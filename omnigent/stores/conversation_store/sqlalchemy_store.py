@@ -32,6 +32,14 @@ from omnigent.db.db_models import (
     SqlConversationLabel,
     SqlUserDailyCost,
 )
+from omnigent.db.enum_codecs import (
+    decode_conversation_kind,
+    decode_item_status,
+    decode_item_type,
+    encode_conversation_kind,
+    encode_item_status,
+    encode_item_type,
+)
 from omnigent.db.utils import (
     _supports_fts5,
     delete_fts_by_conversation,
@@ -96,7 +104,7 @@ def _to_conversation(
         created_at=row.created_at,
         updated_at=row.updated_at,
         title=row.title,
-        kind=row.kind,
+        kind=decode_conversation_kind(row.kind),
         parent_conversation_id=row.parent_conversation_id,
         root_conversation_id=row.root_conversation_id,
         agent_id=row.agent_id,
@@ -171,7 +179,7 @@ def _new_session_conversation_row(
         created_at=now,
         updated_at=now,
         title=title,
-        kind="sub_agent" if parent_conversation_id else "default",
+        kind=encode_conversation_kind("sub_agent" if parent_conversation_id else "default"),
         parent_conversation_id=parent_conversation_id,
         # Top-level row: ``root_conversation_id`` mirrors the
         # primary key so tree-scoped lookups treat it as its own
@@ -416,13 +424,14 @@ def _to_item(row: SqlConversationItem) -> ConversationItem:
     :param row: The SQLAlchemy ORM row to convert.
     :returns: A :class:`ConversationItem` Pydantic model.
     """
+    item_type = decode_item_type(row.type)
     return ConversationItem(
         id=row.id,
-        type=row.type,
-        status=row.status,
+        type=item_type,
+        status=decode_item_status(row.status),
         response_id=row.response_id,
         created_at=row.created_at,
-        data=parse_item_data(row.type, json.loads(row.data)),
+        data=parse_item_data(item_type, json.loads(row.data)),
         created_by=row.created_by,
     )
 
@@ -448,7 +457,7 @@ def _ranked_latest_message_item_ids(conversation_ids: list[str]) -> Subquery:
         )
         .where(
             SqlConversationItem.conversation_id.in_(conversation_ids),
-            SqlConversationItem.type == "message",
+            SqlConversationItem.type == encode_item_type("message"),
         )
         .subquery()
     )
@@ -648,7 +657,7 @@ class SqlAlchemyConversationStore(ConversationStore):
                     created_at=now,
                     updated_at=now,
                     title=title,
-                    kind=kind,
+                    kind=encode_conversation_kind(kind),
                     parent_conversation_id=parent_conversation_id,
                     root_conversation_id=root_id,
                     agent_id=agent_id,
@@ -842,7 +851,7 @@ class SqlAlchemyConversationStore(ConversationStore):
         with self._session() as session:
             rows = session.execute(
                 select(SqlConversation.parent_conversation_id, SqlConversation.id)
-                .where(SqlConversation.kind == "sub_agent")
+                .where(SqlConversation.kind == encode_conversation_kind("sub_agent"))
                 .where(SqlConversation.parent_conversation_id.in_(unique_ids))
                 .order_by(
                     SqlConversation.parent_conversation_id,
@@ -1325,7 +1334,7 @@ class SqlAlchemyConversationStore(ConversationStore):
                 SqlConversationItem.conversation_id == conversation_id
             )
             if type is not None:
-                stmt = stmt.where(SqlConversationItem.type == type)
+                stmt = stmt.where(SqlConversationItem.type == encode_item_type(type))
             if after:
                 sub = (
                     select(SqlConversationItem.position)
@@ -1482,9 +1491,9 @@ class SqlAlchemyConversationStore(ConversationStore):
                     conversation_id=conversation_id,
                     response_id=item.response_id,
                     created_at=now,
-                    status="completed",  # items are final on append
+                    status=encode_item_status("completed"),  # items are final on append
                     position=position,
-                    type=item.type,
+                    type=encode_item_type(item.type),
                     data=data,
                     search_text=search,
                     created_by=item.created_by,
@@ -1494,8 +1503,11 @@ class SqlAlchemyConversationStore(ConversationStore):
                 persisted.append(
                     ConversationItem(
                         id=row.id,
-                        type=row.type,
-                        status=row.status,
+                        # The row stores int codes; the entity carries the
+                        # string names. item.type is the source string and
+                        # the status was just written as "completed".
+                        type=item.type,
+                        status="completed",
                         response_id=row.response_id,
                         created_at=row.created_at,
                         data=item.data,
@@ -1656,7 +1668,7 @@ class SqlAlchemyConversationStore(ConversationStore):
             stmt = select(SqlConversation)
             # Filter by kind when specified (None = no filter).
             if kind is not None:
-                stmt = stmt.where(SqlConversation.kind == kind)
+                stmt = stmt.where(SqlConversation.kind == encode_conversation_kind(kind))
             if parent_conversation_id is not None:
                 stmt = stmt.where(
                     SqlConversation.parent_conversation_id == parent_conversation_id,
@@ -2397,7 +2409,7 @@ class SqlAlchemyConversationStore(ConversationStore):
                 created_at=now,
                 updated_at=now,
                 title=fork_title,
-                kind="default",
+                kind=encode_conversation_kind("default"),
                 # A fork is a fresh top-level conversation, so its
                 # root mirrors its own id (matches the
                 # ``_new_session_conversation_row`` invariant).
@@ -2465,7 +2477,9 @@ class SqlAlchemyConversationStore(ConversationStore):
             source_items = session.execute(items_query).scalars().all()
 
             for pos, src_item in enumerate(source_items):
-                new_item_id = generate_item_id(src_item.type)
+                # src_item.type/status are int codes copied verbatim to the new
+                # row; only generate_item_id needs the decoded string type.
+                new_item_id = generate_item_id(decode_item_type(src_item.type))
                 new_item = SqlConversationItem(
                     id=new_item_id,
                     conversation_id=new_conv.id,

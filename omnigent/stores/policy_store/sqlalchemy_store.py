@@ -9,6 +9,7 @@ from sqlalchemy import asc, select
 from sqlalchemy.exc import IntegrityError
 
 from omnigent.db.db_models import SqlPolicy
+from omnigent.db.enum_codecs import decode_policy_type, encode_policy_type
 from omnigent.db.utils import (
     get_or_create_engine,
     make_managed_session_maker,
@@ -30,7 +31,7 @@ def _to_entity(row: SqlPolicy) -> Policy:
         name=row.name,
         session_id=row.session_id,
         created_at=row.created_at,
-        type=row.type,
+        type=decode_policy_type(row.type),
         handler=row.handler,
         factory_params=json.loads(row.factory_params) if row.factory_params else None,
         enabled=bool(row.enabled),
@@ -84,7 +85,7 @@ class SqlAlchemyPolicyStore(PolicyStore):
             session_id=session_id,
             created_at=now_epoch(),
             updated_at=None,
-            type=type,
+            type=encode_policy_type(type),
             handler=handler,
             factory_params=json.dumps(factory_params) if factory_params else None,
             enabled=enabled,
@@ -182,7 +183,7 @@ class SqlAlchemyPolicyStore(PolicyStore):
             session_id=None,
             created_at=now_epoch(),
             updated_at=None,
-            type=type,
+            type=encode_policy_type(type),
             handler=handler,
             factory_params=json.dumps(factory_params) if factory_params else None,
             enabled=enabled,

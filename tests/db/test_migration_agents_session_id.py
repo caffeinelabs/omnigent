@@ -102,7 +102,7 @@ def test_agents_session_id_fk_accepts_existing_session(db_engine: Engine) -> Non
             sa.text(
                 "INSERT INTO conversations "
                 "(id, created_at, updated_at, root_conversation_id, kind) "
-                "VALUES (:id, :ts, :ts, :id, 'default')",
+                "VALUES (:id, :ts, :ts, :id, 1)",
             ),
             {"id": "conv_fk_target", "ts": 1700000000},
         )
@@ -156,7 +156,7 @@ def test_agents_session_id_unique_index_rejects_duplicate_session(
             sa.text(
                 "INSERT INTO conversations "
                 "(id, created_at, updated_at, root_conversation_id, kind) "
-                "VALUES (:id, :ts, :ts, :id, 'default')",
+                "VALUES (:id, :ts, :ts, :id, 1)",
             ),
             {"id": "conv_unique_target", "ts": 1700000000},
         )
@@ -203,7 +203,7 @@ def test_agents_session_id_allows_duplicate_names_for_distinct_sessions(
                 sa.text(
                     "INSERT INTO conversations "
                     "(id, created_at, updated_at, root_conversation_id, kind) "
-                    "VALUES (:id, :ts, :ts, :id, 'default')",
+                    "VALUES (:id, :ts, :ts, :id, 1)",
                 ),
                 {"id": session_id, "ts": 1700000000},
             )
@@ -260,7 +260,7 @@ def test_agents_session_id_downgrade_round_trip(tmp_path: Path) -> None:
             sa.text(
                 "INSERT INTO conversations "
                 "(id, created_at, updated_at, root_conversation_id, kind) "
-                "VALUES (:id, :ts, :ts, :id, 'default')",
+                "VALUES (:id, :ts, :ts, :id, 1)",
             ),
             {"id": "conv_downgrade_session", "ts": 1700000002},
         )

@@ -10,6 +10,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
     UniqueConstraint,
@@ -178,7 +179,10 @@ class SqlAccountToken(Base):
     __tablename__ = "account_tokens"
 
     id: Mapped[str] = mapped_column(String(128), primary_key=True)
-    kind: Mapped[str] = mapped_column(String(16), nullable=False)
+    # Enum stored as a stable int code (see omnigent.db.enum_codecs
+    # ACCOUNT_TOKEN_KIND: invite=1, magic=2). The store converts to/from
+    # the string name at the row↔entity boundary.
+    kind: Mapped[int] = mapped_column(SmallInteger, nullable=False)
     user_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -187,7 +191,7 @@ class SqlAccountToken(Base):
     invited_is_admin: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default=false())
 
     __table_args__ = (
-        CheckConstraint("kind IN ('invite', 'magic')", name="ck_account_tokens_kind"),
+        CheckConstraint("kind IN (1, 2)", name="ck_account_tokens_kind"),
         Index("ix_account_tokens_expires_at", "expires_at"),
     )
 
@@ -316,7 +320,10 @@ class SqlConversation(Base):
     created_at: Mapped[int] = mapped_column(Integer)
     updated_at: Mapped[int] = mapped_column(Integer)
     title: Mapped[str | None] = mapped_column(Text, nullable=True)
-    kind: Mapped[str] = mapped_column(String(32), default="default")
+    # Enum stored as a stable int code (see omnigent.db.enum_codecs
+    # CONVERSATION_KIND: default=1, sub_agent=2). The store converts to/from
+    # the string name at the row↔entity boundary.
+    kind: Mapped[int] = mapped_column(SmallInteger, default=1)
     parent_conversation_id: Mapped[str | None] = mapped_column(
         String(64),
         ForeignKey("conversations.id", ondelete="CASCADE"),
@@ -410,7 +417,7 @@ class SqlConversation(Base):
     )
 
     __table_args__ = (
-        CheckConstraint("kind IN ('default', 'sub_agent')", name="ck_conversations_kind"),
+        CheckConstraint("kind IN (1, 2)", name="ck_conversations_kind"),
         CheckConstraint(
             "host_id IS NULL OR workspace IS NOT NULL",
             name="ck_conversations_workspace_required_for_host",
@@ -438,13 +445,14 @@ class SqlConversation(Base):
         ),
         # Partial composite index for child-session listing
         # (list_conversations(kind="sub_agent", parent_conversation_id=...)).
+        # kind = 2 is the "sub_agent" code (enum_codecs.CONVERSATION_KIND).
         Index(
             "idx_conversations_parent",
             "parent_conversation_id",
             text("created_at DESC"),
             text("id DESC"),
-            sqlite_where=text("kind = 'sub_agent'"),
-            postgresql_where=text("kind = 'sub_agent'"),
+            sqlite_where=text("kind = 2"),
+            postgresql_where=text("kind = 2"),
         ),
     )
 
@@ -486,9 +494,15 @@ class SqlConversationItem(Base):
     )
     response_id: Mapped[str] = mapped_column(String(64))
     created_at: Mapped[int] = mapped_column(Integer)
-    status: Mapped[str] = mapped_column(String(32), default="completed")
+    # Enum stored as a stable int code (see omnigent.db.enum_codecs
+    # ITEM_STATUS: completed=1). Only "completed" is written today, but the
+    # CHECK admits the wider OpenAI-style status vocabulary reserved there.
+    status: Mapped[int] = mapped_column(SmallInteger, default=1)
     position: Mapped[int] = mapped_column(Integer)
-    type: Mapped[str] = mapped_column(String(32))
+    # Enum stored as a stable int code (see omnigent.db.enum_codecs
+    # ITEM_TYPE). The store converts to/from the string name at the
+    # row↔entity boundary.
+    type: Mapped[int] = mapped_column(SmallInteger)
     data: Mapped[str] = mapped_column(Text)
     search_text: Mapped[str] = mapped_column(Text)
     created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -501,6 +515,11 @@ class SqlConversationItem(Base):
             unique=True,
         ),
         Index("ix_conversation_items_response_id", "response_id"),
+        CheckConstraint(
+            "type IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)",
+            name="ck_conversation_items_type",
+        ),
+        CheckConstraint("status IN (1, 2, 3, 4)", name="ck_conversation_items_status"),
     )
 
 
@@ -596,13 +615,16 @@ class SqlComment(Base):
     start_index: Mapped[int] = mapped_column(Integer)
     end_index: Mapped[int] = mapped_column(Integer)
     body: Mapped[str] = mapped_column(Text)
-    status: Mapped[str] = mapped_column(String(32))
+    # Enum stored as a stable int code (see omnigent.db.enum_codecs
+    # COMMENT_STATUS: draft=1, addressed=2).
+    status: Mapped[int] = mapped_column(SmallInteger)
     created_at: Mapped[int] = mapped_column(Integer)
     updated_at: Mapped[int] = mapped_column(BigInteger)
     anchor_content: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     __table_args__ = (
+        CheckConstraint("status IN (1, 2)", name="ck_comments_status"),
         Index("ix_comments_conversation_id", "conversation_id"),
         Index("ix_comments_created_at", "created_at"),
     )
@@ -656,7 +678,9 @@ class SqlPolicy(Base):
     )
     created_at: Mapped[int] = mapped_column(Integer)
     updated_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    type: Mapped[str] = mapped_column(String(16))
+    # Handler discriminator stored as a stable int code (see
+    # omnigent.db.enum_codecs POLICY_TYPE: python=1, url=2).
+    type: Mapped[int] = mapped_column(SmallInteger)
     # Dotted import path (type="python") or HTTPS URL
     # (type="url") for the policy handler.
     handler: Mapped[str] = mapped_column(Text)
@@ -669,6 +693,7 @@ class SqlPolicy(Base):
     created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
     __table_args__ = (
+        CheckConstraint("type IN (1, 2)", name="ck_policies_type"),
         Index("ix_policies_created_at", "created_at"),
         Index("ix_policies_session_id", "session_id"),
         UniqueConstraint("session_id", "name", name="uq_policies_session_id_name"),
@@ -730,7 +755,9 @@ class SqlHost(Base):
     owner: Mapped[str] = mapped_column(String(256), primary_key=True)
     name: Mapped[str] = mapped_column(String(256), primary_key=True)
     host_id: Mapped[str] = mapped_column(String(64))
-    status: Mapped[str] = mapped_column(String(16))
+    # Enum stored as a stable int code (see omnigent.db.enum_codecs
+    # HOST_STATUS: online=1, offline=2).
+    status: Mapped[int] = mapped_column(SmallInteger)
     created_at: Mapped[int] = mapped_column(Integer)
     updated_at: Mapped[int] = mapped_column(Integer)
     token_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
@@ -741,7 +768,7 @@ class SqlHost(Base):
 
     __table_args__ = (
         CheckConstraint(
-            "status IN ('online', 'offline')",
+            "status IN (1, 2)",
             name="ck_hosts_status",
         ),
         UniqueConstraint("host_id", name="uq_hosts_host_id"),

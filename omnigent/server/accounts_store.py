@@ -34,6 +34,7 @@ from sqlalchemy import and_, delete, exists, select, update
 from sqlalchemy.exc import IntegrityError
 
 from omnigent.db.db_models import SqlAccountToken, SqlUser
+from omnigent.db.enum_codecs import decode_account_token_kind, encode_account_token_kind
 from omnigent.db.utils import get_or_create_engine, make_managed_session_maker
 from omnigent.entities import Account, AccountToken
 from omnigent.server.auth import RESERVED_USER_LOCAL, RESERVED_USER_PUBLIC
@@ -61,7 +62,7 @@ def _to_account_token(row: SqlAccountToken) -> AccountToken:
     """Convert a :class:`SqlAccountToken` row to a domain entity."""
     return AccountToken(
         id=row.id,
-        kind=row.kind,
+        kind=decode_account_token_kind(row.kind),
         user_id=row.user_id,
         created_by=row.created_by,
         created_at=row.created_at,
@@ -278,7 +279,7 @@ class SqlAlchemyAccountStore:
         with self._session() as session:
             row = SqlAccountToken(
                 id=token_id,
-                kind=kind,
+                kind=encode_account_token_kind(kind),
                 user_id=user_id,
                 created_by=created_by,
                 created_at=created_at,
@@ -311,7 +312,7 @@ class SqlAlchemyAccountStore:
                 .where(
                     and_(
                         SqlAccountToken.id == token_id,
-                        SqlAccountToken.kind == kind,
+                        SqlAccountToken.kind == encode_account_token_kind(kind),
                         SqlAccountToken.redeemed_at.is_(None),
                         SqlAccountToken.expires_at > now_epoch_seconds,
                     )
@@ -372,7 +373,7 @@ class SqlAlchemyAccountStore:
                 .where(
                     and_(
                         SqlAccountToken.id == token_id,
-                        SqlAccountToken.kind == "invite",
+                        SqlAccountToken.kind == encode_account_token_kind("invite"),
                         SqlAccountToken.redeemed_at.is_(None),
                         SqlAccountToken.expires_at > now_epoch_seconds,
                     )
@@ -398,7 +399,7 @@ class SqlAlchemyAccountStore:
                 select(
                     exists().where(
                         and_(
-                            SqlAccountToken.kind == "invite",
+                            SqlAccountToken.kind == encode_account_token_kind("invite"),
                             SqlAccountToken.user_id == email,
                             SqlAccountToken.redeemed_at.is_not(None),
                         )
