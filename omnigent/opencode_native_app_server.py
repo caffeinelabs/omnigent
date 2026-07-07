@@ -71,6 +71,11 @@ _ENV_PASSTHROUGH_PREFIXES = (
     "HTTPS_",
     "NO_PROXY",
     "ALL_PROXY",
+    # git's native config-injection vars (GIT_CONFIG_COUNT / GIT_CONFIG_KEY_n /
+    # GIT_CONFIG_VALUE_n). Lets an operator route the harness's git through a
+    # credential-injecting proxy (e.g. url.<proxy>.insteadOf=https://github.com/)
+    # without baking config into the image or shipping a token into the sandbox.
+    "GIT_CONFIG_",
 )
 _ENV_PASSTHROUGH_KEYS = (
     "PATH",
