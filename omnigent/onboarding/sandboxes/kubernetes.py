@@ -65,6 +65,7 @@ from omnigent.onboarding.sandboxes.base import (
     DEFAULT_HOST_IMAGE,
     RemoteCommandResult,
     SandboxLauncher,
+    git_identity_env,
 )
 
 if TYPE_CHECKING:
@@ -461,6 +462,7 @@ def build_pod_manifest(
     clone_dir: str | None = None,
     repo_url: str | None = None,
     repo_branch: str | None = None,
+    owner: str | None = None,
     resources: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """
@@ -509,6 +511,9 @@ def build_pod_manifest(
     :param clone_dir: Directory the clone lands in, or ``None`` for no clone.
     :param repo_url: Repository clone URL, or ``None`` for an empty workspace.
     :param repo_branch: Branch to clone, or ``None`` for the default branch.
+    :param owner: Session owner; when an email, its git author / committer
+        identity is added as literal env so sandbox commits are attributed to
+        that human, not the shared ``GIT_TOKEN`` (see :func:`git_identity_env`).
     :param resources: Configured resources block, or ``None`` for the defaults.
     :returns: The Pod manifest dict.
     """
@@ -544,6 +549,12 @@ def build_pod_manifest(
         },
     ]
     host_env.extend({"name": name, "value": value} for name, value in env_literals.items())
+    # Session-owner git identity, last so it wins any env_literals collision and
+    # (as literal env) overrides the harness Secret's envFrom: sandbox commits
+    # are authored by the human who launched the session, not the shared token.
+    host_env.extend(
+        {"name": name, "value": value} for name, value in git_identity_env(owner).items()
+    )
 
     host_container: dict[str, object] = {
         "name": _CONTAINER_NAME,
@@ -1018,6 +1029,7 @@ class KubernetesSandboxLauncher(SandboxLauncher):
         repo_url: str | None = None,
         repo_branch: str | None = None,
         repo_name: str | None = None,
+        owner: str | None = None,
         on_stage: Callable[[str], None] | None = None,
     ) -> str:
         """
@@ -1042,6 +1054,8 @@ class KubernetesSandboxLauncher(SandboxLauncher):
         :param repo_url: Repository clone URL, or ``None`` for an empty workspace.
         :param repo_branch: Branch to clone, or ``None`` for the default branch.
         :param repo_name: Directory the clone lands in, or ``None``.
+        :param owner: Session owner; when an email, exported as the runner Pod's
+            git author / committer identity (see :func:`git_identity_env`).
         :param on_stage: Progress observer; invoked with ``"starting"``.
         :returns: The absolute in-sandbox workspace path (the cloned repository
             directory when *repo_url* is set).
@@ -1093,6 +1107,7 @@ class KubernetesSandboxLauncher(SandboxLauncher):
                     clone_dir=clone_dir,
                     repo_url=repo_url,
                     repo_branch=repo_branch,
+                    owner=owner,
                     resources=self._resources,
                 )
                 core.create_namespaced_pod(

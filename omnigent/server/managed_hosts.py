@@ -1912,6 +1912,7 @@ async def _arm_and_start_host(
             repo_url=repo.url if repo is not None else None,
             repo_branch=repo.branch if repo is not None else None,
             repo_name=repo.repo_name if repo is not None else None,
+            owner=owner,
             on_stage=on_stage,
         )
         await _wait_for_host_online(host_store, host_id)

@@ -76,6 +76,41 @@ def host_image_wheel_install_command(remote_tgz_path: str) -> str:
     )
 
 
+def git_identity_env(owner: str | None) -> dict[str, str]:
+    """
+    Git author/committer identity for a managed runner, derived from the
+    session owner.
+
+    Managed sandboxes authenticate git over HTTPS with a single shared
+    ``GIT_TOKEN`` (the host image's credential helper), so without this every
+    sandbox commit would be *authored* by that shared token's account rather
+    than by the human who launched the session. Setting ``GIT_AUTHOR_*`` /
+    ``GIT_COMMITTER_*`` decouples authorship from the push credential: git
+    stamps the commit as *owner*, GitHub attributes it to the account whose
+    verified email matches, and the push still rides the shared token.
+
+    The name is the email local-part (cosmetic — GitHub keys attribution on the
+    *email*). Returns an empty mapping unless *owner* looks like an email, which
+    both skips the reserved single-user / public sentinels (``local`` /
+    ``__public__``, which carry no ``@``) and enforces the email GitHub needs.
+    Callers can splat the result unconditionally.
+
+    :param owner: The session owner the runner acts for, e.g.
+        ``"alice@example.com"``, or ``None`` / a sentinel on auth-disabled
+        servers.
+    :returns: ``GIT_AUTHOR_*`` / ``GIT_COMMITTER_*`` name+email env, or ``{}``.
+    """
+    if not owner or "@" not in owner:
+        return {}
+    name = owner.split("@", 1)[0] or owner
+    return {
+        "GIT_AUTHOR_NAME": name,
+        "GIT_AUTHOR_EMAIL": owner,
+        "GIT_COMMITTER_NAME": name,
+        "GIT_COMMITTER_EMAIL": owner,
+    }
+
+
 class SandboxCapabilityError(click.ClickException):
     """
     Raised when a launcher does not support an optional primitive.
@@ -238,6 +273,7 @@ class SandboxLauncher(ABC):
         repo_url: str | None = None,
         repo_branch: str | None = None,
         repo_name: str | None = None,
+        owner: str | None = None,
         on_stage: Callable[[str], None] | None = None,
     ) -> str:
         """
@@ -267,6 +303,11 @@ class SandboxLauncher(ABC):
         :param repo_branch: Branch to clone, or ``None`` for the default branch.
         :param repo_name: Directory the clone lands in under the workspace, or
             ``None`` when *repo_url* is ``None``.
+        :param owner: Session owner the host acts for (e.g.
+            ``"alice@example.com"``); when it is an email, its git author /
+            committer identity is exported so sandbox commits are attributed to
+            that human rather than the shared ``GIT_TOKEN`` (see
+            :func:`git_identity_env`). ``None`` on auth-disabled servers.
         :param on_stage: Progress observer invoked with ``"cloning"`` before the
             clone (when *repo_url* is set) and ``"starting"`` before the host
             launches. Runs on this (worker) thread, so it must be thread-safe.
@@ -319,6 +360,7 @@ class SandboxLauncher(ABC):
                 (HOST_TOKEN_ENV_VAR, token),
                 (HOST_ID_ENV_VAR, host_id),
                 (HOST_NAME_ENV_VAR, host_name),
+                *git_identity_env(owner).items(),
             )
         )
         self.run_background(
