@@ -10,6 +10,7 @@ import sqlalchemy as sa
 from alembic import command
 from sqlalchemy.engine import Engine
 
+from omnigent.db.db_models import name_checksum
 from omnigent.db.utils import (
     _build_alembic_config,
     clear_engine_cache,
@@ -59,9 +60,11 @@ def test_agents_session_id_column_is_nullable_and_indexed(db_engine: Engine) -> 
 def test_agents_name_unique_index_is_template_scoped(db_engine: Engine) -> None:
     """Registered agent names stay unique while session copies may share them."""
     indexes = sa.inspect(db_engine).get_indexes("agents")
-    template_indexes = [index for index in indexes if index["name"] == "ix_agents_template_name"]
+    template_indexes = [
+        index for index in indexes if index["name"] == "ix_agents_template_name_cksum"
+    ]
     assert len(template_indexes) == 1, (
-        f"Expected ix_agents_template_name, got {[index['name'] for index in indexes]}"
+        f"Expected ix_agents_template_name_cksum, got {[index['name'] for index in indexes]}"
     )
     assert bool(template_indexes[0]["unique"]) is True
 
@@ -70,26 +73,28 @@ def test_agents_name_unique_index_is_template_scoped(db_engine: Engine) -> None:
             conn.execute(
                 sa.text(
                     "INSERT INTO agents "
-                    "(id, created_at, name, bundle_location, version) "
-                    "VALUES (:id, :ts, :name, :loc, 1)",
+                    "(id, created_at, name, name_cksum, bundle_location, version) "
+                    "VALUES (:id, :ts, :name, :cksum, :loc, 1)",
                 ),
                 {
                     "id": "ag_template_one",
                     "ts": 1700000001,
                     "name": "template-name",
+                    "cksum": name_checksum("template-name"),
                     "loc": "ag_template_one/bundle",
                 },
             )
             conn.execute(
                 sa.text(
                     "INSERT INTO agents "
-                    "(id, created_at, name, bundle_location, version) "
-                    "VALUES (:id, :ts, :name, :loc, 1)",
+                    "(id, created_at, name, name_cksum, bundle_location, version) "
+                    "VALUES (:id, :ts, :name, :cksum, :loc, 1)",
                 ),
                 {
                     "id": "ag_template_two",
                     "ts": 1700000002,
                     "name": "template-name",
+                    "cksum": name_checksum("template-name"),
                     "loc": "ag_template_two/bundle",
                 },
             )
@@ -109,13 +114,14 @@ def test_agents_session_id_fk_accepts_existing_session(db_engine: Engine) -> Non
         conn.execute(
             sa.text(
                 "INSERT INTO agents "
-                "(id, created_at, name, bundle_location, version, session_id) "
-                "VALUES (:id, :ts, :name, :loc, 1, :session_id)",
+                "(id, created_at, name, name_cksum, bundle_location, version, session_id) "
+                "VALUES (:id, :ts, :name, :cksum, :loc, 1, :session_id)",
             ),
             {
                 "id": "ag_session_bound",
                 "ts": 1700000001,
                 "name": "session-bound-agent",
+                "cksum": name_checksum("session-bound-agent"),
                 "loc": "ag_session_bound/bundle",
                 "session_id": "conv_fk_target",
             },
@@ -134,13 +140,14 @@ def test_agents_session_id_fk_rejects_missing_session(db_engine: Engine) -> None
             conn.execute(
                 sa.text(
                     "INSERT INTO agents "
-                    "(id, created_at, name, bundle_location, version, session_id) "
-                    "VALUES (:id, :ts, :name, :loc, 1, :session_id)",
+                    "(id, created_at, name, name_cksum, bundle_location, version, session_id) "
+                    "VALUES (:id, :ts, :name, :cksum, :loc, 1, :session_id)",
                 ),
                 {
                     "id": "ag_missing_session",
                     "ts": 1700000002,
                     "name": "missing-session-agent",
+                    "cksum": name_checksum("missing-session-agent"),
                     "loc": "ag_missing_session/bundle",
                     "session_id": "conv_missing",
                 },
@@ -163,13 +170,14 @@ def test_agents_session_id_unique_index_rejects_duplicate_session(
         conn.execute(
             sa.text(
                 "INSERT INTO agents "
-                "(id, created_at, name, bundle_location, version, session_id) "
-                "VALUES (:id, :ts, :name, :loc, 1, :session_id)",
+                "(id, created_at, name, name_cksum, bundle_location, version, session_id) "
+                "VALUES (:id, :ts, :name, :cksum, :loc, 1, :session_id)",
             ),
             {
                 "id": "ag_unique_one",
                 "ts": 1700000001,
                 "name": "unique-one",
+                "cksum": name_checksum("unique-one"),
                 "loc": "ag_unique_one/bundle",
                 "session_id": "conv_unique_target",
             },
@@ -180,13 +188,14 @@ def test_agents_session_id_unique_index_rejects_duplicate_session(
             conn.execute(
                 sa.text(
                     "INSERT INTO agents "
-                    "(id, created_at, name, bundle_location, version, session_id) "
-                    "VALUES (:id, :ts, :name, :loc, 1, :session_id)",
+                    "(id, created_at, name, name_cksum, bundle_location, version, session_id) "
+                    "VALUES (:id, :ts, :name, :cksum, :loc, 1, :session_id)",
                 ),
                 {
                     "id": "ag_unique_two",
                     "ts": 1700000002,
                     "name": "unique-two",
+                    "cksum": name_checksum("unique-two"),
                     "loc": "ag_unique_two/bundle",
                     "session_id": "conv_unique_target",
                 },
@@ -214,13 +223,14 @@ def test_agents_session_id_allows_duplicate_names_for_distinct_sessions(
             conn.execute(
                 sa.text(
                     "INSERT INTO agents "
-                    "(id, created_at, name, bundle_location, version, session_id) "
-                    "VALUES (:id, :ts, :name, :loc, 1, :session_id)",
+                    "(id, created_at, name, name_cksum, bundle_location, version, session_id) "
+                    "VALUES (:id, :ts, :name, :cksum, :loc, 1, :session_id)",
                 ),
                 {
                     "id": agent_id,
                     "ts": 1700000001,
                     "name": "shared-session-name",
+                    "cksum": name_checksum("shared-session-name"),
                     "loc": f"{agent_id}/bundle",
                     "session_id": session_id,
                 },
@@ -246,13 +256,14 @@ def test_agents_session_id_downgrade_round_trip(tmp_path: Path) -> None:
         conn.execute(
             sa.text(
                 "INSERT INTO agents "
-                "(id, created_at, name, bundle_location, version) "
-                "VALUES (:id, :ts, :name, :loc, 1)",
+                "(id, created_at, name, name_cksum, bundle_location, version) "
+                "VALUES (:id, :ts, :name, :cksum, :loc, 1)",
             ),
             {
                 "id": "ag_downgrade_template",
                 "ts": 1700000001,
                 "name": "downgrade-shared-name",
+                "cksum": name_checksum("downgrade-shared-name"),
                 "loc": "ag_downgrade_template/bundle",
             },
         )
@@ -267,13 +278,14 @@ def test_agents_session_id_downgrade_round_trip(tmp_path: Path) -> None:
         conn.execute(
             sa.text(
                 "INSERT INTO agents "
-                "(id, created_at, name, bundle_location, version, session_id) "
-                "VALUES (:id, :ts, :name, :loc, 1, :session_id)",
+                "(id, created_at, name, name_cksum, bundle_location, version, session_id) "
+                "VALUES (:id, :ts, :name, :cksum, :loc, 1, :session_id)",
             ),
             {
                 "id": "ag_downgrade_session",
                 "ts": 1700000003,
                 "name": "downgrade-shared-name",
+                "cksum": name_checksum("downgrade-shared-name"),
                 "loc": "ag_downgrade_session/bundle",
                 "session_id": "conv_downgrade_session",
             },

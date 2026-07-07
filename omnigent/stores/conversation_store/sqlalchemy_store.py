@@ -31,6 +31,7 @@ from omnigent.db.db_models import (
     SqlConversationItem,
     SqlConversationLabel,
     SqlUserDailyCost,
+    name_checksum,
 )
 from omnigent.db.utils import (
     _supports_fts5,
@@ -1670,8 +1671,11 @@ class SqlAlchemyConversationStore(ConversationStore):
             if not include_archived:
                 stmt = stmt.where(SqlConversation.archived.is_(False))
             if agent_name is not None:
+                # Match on the checksum (backed by the template-name
+                # unique index) with the raw name as a collision guard.
                 stmt = stmt.join(SqlAgent, SqlAgent.id == SqlConversation.agent_id).where(
-                    SqlAgent.name == agent_name
+                    SqlAgent.name_cksum == name_checksum(agent_name),
+                    SqlAgent.name == agent_name,
                 )
             if agent_id is not None:
                 # Filter by the agent_id column on conversations directly

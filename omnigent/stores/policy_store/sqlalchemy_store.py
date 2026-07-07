@@ -8,7 +8,7 @@ from typing import Any
 from sqlalchemy import asc, select
 from sqlalchemy.exc import IntegrityError
 
-from omnigent.db.db_models import SqlPolicy
+from omnigent.db.db_models import SqlPolicy, name_checksum
 from omnigent.db.utils import (
     get_or_create_engine,
     make_managed_session_maker,
@@ -196,6 +196,7 @@ class SqlAlchemyPolicyStore(PolicyStore):
                 session.execute(
                     select(SqlPolicy)
                     .where(SqlPolicy.session_id.is_(None))
+                    .where(SqlPolicy.name_cksum == name_checksum(name))
                     .where(SqlPolicy.name == name)
                 )
                 .scalars()
@@ -255,6 +256,7 @@ class SqlAlchemyPolicyStore(PolicyStore):
                     session.execute(
                         select(SqlPolicy)
                         .where(SqlPolicy.session_id.is_(None))
+                        .where(SqlPolicy.name_cksum == name_checksum(name))
                         .where(SqlPolicy.name == name)
                         .where(SqlPolicy.id != policy_id)
                     )

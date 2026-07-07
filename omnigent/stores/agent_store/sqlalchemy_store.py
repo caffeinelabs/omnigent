@@ -5,7 +5,7 @@ from __future__ import annotations
 from sqlalchemy import and_, asc, desc, or_, select
 
 from omnigent.db.converters import sql_agent_to_entity
-from omnigent.db.db_models import SqlAgent
+from omnigent.db.db_models import SqlAgent, name_checksum
 from omnigent.db.utils import (
     get_or_create_engine,
     make_managed_session_maker,
@@ -89,8 +89,12 @@ class SqlAlchemyAgentStore(AgentStore):
         :returns: The :class:`Agent` if found, otherwise ``None``.
         """
         with self._session() as session:
+            # Filter on the checksum so the query uses the
+            # ``ix_agents_template_name_cksum`` unique index; the raw
+            # ``name`` predicate guards against a hash collision.
             row = session.execute(
                 select(SqlAgent).where(
+                    SqlAgent.name_cksum == name_checksum(name),
                     SqlAgent.name == name,
                     SqlAgent.session_id.is_(None),
                 )

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sqlalchemy as sa
 
+from omnigent.db.db_models import name_checksum
 from omnigent.db.utils import get_or_create_engine
 from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
 
@@ -53,13 +54,14 @@ def test_get_by_name_and_list_hide_session_scoped_agents(
         conn.execute(
             sa.text(
                 "INSERT INTO agents "
-                "(id, created_at, name, bundle_location, version, session_id) "
-                "VALUES (:id, :ts, :name, :loc, 1, :session_id)",
+                "(id, created_at, name, name_cksum, bundle_location, version, session_id) "
+                "VALUES (:id, :ts, :name, :cksum, :loc, 1, :session_id)",
             ),
             {
                 "id": "ag_agent_store_session",
                 "ts": 1700000001,
                 "name": "session-only-agent",
+                "cksum": name_checksum("session-only-agent"),
                 "loc": "ag_agent_store_session/bundle",
                 "session_id": "conv_agent_store_session",
             },

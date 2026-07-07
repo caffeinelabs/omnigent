@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+
 from sqlalchemy import (
     BigInteger,
     Boolean,
@@ -17,7 +19,25 @@ from sqlalchemy import (
     text,
     true,
 )
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, validates
+
+
+def name_checksum(value: str) -> str:
+    """
+    SHA-256 hex digest of a name, used as the indexed key for
+    columns that would otherwise carry a unique index on raw
+    variable-length text.
+
+    The full 64-char digest is stored (no truncation) so the
+    checksum alone is a reliable unique key — collisions are
+    cryptographically negligible. The input is hashed verbatim
+    (no case-folding or trimming) to preserve the byte-for-byte
+    exact-match semantics of the original text index.
+
+    :param value: The name to hash, e.g. an agent or policy name.
+    :returns: 64-character lowercase hex SHA-256 digest.
+    """
+    return hashlib.sha256(value.encode()).hexdigest()
 
 
 class Base(DeclarativeBase):
@@ -54,6 +74,10 @@ class SqlAgent(Base):
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     created_at: Mapped[int] = mapped_column(Integer)
     name: Mapped[str] = mapped_column(String(256))
+    # SHA-256 of ``name``, kept in sync by the ``@validates`` hook
+    # below. The template-name unique index is on this checksum
+    # rather than the raw name.
+    name_cksum: Mapped[str] = mapped_column(String(64))
     bundle_location: Mapped[str] = mapped_column(String(512))
     version: Mapped[int] = mapped_column(Integer, default=1)
     description: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -64,11 +88,17 @@ class SqlAgent(Base):
         nullable=True,
     )
 
+    @validates("name")
+    def _sync_name_cksum(self, _key: str, value: str) -> str:
+        """Derive ``name_cksum`` on every ``name`` assignment."""
+        self.name_cksum = name_checksum(value)
+        return value
+
     __table_args__ = (
         Index("ix_agents_created_at", "created_at"),
         Index(
-            "ix_agents_template_name",
-            "name",
+            "ix_agents_template_name_cksum",
+            "name_cksum",
             unique=True,
             sqlite_where=text("session_id IS NULL"),
             postgresql_where=text("session_id IS NULL"),
@@ -648,6 +678,10 @@ class SqlPolicy(Base):
 
     id: Mapped[str] = mapped_column(String(64), primary_key=True)
     name: Mapped[str] = mapped_column(String(256))
+    # SHA-256 of ``name``, kept in sync by the ``@validates`` hook
+    # below. The per-session name uniqueness constraint is on this
+    # checksum rather than the raw name.
+    name_cksum: Mapped[str] = mapped_column(String(64))
     # Nullable: NULL for server-wide default policies.
     session_id: Mapped[str | None] = mapped_column(
         String(64),
@@ -668,10 +702,16 @@ class SqlPolicy(Base):
     enabled: Mapped[bool] = mapped_column(Boolean, server_default=true())
     created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
+    @validates("name")
+    def _sync_name_cksum(self, _key: str, value: str) -> str:
+        """Derive ``name_cksum`` on every ``name`` assignment."""
+        self.name_cksum = name_checksum(value)
+        return value
+
     __table_args__ = (
         Index("ix_policies_created_at", "created_at"),
         Index("ix_policies_session_id", "session_id"),
-        UniqueConstraint("session_id", "name", name="uq_policies_session_id_name"),
+        UniqueConstraint("session_id", "name_cksum", name="uq_policies_session_id_name_cksum"),
     )
 
 
