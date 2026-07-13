@@ -43,9 +43,6 @@ def test_probes_are_p1() -> None:
     assert PolicyAskProbe().priority is Priority.P1
 
 
-# ── ALLOW ────────────────────────────────────────────────────────
-
-
 async def test_allow_supported_when_call_proceeds() -> None:
     r = await _allow(TurnResult(completed=True, tool_call_allowed=True))
     assert r.verdict is Verdict.SUPPORTED
@@ -58,7 +55,6 @@ async def test_allow_passes_action_allow_to_driver() -> None:
 
 
 async def test_allow_skipped_when_unmeasured() -> None:
-    # Wrap/native return an empty TurnResult -> no tool call, not completed.
     r = await _allow(TurnResult())
     assert r.verdict is Verdict.SKIPPED
     assert "not observable" in r.note
@@ -69,17 +65,12 @@ async def test_allow_skipped_on_infra_failure() -> None:
     assert r.verdict is Verdict.SKIPPED
 
 
-# ── ASK ──────────────────────────────────────────────────────────
-
-
 async def test_ask_supported_when_elicitation_raised() -> None:
     r = await _ask(TurnResult(completed=True, elicitation_requested=True))
     assert r.verdict is Verdict.SUPPORTED
 
 
 async def test_ask_supported_even_if_turn_not_settled() -> None:
-    # The driver returns early once the elicitation fires (verdict decided), so
-    # a real ASK success has elicitation_requested=True but completed=False.
     r = await _ask(TurnResult(completed=False, elicitation_requested=True))
     assert r.verdict is Verdict.SUPPORTED
 
@@ -97,8 +88,6 @@ async def test_ask_skipped_when_unmeasured() -> None:
 
 
 async def test_ask_skipped_when_no_elicitation_but_completed() -> None:
-    # Tool call happened and turn completed, but no elicitation surfaced -> SKIP,
-    # never a false UNSUPPORTED.
     r = await _ask(TurnResult(completed=True, tool_calls=[{"name": "list_files"}]))
     assert r.verdict is Verdict.SKIPPED
 

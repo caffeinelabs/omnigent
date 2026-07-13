@@ -9,9 +9,9 @@ lives apart from the *driver* that runs probes against it. Credentials come from
 - :class:`~tests.harness_bench.full_server_driver.FullServerDriver` — one
   harness per :class:`SharedFullServer` (solo run), or several harnesses on one
   shared server (parallel run; see ``bench.run_bench``).
-- :mod:`tests.harness_bench.native_tui_driver` reuses the lower-level spawn
-  helpers (:func:`spawn_omnigent_server`, :func:`_find_free_port`) for its own
-  server + host-daemon topology.
+- :mod:`tests.harness_bench.native_tui_driver` reuses the lower-level server
+  spawn helper and :func:`tests._helpers.live_server.find_free_port` for its
+  own server + host-daemon topology.
 """
 
 from __future__ import annotations
@@ -21,7 +21,6 @@ import json
 import os
 import shutil
 import signal
-import socket
 import subprocess
 import tarfile
 import time
@@ -41,11 +40,14 @@ from tests._helpers.compat import (
     runner_executable,
     server_executable,
 )
+from tests._helpers.live_server import find_free_port
 from tests.harness_bench.profile import BenchProfile
 from tests.harness_bench.runtime_env import BenchRuntimeEnv
 
 _REPO_ROOT = str(Path(__file__).resolve().parents[2])
-_HEALTH_TIMEOUT_S = 90.0
+# Server+runner boot is local; 45s is a "clearly failed to start" ceiling with
+# cold-start headroom, not an expected wait (a healthy boot is a few seconds).
+_HEALTH_TIMEOUT_S = 45.0
 _POLL_INTERVAL_S = 0.2
 
 # The builtin the tool/policy probes drive: read-only, zero setup, server-
@@ -53,12 +55,6 @@ _POLL_INTERVAL_S = 0.2
 # _DENY_REASON so a blocked call is unambiguous.
 _TOOL_NAME = "list_files"
 _DENY_REASON = "bench-policy-deny"
-
-
-def _find_free_port() -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        s.bind(("127.0.0.1", 0))
-        return int(s.getsockname()[1])
 
 
 def spawn_omnigent_server(
@@ -235,7 +231,7 @@ class SharedFullServer:
 
     def __enter__(self) -> SharedFullServer:
         self._tmp.mkdir(mode=0o700, parents=True, exist_ok=True)
-        port = _find_free_port()
+        port = find_free_port()
         self.base_url = f"http://localhost:{port}"
         binding_token = uuid.uuid4().hex
         self.runner_id = token_bound_runner_id(binding_token)

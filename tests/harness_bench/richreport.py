@@ -1,15 +1,4 @@
-"""A rich live-progress sink for a bench run.
-
-Draws a table that updates in place as events arrive: one row per harness,
-one column per capability dimension, each cell showing the probe's live state
-(a spinner while running, then the verdict glyph). Under a parallel run
-(``--jobs`` > 1) several rows advance at once, which is exactly what the live
-table is for.
-
-Only usable on a TTY with ``rich`` installed. :func:`rich_sink_or_none`
-returns ``None`` when either precondition is missing, so the CLI falls back to
-the plain :class:`~tests.harness_bench.events.LineSink`.
-"""
+"""Rich live progress renderer for harness bench runs."""
 
 from __future__ import annotations
 
@@ -80,10 +69,7 @@ class _RichLiveSink:
         # harness → {dim_title: markup}; insertion order = display order.
         self._rows: dict[str, dict[str, str]] = {}
         self._transport: dict[str, str] = {}  # harness → resolved transport label
-        # vertical_overflow="visible": let a grid taller than the viewport print
-        # in full instead of rich clipping/repositioning it each frame (the
-        # "pointer jumps around" thrash). refresh_per_second=4 + our own
-        # update() per event is smooth without high-rate flicker.
+        # Visible overflow prevents Rich from repositioning tall grids each frame.
         self._live = Live(
             self._render(),
             console=console,
