@@ -57,6 +57,7 @@ import { useTheme } from "next-themes";
 import { PageScroll } from "@/components/PageScroll";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Switch } from "@/components/ui/switch";
 import {
   Select,
   SelectContent,
@@ -125,6 +126,10 @@ import {
   type WorkspacePanelDefault,
 } from "@/lib/workspacePanelPreferences";
 import { readDefaultBaseBranch, writeDefaultBaseBranch } from "@/lib/baseBranchPreferences";
+import {
+  readHideUnconfiguredHarnesses,
+  writeHideUnconfiguredHarnesses,
+} from "@/lib/harnessVisibilityPreferences";
 import {
   applyThemePalette,
   isThemePalette,
@@ -625,6 +630,41 @@ function PaletteSwatchPreview({ swatch }: { swatch: PaletteSwatch }) {
   );
 }
 
+/**
+ * Opt-in filter for the new-chat harness picker: when on, harnesses that
+ * aren't set up on the selected host (missing CLI / auth) are hidden instead
+ * of badged. Off by default so the picker keeps surfacing harnesses to set up.
+ * Fails open — with no connected host or readiness info, nothing is hidden.
+ */
+function HideUnconfiguredHarnessesControl() {
+  const [value, setValue] = useState(() => readHideUnconfiguredHarnesses());
+  const labelId = useId();
+  const toggle = useCallback((next: boolean) => {
+    setValue(next);
+    writeHideUnconfiguredHarnesses(next);
+  }, []);
+  return (
+    <div className="flex items-start justify-between gap-6">
+      <div className="flex flex-col">
+        <span id={labelId} className="text-sm font-medium">
+          Hide unconfigured harnesses
+        </span>
+        <span className="text-sm text-muted-foreground">
+          Only show harnesses that are set up on the selected host in the new-chat picker. Harnesses
+          needing a CLI install or sign-in are hidden instead of badged.
+        </span>
+      </div>
+      <Switch
+        aria-labelledby={labelId}
+        checked={value}
+        onCheckedChange={toggle}
+        data-testid="hide-unconfigured-harnesses-toggle"
+        className="mt-0.5 shrink-0"
+      />
+    </div>
+  );
+}
+
 function AppearanceSection() {
   // Embedded: the host owns light/dark, so the Mode and Color theme pickers
   // would be no-ops — hide them and say so (matching ThemeModeMenu). Terminal
@@ -652,6 +692,8 @@ function AppearanceSection() {
         <TerminalThemeControl />
 
         <WorkspacePanelDefaultControl />
+
+        <HideUnconfiguredHarnessesControl />
 
         <UiFontSizeControl />
 
