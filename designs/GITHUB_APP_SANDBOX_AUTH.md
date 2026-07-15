@@ -141,3 +141,20 @@ connected), `start_host` behaves exactly as before — the shared
   per-user GitHub accounts.
 - Only **public** SSH keys are injected (into `authorized_keys`); no
   private key material ever leaves GitHub or the server.
+
+## VS Code Remote via SSHPiper
+
+When ``OMNIGENT_SSHPIPER_HOST`` is set, the web UI shows **Open in VS Code**
+on online managed-sandbox sessions. The deep link uses SSHPiper's
+``{target}--{user}`` username routing:
+
+- **Gateway** — ``OMNIGENT_SSHPIPER_HOST`` (optional ``OMNIGENT_SSHPIPER_PORT``)
+- **Username** — ``{ssh_target}--{OMNIGENT_SSHPIPER_USER}`` (default user
+  ``sandbox``). ``ssh_target`` defaults to
+  ``{sandbox_id}.{namespace}.svc.cluster.local``.
+- **Path** — the session's absolute workspace inside the sandbox
+
+Configure via ``OMNIGENT_SSHPIPER_*`` (see ``deploy/docker/.env.example``).
+The host image already ships OpenSSH + a preseeded VS Code Server; the
+operator must still expose port 22 through SSHPiper to each sandbox.
+

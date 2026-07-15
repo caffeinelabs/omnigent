@@ -136,6 +136,9 @@ function serverInfo(overrides: Partial<ServerInfo> = {}): ServerInfo {
     server_version: null,
     smart_routing_enabled: false,
     github_app_enabled: false,
+    sshpiper_host: null,
+    sshpiper_port: null,
+    sshpiper_user: null,
     ...overrides,
   };
 }

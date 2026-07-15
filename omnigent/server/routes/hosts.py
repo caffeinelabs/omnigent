@@ -285,6 +285,33 @@ async def _resolve_agent_harness(
     return canonicalize_harness(loaded.spec.executor.harness_kind)
 
 
+def _host_ssh_fields(request: Request, host: Any) -> dict[str, Any]:
+    """SSHPiper routing fields for a managed sandbox host, if configured.
+
+    :param request: Incoming request (reads ``app.state.sshpiper_config``).
+    :param host: Host row with optional ``sandbox_id`` / ``sandbox_provider``.
+    :returns: Dict with ``sandbox_id``, and when SSHPiper is on and the
+        host has a sandbox id, ``ssh_target`` + ``sshpiper_username``.
+    """
+    out: dict[str, Any] = {"sandbox_id": getattr(host, "sandbox_id", None)}
+    sshpiper = getattr(request.app.state, "sshpiper_config", None)
+    sandbox_id = out["sandbox_id"]
+    if sshpiper is None or not sandbox_id:
+        return out
+    try:
+        target = sshpiper.ssh_target(
+            sandbox_id=sandbox_id,
+            host_id=host.host_id,
+            name=host.name or "",
+            provider=host.sandbox_provider or "",
+        )
+    except ValueError:
+        return out
+    out["ssh_target"] = target
+    out["sshpiper_username"] = sshpiper.sshpiper_username(target)
+    return out
+
+
 def create_hosts_router(
     host_registry: HostRegistry,
     host_store: HostStore,
@@ -351,21 +378,21 @@ def create_hosts_router(
             # A stored "online" is only trusted if the host was seen
             # recently: a crashed host never runs set_offline and would
             # otherwise show as online forever in the picker.
-            result.append(
-                {
-                    "host_id": host.host_id,
-                    "name": host.name,
-                    "owner": host.owner,
-                    "status": "online" if host_is_live(host, now=now) else "offline",
-                    # Non-None marks a server-managed sandbox host (e.g.
-                    # "modal"). Clients use it to hide sandbox-backed
-                    # hosts from manual host pickers — they are launch
-                    # targets the server creates on demand, not
-                    # user-connectable machines.
-                    "sandbox_provider": host.sandbox_provider,
-                    "configured_harnesses": host.configured_harnesses,
-                }
-            )
+            entry: dict[str, Any] = {
+                "host_id": host.host_id,
+                "name": host.name,
+                "owner": host.owner,
+                "status": "online" if host_is_live(host, now=now) else "offline",
+                # Non-None marks a server-managed sandbox host (e.g.
+                # "modal"). Clients use it to hide sandbox-backed
+                # hosts from manual host pickers — they are launch
+                # targets the server creates on demand, not
+                # user-connectable machines.
+                "sandbox_provider": host.sandbox_provider,
+                "configured_harnesses": host.configured_harnesses,
+            }
+            entry.update(_host_ssh_fields(request, host))
+            result.append(entry)
         return {"hosts": result}
 
     @router.get("/hosts/{host_id}")
@@ -393,7 +420,7 @@ def create_hosts_router(
         # Status comes from the DB so the answer is consistent across
         # replicas, gated on the liveness freshness window — see
         # list_hosts above for the full rationale.
-        return {
+        detail: dict[str, Any] = {
             "host_id": host.host_id,
             "name": host.name,
             "owner": host.owner,
@@ -404,6 +431,8 @@ def create_hosts_router(
             "configured_harnesses": host.configured_harnesses,
             "runners": [],
         }
+        detail.update(_host_ssh_fields(request, host))
+        return detail
 
     @router.post("/hosts/{host_id}/runners")
     async def launch_runner(

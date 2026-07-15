@@ -19,6 +19,21 @@ export interface Host {
    * "nothing configured".
    */
   configured_harnesses?: Record<string, boolean | string> | null;
+  /**
+   * Provider sandbox id (k8s Pod name, etc.). Present for managed
+   * sandbox hosts; used with SSHPiper target templating.
+   */
+  sandbox_id?: string | null;
+  /**
+   * SSHPiper *target* (left of ``--``), e.g. a cluster-local Service
+   * DNS name. Only set when the server has SSHPiper configured.
+   */
+  ssh_target?: string | null;
+  /**
+   * Full SSHPiper username ``{ssh_target}--{user}`` ready to use in a
+   * Remote-SSH URI. Only set when SSHPiper is configured.
+   */
+  sshpiper_username?: string | null;
 }
 
 interface HostsResponse {

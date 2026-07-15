@@ -3281,6 +3281,9 @@ def server(
     from omnigent.server.github_app import GitHubAppConfig
 
     github_config = GitHubAppConfig.from_env()
+    from omnigent.server.sshpiper import SshPiperConfig
+
+    sshpiper_config = SshPiperConfig.from_env()
     github_store = None
     if github_config is not None:
         from omnigent.server.github_store import GithubConnectionStore
@@ -3353,6 +3356,7 @@ def server(
         allowed_domains=config_str_list(cfg.get("allowed_domains")),
         sandbox_config=sandbox_config,
         github_config=github_config,
+        sshpiper_config=sshpiper_config,
         github_store=github_store,
         server_config=cfg,
     )
