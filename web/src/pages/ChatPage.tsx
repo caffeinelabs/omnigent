@@ -5006,8 +5006,12 @@ export function computeIsWorking(sessionStatus: SessionStatus): boolean {
  * @param options.hasPendingElicitation - ``true`` when an elicitation prompt
  *   owns the in-progress slot and should suppress the shimmer/pinned pill.
  * @param options.runnerOnline - Runner liveness: ``true`` online, ``false``
- *   known offline, ``undefined`` before the health poll resolves. Only known
- *   offline suppresses the indicator.
+ *   known offline, ``undefined`` before the health poll resolves. A known-offline
+ *   runner suppresses the indicator ONLY when the session is otherwise idle: a
+ *   session actively reporting ``running``/``waiting`` cannot have an offline
+ *   runner, so its live status wins over the ``/health`` poll — which polls at a
+ *   10s cadence and reads stale-offline during the runner's connect window on a
+ *   fresh session's first turn (it would otherwise hide "Working…" for seconds).
  * @param options.backgroundTaskCount - Background shells still running after
  *   the turn ended. A claude-native turn settles to ``idle`` (the PTY-activity
  *   watcher's edge) even while shells run, so the bare status alone would hide
@@ -5023,9 +5027,14 @@ export function computeShowsWorking(
     backgroundTaskCount?: number;
   },
 ): boolean {
-  if (options.runnerOnline === false) return false;
   if (options.hasPendingElicitation) return false;
-  return computeIsWorking(sessionStatus) || (options.backgroundTaskCount ?? 0) > 0;
+  const isWorking = computeIsWorking(sessionStatus);
+  // A running/waiting session is proof the runner is up, so a stale
+  // poll-derived ``runnerOnline === false`` must not suppress it. Only gate on
+  // known-offline for the not-actively-working case (e.g. a background-shell
+  // tally on an idle session).
+  if (options.runnerOnline === false && !isWorking) return false;
+  return isWorking || (options.backgroundTaskCount ?? 0) > 0;
 }
 
 /**
@@ -5160,7 +5169,7 @@ const EFFORT_LEVELS = ["low", "medium", "high"] as const;
 /** Anthropic-side efforts for claude-native sessions (matches ANTHROPIC_EFFORTS in reasoning_effort.py). */
 const CLAUDE_NATIVE_EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
 
-type NativeModelPickerKind = "claude" | "codex" | "cursor" | "kiro" | "opencode";
+type NativeModelPickerKind = "claude" | "codex" | "cursor" | "kiro" | "opencode" | "pi";
 
 type LabelSource = { labels?: Record<string, string | null> | null } | null | undefined;
 
@@ -5234,6 +5243,12 @@ export function modelPickerKindForConv(
       // model into the session ``model_override`` (the forwarder's terminal→web
       // mirror), so the picker surfaces that as the live model.
       return "opencode";
+    case "pi-native-ui":
+      // Like cursor: the runner types a model switch into the live Pi process
+      // (via the bridge inbox → Pi's ``setModel``) and Pi mirrors its own
+      // ``/model`` picks back to ``model_override`` via the extension's
+      // model_select handler, so the picker surfaces that as the live model.
+      return "pi";
     default:
       return null;
   }
@@ -5355,11 +5370,14 @@ function AgentPicker({
   const sessionModelOverride = useChatStore((s) => s.sessionModelOverride);
   const llmModel = useChatStore((s) => s.llmModel);
 
-  // Codex and cursor both populate the picker from the server-provided
-  // ``codexModelOptions`` channel (the snapshot's ``model_options`` field);
-  // claude uses the static local catalog.
+  // Codex, cursor, kiro, and pi all populate the picker from the
+  // server-provided ``codexModelOptions`` channel (the snapshot's
+  // ``model_options`` field); claude uses the static local catalog.
   const usesServerModelOptions =
-    modelPickerKind === "codex" || modelPickerKind === "cursor" || modelPickerKind === "kiro";
+    modelPickerKind === "codex" ||
+    modelPickerKind === "cursor" ||
+    modelPickerKind === "kiro" ||
+    modelPickerKind === "pi";
   const modelOptions: ReadonlyArray<{ id: string; label?: string; displayName?: string }> =
     modelPickerKind === "claude"
       ? CLAUDE_NATIVE_MODELS
@@ -5396,8 +5414,15 @@ function AgentPicker({
   // There is no terminal→web mirror, so the picker reflects the web-side
   // ``sessionModelOverride`` (which stays correct since a web pick sets it), like
   // cursor/opencode surface theirs.
+  // pi mirrors both ways into ``model_override`` (a web pick persists it before
+  // the live ``setModel``; a TUI ``/model`` pick posts external_model_change),
+  // so like cursor/kiro/opencode the live model is the session override, never
+  // the cross-session sticky ``selectedModel``.
   const pickerSelectedModel =
-    modelPickerKind === "cursor" || modelPickerKind === "kiro" || modelPickerKind === "opencode"
+    modelPickerKind === "cursor" ||
+    modelPickerKind === "kiro" ||
+    modelPickerKind === "opencode" ||
+    modelPickerKind === "pi"
       ? sessionModelOverride
       : (sessionModelOverride ?? selectedModel);
   // SDK/bundle agents (no native picker) never have the cross-session sticky
@@ -5416,10 +5441,11 @@ function AgentPicker({
         // on a web pick (which also drives a live ``/model`` switch). Either way
         // the Omnigent-visible model is ``model_override``.
         sessionModelOverride
-      : modelPickerKind === "opencode"
-        ? // opencode mirrors its live TUI model into ``model_override`` (set at
-          // launch and updated by the forwarder on a TUI switch); show that,
-          // falling back to the launch-resolved model before any switch.
+      : modelPickerKind === "opencode" || modelPickerKind === "pi"
+        ? // opencode/pi mirror their live TUI model into ``model_override``
+          // (set on a web pick, updated by the extension's model_select
+          // handler on a TUI switch); show that, falling back to the
+          // launch-resolved model before any switch.
           (sessionModelOverride ?? llmModel)
         : null
     : nonNativeModel;
@@ -5430,14 +5456,16 @@ function AgentPicker({
       : null;
   const hasPickerActions = showAgents || modelOptions.length > 0 || showEffort;
 
-  // Until kiro mirrors its live model (its first session ``.json`` write), there
-  // is no resolved model to show; fall back to the catalog default (e.g. "Auto")
-  // so the trigger reads as a model rather than the harness name ("Kiro").
-  const kiroDefaultOption =
-    modelPickerKind === "kiro"
+  // Before kiro/pi resolve a live model, there is no model to show: kiro until
+  // its first session ``.json`` write, pi until its snapshot fills llmModel (or
+  // the workspace model-list fetch failed, leaving only the launch model). Fall
+  // back to the catalog default (e.g. "Auto") / first option so the trigger
+  // reads as a model rather than the harness name ("Kiro" / "Pi").
+  const launchFallbackOption =
+    modelPickerKind === "kiro" || modelPickerKind === "pi"
       ? (codexModelOptions.find((m) => m.isDefault) ?? codexModelOptions[0])
       : undefined;
-  const kiroLaunchFallbackLabel = kiroDefaultOption?.displayName ?? kiroDefaultOption?.id;
+  const launchFallbackLabel = launchFallbackOption?.displayName ?? launchFallbackOption?.id;
 
   // Model in foreground (black), effort in muted (grey). Static fallbacks
   // first; the final `else` returns null so a session with nothing to show
@@ -5468,10 +5496,10 @@ function AgentPicker({
     // spec may carry no executor model and no sticky/override is set), but the
     // dropdown still has model rows to switch. Keep the trigger rendered — and
     // the model dropdown + bare-`/model` open path reachable — with a stable
-    // identity fallback rather than hiding the picker entirely. For kiro, prefer
-    // the catalog default (e.g. "Auto") over the agent name so the launch-window
-    // label reads as a model.
-    triggerContent = kiroLaunchFallbackLabel ?? agentDisplayName ?? "Model";
+    // identity fallback rather than hiding the picker entirely. For kiro/pi,
+    // prefer the catalog default (e.g. "Auto") over the agent name so the
+    // launch-window label reads as a model.
+    triggerContent = launchFallbackLabel ?? agentDisplayName ?? "Model";
   } else {
     return null;
   }

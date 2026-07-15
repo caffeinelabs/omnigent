@@ -147,7 +147,8 @@ dismisses.
   `ipcRenderer` or Node.
 - **Security posture**: `nodeIntegration: false`, `contextIsolation: true`.
   `window.open` / `target=_blank` links are opened in the user's real
-  browser, not chromeless Electron windows. Non-web schemes (`vscode://`,
+  browser, not chromeless Electron windows — with one narrow exception,
+  **OAuth sign-in popups** (next bullet). Non-web schemes (`vscode://`,
   `ssh://`, …) launch an OS protocol handler with page-controlled
   arguments, so they prompt for consent first — showing the requesting
   origin and the full URL — with an optional persisted "always allow this
@@ -167,6 +168,38 @@ dismisses.
   - The microphone permission grant is likewise scoped: only the audio set,
     only for pages on an origin some window is pinned to, and only when the
     requesting page is the top-level page — everything else is denied.
+- **OAuth sign-in popups**: the workspace UI's OAuth flows (connect an MCP
+  service, Catalog Explorer connections) hand the authorization code back
+  via `window.opener.postMessage` plus a nonce in the opener's
+  `localStorage` — both exist only in a real, same-profile child window,
+  so sending these popups to the external browser strands the code and the
+  sign-in fails. A `window.open` is therefore allowed as a real child
+  window only when **all** of these hold (`src/popupPolicy.js`): it is
+  popup-shaped (explicit width/height features), the opener window is
+  pinned and currently _on_ its pinned origin, and the target is `https`
+  on the pinned origin itself, a well-known OAuth authorization host
+  (github.com, accounts.google.com, slack.com, mcp.atlassian.com,
+  auth.atlassian.com, login.microsoftonline.com, salesforce.com), or
+  hand-listed in `settings.json` under `popup_allowed_origins`. The child
+  is hardened (`hardenOauthPopup`): it never gets the shell preload (a
+  no-op `popup_preload.js` instead), runs sandboxed, shows the **current
+  host in its title** on every navigation (the page can't control the
+  prefix), and cannot open popups of its own. It is never entered in the
+  shell's window registry, so it gains none of that registry's privileges
+  — its only grant is the auth-surface localhost trust described below
+  (sign-in chains run IdP device-trust checks, e.g. Okta FastPass, inside
+  the popup). The shell also strips `Cross-Origin-Opener-Policy` from
+  main-frame responses inside these popups (and only there): a COOP:
+  same-origin hop — slack.com's sign-in pages serve one — would sever
+  `window.opener` mid-flow, which both kills the code hand-off and makes
+  the opener misread the popup as closed, so first-time sign-ins fail
+  while retries succeed. Custom providers on other domains fall back to
+  the external browser; add their authorization origin to
+  `popup_allowed_origins` to sign in without leaving the app:
+
+  ```json
+  { "popup_allowed_origins": ["https://sso.my-git-host.example.com"] }
+  ```
 
 ## Embedded browser pane
 
@@ -586,9 +619,14 @@ means:
   redirect the main frame through SSO/IdP origins that can't be known in
   advance (server → SSO domain → localhost helper probe), and those
   pages get localhost access while the user is actually on them.
-  In-window navigation only starts from the pinned server (links/popups
-  open in the external browser), so this doesn't extend to arbitrary
-  sites; iframes never match (main-frame origin only).
+  In-window navigation only starts from the pinned server (links open in
+  the external browser), which keeps this from extending to arbitrary
+  sites; iframes never match (main-frame origin only). The **current
+  top-level page of a live OAuth sign-in popup** gets the same trust for
+  the same reason — the IdP device-trust checks (Okta FastPass) run
+  _inside_ the popup and fail closed without it — bounded the same way:
+  popups only ever start on allowlisted sign-in hosts, and a closed popup
+  confers nothing. Popups gain no other shell-window privileges.
 
 Anything else stays blocked by normal CORS, and a localhost service that
 sends its own `Access-Control-Allow-Origin` keeps enforcing its own
@@ -614,6 +652,59 @@ untouched and the extra connection ends when the window closes. These
 windows get the same per-window origin pinning as regular ones. With windows
 on more than one server, the dock badge shows the sum of each server's unread
 count and notification titles are prefixed with the firing server's hostname.
+
+## Deep links
+
+An `omnigent://<hostname>/c/<session_id>` URL opens that session on that
+server in the desktop app — the way a browser deep link opens a page:
+
+```
+omnigent://localhost:8000/c/conv_abc              → http://localhost:8000/c/conv_abc
+omnigent://my-workspace.cloud.databricks.com/c/x → https://…/ml/omnigents/c/x
+```
+
+The link names a server by **host** (with port if non-default) and carries no
+`http`/`https` — the shell infers the scheme with the same rule the setup page
+uses (`http` for loopback, `https` for a remote host), so a deep link and a
+pasted URL can never disagree. The Databricks workspace mount (`/ml/omnigents`)
+is **not** in the link; it is server-determined and discovered the same way a
+pasted workspace URL is. v1 accepts only `/c/<session_id>`; other paths are
+ignored.
+
+**Window handling** (the careful part):
+
+- A window already open on that server and currently on its page is **reused
+  in place** — the shell tells the SPA's router to navigate to the conversation
+  without a reload, so the in-flight stream isn't dropped. (Same basename-less
+  `/c/<id>` path a notification click routes.)
+- A window pinned to that server but mid-SSO-redirect (off the server origin)
+  is **reused with a reload** to the conversation, since the SPA's listener
+  isn't reliably mounted on a foreign IdP page.
+- A server you've **previously connected to** (in the recent-servers list or
+  the saved default) but have no live window for opens in a **new window** —
+  no prompt, the way a second tab for a known site would.
+- A server you have **never connected to** prompts with a native confirmation
+  dialog (Cancel is the default). Pinning a new origin is a privilege grant
+  (notifications, badge, mic), so a clicked link never silently pins an
+  attacker-chosen origin; once you allow it, the server is remembered so the
+  next link is frictionless.
+
+**Cold start vs warm start.** On macOS, `open-url` fires for the link and can
+arrive **before** the app is ready, so pre-ready links are queued and drained
+once the windows exist. On Windows/Linux, a second launch carrying the URL is
+funneled to the running instance by the single-instance lock. Links are
+handled one at a time, so two arriving together can't race two consent
+dialogs. At cold start the deep link replaces the default launch window; if you
+cancel an unknown-server prompt, a normal launch window opens instead.
+
+**Registration.** The scheme is registered two ways: the build manifest
+(`build.protocols` in `package.json`, which writes `CFBundleURLSchemes` on
+macOS, a `.desktop` `MimeType` on Linux, and registry entries on Windows) for
+packaged installs, plus a runtime `app.setAsDefaultProtocolClient("omnigent")`
+call so `electron .` dev clicks route to the running dev instance.
+
+The decision logic (parse + window selection) is pure and unit-tested in
+`src/deepLink.js`; the orchestration lives in `src/main.js`.
 
 ## Implementation notes
 
