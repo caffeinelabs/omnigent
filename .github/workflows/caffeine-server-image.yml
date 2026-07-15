@@ -1,12 +1,8 @@
-# Builds the Caffeine server + host images and pushes them to our registry:
+# Builds the Caffeine server + host images from this fork's `staging` branch and
+# pushes them to our registry:
 #
-#   ghcr.io/caffeinelabs/omnigent-server:<branch>{,-<sha>}  (server, kubernetes extra)
-#   ghcr.io/caffeinelabs/omnigent-host:<branch>{,-<sha>}    (runner host, same commit)
-#
-# On `staging`, that yields the familiar `:staging` / `:staging-<sha>` tags.
-# `workflow_dispatch` on any other branch (e.g. a PR working branch) publishes
-# the same pair under a sanitized branch tag so we can soak-test images
-# before merging — without moving `:staging`.
+#   ghcr.io/caffeinelabs/omnigent-server:staging{,-<sha>}  (server, kubernetes extra)
+#   ghcr.io/caffeinelabs/omnigent-host:staging{,-<sha>}    (runner host, same commit)
 #
 # The server needs the `kubernetes` extra (the sandbox launcher imports the
 # Python k8s client, which the upstream published image omits). We build the
@@ -19,10 +15,7 @@ name: Caffeine Server Image
 
 on:
   push:
-    # staging: production soak tag. cursor/**: PR working branches so a
-    # cloud-agent / contributor branch can publish test images without a
-    # workflow_dispatch (which some tokens cannot fire).
-    branches: [staging, 'cursor/**']
+    branches: [staging]
   workflow_dispatch:
 
 permissions:
@@ -51,18 +44,14 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      # Branch-scoped tags: `type=ref,event=branch` → floating tag named after
-      # the branch (sanitized; `cursor/foo` → `cursor-foo`). The sha tag is the
-      # immutable pin (`cursor-foo-<shortsha>`). Staging keeps publishing
-      # `:staging` / `:staging-<sha>` because that is the branch name.
       - name: Server meta
         id: server-meta
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository_owner }}/omnigent-server
           tags: |
-            type=ref,event=branch
-            type=sha,prefix={{branch}}-,format=short
+            type=raw,value=staging
+            type=sha,prefix=staging-,format=short
 
       # amd64 only: this runs as our omnigent server on the (amd64) sandbox
       # cluster. build-arg adds the kubernetes client so the sandbox launcher
@@ -88,8 +77,8 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/omnigent-host
           tags: |
-            type=ref,event=branch
-            type=sha,prefix={{branch}}-,format=short
+            type=raw,value=staging
+            type=sha,prefix=staging-,format=short
 
       # Runner host image, `host` target of the same Dockerfile, same commit as
       # the server so the dial-back protocol matches. amd64 only — the launcher
@@ -108,19 +97,3 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
-
-      - name: Summarize published tags
-        run: |
-          {
-            echo "### Published images"
-            echo ""
-            echo "**Server**"
-            echo '```'
-            echo "${{ steps.server-meta.outputs.tags }}"
-            echo '```'
-            echo ""
-            echo "**Host**"
-            echo '```'
-            echo "${{ steps.host-meta.outputs.tags }}"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
