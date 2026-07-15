@@ -353,7 +353,7 @@ RUN set -eu; \
     echo "agy ${AGY_VERSION} pinned (sha256 verified)"
 
 # GitHub CLI (`gh`) — required for per-user GitHub App sandbox auth
-# (hosts.yml / GH_TOKEN). Pin + sha256 like agy/kiro so the image is
+# (hosts.yml + forwarded auth env). Pin + sha256 like agy/kiro so the image is
 # reconstructable. Binary lands on the shared PATH for root and the
 # OpenShell `sandbox` user.
 ARG GH_VERSION=2.96.0
