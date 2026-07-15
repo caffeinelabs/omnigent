@@ -211,7 +211,7 @@ class GitHubAppClient:
     """
 
     def __init__(
-        self, config: GitHubAppConfig, *, transport: httpx.BaseTransport | None = None
+        self, config: GitHubAppConfig, *, transport: httpx.AsyncBaseTransport | None = None
     ) -> None:
         self._config = config
         # Injectable transport for tests (httpx.MockTransport); None uses
