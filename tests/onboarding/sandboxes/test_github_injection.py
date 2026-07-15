@@ -73,7 +73,7 @@ def test_setup_commands_empty_without_identity() -> None:
     )
 
 
-def test_setup_commands_write_gh_hosts_yml() -> None:
+def test_setup_commands_write_gh_hosts_yml_and_git_credentials() -> None:
     cmds = github_sandbox_setup_commands(
         "/root", github_token="ghu_tok", github_login="octocat", ssh_authorized_keys=None
     )
@@ -81,6 +81,9 @@ def test_setup_commands_write_gh_hosts_yml() -> None:
     assert "/root/.config/gh/hosts.yml" in joined
     assert "base64 -d" in joined  # content is written base64-decoded
     assert "chmod 600" in joined
+    # git authenticates as the user via an on-disk credential.
+    assert "/root/.git-credentials" in joined
+    assert "git config --global credential.helper store" in joined
 
 
 def test_setup_commands_append_ssh_keys_deduped() -> None:
@@ -114,8 +117,9 @@ def test_start_host_injects_gh_and_ssh_and_env() -> None:
         ssh_authorized_keys=("ssh-ed25519 AAAAKEY a@b",),
     )
     all_run = "\n".join(launcher.commands)
-    # gh config + authorized_keys were written via run().
+    # gh config + git credential + authorized_keys were written via run().
     assert ".config/gh/hosts.yml" in all_run
+    assert ".git-credentials" in all_run
     assert "authorized_keys" in all_run
     # The host launch carries the per-user credential env.
     [raw] = launcher.backgrounded
@@ -123,7 +127,7 @@ def test_start_host_injects_gh_and_ssh_and_env() -> None:
     assert "GH_TOKEN=ghu_tok" in raw
 
 
-def test_start_host_clone_uses_user_token() -> None:
+def test_start_host_clone_authenticates_via_on_disk_credential() -> None:
     launcher = _RecordingLauncher()
     launcher.start_host(
         "sb-1",
@@ -136,10 +140,11 @@ def test_start_host_clone_uses_user_token() -> None:
         github_token="ghu_tok",
         github_login="octocat",
     )
-    clone_cmds = [c for c in launcher.commands if "git clone" in c]
-    assert len(clone_cmds) == 1
-    # The clone runs with the user's token so it authenticates as them.
-    assert clone_cmds[0].startswith("GIT_TOKEN=ghu_tok GIT_USERNAME=x-access-token ")
+    # The on-disk credential is written BEFORE the clone runs, so the clone
+    # authenticates as the user without an inline token prefix.
+    cred_idx = next(i for i, c in enumerate(launcher.commands) if ".git-credentials" in c)
+    clone_idx = next(i for i, c in enumerate(launcher.commands) if "git clone" in c)
+    assert cred_idx < clone_idx
 
 
 def test_start_host_no_identity_is_unchanged() -> None:
