@@ -210,8 +210,17 @@ class GitHubAppClient:
     once and reuse across requests.
     """
 
-    def __init__(self, config: GitHubAppConfig) -> None:
+    def __init__(
+        self, config: GitHubAppConfig, *, transport: httpx.BaseTransport | None = None
+    ) -> None:
         self._config = config
+        # Injectable transport for tests (httpx.MockTransport); None uses
+        # the real network.
+        self._transport = transport
+
+    def _http_client(self) -> httpx.AsyncClient:
+        """Open an AsyncClient, honoring an injected test transport."""
+        return httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S, transport=self._transport)
 
     def app_jwt(self) -> str:
         """Mint a short-lived RS256 app JWT signed with the private key.
@@ -268,7 +277,7 @@ class GitHubAppClient:
         :returns: The GitHub login and numeric user id.
         :raises GitHubAppError: When the API call fails.
         """
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as client:
+        async with self._http_client() as client:
             resp = await client.get(
                 _USER_ENDPOINT,
                 headers={
@@ -297,7 +306,7 @@ class GitHubAppClient:
         """
         url = _USER_KEYS_ENDPOINT.format(login=login)
         try:
-            async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as client:
+            async with self._http_client() as client:
                 resp = await client.get(url, headers={"Accept": "application/vnd.github+json"})
             if resp.status_code != 200:
                 _logger.warning("GitHub public keys for %s returned %s", login, resp.status_code)
@@ -313,7 +322,7 @@ class GitHubAppClient:
 
     async def _token_request(self, data: dict[str, str]) -> GitHubTokenSet:
         """POST to the token endpoint and parse the JSON token response."""
-        async with httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S) as client:
+        async with self._http_client() as client:
             resp = await client.post(
                 _TOKEN_ENDPOINT,
                 data=data,
