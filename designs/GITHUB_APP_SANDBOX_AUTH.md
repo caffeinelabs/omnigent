@@ -117,9 +117,13 @@ present:
    user.
 2. Writes `~/.config/gh/hosts.yml` with the user's `oauth_token` +
    `user`, so the `gh` CLI is authenticated as the user for every shell
-   in the sandbox — independent of env-forwarding rules.
+   in the sandbox — independent of env-forwarding rules. The managed
+   host image (`deploy/docker/Dockerfile` `--target host`) ships `gh`
+   itself so this config is usable out of the box.
 3. Appends the user's public keys to `~/.ssh/authorized_keys`
-   (`0700` dir, `0600` file).
+   (`0700` dir, `0600` file). The host image also preinstalls OpenSSH
+   and a pinned VS Code Server so Remote-SSH into the sandbox works
+   without a cold server download.
 
 When no identity is resolvable (App not configured, user not
 connected), `start_host` behaves exactly as before — the shared

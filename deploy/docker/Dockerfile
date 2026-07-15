@@ -18,8 +18,9 @@
 # and server-launched managed hosts. It bakes the full omnigent
 # install plus the tools a host needs at runtime — git (workspaces /
 # worktrees), tmux (terminal sessions spawned by native harnesses),
-# and the coding-harness CLIs (claude / codex / pi, via Node; kiro-cli via
-# Kiro's installer) — and
+# the coding-harness CLIs (claude / codex / pi, via Node; kiro-cli via
+# Kiro's installer), gh + mise, OpenSSH, and a preseeded VS Code
+# Server — and
 # skips everything server-only: no SPA bundle, no psycopg, no
 # uvicorn entrypoint. Modal's `Image.from_registry` requirements shape
 # it: `python` + `pip` on $PATH, and CMD-only (an ENTRYPOINT that
@@ -171,8 +172,11 @@ FROM node:${NODE_VERSION}-slim AS node-runtime
 # certificates for outbound HTTPS and in-sandbox downloads, plus the
 # coding-harness CLIs (claude / codex / pi / kiro-cli / opencode) so claude-sdk,
 # claude-native, codex, pi, kiro-native, and opencode-native agents can run in
-# managed sandboxes without an in-sandbox install. No SPA, no psycopg, no server
-# entrypoint.
+# managed sandboxes without an in-sandbox install. Also ships ``gh`` (for
+# per-user GitHub App auth), ``mise`` (polyglot toolchains), OpenSSH server
+# (pubkey login via injected authorized_keys), and a pinned VS Code Server +
+# CLI so Remote-SSH / ``code`` attach without a cold download. No SPA, no
+# psycopg, no server entrypoint.
 #
 # Also carries two additions required only by the NVIDIA OpenShell provider
 # (deploy/openshell/README.md) and inert for the root-based providers
@@ -204,7 +208,16 @@ RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       git tmux procps lsof bubblewrap curl ca-certificates unzip \
       iproute2 nftables \
- && rm -rf /var/lib/apt/lists/*
+      openssh-server libatomic1 \
+ && rm -rf /var/lib/apt/lists/* \
+ && mkdir -p /var/run/sshd \
+ && ssh-keygen -A \
+ && printf '%s\n' \
+      'PasswordAuthentication no' \
+      'PermitRootLogin prohibit-password' \
+      'PubkeyAuthentication yes' \
+      'X11Forwarding no' \
+      > /etc/ssh/sshd_config.d/omnigent-sandbox.conf
 
 # OpenShell-required non-root user (see the header note). UID/GID in the high
 # range per OpenShell's bring-your-own-container guidance, so that without
@@ -338,6 +351,101 @@ RUN set -eu; \
       exit 1; \
     fi; \
     echo "agy ${AGY_VERSION} pinned (sha256 verified)"
+
+# GitHub CLI (`gh`) — required for per-user GitHub App sandbox auth
+# (hosts.yml / GH_TOKEN). Pin + sha256 like agy/kiro so the image is
+# reconstructable. Binary lands on the shared PATH for root and the
+# OpenShell `sandbox` user.
+ARG GH_VERSION=2.96.0
+ARG GH_SHA256_AMD64=83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60
+ARG GH_SHA256_ARM64=06f86ec7103d41993b76cd78072f43595c34aaa56506d971d9860e67140bf909
+RUN set -eu; \
+    case "$(uname -m)" in \
+      x86_64)  arch="amd64"; sha="$GH_SHA256_AMD64" ;; \
+      aarch64) arch="arm64"; sha="$GH_SHA256_ARM64" ;; \
+      *) echo "ERROR: unsupported arch '$(uname -m)' for gh" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/gh.tar.gz \
+      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.tar.gz"; \
+    echo "${sha}  /tmp/gh.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/gh.tar.gz -C /tmp; \
+    install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${arch}/bin/gh" /usr/local/bin/gh; \
+    rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${arch}"; \
+    test -x /usr/local/bin/gh; \
+    installed="$(/usr/local/bin/gh --version | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"; \
+    [ "$installed" = "$GH_VERSION" ] || { \
+      echo "ERROR: gh reports '${installed:-<none>}', expected '$GH_VERSION'." >&2; exit 1; }; \
+    echo "gh ${GH_VERSION} pinned (sha256 verified)"
+
+# mise — polyglot runtime/version manager used by agentic workflows to
+# install project toolchains without baking every language into the
+# image. Activate for login shells (`bash -lc`) so shims are on PATH.
+ARG MISE_VERSION=2026.7.6
+ARG MISE_SHA256_AMD64=fbd2f36a5d726822e997b83b9ca29f66411de2acb2935dcabacd4df51a0dade3
+ARG MISE_SHA256_ARM64=1e5d2181bad9b897437e8227200fe661339bad7d66a3cd1828b22c48156ac73a
+RUN set -eu; \
+    case "$(uname -m)" in \
+      x86_64)  arch="linux-x64"; sha="$MISE_SHA256_AMD64" ;; \
+      aarch64) arch="linux-arm64"; sha="$MISE_SHA256_ARM64" ;; \
+      *) echo "ERROR: unsupported arch '$(uname -m)' for mise" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/mise.tar.gz \
+      "https://github.com/jdx/mise/releases/download/v${MISE_VERSION}/mise-v${MISE_VERSION}-${arch}.tar.gz"; \
+    echo "${sha}  /tmp/mise.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/mise.tar.gz -C /tmp; \
+    install -m 0755 /tmp/mise/bin/mise /usr/local/bin/mise; \
+    rm -rf /tmp/mise.tar.gz /tmp/mise; \
+    test -x /usr/local/bin/mise; \
+    installed="$(/usr/local/bin/mise --version | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"; \
+    [ "$installed" = "$MISE_VERSION" ] || { \
+      echo "ERROR: mise reports '${installed:-<none>}', expected '$MISE_VERSION'." >&2; exit 1; }; \
+    printf '%s\n' \
+      'command -v mise >/dev/null 2>&1 && eval "$(mise activate bash)"' \
+      > /etc/profile.d/mise.sh; \
+    echo "mise ${MISE_VERSION} pinned (sha256 verified)"
+
+# VS Code Server + CLI — pre-seeded so Remote-SSH (and `code serve-web` /
+# tunnel) against this sandbox does not pay a cold download for the
+# pinned stable commit. Client versions that differ still fall back to
+# VS Code's normal server download. Layout covers both modern
+# (`cli/servers/Stable-<commit>`) and legacy (`bin/<commit>`) paths.
+# Installed under /root and the OpenShell `sandbox` home. libatomic1
+# (apt above) is a runtime dependency of the server binary.
+ARG VSCODE_COMMIT=5264f2156cbcd7aea5fd004d29eaa10209155d66
+ARG VSCODE_CLI_SHA256_AMD64=5184a147ae8f213231b8966c1ff8b89eee77ac57589599ad49f372092cf4cca6
+ARG VSCODE_CLI_SHA256_ARM64=0d41236ad7b4a70f86db692132b4ba8c5c6514ec71f2bf0d550acd2b7cd5180e
+ARG VSCODE_SERVER_SHA256_AMD64=b53c3a89bb2afb96f4b91d2819c32ac342427c7b7f034b114a6eb42cda7bfe08
+ARG VSCODE_SERVER_SHA256_ARM64=f283de5f433dc942f30885aa12656a160f3fa2396a8d9abde9093851bff7a5f7
+RUN set -eu; \
+    case "$(uname -m)" in \
+      x86_64)  arch="x64"; cli_sha="$VSCODE_CLI_SHA256_AMD64"; srv_sha="$VSCODE_SERVER_SHA256_AMD64" ;; \
+      aarch64) arch="arm64"; cli_sha="$VSCODE_CLI_SHA256_ARM64"; srv_sha="$VSCODE_SERVER_SHA256_ARM64" ;; \
+      *) echo "ERROR: unsupported arch '$(uname -m)' for vscode-server" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/vscode-cli.tar.gz \
+      "https://update.code.visualstudio.com/commit:${VSCODE_COMMIT}/cli-linux-${arch}/stable"; \
+    echo "${cli_sha}  /tmp/vscode-cli.tar.gz" | sha256sum -c -; \
+    curl -fsSL -o /tmp/vscode-server.tar.gz \
+      "https://update.code.visualstudio.com/commit:${VSCODE_COMMIT}/server-linux-${arch}/stable"; \
+    echo "${srv_sha}  /tmp/vscode-server.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/vscode-cli.tar.gz -C /tmp; \
+    install -m 0755 /tmp/code /usr/local/bin/code; \
+    rm -f /tmp/code /tmp/vscode-cli.tar.gz; \
+    for home in /root /sandbox; do \
+      mkdir -p \
+        "${home}/.vscode-server/bin/${VSCODE_COMMIT}" \
+        "${home}/.vscode-server/cli/servers/Stable-${VSCODE_COMMIT}/server"; \
+      tar -xzf /tmp/vscode-server.tar.gz -C "${home}/.vscode-server/bin/${VSCODE_COMMIT}" --strip-components=1; \
+      touch "${home}/.vscode-server/bin/${VSCODE_COMMIT}/0"; \
+      tar -xzf /tmp/vscode-server.tar.gz \
+        -C "${home}/.vscode-server/cli/servers/Stable-${VSCODE_COMMIT}/server" --strip-components=1; \
+      cp /usr/local/bin/code "${home}/.vscode-server/code-${VSCODE_COMMIT}"; \
+      chmod 0755 "${home}/.vscode-server/code-${VSCODE_COMMIT}"; \
+    done; \
+    chown -R sandbox:sandbox /sandbox/.vscode-server; \
+    rm -f /tmp/vscode-server.tar.gz; \
+    test -x /usr/local/bin/code; \
+    echo "vscode-server ${VSCODE_COMMIT} pinned (sha256 verified)"
 
 # Copy the venv and source tree. The editable install's .pth files reference
 # /build/omnigent and /build/sdks/* -- both denied by the k8s Landlock LSM
