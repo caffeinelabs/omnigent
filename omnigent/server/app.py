@@ -1411,7 +1411,7 @@ def create_app(
     app.state.github_config = github_config if github_enabled else None
     app.state.github_store = github_store if github_enabled else None
     if github_enabled:
-        from omnigent.server.github_app import GitHubAppClient
+        from omnigent.server.github_app_client import GitHubAppClient
 
         app.state.github_client = GitHubAppClient(github_config)
     else:

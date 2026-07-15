@@ -21,11 +21,11 @@ from starlette.responses import RedirectResponse
 
 from omnigent.server.auth import RESERVED_USER_LOCAL, AuthProvider
 from omnigent.server.github_app import (
-    GitHubAppClient,
     GitHubAppConfig,
     GitHubAppError,
     build_authorize_url,
 )
+from omnigent.server.github_app_client import GitHubAppClient
 from omnigent.server.github_store import GithubConnectionStore
 from omnigent.server.routes._auth_helpers import require_user
 

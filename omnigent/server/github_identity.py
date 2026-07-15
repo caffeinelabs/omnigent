@@ -12,11 +12,8 @@ from __future__ import annotations
 import logging
 
 from omnigent.db.utils import now_epoch
-from omnigent.server.github_app import (
-    GitHubAppClient,
-    GitHubAppError,
-    SandboxGithubIdentity,
-)
+from omnigent.server.github_app import GitHubAppError, SandboxGithubIdentity
+from omnigent.server.github_app_client import GitHubAppClient
 from omnigent.server.github_store import GithubConnectionStore
 
 _logger = logging.getLogger(__name__)

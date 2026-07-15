@@ -2,7 +2,10 @@
 
 > **Status: implemented.** Config surface: `github:` server-config
 > section / `OMNIGENT_GITHUB_APP_*` env. Code:
-> `omnigent/server/github_app.py`, `omnigent/server/secretbox.py`,
+> `omnigent/server/github_app.py` (config + secret handling, no
+> network), `omnigent/server/github_app_client.py` (the httpx client;
+> kept separate so secret material and the network sink never share a
+> module), `omnigent/server/secretbox.py`,
 > `omnigent/server/github_store.py`,
 > `omnigent/server/routes/integrations_github.py`, the injection path
 > in `omnigent/onboarding/sandboxes/base.py` +

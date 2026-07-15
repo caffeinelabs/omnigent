@@ -1,9 +1,16 @@
-"""GitHub App configuration and API client.
+"""GitHub App configuration and credential handling.
 
-Implements the *GitHub App* (not classic OAuth App) integration that
-lets a user connect their GitHub account from the web UI and have their
-managed sandboxes authenticate ``gh`` / git as them. See
-``designs/GITHUB_APP_SANDBOX_AUTH.md``.
+Implements the config half of the *GitHub App* (not classic OAuth App)
+integration that lets a user connect their GitHub account from the web
+UI and have their managed sandboxes authenticate ``gh`` / git as them.
+See ``designs/GITHUB_APP_SANDBOX_AUTH.md``.
+
+This module deliberately owns everything that *touches the App's
+secrets* — reading them from env, minting the app JWT, and building the
+OAuth token-request form fields — but makes **no network calls**. The
+HTTP client that sends these to GitHub lives in
+:mod:`omnigent.server.github_app_client`, so secret material and the
+network sink never sit in the same module.
 
 Two credential shapes are involved:
 
@@ -25,18 +32,11 @@ import os
 import time
 from dataclasses import dataclass
 
-import httpx
 import jwt
 
 _logger = logging.getLogger(__name__)
 
 _AUTHORIZE_ENDPOINT = "https://github.com/login/oauth/authorize"
-_TOKEN_ENDPOINT = "https://github.com/login/oauth/access_token"
-_USER_ENDPOINT = "https://api.github.com/user"
-# Public per-user SSH keys — no auth required, returns only PUBLIC keys.
-_USER_KEYS_ENDPOINT = "https://api.github.com/users/{login}/keys"
-
-_HTTP_TIMEOUT_S = 15.0
 
 # App JWTs are accepted for up to 10 minutes by GitHub; use a small skew
 # on the issued-at to tolerate minor clock drift between us and GitHub.
@@ -115,6 +115,54 @@ class GitHubAppConfig:
         if not self.slug:
             return None
         return f"https://github.com/apps/{self.slug}/installations/new"
+
+    def mint_app_jwt(self) -> str:
+        """Mint a short-lived RS256 app JWT signed with the private key.
+
+        Kept here (not on the network client) so the private key never
+        leaves the secret-owning module.
+
+        :returns: A signed JWT for app-level GitHub API calls.
+        :raises RuntimeError: When no app id / private key is configured.
+        """
+        if not self.app_id or not self.private_key:
+            raise RuntimeError("app JWT requires OMNIGENT_GITHUB_APP_ID and a private key")
+        now = int(time.time())
+        payload = {
+            "iat": now - _APP_JWT_CLOCK_SKEW_S,
+            "exp": now + _APP_JWT_TTL_S,
+            "iss": self.app_id,
+        }
+        return jwt.encode(payload, self.private_key, algorithm="RS256")
+
+    def code_exchange_fields(self, code: str) -> dict[str, str]:
+        """Form fields for exchanging an authorization code for a token.
+
+        The App credentials are assembled here so the network client can
+        POST them without ever naming a secret.
+
+        :param code: The ``code`` GitHub returned to the callback.
+        :returns: The ``application/x-www-form-urlencoded`` field mapping.
+        """
+        return {
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "code": code,
+            "redirect_uri": self.redirect_uri,
+        }
+
+    def token_refresh_fields(self, refresh_token: str) -> dict[str, str]:
+        """Form fields for refreshing a user access token.
+
+        :param refresh_token: The stored ``ghr_…`` refresh token.
+        :returns: The ``application/x-www-form-urlencoded`` field mapping.
+        """
+        return {
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+        }
 
     @staticmethod
     def from_env() -> GitHubAppConfig | None:
@@ -202,153 +250,34 @@ def build_authorize_url(config: GitHubAppConfig, *, state: str) -> str:
     return f"{_AUTHORIZE_ENDPOINT}?{urlencode(params)}"
 
 
-class GitHubAppClient:
-    """Async HTTP client for the GitHub App user + app flows.
+def token_set_from_payload(payload: dict) -> GitHubTokenSet:
+    """Parse a GitHub token-endpoint JSON payload into a :class:`GitHubTokenSet`.
 
-    Stateless beyond holding the config; every method opens its own
-    short-lived :class:`httpx.AsyncClient` so the client is safe to build
-    once and reuse across requests.
+    Shared by the network client so response parsing (which names the
+    ``access_token`` / ``refresh_token`` OAuth fields) stays out of the
+    HTTP module and next to the token type it produces.
+
+    :param payload: The decoded JSON body from the token endpoint.
+    :returns: The parsed token set.
+    :raises GitHubAppError: When the payload carries an ``error`` or lacks
+        an access token.
     """
-
-    def __init__(
-        self, config: GitHubAppConfig, *, transport: httpx.AsyncBaseTransport | None = None
-    ) -> None:
-        self._config = config
-        # Injectable transport for tests (httpx.MockTransport); None uses
-        # the real network.
-        self._transport = transport
-
-    def _http_client(self) -> httpx.AsyncClient:
-        """Open an AsyncClient, honoring an injected test transport."""
-        return httpx.AsyncClient(timeout=_HTTP_TIMEOUT_S, transport=self._transport)
-
-    def app_jwt(self) -> str:
-        """Mint a short-lived RS256 app JWT signed with the private key.
-
-        :returns: A signed JWT for app-level GitHub API calls.
-        :raises RuntimeError: When no app id / private key is configured.
-        """
-        if not self._config.app_id or not self._config.private_key:
-            raise RuntimeError("app JWT requires OMNIGENT_GITHUB_APP_ID and a private key")
-        now = int(time.time())
-        payload = {
-            "iat": now - _APP_JWT_CLOCK_SKEW_S,
-            "exp": now + _APP_JWT_TTL_S,
-            "iss": self._config.app_id,
-        }
-        return jwt.encode(payload, self._config.private_key, algorithm="RS256")
-
-    async def exchange_code(self, code: str) -> GitHubTokenSet:
-        """Exchange an authorization ``code`` for a user access token.
-
-        :param code: The ``code`` GitHub returned to the callback.
-        :returns: The resulting token set.
-        :raises GitHubAppError: When GitHub rejects the exchange.
-        """
-        return await self._token_request(
-            {
-                "client_id": self._config.client_id,
-                "client_secret": self._config.client_secret,
-                "code": code,
-                "redirect_uri": self._config.redirect_uri,
-            }
-        )
-
-    async def refresh_token(self, refresh_token: str) -> GitHubTokenSet:
-        """Exchange a refresh token for a fresh user access token.
-
-        :param refresh_token: The stored ``ghr_…`` refresh token.
-        :returns: The refreshed token set.
-        :raises GitHubAppError: When GitHub rejects the refresh.
-        """
-        return await self._token_request(
-            {
-                "client_id": self._config.client_id,
-                "client_secret": self._config.client_secret,
-                "grant_type": "refresh_token",
-                "refresh_token": refresh_token,
-            }
-        )
-
-    async def fetch_login(self, access_token: str) -> tuple[str, int]:
-        """Fetch the authenticated user's ``(login, id)``.
-
-        :param access_token: A valid user access token.
-        :returns: The GitHub login and numeric user id.
-        :raises GitHubAppError: When the API call fails.
-        """
-        async with self._http_client() as client:
-            resp = await client.get(
-                _USER_ENDPOINT,
-                headers={
-                    "Authorization": f"Bearer {access_token}",
-                    "Accept": "application/vnd.github+json",
-                },
-            )
-        if resp.status_code != 200:
-            raise GitHubAppError(f"GitHub /user returned {resp.status_code}")
-        data = resp.json()
-        login = data.get("login")
-        user_id = data.get("id")
-        if not login or user_id is None:
-            raise GitHubAppError("GitHub /user response missing login/id")
-        return str(login), int(user_id)
-
-    async def fetch_public_ssh_keys(self, login: str) -> tuple[str, ...]:
-        """Fetch a user's PUBLIC SSH keys as ``authorized_keys`` lines.
-
-        Uses the unauthenticated ``/users/{login}/keys`` endpoint, which
-        only ever exposes public keys. A failure returns an empty tuple —
-        SSH-key injection is best-effort and must not fail a launch.
-
-        :param login: The GitHub login to read keys for.
-        :returns: Tuple of key lines (possibly empty).
-        """
-        url = _USER_KEYS_ENDPOINT.format(login=login)
-        try:
-            async with self._http_client() as client:
-                resp = await client.get(url, headers={"Accept": "application/vnd.github+json"})
-            if resp.status_code != 200:
-                _logger.warning("GitHub public keys for %s returned %s", login, resp.status_code)
-                return ()
-            return tuple(
-                str(entry["key"]).strip()
-                for entry in resp.json()
-                if isinstance(entry, dict) and entry.get("key")
-            )
-        except (httpx.HTTPError, ValueError, KeyError) as exc:
-            _logger.warning("Failed to fetch GitHub public keys for %s: %s", login, exc)
-            return ()
-
-    async def _token_request(self, data: dict[str, str]) -> GitHubTokenSet:
-        """POST to the token endpoint and parse the JSON token response."""
-        async with self._http_client() as client:
-            resp = await client.post(
-                _TOKEN_ENDPOINT,
-                data=data,
-                headers={"Accept": "application/json"},
-            )
-        if resp.status_code != 200:
-            raise GitHubAppError(f"GitHub token endpoint returned {resp.status_code}")
-        payload = resp.json()
-        if "error" in payload:
-            detail = payload.get("error_description", payload["error"])
-            raise GitHubAppError(f"GitHub token exchange failed: {detail}")
-        access_token = payload.get("access_token")
-        if not access_token:
-            raise GitHubAppError("GitHub token response missing access_token")
-        now = int(time.time())
-        expires_in = payload.get("expires_in")
-        refresh_expires_in = payload.get("refresh_token_expires_in")
-        return GitHubTokenSet(
-            access_token=str(access_token),
-            refresh_token=payload.get("refresh_token") or None,
-            expires_at=now + int(expires_in) if expires_in else None,
-            refresh_token_expires_at=(
-                now + int(refresh_expires_in) if refresh_expires_in else None
-            ),
-            scopes=str(payload.get("scope", "")),
-        )
+    if "error" in payload:
+        detail = payload.get("error_description", payload["error"])
+        raise GitHubAppError(f"GitHub token exchange failed: {detail}")
+    access = payload.get("access_token")
+    if not access:
+        raise GitHubAppError("GitHub token response missing access_token")
+    now = int(time.time())
+    expires_in = payload.get("expires_in")
+    refresh_expires_in = payload.get("refresh_token_expires_in")
+    return GitHubTokenSet(
+        access_token=str(access),
+        refresh_token=payload.get("refresh_token") or None,
+        expires_at=now + int(expires_in) if expires_in else None,
+        refresh_token_expires_at=(now + int(refresh_expires_in) if refresh_expires_in else None),
+        scopes=str(payload.get("scope", "")),
+    )
 
 
 class GitHubAppError(Exception):
