@@ -19,7 +19,10 @@ name: Caffeine Server Image
 
 on:
   push:
-    branches: [staging]
+    # staging: production soak tag. cursor/**: PR working branches so a
+    # cloud-agent / contributor branch can publish test images without a
+    # workflow_dispatch (which some tokens cannot fire).
+    branches: [staging, 'cursor/**']
   workflow_dispatch:
 
 permissions:
