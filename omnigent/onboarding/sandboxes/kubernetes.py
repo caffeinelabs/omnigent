@@ -66,10 +66,12 @@ from omnigent.onboarding.sandboxes.base import (
     RemoteCommandResult,
     SandboxLauncher,
     git_identity_env,
+    github_sandbox_env,
+    github_sandbox_setup_commands,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from kubernetes import client as k8s_client
 
@@ -362,6 +364,7 @@ def _render_workspace_prep_command(
     clone_dir: str | None,
     repo_url: str | None,
     repo_branch: str | None,
+    extra_setup_commands: list[str] | None = None,
 ) -> list[str]:
     """
     Render the init container command that prepares the workspace.
@@ -377,6 +380,9 @@ def _render_workspace_prep_command(
     :param repo_url: Repository clone URL, or ``None`` for an empty workspace.
     :param repo_branch: Branch to clone (``--branch … --single-branch``), or
         ``None`` for the default branch.
+    :param extra_setup_commands: Additional per-user setup commands (``gh``
+        auth + ``authorized_keys``) run after the clone; best-effort, so a
+        failure here does not abort init (``|| true``). ``None`` for none.
     :returns: The ``["bash", "-lc", script]`` command.
     """
     script = f"set -e\nmkdir -p {shlex.quote(workspace)}\n"
@@ -391,6 +397,8 @@ def _render_workspace_prep_command(
             else ""
         )
         script += f"git clone {branch}-- {shlex.quote(repo_url)} {shlex.quote(clone_dir)}\n"
+    for cmd in extra_setup_commands or ():
+        script += f"{cmd} || true\n"
     return ["bash", "-lc", script]
 
 
@@ -463,6 +471,9 @@ def build_pod_manifest(
     repo_url: str | None = None,
     repo_branch: str | None = None,
     owner: str | None = None,
+    github_token: str | None = None,
+    github_login: str | None = None,
+    ssh_authorized_keys: Sequence[str] | None = None,
     resources: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """
@@ -525,12 +536,29 @@ def build_pod_manifest(
     }
     home_mount = [{"name": "home", "mountPath": _HOME_DIR}]
 
+    # Per-user GitHub auth: the credential env (git + gh act as the user)
+    # plus the gh hosts.yml / authorized_keys setup commands run in the
+    # init container so they land in the shared HOME before the host starts.
+    github_env = github_sandbox_env(github_token)
+    github_setup = github_sandbox_setup_commands(
+        _HOME_DIR,
+        github_token=github_token,
+        github_login=github_login,
+        ssh_authorized_keys=ssh_authorized_keys,
+    )
+
+    init_env: list[dict[str, object]] = [{"name": "HOME", "value": _HOME_DIR}]
+    # Give the init container the user's token too so a private clone
+    # authenticates as the user (literal env overrides the harness Secret).
+    init_env.extend({"name": name, "value": value} for name, value in github_env.items())
     init_container: dict[str, object] = {
         "name": _INIT_CONTAINER_NAME,
         "image": image,
         "workingDir": _HOME_DIR,
-        "command": _render_workspace_prep_command(workspace, clone_dir, repo_url, repo_branch),
-        "env": [{"name": "HOME", "value": _HOME_DIR}],
+        "command": _render_workspace_prep_command(
+            workspace, clone_dir, repo_url, repo_branch, github_setup
+        ),
+        "env": init_env,
         "resources": pod_resources,
         "securityContext": container_security,
         "volumeMounts": home_mount,
@@ -550,6 +578,9 @@ def build_pod_manifest(
         },
     ]
     host_env.extend({"name": name, "value": value} for name, value in env_literals.items())
+    # Per-user GitHub credential env (git + gh authenticate as the connecting
+    # user), after env_literals so it overrides any shared GIT_TOKEN.
+    host_env.extend({"name": name, "value": value} for name, value in github_env.items())
     # Session-owner git identity, last so it wins any env_literals collision and
     # (as literal env) overrides the harness Secret's envFrom: sandbox commits
     # are authored by the human who launched the session, not the shared token.
@@ -1033,6 +1064,9 @@ class KubernetesSandboxLauncher(SandboxLauncher):
         repo_branch: str | None = None,
         repo_name: str | None = None,
         owner: str | None = None,
+        github_token: str | None = None,
+        github_login: str | None = None,
+        ssh_authorized_keys: Sequence[str] | None = None,
         on_stage: Callable[[str], None] | None = None,
     ) -> str:
         """
@@ -1059,6 +1093,13 @@ class KubernetesSandboxLauncher(SandboxLauncher):
         :param repo_name: Directory the clone lands in, or ``None``.
         :param owner: Session owner; when an email, exported as the runner Pod's
             git author / committer identity (see :func:`git_identity_env`).
+        :param github_token: Session owner's connected GitHub token, injected
+            as the Pod's git / ``gh`` credential so the sandbox acts as that
+            user. ``None`` when not connected.
+        :param github_login: Owner's GitHub login, paired with *github_token*
+            to write the ``gh`` CLI config. ``None`` when *github_token* is.
+        :param ssh_authorized_keys: Owner's PUBLIC SSH keys, appended to the
+            Pod's ``authorized_keys``. ``None`` / empty when unavailable.
         :param on_stage: Progress observer; invoked with ``"starting"``.
         :returns: The absolute in-sandbox workspace path (the cloned repository
             directory when *repo_url* is set).
@@ -1111,6 +1152,9 @@ class KubernetesSandboxLauncher(SandboxLauncher):
                     repo_url=repo_url,
                     repo_branch=repo_branch,
                     owner=owner,
+                    github_token=github_token,
+                    github_login=github_login,
+                    ssh_authorized_keys=ssh_authorized_keys,
                     resources=self._resources,
                 )
                 core.create_namespaced_pod(

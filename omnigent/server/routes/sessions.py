@@ -6392,6 +6392,38 @@ async def cancel_managed_launch_tasks() -> None:
     await asyncio.gather(*tasks, return_exceptions=True)
 
 
+async def _resolve_owner_github_identity(
+    github_store: Any,
+    github_client: Any,
+    owner: str,
+) -> Any:
+    """Resolve the owner's GitHub sandbox identity, or ``None``.
+
+    Best-effort bridge to
+    :func:`omnigent.server.github_identity.resolve_sandbox_identity`:
+    returns ``None`` when the GitHub App is not wired, the owner has not
+    connected, or resolution fails — so a managed launch degrades to the
+    shared-``GIT_TOKEN`` behaviour rather than erroring.
+
+    :param github_store: ``app.state.github_store`` or ``None``.
+    :param github_client: ``app.state.github_client`` or ``None``.
+    :param owner: The session owner to resolve credentials for.
+    :returns: A ``SandboxGithubIdentity`` or ``None``.
+    """
+    if github_store is None or github_client is None:
+        return None
+    from omnigent.server.auth import RESERVED_USER_LOCAL
+    from omnigent.server.github_identity import resolve_sandbox_identity
+
+    if owner == RESERVED_USER_LOCAL:
+        return None
+    try:
+        return await resolve_sandbox_identity(owner, store=github_store, client=github_client)
+    except Exception:
+        _logger.exception("Failed to resolve GitHub identity for %s", owner)
+        return None
+
+
 async def _run_managed_launch(
     *,
     session_id: str,
@@ -6404,6 +6436,8 @@ async def _run_managed_launch(
     host_registry: HostRegistry | None,
     tunnel_registry: TunnelRegistry | None,
     relaunch_host: Host | None = None,
+    github_store: Any = None,
+    github_client: Any = None,
 ) -> None:
     """
     Provision a managed sandbox for a session in the background.
@@ -6453,6 +6487,7 @@ async def _run_managed_launch(
         sandbox generation for, or ``None`` for a first launch (a
         fresh host identity is minted).
     """
+    github_identity = await _resolve_owner_github_identity(github_store, github_client, owner)
     managed = await _provision_managed_sandbox(
         session_id=session_id,
         owner=owner,
@@ -6461,6 +6496,7 @@ async def _run_managed_launch(
         tracker=tracker,
         host_store=host_store,
         relaunch_host=relaunch_host,
+        github_identity=github_identity,
     )
     if managed is None:
         return
@@ -6485,6 +6521,7 @@ async def _provision_managed_sandbox(
     tracker: ManagedLaunchTracker,
     host_store: HostStore,
     relaunch_host: Host | None,
+    github_identity: Any = None,
 ) -> ManagedHostLaunch | None:
     """
     Run the provision phase of a background managed launch.
@@ -6502,6 +6539,9 @@ async def _provision_managed_sandbox(
     :param host_store: Persistent host registrations.
     :param relaunch_host: Existing host row for a relaunch, or
         ``None`` for a first launch.
+    :param github_identity: The owner's resolved GitHub credentials to
+        authenticate ``gh`` / git as them in the sandbox and inject their
+        SSH keys, or ``None`` to keep the shared ``GIT_TOKEN`` behaviour.
     :returns: The launch result, or ``None`` when the launch failed
         (the tracker entry is already settled with the reason).
     """
@@ -6526,6 +6566,7 @@ async def _provision_managed_sandbox(
                 host=relaunch_host,
                 host_store=host_store,
                 repo=repo,
+                github_identity=github_identity,
                 on_stage=_on_stage,
             )
         return await launch_managed_host(
@@ -6533,6 +6574,7 @@ async def _provision_managed_sandbox(
             owner=owner,
             host_store=host_store,
             repo=repo,
+            github_identity=github_identity,
             on_stage=_on_stage,
         )
     except HTTPException as exc:
@@ -6849,6 +6891,8 @@ def _kick_managed_relaunch(
             host_registry=getattr(app_state, "host_registry", None),
             tunnel_registry=getattr(app_state, "tunnel_registry", None),
             relaunch_host=host,
+            github_store=getattr(app_state, "github_store", None),
+            github_client=getattr(app_state, "github_client", None),
         )
     )
     _managed_launch_tasks.add(relaunch_task)
@@ -14282,6 +14326,8 @@ def create_sessions_router(
                     host_store=host_store_for_managed,
                     host_registry=getattr(request.app.state, "host_registry", None),
                     tunnel_registry=getattr(request.app.state, "tunnel_registry", None),
+                    github_store=getattr(request.app.state, "github_store", None),
+                    github_client=getattr(request.app.state, "github_client", None),
                 )
             )
             _managed_launch_tasks.add(launch_task)

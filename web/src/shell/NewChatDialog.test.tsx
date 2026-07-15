@@ -635,6 +635,7 @@ function renderLanding(infoOverrides: Partial<ServerInfo> = {}, route = "/") {
     public_sharing_enabled: true,
     server_version: null,
     smart_routing_enabled: false,
+    github_app_enabled: false,
     ...infoOverrides,
   };
   return render(

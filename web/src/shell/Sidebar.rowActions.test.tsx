@@ -108,6 +108,7 @@ function serverInfo(overrides: Partial<ServerInfo> = {}): ServerInfo {
     public_sharing_enabled: true,
     server_version: null,
     smart_routing_enabled: false,
+    github_app_enabled: false,
     ...overrides,
   };
 }
