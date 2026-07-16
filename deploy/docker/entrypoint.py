@@ -335,6 +335,24 @@ def build_app(resolved_config: _ResolvedConfig | None = None) -> _BuiltApp:
 
         account_store = SqlAlchemyAccountStore(database_url)
 
+    # GitHub App + SSHPiper: same env-driven wiring as `omnigent server`
+    # (omnigent/cli.py). Without these kwargs the Docker image silently
+    # leaves Connect GitHub / Open in VS Code disabled even when the
+    # OMNIGENT_GITHUB_APP_* / OMNIGENT_SSHPIPER_* env vars are set.
+    from omnigent.server.github_app import GitHubAppConfig
+    from omnigent.server.sshpiper import SshPiperConfig
+
+    github_config = GitHubAppConfig.from_env()
+    sshpiper_config = SshPiperConfig.from_env()
+    github_store = None
+    if github_config is not None:
+        from omnigent.server.github_store import GithubConnectionStore
+        from omnigent.server.secretbox import SecretBox
+
+        github_store = GithubConnectionStore(
+            database_url, SecretBox(github_config.token_enc_secret)
+        )
+
     app = create_app(
         agent_store=agent_store,
         file_store=file_store,
@@ -352,6 +370,9 @@ def build_app(resolved_config: _ResolvedConfig | None = None) -> _BuiltApp:
         admins=config_str_list(cfg.get("admins")),
         allowed_domains=config_str_list(cfg.get("allowed_domains")),
         sandbox_config=sandbox_config,
+        github_config=github_config,
+        github_store=github_store,
+        sshpiper_config=sshpiper_config,
     )
 
     return _BuiltApp(app=app, host=resolved_config.host, port=resolved_config.port)

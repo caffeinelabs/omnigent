@@ -72,6 +72,11 @@ token (`ghr_…`); we refresh transparently at sandbox-launch time.
 The feature is **enabled** iff a client id + client secret + a resolvable
 redirect URI are present.
 
+Docker / k8s deploys boot via `deploy/docker/entrypoint.py`, which
+must call `GitHubAppConfig.from_env()` / `SshPiperConfig.from_env()` and
+pass them into `create_app` — the CLI path already does this; without the
+entrypoint wiring, `/v1/info` stays disabled even when the env is set.
+
 ## Token storage
 
 `github_connections` table (one row per `(workspace_id, user_id)`):
