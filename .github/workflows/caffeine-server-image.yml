@@ -1,21 +1,17 @@
-# Builds the Caffeine server + host images from this fork's `staging` branch and
-# pushes them to our registry:
+# Builds the Caffeine server + host images and pushes them to our registry:
 #
-#   ghcr.io/caffeinelabs/omnigent-server:staging{,-<sha>}  (server, kubernetes extra)
-#   ghcr.io/caffeinelabs/omnigent-host:staging{,-<sha>}    (runner host, same commit)
+#   ghcr.io/caffeinelabs/omnigent-server:<branch>{,-<sha>}  (server, kubernetes extra)
+#   ghcr.io/caffeinelabs/omnigent-host:<branch>{,-<sha>}    (runner host, same commit)
 #
-# The server needs the `kubernetes` extra (the sandbox launcher imports the
-# Python k8s client, which the upstream published image omits). We build the
-# host from the SAME commit rather than reusing ghcr.io/omnigent-ai/omnigent-host
-# (which only publishes up to v0.1.x) so host↔server protocol always matches.
-# opencode is NOT baked in yet — add it here when we move past the GIT_AUTHOR
-# test. Distinct from the inherited upstream `oss-publish-images.yml`, which
-# targets ghcr.io/omnigent-ai (not writable by this fork) and ships no extras.
+# On `staging`, that yields `:staging` / `:staging-<sha>`.
+# `cursor/**` working-branch pushes publish branch-scoped soak tags without
+# moving `:staging`. Keep workflow edits OUT of untrusted PRs long-term
+# (sensitive-path guard); use a short-lived commit to publish, then revert.
 name: Caffeine Server Image
 
 on:
   push:
-    branches: [staging]
+    branches: [staging, 'cursor/**']
   workflow_dispatch:
 
 permissions:
@@ -50,12 +46,9 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/omnigent-server
           tags: |
-            type=raw,value=staging
-            type=sha,prefix=staging-,format=short
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-,format=short
 
-      # amd64 only: this runs as our omnigent server on the (amd64) sandbox
-      # cluster. build-arg adds the kubernetes client so the sandbox launcher
-      # can import it — the whole point of the fork.
       - name: Build and push server
         uses: docker/build-push-action@v6
         with:
@@ -77,13 +70,9 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository_owner }}/omnigent-host
           tags: |
-            type=raw,value=staging
-            type=sha,prefix=staging-,format=short
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-,format=short
 
-      # Runner host image, `host` target of the same Dockerfile, same commit as
-      # the server so the dial-back protocol matches. amd64 only — the launcher
-      # hard-pins runner Pods to kubernetes.io/arch: amd64. Reuses the builder
-      # layers cached by the server build above.
       - name: Build and push host
         uses: docker/build-push-action@v6
         with:
@@ -97,3 +86,19 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
+
+      - name: Summarize published tags
+        run: |
+          {
+            echo "### Published images"
+            echo ""
+            echo "**Server**"
+            echo '```'
+            echo "${{ steps.server-meta.outputs.tags }}"
+            echo '```'
+            echo ""
+            echo "**Host**"
+            echo '```'
+            echo "${{ steps.host-meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
