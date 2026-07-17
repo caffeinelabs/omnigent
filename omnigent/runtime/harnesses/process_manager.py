@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import logging
 import os
 import secrets
@@ -211,6 +212,12 @@ def _socket_path(instance_dir: Path, conversation_id: str) -> Path:
     """
     Per-conversation socket path under the per-AP-instance dir.
 
+    The filename is a short, stable hash of the conversation id, not the
+    id itself: ``AF_UNIX`` paths cap at ~107 bytes, and a container uid can
+    be 10 digits (``/tmp/omnigent-1000660000``), so embedding the full
+    ``conv_<32 hex>`` id overflows the limit and the bind fails. The hash is
+    deterministic, so the runner (bind) and AP's client (connect) agree.
+
     :param instance_dir: This Omnigent instance's directory, e.g.
         ``/tmp/omnigent/ap-abc123``.
     :param conversation_id: AP-allocated conversation id, e.g.
@@ -218,7 +225,8 @@ def _socket_path(instance_dir: Path, conversation_id: str) -> Path:
     :returns: Absolute Unix socket path the runner binds and AP's
         httpx client connects to.
     """
-    return instance_dir / f"conv-{conversation_id}.sock"
+    token = hashlib.sha256(conversation_id.encode()).hexdigest()[:16]
+    return instance_dir / f"c-{token}.sock"
 
 
 def _resolve_module_path(harness: str) -> str:
@@ -553,8 +561,10 @@ class HarnessProcessManager:
         self._reaper_interval_s = reaper_interval_s
         self._tmp_parent = tmp_parent if tmp_parent is not None else _default_tmp_parent()
         # Pre-allocate the instance dir path so it stays stable
-        # across re-entrant ``start()`` calls (idempotent boot).
-        self._instance_dir = self._tmp_parent / f"ap-{uuid.uuid4().hex}"
+        # across re-entrant ``start()`` calls (idempotent boot). A short
+        # suffix keeps the per-conversation socket path under the AF_UNIX
+        # length limit even below a long ``/tmp/omnigent-<uid>`` parent.
+        self._instance_dir = self._tmp_parent / f"ap-{uuid.uuid4().hex[:12]}"
         self._entries: dict[str, _SubprocessEntry] = {}
         # Per-conversation in-flight harness response_id. The runner's
         # ``proxy_stream`` populates it via :meth:`mark_in_flight` when

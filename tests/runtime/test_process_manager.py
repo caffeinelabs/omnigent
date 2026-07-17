@@ -147,3 +147,24 @@ def test_build_harness_spawn_env_strips_binding_token_without_overrides(
     assert RUNNER_TUNNEL_BINDING_TOKEN_ENV_VAR not in env
     assert "bug-binding-token-secret" not in env.values()  # not leaked under another key
     assert env["PATH_MARKER_FOR_TEST"] == "marker-value"
+
+
+def test_socket_path_stays_within_af_unix_limit_under_long_parent() -> None:
+    """The per-conversation socket path must fit the ~107-byte AF_UNIX limit.
+
+    A container uid can be 10 digits, so the default parent is
+    ``/tmp/omnigent-1000660000``; combined with a full ``conv_<32 hex>`` id
+    the old ``conv-<id>.sock`` name overflowed and the harness bind failed
+    with ``OSError: AF_UNIX path too long`` (no chat response). The name is
+    now a short hash, so even the longest realistic id stays well under.
+    """
+    from omnigent.runtime.harnesses.process_manager import _socket_path
+
+    instance_dir = Path("/tmp/omnigent-1000660000/ap-0123456789ab")
+    conversation_id = "conv_" + "d" * 32
+    sock = _socket_path(instance_dir, conversation_id)
+    assert len(str(sock)) <= 103  # margin below the 107/108-byte cap
+    # Deterministic: runner (bind) and client (connect) must agree.
+    assert _socket_path(instance_dir, conversation_id) == sock
+    # Distinct conversations get distinct sockets.
+    assert _socket_path(instance_dir, "conv_other") != sock
