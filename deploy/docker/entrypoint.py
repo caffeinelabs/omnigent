@@ -375,6 +375,17 @@ def build_app(resolved_config: _ResolvedConfig | None = None) -> _BuiltApp:
         sshpiper_config=sshpiper_config,
     )
 
+    # Surface the same flags /v1/info exposes so a missing sandbox:
+    # block or GitHub App env shows up in pod logs without curling.
+    managed = sandbox_config is not None and sandbox_config.managed_launch_supported
+    logger.info(
+        "Capabilities: managed_sandboxes=%s provider=%s github_app=%s sshpiper_host=%s",
+        managed,
+        sandbox_config.provider if managed else None,
+        github_config is not None and github_store is not None,
+        sshpiper_config.host if sshpiper_config is not None else None,
+    )
+
     return _BuiltApp(app=app, host=resolved_config.host, port=resolved_config.port)
 
 
