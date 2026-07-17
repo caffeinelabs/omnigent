@@ -22,8 +22,12 @@ Platform notes that shape this launcher:
 
 - **Token via Secret.** The launch token rides a per-Pod Kubernetes Secret
   referenced by ``secretKeyRef`` — never the Pod spec, an exec request URI, or
-  any audit-logged surface. Harness LLM credentials ride a pre-created Secret
-  projected via ``envFrom`` (``sandbox.kubernetes.secret_name``).
+  any audit-logged surface. The connecting user's GitHub token (when present)
+  rides the SAME Secret and is projected as ``GIT_TOKEN`` / ``GH_TOKEN`` /
+  ``GITHUB_TOKEN`` via ``secretKeyRef``; the init container's ``gh`` / git
+  setup reads it from that env at runtime, so it never lands in the Pod spec
+  either. Harness LLM credentials ride a pre-created Secret projected via
+  ``envFrom`` (``sandbox.kubernetes.secret_name``).
 - **Writable HOME.** The host image's WORKDIR is ``/root`` (root-owned), but
   the Pod runs as the image's non-root ``sandbox`` user (:data:`_RUN_AS_UID`)
   for least privilege, so ``$HOME`` would be unwritable. The Pod sets ``HOME``
@@ -62,11 +66,11 @@ from omnigent.host.identity import (
     HOST_TOKEN_ENV_VAR,
 )
 from omnigent.onboarding.sandboxes.base import (
+    _GIT_TOKEN_USERNAME,
     DEFAULT_HOST_IMAGE,
     RemoteCommandResult,
     SandboxLauncher,
     git_identity_env,
-    github_sandbox_env,
     github_sandbox_setup_commands,
 )
 
@@ -348,6 +352,12 @@ def _new_pod_name(label: str) -> str:
     return f"omnigent-{base[:40]}-{uuid.uuid4().hex[:6]}"
 
 
+# Key under which the connecting user's GitHub token rides the per-Pod Secret
+# (alongside the launch token), projected into the sandbox as GIT_TOKEN /
+# GH_TOKEN / GITHUB_TOKEN via secretKeyRef so it never enters the Pod spec.
+_GITHUB_TOKEN_SECRET_KEY = "GITHUB_USER_TOKEN"
+
+
 def _token_secret_name(pod_name: str) -> str:
     """
     Name of the per-Pod launch-token Secret for *pod_name*.
@@ -423,23 +433,53 @@ def _render_host_command(server_url: str) -> list[str]:
     return ["bash", "-lc", script]
 
 
+def _github_secret_env(token_secret_name: str) -> list[dict[str, object]]:
+    """
+    Build the user's GitHub credential env as ``secretKeyRef`` entries.
+
+    ``GIT_TOKEN`` / ``GH_TOKEN`` / ``GITHUB_TOKEN`` all resolve from the per-Pod
+    Secret's :data:`_GITHUB_TOKEN_SECRET_KEY` at runtime, so the token stays out
+    of the Pod spec. ``GIT_USERNAME`` is the fixed, non-secret token-user, so it
+    stays a literal.
+
+    :param token_secret_name: Per-Pod Secret holding the GitHub token.
+    :returns: Env entries suitable for a container's ``env`` list.
+    """
+
+    def _ref() -> dict[str, object]:
+        return {"secretKeyRef": {"name": token_secret_name, "key": _GITHUB_TOKEN_SECRET_KEY}}
+
+    return [
+        {"name": "GIT_USERNAME", "value": _GIT_TOKEN_USERNAME},
+        {"name": "GIT_TOKEN", "valueFrom": _ref()},
+        {"name": "GH_TOKEN", "valueFrom": _ref()},
+        {"name": "GITHUB_TOKEN", "valueFrom": _ref()},
+    ]
+
+
 def build_token_secret_manifest(
-    *, secret_name: str, namespace: str, token: str
+    *, secret_name: str, namespace: str, token: str, github_token: str | None = None
 ) -> dict[str, object]:
     """
     Build the per-Pod launch-token Secret manifest as a plain dict.
 
     The token rides this Secret (referenced by the Pod's ``secretKeyRef``)
     instead of the Pod spec, so it never lands in an audit-logged surface. The
-    Secret is labeled like its Pod for GC and deleted alongside it by
+    connecting user's GitHub token (when present) rides the same Secret under
+    :data:`_GITHUB_TOKEN_SECRET_KEY`, for the same reason. The Secret is
+    labeled like its Pod for GC and deleted alongside it by
     :meth:`KubernetesSandboxLauncher.terminate`.
 
     :param secret_name: The Secret name (see :func:`_token_secret_name`).
     :param namespace: Namespace the Secret is created in.
     :param token: The raw launch token (the apiserver base64-encodes
         ``stringData``).
+    :param github_token: The connecting user's GitHub token, or ``None``.
     :returns: The Secret manifest dict.
     """
+    string_data: dict[str, str] = {HOST_TOKEN_ENV_VAR: token}
+    if github_token:
+        string_data[_GITHUB_TOKEN_SECRET_KEY] = github_token
     return {
         "apiVersion": "v1",
         "kind": "Secret",
@@ -449,7 +489,7 @@ def build_token_secret_manifest(
             "labels": {_MANAGED_BY_LABEL: _MANAGED_BY_VALUE, _ROLE_LABEL: _ROLE_VALUE},
         },
         "type": "Opaque",
-        "stringData": {HOST_TOKEN_ENV_VAR: token},
+        "stringData": string_data,
     }
 
 
@@ -495,7 +535,10 @@ def build_pod_manifest(
       the API with the runner SA.
     - The launch token is referenced via ``secretKeyRef`` (never in the spec);
       the host identity rides literal env; harness credentials are projected via
-      ``envFrom`` when *harness_secret* is set.
+      ``envFrom`` when *harness_secret* is set. The connecting user's GitHub
+      token likewise rides the per-Pod Secret via ``secretKeyRef`` (as
+      ``GIT_TOKEN`` / ``GH_TOKEN`` / ``GITHUB_TOKEN``), so it never enters the
+      Pod spec — the init container's ``gh`` / git setup reads it from that env.
     - Pod + container ``securityContext`` satisfy Pod Security "restricted"
       (runAsNonRoot as the image's ``sandbox`` user :data:`_RUN_AS_UID`, drop ALL
       caps, ``seccompProfile: RuntimeDefault``, no privilege escalation). The
@@ -539,18 +582,22 @@ def build_pod_manifest(
     # Per-user GitHub auth: the credential env (git + gh act as the user)
     # plus the gh hosts.yml / authorized_keys setup commands run in the
     # init container so they land in the shared HOME before the host starts.
-    github_env = github_sandbox_env(github_token)
+    # The token rides the per-Pod Secret (secretKeyRef), never literal env, so
+    # it stays out of the Pod spec; the setup commands read it from GH_TOKEN.
+    github_env = _github_secret_env(token_secret_name) if github_token else []
     github_setup = github_sandbox_setup_commands(
         _HOME_DIR,
-        github_token=github_token,
+        github_token=None,
         github_login=github_login,
         ssh_authorized_keys=ssh_authorized_keys,
+        github_token_env="GH_TOKEN" if github_token else None,
     )
 
     init_env: list[dict[str, object]] = [{"name": "HOME", "value": _HOME_DIR}]
-    # Give the init container the user's token too so a private clone
-    # authenticates as the user (literal env overrides the harness Secret).
-    init_env.extend({"name": name, "value": value} for name, value in github_env.items())
+    # Give the init container the user's token too (via the same secretKeyRef)
+    # so a private clone authenticates as the user; it overrides the harness
+    # Secret's shared GIT_TOKEN.
+    init_env.extend(github_env)
     init_container: dict[str, object] = {
         "name": _INIT_CONTAINER_NAME,
         "image": image,
@@ -579,8 +626,9 @@ def build_pod_manifest(
     ]
     host_env.extend({"name": name, "value": value} for name, value in env_literals.items())
     # Per-user GitHub credential env (git + gh authenticate as the connecting
-    # user), after env_literals so it overrides any shared GIT_TOKEN.
-    host_env.extend({"name": name, "value": value} for name, value in github_env.items())
+    # user), after env_literals so it overrides any shared GIT_TOKEN. The token
+    # values come from the per-Pod Secret via secretKeyRef, not the spec.
+    host_env.extend(github_env)
     # Session-owner git identity, last so it wins any env_literals collision and
     # (as literal env) overrides the harness Secret's envFrom: sandbox commits
     # are authored by the human who launched the session, not the shared token.
@@ -1131,7 +1179,10 @@ class KubernetesSandboxLauncher(SandboxLauncher):
                 core.create_namespaced_secret(
                     namespace,
                     build_token_secret_manifest(
-                        secret_name=secret_name, namespace=namespace, token=token
+                        secret_name=secret_name,
+                        namespace=namespace,
+                        token=token,
+                        github_token=github_token,
                     ),
                     _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
                 )

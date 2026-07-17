@@ -111,6 +111,7 @@ def github_sandbox_setup_commands(
     github_token: str | None,
     github_login: str | None,
     ssh_authorized_keys: Sequence[str] | None,
+    github_token_env: str | None = None,
 ) -> list[str]:
     """Build the in-sandbox commands that authenticate the connecting user.
 
@@ -130,26 +131,57 @@ def github_sandbox_setup_commands(
     splat it unconditionally.
 
     :param home: The sandbox ``$HOME`` (already resolved).
-    :param github_token: The user access token, or ``None``.
+    :param github_token: The user access token, or ``None``. Ignored when
+        *github_token_env* is set.
     :param github_login: The user's GitHub login, or ``None``.
     :param ssh_authorized_keys: The user's public SSH key lines, or ``None``.
+    :param github_token_env: Name of an environment variable already holding
+        the token in the sandbox (e.g. from a Kubernetes ``secretKeyRef``).
+        When set, the commands read the token from that variable at runtime
+        so it never appears in the command text — the only way to keep it out
+        of a surface like the Pod spec. When ``None`` the literal
+        *github_token* is embedded (for launchers with no secret channel).
     :returns: Shell command strings, in the order they should run.
     """
     commands: list[str] = []
-    if github_token and github_login:
-        hosts_yml = (
-            "github.com:\n"
-            f"    user: {github_login}\n"
-            f"    oauth_token: {github_token}\n"
-            "    git_protocol: https\n"
-        )
-        commands.append(_write_file_command(home, ".config/gh/hosts.yml", hosts_yml, mode="600"))
+    have_token = bool(github_token_env) or bool(github_token)
+    if have_token and github_login:
+        if github_token_env:
+            # Read the token from the env var at runtime; the command text
+            # carries only the variable name, never the secret.
+            token_ref = f'"${{{github_token_env}}}"'
+            gh_dir = f"{home}/.config/gh"
+            hosts_path = f"{gh_dir}/hosts.yml"
+            commands.append(
+                f"mkdir -p {shlex.quote(gh_dir)} && "
+                f"printf 'github.com:\\n    user: %s\\n    oauth_token: %s\\n"
+                f"    git_protocol: https\\n' {shlex.quote(github_login)} {token_ref} "
+                f"> {shlex.quote(hosts_path)} && chmod 600 {shlex.quote(hosts_path)}"
+            )
+            cred_path = f"{home}/.git-credentials"
+            commands.append(
+                f"printf 'https://%s:%s@github.com\\n' "
+                f"{shlex.quote(_GIT_TOKEN_USERNAME)} {token_ref} "
+                f"> {shlex.quote(cred_path)} && chmod 600 {shlex.quote(cred_path)}"
+            )
+        else:
+            hosts_yml = (
+                "github.com:\n"
+                f"    user: {github_login}\n"
+                f"    oauth_token: {github_token}\n"
+                "    git_protocol: https\n"
+            )
+            commands.append(
+                _write_file_command(home, ".config/gh/hosts.yml", hosts_yml, mode="600")
+            )
+            git_credentials = f"https://{_GIT_TOKEN_USERNAME}:{github_token}@github.com\n"
+            commands.append(
+                _write_file_command(home, ".git-credentials", git_credentials, mode="600")
+            )
         # Authenticate git over HTTPS as the user via an on-disk credential
         # (the ``store`` helper). This covers the workspace clone AND the
         # agent's later git ops without prefixing every command with the
         # token, and does not depend on the launcher's clone implementation.
-        git_credentials = f"https://{_GIT_TOKEN_USERNAME}:{github_token}@github.com\n"
-        commands.append(_write_file_command(home, ".git-credentials", git_credentials, mode="600"))
         commands.append("git config --global credential.helper store")
 
     keys = [k.strip() for k in (ssh_authorized_keys or ()) if k.strip()]
