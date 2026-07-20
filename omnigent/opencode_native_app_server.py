@@ -290,6 +290,14 @@ def filtered_server_env(
     env.update(extra_env or {})
     env["XDG_DATA_HOME"] = str(xdg_data_home_for_bridge_dir(bridge_dir))
     env["XDG_CONFIG_HOME"] = str(xdg_config_home_for_bridge_dir(bridge_dir))
+    # The per-session XDG_CONFIG_HOME above also redirects the `gh` CLI's
+    # config lookup, hiding a ~/.config/gh/hosts.yml that a managed sandbox
+    # injects to authenticate `gh` as the connecting user. Point gh back at
+    # the real config dir (GH_CONFIG_DIR wins over XDG_CONFIG_HOME) so the
+    # agent's `gh` stays logged in, while OpenCode keeps its isolated config.
+    home = env.get("HOME")
+    if home:
+        env.setdefault("GH_CONFIG_DIR", os.path.join(home, ".config", "gh"))
     env[OPENCODE_SERVER_PASSWORD_ENV_VAR] = auth_secret
     env[OPENCODE_SERVER_USERNAME_ENV_VAR] = OPENCODE_DEFAULT_USERNAME
     return env
