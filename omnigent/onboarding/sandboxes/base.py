@@ -183,6 +183,21 @@ def github_sandbox_setup_commands(
         # agent's later git ops without prefixing every command with the
         # token, and does not depend on the launcher's clone implementation.
         commands.append("git config --global credential.helper store")
+        # Tell the agent (via an AGENTS.md the harness reads from the workspace)
+        # that gh/git are already authenticated, so it clones/PRs directly
+        # instead of asking the user for a token.
+        agents_md = (
+            "# Sandbox environment\n\n"
+            "This managed sandbox is already authenticated to GitHub as "
+            f"**{github_login}** via the `gh` CLI and git (HTTPS).\n\n"
+            "- Clone any repo you can access: `gh repo clone <owner>/<repo>` or "
+            "`git clone https://github.com/<owner>/<repo>.git`.\n"
+            "- Push branches, open PRs, and comment with `gh` / `git` — they act "
+            f"as {github_login} (e.g. `gh pr create --fill`).\n"
+            "- Auth is already configured; never ask the user for a token or "
+            "print credentials.\n"
+        )
+        commands.append(_write_file_command(home, "workspace/AGENTS.md", agents_md, mode="644"))
 
     keys = [k.strip() for k in (ssh_authorized_keys or ()) if k.strip()]
     if keys:

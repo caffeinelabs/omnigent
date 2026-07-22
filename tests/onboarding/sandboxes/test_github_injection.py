@@ -84,6 +84,18 @@ def test_setup_commands_write_gh_hosts_yml_and_git_credentials() -> None:
     # git authenticates as the user via an on-disk credential.
     assert "/root/.git-credentials" in joined
     assert "git config --global credential.helper store" in joined
+    # An AGENTS.md is dropped in the workspace so the agent knows gh/git are
+    # already authenticated and can clone/PR directly.
+    assert "/root/workspace/AGENTS.md" in joined
+
+
+def test_setup_commands_no_agents_md_without_identity() -> None:
+    """No AGENTS.md (nor gh config) is written when there's no GitHub identity."""
+    cmds = github_sandbox_setup_commands(
+        "/root", github_token=None, github_login=None, ssh_authorized_keys=("ssh-ed25519 K a@b",)
+    )
+    joined = "\n".join(cmds)
+    assert "AGENTS.md" not in joined
 
 
 def test_setup_commands_append_ssh_keys_deduped() -> None:
