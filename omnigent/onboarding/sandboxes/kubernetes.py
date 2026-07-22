@@ -124,13 +124,13 @@ out-of-cluster fallback. Ignored when in-cluster config loads."""
 _DEFAULT_NAMESPACE: str = "omnigent-sandboxes"
 _DEFAULT_SERVICE_ACCOUNT: str = "omnigent-runner"
 
-# Pod resource sizing. Matches the other launchers' 2 vCPU / 4 GiB ceiling; a
-# low request keeps the Pod schedulable on modest nodes while the limit caps a
-# runaway runner.
-_SANDBOX_CPU_REQUEST: str = "500m"
-_SANDBOX_CPU_LIMIT: str = "2"
-_SANDBOX_MEMORY_REQUEST: str = "1Gi"
-_SANDBOX_MEMORY_LIMIT: str = "4Gi"
+# Pod-level resource sizing (applied to the whole Pod, shared across the host
+# and the ssh sidecar rather than budgeted per container). Memory is guaranteed
+# (request == limit); CPU has a floor but no ceiling, so a busy sandbox can burst
+# to whatever the node has free.
+_SANDBOX_CPU_REQUEST: str = "4"
+_SANDBOX_MEMORY_REQUEST: str = "16Gi"
+_SANDBOX_MEMORY_LIMIT: str = "16Gi"
 
 # Labels stamped on every managed runner Pod + its token Secret, so an operator
 # (or a future reconciler) can select omnigent-managed objects for GC.
@@ -310,18 +310,20 @@ def _validate_k8s_name_env(
 def _resolve_pod_resources(resources: dict[str, object] | None) -> dict[str, dict[str, str]]:
     """
     Merge a configured ``sandbox.kubernetes.resources`` block over the built-in
-    defaults, producing the container ``resources`` mapping.
+    defaults, producing the **Pod-level** ``resources`` mapping.
 
-    Each tier and field is optional; an omitted field keeps the default. The
-    config shape is validated at parse time, so this merge reads only the
-    recognized string fields.
+    Defaults guarantee memory (request == limit) and give CPU a floor but no
+    limit, so the sandbox bursts freely. Each tier and field is optional; an
+    omitted field keeps the default, and an operator may add ``limits.cpu`` to
+    cap bursting. Only the recognized ``cpu`` / ``memory`` string fields are read.
 
     :param resources: The configured block, or ``None`` for the defaults.
-    :returns: A ``{"requests": {...}, "limits": {...}}`` mapping.
+    :returns: A ``{"requests": {...}, "limits": {...}}`` mapping (no ``limits.cpu``
+        unless the config supplies one).
     """
     resolved: dict[str, dict[str, str]] = {
         "requests": {"cpu": _SANDBOX_CPU_REQUEST, "memory": _SANDBOX_MEMORY_REQUEST},
-        "limits": {"cpu": _SANDBOX_CPU_LIMIT, "memory": _SANDBOX_MEMORY_LIMIT},
+        "limits": {"memory": _SANDBOX_MEMORY_LIMIT},
     }
     if not resources:
         return resolved
@@ -531,6 +533,10 @@ def build_pod_manifest(
       Both share the writable-HOME ``emptyDir``.
     - ``restartPolicy: Never`` — a crashed host should not silently restart with
       a stale launch token; the managed machinery provisions a replacement.
+    - Resources are budgeted at the **Pod level** (``spec.resources``), shared by
+      the host and any injected sidecar, so neither carries its own request/limit.
+    - ``shareProcessNamespace: true`` — an ssh session in a sidecar sees and can
+      signal the host's processes.
     - ``automountServiceAccountToken: false`` — a compromised agent cannot reach
       the API with the runner SA.
     - The launch token is referenced via ``secretKeyRef`` (never in the spec);
@@ -573,6 +579,8 @@ def build_pod_manifest(
     :returns: The Pod manifest dict.
     """
     pod_resources = _resolve_pod_resources(resources)
+    # Budget resources at the Pod level so the host and the ssh sidecar share one
+    # pool instead of each carrying its own; containers omit their own resources.
     container_security = {
         "allowPrivilegeEscalation": False,
         "capabilities": {"drop": ["ALL"]},
@@ -606,7 +614,6 @@ def build_pod_manifest(
             workspace, clone_dir, repo_url, repo_branch, github_setup
         ),
         "env": init_env,
-        "resources": pod_resources,
         "securityContext": container_security,
         "volumeMounts": home_mount,
     }
@@ -642,7 +649,6 @@ def build_pod_manifest(
         "workingDir": _HOME_DIR,
         "command": _render_host_command(server_url),
         "env": host_env,
-        "resources": pod_resources,
         "securityContext": container_security,
         "volumeMounts": home_mount,
     }
@@ -653,6 +659,11 @@ def build_pod_manifest(
         "restartPolicy": "Never",
         "automountServiceAccountToken": False,
         "serviceAccountName": service_account,
+        # Whole-Pod budget shared by the host + ssh sidecar (see above).
+        "resources": pod_resources,
+        # Share the PID namespace so an ssh session in the sidecar sees (and can
+        # signal) the sandbox host's processes.
+        "shareProcessNamespace": True,
         # amd64 default first so existing deployments keep their placement; an
         # operator "kubernetes.io/arch" entry overrides it (e.g. arm64 nodes —
         # the host image is published multi-arch).

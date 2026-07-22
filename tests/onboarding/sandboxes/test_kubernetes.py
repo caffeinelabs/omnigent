@@ -223,6 +223,35 @@ def test_build_pod_manifest_is_restricted_and_least_privilege() -> None:
     assert host["securityContext"]["capabilities"] == {"drop": ["ALL"]}
 
 
+def test_build_pod_manifest_budgets_resources_at_pod_level() -> None:
+    """Resources live on the Pod (shared by host + sidecar), not per-container.
+
+    Memory is guaranteed (request == limit); CPU has a floor but no limit so the
+    sandbox can burst. Containers carry no resources of their own, and the PID
+    namespace is shared so an ssh session sees the host's processes.
+    """
+    manifest = build_pod_manifest(**_MANIFEST_KW)
+    spec = manifest["spec"]
+    assert spec["shareProcessNamespace"] is True
+    res = spec["resources"]
+    assert res["requests"]["cpu"] == "4"
+    assert res["requests"]["memory"] == "16Gi"
+    assert res["limits"]["memory"] == "16Gi"
+    assert "cpu" not in res["limits"]  # CPU is burstable (no ceiling)
+    # No per-container resources — the whole Pod shares one budget.
+    assert "resources" not in spec["containers"][0]
+    assert "resources" not in spec["initContainers"][0]
+
+
+def test_resolve_pod_resources_config_override_can_add_cpu_cap() -> None:
+    """Config overrides win, and an operator can add a CPU limit to cap bursting."""
+    res = k8s._resolve_pod_resources(
+        {"requests": {"cpu": "2", "memory": "8Gi"}, "limits": {"cpu": "8", "memory": "8Gi"}}
+    )
+    assert res["requests"] == {"cpu": "2", "memory": "8Gi"}
+    assert res["limits"] == {"cpu": "8", "memory": "8Gi"}
+
+
 @pytest.mark.parametrize(
     ("clone_dir", "repo_url", "repo_branch", "expect_clone", "expect_branch"),
     [
