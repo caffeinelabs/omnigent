@@ -185,17 +185,27 @@ def github_sandbox_setup_commands(
         commands.append("git config --global credential.helper store")
         # Tell the agent (via an AGENTS.md the harness reads from the workspace)
         # that gh/git are already authenticated, so it clones/PRs directly
-        # instead of asking the user for a token.
+        # instead of asking the user for a token, and always ships changes as a
+        # pull request rather than pushing to the default branch.
         agents_md = (
             "# Sandbox environment\n\n"
             "This managed sandbox is already authenticated to GitHub as "
             f"**{github_login}** via the `gh` CLI and git (HTTPS).\n\n"
             "- Clone any repo you can access: `gh repo clone <owner>/<repo>` or "
             "`git clone https://github.com/<owner>/<repo>.git`.\n"
-            "- Push branches, open PRs, and comment with `gh` / `git` — they act "
-            f"as {github_login} (e.g. `gh pr create --fill`).\n"
-            "- Auth is already configured; never ask the user for a token or "
-            "print credentials.\n"
+            "- `gh` / git act as "
+            f"{github_login}; auth is already configured, so never ask the user "
+            "for a token or print credentials.\n\n"
+            "## Shipping changes — always open a pull request\n\n"
+            "Whenever you make changes to a repository, deliver them as a pull "
+            "request. Never commit or push directly to the default branch "
+            "(`main`/`master`).\n\n"
+            "1. Create a new branch: `git checkout -b <short-descriptive-name>`.\n"
+            "2. Commit with a clear message.\n"
+            "3. Push and open a PR: `git push -u origin HEAD && "
+            "gh pr create --fill` (write a real title/body describing what and "
+            "why; fill in the repo's PR template if it has one).\n"
+            "4. Report the PR URL back to the user.\n"
         )
         commands.append(_write_file_command(home, "workspace/AGENTS.md", agents_md, mode="644"))
 
