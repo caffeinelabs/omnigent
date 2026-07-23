@@ -599,6 +599,9 @@ def build_pod_manifest(
         github_login=github_login,
         ssh_authorized_keys=ssh_authorized_keys,
         github_token_env="GH_TOKEN" if github_token else None,
+        # A Docker-in-Docker sidecar is injected into every managed runner Pod
+        # by cluster admission, so the agent can build/run containers.
+        docker_available=True,
     )
 
     init_env: list[dict[str, object]] = [{"name": "HOME", "value": _HOME_DIR}]
@@ -624,6 +627,11 @@ def build_pod_manifest(
     host_env: list[dict[str, object]] = [
         {"name": "HOME", "value": _HOME_DIR},
         {"name": "IS_SANDBOX", "value": "1"},
+        # A Docker-in-Docker sidecar (injected by cluster admission) shares the
+        # Pod network namespace and exposes the Engine API on loopback, so the
+        # agent's `docker` CLI reaches it here. Harmless when no sidecar exists —
+        # `docker` just reports the daemon is unreachable.
+        {"name": "DOCKER_HOST", "value": "tcp://127.0.0.1:2375"},
         {"name": HOST_ID_ENV_VAR, "value": host_id},
         {"name": HOST_NAME_ENV_VAR, "value": host_name},
         {

@@ -112,6 +112,7 @@ def github_sandbox_setup_commands(
     github_login: str | None,
     ssh_authorized_keys: Sequence[str] | None,
     github_token_env: str | None = None,
+    docker_available: bool = False,
 ) -> list[str]:
     """Build the in-sandbox commands that authenticate the connecting user.
 
@@ -141,6 +142,9 @@ def github_sandbox_setup_commands(
         so it never appears in the command text — the only way to keep it out
         of a surface like the Pod spec. When ``None`` the literal
         *github_token* is embedded (for launchers with no secret channel).
+    :param docker_available: When ``True``, the AGENTS.md notes that a Docker
+        daemon is reachable (a Docker-in-Docker sidecar), so the agent knows it
+        can build/run containers. Providers without a sidecar leave it ``False``.
     :returns: Shell command strings, in the order they should run.
     """
     commands: list[str] = []
@@ -207,6 +211,13 @@ def github_sandbox_setup_commands(
             "why; fill in the repo's PR template if it has one).\n"
             "4. Report the PR URL back to the user.\n"
         )
+        if docker_available:
+            agents_md += (
+                "\n## Docker\n\n"
+                "A Docker daemon is available — `docker build`, `docker run`, "
+                "etc. work out of the box (`DOCKER_HOST` is already set). Use it "
+                "to build and run containers as needed.\n"
+            )
         commands.append(_write_file_command(home, "workspace/AGENTS.md", agents_md, mode="644"))
 
     keys = [k.strip() for k in (ssh_authorized_keys or ()) if k.strip()]

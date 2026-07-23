@@ -80,6 +80,10 @@ _ENV_PASSTHROUGH_PREFIXES = (
 _ENV_PASSTHROUGH_KEYS = (
     "PATH",
     "HOME",
+    # Engine API endpoint for a Docker-in-Docker sidecar (a managed sandbox
+    # sets it to the loopback daemon). Without this the per-session env rebuild
+    # drops it and the agent's `docker` CLI can't find the daemon.
+    "DOCKER_HOST",
     "HTTP_PROXY",
     "HTTPS_PROXY",
     "NO_PROXY",
