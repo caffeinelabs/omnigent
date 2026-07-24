@@ -90,6 +90,7 @@ from omnigent.stores.conversation_store import (
     ConversationStore,
     CreatedSession,
     SessionConnectivity,
+    UsageRecord,
     pinned_label_key,
 )
 
@@ -1635,6 +1636,121 @@ class SqlAlchemyConversationStore(ConversationStore):
                 .order_by(SqlSessionPermission.level.desc())
                 .limit(1)
             ).scalar_one_or_none()
+
+    def list_usage_records(
+        self,
+        *,
+        start_epoch: int,
+        end_epoch: int | None = None,
+        owner_user_id: str | None = None,
+    ) -> list[UsageRecord]:
+        """
+        Return per-conversation OWN usage records for a time window.
+
+        Materializes each conversation created in ``[start_epoch, end_epoch)``
+        (or ``[start_epoch, ∞)`` when ``end_epoch`` is ``None``) that has a
+        populated ``session_usage`` blob. All kinds are included; the caller
+        sums the disjoint per-node blobs (see :class:`UsageRecord`). When
+        ``owner_user_id`` is set, the rows are scoped to that user's owned
+        sessions via their ``LEVEL_OWNER`` grants in ``session_permissions``
+        (the same attribution :meth:`get_session_owner` uses), so an admin
+        querying another user sees exactly that user's spend.
+
+        Two-phase, because the data spans the split-DB layout: the OWN
+        ``session_usage`` blob and the ``session_permissions`` owner grants
+        live in the Omnigent DB, while ``created_at`` and the per-session
+        fields (agent, parent, overrides) live on the conversation row in the
+        Agent Platform DB. Each phase reads its own bind and the two are
+        joined in memory by conversation id, so this is correct in both
+        single-DB and split-DB deployments. ``kind`` is derived from
+        parent-nullness and ``harness_override`` is unpacked from the
+        ``session_overrides`` blob — neither is a column any more.
+
+        :param start_epoch: Inclusive lower bound on ``created_at``.
+        :param end_epoch: Exclusive upper bound, or ``None`` for open-ended.
+        :param owner_user_id: When set, restrict to this user's owned
+            sessions; ``None`` returns all users' rows.
+        :returns: A list of :class:`UsageRecord`, unordered.
+        """
+        # Function-local import to avoid a server->stores->server import
+        # cycle (mirrors get_session_owner's LEVEL_OWNER import).
+        from omnigent.server.auth import LEVEL_OWNER
+
+        workspace = current_workspace_id()
+
+        # Phase 1 (Omnigent DB): each conversation's OWN usage blob, plus the
+        # optional owner scope. session_usage and session_permissions are both
+        # in this bind, so the owner filter is a same-DB subquery. Not windowed
+        # here — metadata carries no created_at; the window is applied in the
+        # AP-DB phase and the two are intersected by id.
+        with self._session() as meta_sess:
+            usage_stmt = select(
+                SqlConversationMetadata.id,
+                SqlConversationMetadata.session_usage,
+            ).where(
+                SqlConversationMetadata.workspace_id == workspace,
+                # Populated usage only: NULL means no LLM call was ever
+                # recorded, so the row contributes nothing to any rollup.
+                SqlConversationMetadata.session_usage.is_not(None),
+            )
+            if owner_user_id is not None:
+                owned_ids = select(SqlSessionPermission.conversation_id).where(
+                    SqlSessionPermission.workspace_id == workspace,
+                    SqlSessionPermission.user_id == owner_user_id,
+                    SqlSessionPermission.level == LEVEL_OWNER,
+                )
+                usage_stmt = usage_stmt.where(SqlConversationMetadata.id.in_(owned_ids))
+            usage_by_id: dict[str, dict[str, Any]] = {}
+            for meta_id, raw_usage in meta_sess.execute(usage_stmt):
+                try:
+                    usage: dict[str, Any] = json.loads(raw_usage)
+                except (ValueError, TypeError):
+                    # Defensive: a corrupt JSON blob shouldn't sink the whole
+                    # aggregation. Skip it and keep the rest.
+                    continue
+                if isinstance(usage, dict) and usage:
+                    usage_by_id[meta_id] = usage
+
+        if not usage_by_id:
+            return []
+
+        # Phase 2 (Agent Platform DB): the windowed conversation rows carrying
+        # created_at + the per-session fields. Intersected with the usage map
+        # in memory (no cross-id IN clause, so no SQLite variable-count limit).
+        with self._conv_session() as conv_sess:
+            conv_stmt = select(
+                SqlConversation.id,
+                SqlConversation.created_at,
+                SqlConversation.agent_id,
+                SqlConversation.parent_conversation_id,
+                SqlConversation.session_overrides,
+            ).where(
+                SqlConversation.workspace_id == workspace,
+                SqlConversation.created_at >= start_epoch,
+            )
+            if end_epoch is not None:
+                conv_stmt = conv_stmt.where(SqlConversation.created_at < end_epoch)
+            conv_rows = conv_sess.execute(conv_stmt).all()
+
+        records: list[UsageRecord] = []
+        for row in conv_rows:
+            usage = usage_by_id.get(row.id)
+            if usage is None:
+                continue
+            overrides = _decode_session_overrides(row.session_overrides)
+            records.append(
+                UsageRecord(
+                    conversation_id=row.id,
+                    created_at=row.created_at,
+                    # Derived from parent-nullness (the store's single source of
+                    # truth for kind), not a stored column.
+                    kind="sub_agent" if row.parent_conversation_id is not None else "default",
+                    agent_id=row.agent_id,
+                    harness_override=overrides["harness_override"],
+                    session_usage=usage,
+                )
+            )
+        return records
 
     def search(
         self,

@@ -1,22 +1,69 @@
-"""API route for the per-user LLM cost report (``omni usage``)."""
+"""Routes for per-user LLM cost reporting and aggregated usage analytics.
+
+Exposes two endpoints (both mounted under ``/v1``):
+
+* ``GET /usage`` — the per-user LLM cost report backing ``omni usage``: a
+  daily-rollup cost summary (today / 7d / 30d / all-time) plus per-session
+  detail for the calling user.
+* ``GET /usage/summary`` — a rollup of token usage and USD spend across a
+  caller's conversations (or, for an admin, any user's or all users'),
+  broken down by provider, harness, or model over a time window.
+
+The ``/usage/summary`` aggregation sums each conversation's OWN per-node
+``session_usage`` blob (see
+:class:`omnigent.stores.conversation_store.UsageRecord`), NOT the
+subtree-summed value from
+:func:`omnigent.runtime.policies.builder.load_session_usage` — the latter
+folds a sub-agent's spend into every ancestor's roll-up, so summing it
+across the conversation set would double-count. Every conversation kind
+(``"default"`` and ``"sub_agent"``) is included because each row's blob is
+its own disjoint spend.
+"""
 
 from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import APIRouter, Request
 
+from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.runtime.policies.builder import load_session_usage
 from omnigent.server.auth import RESERVED_USER_LOCAL, AuthProvider
-from omnigent.server.routes._auth_helpers import require_user
-from omnigent.server.schemas import SessionUsage, UsageReport
+from omnigent.server.routes._auth_helpers import get_user_id, require_user
+from omnigent.server.schemas import (
+    SessionUsage,
+    UsageBucketEntry,
+    UsageGroupEntry,
+    UsageReport,
+    UsageSummaryResponse,
+)
 from omnigent.stores import ConversationStore
+from omnigent.stores.conversation_store import UsageRecord
+from omnigent.stores.permission_store import PermissionStore
 
 # The daily rollup floor for an "all-time" sum: earlier than any real row, so
 # ``sum_daily_cost`` with this lower bound totals every recorded day.
 _EPOCH_DAY = "0000-00-00"
+
+# Sentinel ``user`` query value meaning "every user's spend" (admin only).
+_USER_ALL = "all"
+
+# Window lengths in seconds, keyed by the ``period`` query param.
+_DAY_SECONDS = 86_400
+_PERIOD_SECONDS: dict[str, int] = {
+    "today": _DAY_SECONDS,
+    "7days": 7 * _DAY_SECONDS,
+    "30days": 30 * _DAY_SECONDS,
+}
+
+# Token/cost keys summed out of a conversation's OWN ``session_usage`` (and
+# out of each ``by_model`` bucket). Restricted to the fields the endpoint
+# reports so an unexpected persisted key can't leak into a total.
+_INPUT_KEY = "input_tokens"
+_OUTPUT_KEY = "output_tokens"
+_COST_KEY = "total_cost_usd"
 
 
 def _utc_today() -> str:
@@ -146,20 +193,275 @@ def _build_usage_report(
     )
 
 
+def _provider_from_model(model_id: str) -> str:
+    """Derive a provider token from a raw model id.
+
+    Follows the endpoint contract: a ``vendor/model`` id yields its prefix
+    (``"z-ai/glm-5.2"`` -> ``"z-ai"``); an id with no ``/`` falls back to a
+    known vendor family (``"anthropic"`` / ``"openai"``) inferred from the
+    id text, else ``"unknown"``.
+
+    :param model_id: Raw harness-reported model id, e.g. ``"z-ai/glm-5.2"``
+        or ``"claude-opus-4-8"``.
+    :returns: The provider token, e.g. ``"z-ai"``, ``"anthropic"``,
+        ``"openai"``, or ``"unknown"``.
+    """
+    if "/" in model_id:
+        prefix = model_id.split("/", 1)[0].strip()
+        return prefix or "unknown"
+    from omnigent.model_catalog import model_family_token
+
+    family = model_family_token(model_id)
+    if family == "claude":
+        return "anthropic"
+    if family == "openai":
+        return "openai"
+    return "unknown"
+
+
+class _HarnessResolver:
+    """Resolve (and memoize) the harness for a conversation.
+
+    A conversation's per-session ``harness_override`` wins; otherwise the
+    harness is read from the bound agent's spec via the agent cache. Spec
+    loads are keyed by ``agent_id`` and cached for the life of one request
+    so a window with many sessions on the same agent pays the load once.
+    Mirrors :func:`omnigent.server.routes.sessions._resolve_harness` but
+    trimmed to what the rollup needs (no sub-agent head special-casing —
+    the record already carries any per-session override).
+    """
+
+    def __init__(self) -> None:
+        """Initialize an empty per-request harness cache."""
+        self._by_agent: dict[str, str] = {}
+
+    def resolve(self, record: UsageRecord) -> str:
+        """Return the harness group key for one usage record.
+
+        :param record: The conversation's usage record.
+        :returns: The canonical harness id, e.g. ``"claude-sdk"``, or
+            ``"unknown"`` when it cannot be determined.
+        """
+        if record.harness_override:
+            return record.harness_override
+        agent_id = record.agent_id
+        if agent_id is None:
+            return "unknown"
+        cached = self._by_agent.get(agent_id)
+        if cached is not None:
+            return cached
+        resolved = self._load_agent_harness(agent_id)
+        self._by_agent[agent_id] = resolved
+        return resolved
+
+    @staticmethod
+    def _load_agent_harness(agent_id: str) -> str:
+        """Load an agent's declared harness from its spec.
+
+        :param agent_id: The bound agent id, e.g. ``"ag_abc123"``.
+        :returns: The canonical harness id, or ``"unknown"`` when the agent
+            row / spec / harness cannot be resolved.
+        """
+        try:
+            from omnigent.harness_aliases import canonicalize_harness
+            from omnigent.model_catalog import spec_harness
+            from omnigent.runtime import get_agent_cache
+            from omnigent.runtime._globals import _agent_store
+
+            if _agent_store is None:
+                return "unknown"
+            agent = _agent_store.get(agent_id)
+            if agent is None:
+                return "unknown"
+            loaded = get_agent_cache().load(
+                agent.id, agent.bundle_location, expand_env=agent.session_id is None
+            )
+            harness = spec_harness(loaded.spec)
+            if harness is None:
+                return "unknown"
+            return canonicalize_harness(harness) or harness
+        except (KeyError, AttributeError, ValueError, ImportError, OSError):
+            return "unknown"
+
+
+def _record_totals(usage: dict[str, object]) -> tuple[int, int, float]:
+    """Extract the flat (input, output, cost) totals from a usage blob.
+
+    :param usage: A conversation's OWN ``session_usage`` dict.
+    :returns: ``(input_tokens, output_tokens, total_cost_usd)``; missing or
+        non-numeric fields count as zero.
+    """
+    return (
+        _as_int(usage.get(_INPUT_KEY)),
+        _as_int(usage.get(_OUTPUT_KEY)),
+        _as_float(usage.get(_COST_KEY)),
+    )
+
+
+def _as_int(value: object) -> int:
+    """Coerce a persisted numeric to ``int``, treating junk / ``bool`` as 0.
+
+    :param value: A value read from a JSON usage blob.
+    :returns: The integer value, or ``0`` when absent / non-numeric /
+        boolean (``bool`` is an ``int`` subclass, excluded so a stray flag
+        isn't summed as ``1``).
+    """
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return int(value)
+    return 0
+
+
+def _as_float(value: object) -> float:
+    """Coerce a persisted numeric to ``float``, treating junk / ``bool`` as 0.
+
+    :param value: A value read from a JSON usage blob.
+    :returns: The float value, or ``0.0`` when absent / non-numeric /
+        boolean.
+    """
+    if isinstance(value, bool):
+        return 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    return 0.0
+
+
+def _bucket_start(created_at: int, by_hour: bool) -> int:
+    """Snap a timestamp to the start of its day (or hour) bucket.
+
+    :param created_at: The conversation's ``created_at`` epoch seconds.
+    :param by_hour: ``True`` to bucket by hour (``period="today"``), else
+        by UTC day.
+    :returns: Unix epoch seconds of the bucket start.
+    """
+    width = 3_600 if by_hour else _DAY_SECONDS
+    return created_at - (created_at % width)
+
+
+def _aggregate(
+    records: list[UsageRecord],
+    *,
+    group_by: str,
+    by_hour: bool,
+    harness_resolver: _HarnessResolver,
+) -> tuple[int, int, float, list[UsageGroupEntry], list[UsageBucketEntry]]:
+    """Roll usage records up into totals, per-group rows, and a time series.
+
+    Cost/token grouping keys come from the requested dimension:
+
+    * ``provider`` / ``model`` — walk the record's ``by_model`` map so a
+      session that ran multiple models splits correctly; the model id is the
+      group key (``model``) or its derived provider (``provider``). A record
+      with no ``by_model`` breakdown contributes its flat totals to an
+      ``"unknown"`` group for these dimensions.
+    * ``harness`` — one group per resolved harness; the record's flat totals
+      apply wholesale (harness is a per-conversation property).
+
+    The window totals and the time-series buckets always come from each
+    record's flat totals, so they are identical across ``group_by`` values.
+
+    :param records: The per-conversation OWN usage records in the window.
+    :param group_by: The grouping dimension, ``"provider"`` / ``"harness"``
+        / ``"model"``.
+    :param by_hour: ``True`` to bucket the time series by hour, else by day.
+    :param harness_resolver: Per-request harness resolver / cache.
+    :returns: ``(total_input, total_output, total_cost, groups, buckets)``.
+    """
+    total_input = 0
+    total_output = 0
+    total_cost = 0.0
+    group_in: dict[str, int] = {}
+    group_out: dict[str, int] = {}
+    group_cost: dict[str, float] = {}
+    bucket_in: dict[int, int] = {}
+    bucket_out: dict[int, int] = {}
+    bucket_cost: dict[int, float] = {}
+
+    for record in records:
+        usage = record.session_usage
+        r_in, r_out, r_cost = _record_totals(usage)
+        # Window totals + time series: always from the flat per-node totals.
+        total_input += r_in
+        total_output += r_out
+        total_cost += r_cost
+        bucket = _bucket_start(record.created_at, by_hour)
+        bucket_in[bucket] = bucket_in.get(bucket, 0) + r_in
+        bucket_out[bucket] = bucket_out.get(bucket, 0) + r_out
+        bucket_cost[bucket] = bucket_cost.get(bucket, 0.0) + r_cost
+
+        if group_by == "harness":
+            key = harness_resolver.resolve(record)
+            group_in[key] = group_in.get(key, 0) + r_in
+            group_out[key] = group_out.get(key, 0) + r_out
+            group_cost[key] = group_cost.get(key, 0.0) + r_cost
+            continue
+
+        # provider / model: split via the per-model breakdown so a session
+        # that ran multiple models is attributed correctly.
+        by_model = usage.get("by_model")
+        if not isinstance(by_model, dict) or not by_model:
+            # No per-model breakdown recorded — attribute the flat totals to
+            # an "unknown" group rather than dropping this record's spend.
+            key = "unknown"
+            group_in[key] = group_in.get(key, 0) + r_in
+            group_out[key] = group_out.get(key, 0) + r_out
+            group_cost[key] = group_cost.get(key, 0.0) + r_cost
+            continue
+        for model_id, model_bucket in by_model.items():
+            if not isinstance(model_bucket, dict):
+                continue
+            key = model_id if group_by == "model" else _provider_from_model(model_id)
+            group_in[key] = group_in.get(key, 0) + _as_int(model_bucket.get(_INPUT_KEY))
+            group_out[key] = group_out.get(key, 0) + _as_int(model_bucket.get(_OUTPUT_KEY))
+            group_cost[key] = group_cost.get(key, 0.0) + _as_float(model_bucket.get(_COST_KEY))
+
+    groups = [
+        UsageGroupEntry(
+            group_key=key,
+            input_tokens=group_in.get(key, 0),
+            output_tokens=group_out.get(key, 0),
+            total_cost_usd=group_cost.get(key, 0.0),
+        )
+        for key in group_cost
+    ]
+    # Highest spend first; group_key breaks ties for a stable order.
+    groups.sort(key=lambda g: (-g.total_cost_usd, g.group_key))
+
+    buckets = [
+        UsageBucketEntry(
+            bucket_start=start,
+            input_tokens=bucket_in.get(start, 0),
+            output_tokens=bucket_out.get(start, 0),
+            total_cost_usd=bucket_cost.get(start, 0.0),
+        )
+        for start in sorted(bucket_cost)
+    ]
+    return total_input, total_output, total_cost, groups, buckets
+
+
 def create_usage_router(
     conversation_store: ConversationStore,
-    *,
     auth_provider: AuthProvider | None = None,
+    permission_store: PermissionStore | None = None,
 ) -> APIRouter:
-    """
-    Create the per-user usage-report router.
+    """Create the usage router (per-user cost report + aggregated analytics).
 
-    The report is user-scoped, not session-scoped, so it lives in its own
-    router rather than under the sessions router.
+    Registers two routes, both mounted under ``/v1`` by the app:
 
-    :param conversation_store: Store for the daily rollup and session reads.
+    * ``GET /usage`` — the calling user's cost report.
+    * ``GET /usage/summary`` — aggregated usage + cost analytics.
+
+    Both are user-scoped rather than session-scoped, so they live in their
+    own router rather than under the sessions router.
+
+    :param conversation_store: Store the reports and usage records read from.
     :param auth_provider: Auth provider for user identity. ``None`` disables
         auth (single-user / local mode).
+    :param permission_store: Permission store used by ``/usage/summary`` both
+        to attribute a session to its owner and to check the admin flag.
+        ``None`` disables per-user scoping (single-user mode) — the ``user``
+        param is then rejected because there is no notion of another user.
     :returns: The configured router (mounted under ``/v1``).
     """
     router = APIRouter()
@@ -177,4 +479,110 @@ def create_usage_router(
         user_id = require_user(request, auth_provider)
         return await asyncio.to_thread(_build_usage_report, conversation_store, user_id)
 
+    @router.get("/usage/summary")
+    async def usage_summary(
+        request: Request,
+        period: Literal["today", "7days", "30days"] = "7days",
+        group_by: Literal["provider", "harness", "model"] = "model",
+        user: str | None = None,
+    ) -> UsageSummaryResponse:
+        """Aggregate LLM usage + cost over a time window.
+
+        The default scope is the caller's own conversations. Passing
+        ``user`` (a specific id, or the ``"all"`` sentinel for every user)
+        is honored only for admins; a non-admin caller who passes it gets
+        403. In single-user mode (no ``permission_store``) the ``user``
+        param is rejected as unsupported.
+
+        :param request: The incoming request, used to extract the caller.
+        :param period: Window length, ``"today"`` | ``"7days"`` |
+            ``"30days"`` (default ``"7days"``). ``"today"`` buckets the
+            time series by hour; the others by day.
+        :param group_by: Rollup dimension, ``"provider"`` | ``"harness"`` |
+            ``"model"`` (default ``"model"``).
+        :param user: Optional target user (or ``"all"``). Admin-only.
+        :returns: The aggregated :class:`UsageSummaryResponse`.
+        :raises OmnigentError: 403 when a non-admin requests another user's
+            spend; 400 when ``user`` is passed in single-user mode.
+        """
+        from omnigent.db.utils import now_epoch
+
+        caller = get_user_id(request, auth_provider)
+        is_admin = await _is_admin(caller, permission_store)
+
+        # Resolve the owner scope. Default = the caller's own sessions.
+        owner_scope: str | None
+        if user is None:
+            owner_scope = caller
+        else:
+            if permission_store is None:
+                raise OmnigentError(
+                    "The 'user' parameter requires multi-user mode.",
+                    code=ErrorCode.INVALID_INPUT,
+                )
+            if not is_admin:
+                raise OmnigentError(
+                    "Only admins may query another user's usage.",
+                    code=ErrorCode.FORBIDDEN,
+                )
+            # Admin: "all" means every user (no owner filter); otherwise the
+            # named user's owned sessions.
+            owner_scope = None if user == _USER_ALL else user
+
+        window_seconds = _PERIOD_SECONDS[period]
+        start_epoch = now_epoch() - window_seconds
+        by_hour = period == "today"
+
+        records = await asyncio.to_thread(
+            conversation_store.list_usage_records,
+            start_epoch=start_epoch,
+            end_epoch=None,
+            owner_user_id=owner_scope,
+        )
+
+        harness_resolver = _HarnessResolver()
+        total_input, total_output, total_cost, groups, buckets = _aggregate(
+            records,
+            group_by=group_by,
+            by_hour=by_hour,
+            harness_resolver=harness_resolver,
+        )
+
+        # ``user`` reported on the response is the scope actually applied:
+        # the named/target user, or None for the all-users / caller-None view.
+        reported_user = owner_scope if user != _USER_ALL else None
+        return UsageSummaryResponse(
+            period=period,
+            group_by=group_by,
+            start_epoch=start_epoch,
+            user=reported_user,
+            total_input_tokens=total_input,
+            total_output_tokens=total_output,
+            total_cost_usd=total_cost,
+            groups=groups,
+            buckets=buckets,
+        )
+
     return router
+
+
+async def _is_admin(
+    user_id: str | None,
+    permission_store: PermissionStore | None,
+) -> bool:
+    """Return whether the caller holds the admin flag.
+
+    Mirrors the admin check the session routes use
+    (``permission_store.is_admin`` via :func:`asyncio.to_thread` to keep the
+    event loop unblocked). The file-backed admin-list promotion is not
+    consulted here — like the session list route, this relies on the DB
+    ``users.is_admin`` flag the login path maintains.
+
+    :param user_id: The caller's id, or ``None`` (unauthenticated /
+        single-user).
+    :param permission_store: Permission store, or ``None`` to skip.
+    :returns: ``True`` when the caller is a known admin, else ``False``.
+    """
+    if user_id is None or permission_store is None:
+        return False
+    return await asyncio.to_thread(permission_store.is_admin, user_id)

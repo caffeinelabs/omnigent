@@ -190,6 +190,48 @@ class CreatedSession:
 
 
 @dataclass(frozen=True)
+class UsageRecord:
+    """
+    One conversation's OWN per-node usage, for cost/usage aggregation.
+
+    Returned by :meth:`ConversationStore.list_usage_records` — the raw
+    material the ``GET /v1/usage/summary`` endpoint rolls up by provider /
+    harness / model over a time window. Deliberately carries each row's OWN
+    ``session_usage`` blob (not the subtree-summed value from
+    :func:`omnigent.runtime.policies.builder.load_session_usage`): every
+    conversation node — parent and child alike — persists only the spend it
+    itself incurred, so summing the raw per-node blobs across the whole set
+    (including ``kind="sub_agent"`` rows) totals the true spend with no
+    double counting. Using the subtree-summed loader instead would count a
+    child's spend once in its own row and again in every ancestor's roll-up.
+
+    :param conversation_id: The conversation this usage belongs to,
+        e.g. ``"conv_abc123"``.
+    :param created_at: Unix epoch seconds when the conversation was created —
+        the bucketing timestamp for the time series.
+    :param kind: Conversation kind, ``"default"`` or ``"sub_agent"``. Carried
+        so callers can inspect it; the aggregation includes both because each
+        row's ``session_usage`` is its own disjoint spend.
+    :param agent_id: The bound agent id, or ``None`` for legacy/unbound rows.
+        Used to resolve the harness when grouping ``by_harness``.
+    :param harness_override: Per-session harness override, e.g. ``"pi"``, or
+        ``None`` to defer to the bound agent spec's declared harness.
+    :param session_usage: The conversation's OWN cumulative usage dict —
+        flat token keys (``input_tokens``, ``output_tokens``,
+        ``total_tokens``, ``cache_*``), ``total_cost_usd``, and an optional
+        nested ``by_model`` map keyed by raw harness model id. Empty dict
+        when the conversation recorded no LLM usage.
+    """
+
+    conversation_id: str
+    created_at: int
+    kind: str
+    agent_id: str | None
+    harness_override: str | None
+    session_usage: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class SessionConnectivity:
     """
     The minimal session fields the sidebar's online-dot needs.
@@ -1142,6 +1184,47 @@ class ConversationStore(ABC):
         :returns: The owner's user id, e.g. ``"alice@example.com"``,
             or ``None`` when the session has no permission grants
             (e.g. single-user mode, where access is not tracked).
+        """
+        ...
+
+    @abstractmethod
+    def list_usage_records(
+        self,
+        *,
+        start_epoch: int,
+        end_epoch: int | None = None,
+        owner_user_id: str | None = None,
+    ) -> list[UsageRecord]:
+        """
+        Return per-conversation OWN usage records for a time window.
+
+        Backs the ``GET /v1/usage/summary`` aggregation endpoint. Returns
+        one :class:`UsageRecord` per conversation whose ``created_at`` falls
+        in ``[start_epoch, end_epoch)`` (or ``[start_epoch, ∞)`` when
+        ``end_epoch`` is ``None``) that has non-empty ``session_usage``.
+
+        Every conversation kind is included (``"default"`` and
+        ``"sub_agent"``): each row carries only the spend it itself incurred,
+        so summing all rows in the window totals the true spend without the
+        double counting that the subtree-summed
+        :func:`omnigent.runtime.policies.builder.load_session_usage` would
+        introduce.
+
+        When ``owner_user_id`` is set, the result is scoped to conversations
+        that user owns — resolved via the ``LEVEL_OWNER`` grant in
+        ``session_permissions`` (the same attribution
+        :meth:`get_session_owner` reads). ``None`` returns records across all
+        users (admin-wide view); the route layer is responsible for
+        authorizing an unscoped call.
+
+        :param start_epoch: Inclusive lower bound on ``created_at`` (Unix
+            epoch seconds), e.g. ``1_717_200_000``.
+        :param end_epoch: Exclusive upper bound on ``created_at``. ``None``
+            (default) leaves the window open-ended.
+        :param owner_user_id: When set, restrict to sessions this user owns
+            (their ``LEVEL_OWNER`` grant). ``None`` returns all users' rows.
+        :returns: A list of :class:`UsageRecord`, unordered — the caller
+            buckets and rolls them up.
         """
         ...
 

@@ -2426,6 +2426,102 @@ class PermissionObject(BaseModel):
     level: int
 
 
+# ── Usage Analytics (/v1/usage) ─────────────────────────────────
+
+
+class UsageGroupEntry(BaseModel):
+    """
+    One rollup row in a :class:`UsageSummaryResponse`.
+
+    Aggregates token counts and cost for a single value of the requested
+    grouping dimension (a provider, harness, or model) over the whole
+    reporting window. Mirrors the token-field naming of :class:`ModelUsage`
+    so a UI can render provider/harness/model tables interchangeably.
+
+    :param group_key: The dimension value this row totals, e.g.
+        ``"anthropic"`` (provider), ``"claude-sdk"`` (harness), or
+        ``"z-ai/glm-5.2"`` (model). ``"unknown"`` when the dimension could
+        not be derived (e.g. a model id with no provider prefix and no known
+        vendor).
+    :param input_tokens: Summed non-cached input (prompt) tokens, e.g.
+        ``120000``.
+    :param output_tokens: Summed output (completion) tokens, e.g. ``34000``.
+    :param total_cost_usd: Summed USD spend attributed to this group, e.g.
+        ``4.21``. ``0.0`` when no priced turns landed in this group.
+    """
+
+    group_key: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_cost_usd: float = 0.0
+
+
+class UsageBucketEntry(BaseModel):
+    """
+    One point in a :class:`UsageSummaryResponse` day/hour time series.
+
+    Buckets the same aggregated spend by wall-clock period so a UI can draw
+    a spend-over-time chart alongside the per-group table. Bucketing is by
+    the conversation ``created_at`` epoch — by hour for ``period="today"``,
+    by day otherwise.
+
+    :param bucket_start: Unix epoch seconds of the bucket's start (midnight
+        UTC for day buckets, the top of the hour for hour buckets), e.g.
+        ``1_717_200_000``.
+    :param input_tokens: Summed non-cached input tokens in this bucket.
+    :param output_tokens: Summed output tokens in this bucket.
+    :param total_cost_usd: Summed USD spend in this bucket.
+    """
+
+    bucket_start: int
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_cost_usd: float = 0.0
+
+
+class UsageSummaryResponse(BaseModel):
+    """
+    Aggregated LLM usage + cost for ``GET /v1/usage/summary``.
+
+    Rolls up each conversation's OWN per-node ``session_usage`` (never the
+    subtree-summed value, which would double-count parent + child) over a
+    time window, broken down by the requested dimension (provider, harness,
+    or model) plus a per-period time series. A non-admin caller sees only
+    their own sessions; an admin may scope to any user (or all users) via
+    the ``user`` query param.
+
+    :param period: The requested window label, one of ``"today"``,
+        ``"7days"``, ``"30days"``.
+    :param group_by: The requested grouping dimension, one of
+        ``"provider"``, ``"harness"``, ``"model"``.
+    :param start_epoch: Inclusive Unix-epoch-seconds lower bound of the
+        window that was aggregated, e.g. ``1_717_200_000``.
+    :param user: The user whose spend this summary covers, e.g.
+        ``"alice@example.com"``. ``None`` for the admin all-users view or
+        single-user mode (no auth).
+    :param total_input_tokens: Total non-cached input tokens across the
+        whole window, e.g. ``480000``.
+    :param total_output_tokens: Total output tokens across the window, e.g.
+        ``96000``.
+    :param total_cost_usd: Total USD spend across the window, e.g. ``18.74``.
+    :param groups: Per-group rollups for the requested dimension, ordered by
+        ``total_cost_usd`` descending (ties broken by ``group_key``).
+    :param buckets: Per-period time series (hour buckets for ``"today"``,
+        else day buckets), ordered by ``bucket_start`` ascending. Empty when
+        no usage landed in the window.
+    """
+
+    period: Literal["today", "7days", "30days"]
+    group_by: Literal["provider", "harness", "model"]
+    start_epoch: int
+    user: str | None = None
+    total_input_tokens: int = 0
+    total_output_tokens: int = 0
+    total_cost_usd: float = 0.0
+    groups: list[UsageGroupEntry] = Field(default_factory=list)
+    buckets: list[UsageBucketEntry] = Field(default_factory=list)
+
+
 # ─────────────────────────────────────────────────────────────────────
 # STREAM EVENTS — typed Pydantic union for SSE event boundary
 # ─────────────────────────────────────────────────────────────────────
