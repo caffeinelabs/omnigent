@@ -21,3 +21,11 @@ shivam5
 TomeHirata
 xq-yin
 hzub
+
+# caffeinelabs fork maintainers (@team-sre). Added so the caffeine team can
+# approve PRs and pass the maintainer-gated checks (Maintainer Approval, Security
+# Scan trust) on this fork — the list above is upstream omnigent-ai and has no
+# caffeine members. Keep in sync with the caffeinelabs/team-sre GitHub team.
+LittleChimera
+marko-k0
+Visn0
