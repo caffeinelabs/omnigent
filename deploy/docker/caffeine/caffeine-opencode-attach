@@ -1,0 +1,19 @@
+#!/usr/bin/env bash
+# Attach a terminal (e.g. VS Code) to the sandbox's running `opencode serve`,
+# inheriting its OPENCODE_* env + host/port. Works across the shared PID/net
+# namespace (the serve runs in the host container; this may run in the sshd
+# sidecar). Falls back to a login shell if there's no server to attach to.
+set -uo pipefail
+pid=$(pgrep -f 'opencode serve' | head -n1)
+if [ -z "${pid:-}" ]; then
+  echo "caffeine-opencode-attach: no 'opencode serve' running; starting a shell." >&2
+  exec bash -l
+fi
+while IFS= read -r -d '' kv; do
+  [[ $kv == OPENCODE_* ]] && export "$kv"
+done < "/proc/$pid/environ"
+cmd=$(tr '\0' ' ' < "/proc/$pid/cmdline")
+host=$(grep -oP -- '--hostname \K[^ ]+' <<<"$cmd"); host=${host:-127.0.0.1}
+port=$(grep -oP -- '--port \K[^ ]+' <<<"$cmd")
+[ -n "${port:-}" ] || { echo "caffeine-opencode-attach: could not read server port; starting a shell." >&2; exec bash -l; }
+exec opencode attach "http://${host}:${port}" -c
