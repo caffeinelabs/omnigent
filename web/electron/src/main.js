@@ -23,11 +23,15 @@ const {
   dialog,
   ipcMain,
   nativeImage,
+  nativeTheme,
   screen,
   session,
   shell,
   systemPreferences,
 } = require("electron");
+const { autoUpdater } = require("electron-updater");
+const { createDesktopUpdater } = require("./desktop_updater");
+const { createUpdateOverlay } = require("./update_overlay");
 const fs = require("node:fs");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
@@ -52,6 +56,10 @@ const SETUP_PAGE_URL = pathToFileURL(SETUP_PAGE);
 
 /** Absolute path to the bundled find-in-page bar page. */
 const FIND_PAGE = path.join(__dirname, "..", "find", "index.html");
+// Built by web's `build:overlay` into electron/overlay/ (shipped by
+// electron-builder). Shell-owned so the update UI is independent of the
+// connected server's web-bundle version.
+const UPDATE_OVERLAY_PAGE = path.join(__dirname, "..", "overlay", "update-overlay.html");
 
 /** The find bar's file:// URL, for verifying IPC sender frames. */
 const FIND_PAGE_URL = pathToFileURL(FIND_PAGE);
@@ -76,6 +84,15 @@ const POPUP_PRELOAD = path.join(__dirname, "popup_preload.js");
 
 /** Absolute path to the app icon (PNG works for the macOS dock at runtime). */
 const ICON_PNG = path.join(__dirname, "..", "icons", "icon.png");
+
+/**
+ * Quit-safety timeouts (see the before-quit handler near the end of this
+ * file). `let` (not const) so tests can shrink them via __test.setQuitTimeouts
+ * to exercise the force-exit safety nets without waiting seconds in real
+ * time. Production code never writes them.
+ */
+let quitCleanupTimeoutMs = 10000;
+let quitInstallFallbackMs = 3000;
 
 /**
  * Permissions the SPA legitimately needs and we auto-grant. The dictation
@@ -128,106 +145,6 @@ const GRANTED_PERMISSIONS = new Set([
  * localhost CORS layer trusts.
  */
 const LNA_PERMISSIONS = new Set(["local-network-access", "loopback-network"]);
-
-/**
- * Keychain access group for the WebAuthn Touch ID platform authenticator
- * (`app.configureWebAuthn`), in the form ``"<TEAM_ID>.ai.omnigent.desktop"``.
- *
- * null disables the platform authenticator: the value only works in a
- * code-signed build whose `keychain-access-groups` entitlement
- * (signing/entitlements.mac.plist) lists the SAME string, so there is no
- * meaningful default — set both places together when configuring signing.
- * External security keys (e.g. YubiKey) work regardless of this setting.
- *
- * Three pieces must agree: this constant, the `keychain-access-groups`
- * entitlement, AND the embedded Developer ID provisioning profile
- * authorizing the group — without the profile, AMFI SIGKILLs the signed
- * app at launch. Details in signing/entitlements.mac.plist.
- * @type {string | null}
- */
-const WEBAUTHN_KEYCHAIN_ACCESS_GROUP = "8RMX4WU6F8.ai.omnigent.desktop";
-
-/**
- * Enable the macOS WebAuthn platform authenticator so passkey
- * registration/sign-in shows the native Touch ID / keychain dialog instead
- * of completing invisibly. Two pieces:
- *
- *   1. `app.configureWebAuthn` (Electron ≥ 42, macOS-only) turns on the
- *      Secure-Enclave-backed authenticator. Until it's called,
- *      `PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable()`
- *      resolves false in the page and sites offer only external keys.
- *   2. The `select-webauthn-account` session event fires when a
- *      `navigator.credentials.get()` matches several discoverable
- *      credentials; we show a native chooser and answer with the picked
- *      `credentialId` (answering with nothing cancels the request).
- *
- * No-ops (with a console note) when the access group isn't configured,
- * off macOS, or on an Electron without the API — external security keys
- * keep working through Chromium's built-in CTAP path in all cases.
- * Credentials are device-bound (Secure Enclave), not synced to iCloud
- * Keychain, and invisible to Safari/Chrome — and vice versa.
- */
-function registerWebAuthn() {
-  if (process.platform !== "darwin") return;
-  if (typeof app.configureWebAuthn !== "function") {
-    console.log("[omnigent] webauthn: Electron too old for configureWebAuthn; skipping");
-    return;
-  }
-  if (WEBAUTHN_KEYCHAIN_ACCESS_GROUP === null) {
-    console.log(
-      "[omnigent] webauthn: WEBAUTHN_KEYCHAIN_ACCESS_GROUP not set; " +
-        "platform passkeys (Touch ID dialog) disabled — security keys still work",
-    );
-    return;
-  }
-  // Dev runs (`electron .`) use the unsigned prebuilt Electron binary, which
-  // has no keychain-access-groups entitlement: configuring the authenticator
-  // there doesn't fail at this call, but breaks every later ceremony with an
-  // opaque NotAllowedError ("operation timed out or was not allowed"). Skip
-  // cleanly so dev keeps the silent security-key path.
-  if (!app.isPackaged) {
-    console.log(
-      "[omnigent] webauthn: dev run (unsigned, no keychain entitlement); " +
-        "platform passkeys disabled — security keys still work",
-    );
-    return;
-  }
-  app.configureWebAuthn({
-    touchID: {
-      keychainAccessGroup: WEBAUTHN_KEYCHAIN_ACCESS_GROUP,
-      // Rendered by macOS as "<app name> is trying to <promptReason>".
-      promptReason: "sign in with your passkey",
-    },
-  });
-
-  session.defaultSession.on("select-webauthn-account", (_event, details, callback) => {
-    const accounts = details.accounts ?? [];
-    const win = activeWindow();
-    if (!win || accounts.length === 0) {
-      callback(); // no UI to ask with / nothing to pick → cancel the request
-      return;
-    }
-    // Label each account by whatever name fields the credential carries;
-    // the index-based fallback is display-only (the answer is always the
-    // credentialId, never the label).
-    const labels = accounts.map((a, i) => a.userName || a.userDisplayName || `Account ${i + 1}`);
-    void dialog
-      .showMessageBox(win, {
-        type: "question",
-        message: `Choose a passkey for ${details.relyingPartyId}`,
-        buttons: [...labels, "Cancel"],
-        cancelId: labels.length,
-      })
-      .then(({ response }) => {
-        if (response >= 0 && response < accounts.length) {
-          callback(accounts[response].credentialId);
-        } else {
-          callback(); // Cancel
-        }
-      })
-      .catch(() => callback()); // dialog failure must still answer → cancel
-  });
-}
 
 /**
  * Origin of a webContents' top-level (main-frame) page, or null when the
@@ -703,6 +620,44 @@ function activeWindow() {
   return null;
 }
 
+// Desktop auto-update orchestration lives in its own module; the main process
+// only composes it with its main-process dependencies and wires the four thin
+// seams below (startup init, the Updates menu, the update IPC surface, and the
+// before-quit install handoff). Dependencies passed here are function
+// declarations (hoisted) or already-initialized bindings, so constructing at
+// module load is safe — the module never calls into them until a seam fires.
+const updater = createDesktopUpdater({
+  app,
+  BrowserWindow,
+  ipcMain,
+  dialog,
+  nativeImage,
+  autoUpdater,
+  loadSettings,
+  saveSettings,
+  isPinnedOriginSender,
+  pinnedOrigin,
+  iconPath: ICON_PNG,
+  // Dev builds always use the local dev feed (dev-app-update.yml ->
+  // 127.0.0.1:8765); packaged builds always use the baked app-update.yml.
+  // Tying this to !app.isPackaged — not an env var — closes a redirect attack:
+  // an OMNIGENT_FORCE_DEV_UPDATE_CONFIG-style env var could otherwise point a
+  // packaged (production) app at an untrusted HTTP local feed and push a
+  // malicious update. A packaged build can never be redirected to the dev feed.
+  forceDevUpdateConfig: !app.isPackaged,
+});
+
+// Shell-owned update toast: renders the reused web UpdateBanner in a transparent
+// corner window so it shows even against servers running old omnigent web.
+const updateOverlay = createUpdateOverlay({
+  BrowserWindow,
+  ipcMain,
+  nativeTheme,
+  updater,
+  overlayPage: UPDATE_OVERLAY_PAGE,
+  preloadPath: path.join(__dirname, "update_overlay_preload.js"),
+});
+
 // ---------------------------------------------------------------------------
 // Persisted settings (the saved server URL and the recently-connected server
 // list), stored as JSON in the per-user app data dir (Electron's `userData`
@@ -1096,6 +1051,7 @@ function createWindow(targetUrl, opts = {}) {
   // treated as "no server configured" rather than crashing window creation.
   const destinationOrigin = serverUrl ? originOf(serverUrl) : null;
   const destination = destinationOrigin ? loadUrl : null;
+  updateOverlay.ensureOverlay(win);
   windows.set(win, {
     // Pin to the destination's origin up front; setup-page windows stay
     // unpinned (null) until the user connects them.
@@ -1773,8 +1729,8 @@ function buildMenu() {
     {
       id: "new_window",
       label: "New Window",
-      // Standard new-window accelerator; the role-based File menu below
-      // doesn't include one, so we own it here.
+      // Own the standard new-window accelerator here — there is no
+      // role-based File menu in this app.
       accelerator: "CmdOrCtrl+N",
       click: () => newWindow(),
     },
@@ -1791,6 +1747,68 @@ function buildMenu() {
       label: "Change Server…",
       click: () => changeServer(),
     },
+    { type: "separator" },
+    // Manual update check, surfaced as a production item here so shipped
+    // .app users can trigger it from the menubar. Download/install still
+    // flows through the in-app Settings UI / UpdateBanner (and the native
+    // consent dialog when driven from a server page).
+    {
+      id: "check_for_updates",
+      label: "Check for Updates…",
+      click: async () => {
+        // Surface the two silent outcomes of a manual menubar check with a
+        // native dialog: "no update" (otherwise only the renderer banner
+        // hears it, which the user may not be looking at) and "check failed"
+        // (the promise rejects and was previously swallowed). An available
+        // update is left to the in-app UpdateBanner to avoid a double notify.
+        try {
+          await updater.checkForUpdates({ manual: true });
+          const status = updater.getStatus();
+          if (status.state === "none") {
+            await dialog.showMessageBox(activeWindow(), {
+              type: "info",
+              title: "Omnigent",
+              message: "You're up to date!",
+              detail: `Omnigent ${app.getVersion()} is the latest version.`,
+              buttons: ["OK"],
+            });
+          }
+        } catch (err) {
+          await dialog.showMessageBox(activeWindow(), {
+            type: "warning",
+            title: "Omnigent",
+            message: "Couldn't check for updates",
+            detail: String(err?.message ?? err),
+            buttons: ["OK"],
+          });
+        }
+      },
+    },
+    {
+      id: "restart_to_update",
+      label: "Restart to Update",
+      click: async () => {
+        // Production install path: the UpdateBanner toast is dismissible (and
+        // a user may have closed it), so the menubar must still offer a way to
+        // install a downloaded update. installUpdateNow() quits the app to
+        // hand off to the installer; it returns false when nothing is ready
+        // (e.g. the toast was for an update since skipped or not downloaded),
+        // which we surface with a native dialog instead of silently no-op'ing.
+        if (!updater.installUpdateNow()) {
+          await dialog.showMessageBox(activeWindow(), {
+            type: "info",
+            title: "Omnigent",
+            message: "No update is ready to install",
+            detail: "Check for updates first, then download the new version.",
+            buttons: ["OK"],
+          });
+        }
+      },
+    },
+    { type: "separator" },
+    // `role: "close"` carries the standard CmdOrCtrl+W shortcut and closes
+    // the focused window. There is no File menu, so Close lives under Server.
+    { role: "close", label: "Close Window" },
   ];
 
   // Our custom Server menu, inserted right after the leftmost menu — index 1
@@ -1800,48 +1818,6 @@ function buildMenu() {
     submenu: serverSubmenu,
   });
 
-  // Notifications menu (macOS only — sound playback uses `afplay`): an on/off
-  // switch for the notification sound plus a picker of macOS system sounds.
-  // Selections persist in settings.json and are read live by the notify
-  // handler, so a change applies to the next notification without a relaunch.
-  if (isMac) {
-    /** @type {Electron.MenuItemConstructorOptions[]} */
-    const soundChoices = systemSoundNames().map((name) => ({
-      id: `notification_sound_${name}`,
-      label: name,
-      type: "radio",
-      checked: currentNotificationSoundName() === name,
-      click: () => {
-        const settings = loadSettings();
-        settings.notification_sound_name = name;
-        saveSettings(settings);
-        // Pick-to-preview: play the choice immediately so the user hears it,
-        // even when the sound is currently toggled off.
-        playSystemSound(name);
-      },
-    }));
-    template.push({
-      label: "Notifications",
-      submenu: [
-        {
-          id: "notification_sound_enabled",
-          label: "Play Notification Sound",
-          type: "checkbox",
-          checked: notificationSoundEnabled(),
-          click: (item) => {
-            const settings = loadSettings();
-            settings.notification_sound_enabled = item.checked;
-            saveSettings(settings);
-          },
-        },
-        { type: "separator" },
-        { label: "Sound", submenu: soundChoices },
-      ],
-    });
-  }
-
-  // Standard roles — these carry the predefined keyboard shortcuts.
-  template.push({ role: "fileMenu" });
   // The Edit roles (Undo/Redo/Cut/Copy/Paste/Select All) carry the platform
   // text-editing shortcuts; hand-rolled here instead of `role: "editMenu"`
   // only so Find… can live where users expect it.
@@ -1869,14 +1845,13 @@ function buildMenu() {
       },
     ],
   });
-  // Same items as `role: "viewMenu"`, hand-rolled so Toggle Developer
-  // Tools (and its accelerator) can be dropped from release builds.
+  // Standard View roles (Reload/zoom/fullscreen). Developer Tools lives in
+  // the Debug menu (dev only), so this menu is identical in dev and release.
   template.push({
     label: "View",
     submenu: [
       { role: "reload" },
       { role: "forceReload" },
-      ...(app.isPackaged ? [] : [{ role: "toggleDevTools" }]),
       { type: "separator" },
       { role: "resetZoom" },
       { role: "zoomIn" },
@@ -1886,6 +1861,59 @@ function buildMenu() {
     ],
   });
   template.push({ role: "windowMenu" });
+
+  // Debug menu (dev only, !app.isPackaged): consolidates every debug-only /
+  // non-production affordance behind a single top-level menu — the macOS
+  // notification-sound settings (sound playback uses `afplay`, so macOS-only)
+  // and the developer tools. Restart-to-update now lives in the production
+  // Server menu (it's a needed install path, not a debug affordance, once the
+  // UpdateBanner toast is dismissible). Hidden in the shipped .app. Placed
+  // last so it never displaces the standard menus users expect.
+  if (!app.isPackaged) {
+    /** @type {Electron.MenuItemConstructorOptions[]} */
+    const debugSubmenu = [];
+
+    // macOS notification-sound settings: an on/off switch plus a picker of
+    // system sounds. Selections persist in settings.json and are read live by
+    // the notify handler, so a change applies to the next notification without
+    // a relaunch. macOS-only because playback uses `afplay`.
+    if (isMac) {
+      /** @type {Electron.MenuItemConstructorOptions[]} */
+      const soundChoices = systemSoundNames().map((name) => ({
+        id: `notification_sound_${name}`,
+        label: name,
+        type: "radio",
+        checked: currentNotificationSoundName() === name,
+        click: () => {
+          const settings = loadSettings();
+          settings.notification_sound_name = name;
+          saveSettings(settings);
+          // Pick-to-preview: play the choice immediately so the user hears it,
+          // even when the sound is currently toggled off.
+          playSystemSound(name);
+        },
+      }));
+      debugSubmenu.push(
+        { type: "separator" },
+        {
+          id: "notification_sound_enabled",
+          label: "Play Notification Sound",
+          type: "checkbox",
+          checked: notificationSoundEnabled(),
+          click: (item) => {
+            const settings = loadSettings();
+            settings.notification_sound_enabled = item.checked;
+            saveSettings(settings);
+          },
+        },
+        { label: "Sound", submenu: soundChoices },
+      );
+    }
+
+    debugSubmenu.push({ type: "separator" }, { role: "toggleDevTools" });
+
+    template.push({ label: "Debug", submenu: debugSubmenu });
+  }
 
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
@@ -2363,6 +2391,23 @@ function registerIpc() {
     return clearCliPath();
   });
 
+  // Updater IPC surface (get/set config, get status, check/download/install).
+  // The module owns the handlers and their trusted-sender + consent gates.
+  updater.registerIpc();
+  updateOverlay.registerIpc();
+
+  // Mirror the web app's in-app theme onto the native side so the update
+  // overlay, native dialogs, and menus track the theme switcher (not just the
+  // OS). Value-validated; the worst a page can do is toggle appearance. Still
+  // gated to a pinned server page like every other privileged channel, so a
+  // foreign page can't drive the shell's native appearance.
+  ipcMain.on("omnigent:set-color-scheme", (event, scheme) => {
+    if (!isPinnedOriginSender(event)) return;
+    if (scheme === "light" || scheme === "dark" || scheme === "system") {
+      nativeTheme.themeSource = scheme;
+    }
+  });
+
   // SPA → start / stop / restart this machine's host daemon for the window's
   // own server (the host selection menu's "connect this machine" action).
   ipcMain.handle("omnigent:host-control", async (event, action) => {
@@ -2783,7 +2828,6 @@ if (!gotLock) {
     registerPermissions();
     registerLocalhostAccess();
     registerSessionExpiryAccess();
-    registerWebAuthn();
     registerIpc();
     buildMenu();
     // Patch PATH for GUI-launched Electron on macOS/Linux:
@@ -2817,6 +2861,7 @@ if (!gotLock) {
     } else {
       createWindow();
     }
+    updater.init();
 
     app.on("activate", () => {
       // macOS: re-create the window when the dock icon is clicked and none
@@ -2841,6 +2886,20 @@ if (!gotLock) {
   // stop a local server it owns. The desktop owns its host connections (the
   // confirmed lifecycle), so quitting disconnects this machine. We defer the
   // quit until cleanup finishes, then re-issue it.
+  //
+  // Hard safety cap: the only thing that ever lets the quit proceed is the
+  // re-issued app.quit() in .finally — and re-issuing app.quit() after
+  // before-quit's preventDefault() is a known intermittently-unreliable
+  // Electron behavior (electron/electron#4994, #33643, #39094). If that re-issue
+  // is a no-op, or shutdown hangs (a stuck `omnigent server stop`), the app
+  // would otherwise stay up with its window still open — looking exactly like
+  // "refuses to quit". So if graceful cleanup + the re-issued quit haven't
+  // terminated the process within quitCleanupTimeoutMs, force-exit. Host
+  // children are SIGKILL'd at 4s and a normal `omnigent server stop` is sub-
+  // second, so a normal quit completes well under the cap; the cap only trips
+  // when something is genuinely stuck, and force-exiting then is strictly
+  // better than a hung app. A cut-off server stop only leaves a daemon with a
+  // pidfile that the next launch reuses or `omnigent server stop` reclaims.
   let quitCleanupDone = false;
   let quitCleanupStarted = false;
   app.on("before-quit", (event) => {
@@ -2851,12 +2910,45 @@ if (!gotLock) {
     event.preventDefault();
     if (quitCleanupStarted) return;
     quitCleanupStarted = true;
-    serverManager
-      .shutdown(resolvedCliPath())
+
+    // unref'd so the cap itself can't hold the event loop open; app.exit()
+    // bypasses before-quit/will-quit, so it's the guaranteed way out when
+    // app.quit() proves unreliable.
+    const cap = setTimeout(() => {
+      if (quitCleanupDone) return;
+      quitCleanupDone = true;
+      app.exit(0);
+    }, quitCleanupTimeoutMs);
+    if (typeof cap.unref === "function") cap.unref();
+
+    // resolvedCliPath() is evaluated inside the async IIFE so a throw (a future
+    // change to settings/CLI resolution) becomes a rejection caught below,
+    // never stranding the quit. shutdown() always settles: host children are
+    // SIGKILL'd within 4s and `omnigent server stop` has its own exec timeout.
+    (async () => {
+      const cliPath = resolvedCliPath();
+      await serverManager.shutdown(cliPath);
+    })()
       .catch(() => {})
       .finally(() => {
+        if (quitCleanupDone) return; // the hard cap already forced the exit
         quitCleanupDone = true;
-        app.quit();
+        clearTimeout(cap);
+        // Hand off to a user-approved install if one is pending; otherwise
+        // complete the deferred quit. quitAndInstall() re-issues app.quit()
+        // (via setImmediate) only when it can actually install — so if the
+        // staged update is gone and install() returns false, fall back to a
+        // plain quit and then a forced exit after a short grace, rather than
+        // leave the app up waiting for an update that won't install. The
+        // installer is spawned synchronously inside quitAndInstall(), so by
+        // the time the fallback fires the update is already underway (or was
+        // never going to install) — force-exiting only ensures we quit.
+        if (updater.quitAndInstallIfPending()) {
+          const fallback = setTimeout(() => app.exit(0), quitInstallFallbackMs);
+          if (typeof fallback.unref === "function") fallback.unref();
+        } else {
+          app.quit();
+        }
       });
   });
 }

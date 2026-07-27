@@ -99,7 +99,7 @@ _SOCKET_MODE = 0o600
 # Per §Deployment knobs vs spec self-containment, this is a
 # deployment-level capacity knob — operators may tune; specs MUST
 # NOT depend on a specific value.
-_DEFAULT_IDLE_TIMEOUT_S = 30 * 60  # 30 minutes
+_DEFAULT_IDLE_TIMEOUT_S = 60 * 60  # 1 hour
 
 # How often the idle reaper wakes up to check for stale entries.
 # Picking 1/30th of the timeout keeps reaping reasonably prompt
@@ -116,7 +116,7 @@ def _resolve_harness_idle_timeout_s() -> float:
     """Resolve the harness idle-reap window in seconds.
 
     Honors :envvar:`OMNIGENT_HARNESS_IDLE_TIMEOUT_S` (``0`` disables reaping);
-    otherwise the 30-minute default. An unparseable or negative value logs a
+    otherwise the 1-hour default. An unparseable or negative value logs a
     warning and falls back to the default rather than failing the runner at
     boot — an env typo shouldn't take the runner down.
     """
@@ -534,7 +534,7 @@ class HarnessProcessManager:
 
     :param idle_timeout_s: Seconds of inactivity after which a
         subprocess gets reaped. Deployment-level capacity knob;
-        defaults to 30 minutes. Specs MUST NOT depend on a
+        defaults to 1 hour. Specs MUST NOT depend on a
         specific value.
     :param reaper_interval_s: Seconds between idle-reaper passes.
         Defaults to 60.
@@ -554,7 +554,7 @@ class HarnessProcessManager:
         tmp_parent: Path | None = None,
     ) -> None:
         # ``None`` (the default at both construction sites) resolves from the
-        # OMNIGENT_HARNESS_IDLE_TIMEOUT_S env var, else the 30-minute default.
+        # OMNIGENT_HARNESS_IDLE_TIMEOUT_S env var, else the 1-hour default.
         self._idle_timeout_s = (
             idle_timeout_s if idle_timeout_s is not None else _resolve_harness_idle_timeout_s()
         )
@@ -583,12 +583,21 @@ class HarnessProcessManager:
         # ``get_client``; uncontested after the first spawn for a
         # given conv_id.
         self._spawn_locks: dict[str, asyncio.Lock] = {}
+        # Per-conversation release generation. ``get_client`` samples this
+        # before waiting on the spawn lock; ``release`` bumps it under that
+        # lock. Waiters queued behind a release see a mismatch and fail
+        # instead of respawning after teardown, while a fresh ``get_client``
+        # started after release samples the new generation and may respawn.
+        self._release_generations: dict[str, int] = {}
         # Top-level lock for ``_entries`` / ``_spawn_locks`` dict
         # mutations themselves (the entries within are guarded by
         # their per-conv locks).
         self._registry_lock = asyncio.Lock()
         self._reaper_task: asyncio.Task[None] | None = None
         self._started = False
+        # Set at the start of ``shutdown`` so an in-flight cold spawn
+        # cannot register a live process after teardown begins.
+        self._shutting_down = False
 
     @property
     def instance_dir(self) -> Path:
@@ -627,6 +636,7 @@ class HarnessProcessManager:
         """
         if self._started:
             return
+        self._shutting_down = False
         self._tmp_parent.mkdir(mode=_DIR_MODE, parents=True, exist_ok=True)
         # Sweep BEFORE creating our own dir, so a crashed prior
         # instance whose dir uuid happens to collide with ours
@@ -694,14 +704,32 @@ class HarnessProcessManager:
             :class:`httpx.AsyncClient` bound to the
             per-conversation Unix socket.
         :raises RuntimeError: If ``start()`` was not called first
-            (process manager not initialized) or the spawn fails
-            to produce a usable socket within the readiness
+            (process manager not initialized), the manager is shutting
+            down, a ``release`` invalidated this waiter, or the spawn
+            fails to produce a usable socket within the readiness
             timeout.
         """
         if not self._started:
             raise RuntimeError("HarnessProcessManager.get_client called before start()")
+        # Sample before waiting so a ``release`` that runs while we are
+        # queued (behind the holder or behind that release) invalidates
+        # this call. A later ``get_client`` after release samples the
+        # bumped generation and is allowed to respawn.
+        async with self._registry_lock:
+            start_generation = self._release_generations.get(conversation_id, 0)
         spawn_lock = await self._get_spawn_lock(conversation_id)
         async with spawn_lock:
+            # ``release`` / ``shutdown`` take this same lock, so a teardown
+            # that started while we were waiting cannot race the spawn below.
+            if self._shutting_down:
+                raise RuntimeError("HarnessProcessManager.get_client called during shutdown")
+            async with self._registry_lock:
+                current_generation = self._release_generations.get(conversation_id, 0)
+            if current_generation != start_generation:
+                raise RuntimeError(
+                    f"harness for conversation {conversation_id!r} was released "
+                    "while get_client waited"
+                )
             entry = self._entries.get(conversation_id)
             if entry is not None and entry.process.returncode is not None:
                 # Prior subprocess died; drop the stale entry and
@@ -763,6 +791,17 @@ class HarnessProcessManager:
                         f"no live harness subprocess for conversation {conversation_id!r}"
                     )
                 entry = await self._spawn_entry(conversation_id, harness, env)
+                # Shutdown may have begun while we awaited readiness; discard
+                # rather than registering a process that ``shutdown``'s entry
+                # walk would miss. Release bumps generation only while holding
+                # this spawn lock, so a concurrent release cannot invalidate
+                # mid-spawn — it runs after we drop the lock.
+                if self._shutting_down:
+                    await self._close_entry(entry)
+                    raise RuntimeError(
+                        "HarnessProcessManager shut down during spawn for "
+                        f"conversation {conversation_id!r}"
+                    )
                 self._entries[conversation_id] = entry
             # Use ``time.monotonic()`` directly rather than
             # ``asyncio.get_running_loop().time()`` so the value is
@@ -946,29 +985,46 @@ class HarnessProcessManager:
         that bound becomes a real problem, switch to a TTL-based
         lock cache.
 
+        Acquires the per-conversation spawn lock before touching
+        ``_entries`` so a ``release`` that arrives while ``get_client``
+        is still awaiting readiness cannot return early (no entry yet)
+        and then lose to a late registration. Bumps the per-conversation
+        release generation under that lock so waiters queued behind this
+        release fail instead of respawning after teardown; a fresh
+        ``get_client`` started after release samples the new generation
+        and may respawn. Lock order is spawn lock then ``_registry_lock``
+        — never the reverse while holding both — so this cannot deadlock
+        with ``_get_spawn_lock`` (registry only, briefly, before the
+        spawn lock is acquired).
+
         :param conversation_id: AP-allocated conversation id.
         """
-        async with self._registry_lock:
-            if only_if_idle_cutoff is not None:
-                current = self._entries.get(conversation_id)
-                if (
-                    current is None
-                    or current.last_used_at > only_if_idle_cutoff
-                    or conversation_id in self._in_flight_response_ids
-                ):
-                    _logger.info(
-                        "skipping idle reap for conversation %s: entry became "
-                        "active or was already released during the pass",
-                        conversation_id,
-                    )
-                    return
-            entry = self._entries.pop(conversation_id, None)
-            # NOTE: ``_spawn_locks[conversation_id]`` intentionally
-            # NOT popped — see this method's docstring for the
-            # per-conv lock-identity invariant rationale.
-        if entry is None:
-            return
-        await self._close_entry(entry)
+        spawn_lock = await self._get_spawn_lock(conversation_id)
+        async with spawn_lock:
+            async with self._registry_lock:
+                if only_if_idle_cutoff is not None:
+                    current = self._entries.get(conversation_id)
+                    if (
+                        current is None
+                        or current.last_used_at > only_if_idle_cutoff
+                        or conversation_id in self._in_flight_response_ids
+                    ):
+                        _logger.info(
+                            "skipping idle reap for conversation %s: entry became "
+                            "active or was already released during the pass",
+                            conversation_id,
+                        )
+                        return
+                self._release_generations[conversation_id] = (
+                    self._release_generations.get(conversation_id, 0) + 1
+                )
+                entry = self._entries.pop(conversation_id, None)
+                # NOTE: ``_spawn_locks[conversation_id]`` intentionally
+                # NOT popped — see this method's docstring for the
+                # per-conv lock-identity invariant rationale.
+            if entry is None:
+                return
+            await self._close_entry(entry)
 
     async def shutdown(self) -> None:
         """
@@ -982,13 +1038,23 @@ class HarnessProcessManager:
         """
         if not self._started:
             return
+        # Flip before cancelling the reaper / releasing so an in-flight
+        # ``get_client`` that is past its spawn-lock wait still discards
+        # rather than registering after we finish draining.
+        self._shutting_down = True
         if self._reaper_task is not None:
             self._reaper_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._reaper_task
             self._reaper_task = None
-        # Snapshot then iterate — release mutates ``_entries``.
-        for conv_id in list(self._entries):
+        # Include spawn-lock keys so a cold spawn that has not yet
+        # registered in ``_entries`` is still linearized with ``release``
+        # (``release`` waits on the spawn lock, then tears down whatever
+        # got registered). Snapshot under the registry lock; ``release``
+        # mutates ``_entries``.
+        async with self._registry_lock:
+            conv_ids = list(set(self._entries) | set(self._spawn_locks))
+        for conv_id in conv_ids:
             await self.release(conv_id)
         # Best-effort cleanup of our instance dir. If a subprocess
         # we couldn't kill is still holding a socket file, the

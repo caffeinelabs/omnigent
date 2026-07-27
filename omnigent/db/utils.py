@@ -606,66 +606,71 @@ def make_managed_session_maker(
 
 # ── ID generation ──────────────────────────────────────
 
-_ITEM_TYPE_PREFIX: dict[str, str] = {
-    "message": "msg_",
-    "function_call": "fc_",
-    "function_call_output": "fco_",
-    "error": "err_",
-    "reasoning": "rs_",
-    "compaction": "cmp_",
-    "native_tool": "nt_",
-    "resource_event": "rse_",
-    "slash_command": "sc_",
-    "terminal_command": "tc_",
-    "routing_decision": "rd_",
-}
+# Recognised conversation-item types, validated at id generation. The item's
+# type lives in the ``conversation_items.type`` column, not in its id. Kept in
+# parity with ``ITEM_TYPE_TO_DATA_CLS`` (see the db util tests).
+_ITEM_TYPES: frozenset[str] = frozenset(
+    {
+        "message",
+        "function_call",
+        "function_call_output",
+        "error",
+        "reasoning",
+        "compaction",
+        "native_tool",
+        "resource_event",
+        "slash_command",
+        "terminal_command",
+        "routing_decision",
+    }
+)
 
 
 def generate_agent_id() -> str:
     """
     Generate a unique agent identifier.
 
-    :returns: A string of the form ``"ag_<32-char hex>"``,
-        e.g. ``"ag_0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c"``.
+    :returns: A bare 32-char hex uuid,
+        e.g. ``"0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c"``.
     """
-    return f"ag_{uuid.uuid4().hex}"
+    return uuid.uuid4().hex
 
 
 def builtin_agent_id(name: str) -> str:
     """
     Deterministic agent id for a built-in agent, derived from its name.
 
-    Same shape and length as :func:`generate_agent_id` (``ag_`` + 32 hex), but
+    Same shape and length as :func:`generate_agent_id` (bare 32-char hex), but
     stable across processes: a multi-tenant deployment reseeds the built-ins into
     an ephemeral per-pod store, where a random id would change each boot and
     dangle a persisted ``conversation.agent_id``. Do NOT revert built-in seeding
     to :func:`generate_agent_id` (guarded by the ``builtin_agent_id`` tests).
 
     :param name: The built-in agent's unique name, e.g. ``"polly"``.
-    :returns: A deterministic id of the form ``"ag_<32-char hex>"``.
+    :returns: A deterministic bare 32-char hex id.
     """
     digest = hashlib.sha256(f"builtin:{name}".encode()).hexdigest()
-    return f"ag_{digest[:32]}"
+    return digest[:32]
 
 
 def generate_file_id() -> str:
     """
     Generate a unique file identifier.
 
-    :returns: A string of the form ``"file_<32-char hex>"``,
-        e.g. ``"file_a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"``.
+    :returns: A bare 32-char hex uuid,
+        e.g. ``"a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"``.
     """
-    return f"file_{uuid.uuid4().hex}"
+    return uuid.uuid4().hex
 
 
 def generate_conversation_id() -> str:
     """
     Generate a unique conversation identifier.
 
-    :returns: A string of the form ``"conv_<32-char hex>"``,
-        e.g. ``"conv_e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9"``.
+    :returns: A bare 32-char hex uuid,
+        e.g. ``"e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9"``.
     """
-    return f"conv_{uuid.uuid4().hex}"
+    return uuid.uuid4().hex
 
 
 def generate_task_id() -> str:
@@ -682,25 +687,16 @@ def generate_item_id(item_type: str) -> str:
     """
     Generate a unique conversation-item identifier.
 
-    The prefix is determined by the item type:
+    *item_type* is validated against :data:`_ITEM_TYPES` but no longer encoded
+    into the id — the type lives in the ``conversation_items.type`` column.
 
-    - ``"message"`` -> ``"msg_"``
-    - ``"function_call"`` -> ``"fc_"``
-    - ``"function_call_output"`` -> ``"fco_"``
-    - ``"error"`` -> ``"err_"``
-    - ``"reasoning"`` -> ``"rs_"``
-    - ``"compaction"`` -> ``"cmp_"``
-    - ``"native_tool"`` -> ``"nt_"``
-    - ``"slash_command"`` -> ``"sc_"``
-
-    :param item_type: One of the keys in :data:`_ITEM_TYPE_PREFIX`.
-    :returns: A prefixed identifier, e.g. ``"msg_a1b2c3d4..."``.
+    :param item_type: One of the members of :data:`_ITEM_TYPES`.
+    :returns: A bare 32-char hex uuid, e.g. ``"a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6"``.
     :raises ValueError: If *item_type* is not a recognised type.
     """
-    prefix = _ITEM_TYPE_PREFIX.get(item_type)
-    if prefix is None:
+    if item_type not in _ITEM_TYPES:
         raise ValueError(f"unknown item type: {item_type!r}")
-    return f"{prefix}{uuid.uuid4().hex}"
+    return uuid.uuid4().hex
 
 
 # ── FTS (SQLite FTS5) ─────────────────────────────────
@@ -779,6 +775,45 @@ def insert_fts(
         )
 
 
+def insert_fts_bulk(
+    session: Session,
+    rows: list[tuple[str, str, str]],
+) -> None:
+    """
+    Dual-write multiple rows into the FTS5 table in a single INSERT.
+
+    On dialects without FTS5 this is a no-op. An empty ``rows`` list is also
+    a no-op.
+
+    :param session: An active SQLAlchemy session.
+    :param rows: Each tuple is ``(item_id, conversation_id, search_text)``.
+    """
+    if not rows:
+        return
+    if not (session.bind and _supports_fts5(session.bind.dialect.name)):
+        return
+    # 3 params per row; keep total < 999 (SQLite's safe SQLITE_MAX_VARIABLE_NUMBER
+    # on pre-3.32 builds). Newer SQLite raised the limit to 32766, but chunking at
+    # 300 is safe on all versions.
+    _CHUNK_SIZE = 300
+    for chunk_start in range(0, len(rows), _CHUNK_SIZE):
+        chunk = rows[chunk_start : chunk_start + _CHUNK_SIZE]
+        placeholders = ", ".join(f"(:item_id_{i}, :cid_{i}, :st_{i})" for i in range(len(chunk)))
+        params: dict[str, str] = {}
+        for i, (item_id, conversation_id, search_text) in enumerate(chunk):
+            params[f"item_id_{i}"] = item_id
+            params[f"cid_{i}"] = conversation_id
+            params[f"st_{i}"] = search_text
+        session.execute(
+            text(
+                f"INSERT INTO {_FTS_TABLE}"
+                f"(item_id, conversation_id, search_text) "
+                f"VALUES {placeholders}"
+            ),
+            params,
+        )
+
+
 def delete_fts_by_conversation(session: Session, conversation_id: str) -> None:
     """
     Remove all FTS rows for a conversation (SQLite-family dialects only).
@@ -794,6 +829,26 @@ def delete_fts_by_conversation(session: Session, conversation_id: str) -> None:
         session.execute(
             text(f"DELETE FROM {_FTS_TABLE} WHERE conversation_id = :cid"),
             {"cid": conversation_id},
+        )
+
+
+def delete_fts_by_conversation_ids(session: Session, conv_ids: list[str]) -> None:
+    """
+    Remove all FTS rows for a list of conversations in a single query.
+
+    No-op when ``conv_ids`` is empty or the dialect lacks FTS5.
+
+    :param session: An active SQLAlchemy session.
+    :param conv_ids: Conversation IDs whose FTS rows should be removed.
+    """
+    if not conv_ids:
+        return
+    if session.bind and _supports_fts5(session.bind.dialect.name):
+        placeholders = ", ".join(f":cid{i}" for i in range(len(conv_ids)))
+        params = {f"cid{i}": cid for i, cid in enumerate(conv_ids)}
+        session.execute(
+            text(f"DELETE FROM {_FTS_TABLE} WHERE conversation_id IN ({placeholders})"),
+            params,
         )
 
 

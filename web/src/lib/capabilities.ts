@@ -99,8 +99,8 @@ export interface ServerInfo {
    */
   server_version: string | null;
   /**
-   * True when the server has a routing client configured
-   * (``OMNIGENT_SMART_ROUTING=1`` + ``llm:`` config). Hidden by default.
+   * True when the server has a routing client configured — a server ``llm:``
+   * block, or a ``routing.provider=external`` block.
    */
   smart_routing_enabled: boolean;
   /**
@@ -123,6 +123,29 @@ export interface ServerInfo {
    * ``null`` when disabled.
    */
   sshpiper_user: string | null;
+  /**
+   * True when the server accepts UI-driven harness installs
+   * (``OMNIGENT_HARNESS_INSTALL_ENABLED=1``). Gates the New Chat dialog's
+   * one-click "Install" action for a missing harness. Fails to ``false`` so a
+   * failed probe never offers an install the server would reject.
+   */
+  harness_install_enabled: boolean;
+  /**
+   * Harness ids the install route accepts (bare ids + native spellings that
+   * resolve to an npm-installable family, e.g. ``"codex"``, ``"codex-native"``).
+   * The dialog offers the one-click install only for a harness in this set, so
+   * it never shows an Install button the server would reject. Empty when
+   * ``harness_install_enabled`` is false (or on a failed probe).
+   */
+  installable_harnesses: string[];
+  /**
+   * True when the server can transcribe dictation audio
+   * (``WS /v1/dictation/stream``; the ``dictation`` extra plus models
+   * are installed). Gates the composer mic button's server
+   * speech-to-text fallback where the browser Web Speech API has no
+   * backend (Electron, Firefox/Chromium).
+   */
+  dictation_available: boolean;
 }
 
 /** Sentinel used when the probe fails — accounts is off, no login URL. */
@@ -145,6 +168,9 @@ const _OFF: ServerInfo = {
   sshpiper_host: null,
   sshpiper_port: null,
   sshpiper_user: null,
+  harness_install_enabled: false,
+  installable_harnesses: [],
+  dictation_available: false,
 };
 
 let _cached: ServerInfo | null = null;
@@ -189,6 +215,11 @@ export async function resolveServerInfo(): Promise<ServerInfo> {
           sshpiper_host: typeof data.sshpiper_host === "string" ? data.sshpiper_host : null,
           sshpiper_port: typeof data.sshpiper_port === "number" ? data.sshpiper_port : null,
           sshpiper_user: typeof data.sshpiper_user === "string" ? data.sshpiper_user : null,
+          harness_install_enabled: data.harness_install_enabled === true,
+          installable_harnesses: Array.isArray(data.installable_harnesses)
+            ? data.installable_harnesses.filter((h): h is string => typeof h === "string")
+            : [],
+          dictation_available: data.dictation_available === true,
         };
         return _cached;
       }

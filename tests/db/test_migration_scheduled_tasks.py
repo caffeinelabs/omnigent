@@ -3,7 +3,7 @@
 Verifies the migration creates both tables with the expected shape, that
 neither carries a database-level foreign key (schema Rule R032 — the
 ``agent_id`` / ``conversation_id`` / ``scheduled_task_id`` relationships are
-application-owned), that ``scheduled_tasks.cron_expression`` is NOT NULL and the
+application-owned), that ``scheduled_tasks.rrule`` is NOT NULL and the
 ``scheduled_task_runs.status`` CHECK is enforced, and that a downgrade drops both
 tables cleanly.
 """
@@ -55,8 +55,8 @@ def test_scheduled_tasks_columns(db_engine: Engine) -> None:
         "id",
         "name",
         "prompt",
-        "cron_expression",
-        "owner_user_id",
+        "rrule",
+        "user_id",
         "agent_id",
         "model_override",
         "reasoning_effort",
@@ -120,12 +120,25 @@ def test_expected_indexes(db_engine: Engine) -> None:
     """Both tables expose the indexes that back the read paths."""
     insp = sa.inspect(db_engine)
     scheduled_tasks_idx = {i["name"] for i in insp.get_indexes("scheduled_tasks")}
-    assert {
-        "ix_scheduled_tasks_created_at",
-        "ix_scheduled_tasks_owner_user_id",
-        "ix_scheduled_tasks_state",
-    } <= scheduled_tasks_idx
+    assert "ix_scheduled_tasks_user_scope" in scheduled_tasks_idx
+    scheduled_tasks_idx_cols = {
+        i["name"]: list(i["column_names"]) for i in insp.get_indexes("scheduled_tasks")
+    }
+    assert scheduled_tasks_idx_cols["ix_scheduled_tasks_user_scope"] == [
+        "workspace_id",
+        "user_id",
+        "created_at",
+        "id",
+    ]
     assert "ix_scheduled_tasks_agent_id" not in scheduled_tasks_idx
+    # The separate created_at + user_id listing indexes were folded into the
+    # single user-scope index above: with the user_id filter pushed into SQL the
+    # per-user list is a covered seek, and the boot scan reads whole rows
+    # regardless (see migration f4664ca64ea8).
+    assert "ix_scheduled_tasks_created_at" not in scheduled_tasks_idx
+    assert "ix_scheduled_tasks_user_id" not in scheduled_tasks_idx
+    # ix_scheduled_tasks_state was dropped earlier (see migration e5c8b1f4a2d7).
+    assert "ix_scheduled_tasks_state" not in scheduled_tasks_idx
     runs_idx = {i["name"] for i in insp.get_indexes("scheduled_task_runs")}
     assert "ix_scheduled_task_runs_scheduled_task_id" in runs_idx
     runs_idx_cols = {
@@ -151,10 +164,10 @@ def test_state_default_on_omitted_insert(db_engine: Engine) -> None:
         conn.execute(
             sa.text(
                 "INSERT INTO scheduled_tasks "
-                "(id, name, prompt, cron_expression, owner_user_id, agent_id, "
+                "(id, name, prompt, rrule, user_id, agent_id, "
                 " timezone, created_at) "
                 "VALUES (X'00000000000000000000000000000de1', 'n', 'p', "
-                "'0 9 * * *', 'u', 'ag_1', 'UTC', 1)"
+                "'FREQ=DAILY;BYHOUR=9;BYMINUTE=0', 'u', 'ag_1', 'UTC', 1)"
             )
         )
         state, workspace_id, execution_target = conn.execute(
@@ -180,36 +193,36 @@ def test_execution_target_check_rejects_bad_code(db_engine: Engine) -> None:
             conn.execute(
                 sa.text(
                     "INSERT INTO scheduled_tasks "
-                    "(id, name, prompt, cron_expression, owner_user_id, agent_id, "
+                    "(id, name, prompt, rrule, user_id, agent_id, "
                     " timezone, execution_target, created_at) "
                     "VALUES (X'00000000000000000000000000e6bad0', 'n', 'p', "
-                    "'0 9 * * *', 'u', 'ag', 'UTC', 99, 1)"
+                    "'FREQ=DAILY;BYHOUR=9;BYMINUTE=0', 'u', 'ag', 'UTC', 99, 1)"
                 )
             )
 
 
-def test_cron_expression_accepts_recurring_row(db_engine: Engine) -> None:
-    """A row with ``cron_expression`` set inserts cleanly (the recurring trigger)."""
+def test_rrule_accepts_recurring_row(db_engine: Engine) -> None:
+    """A row with ``rrule`` set inserts cleanly (the recurring trigger)."""
     with db_engine.begin() as conn:
         conn.execute(
             sa.text(
                 "INSERT INTO scheduled_tasks "
-                "(id, name, prompt, cron_expression, owner_user_id, agent_id, "
+                "(id, name, prompt, rrule, user_id, agent_id, "
                 " timezone, created_at) "
                 "VALUES (X'0000000000000000000000000000c40e', 'n', 'p', "
-                "'0 9 * * *', 'u', 'ag', 'UTC', 1)"
+                "'FREQ=DAILY;BYHOUR=9;BYMINUTE=0', 'u', 'ag', 'UTC', 1)"
             )
         )
 
 
-def test_cron_expression_is_not_null(db_engine: Engine) -> None:
-    """A row omitting ``cron_expression`` fails the NOT NULL constraint."""
+def test_rrule_is_not_null(db_engine: Engine) -> None:
+    """A row omitting ``rrule`` fails the NOT NULL constraint."""
     with pytest.raises(IntegrityError):
         with db_engine.begin() as conn:
             conn.execute(
                 sa.text(
                     "INSERT INTO scheduled_tasks "
-                    "(id, name, prompt, owner_user_id, agent_id, timezone, "
+                    "(id, name, prompt, user_id, agent_id, timezone, "
                     " created_at) "
                     "VALUES (X'000000000000000000000000000000e0', 'n', 'p', "
                     "'u', 'ag', 'UTC', 1)"
@@ -234,10 +247,10 @@ def test_state_check_rejects_bad_code(db_engine: Engine) -> None:
             conn.execute(
                 sa.text(
                     "INSERT INTO scheduled_tasks "
-                    "(id, name, prompt, cron_expression, owner_user_id, agent_id, "
+                    "(id, name, prompt, rrule, user_id, agent_id, "
                     " timezone, state, created_at) "
                     "VALUES (X'00000000000000000000000000badc0d', 'n', 'p', "
-                    "'0 9 * * *', 'u', 'ag', 'UTC', 99, 1)"
+                    "'FREQ=DAILY;BYHOUR=9;BYMINUTE=0', 'u', 'ag', 'UTC', 99, 1)"
                 )
             )
 
