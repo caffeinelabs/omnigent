@@ -463,44 +463,6 @@ RUN pip install --no-cache-dir /build /build/sdks/python-client /build/sdks/ui \
 # are sourced after that reset, so this puts the venv back in front.
 RUN echo 'export PATH="/opt/venv/bin:${PATH}"' > /etc/profile.d/omnigent-venv.sh
 
-# ── Caffeine sandbox app-dev tooling ────────────────────
-# Lets a managed sandbox clone and run a caffeinelabs app repo (`pnpm dev`)
-# out of the box. Previously a stack of hand-built "soak" overlay images
-# (`…-docker1..10`) layered on this host; folded in here so CI builds it
-# reproducibly and server↔host stay same-commit. Docker CLI + buildx + compose
-# talk to the Docker-in-Docker sidecar the sandbox admission policy injects (the
-# launcher points DOCKER_HOST at it); the app's `pnpm dev` runs `docker compose
-# up`. The C toolchain is the one app-dev dependency mise can't provide (it
-# compiles the app's Rust dev services, which link openssl) — Rust + Java come
-# from the repo's own mise.toml, not baked here. A system mise config trusts the
-# sandbox HOME so a cloned repo's mise.toml toolchain auto-activates without an
-# interactive prompt. The caffeine-* helpers wire npm/ghcr auth from the
-# injected secret bundle, a one-command clone+boot, and opencode attach.
-COPY --from=docker:28-cli /usr/local/bin/docker /usr/local/bin/docker
-COPY --from=docker/buildx-bin:0.18.0 /buildx /usr/local/libexec/docker/cli-plugins/docker-buildx
-COPY --from=docker/compose-bin:v2.40.3 /docker-compose /usr/local/libexec/docker/cli-plugins/docker-compose
-COPY deploy/docker/caffeine/mise-config.toml /etc/mise/config.toml
-RUN apt-get update \
- && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      build-essential pkg-config libssl-dev cmake ca-certificates \
- && rm -rf /var/lib/apt/lists/*
-COPY deploy/docker/caffeine/caffeine-sandbox-init.sh /etc/caffeine-sandbox-init.sh
-COPY deploy/docker/caffeine/caffeine-dev-setup \
-     deploy/docker/caffeine/caffeine-app-dev \
-     deploy/docker/caffeine/caffeine-opencode-attach \
-     /usr/local/bin/
-RUN set -e; \
-    chmod 0644 /etc/caffeine-sandbox-init.sh; \
-    chmod 0755 /usr/local/bin/caffeine-dev-setup /usr/local/bin/caffeine-app-dev /usr/local/bin/caffeine-opencode-attach; \
-    # source the init from login (profile.d) AND interactive non-login (bash.bashrc) shells
-    printf '. /etc/caffeine-sandbox-init.sh\n' > /etc/profile.d/zz-caffeine-sandbox.sh; \
-    grep -q caffeine-sandbox-init /etc/bash.bashrc || printf '\n. /etc/caffeine-sandbox-init.sh\n' >> /etc/bash.bashrc; \
-    usermod -s /bin/bash sandbox 2>/dev/null || true; \
-    docker --version; docker buildx version; \
-    /usr/local/libexec/docker/cli-plugins/docker-compose version | head -1; \
-    cc --version | head -1; \
-    bash -n /etc/caffeine-sandbox-init.sh; bash -n /usr/local/bin/caffeine-opencode-attach
-
 WORKDIR /root
 
 # CMD only — Modal's `Image.from_registry` (and the sandbox launchers
