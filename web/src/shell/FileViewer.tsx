@@ -78,6 +78,7 @@ import { CommentSenderProvider, useOptionalCommentSender } from "@/hooks/Comment
 import { markCommentsSeen } from "@/hooks/useSeenComments";
 import { useChatStore } from "@/store/chatStore";
 import { useResizablePanel } from "@/hooks/useResizablePanel";
+import { useIOSNativeKeyboardInset } from "@/hooks/useIOSNativeKeyboardInset";
 import { useWorkspaceChangedFiles } from "@/hooks/useWorkspaceChangedFiles";
 import { cn } from "@/lib/utils";
 import { readFileViewPreferences, writeFileViewPreferences } from "@/lib/fileViewPreferences";
@@ -89,9 +90,11 @@ import {
   detectLang,
   isImageFile,
   isNotebookPath,
+  isPdfFile,
   openHtmlArtifactInNewTab,
 } from "./codeViewerHelpers";
 import { CommentsPanel, type ActiveSelection } from "./CommentsPanel";
+import { isPdfAnchor } from "./pdfCommentHelpers";
 
 // Monaco diff is heavy (~MBs + worker); load it only when the diff view is
 // actually shown.
@@ -126,6 +129,12 @@ export function classifyAndRemapComments(
     }
     // Draft with no anchor — keep as-is.
     if (!c.anchor_content) {
+      open.push(c);
+      continue;
+    }
+    // PDF anchors store geometry in anchor_content; byte-offset remapping does
+    // not apply to binary PDF content.
+    if (isPdfAnchor(c.anchor_content)) {
       open.push(c);
       continue;
     }
@@ -352,6 +361,13 @@ function FileViewerBody({
     50,
     frameless ? undefined : minWidthPx,
   );
+  // The mobile viewer is a `fixed inset-0` overlay, so the iOS shell-lock
+  // (useIOSViewportLock) — which only resizes flow content inside .app-shell —
+  // doesn't lift it above the soft keyboard. Pad the overlay's bottom by the
+  // keyboard inset so the comments panel and its (auto-focused) textarea stay
+  // visible. No-op off iOS / with the keyboard closed. Not needed frameless
+  // (embedded in the desktop aside, never a fixed overlay).
+  const keyboardInset = useIOSNativeKeyboardInset(!frameless && open);
   const fileQuery = useFileContent(conversationId, path);
   const diffQuery = useFileDiff(conversationId, path);
   const changedFiles = useWorkspaceChangedFiles(conversationId);
@@ -606,13 +622,14 @@ function FileViewerBody({
   // notebooks to their rendered preview, and everything else to source.
   const lang = detectLang(path);
   const isPreviewable = lang === "markdown" || lang === "html" || isNotebookPath(path);
-  // Images render through CodeViewer's <ImageViewer> regardless of view mode;
-  // they have no source/diff representation, so diff is suppressed for them
-  // (Monaco would otherwise render the base64 payload as garbage text).
+  // Images and PDFs render through CodeViewer's own viewers regardless of view
+  // mode; they have no source/diff representation, so diff is suppressed for
+  // them (Monaco would otherwise render the base64 payload as garbage text).
   const isImage = isImageFile(path, fileQuery.data?.content_type);
+  const isPdf = isPdfFile(path, fileQuery.data?.content_type);
   // Show Δ button only when the file appears in the session's changed-files list.
   const isDiffAvailable =
-    !isImage && (changedFiles.data?.data.some((f) => f.path === path) ?? false);
+    !isImage && !isPdf && (changedFiles.data?.data.some((f) => f.path === path) ?? false);
   const isDeletedFile =
     changedFiles.data?.data.some((f) => f.path === path && f.status === "deleted") ?? false;
 
@@ -871,6 +888,7 @@ function FileViewerBody({
       onSelect: openHtmlInNewTab,
     });
   }
+  // PDFs render through PdfViewer with text-layer comment anchors.
   toolbarActions.push({
     key: "comments",
     label: commentsOpen ? "Hide comments" : "Show comments",
@@ -881,7 +899,7 @@ function FileViewerBody({
       setCommentsOpen((prev) => !prev);
     },
   });
-  if (isDiffAvailable) {
+  if (!isPdf && isDiffAvailable) {
     toolbarActions.push({
       key: "diff",
       label: viewMode === "diff" ? "Exit diff view" : "Show diff",
@@ -1487,7 +1505,7 @@ function FileViewerBody({
   return (
     <aside
       data-testid="file-viewer"
-      style={{ width: panelWidth }}
+      style={{ width: panelWidth, paddingBottom: keyboardInset || undefined }}
       className={cn(
         "flex flex-col overflow-hidden bg-card transition-[translate,border-color,border-width] duration-150 ease-out",
         // Mobile (default): fixed full-screen overlay, slide via translate-x.

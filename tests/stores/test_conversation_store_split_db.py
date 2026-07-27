@@ -49,7 +49,9 @@ def _count(db: Path, table: str) -> int:
 def _col(db: Path, table: str, col: str, where: str = "") -> list:
     with sqlite3.connect(str(db)) as conn:
         q = f"SELECT {col} FROM {table}" + (f" WHERE {where}" if where else "")
-        return [r[0] for r in conn.execute(q).fetchall()]
+        rows = [r[0] for r in conn.execute(q).fetchall()]
+        # id columns are 16-byte blobs; present them as bare hex.
+        return [v.hex() if isinstance(v, bytes) else v for v in rows]
 
 
 # ── Table placement ────────────────────────────────────
@@ -66,7 +68,7 @@ def test_tables_live_in_correct_db(
 
     # AP tables in conv_db only
     for t in ("conversations", "conversation_items", "conversation_labels"):
-        assert t in conv_tables, f"{t} missing from conv_db"
+        assert t in conv_tables, f"{t} missing from 9b7e62bfe9e16274877fe2868bffae5e"
 
     # Omnigent tables in omnigent_db
     for t in ("omnigent_conversation_metadata", "agents", "hosts", "policies", "comments"):
@@ -113,10 +115,10 @@ def test_create_sub_agent_conversation(
     assert child.kind == "sub_agent"
     assert child.parent_conversation_id == parent.id
     # kind lives in metadata
-    kind_code = _col(omnigent_db, "omnigent_conversation_metadata", "kind", f"id='{child.id}'")
+    kind_code = _col(omnigent_db, "omnigent_conversation_metadata", "kind", f"id=X'{child.id}'")
     assert kind_code == [2]
     # title and parent link live in AP
-    parent_id_col = _col(conv_db, "conversations", "parent_conversation_id", f"id='{child.id}'")
+    parent_id_col = _col(conv_db, "conversations", "parent_conversation_id", f"id=X'{child.id}'")
     assert parent_id_col == [parent.id]
 
 
@@ -256,7 +258,7 @@ def test_set_runner_id_lands_in_omnigent_db(
     conv = store.create_conversation(title="runner")
     store.set_runner_id(conv.id, "runner_xyz")
     runner_ids = _col(
-        omnigent_db, "omnigent_conversation_metadata", "runner_id", f"id='{conv.id}'"
+        omnigent_db, "omnigent_conversation_metadata", "runner_id", f"id=X'{conv.id}'"
     )
     assert runner_ids == ["runner_xyz"]
 
@@ -282,6 +284,56 @@ def test_set_external_session_id(store: SqlAlchemyConversationStore) -> None:
     conv = store.create_conversation(title="ext")
     updated = store.set_external_session_id(conv.id, "ext-uuid-123")
     assert updated.external_session_id == "ext-uuid-123"
+
+
+# ── project membership ─────────────────────────────────
+
+
+def test_set_conversation_project_lands_in_omnigent_db(
+    omnigent_db: Path, store: SqlAlchemyConversationStore
+) -> None:
+    """``project_id`` is written to the metadata row in the Omnigent DB."""
+    project_id = "b" * 32
+    conv = store.create_conversation(title="filed")
+    filed = store.set_conversation_project(conv.id, project_id)
+    assert filed is True
+
+    stored = _col(omnigent_db, "omnigent_conversation_metadata", "project_id", f"id=X'{conv.id}'")
+    assert stored == [project_id]
+    # Reads back through the entity (which merges both DBs).
+    assert store.get_conversation(conv.id).project_id == project_id
+
+
+def test_list_conversations_project_name_filter_crosses_dbs(
+    store: SqlAlchemyConversationStore,
+    omnigent_db: Path,
+) -> None:
+    """The dual-read ``project`` (by name) filter resolves the first-class
+    member ids from the Omnigent DB (``projects`` JOIN ``conversation_metadata``,
+    both colocated there) and ORs them with the ``omni_project`` label on the AP
+    DB — the cross-DB path a single-DB test can't exercise.
+    """
+    from omnigent.stores.project_store.sqlalchemy_store import SqlAlchemyProjectStore
+
+    # projects lives on the Omnigent DB, so create it against that URI.
+    project_store = SqlAlchemyProjectStore(f"sqlite:///{omnigent_db}")
+    project = project_store.create("c" * 32, "Work", None)
+
+    first_class = store.create_conversation(title="first-class")
+    labelled = store.create_conversation(title="labelled")
+    unfiled = store.create_conversation(title="loose")
+    store.set_conversation_project(first_class.id, project.id)
+    store.set_labels(labelled.id, {"omni_project": "Work"})
+
+    members = store.list_conversations(project="Work", owned_by=None)
+    assert {c.id for c in members.data} == {first_class.id, labelled.id}
+
+    # Empty string means "unfiled" — the loose session, excluding both members,
+    # even though first-class membership lives in the other physical DB.
+    unfiled_ids = {c.id for c in store.list_conversations(project="", owned_by=None).data}
+    assert unfiled.id in unfiled_ids
+    assert first_class.id not in unfiled_ids
+    assert labelled.id not in unfiled_ids
 
 
 # ── conversation items ─────────────────────────────────
@@ -349,12 +401,10 @@ def test_delete_conversation_subtree_cleans_both_dbs(
     parent = store.create_conversation(title="parent")
     store.create_conversation(kind="sub_agent", title="child", parent_conversation_id=parent.id)
     assert _count(conv_db, "conversations") == 2
-    assert _count(conv_db, "agent_configuration") == 2
     assert _count(omnigent_db, "omnigent_conversation_metadata") == 2
 
     asyncio.run(store.delete_conversation(parent.id))
     assert _count(conv_db, "conversations") == 0
-    assert _count(conv_db, "agent_configuration") == 0
     assert _count(omnigent_db, "omnigent_conversation_metadata") == 0
 
 
@@ -427,26 +477,28 @@ def test_agent_store_resolves_session_id_across_dbs(
     from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
 
     created = store.create_session_with_agent(
-        agent_id="ag_split_1",
+        agent_id="112c4ebea353b873df12de9d02f539ab",
         agent_name="session-agent",
-        agent_bundle_location="ag_split_1/bundle",
+        agent_bundle_location="112c4ebea353b873df12de9d02f539ab/bundle",
         agent_description=None,
         title="split session",
     )
-    # Agent row lands in the Omnigent DB; the binding in the AP DB's
-    # agent_configuration table.
+    # Agent row lands in the Omnigent DB; the binding on the AP DB's
+    # conversations.agent_id column.
     assert _count(omnigent_db, "agents") == 1
-    assert _col(conv_db, "agent_configuration", "agent_id") == ["ag_split_1"]
+    assert _col(conv_db, "conversations", "agent_id") == ["112c4ebea353b873df12de9d02f539ab"]
 
     agent_store = SqlAlchemyAgentStore(
         f"sqlite:///{omnigent_db}",
         f"sqlite:///{conv_db}",
     )
-    agent = agent_store.get("ag_split_1")
+    agent = agent_store.get("112c4ebea353b873df12de9d02f539ab")
     assert agent is not None
     assert agent.session_id == created.conversation.id
 
-    updated = agent_store.update("ag_split_1", "ag_split_1/bundle2")
+    updated = agent_store.update(
+        "112c4ebea353b873df12de9d02f539ab", "112c4ebea353b873df12de9d02f539ab/bundle2"
+    )
     assert updated is not None
     assert updated.session_id == created.conversation.id
 
@@ -476,7 +528,7 @@ def test_update_conversation_archives_without_metadata_row(
     with sqlite3.connect(str(omnigent_db)) as conn:
         conn.execute(
             "DELETE FROM omnigent_conversation_metadata WHERE id IN (?, ?)",
-            (parent.id, child.id),
+            (bytes.fromhex(parent.id), bytes.fromhex(child.id)),
         )
         conn.commit()
     assert _count(omnigent_db, "omnigent_conversation_metadata") == 0
@@ -510,9 +562,9 @@ def test_delete_conversation_deletes_session_scoped_agent(
 ) -> None:
     """Deleting a session deletes the session-scoped agent row backing it."""
     created = store.create_session_with_agent(
-        agent_id="ag_del_1",
+        agent_id="d6f21846ee961735d477aae06247b99c",
         agent_name="del-agent",
-        agent_bundle_location="ag_del_1/bundle",
+        agent_bundle_location="d6f21846ee961735d477aae06247b99c/bundle",
         agent_description=None,
         title="del session",
     )
@@ -520,7 +572,7 @@ def test_delete_conversation_deletes_session_scoped_agent(
 
     asyncio.run(store.delete_conversation(created.conversation.id))
     assert _count(omnigent_db, "agents") == 0
-    assert _count(conv_db, "agent_configuration") == 0
+    assert _count(conv_db, "conversations") == 0
 
 
 def test_delete_conversation_keeps_template_agent(
@@ -535,8 +587,12 @@ def test_delete_conversation_keeps_template_agent(
         f"sqlite:///{omnigent_db}",
         f"sqlite:///{conv_db}",
     )
-    template = agent_store.create("ag_tmpl_1", "shared-template", "ag_tmpl_1/bundle")
+    template = agent_store.create(
+        "191cbf904e3223e9e00ac9a1abfe79a5",
+        "shared-template",
+        "191cbf904e3223e9e00ac9a1abfe79a5/bundle",
+    )
     conv = store.create_conversation(title="uses template", agent_id=template.id)
 
     asyncio.run(store.delete_conversation(conv.id))
-    assert _col(omnigent_db, "agents", "id") == ["ag_tmpl_1"]
+    assert _col(omnigent_db, "agents", "id") == ["191cbf904e3223e9e00ac9a1abfe79a5"]

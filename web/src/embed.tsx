@@ -116,6 +116,9 @@ const SERVER_INFO_OFFLINE_FALLBACK: ServerInfo = {
   sshpiper_host: null,
   sshpiper_port: null,
   sshpiper_user: null,
+  harness_install_enabled: false,
+  installable_harnesses: [],
+  dictation_available: false,
 };
 
 /**

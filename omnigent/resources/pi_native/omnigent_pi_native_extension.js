@@ -565,6 +565,10 @@ function textFromContent(content) {
   const parts = [];
   for (const block of content) {
     if (!block || typeof block !== "object") continue;
+    // OpenAI o-series / gpt-oss models return content as an array with typed
+    // blocks: {type:"text",text:"..."} and {type:"reasoning",summary:[...]}.
+    // Only collect text blocks; skip reasoning/summary blocks.
+    if (block.type === "reasoning") continue;
     const text =
       block.text || block.input_text || block.output_text || block.content;
     if (typeof text === "string") parts.push(text);
@@ -1122,6 +1126,7 @@ module.exports = function (pi) {
   const postedToolCalls = new Set();
   const postedToolResults = new Set();
   const postedReasoning = new Set();
+  const streamedReasoningBlocks = new Set();
   const toolCallsById = new Map();
   const pendingInterruptMs = 30_000;
   // Live streaming state for assistant text deltas. Pi emits
@@ -1384,13 +1389,19 @@ module.exports = function (pi) {
     });
   }
 
-  async function postReasoningText(text, responseId, keyHint) {
+  async function postCompletedReasoning(text, responseId, keyHint, streamed) {
     if (typeof text !== "string" || !text.trim()) return;
     const textKey = `${responseId}:text:${fingerprint(text)}`;
     const key = `${responseId}:${keyHint || fingerprint(text)}`;
     if (postedReasoning.has(key) || postedReasoning.has(textKey)) return;
     postedReasoning.add(key);
     postedReasoning.add(textKey);
+    if (!streamed) {
+      await postEvent(config, {
+        type: "external_output_reasoning_delta",
+        data: { delta: text, started: true },
+      });
+    }
     await postEvent(config, {
       type: "external_conversation_item",
       data: {
@@ -1402,6 +1413,21 @@ module.exports = function (pi) {
           content: [{ type: "reasoning_text", text }],
         },
       },
+    });
+  }
+
+  function reasoningBlockKey(responseId, contentIndex) {
+    return `${responseId}:msg:${streamingMessageOrdinal}:thinking:${contentIndex}`;
+  }
+
+  async function postReasoningDelta(update, responseId) {
+    if (typeof update.delta !== "string" || !update.delta) return;
+    const blockKey = reasoningBlockKey(responseId, update.contentIndex);
+    const started = !streamedReasoningBlocks.has(blockKey);
+    streamedReasoningBlocks.add(blockKey);
+    await postEvent(config, {
+      type: "external_output_reasoning_delta",
+      data: { delta: update.delta, started },
     });
   }
 
@@ -1471,7 +1497,13 @@ module.exports = function (pi) {
       if (block.type === "thinking") {
         const text = typeof block.thinking === "string" ? block.thinking : "";
         const key = block.thinkingSignature || `${turnOrdinal}:${index}`;
-        await postReasoningText(text, responseId, key);
+        const blockKey = reasoningBlockKey(responseId, index);
+        await postCompletedReasoning(
+          text,
+          responseId,
+          key,
+          streamedReasoningBlocks.has(blockKey),
+        );
       }
     }
   }
@@ -1559,6 +1591,7 @@ module.exports = function (pi) {
     postedToolCalls.clear();
     postedToolResults.clear();
     postedReasoning.clear();
+    streamedReasoningBlocks.clear();
     toolCallsById.clear();
     streamedTextIndex.clear();
     finalizedTextBlocks.clear();
@@ -1626,13 +1659,23 @@ module.exports = function (pi) {
       await postTextDelta(update, responseId);
       return;
     }
+    if (update.type === "thinking_delta") {
+      await postReasoningDelta(update, responseId);
+      return;
+    }
     if (update.type === "toolcall_end") {
       await postToolCall(update.toolCall, responseId);
       return;
     }
     if (update.type === "thinking_end") {
       const key = `${turnOrdinal}:${update.contentIndex}`;
-      await postReasoningText(update.content, responseId, key);
+      const blockKey = reasoningBlockKey(responseId, update.contentIndex);
+      await postCompletedReasoning(
+        update.content,
+        responseId,
+        key,
+        streamedReasoningBlocks.has(blockKey),
+      );
     }
   });
 
@@ -1727,8 +1770,8 @@ module.exports = function (pi) {
     // posted and this finalize agree on the id regardless of whether Pi
     // fires message_start.
     await finalizeStreamingMessage(responseId);
-    streamingMessageOrdinal += 1;
     await mirrorAssistantMessage(message, responseId);
+    streamingMessageOrdinal += 1;
     // ``message_end`` is the primary usage-capture site (one completed
     // assistant message per LLM call); fold its token counts into the
     // cumulative session totals and flush to the server for pricing.

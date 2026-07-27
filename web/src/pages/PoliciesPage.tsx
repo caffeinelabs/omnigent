@@ -45,12 +45,10 @@ import { coercePolicyParams } from "@/lib/policyParams";
 
 function AddDefaultPolicyDialog({
   registry,
-  appliedHandlers,
   open,
   onOpenChange,
 }: {
   registry: PolicyRegistryEntry[];
-  appliedHandlers: Set<string>;
   open: boolean;
   onOpenChange: (open: boolean) => void;
 }) {
@@ -158,15 +156,14 @@ function AddDefaultPolicyDialog({
         <div className="min-w-0 space-y-3 pt-1">
           {!selected &&
             (() => {
-              const available = registry.filter((r) => !appliedHandlers.has(r.handler));
               const lowerFilter = filter.toLowerCase();
               const filtered = lowerFilter
-                ? available.filter(
+                ? registry.filter(
                     (r) =>
                       r.name.toLowerCase().includes(lowerFilter) ||
                       r.description?.toLowerCase().includes(lowerFilter),
                   )
-                : available;
+                : registry;
               return (
                 <>
                   <input
@@ -196,9 +193,7 @@ function AddDefaultPolicyDialog({
                     ))}
                     {filtered.length === 0 && (
                       <p className="py-2 text-center text-xs text-muted-foreground">
-                        {available.length === 0
-                          ? "All available policies are already applied."
-                          : "No policies match your filter."}
+                        No policies match your filter.
                       </p>
                     )}
                   </div>
@@ -445,7 +440,6 @@ export function PoliciesPage() {
   const [actionError, setActionError] = useState<string | null>(null);
 
   const registryByHandler = new Map(registry.map((r) => [r.handler, r]));
-  const appliedHandlers = new Set(policies.map((p) => p.handler));
 
   const refresh = useCallback(() => {
     void refetch();
@@ -483,7 +477,7 @@ export function PoliciesPage() {
   }
 
   async function onConfirmDelete() {
-    if (deleteCandidate === null) return;
+    if (deleteCandidate === null || deleteCandidate.id === null) return;
     setPendingAction(true);
     setActionError(null);
     deletePolicy.mutate(deleteCandidate.id, {
@@ -519,14 +513,22 @@ export function PoliciesPage() {
             const params = p.factory_params;
             const hasParams = params != null && Object.keys(params).length > 0;
             return (
-              <div key={p.id} className="rounded-lg border border-border bg-background p-4">
+              <div
+                key={p.id ?? p.name}
+                className="rounded-lg border border-border bg-background p-4"
+              >
                 <div className="flex items-start justify-between gap-3">
                   <div className="flex items-start gap-2.5 min-w-0">
                     <ShieldCheckIcon className="mt-0.5 size-4 shrink-0 text-muted-foreground" />
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
                         <span className="text-sm font-medium">{p.name}</span>
-                        {!p.enabled && (
+                        {p.source === "config" && (
+                          <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                            Config
+                          </span>
+                        )}
+                        {!p.enabled && p.source !== "config" && (
                           <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
                             Disabled
                           </span>
@@ -543,26 +545,30 @@ export function PoliciesPage() {
                     </div>
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
-                    <Switch
-                      checked={p.enabled}
-                      onCheckedChange={(checked) =>
-                        updatePolicy.mutate({
-                          policyId: p.id,
-                          enabled: checked,
-                        })
-                      }
-                      aria-label={`Toggle ${p.name}`}
-                    />
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      className="size-8 text-muted-foreground hover:text-destructive"
-                      title="Remove policy"
-                      onClick={() => setDeleteCandidate(p)}
-                      disabled={pendingAction}
-                    >
-                      <TrashIcon className="size-3.5" />
-                    </Button>
+                    {p.source !== "config" ? (
+                      <>
+                        <Switch
+                          checked={p.enabled}
+                          onCheckedChange={(checked) =>
+                            updatePolicy.mutate({
+                              policyId: p.id!,
+                              enabled: checked,
+                            })
+                          }
+                          aria-label={`Toggle ${p.name}`}
+                        />
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="size-8 text-muted-foreground hover:text-destructive"
+                          title="Remove policy"
+                          onClick={() => setDeleteCandidate(p)}
+                          disabled={pendingAction}
+                        >
+                          <TrashIcon className="size-3.5" />
+                        </Button>
+                      </>
+                    ) : null}
                   </div>
                 </div>
                 {hasParams && (
@@ -600,12 +606,7 @@ export function PoliciesPage() {
         </Button>
       </div>
 
-      <AddDefaultPolicyDialog
-        registry={registry}
-        appliedHandlers={appliedHandlers}
-        open={addOpen}
-        onOpenChange={setAddOpen}
-      />
+      <AddDefaultPolicyDialog registry={registry} open={addOpen} onOpenChange={setAddOpen} />
 
       {/* Delete confirmation */}
       <Dialog

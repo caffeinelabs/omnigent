@@ -32,7 +32,9 @@ Platform notes that shape this launcher:
   the Pod runs as the image's non-root ``sandbox`` user (:data:`_RUN_AS_UID`)
   for least privilege, so ``$HOME`` would be unwritable. The Pod sets ``HOME``
   to :data:`_HOME_DIR`, mounts an ``emptyDir`` there shared by both containers,
-  and ``fsGroup`` makes it group-writable.
+  and ``fsGroup`` makes it group-writable. When the host receives a literal
+  ``OMNIGENT_CONFIG_HOME``, the init container receives the same value so its
+  config injection lands where the host loader reads it.
 - **PID-1 reaper.** The in-sandbox host re-parents orphaned runner processes to
   PID 1, so the container command is a tiny supervisor that spawns
   ``omnigent host``, reaps any children, and forwards SIGTERM for prompt,
@@ -51,11 +53,12 @@ import contextlib
 import importlib
 import logging
 import os
+import posixpath
 import re
 import shlex
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, ClassVar, Literal
 
 import click
@@ -72,6 +75,7 @@ from omnigent.onboarding.sandboxes.base import (
     SandboxLauncher,
     git_identity_env,
     github_sandbox_setup_commands,
+    render_host_config_write_command,
 )
 
 if TYPE_CHECKING:
@@ -377,15 +381,18 @@ def _render_workspace_prep_command(
     repo_url: str | None,
     repo_branch: str | None,
     extra_setup_commands: list[str] | None = None,
+    host_config: dict[str, object] | None = None,
 ) -> list[str]:
     """
     Render the init container command that prepares the workspace.
 
-    Creates ``<workspace>`` and, when a repository is requested, clones it into
-    ``<clone_dir>`` BEFORE the host starts. Running in an init container means a
-    clone failure terminates the init container non-zero — surfaced fast by the
-    start wait with the git error as the container log tail — rather than
-    silently leaving the host without its workspace.
+    Creates ``<workspace>``, clones the repository into ``<clone_dir>`` when
+    requested, and merges *host_config* into ``config.yaml`` under
+    ``$OMNIGENT_CONFIG_HOME`` or the default ``~/.omnigent`` when set — all
+    BEFORE the host starts. Running in an init container means a failure
+    terminates the init container non-zero — surfaced fast by the start wait
+    with the error as the container log tail — rather than silently leaving the
+    host without its workspace or provider config.
 
     :param workspace: The workspace root to create, e.g. ``"/home/omnigent/workspace"``.
     :param clone_dir: Directory the clone lands in, or ``None`` for no clone.
@@ -395,6 +402,9 @@ def _render_workspace_prep_command(
     :param extra_setup_commands: Additional per-user setup commands (``gh``
         auth + ``authorized_keys``) run after the clone; best-effort, so a
         failure here does not abort init (``|| true``). ``None`` for none.
+    :param host_config: Deployment-supplied config content to merge in (lands
+        under the same config directory seen by the host container), or
+        ``None``.
     :returns: The ``["bash", "-lc", script]`` command.
     """
     script = f"set -e\nmkdir -p {shlex.quote(workspace)}\n"
@@ -411,6 +421,8 @@ def _render_workspace_prep_command(
         script += f"git clone {branch}-- {shlex.quote(repo_url)} {shlex.quote(clone_dir)}\n"
     for cmd in extra_setup_commands or ():
         script += f"{cmd} || true\n"
+    if host_config is not None:
+        script += render_host_config_write_command(host_config) + "\n"
     return ["bash", "-lc", script]
 
 
@@ -516,7 +528,9 @@ def build_pod_manifest(
     github_token: str | None = None,
     github_login: str | None = None,
     ssh_authorized_keys: Sequence[str] | None = None,
+    host_config: dict[str, object] | None = None,
     resources: dict[str, object] | None = None,
+    pvc_mounts: Sequence[Mapping[str, object]] | None = None,
 ) -> dict[str, object]:
     """
     Build the sandbox Pod manifest as a plain dict.
@@ -551,6 +565,9 @@ def build_pod_manifest(
       root filesystem stays writable (the host writes ``/tmp`` + ``~/.omnigent``).
     - ``kubernetes.io/arch: amd64`` is the default; a *node_selector* entry for
       that key overrides it (e.g. ``arm64`` — the host image is multi-arch).
+    - Operator *pvc_mounts* become ``persistentVolumeClaim`` volumes mounted on
+      the **host container only** (read-only unless opted out); the init
+      container sees only HOME, so nothing external is exposed at clone time.
 
     :param pod_name: DNS-label-safe Pod name (see :func:`_new_pod_name`).
     :param namespace: Namespace the Pod is created in.
@@ -575,7 +592,16 @@ def build_pod_manifest(
     :param owner: Session owner; when an email, its git author / committer
         identity is added as literal env so sandbox commits are attributed to
         that human, not the shared ``GIT_TOKEN`` (see :func:`git_identity_env`).
+    :param host_config: Deployment-supplied config content merged in by the
+        init container under the host's resolved config directory, or ``None``.
+        Non-secret by design:
+        credentials stay behind ``api_key_ref: env:`` indirection (resolved in
+        the sandbox against the ``envFrom`` harness Secret), so embedding the
+        content in the init container's command is as safe as the clone URL.
     :param resources: Configured resources block, or ``None`` for the defaults.
+    :param pvc_mounts: Normalized PVC mounts (``{claim_name, mount_path,
+        read_only}``) added as ``persistentVolumeClaim`` volumes on the host
+        container only, or ``None``.
     :returns: The Pod manifest dict.
     """
     pod_resources = _resolve_pod_resources(resources)
@@ -586,6 +612,23 @@ def build_pod_manifest(
         "capabilities": {"drop": ["ALL"]},
     }
     home_mount = [{"name": "home", "mountPath": _HOME_DIR}]
+    pvc_volumes: list[dict[str, object]] = []
+    pvc_volume_mounts: list[dict[str, object]] = []
+    for i, mount in enumerate(pvc_mounts or ()):
+        # Index-based names sidestep DNS-label collisions between similar claim
+        # names and with the reserved "home" volume.
+        claim_source: dict[str, object] = {"claimName": mount["claim_name"]}
+        volume_mount: dict[str, object] = {
+            "name": f"pvc-{i}",
+            "mountPath": mount["mount_path"],
+        }
+        if mount["read_only"]:
+            # readOnly on the volume source too, so even a future second mount
+            # of the same volume cannot write through it.
+            claim_source["readOnly"] = True
+            volume_mount["readOnly"] = True
+        pvc_volumes.append({"name": f"pvc-{i}", "persistentVolumeClaim": claim_source})
+        pvc_volume_mounts.append(volume_mount)
 
     # Per-user GitHub auth: the credential env (git + gh act as the user)
     # plus the gh hosts.yml / authorized_keys setup commands run in the
@@ -609,12 +652,44 @@ def build_pod_manifest(
     # so a private clone authenticates as the user; it overrides the harness
     # Secret's shared GIT_TOKEN.
     init_env.extend(github_env)
+    config_home = env_literals.get("OMNIGENT_CONFIG_HOME")
+    if config_home is not None:
+        # Init and host containers share ONLY the HOME emptyDir, and both run
+        # with workingDir=_HOME_DIR. The injected config the init container
+        # writes is visible to the host only if its directory resolves under
+        # HOME — otherwise the write lands in the init container's private
+        # filesystem and the host silently boots without its providers. An empty
+        # value is falsy: the writer (and host loader) treat it as unset
+        # (~/.omnigent), so only a non-empty override is checked. Resolve
+        # relative to HOME (the shared workingDir) and normalize so a ``..``
+        # segment can't slip past the prefix check, then fail the launch loudly.
+        # A runtime symlink under HOME pointing elsewhere can still defeat this
+        # lexical check, so an operator must not aim OMNIGENT_CONFIG_HOME inside
+        # the cloned workspace. Use posixpath: the target is always a POSIX Pod,
+        # even when the server building this manifest runs on Windows.
+        resolved_home = posixpath.normpath(posixpath.join(_HOME_DIR, config_home))
+        if (
+            config_home
+            and host_config is not None
+            and not (resolved_home == _HOME_DIR or resolved_home.startswith(_HOME_DIR + "/"))
+        ):
+            raise ValueError(
+                f"OMNIGENT_CONFIG_HOME ({config_home!r}) must resolve under {_HOME_DIR!r} "
+                "when sandbox.host_config is set — the init container that writes the "
+                "injected config shares only the HOME volume with the host"
+            )
+        init_env.append({"name": "OMNIGENT_CONFIG_HOME", "value": config_home})
     init_container: dict[str, object] = {
         "name": _INIT_CONTAINER_NAME,
         "image": image,
         "workingDir": _HOME_DIR,
         "command": _render_workspace_prep_command(
-            workspace, clone_dir, repo_url, repo_branch, github_setup
+            workspace,
+            clone_dir,
+            repo_url,
+            repo_branch,
+            extra_setup_commands=github_setup,
+            host_config=host_config,
         ),
         "env": init_env,
         "securityContext": container_security,
@@ -658,7 +733,7 @@ def build_pod_manifest(
         "command": _render_host_command(server_url),
         "env": host_env,
         "securityContext": container_security,
-        "volumeMounts": home_mount,
+        "volumeMounts": [*home_mount, *pvc_volume_mounts],
     }
     if harness_secret:
         host_container["envFrom"] = [{"secretRef": {"name": harness_secret}}]
@@ -684,7 +759,7 @@ def build_pod_manifest(
             "fsGroupChangePolicy": "OnRootMismatch",
             "seccompProfile": {"type": "RuntimeDefault"},
         },
-        "volumes": [{"name": "home", "emptyDir": {}}],
+        "volumes": [{"name": "home", "emptyDir": {}}, *pvc_volumes],
         "initContainers": [init_container],
         "containers": [host_container],
     }
@@ -874,6 +949,7 @@ class KubernetesSandboxLauncher(SandboxLauncher):
         kubeconfig: str | None = None,
         in_cluster: bool | None = None,
         resources: dict[str, object] | None = None,
+        pvc_mounts: Sequence[Mapping[str, object]] | None = None,
     ) -> None:
         """
         Initialize the launcher.
@@ -898,6 +974,8 @@ class KubernetesSandboxLauncher(SandboxLauncher):
             ``False`` kubeconfig only, ``None`` to try in-cluster then fall back.
         :param resources: ``sandbox.kubernetes.resources`` block, or ``None``
             for the built-in defaults.
+        :param pvc_mounts: Normalized ``sandbox.kubernetes.pvc_mounts`` entries
+            (validated at parse time), or ``None`` for none.
         """
         self._image_ref = image
         self._namespace = namespace
@@ -908,6 +986,7 @@ class KubernetesSandboxLauncher(SandboxLauncher):
         self._kubeconfig = kubeconfig
         self._in_cluster = in_cluster
         self._resources = resources
+        self._pvc_mounts = list(pvc_mounts) if pvc_mounts else None
         self._core: k8s_client.CoreV1Api | None = None
         self._api_client: k8s_client.ApiClient | None = None
 
@@ -1134,6 +1213,7 @@ class KubernetesSandboxLauncher(SandboxLauncher):
         github_token: str | None = None,
         github_login: str | None = None,
         ssh_authorized_keys: Sequence[str] | None = None,
+        host_config: dict[str, object] | None = None,
         on_stage: Callable[[str], None] | None = None,
     ) -> str:
         """
@@ -1167,6 +1247,9 @@ class KubernetesSandboxLauncher(SandboxLauncher):
             to write the ``gh`` CLI config. ``None`` when *github_token* is.
         :param ssh_authorized_keys: Owner's PUBLIC SSH keys, appended to the
             Pod's ``authorized_keys``. ``None`` / empty when unavailable.
+        :param host_config: Deployment-supplied ``~/.omnigent/config.yaml``
+            content the init container merges in before the host starts, or
+            ``None``.
         :param on_stage: Progress observer; invoked with ``"starting"``.
         :returns: The absolute in-sandbox workspace path (the cloned repository
             directory when *repo_url* is set).
@@ -1191,20 +1274,9 @@ class KubernetesSandboxLauncher(SandboxLauncher):
         )
         try:
             try:
-                # Secret first so the Pod's secretKeyRef resolves immediately —
-                # a Pod referencing a missing Secret would sit in
-                # CreateContainerConfigError (which the start wait treats as
-                # terminal).
-                core.create_namespaced_secret(
-                    namespace,
-                    build_token_secret_manifest(
-                        secret_name=secret_name,
-                        namespace=namespace,
-                        token=token,
-                        github_token=github_token,
-                    ),
-                    _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
-                )
+                # Build the (side-effect-free) manifest first: it validates
+                # host_config placement and can raise, so nothing should have
+                # been created in the cluster yet when it does.
                 manifest = build_pod_manifest(
                     pod_name=sandbox_id,
                     namespace=namespace,
@@ -1225,7 +1297,23 @@ class KubernetesSandboxLauncher(SandboxLauncher):
                     github_token=github_token,
                     github_login=github_login,
                     ssh_authorized_keys=ssh_authorized_keys,
+                    host_config=host_config,
                     resources=self._resources,
+                    pvc_mounts=self._pvc_mounts,
+                )
+                # Secret before Pod so the Pod's secretKeyRef resolves
+                # immediately — a Pod referencing a missing Secret would sit in
+                # CreateContainerConfigError (which the start wait treats as
+                # terminal).
+                core.create_namespaced_secret(
+                    namespace,
+                    build_token_secret_manifest(
+                        secret_name=secret_name,
+                        namespace=namespace,
+                        token=token,
+                        github_token=github_token,
+                    ),
+                    _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
                 )
                 core.create_namespaced_pod(
                     namespace, manifest, _request_timeout=_POD_READY_REQUEST_TIMEOUT_S
