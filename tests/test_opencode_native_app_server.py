@@ -101,6 +101,23 @@ def test_filtered_server_env_sets_xdg_and_password(
     assert "RANDOM_UNRELATED" not in env  # unrelated env filtered out
 
 
+def test_filtered_server_env_points_gh_at_real_config_dir(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`gh` stays authenticated despite OpenCode's XDG_CONFIG_HOME isolation.
+
+    A managed sandbox injects ~/.config/gh/hosts.yml to log `gh` in as the
+    connecting user. The per-session XDG_CONFIG_HOME would otherwise redirect
+    gh's lookup away from it, so filtered_server_env sets GH_CONFIG_DIR back to
+    the real config dir (which takes precedence over XDG_CONFIG_HOME for gh).
+    """
+    monkeypatch.setenv("HOME", "/home/omnigent")
+    env = filtered_server_env(bridge_dir=tmp_path, auth_secret="pw")
+    assert env["GH_CONFIG_DIR"] == "/home/omnigent/.config/gh"
+    # OpenCode's own config stays isolated.
+    assert env["XDG_CONFIG_HOME"] == str(tmp_path / "xdg-config")
+
+
 def test_filtered_server_env_drops_global_opencode_config(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:

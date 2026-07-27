@@ -59,6 +59,7 @@ import {
 import { cn } from "@/lib/utils";
 import { isNativeWrapper as isNativeWrapperLabel } from "@/lib/nativeCodingAgents";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
+import { sshpiperConfigured } from "@/components/OpenInVsCodeRemote";
 import { isSingleUserMode } from "@/lib/capabilities";
 import { isCurrentServerLocal } from "@/lib/serverOrigin";
 import { useChatStore } from "@/store/chatStore";
@@ -399,7 +400,8 @@ export function AppShell() {
   // Agent tools/policies exist to show.
   const hasAgentInfo = !!conversationId && agentHasInfo(boundAgent, conversationId);
   // Whether the mobile three-dot menu has any entry to offer.
-  const hasHeaderMenu = canShare || hasAgentInfo;
+  const hasHeaderMenu =
+    canShare || hasAgentInfo || (Boolean(conversationId) && sshpiperConfigured(serverInfo));
   // Claude-native sub-agents have no terminal of their own — the parent
   // owns the tmux pane.
   const isClaudeNativeSubagent =

@@ -22,6 +22,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { AgentInfoButton } from "@/components/AgentInfo";
+import { OpenInVsCodeRemote } from "@/components/OpenInVsCodeRemote";
 import { PresenceAvatars } from "@/components/PresenceAvatars";
 import type { Agent } from "@/hooks/useAgents";
 import { cn } from "@/lib/utils";
@@ -312,9 +313,13 @@ export function ChatHeader({
                   Agent info
                 </DropdownMenuItem>
               )}
+              {conversationId && (
+                <OpenInVsCodeRemote sessionId={conversationId} variant="menu-item" />
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}
+        {conversationId && <OpenInVsCodeRemote sessionId={conversationId} />}
         {canShare && shareDisabled && shareDisabledReason ? (
           <Tooltip>
             <TooltipTrigger asChild>

@@ -112,6 +112,10 @@ const SERVER_INFO_OFFLINE_FALLBACK: ServerInfo = {
   public_sharing_enabled: true,
   server_version: null,
   smart_routing_enabled: false,
+  github_app_enabled: false,
+  sshpiper_host: null,
+  sshpiper_port: null,
+  sshpiper_user: null,
 };
 
 /**

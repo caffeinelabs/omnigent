@@ -14,6 +14,7 @@ App OAuth dance, host registration) lives in ``bootstrap``.
 
 from __future__ import annotations
 
+import base64
 import shlex
 from abc import ABC, abstractmethod
 from contextlib import AbstractContextManager
@@ -25,7 +26,7 @@ import click
 from omnigent.host.identity import HOST_ID_ENV_VAR, HOST_NAME_ENV_VAR, HOST_TOKEN_ENV_VAR
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Iterator
+    from collections.abc import Callable, Iterator, Sequence
     from pathlib import Path
 
 
@@ -74,6 +75,191 @@ def host_image_wheel_install_command(remote_tgz_path: str) -> str:
         "pip install --quiet --force-reinstall --no-deps "
         "--no-warn-script-location oa-wheels/*.whl"
     )
+
+
+# Git HTTPS username paired with a GitHub token: GitHub accepts the
+# literal ``x-access-token`` as the username for token auth over HTTPS,
+# matching the host image's credential helper default.
+_GIT_TOKEN_USERNAME = "x-access-token"
+
+
+def _write_file_command(home: str, rel_path: str, content: str, *, mode: str) -> str:
+    """Build a shell command that writes *content* to ``<home>/<rel_path>``.
+
+    Content is base64-encoded so arbitrary bytes (YAML, SSH keys) survive
+    the remote shell without quoting hazards, then decoded in-sandbox.
+
+    :param home: The sandbox ``$HOME`` (already resolved).
+    :param rel_path: Path relative to home, e.g. ``".config/gh/hosts.yml"``.
+    :param content: The file contents to write.
+    :param mode: chmod mode for the file, e.g. ``"600"``.
+    :returns: A single shell command string for :meth:`SandboxLauncher.run`.
+    """
+    abs_path = f"{home}/{rel_path}"
+    encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
+    parent = abs_path.rsplit("/", 1)[0]
+    return (
+        f"mkdir -p {shlex.quote(parent)} && "
+        f"printf %s {shlex.quote(encoded)} | base64 -d > {shlex.quote(abs_path)} && "
+        f"chmod {mode} {shlex.quote(abs_path)}"
+    )
+
+
+def github_sandbox_setup_commands(
+    home: str,
+    *,
+    github_token: str | None,
+    github_login: str | None,
+    ssh_authorized_keys: Sequence[str] | None,
+    github_token_env: str | None = None,
+    docker_available: bool = False,
+) -> list[str]:
+    """Build the in-sandbox commands that authenticate the connecting user.
+
+    Produces the shell commands (run via :meth:`SandboxLauncher.run`) that
+    make a managed sandbox act as the user who launched it:
+
+    * write ``~/.config/gh/hosts.yml`` so the ``gh`` CLI is authenticated
+      as the user for every shell in the sandbox, and
+    * append the user's PUBLIC SSH keys to ``~/.ssh/authorized_keys`` so
+      they can SSH into their own sandbox.
+
+    Git authentication itself rides the host image's credential helper via
+    the ``GIT_TOKEN`` / ``GIT_USERNAME`` env (see
+    :func:`github_sandbox_env`), not a command here.
+
+    Returns an empty list when there is nothing to inject, so callers can
+    splat it unconditionally.
+
+    :param home: The sandbox ``$HOME`` (already resolved).
+    :param github_token: The user access token, or ``None``. Ignored when
+        *github_token_env* is set.
+    :param github_login: The user's GitHub login, or ``None``.
+    :param ssh_authorized_keys: The user's public SSH key lines, or ``None``.
+    :param github_token_env: Name of an environment variable already holding
+        the token in the sandbox (e.g. from a Kubernetes ``secretKeyRef``).
+        When set, the commands read the token from that variable at runtime
+        so it never appears in the command text — the only way to keep it out
+        of a surface like the Pod spec. When ``None`` the literal
+        *github_token* is embedded (for launchers with no secret channel).
+    :param docker_available: When ``True``, the AGENTS.md notes that a Docker
+        daemon is reachable (a Docker-in-Docker sidecar), so the agent knows it
+        can build/run containers. Providers without a sidecar leave it ``False``.
+    :returns: Shell command strings, in the order they should run.
+    """
+    commands: list[str] = []
+    have_token = bool(github_token_env) or bool(github_token)
+    if have_token and github_login:
+        if github_token_env:
+            # Read the token from the env var at runtime; the command text
+            # carries only the variable name, never the secret.
+            token_ref = f'"${{{github_token_env}}}"'
+            gh_dir = f"{home}/.config/gh"
+            hosts_path = f"{gh_dir}/hosts.yml"
+            commands.append(
+                f"mkdir -p {shlex.quote(gh_dir)} && "
+                f"printf 'github.com:\\n    user: %s\\n    oauth_token: %s\\n"
+                f"    git_protocol: https\\n' {shlex.quote(github_login)} {token_ref} "
+                f"> {shlex.quote(hosts_path)} && chmod 600 {shlex.quote(hosts_path)}"
+            )
+            cred_path = f"{home}/.git-credentials"
+            commands.append(
+                f"printf 'https://%s:%s@github.com\\n' "
+                f"{shlex.quote(_GIT_TOKEN_USERNAME)} {token_ref} "
+                f"> {shlex.quote(cred_path)} && chmod 600 {shlex.quote(cred_path)}"
+            )
+        else:
+            hosts_yml = (
+                "github.com:\n"
+                f"    user: {github_login}\n"
+                f"    oauth_token: {github_token}\n"
+                "    git_protocol: https\n"
+            )
+            commands.append(
+                _write_file_command(home, ".config/gh/hosts.yml", hosts_yml, mode="600")
+            )
+            git_credentials = f"https://{_GIT_TOKEN_USERNAME}:{github_token}@github.com\n"
+            commands.append(
+                _write_file_command(home, ".git-credentials", git_credentials, mode="600")
+            )
+        # Authenticate git over HTTPS as the user via an on-disk credential
+        # (the ``store`` helper). This covers the workspace clone AND the
+        # agent's later git ops without prefixing every command with the
+        # token, and does not depend on the launcher's clone implementation.
+        commands.append("git config --global credential.helper store")
+        # Tell the agent (via an AGENTS.md the harness reads from the workspace)
+        # that gh/git are already authenticated, so it clones/PRs directly
+        # instead of asking the user for a token, and always ships changes as a
+        # pull request rather than pushing to the default branch.
+        agents_md = (
+            "# Sandbox environment\n\n"
+            "This managed sandbox is already authenticated to GitHub as "
+            f"**{github_login}** via the `gh` CLI and git (HTTPS).\n\n"
+            "- Clone any repo you can access: `gh repo clone <owner>/<repo>` or "
+            "`git clone https://github.com/<owner>/<repo>.git`.\n"
+            "- `gh` / git act as "
+            f"{github_login}; auth is already configured, so never ask the user "
+            "for a token or print credentials.\n\n"
+            "## Shipping changes — always open a pull request\n\n"
+            "Whenever you make changes to a repository, deliver them as a pull "
+            "request. Never commit or push directly to the default branch "
+            "(`main`/`master`).\n\n"
+            "1. Create a new branch: `git checkout -b <short-descriptive-name>`.\n"
+            "2. Commit with a clear message.\n"
+            "3. Push and open a PR: `git push -u origin HEAD && "
+            "gh pr create --fill` (write a real title/body describing what and "
+            "why; fill in the repo's PR template if it has one).\n"
+            "4. Report the PR URL back to the user.\n"
+        )
+        if docker_available:
+            agents_md += (
+                "\n## Docker\n\n"
+                "A Docker daemon is available — `docker build`, `docker run`, "
+                "etc. work out of the box (`DOCKER_HOST` is already set). Use it "
+                "to build and run containers as needed.\n"
+            )
+        commands.append(_write_file_command(home, "workspace/AGENTS.md", agents_md, mode="644"))
+
+    keys = [k.strip() for k in (ssh_authorized_keys or ()) if k.strip()]
+    if keys:
+        ssh_dir = f"{home}/.ssh"
+        auth_keys = f"{ssh_dir}/authorized_keys"
+        commands.append(f"mkdir -p {shlex.quote(ssh_dir)} && chmod 700 {shlex.quote(ssh_dir)}")
+        commands.append(f"touch {shlex.quote(auth_keys)} && chmod 600 {shlex.quote(auth_keys)}")
+        for key in keys:
+            # Grep-guard so a resume (same volume) does not duplicate the
+            # line; ``fgrep -x`` matches the whole line exactly.
+            quoted = shlex.quote(key)
+            commands.append(
+                f"grep -qxF {quoted} {shlex.quote(auth_keys)} || "
+                f"printf '%s\\n' {quoted} >> {shlex.quote(auth_keys)}"
+            )
+    return commands
+
+
+def github_sandbox_env(github_token: str | None) -> dict[str, str]:
+    """Env exposing a user's GitHub token to git / ``gh`` in the sandbox.
+
+    The host image's git credential helper answers HTTPS auth from
+    ``GIT_TOKEN`` / ``GIT_USERNAME``, and the host forwards both to the
+    runner, so setting them on the host process authenticates *git* as the
+    user. ``GH_TOKEN`` / ``GITHUB_TOKEN`` are set too so any tool reading
+    the conventional env picks up the same identity.
+
+    Returns an empty mapping when there is no token, so callers can splat
+    it unconditionally.
+
+    :param github_token: The user access token, or ``None``.
+    :returns: The credential env, or ``{}``.
+    """
+    if not github_token:
+        return {}
+    return {
+        "GIT_TOKEN": github_token,
+        "GIT_USERNAME": _GIT_TOKEN_USERNAME,
+        "GH_TOKEN": github_token,
+        "GITHUB_TOKEN": github_token,
+    }
 
 
 def git_identity_env(owner: str | None) -> dict[str, str]:
@@ -274,6 +460,9 @@ class SandboxLauncher(ABC):
         repo_branch: str | None = None,
         repo_name: str | None = None,
         owner: str | None = None,
+        github_token: str | None = None,
+        github_login: str | None = None,
+        ssh_authorized_keys: Sequence[str] | None = None,
         on_stage: Callable[[str], None] | None = None,
     ) -> str:
         """
@@ -312,6 +501,18 @@ class SandboxLauncher(ABC):
             committer identity is exported so sandbox commits are attributed to
             that human rather than the shared ``GIT_TOKEN`` (see
             :func:`git_identity_env`). ``None`` on auth-disabled servers.
+        :param github_token: The session owner's connected GitHub user
+            access token, used to authenticate git / ``gh`` inside the
+            sandbox *as that user* (overriding the shared ``GIT_TOKEN``
+            for this launch). ``None`` when the owner has not connected a
+            GitHub account or the GitHub App is not configured.
+        :param github_login: The owner's GitHub login, paired with
+            *github_token* to write the ``gh`` CLI's ``hosts.yml``.
+            ``None`` when *github_token* is ``None``.
+        :param ssh_authorized_keys: The owner's PUBLIC SSH key lines
+            (fetched from GitHub), appended to the sandbox's
+            ``authorized_keys`` so they can SSH into their own sandbox.
+            ``None`` / empty when unavailable.
         :param on_stage: Progress observer invoked with ``"cloning"`` before the
             clone (when *repo_url* is set) and ``"starting"`` before the host
             launches. Runs on this (worker) thread, so it must be thread-safe.
@@ -331,6 +532,17 @@ class SandboxLauncher(ABC):
             )
         workspace = f"{home}/workspace"
         self.run(sandbox_id, f"mkdir -p {shlex.quote(workspace)}")
+        # Per-user GitHub auth (gh hosts.yml + authorized_keys). Run before
+        # the clone so the credential is in place if the clone needs it.
+        # Best-effort: a failure to write these must not abort the launch,
+        # which would otherwise regress a plain public-repo clone.
+        for setup_cmd in github_sandbox_setup_commands(
+            home,
+            github_token=github_token,
+            github_login=github_login,
+            ssh_authorized_keys=ssh_authorized_keys,
+        ):
+            self.run(sandbox_id, setup_cmd, check=False)
         if repo_url is not None:
             workspace = self.materialize_workspace(
                 sandbox_id,
@@ -350,6 +562,7 @@ class SandboxLauncher(ABC):
                 (HOST_TOKEN_ENV_VAR, token),
                 (HOST_ID_ENV_VAR, host_id),
                 (HOST_NAME_ENV_VAR, host_name),
+                *github_sandbox_env(github_token).items(),
                 *git_identity_env(owner).items(),
             )
         )

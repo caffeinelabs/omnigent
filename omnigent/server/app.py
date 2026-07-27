@@ -1078,6 +1078,9 @@ def create_app(
     admins: list[str] | None = None,
     allowed_domains: list[str] | None = None,
     sandbox_config: ManagedSandboxConfig | None = None,
+    github_config: Any | None = None,  # GitHubAppConfig — GitHub App integration
+    github_store: Any | None = None,  # GithubConnectionStore — GitHub App integration
+    sshpiper_config: Any | None = None,  # SshPiperConfig — VS Code Remote via SSHPiper
     sharing_mode: SharingMode | Callable[[], SharingMode] | None = None,
     public_sharing: bool | Callable[[], bool] | None = None,
     server_config: dict[str, Any] | None = None,
@@ -1138,6 +1141,21 @@ def create_app(
         ``host_type="managed"`` create fails with a clear error).
         Managed-host credentials live on the ``hosts`` table, so no
         extra store is wired.
+    :param github_config: Parsed GitHub App configuration
+        (:class:`omnigent.server.github_app.GitHubAppConfig`) enabling
+        the per-user "Connect GitHub" flow and per-user sandbox
+        authentication. ``None`` disables the integration (the connect
+        UI is hidden and managed sandboxes keep the shared ``GIT_TOKEN``
+        behaviour).
+    :param github_store: Persistence for per-user GitHub connections
+        (:class:`omnigent.server.github_store.GithubConnectionStore`).
+        Required alongside ``github_config`` to enable the integration;
+        wired together by ``create_app``'s caller.
+    :param sshpiper_config: SSHPiper gateway settings
+        (:class:`omnigent.server.sshpiper.SshPiperConfig`). When set,
+        ``GET /v1/info`` advertises the gateway and managed hosts expose
+        an ``ssh_target`` so the web UI can open VS Code Remote. ``None``
+        hides the button.
     :param sharing_mode: Server policy for creating new session
         permission grants (see :class:`SharingMode`): ``ON`` allows
         grants at any level plus public/workspace read, ``READ_ONLY``
@@ -1392,6 +1410,20 @@ def create_app(
     app.state.host_registry = host_registry
     app.state.host_store = host_store
     app.state.sandbox_config = sandbox_config
+    # GitHub App integration: enabled only when both the config and the
+    # connection store are wired. The client is stateless (holds config),
+    # built once and reused for the connect flow + launch-time refresh.
+    github_enabled = github_config is not None and github_store is not None
+    app.state.github_config = github_config if github_enabled else None
+    app.state.github_store = github_store if github_enabled else None
+    if github_enabled:
+        from omnigent.server.github_app_client import GitHubAppClient
+
+        app.state.github_client = GitHubAppClient(github_config)
+    else:
+        app.state.github_client = None
+    # SSHPiper: optional gateway for VS Code Remote into sandboxes.
+    app.state.sshpiper_config = sshpiper_config
     # Admin roster: the config ``admins:`` list (canonical) union'd with the
     # runtime-editable ``<data_dir>/admins`` file. Built once here so BOTH the
     # admin-gated auth routes AND ``/v1/me``'s is_admin computation consult the
@@ -1851,7 +1883,7 @@ def create_app(
         return {"version": _server_version()}
 
     @app.get("/v1/info")
-    async def info() -> dict[str, bool | str | None]:
+    async def info() -> dict[str, bool | str | int | None]:
         """Runtime capabilities probe for the SPA + CLI.
 
         Returned at app boot by the frontend (and by ``omnigent
@@ -1923,6 +1955,17 @@ def create_app(
         # actually offered; None when no provider is named (embedding
         # configs may leave it unset) so the UI keeps the generic label.
         sandbox_provider = sandbox_config.provider if managed_sandboxes_enabled else None
+        # github_app_enabled gates the web UI's "Connect GitHub" panel in
+        # Settings: true only when a GitHub App is configured AND its
+        # connection store is wired.
+        github_app_enabled = (
+            getattr(app.state, "github_config", None) is not None
+            and getattr(app.state, "github_store", None) is not None
+        )
+        # sshpiper_host gates the "Open in VS Code" button: present only
+        # when a gateway is configured. Port/user are companions the SPA
+        # needs to build the Remote-SSH URI.
+        sshpiper = getattr(app.state, "sshpiper_config", None)
         # sharing_mode is the server's session-sharing policy
         # (on/read_only/off), surfaced so the web app can hide the Share
         # control (off) or restrict it to read-only (read_only) in lockstep
@@ -1956,6 +1999,10 @@ def create_app(
             "databricks_features": databricks_features,
             "managed_sandboxes_enabled": managed_sandboxes_enabled,
             "sandbox_provider": sandbox_provider,
+            "github_app_enabled": github_app_enabled,
+            "sshpiper_host": sshpiper.host if sshpiper is not None else None,
+            "sshpiper_port": sshpiper.port if sshpiper is not None else None,
+            "sshpiper_user": sshpiper.user if sshpiper is not None else None,
             "sharing_mode": sharing_mode.value,
             "public_sharing_enabled": public_sharing_enabled,
             "server_version": _server_version(),
@@ -2381,6 +2428,26 @@ def create_app(
             ),
             prefix="/v1",
             tags=["hosts"],
+        )
+
+    # GitHub App integration routes (connect / callback / status /
+    # disconnect). Mounted only when the App is configured and its
+    # connection store is wired — otherwise the whole surface stays
+    # absent, exactly like a build without the feature.
+    if github_enabled:
+        from omnigent.server.routes.integrations_github import (
+            create_integrations_github_router,
+        )
+
+        app.include_router(
+            create_integrations_github_router(
+                github_config,
+                github_store,
+                auth_provider=auth_provider,
+                client=app.state.github_client,
+            ),
+            prefix="/v1",
+            tags=["integrations"],
         )
 
     # Mount the auth router that matches the active provider. OIDC and

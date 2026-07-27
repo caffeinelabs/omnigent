@@ -22,8 +22,12 @@ Platform notes that shape this launcher:
 
 - **Token via Secret.** The launch token rides a per-Pod Kubernetes Secret
   referenced by ``secretKeyRef`` — never the Pod spec, an exec request URI, or
-  any audit-logged surface. Harness LLM credentials ride a pre-created Secret
-  projected via ``envFrom`` (``sandbox.kubernetes.secret_name``).
+  any audit-logged surface. The connecting user's GitHub token (when present)
+  rides the SAME Secret and is projected as ``GIT_TOKEN`` / ``GH_TOKEN`` /
+  ``GITHUB_TOKEN`` via ``secretKeyRef``; the init container's ``gh`` / git
+  setup reads it from that env at runtime, so it never lands in the Pod spec
+  either. Harness LLM credentials ride a pre-created Secret projected via
+  ``envFrom`` (``sandbox.kubernetes.secret_name``).
 - **Writable HOME.** The host image's WORKDIR is ``/root`` (root-owned), but
   the Pod runs as the image's non-root ``sandbox`` user (:data:`_RUN_AS_UID`)
   for least privilege, so ``$HOME`` would be unwritable. The Pod sets ``HOME``
@@ -62,14 +66,16 @@ from omnigent.host.identity import (
     HOST_TOKEN_ENV_VAR,
 )
 from omnigent.onboarding.sandboxes.base import (
+    _GIT_TOKEN_USERNAME,
     DEFAULT_HOST_IMAGE,
     RemoteCommandResult,
     SandboxLauncher,
     git_identity_env,
+    github_sandbox_setup_commands,
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     from kubernetes import client as k8s_client
 
@@ -118,13 +124,13 @@ out-of-cluster fallback. Ignored when in-cluster config loads."""
 _DEFAULT_NAMESPACE: str = "omnigent-sandboxes"
 _DEFAULT_SERVICE_ACCOUNT: str = "omnigent-runner"
 
-# Pod resource sizing. Matches the other launchers' 2 vCPU / 4 GiB ceiling; a
-# low request keeps the Pod schedulable on modest nodes while the limit caps a
-# runaway runner.
-_SANDBOX_CPU_REQUEST: str = "500m"
-_SANDBOX_CPU_LIMIT: str = "2"
-_SANDBOX_MEMORY_REQUEST: str = "1Gi"
-_SANDBOX_MEMORY_LIMIT: str = "4Gi"
+# Pod-level resource sizing (applied to the whole Pod, shared across the host
+# and the ssh sidecar rather than budgeted per container). Memory is guaranteed
+# (request == limit); CPU has a floor but no ceiling, so a busy sandbox can burst
+# to whatever the node has free.
+_SANDBOX_CPU_REQUEST: str = "4"
+_SANDBOX_MEMORY_REQUEST: str = "16Gi"
+_SANDBOX_MEMORY_LIMIT: str = "16Gi"
 
 # Labels stamped on every managed runner Pod + its token Secret, so an operator
 # (or a future reconciler) can select omnigent-managed objects for GC.
@@ -304,18 +310,20 @@ def _validate_k8s_name_env(
 def _resolve_pod_resources(resources: dict[str, object] | None) -> dict[str, dict[str, str]]:
     """
     Merge a configured ``sandbox.kubernetes.resources`` block over the built-in
-    defaults, producing the container ``resources`` mapping.
+    defaults, producing the **Pod-level** ``resources`` mapping.
 
-    Each tier and field is optional; an omitted field keeps the default. The
-    config shape is validated at parse time, so this merge reads only the
-    recognized string fields.
+    Defaults guarantee memory (request == limit) and give CPU a floor but no
+    limit, so the sandbox bursts freely. Each tier and field is optional; an
+    omitted field keeps the default, and an operator may add ``limits.cpu`` to
+    cap bursting. Only the recognized ``cpu`` / ``memory`` string fields are read.
 
     :param resources: The configured block, or ``None`` for the defaults.
-    :returns: A ``{"requests": {...}, "limits": {...}}`` mapping.
+    :returns: A ``{"requests": {...}, "limits": {...}}`` mapping (no ``limits.cpu``
+        unless the config supplies one).
     """
     resolved: dict[str, dict[str, str]] = {
         "requests": {"cpu": _SANDBOX_CPU_REQUEST, "memory": _SANDBOX_MEMORY_REQUEST},
-        "limits": {"cpu": _SANDBOX_CPU_LIMIT, "memory": _SANDBOX_MEMORY_LIMIT},
+        "limits": {"memory": _SANDBOX_MEMORY_LIMIT},
     }
     if not resources:
         return resolved
@@ -346,6 +354,12 @@ def _new_pod_name(label: str) -> str:
     return f"omnigent-{base[:40]}-{uuid.uuid4().hex[:6]}"
 
 
+# Key under which the connecting user's GitHub token rides the per-Pod Secret
+# (alongside the launch token), projected into the sandbox as GIT_TOKEN /
+# GH_TOKEN / GITHUB_TOKEN via secretKeyRef so it never enters the Pod spec.
+_GITHUB_TOKEN_SECRET_KEY = "GITHUB_USER_TOKEN"
+
+
 def _token_secret_name(pod_name: str) -> str:
     """
     Name of the per-Pod launch-token Secret for *pod_name*.
@@ -362,6 +376,7 @@ def _render_workspace_prep_command(
     clone_dir: str | None,
     repo_url: str | None,
     repo_branch: str | None,
+    extra_setup_commands: list[str] | None = None,
 ) -> list[str]:
     """
     Render the init container command that prepares the workspace.
@@ -377,6 +392,9 @@ def _render_workspace_prep_command(
     :param repo_url: Repository clone URL, or ``None`` for an empty workspace.
     :param repo_branch: Branch to clone (``--branch … --single-branch``), or
         ``None`` for the default branch.
+    :param extra_setup_commands: Additional per-user setup commands (``gh``
+        auth + ``authorized_keys``) run after the clone; best-effort, so a
+        failure here does not abort init (``|| true``). ``None`` for none.
     :returns: The ``["bash", "-lc", script]`` command.
     """
     script = f"set -e\nmkdir -p {shlex.quote(workspace)}\n"
@@ -391,6 +409,8 @@ def _render_workspace_prep_command(
             else ""
         )
         script += f"git clone {branch}-- {shlex.quote(repo_url)} {shlex.quote(clone_dir)}\n"
+    for cmd in extra_setup_commands or ():
+        script += f"{cmd} || true\n"
     return ["bash", "-lc", script]
 
 
@@ -415,23 +435,53 @@ def _render_host_command(server_url: str) -> list[str]:
     return ["bash", "-lc", script]
 
 
+def _github_secret_env(token_secret_name: str) -> list[dict[str, object]]:
+    """
+    Build the user's GitHub credential env as ``secretKeyRef`` entries.
+
+    ``GIT_TOKEN`` / ``GH_TOKEN`` / ``GITHUB_TOKEN`` all resolve from the per-Pod
+    Secret's :data:`_GITHUB_TOKEN_SECRET_KEY` at runtime, so the token stays out
+    of the Pod spec. ``GIT_USERNAME`` is the fixed, non-secret token-user, so it
+    stays a literal.
+
+    :param token_secret_name: Per-Pod Secret holding the GitHub token.
+    :returns: Env entries suitable for a container's ``env`` list.
+    """
+
+    def _ref() -> dict[str, object]:
+        return {"secretKeyRef": {"name": token_secret_name, "key": _GITHUB_TOKEN_SECRET_KEY}}
+
+    return [
+        {"name": "GIT_USERNAME", "value": _GIT_TOKEN_USERNAME},
+        {"name": "GIT_TOKEN", "valueFrom": _ref()},
+        {"name": "GH_TOKEN", "valueFrom": _ref()},
+        {"name": "GITHUB_TOKEN", "valueFrom": _ref()},
+    ]
+
+
 def build_token_secret_manifest(
-    *, secret_name: str, namespace: str, token: str
+    *, secret_name: str, namespace: str, token: str, github_token: str | None = None
 ) -> dict[str, object]:
     """
     Build the per-Pod launch-token Secret manifest as a plain dict.
 
     The token rides this Secret (referenced by the Pod's ``secretKeyRef``)
     instead of the Pod spec, so it never lands in an audit-logged surface. The
-    Secret is labeled like its Pod for GC and deleted alongside it by
+    connecting user's GitHub token (when present) rides the same Secret under
+    :data:`_GITHUB_TOKEN_SECRET_KEY`, for the same reason. The Secret is
+    labeled like its Pod for GC and deleted alongside it by
     :meth:`KubernetesSandboxLauncher.terminate`.
 
     :param secret_name: The Secret name (see :func:`_token_secret_name`).
     :param namespace: Namespace the Secret is created in.
     :param token: The raw launch token (the apiserver base64-encodes
         ``stringData``).
+    :param github_token: The connecting user's GitHub token, or ``None``.
     :returns: The Secret manifest dict.
     """
+    string_data: dict[str, str] = {HOST_TOKEN_ENV_VAR: token}
+    if github_token:
+        string_data[_GITHUB_TOKEN_SECRET_KEY] = github_token
     return {
         "apiVersion": "v1",
         "kind": "Secret",
@@ -441,7 +491,7 @@ def build_token_secret_manifest(
             "labels": {_MANAGED_BY_LABEL: _MANAGED_BY_VALUE, _ROLE_LABEL: _ROLE_VALUE},
         },
         "type": "Opaque",
-        "stringData": {HOST_TOKEN_ENV_VAR: token},
+        "stringData": string_data,
     }
 
 
@@ -463,6 +513,9 @@ def build_pod_manifest(
     repo_url: str | None = None,
     repo_branch: str | None = None,
     owner: str | None = None,
+    github_token: str | None = None,
+    github_login: str | None = None,
+    ssh_authorized_keys: Sequence[str] | None = None,
     resources: dict[str, object] | None = None,
 ) -> dict[str, object]:
     """
@@ -480,11 +533,18 @@ def build_pod_manifest(
       Both share the writable-HOME ``emptyDir``.
     - ``restartPolicy: Never`` — a crashed host should not silently restart with
       a stale launch token; the managed machinery provisions a replacement.
+    - Resources are budgeted at the **Pod level** (``spec.resources``), shared by
+      the host and any injected sidecar, so neither carries its own request/limit.
+    - ``shareProcessNamespace: true`` — an ssh session in a sidecar sees and can
+      signal the host's processes.
     - ``automountServiceAccountToken: false`` — a compromised agent cannot reach
       the API with the runner SA.
     - The launch token is referenced via ``secretKeyRef`` (never in the spec);
       the host identity rides literal env; harness credentials are projected via
-      ``envFrom`` when *harness_secret* is set.
+      ``envFrom`` when *harness_secret* is set. The connecting user's GitHub
+      token likewise rides the per-Pod Secret via ``secretKeyRef`` (as
+      ``GIT_TOKEN`` / ``GH_TOKEN`` / ``GITHUB_TOKEN``), so it never enters the
+      Pod spec — the init container's ``gh`` / git setup reads it from that env.
     - Pod + container ``securityContext`` satisfy Pod Security "restricted"
       (runAsNonRoot as the image's ``sandbox`` user :data:`_RUN_AS_UID`, drop ALL
       caps, ``seccompProfile: RuntimeDefault``, no privilege escalation). The
@@ -519,19 +579,44 @@ def build_pod_manifest(
     :returns: The Pod manifest dict.
     """
     pod_resources = _resolve_pod_resources(resources)
+    # Budget resources at the Pod level so the host and the ssh sidecar share one
+    # pool instead of each carrying its own; containers omit their own resources.
     container_security = {
         "allowPrivilegeEscalation": False,
         "capabilities": {"drop": ["ALL"]},
     }
     home_mount = [{"name": "home", "mountPath": _HOME_DIR}]
 
+    # Per-user GitHub auth: the credential env (git + gh act as the user)
+    # plus the gh hosts.yml / authorized_keys setup commands run in the
+    # init container so they land in the shared HOME before the host starts.
+    # The token rides the per-Pod Secret (secretKeyRef), never literal env, so
+    # it stays out of the Pod spec; the setup commands read it from GH_TOKEN.
+    github_env = _github_secret_env(token_secret_name) if github_token else []
+    github_setup = github_sandbox_setup_commands(
+        _HOME_DIR,
+        github_token=None,
+        github_login=github_login,
+        ssh_authorized_keys=ssh_authorized_keys,
+        github_token_env="GH_TOKEN" if github_token else None,
+        # A Docker-in-Docker sidecar is injected into every managed runner Pod
+        # by cluster admission, so the agent can build/run containers.
+        docker_available=True,
+    )
+
+    init_env: list[dict[str, object]] = [{"name": "HOME", "value": _HOME_DIR}]
+    # Give the init container the user's token too (via the same secretKeyRef)
+    # so a private clone authenticates as the user; it overrides the harness
+    # Secret's shared GIT_TOKEN.
+    init_env.extend(github_env)
     init_container: dict[str, object] = {
         "name": _INIT_CONTAINER_NAME,
         "image": image,
         "workingDir": _HOME_DIR,
-        "command": _render_workspace_prep_command(workspace, clone_dir, repo_url, repo_branch),
-        "env": [{"name": "HOME", "value": _HOME_DIR}],
-        "resources": pod_resources,
+        "command": _render_workspace_prep_command(
+            workspace, clone_dir, repo_url, repo_branch, github_setup
+        ),
+        "env": init_env,
         "securityContext": container_security,
         "volumeMounts": home_mount,
     }
@@ -542,6 +627,11 @@ def build_pod_manifest(
     host_env: list[dict[str, object]] = [
         {"name": "HOME", "value": _HOME_DIR},
         {"name": "IS_SANDBOX", "value": "1"},
+        # A Docker-in-Docker sidecar (injected by cluster admission) shares the
+        # Pod network namespace and exposes the Engine API on loopback, so the
+        # agent's `docker` CLI reaches it here. Harmless when no sidecar exists —
+        # `docker` just reports the daemon is unreachable.
+        {"name": "DOCKER_HOST", "value": "tcp://127.0.0.1:2375"},
         {"name": HOST_ID_ENV_VAR, "value": host_id},
         {"name": HOST_NAME_ENV_VAR, "value": host_name},
         {
@@ -550,6 +640,10 @@ def build_pod_manifest(
         },
     ]
     host_env.extend({"name": name, "value": value} for name, value in env_literals.items())
+    # Per-user GitHub credential env (git + gh authenticate as the connecting
+    # user), after env_literals so it overrides any shared GIT_TOKEN. The token
+    # values come from the per-Pod Secret via secretKeyRef, not the spec.
+    host_env.extend(github_env)
     # Session-owner git identity, last so it wins any env_literals collision and
     # (as literal env) overrides the harness Secret's envFrom: sandbox commits
     # are authored by the human who launched the session, not the shared token.
@@ -563,7 +657,6 @@ def build_pod_manifest(
         "workingDir": _HOME_DIR,
         "command": _render_host_command(server_url),
         "env": host_env,
-        "resources": pod_resources,
         "securityContext": container_security,
         "volumeMounts": home_mount,
     }
@@ -574,6 +667,11 @@ def build_pod_manifest(
         "restartPolicy": "Never",
         "automountServiceAccountToken": False,
         "serviceAccountName": service_account,
+        # Whole-Pod budget shared by the host + ssh sidecar (see above).
+        "resources": pod_resources,
+        # Share the PID namespace so an ssh session in the sidecar sees (and can
+        # signal) the sandbox host's processes.
+        "shareProcessNamespace": True,
         # amd64 default first so existing deployments keep their placement; an
         # operator "kubernetes.io/arch" entry overrides it (e.g. arm64 nodes —
         # the host image is published multi-arch).
@@ -1033,6 +1131,9 @@ class KubernetesSandboxLauncher(SandboxLauncher):
         repo_branch: str | None = None,
         repo_name: str | None = None,
         owner: str | None = None,
+        github_token: str | None = None,
+        github_login: str | None = None,
+        ssh_authorized_keys: Sequence[str] | None = None,
         on_stage: Callable[[str], None] | None = None,
     ) -> str:
         """
@@ -1059,6 +1160,13 @@ class KubernetesSandboxLauncher(SandboxLauncher):
         :param repo_name: Directory the clone lands in, or ``None``.
         :param owner: Session owner; when an email, exported as the runner Pod's
             git author / committer identity (see :func:`git_identity_env`).
+        :param github_token: Session owner's connected GitHub token, injected
+            as the Pod's git / ``gh`` credential so the sandbox acts as that
+            user. ``None`` when not connected.
+        :param github_login: Owner's GitHub login, paired with *github_token*
+            to write the ``gh`` CLI config. ``None`` when *github_token* is.
+        :param ssh_authorized_keys: Owner's PUBLIC SSH keys, appended to the
+            Pod's ``authorized_keys``. ``None`` / empty when unavailable.
         :param on_stage: Progress observer; invoked with ``"starting"``.
         :returns: The absolute in-sandbox workspace path (the cloned repository
             directory when *repo_url* is set).
@@ -1090,7 +1198,10 @@ class KubernetesSandboxLauncher(SandboxLauncher):
                 core.create_namespaced_secret(
                     namespace,
                     build_token_secret_manifest(
-                        secret_name=secret_name, namespace=namespace, token=token
+                        secret_name=secret_name,
+                        namespace=namespace,
+                        token=token,
+                        github_token=github_token,
                     ),
                     _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
                 )
@@ -1111,6 +1222,9 @@ class KubernetesSandboxLauncher(SandboxLauncher):
                     repo_url=repo_url,
                     repo_branch=repo_branch,
                     owner=owner,
+                    github_token=github_token,
+                    github_login=github_login,
+                    ssh_authorized_keys=ssh_authorized_keys,
                     resources=self._resources,
                 )
                 core.create_namespaced_pod(

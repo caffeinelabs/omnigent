@@ -103,6 +103,26 @@ export interface ServerInfo {
    * (``OMNIGENT_SMART_ROUTING=1`` + ``llm:`` config). Hidden by default.
    */
   smart_routing_enabled: boolean;
+  /**
+   * True when a GitHub App is configured (``OMNIGENT_GITHUB_APP_*``) and
+   * its connection store is wired. Gates the "Connect GitHub" panel in
+   * Settings, which lets a user link their GitHub account so their
+   * managed sandboxes authenticate ``gh`` / git as them and receive
+   * their public SSH keys.
+   */
+  github_app_enabled: boolean;
+  /**
+   * SSHPiper gateway hostname for VS Code Remote into managed sandboxes.
+   * ``null`` when unset — hides the "Open in VS Code" button.
+   */
+  sshpiper_host: string | null;
+  /** SSHPiper gateway port (``22`` when standard). ``null`` when disabled. */
+  sshpiper_port: number | null;
+  /**
+   * Linux username SSHPiper routes to after splitting ``target--user``.
+   * ``null`` when disabled.
+   */
+  sshpiper_user: string | null;
 }
 
 /** Sentinel used when the probe fails — accounts is off, no login URL. */
@@ -121,6 +141,10 @@ const _OFF: ServerInfo = {
   public_sharing_enabled: true,
   server_version: null,
   smart_routing_enabled: false,
+  github_app_enabled: false,
+  sshpiper_host: null,
+  sshpiper_port: null,
+  sshpiper_user: null,
 };
 
 let _cached: ServerInfo | null = null;
@@ -161,6 +185,10 @@ export async function resolveServerInfo(): Promise<ServerInfo> {
           public_sharing_enabled: data.public_sharing_enabled !== false,
           server_version: typeof data.server_version === "string" ? data.server_version : null,
           smart_routing_enabled: data.smart_routing_enabled === true,
+          github_app_enabled: data.github_app_enabled === true,
+          sshpiper_host: typeof data.sshpiper_host === "string" ? data.sshpiper_host : null,
+          sshpiper_port: typeof data.sshpiper_port === "number" ? data.sshpiper_port : null,
+          sshpiper_user: typeof data.sshpiper_user === "string" ? data.sshpiper_user : null,
         };
         return _cached;
       }

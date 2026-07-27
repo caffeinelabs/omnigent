@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import httpx
 import pytest
+from fastapi import FastAPI
 
 pytestmark = pytest.mark.asyncio
 
@@ -103,6 +104,32 @@ async def test_info_single_user_false_without_marker(
     # Auth shape is unchanged — single_user is orthogonal to it.
     assert data["accounts_enabled"] is False
     assert data["login_url"] is None
+
+
+async def test_info_reports_sshpiper_port_as_int(client: httpx.AsyncClient, app: FastAPI) -> None:
+    """With SSHPiper configured, /v1/info returns 200 and an integer port.
+
+    The gateway port is a genuine ``int``. If the endpoint's response type
+    doesn't admit ``int``, FastAPI rejects the response with a 500, which
+    nulls ``sshpiper_host`` on the SPA and hides the "Open in VS Code"
+    button on managed-sandbox sessions.
+    """
+    from omnigent.server.sshpiper import SshPiperConfig
+
+    app.state.sshpiper_config = SshPiperConfig(
+        host="sshpiper.example.test",
+        port=22,
+        user="sandbox",
+        target_template="{sandbox_id}.{namespace}.svc.cluster.local",
+        namespace="omnigent-sandboxes",
+    )
+    resp = await client.get("/v1/info")
+    assert resp.status_code == 200
+    data = resp.json()
+    assert data["sshpiper_host"] == "sshpiper.example.test"
+    assert isinstance(data["sshpiper_port"], int)
+    assert data["sshpiper_port"] == 22
+    assert data["sshpiper_user"] == "sandbox"
 
 
 # ── GET /v1/me ───────────────────────────────────────────
