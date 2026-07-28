@@ -13,6 +13,7 @@ import {
   MonitorIcon,
   MonitorCloudIcon,
   CircleHelpIcon,
+  CheckIcon,
   ChevronDownIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
@@ -67,7 +68,11 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { authenticatedFetch } from "@/lib/identity";
-import { fetchGithubRepos, type GithubRepo } from "@/lib/githubIntegration";
+import {
+  fetchGithubBranches,
+  fetchGithubRepos,
+  type GithubRepo,
+} from "@/lib/githubIntegration";
 import { isImeCompositionKeyEvent } from "@/lib/ime";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
@@ -714,6 +719,58 @@ export function deriveRepoName(url: string): string | null {
   const last = t.split(/[/:]/).pop() ?? "";
   const name = last.endsWith(".git") ? last.slice(0, -4) : last;
   return name === "" ? null : name;
+}
+
+/**
+ * Per-repo branch picker for the multi-repo sandbox selector.
+ *
+ * Lazily fetches the repo's branches (cached per repo) and renders a
+ * ``<select>``. The empty value means "the repo's default branch" — so a
+ * blank fragment is composed and the server clones the default. The default
+ * branch is surfaced as the first option and, until the branch list loads,
+ * is the only one shown so the control is usable immediately.
+ */
+function RepoBranchSelect({
+  fullName,
+  value,
+  defaultBranch,
+  onChange,
+}: {
+  fullName: string;
+  value: string;
+  defaultBranch: string | null;
+  onChange: (branch: string) => void;
+}): ReactNode {
+  const { data } = useQuery({
+    queryKey: ["github-branches", fullName],
+    queryFn: () => fetchGithubBranches(fullName),
+    staleTime: 5 * 60_000,
+  });
+  const branches = data?.connected ? data.branches : [];
+  const defaultLabel = defaultBranch ? `Default (${defaultBranch})` : "Default branch";
+  // Options: the "default branch" sentinel (empty value) + fetched branches.
+  // Include the current value even before the list loads (e.g. a draft-restored
+  // branch) so the controlled <select> always has a matching option.
+  const options = branches.filter((b) => b !== defaultBranch);
+  if (value !== "" && !options.includes(value)) {
+    options.unshift(value);
+  }
+  return (
+    <select
+      value={value}
+      onChange={(e) => onChange(e.target.value)}
+      aria-label={`Branch for ${fullName}`}
+      className="h-6 max-w-32 shrink-0 rounded-md border border-input bg-background px-1.5 text-[11px] outline-none transition-colors focus-visible:border-ring"
+      data-testid="new-chat-landing-repo-branch-select"
+    >
+      <option value="">{defaultLabel}</option>
+      {options.map((b) => (
+        <option key={b} value={b}>
+          {b}
+        </option>
+      ))}
+    </select>
+  );
 }
 
 /**
@@ -1587,6 +1644,18 @@ function HarnessConfigModal({
 // message, attachments and picker selections survive the unmount that happens
 // when the user navigates into an existing session and back. Module-scoped,
 // not persisted to storage (a page refresh starts clean); cleared on create.
+/** One repo chosen in the GitHub multi-repo picker (connected mode). */
+type SelectedSandboxRepo = {
+  /** ``owner/name``. */
+  fullName: string;
+  /** Resolved HTTPS clone URL. */
+  cloneUrl: string;
+  /** The repo's default branch, or null. */
+  defaultBranch: string | null;
+  /** Chosen branch; empty string means the repo's default branch. */
+  branch: string;
+};
+
 type LandingDraft = {
   message: string;
   files: File[];
@@ -1595,6 +1664,7 @@ type LandingDraft = {
   sandboxSelected: boolean;
   sandboxRepoUrl: string;
   sandboxRepoBranch: string;
+  sandboxRepos: SelectedSandboxRepo[];
   workspace: string;
   branchName: string;
   prefilledBranch: string;
@@ -1794,6 +1864,12 @@ export function NewChatLandingScreen() {
   const [sandboxRepoBranch, setSandboxRepoBranch] = useState<string>(
     () => landingDraft?.sandboxRepoBranch ?? "",
   );
+  // Repos chosen from the GitHub picker (connected mode) — the multi-repo
+  // counterpart of the free-text `sandboxRepoUrl`/`sandboxRepoBranch` pair.
+  // Each is cloned side by side under the sandbox workspace root.
+  const [selectedSandboxRepos, setSelectedSandboxRepos] = useState<SelectedSandboxRepo[]>(
+    () => landingDraft?.sandboxRepos ?? [],
+  );
   // Filter text for the GitHub repo picker (only used when the GitHub App is
   // configured and the user has connected their account).
   const [sandboxRepoQuery, setSandboxRepoQuery] = useState<string>("");
@@ -1929,6 +2005,7 @@ export function NewChatLandingScreen() {
     sandboxSelected,
     sandboxRepoUrl,
     sandboxRepoBranch,
+    sandboxRepos: selectedSandboxRepos,
     workspace,
     branchName,
     prefilledBranch,
@@ -2531,8 +2608,12 @@ export function NewChatLandingScreen() {
 
   // Sandbox repo inputs are valid when blank (empty workspace), or when
   // the URL passes the shape check; a branch without a URL is dangling.
-  const sandboxRepoValid =
-    sandboxRepoUrl.trim() === ""
+  // Connected mode always validates — the picker only yields real repo URLs,
+  // and zero selections is a valid (empty) workspace. Free-text mode keeps the
+  // typed-URL/branch guard.
+  const sandboxRepoValid = sandboxRepoPickerConnected
+    ? true
+    : sandboxRepoUrl.trim() === ""
       ? sandboxRepoBranch.trim() === ""
       : isValidSandboxRepoUrl(sandboxRepoUrl);
 
@@ -2712,23 +2793,64 @@ export function NewChatLandingScreen() {
   const worktreeLabel = branchName.trim() || "No worktree";
   // Sandbox repository chip label: repo name (server's clone-dir rule)
   // plus the pinned branch, e.g. "repo#main"; placeholder when unset.
-  const sandboxRepoName = deriveRepoName(sandboxRepoUrl);
-  const sandboxRepoLabel = sandboxRepoName
-    ? sandboxRepoBranch.trim()
-      ? `${sandboxRepoName}#${sandboxRepoBranch.trim()}`
-      : sandboxRepoName
-    : "Repository";
   // GitHub repos filtered by the picker's search box (bounded so a huge
   // account can't render thousands of rows).
   const sandboxRepoFilter = sandboxRepoQuery.trim().toLowerCase();
   const filteredSandboxRepos = sandboxRepos
     .filter((r) => r.full_name.toLowerCase().includes(sandboxRepoFilter))
     .slice(0, 100);
-  const selectSandboxRepo = (repo: GithubRepo): void => {
-    setSandboxRepoUrl(repo.clone_url ?? `https://github.com/${repo.full_name}.git`);
-    // Leave the branch blank so the server clones the repo's default branch.
-    setSandboxRepoBranch("");
+  const isRepoSelected = (fullName: string): boolean =>
+    selectedSandboxRepos.some((r) => r.fullName === fullName);
+  const toggleSandboxRepo = (repo: GithubRepo): void => {
+    setSelectedSandboxRepos((prev) =>
+      prev.some((r) => r.fullName === repo.full_name)
+        ? prev.filter((r) => r.fullName !== repo.full_name)
+        : [
+            ...prev,
+            {
+              fullName: repo.full_name,
+              cloneUrl: repo.clone_url ?? `https://github.com/${repo.full_name}.git`,
+              defaultBranch: repo.default_branch,
+              // Blank => the server clones the repo's default branch.
+              branch: "",
+            },
+          ],
+    );
   };
+  const setSandboxRepoBranchFor = (fullName: string, branch: string): void => {
+    setSelectedSandboxRepos((prev) =>
+      prev.map((r) => (r.fullName === fullName ? { ...r, branch } : r)),
+    );
+  };
+  const removeSandboxRepo = (fullName: string): void => {
+    setSelectedSandboxRepos((prev) => prev.filter((r) => r.fullName !== fullName));
+  };
+  // Composed `<url>[#branch]` workspace strings for the managed create.
+  // Connected mode uses the picked repos; free-text mode composes the single
+  // typed URL + branch.
+  const sandboxWorkspaces = sandboxRepoPickerConnected
+    ? selectedSandboxRepos
+        .map((r) => composeSandboxWorkspace(r.cloneUrl, r.branch))
+        .filter((w): w is string => w !== undefined)
+    : [];
+  // Chip label: the free-text repo name (free-text mode) or a count/name of
+  // the picked repos (connected mode).
+  const freeTextRepoName = deriveRepoName(sandboxRepoUrl);
+  let sandboxRepoLabel = "Repository";
+  if (sandboxRepoPickerConnected) {
+    if (selectedSandboxRepos.length === 1) {
+      sandboxRepoLabel = deriveRepoName(selectedSandboxRepos[0].cloneUrl) ?? "Repository";
+    } else if (selectedSandboxRepos.length > 1) {
+      sandboxRepoLabel = `${selectedSandboxRepos.length} repositories`;
+    }
+  } else if (freeTextRepoName) {
+    sandboxRepoLabel = sandboxRepoBranch.trim()
+      ? `${freeTextRepoName}#${sandboxRepoBranch.trim()}`
+      : freeTextRepoName;
+  }
+  const sandboxRepoChosen = sandboxRepoPickerConnected
+    ? selectedSandboxRepos.length > 0
+    : freeTextRepoName !== null;
   // The trigger label is just the agent name; the run-config knobs live in
   // the picker's per-entry submenu, so duplicating their values here would be
   // redundant.
@@ -2876,7 +2998,16 @@ export function NewChatLandingScreen() {
             ...(sandboxSelected
               ? {
                   host_type: "managed",
-                  workspace: composeSandboxWorkspace(sandboxRepoUrl, sandboxRepoBranch),
+                  // Connected picker → multi-repo `workspaces` (omitted when
+                  // nothing picked = empty workspace); free-text → single
+                  // `workspace`.
+                  ...(sandboxRepoPickerConnected
+                    ? sandboxWorkspaces.length > 0
+                      ? { workspaces: sandboxWorkspaces }
+                      : {}
+                    : {
+                        workspace: composeSandboxWorkspace(sandboxRepoUrl, sandboxRepoBranch),
+                      }),
                 }
               : {
                   host_id: selectedHostId,
@@ -3637,7 +3768,7 @@ export function NewChatLandingScreen() {
                     >
                       <GitBranchIcon className="size-4 shrink-0" />
                       <span
-                        className={`hidden max-w-40 truncate sm:block ${sandboxRepoName ? "text-foreground" : "text-muted-foreground"}`}
+                        className={`hidden max-w-40 truncate sm:block ${sandboxRepoChosen ? "text-foreground" : "text-muted-foreground"}`}
                       >
                         {sandboxRepoLabel}
                       </span>
@@ -3684,25 +3815,29 @@ export function NewChatLandingScreen() {
                           <div
                             role="listbox"
                             aria-label="Repositories"
-                            className="flex max-h-56 flex-col gap-0.5 overflow-y-auto"
+                            aria-multiselectable="true"
+                            className="flex max-h-48 flex-col gap-0.5 overflow-y-auto"
                           >
                             {filteredSandboxRepos.map((repo) => {
-                              const repoUrl =
-                                repo.clone_url ?? `https://github.com/${repo.full_name}.git`;
-                              const selected = sandboxRepoUrl.trim() === repoUrl;
+                              const selected = isRepoSelected(repo.full_name);
                               return (
                                 <button
                                   key={repo.full_name}
                                   type="button"
                                   role="option"
                                   aria-selected={selected}
-                                  onClick={() => selectSandboxRepo(repo)}
+                                  onClick={() => toggleSandboxRepo(repo)}
                                   className={`flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors ${
                                     selected ? "bg-accent text-foreground" : "hover:bg-muted"
                                   }`}
                                   data-testid="new-chat-landing-repo-option"
                                 >
-                                  <span className="truncate">{repo.full_name}</span>
+                                  <span className="flex min-w-0 items-center gap-1.5">
+                                    <CheckIcon
+                                      className={`size-3.5 shrink-0 ${selected ? "opacity-100" : "opacity-0"}`}
+                                    />
+                                    <span className="truncate">{repo.full_name}</span>
+                                  </span>
                                   {repo.private && (
                                     <Badge variant="secondary" className="shrink-0 text-[10px]">
                                       private
@@ -3717,36 +3852,72 @@ export function NewChatLandingScreen() {
                               </p>
                             )}
                           </div>
-                          {sandboxRepoName && (
-                            <p className="truncate text-[11px] text-muted-foreground">
-                              Selected: {sandboxRepoUrl}
-                            </p>
+                          {selectedSandboxRepos.length > 0 && (
+                            <div
+                              className="flex flex-col gap-1.5 border-t border-border pt-2"
+                              data-testid="new-chat-landing-repo-selected"
+                            >
+                              <p className="text-[11px] font-medium text-muted-foreground">
+                                Selected — pick a branch for each
+                              </p>
+                              {selectedSandboxRepos.map((sel) => (
+                                <div
+                                  key={sel.fullName}
+                                  className="flex items-center gap-1.5"
+                                  data-testid="new-chat-landing-repo-selected-row"
+                                >
+                                  <span className="min-w-0 flex-1 truncate text-xs text-foreground">
+                                    {sel.fullName}
+                                  </span>
+                                  <RepoBranchSelect
+                                    fullName={sel.fullName}
+                                    value={sel.branch}
+                                    defaultBranch={sel.defaultBranch}
+                                    onChange={(b) => setSandboxRepoBranchFor(sel.fullName, b)}
+                                  />
+                                  <button
+                                    type="button"
+                                    aria-label={`Remove ${sel.fullName}`}
+                                    onClick={() => removeSandboxRepo(sel.fullName)}
+                                    className="inline-flex size-5 shrink-0 items-center justify-center rounded-sm text-muted-foreground transition-colors hover:text-foreground"
+                                  >
+                                    <XIcon className="size-3" />
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
                           )}
+                          <p className="text-xs text-muted-foreground">
+                            Each repo is cloned side by side under the sandbox workspace. Pick none
+                            to start in an empty workspace.
+                          </p>
                         </>
                       ) : (
-                        <input
-                          id="landing-repo-url"
-                          type="text"
-                          value={sandboxRepoUrl}
-                          onChange={(e) => setSandboxRepoUrl(e.target.value)}
-                          placeholder="https://github.com/org/repo"
-                          className="rounded-md border border-input bg-background px-3 py-2 text-xs outline-none transition-colors focus-visible:border-ring"
-                          data-testid="new-chat-landing-repo-input"
-                        />
+                        <>
+                          <input
+                            id="landing-repo-url"
+                            type="text"
+                            value={sandboxRepoUrl}
+                            onChange={(e) => setSandboxRepoUrl(e.target.value)}
+                            placeholder="https://github.com/org/repo"
+                            className="rounded-md border border-input bg-background px-3 py-2 text-xs outline-none transition-colors focus-visible:border-ring"
+                            data-testid="new-chat-landing-repo-input"
+                          />
+                          <input
+                            type="text"
+                            value={sandboxRepoBranch}
+                            onChange={(e) => setSandboxRepoBranch(e.target.value)}
+                            placeholder="Branch (defaults to the repo's default)"
+                            aria-label="Repository branch"
+                            className="rounded-md border border-input bg-background px-3 py-2 text-xs outline-none transition-colors focus-visible:border-ring"
+                            data-testid="new-chat-landing-repo-branch-input"
+                          />
+                          <p className="text-xs text-muted-foreground">
+                            Cloned into the sandbox as the session's working directory. Leave blank
+                            to start in an empty workspace.
+                          </p>
+                        </>
                       )}
-                      <input
-                        type="text"
-                        value={sandboxRepoBranch}
-                        onChange={(e) => setSandboxRepoBranch(e.target.value)}
-                        placeholder="Branch (defaults to the repo's default)"
-                        aria-label="Repository branch"
-                        className="rounded-md border border-input bg-background px-3 py-2 text-xs outline-none transition-colors focus-visible:border-ring"
-                        data-testid="new-chat-landing-repo-branch-input"
-                      />
-                      <p className="text-xs text-muted-foreground">
-                        Cloned into the sandbox as the session's working directory. Leave blank to
-                        start in an empty workspace.
-                      </p>
                     </div>
                   </PopoverContent>
                 </Popover>

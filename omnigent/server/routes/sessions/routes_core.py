@@ -325,23 +325,30 @@ def register_core_routes(
             from omnigent.server.auth import RESERVED_USER_LOCAL
             from omnigent.server.managed_hosts import (
                 MANAGED_REPO_LABEL_KEY,
+                encode_repo_workspaces,
                 parse_repo_workspace,
             )
 
-            # A managed workspace is a repository URL (schema-
-            # validated) the launch clones inside the sandbox; parse
-            # it now so a malformed URL is a synchronous 4xx, not a
-            # background failure.
-            repo = parse_repo_workspace(body.workspace) if body.workspace is not None else None
-            if body.workspace is not None:
+            # A managed workspace is one or more repository URLs (schema-
+            # validated) the launch clones inside the sandbox. ``workspaces``
+            # (plural) carries the multi-repo picker's selection; ``workspace``
+            # (singular) is the legacy single-repo form. Parse now so a
+            # malformed URL is a synchronous 4xx, not a background failure.
+            raw_workspaces: list[str] = list(body.workspaces) if body.workspaces else []
+            if not raw_workspaces and body.workspace is not None:
+                raw_workspaces = [body.workspace]
+            parsed_repos = [parse_repo_workspace(w) for w in raw_workspaces]
+            repo = parsed_repos[0] if parsed_repos else None
+            extra_repos = parsed_repos[1:]
+            if raw_workspaces:
                 # The session row's workspace is overwritten with the
                 # CLONED path at bind time; record the raw request
-                # value so a sandbox relaunch can re-clone the same
-                # repository into the new generation.
+                # value(s) so a sandbox relaunch can re-clone the same
+                # repositories into the new generation.
                 await asyncio.to_thread(
                     conversation_store.set_labels,
                     resp.id,
-                    {MANAGED_REPO_LABEL_KEY: body.workspace},
+                    {MANAGED_REPO_LABEL_KEY: encode_repo_workspaces(raw_workspaces)},
                 )
             managed_launches.begin(resp.id)
             # Seed the launch-progress indicator before the background
@@ -358,6 +365,7 @@ def register_core_routes(
                     owner=user_id if user_id is not None else RESERVED_USER_LOCAL,
                     sandbox_config=sandbox_config,
                     repo=repo,
+                    extra_repos=extra_repos,
                     tracker=managed_launches,
                     conversation_store=conversation_store,
                     host_store=host_store_for_managed,

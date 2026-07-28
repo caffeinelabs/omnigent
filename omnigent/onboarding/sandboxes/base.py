@@ -36,6 +36,8 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
     from pathlib import Path
 
+    from omnigent.onboarding.sandboxes.types import RepoCheckout
+
 
 DEFAULT_HOST_IMAGE: str = "ghcr.io/omnigent-ai/omnigent-host:latest"
 """Default sandbox image across providers: the official prebaked
@@ -673,6 +675,7 @@ class SandboxLauncher(ABC):
         repo_url: str | None = None,
         repo_branch: str | None = None,
         repo_name: str | None = None,
+        extra_repos: Sequence[RepoCheckout] = (),
         owner: str | None = None,
         github_token: str | None = None,
         github_login: str | None = None,
@@ -712,6 +715,10 @@ class SandboxLauncher(ABC):
         :param repo_branch: Branch to clone, or ``None`` for the default branch.
         :param repo_name: Directory the clone lands in under the workspace, or
             ``None`` when *repo_url* is ``None``.
+        :param extra_repos: Additional repositories cloned side by side under
+            the workspace root (each into ``<workspace>/<repo_name>``); when any
+            are present the returned workspace is the root so every sibling repo
+            is visible. Empty for a single- or empty-repo workspace.
         :param owner: Session owner the host acts for (e.g.
             ``"alice@example.com"``); when it is an email, its git author /
             committer identity is exported so sandbox commits are attributed to
@@ -765,15 +772,33 @@ class SandboxLauncher(ABC):
             ssh_authorized_keys=ssh_authorized_keys,
         ):
             self.run(sandbox_id, setup_cmd, check=False)
+        workspace_root = workspace
         if repo_url is not None:
             workspace = self.materialize_workspace(
                 sandbox_id,
-                workspace=workspace,
+                workspace=workspace_root,
                 repo_url=repo_url,
                 repo_branch=repo_branch,
                 repo_name=repo_name,
                 on_stage=on_stage,
             )
+        # Additional repos are cloned side by side under the workspace root so
+        # the agent starts with every repo it needs checked out. When any are
+        # present the host starts at the root (not inside a single clone) so
+        # all sibling repos are visible.
+        for extra in extra_repos:
+            branch_flag = (
+                f"--branch {shlex.quote(extra.branch)} --single-branch "
+                if extra.branch is not None
+                else ""
+            )
+            dest = f"{workspace_root}/{extra.repo_name}"
+            self.run(
+                sandbox_id,
+                f"git clone {branch_flag}-- {shlex.quote(extra.url)} {shlex.quote(dest)}",
+            )
+        if extra_repos:
+            workspace = workspace_root
         # "starting" covers from here through host registration — the caller's
         # online poll resolves it.
         if on_stage is not None:

@@ -90,6 +90,30 @@ class SandboxCapabilities:
 
 
 @dataclass(frozen=True)
+class RepoCheckout:
+    """One repository to clone into a sandbox workspace.
+
+    A managed launch may seed several repositories side by side under the
+    workspace root (``<workspace>/<repo_name>`` each), so the agent starts
+    with every repo it needs already checked out. The primary repo is
+    passed through ``start_host``'s ``repo_url`` / ``repo_branch`` /
+    ``repo_name`` primitives; any additional repos ride the ``extra_repos``
+    list as :class:`RepoCheckout` values (kept free of the server's
+    ``RepoWorkspace`` so the onboarding layer carries no server dependency).
+
+    :param url: Clone URL, e.g. ``"https://github.com/org/repo.git"``.
+    :param branch: Branch to clone (``--branch … --single-branch``), or
+        ``None`` for the repo's default branch.
+    :param repo_name: Directory the clone lands in under the workspace
+        root, e.g. ``"repo"``.
+    """
+
+    url: str
+    branch: str | None
+    repo_name: str
+
+
+@dataclass(frozen=True)
 class SandboxSpec:
     """Provider-agnostic description of a sandbox to provision."""
 

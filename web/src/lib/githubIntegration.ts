@@ -79,6 +79,28 @@ export async function fetchGithubRepos(): Promise<GithubRepoList> {
   return (await res.json()) as GithubRepoList;
 }
 
+/** Shape of ``GET .../github/repos/{owner}/{repo}/branches``. */
+export interface GithubBranchList {
+  /** False when the user hasn't connected GitHub (branches is then empty). */
+  connected: boolean;
+  branches: string[];
+}
+
+/**
+ * Fetch the branch names for ``fullName`` (``owner/repo``), for the
+ * per-repo branch picker. Returns ``connected: false`` with an empty list
+ * when GitHub isn't linked.
+ */
+export async function fetchGithubBranches(fullName: string): Promise<GithubBranchList> {
+  const res = await authenticatedFetch(
+    `/v1/integrations/github/repos/${fullName}/branches`,
+  );
+  if (!res.ok) {
+    throw new Error(`GitHub branches failed: ${res.status}`);
+  }
+  return (await res.json()) as GithubBranchList;
+}
+
 /** Disconnect the current user's GitHub account. */
 export async function disconnectGithub(): Promise<void> {
   const res = await authenticatedFetch("/v1/integrations/github/disconnect", {

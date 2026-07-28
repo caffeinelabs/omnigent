@@ -4073,6 +4073,7 @@ async def _provision_managed_sandbox(
     owner: str,
     sandbox_config: ManagedSandboxConfig,
     repo: RepoWorkspace | None,
+    extra_repos: Sequence[RepoWorkspace] = (),
     tracker: ManagedLaunchTracker,
     host_store: HostStore,
     relaunch_host: Host | None,
@@ -4089,7 +4090,9 @@ async def _provision_managed_sandbox(
     :param session_id: Session/conversation identifier.
     :param owner: User the managed host acts for.
     :param sandbox_config: The deployment's sandbox config.
-    :param repo: Repository workspace to clone, or ``None``.
+    :param repo: Primary repository workspace to clone, or ``None``.
+    :param extra_repos: Additional repositories to clone side by side with
+        *repo* under the workspace root; empty for a single-repo workspace.
     :param tracker: The app's launch tracker (failed here on error).
     :param host_store: Persistent host registrations.
     :param relaunch_host: Existing host row for a relaunch, or
@@ -4121,6 +4124,7 @@ async def _provision_managed_sandbox(
                 host=relaunch_host,
                 host_store=host_store,
                 repo=repo,
+                extra_repos=extra_repos,
                 github_identity=github_identity,
                 on_stage=_on_stage,
             )
@@ -4129,6 +4133,7 @@ async def _provision_managed_sandbox(
             owner=owner,
             host_store=host_store,
             repo=repo,
+            extra_repos=extra_repos,
             github_identity=github_identity,
             on_stage=_on_stage,
         )

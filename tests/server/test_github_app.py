@@ -142,3 +142,34 @@ async def test_list_repos_non_200_raises() -> None:
 
     with pytest.raises(GitHubAppError):
         await _client(handler).list_repos("ghu_bad")
+
+
+@pytest.mark.asyncio
+async def test_list_branches_returns_names_and_stops_on_short_page() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        assert request.url.path == "/repos/caffeinelabs/app/branches"
+        return httpx.Response(
+            200,
+            json=[
+                {"name": "main", "protected": True},
+                {"name": "dev"},
+                {"no_name": "skipped"},
+            ],
+        )
+
+    branches = await _client(handler).list_branches("ghu_x", "caffeinelabs/app")
+    # Short page (< per_page) → single request, entries without a name dropped.
+    assert calls == ["/repos/caffeinelabs/app/branches"]
+    assert branches == ["main", "dev"]
+
+
+@pytest.mark.asyncio
+async def test_list_branches_non_200_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    with pytest.raises(GitHubAppError):
+        await _client(handler).list_branches("ghu_bad", "caffeinelabs/nope")

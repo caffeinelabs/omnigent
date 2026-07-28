@@ -56,6 +56,11 @@ class _FakeClient:
             }
         ]
 
+    async def list_branches(self, access_token: str, full_name: str) -> list[str]:
+        self.branch_calls: list[str] = getattr(self, "branch_calls", [])
+        self.branch_calls.append(full_name)
+        return ["main", "dev"]
+
 
 def _config() -> GitHubAppConfig:
     return GitHubAppConfig(
@@ -214,3 +219,37 @@ def test_repos_lists_when_connected(db_uri: str) -> None:
     assert body["connected"] is True
     assert [r["full_name"] for r in body["repos"]] == ["caffeinelabs/app"]
     assert body["repos"][0]["default_branch"] == "main"
+
+
+def test_repo_branches_unconnected_returns_false(db_uri: str) -> None:
+    tc, _store, _config, _client = _app(db_uri)
+    resp = tc.get("/v1/integrations/github/repos/caffeinelabs/app/branches", headers=_USER)
+    assert resp.status_code == 200
+    assert resp.json() == {"connected": False, "branches": []}
+
+
+def test_repo_branches_lists_when_connected(db_uri: str) -> None:
+    tc, store, _config, client = _app(db_uri)
+    store.upsert(
+        "alice@example.com",
+        github_login="octocat",
+        github_user_id=42,
+        tokens=GitHubTokenSet("ghu_a", "ghr_a", None, None, "repo"),
+    )
+    resp = tc.get("/v1/integrations/github/repos/caffeinelabs/app/branches", headers=_USER)
+    assert resp.status_code == 200
+    assert resp.json() == {"connected": True, "branches": ["main", "dev"]}
+    assert client.branch_calls == ["caffeinelabs/app"]
+
+
+def test_repo_branches_rejects_bad_name(db_uri: str) -> None:
+    tc, store, _config, _client = _app(db_uri)
+    store.upsert(
+        "alice@example.com",
+        github_login="octocat",
+        github_user_id=42,
+        tokens=GitHubTokenSet("ghu_a", "ghr_a", None, None, "repo"),
+    )
+    # A path-traversal owner must be rejected before any GitHub call.
+    resp = tc.get("/v1/integrations/github/repos/..%2Fx/app/branches", headers=_USER)
+    assert resp.status_code in (400, 404)

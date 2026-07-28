@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import secrets
 import time
 from urllib.parse import urlencode
@@ -40,6 +41,10 @@ _STATE_ALG = "HS256"
 # Fallback landing after connect/disconnect when no (safe) return_to is
 # supplied. The SPA renders the integrations panel in Settings.
 _DEFAULT_RETURN_TO = "/settings"
+
+# GitHub owner / repo name charset, enforced before either reaches the
+# branches URL so a caller can never smuggle a path or query.
+_GITHUB_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
 def _sanitize_return_to(raw: str | None) -> str:
@@ -139,6 +144,29 @@ def create_integrations_github_router(
                 status_code=502, detail="Failed to list GitHub repositories"
             ) from exc
         return {"connected": True, "repos": repo_list}
+
+    @router.get("/integrations/github/repos/{owner}/{repo}/branches")
+    async def repo_branches(request: Request, owner: str, repo: str) -> dict[str, object]:
+        """List branch names for ``owner/repo``, for the per-repo branch picker.
+
+        ``connected: false`` (empty list) when the caller hasn't linked
+        GitHub. Owner/repo are charset-validated before they reach the
+        GitHub URL so a caller cannot smuggle a path.
+        """
+        user_id = _current_user(request)
+        if not _GITHUB_NAME_RE.match(owner) or not _GITHUB_NAME_RE.match(repo):
+            raise HTTPException(status_code=400, detail="Invalid repository name")
+        token = await resolve_access_token(user_id, store=store, client=api)
+        if token is None:
+            return {"connected": False, "branches": []}
+        try:
+            branches = await api.list_branches(token, f"{owner}/{repo}")
+        except GitHubAppError as exc:
+            _logger.warning("GitHub branch list failed for %s/%s: %s", owner, repo, exc)
+            raise HTTPException(
+                status_code=502, detail="Failed to list GitHub branches"
+            ) from exc
+        return {"connected": True, "branches": branches}
 
     @router.get("/integrations/github/connect")
     async def connect(request: Request, return_to: str | None = None) -> RedirectResponse:
