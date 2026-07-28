@@ -81,6 +81,7 @@ import { KeyboardShortcutsList } from "@/components/KeyboardShortcutsDialog";
 import { changePassword, logout } from "@/lib/accountsApi";
 import { getCurrentIsAdmin, resolveIdentity } from "@/lib/identity";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
+import { useIsAdmin } from "@/hooks/useIsAdmin";
 import {
   type Conversation,
   useArchiveConversation,
@@ -183,6 +184,11 @@ const PoliciesPage = lazy(() =>
 const SharingPage = lazy(() =>
   import("@/pages/SharingPage").then((m) => ({ default: m.SharingPage })),
 );
+// Usage dashboard: its own chunk (charts + table) so the settings shell stays
+// lean for users who never open it.
+const UsageDashboard = lazy(() =>
+  import("@/components/usage/UsageDashboard").then((m) => ({ default: m.UsageDashboard })),
+);
 
 /**
  * Settings content panel. The section nav lives in the sidebar card
@@ -224,6 +230,7 @@ export function SettingsPage() {
       {section === "appearance" && <AppearanceSection />}
       {section === "git" && <GitSection />}
       {section === "shortcuts" && <ShortcutsSection />}
+      {section === "usage" && <UsageSection />}
       {section === "account" && hasAuthSession && <AccountSection />}
       {section === "archived" && <ArchivedSection />}
       {section === "cli" && isElectronShell() && <LocalCliSection />}
@@ -1356,6 +1363,26 @@ function ShortcutsSection() {
   return (
     <Section title="Keyboard shortcuts" description="Speed up common actions with the keyboard.">
       <KeyboardShortcutsList />
+    </Section>
+  );
+}
+
+/**
+ * Usage & cost. Everyone sees their own spend; admins additionally get a scope
+ * selector (inside the dashboard) for any user's or every user's spend. Admin
+ * gating is chrome-only via the mode-agnostic `/v1/me` probe — the server
+ * enforces the `user` scope on the route regardless.
+ */
+function UsageSection() {
+  const isAdmin = useIsAdmin();
+  return (
+    <Section
+      title="Usage"
+      description="Token usage and estimated cost across your sessions, by provider, harness, or model."
+    >
+      <Suspense fallback={<p className="text-sm text-muted-foreground">Loading…</p>}>
+        <UsageDashboard canViewOthers={isAdmin} />
+      </Suspense>
     </Section>
   );
 }
