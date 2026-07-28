@@ -96,3 +96,49 @@ async def test_fetch_public_ssh_keys_failure_is_empty() -> None:
         return httpx.Response(404, json={})
 
     assert await _client(handler).fetch_public_ssh_keys("ghost") == ()
+
+
+@pytest.mark.asyncio
+async def test_list_repos_projects_fields_and_stops_on_short_page() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(str(request.url))
+        assert request.url.path == "/user/repos"
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "full_name": "caffeinelabs/app",
+                    "clone_url": "https://github.com/caffeinelabs/app.git",
+                    "default_branch": "main",
+                    "private": True,
+                    "pushed_at": "2026-07-28T00:00:00Z",
+                    "stargazers_count": 3,
+                },
+                {"description": "no full_name — skipped"},
+            ],
+        )
+
+    repos = await _client(handler).list_repos("ghu_x")
+    # Short page (< per_page) → only one request, no over-fetch.
+    assert len(calls) == 1
+    # Only the projected keys survive; the entry missing full_name is dropped.
+    assert repos == [
+        {
+            "full_name": "caffeinelabs/app",
+            "clone_url": "https://github.com/caffeinelabs/app.git",
+            "default_branch": "main",
+            "private": True,
+            "pushed_at": "2026-07-28T00:00:00Z",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_repos_non_200_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(401, json={"message": "Bad credentials"})
+
+    with pytest.raises(GitHubAppError):
+        await _client(handler).list_repos("ghu_bad")

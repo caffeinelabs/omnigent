@@ -23,6 +23,41 @@ _logger = logging.getLogger(__name__)
 _REFRESH_MARGIN_S = 300
 
 
+async def resolve_access_token(
+    user_id: str,
+    *,
+    store: GithubConnectionStore,
+    client: GitHubAppClient,
+) -> str | None:
+    """Resolve a valid user access token for *user_id*, or ``None``.
+
+    Reads the stored connection and transparently refreshes a token that is
+    at/near expiry (persisting the refresh). Best-effort: any failure (no
+    connection, no refresh token, refresh rejected) returns ``None``.
+
+    :param user_id: The user whose token to resolve.
+    :param store: The connection store (also used to persist a refresh).
+    :param client: The GitHub App client.
+    :returns: A usable access token, or ``None``.
+    """
+    connection = await _run_sync(store.get, user_id, with_tokens=True)
+    if connection is None or not connection.access_token:
+        return None
+    access_token = connection.access_token
+    expires_at = connection.token_expires_at
+    if expires_at is not None and expires_at <= now_epoch() + _REFRESH_MARGIN_S:
+        if not connection.refresh_token:
+            return None
+        try:
+            refreshed = await client.refresh_token(connection.refresh_token)
+        except GitHubAppError as exc:
+            _logger.warning("GitHub token refresh failed for %s: %s", user_id, exc)
+            return None
+        await _run_sync(store.update_tokens, user_id, refreshed)
+        access_token = refreshed.access_token
+    return access_token
+
+
 async def resolve_sandbox_identity(
     user_id: str,
     *,
