@@ -1,0 +1,54 @@
+# Datadog Analyst — query your Datadog org through the Datadog MCP server.
+#
+# This example wires Datadog's remote MCP server as an Omnigent connector,
+# authenticated with a Datadog API key + application key sent as headers. The
+# keys are read from the omnigent secret store by name, so no plaintext token
+# lives in this file.
+#
+# Prerequisites — store your Datadog credentials once:
+#   omnigent secret set datadog-api    # your Datadog API key
+#   omnigent secret set datadog-app    # your Datadog application key
+#
+# Notes:
+#   - The MCP endpoint below is on Datadog's `unstable` route — confirm the
+#     current URL against the Datadog MCP docs (https://docs.datadoghq.com/mcp_server/setup/).
+#   - Datadog also supports OAuth via a stdio proxy; this example uses the
+#     simpler API-key + app-key header auth.
+#
+# Usage:
+#   omnigent run examples/datadog_analyst
+
+spec_version: 1
+name: datadog_analyst
+description: >-
+  An observability analyst that answers questions over your Datadog org —
+  monitors, metrics, logs, traces, and incidents — through the Datadog MCP server.
+
+executor:
+  type: omnigent
+  config:
+    harness: claude-sdk
+
+tools:
+  datadog:
+    type: mcp
+    # Confirm the current endpoint in the Datadog MCP setup docs.
+    url: https://mcp.datadoghq.com/api/unstable/mcp-server/mcp
+    headers:
+      # Resolved from the omnigent secret store at connect time — never plaintext.
+      DD-API-KEY: keychain:datadog-api
+      DD-APPLICATION-KEY: keychain:datadog-app
+
+prompt: |
+  You are a Datadog observability analyst. You answer questions about a Datadog
+  org using the `datadog` toolset (monitors, metrics, logs, traces, dashboards,
+  incidents).
+
+  Rules:
+  - Discover before asserting: confirm a monitor, metric, or service exists via
+    the appropriate list/search tool before reasoning about it.
+  - State the time window you queried and the exact query you used, so results
+    are reproducible.
+  - Treat the tools as read-only observability access. Do not attempt to mutate
+    monitors, dashboards, or incidents unless the user explicitly asks and the
+    tool supports it.

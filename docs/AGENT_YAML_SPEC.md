@@ -269,6 +269,53 @@ tools:
       Authorization: Bearer ${TOKEN}
 ```
 
+#### Secrets in headers and env
+
+Header values (HTTP) and `env` values (stdio) may reference the omnigent secret
+store instead of embedding a plaintext token, using the same reference shapes as
+provider `api_key_ref`:
+
+- `keychain:<name>` — read `<name>` from the secret store (OS keychain, else a
+  `0600` file). Store it with `omni secret set <name>`.
+- `env:<VAR>` — read `<VAR>` from the environment at **connect** time (late
+  binding). Handy when a secret is injected by an external secret manager
+  (e.g. Bitwarden populating `DD_API_KEY`).
+- `${VAR}` / `$VAR` — expanded from the environment at **parse** time (early
+  binding), as before.
+
+`keychain:`/`env:` refs are resolved fresh on each connect, so a rotated secret
+is picked up on reconnect. Any value without one of these prefixes is passed
+through unchanged.
+
+#### Datadog MCP
+
+The Datadog MCP server accepts an API key + application key as headers. Store
+them once and reference them by name:
+
+```sh
+omni secret set datadog-api    # your Datadog API key
+omni secret set datadog-app    # your Datadog application key
+```
+
+```yaml
+tools:
+  datadog:
+    type: mcp
+    url: https://mcp.datadoghq.com/api/unstable/mcp-server/mcp  # confirm current endpoint in Datadog docs
+    headers:
+      DD-API-KEY: keychain:datadog-api
+      DD-APPLICATION-KEY: keychain:datadog-app
+```
+
+Access is governed by who can reach the agent carrying this tool (the session
+ACL); attach the Datadog MCP only to agents whose users should have it.
+
+> **Follow-up (OAuth):** Datadog also offers OAuth 2.0 (per-user identity, short-lived
+> tokens) via a local `datadog_mcp_cli` stdio proxy. That suits single-user/desktop use
+> but not a shared multi-user server. The multi-user-correct path is server-brokered
+> per-user OAuth tokens injected through this same header seam (reusing the existing
+> device-grant flow) — a separate follow-up, not part of this API-key MVP.
+
 ### Python function tool
 
 ```yaml

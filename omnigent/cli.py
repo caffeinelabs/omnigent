@@ -1470,6 +1470,7 @@ _CLICK_SUBCOMMANDS: frozenset[str] = frozenset(
         "qwen",
         "resume",
         "run",
+        "secret",
         "session",
         "sandbox",
         "server",
@@ -8125,6 +8126,85 @@ def _integration_state_dir() -> Path:
 
 def _slack_daemon() -> IntegrationDaemon:
     return IntegrationDaemon("slack", _integration_state_dir())
+
+
+@cli.group("secret", invoke_without_command=True)
+@click.pass_context
+def secret(ctx: click.Context) -> None:
+    """Manage stored secrets (API keys, tokens).
+
+    \b
+    Secrets are kept in the OS keychain (or a 0600 file fallback) and
+    referenced from agent config by name, e.g. a Datadog MCP header:
+      DD-API-KEY: keychain:datadog-api
+    or an LLM provider's api_key_ref: keychain:anthropic.
+
+    \b
+      omni secret set datadog-api      # prompt for the value (hidden)
+      omni secret list                 # names only, never values
+      omni secret rm datadog-api       # delete a secret
+    """
+    if ctx.invoked_subcommand is None:
+        click.echo(ctx.get_help())
+
+
+@secret.command("set")
+@click.argument("name")
+@click.option(
+    "--value",
+    "value",
+    default=None,
+    help="The secret value. Omit to be prompted (hidden input); use '-' to read from stdin.",
+)
+def secret_set(name: str, value: str | None) -> None:
+    """Store a secret under NAME (e.g. `omni secret set datadog-api`).
+
+    :param name: Stable secret name, matching the ``<name>`` in a
+        ``keychain:<name>`` reference, e.g. ``datadog-api``.
+    :param value: Optional literal value; if omitted, prompt hidden; if
+        ``-``, read one line from stdin (for piping).
+    """
+    from omnigent.onboarding import secrets as secret_store
+
+    if value == "-":
+        value = sys.stdin.readline().rstrip("\n")
+    elif value is None:
+        value = click.prompt(f"Value for {name!r}", hide_input=True)
+    if not value:
+        raise click.ClickException("Refusing to store an empty secret value.")
+    secret_store.store_secret(name, value)
+    click.echo(f"Stored secret {name!r} in the {secret_store.active_backend()} backend.")
+
+
+@secret.command("list")
+def secret_list() -> None:
+    """List stored secret names (file backend only; never prints values)."""
+    from omnigent.onboarding import secrets as secret_store
+
+    names = secret_store.list_secret_names()
+    if not names:
+        click.echo("No secrets stored in the file backend.")
+        if secret_store.active_backend() == secret_store.KEYRING_BACKEND:
+            click.echo(
+                "(Using the OS keychain backend, which cannot be enumerated — "
+                "names are only listed for the file backend.)"
+            )
+        return
+    for name in names:
+        click.echo(name)
+
+
+@secret.command("rm")
+@click.argument("name")
+def secret_rm(name: str) -> None:
+    """Delete the secret stored under NAME (no-op if absent).
+
+    :param name: The stable secret name to delete, e.g. ``datadog-api``.
+    """
+    from omnigent.onboarding import secrets as secret_store
+
+    secret_store.delete_secret(name)
+    click.echo(f"Deleted secret {name!r} (if it existed).")
 
 
 @cli.group("integration", invoke_without_command=True)

@@ -123,6 +123,31 @@ def _resolve_databricks_token(profile: str) -> str:
         ) from exc
 
 
+def _resolve_secret_ref(value: str) -> str:
+    """Resolve a ``keychain:``/``env:`` secret reference to plaintext.
+
+    MCP header and stdio ``env`` values may reference the omnigent secret
+    store the same way the rest of the config does. Only the ``keychain:``
+    and ``env:`` prefixes are intercepted; any other value (a literal, or a
+    ``${VAR}`` already expanded at parse time) is returned unchanged, so
+    existing configs behave exactly as before. Resolution runs per connect,
+    so a rotated secret is picked up on reconnect.
+
+    :param value: A header or env value, e.g. ``"keychain:datadog-api"``,
+        ``"env:DD_API_KEY"``, or a literal like ``"application/json"``.
+    :returns: The resolved plaintext for a recognized ref, else *value*.
+    :raises OmnigentError: If a recognized ref names a missing secret or
+        unset environment variable (via ``resolve_secret``).
+    """
+    if value.startswith(("keychain:", "env:")):
+        # Lazy import to keep the provider_config dependency edge off this
+        # widely-imported module's top-level import graph.
+        from omnigent.onboarding.provider_config import resolve_secret
+
+        return resolve_secret(value)
+    return value
+
+
 # Seconds to wait after tripping before allowing a single
 # half-open probe. Long enough that a restarting server has
 # time to come back; short enough that recovery isn't delayed
@@ -933,7 +958,11 @@ class McpServerConnection:
         :returns: Merged headers dict, or ``None`` if no headers
             are needed (empty config headers and no profile).
         """
-        merged = dict(self.config.headers) if self.config.headers else {}
+        merged = (
+            {key: _resolve_secret_ref(value) for key, value in self.config.headers.items()}
+            if self.config.headers
+            else {}
+        )
         if self.config.databricks_profile is not None:
             token = _resolve_databricks_token(self.config.databricks_profile)
             # Explicit Authorization header wins — don't overwrite.
@@ -1047,8 +1076,12 @@ class McpServerConnection:
             # allowlist (no runner-auth secret). The ``config.env`` branch
             # overlays author-declared vars (e.g. ``GITHUB_TOKEN``) on the
             # full parent env, so strip the runner tunnel binding token
-            # first: an MCP server command is spec-author code.
-            env=(strip_runner_auth_secrets(os.environ) | self.config.env)
+            # first: an MCP server command is spec-author code. Values are
+            # resolved through the secret store (``keychain:``/``env:`` refs).
+            env=(
+                strip_runner_auth_secrets(os.environ)
+                | {key: _resolve_secret_ref(value) for key, value in self.config.env.items()}
+            )
             if self.config.env
             else None,
         )

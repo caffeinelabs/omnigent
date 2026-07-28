@@ -34,6 +34,7 @@ from omnigent.tools.mcp import (
     _format_call_result,
     _is_connection_error,
     _normalize_input_schema,
+    _resolve_secret_ref,
     clear_discovery_cache,
 )
 
@@ -360,6 +361,87 @@ async def test_close_is_safe_when_never_connected() -> None:
     """
     conn = McpServerConnection(config=_make_http_config())
     await conn.close()
+
+
+# ── secret-ref resolution in headers / env ──────────────
+
+
+def test_resolve_secret_ref_passthrough_for_literals() -> None:
+    """A value without a known ref prefix is returned unchanged."""
+    assert _resolve_secret_ref("application/json") == "application/json"
+    # A ``${VAR}`` value is already expanded at parse time, so at connect
+    # time it is a literal and must pass through untouched.
+    assert _resolve_secret_ref("Bearer already-expanded") == "Bearer already-expanded"
+
+
+def test_resolve_secret_ref_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """An ``env:`` ref reads the environment at resolution time."""
+    monkeypatch.setenv("DD_API_KEY", "env-token-123")
+    assert _resolve_secret_ref("env:DD_API_KEY") == "env-token-123"
+
+
+def test_resolve_secret_ref_keychain(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ``keychain:`` ref reads the omnigent secret store."""
+    from omnigent.onboarding import provider_config
+
+    monkeypatch.setattr(
+        provider_config,
+        "resolve_secret",
+        lambda ref: "stored-app-key" if ref == "keychain:datadog-app" else None,
+    )
+    assert _resolve_secret_ref("keychain:datadog-app") == "stored-app-key"
+
+
+def test_resolve_http_headers_resolves_refs(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Header values are resolved through the secret store on connect."""
+    monkeypatch.setenv("DD_API_KEY", "api-from-env")
+
+    from omnigent.onboarding import provider_config
+
+    monkeypatch.setattr(
+        provider_config,
+        "resolve_secret",
+        lambda ref: {
+            "keychain:datadog-app": "app-from-keychain",
+            "env:DD_API_KEY": "api-from-env",
+        }[ref],
+    )
+
+    config = MCPServerConfig(
+        name="datadog",
+        url="https://mcp.datadoghq.com/mcp",
+        headers={
+            "DD-API-KEY": "env:DD_API_KEY",
+            "DD-APPLICATION-KEY": "keychain:datadog-app",
+            "Content-Type": "application/json",
+        },
+    )
+    conn = McpServerConnection(config=config)
+
+    resolved = conn._resolve_http_headers()
+
+    assert resolved == {
+        "DD-API-KEY": "api-from-env",
+        "DD-APPLICATION-KEY": "app-from-keychain",
+        "Content-Type": "application/json",  # literal untouched
+    }
+    # The raw config still holds the ref, not the plaintext (rotation-friendly).
+    assert config.headers["DD-APPLICATION-KEY"] == "keychain:datadog-app"
+
+
+def test_resolve_http_headers_missing_secret_raises() -> None:
+    """A ``keychain:`` ref for a missing secret fails loud at connect time."""
+    from omnigent.errors import OmnigentError
+
+    config = MCPServerConfig(
+        name="datadog",
+        url="https://mcp.datadoghq.com/mcp",
+        headers={"DD-API-KEY": "keychain:definitely-not-stored"},
+    )
+    conn = McpServerConnection(config=config)
+
+    with pytest.raises(OmnigentError, match="no stored secret"):
+        conn._resolve_http_headers()
 
 
 def test_mcp_server_config_repr_redacts_headers() -> None:
@@ -2012,6 +2094,49 @@ def test_open_stdio_transport_overlays_env_on_parent() -> None:
     # realistic test runner, so its presence confirms the dict
     # union didn't wipe the inherited environment.
     assert "PATH" in env
+
+
+def test_open_stdio_transport_resolves_env_secret_refs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """``config.env`` values that are secret refs resolve to plaintext.
+
+    A ``keychain:``/``env:`` ref in an MCP subprocess's env is resolved
+    through the secret store just before spawn, so the subprocess sees the
+    real token, not the literal ref string.
+    """
+    from omnigent.onboarding import provider_config
+
+    monkeypatch.setattr(
+        provider_config,
+        "resolve_secret",
+        lambda ref: "dd-app-plaintext" if ref == "keychain:datadog-app" else ref,
+    )
+
+    config = _make_stdio_config(
+        command="fake-mcp",
+        env={"DD_APPLICATION_KEY": "keychain:datadog-app", "PLAIN": "literal"},
+    )
+    captured: dict[str, Any] = {}
+
+    def _capture_stdio_client(params: Any) -> Any:
+        captured["params"] = params
+        mock_ctx = AsyncMock()
+        mock_ctx.__aenter__ = AsyncMock(return_value=(MagicMock(), MagicMock()))
+        mock_ctx.__aexit__ = AsyncMock(return_value=False)
+        return mock_ctx
+
+    conn = McpServerConnection(config=config)
+
+    with patch("omnigent.tools.mcp.stdio_client", side_effect=_capture_stdio_client):
+        with patch("omnigent.tools.mcp.ClientSession", return_value=_mock_session()):
+            asyncio.run(conn.connect())
+
+    env = captured["params"].env
+    assert env["DD_APPLICATION_KEY"] == "dd-app-plaintext"  # ref resolved
+    assert env["PLAIN"] == "literal"  # non-ref untouched
+    # The raw config still holds the ref (resolution is per-connect).
+    assert config.env["DD_APPLICATION_KEY"] == "keychain:datadog-app"
 
 
 def test_open_stdio_transport_empty_env_inherits_fully() -> None:

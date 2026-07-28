@@ -208,6 +208,19 @@ def load_secret(name: str) -> str | None:
     return _read_secrets_file().get(name)
 
 
+def list_secret_names() -> list[str]:
+    """Return the names of secrets in the file backend, sorted.
+
+    Only the file backend can be enumerated: OS keychains do not expose a
+    reliable "list every entry for this service" API, so keychain-stored
+    secrets are not listed here. Values are never returned — names only.
+
+    :returns: Sorted secret names from ``secrets.json``, e.g.
+        ``["anthropic", "datadog-api"]``; empty when the file is absent.
+    """
+    return sorted(_read_secrets_file().keys())
+
+
 def delete_secret(name: str) -> None:
     """Delete the secret stored under *name*, if present.
 
