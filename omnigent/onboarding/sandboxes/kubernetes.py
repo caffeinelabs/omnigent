@@ -642,9 +642,6 @@ def build_pod_manifest(
         github_login=github_login,
         ssh_authorized_keys=ssh_authorized_keys,
         github_token_env="GH_TOKEN" if github_token else None,
-        # A Docker-in-Docker sidecar is injected into every managed runner Pod
-        # by cluster admission, so the agent can build/run containers.
-        docker_available=True,
     )
 
     init_env: list[dict[str, object]] = [{"name": "HOME", "value": _HOME_DIR}]
