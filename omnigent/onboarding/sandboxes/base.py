@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import secrets
 import shlex
 from abc import ABC, abstractmethod
@@ -198,12 +199,23 @@ def github_sandbox_setup_commands(
         # that gh/git are already authenticated, so it clones/PRs directly
         # instead of asking the user for a token, and always ships changes as a
         # pull request rather than pushing to the default branch.
+        # Deployments that live mostly in one GitHub org can name it here so a
+        # bare repo name (no owner) resolves to that org. Generic knob; left
+        # unset upstream.
+        default_owner = os.environ.get("OMNIGENT_SANDBOX_DEFAULT_REPO_OWNER", "").strip()
+        default_owner_note = (
+            f"- When a repo is named without an owner, assume the `{default_owner}` "
+            f"org (e.g. `gh repo clone {default_owner}/<repo>`).\n"
+            if default_owner
+            else ""
+        )
         agents_md = (
             "# Sandbox environment\n\n"
             "This managed sandbox is already authenticated to GitHub as "
             f"**{github_login}** via the `gh` CLI and git (HTTPS).\n\n"
             "- Clone any repo you can access: `gh repo clone <owner>/<repo>` or "
             "`git clone https://github.com/<owner>/<repo>.git`.\n"
+            f"{default_owner_note}"
             "- `gh` / git act as "
             f"{github_login}; auth is already configured, so never ask the user "
             "for a token or print credentials.\n\n"
