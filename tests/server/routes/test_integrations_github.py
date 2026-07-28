@@ -45,6 +45,17 @@ class _FakeClient:
     async def fetch_login(self, access_token: str) -> tuple[str, int]:
         return "octocat", 42
 
+    async def list_repos(self, access_token: str) -> list[dict[str, object]]:
+        return [
+            {
+                "full_name": "caffeinelabs/app",
+                "clone_url": "https://github.com/caffeinelabs/app.git",
+                "default_branch": "main",
+                "private": True,
+                "pushed_at": "2026-07-28T00:00:00Z",
+            }
+        ]
+
 
 def _config() -> GitHubAppConfig:
     return GitHubAppConfig(
@@ -180,3 +191,26 @@ def test_disconnect(db_uri: str) -> None:
     assert resp.status_code == 200
     assert resp.json() == {"disconnected": True}
     assert store.get("alice@example.com") is None
+
+
+def test_repos_unconnected_returns_false(db_uri: str) -> None:
+    tc, _store, _config, _client = _app(db_uri)
+    resp = tc.get("/v1/integrations/github/repos", headers=_USER)
+    assert resp.status_code == 200
+    assert resp.json() == {"connected": False, "repos": []}
+
+
+def test_repos_lists_when_connected(db_uri: str) -> None:
+    tc, store, _config, _client = _app(db_uri)
+    store.upsert(
+        "alice@example.com",
+        github_login="octocat",
+        github_user_id=42,
+        tokens=GitHubTokenSet("ghu_a", "ghr_a", None, None, "repo"),
+    )
+    resp = tc.get("/v1/integrations/github/repos", headers=_USER)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["connected"] is True
+    assert [r["full_name"] for r in body["repos"]] == ["caffeinelabs/app"]
+    assert body["repos"][0]["default_branch"] == "main"

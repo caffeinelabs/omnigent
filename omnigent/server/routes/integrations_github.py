@@ -16,7 +16,7 @@ import time
 from urllib.parse import urlencode
 
 import jwt
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import RedirectResponse
 
 from omnigent.server.auth import RESERVED_USER_LOCAL, AuthProvider
@@ -26,6 +26,7 @@ from omnigent.server.github_app import (
     build_authorize_url,
 )
 from omnigent.server.github_app_client import GitHubAppClient
+from omnigent.server.github_identity import resolve_access_token
 from omnigent.server.github_store import GithubConnectionStore
 from omnigent.server.routes._auth_helpers import require_user
 
@@ -118,6 +119,26 @@ def create_integrations_github_router(
             "connected_at": connection.created_at if connection is not None else None,
             "install_url": config.install_url,
         }
+
+    @router.get("/integrations/github/repos")
+    async def repos(request: Request) -> dict[str, object]:
+        """List repos the connected user can access, for the new-chat picker.
+
+        ``connected: false`` (with an empty list) when the caller hasn't
+        linked GitHub, so the UI can fall back to a free-text repo URL.
+        """
+        user_id = _current_user(request)
+        token = await resolve_access_token(user_id, store=store, client=api)
+        if token is None:
+            return {"connected": False, "repos": []}
+        try:
+            repo_list = await api.list_repos(token)
+        except GitHubAppError as exc:
+            _logger.warning("GitHub repo list failed for %s: %s", user_id, exc)
+            raise HTTPException(
+                status_code=502, detail="Failed to list GitHub repositories"
+            ) from exc
+        return {"connected": True, "repos": repo_list}
 
     @router.get("/integrations/github/connect")
     async def connect(request: Request, return_to: str | None = None) -> RedirectResponse:

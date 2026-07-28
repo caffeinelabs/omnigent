@@ -29,6 +29,12 @@ _TOKEN_ENDPOINT = "https://github.com/login/oauth/access_token"
 _USER_ENDPOINT = "https://api.github.com/user"
 # Public per-user SSH keys — no auth required, returns only PUBLIC keys.
 _USER_KEYS_ENDPOINT = "https://api.github.com/users/{login}/keys"
+# Repos the token can access (App-scoped), most-recently-pushed first.
+_USER_REPOS_ENDPOINT = "https://api.github.com/user/repos"
+_REPOS_PER_PAGE = 100
+# Cap the walk so a user with thousands of repos gets a bounded, fast
+# response for the picker (the newest ~300 by push time).
+_REPOS_MAX_PAGES = 3
 
 _HTTP_TIMEOUT_S = 15.0
 
@@ -120,6 +126,52 @@ class GitHubAppClient:
         except (httpx.HTTPError, ValueError, KeyError) as exc:
             _logger.warning("Failed to fetch GitHub public keys for %s: %s", login, exc)
             return ()
+
+    async def list_repos(self, access_token: str) -> list[dict[str, object]]:
+        """List repos the authenticated user can access, App-scoped.
+
+        Reads ``/user/repos`` most-recently-pushed first, following up to
+        :data:`_REPOS_MAX_PAGES` pages. Returns a compact projection for the
+        new-chat repo picker (not the full GitHub payload).
+
+        :param access_token: A valid user access token.
+        :returns: Repos as
+            ``{full_name, clone_url, default_branch, private, pushed_at}``,
+            newest first.
+        :raises GitHubAppError: When the API call fails.
+        """
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/vnd.github+json",
+        }
+        repos: list[dict[str, object]] = []
+        async with self._http_client() as client:
+            for page in range(1, _REPOS_MAX_PAGES + 1):
+                resp = await client.get(
+                    _USER_REPOS_ENDPOINT,
+                    params={"per_page": _REPOS_PER_PAGE, "page": page, "sort": "pushed"},
+                    headers=headers,
+                )
+                if resp.status_code != 200:
+                    raise GitHubAppError(f"GitHub /user/repos returned {resp.status_code}")
+                batch = resp.json()
+                if not isinstance(batch, list) or not batch:
+                    break
+                for entry in batch:
+                    if not isinstance(entry, dict) or not entry.get("full_name"):
+                        continue
+                    repos.append(
+                        {
+                            "full_name": entry["full_name"],
+                            "clone_url": entry.get("clone_url"),
+                            "default_branch": entry.get("default_branch"),
+                            "private": bool(entry.get("private")),
+                            "pushed_at": entry.get("pushed_at"),
+                        }
+                    )
+                if len(batch) < _REPOS_PER_PAGE:
+                    break
+        return repos
 
     async def _token_request(self, fields: dict[str, str]) -> GitHubTokenSet:
         """POST the given form fields to the token endpoint and parse the reply."""

@@ -8,7 +8,7 @@ import {
   useState,
 } from "react";
 import { useNavigate, useSearchParams } from "@/lib/routing";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   MonitorIcon,
   MonitorCloudIcon,
@@ -67,6 +67,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { authenticatedFetch } from "@/lib/identity";
+import { fetchGithubRepos, type GithubRepo } from "@/lib/githubIntegration";
 import { isImeCompositionKeyEvent } from "@/lib/ime";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
@@ -1793,6 +1794,21 @@ export function NewChatLandingScreen() {
   const [sandboxRepoBranch, setSandboxRepoBranch] = useState<string>(
     () => landingDraft?.sandboxRepoBranch ?? "",
   );
+  // Filter text for the GitHub repo picker (only used when the GitHub App is
+  // configured and the user has connected their account).
+  const [sandboxRepoQuery, setSandboxRepoQuery] = useState<string>("");
+  // The repos the connected user can access, to pick from instead of typing a
+  // URL. Fetched once (cached) when the GitHub App is enabled; on `connected:
+  // false` the picker falls back to the free-text URL input.
+  const githubReposEnabled = info !== "loading" && info.github_app_enabled === true;
+  const { data: sandboxRepoData } = useQuery({
+    queryKey: ["github-repos"],
+    queryFn: fetchGithubRepos,
+    enabled: githubReposEnabled,
+    staleTime: 5 * 60_000,
+  });
+  const sandboxRepoPickerConnected = sandboxRepoData?.connected ?? false;
+  const sandboxRepos = sandboxRepoPickerConnected ? (sandboxRepoData?.repos ?? []) : [];
   const [workspace, setWorkspace] = useState<string>(() => landingDraft?.workspace ?? "");
   const [branchName, setBranchName] = useState<string>(() => landingDraft?.branchName ?? "");
   // The base branch auto-fills from the configured default (Settings › Git)
@@ -2702,6 +2718,17 @@ export function NewChatLandingScreen() {
       ? `${sandboxRepoName}#${sandboxRepoBranch.trim()}`
       : sandboxRepoName
     : "Repository";
+  // GitHub repos filtered by the picker's search box (bounded so a huge
+  // account can't render thousands of rows).
+  const sandboxRepoFilter = sandboxRepoQuery.trim().toLowerCase();
+  const filteredSandboxRepos = sandboxRepos
+    .filter((r) => r.full_name.toLowerCase().includes(sandboxRepoFilter))
+    .slice(0, 100);
+  const selectSandboxRepo = (repo: GithubRepo): void => {
+    setSandboxRepoUrl(repo.clone_url ?? `https://github.com/${repo.full_name}.git`);
+    // Leave the branch blank so the server clones the repo's default branch.
+    setSandboxRepoBranch("");
+  };
   // The trigger label is just the agent name; the run-config knobs live in
   // the picker's per-entry submenu, so duplicating their values here would be
   // redundant.
@@ -3643,15 +3670,70 @@ export function NewChatLandingScreen() {
                           </Tooltip>
                         )}
                       </div>
-                      <input
-                        id="landing-repo-url"
-                        type="text"
-                        value={sandboxRepoUrl}
-                        onChange={(e) => setSandboxRepoUrl(e.target.value)}
-                        placeholder="https://github.com/org/repo"
-                        className="rounded-md border border-input bg-background px-3 py-2 text-xs outline-none transition-colors focus-visible:border-ring"
-                        data-testid="new-chat-landing-repo-input"
-                      />
+                      {sandboxRepoPickerConnected ? (
+                        <>
+                          <input
+                            type="text"
+                            value={sandboxRepoQuery}
+                            onChange={(e) => setSandboxRepoQuery(e.target.value)}
+                            placeholder="Search your repositories…"
+                            aria-label="Search repositories"
+                            className="rounded-md border border-input bg-background px-3 py-2 text-xs outline-none transition-colors focus-visible:border-ring"
+                            data-testid="new-chat-landing-repo-search"
+                          />
+                          <div
+                            role="listbox"
+                            aria-label="Repositories"
+                            className="flex max-h-56 flex-col gap-0.5 overflow-y-auto"
+                          >
+                            {filteredSandboxRepos.map((repo) => {
+                              const repoUrl =
+                                repo.clone_url ?? `https://github.com/${repo.full_name}.git`;
+                              const selected = sandboxRepoUrl.trim() === repoUrl;
+                              return (
+                                <button
+                                  key={repo.full_name}
+                                  type="button"
+                                  role="option"
+                                  aria-selected={selected}
+                                  onClick={() => selectSandboxRepo(repo)}
+                                  className={`flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-left text-xs transition-colors ${
+                                    selected ? "bg-accent text-foreground" : "hover:bg-muted"
+                                  }`}
+                                  data-testid="new-chat-landing-repo-option"
+                                >
+                                  <span className="truncate">{repo.full_name}</span>
+                                  {repo.private && (
+                                    <Badge variant="secondary" className="shrink-0 text-[10px]">
+                                      private
+                                    </Badge>
+                                  )}
+                                </button>
+                              );
+                            })}
+                            {filteredSandboxRepos.length === 0 && (
+                              <p className="px-2 py-1.5 text-xs text-muted-foreground">
+                                No matching repositories.
+                              </p>
+                            )}
+                          </div>
+                          {sandboxRepoName && (
+                            <p className="truncate text-[11px] text-muted-foreground">
+                              Selected: {sandboxRepoUrl}
+                            </p>
+                          )}
+                        </>
+                      ) : (
+                        <input
+                          id="landing-repo-url"
+                          type="text"
+                          value={sandboxRepoUrl}
+                          onChange={(e) => setSandboxRepoUrl(e.target.value)}
+                          placeholder="https://github.com/org/repo"
+                          className="rounded-md border border-input bg-background px-3 py-2 text-xs outline-none transition-colors focus-visible:border-ring"
+                          data-testid="new-chat-landing-repo-input"
+                        />
+                      )}
                       <input
                         type="text"
                         value={sandboxRepoBranch}
