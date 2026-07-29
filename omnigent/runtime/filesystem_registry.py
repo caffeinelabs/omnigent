@@ -202,6 +202,29 @@ def _find_git_root(path: Path) -> Path | None:
         current = parent
 
 
+def _find_child_git_repos(path: Path) -> list[Path]:
+    """Return the immediate subdirectories of *path* that are git repositories.
+
+    Used for multi-repo managed workspaces, where several repositories are
+    cloned side by side under a workspace root that is not itself a git repo
+    (``<workspace>/<repo_name>`` each). Only immediate children are considered
+    (not a deep walk); results are sorted by name for deterministic ordering.
+
+    :param path: The (already-resolved) workspace root to scan.
+    :returns: Sorted list of child directories containing a ``.git`` entry.
+    """
+    try:
+        children = sorted(p for p in path.iterdir() if p.is_dir())
+    except OSError:
+        return []
+    repos: list[Path] = []
+    for child in children:
+        git_entry = child / ".git"
+        if git_entry.is_dir() or git_entry.is_file():
+            repos.append(child)
+    return repos
+
+
 def _git_common_dir(git_root: Path) -> Path:
     """Return the Git directory shared by a repository and its worktrees."""
     git_entry = git_root / ".git"
@@ -1222,22 +1245,142 @@ class GitFilesystemRegistry(FilesystemRegistry):
         return counts
 
 
+# ── Multi-repo aggregating implementation ───────────────────────────────────
+
+
+class MultiRepoGitFilesystemRegistry(FilesystemRegistry):
+    """Aggregating registry for a workspace holding several sibling git repos.
+
+    A managed multi-repo session clones each repository into
+    ``<workspace>/<repo_name>``; the workspace root itself is not a git repo,
+    so no single :class:`GitFilesystemRegistry` covers it. This wraps one
+    :class:`GitFilesystemRegistry` per sub-repo and presents their changes as
+    one flat list, with every path prefixed by its repo's directory name
+    (``<repo_name>/<path>``). Per-file queries strip that prefix and route to
+    the owning sub-repo. A sub-repo whose ``git status`` is unavailable is
+    skipped rather than blanking the whole panel.
+    """
+
+    def __init__(self, watch_path: Path, repos: dict[str, GitFilesystemRegistry]) -> None:
+        """Initialize with a name→registry map of the workspace's sub-repos.
+
+        :param watch_path: The workspace root (parent of every sub-repo).
+        :param repos: Map of sub-repo directory name to its git registry.
+        """
+        super().__init__(watch_path)
+        self._repos = repos
+
+    def _split(self, path: str) -> tuple[str, str] | None:
+        """Split a ``<repo_name>/<rest>`` path into its sub-repo and remainder.
+
+        :param path: A workspace-root-relative path.
+        :returns: ``(repo_name, rest)`` when the leading component names a known
+            sub-repo and a remainder exists, else ``None``.
+        """
+        head, sep, rest = path.replace("\\", "/").lstrip("/").partition("/")
+        if not sep or not rest or head not in self._repos:
+            return None
+        return head, rest
+
+    def start(self) -> None:
+        """Start every sub-repo's observer."""
+        for repo in self._repos.values():
+            repo.start()
+
+    def stop(self) -> None:
+        """Stop every sub-repo's observer."""
+        for repo in self._repos.values():
+            repo.stop()
+
+    def unregister_conversation(self, conversation_id: str) -> None:
+        """Fan out session teardown to every sub-repo."""
+        for repo in self._repos.values():
+            repo.unregister_conversation(conversation_id)
+
+    def record_change(self, path: str, operation: str, session_id: str) -> None:
+        """Route a recorded change to the owning sub-repo."""
+        split = self._split(path)
+        if split is None:
+            return
+        name, rest = split
+        self._repos[name].record_change(rest, operation, session_id)
+
+    def seed_snapshot(self, path: str, content: str, *, session_id: str | None = None) -> None:
+        """Route a pre-write snapshot to the owning sub-repo."""
+        split = self._split(path)
+        if split is None:
+            return
+        name, rest = split
+        self._repos[name].seed_snapshot(rest, content, session_id=session_id)
+
+    def list_changed_files(self, conversation_id: str, *, limit: int) -> list[dict[str, Any]]:
+        """Merge changed files across every sub-repo, repo-name-prefixed.
+
+        :param conversation_id: Passed through (unused by git-backed sub-repos).
+        :param limit: Maximum records to return across all sub-repos combined.
+        :returns: Merged file-record dicts, newest first, capped at *limit*.
+        """
+        records: list[dict[str, Any]] = []
+        for name, repo in self._repos.items():
+            try:
+                for rec in repo.list_changed_files(conversation_id, limit=limit):
+                    rec["path"] = f"{name}/{rec['path']}"
+                    records.append(rec)
+            except GitStatusUnavailable as exc:
+                _logger.warning(
+                    "MultiRepoGitFilesystemRegistry: sub-repo %s status unavailable: %s",
+                    name,
+                    exc,
+                )
+        records.sort(key=lambda r: (r["modified_at"] or 0, r["path"]), reverse=True)
+        return records[:limit]
+
+    def get_changed_file(self, session_id: str, path: str) -> dict[str, Any] | None:
+        """Return the change record for a repo-prefixed *path*, or ``None``."""
+        split = self._split(path)
+        if split is None:
+            return None
+        name, rest = split
+        rec = self._repos[name].get_changed_file(session_id, rest)
+        if rec is not None:
+            rec["path"] = f"{name}/{rec['path']}"
+        return rec
+
+    def get_baseline(self, path: str) -> str | None:
+        """Return the baseline content for a repo-prefixed *path*, or ``None``."""
+        split = self._split(path)
+        if split is None:
+            return None
+        name, rest = split
+        return self._repos[name].get_baseline(rest)
+
+
 # ── Factory ───────────────────────────────────────────────────────────────────
 
 
 def create_filesystem_registry(watch_path: Path) -> FilesystemRegistry:
     """Return the appropriate :class:`FilesystemRegistry` for *watch_path*.
 
-    Detects whether *watch_path* is inside a git repository and returns:
+    Detects the workspace shape and returns:
 
     - :class:`GitFilesystemRegistry` when a ``.git`` entry is found at or
-      above *watch_path*.
+      above *watch_path* (the workspace is inside a single repo).
+    - :class:`MultiRepoGitFilesystemRegistry` when *watch_path* is not itself
+      inside a repo but has one or more immediate sub-directories that are git
+      repos (a managed multi-repo workspace, repos cloned side by side).
     - :class:`AgentEditFilesystemRegistry` otherwise.
 
     :param watch_path: The workspace root to track.
     :returns: A :class:`FilesystemRegistry` instance ready to be used.
     """
-    git_root = _find_git_root(watch_path.resolve())
+    resolved = watch_path.resolve()
+    git_root = _find_git_root(resolved)
     if git_root is not None:
         return GitFilesystemRegistry(watch_path, git_root)
+    child_repos = _find_child_git_repos(resolved)
+    if child_repos:
+        return MultiRepoGitFilesystemRegistry(
+            watch_path,
+            {repo.name: GitFilesystemRegistry(repo, repo) for repo in child_repos},
+        )
     return AgentEditFilesystemRegistry(watch_path)

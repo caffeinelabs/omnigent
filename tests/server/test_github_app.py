@@ -173,3 +173,52 @@ async def test_list_branches_non_200_raises() -> None:
 
     with pytest.raises(GitHubAppError):
         await _client(handler).list_branches("ghu_bad", "caffeinelabs/nope")
+
+
+@pytest.mark.asyncio
+async def test_list_pulls_projects_fields_and_stops_on_short_page() -> None:
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request.url.path)
+        assert request.url.path == "/repos/caffeinelabs/app/pulls"
+        assert request.url.params.get("state") == "open"
+        return httpx.Response(
+            200,
+            json=[
+                {
+                    "number": 7,
+                    "title": "feat: thing",
+                    "html_url": "https://github.com/caffeinelabs/app/pull/7",
+                    "head": {"ref": "feat-thing"},
+                    "user": {"login": "octocat"},
+                    "draft": False,
+                    "created_at": "2026-07-29T00:00:00Z",
+                    "extra": "ignored",
+                },
+                {"no_number": "skipped"},
+            ],
+        )
+
+    pulls = await _client(handler).list_pulls("ghu_x", "caffeinelabs/app")
+    assert calls == ["/repos/caffeinelabs/app/pulls"]
+    assert pulls == [
+        {
+            "number": 7,
+            "title": "feat: thing",
+            "html_url": "https://github.com/caffeinelabs/app/pull/7",
+            "head_ref": "feat-thing",
+            "draft": False,
+            "author_login": "octocat",
+            "created_at": "2026-07-29T00:00:00Z",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_pulls_non_200_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"message": "Forbidden"})
+
+    with pytest.raises(GitHubAppError):
+        await _client(handler).list_pulls("ghu_bad", "caffeinelabs/app")

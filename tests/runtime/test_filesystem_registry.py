@@ -23,6 +23,7 @@ from omnigent.runtime.filesystem_registry import (
     AgentEditFilesystemRegistry,
     GitFilesystemRegistry,
     GitStatusUnavailable,
+    MultiRepoGitFilesystemRegistry,
     _git_timeout_seconds,
     _normalize_path,
     _parse_git_porcelain_line,
@@ -431,6 +432,53 @@ def test_get_baseline_returns_none_for_new_untracked_file(tmp_path: Path) -> Non
         f"Expected None for an untracked file, got {result!r}. "
         "get_baseline returned a non-None baseline for a file not in git."
     )
+
+
+def _init_repo_with_commit(path: Path, filename: str, content: str) -> None:
+    """Init a git repo at *path* with a single committed file."""
+    env = _git_env()
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True, env=env)
+    (path / filename).write_text(content)
+    subprocess.run(["git", "add", filename], cwd=path, check=True, capture_output=True, env=env)
+    subprocess.run(
+        ["git", "commit", "-m", "init"], cwd=path, check=True, capture_output=True, env=env
+    )
+
+
+def test_create_registry_aggregates_sibling_repos(tmp_path: Path) -> None:
+    """A workspace root holding sibling git repos yields a multi-repo registry.
+
+    Mirrors a managed multi-repo session: ``<workspace>/<repo>`` for each repo,
+    with the root itself not a git repo. Changes must surface across every
+    sub-repo, each path prefixed by its repo directory name, and per-file
+    baseline/diff queries must route by that prefix.
+    """
+    workspace = tmp_path / "workspace"
+    _init_repo_with_commit(workspace / "alpha", "a.py", "alpha original\n")
+    _init_repo_with_commit(workspace / "beta", "b.py", "beta original\n")
+    # Modify a tracked file in alpha; add an untracked file in beta.
+    (workspace / "alpha" / "a.py").write_text("alpha changed\n")
+    (workspace / "beta" / "new.py").write_text("brand new\n")
+
+    reg = create_filesystem_registry(workspace)
+    assert isinstance(reg, MultiRepoGitFilesystemRegistry)
+
+    changed = reg.list_changed_files("conv_test", limit=50)
+    paths = {r["path"] for r in changed}
+    # Both sub-repos' changes appear, each prefixed by the repo directory name.
+    assert "alpha/a.py" in paths, f"alpha change missing; got {sorted(paths)}"
+    assert "beta/new.py" in paths, f"beta change missing; got {sorted(paths)}"
+
+    # Per-file routing: baseline for the modified alpha file is its committed content.
+    assert reg.get_baseline("alpha/a.py") == "alpha original\n"
+    # An untracked file has no committed baseline.
+    assert reg.get_baseline("beta/new.py") is None
+    # get_changed_file routes by prefix and re-prefixes the returned record.
+    rec = reg.get_changed_file("conv_test", "alpha/a.py")
+    assert rec is not None and rec["path"] == "alpha/a.py"
+    # A path that names no known sub-repo resolves to nothing.
+    assert reg.get_changed_file("conv_test", "unknown/x.py") is None
 
 
 def test_git_list_changed_files_excludes_terminals_dir(tmp_path: Path) -> None:
