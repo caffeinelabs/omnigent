@@ -130,7 +130,7 @@ import re
 import secrets
 import time
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -138,6 +138,7 @@ import click
 from fastapi import HTTPException
 
 from omnigent.db.utils import now_epoch
+from omnigent.onboarding.sandboxes.types import RepoCheckout
 from omnigent.stores.host_store import Host, HostStore
 
 if TYPE_CHECKING:
@@ -581,6 +582,40 @@ def parse_repo_workspace(workspace: str) -> RepoWorkspace:
         )
     branch = _validate_clone_branch(fragment) if sep else None
     return RepoWorkspace(url=url, branch=branch, repo_name=_derive_repo_name(url))
+
+
+# A managed session may seed several repositories. Their create-time raw
+# workspace strings are stored in one session label, newline-joined — a repo
+# workspace can never contain whitespace (:func:`parse_repo_workspace` rejects
+# it), so the newline is an unambiguous separator that round-trips cleanly.
+_REPO_LABEL_SEP = "\n"
+
+
+def encode_repo_workspaces(workspaces: Sequence[str]) -> str:
+    """Join raw repo-workspace strings into one session-label value.
+
+    :param workspaces: Raw ``<url>[#branch]`` strings, create-order.
+    :returns: The newline-joined label value.
+    """
+    return _REPO_LABEL_SEP.join(workspaces)
+
+
+def parse_repo_workspaces(label: str) -> list[RepoWorkspace]:
+    """Parse a stored repo label back into ordered :class:`RepoWorkspace`.
+
+    Accepts both the multi-repo (newline-joined) form and a bare single
+    workspace (older sessions stored just one string), so relaunching a
+    session created before multi-repo support still re-clones its repo.
+
+    :param label: The stored label value.
+    :returns: Parsed repos in create-order (empty when the label is blank).
+    :raises ValueError: When any entry is malformed.
+    """
+    return [
+        parse_repo_workspace(entry)
+        for entry in label.split(_REPO_LABEL_SEP)
+        if entry.strip()
+    ]
 
 
 def _modal_launcher_factory(
@@ -1981,6 +2016,7 @@ async def launch_managed_host(
     owner: str,
     host_store: HostStore,
     repo: RepoWorkspace | None = None,
+    extra_repos: Sequence[RepoWorkspace] = (),
     github_identity: SandboxGithubIdentity | None = None,
     on_stage: Callable[[str], None] | None = None,
 ) -> ManagedHostLaunch:
@@ -2010,6 +2046,9 @@ async def launch_managed_host(
         host image's git credential helper when the sandbox env
         carries ``GIT_TOKEN`` (injected through Modal secrets — see
         deploy/modal/README.md "Git credentials").
+    :param extra_repos: Additional repositories cloned side by side with
+        *repo* under the workspace root; empty for a single-repo workspace.
+        When any are present the host starts at the workspace root.
     :param github_identity: The session owner's connected GitHub
         credentials (user access token, login, public SSH keys), used to
         authenticate ``gh`` / git in the sandbox *as that user* and to
@@ -2051,6 +2090,7 @@ async def launch_managed_host(
         owner=owner,
         sandbox_id=sandbox_id,
         repo=repo,
+        extra_repos=extra_repos,
         github_identity=github_identity,
         on_stage=on_stage,
     )
@@ -2063,6 +2103,7 @@ async def relaunch_managed_host(
     host: Host,
     host_store: HostStore,
     repo: RepoWorkspace | None = None,
+    extra_repos: Sequence[RepoWorkspace] = (),
     github_identity: SandboxGithubIdentity | None = None,
     on_stage: Callable[[str], None] | None = None,
 ) -> ManagedHostLaunch:
@@ -2091,6 +2132,8 @@ async def relaunch_managed_host(
     :param host_store: Persistent host registrations.
     :param repo: Repository to re-clone as the workspace, or ``None``
         for an empty workspace.
+    :param extra_repos: Additional repositories to re-clone side by side
+        with *repo*; empty for a single-repo workspace.
     :param github_identity: The owner's connected GitHub credentials to
         authenticate ``gh`` / git as them and inject their SSH keys, or
         ``None`` to keep the shared ``GIT_TOKEN`` behaviour.
@@ -2132,6 +2175,7 @@ async def relaunch_managed_host(
         owner=host.user_id,
         sandbox_id=sandbox_id,
         repo=repo,
+        extra_repos=extra_repos,
         github_identity=github_identity,
         on_stage=on_stage,
         keep_host_on_failure=True,
@@ -2149,6 +2193,7 @@ async def _arm_and_start_host(
     owner: str,
     sandbox_id: str,
     repo: RepoWorkspace | None = None,
+    extra_repos: Sequence[RepoWorkspace] = (),
     github_identity: SandboxGithubIdentity | None = None,
     on_stage: Callable[[str], None] | None = None,
     keep_host_on_failure: bool = False,
@@ -2177,6 +2222,8 @@ async def _arm_and_start_host(
     :param sandbox_id: The provisioned sandbox, e.g. ``"sb-a1b2c3"``.
     :param repo: Repository to clone as the workspace, or ``None``
         for an empty workspace.
+    :param extra_repos: Additional repositories cloned side by side with
+        *repo* under the workspace root; empty for a single-repo workspace.
     :param github_identity: The owner's connected GitHub credentials to
         authenticate ``gh`` / git as them and inject their SSH keys, or
         ``None`` to keep the shared ``GIT_TOKEN`` behaviour.
@@ -2225,7 +2272,19 @@ async def _arm_and_start_host(
             ),
             on_stage=on_stage,
             # Omitted entirely when unset: a deployment-injected launcher
-            # predating the host_config parameter must keep launching.
+            # predating these parameters must keep launching. *repo* is
+            # unpacked into primitives above; additional repos ride the
+            # RepoCheckout list only when the session requested more than one.
+            **(
+                {
+                    "extra_repos": [
+                        RepoCheckout(url=r.url, branch=r.branch, repo_name=r.repo_name)
+                        for r in extra_repos
+                    ]
+                }
+                if extra_repos
+                else {}
+            ),
             **({"host_config": config.host_config} if config.host_config is not None else {}),
         )
         await _wait_for_host_online(host_store, host_id)

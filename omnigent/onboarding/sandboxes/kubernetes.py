@@ -83,6 +83,8 @@ if TYPE_CHECKING:
 
     from kubernetes import client as k8s_client
 
+    from omnigent.onboarding.sandboxes.types import RepoCheckout
+
 
 _logger = logging.getLogger(__name__)
 
@@ -375,30 +377,54 @@ def _token_secret_name(pod_name: str) -> str:
     return f"{pod_name}-token"
 
 
+def _git_clone_line(url: str, branch: str | None, dest: str) -> str:
+    """Render one ``git clone`` line for the workspace prep script.
+
+    ``--`` separates options from the (already-validated) URL so it can never
+    be parsed as a flag; ``--single-branch`` keeps branch-pinned clones fast.
+    Private repos authenticate via the image's ``GIT_TOKEN`` credential helper
+    (projected from the harness Secret).
+
+    :param url: Clone URL (validated upstream).
+    :param branch: Branch to clone, or ``None`` for the default branch.
+    :param dest: Destination directory the clone lands in.
+    :returns: A single ``git clone …`` shell line (newline-terminated).
+    """
+    branch_flag = (
+        f"--branch {shlex.quote(branch)} --single-branch " if branch is not None else ""
+    )
+    return f"git clone {branch_flag}-- {shlex.quote(url)} {shlex.quote(dest)}\n"
+
+
 def _render_workspace_prep_command(
     workspace: str,
     clone_dir: str | None,
     repo_url: str | None,
     repo_branch: str | None,
+    extra_repos: Sequence[RepoCheckout] = (),
     extra_setup_commands: list[str] | None = None,
     host_config: dict[str, object] | None = None,
 ) -> list[str]:
     """
     Render the init container command that prepares the workspace.
 
-    Creates ``<workspace>``, clones the repository into ``<clone_dir>`` when
-    requested, and merges *host_config* into ``config.yaml`` under
-    ``$OMNIGENT_CONFIG_HOME`` or the default ``~/.omnigent`` when set — all
-    BEFORE the host starts. Running in an init container means a failure
-    terminates the init container non-zero — surfaced fast by the start wait
-    with the error as the container log tail — rather than silently leaving the
-    host without its workspace or provider config.
+    Creates ``<workspace>``, clones the primary repository into ``<clone_dir>``
+    when requested plus each of *extra_repos* into ``<workspace>/<repo_name>``,
+    and merges *host_config* into ``config.yaml`` under ``$OMNIGENT_CONFIG_HOME``
+    or the default ``~/.omnigent`` when set — all BEFORE the host starts.
+    Running in an init container means a failure terminates the init container
+    non-zero — surfaced fast by the start wait with the error as the container
+    log tail — rather than silently leaving the host without its workspace or
+    provider config.
 
     :param workspace: The workspace root to create, e.g. ``"/home/omnigent/workspace"``.
-    :param clone_dir: Directory the clone lands in, or ``None`` for no clone.
-    :param repo_url: Repository clone URL, or ``None`` for an empty workspace.
+    :param clone_dir: Directory the primary clone lands in, or ``None`` for no clone.
+    :param repo_url: Primary repository clone URL, or ``None`` for an empty workspace.
     :param repo_branch: Branch to clone (``--branch … --single-branch``), or
         ``None`` for the default branch.
+    :param extra_repos: Additional repositories to clone side by side under the
+        workspace root, each into ``<workspace>/<repo_name>``. Empty for a
+        single- or empty-repo workspace.
     :param extra_setup_commands: Additional per-user setup commands (``gh``
         auth + ``authorized_keys``) run after the clone; best-effort, so a
         failure here does not abort init (``|| true``). ``None`` for none.
@@ -409,16 +435,9 @@ def _render_workspace_prep_command(
     """
     script = f"set -e\nmkdir -p {shlex.quote(workspace)}\n"
     if repo_url is not None and clone_dir is not None:
-        # ``--`` separates options from the (already-validated) URL so it can
-        # never be parsed as a flag; --single-branch keeps branch-pinned clones
-        # fast. Private repos authenticate via the image's GIT_TOKEN credential
-        # helper (projected from the harness Secret).
-        branch = (
-            f"--branch {shlex.quote(repo_branch)} --single-branch "
-            if repo_branch is not None
-            else ""
-        )
-        script += f"git clone {branch}-- {shlex.quote(repo_url)} {shlex.quote(clone_dir)}\n"
+        script += _git_clone_line(repo_url, repo_branch, clone_dir)
+    for extra in extra_repos:
+        script += _git_clone_line(extra.url, extra.branch, f"{workspace}/{extra.repo_name}")
     for cmd in extra_setup_commands or ():
         script += f"{cmd} || true\n"
     if host_config is not None:
@@ -524,6 +543,7 @@ def build_pod_manifest(
     clone_dir: str | None = None,
     repo_url: str | None = None,
     repo_branch: str | None = None,
+    extra_repos: Sequence[RepoCheckout] = (),
     owner: str | None = None,
     github_token: str | None = None,
     github_login: str | None = None,
@@ -685,6 +705,7 @@ def build_pod_manifest(
             clone_dir,
             repo_url,
             repo_branch,
+            extra_repos=extra_repos,
             extra_setup_commands=github_setup,
             host_config=host_config,
         ),
@@ -1206,6 +1227,7 @@ class KubernetesSandboxLauncher(SandboxLauncher):
         repo_url: str | None = None,
         repo_branch: str | None = None,
         repo_name: str | None = None,
+        extra_repos: Sequence[RepoCheckout] = (),
         owner: str | None = None,
         github_token: str | None = None,
         github_login: str | None = None,
@@ -1290,6 +1312,7 @@ class KubernetesSandboxLauncher(SandboxLauncher):
                     clone_dir=clone_dir,
                     repo_url=repo_url,
                     repo_branch=repo_branch,
+                    extra_repos=extra_repos,
                     owner=owner,
                     github_token=github_token,
                     github_login=github_login,
@@ -1342,6 +1365,11 @@ class KubernetesSandboxLauncher(SandboxLauncher):
             # the connection pool here on both paths.
             self._close_clients()
         click.echo(f"  → pod '{sandbox_id}' is starting the host")
+        # With sibling repos checked out under the workspace root, the host
+        # starts at the root so every repo is visible; a lone repo keeps the
+        # existing behaviour of starting inside its clone directory.
+        if extra_repos:
+            return workspace
         return clone_dir or workspace
 
     def _wait_for_pod_running(self, namespace: str, pod_name: str) -> None:

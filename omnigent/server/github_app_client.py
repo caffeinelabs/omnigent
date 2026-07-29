@@ -36,6 +36,12 @@ _REPOS_PER_PAGE = 100
 # response for the picker (the newest ~300 by push time).
 _REPOS_MAX_PAGES = 3
 
+_REPO_BRANCHES_ENDPOINT = "https://api.github.com/repos/{full_name}/branches"
+_BRANCHES_PER_PAGE = 100
+# Cap the branch walk the same way — a busy repo can have hundreds of
+# branches, but the picker only needs a bounded, fast list.
+_BRANCHES_MAX_PAGES = 3
+
 _HTTP_TIMEOUT_S = 15.0
 
 
@@ -172,6 +178,44 @@ class GitHubAppClient:
                 if len(batch) < _REPOS_PER_PAGE:
                     break
         return repos
+
+    async def list_branches(self, access_token: str, full_name: str) -> list[str]:
+        """List branch names for ``full_name`` (``owner/repo``), App-scoped.
+
+        Reads ``/repos/{full_name}/branches`` following up to
+        :data:`_BRANCHES_MAX_PAGES` pages, for the per-repo branch picker.
+
+        :param access_token: A valid user access token.
+        :param full_name: The repository's ``owner/name``.
+        :returns: Branch names in the order GitHub returns them.
+        :raises GitHubAppError: When the API call fails.
+        """
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/vnd.github+json",
+        }
+        url = _REPO_BRANCHES_ENDPOINT.format(full_name=full_name)
+        branches: list[str] = []
+        async with self._http_client() as client:
+            for page in range(1, _BRANCHES_MAX_PAGES + 1):
+                resp = await client.get(
+                    url,
+                    params={"per_page": _BRANCHES_PER_PAGE, "page": page},
+                    headers=headers,
+                )
+                if resp.status_code != 200:
+                    raise GitHubAppError(
+                        f"GitHub /repos/{full_name}/branches returned {resp.status_code}"
+                    )
+                batch = resp.json()
+                if not isinstance(batch, list) or not batch:
+                    break
+                for entry in batch:
+                    if isinstance(entry, dict) and entry.get("name"):
+                        branches.append(str(entry["name"]))
+                if len(batch) < _BRANCHES_PER_PAGE:
+                    break
+        return branches
 
     async def _token_request(self, fields: dict[str, str]) -> GitHubTokenSet:
         """POST the given form fields to the token endpoint and parse the reply."""

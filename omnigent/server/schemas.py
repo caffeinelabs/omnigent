@@ -1219,6 +1219,11 @@ class SessionGitOptions(BaseModel):
         return self
 
 
+# Upper bound on repositories a single managed session may seed. Generous for
+# real multi-repo work while capping the init container's clone fan-out.
+_MAX_MANAGED_WORKSPACES = 10
+
+
 class SessionCreateRequest(BaseModel):
     """
     JSON request body for ``POST /v1/sessions``.
@@ -1281,6 +1286,15 @@ class SessionCreateRequest(BaseModel):
         inside the sandbox and the cloned directory becomes the
         stored session workspace (paths are rejected; ``None``
         gives an empty server-created workspace).
+    :param workspaces: For ``host_type: "managed"`` only — the
+        multi-repo form of :attr:`workspace`. A list of git
+        repository URLs (each optionally ``#<branch>``), cloned side
+        by side under the sandbox workspace root (``<root>/<repo>``
+        each) so the agent starts with every repo checked out; the
+        stored session workspace is then the root. Mutually exclusive
+        with :attr:`workspace`. Each entry must be a valid repository
+        URL (paths are rejected). ``None`` / empty falls back to the
+        single-repo :attr:`workspace`.
     :param git: Optional git worktree options. When set, the server
         creates a worktree for a new branch on the host and starts
         the runner in it; ``workspace`` is then interpreted as the
@@ -1341,6 +1355,7 @@ class SessionCreateRequest(BaseModel):
     host_type: Literal["external", "managed"] = "external"
     host_id: str | None = None
     workspace: str | None = None
+    workspaces: list[str] | None = None
     git: SessionGitOptions | None = None
     terminal_launch_args: list[str] | None = None
     model_override: str | None = None
@@ -1383,8 +1398,9 @@ class SessionCreateRequest(BaseModel):
 
         :returns: The validated instance.
         :raises ValueError: On ``"managed"`` + ``host_id``, a managed
-            workspace that isn't a valid repository URL, or an
-            external repository-URL workspace.
+            workspace that isn't a valid repository URL, ``workspace``
+            and ``workspaces`` both set, too many workspaces, or a
+            repository-URL / ``workspaces`` on an external host.
         """
         # Lazy import: schemas is imported by nearly every module, so
         # pulling the (FastAPI/click-importing) managed-hosts module in
@@ -1397,19 +1413,35 @@ class SessionCreateRequest(BaseModel):
                     "host_type 'managed' lets the server provision the host; "
                     "host_id must not be set"
                 )
-            if self.workspace is not None:
+            if self.workspace is not None and self.workspaces:
+                raise ValueError(
+                    "pass either 'workspace' (single repo) or 'workspaces' "
+                    "(multiple repos), not both"
+                )
+            if self.workspaces is not None and len(self.workspaces) > _MAX_MANAGED_WORKSPACES:
+                raise ValueError(
+                    f"'workspaces' takes at most {_MAX_MANAGED_WORKSPACES} repositories"
+                )
+            for candidate in (self.workspace, *(self.workspaces or ())):
+                if candidate is None:
+                    continue
                 try:
-                    parse_repo_workspace(self.workspace)
+                    parse_repo_workspace(candidate)
                 except ValueError as exc:
                     raise ValueError(
                         "host_type 'managed' takes a git repository URL "
-                        f"(optionally '#<branch>') as workspace: {exc}"
+                        f"(optionally '#<branch>') per workspace: {exc}"
                     ) from exc
-        elif self.workspace is not None and is_repo_workspace(self.workspace):
-            raise ValueError(
-                "a repository-URL workspace requires host_type 'managed' — "
-                "external hosts take an absolute path on the host"
-            )
+        else:
+            if self.workspaces:
+                raise ValueError(
+                    "'workspaces' (multi-repo clone) requires host_type 'managed'"
+                )
+            if self.workspace is not None and is_repo_workspace(self.workspace):
+                raise ValueError(
+                    "a repository-URL workspace requires host_type 'managed' — "
+                    "external hosts take an absolute path on the host"
+                )
         return self
 
 

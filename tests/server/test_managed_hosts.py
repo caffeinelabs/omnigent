@@ -1233,6 +1233,26 @@ def test_parse_repo_workspace_rejects_malformed(workspace: str, expected_fragmen
     assert expected_fragment in str(exc.value)
 
 
+def test_encode_decode_repo_workspaces_round_trips() -> None:
+    """Multiple repo workspaces survive the label encode → decode round trip."""
+    from omnigent.server.managed_hosts import encode_repo_workspaces, parse_repo_workspaces
+
+    raw = ["https://github.com/org/a", "https://github.com/org/b.git#dev"]
+    label = encode_repo_workspaces(raw)
+    parsed = parse_repo_workspaces(label)
+    assert [(p.repo_name, p.branch) for p in parsed] == [("a", None), ("b", "dev")]
+
+
+def test_parse_repo_workspaces_accepts_single_legacy_value() -> None:
+    """A label holding one bare workspace (pre-multi-repo) still decodes to one repo."""
+    from omnigent.server.managed_hosts import parse_repo_workspaces
+
+    parsed = parse_repo_workspaces("https://github.com/org/a#main")
+    assert len(parsed) == 1
+    assert parsed[0].repo_name == "a"
+    assert parsed[0].branch == "main"
+
+
 # ── GET /v1/info: managed_sandboxes_enabled ─────────────────
 
 
@@ -1495,7 +1515,13 @@ async def test_launch_without_host_config_supports_legacy_start_host_signature(
         )
 
     class _LegacySignatureLauncher(FakeSandboxLauncher):
-        """Overrides start_host with the pre-host_config explicit signature."""
+        """Overrides start_host with a pre-host_config explicit signature.
+
+        Deliberately omits ``host_config`` (the parameter under test) so a
+        regression that passed it unconditionally would ``TypeError`` here.
+        It DOES accept the always-supplied identity / ``extra_repos`` kwargs,
+        which the real launch path passes verbatim.
+        """
 
         def start_host(
             self,
@@ -1508,6 +1534,11 @@ async def test_launch_without_host_config_supports_legacy_start_host_signature(
             repo_url: str | None = None,
             repo_branch: str | None = None,
             repo_name: str | None = None,
+            extra_repos: object = (),
+            owner: str | None = None,
+            github_token: str | None = None,
+            github_login: str | None = None,
+            ssh_authorized_keys: object = None,
             on_stage: Callable[[str], None] | None = None,
         ) -> str:
             return super().start_host(
@@ -1519,6 +1550,11 @@ async def test_launch_without_host_config_supports_legacy_start_host_signature(
                 repo_url=repo_url,
                 repo_branch=repo_branch,
                 repo_name=repo_name,
+                extra_repos=extra_repos,
+                owner=owner,
+                github_token=github_token,
+                github_login=github_login,
+                ssh_authorized_keys=ssh_authorized_keys,
                 on_stage=on_stage,
             )
 
@@ -1803,6 +1839,11 @@ class _EntrypointFakeLauncher(FakeSandboxLauncher):
         repo_url: str | None = None,
         repo_branch: str | None = None,
         repo_name: str | None = None,
+        extra_repos: object = (),
+        owner: str | None = None,
+        github_token: str | None = None,
+        github_login: str | None = None,
+        ssh_authorized_keys: object = None,
         host_config: dict[str, object] | None = None,
         on_stage=None,
     ) -> str:

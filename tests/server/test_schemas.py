@@ -769,6 +769,73 @@ def test_session_create_external_rejects_repo_url_workspace() -> None:
         )
 
 
+def test_session_create_managed_accepts_multiple_workspaces() -> None:
+    """``host_type="managed"`` accepts a ``workspaces`` list of repo URLs."""
+    from omnigent.server.schemas import SessionCreateRequest
+
+    req = SessionCreateRequest(
+        agent_id="ag_x",
+        host_type="managed",
+        workspaces=[
+            "https://github.com/org/a",
+            "https://github.com/org/b.git#dev",
+        ],
+    )
+    assert req.workspaces == [
+        "https://github.com/org/a",
+        "https://github.com/org/b.git#dev",
+    ]
+
+
+def test_session_create_rejects_workspace_and_workspaces_together() -> None:
+    """``workspace`` and ``workspaces`` are mutually exclusive."""
+    from omnigent.server.schemas import SessionCreateRequest
+
+    with pytest.raises(ValidationError, match="not both"):
+        SessionCreateRequest(
+            agent_id="ag_x",
+            host_type="managed",
+            workspace="https://github.com/org/a",
+            workspaces=["https://github.com/org/b"],
+        )
+
+
+def test_session_create_rejects_too_many_workspaces() -> None:
+    """The multi-repo list is capped so init-container clone fan-out is bounded."""
+    from omnigent.server.schemas import SessionCreateRequest
+
+    with pytest.raises(ValidationError, match="at most"):
+        SessionCreateRequest(
+            agent_id="ag_x",
+            host_type="managed",
+            workspaces=[f"https://github.com/org/r{i}" for i in range(11)],
+        )
+
+
+def test_session_create_managed_rejects_malformed_in_workspaces() -> None:
+    """A malformed entry in ``workspaces`` 422s at validation."""
+    from omnigent.server.schemas import SessionCreateRequest
+
+    with pytest.raises(ValidationError, match="per workspace"):
+        SessionCreateRequest(
+            agent_id="ag_x",
+            host_type="managed",
+            workspaces=["https://github.com/org/a", "not-a-url"],
+        )
+
+
+def test_session_create_external_rejects_workspaces() -> None:
+    """``workspaces`` (multi-repo clone) requires the managed host type."""
+    from omnigent.server.schemas import SessionCreateRequest
+
+    with pytest.raises(ValidationError, match="requires host_type 'managed'"):
+        SessionCreateRequest(
+            agent_id="ag_x",
+            host_id="host_abc",
+            workspaces=["https://github.com/org/a"],
+        )
+
+
 @pytest.mark.parametrize("status", ["idle", "running", "waiting", "failed"])
 def test_session_response_status_accepts_canonical_set(status: str) -> None:
     """

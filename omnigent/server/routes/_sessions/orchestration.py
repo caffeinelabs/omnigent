@@ -11,7 +11,7 @@ import asyncio
 import json
 import secrets
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from typing import Any, Literal, cast
 
 import httpx
@@ -2163,6 +2163,7 @@ async def _run_managed_launch(
     owner: str,
     sandbox_config: ManagedSandboxConfig,
     repo: RepoWorkspace | None,
+    extra_repos: Sequence[RepoWorkspace] = (),
     tracker: ManagedLaunchTracker,
     conversation_store: ConversationStore,
     host_store: HostStore,
@@ -2207,6 +2208,8 @@ async def _run_managed_launch(
     :param sandbox_config: The deployment's sandbox config.
     :param repo: Parsed repository-URL workspace to clone inside the
         sandbox, or ``None`` for an empty workspace.
+    :param extra_repos: Additional repositories cloned side by side with
+        *repo* under the workspace root; empty for a single-repo workspace.
     :param tracker: The app's :class:`ManagedLaunchTracker`; this
         session's entry was registered by the caller.
     :param conversation_store: Store holding the session row.
@@ -2230,6 +2233,7 @@ async def _run_managed_launch(
         owner=owner,
         sandbox_config=sandbox_config,
         repo=repo,
+        extra_repos=extra_repos,
         tracker=tracker,
         host_store=host_store,
         relaunch_host=relaunch_host,
@@ -2551,19 +2555,22 @@ def _kick_managed_relaunch(
     :param host_store: Persistent host registrations.
     :param app_state: ``request.app.state`` — supplies the registries.
     """
-    from omnigent.server.managed_hosts import MANAGED_REPO_LABEL_KEY, parse_repo_workspace
+    from omnigent.server.managed_hosts import MANAGED_REPO_LABEL_KEY, parse_repo_workspaces
 
-    # Re-clone the repository the session was created with so the
+    # Re-clone the repositories the session was created with so the
     # fresh generation's workspace matches the create-time state.
-    # The label holds the raw create-time value, already validated
+    # The label holds the raw create-time value(s), already validated
     # by the create's parse — a parse failure here means the label
     # was tampered with, and the relaunch proceeds with an empty
     # workspace rather than dying.
     repo = None
+    extra_repos: list[RepoWorkspace] = []
     raw_repo = conv.labels.get(MANAGED_REPO_LABEL_KEY)
     if raw_repo is not None:
         try:
-            repo = parse_repo_workspace(raw_repo)
+            parsed = parse_repo_workspaces(raw_repo)
+            repo = parsed[0] if parsed else None
+            extra_repos = parsed[1:]
         except ValueError:
             _logger.warning(
                 "Session %s has an unparseable %s label (%r); relaunching with an empty workspace",
@@ -2586,6 +2593,7 @@ def _kick_managed_relaunch(
             owner=host.user_id,
             sandbox_config=sandbox_config,
             repo=repo,
+            extra_repos=extra_repos,
             tracker=tracker,
             conversation_store=conversation_store,
             host_store=host_store,

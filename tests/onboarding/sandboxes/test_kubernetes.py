@@ -417,6 +417,26 @@ def test_render_workspace_prep_command(
     assert ("--branch release-1.2 --single-branch" in script) is expect_branch
 
 
+def test_render_workspace_prep_command_clones_extra_repos_as_siblings() -> None:
+    """Each extra repo is cloned into ``<workspace>/<repo_name>`` beside the primary."""
+    from omnigent.onboarding.sandboxes.types import RepoCheckout
+
+    command = k8s._render_workspace_prep_command(
+        "/ws",
+        "/ws/a",
+        "https://x/a.git",
+        None,
+        extra_repos=[
+            RepoCheckout(url="https://x/b.git", branch="dev", repo_name="b"),
+            RepoCheckout(url="https://x/c.git", branch=None, repo_name="c"),
+        ],
+    )
+    script = command[2]
+    assert "git clone -- https://x/a.git /ws/a" in script
+    assert "git clone --branch dev --single-branch -- https://x/b.git /ws/b" in script
+    assert "git clone -- https://x/c.git /ws/c" in script
+
+
 def test_new_pod_name_and_token_secret_name() -> None:
     """Pod names are DNS-label-safe and the token Secret is the pod name + suffix."""
     name = k8s._new_pod_name("Managed-ABC_123!")
