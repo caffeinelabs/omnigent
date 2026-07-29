@@ -4125,6 +4125,7 @@ async def _provision_managed_sandbox(
                 host_store=host_store,
                 repo=repo,
                 extra_repos=extra_repos,
+                session_id=session_id,
                 github_identity=github_identity,
                 on_stage=_on_stage,
             )
@@ -4134,6 +4135,7 @@ async def _provision_managed_sandbox(
             host_store=host_store,
             repo=repo,
             extra_repos=extra_repos,
+            session_id=session_id,
             github_identity=github_identity,
             on_stage=_on_stage,
         )

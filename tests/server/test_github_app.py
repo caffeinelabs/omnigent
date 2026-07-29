@@ -228,3 +228,30 @@ async def test_list_pulls_non_200_raises() -> None:
 
     with pytest.raises(GitHubAppError):
         await _client(handler).list_pulls("ghu_bad", "caffeinelabs/app")
+
+
+@pytest.mark.asyncio
+async def test_list_pull_commit_messages_extracts_messages() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/caffeinelabs/app/pulls/7/commits"
+        return httpx.Response(
+            200,
+            json=[
+                {"commit": {"message": "feat: x\n\nOmnigent-Session: conv_abc"}},
+                {"commit": {"message": "fix: y"}},
+                {"no_commit": True},
+            ],
+        )
+
+    msgs = await _client(handler).list_pull_commit_messages("ghu_x", "caffeinelabs/app", 7)
+    assert msgs == ["feat: x\n\nOmnigent-Session: conv_abc", "fix: y"]
+    assert any("Omnigent-Session: conv_abc" in m for m in msgs)
+
+
+@pytest.mark.asyncio
+async def test_list_pull_commit_messages_non_200_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"message": "Not Found"})
+
+    with pytest.raises(GitHubAppError):
+        await _client(handler).list_pull_commit_messages("ghu_bad", "caffeinelabs/app", 9)

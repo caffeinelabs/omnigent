@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 import secrets
 import shlex
 from abc import ABC, abstractmethod
@@ -91,6 +92,10 @@ def host_image_wheel_install_command(remote_tgz_path: str) -> str:
 # matching the host image's credential helper default.
 _GIT_TOKEN_USERNAME = "x-access-token"
 
+# Conversation/session ids are opaque tokens; guard the charset since the id
+# is interpolated into the commit-msg hook script text.
+_SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
+
 
 def _write_file_command(home: str, rel_path: str, content: str, *, mode: str) -> str:
     """Build a shell command that writes *content* to ``<home>/<rel_path>``.
@@ -121,6 +126,7 @@ def github_sandbox_setup_commands(
     github_login: str | None,
     ssh_authorized_keys: Sequence[str] | None,
     github_token_env: str | None = None,
+    session_id: str | None = None,
 ) -> list[str]:
     """Build the in-sandbox commands that authenticate the connecting user.
 
@@ -192,6 +198,23 @@ def github_sandbox_setup_commands(
         # agent's later git ops without prefixing every command with the
         # token, and does not depend on the launcher's clone implementation.
         commands.append("git config --global credential.helper store")
+
+    # Stamp an ``Omnigent-Session`` trailer onto every commit made in the
+    # sandbox via a global ``commit-msg`` hook, so PRs opened during this
+    # session can be identified server-side (their commits carry the trailer)
+    # without reverse-inferring from GitHub. Session id is charset-guarded
+    # since it is interpolated into the hook script.
+    if session_id and _SESSION_ID_RE.match(session_id):
+        hook_rel = ".omnigent/git-hooks/commit-msg"
+        marker = f"Omnigent-Session: {session_id}"
+        hook_script = (
+            "#!/bin/sh\n"
+            f"grep -qF '{marker}' \"$1\" 2>/dev/null || "
+            f"printf '\\n{marker}\\n' >> \"$1\"\n"
+        )
+        commands.append(_write_file_command(home, hook_rel, hook_script, mode="755"))
+        hooks_dir = f"{home}/.omnigent/git-hooks"
+        commands.append(f"git config --global core.hooksPath {shlex.quote(hooks_dir)}")
 
     keys = [k.strip() for k in (ssh_authorized_keys or ()) if k.strip()]
     if keys:
@@ -682,6 +705,7 @@ class SandboxLauncher(ABC):
         ssh_authorized_keys: Sequence[str] | None = None,
         host_config: dict[str, object] | None = None,
         on_stage: Callable[[str], None] | None = None,
+        session_id: str | None = None,
     ) -> str:
         """
         Start ``omnigent host`` in the sandbox and return the workspace path.
@@ -770,6 +794,7 @@ class SandboxLauncher(ABC):
             github_token=github_token,
             github_login=github_login,
             ssh_authorized_keys=ssh_authorized_keys,
+            session_id=session_id,
         ):
             self.run(sandbox_id, setup_cmd, check=False)
         workspace_root = workspace
