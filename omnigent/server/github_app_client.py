@@ -223,17 +223,20 @@ class GitHubAppClient:
         return branches
 
     async def list_pulls(self, access_token: str, full_name: str) -> list[dict[str, object]]:
-        """List OPEN pull requests for ``full_name`` (``owner/repo``), newest first.
+        """List pull requests for ``full_name`` (``owner/repo``), newest first.
 
-        Reads ``/repos/{full_name}/pulls?state=open`` (up to
-        :data:`_PULLS_MAX_PAGES` pages) and returns a compact projection for
-        the "PRs opened this session" panel. Caller-side filtering (by author
-        and creation time) scopes the raw list to a session.
+        Reads ``/repos/{full_name}/pulls?state=all`` (up to
+        :data:`_PULLS_MAX_PAGES` pages) so OPEN, CLOSED, and MERGED PRs are all
+        returned — the "PRs opened this session" panel shows anything created
+        during the session regardless of its current state. Caller-side
+        filtering (by author and creation time) scopes the raw list to a
+        session.
 
         :param access_token: A valid user access token.
         :param full_name: The repository's ``owner/name``.
-        :returns: PRs as ``{number, title, html_url, head_ref, draft,
-            author_login, created_at}``, newest first.
+        :returns: PRs as ``{number, title, html_url, head_ref, draft, state,
+            merged, author_login, created_at}``, newest first. ``state`` is
+            ``"open"``/``"closed"``; ``merged`` is ``True`` for a merged PR.
         :raises GitHubAppError: When the API call fails.
         """
         headers = {
@@ -247,7 +250,7 @@ class GitHubAppClient:
                 resp = await client.get(
                     url,
                     params={
-                        "state": "open",
+                        "state": "all",
                         "sort": "created",
                         "direction": "desc",
                         "per_page": _PULLS_PER_PAGE,
@@ -274,6 +277,8 @@ class GitHubAppClient:
                             "html_url": entry.get("html_url"),
                             "head_ref": head.get("ref"),
                             "draft": bool(entry.get("draft")),
+                            "state": entry.get("state"),
+                            "merged": entry.get("merged_at") is not None,
                             "author_login": user.get("login"),
                             "created_at": entry.get("created_at"),
                         }
