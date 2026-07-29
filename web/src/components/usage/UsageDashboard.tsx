@@ -8,7 +8,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { CoinsIcon, LogInIcon, LogOutIcon } from "lucide-react";
+import { ActivityIcon, CoinsIcon, ZapIcon } from "lucide-react";
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
@@ -124,28 +124,31 @@ export function UsageDashboard({ canViewOthers }: { canViewOthers: boolean }) {
         <>
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <KpiTile
-              label="Total cost"
+              label="Sessions"
+              value={summary.total_sessions.toLocaleString()}
+              icon={<ActivityIcon className="size-4" />}
+            />
+            <KpiTile
+              label="Total tokens"
+              value={formatTokensOrDash(
+                summary.total_input_tokens + summary.total_output_tokens,
+                summary.total_cost_usd,
+              )}
+              icon={<ZapIcon className="size-4" />}
+            />
+            <KpiTile
+              label="Est. cost"
               value={formatUsd(summary.total_cost_usd)}
               icon={<CoinsIcon className="size-4" />}
-            />
-            <KpiTile
-              label="Input tokens"
-              value={formatTokensOrDash(summary.total_input_tokens, summary.total_cost_usd)}
-              icon={<LogInIcon className="size-4" />}
-            />
-            <KpiTile
-              label="Output tokens"
-              value={formatTokensOrDash(summary.total_output_tokens, summary.total_cost_usd)}
-              icon={<LogOutIcon className="size-4" />}
             />
           </div>
 
           {summary.buckets.length > 0 && (
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Spend over time</CardTitle>
+                <CardTitle className="text-base">Token usage over time</CardTitle>
                 <CardDescription>
-                  USD cost per {period === "today" ? "hour" : "day"}.
+                  USD cost per {period === "today" ? "hour" : "day"} (hover for token counts).
                 </CardDescription>
               </CardHeader>
               <CardContent>
@@ -211,9 +214,10 @@ function GroupsTable({
         <thead className="bg-muted/40 text-left text-xs uppercase text-muted-foreground">
           <tr>
             <th className="px-3 py-2 font-medium">{groupByLabel(groupBy)}</th>
+            <th className="px-3 py-2 text-right font-medium">Sessions</th>
             <th className="px-3 py-2 text-right font-medium">Input</th>
             <th className="px-3 py-2 text-right font-medium">Output</th>
-            <th className="px-3 py-2 text-right font-medium">Cost</th>
+            <th className="px-3 py-2 text-right font-medium">Est. cost</th>
           </tr>
         </thead>
         <tbody>
@@ -223,7 +227,7 @@ function GroupsTable({
               <tr key={row.group_key} className="border-t border-border">
                 <td className="px-3 py-2 align-middle">
                   {/* A thin share-of-total bar behind the label reads the
-                      cost distribution at a glance without a second chart. */}
+                      token distribution at a glance without a second chart. */}
                   <div className="flex flex-col gap-1">
                     <span className="font-medium">{row.group_key}</span>
                     <span
@@ -232,6 +236,9 @@ function GroupsTable({
                       style={{ width: `${Math.max(share, share > 0 ? 2 : 0)}%` }}
                     />
                   </div>
+                </td>
+                <td className="px-3 py-2 text-right align-middle tabular-nums text-muted-foreground">
+                  {row.session_count.toLocaleString()}
                 </td>
                 <td className="px-3 py-2 text-right align-middle tabular-nums text-muted-foreground">
                   {formatTokensOrDash(row.input_tokens, row.total_cost_usd)}

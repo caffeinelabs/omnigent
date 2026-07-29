@@ -15,6 +15,8 @@ export interface UsageGroupEntry {
   input_tokens: number;
   output_tokens: number;
   total_cost_usd: number;
+  /** Distinct conversations that touched this group. */
+  session_count: number;
 }
 
 /** One point in the day/hour spend time series. */
@@ -36,6 +38,7 @@ export interface UsageSummary {
   total_input_tokens: number;
   total_output_tokens: number;
   total_cost_usd: number;
+  total_sessions: number;
   groups: UsageGroupEntry[];
   buckets: UsageBucketEntry[];
 }

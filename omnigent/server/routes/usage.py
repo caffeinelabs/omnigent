@@ -345,7 +345,7 @@ def _aggregate(
     group_by: str,
     by_hour: bool,
     harness_resolver: _HarnessResolver,
-) -> tuple[int, int, float, list[UsageGroupEntry], list[UsageBucketEntry]]:
+) -> tuple[int, int, float, int, list[UsageGroupEntry], list[UsageBucketEntry]]:
     """Roll usage records up into totals, per-group rows, and a time series.
 
     Cost/token grouping keys come from the requested dimension:
@@ -366,14 +366,16 @@ def _aggregate(
         / ``"model"``.
     :param by_hour: ``True`` to bucket the time series by hour, else by day.
     :param harness_resolver: Per-request harness resolver / cache.
-    :returns: ``(total_input, total_output, total_cost, groups, buckets)``.
+    :returns: ``(total_input, total_output, total_cost, total_sessions, groups, buckets)``.
     """
     total_input = 0
     total_output = 0
     total_cost = 0.0
+    total_sessions = 0
     group_in: dict[str, int] = {}
     group_out: dict[str, int] = {}
     group_cost: dict[str, float] = {}
+    group_sessions: dict[str, int] = {}
     bucket_in: dict[int, int] = {}
     bucket_out: dict[int, int] = {}
     bucket_cost: dict[int, float] = {}
@@ -385,6 +387,7 @@ def _aggregate(
         total_input += r_in
         total_output += r_out
         total_cost += r_cost
+        total_sessions += 1
         bucket = _bucket_start(record.created_at, by_hour)
         bucket_in[bucket] = bucket_in.get(bucket, 0) + r_in
         bucket_out[bucket] = bucket_out.get(bucket, 0) + r_out
@@ -395,6 +398,7 @@ def _aggregate(
             group_in[key] = group_in.get(key, 0) + r_in
             group_out[key] = group_out.get(key, 0) + r_out
             group_cost[key] = group_cost.get(key, 0.0) + r_cost
+            group_sessions[key] = group_sessions.get(key, 0) + 1
             continue
 
         # provider / model: split via the per-model breakdown so a session
@@ -407,6 +411,7 @@ def _aggregate(
             group_in[key] = group_in.get(key, 0) + r_in
             group_out[key] = group_out.get(key, 0) + r_out
             group_cost[key] = group_cost.get(key, 0.0) + r_cost
+            group_sessions[key] = group_sessions.get(key, 0) + 1
             continue
         for model_id, model_bucket in by_model.items():
             if not isinstance(model_bucket, dict):
@@ -415,6 +420,7 @@ def _aggregate(
             group_in[key] = group_in.get(key, 0) + _as_int(model_bucket.get(_INPUT_KEY))
             group_out[key] = group_out.get(key, 0) + _as_int(model_bucket.get(_OUTPUT_KEY))
             group_cost[key] = group_cost.get(key, 0.0) + _as_float(model_bucket.get(_COST_KEY))
+            group_sessions[key] = group_sessions.get(key, 0) + 1
 
     groups = [
         UsageGroupEntry(
@@ -422,6 +428,7 @@ def _aggregate(
             input_tokens=group_in.get(key, 0),
             output_tokens=group_out.get(key, 0),
             total_cost_usd=group_cost.get(key, 0.0),
+            session_count=group_sessions.get(key, 0),
         )
         for key in group_cost
     ]
@@ -437,7 +444,7 @@ def _aggregate(
         )
         for start in sorted(bucket_cost)
     ]
-    return total_input, total_output, total_cost, groups, buckets
+    return total_input, total_output, total_cost, total_sessions, groups, buckets
 
 
 def create_usage_router(
@@ -541,7 +548,7 @@ def create_usage_router(
         )
 
         harness_resolver = _HarnessResolver()
-        total_input, total_output, total_cost, groups, buckets = _aggregate(
+        total_input, total_output, total_cost, total_sessions, groups, buckets = _aggregate(
             records,
             group_by=group_by,
             by_hour=by_hour,
@@ -559,6 +566,7 @@ def create_usage_router(
             total_input_tokens=total_input,
             total_output_tokens=total_output,
             total_cost_usd=total_cost,
+            total_sessions=total_sessions,
             groups=groups,
             buckets=buckets,
         )

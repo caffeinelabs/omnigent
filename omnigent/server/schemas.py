@@ -2448,12 +2448,16 @@ class UsageGroupEntry(BaseModel):
     :param output_tokens: Summed output (completion) tokens, e.g. ``34000``.
     :param total_cost_usd: Summed USD spend attributed to this group, e.g.
         ``4.21``. ``0.0`` when no priced turns landed in this group.
+    :param session_count: Number of distinct conversations that contributed
+        to this group. A session that used multiple models/providers counts
+        once toward each group it touched.
     """
 
     group_key: str
     input_tokens: int = 0
     output_tokens: int = 0
     total_cost_usd: float = 0.0
+    session_count: int = 0
 
 
 class UsageBucketEntry(BaseModel):
@@ -2504,6 +2508,7 @@ class UsageSummaryResponse(BaseModel):
     :param total_output_tokens: Total output tokens across the window, e.g.
         ``96000``.
     :param total_cost_usd: Total USD spend across the window, e.g. ``18.74``.
+    :param total_sessions: Total number of conversation records in the window.
     :param groups: Per-group rollups for the requested dimension, ordered by
         ``total_cost_usd`` descending (ties broken by ``group_key``).
     :param buckets: Per-period time series (hour buckets for ``"today"``,
@@ -2518,6 +2523,7 @@ class UsageSummaryResponse(BaseModel):
     total_input_tokens: int = 0
     total_output_tokens: int = 0
     total_cost_usd: float = 0.0
+    total_sessions: int = 0
     groups: list[UsageGroupEntry] = Field(default_factory=list)
     buckets: list[UsageBucketEntry] = Field(default_factory=list)
 
