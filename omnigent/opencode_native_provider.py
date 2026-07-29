@@ -316,7 +316,9 @@ def resolve_env_gateway(*, model_id: str | None = None) -> OpenCodeGatewayResolu
     base_url = os.environ.get(ENV_GATEWAY_BASE_URL, "").strip()
     if not base_url:
         return None
-    provider_id = os.environ.get(ENV_GATEWAY_PROVIDER_ID, "").strip() or _DEFAULT_ENV_GATEWAY_PROVIDER_ID
+    provider_id = (
+        os.environ.get(ENV_GATEWAY_PROVIDER_ID, "").strip() or _DEFAULT_ENV_GATEWAY_PROVIDER_ID
+    )
     model = (model_id or "").strip() or os.environ.get(ENV_GATEWAY_MODEL, "").strip()
     # model_id may already be qualified as "<provider_id>/<model>" (the runner
     # sets model_override to gateway.qualified_model on relaunch) — strip it so

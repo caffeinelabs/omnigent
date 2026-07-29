@@ -1434,9 +1434,7 @@ class SessionCreateRequest(BaseModel):
                     ) from exc
         else:
             if self.workspaces:
-                raise ValueError(
-                    "'workspaces' (multi-repo clone) requires host_type 'managed'"
-                )
+                raise ValueError("'workspaces' (multi-repo clone) requires host_type 'managed'")
             if self.workspace is not None and is_repo_workspace(self.workspace):
                 raise ValueError(
                     "a repository-URL workspace requires host_type 'managed' — "

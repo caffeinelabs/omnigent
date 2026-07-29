@@ -163,9 +163,7 @@ def create_integrations_github_router(
             branches = await api.list_branches(token, f"{owner}/{repo}")
         except GitHubAppError as exc:
             _logger.warning("GitHub branch list failed for %s/%s: %s", owner, repo, exc)
-            raise HTTPException(
-                status_code=502, detail="Failed to list GitHub branches"
-            ) from exc
+            raise HTTPException(status_code=502, detail="Failed to list GitHub branches") from exc
         return {"connected": True, "branches": branches}
 
     @router.get("/integrations/github/connect")
