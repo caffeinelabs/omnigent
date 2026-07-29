@@ -14,6 +14,8 @@ import logging
 import re
 import secrets
 import time
+from datetime import datetime
+from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
 import jwt
@@ -31,6 +33,9 @@ from omnigent.server.github_identity import resolve_access_token
 from omnigent.server.github_store import GithubConnectionStore
 from omnigent.server.routes._auth_helpers import require_user
 
+if TYPE_CHECKING:
+    from omnigent.stores.conversation_store import ConversationStore
+
 _logger = logging.getLogger(__name__)
 
 # The OAuth state JWT is short-lived: it only has to survive the user's
@@ -45,6 +50,35 @@ _DEFAULT_RETURN_TO = "/settings"
 # GitHub owner / repo name charset, enforced before either reaches the
 # branches URL so a caller can never smuggle a path or query.
 _GITHUB_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
+
+# Extract ``owner/repo`` from a github.com clone URL (https or scp-style),
+# stripping any trailing ``.git``. Returns None for non-github or malformed URLs.
+_GITHUB_HTTPS_RE = re.compile(r"^https://github\.com/([^/\s]+)/([^/\s#]+?)(?:\.git)?/?$")
+_GITHUB_SSH_RE = re.compile(r"^git@github\.com:([^/\s]+)/([^/\s#]+?)(?:\.git)?/?$")
+
+
+def _repo_full_name(url: str) -> str | None:
+    """Return the ``owner/repo`` of a github.com clone URL, or ``None``.
+
+    :param url: A clone URL (fragment already stripped), https or scp-style.
+    :returns: ``"owner/repo"`` when it is a github.com URL, else ``None``.
+    """
+    m = _GITHUB_HTTPS_RE.match(url) or _GITHUB_SSH_RE.match(url)
+    return f"{m.group(1)}/{m.group(2)}" if m else None
+
+
+def _iso_to_epoch(value: object) -> int | None:
+    """Parse an ISO-8601 timestamp (e.g. GitHub ``created_at``) to epoch seconds.
+
+    :param value: The timestamp string, or anything non-string.
+    :returns: Epoch seconds, or ``None`` when unparseable.
+    """
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
+    except ValueError:
+        return None
 
 
 def _sanitize_return_to(raw: str | None) -> str:
@@ -76,6 +110,7 @@ def create_integrations_github_router(
     *,
     auth_provider: AuthProvider | None = None,
     client: GitHubAppClient | None = None,
+    conversation_store: ConversationStore | None = None,
 ) -> APIRouter:
     """Build the GitHub App integration router.
 
@@ -85,6 +120,9 @@ def create_integrations_github_router(
         ``None`` when auth is disabled (single-user/local).
     :param client: GitHub App client. Defaults to one built from
         *config*; injectable for tests.
+    :param conversation_store: Session store, used to resolve a session's
+        cloned repos for the "PRs opened this session" endpoint. When
+        ``None`` that endpoint returns an empty list.
     :returns: A FastAPI router with the integration endpoints.
     """
     router = APIRouter()
@@ -165,6 +203,70 @@ def create_integrations_github_router(
             _logger.warning("GitHub branch list failed for %s/%s: %s", owner, repo, exc)
             raise HTTPException(status_code=502, detail="Failed to list GitHub branches") from exc
         return {"connected": True, "branches": branches}
+
+    @router.get("/integrations/github/sessions/{session_id}/pull-requests")
+    async def session_pull_requests(request: Request, session_id: str) -> dict[str, object]:
+        """List open PRs opened during *session_id*, across its cloned repos.
+
+        Resolves the session's repositories from its managed-repo label,
+        then lists each repo's open PRs authored by the caller and created
+        at/after the session started — i.e. the PRs the agent opened this
+        session (multiple per repo supported). ``connected: false`` when the
+        caller hasn't linked GitHub; an empty list for a non-managed session
+        or one with no cloned repos.
+        """
+        user_id = _current_user(request)
+        if conversation_store is None:
+            return {"connected": True, "pulls": []}
+        conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
+        if conv is None:
+            raise HTTPException(status_code=404, detail="session not found")
+
+        from omnigent.server.managed_hosts import (
+            MANAGED_REPO_LABEL_KEY,
+            parse_repo_workspaces,
+        )
+
+        raw_repos = conv.labels.get(MANAGED_REPO_LABEL_KEY)
+        if not raw_repos:
+            return {"connected": True, "pulls": []}
+
+        connection = await asyncio.to_thread(store.get, user_id)
+        token = await resolve_access_token(user_id, store=store, client=api)
+        if token is None:
+            return {"connected": False, "pulls": []}
+        login = connection.github_login if connection is not None else None
+
+        try:
+            repos = parse_repo_workspaces(raw_repos)
+        except ValueError:
+            repos = []
+        full_names: list[str] = []
+        for repo in repos:
+            full_name = _repo_full_name(repo.url)
+            if full_name and full_name not in full_names:
+                full_names.append(full_name)
+
+        since = conv.created_at
+        pulls: list[dict[str, object]] = []
+        for full_name in full_names:
+            try:
+                repo_pulls = await api.list_pulls(token, full_name)
+            except GitHubAppError as exc:
+                _logger.warning("session PRs: list_pulls failed for %s: %s", full_name, exc)
+                continue
+            for pr in repo_pulls:
+                # Scope to this session: authored by the caller and opened
+                # at/after the session began.
+                if login is not None and pr.get("author_login") != login:
+                    continue
+                created = _iso_to_epoch(pr.get("created_at"))
+                if created is not None and created < since:
+                    continue
+                pulls.append({**pr, "repo": full_name})
+
+        pulls.sort(key=lambda p: str(p.get("created_at") or ""), reverse=True)
+        return {"connected": True, "pulls": pulls}
 
     @router.get("/integrations/github/connect")
     async def connect(request: Request, return_to: str | None = None) -> RedirectResponse:
