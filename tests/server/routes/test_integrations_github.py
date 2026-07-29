@@ -65,15 +65,29 @@ class _FakeClient:
         self.pull_calls: list[str] = getattr(self, "pull_calls", [])
         self.pull_calls.append(full_name)
         return [
-            # Caller's PR, opened after session start → kept.
+            # Caller's open PR, opened after session start → kept.
             {
                 "number": 1,
                 "title": "feat",
                 "html_url": f"https://github.com/{full_name}/pull/1",
                 "head_ref": "feat",
                 "draft": False,
+                "state": "open",
+                "merged": False,
                 "author_login": "octocat",
                 "created_at": "2026-07-29T01:00:00Z",
+            },
+            # Caller's MERGED PR from this session → still kept (any state).
+            {
+                "number": 4,
+                "title": "merged one",
+                "html_url": f"https://github.com/{full_name}/pull/4",
+                "head_ref": "merged-one",
+                "draft": False,
+                "state": "closed",
+                "merged": True,
+                "author_login": "octocat",
+                "created_at": "2026-07-29T01:30:00Z",
             },
             # Caller's PR, but opened BEFORE the session started → filtered out.
             {
@@ -82,6 +96,8 @@ class _FakeClient:
                 "html_url": f"https://github.com/{full_name}/pull/2",
                 "head_ref": "old",
                 "draft": False,
+                "state": "closed",
+                "merged": False,
                 "author_login": "octocat",
                 "created_at": "2026-07-28T00:00:00Z",
             },
@@ -92,6 +108,8 @@ class _FakeClient:
                 "html_url": f"https://github.com/{full_name}/pull/3",
                 "head_ref": "theirs",
                 "draft": False,
+                "state": "open",
+                "merged": False,
                 "author_login": "someone-else",
                 "created_at": "2026-07-29T02:00:00Z",
             },
@@ -354,8 +372,11 @@ def test_session_pulls_scopes_to_author_and_session_start(db_uri: str) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["connected"] is True
-    # Only PR #1 survives: authored by the caller AND opened after session start.
-    assert [p["number"] for p in body["pulls"]] == [1]
+    # PRs #4 (merged) and #1 (open) survive: authored by the caller AND opened
+    # after session start; the pre-session (#2) and other-author (#3) are
+    # filtered. Merged/closed PRs are kept — newest first.
+    assert [p["number"] for p in body["pulls"]] == [4, 1]
+    assert body["pulls"][0]["merged"] is True
     assert body["pulls"][0]["repo"] == "caffeinelabs/app"
     assert client.pull_calls == ["caffeinelabs/app"]
 

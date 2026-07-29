@@ -113,6 +113,10 @@ export interface GithubSessionPull {
   head_ref: string | null;
   /** Whether the PR is a draft. */
   draft: boolean;
+  /** ``"open"`` or ``"closed"``, or null. */
+  state: string | null;
+  /** Whether the PR was merged (a merged PR is also ``state: "closed"``). */
+  merged: boolean;
   /** Login of the PR author, or null. */
   author_login: string | null;
   /** ISO-8601 creation time, or null (list is newest-first). */

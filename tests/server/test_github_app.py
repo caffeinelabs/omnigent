@@ -182,7 +182,8 @@ async def test_list_pulls_projects_fields_and_stops_on_short_page() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         calls.append(request.url.path)
         assert request.url.path == "/repos/caffeinelabs/app/pulls"
-        assert request.url.params.get("state") == "open"
+        # All states so merged/closed PRs surface too.
+        assert request.url.params.get("state") == "all"
         return httpx.Response(
             200,
             json=[
@@ -193,6 +194,8 @@ async def test_list_pulls_projects_fields_and_stops_on_short_page() -> None:
                     "head": {"ref": "feat-thing"},
                     "user": {"login": "octocat"},
                     "draft": False,
+                    "state": "closed",
+                    "merged_at": "2026-07-29T02:00:00Z",
                     "created_at": "2026-07-29T00:00:00Z",
                     "extra": "ignored",
                 },
@@ -202,6 +205,7 @@ async def test_list_pulls_projects_fields_and_stops_on_short_page() -> None:
 
     pulls = await _client(handler).list_pulls("ghu_x", "caffeinelabs/app")
     assert calls == ["/repos/caffeinelabs/app/pulls"]
+    # A merged PR: state closed + merged True, and it is still returned.
     assert pulls == [
         {
             "number": 7,
@@ -209,6 +213,8 @@ async def test_list_pulls_projects_fields_and_stops_on_short_page() -> None:
             "html_url": "https://github.com/caffeinelabs/app/pull/7",
             "head_ref": "feat-thing",
             "draft": False,
+            "state": "closed",
+            "merged": True,
             "author_login": "octocat",
             "created_at": "2026-07-29T00:00:00Z",
         }

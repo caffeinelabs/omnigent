@@ -38,8 +38,22 @@ describe("SessionPullRequests", () => {
           html_url: "https://github.com/caffeinelabs/app/pull/12",
           head_ref: "feat-thing",
           draft: false,
+          state: "open",
+          merged: false,
           author_login: "octocat",
           created_at: "2026-07-29T01:00:00Z",
+        },
+        {
+          repo: "caffeinelabs/app",
+          number: 9,
+          title: "chore: merged thing",
+          html_url: "https://github.com/caffeinelabs/app/pull/9",
+          head_ref: "merged-thing",
+          draft: false,
+          state: "closed",
+          merged: true,
+          author_login: "octocat",
+          created_at: "2026-07-29T00:30:00Z",
         },
       ],
     };
@@ -50,6 +64,10 @@ describe("SessionPullRequests", () => {
     const link = await screen.findByRole("link", { name: /feat: add thing/ });
     expect(link).toHaveAttribute("href", "https://github.com/caffeinelabs/app/pull/12");
     expect(screen.getByText("caffeinelabs/app#12")).toBeInTheDocument();
+    // Merged/closed PRs are shown too, with the right status badge.
+    expect(screen.getByText("caffeinelabs/app#9")).toBeInTheDocument();
+    expect(screen.getByText("merged")).toBeInTheDocument();
+    expect(screen.getByText("open")).toBeInTheDocument();
   });
 
   it("renders nothing when there are no PRs", async () => {
