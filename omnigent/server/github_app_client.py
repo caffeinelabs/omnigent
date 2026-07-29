@@ -47,6 +47,9 @@ _PULLS_PER_PAGE = 100
 # One page of open PRs, newest first, is plenty for "PRs opened this session".
 _PULLS_MAX_PAGES = 2
 
+_REPO_PULL_COMMITS_ENDPOINT = "https://api.github.com/repos/{full_name}/pulls/{number}/commits"
+_PULL_COMMITS_PER_PAGE = 100
+
 _HTTP_TIMEOUT_S = 15.0
 
 
@@ -286,6 +289,45 @@ class GitHubAppClient:
                 if len(batch) < _PULLS_PER_PAGE:
                     break
         return pulls
+
+    async def list_pull_commit_messages(
+        self, access_token: str, full_name: str, number: int
+    ) -> list[str]:
+        """Return the commit messages of PR ``number`` in ``full_name``.
+
+        Used to confirm a PR belongs to a session by looking for the
+        ``Omnigent-Session`` trailer the sandbox stamps on its commits. Reads
+        the first page (a PR's commit count is small in practice).
+
+        :param access_token: A valid user access token.
+        :param full_name: The repository's ``owner/name``.
+        :param number: The pull request number.
+        :returns: Commit messages (possibly empty).
+        :raises GitHubAppError: When the API call fails.
+        """
+        url = _REPO_PULL_COMMITS_ENDPOINT.format(full_name=full_name, number=number)
+        async with self._http_client() as client:
+            resp = await client.get(
+                url,
+                params={"per_page": _PULL_COMMITS_PER_PAGE},
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/vnd.github+json",
+                },
+            )
+        if resp.status_code != 200:
+            raise GitHubAppError(
+                f"GitHub /repos/{full_name}/pulls/{number}/commits returned {resp.status_code}"
+            )
+        batch = resp.json()
+        if not isinstance(batch, list):
+            return []
+        messages: list[str] = []
+        for entry in batch:
+            commit = entry.get("commit") if isinstance(entry, dict) else None
+            if isinstance(commit, dict) and isinstance(commit.get("message"), str):
+                messages.append(commit["message"])
+        return messages
 
     async def _token_request(self, fields: dict[str, str]) -> GitHubTokenSet:
         """POST the given form fields to the token endpoint and parse the reply."""

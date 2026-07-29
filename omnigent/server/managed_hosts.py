@@ -2013,6 +2013,7 @@ async def launch_managed_host(
     host_store: HostStore,
     repo: RepoWorkspace | None = None,
     extra_repos: Sequence[RepoWorkspace] = (),
+    session_id: str | None = None,
     github_identity: SandboxGithubIdentity | None = None,
     on_stage: Callable[[str], None] | None = None,
 ) -> ManagedHostLaunch:
@@ -2087,6 +2088,7 @@ async def launch_managed_host(
         sandbox_id=sandbox_id,
         repo=repo,
         extra_repos=extra_repos,
+        session_id=session_id,
         github_identity=github_identity,
         on_stage=on_stage,
     )
@@ -2100,6 +2102,7 @@ async def relaunch_managed_host(
     host_store: HostStore,
     repo: RepoWorkspace | None = None,
     extra_repos: Sequence[RepoWorkspace] = (),
+    session_id: str | None = None,
     github_identity: SandboxGithubIdentity | None = None,
     on_stage: Callable[[str], None] | None = None,
 ) -> ManagedHostLaunch:
@@ -2172,6 +2175,7 @@ async def relaunch_managed_host(
         sandbox_id=sandbox_id,
         repo=repo,
         extra_repos=extra_repos,
+        session_id=session_id,
         github_identity=github_identity,
         on_stage=on_stage,
         keep_host_on_failure=True,
@@ -2190,6 +2194,7 @@ async def _arm_and_start_host(
     sandbox_id: str,
     repo: RepoWorkspace | None = None,
     extra_repos: Sequence[RepoWorkspace] = (),
+    session_id: str | None = None,
     github_identity: SandboxGithubIdentity | None = None,
     on_stage: Callable[[str], None] | None = None,
     keep_host_on_failure: bool = False,
@@ -2281,6 +2286,10 @@ async def _arm_and_start_host(
                 if extra_repos
                 else {}
             ),
+            # Session id tags the sandbox's commits (commit-msg hook) so PRs
+            # opened during the session are identifiable. Omitted when unset so
+            # an out-of-tree launcher predating it keeps launching.
+            **({"session_id": session_id} if session_id else {}),
             **({"host_config": config.host_config} if config.host_config is not None else {}),
         )
         await _wait_for_host_online(host_store, host_id)

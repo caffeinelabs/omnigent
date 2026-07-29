@@ -173,3 +173,55 @@ def test_start_host_no_identity_is_unchanged() -> None:
     [raw] = launcher.backgrounded
     assert "GIT_TOKEN" not in raw
     assert "GH_TOKEN" not in raw
+
+
+def test_setup_commands_install_session_commit_hook() -> None:
+    """A session id installs a commit-msg hook stamping the session trailer."""
+    cmds = github_sandbox_setup_commands(
+        "/root",
+        github_token=None,
+        github_login=None,
+        ssh_authorized_keys=None,
+        session_id="conv_abc123",
+    )
+    joined = "\n".join(cmds)
+    # The hook file is written under HOME and core.hooksPath points at it.
+    assert ".omnigent/git-hooks/commit-msg" in joined
+    assert "git config --global core.hooksPath /root/.omnigent/git-hooks" in joined
+    # The trailer (base64-encoded in the write command) carries the session id.
+    import base64
+
+    assert any(
+        "Omnigent-Session: conv_abc123"
+        in base64.b64decode(
+            # the encoded payload sits between `printf %s ` and `| base64 -d`
+            c.split("printf %s ", 1)[1].split(" | base64 -d", 1)[0].strip("'")
+        ).decode()
+        for c in cmds
+        if "base64 -d" in c and "git-hooks" in c
+    )
+
+
+def test_setup_commands_no_hook_without_session() -> None:
+    """No session id → no commit-msg hook / hooksPath config."""
+    cmds = github_sandbox_setup_commands(
+        "/root",
+        github_token=None,
+        github_login=None,
+        ssh_authorized_keys=None,
+    )
+    joined = "\n".join(cmds)
+    assert "core.hooksPath" not in joined
+    assert "git-hooks" not in joined
+
+
+def test_setup_commands_ignore_unsafe_session_id() -> None:
+    """A session id with shell-unsafe chars is not stamped into a hook."""
+    cmds = github_sandbox_setup_commands(
+        "/root",
+        github_token=None,
+        github_login=None,
+        ssh_authorized_keys=None,
+        session_id="bad id';rm -rf /",
+    )
+    assert "core.hooksPath" not in "\n".join(cmds)

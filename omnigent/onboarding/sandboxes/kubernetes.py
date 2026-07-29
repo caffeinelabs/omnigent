@@ -549,6 +549,7 @@ def build_pod_manifest(
     host_config: dict[str, object] | None = None,
     resources: dict[str, object] | None = None,
     pvc_mounts: Sequence[Mapping[str, object]] | None = None,
+    session_id: str | None = None,
 ) -> dict[str, object]:
     """
     Build the sandbox Pod manifest as a plain dict.
@@ -660,6 +661,7 @@ def build_pod_manifest(
         github_login=github_login,
         ssh_authorized_keys=ssh_authorized_keys,
         github_token_env="GH_TOKEN" if github_token else None,
+        session_id=session_id,
     )
 
     init_env: list[dict[str, object]] = [{"name": "HOME", "value": _HOME_DIR}]
@@ -1232,6 +1234,7 @@ class KubernetesSandboxLauncher(SandboxLauncher):
         ssh_authorized_keys: Sequence[str] | None = None,
         host_config: dict[str, object] | None = None,
         on_stage: Callable[[str], None] | None = None,
+        session_id: str | None = None,
     ) -> str:
         """
         Create the token Secret + runner Pod and wait for the host to start.
@@ -1318,6 +1321,7 @@ class KubernetesSandboxLauncher(SandboxLauncher):
                     host_config=host_config,
                     resources=self._resources,
                     pvc_mounts=self._pvc_mounts,
+                    session_id=session_id,
                 )
                 # Secret before Pod so the Pod's secretKeyRef resolves
                 # immediately — a Pod referencing a missing Secret would sit in

@@ -113,7 +113,32 @@ class _FakeClient:
                 "author_login": "someone-else",
                 "created_at": "2026-07-29T02:00:00Z",
             },
+            # Caller's OWN recent PR in this repo but from ANOTHER session (its
+            # commits lack this session's trailer) → must be filtered out. This
+            # is the leak the trailer check fixes.
+            {
+                "number": 5,
+                "title": "unrelated other-session PR",
+                "html_url": f"https://github.com/{full_name}/pull/5",
+                "head_ref": "other",
+                "draft": False,
+                "state": "open",
+                "merged": False,
+                "author_login": "octocat",
+                "created_at": "2026-07-29T01:45:00Z",
+            },
         ]
+
+    async def list_pull_commit_messages(
+        self, access_token: str, full_name: str, number: int
+    ) -> list[str]:
+        self.commit_calls: list[tuple[str, int]] = getattr(self, "commit_calls", [])
+        self.commit_calls.append((full_name, number))
+        # Only PRs 1 and 4 were opened in the "conv_1" session, so only their
+        # commits carry the session trailer.
+        if number in (1, 4):
+            return ["do the thing\n\nOmnigent-Session: conv_1\n"]
+        return ["unrelated work with no session trailer"]
 
 
 class _FakeConv:
@@ -372,13 +397,16 @@ def test_session_pulls_scopes_to_author_and_session_start(db_uri: str) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["connected"] is True
-    # PRs #4 (merged) and #1 (open) survive: authored by the caller AND opened
-    # after session start; the pre-session (#2) and other-author (#3) are
-    # filtered. Merged/closed PRs are kept — newest first.
+    # Only #4 (merged) and #1 (open) survive — their commits carry this
+    # session's trailer. #2 (pre-session) and #3 (other author) are pre-filtered;
+    # crucially #5 (caller's own recent PR in the same repo, but from another
+    # session → no trailer) is EXCLUDED by the trailer check. Newest first.
     assert [p["number"] for p in body["pulls"]] == [4, 1]
     assert body["pulls"][0]["merged"] is True
     assert body["pulls"][0]["repo"] == "caffeinelabs/app"
     assert client.pull_calls == ["caffeinelabs/app"]
+    # The commit-messages endpoint was consulted for the candidate PRs.
+    assert ("caffeinelabs/app", 5) in getattr(client, "commit_calls", [])
 
 
 def test_session_pulls_empty_when_no_repo_label(db_uri: str) -> None:

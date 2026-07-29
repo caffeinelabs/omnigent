@@ -206,14 +206,16 @@ def create_integrations_github_router(
 
     @router.get("/integrations/github/sessions/{session_id}/pull-requests")
     async def session_pull_requests(request: Request, session_id: str) -> dict[str, object]:
-        """List open PRs opened during *session_id*, across its cloned repos.
+        """List PRs opened DURING *session_id*, across its cloned repos.
 
-        Resolves the session's repositories from its managed-repo label,
-        then lists each repo's open PRs authored by the caller and created
-        at/after the session started — i.e. the PRs the agent opened this
-        session (multiple per repo supported). ``connected: false`` when the
-        caller hasn't linked GitHub; an empty list for a non-managed session
-        or one with no cloned repos.
+        Session-scoped by a tag, not inference: the sandbox stamps every commit
+        it makes with an ``Omnigent-Session: <session_id>`` trailer (via a
+        commit-msg hook), so a PR belongs to this session iff one of its commits
+        carries this session's trailer. This avoids surfacing unrelated PRs the
+        caller opened in a shared repo the session merely cloned. Any state
+        (open/draft/merged/closed) is included. ``connected: false`` when the
+        caller hasn't linked GitHub; an empty list for a non-managed session or
+        one with no cloned repos.
         """
         user_id = _current_user(request)
         if conversation_store is None:
@@ -247,6 +249,11 @@ def create_integrations_github_router(
             if full_name and full_name not in full_names:
                 full_names.append(full_name)
 
+        # The exact trailer this session's commits carry (see
+        # github_sandbox_setup_commands' commit-msg hook).
+        marker = f"Omnigent-Session: {session_id}"
+        # Author + creation time only PRE-FILTER the candidate set (to bound how
+        # many PRs we fetch commits for). The trailer is the source of truth.
         since = conv.created_at
         pulls: list[dict[str, object]] = []
         for full_name in full_names:
@@ -256,12 +263,23 @@ def create_integrations_github_router(
                 _logger.warning("session PRs: list_pulls failed for %s: %s", full_name, exc)
                 continue
             for pr in repo_pulls:
-                # Scope to this session: authored by the caller and opened
-                # at/after the session began.
                 if login is not None and pr.get("author_login") != login:
                     continue
                 created = _iso_to_epoch(pr.get("created_at"))
                 if created is not None and created < since:
+                    continue
+                number = pr.get("number")
+                if not isinstance(number, int):
+                    continue
+                try:
+                    messages = await api.list_pull_commit_messages(token, full_name, number)
+                except GitHubAppError as exc:
+                    _logger.warning(
+                        "session PRs: commits fetch failed for %s#%s: %s", full_name, number, exc
+                    )
+                    continue
+                # Confirm the PR actually belongs to this session.
+                if not any(marker in message for message in messages):
                     continue
                 pulls.append({**pr, "repo": full_name})
 
