@@ -611,11 +611,7 @@ def parse_repo_workspaces(label: str) -> list[RepoWorkspace]:
     :returns: Parsed repos in create-order (empty when the label is blank).
     :raises ValueError: When any entry is malformed.
     """
-    return [
-        parse_repo_workspace(entry)
-        for entry in label.split(_REPO_LABEL_SEP)
-        if entry.strip()
-    ]
+    return [parse_repo_workspace(entry) for entry in label.split(_REPO_LABEL_SEP) if entry.strip()]
 
 
 def _modal_launcher_factory(

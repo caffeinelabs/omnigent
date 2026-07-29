@@ -390,9 +390,7 @@ def _git_clone_line(url: str, branch: str | None, dest: str) -> str:
     :param dest: Destination directory the clone lands in.
     :returns: A single ``git clone …`` shell line (newline-terminated).
     """
-    branch_flag = (
-        f"--branch {shlex.quote(branch)} --single-branch " if branch is not None else ""
-    )
+    branch_flag = f"--branch {shlex.quote(branch)} --single-branch " if branch is not None else ""
     return f"git clone {branch_flag}-- {shlex.quote(url)} {shlex.quote(dest)}\n"
 
 

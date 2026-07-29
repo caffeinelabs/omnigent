@@ -92,9 +92,7 @@ export interface GithubBranchList {
  * when GitHub isn't linked.
  */
 export async function fetchGithubBranches(fullName: string): Promise<GithubBranchList> {
-  const res = await authenticatedFetch(
-    `/v1/integrations/github/repos/${fullName}/branches`,
-  );
+  const res = await authenticatedFetch(`/v1/integrations/github/repos/${fullName}/branches`);
   if (!res.ok) {
     throw new Error(`GitHub branches failed: ${res.status}`);
   }
