@@ -137,7 +137,7 @@ class _FakeClient:
         # Only PRs 1 and 4 were opened in the "conv_1" session, so only their
         # commits carry the session trailer.
         if number in (1, 4):
-            return [f"do the thing\n\nOmnigent-Session: conv_1\n"]
+            return ["do the thing\n\nOmnigent-Session: conv_1\n"]
         return ["unrelated work with no session trailer"]
 
 
