@@ -6693,6 +6693,6 @@ __all__ = [
     "_spawn_native_blocked_notice_forward",
     "_wait_for_host_bound_runner_client",
     "_wake_parent_for_blocked_child",
-    "wake_session_with_notice",
     "configure_subagent_block_notifier",
+    "wake_session_with_notice",
 ]
