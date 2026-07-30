@@ -376,6 +376,9 @@ def _app_with_convs(
         ),
         prefix="/v1",
     )
+    from omnigent.server.ci_watch import CiWatchRegistry
+
+    app.state.ci_watch_registry = CiWatchRegistry()
     return TestClient(app, follow_redirects=False), store, client
 
 
@@ -445,4 +448,74 @@ def test_session_pulls_missing_session_404(db_uri: str) -> None:
         tokens=GitHubTokenSet("ghu_a", "ghr_a", None, None, "repo"),
     )
     resp = tc.get("/v1/integrations/github/sessions/nope/pull-requests", headers=_USER)
+    assert resp.status_code == 404
+
+
+# ── CI watch arming ─────────────────────────────────────────────────
+
+
+def test_arm_ci_watch_registers_session_prs(db_uri: str) -> None:
+    convs = {
+        "conv_1": _FakeConv(
+            labels={_REPO_LABEL_KEY: "https://github.com/caffeinelabs/app#main"},
+            created_at=_SESSION_START,
+        )
+    }
+    tc, store, _client = _app_with_convs(db_uri, convs)
+    store.upsert(
+        "alice@example.com",
+        github_login="octocat",
+        github_user_id=42,
+        tokens=GitHubTokenSet("ghu_a", "ghr_a", None, None, "repo"),
+    )
+    resp = tc.post("/v1/integrations/github/sessions/conv_1/ci-watch", headers=_USER)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["armed"] is True
+    # PRs #4 and #1 are this session's (trailer-confirmed) → both watched.
+    assert body["watched"] == 2
+    assert set(body["prs"]) == {"caffeinelabs/app#4", "caffeinelabs/app#1"}
+    # The registry now holds the watch.
+    reg = tc.app.state.ci_watch_registry
+    assert len(reg) == 1
+    assert reg.snapshot()[0].session_id == "conv_1"
+
+
+def test_arm_ci_watch_no_prs_is_not_armed(db_uri: str) -> None:
+    convs = {"conv_2": _FakeConv(labels={}, created_at=_SESSION_START)}
+    tc, store, _client = _app_with_convs(db_uri, convs)
+    store.upsert(
+        "alice@example.com",
+        github_login="octocat",
+        github_user_id=42,
+        tokens=GitHubTokenSet("ghu_a", "ghr_a", None, None, "repo"),
+    )
+    resp = tc.post("/v1/integrations/github/sessions/conv_2/ci-watch", headers=_USER)
+    assert resp.status_code == 200
+    assert resp.json()["armed"] is False
+    assert len(tc.app.state.ci_watch_registry) == 0
+
+
+def test_arm_ci_watch_unconnected(db_uri: str) -> None:
+    convs = {
+        "conv_3": _FakeConv(
+            labels={_REPO_LABEL_KEY: "https://github.com/caffeinelabs/app"},
+            created_at=_SESSION_START,
+        )
+    }
+    tc, _store, _client = _app_with_convs(db_uri, convs)
+    resp = tc.post("/v1/integrations/github/sessions/conv_3/ci-watch", headers=_USER)
+    assert resp.status_code == 200
+    assert resp.json() == {"armed": False, "reason": "github not connected"}
+
+
+def test_arm_ci_watch_missing_session_404(db_uri: str) -> None:
+    tc, store, _client = _app_with_convs(db_uri, {})
+    store.upsert(
+        "alice@example.com",
+        github_login="octocat",
+        github_user_id=42,
+        tokens=GitHubTokenSet("ghu_a", "ghr_a", None, None, "repo"),
+    )
+    resp = tc.post("/v1/integrations/github/sessions/nope/ci-watch", headers=_USER)
     assert resp.status_code == 404
