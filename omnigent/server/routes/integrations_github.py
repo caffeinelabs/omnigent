@@ -204,26 +204,17 @@ def create_integrations_github_router(
             raise HTTPException(status_code=502, detail="Failed to list GitHub branches") from exc
         return {"connected": True, "branches": branches}
 
-    @router.get("/integrations/github/sessions/{session_id}/pull-requests")
-    async def session_pull_requests(request: Request, session_id: str) -> dict[str, object]:
-        """List PRs opened DURING *session_id*, across its cloned repos.
+    async def _resolve_session_pulls(
+        user_id: str, session_id: str, conv: object
+    ) -> dict[str, object]:
+        """Resolve the PRs opened during *session_id* (shared by list + ci-watch).
 
-        Session-scoped by a tag, not inference: the sandbox stamps every commit
-        it makes with an ``Omnigent-Session: <session_id>`` trailer (via a
-        commit-msg hook), so a PR belongs to this session iff one of its commits
-        carries this session's trailer. This avoids surfacing unrelated PRs the
-        caller opened in a shared repo the session merely cloned. Any state
-        (open/draft/merged/closed) is included. ``connected: false`` when the
-        caller hasn't linked GitHub; an empty list for a non-managed session or
-        one with no cloned repos.
+        Session-scoped by the ``Omnigent-Session: <id>`` commit trailer, so a PR
+        belongs to this session iff one of its commits carries the trailer —
+        unrelated PRs in a shared repo the session merely cloned are excluded.
+        Returns ``{connected, pulls}``; ``connected: false`` when GitHub isn't
+        linked; empty for a non-managed session or one with no cloned repos.
         """
-        user_id = _current_user(request)
-        if conversation_store is None:
-            return {"connected": True, "pulls": []}
-        conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
-        if conv is None:
-            raise HTTPException(status_code=404, detail="session not found")
-
         from omnigent.server.managed_hosts import (
             MANAGED_REPO_LABEL_KEY,
             parse_repo_workspaces,
@@ -249,11 +240,7 @@ def create_integrations_github_router(
             if full_name and full_name not in full_names:
                 full_names.append(full_name)
 
-        # The exact trailer this session's commits carry (see
-        # github_sandbox_setup_commands' commit-msg hook).
         marker = f"Omnigent-Session: {session_id}"
-        # Author + creation time only PRE-FILTER the candidate set (to bound how
-        # many PRs we fetch commits for). The trailer is the source of truth.
         since = conv.created_at
         pulls: list[dict[str, object]] = []
         for full_name in full_names:
@@ -278,13 +265,63 @@ def create_integrations_github_router(
                         "session PRs: commits fetch failed for %s#%s: %s", full_name, number, exc
                     )
                     continue
-                # Confirm the PR actually belongs to this session.
                 if not any(marker in message for message in messages):
                     continue
                 pulls.append({**pr, "repo": full_name})
 
         pulls.sort(key=lambda p: str(p.get("created_at") or ""), reverse=True)
         return {"connected": True, "pulls": pulls}
+
+    @router.get("/integrations/github/sessions/{session_id}/pull-requests")
+    async def session_pull_requests(request: Request, session_id: str) -> dict[str, object]:
+        """List PRs opened DURING *session_id*, across its cloned repos.
+
+        Any state (open/draft/merged/closed) is included. ``connected: false``
+        when the caller hasn't linked GitHub; an empty list for a non-managed
+        session or one with no cloned repos.
+        """
+        user_id = _current_user(request)
+        if conversation_store is None:
+            return {"connected": True, "pulls": []}
+        conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
+        if conv is None:
+            raise HTTPException(status_code=404, detail="session not found")
+        return await _resolve_session_pulls(user_id, session_id, conv)
+
+    @router.post("/integrations/github/sessions/{session_id}/ci-watch")
+    async def arm_ci_watch(request: Request, session_id: str) -> dict[str, object]:
+        """Arm a CI watch: wake this session when its PRs' checks conclude.
+
+        Resolves the session's PRs now and registers a watch; a background
+        poller then injects a ``[CI] …`` message into the session when a PR's
+        check runs reach a terminal state. Idempotent (re-arming replaces).
+        """
+        user_id = _current_user(request)
+        registry = getattr(request.app.state, "ci_watch_registry", None)
+        if registry is None or conversation_store is None:
+            raise HTTPException(status_code=503, detail="CI watch is not enabled on this server")
+        conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
+        if conv is None:
+            raise HTTPException(status_code=404, detail="session not found")
+
+        resolved = await _resolve_session_pulls(user_id, session_id, conv)
+        if not resolved.get("connected"):
+            return {"armed": False, "reason": "github not connected"}
+
+        from omnigent.server.ci_watch import build_watch_from_prs
+
+        pulls = resolved.get("pulls") or []
+        watch = build_watch_from_prs(session_id, user_id, pulls)  # type: ignore[arg-type]
+        if not watch.prs:
+            registry.disarm(session_id)
+            return {"armed": False, "watched": 0, "reason": "no session PRs to watch"}
+        registry.arm(watch)
+        _logger.info("ci-watch armed for %s (%d PRs)", session_id, len(watch.prs))
+        return {
+            "armed": True,
+            "watched": len(watch.prs),
+            "prs": [f"{pr.repo}#{pr.number}" for pr in watch.prs],
+        }
 
     @router.get("/integrations/github/connect")
     async def connect(request: Request, return_to: str | None = None) -> RedirectResponse:

@@ -255,3 +255,35 @@ async def test_list_pull_commit_messages_non_200_raises() -> None:
 
     with pytest.raises(GitHubAppError):
         await _client(handler).list_pull_commit_messages("ghu_bad", "caffeinelabs/app", 9)
+
+
+@pytest.mark.asyncio
+async def test_list_check_runs_projects_fields() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/caffeinelabs/app/commits/feat-x/check-runs"
+        return httpx.Response(
+            200,
+            json={
+                "total_count": 2,
+                "check_runs": [
+                    {"name": "build", "status": "completed", "conclusion": "success", "x": 1},
+                    {"name": "test", "status": "in_progress", "conclusion": None},
+                    "not-a-dict",
+                ],
+            },
+        )
+
+    runs = await _client(handler).list_check_runs("ghu_x", "caffeinelabs/app", "feat-x")
+    assert runs == [
+        {"name": "build", "status": "completed", "conclusion": "success"},
+        {"name": "test", "status": "in_progress", "conclusion": None},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_list_check_runs_non_200_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, json={"message": "bad ref"})
+
+    with pytest.raises(GitHubAppError):
+        await _client(handler).list_check_runs("ghu_bad", "caffeinelabs/app", "nope")

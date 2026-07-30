@@ -1516,6 +1516,47 @@ def create_app(
             # endpoints (see routes/scheduled_tasks.py); there is no startup
             # sweep and no periodic reconcile.
 
+        # CI-watch poller: wake a session when its PRs' checks conclude. Armed
+        # per-session via POST /v1/integrations/github/.../ci-watch; the poll
+        # loop injects a message (wake) on a terminal transition. Non-critical:
+        # only started when the GitHub App is wired.
+        ci_watch_task: asyncio.Task[None] | None = None
+        if github_enabled and github_store is not None:
+            from omnigent.server.ci_watch import CiWatchRegistry, run_ci_watch_poller
+            from omnigent.server.github_identity import resolve_access_token
+            from omnigent.server.routes._sessions.orchestration import (
+                wake_session_with_notice,
+            )
+
+            _ci_registry = CiWatchRegistry()
+            app_inst.state.ci_watch_registry = _ci_registry
+            _ci_gh_client = app_inst.state.github_client
+
+            async def _ci_resolve_token(uid: str) -> str | None:
+                return await resolve_access_token(uid, store=github_store, client=_ci_gh_client)
+
+            async def _ci_list_check_runs(
+                token: str, full_name: str, ref: str
+            ) -> list[dict[str, object]]:
+                return await _ci_gh_client.list_check_runs(token, full_name, ref)
+
+            async def _ci_wake(session_id: str, notice: str) -> bool:
+                return await wake_session_with_notice(
+                    session_id,
+                    notice,
+                    conversation_store=conversation_store,
+                    runner_router=runner_router,
+                )
+
+            ci_watch_task = asyncio.create_task(
+                run_ci_watch_poller(
+                    _ci_registry,
+                    resolve_token=_ci_resolve_token,
+                    list_check_runs=_ci_list_check_runs,
+                    wake=_ci_wake,
+                )
+            )
+
         try:
             yield
         finally:
@@ -1524,6 +1565,10 @@ def create_app(
             # cancel. Only the per-job scheduler holds timers that need stopping.
             if scheduled_task_scheduler is not None:
                 scheduled_task_scheduler.stop()
+            if ci_watch_task is not None:
+                ci_watch_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await ci_watch_task
             metrics_publish_task.cancel()
             with suppress(asyncio.CancelledError):
                 await metrics_publish_task

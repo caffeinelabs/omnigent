@@ -4999,6 +4999,62 @@ async def _evaluate_input_policy(
     }
 
 
+async def wake_session_with_notice(
+    session_id: str,
+    notice: str,
+    *,
+    conversation_store: ConversationStore,
+    runner_router: RunnerRouter | None,
+) -> bool:
+    """Inject a synthetic user message into *session_id* to start a turn.
+
+    The server-originated wake primitive: posts *notice* as a ``type="message"``
+    user event down the same dispatch path a human message uses, so it starts a
+    continuation turn on an idle session (or coalesces with pending input on a
+    busy one). Used by background watchers (e.g. CI tracking) to make an agent
+    react to an external event. Best-effort: a missing session, unbound runner,
+    or transport error is logged and returns ``False`` rather than raising.
+
+    :param session_id: The session to wake, e.g. ``"conv_abc123"``.
+    :param notice: The message text to inject (typically a ``[CI] …`` summary).
+    :param conversation_store: Loads the session + persists the message item.
+    :param runner_router: Resolves the session's bound runner (``None`` uses the
+        runtime singleton fallback).
+    :returns: ``True`` when the message was dispatched; ``False`` otherwise.
+    """
+    conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
+    if conv is None:
+        _logger.debug("wake_session_with_notice: session %s missing", session_id)
+        return False
+    runner_client = await _get_runner_client(session_id, runner_router)
+    if runner_client is None:
+        _logger.warning("wake_session_with_notice: no runner bound for %s", session_id)
+        return False
+    _ensure_runner_relay(session_id, conv.runner_id, runner_client, conversation_store)
+    body = SessionEventInput(
+        type="message",
+        data={"role": "user", "content": [{"type": "input_text", "text": notice}]},
+    )
+    try:
+        await _dispatch_session_event_to_runner(
+            session_id,
+            conv,
+            body,
+            conversation_store,
+            runner_client,
+            agent_name=None,
+            file_store=None,
+            artifact_store=None,
+            runner_router=runner_router,
+        )
+    except (httpx.HTTPError, OmnigentError):
+        _logger.warning(
+            "wake_session_with_notice dispatch failed for %s", session_id, exc_info=True
+        )
+        return False
+    return True
+
+
 async def _wake_parent_for_blocked_child(
     parent_id: str,
     child: Conversation,
@@ -6637,5 +6693,6 @@ __all__ = [
     "_spawn_native_blocked_notice_forward",
     "_wait_for_host_bound_runner_client",
     "_wake_parent_for_blocked_child",
+    "wake_session_with_notice",
     "configure_subagent_block_notifier",
 ]

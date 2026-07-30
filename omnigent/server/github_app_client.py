@@ -50,6 +50,10 @@ _PULLS_MAX_PAGES = 2
 _REPO_PULL_COMMITS_ENDPOINT = "https://api.github.com/repos/{full_name}/pulls/{number}/commits"
 _PULL_COMMITS_PER_PAGE = 100
 
+# Check runs (GitHub Actions + other apps) for a commit/branch ref.
+_REPO_CHECK_RUNS_ENDPOINT = "https://api.github.com/repos/{full_name}/commits/{ref}/check-runs"
+_CHECK_RUNS_PER_PAGE = 100
+
 _HTTP_TIMEOUT_S = 15.0
 
 
@@ -328,6 +332,53 @@ class GitHubAppClient:
             if isinstance(commit, dict) and isinstance(commit.get("message"), str):
                 messages.append(commit["message"])
         return messages
+
+    async def list_check_runs(
+        self, access_token: str, full_name: str, ref: str
+    ) -> list[dict[str, object]]:
+        """List check runs for a commit/branch ``ref`` in ``full_name``.
+
+        Covers GitHub Actions (and other Checks-API apps) for a PR's head ref,
+        so CI status can be aggregated for the "wake on CI" watcher. Reads the
+        first page (a ref rarely has >100 checks).
+
+        :param access_token: A valid user access token.
+        :param full_name: The repository's ``owner/name``.
+        :param ref: A commit SHA or branch name (a PR head ref).
+        :returns: Check runs as ``{name, status, conclusion}`` — ``status`` is
+            ``queued``/``in_progress``/``completed``; ``conclusion`` is set once
+            completed (``success``/``failure``/``neutral``/``cancelled``/…).
+        :raises GitHubAppError: When the API call fails.
+        """
+        url = _REPO_CHECK_RUNS_ENDPOINT.format(full_name=full_name, ref=ref)
+        async with self._http_client() as client:
+            resp = await client.get(
+                url,
+                params={"per_page": _CHECK_RUNS_PER_PAGE},
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/vnd.github+json",
+                },
+            )
+        if resp.status_code != 200:
+            raise GitHubAppError(
+                f"GitHub /repos/{full_name}/commits/{ref}/check-runs returned {resp.status_code}"
+            )
+        payload = resp.json()
+        runs = payload.get("check_runs") if isinstance(payload, dict) else None
+        if not isinstance(runs, list):
+            return []
+        result: list[dict[str, object]] = []
+        for entry in runs:
+            if isinstance(entry, dict):
+                result.append(
+                    {
+                        "name": entry.get("name"),
+                        "status": entry.get("status"),
+                        "conclusion": entry.get("conclusion"),
+                    }
+                )
+        return result
 
     async def _token_request(self, fields: dict[str, str]) -> GitHubTokenSet:
         """POST the given form fields to the token endpoint and parse the reply."""
