@@ -323,6 +323,50 @@ def create_integrations_github_router(
             "prs": [f"{pr.repo}#{pr.number}" for pr in watch.prs],
         }
 
+    @router.get("/integrations/github/sessions/{session_id}/ci-watch")
+    async def ci_watch_dryrun(request: Request, session_id: str) -> dict[str, object]:
+        """Dry-run the CI-watch poll for a session (diagnostic, no wake).
+
+        Resolves the session's PRs and, using the caller's token, fetches each
+        PR's check runs exactly as the background poller does — returning the
+        raw runs, the computed aggregate, and any error. Surfaces silent
+        poll-side failures (e.g. a token lacking ``checks:read``) that the
+        fire-and-forget poller only logs. Never injects a message.
+        """
+        from omnigent.server.ci_watch import aggregate_check_conclusion
+
+        user_id = _current_user(request)
+        if conversation_store is None:
+            return {"connected": True, "prs": []}
+        conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
+        if conv is None:
+            raise HTTPException(status_code=404, detail="session not found")
+
+        resolved = await _resolve_session_pulls(user_id, session_id, conv)
+        if not resolved.get("connected"):
+            return {"connected": False, "prs": []}
+        token = await resolve_access_token(user_id, store=store, client=api)
+        if token is None:
+            return {"connected": False, "prs": [], "reason": "no token"}
+
+        results: list[dict[str, object]] = []
+        for pr in resolved.get("pulls") or []:
+            full_name = pr.get("repo")
+            head_ref = pr.get("head_ref")
+            entry: dict[str, object] = {"repo": full_name, "head_ref": head_ref}
+            if not isinstance(full_name, str) or not isinstance(head_ref, str):
+                entry["error"] = "malformed pr"
+                results.append(entry)
+                continue
+            try:
+                runs = await api.list_check_runs(token, full_name, head_ref)
+                entry["runs"] = runs
+                entry["conclusion"] = aggregate_check_conclusion(runs)
+            except GitHubAppError as exc:
+                entry["error"] = f"{type(exc).__name__}: {exc}"
+            results.append(entry)
+        return {"connected": True, "prs": results}
+
     @router.get("/integrations/github/connect")
     async def connect(request: Request, return_to: str | None = None) -> RedirectResponse:
         """Redirect the user into the GitHub authorization flow."""
