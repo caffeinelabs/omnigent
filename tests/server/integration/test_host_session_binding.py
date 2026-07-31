@@ -1331,6 +1331,181 @@ async def test_managed_launch_fails_when_runner_never_connects(
     assert stages[-1] == ("failed", "managed runner did not connect after launch")
 
 
+async def test_managed_launch_installs_missing_harness_and_retries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    A managed sandbox host that refuses for a missing, UI-installable harness
+    gets the CLI installed onto it and the launch retried, instead of failing
+    outright — closing the gap where the New Chat dialog's pre-launch
+    "Install" action never gets a chance to run against a host that doesn't
+    exist until this same launch call provisions it.
+    """
+    from omnigent.host.frames import HARNESS_NOT_CONFIGURED_ERROR_CODE
+    from omnigent.server.routes import sessions as sessions_module
+
+    monkeypatch.setenv("OMNIGENT_HARNESS_INSTALL_ENABLED", "1")
+
+    session_id = "2b6c1c1e6b394e6c9f5f6f0b6c9a1b2c"
+    conv = SimpleNamespace(id=session_id)
+    tracker = ManagedLaunchTracker()
+    tracker.begin(session_id)
+    launch = tracker.get(session_id)
+    assert launch is not None
+    stages: list[tuple[str, str | None]] = []
+    launch_calls = 0
+    install_calls: list[str] = []
+
+    async def _launch_runner(*_args: object, **_kwargs: object) -> object:
+        nonlocal launch_calls
+        launch_calls += 1
+        if launch_calls == 1:
+            return sessions_module._HostLaunchAttempt(
+                runner_id="runner_before_install",
+                error_code=HARNESS_NOT_CONFIGURED_ERROR_CODE,
+                error="harness 'opencode-native' is not configured on host 'managed-test'",
+            )
+        return sessions_module._HostLaunchAttempt(runner_id="runner_after_install")
+
+    async def _proxy_install_harness(
+        *, host_registry: object, host_conn: object, harness: str
+    ) -> dict[str, object]:
+        del host_registry, host_conn
+        install_calls.append(harness)
+        return {"status": "ok", "configured_harnesses": {}}
+
+    class _HostRegistry:
+        def get(self, _host_id: str) -> object:
+            return SimpleNamespace(host_id=_host_id)
+
+    class _TunnelRegistry:
+        async def wait_for_runner(self, _runner_id: str, *, timeout_s: float) -> object:
+            del timeout_s
+            return object()
+
+    monkeypatch.setattr(sessions_module, "_launch_runner_on_host", _launch_runner)
+    monkeypatch.setattr(sessions_module, "_resolve_harness", lambda _conv: "opencode-native")
+    monkeypatch.setattr(
+        "omnigent.server.routes.hosts._proxy_install_harness", _proxy_install_harness
+    )
+    monkeypatch.setattr(
+        sessions_module,
+        "_publish_sandbox_status",
+        lambda _sid, stage, error=None: stages.append((stage, error)),
+    )
+
+    await sessions_module._bind_and_launch_managed_runner(
+        session_id=session_id,
+        managed=ManagedHostLaunch(
+            host_id="3c8cdcdb61903904849174c864620a5c",
+            workspace="/root/workspace",
+        ),
+        sandbox_config=ManagedSandboxConfig(
+            server_url="https://managed-test.example.com",
+            launcher_factory=lambda: FakeSandboxLauncher(),
+            token_ttl_s=3600,
+        ),
+        tracker=tracker,
+        conversation_store=SimpleNamespace(
+            set_host_id=lambda _sid, _host_id, _workspace: conv,
+        ),
+        host_store=SimpleNamespace(),
+        host_registry=_HostRegistry(),  # type: ignore[arg-type]
+        tunnel_registry=_TunnelRegistry(),  # type: ignore[arg-type]
+    )
+
+    assert install_calls == ["opencode-native"]
+    assert launch_calls == 2
+    # finish() pops the entry once settled — the reference captured before
+    # the call is the only way to observe the settled state.
+    assert tracker.get(session_id) is None
+    assert launch.settled.is_set()
+    assert launch.error is None
+    assert stages[-1] == ("ready", None)
+
+
+async def test_managed_launch_skips_install_when_feature_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    ``OMNIGENT_HARNESS_INSTALL_ENABLED`` defaults off, so a managed sandbox
+    host refusing an unconfigured harness still fails the launch outright —
+    unchanged behavior for deployments that haven't opted in.
+    """
+    from omnigent.host.frames import HARNESS_NOT_CONFIGURED_ERROR_CODE
+    from omnigent.server.routes import sessions as sessions_module
+
+    monkeypatch.delenv("OMNIGENT_HARNESS_INSTALL_ENABLED", raising=False)
+
+    session_id = "9f1e2d3c4b5a69788796a5b4c3d2e1f0"
+    conv = SimpleNamespace(id=session_id)
+    tracker = ManagedLaunchTracker()
+    tracker.begin(session_id)
+    stages: list[tuple[str, str | None]] = []
+    install_calls: list[str] = []
+
+    async def _launch_runner(*_args: object, **_kwargs: object) -> object:
+        return sessions_module._HostLaunchAttempt(
+            runner_id="runner_before_install",
+            error_code=HARNESS_NOT_CONFIGURED_ERROR_CODE,
+            error="harness 'opencode-native' is not configured on host 'managed-test'",
+        )
+
+    async def _proxy_install_harness(
+        *, host_registry: object, host_conn: object, harness: str
+    ) -> dict[str, object]:
+        del host_registry, host_conn
+        install_calls.append(harness)
+        return {"status": "ok", "configured_harnesses": {}}
+
+    class _HostRegistry:
+        def get(self, _host_id: str) -> object:
+            return SimpleNamespace(host_id=_host_id)
+
+    class _TunnelRegistry:
+        async def wait_for_runner(self, _runner_id: str, *, timeout_s: float) -> object:
+            del timeout_s
+            return object()
+
+    monkeypatch.setattr(sessions_module, "_launch_runner_on_host", _launch_runner)
+    monkeypatch.setattr(sessions_module, "_resolve_harness", lambda _conv: "opencode-native")
+    monkeypatch.setattr(
+        "omnigent.server.routes.hosts._proxy_install_harness", _proxy_install_harness
+    )
+    monkeypatch.setattr(
+        sessions_module,
+        "_publish_sandbox_status",
+        lambda _sid, stage, error=None: stages.append((stage, error)),
+    )
+
+    await sessions_module._bind_and_launch_managed_runner(
+        session_id=session_id,
+        managed=ManagedHostLaunch(
+            host_id="3c8cdcdb61903904849174c864620a5c",
+            workspace="/root/workspace",
+        ),
+        sandbox_config=ManagedSandboxConfig(
+            server_url="https://managed-test.example.com",
+            launcher_factory=lambda: FakeSandboxLauncher(),
+            token_ttl_s=3600,
+        ),
+        tracker=tracker,
+        conversation_store=SimpleNamespace(
+            set_host_id=lambda _sid, _host_id, _workspace: conv,
+        ),
+        host_store=SimpleNamespace(),
+        host_registry=_HostRegistry(),  # type: ignore[arg-type]
+        tunnel_registry=_TunnelRegistry(),  # type: ignore[arg-type]
+    )
+
+    assert install_calls == []
+    launch = tracker.get(session_id)
+    assert launch is not None
+    assert launch.settled.is_set()
+    assert launch.error == "harness 'opencode-native' is not configured on host 'managed-test'"
+    assert stages[-1][0] == "failed"
+
+
 async def test_cancel_managed_launch_tasks_returns_while_provision_parked(
     managed_session_env: ManagedSessionEnv,
     monkeypatch: pytest.MonkeyPatch,
