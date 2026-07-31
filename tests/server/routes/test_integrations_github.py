@@ -140,6 +140,16 @@ class _FakeClient:
             return ["do the thing\n\nOmnigent-Session: conv_1\n"]
         return ["unrelated work with no session trailer"]
 
+    async def list_check_runs(
+        self, access_token: str, full_name: str, ref: str
+    ) -> list[dict[str, object]]:
+        self.check_calls: list[tuple[str, str]] = getattr(self, "check_calls", [])
+        self.check_calls.append((full_name, ref))
+        return [
+            {"name": "build", "status": "completed", "conclusion": "success"},
+            {"name": "test", "status": "completed", "conclusion": "success"},
+        ]
+
 
 class _FakeConv:
     """Minimal conversation stub exposing the fields the PR route reads."""
@@ -519,3 +529,27 @@ def test_arm_ci_watch_missing_session_404(db_uri: str) -> None:
     )
     resp = tc.post("/v1/integrations/github/sessions/nope/ci-watch", headers=_USER)
     assert resp.status_code == 404
+
+
+def test_ci_watch_dryrun_returns_runs_and_conclusion(db_uri: str) -> None:
+    convs = {
+        "conv_1": _FakeConv(
+            labels={_REPO_LABEL_KEY: "https://github.com/caffeinelabs/app#main"},
+            created_at=_SESSION_START,
+        )
+    }
+    tc, store, _client = _app_with_convs(db_uri, convs)
+    store.upsert(
+        "alice@example.com",
+        github_login="octocat",
+        github_user_id=42,
+        tokens=GitHubTokenSet("ghu_a", "ghr_a", None, None, "repo"),
+    )
+    resp = tc.get("/v1/integrations/github/sessions/conv_1/ci-watch", headers=_USER)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["connected"] is True
+    # Both trailer-confirmed session PRs are probed, each aggregating to success.
+    assert {p["repo"] for p in body["prs"]} == {"caffeinelabs/app"}
+    assert all(p["conclusion"] == "success" for p in body["prs"])
+    assert all("error" not in p for p in body["prs"])
