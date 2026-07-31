@@ -117,6 +117,23 @@ export function harnessWarningBadgeText(reason: string | null, collapsed = false
  * matching the install route's allowlist, so the UI never offers an install the
  * server would reject.
  */
+/**
+ * Whether the server can auto-install *harness* on a managed sandbox at launch
+ * time (no pre-existing host needed). Matches the install route's allowlist so
+ * the hide-unconfigured filter doesn't hide harnesses the sandbox will provision.
+ */
+export function harnessAutoInstallableOnSandbox(
+  info: ServerInfo | "loading",
+  harness: string | null | undefined,
+): boolean {
+  return (
+    info !== "loading" &&
+    info.harness_install_enabled &&
+    !!harness &&
+    info.installable_harnesses.includes(harness)
+  );
+}
+
 export function harnessInstallableOnHost(
   info: ServerInfo | "loading",
   harness: string | null | undefined,

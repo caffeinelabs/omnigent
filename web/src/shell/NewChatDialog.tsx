@@ -73,6 +73,7 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 import { useServerInfo } from "@/lib/CapabilitiesContext";
 import { HarnessSetupDialog } from "@/shell/HarnessSetupDialog";
 import {
+  harnessAutoInstallableOnSandbox,
   harnessUnavailableReasonOnHost,
   harnessUnconfiguredOnHost,
   harnessWarningBadgeText,
@@ -973,11 +974,13 @@ export function AgentHarnessPicker({
     const more: AvailableAgent[] = [];
     for (const a of harnessEntries) {
       const unconfigured = harnessUnconfiguredOnHost(a.harness, effectiveFilterHost);
-      if (!unconfigured || a.id === effectiveAgentId) ready.push(a);
+      const autoInstallable =
+        sandboxSelected && harnessAutoInstallableOnSandbox(info, a.harness);
+      if (!unconfigured || autoInstallable || a.id === effectiveAgentId) ready.push(a);
       else if (!hideUnconfigured) more.push(a);
     }
     return { readyHarnessEntries: ready, moreHarnessEntries: more };
-  }, [harnessEntries, effectiveFilterHost, hideUnconfigured, effectiveAgentId]);
+  }, [harnessEntries, effectiveFilterHost, hideUnconfigured, effectiveAgentId, sandboxSelected, info]);
 
   // Split the agents group: built-in bundle agents (Polly / Debby) stay inline
   // in the main list; user-registered custom agents fold into a "Custom agents"
@@ -1242,6 +1245,7 @@ function HarnessConfigModal({
   host,
   filterHost,
   hideUnconfigured,
+  sandboxSelected,
   smartRoutingEligible,
   permissionMode,
   approvalMode,
@@ -1271,6 +1275,7 @@ function HarnessConfigModal({
   host: Host | undefined | null;
   filterHost?: Host | undefined | null;
   hideUnconfigured: boolean;
+  sandboxSelected: boolean;
   smartRoutingEligible: boolean;
   permissionMode: string;
   approvalMode: string;
@@ -1399,7 +1404,8 @@ function HarnessConfigModal({
         ([id]) =>
           id === (draftHarness ?? brainDefault) ||
           !hideUnconfigured ||
-          !harnessUnconfiguredOnHost(id, effectiveBrainFilterHost),
+          !harnessUnconfiguredOnHost(id, effectiveBrainFilterHost) ||
+          (sandboxSelected && harnessAutoInstallableOnSandbox(info, id)),
       )
     : [];
 
@@ -3491,6 +3497,7 @@ export function NewChatLandingScreen() {
                     host={harnessWarningHost}
                     filterHost={harnessFilterHost}
                     hideUnconfigured={hideUnconfiguredHarnesses}
+                    sandboxSelected={sandboxSelected}
                     smartRoutingEligible={smartRoutingEligible}
                     permissionMode={permissionMode}
                     approvalMode={approvalMode}
