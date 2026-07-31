@@ -1918,12 +1918,15 @@ def create_app(
         prefix="/v1",
         tags=["imports"],
     )
-    # Per-user LLM cost report (omni usage). User-scoped, not session-scoped,
-    # so it gets its own router rather than living under /sessions.
+    # Per-user LLM cost report (omni usage) plus the aggregated usage + cost
+    # analytics summary. User-scoped, not session-scoped, so it gets its own
+    # router rather than living under /sessions. permission_store powers the
+    # admin cross-user scope on /usage/summary.
     app.include_router(
         create_usage_router(
             conversation_store,
             auth_provider=auth_provider,
+            permission_store=permission_store,
         ),
         prefix="/v1",
         tags=["usage"],

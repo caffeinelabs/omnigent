@@ -11,6 +11,7 @@ import {
   ArchiveIcon,
   ArrowLeftIcon,
   DownloadIcon,
+  GaugeIcon,
   GitBranchIcon,
   KeyboardIcon,
   PaletteIcon,
@@ -34,6 +35,7 @@ export type SettingsSectionId =
   | "appearance"
   | "git"
   | "shortcuts"
+  | "usage"
   | "account"
   | "members"
   | "policies"
@@ -46,6 +48,7 @@ const SECTION_IDS: readonly SettingsSectionId[] = [
   "appearance",
   "git",
   "shortcuts",
+  "usage",
   "account",
   "members",
   "policies",
@@ -87,6 +90,9 @@ export function settingsNavGroups(
     { id: "appearance", label: "Appearance", icon: PaletteIcon },
     { id: "git", label: "Git", icon: GitBranchIcon },
     { id: "shortcuts", label: "Keyboard shortcuts", icon: KeyboardIcon, hideOnMobile: true },
+    // Usage & cost — the caller's own spend; admins get a scope selector to
+    // view any user's or every user's inside the section itself.
+    { id: "usage", label: "Usage", icon: GaugeIcon },
   ];
   if (hasAuthSession) {
     // Account leads the group when present — it's the most-visited section
