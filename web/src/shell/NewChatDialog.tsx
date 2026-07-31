@@ -831,6 +831,7 @@ export function AgentHarnessPicker({
   agentLabel,
   hasAgents,
   host,
+  filterHost,
   onSelectAgent,
   pendingAgent,
   pendingAgentId,
@@ -851,6 +852,9 @@ export function AgentHarnessPicker({
   agentLabel: string;
   hasAgents: boolean;
   host: Host | undefined | null;
+  /** Host used for the hide-unconfigured filter when it differs from the badge
+   *  host (e.g. sandbox selected but filtering against a connected host). */
+  filterHost?: Host | undefined | null;
   onSelectAgent: (agent: AvailableAgent) => void;
   pendingAgent: AgentBundleInput | null;
   pendingAgentId: string;
@@ -955,6 +959,10 @@ export function AgentHarnessPicker({
   // harnessUnconfiguredOnHost returns false with no host / no readiness map, so
   // nothing is hidden in those cases, and unrecognized harnesses stay visible.
   const hideUnconfigured = useMemo(() => readHideUnconfiguredHarnesses(), []);
+  // The filter host drives the ready/more split: it may differ from the badge
+  // host when sandbox is selected (badges suppressed, but the filter still
+  // checks a connected host's readiness).
+  const effectiveFilterHost = filterHost ?? host;
   // Split harnesses so the ready-to-use ones lead and the "needs setup" ones
   // fold into a "More" submenu (kept discoverable, out of the primary list).
   // The currently-selected harness always stays inline even when unconfigured,
@@ -964,12 +972,12 @@ export function AgentHarnessPicker({
     const ready: AvailableAgent[] = [];
     const more: AvailableAgent[] = [];
     for (const a of harnessEntries) {
-      const unconfigured = harnessUnconfiguredOnHost(a.harness, host);
+      const unconfigured = harnessUnconfiguredOnHost(a.harness, effectiveFilterHost);
       if (!unconfigured || a.id === effectiveAgentId) ready.push(a);
       else if (!hideUnconfigured) more.push(a);
     }
     return { readyHarnessEntries: ready, moreHarnessEntries: more };
-  }, [harnessEntries, host, hideUnconfigured, effectiveAgentId]);
+  }, [harnessEntries, effectiveFilterHost, hideUnconfigured, effectiveAgentId]);
 
   // Split the agents group: built-in bundle agents (Polly / Debby) stay inline
   // in the main list; user-registered custom agents fold into a "Custom agents"
@@ -1232,6 +1240,7 @@ function HarnessConfigModal({
   agent,
   brainHarnessLabels,
   host,
+  filterHost,
   hideUnconfigured,
   smartRoutingEligible,
   permissionMode,
@@ -1260,6 +1269,7 @@ function HarnessConfigModal({
   agent: AvailableAgent;
   brainHarnessLabels: Record<string, string>;
   host: Host | undefined | null;
+  filterHost?: Host | undefined | null;
   hideUnconfigured: boolean;
   smartRoutingEligible: boolean;
   permissionMode: string;
@@ -1383,12 +1393,13 @@ function HarnessConfigModal({
     onOpenChange(false);
   };
 
+  const effectiveBrainFilterHost = filterHost ?? host;
   const brainEntries = brainDefault
     ? Object.entries(brainHarnessLabels).filter(
         ([id]) =>
           id === (draftHarness ?? brainDefault) ||
           !hideUnconfigured ||
-          !harnessUnconfiguredOnHost(id, host),
+          !harnessUnconfiguredOnHost(id, effectiveBrainFilterHost),
       )
     : [];
 
@@ -2234,6 +2245,15 @@ export function NewChatLandingScreen() {
   const supportsApprovalMode = nativeAgentHasCapability(selectedAgent, "approvalMode");
   const supportsCursorMode = nativeAgentHasCapability(selectedAgent, "cursorMode");
   const hideUnconfiguredHarnesses = useMemo(() => readHideUnconfiguredHarnesses(), []);
+  // Include sandbox-backed hosts when the hide-unconfigured filter is active
+  // on a sandbox target: a sandbox host from a prior session reports
+  // configured_harnesses on connect, so its readiness can drive the filter
+  // even when no regular host is connected. Disabled otherwise to avoid an
+  // extra fetch in the common path.
+  const { data: allHostsWithSandbox } = useHosts({
+    includeSandbox: true,
+    enabled: sandboxSelected && hideUnconfiguredHarnesses,
+  });
   // Smart Routing (per-session model selection) is superseded by the Auto
   // harness which handles both harness + model. Hide it entirely for now.
   const smartRoutingEligible = false;
@@ -2417,6 +2437,18 @@ export function NewChatLandingScreen() {
   // Selection stays allowed — the host re-checks at launch and the create
   // call surfaces a specific error if the harness really can't run.
   const harnessWarningHost = !sandboxSelected ? selectedHost : undefined;
+  // When sandbox is selected the badge host is undefined (no "needs setup"
+  // badges for a sandbox). But the hide-unconfigured filter should still work
+  // by checking against ANY host's readiness — including sandbox-backed hosts
+  // from prior sessions — so users who only care about a couple of harnesses
+  // can declutter the picker regardless of sandbox type.
+  const harnessFilterHost =
+    harnessWarningHost ??
+    (hideUnconfiguredHarnesses
+      ? (allHostsWithSandbox ?? []).find(
+          (h) => h.status === "online" && h.configured_harnesses != null,
+        )
+      : undefined);
   const selectedAgentUnconfigured = harnessUnconfiguredOnHost(
     selectedAgent?.harness,
     harnessWarningHost,
@@ -3406,6 +3438,7 @@ export function NewChatLandingScreen() {
                   agentLabel={agentLabel}
                   hasAgents={agentList.length > 0}
                   host={harnessWarningHost}
+                  filterHost={harnessFilterHost}
                   onSelectAgent={handleSelectAgent}
                   pendingAgent={pendingAgentAllowedOnTarget ? pendingAgent : null}
                   pendingAgentId={PENDING_AGENT_ID}
@@ -3456,6 +3489,7 @@ export function NewChatLandingScreen() {
                     agent={selectedAgent}
                     brainHarnessLabels={brainHarnessLabels}
                     host={harnessWarningHost}
+                    filterHost={harnessFilterHost}
                     hideUnconfigured={hideUnconfiguredHarnesses}
                     smartRoutingEligible={smartRoutingEligible}
                     permissionMode={permissionMode}

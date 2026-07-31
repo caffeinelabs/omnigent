@@ -1002,6 +1002,42 @@ describe("NewChatLandingScreen", () => {
     expect(screen.queryByTestId("new-chat-landing-harness-copilot")).toBeNull();
   });
 
+  it("hides unconfigured harnesses when sandbox is selected by falling back to a connected host", () => {
+    // On servers with managed sandboxes the default selection is sandbox, which
+    // has no configured_harnesses of its own. The filter should still work by
+    // checking the first online host's readiness so the toggle is not a no-op.
+    writeHideUnconfiguredHarnesses(true);
+    mockHostWithHarnessReadiness();
+    renderLanding({ managed_sandboxes_enabled: true, sandbox_provider: "modal" });
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-agent-select"), { button: 0 });
+    expect(screen.getByTestId("new-chat-landing-agent-a1")).toBeTruthy();
+    expect(screen.queryByTestId("new-chat-landing-agent-a2")).toBeNull();
+  });
+
+  it("hides unconfigured harnesses on sandbox-only setups via sandbox host readiness", () => {
+    // Pure sandbox environment: no regular hosts, but a sandbox-backed host from
+    // a prior session reports configured_harnesses. The filter should use that
+    // readiness data regardless of sandbox provider type.
+    writeHideUnconfiguredHarnesses(true);
+    const sandboxHost = {
+      ...host("online"),
+      host_id: "sandbox_host_1",
+      sandbox_provider: "modal",
+      configured_harnesses: { "claude-native": true, "codex-native": false },
+    } as Host;
+    useHostsMock.mockImplementation(
+      (opts) =>
+        ({
+          data: opts?.includeSandbox ? [sandboxHost] : [],
+          isLoading: false,
+        }) as unknown as ReturnType<typeof useHosts>,
+    );
+    renderLanding({ managed_sandboxes_enabled: true, sandbox_provider: "modal" });
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-agent-select"), { button: 0 });
+    expect(screen.getByTestId("new-chat-landing-agent-a1")).toBeTruthy();
+    expect(screen.queryByTestId("new-chat-landing-agent-a2")).toBeNull();
+  });
+
   it("seeds the working directory from the host's most-recent path", async () => {
     renderLanding();
     // host_1's recent ("/Users/corey/repo") seeds the field; the chip shows
