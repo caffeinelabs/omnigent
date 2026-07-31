@@ -2446,7 +2446,7 @@ export function NewChatLandingScreen() {
     harnessWarningHost ??
     (hideUnconfiguredHarnesses
       ? (allHostsWithSandbox ?? []).find(
-          (h) => h.status === "online" && h.configured_harnesses != null,
+          (h) => h.configured_harnesses != null,
         )
       : undefined);
   const selectedAgentUnconfigured = harnessUnconfiguredOnHost(

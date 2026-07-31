@@ -1016,11 +1016,11 @@ describe("NewChatLandingScreen", () => {
 
   it("hides unconfigured harnesses on sandbox-only setups via sandbox host readiness", () => {
     // Pure sandbox environment: no regular hosts, but a sandbox-backed host from
-    // a prior session reports configured_harnesses. The filter should use that
-    // readiness data regardless of sandbox provider type.
+    // a prior session reports configured_harnesses. The host is offline (sessions
+    // ended) but the readiness snapshot is still valid for filtering.
     writeHideUnconfiguredHarnesses(true);
     const sandboxHost = {
-      ...host("online"),
+      ...host("offline"),
       host_id: "sandbox_host_1",
       sandbox_provider: "modal",
       configured_harnesses: { "claude-native": true, "codex-native": false },
