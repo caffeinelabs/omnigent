@@ -114,10 +114,16 @@ def find_opencode_cli(opencode_path: str | None = None) -> str:
     """
     Resolve the ``opencode`` executable.
 
+    Uses :func:`resolve_cli_binary` so binaries installed into user-prefix
+    dirs (``~/.npm-global/bin``) or nvm dirs are found even when the runner's
+    ``PATH`` doesn't include them.
+
     :param opencode_path: Explicit path override; ``None`` searches ``PATH``.
     :returns: Absolute path to the ``opencode`` binary.
     :raises OpenCodeCliNotFoundError: When no binary can be resolved.
     """
+    from omnigent._platform import resolve_cli_binary
+
     if opencode_path:
         if os.path.isabs(opencode_path) and os.access(opencode_path, os.X_OK):
             return opencode_path
@@ -125,7 +131,7 @@ def find_opencode_cli(opencode_path: str | None = None) -> str:
         if resolved:
             return resolved
         raise OpenCodeCliNotFoundError(f"opencode executable not found: {opencode_path!r}")
-    resolved = shutil.which("opencode")
+    resolved = resolve_cli_binary("opencode")
     if not resolved:
         raise OpenCodeCliNotFoundError(
             "opencode CLI not found on PATH; install the 'opencode-ai' npm package"
