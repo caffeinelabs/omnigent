@@ -36,6 +36,7 @@ when the credentials file is absent — see ``ambient._claude_login_detected``.)
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -43,6 +44,8 @@ import subprocess
 import sys
 from pathlib import Path
 from typing import NamedTuple
+
+_logger = logging.getLogger(__name__)
 
 from packaging.version import InvalidVersion, Version
 
@@ -868,6 +871,20 @@ class HarnessInstallResult(NamedTuple):
     reason: str | None
 
 
+def _is_npm_global_install(cmd: list[str]) -> bool:
+    """Whether *cmd* is an ``npm install -g`` invocation."""
+    return len(cmd) >= 3 and cmd[0] == "npm" and cmd[1] == "install" and "-g" in cmd
+
+
+def _user_npm_prefix() -> Path:
+    """Per-user npm global prefix (``~/.npm-global``).
+
+    Matches the fallback dir in :func:`~omnigent._platform._cli_fallback_dirs`
+    so binaries installed here are found by :func:`resolve_cli_binary`.
+    """
+    return Path.home() / ".npm-global"
+
+
 def try_install_harness_cli(key: str) -> HarnessInstallResult:
     """Install the harness CLI, returning whether it landed and why not.
 
@@ -876,6 +893,11 @@ def try_install_harness_cli(key: str) -> HarnessInstallResult:
     visible in the setup terminal / host log), but returns a human-readable
     reason so a UI-driven install can surface "npm is not available on the
     host" instead of a silent boolean failure.
+
+    When the default ``npm install -g`` fails (e.g. EACCES on a non-root
+    sandbox user), retries with ``--prefix ~/.npm-global`` so the binary
+    lands in a user-writable dir that :func:`resolve_cli_binary` already
+    checks.
 
     :param key: A harness family or :data:`PI_KEY`.
     :returns: A :class:`HarnessInstallResult` — ``(True, None)`` once the CLI
@@ -898,6 +920,18 @@ def try_install_harness_cli(key: str) -> HarnessInstallResult:
         return HarnessInstallResult(False, "install timed out after 300s")
     except OSError as exc:
         return HarnessInstallResult(False, f"install command failed to run: {exc}")
+
+    if result.returncode != 0 and _is_npm_global_install(cmd):
+        prefix = str(_user_npm_prefix())
+        retry_cmd = [*cmd, "--prefix", prefix]
+        _logger.info("Global npm install failed (exit %d); retrying with --prefix %s", result.returncode, prefix)
+        try:
+            result = subprocess.run(retry_cmd, check=False, timeout=300)
+        except subprocess.TimeoutExpired:
+            return HarnessInstallResult(False, "install timed out after 300s (user-prefix retry)")
+        except OSError as exc:
+            return HarnessInstallResult(False, f"install command failed to run: {exc}")
+
     # harness_install_command would have raised for a spec-less key, so spec is
     # non-None past this point.
     assert spec is not None

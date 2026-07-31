@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import secrets
 import time
 import urllib.parse
@@ -4166,6 +4167,67 @@ async def _launch_runner_on_host_impl(
             error=result.get("error"),
         )
     return _HostLaunchAttempt(runner_id=new_runner_id)
+
+
+async def _launch_runner_with_install_fallback(
+    conv: Conversation,
+    conversation_store: ConversationStore,
+    host_registry: HostRegistry,
+    host_conn: HostConnection,
+) -> _HostLaunchAttempt:
+    """Launch a runner, installing a missing harness CLI first if needed.
+
+    When a managed-sandbox launch refuses because the harness isn't configured
+    and ``OMNIGENT_HARNESS_INSTALL_ENABLED`` is on, install the CLI onto the
+    just-provisioned host and retry the launch once before giving up.
+    """
+    from omnigent.host.frames import HARNESS_NOT_CONFIGURED_ERROR_CODE
+
+    attempt = await _launch_runner_on_host(conv, conversation_store, host_registry, host_conn)
+    if attempt.error_code != HARNESS_NOT_CONFIGURED_ERROR_CODE:
+        return attempt
+
+    from omnigent.onboarding.harness_install import ui_install_key
+    from omnigent.process_logging import env_truthy
+
+    from omnigent.server.routes.hosts import HARNESS_INSTALL_ENABLED_ENV, _proxy_install_harness
+
+    if not env_truthy(os.environ.get(HARNESS_INSTALL_ENABLED_ENV)):
+        return attempt
+    harness = _resolve_harness(conv)
+    if harness is None or ui_install_key(harness) is None:
+        return attempt
+
+    try:
+        result = await _proxy_install_harness(
+            host_registry=host_registry, host_conn=host_conn, harness=harness
+        )
+    except HTTPException as exc:
+        _logger.warning(
+            "Auto-install of harness %s onto managed host %s failed for session %s: %s",
+            harness,
+            host_conn.host_id,
+            conv.id,
+            exc.detail,
+        )
+        return attempt
+    if result.get("status") != "ok":
+        _logger.warning(
+            "Auto-install of harness %s onto managed host %s failed for session %s: %s",
+            harness,
+            host_conn.host_id,
+            conv.id,
+            result.get("error"),
+        )
+        return attempt
+
+    _logger.info(
+        "Installed harness %s onto managed host %s for session %s; retrying launch",
+        harness,
+        host_conn.host_id,
+        conv.id,
+    )
+    return await _launch_runner_on_host(conv, conversation_store, host_registry, host_conn)
 
 
 async def cancel_managed_launch_tasks() -> None:
@@ -8686,6 +8748,7 @@ __all__ = [
     "_latest_assistant_text_from_store",
     "_latest_message_preview",
     "_launch_runner_on_host",
+    "_launch_runner_with_install_fallback",
     "_load_agent_spec_for_session",
     "_load_model_options",
     "_load_model_options_from_host",

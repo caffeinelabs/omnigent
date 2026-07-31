@@ -2361,17 +2361,20 @@ async def _bind_and_launch_managed_runner(
     if host_registry is not None:
         host_conn = host_registry.get(managed.host_id)
         if host_conn is not None:
-            launch_attempt = await _launch_runner_on_host(
+            launch_attempt = await _launch_runner_with_install_fallback(
                 conv,
                 conversation_store,
                 host_registry,
                 host_conn,
             )
             if launch_attempt.error_code == _HARNESS_NOT_CONFIGURED_ERROR_CODE:
-                # The sandbox image should bake in the harness, but if the
-                # host refuses, fail the launch loudly (mirroring the
-                # delete-during-provisioning path) rather than waiting out
-                # the connect timeout for a runner that will never appear.
+                # The sandbox image should bake in the harness, and
+                # _launch_runner_with_install_fallback already tried
+                # installing it onto this host when that opt-in is enabled —
+                # a refusal here is terminal, so fail the launch loudly
+                # (mirroring the delete-during-provisioning path) rather than
+                # waiting out the connect timeout for a runner that will
+                # never appear.
                 reason = launch_attempt.error or "harness not configured on the sandbox host"
                 tracker.fail(session_id, reason)
                 _publish_sandbox_status(session_id, "failed", reason)
@@ -2798,7 +2801,8 @@ async def _run_managed_wake(
                 )
                 return
         if host_conn is not None:
-            launch_attempt = await _launch_runner_on_host(
+            assert host_registry is not None
+            launch_attempt = await _launch_runner_with_install_fallback(
                 refreshed,
                 conversation_store,
                 host_registry,
