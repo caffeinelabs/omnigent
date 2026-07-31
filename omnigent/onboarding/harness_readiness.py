@@ -115,7 +115,8 @@ _OPENCODE_HARNESSES: frozenset[str] = frozenset({"opencode-native"})
 _CURSOR_NATIVE_HARNESSES: frozenset[str] = frozenset({"cursor-native", "native-cursor"})
 
 # Native Kiro harnesses boot the standalone ``kiro-cli`` TUI. Kiro has its own
-# auth backend and no Omnigent provider family, so readiness is binary presence.
+# auth backend (Builder ID / social login); readiness is binary + CLI login
+# (``kiro-cli chat --list-models`` exits 0 only when signed in).
 _KIRO_NATIVE_HARNESSES: frozenset[str] = frozenset({"kiro-native", "native-kiro"})
 
 # Native Goose harnesses. Boot the ``goose session`` TUI (``omni goose``) and
@@ -305,6 +306,8 @@ _AUTH_AWARE_NATIVE_HARNESSES: dict[str, str] = {
     "opencode-native": OPENCODE_KEY,
     "cursor-native": CURSOR_KEY,
     "native-cursor": CURSOR_KEY,
+    "kiro-native": KIRO_KEY,
+    "native-kiro": KIRO_KEY,
 }
 
 

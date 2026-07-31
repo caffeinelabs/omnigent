@@ -242,6 +242,8 @@ _HARNESS_INSTALL: dict[str, HarnessInstallSpec] = {
         "Kiro",
         "kiro-cli",
         package=None,
+        login_args=("login",),
+        status_args=("chat", "--list-models", "--format", "json"),
         install_hint="curl -fsSL https://cli.kiro.dev/install | bash",
         min_version=_KIRO_MIN_VERSION,
     ),

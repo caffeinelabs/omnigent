@@ -377,8 +377,6 @@ def test_configured_harness_map_gates_only_cli_harnesses(
     # binary it reads False before its credential check is even reached.
     for cli in (
         "kimi",
-        "kiro-native",
-        "native-kiro",
         "antigravity-native",
         "native-antigravity",
         "goose-native",
@@ -387,12 +385,9 @@ def test_configured_harness_map_gates_only_cli_harnesses(
         "hermes",
     ):
         assert result[cli] is not True, f"{cli} should be gated on its CLI binary"
-    # Auth-aware harnesses (codex, claude, opencode, cursor, pi) carry a
+    # Auth-aware harnesses (codex, claude, opencode, cursor, kiro, pi) carry a
     # two-step signal in the picker map, so a missing binary is the structured
-    # ``"binary-missing"`` (step 1 to-do), not a bare ``False``. Cursor joined
-    # this group — it is now auth-aware like the other native CLI harnesses, so
-    # its missing binary surfaces as ``"binary-missing"`` too. Pi is also here —
-    # it reports the credential axis (no CLI login; its credential is a provider).
+    # ``"binary-missing"`` (step 1 to-do), not a bare ``False``.
     for missing in (
         "codex",
         "codex-native",
@@ -402,6 +397,8 @@ def test_configured_harness_map_gates_only_cli_harnesses(
         "opencode-native",
         "cursor-native",
         "native-cursor",
+        "kiro-native",
+        "native-kiro",
         "pi",
         "pi-native",
     ):
@@ -484,6 +481,26 @@ def test_kimi_readiness_keys_off_binary(
     _all_clis_installed(monkeypatch)
     assert harness_is_configured("kimi") is True
     assert harness_is_configured("kimi-code") is True
+
+
+def test_kiro_readiness_needs_auth_when_not_logged_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Kiro reports ``needs-auth`` when installed but not signed in.
+
+    ``kiro-cli chat --list-models`` exits non-zero without a login, so the
+    picker map distinguishes "installed, needs sign-in" from "not installed".
+    """
+    _all_clis_installed(monkeypatch)
+    monkeypatch.setattr(hi, "harness_cli_logged_in", lambda _key: False)
+    result = configured_harness_map()
+    assert result["kiro-native"] == "needs-auth"
+    assert result["native-kiro"] == "needs-auth"
+
+    monkeypatch.setattr(hi, "harness_cli_logged_in", lambda _key: True)
+    result = configured_harness_map()
+    assert result["kiro-native"] is True
+    assert result["native-kiro"] is True
 
 
 def test_cursor_readiness_keys_off_api_key(
