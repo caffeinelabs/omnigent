@@ -363,6 +363,8 @@ def register_core_routes(
                     host_store=host_store_for_managed,
                     host_registry=getattr(request.app.state, "host_registry", None),
                     tunnel_registry=getattr(request.app.state, "tunnel_registry", None),
+                    github_store=getattr(request.app.state, "github_store", None),
+                    github_client=getattr(request.app.state, "github_client", None),
                 )
             )
             _managed_launch_tasks.add(launch_task)

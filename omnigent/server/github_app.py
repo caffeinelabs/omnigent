@@ -72,13 +72,10 @@ class SandboxGithubIdentity:
 
     :param token: A currently-valid user access token.
     :param login: The user's GitHub login, e.g. ``"octocat"``.
-    :param ssh_authorized_keys: The user's PUBLIC SSH keys, each a full
-        ``authorized_keys`` line (``"ssh-ed25519 AAAA… "``).
     """
 
     token: str
     login: str
-    ssh_authorized_keys: tuple[str, ...]
 
 
 @dataclass(frozen=True)

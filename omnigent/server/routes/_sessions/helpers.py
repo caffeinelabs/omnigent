@@ -4076,6 +4076,7 @@ async def _provision_managed_sandbox(
     tracker: ManagedLaunchTracker,
     host_store: HostStore,
     relaunch_host: Host | None,
+    github_identity: Any = None,
 ) -> ManagedHostLaunch | None:
     """
     Run the provision phase of a background managed launch.
@@ -4093,6 +4094,9 @@ async def _provision_managed_sandbox(
     :param host_store: Persistent host registrations.
     :param relaunch_host: Existing host row for a relaunch, or
         ``None`` for a first launch.
+    :param github_identity: The owner's resolved GitHub credentials to
+        authenticate ``gh`` / git as them in the sandbox and inject their
+        SSH keys, or ``None`` to keep the shared ``GIT_TOKEN`` behaviour.
     :returns: The launch result, or ``None`` when the launch failed
         (the tracker entry is already settled with the reason).
     """
@@ -4117,6 +4121,7 @@ async def _provision_managed_sandbox(
                 host=relaunch_host,
                 host_store=host_store,
                 repo=repo,
+                github_identity=github_identity,
                 on_stage=_on_stage,
             )
         return await launch_managed_host(
@@ -4124,6 +4129,7 @@ async def _provision_managed_sandbox(
             owner=owner,
             host_store=host_store,
             repo=repo,
+            github_identity=github_identity,
             on_stage=_on_stage,
         )
     except HTTPException as exc:

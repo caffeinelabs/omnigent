@@ -142,6 +142,7 @@ from omnigent.stores.host_store import Host, HostStore
 
 if TYPE_CHECKING:
     from omnigent.onboarding.sandboxes import SandboxLauncher
+    from omnigent.server.github_app import SandboxGithubIdentity
 
 _logger = logging.getLogger(__name__)
 
@@ -1980,6 +1981,7 @@ async def launch_managed_host(
     owner: str,
     host_store: HostStore,
     repo: RepoWorkspace | None = None,
+    github_identity: SandboxGithubIdentity | None = None,
     on_stage: Callable[[str], None] | None = None,
 ) -> ManagedHostLaunch:
     """
@@ -2008,6 +2010,12 @@ async def launch_managed_host(
         host image's git credential helper when the sandbox env
         carries ``GIT_TOKEN`` (injected through Modal secrets — see
         deploy/modal/README.md "Git credentials").
+    :param github_identity: The session owner's connected GitHub
+        credentials (user access token, login, public SSH keys), used to
+        authenticate ``gh`` / git in the sandbox *as that user* and to
+        inject their SSH keys. ``None`` when the owner has not connected
+        GitHub or the GitHub App is not configured — the sandbox then
+        keeps the shared ``GIT_TOKEN`` behaviour.
     :param on_stage: Progress observer invoked as the launch pipeline
         advances, with the stage just entered: ``"cloning"`` (when
         *repo* is set) then ``"starting"``. May be called from a
@@ -2043,6 +2051,7 @@ async def launch_managed_host(
         owner=owner,
         sandbox_id=sandbox_id,
         repo=repo,
+        github_identity=github_identity,
         on_stage=on_stage,
     )
     return ManagedHostLaunch(host_id=host_id, workspace=workspace)
@@ -2054,6 +2063,7 @@ async def relaunch_managed_host(
     host: Host,
     host_store: HostStore,
     repo: RepoWorkspace | None = None,
+    github_identity: SandboxGithubIdentity | None = None,
     on_stage: Callable[[str], None] | None = None,
 ) -> ManagedHostLaunch:
     """
@@ -2081,6 +2091,9 @@ async def relaunch_managed_host(
     :param host_store: Persistent host registrations.
     :param repo: Repository to re-clone as the workspace, or ``None``
         for an empty workspace.
+    :param github_identity: The owner's connected GitHub credentials to
+        authenticate ``gh`` / git as them and inject their SSH keys, or
+        ``None`` to keep the shared ``GIT_TOKEN`` behaviour.
     :param on_stage: Progress observer forwarded to
         :func:`_arm_and_start_host`; see :func:`launch_managed_host`.
         ``None`` disables progress reporting.
@@ -2119,6 +2132,7 @@ async def relaunch_managed_host(
         owner=host.user_id,
         sandbox_id=sandbox_id,
         repo=repo,
+        github_identity=github_identity,
         on_stage=on_stage,
         keep_host_on_failure=True,
     )
@@ -2135,6 +2149,7 @@ async def _arm_and_start_host(
     owner: str,
     sandbox_id: str,
     repo: RepoWorkspace | None = None,
+    github_identity: SandboxGithubIdentity | None = None,
     on_stage: Callable[[str], None] | None = None,
     keep_host_on_failure: bool = False,
 ) -> str:
@@ -2162,6 +2177,9 @@ async def _arm_and_start_host(
     :param sandbox_id: The provisioned sandbox, e.g. ``"sb-a1b2c3"``.
     :param repo: Repository to clone as the workspace, or ``None``
         for an empty workspace.
+    :param github_identity: The owner's connected GitHub credentials to
+        authenticate ``gh`` / git as them and inject their SSH keys, or
+        ``None`` to keep the shared ``GIT_TOKEN`` behaviour.
     :param on_stage: Progress observer forwarded to the launcher's
         ``start_host``; see :func:`launch_managed_host`. ``None``
         disables progress reporting.
@@ -2199,7 +2217,20 @@ async def _arm_and_start_host(
             repo_url=repo.url if repo is not None else None,
             repo_branch=repo.branch if repo is not None else None,
             repo_name=repo.repo_name if repo is not None else None,
+            owner=owner,
             on_stage=on_stage,
+            # The owner's connected GitHub credentials authenticate gh / git
+            # in the sandbox as that user. Splatted (and omitted entirely when
+            # there is no identity) so a deployment-injected launcher predating
+            # these parameters keeps launching.
+            **(
+                {
+                    "github_token": github_identity.token,
+                    "github_login": github_identity.login,
+                }
+                if github_identity is not None
+                else {}
+            ),
             # Omitted entirely when unset: a deployment-injected launcher
             # predating the host_config parameter must keep launching.
             **({"host_config": config.host_config} if config.host_config is not None else {}),
