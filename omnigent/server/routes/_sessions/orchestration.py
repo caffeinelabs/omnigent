@@ -2125,6 +2125,38 @@ async def _wait_for_host_bound_runner_client(
             await asyncio.gather(*outstanding, return_exceptions=True)
 
 
+async def _resolve_owner_github_identity(
+    github_store: Any,
+    github_client: Any,
+    owner: str,
+) -> Any:
+    """Resolve the owner's GitHub sandbox identity, or ``None``.
+
+    Best-effort bridge to
+    :func:`omnigent.server.github_identity.resolve_sandbox_identity`:
+    returns ``None`` when the GitHub App is not wired, the owner has not
+    connected, or resolution fails — so a managed launch degrades to the
+    shared-``GIT_TOKEN`` behaviour rather than erroring.
+
+    :param github_store: ``app.state.github_store`` or ``None``.
+    :param github_client: ``app.state.github_client`` or ``None``.
+    :param owner: The session owner to resolve credentials for.
+    :returns: A ``SandboxGithubIdentity`` or ``None``.
+    """
+    if github_store is None or github_client is None:
+        return None
+    from omnigent.server.auth import RESERVED_USER_LOCAL
+    from omnigent.server.github_identity import resolve_sandbox_identity
+
+    if owner == RESERVED_USER_LOCAL:
+        return None
+    try:
+        return await resolve_sandbox_identity(owner, store=github_store, client=github_client)
+    except Exception:
+        _logger.exception("Failed to resolve GitHub identity for %s", owner)
+        return None
+
+
 async def _run_managed_launch(
     *,
     session_id: str,
@@ -2137,6 +2169,8 @@ async def _run_managed_launch(
     host_registry: HostRegistry | None,
     tunnel_registry: TunnelRegistry | None,
     relaunch_host: Host | None = None,
+    github_store: Any = None,
+    github_client: Any = None,
 ) -> None:
     """
     Provision a managed sandbox for a session in the background.
@@ -2185,7 +2219,12 @@ async def _run_managed_launch(
     :param relaunch_host: Existing managed host row to relaunch a new
         sandbox generation for, or ``None`` for a first launch (a
         fresh host identity is minted).
+    :param github_store: ``app.state.github_store`` (per-user GitHub
+        connections), or ``None`` when the GitHub App is not wired.
+    :param github_client: ``app.state.github_client`` used to mint the
+        owner's sandbox credentials, or ``None`` when not wired.
     """
+    github_identity = await _resolve_owner_github_identity(github_store, github_client, owner)
     managed = await _provision_managed_sandbox(
         session_id=session_id,
         owner=owner,
@@ -2194,6 +2233,7 @@ async def _run_managed_launch(
         tracker=tracker,
         host_store=host_store,
         relaunch_host=relaunch_host,
+        github_identity=github_identity,
     )
     if managed is None:
         return
@@ -2552,6 +2592,8 @@ def _kick_managed_relaunch(
             host_registry=getattr(app_state, "host_registry", None),
             tunnel_registry=getattr(app_state, "tunnel_registry", None),
             relaunch_host=host,
+            github_store=getattr(app_state, "github_store", None),
+            github_client=getattr(app_state, "github_client", None),
         )
     )
     _managed_launch_tasks.add(relaunch_task)

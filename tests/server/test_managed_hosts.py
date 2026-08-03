@@ -1495,7 +1495,13 @@ async def test_launch_without_host_config_supports_legacy_start_host_signature(
         )
 
     class _LegacySignatureLauncher(FakeSandboxLauncher):
-        """Overrides start_host with the pre-host_config explicit signature."""
+        """Overrides start_host with a pre-host_config explicit signature.
+
+        It DOES accept the always-supplied identity kwargs (``owner`` + the
+        connected-GitHub credentials) but predates ``host_config`` — so the
+        test proves the optional ``host_config`` kwarg is omitted entirely
+        rather than passed as ``None``.
+        """
 
         def start_host(
             self,
@@ -1508,6 +1514,9 @@ async def test_launch_without_host_config_supports_legacy_start_host_signature(
             repo_url: str | None = None,
             repo_branch: str | None = None,
             repo_name: str | None = None,
+            owner: str | None = None,
+            github_token: str | None = None,
+            github_login: str | None = None,
             on_stage: Callable[[str], None] | None = None,
         ) -> str:
             return super().start_host(
@@ -1519,6 +1528,9 @@ async def test_launch_without_host_config_supports_legacy_start_host_signature(
                 repo_url=repo_url,
                 repo_branch=repo_branch,
                 repo_name=repo_name,
+                owner=owner,
+                github_token=github_token,
+                github_login=github_login,
                 on_stage=on_stage,
             )
 
@@ -1803,6 +1815,9 @@ class _EntrypointFakeLauncher(FakeSandboxLauncher):
         repo_url: str | None = None,
         repo_branch: str | None = None,
         repo_name: str | None = None,
+        owner: str | None = None,
+        github_token: str | None = None,
+        github_login: str | None = None,
         host_config: dict[str, object] | None = None,
         on_stage=None,
     ) -> str:

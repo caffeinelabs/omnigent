@@ -220,6 +220,64 @@ def test_build_token_secret_manifest_carries_token_in_stringdata() -> None:
     assert secret["type"] == "Opaque"
 
 
+def test_build_token_secret_manifest_carries_github_token() -> None:
+    """A connecting user's GitHub token rides the same Secret, not the Pod spec."""
+    secret = build_token_secret_manifest(
+        secret_name="omnigent-pod-token",
+        namespace="omnigent-sandboxes",
+        token=_TOKEN,
+        github_token="ghu_secret_xyz",
+    )
+    assert secret["stringData"] == {
+        HOST_TOKEN_ENV_VAR: _TOKEN,
+        "GITHUB_USER_TOKEN": "ghu_secret_xyz",
+    }
+
+
+def test_build_pod_manifest_github_token_rides_secret_ref_not_the_spec() -> None:
+    """The user's GitHub token is a secretKeyRef in env and never a literal.
+
+    Regression: the token must not appear in the Pod spec — not as literal env,
+    and not base64-embedded in the init container's gh/git setup commands.
+    Anyone with ``get pod`` on the sandbox namespace would otherwise read a live
+    GitHub token.
+    """
+    manifest = build_pod_manifest(
+        **_MANIFEST_KW,
+        github_token="ghu_secret_xyz",
+        github_login="octocat",
+    )
+    # The raw token appears nowhere in the manifest (env, commands, anywhere).
+    assert "ghu_secret_xyz" not in json.dumps(manifest)
+
+    ref = {"name": "omnigent-managed-abc-1a2b3c-token", "key": "GITHUB_USER_TOKEN"}
+    for container in (
+        manifest["spec"]["containers"][0],
+        manifest["spec"]["initContainers"][0],
+    ):
+        by_name = {e["name"]: e for e in container["env"]}
+        for var in ("GIT_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
+            assert by_name[var]["valueFrom"]["secretKeyRef"] == ref
+            assert "value" not in by_name[var]
+        # The non-secret token username stays a literal.
+        assert by_name["GIT_USERNAME"]["value"] == "x-access-token"
+
+    # The init container's gh/git setup reads the token from $GH_TOKEN at
+    # runtime rather than embedding it.
+    init_script = manifest["spec"]["initContainers"][0]["command"][2]
+    assert "/home/omnigent/.config/gh/hosts.yml" in init_script
+    assert "/home/omnigent/.git-credentials" in init_script
+    assert '"$GH_TOKEN"' in init_script or '"${GH_TOKEN}"' in init_script
+
+
+def test_build_pod_manifest_no_github_token_has_no_credential_env() -> None:
+    """Without a user token, no GIT_TOKEN/GH_TOKEN credential env is added."""
+    manifest = build_pod_manifest(**_MANIFEST_KW)
+    host_env = {e["name"] for e in manifest["spec"]["containers"][0]["env"]}
+    assert "GH_TOKEN" not in host_env
+    assert "GITHUB_TOKEN" not in host_env
+
+
 def test_build_pod_manifest_harness_secret_projects_into_both_containers() -> None:
     """The harness creds Secret is projected via envFrom on init (for clone) + host."""
     manifest = build_pod_manifest(**_MANIFEST_KW)
