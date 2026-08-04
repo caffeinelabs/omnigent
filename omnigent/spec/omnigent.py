@@ -412,6 +412,7 @@ def _mcp_server_to_mcp_tool(config: MCPServerConfig) -> MCPTool:
     return MCPTool(
         url=config.url,
         headers=dict(config.headers) if config.headers else None,
+        oauth=config.oauth,
         tools=list(config.tools) if config.tools else None,
     )
 
@@ -1817,6 +1818,7 @@ def _translate_mcp_tool_from_def(
             url=tool.url,
             headers=dict(tool.headers) if tool.headers else {},
             databricks_profile=tool.profile,
+            oauth=tool.oauth,
             tools=list(tool.tools) if tool.tools else None,
         )
     if tool.command is not None:
