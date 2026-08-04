@@ -216,6 +216,7 @@ def mcp_http_tool_yaml(tmp_path: Path) -> Path:
                 "type": "mcp",
                 "url": "https://mcp.example.com/sse",
                 "headers": {"Authorization": "Bearer tok_xyz"},
+                "oauth": False,
             },
         },
     }
@@ -741,10 +742,40 @@ def test_load_mcp_http_yaml_translates_to_mcp_server(mcp_http_tool_yaml: Path) -
     # Headers carry through — provider-auth headers like
     # Authorization must survive translation.
     assert mcp.headers == {"Authorization": "Bearer tok_xyz"}
+    # oauth carries through the MCPTool→MCPServerConfig translation so
+    # opencode's OAuth provider can be disabled for header-auth remotes
+    # (e.g. Datadog). A missing passthrough here silently drops oauth and
+    # opencode falls back to needs_auth.
+    assert mcp.oauth is False
     # Stdio fields stay empty on the http branch.
     assert mcp.command is None
     assert mcp.args == []
     assert mcp.env == {}
+
+
+def test_mcp_http_oauth_round_trips_through_mcp_tool() -> None:
+    """
+    The opencode-native runtime path goes MCPServerConfig → MCPTool →
+    MCPServerConfig → build_opencode_mcp_block. ``oauth`` must survive both
+    translation hops so opencode's OAuth provider can be disabled for a
+    header-auth remote MCP that advertises OAuth (e.g. Datadog). A dropped
+    field at either hop is exactly the regression where the tool is
+    configured but opencode enters its OAuth flow and reports needs_auth.
+    """
+    from omnigent.spec.omnigent import _mcp_server_to_mcp_tool, _translate_mcp_tool_from_def
+    from omnigent.spec.types import MCPServerConfig
+
+    cfg = MCPServerConfig(
+        name="datadog",
+        transport="http",
+        url="https://mcp.datadoghq.com/api/unstable/mcp-server/mcp",
+        headers={"DD-API-KEY": "k"},
+        oauth=False,
+    )
+    tool = _mcp_server_to_mcp_tool(cfg)
+    assert tool.oauth is False, "MCPServerConfig→MCPTool dropped oauth"
+    back = _translate_mcp_tool_from_def("datadog", tool)
+    assert back.oauth is False, "MCPTool→MCPServerConfig dropped oauth"
 
 
 def test_mcp_stdio_yaml_reverse_trip_recovers_mcp_tool(mcp_tool_yaml: Path) -> None:

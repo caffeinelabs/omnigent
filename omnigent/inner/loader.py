@@ -429,6 +429,7 @@ def _parse_tool(name: str, data: str | YamlData) -> Tool:
             profile=mcp_profile,
             databricks_server=data.get("databricks_server"),
             headers=data.get("headers"),
+            oauth=data.get("oauth"),
         )
 
     if tool_type == "agent":
