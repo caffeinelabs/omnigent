@@ -250,6 +250,12 @@ class MCPTool(Tool):
         (e.g. ``"unity-catalog"``). ``None`` when ``url`` or
         ``command`` is used.
     :param headers: Extra HTTP headers for the ``url`` transport.
+    :param oauth: OAuth control for the ``url`` transport, passed
+        through to opencode's ``mcp.<name>.oauth``. ``False`` disables
+        opencode's default OAuth provider so a header-auth remote MCP
+        that advertises OAuth (e.g. Datadog) uses ``headers`` instead
+        of dropping to ``needs_auth``; a mapping supplies explicit OAuth
+        settings. ``None`` keeps opencode's default.
     """
 
     url: str | None = None
@@ -261,6 +267,7 @@ class MCPTool(Tool):
     profile: str | None = None
     databricks_server: str | None = None
     headers: dict[str, str] | None = None
+    oauth: bool | dict[str, object] | None = None
 
 
 @dataclass
