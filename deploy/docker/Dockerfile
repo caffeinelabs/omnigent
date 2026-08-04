@@ -262,10 +262,14 @@ RUN npm install -g --no-audit --no-fund \
 # OpenCode CLI for the opencode-native harness. PINNED (unlike the CLIs above):
 # the omnigent opencode-native client speaks a specific OpenCode API version
 # (omnigent/opencode_native_client.py — OPENCODE_MIN_VERSION 1.17.7,
-# OPENCODE_MAX_VERSION_EXCLUSIVE 1.18.0), so a floating `latest` could jump to an
+# OPENCODE_MAX_VERSION_EXCLUSIVE 1.19.0), so a floating `latest` could jump to an
 # unsupported release and fail the runner's version check. Bump within that
 # range in lockstep with those constants.
-ARG OPENCODE_VERSION=1.17.11
+# 1.18.x is required for remote (streamable-HTTP) MCP servers: 1.17.x's
+# remote-MCP client fails to connect to streamable-HTTP endpoints (e.g. Datadog's
+# mcp.datadoghq.com) and drops them as "server unavailable", so no tools load.
+# 1.18.13 connects correctly (verified against the Datadog MCP).
+ARG OPENCODE_VERSION=1.18.13
 RUN npm install -g --no-audit --no-fund "opencode-ai@${OPENCODE_VERSION}" \
  && npm cache clean --force \
  && opencode --version
