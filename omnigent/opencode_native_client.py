@@ -27,10 +27,13 @@ import httpx
 
 _logger = logging.getLogger(__name__)
 
-# Pinned OpenCode CLI/API version range. The source monorepo reports
-# 1.17.7; we accept 1.17.x and refuse 1.18+ until validated.
+# Pinned OpenCode CLI/API version range. The v1 REST + SSE endpoints this
+# client uses are unchanged across 1.17.x–1.18.x; 1.18.x is required because
+# 1.17.x's remote-MCP client fails to connect to streamable-HTTP MCP servers
+# (e.g. Datadog) and drops them as "server unavailable". Accept 1.17.7–1.18.x;
+# refuse 1.19+ until validated.
 OPENCODE_MIN_VERSION = "1.17.7"
-OPENCODE_MAX_VERSION_EXCLUSIVE = "1.18.0"
+OPENCODE_MAX_VERSION_EXCLUSIVE = "1.19.0"
 
 _DEFAULT_TIMEOUT = httpx.Timeout(30.0, connect=10.0)
 
