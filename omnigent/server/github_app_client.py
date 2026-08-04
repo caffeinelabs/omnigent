@@ -36,6 +36,14 @@ _BRANCHES_PER_PAGE = 100
 # branches, but the picker only needs a bounded, fast list.
 _BRANCHES_MAX_PAGES = 3
 
+_REPO_PULLS_ENDPOINT = "https://api.github.com/repos/{full_name}/pulls"
+_PULLS_PER_PAGE = 100
+# One page of open PRs, newest first, is plenty for "PRs opened this session".
+_PULLS_MAX_PAGES = 2
+
+_REPO_PULL_COMMITS_ENDPOINT = "https://api.github.com/repos/{full_name}/pulls/{number}/commits"
+_PULL_COMMITS_PER_PAGE = 100
+
 _HTTP_TIMEOUT_S = 15.0
 
 
@@ -184,6 +192,111 @@ class GitHubAppClient:
                 if len(batch) < _BRANCHES_PER_PAGE:
                     break
         return branches
+
+    async def list_pulls(self, access_token: str, full_name: str) -> list[dict[str, object]]:
+        """List pull requests for ``full_name`` (``owner/repo``), newest first.
+
+        Reads ``/repos/{full_name}/pulls?state=all`` (up to
+        :data:`_PULLS_MAX_PAGES` pages) so OPEN, CLOSED, and MERGED PRs are all
+        returned — the "PRs opened this session" panel shows anything created
+        during the session regardless of its current state. Caller-side
+        filtering (by author and creation time) scopes the raw list to a
+        session.
+
+        :param access_token: A valid user access token.
+        :param full_name: The repository's ``owner/name``.
+        :returns: PRs as ``{number, title, html_url, head_ref, draft, state,
+            merged, author_login, created_at}``, newest first. ``state`` is
+            ``"open"``/``"closed"``; ``merged`` is ``True`` for a merged PR.
+        :raises GitHubAppError: When the API call fails.
+        """
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/vnd.github+json",
+        }
+        url = _REPO_PULLS_ENDPOINT.format(full_name=full_name)
+        pulls: list[dict[str, object]] = []
+        async with self._http_client() as client:
+            for page in range(1, _PULLS_MAX_PAGES + 1):
+                resp = await client.get(
+                    url,
+                    params={
+                        "state": "all",
+                        "sort": "created",
+                        "direction": "desc",
+                        "per_page": _PULLS_PER_PAGE,
+                        "page": page,
+                    },
+                    headers=headers,
+                )
+                if resp.status_code != 200:
+                    raise GitHubAppError(
+                        f"GitHub /repos/{full_name}/pulls returned {resp.status_code}"
+                    )
+                batch = resp.json()
+                if not isinstance(batch, list) or not batch:
+                    break
+                for entry in batch:
+                    if not isinstance(entry, dict) or entry.get("number") is None:
+                        continue
+                    head = entry.get("head") if isinstance(entry.get("head"), dict) else {}
+                    user = entry.get("user") if isinstance(entry.get("user"), dict) else {}
+                    pulls.append(
+                        {
+                            "number": entry.get("number"),
+                            "title": entry.get("title"),
+                            "html_url": entry.get("html_url"),
+                            "head_ref": head.get("ref"),
+                            "draft": bool(entry.get("draft")),
+                            "state": entry.get("state"),
+                            "merged": entry.get("merged_at") is not None,
+                            "author_login": user.get("login"),
+                            "created_at": entry.get("created_at"),
+                            "body": entry.get("body") or "",
+                        }
+                    )
+                if len(batch) < _PULLS_PER_PAGE:
+                    break
+        return pulls
+
+    async def list_pull_commit_messages(
+        self, access_token: str, full_name: str, number: int
+    ) -> list[str]:
+        """Return the commit messages of PR ``number`` in ``full_name``.
+
+        Used to confirm a PR belongs to a session by looking for the
+        ``Omnigent-Session`` trailer the sandbox stamps on its commits. Reads
+        the first page (a PR's commit count is small in practice).
+
+        :param access_token: A valid user access token.
+        :param full_name: The repository's ``owner/name``.
+        :param number: The pull request number.
+        :returns: Commit messages (possibly empty).
+        :raises GitHubAppError: When the API call fails.
+        """
+        url = _REPO_PULL_COMMITS_ENDPOINT.format(full_name=full_name, number=number)
+        async with self._http_client() as client:
+            resp = await client.get(
+                url,
+                params={"per_page": _PULL_COMMITS_PER_PAGE},
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/vnd.github+json",
+                },
+            )
+        if resp.status_code != 200:
+            raise GitHubAppError(
+                f"GitHub /repos/{full_name}/pulls/{number}/commits returned {resp.status_code}"
+            )
+        batch = resp.json()
+        if not isinstance(batch, list):
+            return []
+        messages: list[str] = []
+        for entry in batch:
+            commit = entry.get("commit") if isinstance(entry, dict) else None
+            if isinstance(commit, dict) and isinstance(commit.get("message"), str):
+                messages.append(commit["message"])
+        return messages
 
     async def _token_request(self, fields: dict[str, str]) -> GitHubTokenSet:
         """POST the given form fields to the token endpoint and parse the reply."""
