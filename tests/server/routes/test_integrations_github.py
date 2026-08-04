@@ -196,6 +196,20 @@ def _app(db_uri: str) -> tuple[TestClient, GithubConnectionStore, GitHubAppConfi
 _USER = {"X-Test-User": "alice@example.com"}
 
 
+def test_open_in_omnigent_button_svg_is_public(db_uri: str) -> None:
+    tc, _store, _config, _client = _app(db_uri)
+    # No auth header — GitHub's image proxy fetches this without cookies.
+    resp = tc.get("/v1/integrations/github/open-in-omnigent.svg")
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("image/svg+xml")
+    assert "Open in Omnigent" in resp.text
+    assert resp.text.startswith("<svg")
+    # Dark variant differs from the (default) light one.
+    dark = tc.get("/v1/integrations/github/open-in-omnigent.svg", params={"theme": "dark"})
+    assert dark.status_code == 200
+    assert dark.text != resp.text
+
+
 def test_status_unconnected(db_uri: str) -> None:
     tc, _store, _config, _client = _app(db_uri)
     resp = tc.get("/v1/integrations/github/status", headers=_USER)

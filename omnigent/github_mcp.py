@@ -25,8 +25,13 @@ from __future__ import annotations
 
 import os
 import sys
+import urllib.parse
 
 from omnigent.spec.types import MCPServerConfig
+
+#: Public (unauthenticated) path the Omnigent server serves the branded button
+#: SVG on, so GitHub's image proxy can render it in a PR body.
+BUTTON_ASSET_PATH = "/v1/integrations/github/open-in-omnigent.svg"
 
 #: GitHub's hosted (remote) MCP server. Reachable over the sandbox's outbound
 #: network; needs only an ``Authorization: Bearer <token>`` header.
@@ -56,8 +61,30 @@ def github_mcp_available() -> bool:
 
 
 def open_in_omnigent_link(session_url: str) -> str:
-    """The canonical 'Open in Omnigent' markdown link for a PR body."""
-    return f"[Open in Omnigent]({session_url})"
+    """A branded 'Open in Omnigent' button (GitHub ``<picture>``) for a PR body.
+
+    Renders like Cursor's PR-footer button: a light/dark image linking back to
+    the session. The button image is served *unauthenticated* by the Omnigent
+    server (:data:`BUTTON_ASSET_PATH`) so GitHub's image proxy can fetch it; the
+    variants switch on ``prefers-color-scheme`` via ``<picture>``.
+
+    The session URL is kept verbatim in the anchor ``href`` so the session-PR
+    panel still associates the PR by substring match. Falls back to a plain
+    markdown link when the server origin can't be derived from *session_url*.
+    """
+    parts = urllib.parse.urlsplit(session_url)
+    origin = f"{parts.scheme}://{parts.netloc}" if parts.scheme and parts.netloc else ""
+    if not origin:
+        return f"[Open in Omnigent]({session_url})"
+    dark = f"{origin}{BUTTON_ASSET_PATH}?theme=dark"
+    light = f"{origin}{BUTTON_ASSET_PATH}?theme=light"
+    return (
+        f'<a href="{session_url}">'
+        "<picture>"
+        f'<source media="(prefers-color-scheme: dark)" srcset="{dark}">'
+        f'<img alt="Open in Omnigent" height="28" src="{light}">'
+        "</picture></a>"
+    )
 
 
 def inject_session_link(arguments: dict, session_url: str | None) -> dict:

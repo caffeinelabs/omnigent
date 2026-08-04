@@ -75,6 +75,24 @@ def test_inject_session_link_empty_body() -> None:
     assert args["body"] == open_in_omnigent_link(_SESSION_URL)
 
 
+def test_open_in_omnigent_link_is_picture_button() -> None:
+    link = open_in_omnigent_link(_SESSION_URL)
+    # A GitHub <picture> button with light/dark variants served by the server.
+    assert "<picture>" in link
+    assert 'media="(prefers-color-scheme: dark)"' in link
+    assert "/v1/integrations/github/open-in-omnigent.svg?theme=dark" in link
+    assert "/v1/integrations/github/open-in-omnigent.svg?theme=light" in link
+    # The session URL stays verbatim in the href exactly once → detection intact.
+    assert f'href="{_SESSION_URL}"' in link
+    assert link.count(_SESSION_URL) == 1
+
+
+def test_open_in_omnigent_link_falls_back_without_origin() -> None:
+    # A bare id (no scheme/host) can't yield an image origin → markdown link.
+    link = open_in_omnigent_link("sess123")
+    assert link == "[Open in Omnigent](sess123)"
+
+
 def test_opencode_block_translates_stdio_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
     from omnigent.opencode_native_provider import build_opencode_mcp_block
 
