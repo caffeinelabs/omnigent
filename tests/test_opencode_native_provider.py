@@ -494,3 +494,33 @@ def test_merge_user_provider_config_handles_jsonc_trailing_commas(
 
     result = maybe_merge_user_provider_config({})
     assert result["provider"]["my-openai"]["options"]["baseURL"] == "https://my-gw/v1"
+
+
+def test_resolve_env_gateway_from_bifrost_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """HARNESS_OPENCODE_GATEWAY_* → a synthesized Bifrost provider + qualified model."""
+    from omnigent.opencode_native_provider import (
+        build_opencode_provider_config,
+        resolve_env_gateway,
+    )
+
+    monkeypatch.setenv("HARNESS_OPENCODE_GATEWAY_BASE_URL", "http://bifrost:4000/v1")
+    monkeypatch.setenv("HARNESS_OPENCODE_GATEWAY_MODEL", "openrouter/z-ai/glm-5.2")
+    monkeypatch.delenv("HARNESS_OPENCODE_GATEWAY_API_KEY", raising=False)
+
+    g = resolve_env_gateway()
+    assert g is not None
+    assert g.qualified_model == "bifrost-gateway/openrouter/z-ai/glm-5.2"
+    prov = build_opencode_provider_config(g)["provider"]["bifrost-gateway"]
+    assert prov["options"]["baseURL"] == "http://bifrost:4000/v1"
+    assert prov["options"]["apiKey"]  # non-empty (opencode requires it)
+    assert "openrouter/z-ai/glm-5.2" in prov["models"]
+
+
+def test_resolve_env_gateway_none_without_base_or_model(monkeypatch: pytest.MonkeyPatch) -> None:
+    from omnigent.opencode_native_provider import resolve_env_gateway
+
+    monkeypatch.delenv("HARNESS_OPENCODE_GATEWAY_BASE_URL", raising=False)
+    monkeypatch.delenv("HARNESS_OPENCODE_GATEWAY_MODEL", raising=False)
+    assert resolve_env_gateway() is None
+    monkeypatch.setenv("HARNESS_OPENCODE_GATEWAY_BASE_URL", "http://bifrost:4000/v1")
+    assert resolve_env_gateway() is None  # model still unset
