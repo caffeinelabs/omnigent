@@ -21,7 +21,7 @@ from urllib.parse import urlencode
 
 import jwt
 from fastapi import APIRouter, HTTPException, Request
-from starlette.responses import RedirectResponse, Response
+from starlette.responses import RedirectResponse
 
 from omnigent.server.auth import RESERVED_USER_LOCAL, AuthProvider
 from omnigent.server.github_app import (
@@ -97,35 +97,6 @@ def _sanitize_return_to(raw: str | None) -> str:
     return raw
 
 
-# ── Open-in-Omnigent button ─────────────────────────────────────────
-# The GitHub MCP proxy stamps a branded button into each PR body it opens; the
-# button image is this SVG, served unauthenticated so GitHub's image proxy can
-# render it. Brand accent matches the web UI (``--brand-accent``).
-_BUTTON_ACCENT = "#df3c85"
-_BUTTON_THEMES = {
-    "dark": {"bg": "#1b2129", "border": "#30363d", "fg": "#e6edf3"},
-    "light": {"bg": "#ffffff", "border": "#d0d7de", "fg": "#1f2328"},
-}
-
-
-def _open_in_omnigent_svg(theme: str) -> str:
-    """Render the 'Open in Omnigent' pill button as a standalone SVG string."""
-    t = _BUTTON_THEMES.get(theme, _BUTTON_THEMES["light"])
-    return (
-        '<svg xmlns="http://www.w3.org/2000/svg" width="168" height="28" '
-        'role="img" aria-label="Open in Omnigent">'
-        f'<rect x="0.5" y="0.5" width="167" height="27" rx="6" '
-        f'fill="{t["bg"]}" stroke="{t["border"]}"/>'
-        f'<circle cx="17" cy="14" r="5.5" fill="none" '
-        f'stroke="{_BUTTON_ACCENT}" stroke-width="2"/>'
-        f'<circle cx="17" cy="14" r="1.6" fill="{_BUTTON_ACCENT}"/>'
-        '<text x="31" y="18" font-size="12" font-weight="600" '
-        'font-family="-apple-system,BlinkMacSystemFont,Segoe UI,Helvetica,Arial,sans-serif" '
-        f'fill="{t["fg"]}">Open in Omnigent</text>'
-        "</svg>"
-    )
-
-
 def _redirect_with_status(return_to: str, status: str) -> RedirectResponse:
     """Redirect back to *return_to* with a ``?github=<status>`` marker."""
     sep = "&" if "?" in return_to else "?"
@@ -156,21 +127,6 @@ def create_integrations_github_router(
     :returns: A FastAPI router with the integration endpoints.
     """
     router = APIRouter()
-
-    @router.get("/integrations/github/open-in-omnigent.svg")
-    async def open_in_omnigent_button(theme: str = "light") -> Response:
-        """The branded 'Open in Omnigent' button image, for PR bodies.
-
-        Intentionally UNAUTHENTICATED: GitHub's image proxy fetches it
-        server-side with no cookies when rendering a PR body. Exposes no state —
-        just a static SVG. ``?theme=dark|light`` selects the variant.
-        """
-        variant = "dark" if theme == "dark" else "light"
-        return Response(
-            content=_open_in_omnigent_svg(variant),
-            media_type="image/svg+xml",
-            headers={"Cache-Control": "public, max-age=86400"},
-        )
 
     api = client if client is not None else GitHubAppClient(config)
 
