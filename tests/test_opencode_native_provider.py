@@ -229,6 +229,43 @@ def test_build_mcp_block_http_databricks_injects_bearer(monkeypatch: pytest.Monk
     assert block["dbx"]["headers"] == {"Authorization": "Bearer tok123"}
 
 
+def test_build_mcp_block_http_oauth_false_disables_provider() -> None:
+    from types import SimpleNamespace as N
+
+    from omnigent.opencode_native_provider import build_opencode_mcp_block
+
+    servers = [
+        # oauth: false — header-auth remote that advertises OAuth (e.g. Datadog)
+        # must NOT get opencode's default OAuth provider.
+        N(
+            name="datadog",
+            transport="http",
+            url="https://mcp.datadoghq.com/api/unstable/mcp-server/mcp",
+            headers={"DD-API-KEY": "k", "DD-APPLICATION-KEY": "a"},
+            databricks_profile=None,
+            oauth=False,
+            command=None,
+            args=[],
+            env={},
+        ),
+        # oauth unset → key omitted, default behavior unchanged.
+        N(
+            name="plain",
+            transport="http",
+            url="https://mcp.example/sse",
+            headers={"X-Key": "k"},
+            databricks_profile=None,
+            oauth=None,
+            command=None,
+            args=[],
+            env={},
+        ),
+    ]
+    block = build_opencode_mcp_block(servers)
+    assert block["datadog"]["oauth"] is False
+    assert "oauth" not in block["plain"]
+
+
 def test_strip_jsonc_comments_removes_line_and_block_comments() -> None:
     raw = """{
   // line comment

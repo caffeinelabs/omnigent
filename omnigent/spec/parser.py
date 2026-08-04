@@ -2485,6 +2485,19 @@ def _parse_inline_mcp_servers(
                 code=ErrorCode.INVALID_INPUT,
             )
         tool_allowlist = [str(t) for t in raw_allow] if raw_allow else None
+        # Optional opencode OAuth control (http only): ``false`` disables
+        # opencode's default OAuth provider so a header-auth remote MCP that
+        # advertises OAuth uses the configured headers. A mapping passes explicit
+        # OAuth settings through. Passed verbatim to opencode's ``mcp.*.oauth``.
+        raw_oauth = val.get("oauth")
+        oauth: bool | dict[str, object] | None
+        if raw_oauth is None or isinstance(raw_oauth, (bool, dict)):
+            oauth = raw_oauth
+        else:
+            raise OmnigentError(
+                f"Inline MCP server {name!r} 'oauth' must be a boolean or a mapping",
+                code=ErrorCode.INVALID_INPUT,
+            )
         servers.append(
             MCPServerConfig(
                 name=name,
@@ -2499,6 +2512,7 @@ def _parse_inline_mcp_servers(
                 headers=headers,
                 env=env,
                 databricks_profile=databricks_profile,
+                oauth=oauth,
                 tools=tool_allowlist,
             )
         )
