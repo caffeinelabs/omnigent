@@ -913,6 +913,14 @@ class MCPServerConfig:
         ``Authorization: Bearer <token>`` into the HTTP headers.
         Valid only on ``"http"``. Avoids hardcoding short-lived
         tokens in the YAML.
+    :param oauth: OAuth control for ``"http"`` MCPs, passed through
+        to opencode's ``mcp.<name>.oauth``. ``False`` disables
+        opencode's default OAuth provider so a header-auth remote
+        MCP that advertises OAuth (e.g. Datadog) uses ``headers``
+        instead of dropping to ``needs_auth``; a mapping supplies
+        explicit OAuth settings. ``None`` (default) keeps opencode's
+        default. Ignored by non-opencode harnesses. Valid only on
+        ``"http"``.
     :param command: Executable to spawn, e.g. ``"npx"``. Required
         when ``transport == "stdio"``; invalid for ``"http"``.
     :param args: Arguments to pass to *command*, e.g.
@@ -944,6 +952,16 @@ class MCPServerConfig:
     # ``Authorization`` header. Mutually usable with ``headers``:
     # explicit headers win if both set ``Authorization``.
     databricks_profile: str | None = None
+    # OAuth control for remote (http) MCPs, passed through verbatim to the
+    # opencode config's ``oauth`` key (opencode_native_provider
+    # build_opencode_mcp_block). ``False`` disables opencode's default OAuth
+    # provider so a header-authenticated remote MCP that *advertises* OAuth
+    # (e.g. Datadog's ``mcp.datadoghq.com`` endpoint) uses the configured
+    # ``headers`` instead of entering an OAuth flow and dropping the server as
+    # ``needs_auth``. A mapping supplies explicit opencode OAuth settings.
+    # ``None`` (default) leaves opencode's own default behavior. HTTP-only;
+    # other harnesses ignore it. Mirrors opencode's ``mcp.<name>.oauth``.
+    oauth: bool | dict[str, object] | None = None
     # Stdio-only fields.
     command: str | None = None
     args: list[str] = field(default_factory=list)

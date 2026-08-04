@@ -195,6 +195,14 @@ def build_opencode_mcp_block(
             entry = {"type": "remote", "url": url, "enabled": True}
             if headers:
                 entry["headers"] = headers
+            # ``oauth: false`` disables opencode's default OAuth provider so a
+            # header-auth remote MCP that advertises OAuth (e.g. Datadog) uses
+            # the configured headers instead of dropping to ``needs_auth``. A
+            # mapping passes explicit OAuth settings. Emitted only when set, so
+            # the default behavior is unchanged.
+            oauth = getattr(server, "oauth", None)
+            if oauth is not None:
+                entry["oauth"] = oauth
         block[str(name)] = entry
     return block
 
