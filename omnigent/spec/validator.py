@@ -321,6 +321,8 @@ def _validate_mcp_servers(spec: AgentSpec, result: ValidationResult) -> None:
                 result.add(f"{prefix}.url", "not allowed when transport is 'stdio'")
             if mcp.headers:
                 result.add(f"{prefix}.headers", "not allowed when transport is 'stdio'")
+            if mcp.oauth is not None:
+                result.add(f"{prefix}.oauth", "not allowed when transport is 'stdio'")
         else:
             result.add(
                 f"{prefix}.transport",

@@ -1234,6 +1234,42 @@ def test_parse_inline_mcp_http_server(tmp_path: Path) -> None:
     assert srv.description == "My HTTP service"
     assert srv.command is None
     assert srv.args == []
+    # oauth absent → None (opencode default behavior preserved).
+    assert srv.oauth is None
+
+
+def test_parse_inline_mcp_http_oauth_false(tmp_path: Path) -> None:
+    """
+    A ``tools:`` block ``type: mcp`` entry with ``oauth: false`` parses the
+    flag through to ``MCPServerConfig.oauth`` so opencode's default OAuth
+    provider is disabled (header-auth remotes that advertise OAuth, e.g.
+    Datadog). A mapping is preserved verbatim; a non-bool/non-mapping raises.
+    """
+    config = {
+        "spec_version": 1,
+        "name": "inline-oauth",
+        "tools": {
+            "datadog": {
+                "type": "mcp",
+                "url": "https://mcp.datadoghq.com/api/unstable/mcp-server/mcp",
+                "headers": {"DD-API-KEY": "k", "DD-APPLICATION-KEY": "a"},
+                "oauth": False,
+            }
+        },
+    }
+    (tmp_path / "config.yaml").write_text(yaml.dump(config))
+    srv = next(m for m in parse(tmp_path).mcp_servers if m.name == "datadog")
+    assert srv.oauth is False
+
+    config["tools"]["datadog"]["oauth"] = {"clientId": "abc"}  # type: ignore[index]
+    (tmp_path / "config.yaml").write_text(yaml.dump(config))
+    srv = next(m for m in parse(tmp_path).mcp_servers if m.name == "datadog")
+    assert srv.oauth == {"clientId": "abc"}
+
+    config["tools"]["datadog"]["oauth"] = "yes"  # type: ignore[index]
+    (tmp_path / "config.yaml").write_text(yaml.dump(config))
+    with pytest.raises(OmnigentError, match="'oauth' must be a boolean or a mapping"):
+        parse(tmp_path)
 
 
 def test_parse_inline_mcp_skips_standard_tools_keys(tmp_path: Path) -> None:
