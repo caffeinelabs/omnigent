@@ -340,7 +340,23 @@ def resolve_env_gateway(*, model_id: str | None = None) -> OpenCodeGatewayResolu
     base_url = os.environ.get(ENV_GATEWAY_BASE_URL, "").strip()
     if not base_url:
         return None
-    provider_id = os.environ.get(ENV_GATEWAY_PROVIDER_ID, "").strip() or _DEFAULT_ENV_GATEWAY_PROVIDER_ID
+    provider_id = (
+        os.environ.get(ENV_GATEWAY_PROVIDER_ID, "").strip() or _DEFAULT_ENV_GATEWAY_PROVIDER_ID
+    )
+    if "/" in provider_id or any(ch.isspace() for ch in provider_id):
+        # A "/" or whitespace makes the synthesized "<provider_id>/<model>" id
+        # ambiguous to parse back apart (the prefix-strip below, and the
+        # runner's relaunch path, both split on the first "/"), which can
+        # corrupt resume/summarize. Fall back to the always-valid default
+        # rather than write a provider config we can't reliably read back.
+        _logger.warning(
+            "%s=%r is not a valid opencode provider id (contains '/' or "
+            "whitespace); falling back to %r",
+            ENV_GATEWAY_PROVIDER_ID,
+            provider_id,
+            _DEFAULT_ENV_GATEWAY_PROVIDER_ID,
+        )
+        provider_id = _DEFAULT_ENV_GATEWAY_PROVIDER_ID
     model = (model_id or "").strip() or os.environ.get(ENV_GATEWAY_MODEL, "").strip()
     # model_id may already be qualified as "<provider_id>/<model>" (the runner
     # sets model_override to gateway.qualified_model on relaunch) — strip it so
