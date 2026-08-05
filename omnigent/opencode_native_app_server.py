@@ -84,6 +84,13 @@ _ENV_PASSTHROUGH_KEYS = (
     # sets it to the loopback daemon). Without this the per-session env rebuild
     # drops it and the agent's `docker` CLI can't find the daemon.
     "DOCKER_HOST",
+    # Datadog MCP credentials. A remote MCP server configured with
+    # ``headers: {DD-API-KEY: "{env:DD_API_KEY}", ...}`` needs these in the
+    # server subprocess env for OpenCode to expand the placeholders; the clean
+    # per-session env would otherwise drop them (no shared prefix) and the
+    # Datadog MCP auth-fails / drops as "server unavailable".
+    "DD_API_KEY",
+    "DD_APP_KEY",
     "HTTP_PROXY",
     "HTTPS_PROXY",
     "NO_PROXY",
