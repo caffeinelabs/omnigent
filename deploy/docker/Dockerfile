@@ -177,9 +177,9 @@ FROM node:${NODE_VERSION}-slim AS node-runtime
 # port" and breaks web-turn injection), bubblewrap to OS-sandbox the
 # native harness terminals (mandatory and fail-loud on Linux), curl + CA
 # certificates for outbound HTTPS and in-sandbox downloads, plus the
-# coding-harness CLIs (claude / codex / pi / kiro-cli) so claude-sdk,
-# claude-native, codex, pi, and kiro-native agents can run in managed
-# sandboxes without an in-sandbox install. No SPA, no psycopg, no server
+# coding-harness CLIs (claude / codex / pi / kiro-cli / opencode) so claude-sdk,
+# claude-native, codex, pi, kiro-native, and opencode-native agents can run in
+# managed sandboxes without an in-sandbox install. No SPA, no psycopg, no server
 # entrypoint.
 #
 # Also carries two additions required only by the NVIDIA OpenShell provider
@@ -253,6 +253,17 @@ RUN npm install -g --no-audit --no-fund \
       @openai/codex \
       @earendil-works/pi-coding-agent \
  && npm cache clean --force
+
+# OpenCode CLI for the opencode-native harness. PINNED (unlike the CLIs above):
+# the omnigent opencode-native client speaks a specific OpenCode API version
+# (omnigent/opencode_native_client.py — OPENCODE_MIN_VERSION 1.17.7,
+# OPENCODE_MAX_VERSION_EXCLUSIVE 1.18.0), so a floating `latest` could jump to an
+# unsupported release and fail the runner's version check. Bump within that
+# range in lockstep with those constants.
+ARG OPENCODE_VERSION=1.17.11
+RUN npm install -g --no-audit --no-fund "opencode-ai@${OPENCODE_VERSION}" \
+ && npm cache clean --force \
+ && opencode --version
 
 # Kiro CLI is not published as an npm package, and its installer has NO version
 # flag — `curl …/install | bash` always fetches `latest`, so the image was
