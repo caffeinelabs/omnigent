@@ -42,6 +42,12 @@ _PULLS_PER_PAGE = 100
 _PULLS_MAX_PAGES = 2
 
 _REPO_PULL_COMMITS_ENDPOINT = "https://api.github.com/repos/{full_name}/pulls/{number}/commits"
+
+# Search endpoint used to find a session's PRs by the Open-in-Omnigent link in
+# their body — across ALL repos, so PRs the agent opened via the GitHub MCP in a
+# repo the session never cloned are still found.
+_SEARCH_ISSUES_ENDPOINT = "https://api.github.com/search/issues"
+_SEARCH_PER_PAGE = 100
 _PULL_COMMITS_PER_PAGE = 100
 
 _HTTP_TIMEOUT_S = 15.0
@@ -257,6 +263,68 @@ class GitHubAppClient:
                     )
                 if len(batch) < _PULLS_PER_PAGE:
                     break
+        return pulls
+
+    async def search_pulls(self, access_token: str, query: str) -> list[dict[str, object]]:
+        """Search issues/PRs matching *query*, mapped to the session-PR shape.
+
+        Uses ``GET /search/issues`` (one request), so a session's PRs are found
+        across every repo by the Open-in-Omnigent link in their body — including
+        repos the session never cloned (PRs opened via the GitHub MCP). Search
+        results carry no ``head`` ref, so ``head_ref`` is ``None`` (the panel
+        only uses it as a title fallback, and ``title`` is always present).
+
+        :param access_token: A valid user access token.
+        :param query: A GitHub issues-search query, e.g.
+            ``'<session_id> in:body type:pr author:<login>'``.
+        :returns: PRs as ``{number, title, html_url, head_ref, draft, state,
+            merged, author_login, created_at, body, repo}``, where ``repo`` is
+            ``owner/name`` and ``merged`` reflects ``pull_request.merged_at``.
+        :raises GitHubAppError: When the API call fails.
+        """
+        headers = {
+            "Authorization": f"Bearer {access_token}",
+            "Accept": "application/vnd.github+json",
+        }
+        pulls: list[dict[str, object]] = []
+        async with self._http_client() as client:
+            resp = await client.get(
+                _SEARCH_ISSUES_ENDPOINT,
+                params={"q": query, "per_page": _SEARCH_PER_PAGE},
+                headers=headers,
+            )
+            if resp.status_code != 200:
+                raise GitHubAppError(f"GitHub /search/issues returned {resp.status_code}")
+            payload = resp.json()
+            items = payload.get("items") if isinstance(payload, dict) else None
+            for entry in items or []:
+                if not isinstance(entry, dict) or entry.get("number") is None:
+                    continue
+                user = entry.get("user") if isinstance(entry.get("user"), dict) else {}
+                pr = (
+                    entry.get("pull_request")
+                    if isinstance(entry.get("pull_request"), dict)
+                    else {}
+                )
+                # ``repository_url`` is ``…/repos/{owner}/{name}`` — the only place
+                # the repo is named in a search result.
+                repo_url = str(entry.get("repository_url") or "")
+                repo = repo_url.split("/repos/", 1)[-1] if "/repos/" in repo_url else ""
+                pulls.append(
+                    {
+                        "number": entry.get("number"),
+                        "title": entry.get("title"),
+                        "html_url": entry.get("html_url"),
+                        "head_ref": None,
+                        "draft": bool(entry.get("draft")),
+                        "state": entry.get("state"),
+                        "merged": pr.get("merged_at") is not None,
+                        "author_login": user.get("login"),
+                        "created_at": entry.get("created_at"),
+                        "body": entry.get("body") or "",
+                        "repo": repo,
+                    }
+                )
         return pulls
 
     async def list_pull_commit_messages(

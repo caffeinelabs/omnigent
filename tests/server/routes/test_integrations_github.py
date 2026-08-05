@@ -138,6 +138,56 @@ class _FakeClient:
             },
         ]
 
+    async def search_pulls(self, access_token: str, query: str) -> list[dict[str, object]]:
+        self.search_calls: list[str] = getattr(self, "search_calls", [])
+        self.search_calls.append(query)
+        # Search finds PRs across ALL repos by the session link. head_ref is None
+        # (search results carry no head ref). Includes a cross-repo PR the session
+        # never cloned, a dup of the cloned-repo #1 (to exercise dedup), and an
+        # unrelated other-session PR (to exercise the body-link filter).
+        link = f"[Open in Omnigent]({_SESSION_LINK})"
+        return [
+            {
+                "number": 9,
+                "title": "opened via MCP in an un-cloned repo",
+                "html_url": "https://github.com/caffeinelabs/other/pull/9",
+                "head_ref": None,
+                "draft": False,
+                "state": "open",
+                "merged": False,
+                "author_login": "octocat",
+                "created_at": "2026-07-29T03:00:00Z",
+                "body": link,
+                "repo": "caffeinelabs/other",
+            },
+            {
+                "number": 1,  # same PR search ALSO returns; dedup vs list_pulls.
+                "title": "feat",
+                "html_url": "https://github.com/caffeinelabs/app/pull/1",
+                "head_ref": None,
+                "draft": False,
+                "state": "open",
+                "merged": False,
+                "author_login": "octocat",
+                "created_at": "2026-07-29T01:00:00Z",
+                "body": link,
+                "repo": "caffeinelabs/app",
+            },
+            {
+                "number": 8,
+                "title": "another session's PR",
+                "html_url": "https://github.com/caffeinelabs/other/pull/8",
+                "head_ref": None,
+                "draft": False,
+                "state": "open",
+                "merged": False,
+                "author_login": "octocat",
+                "created_at": "2026-07-29T03:30:00Z",
+                "body": "[Open in Omnigent](https://omni.example/c/other_session)",
+                "repo": "caffeinelabs/other",
+            },
+        ]
+
 
 class _FakeConv:
     """Minimal conversation stub exposing the fields the PR route reads."""
@@ -402,19 +452,51 @@ def test_session_pulls_scopes_to_author_and_session_start(
     assert resp.status_code == 200
     body = resp.json()
     assert body["connected"] is True
-    # Only #4 (merged) and #1 (open) survive — their bodies carry this session's
-    # Open-in-Omnigent link. #2 (pre-session) and #3 (other author) are
-    # pre-filtered; crucially #5 (caller's own recent PR in the same repo, but
-    # carrying ANOTHER session's link) is EXCLUDED by the link check. Newest first.
-    assert [p["number"] for p in body["pulls"]] == [4, 1]
-    assert body["pulls"][0]["merged"] is True
-    assert body["pulls"][0]["repo"] == "caffeinelabs/app"
+    # Union of the cloned-repo listing (#1 open, #4 merged) and the cross-repo
+    # search (#9, in a repo the session never cloned). #2 (pre-session), #3 (other
+    # author), #5/#8 (another session's link) are all filtered out. Newest first,
+    # and the search's duplicate #1 is de-duped against the cloned-repo #1.
+    assert [p["number"] for p in body["pulls"]] == [9, 4, 1]
+    by_num = {p["number"]: p for p in body["pulls"]}
+    assert by_num[9]["repo"] == "caffeinelabs/other"  # cross-repo, MCP-opened
+    assert by_num[4]["merged"] is True
+    assert by_num[1]["repo"] == "caffeinelabs/app"
+    assert by_num[1]["head_ref"] == "feat"  # richer cloned-repo record won dedup
     # The raw body is not leaked to the panel — the link was only a match key.
-    assert "body" not in body["pulls"][0]
+    assert "body" not in by_num[1]
     assert client.pull_calls == ["caffeinelabs/app"]
+    assert len(getattr(client, "search_calls", [])) == 1  # one search request
 
 
-def test_session_pulls_empty_when_no_repo_label(db_uri: str) -> None:
+def test_session_pulls_found_across_repos_without_a_clone(
+    db_uri: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # No repo was selected/cloned; the agent opened PRs via the GitHub MCP. They
+    # are still found by searching for the session link — the cloned-repo listing
+    # is skipped (no repo), so detection is search-only.
+    monkeypatch.setenv("OMNIGENT_ACCOUNTS_BASE_URL", _PUBLIC_BASE)
+    convs = {"conv_1": _FakeConv(labels={}, created_at=_SESSION_START)}
+    tc, store, client = _app_with_convs(db_uri, convs)
+    store.upsert(
+        "alice@example.com",
+        github_login="octocat",
+        github_user_id=42,
+        tokens=GitHubTokenSet("ghu_a", "ghr_a", None, None, "repo"),
+    )
+    resp = tc.get("/v1/integrations/github/sessions/conv_1/pull-requests", headers=_USER)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["connected"] is True
+    assert [p["number"] for p in body["pulls"]] == [9, 1]  # both from search
+    assert not getattr(client, "pull_calls", [])  # no cloned repo → no listing
+
+
+def test_session_pulls_empty_when_no_matching_link(
+    db_uri: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # conv_2's own link (…/c/conv_2) matches none of the candidate PR bodies (all
+    # carry …/c/conv_1), so nothing is attributed to it.
+    monkeypatch.setenv("OMNIGENT_ACCOUNTS_BASE_URL", _PUBLIC_BASE)
     convs = {"conv_2": _FakeConv(labels={}, created_at=_SESSION_START)}
     tc, store, _client = _app_with_convs(db_uri, convs)
     store.upsert(

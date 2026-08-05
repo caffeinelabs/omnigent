@@ -212,6 +212,60 @@ async def test_list_pulls_non_200_raises() -> None:
 
 
 @pytest.mark.asyncio
+async def test_search_pulls_maps_search_items() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/search/issues"
+        assert request.url.params.get("q") == "sess123 in:body type:pr author:octocat"
+        return httpx.Response(
+            200,
+            json={
+                "total_count": 2,
+                "items": [
+                    {
+                        "number": 9,
+                        "title": "via MCP",
+                        "html_url": "https://github.com/caffeinelabs/other/pull/9",
+                        "state": "closed",
+                        "draft": False,
+                        "user": {"login": "octocat"},
+                        "created_at": "2026-07-29T03:00:00Z",
+                        "body": "…/c/sess123",
+                        "repository_url": "https://api.github.com/repos/caffeinelabs/other",
+                        "pull_request": {"merged_at": "2026-07-29T04:00:00Z"},
+                    },
+                    {"no_number": "skipped"},
+                ],
+            },
+        )
+
+    pulls = await _client(handler).search_pulls("ghu_x", "sess123 in:body type:pr author:octocat")
+    assert pulls == [
+        {
+            "number": 9,
+            "title": "via MCP",
+            "html_url": "https://github.com/caffeinelabs/other/pull/9",
+            "head_ref": None,
+            "draft": False,
+            "state": "closed",
+            "merged": True,  # from pull_request.merged_at
+            "author_login": "octocat",
+            "created_at": "2026-07-29T03:00:00Z",
+            "body": "…/c/sess123",
+            "repo": "caffeinelabs/other",  # parsed from repository_url
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_pulls_non_200_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, json={"message": "Validation Failed"})
+
+    with pytest.raises(GitHubAppError):
+        await _client(handler).search_pulls("ghu_bad", "sess in:body type:pr")
+
+
+@pytest.mark.asyncio
 async def test_list_pull_commit_messages_extracts_messages() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         assert request.url.path == "/repos/caffeinelabs/app/pulls/7/commits"
