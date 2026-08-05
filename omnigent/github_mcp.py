@@ -28,6 +28,15 @@ import sys
 
 from omnigent.spec.types import MCPServerConfig
 
+#: Branded button image for PR bodies: the Omnigent favicon star + "Open in
+#: Omnigent", served as a static SVG from the PUBLIC ``caffeinelabs/omnigent``
+#: repo via raw.githubusercontent. GitHub serves its own githubusercontent
+#: directly (no camo proxy, no URL-length limit), so the full multicolor
+#: favicon star renders — unlike a shields.io data-URI logo, which is size-
+#: capped, and unlike a self-hosted asset, which camo can't reach when the
+#: deployment sits behind Cloudflare Access.
+BUTTON_IMAGE_URL = "https://raw.githubusercontent.com/caffeinelabs/omnigent/gh-mvp-4-session-prs/web/public/open-in-omnigent.svg"
+
 #: GitHub's hosted (remote) MCP server. Reachable over the sandbox's outbound
 #: network; needs only an ``Authorization: Bearer <token>`` header.
 GITHUB_MCP_URL = "https://api.githubcopilot.com/mcp/"
@@ -56,8 +65,17 @@ def github_mcp_available() -> bool:
 
 
 def open_in_omnigent_link(session_url: str) -> str:
-    """The canonical 'Open in Omnigent' markdown link for a PR body."""
-    return f"[Open in Omnigent]({session_url})"
+    """A branded 'Open in Omnigent' button for a PR body.
+
+    Renders like Cursor's PR-footer button: the Omnigent star button image
+    (:data:`BUTTON_IMAGE_URL`) linking back to the session. The session URL is
+    kept verbatim in the anchor ``href`` so the session-PR panel still
+    associates the PR by substring match.
+    """
+    return (
+        f'<a href="{session_url}">'
+        f'<img alt="Open in Omnigent" src="{BUTTON_IMAGE_URL}" height="28"></a>'
+    )
 
 
 def inject_session_link(arguments: dict, session_url: str | None) -> dict:

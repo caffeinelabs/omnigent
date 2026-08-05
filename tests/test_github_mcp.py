@@ -75,6 +75,18 @@ def test_inject_session_link_empty_body() -> None:
     assert args["body"] == open_in_omnigent_link(_SESSION_URL)
 
 
+def test_open_in_omnigent_link_is_favicon_star_button() -> None:
+    from omnigent.github_mcp import BUTTON_IMAGE_URL
+
+    link = open_in_omnigent_link(_SESSION_URL)
+    # The Omnigent star button image (raw githubusercontent) inside an anchor.
+    assert f'src="{BUTTON_IMAGE_URL}"' in link
+    assert "raw.githubusercontent.com/caffeinelabs/omnigent" in link
+    # The session URL stays verbatim in the href exactly once → detection intact.
+    assert f'href="{_SESSION_URL}"' in link
+    assert link.count(_SESSION_URL) == 1
+
+
 def test_opencode_block_translates_stdio_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
     from omnigent.opencode_native_provider import build_opencode_mcp_block
 

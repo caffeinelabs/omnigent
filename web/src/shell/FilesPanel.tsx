@@ -33,6 +33,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { type ChangedSort, FlatFileList } from "./FlatFileList";
 import { FolderTree } from "./FolderTree";
+import { SessionPullRequests } from "./SessionPullRequests";
 
 interface FilesPanelProps {
   onFileSelect: (path: string) => void;
@@ -491,6 +492,7 @@ export function FilesPanel({
           )}
         </div>
       )}
+      <SessionPullRequests conversationId={conversationId} />
       <section
         className={cn(
           "overflow-y-auto px-2 pb-2",
