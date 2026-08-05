@@ -42,6 +42,20 @@ DATABRICKS_GATEWAY_PROVIDER_NAME = "Databricks AI Gateway"
 # Endpoint that exposes the workspace's OpenAI-compatible chat completions.
 _SERVING_ENDPOINTS_PATH = "serving-endpoints"
 
+# Generic OpenAI-compatible gateway for opencode-native, configured purely by
+# env — mirrors the HARNESS_*_GATEWAY_* convention the other harnesses use, but
+# opencode consumes it via the synthesized config file (see module docstring).
+# Lets a deployment route opencode through any gateway (e.g. Bifrost) without
+# the Databricks SDK. BASE_URL is the switch; API_KEY defaults to a dummy for
+# keyless gateways; MODEL is the default model id sent to the gateway.
+ENV_GATEWAY_BASE_URL = "HARNESS_OPENCODE_GATEWAY_BASE_URL"
+ENV_GATEWAY_API_KEY = "HARNESS_OPENCODE_GATEWAY_API_KEY"
+ENV_GATEWAY_MODEL = "HARNESS_OPENCODE_GATEWAY_MODEL"
+ENV_GATEWAY_PROVIDER_ID = "HARNESS_OPENCODE_GATEWAY_PROVIDER_ID"
+ENV_GATEWAY_PROVIDER_NAME = "HARNESS_OPENCODE_GATEWAY_PROVIDER_NAME"
+_DEFAULT_ENV_GATEWAY_PROVIDER_ID = "gateway"
+_DEFAULT_ENV_GATEWAY_PROVIDER_NAME = "LLM Gateway"
+
 
 @dataclass(frozen=True)
 class OpenCodeGatewayResolution:
@@ -306,6 +320,42 @@ def resolve_databricks_gateway(
         base_url=f"{host}/{_SERVING_ENDPOINTS_PATH}",
         api_key=token,
         model_id=resolved_model,
+    )
+
+
+def resolve_env_gateway(*, model_id: str | None = None) -> OpenCodeGatewayResolution | None:
+    """
+    Resolve a generic OpenAI-compatible gateway for opencode from env.
+
+    Reads ``HARNESS_OPENCODE_GATEWAY_*`` (see the constants above): ``BASE_URL``
+    is the switch, ``API_KEY`` defaults to a dummy for keyless gateways, and the
+    model is *model_id* (the session's pinned model) else ``..._MODEL``. Lets a
+    deployment route opencode through any gateway (e.g. an in-cluster Bifrost)
+    with no Databricks SDK. Returns ``None`` when no base URL is set.
+
+    :param model_id: The session's pinned model, e.g. ``"bedrock/claude-sonnet-4-6"``
+        or a ``<provider_id>/<model>`` already qualified with our provider id.
+    :returns: A resolution, or ``None`` when no gateway is configured.
+    """
+    base_url = os.environ.get(ENV_GATEWAY_BASE_URL, "").strip()
+    if not base_url:
+        return None
+    provider_id = os.environ.get(ENV_GATEWAY_PROVIDER_ID, "").strip() or _DEFAULT_ENV_GATEWAY_PROVIDER_ID
+    model = (model_id or "").strip() or os.environ.get(ENV_GATEWAY_MODEL, "").strip()
+    # model_id may already be qualified as "<provider_id>/<model>" (the runner
+    # sets model_override to gateway.qualified_model on relaunch) — strip it so
+    # the provider config declares the bare gateway model id.
+    if provider_id and model.startswith(f"{provider_id}/"):
+        model = model[len(provider_id) + 1 :]
+    if not model:
+        return None
+    return OpenCodeGatewayResolution(
+        base_url=base_url,
+        api_key=os.environ.get(ENV_GATEWAY_API_KEY, "").strip() or "gateway-no-auth",
+        model_id=model,
+        provider_id=provider_id,
+        provider_name=os.environ.get(ENV_GATEWAY_PROVIDER_NAME, "").strip()
+        or _DEFAULT_ENV_GATEWAY_PROVIDER_NAME,
     )
 
 
