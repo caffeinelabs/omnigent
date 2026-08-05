@@ -42,6 +42,19 @@ _SERVING_ENDPOINTS_PATH = "serving-endpoints"
 # Fallback chat model when neither the spec nor config names one.
 DEFAULT_DATABRICKS_GATEWAY_MODEL = "databricks-claude-sonnet-4-6"
 
+# Generic OpenAI-compatible gateway (e.g. Bifrost) driven purely by env, so an
+# opencode-native sandbox can route through the same keyless gateway the rest of
+# the fleet uses. ``BASE_URL`` + ``MODEL`` are required; the key is optional
+# (Bifrost runs with ``enforceAuthOnInference:false``, but opencode's
+# openai-compatible provider still wants a non-empty ``apiKey`` string).
+ENV_GATEWAY_BASE_URL = "HARNESS_OPENCODE_GATEWAY_BASE_URL"
+ENV_GATEWAY_MODEL = "HARNESS_OPENCODE_GATEWAY_MODEL"
+ENV_GATEWAY_API_KEY = "HARNESS_OPENCODE_GATEWAY_API_KEY"
+ENV_GATEWAY_PROVIDER_ID = "bifrost-gateway"
+ENV_GATEWAY_PROVIDER_NAME = "Bifrost Gateway"
+# Placeholder key for keyless gateways — opencode requires a non-empty apiKey.
+_ENV_GATEWAY_DUMMY_KEY = "sk-omnigent-gateway"
+
 
 @dataclass(frozen=True)
 class OpenCodeGatewayResolution:
@@ -236,6 +249,38 @@ def _databricks_bearer_token(profile: str) -> str | None:
     except Exception as exc:  # noqa: BLE001 - SDK absent / bad profile / auth failure.
         _logger.info("opencode MCP databricks token resolve failed for %r: %r", profile, exc)
         return None
+
+
+def resolve_env_gateway(
+    *,
+    model_id: str | None = None,
+) -> OpenCodeGatewayResolution | None:
+    """Resolve a generic OpenAI-compatible gateway for opencode from env.
+
+    Reads :data:`ENV_GATEWAY_BASE_URL` / :data:`ENV_GATEWAY_MODEL` (and an
+    optional :data:`ENV_GATEWAY_API_KEY`) — the same ``HARNESS_OPENCODE_GATEWAY_*``
+    contract the rest of the fleet uses — and synthesizes an opencode provider
+    pointed at that gateway (e.g. keyless Bifrost routing ``openrouter/z-ai/glm-5.2``).
+    Without this, opencode with no Databricks profile falls back to its no-auth
+    default (``opencode/big-pickle``).
+
+    :param model_id: Ignored spec/override model; the gateway model comes from
+        the env so the whole fleet pins one place. Accepted for call-site symmetry.
+    :returns: A resolution, or ``None`` when base URL or model is unset.
+    """
+    del model_id  # gateway model is env-driven, matching the fleet.
+    base_url = (os.environ.get(ENV_GATEWAY_BASE_URL) or "").strip()
+    model = (os.environ.get(ENV_GATEWAY_MODEL) or "").strip()
+    if not base_url or not model:
+        return None
+    api_key = (os.environ.get(ENV_GATEWAY_API_KEY) or "").strip() or _ENV_GATEWAY_DUMMY_KEY
+    return OpenCodeGatewayResolution(
+        base_url=base_url,
+        api_key=api_key,
+        model_id=model,
+        provider_id=ENV_GATEWAY_PROVIDER_ID,
+        provider_name=ENV_GATEWAY_PROVIDER_NAME,
+    )
 
 
 def resolve_databricks_gateway(
