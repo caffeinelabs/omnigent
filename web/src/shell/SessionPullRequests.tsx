@@ -40,9 +40,13 @@ export function SessionPullRequests({ conversationId }: SessionPullRequestsProps
     queryKey: ["session-pulls", conversationId],
     queryFn: () => fetchSessionPulls(conversationId as string),
     enabled: !!conversationId,
-    // Poll so PRs the agent opens mid-session appear without a manual refresh.
-    refetchInterval: 30_000,
-    staleTime: 15_000,
+    // Poll so PRs the agent opens mid-session appear without a manual refresh,
+    // and refetch on focus. Interval kept modest because each poll drives a
+    // GitHub *search* (30 req/min authenticated) and several tabs share that
+    // budget; GitHub's search index also lags a brand-new PR by a bit.
+    refetchInterval: 20_000,
+    refetchOnWindowFocus: true,
+    staleTime: 10_000,
   });
 
   const pulls = data?.connected ? data.pulls : [];

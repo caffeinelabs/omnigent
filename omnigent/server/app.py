@@ -2756,10 +2756,29 @@ def create_app(
                 auth_provider=auth_provider,
                 client=app.state.github_client,
                 conversation_store=conversation_store,
+                permission_store=permission_store,
             ),
             prefix="/v1",
             tags=["integrations"],
         )
+
+        # Host-facing credential broker: managed sandboxes fetch the session
+        # owner's GitHub token over the host<->server channel (never injected
+        # per executor). Needs the host store to resolve launch tokens.
+        if host_store is not None:
+            from omnigent.server.routes.host_github import (
+                create_host_github_router,
+            )
+
+            app.include_router(
+                create_host_github_router(
+                    host_store,
+                    github_store,
+                    app.state.github_client,
+                ),
+                prefix="/v1",
+                tags=["integrations"],
+            )
 
     # Mount the auth router that matches the active provider. OIDC and
     # accounts share the /auth prefix but expose different endpoints

@@ -1,9 +1,8 @@
-"""Resolve a user's GitHub credentials for injection into a sandbox.
+"""Resolve a user's GitHub access token for the credential broker.
 
-Bridges the connection store and the GitHub App client: reads the
-stored connection and transparently refreshes an expired access token —
-producing the :class:`SandboxGithubIdentity` the managed-launch path
-injects. See ``designs/GITHUB_APP_SANDBOX_AUTH.md``.
+Bridges the connection store and the GitHub App client: reads the stored
+connection and transparently refreshes an expired access token, so the broker
+always vends a currently-valid token. See ``designs/CREDENTIAL_STORE.md``.
 """
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ from __future__ import annotations
 import logging
 
 from omnigent.db.utils import now_epoch
-from omnigent.server.github_app import GitHubAppError, SandboxGithubIdentity
+from omnigent.server.github_app import GitHubAppError
 from omnigent.server.github_app_client import GitHubAppClient
 from omnigent.server.github_store import GithubConnectionStore
 
@@ -55,52 +54,6 @@ async def resolve_access_token(
         await _run_sync(store.update_tokens, user_id, refreshed)
         access_token = refreshed.access_token
     return access_token
-
-
-async def resolve_sandbox_identity(
-    user_id: str,
-    *,
-    store: GithubConnectionStore,
-    client: GitHubAppClient,
-) -> SandboxGithubIdentity | None:
-    """Resolve the GitHub identity to inject for *user_id*, or ``None``.
-
-    Best-effort: any failure (no connection, refresh rejected, invalid
-    ciphertext) resolves to ``None`` so a managed launch degrades to the
-    existing shared-``GIT_TOKEN`` behaviour rather than failing.
-
-    :param user_id: The session owner to resolve credentials for.
-    :param store: The connection store (also used to persist a refresh).
-    :param client: The GitHub App client.
-    :returns: The user's sandbox identity, or ``None`` when unavailable.
-    """
-    connection = await _run_sync(store.get, user_id, with_tokens=True)
-    if connection is None or not connection.access_token:
-        return None
-
-    access_token = connection.access_token
-    expires_at = connection.token_expires_at
-    needs_refresh = expires_at is not None and expires_at <= now_epoch() + _REFRESH_MARGIN_S
-    if needs_refresh:
-        if not connection.refresh_token:
-            _logger.info(
-                "GitHub token for %s expired and no refresh token is stored; "
-                "sandbox will fall back to the shared credential.",
-                user_id,
-            )
-            return None
-        try:
-            refreshed = await client.refresh_token(connection.refresh_token)
-        except GitHubAppError as exc:
-            _logger.warning("GitHub token refresh failed for %s: %s", user_id, exc)
-            return None
-        await _run_sync(store.update_tokens, user_id, refreshed)
-        access_token = refreshed.access_token
-
-    return SandboxGithubIdentity(
-        token=access_token,
-        login=connection.github_login,
-    )
 
 
 async def _run_sync(func, /, *args, **kwargs):

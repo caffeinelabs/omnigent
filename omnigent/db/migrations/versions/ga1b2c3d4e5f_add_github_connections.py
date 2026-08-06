@@ -30,25 +30,24 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    """Create the github_connections table."""
+    """Create the integration_connections table."""
     op.create_table(
-        "github_connections",
+        "integration_connections",
         sa.Column(
             "workspace_id", sa.BigInteger, primary_key=True, nullable=False, server_default="0"
         ),
         sa.Column("user_id", sa.String(128), primary_key=True),
-        sa.Column("github_login", sa.String(255), nullable=False),
-        sa.Column("github_user_id", sa.BigInteger, nullable=False),
-        sa.Column("access_token_enc", sa.Text, nullable=False),
-        sa.Column("refresh_token_enc", sa.Text, nullable=True),
-        sa.Column("token_expires_at", sa.Integer, nullable=True),
-        sa.Column("refresh_token_expires_at", sa.Integer, nullable=True),
-        sa.Column("scopes", sa.String(512), nullable=False, server_default=""),
+        sa.Column("provider", sa.String(64), primary_key=True),
+        sa.Column(
+            "account_id", sa.String(128), primary_key=True, nullable=False, server_default=""
+        ),
+        sa.Column("secret_enc", sa.Text, nullable=False),
+        sa.Column("metadata_json", sa.Text, nullable=False, server_default="{}"),
         sa.Column("created_at", sa.Integer, nullable=False),
         sa.Column("updated_at", sa.Integer, nullable=False),
     )
 
 
 def downgrade() -> None:
-    """Drop the github_connections table."""
-    op.drop_table("github_connections")
+    """Drop the integration_connections table."""
+    op.drop_table("integration_connections")

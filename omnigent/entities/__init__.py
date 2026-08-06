@@ -26,6 +26,7 @@ from omnigent.entities.conversation import (
 from omnigent.entities.device_grant import DeviceGrant
 from omnigent.entities.file import StoredFile
 from omnigent.entities.github_connection import GithubConnection
+from omnigent.entities.integration_connection import IntegrationConnection
 from omnigent.entities.pagination import PagedList
 from omnigent.entities.permission import ResolvedAccess, SessionPermission
 from omnigent.entities.policy import Policy
@@ -55,6 +56,7 @@ __all__ = [
     "FunctionCallData",
     "FunctionCallOutputData",
     "GithubConnection",
+    "IntegrationConnection",
     "ItemData",
     "LoadedAgent",
     "MessageData",

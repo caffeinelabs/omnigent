@@ -9,10 +9,10 @@ deterministic (no reliance on the model), so the session-PR panel can associate
 MCP-opened PRs by parsing that link, and the PR carries a click-through back to
 the session.
 
-Run as a stdio server: ``python -m omnigent.github_mcp_proxy``. It reads the
-token and session URL from its environment (``GIT_TOKEN`` / ``GH_TOKEN`` /
-``GITHUB_TOKEN`` and ``OMNIGENT_SESSION_URL``), which the runner sets on the
-proxy subprocess when it declares this server.
+Run as a stdio server: ``python -m omnigent.github_mcp_proxy``. It fetches the
+GitHub token from the credential broker (never persisted) using the broker
+coordinates the runner sets on the proxy subprocess (server URL + host id +
+launch token), and reads the session URL from ``OMNIGENT_SESSION_URL``.
 """
 
 from __future__ import annotations
@@ -48,10 +48,32 @@ async def _list_all_upstream_tools(upstream: ClientSession) -> list[types.Tool]:
             return tools
 
 
+async def _serve_empty() -> None:
+    """Run a github MCP server that exposes no tools.
+
+    Used when the session owner hasn't connected GitHub (the broker returns no
+    token): the harness still gets a well-formed ``github`` server that
+    initializes cleanly and simply lists nothing, rather than a subprocess that
+    crashes or a dead server. Connecting GitHub and relaunching populates it.
+    """
+    server: Server = Server(name="omnigent-github")
+
+    @server.list_tools()
+    async def _list_tools() -> list[types.Tool]:
+        return []
+
+    init_opts = server.create_initialization_options()
+    async with stdio_server() as (stdin, stdout):
+        await server.run(stdin, stdout, init_opts)
+
+
 async def _serve(session_url: str | None) -> None:
     token = github_mcp_token()
     if not token:
-        raise SystemExit("github-mcp-proxy: no GitHub token in environment")
+        # Owner not connected (or broker unreachable): degrade to an empty
+        # server instead of crashing the harness's MCP startup.
+        await _serve_empty()
+        return
 
     headers = {"Authorization": f"Bearer {token}"}
     async with AsyncExitStack() as stack:

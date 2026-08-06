@@ -19,11 +19,12 @@ from datetime import datetime
 from typing import TYPE_CHECKING
 from urllib.parse import urlencode
 
+import httpx
 import jwt
 from fastapi import APIRouter, HTTPException, Request
 from starlette.responses import RedirectResponse
 
-from omnigent.server.auth import RESERVED_USER_LOCAL, AuthProvider
+from omnigent.server.auth import LEVEL_READ, RESERVED_USER_LOCAL, AuthProvider
 from omnigent.server.github_app import (
     GitHubAppConfig,
     GitHubAppError,
@@ -32,10 +33,11 @@ from omnigent.server.github_app import (
 from omnigent.server.github_app_client import GitHubAppClient
 from omnigent.server.github_identity import resolve_access_token
 from omnigent.server.github_store import GithubConnectionStore
-from omnigent.server.routes._auth_helpers import require_user
+from omnigent.server.routes._auth_helpers import require_access, require_user
 
 if TYPE_CHECKING:
     from omnigent.stores.conversation_store import ConversationStore
+    from omnigent.stores.permission_store import PermissionStore
 
 _logger = logging.getLogger(__name__)
 
@@ -49,7 +51,9 @@ _STATE_ALG = "HS256"
 _DEFAULT_RETURN_TO = "/settings"
 
 # GitHub owner / repo name charset, enforced before either reaches the
-# branches URL so a caller can never smuggle a path or query.
+# branches URL so a caller can never smuggle a path or query. A dot is allowed
+# but a dot-run (``..``) is not, so ``owner``/``repo`` can never be a traversal
+# segment.
 _GITHUB_NAME_RE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 # Extract ``owner/repo`` from a github.com clone URL (https or scp-style),
@@ -82,6 +86,22 @@ def _iso_to_epoch(value: object) -> int | None:
         return None
 
 
+def _valid_github_name(name: str) -> bool:
+    """Whether *name* is a safe GitHub owner/repo segment (no ``..``)."""
+    return bool(_GITHUB_NAME_RE.match(name)) and ".." not in name
+
+
+def _body_links_session(body: str, session_url: str) -> bool:
+    """Whether a PR *body* carries this session's Open-in-Omnigent link.
+
+    Matches the delimited forms the MCP proxy stamps — the anchor
+    ``href="<session_url>"`` and the markdown ``](<session_url>)`` — rather than
+    a bare substring, so a longer session id sharing this one as a prefix can't
+    collide.
+    """
+    return f'href="{session_url}"' in body or f"]({session_url})" in body
+
+
 def _sanitize_return_to(raw: str | None) -> str:
     """Clamp a caller-supplied return path to a safe same-origin path.
 
@@ -112,6 +132,7 @@ def create_integrations_github_router(
     auth_provider: AuthProvider | None = None,
     client: GitHubAppClient | None = None,
     conversation_store: ConversationStore | None = None,
+    permission_store: PermissionStore | None = None,
 ) -> APIRouter:
     """Build the GitHub App integration router.
 
@@ -124,6 +145,9 @@ def create_integrations_github_router(
     :param conversation_store: Session store, used to resolve a session's
         cloned repos for the "PRs opened this session" endpoint. When
         ``None`` that endpoint returns an empty list.
+    :param permission_store: Session-level access grants, used to gate the
+        session-scoped PR endpoint (same 404-existence invariant as sibling
+        session routes). ``None`` skips the check (single-user/local).
     :returns: A FastAPI router with the integration endpoints.
     """
     router = APIRouter()
@@ -194,7 +218,7 @@ def create_integrations_github_router(
         GitHub URL so a caller cannot smuggle a path.
         """
         user_id = _current_user(request)
-        if not _GITHUB_NAME_RE.match(owner) or not _GITHUB_NAME_RE.match(repo):
+        if not _valid_github_name(owner) or not _valid_github_name(repo):
             raise HTTPException(status_code=400, detail="Invalid repository name")
         token = await resolve_access_token(user_id, store=store, client=api)
         if token is None:
@@ -231,6 +255,11 @@ def create_integrations_github_router(
         if token is None:
             return {"connected": False, "pulls": []}
         login = connection.github_login if connection is not None else None
+        # Fail closed without a resolved login: the author filter is the only
+        # thing scoping results to the caller, so a missing login must not widen
+        # the query to every author's PRs.
+        if not login:
+            return {"connected": True, "pulls": []}
 
         from omnigent.conversation_browser import conversation_url
 
@@ -259,28 +288,28 @@ def create_integrations_github_router(
 
         # Cross-repo: one search for the session's link (by its unique id), scoped
         # to the connected user's PRs.
-        query = f"{session_id} in:body type:pr"
-        if login:
-            query += f" author:{login}"
+        query = f"{session_id} in:body type:pr author:{login}"
         try:
             candidates.extend(await api.search_pulls(token, query))
         except GitHubAppError as exc:
             _logger.warning("session PRs: search failed for %s: %s", session_id, exc)
 
-        # Keep a PR iff its body carries this session's link; scope by author and
-        # session-start; dedup by ``repo#number``. Strip the raw body afterward.
+        # Keep a PR iff its body links THIS session (matched as a delimited
+        # href/markdown target, so a longer session id can't prefix-collide);
+        # scope by author and session-start; dedup by ``repo#number``. Strip the
+        # raw body afterward.
         seen: set[tuple[str, object]] = set()
         pulls: list[dict[str, object]] = []
         for pr in candidates:
             key = (str(pr.get("repo") or ""), pr.get("number"))
             if key in seen:
                 continue
-            if login is not None and pr.get("author_login") != login:
+            if pr.get("author_login") != login:
                 continue
             created = _iso_to_epoch(pr.get("created_at"))
             if created is not None and created < since:
                 continue
-            if session_url not in str(pr.get("body") or ""):
+            if not _body_links_session(str(pr.get("body") or ""), session_url):
                 continue
             seen.add(key)
             pulls.append({k: v for k, v in pr.items() if k != "body"})
@@ -299,6 +328,12 @@ def create_integrations_github_router(
         user_id = _current_user(request)
         if conversation_store is None:
             return {"connected": True, "pulls": []}
+        # Gate on session access, like every sibling session route, so this
+        # can't be used as a cross-user session-existence oracle (preserves the
+        # 404-for-no-access invariant).
+        await require_access(
+            user_id, session_id, LEVEL_READ, permission_store, conversation_store
+        )
         conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
         if conv is None:
             raise HTTPException(status_code=404, detail="session not found")
@@ -337,7 +372,9 @@ def create_integrations_github_router(
         try:
             tokens = await api.exchange_code(code)
             login, github_user_id = await api.fetch_login(tokens.access_token)
-        except GitHubAppError as exc:
+        except (GitHubAppError, httpx.HTTPError, ValueError) as exc:
+            # A transient network error or malformed token response must land on
+            # the graceful ?github=error redirect, not a raw 500.
             _logger.warning("GitHub connect failed for %s: %s", user_id, exc)
             return _redirect_with_status(return_to, "error")
         await asyncio.to_thread(

@@ -145,6 +145,11 @@ def github_sandbox_setup_commands(
         *github_token* is embedded (for launchers with no secret channel).
     :returns: Shell command strings, in the order they should run.
     """
+    # Broker supersedes on-disk credential injection: the host configures a
+    # github.com credential helper at startup that fetches the token from the
+    # server per git op, so nothing is written to ~/.git-credentials or gh
+    # hosts.yml. Return nothing.
+    return []
     commands: list[str] = []
     have_token = bool(github_token_env) or bool(github_token)
     if have_token and github_login:
@@ -204,14 +209,10 @@ def github_sandbox_env(github_token: str | None) -> dict[str, str]:
     :param github_token: The user access token, or ``None``.
     :returns: The credential env, or ``{}``.
     """
-    if not github_token:
-        return {}
-    return {
-        "GIT_TOKEN": github_token,
-        "GIT_USERNAME": _GIT_TOKEN_USERNAME,
-        "GH_TOKEN": github_token,
-        "GITHUB_TOKEN": github_token,
-    }
+    # Broker supersedes env injection: the sandbox fetches the token from the
+    # server's credential endpoint on demand (git credential helper + GitHub
+    # MCP proxy), so no GitHub token is placed in the sandbox environment.
+    return {}
 
 
 def git_identity_env(owner: str | None) -> dict[str, str]:

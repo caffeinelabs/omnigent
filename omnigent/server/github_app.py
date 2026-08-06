@@ -67,18 +67,6 @@ class GitHubTokenSet:
 
 
 @dataclass(frozen=True)
-class SandboxGithubIdentity:
-    """Per-user GitHub credentials to inject into a managed sandbox.
-
-    :param token: A currently-valid user access token.
-    :param login: The user's GitHub login, e.g. ``"octocat"``.
-    """
-
-    token: str
-    login: str
-
-
-@dataclass(frozen=True)
 class GitHubAppConfig:
     """Validated GitHub App configuration.
 

@@ -17,8 +17,38 @@ from __future__ import annotations
 
 import base64
 import hashlib
+from typing import Protocol, runtime_checkable
 
 from cryptography.fernet import Fernet, InvalidToken
+
+
+@runtime_checkable
+class SecretCipher(Protocol):
+    """Port for encrypting integration secrets at rest.
+
+    The credential store depends on this, not on a concrete backend, so a
+    deployment can swap the default local-Fernet :class:`SecretBox` for a
+    KMS/Secrets-Manager/Databricks/Vault adapter without a schema change. See
+    ``designs/CREDENTIAL_STORE.md``.
+    """
+
+    def encrypt(self, plaintext: str) -> str:
+        """Return the ciphertext for *plaintext*."""
+        ...
+
+    def decrypt(self, ciphertext: str) -> str | None:
+        """Return the plaintext, or ``None`` when the ciphertext is unusable."""
+        ...
+
+
+def build_secret_cipher(secret: str | bytes) -> SecretCipher:
+    """Construct the configured secret cipher.
+
+    Single seam where a deployment selects a secret backend. Returns the local
+    Fernet :class:`SecretBox` today; KMS/Databricks/Vault adapters slot in here
+    when a deployment needs them (see ``designs/CREDENTIAL_STORE.md``).
+    """
+    return SecretBox(secret)
 
 
 class SecretBox:
