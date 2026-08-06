@@ -241,6 +241,9 @@ def parse(root: Path, *, expand_env: bool = True) -> AgentSpec:
     os_env = _parse_os_env(raw.get("os_env"))
     terminals = _parse_terminals(raw.get("terminals"))
     params = raw.get("params", {})
+    # OpenCode-native `permission` passthrough (string or per-action mapping);
+    # None keeps the default "ask" gate. See AgentSpec.opencode_permission.
+    opencode_permission = raw.get("opencode_permission")
     # Top-level ``async:`` flag gates the LLM-callable async-dispatch
     # builtins (``sys_call_async``, ``sys_read_inbox``,
     # ``sys_cancel_async``). Defaults to True to match
@@ -309,6 +312,7 @@ def parse(root: Path, *, expand_env: bool = True) -> AgentSpec:
         timers=timers,
         spawn=spawn,
         agent_session_sharing=agent_session_sharing,
+        opencode_permission=opencode_permission,
     )
 
 
