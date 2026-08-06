@@ -851,6 +851,14 @@ class AgentDef:
     # datamodel has no spec.types dep); mapped to SharePolicy when
     # translated to an AgentSpec.
     agent_session_sharing: str = "none"
+    # opencode-native permission mode, mapped from the top-level YAML
+    # ``opencode_permission:`` (a str like "ask"/"allow"/"deny" or a
+    # per-action dict). Carried through the AgentSpec <-> AgentDef bridge so
+    # the opencode-native runtime path (which resolves specs via AgentDef)
+    # doesn't drop it; the runner emits it as opencode's ``permission`` block.
+    # ``None`` keeps opencode's default gate. Kept loosely typed here (inner
+    # datamodel has no spec.types dep), same as agent_session_sharing.
+    opencode_permission: Any | None = None
     os_env: OSEnvSpec | None = None
     terminals: dict[str, TerminalEnvSpec] = field(default_factory=dict)
     skills: SkillRegistry = field(default_factory=dict)
