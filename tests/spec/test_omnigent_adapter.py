@@ -2545,3 +2545,38 @@ def test_compat_yaml_executor_api_key_auth_is_not_dropped(tmp_path: Path) -> Non
 
     assert isinstance(spec.executor.auth, ApiKeyAuth)
     assert spec.executor.auth.api_key == "sk-test-key"
+
+
+def test_opencode_permission_round_trips_through_agent_def() -> None:
+    """opencode_permission survives the AgentSpec <-> AgentDef bridge.
+
+    The opencode-native runtime resolves specs via AgentDef, so a field
+    that isn't carried through both translation directions is silently
+    dropped before the runner emits opencode's ``permission`` block —
+    leaving a trusted sandbox stuck on the default "ask" gate. Regression
+    guard for exactly that drop.
+    """
+    from omnigent.inner.datamodel import AgentDef
+    from omnigent.inner.datamodel import ExecutorSpec as OmniExecutorSpec
+    from omnigent.spec import omnigent as spec_omni
+
+    original = AgentDef(
+        name="opencode-native-ui",
+        prompt="p",
+        executor=OmniExecutorSpec(
+            model="databricks-gpt-5-mini",
+            harness="opencode-native",
+        ),
+        opencode_permission="allow",
+    )
+
+    spec = agent_def_to_agent_spec(original)
+    assert spec.opencode_permission == "allow", (
+        "opencode_permission dropped on AgentDef -> AgentSpec — the runner "
+        "would render permission='ask' despite the spec asking for 'allow'."
+    )
+
+    rebuilt = spec_omni.agent_spec_to_agent_def(spec)
+    assert rebuilt.opencode_permission == "allow", (
+        "opencode_permission dropped on AgentSpec -> AgentDef round-trip."
+    )

@@ -996,29 +996,40 @@ async def _auto_create_opencode_terminal(
         _perm = getattr(_spec, "opencode_permission", None)
         config["permission"] = _perm if _perm is not None else "ask"
 
-    # Always load the deployment-owned workspace AGENTS.md (mounted at the
-    # workspace root) as an opencode instruction file. opencode only reads
-    # AGENTS.md from the cwd up to the repo/git root, so when the cwd is a
-    # cloned repo (which has its own AGENTS.md) the workspace-root guidance
-    # sitting above it is never picked up. An absolute path in ``instructions``
-    # loads it regardless of cwd, alongside the repo's own AGENTS.md.
-    #
-    # Source the root from OMNIGENT_RUNNER_WORKSPACE, not launch_config.workspace:
-    # when a single repo is selected the launch workspace is the repo subdir
-    # (e.g. ``/home/omnigent/workspace/app``), whose AGENTS.md is the repo's own
-    # — opencode already reads that. The deployment guidance lives one level up
-    # at the runner workspace root (``/home/omnigent/workspace/AGENTS.md``).
-    workspace_root = os.environ.get("OMNIGENT_RUNNER_WORKSPACE") or workspace
-    workspace_agents_md = os.path.join(workspace_root, "AGENTS.md")
-    if os.path.isfile(workspace_agents_md):
+    # Load any deployment-owned AGENTS.md that sits ABOVE the session cwd's git
+    # root as an opencode instruction file. opencode reads AGENTS.md from the
+    # cwd up to the repo/git root only, so when a repo is cloned (cwd = the repo
+    # checkout, which has its own AGENTS.md) a deployment file mounted one level
+    # up at the workspace root is never picked up. Both ``workspace`` and
+    # OMNIGENT_RUNNER_WORKSPACE are the per-session cwd (the repo subdir for a
+    # single-repo session, e.g. ``/home/omnigent/workspace/app``), so walk from
+    # the cwd's PARENT up to ``$HOME`` and add any AGENTS.md found. An absolute
+    # ``instructions`` entry loads it regardless of cwd, alongside the repo's
+    # own AGENTS.md that opencode already discovers. No-op for an empty/root
+    # workspace (parent has no AGENTS.md; opencode reads the root one directly).
+    home = os.path.abspath(os.environ.get("HOME") or os.path.expanduser("~"))
+    ancestor = os.path.dirname(os.path.abspath(workspace))
+    ancestor_agents_md: list[str] = []
+    while ancestor and ancestor.startswith(home):
+        candidate = os.path.join(ancestor, "AGENTS.md")
+        if os.path.isfile(candidate):
+            ancestor_agents_md.append(candidate)
+        if ancestor == home:
+            break
+        parent = os.path.dirname(ancestor)
+        if parent == ancestor:
+            break
+        ancestor = parent
+    if ancestor_agents_md:
         config.setdefault("$schema", "https://opencode.ai/config.json")
         existing_instructions = config.get("instructions")
         if isinstance(existing_instructions, list):
             instructions = list(existing_instructions)
         else:
             instructions = []
-        if workspace_agents_md not in instructions:
-            instructions.append(workspace_agents_md)
+        for candidate in ancestor_agents_md:
+            if candidate not in instructions:
+                instructions.append(candidate)
         config["instructions"] = instructions
 
     # Load the Omnigent policy-bridge plugin so opencode's lifecycle hooks reach

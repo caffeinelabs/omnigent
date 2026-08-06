@@ -253,6 +253,11 @@ def _parse_agent_def(
     agent.timers = data.get("timers", False)
     agent.spawn = data.get("spawn", False)
     agent.agent_session_sharing = data.get("agent_session_sharing", "none")
+    # opencode-native permission mode (str "ask"/"allow"/"deny" or per-action
+    # dict). Read here so the YAML -> AgentDef hop the opencode-native runtime
+    # uses carries it; without this it's dropped before the runner emits
+    # opencode's `permission` block. ``None`` keeps opencode's default gate.
+    agent.opencode_permission = data.get("opencode_permission")
     agent.os_env = _parse_os_env_spec(data.get("os_env"))
 
     # Executor

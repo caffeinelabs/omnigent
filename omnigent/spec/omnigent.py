@@ -184,6 +184,7 @@ def agent_spec_to_agent_def(spec: AgentSpec) -> AgentDef:
         os_env=spec.os_env,
         bundle_dir=bundle_dir,
         skills_filter=spec.skills_filter,
+        opencode_permission=spec.opencode_permission,
     )
 
 
@@ -1161,6 +1162,10 @@ def agent_def_to_agent_spec(
         # AgentSpec expects.
         agent_session_sharing=SharePolicy(agent_def.agent_session_sharing),
         skills_filter=skills_filter,
+        # Carry the opencode-native permission mode back through the bridge so
+        # the runtime path (AgentDef -> AgentSpec) doesn't drop it before the
+        # runner emits opencode's `permission` block.
+        opencode_permission=agent_def.opencode_permission,
     )
 
 
