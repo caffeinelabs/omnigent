@@ -996,6 +996,24 @@ async def _auto_create_opencode_terminal(
         _perm = getattr(_spec, "opencode_permission", None)
         config["permission"] = _perm if _perm is not None else "ask"
 
+    # Always load the deployment-owned workspace AGENTS.md (mounted at the
+    # workspace root) as an opencode instruction file. opencode only reads
+    # AGENTS.md from the cwd up to the repo/git root, so when the cwd is a
+    # cloned repo (which has its own AGENTS.md) the workspace-root guidance
+    # sitting above it is never picked up. An absolute path in ``instructions``
+    # loads it regardless of cwd, alongside the repo's own AGENTS.md.
+    workspace_agents_md = os.path.join(workspace, "AGENTS.md")
+    if os.path.isfile(workspace_agents_md):
+        config.setdefault("$schema", "https://opencode.ai/config.json")
+        existing_instructions = config.get("instructions")
+        if isinstance(existing_instructions, list):
+            instructions = list(existing_instructions)
+        else:
+            instructions = []
+        if workspace_agents_md not in instructions:
+            instructions.append(workspace_agents_md)
+        config["instructions"] = instructions
+
     # Load the Omnigent policy-bridge plugin so opencode's lifecycle hooks reach
     # the policy engine at phases the reactive permission.asked path can't:
     # REQUEST (gate TUI-typed prompts at submit) and TOOL_RESULT (gate/redact
