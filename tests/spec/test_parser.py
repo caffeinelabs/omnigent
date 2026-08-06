@@ -2777,6 +2777,34 @@ def test_parse_spawn_true_sets_flag(tmp_path: Path) -> None:
     assert spec.spawn is True
 
 
+def test_parse_opencode_permission_defaults_to_none(agent_dir: Path) -> None:
+    """
+    Without ``opencode_permission:`` the field is ``None`` — the runner
+    then forces opencode's ``permission: "ask"`` so tools route through
+    Omnigent's policy gate.
+
+    :param agent_dir: Temporary agent directory fixture.
+    """
+    spec = parse(agent_dir)
+    assert spec.opencode_permission is None
+
+
+def test_parse_opencode_permission_roundtrips(tmp_path: Path) -> None:
+    """
+    ``opencode_permission:`` round-trips (string or mapping) so a trusted
+    deployment can set ``"allow"`` and skip the per-tool policy prompt.
+
+    :param tmp_path: pytest-provided temporary directory.
+    """
+    config = {"spec_version": 1, "name": "perm-agent", "opencode_permission": "allow"}
+    (tmp_path / "config.yaml").write_text(yaml.dump(config))
+    assert parse(tmp_path).opencode_permission == "allow"
+
+    config["opencode_permission"] = {"bash": "allow", "edit": "allow"}
+    (tmp_path / "config.yaml").write_text(yaml.dump(config))
+    assert parse(tmp_path).opencode_permission == {"bash": "allow", "edit": "allow"}
+
+
 def test_parse_share_defaults_to_none_when_omitted(agent_dir: Path) -> None:
     """
     Without a top-level ``agent_session_sharing:`` key the parsed

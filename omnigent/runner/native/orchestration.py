@@ -989,7 +989,12 @@ async def _auto_create_opencode_terminal(
     if mcp_block:
         config.setdefault("$schema", "https://opencode.ai/config.json")
         config["mcp"] = mcp_block
-        config["permission"] = "ask"
+        # Default "ask" routes tool calls through Omnigent's policy gate. A
+        # spec may override (e.g. "allow") to skip the gate for a trusted
+        # deployment; see AgentSpec.opencode_permission.
+        _spec = getattr(agent_spec, "spec", agent_spec)
+        _perm = getattr(_spec, "opencode_permission", None)
+        config["permission"] = _perm if _perm is not None else "ask"
 
     # Load the Omnigent policy-bridge plugin so opencode's lifecycle hooks reach
     # the policy engine at phases the reactive permission.asked path can't:
