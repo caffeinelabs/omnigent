@@ -1002,7 +1002,14 @@ async def _auto_create_opencode_terminal(
     # cloned repo (which has its own AGENTS.md) the workspace-root guidance
     # sitting above it is never picked up. An absolute path in ``instructions``
     # loads it regardless of cwd, alongside the repo's own AGENTS.md.
-    workspace_agents_md = os.path.join(workspace, "AGENTS.md")
+    #
+    # Source the root from OMNIGENT_RUNNER_WORKSPACE, not launch_config.workspace:
+    # when a single repo is selected the launch workspace is the repo subdir
+    # (e.g. ``/home/omnigent/workspace/app``), whose AGENTS.md is the repo's own
+    # — opencode already reads that. The deployment guidance lives one level up
+    # at the runner workspace root (``/home/omnigent/workspace/AGENTS.md``).
+    workspace_root = os.environ.get("OMNIGENT_RUNNER_WORKSPACE") or workspace
+    workspace_agents_md = os.path.join(workspace_root, "AGENTS.md")
     if os.path.isfile(workspace_agents_md):
         config.setdefault("$schema", "https://opencode.ai/config.json")
         existing_instructions = config.get("instructions")
