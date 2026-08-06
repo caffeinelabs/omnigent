@@ -1568,3 +1568,8 @@ class AgentSpec:  # type: ignore[explicit-any]  # params: dict[str, Any] field (
     timers: bool = False
     spawn: bool = False
     agent_session_sharing: SharePolicy = SharePolicy.NONE
+    # OpenCode-native `permission` config passthrough (a string like "ask"/
+    # "allow", or opencode's per-action mapping). ``None`` means the default:
+    # opencode-native forces "ask" so tool calls route through Omnigent's
+    # policy engine. A trusted deployment can set "allow" to skip that gate.
+    opencode_permission: Any | None = None  # type: ignore[explicit-any]
