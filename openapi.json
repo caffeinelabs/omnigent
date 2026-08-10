@@ -4020,6 +4020,10 @@
             "title": "Features",
             "type": "object"
           },
+          "github_app_enabled": {
+            "title": "Github App Enabled",
+            "type": "boolean"
+          },
           "harness_install_enabled": {
             "title": "Harness Install Enabled",
             "type": "boolean"
@@ -4107,6 +4111,7 @@
           "managed_sandboxes_enabled",
           "sandbox_provider",
           "sandbox_providers",
+          "github_app_enabled",
           "sharing_mode",
           "public_sharing_enabled",
           "server_version",

@@ -150,6 +150,7 @@ function renderSandboxLanding(): { rerender: (ui: ReactNode) => void } {
     login_url: null,
     needs_setup: false,
     databricks_features: false,
+    github_app_enabled: false,
     managed_sandboxes_enabled: true,
     sandbox_provider: null,
     sharing_mode: "on",

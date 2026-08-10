@@ -115,6 +115,13 @@ export interface ServerInfo {
    */
   sandbox_providers?: string[];
   /**
+   * True when a GitHub App is configured (``OMNIGENT_GITHUB_APP_*``) and
+   * its connection store is wired. Gates the "Connect GitHub" panel in
+   * Settings, which lets a user link their GitHub account so their
+   * managed sandboxes authenticate ``gh`` / git as them.
+   */
+  github_app_enabled: boolean;
+  /**
    * Server session-sharing policy. Drives whether the SPA shows the
    * Share control (``"on"``), restricts it to read-only invites
    * (``"read_only"``), or hides it entirely (``"off"``), in lockstep
@@ -224,6 +231,7 @@ export const FALLBACK_SERVER_INFO: ServerInfo = {
   managed_sandboxes_enabled: false,
   sandbox_provider: null,
   sandbox_providers: [],
+  github_app_enabled: false,
   // Sharing fails OPEN (opposite of the other caps): a failed probe must
   // not silently disable sharing, so the sentinel is the permissive "on".
   sharing_mode: "on",
@@ -308,6 +316,7 @@ export async function resolveServerInfo(): Promise<ServerInfo> {
           sandbox_providers: Array.isArray(data.sandbox_providers)
             ? data.sandbox_providers.filter((p): p is string => typeof p === "string")
             : [],
+          github_app_enabled: data.github_app_enabled === true,
           sharing_mode: SHARING_MODES.includes(data.sharing_mode as SharingMode)
             ? (data.sharing_mode as SharingMode)
             : "on",
