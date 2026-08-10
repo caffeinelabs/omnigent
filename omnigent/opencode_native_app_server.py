@@ -98,6 +98,15 @@ _ENV_PASSTHROUGH_KEYS = (
     "http_proxy",
     "https_proxy",
 )
+# Operator-configured passthrough. Names listed here (comma-separated) are
+# forwarded to the server subprocess in addition to the built-in provider/proxy
+# allowlist above, so new header-auth MCP creds can be wired through infra
+# config alone (add the key to the externalsecret + this list) without a
+# per-key code change. Same variable the host uses to forward host->runner
+# (connect.RUNNER_ENV_PASSTHROUGH_ENV_VAR); referenced by name here to avoid a
+# host<->server import cycle. The config denylist below still wins, so an
+# operator can never re-introduce a global-OpenCode-config var this way.
+_RUNNER_ENV_PASSTHROUGH_ENV_VAR = "OMNIGENT_RUNNER_ENV_PASSTHROUGH"
 # OpenCode env vars that point the server at the user's GLOBAL config — they
 # would defeat the per-session XDG isolation by re-introducing whatever
 # config/model/permission settings the parent shell has set. Dropped from
@@ -358,13 +367,23 @@ def filtered_server_env(
     :param extra_env: Additional provider env (e.g. from Omnigent setup).
     :returns: The environment mapping for the server subprocess.
     """
+    operator_passthrough = frozenset(
+        stripped
+        for raw in os.environ.get(_RUNNER_ENV_PASSTHROUGH_ENV_VAR, "").split(",")
+        if (stripped := raw.strip())
+    )
     env: dict[str, str] = {}
     for key, value in os.environ.items():
         if key in _ENV_OPENCODE_CONFIG_DENYLIST:
             # Never inherit the parent's global OpenCode config — the
-            # per-session XDG dirs are the only config source.
+            # per-session XDG dirs are the only config source. This wins over
+            # the operator passthrough below.
             continue
-        if key in _ENV_PASSTHROUGH_KEYS or key.startswith(_ENV_PASSTHROUGH_PREFIXES):
+        if (
+            key in _ENV_PASSTHROUGH_KEYS
+            or key in operator_passthrough
+            or key.startswith(_ENV_PASSTHROUGH_PREFIXES)
+        ):
             env[key] = value
     env.update(extra_env or {})
     env["XDG_DATA_HOME"] = str(xdg_data_home_for_bridge_dir(bridge_dir))

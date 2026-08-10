@@ -112,6 +112,29 @@ def test_filtered_server_env_sets_xdg_and_password(
     assert "RANDOM_UNRELATED" not in env  # unrelated env filtered out
 
 
+def test_filtered_server_env_honors_operator_passthrough(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Operator-named keys pass through, but the config denylist still wins.
+
+    OMNIGENT_RUNNER_ENV_PASSTHROUGH lets infra forward header-auth MCP creds
+    (e.g. LINEAR_MCP_TOKEN for the Linear MCP) to the server subprocess without
+    a per-key code change. A key that is NOT named stays filtered out, and a
+    denylisted global-OpenCode-config var cannot be re-introduced this way.
+    """
+    monkeypatch.setenv(
+        "OMNIGENT_RUNNER_ENV_PASSTHROUGH",
+        "LINEAR_MCP_TOKEN, OPENCODE_CONFIG",  # spaces tolerated; denylisted name ignored
+    )
+    monkeypatch.setenv("LINEAR_MCP_TOKEN", "lin-tok")
+    monkeypatch.setenv("SOME_OTHER_TOKEN", "nope")  # not named -> dropped
+    monkeypatch.setenv("OPENCODE_CONFIG", "/evil/opencode.json")  # denylisted
+    env = filtered_server_env(bridge_dir=tmp_path, auth_secret="pw")
+    assert env["LINEAR_MCP_TOKEN"] == "lin-tok"  # named -> forwarded
+    assert "SOME_OTHER_TOKEN" not in env  # unnamed -> filtered out
+    assert "OPENCODE_CONFIG" not in env  # denylist wins over passthrough
+
+
 def test_filtered_server_env_points_gh_at_real_config_dir(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ) -> None:
