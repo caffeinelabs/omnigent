@@ -3,6 +3,7 @@
 from omnigent.entities.account import Account, AccountToken
 from omnigent.entities.agent import Agent, LoadedAgent
 from omnigent.entities.comment import Comment, CommentsFingerprint
+from omnigent.entities.connection import ProviderConnection
 from omnigent.entities.conversation import (
     NON_CONTENT_ITEM_TYPES,
     CompactionData,
@@ -61,6 +62,7 @@ __all__ = [
     "PagedList",
     "Policy",
     "Project",
+    "ProviderConnection",
     "ReasoningData",
     "ResolvedAccess",
     "ResourceEventData",
