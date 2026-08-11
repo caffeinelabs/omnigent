@@ -95,8 +95,9 @@ def test_filtered_server_env_sets_xdg_and_password(
 ) -> None:
     monkeypatch.setenv("ANTHROPIC_API_KEY", "secret-key")
     monkeypatch.setenv("RANDOM_UNRELATED", "nope")
-    # MCP header-auth creds must reach the server so OpenCode can expand
-    # ``{env:...}`` placeholders in remote MCP headers.
+    # Datadog's DD_API_KEY/DD_APP_KEY have no shared prefix; they reach the
+    # server via the operator passthrough list, not a hardcoded allowlist entry.
+    monkeypatch.setenv("OMNIGENT_RUNNER_ENV_PASSTHROUGH", "DD_API_KEY, DD_APP_KEY")
     monkeypatch.setenv("DD_API_KEY", "dd-api")
     monkeypatch.setenv("DD_APP_KEY", "dd-app")
     monkeypatch.setenv("DATABRICKS_MCP_API_KEY", "dbx")
@@ -106,9 +107,9 @@ def test_filtered_server_env_sets_xdg_and_password(
     assert env["OPENCODE_SERVER_PASSWORD"] == "pw"
     assert env["OPENCODE_SERVER_USERNAME"] == "opencode"
     assert env["ANTHROPIC_API_KEY"] == "secret-key"  # provider env passes through
-    assert env["DD_API_KEY"] == "dd-api"  # Datadog MCP header creds pass through
+    assert env["DD_API_KEY"] == "dd-api"  # Datadog creds via operator passthrough
     assert env["DD_APP_KEY"] == "dd-app"
-    assert env["DATABRICKS_MCP_API_KEY"] == "dbx"  # DATABRICKS_ prefix
+    assert env["DATABRICKS_MCP_API_KEY"] == "dbx"  # DATABRICKS_ provider-family prefix
     assert "RANDOM_UNRELATED" not in env  # unrelated env filtered out
 
 
