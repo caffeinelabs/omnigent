@@ -444,6 +444,15 @@ _RUNNER_ENV_ALLOWLIST: frozenset[str] = frozenset(
         # host→runner intrinsically, so the setter need not also list it in
         # OMNIGENT_RUNNER_ENV_PASSTHROUGH.
         "OMNIGENT_DATABRICKS_EXTRA_HEADERS",
+        # The passthrough LIST itself. Forwarding only the values it names (done
+        # via ``extra_names`` in _build_runner_env) is not enough: downstream
+        # env rebuilds in the runner — notably ``filtered_server_env`` for
+        # ``opencode serve`` — re-read ``OMNIGENT_RUNNER_ENV_PASSTHROUGH`` to
+        # decide which extra creds to forward on to the harness. Without the
+        # list variable itself in the runner env, that read comes back empty and
+        # header-auth MCP creds (e.g. ``{env:LINEAR_MCP_TOKEN}``) get dropped
+        # even though their value was forwarded. Not a secret — just names.
+        "OMNIGENT_RUNNER_ENV_PASSTHROUGH",
     }
     # Windows system / profile constants (SYSTEMROOT is mandatory for Winsock,
     # USERPROFILE for Path.home(), etc.); a no-op on POSIX. See _platform.

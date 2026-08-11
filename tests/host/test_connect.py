@@ -1704,6 +1704,10 @@ def test_build_runner_env_passthrough_extends_forwarded_set() -> None:
     assert env["MY_GATEWAY_URL"] == "https://llm.internal.example.com"
     # Anything unnamed stays behind the allowlist.
     assert "UNLISTED_SECRET" not in env
+    # The passthrough list itself forwards, so downstream env rebuilds in the
+    # runner (e.g. filtered_server_env for `opencode serve`) can re-read it and
+    # forward the named creds on to the harness.
+    assert env["OMNIGENT_RUNNER_ENV_PASSTHROUGH"] == "MY_GATEWAY_TOKEN, MY_GATEWAY_URL"
 
 
 def test_build_runner_env_preserves_ambient_databricks_profile() -> None:
