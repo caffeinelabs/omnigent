@@ -140,6 +140,26 @@ RUN set -eu; \
       echo "ERROR: kiro-cli reports '${installed:-<none>}', expected '$KIRO_CLI_VERSION'." >&2; exit 1; }; \
     echo "kiro-cli ${KIRO_CLI_VERSION} pinned (sha256 verified)"
 
+# jcode (`jcode acp` ACP harness) — not an npm package. Its installer
+# verifies the release's own sha256 checksums and pins via JCODE_VERSION
+# (unlike the kiro/agy bootstrappers), so no separate sha256 args here.
+# The bootstrapper's ~/.local/bin/jcode is a shim that execs the real
+# jcode-linux-<arch>.bin under ~/.jcode/builds; install that binary itself
+# onto a system PATH dir every sandbox user shares and assert the version. Keep in sync with
+# deploy/docker/Dockerfile. To adopt a new jcode: bump JCODE_VERSION.
+ARG JCODE_VERSION=0.75.3
+RUN set -eu; \
+    curl -fsSL -o /tmp/jcode-install.sh https://jcode.sh/install; \
+    JCODE_VERSION="v${JCODE_VERSION}" DO_NOT_TRACK=1 bash /tmp/jcode-install.sh; \
+    bin="$(find /root/.jcode/builds/versions -maxdepth 2 -type f -name 'jcode-linux-*.bin' | head -n1)"; \
+    [ -n "$bin" ] || { echo "ERROR: jcode binary not found under /root/.jcode/builds" >&2; exit 1; }; \
+    install -m 0755 "$bin" /usr/local/bin/jcode; \
+    rm -rf /tmp/jcode-install.sh /root/.jcode /root/.local/bin/jcode; \
+    installed="$(/usr/local/bin/jcode --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"; \
+    [ "$installed" = "$JCODE_VERSION" ] || { \
+      echo "ERROR: jcode reports '${installed:-<none>}', expected '$JCODE_VERSION'." >&2; exit 1; }; \
+    echo "jcode ${JCODE_VERSION} pinned (installer-verified sha256)"
+
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /build /build
 
