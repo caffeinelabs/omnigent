@@ -69,6 +69,12 @@ export interface Usage {
 export interface ErrorInfo {
   code: string;
   message: string;
+  /** Friendly headline for a classified failure, e.g. "Claude Code can't run as root". */
+  title?: string;
+  /** One/two-sentence explanation of why it failed. Paired with `title`. */
+  cause?: string;
+  /** Concrete next step to fix it, e.g. a command to run. */
+  remediation?: string;
 }
 
 /** Details about why a response stopped early. */
@@ -96,7 +102,7 @@ export interface Response {
   /** "queued" | "in_progress" | "completed" | "failed" | "incomplete" | "cancelled". */
   status: string;
   model: string;
-  output?: Array<Record<string, unknown>>;
+  output?: Record<string, unknown>[];
   createdAt?: number;
   completedAt?: number | null;
   previousResponseId?: string | null;
@@ -315,6 +321,13 @@ export interface Session {
    * "Cost Optimized" toggle.
    */
   costControlModeOverride?: "on" | "off" | null;
+  /**
+   * Per-session routing switch for the sub-agents this session spawns:
+   * `"on"` routes them intelligently, and `"off"` or `null` both run them
+   * on the default model. Sessions that start on Smart Routing are stamped
+   * `"on"` at create, so `null` means Default rather than "inherit".
+   */
+  subagentRoutingOverride?: "on" | "off" | null;
   /** Model context window size in tokens as looked up server-side. */
   contextWindow?: number | null;
   /**
@@ -344,7 +357,13 @@ export interface Session {
    * relying on the transient ``response.error`` SSE event, which may
    * have been emitted before the web client subscribed.
    */
-  lastTaskError?: { code: string; message: string } | null;
+  lastTaskError?: {
+    code: string;
+    message: string;
+    title?: string;
+    cause?: string;
+    remediation?: string;
+  } | null;
   /**
    * Outstanding `response.elicitation_request` event payloads on
    * the snapshot. Replayed into the chat as ApprovalCard blocks on
@@ -353,7 +372,7 @@ export interface Session {
    * raw SSE shape so the existing `sse.ts` parser can fold them
    * back into the block stream.
    */
-  pendingElicitations?: Array<Record<string, unknown>>;
+  pendingElicitations?: Record<string, unknown>[];
   /**
    * Un-consumed web-composer user messages on native-terminal
    * sessions at snapshot time. Replayed so a client that posted then
@@ -391,16 +410,22 @@ export interface Session {
    */
   subAgentName: string | null;
   /**
+   * Conversation kind: ``"sub_agent"`` for child sessions spawned by a
+   * parent agent (they have no host binding and recover via their parent's
+   * runner), ``"default"`` for all other sessions.
+   */
+  kind: "default" | "sub_agent";
+  /**
    * Current Claude Code todo list for `omnigent claude` sessions.
    * Sourced from the server's `_session_todos_cache` at snapshot
    * build time so the panel survives page refresh. Empty array for
    * non-claude-native sessions or before the first turn creates todos.
    */
-  todos?: Array<{
+  todos?: {
     content: string;
     status: "pending" | "in_progress" | "completed";
     activeForm: string;
-  }>;
+  }[];
   /**
    * Skills the bound agent has access to (bundled + host-discovered,
    * subject to the spec's ``skills_filter``). Populated by the
@@ -455,12 +480,7 @@ export interface Session {
  * only — the snapshot field clears to null on success).
  */
 export type SandboxLaunchStage =
-  | "provisioning"
-  | "cloning"
-  | "starting"
-  | "connecting"
-  | "ready"
-  | "failed";
+  "provisioning" | "cloning" | "starting" | "connecting" | "ready" | "failed";
 
 /**
  * Managed-sandbox launch progress — mirrors

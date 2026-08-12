@@ -3,7 +3,6 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App.tsx";
-import { PWAUpdateBanner } from "./components/pwa/PWAUpdateBanner";
 import { ThemeProvider } from "./components/theme/ThemeProvider";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { ImageLightboxProvider } from "./components/ImageLightbox";
@@ -16,14 +15,16 @@ import { resolveIdentity } from "./lib/identity";
 import { initNativeInsets } from "./lib/nativeInsets";
 import { initBrowserTelemetry } from "./lib/telemetry";
 import {
+  applyDesktopUiFontSize,
   applyUiFontFamily,
-  applyUiFontScale,
   readUiFontFamily,
   readUiFontSizePx,
 } from "./lib/uiFontPreferences";
 import { applyThemePalette, readThemePalette } from "./lib/themePalette";
 import { applyCustomTheme, readCustomTheme } from "./lib/customTheme";
 import { initChatStore } from "./store/chatStore";
+import "katex/dist/katex.min.css";
+import "streamdown/styles.css";
 import "./index.css";
 
 // Start tracing before any request fires so fetch/XHR are patched in time
@@ -57,12 +58,12 @@ void resolveIdentity();
 // No-op off the iOS shell (the inset vars stay at their env()-only defaults).
 initNativeInsets();
 
-// Apply the saved UI font size and family before first paint so there's no flash.
-applyUiFontScale(readUiFontSizePx());
+// Apply the saved desktop UI font size and family before first paint so there's no flash.
+applyDesktopUiFontSize(readUiFontSizePx());
 applyUiFontFamily(readUiFontFamily());
 
-// The sidebar font size control was removed. Clear any previously persisted
-// value so existing users fall back to the default 13px size on reload.
+// The standalone sidebar font size control was removed. Clear its legacy value
+// so sidebar items follow the shared desktop interface size.
 if (typeof window !== "undefined") {
   try {
     localStorage.removeItem("omnigent:sidebar-font-size");
@@ -82,9 +83,9 @@ applyThemePalette(readThemePalette());
 // missing server doesn't deadlock first paint. We add a small
 // safety timeout (1.5s) so users on a flaky network still get
 // something on screen.
-const _bootProbe: Promise<ServerInfo> = Promise.race([
+const bootProbe: Promise<ServerInfo> = Promise.race([
   resolveServerInfo(),
-  new Promise<ServerInfo>((resolve) =>
+  new Promise<ServerInfo>((resolve) => {
     setTimeout(
       () =>
         resolve({
@@ -99,6 +100,7 @@ const _bootProbe: Promise<ServerInfo> = Promise.race([
           public_sharing_enabled: true,
           server_version: null,
           smart_routing_enabled: false,
+          smart_routing_sources: { external: false, oss: false },
           github_app_enabled: false,
           sshpiper_host: null,
           sshpiper_port: null,
@@ -108,17 +110,16 @@ const _bootProbe: Promise<ServerInfo> = Promise.race([
           dictation_available: false,
         }),
       1500,
-    ),
-  ),
+    );
+  }),
 ]);
 
-void _bootProbe.then((info) => {
+void bootProbe.then((info) => {
   createRoot(document.getElementById("root")!).render(
     <StrictMode>
       <CapabilitiesProvider info={info}>
         <QueryClientProvider client={queryClient}>
           <ThemeProvider>
-            <PWAUpdateBanner />
             <TooltipProvider>
               <ImageLightboxProvider>
                 <BrowserRouter>

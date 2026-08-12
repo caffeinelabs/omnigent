@@ -34,6 +34,7 @@ import time
 import uuid
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -43,6 +44,10 @@ from omnigent.inner import _proc
 from omnigent.inner._subprocess_lifecycle import close_subprocess_transport
 from omnigent.runner.identity import strip_runner_auth_secrets
 from omnigent.runtime.harnesses import _HARNESS_MODULES
+from omnigent.runtime.harnesses._harness_zygote_client import (
+    HarnessZygoteClient,
+    ZygoteHarnessUnavailable,
+)
 
 _logger = logging.getLogger(__name__)
 
@@ -467,7 +472,7 @@ class _SubprocessEntry:
 
     def __init__(
         self,
-        process: asyncio.subprocess.Process,
+        process: asyncio.subprocess.Process | Any,
         client: httpx.AsyncClient,
         endpoint: _HarnessEndpoint,
         harness: str,
@@ -598,6 +603,13 @@ class HarnessProcessManager:
         # Set at the start of ``shutdown`` so an in-flight cold spawn
         # cannot register a live process after teardown begins.
         self._shutting_down = False
+        # Harness fork channel to the runner zygote, present only when this
+        # runner was itself zygote-forked (the inherited fd is in the env).
+        # When set, harness subprocesses are forked from the zygote — sharing
+        # its import graph copy-on-write — instead of exec'd fresh; disabled on
+        # first failure so we fall back to a direct exec for the process's life.
+        self._harness_zygote = HarnessZygoteClient.from_env()
+        self._harness_zygote_disabled = False
 
     @property
     def instance_dir(self) -> Path:
@@ -1139,10 +1151,7 @@ class HarnessProcessManager:
         # ``--parent-pid`` enables the runner's parent-death
         # watchdog thread so orphaned runners self-terminate
         # when the spawning process exits.
-        process = await asyncio.create_subprocess_exec(
-            sys.executable,
-            "-m",
-            "omnigent.runtime.harnesses._runner",
+        runner_argv = [
             "--harness",
             harness,
             "--module",
@@ -1152,10 +1161,8 @@ class HarnessProcessManager:
             conversation_id,
             "--parent-pid",
             str(parent_pid),
-            stdout=None,
-            stderr=None,
-            env=effective_env,
-        )
+        ]
+        process = await self._spawn_harness_process(runner_argv, effective_env)
         try:
             await _wait_for_bind(process, endpoint, harness, conversation_id)
 
@@ -1212,6 +1219,44 @@ class HarnessProcessManager:
             with contextlib.suppress(Exception):
                 endpoint.cleanup()
             raise
+
+    async def _spawn_harness_process(
+        self,
+        runner_argv: list[str],
+        effective_env: dict[str, str],
+    ) -> Any:
+        """Spawn the harness ``_runner``, via the zygote fork path or direct exec.
+
+        When this runner was itself zygote-forked, it asks the zygote to
+        ``os.fork()`` the harness — sharing the already-imported harness graph
+        copy-on-write — and returns an ``asyncio.subprocess.Process``-shaped
+        shim. Otherwise (or on any zygote failure, latched for the process's
+        life) it falls back to the original ``create_subprocess_exec``. Both
+        return a handle exposing the ``returncode`` / ``wait`` / ``send_signal``
+        / ``kill`` / ``pid`` surface the manager uses.
+
+        :param runner_argv: The ``_runner`` CLI flags (``--harness`` … ``--parent-pid``).
+        :param effective_env: The harness subprocess environment.
+        :returns: The process handle (real ``Process`` or ``ZygoteHarnessProc``).
+        """
+        zygote = self._harness_zygote
+        if zygote is not None and not self._harness_zygote_disabled:
+            try:
+                return await zygote.fork_harness(runner_argv, effective_env)
+            except ZygoteHarnessUnavailable as exc:
+                _logger.warning(
+                    "Harness zygote unavailable (%s); falling back to direct exec", exc
+                )
+                self._harness_zygote_disabled = True
+        return await asyncio.create_subprocess_exec(
+            sys.executable,
+            "-m",
+            "omnigent.runtime.harnesses._runner",
+            *runner_argv,
+            stdout=None,
+            stderr=None,
+            env=effective_env,
+        )
 
     async def _close_entry(self, entry: _SubprocessEntry) -> None:
         """
