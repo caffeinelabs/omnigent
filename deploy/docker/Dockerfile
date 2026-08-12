@@ -356,6 +356,16 @@ RUN set -eu; \
       echo "ERROR: jcode reports '${installed:-<none>}', expected '$JCODE_VERSION'." >&2; exit 1; }; \
     echo "jcode ${JCODE_VERSION} pinned (installer-verified sha256)"
 
+# PREVIEW-ONLY (drop before upstream): default jcode profile for the
+# caffeine-sandbox preview cluster (keyless in-cluster Bifrost), written
+# into both runner HOME candidates. /sandbox/.jcode is chowned to the
+# sandbox user so jcode can write session state when pods run non-root.
+COPY deploy/docker/preview-jcode/provider-bifrost.env /etc/jcode/provider-bifrost.env
+COPY deploy/docker/preview-jcode/config.toml /tmp/jcode-preview-config.toml
+RUN install -m 0644 -D /tmp/jcode-preview-config.toml /root/.jcode/config.toml \
+ && install -m 0644 -D /tmp/jcode-preview-config.toml /sandbox/.jcode/config.toml \
+ && chown -R 1000660000:1000660000 /sandbox/.jcode \
+ && rm /tmp/jcode-preview-config.toml
 
 # Copy the venv and source tree. The editable install's .pth files reference
 # /build/omnigent and /build/sdks/* -- both denied by the k8s Landlock LSM

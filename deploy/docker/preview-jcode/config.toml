@@ -1,0 +1,19 @@
+# PREVIEW-ONLY (drop before upstream): default jcode profile for the
+# caffeine-sandbox preview cluster. Points at the keyless in-cluster Bifrost
+# so the preview exercises the harness without real credentials.
+[provider]
+default_provider = "bifrost"
+default_model = "openrouter/z-ai/glm-5.2"
+
+[providers.bifrost]
+type = "openai-compatible"
+base_url = "http://bifrost.bifrost.svc.cluster.local:4000/v1"
+auth = "bearer"
+api_key_env = "JCODE_PROVIDER_BIFROST_API_KEY"
+env_file = "/etc/jcode/provider-bifrost.env"
+default_model = "openrouter/z-ai/glm-5.2"
+requires_api_key = true
+
+[[providers.bifrost.models]]
+id = "openrouter/z-ai/glm-5.2"
+context_window = 131072
