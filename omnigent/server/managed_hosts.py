@@ -971,12 +971,16 @@ def parse_sandbox_config(raw: object) -> ManagedSandboxConfig | None:
                     "resources",
                     "pvc_mounts",
                     "secret_mounts",
+                    "config_map_mounts",
                 },
                 "sandbox.kubernetes",
             )
         pvc_mounts = _parse_kubernetes_pvc_mounts(raw)
         secret_mounts = _parse_kubernetes_secret_mounts(raw)
-        _reject_overlapping_kubernetes_mounts(pvc_mounts, secret_mounts)
+        config_map_mounts = _parse_kubernetes_config_map_mounts(raw)
+        _reject_overlapping_kubernetes_mounts(
+            pvc_mounts, secret_mounts, config_map_mounts
+        )
         launcher_factory = _kubernetes_launcher_factory(
             image=_parse_provider_image(raw, "kubernetes"),
             env=_parse_provider_env(raw, "kubernetes"),
@@ -989,6 +993,7 @@ def parse_sandbox_config(raw: object) -> ManagedSandboxConfig | None:
             resources=_parse_kubernetes_resources(raw),
             pvc_mounts=pvc_mounts,
             secret_mounts=secret_mounts,
+            config_map_mounts=config_map_mounts,
         )
         token_ttl_s = KUBERNETES_MANAGED_TOKEN_TTL_S
     else:
@@ -2190,39 +2195,128 @@ def _parse_kubernetes_secret_mounts(raw: dict[str, object]) -> list[dict[str, ob
     return normalized or None
 
 
+def _parse_kubernetes_config_map_mounts(
+    raw: dict[str, object],
+) -> list[dict[str, object]] | None:
+    """
+    Extract and validate the optional ``sandbox.kubernetes.config_map_mounts`` list.
+
+    Same shape and rules as :func:`_parse_kubernetes_secret_mounts`, but for
+    ConfigMaps — the right carrier for non-secret, cluster-specific config a
+    harness in the runner needs (e.g. an MCP registry). A ConfigMap volume is
+    read-only and refreshed in place by the kubelet like a Secret volume, so
+    there is no ``read_only`` knob here either.
+
+    :param raw: The raw ``sandbox`` mapping.
+    :returns: Normalized ``{config_map_name, mount_path}`` entries, or ``None``
+        when omitted or empty.
+    :raises ValueError: When the list or any entry has the wrong shape, a name
+        or path is malformed, a path is reserved, or paths collide.
+    """
+    section = _parse_provider_section(raw, "kubernetes")
+    if section is None:
+        return None
+    value = section.get("config_map_mounts")
+    if value is None:
+        return None
+    if not isinstance(value, list):
+        raise ValueError(
+            "server config 'sandbox.kubernetes.config_map_mounts' must be a "
+            "list of {config_map_name, mount_path} entries"
+        )
+    normalized: list[dict[str, object]] = []
+    for i, entry in enumerate(value):
+        path_prefix = f"sandbox.kubernetes.config_map_mounts[{i}]"
+        if not isinstance(entry, dict):
+            raise ValueError(f"server config '{path_prefix}' must be a mapping")
+        _reject_unknown_keys(entry, {"config_map_name", "mount_path"}, path_prefix)
+        config_map = entry.get("config_map_name")
+        if not isinstance(config_map, str) or not config_map.strip():
+            raise ValueError(
+                f"server config '{path_prefix}.config_map_name' must name a "
+                "ConfigMap pre-created in the runner namespace"
+            )
+        config_map = config_map.strip()
+        _validate_dns1123_subdomain(config_map, f"config_map_mounts[{i}].config_map_name")
+        mount = entry.get("mount_path")
+        if not isinstance(mount, str) or not mount.startswith("/"):
+            raise ValueError(
+                f"server config '{path_prefix}.mount_path' must be an absolute "
+                "in-Pod path, e.g. '/mnt/config/jcode'"
+            )
+        if mount.startswith("//") or mount != posixpath.normpath(mount):
+            raise ValueError(
+                f"server config '{path_prefix}.mount_path' must be a normalized "
+                f"path (no '..', '.', doubled or trailing slashes): {mount!r}"
+            )
+        if mount == "/" or any(
+            mount == p or mount.startswith(p + "/") or p.startswith(mount + "/")
+            for p in _KUBERNETES_RESERVED_MOUNT_PREFIXES
+        ):
+            raise ValueError(
+                f"server config '{path_prefix}.mount_path' overlaps a reserved "
+                f"path: {mount!r} (the runner's HOME, Secret projections, and OS "
+                "directories cannot be shadowed or mounted over)"
+            )
+        normalized.append({"config_map_name": config_map, "mount_path": mount})
+    for a, b in itertools.combinations(normalized, 2):
+        pa, pb = str(a["mount_path"]), str(b["mount_path"])
+        if pa == pb:
+            raise ValueError(
+                "server config 'sandbox.kubernetes.config_map_mounts' has a "
+                f"duplicate mount_path: {pa!r}"
+            )
+        low, high = sorted((pa, pb), key=len)
+        if high.startswith(low + "/"):
+            raise ValueError(
+                "server config 'sandbox.kubernetes.config_map_mounts' has "
+                f"nested mount_paths: {low!r} contains {high!r}"
+            )
+    return normalized or None
+
+
 def _reject_overlapping_kubernetes_mounts(
     pvc_mounts: list[dict[str, object]] | None,
     secret_mounts: list[dict[str, object]] | None,
+    config_map_mounts: list[dict[str, object]] | None,
 ) -> None:
     """
-    Reject a ``pvc_mounts`` path that duplicates or nests with a ``secret_mounts`` path.
+    Reject mount paths that duplicate or nest across the three mount types.
 
     Each list is already de-conflicted internally by its own parser; this
-    catches a collision *across* the two mount types (e.g. a PVC at ``/mnt/x``
-    and a Secret at ``/mnt/x/token``), which would otherwise produce nested
-    volume mounts on the host container.
+    catches a collision *across* types (e.g. a PVC at ``/mnt/x`` and a Secret
+    at ``/mnt/x/token``), which would otherwise produce nested volume mounts
+    on the host container.
 
     :param pvc_mounts: Normalized PVC mounts, or ``None``.
     :param secret_mounts: Normalized Secret mounts, or ``None``.
-    :raises ValueError: When a PVC and a Secret mount_path are equal or nested.
+    :param config_map_mounts: Normalized ConfigMap mounts, or ``None``.
+    :raises ValueError: When two mount_paths of different types are equal or
+        nested.
     """
-    if not pvc_mounts or not secret_mounts:
-        return
-    for pvc in pvc_mounts:
-        pa = str(pvc["mount_path"])
-        for secret in secret_mounts:
-            sb = str(secret["mount_path"])
-            if pa == sb:
-                raise ValueError(
-                    "server config 'sandbox.kubernetes' uses the same mount_path "
-                    f"for a PVC and a Secret: {pa!r}"
-                )
-            low, high = sorted((pa, sb), key=len)
-            if high.startswith(low + "/"):
-                raise ValueError(
-                    "server config 'sandbox.kubernetes' has nested pvc_mounts / "
-                    f"secret_mounts paths: {low!r} contains {high!r}"
-                )
+    typed = (
+        ("pvc_mounts", pvc_mounts),
+        ("secret_mounts", secret_mounts),
+        ("config_map_mounts", config_map_mounts),
+    )
+    for (kind_a, mounts_a), (kind_b, mounts_b) in itertools.combinations(typed, 2):
+        if not mounts_a or not mounts_b:
+            continue
+        for a in mounts_a:
+            pa = str(a["mount_path"])
+            for b in mounts_b:
+                pb = str(b["mount_path"])
+                if pa == pb:
+                    raise ValueError(
+                        "server config 'sandbox.kubernetes' uses the same "
+                        f"mount_path for {kind_a} and {kind_b}: {pa!r}"
+                    )
+                low, high = sorted((pa, pb), key=len)
+                if high.startswith(low + "/"):
+                    raise ValueError(
+                        "server config 'sandbox.kubernetes' has nested "
+                        f"{kind_a} / {kind_b} paths: {low!r} contains {high!r}"
+                    )
 
 
 def _kubernetes_launcher_factory(
@@ -2238,6 +2332,7 @@ def _kubernetes_launcher_factory(
     resources: dict[str, object] | None,
     pvc_mounts: list[dict[str, object]] | None,
     secret_mounts: list[dict[str, object]] | None,
+    config_map_mounts: list[dict[str, object]] | None,
 ) -> Callable[[], SandboxHostLauncher]:
     """
     Build the launcher factory for the YAML ``provider: kubernetes`` path.
@@ -2263,6 +2358,8 @@ def _kubernetes_launcher_factory(
         or ``None``.
     :param secret_mounts: Normalized Secret file-mount entries added to every
         runner Pod (rotation-friendly credential volumes), or ``None``.
+    :param config_map_mounts: Normalized ConfigMap file-mount entries added to
+        every runner Pod (non-secret cluster config), or ``None``.
     :returns: A factory producing parameterized Kubernetes launchers.
     :raises ValueError: When a name or node-selector label is malformed.
     """
@@ -2284,6 +2381,7 @@ def _kubernetes_launcher_factory(
             resources=resources,
             pvc_mounts=pvc_mounts,
             secret_mounts=secret_mounts,
+            config_map_mounts=config_map_mounts,
         )
 
     return _build

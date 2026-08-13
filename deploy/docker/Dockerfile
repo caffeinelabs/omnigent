@@ -369,11 +369,11 @@ COPY deploy/docker/preview-jcode/provider-bifrost.env /opt/jcode/config/jcode/pr
 RUN chown -R 1000660000:1000660000 /opt/jcode
 # PREVIEW-ONLY (drop before upstream): jcode MCP is stdio-only, so mcp-remote
 # bridges it to Bifrost's in-cluster /mcp endpoint. The bridge config holds
-# cluster-specific DNS, so it ships cluster-side (Secret mounted at
-# /mnt/secrets/jcode); a dangling symlink reads as "no MCP servers" elsewhere.
+# cluster-specific DNS, so it ships cluster-side (ConfigMap mounted at
+# /mnt/config/jcode); a dangling symlink reads as "no MCP servers" elsewhere.
 RUN npm install -g --no-audit --no-fund mcp-remote@0.1.38 \
  && npm cache clean --force \
- && ln -s /mnt/secrets/jcode/mcp.json /opt/jcode/mcp.json
+ && ln -s /mnt/config/jcode/mcp.json /opt/jcode/mcp.json
 
 # Copy the venv and source tree. The editable install's .pth files reference
 # /build/omnigent and /build/sdks/* -- both denied by the k8s Landlock LSM
