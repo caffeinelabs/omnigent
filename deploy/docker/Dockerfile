@@ -413,6 +413,12 @@ COPY deploy/docker/entrypoint.py /app/entrypoint.py
 
 WORKDIR /app
 
+# Fork deployment extra (not proposed upstream): seed a first-class "jcode"
+# agent (catalog row + os_env/terminals for the UI Files/Changes/Shell tabs).
+# Deployments can override/extend via their own OMNIGENT_BUILTIN_AGENT_DIRS.
+COPY deploy/docker/preview-jcode/jcode-agent.yaml /etc/omnigent/agents/jcode.yaml
+ENV OMNIGENT_BUILTIN_AGENT_DIRS=/etc/omnigent/agents/jcode.yaml
+
 # /data is mounted as a persistent volume by docker-compose for the
 # artifact store.
 RUN mkdir -p /data/artifacts
