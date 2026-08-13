@@ -19,6 +19,10 @@ os_env:
   cwd: .
   sandbox:
     type: none
+    # The ACP spawn env is deny-by-default; let the runner-supplied
+    # JCODE_HOME through so jcode finds its baked profile (/opt/jcode).
+    env_passthrough:
+      - JCODE_HOME
 
 # Web-UI "+ New shell" affordance (bash is what the slim host image ships).
 terminals:

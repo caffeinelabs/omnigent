@@ -357,15 +357,14 @@ RUN set -eu; \
     echo "jcode ${JCODE_VERSION} pinned (installer-verified sha256)"
 
 # PREVIEW-ONLY (drop before upstream): default jcode profile for the
-# caffeine-sandbox preview cluster (keyless in-cluster Bifrost), written
-# into both runner HOME candidates. /sandbox/.jcode is chowned to the
-# sandbox user so jcode can write session state when pods run non-root.
-COPY deploy/docker/preview-jcode/provider-bifrost.env /etc/jcode/provider-bifrost.env
-COPY deploy/docker/preview-jcode/config.toml /tmp/jcode-preview-config.toml
-RUN install -m 0644 -D /tmp/jcode-preview-config.toml /root/.jcode/config.toml \
- && install -m 0644 -D /tmp/jcode-preview-config.toml /sandbox/.jcode/config.toml \
- && chown -R 1000660000:1000660000 /sandbox/.jcode \
- && rm /tmp/jcode-preview-config.toml
+# caffeine-sandbox preview cluster (keyless in-cluster Bifrost). K8s runner
+# pods mount a writable emptyDir over HOME, so a baked ~/.jcode never
+# survives; bake a complete jcode home at /opt/jcode instead and activate it
+# via JCODE_HOME=/opt/jcode (set by the preview env). Chowned to the sandbox
+# user (1000660000) so jcode can write session state when pods run non-root.
+COPY deploy/docker/preview-jcode/config.toml /opt/jcode/config.toml
+COPY deploy/docker/preview-jcode/provider-bifrost.env /opt/jcode/provider-bifrost.env
+RUN chown -R 1000660000:1000660000 /opt/jcode
 
 # Copy the venv and source tree. The editable install's .pth files reference
 # /build/omnigent and /build/sdks/* -- both denied by the k8s Landlock LSM
