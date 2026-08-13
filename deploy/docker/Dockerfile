@@ -365,7 +365,8 @@ RUN set -eu; \
 # can write session state when pods run non-root. jcode's MCP client is
 # stdio-only, so mcp-remote bridges it to a gateway /mcp endpoint. Dangling
 # symlinks read as "no config" where nothing is mounted.
-RUN install -d -o 1000660000 -g 1000660000 /opt/jcode/config/jcode \
+RUN install -d /opt/jcode/config/jcode \
+ && chown -R 1000660000:1000660000 /opt/jcode \
  && npm install -g --no-audit --no-fund mcp-remote@0.1.38 \
  && npm cache clean --force \
  && ln -s /mnt/config/jcode/config.toml /opt/jcode/config.toml \
