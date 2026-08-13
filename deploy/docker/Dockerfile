@@ -343,7 +343,7 @@ RUN set -eu; \
 # jcode-linux-<arch>.bin under ~/.jcode/builds; install that binary itself
 # onto a system PATH dir every sandbox user shares and assert the version. Keep in sync with
 # deploy/docker/Dockerfile.ubi. To adopt a new jcode: bump JCODE_VERSION.
-ARG JCODE_VERSION=0.75.3
+ARG JCODE_VERSION=0.75.5
 RUN set -eu; \
     curl -fsSL -o /tmp/jcode-install.sh https://jcode.sh/install; \
     JCODE_VERSION="v${JCODE_VERSION}" DO_NOT_TRACK=1 bash /tmp/jcode-install.sh; \
