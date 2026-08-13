@@ -10,7 +10,9 @@ type = "openai-compatible"
 base_url = "http://bifrost.bifrost.svc.cluster.local:4000/v1"
 auth = "bearer"
 api_key_env = "JCODE_PROVIDER_BIFROST_API_KEY"
-env_file = "/opt/jcode/provider-bifrost.env"
+# Bare filename only (jcode rejects paths); resolved under jcode's config
+# dir — $JCODE_HOME/config/jcode/provider-bifrost.env in the baked image.
+env_file = "provider-bifrost.env"
 default_model = "openrouter/z-ai/glm-5.2"
 requires_api_key = true
 

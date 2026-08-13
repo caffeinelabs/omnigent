@@ -363,7 +363,9 @@ RUN set -eu; \
 # via JCODE_HOME=/opt/jcode (set by the preview env). Chowned to the sandbox
 # user (1000660000) so jcode can write session state when pods run non-root.
 COPY deploy/docker/preview-jcode/config.toml /opt/jcode/config.toml
-COPY deploy/docker/preview-jcode/provider-bifrost.env /opt/jcode/provider-bifrost.env
+# jcode resolves bare env_file names under its config dir
+# ($JCODE_HOME/config/jcode), not next to config.toml.
+COPY deploy/docker/preview-jcode/provider-bifrost.env /opt/jcode/config/jcode/provider-bifrost.env
 RUN chown -R 1000660000:1000660000 /opt/jcode
 
 # Copy the venv and source tree. The editable install's .pth files reference
