@@ -416,8 +416,10 @@ WORKDIR /app
 # Fork deployment extra (not proposed upstream): seed a first-class "jcode"
 # agent (catalog row + os_env/terminals for the UI Files/Changes/Shell tabs).
 # Deployments can override/extend via their own OMNIGENT_BUILTIN_AGENT_DIRS.
-COPY deploy/docker/preview-jcode/jcode-agent.yaml /etc/omnigent/agents/jcode.yaml
-ENV OMNIGENT_BUILTIN_AGENT_DIRS=/etc/omnigent/agents/jcode.yaml
+# Kept off /etc/omnigent: deployments mount their config ConfigMap there,
+# which would shadow the baked file.
+COPY deploy/docker/preview-jcode/jcode-agent.yaml /opt/omnigent/agents/jcode.yaml
+ENV OMNIGENT_BUILTIN_AGENT_DIRS=/opt/omnigent/agents/jcode.yaml
 
 # /data is mounted as a persistent volume by docker-compose for the
 # artifact store.
