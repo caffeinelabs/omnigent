@@ -1348,6 +1348,78 @@ def test_parse_kubernetes_all_mount_types_coexist_at_distinct_paths(
     ]
 
 
+def test_parse_kubernetes_config_map_mounts_env_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Absent YAML key → JSON env value resolves and reaches the launcher."""
+    monkeypatch.setenv(
+        "OMNIGENT_KUBERNETES_CONFIG_MAP_MOUNTS",
+        '[{"config_map_name": "jcode-mcp", "mount_path": "/mnt/config/jcode"}]',
+    )
+    cfg = parse_sandbox_config(
+        {"provider": "kubernetes", "server_url": "http://s.svc.cluster.local"}
+    )
+    assert cfg is not None
+    fake = FakeSandboxLauncher()
+    install_fake_kubernetes_launcher(monkeypatch, fake)
+    assert cfg.launcher_factory() is fake
+    assert fake.config_map_mounts == [
+        {"config_map_name": "jcode-mcp", "mount_path": "/mnt/config/jcode"}
+    ]
+
+
+def test_parse_kubernetes_config_map_mounts_yaml_wins_over_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit YAML list (even empty) suppresses the env fallback."""
+    monkeypatch.setenv(
+        "OMNIGENT_KUBERNETES_CONFIG_MAP_MOUNTS",
+        '[{"config_map_name": "jcode-mcp", "mount_path": "/mnt/config/jcode"}]',
+    )
+    cfg = parse_sandbox_config(
+        {
+            "provider": "kubernetes",
+            "server_url": "http://s.svc.cluster.local",
+            "kubernetes": {"config_map_mounts": []},
+        }
+    )
+    assert cfg is not None
+    fake = FakeSandboxLauncher()
+    install_fake_kubernetes_launcher(monkeypatch, fake)
+    assert cfg.launcher_factory() is fake
+    assert fake.config_map_mounts is None
+
+
+def test_parse_kubernetes_config_map_mounts_empty_env_is_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty env value (GitOps default) means no mounts, not a parse error."""
+    monkeypatch.setenv("OMNIGENT_KUBERNETES_CONFIG_MAP_MOUNTS", "")
+    cfg = parse_sandbox_config(
+        {"provider": "kubernetes", "server_url": "http://s.svc.cluster.local"}
+    )
+    assert cfg is not None
+
+
+@pytest.mark.parametrize(
+    ("env_value", "expected_fragment"),
+    [
+        ("not-json", "OMNIGENT_KUBERNETES_CONFIG_MAP_MOUNTS"),
+        ('{"config_map_name": "c"}', "must be a list"),
+        ('[{"config_map_name": "c", "mount_path": "/etc/x"}]', "reserved"),
+    ],
+)
+def test_parse_kubernetes_config_map_mounts_env_invalid_fails_loud(
+    monkeypatch: pytest.MonkeyPatch, env_value: str, expected_fragment: str
+) -> None:
+    """A malformed env value fails at parse with the same rules as the YAML key."""
+    monkeypatch.setenv("OMNIGENT_KUBERNETES_CONFIG_MAP_MOUNTS", env_value)
+    with pytest.raises(ValueError, match=expected_fragment):
+        parse_sandbox_config(
+            {"provider": "kubernetes", "server_url": "http://s.svc.cluster.local"}
+        )
+
+
 def test_parse_kubernetes_secret_mounts_sibling_prefix_is_not_nested() -> None:
     """/mnt/data vs /mnt/database share a string prefix but are distinct mounts."""
     cfg = parse_sandbox_config(

@@ -137,7 +137,9 @@ from __future__ import annotations
 
 import asyncio
 import itertools
+import json
 import logging
+import os
 import posixpath
 import re
 import secrets
@@ -2195,11 +2197,19 @@ def _parse_kubernetes_secret_mounts(raw: dict[str, object]) -> list[dict[str, ob
     return normalized or None
 
 
+# Env fallback for sandbox.kubernetes.config_map_mounts: a JSON list of
+# {config_map_name, mount_path} entries. GitOps flows that render one shared
+# server config for many deployments use it to opt a single deployment in —
+# an env value needs no per-deployment config surgery, and deployments on old
+# images simply never read the var.
+KUBERNETES_CONFIG_MAP_MOUNTS_ENV_VAR = "OMNIGENT_KUBERNETES_CONFIG_MAP_MOUNTS"
+
+
 def _parse_kubernetes_config_map_mounts(
     raw: dict[str, object],
 ) -> list[dict[str, object]] | None:
     """
-    Extract and validate the optional ``sandbox.kubernetes.config_map_mounts`` list.
+    Extract and validate the optional kubernetes ConfigMap mount list.
 
     Same shape and rules as :func:`_parse_kubernetes_secret_mounts`, but for
     ConfigMaps — the right carrier for non-secret, cluster-specific config a
@@ -2207,46 +2217,74 @@ def _parse_kubernetes_config_map_mounts(
     read-only and refreshed in place by the kubelet like a Secret volume, so
     there is no ``read_only`` knob here either.
 
+    Resolved from ``sandbox.kubernetes.config_map_mounts``, falling back to
+    :data:`KUBERNETES_CONFIG_MAP_MOUNTS_ENV_VAR` (JSON) when the YAML key is
+    absent. An explicit empty YAML list suppresses the env fallback.
+
     :param raw: The raw ``sandbox`` mapping.
     :returns: Normalized ``{config_map_name, mount_path}`` entries, or ``None``
-        when omitted or empty.
-    :raises ValueError: When the list or any entry has the wrong shape, a name
-        or path is malformed, a path is reserved, or paths collide.
+        when neither source configures any.
+    :raises ValueError: When the env value is not valid JSON, or either source
+        has the wrong shape, a malformed name or path, a reserved path, or
+        colliding paths.
     """
     section = _parse_provider_section(raw, "kubernetes")
-    if section is None:
-        return None
-    value = section.get("config_map_mounts")
-    if value is None:
-        return None
+    value = section.get("config_map_mounts") if section is not None else None
+    if value is not None:
+        source = "server config 'sandbox.kubernetes.config_map_mounts'"
+    else:
+        env_raw = os.environ.get(KUBERNETES_CONFIG_MAP_MOUNTS_ENV_VAR, "").strip()
+        if not env_raw:
+            return None
+        try:
+            value = json.loads(env_raw)
+        except json.JSONDecodeError as exc:
+            raise ValueError(
+                f"env '{KUBERNETES_CONFIG_MAP_MOUNTS_ENV_VAR}' must be a JSON "
+                f"list of {{config_map_name, mount_path}} entries: {exc}"
+            ) from exc
+        source = f"env '{KUBERNETES_CONFIG_MAP_MOUNTS_ENV_VAR}'"
+    return _normalize_kubernetes_config_map_mounts(value, source)
+
+
+def _normalize_kubernetes_config_map_mounts(
+    value: object, source: str
+) -> list[dict[str, object]] | None:
+    """
+    Validate raw ConfigMap mount entries from either config source.
+
+    :param value: The raw list value.
+    :param source: Human-readable origin prepended to error messages.
+    :returns: Normalized entries, or ``None`` for an empty list.
+    :raises ValueError: On any malformed entry or path collision.
+    """
     if not isinstance(value, list):
         raise ValueError(
-            "server config 'sandbox.kubernetes.config_map_mounts' must be a "
-            "list of {config_map_name, mount_path} entries"
+            f"{source} must be a list of {{config_map_name, mount_path}} entries"
         )
     normalized: list[dict[str, object]] = []
     for i, entry in enumerate(value):
-        path_prefix = f"sandbox.kubernetes.config_map_mounts[{i}]"
+        path_prefix = f"{source}[{i}]"
         if not isinstance(entry, dict):
-            raise ValueError(f"server config '{path_prefix}' must be a mapping")
+            raise ValueError(f"{path_prefix} must be a mapping")
         _reject_unknown_keys(entry, {"config_map_name", "mount_path"}, path_prefix)
         config_map = entry.get("config_map_name")
         if not isinstance(config_map, str) or not config_map.strip():
             raise ValueError(
-                f"server config '{path_prefix}.config_map_name' must name a "
+                f"{path_prefix}.config_map_name must name a "
                 "ConfigMap pre-created in the runner namespace"
             )
         config_map = config_map.strip()
-        _validate_dns1123_subdomain(config_map, f"config_map_mounts[{i}].config_map_name")
+        _validate_dns1123_subdomain(config_map, path_prefix + ".config_map_name")
         mount = entry.get("mount_path")
         if not isinstance(mount, str) or not mount.startswith("/"):
             raise ValueError(
-                f"server config '{path_prefix}.mount_path' must be an absolute "
+                f"{path_prefix}.mount_path must be an absolute "
                 "in-Pod path, e.g. '/mnt/config/jcode'"
             )
         if mount.startswith("//") or mount != posixpath.normpath(mount):
             raise ValueError(
-                f"server config '{path_prefix}.mount_path' must be a normalized "
+                f"{path_prefix}.mount_path must be a normalized "
                 f"path (no '..', '.', doubled or trailing slashes): {mount!r}"
             )
         if mount == "/" or any(
@@ -2254,7 +2292,7 @@ def _parse_kubernetes_config_map_mounts(
             for p in _KUBERNETES_RESERVED_MOUNT_PREFIXES
         ):
             raise ValueError(
-                f"server config '{path_prefix}.mount_path' overlaps a reserved "
+                f"{path_prefix}.mount_path overlaps a reserved "
                 f"path: {mount!r} (the runner's HOME, Secret projections, and OS "
                 "directories cannot be shadowed or mounted over)"
             )
@@ -2262,15 +2300,11 @@ def _parse_kubernetes_config_map_mounts(
     for a, b in itertools.combinations(normalized, 2):
         pa, pb = str(a["mount_path"]), str(b["mount_path"])
         if pa == pb:
-            raise ValueError(
-                "server config 'sandbox.kubernetes.config_map_mounts' has a "
-                f"duplicate mount_path: {pa!r}"
-            )
+            raise ValueError(f"{source} has a duplicate mount_path: {pa!r}")
         low, high = sorted((pa, pb), key=len)
         if high.startswith(low + "/"):
             raise ValueError(
-                "server config 'sandbox.kubernetes.config_map_mounts' has "
-                f"nested mount_paths: {low!r} contains {high!r}"
+                f"{source} has nested mount_paths: {low!r} contains {high!r}"
             )
     return normalized or None
 
