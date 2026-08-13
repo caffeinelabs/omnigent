@@ -356,23 +356,20 @@ RUN set -eu; \
       echo "ERROR: jcode reports '${installed:-<none>}', expected '$JCODE_VERSION'." >&2; exit 1; }; \
     echo "jcode ${JCODE_VERSION} pinned (installer-verified sha256)"
 
-# PREVIEW-ONLY (drop before upstream): default jcode profile for the
-# caffeine-sandbox preview cluster (keyless in-cluster Bifrost). K8s runner
-# pods mount a writable emptyDir over HOME, so a baked ~/.jcode never
-# survives; bake a complete jcode home at /opt/jcode instead and activate it
-# via JCODE_HOME=/opt/jcode (set by the preview env). Chowned to the sandbox
-# user (1000660000) so jcode can write session state when pods run non-root.
-COPY deploy/docker/preview-jcode/config.toml /opt/jcode/config.toml
-# jcode resolves bare env_file names under its config dir
-# ($JCODE_HOME/config/jcode), not next to config.toml.
-COPY deploy/docker/preview-jcode/provider-bifrost.env /opt/jcode/config/jcode/provider-bifrost.env
-RUN chown -R 1000660000:1000660000 /opt/jcode
-# PREVIEW-ONLY (drop before upstream): jcode MCP is stdio-only, so mcp-remote
-# bridges it to Bifrost's in-cluster /mcp endpoint. The bridge config holds
-# cluster-specific DNS, so it ships cluster-side (ConfigMap mounted at
-# /mnt/config/jcode); a dangling symlink reads as "no MCP servers" elsewhere.
-RUN npm install -g --no-audit --no-fund mcp-remote@0.1.38 \
+# jcode harness wiring for k8s runner pods. Pods mount a writable emptyDir
+# over HOME, so a baked ~/.jcode never survives; instead the image bakes an
+# empty jcode home at /opt/jcode plus symlinks into /mnt/config/jcode, where
+# the deployment mounts its cluster-specific jcode config (profile, provider
+# env file, MCP registry) via config_map_mounts. Activated via
+# JCODE_HOME=/opt/jcode. Chowned to the sandbox user (1000660000) so jcode
+# can write session state when pods run non-root. jcode's MCP client is
+# stdio-only, so mcp-remote bridges it to a gateway /mcp endpoint. Dangling
+# symlinks read as "no config" where nothing is mounted.
+RUN install -d -o 1000660000 -g 1000660000 /opt/jcode/config/jcode \
+ && npm install -g --no-audit --no-fund mcp-remote@0.1.38 \
  && npm cache clean --force \
+ && ln -s /mnt/config/jcode/config.toml /opt/jcode/config.toml \
+ && ln -s /mnt/config/jcode/provider-bifrost.env /opt/jcode/config/jcode/provider-bifrost.env \
  && ln -s /mnt/config/jcode/mcp.json /opt/jcode/mcp.json
 
 # Copy the venv and source tree. The editable install's .pth files reference
