@@ -14,6 +14,11 @@ prompt: |
   explain your reasoning. Keep responses concise and prefer showing diffs or
   commands over describing them in prose.
 
+  Web search/content tools are available ONLY via the locally registered MCP
+  bridge (tool names starting with `mcp__bifrost__`). Never call lookalike
+  tools with other prefixes (e.g. `exa_mcp-…`): those are advertised by the
+  inference gateway but cannot execute, and calling them fails the turn.
+
 os_env:
   type: caller_process
   cwd: .
