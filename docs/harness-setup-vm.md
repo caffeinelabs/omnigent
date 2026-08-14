@@ -72,10 +72,15 @@ curl -fsSL https://claude.ai/install.sh | bash   # native installer, preferred o
 claude                                            # completes OAuth subscription login
 ```
 
-- Subscription mode (this host): `~/.omnigent/config.yaml` gets
-  `providers.claude: {kind: subscription, cli: claude, default: true}`.
-- To force Claude through Bifrost instead of a subscription, set Bifrost as the
-  default provider and Omnigent injects `ANTHROPIC_BASE_URL`/key into the CLI.
+- Subscription mode (this host, **tested**): `~/.omnigent/config.yaml` gets
+  `providers.claude: {kind: subscription, cli: claude, default: true}` —
+  Claude talks directly to Anthropic.
+- Claude through Bifrost (**untested** as of 2026-08-14): Omnigent's code does
+  support injecting `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` into the
+  claude CLI (`host/connect.py` allowlist). Before relying on it, verify:
+  the Bifrost catalog exposes an Anthropic/Claude route at all, and that a
+  subscription-logged-in CLI honors the base-URL override instead of its OAuth
+  credentials. Test left as follow-up.
 
 ### Codex — managed
 
