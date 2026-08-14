@@ -91,3 +91,13 @@ instructions:
   not duplicate policy across adapters or add lifecycle metadata to `AgentSpec`.
 - If framework instructions grow beyond a small ordered list, introduce a
   structured `FrameworkInstructions` value at the prompt-composition boundary.
+
+## Caffeinelabs fork (applies to `develop`)
+
+- This fork (`caffeinelabs/omnigent`) tracks `omnigent-ai/omnigent` as
+  upstream. `main` mirrors upstream `main`; `develop` is the working branch.
+- Any change that does not exist upstream must be recorded in `DIFF.md` in the
+  same commit: what, where, why, whether it is upstreamable, expected lifetime.
+- Keep fork deltas narrow and additive (new files over edits where possible) to
+  minimize upstream-sync conflicts.
+- This section is fork-local: leave it untouched when syncing upstream changes.
