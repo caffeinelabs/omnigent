@@ -160,6 +160,30 @@ RUN set -eu; \
       echo "ERROR: jcode reports '${installed:-<none>}', expected '$JCODE_VERSION'." >&2; exit 1; }; \
     echo "jcode ${JCODE_VERSION} pinned (installer-verified sha256)"
 
+# goose CLI (goose-native harness) — not an npm package. The GitHub release
+# ships a CLI-only tarball (a single `goose` binary) per arch; fetch the
+# pinned version's immutable asset, verify its sha256, and assert the binary
+# reports the pinned version. Keep in sync with deploy/docker/Dockerfile.
+# To adopt a new goose: bump GOOSE_VERSION + both SHA256s.
+ARG GOOSE_VERSION=1.46.0
+ARG GOOSE_SHA256_AMD64=23f0f37717406cc13bb55232f68932e152eec596643d26a92f9b21410bce4331
+ARG GOOSE_SHA256_ARM64=e8c071ef75c1d8d036b3c4a791fb2be9e700f61a43e686c581e027b93e97dccf
+RUN set -eu; \
+    case "$(uname -m)" in \
+      x86_64)  asset="goose-x86_64-unknown-linux-gnu.tar.gz";  sha="$GOOSE_SHA256_AMD64" ;; \
+      aarch64) asset="goose-aarch64-unknown-linux-gnu.tar.gz"; sha="$GOOSE_SHA256_ARM64" ;; \
+      *) echo "ERROR: unsupported arch '$(uname -m)' for goose" >&2; exit 1 ;; \
+    esac; \
+    curl -fsSL -o /tmp/goose.tar.gz "https://github.com/block/goose/releases/download/v${GOOSE_VERSION}/${asset}"; \
+    echo "${sha}  /tmp/goose.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/goose.tar.gz -C /tmp goose; \
+    install -m 0755 /tmp/goose /usr/local/bin/goose; \
+    rm -f /tmp/goose /tmp/goose.tar.gz; \
+    installed="$(/usr/local/bin/goose --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"; \
+    [ "$installed" = "$GOOSE_VERSION" ] || { \
+      echo "ERROR: goose reports '${installed:-<none>}', expected '$GOOSE_VERSION'." >&2; exit 1; }; \
+    echo "goose ${GOOSE_VERSION} pinned (sha256 verified)"
+
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /build /build
 
