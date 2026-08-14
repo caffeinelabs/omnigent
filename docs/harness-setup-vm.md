@@ -75,12 +75,29 @@ claude                                            # completes OAuth subscription
 - Subscription mode (this host, **tested**): `~/.omnigent/config.yaml` gets
   `providers.claude: {kind: subscription, cli: claude, default: true}` —
   Claude talks directly to Anthropic.
-- Claude through Bifrost (**untested** as of 2026-08-14): Omnigent's code does
-  support injecting `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` into the
-  claude CLI (`host/connect.py` allowlist). Before relying on it, verify:
-  the Bifrost catalog exposes an Anthropic/Claude route at all, and that a
-  subscription-logged-in CLI honors the base-URL override instead of its OAuth
-  credentials. Test left as follow-up.
+- Gateway mode (**tested** 2026-08-14, subscription login left in place):
+
+  ```yaml
+  providers:
+    claude:
+      default: true
+      kind: key
+      anthropic:
+        api_key: bifrost-no-auth        # dev gateway accepts it; real key once auth is enforced
+        base_url: https://bifrost.dev.caffeine.ai/anthropic
+        models: {default: bedrock/claude-sonnet-4-6}
+  ```
+
+  Omnigent injects `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` +
+  `ANTHROPIC_MODEL` into the claude terminal at session start (new sessions
+  only; running ones keep their process env). No daemon restart needed.
+- **Model picker shows only what the gateway catalog exposes for the
+  anthropic family.** On dev Bifrost today: `bedrock/claude-sonnet-4-6` and
+  `bedrock/claude-haiku-4-5-20251001` (no opus). Seeing more models there is
+  gateway-side catalog curation (SRE-682), not client config.
+- Manual fallback without touching Omnigent config: an `env` block in
+  `~/.claude/settings.json` with the same three vars + `ANTHROPIC_SMALL_FAST_MODEL`.
+  Host-wide, applies to standalone `claude` too — use only for debugging.
 
 ### Codex — managed
 
