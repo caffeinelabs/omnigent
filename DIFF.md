@@ -31,6 +31,18 @@ upstream take it), **Lifetime** (permanent fork delta / until upstream lands X).
 - **Upstreamable:** no — tied to our GHCR and the infra GitOps flow.
 - **Lifetime:** permanent while preview environments exist.
 
+### Docs: VM harness setup guide
+
+- **What:** `docs/harness-setup-vm.md` — install + configure Omnigent (fork)
+  and the five supported harnesses (Claude Code, Codex, Pi, Goose, jcode) on a
+  VM/EC2, routed through our Bifrost gateway; verified working-example config.
+- **Why:** SRE-681 exit criterion — colleagues must be able to reproduce the
+  environment from a doc; upstream docs cover neither our gateway nor the fork's
+  harness set.
+- **Upstreamable:** no — references our internal gateway, key handling, and
+  Linear tickets.
+- **Lifetime:** living doc; keep current as harness setup changes.
+
 ### Process: this ledger + agent instructions
 
 - **What:** `DIFF.md`; the *Caffeinelabs fork* section appended to `AGENTS.md`.
