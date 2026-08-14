@@ -90,7 +90,9 @@ claude                                            # completes OAuth subscription
 
   Omnigent injects `ANTHROPIC_BASE_URL` + `ANTHROPIC_AUTH_TOKEN` +
   `ANTHROPIC_MODEL` into the claude terminal at session start (new sessions
-  only; running ones keep their process env). No daemon restart needed.
+  only; running ones keep their process env). The server re-reads
+  `config.yaml` at session create — if a new session still shows old
+  behavior, restart the Omnigent server first.
 - **Model picker shows only what the gateway catalog exposes for the
   anthropic family.** On dev Bifrost today: `bedrock/claude-sonnet-4-6` and
   `bedrock/claude-haiku-4-5-20251001` (no opus). Seeing more models there is
