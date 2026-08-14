@@ -60,7 +60,41 @@ providers:
 The catalog exposed here is curated: only models enabled on the Bifrost side are
 visible (see Linear SRE-682 for that change).
 
-## 3. Per-harness setup
+## 3. Register this VM as a host (`omnigent login` + `omnigent host`)
+
+Two steps.
+First, authenticate (one-time):
+
+```bash
+omnigent login https://omni.marko.caffeine.tech
+```
+
+Probes the server's auth mode and runs the matching flow (accounts →
+user/password prompt, OIDC → browser, header → no-op). Stores the session JWT
+in `~/.omnigent/auth_tokens.json` keyed by server URL, **and records the
+server as the default** (`server:` key in `~/.omnigent/config.yaml`) — every
+later command then targets it without arguments. `host` can run the login flow
+itself, but doing `login` first keeps host startup non-interactive.
+
+Then register this machine as a host (foreground; Ctrl-C stops it):
+
+```bash
+uv run --env-file .env omnigent host        # server URL comes from config
+```
+
+- URL optional after `login` wrote the config default; `omnigent host <url>`
+  or `--server <url>` overrides it.
+- **`--env-file` is the supported way to load env** — exporting works too, but
+  `set -a; source .env; set +a` is the long way around.
+- The `.env` content matters: the host forwards an allowlist of its own env
+  into runners/harness processes — `ANTHROPIC_*`, `OPENAI_*`,
+  `GEMINI_API_KEY`, `GIT_TOKEN`/`GIT_USERNAME`, plus any extra names in
+  `OMNIGENT_RUNNER_ENV_PASSTHROUGH` (comma-separated; add
+  `JCODE_PROVIDER_BIFROST_API_KEY` so jcode inside runners sees its key).
+- `--background` spawns a detached daemon instead. Manage:
+  `omnigent host status` / `omnigent host stop` / `omnigent host stop-session`.
+
+## 4. Per-harness setup
 
 Legend: **managed** = Omnigent injects provider config at launch;
 **user-owned** = you configure the harness's own files.
@@ -197,7 +231,7 @@ acp:
 Known limitations: no model switching over ACP mid-session (jcode #813), and
 re-read instruction files can flush the provider KV cache (jcode #905).
 
-## 4. Resulting `~/.omnigent/config.yaml` (working example from EC2)
+## 5. Resulting `~/.omnigent/config.yaml` (working example from EC2)
 
 ```yaml
 acp:
@@ -226,7 +260,7 @@ tui:
   theme: dark
 ```
 
-## 5. Hosted runner (k8s) notes
+## 6. Hosted runner (k8s) notes
 
 - Runner hosts come from the host image (`ghcr.io/caffeinelabs/omnigent-host`);
   harness CLIs must be baked in or installed on first attach. Preview-env images
@@ -236,13 +270,13 @@ tui:
 - jcode in k8s currently runs a patched build (see Linear SRE-682 comment) until
   upstream lands the fix; the k8s image work is tracked there.
 
-## 6. Smoke test (per harness)
+## 7. Smoke test (per harness)
 
 For each harness: create a session in the Omnigent TUI/web, send "print
 ok", confirm the turn completes and tool calls (if any) execute. If Goose or
 jcode standalone fail auth, check §3 for the key location first.
 
-## 7. Keeping this honest
+## 8. Keeping this honest
 
 This file describes fork behavior. When harness setup changes, update this doc
 and record the delta in `DIFF.md` (required by the fork section of `AGENTS.md`).
