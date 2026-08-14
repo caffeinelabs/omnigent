@@ -176,9 +176,10 @@ RUN set -eu; \
     esac; \
     curl -fsSL -o /tmp/goose.tar.gz "https://github.com/block/goose/releases/download/v${GOOSE_VERSION}/${asset}"; \
     echo "${sha}  /tmp/goose.tar.gz" | sha256sum -c -; \
-    tar -xzf /tmp/goose.tar.gz -C /tmp goose; \
-    install -m 0755 /tmp/goose /usr/local/bin/goose; \
-    rm -f /tmp/goose /tmp/goose.tar.gz; \
+    mkdir -p /tmp/goose-pkg; \
+    tar -xzf /tmp/goose.tar.gz -C /tmp/goose-pkg; \
+    install -m 0755 /tmp/goose-pkg/goose /usr/local/bin/goose; \
+    rm -rf /tmp/goose-pkg /tmp/goose.tar.gz; \
     installed="$(/usr/local/bin/goose --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"; \
     [ "$installed" = "$GOOSE_VERSION" ] || { \
       echo "ERROR: goose reports '${installed:-<none>}', expected '$GOOSE_VERSION'." >&2; exit 1; }; \
