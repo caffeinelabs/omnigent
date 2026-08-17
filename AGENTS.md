@@ -45,8 +45,10 @@ sections.
 
 When you finish a task, print instructions to the user on how to test it: the
 commands to run, the inputs to provide, or the steps to reproduce so they can
-verify the result themselves. Don't leave the user guessing how to confirm the
-work — tell them exactly what to do.
+verify the result themselves. Prefer verification that is best performed by a
+human, such as concrete manual behavior checks, rather than only listing unit
+test commands. Don't leave the user guessing how to confirm the work — tell
+them exactly what to do.
 
 ## Deprecating features
 
@@ -89,3 +91,13 @@ instructions:
   not duplicate policy across adapters or add lifecycle metadata to `AgentSpec`.
 - If framework instructions grow beyond a small ordered list, introduce a
   structured `FrameworkInstructions` value at the prompt-composition boundary.
+
+## Caffeinelabs fork (applies to `develop`)
+
+- This fork (`caffeinelabs/omnigent`) tracks `omnigent-ai/omnigent` as
+  upstream. `main` mirrors upstream `main`; `develop` is the working branch.
+- Any change that does not exist upstream must be recorded in `DIFF.md` in the
+  same commit: what, where, why, whether it is upstreamable, expected lifetime.
+- Keep fork deltas narrow and additive (new files over edits where possible) to
+  minimize upstream-sync conflicts.
+- This section is fork-local: leave it untouched when syncing upstream changes.
