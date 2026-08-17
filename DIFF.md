@@ -31,6 +31,32 @@ upstream take it), **Lifetime** (permanent fork delta / until upstream lands X).
 - **Upstreamable:** no — tied to our GHCR and the infra GitOps flow.
 - **Lifetime:** permanent while preview environments exist.
 
+### Host image: all-harness runner image (goose + jcode baked, jcode profile, config_map_mounts)
+
+- **What:** `deploy/docker/Dockerfile` (+ `Dockerfile.ubi`) bake the goose CLI
+  (pinned, per-arch sha256-verified) and jcode (pinned via its checksummed
+  installer) into the host image next to upstream's npm-installed
+  claude/codex/pi; `/opt/jcode` baked profile with symlinks into
+  `/mnt/config/jcode` + `mcp-remote` for jcode's stdio-only MCP client;
+  `deploy/docker/preview-jcode/jcode-agent.yaml` seeded via
+  `OMNIGENT_BUILTIN_AGENT_DIRS`. `omnigent/acp_cli_harnesses.py` adds the
+  `jcode` ACP catalog row with an `omnigent_mcp` opt-out (jcode rejects
+  `mcpServers` in `session/new`; MCP is configured via `~/.jcode/mcp.json`),
+  threaded through `omnigent/runtime/workflow.py` as
+  `HARNESS_ACP_OMNIGENT_MCP`. `omnigent/onboarding/sandboxes/kubernetes.py` +
+  `omnigent/server/managed_hosts.py` add `sandbox.kubernetes.config_map_mounts`
+  (with an `OMNIGENT_KUBERNETES_CONFIG_MAP_MOUNTS` JSON env fallback for
+  GitOps-rendered shared configs).
+- **Why:** One runner image runs all five supported harnesses (claude, codex,
+  pi, goose, jcode) in managed k8s sandboxes. Runner pods get an emptyDir
+  HOME, so jcode's provider/MCP config must come from a baked profile plus a
+  cluster-mounted ConfigMap.
+- **Upstreamable:** `config_map_mounts` and the `omnigent_mcp` row field are
+  generic and upstreamable; the image bakes and seeded jcode agent are
+  deployment-specific (jcode is our own harness, not upstream's set).
+- **Lifetime:** until upstream takes `config_map_mounts` + the ACP row field;
+  the image/jcode-agent parts are permanent fork deltas.
+
 ### Docs: VM harness setup guide
 
 - **What:** `docs/harness-setup-vm.md` — install + configure Omnigent (fork)

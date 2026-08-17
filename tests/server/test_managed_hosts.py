@@ -1255,6 +1255,7 @@ def test_parse_kubernetes_config_map_mounts_normalizes_and_reaches_launcher(
         }
     )
     assert cfg is not None
+    cfg = cfg.default
     fake = FakeSandboxLauncher()
     install_fake_kubernetes_launcher(monkeypatch, fake)
     assert cfg.launcher_factory() is fake
@@ -1275,6 +1276,7 @@ def test_parse_kubernetes_without_config_map_mounts_is_none(
         }
     )
     assert cfg is not None
+    cfg = cfg.default
     fake = FakeSandboxLauncher()
     install_fake_kubernetes_launcher(monkeypatch, fake)
     assert cfg.launcher_factory() is fake
@@ -1372,6 +1374,7 @@ def test_parse_kubernetes_all_mount_types_coexist_at_distinct_paths(
         }
     )
     assert cfg is not None
+    cfg = cfg.default
     fake = FakeSandboxLauncher()
     install_fake_kubernetes_launcher(monkeypatch, fake)
     assert cfg.launcher_factory() is fake
@@ -1396,6 +1399,7 @@ def test_parse_kubernetes_config_map_mounts_env_fallback(
         {"provider": "kubernetes", "server_url": "http://s.svc.cluster.local"}
     )
     assert cfg is not None
+    cfg = cfg.default
     fake = FakeSandboxLauncher()
     install_fake_kubernetes_launcher(monkeypatch, fake)
     assert cfg.launcher_factory() is fake
@@ -1420,6 +1424,7 @@ def test_parse_kubernetes_config_map_mounts_yaml_wins_over_env(
         }
     )
     assert cfg is not None
+    cfg = cfg.default
     fake = FakeSandboxLauncher()
     install_fake_kubernetes_launcher(monkeypatch, fake)
     assert cfg.launcher_factory() is fake
