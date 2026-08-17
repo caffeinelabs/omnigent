@@ -141,6 +141,31 @@ def test_build_pod_manifest_forwards_config_home_to_init_container() -> None:
     }
 
 
+def test_build_pod_manifest_session_url_wires_gh_pr_button_wrapper() -> None:
+    """A session URL installs the gh wrapper, exports the URL, and PATH-prepends."""
+    manifest = build_pod_manifest(
+        **_MANIFEST_KW,
+        session_url="https://omni.example.com/c/conv_1",
+    )
+    # Init container writes the wrapper into the shared HOME.
+    init_script = manifest["spec"]["initContainers"][0]["command"][2]
+    assert "/.omnigent/bin/gh" in init_script
+    host = manifest["spec"]["containers"][0]
+    host_env = {e["name"]: e.get("value") for e in host["env"]}
+    assert host_env.get("OMNIGENT_SESSION_URL") == "https://omni.example.com/c/conv_1"
+    # The main container's command prepends the wrapper dir to PATH.
+    script = host["command"][2]
+    assert "export PATH=/home/omnigent/.omnigent/bin:" in script
+
+
+def test_build_pod_manifest_no_session_url_no_wrapper() -> None:
+    """Without a session URL the wrapper/env/PATH are untouched (fail-open)."""
+    manifest = build_pod_manifest(**_MANIFEST_KW)
+    host = manifest["spec"]["containers"][0]
+    assert "OMNIGENT_SESSION_URL" not in {e["name"] for e in host["env"]}
+    assert ".omnigent/bin" not in host["command"][2]
+
+
 @pytest.mark.parametrize(
     "config_home",
     ["/tmp/elsewhere", "/home/omnigent-other", "/home/omnigent/../tmp", "../etc"],

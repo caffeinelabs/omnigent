@@ -175,6 +175,41 @@ def test_start_host_no_identity_is_unchanged() -> None:
     assert "GH_TOKEN" not in raw
 
 
+def test_start_host_session_url_installs_wrapper_and_exports_env() -> None:
+    """A session URL installs the gh wrapper and PATH-prepends + exports it."""
+    launcher = _RecordingLauncher()
+    launcher.start_host(
+        "sb-1",
+        token="tok",
+        host_id="host_abc",
+        host_name="managed-abc",
+        server_url="https://srv",
+        session_url="https://omni.example.com/c/conv_1",
+    )
+    all_run = "\n".join(launcher.commands)
+    assert ".omnigent/bin/gh" in all_run  # wrapper written via run()
+    [raw] = launcher.backgrounded
+    # Host launch prepends the wrapper dir to PATH and exports the session URL.
+    assert 'PATH=' in raw and '/.omnigent/bin:"$PATH"' in raw
+    assert "OMNIGENT_SESSION_URL=https://omni.example.com/c/conv_1" in raw
+
+
+def test_start_host_no_session_url_no_wrapper() -> None:
+    """No session URL → no wrapper, no PATH/env change (fail-open)."""
+    launcher = _RecordingLauncher()
+    launcher.start_host(
+        "sb-1",
+        token="tok",
+        host_id="host_abc",
+        host_name="managed-abc",
+        server_url="https://srv",
+    )
+    assert ".omnigent/bin/gh" not in "\n".join(launcher.commands)
+    [raw] = launcher.backgrounded
+    assert "OMNIGENT_SESSION_URL" not in raw
+    assert ".omnigent/bin" not in raw
+
+
 def test_setup_commands_install_session_commit_hook() -> None:
     """A session id installs a commit-msg hook stamping the session trailer."""
     cmds = github_sandbox_setup_commands(
@@ -225,3 +260,51 @@ def test_setup_commands_ignore_unsafe_session_id() -> None:
         session_id="bad id';rm -rf /",
     )
     assert "core.hooksPath" not in "\n".join(cmds)
+
+
+def test_setup_commands_install_gh_pr_button_wrapper() -> None:
+    """A session URL installs the on-PATH gh wrapper (mode 755) under HOME."""
+    import base64
+
+    cmds = github_sandbox_setup_commands(
+        "/root",
+        github_token=None,
+        github_login=None,
+        ssh_authorized_keys=None,
+        session_url="https://omni.example.com/c/conv_abc123",
+    )
+    joined = "\n".join(cmds)
+    # The wrapper file is written under HOME at .omnigent/bin/gh, mode 755.
+    assert ".omnigent/bin/gh" in joined
+    wrapper_cmds = [c for c in cmds if ".omnigent/bin/gh" in c and "base64 -d" in c]
+    assert wrapper_cmds and "chmod 755" in wrapper_cmds[0]
+    # The decoded payload is the gh wrapper (no per-session value is baked in;
+    # it reads OMNIGENT_SESSION_URL from the environment).
+    decoded = base64.b64decode(
+        wrapper_cmds[0].split("printf %s ", 1)[1].split(" | base64 -d", 1)[0].strip("'")
+    ).decode()
+    assert "OMNIGENT_SESSION_URL" in decoded
+    assert 'args[:2] == ["pr", "create"]' in decoded
+
+
+def test_setup_commands_no_wrapper_without_session_url() -> None:
+    """No session URL → no gh wrapper installed."""
+    cmds = github_sandbox_setup_commands(
+        "/root",
+        github_token=None,
+        github_login=None,
+        ssh_authorized_keys=None,
+    )
+    assert ".omnigent/bin/gh" not in "\n".join(cmds)
+
+
+def test_setup_commands_ignore_unsafe_session_url() -> None:
+    """A session URL with shell-unsafe chars is not used to install the wrapper."""
+    cmds = github_sandbox_setup_commands(
+        "/root",
+        github_token=None,
+        github_login=None,
+        ssh_authorized_keys=None,
+        session_url="https://omni/c/x`rm -rf /`",
+    )
+    assert ".omnigent/bin/gh" not in "\n".join(cmds)

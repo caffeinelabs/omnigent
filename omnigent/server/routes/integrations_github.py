@@ -16,7 +16,7 @@ import secrets
 import time
 from datetime import datetime
 from typing import TYPE_CHECKING
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 
 import jwt
 from fastapi import APIRouter, HTTPException, Request
@@ -79,6 +79,21 @@ def _iso_to_epoch(value: object) -> int | None:
         return int(datetime.fromisoformat(value.replace("Z", "+00:00")).timestamp())
     except ValueError:
         return None
+
+
+def _body_links_session(body: str, session_id: str) -> bool:
+    """Whether a PR *body* carries this session's Open-in-Omnigent link.
+
+    Matches the stable ``/c/<id>`` suffix of the link target inside a delimited
+    href/markdown link, not the full URL. The stamp uses its own session URL
+    while this server derives the URL from its own base; a trailing-slash /
+    mount-path / query-string divergence between the two would make a full-URL
+    match silently drop every PR. The id is bounded by a link delimiter (or a
+    query) so a longer id sharing this one as a prefix can't collide.
+    """
+    suffix = re.escape(f"/c/{quote(session_id, safe='')}")
+    pattern = rf'(?:href="|\]\()[^"\)\s]*{suffix}(?:\?[^"\)\s]*)?(?:"|\))'
+    return re.search(pattern, body) is not None
 
 
 def _sanitize_return_to(raw: str | None) -> str:
@@ -209,48 +224,97 @@ def create_integrations_github_router(
     ) -> dict[str, object]:
         """Resolve the PRs opened during *session_id* (shared by list + ci-watch).
 
-        Session-scoped by the ``Omnigent-Session: <id>`` commit trailer, so a PR
-        belongs to this session iff one of its commits carries the trailer —
-        unrelated PRs in a shared repo the session merely cloned are excluded.
+        UNIONs two detection paths so a PR is associated with this session by
+        EITHER signal:
+
+        * **Commit trailer** — for the session's cloned repos, a PR whose commits
+          carry the ``Omnigent-Session: <id>`` trailer the sandbox stamps.
+        * **Body link** — across ALL repos (a single GitHub search), a PR whose
+          body carries this session's Open-in-Omnigent link (``…/c/<id>``),
+          stamped by the sandbox ``gh`` wrapper on PR creation. This finds PRs in
+          repos the session never cloned.
+
         Returns ``{connected, pulls}``; ``connected: false`` when GitHub isn't
-        linked; empty for a non-managed session or one with no cloned repos.
+        linked. Deduped by ``(repo, number)``; the cloned-repo (trailer) record
+        wins on collision since it carries a richer ``head_ref``.
         """
         from omnigent.server.managed_hosts import (
             MANAGED_REPO_LABEL_KEY,
             parse_repo_workspaces,
         )
 
-        raw_repos = conv.labels.get(MANAGED_REPO_LABEL_KEY)
-        if not raw_repos:
-            return {"connected": True, "pulls": []}
-
+        # Resolve identity first — it gates BOTH paths and must run even when the
+        # session cloned no repos (the body-link search can still find PRs).
         connection = await asyncio.to_thread(store.get, user_id)
         token = await resolve_access_token(user_id, store=store, client=api)
         if token is None:
             return {"connected": False, "pulls": []}
         login = connection.github_login if connection is not None else None
 
-        try:
-            repos = parse_repo_workspaces(raw_repos)
-        except ValueError:
-            repos = []
-        full_names: list[str] = []
-        for repo in repos:
-            full_name = _repo_full_name(repo.url)
-            if full_name and full_name not in full_names:
-                full_names.append(full_name)
-
-        marker = f"Omnigent-Session: {session_id}"
         since = conv.created_at
-        pulls: list[dict[str, object]] = []
-        for full_name in full_names:
+        # Keyed by (repo_full_name, number) so the two paths dedup against each
+        # other; the trailer path inserts first so its richer record wins.
+        found: dict[tuple[str, object], dict[str, object]] = {}
+
+        raw_repos = conv.labels.get(MANAGED_REPO_LABEL_KEY)
+        if raw_repos:
             try:
-                repo_pulls = await api.list_pulls(token, full_name)
+                repos = parse_repo_workspaces(raw_repos)
+            except ValueError:
+                repos = []
+            full_names: list[str] = []
+            for repo in repos:
+                full_name = _repo_full_name(repo.url)
+                if full_name and full_name not in full_names:
+                    full_names.append(full_name)
+
+            marker = f"Omnigent-Session: {session_id}"
+            for full_name in full_names:
+                try:
+                    repo_pulls = await api.list_pulls(token, full_name)
+                except GitHubAppError as exc:
+                    _logger.warning("session PRs: list_pulls failed for %s: %s", full_name, exc)
+                    continue
+                for pr in repo_pulls:
+                    if login is not None and pr.get("author_login") != login:
+                        continue
+                    created = _iso_to_epoch(pr.get("created_at"))
+                    if created is not None and created < since:
+                        continue
+                    number = pr.get("number")
+                    if not isinstance(number, int):
+                        continue
+                    try:
+                        messages = await api.list_pull_commit_messages(token, full_name, number)
+                    except GitHubAppError as exc:
+                        _logger.warning(
+                            "session PRs: commits fetch failed for %s#%s: %s",
+                            full_name,
+                            number,
+                            exc,
+                        )
+                        continue
+                    if not any(marker in message for message in messages):
+                        continue
+                    key = (full_name, number)
+                    if key not in found:
+                        found[key] = {
+                            **{k: v for k, v in pr.items() if k != "body"},
+                            "repo": full_name,
+                        }
+
+        # Cross-repo body-link search, scoped to the connected user's PRs. Needs a
+        # resolved login: the author filter is the only thing scoping results to
+        # the caller, so a missing login must not widen the query to every author.
+        if login is not None:
+            query = f"{session_id} in:body type:pr author:{login}"
+            try:
+                search_hits = await api.search_pulls(token, query)
             except GitHubAppError as exc:
-                _logger.warning("session PRs: list_pulls failed for %s: %s", full_name, exc)
-                continue
-            for pr in repo_pulls:
-                if login is not None and pr.get("author_login") != login:
+                _logger.warning("session PRs: search failed for %s: %s", session_id, exc)
+                search_hits = []
+            for pr in search_hits:
+                if not _body_links_session(str(pr.get("body") or ""), session_id):
                     continue
                 created = _iso_to_epoch(pr.get("created_at"))
                 if created is not None and created < since:
@@ -258,18 +322,13 @@ def create_integrations_github_router(
                 number = pr.get("number")
                 if not isinstance(number, int):
                     continue
-                try:
-                    messages = await api.list_pull_commit_messages(token, full_name, number)
-                except GitHubAppError as exc:
-                    _logger.warning(
-                        "session PRs: commits fetch failed for %s#%s: %s", full_name, number, exc
-                    )
-                    continue
-                if not any(marker in message for message in messages):
-                    continue
-                pulls.append({**pr, "repo": full_name})
+                key = (str(pr.get("repo") or ""), number)
+                if key not in found:
+                    found[key] = {k: v for k, v in pr.items() if k != "body"}
 
-        pulls.sort(key=lambda p: str(p.get("created_at") or ""), reverse=True)
+        pulls = sorted(
+            found.values(), key=lambda p: str(p.get("created_at") or ""), reverse=True
+        )
         return {"connected": True, "pulls": pulls}
 
     @router.get("/integrations/github/sessions/{session_id}/pull-requests")

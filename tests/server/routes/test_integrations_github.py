@@ -129,6 +129,14 @@ class _FakeClient:
             },
         ]
 
+    async def search_pulls(self, access_token: str, query: str) -> list[dict[str, object]]:
+        self.search_calls: list[str] = getattr(self, "search_calls", [])
+        self.search_calls.append(query)
+        # Default: the cross-repo body-link search finds nothing, so tests that
+        # only exercise the trailer path are unaffected. A test can set
+        # ``client.search_results`` to exercise the body-link union.
+        return list(getattr(self, "search_results", []))
+
     async def list_pull_commit_messages(
         self, access_token: str, full_name: str, number: int
     ) -> list[str]:
@@ -553,3 +561,120 @@ def test_ci_watch_dryrun_returns_runs_and_conclusion(db_uri: str) -> None:
     assert {p["repo"] for p in body["prs"]} == {"caffeinelabs/app"}
     assert all(p["conclusion"] == "success" for p in body["prs"])
     assert all("error" not in p for p in body["prs"])
+
+
+# ── Body-link (cross-repo search) union path ─────────────────────────
+
+
+def _link_body(session_id: str, *, base: str = "https://omni.example.com") -> str:
+    """A PR body carrying this session's Open-in-Omnigent link (anchor form)."""
+    url = f"{base}/c/{session_id}"
+    return f'work\n\n<a href="{url}"><img alt="Open in Omnigent" src="https://cdn/x.svg"></a>'
+
+
+def test_session_pulls_finds_body_linked_pr_in_uncloned_repo(db_uri: str) -> None:
+    # A session with NO cloned repo label: the trailer path never runs, but the
+    # cross-repo body-link search still associates a PR whose body links back.
+    convs = {"conv_9": _FakeConv(labels={}, created_at=_SESSION_START)}
+    tc, store, client = _app_with_convs(db_uri, convs)
+    store.upsert(
+        "alice@example.com",
+        github_login="octocat",
+        github_user_id=42,
+        tokens=GitHubTokenSet("ghu_a", "ghr_a", None, None, "repo"),
+    )
+    client.search_results = [
+        # Kept: octocat, after session start, body links this session.
+        {
+            "number": 11,
+            "title": "cross-repo PR",
+            "html_url": "https://github.com/other/repo/pull/11",
+            "head_ref": None,
+            "draft": False,
+            "state": "open",
+            "merged": False,
+            "author_login": "octocat",
+            "created_at": "2026-07-29T05:00:00Z",
+            "body": _link_body("conv_9"),
+            "repo": "other/repo",
+        },
+        # Dropped: body does NOT carry this session's link (search is fuzzy).
+        {
+            "number": 12,
+            "title": "unrelated hit",
+            "html_url": "https://github.com/other/repo/pull/12",
+            "head_ref": None,
+            "draft": False,
+            "state": "open",
+            "merged": False,
+            "author_login": "octocat",
+            "created_at": "2026-07-29T06:00:00Z",
+            "body": "mentions conv_9 in prose but no link",
+            "repo": "other/repo",
+        },
+        # Dropped: opened before the session started.
+        {
+            "number": 13,
+            "title": "pre-session",
+            "html_url": "https://github.com/other/repo/pull/13",
+            "head_ref": None,
+            "draft": False,
+            "state": "open",
+            "merged": False,
+            "author_login": "octocat",
+            "created_at": "2026-07-01T00:00:00Z",
+            "body": _link_body("conv_9"),
+            "repo": "other/repo",
+        },
+    ]
+    resp = tc.get("/v1/integrations/github/sessions/conv_9/pull-requests", headers=_USER)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["connected"] is True
+    assert [p["number"] for p in body["pulls"]] == [11]
+    assert body["pulls"][0]["repo"] == "other/repo"
+    # The raw body is never surfaced to the client.
+    assert "body" not in body["pulls"][0]
+    # The search was scoped to the session id, PR type, and the caller's login.
+    assert client.search_calls == ["conv_9 in:body type:pr author:octocat"]
+
+
+def test_session_pulls_union_dedups_trailer_and_body_link(db_uri: str) -> None:
+    # PR #1 is found by BOTH the cloned-repo trailer path and the body-link
+    # search; it must appear once, with the richer trailer record (head_ref).
+    convs = {
+        "conv_1": _FakeConv(
+            labels={_REPO_LABEL_KEY: "https://github.com/caffeinelabs/app#main"},
+            created_at=_SESSION_START,
+        )
+    }
+    tc, store, client = _app_with_convs(db_uri, convs)
+    store.upsert(
+        "alice@example.com",
+        github_login="octocat",
+        github_user_id=42,
+        tokens=GitHubTokenSet("ghu_a", "ghr_a", None, None, "repo"),
+    )
+    client.search_results = [
+        {
+            "number": 1,
+            "title": "feat",
+            "html_url": "https://github.com/caffeinelabs/app/pull/1",
+            "head_ref": None,  # search result carries no head ref
+            "draft": False,
+            "state": "open",
+            "merged": False,
+            "author_login": "octocat",
+            "created_at": "2026-07-29T01:00:00Z",
+            "body": _link_body("conv_1"),
+            "repo": "caffeinelabs/app",
+        }
+    ]
+    resp = tc.get("/v1/integrations/github/sessions/conv_1/pull-requests", headers=_USER)
+    assert resp.status_code == 200
+    pulls = resp.json()["pulls"]
+    # #4 and #1 from the trailer path; #1 not duplicated by the search hit.
+    assert [p["number"] for p in pulls] == [4, 1]
+    pr1 = next(p for p in pulls if p["number"] == 1)
+    # Trailer record won on dedup, so its head_ref survives (search had None).
+    assert pr1["head_ref"] == "feat"

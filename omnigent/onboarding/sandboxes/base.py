@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import base64
 import json
+import os
 import re
 import secrets
 import shlex
@@ -33,6 +34,7 @@ import click
 from omnigent.host import HOST_FATAL_EXIT_CODE, HOST_SIGTERM_EXIT_CODE
 from omnigent.host.identity import HOST_ID_ENV_VAR, HOST_NAME_ENV_VAR, HOST_TOKEN_ENV_VAR
 from omnigent.onboarding.sandboxes import types as _sandbox_types
+from omnigent.pr_button import BUTTON_IMAGE_URL_ENV_VAR, SESSION_URL_ENV_VAR
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
@@ -101,6 +103,129 @@ _GIT_TOKEN_USERNAME = "x-access-token"
 # is interpolated into the commit-msg hook script text.
 _SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]+$")
 
+# The Open-in-Omnigent session URL is exported into the sandbox env and reaches
+# the runner process. Guard its charset (RFC-3986 URL characters) the same way
+# the session id is guarded, so a malformed value can never smuggle anything
+# through the env / command text before it is quoted.
+_SESSION_URL_RE = re.compile(r"^[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]+$")
+
+# Path (relative to $HOME) of the on-PATH ``gh`` wrapper that stamps the
+# Open-in-Omnigent link into ``gh pr create`` bodies, and the dir prepended to
+# PATH so the agent finds it before the real ``gh``.
+_GH_WRAPPER_BIN_REL = ".omnigent/bin"
+_GH_WRAPPER_REL = f"{_GH_WRAPPER_BIN_REL}/gh"
+
+# The wrapper itself. python3 is present in the host image; it reads the session
+# URL (and optional button-image override) from the environment the launcher
+# exports, so no per-session value is interpolated into this script text. It is
+# strictly additive and fail-open: anything other than a recognized
+# ``gh pr create`` invocation — or any parsing surprise — execs the real ``gh``
+# unchanged.
+_GH_WRAPPER_SCRIPT = '''\
+#!/usr/bin/env python3
+"""Omnigent gh wrapper: stamp the Open-in-Omnigent link into `gh pr create`.
+
+Additive + fail-open: for `gh pr create` it ensures the session's
+Open-in-Omnigent link is present in the PR body, then execs the real gh; every
+other invocation is passed straight through.
+"""
+import os
+import sys
+import tempfile
+
+_SESSION_URL_ENV = "OMNIGENT_SESSION_URL"
+_BUTTON_IMAGE_ENV = "OMNIGENT_PR_BUTTON_IMAGE_URL"
+
+
+def _real_gh():
+    """The first `gh` on PATH that is not this wrapper's own directory."""
+    self_dir = os.path.dirname(os.path.realpath(sys.argv[0]))
+    for entry in (os.environ.get("PATH") or "").split(os.pathsep):
+        if not entry:
+            continue
+        try:
+            if os.path.realpath(entry) == self_dir:
+                continue
+        except OSError:
+            pass
+        candidate = os.path.join(entry, "gh")
+        if os.path.isfile(candidate) and os.access(candidate, os.X_OK):
+            return candidate
+    return None
+
+
+def _link(session_url):
+    image = (os.environ.get(_BUTTON_IMAGE_ENV) or "").strip()
+    if image:
+        return (
+            '<a href="%s"><img alt="Open in Omnigent" src="%s" height="28"></a>'
+            % (session_url, image)
+        )
+    return "[Open in Omnigent](%s)" % session_url
+
+
+def _augment_body_file(path, session_url, link):
+    """Return a path to a body file that includes the link (a temp copy)."""
+    if path == "-":
+        return path  # streamed stdin: cannot rewrite, leave untouched
+    try:
+        with open(path, "r", encoding="utf-8") as handle:
+            content = handle.read()
+    except OSError:
+        return path
+    if session_url in content:
+        return path
+    fd, tmp = tempfile.mkstemp(prefix="omnigent-pr-body-", suffix=".md")
+    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+        handle.write((content.rstrip("\\n") + "\\n\\n" + link + "\\n") if content else link + "\\n")
+    return tmp
+
+
+def _stamp(args, session_url):
+    link = _link(session_url)
+    # --body / -b (inline body): append the link when absent.
+    for i, arg in enumerate(args):
+        if arg in ("--body", "-b") and i + 1 < len(args):
+            if session_url not in args[i + 1]:
+                args[i + 1] = (args[i + 1] + "\\n\\n" + link) if args[i + 1] else link
+            return args
+        if arg.startswith("--body="):
+            val = arg[len("--body="):]
+            if session_url not in val:
+                args[i] = "--body=" + ((val + "\\n\\n" + link) if val else link)
+            return args
+    # --body-file / -F: append the link to a temp copy of the file.
+    for i, arg in enumerate(args):
+        if arg in ("--body-file", "-F") and i + 1 < len(args):
+            args[i + 1] = _augment_body_file(args[i + 1], session_url, link)
+            return args
+        if arg.startswith("--body-file="):
+            path = arg[len("--body-file="):]
+            args[i] = "--body-file=" + _augment_body_file(path, session_url, link)
+            return args
+    # Neither present: inject a body carrying just the link.
+    return args + ["--body", link]
+
+
+def main():
+    real = _real_gh()
+    if real is None:
+        sys.stderr.write("omnigent gh wrapper: real gh not found on PATH\\n")
+        return 127
+    args = sys.argv[1:]
+    session_url = (os.environ.get(_SESSION_URL_ENV) or "").strip()
+    if session_url and args[:2] == ["pr", "create"]:
+        try:
+            args = _stamp(list(args), session_url)
+        except Exception:  # never break gh on an unexpected invocation
+            args = sys.argv[1:]
+    os.execv(real, [real] + args)
+
+
+if __name__ == "__main__":
+    sys.exit(main())
+'''
+
 
 def _write_file_command(home: str, rel_path: str, content: str, *, mode: str) -> str:
     """Build a shell command that writes *content* to ``<home>/<rel_path>``.
@@ -132,6 +257,7 @@ def github_sandbox_setup_commands(
     ssh_authorized_keys: Sequence[str] | None,
     github_token_env: str | None = None,
     session_id: str | None = None,
+    session_url: str | None = None,
 ) -> list[str]:
     """Build the in-sandbox commands that authenticate the connecting user.
 
@@ -161,6 +287,15 @@ def github_sandbox_setup_commands(
         so it never appears in the command text — the only way to keep it out
         of a surface like the Pod spec. When ``None`` the literal
         *github_token* is embedded (for launchers with no secret channel).
+    :param session_id: The session the host is launched for, used to stamp an
+        ``Omnigent-Session`` commit trailer. ``None`` disables it.
+    :param session_url: The public Open-in-Omnigent session URL (``…/c/<id>``).
+        When set (and charset-valid), an on-PATH ``gh`` wrapper is installed
+        that stamps the Open-in-Omnigent link into ``gh pr create`` bodies, so
+        the session-PR panel can associate the PR by its body link (additive to
+        the commit trailer). ``None`` disables it. The caller must prepend
+        ``~/.omnigent/bin`` to the runner PATH and export ``OMNIGENT_SESSION_URL``
+        so the wrapper takes effect.
     :returns: Shell command strings, in the order they should run.
     """
     commands: list[str] = []
@@ -220,6 +355,16 @@ def github_sandbox_setup_commands(
         commands.append(_write_file_command(home, hook_rel, hook_script, mode="755"))
         hooks_dir = f"{home}/.omnigent/git-hooks"
         commands.append(f"git config --global core.hooksPath {shlex.quote(hooks_dir)}")
+
+    # Install the on-PATH ``gh`` wrapper that stamps the Open-in-Omnigent link
+    # into ``gh pr create`` bodies. The wrapper reads the session URL from the
+    # environment (exported by the launcher), so nothing per-session is
+    # interpolated into the script; the URL is still charset-guarded before we
+    # decide to install it. The launcher prepends ``~/.omnigent/bin`` to PATH.
+    if session_url and _SESSION_URL_RE.match(session_url):
+        commands.append(
+            _write_file_command(home, _GH_WRAPPER_REL, _GH_WRAPPER_SCRIPT, mode="755")
+        )
 
     keys = [k.strip() for k in (ssh_authorized_keys or ()) if k.strip()]
     if keys:
@@ -1031,6 +1176,7 @@ class SandboxHostLauncher(SandboxLifecycle):
         host_config: dict[str, object] | None = None,
         on_stage: Callable[[str], None] | None = None,
         session_id: str | None = None,
+        session_url: str | None = None,
     ) -> str:
         """
         Start ``omnigent host`` in the sandbox and return the workspace path.
@@ -1066,6 +1212,11 @@ class SandboxHostLauncher(SandboxLifecycle):
             ``"starting"``.
         :param session_id: The session the host is launched for, used to stamp
             an ``Omnigent-Session`` commit trailer. ``None`` disables it.
+        :param session_url: The public Open-in-Omnigent session URL
+            (``…/c/<id>``). When set, an on-PATH ``gh`` wrapper is installed and
+            ``OMNIGENT_SESSION_URL`` exported so ``gh pr create`` bodies carry
+            the Open-in-Omnigent link (additive to the commit trailer).
+            ``None`` disables it.
         :returns: The absolute in-sandbox workspace path.
         """
 
@@ -1104,6 +1255,7 @@ class ExecModelHostLauncher(SandboxHostLauncher, SandboxExecTransport):
         host_config: dict[str, object] | None = None,
         on_stage: Callable[[str], None] | None = None,
         session_id: str | None = None,
+        session_url: str | None = None,
     ) -> str:
         """
         Start ``omnigent host`` in the sandbox and return the workspace path.
@@ -1121,7 +1273,10 @@ class ExecModelHostLauncher(SandboxHostLauncher, SandboxExecTransport):
         git author/committer identity; *extra_repos* are cloned side by side
         under the workspace root (with the root returned so siblings are
         visible); and *session_id* stamps an ``Omnigent-Session`` commit
-        trailer.
+        trailer. When *session_url* is set, an on-PATH ``gh`` wrapper is
+        installed (with ``~/.omnigent/bin`` prepended to the runner PATH and
+        ``OMNIGENT_SESSION_URL`` exported) so ``gh pr create`` bodies carry the
+        Open-in-Omnigent link.
 
         :returns: The absolute in-sandbox workspace path.
         """
@@ -1143,6 +1298,7 @@ class ExecModelHostLauncher(SandboxHostLauncher, SandboxExecTransport):
             github_login=github_login,
             ssh_authorized_keys=ssh_authorized_keys,
             session_id=session_id,
+            session_url=session_url,
         ):
             self.run(sandbox_id, setup_cmd, check=False)
         workspace_root = workspace
@@ -1176,16 +1332,30 @@ class ExecModelHostLauncher(SandboxHostLauncher, SandboxExecTransport):
             on_stage("starting")
         if host_config is not None or self.capabilities.resume_stopped:
             self.run(sandbox_id, render_host_config_write_command(host_config or {}))
-        env_prefix = " ".join(
-            f"{key}={shlex.quote(value)}"
-            for key, value in (
-                (HOST_TOKEN_ENV_VAR, token),
-                (HOST_ID_ENV_VAR, host_id),
-                (HOST_NAME_ENV_VAR, host_name),
-                *github_sandbox_env(github_token).items(),
-                *git_identity_env(owner).items(),
-            )
-        )
+        env_pairs: list[tuple[str, str]] = [
+            (HOST_TOKEN_ENV_VAR, token),
+            (HOST_ID_ENV_VAR, host_id),
+            (HOST_NAME_ENV_VAR, host_name),
+            *github_sandbox_env(github_token).items(),
+            *git_identity_env(owner).items(),
+        ]
+        # When a session URL is stamped, export it (and any button-image
+        # override) so the on-PATH ``gh`` wrapper installed above stamps the
+        # Open-in-Omnigent link, and prepend its bin dir to PATH so the wrapper
+        # is found before the real ``gh``. Charset-guarded so the URL can never
+        # smuggle anything through the exported env / command text.
+        wrapper_on = bool(session_url) and bool(_SESSION_URL_RE.match(session_url or ""))
+        if wrapper_on:
+            env_pairs.append((SESSION_URL_ENV_VAR, session_url or ""))
+            button_override = os.environ.get(BUTTON_IMAGE_URL_ENV_VAR)
+            if button_override is not None:
+                env_pairs.append((BUTTON_IMAGE_URL_ENV_VAR, button_override))
+        env_prefix = " ".join(f"{key}={shlex.quote(value)}" for key, value in env_pairs)
+        if wrapper_on:
+            # Prepend the wrapper dir; ``$PATH`` is left unquoted so the sandbox
+            # shell expands the inherited PATH at exec time.
+            bin_dir = shlex.quote(f"{home}/{_GH_WRAPPER_BIN_REL}")
+            env_prefix = f'PATH={bin_dir}:"$PATH" {env_prefix}'
         self.run_background(
             sandbox_id,
             f"{env_prefix} omnigent host --server {shlex.quote(server_url)}",

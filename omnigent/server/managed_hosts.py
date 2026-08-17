@@ -138,6 +138,7 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+import os
 import posixpath
 import re
 import secrets
@@ -287,6 +288,12 @@ MANAGED_SANDBOX_LABEL_NAMESPACE = "omnigent.sandbox."
 # path at bind time, so this label is what a sandbox RELAUNCH parses
 # to re-clone the repository into the fresh generation's workspace.
 MANAGED_REPO_LABEL_KEY = "omnigent.sandbox.repo"
+
+# Public base URL of this deployment (e.g. ``https://omnigent.example.com``),
+# used to derive the per-session ``…/c/<id>`` Open-in-Omnigent URL stamped into
+# PR bodies by the sandbox ``gh`` wrapper. Unset ⇒ no session URL ⇒ no wrapper,
+# no behavior change (fail-open).
+PUBLIC_BASE_URL_ENV_VAR = "OMNIGENT_PUBLIC_BASE_URL"
 
 
 def resolve_managed_agent_label(
@@ -2560,6 +2567,12 @@ async def _start_sandbox_host(
         kwargs["extra_repos"] = list(extra_repos)
     if session_id is not None:
         kwargs["session_id"] = session_id
+        # Derive the public Open-in-Omnigent session URL from this deployment's
+        # base URL; when the base is unset there is no URL to stamp, so the
+        # sandbox gh wrapper is never installed (fail-open, no behavior change).
+        base = (os.environ.get(PUBLIC_BASE_URL_ENV_VAR) or "").strip()
+        if base:
+            kwargs["session_url"] = f"{base.rstrip('/')}/c/{session_id}"
     if host_config is not None:
         kwargs["host_config"] = host_config
     if on_stage is not None:

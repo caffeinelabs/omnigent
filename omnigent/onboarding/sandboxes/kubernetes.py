@@ -69,13 +69,16 @@ from omnigent.host.identity import (
     HOST_TOKEN_ENV_VAR,
 )
 from omnigent.onboarding.sandboxes.base import (
+    _GH_WRAPPER_BIN_REL,
     _GIT_TOKEN_USERNAME,
+    _SESSION_URL_RE,
     DEFAULT_HOST_IMAGE,
     SandboxHostLauncher,
     git_identity_env,
     github_sandbox_setup_commands,
     render_host_config_write_command,
 )
+from omnigent.pr_button import BUTTON_IMAGE_URL_ENV_VAR, SESSION_URL_ENV_VAR
 from omnigent.onboarding.sandboxes.types import SandboxCapabilities
 
 if TYPE_CHECKING:
@@ -470,7 +473,7 @@ def _render_workspace_prep_command(
     return ["bash", "-lc", script]
 
 
-def _render_host_command(server_url: str) -> list[str]:
+def _render_host_command(server_url: str, *, path_prepend: str | None = None) -> list[str]:
     """
     Render the main container command that runs ``omnigent host`` under the
     PID-1 reaper.
@@ -482,10 +485,15 @@ def _render_host_command(server_url: str) -> list[str]:
     not this command.
 
     :param server_url: URL of this server the host dials back to.
+    :param path_prepend: A directory to prepend to ``PATH`` before ``exec``
+        (the Open-in-Omnigent ``gh`` wrapper dir), or ``None``. Prepended inside
+        the login shell so ``$PATH`` (the image's venv-first PATH) expands at
+        runtime and the reaper's children inherit it.
     :returns: The ``["bash", "-lc", script]`` command.
     """
+    export = f"export PATH={shlex.quote(path_prepend)}:\"$PATH\"; " if path_prepend else ""
     script = (
-        f"exec python3 -c {shlex.quote(_REAPER_SRC)} "
+        f"{export}exec python3 -c {shlex.quote(_REAPER_SRC)} "
         f"omnigent host --server {shlex.quote(server_url)}"
     )
     return ["bash", "-lc", script]
@@ -581,6 +589,7 @@ def build_pod_manifest(
     secret_mounts: Sequence[Mapping[str, object]] | None = None,
     agent_name: str | None = None,
     session_id: str | None = None,
+    session_url: str | None = None,
 ) -> dict[str, object]:
     """
     Build the sandbox Pod manifest as a plain dict.
@@ -736,6 +745,7 @@ def build_pod_manifest(
         ssh_authorized_keys=ssh_authorized_keys,
         github_token_env="GH_TOKEN" if github_token else None,
         session_id=session_id,
+        session_url=session_url,
     )
 
     init_env: list[dict[str, object]] = [{"name": "HOME", "value": _HOME_DIR}]
@@ -817,12 +827,23 @@ def build_pod_manifest(
     host_env.extend(
         {"name": name, "value": value} for name, value in git_identity_env(owner).items()
     )
+    # Open-in-Omnigent PR-body wrapper: export the session URL (and any
+    # button-image override) so the on-PATH ``gh`` wrapper the init container
+    # wrote stamps ``gh pr create`` bodies, and prepend its bin dir to the host
+    # command's PATH. Charset-guarded so a malformed URL can't reach the env.
+    wrapper_bin_dir: str | None = None
+    if session_url and _SESSION_URL_RE.match(session_url):
+        wrapper_bin_dir = f"{_HOME_DIR}/{_GH_WRAPPER_BIN_REL}"
+        host_env.append({"name": SESSION_URL_ENV_VAR, "value": session_url})
+        button_override = os.environ.get(BUTTON_IMAGE_URL_ENV_VAR)
+        if button_override is not None:
+            host_env.append({"name": BUTTON_IMAGE_URL_ENV_VAR, "value": button_override})
 
     host_container: dict[str, object] = {
         "name": _CONTAINER_NAME,
         "image": image,
         "workingDir": _HOME_DIR,
-        "command": _render_host_command(server_url),
+        "command": _render_host_command(server_url, path_prepend=wrapper_bin_dir),
         "env": host_env,
         "securityContext": container_security,
         "volumeMounts": [*home_mount, *pvc_volume_mounts, *secret_volume_mounts],
@@ -1338,6 +1359,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
         agent_name: str | None = None,
         on_stage: Callable[[str], None] | None = None,
         session_id: str | None = None,
+        session_url: str | None = None,
     ) -> str:
         """
         Create the token Secret + runner Pod and wait for the host to start.
@@ -1378,6 +1400,11 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
             leave the runner unclassified. Threaded only because this provider
             declares ``classifies_runner_by_agent``.
         :param on_stage: Progress observer; invoked with ``"starting"``.
+        :param session_url: The public Open-in-Omnigent session URL
+            (``…/c/<id>``). When set, the init container installs the on-PATH
+            ``gh`` wrapper and the main container exports ``OMNIGENT_SESSION_URL``
+            (with its bin dir prepended to PATH) so ``gh pr create`` bodies carry
+            the Open-in-Omnigent link. ``None`` disables it.
         :returns: The absolute in-sandbox workspace path (the cloned repository
             directory when *repo_url* is set).
         :raises click.ClickException: When creation fails or the host does not
@@ -1431,6 +1458,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                     secret_mounts=self._secret_mounts,
                     agent_name=agent_name,
                     session_id=session_id,
+                    session_url=session_url,
                 )
                 # Secret before Pod so the Pod's secretKeyRef resolves
                 # immediately — a Pod referencing a missing Secret would sit in

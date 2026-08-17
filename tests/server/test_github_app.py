@@ -217,6 +217,7 @@ async def test_list_pulls_projects_fields_and_stops_on_short_page() -> None:
             "merged": True,
             "author_login": "octocat",
             "created_at": "2026-07-29T00:00:00Z",
+            "body": "",
         }
     ]
 
@@ -228,6 +229,63 @@ async def test_list_pulls_non_200_raises() -> None:
 
     with pytest.raises(GitHubAppError):
         await _client(handler).list_pulls("ghu_bad", "caffeinelabs/app")
+
+
+@pytest.mark.asyncio
+async def test_search_pulls_maps_items_and_derives_repo() -> None:
+    calls: list[dict[str, str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(dict(request.url.params))
+        assert request.url.path == "/search/issues"
+        return httpx.Response(
+            200,
+            json={
+                "items": [
+                    {
+                        "number": 11,
+                        "title": "cross-repo PR",
+                        "html_url": "https://github.com/other/repo/pull/11",
+                        "user": {"login": "octocat"},
+                        "draft": False,
+                        "state": "closed",
+                        "created_at": "2026-07-29T05:00:00Z",
+                        "body": "see /c/conv_9",
+                        "repository_url": "https://api.github.com/repos/other/repo",
+                        "pull_request": {"merged_at": "2026-07-30T00:00:00Z"},
+                    },
+                    # No number → skipped.
+                    {"title": "not a pr row"},
+                ]
+            },
+        )
+
+    pulls = await _client(handler).search_pulls("ghu_x", "conv_9 in:body type:pr author:octocat")
+    assert calls == [{"q": "conv_9 in:body type:pr author:octocat", "per_page": "100"}]
+    assert pulls == [
+        {
+            "number": 11,
+            "title": "cross-repo PR",
+            "html_url": "https://github.com/other/repo/pull/11",
+            "head_ref": None,
+            "draft": False,
+            "state": "closed",
+            "merged": True,
+            "author_login": "octocat",
+            "created_at": "2026-07-29T05:00:00Z",
+            "body": "see /c/conv_9",
+            "repo": "other/repo",
+        }
+    ]
+
+
+@pytest.mark.asyncio
+async def test_search_pulls_non_200_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(422, json={"message": "Unprocessable"})
+
+    with pytest.raises(GitHubAppError):
+        await _client(handler).search_pulls("ghu_bad", "q in:body type:pr author:x")
 
 
 @pytest.mark.asyncio
