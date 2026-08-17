@@ -3,8 +3,9 @@
 How to install Omnigent (caffeinelabs fork) plus the five supported harnesses —
 Claude Code, Codex, Pi, Goose, jcode — on a bare VM, and configure everything so
 sessions run through our Bifrost gateway where possible. Verified on EC2
-(`cafetero`), Ubuntu, x86_64. This doubles as the SRE-681 exit doc for the VM
-side; k8s/hosted-runner specifics are at the end.
+(`cafetero`), **Ubuntu 24.04 LTS, x86_64** (any 24.04+ should do; older LTS
+releases are untested). This doubles as the SRE-681 exit doc for the VM side;
+k8s/hosted-runner specifics are at the end.
 
 Audience: teammates reproducing this setup on their own VM. Nothing here is
 secret, but the Bifrost API key goes through 1Password / the team vault, not
@@ -12,14 +13,15 @@ this doc.
 
 ---
 
-## 0. Prerequisites
+## 0. Prerequisites (Ubuntu 24.04+)
 
 ```bash
-# node (via fnm or nvm — needed for claude? no, native installer. Needed for codex + pi)
+# node via fnm — needed for the npm-installed harnesses (codex, pi).
+# claude, goose, and jcode use native installers and do not need node.
 curl -fsSL https://fnm.vercel.app/install | bash
 fnm install --lts
 
-# python 3.11+ and uv (Omnigent runs from a venv)
+# python 3.11+ and uv (Omnigent runs from a venv; 24.04 ships 3.12)
 curl -LsSf https://astral.sh/uv/install.sh | sh
 
 # tmux (Omnigent's native TUI wrappers run claude/codex/pi/goose inside tmux)
@@ -41,8 +43,10 @@ For k8s-adjacent work use `uv pip install -e '.[kubernetes]'`.
 ## 2. Bifrost gateway (shared provider)
 
 Everything non-subscription routes through Bifrost
-(`https://bifrost.dev.caffeine.ai/v1`, OpenAI-compatible, chat wire API).
-Get the key from the vault, then put it in `~/.omnigent/config.yaml`:
+(`https://bifrost.dev.caffeine.ai/v1`, OpenAI-compatible). It serves both the
+chat-completions and the responses wire APIs — Pi/jcode use chat, Codex (which
+no longer speaks anything else) uses responses; both verified working through
+it. Get the key from the vault, then put it in `~/.omnigent/config.yaml`:
 
 ```yaml
 providers:
@@ -106,7 +110,7 @@ curl -fsSL https://claude.ai/install.sh | bash   # native installer, preferred o
 claude                                            # completes OAuth subscription login
 ```
 
-- Subscription mode (this host, **tested**): `~/.omnigent/config.yaml` gets
+- Subscription mode (**tested** on this host): `~/.omnigent/config.yaml` gets
   `providers.claude: {kind: subscription, cli: claude, default: true}` —
   Claude talks directly to Anthropic.
 - Gateway mode (**tested** 2026-08-14, subscription login left in place):
@@ -144,10 +148,20 @@ codex login                           # optional: standalone use only
 
 Under Omnigent, **do not** hand-edit `~/.codex/config.toml`: codex-native runs
 with a per-session managed `CODEX_HOME` generated from the configured provider
-(Bifrost section above). If you *do* run codex standalone against Bifrost, note
-the current codex only accepts `wire_api = "responses"` — our gateway speaks
-chat, so standalone codex needs a translating proxy (LiteLLM) until Bifrost
-exposes /responses.
+(Bifrost section above).
+
+Wire-API note (verified against `omnigent/inner/codex_executor.py`
+`_provider_codex_config_overrides` and a live rollout on this host): codex
+≥ 0.137 removed the chat wire from its config schema — a provider block with
+`wire_api = "chat"` hard-fails config load — so Omnigent **coerces the
+provider's `wire_api: chat` to `"responses"`** in the managed config it
+generates. Managed codex sessions therefore always run the responses wire,
+and Bifrost serves it: a turn through `bifrost.dev.caffeine.ai/v1` with
+`kimi-k3` completed end to end on 2026-08-13 (codex 0.147.0). The mismatch
+only remains for genuinely chat-only upstreams (e.g. OpenRouter), where the
+coerced config loads but turns fail at request time. If you *do* run codex
+standalone against Bifrost, set `wire_api = "responses"` in your own
+`~/.codex/config.toml` — it is the only value codex accepts anyway.
 
 ### Pi — managed
 
@@ -165,8 +179,12 @@ npm install -g @earendil-works/pi-coding-agent   # 0.84.x tested
 ### Goose — user-owned
 
 ```bash
-brew install block-goose-cli          # or: curl installer from block/goose releases
+curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash   # 1.46.x tested
 ```
+
+The installer drops `goose` into `~/.local/bin`; `CONFIGURE=false` skips its
+interactive `goose configure` prompt (we write the config file ourselves
+below). On macOS, `brew install --cask block-goose` is the alternative.
 
 Omnigent does **not** manage Goose auth. Edit `~/.config/goose/config.yaml`:
 
@@ -233,6 +251,9 @@ re-read instruction files can flush the provider KV cache (jcode #905).
 
 ## 5. Resulting `~/.omnigent/config.yaml` (working example from EC2)
 
+This is the tested state: Claude in **gateway mode** (§4), everything else
+defaulting to Bifrost. It matches what runs on `cafetero` today.
+
 ```yaml
 acp:
   agents:
@@ -252,15 +273,48 @@ providers:
       models: {default: kimi-k3}
       wire_api: chat
   claude:
-    cli: claude
     default: true
-    kind: subscription
+    kind: key
+    anthropic:
+      api_key: bifrost-no-auth
+      base_url: https://bifrost.dev.caffeine.ai/anthropic
+      models: {default: bedrock/claude-sonnet-4-6}
 server: https://omni.<you>.caffeine.tech   # optional: your own Omnigent web endpoint
 tui:
   theme: dark
 ```
 
-## 6. Hosted runner (k8s) notes
+## 6. Upgrading
+
+Dev VMs **float**: upgrade harnesses ad hoc to catch upstream breakage early,
+and note the last-tested versions in §4 when you do. Hosted-runner (k8s) hosts
+are the opposite: harness CLIs come from the host image and are **pinned**
+there — bump them by rebuilding `ghcr.io/caffeinelabs/omnigent-host` and
+rolling the image through a preview env, never by upgrading inside a live pod.
+
+```bash
+# Omnigent itself
+cd ~/code/omnigent && git pull --ff-only && uv pip install -e .
+
+# Claude Code (native installer self-update)
+claude update
+
+# Codex / Pi (npm)
+npm install -g @openai/codex@latest
+npm install -g @earendil-works/pi-coding-agent@latest
+
+# Goose (re-run the installer; pin with GOOSE_VERSION=v1.46.0 if needed)
+curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh | CONFIGURE=false bash
+
+# jcode (built-in self-update)
+jcode update
+```
+
+After upgrading a harness, rerun its verification row from §8 before declaring
+the host healthy — wire-API and auth behavior change upstream without notice
+(the codex `wire_api` removal in §4 is the canonical example).
+
+## 7. Hosted runner (k8s) notes
 
 - Runner hosts come from the host image (`ghcr.io/caffeinelabs/omnigent-host`);
   harness CLIs must be baked in or installed on first attach. Preview-env images
@@ -270,13 +324,35 @@ tui:
 - jcode in k8s currently runs a patched build (see Linear SRE-682 comment) until
   upstream lands the fix; the k8s image work is tracked there.
 
-## 7. Smoke test (per harness)
+## 8. Verification matrix (per harness)
 
-For each harness: create a session in the Omnigent TUI/web, send "print
-ok", confirm the turn completes and tool calls (if any) execute. If Goose or
-jcode standalone fail auth, check §3 for the key location first.
+Run this after first setup and after any upgrade (§6). "Bottom bar" = the
+composer status label in the web UI's session view. Expected labels:
+**Claude Code**, **Codex**, **Pi**, **Goose**, **Jcode** — anything else
+(e.g. another harness's name) is a bug, not a quirk.
 
-## 8. Keeping this honest
+| Check | What to do | Pass looks like |
+|---|---|---|
+| Simple prompt | New session, send `Reply with exactly: ok` | Turn completes; reply is `ok` |
+| Multi-turn + tools | Ask it to write a file, then in a second message read it back | Tool calls execute (approve if prompted); second turn reads the first turn's file |
+| Correct UI label | Look at the bottom bar in the session view | Shows this harness's label from the table above |
+| Visible in Bifrost logs | Check the Bifrost request log for the turn | Requests appear, routed to the expected model (`kimi-k3`, `bedrock/claude-sonnet-4-6`) |
+| Zombie-session recovery | `omnigent host stop-session <id>` (or close the session), reopen it, send another message | Session relaunches/resumes; no stranded "busy" state (Pi caveat: §4) |
+
+Harness-specific notes:
+
+- **Claude**: the subscription OAuth login must exist even in gateway mode —
+  the CLI refuses to start unauthenticated before Omnigent's env injection
+  matters.
+- **Codex**: if a turn fails instantly with a wire/protocol error, suspect a
+  chat-only upstream — see the wire-API note in §4.
+- **Pi**: a turn that never settles is the known `agent_settled` caveat (§4),
+  not an auth failure.
+- **Goose/jcode**: auth is user-owned — if the simple prompt 401s, check
+  §4's key locations (`~/.config/goose/config.yaml`,
+  `JCODE_PROVIDER_BIFROST_API_KEY`) before touching Omnigent config.
+
+## 9. Keeping this honest
 
 This file describes fork behavior. When harness setup changes, update this doc
 and record the delta in `DIFF.md` (required by the fork section of `AGENTS.md`).

@@ -35,7 +35,9 @@ upstream take it), **Lifetime** (permanent fork delta / until upstream lands X).
 
 - **What:** `docs/harness-setup-vm.md` — install + configure Omnigent (fork)
   and the five supported harnesses (Claude Code, Codex, Pi, Goose, jcode) on a
-  VM/EC2, routed through our Bifrost gateway; verified working-example config.
+  VM/EC2 (Ubuntu 24.04+), routed through our Bifrost gateway; verified
+  working-example config, per-harness upgrade one-liners + float/pin policy,
+  and a per-harness verification matrix.
 - **Why:** SRE-681 exit criterion — colleagues must be able to reproduce the
   environment from a doc; upstream docs cover neither our gateway nor the fork's
   harness set.
