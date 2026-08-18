@@ -31,6 +31,31 @@ upstream take it), **Lifetime** (permanent fork delta / until upstream lands X).
 - **Upstreamable:** no — tied to our GHCR and the infra GitOps flow.
 - **Lifetime:** permanent while preview environments exist.
 
+### Host image: all-harness runner image (goose + jcode + dsh-acp)
+
+- **What:** `deploy/docker/Dockerfile` (+ `Dockerfile.ubi`) bake goose, jcode,
+  and DeepSeek Harness (`dsh-acp`) via upstream's `EXTRA_HARNESS_CLIS`
+  mechanism (omnigent-ai/omnigent#4148). Fork ARG default is
+  `goose@1.46.0 jcode@0.77.1 deepseek@0.4.14`. Debian host `NODE_VERSION`
+  is `22.19` (`dsh-acp` needs Node >= 22.15 / `createZstdDecompress`).
+  Fork-only on top: `/opt/jcode` profile + `mcp-remote`; baked
+  `jcode-agent.yaml` and `deepseek-agent.yaml` via
+  `OMNIGENT_BUILTIN_AGENT_DIRS`. `omnigent/acp_cli_harnesses.py` adds
+  `jcode` (`omnigent_mcp` opt-out) and `deepseek` (OpenMA `dsh-acp`,
+  `env_passthrough` for `DEEPSEEK_*` / `DSH_*`).
+  `HARNESS_ACP_OMNIGENT_MCP` + row `env_passthrough` in
+  `omnigent/runtime/workflow.py`. `config_map_mounts` +
+  `OMNIGENT_KUBERNETES_CONFIG_MAP_MOUNTS` env fallback.
+- **Why:** One runner image for claude, codex, pi, goose, jcode, and
+  DeepSeek Harness in managed k8s sandboxes. Official `@deepseek-ai/dsh-acp`
+  is too thin (no MCP/tools/usage); OpenMA adapter is the path in
+  omnigent-ai/omnigent#4863 / #4864.
+- **Upstreamable:** `deepseek` catalog row + `env_passthrough` match #4863
+  (CONFLICTING). CLI bake row is a candidate for #4148 follow-up.
+  `/opt/jcode` wiring stays a fork delta.
+- **Lifetime:** catalog row until #4863 lands; ARG pin + Node 22.19 until
+  the host image default covers dsh-acp.
+
 ### Docs: VM harness setup guide
 
 - **What:** `docs/harness-setup-vm.md` — install + configure Omnigent (fork)

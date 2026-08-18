@@ -1548,7 +1548,12 @@ def _build_acp_cli_spawn_env(
     env = {
         "HARNESS_ACP_COMMAND": shlex.join([executable, *row.args]),
         "HARNESS_ACP_NAME": row.label,
+        # Rows whose CLI rejects session/new mcpServers (e.g. jcode) opt out
+        # of advertising the Omnigent MCP server.
+        "HARNESS_ACP_OMNIGENT_MCP": "1" if row.omnigent_mcp else "0",
     }
+    if row.env_passthrough:
+        env["HARNESS_ACP_ENV_PASSTHROUGH"] = ",".join(row.env_passthrough)
     # Session workspace (selected working folder). ``None`` lets the wrap fall
     # back to OMNIGENT_RUNNER_WORKSPACE — see HARNESS_ACP_CWD.
     if cwd is not None:

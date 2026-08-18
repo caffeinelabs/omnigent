@@ -41,6 +41,16 @@
 #   docker build -t omnigent-host:latest --target host \
 #                -f deploy/docker/Dockerfile .
 #
+# To bake extra harness CLIs into a host image beyond the default set — by
+# harness name, whether the CLI ships on npm or via a vendor installer:
+#
+#   docker build -t omnigent-host:latest --target host \
+#                -f deploy/docker/Dockerfile \
+#                --build-arg EXTRA_HARNESS_CLIS="goose jcode opencode" .
+#
+# (See deploy/docker/install-harness-cli.sh for the supported names, optional
+# NAME@VERSION pins, and the npm:<pkg-spec> escape hatch.)
+#
 # Behind corporate package proxies (the host target also installs the
 # harness CLIs from npm, so it needs the npm proxy too):
 #
@@ -55,7 +65,8 @@
 
 # Must satisfy pyproject requires-python (>=3.12); 3.11 fails dependency resolution.
 ARG PYTHON_VERSION=3.12
-ARG NODE_VERSION=22
+# 22.19: dsh-acp needs Node >= 22.15 (node:zlib createZstdDecompress).
+ARG NODE_VERSION=22.19
 
 # ── Web UI builder ──────────────────────────────────────
 # Builds the web SPA so `docker build` works from a clean checkout —
@@ -208,9 +219,11 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:${PATH}" \
     IS_SANDBOX=1
 
+# bzip2 extracts goose's .tar.bz2 release archive when EXTRA_HARNESS_CLIS
+# includes goose (see install-harness-cli.sh).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      git tmux procps lsof bubblewrap curl ca-certificates unzip \
+      git tmux procps lsof bubblewrap curl ca-certificates unzip bzip2 \
       iproute2 nftables \
  && rm -rf /var/lib/apt/lists/*
 
@@ -336,6 +349,47 @@ RUN set -eu; \
     fi; \
     echo "agy ${AGY_VERSION} pinned (sha256 verified)"
 
+# Optional additional harness CLIs for a downstream deployment that wants a
+# harness beyond the pre-baked set above, without forking this Dockerfile —
+# including CLIs that don't ship on npm (goose, jcode). The pre-baked set has
+# grown one harness at a time with no shared policy yet for what ships by
+# default, so this sidesteps that question entirely rather than expanding it.
+# Space-separate entries; each is a harness name with an optional @version
+# pin (e.g. "goose jcode@0.75.5 opencode") resolved by
+# deploy/docker/install-harness-cli.sh, or npm:<pkg-spec> for a package with
+# no row there yet. Mirrors the OMNIGENT_EXTRAS pattern used for optional
+# Python extras above. Kept after the pinned installs so iterating on the
+# script doesn't bust their layers. `set -f` disables pathname expansion for
+# the unquoted expansion below, so an entry containing a shell glob character
+# (*, ?, []) reaches the script literally instead of matching files in the
+# build context.
+# Fork delta (see DIFF.md): upstream defaults this ARG to empty; the fork
+# pins goose + jcode for its sandbox deployment.
+ARG EXTRA_HARNESS_CLIS="goose@1.46.0 jcode@0.77.1 deepseek@0.4.14"
+COPY deploy/docker/install-harness-cli.sh /tmp/install-harness-cli.sh
+RUN if [ -n "${EXTRA_HARNESS_CLIS}" ]; then \
+        set -f; \
+        bash /tmp/install-harness-cli.sh ${EXTRA_HARNESS_CLIS}; \
+    fi
+
+# jcode harness wiring for k8s runner pods. Pods mount a writable emptyDir
+# over HOME, so a baked ~/.jcode never survives; instead the image points
+# JCODE_HOME at /opt/jcode — where install-harness-cli.sh already placed
+# jcode's builds — plus symlinks into /mnt/config/jcode, where the
+# deployment mounts its cluster-specific jcode config (profile, provider
+# env file, MCP registry) via config_map_mounts. Chowned to the sandbox
+# user (1000660000) so jcode can write session state when pods run
+# non-root. jcode's MCP client is stdio-only, so mcp-remote bridges it to
+# a gateway /mcp endpoint. Dangling symlinks read as "no config" where
+# nothing is mounted.
+RUN install -d /opt/jcode/config/jcode \
+ && chown -R 1000660000:1000660000 /opt/jcode \
+ && npm install -g --no-audit --no-fund mcp-remote@0.1.38 \
+ && npm cache clean --force \
+ && ln -s /mnt/config/jcode/config.toml /opt/jcode/config.toml \
+ && ln -s /mnt/config/jcode/provider-bifrost.env /opt/jcode/config/jcode/provider-bifrost.env \
+ && ln -s /mnt/config/jcode/mcp.json /opt/jcode/mcp.json
+
 # Copy the venv and source tree. The editable install's .pth files reference
 # /build/omnigent and /build/sdks/* -- both denied by the k8s Landlock LSM
 # policy. Re-install without -e so the package bytes land in the venv's
@@ -381,6 +435,15 @@ COPY --from=server-builder /build /build
 COPY deploy/docker/entrypoint.py /app/entrypoint.py
 
 WORKDIR /app
+
+# Fork deployment extra (not proposed upstream): seed a first-class "jcode"
+# agent (catalog row + os_env/terminals for the UI Files/Changes/Shell tabs).
+# Deployments can override/extend via their own OMNIGENT_BUILTIN_AGENT_DIRS.
+# Kept off /etc/omnigent: deployments mount their config ConfigMap there,
+# which would shadow the baked file.
+COPY deploy/docker/preview-jcode/jcode-agent.yaml /opt/omnigent/agents/jcode.yaml
+COPY deploy/docker/preview-jcode/deepseek-agent.yaml /opt/omnigent/agents/deepseek.yaml
+ENV OMNIGENT_BUILTIN_AGENT_DIRS=/opt/omnigent/agents/jcode.yaml:/opt/omnigent/agents/deepseek.yaml
 
 # /data is mounted as a persistent volume by docker-compose for the
 # artifact store.

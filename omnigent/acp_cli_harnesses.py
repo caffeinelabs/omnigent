@@ -46,11 +46,19 @@ class AcpCliHarness:
     :param args: Argv appended after the binary to start the CLI's ACP stdio
         server, e.g. ``("--acp",)`` or ``("agent", "stdio")``.
     :param aliases: Accepted alternate spellings, canonicalized to the row key.
+    :param omnigent_mcp: Whether to offer Omnigent's MCP server in
+        ``session/new``. Some vendor CLIs reject ``mcpServers`` over ACP and
+        configure MCP out of band (e.g. jcode reads ``~/.jcode/mcp.json``);
+        set ``False`` for those so the server isn't advertised.
+    :param env_passthrough: Environment variable names the otherwise
+        deny-by-default ACP subprocess may inherit.
     """
 
     install: HarnessInstallSpec
     args: tuple[str, ...]
     aliases: tuple[str, ...] = ()
+    omnigent_mcp: bool = True
+    env_passthrough: tuple[str, ...] = ()
 
     @property
     def label(self) -> str:
@@ -73,6 +81,30 @@ class AcpCliHarness:
 # Keyed by canonical harness id. Keep keys sorted; each row's registrations
 # derive from here (see the module docstring for the full list).
 ACP_CLI_HARNESSES: dict[str, AcpCliHarness] = {
+    # DeepSeek Harness official runtime, exposed over ACP by the Apache-2.0
+    # OpenMA adapter (dsh-acp). Official @deepseek-ai/dsh-acp is too thin
+    # (fresh sessions only, no MCP/tools/usage). Auth and model stay with
+    # the adapter (dsh-acp login or DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL).
+    "deepseek": AcpCliHarness(
+        install=HarnessInstallSpec(
+            "DeepSeek Harness",
+            "dsh-acp",
+            "@openma/deepseek-harness-acp",
+            login_args=("login",),
+            auth_hint="run `dsh-acp login` or set DEEPSEEK_API_KEY",
+            min_version="0.4.6",
+        ),
+        args=(),
+        aliases=("deepseek-harness", "dsh"),
+        env_passthrough=(
+            "DEEPSEEK_API_KEY",
+            "DEEPSEEK_BASE_URL",
+            "DSH_HOME",
+            "DSH_PATH",
+            "DSH_MODEL",
+            "DSH_PROVIDER",
+        ),
+    ),
     # Grok Build (xAI's ``grok`` CLI) drives ``grok agent stdio``. Ships via a
     # curl installer (not npm) and authenticates through its own ``grok login``
     # (xAI OAuth, device-code capable) or ``XAI_API_KEY``; Omnigent stores no
@@ -88,5 +120,21 @@ ACP_CLI_HARNESSES: dict[str, AcpCliHarness] = {
         ),
         args=("agent", "stdio"),
         aliases=("grok-build",),
+    ),
+    # jcode (https://jcode.sh) drives ``jcode acp``. Ships via a curl
+    # installer (not npm) and owns its provider/model config in
+    # ``~/.jcode/config.toml``; Omnigent stores no credential. Its ACP server
+    # rejects ``mcpServers`` in ``session/new`` (MCP is configured in
+    # ``~/.jcode/mcp.json``), so the Omnigent MCP server is not offered.
+    "jcode": AcpCliHarness(
+        install=HarnessInstallSpec(
+            "Jcode",
+            "jcode",
+            None,
+            install_hint="curl -fsSL https://jcode.sh/install | bash",
+            auth_hint="configure a provider in ~/.jcode/config.toml",
+        ),
+        args=("acp",),
+        omnigent_mcp=False,
     ),
 }
