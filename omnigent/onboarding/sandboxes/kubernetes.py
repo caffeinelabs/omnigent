@@ -78,8 +78,8 @@ from omnigent.onboarding.sandboxes.base import (
     github_sandbox_setup_commands,
     render_host_config_write_command,
 )
-from omnigent.pr_button import BUTTON_IMAGE_URL_ENV_VAR, SESSION_URL_ENV_VAR
 from omnigent.onboarding.sandboxes.types import SandboxCapabilities
+from omnigent.pr_button import BUTTON_IMAGE_URL_ENV_VAR, SESSION_URL_ENV_VAR
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -491,7 +491,7 @@ def _render_host_command(server_url: str, *, path_prepend: str | None = None) ->
         runtime and the reaper's children inherit it.
     :returns: The ``["bash", "-lc", script]`` command.
     """
-    export = f"export PATH={shlex.quote(path_prepend)}:\"$PATH\"; " if path_prepend else ""
+    export = f'export PATH={shlex.quote(path_prepend)}:"$PATH"; ' if path_prepend else ""
     script = (
         f"{export}exec python3 -c {shlex.quote(_REAPER_SRC)} "
         f"omnigent host --server {shlex.quote(server_url)}"
@@ -587,6 +587,7 @@ def build_pod_manifest(
     resources: dict[str, object] | None = None,
     pvc_mounts: Sequence[Mapping[str, object]] | None = None,
     secret_mounts: Sequence[Mapping[str, object]] | None = None,
+    config_map_mounts: Sequence[Mapping[str, object]] | None = None,
     agent_name: str | None = None,
     session_id: str | None = None,
     session_url: str | None = None,
@@ -672,6 +673,9 @@ def build_pod_manifest(
     :param secret_mounts: Normalized Secret mounts (``{secret_name,
         mount_path}``) added as read-only ``secret`` volumes on the host
         container only, or ``None``.
+    :param config_map_mounts: Normalized ConfigMap mounts (``{config_map_name,
+        mount_path}``) added as read-only ``configMap`` volumes on the host
+        container only, or ``None``.
     :param agent_name: Server-resolved built-in agent name the session runs,
         added as the ``omnigent.ai/agent`` classifier label. Stamped verbatim
         when it is already a valid label value, otherwise omitted (extending the
@@ -730,6 +734,26 @@ def build_pod_manifest(
         # A Secret volume is read-only regardless; readOnly makes that explicit.
         secret_volume_mounts.append(
             {"name": f"secret-{i}", "mountPath": mount["mount_path"], "readOnly": True}
+        )
+
+    config_map_volumes: list[dict[str, object]] = []
+    config_map_volume_mounts: list[dict[str, object]] = []
+    for i, mount in enumerate(config_map_mounts or ()):
+        config_map_volumes.append(
+            {
+                "name": f"config-map-{i}",
+                "configMap": {
+                    "name": mount["config_map_name"],
+                    # optional=False, same as Secrets: a configured mount whose
+                    # source is missing fails the Pod rather than booting the
+                    # runner without the config it was meant to see.
+                    "optional": False,
+                },
+            }
+        )
+        # A ConfigMap volume is read-only regardless; readOnly is explicit.
+        config_map_volume_mounts.append(
+            {"name": f"config-map-{i}", "mountPath": mount["mount_path"], "readOnly": True}
         )
 
     # Per-user GitHub auth: the credential env (git + gh act as the user)
@@ -846,7 +870,12 @@ def build_pod_manifest(
         "command": _render_host_command(server_url, path_prepend=wrapper_bin_dir),
         "env": host_env,
         "securityContext": container_security,
-        "volumeMounts": [*home_mount, *pvc_volume_mounts, *secret_volume_mounts],
+        "volumeMounts": [
+            *home_mount,
+            *pvc_volume_mounts,
+            *secret_volume_mounts,
+            *config_map_volume_mounts,
+        ],
     }
     if harness_secret:
         host_container["envFrom"] = [{"secretRef": {"name": harness_secret}}]
@@ -872,7 +901,12 @@ def build_pod_manifest(
             "fsGroupChangePolicy": "OnRootMismatch",
             "seccompProfile": {"type": "RuntimeDefault"},
         },
-        "volumes": [{"name": "home", "emptyDir": {}}, *pvc_volumes, *secret_volumes],
+        "volumes": [
+            {"name": "home", "emptyDir": {}},
+            *pvc_volumes,
+            *secret_volumes,
+            *config_map_volumes,
+        ],
         "initContainers": [init_container],
         "containers": [host_container],
     }
@@ -1088,6 +1122,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
         resources: dict[str, object] | None = None,
         pvc_mounts: Sequence[Mapping[str, object]] | None = None,
         secret_mounts: Sequence[Mapping[str, object]] | None = None,
+        config_map_mounts: Sequence[Mapping[str, object]] | None = None,
     ) -> None:
         """
         Initialize the launcher.
@@ -1116,6 +1151,9 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
             (validated at parse time), or ``None`` for none.
         :param secret_mounts: Normalized ``sandbox.kubernetes.secret_mounts``
             entries (validated at parse time), or ``None`` for none.
+        :param config_map_mounts: Normalized
+            ``sandbox.kubernetes.config_map_mounts`` entries (validated at
+            parse time), or ``None`` for none.
         """
         self._image_ref = image
         self._namespace = namespace
@@ -1128,6 +1166,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
         self._resources = resources
         self._pvc_mounts = list(pvc_mounts) if pvc_mounts else None
         self._secret_mounts = list(secret_mounts) if secret_mounts else None
+        self._config_map_mounts = list(config_map_mounts) if config_map_mounts else None
         self._core: k8s_client.CoreV1Api | None = None
         self._api_client: k8s_client.ApiClient | None = None
 
@@ -1456,6 +1495,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                     resources=self._resources,
                     pvc_mounts=self._pvc_mounts,
                     secret_mounts=self._secret_mounts,
+                    config_map_mounts=self._config_map_mounts,
                     agent_name=agent_name,
                     session_id=session_id,
                     session_url=session_url,

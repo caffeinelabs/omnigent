@@ -438,6 +438,32 @@ def test_build_pod_manifest_without_secret_mounts_is_unchanged() -> None:
     ]
 
 
+def test_build_pod_manifest_config_map_mounts_land_on_host_container_only() -> None:
+    """Each config_map_mounts entry becomes a read-only configMap volume on host only."""
+    manifest = build_pod_manifest(
+        **_MANIFEST_KW,
+        config_map_mounts=[
+            {"config_map_name": "jcode-mcp", "mount_path": "/mnt/config/jcode"},
+        ],
+    )
+    spec = manifest["spec"]
+    volumes = {v["name"]: v for v in spec["volumes"]}
+    assert volumes["config-map-0"]["configMap"] == {
+        "name": "jcode-mcp",
+        "optional": False,
+    }
+    host_mounts = {m["name"]: m for m in spec["containers"][0]["volumeMounts"]}
+    assert host_mounts["config-map-0"] == {
+        "name": "config-map-0",
+        "mountPath": "/mnt/config/jcode",
+        "readOnly": True,
+    }
+    # Init container keeps only HOME.
+    assert spec["initContainers"][0]["volumeMounts"] == [
+        {"name": "home", "mountPath": "/home/omnigent"}
+    ]
+
+
 def test_build_pod_manifest_stamps_agent_label_alongside_reserved_pair() -> None:
     """A valid agent name adds the omnigent.ai/agent classifier; reserved pair stays."""
     manifest = build_pod_manifest(**_MANIFEST_KW, agent_name="research-agent")

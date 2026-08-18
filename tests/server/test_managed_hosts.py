@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import re
+from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
@@ -1201,6 +1202,221 @@ def test_parse_kubernetes_pvc_and_secret_mounts_coexist_at_distinct_paths(
         {"claim_name": "datasets", "mount_path": "/mnt/datasets", "read_only": True}
     ]
     assert fake.secret_mounts == [{"secret_name": "git-token", "mount_path": "/mnt/secrets/git"}]
+
+
+def test_parse_kubernetes_config_map_mounts_normalizes_and_reaches_launcher(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """config_map_mounts parse into normalized {config_map_name, mount_path} on the launcher."""
+    cfg = parse_sandbox_config(
+        {
+            "provider": "kubernetes",
+            "server_url": "http://s.svc.cluster.local",
+            "kubernetes": {
+                "config_map_mounts": [
+                    {"config_map_name": "jcode-mcp", "mount_path": "/mnt/config/jcode"},
+                ]
+            },
+        }
+    )
+    assert cfg is not None
+    fake = FakeSandboxLauncher()
+    install_fake_kubernetes_launcher(monkeypatch, fake)
+    assert cfg.launcher_factory() is fake
+    assert fake.config_map_mounts == [
+        {"config_map_name": "jcode-mcp", "mount_path": "/mnt/config/jcode"},
+    ]
+
+
+def test_parse_kubernetes_without_config_map_mounts_is_none(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Omitted (or empty) config_map_mounts reach the launcher as None — no volumes added."""
+    cfg = parse_sandbox_config(
+        {
+            "provider": "kubernetes",
+            "server_url": "http://s.svc.cluster.local",
+            "kubernetes": {"config_map_mounts": []},
+        }
+    )
+    assert cfg is not None
+    fake = FakeSandboxLauncher()
+    install_fake_kubernetes_launcher(monkeypatch, fake)
+    assert cfg.launcher_factory() is fake
+    assert fake.config_map_mounts is None
+
+
+@pytest.mark.parametrize(
+    ("config_map_mounts", "expected_fragment"),
+    [
+        # Wrong container shapes.
+        ("jcode-mcp", "must be a list"),
+        ([["jcode-mcp"]], "must be a mapping"),
+        # Unknown / missing keys (a ConfigMap volume is read-only by nature, so
+        # read_only reads as an unknown key, same as secret_mounts).
+        ([{"config_map_name": "c", "mount_path": "/mnt/x", "read_only": True}], "unknown key"),
+        ([{"mount_path": "/mnt/x"}], "config_map_name"),
+        ([{"config_map_name": "c"}], "mount_path"),
+        # Bad ConfigMap names (DNS-1123 subdomains).
+        ([{"config_map_name": "Bad_Map", "mount_path": "/mnt/x"}], "config_map_name"),
+        # Bad mount paths: relative, unnormalized, root, reserved.
+        ([{"config_map_name": "c", "mount_path": "mnt/x"}], "absolute"),
+        ([{"config_map_name": "c", "mount_path": "/mnt/../etc"}], "normalized"),
+        ([{"config_map_name": "c", "mount_path": "/"}], "reserved"),
+        ([{"config_map_name": "c", "mount_path": "/etc/omnigent"}], "reserved"),
+        ([{"config_map_name": "c", "mount_path": "/opt/jcode"}], "reserved"),
+        # Duplicates / nesting between entries.
+        (
+            [
+                {"config_map_name": "a", "mount_path": "/mnt/x"},
+                {"config_map_name": "b", "mount_path": "/mnt/x"},
+            ],
+            "duplicate",
+        ),
+        (
+            [
+                {"config_map_name": "a", "mount_path": "/mnt/x"},
+                {"config_map_name": "b", "mount_path": "/mnt/x/sub"},
+            ],
+            "nested",
+        ),
+    ],
+)
+def test_parse_kubernetes_config_map_mounts_invalid_fails_loud(
+    config_map_mounts: object, expected_fragment: str
+) -> None:
+    """An operator typo in config_map_mounts fails at parse (server startup), not at launch."""
+    with pytest.raises(ValueError, match=expected_fragment):
+        parse_sandbox_config(
+            {
+                "provider": "kubernetes",
+                "server_url": "http://s.svc.cluster.local",
+                "kubernetes": {"config_map_mounts": config_map_mounts},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("config_map_path", "expected_fragment"),
+    [("/mnt/data", "same mount_path"), ("/mnt/data/mcp", "nested")],
+)
+def test_parse_kubernetes_rejects_secret_and_config_map_mount_overlap(
+    config_map_path: str, expected_fragment: str
+) -> None:
+    """A config_map_mounts path equal to or nested under a secret_mounts path fails loud."""
+    with pytest.raises(ValueError, match=expected_fragment):
+        parse_sandbox_config(
+            {
+                "provider": "kubernetes",
+                "server_url": "http://s.svc.cluster.local",
+                "kubernetes": {
+                    "secret_mounts": [{"secret_name": "s", "mount_path": "/mnt/data"}],
+                    "config_map_mounts": [{"config_map_name": "c", "mount_path": config_map_path}],
+                },
+            }
+        )
+
+
+def test_parse_kubernetes_all_mount_types_coexist_at_distinct_paths(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-overlapping PVC, Secret, and ConfigMap mounts all reach the launcher."""
+    cfg = parse_sandbox_config(
+        {
+            "provider": "kubernetes",
+            "server_url": "http://s.svc.cluster.local",
+            "kubernetes": {
+                "pvc_mounts": [{"claim_name": "datasets", "mount_path": "/mnt/datasets"}],
+                "secret_mounts": [{"secret_name": "git-token", "mount_path": "/mnt/secrets/git"}],
+                "config_map_mounts": [
+                    {"config_map_name": "jcode-mcp", "mount_path": "/mnt/config/jcode"}
+                ],
+            },
+        }
+    )
+    assert cfg is not None
+    fake = FakeSandboxLauncher()
+    install_fake_kubernetes_launcher(monkeypatch, fake)
+    assert cfg.launcher_factory() is fake
+    assert fake.pvc_mounts == [
+        {"claim_name": "datasets", "mount_path": "/mnt/datasets", "read_only": True}
+    ]
+    assert fake.secret_mounts == [{"secret_name": "git-token", "mount_path": "/mnt/secrets/git"}]
+    assert fake.config_map_mounts == [
+        {"config_map_name": "jcode-mcp", "mount_path": "/mnt/config/jcode"}
+    ]
+
+
+def test_parse_kubernetes_config_map_mounts_env_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Absent YAML key → JSON env value resolves and reaches the launcher."""
+    monkeypatch.setenv(
+        "OMNIGENT_KUBERNETES_CONFIG_MAP_MOUNTS",
+        '[{"config_map_name": "jcode-mcp", "mount_path": "/mnt/config/jcode"}]',
+    )
+    cfg = parse_sandbox_config(
+        {"provider": "kubernetes", "server_url": "http://s.svc.cluster.local"}
+    )
+    assert cfg is not None
+    fake = FakeSandboxLauncher()
+    install_fake_kubernetes_launcher(monkeypatch, fake)
+    assert cfg.launcher_factory() is fake
+    assert fake.config_map_mounts == [
+        {"config_map_name": "jcode-mcp", "mount_path": "/mnt/config/jcode"}
+    ]
+
+
+def test_parse_kubernetes_config_map_mounts_yaml_wins_over_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An explicit YAML list (even empty) suppresses the env fallback."""
+    monkeypatch.setenv(
+        "OMNIGENT_KUBERNETES_CONFIG_MAP_MOUNTS",
+        '[{"config_map_name": "jcode-mcp", "mount_path": "/mnt/config/jcode"}]',
+    )
+    cfg = parse_sandbox_config(
+        {
+            "provider": "kubernetes",
+            "server_url": "http://s.svc.cluster.local",
+            "kubernetes": {"config_map_mounts": []},
+        }
+    )
+    assert cfg is not None
+    fake = FakeSandboxLauncher()
+    install_fake_kubernetes_launcher(monkeypatch, fake)
+    assert cfg.launcher_factory() is fake
+    assert fake.config_map_mounts is None
+
+
+def test_parse_kubernetes_config_map_mounts_empty_env_is_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An empty env value (GitOps default) means no mounts, not a parse error."""
+    monkeypatch.setenv("OMNIGENT_KUBERNETES_CONFIG_MAP_MOUNTS", "")
+    cfg = parse_sandbox_config(
+        {"provider": "kubernetes", "server_url": "http://s.svc.cluster.local"}
+    )
+    assert cfg is not None
+
+
+@pytest.mark.parametrize(
+    ("env_value", "expected_fragment"),
+    [
+        ("not-json", "OMNIGENT_KUBERNETES_CONFIG_MAP_MOUNTS"),
+        ('{"config_map_name": "c"}', "must be a list"),
+        ('[{"config_map_name": "c", "mount_path": "/etc/x"}]', "reserved"),
+    ],
+)
+def test_parse_kubernetes_config_map_mounts_env_invalid_fails_loud(
+    monkeypatch: pytest.MonkeyPatch, env_value: str, expected_fragment: str
+) -> None:
+    """A malformed env value fails at parse with the same rules as the YAML key."""
+    monkeypatch.setenv("OMNIGENT_KUBERNETES_CONFIG_MAP_MOUNTS", env_value)
+    with pytest.raises(ValueError, match=expected_fragment):
+        parse_sandbox_config(
+            {"provider": "kubernetes", "server_url": "http://s.svc.cluster.local"}
+        )
 
 
 def test_parse_kubernetes_secret_mounts_sibling_prefix_is_not_nested() -> None:
