@@ -57,7 +57,7 @@ providers:
       api_key: <BIFROST_KEY>          # consider env interpolation instead of plaintext
       base_url: https://bifrost.dev.caffeine.ai/v1
       models:
-        default: kimi-k3
+        default: x-ai/grok-4.6     # kimi-k3 remains in the catalog as an alternative
       wire_api: chat
 ```
 
@@ -191,7 +191,7 @@ Omnigent does **not** manage Goose auth. Edit `~/.config/goose/config.yaml`:
 ```yaml
 OPENAI_HOST: https://bifrost.dev.caffeine.ai
 OPENAI_API_KEY: bifrost-no-auth        # accepted as-is by our dev gateway; if Goose ever 401s, put the real Bifrost key here
-GOOSE_CONTEXT_LIMIT: 1048576
+GOOSE_CONTEXT_LIMIT: 500000   # grok-4.6 window; use 1048576 if you default to kimi-k3
 GOOSE_MODE: auto
 ```
 
@@ -209,15 +209,19 @@ jcode --version     # expect >= v0.75.5 — earlier releases break ACP MCP sessi
 ```toml
 [provider]
 default_provider = "bifrost"
-default_model = "kimi-k3"
+default_model = "x-ai/grok-4.6"
 
 [providers.bifrost]
 type = "openai-compatible"
 base_url = "https://bifrost.dev.caffeine.ai/v1"
 auth = "bearer"
 api_key_env = "JCODE_PROVIDER_BIFROST_API_KEY"
-default_model = "kimi-k3"
+default_model = "x-ai/grok-4.6"
 requires_api_key = true
+
+[[providers.bifrost.models]]
+id = "x-ai/grok-4.6"
+context_window = 500000
 
 [[providers.bifrost.models]]
 id = "kimi-k3"
@@ -270,7 +274,7 @@ providers:
     openai:
       api_key: <BIFROST_KEY>
       base_url: https://bifrost.dev.caffeine.ai/v1
-      models: {default: kimi-k3}
+      models: {default: x-ai/grok-4.6}
       wire_api: chat
   claude:
     default: true
@@ -336,7 +340,7 @@ composer status label in the web UI's session view. Expected labels:
 | Simple prompt | New session, send `Reply with exactly: ok` | Turn completes; reply is `ok` |
 | Multi-turn + tools | Ask it to write a file, then in a second message read it back | Tool calls execute (approve if prompted); second turn reads the first turn's file |
 | Correct UI label | Look at the bottom bar in the session view | Shows this harness's label from the table above |
-| Visible in Bifrost logs | Check the Bifrost request log for the turn | Requests appear, routed to the expected model (`kimi-k3`, `bedrock/claude-sonnet-4-6`) |
+| Visible in Bifrost logs | Check the Bifrost request log for the turn | Requests appear, routed to the expected model (`x-ai/grok-4.6`, `kimi-k3`) |
 | Zombie-session recovery | `omnigent host stop-session <id>` (or close the session), reopen it, send another message | Session relaunches/resumes; no stranded "busy" state (Pi caveat: §4) |
 
 Harness-specific notes:
