@@ -1,6 +1,6 @@
 """Typed HTTP + SSE client for an ``opencode serve`` native server.
 
-Shaped from the pinned OpenCode OpenAPI (``opencode`` 1.17.x,
+Shaped from the pinned OpenCode OpenAPI (``opencode`` 1.17.x–1.18.x,
 ``packages/sdk/openapi.json``). This is a thin typed wrapper over the v1
 REST endpoints the Omnigent OpenCode-native harness needs plus the SSE
 ``GET /event`` stream — not a full generated SDK. Unknown response fields

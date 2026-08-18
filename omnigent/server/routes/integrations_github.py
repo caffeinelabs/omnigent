@@ -34,6 +34,7 @@ from omnigent.server.github_store import GithubConnectionStore
 from omnigent.server.routes._auth_helpers import require_user
 
 if TYPE_CHECKING:
+    from omnigent.entities import Conversation
     from omnigent.stores.conversation_store import ConversationStore
 
 _logger = logging.getLogger(__name__)
@@ -220,7 +221,7 @@ def create_integrations_github_router(
         return {"connected": True, "branches": branches}
 
     async def _resolve_session_pulls(
-        user_id: str, session_id: str, conv: object
+        user_id: str, session_id: str, conv: Conversation
     ) -> dict[str, object]:
         """Resolve the PRs opened during *session_id* (shared by list + ci-watch).
 
@@ -326,9 +327,7 @@ def create_integrations_github_router(
                 if key not in found:
                     found[key] = {k: v for k, v in pr.items() if k != "body"}
 
-        pulls = sorted(
-            found.values(), key=lambda p: str(p.get("created_at") or ""), reverse=True
-        )
+        pulls = sorted(found.values(), key=lambda p: str(p.get("created_at") or ""), reverse=True)
         return {"connected": True, "pulls": pulls}
 
     @router.get("/integrations/github/sessions/{session_id}/pull-requests")
@@ -409,7 +408,12 @@ def create_integrations_github_router(
             return {"connected": False, "prs": [], "reason": "no token"}
 
         results: list[dict[str, object]] = []
-        for pr in resolved.get("pulls") or []:
+        pulls = resolved.get("pulls") or []
+        if not isinstance(pulls, list):
+            pulls = []
+        for pr in pulls:
+            if not isinstance(pr, dict):
+                continue
             full_name = pr.get("repo")
             head_ref = pr.get("head_ref")
             entry: dict[str, object] = {"repo": full_name, "head_ref": head_ref}
