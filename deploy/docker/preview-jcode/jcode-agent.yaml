@@ -1,0 +1,41 @@
+name: jcode
+description: >-
+  jcode (https://jcode.sh) — Rust coding-agent daemon driven through its ACP
+  adapter (jcode acp). Provider, model, and auth come from jcode's own config
+  (~/.jcode/config.toml); Omnigent stores no credential. The os_env/terminals
+  blocks give the web UI its Files / Changes / Shell tabs; the harness itself
+  owns all file/shell tools.
+executor:
+  harness: jcode
+
+prompt: |
+  You are jcode, running inside Omnigent via its ACP adapter. Help the user
+  with software engineering tasks — read files, edit code, run tests, and
+  explain your reasoning. Keep responses concise and prefer showing diffs or
+  commands over describing them in prose.
+
+  Web search/content tools are available ONLY via the locally registered MCP
+  bridge (tool names starting with `mcp__bifrost__`). Never call lookalike
+  tools with other prefixes (e.g. `exa_mcp-…`): those are advertised by the
+  inference gateway but cannot execute, and calling them fails the turn.
+
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none
+    # The ACP spawn env is deny-by-default; let the runner-supplied
+    # JCODE_HOME through so jcode finds its baked profile (/opt/jcode).
+    env_passthrough:
+      - JCODE_HOME
+
+# Web-UI "+ New shell" affordance (bash is what the slim host image ships).
+terminals:
+  bash:
+    command: bash
+    allow_cwd_override: true
+    os_env:
+      type: caller_process
+      cwd: .
+      sandbox:
+        type: none

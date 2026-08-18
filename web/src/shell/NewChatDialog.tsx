@@ -1926,7 +1926,7 @@ function HarnessConfigModal({
 // when the user navigates into an existing session and back. Module-scoped,
 // not persisted to storage (a page refresh starts clean); cleared on create.
 /** One repo chosen in the GitHub multi-repo picker (connected mode). */
-type SelectedSandboxRepo = {
+interface SelectedSandboxRepo {
   /** ``owner/name``. */
   fullName: string;
   /** Resolved HTTPS clone URL. */
@@ -1935,7 +1935,7 @@ type SelectedSandboxRepo = {
   defaultBranch: string | null;
   /** Chosen branch; empty string means the repo's default branch. */
   branch: string;
-};
+}
 
 interface LandingDraft {
   message: string;

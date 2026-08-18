@@ -177,7 +177,8 @@ def _augment_body_file(path, session_url, link):
         return path
     fd, tmp = tempfile.mkstemp(prefix="omnigent-pr-body-", suffix=".md")
     with os.fdopen(fd, "w", encoding="utf-8") as handle:
-        handle.write((content.rstrip("\\n") + "\\n\\n" + link + "\\n") if content else link + "\\n")
+        body = (content.rstrip("\n") + "\n\n" + link + "\n") if content else link + "\n"
+        handle.write(body)
     return tmp
 
 
@@ -362,9 +363,7 @@ def github_sandbox_setup_commands(
     # interpolated into the script; the URL is still charset-guarded before we
     # decide to install it. The launcher prepends ``~/.omnigent/bin`` to PATH.
     if session_url and _SESSION_URL_RE.match(session_url):
-        commands.append(
-            _write_file_command(home, _GH_WRAPPER_REL, _GH_WRAPPER_SCRIPT, mode="755")
-        )
+        commands.append(_write_file_command(home, _GH_WRAPPER_REL, _GH_WRAPPER_SCRIPT, mode="755"))
 
     keys = [k.strip() for k in (ssh_authorized_keys or ()) if k.strip()]
     if keys:

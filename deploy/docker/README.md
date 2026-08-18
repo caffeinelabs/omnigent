@@ -292,6 +292,27 @@ docker build -t omnigent-host:latest --target host \
              -f deploy/docker/Dockerfile .
 ```
 
+### Baking in extra harness CLIs
+
+A harness whose CLI isn't in the image fails closed with
+`harness_not_configured` when a managed-sandbox session tries to launch
+it. To bake in additional harness CLIs without forking the Dockerfile,
+pass `EXTRA_HARNESS_CLIS` at build time — space-separated harness names
+with an optional `@version` pin, whether the CLI ships on npm or via a
+vendor installer:
+
+```bash
+docker build -t omnigent-host:latest --target host \
+             -f deploy/docker/Dockerfile \
+             --build-arg EXTRA_HARNESS_CLIS="goose jcode opencode" .
+```
+
+Supported names (`opencode`, `qwen`, `goose`, `jcode`, `cursor`, `kimi`),
+the install method behind each, and the `npm:<pkg-spec>` escape hatch
+live in [`install-harness-cli.sh`](./install-harness-cli.sh). The fork
+pins a default set (`goose@1.46.0 jcode@0.77.1`) for its sandbox
+deployment; upstream defaults the arg to empty.
+
 ### Using it with the Modal sandbox provider
 
 `omnigent sandbox create --provider modal` boots sandboxes from

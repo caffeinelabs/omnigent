@@ -7,29 +7,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // resolveServerInfo is imported dynamically inside each probe (below) so every
 // test starts from a fresh module cache; only the pure helpers are static.
-import { sandboxOptionLabel, sandboxProviderOptions } from "./capabilities";
-import type { ServerInfo } from "./capabilities";
+import {
+  FALLBACK_SERVER_INFO,
+  sandboxOptionLabel,
+  sandboxProviderOptions,
+  type ServerInfo,
+} from "./capabilities";
 
 /** A ServerInfo with only the sandbox fields a test cares about set. */
 function info(overrides: Partial<ServerInfo>): ServerInfo {
   return {
-    accounts_enabled: false,
+    ...FALLBACK_SERVER_INFO,
     single_user: true,
-    login_url: null,
-    needs_setup: false,
-    databricks_features: false,
     managed_sandboxes_enabled: true,
-    sandbox_provider: null,
-    sandbox_providers: [],
-    sharing_mode: "on",
-    public_sharing_enabled: true,
-    server_version: null,
-    smart_routing_enabled: false,
-    smart_routing_sources: { external: false, oss: false },
-    features: {},
-    harness_install_enabled: false,
-    installable_harnesses: [],
-    dictation_available: false,
     ...overrides,
   };
 }

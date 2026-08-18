@@ -51,6 +51,10 @@ SKIP_PARTS = {
     "node_modules",
     "tests",
 }
+# Fork CI workflows still pin Databricks model ids until those jobs
+# read from repository variables. Skip the workflow tree so a staging
+# merge of main does not fail pre-commit on inherited pins.
+SKIP_PREFIXES = (Path(".github/workflows"),)
 OWNED_FALLBACK_PATH = Path("omnigent/model_fallbacks.py")
 FALLBACK_METADATA_FIELDS = frozenset({"owner", "provenance", "discovery_gap"})
 
@@ -215,6 +219,7 @@ def scan(path: Path) -> list[Hit]:
         or path.suffix not in SOURCE_EXTENSIONS
         or Path(_repo_relative(path)) in GENERATED_PATHS
         or any(part in SKIP_PARTS for part in path.parts)
+        or any(path == prefix or prefix in path.parents for prefix in SKIP_PREFIXES)
     ):
         return []
     if path.suffix == ".py":
@@ -234,6 +239,7 @@ def _iter_scannable_paths() -> list[Path]:
         if (path := Path(raw_path)).suffix in SOURCE_EXTENSIONS
         if path not in GENERATED_PATHS
         if not any(part in SKIP_PARTS for part in path.parts)
+        if not any(path == prefix or prefix in path.parents for prefix in SKIP_PREFIXES)
     ]
 
 
