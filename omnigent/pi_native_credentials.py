@@ -53,7 +53,10 @@ from omnigent.onboarding.provider_config import (
 from omnigent.pi_model_compatibility import (
     SYSTEM_AI_RESPONSES_KEYWORDS,
     DatabricksPiSurface,
+    PiModelEntry,
     databricks_pi_surface_for_model,
+    enrich_databricks_model_catalog,
+    pi_model_json_entry,
     unsupported_in_pi,
 )
 from omnigent.runtime.credentials.databricks import resolve_databricks_workspace
@@ -112,10 +115,9 @@ _DATABRICKS_AI_GATEWAY_LABEL = DATABRICKS_AI_GATEWAY_LABEL
 _is_databricks_ai_gateway_url = is_databricks_ai_gateway_url
 
 
-class _PiModelEntry(TypedDict):
-    id: str
-    input: NotRequired[list[str]]
-    reasoning: NotRequired[bool]
+# Declared in pi_model_compatibility so the harness and interactive paths
+# render byte-identical entries.
+_PiModelEntry: TypeAlias = PiModelEntry
 
 
 class _PiProviderCompat(TypedDict):
@@ -354,6 +356,29 @@ class PiProviderConfig:
         )
 
 
+# DATABRICKS-PATCH(pi-live-model-discovery)
+def _default_claude_model_from(entries: list[_PiModelEntry]) -> str | None:
+    """Pick pi's launch model from the workspace's live Claude entries.
+
+    ``_fetch_pi_model_lists`` reads Unity Catalog model services, so the servable
+    ``system.ai.*`` ids are in hand; without this the launch fell back to the
+    bundled MLflow catalog, whose legacy ``databricks-`` ids the gateway now
+    answers with ``501 … Use Unity Catalog model services (v3)``.
+
+    :param entries: Live Claude entries, e.g. ``[{"id": "system.ai.claude-opus-5"}]``.
+    :returns: The best servable id, or ``None`` when the listing was empty.
+    """
+    from omnigent.databricks_model_discovery import _natural_model_key
+
+    ids = [str(e["id"]) for e in entries if e.get("id")]
+    # The precedence claude-native falls back to; newest within a tier.
+    for tier in ("opus", "sonnet", "haiku", "fable"):
+        matches = [i for i in ids if tier in i.lower()]
+        if matches:
+            return max(matches, key=_natural_model_key)
+    return ids[0] if ids else None
+
+
 def _databricks_pi_provider(entry: ProviderEntry, *, model: str | None) -> PiProviderConfig | None:
     """Resolve a Databricks-profile provider into Pi gateway config.
 
@@ -422,7 +447,11 @@ def _databricks_pi_provider(entry: ProviderEntry, *, model: str | None) -> PiPro
         provider_id=_PI_PROVIDER_ID,
         base_url=f"{host}{_DATABRICKS_ANTHROPIC_GATEWAY_PATH}",
         api="anthropic-messages",
-        model=model or model_catalog.resolve_catalog_model("databricks", family="claude").model_id,
+        # DATABRICKS-PATCH(pi-live-model-discovery): prefer what the workspace
+        # actually serves (fetched above) over the bundled catalog.
+        model=model
+        or _default_claude_model_from(claude_models)
+        or model_catalog.resolve_catalog_model("databricks", family="claude").model_id,
         # Pi resolves a "!command" apiKey at request time, so the gateway
         # bearer token is re-read per request (the auth command attempts a
         # refresh), matching codex-native's refresh semantics.
@@ -560,14 +589,25 @@ def _fetch_pi_model_lists(
     completions: list[_PiModelEntry] = []
     gemini: list[_PiModelEntry] = []
 
+    # The model-service listing reports availability but no token limits; the
+    # MLflow catalog reports limits but not what this workspace serves. Merge
+    # them, or Pi falls back to its 128000/16384 defaults and silently truncates
+    # the 1M-context gateway models. Best-effort: a catalog outage just means
+    # the limits are omitted, exactly as before.
+    try:
+        models = enrich_databricks_model_catalog(
+            models, model_catalog.catalog_model_entries("databricks")
+        )
+    except Exception:  # noqa: BLE001 — live availability remains authoritative
+        _LOGGER.info(
+            "pi-native: could not enrich the live Databricks model list with MLflow metadata",
+            exc_info=True,
+        )
+
     for model in models:
         name = model.id
         name_lower = name.lower()
-        entry: _PiModelEntry = {"id": name, "input": ["text", "image"]}
-        # DeepSeek streams on reasoning_content; needs reasoning:true so Pi reads
-        # from that channel. GLM/kimi/inkling now use Responses API, not needed.
-        if "deepseek" in name_lower:
-            entry["reasoning"] = True
+        entry: _PiModelEntry = pi_model_json_entry(model)
         needs_responses = ModelWireAPI.OPENAI_RESPONSES in model.metadata.wire_apis or any(
             keyword in name_lower for keyword in SYSTEM_AI_RESPONSES_KEYWORDS
         )

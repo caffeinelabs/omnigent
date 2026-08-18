@@ -45,6 +45,7 @@ from omnigent.runtime.harnesses.process_manager import (
     _default_tmp_parent,
     _pid_alive,
     _pids_holding_socket,
+    _socket_path,
     _SubprocessEntry,
 )
 
@@ -333,7 +334,7 @@ async def test_release_terminates_subprocess(
         # Capture the subprocess PID via the introspection endpoint;
         # if release worked, the PID won't be alive after.
         pid = (await client.get("/pid")).json()["pid"]
-        socket_path = manager.instance_dir / "conv-conv_a.sock"
+        socket_path = _socket_path(manager.instance_dir, "conv_a")
         assert socket_path.exists()
         await manager.release("conv_a")
         # Socket cleanup is part of release's contract — leaving
@@ -616,7 +617,7 @@ async def test_idle_reaper_releases_stale_entries(
         # No HTTP ping: with idle_timeout_s=0.0 the reaper can fire during an
         # inline HTTP call and yank the client mid-request. Socket-existence
         # loop below is the real "entry was reaped" assertion.
-        socket_path = fast.instance_dir / "conv-conv_a.sock"
+        socket_path = _socket_path(fast.instance_dir, "conv_a")
         assert socket_path.exists()
         # Wait long enough for the 2s idle window plus multiple
         # reaper passes. A 0s timeout races with subprocess startup
@@ -663,7 +664,7 @@ async def test_idle_reaper_survives_release_error(
     await fast.start()
     try:
         await fast.get_client("conv_a", _TEST_HARNESS_NAME)
-        socket_path = fast.instance_dir / "conv-conv_a.sock"
+        socket_path = _socket_path(fast.instance_dir, "conv_a")
         assert socket_path.exists()
 
         # Make the first reaper-triggered release raise, then defer to the
@@ -721,7 +722,7 @@ async def test_idle_reaper_skips_in_flight_turn(
     await fast.start()
     try:
         await fast.get_client("conv_a", _TEST_HARNESS_NAME)
-        socket_path = fast.instance_dir / "conv-conv_a.sock"
+        socket_path = _socket_path(fast.instance_dir, "conv_a")
         assert socket_path.exists()
         # Mark the turn live, as the runner does on ``response.created``.
         fast.mark_in_flight("conv_a", "resp_x")
@@ -858,7 +859,7 @@ async def test_idle_reaper_disabled_when_timeout_zero(
     await fast.start()
     try:
         await fast.get_client("conv_a", _TEST_HARNESS_NAME)
-        socket_path = fast.instance_dir / "conv-conv_a.sock"
+        socket_path = _socket_path(fast.instance_dir, "conv_a")
         assert socket_path.exists()
         # ~20 reaper passes at 0.05 s. With the bug the socket is gone almost
         # immediately; with the guard it survives because reaping is disabled.
