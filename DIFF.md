@@ -33,13 +33,16 @@ upstream take it), **Lifetime** (permanent fork delta / until upstream lands X).
 
 ### Host image: all-harness runner image (goose + jcode baked, jcode profile, config_map_mounts)
 
-- **What:** `deploy/docker/Dockerfile` (+ `Dockerfile.ubi`) bake the goose CLI
-  (pinned, per-arch sha256-verified) and jcode (pinned via its checksummed
-  installer) into the host image next to upstream's npm-installed
-  claude/codex/pi; `/opt/jcode` baked profile with symlinks into
-  `/mnt/config/jcode` + `mcp-remote` for jcode's stdio-only MCP client;
-  `deploy/docker/preview-jcode/jcode-agent.yaml` seeded via
-  `OMNIGENT_BUILTIN_AGENT_DIRS`. `omnigent/acp_cli_harnesses.py` adds the
+- **What:** `deploy/docker/Dockerfile` (+ `Dockerfile.ubi`) bake goose and
+  jcode into the host image via upstream's `EXTRA_HARNESS_CLIS` mechanism
+  (omnigent-ai/omnigent#4148: `deploy/docker/install-harness-cli.sh`, the
+  ARG/COPY/RUN block, bzip2, and README sections are carried verbatim);
+  the fork delta in those files is only the non-empty ARG default
+  `goose@1.46.0 jcode@0.77.1`. Fork-only on top: `/opt/jcode` baked profile
+  with symlinks into `/mnt/config/jcode` + `mcp-remote` for jcode's
+  stdio-only MCP client; `deploy/docker/preview-jcode/jcode-agent.yaml`
+  seeded via `OMNIGENT_BUILTIN_AGENT_DIRS`.
+  `omnigent/acp_cli_harnesses.py` adds the
   `jcode` ACP catalog row with an `omnigent_mcp` opt-out (jcode rejects
   `mcpServers` in `session/new`; MCP is configured via `~/.jcode/mcp.json`),
   threaded through `omnigent/runtime/workflow.py` as
@@ -52,10 +55,14 @@ upstream take it), **Lifetime** (permanent fork delta / until upstream lands X).
   HOME, so jcode's provider/MCP config must come from a baked profile plus a
   cluster-mounted ConfigMap.
 - **Upstreamable:** `config_map_mounts` and the `omnigent_mcp` row field are
-  generic and upstreamable; the image bakes and seeded jcode agent are
-  deployment-specific (jcode is our own harness, not upstream's set).
+  generic and upstreamable; the CLI baking itself is upstreamed as #4148
+  (assumed merged before this lands on develop — the verbatim copies here
+  then collapse to zero diff on the next upstream sync); the ARG default,
+  `/opt/jcode` wiring, and seeded jcode agent are deployment-specific (jcode
+  is our own harness, not upstream's set).
 - **Lifetime:** until upstream takes `config_map_mounts` + the ACP row field;
-  the image/jcode-agent parts are permanent fork deltas.
+  the ARG default, `/opt/jcode` wiring, and jcode-agent parts are permanent
+  fork deltas.
 
 ### Docs: VM harness setup guide
 

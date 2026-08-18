@@ -41,6 +41,16 @@
 #   docker build -t omnigent-host:latest --target host \
 #                -f deploy/docker/Dockerfile .
 #
+# To bake extra harness CLIs into a host image beyond the default set — by
+# harness name, whether the CLI ships on npm or via a vendor installer:
+#
+#   docker build -t omnigent-host:latest --target host \
+#                -f deploy/docker/Dockerfile \
+#                --build-arg EXTRA_HARNESS_CLIS="goose jcode opencode" .
+#
+# (See deploy/docker/install-harness-cli.sh for the supported names, optional
+# NAME@VERSION pins, and the npm:<pkg-spec> escape hatch.)
+#
 # Behind corporate package proxies (the host target also installs the
 # harness CLIs from npm, so it needs the npm proxy too):
 #
@@ -208,9 +218,11 @@ ENV PYTHONUNBUFFERED=1 \
     PATH="/opt/venv/bin:${PATH}" \
     IS_SANDBOX=1
 
+# bzip2 extracts goose's .tar.bz2 release archive when EXTRA_HARNESS_CLIS
+# includes goose (see install-harness-cli.sh).
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
-      git tmux procps lsof bubblewrap curl ca-certificates unzip \
+      git tmux procps lsof bubblewrap curl ca-certificates unzip bzip2 \
       iproute2 nftables \
  && rm -rf /var/lib/apt/lists/*
 
@@ -336,35 +348,39 @@ RUN set -eu; \
     fi; \
     echo "agy ${AGY_VERSION} pinned (sha256 verified)"
 
-# jcode (`jcode acp` ACP harness) — not an npm package. Its installer
-# verifies the release's own sha256 checksums and pins via JCODE_VERSION
-# (unlike the kiro/agy bootstrappers), so no separate sha256 args here.
-# The bootstrapper's ~/.local/bin/jcode is a shim that execs the real
-# jcode-linux-<arch>.bin under ~/.jcode/builds; install that binary itself
-# onto a system PATH dir every sandbox user shares and assert the version. Keep in sync with
-# deploy/docker/Dockerfile.ubi. To adopt a new jcode: bump JCODE_VERSION.
-ARG JCODE_VERSION=0.77.1
-RUN set -eu; \
-    curl -fsSL -o /tmp/jcode-install.sh https://jcode.sh/install; \
-    JCODE_VERSION="v${JCODE_VERSION}" DO_NOT_TRACK=1 bash /tmp/jcode-install.sh; \
-    bin="$(find /root/.jcode/builds/versions -maxdepth 2 -type f -name 'jcode-linux-*.bin' | head -n1)"; \
-    [ -n "$bin" ] || { echo "ERROR: jcode binary not found under /root/.jcode/builds" >&2; exit 1; }; \
-    install -m 0755 "$bin" /usr/local/bin/jcode; \
-    rm -rf /tmp/jcode-install.sh /root/.jcode /root/.local/bin/jcode; \
-    installed="$(/usr/local/bin/jcode --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"; \
-    [ "$installed" = "$JCODE_VERSION" ] || { \
-      echo "ERROR: jcode reports '${installed:-<none>}', expected '$JCODE_VERSION'." >&2; exit 1; }; \
-    echo "jcode ${JCODE_VERSION} pinned (installer-verified sha256)"
+# Optional additional harness CLIs for a downstream deployment that wants a
+# harness beyond the pre-baked set above, without forking this Dockerfile —
+# including CLIs that don't ship on npm (goose, jcode). The pre-baked set has
+# grown one harness at a time with no shared policy yet for what ships by
+# default, so this sidesteps that question entirely rather than expanding it.
+# Space-separate entries; each is a harness name with an optional @version
+# pin (e.g. "goose jcode@0.75.5 opencode") resolved by
+# deploy/docker/install-harness-cli.sh, or npm:<pkg-spec> for a package with
+# no row there yet. Mirrors the OMNIGENT_EXTRAS pattern used for optional
+# Python extras above. Kept after the pinned installs so iterating on the
+# script doesn't bust their layers. `set -f` disables pathname expansion for
+# the unquoted expansion below, so an entry containing a shell glob character
+# (*, ?, []) reaches the script literally instead of matching files in the
+# build context.
+# Fork delta (see DIFF.md): upstream defaults this ARG to empty; the fork
+# pins goose + jcode for its sandbox deployment.
+ARG EXTRA_HARNESS_CLIS="goose@1.46.0 jcode@0.77.1"
+COPY deploy/docker/install-harness-cli.sh /tmp/install-harness-cli.sh
+RUN if [ -n "${EXTRA_HARNESS_CLIS}" ]; then \
+        set -f; \
+        bash /tmp/install-harness-cli.sh ${EXTRA_HARNESS_CLIS}; \
+    fi
 
 # jcode harness wiring for k8s runner pods. Pods mount a writable emptyDir
-# over HOME, so a baked ~/.jcode never survives; instead the image bakes an
-# empty jcode home at /opt/jcode plus symlinks into /mnt/config/jcode, where
-# the deployment mounts its cluster-specific jcode config (profile, provider
-# env file, MCP registry) via config_map_mounts. Activated via
-# JCODE_HOME=/opt/jcode. Chowned to the sandbox user (1000660000) so jcode
-# can write session state when pods run non-root. jcode's MCP client is
-# stdio-only, so mcp-remote bridges it to a gateway /mcp endpoint. Dangling
-# symlinks read as "no config" where nothing is mounted.
+# over HOME, so a baked ~/.jcode never survives; instead the image points
+# JCODE_HOME at /opt/jcode — where install-harness-cli.sh already placed
+# jcode's builds — plus symlinks into /mnt/config/jcode, where the
+# deployment mounts its cluster-specific jcode config (profile, provider
+# env file, MCP registry) via config_map_mounts. Chowned to the sandbox
+# user (1000660000) so jcode can write session state when pods run
+# non-root. jcode's MCP client is stdio-only, so mcp-remote bridges it to
+# a gateway /mcp endpoint. Dangling symlinks read as "no config" where
+# nothing is mounted.
 RUN install -d /opt/jcode/config/jcode \
  && chown -R 1000660000:1000660000 /opt/jcode \
  && npm install -g --no-audit --no-fund mcp-remote@0.1.38 \
@@ -372,37 +388,6 @@ RUN install -d /opt/jcode/config/jcode \
  && ln -s /mnt/config/jcode/config.toml /opt/jcode/config.toml \
  && ln -s /mnt/config/jcode/provider-bifrost.env /opt/jcode/config/jcode/provider-bifrost.env \
  && ln -s /mnt/config/jcode/mcp.json /opt/jcode/mcp.json
-
-# goose CLI (goose-native harness) — not an npm package. The GitHub release
-# ships a CLI-only tarball (a single `goose` binary) per arch; fetch the
-# pinned version's immutable asset, verify its sha256, and assert the binary
-# reports the pinned version — the same supply-chain shape as kiro-cli / agy
-# above. Provider/model/MCP come from goose's own config or GOOSE_* /
-# OPENAI_* env (the goose-native harness owns no provider config), so the
-# image only needs the binary. To adopt a new goose: bump GOOSE_VERSION +
-# both SHA256s (release assets under
-# https://github.com/block/goose/releases). Keep in sync with
-# deploy/docker/Dockerfile.ubi.
-ARG GOOSE_VERSION=1.46.0
-ARG GOOSE_SHA256_AMD64=23f0f37717406cc13bb55232f68932e152eec596643d26a92f9b21410bce4331
-ARG GOOSE_SHA256_ARM64=e8c071ef75c1d8d036b3c4a791fb2be9e700f61a43e686c581e027b93e97dccf
-RUN set -eu; \
-    arch="$(dpkg --print-architecture)"; \
-    case "$arch" in \
-      amd64) asset="goose-x86_64-unknown-linux-gnu.tar.gz";  sha="$GOOSE_SHA256_AMD64" ;; \
-      arm64) asset="goose-aarch64-unknown-linux-gnu.tar.gz"; sha="$GOOSE_SHA256_ARM64" ;; \
-      *) echo "ERROR: unsupported arch '$arch' for goose" >&2; exit 1 ;; \
-    esac; \
-    curl -fsSL -o /tmp/goose.tar.gz "https://github.com/block/goose/releases/download/v${GOOSE_VERSION}/${asset}"; \
-    echo "${sha}  /tmp/goose.tar.gz" | sha256sum -c -; \
-    mkdir -p /tmp/goose-pkg; \
-    tar -xzf /tmp/goose.tar.gz -C /tmp/goose-pkg; \
-    install -m 0755 /tmp/goose-pkg/goose /usr/local/bin/goose; \
-    rm -rf /tmp/goose-pkg /tmp/goose.tar.gz; \
-    installed="$(/usr/local/bin/goose --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"; \
-    [ "$installed" = "$GOOSE_VERSION" ] || { \
-      echo "ERROR: goose reports '${installed:-<none>}', expected '$GOOSE_VERSION'." >&2; exit 1; }; \
-    echo "goose ${GOOSE_VERSION} pinned (sha256 verified)"
 
 # Copy the venv and source tree. The editable install's .pth files reference
 # /build/omnigent and /build/sdks/* -- both denied by the k8s Landlock LSM
