@@ -131,6 +131,24 @@ def test_fake_row_login_command() -> None:
     assert _FAKE_ROW.binary == "fakecli"
 
 
+def test_spawn_env_mirrors_row_omnigent_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Rows that opt out of MCP injection must propagate that to the wrap.
+
+    A vendor CLI that rejects ``session/new`` mcpServers (jcode) fails every
+    session if the Omnigent MCP server is advertised, so the row flag has to
+    reach ``HARNESS_ACP_OMNIGENT_MCP`` rather than relying on the wrap's
+    default-on.
+    """
+    no_mcp_row = dataclasses.replace(_FAKE_ROW, omnigent_mcp=False)
+    monkeypatch.setitem(ACP_CLI_HARNESSES, "fakecli", no_mcp_row)
+    env = _build_acp_cli_spawn_env(_spec("fakecli"), harness="fakecli")
+    assert env["HARNESS_ACP_OMNIGENT_MCP"] == "0"
+
+    monkeypatch.setitem(ACP_CLI_HARNESSES, "fakecli", _FAKE_ROW)
+    env = _build_acp_cli_spawn_env(_spec("fakecli"), harness="fakecli")
+    assert env["HARNESS_ACP_OMNIGENT_MCP"] == "1"
+
+
 # ---------------------------------------------------------------------------
 # Per-row registration (parametrized over the real catalog)
 # ---------------------------------------------------------------------------
@@ -156,6 +174,10 @@ def test_catalog_row_is_fully_registered(name: str) -> None:
     assert steps
     if row.login_command is not None and row.install.package is not None:
         assert any(step.command == row.login_command for step in steps)
+    # `omni setup` renders a row per catalog entry and needs somewhere to point a
+    # user who hasn't installed the CLI. Without one the row would say "Not
+    # installed" with no way to fix it.
+    assert row.install.install_hint or row.install.package
 
 
 @pytest.mark.parametrize("name", sorted(ACP_CLI_HARNESSES))
@@ -168,3 +190,50 @@ def test_catalog_row_spawn_env_builds(name: str) -> None:
     if row.args:
         assert argv[-len(row.args) :] == list(row.args)
     assert env["HARNESS_ACP_NAME"] == row.label
+    assert env["HARNESS_ACP_OMNIGENT_MCP"] == ("1" if row.omnigent_mcp else "0")
+
+
+# ---------------------------------------------------------------------------
+# `omni setup` drill-in
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("name", sorted(ACP_CLI_HARNESSES))
+def test_setup_drill_in_names_install_and_login(
+    name: str,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """
+    Selecting a builtin ACP row in ``omni setup`` names how to install and sign in.
+
+    These rows own their auth and install out-of-band, so the drill-in is the only
+    place a user learns the two commands. Without it the row is a dead end — which
+    is what shipped before: ``grok`` was addressable via ``--harness grok`` but
+    absent from setup entirely, making a builtin *less* discoverable than a
+    user-configured ``acp:`` entry.
+
+    **What breaks if this fails**: a user picks the harness in setup and is told
+    nothing about how to make it work.
+    """
+    from omnigent import cli_config
+
+    row = ACP_CLI_HARNESSES[name]
+    # Force the "not installed" branch so the install hint has to be shown.
+    monkeypatch.setattr("omnigent._platform.resolve_cli_binary", lambda _binary: None)
+    cli_config._show_acp_cli_harness(name)
+
+    out = capsys.readouterr().out
+    assert row.label in out
+    assert (row.install.install_hint or row.binary) in out
+    if row.login_command:
+        assert row.login_command in out
+    # Tells the user how to actually launch it.
+    assert f"--harness {name}" in out
+
+
+def test_setup_drill_in_ignores_unknown_row() -> None:
+    """A stale key (concurrent config change) must not raise."""
+    from omnigent import cli_config
+
+    cli_config._show_acp_cli_harness("definitely-not-a-row")
