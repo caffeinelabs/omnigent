@@ -304,6 +304,20 @@ def _build_routing(
     return _build_local_llm_routing_client(server_llm), settings
 
 
+def _capability_provider(
+    sandbox_config: Any,  # type: ignore[explicit-any]  # ManagedSandboxDeployment | None
+) -> str | None:
+    """Provider name the boot log should report.
+
+    ``ManagedSandboxDeployment`` wraps one or more provider configs and has
+    no ``.provider``. The default config does. Reading the wrapper crashes
+    after ``create_app`` already succeeded.
+    """
+    if sandbox_config is None or not sandbox_config.managed_launch_supported:
+        return None
+    return sandbox_config.default.provider
+
+
 def build_app(resolved_config: _ResolvedConfig | None = None) -> _BuiltApp:
     """Resolve config if needed, wire the stores, and build the app.
 
@@ -456,7 +470,7 @@ def build_app(resolved_config: _ResolvedConfig | None = None) -> _BuiltApp:
     logger.info(
         "Capabilities: managed_sandboxes=%s provider=%s github_app=%s sshpiper_host=%s",
         managed,
-        sandbox_config.provider if managed else None,
+        _capability_provider(sandbox_config),
         github_config is not None and github_store is not None,
         sshpiper_config.host if sshpiper_config is not None else None,
     )

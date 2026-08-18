@@ -185,3 +185,23 @@ def test_build_routing_defaults_without_a_routing_block() -> None:
     client, settings = _build_routing({}, None)
     assert client is None
     assert settings == RoutingSettings()
+
+
+def test_capability_provider_reads_default_not_wrapper() -> None:
+    """The boot log must not read ``.provider`` on ManagedSandboxDeployment.
+
+    After the #60 merge that type wraps provider configs and has no
+    ``.provider``. The leftover Docker entrypoint log crashed staging
+    after ``create_app`` already succeeded.
+    """
+    from deploy.docker.entrypoint import _capability_provider
+    from omnigent.server.managed_hosts import parse_sandbox_config
+
+    cfg = parse_sandbox_config(
+        {"provider": "kubernetes", "server_url": "http://s.svc.cluster.local"}
+    )
+    assert cfg is not None
+    with pytest.raises(AttributeError):
+        _ = cfg.provider
+    assert _capability_provider(cfg) == "kubernetes"
+    assert _capability_provider(None) is None

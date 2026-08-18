@@ -18,6 +18,23 @@ ledgered below newest-first:
 
 ## Entries
 
+### Docker entrypoint leftover `.provider` after #60 (hotfix)
+
+- **What:** `deploy/docker/entrypoint.py` still logged
+  `sandbox_config.provider` after `create_app` succeeded. #60 wrapped
+  that object as `ManagedSandboxDeployment`, which has no `.provider`
+  (use `.default.provider`). Staging boot then died with
+  `AttributeError` after migrations. Read the default via
+  `_capability_provider` and cover it in
+  `tests/deploy/test_docker_entrypoint_import.py`.
+- **Why:** #58 published `staging-abdfd0d` on a tree that already had
+  the #60 wrap; the leftover log line was not in the harness-bundle
+  port review surface.
+- **Upstreamable:** n/a (staging-only leftover). Develop's entrypoint
+  already uses `.default.provider` via `/v1/info`.
+- **Lifetime:** until the next staging sync that carries a develop
+  entrypoint rewrite.
+
 ### Host image + server: all-harness runner bundle (ported from feat-harness-bundle)
 
 - **What:** A port of caffeinelabs/omnigent#57 (`feat-harness-bundle` →
