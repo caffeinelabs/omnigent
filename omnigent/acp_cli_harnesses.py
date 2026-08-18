@@ -50,12 +50,15 @@ class AcpCliHarness:
         ``session/new``. Some vendor CLIs reject ``mcpServers`` over ACP and
         configure MCP out of band (e.g. jcode reads ``~/.jcode/mcp.json``);
         set ``False`` for those so the server isn't advertised.
+    :param env_passthrough: Environment variable names the otherwise
+        deny-by-default ACP subprocess may inherit.
     """
 
     install: HarnessInstallSpec
     args: tuple[str, ...]
     aliases: tuple[str, ...] = ()
     omnigent_mcp: bool = True
+    env_passthrough: tuple[str, ...] = ()
 
     @property
     def label(self) -> str:
@@ -78,6 +81,30 @@ class AcpCliHarness:
 # Keyed by canonical harness id. Keep keys sorted; each row's registrations
 # derive from here (see the module docstring for the full list).
 ACP_CLI_HARNESSES: dict[str, AcpCliHarness] = {
+    # DeepSeek Harness official runtime, exposed over ACP by the Apache-2.0
+    # OpenMA adapter (dsh-acp). Official @deepseek-ai/dsh-acp is too thin
+    # (fresh sessions only, no MCP/tools/usage). Auth and model stay with
+    # the adapter (dsh-acp login or DEEPSEEK_API_KEY / DEEPSEEK_BASE_URL).
+    "deepseek": AcpCliHarness(
+        install=HarnessInstallSpec(
+            "DeepSeek Harness",
+            "dsh-acp",
+            "@openma/deepseek-harness-acp",
+            login_args=("login",),
+            auth_hint="run `dsh-acp login` or set DEEPSEEK_API_KEY",
+            min_version="0.4.6",
+        ),
+        args=(),
+        aliases=("deepseek-harness", "dsh"),
+        env_passthrough=(
+            "DEEPSEEK_API_KEY",
+            "DEEPSEEK_BASE_URL",
+            "DSH_HOME",
+            "DSH_PATH",
+            "DSH_MODEL",
+            "DSH_PROVIDER",
+        ),
+    ),
     # Grok Build (xAI's ``grok`` CLI) drives ``grok agent stdio``. Ships via a
     # curl installer (not npm) and authenticates through its own ``grok login``
     # (xAI OAuth, device-code capable) or ``XAI_API_KEY``; Omnigent stores no

@@ -65,7 +65,8 @@
 
 # Must satisfy pyproject requires-python (>=3.12); 3.11 fails dependency resolution.
 ARG PYTHON_VERSION=3.12
-ARG NODE_VERSION=22
+# 22.19: dsh-acp needs Node >= 22.15 (node:zlib createZstdDecompress).
+ARG NODE_VERSION=22.19
 
 # ── Web UI builder ──────────────────────────────────────
 # Builds the web SPA so `docker build` works from a clean checkout —
@@ -364,7 +365,7 @@ RUN set -eu; \
 # build context.
 # Fork delta (see DIFF.md): upstream defaults this ARG to empty; the fork
 # pins goose + jcode for its sandbox deployment.
-ARG EXTRA_HARNESS_CLIS="goose@1.46.0 jcode@0.77.1"
+ARG EXTRA_HARNESS_CLIS="goose@1.46.0 jcode@0.77.1 deepseek@0.4.14"
 COPY deploy/docker/install-harness-cli.sh /tmp/install-harness-cli.sh
 RUN if [ -n "${EXTRA_HARNESS_CLIS}" ]; then \
         set -f; \
@@ -441,7 +442,8 @@ WORKDIR /app
 # Kept off /etc/omnigent: deployments mount their config ConfigMap there,
 # which would shadow the baked file.
 COPY deploy/docker/preview-jcode/jcode-agent.yaml /opt/omnigent/agents/jcode.yaml
-ENV OMNIGENT_BUILTIN_AGENT_DIRS=/opt/omnigent/agents/jcode.yaml
+COPY deploy/docker/preview-jcode/deepseek-agent.yaml /opt/omnigent/agents/deepseek.yaml
+ENV OMNIGENT_BUILTIN_AGENT_DIRS=/opt/omnigent/agents/jcode.yaml:/opt/omnigent/agents/deepseek.yaml
 
 # /data is mounted as a persistent volume by docker-compose for the
 # artifact store.

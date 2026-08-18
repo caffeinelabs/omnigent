@@ -131,6 +131,37 @@ def test_fake_row_login_command() -> None:
     assert _FAKE_ROW.binary == "fakecli"
 
 
+def test_deepseek_row_matches_published_acp_adapter() -> None:
+    """Pin the OpenMA adapter package, empty ACP argv, and Bifrost env allowlist."""
+    row = ACP_CLI_HARNESSES["deepseek"]
+
+    assert row.install.package == "@openma/deepseek-harness-acp"
+    assert row.install.min_version == "0.4.6"
+    assert row.binary == "dsh-acp"
+    assert row.args == ()
+    assert row.login_command == "dsh-acp login"
+    assert row.aliases == ("deepseek-harness", "dsh")
+    assert row.env_passthrough == (
+        "DEEPSEEK_API_KEY",
+        "DEEPSEEK_BASE_URL",
+        "DSH_HOME",
+        "DSH_PATH",
+        "DSH_MODEL",
+        "DSH_PROVIDER",
+    )
+    env = _build_acp_cli_spawn_env(_spec("deepseek"), harness="deepseek")
+    assert env["HARNESS_ACP_ENV_PASSTHROUGH"] == ",".join(row.env_passthrough)
+
+
+def test_grok_row_keeps_deny_by_default_environment() -> None:
+    """Rows without an allowlist must not emit the passthrough escape hatch."""
+    row = ACP_CLI_HARNESSES["grok"]
+
+    assert row.env_passthrough == ()
+    env = _build_acp_cli_spawn_env(_spec("grok"), harness="grok")
+    assert "HARNESS_ACP_ENV_PASSTHROUGH" not in env
+
+
 def test_spawn_env_mirrors_row_omnigent_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
     """Rows that opt out of MCP injection must propagate that to the wrap.
 

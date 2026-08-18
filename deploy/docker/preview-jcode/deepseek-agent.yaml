@@ -1,0 +1,36 @@
+name: deepseek
+description: >-
+  DeepSeek Harness (dsh-acp) — official @deepseek-ai/dsh runtime driven through
+  the OpenMA ACP adapter. Provider, model, and auth come from DEEPSEEK_* /
+  DSH_* env (or `dsh-acp login`); Omnigent stores no credential.
+executor:
+  harness: deepseek
+
+prompt: |
+  You are DeepSeek Harness, running inside Omnigent via its ACP adapter. Help
+  the user with software engineering tasks — read files, edit code, run tests,
+  and explain your reasoning. Keep responses concise and prefer showing diffs
+  or commands over describing them in prose.
+
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none
+    env_passthrough:
+      - DEEPSEEK_API_KEY
+      - DEEPSEEK_BASE_URL
+      - DSH_HOME
+      - DSH_PATH
+      - DSH_MODEL
+      - DSH_PROVIDER
+
+terminals:
+  bash:
+    command: bash
+    allow_cwd_override: true
+    os_env:
+      type: caller_process
+      cwd: .
+      sandbox:
+        type: none

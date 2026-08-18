@@ -150,7 +150,7 @@ RUN set -eu; \
 # rationale in deploy/docker/Dockerfile — keep in sync.
 # Fork delta (see DIFF.md): upstream defaults this ARG to empty; the fork
 # pins goose + jcode for its sandbox deployment.
-ARG EXTRA_HARNESS_CLIS="goose@1.46.0 jcode@0.77.1"
+ARG EXTRA_HARNESS_CLIS="goose@1.46.0 jcode@0.77.1 deepseek@0.4.14"
 COPY deploy/docker/install-harness-cli.sh /tmp/install-harness-cli.sh
 RUN if [ -n "${EXTRA_HARNESS_CLIS}" ]; then \
         set -f; \

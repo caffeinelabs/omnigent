@@ -44,6 +44,9 @@
 #   cursor    → vendor installer (cursor.com/install) — always fetches the
 #               latest agent build, so VERSION pins are rejected
 #   kimi      → vendor installer (code.kimi.com/kimi-code/install.sh)
+#   deepseek  → npm @openma/deepseek-harness-acp (binary dsh-acp). Needs
+#               Node >= 22.15 (createZstdDecompress). Official
+#               @deepseek-ai/dsh-acp is too thin for Omnigent.
 #
 # hermes is deliberately NOT a row: it requires Node >= 26 at runtime (its
 # installer self-installs a managed Node into the installing user's
@@ -192,6 +195,7 @@ for spec in "$@"; do
             install_cursor
             ;;
         kimi)     install_kimi "$version" ;;
+        deepseek) install_npm "@openma/deepseek-harness-acp${version:+@$version}" dsh-acp ;;
         hermes)
             die "hermes needs Node >= 26 at runtime and the host image ships Node 22 — its installer's managed Node lands in the build user's home. Raise the image's Node baseline first; no EXTRA_HARNESS_CLIS row until then" ;;
         claude)   die "claude ships in the host image by default (unpinned npm install) — pin a different version via the npm: escape hatch: npm:@anthropic-ai/claude-code@<version>" ;;
@@ -200,6 +204,6 @@ for spec in "$@"; do
         kiro | kiro-cli | agy | antigravity)
             die "$name ships in the host image by default, version-pinned via Dockerfile build ARGs (KIRO_CLI_VERSION / AGY_VERSION) — override with --build-arg instead" ;;
         *)
-            die "unknown harness CLI '$name' — supported names: opencode, qwen, goose, jcode, cursor, kimi (or npm:<pkg-spec> for a package with no row)" ;;
+            die "unknown harness CLI '$name' — supported names: opencode, qwen, goose, jcode, cursor, kimi, deepseek (or npm:<pkg-spec> for a package with no row)" ;;
     esac
 done
