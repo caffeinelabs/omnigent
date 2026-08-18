@@ -27,3 +27,12 @@ exclude-newer = "P7D"
 # - nimble-python: the verified Agent API V2 1.2 contract release, required by
 #   nimble_research for typed run fields. Drop once it has aged past P7D.
 exclude-newer-package = { cwsandbox = "2026-06-12T00:00:00Z", google-antigravity = "2026-06-12T00:00:00Z", cryptography = "2026-06-26T00:00:00Z", pydantic-settings = "2026-06-26T00:00:00Z", nimble-python = "2026-07-29T00:00:00Z" }
+
+# Security floor: GHSA-7gwp-5pfp-969j (critical SSRF in mlflow webhook
+# delivery via unvalidated HTTP redirect; fixed in 3.15.0). mlflow is a
+# transitive dep via databricks-mcp / databricks-ai-bridge.
+constraint-dependencies = [
+    "mlflow>=3.15.0",
+    "mlflow-skinny>=3.15.0",
+    "mlflow-tracing>=3.15.0",
+]
