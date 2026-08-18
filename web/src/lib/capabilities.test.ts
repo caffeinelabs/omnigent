@@ -26,6 +26,7 @@ function info(overrides: Partial<ServerInfo>): ServerInfo {
     server_version: null,
     smart_routing_enabled: false,
     smart_routing_sources: { external: false, oss: false },
+    github_app_enabled: false,
     features: {},
     harness_install_enabled: false,
     installable_harnesses: [],
