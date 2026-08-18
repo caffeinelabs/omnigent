@@ -99,8 +99,12 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
-          ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
+          # Default ref: merge commit on pull_request, triggering ref otherwise.
+          # Do not express refs/pull/*/merge here — CodeQL treats that as
+          # untrusted checkout on schedule/dispatch even though the ternary
+          # is dead on those events.
           fetch-depth: 0
+          persist-credentials: false
       - name: Run compat smoke (Config 1)
         uses: ./.github/actions/compat-smoke-run
         with:
@@ -116,8 +120,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
-          ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
           fetch-depth: 0
+          persist-credentials: false
       - name: Run compat smoke (Config 2)
         uses: ./.github/actions/compat-smoke-run
         with:
@@ -133,8 +137,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
-          ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
           fetch-depth: 0
+          persist-credentials: false
       - name: Run UI compat smoke (Config A)
         uses: ./.github/actions/compat-smoke-ui-run
         with:
@@ -150,8 +154,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
-          ref: ${{ github.event.pull_request.number && format('refs/pull/{0}/merge', github.event.pull_request.number) || github.ref }}
           fetch-depth: 0
+          persist-credentials: false
       - name: Run UI compat smoke (Config B)
         uses: ./.github/actions/compat-smoke-ui-run
         with:
@@ -207,8 +211,8 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
           # fetch-depth 0 so the action can `git worktree add` the old tags.
-          ref: ${{ github.ref }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Run e2e suite for this cell
         uses: ./.github/actions/e2e-run
@@ -241,8 +245,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
-          ref: ${{ github.ref }}
           fetch-depth: 0
+          persist-credentials: false
 
       - name: Run integration suite for this cell
         uses: ./.github/actions/integration-run
@@ -292,8 +296,8 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0  # v7.0.0
         with:
-          ref: ${{ github.ref }}
           fetch-depth: 0
+          persist-credentials: false
       - name: Run e2e-ui suite for this cell
         uses: ./.github/actions/compat-smoke-ui-run
         with:
