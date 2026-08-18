@@ -13,6 +13,8 @@ ciphertext.
 
 from __future__ import annotations
 
+from typing import Protocol, cast
+
 from sqlalchemy import delete, select
 
 from omnigent.db.db_models import SqlGithubConnection, current_workspace_id
@@ -20,6 +22,10 @@ from omnigent.db.utils import get_or_create_engine, make_managed_session_maker, 
 from omnigent.entities import GithubConnection
 from omnigent.server.github_app import GitHubTokenSet
 from omnigent.server.secretbox import SecretBox
+
+
+class _RowCountResult(Protocol):
+    rowcount: int
 
 
 class GithubConnectionStore:
@@ -155,11 +161,14 @@ class GithubConnectionStore:
         :returns: ``True`` when a row was deleted.
         """
         with self._session() as session:
-            result = session.execute(
-                delete(SqlGithubConnection).where(
-                    SqlGithubConnection.workspace_id == current_workspace_id(),
-                    SqlGithubConnection.user_id == user_id,
-                )
+            result = cast(
+                _RowCountResult,
+                session.execute(
+                    delete(SqlGithubConnection).where(
+                        SqlGithubConnection.workspace_id == current_workspace_id(),
+                        SqlGithubConnection.user_id == user_id,
+                    )
+                ),
             )
             return result.rowcount > 0
 

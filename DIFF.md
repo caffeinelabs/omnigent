@@ -34,9 +34,9 @@ ledgered below newest-first:
   (`omnigent/cli_config.py`). `omnigent/server/managed_hosts.py` +
   `omnigent/onboarding/sandboxes/kubernetes.py` add
   `sandbox.kubernetes.config_map_mounts` with the
-  `OMNIGENT_KUBERNETES_CONFIG_MAP_MOUNTS` JSON env fallback — adapted to
-  staging's pre-`ManagedSandboxDeployment` parse shape (no `.default`
-  unwrap in the tests).
+  `OMNIGENT_KUBERNETES_CONFIG_MAP_MOUNTS` JSON env fallback. After #60
+  brought `ManagedSandboxDeployment`, the tests unwrap `.default` like
+  the rest of the file.
 - **Why:** The staging deployment (clusters/caffeine-sandbox/omnigent in
   caffeinelabs/infra) runs managed k8s sandboxes; one runner image should
   launch claude, codex, pi, goose, and jcode with zero per-pod setup.
@@ -47,6 +47,18 @@ ledgered below newest-first:
 - **Lifetime:** until staging syncs a develop that contains #57. Resolve
   conflicts in favor of the develop versions — they are the same changes
   integrated with the newer base.
+
+### CI restore: merge fork `main` into `staging` (PR #60)
+
+- **What:** `f55ae0034` merged fork `main` into `staging` so lint / e2e-ui /
+  web-tests use `./.github/actions/setup-pnpm` again (the old
+  `setup-node` local action was deleted upstream). Also brings Devin as a
+  third builtin ACP CLI row. This harness-bundle branch rebases the
+  `omni setup` overview tests onto three ACP rows (Devin, Grok Build,
+  Jcode) instead of two.
+- **Why:** Staging CI was failing at "Set up Node 20" before any test ran.
+- **Upstreamable:** n/a (fork workflow restore).
+- **Lifetime:** until staging's workflows stay in sync with fork `main`.
 
 ### GitHub App sandbox auth + per-user identity (PR #1, follow-ups)
 
