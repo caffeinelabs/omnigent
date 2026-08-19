@@ -172,8 +172,7 @@ jobs:
 
       - name: Install dependencies
         if: steps.creds.outputs.available == 'true'
-        # The tools-less triage agent emits JSON; no repository checks run.
-        run: uv sync --extra all
+        run: uv sync --extra all --extra dev
 
       - name: Install Claude Code CLI
         if: steps.creds.outputs.available == 'true'
