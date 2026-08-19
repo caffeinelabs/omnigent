@@ -1,6 +1,7 @@
 import type * as UseTerminalsModule from "@/hooks/useTerminals";
 import type * as UseChildSessionsModule from "@/hooks/useChildSessions";
 import type * as UseSessionModule from "@/hooks/useSession";
+import type * as UseConversationsModule from "@/hooks/useConversations";
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
@@ -19,8 +20,13 @@ import { CapabilitiesProvider } from "@/lib/CapabilitiesContext";
 import { writeSessionWorkspaceState } from "@/lib/sessionWorkspaceState";
 import { writeWorkspacePanelDefault } from "@/lib/workspacePanelPreferences";
 
-vi.mock("@/hooks/useConversations", () => ({
+vi.mock("@/hooks/useConversations", async (importOriginal) => ({
+  // Keep the real module (PROJECT_LABEL_KEY, the mutation hooks) — only the
+  // list/projects queries the header + sidebar read are replaced. useProjects
+  // returns an empty set so the breadcrumb resolves no project folder.
+  ...(await importOriginal<typeof UseConversationsModule>()),
   useConversations: vi.fn(),
+  useProjects: vi.fn(() => ({ data: [] })),
 }));
 
 vi.mock("@/hooks/useTerminals", async (importOriginal) => ({
@@ -164,9 +170,6 @@ vi.mock("@/components/blocks/TerminalView", () => ({
   TerminalView: ({ terminalId }: { terminalId: string }) => (
     <div data-testid="terminal-view-stub">{terminalId}</div>
   ),
-}));
-vi.mock("./TodoPanel", () => ({
-  TodoPanel: () => <div data-testid="todo-panel" />,
 }));
 vi.mock("./FilesPanelDrawer", () => ({
   FilesPanelDrawer: ({ open, flatView }: { open: boolean; flatView: boolean }) => (
@@ -361,6 +364,7 @@ function serverInfo(overrides: Partial<ServerInfo> = {}): ServerInfo {
     sshpiper_host: null,
     sshpiper_port: null,
     sshpiper_user: null,
+    features: {},
     harness_install_enabled: false,
     installable_harnesses: [],
     dictation_available: false,
@@ -432,6 +436,7 @@ function mockConversations(
     labels?: Record<string, string>;
     host_id?: string | null;
     runner_id?: string | null;
+    workspace?: string | null;
   }[],
 ) {
   useConvMock.mockReturnValue({
@@ -448,6 +453,7 @@ function mockConversations(
             permission_level: c.permission_level,
             host_id: c.host_id ?? null,
             runner_id: c.runner_id ?? null,
+            workspace: c.workspace ?? null,
           })),
           first_id: null,
           last_id: null,
@@ -513,12 +519,9 @@ beforeEach(() => {
   // choice carries across sessions. Clear it so a stored preference from one
   // test can't change another test's default scope.
   localStorage.clear();
-  // The Tasks tab/drawer gates on chatStore.todos; reset so a populated
-  // todo list from one test doesn't leak into the next.
   // Reset terminal-first startup signals so one test's terminalPending /
   // failed status can't leak into another's terminalStartingUp.
   useChatStore.setState({
-    todos: [],
     terminalPending: false,
     sessionStatus: "idle",
     status: "idle",
@@ -1409,6 +1412,7 @@ describe("Subagents tab", () => {
       {
         id: "conv_child_a",
         title: "researcher:auth",
+        task_summary: null,
         tool: "researcher",
         session_name: "auth",
         current_task_status: "completed" as const,
@@ -1504,6 +1508,7 @@ describe("Subagents tab", () => {
         {
           id: "conv_child_a",
           title: "researcher:auth",
+          task_summary: null,
           tool: "researcher",
           session_name: "auth",
           current_task_status: "completed",
@@ -1514,6 +1519,7 @@ describe("Subagents tab", () => {
         {
           id: "conv_child_b",
           title: "frontend_engineer:rail",
+          task_summary: null,
           tool: "frontend_engineer",
           session_name: "rail",
           current_task_status: "in_progress",
@@ -1548,6 +1554,7 @@ describe("Subagents tab", () => {
         {
           id: "conv_child_a",
           title: "researcher:auth",
+          task_summary: null,
           tool: "researcher",
           session_name: "auth",
           current_task_status: "completed",
@@ -1558,6 +1565,7 @@ describe("Subagents tab", () => {
         {
           id: "conv_child_b",
           title: "researcher:api",
+          task_summary: null,
           tool: "researcher",
           session_name: "api",
           current_task_status: "completed",
@@ -1781,6 +1789,7 @@ describe("Subagents tab", () => {
         {
           id: "conv_child_a",
           title: "researcher:auth",
+          task_summary: null,
           tool: "researcher",
           session_name: "auth",
           current_task_status: "completed",
@@ -1828,6 +1837,7 @@ describe("Subagents tab", () => {
         {
           id: "conv_child_a",
           title: "researcher:auth",
+          task_summary: null,
           tool: "researcher",
           session_name: "auth",
           current_task_status: "completed",
@@ -1838,6 +1848,7 @@ describe("Subagents tab", () => {
         {
           id: "conv_child_b",
           title: "researcher:api",
+          task_summary: null,
           tool: "researcher",
           session_name: "api",
           current_task_status: "in_progress",
@@ -1903,6 +1914,7 @@ describe("Subagents tab", () => {
         {
           id: "conv_child_a",
           title: "researcher:auth",
+          task_summary: null,
           tool: "researcher",
           session_name: "auth",
           current_task_status: "completed",
@@ -1913,6 +1925,7 @@ describe("Subagents tab", () => {
         {
           id: "conv_child_b",
           title: "researcher:api",
+          task_summary: null,
           tool: "researcher",
           session_name: "api",
           current_task_status: "completed",
@@ -1949,6 +1962,7 @@ describe("Subagents tab", () => {
         {
           id: "conv_child",
           title: "researcher:auth",
+          task_summary: null,
           tool: "researcher",
           session_name: "auth",
           current_task_status: "in_progress",
@@ -1994,6 +2008,45 @@ describe("Subagents tab", () => {
     expect(screen.getByRole("tab", { name: /Agents/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Files/i })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /Shells/i })).toBeInTheDocument();
+  });
+
+  it("keeps the back-to-parent header link when the parent title is unresolved", () => {
+    // Parent is outside the loaded sidebar window and its snapshot has no
+    // title yet. The header used to hide the whole breadcrumb (and the only
+    // in-header climb-out) until a title resolved. The parent id is enough.
+    mockConversations([]);
+    useSessionMock.mockImplementation((id) => {
+      if (id === "conv_child") {
+        return {
+          session: {
+            id: "conv_child",
+            agentId: "ag_child",
+            agentName: null,
+            runnerId: null,
+            status: "idle",
+            createdAt: 0,
+            title: null,
+            labels: {},
+            items: [],
+            pendingElicitations: [],
+            permissionLevel: 4,
+            parentSessionId: "conv_parent",
+            subAgentName: null,
+            kind: "sub_agent",
+          },
+          isLoading: false,
+          error: null,
+        };
+      }
+      return { session: null, isLoading: false, error: null };
+    });
+
+    renderShell("/c/conv_child");
+
+    expect(screen.getByRole("link", { name: "Back to parent session" })).toHaveAttribute(
+      "href",
+      "/c/conv_parent",
+    );
   });
 });
 
@@ -2079,19 +2132,17 @@ describe("Right workspace card visibility", () => {
     const panelWidth = Number.parseFloat(panel.style.width);
     const headerGroup = panel.parentElement;
     expect(headerGroup?.querySelector("header")).not.toBeNull();
-    expect(headerGroup?.style.getPropertyValue("--workspace-panel-offset")).toBe(
-      `${panelWidth + 16}px`,
-    );
+    expect(headerGroup?.style.getPropertyValue("--workspace-panel-offset")).toBe(`${panelWidth}px`);
 
     fireEvent.click(screen.getByRole("button", { name: "Collapse right panel" }));
     expect(headerGroup?.style.getPropertyValue("--workspace-panel-offset")).toBe("0px");
   });
 
   it("keeps the card mounted with Agents as the only tab for a minimal agent", () => {
-    // A no-os_env agent (available: false) with no shells and no todos
+    // A no-os_env agent (available: false) with no shells
     // still has the unconditional Agents tab (the panel lists at least
     // the main agent), so the card mounts, the Agents tab is selected
-    // by the fallback, and Files/Shells/Tasks are absent. An unmounted
+    // by the fallback, and Files/Shells are absent. An unmounted
     // card here means the always-visible Agents rule regressed.
     useEnvironmentMock.mockReturnValue({
       data: { available: false, root: null, home: null },
@@ -2504,7 +2555,7 @@ describe("AppShell URL sync — file param", () => {
   });
 
   it("restores the file viewer into the desktop rail on a ?file= reload", () => {
-    // Regression (E2E reload-persistence): the Subagents/Terminals/Todos
+    // Regression (E2E reload-persistence): the Subagents/Terminals
     // panels are checked before the file viewer in the rail content
     // precedence. A ?file= reload must pull the rail to Files so the inline
     // viewer renders instead of another panel shadowing it.
@@ -2867,6 +2918,7 @@ describe("Mobile session menu", () => {
         {
           id: "conv_child_a",
           title: "researcher:auth",
+          task_summary: null,
           tool: "researcher",
           session_name: "auth",
           current_task_status: "completed",
@@ -2878,25 +2930,17 @@ describe("Mobile session menu", () => {
       isLoading: false,
       error: null,
     });
-    useChatStore.setState({
-      todos: [
-        { content: "do a thing", status: "completed", activeForm: "doing a thing" },
-        { content: "do another", status: "pending", activeForm: "doing another" },
-      ],
-    });
-
     renderShell("/c/conv_native");
     openSessionMenu();
 
     // Mirror of the desktop rail's tab strip for a native-wrapper session:
-    // Files · Agents · Tasks. Shells is absent because the only terminal is
+    // Files · Agents. Shells is absent because the only terminal is
     // the vendor pane (the pill's Terminal view — excluded from the shell
     // inventory) and the mocked agent declares no terminals. An unexpected
     // Shells entry means the vendor pane leaked into the inventory.
     expect(screen.getByRole("menuitem", { name: /^Files$/i })).toBeInTheDocument();
     expect(screen.queryByRole("menuitem", { name: /Shells/i })).toBeNull();
     expect(screen.getByRole("menuitem", { name: /Agents/i })).toBeInTheDocument();
-    expect(screen.getByRole("menuitem", { name: /Tasks/i })).toBeInTheDocument();
   });
 
   it("keeps the Terminals entry in terminal-first SDK sessions (no native wrapper)", () => {
@@ -2973,6 +3017,7 @@ describe("Mobile session menu", () => {
         {
           id: "conv_child_a",
           title: "researcher:auth",
+          task_summary: null,
           tool: "researcher",
           session_name: "auth",
           current_task_status: "in_progress",
@@ -3046,67 +3091,8 @@ describe("Mobile session menu", () => {
     expect(drawer).toHaveAttribute("data-flat-view", "true");
   });
 
-  it("opens the Tasks drawer for a claude-native session with todos", () => {
-    useEnvironmentMock.mockReturnValue({
-      data: { available: true, root: null },
-      isLoading: false,
-    } as unknown as ReturnType<typeof useWorkspaceEnvironment>);
-    mockConversations([
-      {
-        id: "conv_native",
-        permission_level: null,
-        labels: { "omnigent.wrapper": "claude-code-native-ui" },
-      },
-    ]);
-    useChatStore.setState({
-      todos: [{ content: "build the thing", status: "in_progress", activeForm: "building" }],
-    });
-
-    renderShell("/c/conv_native");
-
-    expect(screen.getByTestId("todos-panel-drawer")).toHaveAttribute("data-state", "closed");
-    expect(screen.queryByTestId("todo-panel")).toBeNull();
-
-    openSessionMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /Tasks/i }));
-
-    // Failure: openTodosPanel didn't set todosPanelOpen, or the Tasks entry
-    // was gated out despite isClaudeNative + a non-empty todo list.
-    expect(screen.getByTestId("todos-panel-drawer")).toHaveAttribute("data-state", "open");
-    expect(screen.getByTestId("todo-panel")).toBeInTheDocument();
-  });
-
-  it.each([
-    ["codex-native", "conv_codex", "codex-native-ui"],
-    ["pi-native", "conv_pi", "pi-native-ui"],
-  ])("opens the Tasks drawer for a %s session with todos", (_harness, id, wrapper) => {
-    useEnvironmentMock.mockReturnValue({
-      data: { available: true, root: null },
-      isLoading: false,
-    } as unknown as ReturnType<typeof useWorkspaceEnvironment>);
-    mockConversations([
-      {
-        id,
-        permission_level: null,
-        labels: { "omnigent.wrapper": wrapper },
-      },
-    ]);
-    useChatStore.setState({
-      todos: [{ content: "Locate CLI parser", status: "in_progress", activeForm: "Locating" }],
-    });
-
-    renderShell(`/c/${id}`);
-    expect(screen.getByTestId("todos-panel-drawer")).toHaveAttribute("data-state", "closed");
-
-    openSessionMenu();
-    fireEvent.click(screen.getByRole("menuitem", { name: /Tasks/i }));
-
-    expect(screen.getByTestId("todos-panel-drawer")).toHaveAttribute("data-state", "open");
-    expect(screen.getByTestId("todo-panel")).toBeInTheDocument();
-  });
-
   it("keeps the FAB with only the Agents entry for a minimal agent", () => {
-    // available:false → no files; no shells, no todos, no debug. The
+    // available:false → no files; no shells, no debug. The
     // Agents entry is unconditional (badge = 1, the main agent), so the
     // FAB still renders with exactly that entry. A missing FAB means
     // the always-visible Agents rule regressed on mobile.
@@ -3143,9 +3129,10 @@ describe("AppShell clone/fork action", () => {
     expect(screen.getByTestId("fork-probe")).toHaveAttribute("data-can-fork", "true");
   });
 
-  it("reports canFork=false on a sub-agent (child) session", () => {
-    // The server rejects forking a sub-agent session, so the affordance is
-    // suppressed for children (parentSessionId set on the snapshot).
+  it("exposes canFork on a sub-agent (child) session", () => {
+    // Forking a child is how it gets promoted to a top-level session, so the
+    // affordance must reach children too — they never appear in the sidebar
+    // list, so the loaded snapshot is the only signal the session exists.
     mockConversations([]); // sidebar omits child rows
     useSessionMock.mockReturnValue({
       session: {
@@ -3170,8 +3157,8 @@ describe("AppShell clone/fork action", () => {
 
     renderShell("/c/conv_child");
 
-    // The per-message fork action hides itself off this flag.
-    expect(screen.getByTestId("fork-probe")).toHaveAttribute("data-can-fork", "false");
+    // The per-message fork action shows itself off this flag.
+    expect(screen.getByTestId("fork-probe")).toHaveAttribute("data-can-fork", "true");
   });
 
   it("opens the fork dialog (name suggested from the source title) when clicked", () => {
@@ -3210,6 +3197,47 @@ describe("AppShell clone/fork action", () => {
     const nameInput = screen.getByTestId("fork-session-title-input");
     expect(nameInput).toHaveValue("");
     expect(nameInput).toHaveAttribute("placeholder", "Fork of Auth refactor");
+  });
+
+  it("offers host + directory when forking a child, taken from its parent", () => {
+    // A sub-agent records no workspace or host of its own, so without the
+    // parent's the dialog drops to its no-directory mode and the promoted
+    // session lands unbound — a different, smaller dialog than every other
+    // session's fork.
+    mockConversations([
+      { id: "conv_parent", permission_level: 4, host_id: "host_a", workspace: "/repo" },
+    ]);
+    useSessionMock.mockReturnValue({
+      session: {
+        id: "conv_child",
+        agentId: "ag_x",
+        agentName: null,
+        runnerId: null,
+        status: "idle",
+        createdAt: 0,
+        title: null,
+        labels: {},
+        items: [],
+        pendingElicitations: [],
+        permissionLevel: 4,
+        parentSessionId: "conv_parent",
+        subAgentName: null,
+        kind: "sub_agent",
+        workspace: null,
+        hostId: null,
+      },
+      isLoading: false,
+      error: null,
+    });
+
+    renderShell("/c/conv_child");
+    fireEvent.click(screen.getByTestId("fork-probe-open"));
+
+    const dialog = screen.getByTestId("fork-session-dialog");
+    expect(within(dialog).getByText("Host")).toBeInTheDocument();
+    // "Clone" alone is the no-directory form: the fork would be created
+    // unbound instead of started on a host.
+    expect(within(dialog).getByRole("button", { name: "Clone & start" })).toBeInTheDocument();
   });
 });
 

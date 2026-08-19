@@ -1,7 +1,8 @@
 import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { Outlet, useParams, useSearchParams } from "@/lib/routing";
-import { useConversations } from "@/hooks/useConversations";
+import { PROJECT_LABEL_KEY, useConversations, useProjects } from "@/hooks/useConversations";
+import { conversationDisplayLabel, UNTITLED_CONVERSATION_LABEL } from "./sidebarNav";
 import { useSessionAgent } from "@/hooks/useAgents";
 import { useApproveHotkey } from "@/hooks/useApproveHotkey";
 import { useSidebarToggleHotkeys } from "@/hooks/useSidebarToggleHotkeys";
@@ -91,7 +92,6 @@ import {
   type TerminalFirstContextValue,
 } from "./TerminalFirstContext";
 import { TerminalsPanel } from "./TerminalsPanel";
-import { TodoPanel } from "./TodoPanel";
 import { PermissionsModal } from "@/components/PermissionsModal";
 import { KeyboardShortcutsDialog } from "@/components/KeyboardShortcutsDialog";
 import { CommandPalette } from "./CommandPalette";
@@ -307,7 +307,6 @@ export function AppShell() {
   // on a phone they open as full-screen overlays from the session-menu FAB.
   const [subagentsPanelOpen, setSubagentsPanelOpen] = useState(false);
   const [shellsPanelOpen, setShellsPanelOpen] = useState(false);
-  const [todosPanelOpen, setTodosPanelOpen] = useState(false);
   // The right "Workspace" rail (WorkspacePanel) remembers its open/closed
   // state per session. A brand-new session (no saved `open`) follows the
   // Appearance "Workspace panel" default; reopening a session restores how
@@ -418,20 +417,56 @@ export function AppShell() {
   const sessionLabels = { ...activeConv?.labels, ...activeSession?.labels };
   const terminalFirst = sessionLabels["omnigent.ui"] === "terminal";
   const isClaudeNative = sessionLabels["omnigent.wrapper"] === "claude-code-native-ui";
-  const todos = useChatStore((s) => s.todos);
-  // The session.todos contract is harness-agnostic; show Tasks when it has data.
-  const todosSupported = todos.length > 0;
   // Native-CLI wrapper of either family. Keys harness behavior gates
   // (composer slash commands, `/model`); terminal-first SDK sessions
   // (embedded Omnigent REPL terminal) have NO wrapper label and must
   // keep regular chat behavior. See TerminalFirstContext.tsx.
   const isNativeWrapper = isNativeWrapperLabel(sessionLabels["omnigent.wrapper"]);
-  const todosCompleted = todos.filter((t) => t.status === "completed").length;
   // Used for the header "Back to parent" link, which is hidden on
   // top-level sessions. The Subagents tab itself is always visible —
   // it lists the root's children plus a "main" entry, so the user
   // can move between siblings and back to the parent from one place.
   const isChildSession = activeSession?.parentSessionId != null;
+  // A sub-agent runs in its parent's working directory but records no
+  // host/workspace of its own (the parent owns the tmux pane), which would drop
+  // the fork dialog into its no-directory mode. The parent's sidebar row backs
+  // the child's missing values so promoting a child offers the same host +
+  // directory choices as forking any other session.
+  const parentConv = useMemo(
+    () => allConversations?.find((c) => c.id === activeSession?.parentSessionId) ?? null,
+    [allConversations, activeSession?.parentSessionId],
+  );
+  // ── Header breadcrumb ─────────────────────────────────────────────────
+  // The chat header shows the conversation's title, prefixed by a folder icon
+  // when the session is filed under a project, and with the sub-agent identity
+  // appended when viewing a child. Title + project come from the active
+  // conversation normally, or its immediate parent when inside a sub-agent
+  // (whose own row the sidebar omits, so its title falls back to the parent
+  // snapshot). The parent title also links back out, replacing the old "Back"
+  // button. A child always gets a title (fallback "New session") so that
+  // climb-out does not wait on the parent row or snapshot. Prefer a real
+  // list/snapshot title over conversationDisplayLabel — that helper's
+  // "New session" fallback would otherwise shadow a titled snapshot.
+  // Project membership lives only on the list row (`Conversation`), never
+  // the snapshot, so a parent outside the loaded window shows no folder.
+  const { session: parentSession } = useSession(activeSession?.parentSessionId);
+  const { data: projectSummaries } = useProjects();
+  const breadcrumbConv = isChildSession ? parentConv : activeConv;
+  const headerConversationTitle =
+    breadcrumbConv?.title ||
+    (isChildSession ? parentSession?.title : activeSession?.title) ||
+    (breadcrumbConv ? conversationDisplayLabel(breadcrumbConv) : null) ||
+    (isChildSession ? UNTITLED_CONVERSATION_LABEL : null);
+  const headerProjectName =
+    (breadcrumbConv?.project_id != null
+      ? projectSummaries?.find((p) => p.id === breadcrumbConv.project_id)?.name
+      : undefined) ??
+    breadcrumbConv?.labels?.[PROJECT_LABEL_KEY] ??
+    null;
+  const headerTitleLinkTo =
+    isChildSession && activeSession?.parentSessionId
+      ? `/c/${activeSession.parentSessionId}`
+      : undefined;
   // Positive "this is a top-level session" signal for the top-level-only
   // actions (Share/Clone). Gating those on ``!isChildSession`` flickered:
   // while the snapshot loads ``activeSession`` is null, so ``isChildSession``
@@ -471,11 +506,16 @@ export function AppShell() {
     : isCurrentServerLocal()
       ? "Sharing is unavailable from a local server."
       : "Sharing has been disabled for this Omnigent server.";
-  // Any viewer can fork a shared session; top-level only (the server
-  // rejects forking a sub-agent). Surfaced as ForkDialogContext.canFork —
-  // the per-message "Fork from here" action is the only fork entry point.
+  // Any viewer can fork a shared session, sub-agents included — forking a
+  // child is how it gets promoted to a top-level session of its own. Gated on
+  // knowing which the session is (sidebar row or loaded snapshot) so the
+  // affordance doesn't flicker in before that resolves. Surfaced as
+  // ForkDialogContext.canFork — the per-message "Fork from here" action is
+  // the only fork entry point.
   const canClone =
-    !!conversationId && isKnownTopLevel && (permissionLevel === null || permissionLevel >= 1);
+    !!conversationId &&
+    (isKnownTopLevel || isChildSession) &&
+    (permissionLevel === null || permissionLevel >= 1);
   // Agent tools/policies exist to show.
   const hasAgentInfo = !!conversationId && agentHasInfo(boundAgent, conversationId);
   // Whether the mobile three-dot menu has any entry to offer.
@@ -594,24 +634,23 @@ export function AppShell() {
         // ``railTerminals`` starts empty while the agent loads, so native
         // sessions don't flash the tab.
         terminals: !hideTerminalsTab && railTerminals.length > 0,
-        todos: todosSupported && todos.length > 0,
       }) as const,
-    [showFilesPanel, hideTerminalsTab, railTerminals.length, todosSupported, todos.length],
+    [showFilesPanel, hideTerminalsTab, railTerminals.length],
   );
   // Whether the rail has anything at all to show. When false the workspace
   // card doesn't mount and the header hides its collapse toggle — a
-  // no-filesystem agent with no terminals/sub-agents/todos would otherwise
+  // no-filesystem agent with no terminals/sub-agents would otherwise
   // render an empty white card with no way to dismiss it.
   const hasRailContent = Object.values(railTabsAvailable).some(Boolean);
   // Keep the selected tab valid. When the current tab disappears — files
   // panel turns off, or the Shells tab hides (native wrapper / no shell
   // and no shell access) — fall back to the first still-visible tab in
-  // display order (Files · Changes · Agents · Shells · Tasks · Browser). Picking
+  // display order (Files · Changes · Agents · Shells · Browser). Picking
   // the first available (rather than ping-ponging between two effects) keeps
   // this convergent even when several tabs vanish at once.
   useEffect(() => {
     if (railTabsAvailable[rightRailTab]) return;
-    const next = (["files", "changes", "subagents", "terminals", "todos", "browser"] as const).find(
+    const next = (["files", "changes", "subagents", "terminals", "browser"] as const).find(
       (t) => railTabsAvailable[t],
     );
     if (next) setRightRailTab(next);
@@ -775,7 +814,6 @@ export function AppShell() {
     setFilesPanelOpen(false);
     setSubagentsPanelOpen(false);
     setShellsPanelOpen(false);
-    setTodosPanelOpen(false);
     setFilesPanelShowHidden(true);
     if (!conversationId) {
       // No session → no rail; false (not the open default) so rail-gated
@@ -826,7 +864,7 @@ export function AppShell() {
       return false;
     });
     // A selected file must be visible in the rail. The Files and Changes tabs
-    // both surface the inline viewer; the Agents/Todos/Terminals tabs don't, so
+    // both surface the inline viewer; the Agents/Terminals tabs don't, so
     // pull the rail to Files unless it's already on a files scope.
     if (nextSelected && nextTab !== "files" && nextTab !== "changes") {
       nextTab = "files";
@@ -898,13 +936,10 @@ export function AppShell() {
       setExecutionLogsKey(null); // close execution-logs panel
       setFilesPanelOpen(false); // close files drawer so the viewer is unobscured
       setSubagentsPanelOpen(false); // close mobile agents drawer
-      setTodosPanelOpen(false); // close mobile tasks drawer
       // Pull the rail to the Files tab when parked on a tab where the viewer
-      // won't render (Terminals, Subagents, Todos). The Files tab surfaces the
+      // won't render (Terminals, Subagents). The Files tab surfaces the
       // FileViewer inline, so leave it undisturbed.
-      setRightRailTab((prev) =>
-        prev === "terminals" || prev === "subagents" || prev === "todos" ? "files" : prev,
-      );
+      setRightRailTab((prev) => (prev === "terminals" || prev === "subagents" ? "files" : prev));
       // Reveal the rail so the viewer is actually visible — a session the user
       // collapsed (or one that started collapsed via the Appearance default)
       // would otherwise route the file into an invisible panel. Persist
@@ -1211,7 +1246,6 @@ export function AppShell() {
     setFilesPanelOpen(false); // close files drawer
     setSubagentsPanelOpen(false); // close mobile agents drawer
     setShellsPanelOpen(false); // close mobile shells drawer
-    setTodosPanelOpen(false); // close mobile tasks drawer
     setPanelInitialKey(key);
   }
 
@@ -1231,7 +1265,6 @@ export function AppShell() {
       setFilesPanelOpen(false);
       setSubagentsPanelOpen(false);
       setShellsPanelOpen(false);
-      setTodosPanelOpen(false);
       setRightPanelOpen(true);
       if (conversationId) writeSessionWorkspaceState(conversationId, { open: true });
     },
@@ -1279,7 +1312,6 @@ export function AppShell() {
     setFilesPanelOpen(false); // close files drawer
     setSubagentsPanelOpen(false); // close mobile agents drawer
     setShellsPanelOpen(false); // close mobile shells drawer
-    setTodosPanelOpen(false); // close mobile tasks drawer
     setExecutionLogsKey(key);
   }
 
@@ -1292,7 +1324,6 @@ export function AppShell() {
     setExecutionLogsKey(null); // close execution-logs panel
     setSubagentsPanelOpen(false); // close mobile agents drawer
     setShellsPanelOpen(false); // close mobile shells drawer
-    setTodosPanelOpen(false); // close mobile tasks drawer
     setFilesDrawerFlatView(flatView);
     setFilesPanelOpen(true);
   }
@@ -1308,7 +1339,6 @@ export function AppShell() {
     setExecutionLogsKey(null); // close execution-logs panel
     setFilesPanelOpen(false); // close files drawer
     setShellsPanelOpen(false); // close mobile shells drawer
-    setTodosPanelOpen(false); // close mobile tasks drawer
     setSubagentsPanelOpen(true);
   }
 
@@ -1322,21 +1352,7 @@ export function AppShell() {
     setExecutionLogsKey(null); // close execution-logs panel
     setFilesPanelOpen(false); // close files drawer
     setSubagentsPanelOpen(false); // close mobile agents drawer
-    setTodosPanelOpen(false); // close mobile tasks drawer
     setShellsPanelOpen(true);
-  }
-
-  // Mobile FAB → "Tasks" opens the todo list (the desktop rail's Tasks tab)
-  // as a full-screen drawer.
-  function openTodosPanel() {
-    setSelectedFilePath(null); // close file viewer
-    clearFileViewerUrl();
-    setPanelInitialKey(null); // close terminals panel
-    setExecutionLogsKey(null); // close execution-logs panel
-    setFilesPanelOpen(false); // close files drawer
-    setSubagentsPanelOpen(false); // close mobile agents drawer
-    setShellsPanelOpen(false); // close mobile shells drawer
-    setTodosPanelOpen(true);
   }
 
   function openMainExecutionLog() {
@@ -1527,7 +1543,13 @@ export function AppShell() {
             {isMacElectronShell() && !inSettings && (
               <div className="electron-sidebar-header-actions">
                 <SidebarHeaderActions
-                  expanded={sidebarOpen || sidebarPeek}
+                  // Real docked state — NOT `|| sidebarPeek`. During a peek the
+                  // sidebar isn't pinned open, and `onToggle` below pins it open
+                  // (the else branch, since sidebarOpen is false), so the button
+                  // must read "Open" and expand. Counting peek as expanded made
+                  // it show "Collapse" while a click actually expanded — the
+                  // icon/tooltip lied until the sidebar was really open.
+                  expanded={sidebarOpen}
                   onToggle={() => {
                     // Mirrors the ⌘⌥[ hotkey: a peeking sidebar counts as open,
                     // so toggling from peek pins it open rather than collapsing.
@@ -1589,13 +1611,21 @@ export function AppShell() {
                 style={
                   {
                     "--workspace-panel-offset": workspacePanelVisible
-                      ? `${inlinePanelWidth + 16}px`
+                      ? `${inlinePanelWidth}px`
                       : "0px",
                   } as CSSProperties
                 }
               >
                 <ChatHeader
-                  sidebarOpen={sidebarOpen || sidebarPeek}
+                  // Real docked state — deliberately NOT `|| sidebarPeek`. Peek
+                  // is a transient card floating over the collapsed layout (the
+                  // docked sidebar stays w-0), so the header must keep its
+                  // collapsed left slot. Treating peek as open relaid it out —
+                  // the toggle unmounted and the breadcrumb slid left into its
+                  // spot — shifting the title sideways the instant the peek card
+                  // appeared. Left collapsed, the breadcrumb stays put beneath
+                  // the floating card (and in the title-bar strip on mac).
+                  sidebarOpen={sidebarOpen}
                   onOpenSidebar={(peek?: boolean) => {
                     if (peek) {
                       setSidebarPeek(true);
@@ -1606,8 +1636,10 @@ export function AppShell() {
                     }
                   }}
                   isChildSession={isChildSession}
-                  parentSessionId={activeSession?.parentSessionId}
                   conversationId={conversationId}
+                  conversationTitle={headerConversationTitle}
+                  projectName={headerProjectName}
+                  titleLinkTo={headerTitleLinkTo}
                   boundAgent={boundAgent}
                   wrapperLabel={wrapperLabel}
                   canShare={canShare}
@@ -1629,7 +1661,6 @@ export function AppShell() {
                     filesPanelOpen,
                     subagentsPanelOpen,
                     shellsPanelOpen,
-                    todosPanelOpen,
                     hideTerminalsTab,
                     // Mobile: reachable when a shell exists OR the agent
                     // declares shell access (so the drawer's "+ New shell" row
@@ -1638,9 +1669,6 @@ export function AppShell() {
                     showShellsTab:
                       !hideTerminalsTab && (railTerminals.length > 0 || agentSupportsShells),
                     terminalsLength: railTerminals.length,
-                    todosSupported,
-                    todosCompleted,
-                    todosTotal: todos.length,
                     debugMode,
                     changedCount,
                     subagentsWorking,
@@ -1649,7 +1677,6 @@ export function AppShell() {
                     onOpenChanges: openChangesPanel,
                     onOpenShells: openShellsPanel,
                     onOpenSubagents: openSubagentsPanel,
-                    onOpenTodos: openTodosPanel,
                     onOpenMainExecutionLog: openMainExecutionLog,
                   }}
                 />
@@ -1696,9 +1723,6 @@ export function AppShell() {
                     terminalsLength={railTerminals.length}
                     subagentsWorking={subagentsWorking}
                     agentCount={agentCount}
-                    todosSupported={todosSupported}
-                    todosCompleted={todosCompleted}
-                    todosTotal={todos.length}
                     rootSessionId={rootSessionId}
                     selectedFilePath={selectedFilePath}
                     openFiles={openFiles}
@@ -1789,16 +1813,6 @@ export function AppShell() {
                   />
                 </MobilePanelDrawer>
               )}
-              {conversationId && (
-                <MobilePanelDrawer
-                  open={todosPanelOpen}
-                  title="Tasks"
-                  onClose={() => setTodosPanelOpen(false)}
-                  testId="todos-panel-drawer"
-                >
-                  <TodoPanel frameless />
-                </MobilePanelDrawer>
-              )}
               {/* Mobile-only push panel — on desktop the viewer lives inside the inline aside. */}
               {conversationId && selectedFilePath !== null && (
                 <div className="md:hidden">
@@ -1829,8 +1843,8 @@ export function AppShell() {
               key={`fork-session-dialog-${conversationId}`}
               sourceSessionId={conversationId}
               sourceTitle={activeSession?.title}
-              sourceWorkspace={activeSession?.workspace}
-              sourceHostId={activeSession?.hostId}
+              sourceWorkspace={activeSession?.workspace ?? parentConv?.workspace}
+              sourceHostId={activeSession?.hostId ?? parentConv?.host_id}
               sourceGitBranch={activeSession?.gitBranch}
               upToResponseId={forkUpToResponseId}
               open={forkOpen}

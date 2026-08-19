@@ -34,6 +34,7 @@ def test_check_version_in_range() -> None:
     # 1.18.x is now accepted (required for remote streamable-HTTP MCP servers).
     check_opencode_version("1.18.0")
     check_opencode_version("1.18.13")
+    check_opencode_version("1.18.16")
 
 
 @pytest.mark.parametrize("version", ["1.16.0", "1.19.0", "2.0.0"])
