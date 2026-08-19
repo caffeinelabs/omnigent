@@ -1661,3 +1661,231 @@ def test_keychain_credential_ref_degrades_not_crashes(
     assert listing.source == "none"
     assert not listing.models
     assert listing.note, "degraded keychain row must carry an explanatory note"
+
+
+def test_openai_compatible_listing_keeps_display_names(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """OpenAI-compatible listings preserve provider ``name`` as display_name.
+
+    :param monkeypatch: Pytest monkeypatch fixture.
+    :param tmp_path: Per-test temp dir.
+    """
+    monkeypatch.setenv("GW_KEY", "sk-test")
+    _isolate_config(
+        monkeypatch,
+        tmp_path,
+        "providers:\n"
+        "  bifrost:\n"
+        "    kind: gateway\n"
+        "    default: true\n"
+        "    openai:\n"
+        "      base_url: https://bifrost.example/v1\n"
+        "      api_key: $GW_KEY\n"
+        "      wire_api: chat\n"
+        "      models:\n"
+        "        default: moonshotai/Kimi-K2.6\n",
+    )
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        assert str(request.url) == "https://bifrost.example/v1/models"
+        return httpx.Response(
+            200,
+            json={
+                "data": [
+                    {
+                        "id": "moonshotai/Kimi-K2.6",
+                        "name": "Kimi K2.6",
+                        "context_length": 262144,
+                    },
+                    {"id": "openai/gpt-5.4", "name": "openai/gpt-5.4"},
+                ]
+            },
+        )
+
+    listing = list_models_for_worker(
+        _worker_spec("codex-native"), "codex-native", transport=httpx.MockTransport(_handler)
+    )
+
+    assert listing.source == "openai-compatible"
+    assert listing.verified is True
+    by_id = {m.id: m for m in listing.models}
+    assert by_id["moonshotai/Kimi-K2.6"].display_name == "Kimi K2.6"
+    # Name identical to id is dropped so the UI falls back cleanly.
+    assert by_id["openai/gpt-5.4"].display_name is None
+
+
+def test_openai_compatible_listing_falls_back_when_endpoint_missing(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Proxies without ``/v1/models`` surface configured models instead.
+
+    :param monkeypatch: Pytest monkeypatch fixture.
+    :param tmp_path: Per-test temp dir.
+    """
+    monkeypatch.setenv("GW_KEY", "sk-test")
+    _isolate_config(
+        monkeypatch,
+        tmp_path,
+        "providers:\n"
+        "  no-list:\n"
+        "    kind: gateway\n"
+        "    default: true\n"
+        "    openai:\n"
+        "      base_url: https://proxy.example/v1\n"
+        "      api_key: $GW_KEY\n"
+        "      wire_api: chat\n"
+        "      models:\n"
+        "        default: glm-5.2\n"
+        "        fast: openai/gpt-5.4-mini\n",
+    )
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": "not found"})
+
+    listing = list_models_for_worker(
+        _worker_spec("codex-native"), "codex-native", transport=httpx.MockTransport(_handler)
+    )
+
+    assert listing.source == "configured"
+    assert listing.verified is False
+    assert [m.id for m in listing.models] == ["glm-5.2", "openai/gpt-5.4-mini"]
+    assert "listing endpoint returned HTTP 404" in listing.note
+
+
+def test_openai_compatible_listing_unsupported_without_configured_is_empty(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A 404 with no configured models still degrades to an empty row.
+
+    :param monkeypatch: Pytest monkeypatch fixture.
+    :param tmp_path: Per-test temp dir.
+    """
+    monkeypatch.setenv("GW_KEY", "sk-test")
+    _isolate_config(
+        monkeypatch,
+        tmp_path,
+        "providers:\n"
+        "  bare:\n"
+        "    kind: gateway\n"
+        "    default: true\n"
+        "    openai:\n"
+        "      base_url: https://proxy.example/v1\n"
+        "      api_key: $GW_KEY\n"
+        "      wire_api: chat\n",
+    )
+
+    listing = list_models_for_worker(
+        _worker_spec("codex-native"),
+        "codex-native",
+        transport=httpx.MockTransport(lambda request: httpx.Response(405)),
+    )
+
+    assert listing.source == "none"
+    assert listing.models == ()
+    assert "listing unsupported" in listing.note
+
+
+def test_openai_compatible_listing_falls_back_on_empty_page(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """An empty live page still offers the family's configured default.
+
+    :param monkeypatch: Pytest monkeypatch fixture.
+    :param tmp_path: Per-test temp dir.
+    """
+    monkeypatch.setenv("GW_KEY", "sk-test")
+    _isolate_config(
+        monkeypatch,
+        tmp_path,
+        "providers:\n"
+        "  empty-list:\n"
+        "    kind: gateway\n"
+        "    default: true\n"
+        "    openai:\n"
+        "      base_url: https://proxy.example/v1\n"
+        "      api_key: $GW_KEY\n"
+        "      wire_api: chat\n"
+        "      models:\n"
+        "        default: moonshotai/Kimi-K2.6\n",
+    )
+
+    listing = list_models_for_worker(
+        _worker_spec("codex-native"),
+        "codex-native",
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(200, json={"data": []}),
+        ),
+    )
+
+    assert listing.source == "configured"
+    assert [m.id for m in listing.models] == ["moonshotai/Kimi-K2.6"]
+
+
+def test_listing_to_native_options_marks_default() -> None:
+    """Native option conversion marks the requested default id."""
+    from omnigent.model_catalog import listing_to_native_options
+
+    listing = ModelListing(
+        source="openai-compatible",
+        verified=True,
+        models=(
+            ModelEntry(id="a", family="openai", display_name="Model A"),
+            ModelEntry(id="b", family="openai"),
+        ),
+        note="test",
+    )
+    assert listing_to_native_options(listing, default_id="b") == [
+        {"id": "a", "displayName": "Model A"},
+        {"id": "b", "displayName": "b", "isDefault": True},
+    ]
+
+
+def test_provider_uses_http_model_listing_kinds() -> None:
+    """Only HTTP-listing provider kinds opt into the proxy discovery path."""
+    from omnigent.model_catalog import (
+        ResolvedModelProvider,
+        provider_uses_http_model_listing,
+    )
+
+    assert provider_uses_http_model_listing(
+        ResolvedModelProvider(kind="gateway", family="openai", base_url="https://x/v1")
+    )
+    assert provider_uses_http_model_listing(
+        ResolvedModelProvider(kind="key", family="anthropic", base_url="https://api.anthropic.com")
+    )
+    assert not provider_uses_http_model_listing(
+        ResolvedModelProvider(kind="databricks", profile="p")
+    )
+    assert not provider_uses_http_model_listing(
+        ResolvedModelProvider(kind="subscription", cli="claude")
+    )
+
+
+def test_resolve_model_provider_carries_configured_models(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Inline-family resolution exposes the family's models map for fallback.
+
+    :param monkeypatch: Pytest monkeypatch fixture.
+    :param tmp_path: Per-test temp dir.
+    """
+    monkeypatch.setenv("GW_KEY", "sk-test")
+    _isolate_config(
+        monkeypatch,
+        tmp_path,
+        "providers:\n"
+        "  bifrost:\n"
+        "    kind: gateway\n"
+        "    default: true\n"
+        "    openai:\n"
+        "      base_url: https://bifrost.example/v1\n"
+        "      api_key: $GW_KEY\n"
+        "      wire_api: chat\n"
+        "      models:\n"
+        "        default: glm-5.2\n"
+        "        alt: openai/gpt-5.4\n",
+    )
+    provider = resolve_model_provider(_worker_spec("codex-native"), "codex-native")
+    assert provider.kind == "gateway"
+    assert provider.configured_models == ("glm-5.2", "openai/gpt-5.4")
