@@ -2250,7 +2250,7 @@ class HostProcess:
                     models = [
                         {
                             "id": model.id,
-                            "displayName": model.id,
+                            "displayName": model.display_name or model.id,
                             **({"isDefault": True} if model.id == default_id else {}),
                         }
                         for model in listing.models
@@ -2279,8 +2279,48 @@ class HostProcess:
                 claude_native_model_options,
                 resolve_native_claude_config,
             )
+            from omnigent.model_catalog import (
+                list_models_for_worker,
+                listing_to_native_options,
+                provider_uses_http_model_listing,
+                resolve_model_provider,
+            )
+            from omnigent.spec.types import AgentSpec, ExecutorSpec
 
             config = await asyncio.to_thread(resolve_native_claude_config, spec=None)
+            # Prefer a live proxy/API catalog when the ambient provider speaks
+            # OpenAI-compatible or Anthropic HTTP listing. Databricks and
+            # subscription paths keep the curated Claude tier options.
+            prelaunch_spec = AgentSpec(
+                spec_version=1,
+                name="claude-native-prelaunch",
+                executor=ExecutorSpec(
+                    type="omnigent",
+                    config={"harness": "claude-native"},
+                ),
+            )
+            provider = await asyncio.to_thread(
+                resolve_model_provider, prelaunch_spec, "claude-native"
+            )
+            if provider_uses_http_model_listing(provider):
+                listing = await asyncio.to_thread(
+                    list_models_for_worker, prelaunch_spec, "claude-native"
+                )
+                if listing.models:
+                    default_id = config.model if config is not None else None
+                    if default_id is not None:
+                        default_id = default_id.removesuffix("[1m]")
+                    if default_id not in {m.id for m in listing.models}:
+                        default_id = None
+                    models = listing_to_native_options(listing, default_id=default_id)
+                    return HostModelOptionsResultFrame(
+                        request_id=frame.request_id,
+                        status="ok",
+                        models=models,
+                        routable_models=(
+                            list(config.routable_models) if config is not None else []
+                        ),
+                    )
             models = await asyncio.to_thread(claude_native_model_options, config)
         except Exception:
             _logger.exception("Failed to resolve pre-launch Claude model options")

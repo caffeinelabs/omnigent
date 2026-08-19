@@ -73,6 +73,7 @@ async def test_handle_model_options_uses_host_claude_configuration(
 ) -> None:
     """The launch picker is resolved on the host that will start Claude."""
     from omnigent import claude_native
+    from omnigent.model_catalog import ResolvedModelProvider
 
     monkeypatch.setattr(claude_native, "resolve_native_claude_config", lambda *, spec: None)
     monkeypatch.setattr(
@@ -85,6 +86,10 @@ async def test_handle_model_options_uses_host_claude_configuration(
                 "displayName": "Sonnet 4.6",
             }
         ],
+    )
+    monkeypatch.setattr(
+        "omnigent.model_catalog.resolve_model_provider",
+        lambda spec, harness: ResolvedModelProvider(kind="none", detail="test"),
     )
     host = _make_host_process()
 
@@ -516,6 +521,7 @@ async def test_handle_model_options_reports_the_endpoints_wider_catalog(
 ) -> None:
     """Generations no picker row names are still launchable, so they ship too."""
     from omnigent import claude_native
+    from omnigent.model_catalog import ResolvedModelProvider
 
     monkeypatch.setattr(
         claude_native,
@@ -531,6 +537,10 @@ async def test_handle_model_options_reports_the_endpoints_wider_catalog(
         "claude_native_model_options",
         lambda config: [{"id": "opus", "model": "system.ai.claude-opus-5"}],
     )
+    monkeypatch.setattr(
+        "omnigent.model_catalog.resolve_model_provider",
+        lambda spec, harness: ResolvedModelProvider(kind="none", detail="test"),
+    )
     host = _make_host_process()
 
     result = await host._handle_model_options(
@@ -540,6 +550,131 @@ async def test_handle_model_options_reports_the_endpoints_wider_catalog(
     assert result.routable_models == [
         "system.ai.claude-opus-5",
         "system.ai.claude-opus-4-8",
+    ]
+
+
+async def test_handle_model_options_uses_claude_gateway_live_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Claude on an HTTP-listing proxy shows the live catalog, not static tiers."""
+    from omnigent import claude_native
+    from omnigent.model_catalog import ModelEntry, ModelListing, ResolvedModelProvider
+
+    monkeypatch.setattr(
+        claude_native,
+        "resolve_native_claude_config",
+        lambda *, spec: claude_native.ClaudeNativeUcodeConfig(
+            env={},
+            model="anthropic/claude-sonnet-4.5",
+            routable_models=(),
+        ),
+    )
+    monkeypatch.setattr(
+        "omnigent.model_catalog.resolve_model_provider",
+        lambda spec, harness: ResolvedModelProvider(
+            kind="gateway",
+            family="anthropic",
+            base_url="https://bifrost.example/v1",
+            detail="provider 'bifrost'",
+        ),
+    )
+    monkeypatch.setattr(
+        "omnigent.model_catalog.list_models_for_worker",
+        lambda spec, harness: ModelListing(
+            source="openai-compatible",
+            verified=True,
+            models=(
+                ModelEntry(
+                    id="anthropic/claude-sonnet-4.5",
+                    family="claude",
+                    display_name="Claude Sonnet 4.5",
+                ),
+                ModelEntry(
+                    id="anthropic/claude-opus-4.6",
+                    family="claude",
+                    display_name="Claude Opus 4.6",
+                ),
+            ),
+            note="models reported by https://bifrost.example/v1/models",
+        ),
+    )
+
+    def _unexpected_static(config: object) -> list[dict[str, object]]:
+        raise AssertionError("gateway Claude must not fall back to static tier options")
+
+    monkeypatch.setattr(claude_native, "claude_native_model_options", _unexpected_static)
+    host = _make_host_process()
+
+    result = await host._handle_model_options(
+        HostModelOptionsFrame(request_id="req_models", harness="claude-native"),
+    )
+
+    assert result.status == "ok"
+    assert result.models == [
+        {
+            "id": "anthropic/claude-sonnet-4.5",
+            "displayName": "Claude Sonnet 4.5",
+            "isDefault": True,
+        },
+        {
+            "id": "anthropic/claude-opus-4.6",
+            "displayName": "Claude Opus 4.6",
+        },
+    ]
+
+
+async def test_handle_model_options_uses_gateway_display_names(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Codex gateway listings forward provider display names into the picker."""
+    from omnigent import codex_native_app_server
+    from omnigent.model_catalog import ModelEntry, ModelListing, ResolvedModelProvider
+
+    monkeypatch.setattr(
+        "omnigent.model_catalog.list_models_for_worker",
+        lambda spec, harness: ModelListing(
+            source="openai-compatible",
+            verified=True,
+            models=(
+                ModelEntry(
+                    id="moonshotai/Kimi-K2.6",
+                    family="openai",
+                    display_name="Kimi K2.6",
+                ),
+            ),
+            note="test",
+        ),
+    )
+    monkeypatch.setattr(
+        "omnigent.model_catalog.resolve_model_provider",
+        lambda spec, harness: ResolvedModelProvider(
+            kind="gateway",
+            family="openai",
+            base_url="https://gateway.example/v1",
+            detail="test gateway",
+        ),
+    )
+    monkeypatch.setattr(
+        codex_native_app_server,
+        "resolve_native_codex_launch",
+        lambda *, model: codex_native_app_server.NativeCodexLaunch(
+            config_overrides=[],
+            model="moonshotai/Kimi-K2.6",
+            profile=None,
+        ),
+    )
+    host = _make_host_process()
+
+    result = await host._handle_model_options(
+        HostModelOptionsFrame(request_id="req_models", harness="codex-native"),
+    )
+
+    assert result.models == [
+        {
+            "id": "moonshotai/Kimi-K2.6",
+            "displayName": "Kimi K2.6",
+            "isDefault": True,
+        }
     ]
 
 

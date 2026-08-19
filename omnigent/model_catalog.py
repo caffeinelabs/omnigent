@@ -18,7 +18,11 @@ Enumeration is deterministic per provider kind:
   with ``x-api-key`` headers (source ``"anthropic-api"``).
 - ``key`` (openai family) / ``gateway`` / ``local`` →
   ``GET <base_url>/v1/models`` with a bearer token (source
-  ``"openai-compatible"``).
+  ``"openai-compatible"``). Not every OpenAI-compatible proxy exposes
+  that route (some gateways only serve chat/completions); when the
+  listing endpoint is missing or empty, the family's configured
+  ``models`` map is used instead (source ``"configured"``,
+  ``verified: false``).
 - ``subscription`` → live CLI discovery for Cursor; curated static aliases for
   CLIs without a listing API (source ``"static"``, ``verified: false``).
 - ``cli-config`` → the codex curated static list (source ``"static"``,
@@ -65,7 +69,9 @@ from omnigent.onboarding.provider_config import (
     ANTHROPIC_FAMILY,
     CLI_CONFIG_KIND,
     DATABRICKS_KIND,
+    GATEWAY_KIND,
     KEY_KIND,
+    LOCAL_KIND,
     OPENAI_FAMILY,
     SUBSCRIPTION_KIND,
     ProviderEntry,
@@ -81,6 +87,14 @@ _logger = logging.getLogger(__name__)
 
 # Sentinel kind for "no usable provider resolved" rows.
 NONE_KIND = "none"
+
+# Provenance when live ``/v1/models`` is unavailable and we surface the
+# operator-configured ``models`` map from the provider family instead.
+CONFIGURED_SOURCE = "configured"
+
+# HTTP statuses that mean "this proxy has no model-listing route" rather
+# than a transient outage. Proxies vary: some 404, some 405, some 501.
+_LISTING_UNSUPPORTED_STATUS = frozenset({404, 405, 501})
 
 # ~5 min: provider listings change rarely; a turn that fans out many
 # dispatches should never re-fetch per call.
@@ -171,12 +185,15 @@ class ModelEntry:
         ``"databricks-claude-sonnet-4-6"`` or ``"gpt-5.4-mini"``.
     :param family: Vendor family token — ``"claude"``, ``"openai"``, or
         ``"other"``.
+    :param display_name: Optional human label from the listing API (e.g.
+        OpenRouter ``name``); ``None`` when the endpoint only reports an id.
     :param metadata: Provider-neutral capabilities and limits. Metadata fields
         remain unknown when the listing API reports only a model id.
     """
 
     id: str
     family: str
+    display_name: str | None = None
     metadata: ModelMetadata = field(default_factory=ModelMetadata)
 
     @property
@@ -191,14 +208,14 @@ class ModelListing:
 
     :param source: Where the list came from — ``"gateway"``,
         ``"openai-compatible"``, ``"anthropic-api"``, ``"cli"``,
-        ``"static"``, or ``"none"``.
+        ``"static"``, ``"configured"``, or ``"none"``.
     :param verified: ``True`` when the list was fetched live from the
-        provider; ``False`` for static/curated or empty listings.
+        provider; ``False`` for static/curated/configured or empty listings.
     :param models: The enumerated models, e.g.
         ``(ModelEntry(id="databricks-gpt-5-4", family="openai"),)``.
     :param note: Human-readable provenance / failure explanation.
     :param static_fallback: Ownership metadata for a release-curated fallback;
-        ``None`` for live or empty listings.
+        ``None`` for live, configured, or empty listings.
     """
 
     source: str
@@ -230,6 +247,9 @@ class ResolvedModelProvider:
         ``kind="subscription"``; ``"codex"`` for ``kind="cli-config"``.
     :param detail: Non-secret descriptor of how the provider resolved,
         e.g. ``"provider 'openrouter'"`` — used in listing notes.
+    :param configured_models: Model ids from the family's ``models`` map
+        (``default`` first when present). Used when a proxy has no live
+        listing endpoint or the listing call fails.
     """
 
     kind: str
@@ -240,6 +260,15 @@ class ResolvedModelProvider:
     auth_command: str | None = None
     cli: str | None = None
     detail: str = ""
+    configured_models: tuple[str, ...] = ()
+
+
+class ListingNotSupported(Exception):
+    """Raised when a proxy/provider has no usable model-listing endpoint."""
+
+    def __init__(self, message: str, *, status_code: int | None = None) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def is_direct_openai_provider(provider: ResolvedModelProvider) -> bool:
@@ -250,6 +279,68 @@ def is_direct_openai_provider(provider: ResolvedModelProvider) -> bool:
 
     canonical = default_base_url_for_family(OPENAI_FAMILY)
     return _models_url(provider.base_url).lower() == _models_url(canonical).lower()
+
+
+def provider_attempts_live_listing(provider: ResolvedModelProvider) -> bool:
+    """Return whether *provider* would try a live models HTTP/CLI probe.
+
+    Subscription CLIs without a listing API and unresolved providers return
+    ``False``. Gateways and OpenAI-compatible keys always attempt the probe
+    even when some proxies ultimately lack ``/v1/models``.
+
+    :param provider: Resolved provider descriptor.
+    :returns: ``True`` when enumeration will hit the network or a CLI.
+    """
+    if provider.kind in (DATABRICKS_KIND, KEY_KIND, GATEWAY_KIND, LOCAL_KIND):
+        return True
+    if provider.kind == SUBSCRIPTION_KIND and provider.cli == "cursor-agent":
+        return True
+    return False
+
+
+def provider_uses_http_model_listing(provider: ResolvedModelProvider) -> bool:
+    """Return whether *provider* enumerates via an HTTP models API.
+
+    True for OpenAI-compatible gateways/locals, OpenAI keys, and Anthropic
+    keys. False for Databricks (serving-endpoints / UC), subscription CLIs,
+    and unresolved providers — those keep their own discovery paths.
+
+    :param provider: Resolved provider descriptor.
+    :returns: ``True`` when ``/v1/models`` (or Anthropic's models API) is used.
+    """
+    if provider.kind in (GATEWAY_KIND, LOCAL_KIND):
+        return True
+    if provider.kind == KEY_KIND and provider.family in (ANTHROPIC_FAMILY, OPENAI_FAMILY):
+        return True
+    return False
+
+
+def listing_to_native_options(
+    listing: ModelListing,
+    *,
+    default_id: str | None = None,
+) -> list[dict[str, object]]:
+    """Convert a :class:`ModelListing` into host/UI model-option rows.
+
+    :param listing: Enumerated models for a harness.
+    :param default_id: Optional id to mark ``isDefault``; when ``None`` and
+        the listing has exactly one model, that model is marked default.
+    :returns: Wire-ready option dicts with ``id`` / ``displayName``.
+    """
+    models = listing.models
+    effective_default = default_id
+    if effective_default is None and len(models) == 1:
+        effective_default = models[0].id
+    options: list[dict[str, object]] = []
+    for entry in models:
+        option: dict[str, object] = {
+            "id": entry.id,
+            "displayName": entry.display_name or entry.id,
+        }
+        if entry.id == effective_default:
+            option["isDefault"] = True
+        options.append(option)
+    return options
 
 
 # Unfiltered listings keyed by provider identity. TTLCache is not thread-safe
@@ -769,6 +860,7 @@ def _provider_from_entry(entry: ProviderEntry, harness_type: str) -> ResolvedMod
             api_key=family.api_key,
             auth_command=family.auth_command,
             detail=f"provider {entry.name!r}",
+            configured_models=_configured_model_ids(family.models),
         )
     return ResolvedModelProvider(
         kind=NONE_KIND,
@@ -777,6 +869,25 @@ def _provider_from_entry(entry: ProviderEntry, harness_type: str) -> ResolvedMod
             f"credentials for this harness"
         ),
     )
+
+
+def _configured_model_ids(models: dict[str, str]) -> tuple[str, ...]:
+    """Order a family's ``models`` map with ``default`` first, deduped.
+
+    :param models: Role/tier → model id map from :class:`FamilyConfig`.
+    :returns: Stable tuple of model ids for listing fallback.
+    """
+    ordered: list[str] = []
+    seen: set[str] = set()
+    default = models.get("default")
+    if isinstance(default, str) and default and default not in seen:
+        ordered.append(default)
+        seen.add(default)
+    for model_id in models.values():
+        if isinstance(model_id, str) and model_id and model_id not in seen:
+            ordered.append(model_id)
+            seen.add(model_id)
+    return tuple(ordered)
 
 
 def list_models_for_worker(
@@ -894,6 +1005,8 @@ def _listing_payload(listing: ModelListing) -> _JsonObject:
     models: list[_JsonObject] = []
     for entry in listing.models:
         row: _JsonObject = {"id": entry.id, "family": entry.family}
+        if entry.display_name:
+            row["display_name"] = entry.display_name
         metadata = entry.metadata
         if metadata.context_window is not None:
             row["context_window"] = metadata.context_window
@@ -946,6 +1059,10 @@ def _redacted_failure_reason(exc: Exception) -> str:
     :returns: A redacted human-readable category, e.g.
         ``"listing endpoint returned HTTP 503"``.
     """
+    if isinstance(exc, ListingNotSupported):
+        if exc.status_code is not None:
+            return f"listing endpoint returned HTTP {exc.status_code}"
+        return str(exc) or "listing endpoint not supported"
     if isinstance(exc, subprocess.TimeoutExpired):
         return "provider auth command timed out"
     if isinstance(exc, subprocess.SubprocessError):
@@ -975,8 +1092,9 @@ def _listing_for_provider(
     """Enumerate (or replay from cache) one provider's unfiltered listing.
 
     Live fetches are cached for :data:`_CATALOG_TTL_S` keyed by provider
-    identity; failures are returned (not cached) so a transient outage
-    retries on the next call.
+    identity. Transient failures are not cached so the next call retries;
+    ``ListingNotSupported`` and successful configured fallbacks are cached
+    so a proxy without ``/v1/models`` is not re-probed every turn.
 
     :param provider: The resolved provider descriptor.
     :param transport: Optional httpx transport override for tests.
@@ -1011,6 +1129,37 @@ def _listing_for_provider(
             listing = _fetch_anthropic_listing(provider, transport=transport)
         else:
             listing = _fetch_openai_compatible_listing(provider, transport=transport)
+        if not listing.models:
+            fallback = _configured_models_listing(
+                provider,
+                reason=(
+                    f"listing endpoint at {_models_url(provider.base_url or '')} "
+                    "returned no models"
+                    if provider.base_url
+                    else "live listing returned no models"
+                ),
+            )
+            if fallback is not None:
+                listing = fallback
+    except ListingNotSupported as exc:
+        _logger.debug(
+            "model listing unsupported for %s", provider.detail or provider.kind, exc_info=True
+        )
+        fallback = _configured_models_listing(
+            provider,
+            reason=_redacted_failure_reason(exc),
+        )
+        if fallback is None:
+            return ModelListing(
+                source=NONE_KIND,
+                verified=False,
+                models=(),
+                note=(
+                    f"model listing unsupported for {provider.detail or provider.kind}: "
+                    f"{_redacted_failure_reason(exc)}"
+                ),
+            )
+        listing = fallback
     except (
         click.ClickException,
         httpx.HTTPError,
@@ -1021,18 +1170,55 @@ def _listing_for_provider(
         _logger.debug(
             "model enumeration failed for %s", provider.detail or provider.kind, exc_info=True
         )
-        return ModelListing(
-            source=NONE_KIND,
-            verified=False,
-            models=(),
-            note=(
-                f"model enumeration failed for {provider.detail or provider.kind}: "
-                f"{_redacted_failure_reason(exc)}"
-            ),
+        fallback = _configured_models_listing(
+            provider,
+            reason=_redacted_failure_reason(exc),
         )
+        if fallback is not None:
+            # Cache configured fallbacks so a flapping proxy does not empty
+            # the picker every turn; live probes still retry after TTL.
+            listing = fallback
+        else:
+            return ModelListing(
+                source=NONE_KIND,
+                verified=False,
+                models=(),
+                note=(
+                    f"model enumeration failed for {provider.detail or provider.kind}: "
+                    f"{_redacted_failure_reason(exc)}"
+                ),
+            )
     with _listing_cache_lock:
         _listing_cache[cache_key] = listing
     return listing
+
+
+def _configured_models_listing(
+    provider: ResolvedModelProvider,
+    *,
+    reason: str,
+) -> ModelListing | None:
+    """Build a listing from the family's configured ``models`` map.
+
+    :param provider: Provider that may carry :attr:`configured_models`.
+    :param reason: Why live listing was not used (secret-free).
+    :returns: A ``source="configured"`` listing, or ``None`` when the
+        family declares no models to fall back to.
+    """
+    if not provider.configured_models:
+        return None
+    return ModelListing(
+        source=CONFIGURED_SOURCE,
+        verified=False,
+        models=tuple(
+            ModelEntry(id=model_id, family=model_family_token(model_id))
+            for model_id in provider.configured_models
+        ),
+        note=(
+            f"live model listing unavailable for {provider.detail or provider.kind} "
+            f"({reason}); using configured models"
+        ),
+    )
 
 
 def _fetch_cursor_cli_listing(provider: ResolvedModelProvider) -> ModelListing:
@@ -1322,21 +1508,30 @@ def _fetch_openai_compatible_listing(
     """List models from an OpenAI-compatible ``/v1/models`` endpoint.
 
     :param provider: An inline-family provider descriptor (an OpenAI key
-        or an OpenRouter/LiteLLM-style gateway/local endpoint).
+        or an OpenRouter/LiteLLM/Bifrost-style gateway/local endpoint).
     :param transport: Optional httpx transport override for tests.
     :returns: A ``source="openai-compatible"`` listing; entries carry
-        ``context_window`` when the endpoint reports ``context_length``.
+        ``context_window`` when the endpoint reports ``context_length``
+        and ``display_name`` when it reports ``name``.
     :raises ValueError: When the provider has no base URL or credential.
-    :raises httpx.HTTPError: On transport/HTTP failures.
+    :raises ListingNotSupported: When the endpoint responds with a status
+        that indicates no models route (404 / 405 / 501).
+    :raises httpx.HTTPError: On other transport/HTTP failures.
     """
     if not provider.base_url:
         raise ValueError("provider has no base_url to list models from")
     token = _resolve_bearer_token(provider)
+    url = _models_url(provider.base_url)
     with httpx.Client(transport=transport, timeout=_HTTP_TIMEOUT_S) as client:
         resp = client.get(
-            _models_url(provider.base_url),
+            url,
             headers={"Authorization": f"Bearer {token}"},
         )
+        if resp.status_code in _LISTING_UNSUPPORTED_STATUS:
+            raise ListingNotSupported(
+                f"listing endpoint returned HTTP {resp.status_code}",
+                status_code=resp.status_code,
+            )
         resp.raise_for_status()
         payload = resp.json()
     models: list[ModelEntry] = []
@@ -1348,10 +1543,15 @@ def _fetch_openai_compatible_listing(
         if not isinstance(model_id, str) or not model_id:
             continue
         context_length = item.get("context_length")
+        raw_name = item.get("name")
+        display_name = (
+            raw_name if isinstance(raw_name, str) and raw_name and raw_name != model_id else None
+        )
         models.append(
             ModelEntry(
                 id=model_id,
                 family=model_family_token(model_id),
+                display_name=display_name,
                 metadata=ModelMetadata(
                     context_window=context_length if isinstance(context_length, int) else None
                 ),
@@ -1361,7 +1561,7 @@ def _fetch_openai_compatible_listing(
         source="openai-compatible",
         verified=True,
         models=tuple(models),
-        note=f"models reported by {_models_url(provider.base_url)}",
+        note=f"models reported by {url}",
     )
 
 
@@ -1376,17 +1576,25 @@ def _fetch_anthropic_listing(
     :param transport: Optional httpx transport override for tests.
     :returns: A ``source="anthropic-api"`` listing.
     :raises ValueError: When the provider has no base URL or credential.
-    :raises httpx.HTTPError: On transport/HTTP failures (subscription
+    :raises ListingNotSupported: When the endpoint responds with a status
+        that indicates no models route (404 / 405 / 501).
+    :raises httpx.HTTPError: On other transport/HTTP failures (subscription
         OAuth tokens are rejected here — only real API keys work).
     """
     if not provider.base_url:
         raise ValueError("provider has no base_url to list models from")
     token = _resolve_bearer_token(provider)
+    url = _models_url(provider.base_url)
     with httpx.Client(transport=transport, timeout=_HTTP_TIMEOUT_S) as client:
         resp = client.get(
-            _models_url(provider.base_url),
+            url,
             headers={"x-api-key": token, "anthropic-version": _ANTHROPIC_API_VERSION},
         )
+        if resp.status_code in _LISTING_UNSUPPORTED_STATUS:
+            raise ListingNotSupported(
+                f"listing endpoint returned HTTP {resp.status_code}",
+                status_code=resp.status_code,
+            )
         resp.raise_for_status()
         payload = resp.json()
     models: list[ModelEntry] = []
@@ -1397,10 +1605,16 @@ def _fetch_anthropic_listing(
         model_id = item.get("id")
         if not isinstance(model_id, str) or not model_id:
             continue
+        display_name = item.get("display_name")
         models.append(
             ModelEntry(
                 id=model_id,
                 family=model_family_token(model_id),
+                display_name=(
+                    display_name
+                    if isinstance(display_name, str) and display_name and display_name != model_id
+                    else None
+                ),
                 metadata=parse_anthropic_model_metadata(item),
             )
         )
@@ -1408,5 +1622,5 @@ def _fetch_anthropic_listing(
         source="anthropic-api",
         verified=True,
         models=tuple(models),
-        note=f"models reported by {_models_url(provider.base_url)}",
+        note=f"models reported by {url}",
     )
