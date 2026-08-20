@@ -1,7 +1,7 @@
 """add github_connections table
 
 Revision ID: ga1b2c3d4e5f
-Revises: za2b3c4d5e6f
+Revises: d5e9f1a2b3c4
 Create Date: 2026-07-15 00:00:00.000000
 
 Adds the ``github_connections`` table backing the per-user GitHub App
@@ -24,7 +24,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision: str = "ga1b2c3d4e5f"
-down_revision: str | None = "za2b3c4d5e6f"
+down_revision: str | None = "d5e9f1a2b3c4"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
