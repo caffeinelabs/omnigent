@@ -1844,6 +1844,25 @@ def test_build_hook_settings_omits_apikeyhelper_when_none(
     assert with_helper["apiKeyHelper"] == "printf tok"
 
 
+def test_build_hook_settings_auto_approves_project_mcp_servers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Invocation `--settings` auto-approves project `.mcp.json` servers.
+
+    Claude Code otherwise blocks the TUI on "New MCP server found in this
+    project" (e.g. `vexp` in caffeine clones). Omnigent cannot answer that
+    dialog, so the first inject times out. The flag must live on `--settings`
+    (not a checked-in project file) or an untrusted workspace ignores it.
+    """
+    monkeypatch.setattr("omnigent.claude_native_bridge._TRUSTED_PARENT", tmp_path)
+    monkeypatch.setattr("omnigent.claude_native_bridge._BRIDGE_ROOT", tmp_path / "root")
+    bridge_dir = prepare_bridge_dir("conv_abc", bridge_id="bridge_test", workspace=tmp_path)
+
+    settings = build_hook_settings(bridge_dir)
+    assert settings["enableAllProjectMcpServers"] is True
+
+
 def test_evaluate_policy_retries_5xx_and_succeeds(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

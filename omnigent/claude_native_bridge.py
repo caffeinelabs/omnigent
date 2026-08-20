@@ -1362,7 +1362,9 @@ def build_hook_settings(
         routing round trip (25s worst case on a degraded server) in front of
         every prompt of every native session, to be told every time that the
         session does not route.
-    :returns: JSON-serializable Claude settings fragment.
+    :returns: JSON-serializable Claude settings fragment. Always includes
+        ``enableAllProjectMcpServers: true`` so project ``.mcp.json`` servers
+        (e.g. ``vexp``) do not block the TUI on first launch.
     """
     python = python_executable or sys.executable
     # -I (isolated mode) prevents Python from adding the session's
@@ -1599,6 +1601,12 @@ def build_hook_settings(
             {"matcher": CLAUDE_SUBAGENT_TOOL_MATCHER, "hooks": [router_hook]}
         )
     settings: _JsonObject = {"hooks": hooks}
+    # Claude Code blocks the TUI on "New MCP server found in this project"
+    # for each `.mcp.json` entry (caffeine repos ship `vexp`). Omnigent
+    # injects via tmux and only waits for the input prompt, so that dialog
+    # times out the first message. `--settings` is honored even in an
+    # untrusted clone (project `.claude/settings.json` is not).
+    settings["enableAllProjectMcpServers"] = True
     if launch_model:
         settings["model"] = launch_model
     if launch_permission_mode:

@@ -133,6 +133,18 @@ Do not grow layer 3. New work lands on `develop` first and is ported to
 - **Lifetime:** until staging is replaced by / rebased onto `develop`.
   Do not grow this layer.
 
+### Claude-native: auto-approve project `.mcp.json` (this PR)
+
+- **What:** `build_hook_settings` sets `enableAllProjectMcpServers: true`
+  on the invocation `--settings` file.
+- **Why:** Caffeine clones ship `.mcp.json` with `vexp`. Claude Code
+  blocks the TUI on "New MCP server found in this project". Omnigent
+  injects via tmux and only waits for the input prompt, so the first
+  message times out. `--settings` is honored in an untrusted workspace;
+  a checked-in project settings file is not.
+- **Upstreamable:** yes (same hang on any repo with project MCP).
+- **Lifetime:** until upstreamed.
+
 ### Not a fork delta (do not treat as staging-only)
 
 Fork `main` lags current `omnigent-ai/main`. A `staging` vs `main` file
