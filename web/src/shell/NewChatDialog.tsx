@@ -77,6 +77,13 @@ import {
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { authenticatedFetch } from "@/lib/identity";
 import { fetchGithubBranches, fetchGithubRepos, type GithubRepo } from "@/lib/githubIntegration";
+import {
+  loadCachedRepoList,
+  loadCachedRepoListUpdatedAt,
+  readLastSandboxRepos,
+  saveCachedRepoList,
+  writeLastSandboxRepos,
+} from "@/lib/sandboxRepoPreferences";
 import { isImeCompositionKeyEvent } from "@/lib/ime";
 import { attachmentKey, validateAttachments } from "@/lib/attachments";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -2037,7 +2044,7 @@ function HarnessConfigModal({
 // when the user navigates into an existing session and back. Module-scoped,
 // not persisted to storage (a page refresh starts clean); cleared on create.
 /** One repo chosen in the GitHub multi-repo picker (connected mode). */
-type SelectedSandboxRepo = {
+interface SelectedSandboxRepo {
   /** ``owner/name``. */
   fullName: string;
   /** Resolved HTTPS clone URL. */
@@ -2046,7 +2053,7 @@ type SelectedSandboxRepo = {
   defaultBranch: string | null;
   /** Chosen branch; empty string means the repo's default branch. */
   branch: string;
-};
+}
 
 interface LandingDraft {
   message: string;
@@ -2342,8 +2349,11 @@ export function NewChatLandingScreen() {
   // Repos chosen from the GitHub picker (connected mode) — the multi-repo
   // counterpart of the free-text `sandboxRepoUrl`/`sandboxRepoBranch` pair.
   // Each is cloned side by side under the sandbox workspace root.
+  // An in-progress draft (returning to the composer) wins; otherwise pre-fill
+  // the repos the user launched their last session with, so a repeat session
+  // doesn't start from an empty picker.
   const [selectedSandboxRepos, setSelectedSandboxRepos] = useState<SelectedSandboxRepo[]>(
-    () => landingDraft?.sandboxRepos ?? [],
+    () => landingDraft?.sandboxRepos ?? readLastSandboxRepos() ?? [],
   );
   // Filter text for the GitHub repo picker (only used when the GitHub App is
   // configured and the user has connected their account).
@@ -2351,13 +2361,27 @@ export function NewChatLandingScreen() {
   // The repos the connected user can access, to pick from instead of typing a
   // URL. Fetched once (cached) when the GitHub App is enabled; on `connected:
   // false` the picker falls back to the free-text URL input.
+  //
+  // `initialData` seeds the query from a browser-cached list so reopening the
+  // composer (even after a full reload, which drops react-query's in-memory
+  // cache) shows the last-known repos instantly instead of an empty picker.
+  // `initialDataUpdatedAt` carries the cache's own fetch time so react-query
+  // still treats the seed as stale past `staleTime` and refetches in the
+  // background, replacing it with fresh data.
   const githubReposEnabled = info !== "loading" && info.github_app_enabled === true;
   const { data: sandboxRepoData } = useQuery({
     queryKey: ["github-repos"],
     queryFn: fetchGithubRepos,
     enabled: githubReposEnabled,
     staleTime: 5 * 60_000,
+    initialData: () => loadCachedRepoList() ?? undefined,
+    initialDataUpdatedAt: () => loadCachedRepoListUpdatedAt() ?? undefined,
   });
+  // Persist each freshly fetched list so it survives a reload. `saveCachedRepoList`
+  // ignores a `connected: false` result (no repos to cache).
+  useEffect(() => {
+    if (sandboxRepoData) saveCachedRepoList(sandboxRepoData);
+  }, [sandboxRepoData]);
   const sandboxRepoPickerConnected = sandboxRepoData?.connected ?? false;
   const sandboxRepos = sandboxRepoPickerConnected ? (sandboxRepoData?.repos ?? []) : [];
   const [workspace, setWorkspace] = useState<string>(() => landingDraft?.workspace ?? "");
@@ -3891,6 +3915,14 @@ export function NewChatLandingScreen() {
     // because the create outlives an unmount; a create that fails hands the
     // draft back via returnDraftToUser.
     submittedRef.current = true;
+    // Remember the repos this session launched with so the next new session
+    // pre-selects them. Only in connected managed-sandbox mode — free-text URL
+    // mode drives `selectedSandboxRepos` empty, and persisting that would wipe
+    // a real remembered pick. An empty selection here is itself a deliberate
+    // choice ("start in an empty workspace") and is stored as such.
+    if (sandboxSelected && sandboxRepoPickerConnected) {
+      writeLastSandboxRepos(selectedSandboxRepos);
+    }
     try {
       const trimmedBranch = branchName.trim();
       // `shouldCreateWorktree` (component scope): true only when a branch is
