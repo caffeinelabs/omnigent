@@ -2,20 +2,26 @@
 
 from __future__ import annotations
 
-from omnigent.server.databricks_app import DatabricksTokenSet
 from omnigent.connections.databricks import DatabricksConnectionStore
+from omnigent.server.databricks_app import DatabricksTokenSet
+
+
 class SecretBox:  # test double for the KMS SecretCipher: key- and context-bound
     def __init__(self, key: str) -> None:
         self._key = key
 
     def encrypt(self, plaintext: str, *, context) -> str:
-        import base64, json
+        import base64
+        import json
+
         return base64.b64encode(
             json.dumps({"k": self._key, "c": dict(context), "p": plaintext}).encode()
         ).decode("ascii")
 
     def decrypt(self, ciphertext: str, *, context):
-        import base64, json
+        import base64
+        import json
+
         try:
             d = json.loads(base64.b64decode(ciphertext.encode("ascii")))
         except ValueError:
