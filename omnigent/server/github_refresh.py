@@ -78,6 +78,57 @@ async def _push_refresh(
         conn.pending_github_refreshes.pop(request_id, None)
 
 
+async def _refresh_one_host(
+    conn: HostConnection,
+    *,
+    host_registry: HostRegistry,
+    host_store: HostStore,
+    github_store: GithubConnectionStore,
+    github_client: GitHubAppClient,
+) -> bool:
+    """Refresh one live host's GitHub credentials, or skip it.
+
+    Isolated and best-effort: returns ``True`` only when a fresh token was
+    pushed and the host acked; any skip (ineligible owner, not a managed
+    sandbox, no GitHub connection) or failure (refresh rejected, host
+    unreachable/ignored the frame) returns ``False`` without raising, so one
+    host never affects another.
+
+    Runs the whole body under the host's own ``workspace_scope`` — under
+    :func:`asyncio.gather` each host runs as its own task with an independent
+    context copy, so per-host workspace binding stays isolated across the
+    concurrent sweep.
+    """
+    owner = conn.owner
+    if not owner or owner == RESERVED_USER_LOCAL:
+        return False
+    try:
+        with workspace_scope(conn.workspace_id):
+            host = host_store.get_host(conn.host_id)
+            if host is None or host.sandbox_provider is None:
+                # Not a server-managed sandbox — never touch a personal
+                # machine's credentials.
+                return False
+            token = await resolve_access_token(
+                owner,
+                store=github_store,
+                client=github_client,
+                refresh_margin_s=_REFRESH_MARGIN_S,
+            )
+            connection = github_store.get(owner)
+        if token is None or connection is None or not connection.github_login:
+            # Owner hasn't connected GitHub (or the token can't be refreshed) —
+            # the sandbox runs on the shared credential; leave it be.
+            return False
+        await _push_refresh(host_registry, conn, token=token, login=connection.github_login)
+        return True
+    except Exception:  # noqa: BLE001 - one host's failure must not stop the sweep
+        _logger.warning(
+            "github credential refresh failed for host %s", conn.host_id, exc_info=True
+        )
+        return False
+
+
 async def refresh_once(
     *,
     host_registry: HostRegistry,
@@ -91,44 +142,28 @@ async def refresh_once(
     identity), that ``host_store`` marks as server-managed (has a
     ``sandbox_provider``), and whose owner has a usable GitHub connection.
 
-    Best-effort and isolated: a per-host failure (no connection, refresh
-    rejected, host unreachable) is logged and the sweep continues.
+    Hosts are refreshed CONCURRENTLY (:func:`asyncio.gather`): an unreachable
+    host — e.g. one still on an older image that ignores the frame and never
+    acks — costs only the single ``_PUSH_TIMEOUT_S`` wait for itself, not for
+    everyone behind it. Serial awaiting would make one sweep take
+    ``timeout × #stale-hosts``, overrunning the sweep interval on a large or
+    mid-rollout fleet.
 
     :returns: The number of sandboxes successfully refreshed.
     """
-    refreshed = 0
-    for conn in host_registry.all_connections():
-        owner = conn.owner
-        if not owner or owner == RESERVED_USER_LOCAL:
-            continue
-        try:
-            with workspace_scope(conn.workspace_id):
-                host = host_store.get_host(conn.host_id)
-                if host is None or host.sandbox_provider is None:
-                    # Not a server-managed sandbox — never touch a personal
-                    # machine's credentials.
-                    continue
-                token = await resolve_access_token(
-                    owner,
-                    store=github_store,
-                    client=github_client,
-                    refresh_margin_s=_REFRESH_MARGIN_S,
-                )
-                connection = github_store.get(owner)
-            if token is None or connection is None or not connection.github_login:
-                # Owner hasn't connected GitHub (or the token can't be
-                # refreshed) — the sandbox runs on the shared credential; leave
-                # it be.
-                continue
-            await _push_refresh(
-                host_registry, conn, token=token, login=connection.github_login
+    results = await asyncio.gather(
+        *(
+            _refresh_one_host(
+                conn,
+                host_registry=host_registry,
+                host_store=host_store,
+                github_store=github_store,
+                github_client=github_client,
             )
-            refreshed += 1
-        except Exception:  # noqa: BLE001 - one host's failure must not stop the sweep
-            _logger.warning(
-                "github credential refresh failed for host %s", conn.host_id, exc_info=True
-            )
-    return refreshed
+            for conn in host_registry.all_connections()
+        )
+    )
+    return sum(1 for ok in results if ok)
 
 
 async def run_github_refresh_loop(
