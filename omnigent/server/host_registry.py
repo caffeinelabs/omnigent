@@ -315,6 +315,9 @@ class HostConnection:
     pending_model_options: dict[str, asyncio.Future[dict[str, Any]]] = field(
         default_factory=dict,
     )
+    pending_github_refreshes: dict[str, asyncio.Future[dict[str, Any]]] = field(
+        default_factory=dict,
+    )
 
 
 class HostRegistry:
@@ -469,6 +472,19 @@ class HostRegistry:
         ws_id = current_workspace_id() if workspace_id is None else workspace_id
         with self._lock:
             return [hid for (ws, hid) in self._hosts if ws == ws_id]
+
+    def all_connections(self) -> list[HostConnection]:
+        """Snapshot every live host connection on this replica, all workspaces.
+
+        For replica-wide background sweeps (e.g. the GitHub-credential refresh
+        loop) that run without a workspace context and must reach every managed
+        sandbox regardless of tenant. Each returned :class:`HostConnection`
+        carries its own ``workspace_id`` and ``owner``, so the caller can bind
+        the right workspace per host. Returns a list copy so the caller can
+        iterate without holding the registry lock.
+        """
+        with self._lock:
+            return list(self._hosts.values())
 
     def is_host_telemetry_opted_out(self, host_id: str, workspace_id: int | None = None) -> bool:
         """Return whether the host has opted out of telemetry.

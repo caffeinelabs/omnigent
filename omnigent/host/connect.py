@@ -57,6 +57,8 @@ from omnigent.host.frames import (
     HostListWorktreesResultFrame,
     HostModelOptionsFrame,
     HostModelOptionsResultFrame,
+    HostRefreshGithubFrame,
+    HostRefreshGithubResultFrame,
     HostRemoveWorktreeFrame,
     HostRemoveWorktreeResultFrame,
     HostRunnerExitedFrame,
@@ -77,6 +79,7 @@ from omnigent.host.git_worktree import (
     list_worktrees,
     remove_worktree,
 )
+from omnigent.host.github_creds import write_github_credentials
 from omnigent.host.identity import HostIdentity, load_or_create_host_identity
 from omnigent.host.runner_zygote import ZygoteManager, ZygoteRunnerProc, ZygoteUnavailable
 from omnigent.inner import _proc
@@ -2129,6 +2132,46 @@ class HostProcess:
             gateway_inference=gateway_inference_map(),
         )
 
+    def _handle_refresh_github(
+        self, frame: HostRefreshGithubFrame
+    ) -> HostRefreshGithubResultFrame:
+        """Handle a ``host.refresh_github`` request from the server.
+
+        Overwrites this sandbox's ``~/.git-credentials`` and
+        ``~/.config/gh/hosts.yml`` with a freshly minted GitHub token (and the
+        connected login), so ``git``/``gh`` keep working after the launch-time
+        token expires. The file contents match what the launcher wrote at setup,
+        so a refresh is indistinguishable from a fresh launch. The token is
+        never logged (only the login + outcome). Runs off the event loop (file
+        I/O).
+
+        HOME is resolved the same way the launcher did — the host process runs
+        as the sandbox user with the same ``$HOME`` the setup commands wrote
+        into (``/home/omnigent`` on Kubernetes), so ``os.path.expanduser("~")``
+        points at the same credential files.
+
+        :param frame: The refresh request carrying the new ``token`` and
+            ``github_login``.
+        :returns: ``status`` ``"ok"`` on success, else ``"failed"`` with a
+            non-secret ``error``.
+        """
+        try:
+            home = os.path.expanduser("~")
+            write_github_credentials(home, token=frame.token, login=frame.github_login)
+        except Exception as exc:  # noqa: BLE001 - report any write failure, never the token
+            _logger.warning(
+                "github credential refresh failed for login %s: %s",
+                frame.github_login,
+                exc,
+            )
+            return HostRefreshGithubResultFrame(
+                request_id=frame.request_id,
+                status="failed",
+                error=str(exc),
+            )
+        _logger.info("refreshed github credentials for login %s", frame.github_login)
+        return HostRefreshGithubResultFrame(request_id=frame.request_id, status="ok")
+
     def _handle_detect_credentials(
         self, frame: HostDetectCredentialsFrame
     ) -> HostDetectCredentialsResultFrame:
@@ -3215,6 +3258,11 @@ class HostProcess:
             # it off the event loop and reply when it completes.
             secret_result = await asyncio.to_thread(self._handle_store_secret, frame)
             await ws.send(encode_host_frame(secret_result))
+        elif isinstance(frame, HostRefreshGithubFrame):
+            # Rewrites the on-disk git/gh credential files; file I/O, so run it
+            # off the event loop and reply when it completes.
+            refresh_result = await asyncio.to_thread(self._handle_refresh_github, frame)
+            await ws.send(encode_host_frame(refresh_result))
         elif isinstance(frame, HostDetectCredentialsFrame):
             # Ambient detection may probe files / a localhost socket, so run it
             # off the event loop.

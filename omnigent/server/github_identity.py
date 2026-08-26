@@ -28,6 +28,7 @@ async def resolve_access_token(
     *,
     store: GithubConnectionStore,
     client: GitHubAppClient,
+    refresh_margin_s: float = _REFRESH_MARGIN_S,
 ) -> str | None:
     """Resolve a valid user access token for *user_id*, or ``None``.
 
@@ -38,6 +39,10 @@ async def resolve_access_token(
     :param user_id: The user whose token to resolve.
     :param store: The connection store (also used to persist a refresh).
     :param client: The GitHub App client.
+    :param refresh_margin_s: Refresh the token when it expires within this many
+        seconds. Defaults to :data:`_REFRESH_MARGIN_S` (a short at-use margin).
+        A periodic pusher passes a margin at least as long as its sweep interval
+        so every pushed token outlives the gap until the next sweep.
     :returns: A usable access token, or ``None``.
     """
     connection = await _run_sync(store.get, user_id, with_tokens=True)
@@ -45,7 +50,7 @@ async def resolve_access_token(
         return None
     access_token = connection.access_token
     expires_at = connection.token_expires_at
-    if expires_at is not None and expires_at <= now_epoch() + _REFRESH_MARGIN_S:
+    if expires_at is not None and expires_at <= now_epoch() + refresh_margin_s:
         if not connection.refresh_token:
             return None
         try:

@@ -39,6 +39,7 @@ from omnigent.host.frames import (
     HostListDirResultFrame,
     HostListWorktreesResultFrame,
     HostModelOptionsResultFrame,
+    HostRefreshGithubResultFrame,
     HostRemoveWorktreeResultFrame,
     HostRunnerExitedFrame,
     HostRunnerStatusResultFrame,
@@ -696,6 +697,12 @@ async def _receive_loop(
                         "error": frame.error,
                     }
                 )
+            continue
+
+        if isinstance(frame, HostRefreshGithubResultFrame):
+            refresh_future = conn.pending_github_refreshes.pop(frame.request_id, None)
+            if refresh_future is not None and not refresh_future.done():
+                refresh_future.set_result({"status": frame.status, "error": frame.error})
             continue
 
         if isinstance(frame, HostDetectCredentialsResultFrame):
