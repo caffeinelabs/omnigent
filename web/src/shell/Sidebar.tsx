@@ -133,6 +133,7 @@ import { relativeTime } from "@/lib/relativeTime";
 import { showToast } from "@/components/ui/toast";
 import { PermissionsModal } from "@/components/PermissionsModal";
 import { ProjectSettingsDialog } from "./ProjectSettingsDialog";
+import { SandboxStatusDot } from "@/components/SandboxStatusDot";
 import { SessionStateBadge } from "@/components/SessionStateBadge";
 import { useSessionRunnerOnline } from "@/hooks/RunnerHealthProvider";
 import { useActiveRootSessionId } from "@/hooks/useSession";
@@ -3458,6 +3459,11 @@ function ConversationRow({
           here. Leading icons (agent type, pin, shared) were removed to keep
           rows text-clean; pinned rows still group under "Pinned". */}
       <div className="flex w-full items-center gap-1.5">
+        {/* Sandbox running indicator: green when the session's managed sandbox
+            host tunnel is live, muted when it's stopped/expired, absent for
+            non-sandbox sessions. `host_online` is computed per row by the
+            session-list fetch and kept fresh by the updates stream. */}
+        <SandboxStatusDot hostId={conversation.host_id} online={conversation.host_online} />
         <span className="relative min-w-0 truncate">
           {label}
           {hasUnseenMessages && <span className="sr-only"> (unread)</span>}
