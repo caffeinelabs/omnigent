@@ -12,8 +12,8 @@ from __future__ import annotations
 
 from typing import Any, ClassVar
 
-from omnigent.entities import DatabricksConnection, ProviderConnection
 from omnigent.connections import ConnectionStore
+from omnigent.entities import DatabricksConnection, ProviderConnection
 from omnigent.server.databricks_app import DatabricksTokenSet
 
 
