@@ -74,6 +74,8 @@ class HostFrameKind(str, Enum):
     FS_RESULT = "host.fs_result"
     MODEL_OPTIONS = "host.model_options"
     MODEL_OPTIONS_RESULT = "host.model_options_result"
+    REFRESH_GITHUB = "host.refresh_github"
+    REFRESH_GITHUB_RESULT = "host.refresh_github_result"
 
 
 # ── Frame dataclasses ────────────────────────────────────
@@ -753,6 +755,51 @@ class HostStoreSecretResultFrame:
 
 
 @dataclass
+class HostRefreshGithubFrame:
+    """Server → host: replace the sandbox's GitHub credentials with a freshly
+    minted token.
+
+    The GitHub user-to-server token written at launch
+    (``~/.git-credentials`` + ``~/.config/gh/hosts.yml``) expires after a few
+    hours, after which ``git``/``gh`` inside a still-running sandbox can no
+    longer push or pull. A server-side timer re-mints the token
+    (:func:`omnigent.server.github_identity.resolve_sandbox_identity`) and
+    pushes it here so the host rewrites both files in place — no relaunch, and
+    the token value never reaches the command text or a log.
+
+    Security: ``token`` is the only credential-bearing field and is named so
+    telemetry redaction masks it on spans (``token`` is in
+    ``_REDACT_KEY_SUBSTRINGS``). The server is an authz'd pass-through over the
+    (TLS) tunnel and never persists it here.
+
+    :param request_id: Correlates the result, e.g. ``"req_ghrefresh_1"``.
+    :param token: The freshly minted GitHub user-to-server token (``ghu_…``).
+    :param github_login: The connected GitHub login, written as ``user:`` in
+        ``hosts.yml``. The host process is not told the login at launch (only
+        the token rides an env var), so the refresh must carry it.
+    """
+
+    request_id: str
+    token: str
+    github_login: str
+
+
+@dataclass
+class HostRefreshGithubResultFrame:
+    """Host → server: outcome of a GitHub-credential refresh.
+
+    :param request_id: Correlates to the :class:`HostRefreshGithubFrame`.
+    :param status: ``"ok"`` when both credential files were rewritten,
+        ``"failed"`` otherwise (paired with a non-secret ``error``).
+    :param error: Non-secret failure reason, or ``None`` on success.
+    """
+
+    request_id: str
+    status: str
+    error: str | None = None
+
+
+@dataclass
 class HostDetectCredentialsFrame:
     """Server → host: list adoptable credentials already present on the host.
 
@@ -897,6 +944,8 @@ HostFrame = (
     | HostFsResultFrame
     | HostModelOptionsFrame
     | HostModelOptionsResultFrame
+    | HostRefreshGithubFrame
+    | HostRefreshGithubResultFrame
 )
 
 
@@ -1201,6 +1250,24 @@ def encode_host_frame(frame: HostFrame) -> str:
                 "error": frame.error,
             }
         )
+    if isinstance(frame, HostRefreshGithubFrame):
+        return _encode_payload(
+            {
+                "kind": HostFrameKind.REFRESH_GITHUB.value,
+                "request_id": frame.request_id,
+                "token": frame.token,
+                "github_login": frame.github_login,
+            }
+        )
+    if isinstance(frame, HostRefreshGithubResultFrame):
+        return _encode_payload(
+            {
+                "kind": HostFrameKind.REFRESH_GITHUB_RESULT.value,
+                "request_id": frame.request_id,
+                "status": frame.status,
+                "error": frame.error,
+            }
+        )
     if isinstance(frame, HostDetectCredentialsFrame):
         return _encode_payload(
             {
@@ -1374,6 +1441,18 @@ def _decode_known_host_frame(
             return _decode_store_secret(msg)
         case HostFrameKind.STORE_SECRET_RESULT:
             return _decode_store_secret_result(msg)
+        case HostFrameKind.REFRESH_GITHUB:
+            return HostRefreshGithubFrame(
+                request_id=_required_str(msg, "request_id"),
+                token=_required_str(msg, "token"),
+                github_login=_required_str(msg, "github_login"),
+            )
+        case HostFrameKind.REFRESH_GITHUB_RESULT:
+            return HostRefreshGithubResultFrame(
+                request_id=_required_str(msg, "request_id"),
+                status=_required_str(msg, "status"),
+                error=_optional_nullable_str(msg, "error"),
+            )
         case HostFrameKind.DETECT_CREDENTIALS:
             return HostDetectCredentialsFrame(request_id=_required_str(msg, "request_id"))
         case HostFrameKind.DETECT_CREDENTIALS_RESULT:

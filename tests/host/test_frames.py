@@ -30,6 +30,8 @@ from omnigent.host.frames import (
     HostListWorktreesResultFrame,
     HostModelOptionsFrame,
     HostModelOptionsResultFrame,
+    HostRefreshGithubFrame,
+    HostRefreshGithubResultFrame,
     HostRemoveWorktreeFrame,
     HostRemoveWorktreeResultFrame,
     HostRunnerExitedFrame,
@@ -44,6 +46,51 @@ from omnigent.host.frames import (
     decode_host_frame,
     encode_host_frame,
 )
+
+
+def test_refresh_github_frames_round_trip() -> None:
+    """A GitHub-credential refresh survives both directions of the host tunnel."""
+    request = decode_host_frame(
+        encode_host_frame(
+            HostRefreshGithubFrame(
+                request_id="req_ghrefresh",
+                token="ghu_freshtoken",
+                github_login="octocat",
+            )
+        )
+    )
+    assert request == HostRefreshGithubFrame(
+        request_id="req_ghrefresh",
+        token="ghu_freshtoken",
+        github_login="octocat",
+    )
+
+    ok = decode_host_frame(
+        encode_host_frame(HostRefreshGithubResultFrame(request_id="req_ghrefresh", status="ok"))
+    )
+    assert ok == HostRefreshGithubResultFrame(request_id="req_ghrefresh", status="ok", error=None)
+
+    failed = decode_host_frame(
+        encode_host_frame(
+            HostRefreshGithubResultFrame(
+                request_id="req_ghrefresh", status="failed", error="disk full"
+            )
+        )
+    )
+    assert isinstance(failed, HostRefreshGithubResultFrame)
+    assert failed.status == "failed"
+    assert failed.error == "disk full"
+
+
+def test_refresh_github_token_is_redacted_on_span(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The token must never be encoded onto a telemetry span (it's a bearer)."""
+    from omnigent.runtime import telemetry
+
+    redacted = telemetry._redact_payload(
+        {"kind": "host.refresh_github", "token": "ghu_secret", "github_login": "octocat"}
+    )
+    assert redacted["token"] == "[redacted]"
+    assert redacted["github_login"] == "octocat"
 
 
 def test_model_options_frames_round_trip() -> None:

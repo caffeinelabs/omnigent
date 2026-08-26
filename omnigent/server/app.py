@@ -1369,6 +1369,22 @@ def create_app(
                 )
             )
 
+        # Keep running managed sandboxes' GitHub credentials fresh: a sandbox's
+        # launch-time git/gh token expires after a few hours, so re-mint it and
+        # push it down the existing host tunnel on a timer (see github_refresh).
+        github_refresh_task: asyncio.Task[None] | None = None
+        if github_enabled and github_store is not None:
+            from omnigent.server.github_refresh import run_github_refresh_loop
+
+            github_refresh_task = asyncio.create_task(
+                run_github_refresh_loop(
+                    host_registry=host_registry,
+                    host_store=host_store,
+                    github_store=github_store,
+                    github_client=app_inst.state.github_client,
+                )
+            )
+
         try:
             yield
         finally:
@@ -1381,6 +1397,10 @@ def create_app(
                 ci_watch_task.cancel()
                 with suppress(asyncio.CancelledError):
                     await ci_watch_task
+            if github_refresh_task is not None:
+                github_refresh_task.cancel()
+                with suppress(asyncio.CancelledError):
+                    await github_refresh_task
             metrics_publish_task.cancel()
             with suppress(asyncio.CancelledError):
                 await metrics_publish_task
