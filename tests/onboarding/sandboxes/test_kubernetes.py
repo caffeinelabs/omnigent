@@ -114,6 +114,19 @@ def test_build_job_manifest_init_container_prepares_and_clones_workspace() -> No
     assert "https://github.com/org/repo.git /home/omnigent/workspace/repo" in script
 
 
+def test_build_job_manifest_wires_broker_helper_before_clone() -> None:
+    """A repo clone configures the per-user credential broker helper first, so a
+    private repo authenticates without a shared GIT_TOKEN."""
+    manifest = build_job_manifest(
+        **{**_MANIFEST_KW, "clone_dir": "/home/omnigent/workspace/repo"},
+        repo_url="https://github.com/org/repo.git",
+    )
+    script = _pod_spec(manifest)["initContainers"][0]["command"][2]
+    assert "configure_host_git(" in script
+    # Helper must be wired BEFORE the clone runs.
+    assert script.index("configure_host_git(") < script.index("git clone")
+
+
 def test_build_job_manifest_without_repo_has_no_clone() -> None:
     """No repo → the init container only makes the workspace, no git clone."""
     manifest = build_job_manifest(**_MANIFEST_KW)
@@ -158,6 +171,17 @@ def test_build_job_manifest_forwards_config_home_to_init_container() -> None:
         {
             "name": "OMNIGENT_CONFIG_HOME",
             "value": "/home/omnigent/custom-config",
+        },
+        # The init container carries the launch token too, so the clone can
+        # authenticate private repos via the per-user credential broker.
+        {
+            "name": "OMNIGENT_HOST_TOKEN",
+            "valueFrom": {
+                "secretKeyRef": {
+                    "name": "omnigent-managed-abc-1a2b3c-token",
+                    "key": "OMNIGENT_HOST_TOKEN",
+                }
+            },
         },
     ]
     assert {entry["name"] for entry in host_env} >= {

@@ -458,6 +458,9 @@ def _render_workspace_prep_command(
     repo_url: str | None,
     repo_branch: str | None,
     host_config: dict[str, object] | None = None,
+    *,
+    server_url: str | None = None,
+    host_id: str | None = None,
 ) -> list[str]:
     """
     Render the init container command that prepares the workspace.
@@ -478,14 +481,29 @@ def _render_workspace_prep_command(
     :param host_config: Deployment-supplied config content to merge in (lands
         under the same config directory seen by the host container), or
         ``None``.
+    :param server_url: Server URL the GitHub credential broker helper dials, or
+        ``None`` to skip wiring it (the clone then relies on a shared GIT_TOKEN).
+    :param host_id: Managed host id the broker helper authenticates as.
     :returns: The ``["bash", "-lc", script]`` command.
     """
     script = f"set -e\nmkdir -p {shlex.quote(workspace)}\n"
     if repo_url is not None and clone_dir is not None:
+        # Private repos: with no shared GIT_TOKEN, authenticate the clone as the
+        # connected user via the per-user GitHub credential broker. The clone
+        # runs here in the init container, BEFORE ``omnigent host`` wires the
+        # same helper, so wire it now — reading $OMNIGENT_HOST_TOKEN from the
+        # init env and fetching the owner's token per-op from the server (no
+        # token on disk). Best-effort (``|| true``): public repos and
+        # shared-GIT_TOKEN deployments clone fine without it.
+        if server_url is not None and host_id is not None:
+            _wire = (
+                "from omnigent.git_credential_github import configure_host_git; "
+                f"configure_host_git({server_url!r}, {host_id!r})"
+            )
+            script += f"python3 -c {shlex.quote(_wire)} || true\n"
         # ``--`` separates options from the (already-validated) URL so it can
         # never be parsed as a flag; --single-branch keeps branch-pinned clones
-        # fast. Private repos authenticate via the image's GIT_TOKEN credential
-        # helper (projected from the harness Secret).
+        # fast.
         branch = (
             f"--branch {shlex.quote(repo_branch)} --single-branch "
             if repo_branch is not None
@@ -768,12 +786,27 @@ def build_job_manifest(
                 "injected config shares only the HOME volume with the host"
             )
         init_env.append({"name": "OMNIGENT_CONFIG_HOME", "value": config_home})
+    # The init-container clone authenticates private repos as the connected user
+    # via the credential broker, which needs the launch token (same secretKeyRef
+    # the host container uses) — the init container otherwise has no identity.
+    init_env.append(
+        {
+            "name": HOST_TOKEN_ENV_VAR,
+            "valueFrom": {"secretKeyRef": {"name": token_secret_name, "key": HOST_TOKEN_ENV_VAR}},
+        }
+    )
     init_container: dict[str, object] = {
         "name": _INIT_CONTAINER_NAME,
         "image": image,
         "workingDir": _HOME_DIR,
         "command": _render_workspace_prep_command(
-            workspace, clone_dir, repo_url, repo_branch, host_config
+            workspace,
+            clone_dir,
+            repo_url,
+            repo_branch,
+            host_config,
+            server_url=server_url,
+            host_id=host_id,
         ),
         "env": init_env,
         "resources": pod_resources,
