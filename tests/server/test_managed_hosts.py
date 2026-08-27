@@ -262,6 +262,35 @@ def test_parse_valid_daytona_config_builds_parameterized_factory(
     assert fake.env == ["OPENAI_API_KEY", "GIT_TOKEN"]
 
 
+def test_parse_agentsandbox_provider_builds_factory() -> None:
+    """
+    `provider: agentsandbox` parses and builds its launcher factory, which
+    validates the shared kubernetes identifiers. Regression guard: the factory
+    must pass the `runtime_class` argument the kubernetes validator now requires,
+    or parsing raises TypeError at server startup.
+    """
+    cfg = parse_sandbox_config(
+        {
+            "provider": "agentsandbox",
+            "server_url": "https://srv.example.com/",
+            "agentsandbox": {
+                "namespace": "omnigent-github-mvp",
+                "service_account": "omnigent-runner",
+                "in_cluster": True,
+                "persist": True,
+                "workspace_storage": "10Gi",
+                "image": "ghcr.io/x/host:tag",
+                "env": ["OMNIGENT_HARNESS_TMP_PARENT"],
+            },
+        }
+    )
+    assert cfg is not None
+    cfg = cfg.default
+    assert cfg.server_url == "https://srv.example.com"
+    assert cfg.managed_launch_supported is True
+    assert callable(cfg.launcher_factory)
+
+
 def test_parse_daytona_without_section_defaults(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

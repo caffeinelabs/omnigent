@@ -180,6 +180,7 @@ SUPPORTED_SANDBOX_PROVIDERS: frozenset[str] = frozenset(
         "e2b",
         "openshell",
         "kubernetes",
+        "agentsandbox",
     }
 )
 PROVIDERS_WITH_MANAGED_LAUNCH: frozenset[str] = frozenset(
@@ -193,6 +194,7 @@ PROVIDERS_WITH_MANAGED_LAUNCH: frozenset[str] = frozenset(
         "e2b",
         "openshell",
         "kubernetes",
+        "agentsandbox",
     }
 )
 
@@ -1296,6 +1298,54 @@ def _parse_single_provider_sandbox_config(raw: dict[str, object]) -> ManagedSand
         _parse_registry_config(provider, section)
         launcher_factory = _registry_launcher_factory(provider, section)
         token_ttl_s = _registry_token_ttl_s(provider)
+    elif provider == "agentsandbox":
+        agentsandbox_section = _parse_provider_section(raw, "agentsandbox")
+        if agentsandbox_section is not None:
+            _reject_unknown_keys(
+                agentsandbox_section,
+                {
+                    # Shared with the kubernetes provider (same pod template).
+                    "image",
+                    "env",
+                    "namespace",
+                    "secret_name",
+                    "service_account",
+                    "node_selector",
+                    "kubeconfig",
+                    "in_cluster",
+                    "pod_ready_timeout_s",
+                    # agent-sandbox lifecycle extras.
+                    "persist",
+                    "workspace_storage",
+                    "storage_class",
+                    "idle_shutdown_seconds",
+                    "service",
+                },
+                "sandbox.agentsandbox",
+            )
+        persist = _parse_provider_bool(raw, "agentsandbox", "persist")
+        service = _parse_provider_bool(raw, "agentsandbox", "service")
+        launcher_factory = _agentsandbox_launcher_factory(
+            image=_parse_provider_image(raw, "agentsandbox"),
+            env=_parse_provider_env(raw, "agentsandbox"),
+            namespace=_parse_provider_string(raw, "agentsandbox", "namespace"),
+            secret_name=_parse_provider_string(raw, "agentsandbox", "secret_name"),
+            service_account=_parse_provider_string(raw, "agentsandbox", "service_account"),
+            node_selector=_parse_provider_str_mapping(raw, "agentsandbox", "node_selector"),
+            kubeconfig=_parse_provider_string(raw, "agentsandbox", "kubeconfig"),
+            in_cluster=_parse_provider_bool(raw, "agentsandbox", "in_cluster"),
+            pod_ready_timeout_s=_parse_provider_positive_int(
+                raw, "agentsandbox", "pod_ready_timeout_s"
+            ),
+            persist=persist if persist is not None else True,
+            workspace_storage=_parse_provider_string(raw, "agentsandbox", "workspace_storage"),
+            storage_class=_parse_provider_string(raw, "agentsandbox", "storage_class"),
+            idle_shutdown_seconds=_parse_provider_positive_int(
+                raw, "agentsandbox", "idle_shutdown_seconds"
+            ),
+            service=service if service is not None else False,
+        )
+        token_ttl_s = KUBERNETES_MANAGED_TOKEN_TTL_S
     else:
         launcher_factory = _unsupported_launcher_factory(provider)
         # Never consulted (the factory rejects before any token is
@@ -2605,6 +2655,63 @@ def _kubernetes_launcher_factory(
             pod_ready_timeout_s=pod_ready_timeout_s,
             runtime_class=runtime_class,
         )
+
+    return _build
+
+
+def _agentsandbox_launcher_factory(
+    *,
+    image: str | None,
+    env: list[str] | None,
+    namespace: str | None,
+    secret_name: str | None,
+    service_account: str | None,
+    node_selector: dict[str, str] | None,
+    kubeconfig: str | None,
+    in_cluster: bool | None,
+    pod_ready_timeout_s: int | None,
+    persist: bool,
+    workspace_storage: str | None,
+    storage_class: str | None,
+    idle_shutdown_seconds: int | None,
+    service: bool,
+) -> Callable[[], SandboxHostLauncher]:
+    """
+    Build the launcher factory for the YAML ``provider: agentsandbox`` path.
+
+    Shares the kubernetes provider's pod-template config; adds the agent-sandbox
+    lifecycle knobs: *persist* (PVC-backed HOME via ``volumeClaimTemplates``),
+    *workspace_storage* / *storage_class* for that PVC, *idle_shutdown_seconds*
+    (``shutdownTime`` reclaim deadline), and *service* (stable ``serviceFQDN``).
+
+    :returns: A factory producing parameterized :class:`AgentSandboxLauncher`.
+    :raises ValueError: When a name or node-selector label is malformed.
+    """
+    # agent-sandbox pods don't set a RuntimeClass, so pass None for it.
+    _validate_kubernetes_identifiers(namespace, secret_name, service_account, node_selector, None)
+
+    def _build() -> SandboxHostLauncher:
+        """Construct the agent-sandbox launcher (lazy SDK import inside)."""
+        from omnigent.onboarding.sandboxes.agentsandbox import AgentSandboxLauncher
+
+        kwargs: dict[str, object] = dict(
+            image=image,
+            env=env,
+            namespace=namespace,
+            secret_name=secret_name,
+            service_account=service_account,
+            node_selector=node_selector,
+            kubeconfig=kubeconfig,
+            in_cluster=in_cluster,
+            pod_ready_timeout_s=pod_ready_timeout_s,
+            persist=persist,
+            storage_class=storage_class,
+            idle_shutdown_seconds=idle_shutdown_seconds,
+            service=service,
+        )
+        if workspace_storage is not None:
+            kwargs["workspace_storage"] = workspace_storage
+        return AgentSandboxLauncher(**kwargs)  # type: ignore[arg-type]
 
     return _build
 
