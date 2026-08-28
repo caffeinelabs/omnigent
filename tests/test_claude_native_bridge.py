@@ -6480,9 +6480,11 @@ def test_ensure_trusted_creates_config_when_missing(
     # Per-directory trust gate, keyed by the RESOLVED absolute path —
     # without this Claude shows "Do you trust the files in this folder?".
     assert data["projects"][str(workspace.resolve())]["hasTrustDialogAccepted"] is True
-    # Bypass-permissions acceptance gate — without this a session launched in
-    # bypassPermissions mode hangs on Claude's "Yes, I accept" warning screen.
-    assert data["bypassPermissionsModeAccepted"] is True
+    # Bypass-permissions warning gate — recorded in ~/.claude/settings.json,
+    # not ~/.claude.json. Without it a bypassPermissions launch hangs on the
+    # "Yes, I accept" screen.
+    settings = json.loads((config_path.parent / ".claude" / "settings.json").read_text())
+    assert settings["skipDangerousModePermissionPrompt"] is True
 
 
 def test_ensure_trusted_preserves_existing_state(
@@ -6547,9 +6549,12 @@ def test_ensure_trusted_idempotent_does_not_rewrite(
     workspace.mkdir(parents=True)
     already = {
         "hasCompletedOnboarding": True,
-        "bypassPermissionsModeAccepted": True,
         "projects": {str(workspace.resolve()): {"hasTrustDialogAccepted": True}},
     }
+    # Pre-seed the settings gate too so the helper is a full no-op here.
+    settings_path = config_path.parent / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps({"skipDangerousModePermissionPrompt": True}))
     # Compact, no indentation — distinct from the helper's indent=2 output.
     config_path.write_text(json.dumps(already, separators=(",", ":")))
     before = config_path.read_bytes()
@@ -6558,6 +6563,31 @@ def test_ensure_trusted_idempotent_does_not_rewrite(
 
     # Byte-identical → the helper detected no change and never wrote.
     assert config_path.read_bytes() == before
+
+
+def test_ensure_trusted_merges_bypass_gate_into_existing_settings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The bypass gate merges into ~/.claude/settings.json without clobbering.
+
+    Claude's user settings file holds the status line, effort level, and
+    other client-side state; adding the bypass-skip key must preserve all of
+    it. Seed an unrelated key and assert it survives alongside the new one.
+    """
+    config_path = _redirect_home(monkeypatch, tmp_path / "home")
+    settings_path = config_path.parent / ".claude" / "settings.json"
+    settings_path.parent.mkdir(parents=True, exist_ok=True)
+    settings_path.write_text(json.dumps({"effortLevel": "high"}))
+
+    workspace = tmp_path / "worktrees" / "feature-b"
+    workspace.mkdir(parents=True)
+    ensure_claude_workspace_trusted(workspace)
+
+    settings = json.loads(settings_path.read_text())
+    assert settings["skipDangerousModePermissionPrompt"] is True
+    assert settings["effortLevel"] == "high"  # unrelated state preserved
 
 
 @pytest.mark.parametrize(

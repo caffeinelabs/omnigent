@@ -1159,17 +1159,6 @@ def ensure_claude_workspace_trusted(workspace: Path) -> None:
         data["hasCompletedOnboarding"] = True
         changed = True
 
-    # Bypass-permissions acceptance gate. When a session launches in
-    # bypassPermissions mode Claude Code shows a one-time "Yes, I accept"
-    # warning screen; like onboarding it fires no PermissionRequest hook, so
-    # a host-spawned session hangs on it and the terminal never becomes ready.
-    # Pre-accept it so the bypassPermissions launch path never blocks. Seeding
-    # the key does not enable bypass — that stays gated by --permission-mode;
-    # this only pre-acknowledges the warning for sessions that opt in.
-    if data.get("bypassPermissionsModeAccepted") is not True:
-        data["bypassPermissionsModeAccepted"] = True
-        changed = True
-
     # Per-directory trust gate. Claude keys its ``projects`` map by the
     # resolved absolute path, so match that exactly.
     project_key = str(workspace.resolve())
@@ -1185,9 +1174,44 @@ def ensure_claude_workspace_trusted(workspace: Path) -> None:
         project["hasTrustDialogAccepted"] = True
         changed = True
 
-    if not changed:
+    if changed:
+        _atomic_write_user_json(config_path, data)
+
+    _ensure_bypass_permission_prompt_skipped()
+
+
+def _ensure_bypass_permission_prompt_skipped() -> None:
+    """
+    Pre-accept Claude Code's bypassPermissions-mode warning screen.
+
+    When a session launches with ``--permission-mode bypassPermissions``,
+    Claude Code shows a one-time interactive gate ("This mode should only be
+    used in a sandboxed container/VM … 2. Yes, I accept"). Like onboarding and
+    the trust dialog it fires no ``PermissionRequest`` hook, so a host-spawned
+    session has nobody to answer it: Claude sits on the prompt, the terminal
+    never becomes ready, and the turn fails. Unlike those two, it is NOT gated
+    by ``~/.claude.json``; clicking "Yes, I accept" records
+    ``skipDangerousModePermissionPrompt: true`` in ``~/.claude/settings.json``,
+    and thereafter the screen never shows. Seed that key so the bypass launch
+    path never blocks. This does not enable bypass — that stays gated by
+    ``--permission-mode``; it only pre-acknowledges the warning for opt-in
+    sessions. Merges into any existing settings; leaves the file untouched when
+    the key is already set.
+    """
+    # Resolve under the live home (not the import-time constant) so a
+    # relocated HOME — and tests that redirect it — target the right file.
+    path = Path.home() / ".claude" / "settings.json"
+    if path.exists():
+        settings = json.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(settings, dict):
+            raise ValueError(f"{path} is not a JSON object; refusing to overwrite.")
+    else:
+        settings = {}
+    if settings.get("skipDangerousModePermissionPrompt") is True:
         return
-    _atomic_write_user_json(config_path, data)
+    settings["skipDangerousModePermissionPrompt"] = True
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write_user_json(path, settings)
 
 
 def _atomic_write_user_json(path: Path, payload: _JsonObject) -> None:
