@@ -6480,6 +6480,9 @@ def test_ensure_trusted_creates_config_when_missing(
     # Per-directory trust gate, keyed by the RESOLVED absolute path —
     # without this Claude shows "Do you trust the files in this folder?".
     assert data["projects"][str(workspace.resolve())]["hasTrustDialogAccepted"] is True
+    # Bypass-permissions acceptance gate — without this a session launched in
+    # bypassPermissions mode hangs on Claude's "Yes, I accept" warning screen.
+    assert data["bypassPermissionsModeAccepted"] is True
 
 
 def test_ensure_trusted_preserves_existing_state(
@@ -6544,6 +6547,7 @@ def test_ensure_trusted_idempotent_does_not_rewrite(
     workspace.mkdir(parents=True)
     already = {
         "hasCompletedOnboarding": True,
+        "bypassPermissionsModeAccepted": True,
         "projects": {str(workspace.resolve()): {"hasTrustDialogAccepted": True}},
     }
     # Compact, no indentation — distinct from the helper's indent=2 output.

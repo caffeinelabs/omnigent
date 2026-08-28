@@ -1117,8 +1117,8 @@ def ensure_claude_workspace_trusted(workspace: Path) -> None:
     per-session git worktrees, which hand Claude a brand-new —
     therefore untrusted — directory on every session.
 
-    Seed both gating keys idempotently so the launch never blocks. Only
-    those two keys are written; all other ``~/.claude.json`` state (the
+    Seed these gating keys idempotently so the launch never blocks. Only
+    those keys are written; all other ``~/.claude.json`` state (the
     user's own onboarding choices, project history, MCP config, OAuth
     account) is preserved, and the file is left untouched when both keys
     are already set. This deliberately does NOT skip per-tool permission
@@ -1157,6 +1157,17 @@ def ensure_claude_workspace_trusted(workspace: Path) -> None:
     # has never run Claude Code interactively.
     if data.get("hasCompletedOnboarding") is not True:
         data["hasCompletedOnboarding"] = True
+        changed = True
+
+    # Bypass-permissions acceptance gate. When a session launches in
+    # bypassPermissions mode Claude Code shows a one-time "Yes, I accept"
+    # warning screen; like onboarding it fires no PermissionRequest hook, so
+    # a host-spawned session hangs on it and the terminal never becomes ready.
+    # Pre-accept it so the bypassPermissions launch path never blocks. Seeding
+    # the key does not enable bypass — that stays gated by --permission-mode;
+    # this only pre-acknowledges the warning for sessions that opt in.
+    if data.get("bypassPermissionsModeAccepted") is not True:
+        data["bypassPermissionsModeAccepted"] = True
         changed = True
 
     # Per-directory trust gate. Claude keys its ``projects`` map by the
