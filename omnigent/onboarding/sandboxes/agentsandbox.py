@@ -28,20 +28,20 @@ from __future__ import annotations
 
 import contextlib
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable
 from typing import TYPE_CHECKING, ClassVar
 
 import click
 
 from omnigent.onboarding.sandboxes.base import SandboxHostLauncher
 from omnigent.onboarding.sandboxes.kubernetes import (
+    _HOME_DIR,
+    _POD_READY_REQUEST_TIMEOUT_S,
+    _POD_READY_TIMEOUT_S,
     KubernetesSandboxLauncher,
     _api_reason,
     _ensure_sdk,
     _format_api_error,
-    _HOME_DIR,
-    _POD_READY_REQUEST_TIMEOUT_S,
-    _POD_READY_TIMEOUT_S,
     _token_secret_name,
     build_job_manifest,
     build_token_secret_manifest,
@@ -499,9 +499,7 @@ class AgentSandboxLauncher(KubernetesSandboxLauncher):
         except ApiException as exc:
             if getattr(exc, "status", None) == 404:
                 return None
-            raise click.ClickException(
-                _format_api_error("read Sandbox", sandbox_id, exc)
-            ) from exc
+            raise click.ClickException(_format_api_error("read Sandbox", sandbox_id, exc)) from exc
 
     def _patch_operating_mode(self, sandbox_id: str, mode: str) -> None:
         """JSON-merge-patch ``spec.operatingMode`` on the ``Sandbox``."""

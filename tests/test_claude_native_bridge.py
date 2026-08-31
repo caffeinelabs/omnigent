@@ -2785,6 +2785,34 @@ def test_augment_claude_args_injects_mcp_and_hooks(tmp_path: Path) -> None:
     assert "--disallowedTools" not in args
 
 
+def test_augment_claude_args_applies_default_permission_mode(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deployment default seeds --permission-mode when the session omits it."""
+    monkeypatch.setenv("OMNIGENT_CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE", "bypassPermissions")
+    args = augment_claude_args((), bridge_dir=tmp_path)
+    assert args[:2] == ["--permission-mode", "bypassPermissions"]
+    # Mirrored into the invocation settings' defaultMode too.
+    settings = _load_invocation_settings(args)
+    assert settings["permissions"]["defaultMode"] == "bypassPermissions"
+
+
+def test_augment_claude_args_default_permission_mode_yields_to_explicit(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An explicit per-session --permission-mode wins over the deployment default."""
+    monkeypatch.setenv("OMNIGENT_CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE", "bypassPermissions")
+    args = augment_claude_args(("--permission-mode", "plan"), bridge_dir=tmp_path)
+    assert args.count("--permission-mode") == 1
+    assert _load_invocation_settings(args)["permissions"]["defaultMode"] == "plan"
+
+
+def test_augment_claude_args_no_default_permission_mode_when_unset(tmp_path: Path) -> None:
+    """Without the env, no --permission-mode is injected (Claude's own default)."""
+    args = augment_claude_args((), bridge_dir=tmp_path)
+    assert "--permission-mode" not in args
+
+
 @pytest.mark.parametrize(
     "api_key_helper",
     (

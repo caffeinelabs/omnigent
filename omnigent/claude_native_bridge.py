@@ -1844,6 +1844,24 @@ def url_component(value: str) -> str:
 _OMNIGENT_DISALLOWED_TOOLS: tuple[str, ...] = ()
 
 
+_DEFAULT_PERMISSION_MODE_ENV = "OMNIGENT_CLAUDE_NATIVE_DEFAULT_PERMISSION_MODE"
+"""Server/runner env naming a ``--permission-mode`` value applied to
+claude-native launches that don't already specify one. Lets a deployment
+default sessions to e.g. ``bypassPermissions`` so tool calls run without
+per-tool approval cards, while an explicit per-session mode still wins.
+Unset leaves Claude Code's own default (interactive prompts) untouched."""
+
+
+def _with_default_permission_mode(claude_args: tuple[str, ...]) -> tuple[str, ...]:
+    """Prepend a configured default ``--permission-mode`` when none is set."""
+    if _arg_value(claude_args, "--permission-mode") is not None:
+        return claude_args
+    default = os.environ.get(_DEFAULT_PERMISSION_MODE_ENV, "").strip()
+    if not default:
+        return claude_args
+    return ("--permission-mode", default, *claude_args)
+
+
 def augment_claude_args(
     claude_args: tuple[str, ...],
     *,
@@ -1909,6 +1927,7 @@ def augment_claude_args(
         ``False`` keeps every prompt off the routing round trip.
     :returns: Augmented argument list for the terminal resource.
     """
+    claude_args = _with_default_permission_mode(claude_args)
     mcp_config = build_mcp_config(bridge_dir, python_executable=python_executable)
     hook_settings = build_hook_settings(
         bridge_dir,

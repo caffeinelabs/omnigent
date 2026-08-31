@@ -192,7 +192,9 @@ class _FakeCore:
     def create_namespaced_secret(self, namespace: str, body: object, **kw: object) -> None:
         self.created_secrets.append(namespace)
 
-    def replace_namespaced_secret(self, name: str, namespace: str, body: object, **kw: object) -> None:
+    def replace_namespaced_secret(
+        self, name: str, namespace: str, body: object, **kw: object
+    ) -> None:
         self.replaced_secrets.append(name)
 
 
@@ -209,7 +211,9 @@ def _wire(
     return fake_custom, fake_core
 
 
-def test_suspend_patches_operating_mode_suspended(monkeypatch: pytest.MonkeyPatch, fake_sdk: type[Exception]) -> None:
+def test_suspend_patches_operating_mode_suspended(
+    monkeypatch: pytest.MonkeyPatch, fake_sdk: type[Exception]
+) -> None:
     lc = AgentSandboxLauncher(namespace="omnigent-sandboxes")
     fake_custom, _ = _wire(monkeypatch, lc)
     lc.suspend("omnigent-managed-abc")
@@ -239,7 +243,9 @@ def test_start_host_resumes_in_place_when_cr_survived(
     # Secret + flip operatingMode=Running, and NEVER recreate the CR (its
     # volumeClaimTemplate PVC would be lost).
     lc = AgentSandboxLauncher(namespace="omnigent-sandboxes")
-    fake_custom, fake_core = _wire(monkeypatch, lc, existing={"metadata": {"name": "omnigent-managed-abc"}})
+    fake_custom, fake_core = _wire(
+        monkeypatch, lc, existing={"metadata": {"name": "omnigent-managed-abc"}}
+    )
     lc.start_host(
         "omnigent-managed-abc",
         token="tok",
@@ -253,7 +259,9 @@ def test_start_host_resumes_in_place_when_cr_survived(
     assert fake_custom.creates == []
 
 
-def test_terminate_deletes_sandbox_cr_and_token_secret(monkeypatch: pytest.MonkeyPatch, fake_sdk: type[Exception]) -> None:
+def test_terminate_deletes_sandbox_cr_and_token_secret(
+    monkeypatch: pytest.MonkeyPatch, fake_sdk: type[Exception]
+) -> None:
     lc = AgentSandboxLauncher(namespace="omnigent-sandboxes")
     fake_custom, fake_core = _wire(monkeypatch, lc)
     lc.terminate("omnigent-managed-abc")
