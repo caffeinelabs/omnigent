@@ -164,7 +164,7 @@ jobs:
 
       - name: Install dependencies
         if: steps.trigger.outputs.skip != 'true' && steps.creds.outputs.available == 'true'
-        run: uv sync --extra all --extra dev
+        run: uv sync --extra all
 
       - name: Install Claude Code CLI
         if: steps.trigger.outputs.skip != 'true' && steps.creds.outputs.available == 'true'
