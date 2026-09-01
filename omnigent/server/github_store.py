@@ -14,6 +14,7 @@ ciphertext.
 from __future__ import annotations
 
 from sqlalchemy import delete, select
+from sqlalchemy.engine import CursorResult
 
 from omnigent.db.db_models import SqlGithubConnection, current_workspace_id
 from omnigent.db.utils import get_or_create_engine, make_managed_session_maker, now_epoch
@@ -161,6 +162,9 @@ class GithubConnectionStore:
                     SqlGithubConnection.user_id == user_id,
                 )
             )
+            # DML executes return a CursorResult; the base Result type the
+            # stub infers does not expose ``rowcount``.
+            assert isinstance(result, CursorResult)
             return result.rowcount > 0
 
     def list_all(self) -> list[GithubConnection]:

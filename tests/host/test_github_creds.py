@@ -20,10 +20,7 @@ def test_writes_both_files_with_expected_content(tmp_path: Path) -> None:
     assert creds.read_text() == "https://x-access-token:ghu_abc123@github.com\n"
     # gh hosts.yml: exact four-line shape the launcher writes.
     assert hosts.read_text() == (
-        "github.com:\n"
-        "    user: octocat\n"
-        "    oauth_token: ghu_abc123\n"
-        "    git_protocol: https\n"
+        "github.com:\n    user: octocat\n    oauth_token: ghu_abc123\n    git_protocol: https\n"
     )
 
 

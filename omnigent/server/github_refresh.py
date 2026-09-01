@@ -192,9 +192,7 @@ async def run_github_refresh_loop(
                     github_client=github_client,
                 )
                 if count:
-                    _logger.info(
-                        "refreshed github credentials on %d managed sandbox(es)", count
-                    )
+                    _logger.info("refreshed github credentials on %d managed sandbox(es)", count)
             except Exception:  # noqa: BLE001 - a sweep failure must not kill the loop
                 _logger.warning("github credential refresh sweep failed", exc_info=True)
     except asyncio.CancelledError:

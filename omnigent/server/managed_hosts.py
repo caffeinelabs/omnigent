@@ -2931,12 +2931,13 @@ async def _start_sandbox_host(
         kwargs["on_stage"] = on_stage
     # `agent_name` is declared on the classifying launcher's `start_host` alone,
     # so the abstract signature does not carry it and the call is cast: the
-    # capability is the runtime guarantee the static type cannot express.
+    # capability is the runtime guarantee the static type cannot express. The
+    # same cast also covers the gradually-built ``kwargs`` dict (typed
+    # ``object``), which the abstract signature cannot check either.
+    start_host = cast(Callable[..., str], launcher.start_host)
     if agent_name is not None and launcher.capabilities.classifies_runner_by_agent:
         kwargs["agent_name"] = agent_name
-        start_classified = cast(Callable[..., str], launcher.start_host)
-        return await asyncio.to_thread(start_classified, sandbox_id, **kwargs)
-    return await asyncio.to_thread(launcher.start_host, sandbox_id, **kwargs)
+    return await asyncio.to_thread(start_host, sandbox_id, **kwargs)
 
 
 async def _arm_and_start_host(

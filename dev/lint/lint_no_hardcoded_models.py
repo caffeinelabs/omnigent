@@ -39,6 +39,23 @@ MODEL_ID_RE = re.compile(
 TEXT_EXTENSIONS = {".json", ".toml", ".yaml", ".yml", ".sh"}
 SOURCE_EXTENSIONS = {".py", *TEXT_EXTENSIONS}
 GENERATED_PATHS = {Path("openapi.json")}
+# Fork bot deployment workflows embed their Databricks lane's serving id as a
+# deployment parameter of the sandbox host_config they render — the same class
+# as an image tag, not application-code model sprawl. Named files only, so any
+# future workflow stays covered by the hook. (This must live in the script:
+# the hook runs with ``pass_filenames: false`` and walks git ls-files itself,
+# so pre-commit's own ``exclude:`` has no effect.)
+DEPLOYMENT_CONFIG_PATHS = {
+    Path(".github/workflows/auto-assign-reviewer.yml"),
+    Path(".github/workflows/doc-sync.yml"),
+    Path(".github/workflows/e2e-ui-required.yml"),
+    Path(".github/workflows/feature-blog.yml"),
+    Path(".github/workflows/flake-stress-e2e.yml"),
+    Path(".github/workflows/issue-triage.yml"),
+    Path(".github/workflows/polly-review.yml"),
+    Path(".github/workflows/security-triage.yml"),
+    Path(".github/workflows/vscode-release-pr.yml"),
+}
 SKIP_PARTS = {
     ".git",
     ".mypy_cache",
@@ -214,6 +231,7 @@ def scan(path: Path) -> list[Hit]:
         not path.is_file()
         or path.suffix not in SOURCE_EXTENSIONS
         or Path(_repo_relative(path)) in GENERATED_PATHS
+        or Path(_repo_relative(path)) in DEPLOYMENT_CONFIG_PATHS
         or any(part in SKIP_PARTS for part in path.parts)
     ):
         return []
@@ -233,6 +251,7 @@ def _iter_scannable_paths() -> list[Path]:
         if raw_path
         if (path := Path(raw_path)).suffix in SOURCE_EXTENSIONS
         if path not in GENERATED_PATHS
+        if path not in DEPLOYMENT_CONFIG_PATHS
         if not any(part in SKIP_PARTS for part in path.parts)
     ]
 

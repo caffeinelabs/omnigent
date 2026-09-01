@@ -45,7 +45,7 @@ from omnigent.onboarding.sandboxes.base import (
     SandboxLauncher,
     host_image_wheel_install_command,
 )
-from omnigent.onboarding.sandboxes.types import SandboxCapabilities
+from omnigent.onboarding.sandboxes.types import RepoCheckout, SandboxCapabilities
 
 API_BASE_URL_ENV_VAR: str = "ISLO_BASE_URL"
 """Optional Islo API base URL override. Defaults to
@@ -538,8 +538,15 @@ class IsloSandboxLauncher(SandboxLauncher):
         repo_url: str | None = None,
         repo_branch: str | None = None,
         repo_name: str | None = None,
+        extra_repos: Sequence[RepoCheckout] = (),
+        owner: str | None = None,
+        github_token: str | None = None,
+        github_login: str | None = None,
+        ssh_authorized_keys: Sequence[str] | None = None,
         host_config: dict[str, object] | None = None,
         on_stage: Callable[[str], None] | None = None,
+        session_id: str | None = None,
+        session_url: str | None = None,
     ) -> str:
         """Stop any memory-preserved host daemon, then start with a fresh token."""
         self._stop_preserved_host_daemon(sandbox_id)
@@ -552,8 +559,15 @@ class IsloSandboxLauncher(SandboxLauncher):
             repo_url=repo_url,
             repo_branch=repo_branch,
             repo_name=repo_name,
+            extra_repos=extra_repos,
+            owner=owner,
+            github_token=github_token,
+            github_login=github_login,
+            ssh_authorized_keys=ssh_authorized_keys,
             host_config=host_config,
             on_stage=on_stage,
+            session_id=session_id,
+            session_url=session_url,
         )
 
     def _stop_preserved_host_daemon(self, sandbox_id: str) -> None:
