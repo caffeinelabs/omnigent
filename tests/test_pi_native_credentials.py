@@ -464,6 +464,60 @@ def test_openai_responses_wire_api_default() -> None:
     assert provider.model == "gpt-4o"
 
 
+def test_inline_family_registers_curated_shortlist_as_extra_models() -> None:
+    """The family's ``models:`` tier map registers as Pi ``extra_models``.
+
+    Pi then shows exactly the deployment's curated, verified set in /model
+    (verified empirically: Pi lists only the models its models.json
+    declares), instead of just the launch model. Deepseek ids get the
+    reasoning flag on every surface; claude ids get it only on the
+    anthropic-messages surface; duplicate ids collapse to their first
+    occurrence.
+    """
+    config = {
+        "providers": {
+            "bifrost": {
+                "kind": "gateway",
+                "default": True,
+                "openai": {
+                    "base_url": "http://bifrost.example.com/v1",
+                    "api_key": "sk-test",
+                    "wire_api": "chat",
+                    "models": {
+                        "default": "GLM-5.3-Flash",
+                        "opus": "GLM-5.3",
+                        "fable": "claude-fable-5",
+                        "pro": "deepseek-v4-pro",
+                        "sonnet": "GLM-5.3-Flash",  # duplicate id of the default
+                    },
+                },
+            }
+        }
+    }
+    provider = creds.resolve_pi_native_provider(config_loader=lambda: config)
+    assert provider is not None
+
+    extra_ids = [entry["id"] for entry in provider.extra_models]
+    assert extra_ids == ["GLM-5.3-Flash", "GLM-5.3", "claude-fable-5", "deepseek-v4-pro"]
+    by_id = {entry["id"]: entry for entry in provider.extra_models}
+    assert by_id["deepseek-v4-pro"].get("reasoning") is True
+    # Claude gets the reasoning flag only on the anthropic-messages surface;
+    # this is the openai-completions surface.
+    assert "reasoning" not in by_id["claude-fable-5"]
+    assert "reasoning" not in by_id["GLM-5.3"]
+
+    # The rendered models.json registers the shortlist alongside the launch
+    # model, each exactly once (the launch model is not re-appended).
+    rendered = provider.to_models_config()
+    registered = rendered["providers"][provider.provider_id]["models"]
+    assert [entry["id"] for entry in registered] == [
+        "GLM-5.3-Flash",
+        "GLM-5.3",
+        "claude-fable-5",
+        "deepseek-v4-pro",
+    ]
+
+
 def test_openai_responses_wire_api_explicit() -> None:
     """An OpenAI family with wire_api: responses → openai-responses API.
 
@@ -969,7 +1023,12 @@ def test_model_override_beats_inline_family_default() -> None:
     assert provider is not None
     assert provider.model == "claude-opus-4-7"
     cfg = provider.to_models_config()
-    assert cfg["providers"]["omnigent"]["models"] == [{"id": "claude-opus-4-7"}]
+    # The family's curated shortlist (its ``models:`` map, here just the
+    # default) registers alongside the selected model.
+    assert cfg["providers"]["omnigent"]["models"] == [
+        {"id": "claude-sonnet-4-6"},
+        {"id": "claude-opus-4-7", "input": ["text", "image"]},
+    ]
 
 
 def test_databricks_prefixed_override_normalized_for_inline_anthropic() -> None:
@@ -1002,7 +1061,12 @@ def test_databricks_prefixed_override_normalized_for_inline_anthropic() -> None:
     # The gateway prefix is stripped for the vendor-direct Anthropic endpoint.
     assert provider.model == "claude-opus-4-7"
     cfg = provider.to_models_config()
-    assert cfg["providers"]["omnigent"]["models"] == [{"id": "claude-opus-4-7"}]
+    # The family's curated shortlist (its ``models:`` map, here just the
+    # default) registers alongside the selected model.
+    assert cfg["providers"]["omnigent"]["models"] == [
+        {"id": "claude-sonnet-4-6"},
+        {"id": "claude-opus-4-7", "input": ["text", "image"]},
+    ]
 
 
 def test_databricks_prefixed_override_normalized_for_inline_openai() -> None:
@@ -1033,7 +1097,12 @@ def test_databricks_prefixed_override_normalized_for_inline_openai() -> None:
     # The gateway prefix is stripped for the vendor-direct OpenAI endpoint.
     assert provider.model == "gpt-5-4"
     cfg = provider.to_models_config()
-    assert cfg["providers"]["omnigent"]["models"] == [{"id": "gpt-5-4"}]
+    # The family's curated shortlist (its ``models:`` map, here just the
+    # default) registers alongside the selected model.
+    assert cfg["providers"]["omnigent"]["models"] == [
+        {"id": "gpt-4o"},
+        {"id": "gpt-5-4", "input": ["text", "image"]},
+    ]
 
 
 def test_inline_family_passes_non_mechanical_override_through() -> None:
