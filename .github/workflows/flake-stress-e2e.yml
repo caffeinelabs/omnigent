@@ -236,7 +236,7 @@ jobs:
       - name: Install project and dev dependencies
         # Matches e2e.yml; ``--extra all`` pulls the harness SDKs so the
         # executor adapters import at collection time.
-        run: uv sync --extra all --extra dev
+        run: uv sync --extra all --group test
 
       - name: Install binary dependencies
         # Mirrors e2e.yml. ripgrep: Grep fallback for inner tests. tmux +
