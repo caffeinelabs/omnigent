@@ -22,6 +22,31 @@ Do not grow layer 3. New work lands on `develop` first and is ported to
 
 ## Entries
 
+### pi-native: curated model shortlist (this PR / #71)
+
+- **What:** `3cf827369` registers the provider family's `models:` map
+  (tier/role → bare model id, e.g. the sandbox host_config's
+  GLM-5.3-Flash / GLM-5.3 / claude-fable-5 / grok-4.6 / kimi-k3) in the
+  pi session's managed `models.json` alongside the selected model.
+  Pi's model list is provably just its `models.json` content (the TUI
+  `/model` dialog and the registry `getAvailable()` feeding the web
+  picker alike), so the picker offers exactly the deployment's curated,
+  verified set instead of only the launch model. Ids dedupe; deepseek
+  ids carry the `reasoning` flag. No behavior change without a
+  `models:` map.
+- **Why:** Without the shortlist only the launch model was selectable
+  (GLM-5.3 missing from a GLM-5.3-Flash session). Bare ids keep
+  LLM-gateway routing + fallbacks; the gateway's `/v1/models` exposes
+  only provider-prefixed ids that pin a single backend and skip the
+  chains.
+- **Upstreamable:** yes — inert for configs that declare no `models:`
+  map. Note upstream #4961 already added a searchable pi launch picker
+  (Databricks-OAuth-shaped); this change is the complementary
+  in-session catalog curation.
+- **Lifetime:** open-ended while staging runs pi against Bifrost.
+  Codex / claude / launch-picker lanes of the same shortlist land as
+  their own PRs.
+
 ### GitHub credential auto-refresh in sandboxes (PRs #69, #70)
 
 - **What:** `e671c5e66` (#69) pushes refreshed GitHub App credentials
