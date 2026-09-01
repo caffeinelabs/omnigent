@@ -365,3 +365,28 @@ def test_inject_relay_into_config_noops_when_config_absent(tmp_path: Path) -> No
     bridge_dir = tmp_path / "missing"
     bridge_dir.mkdir()
     assert pi_native_bridge.inject_relay_into_config(bridge_dir, "http://x", "tok") is False
+
+
+def test_pi_native_env_unset_parses_operator_denylist() -> None:
+    """OMNIGENT_PI_ENV_UNSET parses as a sorted, deduplicated name list."""
+    environ = {
+        pi_native_bridge.PI_NATIVE_ENV_UNSET_ENV_VAR: (
+            "OPENAI_API_KEY, ANTHROPIC_AUTH_TOKEN,,DEEPSEEK_API_KEY ,OPENAI_API_KEY"
+        )
+    }
+    assert pi_native_bridge.pi_native_env_unset(environ) == [
+        "ANTHROPIC_AUTH_TOKEN",
+        "DEEPSEEK_API_KEY",
+        "OPENAI_API_KEY",
+    ]
+
+
+def test_pi_native_env_unset_absent_or_empty_strips_nothing() -> None:
+    """An unset or empty OMNIGENT_PI_ENV_UNSET leaves the terminal env alone."""
+    assert pi_native_bridge.pi_native_env_unset({}) == []
+    assert (
+        pi_native_bridge.pi_native_env_unset(
+            {pi_native_bridge.PI_NATIVE_ENV_UNSET_ENV_VAR: "  , ,"}
+        )
+        == []
+    )

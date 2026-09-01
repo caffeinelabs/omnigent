@@ -197,6 +197,17 @@ async def test_auto_create_pi_terminal_launches_required_terminal(
                 metadata={"terminal_name": "pi", "session_key": "main", "running": True},
             )
 
+    # The pi terminal strips the operator-declared credential vars
+    # (OMNIGENT_PI_ENV_UNSET) from the process env: pi activates a built-in
+    # provider's whole catalog on the mere presence of its credential (any
+    # value), flooding the picker with entries that bypass the managed
+    # models.json provider — notably ANTHROPIC_AUTH_TOKEN (read since
+    # pi 0.84), which sandboxes set as a dummy for claude-code.
+    monkeypatch.setenv(
+        pi_native_bridge.PI_NATIVE_ENV_UNSET_ENV_VAR,
+        "OPENAI_API_KEY, ANTHROPIC_AUTH_TOKEN,,DEEPSEEK_API_KEY ",
+    )
+
     published: list[dict[str, Any]] = []
 
     await _auto_create_pi_terminal(
@@ -211,6 +222,13 @@ async def test_auto_create_pi_terminal_launches_required_terminal(
     assert captured["session_key"] == "main"
     assert captured["resource_role"] == PI_NATIVE_TERMINAL_ROLE
     assert captured["spec"].command == "pi"
+    # The env_unset list is parsed from OMNIGENT_PI_ENV_UNSET: sorted,
+    # deduplicated, whitespace/empty entries tolerated.
+    assert captured["spec"].env_unset == [
+        "ANTHROPIC_AUTH_TOKEN",
+        "DEEPSEEK_API_KEY",
+        "OPENAI_API_KEY",
+    ]
     config = json.loads(
         Path(captured["spec"].env[pi_native_bridge.PI_NATIVE_CONFIG_ENV_VAR]).read_text()
     )

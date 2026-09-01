@@ -48,6 +48,39 @@ Do not grow layer 3. New work lands on `develop` first and is ported to
 - **Lifetime:** The islo delta lasts until upstream widens `start_host`
   the same way; the lint exemption until the workflows move to `vars.*`.
 
+### pi-native: scrub provider credential env from the pi terminal (this PR / #76)
+
+- **What:** Two cooperating mechanisms. (1) The pi-native terminal spec
+  strips an operator-declared denylist of credential env vars, named as a
+  comma-separated list in `OMNIGENT_PI_ENV_UNSET` and popped via
+  `TerminalEnvSpec.env_unset` — pi activates a built-in provider's entire
+  catalog on the mere presence of its credential (any value), and pi's own
+  auth rides the managed `models.json` `apiKey`, so it needs no credential
+  env. (2) The managed `settings.json` now carries `enabledModels` —
+  provider-qualified refs for every model in the rendered `models.json` —
+  so pi's picker (`/model` dialog, Ctrl+P cycling) is scoped to the
+  managed shortlist even if a sniffed var slips through (allowlist
+  belt-and-suspenders; older pi ignores the unknown key harmlessly).
+- **Why:** Pi's built-in catalog activation flooded the session picker
+  with entries that bypass the managed provider and its gateway routing —
+  and hang on use. Two enabling conditions met in caffeine sandboxes: the
+  shortlist `models.json` carries a `claude-*` id (enables the built-in
+  anthropic provider) and pods set a dummy `ANTHROPIC_AUTH_TOKEN` for
+  claude-code, which pi >= 0.84 newly reads as anthropic auth (0.79 did
+  not). Verified against pi 0.84.4 (13 built-in Claude rows) vs 0.79.0
+  (clean). The denylist is operator config rather than a code constant
+  because the deployment knows which credential vars it projects into
+  runner pods — only the intersection of "projected" and "sniffed by pi"
+  can flood — so the list lives next to the projection (e.g.
+  `ANTHROPIC_AUTH_TOKEN`, `DEEPSEEK_API_KEY`) and can absorb future vars
+  without an Omnigent release.
+- **Overlap with upstream:** none — upstream has no managed-gateway
+  deployment with dummy credential env; the env-var-driven `env_unset`
+  config is a candidate for an upstream discussion (generic per-harness
+  denylist config), as is a pi-side opt-out for built-in catalog
+  activation.
+
+
 ### pi-native: curated model shortlist (this PR / #71)
 
 - **What:** `3cf827369` registers the provider family's `models:` map
