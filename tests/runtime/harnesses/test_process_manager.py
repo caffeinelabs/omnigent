@@ -45,6 +45,7 @@ from omnigent.runtime.harnesses.process_manager import (
     _default_tmp_parent,
     _pid_alive,
     _pids_holding_socket,
+    _socket_path,
     _SubprocessEntry,
 )
 
@@ -333,7 +334,7 @@ async def test_release_terminates_subprocess(
         # Capture the subprocess PID via the introspection endpoint;
         # if release worked, the PID won't be alive after.
         pid = (await client.get("/pid")).json()["pid"]
-        socket_path = manager.instance_dir / "conv-conv_a.sock"
+        socket_path = _socket_path(manager.instance_dir, "conv_a")
         assert socket_path.exists()
         await manager.release("conv_a")
         # Socket cleanup is part of release's contract — leaving
@@ -616,7 +617,7 @@ async def test_idle_reaper_releases_stale_entries(
         # No HTTP ping: with idle_timeout_s=0.0 the reaper can fire during an
         # inline HTTP call and yank the client mid-request. Socket-existence
         # loop below is the real "entry was reaped" assertion.
-        socket_path = fast.instance_dir / "conv-conv_a.sock"
+        socket_path = _socket_path(fast.instance_dir, "conv_a")
         assert socket_path.exists()
         # Wait long enough for the 2s idle window plus multiple
         # reaper passes. A 0s timeout races with subprocess startup
@@ -663,7 +664,7 @@ async def test_idle_reaper_survives_release_error(
     await fast.start()
     try:
         await fast.get_client("conv_a", _TEST_HARNESS_NAME)
-        socket_path = fast.instance_dir / "conv-conv_a.sock"
+        socket_path = _socket_path(fast.instance_dir, "conv_a")
         assert socket_path.exists()
 
         # Make the first reaper-triggered release raise, then defer to the
@@ -721,7 +722,7 @@ async def test_idle_reaper_skips_in_flight_turn(
     await fast.start()
     try:
         await fast.get_client("conv_a", _TEST_HARNESS_NAME)
-        socket_path = fast.instance_dir / "conv-conv_a.sock"
+        socket_path = _socket_path(fast.instance_dir, "conv_a")
         assert socket_path.exists()
         # Mark the turn live, as the runner does on ``response.created``.
         fast.mark_in_flight("conv_a", "resp_x")
@@ -858,7 +859,7 @@ async def test_idle_reaper_disabled_when_timeout_zero(
     await fast.start()
     try:
         await fast.get_client("conv_a", _TEST_HARNESS_NAME)
-        socket_path = fast.instance_dir / "conv-conv_a.sock"
+        socket_path = _socket_path(fast.instance_dir, "conv_a")
         assert socket_path.exists()
         # ~20 reaper passes at 0.05 s. With the bug the socket is gone almost
         # immediately; with the guard it survives because reaping is disabled.
@@ -889,7 +890,8 @@ async def test_orphan_sweep_removes_dead_omnigent_dirs(
     (fake_dir / _AP_PID_FILE).write_text("99999999", encoding="utf-8")
     # Plant a stale socket file too so the sweep has something to
     # try-and-clean (no live runner to kill, but the dir removal
-    # path is what matters).
+    # path is what matters). The legacy ``conv-`` name also covers
+    # the sweep's backward-compat glob for pre-rename sockets.
     (fake_dir / "conv-orphan.sock").write_text("", encoding="utf-8")
 
     fresh = HarnessProcessManager(tmp_parent=short_tmp_parent)
@@ -1168,8 +1170,14 @@ async def test_orphan_sweep_escalates_to_sigkill(
     killed: list[tuple[int, signal.Signals]] = []
     calls = 0
 
+    instance_dir = short_tmp_parent / "ap-dead"
+    instance_dir.mkdir()
+    stale_socket = _socket_path(instance_dir, "stale")
+    assert stale_socket.name.startswith("c-"), "expected the hashed socket convention"
+    stale_socket.touch()
+
     async def fake_pids_holding_socket(socket_path: Path) -> list[int]:
-        assert socket_path.name == "conv-stale.sock"
+        assert socket_path == stale_socket
         return [12345]
 
     def fake_pid_alive(pid: int) -> bool:
@@ -1186,10 +1194,6 @@ async def test_orphan_sweep_escalates_to_sigkill(
     monkeypatch.setattr(pm_mod, "_pids_holding_socket", fake_pids_holding_socket)
     monkeypatch.setattr(pm_mod, "_pid_alive", fake_pid_alive)
     monkeypatch.setattr(pm_mod.os, "kill", fake_kill)
-
-    instance_dir = short_tmp_parent / "ap-dead"
-    instance_dir.mkdir()
-    (instance_dir / "conv-stale.sock").touch()
 
     mgr = HarnessProcessManager(tmp_parent=short_tmp_parent)
     await mgr._kill_orphan_runners(instance_dir)
@@ -1387,7 +1391,7 @@ async def test_release_during_spawn_leaves_no_live_process(
         assert client is not None
         assert await release_task is None
 
-        socket_path = manager.instance_dir / f"conv-{conv_id}.sock"
+        socket_path = _socket_path(manager.instance_dir, conv_id)
         assert not manager.has_session(conv_id)
         assert conv_id not in manager._entries
         assert not socket_path.exists()
@@ -1534,7 +1538,7 @@ async def test_shutdown_during_spawn_leaves_no_live_process(
         assert spawned, "spawn was never reached"
         process = spawned[0]
         pid = process.pid
-        socket_path = manager.instance_dir / f"conv-{conv_id}.sock"
+        socket_path = _socket_path(manager.instance_dir, conv_id)
 
         shutdown_task = asyncio.create_task(manager.shutdown())
         await asyncio.sleep(0)
