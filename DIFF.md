@@ -2,7 +2,7 @@
 
 This file tracks what the fork's `staging` branch carries that is **not**
 on the fork's `main` (caffeinelabs/omnigent `main`, currently
-`8aaf72c91`, a mirror of an older `omnigent-ai/omnigent` main).
+`2a4fc31fa`, a mirror of an older `omnigent-ai/omnigent` main).
 
 `develop` keeps its own ledger. This one is for `staging`.
 
@@ -21,6 +21,52 @@ Do not grow layer 3. New work lands on `develop` first and is ported to
 `staging` on purpose (this PR).
 
 ## Entries
+
+### GitHub credential auto-refresh in sandboxes (PRs #69, #70)
+
+- **What:** `e671c5e66` (#69) pushes refreshed GitHub App credentials
+  into already-running sandboxes so sessions outlive the token TTL;
+  `ea707befa` (#70) fans those pushes out concurrently instead of
+  serially (refresh latency no longer scales with live sandbox count).
+- **Why:** Long-running staging sessions were losing git/gh auth
+  mid-session when the installation token expired.
+- **Upstreamable:** the credential-refresh mechanics are generic; the
+  GitHub-App identity layer it serves (#1) is deployment-shaped. Not
+  proposed.
+- **Lifetime:** open-ended; tied to the GitHub App sandbox auth entry
+  below.
+
+### Web UX: new-session repo list cache + last selection (PR #67)
+
+- **What:** `57e3a5158` caches the GitHub repo list in the new-session
+  dialog and remembers the last repo selection across sessions.
+- **Why:** The repo query refetched (and re-rendered a loading state)
+  on every dialog open.
+- **Upstreamable:** yes, generic web polish; not proposed.
+- **Lifetime:** open-ended.
+
+### Web UX: per-chat sandbox running indicator (PR #68)
+
+- **What:** `1cffb6c72` shows a per-chat indicator in the sidebar while
+  a session's managed sandbox is running.
+- **Why:** Sandbox liveness was only visible inside the open chat.
+- **Upstreamable:** yes, generic web polish; not proposed.
+- **Lifetime:** open-ended.
+
+### Second upstream sync + staging hardening (sync/upstream-main-2)
+
+- **What:** `ed3b8545a` merges `omnigent-ai/main` (+90 commits:
+  upstream #4766–#5036 incl. the upstream pi launch model picker
+  #4961) into `staging`; `2a6d95185` (#2) keeps staging's own
+  `.github/workflows` during the sync; `0bf8b1313` merges the
+  `github_connections` + `task_summary` alembic heads instead of
+  reparenting; `e7b346ded` fixes the sandbox-provider entrypoint lookup
+  after the upstream `ManagedSandboxDeployment` rename.
+- **Why:** Routine upstream reconciliation; the two fixes are
+  staging-only collision points (fork migrations, fork provider
+  resolution).
+- **Upstreamable:** no (sync mechanics).
+- **Lifetime:** permanent pattern for future syncs.
 
 ### Host image + server: all-harness runner bundle (this PR / #62)
 
