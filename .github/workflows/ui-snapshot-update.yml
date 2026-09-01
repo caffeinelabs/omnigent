@@ -97,7 +97,7 @@ jobs:
           key: venv-uisnapshot-${{ runner.os }}-${{ hashFiles('.python-version') }}-${{ hashFiles('uv.lock') }}
 
       - name: Install project + dev extras
-        run: uv sync --extra all --extra dev
+        run: uv sync --extra all --group test
 
       # No "playwright install": the pinned image ships matching Chromium + deps
       # under $PLAYWRIGHT_BROWSERS_PATH (/ms-playwright).
