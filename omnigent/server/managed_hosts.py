@@ -150,7 +150,7 @@ import time
 import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import click
 from fastapi import HTTPException
@@ -2892,7 +2892,7 @@ async def _start_sandbox_host(
     """Start a host without sending absent optional arguments to legacy launchers."""
     # The mandatory identity/repo primitives every launcher (in-tree or a
     # deployment-injected legacy one) accepts.
-    kwargs: dict[str, object] = {
+    kwargs: dict[str, Any] = {
         "token": token,
         "host_id": host_id,
         "host_name": host_name,

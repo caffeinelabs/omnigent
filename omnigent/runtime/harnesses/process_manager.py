@@ -1528,9 +1528,7 @@ class HarnessProcessManager:
         all_pids: set[int] = set()
         # Match both the current ``c-<hash>.sock`` names and legacy
         # ``conv-<id>.sock`` files left by pre-rename runners.
-        socket_files = set(instance_dir.glob("c-*.sock")) | set(
-            instance_dir.glob("conv-*.sock")
-        )
+        socket_files = set(instance_dir.glob("c-*.sock")) | set(instance_dir.glob("conv-*.sock"))
         for socket_file in sorted(socket_files):
             pids = await _pids_holding_socket(socket_file)
             for pid in pids:
