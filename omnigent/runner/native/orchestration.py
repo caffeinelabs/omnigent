@@ -2106,6 +2106,7 @@ async def _auto_create_pi_terminal(
     from omnigent.pi_native_bridge import (
         PI_NATIVE_CONFIG_ENV_VAR,
         clear_inbox,
+        pi_native_env_unset,
         pi_session_dir,
         prepare_bridge_dir,
         write_extension_files,
@@ -2237,6 +2238,14 @@ async def _auto_create_pi_terminal(
             command=pi_command,
             args=pi_args,
             env=pi_env,
+            # Strip operator-declared credential vars (OMNIGENT_PI_ENV_UNSET)
+            # that pi sniffs for its built-in provider registry: any value
+            # activates the provider's whole catalog. Sandbox pods carry
+            # dummy gateway tokens (ANTHROPIC_AUTH_TOKEN for claude-code),
+            # and pi >= 0.84 reads ANTHROPIC_AUTH_TOKEN — with a claude-* id
+            # in the managed models.json that flooded the picker with broken
+            # built-in Claude entries. Pi's own auth rides models.json.
+            env_unset=pi_native_env_unset(os.environ),
             scrollback=100_000,
             tmux_allow_passthrough=True,
             tmux_start_on_attach=False,

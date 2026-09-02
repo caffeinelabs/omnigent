@@ -1109,6 +1109,22 @@ def resolve_pi_native_provider(
         return None
 
 
+def _enabled_model_refs(rendered: _PiModelsConfig) -> list[str]:
+    """Return provider-qualified refs for every model in a rendered config.
+
+    Written to the managed settings.json as ``enabledModels`` so Pi scopes
+    its picker (``/model`` dialog, Ctrl+P cycling) to exactly the managed
+    shortlist.
+    """
+    refs = {
+        f"{provider_id}/{model['id']}"
+        for provider_id, payload in rendered["providers"].items()
+        for model in payload.get("models", [])
+        if model.get("id")
+    }
+    return sorted(refs)
+
+
 def write_pi_models_config(
     agent_dir: Path,
     provider: PiProviderConfig,
@@ -1188,7 +1204,20 @@ def pi_native_provider_launch(
     # key; Pi's getDefaultThinkingLevel() returns null (falsy) → no thinking.
     from omnigent.inner.pi_settings import prepare_managed_pi_agent_dir
 
-    prepare_managed_pi_agent_dir(agent_dir, overlay={"defaultThinkingLevel": None})
+    prepare_managed_pi_agent_dir(
+        agent_dir,
+        overlay={
+            "defaultThinkingLevel": None,
+            # Scope the picker to the managed shortlist: when enabledModels is
+            # non-empty, Pi's /model dialog and Ctrl+P cycling show only these
+            # provider-qualified refs. Allowlist counterpart to the
+            # OMNIGENT_PI_ENV_UNSET denylist — even if a credential var pi
+            # sniffs slips through and activates a built-in provider's
+            # catalog, those entries stay invisible rather than selectable.
+            # Older Pi versions ignore the unknown key harmlessly.
+            "enabledModels": _enabled_model_refs(rendered),
+        },
+    )
     env = {PI_CODING_AGENT_DIR_ENV_VAR: str(agent_dir)}
     # When the model id contains a "/" Pi's arg parser splits on the first
     # slash and treats the left part as a provider name, overriding

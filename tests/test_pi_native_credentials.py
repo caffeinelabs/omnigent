@@ -279,6 +279,35 @@ def test_provider_launch_returns_env_and_args(tmp_path: Path) -> None:
     assert (agent_dir / "models.json").exists()
 
 
+def test_provider_launch_scopes_picker_via_enabled_models(tmp_path: Path) -> None:
+    """The managed settings.json scopes the picker to the rendered shortlist.
+
+    ``enabledModels`` is the allowlist counterpart to the
+    ``OMNIGENT_PI_ENV_UNSET`` denylist: provider-qualified refs for every
+    model in the rendered models.json config, so Pi's picker shows exactly
+    the managed set even if a built-in provider's catalog gets activated.
+    """
+    provider = creds.PiProviderConfig(
+        provider_id="omnigent",
+        base_url="https://api.anthropic.com",
+        api="anthropic-messages",
+        model="claude-sonnet-4-6",
+        api_key="sk-secret",
+        auth_header=False,
+        extra_models=[{"id": "GLM-5.3-Flash"}, {"id": "claude-fable-5"}],
+    )
+    agent_dir = tmp_path / "pi-agent"
+    creds.pi_native_provider_launch(agent_dir, provider)
+
+    settings = json.loads((agent_dir / "settings.json").read_text(encoding="utf-8"))
+    assert settings["enabledModels"] == [
+        "omnigent/GLM-5.3-Flash",
+        "omnigent/claude-fable-5",
+        "omnigent/claude-sonnet-4-6",
+    ]
+    assert settings["defaultThinkingLevel"] is None
+
+
 def test_pi_native_provider_launch_namespaced_model_uses_qualified_arg(
     tmp_path: Path,
 ) -> None:

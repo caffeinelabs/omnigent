@@ -10,6 +10,7 @@ import os
 import tempfile
 import time
 import uuid
+from collections.abc import Mapping
 from importlib.resources import files
 from pathlib import Path
 
@@ -23,6 +24,46 @@ _ENQUEUE_SEQUENCE = itertools.count()
 
 PI_NATIVE_BRIDGE_DIR_ENV_VAR = "HARNESS_PI_NATIVE_BRIDGE_DIR"
 PI_NATIVE_REQUEST_SESSION_ID_ENV_VAR = "HARNESS_PI_NATIVE_REQUEST_SESSION_ID"
+
+# Operator-declared denylist of environment variables stripped from the Pi
+# terminal's process env (``TerminalEnvSpec.env_unset``), named as a
+# comma-separated list in ``OMNIGENT_PI_ENV_UNSET``. Pi activates a built-in
+# provider's ENTIRE model catalog on the mere presence of that provider's
+# credential (any value), so an ambient dummy/gateway token floods the
+# session model picker with entries that cannot work — they bypass the
+# Omnigent-managed provider (models.json ``apiKey``) and its routing.
+# Concretely, pi >= 0.84 additionally reads ``ANTHROPIC_AUTH_TOKEN`` (0.79
+# did not), and a custom model whose id starts with ``claude-`` enables the
+# built-in anthropic provider; sandboxes that set a dummy
+# ``ANTHROPIC_AUTH_TOKEN`` for claude-code therefore saw ~13 broken
+# "Claude Fable/Opus/Sonnet" rows.
+#
+# The list is operator config, not a code constant: the deployment knows
+# which credential variables it projects into runner pods (e.g.
+# ``ANTHROPIC_AUTH_TOKEN`` for claude-code, ``DEEPSEEK_API_KEY`` for
+# dsh-acp), and only the intersection of "projected" and "sniffed by pi"
+# can flood. Declaring it next to the projection keeps the two in sync and
+# lets operators strip any future var without an Omnigent release.
+# Pi needs no credential env at all here: its auth rides the managed
+# models.json. Other harness processes keep their own env — only the Pi
+# terminal is scrubbed. When the variable is unset or empty nothing is
+# stripped. Belt-and-suspenders: the managed settings.json also scopes the
+# picker via ``enabledModels`` (allowlist), so even a missed var leaves
+# built-ins invisible rather than selectable.
+PI_NATIVE_ENV_UNSET_ENV_VAR = "OMNIGENT_PI_ENV_UNSET"
+
+
+def pi_native_env_unset(environ: Mapping[str, str]) -> list[str]:
+    """Return the operator-declared env var names to strip from the Pi terminal.
+
+    Parses :data:`PI_NATIVE_ENV_UNSET_ENV_VAR` as a comma-separated list,
+    tolerating whitespace and empty entries. Returns an empty list when the
+    variable is unset, which leaves the terminal env untouched.
+    """
+    raw = environ.get(PI_NATIVE_ENV_UNSET_ENV_VAR, "")
+    return sorted({name.strip() for name in raw.split(",") if name.strip()})
+
+
 PI_NATIVE_CONFIG_ENV_VAR = "OMNIGENT_PI_NATIVE_CONFIG"
 
 _BRIDGE_ROOT = Path.home() / ".omnigent" / "pi-native"
