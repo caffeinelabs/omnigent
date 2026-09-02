@@ -23,12 +23,28 @@ inactivity timeout:
   calls that for as long as the sandbox has a live runner tunnel
   (:mod:`omnigent.server.managed_keepalive`).
 - Once nothing is running, nothing refreshes the deadline, and the
-  agent-sandbox controller tears the Pod down and (``shutdownPolicy: Delete``)
-  removes the ``Sandbox`` object with it.
+  agent-sandbox controller tears the Pod down.
 
 So an idle sandbox reclaims itself within one window, a busy one lives as long
 as work keeps arriving, and the controller (not the Omnigent server) does the
 reaping. Nothing here has to enumerate or babysit live Pods.
+
+**Expiry is a suspend, not a delete.** ``shutdownPolicy: Retain`` keeps the
+``Sandbox`` object and its claims when the deadline lapses; only the Pod, the
+part that costs CPU and memory, goes away. And because the controller recomputes
+expiry from ``spec.shutdownTime`` on every reconcile rather than latching it,
+pushing that field forward brings the Pod back. That is the whole wake path:
+:meth:`AgentSandboxLauncher.resume` clears the two things the server re-mints
+and :meth:`_create_workload` patches the deadline forward, so the sandbox comes
+back under the same id. Deleting a sandbox for good stays an explicit
+:meth:`~AgentSandboxLauncher.terminate` (session delete, or the deployment's
+inactive-sandbox reaper).
+
+Set :data:`WORKSPACE_SIZE_ENV_VAR` and a suspend also preserves the *workspace*:
+``$HOME`` moves from the Pod's ``emptyDir`` onto a per-sandbox claim, so files,
+``~/.omnigent`` and harness caches survive. Without it a woken sandbox keeps its
+conversation and host identity but starts from an empty workspace, matching the
+``kubernetes`` provider.
 
 Requires the agent-sandbox controller installed in the cluster and the server's
 ServiceAccount granted ``sandboxes`` create/get/patch/delete (see
@@ -89,6 +105,43 @@ first session spawning a runner (no runner yet means no refresh yet).
 """
 
 
+WORKSPACE_SIZE_ENV_VAR: str = "OMNIGENT_AGENT_SANDBOX_WORKSPACE_SIZE"
+"""Environment variable enabling a durable workspace, as a Kubernetes quantity
+(e.g. ``"20Gi"``). Unset means the workspace stays an ``emptyDir`` that dies with
+the Pod, matching the ``kubernetes`` provider."""
+
+STORAGE_CLASS_ENV_VAR: str = "OMNIGENT_AGENT_SANDBOX_STORAGE_CLASS"
+"""Environment variable naming the ``StorageClass`` for the durable workspace.
+Unset uses the cluster's default class. Ignored without
+:data:`WORKSPACE_SIZE_ENV_VAR`."""
+
+WORKSPACE_VOLUME_NAME: str = "home"
+"""Volume name the workspace claim must use.
+
+Not arbitrary: the agent-sandbox controller merges ``volumeClaimTemplates`` into
+the Pod's volumes by NAME, replacing a match (StatefulSet semantics), and
+:func:`~omnigent.onboarding.sandboxes.kubernetes.build_job_manifest` already
+names the HOME ``emptyDir`` ``home`` and mounts it in both the init and host
+containers. Matching that name swaps the ``emptyDir`` for the claim in both
+containers with no manifest surgery, which is what makes ``$HOME`` (and with it
+the workspace, ``~/.omnigent``, and harness caches) survive a suspend.
+"""
+
+
+def resolve_workspace_volume() -> tuple[str, str | None] | None:
+    """
+    Resolve the durable-workspace claim from the environment.
+
+    :returns: ``(size, storage_class)`` when a workspace size is configured,
+        else ``None`` for the ephemeral ``emptyDir`` workspace.
+    """
+    size = os.environ.get(WORKSPACE_SIZE_ENV_VAR, "").strip()
+    if not size:
+        return None
+    storage_class = os.environ.get(STORAGE_CLASS_ENV_VAR, "").strip() or None
+    return size, storage_class
+
+
 def resolve_shutdown_window_s() -> int:
     """
     Resolve the shutdown window from the environment, else the default.
@@ -138,6 +191,7 @@ def build_sandbox_manifest(
     job_manifest: dict[str, object],
     *,
     shutdown_time: str,
+    workspace_volume: tuple[str, str | None] | None = None,
 ) -> dict[str, object]:
     """
     Convert a sandbox Job manifest into an agent-sandbox ``Sandbox`` manifest.
@@ -152,32 +206,52 @@ def build_sandbox_manifest(
     The Job's own ``backoffLimit`` and ``activeDeadlineSeconds`` are dropped:
     the Pod's ``restartPolicy: OnFailure`` still restarts a crashed host in
     place, and the fixed deadline is replaced by the refreshable
-    *shutdown_time*. ``volumeClaimTemplates`` is deliberately not set: the
-    operator PVC lane (``sandbox.kubernetes.pvc_mounts``) already rides in the
-    Pod template, and controller-created claims would be cascade-deleted with
-    the ``Sandbox``, which is the opposite of what a persistent volume is for.
+    *shutdown_time*.
+
+    ``shutdownPolicy: Retain`` (the CRD default) is what makes expiry a
+    *suspend* rather than a delete: on expiry the controller tears down the Pod
+    but keeps the ``Sandbox`` object and its claims, and because expiry is
+    recomputed from ``spec.shutdownTime`` on every reconcile, pushing that
+    field forward brings the Pod back. See :meth:`AgentSandboxLauncher.resume`.
 
     :param job_manifest: The manifest from
         :func:`~omnigent.onboarding.sandboxes.kubernetes.build_job_manifest`.
     :param shutdown_time: Absolute RFC 3339 expiry for ``spec.shutdownTime``.
+    :param workspace_volume: ``(size, storage_class)`` to back ``$HOME`` with a
+        per-sandbox claim that survives suspend, or ``None`` to leave the
+        workspace on the Pod's ``emptyDir``. Note the CRD makes
+        ``volumeClaimTemplates`` immutable after creation, so this is fixed for
+        a sandbox's lifetime: turning it on later applies only to new sandboxes.
     :returns: The ``Sandbox`` manifest to hand to ``CustomObjectsApi``.
     """
     metadata = dict(job_manifest["metadata"])  # type: ignore[arg-type]
     template = job_manifest["spec"]["template"]  # type: ignore[index]
+    spec: dict[str, object] = {
+        "podTemplate": template,
+        "operatingMode": "Running",
+        "shutdownTime": shutdown_time,
+        # Retain keeps the object and its claims when the deadline lapses, so
+        # expiry suspends the sandbox instead of destroying it. The expensive
+        # part (the Pod) still goes; the resumable part stays.
+        "shutdownPolicy": "Retain",
+    }
+    if workspace_volume is not None:
+        size, storage_class = workspace_volume
+        claim: dict[str, object] = {
+            # ReadWriteOnce: exactly one Pod ever mounts a sandbox's workspace.
+            "accessModes": ["ReadWriteOnce"],
+            "resources": {"requests": {"storage": size}},
+        }
+        if storage_class is not None:
+            claim["storageClassName"] = storage_class
+        spec["volumeClaimTemplates"] = [
+            {"metadata": {"name": WORKSPACE_VOLUME_NAME}, "spec": claim}
+        ]
     return {
         "apiVersion": f"{API_GROUP}/{API_VERSION}",
         "kind": "Sandbox",
         "metadata": metadata,
-        "spec": {
-            "podTemplate": template,
-            "operatingMode": "Running",
-            "shutdownTime": shutdown_time,
-            # Delete, not the CRD's Retain default: an expired-but-retained
-            # Sandbox is a leftover object with cleared status that something
-            # would still have to sweep, and self-cleaning expiry is the whole
-            # reason to be on this provider.
-            "shutdownPolicy": "Delete",
-        },
+        "spec": spec,
     }
 
 
@@ -186,13 +260,18 @@ class AgentSandboxLauncher(KubernetesSandboxLauncher):
     :class:`SandboxLauncher` backing managed hosts with agent-sandbox
     ``Sandbox`` custom resources.
 
-    A thin lifecycle specialization of :class:`KubernetesSandboxLauncher`: the
-    Pod, its credentials and its start-readiness polling are all inherited, and
-    only the four lifecycle verbs that differ are overridden:
-    :meth:`_create_workload` (create a ``Sandbox`` rather than a Job),
-    :meth:`_find_job_pod` (the backing Pod is named after the ``Sandbox``, so
-    no label lookup is needed), :meth:`keep_alive` (push ``shutdownTime``
-    forward) and :meth:`terminate` (delete the ``Sandbox``).
+    A lifecycle specialization of :class:`KubernetesSandboxLauncher`: the Pod,
+    its credentials and its start-readiness polling are all inherited, and only
+    the verbs that differ are overridden:
+
+    - :meth:`_create_workload` creates a ``Sandbox`` rather than a Job, or
+      patches an existing one back to life on a wake.
+    - :meth:`_find_job_pod` reads the backing Pod by name (it is named after the
+      ``Sandbox``), and treats one being torn down as absent.
+    - :meth:`keep_alive` pushes ``shutdownTime`` forward.
+    - :meth:`resume` clears the stale token Secret and Pod but keeps the
+      ``Sandbox`` and its workspace claim.
+    - :meth:`terminate` deletes the ``Sandbox``, cascading to its claims.
     """
 
     provider: ClassVar[str] = "agent_sandbox"
@@ -219,18 +298,51 @@ class AgentSandboxLauncher(KubernetesSandboxLauncher):
 
     def _create_workload(self, namespace: str, manifest: dict[str, object]) -> None:
         """
-        Create a ``Sandbox`` custom resource wrapping the Job's Pod template.
+        Create the ``Sandbox`` custom resource, or wake the one already there.
+
+        Both halves of the lifecycle land here, because the managed wake path
+        calls :meth:`~KubernetesSandboxLauncher.start_host` again under the same
+        sandbox id. A fresh launch creates; a wake finds the suspended object
+        (409) and patches it back to life instead, which is what preserves the
+        workspace claim. The patch deliberately omits ``volumeClaimTemplates``
+        (immutable after creation) and carries the re-rendered ``podTemplate``,
+        so a token-Secret or ``host_config`` change since the last run is picked
+        up when the controller rebuilds the Pod.
 
         :param namespace: Namespace to create the ``Sandbox`` in.
         :param manifest: The manifest from ``build_job_manifest``.
         """
-        window_s = resolve_shutdown_window_s()
-        self._load_custom().create_namespaced_custom_object(
+        from kubernetes.client.rest import ApiException
+
+        body = build_sandbox_manifest(
+            manifest,
+            shutdown_time=_shutdown_time(resolve_shutdown_window_s()),
+            workspace_volume=resolve_workspace_volume(),
+        )
+        custom = self._load_custom()
+        try:
+            custom.create_namespaced_custom_object(
+                API_GROUP,
+                API_VERSION,
+                namespace,
+                SANDBOX_PLURAL,
+                body,
+                _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
+            )
+            return
+        except ApiException as exc:
+            if getattr(exc, "status", None) != 409:
+                raise
+        spec = dict(body["spec"])  # type: ignore[arg-type]
+        spec.pop("volumeClaimTemplates", None)
+        click.echo(f"  → waking suspended agent-sandbox '{body['metadata']['name']}'")  # type: ignore[index]
+        custom.patch_namespaced_custom_object(
             API_GROUP,
             API_VERSION,
             namespace,
             SANDBOX_PLURAL,
-            build_sandbox_manifest(manifest, shutdown_time=_shutdown_time(window_s)),
+            body["metadata"]["name"],  # type: ignore[index]
+            {"spec": spec},
             _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
         )
 
@@ -243,16 +355,21 @@ class AgentSandboxLauncher(KubernetesSandboxLauncher):
         rather than the base class's ``job-name`` label lookup. Re-raises 401/403
         so an RBAC gap surfaces as itself instead of a readiness timeout.
 
+        A Pod carrying a ``deletionTimestamp`` counts as absent. On a wake the
+        previous Pod is being torn down under the same name, and reporting it
+        ready would hand the caller a Pod that is about to vanish; the poll has
+        to wait for the controller's replacement.
+
         :param namespace: Namespace the ``Sandbox`` lives in.
         :param job_name: The ``Sandbox`` name (also the Pod name).
-        :returns: The Pod name, or ``None`` while the Pod does not exist yet.
+        :returns: The Pod name, or ``None`` while no live Pod exists yet.
         :raises click.ClickException: On a 401/403 from the apiserver.
         """
         from kubernetes.client.rest import ApiException
         from urllib3.exceptions import HTTPError
 
         try:
-            self._load_core().read_namespaced_pod(
+            pod = self._load_core().read_namespaced_pod(
                 job_name, namespace, _request_timeout=_POD_READY_REQUEST_TIMEOUT_S
             )
         except ApiException as exc:
@@ -262,6 +379,8 @@ class AgentSandboxLauncher(KubernetesSandboxLauncher):
                 ) from exc
             return None
         except HTTPError:
+            return None
+        if getattr(getattr(pod, "metadata", None), "deletion_timestamp", None):
             return None
         return job_name
 
@@ -366,23 +485,67 @@ class AgentSandboxLauncher(KubernetesSandboxLauncher):
 
     def resume(self, sandbox_id: str) -> None:
         """
-        Prepare an expired or dormant sandbox for recreation in place.
+        Prepare a suspended sandbox to be woken in place, keeping its workspace.
 
-        Delete the ``Sandbox`` and its stale launch-token Secret so the shared
-        managed-host wake path can call
-        :meth:`~KubernetesSandboxLauncher.start_host` again under the same
-        sandbox id with a freshly armed token. Operator-managed PVCs
-        (``sandbox.kubernetes.pvc_mounts``) are external and untouched, so
-        anything the previous run persisted there is still mounted.
+        Unlike the Job provider, this does NOT delete the sandbox. The
+        ``Sandbox`` object and its workspace claim are exactly what a resume has
+        to preserve, so only the two things
+        :meth:`~KubernetesSandboxLauncher.start_host` is about to re-mint are
+        cleared: the stale launch-token Secret (the wake path mints a fresh
+        token, and the create would 409 on the old Secret) and the previous
+        backing Pod, so the controller rebuilds it from the re-rendered
+        template. Deleting a Pod that has finished or been left behind is also
+        what makes the wake work at all: the controller does not replace a Pod
+        that reached a terminal phase.
 
-        Suspend-and-resume in place (``operatingMode: Suspended``, which keeps
-        the object and its volumes) is the natural fit for this CRD, but it
-        needs the wake path to accept "the provider already resumed it, do not
-        start a new host": a separate change.
+        The wake itself happens in :meth:`_create_workload`, which runs after
+        the new Secret exists. Doing it here instead would let the controller
+        recreate the Pod against a deleted Secret and stall it in
+        ``CreateContainerConfigError`` until the new one appeared.
 
-        :param sandbox_id: The sandbox id to recreate.
-        :raises click.ClickException: On an API delete failure other than
-            not-found.
+        Best-effort on both deletes: a sandbox that expired before its Pod was
+        ever created has neither, and that is a normal wake, not a failure.
+
+        :param sandbox_id: The sandbox id to wake.
         """
+        _ensure_sdk()
+        from kubernetes.client.rest import ApiException
+        from urllib3.exceptions import HTTPError
+
         click.echo(f"▸ Resuming agent-sandbox '{sandbox_id}'")
-        self.terminate(sandbox_id)
+        namespace = self._resolve_namespace()
+        core = self._load_core()
+        try:
+            for kind, delete in (
+                (
+                    "token secret",
+                    lambda: core.delete_namespaced_secret(
+                        _token_secret_name(sandbox_id),
+                        namespace,
+                        _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
+                    ),
+                ),
+                (
+                    "pod",
+                    lambda: core.delete_namespaced_pod(
+                        sandbox_id, namespace, _request_timeout=_POD_READY_REQUEST_TIMEOUT_S
+                    ),
+                ),
+            ):
+                try:
+                    delete()
+                except ApiException as exc:
+                    if getattr(exc, "status", None) != 404:
+                        click.echo(
+                            f"  → warning: could not clear stale {kind} for "
+                            f"'{sandbox_id}': {_api_reason(exc)}",
+                            err=True,
+                        )
+                except HTTPError as exc:
+                    click.echo(
+                        f"  → warning: could not clear stale {kind} for "
+                        f"'{sandbox_id}': {_api_reason(exc)}",
+                        err=True,
+                    )
+        finally:
+            self._close_clients()

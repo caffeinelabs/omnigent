@@ -38,7 +38,10 @@ rules:
   # then reads it to poll for Running phase. create/delete are retained so
   # old-server (bare Pod) + new-Role doesn't break, and so terminate() can
   # fall back to deleting a bare Pod created before the Job migration.
-  # TODO(v0.29): remove create/delete once all runners have rolled past v0.28.
+  # TODO(v0.29): remove create once all runners have rolled past v0.28. Keep
+  # delete: `provider: agent_sandbox` needs it to clear a finished Pod when
+  # waking a suspended sandbox (the controller will not replace a Pod that has
+  # reached a terminal phase).
   - apiGroups: [""]
     resources: ["pods"]
     verbs: ["create", "list", "get", "delete"]

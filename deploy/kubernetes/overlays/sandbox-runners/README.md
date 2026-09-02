@@ -251,9 +251,59 @@ Prerequisites:
 1. Install the agent-sandbox controller and its CRDs in the cluster.
 2. The `sandboxes` RBAC rule in `role.yaml` (already applied by this overlay).
 
-Suspend-and-resume in place and the CRD's `volumeClaimTemplates` are not wired
-up yet; `pvc_mounts` below is still the persistent-storage lane, and a resumed
-session recreates the sandbox under the same id with those mounts intact.
+### Suspend and resume
+
+`shutdownPolicy` is `Retain`, so a lapsed deadline **suspends** the sandbox: the
+Pod is torn down, the `Sandbox` object and its volumes stay. Sending a new
+message in the session wakes it under the same sandbox id (the server's normal
+resume path), and the sandbox keeps its host identity and conversation.
+
+Deleting for good stays explicit: deleting the session terminates it, and a
+deployment-wide reaper handles sandboxes abandoned long-term. `kubectl get
+sandbox -n omnigent-sandboxes` shows suspended ones with `Ready=False`,
+`Reason=SandboxExpired`.
+
+### Durable workspace (`OMNIGENT_AGENT_SANDBOX_WORKSPACE_SIZE`)
+
+By default `$HOME` is an `emptyDir` and dies with the Pod, so a woken sandbox
+starts from an empty workspace. Set a size on the **server** to move `$HOME`
+onto a per-sandbox PersistentVolumeClaim instead:
+
+```yaml
+env:
+  - name: OMNIGENT_AGENT_SANDBOX_WORKSPACE_SIZE
+    value: "20Gi"
+  - name: OMNIGENT_AGENT_SANDBOX_STORAGE_CLASS   # optional
+    value: "fast-ssd"                            # omit for the default class
+```
+
+The claim covers all of `$HOME`, so the workspace, `~/.omnigent` and harness
+caches all survive a suspend. Requirements and caveats:
+
+- The cluster needs a StorageClass with a dynamic provisioner that supports
+  `ReadWriteOnce` (kind ships `standard`). Without one the Pod stays `Pending`
+  on an unbound claim.
+- One claim per sandbox, named `home-<sandbox-id>`, owned by the `Sandbox`, so
+  `terminate` (session delete) cascades it away. Nothing is shared between
+  sessions.
+- `volumeClaimTemplates` is immutable after a `Sandbox` is created, so enabling
+  or resizing this applies to **new** sandboxes only; existing ones keep the
+  workspace they were born with.
+- This is a different lane from `pvc_mounts` below, which stays what it is:
+  pre-created, deployment-global, shared, and rejected at/over `$HOME`. Use
+  `pvc_mounts` for shared datasets and caches, this for per-session work.
+
+### Warm pools are not usable yet
+
+The extension CRDs (`SandboxWarmPool` / `SandboxClaim`) look like the answer to
+slow image pulls, but they cannot help Omnigent as the API stands: a
+`SandboxClaim` that sets either `env` or `volumeClaimTemplates` is documented
+(and tested upstream) to force a **cold start**, and Omnigent needs both, a
+per-session host identity in `env` and a per-session workspace claim. A warm
+pod's pre-created volumes are also pool-owned and recycled across claims, which
+is not acceptable for sandbox isolation. Pre-pulling the host image onto nodes
+is the workaround until upstream can inject per-claim identity without
+discarding the warm pod.
 
 ## Persistent storage mounts (`pvc_mounts`)
 
