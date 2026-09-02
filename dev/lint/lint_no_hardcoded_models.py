@@ -51,6 +51,22 @@ SKIP_PARTS = {
     "node_modules",
     "tests",
 }
+# CI automation workflows whose Databricks serving ids are deployment
+# parameters of the host_config they render — deliberate fork configuration,
+# not product code. Named files (not a .github/ exclusion) so NEW workflows
+# with hardcoded ids still get flagged. Upstream keeps these in repo `vars.*`
+# instead; migrating is a follow-up that needs the variables provisioned.
+DEPLOYMENT_CONFIG_PATHS = {
+    ".github/workflows/auto-assign-reviewer.yml",
+    ".github/workflows/doc-sync.yml",
+    ".github/workflows/e2e-ui-required.yml",
+    ".github/workflows/feature-blog.yml",
+    ".github/workflows/flake-stress-e2e.yml",
+    ".github/workflows/issue-triage.yml",
+    ".github/workflows/polly-review.yml",
+    ".github/workflows/security-triage.yml",
+    ".github/workflows/vscode-release-pr.yml",
+}
 OWNED_FALLBACK_PATH = Path("omnigent/model_fallbacks.py")
 FALLBACK_METADATA_FIELDS = frozenset({"owner", "provenance", "discovery_gap"})
 
@@ -214,6 +230,7 @@ def scan(path: Path) -> list[Hit]:
         not path.is_file()
         or path.suffix not in SOURCE_EXTENSIONS
         or Path(_repo_relative(path)) in GENERATED_PATHS
+        or _repo_relative(path) in DEPLOYMENT_CONFIG_PATHS
         or any(part in SKIP_PARTS for part in path.parts)
     ):
         return []
@@ -233,6 +250,7 @@ def _iter_scannable_paths() -> list[Path]:
         if raw_path
         if (path := Path(raw_path)).suffix in SOURCE_EXTENSIONS
         if path not in GENERATED_PATHS
+        if raw_path not in DEPLOYMENT_CONFIG_PATHS
         if not any(part in SKIP_PARTS for part in path.parts)
     ]
 

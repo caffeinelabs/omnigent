@@ -190,7 +190,7 @@ def test_start_host_session_url_installs_wrapper_and_exports_env() -> None:
     assert ".omnigent/bin/gh" in all_run  # wrapper written via run()
     [raw] = launcher.backgrounded
     # Host launch prepends the wrapper dir to PATH and exports the session URL.
-    assert 'PATH=' in raw and '/.omnigent/bin:"$PATH"' in raw
+    assert "PATH=" in raw and '/.omnigent/bin:"$PATH"' in raw
     assert "OMNIGENT_SESSION_URL=https://omni.example.com/c/conv_1" in raw
 
 

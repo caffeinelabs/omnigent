@@ -1373,7 +1373,7 @@ def create_app(
         # launch-time git/gh token expires after a few hours, so re-mint it and
         # push it down the existing host tunnel on a timer (see github_refresh).
         github_refresh_task: asyncio.Task[None] | None = None
-        if github_enabled and github_store is not None:
+        if github_enabled and github_store is not None and host_store is not None:
             from omnigent.server.github_refresh import run_github_refresh_loop
 
             github_refresh_task = asyncio.create_task(

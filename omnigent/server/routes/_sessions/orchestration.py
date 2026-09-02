@@ -2658,7 +2658,7 @@ async def _resolve_owner_github_identity(
         return None
     try:
         return await resolve_sandbox_identity(owner, store=github_store, client=github_client)
-    except Exception:
+    except Exception:  # noqa: BLE001 - identity resolution is best-effort and must not fail the launch
         _logger.exception("Failed to resolve GitHub identity for %s", owner)
         return None
 

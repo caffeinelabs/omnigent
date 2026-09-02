@@ -69,10 +69,7 @@ def write_github_credentials(home: Path | str, token: str, login: str) -> None:
 
     # gh CLI credential (drives `gh` + git operations gh wraps).
     hosts_yml = (
-        "github.com:\n"
-        f"    user: {login}\n"
-        f"    oauth_token: {token}\n"
-        "    git_protocol: https\n"
+        f"github.com:\n    user: {login}\n    oauth_token: {token}\n    git_protocol: https\n"
     )
     _write_private(home_path / ".config" / "gh" / "hosts.yml", hosts_yml)
 

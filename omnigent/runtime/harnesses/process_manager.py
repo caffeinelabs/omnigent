@@ -456,7 +456,7 @@ class _SubprocessEntry:
         to this subprocess over its Unix socket.
     :param socket_path: Absolute Unix socket path the runner
         bound, e.g.
-        ``Path("/tmp/omnigent/ap-abc/conv-xyz.sock")``.
+        ``Path("/tmp/omnigent/ap-abc/c-a1b2c3d4e5f60718.sock")``.
     :param harness: The harness name this subprocess serves
         (e.g. ``"claude-sdk"``). Recorded so the reaper can
         include it in log lines.
@@ -1526,7 +1526,10 @@ class HarnessProcessManager:
             whose runner subprocesses to terminate.
         """
         all_pids: set[int] = set()
-        for socket_file in instance_dir.glob("conv-*.sock"):
+        # Match both the current ``c-<hash>.sock`` names and legacy
+        # ``conv-<id>.sock`` files left by pre-rename runners.
+        socket_files = set(instance_dir.glob("c-*.sock")) | set(instance_dir.glob("conv-*.sock"))
+        for socket_file in sorted(socket_files):
             pids = await _pids_holding_socket(socket_file)
             for pid in pids:
                 try:

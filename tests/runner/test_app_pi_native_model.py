@@ -91,11 +91,9 @@ async def test_auto_create_pi_terminal_threads_spec_model_into_models_json(
 
     Drives ``_auto_create_pi_terminal`` with a spec pinning
     ``claude-opus-4-7`` and a key-kind provider whose family default is
-    ``claude-sonnet-4-6``. The threaded override must win: the generated
-    ``models.json`` selects ``claude-opus-4-7`` and the appended Pi
-    ``--model`` arg reflects it. This is the runner-side seam the feature
-    adds — without threading the spec model, the models.json would carry
-    the family default instead.
+    ``claude-sonnet-4-6``. The threaded override must win the launch: the
+    appended Pi ``--model`` arg selects it, and the generated ``models.json``
+    registers it alongside the family's curated ``models:`` shortlist.
 
     :param tmp_path: Temp dir backing the pi-native bridge root.
     :param monkeypatch: Pytest monkeypatch fixture.
@@ -197,10 +195,16 @@ async def test_auto_create_pi_terminal_threads_spec_model_into_models_json(
     assert args[args.index("--model") + 1] == "claude-opus-4-7"
     assert "--provider" in args
 
-    # The managed config dir env was set and its models.json selects the override.
+    # The managed config dir env was set and its models.json registers the
+    # family's curated shortlist (``claude-sonnet-4-6``) alongside the threaded
+    # override — the override is appended (with vision input, matching the
+    # shortlist-entry convention) and remains the selected model via ``--model``.
     agent_dir = Path(launched["env"]["PI_CODING_AGENT_DIR"])
     models = json.loads((agent_dir / "models.json").read_text(encoding="utf-8"))
-    assert models["providers"]["omnigent"]["models"] == [{"id": "claude-opus-4-7"}]
+    assert models["providers"]["omnigent"]["models"] == [
+        {"id": "claude-sonnet-4-6"},
+        {"id": "claude-opus-4-7", "input": ["text", "image"]},
+    ]
 
 
 @pytest.mark.asyncio

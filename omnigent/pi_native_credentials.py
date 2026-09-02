@@ -56,6 +56,7 @@ from omnigent.pi_model_compatibility import (
     PiModelEntry,
     databricks_pi_surface_for_model,
     enrich_databricks_model_catalog,
+    pi_model_is_reasoning,
     pi_model_json_entry,
     unsupported_in_pi,
 )
@@ -978,6 +979,22 @@ def _inline_family_pi_provider(
         # Strip bracket suffixes (e.g. "[1m]") — accepted by the direct
         # Anthropic API but rejected by the Databricks AI Gateway.
         resolved_model = re.sub(r"\[.*?\]$", "", resolved_model)
+        # Register the family's curated models: shortlist (its ``models:``
+        # tier map) alongside the selected model, so Pi's /model picker
+        # offers exactly the deployment's verified set instead of just the
+        # launch model. Duplicate ids collapse to their first occurrence.
+        # The reasoning flag follows pi_model_json_entry's own convention
+        # (deepseek ids stream reasoning on a separate channel).
+        shortlist: list[_PiModelEntry] = []
+        seen_ids: set[str] = set()
+        for tier_model in family.models.values():
+            if not isinstance(tier_model, str) or not tier_model or tier_model in seen_ids:
+                continue
+            seen_ids.add(tier_model)
+            entry_model: _PiModelEntry = {"id": tier_model}
+            if pi_model_is_reasoning(tier_model):
+                entry_model["reasoning"] = True
+            shortlist.append(entry_model)
         return PiProviderConfig(
             provider_id=_PI_PROVIDER_ID,
             base_url=family.base_url,
@@ -985,6 +1002,7 @@ def _inline_family_pi_provider(
             model=resolved_model,
             api_key=api_key,
             auth_header=auth_header,
+            extra_models=shortlist,
         )
     return None
 

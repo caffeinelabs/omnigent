@@ -13,7 +13,10 @@ ciphertext.
 
 from __future__ import annotations
 
+from typing import cast
+
 from sqlalchemy import delete, select
+from sqlalchemy.engine import CursorResult
 
 from omnigent.db.db_models import SqlGithubConnection, current_workspace_id
 from omnigent.db.utils import get_or_create_engine, make_managed_session_maker, now_epoch
@@ -155,11 +158,15 @@ class GithubConnectionStore:
         :returns: ``True`` when a row was deleted.
         """
         with self._session() as session:
-            result = session.execute(
-                delete(SqlGithubConnection).where(
-                    SqlGithubConnection.workspace_id == current_workspace_id(),
-                    SqlGithubConnection.user_id == user_id,
-                )
+            # DML always yields a CursorResult, which is what carries rowcount.
+            result = cast(
+                CursorResult,
+                session.execute(
+                    delete(SqlGithubConnection).where(
+                        SqlGithubConnection.workspace_id == current_workspace_id(),
+                        SqlGithubConnection.user_id == user_id,
+                    )
+                ),
             )
             return result.rowcount > 0
 

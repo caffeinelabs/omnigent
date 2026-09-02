@@ -19,9 +19,7 @@ import os
 #: ``href`` is the per-session URL. Override per deployment with
 #: :data:`BUTTON_IMAGE_URL_ENV_VAR`; set it empty to fall back to a plain
 #: markdown link.
-_DEFAULT_BUTTON_IMAGE_URL = (
-    "https://raw.githubusercontent.com/caffeinelabs/omnigent/staging/web/public/open-in-omnigent.svg"
-)
+_DEFAULT_BUTTON_IMAGE_URL = "https://raw.githubusercontent.com/caffeinelabs/omnigent/staging/web/public/open-in-omnigent.svg"
 BUTTON_IMAGE_URL_ENV_VAR = "OMNIGENT_PR_BUTTON_IMAGE_URL"
 SESSION_URL_ENV_VAR = "OMNIGENT_SESSION_URL"
 
