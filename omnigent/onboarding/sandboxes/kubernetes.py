@@ -1045,6 +1045,10 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
     provider: ClassVar[str] = "kubernetes"
     can_resume: ClassVar[bool] = True
 
+    workload_kind: ClassVar[str] = "job"
+    """What ``start_host`` calls the object it creates, for progress output.
+    Overridden by subclasses that wrap the Pod in a different workload kind."""
+
     @property
     def capabilities(self) -> SandboxCapabilities:
         return SandboxCapabilities(
@@ -1360,7 +1364,8 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
             on_stage("starting")
         core = self._load_core()
         click.echo(
-            f"▸ Creating Kubernetes job '{sandbox_id}' in namespace '{namespace}' from {image}"
+            f"▸ Creating Kubernetes {self.workload_kind} '{sandbox_id}' in "
+            f"namespace '{namespace}' from {image}"
         )
         try:
             try:
@@ -1414,7 +1419,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                 raise
         finally:
             self._close_clients()
-        click.echo(f"  → job '{sandbox_id}' is starting the host")
+        click.echo(f"  → {self.workload_kind} '{sandbox_id}' is starting the host")
         return clone_dir or workspace
 
     def _create_workload(self, namespace: str, manifest: dict[str, object]) -> None:

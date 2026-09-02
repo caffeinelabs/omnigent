@@ -275,6 +275,7 @@ class AgentSandboxLauncher(KubernetesSandboxLauncher):
     """
 
     provider: ClassVar[str] = "agent_sandbox"
+    workload_kind: ClassVar[str] = "sandbox"
 
     # ── clients ─────────────────────────────────────────────
 
