@@ -8,8 +8,8 @@ signal disappears on its own when the session goes quiet.
 
 This module turns that existing signal into a provider
 :meth:`~omnigent.onboarding.sandboxes.base.SandboxHostLauncher.keep_alive` call,
-so a sandbox whose platform reaps on inactivity — or one that expects the
-operator to push an absolute deadline forward — stays up while work is happening
+so a sandbox whose platform reaps on inactivity, or one that expects the
+operator to push an absolute deadline forward, stays up while work is happening
 and is reclaimed once it is not. Nine providers already implement ``keep_alive``
 but only the CLI bootstrap ever called it; this is the managed-path caller.
 
@@ -18,7 +18,7 @@ Providers that cannot extend a sandbox (``kubernetes`` today) raise
 as it is now.
 
 Rate-limited per runner (:data:`_MIN_INTERVAL_S`): stamping ``runner_last_seen``
-is a local write, but ``keep_alive`` is a provider API call — on Kubernetes-style
+is a local write, but ``keep_alive`` is a provider API call: on Kubernetes-style
 backends it is an apiserver write that also wakes a controller reconcile, so it
 must not run at the 30s ping cadence.
 """
@@ -47,7 +47,7 @@ _MIN_INTERVAL_S = 600.0
 # Cap on the per-runner throttle map before stale entries are pruned. Runners
 # are transient, so without this a long-lived server accumulates one dead key
 # per session.
-# ponytail: prune-on-grow, not a background sweep — swap if profiling says so.
+# ponytail: prune-on-grow, not a background sweep: swap if profiling says so.
 _THROTTLE_MAX_ENTRIES = 4096
 
 _conversation_store: ConversationStore | None = None
@@ -144,5 +144,6 @@ def _keep_alive_for_runner(runner_id: str) -> None:
                     host.sandbox_provider,
                     host.sandbox_id,
                 )
-    except Exception:  # noqa: BLE001 — keepalive must never disrupt the tunnel
+    # Keepalive is best effort: it must never disrupt the runner tunnel.
+    except Exception:  # noqa: BLE001
         _logger.warning("managed sandbox keepalive failed for runner %s", runner_id, exc_info=True)

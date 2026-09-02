@@ -202,6 +202,7 @@ writing nothing to disk — use HTTPS repository URLs. Details by provider match
 
 | Key | Meaning |
 |---|---|
+| `provider` | `kubernetes` (a Job with a fixed 7-day cap) or `agent_sandbox` (an agent-sandbox `Sandbox` that reclaims itself once idle): see [Self-reclaiming sandboxes](#self-reclaiming-sandboxes-provider-agent_sandbox). Both read this same `kubernetes:` block. |
 | `server_url` | URL the runner Pod's host dials back to (in-cluster service DNS by default). |
 | `host_config` | Optional, top-level under `sandbox:` (provider-agnostic, not inside `kubernetes:`): verbatim in-sandbox `~/.omnigent/config.yaml` content installed before `omnigent host` starts — e.g. a `providers:` block routing the `pi` harness through a self-hosted gateway (LiteLLM/vLLM). Server-managed: entries injected by a previous launch are replaced or removed on the next launch/resume; config created inside the sandbox survives. Keep secrets out via `api_key_ref: env:VAR`, resolved inside the runner Pod against the `secret_name` Secret. Validated at server startup. |
 | `namespace` | Runner-Pod namespace (defaults to `omnigent-sandboxes`). |
@@ -215,6 +216,44 @@ writing nothing to disk — use HTTPS repository URLs. Details by provider match
 | `in_cluster` | Optional cluster-config source: `true` (in-cluster SA only), `false` (kubeconfig only), omit (try in-cluster, then kubeconfig). |
 | `kubeconfig` | Optional kubeconfig path for the out-of-cluster fallback (env: `OMNIGENT_KUBERNETES_KUBECONFIG`). |
 | `pvc_mounts` | Optional pre-created PersistentVolumeClaims mounted into every runner Pod — see [Persistent storage mounts](#persistent-storage-mounts-pvc_mounts). |
+
+## Self-reclaiming sandboxes (`provider: agent_sandbox`)
+
+`provider: kubernetes` runs each sandbox as a `batch/v1` Job capped by
+`activeDeadlineSeconds` (7 days). That is a *fixed* lifetime, so an abandoned
+sandbox holds a node slot for a week whether or not anything ever ran in it.
+
+`provider: agent_sandbox` runs the identical Pod inside an
+[agent-sandbox](https://github.com/kubernetes-sigs/agent-sandbox) `Sandbox`
+custom resource, whose `spec.shutdownTime` is a deadline the owner keeps pushing
+forward. The server refreshes it for as long as the sandbox has a live runner
+tunnel, so:
+
+- a busy sandbox lives as long as work keeps arriving;
+- an idle one is reclaimed within one window (default 1h, env
+  `OMNIGENT_AGENT_SANDBOX_SHUTDOWN_WINDOW_S`);
+- the agent-sandbox controller does the teardown, so the Omnigent server never
+  enumerates or babysits live Pods.
+
+Switching is one line: every other key stays in the same `kubernetes:` block:
+
+```yaml
+sandbox:
+  provider: agent_sandbox      # was: kubernetes
+  server_url: http://omnigent.omnigent.svc.cluster.local
+  kubernetes:
+    namespace: omnigent-sandboxes
+    secret_name: omnigent-creds
+```
+
+Prerequisites:
+
+1. Install the agent-sandbox controller and its CRDs in the cluster.
+2. The `sandboxes` RBAC rule in `role.yaml` (already applied by this overlay).
+
+Suspend-and-resume in place and the CRD's `volumeClaimTemplates` are not wired
+up yet; `pvc_mounts` below is still the persistent-storage lane, and a resumed
+session recreates the sandbox under the same id with those mounts intact.
 
 ## Persistent storage mounts (`pvc_mounts`)
 

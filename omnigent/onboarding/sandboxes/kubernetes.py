@@ -1359,7 +1359,6 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
         if on_stage is not None:
             on_stage("starting")
         core = self._load_core()
-        batch = self._load_batch()
         click.echo(
             f"▸ Creating Kubernetes job '{sandbox_id}' in namespace '{namespace}' from {image}"
         )
@@ -1397,9 +1396,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                     ),
                     _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
                 )
-                batch.create_namespaced_job(
-                    namespace, manifest, _request_timeout=_POD_READY_REQUEST_TIMEOUT_S
-                )
+                self._create_workload(namespace, manifest)
             except (ApiException, HTTPError) as exc:
                 self._best_effort_delete(namespace, sandbox_id, secret_name)
                 if isinstance(exc, ApiException):
@@ -1419,6 +1416,21 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
             self._close_clients()
         click.echo(f"  → job '{sandbox_id}' is starting the host")
         return clone_dir or workspace
+
+    def _create_workload(self, namespace: str, manifest: dict[str, object]) -> None:
+        """
+        Create the object that runs the sandbox host from a Job manifest.
+
+        Seam for subclasses that wrap the same Pod template in a different
+        workload kind: see
+        :class:`~omnigent.onboarding.sandboxes.agent_sandbox.AgentSandboxLauncher`.
+
+        :param namespace: Namespace to create the object in.
+        :param manifest: The manifest from :func:`build_job_manifest`.
+        """
+        self._load_batch().create_namespaced_job(
+            namespace, manifest, _request_timeout=_POD_READY_REQUEST_TIMEOUT_S
+        )
 
     def _find_job_pod(self, namespace: str, job_name: str) -> str | None:
         """

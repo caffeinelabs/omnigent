@@ -25,6 +25,15 @@ rules:
   - apiGroups: ["batch"]
     resources: ["jobs"]
     verbs: ["create", "get", "delete"]
+  # Manage the lifecycle of `provider: agent_sandbox` Sandbox custom resources
+  # (github.com/kubernetes-sigs/agent-sandbox): the launcher creates one, reads
+  # it back, patches spec.shutdownTime to keep a busy sandbox alive, and deletes
+  # it at terminate. Harmless to grant when the CRD is not installed: the rule
+  # simply never matches. `watch` is withheld: the launcher polls the backing
+  # Pod, and the controller does the reaping.
+  - apiGroups: ["agents.x-k8s.io"]
+    resources: ["sandboxes"]
+    verbs: ["create", "get", "patch", "delete"]
   # The launcher lists Pods by job-name label to find the Job's child Pod,
   # then reads it to poll for Running phase. create/delete are retained so
   # old-server (bare Pod) + new-Role doesn't break, and so terminate() can
