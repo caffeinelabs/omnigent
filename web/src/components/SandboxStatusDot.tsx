@@ -31,7 +31,11 @@ export function SandboxStatusDot({
 
   const running = online === true;
   const stopped = online === false;
-  const label = running ? "Sandbox running" : stopped ? "Sandbox stopped" : "Sandbox status unknown";
+  const label = running
+    ? "Sandbox running"
+    : stopped
+      ? "Sandbox stopped"
+      : "Sandbox status unknown";
 
   return (
     <span

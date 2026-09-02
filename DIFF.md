@@ -22,6 +22,32 @@ Do not grow layer 3. New work lands on `develop` first and is ported to
 
 ## Entries
 
+### fix: pre-commit debt from the blind-merge window (this PR / #77)
+
+- **What:** Pays down lint debt accumulated while the pre-commit gate
+  could not run (between the second upstream sync and the CI repair in
+  #72/#74): ruff/prettier formatting, pyrefly fixes in #67–#70/#73 code,
+  and a `no-hardcoded-models` scope fix. Mostly repair of existing fork
+  deltas — two pieces create NEW small deltas: (1)
+  `IsloSandboxLauncher.start_host` is widened to the fork's parent
+  signature (upstream's `islo.py` keeps the narrow override; ours now
+  forwards the identity/extra-repos/session kwargs), and (2)
+  `lint_no_hardcoded_models.py` gains `DEPLOYMENT_CONFIG_PATHS`, a
+  named-file exemption for the nine fork CI workflows whose Databricks
+  serving ids are deployment config (named, so future workflows still
+  get flagged).
+- **Why:** The debt failed every PR's Pre-commit gate once #74 made it
+  run again. The islo mismatch was also a real latent bug — the new
+  launch kwargs were silently dropped for islo launchers; upstream never
+  hit it because upstream's `ExecModelHostLauncher.start_host` was never
+  widened.
+- **Upstreamable:** No — repair of fork-landed debt, and the two new
+  deltas are fork-config-shaped. The upstream-aligned alternative for
+  the workflow model pins (GitHub repo `vars.*`, as upstream does) is a
+  follow-up that needs the variables provisioned first.
+- **Lifetime:** The islo delta lasts until upstream widens `start_host`
+  the same way; the lint exemption until the workflows move to `vars.*`.
+
 ### pi-native: curated model shortlist (this PR / #71)
 
 - **What:** `3cf827369` registers the provider family's `models:` map
