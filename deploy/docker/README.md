@@ -304,10 +304,18 @@ docker build -t omnigent-host:latest --target host \
              --build-arg EXTRA_HARNESS_CLIS="goose jcode opencode" .
 ```
 
-Supported names (`opencode`, `qwen`, `goose`, `jcode`, `cursor`, `kimi`),
-the install method behind each, and the `npm:<pkg-spec>` escape hatch
-live in [`install-harness-cli.sh`](./install-harness-cli.sh). Empty by
+Supported names (`opencode`, `qwen`, `goose`, `agy`, `jcode`, `cursor`,
+`kimi`), the install method behind each, and the `npm:<pkg-spec>` escape
+hatch live in [`install-harness-cli.sh`](./install-harness-cli.sh). Empty by
 default — the shipped CLI set is unchanged.
+
+Supply-chain note: the `agy` row is pinned to an immutable per-arch release
+asset with a sha256 check (the same control kiro-cli gets in the default
+image); the other vendor-installer rows run the harness's own `curl | bash`
+off mutable refs and are verified only with a `--version` check (cursor's
+installer cannot be pinned at all). `npm:<pkg-spec>` entries get no binary
+smoke check — confirm the binary yourself. UBI has no baked `agy`; use
+`EXTRA_HARNESS_CLIS=agy` there.
 
 ### Using it with the Modal sandbox provider
 

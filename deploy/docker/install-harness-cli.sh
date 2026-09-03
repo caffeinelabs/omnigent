@@ -28,32 +28,48 @@
 # that happens to share the name.
 #
 # Binaries land on a system PATH dir (/usr/local/bin) that every sandbox user
-# shares — including the non-root `sandbox` user the OpenShell provider runs
-# as — and each row is smoke-checked with `<binary> --version` under a fresh
-# HOME, so a CLI that only works from the build user's home fails the build
-# here rather than the first managed-sandbox session.
+# shares, and each row is smoke-checked twice: once under a fresh HOME (a CLI
+# that only works from the build user's home — e.g. state the installer left
+# under /root — fails here), then re-run as the non-root `sandbox` user the
+# OpenShell provider runs agents as (a binary reachable only through the build
+# user's home would pass the fresh-HOME check yet break the first
+# managed-sandbox session; images without a `sandbox` user, like UBI, skip it).
 #
 # Supported rows — the CLI-gated harnesses NOT in the default image set (the
 # canonical list is _HARNESS_INSTALL in omnigent/onboarding/harness_install.py):
 #   opencode  → npm opencode-ai (default pin ~1.18.0, as harness_install.py)
 #   qwen      → npm @qwen-code/qwen-code
-#   goose     → vendor installer (aaif-goose/goose download_cli.sh)
+#   goose     → vendor installer (aaif-goose/goose download_cli.sh), default
+#               pin 1.38.0 (mirroring _GOOSE_MIN_VERSION)
 #   jcode     → vendor installer (1jehuang/jcode install.sh) — jcode runs as a
 #               user-configured ACP agent (acp.agents in config.yaml), not a
-#               builtin harness, but the managed host still needs the binary
+#               builtin harness; a deployment that runs jcode that way still
+#               needs the binary on the managed host's PATH, since the sandbox
+#               cannot run the installer at session start
 #   cursor    → vendor installer (cursor.com/install) — always fetches the
 #               latest agent build, so VERSION pins are rejected
 #   kimi      → vendor installer (code.kimi.com/kimi-code/install.sh)
+#   agy       → pinned per-arch GitHub release asset + sha256 (AGY_VERSION +
+#               the two AGY_SHA256_* values) — the same control as the default
+#               image, exposed as a row because UBI does not bake agy by default
 #
 # hermes is deliberately NOT a row: it requires Node >= 26 at runtime (its
 # installer self-installs a managed Node into the installing user's
 # HERMES_HOME) while the host images ship Node 22 — it needs the image's
 # Node baseline raised first, not just a baked binary.
 #
+# Supply-chain note: only agy here (and kiro-cli baked in the Dockerfile) is
+# pinned to an immutable asset + sha256. The vendor-installer rows (goose,
+# jcode, cursor, kimi) run the harness's own `curl | bash` off mutable refs and
+# are checked only with `--version`; cursor cannot be pinned at all.
+# Off-by-default bounds this, but a deployment needing kiro-cli-grade integrity
+# should pin + verify in its own image rather than rely on a name here.
+#
 # Default-set CLIs are deliberately not rows: claude/codex/pi install unpinned
 # from npm in the Dockerfiles (override via the npm: escape hatch, e.g.
-# npm:@openai/codex@0.147.0), and kiro-cli/agy are version-pinned there via
-# build ARGs (KIRO_CLI_VERSION / AGY_VERSION).
+# npm:@openai/codex@0.147.0), and kiro-cli is version-pinned there via the
+# KIRO_CLI_VERSION build ARG. agy IS a row (see install_agy) because UBI does
+# not install it by default.
 #
 # Also runnable by hand on any Linux host with bash, curl, and npm (for the
 # npm rows) — e.g. to test a row before rebuilding an image:
@@ -70,8 +86,9 @@ CURSOR_HOME="${CURSOR_HOME:-/opt/cursor}"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
-# Smoke-check: the binary resolves on PATH and runs under a fresh HOME, the
-# way a managed-sandbox session (possibly a non-root user) would invoke it.
+# Smoke-check: the binary resolves on PATH and runs under a fresh HOME, then
+# again as the non-root sandbox user when the image has one — the two ways a
+# managed-sandbox session (possibly a different user) would invoke it.
 verify() {
     local binary="$1" out scratch
     command -v "$binary" >/dev/null 2>&1 \
@@ -80,7 +97,16 @@ verify() {
     out="$(HOME="$scratch" "$binary" --version 2>&1 | tail -n1)" \
         || { rm -rf "$scratch"; die "$binary --version failed after install"; }
     rm -rf "$scratch"
-    echo ">> $binary OK: ${out:-<no version output>}"
+    echo ">> $binary OK as root: ${out:-<no version output>}"
+    # Re-run as the non-root `sandbox` user OpenShell runs agents as, when the
+    # image has one: a binary reachable only through the build user's home
+    # would pass the root check above yet fail the first managed-sandbox
+    # session. UBI has no sandbox user, so guard on `id sandbox`.
+    if [ "$(id -u)" = 0 ] && id sandbox >/dev/null 2>&1 && command -v setpriv >/dev/null 2>&1; then
+        out="$(HOME=/sandbox setpriv --reuid=sandbox --regid=sandbox --clear-groups "$binary" --version 2>&1 | tail -n1)" \
+            || die "$binary --version failed as the non-root sandbox user"
+        echo ">> $binary OK as sandbox: ${out:-<no version output>}"
+    fi
 }
 
 install_npm() { # <pkg-spec> <binary>
@@ -92,7 +118,10 @@ install_npm() { # <pkg-spec> <binary>
 }
 
 install_goose() { # <version|"">
-    local version="$1"
+    # Default pin mirrors _GOOSE_MIN_VERSION in harness_install.py (the native
+    # forwarder is verified against it); goose already accepts GOOSE_VERSION,
+    # so pinning it rather than tracking `stable` costs nothing.
+    local version="${1:-1.38.0}"
     # goose's Linux release archive is .tar.bz2 — tar needs bzip2 to extract it.
     command -v bzip2 >/dev/null 2>&1 \
         || die "goose needs bzip2 to extract its release archive (the host Dockerfiles install it)"
@@ -101,12 +130,44 @@ install_goose() { # <version|"">
         # `goose configure` prompt — auth stays user-owned at runtime.
         "GOOSE_BIN_DIR=$BIN_DIR"
         "CONFIGURE=false"
+        "GOOSE_VERSION=$version"
     )
-    [ -z "$version" ] || install_env+=("GOOSE_VERSION=$version")
-    echo ">> installing goose ${version:-<latest stable>} via aaif-goose/goose installer"
+    echo ">> installing goose $version via aaif-goose/goose installer"
     curl -fsSL https://github.com/aaif-goose/goose/releases/download/stable/download_cli.sh \
         | env "${install_env[@]}" bash
     verify goose
+}
+
+install_agy() {
+    # The one row with real integrity pinning, mirroring the Dockerfile's baked
+    # agy: immutable per-arch GitHub release asset + sha256. The version and
+    # both sha256s come from the Dockerfile build ARGs (exported as ENV), so
+    # this row and the baked default stay on the same value.
+    [ -n "${AGY_VERSION:-}" ] \
+        || die "agy needs AGY_VERSION — set it via the Dockerfile build ARG (see deploy/docker/Dockerfile)"
+    local asset sha
+    case "$(uname -m)" in
+        x86_64)
+            asset="agy_cli_linux_x64.tar.gz"
+            [ -n "${AGY_SHA256_AMD64:-}" ] || die "agy needs AGY_SHA256_AMD64"
+            sha="$AGY_SHA256_AMD64"
+            ;;
+        aarch64)
+            asset="agy_cli_linux_arm64.tar.gz"
+            [ -n "${AGY_SHA256_ARM64:-}" ] || die "agy needs AGY_SHA256_ARM64"
+            sha="$AGY_SHA256_ARM64"
+            ;;
+        *) die "unsupported arch '$(uname -m)' for agy" ;;
+    esac
+    echo ">> installing agy $AGY_VERSION (sha256 verified)"
+    curl -fsSL -o /tmp/agy.tar.gz \
+        "https://github.com/google-antigravity/antigravity-cli/releases/download/${AGY_VERSION}/${asset}"
+    echo "${sha} /tmp/agy.tar.gz" | sha256sum -c - \
+        || die "agy sha256 mismatch for ${asset}"
+    tar -xzf /tmp/agy.tar.gz -C /tmp antigravity
+    install -m 0755 /tmp/antigravity "$BIN_DIR/agy"
+    rm -f /tmp/agy.tar.gz /tmp/antigravity
+    verify agy
 }
 
 install_jcode() { # <version|"">
@@ -185,6 +246,7 @@ for spec in "$@"; do
         opencode) install_npm "opencode-ai@${version:-~1.18.0}" opencode ;;
         qwen)     install_npm "@qwen-code/qwen-code${version:+@$version}" qwen ;;
         goose)    install_goose "$version" ;;
+        agy | antigravity) install_agy ;;
         jcode)    install_jcode "$version" ;;
         cursor)
             [ -z "$version" ] \
@@ -197,9 +259,9 @@ for spec in "$@"; do
         claude)   die "claude ships in the host image by default (unpinned npm install) — pin a different version via the npm: escape hatch: npm:@anthropic-ai/claude-code@<version>" ;;
         codex)    die "codex ships in the host image by default (unpinned npm install) — pin a different version via the npm: escape hatch: npm:@openai/codex@<version>" ;;
         pi)       die "pi ships in the host image by default (unpinned npm install) — pin a different version via the npm: escape hatch: npm:@earendil-works/pi-coding-agent@<version>" ;;
-        kiro | kiro-cli | agy | antigravity)
-            die "$name ships in the host image by default, version-pinned via Dockerfile build ARGs (KIRO_CLI_VERSION / AGY_VERSION) — override with --build-arg instead" ;;
+        kiro | kiro-cli)
+            die "$name ships in the host image by default, version-pinned via the KIRO_CLI_VERSION build ARG — override with --build-arg instead" ;;
         *)
-            die "unknown harness CLI '$name' — supported names: opencode, qwen, goose, jcode, cursor, kimi (or npm:<pkg-spec> for a package with no row)" ;;
+            die "unknown harness CLI '$name' — supported names: opencode, qwen, goose, agy, jcode, cursor, kimi (or npm:<pkg-spec> for a package with no row)" ;;
     esac
 done
