@@ -36,7 +36,7 @@ from omnigent.runner.transports.ws_tunnel.frames import (
     encode_frame,
 )
 from omnigent.runner.transports.ws_tunnel.registry import RunnerSession, TunnelRegistry
-from omnigent.server import managed_keepalive, session_live_state, shutdown_state
+from omnigent.server import managed_host_keepalive, session_live_state, shutdown_state
 from omnigent.server.auth import RESERVED_USER_LOCAL, AuthProvider
 from omnigent.server.host_registry import RunnerExitReports
 from omnigent.server.routes._auth_helpers import require_user
@@ -769,7 +769,7 @@ async def _ping_loop(
         session_live_state.touch_runner_liveness([runner_id])
         # A live runner tunnel is also the signal that this sandbox is still
         # in use; rate-limited inside, so calling it per ping is fine.
-        managed_keepalive.touch(runner_id)
+        managed_host_keepalive.touch(runner_id)
         try:
             await registry.send_text(
                 session,

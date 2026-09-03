@@ -24,6 +24,7 @@ from omnigent.onboarding.sandboxes.agent_sandbox import (
     API_GROUP,
     API_VERSION,
     DEFAULT_SHUTDOWN_WINDOW_S,
+    MIN_SHUTDOWN_WINDOW_S,
     SANDBOX_PLURAL,
     SHUTDOWN_WINDOW_ENV_VAR,
     STORAGE_CLASS_ENV_VAR,
@@ -34,7 +35,6 @@ from omnigent.onboarding.sandboxes.agent_sandbox import (
     resolve_shutdown_window_s,
     resolve_workspace_volume,
 )
-from omnigent.onboarding.sandboxes.kubernetes import build_job_manifest
 
 _SANDBOX_ID = "omnigent-managed-abc-1a2b3c"
 _MANIFEST_KW = {
@@ -144,7 +144,7 @@ def fake_clients(monkeypatch: pytest.MonkeyPatch) -> tuple[_FakeCore, _FakeCusto
 
     client_mod = types.ModuleType("kubernetes.client")
     client_mod.ApiException = _FakeApiException  # type: ignore[attr-defined]
-    client_mod.Configuration = lambda: SimpleNamespace()  # type: ignore[attr-defined]
+    client_mod.Configuration = SimpleNamespace  # type: ignore[attr-defined]
     client_mod.ApiClient = lambda cfg=None: SimpleNamespace(  # type: ignore[attr-defined]
         close=lambda: None
     )
@@ -186,7 +186,7 @@ def _launcher() -> AgentSandboxLauncher:
 
 def test_sandbox_manifest_carries_the_pod_template_verbatim() -> None:
     """The Job's PodTemplateSpec becomes spec.podTemplate unchanged."""
-    job = build_job_manifest(**_MANIFEST_KW)  # type: ignore[arg-type]
+    job = k8s.build_job_manifest(**_MANIFEST_KW)  # type: ignore[arg-type]
     sandbox = build_sandbox_manifest(job, shutdown_time="2026-09-02T12:00:00Z")
 
     assert sandbox["apiVersion"] == f"{API_GROUP}/{API_VERSION}"
@@ -202,7 +202,7 @@ def test_sandbox_manifest_carries_the_pod_template_verbatim() -> None:
 
 def test_sandbox_manifest_expiry_suspends_rather_than_destroys() -> None:
     """A pushable deadline plus Retain, so expiry is a resumable suspend."""
-    job = build_job_manifest(**_MANIFEST_KW)  # type: ignore[arg-type]
+    job = k8s.build_job_manifest(**_MANIFEST_KW)  # type: ignore[arg-type]
     spec = build_sandbox_manifest(job, shutdown_time="2026-09-02T12:00:00Z")["spec"]
 
     assert spec["shutdownTime"] == "2026-09-02T12:00:00Z"  # type: ignore[index]
@@ -217,7 +217,7 @@ def test_sandbox_manifest_expiry_suspends_rather_than_destroys() -> None:
 
 def test_workspace_claim_is_absent_unless_configured() -> None:
     """Default stays the Job provider's ephemeral emptyDir workspace."""
-    job = build_job_manifest(**_MANIFEST_KW)  # type: ignore[arg-type]
+    job = k8s.build_job_manifest(**_MANIFEST_KW)  # type: ignore[arg-type]
     spec = build_sandbox_manifest(job, shutdown_time="2026-09-02T12:00:00Z")["spec"]
     assert "volumeClaimTemplates" not in spec
 
@@ -228,7 +228,7 @@ def test_workspace_claim_is_named_to_replace_the_home_emptydir() -> None:
     controller merges volumeClaimTemplates into the Pod's volumes BY NAME, so
     the name is what swaps the emptyDir for the claim in both containers.
     """
-    job = build_job_manifest(**_MANIFEST_KW)  # type: ignore[arg-type]
+    job = k8s.build_job_manifest(**_MANIFEST_KW)  # type: ignore[arg-type]
     sandbox = build_sandbox_manifest(
         job, shutdown_time="2026-09-02T12:00:00Z", workspace_volume=("20Gi", "fast-ssd")
     )
@@ -250,7 +250,7 @@ def test_workspace_claim_is_named_to_replace_the_home_emptydir() -> None:
 
 def test_workspace_claim_omits_storage_class_when_unset() -> None:
     """No storageClassName means the cluster's default class, not a null."""
-    job = build_job_manifest(**_MANIFEST_KW)  # type: ignore[arg-type]
+    job = k8s.build_job_manifest(**_MANIFEST_KW)  # type: ignore[arg-type]
     sandbox = build_sandbox_manifest(
         job, shutdown_time="2026-09-02T12:00:00Z", workspace_volume=("5Gi", None)
     )
@@ -294,11 +294,32 @@ def test_malformed_window_falls_back_instead_of_raising(
     assert resolve_shutdown_window_s() == DEFAULT_SHUTDOWN_WINDOW_S
 
 
-def test_window_exceeds_the_servers_refresh_interval() -> None:
-    """A busy sandbox must survive several missed refreshes."""
-    from omnigent.server.managed_keepalive import _MIN_INTERVAL_S
+def test_window_below_the_floor_is_clamped_up(monkeypatch: pytest.MonkeyPatch) -> None:
+    """
+    A window shorter than the server's refresh interval would lapse before
+    anything pushed it forward, suspending every sandbox mid-run. Clamp, don't
+    honour it.
+    """
+    monkeypatch.setenv(SHUTDOWN_WINDOW_ENV_VAR, "60")
+    assert resolve_shutdown_window_s() == MIN_SHUTDOWN_WINDOW_S
+    monkeypatch.setenv(SHUTDOWN_WINDOW_ENV_VAR, str(MIN_SHUTDOWN_WINDOW_S - 1))
+    assert resolve_shutdown_window_s() == MIN_SHUTDOWN_WINDOW_S
+    # At or above the floor is honoured verbatim.
+    monkeypatch.setenv(SHUTDOWN_WINDOW_ENV_VAR, str(MIN_SHUTDOWN_WINDOW_S))
+    assert resolve_shutdown_window_s() == MIN_SHUTDOWN_WINDOW_S
+    monkeypatch.setenv(SHUTDOWN_WINDOW_ENV_VAR, "1800")
+    assert resolve_shutdown_window_s() == 1800
 
-    assert DEFAULT_SHUTDOWN_WINDOW_S >= 2 * _MIN_INTERVAL_S
+
+def test_floor_outlives_two_server_refresh_intervals() -> None:
+    """
+    The floor is declared locally to keep the onboarding layer free of a server
+    import; this is what stops the two constants drifting apart.
+    """
+    from omnigent.server.managed_host_keepalive import _MIN_INTERVAL_S
+
+    assert MIN_SHUTDOWN_WINDOW_S >= 2 * _MIN_INTERVAL_S
+    assert DEFAULT_SHUTDOWN_WINDOW_S >= MIN_SHUTDOWN_WINDOW_S
 
 
 # ── keep_alive ─────────────────────────────────────────
@@ -309,7 +330,7 @@ def test_keep_alive_pushes_shutdown_time_forward(
 ) -> None:
     """A single-field merge patch moves the deadline one window out."""
     _, custom = fake_clients
-    monkeypatch.setenv(SHUTDOWN_WINDOW_ENV_VAR, "600")
+    monkeypatch.setenv(SHUTDOWN_WINDOW_ENV_VAR, "1800")
     _launcher().keep_alive(_SANDBOX_ID)
 
     assert custom.calls == ["patch"]
@@ -320,7 +341,7 @@ def test_keep_alive_pushes_shutdown_time_forward(
         tzinfo=UTC
     )
     ahead = (when - datetime.now(UTC)).total_seconds()
-    assert 540 <= ahead <= 600
+    assert 1740 <= ahead <= 1800
 
 
 def test_keep_alive_is_idempotent_across_calls(
@@ -431,7 +452,7 @@ def test_create_workload_creates_a_fresh_sandbox(
     """The normal launch path creates, and carries the workspace claim."""
     _, custom = fake_clients
     monkeypatch.setenv(WORKSPACE_SIZE_ENV_VAR, "20Gi")
-    job = build_job_manifest(**_MANIFEST_KW)  # type: ignore[arg-type]
+    job = k8s.build_job_manifest(**_MANIFEST_KW)  # type: ignore[arg-type]
     _launcher()._create_workload("omnigent-sandboxes", job)
 
     assert custom.calls == ["create"]
@@ -449,7 +470,7 @@ def test_create_workload_wakes_an_existing_sandbox_instead_of_failing(
     _, custom = fake_clients
     custom.create_error = _FakeApiException(status=409, reason="AlreadyExists")
     monkeypatch.setenv(WORKSPACE_SIZE_ENV_VAR, "20Gi")
-    job = build_job_manifest(**_MANIFEST_KW)  # type: ignore[arg-type]
+    job = k8s.build_job_manifest(**_MANIFEST_KW)  # type: ignore[arg-type]
     _launcher()._create_workload("omnigent-sandboxes", job)
 
     assert custom.calls == ["create", "patch"]
@@ -471,7 +492,7 @@ def test_create_workload_still_raises_on_a_real_error(
     """Only 409 means "already there"; anything else is a launch failure."""
     _, custom = fake_clients
     custom.create_error = _FakeApiException(status=403, reason="Forbidden")
-    job = build_job_manifest(**_MANIFEST_KW)  # type: ignore[arg-type]
+    job = k8s.build_job_manifest(**_MANIFEST_KW)  # type: ignore[arg-type]
     with pytest.raises(_FakeApiException):
         _launcher()._create_workload("omnigent-sandboxes", job)
 

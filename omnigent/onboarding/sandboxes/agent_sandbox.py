@@ -21,7 +21,7 @@ inactivity timeout:
   ``shutdownTime = now + window`` (:data:`DEFAULT_SHUTDOWN_WINDOW_S`).
 - :meth:`AgentSandboxLauncher.keep_alive` pushes it forward, and the server
   calls that for as long as the sandbox has a live runner tunnel
-  (:mod:`omnigent.server.managed_keepalive`).
+  (:mod:`omnigent.server.managed_host_keepalive`).
 - Once nothing is running, nothing refreshes the deadline, and the
   agent-sandbox controller tears the Pod down.
 
@@ -97,7 +97,7 @@ DEFAULT_SHUTDOWN_WINDOW_S: int = 3600
 
 This is effectively the sandbox's inactivity timeout: a sandbox with no live
 runner is reclaimed within one window of its last refresh. It MUST stay
-comfortably above :data:`omnigent.server.managed_keepalive._MIN_INTERVAL_S`
+comfortably above :data:`omnigent.server.managed_host_keepalive._MIN_INTERVAL_S`
 (the server's per-runner refresh rate) so a couple of missed or slow refreshes
 cannot reclaim a busy sandbox. One hour against a 10-minute refresh leaves five
 misses of headroom, and also covers the gap between a host starting and its
@@ -128,6 +128,26 @@ the workspace, ``~/.omnigent``, and harness caches) survive a suspend.
 """
 
 
+MIN_SHUTDOWN_WINDOW_S: int = 1200
+"""Floor on the resolved window, in seconds.
+
+A window shorter than the server's keepalive refresh interval is a footgun that
+looks like it works: the deadline lapses before anything ever pushes it forward,
+so every sandbox suspends mid-run. A configured value below this is clamped up
+rather than honoured.
+
+Declared here rather than imported from
+``omnigent.server.managed_host_keepalive._MIN_INTERVAL_S`` on purpose: this
+module is in the onboarding layer and the server imports IT, so reading the
+server's constant here would invert that dependency. The test suite pins this
+floor at >= 2x that interval instead, so the two cannot drift apart silently.
+
+To watch a suspend happen quickly in a lab, patch ``spec.shutdownTime`` into the
+past directly (``kubectl patch sandbox … shutdownTime``) rather than shortening
+the window below this floor.
+"""
+
+
 def resolve_workspace_volume() -> tuple[str, str | None] | None:
     """
     Resolve the durable-workspace claim from the environment.
@@ -148,9 +168,10 @@ def resolve_shutdown_window_s() -> int:
 
     A non-positive or unparseable value falls through to the default rather
     than raising: a malformed knob must not make sandboxes unlaunchable, and a
-    zero window would expire every sandbox at birth.
+    zero window would expire every sandbox at birth. A positive value below
+    :data:`MIN_SHUTDOWN_WINDOW_S` is clamped up to it.
 
-    :returns: The window in seconds, always positive.
+    :returns: The window in seconds, always >= :data:`MIN_SHUTDOWN_WINDOW_S`.
     """
     raw = os.environ.get(SHUTDOWN_WINDOW_ENV_VAR, "").strip()
     if raw:
@@ -164,8 +185,18 @@ def resolve_shutdown_window_s() -> int:
                 DEFAULT_SHUTDOWN_WINDOW_S,
             )
         else:
-            if parsed > 0:
+            if parsed >= MIN_SHUTDOWN_WINDOW_S:
                 return parsed
+            if parsed > 0:
+                _logger.warning(
+                    "%s=%r is below the %ss floor (the server would not refresh a "
+                    "deadline that short in time); using %ss",
+                    SHUTDOWN_WINDOW_ENV_VAR,
+                    raw,
+                    MIN_SHUTDOWN_WINDOW_S,
+                    MIN_SHUTDOWN_WINDOW_S,
+                )
+                return MIN_SHUTDOWN_WINDOW_S
             _logger.warning(
                 "ignoring %s=%r (must be positive); using %ss",
                 SHUTDOWN_WINDOW_ENV_VAR,
@@ -378,6 +409,10 @@ class AgentSandboxLauncher(KubernetesSandboxLauncher):
                 raise click.ClickException(
                     _format_api_error("read sandbox pod", job_name, exc)
                 ) from exc
+            # Every other status (404 "not created yet", but also a transient
+            # 500/503) reads as "no pod yet" so the readiness poll retries until
+            # its deadline. Deliberately not narrowed to 404: an apiserver blip
+            # mid-wake should cost a retry, not fail the launch.
             return None
         except HTTPError:
             return None

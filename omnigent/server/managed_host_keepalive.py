@@ -25,7 +25,9 @@ must not run at the 30s ping cadence.
 
 from __future__ import annotations
 
+import contextvars
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
@@ -57,6 +59,12 @@ _executor: ThreadPoolExecutor | None = None
 
 # runner_id -> monotonic seconds of its last keep_alive attempt.
 _last_kept: dict[str, float] = {}
+
+# Runners with work queued or running on the executor. The throttle alone bounds
+# the queue only while calls finish inside the interval; this also keeps a stalled
+# provider from stacking a second job for the same runner behind the first.
+_inflight: set[str] = set()
+_inflight_lock = threading.Lock()
 
 
 def configure(
@@ -91,6 +99,17 @@ def touch(runner_id: str) -> None:
     slow backend cannot delay the tunnel ping loop that calls this, and every
     failure is logged and swallowed. Safe to call on every ping.
 
+    The worker runs inside a snapshot of THIS caller's ``contextvars``
+    (``copy_context().run``), which is load-bearing rather than tidiness: the
+    resolution chain reads stores that filter every query on
+    ``current_workspace_id()``, a ``ContextVar`` the multi-tenant request
+    middleware binds per request via ``workspace_scope``. A bare
+    ``ThreadPoolExecutor.submit`` would run those reads at the default workspace
+    (0), so on a multi-tenant replica they would match no rows and the keepalive
+    would silently no-op, letting a busy sandbox reclaim itself mid-run. Same
+    guard, and same reason, as :func:`omnigent.server.session_live_state._submit`
+    on the other side of this ping loop.
+
     :param runner_id: Runner with a live tunnel, e.g. ``"runner_token_abc"``.
     """
     if _sandbox_config is None or _host_store is None or _executor is None:
@@ -99,10 +118,18 @@ def touch(runner_id: str) -> None:
     last = _last_kept.get(runner_id)
     if last is not None and now - last < _MIN_INTERVAL_S:
         return
+    with _inflight_lock:
+        if runner_id in _inflight:
+            # Previous attempt for this runner has not finished; skip rather than
+            # queue a duplicate. Deliberately leaves _last_kept untouched so the
+            # next tick retries as soon as the in-flight one clears.
+            return
+        _inflight.add(runner_id)
     _last_kept[runner_id] = now
     if len(_last_kept) > _THROTTLE_MAX_ENTRIES:
         _prune_throttle(now)
-    _executor.submit(_keep_alive_for_runner, runner_id)
+    ctx = contextvars.copy_context()
+    _executor.submit(ctx.run, _keep_alive_for_runner, runner_id)
 
 
 def _prune_throttle(now: float) -> None:
@@ -130,10 +157,23 @@ def _keep_alive_for_runner(runner_id: str) -> None:
         for host_id in host_ids:
             host = host_store.get_host(host_id)
             # Only a server-provisioned sandbox has one to extend; a CLI host has
-            # no sandbox_id and is left alone.
-            if host is None or not host.sandbox_id:
+            # no sandbox_id / provider and is left alone.
+            if host is None or not host.sandbox_id or not host.sandbox_provider:
                 continue
-            config = deployment.recorded(host.sandbox_provider)
+            # for_provider, NOT recorded: recorded() falls back to the deployment
+            # default when the host's provider is no longer offered, which is safe
+            # only for callers that then compare launcher.provider against the row
+            # (see _launcher_for_teardown). Extending is best-effort with nothing
+            # to fall back to, so a config for some OTHER provider would push a
+            # deadline on the wrong backend using a foreign sandbox id. Skip.
+            config = deployment.for_provider(host.sandbox_provider)
+            if config is None:
+                _logger.debug(
+                    "provider %s no longer offered; skipping sandbox %s",
+                    host.sandbox_provider,
+                    host.sandbox_id,
+                )
+                continue
             try:
                 config.launcher_factory().keep_alive(host.sandbox_id)
             except SandboxCapabilityError:
@@ -147,3 +187,6 @@ def _keep_alive_for_runner(runner_id: str) -> None:
     # Keepalive is best effort: it must never disrupt the runner tunnel.
     except Exception:  # noqa: BLE001
         _logger.warning("managed sandbox keepalive failed for runner %s", runner_id, exc_info=True)
+    finally:
+        with _inflight_lock:
+            _inflight.discard(runner_id)
