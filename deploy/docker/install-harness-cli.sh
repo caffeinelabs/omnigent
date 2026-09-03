@@ -246,7 +246,11 @@ for spec in "$@"; do
         opencode) install_npm "opencode-ai@${version:-~1.18.0}" opencode ;;
         qwen)     install_npm "@qwen-code/qwen-code${version:+@$version}" qwen ;;
         goose)    install_goose "$version" ;;
-        agy | antigravity) install_agy ;;
+        agy | antigravity)
+            [ -z "$version" ] \
+                || die "agy is pinned via the AGY_VERSION build ARG (sha256-verified), not an @version suffix"
+            install_agy
+            ;;
         jcode)    install_jcode "$version" ;;
         cursor)
             [ -z "$version" ] \
