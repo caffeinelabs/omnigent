@@ -70,6 +70,8 @@ export interface TranscriptProps {
   sandboxLaunching: boolean;
   /** Terminal-first spin-up bits for the cold-launch empty state. */
   terminalFirst: { isTerminalFirst: boolean; terminalStartingUp?: boolean } | null | undefined;
+  /** Pub/sub ref for the LatestTurnSpacer's synchronous re-measure handle. */
+  spacerMeasureRef: React.RefObject<(() => void) | null>;
 }
 
 /**
@@ -93,6 +95,7 @@ function TranscriptImpl({
   agentsError,
   sandboxLaunching,
   terminalFirst,
+  spacerMeasureRef,
 }: TranscriptProps) {
   const blocks = useChatStore((s) => s.blocks);
   const pendingUserMessages = useChatStore((s) => s.pendingUserMessages);
@@ -298,6 +301,7 @@ function TranscriptImpl({
             <LatestTurnSpacer
               scrollElement={scroller?.el ?? null}
               topGapPx={hasTasks ? 16 : undefined}
+              measureRef={spacerMeasureRef}
             />
           </ConversationContent>
           <ConversationScrollButton />
