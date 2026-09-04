@@ -13,7 +13,9 @@ Why this shape:
   stdout. (The gh CLI has no per-op credential hook, so
   :func:`configure_host_gh` does materialize the token into gh's ``hosts.yml``
   at launch — a within-sandbox persistence the threat model below already
-  admits, matching how ``~/.databrickscfg`` is written.)
+  admits, matching how ``~/.databrickscfg`` is written — and
+  :func:`start_host_gh_refresh` re-writes it on an interval so gh stays fresh
+  across the ~8h token expiry the git broker otherwise handles per-op.)
 - It is **executor-agnostic**: every executor already starts the host with a
   server URL + launch token, so nothing GitHub-specific is injected per
   executor. The host bakes the endpoint coordinates (server URL, host id, launch
@@ -43,6 +45,8 @@ import os
 import shlex
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 import httpx
@@ -254,6 +258,59 @@ def configure_host_gh(server_url: str, host_id: str) -> bool:
     gh_token = str(data["token"])
     login = str(data.get("login") or data.get("username") or "x-access-token")
     return _write_gh_hosts(login, gh_token)
+
+
+# How often the background refresher re-materializes gh's hosts.yml, in seconds.
+# NB the name deliberately avoids a TOKEN/KEY/SECRET/PASSWORD/CREDENTIAL segment:
+# the managed-sandbox launcher rejects env-passthrough names that look like a
+# credential (they would land in the Pod spec/etcd), and this is a plain integer.
+_GH_REFRESH_INTERVAL_ENV_VAR: str = "OMNIGENT_GH_REFRESH_INTERVAL_S"
+_GH_REFRESH_DEFAULT_S: int = 1800
+
+
+def _gh_refresh_interval_s() -> int:
+    """Resolve the gh-token refresh interval (env override, else 30 min).
+
+    Non-positive disables the refresher.
+    """
+    raw = (os.environ.get(_GH_REFRESH_INTERVAL_ENV_VAR) or "").strip()
+    if not raw:
+        return _GH_REFRESH_DEFAULT_S
+    try:
+        return int(raw)
+    except ValueError:
+        return _GH_REFRESH_DEFAULT_S
+
+
+def start_host_gh_refresh(server_url: str, host_id: str) -> threading.Thread | None:
+    """Keep the gh CLI's ``hosts.yml`` token fresh over a long-lived host.
+
+    Unlike git (whose per-op broker helper re-fetches the server-refreshed
+    token on every operation), the gh CLI reads a **static** ``hosts.yml``, so
+    the token :func:`configure_host_gh` writes at startup goes stale when the
+    GitHub App user token expires (~8h) and the server rotates it — a
+    long-running session would then hit ``gh api`` 401s. This best-effort daemon
+    thread re-materializes ``hosts.yml`` on an interval well under the token
+    lifetime, so gh stays authenticated for the life of the host. (An
+    agent-sandbox resume already refreshes it by re-running host startup; this
+    covers a session that stays live without ever suspending.)
+
+    :returns: The started daemon thread, or ``None`` when disabled (a
+        non-positive interval) — the return is mainly for tests.
+    """
+    interval = _gh_refresh_interval_s()
+    if interval <= 0:
+        return None
+
+    def _loop() -> None:
+        while True:
+            time.sleep(interval)
+            with contextlib.suppress(Exception):
+                configure_host_gh(server_url, host_id)
+
+    thread = threading.Thread(target=_loop, name="gh-token-refresh", daemon=True)
+    thread.start()
+    return thread
 
 
 def configure_clone_credentials(server_url: str, host_id: str) -> bool:

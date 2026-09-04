@@ -247,3 +247,54 @@ def test_configure_host_gh_noop_without_token(monkeypatch: pytest.MonkeyPatch, t
     monkeypatch.setenv("GH_CONFIG_DIR", str(tmp_path / "gh"))
     assert h.configure_host_gh("http://srv", "host1") is False
     assert not (tmp_path / "gh" / "hosts.yml").exists()
+
+
+def test_gh_refresh_interval_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(h._GH_REFRESH_INTERVAL_ENV_VAR, raising=False)
+    assert h._gh_refresh_interval_s() == h._GH_REFRESH_DEFAULT_S
+    monkeypatch.setenv(h._GH_REFRESH_INTERVAL_ENV_VAR, "60")
+    assert h._gh_refresh_interval_s() == 60
+    monkeypatch.setenv(h._GH_REFRESH_INTERVAL_ENV_VAR, "garbage")
+    assert h._gh_refresh_interval_s() == h._GH_REFRESH_DEFAULT_S
+
+
+def test_start_host_gh_refresh_disabled_when_nonpositive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A non-positive interval disables the refresher (returns no thread).
+    monkeypatch.setenv(h._GH_REFRESH_INTERVAL_ENV_VAR, "0")
+    assert h.start_host_gh_refresh("http://srv", "host1") is None
+
+
+def test_start_host_gh_refresh_rewrites_hosts_on_tick(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The daemon loop re-materializes hosts.yml each tick. Drive exactly one
+    # refresh, then park the (daemon) thread harmlessly on a never-set event so
+    # the loop neither spins nor raises.
+    import threading as _threading
+
+    calls: list[tuple[str, str]] = []
+    refreshed = _threading.Event()
+    parked = _threading.Event()
+    monkeypatch.setenv(h._GH_REFRESH_INTERVAL_ENV_VAR, "1")
+
+    def _record(server: str, host_id: str) -> bool:
+        calls.append((server, host_id))
+        refreshed.set()
+        return True
+
+    monkeypatch.setattr(h, "configure_host_gh", _record)
+
+    ticks = {"n": 0}
+
+    def fake_sleep(_secs: float) -> None:
+        ticks["n"] += 1
+        if ticks["n"] >= 2:  # after one refresh, park forever (daemon → harmless)
+            parked.wait()
+
+    monkeypatch.setattr(h.time, "sleep", fake_sleep)
+    t = h.start_host_gh_refresh("http://srv", "host1")
+    assert t is not None
+    assert refreshed.wait(timeout=5), "refresher never re-materialized hosts.yml"
+    assert calls == [("http://srv", "host1")]
