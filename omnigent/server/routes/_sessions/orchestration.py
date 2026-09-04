@@ -165,6 +165,7 @@ from omnigent.server.routes._sessions.common import (  # noqa: F401
     _deferred_elicitation_clear_tasks,
     _intentional_stop_sessions,
     _interrupt_fenced_sessions,
+    _llm_response_denied_turns,
     _logger,
     _managed_launch_tasks,
     _MirroredToolCall,
@@ -2897,6 +2898,7 @@ async def _run_managed_launch(
         host_store=host_store,
         host_registry=host_registry,
         tunnel_registry=tunnel_registry,
+        relaunch_host=relaunch_host,
     )
 
 
@@ -2910,6 +2912,7 @@ async def _bind_and_launch_managed_runner(
     host_store: HostStore,
     host_registry: HostRegistry | None,
     tunnel_registry: TunnelRegistry | None,
+    relaunch_host: Host | None = None,
 ) -> None:
     """
     Bind a provisioned managed host to its session and launch a runner.
@@ -2919,6 +2922,14 @@ async def _bind_and_launch_managed_runner(
     ``ConversationNotFoundError``, and the fresh sandbox is torn down
     (the delete route could not see the host binding yet). Settles
     the tracker on every path.
+
+    A launch failure after the host is online also tears the sandbox
+    down — UNLESS *relaunch_host* is set: that means ``managed.host_id``
+    is an existing, persistent host identity getting a new sandbox
+    generation, not a fresh one minted for this launch, so a failed
+    generation is left alone (same reasoning as a failed wake: the
+    identity is the user's, not this attempt's to destroy) rather than
+    torn down.
 
     :param session_id: Session/conversation identifier.
     :param managed: The provision result (host id + workspace).
@@ -2931,6 +2942,9 @@ async def _bind_and_launch_managed_runner(
     :param tunnel_registry: Runner-tunnel registry used to await the
         launched runner's connection. ``None`` in minimal test
         wirings (the rendezvous then settles at frame-send).
+    :param relaunch_host: Existing managed host row being relaunched, or
+        ``None`` for a first launch (a fresh host identity was just
+        minted for ``managed.host_id``).
     """
     from omnigent.server.managed_hosts import terminate_managed_host
 
@@ -2979,7 +2993,15 @@ async def _bind_and_launch_managed_runner(
                 # host refuses, fail the launch loudly (mirroring the
                 # delete-during-provisioning path) rather than waiting out
                 # the connect timeout for a runner that will never appear.
+                # A first launch's fresh Job that will never serve this
+                # session shouldn't outlive the launch that provisioned it;
+                # a relaunch generation on an existing host leaves the
+                # identity alone, same as a failed wake.
                 reason = launch_attempt.error or "harness not configured on the sandbox host"
+                if relaunch_host is None:
+                    host = await asyncio.to_thread(host_store.get_host, managed.host_id)
+                    if host is not None:
+                        await terminate_managed_host(host, host_store, sandbox_config)
                 tracker.fail(session_id, reason)
                 _publish_sandbox_status(session_id, "failed", reason)
                 return
@@ -2992,6 +3014,13 @@ async def _bind_and_launch_managed_runner(
             tracker,
         )
         if not connected:
+            # The runner never connected its tunnel; _wait_for_managed_runner_tunnel
+            # already settled the tracker and published the failure. Same
+            # first-launch-vs-relaunch reasoning as the branch above.
+            if relaunch_host is None:
+                host = await asyncio.to_thread(host_store.get_host, managed.host_id)
+                if host is not None:
+                    await terminate_managed_host(host, host_store, sandbox_config)
             return
     tracker.finish(session_id)
     _publish_sandbox_status(session_id, "ready")
@@ -4903,6 +4932,15 @@ async def _forward_event_to_runner(
         # servers — False/absent saves the runner from a no-op spec
         # load on every turn for agents without MCP servers.
         "has_mcp_servers": has_mcp_servers,
+        # Whether a live renderer (e.g. the desktop app's embedded
+        # browser) is subscribed to this session's stream right now.
+        # The runner drops the ``browser_*`` tool schemas for the turn
+        # when this is False — a headless session must not advertise
+        # tools that can never be served. Presence heuristic: any stream
+        # subscriber counts (the protocol has no renderer-capability
+        # registration), so a non-renderer viewer keeps tools advertised
+        # — no worse than the pre-hint behavior.
+        "browser_renderer_available": session_stream.has_subscribers(session_id),
         # Id of the item just persisted for this turn. On a cold runner
         # cache the runner reloads history (which includes this item in
         # PRE-resolution form) and drops it by id, appending its own
@@ -6179,6 +6217,10 @@ async def _relay_runner_stream_once(
                             )
                         if status == "running":
                             text_acc.clear()
+                            # A new turn invalidates any deny marker a prior
+                            # turn left un-consumed (e.g. its terminal event
+                            # never reached the relay across a reconnect).
+                            _llm_response_denied_turns.pop(session_id, None)
                         continue
 
                     # Terminal spin-up status from the runner's auto-create
@@ -6261,13 +6303,29 @@ async def _relay_runner_stream_once(
                         and _item.get("status") == "completed"
                         and text_acc
                     ):
+                        # A deny recorded by a mid-turn LLM_RESPONSE evaluation
+                        # (harnesses that gate per LLM call) marks this segment
+                        # as denied content; consume it the same way the
+                        # terminal flush does.
+                        _boundary_deny = _llm_response_denied_turns.pop(session_id, None)
                         await _flush_relay_text(
                             conversation_store,
                             session_id,
                             text_acc,
                             current_response_id,
                             current_model,
+                            deny_reason=_boundary_deny,
+                            # Gate each segment as it becomes durable: without
+                            # this a RESPONSE-phase policy is bypassed whenever
+                            # the model emits the offending text before a tool
+                            # call (the segment persists here, ahead of the
+                            # terminal-flush evaluation).
+                            evaluate_response_phase=_boundary_deny is None,
                         )
+                        # A failed append leaves text_acc for retry — re-arm
+                        # the marker so the retry persists the sentinel.
+                        if _boundary_deny is not None and text_acc:
+                            _llm_response_denied_turns[session_id] = _boundary_deny
 
                     conv_item = _extract_persistent_item_from_sse(
                         event,
@@ -6298,13 +6356,37 @@ async def _relay_runner_stream_once(
                             if isinstance(_resp_model, str) and _resp_model
                             else current_model
                         )
+                        # An LLM_RESPONSE DENY recorded by the policy-evaluate
+                        # route means this buffered text is the denied content;
+                        # the flush persists the deny sentinel instead. Popped
+                        # here (not merely read) so the marker can never bleed
+                        # into a later turn.
+                        #
+                        # Scope: the LLM_RESPONSE verdict exists only after the
+                        # full stream, so it can sanitize only this final
+                        # buffered segment; text persisted at earlier tool-call
+                        # boundaries is already durable (the turn still fails
+                        # with a persisted deny error item). Segment-complete
+                        # durable gating is the RESPONSE phase's job — the
+                        # boundary flush above evaluates it for every segment.
+                        _deny_reason = _llm_response_denied_turns.pop(session_id, None)
                         await _flush_relay_text(
                             conversation_store,
                             session_id,
                             text_acc,
                             current_response_id,
                             _final_model,
+                            deny_reason=_deny_reason,
+                            # Terminal flush is the only place the runner
+                            # topology can evaluate the spec's RESPONSE-phase
+                            # output policies over the final assistant text.
+                            evaluate_response_phase=_deny_reason is None,
                         )
+                        # A failed append leaves text_acc intact for a retry
+                        # at a later flush — re-arm the marker so the retry
+                        # still persists the sentinel, not the denied text.
+                        if _deny_reason is not None and text_acc:
+                            _llm_response_denied_turns[session_id] = _deny_reason
 
                     error_item = _error_item_from_sse(
                         event,
@@ -6647,6 +6729,11 @@ def _ensure_runner_relay(
         current = _runner_relay_tasks.get(session_id)
         if current is not None and current.task is t:
             _runner_relay_tasks.pop(session_id, None)
+            # A deny marker is only consumable by this relay's flushes;
+            # drop any leftover so the (unbounded) marker dict cannot
+            # leak entries for relays that died before their terminal
+            # flush. A replacement relay re-records on the next verdict.
+            _llm_response_denied_turns.pop(session_id, None)
 
     task.add_done_callback(_on_done)
     return handle
@@ -8312,7 +8399,9 @@ async def _create_session_from_existing_agent(
     # the validated body args (e.g. ``["--permission-mode",
     # "bypassPermissions"]`` from the web permission-mode selector). The
     # flat-list shape plus this bounds check is the security boundary;
-    # mirrors the multipart create + PATCH paths.
+    # mirrors the multipart create + PATCH paths. When the body carries no
+    # args, the agent's own trusted spec seeds them below — explicit
+    # opt-ins only, never the headless worker default bypass.
     sub_spec: AgentSpec | None = None
     if body.sub_agent_name:
         sub_spec = _resolve_subagent_spec(
@@ -8338,24 +8427,46 @@ async def _create_session_from_existing_agent(
                 code=ErrorCode.INVALID_INPUT,
             ) from exc
 
+    # Spec-seeded defaults: a self-resolved agent's stored spec supplies the
+    # spec-level reasoning effort and, when the body carried no launch args,
+    # its explicit native-bypass opt-ins; one tolerant load serves both.
+    own_spec: AgentSpec | None = None
+    needs_launch_args_from_spec = not body.sub_agent_name and validated_launch_args is None
+    needs_effort_from_spec = reasoning_effort is None and sub_spec is None
+    if (
+        (needs_launch_args_from_spec or needs_effort_from_spec)
+        and agent_cache is not None
+        and agent.bundle_location is not None
+    ):
+        try:
+            own_loaded = await asyncio.to_thread(
+                agent_cache.load,
+                agent.id,
+                agent.bundle_location,
+                expand_env=agent.session_id is None,
+            )
+            own_spec = own_loaded.spec if own_loaded is not None else None
+        except (OSError, ValueError, RuntimeError, KeyError, AttributeError, ImportError):
+            _logger.warning(
+                "create: spec load for spec-seeded defaults failed "
+                "(agent=%s); session starts with no spec-level effort or launch args",
+                agent.id,
+                exc_info=True,
+            )
+
+    if needs_launch_args_from_spec and own_spec is not None:
+        try:
+            validated_launch_args = _derive_terminal_launch_args_from_spec(
+                own_spec, headless_defaults=False
+            )
+        except ValueError as exc:
+            raise OmnigentError(
+                f"invalid terminal_launch_args in agent spec: {exc}",
+                code=ErrorCode.INVALID_INPUT,
+            ) from exc
+
     if reasoning_effort is None:
-        effort_spec: AgentSpec | None = sub_spec
-        if effort_spec is None and agent_cache is not None and agent.bundle_location is not None:
-            try:
-                effort_loaded = await asyncio.to_thread(
-                    agent_cache.load,
-                    agent.id,
-                    agent.bundle_location,
-                    expand_env=agent.session_id is None,
-                )
-                effort_spec = effort_loaded.spec if effort_loaded is not None else None
-            except (OSError, ValueError, RuntimeError, KeyError, AttributeError, ImportError):
-                _logger.warning(
-                    "create: spec load for reasoning_effort default failed "
-                    "(agent=%s); session starts with no spec-level effort",
-                    agent.id,
-                    exc_info=True,
-                )
+        effort_spec: AgentSpec | None = sub_spec if sub_spec is not None else own_spec
         spec_effort = effort_spec.executor.reasoning_effort if effort_spec is not None else None
         if spec_effort is not None:
             _, reasoning_effort = validate_session_model_metadata(
@@ -8704,6 +8815,7 @@ def _create_session_from_bundle(
     metadata: SessionCreateMetadata,
     bundle_bytes: bytes,
     runner_id: str | None = None,
+    spec: AgentSpec | None = None,
 ) -> CreatedSessionResponse:
     """
     Validate, store, and persist a bundled session request.
@@ -8728,6 +8840,11 @@ def _create_session_from_bundle(
         parent session (caller-resolved, ownership-checked),
         e.g. ``"runner_abc123"``. ``None`` leaves the session
         unbound.
+    :param spec: Optional pre-validated spec for *bundle_bytes*. The
+        multipart route validates the bundle once up front (it needs
+        ``os_env.cwd`` for workspace validation before any row
+        exists) and passes the result here so the tarball isn't
+        extracted twice. ``None`` validates in this function.
     :returns: Response with the new session id.
     :raises OmnigentError: If bundle validation or agent insert
         integrity checks fail, or the parent session vanished
@@ -8735,15 +8852,16 @@ def _create_session_from_bundle(
     :raises SQLAlchemyError: If the database transaction fails for
         any non-integrity reason.
     """
-    # Enforce the policy-handler allowlist only on a shared /
-    # multi-user server. On a trusted single-user/local server,
-    # ``omnigent run`` uploads the operator's own bundle through this same
-    # path, so custom handlers must keep working (the operator already has
-    # code execution — the restriction would add no security there).
-    spec = validate_agent_bundle(
-        bundle_bytes,
-        enforce_handler_allowlist=not local_single_user_enabled(),
-    )
+    if spec is None:
+        # Enforce the policy-handler allowlist only on a shared /
+        # multi-user server. On a trusted single-user/local server,
+        # ``omnigent run`` uploads the operator's own bundle through this same
+        # path, so custom handlers must keep working (the operator already has
+        # code execution — the restriction would add no security there).
+        spec = validate_agent_bundle(
+            bundle_bytes,
+            enforce_handler_allowlist=not local_single_user_enabled(),
+        )
     assert spec.name is not None
 
     if metadata.reasoning_effort is None and spec.executor.reasoning_effort is not None:
@@ -8762,6 +8880,21 @@ def _create_session_from_bundle(
                 code=ErrorCode.INVALID_INPUT,
             ) from exc
         metadata = metadata.model_copy(update={"terminal_launch_args": terminal_launch_args})
+    elif metadata.terminal_launch_args is None:
+        # Top-level bundle create (the ``omnigent run <dir>`` shape): honor the
+        # spec's explicit bypass opt-ins (e.g. codex-native ``yolo: true``);
+        # an interactive session never inherits the headless default bypass.
+        try:
+            terminal_launch_args = _derive_terminal_launch_args_from_spec(
+                spec, headless_defaults=False
+            )
+        except ValueError as exc:
+            raise OmnigentError(
+                f"invalid terminal_launch_args in bundled spec: {exc}",
+                code=ErrorCode.INVALID_INPUT,
+            ) from exc
+        if terminal_launch_args is not None:
+            metadata = metadata.model_copy(update={"terminal_launch_args": terminal_launch_args})
 
     agent_id = generate_agent_id()
     agent_bundle_location = bundle_location(agent_id, bundle_bytes)

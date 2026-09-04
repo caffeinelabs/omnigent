@@ -137,14 +137,25 @@ function serverSelectorV2DevUrl() {
  * wizard gets HMR — it still runs in this window, keeping the omnigentSetup
  * bridge). If that server isn't running, loadURL rejects and we fall back to
  * the bundled file:// page. Prod always loads file://. Returns the load promise.
+ *
+ * Deferred to the next tick: this is often called from inside a `did-fail-load`
+ * handler (a dead saved server bouncing back to setup). Navigating a webContents
+ * synchronously while the failed load is still tearing down is unreliable —
+ * Electron can drop the new navigation and strand the window on the error page
+ * (seen in dev when BOTH the server and the Vite dev server are down). Letting
+ * the failing load settle first makes the fallback land every time.
  */
 function loadSetupPage(win, search = "") {
   const loadFile = () => win.loadFile(setupPagePath(), search ? { search } : undefined);
   const devUrl = serverSelectorV2DevUrl();
-  if (devUrl) {
-    return win.loadURL(search ? `${devUrl}?${search}` : devUrl).catch(loadFile);
-  }
-  return loadFile();
+  const run = () => {
+    if (win.isDestroyed()) return Promise.resolve();
+    if (devUrl) return win.loadURL(search ? `${devUrl}?${search}` : devUrl).catch(loadFile);
+    return loadFile();
+  };
+  return new Promise((resolve) => {
+    setTimeout(() => resolve(run()), 0);
+  });
 }
 
 /** Absolute path to the bundled find-in-page bar page. */
@@ -2362,6 +2373,29 @@ function isPinnedOriginSender(event) {
 // ---------------------------------------------------------------------------
 
 /**
+ * Deny-all permission handlers for an agent view's storage partition.
+ *
+ * SECURITY: agent views live on per-conversation partitions (storage isolation
+ * — see browserViewRegistry), NOT on `session.defaultSession`, so the shell's
+ * permission handlers (registerPermissions) do not cover them. A session with
+ * NO handler auto-grants every permission request in Electron, so each new
+ * partition gets an explicit deny-all before its first page loads. Agent-
+ * visited pages never legitimately need mic/camera/notifications from the
+ * shell; on defaultSession they were already denied (grants require the
+ * pinned server origin), so deny-all preserves the old posture. Re-installing
+ * on a partition that already has the handlers is an idempotent no-op, so no
+ * per-partition memo is kept (a failed install is retried on the next view).
+ *
+ * @param {string | undefined} partition
+ */
+function hardenAgentPartition(partition) {
+  if (!partition) return;
+  const ses = session.fromPartition(partition);
+  ses.setPermissionRequestHandler((_wc, _permission, callback) => callback(false));
+  ses.setPermissionCheckHandler(() => false);
+}
+
+/**
  * Build the per-conversation WebContentsView registry for a shell window
  * (positions child views in `win.contentView`, pings back via `win.webContents`).
  *
@@ -2370,7 +2404,12 @@ function isPinnedOriginSender(event) {
  */
 function createBrowserRegistryForWindow(win) {
   return createBrowserViewRegistry({
-    WebContentsViewCtor: (opts) => new WebContentsView(opts),
+    WebContentsViewCtor: (opts) => {
+      // Harden the view's partition before construction so no page can race a
+      // permission request ahead of the deny-all handlers.
+      hardenAgentPartition(opts && opts.webPreferences && opts.webPreferences.partition);
+      return new WebContentsView(opts);
+    },
     createBoundsController: createBrowserViewBoundsController,
     attachToHost: (view) => win.contentView.addChildView(view),
     detachFromHost: (view) => win.contentView.removeChildView(view),
@@ -2675,7 +2714,11 @@ function registerIpc() {
     const ephemeral = windows.get(win)?.ephemeral === true;
     pinWindow(win, null); // back on the setup page → no trusted origin
     setWindowServerUrl(win, null);
-    void loadSetupPage(win, ephemeral ? "ephemeral=1" : "");
+    // "Connect to new server…" from a connected window goes straight to the
+    // server list, skipping the landing/mode intro (that's for first run).
+    const params = new URLSearchParams({ step: "server" });
+    if (ephemeral) params.set("ephemeral", "1");
+    void loadSetupPage(win, params.toString());
   });
 
   // Find bar → run/continue a search in its parent window. Empty text
@@ -2867,7 +2910,15 @@ function registerIpc() {
     if (!cliPath) {
       return { ok: false, error: "The omnigent CLI was not found. Install it or set its path." };
     }
-    return serverManager.startLocalServer(cliPath);
+    // Stream the server's startup log lines to the setup page as it boots.
+    const onLine = (line) => {
+      try {
+        event.sender.send("omnigent:local-server-setup-log", { line });
+      } catch {
+        /* window torn down mid-start */
+      }
+    };
+    return serverManager.startLocalServer(cliPath, onLine);
   });
 
   // SPA → this machine's identity: is the CLI installed, and its host id. Both
