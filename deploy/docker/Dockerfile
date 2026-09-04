@@ -336,6 +336,36 @@ RUN set -eu; \
     fi; \
     echo "agy ${AGY_VERSION} pinned (sha256 verified)"
 
+# GitHub CLI (`gh`). Agents commonly drive GitHub through `gh` (`gh pr create`,
+# `gh api`, `gh issue`), and a managed sandbox authenticates it per-user from
+# the credential broker (see omnigent/git_credential_github.configure_host_gh).
+# gh is not an npm package, so — like kiro-cli / agy above — fetch the immutable
+# per-arch tarball from the versioned GitHub release, verify its sha256, install
+# the single binary on the shared system PATH, and assert the version. gh is a
+# stable general-purpose tool (no behavioural harness coupling), so bump
+# GH_VERSION freely and refresh both SHA256s from gh_<version>_checksums.txt on
+# the release. Keep in sync with deploy/docker/Dockerfile.ubi.
+ARG GH_VERSION=2.63.2
+ARG GH_SHA256_AMD64=912fdb1ca29cb005fb746fc5d2b787a289078923a29d0f9ec19a0b00272ded00
+ARG GH_SHA256_ARM64=0f31e2a8549c64b5c1679f0b99ce5e0dac7c91da9e86f6246adb8805b0f0b4bb
+RUN set -eu; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) sha="$GH_SHA256_AMD64" ;; \
+      arm64) sha="$GH_SHA256_ARM64" ;; \
+      *) echo "ERROR: unsupported arch '$arch' for gh" >&2; exit 1 ;; \
+    esac; \
+    asset="gh_${GH_VERSION}_linux_${arch}.tar.gz"; \
+    curl -fsSL -o /tmp/gh.tar.gz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/${asset}"; \
+    echo "${sha}  /tmp/gh.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/gh.tar.gz -C /tmp "gh_${GH_VERSION}_linux_${arch}/bin/gh"; \
+    install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${arch}/bin/gh" /usr/local/bin/gh; \
+    rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${arch}"; \
+    installed="$(/usr/local/bin/gh --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"; \
+    [ "$installed" = "$GH_VERSION" ] || { \
+      echo "ERROR: gh reports '${installed:-<none>}', expected '$GH_VERSION'." >&2; exit 1; }; \
+    echo "gh ${GH_VERSION} pinned (sha256 verified)"
+
 # Copy the venv and source tree. The editable install's .pth files reference
 # /build/omnigent and /build/sdks/* -- both denied by the k8s Landlock LSM
 # policy. Re-install without -e so the package bytes land in the venv's

@@ -140,6 +140,32 @@ RUN set -eu; \
       echo "ERROR: kiro-cli reports '${installed:-<none>}', expected '$KIRO_CLI_VERSION'." >&2; exit 1; }; \
     echo "kiro-cli ${KIRO_CLI_VERSION} pinned (sha256 verified)"
 
+# GitHub CLI (`gh`) — agents drive GitHub through it and the host authenticates
+# it per-user from the credential broker (configure_host_gh). Not an npm package,
+# so fetch the immutable per-arch tarball from the versioned GitHub release,
+# verify sha256, install the binary on the shared PATH, assert the version. See
+# the fuller rationale in deploy/docker/Dockerfile — keep GH_VERSION + both
+# SHA256s in sync.
+ARG GH_VERSION=2.63.2
+ARG GH_SHA256_AMD64=912fdb1ca29cb005fb746fc5d2b787a289078923a29d0f9ec19a0b00272ded00
+ARG GH_SHA256_ARM64=0f31e2a8549c64b5c1679f0b99ce5e0dac7c91da9e86f6246adb8805b0f0b4bb
+RUN set -eu; \
+    case "$(uname -m)" in \
+      x86_64)  arch="amd64"; sha="$GH_SHA256_AMD64" ;; \
+      aarch64) arch="arm64"; sha="$GH_SHA256_ARM64" ;; \
+      *) echo "ERROR: unsupported arch '$(uname -m)' for gh" >&2; exit 1 ;; \
+    esac; \
+    asset="gh_${GH_VERSION}_linux_${arch}.tar.gz"; \
+    curl -fsSL -o /tmp/gh.tar.gz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/${asset}"; \
+    echo "${sha}  /tmp/gh.tar.gz" | sha256sum -c -; \
+    tar -xzf /tmp/gh.tar.gz -C /tmp "gh_${GH_VERSION}_linux_${arch}/bin/gh"; \
+    install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${arch}/bin/gh" /usr/local/bin/gh; \
+    rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${arch}"; \
+    installed="$(/usr/local/bin/gh --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"; \
+    [ "$installed" = "$GH_VERSION" ] || { \
+      echo "ERROR: gh reports '${installed:-<none>}', expected '$GH_VERSION'." >&2; exit 1; }; \
+    echo "gh ${GH_VERSION} pinned (sha256 verified)"
+
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /build /build
 
