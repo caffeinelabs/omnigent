@@ -48,9 +48,7 @@ def test_store_and_erase_are_noops(monkeypatch: pytest.MonkeyPatch) -> None:
         assert h.main(["--server", "http://s", "--host-id", "h", "--host-token", "t", op]) == 0
 
 
-def test_configure_host_git_resets_then_adds_broker_helper(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+def test_configure_host_gh_writes_hosts_yml(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     monkeypatch.setenv(HOST_TOKEN_ENV_VAR, "launch-tok")
     calls: list[list[str]] = []
     monkeypatch.setattr(h.subprocess, "run", lambda args, **k: calls.append(args) or None)
