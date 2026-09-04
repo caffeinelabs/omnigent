@@ -216,10 +216,7 @@ def _write_gh_hosts(login: str, token: str) -> bool:
     """
     hosts_path = _gh_config_dir() / "hosts.yml"
     body = (
-        "github.com:\n"
-        f'    oauth_token: "{token}"\n'
-        f'    user: "{login}"\n'
-        "    git_protocol: https\n"
+        f'github.com:\n    oauth_token: "{token}"\n    user: "{login}"\n    git_protocol: https\n'
     )
     try:
         hosts_path.parent.mkdir(parents=True, exist_ok=True)
