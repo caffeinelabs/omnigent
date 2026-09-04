@@ -151,7 +151,7 @@ ARG AGY_SHA256_ARM64=c71599bb548cf72dfe7a8f6c411b3c7a3623cd4b0f6276bae89c69f769d
 ENV AGY_VERSION=${AGY_VERSION} \
     AGY_SHA256_AMD64=${AGY_SHA256_AMD64} \
     AGY_SHA256_ARM64=${AGY_SHA256_ARM64}
-    
+
 # GitHub CLI (`gh`) — the read-only "GitHub" side panel shells out to it (and
 # agents reach for it), authenticated per-user from the credential broker (see
 # omnigent/runner/github_resource.py). Not an npm package, so fetch the immutable
