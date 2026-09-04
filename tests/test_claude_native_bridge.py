@@ -3132,6 +3132,33 @@ def test_augment_claude_args_leaves_bypass_consent_alone_otherwise(
     )
 
 
+def test_augment_claude_args_preaccepts_bypass_from_harness_override(
+    tmp_path: Path,
+) -> None:
+    """
+    A bypass flag injected by a launch wrapper is honoured via the explicit
+    passthrough.
+
+    The managed-host launch resolves ``harness.claude-native.args`` (e.g.
+    ``[--dangerously-skip-permissions]``) into the command *after* this
+    augmentation, so the flag is absent from ``claude_args`` here. The caller
+    threads that intent through ``extra_bypass_permissions`` so the one-time
+    consent dialog is still pre-accepted; otherwise a headless worker hangs.
+    """
+    args = augment_claude_args(
+        (),
+        bridge_dir=tmp_path,
+        python_executable="/venv/bin/python",
+        extra_bypass_permissions=True,
+    )
+
+    settings = _load_invocation_settings(args)
+    assert settings.get("skipDangerousModePermissionPrompt") is True, (
+        "a harness-override bypass must set skipDangerousModePermissionPrompt via "
+        "extra_bypass_permissions even when no bypass flag is in claude_args"
+    )
+
+
 def test_augment_claude_args_mirrors_joined_model_arg_into_settings(
     tmp_path: Path,
 ) -> None:

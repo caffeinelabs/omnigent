@@ -6460,6 +6460,7 @@ async def _auto_create_claude_terminal(
 
     from omnigent.claude_native_bridge import (
         BRIDGE_ID_LABEL_KEY,
+        _args_request_bypass_permissions,
         augment_claude_args,
         ensure_claude_workspace_trusted,
         prepare_bridge_dir,
@@ -7030,6 +7031,33 @@ async def _auto_create_claude_terminal(
         launch_metadata.auto_harness,
         router_started=subagent_router_dir is not None,
     )
+    # Resolve the per-harness startup command/args override from config
+    # (``harness.claude-native.{command,args}`` in ~/.omnigent/config.yaml) up
+    # front so a bypass flag it injects is visible to the settings builder in
+    # ``augment_claude_args`` below. The resolver folds the config args into the
+    # launch *after* augmentation (so a downstream wrapper — e.g. Databricks'
+    # ``isaac`` with ``command: isaac`` + ``args: ["--"]`` — runs
+    # ``isaac -- <augmented args>``), which means a config-supplied
+    # ``--dangerously-skip-permissions`` never reaches
+    # ``_args_request_bypass_permissions`` at settings-build time. Without the
+    # explicit passthrough below, ``skipDangerousModePermissionPrompt`` would be
+    # omitted from ``--settings`` and Claude's one-time "Bypass Permissions
+    # mode" consent prompt would block the first turn. This is the same resolver
+    # the local-CLI native launch uses (see cli_native.py), so both
+    # terminal-creation paths honour one config surface.
+    from omnigent.config import load_effective_config  # noqa: FlagLocalImports
+    from omnigent.harness_startup_config import (  # noqa: FlagLocalImports
+        resolve_harness_args,
+        resolve_harness_command,
+    )
+
+    _harness_cfg = load_effective_config()
+    launch_command = resolve_harness_command("claude-native", default="claude", cfg=_harness_cfg)
+    # Detect bypass from the resolved args (harness overrides are additive, so
+    # resolving the pre-augmentation args surfaces the same injected flags).
+    _harness_requests_bypass = _args_request_bypass_permissions(
+        tuple(resolve_harness_args("claude-native", tuple(base_claude_args), cfg=_harness_cfg))
+    )
     claude_args = augment_claude_args(
         base_claude_args,
         bridge_dir=bridge_dir,
@@ -7050,24 +7078,9 @@ async def _auto_create_claude_terminal(
         # The route-turn hook is registered only when this session can
         # actually route; otherwise every submit would pay its round trip.
         turn_routing=_claude_turn_router is not None,
+        extra_bypass_permissions=_harness_requests_bypass,
     )
 
-    # Apply the per-harness startup command/args override from config
-    # (``harness.claude-native.{command,args}`` in ~/.omnigent/config.yaml) so a
-    # downstream integration can wrap this managed-host launch — e.g. Databricks'
-    # ``isaac`` sets ``command: isaac`` + ``args: ["--"]`` to run
-    # ``isaac -- <augmented args>`` (the config args prepend, and augmentation
-    # appended above, so the ``--`` stays first). Identity by default. This is
-    # the same resolver the local-CLI native launch uses (see cli_native.py), so
-    # both terminal-creation paths honour one config surface.
-    from omnigent.config import load_effective_config  # noqa: FlagLocalImports
-    from omnigent.harness_startup_config import (  # noqa: FlagLocalImports
-        resolve_harness_args,
-        resolve_harness_command,
-    )
-
-    _harness_cfg = load_effective_config()
-    launch_command = resolve_harness_command("claude-native", default="claude", cfg=_harness_cfg)
     launch_args = resolve_harness_args("claude-native", tuple(claude_args), cfg=_harness_cfg)
 
     claude_terminal_env_unset = _claude_terminal_env_unset(claude_config)
