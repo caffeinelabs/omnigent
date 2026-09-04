@@ -73,6 +73,7 @@ import {
   useWorkspaceChangedFiles,
   useWorkspaceEnvironment,
 } from "@/hooks/useWorkspaceChangedFiles";
+import { useGithubInfo } from "@/hooks/useGithub";
 import { cn } from "@/lib/utils";
 import {
   isNativeWrapper as isNativeWrapperLabel,
@@ -217,7 +218,10 @@ export function AppShell() {
 
   // Read early: the conversationId scopes the per-session workspace state
   // (rail open/width/tab/open files) used throughout this component.
-  const { conversationId } = useParams<{ conversationId: string }>();
+  const { conversationId, extensionId } = useParams<{
+    conversationId: string;
+    extensionId: string;
+  }>();
   const [fileViewerCommentsOpen, setFileViewerCommentsOpen] = useState(false);
   const [rightRailTab, setRightRailTab] = useState<RightRailTab>(() =>
     conversationId ? (readSessionWorkspaceState(conversationId).rightRailTab ?? "files") : "files",
@@ -235,6 +239,10 @@ export function AppShell() {
       : undefined;
   const [searchParams, setSearchParams] = useSearchParams();
   const [sidebarOpen, setSidebarOpen] = useState(initialSidebarOpen);
+  // Extension pages own their top chrome. The shell header only carries the
+  // collapsed-sidebar toggle there, so skip it while the sidebar is open and
+  // let the page use the full height (ExtensionViewHost drops its inset).
+  const extensionOwnsHeader = extensionId !== undefined && sidebarOpen;
   const [sidebarPeek, setSidebarPeek] = useState(false);
 
   // The settings nav lives INSIDE the sidebar, and its "Back" row is the only
@@ -515,12 +523,13 @@ export function AppShell() {
     (isChildSession ? parentSession?.title : activeSession?.title) ||
     (breadcrumbConv ? conversationDisplayLabel(breadcrumbConv) : null) ||
     (isChildSession ? UNTITLED_CONVERSATION_LABEL : null);
+  const headerProjectSummary =
+    breadcrumbConv?.project_id != null
+      ? projectSummaries?.find((p) => p.id === breadcrumbConv.project_id)
+      : undefined;
   const headerProjectName =
-    (breadcrumbConv?.project_id != null
-      ? projectSummaries?.find((p) => p.id === breadcrumbConv.project_id)?.name
-      : undefined) ??
-    breadcrumbConv?.labels?.[PROJECT_LABEL_KEY] ??
-    null;
+    headerProjectSummary?.name ?? breadcrumbConv?.labels?.[PROJECT_LABEL_KEY] ?? null;
+  const headerProjectIcon = headerProjectSummary?.icon ?? null;
   const headerTitleLinkTo =
     isChildSession && activeSession?.parentSessionId
       ? `/c/${activeSession.parentSessionId}`
@@ -732,6 +741,15 @@ export function AppShell() {
   // it is enough to prove availability without paying for directory contents.
   const environmentQuery = useWorkspaceEnvironment(conversationId);
   const showFilesPanel = environmentQuery.data?.available !== false;
+  // The GitHub tab needs a git checkout on disk: hide it once the session's
+  // GitHub info resolves to "not a git repo" — that panel is a dead end. Other
+  // unavailable reasons keep the tab: `host_outdated` renders an actionable
+  // "update your host" prompt, and `no_os_env` is already covered by the Files
+  // gate. While the info is still loading the tab stays, matching the Files
+  // gate's no-flash default. Shares ChatPage's status-line query cache, so no
+  // extra fetch.
+  const githubInfoQuery = useGithubInfo(conversationId);
+  const showGithubTab = showFilesPanel && githubInfoQuery.data?.reason !== "not_a_git_repo";
   // Per-tab availability for the right workspace rail — the single source
   // of truth shared by the tab-fallback effect below, the rail's mount
   // gate, and the header's collapse toggle, so they can never disagree.
@@ -742,11 +760,11 @@ export function AppShell() {
         // Changes tab shares the Files gate — same on-disk workspace, just the
         // changed-files scope.
         changes: showFilesPanel,
-        // GitHub tab shares the Files gate too — it needs a git checkout on
-        // disk. The panel itself renders the "gh not installed" / "not a git
-        // repo" / "no PR" states, so the tab is present whenever there's a
-        // workspace.
-        github: showFilesPanel,
+        // GitHub tab: workspace gate plus the resolved GitHub info — a
+        // non-git workspace hides the tab instead of opening a dead-end
+        // panel. The panel still renders the "gh not installed" /
+        // "not signed in" / "update your host" states for a real checkout.
+        github: showGithubTab,
         // Browser tab: shown only when the desktop shell hosts the embedded
         // WebContentsView. A plain web build has no embedded browser, and an
         // older desktop build predates the `browser*` bridge — both hide the
@@ -760,7 +778,7 @@ export function AppShell() {
         // rail's tab strip (see WorkspacePanel's TerminalTabsStrip / "+"
         // menu). Mobile keeps a shells drawer (see ``showShellsTab`` below).
       }) as const,
-    [showFilesPanel],
+    [showFilesPanel, showGithubTab],
   );
   // Whether the rail has anything at all to show. When false the workspace
   // card doesn't mount and the header hides its collapse toggle — a
@@ -1171,7 +1189,7 @@ export function AppShell() {
   // re-add ?file= on reopen (the FileViewer diff-sync race makes an effect
   // unsafe here), and strip file/diff/comment on collapse so the URL never
   // advertises a panel that isn't shown.
-  const toggleRightPanel = () => {
+  const toggleRightPanel = useCallback(() => {
     const next = !rightPanelOpen;
     if (conversationId) {
       writeSessionWorkspaceState(conversationId, { open: next });
@@ -1207,7 +1225,7 @@ export function AppShell() {
       clearFileViewerUrl();
     }
     setRightPanelOpen(next);
-  };
+  }, [rightPanelOpen, conversationId, selectedFilePath, clearFileViewerUrl, setSearchParams]);
 
   // The hotkey (⌘⌥[) and command-palette toggle for the left sidebar. A peeking
   // sidebar counts as open, so toggling collapses it; either way peek is
@@ -1326,7 +1344,7 @@ export function AppShell() {
   const restoreSidebarAfterMaximize = useCallback(() => {
     setSidebarOpen(sidebarOpenBeforeMaximizeRef.current);
   }, []);
-  const toggleRightPanelMaximized = () => {
+  const toggleRightPanelMaximized = useCallback(() => {
     if (!rightPanelMaximized) {
       sidebarOpenBeforeMaximizeRef.current = sidebarOpen;
       setSidebarOpen(false);
@@ -1334,7 +1352,7 @@ export function AppShell() {
       restoreSidebarAfterMaximize();
     }
     setRightPanelMaximized((prev) => !prev);
-  };
+  }, [rightPanelMaximized, sidebarOpen, restoreSidebarAfterMaximize]);
 
   // ⌘⌥[ / ⌘⌥] (Ctrl+Alt on Win/Linux) toggle the left and right sidebars. Bound
   // here where both panels' open-state lives.
@@ -1347,6 +1365,18 @@ export function AppShell() {
   // embedded build we claim the chord ahead of any host-page ⌘K listener.
   // Bound here where the palette's open-state lives.
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  // Stable handlers so the memoized Sidebar doesn't re-render on AppShell's
+  // frequent re-renders (chatStore status churn during a bind). Inline
+  // callbacks would give it fresh props each time and defeat the memo.
+  const handleSidebarClose = useCallback(() => {
+    setSidebarOpen(false);
+    setSidebarPeek(false);
+  }, []);
+  const handleSidebarOpen = useCallback(() => {
+    setSidebarOpen(true);
+    setSidebarPeek(false);
+  }, []);
+  const handleOpenSearch = useCallback(() => setCommandPaletteOpen(true), []);
   const isEmbedded = useIsEmbedded();
   useCommandPaletteHotkey(() => setCommandPaletteOpen((prev) => !prev));
   useNewSessionHotkey(!isEmbedded);
@@ -1427,19 +1457,22 @@ export function AppShell() {
   // dumb view. The Files/Changes tabs own the viewer, so there's no
   // per-tab file to stash and restore; switching tabs just closes any
   // open file to reveal the picked tab's scope list.
-  function handleRightRailTabChange(next: RightRailTab) {
-    setRightRailTab(next);
-    if (selectedFilePath !== null) {
-      setSelectedFilePath(null);
-      setFileViewerCommentsOpen(false);
-      clearFileViewerUrl();
-    }
-    // Clicking a static nav tab deselects any active shell tab (it stays in
-    // the strip) so the picked tab's content shows in the single slot.
-    if (selectedTerminalKey !== null) {
-      setSelectedTerminalKey(null);
-    }
-  }
+  const handleRightRailTabChange = useCallback(
+    (next: RightRailTab) => {
+      setRightRailTab(next);
+      if (selectedFilePath !== null) {
+        setSelectedFilePath(null);
+        setFileViewerCommentsOpen(false);
+        clearFileViewerUrl();
+      }
+      // Clicking a static nav tab deselects any active shell tab (it stays in
+      // the strip) so the picked tab's content shows in the single slot.
+      if (selectedTerminalKey !== null) {
+        setSelectedTerminalKey(null);
+      }
+    },
+    [selectedFilePath, selectedTerminalKey, clearFileViewerUrl],
+  );
 
   function openTerminalsPanel(key: string) {
     setSelectedFilePath(null); // close file viewer
@@ -1882,17 +1915,11 @@ export function AppShell() {
           cluster on a narrow window. The strip stays pure drag surface. */}
             <Sidebar
               open={sidebarOpen}
-              onOpen={() => {
-                setSidebarOpen(true);
-                setSidebarPeek(false);
-              }}
+              onOpen={handleSidebarOpen}
               peek={sidebarPeek}
               dragProgress={sidebarDragProgress}
-              onClose={() => {
-                setSidebarOpen(false);
-                setSidebarPeek(false);
-              }}
-              onOpenSearch={() => setCommandPaletteOpen(true)}
+              onClose={handleSidebarClose}
+              onOpenSearch={handleOpenSearch}
             />
 
             {/* Content region (everything right of the sidebar): a relative
@@ -1920,73 +1947,79 @@ export function AppShell() {
                   } as CSSProperties
                 }
               >
-                <ChatHeader
-                  // Real docked state — deliberately NOT `|| sidebarPeek`. Peek
-                  // is a transient card floating over the collapsed layout (the
-                  // docked sidebar stays w-0), so the header must keep its
-                  // collapsed left slot. Treating peek as open relaid it out —
-                  // the toggle unmounted and the breadcrumb slid left into its
-                  // spot — shifting the title sideways the instant the peek card
-                  // appeared. Left collapsed, the breadcrumb stays put beneath
-                  // the floating card (and in the title-bar strip on mac).
-                  sidebarOpen={sidebarOpen}
-                  onOpenSidebar={(peek?: boolean) => {
-                    if (peek) {
-                      setSidebarPeek(true);
-                      setSidebarOpen(false);
-                    } else {
-                      setSidebarOpen(true);
-                      setSidebarPeek(false);
-                    }
-                  }}
-                  isChildSession={isChildSession}
-                  subAgentName={activeSession?.subAgentName ?? null}
-                  conversationId={conversationId}
-                  actionConversation={actionConversation}
-                  conversationTitle={headerConversationTitle}
-                  projectName={headerProjectName}
-                  titleLinkTo={headerTitleLinkTo}
-                  boundAgent={boundAgent}
-                  wrapperLabel={wrapperLabel}
-                  canShare={canShare}
-                  shareDisabled={shareDisabled}
-                  shareDisabledReason={shareDisabledReason}
-                  onShare={() => setShareOpen(true)}
-                  hasAgentInfo={hasAgentInfo}
-                  onAgentInfo={() => setAgentInfoOpen(true)}
-                  hasHeaderMenu={hasHeaderMenu}
-                  showFilesPanel={showFilesPanel}
-                  hasRailContent={hasRailContent}
-                  rightPanelOpen={rightPanelOpen}
-                  onToggleRightPanel={toggleRightPanel}
-                  mobileMenu={{
-                    fileViewerOpen,
-                    panelOpen,
-                    terminalFirst,
-                    executionLogsOpen,
-                    filesPanelOpen,
-                    subagentsPanelOpen,
-                    shellsPanelOpen,
-                    hideTerminalsTab,
-                    // Mobile: reachable when a shell exists OR the agent
-                    // declares shell access (so the drawer's "+ New shell" row
-                    // can create the first one). Desktop rail tab stays gated
-                    // on an existing shell (railTabsAvailable.terminals).
-                    showShellsTab:
-                      !hideTerminalsTab && (railTerminals.length > 0 || agentSupportsShells),
-                    terminalsLength: railTerminals.length,
-                    debugMode,
-                    changedCount,
-                    subagentsWorking,
-                    agentCount,
-                    onOpenFiles: openFilesPanel,
-                    onOpenChanges: openChangesPanel,
-                    onOpenShells: openShellsPanel,
-                    onOpenSubagents: openSubagentsPanel,
-                    onOpenMainExecutionLog: openMainExecutionLog,
-                  }}
-                />
-                <main className="relative flex min-h-0 min-w-0 flex-1 flex-col">
+                {!extensionOwnsHeader && (
+                  <ChatHeader
+                    // Real docked state — deliberately NOT `|| sidebarPeek`. Peek
+                    // is a transient card floating over the collapsed layout (the
+                    // docked sidebar stays w-0), so the header must keep its
+                    // collapsed left slot. Treating peek as open relaid it out —
+                    // the toggle unmounted and the breadcrumb slid left into its
+                    // spot — shifting the title sideways the instant the peek card
+                    // appeared. Left collapsed, the breadcrumb stays put beneath
+                    // the floating card (and in the title-bar strip on mac).
+                    sidebarOpen={sidebarOpen}
+                    onOpenSidebar={(peek?: boolean) => {
+                      if (peek) {
+                        setSidebarPeek(true);
+                        setSidebarOpen(false);
+                      } else {
+                        setSidebarOpen(true);
+                        setSidebarPeek(false);
+                      }
+                    }}
+                    isChildSession={isChildSession}
+                    subAgentName={activeSession?.subAgentName ?? null}
+                    conversationId={conversationId}
+                    actionConversation={actionConversation}
+                    conversationTitle={headerConversationTitle}
+                    projectName={headerProjectName}
+                    projectIcon={headerProjectIcon}
+                    titleLinkTo={headerTitleLinkTo}
+                    boundAgent={boundAgent}
+                    wrapperLabel={wrapperLabel}
+                    canShare={canShare}
+                    shareDisabled={shareDisabled}
+                    shareDisabledReason={shareDisabledReason}
+                    onShare={() => setShareOpen(true)}
+                    hasAgentInfo={hasAgentInfo}
+                    onAgentInfo={() => setAgentInfoOpen(true)}
+                    hasHeaderMenu={hasHeaderMenu}
+                    showFilesPanel={showFilesPanel}
+                    hasRailContent={hasRailContent}
+                    rightPanelOpen={rightPanelOpen}
+                    onToggleRightPanel={toggleRightPanel}
+                    mobileMenu={{
+                      fileViewerOpen,
+                      panelOpen,
+                      terminalFirst,
+                      executionLogsOpen,
+                      filesPanelOpen,
+                      subagentsPanelOpen,
+                      shellsPanelOpen,
+                      hideTerminalsTab,
+                      // Mobile: reachable when a shell exists OR the agent
+                      // declares shell access (so the drawer's "+ New shell" row
+                      // can create the first one). Desktop rail tab stays gated
+                      // on an existing shell (railTabsAvailable.terminals).
+                      showShellsTab:
+                        !hideTerminalsTab && (railTerminals.length > 0 || agentSupportsShells),
+                      terminalsLength: railTerminals.length,
+                      debugMode,
+                      changedCount,
+                      subagentsWorking,
+                      agentCount,
+                      onOpenFiles: openFilesPanel,
+                      onOpenChanges: openChangesPanel,
+                      onOpenShells: openShellsPanel,
+                      onOpenSubagents: openSubagentsPanel,
+                      onOpenMainExecutionLog: openMainExecutionLog,
+                    }}
+                  />
+                )}
+                <main
+                  className="relative flex min-h-0 min-w-0 flex-1 flex-col"
+                  data-shell-header={extensionOwnsHeader ? "hidden" : "visible"}
+                >
                   <Outlet />
                 </main>
 
