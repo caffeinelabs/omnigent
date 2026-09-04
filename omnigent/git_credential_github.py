@@ -8,8 +8,12 @@ the sandbox's existing authenticated channel and prints back ``username`` /
 ``password``.
 
 Why this shape:
-- The **GitHub token is never persisted** in the sandbox — it's fetched fresh
-  per git operation and lives only in this short-lived process's stdout.
+- For **git**, the **GitHub token is never persisted** in the sandbox — it's
+  fetched fresh per git operation and lives only in this short-lived process's
+  stdout. (The gh CLI has no per-op credential hook, so
+  :func:`configure_host_gh` does materialize the token into gh's ``hosts.yml``
+  at launch — a within-sandbox persistence the threat model below already
+  admits, matching how ``~/.databrickscfg`` is written.)
 - It is **executor-agnostic**: every executor already starts the host with a
   server URL + launch token, so nothing GitHub-specific is injected per
   executor. The host bakes the endpoint coordinates (server URL, host id, launch
@@ -39,6 +43,7 @@ import os
 import shlex
 import subprocess
 import sys
+from pathlib import Path
 
 import httpx
 
@@ -182,6 +187,73 @@ def configure_host_git(server_url: str, host_id: str) -> None:
         _git_config("user.email", owner)
         login = data.get("login")
         _git_config("user.name", str(login) if login else owner.split("@", 1)[0])
+
+
+def _gh_config_dir() -> Path:
+    """The gh CLI config dir (``GH_CONFIG_DIR`` override, else ``~/.config/gh``)."""
+    override = (os.environ.get("GH_CONFIG_DIR") or "").strip()
+    if override:
+        return Path(override)
+    return Path(os.environ.get("XDG_CONFIG_HOME") or (Path.home() / ".config")) / "gh"
+
+
+def _write_gh_hosts(login: str, token: str) -> bool:
+    """Write ``<gh config>/hosts.yml`` so the gh CLI authenticates as the owner.
+
+    The gh CLI does not consult git's ``credential.helper`` for its own API
+    calls (``gh api`` / ``gh pr`` / ``gh issue``); it reads ``oauth_token`` from
+    ``hosts.yml`` (or ``GH_TOKEN``). This is a small, fixed document, so it is
+    written directly rather than shelling out to ``gh auth login`` (no gh binary
+    or network dependency at setup time). Values are quoted defensively.
+
+    NB deliberately no ``gh auth setup-git``: that would register gh as a git
+    credential helper and compete with the per-user broker, which must stay
+    authoritative for github.com so git ops fetch the token fresh per op.
+    """
+    hosts_path = _gh_config_dir() / "hosts.yml"
+    body = (
+        "github.com:\n"
+        f'    oauth_token: "{token}"\n'
+        f'    user: "{login}"\n'
+        "    git_protocol: https\n"
+    )
+    try:
+        hosts_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(hosts_path, "w", encoding="utf-8") as handle:
+            handle.write(body)
+        with contextlib.suppress(OSError):
+            os.chmod(hosts_path, 0o600)
+    except OSError:
+        return False
+    return True
+
+
+def configure_host_gh(server_url: str, host_id: str) -> bool:
+    """Authenticate the sandbox's gh CLI as the session owner.
+
+    Companion to :func:`configure_host_git` (which wires git's per-op broker):
+    the gh CLI has no per-op credential hook, so — like
+    :func:`omnigent.host.databricks_credential.configure_host_databricks`
+    writing ``~/.databrickscfg`` — the owner's brokered GitHub token is
+    materialized into ``hosts.yml`` at host startup. The token is a short-lived,
+    server-refreshed user token; it is re-fetched on each host launch, so a
+    long-lived session should relaunch to refresh it.
+
+    Best-effort: a no-op when the host token is absent, the broker is
+    unreachable, or the owner hasn't linked GitHub (any ambient gh auth is left
+    untouched). Never raises.
+
+    :returns: ``True`` when gh was authenticated; ``False`` otherwise.
+    """
+    token = (os.environ.get(_HOST_TOKEN_ENV_VAR) or "").strip()
+    if not token:
+        return False
+    data = _fetch(server_url, host_id, token)
+    if not data or not data.get("connected") or not data.get("token"):
+        return False
+    gh_token = str(data["token"])
+    login = str(data.get("login") or data.get("username") or "x-access-token")
+    return _write_gh_hosts(login, gh_token)
 
 
 def configure_clone_credentials(server_url: str, host_id: str) -> bool:

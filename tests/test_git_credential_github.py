@@ -209,3 +209,41 @@ def test_configure_clone_credentials_fails_closed_when_probe_fails(
     assert any(
         c[:5] == ["git", "config", "--global", "--add", key] and "host1" in c[-1] for c in calls
     )
+
+
+def test_configure_host_gh_writes_hosts_yml(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    # A connected owner: gh's hosts.yml is materialized with the brokered token
+    # and the owner's login, 0600, so `gh api` authenticates as them.
+    monkeypatch.setenv(HOST_TOKEN_ENV_VAR, "launch-tok")
+    monkeypatch.setenv("GH_CONFIG_DIR", str(tmp_path / "gh"))
+    monkeypatch.setattr(
+        h,
+        "_fetch",
+        lambda *a, **k: {"connected": True, "token": "gho_user", "login": "octo"},
+    )
+    assert h.configure_host_gh("http://srv", "host1") is True
+    hosts = (tmp_path / "gh" / "hosts.yml").read_text()
+    assert "github.com:" in hosts
+    assert 'oauth_token: "gho_user"' in hosts
+    assert 'user: "octo"' in hosts
+    assert "git_protocol: https" in hosts
+
+
+def test_configure_host_gh_noop_when_not_connected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path
+) -> None:
+    # Not linked → leave any ambient gh auth untouched; write nothing.
+    monkeypatch.setenv(HOST_TOKEN_ENV_VAR, "launch-tok")
+    monkeypatch.setenv("GH_CONFIG_DIR", str(tmp_path / "gh"))
+    monkeypatch.setattr(h, "_fetch", lambda *a, **k: {"connected": False})
+    assert h.configure_host_gh("http://srv", "host1") is False
+    assert not (tmp_path / "gh" / "hosts.yml").exists()
+
+
+def test_configure_host_gh_noop_without_token(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
+    monkeypatch.delenv(HOST_TOKEN_ENV_VAR, raising=False)
+    monkeypatch.setenv("GH_CONFIG_DIR", str(tmp_path / "gh"))
+    assert h.configure_host_gh("http://srv", "host1") is False
+    assert not (tmp_path / "gh" / "hosts.yml").exists()
