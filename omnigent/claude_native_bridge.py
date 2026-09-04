@@ -1919,6 +1919,7 @@ def augment_claude_args(
     allowed_tools: tuple[str, ...] = (),
     subagent_router_dir: Path | None = None,
     turn_routing: bool = False,
+    extra_bypass_permissions: bool = False,
 ) -> list[str]:
     """
     Return Claude CLI args with Omnigent MCP/hook/skill injection.
@@ -1967,6 +1968,12 @@ def augment_claude_args(
         Routing on, threaded to :func:`build_hook_settings` so the
         ``UserPromptSubmit`` first-message routing hook is registered.
         ``False`` keeps every prompt off the routing round trip.
+    :param extra_bypass_permissions: ``True`` when a launch wrapper applied
+        *after* this augmentation (a ``harness.claude-native.args`` override
+        resolved by :func:`resolve_harness_args`) adds a bypass flag that is
+        therefore absent from ``claude_args`` here. Forces the one-time
+        dangerous-mode acceptance into ``--settings`` so the interactive
+        "Bypass Permissions mode" consent prompt does not block the first turn.
     :returns: Augmented argument list for the terminal resource.
     """
     mcp_config = build_mcp_config(bridge_dir, python_executable=python_executable)
@@ -1978,7 +1985,9 @@ def augment_claude_args(
         api_key_helper=api_key_helper,
         launch_model=_arg_value(claude_args, "--model"),
         launch_permission_mode=_arg_value(claude_args, "--permission-mode"),
-        launch_bypass_permissions=_args_request_bypass_permissions(claude_args),
+        launch_bypass_permissions=(
+            _args_request_bypass_permissions(claude_args) or extra_bypass_permissions
+        ),
         launch_effort=_arg_value(claude_args, "--effort"),
         subagent_router_dir=subagent_router_dir,
         turn_routing=turn_routing,
