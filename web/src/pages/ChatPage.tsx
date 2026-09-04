@@ -3005,7 +3005,13 @@ export function Composer({
   useLayoutEffect(() => {
     onGrowthRef.current = onViewportShrinkPinScroll;
   });
-  const onGrowth = useCallback(() => {
+  // The hook measures on every keystroke, but growth only changes at line
+  // wraps: skip the spacer re-measure and transcript pin while the box rests
+  // at an unchanged height.
+  const lastGrowthPxRef = useRef<number | null>(null);
+  const onGrowth = useCallback((px: number) => {
+    if (lastGrowthPxRef.current === px) return;
+    lastGrowthPxRef.current = px;
     onGrowthRef.current?.();
   }, []);
   useAutoGrowTextarea(textareaRef, value, 10, onGrowth);
