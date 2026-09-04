@@ -209,9 +209,7 @@ def test_configure_clone_credentials_fails_closed_when_probe_fails(
     )
 
 
-def test_configure_host_gh_writes_hosts_yml(
-    monkeypatch: pytest.MonkeyPatch, tmp_path
-) -> None:
+def test_configure_host_gh_writes_hosts_yml(monkeypatch: pytest.MonkeyPatch, tmp_path) -> None:
     # A connected owner: gh's hosts.yml is materialized with the brokered token
     # and the owner's login, 0600, so `gh api` authenticates as them.
     monkeypatch.setenv(HOST_TOKEN_ENV_VAR, "launch-tok")
