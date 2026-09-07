@@ -99,14 +99,14 @@ def test_codex_offers_gpt_family_system_ai_ids() -> None:
     assert rows[0]["displayName"] == "GPT 5 5"
 
 
-def test_pi_offers_claude_tiers_only() -> None:
+def test_pi_offers_full_catalog_as_system_ai_ids() -> None:
     rows = _resolve("pi-native")
     ids = [r["id"] for r in rows]
-    # The Claude family tiers Pi routes via the anthropic gateway surface.
-    assert "system.ai.claude-opus-5" in ids
-    assert "system.ai.claude-sonnet-5" in ids
-    # GPT is deliberately omitted — the Responses surface 501s Pi's client.
-    assert all("claude" in i for i in ids)
+    # Every READY chat endpoint, in the system.ai.* spelling both gateway surfaces
+    # answer to (Claude via anthropic, the rest via the OpenAI chat surface).
+    assert ids == ["system.ai.claude-sonnet-4-6", "system.ai.glm-5-3-flash"]
+    by_id = {r["id"]: r for r in rows}
+    assert by_id["system.ai.glm-5-3-flash"]["displayName"] == "GLM 5 3 Flash"
 
 
 def test_unknown_or_unsupported_harness_is_empty() -> None:
