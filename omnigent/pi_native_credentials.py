@@ -1151,11 +1151,15 @@ def _inline_family_pi_provider(
         resolved_model = model or entry.family_default_model(family_name)
         if not resolved_model:
             continue
-        # A session override can arrive as a Databricks-gateway id, which only the
-        # gateway routes; strip the mechanical prefix for a vendor-direct endpoint.
-        # A configured family default is exempt — it names an id its own endpoint
-        # serves, so a translating proxy's gateway-shaped default survives verbatim.
-        if model is not None:
+        # A session override can arrive as a Databricks-gateway id (``databricks-*``)
+        # that a VENDOR-DIRECT endpoint (e.g. api.openai.com) cannot route; strip the
+        # mechanical prefix to the bare vendor id there. But the Databricks AI Gateway
+        # itself routes ONLY the UC-qualified id: it 501s on a stripped
+        # ``claude-sonnet-5`` and needs the full ``system.ai.claude-sonnet-5``. So skip
+        # the strip when the target IS that gateway (its base_url carries the AI-Gateway
+        # path), exactly as a configured family default is left verbatim.
+        _targets_databricks_gateway = "/ai-gateway/" in (family.base_url or "")
+        if model is not None and not _targets_databricks_gateway:
             resolved_model = normalize_model_for_provider(resolved_model, KEY_KIND)
         # Strip bracket suffixes (e.g. "[1m]") — accepted by the direct
         # Anthropic API but rejected by the Databricks AI Gateway.

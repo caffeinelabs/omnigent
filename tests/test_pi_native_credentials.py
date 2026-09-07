@@ -1119,6 +1119,36 @@ def test_databricks_prefixed_override_normalized_for_inline_openai() -> None:
     # The entry now carries input metadata rather than a bare id-only dict.
 
 
+def test_databricks_gateway_override_kept_verbatim() -> None:
+    """A ``system.ai.*`` override against the Databricks AI Gateway is NOT stripped.
+
+    The gateway routes ONLY the UC-qualified id — it 501s on a canonicalized
+    ``claude-sonnet-5`` and needs the full ``system.ai.claude-sonnet-5``. So when
+    the family's base_url is the AI-Gateway, the override must survive verbatim
+    (unlike the vendor-direct case above, which strips to the bare id).
+    """
+    config = {
+        "providers": {
+            "databricks-gateway": {
+                "kind": "gateway",
+                "default": True,
+                "anthropic": {
+                    "base_url": "https://dbc-x.cloud.databricks.com/ai-gateway/anthropic",
+                    "auth_command": "print-token",
+                    "models": {"default": "system.ai.claude-sonnet-5"},
+                },
+            }
+        }
+    }
+    provider = creds.resolve_pi_native_provider(
+        model="system.ai.claude-opus-5", config_loader=lambda: config
+    )
+    assert provider is not None
+    assert provider.api == "anthropic-messages"
+    # Kept verbatim — NOT stripped to "claude-opus-5" (which the gateway 501s on).
+    assert provider.model == "system.ai.claude-opus-5"
+
+
 def test_inline_family_passes_non_mechanical_override_through() -> None:
     """A non-mechanical override (slash-shaped) passes through unchanged.
 
