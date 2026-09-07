@@ -177,22 +177,23 @@ def _pi_rows(
     token: str,
     transport: httpx.BaseTransport | None,
 ) -> list[ModelRow]:
-    """Every chat endpoint Pi can route, in the ``system.ai.*`` spelling.
+    """The Claude endpoints Pi routes through the gateway's anthropic surface.
 
-    Pi routes a chosen model to whichever declared gateway family matches it:
-    Claude to the anthropic surface, everything else to the OpenAI-compatible
-    chat surface (``/ai-gateway/openai/v1/chat/completions``), which fronts the
-    whole workspace catalog (gpt / glm / kimi / gemini / gpt-oss / claude — all
-    200). So Pi offers the full catalog, keyed by the UC id both gateway surfaces
-    answer to. (Pi's earlier 501 was its openai family pointing at the
-    codex-specific Responses surface, which does not implement Pi's request — not
-    a Pi limitation.)
+    Pi routes a chosen model to whichever declared gateway family matches it, and
+    only the anthropic surface (the same ``/ai-gateway/anthropic`` claude-native
+    uses) answers Pi's request shape. The OpenAI Responses surface returns 501 to
+    Pi's generic openai-responses client — Codex's native protocol works there,
+    Pi's does not — so GPT endpoints are deliberately omitted rather than listed
+    as unroutable. Claude family tiers only.
     """
-    names = list_databricks_llm_endpoint_names(host, token, transport=transport)
+    catalog = discover_databricks_claude_catalog(host, token, transport=transport)
     rows: list[ModelRow] = []
-    for name in sorted(names):
-        base = name[len("databricks-") :] if name.startswith("databricks-") else name
-        model_id = f"system.ai.{base}"
+    seen: set[str] = set()
+    for model_id in catalog.families.values():
+        if model_id in seen:
+            continue
+        seen.add(model_id)
+        base = model_id[len("system.ai.") :] if model_id.startswith("system.ai.") else model_id
         rows.append(
             {
                 "id": model_id,
