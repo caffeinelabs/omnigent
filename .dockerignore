@@ -1,11 +1,16 @@
 # Keep the build context lean and hermetic. None of these are consumed by
 # deploy/docker/Dockerfile — dependencies are installed inside the image from
-# the lockfiles. In particular, a host-local web/node_modules carries native
-# bindings for the BUILDER's platform (e.g. darwin-arm64); copied into the
-# linux/amd64 web-builder it shadows the freshly installed linux bindings and
-# the rolldown/vite build fails with "Cannot find native binding".
+# the lockfiles. A host-local web/node_modules carries native bindings for the
+# BUILDER's platform (e.g. darwin-arm64); copied into the linux/amd64 web-builder
+# it shadows the freshly installed linux bindings and the rolldown/vite build
+# fails with "Cannot find native binding". Some BuildKit versions don't expand a
+# leading "**/", so the node_modules paths are listed explicitly too.
+node_modules
 **/node_modules
+web/node_modules
+web/electron/node_modules
 .git
+.venv
 **/.venv
 **/__pycache__
 **/*.pyc
