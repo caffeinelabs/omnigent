@@ -938,6 +938,7 @@ class SandboxHostLauncher(SandboxLifecycle):
         github_login: str | None = None,
         ssh_authorized_keys: Sequence[str] | None = None,
         host_config: dict[str, object] | None = None,
+        session_url: str | None = None,
         on_stage: Callable[[str], None] | None = None,
     ) -> str:
         """
@@ -1008,6 +1009,7 @@ class ExecModelHostLauncher(SandboxHostLauncher, SandboxExecTransport):
         github_login: str | None = None,
         ssh_authorized_keys: Sequence[str] | None = None,
         host_config: dict[str, object] | None = None,
+        session_url: str | None = None,
         on_stage: Callable[[str], None] | None = None,
     ) -> str:
         """

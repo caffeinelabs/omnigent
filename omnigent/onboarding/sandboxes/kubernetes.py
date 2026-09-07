@@ -77,6 +77,13 @@ from omnigent.onboarding.sandboxes.base import (
     ssh_authorized_keys_setup_commands,
 )
 from omnigent.onboarding.sandboxes.types import SandboxCapabilities
+from omnigent.pr_button import (
+    _GH_WRAPPER_BIN_REL,
+    _SESSION_URL_RE,
+    BUTTON_IMAGE_URL_ENV_VAR,
+    SESSION_URL_ENV_VAR,
+    render_gh_wrapper_write_command,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -560,7 +567,7 @@ def _render_workspace_prep_command(
     return ["bash", "-lc", script]
 
 
-def _render_host_command(server_url: str) -> list[str]:
+def _render_host_command(server_url: str, *, path_prepend: str | None = None) -> list[str]:
     """
     Render the main container command that runs ``omnigent host`` under the
     PID-1 reaper.
@@ -572,10 +579,15 @@ def _render_host_command(server_url: str) -> list[str]:
     not this command.
 
     :param server_url: URL of this server the host dials back to.
+    :param path_prepend: A directory to prepend to ``PATH`` before ``exec`` (the
+        Open-in-Omnigent ``gh`` wrapper dir), or ``None``. Prepended inside the
+        login shell so ``$PATH`` (the image's venv-first PATH) expands at runtime
+        and the reaper's children inherit it.
     :returns: The ``["bash", "-lc", script]`` command.
     """
+    export = f'export PATH={shlex.quote(path_prepend)}:"$PATH"; ' if path_prepend else ""
     script = (
-        f"exec python3 -c {shlex.quote(_REAPER_SRC)} "
+        f"{export}exec python3 -c {shlex.quote(_REAPER_SRC)} "
         f"omnigent host --server {shlex.quote(server_url)}"
     )
     return ["bash", "-lc", script]
@@ -671,6 +683,7 @@ def build_job_manifest(
     secret_mounts: Sequence[Mapping[str, object]] | None = None,
     config_map_mounts: Sequence[Mapping[str, object]] | None = None,
     agent_name: str | None = None,
+    session_url: str | None = None,
     backoff_limit: int = _JOB_BACKOFF_LIMIT,
     active_deadline_seconds: int = _JOB_ACTIVE_DEADLINE_S,
     ttl_seconds_after_finished: int = _JOB_TTL_SECONDS_AFTER_FINISHED,
@@ -880,6 +893,18 @@ def build_job_manifest(
     # broker + git_credential_github helper vend/refresh those live per op.
     ssh_setup = ssh_authorized_keys_setup_commands(_HOME_DIR, ssh_authorized_keys)
 
+    # Open-in-Omnigent PR-body button: when a charset-valid session URL is known,
+    # the init container installs an on-PATH ``gh`` wrapper that stamps the
+    # session's Open-in-Omnigent link into ``gh pr create`` bodies. Best-effort
+    # (runs among the ``|| true`` setup commands) and fail-open — a malformed URL
+    # or a write hiccup just means no button, never a failed launch. The host
+    # container exports OMNIGENT_SESSION_URL and prepends the wrapper dir to PATH
+    # (below) so the wrapper takes effect for the agent's shells.
+    wrapper_bin_dir: str | None = None
+    if session_url and _SESSION_URL_RE.match(session_url):
+        wrapper_bin_dir = f"{_HOME_DIR}/{_GH_WRAPPER_BIN_REL}"
+        ssh_setup = [*ssh_setup, render_gh_wrapper_write_command(_HOME_DIR)]
+
     # Launch-time GitHub credential seed (git + gh authenticate as the connecting
     # user), as secretKeyRef entries so the token never lands in the Pod spec.
     # The native credential broker + git_credential_github helper keep these live
@@ -979,12 +1004,21 @@ def build_job_manifest(
     host_env.extend(
         {"name": name, "value": value} for name, value in git_identity_env(owner).items()
     )
+    # Open-in-Omnigent wrapper env: export the session URL (and any button-image
+    # override) so the on-PATH ``gh`` wrapper the init container wrote stamps
+    # ``gh pr create`` bodies. Only when the URL passed the charset guard above
+    # (wrapper_bin_dir set), so a malformed value can never reach the env.
+    if wrapper_bin_dir is not None:
+        host_env.append({"name": SESSION_URL_ENV_VAR, "value": session_url})
+        button_override = os.environ.get(BUTTON_IMAGE_URL_ENV_VAR)
+        if button_override is not None:
+            host_env.append({"name": BUTTON_IMAGE_URL_ENV_VAR, "value": button_override})
 
     host_container: dict[str, object] = {
         "name": _CONTAINER_NAME,
         "image": image,
         "workingDir": _HOME_DIR,
-        "command": _render_host_command(server_url),
+        "command": _render_host_command(server_url, path_prepend=wrapper_bin_dir),
         "env": host_env,
         "securityContext": container_security,
         "volumeMounts": [
@@ -1575,6 +1609,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
         ssh_authorized_keys: Sequence[str] | None = None,
         host_config: dict[str, object] | None = None,
         agent_name: str | None = None,
+        session_url: str | None = None,
         on_stage: Callable[[str], None] | None = None,
     ) -> str:
         """
@@ -1655,6 +1690,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                     secret_mounts=self._secret_mounts,
                     config_map_mounts=self._config_map_mounts,
                     agent_name=agent_name,
+                    session_url=session_url,
                     runtime_class=self._runtime_class,
                 )
                 # Secret before Job so the Pod's secretKeyRef resolves

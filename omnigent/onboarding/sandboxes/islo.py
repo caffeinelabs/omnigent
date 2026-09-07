@@ -545,7 +545,6 @@ class IsloSandboxLauncher(SandboxLauncher):
         ssh_authorized_keys: Sequence[str] | None = None,
         host_config: dict[str, object] | None = None,
         on_stage: Callable[[str], None] | None = None,
-        session_id: str | None = None,
         session_url: str | None = None,
     ) -> str:
         """Stop any memory-preserved host daemon, then start with a fresh token."""
@@ -566,7 +565,6 @@ class IsloSandboxLauncher(SandboxLauncher):
             ssh_authorized_keys=ssh_authorized_keys,
             host_config=host_config,
             on_stage=on_stage,
-            session_id=session_id,
             session_url=session_url,
         )
 

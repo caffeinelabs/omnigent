@@ -5403,6 +5403,7 @@ async def _provision_managed_sandbox(
                 extra_repos=extra_repos,
                 github_identity=github_identity,
                 agent_name=agent_name,
+                session_id=session_id,
                 on_stage=_on_stage,
             )
         return await launch_managed_host(
@@ -5414,6 +5415,7 @@ async def _provision_managed_sandbox(
             github_identity=github_identity,
             provider=provider,
             agent_name=agent_name,
+            session_id=session_id,
             on_stage=_on_stage,
         )
     except HTTPException as exc:
