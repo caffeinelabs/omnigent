@@ -4155,9 +4155,15 @@ def run_host_process(
     # materialize their per-user token as a ``~/.databrickscfg`` profile so the
     # agent's model serving + MCP route through their Databricks AI Gateway.
     # Best-effort; a no-op when Databricks isn't connected/configured.
-    from omnigent.host.databricks_credential import configure_host_databricks
+    from omnigent.host.databricks_credential import (
+        configure_host_databricks,
+        start_host_databricks_refresh,
+    )
 
     configure_host_databricks(server_url, identity.host_id)
+    # The broker token is a static pat that expires (~30-60 min); refresh the
+    # profile on an interval so a long-lived session's model calls don't 401.
+    start_host_databricks_refresh(server_url, identity.host_id)
 
     if lifecycle_lock is None and daemon_target is not None:
         lifecycle_lock = DaemonLifecycleLock.for_target(daemon_target)

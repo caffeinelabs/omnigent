@@ -115,3 +115,53 @@ def configure_host_databricks(server_url: str, host_id: str) -> bool:
     os.environ["DATABRICKS_CONFIG_PROFILE"] = HOST_DATABRICKS_PROFILE
     _logger.info("Databricks credential: profile %r → %s", HOST_DATABRICKS_PROFILE, workspace_host)
     return True
+
+
+# How often the background refresher re-materializes ~/.databrickscfg, in seconds.
+# The name deliberately avoids a TOKEN/KEY/SECRET/PASSWORD/CREDENTIAL segment so
+# it passes the managed-sandbox env-passthrough credential guard.
+_DBX_REFRESH_INTERVAL_ENV_VAR = "OMNIGENT_DATABRICKS_REFRESH_INTERVAL_S"
+_DBX_REFRESH_DEFAULT_S = 600
+
+
+def _dbx_refresh_interval_s() -> int:
+    """Resolve the Databricks refresh interval (env override, else 10 min)."""
+    raw = (os.environ.get(_DBX_REFRESH_INTERVAL_ENV_VAR) or "").strip()
+    if not raw:
+        return _DBX_REFRESH_DEFAULT_S
+    try:
+        return int(raw)
+    except ValueError:
+        return _DBX_REFRESH_DEFAULT_S
+
+
+def start_host_databricks_refresh(server_url: str, host_id: str):
+    """Keep ``~/.databrickscfg`` fresh over a long-lived host.
+
+    The broker writes the owner's Databricks token as a **static** ``pat``
+    profile, and the workspace access token expires (~30-60 min) with no
+    client-side refresh, so a long-running session's model calls (claude-native
+    gateway, opencode/codex/pi, Databricks MCP) start 401ing. This best-effort
+    daemon thread re-fetches the server-refreshed token and rewrites the profile
+    on an interval well under the token lifetime. (An agent-sandbox resume also
+    refreshes it by re-running host startup; this covers a session that stays
+    live without ever suspending.)
+
+    :returns: The started daemon thread, or ``None`` when disabled (a
+        non-positive interval) — the return is mainly for tests.
+    """
+    interval = _dbx_refresh_interval_s()
+    if interval <= 0:
+        return None
+    import threading
+    import time
+
+    def _loop() -> None:
+        while True:
+            time.sleep(interval)
+            with contextlib.suppress(Exception):
+                configure_host_databricks(server_url, host_id)
+
+    thread = threading.Thread(target=_loop, name="databricks-token-refresh", daemon=True)
+    thread.start()
+    return thread

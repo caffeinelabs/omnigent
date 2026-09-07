@@ -249,6 +249,48 @@ class DatabricksClaudeCatalog:
     model_ids: tuple[str, ...]
 
 
+def _humanize_model(base: str) -> str:
+    """``claude-sonnet-5`` -> ``Claude Sonnet 5``; ``glm-5-3-flash`` -> ``GLM 5 3 Flash``."""
+    parts = [p for p in re.split(r"[-_.]", base) if p]
+    words = [p.upper() if len(p) <= 3 and not p.isdigit() else p.capitalize() for p in parts]
+    return " ".join(words) or base
+
+
+def list_databricks_gateway_models(profile: str | None) -> tuple[tuple[str, str], ...]:
+    """``(gateway_model_id, display_name)`` for every CHAT serving endpoint.
+
+    ``gateway_model_id`` is the ``system.ai.<name>`` id the Databricks AI Gateway
+    accepts (verified: the anthropic surface 200s on ``system.ai.claude-*`` /
+    ``system.ai.glm-*`` / ``system.ai.kimi-*``). Enumerates the workspace's chat
+    serving endpoints via the SDK (dropping embedding/rerank), so a harness that
+    routes through the gateway can offer the full model list in its picker rather
+    than only the pinned model. Best-effort: SDK absent, auth failure, or a
+    denied list returns ``()`` and the caller falls back to its pinned model.
+
+    :param profile: ``~/.databrickscfg`` profile name (e.g. ``"omnigent"``), or
+        ``None`` to use the ambient credential chain.
+    :returns: ``((model_id, display), …)``, e.g.
+        ``(("system.ai.claude-sonnet-5", "Claude Sonnet 5"), …)``.
+    """
+    try:
+        from databricks.sdk import WorkspaceClient
+        from databricks.sdk.core import Config
+
+        client = WorkspaceClient(config=Config(profile=profile))
+        out: list[tuple[str, str]] = []
+        for endpoint in client.serving_endpoints.list():
+            name = (getattr(endpoint, "name", "") or "").strip()
+            task = (getattr(endpoint, "task", "") or "").lower()
+            if not name or "embed" in task or "rerank" in task:
+                continue
+            base = name[len("databricks-") :] if name.startswith("databricks-") else name
+            out.append((f"{_SYSTEM_MODEL_PREFIX}{base}", _humanize_model(base)))
+        return tuple(out)
+    except Exception as exc:  # noqa: BLE001 - SDK absent / auth failure / denied list.
+        _logger.info("Databricks gateway model list failed for profile %r: %r", profile, exc)
+        return ()
+
+
 def discover_databricks_claude_catalog(
     workspace_url: str,
     token: str,
