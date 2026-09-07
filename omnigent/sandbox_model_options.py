@@ -73,6 +73,8 @@ def resolve_sandbox_model_options(
             return _claude_rows(workspace_host, token, transport)
         if canonical == "codex-native":
             return _codex_rows(workspace_host, token, default_model, transport)
+        if canonical == "pi-native":
+            return _pi_rows(workspace_host, token, transport)
     except (httpx.HTTPError, ValueError, OSError) as exc:
         _logger.info("sandbox model options for %r failed: %r", canonical, exc)
         return []
@@ -165,6 +167,52 @@ def _codex_rows(
                 "model": model_id,
                 "displayName": humanize_model(base),
                 "isDefault": model_id == default_model,
+            }
+        )
+    return rows
+
+
+def _pi_rows(
+    host: str,
+    token: str,
+    transport: httpx.BaseTransport | None,
+) -> list[ModelRow]:
+    """The endpoints Pi can route through the gateway's two surfaces.
+
+    Pi routes a model to whichever declared gateway family matches it — the
+    anthropic surface for Claude and the OpenAI Responses surface for GPT — so
+    the picker offers exactly those: the Claude family tiers plus the
+    codex-compatible GPT endpoints, all in the ``system.ai.*`` spelling both
+    gateway surfaces answer to. Non-Claude/non-GPT endpoints are omitted (no Pi
+    surface routes them). Best (Claude) first.
+    """
+    rows: list[ModelRow] = []
+    seen: set[str] = set()
+    catalog = discover_databricks_claude_catalog(host, token, transport=transport)
+    for model_id in catalog.families.values():
+        if model_id in seen:
+            continue
+        seen.add(model_id)
+        base = model_id[len("system.ai.") :] if model_id.startswith("system.ai.") else model_id
+        rows.append(
+            {
+                "id": model_id,
+                "model": model_id,
+                "displayName": humanize_model(base),
+                "isDefault": False,
+            }
+        )
+    for model_id in discover_databricks_codex_models(host, token, transport=transport):
+        if model_id in seen:
+            continue
+        seen.add(model_id)
+        base = model_id[len("system.ai.") :] if model_id.startswith("system.ai.") else model_id
+        rows.append(
+            {
+                "id": model_id,
+                "model": model_id,
+                "displayName": humanize_model(base),
+                "isDefault": False,
             }
         )
     return rows

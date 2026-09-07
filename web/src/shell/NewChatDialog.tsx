@@ -2503,6 +2503,12 @@ export function NewChatLandingScreen() {
     isLoading: sandboxOpencodeModelsLoading,
     error: sandboxOpencodeModelsError,
   } = useSandboxModelOptions("opencode-native", sandboxSelected);
+  const { data: sandboxCodexModels, isLoading: sandboxCodexModelsLoading } =
+    useSandboxModelOptions("codex-native", sandboxSelected);
+  const { data: sandboxPiModels, isLoading: sandboxPiModelsLoading } = useSandboxModelOptions(
+    "pi-native",
+    sandboxSelected,
+  );
   const claudeModelOptions = useMemo(
     () =>
       sandboxSelected
@@ -2521,19 +2527,27 @@ export function NewChatLandingScreen() {
     [hostClaudeModelOptions, sandboxSelected],
   );
   const codexModelOptions = useMemo(
-    () => (sandboxSelected ? [] : (hostCodexModelOptions ?? [])),
-    [hostCodexModelOptions, sandboxSelected],
+    () =>
+      sandboxSelected
+        ? (sandboxCodexModels?.models ?? []).map((option) => ({
+            id: option.id,
+            displayName: option.displayName ?? option.id,
+            isDefault: option.isDefault,
+            source: option.source,
+          }))
+        : (hostCodexModelOptions ?? []),
+    [hostCodexModelOptions, sandboxCodexModels, sandboxSelected],
   );
   const piModelOptions = useMemo(
     () =>
-      sandboxSelected
-        ? []
-        : (hostPiModelOptions ?? []).map((option) => ({
-            id: option.id,
-            displayName: option.displayName ?? option.id,
-            source: option.source,
-          })),
-    [hostPiModelOptions, sandboxSelected],
+      (sandboxSelected ? (sandboxPiModels?.models ?? []) : (hostPiModelOptions ?? [])).map(
+        (option) => ({
+          id: option.id,
+          displayName: option.displayName ?? option.id,
+          source: option.source,
+        }),
+      ),
+    [hostPiModelOptions, sandboxPiModels, sandboxSelected],
   );
   // OpenCode's catalog: the server-resolved Databricks endpoints on a sandbox
   // launch, else the connected host's probe. The full workspace list (any served
@@ -5223,14 +5237,18 @@ export function NewChatLandingScreen() {
                     }
                     codexModelOptions={codexModelOptions}
                     codexModelsLoading={
-                      !sandboxSelected && selectedHostId !== null && hostCodexModelsLoading
+                      sandboxSelected
+                        ? sandboxCodexModelsLoading
+                        : selectedHostId !== null && hostCodexModelsLoading
                     }
                     codexModelsError={
                       !sandboxSelected ? (hostCodexModelsError?.message ?? null) : null
                     }
                     piModelOptions={piModelOptions}
                     piModelsLoading={
-                      !sandboxSelected && selectedHostId !== null && hostPiModelsLoading
+                      sandboxSelected
+                        ? sandboxPiModelsLoading
+                        : selectedHostId !== null && hostPiModelsLoading
                     }
                     opencodeModelOptions={opencodeModelOptions}
                     opencodeModelsLoading={
