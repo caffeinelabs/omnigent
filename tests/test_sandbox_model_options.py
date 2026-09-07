@@ -99,16 +99,14 @@ def test_codex_offers_gpt_family_system_ai_ids() -> None:
     assert rows[0]["displayName"] == "GPT 5 5"
 
 
-def test_pi_offers_claude_tiers_plus_gpt_endpoints() -> None:
+def test_pi_offers_claude_tiers_only() -> None:
     rows = _resolve("pi-native")
     ids = [r["id"] for r in rows]
-    # Claude family tiers first (anthropic surface), then GPT (openai responses),
-    # all system.ai.* — the two surfaces Pi's gateway families route.
+    # The Claude family tiers Pi routes via the anthropic gateway surface.
     assert "system.ai.claude-opus-5" in ids
     assert "system.ai.claude-sonnet-5" in ids
-    assert "system.ai.gpt-5-5" in ids
-    # Nothing a Pi surface can't route (e.g. GLM/Gemini) leaks in.
-    assert all(("claude" in i or "gpt" in i) for i in ids)
+    # GPT is deliberately omitted — the Responses surface 501s Pi's client.
+    assert all("claude" in i for i in ids)
 
 
 def test_unknown_or_unsupported_harness_is_empty() -> None:
