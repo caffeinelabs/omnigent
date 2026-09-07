@@ -67,6 +67,7 @@ vi.mock("@/hooks/useHosts", () => ({
   // options through this hook; no test here opens it, so an empty catalog is
   // enough to keep the module contract satisfied.
   useHostModelOptions: () => ({ data: [] }),
+  useSandboxModelOptions: vi.fn(() => ({ data: undefined })),
 }));
 
 // Mutation hooks are only invoked on row actions; stub them. useConversations

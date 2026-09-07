@@ -1203,29 +1203,35 @@ def _is_llm_endpoint(name: str, task: str) -> bool:
     return any(token in name_lower for token in _LLM_NAME_TOKENS)
 
 
-def _fetch_databricks_listing(
-    provider: ResolvedModelProvider,
+def list_databricks_llm_endpoint_names(
+    host: str,
+    token: str,
     *,
-    transport: httpx.BaseTransport | None,
-) -> ModelListing:
-    """List LLM serving endpoints on the provider's Databricks workspace.
+    transport: httpx.BaseTransport | None = None,
+) -> tuple[str, ...]:
+    """READY chat-LLM serving-endpoint names on a Databricks workspace.
 
-    :param provider: A ``kind="databricks"`` provider descriptor.
+    The token-based core of :func:`_fetch_databricks_listing`. Shared with the
+    server's pre-sandbox model picker, which mints its own per-user token via the
+    credential broker instead of resolving a ``~/.databrickscfg`` profile, so the
+    endpoint list a harness offers before a sandbox exists is enumerated by the
+    exact same filter the launched harness sees.
+
+    :param host: Workspace origin, e.g. ``"https://example.cloud.databricks.com"``.
+    :param token: Workspace bearer token.
     :param transport: Optional httpx transport override for tests.
-    :returns: A ``source="gateway"`` listing of LLM endpoint names.
+    :returns: READY chat-LLM endpoint names, e.g. ``("databricks-claude-opus-4-8", …)``.
     :raises httpx.HTTPError: On transport/HTTP failures.
-    :raises OSError: When the profile resolves no credentials.
     """
-    creds = resolve_databricks_workspace(provider.profile)
     with httpx.Client(transport=transport, timeout=_HTTP_TIMEOUT_S) as client:
         resp = client.get(
-            f"{creds.host}/api/2.0/serving-endpoints",
-            headers={"Authorization": f"Bearer {creds.token}"},
+            f"{host.rstrip('/')}/api/2.0/serving-endpoints",
+            headers={"Authorization": f"Bearer {token}"},
         )
         resp.raise_for_status()
         payload = resp.json()
     endpoints = payload.get("endpoints") if isinstance(payload, dict) else None
-    models: list[ModelEntry] = []
+    names: list[str] = []
     for endpoint in endpoints if isinstance(endpoints, list) else []:
         if not isinstance(endpoint, dict):
             continue
@@ -1241,7 +1247,26 @@ def _fetch_databricks_listing(
         # state field stays included (the API may omit it).
         if isinstance(ready, str) and ready and ready.upper() != "READY":
             continue
-        models.append(ModelEntry(id=name, family=model_family_token(name)))
+        names.append(name)
+    return tuple(names)
+
+
+def _fetch_databricks_listing(
+    provider: ResolvedModelProvider,
+    *,
+    transport: httpx.BaseTransport | None,
+) -> ModelListing:
+    """List LLM serving endpoints on the provider's Databricks workspace.
+
+    :param provider: A ``kind="databricks"`` provider descriptor.
+    :param transport: Optional httpx transport override for tests.
+    :returns: A ``source="gateway"`` listing of LLM endpoint names.
+    :raises httpx.HTTPError: On transport/HTTP failures.
+    :raises OSError: When the profile resolves no credentials.
+    """
+    creds = resolve_databricks_workspace(provider.profile)
+    names = list_databricks_llm_endpoint_names(creds.host, creds.token, transport=transport)
+    models = [ModelEntry(id=name, family=model_family_token(name)) for name in names]
     return ModelListing(
         source="gateway",
         verified=True,

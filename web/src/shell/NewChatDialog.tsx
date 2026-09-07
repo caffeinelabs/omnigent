@@ -181,7 +181,13 @@ import {
   CURSOR_NATIVE_DEFAULT_EXEC_MODE,
   CURSOR_NATIVE_EXEC_MODES,
 } from "@/lib/nativeHarnessModes";
-import { fetchHosts, useHostModelOptions, useHosts, type Host } from "@/hooks/useHosts";
+import {
+  fetchHosts,
+  useHostModelOptions,
+  useHosts,
+  useSandboxModelOptions,
+  type Host,
+} from "@/hooks/useHosts";
 import { readArcaHostId, writeArcaHostId } from "@/lib/arcaHost";
 import {
   connectArcaHost,
@@ -1607,6 +1613,8 @@ function HarnessConfigModal({
   codexModelsError,
   piModelOptions,
   piModelsLoading,
+  opencodeModelOptions,
+  opencodeModelsLoading,
   pickedEffort,
   pickedHarness,
   costControlMode,
@@ -1641,6 +1649,8 @@ function HarnessConfigModal({
   codexModelsError: string | null;
   piModelOptions: readonly { id: string; displayName: string }[];
   piModelsLoading: boolean;
+  opencodeModelOptions: readonly { id: string; displayName: string }[];
+  opencodeModelsLoading: boolean;
   pickedEffort: string;
   pickedHarness: string | null;
   costControlMode: CostControlMode;
@@ -1727,7 +1737,9 @@ function HarnessConfigModal({
     ? claudeModelSelectOptions
     : hasApproval
       ? codexModelSelectOptions
-      : piModelOptions;
+      : entryHarness === "opencode-native"
+        ? opencodeModelOptions
+        : piModelOptions;
   useEffect(() => {
     if (!open || !draftModel || draftModelOptions.length === 0) return;
     if (!draftModelOptions.some((m) => m.id === draftModel)) setDraftModel("");
@@ -1852,37 +1864,45 @@ function HarnessConfigModal({
               <ConfigRow label="Model" description="Underlying LLM" controlClassName="sm:w-80">
                 <SearchableModelPicker
                   value={modelValue}
-                  options={piModelOptions}
-                  loading={piModelsLoading}
+                  options={
+                    entryHarness === "opencode-native" ? opencodeModelOptions : piModelOptions
+                  }
+                  loading={
+                    entryHarness === "opencode-native" ? opencodeModelsLoading : piModelsLoading
+                  }
                   onValueChange={onModelChange}
                 />
               </ConfigRow>
-              <ConfigRow label="Thinking level" description="Reasoning depth vs. speed">
-                <Select
-                  value={draftEffort || EFFORT_SELECT_NONE}
-                  onValueChange={(v) => setDraftEffort(v === EFFORT_SELECT_NONE ? "" : v)}
-                >
-                  <SelectTrigger
-                    className="w-full cursor-pointer"
-                    data-testid="new-chat-landing-config-pi-effort"
-                    aria-label="Thinking level"
+              {/* Pi exposes a reasoning-effort knob; OpenCode routes raw through
+              the gateway and has none, so the row is Pi-only. */}
+              {entryHarness === "pi-native" && (
+                <ConfigRow label="Thinking level" description="Reasoning depth vs. speed">
+                  <Select
+                    value={draftEffort || EFFORT_SELECT_NONE}
+                    onValueChange={(v) => setDraftEffort(v === EFFORT_SELECT_NONE ? "" : v)}
                   >
-                    <SelectValue placeholder={EFFORT_UNAVAILABLE_PLACEHOLDER} />
-                  </SelectTrigger>
-                  <SelectContent
-                    position="popper"
-                    align="start"
-                    className="w-(--radix-select-trigger-width) [&_[data-slot=select-item]]:pl-2.5"
-                  >
-                    <SelectItem value={EFFORT_SELECT_NONE}>Default</SelectItem>
-                    {PI_NATIVE_EFFORTS.map((e) => (
-                      <SelectItem key={e.value} value={e.value}>
-                        {e.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </ConfigRow>
+                    <SelectTrigger
+                      className="w-full cursor-pointer"
+                      data-testid="new-chat-landing-config-pi-effort"
+                      aria-label="Thinking level"
+                    >
+                      <SelectValue placeholder={EFFORT_UNAVAILABLE_PLACEHOLDER} />
+                    </SelectTrigger>
+                    <SelectContent
+                      position="popper"
+                      align="start"
+                      className="w-(--radix-select-trigger-width) [&_[data-slot=select-item]]:pl-2.5"
+                    >
+                      <SelectItem value={EFFORT_SELECT_NONE}>Default</SelectItem>
+                      {PI_NATIVE_EFFORTS.map((e) => (
+                        <SelectItem key={e.value} value={e.value}>
+                          {e.label}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </ConfigRow>
+              )}
             </>
           )}
 
@@ -2473,6 +2493,16 @@ export function NewChatLandingScreen() {
     "pi-native",
     !sandboxSelected,
   );
+  const { data: hostOpencodeModelOptions, isLoading: hostOpencodeModelsLoading } =
+    useHostModelOptions(selectedHostId, "opencode-native", !sandboxSelected);
+  // Managed (sandbox) launches have no host to probe yet, so OpenCode's Databricks
+  // catalog is resolved on the server from the user's connection. Enabled is the
+  // inverse of the host hooks above.
+  const {
+    data: sandboxOpencodeModels,
+    isLoading: sandboxOpencodeModelsLoading,
+    error: sandboxOpencodeModelsError,
+  } = useSandboxModelOptions("opencode-native", sandboxSelected);
   const claudeModelOptions = useMemo(
     () =>
       sandboxSelected
@@ -2505,6 +2535,24 @@ export function NewChatLandingScreen() {
           })),
     [hostPiModelOptions, sandboxSelected],
   );
+  // OpenCode's catalog: the server-resolved Databricks endpoints on a sandbox
+  // launch, else the connected host's probe. The full workspace list (any served
+  // model), unlike Claude Code's family aliases.
+  const opencodeModelOptions = useMemo(
+    () =>
+      (sandboxSelected ? (sandboxOpencodeModels?.models ?? []) : (hostOpencodeModelOptions ?? [])).map(
+        (option) => ({
+          id: option.id,
+          displayName: option.displayName ?? option.id,
+          isDefault: option.isDefault,
+          source: option.source,
+        }),
+      ),
+    [hostOpencodeModelOptions, sandboxOpencodeModels, sandboxSelected],
+  );
+  const opencodeModelsLoading = sandboxSelected
+    ? sandboxOpencodeModelsLoading
+    : hostOpencodeModelsLoading;
   // Desktop-shell host status for THIS machine (null outside Electron), so the
   // picker can tag the current machine and offer to auto-connect it.
   const [desktopHost, setDesktopHost] = useState<HostIdentity | null>(null);
@@ -3172,9 +3220,11 @@ export function NewChatLandingScreen() {
       return [{ label: "Permissions", value: AUTO_PERMISSION_MODE.label }];
     }
     if (supportsModelPicker && !supportsPermissionMode) {
+      const pickerOptions =
+        selectedNativeHarness === "opencode-native" ? opencodeModelOptions : piModelOptions;
       const modelValue =
-        piModelOptions.find((model) => model.id === pickedModel)?.displayName ?? "Default";
-      return [{ label: "Model", value: modelValue }, ...sourceRows(piModelOptions)];
+        pickerOptions.find((model) => model.id === pickedModel)?.displayName ?? "Default";
+      return [{ label: "Model", value: modelValue }, ...sourceRows(pickerOptions)];
     }
     if (supportsPermissionMode) {
       const modelValue = routingOn
@@ -3264,6 +3314,8 @@ export function NewChatLandingScreen() {
     claudeModelOptions,
     codexModelOptions,
     piModelOptions,
+    opencodeModelOptions,
+    selectedNativeHarness,
     pickedEffort,
     permissionMode,
     approvalMode,
@@ -3320,7 +3372,9 @@ export function NewChatLandingScreen() {
         ? claudeModelOptions
         : selectedNativeHarness === "codex-native"
           ? codexModelOptions
-          : [];
+          : selectedNativeHarness === "opencode-native"
+            ? opencodeModelOptions
+            : [];
   const projectDefaultModelValid =
     projectDefaultModel != null && projectModelVocab.some((m) => m.id === projectDefaultModel)
       ? projectDefaultModel
@@ -3370,6 +3424,16 @@ export function NewChatLandingScreen() {
           ? stored.effort
           : "",
       );
+    }
+    if (selectedNativeHarness === "opencode-native") {
+      // OpenCode remembers its Databricks model like Pi, but has no effort knob.
+      setPickedModel(
+        projectSeed(opencodeModelOptions) ??
+          (stored.model != null && opencodeModelOptions.some((model) => model.id === stored.model)
+            ? stored.model
+            : ""),
+      );
+      setPickedEffort("");
     }
     if (supportsPermissionMode) {
       setPermissionMode(
@@ -3429,6 +3493,7 @@ export function NewChatLandingScreen() {
     claudeModelOptions,
     codexModelOptions,
     piModelOptions,
+    opencodeModelOptions,
     projectDefaultModel,
   ]);
   // Smart Routing is remembered per harness alongside the mode/model
@@ -5166,6 +5231,12 @@ export function NewChatLandingScreen() {
                     piModelOptions={piModelOptions}
                     piModelsLoading={
                       !sandboxSelected && selectedHostId !== null && hostPiModelsLoading
+                    }
+                    opencodeModelOptions={opencodeModelOptions}
+                    opencodeModelsLoading={
+                      sandboxSelected
+                        ? opencodeModelsLoading
+                        : selectedHostId !== null && opencodeModelsLoading
                     }
                     pickedEffort={pickedEffort}
                     pickedHarness={pickedHarness}

@@ -3152,6 +3152,21 @@ def create_app(
             tags=["integrations"],
         )
 
+    # Pre-sandbox model options (/v1/sandbox/model-options): the composer picks a
+    # model before a managed sandbox host exists, so it can't probe a host. This
+    # route answers from the caller's brokered Databricks credential instead. It
+    # self-degrades to {connected: false} when Databricks isn't linked/configured,
+    # so mounting it unconditionally is safe.
+    from omnigent.server.routes.sandbox_model_options import (
+        create_sandbox_model_options_router,
+    )
+
+    app.include_router(
+        create_sandbox_model_options_router(auth_provider),
+        prefix="/v1",
+        tags=["hosts"],
+    )
+
     # Mount the auth router that matches the active provider. OIDC and
     # accounts share the /auth prefix but expose different endpoints
     # under it (OIDC: /login, /callback, /logout, /cli-login, /cli-poll;

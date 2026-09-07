@@ -134,6 +134,13 @@ def test_write_provider_config_is_0600_and_valid_json(tmp_path: Path) -> None:
     [
         ("databricks-claude-sonnet-4-6", "databricks-claude-sonnet-4-6"),
         ("databricks/databricks-gpt-5-5", "databricks-gpt-5-5"),
+        # The fully qualified spelling the in-session picker / switch mirror emit
+        # must re-resolve to the same endpoint (idempotent across relaunch/resume),
+        # not double-prefix.
+        (
+            "databricks-gateway/databricks-claude-sonnet-4-6",
+            "databricks-claude-sonnet-4-6",
+        ),
         ("claude-opus-4", None),  # not a gateway endpoint name
         ("anthropic/claude-opus-4", None),
         (None, None),

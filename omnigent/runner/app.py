@@ -10526,48 +10526,6 @@ def create_runner_app(
         return [{**row, "source": source} for row in rows]
 
     @app.get("/v1/sessions/{session_id}/claude-model-options")
-    async def _append_databricks_gateway_model_rows(
-        rows: list[dict[str, object]],
-        claude_config: object,
-    ) -> list[dict[str, object]]:
-        """Append every Databricks serving endpoint when Claude routes through the
-        AI gateway, so the picker lists all models (not just Claude aliases).
-
-        Claude Code launches on ``--model system.ai.<name>`` for any endpoint the
-        anthropic gateway serves (verified for claude/glm/kimi). Existing catalog
-        rows win on dedupe. Best-effort — any failure leaves the rows unchanged.
-        (NB Claude Code's runtime ``/model`` accepts only its family aliases + one
-        custom slot, so switching to a non-alias mid-session is refused by the
-        model-change handler; this is a launch-time/list capability.)
-        """
-        try:
-            base_url = ""
-            env = getattr(claude_config, "env", None)
-            if isinstance(env, dict):
-                base_url = str(env.get("ANTHROPIC_BASE_URL") or "")
-            if "ai-gateway/anthropic" not in base_url:
-                return rows
-            from omnigent.databricks_model_discovery import list_databricks_gateway_models
-
-            profile = os.environ.get("DATABRICKS_CONFIG_PROFILE") or None
-            endpoints = await asyncio.to_thread(list_databricks_gateway_models, profile)
-            if not endpoints:
-                return rows
-            seen = {str(r.get("model") or r.get("id") or "") for r in rows}
-            extra = [
-                {"id": mid, "model": mid, "displayName": disp}
-                for mid, disp in endpoints
-                if mid not in seen
-            ]
-            return [*rows, *extra]
-        except Exception:  # noqa: BLE001 - best-effort enrichment.
-            _logger.debug(
-                "databricks gateway model rows append skipped",
-                exc_info=True,
-                extra={"session_id": runner_primary_session_id()},
-            )
-            return rows
-
     async def get_session_claude_model_options(session_id: str) -> JSONResponse:
         if _session_harness_name(session_id) != "claude-native":
             return JSONResponse(status_code=200, content={"models": []})
@@ -10635,7 +10593,6 @@ def create_runner_app(
                 },
             )
         rows = _with_model_configuration_source(session_id, rows)
-        rows = await _append_databricks_gateway_model_rows(rows, claude_config)
         _claude_model_options_rows[session_id] = (
             time.monotonic() + _CLAUDE_MODEL_OPTIONS_CACHE_TTL_S,
             rows,

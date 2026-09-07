@@ -84,6 +84,7 @@ vi.mock("@/hooks/useHosts", () => ({
       { id: "haiku", displayName: "Haiku" },
     ],
   })),
+  useSandboxModelOptions: vi.fn(() => ({ data: undefined })),
   useInstallHarness: vi.fn(() => ({ mutate: vi.fn(), isPending: false })),
   useInstallingHarnesses: vi.fn(() => new Set<string>()),
 }));

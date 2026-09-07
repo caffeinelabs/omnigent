@@ -79,6 +79,7 @@ vi.mock("@/lib/nativeBridge", async (importOriginal) => ({
 vi.mock("@/hooks/useHosts", () => ({
   useHosts: vi.fn(),
   useHostModelOptions: vi.fn(),
+  useSandboxModelOptions: vi.fn(() => ({ data: undefined })),
   fetchHosts: vi.fn(async () => []),
   // The setup dialog mounts these; default to inert so tests that don't
   // exercise install / credential-write don't need to wire them up.
@@ -3765,15 +3766,16 @@ describe("NewChatLandingScreen agent picker + config gear", () => {
     mockAgents([
       {
         id: "a_bare",
-        name: "opencode-native-ui",
-        display_name: "OpenCode",
+        name: "kiro-native-ui",
+        display_name: "Kiro",
         description: null,
-        harness: "opencode-native",
+        harness: "kiro-native",
         skills: [],
       },
     ]);
     renderLanding({ smart_routing_enabled: true });
-    // opencode-native has no knobs and isn't routable → no gear.
+    // kiro-native declares no capabilities and isn't routable → no gear.
+    // (OpenCode is no longer knob-less: it has a Databricks model picker.)
     expect(screen.queryByTestId("new-chat-landing-config-gear")).toBeNull();
   });
 });

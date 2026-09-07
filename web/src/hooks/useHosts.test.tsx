@@ -9,6 +9,7 @@ import {
   useHosts,
   useInstallHarness,
   useInstallingHarnesses,
+  useSandboxModelOptions,
   useStoreCredential,
 } from "./useHosts";
 
@@ -362,6 +363,37 @@ describe("useInstallHarness + useInstallingHarnesses (concurrent installs)", () 
     expect(hosts2?.[0].configured_harnesses?.["pi-native"]).toBe(true);
     // Codex's readiness is still present (the server's full map carries it).
     expect(hosts2?.[0].configured_harnesses?.["codex-native"]).toBe("needs-auth");
+  });
+});
+
+describe("useSandboxModelOptions", () => {
+  it("loads the server-resolved catalog for a harness and surfaces connected", async () => {
+    fetchMock.mockResolvedValueOnce(
+      mockResponse({
+        connected: true,
+        models: [{ id: "databricks-glm-5-3-flash", displayName: "GLM 5 3 Flash", isDefault: true }],
+      }),
+    );
+
+    const { result } = renderHook(() => useSandboxModelOptions("opencode-native"), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(fetchMock.mock.calls[0][0]).toBe("/v1/sandbox/model-options?harness=opencode-native");
+    expect(result.current.data?.connected).toBe(true);
+    expect(result.current.data?.models.map((m) => m.id)).toEqual(["databricks-glm-5-3-flash"]);
+  });
+
+  it("reports connected:false with no models when the body says so", async () => {
+    fetchMock.mockResolvedValueOnce(mockResponse({ connected: false }));
+    const { result } = renderHook(() => useSandboxModelOptions("opencode-native"), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(result.current.data).toEqual({ connected: false, models: [] });
+  });
+
+  it("does not fetch when disabled", async () => {
+    renderHook(() => useSandboxModelOptions("opencode-native", false), { wrapper });
+    await Promise.resolve();
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 

@@ -376,17 +376,27 @@ def _gateway_endpoint_for_model(model_id: str | None) -> str | None:
     """
     Normalize a spec model id to a Databricks serving-endpoint name.
 
-    Accepts ``"databricks-claude-..."`` and ``"databricks/claude-..."`` spellings
-    and strips a leading ``databricks/`` provider prefix; anything that does not
-    look like a ``databricks-*`` endpoint is ignored (the gateway only routes
-    its own endpoint names), so the default applies.
+    Accepts the bare ``"databricks-claude-..."`` spelling, the ``"databricks/claude-..."``
+    provider-qualified spelling, and the fully qualified ``"databricks-gateway/databricks-..."``
+    spelling that the in-session picker / model-switch mirror emit — stripping the
+    provider prefix in each case. Anything that does not look like a ``databricks-*``
+    endpoint is ignored (the gateway only routes its own endpoint names), so the
+    default applies.
+
+    Tolerating the qualified spelling keeps a session idempotent across relaunch/
+    resume: a model switched in-session persists its qualified id as the override,
+    which must re-resolve to the same endpoint rather than double-prefixing.
 
     :param model_id: The spec/override model id, or ``None``.
     :returns: A bare endpoint name, or ``None``.
     """
     if not model_id:
         return None
-    candidate = model_id.split("/", 1)[1] if model_id.startswith("databricks/") else model_id
+    candidate = model_id
+    for prefix in (f"{DATABRICKS_GATEWAY_PROVIDER_ID}/", "databricks/"):
+        if candidate.startswith(prefix):
+            candidate = candidate[len(prefix) :]
+            break
     return candidate if candidate.startswith("databricks-") else None
 
 

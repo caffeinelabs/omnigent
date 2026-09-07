@@ -101,6 +101,42 @@ async function fetchHostModelOptions(
   return models;
 }
 
+export interface SandboxModelOptions {
+  /** True when the caller has a usable Databricks connection to enumerate. */
+  connected: boolean;
+  models: NativeModelOption[];
+}
+
+async function fetchSandboxModelOptions(harness: string): Promise<SandboxModelOptions> {
+  const res = await authenticatedFetch(
+    `/v1/sandbox/model-options?harness=${encodeURIComponent(harness)}`,
+  );
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  const body = (await res.json()) as { connected?: boolean; models?: NativeModelOption[] };
+  return { connected: body.connected ?? false, models: body.models ?? [] };
+}
+
+/**
+ * Model choices for a harness on a managed (sandbox) launch, resolved on the
+ * SERVER from the user's brokered Databricks connection — no host exists yet, so
+ * the composer can't probe one. `{connected:false}` means "not linked / no
+ * models", and the composer falls back to its static vocabulary.
+ */
+export function useSandboxModelOptions(harness: string, enabled = true) {
+  return useQuery({
+    queryKey: ["sandbox-model-options", harness],
+    queryFn: () => fetchSandboxModelOptions(harness),
+    enabled,
+    // The workspace serving-endpoints probe can race the credential broker's
+    // token refresh; poll while mounted and retry with backoff, mirroring the
+    // host picker's warm-up handling.
+    staleTime: 15_000,
+    refetchInterval: enabled ? 15_000 : false,
+    retry: 6,
+    retryDelay: (attempt) => Math.min(5_000, 1_000 * 2 ** attempt),
+  });
+}
+
 /** Model choices available before launch, resolved on the selected host. */
 export function useHostModelOptions(hostId: string | null, harness: string, enabled = true) {
   return useQuery({
