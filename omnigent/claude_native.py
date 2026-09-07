@@ -1284,7 +1284,44 @@ async def claude_model_catalog(
                     "isDefault": True,
                 }
             )
+    out.extend(_databricks_gateway_catalog_rows(claude_config, out))
     return out
+
+
+def _databricks_gateway_catalog_rows(
+    claude_config: ClaudeNativeUcodeConfig | None,
+    existing: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Every Databricks serving endpoint, as picker rows, for a gateway launch.
+
+    When Claude routes through the Databricks AI gateway, the harness probe only
+    enumerates Anthropic aliases — so the picker would omit the workspace's other
+    models (glm/kimi/gpt/…). List them from the SDK (as ``system.ai.<name>``, the
+    id the gateway accepts) so the pre-launch AND in-session pickers offer them;
+    a launch pins the pick via ``--model``. Rows already present (the probe's
+    Claude aliases) are not duplicated. Best-effort — any failure adds nothing.
+
+    NB Claude Code's runtime ``/model`` accepts only its family aliases + one
+    custom slot, so switching to a non-alias *mid-session* is refused by the
+    model-change handler; this is a launch-time capability.
+    """
+    if claude_config is None:
+        return []
+    base_url = claude_config.env.get(_UCODE_CLAUDE_BASE_URL_ENV, "")
+    if "ai-gateway/anthropic" not in base_url:
+        return []
+    from omnigent.databricks_model_discovery import list_databricks_gateway_models
+
+    profile = os.environ.get("DATABRICKS_CONFIG_PROFILE") or None
+    endpoints = list_databricks_gateway_models(profile)
+    if not endpoints:
+        return []
+    seen = {str(row.get("model") or row.get("id") or "") for row in existing}
+    return [
+        {"id": mid, "model": mid, "displayName": disp}
+        for mid, disp in endpoints
+        if mid not in seen
+    ]
 
 
 async def claude_launch_catalog(
@@ -2919,16 +2956,30 @@ def _provider_config_for_native_claude(entry: ProviderEntry) -> ClaudeNativeUcod
         },
         api_key_helper=api_key_helper,
         model=family.default_model,
-        # The declared models are exactly what this entry can route.
+        # The declared models plus — for a Databricks AI-gateway entry — every
+        # serving endpoint the workspace exposes, so a picker can offer the full
+        # model list and a launch of any of them passes the servability gate
+        # (the gateway routes system.ai.<name> for claude/glm/kimi/…). Best-effort.
         routable_models=tuple(
             dict.fromkeys(
                 [
                     *pin_env.values(),
                     *([family.default_model] if family.default_model else []),
+                    *_databricks_gateway_routable_models(family.base_url),
                 ]
             )
         ),
     )
+
+
+def _databricks_gateway_routable_models(base_url: str) -> tuple[str, ...]:
+    """Every ``system.ai.<name>`` id the Databricks AI gateway serves, else ()."""
+    if "ai-gateway/anthropic" not in (base_url or ""):
+        return ()
+    from omnigent.databricks_model_discovery import list_databricks_gateway_models
+
+    profile = os.environ.get("DATABRICKS_CONFIG_PROFILE") or None
+    return tuple(mid for mid, _disp in list_databricks_gateway_models(profile))
 
 
 def _bedrock_config_for_native_claude(entry: ProviderEntry) -> ClaudeNativeUcodeConfig | None:
