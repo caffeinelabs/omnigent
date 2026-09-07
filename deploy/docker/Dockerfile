@@ -164,6 +164,14 @@ RUN test -f ./omnigent/server/static/web-ui/index.html \
 # [databricks] extra in pyproject — so add it explicitly here.
 RUN uv pip install --no-cache-dir --index-url ${PYPI_INDEX_URL} 'psycopg[binary]>=3.1,<4'
 
+# boto3 is the [kms] extra's dependency, needed by the native integration
+# credential store's KmsSecretCipher (per-user connection secrets are encrypted
+# with AWS KMS). Deployments that enable GitHub/other connections set
+# OMNIGENT_CREDENTIAL_CIPHER=kms; without boto3 the connect callback 500s at
+# encrypt time. Server-only (the runner host never talks to KMS), and installed
+# unconditionally so it doesn't depend on the OMNIGENT_EXTRAS build-arg.
+RUN uv pip install --no-cache-dir --index-url ${PYPI_INDEX_URL} -e ".[kms]"
+
 # Optional managed-sandbox provider extras for the SERVER (the launcher imports
 # the provider SDK — e.g. the kubernetes client for `sandbox.provider:
 # kubernetes`). Off by default; the runner host image needs none of these. Build
