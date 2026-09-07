@@ -3,7 +3,7 @@
 Implements the config half of the *GitHub App* (not classic OAuth App)
 integration that lets a user connect their GitHub account from the web
 UI and have their managed sandboxes authenticate ``gh`` / git as them.
-See ``designs/GITHUB_APP_SANDBOX_AUTH.md``.
+See ``docs/GITHUB_APP_SETUP.md``.
 
 This module deliberately owns everything that *touches the App's
 secrets* — reading them from env, minting the app JWT, and building the
@@ -68,7 +68,12 @@ class GitHubTokenSet:
 
 @dataclass(frozen=True)
 class SandboxGithubIdentity:
-    """Per-user GitHub credentials to inject into a managed sandbox.
+    """Per-user GitHub identity injected into a managed sandbox at launch.
+
+    ``token`` is the launch-time user access token (git/gh creds are
+    additionally kept live by the native credential broker + helper, so this
+    is a convenience seed, not the source of truth). ``ssh_authorized_keys``
+    carries the user's PUBLIC SSH keys for VS Code Remote-SSH via SSHPiper.
 
     :param token: A currently-valid user access token.
     :param login: The user's GitHub login, e.g. ``"octocat"``.
@@ -97,8 +102,10 @@ class GitHubAppConfig:
     :param private_key: RSA private key PEM for the app JWT, or ``None``.
     :param redirect_uri: OAuth callback URL registered on the App.
     :param slug: App slug used to build the ``install_url``, or ``None``.
-    :param token_enc_secret: Key material for encrypting stored tokens at
-        rest (see :class:`omnigent.server.secretbox.SecretBox`).
+
+    Token-at-rest encryption is not configured here: stored tokens are
+    encrypted by the shared credential store's cipher
+    (``OMNIGENT_CREDENTIAL_ENC_KEY``), not by any GitHub-specific key.
     """
 
     app_id: str | None
@@ -107,7 +114,6 @@ class GitHubAppConfig:
     private_key: str | None
     redirect_uri: str
     slug: str | None
-    token_enc_secret: str
 
     @property
     def install_url(self) -> str | None:
@@ -170,7 +176,10 @@ class GitHubAppConfig:
 
         The feature requires a client id, a client secret, and a
         resolvable redirect URI (explicit, or derived from
-        ``OMNIGENT_DOMAIN``). Missing any of these disables it.
+        ``OMNIGENT_DOMAIN``). Missing any of these disables it. Token-at-rest
+        encryption is the credential store's concern
+        (``OMNIGENT_CREDENTIAL_ENC_KEY``), not GitHub's — the caller only
+        wires a connection store when that key is present.
 
         :returns: A validated config, or ``None`` when GitHub App
             integration is not configured.
@@ -193,7 +202,7 @@ class GitHubAppConfig:
                     "GitHub App integration stays disabled."
                 )
                 return None
-            redirect_uri = f"https://{domain}/v1/integrations/github/callback"
+            redirect_uri = f"https://{domain}/v1/connections/github/callback"
 
         private_key = os.environ.get("OMNIGENT_GITHUB_APP_PRIVATE_KEY", "").strip() or None
         if private_key is None:
@@ -206,12 +215,6 @@ class GitHubAppConfig:
                         f"OMNIGENT_GITHUB_APP_PRIVATE_KEY_PATH={key_path!r} is unreadable: {exc}"
                     ) from exc
 
-        # Token-at-rest encryption: a dedicated secret if provided, else
-        # derive from the client secret so a minimal config still encrypts.
-        token_enc_secret = (
-            os.environ.get("OMNIGENT_GITHUB_APP_TOKEN_ENC_KEY", "").strip() or client_secret
-        )
-
         return GitHubAppConfig(
             app_id=os.environ.get("OMNIGENT_GITHUB_APP_ID", "").strip() or None,
             client_id=client_id,
@@ -219,7 +222,6 @@ class GitHubAppConfig:
             private_key=private_key,
             redirect_uri=redirect_uri,
             slug=os.environ.get("OMNIGENT_GITHUB_APP_SLUG", "").strip() or None,
-            token_enc_secret=token_enc_secret,
         )
 
 

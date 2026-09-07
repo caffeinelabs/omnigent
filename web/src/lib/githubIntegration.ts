@@ -1,6 +1,6 @@
 /**
  * Client for the GitHub App integration endpoints
- * (``/v1/integrations/github/*``).
+ * (``/v1/connections/github/*``).
  *
  * Lets a signed-in user connect their GitHub account so their managed
  * sandboxes authenticate ``gh`` / git as them and receive their public
@@ -10,7 +10,7 @@
 
 import { authenticatedFetch } from "./identity";
 
-/** Shape of ``GET /v1/integrations/github/status``. */
+/** Shape of ``GET /v1/connections/github/status``. */
 export interface GithubConnectionStatus {
   /** Whether the GitHub App is configured on the server. */
   enabled: boolean;
@@ -28,7 +28,7 @@ export interface GithubConnectionStatus {
 
 /** Fetch the current user's GitHub connection status. */
 export async function fetchGithubStatus(): Promise<GithubConnectionStatus> {
-  const res = await authenticatedFetch("/v1/integrations/github/status");
+  const res = await authenticatedFetch("/v1/connections/github/status");
   if (!res.ok) {
     throw new Error(`GitHub status failed: ${res.status}`);
   }
@@ -41,7 +41,7 @@ export async function fetchGithubStatus(): Promise<GithubConnectionStatus> {
  * callback lands afterwards (defaults to the current settings path).
  */
 export function beginGithubConnect(returnTo: string): void {
-  const url = `/v1/integrations/github/connect?return_to=${encodeURIComponent(returnTo)}`;
+  const url = `/v1/connections/github/connect?return_to=${encodeURIComponent(returnTo)}`;
   window.location.href = url;
 }
 
@@ -59,11 +59,13 @@ export interface GithubRepo {
   pushed_at: string | null;
 }
 
-/** Shape of ``GET /v1/integrations/github/repos``. */
+/** Shape of ``GET /v1/connections/github/repos``. */
 export interface GithubRepoList {
   /** False when the user hasn't connected GitHub (repos is then empty). */
   connected: boolean;
   repos: GithubRepo[];
+  /** True when the page cap was hit and more repos exist than are returned. */
+  truncated?: boolean;
 }
 
 /**
@@ -72,7 +74,7 @@ export interface GithubRepoList {
  * so callers can fall back to a free-text repo URL.
  */
 export async function fetchGithubRepos(): Promise<GithubRepoList> {
-  const res = await authenticatedFetch("/v1/integrations/github/repos");
+  const res = await authenticatedFetch("/v1/connections/github/repos");
   if (!res.ok) {
     throw new Error(`GitHub repos failed: ${res.status}`);
   }
@@ -92,62 +94,16 @@ export interface GithubBranchList {
  * when GitHub isn't linked.
  */
 export async function fetchGithubBranches(fullName: string): Promise<GithubBranchList> {
-  const res = await authenticatedFetch(`/v1/integrations/github/repos/${fullName}/branches`);
+  const res = await authenticatedFetch(`/v1/connections/github/repos/${fullName}/branches`);
   if (!res.ok) {
     throw new Error(`GitHub branches failed: ${res.status}`);
   }
   return (await res.json()) as GithubBranchList;
 }
 
-/** One PR opened during a session, from ``GET .../sessions/{id}/pull-requests``. */
-export interface GithubSessionPull {
-  /** ``owner/repo`` the PR is in. */
-  repo: string;
-  /** PR number. */
-  number: number;
-  /** PR title, or null. */
-  title: string | null;
-  /** Web URL of the PR, or null. */
-  html_url: string | null;
-  /** Head branch the PR was opened from, or null. */
-  head_ref: string | null;
-  /** Whether the PR is a draft. */
-  draft: boolean;
-  /** ``"open"`` or ``"closed"``, or null. */
-  state: string | null;
-  /** Whether the PR was merged (a merged PR is also ``state: "closed"``). */
-  merged: boolean;
-  /** Login of the PR author, or null. */
-  author_login: string | null;
-  /** ISO-8601 creation time, or null (list is newest-first). */
-  created_at: string | null;
-}
-
-/** Shape of ``GET /v1/integrations/github/sessions/{id}/pull-requests``. */
-export interface GithubSessionPullList {
-  /** False when the user hasn't connected GitHub (pulls is then empty). */
-  connected: boolean;
-  pulls: GithubSessionPull[];
-}
-
-/**
- * Fetch the PRs opened during *sessionId* across its cloned repos (newest
- * first). Returns an empty list for non-managed sessions or when GitHub isn't
- * linked, so callers can render nothing without special-casing.
- */
-export async function fetchSessionPulls(sessionId: string): Promise<GithubSessionPullList> {
-  const res = await authenticatedFetch(
-    `/v1/integrations/github/sessions/${encodeURIComponent(sessionId)}/pull-requests`,
-  );
-  if (!res.ok) {
-    throw new Error(`GitHub session PRs failed: ${res.status}`);
-  }
-  return (await res.json()) as GithubSessionPullList;
-}
-
 /** Disconnect the current user's GitHub account. */
 export async function disconnectGithub(): Promise<void> {
-  const res = await authenticatedFetch("/v1/integrations/github/disconnect", {
+  const res = await authenticatedFetch("/v1/connections/github/disconnect", {
     method: "POST",
   });
   if (!res.ok) {

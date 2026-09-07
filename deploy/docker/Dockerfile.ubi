@@ -166,25 +166,39 @@ RUN if [ -n "${EXTRA_HARNESS_CLIS}" ]; then \
         bash /tmp/install-harness-cli.sh ${EXTRA_HARNESS_CLIS}; \
     fi
 
-# GitHub CLI / mise / VS Code Server — keep pins + SHA256s in sync with
-# deploy/docker/Dockerfile (Debian host image).
-ARG GH_VERSION=2.96.0
-ARG GH_SHA256_AMD64=83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60
-ARG GH_SHA256_ARM64=06f86ec7103d41993b76cd78072f43595c34aaa56506d971d9860e67140bf909
+# agy is not baked into UBI by default — install it via EXTRA_HARNESS_CLIS=agy,
+# which pins the same immutable per-arch release asset + sha256 as the default
+# image. Keep AGY_VERSION and both SHA256s in sync with deploy/docker/Dockerfile.
+ARG AGY_VERSION=1.1.16
+ARG AGY_SHA256_AMD64=7742953b7835b457e9102f1357a493913657dfd147435584f609d58356ec085a
+ARG AGY_SHA256_ARM64=c71599bb548cf72dfe7a8f6c411b3c7a3623cd4b0f6276bae89c69f769d6c92d
+ENV AGY_VERSION=${AGY_VERSION} \
+    AGY_SHA256_AMD64=${AGY_SHA256_AMD64} \
+    AGY_SHA256_ARM64=${AGY_SHA256_ARM64}
+
+# GitHub CLI (`gh`) — the read-only "GitHub" side panel shells out to it (and
+# agents reach for it), authenticated per-user from the credential broker (see
+# omnigent/runner/github_resource.py). Not an npm package, so fetch the immutable
+# per-arch tarball from the versioned GitHub release, verify sha256, install the
+# binary on the shared PATH, and assert the version. Mirrors the block in
+# deploy/docker/Dockerfile — keep GH_VERSION + both SHA256s in sync with it.
+# mise + VS Code Server pins below likewise mirror the Debian host image.
+ARG GH_VERSION=2.100.0
+ARG GH_SHA256_AMD64=e4d4bb4498e8d007abe545b6568926793ace1b6447da598294a610018cb164be
+ARG GH_SHA256_ARM64=ea4e7a581a32ccad6cc7923cb1576ac5859ba4b9a16ab22eb8f8a96e78e2e961
 RUN set -eu; \
     case "$(uname -m)" in \
       x86_64)  arch="amd64"; sha="$GH_SHA256_AMD64" ;; \
       aarch64) arch="arm64"; sha="$GH_SHA256_ARM64" ;; \
       *) echo "ERROR: unsupported arch '$(uname -m)' for gh" >&2; exit 1 ;; \
     esac; \
-    curl -fsSL -o /tmp/gh.tar.gz \
-      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.tar.gz"; \
+    asset="gh_${GH_VERSION}_linux_${arch}.tar.gz"; \
+    curl -fsSL -o /tmp/gh.tar.gz "https://github.com/cli/cli/releases/download/v${GH_VERSION}/${asset}"; \
     echo "${sha}  /tmp/gh.tar.gz" | sha256sum -c -; \
-    tar -xzf /tmp/gh.tar.gz -C /tmp; \
+    tar -xzf /tmp/gh.tar.gz -C /tmp "gh_${GH_VERSION}_linux_${arch}/bin/gh"; \
     install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${arch}/bin/gh" /usr/local/bin/gh; \
     rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${arch}"; \
-    test -x /usr/local/bin/gh; \
-    installed="$(/usr/local/bin/gh --version | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"; \
+    installed="$(/usr/local/bin/gh --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"; \
     [ "$installed" = "$GH_VERSION" ] || { \
       echo "ERROR: gh reports '${installed:-<none>}', expected '$GH_VERSION'." >&2; exit 1; }; \
     echo "gh ${GH_VERSION} pinned (sha256 verified)"

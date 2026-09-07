@@ -55,6 +55,21 @@ def test_from_env_disabled_without_redirect(monkeypatch: pytest.MonkeyPatch) -> 
     assert GitHubAppConfig.from_env() is None
 
 
+def test_from_env_enabled_without_store_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Token-at-rest encryption is the credential store's concern
+    # (OMNIGENT_CREDENTIAL_ENC_KEY), not GitHub's: client id/secret + a
+    # resolvable redirect are enough for a valid GitHub App config. Whether
+    # a connection store is wired is decided separately by the caller.
+    _clear_env(monkeypatch)
+    monkeypatch.setenv("OMNIGENT_GITHUB_APP_CLIENT_ID", "Iv1abc")
+    monkeypatch.setenv("OMNIGENT_GITHUB_APP_CLIENT_SECRET", "shh")
+    monkeypatch.setenv("OMNIGENT_GITHUB_APP_REDIRECT_URI", "https://x/cb")
+    config = GitHubAppConfig.from_env()
+    assert config is not None
+    assert config.client_id == "Iv1abc"
+    assert not hasattr(config, "token_enc_secret")
+
+
 def test_from_env_derives_redirect_from_domain(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_env(monkeypatch)
     monkeypatch.setenv("OMNIGENT_GITHUB_APP_CLIENT_ID", "Iv1abc")
@@ -63,23 +78,19 @@ def test_from_env_derives_redirect_from_domain(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setenv("OMNIGENT_GITHUB_APP_SLUG", "omni-app")
     config = GitHubAppConfig.from_env()
     assert config is not None
-    assert config.redirect_uri == "https://omni.example.com/v1/integrations/github/callback"
+    assert config.redirect_uri == "https://omni.example.com/v1/connections/github/callback"
     assert config.install_url == "https://github.com/apps/omni-app/installations/new"
-    # No dedicated enc key → derives from the client secret.
-    assert config.token_enc_secret == "shh"
 
 
-def test_from_env_explicit_redirect_and_enc_key(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_from_env_explicit_redirect(monkeypatch: pytest.MonkeyPatch) -> None:
     _clear_env(monkeypatch)
     monkeypatch.setenv("OMNIGENT_GITHUB_APP_CLIENT_ID", "Iv1abc")
     monkeypatch.setenv("OMNIGENT_GITHUB_APP_CLIENT_SECRET", "shh")
     monkeypatch.setenv("OMNIGENT_GITHUB_APP_REDIRECT_URI", "https://x/cb")
-    monkeypatch.setenv("OMNIGENT_GITHUB_APP_TOKEN_ENC_KEY", "dedicated")
     config = GitHubAppConfig.from_env()
     assert config is not None
     assert config.redirect_uri == "https://x/cb"
     assert config.install_url is None  # no slug
-    assert config.token_enc_secret == "dedicated"
 
 
 # ── URL + form-field builders ────────────────────────────────────
@@ -127,7 +138,6 @@ def test_mint_app_jwt_signs_with_private_key() -> None:
         private_key=pem,
         redirect_uri="https://x/cb",
         slug=None,
-        token_enc_secret="k",
     )
     token = config.mint_app_jwt()
     claims = jwt.decode(token, key.public_key(), algorithms=["RS256"])

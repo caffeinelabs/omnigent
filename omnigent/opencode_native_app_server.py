@@ -358,18 +358,19 @@ def filtered_server_env(
 
     Per-session XDG dirs isolate OpenCode's state from the user's global
     config; ``OPENCODE_SERVER_PASSWORD`` secures the loopback server. Only
-    provider/proxy env from the parent is passed through.
+    provider/proxy env and operator-declared runner passthrough vars from the
+    parent are passed through.
 
     :param bridge_dir: Native OpenCode bridge directory.
     :param auth_secret: Server password for basic auth.
     :param extra_env: Additional provider env (e.g. from Omnigent setup).
     :returns: The environment mapping for the server subprocess.
     """
-    operator_passthrough = frozenset(
-        stripped
-        for raw in os.environ.get(_RUNNER_ENV_PASSTHROUGH_ENV_VAR, "").split(",")
-        if (stripped := raw.strip())
-    )
+    extra_names = {
+        name.strip()
+        for name in os.environ.get(_RUNNER_ENV_PASSTHROUGH_ENV_VAR, "").split(",")
+        if name.strip()
+    }
     env: dict[str, str] = {}
     for key, value in os.environ.items():
         if key in _ENV_OPENCODE_CONFIG_DENYLIST:
@@ -379,8 +380,8 @@ def filtered_server_env(
             continue
         if (
             key in _ENV_PASSTHROUGH_KEYS
-            or key in operator_passthrough
             or key.startswith(_ENV_PASSTHROUGH_PREFIXES)
+            or key in extra_names
         ):
             env[key] = value
     env.update(extra_env or {})

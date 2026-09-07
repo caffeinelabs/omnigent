@@ -2,9 +2,31 @@
 
 from __future__ import annotations
 
+from omnigent.connections.github import GithubConnectionStore
 from omnigent.server.github_app import GitHubTokenSet
-from omnigent.server.github_store import GithubConnectionStore
-from omnigent.server.secretbox import SecretBox
+
+
+class SecretBox:  # test double for the KMS SecretCipher: key- and context-bound
+    def __init__(self, key: str) -> None:
+        self._key = key
+
+    def encrypt(self, plaintext: str, *, context) -> str:
+        import base64
+        import json
+
+        return base64.b64encode(
+            json.dumps({"k": self._key, "c": dict(context), "p": plaintext}).encode()
+        ).decode("ascii")
+
+    def decrypt(self, ciphertext: str, *, context):
+        import base64
+        import json
+
+        try:
+            d = json.loads(base64.b64decode(ciphertext.encode("ascii")))
+        except ValueError:
+            return None
+        return d["p"] if d["k"] == self._key and d["c"] == dict(context) else None
 
 
 def _store(db_uri: str) -> GithubConnectionStore:

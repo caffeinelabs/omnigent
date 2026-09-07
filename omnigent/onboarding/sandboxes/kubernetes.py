@@ -16,7 +16,7 @@ creates the Job — an init container prepares the workspace (``mkdir`` + option
 which dials back over the existing managed launch-token tunnel. Because the host
 is never started by ``exec``-ing into an already-running container, this launcher
 needs no ``pods/exec`` rights and no exec transport — it implements only
-``prepare`` / ``provision`` / ``start_host`` / ``terminate``.
+``prepare`` / ``provision`` / ``start_host`` / ``resume`` / ``terminate``.
 
 Platform notes that shape this launcher:
 
@@ -69,17 +69,14 @@ from omnigent.host.identity import (
     HOST_TOKEN_ENV_VAR,
 )
 from omnigent.onboarding.sandboxes.base import (
-    _GH_WRAPPER_BIN_REL,
     _GIT_TOKEN_USERNAME,
-    _SESSION_URL_RE,
     DEFAULT_HOST_IMAGE,
     SandboxHostLauncher,
     git_identity_env,
-    github_sandbox_setup_commands,
     render_host_config_write_command,
+    ssh_authorized_keys_setup_commands,
 )
 from omnigent.onboarding.sandboxes.types import SandboxCapabilities
-from omnigent.pr_button import BUTTON_IMAGE_URL_ENV_VAR, SESSION_URL_ENV_VAR
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -184,9 +181,19 @@ _INIT_CONTAINER_NAME: str = "workspace-prep"
 # Pod-start wait budget, consumed inside start_host BEFORE the
 # shared _wait_for_host_online poll, so a Pod that can't schedule / pull its
 # image / clone its repo fails fast with a clear reason instead of as a generic
-# online timeout. Kept tight; a cold image pull is the usual slow case.
+# online timeout. Kept tight; a cold image pull is the usual slow case —
+# deployments whose host image regularly takes longer to pull can raise the
+# budget via ``sandbox.kubernetes.pod_ready_timeout_s``, or, when that isn't
+# set, via :data:`_POD_READY_TIMEOUT_ENV_VAR`.
 _POD_READY_TIMEOUT_S: int = 90
 _POD_READY_POLL_S: float = 2.0
+
+# Env var fallback for the pod-ready wait budget, mirroring
+# omnigent.onboarding.sandboxes.e2b.MAX_LIFETIME_ENV_VAR. Only consulted when
+# the launcher wasn't constructed with an explicit pod_ready_timeout_s (i.e.
+# sandbox.kubernetes.pod_ready_timeout_s is unset in the bundle) — the
+# explicit config key always wins when both are present.
+_POD_READY_TIMEOUT_ENV_VAR: str = "OMNIGENT_K8S_POD_READY_TIMEOUT_S"
 
 # Per-request client timeout for the blocking calls. Without it a stalled
 # apiserver socket blocks indefinitely and the wait deadline never fires.
@@ -209,6 +216,16 @@ _JOB_BACKOFF_LIMIT: int = 6
 # sandboxes when no explicit terminate arrives.  7 days matches the managed
 # launch-token TTL.
 _JOB_ACTIVE_DEADLINE_S: int = 7 * 24 * 3600
+
+# How long a Job's objects (and its terminated Pod) stick around after the
+# Job itself reaches a terminal state (Complete or Failed), before the
+# cluster garbage-collects them. Backstop for the case where nothing ever
+# calls terminate() on a Job that ends on its own — a crash-loop exhausting
+# backoffLimit, or activeDeadlineSeconds finally expiring — so a
+# credential-bearing Pod object doesn't linger indefinitely just because
+# application-level cleanup never ran. 24h leaves a window to inspect a
+# failed Job's status/logs before it's swept.
+_JOB_TTL_SECONDS_AFTER_FINISHED: int = 24 * 3600
 
 # Lines of container log tail surfaced in a start-failure message (e.g. the git
 # clone error from the init container).
@@ -297,6 +314,34 @@ def _ensure_sdk() -> None:
         raise click.ClickException(
             "The Kubernetes client is required for the 'kubernetes' sandbox "
             "provider. Install it with `pip install 'omnigent[kubernetes]'`."
+        ) from exc
+
+
+def _resolve_pod_ready_timeout_s(configured: int | None) -> int:
+    """
+    Resolve the pod-ready wait budget for :meth:`_wait_for_pod_running`.
+
+    Precedence: the explicit ``sandbox.kubernetes.pod_ready_timeout_s``
+    config value (``configured``, already parsed by the caller) wins when
+    set; otherwise :data:`_POD_READY_TIMEOUT_ENV_VAR` overrides the
+    :data:`_POD_READY_TIMEOUT_S` default, mirroring
+    ``omnigent.onboarding.sandboxes.e2b.resolve_max_lifetime_s``.
+
+    :param configured: The launcher's ``pod_ready_timeout_s`` constructor
+        argument, or ``None`` when the bundle didn't set it.
+    :returns: The timeout in seconds to wait for the Pod to reach ``Running``.
+    :raises click.ClickException: When the env override is not a number.
+    """
+    if configured is not None:
+        return configured
+    raw = os.environ.get(_POD_READY_TIMEOUT_ENV_VAR)
+    if raw is None:
+        return _POD_READY_TIMEOUT_S
+    try:
+        return int(float(raw))
+    except ValueError as exc:
+        raise click.ClickException(
+            f"{_POD_READY_TIMEOUT_ENV_VAR} must be a number of seconds"
         ) from exc
 
 
@@ -446,6 +491,8 @@ def _render_workspace_prep_command(
     clone_dir: str | None,
     repo_url: str | None,
     repo_branch: str | None,
+    server_url: str,
+    host_id: str,
     extra_repos: Sequence[RepoCheckout] = (),
     extra_setup_commands: list[str] | None = None,
     host_config: dict[str, object] | None = None,
@@ -479,10 +526,33 @@ def _render_workspace_prep_command(
     :returns: The ``["bash", "-lc", script]`` command.
     """
     script = f"set -e\nmkdir -p {shlex.quote(workspace)}\n"
+    # Wire the owner's per-user credential broker as the sole github.com helper
+    # ONCE, before any clone, so the primary repo AND every extra_repo
+    # authenticate as *them*. When they haven't connected GitHub this is a no-op
+    # that leaves the image's shared ``$GIT_TOKEN`` helper in place; ``|| true``
+    # keeps a broker hiccup from failing the clone (it then falls back to
+    # ``$GIT_TOKEN``). Needs OMNIGENT_HOST_TOKEN in-env.
+    if repo_url is not None or extra_repos:
+        wire = (
+            "from omnigent.git_credential_github import configure_clone_credentials; "
+            f"configure_clone_credentials({server_url!r}, {host_id!r})"
+        )
+        script += f"python3 -c {shlex.quote(wire)} || true\n"
+
+    def _clone(url: str, branch: str | None, dest: str) -> str:
+        # ``--`` separates options from the (already-validated) URL so it can
+        # never be parsed as a flag; --single-branch keeps branch-pinned clones
+        # fast. Auth: the broker (wired above, if connected) else the image's
+        # GIT_TOKEN — both via the global github.com credential helper.
+        opt = f"--branch {shlex.quote(branch)} --single-branch " if branch is not None else ""
+        return f"git clone {opt}-- {shlex.quote(url)} {shlex.quote(dest)}\n"
+
     if repo_url is not None and clone_dir is not None:
-        script += _git_clone_line(repo_url, repo_branch, clone_dir)
+        script += _clone(repo_url, repo_branch, clone_dir)
+    # Multi-repo: each extra repo clones side by side under the workspace root.
     for extra in extra_repos:
-        script += _git_clone_line(extra.url, extra.branch, f"{workspace}/{extra.repo_name}")
+        script += _clone(extra.url, extra.branch, f"{workspace}/{extra.repo_name}")
+    # Per-user setup (SSH authorized_keys for VS Code Remote); best-effort.
     for cmd in extra_setup_commands or ():
         script += f"{cmd} || true\n"
     if host_config is not None:
@@ -490,7 +560,7 @@ def _render_workspace_prep_command(
     return ["bash", "-lc", script]
 
 
-def _render_host_command(server_url: str, *, path_prepend: str | None = None) -> list[str]:
+def _render_host_command(server_url: str) -> list[str]:
     """
     Render the main container command that runs ``omnigent host`` under the
     PID-1 reaper.
@@ -502,15 +572,10 @@ def _render_host_command(server_url: str, *, path_prepend: str | None = None) ->
     not this command.
 
     :param server_url: URL of this server the host dials back to.
-    :param path_prepend: A directory to prepend to ``PATH`` before ``exec``
-        (the Open-in-Omnigent ``gh`` wrapper dir), or ``None``. Prepended inside
-        the login shell so ``$PATH`` (the image's venv-first PATH) expands at
-        runtime and the reaper's children inherit it.
     :returns: The ``["bash", "-lc", script]`` command.
     """
-    export = f'export PATH={shlex.quote(path_prepend)}:"$PATH"; ' if path_prepend else ""
     script = (
-        f"{export}exec python3 -c {shlex.quote(_REAPER_SRC)} "
+        f"exec python3 -c {shlex.quote(_REAPER_SRC)} "
         f"omnigent host --server {shlex.quote(server_url)}"
     )
     return ["bash", "-lc", script]
@@ -606,10 +671,10 @@ def build_job_manifest(
     secret_mounts: Sequence[Mapping[str, object]] | None = None,
     config_map_mounts: Sequence[Mapping[str, object]] | None = None,
     agent_name: str | None = None,
-    session_id: str | None = None,
-    session_url: str | None = None,
     backoff_limit: int = _JOB_BACKOFF_LIMIT,
     active_deadline_seconds: int = _JOB_ACTIVE_DEADLINE_S,
+    ttl_seconds_after_finished: int = _JOB_TTL_SECONDS_AFTER_FINISHED,
+    runtime_class: str | None = None,
 ) -> dict[str, object]:
     """
     Build the sandbox Job manifest as a plain dict.
@@ -622,10 +687,14 @@ def build_job_manifest(
     ``restartPolicy: OnFailure`` so the kubelet automatically restarts a
     crashed host container with exponential backoff (10 s, 20 s, 40 s, …
     capped at 5 min).  The Job's ``backoffLimit`` caps the total retry count,
-    and ``activeDeadlineSeconds`` enforces a hard lifetime.  Because
-    ``OnFailure`` restarts the SAME Pod in place, the Pod name is stable
-    across retries — the token Secret ``secretKeyRef`` keeps resolving and the
-    ``sandbox_id`` tracking in the managed-host machinery is unaffected.
+    and ``activeDeadlineSeconds`` enforces a hard lifetime.
+    ``ttlSecondsAfterFinished`` is a backstop on top of both: once a Job
+    reaches a terminal state on its own, the cluster garbage-collects it
+    even if this launcher's own ``terminate()`` never runs or never lands.
+    Because ``OnFailure`` restarts the SAME Pod in place, the Pod name is
+    stable across retries — the token Secret ``secretKeyRef`` keeps
+    resolving and the ``sandbox_id`` tracking in the managed-host machinery
+    is unaffected.
 
     The host's existing WebSocket reconnect logic (exponential backoff in
     ``omnigent/host/connect.py``) re-registers the tunnel automatically after
@@ -676,6 +745,10 @@ def build_job_manifest(
       container start. Refresh is eventually consistent (kubelet sync, up to
       ~1 min), so the in-sandbox consumer must re-read the file each use — a
       value cached at start defeats the rotation.
+    - An operator *runtime_class* becomes ``spec.runtimeClassName``, scheduling
+      the Pod onto a sandboxed container runtime the cluster provides via a
+      ``RuntimeClass`` object (e.g. Kata Containers micro-VMs, gVisor). Unset
+      keeps the cluster's default runtime — today's behaviour exactly.
 
     :param job_name: DNS-label-safe Job name (see :func:`_new_pod_name`).
     :param namespace: Namespace the Job is created in.
@@ -725,6 +798,8 @@ def build_job_manifest(
     :param backoff_limit: Maximum container restart attempts before the Job
         is marked Failed.
     :param active_deadline_seconds: Hard lifetime cap for the Job.
+    :param runtime_class: ``RuntimeClass`` name set as ``spec.runtimeClassName``,
+        or ``None`` to keep the cluster's default container runtime.
     :returns: The Job manifest dict.
     """
     pod_resources = _resolve_pod_resources(resources)
@@ -799,27 +874,35 @@ def build_job_manifest(
             {"name": f"config-map-{i}", "mountPath": mount["mount_path"], "readOnly": True}
         )
 
-    # Per-user GitHub auth: the credential env (git + gh act as the user)
-    # plus the gh hosts.yml / authorized_keys setup commands run in the
-    # init container so they land in the shared HOME before the host starts.
-    # The token rides the per-Pod Secret (secretKeyRef), never literal env, so
-    # it stays out of the Pod spec; the setup commands read it from GH_TOKEN.
+    # Per-user SSH keys (VS Code Remote): append the owner's PUBLIC keys to
+    # ~/.ssh/authorized_keys in the init container's shared HOME before the host
+    # starts. git/gh credentials are NOT written here — the native credential
+    # broker + git_credential_github helper vend/refresh those live per op.
+    ssh_setup = ssh_authorized_keys_setup_commands(_HOME_DIR, ssh_authorized_keys)
+
+    # Launch-time GitHub credential seed (git + gh authenticate as the connecting
+    # user), as secretKeyRef entries so the token never lands in the Pod spec.
+    # The native credential broker + git_credential_github helper keep these live
+    # per op; this only seeds the initial env. Injected into BOTH the init clone
+    # (private-repo checkout) and the host. Empty when GitHub is not connected.
     github_env = _github_secret_env(token_secret_name) if github_token else []
-    github_setup = github_sandbox_setup_commands(
-        _HOME_DIR,
-        github_token=None,
-        github_login=github_login,
-        ssh_authorized_keys=ssh_authorized_keys,
-        github_token_env="GH_TOKEN" if github_token else None,
-        session_id=session_id,
-        session_url=session_url,
-    )
 
     init_env: list[dict[str, object]] = [{"name": "HOME", "value": _HOME_DIR}]
-    # Give the init container the user's token too (via the same secretKeyRef)
-    # so a private clone authenticates as the user; it overrides the harness
-    # Secret's shared GIT_TOKEN.
     init_env.extend(github_env)
+    if repo_url is not None or extra_repos:
+        # The clone wires the per-user broker when the owner has connected GitHub
+        # (see _render_workspace_prep_command), which reads the launch token from
+        # the env — project it the same way the host container does. Only added
+        # when there's a repo to clone, so a workspace-less sandbox's init
+        # container never sees the token.
+        init_env.append(
+            {
+                "name": HOST_TOKEN_ENV_VAR,
+                "valueFrom": {
+                    "secretKeyRef": {"name": token_secret_name, "key": HOST_TOKEN_ENV_VAR}
+                },
+            }
+        )
     config_home = env_literals.get("OMNIGENT_CONFIG_HOME")
     if config_home is not None:
         # Init and host containers share ONLY the HOME emptyDir, and both run
@@ -856,8 +939,10 @@ def build_job_manifest(
             clone_dir,
             repo_url,
             repo_branch,
+            server_url,
+            host_id,
             extra_repos=extra_repos,
-            extra_setup_commands=github_setup,
+            extra_setup_commands=ssh_setup,
             host_config=host_config,
         ),
         "env": init_env,
@@ -894,23 +979,12 @@ def build_job_manifest(
     host_env.extend(
         {"name": name, "value": value} for name, value in git_identity_env(owner).items()
     )
-    # Open-in-Omnigent PR-body wrapper: export the session URL (and any
-    # button-image override) so the on-PATH ``gh`` wrapper the init container
-    # wrote stamps ``gh pr create`` bodies, and prepend its bin dir to the host
-    # command's PATH. Charset-guarded so a malformed URL can't reach the env.
-    wrapper_bin_dir: str | None = None
-    if session_url and _SESSION_URL_RE.match(session_url):
-        wrapper_bin_dir = f"{_HOME_DIR}/{_GH_WRAPPER_BIN_REL}"
-        host_env.append({"name": SESSION_URL_ENV_VAR, "value": session_url})
-        button_override = os.environ.get(BUTTON_IMAGE_URL_ENV_VAR)
-        if button_override is not None:
-            host_env.append({"name": BUTTON_IMAGE_URL_ENV_VAR, "value": button_override})
 
     host_container: dict[str, object] = {
         "name": _CONTAINER_NAME,
         "image": image,
         "workingDir": _HOME_DIR,
-        "command": _render_host_command(server_url, path_prepend=wrapper_bin_dir),
+        "command": _render_host_command(server_url),
         "env": host_env,
         "securityContext": container_security,
         "volumeMounts": [
@@ -970,6 +1044,10 @@ def build_job_manifest(
                 _AGENT_LABEL,
                 job_name,
             )
+    if runtime_class is not None:
+        # Opt-in only: an absent key (not an explicit None/null) keeps the
+        # manifest byte-compatible with pre-runtime_class deployments.
+        pod_spec["runtimeClassName"] = runtime_class
     return {
         "apiVersion": "batch/v1",
         "kind": "Job",
@@ -981,6 +1059,7 @@ def build_job_manifest(
         "spec": {
             "backoffLimit": backoff_limit,
             "activeDeadlineSeconds": active_deadline_seconds,
+            "ttlSecondsAfterFinished": ttl_seconds_after_finished,
             "template": {
                 "metadata": {"labels": labels},
                 "spec": pod_spec,
@@ -1166,7 +1245,9 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
     Server-managed only and entrypoint-as-host: :meth:`provision` reserves a Job
     name, :meth:`start_host` creates a per-Job token Secret and a Job whose Pod
     template's init container prepares the workspace and whose main container runs
-    ``omnigent host``, and :meth:`terminate` deletes both.  The Job uses
+    ``omnigent host``. :meth:`resume` removes a dormant Job and its stale token
+    Secret so the managed-host wake path can recreate both under the same sandbox
+    id, while :meth:`terminate` permanently deletes them. The Job uses
     ``restartPolicy: OnFailure`` so the kubelet automatically restarts a crashed
     host container, providing automatic failover within the Job's
     ``backoffLimit``.  All transport rides the official ``kubernetes`` client's
@@ -1176,6 +1257,11 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
     """
 
     provider: ClassVar[str] = "kubernetes"
+    can_resume: ClassVar[bool] = True
+
+    workload_kind: ClassVar[str] = "job"
+    """What ``start_host`` calls the object it creates, for progress output.
+    Overridden by subclasses that wrap the Pod in a different workload kind."""
 
     @property
     def capabilities(self) -> SandboxCapabilities:
@@ -1183,7 +1269,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
             cli_bootstrap=False,
             managed_launch=True,
             local_port_forward=False,
-            resume_stopped=False,
+            resume_stopped=True,
             programmatic_terminate=True,
             classifies_runner_by_agent=True,
         )
@@ -1203,6 +1289,8 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
         pvc_mounts: Sequence[Mapping[str, object]] | None = None,
         secret_mounts: Sequence[Mapping[str, object]] | None = None,
         config_map_mounts: Sequence[Mapping[str, object]] | None = None,
+        pod_ready_timeout_s: int | None = None,
+        runtime_class: str | None = None,
     ) -> None:
         """
         Store provider config for lazy use by :meth:`start_host` / :meth:`terminate`.
@@ -1253,6 +1341,8 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
         self._pvc_mounts = list(pvc_mounts) if pvc_mounts else None
         self._secret_mounts = list(secret_mounts) if secret_mounts else None
         self._config_map_mounts = list(config_map_mounts) if config_map_mounts else None
+        self._pod_ready_timeout_s = pod_ready_timeout_s
+        self._runtime_class = runtime_class
         self._core: k8s_client.CoreV1Api | None = None
         self._batch: k8s_client.BatchV1Api | None = None
         self._api_client: k8s_client.ApiClient | None = None
@@ -1486,8 +1576,6 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
         host_config: dict[str, object] | None = None,
         agent_name: str | None = None,
         on_stage: Callable[[str], None] | None = None,
-        session_id: str | None = None,
-        session_url: str | None = None,
     ) -> str:
         """
         Create the token Secret + runner Job and wait for the host to start.
@@ -1516,11 +1604,6 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
             stamped as the Job's ``omnigent.ai/agent`` classifier, or ``None`` to
             leave the runner unclassified.
         :param on_stage: Progress observer; invoked with ``"starting"``.
-        :param session_url: The public Open-in-Omnigent session URL
-            (``…/c/<id>``). When set, the init container installs the on-PATH
-            ``gh`` wrapper and the main container exports ``OMNIGENT_SESSION_URL``
-            (with its bin dir prepended to PATH) so ``gh pr create`` bodies carry
-            the Open-in-Omnigent link. ``None`` disables it.
         :returns: The absolute in-sandbox workspace path (the cloned repository
             directory when *repo_url* is set).
         :raises click.ClickException: When creation fails or the host does not
@@ -1539,9 +1622,9 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
         if on_stage is not None:
             on_stage("starting")
         core = self._load_core()
-        batch = self._load_batch()
         click.echo(
-            f"▸ Creating Kubernetes job '{sandbox_id}' in namespace '{namespace}' from {image}"
+            f"▸ Creating Kubernetes {self.workload_kind} '{sandbox_id}' in "
+            f"namespace '{namespace}' from {image}"
         )
         try:
             try:
@@ -1572,8 +1655,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                     secret_mounts=self._secret_mounts,
                     config_map_mounts=self._config_map_mounts,
                     agent_name=agent_name,
-                    session_id=session_id,
-                    session_url=session_url,
+                    runtime_class=self._runtime_class,
                 )
                 # Secret before Job so the Pod's secretKeyRef resolves
                 # immediately.
@@ -1587,9 +1669,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                     ),
                     _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
                 )
-                batch.create_namespaced_job(
-                    namespace, manifest, _request_timeout=_POD_READY_REQUEST_TIMEOUT_S
-                )
+                self._create_workload(namespace, manifest)
             except (ApiException, HTTPError) as exc:
                 self._best_effort_delete(namespace, sandbox_id, secret_name)
                 if isinstance(exc, ApiException):
@@ -1607,13 +1687,28 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                 raise
         finally:
             self._close_clients()
-        click.echo(f"  → job '{sandbox_id}' is starting the host")
+        click.echo(f"  → {self.workload_kind} '{sandbox_id}' is starting the host")
         # With sibling repos checked out under the workspace root, the host
         # starts at the root so every repo is visible; a lone repo keeps the
         # existing behaviour of starting inside its clone directory.
         if extra_repos:
             return workspace
         return clone_dir or workspace
+
+    def _create_workload(self, namespace: str, manifest: dict[str, object]) -> None:
+        """
+        Create the object that runs the sandbox host from a Job manifest.
+
+        Seam for subclasses that wrap the same Pod template in a different
+        workload kind: see
+        :class:`~omnigent.onboarding.sandboxes.agent_sandbox.AgentSandboxLauncher`.
+
+        :param namespace: Namespace to create the object in.
+        :param manifest: The manifest from :func:`build_job_manifest`.
+        """
+        self._load_batch().create_namespaced_job(
+            namespace, manifest, _request_timeout=_POD_READY_REQUEST_TIMEOUT_S
+        )
 
     def _find_job_pod(self, namespace: str, job_name: str) -> str | None:
         """
@@ -1622,7 +1717,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
         Filters out Pods with a ``deletionTimestamp`` (being torn down) and
         prefers a running Pod over a pending one when a replacement exists.
         Re-raises 401/403 so RBAC misconfigurations surface immediately
-        instead of masquerading as a 90s timeout.
+        instead of masquerading as a readiness timeout.
 
         :param namespace: Namespace the Job lives in.
         :param job_name: The Job whose child Pod to find.
@@ -1679,7 +1774,8 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
         from urllib3.exceptions import HTTPError
 
         core = self._load_core()
-        deadline = time.monotonic() + _POD_READY_TIMEOUT_S
+        timeout_s = _resolve_pod_ready_timeout_s(self._pod_ready_timeout_s)
+        deadline = time.monotonic() + timeout_s
         last_reason: str | None = None
         pod_name: str | None = None
         while True:
@@ -1690,7 +1786,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                     if time.monotonic() >= deadline:
                         raise click.ClickException(
                             f"Kubernetes sandbox job '{job_name}' did not create a "
-                            f"child pod within {_POD_READY_TIMEOUT_S}s."
+                            f"child pod within {timeout_s}s."
                         )
                     time.sleep(_POD_READY_POLL_S)
                     continue
@@ -1707,7 +1803,17 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                 if getattr(exc, "status", None) == 404:
                     # Under OnFailure the Job may replace the Pod (eviction,
                     # preemption, node drain) — re-discover instead of failing.
+                    replaced_pod_name = pod_name
                     pod_name = None
+                    if time.monotonic() >= deadline:
+                        raise click.ClickException(
+                            self._pod_failure_message(
+                                namespace,
+                                replaced_pod_name,
+                                "disappeared and could not be rediscovered before the "
+                                f"{timeout_s}s deadline",
+                            )
+                        ) from exc
                     time.sleep(_POD_READY_POLL_S)
                     continue
                 last_reason = _api_reason(exc)
@@ -1716,8 +1822,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                         self._pod_failure_message(
                             namespace,
                             pod_name,
-                            "could not be read before the "
-                            f"{_POD_READY_TIMEOUT_S}s deadline ({last_reason})",
+                            f"could not be read before the {timeout_s}s deadline ({last_reason})",
                         )
                     ) from exc
                 time.sleep(_POD_READY_POLL_S)
@@ -1729,8 +1834,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                         self._pod_failure_message(
                             namespace,
                             pod_name,
-                            "could not be read before the "
-                            f"{_POD_READY_TIMEOUT_S}s deadline ({last_reason})",
+                            f"could not be read before the {timeout_s}s deadline ({last_reason})",
                         )
                     ) from exc
                 time.sleep(_POD_READY_POLL_S)
@@ -1764,7 +1868,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                     self._pod_failure_message(
                         namespace,
                         pod_name,
-                        f"did not start within {_POD_READY_TIMEOUT_S}s "
+                        f"did not start within {timeout_s}s "
                         f"(last phase '{phase or 'unknown'}'{detail})",
                     )
                 )
@@ -1956,6 +2060,9 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                         _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
                     ),
                 ),
+                # TODO(v0.29): remove this entry once all runners have rolled
+                # past v0.28 — bare Pods are no longer created. Keep in sync
+                # with the pods:create/delete TODO in role.yaml.
                 # Fall back to deleting a bare Pod left by the pre-Job
                 # launcher. Child Pods are named <job>-<rand5> so this only
                 # targets pre-migration bare Pods whose name IS sandbox_id.
@@ -1987,6 +2094,23 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
             self._close_clients()
         if first_error is not None:
             raise first_error
+
+    def resume(self, sandbox_id: str) -> None:
+        """
+        Prepare a dormant Kubernetes sandbox for recreation in place.
+
+        Kubernetes Jobs cannot be restarted after their host process exits.
+        Remove the old Job and launch-token Secret so the shared managed-host
+        wake path can call :meth:`start_host` with the same sandbox id and a
+        freshly armed token. Operator-managed PVCs are external resources and
+        are not touched.
+
+        :param sandbox_id: The dormant Job name to recreate.
+        :raises click.ClickException: On an API delete failure other than
+            not-found.
+        """
+        click.echo(f"▸ Resuming Kubernetes sandbox '{sandbox_id}'")
+        self.terminate(sandbox_id)
 
     def _delete_with_retry(self, kind: str, name: str, delete: Callable[[], object]) -> None:
         """

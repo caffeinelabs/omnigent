@@ -19,7 +19,6 @@ def make_config() -> GitHubAppConfig:
         client_id="Iv1abc",
         client_secret="shh",
         private_key=None,
-        redirect_uri="https://x/v1/integrations/github/callback",
+        redirect_uri="https://x/v1/connections/github/callback",
         slug="omni-app",
-        token_enc_secret="enc-secret",
     )

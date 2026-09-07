@@ -74,8 +74,10 @@ class HostFrameKind(str, Enum):
     FS_RESULT = "host.fs_result"
     MODEL_OPTIONS = "host.model_options"
     MODEL_OPTIONS_RESULT = "host.model_options_result"
-    REFRESH_GITHUB = "host.refresh_github"
-    REFRESH_GITHUB_RESULT = "host.refresh_github_result"
+    IMPORT_LOCAL = "host.import_local"
+    IMPORT_LOCAL_BY_ID = "host.import_local_by_id"
+    IMPORT_LOCAL_SESSION = "host.import_local_session"
+    IMPORT_LOCAL_DONE = "host.import_local_done"
 
 
 # ── Frame dataclasses ────────────────────────────────────
@@ -469,12 +471,16 @@ class HostCreateWorktreeFrame:
     :param branch_name: New branch to create, e.g. ``"feature/login"``.
     :param base_branch: Optional base ref, e.g. ``"main"``. ``None``
         branches from ``HEAD``.
+    :param existing_branch: When ``True``, check out the pre-existing
+        ``branch_name`` into a fresh worktree (the deleted-worktree
+        recreate path) instead of creating a new branch.
     """
 
     request_id: str
     repo_path: str
     branch_name: str
     base_branch: str | None = None
+    existing_branch: bool = False
 
 
 @dataclass
@@ -755,51 +761,6 @@ class HostStoreSecretResultFrame:
 
 
 @dataclass
-class HostRefreshGithubFrame:
-    """Server → host: replace the sandbox's GitHub credentials with a freshly
-    minted token.
-
-    The GitHub user-to-server token written at launch
-    (``~/.git-credentials`` + ``~/.config/gh/hosts.yml``) expires after a few
-    hours, after which ``git``/``gh`` inside a still-running sandbox can no
-    longer push or pull. A server-side timer re-mints the token
-    (:func:`omnigent.server.github_identity.resolve_sandbox_identity`) and
-    pushes it here so the host rewrites both files in place — no relaunch, and
-    the token value never reaches the command text or a log.
-
-    Security: ``token`` is the only credential-bearing field and is named so
-    telemetry redaction masks it on spans (``token`` is in
-    ``_REDACT_KEY_SUBSTRINGS``). The server is an authz'd pass-through over the
-    (TLS) tunnel and never persists it here.
-
-    :param request_id: Correlates the result, e.g. ``"req_ghrefresh_1"``.
-    :param token: The freshly minted GitHub user-to-server token (``ghu_…``).
-    :param github_login: The connected GitHub login, written as ``user:`` in
-        ``hosts.yml``. The host process is not told the login at launch (only
-        the token rides an env var), so the refresh must carry it.
-    """
-
-    request_id: str
-    token: str
-    github_login: str
-
-
-@dataclass
-class HostRefreshGithubResultFrame:
-    """Host → server: outcome of a GitHub-credential refresh.
-
-    :param request_id: Correlates to the :class:`HostRefreshGithubFrame`.
-    :param status: ``"ok"`` when both credential files were rewritten,
-        ``"failed"`` otherwise (paired with a non-secret ``error``).
-    :param error: Non-secret failure reason, or ``None`` on success.
-    """
-
-    request_id: str
-    status: str
-    error: str | None = None
-
-
-@dataclass
 class HostDetectCredentialsFrame:
     """Server → host: list adoptable credentials already present on the host.
 
@@ -911,6 +872,95 @@ class HostModelOptionsResultFrame:
     routable_models: list[str] = field(default_factory=list)
 
 
+@dataclass
+class HostImportedLocalSession:
+    """One local transcript the host read, normalized for import.
+
+    :param external_session_id: Harness-native session id on the host.
+    :param workspace: The session's recorded working directory, or ``None``.
+    :param items: Items in ``/v1/imports`` wire shape —
+        ``{"type", "response_id", "data"}`` — ready to persist server-side.
+    :param title: The harness's own session title, or ``None`` to let the
+        server synthesize one from the first user message.
+    :param source: Harness this session came from, e.g. ``"claude"``. Carried
+        per session so an "all harnesses" request can mix sources in one batch.
+    """
+
+    external_session_id: str
+    workspace: str | None
+    items: list[_JsonObject]
+    title: str | None = None
+    source: str = ""
+
+
+@dataclass
+class HostImportLocalFrame:
+    """Server → host: read the host's recent local transcripts for a harness.
+
+    The host owns the transcripts (``~/.claude`` etc.); the server can't see
+    them, so it asks the host to enumerate + normalize the most recent ones.
+
+    :param request_id: Unique id for correlating the result.
+    :param source: Harness whose local sessions to read, e.g. ``"claude"``, or
+        ``"all"`` to read every supported harness on the host in one batch.
+    :param limit: Maximum number of most-recent sessions to return per harness.
+    """
+
+    request_id: str
+    source: str
+    limit: int = 10
+
+
+@dataclass
+class HostImportLocalByIdFrame:
+    """Server → host: read one known local transcript without listing.
+
+    :param request_id: Unique id for correlating the result.
+    :param source: Harness namespace containing the session.
+    :param session_id: Exact harness-native session id to load.
+    """
+
+    request_id: str
+    source: str
+    session_id: str
+
+
+@dataclass
+class HostImportLocalSessionFrame:
+    """Host → server: one normalized local session, streamed as it's read.
+
+    Sent once per session so a large batch never rides in a single frame (the
+    server persists each on arrival). ``total`` is the number of sessions the
+    host expects to stream for this request, so the server can report progress.
+
+    :param request_id: Correlates to the :class:`HostImportLocalFrame`.
+    :param total: Total sessions the host will stream for this request.
+    :param session: The normalized session to persist.
+    """
+
+    request_id: str
+    total: int
+    session: HostImportedLocalSession
+
+
+@dataclass
+class HostImportLocalDoneFrame:
+    """Host → server: the import stream for a request has ended.
+
+    :param request_id: Correlates to the :class:`HostImportLocalFrame`.
+    :param status: ``"ok"`` or ``"failed"``.
+    :param error: Failure detail when ``status`` is ``"failed"``.
+    :param failed: Count of enumerated sessions the host could not read/parse
+        (skipped, no session frame sent). The server folds these into its own
+        failed tally so the reported counts account for every target.
+    """
+
+    request_id: str
+    status: str
+    error: str | None = None
+    failed: int = 0
+
+
 HostFrame = (
     HostHelloFrame
     | HostConnectionErrorFrame
@@ -944,8 +994,10 @@ HostFrame = (
     | HostFsResultFrame
     | HostModelOptionsFrame
     | HostModelOptionsResultFrame
-    | HostRefreshGithubFrame
-    | HostRefreshGithubResultFrame
+    | HostImportLocalFrame
+    | HostImportLocalByIdFrame
+    | HostImportLocalSessionFrame
+    | HostImportLocalDoneFrame
 )
 
 
@@ -1138,6 +1190,7 @@ def encode_host_frame(frame: HostFrame) -> str:
                 "repo_path": frame.repo_path,
                 "branch_name": frame.branch_name,
                 "base_branch": frame.base_branch,
+                "existing_branch": frame.existing_branch,
             }
         )
     if isinstance(frame, HostCreateWorktreeResultFrame):
@@ -1250,24 +1303,6 @@ def encode_host_frame(frame: HostFrame) -> str:
                 "error": frame.error,
             }
         )
-    if isinstance(frame, HostRefreshGithubFrame):
-        return _encode_payload(
-            {
-                "kind": HostFrameKind.REFRESH_GITHUB.value,
-                "request_id": frame.request_id,
-                "token": frame.token,
-                "github_login": frame.github_login,
-            }
-        )
-    if isinstance(frame, HostRefreshGithubResultFrame):
-        return _encode_payload(
-            {
-                "kind": HostFrameKind.REFRESH_GITHUB_RESULT.value,
-                "request_id": frame.request_id,
-                "status": frame.status,
-                "error": frame.error,
-            }
-        )
     if isinstance(frame, HostDetectCredentialsFrame):
         return _encode_payload(
             {
@@ -1323,6 +1358,50 @@ def encode_host_frame(frame: HostFrame) -> str:
                 "models": frame.models,
                 "error": frame.error,
                 "routable_models": frame.routable_models,
+            }
+        )
+    if isinstance(frame, HostImportLocalFrame):
+        return _encode_payload(
+            {
+                "kind": HostFrameKind.IMPORT_LOCAL.value,
+                "request_id": frame.request_id,
+                "source": frame.source,
+                "limit": frame.limit,
+            }
+        )
+    if isinstance(frame, HostImportLocalByIdFrame):
+        return _encode_payload(
+            {
+                "kind": HostFrameKind.IMPORT_LOCAL_BY_ID.value,
+                "request_id": frame.request_id,
+                "source": frame.source,
+                "session_id": frame.session_id,
+            }
+        )
+    if isinstance(frame, HostImportLocalSessionFrame):
+        s = frame.session
+        return _encode_payload(
+            {
+                "kind": HostFrameKind.IMPORT_LOCAL_SESSION.value,
+                "request_id": frame.request_id,
+                "total": frame.total,
+                "session": {
+                    "external_session_id": s.external_session_id,
+                    "workspace": s.workspace,
+                    "items": s.items,
+                    "title": s.title,
+                    "source": s.source,
+                },
+            }
+        )
+    if isinstance(frame, HostImportLocalDoneFrame):
+        return _encode_payload(
+            {
+                "kind": HostFrameKind.IMPORT_LOCAL_DONE.value,
+                "request_id": frame.request_id,
+                "status": frame.status,
+                "error": frame.error,
+                "failed": frame.failed,
             }
         )
     raise TypeError(f"unknown host frame type: {type(frame).__name__}")
@@ -1441,18 +1520,6 @@ def _decode_known_host_frame(
             return _decode_store_secret(msg)
         case HostFrameKind.STORE_SECRET_RESULT:
             return _decode_store_secret_result(msg)
-        case HostFrameKind.REFRESH_GITHUB:
-            return HostRefreshGithubFrame(
-                request_id=_required_str(msg, "request_id"),
-                token=_required_str(msg, "token"),
-                github_login=_required_str(msg, "github_login"),
-            )
-        case HostFrameKind.REFRESH_GITHUB_RESULT:
-            return HostRefreshGithubResultFrame(
-                request_id=_required_str(msg, "request_id"),
-                status=_required_str(msg, "status"),
-                error=_optional_nullable_str(msg, "error"),
-            )
         case HostFrameKind.DETECT_CREDENTIALS:
             return HostDetectCredentialsFrame(request_id=_required_str(msg, "request_id"))
         case HostFrameKind.DETECT_CREDENTIALS_RESULT:
@@ -1465,6 +1532,14 @@ def _decode_known_host_frame(
             return _decode_model_options(msg)
         case HostFrameKind.MODEL_OPTIONS_RESULT:
             return _decode_model_options_result(msg)
+        case HostFrameKind.IMPORT_LOCAL:
+            return _decode_import_local(msg)
+        case HostFrameKind.IMPORT_LOCAL_BY_ID:
+            return _decode_import_local_by_id(msg)
+        case HostFrameKind.IMPORT_LOCAL_SESSION:
+            return _decode_import_local_session(msg)
+        case HostFrameKind.IMPORT_LOCAL_DONE:
+            return _decode_import_local_done(msg)
     raise ValueError(f"unhandled host frame kind: {kind.value!r}")  # pragma: no cover
 
 
@@ -1702,11 +1777,15 @@ def _decode_create_worktree(msg: _JsonObject) -> HostCreateWorktreeFrame:
     :param msg: Decoded frame object.
     :returns: Typed host.create_worktree frame.
     """
+    # ``existing_branch`` is absent on frames from older servers — treat
+    # missing (or non-bool) as False so old-server/new-host stays compatible.
+    existing_branch = msg.get("existing_branch")
     return HostCreateWorktreeFrame(
         request_id=_required_str(msg, "request_id"),
         repo_path=_required_str(msg, "repo_path"),
         branch_name=_required_str(msg, "branch_name"),
         base_branch=_optional_nullable_str(msg, "base_branch"),
+        existing_branch=existing_branch is True,
     )
 
 
@@ -1980,6 +2059,69 @@ def _decode_model_options_result(msg: _JsonObject) -> HostModelOptionsResultFram
         models=models,
         error=_optional_nullable_str(msg, "error"),
         routable_models=routable,
+    )
+
+
+def _decode_import_local(msg: _JsonObject) -> HostImportLocalFrame:
+    """Decode a host.import_local frame."""
+    return HostImportLocalFrame(
+        request_id=_required_str(msg, "request_id"),
+        source=_required_str(msg, "source"),
+        limit=_required_int(msg, "limit"),
+    )
+
+
+def _decode_import_local_by_id(msg: _JsonObject) -> HostImportLocalByIdFrame:
+    """Decode a host.import_local_by_id frame."""
+    return HostImportLocalByIdFrame(
+        request_id=_required_str(msg, "request_id"),
+        source=_required_str(msg, "source"),
+        session_id=_required_str(msg, "session_id"),
+    )
+
+
+def _decode_imported_local_session(raw: object) -> HostImportedLocalSession:
+    """Decode one normalized session object into a HostImportedLocalSession."""
+    if not isinstance(raw, dict):
+        raise ValueError("'session' must be a JSON object")
+    items = raw.get("items", [])
+    if not isinstance(items, list) or not all(isinstance(i, dict) for i in items):
+        raise ValueError("session 'items' must be a list of JSON objects")
+    workspace = raw.get("workspace")
+    if workspace is not None and not isinstance(workspace, str):
+        raise ValueError("session 'workspace' must be a string or null")
+    title = raw.get("title")
+    if title is not None and not isinstance(title, str):
+        raise ValueError("session 'title' must be a string or null")
+    source = raw.get("source", "")
+    if not isinstance(source, str):
+        raise ValueError("session 'source' must be a string")
+    return HostImportedLocalSession(
+        external_session_id=_required_str(raw, "external_session_id"),
+        workspace=workspace,
+        items=items,
+        title=title,
+        source=source,
+    )
+
+
+def _decode_import_local_session(msg: _JsonObject) -> HostImportLocalSessionFrame:
+    """Decode a host.import_local_session frame (one streamed session)."""
+    return HostImportLocalSessionFrame(
+        request_id=_required_str(msg, "request_id"),
+        total=_required_int(msg, "total"),
+        session=_decode_imported_local_session(msg.get("session")),
+    )
+
+
+def _decode_import_local_done(msg: _JsonObject) -> HostImportLocalDoneFrame:
+    """Decode a host.import_local_done frame."""
+    return HostImportLocalDoneFrame(
+        request_id=_required_str(msg, "request_id"),
+        status=_required_str(msg, "status"),
+        error=_optional_nullable_str(msg, "error"),
+        # Absent on older hosts; default to 0 so decode stays backward-compatible.
+        failed=raw_failed if isinstance(raw_failed := msg.get("failed"), int) else 0,
     )
 
 

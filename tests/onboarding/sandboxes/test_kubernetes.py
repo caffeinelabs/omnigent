@@ -112,14 +112,28 @@ def test_build_job_manifest_init_container_prepares_and_clones_workspace() -> No
     assert "mkdir -p /home/omnigent/workspace" in script
     assert "git clone --branch main --single-branch -- " in script
     assert "https://github.com/org/repo.git /home/omnigent/workspace/repo" in script
+    # The per-user broker is wired before the clone, and the init container gets
+    # the launch token (secretKeyRef) so it can reach the broker.
+    assert "configure_clone_credentials" in script
+    assert script.index("configure_clone_credentials") < script.index("git clone")
+    init_env = init[0]["env"]
+    assert any(
+        e["name"] == "OMNIGENT_HOST_TOKEN" and "secretKeyRef" in e.get("valueFrom", {})
+        for e in init_env
+    )
 
 
 def test_build_job_manifest_without_repo_has_no_clone() -> None:
     """No repo → the init container only makes the workspace, no git clone."""
     manifest = build_job_manifest(**_MANIFEST_KW)
-    script = _pod_spec(manifest)["initContainers"][0]["command"][2]
+    init = _pod_spec(manifest)["initContainers"][0]
+    script = init["command"][2]
     assert "mkdir -p /home/omnigent/workspace" in script
     assert "git clone" not in script
+    # No repo → no broker wiring, and the launch token is NOT exposed to the
+    # workspace-less init container.
+    assert "configure_clone_credentials" not in script
+    assert all(e["name"] != "OMNIGENT_HOST_TOKEN" for e in init["env"])
 
 
 def test_build_job_manifest_host_config_is_written_by_init_container() -> None:
@@ -164,31 +178,6 @@ def test_build_job_manifest_forwards_config_home_to_init_container() -> None:
         "OMNIGENT_CONFIG_HOME",
         "PLAIN_CONFIG",
     }
-
-
-def test_build_job_manifest_session_url_wires_gh_pr_button_wrapper() -> None:
-    """A session URL installs the gh wrapper, exports the URL, and PATH-prepends."""
-    manifest = build_job_manifest(
-        **_MANIFEST_KW,
-        session_url="https://omni.example.com/c/conv_1",
-    )
-    # Init container writes the wrapper into the shared HOME.
-    init_script = _pod_spec(manifest)["initContainers"][0]["command"][2]
-    assert "/.omnigent/bin/gh" in init_script
-    host = _pod_spec(manifest)["containers"][0]
-    host_env = {e["name"]: e.get("value") for e in host["env"]}
-    assert host_env.get("OMNIGENT_SESSION_URL") == "https://omni.example.com/c/conv_1"
-    # The main container's command prepends the wrapper dir to PATH.
-    script = host["command"][2]
-    assert "export PATH=/home/omnigent/.omnigent/bin:" in script
-
-
-def test_build_job_manifest_no_session_url_no_wrapper() -> None:
-    """Without a session URL the wrapper/env/PATH are untouched (fail-open)."""
-    manifest = build_job_manifest(**_MANIFEST_KW)
-    host = _pod_spec(manifest)["containers"][0]
-    assert "OMNIGENT_SESSION_URL" not in {e["name"] for e in host["env"]}
-    assert ".omnigent/bin" not in host["command"][2]
 
 
 @pytest.mark.parametrize(
@@ -307,12 +296,11 @@ def test_build_job_manifest_github_token_rides_secret_ref_not_the_spec() -> None
         # The non-secret token username stays a literal.
         assert by_name["GIT_USERNAME"]["value"] == "x-access-token"
 
-    # The init container's gh/git setup reads the token from $GH_TOKEN at
-    # runtime rather than embedding it.
+    # No on-disk gh/git credential files are written by the init container —
+    # git/gh auth is vended live by the native credential broker + helper.
     init_script = _pod_spec(manifest)["initContainers"][0]["command"][2]
-    assert "/home/omnigent/.config/gh/hosts.yml" in init_script
-    assert "/home/omnigent/.git-credentials" in init_script
-    assert '"$GH_TOKEN"' in init_script or '"${GH_TOKEN}"' in init_script
+    assert ".config/gh/hosts.yml" not in init_script
+    assert ".git-credentials" not in init_script
     # Public SSH key injection is unaffected.
     assert "AAAAKEY" in init_script
 
@@ -357,6 +345,18 @@ def test_build_job_manifest_node_selector_can_override_arch() -> None:
     selector = _pod_spec(manifest)["nodeSelector"]
     assert selector["kubernetes.io/arch"] == "arm64"
     assert selector["disktype"] == "ssd"
+
+
+def test_build_job_manifest_omits_runtime_class_by_default() -> None:
+    """No runtime_class → no runtimeClassName key: the cluster default runtime."""
+    manifest = build_job_manifest(**_MANIFEST_KW)
+    assert "runtimeClassName" not in _pod_spec(manifest)
+
+
+def test_build_job_manifest_runtime_class_sets_runtime_class_name() -> None:
+    """An operator runtime_class lands verbatim as spec.runtimeClassName."""
+    manifest = build_job_manifest(**{**_MANIFEST_KW, "runtime_class": "kata"})
+    assert _pod_spec(manifest)["runtimeClassName"] == "kata"
 
 
 def test_build_job_manifest_pvc_mounts_land_on_host_container_only() -> None:
@@ -599,11 +599,15 @@ def test_render_workspace_prep_command(
     expect_branch: bool,
 ) -> None:
     """The init command always mkdir's the workspace and clones only when asked."""
-    command = k8s._render_workspace_prep_command("/ws", clone_dir, repo_url, repo_branch)
+    command = k8s._render_workspace_prep_command(
+        "/ws", clone_dir, repo_url, repo_branch, "http://srv.example.com", "host_abc"
+    )
     script = command[2]
     assert "mkdir -p /ws" in script
     assert ("git clone" in script) is expect_clone
     assert ("--branch release-1.2 --single-branch" in script) is expect_branch
+    # The per-user broker is wired (connected-gated at runtime) only when cloning.
+    assert ("configure_clone_credentials" in script) is expect_clone
 
 
 def test_render_workspace_prep_command_clones_extra_repos_as_siblings() -> None:
@@ -615,6 +619,8 @@ def test_render_workspace_prep_command_clones_extra_repos_as_siblings() -> None:
         "/ws/a",
         "https://x/a.git",
         None,
+        "https://srv",
+        "host_abc",
         extra_repos=[
             RepoCheckout(url="https://x/b.git", branch="dev", repo_name="b"),
             RepoCheckout(url="https://x/c.git", branch=None, repo_name="c"),
@@ -655,6 +661,37 @@ def test_env_var_name_override_is_validated(monkeypatch: pytest.MonkeyPatch) -> 
     monkeypatch.setenv(k8s.NAMESPACE_ENV_VAR, "Not_A_Valid_NS")
     with pytest.raises(click.ClickException, match="not a valid Kubernetes name"):
         KubernetesSandboxLauncher()._resolve_namespace()
+
+
+def test_pod_ready_timeout_defaults_when_unset(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no config and no env var, the hardcoded default wins."""
+    monkeypatch.delenv(k8s._POD_READY_TIMEOUT_ENV_VAR, raising=False)
+    assert k8s._resolve_pod_ready_timeout_s(None) == k8s._POD_READY_TIMEOUT_S
+
+
+def test_pod_ready_timeout_env_var_overrides_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    """With no explicit config, the env var overrides the hardcoded default."""
+    monkeypatch.setenv(k8s._POD_READY_TIMEOUT_ENV_VAR, "300")
+    assert k8s._resolve_pod_ready_timeout_s(None) == 300
+
+
+def test_pod_ready_timeout_config_wins_over_env_var(monkeypatch: pytest.MonkeyPatch) -> None:
+    """sandbox.kubernetes.pod_ready_timeout_s takes precedence over the env var."""
+    monkeypatch.setenv(k8s._POD_READY_TIMEOUT_ENV_VAR, "300")
+    assert k8s._resolve_pod_ready_timeout_s(45) == 45
+
+
+def test_pod_ready_timeout_env_var_accepts_float_string(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A float-looking env value is accepted, matching the E2B lifetime resolver."""
+    monkeypatch.setenv(k8s._POD_READY_TIMEOUT_ENV_VAR, "120.0")
+    assert k8s._resolve_pod_ready_timeout_s(None) == 120
+
+
+def test_pod_ready_timeout_env_var_rejects_non_numeric(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A malformed env value fails fast with a clear error instead of a raw ValueError."""
+    monkeypatch.setenv(k8s._POD_READY_TIMEOUT_ENV_VAR, "not-a-number")
+    with pytest.raises(click.ClickException, match="must be a number of seconds"):
+        k8s._resolve_pod_ready_timeout_s(None)
 
 
 # ── SDK-driven tests (fake kubernetes client) ───────────────
@@ -1081,6 +1118,47 @@ def test_launch_host_times_out_with_reason(
         )
 
 
+@pytest.mark.parametrize(
+    ("wait_state", "expected"),
+    [
+        ("undiscovered", "did not create a child pod within 1s"),
+        ("replaced", "could not be rediscovered before the 1s deadline"),
+        ("read-error", "could not be read before the 1s deadline"),
+        ("pending", "did not start within 1s"),
+    ],
+)
+def test_configured_pod_ready_timeout_bounds_entire_job_wait(
+    fake_clients: tuple[_FakeCore, _FakeBatch],
+    monkeypatch: pytest.MonkeyPatch,
+    wait_state: str,
+    expected: str,
+) -> None:
+    """The configured budget bounds discovery, replacement, reads, and Pending."""
+    core, _batch = fake_clients
+    pod = _pod(phase="Pending")
+    if wait_state != "undiscovered":
+        core.pod_list_items = [pod]
+    if wait_state == "replaced":
+        core.read_default = _FakeApiException(status=404, reason="Not Found")
+    elif wait_state == "read-error":
+        core.read_default = _FakeApiException(status=500, reason="Internal Server Error")
+    else:
+        core.read_default = pod
+
+    ticks = iter((0.0, 1.0))
+    monkeypatch.setattr(k8s.time, "monotonic", lambda: next(ticks))
+    launcher = KubernetesSandboxLauncher(
+        in_cluster=True,
+        namespace="omnigent-sandboxes",
+        secret_name="omnigent-creds",
+        env=(),
+        pod_ready_timeout_s=1,
+    )
+
+    with pytest.raises(click.ClickException, match=expected):
+        launcher._wait_for_pod_running("omnigent-sandboxes", "omnigent-job-timeout")
+
+
 def test_terminate_deletes_job_and_secret(
     fake_clients: tuple[_FakeCore, _FakeBatch],
 ) -> None:
@@ -1091,6 +1169,24 @@ def test_terminate_deletes_job_and_secret(
     assert batch.last_delete_body.propagation_policy == "Foreground"
     assert core.deleted_pods == ["omnigent-job-6"]
     assert core.deleted_secrets == ["omnigent-job-6-token"]
+
+
+def test_resume_recycles_job_and_token_secret(
+    fake_clients: tuple[_FakeCore, _FakeBatch],
+) -> None:
+    """Resume clears stale launch resources so start_host can recreate the same id."""
+    core, batch = fake_clients
+    launcher = _launcher()
+
+    assert launcher.can_resume is True
+    assert launcher.capabilities.resume_stopped is True
+
+    launcher.resume("omnigent-job-resume")
+
+    assert batch.deleted_jobs == ["omnigent-job-resume"]
+    assert batch.last_delete_body.propagation_policy == "Foreground"
+    assert core.deleted_pods == ["omnigent-job-resume"]
+    assert core.deleted_secrets == ["omnigent-job-resume-token"]
 
 
 def test_terminate_is_idempotent_on_404(

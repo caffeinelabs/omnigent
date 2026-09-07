@@ -342,7 +342,7 @@ RUN set -eu; \
 #
 # Version + integrity pin: the native harness is behaviorally coupled to a
 # specific agy build (out-of-order transcript writes, connect-RPC quirks, and TUI
-# injection are all verified against 1.0.10 — grep ``agy 1.0.10`` under
+# injection are all verified against 1.1.16 — grep ``agy 1.1.16`` under
 # omnigent/antigravity_native*). The official ``install.sh`` bootstrapper has NO
 # version flag — it always fetches the LATEST build from an auto-updater manifest
 # and old builds are not retained at any stable, reconstructable URL — so it
@@ -352,9 +352,15 @@ RUN set -eu; \
 # supply-chain control (a version-string check alone is not). To adopt a new agy:
 # re-verify the coupled behavior, then bump AGY_VERSION and both SHA256s (from
 # https://github.com/google-antigravity/antigravity-cli/releases).
-ARG AGY_VERSION=1.0.10
-ARG AGY_SHA256_AMD64=6547cf9a37227f26004fa4b805418b1df96f54c57b9723ca7d10864d2610bb0f
-ARG AGY_SHA256_ARM64=4674fabc3681221e54c90d15077c9a97a25ea71222001dabe44bf1576e888593
+ARG AGY_VERSION=1.1.16
+ARG AGY_SHA256_AMD64=7742953b7835b457e9102f1357a493913657dfd147435584f609d58356ec085a
+ARG AGY_SHA256_ARM64=c71599bb548cf72dfe7a8f6c411b3c7a3623cd4b0f6276bae89c69f769d6c92d
+# Exported for install-harness-cli.sh's agy row, so a build that adds
+# EXTRA_HARNESS_CLIS=agy pins the same version + sha256 as the install above
+# (and UBI — which has no baked agy — pins the same values).
+ENV AGY_VERSION=${AGY_VERSION} \
+    AGY_SHA256_AMD64=${AGY_SHA256_AMD64} \
+    AGY_SHA256_ARM64=${AGY_SHA256_ARM64}
 RUN set -eu; \
     arch="$(dpkg --print-architecture)"; \
     case "$arch" in \
@@ -417,29 +423,36 @@ RUN install -d /opt/jcode/config/jcode \
  && ln -s /mnt/config/jcode/provider-bifrost.env /opt/jcode/config/jcode/provider-bifrost.env \
  && ln -s /mnt/config/jcode/mcp.json /opt/jcode/mcp.json
 
-# GitHub CLI (`gh`) — required for per-user GitHub App sandbox auth
-# (hosts.yml + forwarded auth env). Pin + sha256 like agy/kiro so the image is
-# reconstructable. Binary lands on the shared PATH for root and the
-# OpenShell `sandbox` user.
-ARG GH_VERSION=2.96.0
-ARG GH_SHA256_AMD64=83d5c2ccad5498f58bf6368acb1ab32588cf43ab3a4b1c301bf36328b1c8bd60
-ARG GH_SHA256_ARM64=06f86ec7103d41993b76cd78072f43595c34aaa56506d971d9860e67140bf909
+# GitHub CLI (`gh`) — the read-only "GitHub" side panel shells out to `gh` in the
+# runner (omnigent/runner/github_resource.py: `gh pr view` / `gh pr diff` /
+# `gh api .../pulls/<n>/files`) to render the session branch's PR + file diffs, so
+# a managed host image must carry it or the panel degrades to a "gh not installed"
+# state. Pinned + SHA256-verified per arch, like agy above; to bump, update
+# GH_VERSION and both SHA256s from the release's `gh_<ver>_checksums.txt` at
+# https://github.com/cli/cli/releases.
+ARG GH_VERSION=2.100.0
+ARG GH_SHA256_AMD64=e4d4bb4498e8d007abe545b6568926793ace1b6447da598294a610018cb164be
+ARG GH_SHA256_ARM64=ea4e7a581a32ccad6cc7923cb1576ac5859ba4b9a16ab22eb8f8a96e78e2e961
 RUN set -eu; \
-    case "$(uname -m)" in \
-      x86_64)  arch="amd64"; sha="$GH_SHA256_AMD64" ;; \
-      aarch64) arch="arm64"; sha="$GH_SHA256_ARM64" ;; \
-      *) echo "ERROR: unsupported arch '$(uname -m)' for gh" >&2; exit 1 ;; \
+    arch="$(dpkg --print-architecture)"; \
+    case "$arch" in \
+      amd64) sha="$GH_SHA256_AMD64" ;; \
+      arm64) sha="$GH_SHA256_ARM64" ;; \
+      *) echo "ERROR: unsupported arch '$arch' for gh" >&2; exit 1 ;; \
     esac; \
+    asset="gh_${GH_VERSION}_linux_${arch}.tar.gz"; \
     curl -fsSL -o /tmp/gh.tar.gz \
-      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/gh_${GH_VERSION}_linux_${arch}.tar.gz"; \
+      "https://github.com/cli/cli/releases/download/v${GH_VERSION}/${asset}"; \
     echo "${sha}  /tmp/gh.tar.gz" | sha256sum -c -; \
-    tar -xzf /tmp/gh.tar.gz -C /tmp; \
+    tar -xzf /tmp/gh.tar.gz -C /tmp "gh_${GH_VERSION}_linux_${arch}/bin/gh"; \
     install -m 0755 "/tmp/gh_${GH_VERSION}_linux_${arch}/bin/gh" /usr/local/bin/gh; \
     rm -rf /tmp/gh.tar.gz "/tmp/gh_${GH_VERSION}_linux_${arch}"; \
     test -x /usr/local/bin/gh; \
-    installed="$(/usr/local/bin/gh --version | head -n1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"; \
-    [ "$installed" = "$GH_VERSION" ] || { \
-      echo "ERROR: gh reports '${installed:-<none>}', expected '$GH_VERSION'." >&2; exit 1; }; \
+    installed="$(/usr/local/bin/gh --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -n1)"; \
+    if [ "$installed" != "$GH_VERSION" ]; then \
+      echo "ERROR: gh reports '${installed:-<unparseable>}', expected '$GH_VERSION'." >&2; \
+      exit 1; \
+    fi; \
     echo "gh ${GH_VERSION} pinned (sha256 verified)"
 
 # mise — polyglot runtime/version manager used by agentic workflows to
