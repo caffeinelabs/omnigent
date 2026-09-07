@@ -4095,7 +4095,7 @@ const PI_NATIVE_EFFORT_LEVELS = [
   "max",
 ] as const;
 
-type NativeModelPickerKind = "claude" | "codex" | "cursor" | "kiro" | "opencode" | "pi";
+type NativeModelPickerKind = "claude" | "codex" | "cursor" | "kiro" | "opencode" | "pi" | "acp";
 
 type LabelSource = { labels?: Record<string, string | null> | null } | null | undefined;
 
@@ -4198,6 +4198,9 @@ export function modelPickerKindForConv(
       // model_select handler, so the picker surfaces that as the live model.
       return "pi";
     default:
+      // Generic ACP sessions carry no wrapper label; the server canonicalizes
+      // ``acp:<slug>`` ids to "acp" in the snapshot's harness field.
+      if (conv?.harness === "acp") return "acp";
       return isLabelLessCodexNative(conv) ? "codex" : null;
   }
 }
@@ -5016,7 +5019,8 @@ function useResolvedComposerModel(
     modelPickerKind === "cursor" ||
     modelPickerKind === "kiro" ||
     modelPickerKind === "pi" ||
-    modelPickerKind === "opencode";
+    modelPickerKind === "opencode" ||
+    modelPickerKind === "acp";
   const modelOptions: readonly {
     id: string;
     label?: string;
