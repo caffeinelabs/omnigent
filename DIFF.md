@@ -1,52 +1,26 @@
 # DIFF.md — staging-branch fork delta ledger
 
 This file tracks what the fork's `staging` branch carries that is **not**
-on the fork's `main` (caffeinelabs/omnigent `main`, currently
-`2a4fc31fa`, a mirror of an older `omnigent-ai/omnigent` main).
+on `omnigent-ai/omnigent` `main`. Fork `main` is kept as an exact mirror
+of upstream `main` (synced to `7b9b54784`; upstream has since advanced to
+`358c0df67`, which this sync merges into `staging`), so the fork delta is
+exactly:
+
+    git diff upstream/main...origin/staging
 
 `develop` keeps its own ledger. This one is for `staging`.
 
-`git diff origin/main...origin/staging` is **not** only caffeine fork
-work. It also contains:
+That diff still shows two layers, not one:
 
-1. **Caffeinelabs fork work on staging** (PRs #1–#48 + direct commits).
-2. **This PR's harness-bundle port** (#62).
-3. **An inherited Databricks-internal fork base** (PRs #2xxx–#3xxx) that
-   never landed in `omnigent-ai/main`.
-4. **Upstream drift the other way:** fork `main` is behind current
-   `omnigent-ai/main`. Some files look like staging-only because `main`
-   never picked up later upstream commits. Those are **not** fork deltas.
+1. **Caffeinelabs fork work on staging** (fork PRs #1–#79 + direct
+   commits) — the entries below.
+2. **An inherited Databricks-internal fork base** (PRs #2xxx–#3xxx)
+   that never landed in `omnigent-ai/main` (see the entry at the end).
 
-Do not grow layer 3. New work lands on `develop` first and is ported to
-`staging` on purpose (this PR).
+Do not grow layer 2. New work lands on `develop` first and is ported to
+`staging` on purpose.
 
 ## Entries
-
-### fix: pre-commit debt from the blind-merge window (this PR / #77)
-
-- **What:** Pays down lint debt accumulated while the pre-commit gate
-  could not run (between the second upstream sync and the CI repair in
-  #72/#74): ruff/prettier formatting, pyrefly fixes in #67–#70/#73 code,
-  and a `no-hardcoded-models` scope fix. Mostly repair of existing fork
-  deltas — two pieces create NEW small deltas: (1)
-  `IsloSandboxLauncher.start_host` is widened to the fork's parent
-  signature (upstream's `islo.py` keeps the narrow override; ours now
-  forwards the identity/extra-repos/session kwargs), and (2)
-  `lint_no_hardcoded_models.py` gains `DEPLOYMENT_CONFIG_PATHS`, a
-  named-file exemption for the nine fork CI workflows whose Databricks
-  serving ids are deployment config (named, so future workflows still
-  get flagged).
-- **Why:** The debt failed every PR's Pre-commit gate once #74 made it
-  run again. The islo mismatch was also a real latent bug — the new
-  launch kwargs were silently dropped for islo launchers; upstream never
-  hit it because upstream's `ExecModelHostLauncher.start_host` was never
-  widened.
-- **Upstreamable:** No — repair of fork-landed debt, and the two new
-  deltas are fork-config-shaped. The upstream-aligned alternative for
-  the workflow model pins (GitHub repo `vars.*`, as upstream does) is a
-  follow-up that needs the variables provisioned first.
-- **Lifetime:** The islo delta lasts until upstream widens `start_host`
-  the same way; the lint exemption until the workflows move to `vars.*`.
 
 ### pi-native: scrub provider credential env from the pi terminal (this PR / #76)
 
@@ -80,46 +54,6 @@ Do not grow layer 3. New work lands on `develop` first and is ported to
   denylist config), as is a pi-side opt-out for built-in catalog
   activation.
 
-
-### pi-native: curated model shortlist (this PR / #71)
-
-- **What:** `3cf827369` registers the provider family's `models:` map
-  (tier/role → bare model id, e.g. the sandbox host_config's
-  GLM-5.3-Flash / GLM-5.3 / claude-fable-5 / grok-4.6 / kimi-k3) in the
-  pi session's managed `models.json` alongside the selected model.
-  Pi's model list is provably just its `models.json` content (the TUI
-  `/model` dialog and the registry `getAvailable()` feeding the web
-  picker alike), so the picker offers exactly the deployment's curated,
-  verified set instead of only the launch model. Ids dedupe; deepseek
-  ids carry the `reasoning` flag. No behavior change without a
-  `models:` map.
-- **Why:** Without the shortlist only the launch model was selectable
-  (GLM-5.3 missing from a GLM-5.3-Flash session). Bare ids keep
-  LLM-gateway routing + fallbacks; the gateway's `/v1/models` exposes
-  only provider-prefixed ids that pin a single backend and skip the
-  chains.
-- **Upstreamable:** yes — inert for configs that declare no `models:`
-  map. Note upstream #4961 already added a searchable pi launch picker
-  (Databricks-OAuth-shaped); this change is the complementary
-  in-session catalog curation.
-- **Lifetime:** open-ended while staging runs pi against Bifrost.
-  Codex / claude / launch-picker lanes of the same shortlist land as
-  their own PRs.
-
-### GitHub credential auto-refresh in sandboxes (PRs #69, #70)
-
-- **What:** `e671c5e66` (#69) pushes refreshed GitHub App credentials
-  into already-running sandboxes so sessions outlive the token TTL;
-  `ea707befa` (#70) fans those pushes out concurrently instead of
-  serially (refresh latency no longer scales with live sandbox count).
-- **Why:** Long-running staging sessions were losing git/gh auth
-  mid-session when the installation token expired.
-- **Upstreamable:** the credential-refresh mechanics are generic; the
-  GitHub-App identity layer it serves (#1) is deployment-shaped. Not
-  proposed.
-- **Lifetime:** open-ended; tied to the GitHub App sandbox auth entry
-  below.
-
 ### Web UX: new-session repo list cache + last selection (PR #67)
 
 - **What:** `57e3a5158` caches the GitHub repo list in the new-session
@@ -152,30 +86,58 @@ Do not grow layer 3. New work lands on `develop` first and is ported to
 - **Upstreamable:** no (sync mechanics).
 - **Lifetime:** permanent pattern for future syncs.
 
-### Host image + server: all-harness runner bundle (this PR / #62)
+### Third upstream sync (this PR)
+
+- **What:** Two-step reconciliation. `75325fe1b` (direct on `staging`)
+  migrated the fork's GitHub App identity onto upstream's native
+  `connections` architecture (bridge via `_resolve_owner_github_identity`;
+  SSHPiper / Open-in-VS-Code wiring kept) and removed ci-watch, sandbox
+  credential refresh, and the session PR listing — their entries are
+  removed below. This PR completes the sync by merging the ten upstream
+  commits landed after the mirror point (`358c0df67`: `#6660` session
+  navigation, `#6678` GitHub panel split, `#6307` shell-before-probes,
+  `#6571` sidebar click-through, `#6573` mobile tap targets, `#6591`
+  composer pill modal, plus `#2445`, `#6415`, `#6557`, `#6683`).
+- **Sync decisions:**
+  - Adopted upstream for: pi model-entry rendering (`#71` superseded,
+    entry removed), opencode-native runner support (now upstream, entry
+    trimmed to the image bake), and the `#77` islo/lint repair deltas
+    (reverted, entry removed).
+  - Kept fork behavior for: the per-user GitHub identity bridge +
+    SSHPiper, k8s `config_map_mounts`, jcode ACP row + `/opt/jcode`
+    wiring + pinned `EXTRA_HARNESS_CLIS`, the opencode image pin, fork
+    web UX (NewChatDialog multi-repo picker + cache prefs, sidebar
+    state), and fork CI workflows.
+  - Alembic: upstream's `ga1b2c3d4e5f` `connections` migration replaces
+    the fork's github-connections file with the same id; single head
+    `4e8542fa67c4` verified.
+- **Why:** Routine upstream reconciliation; the staging-side half went
+  direct, this PR finishes it.
+- **Upstreamable:** the reconcile mechanics are sync-only.
+- **Lifetime:** permanent pattern for future syncs.
+
+### Host image + server: all-harness runner bundle (#62)
 
 - **What:** Bare-minimum port of caffeinelabs/omnigent#57 onto
-  `staging` @ `7b8cd26`. **No merge from `main`.** Cherry-picks only
-  `9f5c266a7` + `88574e7c5`.
-  - `deploy/docker/Dockerfile` (+ `.ubi`) bake goose `1.46.0` + jcode
-    `0.77.1` via upstream `EXTRA_HARNESS_CLIS`
-    (`deploy/docker/install-harness-cli.sh` verbatim).
-  - `/opt/jcode` wiring + `mcp-remote` + seeded
-    `deploy/docker/preview-jcode/jcode-agent.yaml`.
+  `staging` @ `7b8cd26`. The CLI bake itself is now **upstream**
+  (upstream's `EXTRA_HARNESS_CLIS` + `install-harness-cli.sh`, merged
+  as #4148, with the `agy` row and sandbox-user smoke check). What
+  remains fork-only on staging:
+  - `deploy/docker/Dockerfile` (+ `.ubi`) default
+    `EXTRA_HARNESS_CLIS="goose@1.46.0 jcode@0.77.1"` (upstream's
+    default is empty), plus the `/opt/jcode` wiring, `mcp-remote`, and
+    seeded `deploy/docker/preview-jcode/jcode-agent.yaml`
+    (`OMNIGENT_BUILTIN_AGENT_DIRS`) — all deployment-specific.
   - `jcode` ACP catalog row (`omnigent_mcp=False` →
     `HARNESS_ACP_OMNIGENT_MCP`) + `omni setup` drill-in.
   - `sandbox.kubernetes.config_map_mounts` +
-    `OMNIGENT_KUBERNETES_CONFIG_MAP_MOUNTS` env fallback, on staging's
-    pre-`ManagedSandboxDeployment` parse shape.
-- **Why:** Staging sandboxes should launch claude, codex, pi, goose, and
-  jcode. Claude / codex / pi CLIs and Bifrost config are already on
-  `staging-7b8cd26` + host `aeb12ae`. This only adds goose + jcode.
-- **Not in this port:** `main` merge, workflow restore,
-  `ManagedSandboxDeployment`, `OMNIGENT_HARNESS_INSTALL_ENABLED`, Cursor.
-- **Upstreamable:** #4148 (CLI bake) + develop line for
-  `config_map_mounts` / ACP field. This copy dies when staging next
-  syncs a develop that contains #57.
-- **Lifetime:** until that sync. Prefer the develop versions on conflict.
+    `OMNIGENT_KUBERNETES_CONFIG_MAP_MOUNTS` env fallback.
+- **Why:** Staging sandboxes launch claude, codex, pi, goose, and jcode.
+- **Upstreamable:** the bake is done. `config_map_mounts` / the ACP
+  field / jcode catalog row are separate upstream candidates.
+- **Lifetime:** the pinned default and wiring last until the deployment
+  moves; `config_map_mounts` and the catalog row until upstream adopts
+  them.
 
 ### GitHub App sandbox auth + per-user identity (PR #1, follow-ups)
 
@@ -189,40 +151,30 @@ Do not grow layer 3. New work lands on `develop` first and is ported to
   deployment-shaped. Not proposed.
 - **Lifetime:** open-ended; required by the staging deployment.
 
-### Session PRs + multi-repo sessions (PRs #17–#22, `7b8cd2606`)
+### Session PRs + multi-repo sessions (#17–#22, `7b8cd2606`)
 
-- **What:** New-chat GitHub repo picker, multi-repo + per-repo branches
-  (#17, #18); sub-repo file changes + session PR list (#20); closed /
-  merged + badges (#21); scoped by per-session commit trailer (#22) and
-  by Open-in-Omnigent body link / cross-repo search (`7b8cd2606`).
-- **Why:** Staging runs real multi-repo sessions; PRs must attach to the
-  session that opened them.
+- **What:** Fork `NewChatDialog` repo picker with multi-repo sessions,
+  per-repo branch selection, and repo-list cache + last-selection UX
+  (`sandboxRepoPreferences`) — all still on staging. The session PR
+  listing, closed/merged badges, per-session commit-trailer scoping, and
+  the Open-in-Omnigent body link were removed by the third sync's
+  native-connections migration (upstream's read-only GitHub panel covers
+  the repo view now).
+- **Why:** Staging runs real multi-repo sessions.
 - **Upstreamable:** yes in principle; not proposed.
 - **Lifetime:** open-ended.
 
-### ci-watch (PRs #23, #24)
+### opencode-native stack (#31–#48 + direct commits)
 
-- **What:** Wake a session when its PRs' CI concludes, plus a GET
-  dry-run diagnostic.
-- **Why:** Agent sessions can react to CI without polling.
-- **Upstreamable:** yes; not proposed.
-- **Lifetime:** open-ended.
-
-### opencode-native stack (PRs #31–#48 + direct commits)
-
-- **What:** `3428eab9c` (env-configured gateway → Bifrost), `2233b62e3`
-  (`GIT_CONFIG_*` passthrough), `bffe36c0b` (bake opencode +
-  `OPENROUTER_*`), then #31–#48: MCP `oauth` passthrough, opencode
-  1.18.13 (streamable-HTTP MCP), `OMNIGENT_RUNNER_ENV_PASSTHROUGH`
-  (#46, #47), `opencode_permission` (#41, #45), workspace-root
-  `AGENTS.md` via `instructions` (#42, #44, #45), drop hardcoded DD
-  keys (#48). Related: #16 (`ee3f30fea`) — sandbox no longer generates
-  workspace `AGENTS.md` (deployment mounts its own).
+- **What:** Runner-side support (gateway wiring, `GIT_CONFIG_*`
+  passthrough, MCP `oauth`, `opencode_permission`, workspace-root
+  `AGENTS.md`, `OMNIGENT_RUNNER_ENV_PASSTHROUGH`) is now upstream (#5041
+  and later). The fork keeps the deployment-shaped image bake: pinned
+  `OPENCODE_VERSION` (1.18.13) + `OPENROUTER_*` env and the mise/
+  OpenSSH/VS Code tooling blocks in `deploy/docker/Dockerfile`.
 - **Why:** Staging runs opencode against Bifrost with deployment MCP
   (Datadog, Linear) and workspace rules.
-- **Upstreamable:** mixed. `OMNIGENT_RUNNER_ENV_PASSTHROUGH` and MCP
-  `oauth` are generic. Develop's supported set is still the five
-  harnesses, so this stack stays staging-only unless that changes.
+- **Upstreamable:** the remaining bake is deployment-specific.
 - **Lifetime:** open-ended while staging runs opencode.
 
 ### Fork CI/CD on staging (PRs #5, #7, #10, #11 + direct commits)
@@ -263,10 +215,13 @@ Do not grow layer 3. New work lands on `develop` first and is ported to
 - **Lifetime:** until staging is replaced by / rebased onto `develop`.
   Do not grow this layer.
 
-### Not a fork delta (do not treat as staging-only)
+## How to verify
 
-Fork `main` lags current `omnigent-ai/main`. A `staging` vs `main` file
-list will also show later upstream commits that `main` never took. Those
-are upstream drift, not caffeine work. Use `git cherry upstream/main
-origin/staging` (or the PR numbers above) before calling something a
-delta.
+Fork `main` is a mirror of upstream `main`, so the fork delta is exactly
+
+    git diff upstream/main...origin/staging
+
+minus the inherited Databricks layer above. Use `git cherry
+upstream/main origin/staging` (or the fork PR numbers in these entries)
+before calling something a delta.
+
