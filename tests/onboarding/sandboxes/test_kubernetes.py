@@ -123,6 +123,54 @@ def test_build_job_manifest_init_container_prepares_and_clones_workspace() -> No
     )
 
 
+def test_build_job_manifest_stamps_open_in_omnigent_gh_wrapper_when_session_url_set() -> None:
+    """A session URL installs the on-PATH ``gh`` wrapper + exports the URL."""
+    from omnigent.pr_button import (
+        _GH_WRAPPER_BIN_REL,
+        _GH_WRAPPER_REL,
+        SESSION_URL_ENV_VAR,
+    )
+
+    session_url = "https://omni.example.com/c/sess_abc"
+    manifest = build_job_manifest(**_MANIFEST_KW, session_url=session_url)
+    spec = _pod_spec(manifest)
+    # Init container writes the wrapper into $HOME/.omnigent/bin/gh, executable.
+    init_script = spec["initContainers"][0]["command"][2]
+    assert f"/home/omnigent/{_GH_WRAPPER_REL}" in init_script
+    assert "chmod 755" in init_script
+    # Host container exports the session URL and prepends the wrapper dir to PATH
+    # so the agent's ``gh pr create`` finds the wrapper before the real gh.
+    host = spec["containers"][0]
+    assert any(
+        e.get("name") == SESSION_URL_ENV_VAR and e.get("value") == session_url for e in host["env"]
+    )
+    host_script = host["command"][2]
+    assert f"export PATH=/home/omnigent/{_GH_WRAPPER_BIN_REL}:" in host_script
+
+
+def test_build_job_manifest_no_gh_wrapper_without_session_url() -> None:
+    """No session URL ⇒ no wrapper, no OMNIGENT_SESSION_URL, no PATH prepend."""
+    from omnigent.pr_button import _GH_WRAPPER_REL, SESSION_URL_ENV_VAR
+
+    manifest = build_job_manifest(**_MANIFEST_KW)
+    spec = _pod_spec(manifest)
+    assert _GH_WRAPPER_REL not in spec["initContainers"][0]["command"][2]
+    host = spec["containers"][0]
+    assert all(e.get("name") != SESSION_URL_ENV_VAR for e in host["env"])
+    assert "export PATH=" not in host["command"][2]
+
+
+def test_build_job_manifest_rejects_malformed_session_url_charset() -> None:
+    """A session URL failing the charset guard is dropped (fail-open, no wrapper)."""
+    from omnigent.pr_button import SESSION_URL_ENV_VAR
+
+    # A space is outside the URL charset guard.
+    manifest = build_job_manifest(**_MANIFEST_KW, session_url="https://omni/c/a b")
+    host = _pod_spec(manifest)["containers"][0]
+    assert all(e.get("name") != SESSION_URL_ENV_VAR for e in host["env"])
+    assert "export PATH=" not in host["command"][2]
+
+
 def test_build_job_manifest_without_repo_has_no_clone() -> None:
     """No repo → the init container only makes the workspace, no git clone."""
     manifest = build_job_manifest(**_MANIFEST_KW)

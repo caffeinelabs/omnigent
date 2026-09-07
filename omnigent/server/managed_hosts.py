@@ -295,6 +295,38 @@ KUBERNETES_MANAGED_TOKEN_TTL_S = 7 * 24 * 3600
 # errors so an operator knows where to look inside the sandbox.
 _HOST_LOG_PATH = "/tmp/omnigent-host.log"
 
+# Public base URL of this deployment's web UI (e.g.
+# ``https://omnigent.example.com``), used to derive the per-session
+# ``…/c/<id>`` Open-in-Omnigent URL the sandbox ``gh`` wrapper stamps into PR
+# bodies. Prefer an explicit ``OMNIGENT_PUBLIC_BASE_URL``; otherwise reuse the
+# accounts/web origin (the same host that serves ``/c/<id>``). Unset ⇒ no
+# session URL ⇒ no wrapper, no behaviour change (fail-open).
+_PUBLIC_BASE_URL_ENV_VAR = "OMNIGENT_PUBLIC_BASE_URL"
+_ACCOUNTS_BASE_URL_ENV_VAR = "OMNIGENT_ACCOUNTS_BASE_URL"
+
+
+def _session_url(session_id: str | None) -> str | None:
+    """The public Open-in-Omnigent session URL (``<base>/c/<id>``), or ``None``.
+
+    Returns ``None`` when *session_id* is unset or no public base URL is
+    configured, so the sandbox ``gh`` wrapper is simply never installed
+    (fail-open: no button, no behaviour change).
+
+    :param session_id: Session/conversation id, or ``None``.
+    :returns: The ``<base>/c/<session_id>`` URL, or ``None``.
+    """
+    if not session_id:
+        return None
+    base = (
+        os.environ.get(_PUBLIC_BASE_URL_ENV_VAR)
+        or os.environ.get(_ACCOUNTS_BASE_URL_ENV_VAR)
+        or ""
+    ).strip()
+    if not base:
+        return None
+    return f"{base.rstrip('/')}/c/{session_id}"
+
+
 # How long a message POST waits for an in-flight managed launch to
 # settle before giving up (see ManagedLaunchTracker). Covers the full
 # launch/wake pipeline ON TOP OF the host-registration wait
@@ -3091,6 +3123,7 @@ async def launch_managed_host(
     github_identity: SandboxGithubIdentity | None = None,
     provider: str | None = None,
     agent_name: str | None = None,
+    session_id: str | None = None,
     on_stage: Callable[[str], None] | None = None,
 ) -> ManagedHostLaunch:
     """
@@ -3174,6 +3207,7 @@ async def launch_managed_host(
         extra_repos=extra_repos,
         github_identity=github_identity,
         agent_name=agent_name,
+        session_id=session_id,
         on_stage=on_stage,
     )
     return ManagedHostLaunch(host_id=host_id, workspace=workspace)
@@ -3188,6 +3222,7 @@ async def relaunch_managed_host(
     extra_repos: Sequence[RepoWorkspace] = (),
     github_identity: SandboxGithubIdentity | None = None,
     agent_name: str | None = None,
+    session_id: str | None = None,
     on_stage: Callable[[str], None] | None = None,
 ) -> ManagedHostLaunch:
     """
@@ -3269,6 +3304,7 @@ async def relaunch_managed_host(
             extra_repos=extra_repos,
             github_identity=github_identity,
             agent_name=agent_name,
+            session_id=session_id,
             on_stage=on_stage,
             keep_host_on_failure=True,
         )
@@ -3298,6 +3334,7 @@ async def _start_sandbox_host(
     extra_repos: Sequence[RepoCheckout] = (),
     host_config: dict[str, object] | None = None,
     agent_name: str | None = None,
+    session_id: str | None = None,
     on_stage: Callable[[str], None] | None = None,
 ) -> str:
     """Start a host without sending absent optional arguments to legacy launchers."""
@@ -3330,6 +3367,14 @@ async def _start_sandbox_host(
         kwargs["extra_repos"] = list(extra_repos)
     if host_config is not None:
         kwargs["host_config"] = host_config
+    # Open-in-Omnigent: derive the public session URL and pass it only when both
+    # a session id and a public base URL are known. Gated on presence like the
+    # other optional args so a deployment-injected launcher predating it keeps
+    # launching. Honoured by the k8s / agent-sandbox launchers (which install
+    # the PR-body ``gh`` wrapper); the abstract signature accepts + ignores it.
+    session_url = _session_url(session_id)
+    if session_url is not None:
+        kwargs["session_url"] = session_url
     if on_stage is not None:
         kwargs["on_stage"] = on_stage
     # `agent_name` is declared on the classifying launcher's `start_host` alone,
@@ -3355,6 +3400,7 @@ async def _register_and_start_host(
     extra_repos: Sequence[RepoWorkspace] = (),
     github_identity: SandboxGithubIdentity | None = None,
     agent_name: str | None = None,
+    session_id: str | None = None,
     on_stage: Callable[[str], None] | None = None,
     keep_host_on_failure: bool = False,
 ) -> str:
@@ -3442,6 +3488,7 @@ async def _register_and_start_host(
             ],
             host_config=config.host_config,
             agent_name=agent_name,
+            session_id=session_id,
             on_stage=on_stage,
         )
         await _wait_for_host_online(host_store, host_id)
