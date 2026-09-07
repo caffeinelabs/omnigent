@@ -387,7 +387,12 @@ RUN set -eu; \
 # site-packages and imports no longer require /build at runtime.
 COPY --from=builder /opt/venv /opt/venv
 COPY --from=builder /build /build
-RUN pip install --no-cache-dir /build /build/sdks/python-client /build/sdks/ui \
+# The Databricks SDK (an optional extra, not a default dep) is required in the
+# HOST: configure_host_databricks materializes ~/.databrickscfg and the
+# claude-native / opencode Databricks model discovery calls the SDK. The host
+# copies the plain `builder` venv (no extras), so pull it in explicitly here.
+RUN pip install --no-cache-dir "databricks-sdk>=0.56,<1" \
+ && pip install --no-cache-dir /build /build/sdks/python-client /build/sdks/ui \
  && ! grep -R --include='*.pth' --include='*.egg-link' -nE '/build(/|$)' /opt/venv/lib/python*/site-packages
 
 # Sandbox launchers exec commands through `bash -lc`, and Debian's
