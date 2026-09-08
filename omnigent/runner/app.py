@@ -9979,7 +9979,18 @@ def create_runner_app(
     # loop 503s the session).
 
     async def _github_workspace_root(session_id: str) -> str:
-        """Resolve the workspace root for GitHub routes, or 404 when headless."""
+        """Resolve the workspace root for GitHub routes, or 404 when headless.
+
+        Resolves the actual git checkout under the workspace: for a multi-repo
+        session the default env root is the PARENT dir holding each repo as a
+        sibling (not itself a repo), which otherwise made every GitHub route
+        report ``not_a_git_repo`` and the UI hide the GitHub tab. See
+        :func:`omnigent.runner.github_resource.resolve_repo_root`.
+        """
+        import asyncio as _asyncio
+
+        from omnigent.runner.github_resource import resolve_repo_root
+
         agent_spec = await _require_os_env(session_id)
         root = resource_registry.compute_default_env_root(session_id, agent_spec)
         if root is None:
@@ -9987,7 +9998,7 @@ def create_runner_app(
                 status_code=404,
                 detail="Session has no filesystem; GitHub API unavailable.",
             )
-        return root
+        return await _asyncio.to_thread(resolve_repo_root, root)
 
     @app.get("/v1/sessions/{session_id}/resources/github")
     async def read_github_info(session_id: str) -> JSONResponse:

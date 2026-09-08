@@ -24,6 +24,7 @@ from omnigent.runner.github_resource import (
     github_file_diff,
     github_info,
     github_pr_diff,
+    resolve_repo_root,
 )
 
 
@@ -92,6 +93,51 @@ def repo(tmp_path: Path) -> Path:
     _run(["git", "add", "."], tmp_path)
     _run(["git", "commit", "-m", "feature"], tmp_path)
     return tmp_path
+
+
+def _init_repo(path: Path, *, branch: str = "main") -> Path:
+    """Init a committed git repo at *path* on *branch* with an origin/HEAD."""
+    path.mkdir(parents=True, exist_ok=True)
+    _run(["git", "init"], path)
+    (path / "f.txt").write_text("x")
+    _run(["git", "add", "."], path)
+    _run(["git", "commit", "-m", "base"], path)
+    _run(["git", "branch", "-M", branch], path)
+    _run(["git", "symbolic-ref", f"refs/remotes/origin/{branch}", f"refs/heads/{branch}"], path)
+    _run(
+        ["git", "symbolic-ref", "refs/remotes/origin/HEAD", f"refs/remotes/origin/{branch}"], path
+    )
+    return path
+
+
+def test_resolve_repo_root_single_repo_returns_root(repo: Path) -> None:
+    """A workspace root that is itself a git checkout is returned unchanged."""
+    assert resolve_repo_root(str(repo)) == str(repo)
+
+
+def test_resolve_repo_root_non_git_returns_root(tmp_path: Path) -> None:
+    """A repo-less workspace is returned unchanged (github_info then 'not a git repo')."""
+    assert resolve_repo_root(str(tmp_path)) == str(tmp_path)
+
+
+def test_resolve_repo_root_multirepo_prefers_active_branch(tmp_path: Path) -> None:
+    """A multi-repo parent resolves to the repo on a NON-default branch.
+
+    Mirrors a multi-repo session: the workspace root holds each repo as a
+    sibling and is not itself a checkout. The GitHub tab should surface the repo
+    with active work (a feature branch / open PR), not just the first by name.
+    """
+    _init_repo(tmp_path / "app", branch="main")  # on default branch
+    devtools = _init_repo(tmp_path / "devtools", branch="main")
+    _run(["git", "checkout", "-b", "feature/work"], devtools)  # active work here
+    assert resolve_repo_root(str(tmp_path)) == str(devtools)
+
+
+def test_resolve_repo_root_multirepo_falls_back_to_first(tmp_path: Path) -> None:
+    """With every sibling on its default branch, pick the first by name."""
+    _init_repo(tmp_path / "app", branch="main")
+    _init_repo(tmp_path / "zebra", branch="main")
+    assert resolve_repo_root(str(tmp_path)) == str(tmp_path / "app")
 
 
 def test_github_info_gh_not_installed(repo: Path, monkeypatch: pytest.MonkeyPatch) -> None:
