@@ -275,6 +275,53 @@ def _pr_view_json(root: str, fields: str) -> dict[str, Any] | None:
     return data if isinstance(data, dict) else None
 
 
+def resolve_repo_root(root: str) -> str:
+    """Resolve the git checkout the GitHub tab should surface for *root*.
+
+    A single-repo session's workspace root IS the checkout. A multi-repo session
+    clones each repo as a sibling under the workspace root, so the root is the
+    PARENT directory — not itself a git repo. Passing that parent straight to
+    :func:`github_info` made it report ``not_a_git_repo``, which the UI treats as
+    "no GitHub tab", so multi-repo sessions lost the GitHub panel entirely even
+    though every repo under them is a normal checkout.
+
+    Resolution:
+
+    - ``root`` is itself a git work tree -> return it (single-repo; unchanged).
+    - otherwise look one level down and return a checkout there, preferring one
+      on a non-default branch (the repo with active work / an open PR — the one
+      worth showing) over the first by name.
+    - no checkout found -> return ``root`` unchanged, so :func:`github_info`
+      still reports ``not_a_git_repo`` for a genuinely repo-less workspace.
+
+    :param root: Absolute path to the session workspace root.
+    :returns: The absolute path of the checkout to inspect.
+    """
+    if _git(["rev-parse", "--is-inside-work-tree"], cwd=root)[0] == 0:
+        return root
+    try:
+        names = sorted(n for n in os.listdir(root) if os.path.isdir(os.path.join(root, n)))
+    except OSError:
+        return root
+    repos = [
+        os.path.join(root, n)
+        for n in names
+        if _git(["rev-parse", "--is-inside-work-tree"], cwd=os.path.join(root, n))[0] == 0
+    ]
+    if not repos:
+        return root
+    for repo in repos:
+        rc_head, head, _ = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=repo)
+        rc_def, default, _ = _git(
+            ["symbolic-ref", "--short", "refs/remotes/origin/HEAD"], cwd=repo
+        )
+        if rc_head == 0 and rc_def == 0:
+            cur = head.strip()
+            if cur and cur != default.strip().rsplit("/", 1)[-1]:
+                return repo
+    return repos[0]
+
+
 def github_info(root: str) -> dict[str, Any]:
     """Resolve GitHub context for the workspace: repo, branch, base, and PR.
 
