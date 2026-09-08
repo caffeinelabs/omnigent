@@ -55,9 +55,10 @@ class AcpCliHarness:
         server, e.g. ``("--acp",)`` or ``("agent", "stdio")``.
     :param aliases: Accepted alternate spellings, canonicalized to the row key.
     :param omnigent_mcp: Whether to offer Omnigent's MCP server in
-        ``session/new``. Some vendor CLIs reject ``mcpServers`` over ACP and
-        configure MCP out of band (e.g. jcode reads ``~/.jcode/mcp.json``);
-        set ``False`` for those so the server isn't advertised.
+        ``session/new``. Some vendor CLIs don't yet support session-scoped
+        MCP and ignore ``mcpServers``, configuring MCP out of band instead
+        (e.g. jcode reads ``~/.jcode/mcp.json``); set ``False`` for those so
+        the server isn't advertised.
     """
 
     install: HarnessInstallSpec
@@ -123,8 +124,9 @@ ACP_CLI_HARNESSES: dict[str, AcpCliHarness] = {
     # jcode (https://jcode.sh) drives ``jcode acp``. Ships via a curl
     # installer (not npm) and owns its provider/model config in
     # ``~/.jcode/config.toml``; Omnigent stores no credential. Its ACP server
-    # rejects ``mcpServers`` in ``session/new`` (MCP is configured in
-    # ``~/.jcode/mcp.json``), so the Omnigent MCP server is not offered.
+    # ignores ``mcpServers`` in ``session/new`` (session-scoped MCP isn't
+    # supported; MCP is configured in ``~/.jcode/mcp.json``), so the Omnigent
+    # MCP server is not offered.
     "jcode": AcpCliHarness(
         install=HarnessInstallSpec(
             "Jcode",
