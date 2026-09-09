@@ -1,0 +1,198 @@
+# Build + push a per-branch preview IMAGE. That is this repo's only job for
+# previews — the k8s manifests live in the GitOps repo (caffeinelabs/infra:
+# clusters/caffeine-sandbox/omnigent-preview-module + omnigent-previews/), and
+# Flux renders/applies them. Here we only produce the image and hand you a
+# ready-to-commit per-slug Flux Kustomization pointing at that image tag.
+#
+# Triggers:
+#   - workflow_dispatch (any branch): gh workflow run preview-env.yml \
+#       --ref develop -f ref=<branch>
+#   - pull_request label `preview` (into develop) / new commits while labeled.
+#
+# No secrets required.
+name: Omnigent WIP
+run-name: Omnigent WIP [${{ github.event.pull_request.head.ref || inputs.ref || github.ref_name }}]
+
+on:
+  pull_request:
+    types: [labeled, synchronize]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Branch/ref to build a preview image for (default: this ref)"
+        required: false
+        type: string
+
+concurrency:
+  group: preview-${{ github.event.pull_request.number || inputs.ref || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  IMAGE_SERVER: ghcr.io/${{ github.repository_owner }}/omnigent-server
+  IMAGE_HOST: ghcr.io/${{ github.repository_owner }}/omnigent-host
+  INFRA_PREVIEWS_DIR: clusters/caffeine-sandbox/omnigent-previews
+  PREVIEW_DOMAIN: sandbox.caffeine.ai
+
+permissions:
+  contents: read
+  packages: write
+  pull-requests: write
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      build: ${{ steps.r.outputs.build }}
+      ref: ${{ steps.r.outputs.ref }}
+      slug: ${{ steps.r.outputs.slug }}
+    steps:
+      - id: r
+        env:
+          LABELED: ${{ contains(github.event.pull_request.labels.*.name, 'preview') }}
+          LABEL_NAME: ${{ github.event.label.name }}
+        run: |
+          build=false; ref=""
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            ref="${{ inputs.ref }}"; [ -n "$ref" ] || ref="${{ github.ref_name }}"; build=true
+          else
+            ref="${{ github.event.pull_request.head.ref }}"
+            case "${{ github.event.action }}" in
+              labeled)     [ "$LABEL_NAME" = "preview" ] && build=true ;;
+              synchronize) [ "$LABELED" = "true" ] && build=true ;;
+            esac
+          fi
+          slug="$(printf '%s' "$ref" | tr '[:upper:]' '[:lower:]' \
+            | sed -e 's/[^a-z0-9]/-/g' -e 's/-\{2,\}/-/g' -e 's/^-//' -e 's/-$//' \
+            | cut -c1-30 | sed 's/-$//')"
+          { echo "build=$build"; echo "ref=$ref"; echo "slug=$slug"; } >> "$GITHUB_OUTPUT"
+          echo "resolved: build=$build ref=$ref slug=$slug"
+
+  image:
+    needs: resolve
+    if: needs.resolve.outputs.build == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout feature ref
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.resolve.outputs.ref }}
+          fetch-depth: 0
+      - name: Compute image tag
+        id: id
+        # <slug>-<UTC-timestamp>: sortable so Flux ImagePolicy can pick the newest
+        # build (it orders by tag, not push time). One GHCR package, tag prefix
+        # per branch — no per-slug packages. The commit is recoverable from the run.
+        run: echo "tag=${{ needs.resolve.outputs.slug }}-$(date -u +%Y%m%dT%H%M%SZ)" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v3
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      # Server carries the kubernetes extra so the sandbox launcher can import
+      # the k8s client; host is the same commit for protocol match.
+      - name: Build + push server
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          push: true
+          platforms: linux/amd64
+          build-args: OMNIGENT_EXTRAS=kubernetes
+          tags: ${{ env.IMAGE_SERVER }}:${{ steps.id.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+      - name: Build + push host
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/docker/Dockerfile
+          target: host
+          push: true
+          platforms: linux/amd64
+          tags: ${{ env.IMAGE_HOST }}:${{ steps.id.outputs.tag }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      # Emit the exact per-slug Flux Kustomization to commit into infra. Flux
+      # renders the shared omnigent-preview-module with these substitutions.
+      - name: Emit infra snippet
+        env:
+          SLUG: ${{ needs.resolve.outputs.slug }}
+          TAG: ${{ steps.id.outputs.tag }}
+          REF: ${{ needs.resolve.outputs.ref }}
+        run: |
+          host="omnigent-$SLUG.$PREVIEW_DOMAIN"
+          dest="$INFRA_PREVIEWS_DIR/$SLUG.yaml"
+          cat > snippet.yaml <<YAML
+          ---
+          apiVersion: kustomize.toolkit.fluxcd.io/v1
+          kind: Kustomization
+          metadata:
+            name: omnigent-preview-$SLUG
+            namespace: flux-deployments
+            annotations:
+              flux.dfinity.network/gaugeEmit: "true"
+          spec:
+            interval: 10m
+            prune: true
+            wait: false
+            sourceRef:
+              kind: GitRepository
+              name: omnigent-previews
+            path: ./clusters/caffeine-sandbox/omnigent-preview-module
+            postBuild:
+              substitute:
+                SLUG: "$SLUG"
+                IMAGE_REPO: "$IMAGE_SERVER"
+                IMAGE_TAG: "$TAG"
+                HOST: "$host"
+          YAML
+          {
+            echo "## 🌱 Preview image built for \`$REF\`"
+            echo ""
+            echo "Server: \`$IMAGE_SERVER:$TAG\` · Host: \`$IMAGE_HOST:$TAG\`"
+            echo "After deploy: https://$host"
+            echo ""
+            echo "**Deploy:** commit this to \`caffeinelabs/infra\` as \`$dest\`, then merge — Flux renders the shared preview module and applies it."
+            echo '```yaml'
+            cat snippet.yaml
+            echo '```'
+            echo ""
+            echo "**Teardown:** delete \`$dest\` from infra → Flux prunes the namespaces + resources."
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload snippet
+        uses: actions/upload-artifact@v4
+        with:
+          name: preview-${{ needs.resolve.outputs.slug }}-flux-kustomization
+          path: snippet.yaml
+      - name: Comment on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v7
+        env:
+          SLUG: ${{ needs.resolve.outputs.slug }}
+          TAG: ${{ steps.id.outputs.tag }}
+        with:
+          script: |
+            const fs = require('fs');
+            const slug = process.env.SLUG, tag = process.env.TAG;
+            const host = `omnigent-${slug}.sandbox.caffeine.ai`;
+            const dest = `clusters/caffeine-sandbox/omnigent-previews/${slug}.yaml`;
+            const snippet = fs.readFileSync('snippet.yaml', 'utf8');
+            const body = [
+              `### 🌱 Preview image built`,
+              `\`ghcr.io/caffeinelabs/omnigent-server:${tag}\` · after deploy → https://${host}`,
+              ``,
+              `Commit this to \`caffeinelabs/infra\` as \`${dest}\` and merge — Flux renders the shared preview module:`,
+              '```yaml', snippet.trim(), '```',
+              ``,
+              `_Teardown: delete \`${dest}\` from infra._`,
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner, repo: context.repo.repo,
+              issue_number: context.payload.pull_request.number, body,
+            });
