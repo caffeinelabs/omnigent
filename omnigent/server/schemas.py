@@ -1646,7 +1646,11 @@ class SessionCreateMetadata(BaseModel):
         uploaded agent's ``os_env.cwd`` boundary at session create
         (per designs/SESSION_WORKSPACE_SELECTION.md). Optional
         otherwise.
-    :param terminal_launch_args: Optional pass-through CLI args for a
+    :param workspaces: For ``host_type: "managed"`` only — multiple git
+        repository URLs (optionally ``#<branch>``) to clone as siblings
+        under the sandbox workspace root, as an alternative to a single
+        ``workspace``. Mutually exclusive with ``workspace`` and capped at
+        ``_MAX_MANAGED_WORKSPACES`` repositories. ``None`` for none.
         native terminal wrapper (claude / codex), e.g.
         ``["--dangerously-skip-permissions"]``. Set at create-time so
         the runner has them before it boots. Bounds (count / length)
@@ -1676,6 +1680,7 @@ class SessionCreateMetadata(BaseModel):
     reasoning_effort: str | None = None
     host_id: str | None = None
     workspace: str | None = None
+    workspaces: list[str] | None = None
     terminal_launch_args: list[str] | None = None
     parent_session_id: str | None = None
     host_type: Literal["external", "managed"] = "external"
@@ -1714,13 +1719,24 @@ class SessionCreateMetadata(BaseModel):
                     "host_type 'managed' lets the server provision the host; "
                     "host_id must not be set"
                 )
-            if self.workspace is not None:
+            if self.workspace is not None and self.workspaces:
+                raise ValueError(
+                    "pass either 'workspace' (single repo) or 'workspaces' "
+                    "(multiple repos), not both"
+                )
+            if self.workspaces is not None and len(self.workspaces) > _MAX_MANAGED_WORKSPACES:
+                raise ValueError(
+                    f"'workspaces' takes at most {_MAX_MANAGED_WORKSPACES} repositories"
+                )
+            for candidate in (self.workspace, *(self.workspaces or ())):
+                if candidate is None:
+                    continue
                 try:
-                    parse_repo_workspace(self.workspace)
+                    parse_repo_workspace(candidate)
                 except ValueError as exc:
                     raise ValueError(
                         "host_type 'managed' takes a git repository URL "
-                        f"(optionally '#<branch>') as workspace: {exc}"
+                        f"(optionally '#<branch>') per workspace: {exc}"
                     ) from exc
             return self
         if self.sandbox_provider is not None:
@@ -1728,6 +1744,8 @@ class SessionCreateMetadata(BaseModel):
                 "sandbox_provider only applies to host_type 'managed' — "
                 "external hosts are not server-provisioned"
             )
+        if self.workspaces:
+            raise ValueError("'workspaces' (multi-repo clone) requires host_type 'managed'")
         if self.workspace is not None and is_repo_workspace(self.workspace):
             raise ValueError(
                 "a repository-URL workspace requires host_type 'managed' — "
@@ -1991,6 +2009,12 @@ class SessionResponse(BaseModel):
         a row created before this became explicit inherits nothing.
         Stamped ``"on"`` at create for Smart Routing sessions; also set
         via ``PATCH /v1/sessions/{id}``.
+    :param share_workspace_files: Whether the owner opted into letting
+        view-level collaborators browse the workspace (Files/Changes/GitHub
+        surfaces). ``False`` by default — read grants share the conversation
+        only. The web share dialog reads this to render the toggle, and the
+        rail reads it to decide whether to mount the file surfaces for a
+        view-only viewer.
     :param context_window: The model's context window size in tokens
         as looked up server-side from litellm's registry (or from the
         ``AP_CONTEXT_WINDOW_OVERRIDE`` env var), e.g. ``200_000``.
@@ -2147,6 +2171,7 @@ class SessionResponse(BaseModel):
     model_override: str | None = None
     cost_control_mode_override: str | None = None
     subagent_routing_override: str | None = None
+    share_workspace_files: bool = False
     context_window: int | None = None
     last_total_tokens: int | None = None
     total_cost_usd: float | None = None
@@ -2253,6 +2278,13 @@ class UpdateSessionRequest(BaseModel):
         presence-is-the-clear-signal rule as
         ``cost_control_mode_override``). Effective on the next spawn, so
         it can be changed at any point in a session.
+    :param share_workspace_files: Opt-in that lets people with *view*
+        (read-only) access browse the session's workspace files. ``True``
+        turns sharing on, ``False`` turns it off (back to edit-only, the
+        default), ``None`` leaves it unchanged. Manage-gated — it sits with
+        the grant/revoke and public-access controls that decide who can see
+        the session. Never widens absolute-path browsing, which stays
+        owner-only.
     :param external_session_id: Runtime-native session id captured
         by a wrapper bridge (e.g. Claude Code's session uuid for
         ``omnigent claude`` sessions). Idempotent on same-value
@@ -2299,6 +2331,7 @@ class UpdateSessionRequest(BaseModel):
     approval_mode: str | None = None
     cost_control_mode_override: str | None = None
     subagent_routing_override: str | None = None
+    share_workspace_files: bool | None = None
     external_session_id: str | None = None
     terminal_launch_args: list[str] | None = None
     archived: bool | None = None
