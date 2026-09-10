@@ -4491,11 +4491,6 @@
             "title": "Features",
             "type": "object"
           },
-          "github_app_enabled": {
-            "default": false,
-            "title": "Github App Enabled",
-            "type": "boolean"
-          },
           "harness_install_enabled": {
             "title": "Harness Install Enabled",
             "type": "boolean"
@@ -4587,6 +4582,7 @@
           "sshpiper_port": {
             "anyOf": [
               {
+                "format": "int64",
                 "type": "integer"
               },
               {

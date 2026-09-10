@@ -264,7 +264,7 @@ def test_build_mcp_block_http_databricks_injects_bearer(monkeypatch: pytest.Monk
 def test_build_mcp_block_http_oauth_false_disables_provider() -> None:
     from types import SimpleNamespace as N
 
-    from omnigent.opencode_native_provider import build_opencode_mcp_block
+    from omnigent.harnesses.opencode_native.provider import build_opencode_mcp_block
 
     servers = [
         # oauth: false — header-auth remote that advertises OAuth (e.g. Datadog)
