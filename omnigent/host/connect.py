@@ -34,7 +34,6 @@ from omnigent.debug_logging import (
     PRIMARY_SESSION_ID_ENV_VAR,
     USER_ID_ENV_VAR,
 )
-from omnigent.env_credentials import env_names_with_omnigent_prefix
 from omnigent.gateway_inference import gateway_inference_map
 from omnigent.harness_aliases import canonicalize_harness, is_claude_sdk_harness_name
 from omnigent.harness_availability import HARNESS_BINARY_MISSING, HarnessAvailability
@@ -52,6 +51,7 @@ from omnigent.host.frames import (
     HostDetectCredentialsResultFrame,
     HostFsRequestFrame,
     HostFsResultFrame,
+    HostFsWriteFrame,
     HostHarnessReadinessFrame,
     HostHelloFrame,
     HostImportedLocalSession,
@@ -83,6 +83,7 @@ from omnigent.host.frames import (
     HostStoreSecretResultFrame,
     decode_host_frame,
     encode_host_frame,
+    workspace_missing_message,
 )
 from omnigent.host.git_worktree import (
     WorktreeError,
@@ -148,8 +149,9 @@ from omnigent.runtime.websocket_metrics import (
     websocket_close_code,
     websocket_close_reason,
 )
-from omnigent.suspend_watch import watch_for_resume
-from omnigent.tls import client_ssl_context
+from omnigent.util.env_credentials import env_names_with_omnigent_prefix
+from omnigent.util.suspend_watch import watch_for_resume
+from omnigent.util.tls import client_ssl_context
 from omnigent.version import VERSION
 
 _logger = logging.getLogger(__name__)
@@ -912,7 +914,7 @@ class ModelOptionsResult:
 
 def _model_configuration_source_for_harness(harness: str) -> dict[str, str] | None:
     """Resolve the host's ambient model provider without exposing credentials."""
-    from omnigent.model_catalog import model_configuration_source, resolve_model_provider
+    from omnigent.models.model_catalog import model_configuration_source, resolve_model_provider
     from omnigent.spec.types import AgentSpec, ExecutorSpec
 
     spec = AgentSpec(
@@ -1004,7 +1006,7 @@ class HostProcess:
         # into every runner this host spawns; None on a non-Databricks server.
         self._origin_workspace_id: str | None = None
         try:
-            from omnigent.server_url import ServerUrl
+            from omnigent.util.server_url import ServerUrl
 
             self._origin_workspace_id = ServerUrl.from_api_base(self._server_url).org_id
         except Exception:  # noqa: BLE001 — attribution is best-effort
@@ -1350,7 +1352,7 @@ class HostProcess:
         :returns: The display URL, e.g.
             ``"https://ws.databricks.com/omnigent?o=123"``.
         """
-        from omnigent.server_url import display_server_url
+        from omnigent.util.server_url import display_server_url
 
         return display_server_url(self._server_url)
 
@@ -1580,6 +1582,43 @@ class HostProcess:
             "Check the server URL and your access."
         )
 
+    def _launch_failed(
+        self,
+        frame: HostLaunchRunnerFrame,
+        error: str,
+        *,
+        error_code: str | None = None,
+    ) -> HostLaunchRunnerResultFrame:
+        """Report and return a failed runner launch.
+
+        :param frame: Launch request that failed.
+        :param error: Human-readable failure reason.
+        :param error_code: Optional machine-readable failure category.
+        :returns: Failed result frame for the server.
+        """
+        session_id = frame.session_id or "<unknown>"
+        diagnostic_lines = error.splitlines()
+        diagnostic = diagnostic_lines[0] if diagnostic_lines else error
+        _logger.warning(
+            "Runner launch failed for session %r in workspace %r: %r",
+            session_id,
+            frame.workspace,
+            diagnostic,
+        )
+        print(
+            "  ! Runner launch failed\n"
+            f"    session: {session_id!r}\n"
+            f"    workspace: {frame.workspace!r}\n"
+            f"    reason: {diagnostic!r}",
+            flush=True,
+        )
+        return HostLaunchRunnerResultFrame(
+            request_id=frame.request_id,
+            status="failed",
+            error=error,
+            error_code=error_code,
+        )
+
     def _classify_transient_404(self) -> HostConnectError | None:
         """Treat a 404 on the tunnel upgrade as a transient restart blip.
 
@@ -1654,9 +1693,8 @@ class HostProcess:
 
         :param frame: The launch request frame.
         :returns: Result frame with status and runner_id, or a
-            ``"failed"`` result with ``error_code`` set to
-            ``"harness_not_configured"`` when the harness check
-            refuses the launch.
+            ``"failed"`` result. Deterministic preflight refusals
+            include a machine-readable ``error_code``.
         """
         # Refuse to spawn for a harness this machine can't actually run —
         # otherwise the runner starts, the session looks alive, and the
@@ -1669,10 +1707,9 @@ class HostProcess:
         if frame.harness is not None and not await asyncio.to_thread(
             harness_is_configured, frame.harness
         ):
-            return HostLaunchRunnerResultFrame(
-                request_id=frame.request_id,
-                status="failed",
-                error=(
+            return self._launch_failed(
+                frame,
+                (
                     f"harness {frame.harness!r} is not configured on host "
                     f"{self._identity.name!r} — {harness_setup_hint(frame.harness)}"
                 ),
@@ -1681,10 +1718,9 @@ class HostProcess:
 
         workspace = Path(frame.workspace).expanduser()
         if not workspace.is_dir():
-            return HostLaunchRunnerResultFrame(
-                request_id=frame.request_id,
-                status="failed",
-                error=f"workspace path does not exist: {workspace}",
+            return self._launch_failed(
+                frame,
+                workspace_missing_message(workspace),
                 error_code=WORKSPACE_MISSING_ERROR_CODE,
             )
 
@@ -1744,21 +1780,19 @@ class HostProcess:
             spawn.add_done_callback(self._discard_abandoned_spawn)
             raise
         except OSError as exc:
-            return HostLaunchRunnerResultFrame(
-                request_id=frame.request_id,
-                status="failed",
-                error=f"failed to spawn runner: {exc}",
+            return self._launch_failed(
+                frame,
+                f"failed to spawn runner: {exc}",
             )
 
         if proc.poll() is not None:
             # The runner died before Popen returned — its actual error
             # is in the captured log, so ship the tail with the result
             # instead of making the user go find the file on the host.
-            return HostLaunchRunnerResultFrame(
-                request_id=frame.request_id,
-                status="failed",
-                error=_runner_exit_error(proc.returncode, log_path),
-            )
+            error = _runner_exit_error(proc.returncode, log_path)
+            # The returned result retains the diagnostic tail, while
+            # _launch_failed limits the host lifecycle line to its first line.
+            return self._launch_failed(frame, error)
 
         # One live runner per session: the session's previous runner —
         # whose binding the server has already rotated away — is
@@ -2245,8 +2279,10 @@ class HostProcess:
         total). It reads + normalizes each and sends it immediately
         (``host.import_local_session``) so a large batch never rides in one frame
         and the server persists as each arrives. A terminal ``host.import_local_done``
-        closes the stream. Sessions that fail to load are skipped; a single-harness
-        enumeration failure fails the request.
+        closes the stream. A session that fails to load, normalize, encode, or
+        send is skipped and counted so the rest of the batch still uploads; only
+        a dead tunnel (ConnectionClosed) or a single-harness enumeration failure
+        fails the whole request.
         """
 
         def _targets() -> tuple[list[tuple[str, str]], str | None]:
@@ -2309,19 +2345,33 @@ class HostProcess:
             total = len(ordered)
             load_failed = 0
             for source, session_id in ordered:
-                session = await asyncio.to_thread(_load, source, session_id)
-                if session is None:
-                    # Unreadable/corrupt transcript: no frame to send, but report
-                    # it on the done frame so the server's counts stay honest.
-                    load_failed += 1
-                    continue
-                await ws.send(
-                    encode_host_frame(
-                        HostImportLocalSessionFrame(
-                            request_id=frame.request_id, total=total, session=session
+                try:
+                    session = await asyncio.to_thread(_load, source, session_id)
+                    if session is None:
+                        # Unreadable/corrupt transcript: no frame to send, but
+                        # report it on the done frame so the counts stay honest.
+                        load_failed += 1
+                        continue
+                    await ws.send(
+                        encode_host_frame(
+                            HostImportLocalSessionFrame(
+                                request_id=frame.request_id, total=total, session=session
+                            )
                         )
                     )
-                )
+                except ConnectionClosed:
+                    # Dead tunnel: abort the batch (recovery is owned upstream),
+                    # never a per-session skip — nothing more can be sent.
+                    raise
+                except Exception:
+                    # Any other failure reading, normalizing, encoding, or sending
+                    # one session must not drop the rest of the batch: count it and
+                    # move on so the remaining sessions still upload.
+                    _logger.exception(
+                        "import_local: skipping session source=%r id=%r", source, session_id
+                    )
+                    load_failed += 1
+                    continue
             await ws.send(
                 encode_host_frame(
                     HostImportLocalDoneFrame(
@@ -2786,7 +2836,7 @@ class HostProcess:
 
         :returns: The catalog listing, or ``None`` when unavailable.
         """
-        from omnigent.codex_native_app_server import codex_launch_catalog
+        from omnigent.harnesses.codex_native.app_server import codex_launch_catalog
 
         try:
             rows = await codex_launch_catalog()
@@ -2809,7 +2859,10 @@ class HostProcess:
 
         :returns: The catalog listing, or ``None`` when unavailable.
         """
-        from omnigent.claude_native import claude_launch_catalog, resolve_native_claude_config
+        from omnigent.harnesses.claude_native.main import (
+            claude_launch_catalog,
+            resolve_native_claude_config,
+        )
 
         try:
             config = await asyncio.to_thread(resolve_native_claude_config, spec=None)
@@ -2840,7 +2893,7 @@ class HostProcess:
             # Harness-truth lane: every launch shape is answered from the
             # shared catalog, probed from the configured Codex binary itself.
             # No curated fallback and no serving-endpoints listing — a probe
-            # that cannot run yields an honest empty answer with the reason.
+            # that cannot run is a failed lookup, not a successful empty catalog.
             probed = await self._probed_codex_model_options()
             if probed is not None:
                 return HostModelOptionsResultFrame(
@@ -2851,14 +2904,13 @@ class HostProcess:
                 )
             return HostModelOptionsResultFrame(
                 request_id=frame.request_id,
-                status="ok",
-                models=[],
+                status="failed",
                 error="the codex model probe failed — see the host log",
             )
 
         if harness == "pi-native":
             try:
-                from omnigent.pi_native_credentials import pi_native_model_options
+                from omnigent.harnesses.pi_native.credentials import pi_native_model_options
 
                 pi_models = await asyncio.to_thread(pi_native_model_options)
             except Exception:
@@ -2879,7 +2931,7 @@ class HostProcess:
             # of its own, so the endpoint listing IS the harness truth — the
             # ids are already in the exact spelling the SDK sends.
             try:
-                from omnigent.model_catalog import list_models_for_worker
+                from omnigent.models.model_catalog import list_models_for_worker
                 from omnigent.spec.types import AgentSpec, ExecutorSpec
 
                 sdk_spec = AgentSpec(
@@ -2934,8 +2986,7 @@ class HostProcess:
             )
         return HostModelOptionsResultFrame(
             request_id=frame.request_id,
-            status="ok",
-            models=[],
+            status="failed",
             error="the claude model probe failed — see the host log",
         )
 
@@ -2980,17 +3031,106 @@ class HostProcess:
                 limit=_coerce_int(params.get("limit", 500)),
             )
         if op == "github_info":
-            return r.github_info()
+            return r.github_info(session_id, cast("str | None", params.get("pr_url")))
         if op == "github_changes":
-            return r.github_changes()
+            return r.github_changes(session_id, cast("str | None", params.get("pr_url")))
         if op == "github_diff":
             return r.github_file_diff(
                 cast("str | None", params.get("base")),
                 str(params.get("path", "")),
+                session_id=session_id,
+                pr_url=cast("str | None", params.get("pr_url")),
+                previous_path=cast("str | None", params.get("previous_path")),
+                head_sha=cast("str | None", params.get("head_sha")),
+                base_sha=cast("str | None", params.get("base_sha")),
             )
         if op == "github_pr_diff":
-            return r.github_pr_diff()
+            return r.github_pr_diff(session_id, cast("str | None", params.get("pr_url")))
         raise ValueError(f"unknown fs op: {op!r}")
+
+    def _handle_fs_write(self, frame: HostFsWriteFrame) -> HostFsResultFrame:
+        """Serve a workspace-mutating op from the host (runner-offline fallback).
+
+        Mirrors :meth:`_handle_fs_request` but for the small set of writes the
+        host can serve — currently the GitHub account/base preference, which
+        touches the host's ``~/.omnigent/config.yaml`` and runs ``gh``/``git`` in
+        the workspace. Called inside a worker thread by the dispatcher.
+
+        :param frame: The write frame (op + workspace + params).
+        :returns: A result frame with the refreshed payload, or an error frame.
+        """
+        try:
+            expanded = os.path.expanduser(frame.workspace)
+        except (TypeError, ValueError) as exc:
+            return HostFsResultFrame(
+                request_id=frame.request_id,
+                status="error",
+                error_status=400,
+                error_code="invalid_workspace",
+                error=f"workspace path expansion failed: {exc}",
+            )
+        if not os.path.isdir(expanded):
+            return HostFsResultFrame(
+                request_id=frame.request_id,
+                status="error",
+                error_status=404,
+                error_code="not_found",
+                error="workspace directory does not exist on host",
+            )
+        try:
+            payload = self._dispatch_fs_write_op(
+                expanded, frame.op, {**(frame.params or {}), "session_id": frame.session_id}
+            )
+        except ValueError as exc:
+            return HostFsResultFrame(
+                request_id=frame.request_id,
+                status="error",
+                error_status=400,
+                error_code="invalid_request",
+                error=str(exc),
+            )
+        except Exception as exc:
+            _logger.exception("host fs_write op %r failed", frame.op)
+            return HostFsResultFrame(
+                request_id=frame.request_id,
+                status="error",
+                error_status=500,
+                error_code="fs_write_failed",
+                error=str(exc),
+            )
+        return HostFsResultFrame(request_id=frame.request_id, status="ok", payload=payload)
+
+    @staticmethod
+    def _dispatch_fs_write_op(
+        workspace: str,
+        op: str,
+        params: dict[str, object],
+    ) -> dict[str, object]:
+        """Route a write op to its handler. Writes call ``github_resource``
+        directly (not the read-only ``WorkspaceReader``).
+
+        :raises ValueError: On an unknown op.
+        """
+        from typing import cast
+
+        from omnigent.runner import github_resource
+
+        if op == "github_set_preference":
+            return github_resource.set_github_preference(
+                workspace,
+                account=cast("str | None", params.get("account")),
+                remote=cast("str | None", params.get("remote")),
+                session_id=cast("str | None", params.get("session_id")),
+                pr_url=cast("str | None", params.get("pr_url")),
+            )
+        if op == "github_prs_update":
+            return github_resource.update_session_pr(
+                workspace,
+                str(params["session_id"]),
+                str(params["url"]),
+                str(params.get("action", "attach")),
+            )
+        raise ValueError(f"unknown fs write op: {op!r}")
 
     async def _handle_create_worktree(
         self,
@@ -3265,7 +3405,7 @@ class HostProcess:
         # crash no new runner may ever launch on this machine, so the host
         # (re)start is the reliable moment to reclaim them. Best-effort and
         # off-loop: a sweep failure must never block host registration.
-        from omnigent.native_bridge_common import reap_orphaned_native_bridge_dirs
+        from omnigent.native.native_bridge_common import reap_orphaned_native_bridge_dirs
 
         try:
             reaped_bridge_dirs = await asyncio.to_thread(reap_orphaned_native_bridge_dirs)
@@ -4038,6 +4178,10 @@ class HostProcess:
             # off the event loop and reply when it completes.
             fs_result = await asyncio.to_thread(self._handle_fs_request, frame)
             await ws.send(encode_host_frame(fs_result))
+        elif isinstance(frame, HostFsWriteFrame):
+            # gh/git writes can block; run off the event loop and reply back.
+            fs_write_result = await asyncio.to_thread(self._handle_fs_write, frame)
+            await ws.send(encode_host_frame(fs_write_result))
         elif isinstance(frame, HostModelOptionsFrame):
             # Every dispatched frame already runs on its own task (see
             # _start_frame_task), so a cold harness probe here cannot stall
@@ -4115,7 +4259,7 @@ def run_host_process(
         print(f"Auto-generated {path} ({identity.host_id}, name: {identity.name})")
     # User-facing: the display form (workspace /omnigent URL with ?o= when
     # known) — the API mount is an implementation detail.
-    from omnigent.server_url import display_server_url
+    from omnigent.util.server_url import display_server_url
 
     print(
         f"Connecting to {display_server_url(server_url)} as {identity.name!r} ({identity.host_id})"
@@ -4153,6 +4297,14 @@ def run_host_process(
     # broker blip at startup can't strand a connected owner for the whole session).
     configure_host_gh(server_url, identity.host_id)
     start_host_gh_refresh(server_url, identity.host_id)
+
+    # Executor-agnostic Databricks setup: when the owner has linked a workspace,
+    # materialize their per-user token as a ``~/.databrickscfg`` profile so the
+    # agent's model serving + MCP route through their Databricks AI Gateway.
+    # Best-effort; a no-op when Databricks isn't connected/configured.
+    from omnigent.host.databricks_credential import configure_host_databricks
+
+    configure_host_databricks(server_url, identity.host_id)
 
     if lifecycle_lock is None and daemon_target is not None:
         lifecycle_lock = DaemonLifecycleLock.for_target(daemon_target)
