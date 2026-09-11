@@ -9948,7 +9948,7 @@ async def _load_acp_model_options(
             from types import SimpleNamespace
 
             resolved_spec = SimpleNamespace(executor=sub.executor)
-    from omnigent.model_catalog import acp_curated_models
+    from omnigent.models.model_catalog import acp_curated_models
 
     curated = acp_curated_models(resolved_spec)
     if len(curated) < 2:

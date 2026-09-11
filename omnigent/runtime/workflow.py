@@ -1643,7 +1643,7 @@ def _build_acp_spawn_env(
     # Lazily import the config reader — the hot spawn-env path shouldn't pull in
     # the onboarding/config stack eagerly (mirrors the cursor builder).
     # Also lazy: model_catalog pulls the onboarding provider config eagerly.
-    from omnigent.model_catalog import _acp_launch_model, acp_curated_models
+    from omnigent.models.model_catalog import _acp_launch_model, acp_curated_models
     from omnigent.onboarding.acp_auth import (
         AcpAgentEntry,
         acp_agents,
