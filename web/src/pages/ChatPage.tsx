@@ -8,20 +8,16 @@ import {
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from "react";
 import {
-  ArrowUpIcon,
   BotIcon,
+  CheckIcon,
+  WandSparklesIcon,
   CornerUpLeftIcon,
   FileTextIcon,
   FolderIcon,
-  GitBranchIcon,
   ImageIcon,
   Loader2Icon,
-  PaperclipIcon,
-  SettingsIcon,
-  SquareIcon,
   SquareTerminalIcon,
   XIcon,
 } from "lucide-react";
@@ -31,8 +27,33 @@ import {
   KeyboardShortcutTooltipContent,
 } from "@/components/KeyboardShortcut";
 import { useNavigate, useParams } from "@/lib/routing";
-import { isImeCompositionKeyEvent } from "@/lib/ime";
 import { Button } from "@/components/ui/button";
+import {
+  ChatComposer,
+  type ComposerKeyIntent,
+  COMPOSER_COLUMN_WIDTH,
+  ComposerSendButton,
+} from "@/components/composer/ChatComposer";
+import { ComposerAddMenu } from "@/components/composer/ComposerAddMenu";
+import {
+  ComposerWorkspaceBar,
+  ComposerWorkspaceTrigger,
+  ComposerPermissionPicker,
+  ComposerHarnessTrigger,
+  ComposerConfigTooltipRows,
+} from "@/components/composer/ComposerControls";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuCheckboxItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useAppName } from "@/lib/branding";
 import { cn } from "@/lib/utils";
 import { QueuedMessagesStrip } from "@/pages/QueuedMessagesStrip";
@@ -67,6 +88,8 @@ import { modelConfigurationSourceRows } from "@/lib/modelConfigurationSource";
 import {
   composerAttachmentKey,
   consumePendingInitialPrompt,
+  isStaleTempConvId,
+  isTempConvId,
   type PendingInitialPrompt,
   type QueuedMessage,
   useChatStore,
@@ -79,7 +102,7 @@ import {
   WRAPPER_LABEL_KEY,
 } from "@/lib/nativeCodingAgents";
 import { readAlwaysSteer } from "@/lib/alwaysSteerPreferences";
-import { isComposerSendKey, readSubmitWithModEnter } from "@/lib/composerSendShortcutPreferences";
+import { readSubmitWithModEnter } from "@/lib/composerSendShortcutPreferences";
 import {
   buildMentionPreamble,
   detectMentionAt,
@@ -162,6 +185,7 @@ import {
 } from "@/components/SlashCommandMenu";
 import { FileMentionMenu } from "@/components/FileMentionMenu";
 import { FileDropOverlay } from "@/components/FileDropOverlay";
+import { FilePathAwareMessageResponse } from "@/components/blocks/ChatMarkdown";
 import {
   useWorkspaceAllFiles,
   useWorkspaceDirectory,
@@ -190,21 +214,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import {
-  ConfigRow,
-  EFFORT_SELECT_NONE,
-  EFFORT_UNAVAILABLE_PLACEHOLDER,
-  MODEL_SELECT_DEFAULT,
-  MODEL_SELECT_SMART,
-  RoutingModelSelect,
-  defaultModelLabel,
-  nativeModelLabel,
-} from "@/components/HarnessConfigControls";
+import { ConfigRow, nativeModelLabel } from "@/components/HarnessConfigControls";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
 import type { ServerInfo } from "@/lib/capabilities";
 import { MainTerminalView } from "@/shell/MainTerminalView";
 import { UNTITLED_CONVERSATION_LABEL } from "@/shell/sidebarNav";
-import { NewChatLandingScreen } from "@/shell/NewChatDialog";
+import { ComposerAgentIcon, NewChatLandingScreen } from "@/shell/NewChatDialog";
 import { ResumeWithDirectoryDialog } from "@/shell/ResumeWithDirectoryDialog";
 import { ReconnectSessionDialog } from "@/shell/ReconnectSessionDialog";
 import { useTerminalFirst } from "@/shell/TerminalFirstContext";
@@ -221,11 +236,16 @@ import {
 import { isCodexNativeSession } from "@/lib/codexPlanMode";
 import { getCliServerUrl } from "@/lib/host";
 import { useOmnigentAnalytics } from "@/lib/analyticsEmit";
-import { GoalControl, GoalStatusPill, useGoalState, type Goal } from "@/components/goal";
+import {
+  GoalDialog,
+  CommandGoalDialog,
+  GoalStatusPill,
+  useGoalState,
+  type Goal,
+} from "@/components/goal";
 import { useIsCoarsePointer } from "@/hooks/useIsCoarsePointer";
 import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
 import { ConnectionIndicator } from "./ChatIndicators";
-import { CHAT_COLUMN_WIDTH } from "./chatLayout";
 import { Transcript } from "@/components/chat/Transcript";
 
 /** Server-info as consumers see it: the probe's result, or "loading". */
@@ -363,6 +383,10 @@ function truncateTitle(raw: string, max = 60): string {
  */
 export function ChatPage() {
   const { conversationId: urlConvId } = useParams<{ conversationId: string }>();
+  // The id for every server-scoped fetch/hook — `undefined` while the URL holds
+  // a client-only temp id, so none of them hit `/v1/sessions/<temp>/*` before
+  // the session exists. `switchTo` still gets the raw `urlConvId`.
+  const sessionConvId = isTempConvId(urlConvId) ? undefined : urlConvId;
   const navigate = useNavigate();
   const appName = useAppName();
   // Optional first message handed off by the landing composer through the
@@ -413,7 +437,10 @@ export function ChatPage() {
   // Clear the "unseen messages" sidebar dot for the conversation the
   // user is currently viewing. Re-fires when conversations refresh
   // (every 4 s) so messages arriving while viewing are marked seen.
-  useMarkConversationSeen(urlConvId, conversations?.find((c) => c.id === urlConvId)?.updated_at);
+  useMarkConversationSeen(
+    sessionConvId,
+    conversations?.find((c) => c.id === sessionConvId)?.updated_at,
+  );
 
   // Sync the store's active conversation to the URL. Single source of
   // truth: URL is what's "current"; store mirrors it. The effect is
@@ -426,8 +453,16 @@ export function ChatPage() {
   // intentionally don't await it here. The store's `loadingConversation` flag
   // drives the loading UI below; `conversationLoadError` drives the error UI.
   useEffect(() => {
+    // A stale temp URL (reload / fresh tab onto `/c/temp:*` whose client-only
+    // conversation is gone) has no forward path: landing is URL-keyed, so the
+    // page would sit on a permanently read-only phantom chat. Redirect to
+    // landing instead of binding a nonexistent session.
+    if (isStaleTempConvId(urlConvId)) {
+      navigate("/", { replace: true });
+      return;
+    }
     void useChatStore.getState().switchTo(urlConvId ?? null);
-  }, [urlConvId]);
+  }, [urlConvId, navigate]);
 
   // Server-driven redirect: when the active conversation is superseded
   // (a `session.superseded` event — e.g. a Claude `/clear` rotated it
@@ -490,12 +525,13 @@ export function ChatPage() {
   // Read runner liveness from the app-level batch poller (see
   // RunnerHealthProvider). `undefined` = not yet polled — the indicator
   // stays hidden until the first poll for this session resolves.
-  const runnerOnline = useSessionRunnerOnline(urlConvId);
-  useRefreshSessionStateOnRunnerOnline(urlConvId, runnerOnline);
+  const runnerOnline = useSessionRunnerOnline(sessionConvId);
+  useRefreshSessionStateOnRunnerOnline(sessionConvId, runnerOnline);
   // OR'd into "Working…" so cross-client turns surface a shimmer.
   const sessionStatus = useChatStore((s) => s.sessionStatus);
   const backgroundTaskCount = useChatStore((s) => s.backgroundTaskCount);
   const loadingConversation = useChatStore((s) => s.loadingConversation);
+  const activeConversationId = useChatStore((s) => s.conversationId);
   const conversationLoadError = useChatStore((s) => s.conversationLoadError);
   const boundAgentId = useChatStore((s) => s.boundAgentId);
   const boundAgentName = useChatStore((s) => s.boundAgentName);
@@ -504,7 +540,7 @@ export function ChatPage() {
   // agent object for the active session. Drives the picker's
   // name/description; the same react-query cache also feeds the header
   // info icon (AgentInfoButton) its tools & policies.
-  const { data: boundAgentBySession } = useSessionAgent(urlConvId ?? null);
+  const { data: boundAgentBySession } = useSessionAgent(sessionConvId ?? null);
   const hasMoreHistory = useChatStore((s) => s.hasMoreHistory);
   const loadingMoreHistory = useChatStore((s) => s.loadingMoreHistory);
 
@@ -624,7 +660,7 @@ export function ChatPage() {
   // Must be declared BEFORE the early-return guards below — otherwise
   // the hook is skipped on renders that hit the loading/error branches,
   // tripping React's "rendered fewer hooks than expected".
-  const { session: activeSession, isLoading: sessionLoading } = useSession(urlConvId ?? null);
+  const { session: activeSession, isLoading: sessionLoading } = useSession(sessionConvId ?? null);
 
   // Orchestrator-only: polly's children inherit its agentName, so the gate
   // needs the session predicate (parent linkage), not a bare name check. An
@@ -651,7 +687,7 @@ export function ChatPage() {
   const subAgentLabel = subAgentComposerLabel(activeSession);
 
   // Hoisted above the early-return guards so the title-update effect can read them.
-  const activeConv = urlConvId ? conversations?.find((c) => c.id === urlConvId) : null;
+  const activeConv = sessionConvId ? conversations?.find((c) => c.id === sessionConvId) : null;
 
   // `isWorking` gates the parent's OWN turn (Stop/Interrupt) and must NOT
   // include child-session activity. `showsWorking` is display-only (tab title
@@ -727,7 +763,7 @@ export function ChatPage() {
   const viewerId = getCurrentAuthorId();
   const sessionOwner = activeConv?.owner ?? null;
   const viewerOwnsSession = sessionOwner !== null && sessionOwner === viewerId;
-  const { data: ownerGrants } = usePermissions(viewerOwnsSession ? (urlConvId ?? null) : null);
+  const { data: ownerGrants } = usePermissions(viewerOwnsSession ? (sessionConvId ?? null) : null);
   const isSessionShared = isSessionSharedWithOthers(sessionOwner, viewerId, ownerGrants);
 
   // The open session's derived liveness — the single signal the chat
@@ -775,7 +811,7 @@ export function ChatPage() {
   // Host-switch launch marker; see the store field. Keeps this surface's
   // liveness in step with AppShell's, which drives the startup spinner.
   const runnerLaunchedAt = useChatStore((s) => s.runnerLaunchedAt);
-  const liveness = useSessionLiveness(urlConvId ?? undefined, livenessRow, {
+  const liveness = useSessionLiveness(sessionConvId ?? undefined, livenessRow, {
     turnActive: status === "streaming",
     launchedAt: runnerLaunchedAt,
   });
@@ -848,6 +884,8 @@ export function ChatPage() {
   const onSend = useCallback(
     (text: string, files?: File[]) => {
       if (!agentId) return;
+      // No server session yet (still creating) — nothing to POST to.
+      if (isTempConvId(urlConvId)) return;
       // An unbound coding clone (fork-source label) needs a directory before
       // it can run: open the picker and stash this message to replay after
       // the bind. Pin the prompt to THIS session so it replays here, never
@@ -948,7 +986,11 @@ export function ChatPage() {
     urlConvId,
     conversationsData !== undefined,
   );
-  const readOnlyReason = readOnlyReasonForSessionLabels(activeSession, activeConv);
+  // Client-only conversation: no server session to POST a follow-up to yet, so
+  // the composer stays read-only until the create resolves and the id hydrates.
+  const readOnlyReason = isTempConvId(urlConvId)
+    ? "Starting the session…"
+    : readOnlyReasonForSessionLabels(activeSession, activeConv);
   // Once present, the live session snapshot is authoritative. Memoized so the
   // derived props it feeds (modelPickerKind, effortLevels, wrapperLabel) keep a
   // stable identity across the switch's re-render burst.
@@ -1003,7 +1045,7 @@ export function ChatPage() {
   // Loading + error gates for `/c/:id` hydration. Placed after all hooks so the
   // early return can't change the hook order between renders.
   if (urlConvId) {
-    if (loadingConversation) return <HydratingPlaceholder />;
+    if (loadingConversation || activeConversationId !== urlConvId) return <HydratingPlaceholder />;
     if (conversationLoadError) {
       return <ConversationLoadError conversationId={urlConvId} error={conversationLoadError} />;
     }
@@ -1468,7 +1510,13 @@ const MainAgentSurface = memo(function MainAgentSurfaceImpl({
 
   // Active reply quotes — each "Reply ↵" click appends; consumed by Composer.
   const [replyQuotes, setReplyQuotes] = useState<ReplyQuote[]>([]);
+  const [replyConversationId, setReplyConversationId] = useState(conversationId);
   const nextReplyQuoteId = useRef(0);
+
+  if (replyConversationId !== conversationId) {
+    setReplyConversationId(conversationId);
+    setReplyQuotes([]);
+  }
 
   // Ref forwarded to SelectionPopup to scope selection detection to the
   // conversation area, preventing selections in the composer from triggering
@@ -1748,6 +1796,7 @@ const MainAgentSurface = memo(function MainAgentSurfaceImpl({
             showClaudePermissionMode={showClaudePermissionMode}
             showCodexApprovalMode={showCodexApprovalMode}
             showGoalControl={showGoalControl}
+            runnerOnline={runnerOnline}
             showClaudeGoalControl={showClaudeGoalControl}
             showPollyCodexGoalControl={showPollyCodexGoalControl}
             isTerminalFirst={isTerminalFirst}
@@ -1873,6 +1922,8 @@ interface ComposerProps {
   showCodexApprovalMode?: boolean;
   /** Show the session Goal control. */
   showGoalControl?: boolean;
+  /** Whether the active session's runner tunnel is connected. */
+  runnerOnline?: boolean;
   /** Show Polly's Claude SDK command-backed Goal control. */
   showClaudeGoalControl?: boolean;
   /** Show Polly's Codex command-backed Goal control. */
@@ -1955,12 +2006,15 @@ export function buildSlashCommandMap(
   showEffort: boolean,
   showModel: boolean,
   showCompact = true,
+  showBtw = false,
 ): Record<string, string> {
   const m: Record<string, string> = {};
   for (const [name, description] of Object.entries(BUILTIN_SLASH_COMMANDS)) {
     if (name === "/effort" && !showEffort) continue;
     if (name === "/model" && !showModel) continue;
     if (name === "/compact" && !showCompact) continue;
+    // /btw is a Claude Code CLI built-in — only offer it on claude-native.
+    if (name === "/btw" && !showBtw) continue;
     m[name] = description;
   }
   for (const skill of skills) {
@@ -1988,10 +2042,13 @@ export function buildSlashCommandWithArgsSet(
   skills: readonly { name: string; description: string }[],
   showEffort: boolean,
   showModel: boolean,
+  showBtw = false,
 ): Set<string> {
   const s = new Set<string>();
   if (showEffort) s.add("/effort");
   if (showModel) s.add("/model");
+  // Selecting /btw fills "/btw " so the user types the side question after it.
+  if (showBtw) s.add("/btw");
   for (const skill of skills) s.add(`/${skill.name}`);
   return s;
 }
@@ -2081,9 +2138,8 @@ export function formatStatusModelLabel(
   return raw;
 }
 
-function formatStatusEffortLabel(effort: string | null, raw = false): string | null {
+function formatStatusEffortLabel(effort: string | null): string | null {
   if (!effort) return null;
-  if (raw) return effort;
   return effort.toLowerCase() === "xhigh" ? "xHigh" : formatEffortLabel(effort);
 }
 
@@ -2099,9 +2155,8 @@ export function formatModelEffortStatusLabel(
   effort: string | null,
   codexModelOptions: readonly NativeModelOption[] = [],
 ): string | null {
-  const codexOption = model ? findNativeModelOption(codexModelOptions, model.trim()) : null;
   const modelLabel = formatStatusModelLabel(model, codexModelOptions);
-  const effortLabel = formatStatusEffortLabel(effort, codexOption !== null);
+  const effortLabel = formatStatusEffortLabel(effort);
   const parts = [modelLabel, effortLabel].filter((p): p is string => p != null && p.length > 0);
   return parts.length > 0 ? parts.join(" ") : null;
 }
@@ -2156,59 +2211,33 @@ export function composerHarnessLabel(
 function ComposerStatusLine({
   goal,
   isSubAgentSession,
-  onHostReconnect,
 }: {
   goal: Goal | null;
   isSubAgentSession: boolean;
-  /**
-   * Opens the reconnect help dialog, handed to the host badge — which turns
-   * itself into a clickable reconnect affordance when its bound host is
-   * offline and reconnectable.
-   */
-  onHostReconnect?: () => void;
 }) {
   const conversationId = useChatStore((s) => s.conversationId);
+  // A client-only temp id has no server session — gate the server-scoped hooks
+  // below on it so they never fetch `/v1/sessions/temp:*` during the create
+  // window (mirrors ChatPage's top-level `sessionConvId`).
+  const sessionId = isTempConvId(conversationId) ? null : conversationId;
   const contextWindow = useChatStore((s) => s.contextWindow);
   const tokensUsed = useChatStore((s) => s.tokensUsed);
   const codexPlanMode = useChatStore((s) => s.codexPlanMode);
-  // Seeded from the session snapshot on bind (chatStore.sessionBindingPatch),
-  // alongside contextWindow — so the branch reads from the same store as
-  // the other status-line values rather than a separate fetch.
-  const gitBranch = useChatStore((s) => s.gitBranch);
-
-  // Host binding drives whether the HostBadge has anything to show — read it
-  // from the same source the badge does so the tray's render guard matches.
-  const { session } = useSession(conversationId);
-  const isHostBound = !!session?.hostId;
-
   // PR link → opens the workspace rail's GitHub tab. Shares the info query's
   // cache with the GitHub panel, so opening the tab is instant.
-  const github = useGithubInfo(conversationId ?? undefined);
+  const github = useGithubInfo(sessionId ?? undefined);
   const openGithubTab = useOpenGithubTab();
-  const prNumber = github.data?.pr?.number ?? null;
-  const showPr = !!conversationId && !isSubAgentSession && prNumber !== null && !!openGithubTab;
+  const prs = github.data?.prs;
+  const prNumber = prs?.[0]?.number ?? github.data?.pr?.number ?? null;
+  const prCount = prs?.length ?? (prNumber !== null ? 1 : 0);
+  const showPr = !!conversationId && !isSubAgentSession && prCount > 0 && !!openGithubTab;
 
-  const showBranch = !!conversationId && !!gitBranch;
-  // Host indicator (green/red dot + host name), left of the worktree branch.
-  // Hidden on sub-agent sessions — the header's child-session slot owns the
-  // back affordance there, mirroring where this badge used to live. HostBadge
-  // self-hides when the session isn't host-bound, so also gate on isHostBound
-  // (below) before treating the badge as a reason to render the tray.
-  const showHost = !!conversationId && !isSubAgentSession;
   const showPlanMode = !!conversationId && codexPlanMode;
   const showGoal = !!conversationId && goal != null;
   // contextWindow > 0: the SSE path validates it but the snapshot path doesn't, and 0/0 → "NaN%".
   const showRing =
     !!conversationId && contextWindow != null && contextWindow > 0 && tokensUsed != null;
-  // A host-bound session shows the badge, so the tray must render for it even
-  // with no branch/ring yet — otherwise the host + context footer vanishes for
-  // sessions with no worktree branch (e.g. codex) until the ring populates.
-  // This also keeps the offline host's reconnect affordance on screen, since
-  // the badge is where it lives and an unreachable session often has no
-  // branch/ring at all.
-  const showHostBadge = showHost && isHostBound;
-  if (!showBranch && !showPr && !showPlanMode && !showGoal && !showRing && !showHostBadge)
-    return null;
+  if (!showPr && !showPlanMode && !showGoal && !showRing) return null;
 
   return (
     <div
@@ -2216,32 +2245,24 @@ function ComposerStatusLine({
       className={cn(
         // -mt-4 tucks under the card; pt-5.5 keeps content below the overlap.
         "mx-auto -mt-4 flex w-full items-center gap-3 rounded-b-2xl px-4 pb-1.5 pt-5.5",
-        CHAT_COLUMN_WIDTH,
+        COMPOSER_COLUMN_WIDTH,
       )}
     >
-      {/* Left: host + branch. flex-1 keeps the right cluster pinned; truncate, no wrap. */}
       <div className="flex min-w-0 flex-1 items-center gap-3 text-sm text-muted-foreground">
-        {showHost && conversationId && (
-          <HostBadge sessionId={conversationId} onReconnect={onHostReconnect} />
-        )}
-        {showBranch && (
-          <span className="flex min-w-0 items-center gap-1.5">
-            <GitBranchIcon className="ui-icon" />
-            <span data-testid="composer-git-branch" className="min-w-0 truncate" title={gitBranch}>
-              {gitBranch}
-            </span>
-          </span>
-        )}
         {showPr && (
           <button
             type="button"
             data-testid="composer-pr-link"
             onClick={() => openGithubTab?.()}
-            title="View this PR in the GitHub tab"
+            title={
+              prCount > 1 ? "View these PRs in the GitHub tab" : "View this PR in the GitHub tab"
+            }
             className="flex shrink-0 items-center gap-1.5 rounded text-muted-foreground transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
           >
             <GithubMono size={14} aria-hidden />
-            <span className="tabular-nums underline underline-offset-2">#{prNumber}</span>
+            <span className="tabular-nums whitespace-nowrap underline underline-offset-2">
+              {prCount > 1 ? `${prCount} PRs` : `#${prNumber}`}
+            </span>
           </button>
         )}
       </div>
@@ -2321,7 +2342,7 @@ function SubagentComposerTray({ label }: { label: string }) {
       data-testid="composer-subagent-tray"
       className={cn(
         "mx-auto -mb-4 flex w-full items-center gap-1.5 rounded-t-2xl bg-brand-accent/10 px-4 pt-1.5 pb-5.5 text-sm text-brand-accent",
-        CHAT_COLUMN_WIDTH,
+        COMPOSER_COLUMN_WIDTH,
       )}
     >
       <BotIcon className="size-3.5 shrink-0" aria-hidden="true" />
@@ -2382,7 +2403,7 @@ export function BackgroundTaskPill() {
     // pointer-events-none lets the transcript underneath stay scrollable /
     // selectable — only the pill itself re-enables them.
     <div className="pointer-events-none absolute inset-x-0 bottom-full px-4 md:px-6">
-      <div className={cn("mx-auto flex w-full px-1 pb-1.5", CHAT_COLUMN_WIDTH)}>
+      <div className={cn("mx-auto flex w-full px-1 pb-1.5", COMPOSER_COLUMN_WIDTH)}>
         <div className="pointer-events-auto relative">
           {/* Reserves the collapsed footprint so the absolute, upward-growing
             card never shoves the composer. */}
@@ -2508,6 +2529,7 @@ function ComposerImpl({
   showClaudePermissionMode = false,
   showCodexApprovalMode = false,
   showGoalControl = false,
+  runnerOnline,
   showClaudeGoalControl = false,
   showPollyCodexGoalControl = false,
   isTerminalFirst = false,
@@ -2526,6 +2548,7 @@ function ComposerImpl({
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [commandError, setCommandError] = useState<string | null>(null);
   const [planModeBusy, setPlanModeBusy] = useState(false);
+  const [goalDialogOpen, setGoalDialogOpen] = useState(false);
   // Index of the highlighted item in the slash-command suggestions menu.
   // -1 means no item highlighted (menu closed or no matches). When the menu
   // opens with matches the reset logic below pre-selects the first item (0)
@@ -2547,6 +2570,28 @@ function ComposerImpl({
   // Text + attachments handed back by a send that failed before the server
   // took ownership. Drained below so the message can be retried.
   const failedSendDraft = useChatStore((s) => s.failedSendDraft);
+  // A settled /btw side-chat overlay is open, so Escape dismisses it here
+  // (before the "Esc cancels turn" branch) rather than interrupting a turn.
+  const btwSidechat = useChatStore((s) => s.btwSidechat);
+  const dismissBtwSidechat = useChatStore((s) => s.dismissBtwSidechat);
+  // While the /btw "Claude Quick Answer" overlay is open, lock the composer:
+  // the side chat is modal (like the terminal overlay), so the next input is
+  // Esc / ✕ to dismiss it, not a new message.
+  const composerLockedByBtw = btwSidechat !== null;
+  // The composer's own Escape handler can't fire while the textarea is
+  // disabled (disabled inputs emit no keydown), so close the overlay from a
+  // document-level Escape while it's open — matching native Claude Code.
+  useEffect(() => {
+    if (!composerLockedByBtw) return;
+    const onKeyDown = (e: globalThis.KeyboardEvent) => {
+      if (e.key === "Escape") {
+        e.preventDefault();
+        dismissBtwSidechat();
+      }
+    };
+    document.addEventListener("keydown", onKeyDown);
+    return () => document.removeEventListener("keydown", onKeyDown);
+  }, [composerLockedByBtw, dismissBtwSidechat]);
   // The conversation whose draft the composer's value/files currently hold.
   // Trails `conversationId` by one commit across a session switch; see the
   // draft-restore effect.
@@ -2563,7 +2608,6 @@ function ComposerImpl({
   // Declared after textareaRef so dictation can place the caret after the
   // text it inserts (and insert at the caret rather than the draft's end).
   const dictation = useDictationInsert(value, setValue, textareaRef);
-  const isComposingRef = useRef(false);
   // Highlight overlay mirroring the textarea; scroll-synced so the tinted
   // `/skill` token stays aligned once the draft grows past the visible rows.
   const backdropRef = useRef<HTMLDivElement>(null);
@@ -2578,7 +2622,10 @@ function ComposerImpl({
   // server-side (the runner blocks on the verdict Future), so a message
   // sent now would sit queued and unread until the card is answered —
   // and for native wrappers the injected text could land in the vendor
-  // TUI's permission prompt. Lock the composer until the verdict is in.
+  // TUI's permission prompt. Lock the SEND path until the verdict is in
+  // (submit() guard + disabled Send button), but keep the textarea itself
+  // editable: disabling it ejects browser focus mid-word when a prompt
+  // lands while the user is typing, silently dropping their keystrokes.
   // Mirrored sub-agent prompts (targetSessionId set to a child session)
   // don't gate this session's inbox, so they don't lock it.
   const hasPendingElicitation = useChatStore((s) =>
@@ -2644,7 +2691,44 @@ function ComposerImpl({
     unreachable,
     maybeFlushQueuedHead,
   ]);
-  const { goal, setGoal: setGoalState } = useGoalState(conversationId, showGoalControl);
+  // No server session behind a temp id — gate goal/workspace fetches on it so
+  // the create window issues no `/v1/sessions/temp:*` requests.
+  const composerSessionId = isTempConvId(conversationId) ? null : conversationId;
+  const { session: composerSession } = useSession(composerSessionId);
+  const composerBranch = useChatStore((s) => s.gitBranch);
+  const claudePermissionMode = useChatStore((s) => s.claudePermissionMode);
+  const codexApprovalMode = useChatStore((s) => s.codexApprovalMode);
+  const [configBusy, setConfigBusy] = useState(false);
+  const configBusyRef = useRef(false);
+  const composerWorkspace = composerSession?.workspace;
+  const permissionOptions = showClaudePermissionMode
+    ? CLAUDE_NATIVE_SWITCHABLE_PERMISSION_MODES
+    : CODEX_NATIVE_RUNTIME_APPROVAL_PRESETS;
+  const permissionLabel = showClaudePermissionMode
+    ? claudePermissionModeLabel(claudePermissionMode)
+    : codexApprovalModeLabel(codexApprovalMode);
+  const changePermission = async (mode: string) => {
+    if (isReadOnly || unreachable || configBusyRef.current) return;
+    configBusyRef.current = true;
+    setConfigBusy(true);
+    const sourceSessionId = useChatStore.getState().conversationId;
+    try {
+      const store = useChatStore.getState();
+      if (showClaudePermissionMode) await store.setClaudePermissionMode(mode);
+      else if (showCodexApprovalMode) await store.setCodexApprovalMode(mode);
+    } catch (error) {
+      if (useChatStore.getState().conversationId === sourceSessionId)
+        setCommandError(error instanceof Error ? error.message : "Unable to change permissions");
+    } finally {
+      configBusyRef.current = false;
+      setConfigBusy(false);
+    }
+  };
+  useEffect(() => setGoalDialogOpen(false), [conversationId]);
+  const { goal, setGoal: setGoalState } = useGoalState(
+    composerSessionId,
+    showGoalControl && runnerOnline === true,
+  );
   // "@"-file-mention is scoped to the native coding-agent harnesses: their
   // vendor CLIs run in the workspace and read an on-disk file from an
   // attachment marker the executor already emits. In-process SDK sessions
@@ -2657,7 +2741,7 @@ function ComposerImpl({
   // so the composer's "@" entry point can't split-brain from the file viewer's
   // "Attach to agent" gate (``canAttachToAgent``), which already uses it.
   const mentionEnabled = nativeCodingAgentForHarness(sessionHarness) !== undefined;
-  const workspaceFilesQuery = useWorkspaceAllFiles(conversationId ?? undefined, {
+  const workspaceFilesQuery = useWorkspaceAllFiles(composerSessionId ?? undefined, {
     enabled: mentionEnabled,
   });
   const valueRef = useRef(value);
@@ -2732,16 +2816,20 @@ function ComposerImpl({
   // codex-native) which inject the slash command into the terminal.
   // SDK harnesses (openai-agents-sdk, claude-sdk) don't support it yet.
   const showCompact = isNativeWrapper;
+  // /btw is a Claude Code CLI built-in (side chat), so offer it only on
+  // claude-native sessions. Selected/typed, it sends as plaintext to the
+  // vendor TUI (see submit) — the forwarder relays its answer to the overlay.
+  const showBtw = sessionHarness === "claude-native";
   const slashCommands = useMemo(
-    () => buildSlashCommandMap(skills, showEffort, showModel, showCompact),
-    [skills, showEffort, showModel, showCompact],
+    () => buildSlashCommandMap(skills, showEffort, showModel, showCompact, showBtw),
+    [skills, showEffort, showModel, showCompact, showBtw],
   );
   // Skills always need an optional argument fill-in so the user can
   // type extra context after the name; built-in commands keep their
   // existing fill/execute split.
   const slashCommandsWithArgs = useMemo(
-    () => buildSlashCommandWithArgsSet(skills, showEffort, showModel),
-    [skills, showEffort, showModel],
+    () => buildSlashCommandWithArgsSet(skills, showEffort, showModel, showBtw),
+    [skills, showEffort, showModel, showBtw],
   );
 
   // Suggestions menu is open while the user is still typing the command
@@ -3115,7 +3203,23 @@ function ComposerImpl({
     dirtyRef.current = true;
   };
 
-  const submit = () => {
+  const clearComposerAfterSend = (resetNativeInputSession: boolean) => {
+    const textarea = textareaRef.current;
+    if (resetNativeInputSession && textarea !== null) {
+      // End the emptied text-input session so native keyboards drop predictions.
+      textarea.focus({ preventScroll: true });
+      textarea.value = "";
+      textarea.setSelectionRange(0, 0);
+      textarea.blur();
+    }
+    setValue("");
+  };
+
+  const submit = ({
+    resetNativeInputSession = false,
+  }: { resetNativeInputSession?: boolean } = {}) => {
+    // The /btw overlay locks the composer — never send while it's open.
+    if (composerLockedByBtw) return;
     const trimmed = value.trim();
     // Allow send if there's text, attached files, OR "@"-tagged paths.
     if (
@@ -3163,7 +3267,11 @@ function ComposerImpl({
         setPickerOpenNonce((n) => n + 1);
         return;
       }
-      if (cmd in BUILTIN_SLASH_COMMANDS && cmd in slashCommands) {
+      // /btw is a built-in for menu/autocomplete purposes only — it is NOT
+      // executed locally. It must reach the vendor TUI as plaintext so Claude
+      // Code opens its side chat and the forwarder relays the answer to the
+      // web overlay; fall through to the plaintext send path below.
+      if (cmd !== "/btw" && cmd in BUILTIN_SLASH_COMMANDS && cmd in slashCommands) {
         executeSlashCommand(cmd, arg);
         return;
       }
@@ -3215,7 +3323,7 @@ function ComposerImpl({
     if (trimmed) appendEntry(trimmed);
     onSend(messageText, files.length > 0 ? files : undefined);
     dirtyRef.current = true;
-    setValue("");
+    clearComposerAfterSend(resetNativeInputSession);
     setFiles([]);
     setAttachmentError(null);
     setMentionedItems([]);
@@ -3229,7 +3337,7 @@ function ComposerImpl({
       onStop();
       return;
     }
-    submit();
+    submit({ resetNativeInputSession: true });
   };
 
   const applyRecall = (ta: HTMLTextAreaElement, recalled: string) => {
@@ -3244,33 +3352,10 @@ function ComposerImpl({
     });
   };
 
-  const handleKeyDown = (e: KeyboardEvent<HTMLTextAreaElement>) => {
-    if (isImeCompositionKeyEvent(e, isComposingRef.current)) {
-      return;
-    }
-
-    // Touch-primary newline behavior outranks autocomplete and desktop submit
-    // preferences. Leave the event untouched so the textarea inserts it.
-    if (preventsKeyboardSubmit && e.key === "Enter") {
-      return;
-    }
-
-    const shouldSubmitFromKeyboard = isComposerSendKey(
-      {
-        key: e.key,
-        shiftKey: e.shiftKey,
-        metaKey: e.metaKey,
-        ctrlKey: e.ctrlKey,
-        altKey: e.altKey,
-        isComposing: e.nativeEvent.isComposing,
-      },
-      submitWithModEnter,
-      preventsKeyboardSubmit,
-    );
-    // Plain Enter still completes an open suggestion. In Mod+Enter mode, the
-    // explicit send chord bypasses suggestions so the modifier has one meaning.
-    const shouldPreferSendOverCompletion = submitWithModEnter && shouldSubmitFromKeyboard;
-
+  const handleKeyDown = (
+    e: KeyboardEvent<HTMLTextAreaElement>,
+    { shouldSubmitFromKeyboard, shouldPreferSendOverCompletion }: ComposerKeyIntent,
+  ) => {
     // "@"-mention menu navigation (shared useMentionBrowser) — mutually
     // exclusive with the slash menu below (a mention token can't also read as a
     // "/"-command). Takes priority over history recall and submission.
@@ -3319,10 +3404,16 @@ function ComposerImpl({
       submit();
       return;
     }
+    // Esc dismisses the /btw sidechat overlay if open
+    if (e.key === "Escape" && btwSidechat) {
+      e.preventDefault();
+      dismissBtwSidechat();
+      return;
+    }
     // Esc cancels an in-flight turn. When idle it's a no-op — clearing on
     // Esc destroys typed prompts with no undo (common muscle memory after
     // dismissing autocomplete suggestions).
-    if (e.key === "Escape" && isStreaming) {
+    if (e.key === "Escape" && isWorking && !isReadOnly) {
       e.preventDefault();
       onStop();
       return;
@@ -3421,7 +3512,7 @@ function ComposerImpl({
         }}
         onSteer={(queueId) => steerMessage(queueId)}
         onReorder={reorderQueuedMessage}
-        widthClassName={CHAT_COLUMN_WIDTH}
+        widthClassName={COMPOSER_COLUMN_WIDTH}
       />
       {/* Sub-agent context tray — peeks above the card; reserves its own
           layout slot so the card sits below it (see SubagentComposerTray).
@@ -3430,75 +3521,216 @@ function ComposerImpl({
       {subAgentLabel ? <SubagentComposerTray label={subAgentLabel} /> : null}
       {/* Drop cue, spanning the chat column this composer belongs to. */}
       {isDragActive && dropTarget ? <FileDropOverlay container={dropTarget} /> : null}
-      {/* Single rounded container — textarea + action row. No focus-within
-          ring; drag-over still lifts an inset ring. dark:bg-card-solid so
-          upper trays (queued / sub-agent) don't ghost through glass --card. */}
-      <div
+      <div className={cn("mx-auto", COMPOSER_COLUMN_WIDTH)}>
+        <ComposerWorkspaceBar data-testid="composer-workspace-controls">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <ComposerWorkspaceTrigger
+                kind="directory"
+                label={composerWorkspace?.split(/[\\/]/).filter(Boolean).pop() ?? "No workspace"}
+                title={composerWorkspace ?? "No workspace bound"}
+              />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" side="top" className="max-w-[min(90vw,24rem)]">
+              <DropdownMenuLabel>Session workspace</DropdownMenuLabel>
+              <p className="break-all px-2 py-1 text-xs text-muted-foreground">
+                {composerWorkspace ?? "This session has no workspace binding."}
+              </p>
+              <p className="px-2 py-1 text-xs text-muted-foreground">
+                Choose a different workspace when starting a new session.
+              </p>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <ComposerWorkspaceTrigger
+                kind="worktree"
+                label={composerBranch || "No branch reported"}
+                data-testid="composer-git-branch"
+              />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" side="top" className="max-w-[min(90vw,24rem)]">
+              <DropdownMenuLabel>Session worktree</DropdownMenuLabel>
+              <p className="break-all px-2 py-1 text-xs text-muted-foreground">
+                {composerBranch || "The runner has not reported a branch for this session."}
+              </p>
+              <p className="px-2 py-1 text-xs text-muted-foreground">
+                The current session keeps its workspace and worktree.
+              </p>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </ComposerWorkspaceBar>
+      </div>
+      <ChatComposer
+        keyboard={{ submitWithModEnter, preventsKeyboardSubmit }}
         ref={bindComposerCard}
-        // Opaque card edge for transcript clearance; status shelf below is translucent.
-        data-composer-card
         className={cn(
-          "relative mx-auto flex w-full flex-col rounded-2xl border border-border bg-card dark:bg-card-solid shadow-composer transition-[border-color,box-shadow] has-[textarea:focus]:shadow-composer-focus",
-          CHAT_COLUMN_WIDTH,
+          "mx-auto",
+          COMPOSER_COLUMN_WIDTH,
           isDragActive && "ring-2 ring-ring ring-inset",
         )}
-      >
-        {/* Slash-command suggestions — floats above the composer box */}
-        {menuOpen && (
-          <SlashCommandMenu
-            query={menuQuery}
-            activeIndex={menuIndex}
-            onSelect={applyMenuSelection}
-            commands={slashCommands}
-          />
-        )}
-        {/* "@"-file-mention browser — native coding-agent sessions only.
+        input={{
+          ref: textareaRef,
+          value,
+          onChange: (e) => {
+            setValue(e.target.value);
+            dirtyRef.current = true;
+            if (commandError !== null) setCommandError(null);
+            // A rejected attachment is never added, so there's no chip to
+            // remove and nothing else would ever clear this. Left sticky it
+            // reads as a blocker on a composer the user can actually submit.
+            if (attachmentError !== null) setAttachmentError(null);
+            // Recompute the active "@"-mention from the caret on every
+            // keystroke (native coding-agent sessions — ``mentionEnabled``).
+            setMention(
+              mentionEnabled
+                ? detectMentionAt(e.target.value, e.target.selectionStart ?? e.target.value.length)
+                : null,
+            );
+            // Treat user-driven changes as exiting recall mode. Recall-
+            // driven setValue toggles `recallingRef` first so we skip the
+            // reset for that one tick.
+            if (recallingRef.current) recallingRef.current = false;
+            else resetCursor();
+          },
+          onFocus: () => {
+            // From here the textarea's caret is one the user placed, so
+            // dictation inserts there instead of at the end of the draft.
+            dictation.noteFocus();
+          },
+          onKeyDown: handleKeyDown,
+          onBlur: () => {
+            // Dismiss the "@"-mention menu when focus leaves the textarea
+            // (clicking a chip's ✕, the Send button, or another field).
+            // Menu rows ``preventDefault`` on mousedown so selecting an entry
+            // keeps focus and does NOT blur — this only fires for genuine
+            // focus-out, where the lingering menu would otherwise float.
+            dismissMention();
+          },
+          onPaste: handlePaste,
+          onScroll: (e) => {
+            // Keep the overlay's scroll position locked to the textarea's.
+            if (backdropRef.current) backdropRef.current.scrollTop = e.currentTarget.scrollTop;
+          },
+          "aria-label": "Message the agent",
+          placeholder: composerLockedByBtw
+            ? "Side chat open — press Esc to close"
+            : readOnlyReason !== null
+              ? readOnlyReason
+              : isReadOnly
+                ? "You have read-only access to this session"
+                : unreachable
+                  ? "Session offline — reconnect below to continue"
+                  : hasPendingElicitation
+                    ? "Respond to the pending request above to continue"
+                    : disabled
+                      ? "Waiting for agents…"
+                      : isStreaming
+                        ? "Send a follow-up (queued) — Esc to stop"
+                        : "Send a message…",
+          rows: 1,
+          disabled: disabled || isReadOnly || unreachable || composerLockedByBtw,
+          "data-slash-command": composerIsCommand ? "true" : undefined,
+          "data-has-draft": hasDraft ? "true" : undefined,
+          className: cn(
+            // Hand glyph painting to the overlay while a command is drafted;
+            // the caret stays visible via caret-foreground.
+            composerIsCommand && "text-transparent caret-foreground",
+          ),
+        }}
+        slots={{
+          beforeInput: (
+            <>
+              {/* Slash-command suggestions — floats above the composer box */}
+              {menuOpen && (
+                <SlashCommandMenu
+                  query={menuQuery}
+                  activeIndex={menuIndex}
+                  onSelect={applyMenuSelection}
+                  commands={slashCommands}
+                />
+              )}
+              {/* "@"-file-mention browser — native coding-agent sessions only.
             Also shown (as a loading row) while the listing is still fetching,
             so "@" isn't silently dead during runner cold-boot or a drill-in. */}
-        {(mentionOpen || mentionListingPending) && (
-          <FileMentionMenu
-            currentDir={mentionDir}
-            activeIndex={mentionIndex}
-            entries={mentionEntries}
-            loading={mentionListingPending}
-            onOpenDir={openMentionDir}
-            onAttach={attachMention}
-          />
-        )}
-        {/* Quote chips — one per quoted selection, shown above the textarea */}
-        {replyQuotes.length > 0 && (
-          <div className="flex flex-col gap-1.5 px-4 pt-3 pb-0">
-            {replyQuotes.map((quote, i) => (
-              <div key={quote.id} className="flex items-start gap-2">
-                <div className="min-w-0 flex-1 bg-muted/40 rounded-md border-l-2 border-l-primary/60 px-2 py-1.5 text-sm text-muted-foreground">
-                  <span className="block truncate">
-                    {quote.text.length > 120 ? `${quote.text.slice(0, 120)}…` : quote.text}
-                  </span>
+              {(mentionOpen || mentionListingPending) && (
+                <FileMentionMenu
+                  currentDir={mentionDir}
+                  activeIndex={mentionIndex}
+                  entries={mentionEntries}
+                  loading={mentionListingPending}
+                  onOpenDir={openMentionDir}
+                  onAttach={attachMention}
+                />
+              )}
+              {/* /btw side-chat overlay — transient question+answer panel,
+            dismissed with Esc / ✕. Never persisted to the transcript. */}
+              {btwSidechat && (
+                <div className="border-b border-border bg-card/50 p-4 backdrop-blur-sm">
+                  <div className="mb-3 flex items-start justify-between">
+                    <h3 className="text-sm font-medium">Claude Quick Answer</h3>
+                    <button
+                      type="button"
+                      onClick={() => dismissBtwSidechat()}
+                      className="rounded-full p-0.5 text-muted-foreground hover:text-foreground"
+                      aria-label="Close side chat"
+                    >
+                      <XIcon className="size-4" />
+                    </button>
+                  </div>
+                  <div className="mb-2">
+                    <p className="mb-1 text-xs text-muted-foreground">Question:</p>
+                    <p className="text-sm">{btwSidechat.question}</p>
+                  </div>
+                  <div className="mb-2">
+                    <p className="mb-1 text-xs text-muted-foreground">Answer:</p>
+                    <div className="prose prose-sm dark:prose-invert max-w-none text-sm">
+                      <FilePathAwareMessageResponse>
+                        {btwSidechat.answer}
+                      </FilePathAwareMessageResponse>
+                    </div>
+                  </div>
+                  {btwSidechat.truncated && (
+                    <p className="text-xs italic text-muted-foreground">Answer was truncated</p>
+                  )}
+                  <p className="mt-2 text-xs text-muted-foreground">Press Esc to close</p>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => onRemoveQuote(i)}
-                  className="mt-0.5 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
-                  aria-label="Remove quote"
-                >
-                  <XIcon className="size-3.5" />
-                </button>
-              </div>
-            ))}
-          </div>
-        )}
-        {/* Highlight overlay: a textarea can only paint its text one color, so
+              )}
+              {/* Quote chips — one per quoted selection, shown above the textarea */}
+              {replyQuotes.length > 0 && (
+                <div className="flex flex-col gap-1.5 px-4 pt-3 pb-0">
+                  {replyQuotes.map((quote, i) => (
+                    <div key={quote.id} className="flex items-start gap-2">
+                      <div className="min-w-0 flex-1 bg-muted/40 rounded-md border-l-2 border-l-primary/60 px-2 py-1.5 text-sm text-muted-foreground">
+                        <span className="block truncate">
+                          {quote.text.length > 120 ? `${quote.text.slice(0, 120)}…` : quote.text}
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onRemoveQuote(i)}
+                        className="mt-0.5 shrink-0 rounded-full text-muted-foreground hover:text-foreground"
+                        aria-label="Remove quote"
+                      >
+                        <XIcon className="size-3.5" />
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              )}
+              {/* Highlight overlay: a textarea can only paint its text one color, so
             to tint just the `/skill` token we hide the textarea's own glyphs
             (text-transparent, caret kept visible) and render an aligned mirror
             behind it. Same box/typography so wrapping matches the textarea
             exactly. Only mounted while the draft is a command. */}
-        <div className="relative overflow-hidden">
-          {composerIsCommand && (
+            </>
+          ),
+          inputBackdrop: composerIsCommand && (
             <div
               ref={backdropRef}
               aria-hidden
               data-testid="composer-highlight-overlay"
-              className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-4 pt-3 pb-2 text-ui text-foreground"
+              className="pointer-events-none absolute inset-0 overflow-hidden whitespace-pre-wrap break-words px-3 pt-3 pb-1 text-ui text-foreground"
             >
               {(() => {
                 const split = splitSlashCommand(value);
@@ -3512,363 +3744,228 @@ function ComposerImpl({
                 );
               })()}
             </div>
-          )}
-          <textarea
-            ref={textareaRef}
-            value={value}
-            onChange={(e) => {
-              setValue(e.target.value);
-              dirtyRef.current = true;
-              if (commandError !== null) setCommandError(null);
-              // A rejected attachment is never added, so there's no chip to
-              // remove and nothing else would ever clear this. Left sticky it
-              // reads as a blocker on a composer the user can actually submit.
-              if (attachmentError !== null) setAttachmentError(null);
-              // Recompute the active "@"-mention from the caret on every
-              // keystroke (native coding-agent sessions — ``mentionEnabled``).
-              setMention(
-                mentionEnabled
-                  ? detectMentionAt(
-                      e.target.value,
-                      e.target.selectionStart ?? e.target.value.length,
-                    )
-                  : null,
-              );
-              // Treat user-driven changes as exiting recall mode. Recall-
-              // driven setValue toggles `recallingRef` first so we skip the
-              // reset for that one tick.
-              if (recallingRef.current) recallingRef.current = false;
-              else resetCursor();
-            }}
-            onFocus={() => {
-              // From here the textarea's caret is one the user placed, so
-              // dictation inserts there instead of at the end of the draft.
-              dictation.noteFocus();
-            }}
-            onCompositionStart={() => {
-              isComposingRef.current = true;
-            }}
-            onCompositionEnd={() => {
-              isComposingRef.current = false;
-            }}
-            onKeyDown={handleKeyDown}
-            onBlur={() => {
-              // Dismiss the "@"-mention menu when focus leaves the textarea
-              // (clicking a chip's ✕, the Send button, or another field).
-              // Menu rows ``preventDefault`` on mousedown so selecting an entry
-              // keeps focus and does NOT blur — this only fires for genuine
-              // focus-out, where the lingering menu would otherwise float.
-              dismissMention();
-            }}
-            onPaste={handlePaste}
-            onScroll={(e) => {
-              // Keep the overlay's scroll position locked to the textarea's.
-              if (backdropRef.current) backdropRef.current.scrollTop = e.currentTarget.scrollTop;
-            }}
-            aria-label="Message the agent"
-            placeholder={
-              readOnlyReason !== null
-                ? readOnlyReason
-                : isReadOnly
-                  ? "You have read-only access to this session"
-                  : unreachable
-                    ? "Session offline — reconnect below to continue"
-                    : hasPendingElicitation
-                      ? "Respond to the pending request above to continue"
-                      : disabled
-                        ? "Waiting for agents…"
-                        : isStreaming
-                          ? "Send a follow-up (queued) — Esc to stop"
-                          : "Send a message…"
-            }
-            rows={1}
-            disabled={disabled || isReadOnly || unreachable || hasPendingElicitation}
-            data-slash-command={composerIsCommand ? "true" : undefined}
-            className={cn(
-              "relative w-full resize-none overflow-y-auto bg-transparent px-4 pt-3 pb-2 text-ui outline-none [scrollbar-width:none] placeholder:text-muted-foreground disabled:opacity-60 [&::-webkit-scrollbar]:hidden",
-              // Hand glyph painting to the overlay while a command is drafted;
-              // the caret stays visible via caret-foreground.
-              composerIsCommand && "text-transparent caret-foreground",
-            )}
-          />
-        </div>
-        {/* File chips — shown below textarea when files are attached */}
-        {files.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 px-4 pb-2">
-            {files.map((file, i) => (
-              <span
-                key={attachmentKey(file)}
-                className="flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-sm text-muted-foreground"
-              >
-                {file.type.startsWith("image/") ? (
-                  <ImageIcon className="size-3 shrink-0" />
-                ) : (
-                  <FileTextIcon className="size-3 shrink-0" />
-                )}
-                <span className="max-w-[140px] truncate">{file.name || "image.png"}</span>
-                <button
-                  type="button"
-                  onClick={() => removeFile(i)}
-                  className="ml-0.5 rounded-full hover:text-foreground"
-                  aria-label={`Remove ${file.name || "image.png"}`}
-                >
-                  <XIcon className="size-3" />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-        {/* Rejected-attachment feedback: unsupported type or too large */}
-        {attachmentError !== null && (
-          <div className="px-4 pb-2 text-sm text-destructive whitespace-pre-wrap">
-            {attachmentError}
-          </div>
-        )}
-        {/* "@"-mention chips — one per tagged workspace file/folder. Each is
+          ),
+          attachments: (
+            <>
+              {/* File chips — shown below textarea when files are attached */}
+              {files.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 px-4 pb-2">
+                  {files.map((file, i) => (
+                    <span
+                      key={attachmentKey(file)}
+                      className="flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-sm text-muted-foreground"
+                    >
+                      {file.type.startsWith("image/") ? (
+                        <ImageIcon className="size-3 shrink-0" />
+                      ) : (
+                        <FileTextIcon className="size-3 shrink-0" />
+                      )}
+                      <span className="max-w-[140px] truncate">{file.name || "image.png"}</span>
+                      <button
+                        type="button"
+                        onClick={() => removeFile(i)}
+                        className="ml-0.5 rounded-full hover:text-foreground"
+                        aria-label={`Remove ${file.name || "image.png"}`}
+                      >
+                        <XIcon className="size-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {/* Rejected-attachment feedback: unsupported type or too large */}
+              {attachmentError !== null && (
+                <div className="px-4 pb-2 text-sm text-destructive whitespace-pre-wrap">
+                  {attachmentError}
+                </div>
+              )}
+              {/* "@"-mention chips — one per tagged workspace file/folder. Each is
             delivered as a "[Attached: <path>]" marker at send time. */}
-        {mentionedItems.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 px-4 pb-2">
-            {mentionedItems.map((item, i) => (
-              <span
-                key={mentionItemPath(item)}
-                className="flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-sm text-muted-foreground"
-              >
-                {item.isDir ? (
-                  <FolderIcon className="size-3 shrink-0" />
-                ) : (
-                  <FileTextIcon className="size-3 shrink-0" />
-                )}
-                <span className="max-w-[200px] truncate" title={mentionItemPath(item)}>
-                  @{item.path}
-                  {item.isDir ? "/" : ""}
-                </span>
-                {item.lineRange && (
-                  <span className="shrink-0">
-                    :{item.lineRange.start}-{item.lineRange.end}
-                  </span>
-                )}
-                <button
-                  type="button"
-                  onClick={() => removeMentionedItem(i)}
-                  className="ml-0.5 rounded-full hover:text-foreground"
-                  aria-label={`Remove ${item.path}`}
-                >
-                  <XIcon className="size-3" />
-                </button>
-              </span>
-            ))}
-          </div>
-        )}
-        {/* Inline slash-command feedback: errors and /help output */}
-        {commandError !== null && (
-          <div className="px-4 pb-2 text-sm text-muted-foreground whitespace-pre-wrap">
-            {commandError}
-          </div>
-        )}
-        <div className="flex items-center justify-between gap-2 px-2 pb-2">
-          {/* Attach + mic — left side of the action row */}
-          <div className="flex shrink-0 items-center gap-0.5">
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              className="size-9 md:size-8"
-              disabled={disabled || isReadOnly || hasPendingElicitation}
-              onClick={() => fileInputRef.current?.click()}
-              title="Attach files"
-              componentId="chat.composer.attach_files"
-            >
-              <PaperclipIcon className="size-4" data-icon-size="16" />
-              <span className="sr-only">Attach files</span>
-            </Button>
-            <ComposerMicButton
-              enableHotkey
-              disabled={disabled || isReadOnly || hasPendingElicitation}
-              onVoiceStart={() => {
-                voiceSnapshotRef.current = value;
-              }}
-              onVoiceDiscard={() => {
-                setValue(voiceSnapshotRef.current);
-              }}
-              onTranscript={(text) => {
-                dictation.appendFinal(text);
-                dirtyRef.current = true;
-                // Dictation is a user-driven edit — exit prompt-recall mode
-                // so ArrowUp/ArrowDown don't clobber the dictated text.
-                resetCursor();
-                if (commandError !== null) setCommandError(null);
-              }}
-              onInterim={(text) => {
-                dictation.replaceInterim(text);
-                dirtyRef.current = true;
-                resetCursor();
-              }}
-            />
-          </div>
-          {/* Right side: read-only model/effort label + config gear + Send.
-              Smart Routing lives inside the gear modal — folded into the Model
-              dropdown for Claude, a standalone Switch for other routable
-              agents. */}
-          <div className="flex min-w-0 items-center gap-0.5">
-            {showCodexPlanMode && (
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={codexPlanMode ? "secondary" : "ghost"}
-                    className={cn(
-                      "h-9 gap-1.5 px-2 text-sm md:h-8",
-                      codexPlanMode && "border border-ring/30 text-foreground",
-                    )}
-                    disabled={isReadOnly || planModeBusy}
-                    aria-pressed={codexPlanMode}
-                    aria-label={codexPlanMode ? "Exit Plan mode" : "Enter Plan mode"}
-                    data-testid="codex-plan-mode-toggle"
-                    data-active={codexPlanMode ? "true" : undefined}
-                    onClick={() => void toggleCodexPlanMode()}
-                    componentId="chat.composer.toggle_plan_mode"
-                  >
-                    {planModeBusy ? (
-                      <Loader2Icon className="size-3.5 animate-spin" />
-                    ) : (
-                      <FileTextIcon className="size-3.5" />
-                    )}
-                    <span>Plan</span>
-                  </Button>
-                </TooltipTrigger>
-                <TooltipContent>
-                  {codexPlanMode ? "Exit Plan mode" : "Enter Plan mode"}
-                </TooltipContent>
-              </Tooltip>
-            )}
-            {showGoalControl && (
-              <GoalControl
-                conversationId={conversationId}
-                readOnly={isReadOnly}
-                goal={goal}
-                onGoalChange={setGoalState}
-                backendLabel="Codex"
+              {mentionedItems.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 px-4 pb-2">
+                  {mentionedItems.map((item, i) => (
+                    <span
+                      key={mentionItemPath(item)}
+                      className="flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-sm text-muted-foreground"
+                    >
+                      {item.isDir ? (
+                        <FolderIcon className="size-3 shrink-0" />
+                      ) : (
+                        <FileTextIcon className="size-3 shrink-0" />
+                      )}
+                      <span className="max-w-[200px] truncate" title={mentionItemPath(item)}>
+                        @{item.path}
+                        {item.isDir ? "/" : ""}
+                      </span>
+                      {item.lineRange && (
+                        <span className="shrink-0">
+                          :{item.lineRange.start}-{item.lineRange.end}
+                        </span>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => removeMentionedItem(i)}
+                        className="ml-0.5 rounded-full hover:text-foreground"
+                        aria-label={`Remove ${item.path}`}
+                      >
+                        <XIcon className="size-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              {/* Inline slash-command feedback: errors and /help output */}
+              {commandError !== null && (
+                <div className="px-4 pb-2 text-sm text-muted-foreground whitespace-pre-wrap">
+                  {commandError}
+                </div>
+              )}
+            </>
+          ),
+        }}
+        actions={{
+          leading: (
+            <>
+              <ComposerAddMenu
+                disabled={false}
+                attachDisabled={
+                  disabled || isReadOnly || hasPendingElicitation || composerLockedByBtw
+                }
+                onAttach={() => fileInputRef.current?.click()}
+                showGoal={showGoalControl || showClaudeGoalControl || showPollyCodexGoalControl}
+                onGoal={() => setGoalDialogOpen(true)}
+                goalDisabled={!composerSessionId || (!showGoalControl && isReadOnly)}
+                goalActive={goal !== null}
+                goalDescription={goal ? "View or update your goal" : "Set a goal for this session"}
+                showPlan={showCodexPlanMode}
+                onPlan={() => void toggleCodexPlanMode()}
+                planDisabled={isReadOnly || planModeBusy}
+                planActive={codexPlanMode}
+                planLabel={codexPlanMode ? "Exit Plan mode" : "Enter Plan mode"}
               />
-            )}
-            {showClaudeGoalControl && (
-              <GoalControl
-                mode="command"
-                conversationId={conversationId}
-                readOnly={isReadOnly}
-                onStartGoal={(condition) => onSend(`/goal ${condition}`)}
-                backendLabel="Claude"
-              />
-            )}
-            {showPollyCodexGoalControl && (
-              <GoalControl
-                mode="command"
-                conversationId={conversationId}
-                readOnly={isReadOnly}
-                onStartGoal={(condition) => onSend(`/goal ${condition}`)}
-                backendLabel="Codex"
-              />
-            )}
-            <div className="flex min-h-9 min-w-0 items-center rounded-lg transition-colors empty:hidden md:min-h-8 has-[button:not([aria-disabled=true])]:hover:bg-muted dark:has-[button:not([aria-disabled=true])]:hover:bg-muted/50 [&>button]:bg-transparent!">
-              <ComposerModelSource
-                modelPickerKind={modelPickerKind}
-                codexModelOptions={codexModelOptions}
-                costRoutingEligible={costRoutingEligible}
-              >
-                <ComposerModelEffortLabel
+              {!subAgentLabel && composerSessionId && (
+                <HostBadge
+                  sessionId={composerSessionId}
+                  appearance="composer"
+                  readOnly={isReadOnly}
+                  onReconnect={onShowReconnectHelp}
+                />
+              )}
+              {(showClaudePermissionMode || showCodexApprovalMode) && (
+                <ComposerPermissionPicker
+                  label="Permissions"
+                  value={permissionLabel || "Permissions"}
+                  options={permissionOptions}
+                  disabled={isReadOnly || unreachable || configBusy}
+                  onSelect={(mode) => void changePermission(mode)}
+                />
+              )}
+            </>
+          ),
+          trailing: (
+            <>
+              <div className="flex min-w-0 items-center rounded-lg">
+                <SessionHarnessPicker
+                  busy={configBusy}
+                  busyRef={configBusyRef}
+                  setBusy={setConfigBusy}
+                  agentName={
+                    subAgentName ??
+                    agents?.find((agent) => agent.id === selectedAgentId)?.name ??
+                    agents?.[0]?.name ??
+                    null
+                  }
+                  harnessLabel={harnessLabel}
                   showModels={showModels}
                   showEffort={showEffort}
+                  showClaudePermissionMode={showClaudePermissionMode}
+                  showCodexApprovalMode={showCodexApprovalMode}
+                  effortLevels={effortLevels}
                   modelPickerKind={modelPickerKind}
                   codexModelOptions={codexModelOptions}
                   costRoutingEligible={costRoutingEligible}
-                  harnessLabel={harnessLabel}
-                  // The pill-wide hover highlight advertises one clickable
-                  // control, so the label half opens the same config modal as
-                  // the gear whenever the gear renders beside it.
-                  onOpenConfig={
-                    hasSessionConfig({
-                      showModels,
-                      showEffort,
-                      costRoutingEligible,
-                      subagentRoutingEligible,
-                      showClaudePermissionMode,
-                      showCodexApprovalMode,
-                    })
-                      ? () => setPickerOpenNonce((n) => n + 1)
-                      : null
-                  }
-                  configDisabled={isReadOnly || unreachable}
+                  subagentRoutingEligible={subagentRoutingEligible}
+                  // Config changes persist server-side and apply on the next
+                  // wake/turn (the runner forward is best-effort), so the gear
+                  // stays live wherever a message could be sent — including
+                  // asleep/starting/unknown. Only read-only viewers and sessions
+                  // no message can wake (unreachable) get an inert gear.
+                  disabled={isReadOnly || unreachable}
+                  openNonce={pickerOpenNonce}
                 />
-              </ComposerModelSource>
-              <ComposerConfigGear
-                harnessLabel={harnessLabel}
-                showModels={showModels}
-                showEffort={showEffort}
-                showClaudePermissionMode={showClaudePermissionMode}
-                showCodexApprovalMode={showCodexApprovalMode}
-                effortLevels={effortLevels}
-                modelPickerKind={modelPickerKind}
-                codexModelOptions={codexModelOptions}
-                costRoutingEligible={costRoutingEligible}
-                subagentRoutingEligible={subagentRoutingEligible}
-                // Config changes persist server-side and apply on the next
-                // wake/turn (the runner forward is best-effort), so the gear
-                // stays live wherever a message could be sent — including
-                // asleep/starting/unknown. Only read-only viewers and sessions
-                // no message can wake (unreachable) get an inert gear.
-                disabled={isReadOnly || unreachable}
-                openNonce={pickerOpenNonce}
+              </div>
+              <ComposerMicButton
+                className="size-8 md:size-7"
+                enableHotkey
+                disabled={disabled || isReadOnly || hasPendingElicitation || composerLockedByBtw}
+                onVoiceStart={() => {
+                  voiceSnapshotRef.current = value;
+                }}
+                onVoiceDiscard={() => {
+                  setValue(voiceSnapshotRef.current);
+                }}
+                onTranscript={(text) => {
+                  dictation.appendFinal(text);
+                  dirtyRef.current = true;
+                  // Dictation is a user-driven edit — exit prompt-recall mode
+                  // so ArrowUp/ArrowDown don't clobber the dictated text.
+                  resetCursor();
+                  if (commandError !== null) setCommandError(null);
+                }}
+                onInterim={(text) => {
+                  dictation.replaceInterim(text);
+                  dirtyRef.current = true;
+                  resetCursor();
+                }}
               />
-            </div>
-            <TooltipProvider>
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Button
-                    type="submit"
-                    size="icon"
-                    variant={showInterruptButton ? "destructive" : "default"}
-                    // Send button fades more decisively when there's no draft —
-                    // overrides the base 50% disabled-opacity so the affordance
-                    // reads as "waiting for input", not "almost active".
-                    className={cn(
-                      "size-9 shrink-0 rounded-lg md:size-8",
-                      !showInterruptButton &&
-                        "hover:bg-primary/90 disabled:bg-muted disabled:text-muted-foreground disabled:opacity-100",
-                    )}
-                    // Interrupt stays live during a pending elicitation —
-                    // cancelling the turn is the other legitimate way out.
-                    disabled={
-                      showInterruptButton
-                        ? isReadOnly
-                        : !hasDraft || disabled || isReadOnly || hasPendingElicitation
-                    }
-                    title={showInterruptButton ? "Interrupt" : undefined}
-                    aria-label={showInterruptButton ? "Interrupt" : "Send"}
-                  >
-                    {showInterruptButton ? (
-                      <SquareIcon className="size-4 fill-current" />
-                    ) : (
-                      <ArrowUpIcon className="size-4" viewBox="4 4 16 16" />
-                    )}
-                    <span className="sr-only">{showInterruptButton ? "Interrupt" : "Send"}</span>
-                  </Button>
-                </TooltipTrigger>
-                {!showInterruptButton && !preventsKeyboardSubmit && (
-                  <KeyboardShortcutTooltipContent
-                    label="Send"
-                    keys={composerSendShortcutKeys(submitWithModEnter)}
-                  />
-                )}
-              </Tooltip>
-            </TooltipProvider>
-          </div>
-        </div>
-      </div>
-      <ComposerStatusLine
-        goal={goal}
-        isSubAgentSession={subAgentLabel != null}
-        onHostReconnect={onShowReconnectHelp}
+              <TooltipProvider>
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <ComposerSendButton
+                      interrupt={showInterruptButton}
+                      disabled={
+                        showInterruptButton
+                          ? isReadOnly
+                          : !hasDraft || disabled || isReadOnly || hasPendingElicitation
+                      }
+                      title={showInterruptButton ? "Interrupt" : undefined}
+                      label={showInterruptButton ? "Interrupt" : "Send"}
+                    />
+                  </TooltipTrigger>
+                  {!showInterruptButton && !preventsKeyboardSubmit && (
+                    <KeyboardShortcutTooltipContent
+                      label="Send"
+                      keys={composerSendShortcutKeys(submitWithModEnter)}
+                    />
+                  )}
+                </Tooltip>
+              </TooltipProvider>
+            </>
+          ),
+          testId: "composer-action-row",
+        }}
       />
+      {showGoalControl ? (
+        <GoalDialog
+          open={goalDialogOpen}
+          onOpenChange={setGoalDialogOpen}
+          conversationId={composerSessionId}
+          readOnly={isReadOnly}
+          goal={goal}
+          onGoalChange={setGoalState}
+        />
+      ) : (
+        (showClaudeGoalControl || showPollyCodexGoalControl) && (
+          <CommandGoalDialog
+            open={goalDialogOpen}
+            onOpenChange={setGoalDialogOpen}
+            readOnly={isReadOnly}
+            onStartGoal={(condition) => onSend(`/goal ${condition}`)}
+            backendLabel={showClaudeGoalControl ? "Claude" : "Codex"}
+          />
+        )
+      )}
+      <ComposerStatusLine goal={goal} isSubAgentSession={subAgentLabel != null} />
     </form>
   );
 }
@@ -4309,79 +4406,25 @@ function formatEffortLabel(effort: string): string {
 const SUBAGENT_ROUTING_LABEL = "Subagent routing";
 const SUBAGENT_ROUTING_DESCRIPTION = "Model routing for subagents this session spawns";
 
-/**
- * In-session run-config modal opened from the composer's gear icon. The
- * live-committing analogue of the new-session ``HarnessConfigModal``: only the
- * knobs switchable mid-session appear — Model (which folds Smart Routing in as
- * an option where a dropdown exists), Effort, and Subagent routing. A session's
- * own Smart Routing is otherwise a create-time choice, and
- * permission/approval/cursor modes are launch-time only (no in-session state to
- * read or write), so they are intentionally absent.
- *
- * Like the new-session modal, changes are drafted locally and only applied on
- * Save (through the store setters ``setModel`` / ``setEffort`` /
- * ``setCostControlMode`` / ``setSubagentRouting``); Cancel / dismiss discards
- * them. The setters enforce the model↔routing mutual exclusion server-side.
- */
 function SessionConfigModal({
   open,
   onOpenChange,
   harnessLabel,
-  showModels,
-  showEffort,
   showClaudePermissionMode = false,
   showCodexApprovalMode = false,
-  effortLevels,
-  modelPickerKind,
-  codexModelOptions,
-  costRoutingEligible,
   subagentRoutingEligible,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   harnessLabel: string | null;
-  showModels: boolean;
-  showEffort: boolean;
   showClaudePermissionMode?: boolean;
   showCodexApprovalMode?: boolean;
-  effortLevels: readonly string[];
-  modelPickerKind: NativeModelPickerKind | null;
-  codexModelOptions: readonly NativeModelOption[];
-  costRoutingEligible: boolean;
   subagentRoutingEligible: boolean;
 }) {
-  const selectedEffort = useSessionEffort();
-  const claudePermissionMode = useChatStore((s) => s.claudePermissionMode);
-  const codexApprovalMode = useChatStore((s) => s.codexApprovalMode);
-  const costControlModeOverride = useChatStore((s) => s.costControlModeOverride);
-  const subagentRoutingOverride = useChatStore((s) => s.subagentRoutingOverride);
-  const conversationId = useChatStore((s) => s.conversationId);
-  const { llmModel, usesServerModelOptions, modelOptions, pickerSelectedModel, modelLabel } =
-    useResolvedComposerModel(modelPickerKind, codexModelOptions);
-
-  // Agents with a Model dropdown fold Smart Routing into it as an option. There
-  // is no in-session switch for agents without one — they choose at create.
-  const liveRoutingOn = costRoutingEligible && costControlModeOverride === "on";
-
-  // Resolve the row the current model maps to: the explicit override wins,
-  // else the bound `llmModel` implicitly selects its row (so a launch-resolved
-  // model shows without an explicit pick), else the catalog default. Falls back
-  // to the "Default" sentinel when nothing resolves.
-  const implicitModelId =
-    pickerSelectedModel === null && usesServerModelOptions
-      ? (findNativeModelOption(codexModelOptions, llmModel)?.id ??
-        codexModelOptions.find((option) => option.isDefault)?.id ??
-        null)
-      : null;
-  const resolvedModelId = pickerSelectedModel ?? implicitModelId;
-
-  // Local draft — seeded from the live state each time the modal opens so
-  // Cancel discards and re-opening always reflects the committed config.
-  // `draftModelId` is the resolved model id (null = Default sentinel);
-  // `draftRoutingOn` folds Smart Routing in as a mutually-exclusive choice.
-  const [draftModelId, setDraftModelId] = useState<string | null>(resolvedModelId);
-  const [draftEffort, setDraftEffort] = useState<string | null>(selectedEffort);
-  const [draftRoutingOn, setDraftRoutingOn] = useState(liveRoutingOn);
+  const claudePermissionMode = useChatStore((state) => state.claudePermissionMode);
+  const codexApprovalMode = useChatStore((state) => state.codexApprovalMode);
+  const subagentRoutingOverride = useChatStore((state) => state.subagentRoutingOverride);
+  const conversationId = useChatStore((state) => state.conversationId);
   const [draftPermissionMode, setDraftPermissionMode] = useState(claudePermissionMode);
   const [draftApprovalMode, setDraftApprovalMode] = useState(codexApprovalMode);
   // Unlike the other drafts (snapshot-on-open), the approval picker must track
@@ -4400,9 +4443,6 @@ function SessionConfigModal({
   );
   useEffect(() => {
     if (!open) return;
-    setDraftModelId(resolvedModelId);
-    setDraftEffort(selectedEffort);
-    setDraftRoutingOn(liveRoutingOn);
     setDraftPermissionMode(claudePermissionMode);
     setDraftApprovalMode(codexApprovalMode);
     approvalTouchedRef.current = false;
@@ -4422,56 +4462,6 @@ function SessionConfigModal({
     if (open && !approvalTouchedRef.current) setDraftApprovalMode(codexApprovalMode);
   }, [open, codexApprovalMode]);
 
-  // The Select value: the router sentinel when routing is drafted on, else the
-  // drafted model, else the "Default" sentinel (no override).
-  const modelValue = draftRoutingOn ? MODEL_SELECT_SMART : (draftModelId ?? MODEL_SELECT_DEFAULT);
-
-  // Codex advertises a per-model effort ladder, so the dropdown must follow the
-  // DRAFTED model, not the committed one the parent computed — else picking
-  // Luna still lists Sol's "ultra". "Default" (null) resolves to the catalog
-  // default; non-codex harnesses use a model-independent ladder, so keep the
-  // parent's list.
-  const draftEffortLevels = useMemo(() => {
-    if (modelPickerKind !== "codex") return effortLevels;
-    const modelForEffort =
-      draftModelId ?? codexModelOptions.find((o) => o.isDefault)?.id ?? llmModel;
-    const levels = codexEffortLevelsForModel(codexModelOptions, modelForEffort);
-    return levels.length > 0 ? levels : effortLevels;
-  }, [modelPickerKind, codexModelOptions, draftModelId, llmModel, effortLevels]);
-
-  // Drop a picked level the newly-drafted model doesn't offer (Sol's "ultra"
-  // when switching to Luna) so no stale rung shows and Save never submits a
-  // level the model rejects.
-  const clampDraftEffortToModel = (modelId: string | null) => {
-    if (modelPickerKind !== "codex") return;
-    setDraftEffort((prev) => {
-      if (prev === null) return null;
-      const modelForEffort = modelId ?? codexModelOptions.find((o) => o.isDefault)?.id ?? llmModel;
-      return codexEffortLevelsForModel(codexModelOptions, modelForEffort).includes(prev)
-        ? prev
-        : null;
-    });
-  };
-
-  const onModelChange = (value: string) => {
-    if (value === MODEL_SELECT_SMART) {
-      setDraftRoutingOn(true);
-      setDraftModelId(null);
-      // The router picks the model (and its effort) per turn, so an explicit
-      // effort can't apply — reset it so it doesn't ride along frozen.
-      setDraftEffort(null);
-    } else if (value === MODEL_SELECT_DEFAULT) {
-      setDraftModelId(null);
-      setDraftRoutingOn(false);
-      clampDraftEffortToModel(null);
-    } else {
-      // Pinning a model turns routing off (mutually exclusive).
-      setDraftModelId(value);
-      setDraftRoutingOn(false);
-      clampDraftEffortToModel(value);
-    }
-  };
-
   // Two-state row. A row stored before the switch became explicit carries no
   // value, and that reads as Default — the same thing "off" means — so the
   // trigger never shows a third state. Untouched (`undefined`) reads through
@@ -4481,45 +4471,9 @@ function SessionConfigModal({
   const subagentRoutingValue = effectiveSubagentRouting === "on" ? "on" : "off";
 
   const save = () => {
-    // Commit the changed knobs SEQUENTIALLY, awaiting each PATCH before the
-    // next. Claude-native applies model/effort changes by typing separate
-    // ``/model``/``/effort`` slash commands into its terminal, so firing them
-    // concurrently lets the injections interleave into one line (e.g.
-    // ``/model opus/effort medium``, which Claude rejects as a model name).
-    // Awaiting serializes them — each change lands in its own turn. Order
-    // matches HarnessConfigModal.save: model/routing first (their setters
-    // enforce the mutual exclusion server-side), then effort.
     void (async () => {
       const store = useChatStore.getState();
       try {
-        if (draftRoutingOn) {
-          if (costRoutingEligible && !liveRoutingOn) await store.setCostControlMode("on");
-        } else {
-          // Re-pin the model when routing was on and there's a Model dropdown
-          // (its setter cleared the applied override, and `resolvedModelId`
-          // reflects the leftover cross-session sticky — not what's applied — so
-          // the ``!==`` guard would false-negative), or whenever the drafted
-          // model actually changed. For a no-dropdown agent (e.g. Polly) the
-          // user can't have chosen a model, so re-pinning the seeded
-          // `resolvedModelId` would risk pinning a leaked sticky — turning
-          // routing off just clears via setModel(null) below.
-          const modelChanged = draftModelId !== resolvedModelId;
-          const rePinAfterRouting = liveRoutingOn && showModels;
-          if (rePinAfterRouting || modelChanged)
-            await store.setModel(draftModelId, {
-              // Reported-model sessions confirm through the harness's own
-              // report — mark the ask pending until it (or the not-applied
-              // error) settles.
-              expectConfirmation: modelPickerKind === "claude" || modelPickerKind === "codex",
-            });
-          if (costRoutingEligible && liveRoutingOn) await store.setCostControlMode("off");
-        }
-        // Skip effort while routing is on: the router picks it per turn, and a
-        // stray ``/effort`` injection would just be noise.
-        if (showEffort && !draftRoutingOn && draftEffort !== selectedEffort)
-          await store.setEffort(draftEffort);
-        // Same pane as /model + /effort, so this must stay in the awaited
-        // sequence rather than firing concurrently.
         if (showClaudePermissionMode && draftPermissionMode !== claudePermissionMode)
           await store.setClaudePermissionMode(draftPermissionMode);
         // Codex approval switch drives Codex's own /permissions popup on the
@@ -4546,99 +4500,17 @@ function SessionConfigModal({
     onOpenChange(false);
   };
 
-  const modelSelectOptions = useMemo(() => {
-    const catalog = usesServerModelOptions
-      ? modelOptions.map((m) => ({ id: m.id, label: nativeModelLabel(m) }))
-      : modelOptions.map((m) => ({ id: m.id, label: m.label ?? m.id }));
-    // Smart Routing pins the router's fully-qualified pick
-    // (``databricks-claude-opus-4-8``), which the harness catalog carries only
-    // under an alias (``opus``) — or not at all. Radix falls back to the
-    // placeholder for a value no item declares, so the row rendered BLANK on a
-    // routed session. Carry the live model as its own option: the trigger then
-    // names the model the session is actually on, matching the status label
-    // below the composer. Nothing is submitted for an untouched row — `save`
-    // re-pins only a changed draft.
-    if (draftModelId === null || catalog.some((option) => option.id === draftModelId)) {
-      return catalog;
-    }
-    return [...catalog, { id: draftModelId, label: modelLabel ?? draftModelId }];
-  }, [usesServerModelOptions, modelOptions, draftModelId, modelLabel]);
-
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md" data-testid="composer-config-modal">
         <DialogHeader>
           <DialogTitle>Configure {harnessLabel ?? "session"}</DialogTitle>
           <DialogDescription className="sr-only">
-            Change how this session runs. Model, effort, and smart routing apply to the next turn.
+            Change permissions, approvals, and sub-agent routing for this session.
           </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-5 py-1">
-          {showModels && (
-            <ConfigRow label="Model" description="Underlying LLM">
-              <RoutingModelSelect
-                value={modelValue}
-                onValueChange={onModelChange}
-                offerSmartRouting={costRoutingEligible}
-                testId="composer-config-model"
-                models={modelSelectOptions}
-                // Claude's and Codex's Default resolves to a model the
-                // spellings don't make obvious, so name it here exactly as
-                // the landing dialog does — one shared labeling.
-                defaultLabel={
-                  modelPickerKind === "codex" || modelPickerKind === "claude"
-                    ? defaultModelLabel(modelOptions)
-                    : undefined
-                }
-                activeModelId={draftModelId}
-                componentId="chat.composer.model"
-              />
-            </ConfigRow>
-          )}
-          {showEffort && (
-            <ConfigRow label="Effort" description="Reasoning depth vs. speed">
-              <Select
-                // Routing picks the model (and its effort) per turn, so an
-                // explicit effort is meaningless: the row is frozen and reads as
-                // an em-dash placeholder (Radix shows it for the empty value).
-                value={draftRoutingOn ? "" : (draftEffort ?? EFFORT_SELECT_NONE)}
-                onValueChange={(v) => setDraftEffort(v === EFFORT_SELECT_NONE ? null : v)}
-                disabled={draftRoutingOn}
-                componentId="chat.composer.effort"
-                valueHasNoPii
-              >
-                <SelectTrigger
-                  className="w-full"
-                  data-testid="composer-config-effort"
-                  aria-label="Effort"
-                >
-                  <SelectValue placeholder={EFFORT_UNAVAILABLE_PLACEHOLDER} />
-                </SelectTrigger>
-                <SelectContent
-                  position="popper"
-                  align="start"
-                  className="w-(--radix-select-trigger-width)"
-                >
-                  <SelectItem value={EFFORT_SELECT_NONE}>Default</SelectItem>
-                  {draftEffortLevels.map((level) => (
-                    <SelectItem
-                      key={level}
-                      value={level}
-                      data-effort-level={level}
-                      // Codex efforts render raw (its ids aren't title-cased);
-                      // other harnesses title-case for display.
-                      className={modelPickerKind === "codex" ? undefined : "capitalize"}
-                    >
-                      {formatStatusEffortLabel(level, modelPickerKind === "codex") ?? level}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </ConfigRow>
-          )}
-          {/* Hidden when the mode is unknown — Claude only renders its mode
-              footer in some pane states, and a guess would misreport it. */}
           {showClaudePermissionMode && claudePermissionMode !== "" && (
             <ConfigRow label="Permissions" description="How much Claude asks before acting">
               <Select
@@ -4792,17 +4664,11 @@ function hasSessionConfig({
   );
 }
 
-/**
- * Composer gear affordance: a ghost `SettingsIcon` that shows the session's
- * live run-config on hover and opens `SessionConfigModal` on click. Rendered
- * only when the session has at least one switchable knob (model, effort, or
- * smart routing) — otherwise there's nothing to configure.
- *
- * @param openNonce External "open the modal" signal, nonce-keyed so repeat
- *   requests re-open (bare ``/model`` submits and clicks on the pill's
- *   model/effort label half route here). ``0`` / omitted means never requested.
- */
-function ComposerConfigGear({
+function SessionHarnessPicker({
+  busy,
+  busyRef,
+  setBusy,
+  agentName,
   harnessLabel,
   showModels,
   showEffort,
@@ -4816,6 +4682,10 @@ function ComposerConfigGear({
   disabled,
   openNonce = 0,
 }: {
+  busy: boolean;
+  busyRef: { current: boolean };
+  setBusy: (busy: boolean) => void;
+  agentName: string | null;
   harnessLabel: string | null;
   showModels: boolean;
   showEffort: boolean;
@@ -4829,17 +4699,28 @@ function ComposerConfigGear({
   disabled: boolean;
   openNonce?: number;
 }) {
+  const isMobile = useIsMobileViewport();
   const [open, setOpen] = useState(false);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [configMenuOpen, setConfigMenuOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const appliedOpenNonce = useRef(0);
-  useEffect(() => {
-    if (!openNonce || openNonce === appliedOpenNonce.current) return;
-    // Consume the nonce even when disabled so a later enable doesn't replay a
-    // stale open request; skip opening while the gear is inert (read-only /
-    // unreachable), matching the click guard.
-    appliedOpenNonce.current = openNonce;
-    if (disabled) return;
-    setOpen(true);
-  }, [openNonce, disabled]);
+  const conversationId = useChatStore((state) => state.conversationId);
+  const sessionHarness = useChatStore((state) => state.sessionHarness);
+  const subAgentName = useChatStore((state) => state.subAgentName);
+  const pendingModelChange = useChatStore((state) => state.pendingModelChange);
+  const selectedEffort = useSessionEffort();
+  const costControlModeOverride = useChatStore((state) => state.costControlModeOverride);
+  const routingOn = costRoutingEligible && costControlModeOverride === "on";
+  const { effectiveModel, modelLabel, modelOptions, pickerSelectedModel } =
+    useResolvedComposerModel(modelPickerKind, codexModelOptions);
+  const nativeAgent =
+    nativeCodingAgentForHarness(sessionHarness) ??
+    (modelPickerKind ? nativeCodingAgentForHarness(modelPickerKind + "-native") : undefined);
+  const iconAgent = {
+    name: nativeAgent?.agentName ?? agentName ?? subAgentName ?? "",
+    harness: nativeAgent?.harness ?? sessionHarness,
+  };
   const summary = useSessionConfigSummary({
     harnessLabel,
     showModels,
@@ -4848,79 +4729,316 @@ function ComposerConfigGear({
     codexModelOptions,
     costRoutingEligible,
   });
-
-  if (
-    !hasSessionConfig({
-      showModels,
-      showEffort,
-      costRoutingEligible,
-      subagentRoutingEligible,
-      showClaudePermissionMode,
-      showCodexApprovalMode,
-    })
-  )
-    return null;
-
+  const configurable = hasSessionConfig({
+    showModels,
+    showEffort,
+    costRoutingEligible,
+    subagentRoutingEligible,
+    showClaudePermissionMode,
+    showCodexApprovalMode,
+  });
+  const effortLabel = showEffort && !routingOn ? formatStatusEffortLabel(selectedEffort) : null;
+  const label = routingOn
+    ? SMART_ROUTING_LABEL
+    : (modelLabel ?? nativeAgent?.displayName ?? harnessLabel ?? "Session");
+  const availableEfforts =
+    modelPickerKind === "codex"
+      ? codexEffortLevelsForModel(codexModelOptions, pickerSelectedModel)
+      : effortLevels;
+  useEffect(() => {
+    if (!openNonce || openNonce === appliedOpenNonce.current) return;
+    appliedOpenNonce.current = openNonce;
+    if (!disabled && configurable) {
+      setMenuOpen(true);
+      setConfigMenuOpen(true);
+    }
+  }, [openNonce, disabled, configurable]);
+  // The pill's summary tooltip must not flash open over the menu, nor
+  // instantly reopen when closing the menu refocuses the trigger; see
+  // useMenuGuardedTooltip. Internal menuOpen covers every open path,
+  // including the programmatic /model (openNonce) one.
+  const gearTooltip = useMenuGuardedTooltip(menuOpen);
+  useEffect(() => {
+    setMenuOpen(false);
+    setConfigMenuOpen(false);
+    setOpen(false);
+    setError(null);
+  }, [conversationId]);
+  const apply = async (change: () => Promise<unknown>) => {
+    if (disabled || busyRef.current || pendingModelChange !== null) return;
+    busyRef.current = true;
+    setBusy(true);
+    setError(null);
+    const sourceSessionId = useChatStore.getState().conversationId;
+    try {
+      await change();
+    } catch (failure) {
+      if (useChatStore.getState().conversationId === sourceSessionId)
+        setError(
+          failure instanceof Error ? failure.message : "Unable to update session configuration",
+        );
+    } finally {
+      busyRef.current = false;
+      setBusy(false);
+    }
+  };
+  const selectModel = (modelId: string | null) =>
+    void apply(async () => {
+      const store = useChatStore.getState();
+      const sourceSessionId = store.conversationId;
+      await store.setModel(modelId, {
+        expectConfirmation: modelPickerKind === "claude" || modelPickerKind === "codex",
+      });
+      if (useChatStore.getState().conversationId !== sourceSessionId) return;
+      if (
+        modelPickerKind === "codex" &&
+        selectedEffort !== null &&
+        !codexEffortLevelsForModel(codexModelOptions, modelId).includes(selectedEffort)
+      )
+        await store.setEffort(null);
+      if (
+        costRoutingEligible &&
+        routingOn &&
+        useChatStore.getState().conversationId === sourceSessionId
+      )
+        await store.setCostControlMode("off");
+    });
+  const configContent = (
+    <>
+      {showModels && (
+        <div data-testid="composer-agent-models">
+          <DropdownMenuLabel className="px-2 text-xs font-normal text-muted-foreground">
+            Models
+          </DropdownMenuLabel>
+          {!modelOptions.some((model) => model.isDefault) && (
+            <DropdownMenuCheckboxItem
+              checked={!routingOn && pickerSelectedModel === null}
+              disabled={busy || pendingModelChange !== null}
+              onSelect={(event) => event.preventDefault()}
+              onCheckedChange={() => selectModel(null)}
+              data-testid="composer-agent-model-default"
+            >
+              Default
+            </DropdownMenuCheckboxItem>
+          )}
+          {modelOptions.map((model) => (
+            <DropdownMenuCheckboxItem
+              key={model.id}
+              disabled={busy || pendingModelChange !== null}
+              checked={
+                !routingOn &&
+                (model.id === pickerSelectedModel ||
+                  (pickerSelectedModel === null && model.isDefault === true))
+              }
+              onSelect={(event) => event.preventDefault()}
+              onCheckedChange={() => selectModel(model.isDefault ? null : model.id)}
+              data-testid={`composer-agent-model-${model.id}`}
+              data-model-id={model.id}
+              className="whitespace-normal break-words"
+            >
+              {nativeModelLabel(model)}
+            </DropdownMenuCheckboxItem>
+          ))}
+          {pickerSelectedModel &&
+            !modelOptions.some((model) => model.id === pickerSelectedModel) && (
+              <DropdownMenuCheckboxItem
+                checked={!routingOn}
+                disabled
+                data-model-id={pickerSelectedModel}
+                className="whitespace-normal break-words"
+              >
+                {modelLabel ?? effectiveModel} (current)
+              </DropdownMenuCheckboxItem>
+            )}
+        </div>
+      )}
+      {showEffort && availableEfforts.length > 0 && (
+        <div data-testid="composer-agent-efforts">
+          <DropdownMenuSeparator />
+          <DropdownMenuLabel className="px-2 text-xs font-normal text-muted-foreground">
+            {modelPickerKind === "pi" ? "Thinking level" : "Effort"}
+          </DropdownMenuLabel>
+          {[null, ...availableEfforts].map((effort) => (
+            <DropdownMenuCheckboxItem
+              key={effort ?? "default"}
+              checked={!routingOn && effort === selectedEffort}
+              disabled={routingOn || busy || pendingModelChange !== null}
+              onSelect={(event) => event.preventDefault()}
+              onCheckedChange={() => void apply(() => useChatStore.getState().setEffort(effort))}
+              data-testid={`composer-agent-effort-${effort ?? "default"}`}
+              data-effort-level={effort ?? "default"}
+            >
+              {formatStatusEffortLabel(effort) ?? "Default"}
+            </DropdownMenuCheckboxItem>
+          ))}
+        </div>
+      )}
+    </>
+  );
   return (
     <>
-      <TooltipProvider>
-        <Tooltip>
-          <TooltipTrigger asChild>
-            <Button
-              type="button"
-              size="icon"
-              variant="ghost"
-              // Soft-disable: keep the button hover-able so its tooltip (the
-              // read-only config summary) still shows, but block the click and
-              // dim it. A native `disabled` button swallows pointer events, so
-              // the tooltip would never fire.
-              // The ::before hairline is this gear's divider from the
-              // model/effort label in the composer's split pill. It's drawn
-              // here rather than as a sibling node because the label renders
-              // nothing for some sessions — `first:` then drops the divider.
-              className={cn(
-                "size-9 shrink-0 text-muted-foreground before:absolute before:top-1/2 before:left-0 before:h-4 before:w-px before:-translate-y-1/2 before:bg-border hover:text-foreground first:before:hidden md:size-8",
-                disabled && "cursor-default opacity-50 hover:text-muted-foreground",
-              )}
-              aria-disabled={disabled}
-              onClick={() => {
-                if (disabled) return;
-                setOpen(true);
-              }}
-              data-testid="composer-config-gear"
-              aria-label="Configure session"
-            >
-              <SettingsIcon className="size-4" data-icon-size="16" />
-            </Button>
-          </TooltipTrigger>
-          {summary.length > 0 && (
+      <DropdownMenu
+        open={menuOpen}
+        onOpenChange={(next) => {
+          if (!next || (!disabled && !busy && configurable)) setMenuOpen(next);
+          if (!next) setConfigMenuOpen(false);
+        }}
+      >
+        <TooltipProvider>
+          <Tooltip open={gearTooltip.open} onOpenChange={gearTooltip.onOpenChange}>
+            <TooltipTrigger asChild>
+              <span className="flex min-w-0" {...gearTooltip.triggerProps}>
+                <DropdownMenuTrigger asChild>
+                  <ComposerHarnessTrigger
+                    label="Configure session"
+                    model={label}
+                    effort={effortLabel ?? undefined}
+                    icon={<ComposerAgentIcon agent={iconAgent} />}
+                    disabled={busy || !configurable}
+                    aria-disabled={disabled || busy || !configurable}
+                    className={disabled ? "cursor-default opacity-50" : undefined}
+                    testIdPrefix="composer"
+                    data-testid="composer-config-gear"
+                    pending={
+                      pendingModelChange !== null &&
+                      (modelPickerKind === "claude" || modelPickerKind === "codex")
+                    }
+                  />
+                </DropdownMenuTrigger>
+              </span>
+            </TooltipTrigger>
             <TooltipContent
               side="top"
               className="max-w-80 flex-col items-start gap-0.5 px-3 py-2"
               data-testid="composer-config-gear-tooltip"
             >
-              {summary.map((row) => (
-                <span key={row.label} className="max-w-72 truncate text-muted-foreground">
-                  {row.label}:{" "}
-                  <span className="text-background dark:text-popover-foreground">{row.value}</span>
-                </span>
-              ))}
+              <ComposerConfigTooltipRows rows={summary} />
             </TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+        <DropdownMenuContent
+          side="top"
+          align="end"
+          collisionPadding={12}
+          className="composer-agent-menu w-[22rem] min-w-0 max-w-[calc(100vw-2rem)] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto p-2"
+          data-testid="composer-agent-menu"
+          onPointerMoveCapture={(event) => {
+            if (configMenuOpen && event.currentTarget.contains(event.target as Node))
+              event.preventDefault();
+          }}
+        >
+          {isMobile && configMenuOpen ? (
+            <>
+              <DropdownMenuItem
+                data-testid="composer-agent-config-back"
+                onSelect={(event) => {
+                  event.preventDefault();
+                  setConfigMenuOpen(false);
+                }}
+              >
+                <CornerUpLeftIcon className="size-4" /> Back
+              </DropdownMenuItem>
+              <div data-testid="composer-agent-config-menu">{configContent}</div>
+            </>
+          ) : (
+            <>
+              <div
+                title={
+                  !costRoutingEligible || !showModels
+                    ? "Smart Routing is not available for this session."
+                    : undefined
+                }
+              >
+                <DropdownMenuItem
+                  disabled={
+                    busy || pendingModelChange !== null || !costRoutingEligible || !showModels
+                  }
+                  onSelect={() =>
+                    void apply(() =>
+                      useChatStore.getState().setCostControlMode(routingOn ? "off" : "on"),
+                    )
+                  }
+                  data-selected={routingOn}
+                >
+                  <WandSparklesIcon className="size-4" />
+                  <span className="flex-1">{SMART_ROUTING_LABEL}</span>
+                  {routingOn && <CheckIcon className="size-4" />}
+                </DropdownMenuItem>
+              </div>
+              <DropdownMenuLabel className="px-2 text-xs font-normal text-muted-foreground">
+                {nativeAgent ? "Harnesses" : "Agents"}
+              </DropdownMenuLabel>
+              {isMobile ? (
+                <DropdownMenuItem
+                  className="gap-2"
+                  data-testid="composer-agent-edit"
+                  disabled={busy || pendingModelChange !== null}
+                  onSelect={(event) => {
+                    event.preventDefault();
+                    setConfigMenuOpen(true);
+                  }}
+                >
+                  <ComposerAgentIcon agent={iconAgent} />
+                  <span className="flex-1">{harnessLabel ?? "Session"}</span>
+                  <span className="min-w-0 flex-1 whitespace-normal break-words text-xs text-muted-foreground">
+                    {routingOn ? SMART_ROUTING_LABEL : (modelLabel ?? "Default")}
+                  </span>
+                  <span className="text-xs text-muted-foreground">Edit</span>
+                </DropdownMenuItem>
+              ) : (
+                <DropdownMenuSub open={configMenuOpen} onOpenChange={setConfigMenuOpen}>
+                  <DropdownMenuSubTrigger
+                    disabled={busy || pendingModelChange !== null}
+                    className="gap-2"
+                    data-testid="composer-agent-edit"
+                    onPointerMove={(event) => event.preventDefault()}
+                    onClick={() => setConfigMenuOpen(true)}
+                  >
+                    <ComposerAgentIcon agent={iconAgent} />
+                    <span className="flex-1">{harnessLabel ?? "Session"}</span>
+                    <span className="min-w-0 flex-1 whitespace-normal break-words text-xs text-muted-foreground">
+                      {routingOn ? SMART_ROUTING_LABEL : (modelLabel ?? "Default")}
+                    </span>
+                    <span className="text-xs text-muted-foreground">Edit</span>
+                  </DropdownMenuSubTrigger>
+                  <DropdownMenuSubContent
+                    className="composer-agent-menu composer-agent-config-menu w-[13.75rem] max-h-[var(--radix-dropdown-menu-content-available-height)] max-w-[calc(100vw-2rem)] overflow-y-auto p-2"
+                    data-testid="composer-agent-config-menu"
+                    onFocusOutside={(event) => {
+                      if (
+                        event.target instanceof Element &&
+                        event.target.getAttribute("role") === "menu"
+                      )
+                        event.preventDefault();
+                    }}
+                  >
+                    {configContent}
+                  </DropdownMenuSubContent>
+                </DropdownMenuSub>
+              )}
+            </>
           )}
-        </Tooltip>
-      </TooltipProvider>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            disabled={busy || pendingModelChange !== null}
+            onSelect={() => setOpen(true)}
+            data-testid="composer-advanced-settings"
+          >
+            Advanced settings…
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      {error && (
+        <span role="alert" className="max-w-40 text-xs text-destructive">
+          {error}
+        </span>
+      )}
       <SessionConfigModal
         open={open}
         onOpenChange={setOpen}
         harnessLabel={harnessLabel}
-        showModels={showModels}
-        showEffort={showEffort}
         showClaudePermissionMode={showClaudePermissionMode}
         showCodexApprovalMode={showCodexApprovalMode}
-        effortLevels={effortLevels}
-        modelPickerKind={modelPickerKind}
-        codexModelOptions={codexModelOptions}
-        costRoutingEligible={costRoutingEligible}
         subagentRoutingEligible={subagentRoutingEligible}
       />
     </>
@@ -4966,7 +5084,7 @@ function useSessionConfigSummary({
   // Suppress Effort while routing is on: the router picks the model and its
   // effort per turn, so a pinned effort doesn't apply and would mislead.
   if (showEffort && !routingOn) {
-    const effortValue = formatStatusEffortLabel(selectedEffort, modelPickerKind === "codex");
+    const effortValue = formatStatusEffortLabel(selectedEffort);
     rows.push({ label: "Effort", value: effortValue ?? "Default" });
   }
   if (!routingOn) {
@@ -5084,179 +5202,51 @@ function useResolvedComposerModel(
     modelLabel,
   };
 }
-
-/** Compact, inspectable provenance beside the composer's model label. */
-function ComposerModelSource({
-  modelPickerKind,
-  codexModelOptions,
-  costRoutingEligible,
-  children,
-}: {
-  modelPickerKind: NativeModelPickerKind | null;
-  codexModelOptions: readonly NativeModelOption[];
-  costRoutingEligible: boolean;
-  children: ReactNode;
-}) {
-  const costControlModeOverride = useChatStore((s) => s.costControlModeOverride);
-  const { effectiveModel } = useResolvedComposerModel(modelPickerKind, codexModelOptions);
-  const source =
-    findNativeModelOption(codexModelOptions, effectiveModel)?.source ??
-    codexModelOptions.find((option) => option.source)?.source;
-  const routingOn = costRoutingEligible && costControlModeOverride === "on";
-  if (routingOn || !source) return children;
-
-  const rows = modelConfigurationSourceRows(source);
-  return (
-    <TooltipProvider>
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <span
-            tabIndex={0}
-            data-testid="composer-model-source"
-            className="min-w-0 shrink outline-none rounded-md focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {children}
-          </span>
-        </TooltipTrigger>
-        <TooltipContent
-          side="top"
-          className="flex max-w-80 flex-col items-start gap-1 px-3 py-2"
-          data-testid="composer-model-source-tooltip"
-        >
-          <span className="font-medium text-background dark:text-popover-foreground">
-            Model configuration
-          </span>
-          {rows.map((row) => (
-            <span key={row.label} className="max-w-72 truncate text-muted-foreground">
-              {row.label}:{" "}
-              <span className="text-background dark:text-popover-foreground">{row.value}</span>
-            </span>
-          ))}
-        </TooltipContent>
-      </Tooltip>
-    </TooltipProvider>
-  );
-}
+/**
+ * How long after the menu closes tooltip open requests stay swallowed.
+ * Radix hands focus back to the trigger on close in the same tick, so the
+ * window only needs to outlive that programmatic focus (and any queued
+ * focus/pointer fallout from the closing menu); 600ms — one hover-open
+ * delay — is comfortably past it without being noticeable to a user who
+ * genuinely re-engages the trigger later.
+ */
+const MENU_CLOSE_TOOLTIP_GUARD_MS = 600;
 
 /**
- * ``<Model> <Effort>`` label in the composer, left of the config gear — model
- * in the foreground, effort muted. Renders nothing when neither is
- * known/switchable (the harness identity and full config live in the gear
- * tooltip/modal). The pill's hover highlight spans both halves, so when the
- * gear renders the label is a button opening the same session-config modal —
- * the click target matches the hover affordance; without a gear it stays a
- * plain read-only span.
+ * Open state for a tooltip whose trigger contains (or is) a menu trigger.
  *
- * @param showModels Whether the session exposes a model to surface.
- * @param showEffort Whether the session exposes a reasoning-effort level.
- * @param modelPickerKind Native picker family, or ``null`` for SDK/bundle.
- * @param codexModelOptions Server-provided model options (codex/cursor/…).
- * @param costRoutingEligible Whether Smart Routing is offered for this session.
- * @param harnessLabel Harness identity (e.g. "Polly (Pi)"), used as the label
- *   fallback for SDK/bundle agents that surface no model/effort.
- * @param onOpenConfig Opens the session-config modal; ``null`` when the gear
- *   isn't rendered, which keeps the label non-interactive.
- * @param configDisabled Mirrors the gear's inert state (read-only viewer /
- *   unreachable session): soft-disables the click without dimming the label.
+ * Keeps the tooltip closed while the menu is open: the menu trigger sits
+ * inside the tooltip trigger's span, so the focus Radix gives it on open
+ * bubbles to the tooltip trigger and would instantly open the tooltip,
+ * painting it over the menu (equal z-index, later-mounted; the menu content
+ * itself is a portalled React sibling whose events do not bubble here).
+ * Closing the menu hands focus back to that same trigger, which would just
+ * as instantly reopen the tooltip, so open requests stay blocked for a short
+ * window after close — unless the pointer re-enters the trigger, which is
+ * unmistakably fresh hover intent.
  */
-function ComposerModelEffortLabel({
-  showModels,
-  showEffort,
-  modelPickerKind,
-  codexModelOptions,
-  costRoutingEligible,
-  harnessLabel,
-  onOpenConfig = null,
-  configDisabled = false,
-}: {
-  showModels: boolean;
-  showEffort: boolean;
-  modelPickerKind: NativeModelPickerKind | null;
-  codexModelOptions: readonly NativeModelOption[];
-  costRoutingEligible: boolean;
-  harnessLabel: string | null;
-  onOpenConfig?: (() => void) | null;
-  configDisabled?: boolean;
-}) {
-  const selectedEffort = useSessionEffort();
-  const costControlModeOverride = useChatStore((s) => s.costControlModeOverride);
-  const pendingModelChange = useChatStore((s) => s.pendingModelChange);
-  const { modelLabel } = useResolvedComposerModel(modelPickerKind, codexModelOptions);
-  const routingOn = costRoutingEligible && costControlModeOverride === "on";
-  // An asked-but-unconfirmed switch on a reported-model session: the chip
-  // keeps the harness's model; this spinner is the honest "asked, not yet
-  // true" marker until the report (or the not-applied error) settles it.
-  const modelPending =
-    pendingModelChange !== null && (modelPickerKind === "claude" || modelPickerKind === "codex") ? (
-      <Loader2Icon
-        data-testid="composer-model-pending"
-        aria-label="Model change pending"
-        className="ml-1 inline size-3 shrink-0 animate-spin text-muted-foreground"
-      />
-    ) : null;
-  const effortLabel =
-    showEffort && selectedEffort
-      ? formatStatusEffortLabel(selectedEffort, modelPickerKind === "codex")
-      : null;
-  // SDK/bundle sessions (no native picker) still surface their resolved model
-  // in the label even though the gear modal has no Model dropdown for them —
-  // showModels gates only the modal control, not this read-out.
-  const model = showModels || modelPickerKind === null ? modelLabel : null;
-
-  let content: ReactNode;
-  if (routingOn) {
-    // Routing picks the model + effort per turn, so the label reads
-    // "Smart Routing" with no pinned model/effort — matching the tooltip.
-    content = <span className="text-foreground">{SMART_ROUTING_LABEL}</span>;
-  } else if (!model && !effortLabel) {
-    // SDK/bundle agents (e.g. Polly) that resolve no model/effort fall back to
-    // the harness identity ("Polly (Pi)") so the slot isn't empty. Scoped to
-    // SDK/bundle (modelPickerKind === null): native wrappers keep an empty label
-    // when their model is unresolved rather than surfacing the bare vendor name,
-    // which the gear tooltip already shows.
-    if (modelPickerKind !== null || !harnessLabel) return null;
-    content = <span className="text-foreground">{harnessLabel}</span>;
-  } else {
-    content = (
-      <>
-        {model && <span className="text-foreground">{model}</span>}
-        {model && effortLabel && " "}
-        {effortLabel && <span className="text-muted-foreground">{effortLabel}</span>}
-        {modelPending}
-      </>
-    );
-  }
-
-  const labelClass =
-    "min-w-0 shrink truncate pl-2.5 pr-2 text-sm tabular-nums text-muted-foreground";
-  if (!onOpenConfig) {
-    return (
-      <span data-testid="composer-model-effort-label" className={labelClass}>
-        {content}
-      </span>
-    );
-  }
-  // The pill highlights as one control when hovered anywhere, so the label
-  // half must act like the gear beside it: clicking opens the same config
-  // modal. Soft-disable (aria-disabled) mirrors the gear so the pill's hover
-  // highlight drops with it, while the label text stays fully readable.
-  return (
-    <button
-      type="button"
-      data-testid="composer-model-effort-label"
-      aria-haspopup="dialog"
-      aria-disabled={configDisabled}
-      onClick={() => {
-        if (configDisabled) return;
-        onOpenConfig();
-      }}
-      className={cn(
-        labelClass,
-        "h-9 rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-ring md:h-8",
-        configDisabled ? "cursor-default" : "cursor-pointer",
-      )}
-    >
-      {content}
-    </button>
-  );
+function useMenuGuardedTooltip(menuOpen: boolean) {
+  const [wantsOpen, setWantsOpen] = useState(false);
+  // Epoch millis until which open requests are ignored; Infinity while the
+  // menu is open. A ref, not state: it is only read when Radix requests an
+  // open, so changing it never needs a re-render.
+  const suppressedUntil = useRef(0);
+  useEffect(() => {
+    if (menuOpen) {
+      setWantsOpen(false);
+      suppressedUntil.current = Number.POSITIVE_INFINITY;
+    } else if (suppressedUntil.current === Number.POSITIVE_INFINITY) {
+      suppressedUntil.current = Date.now() + MENU_CLOSE_TOOLTIP_GUARD_MS;
+    }
+  }, [menuOpen]);
+  return {
+    open: wantsOpen && !menuOpen,
+    onOpenChange: (next: boolean) =>
+      setWantsOpen(next && !menuOpen && Date.now() >= suppressedUntil.current),
+    triggerProps: {
+      onPointerEnter: () => {
+        if (!menuOpen) suppressedUntil.current = 0;
+      },
+    },
+  } as const;
 }

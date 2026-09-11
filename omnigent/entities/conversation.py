@@ -258,9 +258,13 @@ class Conversation:
     # so any replica's session list can serve them. ``live_status`` is the
     # last relay-observed turn status ("idle"/"running"/"waiting"/"failed",
     # None = never reported); ``pending_elicitation_count`` is the
-    # outstanding approval-prompt count (None = never written).
+    # outstanding approval-prompt count (None = never written);
+    # ``runner_last_seen`` is the runner tunnel's last heartbeat (epoch
+    # seconds, None = no live stamp) — carried on the row so a session list
+    # can judge runner liveness without a second connectivity query.
     live_status: str | None = None
     pending_elicitation_count: int | None = None
+    runner_last_seen: int | None = None
     project_id: str | None = None
     # Transient: populated only by list_conversations on a content search;
     # never read from or written to the DB.
@@ -480,6 +484,10 @@ class CompactionData(BaseModel):
         e.g. ``"openai/gpt-4o"``.
     :param token_count: Approximate token count of the summary
         text, for budget tracking, e.g. ``342``.
+    :param window_id: Opaque vendor compaction-window identifier. Current
+        Codex writes a UUID string to ``payload.window_id`` on its
+        ``type == "compacted"`` rollout JSONL record; older Codex rollouts
+        used integer counters there.
     """
 
     summary: str
@@ -487,7 +495,7 @@ class CompactionData(BaseModel):
     model: str | None = None
     token_count: int
     compacted_messages: list[dict[str, Any]] | None = None
-    window_id: int | None = None
+    window_id: int | str | None = None
 
     @field_validator("compacted_messages")
     @classmethod
