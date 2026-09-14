@@ -22,12 +22,8 @@ Platform notes that shape this launcher:
 
 - **Token via Secret.** The launch token rides a per-Job Kubernetes Secret
   referenced by ``secretKeyRef`` — never the Pod spec, an exec request URI, or
-  any audit-logged surface. The connecting user's GitHub token (when present)
-  rides the SAME Secret and is projected as ``GIT_TOKEN`` / ``GH_TOKEN`` /
-  ``GITHUB_TOKEN`` via ``secretKeyRef``; the init container's ``gh`` / git
-  setup reads it from that env at runtime, so it never lands in the Pod spec
-  either. Harness LLM credentials ride a pre-created Secret projected via
-  ``envFrom`` (``sandbox.kubernetes.secret_name``).
+  any audit-logged surface. Harness LLM credentials ride a pre-created Secret
+  projected via ``envFrom`` (``sandbox.kubernetes.secret_name``).
 - **Writable HOME.** The host image's WORKDIR is ``/root`` (root-owned), but
   the Pod runs as the image's non-root ``sandbox`` user (:data:`_RUN_AS_UID`)
   for least privilege, so ``$HOME`` would be unwritable. The Pod sets ``HOME``
@@ -69,14 +65,11 @@ from omnigent.host.identity import (
     HOST_TOKEN_ENV_VAR,
 )
 from omnigent.onboarding.sandboxes.base import (
-    _GIT_TOKEN_USERNAME,
     DEFAULT_HOST_IMAGE,
     SandboxHostLauncher,
-    git_identity_env,
     render_host_config_write_command,
-    ssh_authorized_keys_setup_commands,
 )
-from omnigent.onboarding.sandboxes.types import SandboxCapabilities
+from omnigent.onboarding.sandboxes.types import SandboxCapabilities, clone_dir_names
 from omnigent.pr_button import (
     _GH_WRAPPER_BIN_REL,
     _SESSION_URL_RE,
@@ -86,11 +79,11 @@ from omnigent.pr_button import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
+    from collections.abc import Callable
 
     from kubernetes import client as k8s_client
 
-    from omnigent.onboarding.sandboxes.types import RepoCheckout
+    from omnigent.onboarding.sandboxes.types import RepoWorkspace
 
 
 _logger = logging.getLogger(__name__)
@@ -459,12 +452,6 @@ def _new_pod_name(label: str) -> str:
     return f"omnigent-{base[:40]}-{uuid.uuid4().hex[:6]}"
 
 
-# Key under which the connecting user's GitHub token rides the per-Pod Secret
-# (alongside the launch token), projected into the sandbox as GIT_TOKEN /
-# GH_TOKEN / GITHUB_TOKEN via secretKeyRef so it never enters the Pod spec.
-_GITHUB_TOKEN_SECRET_KEY = "GITHUB_USER_TOKEN"
-
-
 def _is_valid_label_value(value: str) -> bool:
     """
     Report whether *value* is already a valid Kubernetes label value.
@@ -495,90 +482,77 @@ def _token_secret_name(job_name: str) -> str:
     return f"{job_name}-token"
 
 
-def _git_clone_line(url: str, branch: str | None, dest: str) -> str:
-    """Render one ``git clone`` line for the workspace prep script.
-
-    ``--`` separates options from the (already-validated) URL so it can never
-    be parsed as a flag; ``--single-branch`` keeps branch-pinned clones fast.
-    Private repos authenticate via the image's ``GIT_TOKEN`` credential helper
-    (projected from the harness Secret).
-
-    :param url: Clone URL (validated upstream).
-    :param branch: Branch to clone, or ``None`` for the default branch.
-    :param dest: Destination directory the clone lands in.
-    :returns: A single ``git clone …`` shell line (newline-terminated).
-    """
-    branch_flag = f"--branch {shlex.quote(branch)} --single-branch " if branch is not None else ""
-    return f"git clone {branch_flag}-- {shlex.quote(url)} {shlex.quote(dest)}\n"
-
-
 def _render_workspace_prep_command(
     workspace: str,
-    clone_dir: str | None,
-    repo_url: str | None,
-    repo_branch: str | None,
+    repos: Sequence[RepoWorkspace],
     server_url: str,
     host_id: str,
-    extra_repos: Sequence[RepoCheckout] = (),
-    extra_setup_commands: list[str] | None = None,
     host_config: dict[str, object] | None = None,
+    extra_setup_commands: list[str] | None = None,
 ) -> list[str]:
     """
     Render the init container command that prepares the workspace.
 
-    Creates ``<workspace>``, clones the primary repository into ``<clone_dir>``
-    when requested plus each of *extra_repos* into ``<workspace>/<repo_name>``,
-    and merges *host_config* into ``config.yaml`` under ``$OMNIGENT_CONFIG_HOME``
-    or the default ``~/.omnigent`` when set — all BEFORE the host starts.
-    Running in an init container means a failure terminates the init container
-    non-zero — surfaced fast by the start wait with the error as the container
-    log tail — rather than silently leaving the host without its workspace or
-    provider config.
+    Creates ``<workspace>``, clones each requested repository into
+    ``<workspace>/<repo_name>`` **in parallel**, and merges *host_config* into
+    ``config.yaml`` under ``$OMNIGENT_CONFIG_HOME`` or the default
+    ``~/.omnigent`` when set — all BEFORE the host starts. Running in an init
+    container means a failure terminates the init container non-zero — surfaced
+    fast by the start wait with the error as the container log tail — rather
+    than silently leaving the host without its workspace or provider config.
 
     :param workspace: The workspace root to create, e.g. ``"/home/omnigent/workspace"``.
-    :param clone_dir: Directory the primary clone lands in, or ``None`` for no clone.
-    :param repo_url: Primary repository clone URL, or ``None`` for an empty workspace.
-    :param repo_branch: Branch to clone (``--branch … --single-branch``), or
-        ``None`` for the default branch.
-    :param extra_repos: Additional repositories to clone side by side under the
-        workspace root, each into ``<workspace>/<repo_name>``. Empty for a
-        single- or empty-repo workspace.
-    :param extra_setup_commands: Additional per-user setup commands (``gh``
-        auth + ``authorized_keys``) run after the clone; best-effort, so a
-        failure here does not abort init (``|| true``). ``None`` for none.
+    :param repos: Repositories to clone into ``<workspace>/<repo_name>``; empty
+        for an empty workspace.
     :param host_config: Deployment-supplied config content to merge in (lands
         under the same config directory seen by the host container), or
         ``None``.
+    :param extra_setup_commands: Additional per-user setup commands (the
+        Open-in-Omnigent ``gh`` wrapper install) run after the clone;
+        best-effort, so a failure here does not abort init (``|| true``).
+        ``None`` for none.
     :returns: The ``["bash", "-lc", script]`` command.
     """
     script = f"set -e\nmkdir -p {shlex.quote(workspace)}\n"
-    # Wire the owner's per-user credential broker as the sole github.com helper
-    # ONCE, before any clone, so the primary repo AND every extra_repo
-    # authenticate as *them*. When they haven't connected GitHub this is a no-op
-    # that leaves the image's shared ``$GIT_TOKEN`` helper in place; ``|| true``
-    # keeps a broker hiccup from failing the clone (it then falls back to
-    # ``$GIT_TOKEN``). Needs OMNIGENT_HOST_TOKEN in-env.
-    if repo_url is not None or extra_repos:
+    if repos:
+        # Prefer the owner's per-user credential for the clone: when they've
+        # connected GitHub, wire the broker as the sole github.com helper so a
+        # private clone authenticates as *them*. Wired ONCE (it configures the
+        # global github.com helper for every clone below). When they haven't
+        # connected this is a no-op that leaves the image's shared ``$GIT_TOKEN``
+        # helper in place; ``|| true`` keeps a broker hiccup from failing the
+        # clone (it then falls back to ``$GIT_TOKEN``). Needs OMNIGENT_HOST_TOKEN.
         wire = (
             "from omnigent.git_credential_github import configure_clone_credentials; "
             f"configure_clone_credentials({server_url!r}, {host_id!r})"
         )
         script += f"python3 -c {shlex.quote(wire)} || true\n"
-
-    def _clone(url: str, branch: str | None, dest: str) -> str:
-        # ``--`` separates options from the (already-validated) URL so it can
-        # never be parsed as a flag; --single-branch keeps branch-pinned clones
-        # fast. Auth: the broker (wired above, if connected) else the image's
-        # GIT_TOKEN — both via the global github.com credential helper.
-        opt = f"--branch {shlex.quote(branch)} --single-branch " if branch is not None else ""
-        return f"git clone {opt}-- {shlex.quote(url)} {shlex.quote(dest)}\n"
-
-    if repo_url is not None and clone_dir is not None:
-        script += _clone(repo_url, repo_branch, clone_dir)
-    # Multi-repo: each extra repo clones side by side under the workspace root.
-    for extra in extra_repos:
-        script += _clone(extra.url, extra.branch, f"{workspace}/{extra.repo_name}")
-    # Per-user setup (SSH authorized_keys for VS Code Remote); best-effort.
+        # Clone every repo concurrently, then wait on each and fail the init
+        # container if ANY clone failed — a half-populated workspace must abort
+        # the launch loudly, not boot the host on it. ``set -e`` stays on, but a
+        # backgrounded failure doesn't trip it; the explicit per-pid exit-code
+        # check below does. ``--`` separates options from the (already-validated)
+        # URL so it can never be parsed as a flag; --single-branch keeps
+        # branch-pinned clones fast.
+        # ponytail: unbounded fan-out; add `xargs -P <n>` if huge repo sets on a
+        # 2-vCPU pod ever thrash.
+        script += "pids=''\n"
+        # Distinct URLs can derive the same repo_name (e.g. two orgs' "api"); a
+        # shared clone dir would fail the concurrent clones, so disambiguate.
+        for repo, dirname in zip(repos, clone_dir_names(repos), strict=True):
+            clone_dir = f"{workspace}/{dirname}"
+            branch = (
+                f"--branch {shlex.quote(repo.branch)} --single-branch "
+                if repo.branch is not None
+                else ""
+            )
+            script += (
+                f"git clone {branch}-- {shlex.quote(repo.url)} "
+                f'{shlex.quote(clone_dir)} & pids="$pids $!"\n'
+            )
+        script += 'rc=0\nfor p in $pids; do wait "$p" || rc=1; done\n'
+        script += '[ "$rc" -eq 0 ]\n'
+    # Per-user setup (the Open-in-Omnigent ``gh`` wrapper); best-effort.
     for cmd in extra_setup_commands or ():
         script += f"{cmd} || true\n"
     if host_config is not None:
@@ -612,41 +586,15 @@ def _render_host_command(server_url: str, *, path_prepend: str | None = None) ->
     return ["bash", "-lc", script]
 
 
-def _github_secret_env(token_secret_name: str) -> list[dict[str, object]]:
-    """
-    Build the user's GitHub credential env as ``secretKeyRef`` entries.
-
-    ``GIT_TOKEN`` / ``GH_TOKEN`` / ``GITHUB_TOKEN`` all resolve from the per-Pod
-    Secret's :data:`_GITHUB_TOKEN_SECRET_KEY` at runtime, so the token stays out
-    of the Pod spec. ``GIT_USERNAME`` is the fixed, non-secret token-user, so it
-    stays a literal.
-
-    :param token_secret_name: Per-Pod Secret holding the GitHub token.
-    :returns: Env entries suitable for a container's ``env`` list.
-    """
-
-    def _ref() -> dict[str, object]:
-        return {"secretKeyRef": {"name": token_secret_name, "key": _GITHUB_TOKEN_SECRET_KEY}}
-
-    return [
-        {"name": "GIT_USERNAME", "value": _GIT_TOKEN_USERNAME},
-        {"name": "GIT_TOKEN", "valueFrom": _ref()},
-        {"name": "GH_TOKEN", "valueFrom": _ref()},
-        {"name": "GITHUB_TOKEN", "valueFrom": _ref()},
-    ]
-
-
 def build_token_secret_manifest(
-    *, secret_name: str, namespace: str, token: str, github_token: str | None = None
+    *, secret_name: str, namespace: str, token: str
 ) -> dict[str, object]:
     """
     Build the per-Pod launch-token Secret manifest as a plain dict.
 
     The token rides this Secret (referenced by the Pod's ``secretKeyRef``)
     instead of the Pod spec, so it never lands in an audit-logged surface. The
-    connecting user's GitHub token (when present) rides the same Secret under
-    :data:`_GITHUB_TOKEN_SECRET_KEY`, for the same reason. The Secret is
-    labeled like its Pod for GC and deleted alongside it by
+    Secret is labeled like its Pod for GC and deleted alongside it by
     :meth:`KubernetesSandboxLauncher.terminate`. It carries only the
     ``managed-by``/``role`` GC pair — the ``omnigent.ai/agent`` classifier is
     stamped on the Pod alone, since it is an admission selector, not a GC one.
@@ -655,12 +603,8 @@ def build_token_secret_manifest(
     :param namespace: Namespace the Secret is created in.
     :param token: The raw launch token (the apiserver base64-encodes
         ``stringData``).
-    :param github_token: The connecting user's GitHub token, or ``None``.
     :returns: The Secret manifest dict.
     """
-    string_data: dict[str, str] = {HOST_TOKEN_ENV_VAR: token}
-    if github_token:
-        string_data[_GITHUB_TOKEN_SECRET_KEY] = github_token
     return {
         "apiVersion": "v1",
         "kind": "Secret",
@@ -670,7 +614,7 @@ def build_token_secret_manifest(
             "labels": {_MANAGED_BY_LABEL: _MANAGED_BY_VALUE, _ROLE_LABEL: _ROLE_VALUE},
         },
         "type": "Opaque",
-        "stringData": string_data,
+        "stringData": {HOST_TOKEN_ENV_VAR: token},
     }
 
 
@@ -688,14 +632,7 @@ def build_job_manifest(
     env_literals: dict[str, str],
     node_selector: dict[str, str] | None,
     workspace: str,
-    clone_dir: str | None = None,
-    repo_url: str | None = None,
-    repo_branch: str | None = None,
-    extra_repos: Sequence[RepoCheckout] = (),
-    owner: str | None = None,
-    github_token: str | None = None,
-    github_login: str | None = None,
-    ssh_authorized_keys: Sequence[str] | None = None,
+    repos: Sequence[RepoWorkspace] = (),
     host_config: dict[str, object] | None = None,
     resources: dict[str, object] | None = None,
     pvc_mounts: Sequence[Mapping[str, object]] | None = None,
@@ -750,18 +687,11 @@ def build_job_manifest(
       Both share the writable-HOME ``emptyDir``.
     - ``restartPolicy: OnFailure`` — a crashed host is automatically restarted
       by the kubelet within the Job's ``backoffLimit``.
-    - Resources are budgeted at the **Pod level** (``spec.resources``), shared by
-      the host and any injected sidecar, so neither carries its own request/limit.
-    - ``shareProcessNamespace: true`` — an ssh session in a sidecar sees and can
-      signal the host's processes.
     - ``automountServiceAccountToken: false`` — a compromised agent cannot reach
       the API with the runner SA.
     - The launch token is referenced via ``secretKeyRef`` (never in the spec);
       the host identity rides literal env; harness credentials are projected via
-      ``envFrom`` when *harness_secret* is set. The connecting user's GitHub
-      token likewise rides the per-Pod Secret via ``secretKeyRef`` (as
-      ``GIT_TOKEN`` / ``GH_TOKEN`` / ``GITHUB_TOKEN``), so it never enters the
-      Pod spec — the init container's ``gh`` / git setup reads it from that env.
+      ``envFrom`` when *harness_secret* is set.
     - Pod + container ``securityContext`` satisfy Pod Security "restricted"
       (runAsNonRoot as the image's ``sandbox`` user :data:`_RUN_AS_UID`, drop ALL
       caps, ``seccompProfile: RuntimeDefault``, no privilege escalation). The
@@ -805,12 +735,8 @@ def build_job_manifest(
         a default ``kubernetes.io/arch: amd64``; an operator-supplied
         ``kubernetes.io/arch`` entry overrides the default.
     :param workspace: Absolute workspace root created by the init container.
-    :param clone_dir: Directory the clone lands in, or ``None`` for no clone.
-    :param repo_url: Repository clone URL, or ``None`` for an empty workspace.
-    :param repo_branch: Branch to clone, or ``None`` for the default branch.
-    :param owner: Session owner; when an email, its git author / committer
-        identity is added as literal env so sandbox commits are attributed to
-        that human, not the shared ``GIT_TOKEN`` (see :func:`git_identity_env`).
+    :param repos: Repositories the init container clones into
+        ``<workspace>/<repo_name>`` in parallel; empty for an empty workspace.
     :param host_config: Deployment-supplied config content merged in by the
         init container under the host's resolved config directory, or ``None``.
         Non-secret by design:
@@ -823,9 +749,6 @@ def build_job_manifest(
         container only, or ``None``.
     :param secret_mounts: Normalized Secret mounts (``{secret_name,
         mount_path}``) added as read-only ``secret`` volumes on the host
-        container only, or ``None``.
-    :param config_map_mounts: Normalized ConfigMap mounts (``{config_map_name,
-        mount_path}``) added as read-only ``configMap`` volumes on the host
         container only, or ``None``.
     :param tolerations: Normalized Toleration entries (``{key?, operator?,
         value?, effect?, tolerationSeconds?}``) added to ``spec.tolerations``
@@ -849,8 +772,6 @@ def build_job_manifest(
     :returns: The Job manifest dict.
     """
     pod_resources = _resolve_pod_resources(resources)
-    # Budget resources at the Pod level so the host and the ssh sidecar share one
-    # pool instead of each carrying its own; containers omit their own resources.
     home_volume: dict[str, object] = {"name": "home", "emptyDir": {}}
     if home_size_limit is not None:
         home_volume["emptyDir"] = {"sizeLimit": home_size_limit}
@@ -923,12 +844,6 @@ def build_job_manifest(
             {"name": f"config-map-{i}", "mountPath": mount["mount_path"], "readOnly": True}
         )
 
-    # Per-user SSH keys (VS Code Remote): append the owner's PUBLIC keys to
-    # ~/.ssh/authorized_keys in the init container's shared HOME before the host
-    # starts. git/gh credentials are NOT written here — the native credential
-    # broker + git_credential_github helper vend/refresh those live per op.
-    ssh_setup = ssh_authorized_keys_setup_commands(_HOME_DIR, ssh_authorized_keys)
-
     # Open-in-Omnigent PR-body button: when a charset-valid session URL is known,
     # the init container installs an on-PATH ``gh`` wrapper that stamps the
     # session's Open-in-Omnigent link into ``gh pr create`` bodies. Best-effort
@@ -937,20 +852,13 @@ def build_job_manifest(
     # container exports OMNIGENT_SESSION_URL and prepends the wrapper dir to PATH
     # (below) so the wrapper takes effect for the agent's shells.
     wrapper_bin_dir: str | None = None
+    gh_setup: list[str] = []
     if session_url and _SESSION_URL_RE.match(session_url):
         wrapper_bin_dir = f"{_HOME_DIR}/{_GH_WRAPPER_BIN_REL}"
-        ssh_setup = [*ssh_setup, render_gh_wrapper_write_command(_HOME_DIR)]
-
-    # Launch-time GitHub credential seed (git + gh authenticate as the connecting
-    # user), as secretKeyRef entries so the token never lands in the Pod spec.
-    # The native credential broker + git_credential_github helper keep these live
-    # per op; this only seeds the initial env. Injected into BOTH the init clone
-    # (private-repo checkout) and the host. Empty when GitHub is not connected.
-    github_env = _github_secret_env(token_secret_name) if github_token else []
+        gh_setup = [render_gh_wrapper_write_command(_HOME_DIR)]
 
     init_env: list[dict[str, object]] = [{"name": "HOME", "value": _HOME_DIR}]
-    init_env.extend(github_env)
-    if repo_url is not None or extra_repos:
+    if repos:
         # The clone wires the per-user broker when the owner has connected GitHub
         # (see _render_workspace_prep_command), which reads the launch token from
         # the env — project it the same way the host container does. Only added
@@ -997,14 +905,11 @@ def build_job_manifest(
         "workingDir": _HOME_DIR,
         "command": _render_workspace_prep_command(
             workspace,
-            clone_dir,
-            repo_url,
-            repo_branch,
+            repos,
             server_url,
             host_id,
-            extra_repos=extra_repos,
-            extra_setup_commands=ssh_setup,
-            host_config=host_config,
+            host_config,
+            extra_setup_commands=gh_setup,
         ),
         "env": init_env,
         "securityContext": container_security,
@@ -1030,16 +935,6 @@ def build_job_manifest(
         },
     ]
     host_env.extend({"name": name, "value": value} for name, value in env_literals.items())
-    # Per-user GitHub credential env (git + gh authenticate as the connecting
-    # user), after env_literals so it overrides any shared GIT_TOKEN. The token
-    # values come from the per-Pod Secret via secretKeyRef, not the spec.
-    host_env.extend(github_env)
-    # Session-owner git identity, last so it wins any env_literals collision and
-    # (as literal env) overrides the harness Secret's envFrom: sandbox commits
-    # are authored by the human who launched the session, not the shared token.
-    host_env.extend(
-        {"name": name, "value": value} for name, value in git_identity_env(owner).items()
-    )
     # Open-in-Omnigent wrapper env: export the session URL (and any button-image
     # override) so the on-PATH ``gh`` wrapper the init container wrote stamps
     # ``gh pr create`` bodies. Only when the URL passed the charset guard above
@@ -1071,7 +966,9 @@ def build_job_manifest(
         "restartPolicy": "OnFailure",
         "automountServiceAccountToken": False,
         "serviceAccountName": service_account,
-        # Whole-Pod budget shared by the host + ssh sidecar (see above).
+        # Budget resources at the Pod level so the host and the admission-injected
+        # ssh sidecar share one pool instead of each carrying its own; containers
+        # omit their own ``resources``.
         "resources": pod_resources,
         # Share the PID namespace so an ssh session in the sidecar sees (and can
         # signal) the sandbox host's processes.
@@ -1088,12 +985,7 @@ def build_job_manifest(
             "fsGroupChangePolicy": "OnRootMismatch",
             "seccompProfile": {"type": "RuntimeDefault"},
         },
-        "volumes": [
-            home_volume,
-            *pvc_volumes,
-            *secret_volumes,
-            *config_map_volumes,
-        ],
+        "volumes": [home_volume, *pvc_volumes, *secret_volumes, *config_map_volumes],
         "initContainers": [init_container],
         "containers": [host_container],
     }
@@ -1346,6 +1238,11 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
             resume_stopped=True,
             programmatic_terminate=True,
             classifies_runner_by_agent=True,
+            # The init container clones repos in parallel. agent-sandbox
+            # inherits this; managed Databricks launchers (Lakebox, Arca, …)
+            # are on the exec-model branch and stay single-repo until they
+            # opt in themselves.
+            multi_repo=True,
         )
 
     def __init__(
@@ -1377,33 +1274,6 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
         required) and so tests can inject fakes before the real client is
         created.
 
-        :param image: Host image reference — the ``sandbox.kubernetes.image``
-            config. ``None`` resolves :data:`HOST_IMAGE_ENV_VAR` then
-            :data:`~omnigent.onboarding.sandboxes.base.DEFAULT_HOST_IMAGE`.
-        :param namespace: Namespace to create Pods in. ``None`` resolves
-            :data:`NAMESPACE_ENV_VAR` then :data:`_DEFAULT_NAMESPACE`.
-        :param env: Names of server-process environment variables to inject as
-            literal env. ``None`` resolves :data:`SANDBOX_ENV_PASSTHROUGH_ENV_VAR`.
-        :param secret_name: Kubernetes Secret to project via ``envFrom``.
-            ``None`` resolves :data:`SANDBOX_SECRET_ENV_VAR` then no Secret.
-        :param node_selector: Extra node selector labels merged with a default
-            ``kubernetes.io/arch: amd64``; a ``kubernetes.io/arch`` entry here
-            overrides the default (e.g. ``arm64``).
-        :param service_account: ServiceAccount Pods run as. ``None`` resolves
-            :data:`SERVICE_ACCOUNT_ENV_VAR` then :data:`_DEFAULT_SERVICE_ACCOUNT`.
-        :param kubeconfig: Kubeconfig path for the out-of-cluster fallback.
-            ``None`` resolves :data:`KUBECONFIG_ENV_VAR` then the ambient config.
-        :param in_cluster: Force the config source: ``True`` in-cluster only,
-            ``False`` kubeconfig only, ``None`` to try in-cluster then fall back.
-        :param resources: ``sandbox.kubernetes.resources`` block, or ``None``
-            for the built-in defaults.
-        :param pvc_mounts: Normalized ``sandbox.kubernetes.pvc_mounts`` entries
-            (validated at parse time), or ``None`` for none.
-        :param secret_mounts: Normalized ``sandbox.kubernetes.secret_mounts``
-            entries (validated at parse time), or ``None`` for none.
-        :param config_map_mounts: Normalized
-            ``sandbox.kubernetes.config_map_mounts`` entries (validated at
-            parse time), or ``None`` for none.
         :param home_size_limit: ``sizeLimit`` for the writable-HOME emptyDir
             of every Pod, or ``None`` for an unbounded emptyDir (the caller
             decides; ``sandbox.kubernetes.home_size_limit: null`` maps here).
@@ -1646,14 +1516,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
         host_id: str,
         host_name: str,
         server_url: str,
-        repo_url: str | None = None,
-        repo_branch: str | None = None,
-        repo_name: str | None = None,
-        extra_repos: Sequence[RepoCheckout] = (),
-        owner: str | None = None,
-        github_token: str | None = None,
-        github_login: str | None = None,
-        ssh_authorized_keys: Sequence[str] | None = None,
+        repos: Sequence[RepoWorkspace] = (),
         host_config: dict[str, object] | None = None,
         agent_name: str | None = None,
         session_url: str | None = None,
@@ -1667,27 +1530,21 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
         :param host_id: Server-chosen host identity.
         :param host_name: Server-chosen host display name.
         :param server_url: URL the host dials back to.
-        :param repo_url: Repository clone URL, or ``None`` for an empty workspace.
-        :param repo_branch: Branch to clone, or ``None`` for the default branch.
-        :param repo_name: Directory the clone lands in, or ``None``.
-        :param owner: Session owner; when an email, exported as the runner Pod's
-            git author / committer identity (see :func:`git_identity_env`).
-        :param github_token: Session owner's connected GitHub token, injected
-            as the Pod's git / ``gh`` credential so the sandbox acts as that
-            user. ``None`` when not connected.
-        :param github_login: Owner's GitHub login, paired with *github_token*
-            to write the ``gh`` CLI config. ``None`` when *github_token* is.
-        :param ssh_authorized_keys: Owner's PUBLIC SSH keys, appended to the
-            Pod's ``authorized_keys``. ``None`` / empty when unavailable.
+        :param repos: Repositories the init container clones into
+            ``<workspace>/<repo_name>`` in parallel; empty for an empty
+            workspace. The returned path is the single clone directory when one
+            repo is cloned, else the workspace root parenting them all.
         :param host_config: Deployment-supplied ``~/.omnigent/config.yaml``
             content the init container merges in before the host starts, or
             ``None``.
         :param agent_name: Server-resolved built-in agent name the session runs,
             stamped as the Job's ``omnigent.ai/agent`` classifier, or ``None`` to
             leave the runner unclassified.
+        :param session_url: Public Open-in-Omnigent session URL; when charset-valid
+            the init container installs the PR-body ``gh`` wrapper stamped with it.
+            ``None`` disables the button.
         :param on_stage: Progress observer; invoked with ``"starting"``.
-        :returns: The absolute in-sandbox workspace path (the cloned repository
-            directory when *repo_url* is set).
+        :returns: The absolute in-sandbox workspace path.
         :raises click.ClickException: When creation fails or the host does not
             start in time.
         """
@@ -1700,7 +1557,6 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
         env_literals = self._resolve_sandbox_env()
         secret_name = _token_secret_name(sandbox_id)
         workspace = f"{_HOME_DIR}/workspace"
-        clone_dir = f"{workspace}/{repo_name}" if repo_name else None
         if on_stage is not None:
             on_stage("starting")
         core = self._load_core()
@@ -1723,14 +1579,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                     env_literals=env_literals,
                     node_selector=self._node_selector,
                     workspace=workspace,
-                    clone_dir=clone_dir,
-                    repo_url=repo_url,
-                    repo_branch=repo_branch,
-                    extra_repos=extra_repos,
-                    owner=owner,
-                    github_token=github_token,
-                    github_login=github_login,
-                    ssh_authorized_keys=ssh_authorized_keys,
+                    repos=repos,
                     host_config=host_config,
                     resources=self._resources,
                     pvc_mounts=self._pvc_mounts,
@@ -1747,10 +1596,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                 core.create_namespaced_secret(
                     namespace,
                     build_token_secret_manifest(
-                        secret_name=secret_name,
-                        namespace=namespace,
-                        token=token,
-                        github_token=github_token,
+                        secret_name=secret_name, namespace=namespace, token=token
                     ),
                     _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
                 )
@@ -1773,12 +1619,9 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
         finally:
             self._close_clients()
         click.echo(f"  → {self.workload_kind} '{sandbox_id}' is starting the host")
-        # With sibling repos checked out under the workspace root, the host
-        # starts at the root so every repo is visible; a lone repo keeps the
-        # existing behaviour of starting inside its clone directory.
-        if extra_repos:
-            return workspace
-        return clone_dir or workspace
+        # One repo → drop the agent straight into it; several (or none) → the
+        # workspace root that parents every clone.
+        return f"{workspace}/{repos[0].repo_name}" if len(repos) == 1 else workspace
 
     def _create_workload(self, namespace: str, manifest: dict[str, object]) -> None:
         """

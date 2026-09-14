@@ -34,7 +34,7 @@ stores into ``create_app``):
 
        sandbox:
          # lakebox|modal|daytona|blaxel|boxlite|cwsandbox|islo|e2b|openshell|
-         # kubernetes|microsandbox
+         # kubernetes|microsandbox|gensee
          provider: modal
          server_url: https://omnigent.example.com
          # For SEVERAL providers, replace `provider:` with a `providers:`
@@ -112,9 +112,15 @@ stores into ``create_app``):
            network: host                     # host (default)|public-only|all
            host_ports: [8317]                # extra guest-to-host ports (the
                                              # server_url port is always allowed)
+         gensee:                 # optional block (provider: gensee)
+           endpoint: https://sandbox.gensee.ai
+           api_token_env: GENSEE_CONTROLLER_API_TOKEN
+           workspace_root: /mnt/gensee-tclone/workspaces
+           env: [OPENAI_API_KEY, GIT_TOKEN]  # SERVER env var NAMES injected
 
    Most providers default to a public prebaked host image, so
-   ``provider`` + ``server_url`` is a complete config. Registry-backed
+   ``provider`` + ``server_url`` is a complete config. Gensee instead starts a
+   provider-managed runtime. Registry-backed
    providers use ``ghcr.io/omnigent-ai/omnigent-host:latest`` (see
    :data:`omnigent.onboarding.sandboxes.base.DEFAULT_HOST_IMAGE`); Blaxel uses
    ``blaxel/omnigent-host:latest``, which adds its required ``sandbox-api``.
@@ -126,7 +132,9 @@ stores into ``create_app``):
    launcher reads ``DAYTONA_API_KEY`` (plus optional
    ``DAYTONA_API_URL`` / ``DAYTONA_TARGET``), and the Islo launcher
    reads ``ISLO_API_KEY`` (plus optional ``ISLO_BASE_URL``) from the
-   server process environment. The Blaxel launcher reads ``BL_WORKSPACE``
+   server process environment. Gensee reads the environment variable named by
+   ``sandbox.gensee.api_token_env`` (``GENSEE_CONTROLLER_API_TOKEN`` by
+   default). The Blaxel launcher reads ``BL_WORKSPACE``
    and ``BL_API_KEY`` or the local ``bl login`` profile. The OpenShell
    launcher needs no API key:
    it connects to the gateway made active with ``openshell gateway
@@ -166,21 +174,25 @@ import re
 import secrets
 import time
 import uuid
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from dataclasses import field as dataclass_field
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 import click
 from fastapi import HTTPException
 
+from omnigent.db.db_models import LABEL_VALUE_MAX_LEN
 from omnigent.db.utils import builtin_agent_id, now_epoch
-from omnigent.onboarding.sandboxes.types import RepoCheckout
+
+# RepoWorkspace lives in the launcher's own package so a launcher can accept it
+# without importing omnigent.server; re-exported here (its parser is here) so
+# existing `from omnigent.server.managed_hosts import RepoWorkspace` keeps working.
+from omnigent.onboarding.sandboxes.types import RepoWorkspace
 from omnigent.stores.host_store import Host, HostStore
 
 if TYPE_CHECKING:
     from omnigent.onboarding.sandboxes import SandboxHostLauncher
-    from omnigent.server.github_app import SandboxGithubIdentity
     from omnigent.stores.agent_store import AgentStore
 
 _logger = logging.getLogger(__name__)
@@ -201,6 +213,7 @@ SUPPORTED_SANDBOX_PROVIDERS: frozenset[str] = frozenset(
         "cwsandbox",
         "islo",
         "e2b",
+        "gensee",
         "openshell",
         "kubernetes",
         "microsandbox",
@@ -216,6 +229,7 @@ PROVIDERS_WITH_MANAGED_LAUNCH: frozenset[str] = frozenset(
         "cwsandbox",
         "islo",
         "e2b",
+        "gensee",
         "openshell",
         "kubernetes",
         "microsandbox",
@@ -346,12 +360,74 @@ MANAGED_LAUNCH_RENDEZVOUS_TIMEOUT_S = MANAGED_HOST_ONLINE_TIMEOUT_S + 120
 # create/patch reject any client label here, closing future keys by default.
 MANAGED_SANDBOX_LABEL_NAMESPACE = "omnigent.sandbox."
 
-# Session label recording the repository-URL workspace a managed
-# session was created with (the raw ``<url>[#<branch>]`` request
-# value). ``conversations.workspace`` is overwritten with the CLONED
-# path at bind time, so this label is what a sandbox RELAUNCH parses
-# to re-clone the repository into the fresh generation's workspace.
+# Base key for the labels recording the repository-URL workspaces a managed
+# session was created with (the raw ``<url>[#<branch>]`` request values).
+# ``conversations.workspace`` is overwritten with the CLONED path at bind time,
+# so these labels are what a sandbox RELAUNCH parses to re-clone the repos into
+# the fresh generation's workspace. Stored ONE PER REPO under ``<base>.<index>``
+# (``omnigent.sandbox.repo.0``, ``.1``, …): a single joined label would be
+# silently truncated at the 256-char label-value cap, losing repos on relaunch.
+# Per-session state: a fork never inherits them (the store drops the whole
+# ``<base>.`` family, and the fork's own launch re-stamps whatever it resolves),
+# while an in-place agent switch keeps them — the sandbox is unchanged.
 MANAGED_REPO_LABEL_KEY = "omnigent.sandbox.repo"
+
+
+def managed_repo_labels(workspaces: Sequence[str]) -> dict[str, str]:
+    """
+    Build the per-repo relaunch labels for a managed session's workspaces.
+
+    One label per repo, ``<base>.<index>`` → the raw ``<url>[#<branch>]`` value,
+    so each stays well under the 256-char label-value cap that would truncate a
+    single joined label (and lose repos on relaunch/fork). These indexed labels
+    are the source of truth :func:`read_managed_repo_workspaces` reads.
+
+    Backwards-compat shim: also write the legacy bare ``<base>`` key (the
+    space-joined value) so a server predating per-repo storage — e.g. after a
+    rollback against a shared database — still relaunches the repos through its
+    old bare-key read. It's written only when it fits the label-value cap (so a
+    truncated value is never stored); a larger set has no bare key and an old
+    server would relaunch it empty, but that is the rare many-repo case and only
+    a rolled-back reader. The current server ignores the bare key whenever the
+    indexed labels are present.
+
+    :param workspaces: The raw repository workspace strings, in order.
+    :returns: ``{f"{MANAGED_REPO_LABEL_KEY}.{i}": ws}`` for each, plus the bare
+        ``MANAGED_REPO_LABEL_KEY`` when the joined value fits; ``{}`` when
+        *workspaces* is empty.
+    """
+    labels = {f"{MANAGED_REPO_LABEL_KEY}.{i}": ws for i, ws in enumerate(workspaces)}
+    if labels:
+        joined = " ".join(workspaces)
+        if len(joined) <= LABEL_VALUE_MAX_LEN:
+            labels[MANAGED_REPO_LABEL_KEY] = joined
+    return labels
+
+
+def read_managed_repo_workspaces(labels: Mapping[str, str]) -> list[str]:
+    """
+    Recover the ordered repository workspaces from a session's labels.
+
+    Inverse of :func:`managed_repo_labels`: collect every ``<base>.<index>``
+    label and return the values ordered by their integer index. Falls back to
+    the legacy single space-joined ``<base>`` label so sessions created before
+    per-repo storage still relaunch/fork with their repositories.
+
+    :param labels: The session's labels.
+    :returns: The raw workspace strings in order; ``[]`` when none are recorded.
+    """
+    prefix = f"{MANAGED_REPO_LABEL_KEY}."
+    indexed: list[tuple[int, str]] = []
+    for key, value in labels.items():
+        if key.startswith(prefix):
+            suffix = key[len(prefix) :]
+            if suffix.isdigit():
+                indexed.append((int(suffix), value))
+    if indexed:
+        return [value for _, value in sorted(indexed)]
+    # Legacy: a single space-joined label from before per-repo storage.
+    legacy = labels.get(MANAGED_REPO_LABEL_KEY)
+    return legacy.split() if legacy else []
 
 
 def resolve_managed_agent_label(
@@ -729,6 +805,28 @@ class ManagedSandboxDeployment:
             if config.managed_launch_supported and config.provider is not None
         )
 
+    def provider_ui_capabilities(self) -> dict[str, dict[str, bool]]:
+        """
+        UI-relevant capability flags per launchable provider, for ``/v1/info``.
+
+        Only the flags the web branches on are exposed (not the full internal
+        :class:`SandboxCapabilities`), so the wire contract stays small — add an
+        inner key here to surface another flag. Instantiates each launchable
+        provider's launcher to read its declared capabilities.
+
+        ponytail: builds launchers on each call; memoize on the deployment only
+        if /v1/info shows up hot (provider count is tiny, __init__ does no I/O).
+
+        :returns: ``{provider: {"multi_repo": bool}}`` for each launchable
+            provider, in configured order.
+        """
+        caps: dict[str, dict[str, bool]] = {}
+        for config in self.configs:
+            if config.managed_launch_supported and config.provider is not None:
+                launcher = config.launcher_factory()
+                caps[config.provider] = {"multi_repo": launcher.capabilities.multi_repo}
+        return caps
+
 
 @dataclass
 class ManagedHostLaunch:
@@ -746,32 +844,6 @@ class ManagedHostLaunch:
 
     host_id: str
     workspace: str
-
-
-@dataclass
-class RepoWorkspace:
-    """
-    Parsed repository-URL workspace for a managed session.
-
-    A managed create's ``workspace`` is a git repository URL with an
-    optional ``#<branch>`` fragment (Docker build-context style): the
-    URL fully describes what the server materializes inside the
-    sandbox. Built by :func:`parse_repo_workspace` — construct via the
-    parser, not directly, so every field has been validated.
-
-    :param url: The clone URL with any fragment stripped, e.g.
-        ``"https://github.com/org/repo.git"`` or
-        ``"git@github.com:org/repo.git"``.
-    :param branch: Branch to clone (``--branch … --single-branch``),
-        e.g. ``"release-1.2"``, or ``None`` for the default branch.
-    :param repo_name: Directory name the clone lands in under the
-        sandbox workspace, derived from the URL's last path segment
-        with ``.git`` stripped, e.g. ``"repo"``.
-    """
-
-    url: str
-    branch: str | None
-    repo_name: str
 
 
 # A full 40-hex object id — rejected as a clone fragment: cloning a
@@ -881,15 +953,40 @@ def parse_repo_workspace(workspace: str) -> RepoWorkspace:
     url, sep, fragment = workspace.partition("#")
     if any(ch.isspace() for ch in workspace):
         raise ValueError("a repository workspace must not contain whitespace")
+    # Each workspace is stored verbatim in its own relaunch label, whose value
+    # column is capped; reject an over-long one at parse so it can't be silently
+    # truncated on write and relaunch/fork the wrong ref.
+    if len(workspace) > LABEL_VALUE_MAX_LEN:
+        raise ValueError(
+            f"a repository workspace must be at most {LABEL_VALUE_MAX_LEN} characters "
+            f"(got {len(workspace)}) — shorten the URL or branch"
+        )
+    # Reject embedded credentials (``user:token@host``) BEFORE any error that
+    # echoes the URL: the token would otherwise be persisted verbatim in a
+    # session label and the sandbox Pod spec, and leak into the error/logs. A
+    # well-formed URL of either form has no ``@`` after the scheme (https) or the
+    # ``git@`` user (ssh), so any ``@`` in the remainder is embedded userinfo —
+    # for both forms. The message must not echo the URL (it carries the secret);
+    # connect the account so the clone authenticates via the credential broker.
+    _cred_msg = (
+        "a repository URL must not embed credentials (user:token@host) — "
+        "connect the account instead of putting a token in the URL"
+    )
     if url.startswith("https://"):
-        host, slash, path = url[len("https://") :].partition("/")
+        rest = url[len("https://") :]
+        if "@" in rest:
+            raise ValueError(_cred_msg)
+        host, slash, path = rest.partition("/")
         if not host or not slash or not path.strip("/"):
             raise ValueError(
                 f"'{url}' is not a usable https repository URL — expected "
                 "'https://<host>/<org>/<repo>'"
             )
     elif url.startswith("git@"):
-        host, colon, path = url[len("git@") :].partition(":")
+        rest = url[len("git@") :]
+        if "@" in rest:
+            raise ValueError(_cred_msg)
+        host, colon, path = rest.partition(":")
         if not host or not colon or not path.strip("/"):
             raise ValueError(
                 f"'{url}' is not a usable ssh repository URL — expected 'git@<host>:<org>/<repo>'"
@@ -1409,6 +1506,36 @@ def _parse_single_provider_sandbox_config(raw: dict[str, object]) -> ManagedSand
         # outlives the (operator-overridable) sandbox lifetime — mirrors
         # the cwsandbox path.
         token_ttl_s = managed_token_ttl_s()
+    elif provider == "gensee":
+        from omnigent.onboarding.sandboxes.gensee import MANAGED_TOKEN_TTL_S
+
+        section = _parse_provider_section(raw, "gensee")
+        if section is not None:
+            _reject_unknown_keys(
+                section,
+                {
+                    "endpoint",
+                    "api_token_env",
+                    "workspace_root",
+                    "operation_timeout_s",
+                    "poll_interval_s",
+                    "request_timeout_s",
+                    "retry_timeout_s",
+                    "env",
+                },
+                "sandbox.gensee",
+            )
+        launcher_factory = _gensee_launcher_factory(
+            endpoint=_parse_provider_string(raw, "gensee", "endpoint"),
+            api_token_env=_parse_provider_string(raw, "gensee", "api_token_env"),
+            workspace_root=_parse_provider_string(raw, "gensee", "workspace_root"),
+            operation_timeout_s=_parse_provider_positive_int(raw, "gensee", "operation_timeout_s"),
+            poll_interval_s=_parse_provider_positive_int(raw, "gensee", "poll_interval_s"),
+            request_timeout_s=_parse_provider_positive_int(raw, "gensee", "request_timeout_s"),
+            retry_timeout_s=_parse_provider_nonnegative_int(raw, "gensee", "retry_timeout_s"),
+            env=_parse_provider_env(raw, "gensee"),
+        )
+        token_ttl_s = MANAGED_TOKEN_TTL_S
     elif provider == "openshell":
         launcher_factory = _openshell_launcher_factory(
             image=_parse_provider_image(raw, "openshell"),
@@ -2064,6 +2191,50 @@ def _e2b_launcher_factory(
     return _build
 
 
+def _gensee_launcher_factory(
+    *,
+    endpoint: str | None,
+    api_token_env: str | None,
+    workspace_root: str | None,
+    operation_timeout_s: int | None,
+    poll_interval_s: int | None,
+    request_timeout_s: int | None,
+    retry_timeout_s: int | None,
+    env: list[str] | None,
+) -> Callable[[], SandboxHostLauncher]:
+    """Build the launcher factory for the YAML ``provider: gensee`` path."""
+    from omnigent.onboarding.sandboxes.gensee import (
+        API_TOKEN_ENV_VAR,
+        DEFAULT_OPERATION_TIMEOUT_S,
+        DEFAULT_POLL_INTERVAL_S,
+        DEFAULT_REQUEST_TIMEOUT_S,
+        DEFAULT_RETRY_TIMEOUT_S,
+        DEFAULT_WORKSPACE_ROOT,
+        GenseeSandboxLauncher,
+    )
+
+    def _build() -> SandboxHostLauncher:
+        return GenseeSandboxLauncher(
+            endpoint=endpoint,
+            api_token_env=api_token_env or API_TOKEN_ENV_VAR,
+            workspace_root=workspace_root or DEFAULT_WORKSPACE_ROOT,
+            operation_timeout_s=operation_timeout_s or DEFAULT_OPERATION_TIMEOUT_S,
+            poll_interval_s=poll_interval_s or DEFAULT_POLL_INTERVAL_S,
+            request_timeout_s=request_timeout_s or DEFAULT_REQUEST_TIMEOUT_S,
+            retry_timeout_s=(
+                retry_timeout_s if retry_timeout_s is not None else DEFAULT_RETRY_TIMEOUT_S
+            ),
+            env=env,
+        )
+
+    try:
+        _build()
+    except ValueError as exc:
+        raise ValueError(f"server config 'sandbox.gensee' is invalid: {exc}") from exc
+
+    return _build
+
+
 def _parse_e2b_template(raw: dict[str, object]) -> str | None:
     """
     Extract and validate the e2b template from the ``sandbox`` dict.
@@ -2468,6 +2639,21 @@ def _parse_provider_positive_int(raw: dict[str, object], provider: str, key: str
         return None
     if not isinstance(value, int) or isinstance(value, bool) or value <= 0:
         raise ValueError(f"server config 'sandbox.{provider}.{key}' must be a positive integer")
+    return value
+
+
+def _parse_provider_nonnegative_int(raw: dict[str, object], provider: str, key: str) -> int | None:
+    """Extract an optional non-negative integer provider field."""
+    section = _parse_provider_section(raw, provider)
+    if section is None:
+        return None
+    value = section.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(
+            f"server config 'sandbox.{provider}.{key}' must be a non-negative integer"
+        )
     return value
 
 
@@ -3296,9 +3482,7 @@ async def launch_managed_host(
     config: ManagedSandboxDeployment,
     owner: str,
     host_store: HostStore,
-    repo: RepoWorkspace | None = None,
-    extra_repos: Sequence[RepoWorkspace] = (),
-    github_identity: SandboxGithubIdentity | None = None,
+    repos: Sequence[RepoWorkspace] = (),
     provider: str | None = None,
     agent_name: str | None = None,
     session_id: str | None = None,
@@ -3309,12 +3493,11 @@ async def launch_managed_host(
 
     Sequence: provision sandbox → pre-register the host row with its
     launch-token digest (so the credential resolves by the time the
-    host dials the tunnel) → optionally clone the requested repository
-    → start ``omnigent host`` inside the sandbox with the token +
-    identity in its environment → poll the hosts table until the host
-    is online. Any failure after provisioning terminates the sandbox
-    and deletes the host row (which revokes the token) before
-    re-raising.
+    host dials the tunnel) → clone the requested repositories → start
+    ``omnigent host`` inside the sandbox with the token + identity in its
+    environment → poll the hosts table until the host is online. Any
+    failure after provisioning terminates the sandbox and deletes the
+    host row (which revokes the token) before re-raising.
 
     :param config: The deployment's offered providers (YAML-parsed or
         wrapped around a directly-constructed embedding config).
@@ -3324,21 +3507,14 @@ async def launch_managed_host(
     :param host_store: Persistent host registrations — receives the
         pre-registered host row and is polled for the sandbox host
         coming online.
-    :param repo: Parsed repository-URL workspace to clone into the
-        sandbox as the session's working directory, or ``None`` for
-        an empty workspace. Private repositories authenticate via the
-        host image's git credential helper when the sandbox env
-        carries ``GIT_TOKEN`` (injected through Modal secrets — see
-        deploy/modal/README.md "Git credentials").
-    :param extra_repos: Additional repositories cloned side by side with
-        *repo* under the workspace root; empty for a single-repo workspace.
-        When any are present the host starts at the workspace root.
-    :param github_identity: The session owner's connected GitHub
-        credentials (user access token, login, public SSH keys), used to
-        authenticate ``gh`` / git in the sandbox *as that user* and to
-        inject their SSH keys. ``None`` when the owner has not connected
-        GitHub or the GitHub App is not configured — the sandbox then
-        keeps the shared ``GIT_TOKEN`` behaviour.
+    :param repos: Parsed repository-URL workspaces to clone into the
+        sandbox (empty for an empty workspace). One repo becomes the
+        session's working directory; several are cloned as siblings and
+        the working directory is the parent that holds them. Private
+        repositories authenticate via the host image's git credential
+        helper when the sandbox env carries ``GIT_TOKEN`` (injected
+        through Modal secrets — see deploy/modal/README.md "Git
+        credentials").
     :param provider: Which configured provider to launch on, e.g.
         ``"modal"``. ``None`` takes the deployment's default (first)
         provider — what a request that names none gets.
@@ -3381,9 +3557,7 @@ async def launch_managed_host(
         host_name=host_name,
         owner=owner,
         sandbox_id=sandbox_id,
-        repo=repo,
-        extra_repos=extra_repos,
-        github_identity=github_identity,
+        repos=repos,
         agent_name=agent_name,
         session_id=session_id,
         on_stage=on_stage,
@@ -3396,9 +3570,7 @@ async def relaunch_managed_host(
     config: ManagedSandboxDeployment,
     host: Host,
     host_store: HostStore,
-    repo: RepoWorkspace | None = None,
-    extra_repos: Sequence[RepoWorkspace] = (),
-    github_identity: SandboxGithubIdentity | None = None,
+    repos: Sequence[RepoWorkspace] = (),
     agent_name: str | None = None,
     session_id: str | None = None,
     on_stage: Callable[[str], None] | None = None,
@@ -3415,8 +3587,8 @@ async def relaunch_managed_host(
     atomically revokes the previous generation's token).
 
     The new sandbox starts from the image — workspace contents of the
-    dead generation are gone. Passing *repo* re-clones the session's
-    repository so the workspace is restored to its create-time state.
+    dead generation are gone. Passing *repos* re-clones the session's
+    repositories so the workspace is restored to its create-time state.
 
     Unlike a first launch, a failure here keeps the host row (only the
     new sandbox is torn down and the armed token revoked), so the
@@ -3426,13 +3598,8 @@ async def relaunch_managed_host(
     :param host: The existing managed host row to relaunch
         (``sandbox_provider`` set; callers guard on that).
     :param host_store: Persistent host registrations.
-    :param repo: Repository to re-clone as the workspace, or ``None``
-        for an empty workspace.
-    :param extra_repos: Additional repositories to re-clone side by side
-        with *repo*; empty for a single-repo workspace.
-    :param github_identity: The owner's connected GitHub credentials to
-        authenticate ``gh`` / git as them and inject their SSH keys, or
-        ``None`` to keep the shared ``GIT_TOKEN`` behaviour.
+    :param repos: Repositories to re-clone as the workspace (empty for an
+        empty workspace), matching the create-time selection.
     :param agent_name: Server-resolved built-in agent name the session runs,
         re-stamped as the new runner Pod's ``omnigent.ai/agent`` classifier
         (Kubernetes only), or ``None`` to leave it unstamped.
@@ -3483,9 +3650,7 @@ async def relaunch_managed_host(
             host_name=host.name,
             owner=host.user_id,
             sandbox_id=sandbox_id,
-            repo=repo,
-            extra_repos=extra_repos,
-            github_identity=github_identity,
+            repos=repos,
             agent_name=agent_name,
             session_id=session_id,
             on_stage=on_stage,
@@ -3507,67 +3672,44 @@ async def _start_sandbox_host(
     host_id: str,
     host_name: str,
     server_url: str,
-    repo_url: str | None,
-    repo_branch: str | None,
-    repo_name: str | None,
-    owner: str | None = None,
-    github_token: str | None = None,
-    github_login: str | None = None,
-    ssh_authorized_keys: Sequence[str] | None = None,
-    extra_repos: Sequence[RepoCheckout] = (),
-    host_config: dict[str, object] | None = None,
+    repos: Sequence[RepoWorkspace],
+    host_config: dict[str, object] | None,
     agent_name: str | None = None,
     session_id: str | None = None,
     on_stage: Callable[[str], None] | None = None,
 ) -> str:
     """Start a host without sending absent optional arguments to legacy launchers."""
-    # The mandatory identity/repo primitives every launcher (in-tree or a
-    # deployment-injected legacy one) accepts.
-    kwargs: dict[str, Any] = {
+    # Open-in-Omnigent (fork): the public session URL, derived from the session
+    # id + configured public base URL. The k8s / agent-sandbox launchers install
+    # the PR-body ``gh`` wrapper from it. ``None`` when either input is unset.
+    session_url = _session_url(session_id)
+    kwargs: dict[str, object] = {
         "token": token,
         "host_id": host_id,
         "host_name": host_name,
         "server_url": server_url,
-        "repo_url": repo_url,
-        "repo_branch": repo_branch,
-        "repo_name": repo_name,
+        "repos": repos,
     }
-    # Optional args are omitted entirely when unset so a deployment-injected
-    # launcher predating any of them keeps launching: passing an unknown kwarg
-    # would raise. start_host is side-effecting and non-idempotent, so we gate
-    # on presence up front and never probe the signature by passing then
-    # retrying. The per-user GitHub identity + extra repos + session tag ride
-    # the same rule as host_config/on_stage.
-    if owner is not None:
-        kwargs["owner"] = owner
-    if github_token is not None:
-        kwargs["github_token"] = github_token
-    if github_login is not None:
-        kwargs["github_login"] = github_login
-    if ssh_authorized_keys is not None:
-        kwargs["ssh_authorized_keys"] = ssh_authorized_keys
-    if extra_repos:
-        kwargs["extra_repos"] = list(extra_repos)
+    # Legacy launchers predate these optionals; send each only when set so a
+    # pre-optional explicit ``start_host`` signature keeps launching and resuming.
     if host_config is not None:
         kwargs["host_config"] = host_config
-    # Open-in-Omnigent: derive the public session URL and pass it only when both
-    # a session id and a public base URL are known. Gated on presence like the
-    # other optional args so a deployment-injected launcher predating it keeps
-    # launching. Honoured by the k8s / agent-sandbox launchers (which install
-    # the PR-body ``gh`` wrapper); the abstract signature accepts + ignores it.
-    session_url = _session_url(session_id)
-    if session_url is not None:
-        kwargs["session_url"] = session_url
     if on_stage is not None:
         kwargs["on_stage"] = on_stage
-    # `agent_name` is declared on the classifying launcher's `start_host` alone,
-    # so the abstract signature does not carry it and the call is cast: the
-    # capability is the runtime guarantee the static type cannot express.
-    if agent_name is not None and launcher.capabilities.classifies_runner_by_agent:
-        kwargs["agent_name"] = agent_name
-        start_classified = cast(Callable[..., str], launcher.start_host)
-        return await asyncio.to_thread(start_classified, sandbox_id, **kwargs)
-    return await asyncio.to_thread(launcher.start_host, sandbox_id, **kwargs)
+    # `agent_name` and `session_url` ride the current-launcher signature only. A
+    # launcher that classifies runners by agent is in-tree and current, so it
+    # also carries the fork's `session_url` (Open-in-Omnigent PR button); legacy /
+    # custom launchers declare neither and must not receive them. Gated on the
+    # capability, not the value: start_host is side-effecting and non-idempotent,
+    # so we never probe the signature by passing then retrying. The abstract
+    # signature carries neither keyword, so the call is cast.
+    if launcher.capabilities.classifies_runner_by_agent:
+        if agent_name is not None:
+            kwargs["agent_name"] = agent_name
+        if session_url is not None:
+            kwargs["session_url"] = session_url
+    start = cast(Callable[..., str], launcher.start_host)
+    return await asyncio.to_thread(start, sandbox_id, **kwargs)
 
 
 async def _register_and_start_host(
@@ -3579,9 +3721,7 @@ async def _register_and_start_host(
     host_name: str,
     owner: str,
     sandbox_id: str,
-    repo: RepoWorkspace | None = None,
-    extra_repos: Sequence[RepoWorkspace] = (),
-    github_identity: SandboxGithubIdentity | None = None,
+    repos: Sequence[RepoWorkspace] = (),
     agent_name: str | None = None,
     session_id: str | None = None,
     on_stage: Callable[[str], None] | None = None,
@@ -3609,13 +3749,9 @@ async def _register_and_start_host(
     :param owner: User the managed host acts for, e.g.
         ``"alice@example.com"``.
     :param sandbox_id: The provisioned sandbox, e.g. ``"sb-a1b2c3"``.
-    :param repo: Repository to clone as the workspace, or ``None``
-        for an empty workspace.
-    :param extra_repos: Additional repositories cloned side by side with
-        *repo* under the workspace root; empty for a single-repo workspace.
-    :param github_identity: The owner's connected GitHub credentials to
-        authenticate ``gh`` / git as them and inject their SSH keys, or
-        ``None`` to keep the shared ``GIT_TOKEN`` behaviour.
+    :param repos: Repositories to clone into the workspace (empty for an
+        empty workspace). One repo → the agent's cwd is that clone dir;
+        several → the workspace root that parents them all.
     :param agent_name: Server-resolved built-in agent name the session runs,
         forwarded to ``start_host`` only for launchers that declare
         ``classifies_runner_by_agent`` (Kubernetes stamps it as the runner
@@ -3664,8 +3800,7 @@ async def _register_and_start_host(
         # Uniform across providers: provision() fixed the sandbox id and the
         # token was armed against it above, so start_host starts the host with
         # a token that already resolves. The exec-model default execs in; the
-        # entrypoint model (k8s) creates the Pod that boots the host. *repo* is
-        # unpacked into primitives — the launcher API takes no RepoWorkspace.
+        # entrypoint model (k8s) creates the Pod that boots the host.
         workspace = await _start_sandbox_host(
             launcher,
             sandbox_id,
@@ -3673,21 +3808,7 @@ async def _register_and_start_host(
             host_id=host_id,
             host_name=host_name,
             server_url=config.server_url,
-            repo_url=repo.url if repo is not None else None,
-            repo_branch=repo.branch if repo is not None else None,
-            repo_name=repo.repo_name if repo is not None else None,
-            owner=owner,
-            github_token=github_identity.token if github_identity is not None else None,
-            github_login=github_identity.login if github_identity is not None else None,
-            ssh_authorized_keys=(
-                github_identity.ssh_authorized_keys if github_identity is not None else None
-            ),
-            # Additional repos ride the RepoCheckout list; the primary *repo* is
-            # unpacked into primitives above.
-            extra_repos=[
-                RepoCheckout(url=r.url, branch=r.branch, repo_name=r.repo_name)
-                for r in extra_repos
-            ],
+            repos=repos,
             host_config=config.host_config,
             agent_name=agent_name,
             session_id=session_id,
@@ -3964,9 +4085,7 @@ async def resume_managed_host(
                 host_id=host.host_id,
                 host_name=host.name,
                 server_url=entry.server_url,
-                repo_url=None,  # the persistent volume already holds the workspace
-                repo_branch=None,
-                repo_name=None,
+                repos=(),  # the persistent volume already holds the workspace
                 host_config=entry.host_config,
                 on_stage=on_stage,
                 agent_name=agent_name,
