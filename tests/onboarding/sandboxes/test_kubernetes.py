@@ -32,6 +32,7 @@ from omnigent.onboarding.sandboxes.kubernetes import (
     build_job_manifest,
     build_token_secret_manifest,
 )
+from omnigent.onboarding.sandboxes.types import RepoWorkspace
 
 _TOKEN = "launch-token-xyz"
 _MANIFEST_KW = {
@@ -104,9 +105,10 @@ def test_build_job_manifest_has_no_liveness_probe() -> None:
 def test_build_job_manifest_init_container_prepares_and_clones_workspace() -> None:
     """The init container makes the workspace and clones the repo before the host."""
     manifest = build_job_manifest(
-        **{**_MANIFEST_KW, "clone_dir": "/home/omnigent/workspace/repo"},
-        repo_url="https://github.com/org/repo.git",
-        repo_branch="main",
+        **_MANIFEST_KW,
+        repos=[
+            RepoWorkspace(url="https://github.com/org/repo.git", branch="main", repo_name="repo")
+        ],
     )
     init = _pod_spec(manifest)["initContainers"]
     assert len(init) == 1
@@ -174,6 +176,44 @@ def test_build_job_manifest_rejects_malformed_session_url_charset() -> None:
     assert "export PATH=" not in host["command"][2]
 
 
+def test_build_job_manifest_clones_multiple_repos_as_parallel_siblings() -> None:
+    """Several repos → each clones into its own sibling dir, backgrounded (parallel)."""
+    manifest = build_job_manifest(
+        **_MANIFEST_KW,
+        repos=[
+            RepoWorkspace(url="https://github.com/org/a.git", branch=None, repo_name="a"),
+            RepoWorkspace(url="https://github.com/org/b.git", branch="main", repo_name="b"),
+        ],
+    )
+    script = _pod_spec(manifest)["initContainers"][0]["command"][2]
+    assert "https://github.com/org/a.git /home/omnigent/workspace/a" in script
+    assert (
+        "--branch main --single-branch -- https://github.com/org/b.git "
+        "/home/omnigent/workspace/b" in script
+    )
+    # Both clones are backgrounded and joined, and the broker is wired ONCE
+    # (a single `python3 -c` line configures the helper for every clone).
+    assert script.count(" & pids=") == 2
+    assert 'for p in $pids; do wait "$p" || rc=1; done' in script
+    assert script.count("python3 -c") == 1
+
+
+def test_build_job_manifest_disambiguates_same_named_repos() -> None:
+    """Two repos with the same last-segment name clone into owner-qualified dirs,
+    not one colliding directory that would fail the concurrent clone."""
+    manifest = build_job_manifest(
+        **_MANIFEST_KW,
+        repos=[
+            RepoWorkspace(url="https://github.com/org-a/api", branch=None, repo_name="api"),
+            RepoWorkspace(url="https://github.com/org-b/api", branch=None, repo_name="api"),
+        ],
+    )
+    script = _pod_spec(manifest)["initContainers"][0]["command"][2]
+    assert "https://github.com/org-a/api /home/omnigent/workspace/org-a__api" in script
+    assert "https://github.com/org-b/api /home/omnigent/workspace/org-b__api" in script
+    assert "workspace/api " not in script  # no plain colliding dir
+
+
 def test_build_job_manifest_without_repo_has_no_clone() -> None:
     """No repo → the init container only makes the workspace, no git clone."""
     manifest = build_job_manifest(**_MANIFEST_KW)
@@ -190,8 +230,10 @@ def test_build_job_manifest_without_repo_has_no_clone() -> None:
 def test_build_job_manifest_host_config_is_written_by_init_container() -> None:
     """host_config rides the init container script, after mkdir/clone, before the host."""
     manifest = build_job_manifest(
-        **{**_MANIFEST_KW, "clone_dir": "/home/omnigent/workspace/repo"},
-        repo_url="https://github.com/org/repo.git",
+        **_MANIFEST_KW,
+        repos=[
+            RepoWorkspace(url="https://github.com/org/repo.git", branch=None, repo_name="repo")
+        ],
         host_config=_HOST_CONFIG,
     )
     spec = _pod_spec(manifest)
@@ -302,58 +344,6 @@ def test_build_token_secret_manifest_carries_token_in_stringdata() -> None:
     assert secret["stringData"] == {HOST_TOKEN_ENV_VAR: _TOKEN}
     assert secret["metadata"]["labels"]["app.kubernetes.io/managed-by"] == "omnigent"
     assert secret["type"] == "Opaque"
-
-
-def test_build_token_secret_manifest_carries_github_token() -> None:
-    """A connecting user's GitHub token rides the same Secret, not the Pod spec."""
-    secret = build_token_secret_manifest(
-        secret_name="omnigent-pod-token",
-        namespace="omnigent-sandboxes",
-        token=_TOKEN,
-        github_token="ghu_secret_xyz",
-    )
-    assert secret["stringData"] == {
-        HOST_TOKEN_ENV_VAR: _TOKEN,
-        "GITHUB_USER_TOKEN": "ghu_secret_xyz",
-    }
-
-
-def test_build_job_manifest_github_token_rides_secret_ref_not_the_spec() -> None:
-    """The user's GitHub token is a secretKeyRef in env and never a literal.
-
-    Regression: the token must not appear in the Pod spec — not as literal env,
-    and not base64-embedded in the init container's gh/git setup commands.
-    Anyone with ``get pod`` on the sandbox namespace would otherwise read a live
-    GitHub token.
-    """
-    manifest = build_job_manifest(
-        **_MANIFEST_KW,
-        github_token="ghu_secret_xyz",
-        github_login="octocat",
-        ssh_authorized_keys=("ssh-ed25519 AAAAKEY octo@cat",),
-    )
-    # The raw token appears nowhere in the manifest (env, commands, anywhere).
-    assert "ghu_secret_xyz" not in json.dumps(manifest)
-
-    ref = {"name": "omnigent-managed-abc-1a2b3c-token", "key": "GITHUB_USER_TOKEN"}
-    for container in (
-        _pod_spec(manifest)["containers"][0],
-        _pod_spec(manifest)["initContainers"][0],
-    ):
-        by_name = {e["name"]: e for e in container["env"]}
-        for var in ("GIT_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"):
-            assert by_name[var]["valueFrom"]["secretKeyRef"] == ref
-            assert "value" not in by_name[var]
-        # The non-secret token username stays a literal.
-        assert by_name["GIT_USERNAME"]["value"] == "x-access-token"
-
-    # No on-disk gh/git credential files are written by the init container —
-    # git/gh auth is vended live by the native credential broker + helper.
-    init_script = _pod_spec(manifest)["initContainers"][0]["command"][2]
-    assert ".config/gh/hosts.yml" not in init_script
-    assert ".git-credentials" not in init_script
-    # Public SSH key injection is unaffected.
-    assert "AAAAKEY" in init_script
 
 
 def test_build_job_manifest_no_github_token_has_no_credential_env() -> None:
@@ -718,23 +708,21 @@ def test_resolve_pod_resources_config_override_can_add_cpu_cap() -> None:
 
 
 @pytest.mark.parametrize(
-    ("clone_dir", "repo_url", "repo_branch", "expect_clone", "expect_branch"),
+    ("repos", "expect_clone", "expect_branch"),
     [
-        (None, None, None, False, False),
-        ("/ws/repo", "https://x/y.git", None, True, False),
-        ("/ws/repo", "https://x/y.git", "release-1.2", True, True),
+        ([], False, False),
+        ([RepoWorkspace(url="https://x/y.git", branch=None, repo_name="y")], True, False),
+        ([RepoWorkspace(url="https://x/y.git", branch="release-1.2", repo_name="y")], True, True),
     ],
 )
 def test_render_workspace_prep_command(
-    clone_dir: str | None,
-    repo_url: str | None,
-    repo_branch: str | None,
+    repos: list[RepoWorkspace],
     expect_clone: bool,
     expect_branch: bool,
 ) -> None:
     """The init command always mkdir's the workspace and clones only when asked."""
     command = k8s._render_workspace_prep_command(
-        "/ws", clone_dir, repo_url, repo_branch, "http://srv.example.com", "host_abc"
+        "/ws", repos, "http://srv.example.com", "host_abc"
     )
     script = command[2]
     assert "mkdir -p /ws" in script
@@ -742,28 +730,6 @@ def test_render_workspace_prep_command(
     assert ("--branch release-1.2 --single-branch" in script) is expect_branch
     # The per-user broker is wired (connected-gated at runtime) only when cloning.
     assert ("configure_clone_credentials" in script) is expect_clone
-
-
-def test_render_workspace_prep_command_clones_extra_repos_as_siblings() -> None:
-    """Each extra repo is cloned into ``<workspace>/<repo_name>`` beside the primary."""
-    from omnigent.onboarding.sandboxes.types import RepoCheckout
-
-    command = k8s._render_workspace_prep_command(
-        "/ws",
-        "/ws/a",
-        "https://x/a.git",
-        None,
-        "https://srv",
-        "host_abc",
-        extra_repos=[
-            RepoCheckout(url="https://x/b.git", branch="dev", repo_name="b"),
-            RepoCheckout(url="https://x/c.git", branch=None, repo_name="c"),
-        ],
-    )
-    script = command[2]
-    assert "git clone -- https://x/a.git /ws/a" in script
-    assert "git clone --branch dev --single-branch -- https://x/b.git /ws/b" in script
-    assert "git clone -- https://x/c.git /ws/c" in script
 
 
 def test_new_pod_name_and_token_secret_name() -> None:
@@ -1193,7 +1159,7 @@ def test_launch_host_without_agent_label_keeps_reserved_labels(
 def test_launch_host_with_repo_returns_clone_dir(
     fake_clients: tuple[_FakeCore, _FakeBatch],
 ) -> None:
-    """With a repo, the returned workspace is the cloned directory under the workspace."""
+    """With one repo, the returned workspace is the cloned directory under the workspace."""
     core, _batch = fake_clients
     _setup_pod_discovery(core)
     workspace = _launcher().start_host(
@@ -1202,10 +1168,31 @@ def test_launch_host_with_repo_returns_clone_dir(
         host_id="host_2",
         host_name="managed-2",
         server_url="http://srv.example.com",
-        repo_url="https://github.com/org/repo.git",
-        repo_name="repo",
+        repos=[
+            RepoWorkspace(url="https://github.com/org/repo.git", branch=None, repo_name="repo")
+        ],
     )
     assert workspace == "/home/omnigent/workspace/repo"
+
+
+def test_launch_host_with_multiple_repos_returns_parent_workspace(
+    fake_clients: tuple[_FakeCore, _FakeBatch],
+) -> None:
+    """With several repos, the returned workspace is the parent that holds them all."""
+    core, _batch = fake_clients
+    _setup_pod_discovery(core)
+    workspace = _launcher().start_host(
+        "omnigent-job-2b",
+        token=_TOKEN,
+        host_id="host_2b",
+        host_name="managed-2b",
+        server_url="http://srv.example.com",
+        repos=[
+            RepoWorkspace(url="https://github.com/org/a.git", branch=None, repo_name="a"),
+            RepoWorkspace(url="https://github.com/org/b.git", branch=None, repo_name="b"),
+        ],
+    )
+    assert workspace == "/home/omnigent/workspace"
 
 
 def test_launch_host_cleans_up_on_create_failure(
@@ -1274,8 +1261,7 @@ def test_launch_host_fast_fails_on_clone_failure_with_log_tail(
             host_id="host_4",
             host_name="managed-4",
             server_url="http://srv.example.com",
-            repo_url="https://x/y.git",
-            repo_name="y",
+            repos=[RepoWorkspace(url="https://x/y.git", branch=None, repo_name="y")],
         )
     assert "workspace prep failed (exit 128" in exc.value.message
     assert "repository 'https://x/y.git' not found" in exc.value.message

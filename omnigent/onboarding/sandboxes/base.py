@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable, Iterator, Sequence
     from pathlib import Path
 
-    from omnigent.onboarding.sandboxes.types import RepoCheckout
+    from omnigent.onboarding.sandboxes.types import RepoWorkspace
 
 
 DEFAULT_HOST_IMAGE: str = "ghcr.io/omnigent-ai/omnigent-host:latest"
@@ -912,8 +912,9 @@ class SandboxHostLauncher(SandboxLifecycle):
     Every managed-host provider — exec-model or entrypoint-as-host — implements
     this. :meth:`start_host` is abstract here; the exec-model default lives on
     :class:`ExecModelHostLauncher`. Entrypoint-as-host providers (e.g.
-    Kubernetes) inherit this class directly and override :meth:`start_host`
-    without needing any exec transport.
+    Kubernetes) and provider-native host launchers (e.g. Gensee) inherit this
+    class directly and override :meth:`start_host` without needing any exec
+    transport.
     """
 
     def reaper_identity(self, workspace_id: int) -> AbstractContextManager[None]:
@@ -929,14 +930,7 @@ class SandboxHostLauncher(SandboxLifecycle):
         host_id: str,
         host_name: str,
         server_url: str,
-        repo_url: str | None = None,
-        repo_branch: str | None = None,
-        repo_name: str | None = None,
-        extra_repos: Sequence[RepoCheckout] = (),
-        owner: str | None = None,
-        github_token: str | None = None,
-        github_login: str | None = None,
-        ssh_authorized_keys: Sequence[str] | None = None,
+        repos: Sequence[RepoWorkspace] = (),
         host_config: dict[str, object] | None = None,
         session_url: str | None = None,
         on_stage: Callable[[str], None] | None = None,
@@ -950,30 +944,16 @@ class SandboxHostLauncher(SandboxLifecycle):
         :param host_name: Server-chosen host display name, e.g.
             ``"managed-a1b2c3d4"``.
         :param server_url: URL of this server the host dials back to.
-        :param repo_url: Repository clone URL, or ``None`` for an empty
-            workspace.
-        :param repo_branch: Branch to clone, or ``None`` for the default branch.
-        :param repo_name: Directory the clone lands in under the workspace, or
-            ``None`` when *repo_url* is ``None``.
-        :param extra_repos: Additional repositories cloned side by side under
-            the workspace root; when any are present the returned workspace is
-            the root so every sibling repo is visible.
-        :param owner: Session owner the host acts for; when it is an email its
-            git author / committer identity is exported (see
-            :func:`git_identity_env`). ``None`` on auth-disabled servers.
-        :param github_token: The session owner's connected GitHub user access
-            token, used to authenticate git / ``gh`` inside the sandbox *as
-            that user*. ``None`` when unavailable.
-        :param github_login: The owner's GitHub login, seeded alongside
-            *github_token* as the sandbox's git / ``gh`` identity.
-        :param ssh_authorized_keys: The owner's PUBLIC SSH key lines, appended
-            to the sandbox's ``authorized_keys``. ``None`` / empty when
-            unavailable.
+        :param repos: Repositories to clone into ``<workspace>/<repo_name>``
+            (empty for an empty workspace). The returned path is the single
+            clone directory when exactly one repo is cloned, else the
+            workspace root that parents them all.
         :param host_config: Deployment-supplied ``~/.omnigent/config.yaml``
             content installed into the sandbox's config BEFORE the host starts.
         :param on_stage: Progress observer invoked with ``"cloning"`` and
             ``"starting"``.
-        :returns: The absolute in-sandbox workspace path.
+        :returns: The absolute in-sandbox workspace path — the working
+            directory the host starts the agent in.
         """
 
 
@@ -987,7 +967,7 @@ class ExecModelHostLauncher(SandboxHostLauncher, SandboxExecTransport):
     managed-host bootstrap. A provider that only needs to change how the
     repository is obtained overrides :meth:`materialize_workspace` alone.
 
-    Entrypoint-as-host providers (e.g. Kubernetes) inherit
+    Entrypoint-as-host and provider-native host launchers inherit
     :class:`SandboxHostLauncher` directly and do NOT need ``run()`` or any
     exec transport.
     """
@@ -1000,14 +980,7 @@ class ExecModelHostLauncher(SandboxHostLauncher, SandboxExecTransport):
         host_id: str,
         host_name: str,
         server_url: str,
-        repo_url: str | None = None,
-        repo_branch: str | None = None,
-        repo_name: str | None = None,
-        extra_repos: Sequence[RepoCheckout] = (),
-        owner: str | None = None,
-        github_token: str | None = None,
-        github_login: str | None = None,
-        ssh_authorized_keys: Sequence[str] | None = None,
+        repos: Sequence[RepoWorkspace] = (),
         host_config: dict[str, object] | None = None,
         session_url: str | None = None,
         on_stage: Callable[[str], None] | None = None,
@@ -1016,18 +989,16 @@ class ExecModelHostLauncher(SandboxHostLauncher, SandboxExecTransport):
         Start ``omnigent host`` in the sandbox and return the workspace path.
 
         The default is the EXEC model: probe ``$HOME``, create
-        ``<HOME>/workspace``, optionally materialize the repository into it (via
-        :meth:`materialize_workspace`, which clones by default), merge any
-        *host_config* into ``~/.omnigent/config.yaml``, and start the host
-        detached (``setsid``-backgrounded, identity + token in the process
+        ``<HOME>/workspace``, clone each requested repo into it (via
+        :meth:`materialize_workspace`), merge any *host_config* into
+        ``~/.omnigent/config.yaml``, and start the host detached
+        (``setsid``-backgrounded, identity + token in the process
         environment) — all driven through :meth:`run` / :meth:`run_background`.
 
-        When *github_token* is set the sandbox is seeded with the connecting
-        user's git / ``gh`` credential (the native credential broker + helper
-        keep it live per op), *ssh_authorized_keys* are appended to
-        ``authorized_keys``, *owner*'s email seeds the git author/committer
-        identity, and *extra_repos* are cloned side by side under the workspace
-        root (with the root returned so siblings are visible).
+        The working directory is the single clone directory when exactly one
+        repo is cloned, else the workspace root parenting them all (or an empty
+        workspace when none are requested). Clones run sequentially here; the
+        entrypoint-as-host launchers (Kubernetes) clone in parallel.
 
         :returns: The absolute in-sandbox workspace path.
         """
@@ -1039,40 +1010,24 @@ class ExecModelHostLauncher(SandboxHostLauncher, SandboxExecTransport):
             )
         workspace = f"{home}/workspace"
         self.run(sandbox_id, f"mkdir -p {shlex.quote(workspace)}")
-        # Per-user SSH keys (VS Code Remote) appended to authorized_keys.
-        # git/gh credentials are seeded via env (github_sandbox_env) and kept
-        # live by the native credential broker + helper — not written here.
-        # Best-effort: a failure must not abort the launch, which would
-        # otherwise regress a plain public-repo clone.
-        for setup_cmd in ssh_authorized_keys_setup_commands(home, ssh_authorized_keys):
-            self.run(sandbox_id, setup_cmd, check=False)
-        workspace_root = workspace
-        if repo_url is not None:
-            workspace = self.materialize_workspace(
-                sandbox_id,
-                workspace=workspace_root,
-                repo_url=repo_url,
-                repo_branch=repo_branch,
-                repo_name=repo_name,
-                on_stage=on_stage,
-            )
-        # Additional repos are cloned side by side under the workspace root so
-        # the agent starts with every repo it needs checked out. When any are
-        # present the host starts at the root (not inside a single clone) so
-        # all sibling repos are visible.
-        for extra in extra_repos:
-            branch_flag = (
-                f"--branch {shlex.quote(extra.branch)} --single-branch "
-                if extra.branch is not None
-                else ""
-            )
-            dest = f"{workspace_root}/{extra.repo_name}"
-            self.run(
-                sandbox_id,
-                f"git clone {branch_flag}-- {shlex.quote(extra.url)} {shlex.quote(dest)}",
-            )
-        if extra_repos:
-            workspace = workspace_root
+        if repos:
+            if on_stage is not None:
+                on_stage("cloning")
+            # Distinct URLs can derive the same repo_name (e.g. two orgs' "api");
+            # disambiguate so they don't clone into one colliding directory.
+            clone_dirs = [
+                self.materialize_workspace(
+                    sandbox_id,
+                    workspace=workspace,
+                    repo_url=repo.url,
+                    repo_branch=repo.branch,
+                    repo_name=dirname,
+                )
+                for repo, dirname in zip(repos, _sandbox_types.clone_dir_names(repos), strict=True)
+            ]
+            # One repo → drop the agent straight into it; several → the
+            # workspace root that parents them all.
+            workspace = clone_dirs[0] if len(clone_dirs) == 1 else workspace
         if on_stage is not None:
             on_stage("starting")
         if host_config is not None or self.capabilities.resume_stopped:
@@ -1081,8 +1036,6 @@ class ExecModelHostLauncher(SandboxHostLauncher, SandboxExecTransport):
             (HOST_TOKEN_ENV_VAR, token),
             (HOST_ID_ENV_VAR, host_id),
             (HOST_NAME_ENV_VAR, host_name),
-            *github_sandbox_env(github_token).items(),
-            *git_identity_env(owner).items(),
         ]
         env_prefix = " ".join(f"{key}={shlex.quote(value)}" for key, value in env_pairs)
         self.run_background(

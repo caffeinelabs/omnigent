@@ -1,0 +1,24 @@
+"""sync5 merge upstream heads
+
+Revision ID: daba139ca998
+Revises: 527358ea2e27, gg1b2c3d4e5f
+Create Date: 2026-09-14 11:53:09.352164
+"""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+
+# revision identifiers, used by Alembic.
+revision: str = 'daba139ca998'
+down_revision: str | Sequence[str] | None = ('527358ea2e27', 'gg1b2c3d4e5f')
+branch_labels: str | Sequence[str] | None = None
+depends_on: str | Sequence[str] | None = None
+
+
+def upgrade() -> None:
+    pass
+
+
+def downgrade() -> None:
+    pass
