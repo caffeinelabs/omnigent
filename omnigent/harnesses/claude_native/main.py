@@ -1244,6 +1244,87 @@ def claude_catalog_fingerprint(claude_config: ClaudeNativeUcodeConfig | None) ->
     )
 
 
+_AIGW_MODEL_ID_PREFIX_RE = re.compile(r"^anthropic-aigw-[0-9a-f]+-")
+
+
+async def _databricks_gateway_model_rows(
+    claude_config: ClaudeNativeUcodeConfig | None,
+) -> list[dict[str, object]]:
+    """Catalog rows for every model a Databricks AI-gateway lists at ``/v1/models``.
+
+    Claude Code's own ``/model`` enumeration only prints its built-in Claude
+    aliases (opus/sonnet/haiku/…), so a connected Databricks workspace's
+    non-Claude serving-endpoint models (kimi, glm, deepseek, gpt, gemini, …)
+    never reach the picker even though the gateway serves them. This queries the
+    gateway's OpenAI-style ``GET /v1/models`` directly and turns each entry into
+    a picker row, so the workspace's live catalog is offered with no per-model
+    config. Best-effort: any failure (not a gateway, no token, network, bad
+    shape) yields ``[]`` and the caller keeps the alias rows alone.
+
+    The gateway lists non-Claude models under an ``anthropic-aigw-<hash>-``
+    display id, but ``/v1/messages`` only accepts the bare ``system.ai.<model>``
+    spelling (verified: the prefixed id 404s) — so the prefix is stripped to the
+    launchable model id, which Claude Code passes through as "a full model ID".
+
+    :param claude_config: The resolved launch config, or ``None``.
+    :returns: Rows ``{id, model, displayName}`` (possibly empty).
+    """
+    if claude_config is None:
+        return []
+    base_url = (claude_config.env.get(_UCODE_CLAUDE_BASE_URL_ENV) or "").strip().rstrip("/")
+    if not base_url:
+        return []
+    host = (urlparse(base_url).hostname or "").lower()
+    # Only a non-Anthropic gateway (Databricks etc.); anthropic.com serves its
+    # own canonical ids that the alias probe already covers.
+    if host == "anthropic.com" or host.endswith(".anthropic.com"):
+        return []
+    token = ""
+    helper = claude_config.api_key_helper
+    if helper:
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                helper,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.DEVNULL,
+            )
+            async with asyncio.timeout(10):
+                out, _ = await proc.communicate()
+            token = out.decode(errors="replace").strip()
+        except (OSError, TimeoutError, asyncio.CancelledError):
+            token = ""
+    if not token:
+        token = (claude_config.env.get("ANTHROPIC_AUTH_TOKEN") or "").strip()
+    if not token:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(10.0)) as client:
+            resp = await client.get(
+                f"{base_url}/v1/models",
+                headers={"Authorization": f"Bearer {token}"},
+            )
+        resp.raise_for_status()
+        data = resp.json().get("data") or []
+    except (httpx.HTTPError, ValueError, OSError):
+        return []
+    rows: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for entry in data:
+        if not isinstance(entry, dict):
+            continue
+        raw_id = str(entry.get("id") or "")
+        if not raw_id:
+            continue
+        # Strip the gateway's display prefix to the launchable model id.
+        model = _AIGW_MODEL_ID_PREFIX_RE.sub("", raw_id)
+        if not model or model in seen:
+            continue
+        seen.add(model)
+        display = str(entry.get("display_name") or "").strip() or model
+        rows.append({"id": model, "model": model, "displayName": display})
+    return rows
+
+
 async def claude_model_catalog(
     claude_config: ClaudeNativeUcodeConfig | None,
 ) -> list[dict[str, object]] | None:
@@ -1278,6 +1359,17 @@ async def claude_model_catalog(
     ) or (claude_config is None and _ambient_env_is_non_anthropic_gateway())
     if _non_canonical:
         rows = [row for row in rows if not str(row.get("model", "")).startswith("claude-")]
+
+    # Append the connected gateway's own live model list (kimi, glm, deepseek,
+    # gpt, gemini, …), which Claude Code's alias-only enumeration never prints.
+    # Deduped against the alias rows by launchable model id so a model an alias
+    # already resolves to isn't listed twice.
+    if not managed_rows:
+        known = {str(row.get("model") or row.get("id") or "") for row in rows}
+        for gw_row in await _databricks_gateway_model_rows(claude_config):
+            if str(gw_row["model"]) not in known:
+                known.add(str(gw_row["model"]))
+                rows.append(gw_row)
 
     configured_pin = claude_config.model if claude_config is not None else None
     default_model = configured_pin or probe.default_model
@@ -3156,13 +3248,20 @@ _CONNECT_BROKER_UCODE_ENV_ALLOWLIST = frozenset(
 )
 
 
-def _connect_broker_default_model() -> str:
-    """The model a managed connect session pins: the deployment override if set,
-    else the bundled Databricks Claude catalog default."""
-    pinned = os.environ.get(_DATABRICKS_GATEWAY_MODEL_ENV, "").strip()
-    if pinned:
-        return pinned
-    return model_catalog.resolve_catalog_model("databricks", family="claude").model_id
+def _connect_broker_default_model() -> str | None:
+    """The model a managed connect session pins, or ``None`` to let the gateway
+    choose its own default.
+
+    The deployment override (``OMNIGENT_DATABRICKS_GATEWAY_MODEL``) wins when set.
+    Otherwise return ``None`` rather than the bundled Databricks Claude catalog
+    default: that static default can name a model the connected workspace does
+    not serve (e.g. ``databricks-claude-fable-5-1`` → gateway 501), and a
+    connect session's workspace is only known at runtime. With ``None`` no
+    ``--model`` is forced, so Claude Code launches the gateway's own default —
+    a model the workspace actually serves — and the live ``/v1/models`` catalog
+    (see :func:`_databricks_gateway_model_rows`) surfaces the rest for the picker.
+    """
+    return os.environ.get(_DATABRICKS_GATEWAY_MODEL_ENV, "").strip() or None
 
 
 def _connect_broker_claude_config() -> ClaudeNativeUcodeConfig | None:
