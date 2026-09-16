@@ -11109,8 +11109,10 @@ def test_resolve_native_claude_config_connect_broker_fallback(
     assert config.env["CLAUDE_CODE_USE_GATEWAY"] == "1"
     assert config.api_key_helper is not None
     assert "omnigent.host.databricks_credential token" in config.api_key_helper
-    # Model comes from the catalog default (stubbed by _stub_catalog_default).
-    assert config.model == "catalog-databricks-claude-default"
+    # With no OMNIGENT_DATABRICKS_GATEWAY_MODEL pin, no model is forced — the
+    # launch uses the gateway's own default (a model the workspace serves)
+    # rather than a bundled catalog id the workspace may not have deployed.
+    assert config.model is None
 
 
 def test_connect_fallback_prefers_ucode_state(
