@@ -114,6 +114,23 @@ def test_command_arg_spells_the_routed_model_or_nothing(
     assert claude_model_command_arg(model, env) == expected
 
 
+def test_command_arg_passes_gateway_full_ids_verbatim() -> None:
+    """A connected Databricks gateway's ``system.ai.<model>`` ids (kimi, glm,
+    deepseek, claude, …) are non-alias full ids that Claude Code's ``/model``
+    takes verbatim, so the picker can switch to any workspace model — not just
+    the Claude family. Guards the regression where these returned ``None`` and
+    the switch was refused with "no spelling for that model"."""
+    for model in (
+        "system.ai.kimi-k3",
+        "system.ai.glm-5-3",
+        "system.ai.deepseek-v4-pro-0813",
+        "system.ai.claude-opus-4-8",
+    ):
+        assert claude_model_command_arg(model, {}) == model
+    # But a family alias with a conflicting pin still folds, not passes through.
+    assert claude_model_command_arg("opus", {}) == "opus"
+
+
 def test_model_vocabulary_env_rebuilds_the_pinning_from_picker_rows() -> None:
     env = model_vocabulary_env(
         [
