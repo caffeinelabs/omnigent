@@ -862,7 +862,7 @@ def _fetch_pi_model_lists(
     """
     try:
         models = model_catalog.fetch_databricks_model_service_entries(workspace_url, token)
-    except Exception:
+    except Exception:  # noqa: BLE001 — HTTP/network failure → empty
         _LOGGER.warning(
             "pi-native: could not fetch Databricks model list; "
             "Pi will show only the selected model",
@@ -884,7 +884,7 @@ def _fetch_pi_model_lists(
         models = enrich_databricks_model_catalog(
             models, model_catalog.catalog_model_entries("databricks")
         )
-    except Exception:
+    except Exception:  # noqa: BLE001 — live availability remains authoritative
         _LOGGER.info(
             "pi-native: could not enrich the live Databricks model list with MLflow metadata",
             exc_info=True,
@@ -1113,7 +1113,7 @@ def _cli_config_pi_provider(entry: ProviderEntry, *, model: str | None) -> PiPro
                 claude_models, gpt_models, completions_models, gemini_models = (
                     _fetch_pi_model_lists(real_workspace_url, token)
                 )
-            except Exception:
+            except Exception:  # noqa: BLE001 — network failure must not break launch
                 _LOGGER.info(
                     "pi-native: could not fetch workspace model list; showing default model only",
                     exc_info=True,
@@ -1613,7 +1613,7 @@ def resolve_pi_native_provider(
                 ),
             )
         return resolved
-    except Exception:
+    except Exception:  # noqa: BLE001 — any resolution failure must not break launch
         # Any failure (malformed config, duplicate per-family default, or an
         # unresolved ``api_key: $VAR``) falls back to Pi's own login rather than
         # failing the terminal launch.
