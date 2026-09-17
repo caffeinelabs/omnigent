@@ -1436,7 +1436,17 @@ def create_filesystem_registry(watch_path: Path) -> FilesystemRegistry:
     :returns: A :class:`FilesystemRegistry` instance ready to be used.
     """
     resolved = watch_path.resolve()
-    git_root = _find_git_root(resolved)
+    try:
+        git_root = _find_git_root(resolved)
+    except OSError as exc:
+        _logger.warning(
+            "Git metadata is unavailable; using ordinary file-change tracking",
+            extra={
+                "event_name": "filesystem_git_discovery_failed",
+                "attributes": {"exception_type": type(exc).__name__, "errno": exc.errno},
+            },
+        )
+        git_root = None
     if git_root is not None:
         return GitFilesystemRegistry(watch_path, git_root)
     child_repos = _find_child_git_repos(resolved)
