@@ -53,10 +53,7 @@ class _GetClient:
     def __init__(self, payload: dict[str, Any]) -> None:
         self._payload = payload
 
-    async def get(
-        self, url: str, timeout: float | None = None, params: dict[str, str] | None = None
-    ) -> _Resp:
-        del params
+    async def get(self, url: str, timeout: float | None = None) -> _Resp:
         return _Resp(200, self._payload)
 
 

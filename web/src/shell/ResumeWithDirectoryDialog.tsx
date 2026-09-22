@@ -63,8 +63,6 @@ import { getSessionSlim, launchRunner } from "@/lib/sessionsApi";
  *   host/workspace/branch). Ignored when ``sourceSessionId`` is set.
  * @param serverUrl - Origin for the CLI fallback command.
  * @param wrapper - The session's ``omnigent.wrapper`` label (CLI fallback).
- * @param harness - The session's canonical harness; the CLI fallback uses it
- *   to pick the native resume verb when no wrapper label is present.
  * @param onBound - Called after a successful bind so the caller can
  *   replay the message the user was trying to send.
  */
@@ -76,7 +74,6 @@ export function ResumeWithDirectoryDialog({
   prefill,
   serverUrl,
   wrapper,
-  harness,
   onBound,
 }: {
   open: boolean;
@@ -86,7 +83,6 @@ export function ResumeWithDirectoryDialog({
   prefill?: { hostId?: string | null; workspace?: string | null; gitBranch?: string | null };
   serverUrl: string;
   wrapper?: string | null;
-  harness?: string | null;
   onBound?: () => void;
 }) {
   const queryClient = useQueryClient();
@@ -298,7 +294,6 @@ export function ResumeWithDirectoryDialog({
                 conversationId: sessionId,
                 serverUrl,
                 wrapper,
-                harness,
                 // The source's host is offline here. With a host binding the
                 // owner re-registers the host (`omnigent host`); without one
                 // the runner is relaunched directly via the wrapper's resume

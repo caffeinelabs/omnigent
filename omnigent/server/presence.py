@@ -56,7 +56,6 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
 
-from omnigent.db.workspace_cache import WorkspaceScopedCache
 from omnigent.runtime import session_stream
 
 # Delay between a user's last stream disconnecting and their leave
@@ -111,12 +110,10 @@ class _ViewerEntry:
 # tree's ROOT so viewers of different agents/sub-agents in one
 # session share a single viewer list. Module-global, mirroring the
 # subscriber registry in ``omnigent.runtime.session_stream``.
-_viewers: WorkspaceScopedCache[str, dict[str, _ViewerEntry]] = WorkspaceScopedCache()
+_viewers: dict[str, dict[str, _ViewerEntry]] = {}
 
 # (root_conversation_id, user_id) -> pending leave-broadcast timer.
-_pending_leaves: WorkspaceScopedCache[tuple[str, str], asyncio.TimerHandle] = (
-    WorkspaceScopedCache()
-)
+_pending_leaves: dict[tuple[str, str], asyncio.TimerHandle] = {}
 
 _lock = threading.Lock()
 
@@ -335,8 +332,7 @@ def reset_for_tests() -> None:
     is visible to every later test in the same process.
     """
     with _lock:
-        # Test reset spans every workspace, so sweep the whole backing.
-        timers = _pending_leaves.all_values()
+        timers = list(_pending_leaves.values())
         _pending_leaves.clear()
         _viewers.clear()
     for timer in timers:

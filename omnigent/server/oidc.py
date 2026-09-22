@@ -55,8 +55,6 @@ def mint_session_token(
     cookie_secret: bytes,
     ttl_seconds: int,
     provider: str,
-    *,
-    account_generation: str | None = None,
 ) -> str:
     """
     Mint a signed session JWT with a second-granularity lifetime.
@@ -82,8 +80,6 @@ def mint_session_token(
         "exp": now + ttl_seconds,
         "provider": provider,
     }
-    if account_generation is not None:
-        payload["account_generation"] = account_generation
     return jwt.encode(payload, cookie_secret, algorithm="HS256")
 
 
@@ -92,8 +88,6 @@ def mint_session_cookie(
     cookie_secret: bytes,
     ttl_hours: int,
     provider: str,
-    *,
-    account_generation: str | None = None,
 ) -> str:
     """Mint a signed session cookie JWT.
 
@@ -105,9 +99,7 @@ def mint_session_cookie(
         or ``"github"``. Stored as an informational claim.
     :returns: An HS256-signed JWT string.
     """
-    return mint_session_token(
-        user_id, cookie_secret, ttl_hours * 3600, provider, account_generation=account_generation
-    )
+    return mint_session_token(user_id, cookie_secret, ttl_hours * 3600, provider)
 
 
 def hmac_digest(token: str, secret: bytes) -> str:

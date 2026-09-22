@@ -49,4 +49,3 @@ class DeviceGrant:
     expires_at: int
     approved_at: int | None
     last_polled_at: int | None
-    account_generation: str | None = None

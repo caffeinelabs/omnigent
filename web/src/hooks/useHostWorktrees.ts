@@ -1,5 +1,4 @@
-import { queryOptions, useQuery } from "@tanstack/react-query";
-import { useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { authenticatedFetch } from "@/lib/identity";
 
@@ -27,60 +26,6 @@ export interface HostWorktree {
   is_main: boolean;
   /** ``true`` when the worktree has a detached HEAD (no branch). */
   detached: boolean;
-  /** Unix epoch seconds of the worktree HEAD commit. Missing on older hosts. */
-  updated_at?: number | null;
-}
-
-interface VerifiedGitWorktreeCache {
-  hostId: string;
-  roots: string[];
-  worktrees: HostWorktree[];
-}
-
-function normalizedHostPath(path: string): string {
-  const normalized = path.replace(/\\/g, "/").replace(/\/+$/, "");
-  return /^[A-Za-z]:\//.test(normalized) ? normalized.toLowerCase() : normalized;
-}
-
-export function pathIsWithinWorktree(path: string, root: string): boolean {
-  const candidate = normalizedHostPath(path);
-  const boundary = normalizedHostPath(root);
-  return candidate === boundary || candidate.startsWith(`${boundary}/`);
-}
-
-/**
- * Keep a verified Git repository visible while a nested path is loading.
- * An explicit non-Git result clears the cache.
- */
-export function useVerifiedGitWorktrees({
-  hostId,
-  requestedPath,
-  worktrees,
-  resolved,
-}: {
-  hostId: string | null;
-  requestedPath: string | null;
-  worktrees: HostWorktree[] | undefined;
-  resolved: boolean;
-}): HostWorktree[] {
-  const cacheRef = useRef<VerifiedGitWorktreeCache | null>(null);
-  // The listing includes the main checkout even when no linked worktrees exist.
-  const directlyVerified = resolved && worktrees !== undefined && worktrees.length > 0;
-  if (resolved) {
-    cacheRef.current =
-      directlyVerified && hostId !== null && worktrees !== undefined
-        ? { hostId, roots: worktrees.map((worktree) => worktree.path), worktrees }
-        : null;
-  }
-  const cache = cacheRef.current;
-  const cachedMatch =
-    cache !== null &&
-    cache.hostId === hostId &&
-    requestedPath !== null &&
-    cache.roots.some((root) => pathIsWithinWorktree(requestedPath, root));
-
-  if (resolved) return directlyVerified ? (worktrees ?? []) : [];
-  return cachedMatch ? (cache?.worktrees ?? []) : [];
 }
 
 interface HostWorktreesResponse {
@@ -91,41 +36,30 @@ interface HostWorktreesResponse {
 /**
  * Fetch the git worktrees of a repository on a host.
  *
- * Only an explicit not-a-repo 400 resolves to an empty list. Other
- * failures throw so a transient git failure cannot masquerade as a
- * non-git workspace and discard the user's worktree selection.
+ * A 400 response means the path is not a git repository (or git
+ * failed) — the picker treats that as "no worktrees here", so we
+ * resolve to an empty list rather than throwing. Other non-OK
+ * responses throw so React Query surfaces the error.
  *
  * @param hostId Host identifier, e.g. ``"host_a1b2..."``.
  * @param repoPath Absolute path inside the repo to list worktrees for.
  * @returns The repository's worktrees (main first), or ``[]`` when the
  *   path is not a git repository.
  */
-export async function fetchHostWorktrees(
-  hostId: string,
-  repoPath: string,
-): Promise<HostWorktree[]> {
+async function fetchHostWorktrees(hostId: string, repoPath: string): Promise<HostWorktree[]> {
   const params = new URLSearchParams({ path: repoPath });
   const res = await authenticatedFetch(
     `/v1/hosts/${encodeURIComponent(hostId)}/worktrees?${params.toString()}`,
   );
   if (res.status === 400) {
-    const text = await res.text().catch(() => "");
-    if (/not a git (?:repo|repository)/i.test(text)) return [];
+    // Not a git repository — no worktrees to offer.
+    return [];
   }
   if (!res.ok) {
     throw new Error(`host worktrees fetch failed: HTTP ${res.status}`);
   }
   const body = (await res.json()) as HostWorktreesResponse;
   return body.data;
-}
-
-/** Shared query options for single-path and batched recent-workspace reads. */
-export function hostWorktreesQueryOptions(hostId: string, repoPath: string) {
-  return queryOptions({
-    queryKey: ["host-worktrees", hostId, repoPath] as const,
-    queryFn: () => fetchHostWorktrees(hostId, repoPath),
-    staleTime: 5_000,
-  });
 }
 
 /**
@@ -140,9 +74,11 @@ export function hostWorktreesQueryOptions(hostId: string, repoPath: string) {
  * @returns React Query result with ``data: HostWorktree[]``.
  */
 export function useHostWorktrees(hostId: string | null, repoPath: string | null) {
-  const enabled = hostId !== null && repoPath !== null && repoPath !== "";
   return useQuery({
-    ...hostWorktreesQueryOptions(hostId ?? "", repoPath ?? ""),
-    enabled,
+    queryKey: ["host-worktrees", hostId, repoPath],
+    queryFn: () => fetchHostWorktrees(hostId as string, repoPath as string),
+    enabled: hostId !== null && repoPath !== null && repoPath !== "",
+    staleTime: 5_000,
+    placeholderData: (prev) => prev,
   });
 }

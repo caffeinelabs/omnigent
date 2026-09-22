@@ -1,7 +1,3 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("@/hooks/useScopeCache", () => import("@/test/mockScopeCache"));
-import { SidebarDataProvider } from "@/hooks/useSidebarData";
 // Tests for the Inbox page (`/inbox`) — the cross-session list of pending
 // approval prompts and unseen file comments.
 //
@@ -18,6 +14,7 @@ import { SidebarDataProvider } from "@/hooks/useSidebarData";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InboxPage } from "./InboxPage";
 import type { Conversation } from "@/hooks/useConversations";
 import * as conversationsHook from "@/hooks/useConversations";
@@ -119,11 +116,9 @@ function renderPage() {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <SidebarDataProvider>
-        <MemoryRouter>
-          <InboxPage />
-        </MemoryRouter>
-      </SidebarDataProvider>
+      <MemoryRouter>
+        <InboxPage />
+      </MemoryRouter>
     </QueryClientProvider>,
   );
 }
@@ -162,17 +157,18 @@ describe("InboxPage states", () => {
     expect(await screen.findByText("Nothing waiting on you")).toBeInTheDocument();
   });
 
-  it("offers manual loading when older sessions remain", () => {
+  it("does not show the empty state while more pages are still draining", () => {
     // WHY: `hasNextPage` keeps the inbox in the assembling state — an empty
     // `items` then only means "not done paging", so no empty state.
     vi.mocked(conversationsHook.useConversations).mockReturnValue(
       conversationsStub([], { hasNextPage: true }),
     );
     renderPage();
-    expect(screen.getByRole("button", { name: "Load more sessions" })).toBeInTheDocument();
+    expect(screen.queryByText("Nothing waiting on you")).not.toBeInTheDocument();
+    expect(screen.getByText("Loading inbox…")).toBeInTheDocument();
   });
 
-  it("loads additional scope pages only after a click", async () => {
+  it("drains remaining list pages while mounted", () => {
     // WHY: an awaiting session may sit below the first page, so the inbox
     // calls fetchNextPage whenever another page is available.
     const fetchNextPage = vi.fn();
@@ -180,9 +176,7 @@ describe("InboxPage states", () => {
       conversationsStub([], { hasNextPage: true, fetchNextPage }),
     );
     renderPage();
-    expect(fetchNextPage).not.toHaveBeenCalled();
-    fireEvent.click(screen.getByRole("button", { name: "Load more sessions" }));
-    await waitFor(() => expect(fetchNextPage).toHaveBeenCalled());
+    expect(fetchNextPage).toHaveBeenCalled();
   });
 });
 
@@ -313,11 +307,9 @@ describe("InboxPage approval items", () => {
     });
     const { rerender } = render(
       <QueryClientProvider client={queryClient}>
-        <SidebarDataProvider>
-          <MemoryRouter>
-            <InboxPage />
-          </MemoryRouter>
-        </SidebarDataProvider>
+        <MemoryRouter>
+          <InboxPage />
+        </MemoryRouter>
       </QueryClientProvider>,
     );
 
@@ -337,11 +329,9 @@ describe("InboxPage approval items", () => {
     vi.mocked(conversationsHook.useConversations).mockReturnValue(conversationsStub([updatedRow]));
     rerender(
       <QueryClientProvider client={queryClient}>
-        <SidebarDataProvider>
-          <MemoryRouter>
-            <InboxPage />
-          </MemoryRouter>
-        </SidebarDataProvider>
+        <MemoryRouter>
+          <InboxPage />
+        </MemoryRouter>
       </QueryClientProvider>,
     );
 

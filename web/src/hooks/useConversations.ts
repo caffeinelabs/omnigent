@@ -1,7 +1,3 @@
-import { useContext, useEffect, useRef } from "react";
-import { useViewerId } from "./useViewerId";
-import { SidebarConfigContext, sidebarConfig } from "@/lib/sidebarConfig";
-import { revokePermission } from "@/lib/permissionsApi";
 // TanStack Query wrapper around `GET /v1/sessions`, plus mutation
 // hooks for `PATCH /v1/sessions/{id}` (rename) and
 // `DELETE /v1/sessions/{id}`. Rename and delete are optimistic and patch
@@ -28,12 +24,10 @@ import {
   useQueryClient,
   type QueryClient,
 } from "@tanstack/react-query";
-import { authenticatedFetch, getCurrentUserId } from "@/lib/identity";
-import { filterSessionScope, sessionVisibility } from "@/lib/sessionVisibility";
+import { authenticatedFetch } from "@/lib/identity";
 import { startTimedInteraction } from "@/lib/analyticsEmit";
 import {
   filtersFromConversationQueryKey,
-  lastIdAfterFiltering,
   insertNewRowsIntoPages,
   markRecentlyCreated,
   mergeItemsIntoPages,
@@ -49,13 +43,9 @@ import {
   type SessionListWireItem,
 } from "@/lib/sessionListCache";
 import { showToast } from "@/components/ui/toast";
-import {
-  conversationDisplayLabel,
-  readPinnedConversationIds,
-  setLegacyPinnedConversationId,
-} from "@/shell/sidebarNav";
+import { revokePermission } from "@/lib/permissionsApi";
+import { conversationDisplayLabel, setLegacyPinnedConversationId } from "@/shell/sidebarNav";
 import { apiErrorFromResponse, stopSession } from "@/lib/sessionsApi";
-import { isStaleCursorError, useRestartOnStaleCursor } from "@/lib/staleCursor";
 import { setSessionHost } from "@/lib/sessionHost";
 import {
   createProject as apiCreateProject,
@@ -112,8 +102,6 @@ function isAbortTimeout(error: unknown): boolean {
 const ARCHIVED_PROJECT_NAMES_KEY = ["archived-project-names"] as const;
 
 export interface UseConversationsOptions {
-  refreshIntervalMs?: number | false;
-  snapshot?: boolean;
   reconcileWhileConnected?: boolean;
   // When false, the query is disabled (no fetch fires). Lets callers mount
   // the hook unconditionally while suppressing the request until it's needed.
@@ -372,11 +360,7 @@ export function clearSessionTombstones(): void {
 /**
  * Apply optimistic delete/archive state to a freshly fetched page.
  */
-function applySessionTombstones(
-  page: ConversationsPage,
-  dropArchiving = false,
-  originalPage = page,
-): ConversationsPage {
+function applySessionTombstones(page: ConversationsPage, dropArchiving = false): ConversationsPage {
   if (deletingSessionIds.size === 0 && archivingSessions.size === 0) return page;
   let changed = false;
   let lastArchivingId: string | null = null;
@@ -402,8 +386,8 @@ function applySessionTombstones(
     ...page,
     data,
     first_id: data[0]?.id ?? null,
-    // Archived anchors remain valid on legacy row-ID backends.
-    last_id: lastIdAfterFiltering(originalPage, data, lastArchivingId),
+    // Archived rows remain valid server cursors; deleted rows do not.
+    last_id: data[data.length - 1]?.id ?? lastArchivingId,
   };
 }
 
@@ -501,15 +485,13 @@ export async function fetchConversationById(id: string): Promise<Conversation | 
   };
 }
 
-export async function fetchConversationsPage({
+async function fetchConversationsPage({
   after,
   searchQuery,
   includeArchived,
   project,
   visibility,
   queryClient,
-  signal: requestSignal,
-  limit = sidebarConfig.sessionPageSize,
 }: {
   after?: string;
   searchQuery: string;
@@ -517,8 +499,6 @@ export async function fetchConversationsPage({
   project?: string;
   visibility?: "mine" | "shared" | "archived";
   queryClient: QueryClient;
-  signal?: AbortSignal;
-  limit?: number;
 }): Promise<ConversationsPage> {
   // `updated_at` matches the sidebar's sort, which keeps server
   // pagination consistent with the visible order as the user scrolls.
@@ -526,8 +506,7 @@ export async function fetchConversationsPage({
   const params = new URLSearchParams({
     order: "desc",
     sort_by: "updated_at",
-    limit: String(limit),
-    visibility: visibility ?? "all",
+    limit: "30",
   });
   if (after) params.set("after", after);
   if (searchQuery) params.set("search_query", searchQuery);
@@ -540,15 +519,17 @@ export async function fetchConversationsPage({
   // query key (which drops `project`) and the cache-membership check. This
   // list never requests the server's "unfiled" (`project=`) slice.
   if (project) params.set("project", project);
+  // Server-side ownership filter for the sidebar's My/Shared split. Omitting
+  // the param keeps the legacy "all accessible" behaviour (no regression for
+  // callers that don't pass visibility).
+  if (visibility) params.set("visibility", visibility);
   // Bound search fetches with a client-side deadline (see
   // SEARCH_FETCH_TIMEOUT_MS): a search whose server-side index is missing can
   // hang, and the palette shows "Searching…" for the whole in-flight window.
   // Plain list pagination is indexed/fast, so it keeps no timeout.
-  const signal = searchQuery ? AbortSignal.timeout(SEARCH_FETCH_TIMEOUT_MS) : requestSignal;
+  const signal = searchQuery ? AbortSignal.timeout(SEARCH_FETCH_TIMEOUT_MS) : undefined;
   const res = await authenticatedFetch(`/v1/sessions?${params.toString()}`, { signal });
-  // Carries the server's `code`, so a dead cursor stays recognizable as
-  // `stale_cursor` instead of an opaque "400 Bad Request".
-  if (!res.ok) throw await apiErrorFromResponse(res);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   const page = (await res.json()) as ConversationsPage;
   // Seed the session→host map from every list row, not just sessions the user
   // has opened (which is all `sessionFromWire` covers). Two payoffs: (1) the
@@ -571,14 +552,13 @@ export async function fetchConversationsPage({
       visibility,
     ),
     !includeArchived && visibility !== "archived",
-    page,
   );
 }
 
 /**
  * Fetch the conversations list with cursor-based pagination.
  *
- * Page size comes from SidebarConfig (default 30), sorted descending by
+ * Each page holds up to 20 conversations, sorted descending by
  * `updated_at` (latest message first). `searchQuery` is forwarded to the server as
  * `?search_query=` so filtering happens server-side; callers should
  * debounce the value before passing it. `includeArchived` controls
@@ -599,29 +579,6 @@ export async function fetchConversationsPage({
 // exactly one fetch regardless of observer count, then stays latched.
 let initialListLoadTimed = false;
 
-export async function timeInitialConversationLoad(
-  pageParam: unknown,
-  visibility: "mine" | "shared" | "archived" | undefined,
-  fetchPage: () => Promise<ConversationsPage>,
-): Promise<ConversationsPage> {
-  if (
-    initialListLoadTimed ||
-    pageParam !== undefined ||
-    (visibility !== undefined && visibility !== "mine")
-  )
-    return fetchPage();
-  initialListLoadTimed = true;
-  const interaction = startTimedInteraction("list_sessions");
-  try {
-    const page = await fetchPage();
-    interaction.complete();
-    return page;
-  } catch (error) {
-    interaction.fail();
-    throw error;
-  }
-}
-
 export function useConversations(
   searchQuery = "",
   includeArchived = false,
@@ -638,19 +595,17 @@ export function useConversations(
   // If the socket is down, all consumers use a safety poll.
   const streamConnected = useSessionUpdatesConnected();
   const queryClient = useQueryClient();
-  const { sessionPageSize } = useContext(SidebarConfigContext);
-  // Keep the base three-element key for the unfiltered callers (byte-for-byte
-  // unchanged, so the sidebar / rename / push-delta paths are untouched); only
-  // append `project` for a concrete name; append `visibility` only when set so
-  // the "mine"/"shared" tab queries get their own cache entries without
-  // disturbing the existing all-sessions key used by every other caller.
-  const queryKey = visibility
-    ? ["conversations", searchQuery, includeArchived, project ?? null, visibility]
-    : project
-      ? ["conversations", searchQuery, includeArchived, project]
-      : ["conversations", searchQuery, includeArchived];
-  const query = useInfiniteQuery({
-    queryKey,
+  return useInfiniteQuery({
+    // Keep the base three-element key for the unfiltered callers (byte-for-byte
+    // unchanged, so the sidebar / rename / push-delta paths are untouched); only
+    // append `project` for a concrete name; append `visibility` only when set so
+    // the "mine"/"shared" tab queries get their own cache entries without
+    // disturbing the existing all-sessions key used by every other caller.
+    queryKey: visibility
+      ? ["conversations", searchQuery, includeArchived, project ?? null, visibility]
+      : project
+        ? ["conversations", searchQuery, includeArchived, project]
+        : ["conversations", searchQuery, includeArchived],
     queryFn: async ({ pageParam }) => {
       const fetchPage = () =>
         fetchConversationsPage({
@@ -660,9 +615,22 @@ export function useConversations(
           project,
           visibility,
           queryClient,
-          limit: sessionPageSize,
         });
-      return timeInitialConversationLoad(pageParam, visibility, fetchPage);
+      // Time the first full-list load per app session; skip pagination
+      // (pageParam set), every later fetch (poll / reconcile / invalidation),
+      // and tab-scoped visibility queries (the CUJ measures the full-list only).
+      if (initialListLoadTimed || pageParam !== undefined || visibility !== undefined)
+        return fetchPage();
+      initialListLoadTimed = true;
+      const interaction = startTimedInteraction("list_sessions");
+      try {
+        const page = await fetchPage();
+        interaction.complete();
+        return page;
+      } catch (error) {
+        interaction.fail();
+        throw error;
+      }
     },
 
     initialPageParam: undefined as string | undefined,
@@ -672,31 +640,16 @@ export function useConversations(
     // succession after the initial fetch (AppShell, Sidebar, ChatPage)
     // share the cache instead of each triggering a background refetch.
     // The WS stream handles real-time updates within that window.
-    staleTime: options.snapshot ? "static" : 30_000,
-    ...(options.snapshot
-      ? {
-          refetchOnMount: false,
-          refetchOnWindowFocus: false,
-          refetchOnReconnect: false,
-          meta: { snapshot: true },
-        }
-      : {}),
+    staleTime: 30_000,
     // A client-side search timeout is terminal — retrying would just re-arm the
     // same slow request (default 3×) and prolong the spinner. Any other failure
     // keeps React Query's default retry behaviour.
-    // A stale cursor is terminal for that page param too: the row it names is
-    // gone, so a retry reissues the same doomed cursor. The restart below
-    // recovers it instead.
-    retry: (failureCount, error) =>
-      !isAbortTimeout(error) && !isStaleCursorError(error) && failureCount < 3,
-    refetchInterval: options.snapshot
-      ? false
-      : (options.refreshIntervalMs ??
-        (streamConnected
-          ? options.reconcileWhileConnected
-            ? CONNECTED_STREAM_REFETCH_INTERVAL_MS
-            : false
-          : DISCONNECTED_STREAM_REFETCH_INTERVAL_MS)),
+    retry: (failureCount, error) => !isAbortTimeout(error) && failureCount < 3,
+    refetchInterval: streamConnected
+      ? options.reconcileWhileConnected
+        ? CONNECTED_STREAM_REFETCH_INTERVAL_MS
+        : false
+      : DISCONNECTED_STREAM_REFETCH_INTERVAL_MS,
     // Lets callers mount the hook unconditionally while suppressing the fetch
     // until it's actually needed (e.g. the sidebar's tab-scoped query is
     // disabled when the user is not on the "mine" or "shared" tab).
@@ -708,10 +661,6 @@ export function useConversations(
       ? { notifyOnChangeProps: [...options.notifyOnChangeProps] }
       : {}),
   });
-  // A session deleted between two scroll pages kills the cursor; reload the
-  // list from page 1 rather than replacing the sidebar with the raw 400.
-  useRestartOnStaleCursor(queryKey);
-  return query;
 }
 
 /** PATCH /v1/sessions/{id} — exported for direct unit testing. */
@@ -1585,7 +1534,6 @@ export interface PinnedConversationsResult {
    * UI-before-server upgrade can't wipe local pins.
    */
   filterHonored: boolean;
-  filterHonoredByScope?: { mine: boolean; shared?: boolean };
 }
 
 /**
@@ -1594,7 +1542,7 @@ export interface PinnedConversationsResult {
  * window. Pins now live on the server (a session label) so they follow the
  * user across devices; this query is the source of truth for which sessions
  * are pinned and supplies the rows for any pin that sits outside the loaded
- * list. Each enabled scope fetches one page bounded by the configured pin cap.
+ * list. A generous single page (100) covers realistic pin counts.
  *
  * A pre-upgrade server doesn't know the `pinned` param and silently ignores
  * it (FastAPI drops unknown query params), returning an ordinary session page.
@@ -1603,15 +1551,11 @@ export interface PinnedConversationsResult {
  * server handed back rows that aren't pinned — the signal the sidebar uses to
  * skip the destructive localStorage migration against an old server.
  */
-async function fetchPinnedScope(
-  visibility: "mine" | "shared",
-  limit: number,
-): Promise<PinnedConversationsResult> {
+export async function fetchPinnedConversations(): Promise<PinnedConversationsResult> {
   const params = new URLSearchParams({
     order: "desc",
     sort_by: "updated_at",
-    limit: String(limit),
-    visibility,
+    limit: "100",
     pinned: "true",
   });
   const res = await authenticatedFetch(`/v1/sessions?${params.toString()}`);
@@ -1633,57 +1577,16 @@ async function fetchPinnedScope(
   // fully would need a server capability flag; deferred since pins haven't
   // shipped yet.
   const filterHonored = rows.length === 0 || conversations.length === rows.length;
-  // Keep ownership-dependent filtering in the reactive query selector.
   return { conversations, filterHonored };
 }
 
-export async function fetchPinnedConversations(
-  sharedEnabled = true,
-  limit = sidebarConfig.pinCap,
-): Promise<PinnedConversationsResult> {
-  const [mine, shared] = await Promise.all([
-    fetchPinnedScope("mine", limit),
-    sharedEnabled ? fetchPinnedScope("shared", limit) : Promise.resolve(undefined),
-  ]);
-  const byId = new Map(
-    [...mine.conversations, ...(shared?.conversations ?? [])].map((row) => [row.id, row]),
-  );
-  return {
-    conversations: [...byId.values()].sort(
-      (a, b) =>
-        Number(b.labels[PINNED_LABEL_KEY]) - Number(a.labels[PINNED_LABEL_KEY]) ||
-        b.id.localeCompare(a.id),
-    ),
-    filterHonored: mine.filterHonored && (shared?.filterHonored ?? true),
-    filterHonoredByScope: {
-      mine: mine.filterHonored,
-      ...(shared ? { shared: shared.filterHonored } : {}),
-    },
-  };
-}
-
 /** Server-authoritative list of the viewer's pinned sessions. */
-export function usePinnedConversations(sharedEnabled = true, limit = sidebarConfig.pinCap) {
-  const viewerId = useViewerId();
-  const query = useQuery<PinnedConversationsResult>({
+export function usePinnedConversations() {
+  return useQuery<PinnedConversationsResult>({
     queryKey: PINNED_CONVERSATIONS_KEY,
-    queryFn: () => fetchPinnedConversations(sharedEnabled, limit),
-    select: (data) =>
-      sharedEnabled
-        ? data
-        : {
-            ...data,
-            conversations: filterSessionScope(data.conversations, "mine", viewerId),
-          },
+    queryFn: fetchPinnedConversations,
     staleTime: 30_000,
   });
-  const { refetch } = query;
-  const previousSharedEnabled = useRef(sharedEnabled);
-  useEffect(() => {
-    if (sharedEnabled !== previousSharedEnabled.current) void refetch();
-    previousSharedEnabled.current = sharedEnabled;
-  }, [sharedEnabled, refetch]);
-  return query;
 }
 
 /**
@@ -1728,26 +1631,8 @@ function findCachedConversationRow(queryClient: QueryClient, id: string): Conver
     queryClient
       .getQueriesData<ConversationsInfiniteData>({ queryKey: ["project-sessions"] })
       .flatMap(([, data]) => data?.pages.flatMap((p) => p.data) ?? [])
-      .find((c) => c.id === id) ??
-    queryClient.getQueryData<Conversation | null>(["conversation-backfill", id]) ??
-    cachedSessionRow(queryClient, id)
+      .find((c) => c.id === id)
   );
-}
-
-function cachedSessionRow(queryClient: QueryClient, id: string): Conversation | undefined {
-  const session = queryClient.getQueryData<Session>(["session", id]);
-  if (!session) return undefined;
-  return {
-    id,
-    object: "conversation",
-    title: session.title,
-    created_at: session.createdAt,
-    updated_at: session.createdAt,
-    labels: session.labels ?? {},
-    permission_level: session.permissionLevel,
-    agent_id: session.agentId,
-    archived: session.archived,
-  };
 }
 
 /**
@@ -1780,9 +1665,6 @@ function cachedSessionRow(queryClient: QueryClient, id: string): Conversation | 
  * unions localStorage pins into the Pinned section, so it shows immediately.
  */
 export function useTogglePinnedConversation() {
-  const { pinCap, pinsIncludeShared, sharedAvailable } = useContext(SidebarConfigContext);
-  const includeShared = pinsIncludeShared && sharedAvailable;
-  const viewerId = getCurrentUserId();
   const queryClient = useQueryClient();
 
   // Whether the server can store pins. Sourced from the pinned query's
@@ -1829,9 +1711,7 @@ export function useTogglePinnedConversation() {
       // list. If the query hasn't loaded yet, an optimistic patch implies the
       // server can store pins, so treat it as honored.
       const prev = old ?? { conversations: [], filterHonored: true };
-      const rest = prev.conversations.filter(
-        (c) => c.id !== id && (includeShared || sessionVisibility(c, viewerId) === "mine"),
-      );
+      const rest = prev.conversations.filter((c) => c.id !== id);
       if (!pinned) return { ...prev, conversations: rest };
       // Prefer the full cached row (keeps title/updated_at); fall back to a
       // minimal row when the session isn't in any loaded cache (rare — the pin
@@ -1840,9 +1720,6 @@ export function useTogglePinnedConversation() {
       const row: Conversation = existing
         ? { ...existing, labels }
         : ({ id, object: "conversation", labels } as Conversation);
-      if (!includeShared && (!existing || sessionVisibility(row, viewerId) !== "mine")) {
-        return { ...prev, conversations: rest };
-      }
       return { ...prev, conversations: [...rest, row] };
     });
   };
@@ -1868,32 +1745,6 @@ export function useTogglePinnedConversation() {
     // network resolves, which reads as lag. Snapshot the pinned cache so a
     // failed PATCH rolls back.
     onMutate: ({ id, pinned }) => {
-      const existing = findRow(id);
-      if (
-        pinned &&
-        !includeShared &&
-        (!existing || sessionVisibility(existing, viewerId) !== "mine")
-      ) {
-        const message = "Only your sessions can be pinned.";
-        showToast(message);
-        throw new Error(message);
-      }
-      const cachedPins =
-        queryClient.getQueryData<PinnedConversationsResult>(PINNED_CONVERSATIONS_KEY);
-      const pinIds = new Set([
-        ...(cachedPins?.conversations
-          .filter((row) => includeShared || sessionVisibility(row, viewerId) === "mine")
-          .map((row) => row.id) ?? []),
-        ...readPinnedConversationIds().filter((pinId) => {
-          const row = findRow(pinId);
-          return includeShared || (row && sessionVisibility(row, viewerId) === "mine");
-        }),
-      ]);
-      if (pinned && !pinIds.has(id) && pinIds.size >= pinCap) {
-        const message = `You can pin up to ${pinCap} sessions. Unpin a session first.`;
-        showToast(message);
-        throw new Error(message);
-      }
       const prevPinned =
         queryClient.getQueryData<PinnedConversationsResult>(PINNED_CONVERSATIONS_KEY);
       const base = findRow(id)?.labels ?? {};
@@ -1916,21 +1767,11 @@ export function useTogglePinnedConversation() {
       // it and need the anchor to suppress that self-bump). Anchoring here would
       // instead mark a session with genuine unread activity as read on pin.
       //
-      // Reconcile only the pin label (authoritative timestamp) onto the
-      // currently cached labels. Don't invalidate the pinned query — the
-      // `?pinned=true` label index lags the write, so a refetch would
-      // momentarily revert the toggle; the query's `staleTime` converges it
-      // later. And don't write this PATCH snapshot's labels wholesale: a
-      // drag-drop files the row and unpins it in one gesture, and the unpin
-      // usually resolves first — its snapshot predates the move's optimistic
-      // project label, so wholesale it would erase that label and bounce the
-      // row into the flat list until the move landed.
-      const base = findRow(updated.id)?.labels ?? updated.labels;
-      const pinValue = updated.labels[PINNED_LABEL_KEY] ?? base[PINNED_LABEL_KEY];
-      const labels = pinned
-        ? { ...base, ...(pinValue !== undefined ? { [PINNED_LABEL_KEY]: pinValue } : {}) }
-        : Object.fromEntries(Object.entries(base).filter(([k]) => k !== PINNED_LABEL_KEY));
-      patch(updated.id, labels, pinned);
+      // Reconcile with the server-confirmed labels (authoritative pin
+      // timestamp). Don't invalidate the pinned query — the `?pinned=true` label
+      // index lags the write, so a refetch would momentarily revert the toggle;
+      // the query's `staleTime` converges it later.
+      patch(updated.id, updated.labels, pinned);
     },
   });
 }
@@ -1966,8 +1807,8 @@ export interface ProjectSummary {
 export function useProjects() {
   return useQuery<ProjectSummary[]>({
     queryKey: ["projects"],
-    queryFn: async ({ signal }) => {
-      const res = await authenticatedFetch("/v1/sessions/projects", { signal });
+    queryFn: async () => {
+      const res = await authenticatedFetch("/v1/sessions/projects");
       if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
       return (await res.json()) as ProjectSummary[];
     },
@@ -1999,8 +1840,6 @@ export async function fetchAllArchivedProjectNames(): Promise<string[]> {
       order: "desc",
       sort_by: "updated_at",
       limit: "100",
-      visibility: "archived",
-      // Preserve archive inclusion on older servers that ignore visibility.
       include_archived: "true",
     });
     if (after) params.set("after", after);
@@ -2012,7 +1851,8 @@ export async function fetchAllArchivedProjectNames(): Promise<string[]> {
     // eslint-disable-next-line no-await-in-loop
     const page = (await res.json()) as ConversationsPage;
     for (const conv of page.data) {
-      // Keep active rows out even if a server ignores the visibility filter.
+      // include_archived returns archived AND active rows; only archived ones
+      // are filterable on this page, so collect labels from those.
       if (conv.archived !== true) continue;
       const name = conv.labels?.[PROJECT_LABEL_KEY];
       if (name) names.add(name);
@@ -2062,7 +1902,7 @@ export function useArchivedProjectNames() {
  * see no existing project and both POST; the second gets a 409. Treat that as
  * benign — re-list and return the id the winner created.
  */
-export async function resolveOrCreateProjectId(name: string): Promise<string> {
+async function resolveOrCreateProjectId(name: string): Promise<string> {
   const projects = await apiListProjects();
   const existing = projects.find((p) => p.name === name);
   if (existing) return existing.id;
@@ -2118,13 +1958,11 @@ export async function moveConversationToProject(
  * onto every cached copy of the row and it regroups on the next frame — rather
  * than after the PATCH + list refetches round-trip, which parked the row in
  * its old section for the whole request (multi-second against a slow server).
- * The target is read from the cached `["projects"]` list, the same data the
- * move UI rendered its targets from: a first-class target overlays its id, and
- * a label-only folder (cached with a null id — its first-class row is created
- * over the network inside the mutation) overlays the legacy label instead,
- * which the sidebar dual-reads into the same folder. Only a name absent from
- * the cache (a brand-new project) skips the overlay and regroups on the
- * reconcile below — there is no folder to regroup into yet.
+ * The target id is read from the cached `["projects"]` list, the same data the
+ * move UI rendered its targets from. A name with no cached first-class id yet
+ * (label-only folder or brand-new name) is created over the network inside the
+ * mutation, so that path skips the overlay and regroups on the reconcile
+ * below, exactly as before.
  *
  * `onSuccess` still invalidates: membership pagination, project counts, and
  * ordering are server-owned, and those refetches start after the PATCH commits
@@ -2210,15 +2048,15 @@ export function useMoveToProject() {
     mutationFn: ({ id, project }: { id: string; project: string }) =>
       moveConversationToProject(id, project),
     onMutate: async ({ id, project }) => {
-      // `""` unfiles (no id needed); a file target must exist in the cached
-      // projects list for the overlay to be truthful about the outcome — an
-      // uncached name (brand-new project) has no folder to regroup into.
+      // `""` unfiles (no id needed); a file target must resolve to a cached
+      // first-class id for the overlay to be truthful about the outcome. The
+      // `?? undefined` folds a label-only folder's null id into "unknown".
       const target =
         project === ""
           ? null
           : (queryClient
               .getQueryData<ProjectSummary[]>(["projects"])
-              ?.find((p) => p.name === project) ?? undefined);
+              ?.find((p) => p.name === project)?.id ?? undefined);
       if (target === undefined) return undefined;
       // Cancel in-flight list refetches so a response that started before the
       // overlay can't resolve after it and snap the row back to its old spot.
@@ -2239,17 +2077,10 @@ export function useMoveToProject() {
         }),
         backfill: queryClient.getQueryData<Conversation | null>(["conversation-backfill", id]),
       };
-      const baseLabels = Object.fromEntries(
+      const labels = Object.fromEntries(
         Object.entries(row.labels).filter(([labelKey]) => labelKey !== PROJECT_LABEL_KEY),
       );
-      // A label-only folder has no first-class id to overlay yet, so its
-      // membership is written through the legacy label — the sidebar
-      // dual-reads it into the same folder the eventual PATCH files into.
-      const labels =
-        target !== null && target.id === null
-          ? { ...baseLabels, [PROJECT_LABEL_KEY]: project }
-          : baseLabels;
-      overlayMembership(row, target?.id ?? null, labels, project === "" ? null : project);
+      overlayMembership(row, target, labels, project === "" ? null : project);
       return previous;
     },
     onError: (_err, { id }, previous) => {
@@ -2261,20 +2092,8 @@ export function useMoveToProject() {
         queryClient.setQueryData(["conversation-backfill", id], previous.backfill);
       }
     },
-    onSuccess: (updated, { project }) => {
+    onSuccess: (updated) => {
       markConversationSeen(updated.id, updated.updated_at);
-      // Filing can promote a label-only folder to first-class inside the
-      // mutation. Seed the confirmed id into the cached projects list before
-      // the refetches race: a conversations refetch can land first with the
-      // row's legacy label already cleared, and an id-less cached folder
-      // couldn't claim that row by `project_id` — it would flash into the
-      // flat list until the projects refetch landed.
-      const confirmedId = updated.project_id;
-      if (project !== "" && confirmedId != null) {
-        queryClient.setQueryData<ProjectSummary[]>(["projects"], (old) =>
-          old?.map((p) => (p.name === project && p.id === null ? { ...p, id: confirmedId } : p)),
-        );
-      }
       void queryClient.invalidateQueries({ queryKey: ["conversations"] });
       void queryClient.invalidateQueries({ queryKey: ["projects"] });
       // Moving into/out of a project changes both folders' paginated lists.
@@ -2299,7 +2118,6 @@ async function fetchAllProjectSessionIds(project: string): Promise<string[]> {
       order: "desc",
       sort_by: "updated_at",
       limit: "100",
-      visibility: "all",
       include_archived: "true",
       project,
     });
@@ -2331,7 +2149,6 @@ export async function fetchProjectSessionIds(project: string, limit = 2): Promis
     sort_by: "updated_at",
     limit: String(limit),
     include_archived: "true",
-    visibility: "all",
     project,
   });
   const res = await authenticatedFetch(`/v1/sessions?${params.toString()}`);
@@ -2340,7 +2157,7 @@ export async function fetchProjectSessionIds(project: string, limit = 2): Promis
   return page.data.map((conv) => conv.id);
 }
 
-/** One page of the viewer's active sessions in a project, newest-first. */
+/** One page of a project's (non-archived) sessions, newest-first. */
 async function fetchProjectSessionsPage(
   project: string,
   after?: string,
@@ -2350,13 +2167,11 @@ async function fetchProjectSessionsPage(
     order: "desc",
     sort_by: "updated_at",
     limit: String(limit),
-    visibility: "mine",
     project,
   });
   if (after) params.set("after", after);
   const res = await authenticatedFetch(`/v1/sessions?${params.toString()}`);
-  // Carries the server's `code`, so a dead cursor stays recognizable.
-  if (!res.ok) throw await apiErrorFromResponse(res);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return applySessionTombstones((await res.json()) as ConversationsPage, true);
 }
 
@@ -2367,24 +2182,18 @@ async function fetchProjectSessionsPage(
  * excluded (they leave the active sidebar). `enabled` gates the fetch so a
  * collapsed folder costs nothing — pass the folder's expanded state.
  *
- * Folders keep their own 20-row pages and infinite-scroll sentinel,
- * independently of the global list's configured page size.
+ * Same page size (20) and sort (`updated_at desc`) as the global list, so a
+ * folder paginates independently with its own infinite-scroll sentinel.
  */
 export function useProjectSessions(project: string, enabled: boolean) {
-  const queryKey = ["project-sessions", project];
-  const query = useInfiniteQuery({
-    queryKey,
+  return useInfiniteQuery({
+    queryKey: ["project-sessions", project],
     queryFn: ({ pageParam }) => fetchProjectSessionsPage(project, pageParam as string | undefined),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) =>
       lastPage.has_more ? (lastPage.last_id ?? undefined) : undefined,
-    retry: (failureCount, error) => !isStaleCursorError(error) && failureCount < 3,
     enabled,
   });
-  // A session deleted mid-scroll kills the folder's cursor; reload the folder
-  // from page 1 rather than collapsing it into an error.
-  useRestartOnStaleCursor(queryKey);
-  return query;
 }
 
 /** Archive a session AND detach it from its project (clear project_id + the

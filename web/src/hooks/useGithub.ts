@@ -103,7 +103,6 @@ export interface GithubPrAssociation {
   host: string;
   repository: string;
   number: number;
-  title?: string | null;
   relationship: "created" | "worked_on" | "attached" | "inferred";
 }
 

@@ -1,35 +1,4 @@
-import type * as SandboxModelOptionsModule from "@/hooks/useSandboxModelOptions";
-
-vi.mock("@/hooks/useSandboxModelOptions", async (importOriginal) => ({
-  ...(await importOriginal<typeof SandboxModelOptionsModule>()),
-  useSandboxModelOptions: vi.fn(() => ({
-    data: {
-      configured: false,
-      status: "unconfigured",
-      models: [],
-      configuration_revision: null,
-      provider_label: null,
-      default_model: null,
-    },
-    isLoading: false,
-    error: null,
-  })),
-}));
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  useConversations as useTestConversations,
-  moveConversationToProject,
-  useProjectConfig,
-  useProjects,
-} from "@/hooks/useConversations";
-
-vi.mock("@/hooks/useSidebarData", () => ({ useLoadedConversations: () => useTestConversations() }));
-
-vi.mock("@/hooks/useSkills", () => ({
-  useSkills: () => ({ skills: [], skillsStatus: "ready", refetch: vi.fn() }),
-}));
 import type * as UseConversationsModule from "@/hooks/useConversations";
-import type * as HostWorktreesModule from "@/hooks/useHostWorktrees";
 import type * as AgentLabelsModule from "@/lib/agentLabels";
 import type * as ToastModule from "@/components/ui/toast";
 import type * as SessionsApiModule from "@/lib/sessionsApi";
@@ -37,9 +6,9 @@ import type * as SessionsApiModule from "@/lib/sessionsApi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { authenticatedFetch } from "@/lib/identity";
-import { composerContextToLabels } from "@/lib/composerContextAdapters";
 import { createBundledSession, launchRunner } from "@/lib/sessionsApi";
 import { CapabilitiesProvider } from "@/lib/CapabilitiesContext";
 import type { ServerInfo } from "@/lib/capabilities";
@@ -47,12 +16,12 @@ import type { Host } from "@/hooks/useHosts";
 import { useHosts } from "@/hooks/useHosts";
 import type { AvailableAgent } from "@/hooks/useAvailableAgents";
 import { useAvailableAgents } from "@/hooks/useAvailableAgents";
+import { moveConversationToProject, useProjectConfig, useProjects } from "@/hooks/useConversations";
 import type { ProjectConfig } from "@/lib/projectsApi";
 import { showToast } from "@/components/ui/toast";
 import { useHostWorktrees } from "@/hooks/useHostWorktrees";
 import type { HostWorktree } from "@/hooks/useHostWorktrees";
 import { NewChatLandingScreen, resetLandingDraft } from "./NewChatDialog";
-import { TooltipProvider } from "@/components/ui/tooltip";
 
 // A project-driven visit (`?project=` resolved to a first-class project id)
 // creates the session WITH `project_id`: the server files it atomically and
@@ -100,13 +69,8 @@ vi.mock("@/hooks/useHostFilesystem", () => ({
   useHostFilesystem: () => ({ data: undefined }),
   useCreateHostDirectory: () => ({ mutateAsync: vi.fn(), isPending: false }),
 }));
-vi.mock("@/hooks/useHostWorktrees", async (importOriginal) => ({
-  ...(await importOriginal<typeof HostWorktreesModule>()),
+vi.mock("@/hooks/useHostWorktrees", () => ({
   useHostWorktrees: vi.fn(),
-  hostWorktreesQueryOptions: (hostId: string, repoPath: string) => ({
-    queryKey: ["host-worktrees", hostId, repoPath],
-    queryFn: async () => [],
-  }),
 }));
 vi.mock("@/hooks/useDirectorySessions", () => ({
   useDirectorySessions: () => ({ data: [] }),
@@ -179,7 +143,7 @@ function agent(overrides: Partial<AvailableAgent> = {}): AvailableAgent {
     name: "hello_world",
     display_name: "Hello World",
     description: null,
-    harness: "claude-sdk",
+    harness: null,
     skills: [],
     ...overrides,
   };
@@ -204,14 +168,7 @@ function setRepoIsGit(): void {
     const known = hostId === "host_1" && path === REPO;
     return {
       data: known
-        ? ([
-            {
-              path: REPO,
-              branch: "main",
-              is_main: true,
-              detached: false,
-            },
-          ] as HostWorktree[])
+        ? ([{ path: REPO, branch: "main", is_main: true, detached: false }] as HostWorktree[])
         : ([] as HostWorktree[]),
       isError: false,
     } as ReturnType<typeof useHostWorktrees>;
@@ -245,9 +202,7 @@ function renderLanding(infoOverrides: Partial<ServerInfo> = {}): {
   function Wrapper({ children }: { children: ReactNode }) {
     return (
       <QueryClientProvider client={client}>
-        <CapabilitiesProvider info={info}>
-          <TooltipProvider>{children}</TooltipProvider>
-        </CapabilitiesProvider>
+        <CapabilitiesProvider info={info}>{children}</CapabilitiesProvider>
       </QueryClientProvider>
     );
   }
@@ -365,10 +320,6 @@ describe("NewChatLandingScreen project-aware create (first-class project_id)", (
     expect(body.workspace).toBe(RECENT_WORKSPACE);
     expect(body.labels).toEqual({
       "omnigent.client_create_token": expect.stringMatching(/^[0-9a-f]{32}$/),
-      ...composerContextToLabels({
-        workingDirectory: { kind: "selected", path: RECENT_WORKSPACE },
-        worktree: { kind: "none" },
-      }),
     });
   });
 
@@ -446,7 +397,7 @@ describe("NewChatLandingScreen project-aware create (first-class project_id)", (
     );
 
     fireEvent.click(screen.getByTestId("new-chat-landing-workspace-chip"));
-    fireEvent.click(screen.getByTestId("recent-workspace-select-0"));
+    fireEvent.click(screen.getByTestId("new-chat-landing-workspace-recent-0"));
 
     const body = await submitAndReadBody();
     expect(body.project_id).toBe("proj_alpha");
@@ -462,12 +413,7 @@ describe("NewChatLandingScreen project-aware create (first-class project_id)", (
           data:
             hostId === "host_1" && path === REPO
               ? ([
-                  {
-                    path: REPO,
-                    branch: "main",
-                    is_main: true,
-                    detached: false,
-                  },
+                  { path: REPO, branch: "main", is_main: true, detached: false },
                   {
                     path: EXISTING_WORKTREE,
                     branch: "feature/alpha",
@@ -485,7 +431,8 @@ describe("NewChatLandingScreen project-aware create (first-class project_id)", (
     );
 
     fireEvent.click(screen.getByTestId("new-chat-landing-branch-chip"));
-    fireEvent.click(screen.getByRole("radio", { name: "Use worktree alpha-feature" }));
+    fireEvent.focus(screen.getByTestId("new-chat-landing-branch-input"));
+    fireEvent.mouseDown(screen.getByTestId("new-chat-landing-worktree-option"));
 
     const body = await submitAndReadBody();
     expect(body.project_id).toBe("proj_alpha");
@@ -519,7 +466,10 @@ describe("NewChatLandingScreen project-aware create (first-class project_id)", (
 
   it("carries project_id and the omission rules through the multipart (bundled) path", async () => {
     setProjectConfig({ host_id: "host_1", workspace: REPO, agent_id: "ag_other" });
-    vi.mocked(createBundledSession).mockResolvedValue({ id: "conv_new" });
+    vi.mocked(createBundledSession).mockResolvedValue({
+      id: "conv_new",
+      warnings: [{ code: "project_agent_mismatch", message: "bundled agent differs" }],
+    });
     renderLanding();
     await waitFor(() =>
       expect(screen.getByTestId("new-chat-landing-workspace-chip").textContent).toContain("alpha"),
@@ -534,17 +484,36 @@ describe("NewChatLandingScreen project-aware create (first-class project_id)", (
     await waitFor(() => expect(navigateMock).toHaveBeenCalled());
 
     // Atomic filing rides in the metadata part; the config-seeded workspace
-    // is omitted from the launch fields but preserved in composer context.
+    // is omitted (server default-fill) and no born-filed label is stamped.
     const [, metadata] = vi.mocked(createBundledSession).mock.calls[0];
-    expect(metadata).toEqual({
-      project_id: "proj_alpha",
-      labels: composerContextToLabels({
-        workingDirectory: { kind: "selected", path: REPO },
-        worktree: { kind: "none" },
-      }),
-    });
+    expect(metadata).toEqual({ project_id: "proj_alpha" });
     // The runner still launches with the explicit client-side workspace.
     expect(vi.mocked(launchRunner)).toHaveBeenCalledWith("host_1", "conv_new", REPO, undefined);
     expect(vi.mocked(moveConversationToProject)).not.toHaveBeenCalled();
+    await waitFor(() => expect(vi.mocked(showToast)).toHaveBeenCalledWith("bundled agent differs"));
+  });
+
+  it("surfaces server mismatch warnings from the create response as toasts", async () => {
+    setProjectConfig({ host_id: "host_1", workspace: REPO, agent_id: "ag_other" });
+    renderLanding();
+    await waitFor(() =>
+      expect(screen.getByTestId("new-chat-landing-agent-select").textContent).toContain("Other"),
+    );
+    selectAgent("ag_hello");
+
+    await submitAndReadBody({
+      id: "conv_new",
+      warnings: [
+        {
+          code: "project_agent_mismatch",
+          message: "Explicit builtin agent differs from the project's custom agent hint",
+        },
+      ],
+    });
+    await waitFor(() =>
+      expect(vi.mocked(showToast)).toHaveBeenCalledWith(
+        "Explicit builtin agent differs from the project's custom agent hint",
+      ),
+    );
   });
 });

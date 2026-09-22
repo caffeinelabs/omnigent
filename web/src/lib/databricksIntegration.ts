@@ -9,7 +9,6 @@
  * Mirrors ``githubIntegration.ts``.
  */
 
-import { withBasePath } from "./basePath";
 import { authenticatedFetch } from "./identity";
 
 /** Shape of ``GET /v1/connections/databricks/status``. */
@@ -43,7 +42,7 @@ export async function fetchDatabricksStatus(): Promise<DatabricksConnectionStatu
  */
 export function beginDatabricksConnect(workspace: string, returnTo: string): void {
   const params = new URLSearchParams({ workspace, return_to: returnTo });
-  window.location.href = withBasePath(`/v1/connections/databricks/connect?${params.toString()}`);
+  window.location.href = `/v1/connections/databricks/connect?${params.toString()}`;
 }
 
 /** Disconnect the current user's Databricks workspace. */

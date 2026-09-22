@@ -4,20 +4,10 @@
 // - Stale anchor (id not in list) degrades to outside-end.
 // - Assertions check the target element's data attr, not just "spy called".
 
-import type * as ConversationModule from "@/components/ai-elements/conversation";
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useChatStore } from "@/store/chatStore";
 import { useUserMessageNav } from "./useUserMessageNav";
-
-const releaseScrollLock = vi.hoisted(() => vi.fn());
-vi.mock("@/components/ai-elements/conversation", async (importOriginal) => {
-  const actual = await importOriginal<typeof ConversationModule>();
-  return {
-    ...actual,
-    releaseConversationScrollLock: releaseScrollLock,
-  };
-});
 
 function setupDom(ids: string[]): void {
   document.body.innerHTML = ids
@@ -43,7 +33,6 @@ const SETTLE_MS = 200;
 
 beforeEach(() => {
   vi.useFakeTimers();
-  releaseScrollLock.mockClear();
   scrollSpy = vi.spyOn(Element.prototype, "scrollIntoView").mockImplementation(() => {});
   useChatStore.setState({ flashItemId: null });
 });
@@ -69,9 +58,6 @@ describe("useUserMessageNav", () => {
     // scrollIntoView called on the element whose attribute matches "c".
     const target = scrollSpy.mock.contexts[0] as Element;
     expect(target.getAttribute("data-user-message-id")).toBe("c");
-    // StickToBottom bottom-lock must be released before the jump or a
-    // tall multi-message transcript yanks back to the bottom on resize.
-    expect(releaseScrollLock).toHaveBeenCalledOnce();
     expect(useChatStore.getState().flashItemId).toBe(null);
     act(() => vi.advanceTimersByTime(SETTLE_MS));
     expect(useChatStore.getState().flashItemId).toBe("c");
@@ -207,14 +193,12 @@ describe("useUserMessageNav", () => {
     const { result } = renderHook(() => useUserMessageNav(["a"]));
 
     act(() => result.current.goPrev());
-    act(() => vi.advanceTimersToNextTimer());
+    act(() => vi.advanceTimersByTime(SETTLE_MS));
     expect(useChatStore.getState().flashItemId).toBe("a");
 
     act(() => {
-      vi.advanceTimersByTime(1499);
+      vi.advanceTimersByTime(800);
     });
-    expect(useChatStore.getState().flashItemId).toBe("a");
-    act(() => vi.advanceTimersByTime(1));
     expect(useChatStore.getState().flashItemId).toBe(null);
   });
 });

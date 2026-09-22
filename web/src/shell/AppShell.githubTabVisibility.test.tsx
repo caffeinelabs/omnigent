@@ -1,4 +1,3 @@
-import { SidebarDataProvider } from "@/hooks/useSidebarData";
 // The workspace rail's GitHub tab is shown whenever the workspace/Files gate is
 // open. Non-git workspaces (not_a_git_repo) show an empty state inside the panel
 // rather than hiding the tab entirely.
@@ -15,7 +14,6 @@ import { Link, MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { readSessionWorkspaceState, writeSessionWorkspaceState } from "@/lib/sessionWorkspaceState";
-import { writeWorkspacePanelDefault } from "@/lib/workspacePanelPreferences";
 
 vi.mock("@/hooks/useConversations", async (importOriginal) => ({
   ...(await importOriginal<typeof UseConversationsModule>()),
@@ -96,7 +94,6 @@ beforeEach(() => {
   // The rail persists per-session state (selected tab, width) in
   // localStorage; clear it so one test's writes can't leak into another.
   localStorage.clear();
-  writeWorkspacePanelDefault("open");
   sessionStorage.clear();
   vi.mocked(isMobileViewport).mockReturnValue(false);
   useGithubInfoMock.mockReset();
@@ -147,17 +144,15 @@ function renderShell() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <SidebarDataProvider>
-        <TooltipProvider>
-          <MemoryRouter initialEntries={["/c/conv_ws"]}>
-            <Routes>
-              <Route element={<AppShell />}>
-                <Route path="c/:conversationId" element={<GithubLinkProbe />} />
-              </Route>
-            </Routes>
-          </MemoryRouter>
-        </TooltipProvider>
-      </SidebarDataProvider>
+      <TooltipProvider>
+        <MemoryRouter initialEntries={["/c/conv_ws"]}>
+          <Routes>
+            <Route element={<AppShell />}>
+              <Route path="c/:conversationId" element={<GithubLinkProbe />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </TooltipProvider>
     </QueryClientProvider>,
   );
 }

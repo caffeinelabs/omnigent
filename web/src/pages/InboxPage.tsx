@@ -1,13 +1,14 @@
 /**
  * Inbox page (``/inbox``) — every approval prompt waiting on the user,
- * across loaded sessions, rendered as actionable cards.
+ * across all of their sessions, rendered as actionable cards.
  *
  * Built entirely from existing primitives:
  *
- * - The shared sidebar caches carry
+ * - The session list (`useConversations`) already carries
  *   `pending_elicitations_count` per row, kept live by the
- *   `WS /v1/sessions/updates` stream. Manual pagination grows the
- *   same caches used by the sidebar and its badge.
+ *   `WS /v1/sessions/updates` stream. The inbox drains all list
+ *   pages while mounted, since an awaiting session may sit far
+ *   below the sidebar's first page.
  * - Each session's snapshot (`GET /v1/sessions/{id}`) already replays
  *   the full pending `response.elicitation_request` event dicts; the
  *   per-session query key includes the row's count so a count change
@@ -47,7 +48,8 @@ import { ApprovalCard, type SubmitApprovalFn } from "@/components/blocks/Approva
 import { PageScroll } from "@/components/PageScroll";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import { useSidebarData } from "@/hooks/useSidebarData";
+import { useCommentInbox } from "@/hooks/useCommentInbox";
+import { useConversations } from "@/hooks/useConversations";
 import { collectInboxItems, type InboxItem, type InboxSource } from "@/lib/inbox";
 import { relativeTime } from "@/lib/relativeTime";
 import { Link } from "@/lib/routing";
@@ -70,11 +72,7 @@ type RespondedMap = Record<
 export function InboxPage() {
   const queryClient = useQueryClient();
   const { trackClick } = useOmnigentAnalytics();
-  const {
-    inbox: conversationsQuery,
-    inboxRows: allRows,
-    comments: commentInbox,
-  } = useSidebarData();
+  const conversationsQuery = useConversations("", false, { reconcileWhileConnected: true });
   const [responded, setResponded] = useState<RespondedMap>({});
   // Manual expand/collapse toggles keyed by elicitation id. Anything
   // not in the map falls back to the default: expanded only for the
@@ -82,8 +80,22 @@ export function InboxPage() {
   // explicit toggles stable when new items shift positions.
   const [expandedOverrides, setExpandedOverrides] = useState<Record<string, boolean>>({});
 
+  // The sidebar pages lazily on scroll, but the inbox must consider
+  // EVERY session — an approval can be pending in a session that 20+
+  // newer sessions have since pushed off the first page. Drain the
+  // remaining pages while the inbox is mounted (the query cache is
+  // shared with the sidebar, so this also completes its badge).
   const { hasNextPage, isFetchingNextPage, fetchNextPage } = conversationsQuery;
-  const rows = allRows.filter((c) => (c.pending_elicitations_count ?? 0) > 0);
+  useEffect(() => {
+    if (hasNextPage && !isFetchingNextPage) void fetchNextPage();
+  }, [hasNextPage, isFetchingNextPage, fetchNextPage]);
+
+  const allRows = (conversationsQuery.data?.pages ?? []).flatMap((page) => page.data);
+  const rows = allRows.filter((c) => !c.archived && (c.pending_elicitations_count ?? 0) > 0);
+
+  // Unseen file comments across sessions — the hook filters to rows
+  // that report comments and mounts one comments query per such row.
+  const commentInbox = useCommentInbox(allRows);
 
   // One snapshot fetch per session that reports pending prompts. The
   // count rides in the query key, so the WS count patch (new prompt,
@@ -138,12 +150,12 @@ export function InboxPage() {
   // approvals exist, we just couldn't fetch them) and get a banner.
   const assembling =
     conversationsQuery.isLoading ||
+    hasNextPage ||
     isFetchingNextPage ||
     snapshotQueries.some((q) => q.isLoading) ||
     commentInbox.isLoading;
   const failedSnapshots = snapshotQueries.filter((q) => q.isError);
-  const failedSessionCount =
-    failedSnapshots.length + commentInbox.failedCount + Number(Boolean(conversationsQuery.isError));
+  const failedSessionCount = failedSnapshots.length + commentInbox.failedCount;
 
   // Mirrors `chatStore.submitApproval`: optimistic flip → resolve POST →
   // rollback on error. Success invalidates the session list so the row's
@@ -214,7 +226,6 @@ export function InboxPage() {
             onClick={() => {
               failedSnapshots.forEach((q) => void q.refetch());
               commentInbox.retryFailed();
-              if (conversationsQuery.isError) void conversationsQuery.refetch?.();
             }}
             componentId="inbox.retry"
           >
@@ -236,9 +247,7 @@ export function InboxPage() {
         commentInbox.items.length === 0 && (
           <div className="flex flex-col items-center gap-2 py-16 text-center">
             <InboxIcon className="size-8 text-muted-foreground/50" />
-            <p className="text-ui font-medium">
-              {hasNextPage ? "Nothing waiting in these sessions" : "Nothing waiting on you"}
-            </p>
+            <p className="text-ui font-medium">Nothing waiting on you</p>
             <p className="text-sm text-muted-foreground">
               When an agent needs your input or someone comments on a file, it will show up here.
             </p>
@@ -402,16 +411,6 @@ export function InboxPage() {
           </div>
         )}
       </div>
-      {hasNextPage && (
-        <Button
-          variant="outline"
-          disabled={conversationsQuery.isFetching}
-          onClick={() => void fetchNextPage()}
-          componentId="inbox.load_more"
-        >
-          {isFetchingNextPage ? "Loading…" : "Load more sessions"}
-        </Button>
-      )}
     </PageScroll>
   );
 }

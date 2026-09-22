@@ -72,8 +72,6 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from omnigent.db.workspace_cache import WorkspaceScopedCache
-
 # A pending entry is evicted this many seconds after it was recorded
 # if it was never drained by a matching persisted message. Covers the
 # vendor-TUI-never-accepted-the-message ghost; long enough that a slow
@@ -169,7 +167,7 @@ class _Entry:
 # inner dict is insertion-ordered (FIFO), which :func:`resolve_oldest`
 # relies on to drain the oldest matching message first. Empty inner
 # dicts are popped eagerly so the index doesn't accrete stale keys.
-_pending: WorkspaceScopedCache[str, dict[str, _Entry]] = WorkspaceScopedCache()
+_pending: dict[str, dict[str, _Entry]] = {}
 _lock = threading.Lock()
 
 

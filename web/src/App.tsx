@@ -4,7 +4,6 @@ import { ChatPage as ChatPageImpl } from "@/pages/ChatPage";
 import { NotFoundPage as NotFoundPageImpl } from "@/pages/NotFoundPage";
 import { useOmnigentPageView } from "@/lib/analytics";
 import { Spinner } from "@/components/ui/spinner";
-import { ChunkLoadErrorBoundary } from "@/components/ChunkLoadErrorBoundary";
 import { isFeatureEnabled, type FeatureKey } from "@/lib/capabilities";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
 import { AppShell } from "@/shell/AppShell";
@@ -133,7 +132,7 @@ interface AppProps {
  * to the SPA, so unmatched paths land here after the bundle boots
  * rather than a server 404.
  */
-function AppRoutes({ basename }: AppProps) {
+function App({ basename }: AppProps = {}) {
   // Embedded: match the absolute pathname (`${basename}/...`). Standalone
   // (no basename): `prefix` is empty, so every `path` below is identical to
   // the original relative route table.
@@ -220,10 +219,4 @@ function AppRoutes({ basename }: AppProps) {
   );
 }
 
-export default function App(props: AppProps = {}) {
-  return (
-    <ChunkLoadErrorBoundary>
-      <AppRoutes {...props} />
-    </ChunkLoadErrorBoundary>
-  );
-}
+export default App;

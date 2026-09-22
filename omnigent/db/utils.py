@@ -1038,7 +1038,7 @@ def run_write_transaction(
     sleep: Callable[[float], None] = time.sleep,
     random_value: Callable[[], float] = random.random,
 ) -> _T:
-    """Replay CRDB serialization failures and MySQL deadlock victims.
+    """Run a named managed transaction, replaying CRDB serialization failures.
 
     The callback must contain database work only. Callers must perform cache
     invalidation and external side effects after this function returns. The
@@ -1047,7 +1047,7 @@ def run_write_transaction(
     """
     if max_retries < 0:
         raise ValueError("max_retries must be >= 0")
-    dialect = session_maker.engine.dialect.name
+    retryable = is_cockroachdb(session_maker.engine.dialect.name)
     qualified_name = f"{session_maker.query_name_prefix}.{operation_name}"
 
     for attempt in range(max_retries + 1):
@@ -1055,15 +1055,12 @@ def run_write_transaction(
             with session_maker(operation_name) as session:
                 return callback(session)
         except DBAPIError as exc:
-            retryable = (is_cockroachdb(dialect) and _is_serialization_failure(exc)) or (
-                dialect == "mysql" and getattr(exc.orig, "args", ())[:1] == (1213,)
-            )
-            if not retryable:
+            if not retryable or not _is_serialization_failure(exc):
                 raise
             if attempt == max_retries:
                 record_transaction_retry(qualified_name, "exhausted")
                 _logger.error(
-                    "Database transaction retries exhausted",
+                    "CockroachDB transaction retries exhausted",
                     extra={"db_operation": qualified_name, "retry_count": attempt},
                 )
                 raise
@@ -1071,7 +1068,7 @@ def run_write_transaction(
             delay = ceiling * random_value()
             record_transaction_retry(qualified_name, "scheduled")
             _logger.warning(
-                "Retrying database transaction after a concurrency conflict",
+                "Retrying CockroachDB transaction after serialization failure",
                 extra={
                     "db_operation": qualified_name,
                     "retry_count": attempt + 1,

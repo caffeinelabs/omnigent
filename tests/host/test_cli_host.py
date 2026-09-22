@@ -60,7 +60,6 @@ def _persist_fake_daemon_claim(
             server_url=None if mode == "local" else target,
             log_path=spawned.log_path,
             started_at=int(time.time()),
-            host_id=cli_module._load_existing_host_id(),
             config_sig="test-config-signature",
         )
     )
@@ -1328,7 +1327,6 @@ def test_start_hosts_on_explicit_server(
     assert spawned_args == [
         [
             sys.executable,
-            "-P",
             "-m",
             "omnigent.host._daemon_entry",
             "--server",
@@ -1338,27 +1336,13 @@ def test_start_hosts_on_explicit_server(
 
 
 @pytest.mark.parametrize(
-    ("is_tty", "extra_args", "no_open_env", "config_content", "expected_opened"),
+    ("is_tty", "extra_args", "config_content", "expected_opened"),
     [
-        pytest.param(True, [], None, None, ["http://127.0.0.1:8123"], id="interactive-opens"),
-        pytest.param(True, ["--no-open"], None, None, [], id="no-open-flag-skips"),
-        pytest.param(True, [], "1", None, [], id="no-open-env-skips"),
-        pytest.param(True, [], "true", None, [], id="no-open-env-true-skips"),
-        pytest.param(True, [], "0", None, ["http://127.0.0.1:8123"], id="env-zero-opens"),
-        pytest.param(True, [], "false", None, ["http://127.0.0.1:8123"], id="env-false-opens"),
-        pytest.param(True, ["--no-open"], "0", None, [], id="flag-overrides-env"),
-        pytest.param(True, ["--non-interactive"], None, None, [], id="non-interactive-skips"),
-        pytest.param(False, [], None, None, [], id="no-tty-skips"),
+        pytest.param(True, [], None, ["http://127.0.0.1:8123"], id="interactive-opens"),
+        pytest.param(True, ["--non-interactive"], None, [], id="non-interactive-skips"),
+        pytest.param(False, [], None, [], id="no-tty-skips"),
         pytest.param(
-            True, [], None, "auto_open_conversation: false\n", [], id="auto-open-disabled-skips"
-        ),
-        pytest.param(
-            True,
-            ["--no-open"],
-            None,
-            "auto_open_conversation: true\n",
-            [],
-            id="flag-overrides-config",
+            True, [], "auto_open_conversation: false\n", [], id="auto-open-disabled-skips"
         ),
     ],
 )
@@ -1367,7 +1351,6 @@ def test_host_web_ui_open_gates(
     monkeypatch: pytest.MonkeyPatch,
     is_tty: bool,
     extra_args: list[str],
-    no_open_env: str | None,
     config_content: str | None,
     expected_opened: list[str],
 ) -> None:
@@ -1390,28 +1373,24 @@ def test_host_web_ui_open_gates(
             lambda url: opened.append(url) or True,
         ),
     ):
-        result = CliRunner().invoke(
-            cli, ["host", *extra_args], env={"OMNIGENT_HOST_NO_OPEN": no_open_env}
-        )
+        result = CliRunner().invoke(cli, ["host", *extra_args])
 
     assert result.exit_code == 0, result.output
     assert opened == expected_opened
 
 
-@pytest.mark.parametrize("no_open", [False, True])
-def test_host_remote_web_ui_open_preference(
+def test_host_opens_remote_web_ui_when_interactive(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    no_open: bool,
 ) -> None:
-    """Honor the browser preference on remote hosts while preserving sign-in."""
+    """Open the browser-facing URL for a remote workspace host."""
     monkeypatch.setenv("OMNIGENT_CONFIG_HOME", str(tmp_path))
     monkeypatch.setattr("omnigent.cli._HOST_PID_PATH", tmp_path / "host.pid")
     monkeypatch.setattr("omnigent.cli._stdin_is_tty", lambda: True)
     opened: list[str] = []
 
     with (
-        patch("omnigent.cli._ensure_databricks_server_auth") as auth,
+        patch("omnigent.cli._ensure_databricks_server_auth"),
         patch("omnigent.host.connect.run_host_process", lambda server_url, **kwargs: None),
         patch(
             "omnigent.conversation_browser.open_conversation_url",
@@ -1420,41 +1399,18 @@ def test_host_remote_web_ui_open_preference(
     ):
         result = CliRunner().invoke(
             cli,
-            [
-                "host",
-                "https://example.databricks.com/api/2.0/omnigent",
-                *(["--no-open"] if no_open else []),
-            ],
-            env={"OMNIGENT_HOST_NO_OPEN": None},
+            ["host", "--server", "https://example.databricks.com/api/2.0/omnigent"],
         )
 
     assert result.exit_code == 0, result.output
-    assert opened == ([] if no_open else ["https://example.databricks.com/omnigent"])
-    auth.assert_called_once_with(
-        "https://example.databricks.com/api/2.0/omnigent", non_interactive=False
-    )
+    assert opened == ["https://example.databricks.com/omnigent"]
 
 
-@pytest.mark.parametrize("command", [["start"], ["host", "--background"]])
-@pytest.mark.parametrize(
-    ("extra_args", "no_open_env", "expected_opened"),
-    [
-        pytest.param([], None, ["http://127.0.0.1:6767"], id="default-opens"),
-        pytest.param(["--no-open"], None, [], id="flag-skips"),
-        pytest.param([], "1", [], id="env-skips"),
-        pytest.param([], "0", ["http://127.0.0.1:6767"], id="env-zero-opens"),
-        pytest.param(["--no-open"], "0", [], id="flag-overrides-env"),
-    ],
-)
-def test_background_host_web_ui_open_preference(
+def test_start_opens_web_ui_when_interactive(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    command: list[str],
-    extra_args: list[str],
-    no_open_env: str | None,
-    expected_opened: list[str],
 ) -> None:
-    """Both background entry points honor the flag and environment preference."""
+    """Open the web UI after the background host registers."""
     _patch_background_host_spawn(monkeypatch, tmp_path)
     monkeypatch.setattr("omnigent.cli._stdin_is_tty", lambda: True)
     opened: list[str] = []
@@ -1463,9 +1419,7 @@ def test_background_host_web_ui_open_preference(
         "omnigent.conversation_browser.open_conversation_url",
         lambda url: opened.append(url) or True,
     ):
-        result = CliRunner().invoke(
-            cli, [*command, *extra_args], env={"OMNIGENT_HOST_NO_OPEN": no_open_env}
-        )
+        result = CliRunner().invoke(cli, ["start"])
 
     assert result.exit_code == 0, result.output
-    assert opened == expected_opened
+    assert opened == ["http://127.0.0.1:6767"]

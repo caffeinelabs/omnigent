@@ -1,4 +1,3 @@
-import { SidebarDataProvider } from "@/hooks/useSidebarData";
 // Regression test for the "click sub-agent → rail tab jumps to Files" bug.
 //
 // When the user clicks a sub-agent row in the right rail, the navigation
@@ -31,7 +30,6 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { readSessionWorkspaceState, writeSessionWorkspaceState } from "@/lib/sessionWorkspaceState";
-import { writeWorkspacePanelDefault } from "@/lib/workspacePanelPreferences";
 
 // Match the AppShell.test.tsx mocks except DO NOT mock SubagentsPanel —
 // we want the real one so its <Link> renders.
@@ -123,7 +121,6 @@ beforeEach(() => {
   // The rail's open-state persists per session in localStorage; clear it so
   // state written by one test (e.g. a collapse) can't leak into the next.
   localStorage.clear();
-  writeWorkspacePanelDefault("open");
   vi.mocked(useConversations).mockReset();
   vi.mocked(useConversations).mockReturnValue({
     data: {
@@ -242,17 +239,15 @@ describe("click sub-agent in rail (real SubagentsPanel)", () => {
     writeSessionWorkspaceState("conv_root", { widthPx: 500 });
     render(
       <QueryClientProvider client={qc}>
-        <SidebarDataProvider>
-          <TooltipProvider>
-            <MemoryRouter initialEntries={["/c/conv_root?file=foo.txt"]}>
-              <Routes>
-                <Route element={<AppShell />}>
-                  <Route path="c/:conversationId" element={<div data-testid="page" />} />
-                </Route>
-              </Routes>
-            </MemoryRouter>
-          </TooltipProvider>
-        </SidebarDataProvider>
+        <TooltipProvider>
+          <MemoryRouter initialEntries={["/c/conv_root?file=foo.txt"]}>
+            <Routes>
+              <Route element={<AppShell />}>
+                <Route path="c/:conversationId" element={<div data-testid="page" />} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </TooltipProvider>
       </QueryClientProvider>,
     );
 
@@ -300,68 +295,6 @@ describe("click sub-agent in rail (real SubagentsPanel)", () => {
     });
   });
 
-  it.each([undefined, "files"] as const)(
-    "returns from a deep-linked child to a root with remembered tab %s",
-    (rememberedTab) => {
-      vi.mocked(useChildSessions).mockReturnValue({ children: [], isLoading: false, error: null });
-      vi.mocked(useSession).mockImplementation((id) => ({
-        session: id
-          ? {
-              id,
-              agentId: "ag",
-              agentName: null,
-              runnerId: null,
-              status: "idle",
-              createdAt: 0,
-              title: null,
-              labels: {},
-              items: [],
-              pendingElicitations: [],
-              permissionLevel: 4,
-              parentSessionId: id === "conv_child" ? "conv_root" : null,
-              subAgentName: null,
-              kind: id === "conv_child" ? "sub_agent" : "default",
-            }
-          : null,
-        isLoading: false,
-        error: null,
-      }));
-      writeSessionWorkspaceState("conv_child", { rightRailTab: "subagents" });
-      if (rememberedTab) writeSessionWorkspaceState("conv_root", { rightRailTab: rememberedTab });
-      const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-      qc.setQueryData(["rootSessionId", "conv_child"], "conv_root");
-      render(
-        <QueryClientProvider client={qc}>
-          <SidebarDataProvider>
-            <TooltipProvider>
-              <MemoryRouter initialEntries={["/c/conv_child"]}>
-                <Routes>
-                  <Route element={<AppShell />}>
-                    <Route path="c/:conversationId" element={<div data-testid="page" />} />
-                  </Route>
-                </Routes>
-              </MemoryRouter>
-            </TooltipProvider>
-          </SidebarDataProvider>
-        </QueryClientProvider>,
-      );
-      expect(screen.getByRole("tab", { name: /Agents/i })).toHaveAttribute("aria-selected", "true");
-      const mainRow = screen.getByTestId("subagent-main-row");
-      expect(mainRow).toHaveAttribute("href", "/c/conv_root");
-
-      fireEvent.click(mainRow);
-
-      const expectedTab = rememberedTab ? /Files/i : /Agents/i;
-      expect(screen.getByRole("tab", { name: expectedTab })).toHaveAttribute(
-        "aria-selected",
-        "true",
-      );
-      expect(readSessionWorkspaceState("conv_root").rightRailTab).toBe(
-        rememberedTab ?? "subagents",
-      );
-    },
-  );
-
   it("restores a saved width while a cold-loaded session snapshot is unresolved", () => {
     vi.mocked(useChildSessions).mockReturnValue({
       children: [],
@@ -378,17 +311,15 @@ describe("click sub-agent in rail (real SubagentsPanel)", () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={qc}>
-        <SidebarDataProvider>
-          <TooltipProvider>
-            <MemoryRouter initialEntries={["/c/conv_cold"]}>
-              <Routes>
-                <Route element={<AppShell />}>
-                  <Route path="c/:conversationId" element={<div data-testid="page" />} />
-                </Route>
-              </Routes>
-            </MemoryRouter>
-          </TooltipProvider>
-        </SidebarDataProvider>
+        <TooltipProvider>
+          <MemoryRouter initialEntries={["/c/conv_cold"]}>
+            <Routes>
+              <Route element={<AppShell />}>
+                <Route path="c/:conversationId" element={<div data-testid="page" />} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </TooltipProvider>
       </QueryClientProvider>,
     );
 
@@ -412,17 +343,15 @@ describe("click sub-agent in rail (real SubagentsPanel)", () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={qc}>
-        <SidebarDataProvider>
-          <TooltipProvider>
-            <MemoryRouter initialEntries={["/c/conv_cold_child"]}>
-              <Routes>
-                <Route element={<AppShell />}>
-                  <Route path="c/:conversationId" element={<div data-testid="page" />} />
-                </Route>
-              </Routes>
-            </MemoryRouter>
-          </TooltipProvider>
-        </SidebarDataProvider>
+        <TooltipProvider>
+          <MemoryRouter initialEntries={["/c/conv_cold_child"]}>
+            <Routes>
+              <Route element={<AppShell />}>
+                <Route path="c/:conversationId" element={<div data-testid="page" />} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </TooltipProvider>
       </QueryClientProvider>,
     );
 
@@ -466,17 +395,15 @@ describe("click sub-agent in rail (real SubagentsPanel)", () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
     render(
       <QueryClientProvider client={qc}>
-        <SidebarDataProvider>
-          <TooltipProvider>
-            <MemoryRouter initialEntries={["/c/conv_solo"]}>
-              <Routes>
-                <Route element={<AppShell />}>
-                  <Route path="c/:conversationId" element={<div data-testid="page" />} />
-                </Route>
-              </Routes>
-            </MemoryRouter>
-          </TooltipProvider>
-        </SidebarDataProvider>
+        <TooltipProvider>
+          <MemoryRouter initialEntries={["/c/conv_solo"]}>
+            <Routes>
+              <Route element={<AppShell />}>
+                <Route path="c/:conversationId" element={<div data-testid="page" />} />
+              </Route>
+            </Routes>
+          </MemoryRouter>
+        </TooltipProvider>
       </QueryClientProvider>,
     );
 

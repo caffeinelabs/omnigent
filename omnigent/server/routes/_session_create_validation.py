@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from dataclasses import dataclass
 from typing import Any
 
@@ -27,13 +28,26 @@ from omnigent.util.reasoning_effort import EFFORT_VALUES, validate_effort
 
 _logger = logging.getLogger(__name__)
 
+_STRICT_PROJECT_CREATE_ENV = "OMNIGENT_STRICT_PROJECT_SESSION_CREATE"
+
 
 @dataclass(frozen=True)
 class ProjectCreateResolution:
-    """Project-aware request values after defaulting."""
+    """Project-aware request values and any non-fatal consistency warnings."""
 
     body: Any
     project_id: str | None = None
+    warnings: tuple[dict[str, str], ...] = ()
+
+
+def _strict_project_create_enabled() -> bool:
+    """Return strict mismatch mode for direct creates and inherited fork filing."""
+    return os.environ.get(_STRICT_PROJECT_CREATE_ENV, "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
 
 
 async def resolve_project_session_create(
@@ -41,12 +55,18 @@ async def resolve_project_session_create(
     body: Any,
     user_id: str | None,
     project_store: ProjectStore | None,
+    warn_on_mismatch: bool = True,
 ) -> ProjectCreateResolution:
     """Apply opt-in project defaults before any create-side validation.
 
     Field presence, rather than value, controls defaulting.  Consequently an
     explicit JSON ``null`` remains explicit and is never replaced by a project
     hint.  Unknown and foreign projects deliberately share one 404 response.
+
+    ``warn_on_mismatch=False`` skips the consistency warnings (and their
+    strict-mode escalation) for callers whose project is inherited rather than
+    requested — e.g. a fork filing into its source's project, where a mismatch
+    belongs to the source session, not this request.
     """
     fields_set = set(body.model_fields_set)
     project_id = getattr(body, "project_id", None)
@@ -90,7 +110,33 @@ async def resolve_project_session_create(
             code=ErrorCode.INVALID_INPUT,
         )
 
-    return ProjectCreateResolution(body=resolved, project_id=project_id)
+    if not warn_on_mismatch:
+        return ProjectCreateResolution(body=resolved, project_id=project_id)
+
+    warnings: list[dict[str, str]] = []
+    explicit_agent_id = getattr(body, "agent_id", None) if "agent_id" in fields_set else None
+    pinned_agent_id = config.get("agent_id")
+    if explicit_agent_id and pinned_agent_id and explicit_agent_id != pinned_agent_id:
+        warnings.append(
+            {
+                "code": "project_agent_mismatch",
+                "message": "Explicit agent_id differs from the project's pinned agent",
+            }
+        )
+
+    for warning in warnings:
+        _logger.warning(
+            "project-aware session create warning project_id=%s code=%s: %s",
+            project_id,
+            warning["code"],
+            warning["message"],
+        )
+    if warnings and _strict_project_create_enabled():
+        raise OmnigentError(
+            "Project session create mismatch: " + "; ".join(w["message"] for w in warnings),
+            code=ErrorCode.INVALID_INPUT,
+        )
+    return ProjectCreateResolution(body=resolved, project_id=project_id, warnings=tuple(warnings))
 
 
 # Claude Code's ``--permission-mode`` launch vocabulary — every value the CLI

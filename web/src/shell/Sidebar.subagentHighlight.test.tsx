@@ -1,7 +1,3 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("@/hooks/useScopeCache", () => import("@/test/mockScopeCache"));
-import { SidebarDataProvider } from "@/hooks/useSidebarData";
 // Regression test for: clicking a sub-agent in the right rail dropped the
 // owning session's highlight in the left sidebar.
 //
@@ -23,6 +19,7 @@ import type * as SessionsApiModule from "@/lib/sessionsApi";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation } from "@/hooks/useConversations";
 import type { Session } from "@/lib/types";
@@ -122,16 +119,14 @@ function renderAt(initialEntry: string) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <QueryClientProvider client={qc}>
-      <SidebarDataProvider>
-        <TooltipProvider>
-          <MemoryRouter initialEntries={[initialEntry]}>
-            <Routes>
-              <Route path="/" element={<Sidebar open onClose={vi.fn()} />} />
-              <Route path="/c/:conversationId" element={<Sidebar open onClose={vi.fn()} />} />
-            </Routes>
-          </MemoryRouter>
-        </TooltipProvider>
-      </SidebarDataProvider>
+      <TooltipProvider>
+        <MemoryRouter initialEntries={[initialEntry]}>
+          <Routes>
+            <Route path="/" element={<Sidebar open onClose={vi.fn()} />} />
+            <Route path="/c/:conversationId" element={<Sidebar open onClose={vi.fn()} />} />
+          </Routes>
+        </MemoryRouter>
+      </TooltipProvider>
     </QueryClientProvider>,
   );
 }

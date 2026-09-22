@@ -559,8 +559,7 @@ export const PALETTES: readonly PaletteMeta[] = [
         primary: "#268bd2",
         primaryForeground: "#fdf6e3",
         secondary: "#eee8d5",
-        // Keep interactive rows visible over the base2 popover surface.
-        muted: "#d6d4c6",
+        muted: "#eee8d5",
         mutedForeground: "#586e75",
         codeBackground: "#eee8d5",
         accent: "#eee8d5",
@@ -584,8 +583,7 @@ export const PALETTES: readonly PaletteMeta[] = [
         primary: "#268bd2",
         primaryForeground: "#fdf6e3",
         secondary: "#073642",
-        // Keep interactive rows visible over the base02 popover surface.
-        muted: "#1d474f",
+        muted: "#073642",
         mutedForeground: "#93a1a1",
         codeBackground: "#073642",
         accent: "#073642",

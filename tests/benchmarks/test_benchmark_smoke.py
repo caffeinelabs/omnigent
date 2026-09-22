@@ -34,7 +34,6 @@ _SMOKE_JOURNEYS = [
     "fork_session",
     "add_comment",
     "native_hook_spawn",
-    *(name for name in ALL_JOURNEYS if name.startswith("project_order_")),
 ]
 
 

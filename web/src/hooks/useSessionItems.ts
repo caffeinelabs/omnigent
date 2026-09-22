@@ -1,7 +1,5 @@
 import { useInfiniteQuery } from "@tanstack/react-query";
 import { authenticatedFetch } from "@/lib/identity";
-import { apiErrorFromResponse } from "@/lib/sessionsApi";
-import { useRestartOnStaleCursor } from "@/lib/staleCursor";
 
 /**
  * One conversation item exactly as the server serializes it, with no
@@ -68,9 +66,7 @@ export async function fetchSessionItemsPage(
   const res = await authenticatedFetch(
     `/v1/sessions/${encodeURIComponent(sessionId)}/items?${params}`,
   );
-  // Carries the server's `code`, so a dead cursor stays recognizable as
-  // `stale_cursor` instead of an opaque "400 Bad Request".
-  if (!res.ok) throw await apiErrorFromResponse(res);
+  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   return (await res.json()) as ItemsResponse;
 }
 
@@ -93,11 +89,10 @@ export function useSessionItems(
   sessionId: string | null,
   pollMs?: number | null,
 ): UseSessionItemsResult {
-  const queryKey =
-    sessionId === null ? ["session", null, "items", "raw"] : sessionItemsQueryKey(sessionId);
   const { data, isLoading, error, hasNextPage, isFetchingNextPage, fetchNextPage } =
     useInfiniteQuery({
-      queryKey,
+      queryKey:
+        sessionId === null ? ["session", null, "items", "raw"] : sessionItemsQueryKey(sessionId),
       queryFn: ({ pageParam }) => fetchSessionItemsPage(sessionId as string, pageParam),
       initialPageParam: undefined as string | undefined,
       getNextPageParam: (lastPage) =>
@@ -114,9 +109,6 @@ export function useSessionItems(
       // tick. ``false`` (the default when undefined/null) disables.
       refetchInterval: pollMs ?? false,
     });
-  // An item deleted between two scroll pages kills the cursor; reload the
-  // panel from the top rather than replacing it with the raw 400.
-  useRestartOnStaleCursor(queryKey);
   const items = data ? data.pages.flatMap((p) => p.data) : [];
   return {
     items,

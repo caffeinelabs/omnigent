@@ -959,9 +959,7 @@ async def test_forwarded_reasoning_effort_keeps_codex_native_full_ladder(
     """
     # A native turn also nudges the tool relay, which waits 30s for a bridge
     # server-info file no fake harness ever writes.
-    monkeypatch.setattr(
-        claude_native_bridge, "post_tools_changed", lambda _bridge_dir, **kwargs: None
-    )
+    monkeypatch.setattr(claude_native_bridge, "post_tools_changed", lambda _bridge_dir: None)
     hc = _ScriptedHarnessClient(
         [
             _sse({"type": "response.created", "response": {"id": "resp_1"}}),

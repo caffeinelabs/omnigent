@@ -282,12 +282,7 @@ def wait_for_ready(child: pexpect.spawn, *, timeout: float) -> None:
         :func:`spawn_omnigent_run`.
     :param timeout: Max seconds to wait for the REPL to boot.
     """
-    try:
-        child.expect([STATE_SLEEPING, PROMPT_READY], timeout=timeout)
-    except (pexpect.EOF, pexpect.TIMEOUT) as exc:
-        raise AssertionError(
-            f"REPL did not become ready. Startup output:\n{strip_ansi(child.before or '')}"
-        ) from exc
+    child.expect([STATE_SLEEPING, PROMPT_READY], timeout=timeout)
 
 
 def submit_prompt(child: pexpect.spawn, text: str) -> None:

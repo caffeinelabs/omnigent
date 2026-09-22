@@ -62,7 +62,7 @@ describe("ErrorBanner", () => {
     expect(message).not.toHaveTextContent("terminal: claude:main");
   });
 
-  it("disclosure chevron is always visible and rotates when expanded", () => {
+  it("disclosure chevron is always visible, rotates when expanded, hint hides on expand", () => {
     render(
       <ErrorBanner message={TERMINAL_ERROR} source="execution" code="required_terminal_exited" />,
     );
@@ -76,17 +76,18 @@ describe("ErrorBanner", () => {
       "group-hover/error:text-foreground",
     );
     expect(screen.getByTestId("error-disclosure-icon")).not.toHaveClass("rotate-90");
-    expect(screen.queryByText("Expand for details")).toBeNull();
+    // Expand hint is visible when collapsed.
+    expect(screen.getByText("Expand for details")).toBeInTheDocument();
 
-    // Expand: chevron rotates without adding redundant helper copy.
+    // Expand: chevron rotates, hint disappears.
     fireEvent.click(messageToggle);
     expect(screen.getByTestId("error-disclosure-icon")).toHaveClass("rotate-90");
     expect(screen.queryByText("Expand for details")).toBeNull();
 
-    // Collapse: chevron resets and the helper stays absent.
+    // Collapse: chevron resets, hint reappears.
     fireEvent.click(messageToggle);
     expect(screen.getByTestId("error-disclosure-icon")).not.toHaveClass("rotate-90");
-    expect(screen.queryByText("Expand for details")).toBeNull();
+    expect(screen.getByText("Expand for details")).toBeInTheDocument();
   });
 
   it("expand and collapse toggle correctly via pointer clicks", () => {
@@ -102,7 +103,7 @@ describe("ErrorBanner", () => {
     // Collapse.
     fireEvent.click(messageToggle);
     expect(screen.getByTestId("error-disclosure-icon")).not.toHaveClass("rotate-90");
-    expect(screen.queryByText("Expand for details")).toBeNull();
+    expect(screen.getByText("Expand for details")).toBeInTheDocument();
   });
 
   it("replaces the full banner during recovery and restores it after failure", async () => {
@@ -122,7 +123,7 @@ describe("ErrorBanner", () => {
       />,
     );
 
-    fireEvent.click(screen.getByRole("button", { name: "Resume session" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     const reconnecting = screen.getByTestId("error-reconnecting");
     const status = screen.getByRole("status");
     expect(screen.queryByTestId("error-headline")).toBeNull();
@@ -136,7 +137,7 @@ describe("ErrorBanner", () => {
     expect(status).toHaveAttribute("aria-live", "polite");
     expect(status).toHaveAttribute("aria-atomic", "true");
     expect(status).toHaveClass("rounded-xl", "border-border", "bg-background");
-    expect(screen.queryByRole("button", { name: "Resume session" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
     expect(screen.queryByRole("button", { name: "Dismiss error message" })).toBeNull();
     expect(screen.queryByText("Message")).toBeNull();
     expect(screen.queryByRole("button", { name: "View diagnostics" })).toBeNull();
@@ -145,9 +146,7 @@ describe("ErrorBanner", () => {
     await act(async () => rejectRetry?.(new Error("Host is still offline")));
     expect(screen.getByTestId("error-headline")).toBeInTheDocument();
     expect(screen.queryByTestId("error-reconnecting")).toBeNull();
-    expect(screen.getByRole("status")).toHaveTextContent(
-      "Resume session failed: Host is still offline",
-    );
+    expect(screen.getByRole("status")).toHaveTextContent("Retry failed: Host is still offline");
     expect(screen.getByTestId("error-disclosure-icon")).toBeInTheDocument();
   });
 
@@ -334,8 +333,8 @@ describe("ErrorBanner", () => {
     fireEvent.click(pill);
     expect(toggle).toHaveAttribute("aria-expanded", "false");
 
-    // Resume starts recovery instead of toggling; dismiss removes the banner.
-    fireEvent.click(screen.getByRole("button", { name: "Resume session" }));
+    // Retry starts recovery instead of toggling; dismiss removes the banner.
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     expect(onRetry).toHaveBeenCalledTimes(1);
     expect(screen.getByTestId("error-reconnecting")).toBeInTheDocument();
     await act(async () => resolveRetry?.());
@@ -360,7 +359,7 @@ describe("ErrorBanner", () => {
     );
     fireEvent.click(screen.getByRole("button", { name: /terminal exited unexpectedly/i }));
     expect(screen.getByText("Message")).toBeInTheDocument();
-    const retry = screen.getByRole("button", { name: "Resume session" });
+    const retry = screen.getByRole("button", { name: "Retry" });
     act(() => {
       retry.click();
       retry.click();
@@ -386,13 +385,11 @@ describe("ErrorBanner", () => {
         onRetry={onRetry}
       />,
     );
-    fireEvent.click(screen.getByRole("button", { name: "Resume session" }));
+    fireEvent.click(screen.getByRole("button", { name: "Retry" }));
     await waitFor(() =>
-      expect(screen.getByRole("status")).toHaveTextContent(
-        "Resume session failed: Host is still offline",
-      ),
+      expect(screen.getByRole("status")).toHaveTextContent("Retry failed: Host is still offline"),
     );
-    expect(screen.getByRole("button", { name: "Resume session" })).toBeEnabled();
+    expect(screen.getByRole("button", { name: "Retry" })).toBeEnabled();
     expect(screen.getByRole("button", { name: "Dismiss error message" })).toHaveFocus();
     // The retry-error status row must not toggle the pill when clicked.
     fireEvent.click(screen.getByRole("status"));
@@ -411,61 +408,6 @@ describe("ErrorBanner", () => {
       />,
     );
     expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
-  });
-
-  it("keeps causally related error messages in order inside one expanded banner", () => {
-    render(
-      <ErrorBanner
-        message="The session runner stopped."
-        source="execution"
-        code="required_terminal_exited"
-        relatedErrors={[
-          {
-            itemId: "related-1",
-            message: "Harness cleanup failed.\n\nLifecycle diagnostics:\ncleanup: exit 1",
-            source: "execution",
-            code: "runner_error",
-          },
-          {
-            itemId: "related-2",
-            message: "Runner disconnected.\n\nTerminal diagnostics:\ntunnel: closed",
-            source: "execution",
-            code: "runner_disconnected",
-          },
-        ]}
-      />,
-    );
-
-    expect(screen.getAllByTestId("error-pill")).toHaveLength(1);
-    fireEvent.click(screen.getByRole("button", { name: /terminal exited unexpectedly/i }));
-    expect(screen.getByText("Related errors (2)")).toBeInTheDocument();
-    expect(screen.getAllByTestId("related-error-content").map((node) => node.textContent)).toEqual([
-      "Harness cleanup failed.\n\nLifecycle diagnostics:\ncleanup: exit 1",
-      "Runner disconnected.\n\nTerminal diagnostics:\ntunnel: closed",
-    ]);
-  });
-
-  it("offers recovery from a retryable related disconnect", async () => {
-    const onRetry = vi.fn(async () => {});
-    const relatedDisconnect = {
-      itemId: "related-disconnect",
-      message: "Runner disconnected.",
-      source: "execution",
-      code: "runner_disconnected",
-    };
-    render(
-      <ErrorBanner
-        itemId="primary-error"
-        message="The runner failed."
-        source="execution"
-        code="runner_error"
-        relatedErrors={[relatedDisconnect]}
-        onRetry={onRetry}
-      />,
-    );
-
-    fireEvent.click(screen.getByRole("button", { name: "Resume session" }));
-    await waitFor(() => expect(onRetry).toHaveBeenCalledWith(relatedDisconnect));
   });
 
   it("retries classified rate-limit errors and preserves the provider's details", async () => {
@@ -660,43 +602,6 @@ describe("routing decision — harness / scope / raw pick", () => {
       expect(screen.getByTestId("routing-decision-scope")).toHaveTextContent(badge);
     }
   });
-
-  // A shared type or rationale cannot identify the work a decision governs.
-  it("card: names the task the decision governed, in place of the shared type row", () => {
-    render(
-      <RoutingDecisionCard
-        model="databricks-claude-sonnet-4-6"
-        applied={false}
-        rationale="Routing unavailable; spawn allowed unchanged"
-        agent="general-purpose"
-        routing={{ scope: "native_subagent", taskDescription: "Research auth flows" }}
-      />,
-    );
-    expect(screen.getByTestId("routing-decision-task")).toHaveTextContent("Research auth flows");
-    // The shared type stays visible on the scope badge.
-    expect(screen.getByTestId("routing-decision-scope")).toHaveTextContent(
-      "subagent: general-purpose",
-    );
-    fireEvent.click(screen.getByTestId("routing-decision-raw-toggle"));
-    expect(screen.getByText(/"task_description": "Research auth flows"/)).toBeInTheDocument();
-  });
-
-  it.each([undefined, "", " \t\n"])(
-    "card: an unlabeled spawn (%j) keeps the agent row label",
-    (taskDescription) => {
-      render(
-        <RoutingDecisionCard
-          model="databricks-claude-sonnet-4-6"
-          applied={false}
-          rationale="x"
-          agent="general-purpose"
-          routing={{ scope: "native_subagent", taskDescription }}
-        />,
-      );
-      expect(screen.queryByTestId("routing-decision-task")).toBeNull();
-      expect(screen.getByTestId("routing-decision-card")).toHaveTextContent("general-purpose");
-    },
-  );
 
   // The router's vocabulary pick may have had no endpoint and been mapped to a
   // servable id — that must be visible. When it resolves to the same short

@@ -7,7 +7,6 @@
 
 import { useEffect, useRef } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { withBasePath } from "@/lib/basePath";
 import { isDatabricksWorkspace } from "@/lib/host";
 import { authenticatedFetch } from "@/lib/identity";
 import { isAndroidShell, isIOSShell } from "@/lib/nativeBridge";
@@ -136,12 +135,7 @@ export async function downloadWorkspaceFile(conversationId: string, path: string
   const url = workspaceFileUrl(conversationId, path, { download: "true" });
   const filename = path.split("/").pop() ?? path;
   if (!isDatabricksWorkspace() && !isIOSShell() && !isAndroidShell()) {
-    // A direct anchor navigation, so it must carry the deployment subpath the
-    // fetch paths get for free via hostFetch/authenticatedFetch. Without it a
-    // stripping proxy (`/proxy/<port>/`) sends it to the origin root and misses
-    // the app. The fetch branch below keeps `url` raw: authenticatedFetch
-    // prefixes internally, so passing it prefixed would double the base path.
-    clickDownloadLink(withBasePath(url), filename);
+    clickDownloadLink(url, filename);
     return;
   }
   const res = await authenticatedFetch(url);

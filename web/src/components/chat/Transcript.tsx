@@ -25,9 +25,6 @@ import { useChatStore } from "@/store/chatStore";
 import { TranscriptScrollbar } from "@/pages/TranscriptScrollbar";
 import { TurnRail, type Turn } from "@/pages/TurnRail";
 import { StreamBudgetBanner } from "@/components/StreamBudgetBanner";
-import { useSearchParams } from "@/lib/routing";
-import { MESSAGE_QUERY_PARAM } from "@/lib/messageDeepLink";
-import { useMessageDeepLink } from "@/hooks/useMessageDeepLink";
 import { useUserMessageNav } from "@/hooks/useUserMessageNav";
 import { ChatPlanAccordion } from "@/shell/ChatPlanAccordion";
 import { RunnerStartingIndicator, McpStartupIndicator } from "@/pages/ChatIndicators";
@@ -77,6 +74,8 @@ export interface TranscriptProps {
   agentsError: unknown;
   /** True while a managed-sandbox launch is in flight (cold-launch spinner). */
   sandboxLaunching: boolean;
+  /** Terminal-first spin-up bits for the cold-launch empty state. */
+  terminalFirst: { isTerminalFirst: boolean; terminalStartingUp?: boolean } | null | undefined;
   /** Pub/sub ref for the LatestTurnSpacer's synchronous re-measure handle. */
   spacerMeasureRef: React.RefObject<(() => void) | null>;
 }
@@ -115,6 +114,7 @@ function TranscriptImpl({
   showsWorking,
   agentsError,
   sandboxLaunching,
+  terminalFirst,
   spacerMeasureRef,
 }: TranscriptProps) {
   const blocks = useChatStore((s) => s.blocks);
@@ -222,8 +222,6 @@ function TranscriptImpl({
     return () => window.removeEventListener("keydown", handleFind);
   }, [display.conversationId]);
   const disableVirtualization = nativeFindConversationId === display.conversationId;
-  const [searchParams] = useSearchParams();
-  const messageId = searchParams.get(MESSAGE_QUERY_PARAM);
 
   // Virtualizer-derived geometry (scroll handle, active turn, range nonce),
   // published by VirtualBubbleList. The rail reads the active turn and the
@@ -255,11 +253,6 @@ function TranscriptImpl({
     [display.bubbles],
   );
   const nav = useUserMessageNav(userMessageIds, ensureItemVisible);
-  useMessageDeepLink(conversationId ?? null, {
-    ensureMessageVisible: ensureItemVisible,
-    ready: display.conversationId === conversationId && !!scroller?.el && !!scrollToItemRef.current,
-    rangeNonce: spacerMeasureNonce,
-  });
 
   // One rail tick per real user turn, paired with a preview of the reply that
   // followed. Mirrors the transcript's loaded window and grows lazily.
@@ -327,8 +320,7 @@ function TranscriptImpl({
             className={cn(
               "chat-conversation-content mx-auto w-full gap-4 px-4 pb-6",
               display.hasTasks ? "pt-4" : "pt-20",
-              // Keep the rail inset in sync with the column's responsive width.
-              "md:pl-[clamp(1rem,(var(--chat-column-width)+6rem-100cqi)*0.5+1rem,1.5rem)]",
+              "md:pl-[clamp(1rem,(54rem-100cqi)*0.5+1rem,1.5rem)]",
               CHAT_COLUMN_WIDTH,
             )}
           >
@@ -341,6 +333,7 @@ function TranscriptImpl({
               rowCount={display.streamBubbles.length}
             />
             {display.bubbles.length === 0 && !showWorkingIndicator && !display.mcpStartupActive ? (
+              (terminalFirst?.isTerminalFirst && terminalFirst.terminalStartingUp) ||
               sandboxLaunching ? (
                 <RunnerStartingIndicator variant="hero" />
               ) : (
@@ -370,7 +363,6 @@ function TranscriptImpl({
                   conversationId={display.conversationId}
                   hasTasks={display.hasTasks}
                   disableVirtualization={disableVirtualization}
-                  messageId={messageId}
                   onGeometryChange={onGeometryChange}
                 />
                 {/* Pending elicitation cards, floated to the bottom of the chat
@@ -390,7 +382,8 @@ function TranscriptImpl({
                 ))}
                 {/* Working… shimmer, lit for the whole busy turn. */}
                 {showWorkingIndicator && <WorkingIndicator />}
-                {/* Managed-sandbox stage cue; only when Working is absent. */}
+                {/* Terminal-first spin-up cue; self-gates to null off the
+                spin-up window, and only when not already showing Working…. */}
                 {!showWorkingIndicator && <RunnerStartingIndicator variant="row" />}
                 {/* MCP-server startup band (codex-native); clears once the
                 round settles (failures stay in host logs, not the chat). */}
@@ -557,7 +550,6 @@ export function VirtualBubbleList({
   conversationId,
   hasTasks,
   disableVirtualization,
-  messageId,
   onGeometryChange,
 }: {
   bubbles: Bubble[];
@@ -568,7 +560,6 @@ export function VirtualBubbleList({
   conversationId: string | null | undefined;
   hasTasks: boolean;
   disableVirtualization: boolean;
-  messageId?: string | null;
   /** Publishes virtualizer-derived geometry up to the rail/spacer. */
   onGeometryChange: (geometry: TranscriptGeometry) => void;
 }) {
@@ -819,7 +810,7 @@ export function VirtualBubbleList({
   // Mid-scroll mode resolves the saved bubble through the virtualizer on every
   // frame, so estimate-to-measure corrections preserve its viewport position.
   useLayoutEffect(() => {
-    if (!scrollEl || !conversationId || messageId) return;
+    if (!scrollEl || !conversationId) return;
     const c = ctxRef.current;
     const saved = transcriptViewCache.get(conversationId);
     restoringRef.current = conversationId;
@@ -880,19 +871,11 @@ export function VirtualBubbleList({
     pinAnchor();
     frame = requestAnimationFrame(tick);
     return finish;
-  }, [conversationId, scrollEl, messageId]);
+  }, [conversationId, scrollEl]);
 
   const scrollToItem = useCallback((itemId: string): boolean => {
-    const index = bubblesRef.current.findIndex(
-      (b) =>
-        (b.kind === "user" && b.itemId === itemId) ||
-        (b.kind === "assistant" && b.responseId === itemId),
-    );
+    const index = bubblesRef.current.findIndex((b) => b.kind === "user" && b.itemId === itemId);
     if (index < 0) return false;
-    const c = ctxRef.current;
-    c.stopScroll();
-    c.state.isAtBottom = false;
-    c.state.escapedFromLock = true;
     virtualizerRef.current.scrollToIndex(index, { align: "center" });
     return true;
   }, []);

@@ -26,9 +26,7 @@ from __future__ import annotations
 
 import zstandard
 from sqlalchemy import LargeBinary
-from sqlalchemy.dialects.mysql import MEDIUMBLOB
-from sqlalchemy.engine import Dialect
-from sqlalchemy.types import TypeDecorator, TypeEngine
+from sqlalchemy.types import TypeDecorator
 
 # Leading byte marking a framed (post-migration) value. Legacy text never
 # begins with NUL, so its presence unambiguously distinguishes the two formats.
@@ -61,17 +59,12 @@ def encode(text: str | None) -> bytes | None:
     return bytes((_SENTINEL, _CODEC_ZSTD)) + packed
 
 
-def decode(
-    value: bytes | str | memoryview | None, *, max_decoded_bytes: int | None = None
-) -> str | None:
+def decode(value: bytes | str | memoryview | None) -> str | None:
     """Inverse of :func:`encode`; also passes through legacy unframed text.
 
     :param value: The stored column value: framed bytes, legacy UTF-8 bytes,
         a legacy ``str`` (SQLite dynamic typing), a ``memoryview`` (some
         drivers), or ``None``.
-    :param max_decoded_bytes: Optional limit enforced before decoding or allocating
-        the full decompressed payload; oversized/invalid frames raise ``ValueError``
-        or ``zstandard.ZstdError``.
     :returns: The decoded plaintext, or ``None`` when *value* is ``None``.
     """
     if value is None:
@@ -79,35 +72,15 @@ def decode(
     # SQLite is dynamically typed: a value written before the column became a
     # BLOB comes back as ``str``. It is legacy plaintext, unchanged.
     if isinstance(value, str):
-        if max_decoded_bytes is not None and (
-            len(value) > max_decoded_bytes or len(value.encode("utf-8")) > max_decoded_bytes
-        ):
-            raise ValueError("Decoded text exceeds size limit")
         return value
     if isinstance(value, memoryview):
         value = value.tobytes()
     if not value or value[0] != _SENTINEL:
         # Empty, or legacy UTF-8 text (no sentinel — cannot start with NUL).
-        payload = value
-    else:
-        if len(value) < 2:
-            raise ValueError("Truncated compression frame")
-        codec, payload = value[1], value[2:]
-        if codec == _CODEC_ZSTD:
-            if max_decoded_bytes is None:
-                payload = zstandard.ZstdDecompressor().decompress(payload)
-            else:
-                size = zstandard.frame_content_size(payload)
-                if size != zstandard.CONTENTSIZE_UNKNOWN and size > max_decoded_bytes:
-                    raise ValueError("Decoded text exceeds size limit")
-                decompressor = zstandard.ZstdDecompressor(
-                    max_window_size=max(1024, max_decoded_bytes)
-                )
-                payload = decompressor.decompress(payload, max_output_size=max_decoded_bytes)
-        elif codec != _CODEC_RAW and max_decoded_bytes is not None:
-            raise ValueError("Unknown compression codec")
-    if max_decoded_bytes is not None and len(payload) > max_decoded_bytes:
-        raise ValueError("Decoded text exceeds size limit")
+        return value.decode("utf-8")
+    codec, payload = value[1], value[2:]
+    if codec == _CODEC_ZSTD:
+        return zstandard.ZstdDecompressor().decompress(payload).decode("utf-8")
     return payload.decode("utf-8")
 
 
@@ -137,13 +110,3 @@ class CompressedText(TypeDecorator[str]):
         """Decompress on the way out of the database."""
         del dialect
         return decode(value)
-
-
-class CompressedLargeText(CompressedText):
-    """Compressed text with a 16 MiB MySQL capacity instead of BLOB's 64 KiB."""
-
-    cache_ok = True
-
-    def load_dialect_impl(self, dialect: Dialect) -> TypeEngine[bytes]:
-        """Retain compression while selecting the backend's binary column type."""
-        return dialect.type_descriptor(MEDIUMBLOB() if dialect.name == "mysql" else LargeBinary())

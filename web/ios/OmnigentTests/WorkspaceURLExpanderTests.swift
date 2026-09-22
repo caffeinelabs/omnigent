@@ -54,38 +54,15 @@ final class WorkspaceURLExpanderTests: XCTestCase {
   }
 
   func testLeavesDatabricksAppsHostUnchangedWithoutProbe() async {
-    URLProtocolStub.handler = { _ in
-      XCTFail("Databricks Apps must not be probed for a workspace mount")
-      throw URLError(.badServerResponse)
-    }
-    for raw in [
-      "https://my-app-123.aws.databricksapps.com",
-      "https://databricksapps.com",
-      "https://MY-APP.AZURE.DATABRICKSAPPS.COM",
-    ] {
-      let original = URL(string: raw)!
-      let expanded = await WorkspaceURLExpander.expandIfNeeded(original, session: stubbedSession())
-      XCTAssertEqual(expanded, original)
-    }
-  }
+    let app = URL(string: "https://my-app-123.aws.databricksapps.com")!
+    let expandedApp = await WorkspaceURLExpander.expandIfNeeded(app, session: stubbedSession())
+    XCTAssertEqual(expandedApp, app)
 
-  func testAppsLookalikesAreStillProbed() async {
-    URLProtocolStub.handler = { request in
-      XCTAssertEqual(request.httpMethod, "HEAD")
-      let response = HTTPURLResponse(
-        url: request.url!, statusCode: 200, httpVersion: nil,
-        headerFields: ["server": "databricks"]
-      )!
-      return (response, Data())
-    }
-    for raw in [
-      "https://databricksapps.com.example.org",
-      "https://notdatabricksapps.com",
-    ] {
-      let expanded = await WorkspaceURLExpander.expandIfNeeded(
-        URL(string: raw)!, session: stubbedSession())
-      XCTAssertEqual(expanded.absoluteString, raw + "/omnigent")
-    }
+    let apex = URL(string: "https://databricksapps.com")!
+    let expandedApex = await WorkspaceURLExpander.expandIfNeeded(apex, session: stubbedSession())
+    XCTAssertEqual(expandedApex, apex)
+
+    XCTAssertNil(URLProtocolStub.handler)
   }
 
   func testRejectsResponseFromDifferentOrigin() async {
@@ -164,7 +141,6 @@ final class WorkspaceMountURLTests: XCTestCase {
     XCTAssertEqual(
       mount("https://adb-99.azuredatabricks.net/"), "https://adb-99.azuredatabricks.net/omnigent")
     XCTAssertEqual(mount("https://databricks.com/"), "https://databricks.com/omnigent")
-    XCTAssertEqual(mount("https://azuredatabricks.net/"), "https://azuredatabricks.net/omnigent")
   }
 
   /// `?o=<org>` selects which workspace the request lands in, so it must survive.
@@ -196,15 +172,10 @@ final class WorkspaceMountURLTests: XCTestCase {
   /// Apps serve their own app at the root and have no workspace mount.
   func testLeavesDatabricksAppsAndOtherHostsAlone() {
     XCTAssertNil(mount("https://my-app.databricksapps.com/"))
-    XCTAssertNil(mount("https://databricksapps.com/"))
-    XCTAssertNil(mount("https://MY-APP.AWS.DATABRICKSAPPS.COM/"))
     XCTAssertNil(mount("https://example.com/"))
     XCTAssertNil(mount("https://localhost:8000/"))
     // Lookalike host: must match on a dot boundary.
     XCTAssertNil(mount("https://databricks.com.evil.example/"))
-    XCTAssertNil(mount("https://azuredatabricks.net.example.org/"))
-    XCTAssertNil(mount("https://notdatabricks.com/"))
-    XCTAssertNil(mount("https://notazuredatabricks.net/"))
   }
 
   func testRejectsNonHTTPSchemes() {
