@@ -3020,7 +3020,14 @@ def test_setup_single_model_preserves_picker_scope(
 
     provider = creds.resolve_pi_native_provider(model=override, config_loader=lambda: config)
     assert provider is not None
-    assert [model["id"] for model in provider.extra_models] == [override or "gpt-5"]
+    # Fork (#71): a distinct session override registers the family default
+    # alongside it — with ambient credentials stripped
+    # (OMNIGENT_PI_ENV_UNSET) models.json IS the picker, so dropping the
+    # default would strand the user on the override. The picker-scope
+    # invariant this test guards is carried by ``curated_models=False``
+    # (no enabledModels overlay below), not by suppressing registration.
+    expected = [override, "gpt-5"] if override is not None else ["gpt-5"]
+    assert [model["id"] for model in provider.extra_models] == expected
     agent_dir = tmp_path / "pi-agent"
     creds.pi_native_provider_launch(agent_dir, provider)
 

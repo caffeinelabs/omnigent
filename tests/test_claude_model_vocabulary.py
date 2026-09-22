@@ -116,19 +116,31 @@ def test_command_arg_spells_the_routed_model_or_nothing(
     assert claude_model_command_arg(model, env) == expected
 
 
-def test_command_arg_passes_gateway_full_ids_verbatim() -> None:
+def test_command_arg_passes_enumerated_gateway_ids_verbatim() -> None:
     """A connected Databricks gateway's ``system.ai.<model>`` ids (kimi, glm,
-    deepseek, claude, …) are non-alias full ids that Claude Code's ``/model``
-    takes verbatim, so the picker can switch to any workspace model — not just
-    the Claude family. Guards the regression where these returned ``None`` and
-    the switch was refused with "no spelling for that model"."""
+    deepseek, claude, …) are non-alias ids that Claude Code's ``/model`` takes
+    verbatim when the session's own picker enumerates them — so the picker can
+    switch to any workspace model, not just the Claude family.
+
+    The enumeration is the authority: an id NO picker row spells returns
+    ``None`` and the switch is refused with "no spelling for that model",
+    instead of typing a value that silently keeps the current model (or, on an
+    authoritative empty catalog, reviving stale launch-time vocabulary).
+    """
     for model in (
         "system.ai.kimi-k3",
         "system.ai.glm-5-3",
         "system.ai.deepseek-v4-pro-0813",
         "system.ai.claude-opus-4-8",
     ):
-        assert claude_model_command_arg(model, {}) == model
+        assert claude_model_command_arg(model, {}, picker_values=(model,)) == model
+    # Unenumerated gateway ids of no Claude family fail loud, even on an
+    # unpinned env.
+    for model in ("system.ai.kimi-k3", "system.ai.glm-5-3", "system.ai.deepseek-v4-pro-0813"):
+        assert claude_model_command_arg(model, {}) is None
+    # A gateway-spelled Claude id folds to its family alias, same as the
+    # provider-prefixed spelling (``databricks-claude-opus-4-8`` above).
+    assert claude_model_command_arg("system.ai.claude-opus-4-8", {}) == "opus"
     # But a family alias with a conflicting pin still folds, not passes through.
     assert claude_model_command_arg("opus", {}) == "opus"
 
