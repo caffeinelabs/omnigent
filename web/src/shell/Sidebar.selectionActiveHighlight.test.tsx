@@ -1,7 +1,3 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("@/hooks/useScopeCache", () => import("@/test/mockScopeCache"));
-import { SidebarDataProvider } from "@/hooks/useSidebarData";
 // Regression test for: toggling "Select sessions" left the currently-viewed
 // session's row highlighted. In selection mode the active-route highlight must
 // be suppressed — a row should carry a background only when it's explicitly
@@ -13,6 +9,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { forwardRef } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation } from "@/hooks/useConversations";
 import type { Session } from "@/lib/types";
@@ -130,19 +127,17 @@ function renderAt(initialEntry: string, holdRoute = false) {
   );
   return render(
     <QueryClientProvider client={qc}>
-      <SidebarDataProvider>
-        <TooltipProvider>
-          <MemoryRouter initialEntries={[initialEntry]}>
-            {holdRoute ? (
-              <RoutingProvider value={{ ...reactRouterRouting, Link: StaticLink }}>
-                {routes}
-              </RoutingProvider>
-            ) : (
-              routes
-            )}
-          </MemoryRouter>
-        </TooltipProvider>
-      </SidebarDataProvider>
+      <TooltipProvider>
+        <MemoryRouter initialEntries={[initialEntry]}>
+          {holdRoute ? (
+            <RoutingProvider value={{ ...reactRouterRouting, Link: StaticLink }}>
+              {routes}
+            </RoutingProvider>
+          ) : (
+            routes
+          )}
+        </MemoryRouter>
+      </TooltipProvider>
     </QueryClientProvider>,
   );
 }

@@ -63,25 +63,15 @@ def _fulfill_empty_agent_scan(route: Route) -> None:
 
 def test_cursor_missing_cli_shows_install_and_login_guidance(
     page: Page,
-    live_server: str,
+    seeded_session: tuple[str, str],
 ) -> None:
     """A missing Cursor CLI is badged and explained before session launch."""
-    base_url = live_server
+    base_url, session_id = seeded_session
+    del session_id
 
     page.route("**/v1/hosts", _fulfill_hosts)
-    # The fake host has no model catalog or worktrees.
-    page.route(
-        f"**/v1/hosts/{_HOST_ID}/harnesses/*/model-options",
-        lambda route: route.fulfill(json={"models": []}),
-    )
-    page.route(
-        f"**/v1/hosts/{_HOST_ID}/worktrees?*",
-        lambda route: route.fulfill(json={"data": []}),
-    )
     page.route("**/v1/agents", _fulfill_agents)
-    page.route(
-        re.compile(r"/v1/sessions\?(?!.*pinned=).*visibility=mine"), _fulfill_empty_agent_scan
-    )
+    page.route(re.compile(r"/v1/sessions\?.*kind=any"), _fulfill_empty_agent_scan)
     page.add_init_script(
         f"""window.localStorage.setItem(
             "omnigent:recent-workspaces",
@@ -112,12 +102,4 @@ def test_cursor_missing_cli_shows_install_and_login_guidance(
     badge = page.get_by_test_id(f"new-chat-landing-agent-warning-{_AGENT_ID}")
     expect(badge).to_be_visible()
     expect(badge).to_have_accessible_name("binary missing")
-    expect(page.get_by_test_id(f"new-chat-landing-agent-{_AGENT_ID}")).to_have_attribute(
-        "aria-disabled", "true"
-    )
-    badge.hover()
-    tooltip = page.get_by_role("tooltip")
-    expect(tooltip).to_be_visible()
-    expect(tooltip).to_contain_text(
-        f"Cursor isn't configured on {_HOST_NAME} — run omni setup on that machine."
-    )
+    expect(badge).to_have_attribute("title", "binary missing")

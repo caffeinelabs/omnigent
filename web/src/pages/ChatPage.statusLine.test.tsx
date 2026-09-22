@@ -1,8 +1,3 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-vi.mock("@/hooks/useSkills", () => ({
-  useSkills: () => ({ skills: [], skillsStatus: "ready", refetch: vi.fn() }),
-}));
 import type * as UseWorkspaceChangedFilesModule from "@/hooks/useWorkspaceChangedFiles";
 import type * as UseSessionModule from "@/hooks/useSession";
 import type * as UseHostsModule from "@/hooks/useHosts";
@@ -12,6 +7,7 @@ import type * as FileViewerContextModule from "@/shell/FileViewerContext";
 import type * as UseChildSessionsModule from "@/hooks/useChildSessions";
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { useChatStore } from "@/store/chatStore";
 
@@ -40,29 +36,20 @@ vi.mock("@/shell/FileViewerContext", async (importOriginal) => ({
 // PR/context/branch now render in the workspace bar via these shared hooks
 // (their own component + hook tests cover the variations); stub them so the
 // composer renders in isolation with a neutral empty status.
-const { useComposerGitStatusMock } = vi.hoisted(() => ({
-  useComposerGitStatusMock: vi.fn(),
-}));
 vi.mock("@/hooks/useComposerGitStatus", () => ({
-  useComposerGitStatus: () => useComposerGitStatusMock(),
-}));
-
-function composerGitStatus(overrides: Record<string, unknown> = {}) {
-  return {
+  useComposerGitStatus: () => ({
     branch: null,
     branchState: "unknown",
     isWorktree: null,
     worktreePath: null,
     creationBranch: null,
-    repoNameWithOwner: "omnigent-ai/omnigent",
-    githubState: "ready",
+    repoNameWithOwner: null,
     prCount: 0,
     prNumber: null,
     refresh: () => {},
     refreshing: false,
-    ...overrides,
-  };
-}
+  }),
+}));
 vi.mock("@/hooks/useChildSessions", async (importOriginal) => ({
   ...(await importOriginal<typeof UseChildSessionsModule>()),
   useChildSessions: () => ({ children: [] }),
@@ -181,17 +168,17 @@ describe("Composer status line (branch + context ring)", () => {
     useHostsMock.mockReset().mockReturnValue({ data: [] });
     useSessionHostOnlineMock.mockReset().mockReturnValue(undefined);
     useGithubInfoMock.mockReset().mockReturnValue({ data: undefined });
-    useComposerGitStatusMock.mockReset().mockReturnValue(composerGitStatus());
     openGithubTabMock.mockReset();
     useChatStore.setState({
       conversationId: "conv_test",
+      skills: [],
       contextWindow: null,
       tokensUsed: null,
       sessionCostUsd: null,
       gitBranch: null,
       llmModel: null,
-      sessionModelOverride: null,
-      sessionReasoningEffort: null,
+      selectedModel: null,
+      selectedEffort: null,
       codexModelOptions: [],
       codexPlanMode: false,
       nativeVendorOwnsModel: false,
@@ -254,7 +241,7 @@ describe("Composer status line (branch + context ring)", () => {
     // vendor-owned native session where the model used to be (wrongly) shown.
     useChatStore.setState({
       llmModel: "claude-sonnet-4-6",
-      sessionReasoningEffort: "medium",
+      selectedEffort: "medium",
       nativeVendorOwnsModel: true,
       contextWindow: 100_000,
       tokensUsed: 25_000,
@@ -338,14 +325,7 @@ describe("Composer status line (branch + context ring)", () => {
     // The host indicator moved out of the chat header into this tray; it
     // sits immediately left of the worktree branch.
     bindHost("mac-laptop");
-    useComposerGitStatusMock.mockReturnValue(
-      composerGitStatus({
-        branch: "geist",
-        branchState: "ready",
-        isWorktree: true,
-        worktreePath: "/workspace/geist",
-      }),
-    );
+    useChatStore.setState({ gitBranch: "geist" });
     renderComposer();
 
     const host = screen.getByTestId("composer-host-select");
@@ -391,14 +371,7 @@ describe("Composer status line (branch + context ring)", () => {
     // host_offline anyway — a stranded child is local_stranded, handled by the
     // banner elsewhere.
     bindHost("mac-laptop");
-    useComposerGitStatusMock.mockReturnValue(
-      composerGitStatus({
-        branch: "geist",
-        branchState: "ready",
-        isWorktree: true,
-        worktreePath: "/workspace/geist",
-      }),
-    );
+    useChatStore.setState({ gitBranch: "geist" });
     renderComposer({ subAgentLabel: "check-eligibility" });
 
     expect(screen.queryByTestId("composer-host-select")).toBeNull();

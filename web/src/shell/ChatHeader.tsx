@@ -22,7 +22,6 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
@@ -637,7 +636,7 @@ export function ChatHeader({
         {/* Other users currently viewing this session (presence).
             Self-contained — reads the chat store directly, renders
             nothing when the user is alone. */}
-        {conversationId && !isMobile && <PresenceAvatars />}
+        {conversationId && <PresenceAvatars />}
         {/* Desktop (md+) action buttons. On mobile these collapse into
             the three-dot "Session actions" menu below. Fork is also
             available from the session menus and assistant messages. */}
@@ -696,21 +695,7 @@ export function ChatHeader({
                   <EllipsisVerticalIcon className="size-4 max-md:size-5" />
                 </Button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent
-                align="end"
-                className={cn("min-w-44 max-w-[min(20rem,calc(100vw-1rem))]", MOBILE_GLASS_SURFACE)}
-              >
-                {isMobile && conversationId && (
-                  <>
-                    <DropdownMenuLabel className="flex items-center gap-2 px-2.5 pb-1.5 text-foreground">
-                      <span className="min-w-0 flex-1 truncate">
-                        {conversationTitle || UNTITLED_CONVERSATION_LABEL}
-                      </span>
-                      <PresenceAvatars />
-                    </DropdownMenuLabel>
-                    <DropdownMenuSeparator />
-                  </>
-                )}
+              <DropdownMenuContent align="end" className={cn("min-w-44", MOBILE_GLASS_SURFACE)}>
                 {/* Chat/Terminal switch (terminal-first sessions) — self-gates to
                   null otherwise, and renders its own trailing separator. */}
                 {isMobile && <ViewModeMenuItems />}

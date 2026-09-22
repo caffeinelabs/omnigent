@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { OttoEyes } from "@/components/OttoEyes";
 import { OttoIcon } from "@/components/icons/OttoIcon";
-import { withBasePath } from "@/lib/basePath";
 import { useAppName, useLogoUrl } from "@/lib/branding";
 import { authenticatedFetch } from "@/lib/identity";
 import { getOmnigentHostConfig, getOmnigentHostGeneration } from "@/lib/host";
@@ -187,7 +186,7 @@ export function BrandLogo({
     return (
       <StandaloneBrandLogo
         key={logoUrl}
-        path={withBasePath(logoUrl)}
+        path={logoUrl}
         appName={appName}
         className={className}
         variant={variant}

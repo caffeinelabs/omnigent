@@ -185,7 +185,7 @@ def test_badge_notification_activation_navigates_to_target(
 
 def test_sidebar_open_param_reveals_drawer_and_strips_itself(
     page: Page,
-    live_server: str,
+    seeded_session: tuple[str, str],
 ) -> None:
     """``?sidebar=open`` (the multi-unread badge target) opens the drawer once.
 
@@ -195,9 +195,9 @@ def test_sidebar_open_param_reveals_drawer_and_strips_itself(
     ``replace``), so a later in-app navigation doesn't re-trigger it.
 
     :param page: Playwright page fixture (fresh context per test).
-    :param live_server: Base URL of the shared test server.
+    :param seeded_session: ``(base_url, session_id)`` of a runner-bound session.
     """
-    base_url = live_server
+    base_url, _session_id = seeded_session
 
     page.set_viewport_size(_MOBILE_VIEWPORT)
     page.add_init_script(_ANDROID_SHELL_INIT_SCRIPT)

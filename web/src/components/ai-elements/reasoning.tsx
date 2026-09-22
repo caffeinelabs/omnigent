@@ -10,7 +10,6 @@ import { Streamdown } from "streamdown";
 import { normalizeExplicitMathDelimiters } from "./mathMarkdown";
 import { Shimmer } from "./shimmer";
 import { MarkdownErrorBoundary } from "./MarkdownErrorBoundary";
-import { MERMAID_STREAMDOWN_OPTIONS } from "./MermaidError";
 import {
   CHAT_LINK_SAFETY,
   SECURE_STREAMDOWN_REHYPE_PLUGINS,
@@ -200,7 +199,6 @@ export const ReasoningContent = memo(({ className, children, ...props }: Reasoni
       <MarkdownErrorBoundary source={normalizedChildren}>
         <Streamdown
           plugins={STREAMDOWN_PLUGINS}
-          mermaid={MERMAID_STREAMDOWN_OPTIONS}
           // Let links open on a plain click (and cmd/ctrl-click in a new tab)
           // instead of Streamdown's default "Open external link?" modal.
           linkSafety={CHAT_LINK_SAFETY}

@@ -32,7 +32,6 @@
 //      on `POST /v1/sessions/{id}/elicitations/{eid}/resolve`,
 //   3. rolls back to "pending" on network error.
 
-import { useContext } from "react";
 import {
   CheckIcon,
   ClipboardListIcon,
@@ -56,7 +55,6 @@ import { formatPreview } from "@/lib/previewFormat";
 import type { RenderItem } from "@/lib/renderItems";
 import type { CodexPersistMode, RememberScope } from "@/lib/types";
 import { useChatStore } from "@/store/chatStore";
-import { ConversationScopeContext } from "@/components/chat/conversationScope";
 import { AskUserQuestionForm, type AskUserQuestionAnswers } from "./AskUserQuestionForm";
 import {
   type ElicitationAnswers,
@@ -206,19 +204,11 @@ export function ApprovalCard({
   codexPersistModes = EMPTY_CODEX_PERSIST_MODES,
   onSubmit,
 }: ApprovalCardProps) {
-  // In a side-chat pane this resolves to the child id, so the verdict targets
-  // the child's elicitation rather than the main conversation's. null (the main
-  // transcript) leaves submitApproval on its active-conversation default.
-  const scopedConversationId = useContext(ConversationScopeContext);
   const submit: SubmitApprovalFn =
     onSubmit ??
     ((id, action, content, meta) => {
       const store = useChatStore.getState();
-      // Keep the exact call shape for the main chat (no scope); pass the child
-      // id only when scoped so a side-chat verdict targets the child.
-      if (scopedConversationId) {
-        void store.submitApproval(id, action, content, meta, scopedConversationId);
-      } else if (meta === undefined) {
+      if (meta === undefined) {
         void store.submitApproval(id, action, content);
       } else {
         void store.submitApproval(id, action, content, meta);

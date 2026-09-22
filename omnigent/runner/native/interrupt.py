@@ -45,10 +45,7 @@ from omnigent.runner.native.orchestration import (
     _claude_native_bridge_id_for_session,
     _session_labels_for_runner_spawn,
 )
-from omnigent.runner.resource_registry import (
-    _STATUS_EMITTING_TERMINAL_ROLES,
-    SessionResourceRegistry,
-)
+from omnigent.runner.resource_registry import SessionResourceRegistry
 
 if TYPE_CHECKING:
     from omnigent.harness_plugins import NativeCodingAgent
@@ -143,7 +140,7 @@ class _UniformStop:
     display_name: str
 
 
-# The eight uniform interrupt harnesses (claude/codex are special-cased). pi uses
+# The seven uniform interrupt harnesses (claude/codex are special-cased). pi uses
 # enqueue_interrupt + OSError and no timeout; the rest inject_interrupt +
 # RuntimeError + timeout_s.
 _UNIFORM_INTERRUPT: dict[str, _UniformInterrupt] = {
@@ -204,17 +201,9 @@ _UNIFORM_INTERRUPT: dict[str, _UniformInterrupt] = {
         (RuntimeError,),
         True,
     ),
-    "devin": _UniformInterrupt(
-        "omnigent.harnesses.devin_native.bridge",
-        "inject_interrupt",
-        "devin_native_interrupt_failed",
-        "devin-native interrupt",
-        (RuntimeError,),
-        True,
-    ),
 }
 
-# The seven uniform stop harnesses (claude has a special stop; codex/pi have no
+# The six uniform stop harnesses (claude has a special stop; codex/pi have no
 # distinct stop — they route to interrupt, handled in ``stop``).
 _UNIFORM_STOP: dict[str, _UniformStop] = {
     "cursor": _UniformStop(
@@ -252,12 +241,6 @@ _UNIFORM_STOP: dict[str, _UniformStop] = {
         "qwen_native_stop_failed",
         "qwen-native stop",
         "Qwen",
-    ),
-    "devin": _UniformStop(
-        "omnigent.harnesses.devin_native.bridge",
-        "devin_native_stop_failed",
-        "devin-native stop",
-        "Devin",
     ),
 }
 
@@ -350,7 +333,7 @@ class NativeInterruptRunner:
         spec = _UNIFORM_INTERRUPT.get(key)
         if spec is None:
             return None
-        return await self._uniform_interrupt(spec, conv_id, terminal_role=agent.harness)
+        return await self._uniform_interrupt(spec, conv_id)
 
     async def stop(self, harness_name: str | None, conv_id: str) -> Response | None:
         """Dispatch a stop_session to the harness's bridge.
@@ -418,9 +401,7 @@ class NativeInterruptRunner:
                 publish_event=self._publish_event,
             )
 
-    async def _uniform_interrupt(
-        self, spec: _UniformInterrupt, conv_id: str, *, terminal_role: str | None = None
-    ) -> Response:
+    async def _uniform_interrupt(self, spec: _UniformInterrupt, conv_id: str) -> Response:
         module = importlib.import_module(spec.module)
         bridge_dir = module.bridge_dir_for_session_id(conv_id)
         inject = getattr(module, spec.inject_fn)
@@ -441,12 +422,6 @@ class NativeInterruptRunner:
                     "detail": self._client_safe_error_detail(exc, context=spec.context),
                 },
             )
-        # A harness excluded from PTY-derived status owns its own cancel edge: an
-        # interrupt fires no lifecycle hook, so without this the web spins forever.
-        # The ones still on the watcher get their idle from pane quiescence, which
-        # is why publishing here would double it.
-        if terminal_role is not None and terminal_role not in _STATUS_EMITTING_TERMINAL_ROLES:
-            self._publish_event(conv_id, {"type": "session.status", "status": "idle"})
         self._wake_parent_after_native_interrupt(conv_id)
         return Response(status_code=204)
 

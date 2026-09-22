@@ -16,8 +16,6 @@
  * without try/catch every call site.
  */
 
-import { withBasePath } from "./basePath";
-
 /** Body of POST /auth/login. */
 export interface LoginRequest {
   username: string;
@@ -62,7 +60,7 @@ export interface CurrentAccount {
 export async function login(body: LoginRequest): Promise<LoginResult> {
   let res: Response;
   try {
-    res = await fetch(withBasePath("/auth/login"), {
+    res = await fetch("/auth/login", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -109,7 +107,7 @@ export async function login(body: LoginRequest): Promise<LoginResult> {
  */
 export async function logout(): Promise<void> {
   try {
-    await fetch(withBasePath("/auth/logout"), { method: "POST" });
+    await fetch("/auth/logout", { method: "POST" });
   } catch {
     // Network error — the cookie is still in the browser, but the
     // next authenticated request will 401 and bounce to login.
@@ -130,7 +128,7 @@ export async function logout(): Promise<void> {
 export async function getMe(): Promise<CurrentAccount | null> {
   let res: Response;
   try {
-    res = await fetch(withBasePath("/auth/me"), { cache: "no-store" });
+    res = await fetch("/auth/me", { cache: "no-store" });
   } catch {
     return null;
   }
@@ -156,7 +154,7 @@ export interface RegisterRequest {
 export async function register(body: RegisterRequest): Promise<LoginResult> {
   let res: Response;
   try {
-    res = await fetch(withBasePath("/auth/register"), {
+    res = await fetch("/auth/register", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -209,7 +207,7 @@ export type ChangePasswordResult = { ok: true } | { ok: false; error: string };
 export async function changePassword(body: ChangePasswordRequest): Promise<ChangePasswordResult> {
   let res: Response;
   try {
-    res = await fetch(withBasePath("/auth/users/me/password"), {
+    res = await fetch("/auth/users/me/password", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -250,7 +248,7 @@ export interface SetupRequest {
 export async function setup(body: SetupRequest): Promise<LoginResult> {
   let res: Response;
   try {
-    res = await fetch(withBasePath("/auth/setup"), {
+    res = await fetch("/auth/setup", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify(body),
@@ -366,7 +364,7 @@ async function adminRequest<T extends { ok: true }>(
 export async function listUsers(): Promise<AccountListEntry[] | null> {
   let res: Response;
   try {
-    res = await fetch(withBasePath("/auth/users"), { cache: "no-store" });
+    res = await fetch("/auth/users", { cache: "no-store" });
   } catch {
     return null;
   }
@@ -385,7 +383,7 @@ export async function listUsers(): Promise<AccountListEntry[] | null> {
 export async function createInvite(isAdmin: boolean): Promise<InviteCreated | AdminFailure> {
   return adminRequest<InviteCreated>(
     () =>
-      fetch(withBasePath("/auth/invite"), {
+      fetch("/auth/invite", {
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify({ is_admin: isAdmin }),
@@ -417,7 +415,7 @@ export async function createInvite(isAdmin: boolean): Promise<InviteCreated | Ad
 export async function deleteUser(userId: string): Promise<{ ok: true } | AdminFailure> {
   let res: Response;
   try {
-    res = await fetch(withBasePath(`/auth/users/${encodeURIComponent(userId)}`), {
+    res = await fetch(`/auth/users/${encodeURIComponent(userId)}`, {
       method: "DELETE",
     });
   } catch {
@@ -443,7 +441,7 @@ export async function deleteUser(userId: string): Promise<{ ok: true } | AdminFa
 export async function resetUserPassword(userId: string): Promise<PasswordReset | AdminFailure> {
   return adminRequest<PasswordReset>(
     () =>
-      fetch(withBasePath(`/auth/users/${encodeURIComponent(userId)}/reset`), {
+      fetch(`/auth/users/${encodeURIComponent(userId)}/reset`, {
         method: "POST",
       }),
     (body) => {

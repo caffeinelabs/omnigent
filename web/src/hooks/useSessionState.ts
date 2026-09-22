@@ -10,13 +10,11 @@
 // after an error, so callers also inspect the latest conversation message.
 
 import type { Conversation } from "@/hooks/useConversations";
-import type { LatestSessionError } from "@/lib/sessionError";
 
 export type SessionState =
   | { kind: "awaiting"; count: number }
   | { kind: "running" }
   | { kind: "error" }
-  | { kind: "disconnected" }
   | { kind: "unseen" }
   // The open session's launch/relaunch window — a send in flight or the PTY
   // being created before the server confirms `running`. Not derivable from a
@@ -26,13 +24,11 @@ export type SessionState =
 
 export function getSessionState(
   conversation: Pick<Conversation, "status" | "pending_elicitations_count"> | undefined | null,
-  latestError: LatestSessionError | null = null,
+  latestMessageIsError = false,
 ): SessionState | null {
   const pending = conversation?.pending_elicitations_count ?? 0;
   if (pending > 0) return { kind: "awaiting", count: pending };
   if (conversation?.status === "running") return { kind: "running" };
-  if (latestError === "disconnected") return { kind: "disconnected" };
-  if (latestError === "recovered_disconnect") return null;
-  if (conversation?.status === "failed" || latestError === "error") return { kind: "error" };
+  if (conversation?.status === "failed" || latestMessageIsError) return { kind: "error" };
   return null;
 }

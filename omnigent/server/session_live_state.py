@@ -44,7 +44,6 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import TYPE_CHECKING
 
 from omnigent.db.enum_codecs import SESSION_LIVE_STATUS
-from omnigent.db.workspace_cache import WorkspaceScopedCache
 
 if TYPE_CHECKING:
     from omnigent.stores import ConversationStore
@@ -70,9 +69,9 @@ _executor: ThreadPoolExecutor | None = None
 # enqueued, or (for an unencodable status) the value whose warning was
 # already logged, so repeats of either are suppressed. Unbounded like the
 # in-memory caches these writes mirror; entries live for the process.
-_last_status: WorkspaceScopedCache[str, str] = WorkspaceScopedCache()
+_last_status: dict[str, str] = {}
 # Last count persisted per session, for dedupe.
-_last_pending: WorkspaceScopedCache[str, int] = WorkspaceScopedCache()
+_last_pending: dict[str, int] = {}
 
 
 def configure(

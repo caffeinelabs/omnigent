@@ -1,5 +1,5 @@
 import { useTheme } from "next-themes";
-import { Toaster as Sonner, type ToasterProps, useSonner } from "sonner";
+import { Toaster as Sonner, type ToasterProps } from "sonner";
 import {
   CircleCheckIcon,
   InfoIcon,
@@ -8,12 +8,8 @@ import {
   Loader2Icon,
 } from "lucide-react";
 
-const Toaster = ({ expand, ...props }: ToasterProps) => {
+const Toaster = ({ ...props }: ToasterProps) => {
   const { theme = "system" } = useTheme();
-  const { toasts } = useSonner();
-  const hasPersistentPrompt = toasts.some(
-    (toast) => toast.dismissible === false && toast.duration === Number.POSITIVE_INFINITY,
-  );
 
   return (
     <Sonner
@@ -40,7 +36,6 @@ const Toaster = ({ expand, ...props }: ToasterProps) => {
         },
       }}
       {...props}
-      expand={expand || hasPersistentPrompt}
     />
   );
 };

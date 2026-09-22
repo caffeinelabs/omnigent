@@ -3,7 +3,7 @@
 The Workspace panel control (``WorkspacePanelDefaultControl`` on
 ``pages/SettingsPage.tsx``) is a two-card radiogroup — Open / Collapsed —
 under Settings → Appearance. Picking a mode writes to
-``localStorage["omnigent:default-workspace-panel"]`` (absent = "collapsed").
+``localStorage["omnigent:default-workspace-panel"]`` (absent = "open").
 
 AppShell applies that preference only when a session has no saved
 ``SessionWorkspaceState.open``. Once the user toggles the rail in a chat,
@@ -22,17 +22,14 @@ No LLM turn is needed.
 
 from __future__ import annotations
 
-import pytest
 from playwright.sync_api import Page, expect
-
-pytestmark = pytest.mark.workspace_panel_product_default
 
 STORAGE_KEY = "omnigent:default-workspace-panel"
 _COMPOSER = "Send a message…"
 
 
 def _stored_default(page: Page) -> str | None:
-    """The persisted Workspace panel default, or None when using Collapsed."""
+    """The persisted Workspace panel default, or None when unset (open)."""
     return page.evaluate(f"() => window.localStorage.getItem('{STORAGE_KEY}')")
 
 
@@ -65,30 +62,29 @@ def _wait_session_ready(page: Page) -> None:
 
 
 def test_workspace_panel_default_control_defaults_and_persists(
-    page: Page, live_server: str
+    page: Page, seeded_session: tuple[str, str]
 ) -> None:
-    """Collapsed is the default; picking Open persists and survives a reload."""
-    base_url = live_server
+    """Open is the default; picking Collapsed persists and survives a reload."""
+    base_url, _session_id = seeded_session
     _open_appearance(page, base_url)
 
-    # Fresh context → Collapsed is selected and nothing is stored.
-    expect(page.get_by_test_id("workspace-panel-default-collapsed")).to_have_attribute(
+    # Fresh context → Open is selected and nothing is stored.
+    expect(page.get_by_test_id("workspace-panel-default-open")).to_have_attribute(
         "aria-checked", "true"
     )
     assert _stored_default(page) is None, "a fresh load should store no Workspace panel default"
 
-    _pick_workspace_panel_default(page, "open")
-    assert _stored_default(page) == "open"
+    _pick_workspace_panel_default(page, "collapsed")
+    assert _stored_default(page) == "collapsed"
 
     page.reload()
     expect(page.get_by_role("radiogroup", name="Workspace panel")).to_be_visible(timeout=30_000)
-    expect(page.get_by_test_id("workspace-panel-default-open")).to_have_attribute(
+    expect(page.get_by_test_id("workspace-panel-default-collapsed")).to_have_attribute(
         "aria-checked", "true"
     )
-    assert _stored_default(page) == "open", "the Workspace panel default did not survive a reload"
-
-    _pick_workspace_panel_default(page, "collapsed")
-    assert _stored_default(page) is None, "the product default should clear the storage key"
+    assert _stored_default(page) == "collapsed", (
+        "the Workspace panel default did not survive a reload"
+    )
 
 
 def test_new_chat_follows_workspace_panel_default(
@@ -103,16 +99,20 @@ def test_new_chat_follows_workspace_panel_default(
     """
     base_url, session_a, session_b = seeded_session_pair
 
-    # Session A has never been opened in this browser → the product default applies.
+    _open_appearance(page, base_url)
+    _pick_workspace_panel_default(page, "collapsed")
+    assert _stored_default(page) == "collapsed"
+
+    # Session A has never been opened in this browser → Collapsed applies.
     page.goto(f"{base_url}/c/{session_a}")
     _wait_session_ready(page)
     expect(page.get_by_role("complementary", name="Workspace")).to_have_count(0)
     expect(page.get_by_role("button", name="Expand right panel")).to_be_visible()
 
-    # Select Open and open a different never-visited session → rail starts open.
+    # Restore Open and open a different never-visited session → rail starts open.
     _open_appearance(page, base_url)
     _pick_workspace_panel_default(page, "open")
-    assert _stored_default(page) == "open"
+    assert _stored_default(page) is None, "Open clears the storage key (product default)"
 
     page.goto(f"{base_url}/c/{session_b}")
     _wait_session_ready(page)
@@ -125,18 +125,20 @@ def test_saved_session_open_state_wins_over_appearance_default(
 ) -> None:
     """Expanding the rail in a chat sticks even after Appearance is set to Collapsed.
 
-    Opens session A under the product default (Collapsed), expands it so
-    ``open: true`` is written, switches Appearance back to Collapsed, and remounts
+    Opens session A under the product default (Open), collapses then re-expands
+    so ``open: true`` is written, switches Appearance to Collapsed, and remounts
     session A — the saved open-state must win. Session B (never visited until
     after the preference change) still follows Collapsed, proving the default
     only seeds sessions without saved open-state.
     """
     base_url, session_a, session_b = seeded_session_pair
 
-    # Visit session A under the collapsed product default, then expand it so
+    # Visit session A while the product default is still Open, then toggle so
     # the per-session store records an explicit open=true.
     page.goto(f"{base_url}/c/{session_a}")
     _wait_session_ready(page)
+    expect(page.get_by_role("complementary", name="Workspace")).to_be_visible(timeout=30_000)
+    page.get_by_role("button", name="Collapse right panel").click()
     expect(page.get_by_role("complementary", name="Workspace")).to_have_count(0)
     page.get_by_role("button", name="Expand right panel").click()
     expect(page.get_by_role("complementary", name="Workspace")).to_be_visible()
@@ -164,21 +166,17 @@ def test_collapsing_the_rail_sticks_across_reload_and_new_sessions(
 
     Collapsing in session A must not be undone by a reload, and must carry into
     session B — a chat with no saved open-state of its own — instead of
-    springing back open. Reopening in B flips the remembered state, so the
-    next fresh chat starts open.
+    springing back to the open product default. Reopening in B flips the
+    remembered state back, so the next fresh chat starts open again.
     """
     base_url, session_a, session_b = seeded_session_pair
 
     page.goto(f"{base_url}/c/{session_a}")
     _wait_session_ready(page)
-    expect(page.get_by_role("complementary", name="Workspace")).to_have_count(0)
-    page.get_by_role("button", name="Expand right panel").click()
-    expect(page.get_by_role("complementary", name="Workspace")).to_be_visible()
-    assert _stored_default(page) == "open", "expanding did not record the rail state"
-
+    expect(page.get_by_role("complementary", name="Workspace")).to_be_visible(timeout=30_000)
     page.get_by_role("button", name="Collapse right panel").click()
     expect(page.get_by_role("complementary", name="Workspace")).to_have_count(0)
-    assert _stored_default(page) is None, "collapsing should restore the product default"
+    assert _stored_default(page) == "collapsed", "collapsing did not record the rail state"
 
     # A reload of the same chat keeps it collapsed.
     page.reload()
@@ -194,4 +192,4 @@ def test_collapsing_the_rail_sticks_across_reload_and_new_sessions(
     # Reopening it there flips the remembered state back.
     page.get_by_role("button", name="Expand right panel").click()
     expect(page.get_by_role("complementary", name="Workspace")).to_be_visible()
-    assert _stored_default(page) == "open", "reopening the rail did not record the open state"
+    assert _stored_default(page) is None, "reopening the rail did not clear the collapsed state"

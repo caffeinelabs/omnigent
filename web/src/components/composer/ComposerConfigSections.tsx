@@ -60,34 +60,29 @@ function ConfigChoices({ choices }: { choices: readonly ComposerConfigChoice[] }
  * separate page-local copies. Pass a section as undefined to omit it.
  */
 export function ComposerConfigSections({
-  sdk,
   models,
   efforts,
-  extra,
 }: {
-  sdk?: ComposerConfigSection;
   models?: ComposerConfigSection;
   efforts?: ComposerConfigSection;
-  // Additional sections rendered after Models/Effort — e.g. Devin Fusion's
-  // Lead / Effort / Sidekick selectors. Each gets its own separator + header.
-  extra?: readonly ComposerConfigSection[];
 }) {
-  const sections = [
-    ...(sdk ? [sdk] : []),
-    ...(models ? [models] : []),
-    ...(efforts ? [efforts] : []),
-    ...(extra ?? []),
-  ];
   return (
     <>
-      {sections.map((section, index) => (
-        <div key={section.testId} data-testid={section.testId}>
-          {index > 0 && <DropdownMenuSeparator />}
-          <PickerSectionHeader>{section.header}</PickerSectionHeader>
-          {section.leading}
-          <ConfigChoices choices={section.choices} />
+      {models && (
+        <div data-testid={models.testId}>
+          <PickerSectionHeader>{models.header}</PickerSectionHeader>
+          {models.leading}
+          <ConfigChoices choices={models.choices} />
         </div>
-      ))}
+      )}
+      {efforts && (
+        <div data-testid={efforts.testId}>
+          <DropdownMenuSeparator />
+          <PickerSectionHeader>{efforts.header}</PickerSectionHeader>
+          {efforts.leading}
+          <ConfigChoices choices={efforts.choices} />
+        </div>
+      )}
     </>
   );
 }

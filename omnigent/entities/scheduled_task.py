@@ -94,7 +94,6 @@ class ScheduledTask:
     last_run_at: int | None = None
     last_run_conversation_id: str | None = None
     updated_at: int | None = None
-    account_generation: str | None = None
 
 
 @dataclass

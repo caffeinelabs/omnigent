@@ -1,7 +1,3 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
-import { useConversations as useTestConversations } from "@/hooks/useConversations";
-
-vi.mock("@/hooks/useSidebarData", () => ({ useLoadedConversations: () => useTestConversations() }));
 // Tests for the `useCanEdit` edit-gate hook.
 //
 // `useCanEdit` is what every editable surface (CodeViewer,
@@ -16,6 +12,7 @@ vi.mock("@/hooks/useSidebarData", () => ({ useLoadedConversations: () => useTest
 // up a QueryClient or re-testing the resolution order.
 
 import { renderHook } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Conversation } from "./useConversations";
 import type { Session } from "@/lib/types";
 

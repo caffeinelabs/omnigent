@@ -154,7 +154,7 @@ export function TasksPage() {
         <div className="flex flex-col gap-1">
           <h1 className="text-2xl font-semibold">Automations</h1>
           <p className="text-ui text-muted-foreground">
-            Run agent sessions on a recurring schedule.
+            Run agent sessions on a recurring schedule. Tasks fire on a connected host.
           </p>
         </div>
         <Button

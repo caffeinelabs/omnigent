@@ -9,7 +9,6 @@
 // would each hold their own anchor and diverge.
 
 import { useCallback, useMemo, useState } from "react";
-import { releaseConversationScrollLock } from "@/components/ai-elements/conversation";
 import { useChatStore } from "@/store/chatStore";
 
 export interface UserMessageNav {
@@ -42,41 +41,45 @@ function getScrollParent(node: Element): Element | null {
 }
 
 /**
- * Center a user or assistant message and flash it after scrolling settles.
- * `ensureVisible` mounts a virtualized row before the DOM lookup is retried.
+ * Smooth-scroll a user message into view (centered) and flash it once the
+ * scroll settles. Shared by the Cmd+Alt nav hook and the turn rail so both
+ * land on the message the same way. Anchors on the `data-user-message-id`
+ * DOM attribute stamped by UserBubble.
+ *
+ * @param itemId - The user bubble's itemId (the DOM anchor to scroll to).
+ * @param flash - Optional highlight callback fired when the scroll settles.
+ * @param ensureVisible - Optional hook (from the virtualized transcript) that
+ *     pulls a windowed-out row into the DOM. Called first; when it reports it
+ *     scrolled, the centering scroll is deferred a frame so the freshly mounted
+ *     node exists to center on.
  */
-export function scrollToMessage(
-  messageId: string,
+export function scrollToUserMessage(
+  itemId: string,
   flash?: (id: string) => void,
   ensureVisible?: (id: string) => boolean,
 ): void {
   // The row may be windowed out of the DOM (virtualized transcript). Ask the
   // transcript to scroll it into the mounted range first; its node then mounts
   // on the next frame, so retry the DOM lookup + centering scroll there.
-  const scrolledIntoWindow = ensureVisible?.(messageId) ?? false;
-  const el =
-    document.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`) ??
-    document.querySelector(`[data-user-message-id="${CSS.escape(messageId)}"]`);
+  const scrolledIntoWindow = ensureVisible?.(itemId) ?? false;
+  const el = document.querySelector(
+    // CSS.escape is defensive — itemIds are alphanumeric today.
+    `[data-user-message-id="${CSS.escape(itemId)}"]`,
+  );
   if (!el) {
     if (scrolledIntoWindow) {
       // Row is being mounted by the virtualizer — center on it next frame.
-      requestAnimationFrame(() => scrollToMessage(messageId, flash));
+      requestAnimationFrame(() => scrollToUserMessage(itemId, flash));
       return;
     }
     // Fail loud: id exists in the list but DOM anchor is missing.
-    console.warn(`scrollToMessage: no element for messageId=${messageId}`);
+    console.warn(`scrollToUserMessage: no element for itemId=${itemId}`);
     return;
   }
 
   // Supersede the previous jump's pending flash so rapid nav only flashes
   // the message we finally land on.
   cancelPendingFlash?.();
-
-  // Opening a tall transcript starts StickToBottom locked to the bottom.
-  // Without releasing that lock, the next content-resize scrollToBottom
-  // yanks the view back — deep-link / rail jumps look like a no-op on
-  // multi-message sessions (single short transcripts stay in view anyway).
-  releaseConversationScrollLock();
 
   el.scrollIntoView({ block: "center", behavior: "smooth" });
 
@@ -102,7 +105,7 @@ export function scrollToMessage(
     if (done) return;
     done = true;
     cleanup();
-    flash?.(messageId);
+    flash?.(itemId);
   }
 
   function onScroll(): void {
@@ -116,14 +119,6 @@ export function scrollToMessage(
   // each scroll event reschedules it while the smooth-scroll is in motion.
   settleTimer = window.setTimeout(finish, SCROLL_SETTLE_MS);
   maxTimer = window.setTimeout(finish, SCROLL_SETTLE_MAX_MS);
-}
-
-export function scrollToUserMessage(
-  itemId: string,
-  flash?: (id: string) => void,
-  ensureVisible?: (id: string) => boolean,
-): void {
-  scrollToMessage(itemId, flash, ensureVisible);
 }
 
 export function useUserMessageNav(

@@ -402,9 +402,7 @@ def _run_polly(
 def _latest_session_id(server_url: str) -> str | None:
     """Newest top-level session id, or None."""
     try:
-        page = _get_json(
-            f"{server_url}/v1/sessions?kind=default&order=desc&limit=5&visibility=all"
-        )
+        page = _get_json(f"{server_url}/v1/sessions?kind=default&order=desc&limit=5")
     except (urllib.error.URLError, OSError):
         return None
     data = page.get("data", []) if isinstance(page, dict) else []

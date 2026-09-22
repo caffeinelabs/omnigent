@@ -2,11 +2,7 @@
 
 The sessions route uses these to bridge a client-issued elicitation
 verdict (PATCH on the session) to the in-flight Future an upstream
-caller is awaiting. Keyed by ``elicitation_id`` — but harness-supplied
-ids are deterministic (derived from the session and request), and
-imported sessions share a ``conversation_id`` across workspaces, so the
-key is namespaced by workspace to keep one tenant's verdict from
-resolving another's parked Future.
+caller is awaiting. Keyed by ``elicitation_id``.
 """
 
 from __future__ import annotations
@@ -15,17 +11,14 @@ import asyncio
 from dataclasses import dataclass
 from typing import Any
 
-from omnigent.db.workspace_cache import WorkspaceScopedCache
 from omnigent.server.schemas import ElicitationResult
 
-_harness_elicitation_registry: WorkspaceScopedCache[str, asyncio.Future[ElicitationResult]] = (
-    WorkspaceScopedCache()
-)
+_harness_elicitation_registry: dict[str, asyncio.Future[ElicitationResult]] = {}
 
 # Maps ``elicitation_id`` to the conversation id that issued it, so
 # the PATCH handler can verify the caller owns the elicitation
 # before resolving the Future.
-_harness_elicitation_owners: WorkspaceScopedCache[str, str] = WorkspaceScopedCache()
+_harness_elicitation_owners: dict[str, str] = {}
 
 
 @dataclass
@@ -108,18 +101,14 @@ class _PreResolvedHarnessElicitation:
 
 # Maps ``elicitation_id`` to its parked-elicitation state. Populated
 # while a harness hook long-poll is parked; popped when it returns.
-_harness_parked_elicitations: WorkspaceScopedCache[str, _ParkedHarnessElicitation] = (
-    WorkspaceScopedCache()
-)
+_harness_parked_elicitations: dict[str, _ParkedHarnessElicitation] = {}
 
 # Maps deterministic ``elicitation_id`` values to the session that
 # resolved them before the harness hook registered its parked wait. The
 # hook consumes the tombstone at registration time, which closes the
 # race between a native client answering instantly and the Omnigent hook
 # request reaching this process.
-_harness_pre_resolved_elicitations: WorkspaceScopedCache[str, _PreResolvedHarnessElicitation] = (
-    WorkspaceScopedCache()
-)
+_harness_pre_resolved_elicitations: dict[str, _PreResolvedHarnessElicitation] = {}
 
 
 def reset_for_tests() -> None:

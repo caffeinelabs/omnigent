@@ -1,5 +1,3 @@
-import { appConfig } from "./appConfig";
-import { IdentityAwareSidebarDataProvider } from "./hooks/useSidebarData";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { StrictMode, useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -11,7 +9,6 @@ import { ImageLightboxProvider } from "./components/ImageLightbox";
 import { RunnerHealthProvider } from "./hooks/RunnerHealthProvider";
 import { QueueFlushProvider } from "./hooks/QueueFlushProvider";
 import { SessionUpdatesProvider } from "./hooks/SessionUpdatesProvider";
-import { getBasePath, withBasePath } from "./lib/basePath";
 import { resolveServerInfo, type ServerInfo } from "./lib/capabilities";
 import { CapabilitiesProvider } from "./lib/CapabilitiesContext";
 import { ExtensionProvider } from "./extensions/ExtensionProvider";
@@ -134,7 +131,7 @@ function RootApp({ initialInfo }: { initialInfo: ServerInfo | "loading" }) {
       document.head.appendChild(link);
     }
     link.removeAttribute("type");
-    link.href = withBasePath(faviconUrl);
+    link.href = faviconUrl;
   }, [info]);
   return (
     <CapabilitiesProvider info={info}>
@@ -143,16 +140,14 @@ function RootApp({ initialInfo }: { initialInfo: ServerInfo | "loading" }) {
           <ThemeProvider>
             <TooltipProvider>
               <ImageLightboxProvider>
-                <BrowserRouter basename={getBasePath() || undefined}>
-                  <IdentityAwareSidebarDataProvider config={appConfig.sidebar}>
-                    <SessionUpdatesProvider>
-                      <RunnerHealthProvider>
-                        <QueueFlushProvider>
-                          <App />
-                        </QueueFlushProvider>
-                      </RunnerHealthProvider>
-                    </SessionUpdatesProvider>
-                  </IdentityAwareSidebarDataProvider>
+                <BrowserRouter>
+                  <SessionUpdatesProvider>
+                    <RunnerHealthProvider>
+                      <QueueFlushProvider>
+                        <App />
+                      </QueueFlushProvider>
+                    </RunnerHealthProvider>
+                  </SessionUpdatesProvider>
                 </BrowserRouter>
               </ImageLightboxProvider>
             </TooltipProvider>

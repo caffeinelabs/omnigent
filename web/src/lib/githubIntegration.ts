@@ -8,7 +8,6 @@
  * server owns the OAuth handshake); status and disconnect are JSON.
  */
 
-import { withBasePath } from "./basePath";
 import { authenticatedFetch } from "./identity";
 
 /** Shape of ``GET /v1/connections/github/status``. */
@@ -43,7 +42,7 @@ export async function fetchGithubStatus(): Promise<GithubConnectionStatus> {
  */
 export function beginGithubConnect(returnTo: string): void {
   const url = `/v1/connections/github/connect?return_to=${encodeURIComponent(returnTo)}`;
-  window.location.href = withBasePath(url);
+  window.location.href = url;
 }
 
 /** A repo the connected user can access, from ``GET .../github/repos``. */

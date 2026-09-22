@@ -11,7 +11,7 @@ runtime::
 On the current build the same installed skill is surfaced under two
 different names depending on the session's harness family:
 
-* a claude-family session's ``GET /v1/skills?session_id={id}`` menu shows
+* a claude-family session's ``GET /v1/sessions/{id}/skills`` menu shows
   ``myplugin:brand-review`` (``_claude_plugin_skills`` namespaces it),
 * a codex-family session's menu and ``$CODEX_HOME/skills/`` carry only the
   bare ``brand-review`` (``select_codex_skill_dirs`` keys by directory
@@ -47,19 +47,12 @@ import pytest
 from omnigent.runner import create_runner_app
 from omnigent.runner.app import ResolvedSpec
 from omnigent.spec.types import SkillSpec
-from tests.e2e.test_claude_terminal_web_skills_parity_e2e import _menu_names
 
 _MARKETPLACE = "testmarket"
 _PLUGIN = "myplugin"
 _SKILL = "brand-review"
 _NAMESPACED = f"{_PLUGIN}:{_SKILL}"
 _SKILL_BODY_MARKER = "plugin skill body marker c7e1f4"
-
-
-@pytest.fixture(autouse=True)
-def isolated_skill_config(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("CODEX_HOME", raising=False)
-    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
 
 
 def _skill_md() -> str:
@@ -221,19 +214,23 @@ async def test_codex_session_resolves_plugin_namespaced_skill(
 
     # Sanity: a claude-family session exposes this installed skill under the
     # namespaced name — the name a user/model then carries into codex context.
-    claude_names = _menu_names("claude-sdk", workspace)
+    claude_app = _make_app("claude-sdk", workspace)
+    async for c in _client(claude_app):
+        claude_menu = await c.get("/v1/sessions/conv_claude_ps/skills")
+    claude_names = [s["name"] for s in claude_menu.json()["skills"]]
     assert _NAMESPACED in claude_names, (
         f"precondition: claude-family menu should namespace the plugin skill; got {claude_names}"
     )
 
     codex_app = _make_app("codex-native", workspace)
     async for c in _client(codex_app):
+        menu = await c.get("/v1/sessions/conv_codex_ps/skills")
         resolved = await c.post(
             "/v1/sessions/conv_codex_ps/skills/resolve",
             json={"name": _NAMESPACED, "arguments": ""},
         )
 
-    exposed = _menu_names("codex-native", workspace)
+    exposed = [s["name"] for s in menu.json()["skills"]]
     # Sanity: the skill IS installed and surfaced for the codex session.
     assert any(_SKILL in name for name in exposed), (
         f"precondition: installed plugin skill missing from codex menu; got {exposed}"

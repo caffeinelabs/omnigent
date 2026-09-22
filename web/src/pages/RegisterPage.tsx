@@ -25,7 +25,6 @@ import { JoinTeamStep } from "@/pages/onboarding/JoinTeamStep";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { register as registerRequest } from "@/lib/accountsApi";
-import { withBasePath } from "@/lib/basePath";
 
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -68,7 +67,7 @@ export function RegisterPage() {
     setSubmitting(true);
     const result = await registerRequest({ invite, username, password });
     if (result.ok) {
-      window.location.href = withBasePath("/");
+      window.location.href = "/";
       return;
     }
     setSubmitting(false);

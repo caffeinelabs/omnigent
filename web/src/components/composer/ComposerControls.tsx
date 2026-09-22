@@ -12,12 +12,10 @@ import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
+  DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/utils";
-import { permissionModeConcept } from "@/lib/nativeHarnessModes";
 import {
   COMPOSER_COLLAPSED_LABEL_CLASS,
   COMPOSER_WORKSPACE_COLLAPSED_LABEL_CLASS,
@@ -31,7 +29,7 @@ export function ComposerWorkspaceBar({ className, ...props }: ComponentPropsWith
     <div
       ref={barRef}
       className={cn(
-        "composer-workspace-surface group/composer-workspace relative z-0 mx-3 -mb-px flex h-[37px] min-w-0 items-center gap-0.5 rounded-t-2xl border border-b-0 border-border px-2 py-1.5 md:gap-2",
+        "group/composer-workspace relative z-0 mx-3 -mb-px flex h-[37px] min-w-0 items-center gap-0.5 rounded-t-2xl border border-b-0 border-border bg-muted/70 px-2 py-1.5 md:gap-2",
         className,
       )}
       {...props}
@@ -41,12 +39,8 @@ export function ComposerWorkspaceBar({ className, ...props }: ComponentPropsWith
 
 export const ComposerWorkspaceTrigger = forwardRef<
   HTMLButtonElement,
-  ComponentPropsWithoutRef<"button"> & {
-    kind: "directory" | "worktree";
-    label: string;
-    icon?: ReactNode;
-  }
->(function ComposerWorkspaceTrigger({ kind, label, icon, className, ...props }, ref) {
+  ComponentPropsWithoutRef<"button"> & { kind: "directory" | "worktree"; label: string }
+>(function ComposerWorkspaceTrigger({ kind, label, className, ...props }, ref) {
   const Icon = kind === "directory" ? FolderIcon : GitForkIcon;
   return (
     <button
@@ -60,7 +54,7 @@ export const ComposerWorkspaceTrigger = forwardRef<
       )}
       {...props}
     >
-      {icon ?? <Icon className="size-3.5 shrink-0" />}
+      <Icon className="size-3.5 shrink-0" />
       <span
         data-workspace-collapse-label=""
         className={cn("min-w-0 truncate text-left", COMPOSER_WORKSPACE_COLLAPSED_LABEL_CLASS)}
@@ -117,8 +111,6 @@ export const ComposerHostTrigger = forwardRef<
 export function ComposerPermissionPicker({
   label,
   value,
-  harness,
-  selectedValue,
   options,
   disabled = false,
   loading = false,
@@ -128,8 +120,6 @@ export function ComposerPermissionPicker({
 }: {
   label: string;
   value: string;
-  harness?: string | null;
-  selectedValue?: string | null;
   options: readonly { value: string; label: string }[];
   disabled?: boolean;
   loading?: boolean;
@@ -151,7 +141,6 @@ export function ComposerPermissionPicker({
           aria-label={`${label}: ${value}`}
           title={`${label}: ${value}`}
           data-testid={`${testIdPrefix}-permission-chip`}
-          data-permission-concept={permissionModeConcept(harness, selectedValue)}
         >
           <HandIcon className="size-3 shrink-0" />
           <span
@@ -166,27 +155,18 @@ export function ComposerPermissionPicker({
         align="start"
         className="w-max min-w-[13.75rem] max-w-[calc(100vw-2rem)]"
         data-testid={`${testIdPrefix}-permission-menu`}
-        onCloseAutoFocus={(event) => {
-          // A closing animation must not steal focus from a newly opened menu.
-          if (document.activeElement?.closest('[role="menu"][data-state="open"]')) {
-            event.preventDefault();
-          }
-        }}
       >
         <div className="px-2 py-1 text-xs text-muted-foreground">{label}</div>
-        <DropdownMenuRadioGroup value={selectedValue ?? undefined} onValueChange={onSelect}>
-          {options.map((option) => (
-            <DropdownMenuRadioItem
-              key={option.value}
-              value={option.value}
-              data-testid={`${testIdPrefix}-permission-option-${option.value}`}
-              data-permission-concept={permissionModeConcept(harness, option.value)}
-              className="whitespace-normal break-words"
-            >
-              {option.label}
-            </DropdownMenuRadioItem>
-          ))}
-        </DropdownMenuRadioGroup>
+        {options.map((option) => (
+          <DropdownMenuItem
+            key={option.value}
+            onSelect={() => onSelect(option.value)}
+            data-testid={`${testIdPrefix}-permission-option-${option.value}`}
+            className="whitespace-normal break-words"
+          >
+            {option.label}
+          </DropdownMenuItem>
+        ))}
       </DropdownMenuContent>
     </DropdownMenu>
   );

@@ -59,7 +59,6 @@ import httpx
 
 from .environment import BenchEnvironment, ServerRequestSnapshot
 from .measure import RunResult
-from .project_order import project_order_journeys
 
 # Per-journey context returned by ``setup`` and threaded to ``measure``. Its
 # concrete type varies by journey (an agent id, a session id, or nothing), so
@@ -89,8 +88,6 @@ class Journey:
     :param prepare: Optional coroutine run before every measured operation,
         outside that operation's latency timer. Used when each sample needs a
         repeatable precondition, such as an offline runner.
-    :param validate: Optional correctness check after each operation, excluded
-        from latency. Failures invalidate that sample, including the final one.
     :param teardown: Optional coroutine run once after timing, given ``ctx``.
     :param concurrency_safe: Whether many ``measure`` calls may run at once
         against a shared setup (true for read-only / independent-write HTTP
@@ -117,7 +114,6 @@ class Journey:
     measure: Callable[[BenchEnvironment, JourneyContext], Awaitable[None]]
     setup: Callable[[BenchEnvironment], Awaitable[JourneyContext]] | None = None
     prepare: Callable[[BenchEnvironment, JourneyContext], Awaitable[None]] | None = None
-    validate: Callable[[BenchEnvironment, JourneyContext], Awaitable[None]] | None = None
     teardown: Callable[[BenchEnvironment, JourneyContext], Awaitable[None]] | None = None
     concurrency_safe: bool = False
     needs_runner: bool = False
@@ -132,10 +128,6 @@ class Journey:
     async def run_prepare(self, env: BenchEnvironment, ctx: JourneyContext) -> None:
         if self.prepare is not None:
             await self.prepare(env, ctx)
-
-    async def run_validate(self, env: BenchEnvironment, ctx: JourneyContext) -> None:
-        if self.validate is not None:
-            await self.validate(env, ctx)
 
     async def run_teardown(self, env: BenchEnvironment, ctx: JourneyContext) -> None:
         if self.teardown is not None:
@@ -231,12 +223,10 @@ async def _timed(
     start = time.perf_counter()
     try:
         await journey.measure(env, ctx)
-        latency_ms = (time.perf_counter() - start) * 1000
-        await journey.run_validate(env, ctx)
     except Exception as exc:  # noqa: BLE001 — any failure is a recorded data point
         result.record_failure(_failure_reason(exc))
     else:
-        result.latencies_ms.append(latency_ms)
+        result.latencies_ms.append((time.perf_counter() - start) * 1000)
 
 
 # ── runners ──────────────────────────────────────────────────
@@ -263,7 +253,6 @@ async def run_latency(
             with contextlib.suppress(Exception):  # warmup errors are non-fatal
                 await journey.run_prepare(env, ctx)
                 await journey.measure(env, ctx)
-                await journey.run_validate(env, ctx)
         result = RunResult()
         count_start = await _count_start(env)
         wall_start = time.perf_counter()
@@ -319,7 +308,6 @@ async def run_throughput(
                     with contextlib.suppress(Exception):  # warmup errors are non-fatal
                         await journey.run_prepare(env, ctx)
                         await journey.measure(env, ctx)
-                        await journey.run_validate(env, ctx)
 
         if warmup:
             throwaway = RunResult()
@@ -363,7 +351,7 @@ async def _setup_target_session(env: BenchEnvironment) -> str:
     the journey still exercises the read path.
     """
     assert env.client is not None
-    listing = await env.client.get("/v1/sessions", params={"limit": 1, "visibility": "all"})
+    listing = await env.client.get("/v1/sessions", params={"limit": 1})
     listing.raise_for_status()
     data = listing.json().get("data", [])
     if data:
@@ -378,14 +366,14 @@ async def _setup_target_session(env: BenchEnvironment) -> str:
 
 async def _measure_list_sessions(env: BenchEnvironment, _ctx: JourneyContext) -> None:
     assert env.client is not None
-    resp = await env.client.get("/v1/sessions", params={"limit": 20, "visibility": "all"})
+    resp = await env.client.get("/v1/sessions", params={"limit": 20})
     resp.raise_for_status()
 
 
 async def _measure_search_sessions(env: BenchEnvironment, _ctx: JourneyContext) -> None:
     assert env.client is not None
     resp = await env.client.get(
-        "/v1/sessions", params={"limit": 20, "search_query": _SEARCH_TOKEN, "visibility": "all"}
+        "/v1/sessions", params={"limit": 20, "search_query": _SEARCH_TOKEN}
     )
     resp.raise_for_status()
 
@@ -462,9 +450,7 @@ async def _measure_list_projects(env: BenchEnvironment, _ctx: JourneyContext) ->
 async def _measure_list_project_sessions(env: BenchEnvironment, ctx: JourneyContext) -> None:
     assert env.client is not None
     project = cast(str, ctx)  # _setup_project_name
-    resp = await env.client.get(
-        "/v1/sessions", params={"limit": 20, "project": project, "visibility": "all"}
-    )
+    resp = await env.client.get("/v1/sessions", params={"limit": 20, "project": project})
     resp.raise_for_status()
 
 
@@ -950,7 +936,6 @@ async def _teardown_hook_spawn(env: BenchEnvironment, ctx: JourneyContext) -> No
 ALL_JOURNEYS: dict[str, Journey] = {
     j.name: j
     for j in (
-        *project_order_journeys(),
         Journey(
             name="list_sessions",
             kind="latency",

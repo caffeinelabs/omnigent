@@ -1,6 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { userEvent, within } from "storybook/test";
-import { structuredErrorFields } from "@/lib/blocks";
 import {
   CompactionMarker,
   ErrorBanner,
@@ -69,42 +68,6 @@ export const ClassifiedError: Story = {
   ),
 };
 
-export const NativeAgentTurnError: Story = {
-  render: () => (
-    <ErrorBanner
-      message="API Error: 502 The server received an invalid response from an upstream server."
-      source=""
-      code="native_turn_error"
-      {...structuredErrorFields({ code: "native_turn_error" }, "claude-native-ui")}
-    />
-  ),
-  play: async ({ canvasElement }) => {
-    await userEvent.click(
-      within(canvasElement).getByRole("button", {
-        name: "Claude Code ran into an error during this turn.",
-      }),
-    );
-  },
-};
-
-export const NonNativeAgentTurnError: Story = {
-  render: () => (
-    <ErrorBanner
-      message="The turn exceeded the harness watchdog timeout."
-      source="execution"
-      code="RuntimeError"
-      {...structuredErrorFields({ code: "RuntimeError", source: "execution" }, "polly")}
-    />
-  ),
-  play: async ({ canvasElement }) => {
-    await userEvent.click(
-      within(canvasElement).getByRole("button", {
-        name: "Polly ran into an error during this turn.",
-      }),
-    );
-  },
-};
-
 export const TerminalErrorExpanded: Story = {
   render: () => (
     <ErrorBanner message={terminalError} source="execution" code="required_terminal_exited" />
@@ -130,7 +93,7 @@ export const Reconnecting: Story = {
     />
   ),
   play: async ({ canvasElement }) => {
-    await userEvent.click(within(canvasElement).getByRole("button", { name: "Resume session" }));
+    await userEvent.click(within(canvasElement).getByRole("button", { name: "Retry" }));
   },
 };
 

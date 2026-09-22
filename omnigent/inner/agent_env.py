@@ -26,11 +26,6 @@ from collections.abc import Iterable, Mapping
 from omnigent._platform import WINDOWS_ENV_PASSTHROUGH
 from omnigent.runner.identity import OMNIGENT_SESSION_ENV_VAR
 
-# Desktop access requires an explicit grant outside the sandbox.
-DESKTOP_SESSION_ENV_VARS: frozenset[str] = frozenset(
-    {"DBUS_SESSION_BUS_ADDRESS", "XDG_RUNTIME_DIR"}
-)
-
 # Categories every POSIX CLI needs regardless of vendor: where the user's
 # config lives, how to reach the network, how to format output, where to put
 # temp files, and the "you are inside Omnigent" marker.
@@ -100,32 +95,17 @@ def clean_agent_env(
         for an agent that authenticates from a variable outside its own family.
     :param source: Environment to filter. Defaults to ``os.environ``; injectable
         for tests.
-    :returns: A filtered copy; desktop-session variables require ``extra_allowed``.
+    :returns: A new dict. Never mutates *source*.
     """
     env_source = os.environ if source is None else source
     prefixes = BASE_ALLOW_PREFIXES + tuple(allow_prefixes)
-    extra = set(extra_allowed)
-    exact = BASE_ALLOW_EXACT | set(allow_exact) | extra
-    denied = set(deny_exact) | (DESKTOP_SESSION_ENV_VARS - extra)
+    exact = BASE_ALLOW_EXACT | set(allow_exact) | set(extra_allowed)
+    denied = set(deny_exact)
     return {
         key: value
         for key, value in env_source.items()
         if key not in denied and (key in exact or key.startswith(prefixes))
     }
-
-
-def strip_desktop_session_env(env: Mapping[str, str]) -> dict[str, str]:
-    """Remove host desktop locators without mutating the source environment."""
-    return {key: value for key, value in env.items() if key not in DESKTOP_SESSION_ENV_VARS}
-
-
-def desktop_session_passthrough(os_env: object | None) -> dict[str, str]:
-    """Forward declared desktop variables only for explicitly unsandboxed specs."""
-    sandbox = getattr(os_env, "sandbox", None)
-    if getattr(sandbox, "type", None) != "none":
-        return {}
-    allowed = DESKTOP_SESSION_ENV_VARS.intersection(declared_passthrough(os_env))
-    return {name: os.environ[name] for name in allowed if name in os.environ}
 
 
 def declared_passthrough(os_env: object | None) -> tuple[str, ...]:
@@ -141,8 +121,4 @@ def declared_passthrough(os_env: object | None) -> tuple[str, ...]:
     """
     sandbox = getattr(os_env, "sandbox", None) if os_env is not None else None
     names = getattr(sandbox, "env_passthrough", None) if sandbox is not None else None
-    if not names:
-        return ()
-    if getattr(sandbox, "type", None) == "none":
-        return tuple(names)
-    return tuple(name for name in names if name not in DESKTOP_SESSION_ENV_VARS)
+    return tuple(names) if names else ()

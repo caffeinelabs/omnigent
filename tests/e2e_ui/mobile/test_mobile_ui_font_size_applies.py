@@ -71,7 +71,9 @@ def _stored_size(page: Page) -> str | None:
     return page.evaluate(f"() => window.localStorage.getItem('{STORAGE_KEY}')")
 
 
-def test_mobile_ui_font_size_applies_not_just_saves(page: Page, live_server: str) -> None:
+def test_mobile_ui_font_size_applies_not_just_saves(
+    page: Page, seeded_session: tuple[str, str]
+) -> None:
     """At a phone viewport, stepping the size up must visibly scale the UI.
 
     Reporter's journey: open Settings / Appearance on mobile, increase the UI
@@ -80,7 +82,7 @@ def test_mobile_ui_font_size_applies_not_just_saves(page: Page, live_server: str
     half that already worked; the rendered-size checks are the regression
     guard for the applied size.
     """
-    base_url = live_server
+    base_url, _session_id = seeded_session
     page.set_viewport_size(_MOBILE_VIEWPORT)
     _open_appearance(page, base_url)
 
