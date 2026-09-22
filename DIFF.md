@@ -25,12 +25,18 @@ Do not grow layer 3. New work lands on `develop` first and is ported to
 ### Sixth upstream sync (sync6: `origin/main` @ 16a7f046 into staging)
 
 - **What:** Merges the 331 upstream commits that landed after the sync5
-  cut (`52a06c4e`, 2026-09-14). `.github/**` keeps staging's side as in
-  every previous sync (the push token lacks the `workflow` scope; CI-only
-  drift), except `.github/ci-deps/package.json`, which takes upstream's
-  claude-code / pi pins so `pnpm-lock.yaml` (upstream's, verbatim) stays
-  frozen-lockfile clean. Adds the `938aa024b057` alembic merge revision
-  over `daba139ca998` + upstream's `ii1a2b3c4d5e`.
+  cut (`52a06c4e`, 2026-09-14). `.github/**` is staging's tree wholesale
+  (workflows, actions, scripts, triage_v2 — the push token lacks the
+  `workflow` scope, and upstream's action/script changes assume upstream's
+  workflows: mixing them tripped CodeQL cache-poisoning and the
+  auto-assign-reviewer test job), except `.github/ci-deps/package.json`,
+  which takes upstream's claude-code / pi pins so `pnpm-lock.yaml`
+  (upstream's, verbatim) stays frozen-lockfile clean. Upstream's new
+  `tests/scripts/test_{open_code_review_workflow,polly_review_output,
+  polly_review_trigger,release_ci_gate,security_gate}.py` test those
+  upstream-only `.github/scripts` and are dropped with them. Adds the
+  `938aa024b057` alembic merge revision over `daba139ca998` + upstream's
+  `ii1a2b3c4d5e`.
 - **Fork entries retired by this sync (upstream now carries them):**
   - #71 curated pi shortlist → upstream's `curated_models` /
     `resolve_model_tier` path in `pi_native/credentials.py` (plus its

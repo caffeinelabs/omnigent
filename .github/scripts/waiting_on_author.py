@@ -12,7 +12,6 @@ import urllib.parse
 import urllib.request
 from datetime import UTC, datetime
 from email.message import Message
-from pathlib import Path
 from typing import Any
 
 LABEL = "waiting-on-author"
@@ -221,24 +220,14 @@ def remove_waiting_label(api: GitHubAPI, issue_number: int, reason: str) -> bool
     return removed
 
 
-def hand_off_to_reviewer(api: GitHubAPI, pull: dict[str, Any], reason: str) -> bool:
+def hand_off_to_reviewer(api: GitHubAPI, pull: dict[str, Any], reason: str) -> None:
     """Move a PR from the author's court back into the reviewer's.
 
     The label is what maintainers filter on; the review request is what actually
     surfaces the PR in their GitHub review queue. GitHub clears the request when a
     review is submitted, so it has to be re-made here or the reply is invisible.
     """
-    config = json.loads(Path(__file__).resolve().parents[1].joinpath("areas.json").read_text())
-    paused_logins = config.get("assignment_paused", [])
-    if not isinstance(paused_logins, list) or any(
-        not isinstance(login, str) or not login for login in paused_logins
-    ):
-        raise ValueError("assignment_paused must be an array of non-empty GitHub logins")
-    paused = {login.casefold() for login in paused_logins}
-
     number = pull["number"]
-    if not remove_waiting_label(api, number, reason):
-        return False
     labels = label_names(pull)
     if REVIEW_LABEL not in labels:
         api.add_label(number, REVIEW_LABEL)
@@ -253,7 +242,7 @@ def hand_off_to_reviewer(api: GitHubAPI, pull: dict[str, Any], reason: str) -> b
             (person or {}).get("login")
             for person in (pull.get("assignees") or []) + (pull.get("requested_reviewers") or [])
         )
-        if login and login.lower() != author and login.casefold() not in paused
+        if login and login.lower() != author
     ]
     queued = api.request_review(number, sorted(set(owners))) if owners else 0
     if not queued:
@@ -261,7 +250,6 @@ def hand_off_to_reviewer(api: GitHubAPI, pull: dict[str, Any], reason: str) -> b
         # to whoever filters on it. Auto-assign normally populates assignees, so
         # this means something upstream skipped the PR.
         print(f"::warning::#{number} is {REVIEW_LABEL} with no reviewer queued")
-    return True
 
 
 def user_login(item: dict[str, Any]) -> str | None:
@@ -441,7 +429,10 @@ def clear_on_author_activity(event_name: str, payload: dict[str, Any], api: GitH
 
     if not author_activity:
         return False
-    return hand_off_to_reviewer(api, pull, reason)
+    removed = remove_waiting_label(api, pull_number, reason)
+    if removed:
+        hand_off_to_reviewer(api, pull, reason)
+    return removed
 
 
 def close_stale_waiting_prs(api: GitHubAPI, now: datetime | None = None) -> int:
@@ -465,7 +456,8 @@ def close_stale_waiting_prs(api: GitHubAPI, now: datetime | None = None) -> int:
             pull = api.get_pull(issue["number"])
             reason = author_activity_since_label(api, pull, label_applied_at)
             if reason:
-                hand_off_to_reviewer(api, pull, reason)
+                if remove_waiting_label(api, issue["number"], reason):
+                    hand_off_to_reviewer(api, pull, reason)
                 continue
 
             if days_between(label_applied_at, now) < WAITING_DAYS:

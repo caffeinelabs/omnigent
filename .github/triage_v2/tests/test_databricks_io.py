@@ -95,8 +95,7 @@ class FakeServingEndpoints:
         return self.response
 
 
-@pytest.mark.parametrize("review_bugs", [False, True])
-def test_serving_classifier_uses_online_chat_endpoint(review_bugs) -> None:
+def test_serving_classifier_uses_online_chat_endpoint() -> None:
     payload = json.dumps(
         {
             "type": "Bug",
@@ -107,48 +106,20 @@ def test_serving_classifier_uses_online_chat_endpoint(review_bugs) -> None:
     )
     serving = FakeServingEndpoints(
         SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content=payload), text=None, finish_reason="stop"
-                )
-            ]
+            choices=[SimpleNamespace(message=SimpleNamespace(content=payload), text=None)]
         )
     )
     workspace = SimpleNamespace(serving_endpoints=serving)
-    classifier = serving_endpoint_classifier(
-        "test-endpoint", AreaCatalog({}, {}), workspace, review_bugs=review_bugs
-    )
+    classifier = serving_endpoint_classifier("test-endpoint", AreaCatalog({}, {}), workspace)
 
     result = classifier.classify(IssueContent(7, "Broken flow", "It fails", (), "user"))
 
     assert result.issue_type == IssueType.BUG
     endpoint, request = serving.calls[0]
     assert endpoint == "test-endpoint"
-    assert request["max_tokens"] == (8192 if review_bugs else 2048)
+    assert request["max_tokens"] == 2048
     assert request["messages"][0].role == ChatMessageRole.USER
     assert "Broken flow" in request["messages"][0].content
-
-
-@pytest.mark.parametrize("payload", ['{"type":"Feature","impact":"low"}', '{"type":'])
-def test_serving_classifier_rejects_truncated_responses_before_json_parsing(payload):
-    serving = FakeServingEndpoints(
-        SimpleNamespace(
-            choices=[
-                SimpleNamespace(
-                    message=SimpleNamespace(content=payload), text=None, finish_reason="length"
-                )
-            ]
-        )
-    )
-    classifier = serving_endpoint_classifier(
-        "test-endpoint",
-        AreaCatalog({}, {}),
-        SimpleNamespace(serving_endpoints=serving),
-        review_bugs=True,
-    )
-    with pytest.raises(RuntimeError, match="output token limit"):
-        classifier.classify(IssueContent(7, "Broken", "", (), "user"))
-    assert len(serving.calls) == 1
 
 
 def test_serving_classifier_rejects_empty_response() -> None:
