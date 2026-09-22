@@ -35,9 +35,9 @@ export function OpenInVsCodeRemote({
   const online =
     liveOnline === undefined ? (host ? host.status === "online" : undefined) : liveOnline;
 
-  const sshpiperHost = info !== "loading" ? info.sshpiper_host : null;
-  const sshpiperPort = info !== "loading" ? info.sshpiper_port : null;
-  const sshpiperUser = info !== "loading" ? info.sshpiper_user : null;
+  const sshpiperHost = info !== "loading" ? (info.sshpiper_host ?? null) : null;
+  const sshpiperPort = info !== "loading" ? (info.sshpiper_port ?? null) : null;
+  const sshpiperUser = info !== "loading" ? (info.sshpiper_user ?? null) : null;
   const workspace = session?.workspace ?? null;
   const sshTarget = host?.ssh_target ?? null;
   const sshpiperUsername = host?.sshpiper_username ?? null;

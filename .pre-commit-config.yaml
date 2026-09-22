@@ -55,6 +55,17 @@ repos:
         # tests/dev/lint/test_lint_no_hardcoded_models.py).
         exclude: (^|/)tests/|^openapi\.json$|^\.github/workflows/(auto-assign-reviewer|doc-sync|e2e-ui-required|feature-blog|flake-stress-e2e|issue-triage|polly-review|security-triage|vscode-release-pr)\.yml$
 
+      # Aggregate runner for project-specific lint rules (dev/lint/custom_lint.py).
+      # Add a new rule by registering it there — not by adding another hook.
+      - id: custom-lint
+        name: custom project lint rules
+        language: system
+        entry: >-
+          bash -c '.venv/bin/python -m dev.lint.custom_lint &&
+          node --test dev/lint/session_list_visibility.test.mjs'
+        pass_filenames: false
+        files: \.(py|[cm]?[jt]sx?|sh)$|^(\.pre-commit-config\.yaml|\.github/workflows/lint\.yml)$
+
       - id: web-prettier
         name: web prettier
         language: system

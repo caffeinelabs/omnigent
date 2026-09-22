@@ -73,6 +73,7 @@ def _git_timeout_seconds() -> float:
 # the one-shot config write doesn't repeat.  The host fallback path builds a
 # fresh registry per fs request (unlike the runner, which caches per session),
 # so without this guard every request would re-spawn the ``git config``.
+# custom-lint: disable-next=workspace-scoped-cache -- keyed by git-root filesystem path
 _untracked_cache_enabled: set[str] = set()
 _untracked_cache_lock = threading.Lock()
 
@@ -1426,7 +1427,17 @@ def create_filesystem_registry(watch_path: Path) -> FilesystemRegistry:
     :returns: A :class:`FilesystemRegistry` instance ready to be used.
     """
     resolved = watch_path.resolve()
-    git_root = _find_git_root(resolved)
+    try:
+        git_root = _find_git_root(resolved)
+    except OSError as exc:
+        _logger.warning(
+            "Git metadata is unavailable; using ordinary file-change tracking",
+            extra={
+                "event_name": "filesystem_git_discovery_failed",
+                "attributes": {"exception_type": type(exc).__name__, "errno": exc.errno},
+            },
+        )
+        git_root = None
     if git_root is not None:
         return GitFilesystemRegistry(watch_path, git_root)
     child_repos = _find_child_git_repos(resolved)
