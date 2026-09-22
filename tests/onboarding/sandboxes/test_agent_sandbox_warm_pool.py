@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import inspect
 import json
 import os
 import sys
@@ -933,6 +934,50 @@ def test_warm_launch_accepts_admission_added_tolerations(
     sandbox_id = harness.launcher.provision("managed-test")
     assert harness.launcher.start_host(sandbox_id, **_START_ARGS) == "/home/omnigent/workspace"
     assert len([call for call in execute.call_args_list if call.args[2] == "activate"]) == 1
+
+
+def test_warm_launch_accepts_and_drops_session_url(
+    harness: _Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The server threads ``session_url`` to every launcher declaring
+    ``classifies_runner_by_agent`` — which this launcher inherits from the
+    Kubernetes base — so the warm path must ACCEPT the keyword (a missing
+    keyword fails every launch with TypeError). It is dropped on purpose:
+    ``Activation.parse`` pins an exact payload key-set, so the URL can only
+    reach the bootstrap after an activation-version bump."""
+    execute = _exec_states(harness, monkeypatch, "waiting", "prepared")
+    sandbox_id = harness.launcher.provision("managed-test")
+    assert (
+        harness.launcher.start_host(
+            sandbox_id, **_START_ARGS, session_url="https://omni.example.com/c/sess_abc"
+        )
+        == "/home/omnigent/workspace"
+    )
+    payload = next(call.args[3] for call in execute.call_args_list if call.args[2] == "activate")
+    assert "session_url" not in payload
+
+
+def test_legacy_handle_forwards_session_url_to_plain_start_host(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A non-pool handle delegates to the Kubernetes launcher with the URL
+    intact, so plain runners keep the Open-in-Omnigent ``gh`` wrapper."""
+    launcher = _launcher()
+    delegated = MagicMock(return_value="legacy-result")
+    monkeypatch.setattr(AgentSandboxLauncher, "start_host", delegated)
+    url = "https://omni.example.com/c/sess_abc"
+    assert launcher.start_host("legacy-sandbox", **_START_ARGS, session_url=url) == "legacy-result"
+    assert delegated.call_args.kwargs["session_url"] == url
+
+
+def test_start_host_override_never_narrows_the_base_signature() -> None:
+    """Sync guard: the server threads kwargs by capability, not by concrete
+    class, so this override must accept every keyword the base
+    ``KubernetesSandboxLauncher.start_host`` declares — including fork-only
+    ones like ``session_url`` that upstream resyncs cannot know about."""
+    base = inspect.signature(k8s.KubernetesSandboxLauncher.start_host)
+    override = inspect.signature(warm.AgentSandboxWarmPoolLauncher.start_host)
+    assert set(base.parameters) <= set(override.parameters)
 
 
 @pytest.mark.parametrize(
