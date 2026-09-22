@@ -1446,19 +1446,27 @@ def _inline_family_pi_provider(
             )
         )
         shortlist: list[_PiModelEntry] = [model_entry]
-        # A session override must not turn a default-only setup into a shortlist.
+        # A session override must not turn a default-only setup into a
+        # picker-scoped shortlist.
         curated_models = len(tier_ids) > 1
-        if curated_models:
-            for tier_id in tier_ids:
-                if tier_id == resolved_model:
-                    continue
-                shortlist.append(
-                    _gateway_pi_model_entry(
-                        tier_id,
-                        configured_context_window=family.context_window,
-                        configured_max_output_tokens=family.max_output_tokens,
-                    )
+        # Fork: register the family's tiers alongside a distinct session
+        # override even when the tier map is default-only. The fork strips
+        # ambient credentials (OMNIGENT_PI_ENV_UNSET), so models.json IS the
+        # picker — dropping the family default here strands the user on the
+        # override with no way back. (The loop is a no-op when the only tier
+        # is the selected model, so an un-overridden default-only setup stays
+        # a single entry, as upstream intends.) ``curated_models`` still gates
+        # only the enabledModels picker scoping, not registration.
+        for tier_id in tier_ids:
+            if tier_id == resolved_model:
+                continue
+            shortlist.append(
+                _gateway_pi_model_entry(
+                    tier_id,
+                    configured_context_window=family.context_window,
+                    configured_max_output_tokens=family.max_output_tokens,
                 )
+            )
         return PiProviderConfig(
             provider_id=_PI_PROVIDER_ID,
             base_url=family.base_url,

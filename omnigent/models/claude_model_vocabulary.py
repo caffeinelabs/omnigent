@@ -310,18 +310,18 @@ def claude_model_command_arg(
     if custom and normalized_model_id(custom) == normalized_model_id(model):
         return custom
     candidate = model.strip()
-    lowered = candidate.lower()
-    # A full model id names an EXACT model, and ``/model`` on an unpinned
-    # (canonical- or gateway-endpoint) session accepts full ids verbatim — the
-    # same spelling the harness's own enumeration resolves. Stepping down to a
-    # family alias would switch to the CURRENT generation instead (picking
-    # "Opus 4.8 (1M context)" used to type ``/model opus`` and land on Opus 5).
-    # Besides canonical ``claude-*`` ids this also covers a connected Databricks
-    # gateway's ``system.ai.<model>`` catalog (kimi, glm, deepseek, claude, …),
-    # whose non-alias ids Claude Code likewise takes as "a full model ID" — so
-    # the picker can switch to any workspace model, not just the Claude family.
-    is_full_id = lowered.startswith(("claude-", "system.ai.")) or "/" in candidate
-    if not alias_pins(env) and is_full_id:
+    if not alias_pins(env) and candidate.lower().startswith("claude-"):
+        # A full Anthropic model id names an EXACT generation, and ``/model``
+        # on an unpinned (canonical-endpoint) session accepts full ids
+        # verbatim — the same spelling the harness's own enumeration
+        # resolves. Stepping down to the family alias here would switch to
+        # claude's CURRENT generation of that family instead (picking
+        # "Opus 4.8 (1M context)" used to type ``/model opus`` and land on
+        # Opus 5).
+        # Gateway ids (``system.ai.*``, ``provider/model``) deliberately do
+        # NOT pass through: they are accepted only as a picker value, so an
+        # authoritative empty catalog (every picker entry disabled) leaves
+        # nothing switchable instead of silently reviving stale vocabulary.
         return candidate
     return claude_model_alias(model, env)
 
