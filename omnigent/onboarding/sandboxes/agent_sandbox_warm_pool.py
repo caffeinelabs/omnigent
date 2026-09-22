@@ -607,8 +607,15 @@ class AgentSandboxWarmPoolLauncher(AgentSandboxLauncher):
         repos: Sequence[RepoWorkspace] = (),
         host_config: dict[str, object] | None = None,
         agent_name: str | None = None,
+        session_url: str | None = None,
         on_stage: Callable[[str], None] | None = None,
     ) -> str:
+        # ``session_url`` (fork: Open-in-Omnigent PR button) MUST be declared
+        # here: the server threads it to every launcher whose capabilities
+        # declare ``classifies_runner_by_agent``, which this class inherits
+        # from ``KubernetesSandboxLauncher``. Without the keyword the launch
+        # dies with ``TypeError: start_host() got an unexpected keyword
+        # argument 'session_url'`` before any Pod is touched.
         if not sandbox_id.startswith(_HANDLE_PREFIX):
             return super().start_host(
                 sandbox_id,
@@ -619,8 +626,15 @@ class AgentSandboxWarmPoolLauncher(AgentSandboxLauncher):
                 repos=repos,
                 host_config=host_config,
                 agent_name=agent_name,
+                session_url=session_url,
                 on_stage=on_stage,
             )
+        # Warm-pool activation deliberately drops ``session_url`` for now: the
+        # bootstrap's ``Activation.parse`` requires an exact payload key-set,
+        # so a new key can only ride a version bump coordinated with the host
+        # image. Warm runners simply skip the PR-body ``gh`` wrapper until
+        # then; a plain (non-pool) runner still gets it via the super() call
+        # above.
         _ensure_sdk()
         handle = WarmPoolHandle.parse(sandbox_id)
         workspace = f"{_HOME_DIR}/workspace"
