@@ -566,12 +566,14 @@ class _CodexNativeLaunchConfig:
         rollout exists to clone (an SDK or cross-family source) the runner
         builds the clone's rollout from the copied Omnigent items instead (see
         ``_ensure_local_codex_resume_rollout``).
-    :param bypass_sandbox: ``True`` when the session opted into Codex's
-        DANGEROUS full-bypass stance (``omnigent.codex_native.bypass_sandbox``
-        label == ``"1"``). The runner then launches the ``--remote`` TUI with
-        ``--dangerously-bypass-approvals-and-sandbox`` and aligns the
-        app-server threads (no approval prompts, no command sandbox). Default
-        ``False``. See issue #657.
+    :param bypass_sandbox: ``True`` when the session should launch with Codex's
+        DANGEROUS full-bypass stance (``--dangerously-bypass-approvals-and-sandbox``,
+        no approval prompts, no command sandbox). Set by the explicit opt-in
+        label (``omnigent.codex_native.bypass_sandbox`` == ``"1"``), or
+        automatically when the host cannot run Codex's command sandbox at all
+        (no unprivileged user namespaces — every shell command would otherwise
+        hard-fail with bwrap's "No permissions to create new namespace"; see
+        issue #657). An explicit label always wins over the host-based default.
     :param auto_harness: ``True`` when the session started in Smart Routing's
         auto-harness mode (``omnigent.routing.auto_harness`` label or a
         ``harness_override`` of ``"auto"``), so the router may re-route its
@@ -604,6 +606,10 @@ class _CodexNativeLaunchConfig:
     fork_source_external_id: str | None
     fork_carry_history: bool
     bypass_sandbox: bool
+    # Host lacks unprivileged user namespaces, so ``bypass_sandbox`` was
+    # auto-enabled (not user-requested). The launch site persists the label
+    # from this so restarts/forks stay coherent. See issue #657.
+    host_userns_unavailable: bool = False
     auto_harness: bool = False
     routing_enabled: bool = False
     turn_routing: bool = False
@@ -1286,9 +1292,18 @@ async def _codex_native_launch_config(
     _cost_control = snapshot.get("cost_control_mode_override")
     # DANGEROUS opt-in: full approval/sandbox bypass, stored as a plain
     # conversation label ("1" to enable). Read here so the runner applies
-    # it at launch; any other value (incl. absent) leaves the normal stance.
+    # it at launch; any other value (incl. absent) leaves the normal
+    # stance — except on a host that cannot run Codex's command sandbox
+    # at all (no unprivileged user namespaces), where the stance is
+    # auto-enabled below. See issue #657.
     bypass_sandbox = False
+    host_userns_unavailable = False
     labels = snapshot.get("labels")
+    # Whether a stored label explicitly decided the bypass stance. When no
+    # label did (absent labels dict, or the key simply not set), the host
+    # probe below decides instead — so a fresh session on a hardened host
+    # still gets a working stance.
+    label_decided_bypass = False
     if isinstance(labels, dict):
         _fsi = labels.get(FORK_SOURCE_LABEL_KEY)
         if isinstance(_fsi, str) and _fsi:
@@ -1298,6 +1313,27 @@ async def _codex_native_launch_config(
             fork_source_external_id = _fse
         fork_carry_history = labels.get(FORK_CARRY_HISTORY_LABEL_KEY) == "1"
         bypass_sandbox = labels.get(CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY) == "1"
+        label_decided_bypass = CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY in labels
+    # Host-based default for the same stance: Codex's command sandbox
+    # needs unprivileged user namespaces, and on a hardened container
+    # that disallows them every shell command hard-fails with bwrap's
+    # "No permissions to create new namespace", leaving the session
+    # unusable (#657). Only consulted when no label decided the stance,
+    # so a deliberate "0" opt-out is honored even on a broken host.
+    # Flagged separately so the launch site can persist the label —
+    # keeping forks, restarts, and UI read-backs coherent with the
+    # stance this session actually launched with.
+    if not label_decided_bypass:
+        from omnigent.inner.sandbox import linux_userns_supported
+
+        try:
+            host_userns_unavailable = not linux_userns_supported()
+        except Exception:  # noqa: BLE001 — probe failure must never block the launch
+            _logger.warning(
+                "user-namespace probe failed; keeping Codex's normal sandbox stance",
+                exc_info=True,
+            )
+        bypass_sandbox = host_userns_unavailable
     # One derivation of the session's Smart Routing class, shared with the SDK
     # codex path, so "pinned" and "auto-harness" mean the same on both.
     routing_class = routing_class_from_snapshot(
@@ -1315,6 +1351,7 @@ async def _codex_native_launch_config(
         fork_source_external_id=fork_source_external_id,
         fork_carry_history=fork_carry_history,
         bypass_sandbox=bypass_sandbox,
+        host_userns_unavailable=host_userns_unavailable,
         auto_harness=routing_class.auto_harness,
         routing_enabled=routing_class.routing_enabled,
         turn_routing=routing_class.turn_routing,
@@ -4865,6 +4902,48 @@ async def _auto_create_codex_terminal(
     )
     # SDK initialization can block on DNS/auth before model discovery times out.
     # Keep it off the runner loop so heartbeats and other sessions can progress.
+    # When the full-bypass stance was auto-enabled for this host (no
+    # unprivileged user namespaces — Codex's command sandbox could never
+    # start, #657), persist the label the user never wrote: forks read it to
+    # seed the same stance, runner restarts re-resolve it without re-probing
+    # drift, and the web fork dialog reads it back. A no-op when the label
+    # was already set (explicit opt-in/out) — only the host-derived default
+    # is materialized.
+    if launch_config.host_userns_unavailable:
+        from omnigent.stores.conversation_store import CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY
+
+        try:
+            if server_client is not None:
+                await server_client.patch(
+                    f"/v1/sessions/{urllib.parse.quote(session_id, safe='')}",
+                    json={"labels": {CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY: "1"}},
+                    timeout=10.0,
+                )
+                _logger.info(
+                    "codex-native: host has no unprivileged user namespaces; "
+                    "launched session %s with Codex's full-bypass stance and "
+                    "persisted %s=1",
+                    session_id,
+                    CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY,
+                    extra={"session_id": session_id},
+                )
+            else:
+                _logger.warning(
+                    "codex-native: host has no unprivileged user namespaces; "
+                    "session %s launched with Codex's full-bypass stance but no "
+                    "server client to persist the label on",
+                    session_id,
+                    extra={"session_id": session_id},
+                )
+        except Exception as exc:  # noqa: BLE001 — label persistence must never block the launch
+            _logger.warning(
+                "codex-native: could not persist %s=1 for session %s (%s); "
+                "the stance still applies to this launch",
+                CODEX_NATIVE_BYPASS_SANDBOX_LABEL_KEY,
+                session_id,
+                exc,
+                extra={"session_id": session_id},
+            )
     app_server = await asyncio.to_thread(
         build_codex_native_server,
         session_id=session_id,
