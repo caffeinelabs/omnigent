@@ -24,7 +24,6 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, TextIO
 from unittest.mock import Mock
-from urllib.error import URLError
 
 import pytest
 
@@ -5714,7 +5713,7 @@ def test_inject_slash_command_raises_when_tmux_target_never_published(
 @pytest.mark.parametrize(
     "transport_error",
     [
-        URLError("bridge unavailable"),
+        ConnectionRefusedError("bridge unavailable"),
         ConnectionResetError("connection reset"),
         RemoteDisconnected("bridge disconnected"),
         TimeoutError("notification timed out"),
@@ -5727,9 +5726,13 @@ def test_post_tools_changed_normalizes_transport_errors(
     monkeypatch.setattr(
         claude_native_bridge,
         "_wait_for_server_info",
-        Mock(return_value={"url": "http://127.0.0.1:12345", "token": "test-token"}),
+        Mock(return_value={"socket": "/tmp/og-mcp-test.sock", "token": "test-token"}),
     )
-    monkeypatch.setattr(claude_native_bridge.request, "urlopen", Mock(side_effect=transport_error))
+    monkeypatch.setattr(
+        claude_native_bridge,
+        "_control_connection",
+        lambda server: Mock(request=Mock(side_effect=transport_error)),
+    )
 
     with pytest.raises(RuntimeError, match="failed to notify Claude tool list change") as caught:
         post_tools_changed(tmp_path)
@@ -5789,10 +5792,12 @@ def test_post_tools_changed_preserves_programming_errors(
     monkeypatch.setattr(
         claude_native_bridge,
         "_wait_for_server_info",
-        Mock(return_value={"url": "http://127.0.0.1:12345", "token": "test-token"}),
+        Mock(return_value={"socket": "/tmp/og-mcp-test.sock", "token": "test-token"}),
     )
     monkeypatch.setattr(
-        claude_native_bridge.request, "urlopen", Mock(side_effect=ValueError("bug"))
+        claude_native_bridge,
+        "_control_connection",
+        lambda server: Mock(request=Mock(side_effect=ValueError("bug"))),
     )
 
     with pytest.raises(ValueError, match="bug"):
@@ -11503,6 +11508,76 @@ def test_http_ingress_all_interfaces_opt_in_advertises_routable_host(
         assert info["url"] == f"http://203.0.113.9:{port}"
         with socket.create_connection(("127.0.0.1", port), timeout=5):
             pass
+        connection = claude_native_bridge._control_connection(info)
+        assert (connection.host, connection.port) == ("203.0.113.9", port)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+@pytest.fixture
+def _short_harness_socket_root(monkeypatch: pytest.MonkeyPatch) -> Iterator[Path]:
+    """Point the harness socket root at a short ``/tmp`` dir (``sun_path`` caps at 104 bytes)."""
+    with tempfile.TemporaryDirectory(prefix="og-mcp-", dir="/tmp") as root:
+        monkeypatch.setenv("OMNIGENT_HARNESS_TMP_PARENT", root)
+        yield Path(root)
+
+
+@pytest.mark.usefixtures("_no_ambient_bridge_network")
+def test_http_ingress_defaults_to_unix_socket(
+    tmp_path: Path, _short_harness_socket_root: Path
+) -> None:
+    """Without the bind-host override the control ingress opens no TCP port.
+
+    Remote-dev port forwarders mirror every loopback listener to the laptop
+    and cap how many they will, so the per-``serve-mcp`` control endpoint
+    lives on a Unix socket: ``post_tools_changed`` reaches it there, and
+    closing the server removes the socket file.
+    """
+    bridge_dir = prepare_bridge_dir("conv_ingress_uds", workspace=tmp_path)
+    notifications: queue.Queue[dict[str, object] | None] = queue.Queue()
+    httpd = claude_native_bridge._start_http_ingress(bridge_dir, "test-token", notifications)
+    try:
+        info = json.loads(
+            (bridge_dir / claude_native_bridge._SERVER_FILE).read_text(encoding="utf-8")
+        )
+        assert "url" not in info
+        socket_path = Path(info["socket"])
+        assert socket_path == _short_harness_socket_root / f"mcp-{os.getpid()}.sock"
+        assert socket_path.stat().st_mode & 0o777 == 0o600
+        post_tools_changed(bridge_dir, timeout_s=5.0)
+        assert notifications.get(timeout=5.0) == {
+            "jsonrpc": "2.0",
+            "method": "notifications/tools/list_changed",
+            "params": {},
+        }
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    assert not socket_path.exists()
+
+
+@pytest.mark.usefixtures("_no_ambient_bridge_network")
+def test_http_ingress_reaps_sockets_of_dead_owners(
+    tmp_path: Path, _short_harness_socket_root: Path
+) -> None:
+    """A killed pane leaves its ``serve-mcp`` socket behind; the next start reaps it by pid.
+
+    A socket whose owner is still alive belongs to another live session and stays.
+    """
+    exited = subprocess.Popen([sys.executable, "-c", ""])
+    exited.wait(timeout=30)
+    stale = _short_harness_socket_root / f"mcp-{exited.pid}.sock"
+    live = _short_harness_socket_root / f"mcp-{os.getppid()}.sock"
+    stale.touch()
+    live.touch()
+    bridge_dir = prepare_bridge_dir("conv_ingress_reap", workspace=tmp_path)
+    notifications: queue.Queue[dict[str, object] | None] = queue.Queue()
+    httpd = claude_native_bridge._start_http_ingress(bridge_dir, "test-token", notifications)
+    try:
+        assert not stale.exists()
+        assert live.exists()
+        assert (_short_harness_socket_root / f"mcp-{os.getpid()}.sock").exists()
     finally:
         httpd.shutdown()
         httpd.server_close()
