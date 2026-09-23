@@ -481,6 +481,50 @@ def test_create_registry_aggregates_sibling_repos(tmp_path: Path) -> None:
     assert reg.get_changed_file("conv_test", "unknown/x.py") is None
 
 
+@pytest.mark.skipif(os.geteuid() == 0, reason="root ignores directory permission bits")
+def test_create_registry_skips_unreadable_sibling_dirs(tmp_path: Path) -> None:
+    """An opaque (0700 root-style) sibling dir must not crash repo discovery.
+
+    Mirrors an automation session on a managed sandbox: the workspace defaults
+    to ``$HOME``, where the sshd sidecar leaves a root-owned, unreadable
+    ``~/.sshd``. Probing ``<child>/.git`` stats THROUGH the child, so
+    ``is_dir()`` raises ``PermissionError`` (pathlib only swallows
+    ENOENT-class errors) — the runner then died with exit 1 before serving.
+    The unreadable child is skipped; readable sibling repos keep multi-repo
+    detection.
+    """
+    workspace = tmp_path / "home"
+    _init_repo_with_commit(workspace / "alpha", "a.py", "alpha original\n")
+    locked = workspace / ".sshd"
+    locked.mkdir()
+    locked.chmod(0)
+    try:
+        reg = create_filesystem_registry(workspace)
+    finally:
+        locked.chmod(0o755)
+    # The readable repo still drives multi-repo detection.
+    assert isinstance(reg, MultiRepoGitFilesystemRegistry)
+    assert reg.get_baseline("alpha/a.py") == "alpha original\n"
+
+
+def test_create_registry_plain_workspace_with_unreadable_sibling(tmp_path: Path) -> None:
+    """With no readable repos at all, discovery degrades to plain tracking.
+
+    Same automation-on-$HOME shape but without any cloned repo: the registry
+    must fall back to :class:`AgentEditFilesystemRegistry`, never raise.
+    (Runs as root too: iterdir + the try/except path are exercised even when
+    the permission bit is ineffective.)
+    """
+    workspace = tmp_path / "home"
+    (workspace / ".sshd").mkdir(parents=True)
+    (workspace / ".sshd").chmod(0)
+    try:
+        reg = create_filesystem_registry(workspace)
+    finally:
+        (workspace / ".sshd").chmod(0o755)
+    assert isinstance(reg, AgentEditFilesystemRegistry)
+
+
 def test_git_list_changed_files_excludes_terminals_dir(tmp_path: Path) -> None:
     """``list_changed_files`` must not surface files under the ``terminals/`` directory.
 

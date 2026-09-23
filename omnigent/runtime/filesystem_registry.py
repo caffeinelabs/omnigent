@@ -228,8 +228,18 @@ def _find_child_git_repos(path: Path) -> list[Path]:
     repos: list[Path] = []
     for child in children:
         git_entry = child / ".git"
-        if git_entry.is_dir() or git_entry.is_file():
-            repos.append(child)
+        # Per-child guard, mirroring upstream #7689's discovery hardening:
+        # probing `<child>/.git` stats THROUGH the child, so an unreadable
+        # sibling (an automation workspace defaults to $HOME, where the
+        # managed-sandbox sshd sidecar leaves a root-owned 0700 ~/.sshd)
+        # raises PermissionError — pathlib only swallows ENOENT-class
+        # errors. One opaque dotdir must not crash the runner or disable
+        # multi-repo detection for the readable siblings.
+        try:
+            if git_entry.is_dir() or git_entry.is_file():
+                repos.append(child)
+        except OSError:
+            continue
     return repos
 
 
