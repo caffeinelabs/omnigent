@@ -141,27 +141,136 @@ async def test_happy_path_parses_full_config(monkeypatch: pytest.MonkeyPatch) ->
 @pytest.mark.parametrize(
     "labels",
     [
-        None,  # no labels at all
-        {},  # labels present but no bypass key
         {"omnigent.codex_native.bypass_sandbox": "0"},  # explicit off
         {"omnigent.codex_native.bypass_sandbox": "true"},  # only "1" arms it
         {"omnigent.codex_native.bypass_sandbox": ""},  # empty string
     ],
 )
 async def test_bypass_sandbox_defaults_off_unless_label_is_one(
+    monkeypatch: pytest.MonkeyPatch, labels: dict[str, str]
+) -> None:
+    """
+    Fail-safe: ``bypass_sandbox`` is False unless the label is ``"1"`` or
+    the host probe arms it.
+
+    When a bypass label is PRESENT (any value — ``"0"``, ``"true"``, ``""``),
+    it decides the stance: only the canonical ``"1"`` (set by the guarded
+    web toggle) arms the full bypass, every near-miss leaves Codex's normal
+    approval/sandbox stance, and the host probe is never consulted — a
+    deliberate ``"0"`` opt-out is honored even on a hardened host. (The
+    no-labels-at-all case is covered by
+    ``test_userns_capable_host_keeps_normal_stance`` and
+    ``test_host_without_userns_auto_enables_bypass`` — with no label the
+    host probe decides.)
+    """
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
+    # Pin the host probe so this test doesn't depend on the CI runner's
+    # kernel: with a label present the probe must not even be consulted.
+    probe_calls: list[int] = []
+
+    def _unexpected_probe() -> bool:
+        probe_calls.append(1)
+        return False
+
+    monkeypatch.setattr("omnigent.inner.sandbox.linux_userns_supported", _unexpected_probe)
+    snapshot: dict[str, Any] = {"workspace": "/tmp/repo", "labels": dict(labels)}
+    cfg = await _run(_Client(_Resp(200, snapshot)))
+    assert cfg.bypass_sandbox is False
+    assert probe_calls == [], "a stored label must decide the stance, not the host probe"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "labels",
+    [
+        None,  # no labels at all — nothing decided the stance explicitly
+        {},  # labels present but no bypass key
+    ],
+)
+async def test_host_without_userns_auto_enables_bypass(
     monkeypatch: pytest.MonkeyPatch, labels: Any
 ) -> None:
     """
-    Fail-safe: ``bypass_sandbox`` is False unless the label is exactly ``"1"``.
+    A hardened container (no unprivileged user namespaces) auto-enables bypass.
 
-    The dangerous full-bypass stance must never be entered by accident, so an
-    absent label, an unrelated value, or any near-miss (``"0"``, ``"true"``,
-    ``""``) leaves Codex in its normal approval/sandbox stance. Only the
-    canonical ``"1"`` (set by the guarded web toggle) arms it.
+    On such a host Codex's own command sandbox cannot start, so every
+    shell command hard-fails with bwrap's "No permissions to create new
+    namespace" and the session is unusable (#657). When the snapshot
+    carries NO bypass label, the runner consults the host probe and arms
+    the same full-bypass stance the web toggle would have — plus
+    ``host_userns_unavailable`` so the launch site persists the label.
     """
     monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
+    monkeypatch.setattr("omnigent.inner.sandbox.linux_userns_supported", lambda: False)
     snapshot: dict[str, Any] = {"workspace": "/tmp/repo"}
     if labels is not None:
         snapshot["labels"] = labels
     cfg = await _run(_Client(_Resp(200, snapshot)))
+    assert cfg.bypass_sandbox is True, (
+        "A host that cannot run Codex's command sandbox must default to bypass."
+    )
+    assert cfg.host_userns_unavailable is True, (
+        "The launch site persists the label only when the stance was host-derived."
+    )
+
+
+@pytest.mark.asyncio
+async def test_explicit_label_wins_over_host_probe(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    An explicit label decides the stance; the host probe is never consulted.
+
+    ``"1"`` stays armed AND ``"0"`` stays disarmed even on a host whose
+    command sandbox can never start — a deliberate operator choice (or the
+    persisted record of one) outranks the host-based default. Neither case
+    flags ``host_userns_unavailable``, so the launch site writes no label.
+    """
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
+    monkeypatch.setattr("omnigent.inner.sandbox.linux_userns_supported", lambda: False)
+    snapshot: dict[str, Any] = {
+        "workspace": "/tmp/repo",
+        "labels": {"omnigent.codex_native.bypass_sandbox": "0"},
+    }
+    cfg = await _run(_Client(_Resp(200, snapshot)))
     assert cfg.bypass_sandbox is False
+    assert cfg.host_userns_unavailable is False
+    snapshot["labels"] = {"omnigent.codex_native.bypass_sandbox": "1"}
+    cfg = await _run(_Client(_Resp(200, snapshot)))
+    assert cfg.bypass_sandbox is True
+    assert cfg.host_userns_unavailable is False
+
+
+@pytest.mark.asyncio
+async def test_userns_capable_host_keeps_normal_stance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """On a host where the command sandbox works, nothing changes."""
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
+    monkeypatch.setattr("omnigent.inner.sandbox.linux_userns_supported", lambda: True)
+    cfg = await _run(_Client(_Resp(200, {"workspace": "/tmp/repo"})))
+    assert cfg.bypass_sandbox is False
+    assert cfg.host_userns_unavailable is False
+
+
+@pytest.mark.asyncio
+async def test_probe_failure_keeps_normal_stance(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    A crashing host probe must not block the launch NOR arm bypass.
+
+    Failing closed (normal stance) is the fail-safe direction here: a
+    session that hits the bwrap error still gets the forwarder's recovery
+    guidance, while a silently disarmed sandbox is never entered by
+    accident on an inconclusive probe.
+    """
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8123")
+
+    def _boom() -> bool:
+        raise OSError("seccomp denies everything")
+
+    monkeypatch.setattr("omnigent.inner.sandbox.linux_userns_supported", _boom)
+    cfg = await _run(_Client(_Resp(200, {"workspace": "/tmp/repo"})))
+    assert cfg.bypass_sandbox is False
+    assert cfg.host_userns_unavailable is False

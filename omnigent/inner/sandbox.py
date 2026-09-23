@@ -1205,6 +1205,83 @@ def _ensure_builtin_backends() -> None:
         from . import windows_jobobject_sandbox  # noqa: F401
 
 
+# Cache for :func:`linux_userns_supported`. ``None`` = not probed yet;
+# otherwise the probe's verdict. Module-level because the kernel setting
+# cannot change under a running process, so the first answer is final.
+_linux_userns_supported_cache: bool | None = None
+
+
+def linux_userns_supported() -> bool:
+    """
+    Probe whether this Linux host permits unprivileged user namespaces.
+
+    Codex's own command sandbox (and bubblewrap generally) shells out to
+    ``clone``/``unshare`` with ``CLONE_NEWUSER``; hardened containers
+    (Docker's default seccomp profile, some k8s pods) deny it, so those
+    sandboxes cannot start — every shell command fails with bwrap's
+    "No permissions to create new namespace" (see omnigent-ai/omnigent#657).
+    Callers use this to pick a stance that works on the host instead of
+    failing per-command at runtime.
+
+    The probe runs ``unshare(CLONE_NEWUSER)`` in a forked child and waits
+    for it — never in-process, because a successful ``unshare`` here would
+    irreversibly move the *caller* into a fresh user namespace (breaking
+    ``setuid`` and every later namespace creation). The child also exits
+    via ``os._exit`` so its successful new namespace can never leak into
+    the interpreter. libc is loaded in the parent *before* the fork so the
+    child only makes a plain syscall call — importing or dlopen-ing in a
+    forked child could deadlock on a lock the parent held at fork time.
+    All fork/wait failures (including the fork not being permitted at
+    all) count as "unsupported" — a host this locked down cannot run
+    user-namespace sandboxes either.
+
+    Results are cached: the kernel setting cannot change under a running
+    process. Non-Linux platforms return ``False`` — the probe answers
+    "can this host run a Linux user-namespace sandbox?", which is
+    meaningless outside Linux.
+
+    :returns: ``True`` when a fresh user namespace can be created.
+    """
+    global _linux_userns_supported_cache
+    if _linux_userns_supported_cache is not None:
+        return _linux_userns_supported_cache
+    if sys.platform != "linux":
+        _linux_userns_supported_cache = False
+        return False
+    supported = False
+    try:
+        # Load libc in the parent: the forked child then only calls an
+        # already-resolved function pointer (no import, no dlopen — either
+        # could deadlock on a lock the parent held at fork time).
+        import ctypes
+
+        libc = ctypes.CDLL(None, use_errno=True)
+        pid = os.fork()
+    except OSError:
+        # Fork itself is denied (seccomp/pid-limits): treat as unsupported.
+        _linux_userns_supported_cache = False
+        return False
+    if pid == 0:  # pragma: no cover — child path, never returns
+        status = 1
+        try:
+            # Numeric flag matches omnigent.inner.bwrap_sandbox._CLONE_NEWUSER.
+            rc = libc.unshare(ctypes.c_ulong(0x10000000))  # CLONE_NEWUSER
+            status = 0 if rc == 0 else 1
+        except Exception:  # noqa: BLE001 — probe child must never traceback
+            status = 1
+        finally:
+            os._exit(status)
+    # A short bound is plenty: an unshare either succeeds or is denied
+    # outright. A timeout is read as "cannot rely on user namespaces".
+    try:
+        _, wait_status = os.waitpid(pid, 0)
+        supported = os.waitstatus_to_exitcode(wait_status) == 0
+    except (ChildProcessError, InterruptedError, OSError):
+        supported = False
+    _linux_userns_supported_cache = supported
+    return supported
+
+
 def _default_sandbox_for_platform() -> OSEnvSandboxSpec:
     """
     Pick the platform-preferred sandbox backend for the host OS.
