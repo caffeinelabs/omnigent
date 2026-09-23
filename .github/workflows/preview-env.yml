@@ -92,7 +92,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       # Server carries the kubernetes extra so the sandbox launcher can import
-      # the k8s client; host is the same commit for protocol match.
+      # the k8s client; host is the same commit for protocol match. kms (boto3)
+      # is requested here rather than relied on from the Dockerfile, because
+      # this workflow builds arbitrary refs — including upstream main, which has
+      # no unconditional [kms] install. Preview envs set
+      # OMNIGENT_CREDENTIAL_CIPHER=kms, and without boto3 the connect callback
+      # 500s after a successful OAuth handshake. Redundant but harmless on refs
+      # that already install it.
       - name: Build + push server
         uses: docker/build-push-action@v6
         with:
@@ -100,7 +106,7 @@ jobs:
           file: deploy/docker/Dockerfile
           push: true
           platforms: linux/amd64
-          build-args: OMNIGENT_EXTRAS=kubernetes
+          build-args: OMNIGENT_EXTRAS=kubernetes,kms
           tags: ${{ env.IMAGE_SERVER }}:${{ steps.id.outputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
