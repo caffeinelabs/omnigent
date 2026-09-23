@@ -392,6 +392,8 @@ def test_pi_native_env_unset_absent_or_empty_strips_nothing() -> None:
         )
         == []
     )
+
+
 # ── owner-pid marker + orphan prune (bridge-dir reaping) ────────────────────
 
 
