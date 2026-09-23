@@ -1177,6 +1177,10 @@ function renderLanding(
     harness_install_enabled: false,
     installable_harnesses: [],
     dictation_available: false,
+    github_app_enabled: false,
+    sshpiper_host: null,
+    sshpiper_port: null,
+    sshpiper_user: null,
     ...infoOverrides,
   };
   return render(
