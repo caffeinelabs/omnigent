@@ -98,6 +98,11 @@ runs:
       working-directory: .github/ci-deps
       shell: bash
       run: |
+        # apt-get update first: the runner image's baked package index goes
+        # stale, and Ubuntu rotates noble-updates debs — installing against
+        # the stale index 404s (bubblewrap 0.9.0-1ubuntu0.1). Upstream's
+        # e2e-run carries the same line.
+        sudo apt-get update
         sudo apt-get install -y tmux bubblewrap
         sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
         npm install --ignore-scripts

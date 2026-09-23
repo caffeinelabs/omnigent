@@ -93,6 +93,9 @@ runs:
     - name: Install bubblewrap and tmux
       shell: bash
       run: |
+        # apt-get update first: stale baked index + rotated noble-updates
+        # debs 404 otherwise (same fix as e2e-run).
+        sudo apt-get update
         sudo apt-get install -y bubblewrap tmux
         sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
 
