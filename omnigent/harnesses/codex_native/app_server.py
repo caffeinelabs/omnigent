@@ -11,6 +11,7 @@ import os
 import re
 import shlex
 import socket
+import subprocess
 import sys
 import tempfile
 import uuid
@@ -402,6 +403,131 @@ def _materialize_config_symlink(config_path: Path) -> None:
         import shutil
 
         shutil.copy2(target, config_path)
+
+
+#: Valid Codex ``sandbox_mode`` values (read-only / workspace-write /
+#: danger-full-access). Mirrored from the codex CLI; the rollout policy builder
+#: (:func:`_codex_turn_context_policy_fields_from_launch_args` in
+#: ``codex_native/main.py``) understands the same three.
+_CODEX_SANDBOX_MODES = frozenset({"read-only", "workspace-write", "danger-full-access"})
+
+#: Operator escape hatch. Empty (the default) resolves the fallback from a
+#: one-shot bwrap probe; a named value forces that mode; ``off`` disables
+#: fallback injection entirely.
+_CODEX_SANDBOX_MODE_ENV = "OMNIGENT_CODEX_SANDBOX_MODE"
+
+#: The probe only needs the kernel/seccomp verdict, not a real sandbox.
+_BWRAP_PROBE_TIMEOUT_SECONDS = 10.0
+
+#: Process-wide cache of the probe result; probing is never retried in a host
+#: process (the kernel policy does not change under a running pod).
+_probed_bwrap_usable: bool | None = None
+
+
+def _bwrap_sandbox_usable() -> bool:
+    """Whether Codex's bubblewrap sandbox can start, probed once per process.
+
+    The managed-sandbox runner pods run under a seccomp filter that denies
+    ``unshare(CLONE_NEWUSER)`` (plus the mount-namespace family), so bwrap
+    exits with EPERM before doing any work. Codex's default ``sandbox_mode``
+    (``workspace-write``) then fails EVERY tool call, not just trims
+    isolation. Probing bwrap directly is what makes the fallback
+    self-correcting: any host whose seccomp/kernel policy blocks namespace
+    creation gets ``danger-full-access`` seeded into the session config;
+    hosts where bwrap works keep Codex's sandbox untouched.
+
+    A missing bwrap binary counts as unusable: Codex cannot sandbox either,
+    and the fallback keeps tools runnable instead of EPERM-ing every call.
+    """
+    global _probed_bwrap_usable
+    if _probed_bwrap_usable is not None:
+        return _probed_bwrap_usable
+    try:
+        result = subprocess.run(
+            [
+                "bwrap",
+                "--unshare-user",
+                "--uid",
+                "65534",
+                "--ro-bind",
+                "/",
+                "/",
+                "true",
+            ],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=_BWRAP_PROBE_TIMEOUT_SECONDS,
+            check=False,
+        )
+        _probed_bwrap_usable = result.returncode == 0
+    except (FileNotFoundError, OSError, subprocess.TimeoutExpired):
+        _probed_bwrap_usable = False
+    return _probed_bwrap_usable
+
+
+def _codex_sandbox_mode_fallback() -> str | None:
+    """Resolve the sandbox mode to seed when the user set none.
+
+    Precedence:
+
+    0. ``OMNIGENT_CODEX_SANDBOX_MODE=off`` -> ``None`` (policy off);
+    1. a valid named value -> that mode (forced, no probing);
+    2. otherwise the one-shot bwrap probe: unusable -> ``danger-full-access``,
+       usable -> ``None`` (Codex keeps its own default and its sandbox).
+
+    The caller only seeds this into the per-session ``config.toml`` when that
+    file carries no top-level ``sandbox_mode`` line, so an explicit user
+    choice always wins over the fallback.
+    """
+    env_mode = os.environ.get(_CODEX_SANDBOX_MODE_ENV, "").strip()
+    if env_mode == "off":
+        return None
+    if env_mode:
+        if env_mode in _CODEX_SANDBOX_MODES:
+            return env_mode
+        log_once(
+            _logger,
+            "ignoring invalid %s=%r (expected one of %s); falling through to the bwrap probe",
+            _CODEX_SANDBOX_MODE_ENV,
+            env_mode,
+            sorted(_CODEX_SANDBOX_MODES),
+        )
+    if os.name != "posix" or _bwrap_sandbox_usable():
+        return None
+    return "danger-full-access"
+
+
+def _pin_codex_sandbox_mode(codex_home: Path, mode: str) -> None:
+    """Seed a top-level ``sandbox_mode`` into the session ``config.toml``.
+
+    Mirrors :func:`_pin_codex_config_model`: the per-session ``config.toml``
+    starts as a copy of the user's shared file, and the app-server reads it
+    at config load (``-c`` overrides are not honored by ``codex app-server``,
+    which is why pins are written to the file). A pre-existing top-level
+    ``sandbox_mode`` (an explicit user choice, or a prior pin) wins - this
+    helper then no-ops.
+
+    :param codex_home: Private per-session ``CODEX_HOME`` directory.
+    :param mode: Resolved fallback mode, e.g. ``"danger-full-access"``.
+    """
+    if mode not in _CODEX_SANDBOX_MODES:
+        raise ValueError(f"invalid codex sandbox_mode: {mode!r}")
+    config_path = codex_home / "config.toml"
+    _materialize_config_symlink(config_path)
+    existing = config_path.read_text(encoding="utf-8") if config_path.exists() else ""
+    lines = existing.splitlines()
+    for line in lines:
+        if line.startswith("["):
+            break
+        if re.match(r"^sandbox_mode\s*=", line):
+            return
+    pin_line = f"sandbox_mode = {json.dumps(mode)}"
+    if lines:
+        lines.insert(0, pin_line)
+    else:
+        lines = [pin_line]
+    config_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def _sync_codex_developer_instructions(
@@ -1464,6 +1590,18 @@ class CodexNativeAppServer:
             self.codex_home,
             self.developer_instructions,
         )
+        # bwrap cannot create namespaces under the managed-sandbox pod seccomp
+        # filter (unshare -> EPERM), which makes Codex's default sandbox_mode
+        # fail every tool call. Seed a fallback mode into the session config
+        # when that is the environment (and the user set no explicit mode).
+        sandbox_fallback = await asyncio.to_thread(_codex_sandbox_mode_fallback)
+        if sandbox_fallback:
+            _pin_codex_sandbox_mode(self.codex_home, sandbox_fallback)
+            log_info_once(
+                _logger,
+                "seeding codex sandbox_mode=%r (bwrap sandbox unavailable or forced)",
+                sandbox_fallback,
+            )
         self.config_overrides = materialize_codex_provider_config(
             self.codex_home,
             self.config_overrides,

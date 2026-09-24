@@ -3337,3 +3337,65 @@ async def test_discovery_early_exit_without_stderr_keeps_plain_error() -> None:
     )
     with pytest.raises(RuntimeError, match=r"^Codex model discovery exited early \(1\)$"):
         await codex_native_app_server._wait_for_discovery_listener(discovery, port=1)
+
+
+def test_sandbox_mode_fallback_pin_into_session_config(tmp_path: Path) -> None:
+    """_pin_codex_sandbox_mode seeds a top-level sandbox_mode when absent."""
+    from omnigent.harnesses.codex_native.app_server import _pin_codex_sandbox_mode
+
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    (home / "config.toml").write_text('model = "gpt-5.5"\n', encoding="utf-8")
+
+    _pin_codex_sandbox_mode(home, "danger-full-access")
+
+    data = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
+    assert data["sandbox_mode"] == "danger-full-access"
+    assert data["model"] == "gpt-5.5"
+
+
+def test_sandbox_mode_fallback_respects_existing_user_mode(tmp_path: Path) -> None:
+    """A user-set sandbox_mode line wins; the pin no-ops."""
+    from omnigent.harnesses.codex_native.app_server import _pin_codex_sandbox_mode
+
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    (home / "config.toml").write_text(
+        'sandbox_mode = "workspace-write"\nmodel = "gpt-5.5"\n', encoding="utf-8"
+    )
+
+    _pin_codex_sandbox_mode(home, "danger-full-access")
+
+    data = tomllib.loads((home / "config.toml").read_text(encoding="utf-8"))
+    assert data["sandbox_mode"] == "workspace-write"
+
+
+def test_sandbox_mode_fallback_rejects_invalid_mode(tmp_path: Path) -> None:
+    """Invalid modes fail loud instead of writing codex-invalid config."""
+    from omnigent.harnesses.codex_native.app_server import _pin_codex_sandbox_mode
+
+    home = tmp_path / "codex-home"
+    home.mkdir()
+    (home / "config.toml").write_text("", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="invalid codex sandbox_mode"):
+        _pin_codex_sandbox_mode(home, "kernel-default")
+
+
+def test_sandbox_mode_fallback_probe_branches(monkeypatch) -> None:
+    """Resolver: off disables, forcing wins, and probe failure selects full-access."""
+    from omnigent.harnesses.codex_native import app_server as codex_native_app_server
+
+    monkeypatch.setenv(codex_native_app_server._CODEX_SANDBOX_MODE_ENV, "off")
+    assert codex_native_app_server._codex_sandbox_mode_fallback() is None
+
+    monkeypatch.setenv(codex_native_app_server._CODEX_SANDBOX_MODE_ENV, "read-only")
+    assert codex_native_app_server._codex_sandbox_mode_fallback() == "read-only"
+
+    monkeypatch.delenv(codex_native_app_server._CODEX_SANDBOX_MODE_ENV, raising=False)
+    monkeypatch.setattr(codex_native_app_server, "_bwrap_sandbox_usable", lambda: False)
+    monkeypatch.setattr(codex_native_app_server, "_probed_bwrap_usable", None)
+    assert codex_native_app_server._codex_sandbox_mode_fallback() == "danger-full-access"
+
+    monkeypatch.setattr(codex_native_app_server, "_bwrap_sandbox_usable", lambda: True)
+    assert codex_native_app_server._codex_sandbox_mode_fallback() is None
