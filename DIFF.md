@@ -22,6 +22,46 @@ Do not grow layer 3. New work lands on `develop` first and is ported to
 
 ## Entries
 
+### Sixth upstream sync (sync6: `origin/main` @ 16a7f046 into staging)
+
+- **What:** Merges the 331 upstream commits that landed after the sync5
+  cut (`52a06c4e`, 2026-09-14). `.github/**` is staging's tree wholesale
+  (workflows, actions, scripts, triage_v2 — the push token lacks the
+  `workflow` scope, and upstream's action/script changes assume upstream's
+  workflows: mixing them tripped CodeQL cache-poisoning and the
+  auto-assign-reviewer test job), except `.github/ci-deps/package.json`,
+  which takes upstream's claude-code / pi pins so `pnpm-lock.yaml`
+  (upstream's, verbatim) stays frozen-lockfile clean. Upstream's new
+  `tests/scripts/test_{open_code_review_workflow,polly_review_output,
+  polly_review_trigger,release_ci_gate,security_gate}.py` test those
+  upstream-only `.github/scripts` and are dropped with them. Adds the
+  `938aa024b057` alembic merge revision over `daba139ca998` + upstream's
+  `ii1a2b3c4d5e`.
+- **Fork entries retired by this sync (upstream now carries them):**
+  - #71 curated pi shortlist → upstream's `curated_models` /
+    `resolve_model_tier` path in `pi_native/credentials.py` (plus its
+    `enabledModels` scoping). Fork implementation and tests dropped.
+  - #76 `OMNIGENT_PI_ENV_UNSET` → upstream ships the same env var,
+    `pi_native_env_unset` and `TerminalEnvSpec.env_unset`; fork copies
+    dropped, upstream tests kept.
+  - #73 orphan-socket sweep → upstream moved `_kill_orphan_runners` to a
+    module-level sweep keyed on the `ap-*/pid` sentinel; the fork's
+    `c-<hash>.sock` glob is re-added there (the hashed `_socket_path`
+    stays fork-only).
+- **Fork entries adjusted to fit upstream:**
+  - #85 gateway `/v1/models` picker rows: the `if not managed_rows:`
+    gate referenced the configured/static catalog merge upstream removed;
+    the rows are now always appended (still deduped against alias rows).
+  - opencode `HARNESS_OPENCODE_GATEWAY_*` env gateway (#31–#48): now the
+    last fallback after upstream's bound provider
+    (`resolve_bound_opencode_gateway`, #7783) and the Databricks profile.
+  - Inline MCP `oauth` passthrough (#31/#32): kept; the `tools:` allowlist
+    parsing it sat next to is now upstream's `_parse_mcp_tool_allowlist`.
+- **Not changed:** SSHPiper, Open-in-Omnigent PR button, k8s
+  `config_map_mounts`, jcode `/opt/jcode` wiring, GitHub credential
+  refresh (#69/#70 — upstream's #7505 refresh is a different mechanism;
+  both coexist, candidate for a follow-up retirement).
+
 ### fix: pre-commit debt from the blind-merge window (this PR / #77)
 
 - **What:** Pays down lint debt accumulated while the pre-commit gate

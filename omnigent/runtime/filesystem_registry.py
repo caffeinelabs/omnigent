@@ -73,6 +73,7 @@ def _git_timeout_seconds() -> float:
 # the one-shot config write doesn't repeat.  The host fallback path builds a
 # fresh registry per fs request (unlike the runner, which caches per session),
 # so without this guard every request would re-spawn the ``git config``.
+# custom-lint: disable-next=workspace-scoped-cache -- keyed by git-root filesystem path
 _untracked_cache_enabled: set[str] = set()
 _untracked_cache_lock = threading.Lock()
 
@@ -227,8 +228,18 @@ def _find_child_git_repos(path: Path) -> list[Path]:
     repos: list[Path] = []
     for child in children:
         git_entry = child / ".git"
-        if git_entry.is_dir() or git_entry.is_file():
-            repos.append(child)
+        # Per-child guard, mirroring upstream #7689's discovery hardening:
+        # probing `<child>/.git` stats THROUGH the child, so an unreadable
+        # sibling (an automation workspace defaults to $HOME, where the
+        # managed-sandbox sshd sidecar leaves a root-owned 0700 ~/.sshd)
+        # raises PermissionError — pathlib only swallows ENOENT-class
+        # errors. One opaque dotdir must not crash the runner or disable
+        # multi-repo detection for the readable siblings.
+        try:
+            if git_entry.is_dir() or git_entry.is_file():
+                repos.append(child)
+        except OSError:
+            continue
     return repos
 
 
@@ -1426,7 +1437,17 @@ def create_filesystem_registry(watch_path: Path) -> FilesystemRegistry:
     :returns: A :class:`FilesystemRegistry` instance ready to be used.
     """
     resolved = watch_path.resolve()
-    git_root = _find_git_root(resolved)
+    try:
+        git_root = _find_git_root(resolved)
+    except OSError as exc:
+        _logger.warning(
+            "Git metadata is unavailable; using ordinary file-change tracking",
+            extra={
+                "event_name": "filesystem_git_discovery_failed",
+                "attributes": {"exception_type": type(exc).__name__, "errno": exc.errno},
+            },
+        )
+        git_root = None
     if git_root is not None:
         return GitFilesystemRegistry(watch_path, git_root)
     child_repos = _find_child_git_repos(resolved)

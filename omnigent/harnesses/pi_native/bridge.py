@@ -25,47 +25,32 @@ _ENQUEUE_SEQUENCE = itertools.count()
 
 PI_NATIVE_BRIDGE_DIR_ENV_VAR = "HARNESS_PI_NATIVE_BRIDGE_DIR"
 PI_NATIVE_REQUEST_SESSION_ID_ENV_VAR = "HARNESS_PI_NATIVE_REQUEST_SESSION_ID"
+PI_NATIVE_CONFIG_ENV_VAR = "OMNIGENT_PI_NATIVE_CONFIG"
 
-# Operator-declared denylist of environment variables stripped from the Pi
-# terminal's process env (``TerminalEnvSpec.env_unset``), named as a
-# comma-separated list in ``OMNIGENT_PI_ENV_UNSET``. Pi activates a built-in
-# provider's ENTIRE model catalog on the mere presence of that provider's
-# credential (any value), so an ambient dummy/gateway token floods the
-# session model picker with entries that cannot work — they bypass the
-# Omnigent-managed provider (models.json ``apiKey``) and its routing.
-# Concretely, pi >= 0.84 additionally reads ``ANTHROPIC_AUTH_TOKEN`` (0.79
-# did not), and a custom model whose id starts with ``claude-`` enables the
-# built-in anthropic provider; sandboxes that set a dummy
-# ``ANTHROPIC_AUTH_TOKEN`` for claude-code therefore saw ~13 broken
-# "Claude Fable/Opus/Sonnet" rows.
-#
-# The list is operator config, not a code constant: the deployment knows
-# which credential variables it projects into runner pods (e.g.
-# ``ANTHROPIC_AUTH_TOKEN`` for claude-code, ``DEEPSEEK_API_KEY`` for
-# dsh-acp), and only the intersection of "projected" and "sniffed by pi"
-# can flood. Declaring it next to the projection keeps the two in sync and
-# lets operators strip any future var without an Omnigent release.
-# Pi needs no credential env at all here: its auth rides the managed
-# models.json. Other harness processes keep their own env — only the Pi
-# terminal is scrubbed. When the variable is unset or empty nothing is
-# stripped. Belt-and-suspenders: the managed settings.json also scopes the
-# picker via ``enabledModels`` (allowlist), so even a missed var leaves
-# built-ins invisible rather than selectable.
+#: Env var naming credential variables to strip from the Pi terminal
+#: (comma-separated). Pi activates a built-in provider's whole catalog on the
+#: mere presence of its credential (any value); managed deployments that export
+#: dummy tokens for other harnesses (e.g. ``ANTHROPIC_AUTH_TOKEN`` for
+#: claude-code against a gateway) would otherwise see Pi's picker flooded with
+#: built-in entries that bypass the managed provider. Pi's own auth rides the
+#: managed models.json ``apiKey``, so it needs no credential env. Operator-
+#: declared (not a code constant) because the deployment knows which credential
+#: vars it projects; unset means no scrubbing.
 PI_NATIVE_ENV_UNSET_ENV_VAR = "OMNIGENT_PI_ENV_UNSET"
 
 
 def pi_native_env_unset(environ: Mapping[str, str]) -> list[str]:
-    """Return the operator-declared env var names to strip from the Pi terminal.
+    """Parse the Pi terminal credential-env denylist.
 
-    Parses :data:`PI_NATIVE_ENV_UNSET_ENV_VAR` as a comma-separated list,
-    tolerating whitespace and empty entries. Returns an empty list when the
-    variable is unset, which leaves the terminal env untouched.
+    :param environ: The environment mapping to read
+        :data:`PI_NATIVE_ENV_UNSET_ENV_VAR` from (``os.environ`` at call sites,
+        a dict in tests).
+    :returns: Sorted, deduplicated variable names to pop from the Pi terminal
+        env; empty when the var is unset or blank.
     """
     raw = environ.get(PI_NATIVE_ENV_UNSET_ENV_VAR, "")
     return sorted({name.strip() for name in raw.split(",") if name.strip()})
 
-
-PI_NATIVE_CONFIG_ENV_VAR = "OMNIGENT_PI_NATIVE_CONFIG"
 
 _BRIDGE_ROOT = Path.home() / ".omnigent" / "pi-native"
 _CONFIG_FILE = "config.json"
@@ -99,13 +84,14 @@ def prepare_bridge_dir(session_id: str) -> Path:
     :returns: Prepared bridge directory.
     """
     bridge_dir = bridge_dir_for_session_id(session_id)
-    bridge_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
-    os.chmod(bridge_dir, 0o700)
-    (bridge_dir / _INBOX_DIR).mkdir(mode=0o700, exist_ok=True)
-    (bridge_dir / _SESSIONS_DIR).mkdir(mode=0o700, exist_ok=True)
-    # Owner-pid marker for the periodic dead-owner prune; refreshed every
-    # turn so it always names the current runner. See native_bridge_common.
-    native_bridge_common.write_owner_pid_marker(bridge_dir)
+    with native_bridge_common.bridge_dir_preparation_lock(bridge_dir):
+        bridge_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+        os.chmod(bridge_dir, 0o700)
+        (bridge_dir / _INBOX_DIR).mkdir(mode=0o700, exist_ok=True)
+        (bridge_dir / _SESSIONS_DIR).mkdir(mode=0o700, exist_ok=True)
+        # Owner-pid marker for the periodic dead-owner prune; refreshed every
+        # turn so it always names the current runner. See native_bridge_common.
+        native_bridge_common.write_owner_pid_marker(bridge_dir)
     return bridge_dir
 
 
@@ -114,7 +100,7 @@ def prune_orphaned_bridge_dirs() -> int:
     Remove pi-native bridge dirs whose owner process is provably dead.
 
     Delegates to the shared sweep against this harness's bridge root; the
-    runner calls it (via ``native_bridge_common.reap_orphaned_native_bridge_dirs``)
+    global maintenance calls it (via ``native_bridge_common.reap_orphaned_native_bridge_dirs``)
     at startup to reclaim dirs leaked by a prior runner that died without
     running the explicit delete path.
 

@@ -7,6 +7,8 @@ from omnigent.models.claude_model_vocabulary import (
     claude_model_command_arg,
     model_vocabulary_env,
     normalized_model_id,
+    picker_command_values,
+    picker_value_for_model,
     prefix_folded_model_id,
     served_alias_pins,
     served_canonical_overrides,
@@ -114,19 +116,31 @@ def test_command_arg_spells_the_routed_model_or_nothing(
     assert claude_model_command_arg(model, env) == expected
 
 
-def test_command_arg_passes_gateway_full_ids_verbatim() -> None:
+def test_command_arg_passes_enumerated_gateway_ids_verbatim() -> None:
     """A connected Databricks gateway's ``system.ai.<model>`` ids (kimi, glm,
-    deepseek, claude, …) are non-alias full ids that Claude Code's ``/model``
-    takes verbatim, so the picker can switch to any workspace model — not just
-    the Claude family. Guards the regression where these returned ``None`` and
-    the switch was refused with "no spelling for that model"."""
+    deepseek, claude, …) are non-alias ids that Claude Code's ``/model`` takes
+    verbatim when the session's own picker enumerates them — so the picker can
+    switch to any workspace model, not just the Claude family.
+
+    The enumeration is the authority: an id NO picker row spells returns
+    ``None`` and the switch is refused with "no spelling for that model",
+    instead of typing a value that silently keeps the current model (or, on an
+    authoritative empty catalog, reviving stale launch-time vocabulary).
+    """
     for model in (
         "system.ai.kimi-k3",
         "system.ai.glm-5-3",
         "system.ai.deepseek-v4-pro-0813",
         "system.ai.claude-opus-4-8",
     ):
-        assert claude_model_command_arg(model, {}) == model
+        assert claude_model_command_arg(model, {}, picker_values=(model,)) == model
+    # Unenumerated gateway ids of no Claude family fail loud, even on an
+    # unpinned env.
+    for model in ("system.ai.kimi-k3", "system.ai.glm-5-3", "system.ai.deepseek-v4-pro-0813"):
+        assert claude_model_command_arg(model, {}) is None
+    # A gateway-spelled Claude id folds to its family alias, same as the
+    # provider-prefixed spelling (``databricks-claude-opus-4-8`` above).
+    assert claude_model_command_arg("system.ai.claude-opus-4-8", {}) == "opus"
     # But a family alias with a conflicting pin still folds, not passes through.
     assert claude_model_command_arg("opus", {}) == "opus"
 
@@ -304,3 +318,80 @@ def test_served_canonical_overrides_keep_the_first_of_two_equal_spellings() -> N
     assert served_canonical_overrides(["databricks-claude-opus-4-8", "gw-claude-opus-4-8"]) == {
         "claude-opus-4-8": "databricks-claude-opus-4-8"
     }
+
+
+# A gateway that manages the picker names every row by the id it serves,
+# family models and third-party models alike — the shape Claude Code's
+# initialize response reports for a workspace-managed Claude Code.
+_MANAGED_PICKER_VALUES = (
+    "system.ai.claude-opus-4-8[1m]",
+    "system.ai.claude-sonnet-4-6[1m]",
+    "system.ai.claude-haiku-4-5",
+    "system.ai.glm-5-3",
+)
+
+
+def test_picker_command_values_reads_the_rows_as_the_vocabulary() -> None:
+    assert picker_command_values(
+        [
+            {"id": "default", "model": "system.ai.claude-opus-4-8[1m]"},
+            {"id": "system.ai.glm-5-3", "model": "system.ai.glm-5-3"},
+            {"id": "system.ai.glm-5-3", "model": "system.ai.glm-5-3"},
+            {"id": "  opus  ", "model": "system.ai.claude-opus-4-8[1m]"},
+            {"id": ""},
+            {"model": "system.ai.kimi-k3"},
+            "not-a-row",
+        ]
+    ) == ["system.ai.glm-5-3", "opus"]
+    assert picker_command_values([]) == []
+
+
+@pytest.mark.parametrize(
+    ("model", "expected"),
+    [
+        # The reported bug: a managed model of no Claude family. Every alias
+        # is pinned elsewhere, so only the picker's own row spells it.
+        ("system.ai.glm-5-3", "system.ai.glm-5-3"),
+        # Catalog prefix and case fold; the row's spelling is what is typed.
+        ("databricks-glm-5-3", "system.ai.glm-5-3"),
+        ("SYSTEM.AI.GLM-5-3", "system.ai.glm-5-3"),
+        # A row carrying the 1M marker is that model's only spelling here,
+        # so a routed id without the marker still reaches it.
+        ("system.ai.claude-opus-4-8[1m]", "system.ai.claude-opus-4-8[1m]"),
+        ("databricks-claude-opus-4-8", "system.ai.claude-opus-4-8[1m]"),
+        # Nothing in the picker serves it: the caller must fail loud.
+        ("system.ai.kimi-k3", None),
+    ],
+)
+def test_picker_value_for_model_speaks_the_rows_the_cli_listed(
+    model: str, expected: str | None
+) -> None:
+    assert picker_value_for_model(model, _MANAGED_PICKER_VALUES) == expected
+
+
+def test_command_arg_prefers_the_picker_over_an_unrelated_pin() -> None:
+    """A managed row is speakable even when every alias is pinned elsewhere.
+
+    Without the picker the pane's vocabulary is just the pinning, so a
+    switch to a model of no Claude family answered "no spelling" and left
+    the session on its old model.
+    """
+    assert claude_model_command_arg("system.ai.glm-5-3", _PINNED_ENV) is None
+    assert (
+        claude_model_command_arg(
+            "system.ai.glm-5-3", _PINNED_ENV, picker_values=_MANAGED_PICKER_VALUES
+        )
+        == "system.ai.glm-5-3"
+    )
+    # A pin the picker does not list still resolves through the alias.
+    assert (
+        claude_model_command_arg(
+            "databricks-claude-sonnet-4-6", _PINNED_ENV, picker_values=("system.ai.glm-5-3",)
+        )
+        == "sonnet"
+    )
+
+
+def test_command_arg_keeps_failing_loud_when_the_picker_is_unknown() -> None:
+    """No picker rows recorded yet leaves today's pinning-only answer."""
+    assert claude_model_command_arg("system.ai.glm-5-3", _PINNED_ENV, picker_values=()) is None

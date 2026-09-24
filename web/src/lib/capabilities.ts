@@ -57,7 +57,7 @@ export interface Branding {
 }
 
 /** Release features understood by this frontend build. */
-export type FeatureKey = "usage_page" | "harness_install" | "canvas";
+export type FeatureKey = "usage_page" | "harness_install" | "canvas" | "customize";
 
 /** Deployment-wide release-feature values advertised by the server. */
 export type FeatureValues = Record<string, boolean>;
@@ -120,7 +120,10 @@ export interface ServerInfo {
    * branches on these (multi-repo list vs single). A provider absent from the
    * map, or the map absent entirely, defaults every flag off.
    */
-  sandbox_provider_capabilities?: Record<string, { multi_repo?: boolean }>;
+  sandbox_provider_capabilities?: Record<
+    string,
+    { multi_repo?: boolean; inference_models?: boolean }
+  >;
   /**
    * Connection providers this deploy has wired (config + store present),
    * e.g. ``["github"]`` or ``["github", "databricks"]``. Non-empty shows the
@@ -162,6 +165,9 @@ export interface ServerInfo {
    * ``smart_routing_enabled``.
    */
   smart_routing_sources: SmartRoutingSources;
+  // Fork-only fields (GitHub App connect + SSHPiper). Optional so upstream
+  // test fixtures that build a ServerInfo literal keep type-checking across
+  // syncs; the parser below always fills them in.
   /**
    * True when a GitHub App is configured (``OMNIGENT_GITHUB_APP_*``) and
    * its connection store is wired. Gates the "Connect GitHub" panel in
@@ -169,19 +175,19 @@ export interface ServerInfo {
    * managed sandboxes authenticate ``gh`` / git as them and receive
    * their public SSH keys.
    */
-  github_app_enabled: boolean;
+  github_app_enabled?: boolean;
   /**
    * SSHPiper gateway hostname for VS Code Remote into managed sandboxes.
    * ``null`` when unset — hides the "Open in VS Code" button.
    */
-  sshpiper_host: string | null;
+  sshpiper_host?: string | null;
   /** SSHPiper gateway port (``22`` when standard). ``null`` when disabled. */
-  sshpiper_port: number | null;
+  sshpiper_port?: number | null;
   /**
    * Linux username SSHPiper routes to after splitting ``target--user``.
    * ``null`` when disabled.
    */
-  sshpiper_user: string | null;
+  sshpiper_user?: string | null;
   /**
    * Deployment-wide release features. Missing keys are disabled. The map is
    * the canonical gate for new frontend surfaces.
@@ -354,7 +360,7 @@ export async function resolveServerInfo(): Promise<ServerInfo> {
             data.sandbox_provider_capabilities !== null &&
             typeof data.sandbox_provider_capabilities === "object" &&
             !Array.isArray(data.sandbox_provider_capabilities)
-              ? (data.sandbox_provider_capabilities as Record<string, { multi_repo?: boolean }>)
+              ? (data.sandbox_provider_capabilities as ServerInfo["sandbox_provider_capabilities"])
               : {},
           enabled_connections: Array.isArray(data.enabled_connections)
             ? data.enabled_connections.filter((p): p is string => typeof p === "string")
