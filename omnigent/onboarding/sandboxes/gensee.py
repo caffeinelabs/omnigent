@@ -174,6 +174,12 @@ class GenseeSandboxLauncher(SandboxHostLauncher):
         server_url: str,
         repos: Sequence[RepoWorkspace] = (),
         host_config: dict[str, object] | None = None,
+        # Accepted, never read: the fork's abstract ``start_host`` declares
+        # ``session_url`` (Open-in-Omnigent PR button), so an override that omits
+        # it is not substitutable. ``managed_hosts._start_host`` only sends the
+        # keyword to launchers declaring ``classifies_runner_by_agent`` — Gensee
+        # does not — so the value never actually arrives here.
+        session_url: str | None = None,
         on_stage: Callable[[str], None] | None = None,
     ) -> str:
         """Ask the sandbox agent to materialize a workspace and start its host."""

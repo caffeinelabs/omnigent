@@ -234,6 +234,14 @@ def test_ephemeral_storage_resources_accepted_and_forwarded(tmp_path: Path) -> N
     startup, and even when it passed, the launcher forwarded only cpu/memory
     — so sandboxes carried request 0 for ephemeral-storage and the scheduler
     could not spread them by disk.
+
+    This fork budgets at the **Pod** level, not per container, so the host and
+    the admission-injected ssh sidecar draw on one pool instead of each
+    carrying its own reservation (see ``build_job_manifest``'s ``pod_spec``).
+    The assertion below therefore reads ``spec.resources`` and requires the
+    containers to stay bare — the same contract
+    ``test_build_job_manifest_budgets_resources_at_pod_level`` pins in the unit
+    suite.
     """
     port = _find_free_port()
     config_path = _write_server_config(
@@ -257,14 +265,21 @@ def test_ephemeral_storage_resources_accepted_and_forwarded(tmp_path: Path) -> N
         proc.wait(timeout=30)
 
     pod = _pod_spec(manifest)
+    resources = pod.get("resources") or {}
+    for tier, expected in (("requests", "2Gi"), ("limits", "8Gi")):
+        actual = (resources.get(tier) or {}).get("ephemeral-storage")
+        assert actual == expected, (
+            f"the Pod-level {tier} dropped the configured ephemeral-storage "
+            f"(expected {expected!r}, got {actual!r}); resources: {resources!r}"
+        )
+
+    # One budget for the whole Pod: a container that reserves separately would
+    # double-count against the node and starve the injected ssh sidecar.
     containers = pod.get("initContainers", []) + pod["containers"]
     assert containers
     for container in containers:
-        resources = container.get("resources") or {}
-        for tier, expected in (("requests", "2Gi"), ("limits", "8Gi")):
-            actual = (resources.get(tier) or {}).get("ephemeral-storage")
-            assert actual == expected, (
-                f"container {container['name']!r} {tier} dropped the configured "
-                f"ephemeral-storage (expected {expected!r}, got {actual!r}); "
-                f"resources: {resources!r}"
-            )
+        assert "resources" not in container, (
+            f"container {container['name']!r} carries its own resources "
+            f"({container['resources']!r}) — this fork budgets at the Pod level "
+            "so the host and the ssh sidecar share one pool"
+        )
