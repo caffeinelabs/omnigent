@@ -22,6 +22,15 @@ on:
         description: "Branch/ref to build a preview image for (default: this ref)"
         required: false
         type: string
+      extra_harness_clis:
+        # Space-separated harness names for the host image (see
+        # deploy/docker/install-harness-cli.sh). Dispatch-only on purpose: a
+        # label-triggered build passes nothing, so each branch keeps its own
+        # Dockerfile default. Leave empty to get that default here too.
+        description: "Harness CLIs to bake into the host image (empty = the ref's Dockerfile default)"
+        required: false
+        default: "goose jcode opencode qwen"
+        type: string
 
 concurrency:
   group: preview-${{ github.event.pull_request.number || inputs.ref || github.ref_name }}
@@ -92,7 +101,13 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       # Server carries the kubernetes extra so the sandbox launcher can import
-      # the k8s client; host is the same commit for protocol match.
+      # the k8s client; host is the same commit for protocol match. kms (boto3)
+      # is requested here rather than relied on from the Dockerfile, because
+      # this workflow builds arbitrary refs — including upstream main, which has
+      # no unconditional [kms] install. Preview envs set
+      # OMNIGENT_CREDENTIAL_CIPHER=kms, and without boto3 the connect callback
+      # 500s after a successful OAuth handshake. Redundant but harmless on refs
+      # that already install it.
       - name: Build + push server
         uses: docker/build-push-action@v6
         with:
@@ -100,11 +115,16 @@ jobs:
           file: deploy/docker/Dockerfile
           push: true
           platforms: linux/amd64
-          build-args: OMNIGENT_EXTRAS=kubernetes
+          build-args: OMNIGENT_EXTRAS=kubernetes,kms
           tags: ${{ env.IMAGE_SERVER }}:${{ steps.id.outputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
           provenance: false
+      # Harness CLIs live in the host stage. Upstream main defaults
+      # EXTRA_HARNESS_CLIS empty, so a main-built host ships no
+      # goose/jcode/opencode/qwen and the preview's per-harness env is inert.
+      # Emitted only when non-empty — passing an empty build-arg would override
+      # a branch Dockerfile's own default.
       - name: Build + push host
         uses: docker/build-push-action@v6
         with:
@@ -113,6 +133,7 @@ jobs:
           target: host
           push: true
           platforms: linux/amd64
+          build-args: ${{ inputs.extra_harness_clis && format('EXTRA_HARNESS_CLIS={0}', inputs.extra_harness_clis) || '' }}
           tags: ${{ env.IMAGE_HOST }}:${{ steps.id.outputs.tag }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
