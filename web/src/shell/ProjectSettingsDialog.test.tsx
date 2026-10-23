@@ -323,6 +323,47 @@ describe("ProjectSettingsDialog", () => {
     ).toBe(true);
   });
 
+  it("lists a custom-named native built-in under Agents, not the harness rows", async () => {
+    // Same split as the composer: factory-lead runs claude-native but is a
+    // named agent, so it must not sit among the Claude Code harness rows.
+    availableAgentsMock.mockReturnValue({
+      data: [
+        pickerAgent({
+          id: "ag_lead",
+          name: "factory-lead",
+          display_name: "Factory Lead",
+          harness: "claude-native",
+          builtin: true,
+        }),
+        pickerAgent({
+          id: "ag_claude",
+          name: "claude-native-ui",
+          display_name: "Claude Code",
+          harness: "claude-native",
+          builtin: true,
+        }),
+      ],
+    });
+    getProjectMock.mockResolvedValue({ id: "p_1", name: "Work", config: {} });
+    renderDialog();
+    await waitFor(() =>
+      expect((screen.getByTestId("project-settings-save") as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
+    );
+
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-agent-select"), { button: 0 });
+    const agentsHeading = screen.getByText("Agents");
+    const lead = screen.getByTestId("new-chat-landing-agent-ag_lead");
+    const claude = screen.getByTestId("new-chat-landing-agent-ag_claude");
+    expect(
+      agentsHeading.compareDocumentPosition(lead) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(
+      agentsHeading.compareDocumentPosition(claude) & Node.DOCUMENT_POSITION_PRECEDING,
+    ).toBeTruthy();
+  });
+
   // A model default belongs only to a native harness that takes a model
   // override (Claude Code / Codex). These pin the control's visibility, its
   // round-trip through save, and the data-safety edges around it.

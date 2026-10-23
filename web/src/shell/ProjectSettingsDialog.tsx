@@ -43,7 +43,7 @@ import { readAlwaysUseWorktree } from "@/lib/worktreeDefaultPreferences";
 import { SANDBOX_HOST_CHOICE } from "@/lib/hostPreferences";
 import { CLAUDE_NATIVE_MODELS } from "@/lib/claudeNativeModels";
 import {
-  isNativeCodingAgent,
+  isNativeHarnessPickerEntry,
   nativeAgentHasCapability,
   nativeCodingAgentForAvailableAgent,
 } from "@/lib/nativeCodingAgents";
@@ -256,8 +256,11 @@ export function ProjectSettingsDialog({
   // surfaces must offer the SAME set, or a project could pin a default the
   // composer refuses to show — and then silently substitutes another for.
   const agentList = useMemo(() => selectableSessionAgents(agents ?? []), [agents]);
-  const harnessEntries = useMemo(() => agentList.filter(isNativeCodingAgent), [agentList]);
-  const agentEntries = useMemo(() => agentList.filter((a) => !isNativeCodingAgent(a)), [agentList]);
+  const harnessEntries = useMemo(() => agentList.filter(isNativeHarnessPickerEntry), [agentList]);
+  const agentEntries = useMemo(
+    () => agentList.filter((a) => !isNativeHarnessPickerEntry(a)),
+    [agentList],
+  );
   const selectedAgent = agentList.find((a) => a.id === agentId) ?? null;
   const agentLabel = selectedAgent ? selectedAgent.display_name : "No default";
   // Model default is offered for harnesses whose create call carries a model

@@ -208,6 +208,7 @@ import { useOmnigentAnalytics } from "@/lib/analytics";
 import { isCurrentServerLocal } from "@/lib/serverOrigin";
 import {
   isNativeCodingAgent,
+  isNativeHarnessPickerEntry,
   nativeAgentHasCapability,
   nativeCodingAgentForAvailableAgent,
   nativeWrapperLabelsForAgent,
@@ -1278,6 +1279,11 @@ export function ComposerAgentIcon({ agent }: { agent: Pick<AvailableAgent, "name
   );
 }
 
+/** Whether the picker lists ``agent`` as a harness row rather than a named agent. */
+function isPickerHarnessEntry(agent: AvailableAgent): boolean {
+  return isNativeHarnessPickerEntry(agent) || isAcpHarnessAgent(agent);
+}
+
 function visibleModelLabel(label: string): string {
   return label.replaceAll("`", "");
 }
@@ -2210,13 +2216,11 @@ export function NewChatLandingScreen() {
   // and "Agents" (composed SDK / bundle agents like Polly & Debby plus custom
   // user-registered agents). Harness-backed vs composed, NOT the builtins/customs
   // split: Polly & Debby are built-ins but are composed agents, so they stay
-  // under "Agents". ACP agents aren't native, so they fold into "More".
-  const harnessEntries = useMemo(
-    () => agentList.filter((a) => isNativeCodingAgent(a) || isAcpHarnessAgent(a)),
-    [agentList],
-  );
+  // under "Agents". ACP agents aren't native, so they fold into "More". A
+  // custom-named agent on a native harness (e.g. factory-lead) is a named agent.
+  const harnessEntries = useMemo(() => agentList.filter(isPickerHarnessEntry), [agentList]);
   const agentEntries = useMemo(
-    () => agentList.filter((a) => !isNativeCodingAgent(a) && !isAcpHarnessAgent(a)),
+    () => agentList.filter((a) => !isPickerHarnessEntry(a)),
     [agentList],
   );
 
@@ -3847,6 +3851,8 @@ export function NewChatLandingScreen() {
   // agents must be registered and both CLIs ready on the target host — a router
   // with one arm is just that arm. The Claude wrapper is the placeholder the
   // create binds; the server rebinds to whichever the router picks.
+  // harnessEntries holds only canonical wrappers, so a custom-named agent on
+  // the same harness (e.g. factory-lead) is never the placeholder.
   const smartRoutingWrappers = useMemo(() => {
     const byHarness = (harness: string) =>
       harnessEntries.find((a) => nativeCodingAgentForAvailableAgent(a)?.harness === harness);

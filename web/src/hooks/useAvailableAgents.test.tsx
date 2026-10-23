@@ -519,6 +519,66 @@ describe("useAvailableAgents", () => {
     ]);
   });
 
+  it("keeps custom-named native built-ins as their own rows with their own names", async () => {
+    routeFetch({
+      [BUILTINS_URL]: mockResponse({
+        object: "list",
+        data: [
+          { id: "ag_lead", name: "factory-lead", harness: "claude-native", builtin: true },
+          { id: "ag_claude", name: "claude-native-ui", harness: "claude-native", builtin: true },
+          { id: "ag_pl", name: "factory-pl", harness: "claude-native", builtin: true },
+        ],
+        has_more: false,
+      }),
+      [SCAN_URL]: EMPTY_SCAN,
+    });
+
+    const { result } = renderHook(() => useAvailableAgents(), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    // Sharing claude-native with the canonical wrapper must not collapse them:
+    // each is a distinct agent the picker offers by its own name.
+    expect(result.current.data?.map((a) => [a.id, a.display_name])).toEqual([
+      ["ag_lead", "Factory Lead"],
+      ["ag_claude", "Claude Code"],
+      ["ag_pl", "Factory Project Lead"],
+    ]);
+  });
+
+  it("still collapses an override of a canonical wrapper to one row", async () => {
+    // A deployment re-seeding opencode-native-ui (extra tools) alongside a
+    // stale clone keeps a single OpenCode row: the canonical one.
+    routeFetch({
+      [BUILTINS_URL]: mockResponse({
+        object: "list",
+        data: [
+          {
+            id: "ag_opencode_fork",
+            name: "opencode-native-ui (fork ag_old)",
+            harness: "opencode-native",
+          },
+          { id: "ag_opencode", name: "opencode-native-ui", harness: "opencode-native" },
+        ],
+        has_more: false,
+      }),
+      [SCAN_URL]: EMPTY_SCAN,
+    });
+
+    const { result } = renderHook(() => useAvailableAgents(), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toEqual([
+      {
+        id: "ag_opencode",
+        name: "opencode-native-ui",
+        display_name: "OpenCode",
+        description: null,
+        harness: "opencode-native",
+        skills: [],
+      },
+    ]);
+  });
+
   it("collapses same-named custom agents with distinct agent_ids to the newest session's row", async () => {
     routeFetch({
       [BUILTINS_URL]: mockResponse({ object: "list", data: [], has_more: false }),
@@ -882,6 +942,53 @@ describe("prefetchAvailableAgentDetails", () => {
 
     // Shadow removed; only the seeded built-in remains.
     expect(queryClient.getQueryData(["available-agents"])).toEqual([kiroBuiltin]);
+  });
+
+  it("keeps a custom-named session agent that enriches to a native harness", async () => {
+    // A custom name on claude-native (e.g. an uploaded factory-lead) is its
+    // own agent, not a shadow of the seeded Claude Code wrapper.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const claudeBuiltin = {
+      id: "ag_claude",
+      name: "claude-native-ui",
+      display_name: "Claude Code",
+      description: null,
+      harness: "claude-native",
+      skills: [],
+    };
+    const customLead = {
+      id: "ag_session_lead",
+      name: "factory-lead",
+      display_name: "Factory Lead",
+      description: null,
+      harness: null,
+      skills: [],
+      sessionId: "conv_lead",
+    };
+    queryClient.setQueryData(["available-agents"], [claudeBuiltin, customLead]);
+
+    fetchMock.mockResolvedValueOnce(
+      mockResponse({
+        id: "ag_session_lead",
+        object: "agent",
+        name: "factory-lead",
+        description: "Leads the factory",
+        harness: "claude-native",
+        skills: [],
+      }),
+    );
+
+    await prefetchAvailableAgentDetails(customLead, queryClient);
+
+    expect(queryClient.getQueryData(["available-agents"])).toEqual([
+      claudeBuiltin,
+      {
+        ...customLead,
+        display_name: "Factory Lead",
+        description: "Leads the factory",
+        harness: "claude-native",
+      },
+    ]);
   });
 });
 
