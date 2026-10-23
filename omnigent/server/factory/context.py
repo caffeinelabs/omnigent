@@ -33,6 +33,8 @@ class FactoryDeps:
     :param auth_provider: Request identity, or ``None`` when auth is off.
     :param file_store: File metadata forwarded with dispatched messages.
     :param artifact_store: Binary store forwarded with dispatched messages.
+    :param runner_tunnel_tokens: The server's runner tunnel-token allow-list,
+        or ``None`` when runners prove themselves by token-bound ids only.
     """
 
     conversation_store: ConversationStore
@@ -42,6 +44,7 @@ class FactoryDeps:
     auth_provider: AuthProvider | None = None
     file_store: FileStore | None = None
     artifact_store: ArtifactStore | None = None
+    runner_tunnel_tokens: frozenset[str] | None = None
 
 
 def factory_deps(app_state: Any) -> FactoryDeps:

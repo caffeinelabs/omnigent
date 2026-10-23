@@ -34,6 +34,7 @@ def register_factory_routes(
     auth_provider: AuthProvider | None = None,
     file_store: FileStore | None = None,
     artifact_store: ArtifactStore | None = None,
+    runner_tunnel_tokens: frozenset[str] | None = None,
 ) -> None:
     """
     Mount ``/v1/factory`` on *app* and record the stores it needs.
@@ -46,6 +47,8 @@ def register_factory_routes(
     :param auth_provider: Request identity, or ``None`` when auth is off.
     :param file_store: Forwarded with dispatched messages.
     :param artifact_store: Forwarded with dispatched messages.
+    :param runner_tunnel_tokens: The server's runner tunnel-token allow-list;
+        a listed token proves a runner the way the tunnel route accepts it.
     """
     from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
     from omnigent.server.factory.routes import (
@@ -65,6 +68,7 @@ def register_factory_routes(
             auth_provider=auth_provider,
             file_store=file_store,
             artifact_store=artifact_store,
+            runner_tunnel_tokens=runner_tunnel_tokens,
         ),
     )
     app.add_exception_handler(FactoryRouteError, factory_error_handler)

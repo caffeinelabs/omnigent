@@ -10,6 +10,7 @@ import pytest
 
 from omnigent import factory as F
 from omnigent.server.factory import start_factory_services
+from omnigent.server.factory.context import factory_deps
 from omnigent.server.factory.mailer import MAILER_STATE_ATTR, Mailer
 from tests.server.factory.conftest import FactoryApi, FactoryWorld
 
@@ -187,8 +188,10 @@ def test_create_app_mounts_hidden_factory_routes(db_uri: str, tmp_path: Path) ->
         conversation_store=SqlAlchemyConversationStore(db_uri),
         artifact_store=artifacts,
         agent_cache=AgentCache(artifact_store=artifacts, cache_dir=tmp_path / "cache"),
+        runner_tunnel_tokens=frozenset({"tok-local"}),
     )
 
+    assert factory_deps(app.state).runner_tunnel_tokens == frozenset({"tok-local"})
     paths = {getattr(route, "path", "") for route in app.routes}
     assert {
         "/v1/factory/membership/{session_id}",

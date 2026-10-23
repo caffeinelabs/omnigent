@@ -3,9 +3,9 @@
 Callers are runner tools acting for a session (``from_session_id``) with the
 runner owner's credentials. Every route requires EDIT on that session; when
 the runner tunnel token header is present it must bind to the sender's runner
-(or its root's, for co-located sub-agents), so one pod cannot speak for
-another. Factory scope is label-based: sender and target must share
-``omnigent.factory.id``.
+(or its root's, for co-located sub-agents) or be on the server's tunnel-token
+allow-list, so one pod cannot speak for another. Factory scope is label-based:
+sender and target must share ``omnigent.factory.id``.
 """
 
 from __future__ import annotations
@@ -36,7 +36,7 @@ from omnigent.factory import (
     valid_heartbeat_s,
 )
 from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER, token_bound_runner_id
-from omnigent.server.auth import LEVEL_EDIT, LEVEL_READ
+from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER, LEVEL_READ
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.envelope import display_title, format_envelope
 from omnigent.server.factory.mailer import MailItem, get_mailer, new_mail_id
@@ -140,7 +140,9 @@ async def _authorize_sender(
     )
     sender = access.conversation or await _get_session(deps, from_session_id)
     token = request.headers.get(RUNNER_TUNNEL_TOKEN_HEADER)
-    if token is not None:
+    allow_list = deps.runner_tunnel_tokens
+    # An allow-listed token proves a runner with a stable id, as on the tunnel route.
+    if token is not None and not (allow_list is not None and token.strip() in allow_list):
         bound = token_bound_runner_id(token) if token.strip() else None
         allowed = {sender.runner_id}
         if not is_top_level(sender):
@@ -263,17 +265,24 @@ def create_factory_router() -> APIRouter:
             )
         except UnknownTargetError as exc:
             raise FactoryRouteError(400, "unknown_target", str(exc)) from exc
-        target_m = await _same_factory_target(deps, sender_m, target)
         # Delivery types into the target, so the caller must be allowed to.
+        # Checked before the factory match so the 403 below does not reveal
+        # labels of a session the caller cannot access.
         await require_access(
             user_id, target.id, LEVEL_EDIT, deps.permission_store, deps.conversation_store
         )
-        if body.restart and not _restart_allowed(sender_m, target_m):
-            raise FactoryRouteError(
-                403,
-                "restart_not_allowed",
-                "restart is for top-level peers, from a lead or the target's supervisor",
+        target_m = await _same_factory_target(deps, sender_m, target)
+        if body.restart:
+            # A restart is the UI's Stop, which only the owner may run.
+            await require_access(
+                user_id, target.id, LEVEL_OWNER, deps.permission_store, deps.conversation_store
             )
+            if not _restart_allowed(sender_m, target_m):
+                raise FactoryRouteError(
+                    403,
+                    "restart_not_allowed",
+                    "restart is for top-level peers, from a lead or the target's supervisor",
+                )
         mailer = get_mailer(request.app.state)
         limit = mailer.try_acquire(sender.id, target.id)
         if limit is not None:

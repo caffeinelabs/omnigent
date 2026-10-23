@@ -284,6 +284,11 @@ def factory_members(factory_id: str, store: ConversationStore) -> list[Conversat
     return [rows[i] for i in ids if i in rows and is_top_level(rows[i])]
 
 
+def _replacement_rank(conv: Conversation) -> tuple[bool, int]:
+    """Sort key preferring an active member, then the newest (a replacement)."""
+    return conv.labels.get(LABEL_STATE) != STATE_ACTIVE, -conv.created_at
+
+
 def _peer_lead(sender: Membership, store: ConversationStore) -> str | None:
     if sender.factory_id is None:
         return None
@@ -295,6 +300,7 @@ def _peer_lead(sender: Membership, store: ConversationStore) -> str | None:
     if sender.role != ROLE_LEAD:
         # From a non-lead, the peer lead is the one that is not the root.
         leads = [m for m in leads if m.id != sender.factory_id]
+    leads.sort(key=_replacement_rank)
     return leads[0].id if leads else None
 
 
@@ -310,7 +316,10 @@ def _project_lead(sender: Membership, slug: str, store: ConversationStore) -> st
         and is_top_level(rows[i])
         and rows[i].labels.get(LABEL_ID) == sender.factory_id
     ]
-    matches.sort(key=lambda c: c.labels.get(LABEL_ROLE) != ROLE_PROJECT_LEAD)
+    # Recovery replaces a failing PL with a new one and pauses the old one.
+    matches.sort(
+        key=lambda c: (c.labels.get(LABEL_ROLE) != ROLE_PROJECT_LEAD, *_replacement_rank(c))
+    )
     return matches[0].id if matches else None
 
 
@@ -319,8 +328,10 @@ def resolve_target(to: str, sender: Membership, store: ConversationStore) -> Con
     Resolve a ``to`` address (session id or alias) to a session row.
 
     Aliases: ``parent``, ``lead`` (the factory root), ``peer_lead``,
-    ``supervisor`` and ``project:<slug>``. Factory scoping is the caller's
-    job; this only answers "which session does the address name".
+    ``supervisor`` and ``project:<slug>``. Where an alias matches several
+    members, an ``active`` one wins over a paused/done one, then the newest.
+    Factory scoping is the caller's job; this only answers "which session
+    does the address name".
 
     :param to: The address, e.g. ``"conv_abc"`` or ``"project:api-version"``.
     :param sender: The sender's membership (must be a member).

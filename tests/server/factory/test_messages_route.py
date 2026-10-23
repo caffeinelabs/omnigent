@@ -195,6 +195,20 @@ async def test_runner_token_must_bind_to_the_sender(world: FactoryWorld, api: Fa
     assert unbound.status_code == 403 and _error_code(unbound) == "sender_not_bound"
 
 
+async def test_allow_listed_runner_token_is_accepted(world: FactoryWorld, api: FactoryApi) -> None:
+    from omnigent.server.factory.context import factory_deps
+
+    # A server with a tunnel-token allow-list lets runners keep stable ids.
+    factory_deps(api.app.state).runner_tunnel_tokens = frozenset({"tok-shared"})
+    lead, pl = world.id("lead_a"), world.id("pl")
+
+    listed = await _post(api, lead, pl, headers={RUNNER_TUNNEL_TOKEN_HEADER: " tok-shared "})
+    unlisted = await _post(api, lead, pl, headers={RUNNER_TUNNEL_TOKEN_HEADER: "tok-other"})
+
+    assert listed.status_code == 202
+    assert unlisted.status_code == 403 and _error_code(unlisted) == "sender_not_bound"
+
+
 # ── restart ─────────────────────────────────────────────
 
 
@@ -309,4 +323,53 @@ async def test_labels_do_not_grant_access_to_a_foreign_factory(
     resp = await _post(authed_api, intruder.id, world.id("pl"), headers={"X-Test-User": "bob"})
 
     assert resp.status_code in (403, 404)
+    assert authed_api.deliver.calls == []
+
+
+async def test_restart_needs_owner_on_the_target(
+    world: FactoryWorld, authed_api: FactoryApi, db_uri: str
+) -> None:
+    from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER
+    from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
+
+    permissions = SqlAlchemyPermissionStore(db_uri)
+    lead_a, lead_b, pl = world.id("lead_a"), world.id("lead_b"), world.id("pl")
+    owner_restart = await _post(
+        authed_api, lead_a, lead_b, "restarting", restart=True, headers={"X-Test-User": "alice"}
+    )
+    # Bob holds EDIT on alice's PL, which is enough to relabel it into his factory.
+    bob_lead = world.make_session("bob_lead", agent="lead", title="Bob's lead").id
+    world.store.set_labels(bob_lead, {F.LABEL_ID: bob_lead, F.LABEL_ROLE: "lead"})
+    permissions.grant("bob", bob_lead, LEVEL_OWNER)
+    permissions.grant("bob", pl, LEVEL_EDIT)
+    world.store.set_labels(pl, {F.LABEL_ID: bob_lead})
+    bob = {"X-Test-User": "bob"}
+
+    editor_restart = await _post(authed_api, bob_lead, pl, "restarting", restart=True, headers=bob)
+    editor_message = await _post(authed_api, bob_lead, pl, "hello", headers=bob)
+    await authed_api.mailer.drain()
+
+    assert owner_restart.status_code == 202
+    assert editor_restart.status_code == 403
+    assert editor_message.status_code == 202
+    assert [(sid, restart) for sid, _, restart in authed_api.deliver.calls] == [
+        (lead_b, True),
+        (pl, False),
+    ]
+
+
+async def test_target_access_is_checked_before_its_factory(
+    world: FactoryWorld, authed_api: FactoryApi, db_uri: str
+) -> None:
+    from omnigent.server.auth import LEVEL_OWNER
+    from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
+
+    bob_lead = world.make_session("bob_lead", agent="lead", title="Bob's lead").id
+    world.store.set_labels(bob_lead, {F.LABEL_ID: bob_lead, F.LABEL_ROLE: "lead"})
+    SqlAlchemyPermissionStore(db_uri).grant("bob", bob_lead, LEVEL_OWNER)
+
+    # Alice's PL is in another factory, but bob may not learn that.
+    resp = await _post(authed_api, bob_lead, world.id("pl"), headers={"X-Test-User": "bob"})
+
+    assert resp.status_code == 404
     assert authed_api.deliver.calls == []

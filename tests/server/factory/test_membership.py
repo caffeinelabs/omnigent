@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import pytest
+from sqlalchemy import update
 
 from omnigent import factory as F
+from omnigent.db.db_models import SqlConversation, current_workspace_id
 from omnigent.server.factory.membership import (
     UnknownTargetError,
     ensure_member,
@@ -162,6 +164,64 @@ def test_alias_project(world: FactoryWorld) -> None:
     # A project in another factory is not addressable.
     with pytest.raises(UnknownTargetError):
         _resolve(world, "other_lead", "project:api-version")
+
+
+def _age(world: FactoryWorld, key: str, seconds: int) -> None:
+    """Backdate a session's creation by *seconds*."""
+    created_at = world.get(key).created_at - seconds
+    with world.store._conv_engine.begin() as connection:
+        connection.execute(
+            update(SqlConversation)
+            .where(
+                SqlConversation.workspace_id == current_workspace_id(),
+                SqlConversation.id == world.id(key),
+            )
+            .values(created_at=created_at)
+        )
+
+
+def test_alias_project_prefers_the_active_replacement(world: FactoryWorld) -> None:
+    lead_a, old = world.id("lead_a"), world.id("pl")
+    # Recovery: the failing PL is paused and a new PL takes the project an hour later.
+    _age(world, "pl", 3600)
+    world.store.set_labels(old, {F.LABEL_STATE: "paused"})
+    new = world.make_session(
+        "pl_new",
+        agent="pl",
+        title="PL · api-version (2)",
+        labels={
+            F.LABEL_ID: lead_a,
+            F.LABEL_ROLE: "project_lead",
+            F.LABEL_PROJECT: "api-version",
+            F.LABEL_PARENT: lead_a,
+            F.LABEL_STATE: "active",
+        },
+    ).id
+
+    assert _resolve(world, "lead_b", "project:api-version") == new
+
+    # An active PL wins over a newer paused one...
+    world.store.set_labels(old, {F.LABEL_STATE: "active"})
+    world.store.set_labels(new, {F.LABEL_STATE: "paused"})
+    assert _resolve(world, "lead_b", "project:api-version") == old
+
+    # ...and among active PLs the newest wins.
+    world.store.set_labels(new, {F.LABEL_STATE: "active"})
+    assert _resolve(world, "lead_b", "project:api-version") == new
+
+
+def test_alias_peer_lead_prefers_an_active_lead(world: FactoryWorld) -> None:
+    lead_a = world.id("lead_a")
+    world.store.set_labels(world.id("lead_b"), {F.LABEL_STATE: "paused"})
+    lead_c = world.make_session(
+        "lead_c",
+        agent="lead",
+        title="Lead C",
+        labels={F.LABEL_ID: lead_a, F.LABEL_ROLE: "lead", F.LABEL_STATE: "active"},
+    ).id
+
+    assert _resolve(world, "lead_a", "peer_lead") == lead_c
+    assert _resolve(world, "pl", "peer_lead") == lead_c
 
 
 def test_plain_session_ids_and_unknown_addresses(world: FactoryWorld) -> None:

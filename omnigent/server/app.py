@@ -2757,6 +2757,7 @@ def create_app(
         auth_provider=auth_provider,
         file_store=file_store,
         artifact_store=artifact_store,
+        runner_tunnel_tokens=runner_tunnel_tokens,
     )
     app.include_router(
         create_imports_router(

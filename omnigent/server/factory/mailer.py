@@ -22,6 +22,7 @@ from typing import Any
 
 from omnigent.factory import PENDING_REPLY_KINDS
 from omnigent.server.factory.delivery import DeliveryOutcome, deliver_message
+from omnigent.server.factory.envelope import display_title
 
 _logger = logging.getLogger(__name__)
 
@@ -90,7 +91,7 @@ def new_mail_id() -> str:
 
 def bounce_text(target_title: str | None, target_id: str, reason: str) -> str:
     """:returns: The ``[Factory delivery failure · …]`` notice for the sender."""
-    title = target_title or target_id
+    title = display_title(target_title, target_id)
     return (
         f'[Factory delivery failure · message to "{title}" ({target_id}) undeliverable: {reason}]'
     )
@@ -141,6 +142,8 @@ class Mailer:
         self._last_post: dict[tuple[str, str], float] = {}
         # One delivery at a time per target keeps a brief ahead of its follow-ups.
         self._target_locks: dict[str, asyncio.Lock] = {}
+        self._target_users: dict[str, int] = {}
+        self._swept_at = clock()
         self._closed = False
 
     # ── rate limits ─────────────────────────────────────────────
@@ -150,6 +153,20 @@ class Mailer:
         while window and window[0] <= now - _WINDOW_S:
             window.popleft()
         return window
+
+    def _sweep(self, now: float) -> None:
+        """Drop rate windows and storm marks idle for a full window (hourly)."""
+        if now - self._swept_at < _WINDOW_S:
+            return
+        self._swept_at = now
+        for sender_id in [k for k, w in self._sender_posts.items() if not self._prune(w, now)]:
+            del self._sender_posts[sender_id]
+        for pair in [k for k, w in self._pair_posts.items() if not self._prune(w, now)]:
+            del self._pair_posts[pair]
+        for factory_id in [
+            f for f, at in self._storm_alerted_at.items() if now - at >= STORM_ALERT_INTERVAL_S
+        ]:
+            del self._storm_alerted_at[factory_id]
 
     def try_acquire(self, sender_id: str, target_id: str) -> str | None:
         """
@@ -161,6 +178,7 @@ class Mailer:
             the exceeded limit, e.g. ``"60 posts/h per sender"``.
         """
         now = self._clock()
+        self._sweep(now)
         sender_window = self._prune(self._sender_posts.setdefault(sender_id, deque()), now)
         pair_window = self._prune(
             self._pair_posts.setdefault((sender_id, target_id), deque()), now
@@ -247,11 +265,23 @@ class Mailer:
             return DeliveryOutcome(False, f"internal_error: {type(exc).__name__}")
 
     async def _run(self, item: MailItem) -> None:
-        lock = self._target_locks.setdefault(item.target_id, asyncio.Lock())
-        async with lock:
-            await self._deliver_with_retries(item)
+        target_id = item.target_id
+        lock = self._target_locks.setdefault(target_id, asyncio.Lock())
+        self._target_users[target_id] = self._target_users.get(target_id, 0) + 1
+        try:
+            async with lock:
+                reason = await self._deliver_with_retries(item)
+        finally:
+            self._target_users[target_id] -= 1
+            if not self._target_users[target_id]:
+                del self._target_users[target_id]
+                self._target_locks.pop(target_id, None)
+        # Bounce outside the target's lock: waking the sender can take minutes.
+        if reason is not None:
+            await self._bounce(item, reason)
 
-    async def _deliver_with_retries(self, item: MailItem) -> None:
+    async def _deliver_with_retries(self, item: MailItem) -> str | None:
+        """:returns: ``None`` once delivered, else the final failure reason."""
         delays = iter(self._retry_delays_s)
         restart = item.restart
         while True:
@@ -260,7 +290,7 @@ class Mailer:
                 if item.sender_id is not None and item.kind in PENDING_REPLY_KINDS:
                     self._pending[item.target_id] = (item.sender_id, self._clock())
                 _logger.info("factory mail %s delivered to %s", item.mail_id, item.target_id)
-                return
+                return None
             # A restart's stop already ran; retries only redeliver.
             restart = False
             delay = next(delays, None) if outcome.retryable else None
@@ -278,6 +308,9 @@ class Mailer:
         _logger.warning(
             "factory mail %s to %s undeliverable: %s", item.mail_id, item.target_id, reason
         )
+        return reason
+
+    async def _bounce(self, item: MailItem, reason: str) -> None:
         if item.sender_id is None or item.sender_id == item.target_id:
             return
         bounce = await self._attempt(

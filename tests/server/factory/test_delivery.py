@@ -25,6 +25,7 @@ from omnigent.server.routes._sessions.common import (
     _intentional_stop_sessions,
     _interrupt_fenced_sessions,
 )
+from omnigent.server.routes._sessions.helpers import _SessionEventDispatchResult
 from tests.server.factory.conftest import FactoryWorld, FakeDeliver
 
 CLIENT: Any = object()  # stands in for the runner's httpx client
@@ -40,6 +41,8 @@ class Ladder:
         self.ensure_result: dict[str, Any] = {}
         self.heal_result: Any = None
         self.native = False
+        self.terminal_fails = False
+        self.stale_wake = False
         self.dispatch_error: BaseException | None = None
         self.dispatched: list[dict[str, Any]] = []
         self.stop_delivered = True
@@ -55,6 +58,7 @@ class Ladder:
             "_stop_session_via_runner",
             "_stop_session_host_runner",
             "_is_native_terminal_session",
+            "_maybe_wake_stale_resumable_managed_sandbox",
         ):
             monkeypatch.setattr(delivery, name, getattr(self, name))
 
@@ -89,13 +93,26 @@ class Ladder:
 
     async def _dispatch_session_event_to_runner(
         self, session_id: str, conv: Any, body: Any, store: Any, client: Any, **kw: Any
-    ) -> None:
+    ) -> _SessionEventDispatchResult:
         self.calls.append(("dispatch", session_id))
         if self.dispatch_error is not None:
             raise self.dispatch_error
         self.dispatched.append(
             {"session_id": session_id, "text": body.data["content"][0]["text"], **kw}
         )
+        if not self.native:
+            return _SessionEventDispatchResult(item_id="item_1", pending_id=None)
+        # A native terminal that fails to start yields a failure turn, no pending input.
+        if self.terminal_fails:
+            return _SessionEventDispatchResult(item_id="item_err", pending_id=None)
+        return _SessionEventDispatchResult(item_id=None, pending_id="pending_1")
+
+    async def _maybe_wake_stale_resumable_managed_sandbox(
+        self, *, session_id: str, conv: Any, **kw: Any
+    ) -> bool:
+        if self.stale_wake:
+            self.calls.append(("wake_stale", session_id))
+        return self.stale_wake
 
     async def _stop_session_via_runner(self, session_id: str, runner_router: Any) -> bool:
         self.calls.append(("stop", session_id))
@@ -223,6 +240,42 @@ async def test_sdk_sub_agent_heal_skips_init(world: FactoryWorld, ladder: Ladder
 
     assert outcome.delivered
     assert "init" not in ladder.names()
+
+
+async def test_native_terminal_that_fails_to_start_is_retryable(
+    world: FactoryWorld, ladder: Ladder
+) -> None:
+    pl = world.id("pl")
+    ladder.bound[pl] = CLIENT
+    ladder.native = True
+    ladder.terminal_fails = True
+
+    outcome = await deliver_message(world.app_state, pl, "hello PL")
+
+    assert outcome == DeliveryOutcome(False, "terminal_failed_to_start", retryable=True)
+
+    ladder.terminal_fails = False
+    assert (await deliver_message(world.app_state, pl, "hello PL")).delivered
+
+
+async def test_stale_resumable_sandbox_is_woken_before_dispatch(
+    world: FactoryWorld, ladder: Ladder
+) -> None:
+    pl = world.make_session(
+        "pl_paused",
+        agent="pl",
+        title="PL on a paused resumable sandbox",
+        runner_id="runner_paused",
+        host_id="0123456789abcdef0123456789abcdee",
+    ).id
+    ladder.stale_wake = True
+    ladder.bound[pl] = CLIENT
+
+    outcome = await deliver_message(world.app_state, pl, "wake up")
+
+    assert outcome.delivered
+    assert ladder.names() == ["wake_stale", "get_client", "init", "relay", "dispatch"]
+    assert ladder.calls[2][1]["suppress_recovery_turn"] is True
 
 
 async def test_no_runner_anywhere_is_runner_unavailable(
@@ -413,3 +466,54 @@ async def test_restart_is_only_attempted_once(
     await mailer.drain()
 
     assert [restart for sid, _, restart in fake_deliver.calls if sid == pl] == [True, False]
+
+
+async def test_bounce_does_not_hold_up_mail_to_the_failed_target(
+    world: FactoryWorld,
+    fake_deliver: FakeDeliver,
+    no_sleep: Callable[[float], Any],
+) -> None:
+    pl, lead = world.id("pl"), world.id("lead_a")
+    fake_deliver.outcomes[pl] = [DeliveryOutcome(False, "session_closed")]
+    lead_waking = asyncio.Event()
+    deliveries: list[str] = []
+
+    async def deliver(app_state: Any, session_id: str, text: str, **kw: Any) -> DeliveryOutcome:
+        if session_id == lead:
+            # The sender's sandbox takes a while to wake for the bounce.
+            await lead_waking.wait()
+        deliveries.append(session_id)
+        return await fake_deliver(app_state, session_id, text, **kw)
+
+    mailer = Mailer(world.app_state, deliver=deliver, sleep=no_sleep)
+    mailer.submit(_item(world))
+    second = _item(world)
+    second.mail_id = "mail_2"
+    mailer.submit(second)
+    for _ in range(20):
+        await asyncio.sleep(0)
+
+    # The follow-up reached the target while the bounce was still waiting.
+    assert deliveries == [pl, pl]
+    lead_waking.set()
+    await mailer.drain()
+    assert deliveries == [pl, pl, lead]
+    assert mailer._target_locks == {}
+
+
+async def test_idle_rate_windows_are_swept(
+    world: FactoryWorld,
+    fake_deliver: FakeDeliver,
+    no_sleep: Callable[[float], Any],
+) -> None:
+    now = [0.0]
+    mailer = Mailer(world.app_state, deliver=fake_deliver, sleep=no_sleep, clock=lambda: now[0])
+    assert mailer.try_acquire("a", "b") is None
+    assert mailer.claim_storm_alert("factory_1")
+
+    now[0] = 3601.0
+    assert mailer.try_acquire("c", "d") is None
+
+    assert set(mailer._sender_posts) == {"c"}
+    assert set(mailer._pair_posts) == {("c", "d")}
+    assert mailer._storm_alerted_at == {}

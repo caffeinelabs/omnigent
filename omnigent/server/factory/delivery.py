@@ -6,7 +6,8 @@ in-flight managed launch, wake or relaunch the session's runner, heal a stale
 sub-agent binding, run the session-init handshake after a relaunch, arm the
 relay, then dispatch. It composes the module-level helpers that route uses
 rather than re-entering the route, so it works with no HTTP request and no
-live sender (the sender's pod may already be gone).
+live sender (the sender's pod may already be gone). Unlike the route it skips
+the target's input-policy check; the factory's policies act on tool calls.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ from omnigent.server.routes._sessions.orchestration import (
     _intentional_stop_sessions,
     _interrupt_fenced_sessions,
     _is_native_terminal_session,
+    _maybe_wake_stale_resumable_managed_sandbox,
     _stop_session_via_runner,
     ensure_runner_connected,
 )
@@ -51,6 +53,7 @@ REASON_RUNNER_UNAVAILABLE = "runner_unavailable"
 REASON_TRANSPORT_ERROR = "transport_error"
 REASON_SESSION_NOT_FOUND = "session_not_found"
 REASON_SESSION_CLOSED = "session_closed"
+REASON_TERMINAL_FAILED_TO_START = "terminal_failed_to_start"
 
 _RETRYABLE_CODES = frozenset({ErrorCode.RUNNER_UNAVAILABLE, ErrorCode.WRONG_REPLICA})
 
@@ -176,6 +179,18 @@ async def _deliver(
         await _stop_for_restart(app_state, conv, store, runner_router)
         conv = await _reread(store, session_id, conv)
 
+    needs_init = False
+    # A paused resumable sandbox can keep stale tunnels registered; wake it
+    # rather than dispatch into a VM that cannot answer.
+    if conv.host_id is not None and await _maybe_wake_stale_resumable_managed_sandbox(
+        session_id=session_id,
+        conv=conv,
+        app_state=app_state,
+        conversation_store=store,
+    ):
+        conv = await _reread(store, session_id, conv)
+        needs_init = True
+
     runner_client = await _get_runner_client(session_id, runner_router, conversation=conv)
     # Managed-launch rendezvous: a just-spawned managed session has no host
     # binding until its background provision settles.
@@ -187,7 +202,6 @@ async def _deliver(
             conv = await _reread(store, session_id, conv)
             runner_client = await _get_runner_client(session_id, runner_router, conversation=conv)
 
-    needs_init = False
     if runner_client is None:
         runner_client, conv = await ensure_runner_connected(
             session_id=session_id,
@@ -237,7 +251,7 @@ async def _deliver(
         )
     await _ensure_runner_relay_ready(session_id, conv.runner_id, runner_client, store)
     agent_name, has_mcp_servers = await _has_mcp_servers(conv, deps)
-    await _dispatch_session_event_to_runner(
+    result = await _dispatch_session_event_to_runner(
         session_id,
         conv,
         _message_event(text),
@@ -253,6 +267,10 @@ async def _deliver(
         # The envelope is not a human prompt; never derive a title from it.
         background_titles_enabled=False,
     )
+    if _is_native_terminal_session(conv) and result.pending_id is None:
+        # The TUI did not start: dispatch recorded a failed turn instead of
+        # typing the message, so retry and eventually bounce.
+        return DeliveryOutcome(False, REASON_TERMINAL_FAILED_TO_START, retryable=True)
     return DeliveryOutcome(True)
 
 
