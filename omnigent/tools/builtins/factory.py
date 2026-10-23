@@ -196,7 +196,10 @@ class SysFactorySetTool(Tool):
                     "heartbeat_s": {"type": "integer", "description": _HEARTBEAT_DESC},
                     "supervisor_session_id": {
                         "type": "string",
-                        "description": "Session that receives this member's alerts.",
+                        "description": (
+                            "Session that receives this member's alerts; an empty "
+                            "string clears it."
+                        ),
                     },
                     "title": {"type": "string", "description": "New session title."},
                 },
@@ -225,8 +228,8 @@ class SysFactorySpawnTool(Tool):
             "repository URLs (optionally '#<branch>') cloned into the sandbox. The "
             "call returns {session_id, url, status: 'provisioning'} right away; "
             "provisioning takes minutes and the brief is delivered once the "
-            "sandbox is up. Check sys_factory_roster first and never spawn a "
-            "duplicate for the same project. Spawning a lead while you have no "
+            "sandbox is up. Check sys_factory_roster first: a project that already "
+            "has a member that is not done is refused. Spawning a lead while you have no "
             "supervisor makes the two leads supervise each other."
         )
 
