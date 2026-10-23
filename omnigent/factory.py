@@ -10,6 +10,7 @@ their root conversation, and their role comes from their spec's
 
 from __future__ import annotations
 
+import os
 from typing import Any, Final
 
 LABEL_PREFIX: Final = "omnigent.factory."
@@ -58,6 +59,8 @@ SUMMARY_MAX_LEN: Final = 120
 MESSAGE_MAX_CHARS: Final = 8000
 
 MESSAGE_KINDS: Final = frozenset({"info", "request", "reply", "brief", "alert"})
+PENDING_REPLY_KINDS: Final = frozenset({"request", "brief"})
+"""Kinds that expect an answer; the target's next idle edge may notify the sender."""
 ADDRESS_ALIASES: Final = frozenset({"parent", "lead", "peer_lead", "supervisor"})
 PROJECT_ALIAS_PREFIX: Final = "project:"
 
@@ -84,3 +87,11 @@ def clamp_label_value(value: str, limit: int = LABEL_VALUE_MAX_LEN) -> str:
 def valid_heartbeat_s(value: int) -> bool:
     """``0`` (off) or within ``[MIN_HEARTBEAT_S, MAX_HEARTBEAT_S]``."""
     return value == 0 or MIN_HEARTBEAT_S <= value <= MAX_HEARTBEAT_S
+
+
+FACTORY_ENABLED_ENV: Final = "OMNIGENT_FACTORY_ENABLED"
+
+
+def factory_enabled() -> bool:
+    """Whether the factory built-ins and supervisor are switched on (``=1``)."""
+    return os.environ.get(FACTORY_ENABLED_ENV, "").strip() == "1"

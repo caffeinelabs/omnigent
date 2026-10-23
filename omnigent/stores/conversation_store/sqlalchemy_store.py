@@ -2402,6 +2402,44 @@ class SqlAlchemyConversationStore(ConversationStore):
                 stmt = stmt.where(SqlConversationLabel.conversation_id.in_(permission_ids))
             return [row[0] for row in ap_sess.execute(stmt).all()]
 
+    def list_conversation_ids_with_label(
+        self,
+        key: str,
+        value: str | None = None,
+        limit: int = 2000,
+    ) -> list[str]:
+        """
+        Return ids of non-archived conversations carrying a label.
+
+        :param key: Label key to match, e.g. ``"omnigent.factory.id"``.
+        :param value: When set, only rows whose value equals it.
+            ``None`` matches any value.
+        :param limit: Maximum number of ids to return.
+        :returns: Matching conversation ids, oldest conversation first.
+        """
+        workspace_id = current_workspace_id()
+        with self._conv_session("list_conversation_ids_with_label") as ap_sess:
+            stmt = (
+                select(SqlConversationLabel.conversation_id)
+                .join(
+                    SqlConversation,
+                    and_(
+                        SqlConversation.workspace_id == SqlConversationLabel.workspace_id,
+                        SqlConversation.id == SqlConversationLabel.conversation_id,
+                    ),
+                )
+                .where(
+                    SqlConversationLabel.workspace_id == workspace_id,
+                    SqlConversationLabel.key == key,
+                    SqlConversation.archived.is_(False),
+                )
+                .order_by(SqlConversation.created_at, SqlConversation.id)
+                .limit(limit)
+            )
+            if value is not None:
+                stmt = stmt.where(SqlConversationLabel.value == value)
+            return [row[0] for row in ap_sess.execute(stmt).all()]
+
     def delete_label(
         self,
         conversation_id: str,
