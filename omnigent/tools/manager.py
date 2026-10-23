@@ -157,6 +157,7 @@ class ToolManager:
         self._register_skill_tools()
         self._register_builtin_tools()
         self._register_sub_agent_tools()
+        self._register_factory_tools()
         self._register_session_tools()
         self._register_agent_mgmt_tools()
         self._register_os_env_tools()
@@ -496,6 +497,32 @@ class ToolManager:
         # alone only permits the specified sub-agent types.
         if self._spec.spawn:
             self._tools[SysSessionCreateTool.name()] = SysSessionCreateTool()
+
+    def _register_factory_tools(self) -> None:
+        """
+        Register the software-factory tools for specs that declare a factory role.
+
+        ``executor.config.factory_role`` (see :mod:`omnigent.factory`) unlocks
+        ``sys_session_post``, ``sys_factory_roster`` and ``sys_factory_set``;
+        ``sys_factory_spawn`` (a new top-level sandbox) is for ``lead`` only.
+        All four are runner-dispatched to the server's ``/v1/factory`` routes.
+        """
+        from omnigent.factory import ROLE_LEAD, factory_role_from_spec
+        from omnigent.tools.builtins.factory import (
+            SysFactoryRosterTool,
+            SysFactorySetTool,
+            SysFactorySpawnTool,
+            SysSessionPostTool,
+        )
+
+        role = factory_role_from_spec(self._spec)
+        if role is None:
+            return
+        tools: list[Tool] = [SysSessionPostTool(), SysFactoryRosterTool(), SysFactorySetTool()]
+        if role == ROLE_LEAD:
+            tools.append(SysFactorySpawnTool())
+        for tool in tools:
+            self._tools[tool.name()] = tool
 
     def _register_session_tools(self) -> None:
         """Register framework-owned tools for the current session."""

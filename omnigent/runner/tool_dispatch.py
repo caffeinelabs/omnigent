@@ -56,6 +56,7 @@ from omnigent.models.model_override import (
     validate_model_override,
 )
 from omnigent.native.native_coding_agents import public_agent_name
+from omnigent.runner import factory_dispatch
 from omnigent.runtime import pending_elicitations
 from omnigent.tools import ToolManager
 from omnigent.tools.base import Tool, ToolContext
@@ -68,6 +69,7 @@ from omnigent.tools.builtins.async_inbox import (
 )
 from omnigent.tools.builtins.browser import BROWSER_TOOL_NAMES
 from omnigent.tools.builtins.download_file import DownloadFileTool
+from omnigent.tools.builtins.factory import FACTORY_TOOL_NAMES
 from omnigent.tools.builtins.list_comments import ListCommentsTool
 from omnigent.tools.builtins.os_env import (
     SysOsEditTool,
@@ -288,6 +290,10 @@ _TURN_ACTOR_LABEL = "omnigent.turn_actor"
 # as _execute_subagent_tool.
 _SESSION_CREATE_TOOLS = frozenset({"sys_session_create"})
 
+# Software-factory tools (sys_session_post / sys_factory_*), registered for
+# specs with ``executor.config.factory_role``; executed in factory_dispatch.
+_FACTORY_TOOLS = FACTORY_TOOL_NAMES
+
 # Priority 5f.0: Session query tools — peek/list/close/get_info/share. The
 # runner has no in-process ConversationStore, so these read/mutate session
 # state via the Omnigent server's existing REST endpoints (GET /items, GET
@@ -463,6 +469,7 @@ _NATIVE_RELAY_BUILTIN_TOOLS = (
     | _LIST_MODELS_TOOLS
     | _ADVISE_MODELS_TOOLS
     | _SESSION_CREATE_TOOLS
+    | _FACTORY_TOOLS
     | _TASK_LIFECYCLE_TOOLS
     | _AGENT_TOOLS
     | _POLICY_TOOLS
@@ -889,6 +896,7 @@ _ALL_LOCAL_TOOLS = (
     | _LIST_MODELS_TOOLS
     | _ADVISE_MODELS_TOOLS
     | _SESSION_CREATE_TOOLS
+    | _FACTORY_TOOLS
     | _SESSION_QUERY_TOOLS
     | _SESSION_SELF_WRITE_TOOLS
     | _WEB_FETCH_TOOLS
@@ -2991,7 +2999,8 @@ async def _send_to_existing_session(
                 "conversation_id": target_session_id,
                 "message": (
                     "target is not a direct child of the calling session; "
-                    "sys_session_send by session_id is child-only."
+                    "sys_session_send by session_id is child-only. "
+                    "For factory peers use sys_session_post."
                 ),
             }
         )
@@ -6303,6 +6312,15 @@ async def execute_tool(
                 agent_spec=agent_spec,
                 runner_workspace=runner_workspace,
             )
+        elif tool_name in _FACTORY_TOOLS:
+            output = await factory_dispatch.execute_factory_tool(
+                tool_name,
+                args,
+                server_client=server_client,
+                conversation_id=conversation_id,
+                agent_spec=agent_spec,
+                publish_event=publish_event,
+            )
         elif tool_name in _SESSION_SELF_WRITE_TOOLS:
             output = await _rename_current_session_via_rest(
                 args,
@@ -6310,12 +6328,24 @@ async def execute_tool(
                 server_client,
             )
         elif tool_name in _SESSION_QUERY_TOOLS:
-            output = await _execute_session_query_tool(
+            # Factory members read only inside their own factory.
+            scoped = await factory_dispatch.scoped_session_query(
                 tool_name,
-                arguments,
+                args,
                 conversation_id=conversation_id,
                 server_client=server_client,
                 agent_spec=agent_spec,
+            )
+            output = (
+                scoped
+                if scoped is not None
+                else await _execute_session_query_tool(
+                    tool_name,
+                    arguments,
+                    conversation_id=conversation_id,
+                    server_client=server_client,
+                    agent_spec=agent_spec,
+                )
             )
         elif tool_name in _WEB_FETCH_TOOLS:
             output = await _execute_web_fetch_tool(
