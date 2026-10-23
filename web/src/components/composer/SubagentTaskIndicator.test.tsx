@@ -1,11 +1,13 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import type * as UseChildSessionsModule from "@/hooks/useChildSessions";
 import type { ChildSessionInfo } from "@/hooks/useChildSessions";
 import { SubagentTaskIndicator } from "./SubagentTaskIndicator";
 
 const useChildSessionsMock = vi.fn();
-vi.mock("@/hooks/useChildSessions", () => ({
+vi.mock("@/hooks/useChildSessions", async (importOriginal) => ({
+  ...(await importOriginal<typeof UseChildSessionsModule>()),
   useChildSessions: (conversationId: string | null) => useChildSessionsMock(conversationId),
 }));
 
@@ -23,6 +25,7 @@ function child(overrides: Partial<ChildSessionInfo>): ChildSessionInfo {
     last_message_preview: null,
     pending_elicitations_count: 0,
     routed_model: null,
+    ...(overrides.kind !== undefined ? { kind: overrides.kind } : {}),
   };
 }
 
@@ -56,6 +59,18 @@ describe("SubagentTaskIndicator", () => {
     expect(pill).toHaveTextContent("1");
     expect(pill).toHaveClass("px-0", "md:px-2");
     expect(pill).toHaveAttribute("aria-label", "1 sub-agent running");
+  });
+
+  it("does not count busy factory members (top-level sessions) as sub-agents", () => {
+    setChildren([
+      child({ id: "a", busy: true, kind: "sub_agent" }),
+      child({ id: "pl", busy: true, kind: "default", title: "PL · api-version" }),
+    ]);
+    render(<SubagentTaskIndicator conversationId="conv-1" />);
+    expect(screen.getByTestId("subagent-task-pill")).toHaveAttribute(
+      "aria-label",
+      "1 sub-agent running",
+    );
   });
 
   it("pluralizes the count and lists active sub-agents on open", () => {

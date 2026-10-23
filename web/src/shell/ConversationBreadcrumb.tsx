@@ -20,7 +20,9 @@ import { ProjectRowIcon } from "./ProjectPicker";
  * The caller mounts this when there is a title or a parent route to climb
  * back to. Segments self-gate: the folder only shows when filed, the
  * sub-agent only inside a child. The title links back to the parent when
- * `titleLinkTo` is set (viewing a sub-agent), else it's plain text.
+ * `titleLinkTo` is set (viewing a sub-agent), else it's plain text. A
+ * top-level software-factory member (a project lead spawned by a lead) leads
+ * with a "Back to <parent>" link when `factoryParent` is set.
  */
 export function ConversationBreadcrumb({
   conversationTitle,
@@ -33,6 +35,7 @@ export function ConversationBreadcrumb({
   subAgentName,
   boundAgent,
   wrapperLabel,
+  factoryParent,
   actions,
   className,
 }: {
@@ -73,6 +76,12 @@ export function ConversationBreadcrumb({
   boundAgent: Agent | undefined;
   /** The session's `omnigent.wrapper` label — names a native sub-agent's vendor. */
   wrapperLabel: string | null;
+  /**
+   * The factory session that spawned this top-level session (its
+   * `omnigent.factory.parent` label), resolved to a title. Ignored inside a
+   * sub-agent, whose title already climbs to its parent.
+   */
+  factoryParent?: { id: string; title: string } | null;
   /** Session-management menu rendered immediately after the title. */
   actions?: ReactNode;
   /** Extra classes for the context (header vs title-bar strip). */
@@ -132,6 +141,22 @@ export function ConversationBreadcrumb({
             </span>
           </div>
         ))}
+      {factoryParent && !titleLinkTo && (
+        <>
+          <Link
+            to={`/c/${factoryParent.id}`}
+            data-testid="factory-parent-breadcrumb"
+            title={`Back to ${factoryParent.title}`}
+            className="inline-flex min-w-0 max-w-[40%] shrink items-center gap-0.5 text-muted-foreground hover:text-foreground"
+          >
+            <ChevronLeftIcon aria-hidden className="size-4 shrink-0" />
+            <span className="truncate">Back to {factoryParent.title}</span>
+          </Link>
+          <span aria-hidden className="shrink-0 text-muted-foreground opacity-40">
+            /
+          </span>
+        </>
+      )}
       {titleLinkTo ? (
         <Link
           to={titleLinkTo}

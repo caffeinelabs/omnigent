@@ -35,6 +35,12 @@ export interface ChildSessionInfo {
   session_name: string | null;
   /** Session-scoped labels from the child conversation. */
   labels?: Record<string, string>;
+  /**
+   * Conversation kind: ``"sub_agent"`` for spawned children; a top-level
+   * factory member carries its own (e.g. ``"default"``). Absent on rows
+   * seeded from the session stream, which only carries sub-agents.
+   */
+  kind?: string | null;
   /** Status of the latest task, e.g. ``"completed"``. */
   current_task_status: string | null;
   /** Durable error details from the latest failed child run. */
@@ -73,6 +79,7 @@ interface ChildSessionWire {
   tool: string | null;
   session_name: string | null;
   labels?: Record<string, string>;
+  kind?: string | null;
   current_task_status: string | null;
   last_task_error?: ChildSessionError | null;
   busy: boolean;
@@ -85,6 +92,22 @@ interface ChildSessionsResponse {
   object: "list";
   data: ChildSessionWire[];
 }
+
+/**
+ * Whether a child-session row is a real sub-agent rather than a top-level
+ * factory member listed under the lead that spawned it. Rows without a kind
+ * (stream-seeded, or from an older server) are sub-agents.
+ */
+export function isSubAgentChild(child: ChildSessionInfo): boolean {
+  return child.kind == null || child.kind === "sub_agent";
+}
+
+/**
+ * Whether a cached child list was seeded from the session stream rather than
+ * fetched. The stream lists sub-agents only, so such a cache still lacks the
+ * factory members and must be fetched when a consumer mounts.
+ */
+export const STREAM_SEEDED_UPDATED_AT = 0;
 
 /**
  * TanStack Query key for a session's child sessions.
@@ -167,15 +190,28 @@ interface UseChildSessionsResult {
   error: Error | null;
 }
 
+export interface FetchChildSessionsOptions {
+  /**
+   * Also list the top-level software-factory members this session spawned
+   * (sessions labelled ``omnigent.factory.parent == sessionId``), so the
+   * Agents tree renders lead → project leads → ICs.
+   */
+  includeFactory?: boolean;
+}
+
 /**
  * Fetch child sessions for a parent session.
  *
  * Exported for unit testing of the HTTP-shape contract; production
  * code should call ``useChildSessions``.
  */
-export async function fetchChildSessions(sessionId: string): Promise<ChildSessionInfo[]> {
+export async function fetchChildSessions(
+  sessionId: string,
+  { includeFactory = false }: FetchChildSessionsOptions = {},
+): Promise<ChildSessionInfo[]> {
+  const query = includeFactory ? "?include_factory=true" : "";
   const res = await authenticatedFetch(
-    `/v1/sessions/${encodeURIComponent(sessionId)}/child_sessions`,
+    `/v1/sessions/${encodeURIComponent(sessionId)}/child_sessions${query}`,
   );
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   const json = (await res.json()) as ChildSessionsResponse;
@@ -186,6 +222,7 @@ export async function fetchChildSessions(sessionId: string): Promise<ChildSessio
     tool: row.tool,
     session_name: row.session_name,
     labels: row.labels ?? {},
+    kind: row.kind ?? null,
     current_task_status: row.current_task_status,
     last_task_error: parseChildSessionError(row.last_task_error),
     busy: row.busy,
@@ -197,7 +234,8 @@ export async function fetchChildSessions(sessionId: string): Promise<ChildSessio
 
 /**
  * Live child-session list for a conversation, served by
- * ``GET /v1/sessions/{id}/child_sessions``.
+ * ``GET /v1/sessions/{id}/child_sessions?include_factory=true`` (sub-agents
+ * plus the factory members the session spawned).
  *
  * The ``session.created`` handler in ``chatStore.ts`` invalidates
  * this query key on each spawn so newly-created child sessions
@@ -220,11 +258,14 @@ export function useChildSessions(
       conversationId === null
         ? ["conversation", null, "child_sessions"]
         : childSessionsQueryKey(conversationId),
-    queryFn: () => fetchChildSessions(conversationId as string),
+    // Factory members join the tree like children; their own children are
+    // fetched by the next level down, so lead → PLs → ICs nests naturally.
+    queryFn: () => fetchChildSessions(conversationId as string, { includeFactory: true }),
     enabled: conversationId !== null,
     staleTime: 60_000,
     retry: false,
-    refetchOnMount: false,
+    // A cache seeded from the stream (sub-agents only) is fetched once on mount.
+    refetchOnMount: (query) => query.state.dataUpdatedAt === STREAM_SEEDED_UPDATED_AT,
     refetchInterval: pollMs ?? false,
   });
   return {

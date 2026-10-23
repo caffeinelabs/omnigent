@@ -20,6 +20,7 @@ import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { getCurrentUserId } from "@/lib/identity";
 import { useActiveConversationId } from "@/hooks/useActiveConversationId";
 import { childSessionsQueryKey, type ChildSessionInfo } from "@/hooks/useChildSessions";
+import { FACTORY_PARENT_LABEL_KEY } from "@/lib/factory";
 import {
   isSessionArchiving,
   isSessionDeleting,
@@ -354,6 +355,9 @@ export function SessionUpdatesProvider({ children }: { children: ReactNode }) {
           const parentIds = new Set<string>();
           for (const item of frame.items) {
             if (item.parent_session_id) parentIds.add(item.parent_session_id);
+            // Factory members are top-level but listed under the lead that spawned them.
+            const factoryParent = item.labels?.[FACTORY_PARENT_LABEL_KEY];
+            if (factoryParent) parentIds.add(factoryParent);
           }
           for (const parentId of parentIds) {
             void queryClient.invalidateQueries({ queryKey: childSessionsQueryKey(parentId) });

@@ -152,6 +152,11 @@ interface ChatHeaderProps {
    * internal the user should never see.
    */
   wrapperLabel: string | null;
+  /**
+   * The software-factory session that spawned this top-level one, for the
+   * breadcrumb's "Back to <parent>" link. ``null``/omitted otherwise.
+   */
+  factoryParent?: { id: string; title: string } | null;
   /** Whether the Share button/menu entry should render. */
   canShare: boolean;
   /** Whether the active session can be forked. */
@@ -313,6 +318,7 @@ export function ChatHeader({
   titleLinkTo,
   boundAgent,
   wrapperLabel,
+  factoryParent = null,
   canShare,
   canFork,
   shareDisabled = false,
@@ -621,6 +627,7 @@ export function ChatHeader({
             subAgentName={subAgentName}
             boundAgent={boundAgent}
             wrapperLabel={wrapperLabel}
+            factoryParent={factoryParent}
             actions={isMobile ? undefined : (conversationMenu ?? undefined)}
             className="pr-1"
           />

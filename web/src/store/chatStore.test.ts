@@ -55,7 +55,11 @@ import type {
 } from "@/lib/events";
 import type { TerminalInfo } from "@/hooks/useTerminals";
 import { terminalsQueryKey } from "@/hooks/useTerminals";
-import { type ChildSessionInfo, childSessionsQueryKey } from "@/hooks/useChildSessions";
+import {
+  type ChildSessionInfo,
+  childSessionsQueryKey,
+  STREAM_SEEDED_UPDATED_AT,
+} from "@/hooks/useChildSessions";
 import {
   ACTIVE_SESSION_STATUS_RECONCILE_INTERVAL_MS,
   ACTIVE_SESSION_STATUS_RECONCILE_TIMEOUT_MS,
@@ -7153,6 +7157,38 @@ describe("chatStore — handleSessionEvent (resource events)", () => {
       expect(cached).toHaveLength(1);
       expect(cached?.[0].id).toBe("conv_child1");
       expect(cached?.[0].busy).toBe(true);
+    });
+
+    it("keeps a stream-seeded cache marked so the first mount still fetches", () => {
+      const key = childSessionsQueryKey("conv_parent");
+      // The stream lists sub-agents only, so a seeded cache lacks factory members.
+      handleSessionEvent({
+        type: "session_child_session_updated",
+        conversationId: "conv_parent",
+        childSessionId: "conv_child1",
+        child: child(),
+      });
+      expect(client.getQueryState(key)?.dataUpdatedAt).toBe(STREAM_SEEDED_UPDATED_AT);
+      // A later delta on the still-unfetched cache keeps the marker.
+      handleSessionEvent({
+        type: "session_child_session_updated",
+        conversationId: "conv_parent",
+        childSessionId: "conv_child1",
+        child: { id: "conv_child1", last_message_preview: "found it" },
+      });
+      expect(client.getQueryState(key)?.dataUpdatedAt).toBe(STREAM_SEEDED_UPDATED_AT);
+
+      // A fetched list is a full list: deltas patch it without the marker.
+      client.setQueryData<ChildSessionInfo[]>(childSessionsQueryKey("conv_other"), []);
+      handleSessionEvent({
+        type: "session_child_session_updated",
+        conversationId: "conv_other",
+        childSessionId: "conv_child1",
+        child: child(),
+      });
+      expect(client.getQueryState(childSessionsQueryKey("conv_other"))?.dataUpdatedAt).not.toBe(
+        STREAM_SEEDED_UPDATED_AT,
+      );
     });
 
     it("refetches the parent's child list when a child goes idle without a preview", () => {

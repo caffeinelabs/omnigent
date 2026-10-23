@@ -1,5 +1,6 @@
 import type { ChildSessionInfo } from "@/hooks/useChildSessions";
 import { MAX_TREE_DEPTH } from "@/hooks/useChildSessions";
+import { factoryInfo, isFactoryMember, type FactoryInfo } from "@/lib/factory";
 import { nativeCodingAgentForSubagentWrapper, WRAPPER_LABEL_KEY } from "@/lib/nativeCodingAgents";
 import { childStatus, type AgentActivity } from "./subagentStatus";
 
@@ -12,6 +13,8 @@ export interface AgentNodeData {
   sessionId: string;
   isActive: boolean;
   preview: string | null;
+  /** Factory labels (role chip + beacon badge), or null for non-factory sessions. */
+  factory: FactoryInfo | null;
   [key: string]: unknown;
 }
 
@@ -21,6 +24,7 @@ export interface TreeNode {
   activity: AgentActivity;
   statusLabel: string;
   preview: string | null;
+  factory?: FactoryInfo | null;
   children: TreeNode[];
 }
 
@@ -92,6 +96,7 @@ export function layoutTree(
         sessionId: node.id,
         isActive: node.id === activeId,
         preview: node.preview,
+        factory: node.factory ?? null,
       },
     });
 
@@ -138,6 +143,7 @@ export function buildTree(
   childrenMap: Map<string, ChildSessionInfo[]>,
   depth: number,
   visited = new Set<string>(),
+  rootFactory: FactoryInfo | null = null,
 ): TreeNode {
   visited.add(rootId);
   const children = childrenMap.get(rootId) ?? [];
@@ -147,6 +153,7 @@ export function buildTree(
     activity: rootActivity,
     statusLabel: rootStatusLabel,
     preview: rootPreview,
+    ...(rootFactory ? { factory: rootFactory } : {}),
     children:
       depth >= MAX_TREE_DEPTH
         ? []
@@ -164,14 +171,18 @@ export function buildTree(
                 nativeCodingAgentForSubagentWrapper(child.labels?.[WRAPPER_LABEL_KEY]) !==
                 undefined;
               const isUserAdded = child.title?.startsWith("ui:") ?? false;
+              const factory = factoryInfo(child.labels);
+              // A factory member is a top-level session: its title names it.
               const label =
-                isNativeSubagent && !isUserAdded
-                  ? (child.tool ?? child.title ?? child.id)
-                  : (child.task_summary ??
-                    child.session_name ??
-                    child.title ??
-                    child.tool ??
-                    child.id);
+                isFactoryMember(factory) && child.title
+                  ? child.title
+                  : isNativeSubagent && !isUserAdded
+                    ? (child.tool ?? child.title ?? child.id)
+                    : (child.task_summary ??
+                      child.session_name ??
+                      child.title ??
+                      child.tool ??
+                      child.id);
               return buildTree(
                 child.id,
                 label,
@@ -181,6 +192,7 @@ export function buildTree(
                 childrenMap,
                 depth + 1,
                 visited,
+                factory,
               );
             }),
   };
@@ -194,6 +206,7 @@ export function buildGraphLayout(
   rootPreview: string | null,
   childrenMap: Map<string, ChildSessionInfo[]>,
   activeId: string,
+  rootFactory: FactoryInfo | null = null,
 ): { nodes: LayoutNode[]; edges: LayoutEdge[] } {
   const tree = buildTree(
     rootId,
@@ -203,6 +216,8 @@ export function buildGraphLayout(
     rootPreview,
     childrenMap,
     0,
+    new Set<string>(),
+    rootFactory,
   );
   return layoutTree(tree, activeId);
 }

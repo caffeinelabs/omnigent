@@ -51,6 +51,7 @@ import { RunningDot } from "@/components/RunningDot";
 import { shortModelName } from "@/components/CostRoutingControl";
 import { MAX_TREE_DEPTH, useChildSessions, type ChildSessionInfo } from "@/hooks/useChildSessions";
 import { useSession } from "@/hooks/useSession";
+import { factoryInfo, hasFactoryBeacon, isFactoryMember } from "@/lib/factory";
 import type { SessionItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -70,6 +71,7 @@ import {
   type AgentStatus,
 } from "./subagentStatus";
 import { AddAgentDialog } from "./AddAgentDialog";
+import { FactoryBadge, FactoryRoleChip } from "./FactoryBadge";
 
 // Session-scoped URL params that the file viewer / Files panel write
 // for one session and AppShell's restore effect re-reads on the next.
@@ -411,6 +413,9 @@ function StatusIndicator({ activity, label, details }: AgentStatus) {
  * @returns The label shown beside the child icon.
  */
 function childPrimaryLabel(child: ChildSessionInfo): string {
+  // A factory member is a top-level session in its own right: its title
+  // (e.g. "PL · api-version") names it, not a task summary.
+  if (isFactoryMember(factoryInfo(child.labels)) && child.title) return child.title;
   // User-added rows use the reserved "ui:<agent>:<name>" title sentinel;
   // LLM-spawned titles cannot start with "ui:" because the spec validator
   // rejects "ui" as a sub-agent name.
@@ -533,6 +538,8 @@ function MainRow({ rootSessionId, isActive }: { rootSessionId: string; isActive:
   // carries no name.
   const label = nativeAgent?.displayName ?? session?.agentName ?? "main";
   const preview = mainMessagePreview(session?.items);
+  // A factory lead's own role and beacon, like its members' rows below.
+  const factory = factoryInfo(session?.labels);
   return (
     <li>
       <Link
@@ -555,9 +562,15 @@ function MainRow({ rootSessionId, isActive }: { rootSessionId: string; isActive:
         <div className="flex w-full items-center gap-1">
           <Icon className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="shrink-0 truncate text-sm font-medium">{label}</span>
+          <FactoryRoleChip info={factory} shownTitle={label} />
           <span className="flex-1" />
           <StatusIndicator {...sessionStatus(session?.status, session?.lastTaskError)} />
         </div>
+        {hasFactoryBeacon(factory) && (
+          <div className="flex min-w-0 pl-[18px]">
+            <FactoryBadge info={factory} />
+          </div>
+        )}
         {preview && (
           // Indented to align with the title text above: 14px icon + 4px gap.
           <p
@@ -603,6 +616,7 @@ function SubagentRow({
   const search = railLinkSearch(useLocation().search);
   const Icon = brandChildIcon(child) ?? iconForAgentType(child.tool);
   const primary = childPrimaryLabel(child);
+  const factory = factoryInfo(child.labels);
   const isActive = conversationId === child.id;
   // De-emphasize settled rows (done/idle) so working/failed agents dominate
   // — but never the row the user is currently viewing.
@@ -662,6 +676,7 @@ function SubagentRow({
             )}
             <Icon className="size-3.5 shrink-0 text-muted-foreground" />
             <span className="shrink-0 truncate text-sm font-medium">{primary}</span>
+            <FactoryRoleChip info={factory} shownTitle={primary} />
             {child.routed_model ? (
               // Model the intelligent router picked for this sub-agent — the
               // per-subagent half of routing visibility.
@@ -676,6 +691,12 @@ function SubagentRow({
             <span className="flex-1" />
             <StatusIndicator {...status} />
           </div>
+          {hasFactoryBeacon(factory) && (
+            // Same 22px indent as the preview below: aligns with the title text.
+            <div className="flex min-w-0 pl-[22px]">
+              <FactoryBadge info={factory} />
+            </div>
+          )}
           {child.last_message_preview && (
             // Preview indented to align with the title text on the row
             // above: 12px connector - 12px (-ml-3) + 4px gap + 14px bot

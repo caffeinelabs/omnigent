@@ -104,6 +104,7 @@ import { SidebarHeaderActions } from "./SidebarHeaderActions";
 import { useSettingsRoute } from "./settingsNav";
 import { SubagentsPanel } from "./SubagentsPanel";
 import { useRootSessionId, useSession } from "@/hooks/useSession";
+import { useFactoryParent } from "@/hooks/useFactoryParent";
 import {
   TerminalFirstContextProvider,
   type TerminalFirstContextValue,
@@ -560,6 +561,13 @@ export function AppShell() {
     isChildSession && activeSession?.parentSessionId
       ? `/c/${activeSession.parentSessionId}`
       : undefined;
+  // A factory project lead is top-level; its label names the lead to climb back to.
+  const factoryParent = useFactoryParent(
+    serverConversationId,
+    sessionLabels,
+    isChildSession,
+    allConversations,
+  );
   // Positive "this is a top-level session" signal for the top-level-only
   // actions (Share/Clone). Gating those on ``!isChildSession`` flickered:
   // while the snapshot loads ``activeSession`` is null, so ``isChildSession``
@@ -2062,6 +2070,7 @@ export function AppShell() {
                     titleLinkTo={headerTitleLinkTo}
                     boundAgent={boundAgent}
                     wrapperLabel={wrapperLabel}
+                    factoryParent={factoryParent}
                     canShare={canShare}
                     canFork={canClone}
                     shareDisabled={shareDisabled}

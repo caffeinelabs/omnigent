@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   executionLogTabKey,
+  isSubAgentChild,
   MAIN_EXECUTION_LOG_KEY,
   useChildSessions,
   type ChildSessionInfo,
@@ -39,7 +40,12 @@ export function SessionRail({
 }: SessionRailProps) {
   const { children } = useChildSessions(conversationId);
   if (suppressed) return null;
-  return <ExecutionLogsCard childSessions={children} onExpand={onExpandExecutionLogs} />;
+  return (
+    <ExecutionLogsCard
+      childSessions={children.filter(isSubAgentChild)}
+      onExpand={onExpandExecutionLogs}
+    />
+  );
 }
 
 interface ExecutionLogsCardProps {
