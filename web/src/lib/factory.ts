@@ -74,13 +74,20 @@ export function isFactoryWarningHealth(health: string | null): boolean {
 /**
  * Text of the role chip, e.g. `"PL · api-version"` or `"Lead"`.
  *
+ * @param shownTitle - The row's visible title; the chip is dropped when it
+ *   already reads the same (a PL titled `"PL · api-version"`).
  * @returns `null` when the session has neither a role nor a project.
  */
-export function factoryRoleChipText(info: FactoryInfo | null): string | null {
+export function factoryRoleChipText(
+  info: FactoryInfo | null,
+  shownTitle?: string | null,
+): string | null {
   if (!info) return null;
   const role = info.role ? (ROLE_DISPLAY[info.role] ?? info.role) : null;
   const parts = [role, info.project].filter((p): p is string => p !== null);
-  return parts.length > 0 ? parts.join(" · ") : null;
+  if (parts.length === 0) return null;
+  const text = parts.join(" · ");
+  return shownTitle?.includes(text) ? null : text;
 }
 
 /**

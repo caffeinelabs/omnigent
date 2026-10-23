@@ -24,6 +24,8 @@ from omnigent.db.db_models import SqlConversation, current_workspace_id
 from omnigent.entities import Conversation
 from omnigent.errors import OmnigentError
 from omnigent.server.auth import LEVEL_OWNER
+from omnigent.server.factory import org_chart
+from omnigent.server.routes._sessions.common import _session_status_cache
 from omnigent.server.routes.sessions.routes_items import register_items_routes
 from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
 from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
@@ -77,6 +79,7 @@ def org(db_uri: str) -> _Org:
     """Lead "Atlas" with two sub-agents, a PL (with an IC) and a peer lead."""
     store = SqlAlchemyConversationStore(db_uri)
     lead = store.create_conversation(kind="default", title="Atlas")
+    store.set_labels(lead.id, {F.LABEL_ID: lead.id, F.LABEL_ROLE: F.ROLE_LEAD})
     children = [
         store.create_conversation(
             kind="sub_agent", title=f"researcher:{name}", parent_conversation_id=lead.id
@@ -276,3 +279,102 @@ async def test_flag_on_excludes_an_unrelated_owners_sessions(org: _Org, db_uri: 
             url, params={"include_factory": "true"}, headers={"X-Test-User": "bob"}
         )
         assert bob.status_code == 404
+
+
+async def test_flag_on_skips_the_label_scan_for_a_non_factory_parent(
+    org: _Org, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    for key in (F.LABEL_ID, F.LABEL_ROLE):
+        org.store.delete_label(org.lead.id, key)
+    scans: list[tuple[Any, ...]] = []
+    real_scan = org.store.list_conversation_ids_with_label
+
+    def _spy(*args: Any) -> list[str]:
+        scans.append(args)
+        return real_scan(*args)
+
+    monkeypatch.setattr(org.store, "list_conversation_ids_with_label", _spy)
+    url = f"/v1/sessions/{org.lead.id}/child_sessions"
+
+    on = await client.get(url, params={"include_factory": "true"})
+    off = await client.get(url)
+
+    # Only an enrolled session spawns members, so a plain session pays no scan.
+    assert scans == []
+    assert on.content == off.content
+    assert _ids(on.json()) == [org.children[1].id, org.children[0].id]
+
+
+async def test_flag_on_member_failure_still_lists_the_sub_agents(
+    org: _Org, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _boom(*_args: Any) -> list[str]:
+        raise RuntimeError("label index unavailable")
+
+    monkeypatch.setattr(org.store, "list_conversation_ids_with_label", _boom)
+
+    resp = await client.get(
+        f"/v1/sessions/{org.lead.id}/child_sessions", params={"include_factory": "true"}
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert _ids(resp.json()) == [org.children[1].id, org.children[0].id]
+
+
+async def test_flag_on_member_status_falls_back_to_the_persisted_status(
+    org: _Org, client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # After a restart the relay cache has no entry, but the row still says running.
+    assert org.pl.id not in _session_status_cache
+    org.store.set_session_live_status(org.pl.id, "running")
+
+    resp = await client.get(
+        f"/v1/sessions/{org.lead.id}/child_sessions", params={"include_factory": "true"}
+    )
+
+    rows = {row["id"]: row for row in resp.json()["data"]}
+    assert rows[org.pl.id]["busy"] is True
+    assert rows[org.pl.id]["current_task_status"] == "in_progress"
+    assert rows[org.peer.id]["busy"] is False
+
+    # A live cache entry still wins over the persisted row.
+    monkeypatch.setitem(_session_status_cache, org.pl.id, "idle")
+    resp = await client.get(
+        f"/v1/sessions/{org.lead.id}/child_sessions", params={"include_factory": "true"}
+    )
+    rows = {row["id"]: row for row in resp.json()["data"]}
+    assert rows[org.pl.id]["busy"] is False
+    assert rows[org.pl.id]["current_task_status"] == "completed"
+
+
+async def test_flag_on_unreadable_rows_do_not_crowd_out_members(
+    org: _Org, db_uri: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(org_chart, "MAX_FACTORY_CHILDREN", 2)
+    permissions = SqlAlchemyPermissionStore(db_uri)
+    for user in ("alice", "bob"):
+        permissions.ensure_user(user)
+    for conv in (org.lead, org.pl, org.peer):
+        permissions.grant("alice", conv.id, LEVEL_OWNER)
+    # Bob labels more sessions than the cap with alice's lead id, all older
+    # than her real members, so a read capped before the READ check finds none.
+    oldest = org.store.get_conversation(org.children[0].id)
+    assert oldest is not None
+    for n in range(3):
+        intruder = _member(org.store, f"Bob's PL {n}", org.lead.id)
+        permissions.grant("bob", intruder.id, LEVEL_OWNER)
+        _backdate(org.store, intruder.id, oldest.created_at - 100 + n)
+
+    async for client in _client(org.store, db_uri, permission_store=permissions):
+        resp = await client.get(
+            f"/v1/sessions/{org.lead.id}/child_sessions",
+            params={"include_factory": "true"},
+            headers={"X-Test-User": "alice"},
+        )
+        assert resp.status_code == 200, resp.text
+        assert _ids(resp.json()) == [
+            org.peer.id,
+            org.children[1].id,
+            org.pl.id,
+            org.children[0].id,
+        ]

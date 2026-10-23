@@ -154,6 +154,14 @@ describe("ExecutionLogsPanel entries", () => {
     expect(screen.getByText("researcher:auth")).toBeInTheDocument();
     expect(screen.getByTestId("execution-log-entry")).toBeInTheDocument();
   });
+
+  it("lists sub-agents only, not the factory members a lead's tree includes", () => {
+    h.children = [mkChild({ id: "conv_pl", title: "PL · api-version", kind: "default" })];
+    renderPanel({ open: true, initialKey: executionLogTabKey("conv_pl") });
+    // A project lead is its own top-level session: no entry, so main stays active.
+    expect(screen.getByText("main")).toBeInTheDocument();
+    expect(screen.queryByText("PL · api-version")).toBeNull();
+  });
 });
 
 describe("ExecutionLogsPanel items-list states", () => {

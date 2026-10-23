@@ -9,7 +9,14 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useSession } from "@/hooks/useSession";
 import { SubagentsPanel } from "@/shell/SubagentsPanel";
-import { fetchChildSessions, useChildSessions } from "./useChildSessions";
+import {
+  childSessionsQueryKey,
+  fetchChildSessions,
+  isSubAgentChild,
+  STREAM_SEEDED_UPDATED_AT,
+  useChildSessions,
+  type ChildSessionInfo,
+} from "./useChildSessions";
 
 const authenticatedFetch = vi.fn();
 vi.mock("@/lib/identity", () => ({
@@ -98,6 +105,30 @@ describe("fetchChildSessions", () => {
       ["conv_pl", { "omnigent.factory.parent": "conv_lead" }],
     ]);
   });
+
+  it("carries each row's kind", async () => {
+    serveTree({
+      conv_lead: [row("conv_pl", { kind: "default" }), row("conv_sub", { kind: "sub_agent" })],
+    });
+
+    const rows = await fetchChildSessions("conv_lead", { includeFactory: true });
+
+    expect(rows.map((r) => [r.id, r.kind, isSubAgentChild(r)])).toEqual([
+      ["conv_pl", "default", false],
+      ["conv_sub", "sub_agent", true],
+    ]);
+  });
+});
+
+describe("isSubAgentChild", () => {
+  it("treats rows without a kind (stream-seeded, older servers) as sub-agents", () => {
+    const base = { id: "c", title: null, task_summary: null, tool: null, session_name: null };
+    const info = (kind?: string | null) =>
+      ({ ...base, kind, current_task_status: null, busy: false }) as ChildSessionInfo;
+    expect(isSubAgentChild(info(undefined))).toBe(true);
+    expect(isSubAgentChild(info(null))).toBe(true);
+    expect(isSubAgentChild(info("default"))).toBe(false);
+  });
 });
 
 describe("useChildSessions", () => {
@@ -110,6 +141,29 @@ describe("useChildSessions", () => {
     });
 
     await waitFor(() => expect(result.current.children).toHaveLength(1));
+    expect(fetchedUrls()).toEqual(["/v1/sessions/conv_lead/child_sessions?include_factory=true"]);
+  });
+
+  it("fetches a cache seeded from the stream on mount, but not a fetched one", async () => {
+    serveTree({
+      conv_lead: [row("conv_sub"), row("conv_pl", { kind: "default", title: "PL · api" })],
+    });
+    const client = new QueryClient();
+    // The stream's snapshot lists sub-agents only.
+    client.setQueryData(childSessionsQueryKey("conv_lead"), [row("conv_sub")], {
+      updatedAt: STREAM_SEEDED_UPDATED_AT,
+    });
+    client.setQueryData(childSessionsQueryKey("conv_fetched"), [row("conv_x")]);
+
+    const seeded = renderHook(() => useChildSessions("conv_lead"), {
+      wrapper: wrapper(client),
+    });
+    const fetched = renderHook(() => useChildSessions("conv_fetched"), {
+      wrapper: wrapper(client),
+    });
+
+    await waitFor(() => expect(seeded.result.current.children).toHaveLength(2));
+    expect(fetched.result.current.children.map((c) => c.id)).toEqual(["conv_x"]);
     expect(fetchedUrls()).toEqual(["/v1/sessions/conv_lead/child_sessions?include_factory=true"]);
   });
 

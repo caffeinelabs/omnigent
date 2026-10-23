@@ -10,15 +10,20 @@ import {
 } from "@/lib/factory";
 import { cn } from "@/lib/utils";
 
-/** Role/project chip; renders nothing for a session without either label. */
+/**
+ * Role/project chip; renders nothing for a session without either label, or
+ * when `shownTitle` (the row's visible title) already reads the same.
+ */
 export function FactoryRoleChip({
   info,
+  shownTitle,
   className,
 }: {
   info: FactoryInfo | null;
+  shownTitle?: string | null;
   className?: string;
 }) {
-  const text = factoryRoleChipText(info);
+  const text = factoryRoleChipText(info, shownTitle);
   if (!text) return null;
   return (
     <span

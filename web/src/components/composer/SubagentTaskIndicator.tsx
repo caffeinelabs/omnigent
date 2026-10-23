@@ -3,7 +3,7 @@ import { BotIcon } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
-import { useChildSessions, type ChildSessionInfo } from "@/hooks/useChildSessions";
+import { isSubAgentChild, useChildSessions, type ChildSessionInfo } from "@/hooks/useChildSessions";
 
 /**
  * Active-subagent tally for the ComposerWorkspaceBar, sitting beside the
@@ -28,7 +28,8 @@ function subagentLabel(child: ChildSessionInfo): string {
 
 export function SubagentTaskIndicator({ conversationId }: { conversationId: string | null }) {
   const { children } = useChildSessions(conversationId);
-  const active = children.filter((child) => child.busy);
+  // Factory members (project leads) run in their own sessions: not sub-agents.
+  const active = children.filter((child) => child.busy && isSubAgentChild(child));
   const count = active.length;
 
   const [open, setOpen] = useState(false);

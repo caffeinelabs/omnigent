@@ -34,6 +34,16 @@ describe("factory labels", () => {
     expect(chip({ "omnigent.factory.parent": "conv_lead" })).toBeNull();
   });
 
+  it("drops the role chip when the visible title already reads the same", () => {
+    const pl = factoryInfo({
+      "omnigent.factory.role": "project_lead",
+      "omnigent.factory.project": "api-version",
+    });
+    expect(factoryRoleChipText(pl, "PL · api-version")).toBeNull();
+    expect(factoryRoleChipText(pl, "api-version owner")).toBe("PL · api-version");
+    expect(factoryRoleChipText(pl, null)).toBe("PL · api-version");
+  });
+
   it("flags only degraded, blocked and dead as warnings", () => {
     expect(["ok", "degraded", "blocked", "dead", null].map(isFactoryWarningHealth)).toEqual([
       false,

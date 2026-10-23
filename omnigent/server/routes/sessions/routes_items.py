@@ -163,11 +163,12 @@ def register_items_routes(
         :param session_name: When set alongside ``tool``, only
             return children whose title matches
             ``"{tool}:{session_name}"`` exactly.
-        :param include_factory: When ``True``, the first page (no
-            ``after``/``before`` cursor) also lists the readable top-level
-            sessions labelled ``omnigent.factory.parent == session_id``,
-            merged by ``created_at``. Cursors and ``has_more`` still page
-            the sub-agent children only.
+        :param include_factory: When ``True`` and the parent is a factory
+            session, the first page (no ``after``/``before`` cursor) also
+            lists the readable top-level sessions labelled
+            ``omnigent.factory.parent == session_id``, merged by
+            ``created_at``. Cursors and ``has_more`` still page the
+            sub-agent children only.
         :returns: A :class:`PaginatedList` of
             :class:`ChildSessionSummary` objects.
         :raises OmnigentError: 403 if the caller lacks READ on
@@ -204,7 +205,7 @@ def register_items_routes(
         )
         if include_factory and after is None and before is None:
             members = await factory_child_summaries(
-                session_id,
+                parent,
                 user_id=user_id,
                 conversation_store=conversation_store,
                 permission_store=permission_store,

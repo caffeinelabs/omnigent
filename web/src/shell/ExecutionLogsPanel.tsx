@@ -35,6 +35,7 @@ import {
 } from "@/components/ui/select";
 import {
   executionLogTabKey,
+  isSubAgentChild,
   MAIN_EXECUTION_LOG_KEY,
   useChildSessions,
   type ChildSessionInfo,
@@ -128,7 +129,7 @@ export function ExecutionLogsPanel({
     }
   }, [open]);
 
-  const entries = buildLogEntries(conversationId, children);
+  const entries = buildLogEntries(conversationId, children.filter(isSubAgentChild));
   const activeEntry = entries.find((e) => e.key === activeKey) ?? entries[0] ?? null;
   const [view, setView] = useState<"items" | "sse">("items");
 

@@ -1620,7 +1620,8 @@ describe("SubagentsPanel factory members", () => {
     // A member's title names it, not its task summary.
     expect(row.textContent).toContain("PL · api-version");
     expect(row.textContent).not.toContain("Ship /version");
-    expect(within(row).getByTestId("subagent-factory-role").textContent).toBe("PL · api-version");
+    // The title already reads "PL · api-version": no duplicate role chip.
+    expect(within(row).queryByTestId("subagent-factory-role")).toBeNull();
     const badge = within(row).getByTestId("subagent-factory-badge");
     expect(badge.textContent).toBe("2 ICs on /version");
     expect(badge.dataset.health).toBe("ok");
@@ -1659,7 +1660,7 @@ describe("SubagentsPanel factory members", () => {
         factoryRow(
           "conv_dead",
           { "omnigent.factory.role": "lead", "omnigent.factory.health": "dead" },
-          "Lead B · Sentinel",
+          "Sentinel",
         ),
       ],
     });
@@ -1699,6 +1700,44 @@ describe("SubagentsPanel factory members", () => {
     const plain = childRow(container, "conv_plain");
     expect(within(plain).queryByTestId("subagent-factory-badge")).toBeNull();
     expect(within(plain).queryByTestId("subagent-factory-role")).toBeNull();
+  });
+
+  it("shows the role chip when the title does not already say it", () => {
+    mockChildTree({ conv_root: [factoryRow("conv_pl", PL_LABELS, "api-version owner")] });
+
+    const { container } = renderPanel({ rootSessionId: "conv_root" });
+
+    const row = childRow(container, "conv_pl");
+    expect(within(row).getByTestId("subagent-factory-role").textContent).toBe("PL · api-version");
+  });
+
+  it("decorates the main row of a factory lead with its role and beacon", () => {
+    useSessionMock.mockReturnValue({
+      session: {
+        id: "conv_root",
+        agentName: "factory-lead",
+        status: "idle",
+        items: [],
+        pendingElicitations: [],
+        labels: {
+          "omnigent.factory.id": "conv_root",
+          "omnigent.factory.role": "lead",
+          "omnigent.factory.summary": "2 projects in flight",
+          "omnigent.factory.health": "degraded",
+        },
+      },
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof useSession>);
+    mockChildTree({ conv_root: [] });
+
+    const { getByTestId } = renderPanel({ rootSessionId: "conv_root" });
+
+    const main = getByTestId("subagent-main-row");
+    expect(within(main).getByTestId("subagent-factory-role").textContent).toBe("Lead");
+    const badge = within(main).getByTestId("subagent-factory-badge");
+    expect(badge.textContent).toBe("degraded · 2 projects in flight");
+    expect(badge.dataset.warning).toBe("true");
   });
 
   it("nests a factory member's own sub-agents under it", () => {

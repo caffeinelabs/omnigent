@@ -93,7 +93,11 @@ import {
   type SseStreamResult,
 } from "@/lib/sse";
 import { clearSseLog, pushSseEvent } from "@/lib/sseEventLog";
-import { childSessionsQueryKey, type ChildSessionInfo } from "@/hooks/useChildSessions";
+import {
+  childSessionsQueryKey,
+  STREAM_SEEDED_UPDATED_AT,
+  type ChildSessionInfo,
+} from "@/hooks/useChildSessions";
 import { sessionItemsQueryKey } from "@/hooks/useSessionItems";
 import type { Conversation, ConversationsPage } from "@/hooks/useConversations";
 import {
@@ -6938,9 +6942,10 @@ function applyTerminalDeleted(sessionId: string, resourceId: string): void {
  * changed (a status delta omits ``last_message_preview``; a preview delta
  * carries only it). So we overlay *present* fields onto the existing row
  * (a status flip keeps the preview, a preview update keeps busy/status),
- * and insert from present fields when the child isn't cached yet. Cold
- * cache (parent not viewed since reload) is a no-op — the eventual
- * ``useChildSessions`` mount pulls a fresh list.
+ * and insert from present fields when the child isn't cached yet. A cold
+ * cache (parent not viewed since reload) is seeded but stays marked as
+ * stream-seeded, so the eventual ``useChildSessions`` mount still pulls
+ * the full list.
  */
 function applyChildSessionUpdated(
   parentId: string,
@@ -6952,7 +6957,14 @@ function applyChildSessionUpdated(
   // Initialize a cold cache rather than skipping: snapshot-on-connect
   // sends full child rows over the stream, so seeding here lets child
   // status/preview update live even when no useChildSessions is mounted.
-  const current = queryClient.getQueryData<ChildSessionInfo[]>(key) ?? [];
+  const cached = queryClient.getQueryData<ChildSessionInfo[]>(key);
+  const current = cached ?? [];
+  // The stream lists sub-agents only (no factory members): keep a seeded
+  // cache marked as such so the first useChildSessions mount still fetches.
+  const seeded =
+    cached === undefined ||
+    queryClient.getQueryState(key)?.dataUpdatedAt === STREAM_SEEDED_UPDATED_AT;
+  const writeOptions = seeded ? { updatedAt: STREAM_SEEDED_UPDATED_AT } : undefined;
 
   // Build a patch from only the fields PRESENT in the payload (undefined
   // = "not in this delta, leave as-is"); explicit null is a real value.
@@ -7007,12 +7019,12 @@ function applyChildSessionUpdated(
       last_message_preview: patch.last_message_preview ?? null,
       pending_elicitations_count: patch.pending_elicitations_count ?? 0,
     };
-    queryClient.setQueryData<ChildSessionInfo[]>(key, [inserted, ...current]);
+    queryClient.setQueryData<ChildSessionInfo[]>(key, [inserted, ...current], writeOptions);
     return;
   }
   const next = [...current];
   next[idx] = { ...current[idx], ...patch };
-  queryClient.setQueryData<ChildSessionInfo[]>(key, next);
+  queryClient.setQueryData<ChildSessionInfo[]>(key, next, writeOptions);
 }
 
 /**

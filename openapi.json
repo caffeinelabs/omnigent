@@ -11717,7 +11717,7 @@
             }
           },
           {
-            "description": "When `True`, the first page (no `after`/`before` cursor) also lists the readable top-level sessions labelled `omnigent.factory.parent == session_id`, merged by `created_at`. Cursors and `has_more` still page the sub-agent children only.",
+            "description": "When `True` and the parent is a factory session, the first page (no `after`/`before` cursor) also lists the readable top-level sessions labelled `omnigent.factory.parent == session_id`, merged by `created_at`. Cursors and `has_more` still page the sub-agent children only.",
             "in": "query",
             "name": "include_factory",
             "required": false,

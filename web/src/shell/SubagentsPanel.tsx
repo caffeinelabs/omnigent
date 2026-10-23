@@ -538,6 +538,8 @@ function MainRow({ rootSessionId, isActive }: { rootSessionId: string; isActive:
   // carries no name.
   const label = nativeAgent?.displayName ?? session?.agentName ?? "main";
   const preview = mainMessagePreview(session?.items);
+  // A factory lead's own role and beacon, like its members' rows below.
+  const factory = factoryInfo(session?.labels);
   return (
     <li>
       <Link
@@ -560,9 +562,15 @@ function MainRow({ rootSessionId, isActive }: { rootSessionId: string; isActive:
         <div className="flex w-full items-center gap-1">
           <Icon className="size-3.5 shrink-0 text-muted-foreground" />
           <span className="shrink-0 truncate text-sm font-medium">{label}</span>
+          <FactoryRoleChip info={factory} shownTitle={label} />
           <span className="flex-1" />
           <StatusIndicator {...sessionStatus(session?.status, session?.lastTaskError)} />
         </div>
+        {hasFactoryBeacon(factory) && (
+          <div className="flex min-w-0 pl-[18px]">
+            <FactoryBadge info={factory} />
+          </div>
+        )}
         {preview && (
           // Indented to align with the title text above: 14px icon + 4px gap.
           <p
@@ -668,7 +676,7 @@ function SubagentRow({
             )}
             <Icon className="size-3.5 shrink-0 text-muted-foreground" />
             <span className="shrink-0 truncate text-sm font-medium">{primary}</span>
-            <FactoryRoleChip info={factory} />
+            <FactoryRoleChip info={factory} shownTitle={primary} />
             {child.routed_model ? (
               // Model the intelligent router picked for this sub-agent — the
               // per-subagent half of routing visibility.

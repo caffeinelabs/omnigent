@@ -206,6 +206,7 @@ export function buildGraphLayout(
   rootPreview: string | null,
   childrenMap: Map<string, ChildSessionInfo[]>,
   activeId: string,
+  rootFactory: FactoryInfo | null = null,
 ): { nodes: LayoutNode[]; edges: LayoutEdge[] } {
   const tree = buildTree(
     rootId,
@@ -215,6 +216,8 @@ export function buildGraphLayout(
     rootPreview,
     childrenMap,
     0,
+    new Set<string>(),
+    rootFactory,
   );
   return layoutTree(tree, activeId);
 }

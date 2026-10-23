@@ -5,7 +5,9 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type ChildSessionInfo, useChildSessions } from "@/hooks/useChildSessions";
 import { useSession } from "@/hooks/useSession";
+import { factoryInfo } from "@/lib/factory";
 import {
+  buildGraphLayout,
   buildTree,
   childActivity,
   computeSubtreeWidths,
@@ -661,6 +663,28 @@ describe("buildTree factory members", () => {
     const { nodes } = layoutTree(tree, "none");
     expect(nodes.find((n) => n.id === "pl")?.data.factory?.health).toBe("degraded");
     expect(nodes.find((n) => n.id === "ic")?.data.factory).toBeNull();
+  });
+
+  it("carries the root lead's own factory labels to the root node", () => {
+    const rootFactory = factoryInfo({
+      "omnigent.factory.role": "lead",
+      "omnigent.factory.summary": "2 projects in flight",
+    });
+
+    const { nodes } = buildGraphLayout(
+      "root",
+      "factory-lead",
+      "idle",
+      "Idle",
+      null,
+      new Map(),
+      "root",
+      rootFactory,
+    );
+
+    expect(nodes.find((n) => n.id === "root")?.data.factory).toEqual(rootFactory);
+    const plain = buildGraphLayout("root", "main", "idle", "Idle", null, new Map(), "root");
+    expect(plain.nodes[0].data.factory).toBeNull();
   });
 });
 

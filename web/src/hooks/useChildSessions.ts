@@ -35,6 +35,12 @@ export interface ChildSessionInfo {
   session_name: string | null;
   /** Session-scoped labels from the child conversation. */
   labels?: Record<string, string>;
+  /**
+   * Conversation kind: ``"sub_agent"`` for spawned children; a top-level
+   * factory member carries its own (e.g. ``"default"``). Absent on rows
+   * seeded from the session stream, which only carries sub-agents.
+   */
+  kind?: string | null;
   /** Status of the latest task, e.g. ``"completed"``. */
   current_task_status: string | null;
   /** Durable error details from the latest failed child run. */
@@ -73,6 +79,7 @@ interface ChildSessionWire {
   tool: string | null;
   session_name: string | null;
   labels?: Record<string, string>;
+  kind?: string | null;
   current_task_status: string | null;
   last_task_error?: ChildSessionError | null;
   busy: boolean;
@@ -85,6 +92,22 @@ interface ChildSessionsResponse {
   object: "list";
   data: ChildSessionWire[];
 }
+
+/**
+ * Whether a child-session row is a real sub-agent rather than a top-level
+ * factory member listed under the lead that spawned it. Rows without a kind
+ * (stream-seeded, or from an older server) are sub-agents.
+ */
+export function isSubAgentChild(child: ChildSessionInfo): boolean {
+  return child.kind == null || child.kind === "sub_agent";
+}
+
+/**
+ * Whether a cached child list was seeded from the session stream rather than
+ * fetched. The stream lists sub-agents only, so such a cache still lacks the
+ * factory members and must be fetched when a consumer mounts.
+ */
+export const STREAM_SEEDED_UPDATED_AT = 0;
 
 /**
  * TanStack Query key for a session's child sessions.
@@ -199,6 +222,7 @@ export async function fetchChildSessions(
     tool: row.tool,
     session_name: row.session_name,
     labels: row.labels ?? {},
+    kind: row.kind ?? null,
     current_task_status: row.current_task_status,
     last_task_error: parseChildSessionError(row.last_task_error),
     busy: row.busy,
@@ -240,7 +264,8 @@ export function useChildSessions(
     enabled: conversationId !== null,
     staleTime: 60_000,
     retry: false,
-    refetchOnMount: false,
+    // A cache seeded from the stream (sub-agents only) is fetched once on mount.
+    refetchOnMount: (query) => query.state.dataUpdatedAt === STREAM_SEEDED_UPDATED_AT,
     refetchInterval: pollMs ?? false,
   });
   return {
