@@ -324,6 +324,8 @@ def _error_audit_extra(
 # Windows checkout (where Git leaves it as a stub text file); a no-op elsewhere.
 _DEBBY_BUNDLE_SOURCE = resolve_repo_symlink(Path(_examples_resources.__file__).parent / "debby")
 _POLLY_BUNDLE_SOURCE = resolve_repo_symlink(Path(_examples_resources.__file__).parent / "polly")
+# Software-factory agent bundles, one directory each; seeded only when enabled.
+_FACTORY_BUNDLES_ROOT = resolve_repo_symlink(Path(_examples_resources.__file__).parent / "factory")
 
 
 class _FastAPICallNext(Protocol):
@@ -688,6 +690,7 @@ def _ensure_default_agents(
     _ensure_default_acp_agents(agent_store, artifact_store, agent_cache)
     _ensure_default_debby_agent(agent_store, artifact_store, agent_cache)
     _ensure_default_polly_agent(agent_store, artifact_store, agent_cache)
+    _ensure_factory_agents(agent_store, artifact_store, agent_cache)
     _ensure_extra_builtin_agents(agent_store, artifact_store, agent_cache)
 
 
@@ -1072,6 +1075,61 @@ def _ensure_default_polly_agent(
     )
 
 
+def _ensure_factory_agents(
+    agent_store: AgentStore,
+    artifact_store: ArtifactStore,
+    agent_cache: Any,
+    *,
+    bundles_root: Path | None = None,
+) -> None:
+    """
+    Seed the software-factory agents when ``OMNIGENT_FACTORY_ENABLED=1``.
+
+    Every bundle directory under ``examples/factory`` (``factory-lead``,
+    ``factory-pl``, …) becomes a built-in named after its directory, packaged
+    and refreshed exactly like polly. A no-op when the flag is off or no
+    bundles ship here; a broken bundle is logged and skipped so it cannot
+    block startup.
+
+    :param agent_store: Store for agent metadata.
+    :param artifact_store: Store for agent bundles.
+    :param agent_cache: Cache for loaded agent specs.
+    :param bundles_root: Directory holding the bundles; defaults to the
+        packaged ``examples/factory``.
+    """
+    import tempfile
+
+    from omnigent.factory import factory_enabled
+    from omnigent.spec import load as load_spec
+    from omnigent.spec import materialize_bundle
+
+    if not factory_enabled():
+        return
+    root = bundles_root if bundles_root is not None else _FACTORY_BUNDLES_ROOT
+    if not root.is_dir():
+        _logger.debug("factory bundles not found at %s; skipping seed", root)
+        return
+    for source in sorted(root.iterdir()):
+        source = resolve_repo_symlink(source)
+        if not (source / "config.yaml").is_file():
+            continue
+        try:
+            with tempfile.TemporaryDirectory() as tmpdir:
+                bundle_dir = materialize_bundle(source, Path(tmpdir) / "bundle")
+                # Parse before registering so a broken bundle never reaches the picker.
+                load_spec(bundle_dir, expand_env=False)
+                bundle_bytes = _tar_gz_dir(bundle_dir)
+            _ensure_builtin_agent(
+                agent_store,
+                artifact_store,
+                agent_cache,
+                name=source.name,
+                bundle_bytes=bundle_bytes,
+            )
+        except Exception:  # a bad bundle must not block server startup
+            _logger.exception("Failed to register factory agent from %s; skipping", source)
+
+
 def create_app(
     agent_store: AgentStore,
     file_store: FileStore,
@@ -1384,6 +1442,10 @@ def create_app(
             runner_router,
         )
 
+        from omnigent.server.factory import start_factory_services
+
+        _stop_factory_services = await start_factory_services(app_inst.state)
+
         from omnigent.runner.resource_registry import (
             SessionResourceRegistry,
         )
@@ -1545,6 +1607,7 @@ def create_app(
 
             await cancel_managed_launch_tasks()
             await background_title_coordinator.shutdown()
+            await _stop_factory_services()
             _uninstall_subagent_block_notifier()
             set_resource_registry(None)
             set_runner_ws_factory(None)
@@ -2681,6 +2744,19 @@ def create_app(
         ),
         prefix="/v1",
         tags=["sessions"],
+    )
+    # Software-factory API (/v1/factory, hidden from the public schema).
+    from omnigent.server.factory import register_factory_routes
+
+    register_factory_routes(
+        app,
+        conversation_store=conversation_store,
+        agent_store=agent_store,
+        agent_cache=agent_cache,
+        permission_store=permission_store,
+        auth_provider=auth_provider,
+        file_store=file_store,
+        artifact_store=artifact_store,
     )
     app.include_router(
         create_imports_router(
