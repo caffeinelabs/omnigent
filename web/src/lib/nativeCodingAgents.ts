@@ -388,6 +388,20 @@ export function isNativeCodingAgent(
 }
 
 /**
+ * Whether an agent picker lists ``agent`` as a native harness row: a canonical
+ * wrapper (or its clone) on a native harness. A custom-named agent on a native
+ * harness (e.g. ``factory-lead``) is a named agent row instead.
+ *
+ * @param agent - Catalog entry to classify.
+ * @returns True when the entry belongs among the native harness rows.
+ */
+export function isNativeHarnessPickerEntry(
+  agent: Pick<AvailableAgent, "name" | "harness"> | null | undefined,
+): boolean {
+  return isNativeCodingAgent(agent) && isCanonicalNativeWrapperName(agent?.name);
+}
+
+/**
  * Whether a harness is fully supported — the maintained, end-to-end tested
  * integrations that lead the picker. Everything else (including non-native
  * agents) belongs in the "More" group regardless of host readiness.

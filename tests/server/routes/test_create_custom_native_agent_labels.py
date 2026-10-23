@@ -195,6 +195,36 @@ async def test_harness_override_off_native_skips_wrapper_labels(
     assert labels[LABEL_ROLE] == ROLE_PROJECT_LEAD
 
 
+async def test_harness_override_to_other_native_takes_its_wrapper(
+    client: httpx.AsyncClient, db_uri: str
+) -> None:
+    """An override to another native harness renders that CLI's terminal-first UI."""
+    agent_id = await _seed_builtin(client, db_uri, "factory-lead", _CLAUDE_NATIVE)
+
+    labels = await _create(
+        client,
+        {"agent_id": agent_id, "harness_override": "codex-native", "labels": _CALLER_LABELS},
+    )
+
+    assert labels[WRAPPER_LABEL_KEY] == CODEX_NATIVE_WRAPPER_VALUE
+    assert labels[UI_MODE_LABEL_KEY] == UI_MODE_TERMINAL_VALUE
+    assert labels[LABEL_ROLE] == ROLE_PROJECT_LEAD
+
+
+async def test_native_override_on_sdk_builtin_stays_unlabelled(
+    client: httpx.AsyncClient, db_uri: str
+) -> None:
+    """A non-native built-in keeps today's labels even under a native override."""
+    agent_id = await _seed_builtin(client, db_uri, "factory-sdk", _CLAUDE_SDK)
+
+    labels = await _create(
+        client,
+        {"agent_id": agent_id, "harness_override": "claude-native", "labels": _CALLER_LABELS},
+    )
+
+    assert labels == _CALLER_LABELS
+
+
 @pytest.mark.parametrize(
     "sub_agent,expected",
     [

@@ -207,8 +207,8 @@ import { cn } from "@/lib/utils";
 import { useOmnigentAnalytics } from "@/lib/analytics";
 import { isCurrentServerLocal } from "@/lib/serverOrigin";
 import {
-  isCanonicalNativeWrapperName,
   isNativeCodingAgent,
+  isNativeHarnessPickerEntry,
   nativeAgentHasCapability,
   nativeCodingAgentForAvailableAgent,
   nativeWrapperLabelsForAgent,
@@ -1281,10 +1281,7 @@ export function ComposerAgentIcon({ agent }: { agent: Pick<AvailableAgent, "name
 
 /** Whether the picker lists ``agent`` as a harness row rather than a named agent. */
 function isPickerHarnessEntry(agent: AvailableAgent): boolean {
-  return (
-    (isNativeCodingAgent(agent) && isCanonicalNativeWrapperName(agent.name)) ||
-    isAcpHarnessAgent(agent)
-  );
+  return isNativeHarnessPickerEntry(agent) || isAcpHarnessAgent(agent);
 }
 
 function visibleModelLabel(label: string): string {
@@ -3854,13 +3851,11 @@ export function NewChatLandingScreen() {
   // agents must be registered and both CLIs ready on the target host — a router
   // with one arm is just that arm. The Claude wrapper is the placeholder the
   // create binds; the server rebinds to whichever the router picks.
+  // harnessEntries holds only canonical wrappers, so a custom-named agent on
+  // the same harness (e.g. factory-lead) is never the placeholder.
   const smartRoutingWrappers = useMemo(() => {
     const byHarness = (harness: string) =>
-      harnessEntries.find(
-        (a) =>
-          isCanonicalNativeWrapperName(a.name) &&
-          nativeCodingAgentForAvailableAgent(a)?.harness === harness,
-      );
+      harnessEntries.find((a) => nativeCodingAgentForAvailableAgent(a)?.harness === harness);
     return {
       claude: byHarness("claude-native"),
       codex: byHarness("codex-native"),

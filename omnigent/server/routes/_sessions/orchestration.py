@@ -267,6 +267,7 @@ from omnigent.server.routes._sessions.helpers import (
     _message_text,
     _model_usage_bucket,
     _native_coding_agent_for_session,
+    _native_coding_agent_for_spec,
     _native_subagent_wrapper_labels_from_spec,
     _native_terminal_ensure_transport_error,
     _native_terminal_failure_from_runner_response,
@@ -9066,16 +9067,17 @@ async def _create_session_from_existing_agent(
     elif (
         needs_native_labels_from_spec
         and own_spec is not None
-        # A concrete override replaces the spec's harness, so only a matching
-        # one keeps the session native.
-        and (harness_override is None or harness_override == _spec_harness(own_spec))
-        and (_own_native_labels := _native_subagent_wrapper_labels_from_spec(own_spec))
+        # Only a natively-specced agent qualifies; a concrete override then
+        # picks which native CLI runs, or moves the brain off native.
+        and _native_coding_agent_for_spec(own_spec) is not None
+        and (_own_native := _native_coding_agent_for_spec(own_spec, harness_override)) is not None
     ):
         # A custom-named built-in whose own spec runs a native harness (e.g.
         # ``factory-lead`` on claude-native) renders terminal-first like the
-        # canonical wrapper. Merge over caller labels so they are kept.
+        # canonical wrapper, with the labels fork/switch derive. Merge over
+        # caller labels so they are kept.
         _merged = dict(body.labels) if body.labels else {}
-        _merged.update(_own_native_labels)
+        _merged.update(_own_native.presentation_labels)
         await asyncio.to_thread(conversation_store.set_labels, conv.id, _merged)
         conv.labels.update(_merged)
     elif (

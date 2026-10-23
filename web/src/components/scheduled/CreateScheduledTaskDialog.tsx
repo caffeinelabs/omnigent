@@ -29,7 +29,7 @@ import { AgentHarnessPicker } from "@/shell/NewChatDialog";
 import { useAvailableAgents, type AvailableAgent } from "@/hooks/useAvailableAgents";
 import { useHosts } from "@/hooks/useHosts";
 import { useCreateScheduledTask, useUpdateScheduledTask } from "@/hooks/useScheduledTasks";
-import { isNativeCodingAgent, nativeAgentHasCapability } from "@/lib/nativeCodingAgents";
+import { isNativeHarnessPickerEntry, nativeAgentHasCapability } from "@/lib/nativeCodingAgents";
 import { sortAgentsForDisplay } from "@/lib/agentGrouping";
 import {
   isBackdropOverlay,
@@ -100,11 +100,11 @@ export function CreateScheduledTaskDialog({
     () => sortAgentsForDisplay((agents ?? []).filter((a) => !HIDDEN_PICKER_AGENTS.has(a.name))),
     [agents],
   );
-  const harnessEntries = useMemo(
-    () => agentList.filter((a) => isNativeCodingAgent(a)),
+  const harnessEntries = useMemo(() => agentList.filter(isNativeHarnessPickerEntry), [agentList]);
+  const agentEntries = useMemo(
+    () => agentList.filter((a) => !isNativeHarnessPickerEntry(a)),
     [agentList],
   );
-  const agentEntries = useMemo(() => agentList.filter((a) => !isNativeCodingAgent(a)), [agentList]);
   // Resolve the effective selection: the explicit pick if it's still in the
   // list, else the edited task's own agent (which may be hidden from the picker
   // — never silently retarget it), else the first agent (so a fresh picker

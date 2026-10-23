@@ -298,17 +298,22 @@ export async function prefetchAvailableAgentDetails(
               skills: json.skills ?? [],
             },
       );
-      // If enrichment reveals this agent is a native coding agent (e.g. a
-      // kiro-native session with a non-canonical name), remove it when a
-      // seeded built-in with the same native key already exists so it doesn't
-      // surface as a duplicate picker row.
+      // If enrichment reveals this agent is a native wrapper (e.g. a
+      // kiro-native session under a legacy wrapper name), remove it when a
+      // canonical wrapper with the same native key already exists so it doesn't
+      // surface as a duplicate picker row. A custom-named native agent keeps
+      // its own row, as in dedupeNativeAgents.
       const enrichedAgent = enriched.find((a) => a.id === agent.id);
-      const enrichedKey = enrichedAgent
-        ? nativeCodingAgentForAvailableAgent(enrichedAgent)?.key
-        : undefined;
+      const enrichedKey =
+        enrichedAgent && isCanonicalNativeWrapperName(enrichedAgent.name)
+          ? nativeCodingAgentForAvailableAgent(enrichedAgent)?.key
+          : undefined;
       if (enrichedKey) {
         const builtinExists = enriched.some(
-          (a) => a.id !== agent.id && nativeCodingAgentForAvailableAgent(a)?.key === enrichedKey,
+          (a) =>
+            a.id !== agent.id &&
+            isCanonicalNativeWrapperName(a.name) &&
+            nativeCodingAgentForAvailableAgent(a)?.key === enrichedKey,
         );
         if (builtinExists) return enriched.filter((a) => a.id !== agent.id);
       }

@@ -49,6 +49,8 @@ vi.mock("@/shell/WorkspacePicker", () => ({
 // a bare harness (claude-native-ui) and a plain agent (polly).
 vi.mock("@/shell/NewChatDialog", () => ({
   AgentHarnessPicker: ({
+    harnessEntries,
+    agentEntries,
     onSelectAgent,
     onOpenChange,
     effectiveAgentId,
@@ -56,6 +58,8 @@ vi.mock("@/shell/NewChatDialog", () => ({
     host,
     dropdownModal,
   }: {
+    harnessEntries: AvailableAgent[];
+    agentEntries: AvailableAgent[];
     onSelectAgent: (a: AvailableAgent) => void;
     onOpenChange?: (open: boolean) => void;
     effectiveAgentId: string | null;
@@ -70,6 +74,9 @@ vi.mock("@/shell/NewChatDialog", () => ({
       // a test can assert it's populated even when no host is pinned.
       data-badge-host={host?.host_id ?? ""}
       data-dropdown-modal={dropdownModal === false ? "false" : "true"}
+      // Surface the harness/agent split the dialog computes.
+      data-harness-ids={harnessEntries.map((a) => a.id).join(",")}
+      data-agent-ids={agentEntries.map((a) => a.id).join(",")}
     >
       <span>{agentLabel}</span>
       <button
@@ -224,6 +231,28 @@ describe("agent picker readiness (needs-setup badges)", () => {
   it("embeds the agent dropdown in non-modal mode so inside-dialog clicks only close the menu", () => {
     renderDialog();
     expect(screen.getByTestId("agent-picker-stub")).toHaveAttribute("data-dropdown-modal", "false");
+  });
+});
+
+describe("agent picker split", () => {
+  it("lists a custom-named native built-in as an agent, not a harness row", () => {
+    vi.mocked(agentsHook.useAvailableAgents).mockReturnValue({
+      data: [
+        ...AGENTS,
+        {
+          id: "ag_lead",
+          name: "factory-lead",
+          display_name: "Factory Lead",
+          description: null,
+          harness: "claude-native",
+          skills: [],
+        },
+      ],
+    } as unknown as ReturnType<typeof agentsHook.useAvailableAgents>);
+    renderDialog();
+    const picker = screen.getByTestId("agent-picker-stub");
+    expect(picker.getAttribute("data-harness-ids")).toBe("ag_claude_native");
+    expect(picker.getAttribute("data-agent-ids")?.split(",")).toContain("ag_lead");
   });
 });
 

@@ -943,6 +943,53 @@ describe("prefetchAvailableAgentDetails", () => {
     // Shadow removed; only the seeded built-in remains.
     expect(queryClient.getQueryData(["available-agents"])).toEqual([kiroBuiltin]);
   });
+
+  it("keeps a custom-named session agent that enriches to a native harness", async () => {
+    // A custom name on claude-native (e.g. an uploaded factory-lead) is its
+    // own agent, not a shadow of the seeded Claude Code wrapper.
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const claudeBuiltin = {
+      id: "ag_claude",
+      name: "claude-native-ui",
+      display_name: "Claude Code",
+      description: null,
+      harness: "claude-native",
+      skills: [],
+    };
+    const customLead = {
+      id: "ag_session_lead",
+      name: "factory-lead",
+      display_name: "Factory Lead",
+      description: null,
+      harness: null,
+      skills: [],
+      sessionId: "conv_lead",
+    };
+    queryClient.setQueryData(["available-agents"], [claudeBuiltin, customLead]);
+
+    fetchMock.mockResolvedValueOnce(
+      mockResponse({
+        id: "ag_session_lead",
+        object: "agent",
+        name: "factory-lead",
+        description: "Leads the factory",
+        harness: "claude-native",
+        skills: [],
+      }),
+    );
+
+    await prefetchAvailableAgentDetails(customLead, queryClient);
+
+    expect(queryClient.getQueryData(["available-agents"])).toEqual([
+      claudeBuiltin,
+      {
+        ...customLead,
+        display_name: "Factory Lead",
+        description: "Leads the factory",
+        harness: "claude-native",
+      },
+    ]);
+  });
 });
 
 // Pinned agents (e.g. a project's configured default) must survive discovery:

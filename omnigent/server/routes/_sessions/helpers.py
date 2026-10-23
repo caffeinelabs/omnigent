@@ -7930,7 +7930,21 @@ def _native_coding_agent_for_agent(agent: Agent) -> NativeCodingAgent | None:
         )
     except Exception:  # noqa: BLE001
         return None
-    return native_coding_agent_for_harness(spec.executor.harness_kind)
+    return _native_coding_agent_for_spec(spec)
+
+
+def _native_coding_agent_for_spec(
+    spec: AgentSpec, harness_override: str | None = None
+) -> NativeCodingAgent | None:
+    """
+    Return native coding-agent metadata for a loaded spec's effective harness.
+
+    :param spec: The agent's parsed spec.
+    :param harness_override: A concrete session harness override, e.g.
+        ``"codex-native"``; when set it replaces the spec's own harness.
+    :returns: Registry metadata for the native TUI harness, or ``None``.
+    """
+    return native_coding_agent_for_harness(harness_override or spec.executor.harness_kind)
 
 
 def _presentation_labels_for_agent(*args: Any, **kwargs: Any) -> dict[str, str]:
@@ -10852,6 +10866,7 @@ __all__ = [
     "_native_ask_gate_lock",
     "_native_coding_agent_for_agent",
     "_native_coding_agent_for_session",
+    "_native_coding_agent_for_spec",
     "_native_subagent_wrapper_labels_from_spec",
     "_native_terminal_ensure_transport_error",
     "_native_terminal_failure_from_runner_response",
