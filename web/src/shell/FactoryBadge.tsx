@@ -25,7 +25,7 @@ export function FactoryRoleChip({
       data-testid="subagent-factory-role"
       title={`Factory role: ${text}`}
       className={cn(
-        "shrink-0 truncate rounded-sm border border-border px-1 font-mono text-[10px] leading-4 text-muted-foreground",
+        "min-w-0 max-w-full shrink truncate rounded-sm border border-border px-1 font-mono text-[10px] leading-4 text-muted-foreground",
         className,
       )}
     >

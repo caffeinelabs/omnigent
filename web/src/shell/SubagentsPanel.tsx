@@ -412,7 +412,7 @@ function StatusIndicator({ activity, label, details }: AgentStatus) {
  * @param child - One child-session summary from the poll or stream.
  * @returns The label shown beside the child icon.
  */
-export function childPrimaryLabel(child: ChildSessionInfo): string {
+function childPrimaryLabel(child: ChildSessionInfo): string {
   // A factory member is a top-level session in its own right: its title
   // (e.g. "PL · api-version") names it, not a task summary.
   if (isFactoryMember(factoryInfo(child.labels)) && child.title) return child.title;

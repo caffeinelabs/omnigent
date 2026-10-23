@@ -77,9 +77,9 @@ function AgentNodeComponent({ data }: NodeProps<Node<AgentNodeData>>) {
           <NodeStatusDot activity={activity} />
         </div>
         {(factoryRoleChipText(factory) !== null || hasFactoryBeacon(factory)) && (
-          <div className="mt-1 flex min-w-0 items-center gap-1">
+          <div className="mt-1 flex min-w-0 flex-wrap items-center gap-1">
             <FactoryRoleChip info={factory} />
-            <FactoryBadge info={factory} className="min-w-0 text-[10px] leading-4" />
+            <FactoryBadge info={factory} className="text-[10px] leading-4" />
           </div>
         )}
         {preview && (
