@@ -7,6 +7,7 @@ non-factory session.
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -349,3 +350,109 @@ async def authed_api(
         auth_provider=HeaderAuth(),
     ):
         yield value
+
+
+class FakeClock:
+    """A wall clock (epoch seconds) that only moves when told to."""
+
+    def __init__(self, now: float | None = None) -> None:
+        self.now = time.time() if now is None else now
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> float:
+        """Move the clock forward and return the new time."""
+        self.now += seconds
+        return self.now
+
+
+@dataclass
+class FakeRunnerClient:
+    """Records ``GET`` calls the supervisor makes through a runner tunnel."""
+
+    calls: list[tuple[str, Any]] = field(default_factory=list)
+    error: BaseException | None = None
+
+    async def get(self, path: str, **kwargs: Any) -> Any:
+        self.calls.append((path, kwargs.get("timeout")))
+        if self.error is not None:
+            raise self.error
+        return httpx.Response(200, json={"status": "ok"})
+
+
+@dataclass
+class FakeRunners:
+    """Stand-in for ``_get_runner_client``: a live client only for listed sessions."""
+
+    clients: dict[str, FakeRunnerClient] = field(default_factory=dict)
+
+    def connect(self, session_id: str) -> FakeRunnerClient:
+        """Give *session_id* a live runner and return its client."""
+        return self.clients.setdefault(session_id, FakeRunnerClient())
+
+    async def __call__(self, session_id: str, runner_router: Any, **_: Any) -> Any:
+        return self.clients.get(session_id)
+
+
+@dataclass
+class Supervision:
+    """A supervisor, notifier and mailer over the seeded world, on one fake clock."""
+
+    world: FactoryWorld
+    clock: FakeClock
+    deliver: FakeDeliver
+    runners: FakeRunners
+    mailer: Any
+    notifier: Any
+    supervisor: Any
+
+    async def settle(self) -> None:
+        """Finish in-flight beats, status-edge tasks and queued mail."""
+        await self.supervisor.drain()
+        await self.notifier.drain()
+        await self.mailer.drain()
+
+    async def tick(self) -> None:
+        """Run one supervisor pass and let everything it queued land."""
+        await self.supervisor.tick()
+        await self.settle()
+
+
+@pytest_asyncio.fixture()
+async def supervision(
+    world: FactoryWorld,
+    fake_deliver: FakeDeliver,
+    no_sleep: Callable[[float], Any],
+    monkeypatch: pytest.MonkeyPatch,
+) -> AsyncIterator[Supervision]:
+    """The factory switched on, with recorded delivery and runner tunnels."""
+    from omnigent.server.factory import supervisor as supervisor_module
+    from omnigent.server.factory.mailer import MAILER_STATE_ATTR, Mailer
+    from omnigent.server.factory.notify import NOTIFIER_STATE_ATTR, FactoryNotifier
+    from omnigent.server.factory.supervisor import FactorySupervisor, SupervisorConfig
+
+    monkeypatch.setenv(F.FACTORY_ENABLED_ENV, "1")
+    runners = FakeRunners()
+    monkeypatch.setattr(supervisor_module, "_get_runner_client", runners)
+    clock = FakeClock()
+    state = world.app_state
+    mailer = Mailer(state, deliver=fake_deliver, sleep=no_sleep, clock=clock)
+    notifier = FactoryNotifier(state, clock=clock)
+    setattr(state, MAILER_STATE_ATTR, mailer)
+    setattr(state, NOTIFIER_STATE_ATTR, notifier)
+    supervisor = FactorySupervisor(
+        state, config=SupervisorConfig(), deliver=fake_deliver, clock=clock, sleep=no_sleep
+    )
+    yield Supervision(
+        world=world,
+        clock=clock,
+        deliver=fake_deliver,
+        runners=runners,
+        mailer=mailer,
+        notifier=notifier,
+        supervisor=supervisor,
+    )
+    await supervisor.stop()
+    await notifier.close()
+    await mailer.close()

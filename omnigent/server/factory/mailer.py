@@ -348,6 +348,9 @@ class Mailer:
         """Wait for every queued delivery to finish (tests and shutdown)."""
         while self._tasks:
             await asyncio.gather(*list(self._tasks), return_exceptions=True)
+            # A gather of finished tasks returns without yielding; let their
+            # done-callbacks prune the set.
+            await asyncio.sleep(0)
 
     async def close(self) -> None:
         """Stop accepting mail and cancel in-flight deliveries."""

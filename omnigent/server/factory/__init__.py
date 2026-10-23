@@ -2,8 +2,9 @@
 
 A factory is a labelled tree of ordinary sessions (see :mod:`omnigent.factory`).
 This package adds the ``/v1/factory`` API the runner tools call, the mailer
-that delivers ``sys_session_post`` messages across pods, and the delivery
-ladder that wakes or relaunches a target session. Submodules import the
+that delivers ``sys_session_post`` messages across pods, the delivery ladder
+that wakes or relaunches a target session, and the supervisor that keeps
+members alive and escalates trouble. Submodules import the
 session-route helpers, so this module imports them lazily to stay cheap and
 cycle-free for importers that only need one piece.
 """
@@ -79,13 +80,14 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
     """
     Start the factory's background services for one server lifespan.
 
-    Today that is the mailer; the supervisor joins it when
-    ``OMNIGENT_FACTORY_ENABLED=1``.
+    The mailer always; the supervisor (and the status-edge notifier it reads)
+    only when ``OMNIGENT_FACTORY_ENABLED=1``.
 
     :param app_state: ``app.state`` of an app passed to
         :func:`register_factory_routes`.
     :returns: An async callable that stops what was started.
     """
+    from omnigent.factory import factory_enabled
     from omnigent.server.factory.context import FACTORY_STATE_ATTR
     from omnigent.server.factory.mailer import MAILER_STATE_ATTR, get_mailer
 
@@ -97,8 +99,15 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
         return _noop
 
     mailer = get_mailer(app_state)
+    stop_supervision: Callable[[], Awaitable[None]] | None = None
+    if factory_enabled():
+        from omnigent.server.factory.supervisor import start_supervision
+
+        stop_supervision = start_supervision(app_state)
 
     async def _stop() -> None:
+        if stop_supervision is not None:
+            await stop_supervision()
         await mailer.close()
         if getattr(app_state, MAILER_STATE_ATTR, None) is mailer:
             setattr(app_state, MAILER_STATE_ATTR, None)
