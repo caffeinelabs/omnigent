@@ -166,6 +166,33 @@ _DENIED_FOR_ALL = [
     # The protected-path unlock label is human-only.
     "gh pr edit 7 --add-label factory:allow-protected",
     "gh pr create --fill --label factory:allow-protected",
+    # Backslash-newline continuations join one command across lines.
+    "git push \\\n  origin HEAD:main",
+    "git push origin \\\n  HEAD:refs/heads/main",
+    "git push origin HEAD:ma\\\nin",
+    "gh pr create \\\n  --repo caffeinelabs/infra \\\n  --title x",
+    "gh pr create \\\r\n  --repo caffeinelabs/infra --fill",
+    "gh \\\n  pr merge 12",
+    "gh api \\\n  -X PUT repos/caffeinelabs/app/pulls/1/merge",
+    "bash \\\n<<'EOF'\ngh pr merge 7\nEOF",
+    # Tag pushes and git's short ref spellings.
+    "git push origin tag v1.0.0",
+    "git push origin tags/v1.0.0",
+    "git push origin heads/main",
+    "git push origin HEAD:heads/main",
+    "git push origin 'heads/*'",
+    # GH_REPO picks gh's target repo just like -R.
+    "GH_REPO=caffeinelabs/infra gh pr create --title x --body y",
+    "export GH_REPO=caffeinelabs/omnigent; gh pr comment 7 --body hi",
+    "env GH_REPO='octo/hello' gh pr edit 7 --title x",
+    "GH_REPO=caffeinelabs/infra gh api -X POST 'repos/{owner}/{repo}/issues/1/comments' -f body=x",
+    # Org, account and app administration.
+    "gh api -X PUT orgs/caffeinelabs/memberships/someone -f role=admin",
+    "gh api -X POST orgs/caffeinelabs/repos -f name=x",
+    "gh api -X POST /user/repos -f name=x",
+    # A quoted interpreter still runs its heredoc; double-quoted backticks run.
+    "\"bash\" <<'EOF'\ngh pr merge 7\nEOF",
+    'git commit -m "explain `gh pr merge 7`"',
 ]
 
 
@@ -225,6 +252,14 @@ _ALLOWED_FOR_ALL = [
     "cat <<-EOF > notes.md\n\tkubectl delete ns env-abc\n\tEOF",
     "git commit -m 'docs: never gh pr merge; use the gate | always'",
     "gh pr comment 7 --body 'Ready.\nNext: tilt down && git push origin main'",
+    # Single-quoted substitutions are literal; multi-word quoted text is prose.
+    "git commit -m 'docs: explain `tilt up` and $(gh pr merge 7)'",
+    'git commit -m "Fix sh" -m "$(cat <<\'EOF\'\nthen tilt up and gh pr merge 7\nEOF\n)"',
+    "git commit \\\n  -m 'wip' \\\n  --no-verify",
+    "GH_REPO=caffeinelabs/app gh pr view 7",
+    "gh api repos/caffeinelabs/app/pulls -X GET",
+    "node scripts/factory.ts status",
+    "node --experimental-strip-types scripts/factory.ts urls",
 ]
 
 
@@ -266,14 +301,25 @@ _FEATURE_PUSHES = [
     "git push --set-upstream origin HEAD:refs/heads/factory/app/t1",
     "git push https://github.com/caffeinelabs/app.git factory/app/t1",
     "cd /home/omnigent/workspace/wt/t1 && git push -u origin factory/app/t1",
+    "git push -u origin \\\n  factory/app/t1",
+    # The API spellings of a push.
+    "gh api repos/caffeinelabs/app/git/refs -f ref=refs/heads/factory/x -f sha=abc",
+    "gh api -X PUT repos/caffeinelabs/app/contents/docs/x.md -f branch=factory/x "
+    "-f message=m -f content=eA==",
 ]
 _PR_CREATES = [
     "gh pr create --fill",
     "gh pr create -R caffeinelabs/app --title x --body y --base main",
     "gh pr create --repo https://github.com/caffeinelabs/app --draft --fill",
+    "GH_REPO=caffeinelabs/app gh pr create --fill",
+    # What agents routinely write: one flag per line and a heredoc body.
+    "gh pr create \\\n  --repo caffeinelabs/app \\\n  --title 'Fix sh quoting' \\\n"
+    "  --body \"$(cat <<'EOF'\n## Summary\nrun tilt up, then gh pr merge 7\nEOF\n)\"",
+    "gh api -X POST repos/caffeinelabs/app/pulls -f head=factory/x -f base=main -f title=t",
 ]
 _MERGE_GATE_RUNS = [
     f"python -m omnigent.factory_merge {_MERGE_URL}",
+    f"python -m \\\n  omnigent.factory_merge {_MERGE_URL}",
     f"python3 -m omnigent.factory_merge {_MERGE_URL} --admin-fallback",
     f"cd wt && uv run python -m omnigent.factory_merge {_MERGE_URL} --dry-run",
     f"/usr/bin/python3.12 -m omnigent.factory_merge {_MERGE_URL}",
@@ -296,6 +342,13 @@ _ENV_LIFECYCLE = [
     "kubectl --context sandbox delete namespaces env-abc env-def",
     "kubectl delete ns/env-abc",
     "kubectl -n env-abc delete pod,ns x",
+    "tilt \\\n  up",
+    "kubectl delete \\\n  ns env-x",
+    # What ``pnpm factory:up|down`` runs in the app repo.
+    "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types "
+    "scripts/factory.ts up",
+    "cd wt/env && node scripts/factory.ts down",
+    "npx tsx ./scripts/factory.ts up",
 ]
 
 
@@ -611,7 +664,7 @@ def _spec_gate(tmp_path: Path, role: str) -> RunnerToolPolicyGate:
     bundle.mkdir()
     (bundle / "config.yaml").write_text(_SPEC_TEMPLATE.format(role=role, handler=_HANDLER))
     spec = load(bundle, enforce_handler_allowlist=True)
-    assert spec.guardrails is not None
+    assert spec.guardrails is not None and spec.guardrails.policies is not None
     assert [p.name for p in spec.guardrails.policies] == ["blast_radius", "factory_guard"]
     return RunnerToolPolicyGate.from_spec(spec)
 
@@ -620,7 +673,7 @@ def _verdicts(gate: RunnerToolPolicyGate, commands: list[str]) -> list[tuple[str
     """:returns: ``(action, deciding policy)`` per command through the runner gate."""
 
     async def _run() -> list[tuple[str, str | None]]:
-        out = []
+        out: list[tuple[str, str | None]] = []
         for command in commands:
             verdict = await gate.evaluate_tool_call("Bash", {"command": command})
             out.append((verdict.action, verdict.policy_name))
@@ -644,10 +697,12 @@ def _verdicts(gate: RunnerToolPolicyGate, commands: list[str]) -> list[tuple[str
         (ROLE_IC, "tilt down", "deny", "factory_guard"),
         (ROLE_LEAD, "git push -u origin factory/app/t1", "deny", "factory_guard"),
         (ROLE_IC, f"python -m omnigent.factory_merge {_MERGE_URL}", "deny", "factory_guard"),
+        (ROLE_IC, "git push \\\n  origin HEAD:main", "deny", "factory_guard"),
         # Recoverable work blast_radius{gate_pushes: false} lets through stays allowed.
         (ROLE_IC, "git push -u origin factory/app/t1", "allow", None),
         (ROLE_IC, "rm -rf build", "allow", None),
         (ROLE_IC, "gh pr create --fill", "allow", None),
+        (ROLE_IC, "gh pr create \\\n  --title x \\\n  --body y", "allow", None),
         (ROLE_PROJECT_LEAD, f"python -m omnigent.factory_merge {_MERGE_URL}", "allow", None),
         (ROLE_ENV_KEEPER, "cd wt/env && pnpm factory:up", "allow", None),
         (ROLE_ENV_KEEPER, "kubectl delete ns env-abc", "allow", None),

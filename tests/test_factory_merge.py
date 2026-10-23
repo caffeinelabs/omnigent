@@ -35,10 +35,56 @@ _COMMITTED = "2026-10-23T10:00:00Z"
 _BEFORE = "2026-10-23T09:30:00Z"
 _AFTER = "2026-10-23T10:30:00Z"
 _LATER = "2026-10-23T11:00:00Z"
-_REVIEW_REQUIRED_ERR = (
-    "GraphQL: At least 1 approving review is required by reviewers with write access. "
-    "(mergePullRequest)"
+# gh's real ``pr merge`` outcomes: ``(exit code, stderr, effect on the PR)``.
+_MERGED = (0, "", "merged")
+_AUTO_MERGE = (
+    0,
+    "! The merge strategy for main is set by the merge queue\n"
+    "✓ Pull request caffeinelabs/app#7 will be added to the merge queue for main when ready",
+    "auto",
 )
+_ENQUEUED = (0, "! The merge strategy for main is set by the merge queue", "queue")
+_BLOCKED = (
+    1,
+    "X Pull request caffeinelabs/app#7 is not mergeable: the base branch policy prohibits "
+    "the merge.\nTo have the pull request merged after all the requirements have been met, "
+    "add the `--auto` flag.\nTo use administrator privileges to immediately merge the pull "
+    "request, add the `--admin` flag.",
+    None,
+)
+_BEHIND = (
+    1,
+    "X Pull request caffeinelabs/app#7 is not mergeable: the head branch is not up to date "
+    "with the base branch.\nTo use administrator privileges to immediately merge the pull "
+    "request, add the `--admin` flag.",
+    None,
+)
+
+
+def _rule(kind: str, **parameters: Any) -> dict[str, Any]:
+    """:returns: One ``rules/branches/<base>`` entry."""
+    return {"type": kind, "ruleset_id": 1, "parameters": parameters or None}
+
+
+# The shape of caffeinelabs/app's main rules: a merge queue, one code-owner
+# approval with thread resolution, and strict required checks.
+_APP_RULES = [
+    _rule("deletion"),
+    _rule("required_linear_history"),
+    _rule("non_fast_forward"),
+    _rule(
+        "pull_request",
+        required_approving_review_count=1,
+        require_code_owner_review=True,
+        required_review_thread_resolution=True,
+    ),
+    _rule("merge_queue", merge_method="SQUASH"),
+    _rule(
+        "required_status_checks",
+        strict_required_status_checks_policy=True,
+        required_status_checks=[{"context": "ci / test", "integration_id": 15368}],
+    ),
+]
 
 
 def _review(sha: str = _HEAD, verdict: str = "APPROVE", at: str = _AFTER) -> dict[str, Any]:
@@ -61,7 +107,6 @@ def _pr(**overrides: Any) -> dict[str, Any]:
         "isDraft": False,
         "mergeable": "MERGEABLE",
         "mergeStateStatus": "BLOCKED",
-        "reviewDecision": "REVIEW_REQUIRED",
         "baseRefName": "main",
         "labels": [],
         "files": [{"path": "apps/api/src/version.ts", "additions": 3, "deletions": 1}],
@@ -82,7 +127,7 @@ def _check(name: str, bucket: str, state: str = "") -> dict[str, str]:
 
 
 class _FakeGh:
-    """Scripted stand-in for ``subprocess.run(["gh", …])``."""
+    """Scripted stand-in for ``subprocess.run(["gh", …])`` with a live PR state."""
 
     def __init__(
         self,
@@ -90,9 +135,14 @@ class _FakeGh:
         *,
         required: list[dict[str, str]] | None = None,
         all_checks: list[dict[str, str]] | None = None,
-        merges: Sequence[tuple[int, str]] = ((0, ""),),
+        merges: Sequence[tuple[int, str, str | None]] = (_MERGED,),
         api_files: list[str] | None = None,
         view_error: str | None = None,
+        rules: list[dict[str, Any]] | None = None,
+        classic: dict[str, Any] | None = None,
+        classic_error: str = "gh: Branch not protected (HTTP 404)",
+        live: dict[str, Any] | None = None,
+        disable_auto_error: str | None = None,
     ) -> None:
         """
         Configure the responses.
@@ -100,9 +150,17 @@ class _FakeGh:
         :param pr: The ``gh pr view`` object.
         :param required: Required checks; ``[]`` means gh reports none.
         :param all_checks: All checks; ``[]`` means gh reports none.
-        :param merges: ``(returncode, stderr)`` per ``gh pr merge`` call, in order.
-        :param api_files: Paths served by the paginated REST files listing.
+        :param merges: ``(returncode, stderr, effect)`` per ``gh pr merge`` call, in
+            order; *effect* ``"merged"``, ``"auto"`` (auto-merge enabled),
+            ``"queue"`` (joined the merge queue), ``"late"`` (shows merged one
+            read later) or ``None``.
+        :param api_files: Lines served by the paginated REST files listing.
         :param view_error: Make ``gh pr view`` fail with this stderr.
+        :param rules: Base-branch ruleset rules (default: none).
+        :param classic: Classic branch protection; ``None`` serves *classic_error*.
+        :param classic_error: stderr of the classic protection read.
+        :param live: Overrides for the GraphQL merge state.
+        :param disable_auto_error: Make ``gh pr merge --disable-auto`` fail.
         """
         self.pr = pr if pr is not None else _pr()
         self.required = [_check("ci / test", "pass")] if required is None else required
@@ -110,6 +168,21 @@ class _FakeGh:
         self.merges = list(merges)
         self.api_files = api_files or []
         self.view_error = view_error
+        self.rules = rules or []
+        self.classic = classic
+        self.classic_error = classic_error
+        self.disable_auto_error = disable_auto_error
+        self.live: dict[str, Any] = {
+            "state": "OPEN",
+            "headRefOid": self.pr["headRefOid"],
+            "mergeStateStatus": self.pr.get("mergeStateStatus", "BLOCKED"),
+            "reviewDecision": "REVIEW_REQUIRED",
+            "isInMergeQueue": False,
+            "autoMergeRequest": None,
+            "reviewThreads": {"pageInfo": {"hasNextPage": False}, "nodes": []},
+        }
+        self.live.update(live or {})
+        self.merge_on_read = False
         self.calls: list[list[str]] = []
 
     @property
@@ -137,11 +210,52 @@ class _FakeGh:
                 return self._done(1, stderr=f"{prefix} reported on the 'factory/x' branch")
             return self._done(0, json.dumps(checks))
         if args[:2] == ["pr", "merge"]:
-            code, stderr = self.merges.pop(0)
-            return self._done(code, stderr=stderr)
+            return self._merge(args)
+        if args[:2] == ["api", "graphql"]:
+            return self._graphql(args)
         if args[0] == "api":
-            return self._done(0, "\n".join(self.api_files) + "\n")
+            return self._rest(args)
         raise AssertionError(f"unexpected gh call: {cmd}")
+
+    def _merge(self, args: list[str]) -> subprocess.CompletedProcess[str]:
+        """Serve ``gh pr merge``, applying its scripted effect to the live state."""
+        if "--disable-auto" in args:
+            if self.disable_auto_error:
+                return self._done(1, stderr=self.disable_auto_error)
+            self.live["autoMergeRequest"] = None
+            return self._done(0)
+        code, stderr, effect = self.merges.pop(0)
+        if effect == "merged":
+            self.live["state"] = "MERGED"
+        elif effect == "auto":
+            self.live["autoMergeRequest"] = {"enabledAt": _LATER}
+        elif effect == "queue":
+            self.live["isInMergeQueue"] = True
+        elif effect == "late":
+            self.merge_on_read = True
+        return self._done(code, stderr=stderr)
+
+    def _graphql(self, args: list[str]) -> subprocess.CompletedProcess[str]:
+        """Serve the merge-state query."""
+        assert {"owner=caffeinelabs", "repo=app", "number=7"} <= set(args), args
+        node = dict(self.live)
+        if self.merge_on_read:
+            self.live["state"] = "MERGED"
+        return self._done(0, json.dumps({"data": {"repository": {"pullRequest": node}}}))
+
+    def _rest(self, args: list[str]) -> subprocess.CompletedProcess[str]:
+        """Serve the rules, classic protection and files listings."""
+        path = next(a for a in args[1:] if a.startswith("repos/"))
+        repo = "/".join(self.pr["url"].split("/")[3:5])
+        if path == f"repos/{repo}/rules/branches/main":
+            return self._done(0, "".join(json.dumps(r) + "\n" for r in self.rules))
+        if path == f"repos/{repo}/branches/main/protection":
+            if self.classic is None:
+                return self._done(1, stderr=self.classic_error)
+            return self._done(0, json.dumps(self.classic))
+        if path == f"repos/{repo}/pulls/{self.pr['url'].rsplit('/', 1)[1]}/files?per_page=100":
+            return self._done(0, "\n".join(self.api_files) + "\n")
+        raise AssertionError(f"unexpected gh api call: {args}")
 
     @staticmethod
     def _done(code: int, stdout: str = "", stderr: str = "") -> subprocess.CompletedProcess[str]:
@@ -171,6 +285,14 @@ def _default_repos(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv(REPOS_ENV, raising=False)
 
 
+@pytest.fixture(autouse=True)
+def _no_sleep(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Skip the settle pauses; returns the delays the gate asked for."""
+    delays: list[float] = []
+    monkeypatch.setattr(factory_merge.time, "sleep", delays.append)
+    return delays
+
+
 # ── Happy path ──────────────────────────────────────────────────────────────
 
 
@@ -182,6 +304,7 @@ def test_all_gates_pass_then_squash_merges_pinned_head(
     code, verdict = _run(monkeypatch, capsys, fake)
     assert code == EXIT_MERGED
     assert verdict["merged"] is True
+    assert verdict["queued"] is False
     assert verdict["admin"] is False
     assert verdict["url"] == _URL
     assert verdict["head_sha"] == _HEAD
@@ -190,12 +313,14 @@ def test_all_gates_pass_then_squash_merges_pinned_head(
     assert fake.merge_calls == [
         ["gh", "pr", "merge", _URL, "--squash", "--match-head-commit", _HEAD]
     ]
+    # "merged" is read back from GitHub after the merge call, never assumed.
+    assert fake.calls[-1][1:3] == ["api", "graphql"]
 
 
 def test_view_requests_the_documented_fields(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """The gate reads exactly the fields its gates depend on, and required checks first."""
+    """The gate reads the fields its gates depend on, the base rules and required checks."""
     fake = _FakeGh()
     _run(monkeypatch, capsys, fake, "--dry-run")
     view = fake.calls[0]
@@ -215,6 +340,15 @@ def test_view_requests_the_documented_fields(
         "isDraft",
     } <= fields
     assert fake.calls[1] == [
+        "gh",
+        "api",
+        "--paginate",
+        "repos/caffeinelabs/app/rules/branches/main",
+        "--jq",
+        ".[]",
+    ]
+    assert fake.calls[2] == ["gh", "api", "repos/caffeinelabs/app/branches/main/protection"]
+    assert fake.calls[3] == [
         "gh",
         "pr",
         "checks",
@@ -269,6 +403,33 @@ _INFRA_URL = "https://github.com/caffeinelabs/infra/pull/9"
             lambda: _FakeGh(required=[{"name": "ci / test", "state": "FAILURE"}]),
             "failing checks: ci / test",
             id="checks-state-without-bucket",
+        ),
+        pytest.param(
+            "checks",
+            lambda: _FakeGh(required=[], all_checks=[], rules=_APP_RULES),
+            "required checks not reported yet: ci / test",
+            id="checks-ci-not-registered-yet",
+        ),
+        pytest.param(
+            "checks",
+            lambda: _FakeGh(
+                rules=[
+                    _rule(
+                        "required_status_checks",
+                        required_status_checks=[{"context": "ci / test"}, {"context": "e2e"}],
+                    )
+                ]
+            ),
+            "required checks not reported yet: e2e",
+            id="checks-one-required-context-missing",
+        ),
+        pytest.param(
+            "checks",
+            lambda: _FakeGh(
+                classic={"required_status_checks": {"strict": True, "contexts": ["lint"]}}
+            ),
+            "required checks not reported yet: lint",
+            id="checks-classic-protection-context-missing",
         ),
         pytest.param(
             "review",
@@ -341,6 +502,21 @@ _INFRA_URL = "https://github.com/caffeinelabs/infra/pull/9"
             lambda: _FakeGh(_pr(files=[{"path": "infra/zz_generated/prod/values.yaml"}])),
             "touches protected paths (infra/zz_generated/prod/values.yaml)",
             id="zz-generated-prod",
+        ),
+        pytest.param(
+            "protected_paths",
+            lambda: _FakeGh(
+                _pr(files=[{"path": "docs/ci.yml"}]),
+                api_files=["docs/ci.yml", ".github/workflows/ci.yml"],
+            ),
+            "touches protected paths (.github/workflows/ci.yml)",
+            id="renamed-out-of-workflows",
+        ),
+        pytest.param(
+            "protected_paths",
+            lambda: _FakeGh(_pr(files=[]), api_files=[".github/workflows/ci.yml"]),
+            "touches protected paths (.github/workflows/ci.yml)",
+            id="deleted-workflow",
         ),
     ],
 )
@@ -446,14 +622,23 @@ def test_protected_paths_pass_with_human_label(
 def test_large_prs_list_files_through_the_api(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A capped ``files`` list is replaced by the full REST listing."""
+    """A capped ``files`` list is completed by the full REST listing (with rename sources)."""
     capped = [{"path": f"apps/api/src/f{i}.ts"} for i in range(100)]
     fake = _FakeGh(_pr(files=capped), api_files=[*(f["path"] for f in capped), "deploy/prod/x"])
     code, verdict = _run(monkeypatch, capsys, fake)
     assert code == EXIT_GATE_FAILED
     assert verdict["gates"]["protected_paths"] == "fail"
-    api = [c for c in fake.calls if c[1] == "api"]
-    assert api and "repos/caffeinelabs/app/pulls/7/files?per_page=100" in api[0]
+    listing = [c for c in fake.calls if "repos/caffeinelabs/app/pulls/7/files?per_page=100" in c]
+    assert listing == [
+        [
+            "gh",
+            "api",
+            "--paginate",
+            "repos/caffeinelabs/app/pulls/7/files?per_page=100",
+            "--jq",
+            ".[] | .filename, (.previous_filename // empty)",
+        ]
+    ]
 
 
 def test_no_required_checks_falls_back_to_all_checks(
@@ -497,54 +682,251 @@ def test_repo_allowlist_comes_from_the_environment(
 
 # ── Merge outcomes ──────────────────────────────────────────────────────────
 
+_BASE_MERGE = ["gh", "pr", "merge", _URL, "--squash", "--match-head-commit", _HEAD]
+_DISABLE_AUTO = ["gh", "pr", "merge", _URL, "--disable-auto"]
 
-def test_admin_fallback_retries_with_admin_on_review_requirement(
+
+def test_merge_queue_auto_merge_is_not_reported_as_merged(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """A merge blocked only by a required review is retried with ``--admin``."""
-    fake = _FakeGh(merges=[(1, _REVIEW_REQUIRED_ERR), (0, "")])
+    """
+    gh exits 0 on a merge-queue branch after only enabling auto-merge: not merged.
+
+    Reporting it merged would make the project lead announce a milestone that
+    never happened; auto-merge left on would let a later unreviewed push merge.
+    """
+    fake = _FakeGh(rules=_APP_RULES, merges=[_AUTO_MERGE])
+    code, verdict = _run(monkeypatch, capsys, fake)
+    assert code == EXIT_ERROR
+    assert verdict["merged"] is False
+    assert verdict["queued"] is False
+    assert verdict["admin"] is False
+    assert fake.merge_calls == [_BASE_MERGE, _DISABLE_AUTO]
+    assert fake.live["autoMergeRequest"] is None
+    assert "only enabled auto-merge" in verdict["reasons"][-1]
+    assert "--admin-fallback" in verdict["reasons"][-1]
+    assert any("turned it off" in note for note in verdict["notes"])
+
+
+def test_auto_merge_that_cannot_be_disabled_is_reported_queued(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """When turning auto-merge off fails, the verdict says the PR is still queued."""
+    fake = _FakeGh(
+        rules=_APP_RULES, merges=[_AUTO_MERGE], disable_auto_error="HTTP 502: Bad Gateway"
+    )
+    code, verdict = _run(monkeypatch, capsys, fake, "--admin-fallback")
+    assert code == EXIT_ERROR
+    assert verdict["merged"] is False
+    assert verdict["queued"] is True
+    assert "ask a human to disable auto-merge" in verdict["reasons"][-1]
+    assert fake.merge_calls == [_BASE_MERGE, _DISABLE_AUTO]
+
+
+def test_merge_queue_entry_is_reported_queued_and_never_admin_merged(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A PR gh put straight into the merge queue is queued, not merged, and not bypassed."""
+    fake = _FakeGh(rules=_APP_RULES, merges=[_ENQUEUED])
+    code, verdict = _run(monkeypatch, capsys, fake, "--admin-fallback")
+    assert code == EXIT_ERROR
+    assert verdict["merged"] is False
+    assert verdict["queued"] is True
+    assert verdict["admin"] is False
+    assert fake.merge_calls == [_BASE_MERGE]
+    assert "merge queue" in verdict["reasons"][-1]
+
+
+def test_merge_that_shows_up_late_is_waited_for(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], _no_sleep: list[float]
+) -> None:
+    """A merge GitHub reports one read late still counts; a missing one never does."""
+    late = _FakeGh(merges=[(0, "", "late")])
+    code, verdict = _run(monkeypatch, capsys, late)
+    assert code == EXIT_MERGED
+    assert verdict["merged"] is True
+    assert _no_sleep == [1.0]
+
+    never = _FakeGh(merges=[(0, "", None)])
+    code, verdict = _run(monkeypatch, capsys, never)
+    assert code == EXIT_ERROR
+    assert verdict["merged"] is False
+    assert "exited 0 but the PR is OPEN" in verdict["reasons"][-1]
+
+
+def test_admin_fallback_bypasses_only_the_review_on_a_merge_queue_branch(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """
+    caffeinelabs/app: queued auto-merge → turned off → ``--admin`` retry merges.
+
+    The PR is BLOCKED with REVIEW_REQUIRED, every required check passed and
+    no review thread is open, so the missing approval is the only block.
+    """
+    fake = _FakeGh(rules=_APP_RULES, merges=[_AUTO_MERGE, _MERGED])
     code, verdict = _run(monkeypatch, capsys, fake, "--admin-fallback")
     assert code == EXIT_MERGED
     assert verdict["merged"] is True
     assert verdict["admin"] is True
-    base = ["gh", "pr", "merge", _URL, "--squash", "--match-head-commit", _HEAD]
-    assert fake.merge_calls == [base, [*base, "--admin"]]
+    assert verdict["queued"] is False
+    assert fake.merge_calls == [_BASE_MERGE, _DISABLE_AUTO, [*_BASE_MERGE, "--admin"]]
+
+
+def test_admin_fallback_retries_a_plain_review_block(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Without a merge queue, gh refuses a BLOCKED PR; the retry uses ``--admin``."""
+    fake = _FakeGh(merges=[_BLOCKED, _MERGED])
+    code, verdict = _run(monkeypatch, capsys, fake, "--admin-fallback")
+    assert code == EXIT_MERGED
+    assert verdict["admin"] is True
+    assert fake.merge_calls == [_BASE_MERGE, [*_BASE_MERGE, "--admin"]]
 
 
 def test_review_block_without_admin_fallback_is_an_error(
     monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """Without ``--admin-fallback`` the review block is reported, never bypassed."""
-    fake = _FakeGh(merges=[(1, _REVIEW_REQUIRED_ERR)])
+    fake = _FakeGh(merges=[_BLOCKED])
     code, verdict = _run(monkeypatch, capsys, fake)
     assert code == EXIT_ERROR
     assert verdict["merged"] is False
-    assert "--admin-fallback" in verdict["reasons"][-1]
+    reason = verdict["reasons"][-1]
+    assert "the base branch policy prohibits the merge" in reason
+    assert "--admin-fallback" in reason
     assert len(fake.merge_calls) == 1
 
 
 @pytest.mark.parametrize(
-    ("decision", "stderr"),
+    ("fake_kwargs", "hint"),
     [
-        pytest.param("CHANGES_REQUESTED", _REVIEW_REQUIRED_ERR, id="human-requested-changes"),
         pytest.param(
-            "APPROVED", "Pull request is not mergeable: merge conflict", id="other-failure"
+            {"pr": _pr(mergeStateStatus="BEHIND"), "merges": [_BEHIND]},
+            "merge origin/main into it",
+            id="behind-strict-base",
+        ),
+        pytest.param(
+            {"pr": _pr(mergeStateStatus="DIRTY"), "merges": [_BLOCKED]},
+            "resolve the conflicts",
+            id="dirty",
+        ),
+        pytest.param(
+            {"pr": _pr(mergeStateStatus="UNKNOWN"), "merges": [_BLOCKED]},
+            "still computing mergeability",
+            id="unknown",
+        ),
+        pytest.param(
+            {"merges": [_BLOCKED], "live": {"reviewDecision": "CHANGES_REQUESTED"}},
+            "requested changes",
+            id="human-requested-changes",
+        ),
+        pytest.param(
+            {"merges": [_BLOCKED], "live": {"reviewDecision": "APPROVED"}},
+            "something other than a missing review",
+            id="blocked-but-approved",
+        ),
+        pytest.param(
+            {"merges": [_BLOCKED], "live": {"headRefOid": _OLD}},
+            "the head moved",
+            id="head-moved",
+        ),
+        pytest.param(
+            {
+                "rules": _APP_RULES,
+                "merges": [_AUTO_MERGE],
+                "live": {
+                    "reviewThreads": {
+                        "pageInfo": {"hasNextPage": False},
+                        "nodes": [{"isResolved": True}, {"isResolved": False}],
+                    }
+                },
+            },
+            "1 unresolved review thread(s)",
+            id="unresolved-thread",
+        ),
+        pytest.param(
+            {"rules": [*_APP_RULES, _rule("required_deployments")], "merges": [_AUTO_MERGE]},
+            "rules the gate does not verify: required_deployments",
+            id="unverified-rule",
+        ),
+        pytest.param(
+            {"merges": [_BLOCKED], "classic_error": "gh: Must have admin rights (HTTP 403)"},
+            "classic branch protection is unreadable",
+            id="classic-protection-unreadable",
         ),
     ],
 )
 def test_admin_fallback_does_not_bypass_other_blocks(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
-    decision: str,
-    stderr: str,
+    fake_kwargs: dict[str, Any],
+    hint: str,
 ) -> None:
-    """``--admin`` is never used over a human's change request or a non-review failure."""
-    fake = _FakeGh(_pr(reviewDecision=decision), merges=[(1, stderr)])
+    """
+    ``--admin`` only bypasses a missing approval, never what else GitHub enforces.
+
+    A BEHIND branch under a strict policy, conflicts, a human's change request,
+    a moved head, unresolved threads, or a rule the gate cannot verify each
+    fail with a fix-it hint and no ``--admin`` call.
+    """
+    fake = _FakeGh(**fake_kwargs)
     code, verdict = _run(monkeypatch, capsys, fake, "--admin-fallback")
     assert code == EXIT_ERROR
     assert verdict["merged"] is False
     assert verdict["admin"] is False
-    assert len(fake.merge_calls) == 1
+    assert "--admin not used" in verdict["reasons"][-1]
+    assert hint in verdict["reasons"][-1]
+    assert all("--admin" not in call for call in fake.merge_calls)
+
+
+def test_missing_required_check_never_reaches_the_admin_merge(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A required check CI has not registered fails gate 2, so nothing is merged."""
+    fake = _FakeGh(required=[], all_checks=[], rules=_APP_RULES, merges=[_AUTO_MERGE, _MERGED])
+    code, verdict = _run(monkeypatch, capsys, fake, "--admin-fallback")
+    assert code == EXIT_GATE_FAILED
+    assert verdict["gates"]["checks"] == "fail"
+    assert fake.merge_calls == []
+
+
+def test_required_context_from_another_app_is_found_among_all_checks(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A required context gh does not flag required is still matched by name."""
+    rules = [
+        _rule(
+            "required_status_checks",
+            required_status_checks=[{"context": "ci / test"}, {"context": "deploy-preview"}],
+        )
+    ]
+    found = _FakeGh(
+        rules=rules,
+        all_checks=[_check("ci / test", "pass"), _check("deploy-preview", "skipping")],
+    )
+    code, verdict = _run(monkeypatch, capsys, found, "--dry-run")
+    assert code == EXIT_MERGED, verdict["reasons"]
+
+    failing = _FakeGh(
+        rules=rules,
+        all_checks=[_check("ci / test", "pass"), _check("deploy-preview", "fail")],
+    )
+    code, verdict = _run(monkeypatch, capsys, failing, "--dry-run")
+    assert code == EXIT_GATE_FAILED
+    assert verdict["reasons"] == ["failing checks: deploy-preview"]
+
+
+def test_failed_admin_retry_is_an_error(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A rejected ``--admin`` merge (e.g. no bypass permission) exits 1, not merged."""
+    denied = (1, "GraphQL: Repository rule violations found (mergePullRequest)", None)
+    fake = _FakeGh(merges=[_BLOCKED, denied])
+    code, verdict = _run(monkeypatch, capsys, fake, "--admin-fallback")
+    assert code == EXIT_ERROR
+    assert verdict["merged"] is False
+    assert verdict["admin"] is False
+    assert "Repository rule violations found" in verdict["reasons"][-1]
 
 
 def test_dry_run_evaluates_without_merging(
@@ -590,6 +972,19 @@ def test_missing_gh_is_an_error(
     monkeypatch.setattr(factory_merge.subprocess, "run", _missing)
     assert main([_URL]) == EXIT_ERROR
     assert "not installed" in json.loads(capsys.readouterr().out)["reasons"][0]
+
+
+@pytest.mark.parametrize("argv", [[], [_URL, "--bogus"]], ids=["no-url", "unknown-flag"])
+def test_usage_errors_exit_1_with_a_json_verdict(
+    capsys: pytest.CaptureFixture[str], argv: list[str]
+) -> None:
+    """A usage error is an error (exit 1), not argparse's 2 that reads as a failed gate."""
+    assert main(argv) == EXIT_ERROR
+    out = capsys.readouterr()
+    verdict = json.loads(out.out)
+    assert verdict["merged"] is False
+    assert verdict["reasons"][0].startswith("error: ")
+    assert "usage:" in out.err
 
 
 # ── Helpers and CLI ─────────────────────────────────────────────────────────

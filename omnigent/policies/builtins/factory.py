@@ -11,15 +11,19 @@ Omnigent terminal) and denies:
 - raw ``gh pr merge`` for every role (merges go through the
   ``python -m omnigent.factory_merge`` gate);
 - admin writes through ``gh api`` (merges, branch protection, rulesets,
-  collaborators, secrets, webhooks, refs of protected branches or tags), and
-  ``gh repo delete|archive|edit|rename``, ``gh release``, ``gh secret``,
-  ``gh ruleset`` and ``gh workflow run``;
+  collaborators, secrets, webhooks, refs of protected branches or tags, org
+  and account settings), and ``gh repo delete|archive|edit|rename``,
+  ``gh release``, ``gh secret``, ``gh ruleset`` and ``gh workflow run``;
 - ``git push`` to a protected branch, of tags, or of every branch;
 - PR writes and pushes that name a repo outside ``write_repos`` (or inside
-  ``deny_repos``);
-- per role: any push or PR creation by a lead or reviewer, the merge gate for
-  anyone but the project lead, and env lifecycle (``tilt up|down``,
-  ``pnpm factory:up|down``, ``kubectl delete ns``) for anyone but env_keeper.
+  ``deny_repos``) by ``-R``, URL or ``GH_REPO``;
+- per role: any push or PR creation (CLI or API) by a lead or reviewer, the
+  merge gate for anyone but the project lead, and env lifecycle
+  (``tilt up|down``, ``pnpm factory:up|down`` or the script behind it,
+  ``kubectl delete ns``) for anyone but env_keeper.
+
+Line continuations are joined and heredoc bodies and single-quoted text are
+treated as data, so multi-line commands are checked as the shell runs them.
 
 Like ``blast_radius`` it is a safety net against accidents, not a security
 boundary: shell variables, aliases, scripts and remotes it cannot resolve
@@ -114,6 +118,12 @@ _PYTHON_RUNNERS: frozenset[str] = frozenset(
 _PYTHON_RE = re.compile(r"python[0-9.]*")
 _MERGE_GATE_RE = re.compile(r"omnigent[./]factory_merge\b|\bimport\s+factory_merge\b")
 _ENV_SCRIPT_RE = re.compile(r"factory:(up|down)")
+# What ``pnpm factory:up|down`` runs: ``node … scripts/factory.ts up|down``.
+_JS_RUNNERS: frozenset[str] = frozenset(
+    {"node", "nodejs", "tsx", "ts-node", "bun", "bunx", "deno", "npx", "pnpx"}
+)
+_ENV_SCRIPT_FILE_RE = re.compile(r"(?:^|/)factory\.[cm]?[jt]s$")
+_ENV_SCRIPT_VERBS: frozenset[str] = frozenset({"up", "down"})
 _TILT_LIFECYCLE: frozenset[str] = frozenset({"up", "down", "ci"})
 
 _KUBECTL_VALUE_FLAGS: frozenset[str] = frozenset(
@@ -143,6 +153,8 @@ _KUBECTL_VALUE_FLAGS: frozenset[str] = frozenset(
 _NAMESPACE_KINDS: frozenset[str] = frozenset({"ns", "namespace", "namespaces"})
 
 _GH_REPO_FLAGS: frozenset[str] = frozenset({"-R", "--repo"})
+# ``GH_REPO=o/r gh pr create`` (or an exported GH_REPO) picks gh's target repo.
+_GH_REPO_ENV_RE = re.compile(r"(?<![\w-])GH_REPO=(['\"]?)([^\s'\"`;&|()]+)")
 # Flags whose value is free text; a URL there is prose, not the PR target.
 _GH_TEXT_FLAGS: frozenset[str] = frozenset({"-b", "--body", "-t", "--title", "--subject"})
 _GH_PR_WRITE_ACTIONS: frozenset[str] = frozenset(
@@ -189,6 +201,13 @@ _GH_API_ADMIN_PATH = re.compile(
     r"|/secrets|/hooks|/keys|/transfer"
 )
 _GH_API_REPO_ROOT = re.compile(r"/repos/[^/]+/[^/]+/?")
+# Org, account and app administration: no factory agent writes there.
+_GH_API_ACCOUNT_PATH = re.compile(
+    r"/(orgs|user|users|enterprises|teams|admin|app|applications|installation)(/|$)"
+)
+# API equivalents of opening a PR and of pushing commits or refs.
+_GH_API_PR_CREATE_PATH = re.compile(r"/repos/[^/]+/[^/]+/pulls/?")
+_GH_API_PUSH_PATH = re.compile(r"/repos/[^/]+/[^/]+/(git|contents)(/|$)")
 _GH_API_REPO = re.compile(r"/repos/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)")
 _GRAPHQL_ADMIN_MUTATION = re.compile(
     r"\b(mergePullRequest|enablePullRequestAutoMerge|mergeBranch|createCommitOnBranch"
@@ -209,6 +228,8 @@ _SEPARATOR_RE = re.compile(r"[;&|\n]+")
 _HEREDOC_RE = re.compile(r"(?<!<)<<(?!<)(-?)\s*(['\"]?)([A-Za-z_][A-Za-z0-9_]*)\2")
 # A heredoc on a line naming a shell interpreter is commands, not data.
 _HEREDOC_SHELL_RE = re.compile(r"(?<![\w.-])(ba|z|da|k)?sh\b|\beval\b")
+# Balanced quoted strings; multi-word ones are prose, never an interpreter name.
+_QUOTED_RE = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"")
 
 # Marker standing in for a command nested too deeply to unwrap.
 _TOO_DEEP = "\x00too-deep"
@@ -285,28 +306,54 @@ def _trim_subshell_close(argv: list[str]) -> list[str]:
     return [*argv[:-1], last] if last else argv[:-1]
 
 
-def _strip_heredoc_bodies(command: str) -> str:
+def _continues(line: str) -> bool:
     """
-    Drop heredoc bodies, which are data for the command reading them.
+    Whether *line* ends in an unescaped backslash (a line continuation).
 
-    Agents write PR bodies and commit messages as
+    :param line: One physical line, e.g. ``"gh pr create \\"``.
+    :returns: ``True`` when the newline after it is removed by the shell.
+    """
+    body = line.rstrip("\r")
+    return (len(body) - len(body.rstrip("\\"))) % 2 == 1
+
+
+def _blank_quoted_prose(line: str) -> str:
+    """
+    Blank quoted strings that contain whitespace (``--title "Fix sh"``).
+
+    A single quoted word stays, since it may be a command name (``"bash" <<EOF``).
+
+    :param line: One command line.
+    :returns: *line* with multi-word quoted strings replaced by a space.
+    """
+    return _QUOTED_RE.sub(lambda m: " " if re.search(r"\s", m.group(0)) else m.group(0), line)
+
+
+def _logical_lines(command: str) -> str:
+    """
+    Join line continuations and drop heredoc bodies, which are data.
+
+    A backslash-newline is deleted by the shell, so ``gh \\<newline> pr merge``
+    is one command. Agents write PR bodies and commit messages as
     ``--body "$(cat <<'EOF' … EOF)"``; their prose ("run tilt up", "1) …")
     must not be parsed as commands. A heredoc fed to a shell interpreter
     (``bash <<EOF``) is kept, because its body does run.
 
     :param command: A command line, possibly spanning several lines.
-    :returns: *command* without the bodies (and closing delimiters) of heredocs.
+    :returns: *command* with continuations joined and without the bodies (and
+        closing delimiters) of heredocs.
     """
-    if "<<" not in command:
-        return command
     lines = command.split("\n")
     kept: list[str] = []
     index = 0
     while index < len(lines):
         line = lines[index]
-        kept.append(line)
         index += 1
-        if _HEREDOC_SHELL_RE.search(line):
+        while _continues(line) and index < len(lines):
+            line = line.rstrip("\r")[:-1] + lines[index]
+            index += 1
+        kept.append(line)
+        if "<<" not in line or _HEREDOC_SHELL_RE.search(_blank_quoted_prose(line)):
             continue
         for match in _HEREDOC_RE.finditer(line):
             delimiter = match.group(3)
@@ -316,6 +363,83 @@ def _strip_heredoc_bodies(command: str) -> str:
             if delimiter in body:
                 index += body.index(delimiter) + 1
     return "\n".join(kept)
+
+
+def _substitution_end(command: str, start: int, closer: str) -> int | None:
+    """
+    Find the end of a ``$(…)`` or backtick substitution, skipping quoted text.
+
+    :param command: The command line.
+    :param start: Index just past the opener.
+    :param closer: ``")"`` or a backtick.
+    :returns: The index of the closing character, or ``None`` when unclosed.
+    """
+    depth = 1
+    index = start
+    while index < len(command):
+        char = command[index]
+        if char == "\\":
+            index += 2
+            continue
+        if char == closer and (closer == "`" or depth == 1):
+            return index
+        if closer == ")" and char == "(":
+            depth += 1
+        elif closer == ")" and char == ")":
+            depth -= 1
+        elif char in "'\"" and closer == ")":
+            end = command.find(char, index + 1)
+            if end == -1:
+                return None
+            index = end
+        index += 1
+    return None
+
+
+def _extract_substitutions(command: str) -> tuple[str, list[str]]:
+    """
+    Pull out ``$(…)`` / backtick bodies, leaving single-quoted text literal.
+
+    ``git commit -m 'explain `tilt up`'`` runs nothing, while the same
+    backticks in double quotes do. Unbalanced quoting falls back to the shared
+    quote-unaware extractor, which errs toward seeing more commands.
+
+    :param command: e.g. ``"echo '$(a)' \"$(b)\""``.
+    :returns: ``(outer, bodies)``, e.g. ``("echo '$(a)' \" \"", ["b"])``.
+    """
+    out: list[str] = []
+    bodies: list[str] = []
+    quote = ""
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote == "'":
+            quote = "" if char == "'" else quote
+            out.append(char)
+            index += 1
+            continue
+        if char == "\\":
+            out.append(command[index : index + 2])
+            index += 2
+            continue
+        opener = 2 if command.startswith("$(", index) else 1 if char == "`" else 0
+        if opener:
+            end = _substitution_end(command, index + opener, ")" if opener == 2 else "`")
+            if end is None:
+                return _extract_command_substitutions(command)
+            bodies.append(command[index + opener : end])
+            out.append(" ")
+            index = end + 1
+            continue
+        if char == "'" and not quote:
+            quote = "'"
+        elif char == '"':
+            quote = "" if quote else '"'
+        out.append(char)
+        index += 1
+    if quote:
+        return _extract_command_substitutions(command)
+    return "".join(out), bodies
 
 
 def _split_quoted(command: str) -> list[list[str]] | None:
@@ -354,7 +478,7 @@ def _statements(command: str) -> list[list[str]]:
     :param command: e.g. ``"x=$(gh pr merge 1); echo $x"``.
     :returns: e.g. ``[["x="], ["echo", "$x"], ["gh", "pr", "merge", "1"]]``.
     """
-    outer, bodies = _extract_command_substitutions(_strip_heredoc_bodies(command))
+    outer, bodies = _extract_substitutions(_logical_lines(command))
     statements = _split_quoted(outer)
     if statements is None:
         statements = [
@@ -532,13 +656,18 @@ class _RoleGuard:
         :param command: A shell command line, e.g. ``"cd x && gh pr merge 1"``.
         :returns: The reason, or ``None`` to ALLOW.
         """
+        gh_repos = tuple(
+            repo
+            for match in _GH_REPO_ENV_RE.finditer(command)
+            if (repo := _normalize_repo(match.group(2)))
+        )
         for argv in _invocations(command):
-            reason = self._check_statement(argv)
+            reason = self._check_statement(argv, gh_repos)
             if reason:
                 return reason
         return None
 
-    def _check_statement(self, argv: list[str]) -> str | None:
+    def _check_statement(self, argv: list[str], gh_repos: tuple[str, ...] = ()) -> str | None:
         """
         Classify one statement, starting at every command name it contains.
 
@@ -546,6 +675,7 @@ class _RoleGuard:
         (``xargs gh pr merge``, ``if git push …``, ``ssh host git push …``).
 
         :param argv: One statement's tokens.
+        :param gh_repos: Repos a ``GH_REPO=`` assignment in the command names.
         :returns: A DENY reason, or ``None``.
         """
         if argv[0] == _TOO_DEEP:
@@ -553,21 +683,24 @@ class _RoleGuard:
         if _token_name(argv[0]) in _INERT_HEADS:
             return None
         for index, token in enumerate(argv):
-            reason = self._check_command_at(_token_name(token), argv[index + 1 :])
+            reason = self._check_command_at(_token_name(token), argv[index + 1 :], gh_repos)
             if reason:
                 return reason
         return None
 
-    def _check_command_at(self, name: str, args: list[str]) -> str | None:
+    def _check_command_at(
+        self, name: str, args: list[str], gh_repos: tuple[str, ...] = ()
+    ) -> str | None:
         """
         Dispatch one command name to its rule set.
 
         :param name: The command's basename, e.g. ``"gh"``.
         :param args: Its arguments.
+        :param gh_repos: Repos a ``GH_REPO=`` assignment in the command names.
         :returns: A DENY reason, or ``None``.
         """
         if name == "gh":
-            return self._check_gh(args)
+            return self._check_gh(args, gh_repos)
         if name == "git":
             return self._check_git(args)
         if name == "tilt":
@@ -575,7 +708,11 @@ class _RoleGuard:
         if name == "kubectl":
             return self._check_kubectl(args)
         if name in _PKG_MANAGERS:
-            return self._check_package_script(name, args)
+            reason = self._check_package_script(name, args)
+            if reason:
+                return reason
+        if name in _JS_RUNNERS:
+            return self._check_env_script_file(name, args)
         if _PYTHON_RE.fullmatch(name) or name in _PYTHON_RUNNERS:
             if any(_MERGE_GATE_RE.search(arg) for arg in args):
                 return self._merge_gate_reason()
@@ -652,18 +789,19 @@ class _RoleGuard:
 
     # ── gh ──────────────────────────────────────────────────────────────
 
-    def _check_gh(self, args: list[str]) -> str | None:
+    def _check_gh(self, args: list[str], gh_repos: tuple[str, ...] = ()) -> str | None:
         """
         Classify a ``gh`` invocation.
 
         :param args: Arguments after ``gh``, e.g. ``["pr", "merge", "1"]``.
+        :param gh_repos: Repos a ``GH_REPO=`` assignment in the command names.
         :returns: A DENY reason, or ``None``.
         """
         positionals = _positionals(args, _GH_REPO_FLAGS)
         group = positionals[0] if positionals else ""
         action = positionals[1] if len(positionals) > 1 else ""
         if group == "api":
-            return self._check_gh_api(args[args.index("api") + 1 :])
+            return self._check_gh_api(args[args.index("api") + 1 :], gh_repos)
         if group == "pr" and action == "merge":
             suffix = (
                 "Run the gate yourself once review and verify markers are posted."
@@ -683,7 +821,7 @@ class _RoleGuard:
             return self._label_reason()
         if group == "pr" and action in _GH_PR_WRITE_ACTIONS:
             repos = [_normalize_repo(v) for v in _flag_values(args, _GH_REPO_FLAGS)]
-            for repo in [*repos, *_github_url_repos(args)]:
+            for repo in [*repos, *_github_url_repos(args), *gh_repos]:
                 reason = self._repo_reason(repo, f"gh pr {action}") if repo else None
                 if reason:
                     return reason
@@ -709,12 +847,13 @@ class _RoleGuard:
             f"is {_HUMAN_ONLY_HINT}."
         )
 
-    def _check_gh_api(self, rest: list[str]) -> str | None:
+    def _check_gh_api(self, rest: list[str], gh_repos: tuple[str, ...] = ()) -> str | None:
         """
         Classify a ``gh api`` call by method, endpoint and fields.
 
         :param rest: Arguments after ``gh api``, e.g.
             ``["-X", "PUT", "repos/o/r/pulls/1/merge"]``.
+        :param gh_repos: Repos a ``GH_REPO=`` assignment names (``{owner}/{repo}``).
         :returns: A DENY reason, or ``None``.
         """
         positionals = _positionals(rest, _GH_API_VALUE_FLAGS)
@@ -742,6 +881,16 @@ class _RoleGuard:
                 "rulesets, collaborators, secrets, webhooks or keys through the API. "
                 f"For merges, {MERGE_GATE_HINT}; anything else is {_HUMAN_ONLY_HINT}."
             )
+        if _GH_API_ACCOUNT_PATH.match(path):
+            return f"`{what}` is blocked: org, account and app settings are {_HUMAN_ONLY_HINT}."
+        if method == "POST" and _GH_API_PR_CREATE_PATH.fullmatch(path):
+            reason = self._no_push_reason("gh pr create")
+            if reason:
+                return reason
+        if _GH_API_PUSH_PATH.match(path):
+            reason = self._no_push_reason("git push")
+            if reason:
+                return reason
         reason = self._api_ref_reason(path, fields, what)
         if reason:
             return reason
@@ -760,6 +909,11 @@ class _RoleGuard:
         match = _GH_API_REPO.search(path)
         if match:
             return self._repo_reason(f"{match.group(1)}/{match.group(2)}".lower(), what)
+        if "{owner}" in path or "{repo}" in path:
+            for repo in gh_repos:
+                reason = self._repo_reason(repo, what)
+                if reason:
+                    return reason
         return None
 
     def _api_ref_reason(self, path: str, fields: Sequence[str], what: str) -> str | None:
@@ -850,6 +1004,9 @@ class _RoleGuard:
             reason = self._repo_reason(repo, "git push") if repo else None
             if reason:
                 return reason
+        # ``git push origin tag v1`` is git's spelling of ``refs/tags/v1:refs/tags/v1``.
+        if "tag" in positionals[1:]:
+            return self._tag_reason()
         for refspec in positionals[1:]:
             reason = self._refspec_reason(refspec)
             if reason:
@@ -870,15 +1027,18 @@ class _RoleGuard:
                 "ones. Push your one feature branch instead."
             )
         target = dest if colon else source
+        # git resolves ``heads/main`` / ``tags/v1`` under ``refs/`` too.
+        name = target.removeprefix("refs/")
         if "*" in target:
-            full = target if target.startswith("refs/") else f"refs/heads/{target}"
+            full = f"refs/{name}" if name.startswith(("heads/", "tags/")) else target
+            full = full if full.startswith("refs/") else f"refs/heads/{full}"
             if fnmatchcase("refs/tags/x", full):
                 return self._tag_reason()
             hits = [b for b in self.protected if fnmatchcase(f"refs/heads/{b}", full)]
             return self._protected_push_reason(hits[0]) if hits else None
-        if target.startswith("refs/tags/"):
+        if name.startswith("tags/"):
             return self._tag_reason()
-        branch = target.removeprefix("refs/heads/")
+        branch = name.removeprefix("heads/")
         if branch in self.protected:
             return self._protected_push_reason(branch)
         return None
@@ -905,6 +1065,16 @@ class _RoleGuard:
         """DENY ``pnpm [run] factory:up|down`` for every role but env_keeper."""
         scripts = [arg for arg in args if _ENV_SCRIPT_RE.fullmatch(arg)]
         return self._env_reason(f"{manager} {scripts[0]}") if scripts else None
+
+    def _check_env_script_file(self, runner: str, args: list[str]) -> str | None:
+        """DENY ``node … scripts/factory.ts up|down`` for every role but env_keeper."""
+        for index, arg in enumerate(args):
+            if not _ENV_SCRIPT_FILE_RE.search(arg):
+                continue
+            verbs = [a for a in args[index + 1 :] if a in _ENV_SCRIPT_VERBS]
+            if verbs:
+                return self._env_reason(f"{runner} {arg} {verbs[0]}")
+        return None
 
     def _check_kubectl(self, args: list[str]) -> str | None:
         """DENY ``kubectl delete ns|namespace …`` for every role but env_keeper."""
