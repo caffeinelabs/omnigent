@@ -519,6 +519,66 @@ describe("useAvailableAgents", () => {
     ]);
   });
 
+  it("keeps custom-named native built-ins as their own rows with their own names", async () => {
+    routeFetch({
+      [BUILTINS_URL]: mockResponse({
+        object: "list",
+        data: [
+          { id: "ag_lead", name: "factory-lead", harness: "claude-native", builtin: true },
+          { id: "ag_claude", name: "claude-native-ui", harness: "claude-native", builtin: true },
+          { id: "ag_pl", name: "factory-pl", harness: "claude-native", builtin: true },
+        ],
+        has_more: false,
+      }),
+      [SCAN_URL]: EMPTY_SCAN,
+    });
+
+    const { result } = renderHook(() => useAvailableAgents(), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    // Sharing claude-native with the canonical wrapper must not collapse them:
+    // each is a distinct agent the picker offers by its own name.
+    expect(result.current.data?.map((a) => [a.id, a.display_name])).toEqual([
+      ["ag_lead", "Factory Lead"],
+      ["ag_claude", "Claude Code"],
+      ["ag_pl", "Factory Project Lead"],
+    ]);
+  });
+
+  it("still collapses an override of a canonical wrapper to one row", async () => {
+    // A deployment re-seeding opencode-native-ui (extra tools) alongside a
+    // stale clone keeps a single OpenCode row: the canonical one.
+    routeFetch({
+      [BUILTINS_URL]: mockResponse({
+        object: "list",
+        data: [
+          {
+            id: "ag_opencode_fork",
+            name: "opencode-native-ui (fork ag_old)",
+            harness: "opencode-native",
+          },
+          { id: "ag_opencode", name: "opencode-native-ui", harness: "opencode-native" },
+        ],
+        has_more: false,
+      }),
+      [SCAN_URL]: EMPTY_SCAN,
+    });
+
+    const { result } = renderHook(() => useAvailableAgents(), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+
+    expect(result.current.data).toEqual([
+      {
+        id: "ag_opencode",
+        name: "opencode-native-ui",
+        display_name: "OpenCode",
+        description: null,
+        harness: "opencode-native",
+        skills: [],
+      },
+    ]);
+  });
+
   it("collapses same-named custom agents with distinct agent_ids to the newest session's row", async () => {
     routeFetch({
       [BUILTINS_URL]: mockResponse({ object: "list", data: [], has_more: false }),

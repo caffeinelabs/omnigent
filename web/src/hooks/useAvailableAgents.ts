@@ -4,6 +4,7 @@ import { authenticatedFetch } from "@/lib/identity";
 import { agentRootName } from "@/lib/forkHarness";
 import { capitalizeAgentName, useAcpHarnessIds, useHarnessLabels } from "@/lib/agentLabels";
 import {
+  isCanonicalNativeWrapperName,
   nativeCodingAgentForAvailableAgent,
   nativeCodingAgentForAgentName,
   nativeCodingAgentForHarness,
@@ -58,9 +59,16 @@ const DISPLAY_NAMES: Record<string, string> = {
   nessie: "Nessie",
   polly: "Polly",
   debby: "Debby",
+  "factory-lead": "Factory Lead",
+  "factory-pl": "Factory Project Lead",
 };
 
 function displayNameForAgent(name: string, harness?: string | null): string {
+  // A custom-named agent on a native harness keeps its own name; only the
+  // canonical wrappers take the harness's product name.
+  if (!isCanonicalNativeWrapperName(name)) {
+    return DISPLAY_NAMES[name] ?? capitalizeAgentName(name);
+  }
   return (
     nativeCodingAgentForHarness(harness)?.displayName ??
     nativeCodingAgentForAgentName(name)?.displayName ??
@@ -69,12 +77,14 @@ function displayNameForAgent(name: string, harness?: string | null): string {
   );
 }
 
+// Collapses the canonical wrapper rows (and their stale clones) to one per
+// native harness. A custom-named agent sharing that harness keeps its own row.
 function dedupeNativeAgents(agents: AvailableAgent[]): AvailableAgent[] {
   const result: AvailableAgent[] = [];
   const nativeIndex = new Map<string, number>();
   for (const agent of agents) {
     const nativeAgent = nativeCodingAgentForAvailableAgent(agent);
-    if (nativeAgent === undefined) {
+    if (nativeAgent === undefined || !isCanonicalNativeWrapperName(agent.name)) {
       result.push(agent);
       continue;
     }

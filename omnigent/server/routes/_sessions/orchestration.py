@@ -8909,12 +8909,21 @@ async def _create_session_from_existing_agent(
 
     # Spec-seeded defaults: a self-resolved agent's stored spec supplies the
     # spec-level reasoning effort and, when the body carried no launch args,
-    # its explicit native-bypass opt-ins; one tolerant load serves both.
+    # its explicit native-bypass opt-ins; one tolerant load serves them all.
+    native_agent = native_coding_agent_for_agent_name(agent.name)
     own_spec: AgentSpec | None = None
     needs_launch_args_from_spec = not body.sub_agent_name and validated_launch_args is None
     needs_effort_from_spec = reasoning_effort is None and sub_spec is None
+    # A custom-named built-in on a native harness needs the spec for its
+    # terminal-first labels below; uploaded bundles stay chat-first.
+    needs_native_labels_from_spec = (
+        native_agent is None
+        and agent.session_id is None
+        and body.sub_agent_name is None
+        and harness_override != "auto"
+    )
     if (
-        (needs_launch_args_from_spec or needs_effort_from_spec)
+        (needs_launch_args_from_spec or needs_effort_from_spec or needs_native_labels_from_spec)
         and agent_cache is not None
         and agent.bundle_location is not None
     ):
@@ -9049,12 +9058,26 @@ async def _create_session_from_existing_agent(
     # (including early ones sent before the runner connects) take
     # the native path and avoid double-persistence with the
     # transcript forwarder.
-    native_agent = native_coding_agent_for_agent_name(agent.name)
     if native_agent is not None:
         _native_labels = dict(body.labels) if body.labels else {}
         _native_labels.update(native_agent.presentation_labels)
         await asyncio.to_thread(conversation_store.set_labels, conv.id, _native_labels)
         conv.labels.update(_native_labels)
+    elif (
+        needs_native_labels_from_spec
+        and own_spec is not None
+        # A concrete override replaces the spec's harness, so only a matching
+        # one keeps the session native.
+        and (harness_override is None or harness_override == _spec_harness(own_spec))
+        and (_own_native_labels := _native_subagent_wrapper_labels_from_spec(own_spec))
+    ):
+        # A custom-named built-in whose own spec runs a native harness (e.g.
+        # ``factory-lead`` on claude-native) renders terminal-first like the
+        # canonical wrapper. Merge over caller labels so they are kept.
+        _merged = dict(body.labels) if body.labels else {}
+        _merged.update(_own_native_labels)
+        await asyncio.to_thread(conversation_store.set_labels, conv.id, _merged)
+        conv.labels.update(_merged)
     elif (
         body.sub_agent_name
         and sub_spec is not None

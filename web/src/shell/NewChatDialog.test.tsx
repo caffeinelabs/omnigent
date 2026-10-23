@@ -7824,6 +7824,64 @@ describe("NewChatLandingScreen Smart Routing harness row", () => {
   });
 });
 
+// A built-in with a custom name on a native harness (e.g. factory-lead on
+// claude-native) is a named agent of its own: it lists under "Agents" next to
+// the canonical Claude Code harness row, which stays Smart Routing's placeholder.
+describe("NewChatLandingScreen custom-named native built-ins", () => {
+  const FACTORY_LEAD: AvailableAgent = {
+    id: "a_lead",
+    name: "factory-lead",
+    display_name: "Factory Lead",
+    description: null,
+    harness: "claude-native",
+    skills: [],
+    builtin: true,
+  };
+
+  beforeEach(() => {
+    setupLandingMocks();
+    // Listed first so a harness-only lookup would pick it over Claude Code.
+    mockAgents([FACTORY_LEAD, ...DEFAULT_LANDING_AGENTS]);
+  });
+  afterEach(() => {
+    cleanup();
+    localStorage.clear();
+  });
+
+  function openPicker(): void {
+    fireEvent.pointerDown(screen.getByTestId("new-chat-landing-agent-select"), { button: 0 });
+  }
+
+  it("renders the custom agent as its own row under Agents", () => {
+    renderLanding();
+    openPicker();
+    const row = screen.getByTestId("new-chat-landing-agent-a_lead");
+    expect(row.textContent).toContain("Factory Lead");
+    // The canonical harness row is still offered alongside it.
+    expect(screen.getByTestId("new-chat-landing-agent-a1").textContent).toContain("Claude Code");
+    const agentsHeading = screen.getByText("Agents");
+    expect(
+      agentsHeading.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("keeps claude-native-ui as the Smart Routing placeholder", async () => {
+    authenticatedFetchMock.mockResolvedValue({
+      ok: true,
+      json: async () => ({ id: "conv_smart" }),
+    } as unknown as Response);
+    renderLanding({ smart_routing_enabled: true });
+    await waitFor(() =>
+      expect(screen.getByTestId("new-chat-landing-workspace-chip").textContent).toContain("repo"),
+    );
+    openPicker();
+    fireEvent.click(screen.getByTestId("new-chat-landing-harness-smart-routing"));
+    const { body } = await submitAndReadBody("refactor the auth module");
+    expect(body.harness_override).toBe("auto");
+    expect(body.agent_id).toBe("a1");
+  });
+});
+
 describe("claude-code default permission mode (payload anchor for Auto)", () => {
   beforeEach(setupLandingMocks);
   afterEach(() => {

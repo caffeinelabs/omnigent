@@ -207,6 +207,7 @@ import { cn } from "@/lib/utils";
 import { useOmnigentAnalytics } from "@/lib/analytics";
 import { isCurrentServerLocal } from "@/lib/serverOrigin";
 import {
+  isCanonicalNativeWrapperName,
   isNativeCodingAgent,
   nativeAgentHasCapability,
   nativeCodingAgentForAvailableAgent,
@@ -1278,6 +1279,14 @@ export function ComposerAgentIcon({ agent }: { agent: Pick<AvailableAgent, "name
   );
 }
 
+/** Whether the picker lists ``agent`` as a harness row rather than a named agent. */
+function isPickerHarnessEntry(agent: AvailableAgent): boolean {
+  return (
+    (isNativeCodingAgent(agent) && isCanonicalNativeWrapperName(agent.name)) ||
+    isAcpHarnessAgent(agent)
+  );
+}
+
 function visibleModelLabel(label: string): string {
   return label.replaceAll("`", "");
 }
@@ -2210,13 +2219,11 @@ export function NewChatLandingScreen() {
   // and "Agents" (composed SDK / bundle agents like Polly & Debby plus custom
   // user-registered agents). Harness-backed vs composed, NOT the builtins/customs
   // split: Polly & Debby are built-ins but are composed agents, so they stay
-  // under "Agents". ACP agents aren't native, so they fold into "More".
-  const harnessEntries = useMemo(
-    () => agentList.filter((a) => isNativeCodingAgent(a) || isAcpHarnessAgent(a)),
-    [agentList],
-  );
+  // under "Agents". ACP agents aren't native, so they fold into "More". A
+  // custom-named agent on a native harness (e.g. factory-lead) is a named agent.
+  const harnessEntries = useMemo(() => agentList.filter(isPickerHarnessEntry), [agentList]);
   const agentEntries = useMemo(
-    () => agentList.filter((a) => !isNativeCodingAgent(a) && !isAcpHarnessAgent(a)),
+    () => agentList.filter((a) => !isPickerHarnessEntry(a)),
     [agentList],
   );
 
@@ -3849,7 +3856,11 @@ export function NewChatLandingScreen() {
   // create binds; the server rebinds to whichever the router picks.
   const smartRoutingWrappers = useMemo(() => {
     const byHarness = (harness: string) =>
-      harnessEntries.find((a) => nativeCodingAgentForAvailableAgent(a)?.harness === harness);
+      harnessEntries.find(
+        (a) =>
+          isCanonicalNativeWrapperName(a.name) &&
+          nativeCodingAgentForAvailableAgent(a)?.harness === harness,
+      );
     return {
       claude: byHarness("claude-native"),
       codex: byHarness("codex-native"),

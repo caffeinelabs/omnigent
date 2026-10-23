@@ -1,4 +1,5 @@
 import type { AvailableAgent } from "@/hooks/useAvailableAgents";
+import { agentRootName } from "@/lib/forkHarness";
 
 export const WRAPPER_LABEL_KEY = "omnigent.wrapper";
 export const UI_MODE_LABEL_KEY = "omnigent.ui";
@@ -308,6 +309,24 @@ export function nativeCodingAgentForAgentName(
   name: string | null | undefined,
 ): NativeCodingAgentSpec | undefined {
   return name == null ? undefined : BY_AGENT_NAME.get(name);
+}
+
+// Pre-release names older deployments still carry for the Kiro wrapper.
+const LEGACY_NATIVE_WRAPPER_NAMES = new Set(["kiro", "kiro-naitive"]);
+
+/**
+ * Whether ``name`` is a canonical `*-native-ui` wrapper agent: a registry
+ * ``agentName``, a fork/switch clone of one, or a legacy wrapper name. A
+ * custom-named agent on a native harness (e.g. ``factory-lead`` on
+ * claude-native) is not one, so pickers keep it as its own entry.
+ *
+ * @param name - Agent name, e.g. ``"claude-native-ui"``.
+ * @returns True for the wrapper names pickers collapse onto one row.
+ */
+export function isCanonicalNativeWrapperName(name: string | null | undefined): boolean {
+  if (name == null) return false;
+  const root = agentRootName(name);
+  return BY_AGENT_NAME.has(root) || LEGACY_NATIVE_WRAPPER_NAMES.has(root.toLocaleLowerCase());
 }
 
 /**

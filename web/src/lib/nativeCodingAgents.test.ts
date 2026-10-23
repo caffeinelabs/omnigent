@@ -5,6 +5,7 @@ import {
   UI_MODE_LABEL_KEY,
   UI_MODE_TERMINAL_VALUE,
   WRAPPER_LABEL_KEY,
+  isCanonicalNativeWrapperName,
   isFullySupportedNativeCodingAgent,
   isNativePolicyName,
   isNativeTerminalSession,
@@ -159,6 +160,24 @@ describe("nativeCodingAgentForSubagentWrapper", () => {
         labels: { [WRAPPER_LABEL_KEY]: "claude-code-native-ui-subagent" },
       }),
     ).toBe(false);
+  });
+});
+
+describe("isCanonicalNativeWrapperName", () => {
+  it.each(NATIVE_CODING_AGENTS.map((agent) => agent.agentName))("accepts %s", (name) => {
+    expect(isCanonicalNativeWrapperName(name)).toBe(true);
+  });
+
+  it("accepts fork clones and legacy wrapper names", () => {
+    expect(isCanonicalNativeWrapperName("claude-native-ui (fork ag_1) (fork ag_2)")).toBe(true);
+    expect(isCanonicalNativeWrapperName("kiro")).toBe(true);
+    expect(isCanonicalNativeWrapperName("kiro-naitive")).toBe(true);
+  });
+
+  it("rejects custom names, even on a native harness", () => {
+    expect(isCanonicalNativeWrapperName("factory-lead")).toBe(false);
+    expect(isCanonicalNativeWrapperName("polly")).toBe(false);
+    expect(isCanonicalNativeWrapperName(null)).toBe(false);
   });
 });
 
