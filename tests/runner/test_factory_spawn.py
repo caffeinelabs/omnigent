@@ -9,6 +9,7 @@ server mailer instead.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -23,6 +24,7 @@ from omnigent.factory import (
     LABEL_STATE,
     LABEL_SUPERVISOR,
 )
+from omnigent.runner import factory_dispatch
 from omnigent.runner.factory_dispatch import execute_factory_tool
 from tests.runner.factory_fakes import (
     FACTORY,
@@ -379,3 +381,165 @@ async def test_invalid_arguments_are_refused_without_server_calls() -> None:
         result = await _spawn(server, args)
         assert "error" in result, args
         assert server.requests == [], args
+
+
+async def test_project_lead_supervisor_skips_a_retired_lead() -> None:
+    server = _server(members=[member(LEAD, role="lead"), member(PEER, role="lead", state="done")])
+
+    await _spawn(server, _PL_ARGS)
+
+    assert _create_call(server).body["labels"][LABEL_SUPERVISOR] == LEAD
+
+
+async def test_seeded_builtin_wins_a_name_collision() -> None:
+    agents = {
+        "data": [
+            {"id": "ag_user_copy", "name": "factory-pl", "builtin": False},
+            {"id": _AGENT_ID, "name": "factory-pl", "builtin": True},
+        ],
+        "has_more": False,
+        "last_id": _AGENT_ID,
+    }
+    server = _server(agents=agents)
+
+    await _spawn(server, _PL_ARGS)
+
+    assert _create_call(server).body["agent_id"] == _AGENT_ID
+
+
+async def test_without_builtin_flags_the_oldest_match_wins() -> None:
+    agents = {
+        "data": [
+            {"id": "ag_old", "name": "factory-pl"},
+            {"id": "ag_new", "name": "factory-pl"},
+        ],
+        "has_more": False,
+        "last_id": "ag_new",
+    }
+    server = _server(agents=agents)
+
+    await _spawn(server, _PL_ARGS)
+
+    assert _create_call(server).body["agent_id"] == "ag_old"
+
+
+async def test_validation_errors_carry_the_first_field_message() -> None:
+    server = _server().on(
+        "POST",
+        "/v1/sessions",
+        status=422,
+        body={
+            "detail": [
+                {
+                    "loc": ["body", "title"],
+                    "msg": "String should have at most 200 characters",
+                    "type": "string_too_long",
+                },
+                {"loc": ["body", "workspaces", 0], "msg": "bad url", "type": "value_error"},
+            ]
+        },
+        replace=True,
+    )
+
+    result = await _spawn(server, _PL_ARGS)
+
+    assert result["status"] == 422
+    assert result["message"] == "title: String should have at most 200 characters"
+
+
+async def test_access_denied_keeps_the_server_message() -> None:
+    server = _server().on(
+        "POST",
+        "/v1/sessions",
+        status=403,
+        body={"error": {"code": "forbidden", "message": "no access to agent factory-pl"}},
+        replace=True,
+    )
+
+    result = await _spawn(server, _PL_ARGS)
+
+    assert result == {
+        "error": "access_denied",
+        "agent": "factory-pl",
+        "status": 403,
+        "message": "no access to agent factory-pl",
+    }
+
+
+async def test_a_second_member_for_a_live_project_is_refused() -> None:
+    existing = member("conv_pl_api", role="project_lead", project="api-version", state="paused")
+    server = _server(members=[member(LEAD, role="lead"), existing])
+
+    result = await _spawn(server, _PL_ARGS)
+
+    assert result["error"] == "duplicate_project"
+    assert result["session_id"] == "conv_pl_api"
+    assert result["state"] == "paused"
+    assert server.calls("POST") == []
+    assert server.calls("GET", "/v1/agents") == []
+
+
+async def test_a_done_project_member_does_not_block_a_respawn() -> None:
+    finished = member("conv_pl_api", role="project_lead", project="api-version", state="done")
+    server = _server(members=[member(LEAD, role="lead"), finished])
+
+    result = await _spawn(server, _PL_ARGS)
+
+    assert result["session_id"] == _NEW
+
+
+class _YieldingServer(FakeServer):
+    """Yields to the event loop on every request, so concurrent calls interleave."""
+
+    def client(self) -> httpx.AsyncClient:
+        async def handle(request: httpx.Request) -> httpx.Response:
+            await asyncio.sleep(0.01)
+            return self._handle(request)
+
+        return httpx.AsyncClient(
+            transport=httpx.MockTransport(handle), base_url="http://omnigent.test"
+        )
+
+
+async def test_parallel_spawns_from_one_lead_are_serialized() -> None:
+    # Two concurrent spawns for one project: the second must see the first.
+    members: list[dict[str, object]] = [member(LEAD, role="lead")]
+    created: list[str] = []
+    server = _YieldingServer()
+    server.on("GET", f"/v1/factory/membership/{LEAD}", body=membership(LEAD, role="lead"))
+    server.on(
+        "GET",
+        "/v1/factory/roster",
+        handler=lambda _req: httpx.Response(200, json=roster(*members)),
+    )
+    server.on("GET", "/v1/agents", body=_AGENTS)
+
+    def _create(req: Recorded) -> httpx.Response:
+        new_id = f"conv_new_{len(created)}"
+        created.append(new_id)
+        labels = req.body["labels"]
+        members.append(member(new_id, role="project_lead", project=labels.get(LABEL_PROJECT)))
+        return httpx.Response(201, json={"id": new_id, "agent_id": _AGENT_ID})
+
+    server.on("POST", "/v1/sessions", handler=_create)
+    server.on("POST", "/v1/factory/messages", status=202, body=_BRIEF)
+
+    async with server.client() as client:
+        outs = await asyncio.gather(
+            *(
+                execute_factory_tool(
+                    "sys_factory_spawn",
+                    _PL_ARGS,
+                    server_client=client,
+                    conversation_id=LEAD,
+                    agent_spec=factory_spec("lead"),
+                )
+                for _ in range(2)
+            )
+        )
+
+    results = sorted((json.loads(o) for o in outs), key=lambda r: "error" in r)
+    assert results[0]["session_id"] == "conv_new_0"
+    assert results[1]["error"] == "duplicate_project"
+    assert created == ["conv_new_0"]
+    assert factory_dispatch._spawn_locks == {}

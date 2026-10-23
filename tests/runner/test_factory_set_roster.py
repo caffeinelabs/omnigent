@@ -119,3 +119,44 @@ async def test_set_permission_error_passes_through() -> None:
     result = await _call(server, "sys_factory_set", {"session_id": "conv_other", "health": "ok"})
 
     assert result["error"] == "session_out_of_factory"
+
+
+@pytest.mark.parametrize(
+    "session_id",
+    ["../../sessions/conv_private", "..", ".", "conv_a/../conv_b", "conv a", "%2e%2e"],
+)
+async def test_set_refuses_ids_that_could_leave_the_factory_route(session_id: str) -> None:
+    # A dot segment or separator would let httpx normalize the PATCH onto
+    # another route (e.g. PATCH /v1/sessions/<id>, a plain rename).
+    server = FakeServer()
+
+    result = await _call(server, "sys_factory_set", {"session_id": session_id, "title": "x"})
+
+    assert result["error"] == "invalid_session_id"
+    assert server.requests == []
+
+
+async def test_set_empty_supervisor_clears_it() -> None:
+    server = FakeServer().on("PATCH", "/v1/factory/sessions/conv_pl", body={})
+
+    await _call(server, "sys_factory_set", {"session_id": "conv_pl", "supervisor_session_id": " "})
+
+    assert server.requests[0].body == {"from_session_id": LEAD, "supervisor_session_id": ""}
+
+
+async def test_set_rejects_a_non_string_supervisor() -> None:
+    server = FakeServer()
+
+    result = await _call(server, "sys_factory_set", {"supervisor_session_id": 7})
+
+    assert "error" in result
+    assert server.requests == []
+
+
+def test_session_path_encodes_the_id_as_one_segment() -> None:
+    from omnigent.runner.factory_dispatch import _session_path
+
+    assert _session_path("/v1/factory/sessions", "a/../b") == "/v1/factory/sessions/a%2F..%2Fb"
+    assert _session_path("/v1/sessions", "conv_1", "/child_sessions") == (
+        "/v1/sessions/conv_1/child_sessions"
+    )

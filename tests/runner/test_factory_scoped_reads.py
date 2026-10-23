@@ -258,3 +258,107 @@ async def test_send_by_session_id_out_of_tree_points_at_sys_session_post() -> No
     result = json.loads(out)
     assert result["error"] == "session_out_of_tree"
     assert "sys_session_post" in result["message"]
+
+
+async def test_a_traversal_target_is_refused_before_any_lookup() -> None:
+    server = FakeServer()
+
+    result = await _run(
+        server, "sys_session_get_history", {"conversation_id": f"../../sessions/{_STRANGER}"}
+    )
+
+    assert result["error"] == "invalid_session_id"
+    assert server.requests == []
+
+
+async def _run_without_spec(server: FakeServer, tool: str, args: dict[str, Any]) -> dict:
+    async with server.client() as client:
+        out = await execute_tool(
+            tool_name=tool,
+            arguments=json.dumps(args),
+            server_client=client,
+            agent_spec=None,
+            conversation_id=LEAD,
+        )
+    return json.loads(out)
+
+
+async def test_unresolved_spec_still_scopes_a_factory_member() -> None:
+    # The membership record stands in for the spec's factory_role.
+    server = _with_session(_with_memberships(FakeServer(), **{_STRANGER: 403}), _STRANGER)
+
+    result = await _run_without_spec(
+        server, "sys_session_get_history", {"conversation_id": _STRANGER}
+    )
+
+    assert result["error"] == "session_out_of_factory"
+    assert server.calls("GET", f"/v1/sessions/{_STRANGER}/items") == []
+
+
+@pytest.mark.parametrize(
+    ("status", "body"),
+    [(200, membership(LEAD, role=None, factory_id=None)), (404, {"detail": "Not Found"})],
+)
+async def test_unresolved_spec_of_a_non_member_reads_globally(status: int, body: object) -> None:
+    server = _with_session(FakeServer(), _STRANGER)
+    server.on("GET", f"/v1/factory/membership/{LEAD}", status=status, body=body)
+
+    result = await _run_without_spec(
+        server, "sys_session_get_history", {"conversation_id": _STRANGER}
+    )
+
+    assert result["conversation_id"] == _STRANGER
+    assert len(server.calls("GET", f"/v1/sessions/{_STRANGER}/items")) == 1
+
+
+async def test_session_list_agent_filter_matches_members_by_their_bound_agent() -> None:
+    server = FakeServer()
+    server.on(
+        "GET",
+        "/v1/factory/roster",
+        body=roster(
+            member(LEAD, role="lead"),
+            member("conv_pl", role="project_lead", project="api"),
+        ),
+    )
+    server.on(
+        "GET",
+        f"/v1/sessions/{LEAD}",
+        body={"id": LEAD, "agent_name": "factory-lead", "parent_session_id": None},
+    )
+    server.on("GET", "/v1/sessions/conv_pl", body={"id": "conv_pl", "agent_name": "factory-pl"})
+
+    result = await _run(server, "sys_session_list", {"agent_name": "factory-pl"})
+
+    assert [row["session_id"] for row in result["sessions"]] == ["conv_pl"]
+    assert result["sessions"][0]["agent_name"] == "factory-pl"
+    [lookup] = server.calls("GET", "/v1/sessions/conv_pl")
+    assert lookup.params == {"include_items": "false", "include_liveness": "false"}
+
+
+async def test_session_list_hides_closed_sub_agents() -> None:
+    closed_ic = "conv_ic_closed"
+    children = [
+        {"session_id": _IC, "title": "ic:auth", "agent": "ic"},
+        {"session_id": closed_ic, "title": "ic:old", "agent": "ic"},
+    ]
+    server = FakeServer()
+    server.on(
+        "GET",
+        "/v1/factory/roster",
+        body=roster(member("conv_pl", role="project_lead", children=children)),
+    )
+    server.on(
+        "GET",
+        "/v1/sessions/conv_pl/child_sessions",
+        body={
+            "data": [
+                {"id": _IC, "title": "ic:auth", "labels": {}},
+                {"id": closed_ic, "title": "ic:old", "labels": {"omnigent.closed": "true"}},
+            ]
+        },
+    )
+
+    result = await _run(server, "sys_session_list", {})
+
+    assert [row["session_id"] for row in result["sessions"]] == ["conv_pl", _IC]

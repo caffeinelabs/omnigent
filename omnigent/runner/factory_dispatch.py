@@ -15,12 +15,16 @@ owns. That bounds what a prompt-injected member can read.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
 import time
-from collections.abc import Callable
+from collections.abc import AsyncIterator, Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass, field
 from typing import Any, Final
+from urllib.parse import quote
 
 import httpx
 
@@ -46,6 +50,7 @@ from omnigent.factory import (
     factory_role_from_spec,
     valid_heartbeat_s,
 )
+from omnigent.native.native_coding_agents import public_agent_name
 from omnigent.tools.builtins.factory import (
     SPAWN_ROLES,
     SYS_FACTORY_ROSTER,
@@ -53,6 +58,7 @@ from omnigent.tools.builtins.factory import (
     SYS_FACTORY_SPAWN,
     SYS_SESSION_POST,
 )
+from omnigent.util.session_lifecycle import is_session_closed
 
 _logger = logging.getLogger(__name__)
 
@@ -64,12 +70,28 @@ DEFAULT_MAX_PODS: Final = 12
 _AGENT_PAGE_LIMIT: Final = 1000
 _AGENT_MAX_PAGES: Final = 10
 _AGENT_NAMES_IN_ERROR: Final = 50
+# Matches the roster's per-member sub-agent bound.
+_CHILD_PAGE_LIMIT: Final = 200
 
 # Membership answers are stable for a session's life, so one lookup serves a
-# whole turn of scoped reads; only definitive answers (200/403) are cached.
+# whole turn of scoped reads; only definitive answers (200/403/404) are cached.
 _MEMBERSHIP_CACHE_TTL_S: Final = 60.0
 _MEMBERSHIP_CACHE_MAX: Final = 1024
 _membership_cache: dict[tuple[str, str], tuple[float, int, _JsonObject | None]] = {}
+_CACHED_MEMBERSHIP_STATUSES: Final = frozenset({200, 403, 404})
+
+
+@dataclass
+class _CallerLock:
+    """A per-caller lock and how many spawns hold or await it."""
+
+    lock: asyncio.Lock = field(default_factory=asyncio.Lock)
+    users: int = 0
+
+
+# One spawn at a time per lead, so the pod-cap and duplicate-project checks
+# see every member the lead created before.
+_spawn_locks: dict[str, _CallerLock] = {}
 
 # Codes the factory routes return; recognised in any server error envelope.
 _FACTORY_ERROR_CODES: Final = frozenset(
@@ -84,6 +106,9 @@ _FACTORY_ERROR_CODES: Final = frozenset(
 )
 _STATUS_ERROR_CODES: Final = {413: "message_too_large", 429: "rate_limited"}
 _CODE_TOKEN_RE: Final = re.compile(r"[a-z][a-z0-9_]*")
+# Session ids are opaque tokens (hex uuids); refusing separators and dot
+# segments keeps an LLM-supplied id from steering a request to another route.
+_SESSION_ID_RE: Final = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,127}")
 
 _HISTORY_TOOL: Final = "sys_session_get_history"
 _INFO_TOOL: Final = "sys_session_get_info"
@@ -127,6 +152,8 @@ def _error_payload(status: int, body: object, text: str, tool_name: str) -> _Jso
                 candidates.extend(
                     v for k in ("error", "code", "message") if isinstance(v := source.get(k), str)
                 )
+        if (validation := _validation_message(body.get("detail"))) is not None:
+            candidates.append(validation)
         extra = {
             k: v
             for k, v in body.items()
@@ -145,6 +172,44 @@ def _error_payload(status: int, body: object, text: str, tool_name: str) -> _Jso
     if message:
         payload["message"] = message
     return payload
+
+
+def _validation_message(detail: object) -> str | None:
+    """
+    First message of a FastAPI 422 ``detail`` list, prefixed with its field.
+
+    :param detail: The body's ``detail``, e.g.
+        ``[{"loc": ["body", "title"], "msg": "String should have at most 200 characters"}]``.
+    :returns: e.g. ``"title: String should have at most 200 characters"``, or ``None``.
+    """
+    if not isinstance(detail, list):
+        return None
+    for entry in detail:
+        if isinstance(entry, dict) and isinstance(msg := entry.get("msg"), str) and msg:
+            loc = entry.get("loc")
+            parts = [str(p) for p in loc if p != "body"] if isinstance(loc, list) else []
+            return f"{'.'.join(parts)}: {msg}" if parts else msg
+    return None
+
+
+def _server_message(payload: _JsonObject, tool_name: str) -> str | None:
+    """The server's own words from a normalized error, if it gave any."""
+    message = payload.get("message")
+    if isinstance(message, str) and message:
+        return message
+    code = payload.get("error")
+    if isinstance(code, str) and not code.startswith(f"{tool_name} returned"):
+        return code
+    return None
+
+
+def _valid_session_id(value: object) -> bool:
+    return isinstance(value, str) and _SESSION_ID_RE.fullmatch(value) is not None
+
+
+def _session_path(prefix: str, session_id: str, suffix: str = "") -> str:
+    """``{prefix}/{session_id}{suffix}`` with the id percent-encoded as one segment."""
+    return f"{prefix}/{quote(session_id, safe='')}{suffix}"
 
 
 async def _request(
@@ -206,7 +271,7 @@ async def _get_object(
 
 
 def _membership_path(session_id: str) -> str:
-    return f"/v1/factory/membership/{session_id}"
+    return _session_path("/v1/factory/membership", session_id)
 
 
 async def execute_factory_tool(
@@ -314,8 +379,14 @@ async def _set_member(
     """``sys_factory_set`` → ``PATCH /v1/factory/sessions/{target}``."""
     tool = SYS_FACTORY_SET
     target = args.get("session_id") or caller
-    if not isinstance(target, str):
-        return _error(f"{tool} 'session_id' must be a string")
+    if isinstance(target, str):
+        target = target.strip()
+    if not _valid_session_id(target):
+        return _error(
+            "invalid_session_id",
+            session_id=target,
+            message=f"{tool} 'session_id' must be a member's session id from sys_factory_roster",
+        )
     patch: _JsonObject = {}
     state = args.get("state")
     if state is not None:
@@ -337,19 +408,23 @@ async def _set_member(
         if (invalid := _heartbeat_error(tool, heartbeat_s)) is not None:
             return invalid
         patch["heartbeat_s"] = heartbeat_s
-    for key in ("supervisor_session_id", "title"):
-        value = args.get(key)
-        if value is None:
-            continue
-        if not isinstance(value, str) or not value.strip():
-            return _error(f"{tool} '{key}' must be a non-empty string")
-        patch[key] = value.strip()
+    supervisor = args.get("supervisor_session_id")
+    if supervisor is not None:
+        if not isinstance(supervisor, str):
+            return _error(f"{tool} 'supervisor_session_id' must be a string")
+        # An empty string clears the supervisor.
+        patch["supervisor_session_id"] = supervisor.strip()
+    title = args.get("title")
+    if title is not None:
+        if not isinstance(title, str) or not title.strip():
+            return _error(f"{tool} 'title' must be a non-empty string")
+        patch["title"] = title.strip()
     if not patch:
         return _error(f"{tool} requires at least one field to change")
     return await _passthrough(
         server_client,
         "PATCH",
-        f"/v1/factory/sessions/{target}",
+        _session_path("/v1/factory/sessions", target),
         tool_name=tool,
         body={"from_session_id": caller, **patch},
     )
@@ -385,11 +460,15 @@ async def _resolve_builtin_agent(
     """
     Resolve a built-in agent name to its id via ``GET /v1/agents``.
 
+    On a name collision a seeded built-in (``builtin: true``) wins over a
+    user-registered template, as in the web picker; otherwise the oldest row.
+
     :returns: ``(agent_id, None)`` on a match, else ``(None, error_json)``.
     """
     tool = SYS_FACTORY_SPAWN
     after: str | None = None
     names: list[str] = []
+    fallback_id: str | None = None
     for _ in range(_AGENT_MAX_PAGES):
         params: dict[str, str | int] = {"limit": _AGENT_PAGE_LIMIT, "order": "asc"}
         if after is not None:
@@ -403,13 +482,17 @@ async def _resolve_builtin_agent(
                 continue
             row_name, row_id = row.get("name"), row.get("id")
             if row_name == name and isinstance(row_id, str) and row_id:
-                return row_id, None
+                if row.get("builtin") is True:
+                    return row_id, None
+                fallback_id = fallback_id or row_id
             if isinstance(row_name, str):
                 names.append(row_name)
         last_id = page.get("last_id")
         if page.get("has_more") is not True or not isinstance(last_id, str) or not last_id:
             break
         after = last_id
+    if fallback_id is not None:
+        return fallback_id, None
     return None, _error(
         "agent_not_found",
         agent=name,
@@ -426,10 +509,34 @@ def _default_supervisor(
     if role == ROLE_PROJECT_LEAD:
         for member in members:
             session_id = member.get("session_id")
-            if member.get("role") == ROLE_LEAD and isinstance(session_id, str):
-                if session_id and session_id != caller:
-                    return session_id
+            # A retired (done) lead may still be listed; it no longer handles alerts.
+            if member.get("role") != ROLE_LEAD or member.get("state") == STATE_DONE:
+                continue
+            if isinstance(session_id, str) and session_id and session_id != caller:
+                return session_id
     return caller
+
+
+def _live_project_member(members: list[_JsonObject], project: str) -> _JsonObject | None:
+    """The not-done member already running *project*, if any."""
+    for member in members:
+        if member.get("project") == project and member.get("state") != STATE_DONE:
+            return member
+    return None
+
+
+@asynccontextmanager
+async def _spawn_lock(caller: str) -> AsyncIterator[None]:
+    """Serialize spawns per lead; the entry is dropped once no call holds it."""
+    entry = _spawn_locks.setdefault(caller, _CallerLock())
+    entry.users += 1
+    try:
+        async with entry.lock:
+            yield
+    finally:
+        entry.users -= 1
+        if entry.users == 0:
+            _spawn_locks.pop(caller, None)
 
 
 def _publish_created(
@@ -457,23 +564,22 @@ def _publish_created(
         _logger.warning("session.created publish failed for %s", session_id, exc_info=True)
 
 
-async def _spawn(
-    args: _JsonObject,
-    *,
-    server_client: httpx.AsyncClient,
-    caller: str,
-    agent_spec: object,
-    publish_event: _PublishEvent | None,
-) -> str:
-    """
-    ``sys_factory_spawn``: create a top-level managed member and brief it.
+@dataclass(frozen=True)
+class _SpawnArgs:
+    """Validated ``sys_factory_spawn`` arguments."""
 
-    Steps: caller must be a lead; enforce the pod cap from the roster;
-    resolve the built-in agent; ``POST /v1/sessions`` (``host_type: managed``,
-    factory labels, no ``parent_session_id`` and no ``initial_items`` — managed
-    initial items are stored as history only); post the brief; set mutual
-    supervision for a second lead; announce ``session.created``.
-    """
+    agent: str
+    title: str
+    message: str
+    role: str
+    project: str | None
+    workspaces: list[str]
+    heartbeat_s: int | None
+    supervisor: str | None
+
+
+def _spawn_args(args: _JsonObject) -> _SpawnArgs | str:
+    """Validate spawn arguments locally; returns them or a JSON error."""
     tool = SYS_FACTORY_SPAWN
     agent, title, message = args.get("agent"), args.get("title"), args.get("message")
     if not isinstance(agent, str) or not agent.strip():
@@ -500,7 +606,59 @@ async def _spawn(
     supervisor = args.get("supervisor_session_id")
     if supervisor is not None and (not isinstance(supervisor, str) or not supervisor.strip()):
         return _error(f"{tool} 'supervisor_session_id' must be a non-empty string")
+    return _SpawnArgs(
+        agent=agent.strip(),
+        title=title.strip(),
+        message=str(message),
+        role=role,
+        project=clamp_label_value(project.strip()) if project else None,
+        workspaces=[w.strip() for w in workspaces or []],
+        heartbeat_s=heartbeat_s,
+        supervisor=supervisor.strip() if supervisor else None,
+    )
 
+
+async def _spawn(
+    args: _JsonObject,
+    *,
+    server_client: httpx.AsyncClient,
+    caller: str,
+    agent_spec: object,
+    publish_event: _PublishEvent | None,
+) -> str:
+    """
+    ``sys_factory_spawn``: create a top-level managed member and brief it.
+
+    Steps: caller must be a lead; enforce the pod cap and refuse a duplicate
+    project from the roster; resolve the built-in agent; ``POST /v1/sessions``
+    (``host_type: managed``, factory labels, no ``parent_session_id`` and no
+    ``initial_items`` — managed initial items are stored as history only);
+    post the brief; set mutual supervision for a second lead; announce
+    ``session.created``. Spawns from one lead run one at a time.
+    """
+    spawn = _spawn_args(args)
+    if isinstance(spawn, str):
+        return spawn
+    async with _spawn_lock(caller):
+        return await _spawn_member(
+            spawn,
+            server_client=server_client,
+            caller=caller,
+            agent_spec=agent_spec,
+            publish_event=publish_event,
+        )
+
+
+async def _spawn_member(
+    spawn: _SpawnArgs,
+    *,
+    server_client: httpx.AsyncClient,
+    caller: str,
+    agent_spec: object,
+    publish_event: _PublishEvent | None,
+) -> str:
+    """The server-side steps of :func:`_spawn`, run under the caller's spawn lock."""
+    tool = SYS_FACTORY_SPAWN
     membership = await _get_object(
         server_client, _membership_path(caller), tool_name=tool, params={"from_session_id": caller}
     )
@@ -532,14 +690,25 @@ async def _spawn(
             members=live,
             message="mark finished members state=done or reuse an existing project lead",
         )
+    if spawn.project and (existing := _live_project_member(members, spawn.project)):
+        return _error(
+            "duplicate_project",
+            project=spawn.project,
+            session_id=existing.get("session_id"),
+            state=existing.get("state"),
+            message=(
+                "that project already has a member: message it with sys_session_post "
+                "(resume a paused one with sys_factory_set state=active), or mark it done first"
+            ),
+        )
 
-    agent_id, agent_error = await _resolve_builtin_agent(server_client, agent.strip())
+    agent_id, agent_error = await _resolve_builtin_agent(server_client, spawn.agent)
     if agent_id is None:
-        return agent_error or _error("agent_not_found", agent=agent)
+        return agent_error or _error("agent_not_found", agent=spawn.agent)
 
-    supervisor_id = (
-        supervisor.strip() if supervisor else _default_supervisor(role, caller, members)
-    )
+    role = spawn.role
+    supervisor_id = spawn.supervisor or _default_supervisor(role, caller, members)
+    heartbeat_s = spawn.heartbeat_s
     labels: dict[str, str] = {
         LABEL_ID: factory_id,
         LABEL_ROLE: role,
@@ -550,26 +719,30 @@ async def _spawn(
             heartbeat_s if heartbeat_s is not None else DEFAULT_HEARTBEAT_S[role]
         ),
     }
-    if project:
-        labels[LABEL_PROJECT] = clamp_label_value(project.strip())
+    if spawn.project:
+        labels[LABEL_PROJECT] = spawn.project
     create_body: _JsonObject = {
         "agent_id": agent_id,
         "host_type": "managed",
-        "title": title.strip(),
+        "title": spawn.title,
         "labels": labels,
     }
-    if workspaces:
-        create_body["workspaces"] = [w.strip() for w in workspaces]
+    if spawn.workspaces:
+        create_body["workspaces"] = spawn.workspaces
     resp = await _request(server_client, "POST", "/v1/sessions", tool_name=tool, body=create_body)
     if isinstance(resp, str):
         return resp
     created = _response_body(resp)
     if resp.status_code == 404:
-        return _error("agent_not_found", agent=agent, agent_id=agent_id)
-    if resp.status_code in (401, 403):
-        return _error("access_denied", agent=agent, status=resp.status_code)
+        return _error("agent_not_found", agent=spawn.agent, agent_id=agent_id)
     if resp.status_code >= 400:
-        return json.dumps(_error_payload(resp.status_code, created, resp.text, tool))
+        payload = _error_payload(resp.status_code, created, resp.text, tool)
+        if resp.status_code not in (401, 403):
+            return json.dumps(payload)
+        denied: _JsonObject = {"agent": spawn.agent, "status": resp.status_code}
+        if (server_message := _server_message(payload, tool)) is not None:
+            denied["message"] = server_message
+        return _error("access_denied", **denied)
     new_id = created.get("id") if isinstance(created, dict) else None
     if not isinstance(new_id, str) or not new_id:
         return _error("server did not return the new session id")
@@ -582,8 +755,8 @@ async def _spawn(
         "role": role,
         "supervisor_session_id": supervisor_id,
     }
-    if project:
-        result["project"] = labels[LABEL_PROJECT]
+    if spawn.project:
+        result["project"] = spawn.project
 
     brief = json.loads(
         await _passthrough(
@@ -594,7 +767,7 @@ async def _spawn(
             body={
                 "from_session_id": caller,
                 "to": new_id,
-                "message": message,
+                "message": spawn.message,
                 "kind": "brief",
                 "restart": False,
             },
@@ -628,7 +801,7 @@ async def _set_mutual_supervision(
             await _passthrough(
                 server_client,
                 "PATCH",
-                f"/v1/factory/sessions/{target}",
+                _session_path("/v1/factory/sessions", target),
                 tool_name=SYS_FACTORY_SPAWN,
                 body={"from_session_id": caller, "supervisor_session_id": supervisor},
             )
@@ -664,7 +837,7 @@ async def _cached_membership(
         return 0, None, resp
     parsed = _response_body(resp)
     body = parsed if isinstance(parsed, dict) else None
-    if resp.status_code in (200, 403):
+    if resp.status_code in _CACHED_MEMBERSHIP_STATUSES:
         if len(_membership_cache) >= _MEMBERSHIP_CACHE_MAX:
             _membership_cache.clear()
         _membership_cache[key] = (now + _MEMBERSHIP_CACHE_TTL_S, resp.status_code, body)
@@ -694,6 +867,8 @@ async def scope_check(
     """
     if target == caller:
         return None
+    if not _valid_session_id(target):
+        return _error("invalid_session_id", **{id_key: target})
     status, own, _ = await _cached_membership(server_client, caller, caller)
     factory_id = own.get("factory_id") if status == 200 and own is not None else None
     if not isinstance(factory_id, str) or not factory_id:
@@ -735,6 +910,57 @@ def _roster_row(entry: _JsonObject, *, parent_session_id: str | None) -> _JsonOb
     return row
 
 
+async def _get_json_or_none(
+    server_client: httpx.AsyncClient,
+    path: str,
+    params: dict[str, str | int],
+) -> _JsonObject | None:
+    """Best-effort GET of a JSON object; any failure is ``None``."""
+    try:
+        resp = await server_client.get(path, params=params, timeout=_TIMEOUT_S)
+    except Exception:  # noqa: BLE001 — enrichment must never fail the list.
+        return None
+    parsed = _response_body(resp) if resp.status_code == 200 else None
+    return parsed if isinstance(parsed, dict) else None
+
+
+async def _closed_child_ids(server_client: httpx.AsyncClient, parent_id: str) -> set[str]:
+    """Ids of *parent_id*'s closed sub-agents (best-effort, like ``_collect_sub_agents``)."""
+    if not _valid_session_id(parent_id):
+        return set()
+    page = await _get_json_or_none(
+        server_client,
+        _session_path("/v1/sessions", parent_id, "/child_sessions"),
+        {"limit": _CHILD_PAGE_LIMIT},
+    )
+    rows = page.get("data") if page is not None else None
+    closed: set[str] = set()
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict) or not isinstance(child_id := row.get("id"), str):
+            continue
+        labels = row.get("labels")
+        title = row.get("title")
+        if is_session_closed(
+            labels if isinstance(labels, dict) else None,
+            title if isinstance(title, str) else None,
+        ):
+            closed.add(child_id)
+    return closed
+
+
+async def _member_agent_name(server_client: httpx.AsyncClient, session_id: object) -> str | None:
+    """A member's bound agent name from its session snapshot (best-effort)."""
+    if not _valid_session_id(session_id):
+        return None
+    snap = await _get_json_or_none(
+        server_client,
+        _session_path("/v1/sessions", str(session_id)),
+        {"include_items": "false", "include_liveness": "false"},
+    )
+    name = snap.get("agent_name") if snap is not None else None
+    return name if isinstance(name, str) and name else None
+
+
 async def _factory_session_list(
     caller: str,
     server_client: httpx.AsyncClient,
@@ -754,22 +980,64 @@ async def _factory_session_list(
     if isinstance(roster, str):
         result["roster_error"] = json.loads(roster)
         return json.dumps(result)
+    members = _roster_members(roster)
+    name_filter = agent_name if isinstance(agent_name, str) and agent_name else None
+    # The roster has no member agent names or closed flags; look them up.
+    parents = [
+        session_id
+        for m in members
+        if isinstance(session_id := m.get("session_id"), str) and m.get("children")
+    ]
+    closed_sets = await asyncio.gather(*(_closed_child_ids(server_client, p) for p in parents))
+    closed = set().union(*closed_sets)
+    looked_up: dict[int, str | None] = {}
+    if name_filter is not None:
+        missing = [i for i, m in enumerate(members) if not isinstance(m.get("agent"), str)]
+        names = await asyncio.gather(
+            *(_member_agent_name(server_client, members[i].get("session_id")) for i in missing)
+        )
+        looked_up = dict(zip(missing, names, strict=True))
     rows: list[_JsonObject] = []
-    for member in _roster_members(roster):
+    for index, member in enumerate(members):
         row = _roster_row(member, parent_session_id=None)
+        raw_agent = member.get("agent") if index not in looked_up else looked_up[index]
+        if isinstance(raw_agent, str):
+            row["agent_name"] = public_agent_name(raw_agent)
         spawned_by = member.get("parent_session_id")
         if spawned_by is not None:
             row["spawned_by"] = spawned_by
-        rows.append(row)
+        if name_filter is None or name_filter in (raw_agent, row["agent_name"]):
+            rows.append(row)
         children = member.get("children")
         for child in children if isinstance(children, list) else []:
-            if isinstance(child, dict):
-                rows.append(_roster_row(child, parent_session_id=member.get("session_id")))
-    if isinstance(agent_name, str) and agent_name:
-        rows = [r for r in rows if r.get("agent_name") == agent_name]
+            if not isinstance(child, dict) or child.get("session_id") in closed:
+                continue
+            if name_filter is not None and child.get("agent") != name_filter:
+                continue
+            rows.append(_roster_row(child, parent_session_id=member.get("session_id")))
     result["factory_id"] = roster.get("factory_id")
     result["sessions"] = rows
     return json.dumps(result)
+
+
+async def _is_factory_caller(
+    agent_spec: object,
+    caller: str,
+    server_client: httpx.AsyncClient,
+) -> bool:
+    """
+    Whether *caller*'s reads are factory-scoped.
+
+    The spec's ``factory_role`` decides; when the spec could not be resolved,
+    the caller's own membership record does, so a member never falls back to
+    unscoped reads just because its spec is unknown.
+    """
+    if factory_role_from_spec(agent_spec) is not None:
+        return True
+    if agent_spec is not None:
+        return False
+    status, own, _ = await _cached_membership(server_client, caller, caller)
+    return status == 200 and own is not None and bool(own.get("factory_id"))
 
 
 async def scoped_session_query(
@@ -781,32 +1049,36 @@ async def scoped_session_query(
     agent_spec: object,
 ) -> str | None:
     """
-    Factory-scope a session read for callers whose spec has a factory role.
+    Factory-scope a session read for factory members.
+
+    A caller is a member when its spec has a factory role or, with no
+    resolvable spec, when the server's membership record says so.
 
     :returns: ``None`` to run the normal executor (non-factory caller, an
         allowed read, or a tool this does not scope); otherwise the tool result
         (a refusal, or the factory-scoped ``sys_session_list``).
     """
-    if factory_role_from_spec(agent_spec) is None:
-        return None
     if server_client is None or not conversation_id:
         return None
     if tool_name == _HISTORY_TOOL:
-        target = args.get("conversation_id")
+        target, id_key = args.get("conversation_id"), "conversation_id"
         if not isinstance(target, str) or not target:
             return None
-        return await scope_check(
-            conversation_id,
-            target,
-            server_client,
-            tool_name=tool_name,
-            id_key="conversation_id",
-        )
-    if tool_name == _INFO_TOOL:
-        target = args.get("session_id") or conversation_id
+    elif tool_name == _INFO_TOOL:
+        target, id_key = args.get("session_id") or conversation_id, "session_id"
         if not isinstance(target, str):
             return None
-        return await scope_check(conversation_id, target, server_client, tool_name=tool_name)
-    if tool_name == _LIST_TOOL:
+    elif tool_name == _LIST_TOOL:
+        target, id_key = None, ""
+    else:
+        return None
+    # Reading yourself needs no scope check (and no membership lookup).
+    if target == conversation_id:
+        return None
+    if not await _is_factory_caller(agent_spec, conversation_id, server_client):
+        return None
+    if target is None:
         return await _factory_session_list(conversation_id, server_client, args.get("agent_name"))
-    return None
+    return await scope_check(
+        conversation_id, target, server_client, tool_name=tool_name, id_key=id_key
+    )
