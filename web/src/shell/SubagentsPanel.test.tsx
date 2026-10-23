@@ -1591,3 +1591,126 @@ describe("SubagentsPanel", () => {
     expect(childRow(container, "conv_child").className.split(/\s+/)).not.toContain("bg-accent");
   });
 });
+
+describe("SubagentsPanel factory members", () => {
+  const PL_LABELS = {
+    "omnigent.factory.role": "project_lead",
+    "omnigent.factory.project": "api-version",
+    "omnigent.factory.parent": "conv_root",
+  };
+
+  function factoryRow(id: string, labels: Record<string, string>, title = "PL · api-version") {
+    return childInfo({ id, title, tool: title, task_summary: "Ship /version", labels });
+  }
+
+  it("renders the role chip and beacon badge, labelled by the session title", () => {
+    mockChildTree({
+      conv_root: [
+        factoryRow("conv_pl", {
+          ...PL_LABELS,
+          "omnigent.factory.summary": "2 ICs on /version",
+          "omnigent.factory.health": "ok",
+        }),
+      ],
+    });
+
+    const { container } = renderPanel({ rootSessionId: "conv_root" });
+
+    const row = childRow(container, "conv_pl");
+    // A member's title names it, not its task summary.
+    expect(row.textContent).toContain("PL · api-version");
+    expect(row.textContent).not.toContain("Ship /version");
+    expect(within(row).getByTestId("subagent-factory-role").textContent).toBe("PL · api-version");
+    const badge = within(row).getByTestId("subagent-factory-badge");
+    expect(badge.textContent).toBe("2 ICs on /version");
+    expect(badge.dataset.health).toBe("ok");
+    expect(badge.className).not.toContain("text-warning");
+    expect(badge.className).toContain("text-muted-foreground");
+  });
+
+  it.each(["degraded", "blocked", "dead"])(
+    "renders a %s beacon in the warning colour",
+    (health) => {
+      mockChildTree({
+        conv_root: [
+          factoryRow("conv_pl", {
+            ...PL_LABELS,
+            "omnigent.factory.summary": "waiting on CI",
+            "omnigent.factory.health": health,
+          }),
+        ],
+      });
+
+      const { container } = renderPanel({ rootSessionId: "conv_root" });
+
+      const badge = within(childRow(container, "conv_pl")).getByTestId("subagent-factory-badge");
+      expect(badge.className.split(/\s+/)).toContain("text-warning");
+      expect(badge.dataset.warning).toBe("true");
+      expect(badge.textContent).toBe(`${health} · waiting on CI`);
+      expect(badge.getAttribute("title")).toBe(`Health: ${health} — waiting on CI`);
+    },
+  );
+
+  it("truncates a long summary and shows a health-only beacon", () => {
+    const long = "x".repeat(100);
+    mockChildTree({
+      conv_root: [
+        factoryRow("conv_long", { ...PL_LABELS, "omnigent.factory.summary": long }),
+        factoryRow(
+          "conv_dead",
+          { "omnigent.factory.role": "lead", "omnigent.factory.health": "dead" },
+          "Lead B · Sentinel",
+        ),
+      ],
+    });
+
+    const { container } = renderPanel({ rootSessionId: "conv_root" });
+
+    const longBadge = within(childRow(container, "conv_long")).getByTestId(
+      "subagent-factory-badge",
+    );
+    expect(longBadge.textContent).toBe(`${"x".repeat(60)}…`);
+    const dead = childRow(container, "conv_dead");
+    expect(within(dead).getByTestId("subagent-factory-badge").textContent).toBe("dead");
+    expect(within(dead).getByTestId("subagent-factory-role").textContent).toBe("Lead");
+  });
+
+  it("renders a beacon on a plain sub-agent and nothing on rows without factory labels", () => {
+    mockChildTree({
+      conv_root: [
+        childInfo({
+          id: "conv_ic",
+          tool: "ic",
+          session_name: "task-1",
+          labels: { "omnigent.factory.summary": "tests green" },
+        }),
+        childInfo({ id: "conv_plain", tool: "researcher", session_name: "auth" }),
+      ],
+    });
+
+    const { container } = renderPanel({ rootSessionId: "conv_root" });
+
+    const ic = childRow(container, "conv_ic");
+    expect(within(ic).getByTestId("subagent-factory-badge").textContent).toBe("tests green");
+    // Sub-agent roles come from the spec, not labels: no chip.
+    expect(within(ic).queryByTestId("subagent-factory-role")).toBeNull();
+    // Its label still follows the sub-agent rules (instance name).
+    expect(ic.textContent).toContain("task-1");
+    const plain = childRow(container, "conv_plain");
+    expect(within(plain).queryByTestId("subagent-factory-badge")).toBeNull();
+    expect(within(plain).queryByTestId("subagent-factory-role")).toBeNull();
+  });
+
+  it("nests a factory member's own sub-agents under it", () => {
+    mockChildTree({
+      conv_root: [factoryRow("conv_pl", PL_LABELS)],
+      conv_pl: [childInfo({ id: "conv_ic", tool: "ic", session_name: "task-1" })],
+    });
+
+    const { container } = renderPanel({ rootSessionId: "conv_root" });
+
+    expect(childRow(container, "conv_pl").dataset.depth).toBe("1");
+    expect(childRow(container, "conv_ic").dataset.depth).toBe("2");
+    expect(useChildSessionsMock).toHaveBeenCalledWith("conv_pl");
+  });
+});

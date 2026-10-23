@@ -167,15 +167,28 @@ interface UseChildSessionsResult {
   error: Error | null;
 }
 
+export interface FetchChildSessionsOptions {
+  /**
+   * Also list the top-level software-factory members this session spawned
+   * (sessions labelled ``omnigent.factory.parent == sessionId``), so the
+   * Agents tree renders lead → project leads → ICs.
+   */
+  includeFactory?: boolean;
+}
+
 /**
  * Fetch child sessions for a parent session.
  *
  * Exported for unit testing of the HTTP-shape contract; production
  * code should call ``useChildSessions``.
  */
-export async function fetchChildSessions(sessionId: string): Promise<ChildSessionInfo[]> {
+export async function fetchChildSessions(
+  sessionId: string,
+  { includeFactory = false }: FetchChildSessionsOptions = {},
+): Promise<ChildSessionInfo[]> {
+  const query = includeFactory ? "?include_factory=true" : "";
   const res = await authenticatedFetch(
-    `/v1/sessions/${encodeURIComponent(sessionId)}/child_sessions`,
+    `/v1/sessions/${encodeURIComponent(sessionId)}/child_sessions${query}`,
   );
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
   const json = (await res.json()) as ChildSessionsResponse;
@@ -197,7 +210,8 @@ export async function fetchChildSessions(sessionId: string): Promise<ChildSessio
 
 /**
  * Live child-session list for a conversation, served by
- * ``GET /v1/sessions/{id}/child_sessions``.
+ * ``GET /v1/sessions/{id}/child_sessions?include_factory=true`` (sub-agents
+ * plus the factory members the session spawned).
  *
  * The ``session.created`` handler in ``chatStore.ts`` invalidates
  * this query key on each spawn so newly-created child sessions
@@ -220,7 +234,9 @@ export function useChildSessions(
       conversationId === null
         ? ["conversation", null, "child_sessions"]
         : childSessionsQueryKey(conversationId),
-    queryFn: () => fetchChildSessions(conversationId as string),
+    // Factory members join the tree like children; their own children are
+    // fetched by the next level down, so lead → PLs → ICs nests naturally.
+    queryFn: () => fetchChildSessions(conversationId as string, { includeFactory: true }),
     enabled: conversationId !== null,
     staleTime: 60_000,
     retry: false,

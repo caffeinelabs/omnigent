@@ -624,6 +624,46 @@ describe("buildTree", () => {
 // Integration tests: view-mode toggle
 // ===========================================================================
 
+describe("buildTree factory members", () => {
+  it("labels a factory member by its title and carries its labels to the node", () => {
+    const pl = childInfo({
+      id: "pl",
+      title: "PL · api-version",
+      task_summary: "Ship /version",
+      labels: {
+        "omnigent.factory.role": "project_lead",
+        "omnigent.factory.project": "api-version",
+        "omnigent.factory.parent": "root",
+        "omnigent.factory.summary": "env up",
+        "omnigent.factory.health": "degraded",
+      },
+    });
+    const ic = childInfo({ id: "ic", tool: "ic", session_name: "task-1" });
+    const map = new Map([
+      ["root", [pl]],
+      ["pl", [ic]],
+    ]);
+
+    const tree = buildTree("root", "main", "idle", "Idle", null, map, 0);
+
+    const plNode = tree.children[0];
+    expect(plNode.label).toBe("PL · api-version");
+    expect(plNode.factory).toEqual({
+      role: "project_lead",
+      project: "api-version",
+      parent: "root",
+      summary: "env up",
+      health: "degraded",
+    });
+    expect(plNode.children.map((c) => [c.id, c.label, c.factory])).toEqual([
+      ["ic", "task-1", undefined],
+    ]);
+    const { nodes } = layoutTree(tree, "none");
+    expect(nodes.find((n) => n.id === "pl")?.data.factory?.health).toBe("degraded");
+    expect(nodes.find((n) => n.id === "ic")?.data.factory).toBeNull();
+  });
+});
+
 describe("SubagentsPanel view-mode toggle", () => {
   it("defaults to list view", () => {
     useChildSessionsMock.mockReturnValue({ children: [], isLoading: false, error: null });

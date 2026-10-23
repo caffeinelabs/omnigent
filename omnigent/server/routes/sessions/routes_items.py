@@ -23,6 +23,7 @@ from omnigent.server.auth import (
     LEVEL_READ,
     AuthProvider,
 )
+from omnigent.server.factory.org_chart import factory_child_summaries, merge_child_summaries
 from omnigent.server.routes._auth_helpers import (
     get_user_id as _get_user_id,
 )
@@ -127,6 +128,7 @@ def register_items_routes(
         order: str = Query(default="desc", pattern="^(asc|desc)$"),
         tool: str | None = Query(default=None),
         session_name: str | None = Query(default=None),
+        include_factory: bool = Query(default=False),
     ) -> PaginatedList:
         """
         List sub-agent (child) sessions under a parent session.
@@ -161,6 +163,11 @@ def register_items_routes(
         :param session_name: When set alongside ``tool``, only
             return children whose title matches
             ``"{tool}:{session_name}"`` exactly.
+        :param include_factory: When ``True``, the first page (no
+            ``after``/``before`` cursor) also lists the readable top-level
+            sessions labelled ``omnigent.factory.parent == session_id``,
+            merged by ``created_at``. Cursors and ``has_more`` still page
+            the sub-agent children only.
         :returns: A :class:`PaginatedList` of
             :class:`ChildSessionSummary` objects.
         :raises OmnigentError: 403 if the caller lacks READ on
@@ -195,6 +202,15 @@ def register_items_routes(
             session_id,
             conversation_store,
         )
+        if include_factory and after is None and before is None:
+            members = await factory_child_summaries(
+                session_id,
+                user_id=user_id,
+                conversation_store=conversation_store,
+                permission_store=permission_store,
+                title=title_filter,
+            )
+            data = merge_child_summaries(data, members, order)
         return PaginatedList(
             data=data,
             first_id=page.first_id,

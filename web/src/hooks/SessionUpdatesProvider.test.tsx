@@ -431,3 +431,30 @@ describe("SessionUpdatesProvider projects_changed frames", () => {
     expect(invalidate).toHaveBeenCalledWith({ queryKey: ["project-config"] });
   });
 });
+
+describe("SessionUpdatesProvider agent-tree freshness", () => {
+  it("invalidates the child list of a sub-agent's parent and of a factory member's lead", () => {
+    const client = new QueryClient();
+    seedConversations(client, ["conv_lead"]);
+    renderProvider(client, ["/"]);
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    act(() =>
+      frameHandler()({
+        type: "changed",
+        items: [
+          { ...conv("conv_ic"), parent_session_id: "conv_pl" },
+          // A project lead is top-level; only its factory label ties it to the lead.
+          { ...conv("conv_pl"), labels: { "omnigent.factory.parent": "conv_lead" } },
+        ],
+      }),
+    );
+
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["conversation", "conv_pl", "child_sessions"],
+    });
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: ["conversation", "conv_lead", "child_sessions"],
+    });
+  });
+});

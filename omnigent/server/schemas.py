@@ -754,8 +754,9 @@ class ChildSessionSummary(BaseModel):
     :param session_name: Sub-agent instance name, the suffix of
         ``title`` after the first ``":"``, e.g. ``"auth"``. ``None``
         if ``title`` is ``None`` or missing a colon.
-    :param kind: Conversation kind discriminator, always
-        ``"sub_agent"`` for rows surfaced by this endpoint.
+    :param kind: Conversation kind discriminator, ``"sub_agent"`` for
+        spawned children. A top-level factory member listed via
+        ``include_factory`` carries its own kind, e.g. ``"default"``.
     :param created_at: Unix epoch timestamp of child creation.
     :param updated_at: Unix epoch timestamp of the child's most
         recent update.

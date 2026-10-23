@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { ZoomInIcon, ZoomOutIcon, Maximize2Icon } from "lucide-react";
 import { MAX_TREE_DEPTH, useChildSessions, type ChildSessionInfo } from "@/hooks/useChildSessions";
 import { useSession } from "@/hooks/useSession";
+import { factoryRoleChipText, hasFactoryBeacon } from "@/lib/factory";
 import { cn } from "@/lib/utils";
 import { nativeCodingAgentForWrapper, WRAPPER_LABEL_KEY } from "@/lib/nativeCodingAgents";
 import {
@@ -16,6 +17,7 @@ import {
   type AgentNodeData,
 } from "./subagentGraphLayout";
 import { activityDotClassName, sessionStatus } from "./subagentStatus";
+import { FactoryBadge, FactoryRoleChip } from "./FactoryBadge";
 
 import "@xyflow/react/dist/style.css";
 
@@ -50,7 +52,7 @@ function NodeStatusDot({ activity }: { activity: AgentActivity }) {
 }
 
 function AgentNodeComponent({ data }: NodeProps<Node<AgentNodeData>>) {
-  const { label, activity, statusLabel, isActive, preview } = data;
+  const { label, activity, statusLabel, isActive, preview, factory } = data;
   const tint = ACTIVITY_TINT[activity];
 
   return (
@@ -74,6 +76,12 @@ function AgentNodeComponent({ data }: NodeProps<Node<AgentNodeData>>) {
           <span className="flex-1" />
           <NodeStatusDot activity={activity} />
         </div>
+        {(factoryRoleChipText(factory) !== null || hasFactoryBeacon(factory)) && (
+          <div className="mt-1 flex min-w-0 items-center gap-1">
+            <FactoryRoleChip info={factory} />
+            <FactoryBadge info={factory} className="min-w-0 text-[10px] leading-4" />
+          </div>
+        )}
         {preview && (
           <p className="mt-1 truncate text-[10px] leading-tight text-muted-foreground">{preview}</p>
         )}
