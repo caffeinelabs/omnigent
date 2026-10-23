@@ -608,7 +608,7 @@
           },
           "kind": {
             "default": "sub_agent",
-            "description": "Conversation kind discriminator, always `\"sub_agent\"` for rows surfaced by this endpoint.",
+            "description": "Conversation kind discriminator, `\"sub_agent\"` for spawned children. A top-level factory member listed via `include_factory` carries its own kind, e.g. `\"default\"`.",
             "title": "Kind",
             "type": "string"
           },
@@ -11714,6 +11714,17 @@
                 }
               ],
               "title": "Session Name"
+            }
+          },
+          {
+            "description": "When `True`, the first page (no `after`/`before` cursor) also lists the readable top-level sessions labelled `omnigent.factory.parent == session_id`, merged by `created_at`. Cursors and `has_more` still page the sub-agent children only.",
+            "in": "query",
+            "name": "include_factory",
+            "required": false,
+            "schema": {
+              "default": false,
+              "title": "Include Factory",
+              "type": "boolean"
             }
           }
         ],
