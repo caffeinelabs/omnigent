@@ -13,12 +13,14 @@ import { ElicitationCard } from "@/components/blocks/ApprovalCard";
 import { cn } from "@/lib/utils";
 import { getCurrentAuthorId } from "@/lib/identity";
 import { hasCommandModifier } from "@/lib/hotkeys";
+import { factoryMessageLabel, parseFactoryMessageCached } from "@/lib/factoryMessages";
 import { isSystemUserContent } from "@/lib/systemMessage";
 import {
   type Bubble,
   type BubbleCache,
   buildBubbles,
   createBubbleCache,
+  foldFactoryHeartbeats,
   liveCandidateAssistantIndex,
 } from "@/lib/renderItems";
 import { useChatStore } from "@/store/chatStore";
@@ -133,17 +135,21 @@ function TranscriptImpl({
   // acked) render as trailing user bubbles so the input is visible immediately.
   const bubbleCacheRef = useRef<BubbleCache>(createBubbleCache());
   const bubbles = useMemo<Bubble[]>(() => {
-    const committed = stripGatedSubagentRoutingChips(
-      reorderCommittedRequestElicitations(
-        buildBubbles(
-          blocks,
-          activeResponse,
-          bubbleCacheRef.current,
-          interruptedResponseIds,
-          computeIsWorking(sessionStatus),
+    const committed = foldFactoryHeartbeats(
+      stripGatedSubagentRoutingChips(
+        reorderCommittedRequestElicitations(
+          buildBubbles(
+            blocks,
+            activeResponse,
+            bubbleCacheRef.current,
+            interruptedResponseIds,
+            computeIsWorking(sessionStatus),
+          ),
         ),
+        subagentRoutingOverride,
       ),
-      subagentRoutingOverride,
+      // Factory heartbeats that changed nothing fold into one row.
+      computeIsWorking(sessionStatus),
     );
     if (pendingUserMessages.length === 0) return committed;
     return mergePendingBubbles(
@@ -256,31 +262,7 @@ function TranscriptImpl({
 
   // One rail tick per real user turn, paired with a preview of the reply that
   // followed. Mirrors the transcript's loaded window and grows lazily.
-  const turns = useMemo<Turn[]>(() => {
-    const out: Turn[] = [];
-    for (let i = 0; i < display.bubbles.length; i++) {
-      const b = display.bubbles[i];
-      if (b.kind !== "user" || isSystemBubble(b)) continue;
-      let preview = "";
-      for (let j = i + 1; j < display.bubbles.length; j++) {
-        const next = display.bubbles[j];
-        if (next.kind === "user" && !isSystemBubble(next)) break;
-        if (next.kind === "assistant") {
-          const textItem = next.items.find((it) => it.kind === "text" && it.text.trim());
-          if (textItem && textItem.kind === "text") {
-            preview = textItem.text.trim();
-            break;
-          }
-        }
-      }
-      out.push({
-        itemId: b.itemId,
-        userText: extractUserText(b.content),
-        responsePreview: preview.slice(0, 240),
-      });
-    }
-    return out;
-  }, [display.bubbles]);
+  const turns = useMemo<Turn[]>(() => railTurns(display.bubbles), [display.bubbles]);
 
   const lastAssistantIndex = useMemo(
     () => liveCandidateAssistantIndex(display.streamBubbles),
@@ -436,6 +418,39 @@ function TranscriptImpl({
       </div>
     </>
   );
+}
+
+/**
+ * Rail ticks: one per real user turn (system and factory markers excluded),
+ * each with a preview of the reply that followed. A factory card's tick reads
+ * as its one-line label instead of the raw envelope.
+ */
+export function railTurns(bubbles: Bubble[]): Turn[] {
+  const out: Turn[] = [];
+  for (let i = 0; i < bubbles.length; i++) {
+    const b = bubbles[i];
+    if (b.kind !== "user" || isSystemBubble(b)) continue;
+    let preview = "";
+    for (let j = i + 1; j < bubbles.length; j++) {
+      const next = bubbles[j];
+      if (next.kind === "user" && !isSystemBubble(next)) break;
+      if (next.kind === "assistant") {
+        const textItem = next.items.find((it) => it.kind === "text" && it.text.trim());
+        if (textItem && textItem.kind === "text") {
+          preview = textItem.text.trim();
+          break;
+        }
+      }
+    }
+    const text = extractUserText(b.content);
+    const factory = parseFactoryMessageCached(text);
+    out.push({
+      itemId: b.itemId,
+      userText: factory ? factoryMessageLabel(factory) : text,
+      responsePreview: preview.slice(0, 240),
+    });
+  }
+  return out;
 }
 
 /**
@@ -714,9 +729,10 @@ export function VirtualBubbleList({
   });
 
   // An assistant bubble is keyed by its first item, so a history page that
-  // continues the top turn renames it. Keep rendering it under the key its row
-  // already has: React keeps the node (a remount replays the action row's hover
-  // fade on every page) and react-virtual keeps the measured height.
+  // continues the top turn renames it (a heartbeat group likewise, by its first
+  // beat). Keep rendering it under the key its row already has: React keeps the
+  // node (a remount replays the action row's hover fade on every page, and
+  // closes an open heartbeat group) and react-virtual keeps the measured height.
   // Only a prepend can rename a bubble, and a prepend always changes the first
   // bubble's key, so the alias map is only rebuilt then.
   const firstBubbleKey = bubbles.length > 0 ? bubbleKey(bubbles[0]!) : undefined;
@@ -737,20 +753,33 @@ export function VirtualBubbleList({
     // prepend renames at most one bubble per response (the topmost, which the
     // page extends), so one entry per response is enough.
     const vanishedByResponse = new Map<string, string>();
+    // Per beat (user item id), the row key of the heartbeat group that held it.
+    const vanishedByBeat = new Map<string, string>();
     for (const bubble of renderedBubblesRef.current) {
       const key = bubbleKey(bubble);
-      if (bubble.kind === "assistant" && !currentKeys.has(key)) {
+      if (currentKeys.has(key)) continue;
+      if (bubble.kind === "assistant") {
         vanishedByResponse.set(bubble.responseId, aliases.get(key) ?? key);
+      } else if (bubble.kind === "heartbeat_group") {
+        for (const tick of bubble.ticks)
+          vanishedByBeat.set(tick.user.itemId, aliases.get(key) ?? key);
       }
     }
     for (const bubble of bubbles) {
       const key = bubbleKey(bubble);
-      if (bubble.kind !== "assistant" || aliases.has(key)) continue;
-      const aliasKey = vanishedByResponse.get(bubble.responseId);
-      if (aliasKey === undefined) continue;
+      if (aliases.has(key)) continue;
+      let aliasKey: string | undefined;
+      if (bubble.kind === "assistant") {
+        aliasKey = vanishedByResponse.get(bubble.responseId);
+        if (aliasKey !== undefined) vanishedByResponse.delete(bubble.responseId);
+      } else if (bubble.kind === "heartbeat_group") {
+        aliasKey = bubble.ticks
+          .map((tick) => vanishedByBeat.get(tick.user.itemId))
+          .find((k) => k !== undefined);
+      }
+      if (aliasKey === undefined || renamed.has(aliasKey)) continue;
       aliases.set(key, aliasKey);
       renamed.add(aliasKey);
-      vanishedByResponse.delete(bubble.responseId);
     }
     for (const key of aliases.keys()) {
       if (!currentKeys.has(key)) aliases.delete(key);

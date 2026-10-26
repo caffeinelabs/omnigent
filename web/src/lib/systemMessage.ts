@@ -8,6 +8,12 @@
 
 import type { MessageContentBlock } from "@/lib/blocks";
 import { isTextBlock } from "@/lib/blocks";
+import {
+  type ParsedFactoryMessage,
+  factoryMessageLabel,
+  isFactoryMarkerKind,
+  parseFactoryMessageCached,
+} from "@/lib/factoryMessages";
 
 export type SystemMessageKind =
   | "task_completed"
@@ -17,6 +23,7 @@ export type SystemMessageKind =
   | "terminal_idle"
   | "subagent_wake"
   | "interrupted"
+  | "factory"
   | "generic";
 
 export interface ParsedSystemMessage {
@@ -25,6 +32,8 @@ export interface ParsedSystemMessage {
   label: string;
   /** Everything after the header line. Empty for headers without a body. */
   body: string;
+  /** The typed factory marker behind a `factory` kind. */
+  factory?: ParsedFactoryMessage;
 }
 
 const HEADER_RE = /^\[System: (.+)\]$/;
@@ -52,6 +61,13 @@ const TASK_KIND_LABEL: Record<string, string> = {
 };
 
 export function parseSystemMessage(text: string): ParsedSystemMessage | null {
+  // Factory markers (heartbeat, notice, alert, …) are system messages; factory
+  // messages, briefs, controls, decisions and reviews stay real turns.
+  const factory = parseFactoryMessageCached(text);
+  if (factory) {
+    if (!isFactoryMarkerKind(factory.kind)) return null;
+    return { kind: "factory", label: factoryMessageLabel(factory), body: factory.body, factory };
+  }
   const newlineIdx = text.indexOf("\n");
   const firstLine = newlineIdx === -1 ? text : text.slice(0, newlineIdx);
   const body = newlineIdx === -1 ? "" : text.slice(newlineIdx + 1);
@@ -141,8 +157,9 @@ const ATTACHED_RE = /\[Attached(?: file)?:\s*([^\]]*)\]\s*/g;
 
 /**
  * True when a user-role message is actually a runtime `[System: …]` marker
- * (task/timer/sub-agent notice, interrupt record) rather than a real user
- * turn. Shared by the transcript's turn derivation and the rail's eager
+ * (task/timer/sub-agent notice, interrupt record) or a factory marker
+ * (heartbeat, notice, alert, delivery failure, NEEDS HUMAN) rather than a
+ * real user turn. Shared by the transcript's turn derivation and the rail's eager
  * history loader so both agree on what counts as a rail tick — a mismatch
  * (loader counting markers the rail drops) can wedge the rail hidden.
  *

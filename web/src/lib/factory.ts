@@ -22,6 +22,7 @@ const ROLE_DISPLAY: Record<string, string> = {
   ic: "IC",
   env_keeper: "Env",
   reviewer: "Reviewer",
+  demo: "Demo",
 };
 
 /** The factory labels of one session, `null` per field when unset. */

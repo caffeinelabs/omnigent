@@ -25,13 +25,18 @@ import type {
   ToolExecution,
   ToolResultBlock,
 } from "./blocks";
-import { LIVE_ITEM_PREFIX } from "./blocks";
+import { LIVE_ITEM_PREFIX, isTextBlock } from "./blocks";
 import { isUserInputElicitation } from "./askUserQuestion";
 import {
   type RoutingDecisionExtras,
   isSessionScopedDecision,
   routingExtras,
 } from "./routingDecision";
+import {
+  heartbeatNoopReply,
+  isFactoryOutcomeCall,
+  parseFactoryMessageCached,
+} from "./factoryMessages";
 import { isSystemUserContent } from "./systemMessage";
 import type { CodexPersistMode, RememberScope } from "./types";
 import type { ActiveResponse } from "@/store/types";
@@ -216,7 +221,26 @@ export type Bubble =
       agent?: string;
       /** Routing identity (harness, scope, decision id …); absent on legacy rows. */
       routing?: RoutingDecisionExtras;
+    }
+  | {
+      /** Consecutive factory heartbeat turns that changed nothing, folded into one row. */
+      kind: "heartbeat_group";
+      /** `hb:` + the first beat's user item id. */
+      itemId: string;
+      ticks: HeartbeatTick[];
     };
+
+/** One folded heartbeat turn: the beat and the replies that changed nothing. */
+export interface HeartbeatTick {
+  user: Extract<Bubble, { kind: "user" }>;
+  replies: Extract<Bubble, { kind: "assistant" }>[];
+  /** Beat number from the `[Factory heartbeat #n · …]` header. */
+  seq: number;
+  /** The beat's ISO timestamp from its header. */
+  at: string;
+  /** Text after `HEARTBEAT_OK ·`, the legacy "nothing changed" reply, or "no reply". */
+  status: string;
+}
 
 const TEXT_BLOCK_TYPES = new Set(["text_chunk", "text_done"]);
 const REASONING_BLOCK_TYPES = new Set(["reasoning_start", "reasoning_chunk", "reasoning_block"]);
@@ -526,6 +550,8 @@ export function liveCandidateAssistantIndex(bubbles: readonly Bubble[]): number 
   for (let i = idx + 1; i < bubbles.length; i += 1) {
     const b = bubbles[i]!;
     if (b.kind === "user" && !isSystemUserContent(b.content)) return -1;
+    // Folded heartbeats are finished turns, so the one before them is too.
+    if (b.kind === "heartbeat_group") return -1;
   }
   return idx;
 }
@@ -1803,5 +1829,131 @@ export function bubblesEqual(a: Bubble, b: Bubble): boolean {
     // Verdict fields are immutable per item, so the id alone identifies it.
     return a.itemId === b.itemId;
   }
+  if (a.kind === "heartbeat_group" && b.kind === "heartbeat_group") {
+    return (
+      a.itemId === b.itemId &&
+      a.ticks.length === b.ticks.length &&
+      a.ticks.every((tick, i) => heartbeatTicksEqual(tick, b.ticks[i]!))
+    );
+  }
   return false;
+}
+
+function heartbeatTicksEqual(a: HeartbeatTick, b: HeartbeatTick): boolean {
+  return (
+    a.status === b.status &&
+    bubblesEqual(a.user, b.user) &&
+    a.replies.length === b.replies.length &&
+    a.replies.every((reply, i) => bubblesEqual(reply, b.replies[i]!))
+  );
+}
+
+type UserBubbleT = Extract<Bubble, { kind: "user" }>;
+type AssistantBubbleT = Extract<Bubble, { kind: "assistant" }>;
+
+// Keyed by the user block's content array, which `buildBubbles` reuses across
+// rebuilds, so a streaming frame re-parses only new user messages.
+const heartbeatHeaders = new WeakMap<MessageContentBlock[], { seq: number; at: string } | null>();
+
+function heartbeatHeader(user: UserBubbleT): { seq: number; at: string } | null {
+  const cached = heartbeatHeaders.get(user.content);
+  if (cached !== undefined) return cached;
+  let header: { seq: number; at: string } | null = null;
+  if (!user.content.some((c) => c.type === "input_image" || c.type === "input_file")) {
+    const text = user.content
+      .filter(isTextBlock)
+      .map((c) => c.text)
+      .join("");
+    const parsed = parseFactoryMessageCached(text);
+    if (parsed?.kind === "heartbeat") header = { seq: parsed.seq ?? 0, at: parsed.at ?? "" };
+  }
+  heartbeatHeaders.set(user.content, header);
+  return header;
+}
+
+/** The turn's closing assistant text, or `null` when it ends on anything else. */
+function closingText(replies: AssistantBubbleT[]): string | null {
+  for (let r = replies.length - 1; r >= 0; r -= 1) {
+    const items = replies[r]!.items;
+    for (let i = items.length - 1; i >= 0; i -= 1) {
+      const item = items[i]!;
+      if (item.kind === "reasoning") continue;
+      return item.kind === "text" ? item.text : null;
+    }
+  }
+  return null;
+}
+
+/** Whether a beat's replies hold something the reader must see (pending question, post, outcome). */
+function holdsVisibleWork(reply: AssistantBubbleT): boolean {
+  return reply.items.some(
+    (it) =>
+      (it.kind === "elicitation" && it.status === "pending") ||
+      (it.kind === "tool" && isFactoryOutcomeCall(it.execution.name)),
+  );
+}
+
+function foldableTick(
+  user: UserBubbleT,
+  replies: AssistantBubbleT[],
+  header: { seq: number; at: string },
+  turnOver: boolean,
+): HeartbeatTick | null {
+  // A finished beat with no reply at all ("reply only if something changed").
+  if (replies.length === 0) {
+    return turnOver ? { user, replies, seq: header.seq, at: header.at, status: "no reply" } : null;
+  }
+  for (const reply of replies) {
+    if (reply.lifecycle !== "completed" || holdsVisibleWork(reply)) return null;
+  }
+  const text = closingText(replies);
+  const noop = text === null ? null : heartbeatNoopReply(text);
+  return noop ? { user, replies, seq: header.seq, at: header.at, status: noop.status } : null;
+}
+
+/**
+ * Fold factory heartbeat turns that changed nothing into `heartbeat_group`
+ * bubbles: a beat whose closing reply starts with `HEARTBEAT_OK` (or a short
+ * legacy "Nothing changed"), or a finished beat with no reply. Consecutive
+ * folded beats share one group. A beat that did work, posted, or recorded an
+ * outcome (spawn, ask, PR, preview, demo) stays as it is. Runs after `buildBubbles`, outside its reuse
+ * cache, and returns `bubbles` itself when nothing folds.
+ *
+ * @param bubbles - The transcript's bubbles in order.
+ * @param holdLastTurn - Leave the newest turn unfolded (the session is still
+ *   working on it, so its closing text may not be final).
+ * @returns The bubbles with folded beats replaced by group bubbles.
+ */
+export function foldFactoryHeartbeats(bubbles: Bubble[], holdLastTurn = false): Bubble[] {
+  let out: Bubble[] | null = null;
+  let group: HeartbeatTick[] | null = null;
+  let i = 0;
+  const flush = () => {
+    if (!group || !out) return;
+    out.push({ kind: "heartbeat_group", itemId: `hb:${group[0]!.user.itemId}`, ticks: group });
+    group = null;
+  };
+  while (i < bubbles.length) {
+    const bubble = bubbles[i]!;
+    const header = bubble.kind === "user" ? heartbeatHeader(bubble) : null;
+    if (bubble.kind === "user" && header) {
+      let end = i + 1;
+      while (end < bubbles.length && bubbles[end]!.kind === "assistant") end += 1;
+      const isLastTurn = end === bubbles.length;
+      const replies = bubbles.slice(i + 1, end) as AssistantBubbleT[];
+      const tick =
+        holdLastTurn && isLastTurn ? null : foldableTick(bubble, replies, header, !isLastTurn);
+      if (tick) {
+        out ??= bubbles.slice(0, i);
+        (group ??= []).push(tick);
+        i = end;
+        continue;
+      }
+    }
+    flush();
+    out?.push(bubble);
+    i += 1;
+  }
+  flush();
+  return out ?? bubbles;
 }

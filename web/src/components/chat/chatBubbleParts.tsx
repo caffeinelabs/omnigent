@@ -45,6 +45,9 @@ import {
   RoutingDecisionCard,
 } from "@/components/blocks/StatusBlocks";
 import { SystemMessageView } from "@/components/blocks/SystemMessage";
+import { FactoryUserCard } from "@/components/factory/transcript/FactoryUserCard";
+import { HeartbeatGroup } from "@/components/factory/transcript/HeartbeatGroup";
+import { parseFactoryMessageCached } from "@/lib/factoryMessages";
 import { isSystemUserContent, parseSystemMessage } from "@/lib/systemMessage";
 import { Button } from "@/components/ui/button";
 import { BrandLogo } from "@/components/BrandLogo";
@@ -330,6 +333,7 @@ export function bubbleKey(bubble: Bubble): string {
   if (bubble.kind === "compaction_loading") return `compaction_loading:${bubble.itemId}`;
   if (bubble.kind === "compaction") return `compaction:${bubble.itemId}`;
   if (bubble.kind === "routing_decision") return `routing_decision:${bubble.itemId}`;
+  if (bubble.kind === "heartbeat_group") return `heartbeat_group:${bubble.itemId}`;
   return `assistant:${bubble.stableId}`;
 }
 
@@ -529,6 +533,9 @@ export const BubbleView = memo(
       return <CompactionLoadingIndicator createdAtS={bubble.createdAtS} />;
     }
     if (bubble.kind === "compaction") return <CompactionMarker />;
+    if (bubble.kind === "heartbeat_group") {
+      return <HeartbeatGroup bubble={bubble} renderBubble={(b) => <BubbleView bubble={b} />} />;
+    }
     if (bubble.kind === "routing_decision") {
       return (
         <RoutingDecisionCard
@@ -629,6 +636,18 @@ function UserBubble({ bubble }: { bubble: Extract<Bubble, { kind: "user" }> }) {
   // Runtime-injected `[System: ...]` notifications ride in on role=user. When
   // the content is a pure system marker, swap in a muted centered indicator.
   if (images.length === 0 && fileChips.length === 0 && mentionedChips.length === 0) {
+    // Server-stamped factory traffic renders as typed cards and markers.
+    const factory = parseFactoryMessageCached(text);
+    if (factory) {
+      return (
+        <FactoryUserCard
+          parsed={factory}
+          createdAtS={bubble.createdAtS}
+          itemId={bubble.itemId}
+          flashing={flashing}
+        />
+      );
+    }
     const parsed = parseSystemMessage(text);
     if (parsed) return <SystemMessageView message={parsed} />;
   }
