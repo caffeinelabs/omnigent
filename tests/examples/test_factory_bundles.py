@@ -116,7 +116,7 @@ def test_both_bundles_parse_with_the_expected_shape(lead: AgentSpec, pl: AgentSp
         assert spec.async_enabled is True
         assert spec.executor.reasoning_effort == "high"
         assert spec.executor.config["harness"] == "claude-native"
-        assert spec.executor.config["permission_mode"] == "auto"
+        assert spec.executor.config["permission_mode"] == "bypassPermissions"
         assert spec.instructions
     assert lead.executor.config["factory_max_pods"] == "12"
     assert {s.name for s in lead.skills} == {
@@ -271,6 +271,19 @@ def test_policy_set_per_role(lead: AgentSpec, pl: AgentSpec) -> None:
             }
         else:
             assert bounds is None, spec.name
+
+
+def test_bypass_mode_always_comes_with_the_deny_only_guards(
+    lead: AgentSpec, pl: AgentSpec
+) -> None:
+    """Claude agents skip Claude's own prompts, so omnigent's policy hooks must fence them."""
+    for spec in _all_specs(lead, pl):
+        if spec.executor.config.get("harness") != "claude-native":
+            continue
+        assert spec.executor.config.get("permission_mode") == "bypassPermissions", spec.name
+        assert spec.guardrails is not None, spec.name
+        names = {p.name for p in spec.guardrails.policies}
+        assert {"factory_guard", "blast_radius"} <= names, spec.name
 
 
 def test_every_spec_runs_unsandboxed_in_the_caller_process(lead: AgentSpec, pl: AgentSpec) -> None:
