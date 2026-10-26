@@ -1407,6 +1407,95 @@ async def test_auto_create_claude_terminal_inherits_agent_sandbox(
 
 
 @pytest.mark.asyncio
+async def test_auto_create_claude_terminal_keeps_deployment_shell_init(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """
+    The claude-native terminal still inherits ``BASH_ENV`` / ``ENV``.
+
+    Unlike the render-only ``codex --remote`` TUI, the claude terminal IS the
+    agent: its tool shells run in that pane and need the deployment's shell
+    init, so neither name may land in its ``env_unset``.
+
+    :param tmp_path: Pytest-provided temporary directory.
+    :param monkeypatch: Pytest monkeypatch fixture.
+    """
+    monkeypatch.setattr(claude_native_bridge, "_TRUSTED_PARENT", tmp_path)
+    monkeypatch.setattr(claude_native_bridge, "_BRIDGE_ROOT", tmp_path / "root")
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://127.0.0.1:8000")
+    monkeypatch.setenv("BASH_ENV", "/etc/deployment-shell-init.sh")
+    monkeypatch.setenv("ENV", "/etc/deployment-shell-init.sh")
+
+    async def _no_op_forwarder(**kwargs: Any) -> None:
+        del kwargs
+
+    monkeypatch.setattr(
+        "omnigent.harnesses.claude_native.forwarder.supervise_forwarder",
+        _no_op_forwarder,
+    )
+
+    captured: dict[str, Any] = {}
+
+    class _FakeResourceRegistry:
+        """Captures the launched terminal spec."""
+
+        terminal_registry = None
+
+        async def launch_required_terminal(
+            self,
+            *,
+            session_id: str,
+            terminal_name: str,
+            session_key: str,
+            spec: Any,
+            resource_role: str | None = None,
+            parent_os_env: Any = None,
+        ) -> SessionResourceView:
+            """Record the spec and return a resource view."""
+            del terminal_name, session_key, resource_role, parent_os_env
+            captured["spec"] = spec
+            return SessionResourceView(
+                id="terminal_claude_main",
+                type="terminal",
+                session_id=session_id,
+                name="claude:main",
+                metadata={"terminal_name": "claude", "session_key": "main", "running": True},
+            )
+
+    fake_client = httpx.AsyncClient(
+        base_url="http://test-server",
+        transport=httpx.MockTransport(
+            lambda req: httpx.Response(200, json={"labels": {}}),
+        ),
+    )
+    agent_spec = AgentSpec(
+        spec_version=1,
+        name="claude_code",
+        executor=ExecutorSpec(
+            type="omnigent",
+            config={"harness": "claude-native", "model": "claude-default"},
+        ),
+    )
+
+    try:
+        await _auto_create_claude_terminal(
+            "5a7c1e9b3d2f4a6c8e0b1d3f5a7c9e1b",
+            _FakeResourceRegistry(),
+            lambda _sid, _evt: None,
+            server_client=fake_client,
+            agent_spec=agent_spec,
+        )
+    finally:
+        await fake_client.aclose()
+
+    spec = captured["spec"]
+    assert spec.inherit_env is True
+    assert "BASH_ENV" not in spec.env_unset
+    assert "ENV" not in spec.env_unset
+
+
+@pytest.mark.asyncio
 async def test_auto_create_claude_terminal_injects_ucode_gateway_config(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

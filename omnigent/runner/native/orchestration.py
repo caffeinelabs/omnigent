@@ -315,6 +315,11 @@ _COST_POPUP_REPOP_TASKS: set[asyncio.Task[object]] = set()
 # runners, kept referenced so they aren't garbage-collected mid-run.
 _AUTO_CODEX_APP_SERVERS: dict[str, CodexNativeAppServer] = {}
 
+# The ``codex --remote`` TUI only renders (the app-server runs every tool), so
+# tmux's ``$SHELL -c`` must not source deployment shell init: a slow init
+# (e.g. a cold toolchain install) outlasts the forwarder's thread-start wait.
+CODEX_REMOTE_TUI_ENV_UNSET: tuple[str, ...] = ("BASH_ENV", "ENV")
+
 # Background OpenCode ``opencode serve`` instances for host-spawned
 # opencode-native runners, kept referenced so they aren't garbage-collected
 # mid-run (mirrors ``_AUTO_CODEX_APP_SERVERS``).
@@ -4665,6 +4670,7 @@ async def _auto_create_codex_terminal(
                 command=codex_command,
                 args=codex_launch_args,
                 env=codex_terminal_env(app_server),
+                env_unset=list(CODEX_REMOTE_TUI_ENV_UNSET),
                 # Match the local ``omnigent codex`` terminal scrollback.
                 scrollback=100_000,
                 # Enable tmux passthrough so the Codex TUI's escape sequences
