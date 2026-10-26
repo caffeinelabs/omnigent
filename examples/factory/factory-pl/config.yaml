@@ -16,7 +16,12 @@ executor:
   model: opus
   config:
     harness: claude-native
-    permission_mode: auto
+    # Headless: Claude's auto-mode classifier fails closed behind the Bifrost
+    # gateway ("Stage 2 classifier error") and blocks routine PR and factory
+    # tool calls. The guardrails are omnigent's PreToolUse policy hooks below
+    # (factory_guard, blast_radius: DENY-only, never ASK), which apply in
+    # bypass mode too.
+    permission_mode: bypassPermissions
     factory_role: project_lead
 
 spawn: true
