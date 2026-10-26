@@ -91,8 +91,9 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
     """
     Start the factory's background services for one server lifespan.
 
-    The mailer always; the supervisor (and the status-edge notifier it reads)
-    and the auto-discovered ``background`` services only when
+    The mailer always (replaying mail a previous process left undelivered);
+    the supervisor (and the status-edge notifier it reads) and the
+    auto-discovered ``background`` services only when
     ``OMNIGENT_FACTORY_ENABLED=1``.
 
     :param app_state: ``app.state`` of an app passed to
@@ -101,6 +102,7 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
     """
     from omnigent.factory import factory_enabled
     from omnigent.server.factory.context import FACTORY_STATE_ATTR
+    from omnigent.server.factory.mail_events import replay_enabled
     from omnigent.server.factory.mailer import MAILER_STATE_ATTR, get_mailer
 
     if getattr(app_state, FACTORY_STATE_ATTR, None) is None:
@@ -111,6 +113,8 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
         return _noop
 
     mailer = get_mailer(app_state)
+    if replay_enabled():
+        await mailer.replay_undelivered()
     stop_supervision: Callable[[], Awaitable[None]] | None = None
     stop_background: Callable[[], Awaitable[None]] | None = None
     if factory_enabled():

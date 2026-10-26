@@ -3,9 +3,10 @@
 ``POST /v1/factory/messages`` answers 202 as soon as a message is accepted;
 the :class:`Mailer` delivers it in a background task (which may wait minutes
 for a managed sandbox to provision or a suspended one to wake), retries
-transient failures, and bounces a final failure back to the sender. State is
-in memory on one replica: a server restart drops queued mail, which agents are
-told to re-ask about at their next heartbeat.
+transient failures, and bounces a final failure back to the sender. Queues are
+in memory on one replica; every message is also logged to the factory event
+log (see :mod:`~omnigent.server.factory.mail_events`), so mail a server
+restart dropped is replayed on the next start.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from omnigent.factory import PENDING_REPLY_KINDS
+from omnigent.server.factory import mail_events
 from omnigent.server.factory.delivery import DeliveryOutcome, deliver_message
 from omnigent.server.factory.envelope import display_title
 
@@ -74,6 +76,9 @@ class MailItem:
     :param text: The full enveloped message.
     :param kind: Message kind, e.g. ``"request"``.
     :param restart: Stop the target before delivering.
+    :param factory_id: The factory it belongs to (resolved from the target when unset).
+    :param project: Project slug for the event log.
+    :param replayed: Re-submitted from the event log after a restart.
     """
 
     mail_id: str
@@ -83,6 +88,9 @@ class MailItem:
     text: str
     kind: str
     restart: bool = False
+    factory_id: str | None = None
+    project: str | None = None
+    replayed: bool = False
 
 
 def new_mail_id() -> str:
@@ -136,6 +144,7 @@ class Mailer:
         self.sender_rate_per_hour = sender_rate_per_hour or env_sender
         self.pair_rate_per_hour = pair_rate_per_hour or env_pair
         self._tasks: set[asyncio.Task[None]] = set()
+        self._queued: dict[str, float] = {}
         self._sender_posts: dict[str, deque[float]] = {}
         self._pair_posts: dict[tuple[str, str], deque[float]] = {}
         self._storm_alerted_at: dict[str, float] = {}
@@ -169,12 +178,15 @@ class Mailer:
         ]:
             del self._storm_alerted_at[factory_id]
 
-    def try_acquire(self, sender_id: str, target_id: str) -> str | None:
+    def try_acquire(
+        self, sender_id: str, target_id: str, *, factory_id: str | None = None
+    ) -> str | None:
         """
         Count one post against the sender and pair limits.
 
         :param sender_id: Posting session id.
         :param target_id: Recipient session id.
+        :param factory_id: Logs a refusal as ``rate_limited`` in this factory.
         :returns: ``None`` when allowed (and counted), else a description of
             the exceeded limit, e.g. ``"60 posts/h per sender"``.
         """
@@ -184,10 +196,19 @@ class Mailer:
         pair_window = self._prune(
             self._pair_posts.setdefault((sender_id, target_id), deque()), now
         )
+        limit = None
         if len(sender_window) >= self.sender_rate_per_hour:
-            return f"{self.sender_rate_per_hour} posts/h per sender"
-        if len(pair_window) >= self.pair_rate_per_hour:
-            return f"{self.pair_rate_per_hour} posts/h to one recipient"
+            limit = f"{self.sender_rate_per_hour} posts/h per sender"
+        elif len(pair_window) >= self.pair_rate_per_hour:
+            limit = f"{self.pair_rate_per_hour} posts/h to one recipient"
+        if limit is not None:
+            if factory_id and not self._closed:
+                self._spawn(
+                    mail_events.record_rate_limited(
+                        self._app_state, factory_id, sender_id, target_id, limit, self._ms()
+                    )
+                )
+            return limit
         sender_window.append(now)
         pair_window.append(now)
         return None
@@ -244,6 +265,24 @@ class Mailer:
 
     # ── delivery ────────────────────────────────────────────────
 
+    def _spawn(self, coro: Any, name: str = "factory-mail-event") -> asyncio.Task[None]:
+        task = asyncio.create_task(coro, name=name)
+        self._tasks.add(task)
+        task.add_done_callback(self._tasks.discard)
+        return task
+
+    def _log_after(
+        self, previous: asyncio.Task[None] | None, record: Callable[[], Awaitable[None]]
+    ) -> None:
+        """Write an event once *previous* (the queued event) is written; never blocks delivery."""
+
+        async def _write() -> None:
+            if previous is not None:
+                await asyncio.gather(previous, return_exceptions=True)
+            await record()
+
+        self._spawn(_write())
+
     def submit(self, item: MailItem) -> None:
         """
         Queue *item* for background delivery.
@@ -253,9 +292,29 @@ class Mailer:
         """
         if self._closed:
             raise RuntimeError("factory mailer is closed")
-        task = asyncio.create_task(self._run(item), name=f"factory-mail-{item.mail_id}")
-        self._tasks.add(task)
-        task.add_done_callback(self._tasks.discard)
+        self._queued.setdefault(item.mail_id, self._clock())
+        self._spawn(self._run(item), name=f"factory-mail-{item.mail_id}")
+
+    def _ms(self) -> int:
+        return int(self._clock() * 1000)
+
+    def is_queued(self, mail_id: str) -> bool:
+        """:returns: Whether *mail_id* is waiting for or in delivery."""
+        return mail_id in self._queued
+
+    def queue_stats(self) -> tuple[int, float | None]:
+        """:returns: ``(messages not yet delivered or bounced, age of the oldest in seconds)``."""
+        if not self._queued:
+            return 0, None
+        return len(self._queued), max(0.0, self._clock() - min(self._queued.values()))
+
+    async def replay_undelivered(self) -> int:
+        """
+        Re-submit mail a previous server process queued but never finished.
+
+        :returns: How many messages were re-submitted.
+        """
+        return await mail_events.replay_undelivered(self._app_state, self)
 
     async def _attempt(self, session_id: str, text: str, *, restart: bool) -> DeliveryOutcome:
         deliver = self._deliver or deliver_message
@@ -284,11 +343,27 @@ class Mailer:
                 self._target_locks.pop(target_id, None)
 
     async def _run(self, item: MailItem) -> None:
-        async with self.target_slot(item.target_id):
-            reason = await self._deliver_with_retries(item)
+        queued = (
+            None
+            if item.replayed
+            else self._spawn(mail_events.record_queued(self._app_state, item, self._ms()))
+        )
+        try:
+            async with self.target_slot(item.target_id):
+                reason = await self._deliver_with_retries(item)
+        finally:
+            self._queued.pop(item.mail_id, None)
+        done_at = self._ms()
+        if reason is None:
+            self._log_after(
+                queued, lambda: mail_events.record_delivered(self._app_state, item, done_at)
+            )
+            return
+        self._log_after(
+            queued, lambda: mail_events.record_bounced(self._app_state, item, reason, done_at)
+        )
         # Bounce outside the target's lock: waking the sender can take minutes.
-        if reason is not None:
-            await self._bounce(item, reason)
+        await self._bounce(item, reason)
 
     async def _deliver_with_retries(self, item: MailItem) -> str | None:
         """:returns: ``None`` once delivered, else the final failure reason."""
@@ -336,23 +411,37 @@ class Mailer:
                 bounce.reason,
             )
 
-    def notify(self, target_id: str, text: str) -> None:
+    def notify(
+        self,
+        target_id: str,
+        text: str,
+        *,
+        factory_id: str | None = None,
+        project: str | None = None,
+    ) -> str:
         """
         Queue a server notice (alert, storm warning) with no sender to bounce to.
 
         :param target_id: Recipient session id.
         :param text: The full notice text.
+        :param factory_id: The factory it concerns (resolved from the target when unset).
+        :param project: Project slug for the event log.
+        :returns: The notice's mail id.
         """
+        mail_id = new_mail_id()
         self.submit(
             MailItem(
-                mail_id=new_mail_id(),
+                mail_id=mail_id,
                 sender_id=None,
                 target_id=target_id,
                 target_title=None,
                 text=text,
                 kind="alert",
+                factory_id=factory_id,
+                project=project,
             )
         )
+        return mail_id
 
     async def drain(self) -> None:
         """Wait for every queued delivery to finish (tests and shutdown)."""

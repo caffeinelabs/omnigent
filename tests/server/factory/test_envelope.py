@@ -58,3 +58,20 @@ def test_bounce_text_uses_the_safe_title() -> None:
         "session_closed]"
     )
     assert 'message to "conv_pl" (conv_pl)' in bounce_text(None, "conv_pl", "runner_unavailable")
+
+
+def test_envelope_header_carries_the_mail_id_after_the_kind() -> None:
+    text = format_envelope(
+        sender_id="conv_pl",
+        sender_title="PL · api-version",
+        sender_role="project_lead",
+        sender_project="api-version",
+        kind="request",
+        body="please review",
+        mail_id="mail_0123456789abcdef",
+    )
+
+    assert text.splitlines()[0] == (
+        '[Factory message · from "PL · api-version" (conv_pl, project_lead, project=api-version)'
+        ' · kind=request · id=mail_0123456789abcdef · reply: sys_session_post(to="conv_pl")]'
+    )

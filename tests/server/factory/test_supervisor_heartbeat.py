@@ -346,7 +346,7 @@ def test_config_reads_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OMNIGENT_FACTORY_BLOCKED_ESCALATE_S", "-1")
 
     assert SupervisorConfig.from_env() == SupervisorConfig(
-        tick_s=15, keepalive_s=120, stuck_s=5400, blocked_escalate_s=1800
+        tick_s=15, keepalive_s=120, stuck_s=5400, blocked_escalate_s=1800, quiet_beats=True
     )
 
 
@@ -375,3 +375,188 @@ async def test_factory_services_run_the_supervisor_only_when_enabled(
     assert get_supervisor(world.app_state) is None
     assert getattr(world.app_state, NOTIFIER_STATE_ATTR) is None
     assert notify._relay_notifier is None
+
+
+# ── restart-safe counters and the event trail ──────────────────
+
+
+async def test_numbering_continues_across_a_new_supervisor_via_the_label(
+    supervision: Supervision,
+) -> None:
+    w, clock = supervision.world, supervision.clock
+    pl = w.id("pl")
+    first = clock.advance(PL_HEARTBEAT_S)
+    await supervision.tick()
+    assert supervision.deliver.texts_to(pl) == [_beat(1, first)]
+    assert w.get("pl").labels[F.LABEL_BEAT_N] == "1"
+
+    # A server roll: a fresh supervisor has no memory of beat #1.
+    restarted = FactorySupervisor(
+        w.app_state, config=SupervisorConfig(), deliver=supervision.deliver, clock=clock
+    )
+    second = clock.advance(PL_HEARTBEAT_S)
+    await restarted.tick()
+    await restarted.drain()
+
+    assert supervision.deliver.texts_to(pl) == [_beat(1, first), _beat(2, second)]
+    labels = w.get("pl").labels
+    assert labels[F.LABEL_BEAT_N] == "2"
+    assert labels[F.LABEL_LAST_BEAT] == iso_utc(second)
+
+
+async def test_a_garbled_beat_label_restarts_numbering(supervision: Supervision) -> None:
+    w, clock = supervision.world, supervision.clock
+    w.store.set_labels(w.id("pl"), {F.LABEL_BEAT_N: "seven"})
+    at = clock.advance(PL_HEARTBEAT_S)
+
+    await supervision.tick()
+
+    assert supervision.deliver.texts_to(w.id("pl")) == [_beat(1, at)]
+
+
+async def test_no_dead_alert_repeat_after_a_restart(supervision: Supervision) -> None:
+    w, clock = supervision.world, supervision.clock
+    pl, lead_b = w.id("pl"), w.id("lead_b")
+    supervision.deliver.outcomes[pl] = [DeliveryOutcome(False, "runner_unavailable")] * 20
+    for lead in (w.id("lead_a"), lead_b):
+        w.store.set_labels(lead, {F.LABEL_HEARTBEAT_S: "0"})
+
+    clock.advance(PL_HEARTBEAT_S)
+    for _ in range(3):
+        await supervision.tick()
+        clock.advance(300)
+    assert len(supervision.deliver.texts_to(lead_b)) == 1
+    alerted_at = int(w.get("pl").labels[F.LABEL_DEAD_ALERTED_AT])
+
+    restarted = FactorySupervisor(
+        w.app_state, config=SupervisorConfig(), deliver=supervision.deliver, clock=clock
+    )
+    for _ in range(3):
+        await restarted.tick()
+        await restarted.drain()
+        clock.advance(300)
+    await supervision.mailer.drain()
+    # Three more failures inside the hour: the stamp in the label still holds.
+    assert len(supervision.deliver.texts_to(lead_b)) == 1
+
+    clock.now = alerted_at + 3600
+    await restarted.tick()
+    await restarted.drain()
+    await supervision.mailer.drain()
+    assert len(supervision.deliver.texts_to(lead_b)) == 2
+
+
+async def test_a_recovered_member_drops_its_dead_stamp(supervision: Supervision) -> None:
+    w, clock = supervision.world, supervision.clock
+    pl = w.id("pl")
+    w.store.set_labels(
+        pl, {F.LABEL_HEALTH: F.HEALTH_DEAD, F.LABEL_DEAD_ALERTED_AT: str(int(clock.now))}
+    )
+
+    clock.advance(PL_HEARTBEAT_S)
+    await supervision.tick()
+
+    labels = w.get("pl").labels
+    assert labels[F.LABEL_HEALTH] == F.HEALTH_OK
+    assert F.LABEL_DEAD_ALERTED_AT not in labels
+
+
+async def test_beats_and_failures_are_logged_as_events(supervision: Supervision) -> None:
+    w, clock = supervision.world, supervision.clock
+    pl = w.id("pl")
+    store = w.app_state.factory.factory_store
+    at = clock.advance(PL_HEARTBEAT_S)
+    await supervision.tick()
+
+    delivered = [e for e in store.find_events(w.id("lead_a"), "heartbeat.*", 0) if e.to_id == pl]
+    assert [(e.kind, e.data, e.project_slug) for e in delivered] == [
+        ("heartbeat.delivered", {"n": 1}, "api-version")
+    ]
+    assert delivered[0].ts == int(at * 1000)
+
+    supervision.deliver.outcomes[pl] = [DeliveryOutcome(False, "runner_unavailable")]
+    clock.advance(PL_HEARTBEAT_S)
+    await supervision.tick()
+    [failed] = store.find_events(w.id("lead_a"), "heartbeat.failed", 0)
+    assert failed.to_id == pl and failed.severity == "warning"
+    assert failed.data == {"reason": "runner_unavailable", "failures": 1}
+
+
+async def test_a_dead_member_raises_a_needs_human_event(supervision: Supervision) -> None:
+    w, clock = supervision.world, supervision.clock
+    pl = w.id("pl")
+    supervision.deliver.outcomes[pl] = [DeliveryOutcome(False, "runner_unavailable")] * 3
+    clock.advance(PL_HEARTBEAT_S)
+    for _ in range(3):
+        await supervision.tick()
+        clock.advance(300)
+
+    store = w.app_state.factory.factory_store
+    [event] = store.find_events(w.id("lead_a"), "needs_human", 0)
+    assert event.from_id == pl and event.severity == "critical"
+    assert event.data == {"reason": "relaunch_failed", "detail": "runner_unavailable"}
+
+
+async def test_the_tick_reports_supervisor_health(supervision: Supervision) -> None:
+    from omnigent.server.factory import status
+
+    status.reset()
+    await supervision.tick()
+
+    reported = status.get_status("supervisor")
+    assert reported is not None
+    assert reported["ok"] is True
+    assert reported["last_tick_at"] == int(supervision.clock.now)
+
+
+# ── PL ↔ sub-agent traffic read off the child list ─────────────
+
+
+async def test_new_sub_agents_and_their_edges_become_events(
+    supervision: Supervision, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = supervision.world
+    store = w.app_state.factory.factory_store
+    lead_a, pl, ic = w.id("lead_a"), w.id("pl"), w.id("ic")
+    supervision.clock.now = float(w.get("ic").created_at)
+    monkeypatch.setitem(_session_status_cache, ic, "running")
+
+    await supervision.tick()
+    dispatches = store.find_events(lead_a, "dispatch", 0)
+    assert {(e.from_id, e.to_id) for e in dispatches} == {
+        (pl, ic),
+        (pl, w.id("reviewer")),
+        (pl, w.id("helper")),
+    }
+    assert {e.summary for e in dispatches} >= {"ic:task-1"}
+    assert all(e.project_slug == "api-version" for e in dispatches)
+
+    # A second tick (and a fresh supervisor after a roll) logs no repeat.
+    await supervision.tick()
+    restarted = FactorySupervisor(
+        w.app_state,
+        config=SupervisorConfig(),
+        deliver=supervision.deliver,
+        clock=supervision.clock,
+    )
+    await restarted.tick()
+    assert len(store.find_events(lead_a, "dispatch", 0)) == 3
+
+    monkeypatch.setitem(_session_status_cache, ic, "idle")
+    await supervision.tick()
+    [done] = store.find_events(lead_a, "task.done", 0)
+    assert (done.from_id, done.to_id, done.summary) == (pl, ic, "ic:task-1 finished")
+
+    monkeypatch.setitem(_session_status_cache, ic, "failed")
+    await supervision.tick()
+    [failed] = store.find_events(lead_a, "task.failed", 0)
+    assert failed.to_id == ic and failed.severity == "warning"
+
+
+async def test_old_sub_agents_are_not_logged_as_new_dispatches(supervision: Supervision) -> None:
+    w = supervision.world
+    supervision.clock.now = w.get("ic").created_at + 3600.0
+
+    await supervision.tick()
+
+    assert w.app_state.factory.factory_store.find_events(w.id("lead_a"), "dispatch", 0) == []

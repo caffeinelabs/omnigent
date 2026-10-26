@@ -679,3 +679,27 @@ async def test_status_route_alerts_through_the_hook(
     ]
     await notifier.close()
     await mailer.close()
+
+
+# ── the event trail ─────────────────────────────────────────────
+
+
+async def test_alerts_and_reply_notices_are_logged_as_events(supervision: Supervision) -> None:
+    w, clock = supervision.world, supervision.clock
+    lead_a, lead_b, pl = w.id("lead_a"), w.id("lead_b"), w.id("pl")
+    store = w.app_state.factory.factory_store
+    await _deliver_request(supervision, lead_a, pl)
+    clock.advance(120)
+    await _edge(supervision, "pl", "idle", output="Opened PR #12.")
+    await _edge(supervision, "pl", "failed", output="API Error: 529 overloaded")
+
+    [reply] = store.find_events(lead_a, "notice.reply", 0)
+    assert (reply.from_id, reply.to_id) == (pl, lead_a)
+    assert reply.summary == '"PL · api-version" finished the requested turn: Opened PR #12.'
+    assert reply.ts == int(clock.now * 1000)
+    [failed] = store.find_events(lead_a, "alert.failed", 0)
+    assert (failed.from_id, failed.to_id, failed.severity) == (pl, lead_b, "warning")
+    assert failed.data == {"detail": "API Error: 529 overloaded"}
+    # The alert and notice mail is logged too, under the right factory.
+    delivered = {e.to_id for e in store.find_events(lead_a, "message.delivered", 0)}
+    assert {lead_a, lead_b, pl} <= delivered

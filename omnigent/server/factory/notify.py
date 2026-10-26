@@ -21,8 +21,9 @@ For factory members (labelled themselves, or through their root) this:
   escalate it to the factory root (see
   :class:`~omnigent.server.factory.supervisor.FactorySupervisor`).
 
-Everything here is best-effort: the hooks never raise into their caller and
-only queue mail, so a status edge never waits on a delivery.
+Every alert and notice is also logged as an event (``alert.failed``,
+``notice.reply``). Everything here is best-effort: the hooks never raise into
+their caller and only queue mail, so a status edge never waits on a delivery.
 """
 
 from __future__ import annotations
@@ -36,12 +37,14 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
 from omnigent.factory import LABEL_ID, LABEL_SUPERVISOR, factory_enabled
+from omnigent.server.factory import events, server_decisions
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.envelope import display_title
 from omnigent.server.factory.membership import is_top_level, resolve_factory_id
 
 if TYPE_CHECKING:
     from omnigent.entities import Conversation
+    from omnigent.entities.factory import FactoryEvent
 
 _logger = logging.getLogger(__name__)
 
@@ -51,6 +54,8 @@ NOTIFIER_STATE_ATTR = "factory_notifier"
 FAILED_ALERT_DEBOUNCE_S = 600.0
 FAILED_DETAIL_MAX_CHARS = 300
 NOTICE_OUTPUT_MAX_CHARS = 1200
+BLOCKED_DEDUPE_LOOKBACK_S = 86400.0
+"""How far back an earlier escalation of the same prompt still counts (it survives a roll)."""
 
 _TERMINAL_STATUSES = frozenset({"idle", "failed"})
 _BUSY_STATUSES = frozenset({"running", "waiting"})
@@ -138,12 +143,61 @@ class BlockedEpisode:
     :param blocked_on: What it waits for, e.g. ``"permission: Bash(rm -rf build)"``.
     :param since: Epoch seconds of the first blocked edge.
     :param escalated: Whether the supervisor already escalated it.
+    :param decision_id: The decision opened for the human, expired when the episode clears.
     """
 
     session_id: str
     blocked_on: str
     since: float
     escalated: bool = False
+    decision_id: str | None = None
+
+
+def session_subject(session_id: str) -> str:
+    """:returns: The event subject of a session, e.g. ``"session:<id>"``."""
+    return f"session:{session_id}"
+
+
+async def prior_escalation(
+    app_state: Any, factory_id: str, episode: BlockedEpisode
+) -> FactoryEvent | None:
+    """
+    Find an earlier ``needs_human`` escalation of the same blocked episode.
+
+    The in-memory episode is lost on a server roll, so the event log decides:
+    the newest escalation of this session for the same prompt counts unless
+    its decision expired (the episode it was for cleared). Never raises.
+
+    :param app_state: ``app.state`` carrying the factory deps.
+    :param factory_id: The session's factory.
+    :param episode: The episode about to be escalated.
+    :returns: That event, or ``None`` when this is a new episode.
+    """
+    deps = getattr(app_state, FACTORY_STATE_ATTR, None)
+    if not isinstance(deps, FactoryDeps):
+        return None
+    store = deps.factory_store
+    since_ms = int((episode.since - BLOCKED_DEDUPE_LOOKBACK_S) * 1000)
+    try:
+        found = await asyncio.to_thread(
+            store.find_events,
+            factory_id,
+            "needs_human",
+            since_ms,
+            session_subject(episode.session_id),
+        )
+        for event in reversed(found):
+            data = event.data or {}
+            if data.get("reason") != "blocked" or data.get("blocked_on") != episode.blocked_on:
+                continue
+            decision_id = data.get("decision_id")
+            decision = (
+                await asyncio.to_thread(store.get_decision, decision_id) if decision_id else None
+            )
+            return None if decision is not None and decision.status == "expired" else event
+    except Exception:  # noqa: BLE001 - when unsure, escalate (a repeat beats silence)
+        _logger.warning("factory: could not check earlier escalations", exc_info=True)
+    return None
 
 
 class FactoryNotifier:
@@ -163,7 +217,7 @@ class FactoryNotifier:
         self._clock = clock
         self._failed_alerted_at: dict[str, float] = {}
         self._blocked: dict[str, BlockedEpisode] = {}
-        self._tasks: set[asyncio.Task[None]] = set()
+        self._tasks: set[asyncio.Task[object]] = set()
 
     def wants(self, conv: Conversation, status: str, data: dict[str, Any]) -> bool:
         """:returns: Whether this edge may need work (cheap, no I/O)."""
@@ -175,7 +229,7 @@ class FactoryNotifier:
         # may still inherit membership from its root.
         return not is_top_level(conv) or bool(conv.labels.get(LABEL_ID))
 
-    def spawn(self, coro: Coroutine[Any, Any, None]) -> None:
+    def spawn(self, coro: Coroutine[Any, Any, object]) -> None:
         """Run *coro* as a tracked background task."""
         task = asyncio.get_running_loop().create_task(coro, name="factory-status-edge")
         self._tasks.add(task)
@@ -184,7 +238,7 @@ class FactoryNotifier:
     def _track_blocked(self, session_id: str, blocked_on: str | None) -> BlockedEpisode | None:
         """:returns: The session's open episode after this edge, if any."""
         if blocked_on is None:
-            self._blocked.pop(session_id, None)
+            self._end_episode(self._blocked.pop(session_id, None))
             return None
         episode = self._blocked.get(session_id)
         if episode is None:
@@ -214,6 +268,16 @@ class FactoryNotifier:
         """Forget *episode* (gone or not a member) unless a newer edge replaced it."""
         if episode is not None and self._blocked.get(episode.session_id) is episode:
             del self._blocked[episode.session_id]
+            self._end_episode(episode)
+
+    def _end_episode(self, episode: BlockedEpisode | None) -> None:
+        """Expire the decision an ended episode opened (the approval no longer waits)."""
+        if episode is None or episode.decision_id is None:
+            return
+        try:
+            self.spawn(server_decisions.expire_decision(self._app_state, episode.decision_id))
+        except RuntimeError:
+            _logger.debug("factory: no loop to expire decision %s", episode.decision_id)
 
     def prune_escalated(self, watched: set[str]) -> None:
         """
@@ -225,7 +289,7 @@ class FactoryNotifier:
         :param watched: Ids of the open members and sub-agents just loaded.
         """
         for sid in [s for s, ep in self._blocked.items() if ep.escalated and s not in watched]:
-            del self._blocked[sid]
+            self._end_episode(self._blocked.pop(sid))
 
     async def handle(self, conv: Conversation, status: str, data: dict[str, Any]) -> None:
         """
@@ -254,7 +318,7 @@ class FactoryNotifier:
         if status == "failed":
             self._alert_failed(conv, factory_id, data)
         elif status == "idle":
-            self._notify_reply(conv, data)
+            self._notify_reply(conv, factory_id, data)
 
     def relayed_edge(
         self,
@@ -325,9 +389,26 @@ class FactoryNotifier:
         self._prune_debounce(now)
         from omnigent.server.factory.mailer import get_mailer
 
-        get_mailer(self._app_state).notify(target, failed_alert_text(conv, _failure_detail(data)))
+        detail = _failure_detail(data)
+        get_mailer(self._app_state).notify(
+            target, failed_alert_text(conv, detail), factory_id=factory_id
+        )
+        self.spawn(
+            events.emit(
+                self._app_state,
+                factory_id,
+                "alert.failed",
+                severity="warning",
+                from_id=conv.id,
+                to_id=target,
+                subject=session_subject(conv.id),
+                summary=f'"{display_title(conv.title, conv.id)}" failed: {detail}',
+                data={"detail": detail},
+                ts=int(now * 1000),
+            )
+        )
 
-    def _notify_reply(self, conv: Conversation, data: dict[str, Any]) -> None:
+    def _notify_reply(self, conv: Conversation, factory_id: str, data: dict[str, Any]) -> None:
         from omnigent.server.factory.mailer import get_mailer
 
         mailer = get_mailer(self._app_state)
@@ -340,7 +421,20 @@ class FactoryNotifier:
             return
         output = data.get("output")
         last_output = excerpt(output, NOTICE_OUTPUT_MAX_CHARS) if isinstance(output, str) else ""
-        mailer.notify(sender_id, reply_notice_text(conv, last_output))
+        mailer.notify(sender_id, reply_notice_text(conv, last_output), factory_id=factory_id)
+        self.spawn(
+            events.emit(
+                self._app_state,
+                factory_id,
+                "notice.reply",
+                from_id=conv.id,
+                to_id=sender_id,
+                subject=session_subject(conv.id),
+                summary=f'"{display_title(conv.title, conv.id)}" finished the requested turn'
+                + (f": {excerpt(last_output, 200)}" if last_output else ""),
+                ts=int(self._clock() * 1000),
+            )
+        )
 
     def _prune_debounce(self, now: float) -> None:
         stale = [
@@ -502,6 +596,7 @@ __all__ = [
     "alert_target_id",
     "get_notifier",
     "on_status_edge",
+    "prior_escalation",
     "register_relay_notifier",
     "schedule_factory_relayed_status",
     "schedule_factory_status_edge",
