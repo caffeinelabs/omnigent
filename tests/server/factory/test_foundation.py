@@ -4,19 +4,23 @@ nudges, the status registry and the store wiring."""
 from __future__ import annotations
 
 import asyncio
+import importlib
+import pkgutil
 import sys
 import textwrap
 from collections.abc import Iterator
 from pathlib import Path
-from types import SimpleNamespace
+from types import ModuleType, SimpleNamespace
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from omnigent.entities.factory import FactoryProject
+from omnigent.server.factory import api as api_pkg
+from omnigent.server.factory import background as background_pkg
 from omnigent.server.factory import nudge, status
-from omnigent.server.factory.api import include_routers
+from omnigent.server.factory.api import discover_routers, include_routers
 from omnigent.server.factory.background import start_all
 from omnigent.server.factory.charter import (
     normalize_charter,
@@ -218,8 +222,34 @@ async def test_background_discovery_starts_and_stops_services(dummy_package: str
     assert started == []
 
 
-def test_shipped_packages_have_no_modules_yet() -> None:
-    assert include_routers(FastAPI()) == []
+async def test_background_start_that_hangs_times_out_and_others_run(
+    dummy_package: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / dummy_package / "aaa_slow.py").write_text(
+        "import asyncio\n\nasync def start(app_state):\n    await asyncio.sleep(3600)\n"
+    )
+    monkeypatch.setattr("omnigent.server.factory.background.START_TIMEOUT_S", 0.05)
+    state = SimpleNamespace()
+    stop = await asyncio.wait_for(start_all(state, dummy_package), 5)
+    started = sys.modules[f"{dummy_package}.hello"].STARTED
+    assert started == [state]
+    await stop()
+
+
+def test_shipped_routers_stay_under_the_factory_prefix() -> None:
+    # Add-tolerant: later packages drop modules in here without editing this test.
+    discovered = discover_routers()
+    for name, router in discovered:
+        paths = [getattr(route, "path", "") for route in router.routes]
+        assert all(p.startswith("/v1/factory/") for p in paths), (name, paths)
+    assert include_routers(FastAPI()) == [name for name, _ in discovered]
+
+
+@pytest.mark.parametrize("package", [api_pkg, background_pkg])
+def test_shipped_discovery_modules_import(package: ModuleType) -> None:
+    # Discovery skips a module that fails to import; fail loudly here instead.
+    for info in pkgutil.iter_modules(package.__path__):
+        importlib.import_module(f"{package.__name__}.{info.name}")
 
 
 async def test_factory_services_start_background_when_enabled(

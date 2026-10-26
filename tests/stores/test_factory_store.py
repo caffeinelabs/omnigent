@@ -480,6 +480,51 @@ def test_demo_create_get_list(store: FactoryStore) -> None:
         )
 
 
+# ── Callers never alias stored rows ───────────────────────────
+
+
+def test_rows_do_not_alias_caller_values(store: FactoryStore) -> None:
+    charter = {"goal": "g", "dod": ["one"]}
+    project = store.upsert_project(FID, "api-version", charter=charter)
+    charter["dod"].append("leaked")
+    project.charter["goal"] = "mutated"  # type: ignore[index]
+    assert store.get_project(FID, "api-version").charter == {"goal": "g", "dod": ["one"]}  # type: ignore[union-attr]
+
+    gates = {"ci": {"state": "pending"}}
+    pr, _ = store.upsert_pr(FID, REPO, 9630, gates=gates)
+    gates["ci"]["state"] = "leaked"
+    pr.gates["ci"]["state"] = "mutated"
+    store.list_prs(FID)[0].gates["extra"] = {}
+    assert store.get_pr(pr.id).gates == {"ci": {"state": "pending"}}  # type: ignore[union-attr]
+
+    options = [{"id": "a", "label": "A"}]
+    decision, _ = store.create_decision(FID, dedupe_key="alias", question="?", options=options)
+    options[0]["label"] = "leaked"
+    decision.options.append({"id": "b"})
+    assert store.get_decision(decision.id).options == [{"id": "a", "label": "A"}]  # type: ignore[union-attr]
+
+    data = {"n": [1]}
+    event = store.append_event(EventDraft(factory_id=FID, kind="pr.ready", summary="s", data=data))
+    data["n"].append(2)
+    event.data["n"].append(3)  # type: ignore[index]
+    assert store.list_events(FID)[0].data == {"n": [1]}
+
+    files = [{"file_id": "f1", "name": "a.png", "meta": {"w": 1}}]
+    demo = store.create_demo(
+        factory_id=FID,
+        project_slug="api-version",
+        repo=REPO,
+        pr_number=9630,
+        head_sha="a" * 40,
+        session_id=PL,
+        created_by_session=PL,
+        files=files,
+    )
+    files[0]["meta"]["w"] = 2
+    demo.files[0]["meta"]["w"] = 3
+    assert store.get_demo(demo.id).files == [{"file_id": "f1", "name": "a.png", "meta": {"w": 1}}]  # type: ignore[union-attr]
+
+
 # ── Workspace isolation ────────────────────────────────────────
 
 
@@ -536,3 +581,12 @@ def test_sql_unique_constraints(db_uri: str) -> None:
     with pytest.raises(IntegrityError), engine.begin() as conn:
         conn.execute(prs.insert().values(**r_row))
     assert project.id and pr.id
+
+
+def test_decision_lock_key_mixes_in_the_workspace() -> None:
+    from omnigent.stores.factory_store.sqlalchemy_store import _decision_lock_key
+
+    keys = {_decision_lock_key(ws, FID) for ws in (0, 1, 7, 2**40)}
+    assert len(keys) == 4
+    assert all(-(2**63) <= key < 2**63 for key in keys)
+    assert _decision_lock_key(0, FID) != _decision_lock_key(0, OTHER_FID)

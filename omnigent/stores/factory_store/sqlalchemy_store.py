@@ -84,9 +84,10 @@ _RETRY_PAUSE_S = 0.02
 _DECISION_LOCK_NS = 0x66616374
 
 
-def _decision_lock_key(factory_id: str) -> int:
-    """A signed 64-bit advisory-lock key for one factory's decision numbering."""
+def _decision_lock_key(workspace_id: int, factory_id: str) -> int:
+    """A signed 64-bit advisory-lock key for one workspace's factory decision numbering."""
     value = int.from_bytes(bytes.fromhex(factory_id)[:8], "big") ^ _DECISION_LOCK_NS
+    value = (value ^ (workspace_id * 0x9E3779B97F4A7C15)) & ((1 << 64) - 1)
     return value - (1 << 64) if value >= (1 << 63) else value
 
 
@@ -535,7 +536,8 @@ class SqlAlchemyFactoryStore(FactoryStore):
             if self._engine.dialect.name == "postgresql":
                 # Serialize numbering per factory; SQLite's BEGIN IMMEDIATE already does.
                 session.execute(
-                    text("SELECT pg_advisory_xact_lock(:key)"), {"key": _decision_lock_key(fid)}
+                    text("SELECT pg_advisory_xact_lock(:key)"),
+                    {"key": _decision_lock_key(ws, fid)},
                 )
             existing = (
                 session.execute(
@@ -735,7 +737,7 @@ class SqlAlchemyFactoryStore(FactoryStore):
             session.flush()
             return _event(row)
 
-        return run_write_transaction(self._session, "append_event", write)
+        return run_write_transaction(self._session_immediate, "append_event", write)
 
     def list_events(
         self,
@@ -812,7 +814,7 @@ class SqlAlchemyFactoryStore(FactoryStore):
             result = session.execute(stmt.execution_options(synchronize_session=False))
             return int(result.rowcount or 0)  # type: ignore[attr-defined]
 
-        return run_write_transaction(self._session, "prune_factory_events", write)
+        return run_write_transaction(self._session_immediate, "prune_factory_events", write)
 
     # ── Demos ───────────────────────────────────────────────────
 
@@ -860,7 +862,7 @@ class SqlAlchemyFactoryStore(FactoryStore):
             session.flush()
             return _demo(row)
 
-        return run_write_transaction(self._session, "create_demo", write)
+        return run_write_transaction(self._session_immediate, "create_demo", write)
 
     def get_demo(self, demo_id: str) -> FactoryDemo | None:
         with self._session("get_demo") as session:

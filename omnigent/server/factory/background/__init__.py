@@ -3,11 +3,13 @@
 Each module in this package that defines
 ``async def start(app_state) -> Callable[[], Awaitable[None]]`` is started by
 :func:`start_all` when the factory is enabled; the returned callable stops it.
-A service that fails to import or start is logged and the others still run.
+A service that fails to import or start (or takes longer than
+:data:`START_TIMEOUT_S` to start) is logged and the others still run.
 """
 
 from __future__ import annotations
 
+import asyncio
 import importlib
 import inspect
 import logging
@@ -18,6 +20,9 @@ from typing import Any
 _logger = logging.getLogger(__name__)
 
 StopFn = Callable[[], Awaitable[None]]
+
+START_TIMEOUT_S = 10.0
+"""How long one service's ``start`` may take; it runs inside the server lifespan."""
 
 
 def discover_services(
@@ -57,8 +62,14 @@ async def start_all(app_state: Any, package: str = __name__) -> StopFn:
     stops: list[tuple[str, StopFn]] = []
     for name, start in discover_services(package):
         try:
-            stops.append((name, await start(app_state)))
+            stops.append((name, await asyncio.wait_for(start(app_state), START_TIMEOUT_S)))
             _logger.info("factory: started background service %s", name)
+        except TimeoutError:
+            _logger.error(
+                "factory: background service %s failed to start within %ss",
+                name,
+                START_TIMEOUT_S,
+            )
         except Exception:
             _logger.exception("factory: background service %s failed to start", name)
 
@@ -72,4 +83,4 @@ async def start_all(app_state: Any, package: str = __name__) -> StopFn:
     return stop_all
 
 
-__all__ = ["StopFn", "discover_services", "start_all"]
+__all__ = ["START_TIMEOUT_S", "StopFn", "discover_services", "start_all"]

@@ -187,3 +187,31 @@ def test_announce_outside_a_loop_publishes_at_once(
 ) -> None:
     live.announce_factory_changed(_state(), FID, ["snapshot"])
     assert [frame["factory_id"] for _, frame in published] == [FID]
+
+
+async def test_frames_carry_the_bare_factory_id(
+    published: list[tuple[str, dict[str, Any]]],
+) -> None:
+    state = _state()
+    live.announce_factory_changed(state, str(uuid.UUID(FID)), ["snapshot"])
+    live.announce_factory_changed(state, f"conv_{FID}", ["events"])
+    live.announce_factory_changed(state, "not-a-uuid", ["snapshot"])
+    await _settle()
+    frames = sorted((frame for _, frame in published), key=lambda f: f["factory_id"] != FID)
+    assert frames == [
+        {"type": "factory_changed", "factory_id": FID, "scopes": ["events", "snapshot"]},
+        {"type": "factory_changed", "factory_id": "not-a-uuid", "scopes": ["snapshot"]},
+    ]
+
+
+def test_recipients_read_the_grants_once(permissions: SqlAlchemyPermissionStore) -> None:
+    calls: list[str] = []
+    real = permissions.list_for_session
+
+    def counting(session_id: str, **kwargs: Any) -> Any:
+        calls.append(session_id)
+        return real(session_id, **kwargs)
+
+    permissions.list_for_session = counting  # type: ignore[method-assign]
+    assert live.recipients(_state(permission_store=permissions), FID) == ["alice", "bob"]
+    assert calls == [FID]

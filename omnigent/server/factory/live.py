@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from omnigent.runtime import user_session_stream
+from omnigent.stores.factory_store import norm_id
 
 _logger = logging.getLogger(__name__)
 
@@ -40,30 +41,40 @@ def recipients(app_state: Any, factory_id: str) -> list[str | None]:
 
     :returns: Distinct user ids, or ``[None]`` in single-user mode.
     """
-    from omnigent.server.auth import RESERVED_USER_PUBLIC
+    from omnigent.server.auth import LEVEL_OWNER, RESERVED_USER_PUBLIC
     from omnigent.server.factory.context import FACTORY_STATE_ATTR
-    from omnigent.server.routes._auth_helpers import get_session_owner_id
 
     deps = getattr(app_state, FACTORY_STATE_ATTR, None)
     permission_store = getattr(deps, "permission_store", None)
     if permission_store is None:
         return [None]
-    users: list[str | None] = []
-    owner = get_session_owner_id(factory_id, permission_store)
-    if owner is not None:
-        users.append(owner)
     grants, _ = permission_store.list_for_session(factory_id, limit=1000)
-    for grant in grants:
+    # Owner first (as get_session_owner_id picks it), then the other grantees.
+    owners = [g for g in grants if g.level >= LEVEL_OWNER][:1]
+    users: list[str | None] = []
+    for grant in [*owners, *grants]:
         if grant.user_id != RESERVED_USER_PUBLIC and grant.user_id not in users:
             users.append(grant.user_id)
     return users
+
+
+def _bare_id(factory_id: str) -> str:
+    """*factory_id* as the bare hex the snapshot uses; an invalid id passes through."""
+    try:
+        return norm_id(factory_id)
+    except ValueError:
+        return factory_id
 
 
 def publish(factory_id: str, scopes: Iterable[str], users: Iterable[str | None]) -> None:
     """Push one ``factory_changed`` frame to each user's session-updates streams."""
     from omnigent.server.routes._sessions.helpers import _discovery_key
 
-    frame = {"type": FRAME_TYPE, "factory_id": factory_id, "scopes": sorted(set(scopes))}
+    frame = {
+        "type": FRAME_TYPE,
+        "factory_id": _bare_id(factory_id),
+        "scopes": sorted(set(scopes)),
+    }
     for user in users:
         user_session_stream.publish(_discovery_key(user), dict(frame))
 
@@ -96,6 +107,7 @@ def announce_factory_changed(
     :param factory_id: Root lead session id.
     :param scopes: What changed: ``snapshot`` / ``events`` / ``decisions``.
     """
+    factory_id = _bare_id(factory_id)
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:

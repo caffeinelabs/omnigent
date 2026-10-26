@@ -13,6 +13,7 @@ production store.
 from __future__ import annotations
 
 import builtins
+import copy
 import json
 import os
 import threading
@@ -21,7 +22,7 @@ import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
-from typing import Any
+from typing import Any, TypeVar
 
 from omnigent.db.db_models import current_workspace_id, uuid_to_bytes
 from omnigent.db.enum_codecs import (
@@ -577,6 +578,14 @@ def _stage_stamp(current: FactoryProject | None, fields: dict[str, Any], now: in
         fields["stage_changed_at"] = now
 
 
+_R = TypeVar("_R")
+
+
+def _detach(row: _R) -> _R:
+    """A deep copy, so a caller never aliases a stored row's dicts or lists."""
+    return copy.deepcopy(row)
+
+
 def _normalise_pr_fields(fields: dict[str, Any]) -> dict[str, Any]:
     out = dict(fields)
     for key in ("is_draft", "ready"):
@@ -592,7 +601,8 @@ class InMemoryFactoryStore(FactoryStore):
     A process-local :class:`FactoryStore` with the same semantics as the SQL store.
 
     Used when no database-backed store is wired. Thread-safe; rows are kept per
-    workspace and lost on restart.
+    workspace and lost on restart. Rows are deep-copied in and out, so callers
+    never share a stored row's dicts or lists (as with the SQL store).
     """
 
     def __init__(self) -> None:
@@ -620,7 +630,7 @@ class InMemoryFactoryStore(FactoryStore):
         now = now_s()
         with self._lock:
             current = self.get_project(fid, slug)
-            values = dict(fields)
+            values = copy.deepcopy(dict(fields))
             if "pl_session_id" in values:
                 values["pl_session_id"] = opt_id(values["pl_session_id"])
             _stage_stamp(current, values, now)
@@ -640,24 +650,24 @@ class InMemoryFactoryStore(FactoryStore):
                     **values,
                 )
             self._projects[(self._ws(), row.id)] = row
-            return row
+            return _detach(row)
 
     def get_project(self, factory_id: str, slug: str) -> FactoryProject | None:
         fid = norm_id(factory_id)
         with self._lock:
             for row in self._rows(self._projects):
                 if row.factory_id == fid and row.slug == slug:
-                    return row
+                    return _detach(row)
         return None
 
     def get_project_by_id(self, project_id: str) -> FactoryProject | None:
         with self._lock:
-            return self._projects.get((self._ws(), norm_id(project_id)))
+            return _detach(self._projects.get((self._ws(), norm_id(project_id))))
 
     def list_projects(self, factory_id: str) -> builtins.list[FactoryProject]:
         fid = norm_id(factory_id)
         with self._lock:
-            rows = [r for r in self._rows(self._projects) if r.factory_id == fid]
+            rows = [_detach(r) for r in self._rows(self._projects) if r.factory_id == fid]
         return sorted(rows, key=lambda r: (r.created_at, r.id))
 
     def update_project(self, project_id: str, **fields: Any) -> FactoryProject | None:
@@ -668,13 +678,13 @@ class InMemoryFactoryStore(FactoryStore):
             current = self.get_project_by_id(project_id)
             if current is None:
                 return None
-            values = dict(fields)
+            values = copy.deepcopy(dict(fields))
             if "pl_session_id" in values:
                 values["pl_session_id"] = opt_id(values["pl_session_id"])
             _stage_stamp(current, values, now)
             row = replace(current, **values, updated_at=now)
             self._projects[(self._ws(), row.id)] = row
-            return row
+            return _detach(row)
 
     # ── PRs ─────────────────────────────────────────────────────
 
@@ -685,7 +695,7 @@ class InMemoryFactoryStore(FactoryStore):
         validate_pr_fields(fields)
         fid = norm_id(factory_id)
         now = now_s()
-        values = _normalise_pr_fields(fields)
+        values = copy.deepcopy(_normalise_pr_fields(fields))
         with self._lock:
             current = self.get_pr_by_number(fid, repo, number)
             if current is not None:
@@ -705,18 +715,18 @@ class InMemoryFactoryStore(FactoryStore):
                 )
                 created = True
             self._prs[(self._ws(), row.id)] = row
-            return row, created
+            return _detach(row), created
 
     def get_pr(self, pr_id: str) -> FactoryPr | None:
         with self._lock:
-            return self._prs.get((self._ws(), norm_id(pr_id)))
+            return _detach(self._prs.get((self._ws(), norm_id(pr_id))))
 
     def get_pr_by_number(self, factory_id: str, repo: str, number: int) -> FactoryPr | None:
         fid = norm_id(factory_id)
         with self._lock:
             for row in self._rows(self._prs):
                 if row.factory_id == fid and row.repo == repo and row.number == number:
-                    return row
+                    return _detach(row)
         return None
 
     def list_prs(
@@ -726,7 +736,7 @@ class InMemoryFactoryStore(FactoryStore):
         wanted = set(states) if states is not None else None
         with self._lock:
             rows = [
-                r
+                _detach(r)
                 for r in self._rows(self._prs)
                 if r.factory_id == fid and (wanted is None or r.state in wanted)
             ]
@@ -741,7 +751,7 @@ class InMemoryFactoryStore(FactoryStore):
         terminal_window_s: int = TERMINAL_PR_WINDOW_S,
     ) -> builtins.list[FactoryPr]:
         with self._lock:
-            rows = list(self._rows(self._prs))
+            rows = [_detach(r) for r in self._rows(self._prs)]
         due = []
         for row in rows:
             if row.last_polled_at is not None and row.last_polled_at > now - min_interval_s:
@@ -756,14 +766,14 @@ class InMemoryFactoryStore(FactoryStore):
     def update_pr(self, pr_id: str, **fields: Any) -> FactoryPr | None:
         check_fields(fields, PR_FIELDS, "update_pr")
         validate_pr_fields(fields)
-        values = _normalise_pr_fields(fields)
+        values = copy.deepcopy(_normalise_pr_fields(fields))
         with self._lock:
             current = self.get_pr(pr_id)
             if current is None:
                 return None
             row = replace(current, **values, updated_at=now_s())
             self._prs[(self._ws(), row.id)] = row
-            return row
+            return _detach(row)
 
     # ── Decisions ───────────────────────────────────────────────
 
@@ -781,9 +791,9 @@ class InMemoryFactoryStore(FactoryStore):
             rows = [r for r in self._rows(self._decisions) if r.factory_id == fid]
             for row in rows:
                 if row.dedupe_key == dedupe_key and row.status == "open":
-                    return row, True
+                    return _detach(row), True
             number = max((r.number for r in rows), default=0) + 1
-            values = dict(fields)
+            values = copy.deepcopy(dict(fields))
             values["blocking"] = bool(values.get("blocking", True))
             values["allow_text"] = bool(values.get("allow_text", True))
             values["options"] = list(values.get("options") or [])
@@ -799,18 +809,18 @@ class InMemoryFactoryStore(FactoryStore):
                 **values,
             )
             self._decisions[(self._ws(), row.id)] = row
-            return row, False
+            return _detach(row), False
 
     def get_decision(self, decision_id: str) -> FactoryDecision | None:
         with self._lock:
-            return self._decisions.get((self._ws(), norm_id(decision_id)))
+            return _detach(self._decisions.get((self._ws(), norm_id(decision_id))))
 
     def get_decision_by_number(self, factory_id: str, number: int) -> FactoryDecision | None:
         fid = norm_id(factory_id)
         with self._lock:
             for row in self._rows(self._decisions):
                 if row.factory_id == fid and row.number == number:
-                    return row
+                    return _detach(row)
         return None
 
     def _transition(
@@ -824,7 +834,7 @@ class InMemoryFactoryStore(FactoryStore):
                 raise DecisionNotOpen(current)
             row = replace(current, **values, updated_at=now_s())
             self._decisions[(self._ws(), row.id)] = row
-            return row
+            return _detach(row)
 
     def answer_decision(
         self, decision_id: str, *, option_id: str | None, text: str | None, by: str
@@ -851,9 +861,9 @@ class InMemoryFactoryStore(FactoryStore):
             current = self.get_decision(decision_id)
             if current is None:
                 return None
-            row = replace(current, **fields, updated_at=now_s())
+            row = replace(current, **copy.deepcopy(fields), updated_at=now_s())
             self._decisions[(self._ws(), row.id)] = row
-            return row
+            return _detach(row)
 
     def list_decisions(
         self,
@@ -869,7 +879,7 @@ class InMemoryFactoryStore(FactoryStore):
         statuses = as_list(status)
         with self._lock:
             rows = [
-                r
+                _detach(r)
                 for r in self._rows(self._decisions)
                 if (ids is None or r.factory_id in ids)
                 and (one is None or r.factory_id == one)
@@ -902,12 +912,12 @@ class InMemoryFactoryStore(FactoryStore):
             from_id=opt_id(draft.from_id),
             to_id=opt_id(draft.to_id),
             subject=draft.subject,
-            data=draft.data,
+            data=copy.deepcopy(draft.data),
             workspace_id=self._ws(),
         )
         with self._lock:
             self._events[(self._ws(), row.id)] = row
-        return row
+        return _detach(row)
 
     def list_events(
         self,
@@ -942,7 +952,7 @@ class InMemoryFactoryStore(FactoryStore):
                 continue
             out.append(row)
         out.sort(key=lambda r: (r.ts, r.id), reverse=True)
-        return out[:limit]
+        return [_detach(r) for r in out[:limit]]
 
     def find_events(
         self,
@@ -965,7 +975,7 @@ class InMemoryFactoryStore(FactoryStore):
                 and (subject is None or r.subject == subject)
             ]
         rows.sort(key=lambda r: (r.ts, r.id))
-        return rows[:limit]
+        return [_detach(r) for r in rows[:limit]]
 
     def prune_events(self, older_than_ms: int, kinds: Sequence[str] | None = None) -> int:
         ws = self._ws()
@@ -1015,8 +1025,8 @@ class InMemoryFactoryStore(FactoryStore):
             status=status,
             title=title,
             summary=summary,
-            files=[dict(f) for f in files or []],
-            manifest=dict(manifest) if manifest is not None else None,
+            files=copy.deepcopy([dict(f) for f in files or []]),
+            manifest=copy.deepcopy(dict(manifest)) if manifest is not None else None,
             pr_id=opt_id(pr_id),
             preview_url=preview_url,
             created_at=now_s(),
@@ -1024,11 +1034,11 @@ class InMemoryFactoryStore(FactoryStore):
         )
         with self._lock:
             self._demos[(self._ws(), row.id)] = row
-        return row
+        return _detach(row)
 
     def get_demo(self, demo_id: str) -> FactoryDemo | None:
         with self._lock:
-            return self._demos.get((self._ws(), norm_id(demo_id)))
+            return _detach(self._demos.get((self._ws(), norm_id(demo_id))))
 
     def list_demos(
         self,
@@ -1048,7 +1058,7 @@ class InMemoryFactoryStore(FactoryStore):
                 and (repo is None or r.repo == repo)
             ]
         rows.sort(key=lambda r: (r.created_at, r.id), reverse=True)
-        return rows[:limit]
+        return [_detach(r) for r in rows[:limit]]
 
 
 __all__ = [
