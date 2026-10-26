@@ -21,8 +21,10 @@ if TYPE_CHECKING:
     from omnigent.server.auth import AuthProvider
     from omnigent.stores import AgentStore, ConversationStore
     from omnigent.stores.artifact_store import ArtifactStore
+    from omnigent.stores.factory_store import FactoryStore
     from omnigent.stores.file_store import FileStore
     from omnigent.stores.permission_store import PermissionStore
+    from omnigent.stores.project_store import ProjectStore
 
 
 def register_factory_routes(
@@ -36,6 +38,8 @@ def register_factory_routes(
     file_store: FileStore | None = None,
     artifact_store: ArtifactStore | None = None,
     runner_tunnel_tokens: frozenset[str] | None = None,
+    factory_store: FactoryStore | None = None,
+    project_store: ProjectStore | None = None,
 ) -> None:
     """
     Mount ``/v1/factory`` on *app* and record the stores it needs.
@@ -50,13 +54,17 @@ def register_factory_routes(
     :param artifact_store: Forwarded with dispatched messages.
     :param runner_tunnel_tokens: The server's runner tunnel-token allow-list;
         a listed token proves a runner the way the tunnel route accepts it.
+    :param factory_store: The cockpit read model; in-memory when ``None``.
+    :param project_store: Sidebar projects, for filing factory sessions.
     """
+    from omnigent.server.factory.api import include_routers
     from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
     from omnigent.server.factory.routes import (
         FactoryRouteError,
         create_factory_router,
         factory_error_handler,
     )
+    from omnigent.stores.factory_store import InMemoryFactoryStore
 
     setattr(
         app.state,
@@ -70,10 +78,13 @@ def register_factory_routes(
             file_store=file_store,
             artifact_store=artifact_store,
             runner_tunnel_tokens=runner_tunnel_tokens,
+            factory_store=factory_store if factory_store is not None else InMemoryFactoryStore(),
+            project_store=project_store,
         ),
     )
     app.add_exception_handler(FactoryRouteError, factory_error_handler)
     app.include_router(create_factory_router())
+    include_routers(app)
 
 
 async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]]:
@@ -81,7 +92,8 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
     Start the factory's background services for one server lifespan.
 
     The mailer always; the supervisor (and the status-edge notifier it reads)
-    only when ``OMNIGENT_FACTORY_ENABLED=1``.
+    and the auto-discovered ``background`` services only when
+    ``OMNIGENT_FACTORY_ENABLED=1``.
 
     :param app_state: ``app.state`` of an app passed to
         :func:`register_factory_routes`.
@@ -100,12 +112,17 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
 
     mailer = get_mailer(app_state)
     stop_supervision: Callable[[], Awaitable[None]] | None = None
+    stop_background: Callable[[], Awaitable[None]] | None = None
     if factory_enabled():
+        from omnigent.server.factory.background import start_all
         from omnigent.server.factory.supervisor import start_supervision
 
         stop_supervision = start_supervision(app_state)
+        stop_background = await start_all(app_state)
 
     async def _stop() -> None:
+        if stop_background is not None:
+            await stop_background()
         if stop_supervision is not None:
             await stop_supervision()
         await mailer.close()

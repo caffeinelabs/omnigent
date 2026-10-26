@@ -5,8 +5,8 @@ Several low-cardinality closed-set columns (``conversations.kind``,
 ``account_tokens.kind``, ``policies.type``, ``policies.scope``,
 ``hosts.status``, ``agents.kind``, ``scheduled_tasks.state``,
 ``scheduled_tasks.execution_target``,
-``scheduled_task_runs.status``) are stored as
-integer codes rather
+``scheduled_task_runs.status``, and the ``factory_*`` cockpit tables) are
+stored as integer codes rather
 than their string names — smaller rows and a tighter ``CHECK`` than a
 free ``VARCHAR``. The string names remain the
 contract for entities, the HTTP API, the web client, and the SDKs; the
@@ -127,6 +127,54 @@ SCHEDULED_TASK_RUN_STATUS: dict[str, int] = {
     "skipped": 5,
 }
 
+# Software-factory cockpit tables. Stages are in pipeline order.
+FACTORY_PROJECT_STAGE: dict[str, int] = {
+    "queued": 1,
+    "planning": 2,
+    "building": 3,
+    "review": 4,
+    "verify": 5,
+    "ready": 6,
+    "merged": 7,
+    "done": 8,
+}
+
+FACTORY_PR_STATE: dict[str, int] = {
+    "open": 1,
+    "merged": 2,
+    "closed": 3,
+}
+
+FACTORY_DECISION_SOURCE: dict[str, int] = {
+    "agent": 1,
+    "relaunch_failed": 2,
+    "blocked_approval": 3,
+    "pr_closed": 4,
+    "storm": 5,
+}
+
+FACTORY_DECISION_STATUS: dict[str, int] = {
+    "open": 1,
+    "answered": 2,
+    "withdrawn": 3,
+    "expired": 4,
+}
+
+FACTORY_EVENT_SEVERITY: dict[str, int] = {
+    "info": 0,
+    "notice": 1,
+    "warning": 2,
+    "critical": 3,
+}
+
+# Demo outcomes keep the harness's upper-case spelling.
+FACTORY_DEMO_STATUS: dict[str, int] = {
+    "PASS": 1,
+    "PARTIAL": 2,
+    "FAIL": 3,
+    "ERROR": 4,
+}
+
 
 def _assert_item_type_codes_cover_data_classes() -> None:
     """
@@ -160,6 +208,16 @@ def _invert(table: dict[str, int]) -> dict[int, str]:
 
 
 _CODE_TO_NAME: dict[int, dict[int, str]] = {}
+
+for _factory_table in (
+    FACTORY_PROJECT_STAGE,
+    FACTORY_PR_STATE,
+    FACTORY_DECISION_SOURCE,
+    FACTORY_DECISION_STATUS,
+    FACTORY_EVENT_SEVERITY,
+    FACTORY_DEMO_STATUS,
+):
+    _CODE_TO_NAME[id(_factory_table)] = _invert(_factory_table)
 
 
 def _encode(table: dict[str, int], name: str, *, field: str) -> int:
@@ -338,3 +396,63 @@ def encode_scheduled_task_run_status(name: str) -> int:
 def decode_scheduled_task_run_status(code: int) -> str:
     """Decode a ``scheduled_task_runs.status`` int code to its name."""
     return _decode(SCHEDULED_TASK_RUN_STATUS, code, field="scheduled_task_runs.status")
+
+
+def encode_factory_project_stage(name: str) -> int:
+    """Encode a ``factory_projects.stage`` name to its int code."""
+    return _encode(FACTORY_PROJECT_STAGE, name, field="factory_projects.stage")
+
+
+def decode_factory_project_stage(code: int) -> str:
+    """Decode a ``factory_projects.stage`` int code to its name."""
+    return _decode(FACTORY_PROJECT_STAGE, code, field="factory_projects.stage")
+
+
+def encode_factory_pr_state(name: str) -> int:
+    """Encode a ``factory_prs.state`` name to its int code."""
+    return _encode(FACTORY_PR_STATE, name, field="factory_prs.state")
+
+
+def decode_factory_pr_state(code: int) -> str:
+    """Decode a ``factory_prs.state`` int code to its name."""
+    return _decode(FACTORY_PR_STATE, code, field="factory_prs.state")
+
+
+def encode_factory_decision_source(name: str) -> int:
+    """Encode a ``factory_decisions.source`` name to its int code."""
+    return _encode(FACTORY_DECISION_SOURCE, name, field="factory_decisions.source")
+
+
+def decode_factory_decision_source(code: int) -> str:
+    """Decode a ``factory_decisions.source`` int code to its name."""
+    return _decode(FACTORY_DECISION_SOURCE, code, field="factory_decisions.source")
+
+
+def encode_factory_decision_status(name: str) -> int:
+    """Encode a ``factory_decisions.status`` name to its int code."""
+    return _encode(FACTORY_DECISION_STATUS, name, field="factory_decisions.status")
+
+
+def decode_factory_decision_status(code: int) -> str:
+    """Decode a ``factory_decisions.status`` int code to its name."""
+    return _decode(FACTORY_DECISION_STATUS, code, field="factory_decisions.status")
+
+
+def encode_factory_event_severity(name: str) -> int:
+    """Encode a ``factory_events.severity`` name to its int code."""
+    return _encode(FACTORY_EVENT_SEVERITY, name, field="factory_events.severity")
+
+
+def decode_factory_event_severity(code: int) -> str:
+    """Decode a ``factory_events.severity`` int code to its name."""
+    return _decode(FACTORY_EVENT_SEVERITY, code, field="factory_events.severity")
+
+
+def encode_factory_demo_status(name: str) -> int:
+    """Encode a ``factory_demos.status`` name to its int code."""
+    return _encode(FACTORY_DEMO_STATUS, name, field="factory_demos.status")
+
+
+def decode_factory_demo_status(code: int) -> str:
+    """Decode a ``factory_demos.status`` int code to its name."""
+    return _decode(FACTORY_DEMO_STATUS, code, field="factory_demos.status")

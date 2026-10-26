@@ -30,13 +30,30 @@ LABEL_LAST_BEAT: Final = "omnigent.factory.last_beat"
 """ISO-8601 time of the last delivered heartbeat (restart-safe supervisor state)."""
 LABEL_SUMMARY: Final = "omnigent.factory.summary"
 LABEL_HEALTH: Final = "omnigent.factory.health"
+LABEL_NAME: Final = "omnigent.factory.name"
+"""Display name of the factory (root only), e.g. ``"Atlas factory"``."""
+LABEL_CADENCE: Final = "omnigent.factory.cadence"
+"""Heartbeat cadence of the factory (root only): ``demo`` or ``normal``."""
+LABEL_FOLDER_PROJECT: Final = "omnigent.factory.folder_project"
+"""Id of the sidebar project folder the factory's sessions are filed into (root only)."""
+LABEL_STARTED_AT: Final = "omnigent.factory.started_at"
+"""Epoch seconds the factory was started from the cockpit (root only)."""
+LABEL_BEAT_N: Final = "omnigent.factory.beat_n"
+"""Number of the last delivered heartbeat (top-level; survives a server roll)."""
+LABEL_DEAD_ALERTED_AT: Final = "omnigent.factory.dead_alerted_at"
+"""Epoch seconds of the last dead-member alert (top-level; dedupes across rolls)."""
+LABEL_KEEP_PREVIEWS: Final = "omnigent.factory.keep_previews"
+"""``"0"`` lets a paused PL's pod idle out despite live previews (PL only)."""
 
 ROLE_LEAD: Final = "lead"
 ROLE_PROJECT_LEAD: Final = "project_lead"
 ROLE_IC: Final = "ic"
 ROLE_ENV_KEEPER: Final = "env_keeper"
 ROLE_REVIEWER: Final = "reviewer"
-ROLES: Final = frozenset({ROLE_LEAD, ROLE_PROJECT_LEAD, ROLE_IC, ROLE_ENV_KEEPER, ROLE_REVIEWER})
+ROLE_DEMO: Final = "demo"
+ROLES: Final = frozenset(
+    {ROLE_LEAD, ROLE_PROJECT_LEAD, ROLE_IC, ROLE_ENV_KEEPER, ROLE_REVIEWER, ROLE_DEMO}
+)
 TOP_LEVEL_ROLES: Final = frozenset({ROLE_LEAD, ROLE_PROJECT_LEAD})
 
 STATE_ACTIVE: Final = "active"
@@ -51,6 +68,62 @@ HEALTH_DEAD: Final = "dead"
 HEALTH: Final = frozenset({HEALTH_OK, HEALTH_DEGRADED, HEALTH_BLOCKED, HEALTH_DEAD})
 
 DEFAULT_HEARTBEAT_S: Final[dict[str, int]] = {ROLE_LEAD: 3600, ROLE_PROJECT_LEAD: 7200}
+
+CADENCE_DEMO: Final = "demo"
+CADENCE_NORMAL: Final = "normal"
+CADENCES: Final = frozenset({CADENCE_DEMO, CADENCE_NORMAL})
+CADENCE_HEARTBEATS: Final[dict[str, dict[str, int]]] = {
+    CADENCE_DEMO: {ROLE_LEAD: 300, ROLE_PROJECT_LEAD: 600},
+    CADENCE_NORMAL: {ROLE_LEAD: 3600, ROLE_PROJECT_LEAD: 7200},
+}
+"""Heartbeat seconds per top-level role for each cadence."""
+
+# Server-derived project stages, in pipeline order (the cockpit stepper).
+STAGE_QUEUED: Final = "queued"
+STAGE_PLANNING: Final = "planning"
+STAGE_BUILDING: Final = "building"
+STAGE_REVIEW: Final = "review"
+STAGE_VERIFY: Final = "verify"
+STAGE_READY: Final = "ready"
+STAGE_MERGED: Final = "merged"
+STAGE_DONE: Final = "done"
+STAGES: Final = (
+    STAGE_QUEUED,
+    STAGE_PLANNING,
+    STAGE_BUILDING,
+    STAGE_REVIEW,
+    STAGE_VERIFY,
+    STAGE_READY,
+    STAGE_MERGED,
+    STAGE_DONE,
+)
+AGENT_STAGES: Final = frozenset(
+    {STAGE_PLANNING, STAGE_BUILDING, STAGE_REVIEW, STAGE_VERIFY, STAGE_READY, STAGE_MERGED}
+)
+"""Stages a PL may claim for itself (``sys_factory_set(stage=...)``)."""
+
+# Action ids a decision option can carry; the server runs them on answer.
+ACTION_RESTART: Final = "restart"
+ACTION_RELAUNCH: Final = "relaunch"
+ACTION_PAUSE: Final = "pause"
+ACTION_RESUME: Final = "resume"
+ACTION_DISMISS: Final = "dismiss"
+ACTION_ABANDON_TASK: Final = "abandon_task"
+ACTION_REWORK: Final = "rework"
+ACTION_REDEPLOY_PREVIEW: Final = "redeploy_preview"
+DECISION_ACTIONS: Final = frozenset(
+    {
+        ACTION_RESTART,
+        ACTION_RELAUNCH,
+        ACTION_PAUSE,
+        ACTION_RESUME,
+        ACTION_DISMISS,
+        ACTION_ABANDON_TASK,
+        ACTION_REWORK,
+        ACTION_REDEPLOY_PREVIEW,
+    }
+)
+
 MIN_HEARTBEAT_S: Final = 120
 MAX_HEARTBEAT_S: Final = 86400
 

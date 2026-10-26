@@ -1781,6 +1781,18 @@ def register_core_routes(
                                 "projects-changed push failed; client converges on next load",
                                 exc_info=True,
                             )
+                elif evt_type == "factory_changed":
+                    frame = {k: evt.get(k) for k in ("type", "factory_id", "scopes")}
+                    async with emit_lock:
+                        try:
+                            await _send(frame)
+                        except WebSocketDisconnect:
+                            raise
+                        except Exception:
+                            _logger.warning(
+                                "factory-changed push failed; cockpit polls instead",
+                                exc_info=True,
+                            )
 
         reader_task = asyncio.create_task(_reader(), name="session-updates-reader")
         ticker_task = asyncio.create_task(_ticker(), name="session-updates-ticker")

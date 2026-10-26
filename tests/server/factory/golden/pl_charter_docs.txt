@@ -1,0 +1,12 @@
+CHARTER · docs-factory-envs
+Title: Factory envs docs · priority P2
+Goal: Add docs/factory-envs.md.
+Definition of Done:
+- PR ready for human merge: CI green, review and verify markers at the head
+Repo#branch: caffeinelabs/app#main · branches factory/docs-factory-envs/<task>
+Scope paths: (whole repo)
+Constraints: Docs only.
+Env needed: no · label PRs factory:no-env (no preview, no demo)
+Demo focus: none (no env)
+IC budget: up to 3 ICs at once
+Merge policy: human. Humans merge caffeinelabs/app; the factory never merges. Report READY FOR HUMAN MERGE <url> to your lead once every gate is green; never run `gh pr merge` or the merge gate.
