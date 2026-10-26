@@ -115,6 +115,7 @@ def _factory_spec(name: str) -> AgentSpec:
         ("factory-pl", "opus", "ANTHROPIC_DEFAULT_OPUS_MODEL", "claude-opus-5-5"),
         ("env_keeper", "sonnet", "ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-5-5"),
         ("ic", "sonnet", "ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-5-5"),
+        ("demo", "sonnet", "ANTHROPIC_DEFAULT_SONNET_MODEL", "claude-sonnet-5-5"),
     ],
 )
 @pytest.mark.usefixtures("sandbox_host")

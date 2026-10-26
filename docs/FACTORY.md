@@ -23,7 +23,8 @@ The factory adds four things to plain sessions:
 HUMAN ──► Lead A "Atlas" (factory-lead, factory root)  ◄── supervise each other ──►  Lead B "Sentinel" (factory-lead)
               │ sys_factory_spawn
               ├──► PL · <project> (factory-pl, own sandbox, supervisor = Sentinel)
-              │        ├─ env_keeper  (claude-native)  owns the project's Tilt env
+              │        ├─ env_keeper  (claude-native)  owns the dev env and one factory preview per PR
+              │        ├─ demo        (claude-native)  records a Playwright demo of each PR head
               │        ├─ ic          (claude-native)  one task card, one worktree, one PR
               │        ├─ ic_codex    (codex-native)   second-vendor implementer
               │        └─ reviewer    (codex-native)   cross-vendor review marker
@@ -65,19 +66,23 @@ symlink). Each directory is seeded as a built-in named after it.
 | Agent | Harness | `factory_role` | Notes |
 |---|---|---|---|
 | `factory-lead` | claude-native | `lead` | Atlas or Sentinel; the brief decides which. `factory_max_pods: 12`. Skills: `factory-protocol`, `factory-lead-playbook`, `factory-heartbeat`, `factory-recovery`. |
-| `factory-pl` | claude-native | `project_lead` | Sub-agents `env_keeper`, `ic`, `ic_codex`, `reviewer`. Skills: `factory-protocol`, `factory-pl-playbook`, `factory-heartbeat`. |
-| `env_keeper` | claude-native | `env_keeper` | `tilt` terminal; the UP / STATUS / VERIFY / MERGED / DOWN protocol. |
+| `factory-pl` | claude-native | `project_lead` | Sub-agents `env_keeper`, `demo`, `ic`, `ic_codex`, `reviewer`. Skills: `factory-protocol`, `factory-pl-playbook`, `factory-heartbeat`. |
+| `env_keeper` | claude-native | `env_keeper` | `tilt` terminal; the dev env (UP / STATUS / DOWN) and factory previews (PREVIEW, alias VERIFY / PREVIEW_DOWN / PREVIEW_STATUS / MERGED / CLOSED). Skill `factory-env`. |
+| `demo` | claude-native | `demo` | DEMO: records a PR head in its preview with the Playwright harness of its `factory-demo` skill, publishes it, posts the demo comment. |
 | `ic` | claude-native | `ic` | One task card in its own worktree; `NOTES.md` checkpoints; a RESULT block every turn. |
 | `ic_codex` | codex-native, `yolo: true` | `ic` | Everything in its prompt. |
 | `reviewer` | codex-native, `yolo: true` | `reviewer` | Review only; posts the review marker. |
 
 Every spec runs unsandboxed in the caller process (`os_env: caller_process`,
-`sandbox: none`; the sandbox pod is the boundary), uses `permission_mode: auto`
-or `yolo` so nothing waits on an approval card, and sets `ask_timeout: 86400`.
+`sandbox: none`; the sandbox pod is the boundary), uses
+`permission_mode: bypassPermissions` behind the DENY-only policy hooks (or
+`yolo` for Codex) so nothing waits on an approval card, and sets
+`ask_timeout: 86400`.
 
 **Model routing.** The claude-native agents set
 `executor.auth: {type: provider, name: bifrost}` and a family alias
-(`model: opus` for leads and PLs, `model: sonnet` for `env_keeper` and `ic`).
+(`model: opus` for leads and PLs, `model: sonnet` for `env_keeper`, `demo`
+and `ic`).
 The `bifrost` provider in the runner's `~/.omnigent/config.yaml` maps the alias
 to a concrete model id (on the sandbox cluster, `claude-opus-5-5` and
 `claude-sonnet-5-5`), so Claude Code reaches the keyless in-cluster Bifrost
@@ -224,6 +229,163 @@ arms the relay and dispatches.
 Paused and done members get no keepalive and no heartbeats, so their runners
 idle out and their sandboxes are reclaimed.
 
+## Cockpit, previews and demos
+
+The human runs the factory from the **cockpit** (`/factory`, one factory at
+`/factory/<factory id>`; `?review=<pr number>` opens a PR's review drawer and
+`&decision=D-<n>` a decision). Everything on it comes from the server: a
+GitHub poller computes each PR's gates, a prober checks envs and previews, and
+an event log records what agents did. Agents add detail through four tools;
+if they stay silent the board is still right.
+
+### Routes
+
+| Route | Who | What |
+|---|---|---|
+| `GET /v1/factory/factories`, `GET /v1/factory/factories/{fid}` (ETag), `…/events` | human (READ on the root) | Factory list, the snapshot (projects, PRs with gates, previews, demos, decisions, members, health), the activity log. |
+| `POST /v1/factory/factories`, `POST …/{fid}/projects`, `PATCH …/projects/{slug}` | human | Start a factory from the form (stores charters, queues `[Factory brief … via cockpit]`), add or edit a project. |
+| `POST /v1/factory/factories/{fid}/control` | human (EDIT) | PAUSE, RESUME, STOP, RESTART, RELAUNCH, cadence, PREVIEW / PREVIEW_DOWN of a PR, ENV STATUS: a server-stamped `[Factory control …]` to the members. |
+| `GET /v1/factory/decisions`, `POST …/decisions/{id}/answer`, `…/withdraw` | human | Open decisions (also in `/inbox`); the answer is delivered to the asker as `[Factory decision · D-<n> answered …]`. |
+| `POST /v1/factory/prs/{id}/feedback`, `…/refresh` | human | Approve or request changes (`[Factory review …]` to the PL); re-poll GitHub now. |
+| `GET /v1/factory/prs/{id}/preview` | human | Stable live-preview link: 302 to the current preview app URL, or back to the cockpit when there is none. |
+| `GET /v1/factory/demos/{demo_id}/files/{file_id}` | human (READ on the PL) | Demo files with Range/206 and ETag; only images and video inline, never HTML or SVG. |
+| `POST /v1/factory/agent/decisions`, `POST …/agent/prs`, `PUT …/agent/envs`, `POST …/agent/demos` (multipart), `GET …/agent/charter` | runner (the tools below) | Agent reports. |
+| `GET /v1/factory/preflight` | human | GitHub connected, agents seeded, sandbox host, factory enabled. |
+
+### Tools
+
+| Tool | Roles | Use |
+|---|---|---|
+| `sys_factory_ask(question, options, context?, blocking=true, dedupe_key?)` | every role | Ask the human. Opens D-<n> in the cockpit and the inbox and returns at once; the answer arrives as a message. Replaces DECISIONS NEEDED lists. |
+| `sys_factory_pr(url, task?, claim?, sentinel_verdict?, head_sha?, note?)` | every role (`sentinel_verdict`: leads) | Register a PR, claim `opened` / `ready_for_human_merge` / `abandoned`, or record Sentinel's verdict. Returns the server's gates `{ready, gates, reasons, claim_mismatch}`. |
+| `sys_factory_env(state, env_id, urls, deployed{sha, ref, tooling_overlay?}, pr?, namespace?, resources?, note?)` | `project_lead`, `env_keeper` | Report the dev env (no `pr`) or the factory preview of PR `pr`. `state=deploying` beyond `OMNIGENT_FACTORY_MAX_PREVIEWS` live previews is refused with `409 preview_cap` and park candidates. |
+| `sys_factory_demo(pr_url, head_sha, title, manifest_path?, files?, …)` | `project_lead`, `env_keeper`, `demo` | Upload a demo (with `manifest_path`, everything the harness's `demo.json` lists) and get back `comment_markdown` / `comment_path` to post on the PR. |
+| `sys_factory_set(stage=…)` | `project_lead` on itself | Claim the project's stage; the cockpit shows it next to the stage it derives. |
+
+### Factory previews
+
+A **factory preview** is the app deployed at one PR head so humans (and the
+demo agent) can review exactly that commit. (Omnigent's own per-branch
+preview envs are a different thing.)
+
+- **Shape.** Namespace `env-<base>-p<n>` next to the PL's dev env, deployed by
+  a one-shot `tilt ci --port 0` that leaves the objects running. A new head is
+  redeployed into the same namespace. The PL's dev env stays one
+  long-running `tilt up` at origin/main for the ICs; previews never touch it.
+- **Entry point.** `scripts/factory.ts preview up|status|down|list` in
+  caffeinelabs/app (`pnpm factory:preview`), with a Tiltfile preview mode that
+  stamps `GET /__factory/preview` (`{repo, pr, sha, short, deployed_at, env_id}`,
+  an Envoy direct response) and an `x-factory-commit` header on the app and API
+  hosts, and creates the `factory-env-secrets` synthetic-session secret. It
+  lives on the open APP-1 PR (caffeinelabs/app#9640, branch
+  `factory/preview-tooling`); a human merges it. Until then env_keeper overlays
+  the tooling files from that branch onto PR heads that lack them (never the
+  root `package.json` or the deploy lockfile) and runs the CLI with `node`
+  directly. The ref comes from `OMNIGENT_FACTORY_PREVIEW_TOOLING_REF`, which the
+  charter carries; env_keeper falls back to `factory/preview-tooling`. A PR
+  that changes the tooling itself gets `PREVIEW SKIPPED tooling-conflict`,
+  and its PL asks the human whether to review it without a preview (label
+  `factory:no-env`) or to wait for the tooling to merge.
+- **Slots.** A PL keeps at most its charter's `preview.slots` live previews
+  (default 2, max 3); the factory at most `OMNIGENT_FACTORY_MAX_PREVIEWS` (8).
+  At the factory cap env_keeper answers `PREVIEW CAPPED` with park
+  candidates; the PL parks one of its own previews of a PR that is not
+  ready, or tells its lead and retries at its next heartbeat.
+- **Lifetime.** A preview dies with its PL's pod (the namespace reaper). The
+  supervisor keeps a PL's pod alive while it has a live preview of an open PR,
+  even when the PL is paused. Previews nobody looked at for
+  `OMNIGENT_FACTORY_PREVIEW_TTL_H` hours get a park notice; merges and closes
+  get a teardown notice; a preview that fails 3 probes gets a redeploy notice.
+- **Commit truth.** env_keeper reports the deployed sha; the prober reads
+  `/__factory/preview` for the observed sha; the cockpit compares both with
+  the PR head and shows "behind head" when they differ.
+
+### Demos
+
+- The `demo` sub-agent (one session per task, `demo-<task>`) records each
+  head after its preview is ready, from the `## Demo plan` the IC writes into
+  the PR body. The Playwright harness ships in its `factory-demo` skill and
+  pins `@playwright/test` to the exact version the sandbox host image bakes
+  into `/opt/ms-playwright` (1.56.1); it falls back to a one-time browser
+  install in `~/.cache/ms-playwright`.
+- `run.mjs` checks that the preview serves the head, records a 1280×800 video
+  with a caption and a `PR #<n> · <sha7> · preview` watermark, one screenshot
+  per UI step, every API call (`api.json`), console errors, a redacted HAR and,
+  for FAIL and ERROR runs, a Playwright trace, logs in through
+  `POST <api>/auth/synthetic-session` when a step needs a user, and writes
+  `demo.json`. Exit codes: 0 PASS or PARTIAL (steps skipped for env reasons),
+  1 FAIL, 2 ERROR, 3 stale preview.
+- The synthetic-session request is sent by Node, outside the recorded
+  browser, so its Bearer secret never reaches the trace or the HAR. Before
+  anything is published, `run.mjs` scrubs the secret and the session tokens
+  from the trace (rewritten), the HAR, `api.json`, `console.json`, `run.log`
+  and the step notes.
+- `sys_factory_demo` uploads the files into the omnigent file and artifact
+  stores (owner: the PL session). Caps: video 50 MB, image 5 MB, text 2 MB,
+  30 files and 120 MB per demo. The PR gets one comment per head with
+  `<!-- factory:demo sha=<head> status=… demo=<id> -->`, the step table and
+  links; the demo gate reads it.
+
+### Pipeline (per runnable PR)
+
+```
+IC ─ READY_FOR_REVIEW(pr, head) ─► PL ─┬─► reviewer: review marker
+                                       └─► env_keeper: PREVIEW pr head checks ─► preview + verify marker
+env_keeper ─ PREVIEW READY app api secret_file ─► PL ─► demo: DEMO pr sha app api secret_file focus
+demo ─ DEMO PASS|PARTIAL demo=<url> (demo comment posted) ─► PL
+PL ─ sys_factory_pr(claim=ready_for_human_merge) ─ ready ─► review-links block in the PR body,
+     "READY FOR HUMAN MERGE <url> · head <sha7>" to the lead; the cockpit lists it
+human ─ Approve / Request changes in the cockpit, merge on GitHub ─► server notices to the PL
+```
+
+Docs-only PRs are labelled `factory:no-env` and skip the preview and the demo.
+
+### Server texts
+
+| Text | To | Meaning |
+|---|---|---|
+| `[Factory brief · from <human> via cockpit · id=mail_…]` | the root lead | Start: spawn Sentinel and one PL per project; charters attach automatically. |
+| `[Factory control · <ACTION> · by <human>] <instructions>` | the affected members | A human command; the member replies once. |
+| `[Factory decision · D-<n> answered by <human> · "<option>"]` | the asker | The answer to `sys_factory_ask`. |
+| `[Factory review · CHANGES REQUESTED on PR #<n> @<sha7> by <human> (cockpit)]` / `[Factory review · APPROVED PR #<n> …]` | the PL | A human's review from the cockpit. |
+| `[Factory notice · PR <repo>#<n> READY FOR HUMAN MERGE · 6/6 gates · head <sha7>]` | the PL and the lead | Gates turned green. |
+| `[Factory notice · PR <repo>#<n> checks failed: <names> (head <sha7>)]` | the PL | Dispatch a fix. |
+| `[Factory notice · PR <repo>#<n> merged by @<login> as <sha7> · <url> · tear down preview p<n>]` | the PL (and the lead, info) | Post-merge steps: env_keeper `MERGED pr=<n>`. |
+| `[Factory notice · PR <repo>#<n> closed without merge by @<login>]` | the PL | env_keeper `CLOSED pr=<n>`; a decision asks whether to abandon or rework. |
+| `[Factory notice · preview p<n> unreachable · redeploy]` / `[Factory notice · preview p<n> idle 72h · park it]` | the PL | Redeploy or park the preview. |
+
+Every message carries `id=mail_…`; mail queued before a server restart is
+replayed with the same id, and agents ignore ids they already handled. A
+heartbeat that needs nothing ends with `HEARTBEAT_OK · <status>`, which the
+transcript folds.
+
+### Knobs
+
+| Variable | Default | Effect |
+|---|---|---|
+| `OMNIGENT_FACTORY_PR_POLL_S` | `60` | GitHub poll interval for tracked PRs; `0` turns the poller off. |
+| `OMNIGENT_FACTORY_ENV_PROBE_S` / `OMNIGENT_FACTORY_PREVIEW_PROBE_S` | `60` / `300` | Dev env and preview probe intervals. |
+| `OMNIGENT_FACTORY_PREVIEW_DOMAIN` | `envs.sandbox.caffeinelabs.io` | The only domain env and preview URLs may use (SSRF guard). |
+| `OMNIGENT_FACTORY_MAX_PREVIEWS` | `8` | Live previews per factory. |
+| `OMNIGENT_FACTORY_PREVIEW_TTL_H` | `72` | Hours without human attention before a preview gets a park notice. |
+| `OMNIGENT_FACTORY_PREVIEW_TOOLING_REF` | empty | caffeinelabs/app ref with the preview tooling (`factory/preview-tooling` until APP-1 merges); stored in new charters. |
+| `OMNIGENT_FACTORY_QUIET_BEATS`, `OMNIGENT_FACTORY_MAIL_REPLAY` | on | `0` turns off skipping unchanged heartbeats / replaying queued mail after a restart. |
+
+### Rollback
+
+- **Prompts and skills** ship in the server image. Roll the image back, or
+  mount the previous bundles through the prompt hotfix lane
+  (`OMNIGENT_BUILTIN_AGENT_DIRS`). Running sessions keep the bundle they
+  started with; relaunch them from the cockpit to pick up another.
+- **Previews off** for a project: edit its charter in the cockpit (previews
+  off) and send CHARTER UPDATE; the PL marks new cards `Preview: no`. Tear
+  existing previews down with the PREVIEW_DOWN control, or let them die with
+  their pods.
+- **Data.** The cockpit tables come from one additive, forward-only migration;
+  an older image ignores them. Demo files stay in the artifact store.
+- **App tooling.** Nothing in caffeinelabs/app changes until a human merges
+  APP-1; until then previews depend only on the branch the overlay reads.
+
 ## Safety
 
 - **`factory_role_guard`** ([`policies/builtins/factory.py`](../omnigent/policies/builtins/factory.py))
@@ -237,8 +399,10 @@ idle out and their sandboxes are reclaimed.
   or reviewer; writes to repos outside `write_repos` (default
   `caffeinelabs/app`) or inside `deny_repos` (`caffeinelabs/infra`,
   `caffeinelabs/omnigent`); the `factory:allow-protected` label; the merge
-  gate for anyone but a PL; and env lifecycle (`tilt up|down`,
-  `pnpm factory:up|down`, `kubectl delete ns`) for anyone but `env_keeper`.
+  gate for anyone but a PL; every PR write but `gh pr comment` by the demo
+  agent; and env lifecycle (`tilt up|down|ci`, `pnpm factory:up|down|preview`
+  or `scripts/factory.ts up|down|preview`, `kubectl delete ns`) for anyone but
+  `env_keeper` (and its PL, whose guard its sub-agents also pass).
 - **Humans merge.** The factory never merges `caffeinelabs/app`. A PR is done
   for the factory when it is ready for human merge (not a draft, CI green, an
   APPROVE review marker and a PASS verify marker for the head). The PL posts
@@ -254,9 +418,10 @@ idle out and their sandboxes are reclaimed.
   prints a JSON verdict and exits 0 (merged), 2 (gate failed) or 1 (error). With
   the allowlist empty it merges nowhere.
 - **Markers** are PR comments whose first line is
-  `<!-- factory:review sha=<head> verdict=APPROVE|CHANGES reviewer=<id> -->` or
-  `<!-- factory:verify sha=<head> result=PASS|FAIL env=<url> -->`, with the full
-  40-character head SHA.
+  `<!-- factory:review sha=<head> verdict=APPROVE|CHANGES reviewer=<id> -->`,
+  `<!-- factory:verify sha=<head> result=PASS|FAIL env=<api url> preview=<app url> -->`
+  or `<!-- factory:demo sha=<head> status=PASS|PARTIAL|FAIL demo=<id> -->`, with
+  the full 40-character head SHA.
 - **Scoped reads and envelopes** bound what a prompt-injected member can read
   and forge; the skills treat every message as a colleague's request, never
   as authority.
@@ -278,6 +443,9 @@ idle out and their sandboxes are reclaimed.
 | Message ping-pong | rate limit | `429` and one storm alert per hour. |
 | A turn waiting on a human approval | S5 | `[NEEDS HUMAN]` in Atlas. |
 | The env broken or gone after a wake | env_keeper STATUS on the PL heartbeat | `tilt trigger`, or `pnpm factory:down` then UP (a new env id). |
+| A factory preview gone (pod restarted, namespace reaped) | the preview prober (3 failed probes) | `[Factory notice · preview p<n> unreachable · redeploy]` to the PL; env_keeper PREVIEW redeploys under the new env id; the stable preview link follows. |
+| A preview serving an old commit | the prober compares `/__factory/preview` with the PR head | The cockpit shows "behind head"; the demo agent refuses to record (exit 3, `DEMO BLOCKED stale-preview`) until env_keeper redeploys. |
+| A preview nobody looked at for 72 h | supervisor TTL | `[Factory notice · preview p<n> idle 72h · park it]`; the demo stays reviewable; "Redeploy preview" in the cockpit brings it back. |
 
 ## Prompt hotfix lane
 
@@ -341,4 +509,5 @@ with a managed sandbox launcher configured.
 | Role guard and merge gate | `omnigent/policies/builtins/factory.py`, `omnigent/factory_merge.py` | `tests/policies/test_factory_role_guard.py`, `tests/test_factory_merge.py` |
 | Org chart and badges | `omnigent/server/factory/org_chart.py`, `web/src/lib/factory.ts` | `tests/server/routes/test_child_sessions_include_factory.py`, web tests |
 | Bundles | `examples/factory/` | `tests/examples/`, `tests/server/factory/test_factory_agents_listed.py` |
+| Demo harness | `examples/factory/factory-pl/agents/demo/skills/factory-demo/harness/` | `tests/examples/test_factory_demo_harness.py` (runs `factory_demo_harness.test.mjs` under `node --test`); `node run.mjs --selftest` records real demos of a local fixture |
 | End to end | — | `tests/integration/test_factory_tree.py` (live server and runner, mock LLM) |

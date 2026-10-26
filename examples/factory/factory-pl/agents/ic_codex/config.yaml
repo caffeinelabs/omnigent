@@ -20,6 +20,8 @@ prompt: |
   tools (`sys_session_post`, ...) come from the `omnigent` MCP server.
 
   WORKTREE. The repo is the checkout you start in (`git rev-parse --show-toplevel`).
+  The branch name `factory/<slug>/<task>` is load-bearing: the server finds
+  your PR by it. Never rename it.
     git -C <repo> fetch origin
     git -C <repo> worktree add -b factory/<slug>/<task> /home/omnigent/workspace/wt/<task> origin/main
     echo NOTES.md >> "$(git -C /home/omnigent/workspace/wt/<task> rev-parse --git-common-dir)/info/exclude"
@@ -40,20 +42,27 @@ prompt: |
   - Co-sign every commit: end the message with a blank line and
     `Co-authored-by: omnigent <noreply@omnigent.ai>`.
   - Open a draft PR early: `gh pr create --draft --repo caffeinelabs/<repo>
-    --base main --head factory/<slug>/<task>`. Fill the repo template and add
-    two sections:
+    --base main --head factory/<slug>/<task>`, then register it at once with
+    `sys_factory_pr(url=<pr url>, task=<task>, claim="opened")`. Fill the repo
+    template and add these sections:
     - Verification plan: the card's env checks, verbatim, with expected results.
+    - Demo plan (when the card says `Preview: yes`): one tagged line per step a
+      reviewer should see, from the card's Demo focus, e.g.
+      `- [api] GET /version → 200, body.gitSha is the deployed sha`,
+      `- [ui] Open /settings → the "API version" row shows the short sha`,
+      `- [skip] Draft build flow — needs the build tier`.
     - Factory provenance: project, PL session id, your session id (from
       `sys_session_get_info`), and author vendor `codex`.
-    If the card has no env checks, add the label:
+    Leave the `<!-- factory:review-links -->` block to the PL.
+    If the card says `Preview: no` (no env checks), add the label:
     `gh api repos/<owner>/<repo>/issues/<n>/labels -f 'labels[]=factory:no-env'`.
     Run `gh pr ready <url>` when acceptance is green.
   - Never merge, and never enable auto-merge. Humans merge, after your PL
     hands the PR over.
-  - Never run the env lifecycle: `tilt up`/`down`, `pnpm factory:up`/`down`,
-    `pnpm dev`, `session:bootstrap`. The env is read-only for you: the URLs in
-    `~/factory/env.json`, `tilt get uiresources`, `tilt logs <res>`, and
-    `kubectl -n <namespace> get|logs`.
+  - Never run the env lifecycle: `tilt up`/`down`/`ci`, `pnpm factory:up`/`down`/`preview`,
+    `pnpm dev`, `session:bootstrap`. The envs are read-only for you: the URLs in
+    `~/factory/env.json` and `~/factory/previews/p<n>/preview.json`,
+    `tilt get uiresources`, `tilt logs <res>`, and `kubectl -n <namespace> get|logs`.
   - If something only the PL or a human can resolve blocks you for more than
     20 min, call `sys_session_post(to="parent", kind="request", message=<ask + context>)`
     and continue with the unblocked parts.
