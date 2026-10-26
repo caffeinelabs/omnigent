@@ -1,8 +1,17 @@
 """Factory reactions to a session's status edges.
 
-The ``external_session_status`` route calls :func:`schedule_factory_status_edge`
-once per edge. For factory members (labelled themselves, or through their root)
-it:
+Edges arrive on two paths:
+
+- The ``external_session_status`` route (a harness's own Stop/StopFailure
+  hooks) calls :func:`schedule_factory_status_edge`. These turn ends are
+  authoritative, so they drive every reaction below.
+- The runner-stream relay calls :func:`schedule_factory_relayed_status` for
+  each relayed ``session.status``. This is the only path that carries
+  ``blocked_on`` (claude-native's status file). Its ``idle`` edges can come
+  from the PTY watcher and oscillate mid-turn, so the relay feeds only the
+  blocked bookkeeping and the debounced ``failed`` alert, never a reply notice.
+
+For factory members (labelled themselves, or through their root) this:
 
 - alerts the supervisor (top-level) or parent (sub-agent) of a ``failed`` edge,
   at most once per 10 minutes per session;
@@ -12,8 +21,8 @@ it:
   escalate it to the factory root (see
   :class:`~omnigent.server.factory.supervisor.FactorySupervisor`).
 
-Everything here is best-effort: the hook never raises into the route and only
-queues mail, so a status edge never waits on a delivery.
+Everything here is best-effort: the hooks never raise into their caller and
+only queue mail, so a status edge never waits on a delivery.
 """
 
 from __future__ import annotations
@@ -88,10 +97,9 @@ def alert_target_id(conv: Conversation, factory_id: str) -> str | None:
     return factory_id if factory_id != conv.id else None
 
 
-def _blocked_on(status: str, data: dict[str, Any]) -> str | None:
+def _blocked_on(status: str, value: object) -> str | None:
     if status not in _BUSY_STATUSES:
         return None
-    value = data.get("blocked_on")
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
@@ -159,7 +167,7 @@ class FactoryNotifier:
 
     def wants(self, conv: Conversation, status: str, data: dict[str, Any]) -> bool:
         """:returns: Whether this edge may need work (cheap, no I/O)."""
-        if status in _BUSY_STATUSES and _blocked_on(status, data) is None:
+        if status in _BUSY_STATUSES and _blocked_on(status, data.get("blocked_on")) is None:
             return conv.id in self._blocked
         if status not in _BUSY_STATUSES and status not in _TERMINAL_STATUSES:
             return False
@@ -173,20 +181,17 @@ class FactoryNotifier:
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    def _track_blocked(
-        self, conv: Conversation, status: str, data: dict[str, Any]
-    ) -> BlockedEpisode | None:
+    def _track_blocked(self, session_id: str, blocked_on: str | None) -> BlockedEpisode | None:
         """:returns: The session's open episode after this edge, if any."""
-        blocked_on = _blocked_on(status, data)
         if blocked_on is None:
-            self._blocked.pop(conv.id, None)
+            self._blocked.pop(session_id, None)
             return None
-        episode = self._blocked.get(conv.id)
+        episode = self._blocked.get(session_id)
         if episode is None:
             episode = BlockedEpisode(
-                session_id=conv.id, blocked_on=blocked_on, since=self._clock()
+                session_id=session_id, blocked_on=blocked_on, since=self._clock()
             )
-            self._blocked[conv.id] = episode
+            self._blocked[session_id] = episode
         else:
             episode.blocked_on = blocked_on
         return episode
@@ -205,9 +210,22 @@ class FactoryNotifier:
         """:returns: The open blocked episode of *session_id*, if any."""
         return self._blocked.get(session_id)
 
-    def forget_blocked(self, session_id: str) -> None:
-        """Drop *session_id*'s episode (the session is gone or not a member)."""
-        self._blocked.pop(session_id, None)
+    def drop_episode(self, episode: BlockedEpisode | None) -> None:
+        """Forget *episode* (gone or not a member) unless a newer edge replaced it."""
+        if episode is not None and self._blocked.get(episode.session_id) is episode:
+            del self._blocked[episode.session_id]
+
+    def prune_escalated(self, watched: set[str]) -> None:
+        """
+        Drop escalated episodes of sessions no longer watched.
+
+        A closed or vanished session sends no further edge to clear its
+        episode. Unescalated ones stay: the supervisor checks them when due.
+
+        :param watched: Ids of the open members and sub-agents just loaded.
+        """
+        for sid in [s for s, ep in self._blocked.items() if ep.escalated and s not in watched]:
+            del self._blocked[sid]
 
     async def handle(self, conv: Conversation, status: str, data: dict[str, Any]) -> None:
         """
@@ -221,7 +239,7 @@ class FactoryNotifier:
         :param data: The edge's (enriched) ``data``; ``output`` carries the
             last assistant text on terminal edges.
         """
-        episode = self._track_blocked(conv, status, data)
+        episode = self._track_blocked(conv.id, _blocked_on(status, data.get("blocked_on")))
         if episode is None and status not in _TERMINAL_STATUSES:
             return
         deps = getattr(self._app_state, FACTORY_STATE_ATTR, None)
@@ -231,20 +249,75 @@ class FactoryNotifier:
             else None
         )
         if not factory_id:
-            # Not a member: forget the episode unless a newer edge replaced it.
-            if episode is not None and self._blocked.get(conv.id) is episode:
-                del self._blocked[conv.id]
+            self.drop_episode(episode)
             return
         if status == "failed":
             self._alert_failed(conv, factory_id, data)
         elif status == "idle":
             self._notify_reply(conv, data)
 
-    def _alert_failed(self, conv: Conversation, factory_id: str, data: dict[str, Any]) -> None:
-        now = self._clock()
-        last = self._failed_alerted_at.get(conv.id)
-        if last is not None and now - last < FAILED_ALERT_DEBOUNCE_S:
+    def relayed_edge(
+        self,
+        session_id: str,
+        status: str,
+        blocked_on: object = None,
+        error_message: str | None = None,
+    ) -> None:
+        """
+        Apply one relayed runner ``session.status`` edge (sync, no I/O).
+
+        Blocked bookkeeping happens here, in arrival order. A new episode or
+        an undebounced ``failed`` edge spawns a task that loads the session
+        and checks membership. ``idle`` only closes an episode; it never
+        sends a reply notice (see the module docstring).
+
+        :param session_id: The session whose runner published the edge.
+        :param status: ``running`` / ``waiting`` / ``idle`` / ``failed``.
+        :param blocked_on: The edge's ``blocked_on`` field, if any.
+        :param error_message: The runner's error message on a ``failed`` edge.
+        """
+        if status not in _BUSY_STATUSES and status not in _TERMINAL_STATUSES:
             return
+        known = session_id in self._blocked
+        episode = self._track_blocked(session_id, _blocked_on(status, blocked_on))
+        if episode is not None and not known:
+            self.spawn(self._check_relayed(session_id, status, episode, error_message))
+        elif status == "failed" and not self._failed_debounced(session_id):
+            self.spawn(self._check_relayed(session_id, status, None, error_message))
+
+    async def _check_relayed(
+        self,
+        session_id: str,
+        status: str,
+        episode: BlockedEpisode | None,
+        error_message: str | None,
+    ) -> None:
+        try:
+            deps = getattr(self._app_state, FACTORY_STATE_ATTR, None)
+            if not isinstance(deps, FactoryDeps):
+                self.drop_episode(episode)
+                return
+            store = deps.conversation_store
+            conv = await asyncio.to_thread(store.get_conversation, session_id)
+            factory_id = await asyncio.to_thread(resolve_factory_id, conv, store) if conv else None
+            if conv is None or not factory_id:
+                self.drop_episode(episode)
+                return
+            if status == "failed":
+                self._alert_failed(conv, factory_id, {"error": error_message})
+        except Exception:  # noqa: BLE001 - a factory reaction must never break the relay
+            _logger.warning(
+                "factory: relayed status edge handling failed for %s", session_id, exc_info=True
+            )
+
+    def _failed_debounced(self, session_id: str) -> bool:
+        last = self._failed_alerted_at.get(session_id)
+        return last is not None and self._clock() - last < FAILED_ALERT_DEBOUNCE_S
+
+    def _alert_failed(self, conv: Conversation, factory_id: str, data: dict[str, Any]) -> None:
+        if self._failed_debounced(conv.id):
+            return
+        now = self._clock()
         target = alert_target_id(conv, factory_id)
         if target is None:
             return
@@ -370,11 +443,67 @@ def schedule_factory_status_edge(
         )
 
 
+# The relay has no ``app.state``; supervision registers its notifier here.
+_relay_notifier: FactoryNotifier | None = None
+
+
+def register_relay_notifier(notifier: FactoryNotifier) -> None:
+    """
+    Make *notifier* the target of :func:`schedule_factory_relayed_status`.
+
+    :param notifier: The notifier of the app whose supervision just started.
+    """
+    global _relay_notifier
+    _relay_notifier = notifier
+
+
+def unregister_relay_notifier(notifier: FactoryNotifier) -> None:
+    """
+    Stop feeding relayed edges to *notifier* (a no-op if another replaced it).
+
+    :param notifier: The notifier registered by :func:`register_relay_notifier`.
+    """
+    global _relay_notifier
+    if _relay_notifier is notifier:
+        _relay_notifier = None
+
+
+def schedule_factory_relayed_status(
+    session_id: str,
+    status: str,
+    blocked_on: object = None,
+    error_message: str | None = None,
+) -> None:
+    """
+    Relay hook: feed one runner ``session.status`` edge to the factory.
+
+    Returns at once (no I/O) and never raises; a no-op unless
+    ``OMNIGENT_FACTORY_ENABLED=1`` and supervision is running.
+
+    :param session_id: The session whose runner published the edge.
+    :param status: The relayed status, e.g. ``"running"``.
+    :param blocked_on: The event's raw ``blocked_on`` field, if any.
+    :param error_message: The runner's error message on a ``failed`` edge.
+    """
+    try:
+        notifier = _relay_notifier
+        if notifier is None or not factory_enabled():
+            return
+        notifier.relayed_edge(session_id, status, blocked_on, error_message)
+    except Exception:  # noqa: BLE001 - the relay must not fail on the factory
+        _logger.warning(
+            "factory: could not apply relayed status edge for %s", session_id, exc_info=True
+        )
+
+
 __all__ = [
     "BlockedEpisode",
     "FactoryNotifier",
     "alert_target_id",
     "get_notifier",
     "on_status_edge",
+    "register_relay_notifier",
+    "schedule_factory_relayed_status",
     "schedule_factory_status_edge",
+    "unregister_relay_notifier",
 ]

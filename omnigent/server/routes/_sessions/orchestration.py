@@ -127,6 +127,7 @@ from omnigent.server.background_session_titles import (
     prepare_background_session_title,
 )
 from omnigent.server.bundles import bundle_location, validate_agent_bundle
+from omnigent.server.factory.notify import schedule_factory_relayed_status
 from omnigent.server.host_registry import HostConnection, HostRegistry, RunnerExitReports
 from omnigent.server.managed_hosts import (
     MANAGED_REPO_LABEL_KEY,
@@ -6571,6 +6572,13 @@ async def _relay_runner_stream_once(
                                     if isinstance(raw_blocked_on, str) and raw_blocked_on
                                     else None
                                 ),
+                            )
+                            # Factory blocked/failed bookkeeping; never raises.
+                            schedule_factory_relayed_status(
+                                session_id,
+                                status,
+                                raw_blocked_on,
+                                status_error.message if status_error is not None else None,
                             )
                         if status == "running":
                             text_acc.clear()

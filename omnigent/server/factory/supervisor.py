@@ -16,7 +16,8 @@ Each tick it reads the top-level members of every factory and applies:
   ``running`` with no progress for ``OMNIGENT_FACTORY_STUCK_S``. Never cancels.
 - **S5 blocked**: a session parked on ``blocked_on`` (see
   :mod:`~omnigent.server.factory.notify`) for ``OMNIGENT_FACTORY_BLOCKED_ESCALATE_S``
-  is escalated to the factory root once.
+  is escalated once: to the factory root, or to the root's supervisor when the
+  root itself is parked.
 
 State beyond the labels is in memory on one replica.
 """
@@ -52,11 +53,14 @@ from omnigent.server.factory.mailer import get_mailer
 from omnigent.server.factory.membership import is_top_level, resolve_factory_id
 from omnigent.server.factory.notify import (
     NOTIFIER_STATE_ATTR,
+    BlockedEpisode,
     FactoryNotifier,
     alert_target_id,
     get_notifier,
     iso_utc,
     parse_iso,
+    register_relay_notifier,
+    unregister_relay_notifier,
 )
 from omnigent.server.routes._sessions.helpers import _session_status_from_cache
 from omnigent.server.routes._sessions.orchestration import _get_runner_client
@@ -84,7 +88,7 @@ DEAD_ALERT_INTERVAL_S = 3600.0
 BEAT_RETRY_S = 300.0
 """Wait after a failed heartbeat before the next attempt (each may relaunch a sandbox)."""
 
-# Sub-agents checked for stalls per member; a PL runs well under this many.
+# Newest sub-agents checked for stalls per member; a PL runs well under this many.
 _MAX_CHILDREN_PER_MEMBER = 200
 
 SUPERVISOR_STATE_ATTR = "factory_supervisor"
@@ -207,13 +211,15 @@ def _load_members(store: ConversationStore) -> list[Conversation]:
 
 
 def _load_children(store: ConversationStore, members: list[Conversation]) -> list[Conversation]:
+    """:returns: Open sub-agents of *members*, newest first per member."""
     children: list[Conversation] = []
     for member in members:
+        # Newest first: re-dispatches (``<task>-r<k>``) must not fall off the page.
         page = store.list_conversations(
             limit=_MAX_CHILDREN_PER_MEMBER,
             kind="sub_agent",
             parent_conversation_id=member.id,
-            order="asc",
+            order="desc",
         )
         children.extend(c for c in page.data if not is_session_closed(c.labels, c.title))
     return children
@@ -368,7 +374,9 @@ class FactorySupervisor:
         n = self._beat_counts.get(conv.id, 0) + 1
         deliver = self._deliver or deliver_message
         try:
-            outcome = await deliver(self._app_state, conv.id, heartbeat_text(n, now))
+            # Queue behind mail still being delivered to this target.
+            async with get_mailer(self._app_state).target_slot(conv.id):
+                outcome = await deliver(self._app_state, conv.id, heartbeat_text(n, now))
         except Exception as exc:  # noqa: BLE001 - counted as a failed beat
             _logger.warning("factory heartbeat to %s crashed", conv.id, exc_info=True)
             outcome = DeliveryOutcome(False, f"internal_error: {type(exc).__name__}")
@@ -419,6 +427,11 @@ class FactorySupervisor:
         factory_id = conv.labels.get(LABEL_ID)
         targets = dict.fromkeys(t for t in (conv.labels.get(LABEL_SUPERVISOR), factory_id) if t)
         targets.pop(conv.id, None)
+        if not targets:
+            _logger.warning(
+                "factory session %s is dead (%s) and has no supervisor to tell", conv.id, reason
+            )
+            return
         mailer = get_mailer(self._app_state)
         for target in targets:
             mailer.notify(target, dead_alert_text(conv, reason))
@@ -451,26 +464,51 @@ class FactorySupervisor:
 
     # ── S5 blocked on a human ───────────────────────────────────
 
-    async def _escalate_blocked(self, store: ConversationStore, now: float) -> None:
+    def _notifier(self) -> FactoryNotifier | None:
         notifier = getattr(self._app_state, NOTIFIER_STATE_ATTR, None)
-        if not isinstance(notifier, FactoryNotifier):
+        return notifier if isinstance(notifier, FactoryNotifier) else None
+
+    async def _escalate_blocked(self, store: ConversationStore, now: float) -> None:
+        notifier = self._notifier()
+        if notifier is None:
             return
         for episode in notifier.blocked_due(now, self.config.blocked_escalate_s):
+            # Claimed before the first await so an overlapping tick skips it.
             episode.escalated = True
-            conv = await asyncio.to_thread(store.get_conversation, episode.session_id)
-            factory_id = await asyncio.to_thread(resolve_factory_id, conv, store) if conv else None
-            if conv is None or not factory_id:
-                notifier.forget_blocked(episode.session_id)
-                continue
-            # A parked root shows its own prompt; typing into it could answer that prompt.
-            if factory_id == conv.id:
-                continue
-            get_mailer(self._app_state).notify(
-                factory_id,
-                blocked_escalation_text(
-                    display_title(conv.title, conv.id), episode.since, episode.blocked_on
-                ),
+            try:
+                await self._escalate_episode(store, notifier, episode)
+            except Exception:  # noqa: BLE001 - retried next tick; others still escalate
+                episode.escalated = False
+                _logger.warning(
+                    "factory: escalating blocked session %s failed",
+                    episode.session_id,
+                    exc_info=True,
+                )
+
+    async def _escalate_episode(
+        self, store: ConversationStore, notifier: FactoryNotifier, episode: BlockedEpisode
+    ) -> None:
+        conv = await asyncio.to_thread(store.get_conversation, episode.session_id)
+        factory_id = await asyncio.to_thread(resolve_factory_id, conv, store) if conv else None
+        if conv is None or not factory_id or is_session_closed(conv.labels, conv.title):
+            notifier.drop_episode(episode)
+            return
+        # A parked root shows its own prompt; typing into it could answer that
+        # prompt, so its supervisor (the peer lead) hears instead.
+        target = factory_id if factory_id != conv.id else conv.labels.get(LABEL_SUPERVISOR, "")
+        if not target or target == conv.id:
+            _logger.warning(
+                "factory root %s is blocked on %r with no supervisor to tell",
+                conv.id,
+                episode.blocked_on,
             )
+            return
+        get_mailer(self._app_state).notify(
+            target,
+            blocked_escalation_text(
+                display_title(conv.title, conv.id), episode.since, episode.blocked_on
+            ),
+        )
 
     # ── housekeeping ────────────────────────────────────────────
 
@@ -487,6 +525,9 @@ class FactorySupervisor:
         watched = member_ids | child_ids
         for sid in [s for s in self._stuck_alerted if s not in watched]:
             del self._stuck_alerted[sid]
+        notifier = self._notifier()
+        if notifier is not None:
+            notifier.prune_escalated(watched)
 
 
 def start_supervision(app_state: Any) -> Callable[[], Awaitable[None]]:
@@ -497,12 +538,14 @@ def start_supervision(app_state: Any) -> Callable[[], Awaitable[None]]:
     :returns: An async callable that stops both and detaches them.
     """
     notifier = get_notifier(app_state)
+    register_relay_notifier(notifier)
     supervisor = FactorySupervisor(app_state)
     setattr(app_state, SUPERVISOR_STATE_ATTR, supervisor)
     supervisor.start()
     _logger.info("factory supervisor started (%s)", supervisor.config)
 
     async def _stop() -> None:
+        unregister_relay_notifier(notifier)
         await supervisor.stop()
         await notifier.close()
         if getattr(app_state, SUPERVISOR_STATE_ATTR, None) is supervisor:

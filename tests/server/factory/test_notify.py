@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import logging
+import uuid
+from collections.abc import AsyncIterator
 from types import SimpleNamespace
 from typing import Any
 
@@ -16,9 +20,11 @@ from omnigent.server.factory.notify import (
     get_notifier,
     iso_utc,
     on_status_edge,
+    schedule_factory_relayed_status,
     schedule_factory_status_edge,
 )
 from omnigent.server.factory.supervisor import DEFAULT_BLOCKED_ESCALATE_S
+from omnigent.server.routes._sessions.common import _session_status_cache
 from tests.server.factory.conftest import FactoryWorld, FakeDeliver, Supervision
 from tests.server.helpers import create_test_agent
 
@@ -256,13 +262,277 @@ async def test_the_next_unblocked_edge_clears_the_episode(
     assert supervision.notifier.blocked_episode(w.id("ic")) is None
 
 
-async def test_a_blocked_root_is_not_escalated_to_itself(supervision: Supervision) -> None:
-    clock = supervision.clock
+async def test_a_blocked_root_escalates_to_its_supervisor(supervision: Supervision) -> None:
+    w, clock = supervision.world, supervision.clock
     _quiet(supervision)
+    since = clock.now
     await _edge(supervision, "lead_a", "running", blocked_on=BLOCKED_ON)
 
     clock.advance(DEFAULT_BLOCKED_ESCALATE_S)
     await supervision.tick()
+    await supervision.tick()
+
+    # Typing into the parked root could answer its prompt; the peer lead hears instead.
+    assert supervision.deliver.calls == [
+        (
+            w.id("lead_b"),
+            f'[NEEDS HUMAN · "Atlas" waiting since {iso_utc(since)}: {BLOCKED_ON}]',
+            False,
+        )
+    ]
+
+
+async def test_a_blocked_root_without_a_supervisor_is_only_logged(
+    supervision: Supervision, caplog: pytest.LogCaptureFixture
+) -> None:
+    w, clock = supervision.world, supervision.clock
+    _quiet(supervision)
+    w.store.delete_label(w.id("lead_a"), F.LABEL_SUPERVISOR)
+    await _edge(supervision, "lead_a", "running", blocked_on=BLOCKED_ON)
+
+    clock.advance(DEFAULT_BLOCKED_ESCALATE_S)
+    with caplog.at_level(logging.WARNING, logger="omnigent.server.factory.supervisor"):
+        await supervision.tick()
+        await supervision.tick()
+
+    assert supervision.deliver.calls == []
+    warnings = [r for r in caplog.records if "no supervisor to tell" in r.getMessage()]
+    assert len(warnings) == 1
+
+
+async def test_a_closed_session_is_not_escalated(supervision: Supervision) -> None:
+    w, clock = supervision.world, supervision.clock
+    _quiet(supervision)
+    await _edge(supervision, "ic", "running", blocked_on=BLOCKED_ON)
+    w.store.set_labels(w.id("ic"), {"omnigent.closed": "true"})
+
+    clock.advance(DEFAULT_BLOCKED_ESCALATE_S)
+    await supervision.tick()
+
+    assert supervision.deliver.calls == []
+    assert supervision.notifier.blocked_episode(w.id("ic")) is None
+
+
+async def test_an_escalated_episode_is_dropped_once_its_session_closes(
+    supervision: Supervision,
+) -> None:
+    w, clock = supervision.world, supervision.clock
+    ic = w.id("ic")
+    _quiet(supervision)
+    await _edge(supervision, "ic", "running", blocked_on=BLOCKED_ON)
+    clock.advance(DEFAULT_BLOCKED_ESCALATE_S)
+    await supervision.tick()
+    assert len(supervision.deliver.texts_to(w.id("lead_a"))) == 1
+    # Still parked and still watched: the escalated episode is kept.
+    assert supervision.notifier.blocked_episode(ic) is not None
+
+    # Closed sessions send no further edge; the tick forgets the episode.
+    w.store.set_labels(ic, {"omnigent.closed": "true"})
+    await supervision.tick()
+
+    assert supervision.notifier.blocked_episode(ic) is None
+    assert len(supervision.deliver.texts_to(w.id("lead_a"))) == 1
+
+
+# ── relayed runner edges (claude-native status file) ────────────
+
+
+class _RunnerStream:
+    """Runner client stub: ``GET /stream`` yields fixed ``session.status`` frames."""
+
+    def __init__(self, events: list[dict[str, Any]]) -> None:
+        self._frames = [f"data: {json.dumps(e)}\n\n" for e in events] + ["data: [DONE]\n\n"]
+
+    def stream(self, method: str, url: str, timeout: object = None) -> _RunnerStream:
+        del method, url, timeout
+        return self
+
+    async def __aenter__(self) -> _RunnerStream:
+        return self
+
+    async def __aexit__(self, *exc: object) -> bool:
+        return False
+
+    async def aiter_text(self) -> AsyncIterator[str]:
+        for frame in self._frames:
+            yield frame
+
+
+@pytest.fixture()
+def _status_cache(supervision: Supervision, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Undo the relay's status-cache writes for the seeded sessions after each test."""
+    for conv in supervision.world.sessions.values():
+        monkeypatch.setitem(_session_status_cache, conv.id, "idle")
+
+
+async def _relay(s: Supervision, key: str, *events: dict[str, Any]) -> None:
+    """Push runner ``session.status`` events for a seeded session through the real relay."""
+    from omnigent.server.routes._sessions.orchestration import _relay_runner_stream_once
+
+    frames = [{"type": "session.status", **event} for event in events]
+    await _relay_runner_stream_once(s.world.id(key), _RunnerStream(frames), s.world.store)  # type: ignore[arg-type]
+    await s.settle()
+
+
+@pytest.mark.usefixtures("_status_cache")
+async def test_a_relayed_blocked_edge_escalates_then_clears(supervision: Supervision) -> None:
+    w, clock = supervision.world, supervision.clock
+    ic, lead_a = w.id("ic"), w.id("lead_a")
+    _quiet(supervision)
+    since = clock.now
+
+    await _relay(supervision, "ic", {"status": "running", "blocked_on": BLOCKED_ON})
+    episode = supervision.notifier.blocked_episode(ic)
+    assert episode is not None
+    assert (episode.blocked_on, episode.since) == (BLOCKED_ON, since)
+
+    clock.advance(DEFAULT_BLOCKED_ESCALATE_S - 1)
+    await supervision.tick()
+    assert supervision.deliver.calls == []
+
+    clock.advance(1)
+    await supervision.tick()
+    await supervision.tick()
+    assert supervision.deliver.calls == [
+        (
+            lead_a,
+            f'[NEEDS HUMAN · "ic:task-1" waiting since {iso_utc(since)}: {BLOCKED_ON}]',
+            False,
+        )
+    ]
+
+    # The human answered the dialog: the runner relays running without blocked_on.
+    await _relay(supervision, "ic", {"status": "running"})
+    assert supervision.notifier.blocked_episode(ic) is None
+
+
+@pytest.mark.usefixtures("_status_cache")
+async def test_a_relayed_blocked_episode_keeps_its_start_and_updates_its_reason(
+    supervision: Supervision,
+) -> None:
+    w, clock = supervision.world, supervision.clock
+    pl = w.id("pl")
+    _quiet(supervision)
+    since = clock.now
+    await _relay(supervision, "pl", {"status": "running", "blocked_on": BLOCKED_ON})
+    clock.advance(120)
+    await _relay(supervision, "pl", {"status": "running", "blocked_on": "question: which DB?"})
+
+    clock.advance(DEFAULT_BLOCKED_ESCALATE_S - 120)
+    await supervision.tick()
+
+    assert supervision.deliver.texts_to(w.id("lead_a")) == [
+        f'[NEEDS HUMAN · "PL · api-version" waiting since {iso_utc(since)}: question: which DB?]'
+    ]
+    assert supervision.notifier.blocked_episode(pl) is not None
+
+
+@pytest.mark.usefixtures("_status_cache")
+async def test_a_relayed_idle_closes_the_episode_without_a_reply_notice(
+    supervision: Supervision,
+) -> None:
+    w, clock = supervision.world, supervision.clock
+    lead_a, ic = w.id("lead_a"), w.id("ic")
+    _quiet(supervision)
+    await _deliver_request(supervision, lead_a, ic)
+    supervision.deliver.calls.clear()
+
+    await _relay(supervision, "ic", {"status": "running", "blocked_on": BLOCKED_ON})
+    assert supervision.notifier.blocked_episode(ic) is not None
+    await _relay(supervision, "ic", {"status": "idle"})
+    clock.advance(DEFAULT_BLOCKED_ESCALATE_S)
+    await supervision.tick()
+
+    assert supervision.notifier.blocked_episode(ic) is None
+    assert supervision.deliver.calls == []
+    # PTY idle edges oscillate mid-turn; the pending request waits for the Stop hook.
+    assert supervision.mailer.pop_pending_reply(ic) is not None
+
+
+@pytest.mark.usefixtures("_status_cache")
+async def test_a_relayed_failed_edge_alerts_with_the_shared_debounce(
+    supervision: Supervision,
+) -> None:
+    w, clock = supervision.world, supervision.clock
+    pl, lead_b = w.id("pl"), w.id("lead_b")
+    _quiet(supervision)
+    error = {"code": "runner_error", "message": "claude exited with code 1 during setup"}
+
+    await _relay(supervision, "pl", {"status": "failed", "error": error})
+    # The Stop hook's own failed edge for the same turn is not a second alert.
+    await _edge(supervision, "pl", "failed", output="API Error: 529")
+    await _relay(supervision, "pl", {"status": "failed", "error": error})
+
+    assert supervision.deliver.calls == [
+        (
+            lead_b,
+            f'[Factory alert · "PL · api-version" ({pl}) failed: '
+            "claude exited with code 1 during setup]",
+            False,
+        )
+    ]
+
+    clock.advance(FAILED_ALERT_DEBOUNCE_S)
+    await _relay(supervision, "pl", {"status": "failed"})
+    assert supervision.deliver.texts_to(lead_b)[-1] == (
+        f'[Factory alert · "PL · api-version" ({pl}) failed: no error detail]'
+    )
+
+
+@pytest.mark.usefixtures("_status_cache")
+async def test_relayed_edges_of_non_members_are_dropped(supervision: Supervision) -> None:
+    w, clock = supervision.world, supervision.clock
+    plain = w.id("plain")
+    _quiet(supervision)
+
+    await _relay(supervision, "plain", {"status": "running", "blocked_on": BLOCKED_ON})
+    assert supervision.notifier.blocked_episode(plain) is None
+    await _relay(
+        supervision, "plain", {"status": "failed", "error": {"code": "x", "message": "boom"}}
+    )
+    # A session deleted since its runner published the edge.
+    gone = uuid.uuid4().hex
+    schedule_factory_relayed_status(gone, "running", BLOCKED_ON)
+    await supervision.settle()
+    clock.advance(DEFAULT_BLOCKED_ESCALATE_S)
+    await supervision.tick()
+
+    assert supervision.deliver.calls == []
+    assert supervision.notifier.blocked_episode(gone) is None
+
+
+async def test_the_relay_hook_is_inert_without_the_flag_or_supervision(
+    supervision: Supervision, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.server.factory.notify import unregister_relay_notifier
+
+    ic = supervision.world.id("ic")
+    monkeypatch.delenv(F.FACTORY_ENABLED_ENV)
+    schedule_factory_relayed_status(ic, "running", BLOCKED_ON)
+    assert supervision.notifier.blocked_episode(ic) is None
+
+    monkeypatch.setenv(F.FACTORY_ENABLED_ENV, "1")
+    unregister_relay_notifier(supervision.notifier)
+    schedule_factory_relayed_status(ic, "running", BLOCKED_ON)
+    assert supervision.notifier.blocked_episode(ic) is None
+
+
+async def test_the_relay_hook_never_raises(
+    supervision: Supervision, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ic = supervision.world.id("ic")
+
+    def _broken(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("store down")
+
+    # A failing membership check stays inside its task ...
+    monkeypatch.setattr("omnigent.server.factory.notify.resolve_factory_id", _broken)
+    schedule_factory_relayed_status(ic, "failed", None, "boom")
+    schedule_factory_relayed_status(ic, "running", BLOCKED_ON)
+    await supervision.settle()
+    # ... and a failing notifier never reaches the relay.
+    monkeypatch.setattr(supervision.notifier, "relayed_edge", _broken)
+    schedule_factory_relayed_status(ic, "running", BLOCKED_ON)
 
     assert supervision.deliver.calls == []
 

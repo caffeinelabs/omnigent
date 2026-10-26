@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 
 import pytest
 
@@ -238,6 +239,42 @@ async def test_three_failures_in_an_hour_mark_dead_and_need_a_human_once(
     assert supervision.deliver.texts_to(lead_b) == [alert, alert]
 
 
+async def test_a_dead_root_without_a_supervisor_is_logged(
+    supervision: Supervision, caplog: pytest.LogCaptureFixture
+) -> None:
+    w, clock = supervision.world, supervision.clock
+    lead_a = w.id("lead_a")
+    w.store.delete_label(lead_a, F.LABEL_SUPERVISOR)
+    w.store.set_labels(w.id("pl"), {F.LABEL_HEARTBEAT_S: "0"})
+    supervision.deliver.outcomes[lead_a] = [DeliveryOutcome(False, "runner_unavailable")] * 3
+
+    clock.advance(3600)
+    with caplog.at_level(logging.WARNING, logger="omnigent.server.factory.supervisor"):
+        for _ in range(3):
+            await supervision.tick()
+            clock.advance(300)
+
+    assert w.get("lead_a").labels[F.LABEL_HEALTH] == F.HEALTH_DEAD
+    assert [sid for sid, _, _ in supervision.deliver.calls] == [lead_a] * 3
+    assert any("no supervisor to tell" in r.getMessage() for r in caplog.records)
+
+
+async def test_a_beat_waits_for_mail_still_being_delivered(supervision: Supervision) -> None:
+    pl = supervision.world.id("pl")
+    supervision.clock.advance(PL_HEARTBEAT_S)
+    slot = supervision.mailer.target_slot(pl)
+    await slot.__aenter__()  # e.g. a brief still waiting on a managed launch
+
+    await supervision.supervisor.tick()
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert supervision.deliver.texts_to(pl) == []
+
+    await slot.__aexit__(None, None, None)
+    await supervision.settle()
+    assert len(supervision.deliver.texts_to(pl)) == 1
+
+
 async def test_a_delivered_beat_clears_dead(supervision: Supervision) -> None:
     w, clock = supervision.world, supervision.clock
     pl = w.id("pl")
@@ -316,11 +353,12 @@ def test_config_reads_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 async def test_factory_services_run_the_supervisor_only_when_enabled(
     world: FactoryWorld, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    from omnigent.server.factory import start_factory_services
+    from omnigent.server.factory import notify, start_factory_services
 
     monkeypatch.delenv(F.FACTORY_ENABLED_ENV, raising=False)
     stop = await start_factory_services(world.app_state)
     assert get_supervisor(world.app_state) is None
+    assert notify._relay_notifier is None
     await stop()
 
     monkeypatch.setenv(F.FACTORY_ENABLED_ENV, "1")
@@ -329,7 +367,11 @@ async def test_factory_services_run_the_supervisor_only_when_enabled(
     supervisor = get_supervisor(world.app_state)
     assert supervisor is not None
     assert supervisor.config.tick_s == 30
-    assert isinstance(getattr(world.app_state, NOTIFIER_STATE_ATTR), FactoryNotifier)
+    notifier = getattr(world.app_state, NOTIFIER_STATE_ATTR)
+    assert isinstance(notifier, FactoryNotifier)
+    # The runner-stream relay (no app.state) feeds this notifier.
+    assert notify._relay_notifier is notifier
     await stop()
     assert get_supervisor(world.app_state) is None
     assert getattr(world.app_state, NOTIFIER_STATE_ATTR) is None
+    assert notify._relay_notifier is None

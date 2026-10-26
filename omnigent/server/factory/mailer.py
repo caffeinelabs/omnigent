@@ -16,7 +16,8 @@ import os
 import secrets
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import AsyncIterator, Awaitable, Callable, Sequence
+from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import Any
 
@@ -264,18 +265,27 @@ class Mailer:
             _logger.exception("factory delivery to %s crashed", session_id)
             return DeliveryOutcome(False, f"internal_error: {type(exc).__name__}")
 
-    async def _run(self, item: MailItem) -> None:
-        target_id = item.target_id
+    @asynccontextmanager
+    async def target_slot(self, target_id: str) -> AsyncIterator[None]:
+        """
+        Hold *target_id*'s delivery slot (one delivery at a time per target).
+
+        :param target_id: Recipient session id.
+        """
         lock = self._target_locks.setdefault(target_id, asyncio.Lock())
         self._target_users[target_id] = self._target_users.get(target_id, 0) + 1
         try:
             async with lock:
-                reason = await self._deliver_with_retries(item)
+                yield
         finally:
             self._target_users[target_id] -= 1
             if not self._target_users[target_id]:
                 del self._target_users[target_id]
                 self._target_locks.pop(target_id, None)
+
+    async def _run(self, item: MailItem) -> None:
+        async with self.target_slot(item.target_id):
+            reason = await self._deliver_with_retries(item)
         # Bounce outside the target's lock: waking the sender can take minutes.
         if reason is not None:
             await self._bounce(item, reason)

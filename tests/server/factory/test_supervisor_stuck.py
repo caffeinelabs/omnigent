@@ -173,3 +173,27 @@ async def test_stuck_alerts_never_cancel(
     assert all(restart is False for _, _, restart in supervision.deliver.calls)
     # Statuses are reported, never changed.
     assert _session_status_cache[w.id("pl")] == "running"
+
+
+async def test_the_newest_sub_agents_are_checked_first(
+    supervision: Supervision, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.server.factory import supervisor as supervisor_module
+
+    w, clock = supervision.world, supervision.clock
+    # A long-lived PL past the per-member page: only the newest child fits.
+    monkeypatch.setattr(supervisor_module, "_MAX_CHILDREN_PER_MEMBER", 1)
+    redispatch = w.make_session(
+        "ic_r2", agent="pl", title="ic:task-1-r2", parent="pl", sub_agent_name="ic"
+    )
+    for key in ("ic", "ic_r2"):
+        monkeypatch.setitem(_session_status_cache, w.id(key), "running")
+    for lead in ("lead_a", "pl"):
+        w.store.set_labels(w.id(lead), {F.LABEL_HEARTBEAT_S: "0"})
+
+    clock.advance(DEFAULT_STUCK_S)
+    await supervision.tick()
+
+    assert supervision.deliver.texts_to(w.id("pl")) == [
+        _stuck("ic:task-1-r2", redispatch.id, "1h30m")
+    ]

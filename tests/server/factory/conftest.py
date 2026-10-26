@@ -429,7 +429,12 @@ async def supervision(
     """The factory switched on, with recorded delivery and runner tunnels."""
     from omnigent.server.factory import supervisor as supervisor_module
     from omnigent.server.factory.mailer import MAILER_STATE_ATTR, Mailer
-    from omnigent.server.factory.notify import NOTIFIER_STATE_ATTR, FactoryNotifier
+    from omnigent.server.factory.notify import (
+        NOTIFIER_STATE_ATTR,
+        FactoryNotifier,
+        register_relay_notifier,
+        unregister_relay_notifier,
+    )
     from omnigent.server.factory.supervisor import FactorySupervisor, SupervisorConfig
 
     monkeypatch.setenv(F.FACTORY_ENABLED_ENV, "1")
@@ -441,6 +446,7 @@ async def supervision(
     notifier = FactoryNotifier(state, clock=clock)
     setattr(state, MAILER_STATE_ATTR, mailer)
     setattr(state, NOTIFIER_STATE_ATTR, notifier)
+    register_relay_notifier(notifier)
     supervisor = FactorySupervisor(
         state, config=SupervisorConfig(), deliver=fake_deliver, clock=clock, sleep=no_sleep
     )
@@ -453,6 +459,7 @@ async def supervision(
         notifier=notifier,
         supervisor=supervisor,
     )
+    unregister_relay_notifier(notifier)
     await supervisor.stop()
     await notifier.close()
     await mailer.close()
