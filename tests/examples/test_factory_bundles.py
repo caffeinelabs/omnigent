@@ -10,33 +10,35 @@ from __future__ import annotations
 
 import importlib
 import re
+import textwrap
 from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 import tomllib
+import yaml
 
 from omnigent.factory import (
-    HEALTH,
-    MESSAGE_KINDS,
+    ROLE_DEMO,
     ROLE_ENV_KEEPER,
     ROLE_IC,
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
     ROLE_REVIEWER,
-    STATES,
     factory_role_from_spec,
 )
+from omnigent.policies.builtins.factory import factory_role_guard
 from omnigent.policies.registry import is_registered_handler
 from omnigent.resources import examples as _examples_resources
 from omnigent.spec import load, materialize_bundle
 from omnigent.spec.types import AgentSpec, FunctionPolicySpec, ProviderAuth
+from omnigent.tools.builtins.factory import FACTORY_TOOL_NAMES
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _FACTORY_DIR = _REPO_ROOT / "examples" / "factory"
 _LEAD_DIR = _FACTORY_DIR / "factory-lead"
 _PL_DIR = _FACTORY_DIR / "factory-pl"
-_PL_SUB_AGENTS = ("env_keeper", "ic", "ic_codex", "reviewer")
+_PL_SUB_AGENTS = ("env_keeper", "demo", "ic", "ic_codex", "reviewer")
 
 _FACTORY_POLICY_MODULE = "omnigent.policies.builtins.factory"
 _TOOL_TOKEN = re.compile(r"\b(sys_[a-z_]+|load_skill|read_skill_file)\b")
@@ -44,20 +46,22 @@ _TOOL_TOKEN = re.compile(r"\b(sys_[a-z_]+|load_skill|read_skill_file)\b")
 _TOOL_CALL = re.compile(r"\b(sys_[a-z_]+)\(([^()]*)\)")
 _QUOTED = re.compile(r'"[^"]*"')
 _KEYWORD = re.compile(r"\b([a-z_]+)=")
-# Arguments whose documented literal values must be valid for the server.
-_ENUM_ARGS = {"kind": MESSAGE_KINDS, "state": STATES, "health": HEALTH}
+_LITERAL_ARG = re.compile(r'\b([a-z_]+)="([^"]*)"')
+_FACTORY_TOOL_TOKEN = re.compile(r"\bsys_factory_[a-z_]+\b")
 
 # Family aliases: the provider's models map turns them into concrete ids.
 _CLAUDE_MODELS = {
     "factory-lead": "opus",
     "factory-pl": "opus",
     "env_keeper": "sonnet",
+    "demo": "sonnet",
     "ic": "sonnet",
 }
 _ROLES = {
     "factory-lead": ROLE_LEAD,
     "factory-pl": ROLE_PROJECT_LEAD,
     "env_keeper": ROLE_ENV_KEEPER,
+    "demo": ROLE_DEMO,
     "ic": ROLE_IC,
     "ic_codex": ROLE_IC,
     "reviewer": ROLE_REVIEWER,
@@ -138,6 +142,7 @@ def test_pl_sub_agents_resolve(pl: AgentSpec) -> None:
         sub = _sub_agent(pl, name)
         assert sub.instructions, f"{name} has no prompt"
     assert {s.name for s in _sub_agent(pl, "env_keeper").skills} == {"factory-env"}
+    assert {s.name for s in _sub_agent(pl, "demo").skills} == {"factory-demo"}
     assert {s.name for s in _sub_agent(pl, "ic").skills} == {"factory-ic"}
     assert "tilt" in (_sub_agent(pl, "env_keeper").terminals or {})
     for name in ("ic_codex", "reviewer"):
@@ -366,11 +371,16 @@ def test_factory_tools_are_on_each_agents_real_surface(lead: AgentSpec, pl: Agen
 
 @pytest.mark.usefixtures("_terminal_registry")
 def test_documented_tool_calls_use_real_argument_names(lead: AgentSpec, pl: AgentSpec) -> None:
-    """Every `sys_x(arg=...)` in a prompt or skill names a real parameter and value."""
+    """Every `sys_x(arg=...)` in a prompt or skill names a real parameter and enum value."""
     parameters: dict[str, set[str]] = {}
+    enums: dict[tuple[str, str], set[str]] = {}
     for spec in _all_specs(lead, pl):
         for name, schema in _relay_schemas(spec).items():
             parameters.setdefault(name, set()).update(_parameter_names(schema))
+            properties = schema["parameters"].get("properties") or {}  # type: ignore[union-attr]
+            for arg, prop in properties.items():
+                if isinstance(prop, dict) and isinstance(prop.get("enum"), list):
+                    enums.setdefault((name, arg), set()).update(map(str, prop["enum"]))
     checked = 0
     for spec in _all_specs(lead, pl):
         for source, text in (("prompt", spec.instructions or ""), ("skills", _skill_text(spec))):
@@ -382,9 +392,12 @@ def test_documented_tool_calls_use_real_argument_names(lead: AgentSpec, pl: Agen
                         f"{spec.name} {source}: {tool}({keyword}=...) is not a parameter; "
                         f"real ones: {sorted(parameters[tool])}"
                     )
-                for keyword, values in _ENUM_ARGS.items():
-                    for value in re.findall(rf'\b{keyword}="([^"]*)"', raw_args):
-                        assert value in values, f"{spec.name} {source}: {tool} {keyword}={value!r}"
+                for keyword, value in _LITERAL_ARG.findall(raw_args):
+                    allowed = enums.get((tool, keyword))
+                    if allowed is not None:
+                        assert value in allowed, (
+                            f"{spec.name} {source}: {tool} {keyword}={value!r}"
+                        )
     assert checked > 50, "the call pattern stopped matching the prompts"
 
 
@@ -404,39 +417,292 @@ def test_prompts_carry_the_operational_contracts(lead: AgentSpec, pl: AgentSpec)
         "sys_factory_roster",
         "sys_factory_set",
         "sys_factory_spawn",
+        "sys_factory_ask",
+        "sys_factory_pr",
         "sys_session_post",
         'load_skill("factory-heartbeat")',
         'load_skill("factory-recovery")',
         "Sentinel",
         "~/factory/ledger.md",
+        "[Factory brief · from <human> via cockpit",
+        "[Factory control",
+        "[Factory decision",
+        "[Factory notice · PR",
+        'message="Start. Your charter follows."',
+        "Cockpit: /factory/<factory id>",
+        "READY FOR HUMAN MERGE",
     ):
         assert token in lead_text, token
-    assert "READY FOR HUMAN MERGE" in lead_text and "MERGED <url>" in lead_text
     pl_text = pl.instructions or ""
     for token in (
         "In ONE response",
         'agent="env_keeper"',
         "sys_read_inbox",
         "sys_session_post",
+        "sys_factory_pr",
+        "sys_factory_ask",
+        'sys_factory_set(stage="building"',
         "READY FOR HUMAN MERGE",
         "python -m omnigent.factory_merge",
         "sys_cancel_task",
         "sys_session_close",
         'load_skill("factory-heartbeat")',
+        "PREVIEW pr=<n> head=<sha>",
+        "DEMO pr=<url> sha=<40-char sha>",
+        "[Factory control",
+        "[Factory review · CHANGES REQUESTED",
     ):
         assert token in pl_text, token
     # Humans merge caffeinelabs/app: the PL hands green PRs over instead.
-    assert "always for caffeinelabs/app): never merge and never run the merge gate" in " ".join(
-        pl_text.split()
-    )
+    assert "never merge and never run the merge gate on it" in " ".join(pl_text.split())
     env_text = _sub_agent(pl, "env_keeper").instructions or ""
-    for token in ("UP:", "STATUS:", "VERIFY ", "MERGED:", "DOWN:", "pnpm factory:up"):
+    for token in (
+        "UP:",
+        "STATUS:",
+        "DOWN:",
+        "PREVIEW pr=<n> head=<sha>",
+        "PREVIEW_DOWN pr=<n>",
+        "PREVIEW_STATUS",
+        "MERGED pr=<n>",
+        "CLOSED pr=<n>",
+        "pnpm factory:up",
+        "scripts/factory.ts preview up",
+        "sys_factory_env",
+    ):
         assert token in env_text, token
     assert "~/factory/env.json" in env_text and "factory:urls" in env_text
-    assert "<!-- factory:verify sha=" in env_text
+    assert (
+        "<!-- factory:verify sha=<sha> result=PASS|FAIL env=<api url> preview=<app url> -->"
+        in (env_text)
+    )
+    demo_text = _sub_agent(pl, "demo").instructions or ""
+    for token in ('load_skill("factory-demo")', "sys_factory_demo", "gh pr comment", "run.mjs"):
+        assert token in demo_text, token
     for name in ("ic", "ic_codex"):
         text = _sub_agent(pl, name).instructions or ""
         assert "RESULT" in text and "NOTES.md" in text, name
         assert 'sys_session_post(to="parent", kind="request"' in text, name
+        assert 'sys_factory_pr(url=<pr url>, task=<task>, claim="opened")' in text, name
+        assert "Demo plan" in text, name
     assert "<!-- factory:review sha=" in (_sub_agent(pl, "reviewer").instructions or "")
     assert "<!-- factory:review sha=" in _skill_text(_sub_agent(pl, "ic"))
+
+
+# ── Cockpit round: tools, server texts, previews and demos ──────────────────
+
+
+def _all_texts(lead: AgentSpec, pl: AgentSpec) -> Iterator[tuple[str, str]]:
+    """Every prompt and skill the factory agents read, as ``(label, text)``."""
+    for spec in _all_specs(lead, pl):
+        yield f"{spec.name} prompt", spec.instructions or ""
+        for skill in spec.skills:
+            path = _skill_dir(spec) / skill.name / "SKILL.md"
+            yield f"{spec.name}/{skill.name}", path.read_text(encoding="utf-8")
+
+
+def test_every_factory_tool_named_anywhere_exists(lead: AgentSpec, pl: AgentSpec) -> None:
+    named: set[str] = set()
+    for label, text in _all_texts(lead, pl):
+        found = set(_FACTORY_TOOL_TOKEN.findall(text))
+        assert found <= FACTORY_TOOL_NAMES, f"{label}: {sorted(found - FACTORY_TOOL_NAMES)}"
+        named |= found
+    factory_tools = {t for t in FACTORY_TOOL_NAMES if t.startswith("sys_factory_")}
+    assert named == factory_tools, f"never documented: {sorted(factory_tools - named)}"
+
+
+def test_no_typed_merged_command_remains(lead: AgentSpec, pl: AgentSpec) -> None:
+    """Merges arrive as server notices; nobody types or relays `merged <url>` any more."""
+    for label, text in _all_texts(lead, pl):
+        assert not re.search(r"merged <url>", text, re.IGNORECASE), label
+        # The old merge poll; Sentinel's one verification reads more fields.
+        assert not re.search(r"gh pr view <url> --json state\b(?!,)", text), label
+
+
+def _command_section(text: str, start: str, ends: tuple[str, ...]) -> str:
+    begin = text.index(start)
+    stops = [text.find(end, begin + len(start)) for end in ends]
+    found = [stop for stop in stops if stop > begin]
+    return text[begin : min(found)] if found else text[begin:]
+
+
+def test_verify_never_returns_the_env_to_main(pl: AgentSpec) -> None:
+    """PREVIEW (alias VERIFY) leaves the preview at the PR head; only MERGED moves the dev env."""
+    env = _sub_agent(pl, "env_keeper")
+    skill = (_skill_dir(env) / "factory-env" / "SKILL.md").read_text(encoding="utf-8")
+    prompt = env.instructions or ""
+    reset = re.compile(r"checkout\s+(-q\s+)?--detach\s+origin/main")
+    sections = {
+        "prompt": _command_section(prompt, "PREVIEW pr=<n>", ("PREVIEW_DOWN",)),
+        "skill": _command_section(skill, "### PREVIEW pr=<n>", ("### PREVIEW_DOWN",)),
+    }
+    for label, section in sections.items():
+        assert "VERIFY" in section or label == "skill", label
+        assert not reset.search(section), f"{label}: the PREVIEW/VERIFY steps reset to main"
+        assert "factory:verify sha=" in section, label
+    merged = _command_section(skill, "### MERGED pr=<n>", ("## Reading Tilt",))
+    assert reset.search(merged), "MERGED moves the dev env to the new origin/main"
+    assert "VERIFY is the same" in prompt
+    assert "FACTORY_TILT_PORT" not in prompt + skill
+
+
+def test_demo_skill_frontmatter_and_the_demo_agent(pl: AgentSpec) -> None:
+    demo = _sub_agent(pl, "demo")
+    assert [s.name for s in demo.skills] == ["factory-demo"]
+    text = (_skill_dir(demo) / "factory-demo" / "SKILL.md").read_text(encoding="utf-8")
+    match = re.match(r"---\n(.*?)\n---\n", text, re.S)
+    assert match is not None, "factory-demo SKILL.md has no frontmatter"
+    meta = yaml.safe_load(match.group(1))
+    assert meta["name"] == "factory-demo"
+    assert "Playwright" in meta["description"]
+    harness = _skill_dir(demo) / "factory-demo" / "harness"
+    for name in (
+        "run.mjs",
+        "explore.mjs",
+        "fixtures.ts",
+        "playwright.config.ts",
+        "package-lock.json",
+    ):
+        assert (harness / name).is_file(), name
+    assert demo.executor.config["permission_mode"] == "bypassPermissions"
+    assert not (demo.terminals or {}).keys() - {"bash"}
+
+
+@pytest.mark.usefixtures("_terminal_registry")
+def test_factory_tools_follow_the_role_matrix(lead: AgentSpec, pl: AgentSpec) -> None:
+    has = {str(spec.name): _relay_tool_names(spec) for spec in _all_specs(lead, pl)}
+    for name, tools in has.items():
+        assert {"sys_factory_ask", "sys_factory_pr"} <= tools, name
+        assert ("sys_factory_env" in tools) is (name in {"factory-pl", "env_keeper"}), name
+        assert ("sys_factory_demo" in tools) is (name in {"factory-pl", "env_keeper", "demo"}), (
+            name
+        )
+
+
+def test_heartbeat_skills_end_quiet_turns_with_heartbeat_ok() -> None:
+    for bundle in (_LEAD_DIR, _PL_DIR):
+        text = (bundle / "skills" / "factory-heartbeat" / "SKILL.md").read_text(encoding="utf-8")
+        assert "HEARTBEAT_OK · " in text, bundle.name
+        assert "Handle only the items listed in the delta" in text, bundle.name
+        assert "gh pr view" not in text and "gh pr checks" not in text, bundle.name
+
+
+def test_protocol_covers_the_cockpit_server_texts() -> None:
+    text = (_LEAD_DIR / "skills" / "factory-protocol" / "SKILL.md").read_text(encoding="utf-8")
+    for token in (
+        "[Factory control",
+        "[Factory decision",
+        "[Factory review",
+        "[Factory brief · from <human> via cockpit",
+        "[Factory notice · PR",
+        "id=mail_",
+        "never post DECISIONS NEEDED lists",
+        "status goes in `summary` only",
+        "Never poll GitHub or curl for what the server reports",
+        "<!-- factory:demo sha=<head> status=PASS|PARTIAL|FAIL demo=<demo id> -->",
+        "HEARTBEAT_OK · <status>",
+    ):
+        assert token in text, token
+
+
+def test_leads_keep_titles_plain(lead: AgentSpec) -> None:
+    """The beacon lives in the summary; titles stay the members' names."""
+    text = lead.instructions or ""
+    assert 'title="<Atlas|Sentinel>' not in text
+    assert re.search(r'sys_factory_set\(summary="', text)
+
+
+# The fenced shell blocks the skills document, run through the guards that will see them.
+_PLACEHOLDERS = (
+    (re.compile(r"<40-char sha>|<sha>"), "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16"),
+    (re.compile(r"<n>"), "9630"),
+    (re.compile(r"<sha7>"), "7767f0d"),
+    (re.compile(r"<repo>"), "/home/omnigent/workspace/app"),
+    (re.compile(r"<tooling ref>"), "factory/preview-tooling"),
+    (re.compile(r"<pr url>|<url>"), "https://github.com/caffeinelabs/app/pull/9630"),
+    (re.compile(r"<[^<>\n]+>"), "x"),
+)
+
+
+def _shell_blocks(path: Path) -> list[str]:
+    blocks = re.findall(r"```bash\n(.*?)```", path.read_text(encoding="utf-8"), re.S)
+    out = []
+    for block in blocks:
+        for pattern, value in _PLACEHOLDERS:
+            block = pattern.sub(value, block)
+        out.append(textwrap.dedent(block))
+    return out
+
+
+def _guard(role: str, command: str) -> dict[str, object]:
+    event = {"type": "tool_call", "data": {"name": "Bash", "arguments": {"command": command}}}
+    return factory_role_guard(role=role, write_repos=["caffeinelabs/app"])(event, {})
+
+
+@pytest.mark.parametrize(
+    ("skill", "roles"),
+    [
+        pytest.param(
+            _PL_DIR / "agents/env_keeper/skills/factory-env/SKILL.md",
+            (ROLE_ENV_KEEPER, ROLE_PROJECT_LEAD),
+            id="factory-env",
+        ),
+        pytest.param(
+            _PL_DIR / "agents/demo/skills/factory-demo/SKILL.md",
+            (ROLE_DEMO, ROLE_PROJECT_LEAD),
+            id="factory-demo",
+        ),
+        pytest.param(
+            _PL_DIR / "skills/factory-pl-playbook/SKILL.md",
+            (ROLE_PROJECT_LEAD,),
+            id="factory-pl-playbook",
+        ),
+    ],
+)
+def test_documented_commands_pass_their_guards(skill: Path, roles: tuple[str, ...]) -> None:
+    """A sub-agent answers to its own and its PL's guard; both must admit the skill's commands."""
+    blocks = _shell_blocks(skill)
+    assert blocks, skill
+    for block in blocks:
+        for role in roles:
+            decision = _guard(role, block)
+            assert decision["result"] == "ALLOW", f"{role} denied:\n{block}\n{decision}"
+
+
+def test_preview_lifecycle_stays_with_env_keeper() -> None:
+    deploy = next(
+        b
+        for b in _shell_blocks(_PL_DIR / "agents/env_keeper/skills/factory-env/SKILL.md")
+        if "preview up" in b
+    )
+    for role in (ROLE_DEMO, ROLE_IC, ROLE_REVIEWER, ROLE_LEAD):
+        assert _guard(role, deploy)["result"] == "DENY", role
+    assert _guard(ROLE_DEMO, "git push origin factory/x/y")["result"] == "DENY"
+
+
+def test_real_bundles_seed_with_the_demo_harness(
+    monkeypatch: pytest.MonkeyPatch, db_uri: str, tmp_path: Path
+) -> None:
+    """The packaged bundles seed as built-ins, and the harness survives the round trip."""
+    from omnigent.runtime.agent_cache import AgentCache
+    from omnigent.server import app as server_app
+    from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
+    from omnigent.stores.artifact_store.local import LocalArtifactStore
+
+    monkeypatch.setenv("OMNIGENT_FACTORY_ENABLED", "1")
+    store = SqlAlchemyAgentStore(db_uri)
+    artifacts = LocalArtifactStore(str(tmp_path / "artifacts"))
+    cache = AgentCache(artifacts, tmp_path / "cache")
+    server_app._ensure_factory_agents(store, artifacts, cache, bundles_root=_FACTORY_DIR)
+
+    assert store.get_by_name("factory-lead") is not None
+    row = store.get_by_name("factory-pl")
+    assert row is not None
+    spec = cache.load(row.id, row.bundle_location, expand_env=True).spec
+    demo = next(s for s in spec.sub_agents if s.name == "demo")
+    skill = next(s for s in demo.skills if s.name == "factory-demo")
+    assert skill.skill_dir is not None
+    harness = skill.skill_dir / "harness"
+    assert (harness / "run.mjs").read_bytes() == (
+        _PL_DIR / "agents/demo/skills/factory-demo/harness/run.mjs"
+    ).read_bytes()
+    assert not (harness / "node_modules").exists()

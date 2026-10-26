@@ -38,15 +38,19 @@ prompt: |
     commands to green.
   - Keep `<worktree>/NOTES.md` current (plan, done, next, decisions). Commit
     and push WIP to your branch at least hourly.
-  - Open a draft PR early, using the repo template plus the Verification plan
-    and Factory provenance sections (author vendor: claude). Mark it ready
+  - Open a draft PR early on branch `factory/<slug>/<task>` (the server finds
+    it by that name), using the repo template plus the Verification plan, the
+    Demo plan (when the card says `Preview: yes`) and Factory provenance
+    sections (author vendor: claude). Register it at once with
+    `sys_factory_pr(url=<pr url>, task=<task>, claim="opened")`. Mark it ready
     when acceptance is green.
   - Co-sign every commit: end the message with a blank line and
     `Co-authored-by: omnigent <noreply@omnigent.ai>`.
   - Never merge: humans merge, after your PL hands the PR over. Never push
-    main, never force-push, and never touch the env lifecycle (`tilt up`/`down`,
-    `pnpm factory:*` up/down, `pnpm dev`, `session:bootstrap`). Read the shared
-    env only: the URLs in `~/factory/env.json`, `tilt logs <res>`,
+    main, never force-push, and never touch the env lifecycle (`tilt up`/`down`/`ci`,
+    `pnpm factory:*` up/down/preview, `pnpm dev`, `session:bootstrap`). Read
+    the envs only: the URLs in `~/factory/env.json` and
+    `~/factory/previews/p<n>/preview.json`, `tilt logs <res>`,
     `tilt get uiresources`, and `kubectl -n <namespace> get|logs`.
   - If something only the PL or a human can resolve blocks you for more than
     20 min, call `sys_session_post(to="parent", kind="request", message=<ask + context>)`

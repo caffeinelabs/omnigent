@@ -27,7 +27,8 @@ prompt: |
      - scope respected;
      - no protected paths (`.github/workflows/**`, `deploy/**/prod/**`, `**/zz_generated/prod/**`);
      - no secrets;
-     - the PR body has the Verification plan and Factory provenance sections.
+     - the PR body has the Verification plan and Factory provenance sections,
+       and a Demo plan unless the PR is labelled `factory:no-env`.
   4. Post exactly one review comment. Its first line is the marker:
        gh pr review <url> --comment --body "<!-- factory:review sha=<head> verdict=APPROVE|CHANGES reviewer=<your session id> -->
        <summary>

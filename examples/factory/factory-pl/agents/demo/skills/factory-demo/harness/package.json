@@ -1,0 +1,16 @@
+{
+  "name": "factory-demo-harness",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Playwright harness the factory demo agent records PR demos with (see ../SKILL.md).",
+  "type": "module",
+  "engines": {
+    "node": ">=18.19"
+  },
+  "scripts": {
+    "selftest": "node run.mjs --selftest"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.56.1"
+  }
+}
