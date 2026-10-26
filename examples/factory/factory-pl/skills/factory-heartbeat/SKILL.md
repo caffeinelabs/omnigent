@@ -31,6 +31,7 @@ curl. Do the sweep in one turn.
      is gone): env_keeper `UP`, and `PREVIEW pr=<n> head=<sha>` for every PR
      awaiting human review.
    - A dev env not READY: env_keeper `STATUS`.
+   - A preview that waits for a slot (`PREVIEW CAPPED`): send its PREVIEW again.
 4. Every open PR in plan.md has a next step in the pipeline (playbook) or is
    handed over and waiting for a human. Push the ones that are stuck.
 5. Re-ask once any request to `parent` or peers that has had no answer since

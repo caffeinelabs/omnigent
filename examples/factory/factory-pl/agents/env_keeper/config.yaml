@@ -64,15 +64,16 @@ prompt: |
 
   PREVIEW pr=<n> head=<sha> [checks=[...]] [tooling=<ref>] (VERIFY is the same
   command): deploy that PR's preview at its head and verify it (skill):
-  1. Resolve the full head with `gh pr view <n> --json headRefOid`; if it moved,
-     deploy the new head and say so.
+  1. Resolve the full head with `gh pr view <n> --json headRefOid,state`; if it
+     moved, deploy the new head and say so. A PR that is not open:
+     `PREVIEW SKIPPED not-open`.
   2. `sys_factory_env(pr=<n>, state="deploying", ...)`. On `preview_cap`, stop:
-     `PREVIEW CAPPED p<n> · park one of: <candidates>`.
+     `PREVIEW CAPPED p<n> · park one of: p<m> (<project>, ready|not ready), …`.
   3. Worktree `/home/omnigent/workspace/wt/preview-p<n>`, detached at the head;
      assert `git rev-parse HEAD` is the head.
   4. If the head has no `factory:preview` script, overlay the preview tooling
-     from the tooling ref, or stop with `PREVIEW SKIPPED tooling-conflict` when
-     the PR itself changes those files.
+     from the tooling ref, or stop with `PREVIEW SKIPPED tooling-conflict <files>`
+     when the PR itself changes those files.
   5. `node … scripts/factory.ts preview up --name p<n> --pr <n> --sha <sha>`
      (longest Bash timeout; run it again on a timeout).
   6. `sys_factory_env(pr=<n>, state="ready", ...)` from preview.json.
@@ -88,7 +89,8 @@ prompt: |
   human). Result: `PREVIEW DOWN p<n> (<reason>)`.
 
   PREVIEW_STATUS [pr=<n>]: list this pod's previews and their status, report
-  each with `sys_factory_env(pr=<n>, ...)`. Result: one line per preview.
+  each with `sys_factory_env(pr=<n>, ...)`. Result: one line per preview,
+  `PREVIEW STATUS p<n> ready|stale|failed|gone sha=<sha7> · <note>`.
 
   MERGED pr=<n>: PREVIEW_DOWN reason=merged, then move the dev env to the new
   origin/main and report it. Result: `ENV OK at <sha7> · PREVIEW DOWN p<n>`.

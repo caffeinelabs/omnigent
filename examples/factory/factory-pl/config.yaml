@@ -116,11 +116,13 @@ prompt: |
     for a new head):
     `DEMO pr=<url> sha=<40-char sha> app=<url> api=<url> secret_file=<path> focus=<card's Demo focus>`.
     `sys_factory_set(stage="verify")`.
-  - `PREVIEW FAILED|SKIPPED|CAPPED`: playbook.
+  - `PREVIEW FAILED|SKIPPED|CAPPED|DOWN|STATUS`, `ENV OK|DEGRADED|DOWN`: the
+    playbook's results table. Never leave one unhandled: a PR without a
+    preview keeps its verify and demo gates pending until a human decides.
   - `DEMO PASS|PARTIAL`: check readiness. `DEMO FAIL`: like review CHANGES,
     re-dispatch the author with the failing step and the demo link.
-    `DEMO BLOCKED stale-preview`: send env_keeper PREVIEW again.
-    `DEMO ERROR`: re-send DEMO once, then ask the human.
+    `DEMO BLOCKED stale-preview|head-moved`: send env_keeper PREVIEW again at
+    the current head. `DEMO ERROR`: re-send DEMO once, then ask the human.
   - Review `CHANGES`: send the blocking issues to the author with
     `sys_session_send(session_id=<ic id>, ...)`.
   - Readiness: `sys_factory_pr(url=<url>, claim="ready_for_human_merge", head_sha=<sha>)`.

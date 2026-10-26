@@ -6,7 +6,11 @@ import { randomBytes } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { extname, join } from 'node:path';
+import { readZip } from './lib.mjs';
+
+// The fixture server's session cookies.
+const SESSION_TOKENS = ['selftest-access', 'selftest-refresh'];
 
 const PAGE = `<!doctype html>
 <html><head><title>Factory demo fixture</title></head>
@@ -95,6 +99,7 @@ demo('Selftest: the fixture shows the deployed version', async ({ ui, api, login
   await step('Open the landing page', async () => {
     await ui.goto('/');
     await ui.see(ui.page.getByRole('heading', { name: 'Factory demo fixture' }));
+    await expect(ui.page.locator('#__factory-demo-caption')).toHaveText('Step 2 · Open the landing page');
   });
   await step.api('GET /version returns the deployed sha', async () => {
     const res = await api.get('/version');
@@ -112,9 +117,11 @@ demo('Selftest: the fixture shows the deployed version', async ({ ui, api, login
 
 const FAIL_SPEC = `import { demo, expect, step } from 'factory-demo';
 
-demo('Selftest: a product assertion fails', async ({ ui }) => {
+demo('Selftest: a product assertion fails', async ({ ui, api, login }) => {
+  await step.check('Sign in with a synthetic session', login);
   await step('Open the landing page', async () => {
     await ui.goto('/');
+    await api.get('/me');
   });
   await step('The version shows 0000000', async () => {
     await ui.click(ui.page.getByRole('button', { name: 'Show version' }));
@@ -142,6 +149,26 @@ function readManifest(dir) {
 
 function check(results, name, ok, detail = '') {
   results.push({ name, ok, detail });
+}
+
+/** Published files (the manifest's artifacts and step screenshots) that carry a credential. */
+function leakedFiles(dir, manifest, secrets) {
+  const files = new Set(Object.values(manifest.artifacts));
+  for (const step of manifest.steps) if (step.screenshot) files.add(step.screenshot);
+  const leaks = [];
+  for (const rel of files) {
+    const path = join(dir, rel);
+    if (!existsSync(path)) continue;
+    const ext = extname(rel);
+    let texts = [];
+    if (ext === '.zip') texts = readZip(readFileSync(path)).map((e) => `${e.name}\n${e.data.toString('latin1')}`);
+    else if (!['.webm', '.mp4', '.png', '.jpg'].includes(ext)) texts = [readFileSync(path, 'latin1')];
+    for (const text of texts) {
+      const hit = secrets.find((secret) => text.includes(secret));
+      if (hit) leaks.push(`${rel}: ${hit === secrets[0] ? 'the synthetic secret' : hit}`);
+    }
+  }
+  return leaks;
 }
 
 export async function selftest({ harnessDir, keep = false }) {
@@ -183,8 +210,10 @@ export async function selftest({ harnessDir, keep = false }) {
       );
       const calls = JSON.parse(readFileSync(join(pass, 'api.json'), 'utf8'));
       check(results, 'api.json has GET /version', calls[0]?.method === 'GET' && calls[0]?.status === 200);
-      const har = readFileSync(join(pass, 'network.har'), 'utf8');
-      check(results, 'HAR has no secret or session cookie', !har.includes(secret) && !har.includes('selftest-access'));
+      const leaks = leakedFiles(pass, manifest, [secret, ...SESSION_TOKENS]);
+      check(results, 'no published file holds the secret or a session token', !leaks.length, leaks.join('\n'));
+      check(results, 'a passing run publishes no trace', !manifest.artifacts.trace, JSON.stringify(manifest.artifacts));
+      check(results, 'plan source defaults to pr-body', manifest.plan_source === 'pr-body', manifest.plan_source);
       check(results, 'console error captured', manifest.console_errors >= 1, String(manifest.console_errors));
       check(results, 'observed sha recorded', manifest.preview.observed_sha === sha);
     } else {
@@ -193,7 +222,17 @@ export async function selftest({ harnessDir, keep = false }) {
 
     const fail = join(root, 'fail');
     writeFileSync(join(root, 'fail.spec.ts'), FAIL_SPEC);
-    const failRun = await run(harnessDir, [...base, '--spec', join(root, 'fail.spec.ts'), '--out', fail, '--sha', sha]);
+    const failRun = await run(harnessDir, [
+      ...base,
+      '--spec',
+      join(root, 'fail.spec.ts'),
+      '--out',
+      fail,
+      '--sha',
+      sha,
+      '--synthetic-secret-file',
+      secretFile,
+    ]);
     check(results, 'FAIL run exits 1', failRun.code === 1, failRun.output);
     if (existsSync(join(fail, 'demo.json'))) {
       const manifest = readManifest(fail);
@@ -201,10 +240,19 @@ export async function selftest({ harnessDir, keep = false }) {
       check(
         results,
         'failure screenshot',
-        manifest.steps[1]?.screenshot === 'shots/02-the-version-shows-0000000-failed.png',
-        manifest.steps[1]?.screenshot,
+        manifest.steps[2]?.screenshot === 'shots/03-the-version-shows-0000000-failed.png',
+        manifest.steps[2]?.screenshot,
       );
-      check(results, 'trace recorded', existsSync(join(fail, 'trace.zip')));
+      check(results, 'trace published', manifest.artifacts.trace === 'trace.zip', JSON.stringify(manifest.artifacts));
+      const entries = existsSync(join(fail, 'trace.zip')) ? readZip(readFileSync(join(fail, 'trace.zip'))) : [];
+      check(
+        results,
+        'the scrubbed trace keeps its events',
+        entries.some((e) => /\.trace$/.test(e.name) && e.data.includes('toHaveText')),
+        entries.map((e) => e.name).join(', '),
+      );
+      const leaks = leakedFiles(fail, manifest, [secret, ...SESSION_TOKENS]);
+      check(results, 'no published FAIL file holds the secret or a session token', !leaks.length, leaks.join('\n'));
     } else {
       check(results, 'FAIL run wrote demo.json', false);
     }

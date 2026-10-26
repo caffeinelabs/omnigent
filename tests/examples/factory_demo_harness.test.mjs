@@ -200,6 +200,121 @@ describe('redaction', () => {
   });
 });
 
+describe('scrubbing published files', () => {
+  const SECRET = 'f'.repeat(64);
+  const TOKENS = ['selftest-access', 'selftest-refresh'];
+  const KNOWN = [SECRET, ...TOKENS];
+  const leaks = (text) => KNOWN.filter((k) => text.includes(k));
+
+  test('scrubText removes known secrets, auth header lines, bearer tokens and token cookies', () => {
+    const log = [
+      `apiRequestContext.get: Timeout 1000ms exceeded.`,
+      `  - → GET http://127.0.0.1:1/me`,
+      `  -   cookie: access_token=selftest-access; refresh_token=selftest-refresh`,
+      `  -   Authorization: Bearer ${SECRET}`,
+      `  - ← 200 OK set-cookie: access_token=rotated123; Path=/`,
+      `a URL https://x/cb?access_token=zzzzzzzz&page=2 and the secret ${SECRET} in prose`,
+    ].join('\n');
+    const out = lib.scrubText(log, KNOWN);
+    assert.deepEqual(leaks(out), []);
+    assert.ok(!out.includes('rotated123') && !out.includes('zzzzzzzz'));
+    assert.match(out, /cookie: \[redacted\]/);
+    assert.match(out, /page=2/);
+    assert.match(out, /GET http:\/\/127\.0\.0\.1:1\/me/);
+    assert.equal(lib.scrubText('short secret abc stays', ['abc']), 'short secret abc stays');
+    assert.equal(lib.scrubText('{"cookie": "x"}'), '{"cookie": "x"}', 'JSON keys are left to the structural pass');
+  });
+
+  test('a trace keeps its events and loses every credential', () => {
+    const traceLines = [
+      { type: 'before', class: 'APIRequestContext', method: 'fetch', params: { url: 'http://h/auth/synthetic-session', headers: [{ name: 'Authorization', value: `Bearer ${SECRET}` }] } },
+      { type: 'log', message: '  cookie: access_token=selftest-access; refresh_token=selftest-refresh' },
+      { type: 'before', class: 'BrowserContext', method: 'addCookies', params: { cookies: [{ name: 'access_token', value: 'selftest-access', domain: 'h' }] } },
+      { type: 'after', result: { response: { status: 200, headers: [{ name: 'set-cookie', value: 'access_token=rotated123; Path=/' }, { name: 'x-factory-commit', value: SHA }] } } },
+    ];
+    const network = {
+      type: 'resource-snapshot',
+      snapshot: {
+        request: {
+          url: 'http://h/me',
+          cookies: [{ name: 'refresh_token', value: 'selftest-refresh' }],
+          headers: [{ name: 'Cookie', value: 'access_token=selftest-access' }, { name: 'Accept', value: '*/*' }],
+          postData: { text: '{"password":"hunter22","name":"n"}' },
+        },
+        response: { status: 200, headers: { 'set-cookie': 'refresh_token=rotated456', 'content-type': 'application/json' } },
+      },
+    };
+    const trace = Buffer.from(`${traceLines.map((l) => JSON.stringify(l)).join('\n')}\nnot json Bearer ${SECRET}\n`);
+    const scrubbed = lib.scrubTraceEntry('0-trace.trace', trace, KNOWN).toString('utf8');
+    assert.deepEqual(leaks(scrubbed), []);
+    assert.ok(!scrubbed.includes('rotated123'));
+    const events = scrubbed.trim().split('\n').slice(0, 4).map((l) => JSON.parse(l));
+    assert.equal(events[0].params.url, 'http://h/auth/synthetic-session');
+    assert.equal(events[2].params.cookies[0].domain, 'h');
+    assert.equal(events[3].result.response.headers[1].value, SHA);
+    const net = JSON.parse(lib.scrubTraceEntry('0-trace.network', Buffer.from(JSON.stringify(network)), KNOWN).toString());
+    assert.equal(net.snapshot.request.headers[1].value, '*/*');
+    assert.equal(net.snapshot.request.cookies[0].value, '[redacted]');
+    assert.equal(net.snapshot.response.headers['set-cookie'], '[redacted]');
+    assert.equal(net.snapshot.response.headers['content-type'], 'application/json');
+    assert.deepEqual(JSON.parse(net.snapshot.request.postData.text), { password: '[redacted]', name: 'n' });
+    const binary = Buffer.concat([Buffer.from([0xff, 0xd8, 0x00]), Buffer.from(SECRET), Buffer.from([0x00, 0xfe])]);
+    const cleaned = lib.scrubTraceEntry('resources/abc', binary, KNOWN);
+    assert.ok(!cleaned.includes(SECRET));
+    assert.deepEqual([...cleaned.subarray(0, 3)], [0xff, 0xd8, 0x00]);
+  });
+
+  test('zip round trip, and scrubTraceZip rewrites every entry', () => {
+    assert.equal(lib.crc32(Buffer.from('123456789')), 0xcbf43926);
+    const entries = [
+      { name: 'test.trace', data: Buffer.from(`{"type":"log","message":"Authorization: Bearer ${SECRET}"}\n`) },
+      { name: 'resources/page.jpeg', data: Buffer.from([1, 2, 3, 255]) },
+      { name: 'resources/x.json', data: Buffer.from('{"session":"selftest-access"}') },
+    ];
+    const roundTrip = lib.readZip(lib.writeZip(entries));
+    assert.deepEqual(roundTrip.map((e) => e.name), entries.map((e) => e.name));
+    assert.ok(roundTrip.every((e, i) => e.data.equals(entries[i].data)));
+    const scrubbed = lib.readZip(lib.scrubTraceZip(lib.writeZip(entries), KNOWN));
+    assert.deepEqual(scrubbed.map((e) => e.name), entries.map((e) => e.name));
+    assert.deepEqual(leaks(scrubbed.map((e) => e.data.toString('latin1')).join('\n')), []);
+    assert.ok(scrubbed[1].data.equals(entries[1].data));
+    assert.throws(() => lib.readZip(Buffer.from('not a zip at all, definitely not')), /not a zip archive/);
+  });
+
+  test('syntheticSession posts the secret with fetch and reads the session cookies', async () => {
+    const calls = [];
+    const fake = (headers, status = 200) => async (url, init) => {
+      calls.push({ url, init });
+      return new Response(JSON.stringify({ user: { userId: 'u1' } }), { status, headers });
+    };
+    const cookies = new Headers();
+    cookies.append('set-cookie', 'access_token=A1234567; Path=/; HttpOnly');
+    cookies.append('set-cookie', 'refresh_token=R1234567; Path=/; HttpOnly');
+    const session = await lib.syntheticSession('https://api.x/', SECRET, { fetchImpl: fake(cookies) });
+    assert.deepEqual(session, { userId: 'u1', accessToken: 'A1234567', refreshToken: 'R1234567' });
+    assert.equal(calls[0].url, 'https://api.x/auth/synthetic-session');
+    assert.equal(calls[0].init.method, 'POST');
+    assert.equal(calls[0].init.headers.Authorization, `Bearer ${SECRET}`);
+    await assert.rejects(lib.syntheticSession('https://api.x', SECRET, { fetchImpl: fake(new Headers(), 404) }), /404: the env has no SYNTHETIC_SESSION_SECRET/);
+    await assert.rejects(lib.syntheticSession('https://api.x', SECRET, { fetchImpl: fake(new Headers()) }), /no access_token/);
+  });
+
+  test('sessionCookies covers the app and API hosts', () => {
+    const tokens = { accessToken: 'a', refreshToken: 'r' };
+    const cross = lib.sessionCookies('https://app-x.envs.example', 'https://api-x.envs.example', tokens);
+    assert.equal(cross.length, 4);
+    assert.deepEqual(new Set(cross.map((c) => `${c.domain}:${c.name}:${c.sameSite}`)), new Set([
+      'app-x.envs.example:access_token:Lax',
+      'app-x.envs.example:refresh_token:Lax',
+      'api-x.envs.example:access_token:None',
+      'api-x.envs.example:refresh_token:None',
+    ]));
+    assert.ok(cross.every((c) => c.secure && c.httpOnly && c.path === '/'));
+    const local = lib.sessionCookies('http://127.0.0.1:1', 'http://127.0.0.1:1', tokens);
+    assert.ok(local.every((c) => c.sameSite === 'Lax' && !c.secure));
+  });
+});
+
 describe('helpers', () => {
   test('checkPreviewStamp compares the served sha with the head', () => {
     assert.equal(lib.checkPreviewStamp({ sha: SHA }, SHA).ok, true);

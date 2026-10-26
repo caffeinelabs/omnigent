@@ -1,8 +1,9 @@
 // Installs what a run needs: the pinned @playwright/test and a matching Chromium.
 
 import { spawnSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
 import { BAKED_BROWSERS_PATH, selectBrowsersPath } from './lib.mjs';
 
@@ -31,13 +32,47 @@ export function runLogged(command, args, options, log) {
   return res;
 }
 
-/** `npm ci` unless node_modules already holds the pinned @playwright/test. */
-export function ensureDeps(log) {
-  if (installedVersion() === pinnedVersion()) return;
-  const res = runLogged('npm', ['ci', '--no-audit', '--no-fund'], { cwd: HARNESS }, log);
-  if (res.status !== 0 || installedVersion() !== pinnedVersion()) {
-    throw new Error(`npm ci in ${HARNESS} failed; see the log`);
+// Demo agents share ~/factory/demo-harness: one `npm ci` at a time.
+const INSTALL_LOCK = join(HARNESS, '.install.lock');
+const LOCK_STALE_MS = 15 * 60_000;
+const LOCK_WAIT_MS = 10 * 60_000;
+
+async function withInstallLock(log, fn) {
+  const deadline = Date.now() + LOCK_WAIT_MS;
+  for (;;) {
+    try {
+      mkdirSync(INSTALL_LOCK);
+      break;
+    } catch (error) {
+      if (error.code !== 'EEXIST') throw error;
+      const since = statSync(INSTALL_LOCK, { throwIfNoEntry: false })?.mtimeMs ?? Date.now();
+      if (Date.now() - since > LOCK_STALE_MS) {
+        log(`removing a stale ${INSTALL_LOCK}`);
+        rmSync(INSTALL_LOCK, { recursive: true, force: true });
+      } else if (Date.now() > deadline) {
+        throw new Error(`another demo agent has held ${INSTALL_LOCK} for too long`);
+      } else {
+        await sleep(2000);
+      }
+    }
   }
+  try {
+    return fn();
+  } finally {
+    rmSync(INSTALL_LOCK, { recursive: true, force: true });
+  }
+}
+
+/** `npm ci` unless node_modules already holds the pinned @playwright/test. */
+export async function ensureDeps(log) {
+  if (installedVersion() === pinnedVersion()) return;
+  await withInstallLock(log, () => {
+    if (installedVersion() === pinnedVersion()) return;
+    const res = runLogged('npm', ['ci', '--no-audit', '--no-fund'], { cwd: HARNESS }, log);
+    if (res.status !== 0 || installedVersion() !== pinnedVersion()) {
+      throw new Error(`npm ci in ${HARNESS} failed; see the log`);
+    }
+  });
 }
 
 /**

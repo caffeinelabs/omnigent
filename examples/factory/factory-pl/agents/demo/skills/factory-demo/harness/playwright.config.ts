@@ -25,7 +25,8 @@ export default defineConfig({
     headless: true,
     viewport: size,
     video: { mode: 'on', size },
-    trace: 'on',
+    // Kept for failed runs only; run.mjs scrubs credentials before it is published.
+    trace: 'retain-on-failure',
     screenshot: 'off',
     actionTimeout: 15_000,
     navigationTimeout: 60_000,

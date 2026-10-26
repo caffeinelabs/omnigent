@@ -10,7 +10,9 @@ import {
   redactJsonText,
   redactUrl,
   screenshotName,
+  sessionCookies,
   sha7,
+  syntheticSession,
   truncate,
   watermark,
 } from './lib.mjs';
@@ -78,6 +80,8 @@ const apiCalls: ApiCall[] = [];
 const consoleEntries: ConsoleEntry[] = [];
 let activeStep: StepRecord | null = null;
 let currentPage: Page | null = null;
+// Re-applied after every load: a caption set on about:blank or before a cross-origin load is lost.
+let currentCaption = '';
 
 function writeJson(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true });
@@ -141,14 +145,19 @@ function installOverlay(label: string): void {
   }
 }
 
-async function setCaption(text: string): Promise<void> {
-  if (!currentPage || currentPage.isClosed()) return;
-  await currentPage
+async function showCaption(page: Page, text: string): Promise<void> {
+  if (page.isClosed()) return;
+  await page
     .evaluate((value) => {
       const w = window as unknown as { __factoryDemoCaption?: (text: string) => void };
       w.__factoryDemoCaption?.(value);
     }, text)
     .catch(() => undefined);
+}
+
+async function setCaption(text: string): Promise<void> {
+  currentCaption = text;
+  if (currentPage) await showCaption(currentPage, text);
 }
 
 async function screenshot(record: StepRecord, suffix?: string): Promise<string | undefined> {
@@ -243,6 +252,7 @@ function makeUi(page: Page) {
     /** Open a path of the preview app (or an absolute URL). */
     async goto(path = '/'): Promise<void> {
       await page.goto(new URL(path, `${preview.app}/`).toString(), { waitUntil: 'load' });
+      await showCaption(page, currentCaption);
       await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);
     },
     async click(target: Target): Promise<void> {
@@ -308,60 +318,27 @@ function makeApi(context: BrowserContext) {
   };
 }
 
-function cookieValue(setCookies: string[], name: string): string | undefined {
-  for (const header of setCookies) {
-    if (header.startsWith(`${name}=`)) {
-      const value = header.slice(name.length + 1).split(';')[0];
-      if (value) return value;
-    }
+// Values run.mjs scrubs from every published file (the secret file it reads itself).
+function recordSecrets(values: string[]): void {
+  const path = join(HARNESS_DIR, 'redact.json');
+  let known: string[] = [];
+  try {
+    known = JSON.parse(readFileSync(path, 'utf8')) as string[];
+  } catch {
+    known = [];
   }
-  return undefined;
+  mkdirSync(HARNESS_DIR, { recursive: true });
+  writeFileSync(path, JSON.stringify([...new Set([...known, ...values])]), { mode: 0o600 });
 }
 
-/** Sign in through the app's synthetic session (POST <api>/auth/synthetic-session). */
+/** Sign in through the app's synthetic session; the request runs outside the traced browser. */
 async function syntheticLogin(page: Page): Promise<{ userId: string }> {
   const file = process.env.FACTORY_DEMO_SECRET_FILE;
   if (!file) throw new Error('login() needs run.mjs --synthetic-secret-file <path>');
   const secret = readFileSync(file, 'utf8').trim();
-  const endpoint = `${preview.api}/auth/synthetic-session`;
-  const response = await page.context().request.post(endpoint, {
-    headers: { Authorization: `Bearer ${secret}` },
-    data: {},
-  });
-  if (!response.ok()) {
-    const hint = response.status() === 404 ? ' (404: the env has no SYNTHETIC_SESSION_SECRET)' : '';
-    throw new Error(`synthetic session: HTTP ${response.status()} from ${endpoint}${hint}`);
-  }
-  const body = (await response.json().catch(() => ({}))) as { user?: { userId?: string } };
-  const setCookies = response
-    .headersArray()
-    .filter((h) => h.name.toLowerCase() === 'set-cookie')
-    .map((h) => h.value);
-  const accessToken = cookieValue(setCookies, 'access_token');
-  const refreshToken = cookieValue(setCookies, 'refresh_token');
-  if (!accessToken || !refreshToken) {
-    throw new Error('synthetic session set no access_token / refresh_token cookie');
-  }
-  const app = new URL(preview.app);
-  const api = new URL(preview.api);
-  const crossSite = api.hostname !== app.hostname && api.protocol === 'https:';
-  const hosts = [
-    { domain: app.hostname, secure: app.protocol === 'https:', sameSite: 'Lax' as const },
-    {
-      domain: api.hostname,
-      secure: api.protocol === 'https:',
-      sameSite: crossSite ? ('None' as const) : ('Lax' as const),
-    },
-  ];
-  await page.context().addCookies(
-    hosts.flatMap((host) =>
-      [
-        { name: 'access_token', value: accessToken },
-        { name: 'refresh_token', value: refreshToken },
-      ].map((cookie) => ({ ...cookie, ...host, path: '/', httpOnly: true })),
-    ),
-  );
-  const userId = body.user?.userId ?? '';
+  const session = await syntheticSession(preview.api || preview.app, secret);
+  recordSecrets([session.accessToken, session.refreshToken]);
+  await page.context().addCookies(sessionCookies(preview.app, preview.api || preview.app, session));
   await page.addInitScript((id: string) => {
     try {
       window.localStorage.removeItem('jwt');
@@ -370,8 +347,8 @@ async function syntheticLogin(page: Page): Promise<{ userId: string }> {
     } catch {
       // Storage is unavailable on opaque origins.
     }
-  }, userId);
-  return { userId };
+  }, session.userId);
+  return { userId: session.userId };
 }
 
 type DemoFixtures = {
@@ -394,6 +371,7 @@ export const demo = base.extend<DemoFixtures>({
   page: async ({ page }, use) => {
     currentPage = page;
     await page.addInitScript(installOverlay, watermark(preview.pr, preview.sha));
+    page.on('load', () => void showCaption(page, currentCaption));
     page.on('console', (message) => {
       const type = message.type();
       if (type !== 'error' && type !== 'warning') return;

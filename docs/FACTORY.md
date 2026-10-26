@@ -283,9 +283,14 @@ preview envs are a different thing.)
   root `package.json` or the deploy lockfile) and runs the CLI with `node`
   directly. The ref comes from `OMNIGENT_FACTORY_PREVIEW_TOOLING_REF`, which the
   charter carries; env_keeper falls back to `factory/preview-tooling`. A PR
-  that changes the tooling itself gets `PREVIEW SKIPPED tooling-conflict`.
+  that changes the tooling itself gets `PREVIEW SKIPPED tooling-conflict`,
+  and its PL asks the human whether to review it without a preview (label
+  `factory:no-env`) or to wait for the tooling to merge.
 - **Slots.** A PL keeps at most its charter's `preview.slots` live previews
   (default 2, max 3); the factory at most `OMNIGENT_FACTORY_MAX_PREVIEWS` (8).
+  At the factory cap env_keeper answers `PREVIEW CAPPED` with park
+  candidates; the PL parks one of its own previews of a PR that is not
+  ready, or tells its lead and retries at its next heartbeat.
 - **Lifetime.** A preview dies with its PL's pod (the namespace reaper). The
   supervisor keeps a PL's pod alive while it has a live preview of an open PR,
   even when the PL is paused. Previews nobody looked at for
@@ -305,10 +310,16 @@ preview envs are a different thing.)
   install in `~/.cache/ms-playwright`.
 - `run.mjs` checks that the preview serves the head, records a 1280×800 video
   with a caption and a `PR #<n> · <sha7> · preview` watermark, one screenshot
-  per UI step, every API call (`api.json`), console errors, a redacted HAR and
-  a trace, logs in through `POST <api>/auth/synthetic-session` when a step
-  needs a user, and writes `demo.json`. Exit codes: 0 PASS or PARTIAL (steps
-  skipped for env reasons), 1 FAIL, 2 ERROR, 3 stale preview.
+  per UI step, every API call (`api.json`), console errors, a redacted HAR and,
+  for FAIL and ERROR runs, a Playwright trace, logs in through
+  `POST <api>/auth/synthetic-session` when a step needs a user, and writes
+  `demo.json`. Exit codes: 0 PASS or PARTIAL (steps skipped for env reasons),
+  1 FAIL, 2 ERROR, 3 stale preview.
+- The synthetic-session request is sent by Node, outside the recorded
+  browser, so its Bearer secret never reaches the trace or the HAR. Before
+  anything is published, `run.mjs` scrubs the secret and the session tokens
+  from the trace (rewritten), the HAR, `api.json`, `console.json`, `run.log`
+  and the step notes.
 - `sys_factory_demo` uploads the files into the omnigent file and artifact
   stores (owner: the PL session). Caps: video 50 MB, image 5 MB, text 2 MB,
   30 files and 120 MB per demo. The PR gets one comment per head with

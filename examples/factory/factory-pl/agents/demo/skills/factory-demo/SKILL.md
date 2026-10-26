@@ -9,7 +9,9 @@ You record what a PR does, at its exact head, in its factory preview, so a
 human can review it from the cockpit without checking it out. The harness
 records a video (1280×800 webm with a caption and a `PR #<n> · <sha7> ·
 preview` watermark), one screenshot per UI step, every API call, console
-errors, a redacted HAR and a Playwright trace, then writes `demo.json`.
+errors, a redacted HAR and, when the run fails, a Playwright trace, then
+writes `demo.json`. Every file it publishes is scrubbed of the synthetic
+secret and the session tokens.
 
 ## Harness setup (once per session; cheap to repeat)
 
@@ -19,17 +21,18 @@ bundle the runner unpacked under the temp directory. Copy it to
 
 ```bash
 SRC=$(dirname "$(find "${TMPDIR:-/tmp}" /tmp -path '*/skills/factory-demo/harness/run.mjs' \
-  -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -n1 | cut -d' ' -f2-)")
+  -exec ls -t {} + 2>/dev/null | head -n1)")
 test -f "$SRC/run.mjs" || { echo "factory-demo harness not found"; exit 1; }
 H=~/factory/demo-harness
 mkdir -p "$H"
-diff -rq -x node_modules "$SRC" "$H" >/dev/null 2>&1 || cp -R "$SRC"/. "$H"/
+diff -rq -x node_modules -x .install.lock "$SRC" "$H" >/dev/null 2>&1 || cp -R "$SRC"/. "$H"/
 ```
 
 If Claude Code showed the skill's base directory, set `SRC=<base>/harness`
 instead of the `find`.
 
-`run.mjs` runs `npm ci` (pinned `@playwright/test@1.56.1`) and picks the
+`run.mjs` runs `npm ci` (pinned `@playwright/test@1.56.1`; one demo agent
+at a time, under `.install.lock`) and picks the
 browsers itself: the sandbox image's `/opt/ms-playwright` when it holds this
 Playwright's Chromium, else a one-time `playwright install chromium` into
 `~/.cache/ms-playwright`. To check the toolchain on its own, run
@@ -52,7 +55,8 @@ Read the PR: `gh pr view <url> --json headRefOid,title,body,files` and
 ```
 
 Each line becomes one step. Without a Demo plan, derive one from the
-Verification plan, the diff and the focus, and pass `--plan-source derived`.
+Verification plan, the diff and the focus, and pass `--plan-source derived`
+(the default is `pr-body`).
 
 ## Explore before you write selectors
 
@@ -95,7 +99,7 @@ demo('Settings shows the API version', async ({ ui, api, login }) => {
 | `step.skip(title, reason)` | A planned step this env cannot run. The reason is shown to reviewers and makes the demo PARTIAL. |
 | `ui.goto(path)`, `ui.click(t)`, `ui.fill(t, v)`, `ui.see(t)`, `ui.page` | Paths resolve against the preview app. `t` is a locator or selector; the element is outlined in the video before the action. `see` asserts visibility. |
 | `api.get/post/put/patch/delete(path, {data?, headers?, params?})` | Requests to the preview API with the browser's cookies. Each call goes to `api.json` (bodies up to 8 KB, credentials redacted). |
-| `login()` | `POST <api>/auth/synthetic-session` with the secret from the file, then the session cookies on the app and API hosts. Call it before the first page that needs a user. |
+| `login()` | `POST <api>/auth/synthetic-session` with the secret from the file (sent by Node, outside the browser, so it never reaches the trace or HAR), then the session cookies on the app and API hosts. Call it before the first page that needs a user. |
 | `preview.{app, api, pr, prUrl, sha, sha7}` | The run's preview and head. |
 
 Rules:
@@ -132,13 +136,14 @@ path. Use the longest Bash timeout; a run takes 1-3 minutes.
 
 | File | What |
 |---|---|
-| `demo.json` | The manifest: `version, pr_url, pr, sha, status, summary, plan_source, preview{app, api, observed_sha}, duration_s, console_errors, steps[{n, title, kind: ui/api/check, status: pass/fail/skipped, screenshot?, duration_ms?, note?, api_calls?}], artifacts{video, poster, api, har, trace, console, script, log, tilt_snapshot?}` |
+| `demo.json` | The manifest: `version, pr_url, pr, sha, status, summary, plan_source, preview{app, api, observed_sha}, duration_s, console_errors, steps[{n, title, kind: ui/api/check, status: pass/fail/skipped, screenshot?, duration_ms?, note?, api_calls?}], artifacts{video, poster, api, har, trace? (FAIL and ERROR), console, script, log, tilt_snapshot?}` |
 | `video/demo.webm` | The whole run; `poster` is the first UI screenshot. |
 | `shots/NN-<title>.png` | One per UI step. |
 | `api.json` | `[{i, step, method, url, status, ms, request{headers, body}, response{headers, content_type, body, bytes, truncated}}]` |
 | `console.json` | Console errors, warnings and page errors. |
 | `network.har` | Redacted (auth and cookie headers, cookie values, credential query parameters). |
-| `trace.zip`, `run.log`, `demo.spec.ts` | Forensics and the exact script that ran. |
+| `trace.zip` | FAIL and ERROR runs only: the Playwright trace, credentials scrubbed. |
+| `run.log`, `demo.spec.ts` | Forensics and the exact script that ran. |
 
 `run.mjs` clears its old outputs in the directory on every run and keeps the
 spec. Each head gets its own `<sha7>` directory.

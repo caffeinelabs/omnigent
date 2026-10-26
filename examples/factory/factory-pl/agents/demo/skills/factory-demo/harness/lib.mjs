@@ -3,6 +3,7 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import zlib from 'node:zlib';
 
 export const STATUSES = Object.freeze(['PASS', 'PARTIAL', 'FAIL', 'ERROR']);
 
@@ -213,6 +214,244 @@ export function redactHar(har) {
     }
   }
   return copy;
+}
+
+// Credentials in free text: header lines (Playwright call logs), bearer tokens, token cookies.
+const SECRET_HEADER_LINE = /\b(authorization|proxy-authorization|set-cookie|cookie|x-api-key|x-auth-token)(\s*:\s*)[^\r\n"\\]+/gi;
+const BEARER = /\b(Bearer|Basic)\s+[A-Za-z0-9._~+/=-]{8,}/g;
+const TOKEN_PAIR = /\b(access_token|refresh_token|id_token)=[^;,&\s"'\\]+/gi;
+const MIN_SECRET_LENGTH = 8;
+
+function literalSecrets(secrets) {
+  return [...new Set((secrets || []).filter((s) => typeof s === 'string' && s.length >= MIN_SECRET_LENGTH))];
+}
+
+/** Text with the known secrets, auth and cookie header values and token cookies replaced. */
+export function scrubText(text, secrets = []) {
+  let out = String(text ?? '');
+  for (const secret of literalSecrets(secrets)) out = out.split(secret).join(REDACTED);
+  return out
+    .replace(SECRET_HEADER_LINE, `$1$2${REDACTED}`)
+    .replace(BEARER, `$1 ${REDACTED}`)
+    .replace(TOKEN_PAIR, `$1=${REDACTED}`);
+}
+
+function replaceBytes(data, needle, replacement) {
+  const parts = [];
+  let from = 0;
+  for (let at = data.indexOf(needle); at !== -1; at = data.indexOf(needle, from)) {
+    parts.push(data.subarray(from, at), replacement);
+    from = at + needle.length;
+  }
+  if (!parts.length) return data;
+  parts.push(data.subarray(from));
+  return Buffer.concat(parts);
+}
+
+// A Playwright trace event or network snapshot: header and cookie values go, whatever their name.
+function redactTraceValue(value, key) {
+  if (Array.isArray(value)) {
+    if (key === 'cookies') return value.map((c) => (c && typeof c === 'object' ? { ...c, value: REDACTED } : c));
+    return value.map((item) => redactTraceValue(item));
+  }
+  if (!value || typeof value !== 'object') return value;
+  const pair =
+    typeof value.name === 'string' &&
+    typeof value.value === 'string' &&
+    (isSecretHeader(value.name) || SECRET_PARAM.test(value.name));
+  const out = {};
+  for (const [k, item] of Object.entries(value)) {
+    if (pair && k === 'value') out[k] = REDACTED;
+    else if (isSecretHeader(k) && typeof item === 'string') out[k] = REDACTED;
+    else if (k === 'postData' && item && typeof item.text === 'string')
+      out[k] = { ...item, text: redactJsonText(item.text) };
+    else out[k] = redactTraceValue(item, k);
+  }
+  return out;
+}
+
+/**
+ * One file of a Playwright trace with its credentials removed: trace and
+ * network events structurally, other text by pattern, binaries by the known
+ * secrets only.
+ * @returns {Buffer}
+ */
+export function scrubTraceEntry(name, data, secrets = []) {
+  const text = data.toString('utf8');
+  const isText = Buffer.from(text, 'utf8').equals(data);
+  if (isText && /\.(trace|network)$/.test(name)) {
+    const lines = text.split('\n').map((line) => {
+      if (!line.trim()) return line;
+      try {
+        return scrubText(JSON.stringify(redactTraceValue(JSON.parse(line))), secrets);
+      } catch {
+        return scrubText(line, secrets);
+      }
+    });
+    return Buffer.from(lines.join('\n'), 'utf8');
+  }
+  if (isText && /\.(stacks|json|txt|html?|css|m?js|xml|md)$/i.test(name)) {
+    return Buffer.from(scrubText(text, secrets), 'utf8');
+  }
+  let out = data;
+  for (const secret of literalSecrets(secrets)) out = replaceBytes(out, Buffer.from(secret), Buffer.from(REDACTED));
+  return out;
+}
+
+// ── Zip (Playwright traces): read stored/deflated entries, write deflated ones.
+
+const CRC_TABLE = (() => {
+  const table = new Uint32Array(256);
+  for (let n = 0; n < 256; n += 1) {
+    let c = n;
+    for (let k = 0; k < 8; k += 1) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    table[n] = c >>> 0;
+  }
+  return table;
+})();
+
+export function crc32(data) {
+  if (typeof zlib.crc32 === 'function') return zlib.crc32(data);
+  let c = 0xffffffff;
+  for (let i = 0; i < data.length; i += 1) c = CRC_TABLE[(c ^ data[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+
+/** @returns {{name: string, data: Buffer}[]} The files of a zip archive (no zip64). */
+export function readZip(buf) {
+  let eocd = -1;
+  for (let i = buf.length - 22; i >= Math.max(0, buf.length - 22 - 0xffff); i -= 1) {
+    if (buf.readUInt32LE(i) === 0x06054b50) {
+      eocd = i;
+      break;
+    }
+  }
+  if (eocd < 0) throw new Error('not a zip archive');
+  const count = buf.readUInt16LE(eocd + 10);
+  let at = buf.readUInt32LE(eocd + 16);
+  if (count === 0xffff || at === 0xffffffff) throw new Error('zip64 archives are not supported');
+  const entries = [];
+  for (let i = 0; i < count; i += 1) {
+    if (buf.readUInt32LE(at) !== 0x02014b50) throw new Error('corrupt zip central directory');
+    const method = buf.readUInt16LE(at + 10);
+    const size = buf.readUInt32LE(at + 20);
+    const nameLength = buf.readUInt16LE(at + 28);
+    const name = buf.toString('utf8', at + 46, at + 46 + nameLength);
+    const local = buf.readUInt32LE(at + 42);
+    if (size === 0xffffffff || local === 0xffffffff) throw new Error('zip64 archives are not supported');
+    if (buf.readUInt32LE(local) !== 0x04034b50) throw new Error(`corrupt zip entry ${name}`);
+    const start = local + 30 + buf.readUInt16LE(local + 26) + buf.readUInt16LE(local + 28);
+    const raw = buf.subarray(start, start + size);
+    if (method !== 0 && method !== 8) throw new Error(`zip method ${method} of ${name} is not supported`);
+    if (!name.endsWith('/')) entries.push({ name, data: method === 8 ? zlib.inflateRawSync(raw) : Buffer.from(raw) });
+    at += 46 + nameLength + buf.readUInt16LE(at + 30) + buf.readUInt16LE(at + 32);
+  }
+  return entries;
+}
+
+/** @returns {Buffer} A zip archive of ``entries``, each deflated. */
+export function writeZip(entries) {
+  const parts = [];
+  const central = [];
+  let offset = 0;
+  const now = new Date();
+  const time = (now.getHours() << 11) | (now.getMinutes() << 5) | Math.floor(now.getSeconds() / 2);
+  const date = ((Math.max(now.getFullYear(), 1980) - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+  for (const { name, data } of entries) {
+    const nameBytes = Buffer.from(name, 'utf8');
+    const packed = zlib.deflateRawSync(data);
+    const crc = crc32(data);
+    const header = Buffer.alloc(30);
+    header.writeUInt32LE(0x04034b50, 0);
+    header.writeUInt16LE(20, 4);
+    header.writeUInt16LE(0x0800, 6); // UTF-8 names
+    header.writeUInt16LE(8, 8);
+    header.writeUInt16LE(time, 10);
+    header.writeUInt16LE(date, 12);
+    header.writeUInt32LE(crc, 14);
+    header.writeUInt32LE(packed.length, 18);
+    header.writeUInt32LE(data.length, 22);
+    header.writeUInt16LE(nameBytes.length, 26);
+    const record = Buffer.alloc(46);
+    record.writeUInt32LE(0x02014b50, 0);
+    record.writeUInt16LE(20, 4);
+    record.writeUInt16LE(20, 6);
+    record.writeUInt16LE(0x0800, 8);
+    record.writeUInt16LE(8, 10);
+    record.writeUInt16LE(time, 12);
+    record.writeUInt16LE(date, 14);
+    record.writeUInt32LE(crc, 16);
+    record.writeUInt32LE(packed.length, 20);
+    record.writeUInt32LE(data.length, 24);
+    record.writeUInt16LE(nameBytes.length, 28);
+    record.writeUInt32LE(offset, 42);
+    parts.push(header, nameBytes, packed);
+    central.push(record, nameBytes);
+    offset += header.length + nameBytes.length + packed.length;
+    if (offset > 0xffffffff) throw new Error('trace too large to rewrite');
+  }
+  const directory = Buffer.concat(central);
+  const end = Buffer.alloc(22);
+  end.writeUInt32LE(0x06054b50, 0);
+  end.writeUInt16LE(entries.length, 8);
+  end.writeUInt16LE(entries.length, 10);
+  end.writeUInt32LE(directory.length, 12);
+  end.writeUInt32LE(offset, 16);
+  return Buffer.concat([...parts, directory, end]);
+}
+
+/** A Playwright trace.zip with every credential removed. */
+export function scrubTraceZip(buf, secrets = []) {
+  return writeZip(readZip(buf).map(({ name, data }) => ({ name, data: scrubTraceEntry(name, data, secrets) })));
+}
+
+// ── Synthetic session (the app's POST <api>/auth/synthetic-session)
+
+/**
+ * Open a synthetic session with Node's fetch, outside Playwright, so the
+ * Bearer secret never reaches a trace, HAR or call log.
+ * @returns {Promise<{userId: string, accessToken: string, refreshToken: string}>}
+ */
+export async function syntheticSession(api, secret, { fetchImpl = fetch, timeoutMs = 30_000 } = {}) {
+  const endpoint = `${String(api).replace(/\/+$/, '')}/auth/synthetic-session`;
+  const response = await fetchImpl(endpoint, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${secret}`, 'content-type': 'application/json', accept: 'application/json' },
+    body: '{}',
+    signal: AbortSignal.timeout(timeoutMs),
+  });
+  if (!response.ok) {
+    const hint = response.status === 404 ? ' (404: the env has no SYNTHETIC_SESSION_SECRET)' : '';
+    throw new Error(`synthetic session: HTTP ${response.status} from ${endpoint}${hint}`);
+  }
+  const body = await response.json().catch(() => ({}));
+  const setCookies = typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : [];
+  const cookie = (name) =>
+    setCookies.map((h) => (h.startsWith(`${name}=`) ? h.slice(name.length + 1).split(';')[0] : '')).find(Boolean);
+  const accessToken = cookie('access_token');
+  const refreshToken = cookie('refresh_token');
+  if (!accessToken || !refreshToken) throw new Error('synthetic session set no access_token / refresh_token cookie');
+  return { userId: body?.user?.userId ?? '', accessToken, refreshToken };
+}
+
+/**
+ * The session cookies for the app and API hosts (SameSite=None when the API is cross-site over https).
+ * @returns {{name: string, value: string, domain: string, path: string, httpOnly: boolean, secure: boolean, sameSite: 'Lax' | 'None'}[]}
+ */
+export function sessionCookies(app, api, { accessToken, refreshToken }) {
+  const appUrl = new URL(app);
+  const apiUrl = new URL(api);
+  const crossSite = apiUrl.hostname !== appUrl.hostname && apiUrl.protocol === 'https:';
+  const hosts = [
+    { domain: appUrl.hostname, secure: appUrl.protocol === 'https:', sameSite: 'Lax' },
+    { domain: apiUrl.hostname, secure: apiUrl.protocol === 'https:', sameSite: crossSite ? 'None' : 'Lax' },
+  ];
+  return hosts.flatMap((host) =>
+    [
+      { name: 'access_token', value: accessToken },
+      { name: 'refresh_token', value: refreshToken },
+    ].map((cookie) => ({ ...cookie, ...host, path: '/', httpOnly: true })),
+  );
 }
 
 /**

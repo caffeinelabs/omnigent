@@ -8,43 +8,15 @@ import { readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { firstLine } from './lib.mjs';
+import { firstLine, sessionCookies, syntheticSession } from './lib.mjs';
 import { browserEnv, ensureDeps } from './setup.mjs';
 
 const USAGE =
   'usage: node explore.mjs <url> [--out <png>] [--login --api <api url> --synthetic-secret-file <path>] [--wait <ms>]';
 
-function cookieValue(setCookies, name) {
-  const header = setCookies.find((h) => h.startsWith(`${name}=`));
-  return header ? header.slice(name.length + 1).split(';')[0] : undefined;
-}
-
 async function login(context, page, appUrl, apiUrl, secretFile) {
-  const secret = readFileSync(secretFile, 'utf8').trim();
-  const res = await context.request.post(`${apiUrl}/auth/synthetic-session`, {
-    headers: { Authorization: `Bearer ${secret}` },
-    data: {},
-  });
-  if (!res.ok()) throw new Error(`synthetic session: HTTP ${res.status()} from ${apiUrl}/auth/synthetic-session`);
-  const body = await res.json().catch(() => ({}));
-  const setCookies = res
-    .headersArray()
-    .filter((h) => h.name.toLowerCase() === 'set-cookie')
-    .map((h) => h.value);
-  const app = new URL(appUrl);
-  const api = new URL(apiUrl);
-  const crossSite = api.hostname !== app.hostname && api.protocol === 'https:';
-  const cookies = [];
-  for (const [host, secure, sameSite] of [
-    [app.hostname, app.protocol === 'https:', 'Lax'],
-    [api.hostname, api.protocol === 'https:', crossSite ? 'None' : 'Lax'],
-  ]) {
-    for (const name of ['access_token', 'refresh_token']) {
-      const value = cookieValue(setCookies, name);
-      if (value) cookies.push({ name, value, domain: host, path: '/', httpOnly: true, secure, sameSite });
-    }
-  }
-  await context.addCookies(cookies);
+  const session = await syntheticSession(apiUrl, readFileSync(secretFile, 'utf8').trim());
+  await context.addCookies(sessionCookies(appUrl, apiUrl, session));
   await page.addInitScript((id) => {
     try {
       window.localStorage.removeItem('jwt');
@@ -53,7 +25,7 @@ async function login(context, page, appUrl, apiUrl, secretFile) {
     } catch {
       // Storage is unavailable on opaque origins.
     }
-  }, body?.user?.userId ?? '');
+  }, session.userId);
 }
 
 async function main(argv) {
@@ -75,7 +47,7 @@ async function main(argv) {
     return 2;
   }
   const log = (line) => console.error(`[explore] ${line}`);
-  ensureDeps(log);
+  await ensureDeps(log);
   const env = browserEnv(process.env, log);
   if (env.PLAYWRIGHT_BROWSERS_PATH) process.env.PLAYWRIGHT_BROWSERS_PATH = env.PLAYWRIGHT_BROWSERS_PATH;
   // Imported after PLAYWRIGHT_BROWSERS_PATH is set.

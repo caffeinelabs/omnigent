@@ -1,6 +1,6 @@
 ---
 name: factory-pl-playbook
-description: Project-lead playbook for the Omnigent software factory - plan.md and task-card templates (Preview and Demo focus), worktree and branch naming, parallel dispatch rules, the /goal convention, the review → factory preview → demo → ready-for-human-merge pipeline, the server message table (reviews, decisions, PR and preview notices), the PR review-links block, questions through sys_factory_ask, the definition of done, milestone reports, and the pause and done procedures.
+description: Project-lead playbook for the Omnigent software factory - plan.md and task-card templates (Preview and Demo focus), worktree and branch naming, parallel dispatch rules, the /goal convention, the review → factory preview → demo → ready-for-human-merge pipeline, the env_keeper and demo results table (preview failures, tooling conflicts, the preview cap), the server message table (reviews, decisions, PR and preview notices), the PR review-links block, questions through sys_factory_ask, the definition of done, milestone reports, and the pause and done procedures.
 ---
 
 # PL playbook
@@ -154,6 +154,31 @@ gh pr edit <url> --body-file /tmp/pr-<n>.md
 ```
 
 The links need Tailscale and an Omnigent login; that is expected.
+
+## Results from env_keeper and demo
+
+Every result line has an action. A PR left without a preview keeps its
+verify and demo gates pending, so it never becomes ready.
+
+| Result | Action |
+|---|---|
+| `ENV READY app=… api=… tilt_ui=… env_id=…` | Record the dev env as READY with its URLs in plan.md. |
+| `ENV OK <urls>`, `ENV OK at <sha7> · PREVIEW DOWN p<n>` | Record it. |
+| `ENV DEGRADED <res: error>` | Record it. If an IC needs a failing resource, send env_keeper `UP` once and keep that IC on work that does not need it. |
+| `ENV FAILED <diagnosis>` | Send env_keeper `UP` once more. If it fails again, `sys_factory_ask` the human with the diagnosis and keep the ICs on work that does not need the env. |
+| `ENV DOWN` | Record it. |
+| `PREVIEW READY … · VERIFY PASS` | Pipeline step 3: dispatch the demo. |
+| `PREVIEW READY … · VERIFY FAIL` | A product failure: send the failing checks to the author like review CHANGES. No demo for that head. |
+| `PREVIEW FAILED p<n> <diagnosis>` | Read the diagnosis. A failure of the PR's own code (its build, its migrations) goes to the author like review CHANGES. Otherwise send `PREVIEW pr=<n> head=<sha>` once more. If that fails too, `sys_factory_ask` the human (options: "Review without a preview" = label `factory:no-env`, or "Wait for an env fix") and record D-n in plan.md. |
+| `PREVIEW SKIPPED tooling-conflict <files>` | The PR changes the preview tooling itself, so it cannot get a preview until the tooling PR (caffeinelabs/app#9640) merges. `sys_factory_ask` the human with options "Review without a preview" (you label it `factory:no-env`; the verify and demo gates then skip) and "Wait for the preview tooling to merge" (the IC then merges origin/main and you send PREVIEW again). Record D-n in plan.md and act on the answer. |
+| `PREVIEW SKIPPED not-open` | The PR merged or closed; its server notice drives the rest. Drop the PREVIEW. |
+| `PREVIEW CAPPED p<n> · park one of: p<m> (<project>, …), …` | The factory-wide preview cap is reached. If a candidate is your project's and not ready, send env_keeper `PREVIEW_DOWN pr=<m> reason=human`, note "p<n> waits for a slot" in plan.md, and send the PREVIEW again when `PREVIEW DOWN p<m>` arrives. Otherwise post one line to `parent` (`kind="info"`, "PR #<n> waits for a preview slot; candidates: …") and send the PREVIEW again at your next heartbeat. |
+| `PREVIEW DOWN p<n> (<reason>)` | Set the task's preview to `parked` or `-` in plan.md. If a preview waits for a slot, send its PREVIEW now. |
+| `PREVIEW STATUS p<n> <state> …` | `ready`: record it. `stale`, `failed` or `gone` for a PR awaiting review: send `PREVIEW pr=<n> head=<sha>`. |
+| `DEMO PASS`, `DEMO PARTIAL`, `DEMO FAIL`, `DEMO ERROR`, `DEMO BLOCKED stale-preview`, `DEMO BLOCKED head-moved <sha>` | Pipeline step 4. |
+
+To label a PR the human chose to review without a preview:
+`gh pr edit <url> --add-label factory:no-env`, then check readiness (step 5).
 
 ## Server messages
 

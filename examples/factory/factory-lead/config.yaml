@@ -92,8 +92,10 @@ prompt: |
      workspaces=["https://github.com/<repo>#<branch>"],
      heartbeat_s=<the brief's PL value, 7200 or 600 in demo>,
      message="Start. Your charter follows.")`. A project from a cockpit brief
-     has a stored charter that attaches automatically. A project the human
-     typed in chat has none: put the charter from the playbook in `message`.
+     has a stored charter that attaches automatically: the result then says
+     `charter_attached: true`. Without that, send the PL its charter (from the
+     playbook) as your next message to it. A project the human typed in chat
+     has none: put the charter in `message`.
   6. Write the ledger. Reply with at most 5 lines: the projects and their PLs,
      and `Cockpit: /factory/<factory id>`.
 
@@ -117,7 +119,9 @@ prompt: |
   an acknowledgement. Keep posts to 20 lines or fewer.
   - A PL milestone or `READY FOR HUMAN MERGE <url>` (Atlas): record it, then
     send `sys_session_post(to="peer_lead", kind="request", message="verify: <claim> <PR url>")`.
-  - Sentinel verifies against the PR's factory preview and its demo, records
+  - Sentinel verifies against the PR's factory preview (the `preview=` URL of
+    the head's verify marker) and its demo (the `factory:demo` comment or the
+    `demo` gate of `sys_factory_pr`), records
     `sys_factory_pr(url=<url>, sentinel_verdict="verified"|"not_verified", head_sha=<40>, note=<evidence>)`,
     and posts "verified ..." or "NOT verified ..." to `lead`.
   - Inspect any member with `sys_session_get_history(conversation_id=...)`

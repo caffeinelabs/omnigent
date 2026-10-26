@@ -88,7 +88,8 @@ stderr; stdout is only JSON):
 2. **Claim the slot.**
    `sys_factory_env(pr=<n>, state="deploying", env_id=<env_id from an earlier preview.json, else "p<n>">, urls={}, deployed={sha: <sha>, ref: "pull/<n>/head"})`.
    A `preview_cap` error means the factory runs its maximum of live previews:
-   reply `PREVIEW CAPPED p<n> · park one of: <park_candidates>` and stop.
+   reply `PREVIEW CAPPED p<n> · park one of: p<m> (<project>, ready|not ready), …`
+   from its `park_candidates` (`preview`, `project`, `pr_ready`) and stop.
 3. **Worktree at the head.**
    ```bash
    W=/home/omnigent/workspace/wt/preview-p<n>
@@ -108,12 +109,12 @@ stderr; stdout is only JSON):
    cd /home/omnigent/workspace/wt/preview-p<n>
    TOOLING=""
    if ! grep -q '"factory:preview"' package.json; then
-     P=(Tiltfile scripts/factory.ts scripts/lib deploy/tilt deploy/services/src/builders/tilt.ts \
+     P=(Tiltfile scripts/factory.ts deploy/tilt deploy/services/src/builders/tilt.ts \
         ':(glob)deploy/services/*/src/tilt.ts' ':(glob)deploy/services/*/zz_generated/tilt/**')
      CONFLICT=$(git diff --name-only origin/main...HEAD -- "${P[@]}")
      if [ -n "$CONFLICT" ]; then echo "tooling-conflict: $CONFLICT"; exit 3; fi
-     git fetch -q origin <tooling ref> && TOOLING=$(git rev-parse FETCH_HEAD)
-     git checkout "$TOOLING" -- "${P[@]}"
+     git fetch -q origin <tooling ref> && TOOLING=$(git rev-parse FETCH_HEAD) \
+       && git checkout "$TOOLING" -- "${P[@]}" || { echo "tooling-fetch-failed"; exit 4; }
    fi
    FACTORY_PREVIEW_TOOLING_REF="$TOOLING" node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
      --experimental-strip-types scripts/factory.ts preview up --name p<n> --pr <n> --sha <sha>
@@ -127,6 +128,8 @@ stderr; stdout is only JSON):
      cannot be overlaid. Report
      `sys_factory_env(pr=<n>, state="failed", env_id=…, urls={}, deployed={sha: <sha>}, note="tooling-conflict: <files>")`
      and reply `PREVIEW SKIPPED tooling-conflict <files>`.
+   - Exit 4 with `tooling-fetch-failed`: the tooling ref could not be fetched
+     or checked out, so nothing was deployed (see the failure table).
    - On a timeout run the same block again: it waits for the previous run's
      lock and redeploys idempotently. A new head of the same PR reuses the
      namespace (about 1-3 min warm).
@@ -165,15 +168,18 @@ and reply `PREVIEW FAILED p<n> <diagnosis>`.
 
 ### PREVIEW_DOWN pr=<n> reason=merged|closed|ttl|human
 
-1. In `/home/omnigent/workspace/wt/preview-p<n>` (or `wt/env` if it has the
+1. First read `env_id` and `namespace` from `~/factory/previews/p<n>/preview.json`
+   (`jq -r '.env_id, .namespace'`): `down` deletes that directory. Without the
+   file, the namespace is `env-<env_id>`, and `FP list` names it.
+2. In `/home/omnigent/workspace/wt/preview-p<n>` (or `wt/env` if it has the
    preview tooling): `FP down --name p<n>` (typed in full). Without a usable
    checkout:
-   `kubectl delete namespace <namespace from preview.json> --wait=false` and
+   `kubectl delete namespace <namespace> --wait=false` and
    `rm -rf ~/factory/previews/p<n>`.
-2. merged or closed: `git -C <repo> worktree remove --force /home/omnigent/workspace/wt/preview-p<n>`.
+3. merged or closed: `git -C <repo> worktree remove --force /home/omnigent/workspace/wt/preview-p<n>`.
    ttl or human (parked): keep the worktree for a quick redeploy.
-3. `sys_factory_env(pr=<n>, state="down"|"parked", env_id=<env_id>, urls={}, deployed={})`.
-4. Result: `PREVIEW DOWN p<n> (<reason>)`.
+4. `sys_factory_env(pr=<n>, state="down"|"parked", env_id=<env_id from step 1>, urls={}, deployed={})`.
+5. Result: `PREVIEW DOWN p<n> (<reason>)`.
 
 The demo and its files stay in the cockpit; a parked preview is redeployed
 by the next PREVIEW.
@@ -184,8 +190,9 @@ by the next PREVIEW.
 `FP status --name p<n>` for each listed or requested preview. Report each:
 `ready` when `ready` is true, else `failed` with the reason in `note`
 (`observed.sha` differs, `api_ready` false, or a note about an earlier pod).
-Previews of this pod that are missing from `list` are gone: say so; the PL
-redeploys them with PREVIEW.
+Previews of this pod that are missing from `list` are gone. Result: one line
+per preview, `PREVIEW STATUS p<n> ready|stale|failed|gone sha=<sha7> · <note>`;
+the PL redeploys the ones that are not ready with PREVIEW.
 
 ### MERGED pr=<n> / CLOSED pr=<n>
 
@@ -217,7 +224,8 @@ redeploys them with PREVIEW.
 | `forbidden` right after the namespace was created | The RoleBinding arrives within about 5 s; the CLI waits for it. |
 | Namespace owned by another pod UID | Never adopt it; the reaper deletes it. Report it. |
 | `HEAD is …, not …` | Step 3 was skipped or the head moved: check out `<sha>` again. |
-| `uncommitted changes outside the factory tooling: …` | Something besides the overlay changed the worktree. Only `scripts/lib/*` listed after an overlay: `git checkout HEAD -- scripts/lib` and run `up` again. Anything else: `git reset --hard` and redo step 4. |
+| `uncommitted changes outside the factory tooling: …` | Something besides the overlay changed the worktree: `git reset -q --hard && git clean -fdq`, then redo step 4. |
+| Exit 4, `tooling-fetch-failed` | A network error: retry once. If `git ls-remote origin <tooling ref>` prints nothing, the ref is gone (the tooling PR merged or was renamed): report `PREVIEW FAILED p<n> tooling ref <ref> not found`, and say whether origin/main has the `factory:preview` script (then the PR only needs a merge of origin/main). |
 | `/__factory/preview` 404 or the app's HTML | The routes were rendered without preview mode: the tooling overlay is missing or `tilt up` ran instead of `preview up`. Check `kubectl -n <ns> get httproute,httproutefilter,configmap/factory-preview`. |
 | `HTTPRouteFilter` or route denied | Report the Kyverno message; never hand-edit routes. |
 | `pid … holds …/up.lock` | Another `up` of that preview runs; wait for it. |

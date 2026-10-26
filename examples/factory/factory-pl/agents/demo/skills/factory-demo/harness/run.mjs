@@ -35,6 +35,8 @@ import {
   isFullSha,
   prNumber,
   redactHar,
+  scrubText,
+  scrubTraceZip,
   sha7,
 } from './lib.mjs';
 import { HARNESS, PLAYWRIGHT_CLI, browserEnv, ensureDeps, runLogged } from './setup.mjs';
@@ -42,6 +44,9 @@ const USAGE =
   'usage: node run.mjs --spec <demo.spec.ts> --out <dir> --app <url> --api <url> --pr <pr url> ' +
   '--sha <40-char sha> [--synthetic-secret-file <path>] [--summary <text>] [--plan-source pr-body|derived] ' +
   '[--tilt-snapshot <path>] [--skip-stale-check] [--mp4]  |  node run.mjs --selftest [--keep]';
+// Only a failed run publishes its trace; every published file is scrubbed of credentials.
+const TRACE_PUBLISHED = new Set(['FAIL', 'ERROR']);
+const SCRUBBED_TEXT = ['api.json', 'console.json', 'network.har'];
 // Outputs of an earlier run in the same directory; the spec itself is kept.
 const OUTPUTS = [
   'demo.json',
@@ -115,8 +120,8 @@ function validate(values) {
   const secretFile = values['synthetic-secret-file'] ? resolve(expandHome(values['synthetic-secret-file'])) : '';
   if (secretFile && !existsSync(secretFile))
     throw new UsageError(`--synthetic-secret-file ${secretFile} does not exist`);
-  const planSource = values['plan-source'] || null;
-  if (planSource && !['pr-body', 'derived'].includes(planSource)) {
+  const planSource = values['plan-source'] || 'pr-body';
+  if (!['pr-body', 'derived'].includes(planSource)) {
     throw new UsageError('--plan-source is pr-body or derived');
   }
   const prUrl = /^https?:\/\//.test(values.pr) ? values.pr.trim() : `https://github.com/caffeinelabs/app/pull/${pr}`;
@@ -227,8 +232,26 @@ function testOutcome(report) {
   return { testsRan: ran > 0, testFailed: (stats.unexpected ?? 0) > 0, globalError };
 }
 
-/** Move Playwright's outputs into the demo layout; returns the artifact map. */
-function collect(args, steps, log) {
+/** The synthetic secret and the session tokens the fixtures saw, for scrubbing. */
+function knownSecrets(args) {
+  const recorded = readJson(join(args.out, '.harness', 'redact.json'), []);
+  const secrets = Array.isArray(recorded) ? [...recorded] : [];
+  if (args.secretFile) {
+    try {
+      secrets.push(readFileSync(args.secretFile, 'utf8').trim());
+    } catch {
+      // validate() checked it exists; an unreadable file has nothing to scrub
+    }
+  }
+  return secrets.filter((s) => typeof s === 'string');
+}
+
+function scrubFile(path, secrets) {
+  if (existsSync(path)) writeFileSync(path, scrubText(readFileSync(path, 'utf8'), secrets));
+}
+
+/** Move Playwright's outputs into the demo layout, scrubbed; returns the artifact map. */
+function collect(args, steps, status, secrets, log) {
   const { out } = args;
   const harness = join(out, '.harness');
   const artifacts = {};
@@ -240,8 +263,13 @@ function collect(args, steps, log) {
   }
   const trace = findFiles(join(harness, 'results'), (name) => name === 'trace.zip')[0];
   if (trace) {
-    renameSync(trace, join(out, 'trace.zip'));
-    artifacts.trace = 'trace.zip';
+    try {
+      writeFileSync(join(out, 'trace.zip'), scrubTraceZip(readFileSync(trace), secrets));
+      if (TRACE_PUBLISHED.has(status)) artifacts.trace = 'trace.zip';
+    } catch (error) {
+      log(`could not scrub the trace, dropped it: ${firstLine(error.message)}`);
+    }
+    rmSync(trace, { force: true });
   }
   const har = join(harness, 'network.har');
   if (existsSync(har)) {
@@ -249,6 +277,7 @@ function collect(args, steps, log) {
     rmSync(har, { force: true });
     artifacts.har = 'network.har';
   }
+  for (const name of SCRUBBED_TEXT) scrubFile(join(out, name), secrets);
   artifacts.api = 'api.json';
   artifacts.console = 'console.json';
   const script = join(out, 'demo.spec.ts');
@@ -346,7 +375,7 @@ async function record(args) {
   let consoleEntries = [];
   let outcome;
   try {
-    ensureDeps(log);
+    await ensureDeps(log);
     const env = browserEnv(
       {
         ...process.env,
@@ -378,9 +407,12 @@ async function record(args) {
     outcome = { status: 'ERROR', reason: firstLine(error.message) };
   }
 
+  const secrets = knownSecrets(args);
+  steps = steps.map((s) => (s?.note ? { ...s, note: scrubText(s.note, secrets) } : s));
+  outcome.reason = scrubText(outcome.reason, secrets);
   let artifacts = { log: 'run.log' };
   try {
-    artifacts = collect(args, steps, log);
+    artifacts = collect(args, steps, outcome.status, secrets, log);
   } catch (error) {
     log(`collecting outputs failed: ${error.stack || error.message}`);
   }
@@ -398,6 +430,8 @@ async function record(args) {
     },
     log,
   );
+  scrubFile(logPath, secrets);
+  rmSync(join(args.out, '.harness', 'redact.json'), { force: true });
   const counts = ['pass', 'fail', 'skipped'].map((s) => `${steps.filter((x) => x.status === s).length} ${s}`);
   console.log(
     `DEMO ${manifest.status} pr=${args.pr} sha=${sha7(args.sha)} · ${counts.join(', ')} · ${manifest.summary}`,

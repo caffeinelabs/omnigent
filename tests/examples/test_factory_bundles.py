@@ -545,6 +545,60 @@ def test_verify_never_returns_the_env_to_main(pl: AgentSpec) -> None:
     assert "FACTORY_TILT_PORT" not in prompt + skill
 
 
+# A result line a sub-agent ends its turn with, e.g. `PREVIEW SKIPPED tooling-conflict <files>`.
+_RESULT_LINE = re.compile(
+    r"\b(ENV|PREVIEW|DEMO) ((?:[A-Z]{2,}\|)*[A-Z]{2,})\b(?: ((?:[a-z]+-)+[a-z]+)\b)?"
+)
+
+
+def _result_lines(text: str) -> set[tuple[str, str, str | None]]:
+    """``(prefix, status, reason)`` for every result line in ``text``, ``A|B`` expanded."""
+    found: set[tuple[str, str, str | None]] = set()
+    for prefix, statuses, reason in _RESULT_LINE.findall(text):
+        for status in statuses.split("|"):
+            found.add((prefix, status, reason or None))
+    return found
+
+
+def _handles(text: str, prefix: str, status: str, reason: str | None) -> bool:
+    alternatives = rf"(?:[A-Z]{{2,}}\|)*{status}(?:\|[A-Z]{{2,}})*"
+    tail = r"(?:\|(?:[a-z]+-)+[a-z]+)*" if reason else ""
+    reasons = rf" (?:(?:[a-z]+-)+[a-z]+\|)*{re.escape(reason)}{tail}" if reason else r"\b"
+    return re.search(rf"\b{prefix} {alternatives}{reasons}", text) is not None
+
+
+def test_pl_handles_every_env_keeper_and_demo_result(pl: AgentSpec) -> None:
+    """Each line env_keeper or the demo agent can end with has a row in the PL's results table."""
+    emitters = []
+    for name, skill in (("env_keeper", "factory-env"), ("demo", "factory-demo")):
+        agent = _sub_agent(pl, name)
+        emitters.append(agent.instructions or "")
+        emitters.append((_skill_dir(agent) / skill / "SKILL.md").read_text(encoding="utf-8"))
+    emitters.append(
+        (_PL_DIR / "agents/demo/skills/factory-demo/harness/run.mjs").read_text(encoding="utf-8")
+    )
+    emitted = set().union(*(_result_lines(text) for text in emitters))
+    assert {
+        ("ENV", "READY", None),
+        ("ENV", "DEGRADED", None),
+        ("PREVIEW", "FAILED", None),
+        ("PREVIEW", "SKIPPED", "tooling-conflict"),
+        ("PREVIEW", "SKIPPED", "not-open"),
+        ("PREVIEW", "CAPPED", None),
+        ("PREVIEW", "STATUS", None),
+        ("DEMO", "ERROR", None),
+        ("DEMO", "BLOCKED", "stale-preview"),
+        ("DEMO", "BLOCKED", "head-moved"),
+    } <= emitted, sorted(emitted)
+    playbook = (_PL_DIR / "skills/factory-pl-playbook/SKILL.md").read_text(encoding="utf-8")
+    table = _command_section(playbook, "## Results from env_keeper and demo", ("\n## ",))
+    missing = sorted(
+        " ".join(p for p in line if p) for line in emitted if not _handles(table, *line)
+    )
+    assert not missing, f"the PL playbook's results table has no row for: {missing}"
+    assert "playbook's results table" in (pl.instructions or "")
+
+
 def test_demo_skill_frontmatter_and_the_demo_agent(pl: AgentSpec) -> None:
     demo = _sub_agent(pl, "demo")
     assert [s.name for s in demo.skills] == ["factory-demo"]
@@ -677,6 +731,19 @@ def test_preview_lifecycle_stays_with_env_keeper() -> None:
     for role in (ROLE_DEMO, ROLE_IC, ROLE_REVIEWER, ROLE_LEAD):
         assert _guard(role, deploy)["result"] == "DENY", role
     assert _guard(ROLE_DEMO, "git push origin factory/x/y")["result"] == "DENY"
+
+
+def test_preview_overlay_and_harness_lookup_stay_portable() -> None:
+    """The overlay is exactly the app CLI's tooling paths, and a failed fetch never deploys."""
+    env_skill = _PL_DIR / "agents/env_keeper/skills/factory-env/SKILL.md"
+    deploy = next(b for b in _shell_blocks(env_skill) if "TOOLING=" in b)
+    assert "scripts/lib" not in deploy
+    assert '{ echo "tooling-fetch-failed"; exit 4; }' in deploy
+    down = _command_section(env_skill.read_text(encoding="utf-8"), "### PREVIEW_DOWN", ("### ",))
+    assert down.index("preview.json") < down.index("FP down")
+    demo_skill = (_PL_DIR / "agents/demo/skills/factory-demo/SKILL.md").read_text(encoding="utf-8")
+    assert "-printf" not in demo_skill
+    assert "-x .install.lock" in demo_skill
 
 
 def test_real_bundles_seed_with_the_demo_harness(
