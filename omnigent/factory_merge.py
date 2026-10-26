@@ -3,8 +3,9 @@
 The only way factory agents merge (``factory_role_guard`` denies raw
 ``gh pr merge``). It squash-merges a PR only when every gate holds:
 
-1. ``repo``/``draft``: the repo is allowlisted (``OMNIGENT_FACTORY_MERGE_REPOS``,
-   default ``caffeinelabs/app``) and the PR is not a draft;
+1. ``repo``/``draft``: the repo is allowlisted (``OMNIGENT_FACTORY_MERGE_REPOS``;
+   empty by default, so the gate merges nowhere until an operator opts a repo
+   in) and the PR is not a draft;
 2. ``checks``: every status check the base branch requires (rulesets and
    classic protection) has reported, none is failing or pending, and at least
    one passed unless the repo reports no checks (required checks, or all
@@ -50,7 +51,7 @@ from urllib.parse import quote
 _Json: TypeAlias = dict[str, Any]  # type: ignore[explicit-any]
 
 REPOS_ENV = "OMNIGENT_FACTORY_MERGE_REPOS"
-DEFAULT_REPOS: tuple[str, ...] = ("caffeinelabs/app",)
+DEFAULT_REPOS: tuple[str, ...] = ()
 
 LABEL_NO_ENV = "factory:no-env"
 LABEL_REVERT = "factory:revert"
@@ -513,7 +514,7 @@ def allowed_repos() -> frozenset[str]:
     Repos the gate may merge in, from ``OMNIGENT_FACTORY_MERGE_REPOS``.
 
     :returns: Lowercase ``owner/repo`` values (comma or space separated in the
-        env var), defaulting to ``caffeinelabs/app``.
+        env var); empty when unset, i.e. merging is opt-in per repo.
     """
     raw = os.environ.get(REPOS_ENV, "")
     repos = {r.strip().lower() for r in re.split(r"[,\s]+", raw) if r.strip()}
@@ -566,6 +567,12 @@ def _check_repo_and_draft(pr: PullRequest, verdict: Verdict) -> None:
     allowed = allowed_repos()
     if full in allowed:
         verdict.gates["repo"] = GATE_PASS
+    elif not allowed:
+        verdict.fail(
+            "repo",
+            f"factory merges are off ({REPOS_ENV} is empty): leave {full} PRs for a human "
+            "to merge and report them as ready for human merge",
+        )
     else:
         verdict.fail(
             "repo",
