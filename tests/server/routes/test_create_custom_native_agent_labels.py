@@ -267,3 +267,45 @@ async def test_subagent_create_uses_sub_spec(
     else:
         assert labels[WRAPPER_LABEL_KEY] == expected[WRAPPER_LABEL_KEY]
         assert labels[UI_MODE_LABEL_KEY] == UI_MODE_TERMINAL_VALUE
+
+
+async def test_factory_agent_spec_owns_its_launch_permission_mode(
+    client: httpx.AsyncClient, db_uri: str
+) -> None:
+    """A composer permission-mode pick does not override a factory agent's spec mode."""
+    executor = {
+        "type": "omnigent",
+        "config": {
+            "harness": "claude-native",
+            "permission_mode": "bypassPermissions",
+            "factory_role": "lead",
+        },
+    }
+    agent_id = await _seed_builtin(client, db_uri, "factory-lead", executor)
+
+    resp = await client.post(
+        "/v1/sessions",
+        json={"agent_id": agent_id, "terminal_launch_args": ["--permission-mode", "auto"]},
+    )
+    assert resp.status_code == 201, resp.text
+    snapshot = await client.get(f"/v1/sessions/{resp.json()['id']}")
+    assert snapshot.json()["terminal_launch_args"] == ["--permission-mode", "bypassPermissions"]
+
+
+async def test_non_factory_agent_keeps_the_composer_permission_mode(
+    client: httpx.AsyncClient, db_uri: str
+) -> None:
+    """Ordinary custom native built-ins keep the caller's permission mode."""
+    executor = {
+        "type": "omnigent",
+        "config": {"harness": "claude-native", "permission_mode": "bypassPermissions"},
+    }
+    agent_id = await _seed_builtin(client, db_uri, "custom-claude", executor)
+
+    resp = await client.post(
+        "/v1/sessions",
+        json={"agent_id": agent_id, "terminal_launch_args": ["--permission-mode", "auto"]},
+    )
+    assert resp.status_code == 201, resp.text
+    snapshot = await client.get(f"/v1/sessions/{resp.json()['id']}")
+    assert snapshot.json()["terminal_launch_args"] == ["--permission-mode", "auto"]

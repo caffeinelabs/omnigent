@@ -47,6 +47,7 @@ from omnigent.entities.conversation import (
 )
 from omnigent.entities.permission import SessionPermission
 from omnigent.errors import ElicitationDeclinedError, ErrorCode, OmnigentError
+from omnigent.factory import factory_role_from_spec
 from omnigent.harness_availability import (
     HARNESS_BINARY_MISSING,
     HARNESS_NEEDS_AUTH,
@@ -8952,6 +8953,14 @@ async def _create_session_from_existing_agent(
                 exc_info=True,
             )
 
+    # Factory agents run unattended behind their policy hooks; a composer
+    # permission-mode pick (e.g. auto) must not replace the spec's launch mode.
+    if (
+        not needs_launch_args_from_spec
+        and own_spec is not None
+        and factory_role_from_spec(own_spec) is not None
+    ):
+        needs_launch_args_from_spec = True
     if needs_launch_args_from_spec and own_spec is not None:
         try:
             validated_launch_args = _derive_terminal_launch_args_from_spec(
