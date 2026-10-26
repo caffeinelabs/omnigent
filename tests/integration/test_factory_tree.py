@@ -289,9 +289,7 @@ def _texts(stack: FactoryStack, session_id: str, role: str) -> list[str]:
         if isinstance(content, str):
             texts.append(content)
         elif isinstance(content, list):
-            texts.append(
-                "".join(str(b.get("text", "")) for b in content if isinstance(b, dict))
-            )
+            texts.append("".join(str(b.get("text", "")) for b in content if isinstance(b, dict)))
     return texts
 
 
@@ -353,9 +351,7 @@ def test_factory_tree_messaging_supervision_and_scope(factory_stack: FactoryStac
     lead_model, pl_model = f"mock-factory-lead-{run}", f"mock-factory-pl-{run}"
     slug = f"tree-{run}"
     lead_agent = _register_agent(stack, name=f"tree-lead-{run}", model=lead_model, role="lead")
-    pl_agent = _register_agent(
-        stack, name=f"tree-pl-{run}", model=pl_model, role="project_lead"
-    )
+    pl_agent = _register_agent(stack, name=f"tree-pl-{run}", model=pl_model, role="project_lead")
     plain_agent = _register_agent(
         stack, name=f"tree-plain-{run}", model=f"mock-factory-plain-{run}", role=None
     )
@@ -397,9 +393,7 @@ def test_factory_tree_messaging_supervision_and_scope(factory_stack: FactoryStac
             F.LABEL_HEARTBEAT_S: "600",
         },
     )
-    membership = stack.client.get(
-        f"/v1/factory/membership/{pl}", params={"from_session_id": lead}
-    )
+    membership = stack.client.get(f"/v1/factory/membership/{pl}", params={"from_session_id": lead})
     assert membership.status_code == 200, membership.text
     assert membership.json()["factory_id"] == lead
     assert membership.json()["role"] == F.ROLE_PROJECT_LEAD
@@ -429,7 +423,7 @@ def test_factory_tree_messaging_supervision_and_scope(factory_stack: FactoryStac
     assert queued["status"] == "queued" and queued["to_session_id"] == pl, queued
     envelope = (
         f'[Factory message · from "Atlas" ({lead}, {F.ROLE_LEAD}) · kind=request'
-        f' · reply: sys_session_post(to="{lead}")]\nSTATUS? {run}'
+        f' · id={queued["mail_id"]} · reply: sys_session_post(to="{lead}")]\nSTATUS? {run}'
     )
     _wait_for_message(stack, pl, "user", lambda t: t == envelope, "the enveloped request")
     _wait_for_message(stack, pl, "assistant", lambda t: pl_answer in t, "the PL's answer")

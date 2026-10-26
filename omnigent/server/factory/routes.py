@@ -52,6 +52,7 @@ from omnigent.server.factory.membership import (
     root_conversation,
 )
 from omnigent.server.factory.roster import build_roster
+from omnigent.server.factory.server_decisions import open_storm_decision
 from omnigent.server.routes._auth_helpers import (
     get_user_id,
     require_access,
@@ -284,10 +285,11 @@ def create_factory_router() -> APIRouter:
                     "restart is for top-level peers, from a lead or the target's supervisor",
                 )
         mailer = get_mailer(request.app.state)
-        limit = mailer.try_acquire(sender.id, target.id)
+        limit = mailer.try_acquire(sender.id, target.id, factory_id=sender_m.factory_id)
         if limit is not None:
             if mailer.claim_storm_alert(sender_m.factory_id):
                 mailer.notify(sender_m.factory_id, _storm_alert(sender_m, target_m, limit))
+                await open_storm_decision(request.app.state, sender_m, limit)
             raise FactoryRouteError(429, "rate_limited", f"rate limit reached: {limit}")
         mailer.record_post(sender.id, target.id, body.kind)
         mail_id = new_mail_id()
@@ -304,9 +306,12 @@ def create_factory_router() -> APIRouter:
                     sender_project=sender_m.project,
                     kind=body.kind,
                     body=body.message,
+                    mail_id=mail_id,
                 ),
                 kind=body.kind,
                 restart=body.restart,
+                factory_id=sender_m.factory_id,
+                project=target_m.project or sender_m.project,
             )
         )
         return {"mail_id": mail_id, "to_session_id": target.id, "status": "queued"}

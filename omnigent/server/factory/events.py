@@ -104,6 +104,7 @@ async def emit(
     subject: str | None = None,
     summary: str,
     data: dict[str, Any] | None = None,
+    ts: int | None = None,
 ) -> FactoryEvent | None:
     """
     Append an event to the factory log and announce the change. Never raises.
@@ -118,6 +119,7 @@ async def emit(
     :param subject: e.g. ``"pr:caffeinelabs/app#9630"``.
     :param summary: One line (clipped to 300 chars).
     :param data: JSON payload.
+    :param ts: Epoch milliseconds, for callers on their own clock; defaults to now.
     :returns: The stored event, or ``None`` when it could not be stored.
     """
     event: FactoryEvent | None = None
@@ -136,6 +138,7 @@ async def emit(
             to_id=_session_or_data(to_id, "to", payload),
             subject=_clip(subject, _SUBJECT_MAX),
             data=payload or None,
+            ts=ts,
         )
         event = await asyncio.to_thread(store.append_event, draft)
     except Exception:  # noqa: BLE001 - emit never raises; a lost event is only logged

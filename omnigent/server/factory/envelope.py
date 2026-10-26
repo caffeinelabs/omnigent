@@ -65,6 +65,7 @@ def format_envelope(
     sender_project: str | None,
     kind: str,
     body: str,
+    mail_id: str | None = None,
 ) -> str:
     """
     Build the delivered text of a ``sys_session_post`` message.
@@ -75,14 +76,17 @@ def format_envelope(
     :param sender_project: Sender project slug, if any.
     :param kind: Message kind, e.g. ``"request"``.
     :param body: Agent-supplied body.
+    :param mail_id: The mail id, so a recipient can ignore a replayed repeat.
     :returns: ``[Factory message · from "<title>" (<id>, <role>[, project=<slug>])
-        · kind=<kind> · reply: sys_session_post(to="<id>")]`` + newline + body.
+        · kind=<kind>[ · id=<mail_id>] · reply: sys_session_post(to="<id>")]``
+        + newline + body.
     """
     identity = f"{sender_id}, {sender_role or 'member'}"
     if sender_project:
         identity += f", project={sender_project[:LABEL_VALUE_MAX_LEN]}"
+    mail = f" · id={mail_id}" if mail_id else ""
     header = (
         f'[Factory message · from "{display_title(sender_title, sender_id)}" ({identity})'
-        f' · kind={kind} · reply: sys_session_post(to="{sender_id}")]'
+        f' · kind={kind}{mail} · reply: sys_session_post(to="{sender_id}")]'
     )
     return f"{header}\n{quote_spoofed_lines(body)}"
