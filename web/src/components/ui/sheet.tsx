@@ -53,8 +53,9 @@ const SheetOverlay = React.forwardRef<
   );
 });
 
+// A solid surface: drawers hold dense content that must not show the page through.
 const sheetContentVariants = cva(
-  "fixed z-50 flex flex-col bg-popover text-ui text-popover-foreground shadow-dialog outline-none duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] data-open:animate-in data-closed:animate-out motion-reduce:animate-none max-md:inset-0 max-md:h-full max-md:w-full max-md:max-w-none",
+  "fixed z-50 flex flex-col bg-card-solid text-ui text-popover-foreground shadow-dialog outline-none duration-200 ease-[cubic-bezier(0.16,1,0.3,1)] data-open:animate-in data-closed:animate-out motion-reduce:animate-none max-md:inset-0 max-md:h-full max-md:w-full max-md:max-w-none",
   {
     variants: {
       side: {

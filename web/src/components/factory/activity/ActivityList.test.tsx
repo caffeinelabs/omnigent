@@ -5,13 +5,15 @@ import { LIVE_RUN_FACTORY_ID, liveRunSnapshot } from "../__fixtures__/liveRun";
 import { boardActivityEvents } from "../board/__fixtures__/boardFixtures";
 import { renderBoard } from "../board/__fixtures__/renderBoard";
 import {
+  ACTIVITY_KIND_GROUPS,
+  type ActivityRow,
   DEFAULT_KIND_GROUPS,
   type KindGroupId,
   buildActivityRows,
   kindGroup,
   kindsQuery,
 } from "./activityModel";
-import { ActivityList } from "./ActivityList";
+import { ActivityList, heartbeatText } from "./ActivityList";
 
 const authenticatedFetch = vi.fn();
 vi.mock("@/lib/identity", () => ({
@@ -19,8 +21,11 @@ vi.mock("@/lib/identity", () => ({
 }));
 vi.mock("@/hooks/useSessionUpdatesConnected", () => ({ useSessionUpdatesConnected: () => true }));
 
-function json(body: unknown): Response {
-  return new Response(JSON.stringify(body), { headers: { "Content-Type": "application/json" } });
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json" },
+  });
 }
 
 function serve(page: EventPage = boardActivityEvents()) {
@@ -79,8 +84,34 @@ describe("activity model", () => {
       { foldHeartbeats: true },
     );
     expect(rows.map((r) => r.type)).toEqual(["event", "heartbeats", "event", "heartbeats"]);
-    expect(rows[1]).toMatchObject({ delivered: 1, skipped: 3, failed: 1 });
+    expect(rows[1]).toMatchObject({ beats: 5, delivered: 1, skipped: 3, failed: 1 });
     expect(rows[1]!.type === "heartbeats" && rows[1]!.events).toHaveLength(3);
+  });
+
+  it("counts beats, not events, in the ♥ row", () => {
+    const [mixed] = buildActivityRows(
+      [
+        event("e1", "heartbeat.delivered"),
+        event("e2", "heartbeat.skipped", { data: { counts: { a: 2, b: 1 } } }),
+      ],
+      { foldHeartbeats: true },
+    );
+    expect(heartbeatText(mixed as Extract<ActivityRow, { type: "heartbeats" }>)).toBe(
+      "4 heartbeats · 1 delivered · 3 skipped · no change",
+    );
+    const [skipped] = buildActivityRows(
+      [event("e3", "heartbeat.skipped", { data: { counts: { a: 3 } } })],
+      { foldHeartbeats: true },
+    );
+    expect(heartbeatText(skipped as Extract<ActivityRow, { type: "heartbeats" }>)).toBe(
+      "3 heartbeats skipped · no change",
+    );
+    const [delivered] = buildActivityRows([event("e4", "heartbeat.delivered")], {
+      foldHeartbeats: true,
+    });
+    expect(heartbeatText(delivered as Extract<ActivityRow, { type: "heartbeats" }>)).toBe(
+      "1 heartbeat delivered",
+    );
   });
 
   it("keeps heartbeats as their own rows when asked for", () => {
@@ -137,8 +168,8 @@ describe("ActivityList", () => {
     serve();
     renderList();
     const folded = await screen.findByTestId("activity-heartbeats");
-    expect(folded).toHaveAttribute("data-count", "2");
-    expect(folded).toHaveTextContent("1 delivered · 3 skipped · no change");
+    expect(folded).toHaveAttribute("data-count", "4");
+    expect(folded).toHaveTextContent("4 heartbeats · 1 delivered · 3 skipped · no change");
     expect(lastQuery().get("kinds")).toBeNull();
 
     fireEvent.click(screen.getByTestId("activity-kind-heartbeats"));
@@ -160,6 +191,61 @@ describe("ActivityList", () => {
     expect(kinds).toContain("decision.*");
     expect(kinds).not.toContain("message.*");
     expect(kinds).not.toContain("heartbeat.*");
+  });
+
+  it("asks for nothing and says so when every kind is switched off", async () => {
+    serve();
+    renderList();
+    await screen.findAllByTestId("activity-row");
+    const calls = authenticatedFetch.mock.calls.length;
+    for (const group of ACTIVITY_KIND_GROUPS) {
+      const toggle = screen.getByTestId(`activity-kind-${group.id}`);
+      if (toggle.getAttribute("aria-pressed") === "true") fireEvent.click(toggle);
+    }
+    expect(await screen.findByTestId("activity-no-kinds")).toBeInTheDocument();
+    expect(screen.queryByTestId("activity-row")).toBeNull();
+    expect(screen.queryByTestId("activity-scroll")).toBeNull();
+    const requested = authenticatedFetch.mock.calls.slice(calls).map((c) => c[0] as string);
+    // Each narrowing on the way asks for its kinds; nothing asks for "everything".
+    for (const path of requested) {
+      expect(new URL(path, "http://x").searchParams.get("kinds")).not.toBeNull();
+    }
+  });
+
+  it("stops loading older pages on its own when they add no rows", async () => {
+    let page = 0;
+    authenticatedFetch.mockImplementation(async () => {
+      page += 1;
+      const base = 1_000_000 - page * 1000;
+      return json({
+        data: [0, 1, 2].map((i) =>
+          event(`p${page}e${i}`, "heartbeat.skipped", { ts: base - i, id: `p${page}e${i}` }),
+        ),
+        has_more: true,
+        next_before: base - 3,
+        next_before_id: `p${page}e2`,
+      });
+    });
+    renderList();
+    const loadOlder = await screen.findByTestId("activity-load-older");
+    // The first page and three automatic ones, then it waits for the reader.
+    expect(authenticatedFetch).toHaveBeenCalledTimes(4);
+    expect(screen.getAllByTestId("activity-heartbeats")).toHaveLength(1);
+    fireEvent.click(loadOlder);
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(5));
+    expect(await screen.findByTestId("activity-load-older")).toBeInTheDocument();
+    expect(authenticatedFetch).toHaveBeenCalledTimes(5);
+  });
+
+  it("shows a load error with its status and no empty list box", async () => {
+    authenticatedFetch.mockImplementation(async () =>
+      json({ error: { message: "forbidden" } }, 403),
+    );
+    renderList();
+    const error = await screen.findByTestId("activity-error");
+    expect(error).toHaveTextContent("Couldn’t load activity(HTTP 403)Retry");
+    expect(screen.queryByTestId("activity-scroll")).toBeNull();
+    expect(screen.queryByTestId("activity-empty")).toBeNull();
   });
 
   it("turns the project and member filters into the events query", async () => {

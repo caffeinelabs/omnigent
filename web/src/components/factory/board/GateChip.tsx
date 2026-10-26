@@ -311,7 +311,7 @@ export function GateChip({
       <HoverCardContent
         side="bottom"
         align="start"
-        className="flex w-72 flex-col gap-1.5"
+        className="flex w-72 flex-col gap-1.5 bg-card-solid"
         data-testid={`gate-evidence-${gate}-${pr.number}`}
       >
         <p className="flex items-center gap-1.5 text-ui font-medium">

@@ -1,7 +1,8 @@
 /**
  * Is the machine alive? One line from the server's status registry: the
  * supervisor's last tick, the mail queue, the GitHub poller, the preview
- * prober and launch-mode drift, each amber or red past its threshold.
+ * prober, demo storage and launch-mode drift, each amber or red past its
+ * threshold.
  */
 
 import type { ReactNode } from "react";
@@ -50,7 +51,7 @@ function Item({ item, children }: { item: HealthItem; children?: ReactNode }) {
     <li
       data-testid={`health-${item.key}`}
       data-state={item.level}
-      title={item.at != null ? `${item.label}: ${at(item.at)}` : undefined}
+      title={item.hint ?? (item.at != null ? `${item.label}: ${at(item.at)}` : undefined)}
       className={cn("inline-flex items-center gap-1.5 whitespace-nowrap", LEVEL_TEXT[item.level])}
     >
       {children ?? <ItemBody item={item} />}
@@ -77,7 +78,10 @@ export function HealthStrip({ snapshot, nowS }: { snapshot: FactorySnapshot; now
                     <ItemBody item={item} />
                   </span>
                 </HoverCardTrigger>
-                <HoverCardContent align="start" className="flex w-80 flex-col gap-1.5 text-sm">
+                <HoverCardContent
+                  align="start"
+                  className="flex w-80 flex-col gap-1.5 bg-card-solid text-sm"
+                >
                   <p className="font-medium">Launch mode differs from the agent spec</p>
                   {drifted.map((member) => (
                     <p key={member.session_id} className="text-muted-foreground">

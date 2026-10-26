@@ -35,6 +35,10 @@ export function previewPillView(pr: PrView, project: ProjectView | null, nowS: n
   switch (preview.state) {
     case "ready":
     case "stale":
+      if (preview.state === "stale" && truth.sha === pr.head_sha) {
+        // The server's last probe saw another commit, but the reading here is the head.
+        return { state: "stale", tone: "warning", head: "behind", text: "stale · re-probing" };
+      }
       return truth.matches && preview.state === "ready"
         ? {
             state: preview.state,
@@ -79,7 +83,7 @@ function UrlRow({ label, url }: { label: string; url: string | null }) {
         href={url}
         target="_blank"
         rel="noreferrer"
-        className="min-w-0 truncate font-mono text-foreground underline-offset-2 hover:underline"
+        className="min-w-0 font-mono break-all text-foreground underline-offset-2 hover:underline"
         title={url}
       >
         {url.replace(/^https:\/\//, "")}
@@ -119,9 +123,7 @@ function PreviewDetails({ pr, preview, nowS }: { pr: PrView; preview: PreviewVie
         {preview.namespace && (
           <>
             <dt className="text-muted-foreground">Namespace</dt>
-            <dd className="truncate font-mono" title={preview.namespace}>
-              {preview.namespace}
-            </dd>
+            <dd className="font-mono break-all">{preview.namespace}</dd>
           </>
         )}
         {preview.resources.length > 0 && (
@@ -212,7 +214,11 @@ export function PreviewPill({
               {pill}
             </button>
           </HoverCardTrigger>
-          <HoverCardContent side="bottom" align="start" className="w-80">
+          <HoverCardContent
+            side="bottom"
+            align="start"
+            className="w-96 max-w-[calc(100vw-2rem)] bg-card-solid"
+          >
             <PreviewDetails pr={pr} preview={preview} nowS={nowS} />
           </HoverCardContent>
         </HoverCard>

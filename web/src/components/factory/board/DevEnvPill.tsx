@@ -150,7 +150,7 @@ export function DevEnvPill({ env, nowS }: { env: EnvView | null; nowS: number })
           )}
         </button>
       </HoverCardTrigger>
-      <HoverCardContent side="top" align="start" className="w-80">
+      <HoverCardContent side="top" align="start" className="w-80 bg-card-solid">
         <DevEnvDetails env={env} nowS={nowS} />
       </HoverCardContent>
     </HoverCard>

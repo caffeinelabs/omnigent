@@ -112,7 +112,11 @@ function MemberChip({
             <MemberStatusDot member={member} />
           </Link>
         </HoverCardTrigger>
-        <HoverCardContent side="top" align="start" className="flex w-72 flex-col gap-1">
+        <HoverCardContent
+          side="top"
+          align="start"
+          className="flex w-72 flex-col gap-1 bg-card-solid"
+        >
           <p className="flex items-center gap-1.5 font-medium">
             <HarnessGlyph harness={member.harness} className="size-3.5" />
             <span className="truncate">{member.title}</span>

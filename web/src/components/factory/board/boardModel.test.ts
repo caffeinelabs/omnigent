@@ -8,8 +8,10 @@ import {
   healthItems,
   needsYou,
   needsYouCount,
+  formatBytes,
   nextChecks,
   orderProjects,
+  projectLeadIds,
   prAnchorId,
   prHasNoEnv,
   prTouchesUi,
@@ -180,8 +182,17 @@ describe("health thresholds", () => {
       mail: "ok",
       github: "ok",
       probes: "ok",
+      demos: "ok",
       drift: "amber",
     });
+  });
+
+  it("flags demo storage past half the data volume, red near full", () => {
+    const at = (bytes: number) => levels(health({ demo_storage_bytes: bytes })).demos;
+    expect(at(0)).toBe("ok");
+    expect(at(9 * 1024 ** 3)).toBe("ok");
+    expect(at(10 * 1024 ** 3)).toBe("amber");
+    expect(at(16 * 1024 ** 3)).toBe("red");
   });
 
   it("turns the supervisor amber after three missed ticks and red after ten or a failure", () => {
@@ -227,7 +238,23 @@ describe("clock helpers", () => {
     expect(clipDuration(41.2)).toBe("0:41");
     expect(clipDuration(125)).toBe("2:05");
     expect(clipDuration(null)).toBeNull();
-    const checks = nextChecks(liveRunSnapshot().factory, NOW);
-    expect(checks).toEqual({ lead: { title: "Atlas", in: 60 }, pls: 240 });
+    const snapshot = liveRunSnapshot();
+    const checks = nextChecks(snapshot.factory, NOW, projectLeadIds(snapshot));
+    expect(checks).toEqual({ lead: { title: "Atlas", in: 60 }, pls: 240, others: [] });
+  });
+
+  it("formats storage in binary units", () => {
+    expect(formatBytes(512)).toBe("512 B");
+    expect(formatBytes(7_533_983)).toBe("7.2 MB");
+    expect(formatBytes(1.5 * 1024 ** 3)).toBe("1.5 GB");
+    expect(formatBytes(250 * 1024 ** 2)).toBe("250 MB");
+  });
+
+  it("lists a peer lead's next check apart from the PLs", () => {
+    const snapshot = liveRunSnapshot();
+    snapshot.factory.next_beats.push({ session_id: "sentinel", title: "Sentinel", at: NOW + 120 });
+    const checks = nextChecks(snapshot.factory, NOW, projectLeadIds(snapshot));
+    expect(checks.pls).toBe(240);
+    expect(checks.others).toEqual([{ title: "Sentinel", in: 120 }]);
   });
 });

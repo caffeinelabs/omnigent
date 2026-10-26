@@ -4,7 +4,8 @@
  */
 
 import { type ReactNode, useRef, useState } from "react";
-import { ChevronRightIcon, EyeOffIcon, FolderKanbanIcon } from "lucide-react";
+import { flushSync } from "react-dom";
+import { CircleCheckIcon, ChevronRightIcon, EyeOffIcon, FolderKanbanIcon } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { FactorySnapshot } from "@/lib/factoryApi";
 import { STAGE_LABEL, plural } from "../factoryFormat";
@@ -56,11 +57,18 @@ export function FactoryBoard({
     : snapshot.projects;
   const { active, done } = boardSections(shown);
   const empty = snapshot.projects.length === 0;
+  // Nothing left in flight: the Done group is the board, so it opens.
+  const allDone = !filter && active.length === 0 && done.length > 0;
+  // A chip's target may sit in a card the stage filter hides: show every card first.
+  const jump = (targetId: string) => {
+    if (filter && !document.getElementById(targetId)) flushSync(() => setFilter(null));
+    onJump(targetId);
+  };
   return (
     <div data-testid="factory-board" className="flex min-w-0 flex-col gap-4">
       <NeedsYouStrip
         needs={needs}
-        onJump={onJump}
+        onJump={jump}
         onDecisions={onDecisions}
         decisionsPanel={decisionsPanel}
         decisionsExpanded={decisionsExpanded}
@@ -101,10 +109,20 @@ export function FactoryBoard({
         <p className="text-sm text-muted-foreground">No projects in {STAGE_LABEL[filter]}.</p>
       )}
 
+      {allDone && (
+        <p
+          data-testid="factory-all-done"
+          className="inline-flex items-center gap-1.5 text-sm text-muted-foreground"
+        >
+          <CircleCheckIcon aria-hidden className="size-3.5 text-success" />
+          {done.length === 1 ? "The project is done." : `All ${done.length} projects are done.`}
+        </p>
+      )}
+
       {done.length > 0 && (
         <Collapsible
-          key={filter ?? "all"}
-          defaultOpen={filter === "merged"}
+          key={`${filter ?? "all"}-${allDone}`}
+          defaultOpen={filter === "merged" || allDone}
           data-testid="factory-done-group"
           className="rounded-xl border border-border bg-card/60 px-2 py-1.5"
         >

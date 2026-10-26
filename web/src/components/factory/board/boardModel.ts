@@ -230,16 +230,34 @@ export const SUPERVISOR_TICK_S = 60;
 export const POLL_INTERVAL_S = 60;
 export const MAIL_AMBER_S = 10 * 60;
 export const MAIL_RED_S = 30 * 60;
+/** Demo files are never deleted automatically; flag growth on the 20 GiB data volume. */
+export const DEMO_STORAGE_AMBER_BYTES = 10 * 1024 ** 3;
+export const DEMO_STORAGE_RED_BYTES = 16 * 1024 ** 3;
 
 export type HealthLevel = "ok" | "amber" | "red" | "off";
 
 export interface HealthItem {
-  key: "supervisor" | "mail" | "github" | "probes" | "drift";
+  key: "supervisor" | "mail" | "github" | "probes" | "demos" | "drift";
   label: string;
   detail: string;
   level: HealthLevel;
   /** Epoch seconds of the reading the detail ages from. */
   at: number | null;
+  /** What the item measures, on hover. */
+  hint?: string;
+}
+
+/** `"7.2 MB"`, `"1.4 GB"`, `"512 B"` (binary units). */
+export function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${Math.max(0, Math.round(bytes))} B`;
+  const units = ["KB", "MB", "GB", "TB"];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) {
+    value /= 1024;
+    unit += 1;
+  }
+  return `${value >= 100 ? Math.round(value) : value.toFixed(1)} ${units[unit]}`;
 }
 
 /** `"12s ago"`, `"4m ago"`, `"2h ago"`; `"just now"` under 5 s. */
@@ -341,6 +359,21 @@ export function healthItems(health: HealthView, nowS: number): HealthItem[] {
     at: health.probes.last_run_at,
   });
 
+  const demoBytes = health.demo_storage_bytes;
+  items.push({
+    key: "demos",
+    label: "Demos",
+    detail: demoBytes > 0 ? formatBytes(demoBytes) : "none stored",
+    level:
+      demoBytes >= DEMO_STORAGE_RED_BYTES
+        ? "red"
+        : demoBytes >= DEMO_STORAGE_AMBER_BYTES
+          ? "amber"
+          : "ok",
+    at: null,
+    hint: "Demo videos and screenshots kept on the server's data volume; nothing is deleted automatically",
+  });
+
   if (health.drifted_members > 0) {
     items.push({
       key: "drift",
@@ -384,18 +417,40 @@ export function untilText(seconds: number): string {
   return `${Math.floor(seconds / 3600)}h ${Math.round((seconds % 3600) / 60)}m`;
 }
 
-/** The lead's next heartbeat and the soonest PL heartbeat, in seconds from now. */
+export interface NextCheck {
+  title: string;
+  /** Seconds from now. */
+  in: number;
+}
+
+/**
+ * The lead's next heartbeat, the soonest project-lead heartbeat, and every
+ * other member's (a peer lead such as Sentinel) soonest first.
+ *
+ * @param plIds - Session ids of the project leads.
+ */
 export function nextChecks(
   factory: FactoryView,
   nowS: number,
-): { lead: { title: string; in: number } | null; pls: number | null } {
+  plIds: ReadonlySet<string> = new Set(),
+): { lead: NextCheck | null; pls: number | null; others: NextCheck[] } {
   const lead = factory.next_beats.find((b) => b.session_id === factory.root_session_id);
-  const others = factory.next_beats.filter((b) => b.session_id !== factory.root_session_id);
-  const soonest = others.length ? Math.min(...others.map((b) => b.at)) : null;
+  const rest = factory.next_beats.filter((b) => b.session_id !== factory.root_session_id);
+  const pls = rest.filter((b) => plIds.has(b.session_id));
+  const soonest = pls.length ? Math.min(...pls.map((b) => b.at)) : null;
   return {
     lead: lead ? { title: lead.title, in: lead.at - nowS } : null,
     pls: soonest == null ? null : soonest - nowS,
+    others: rest
+      .filter((b) => !plIds.has(b.session_id))
+      .sort((a, b) => a.at - b.at)
+      .map((b) => ({ title: b.title, in: b.at - nowS })),
   };
+}
+
+/** Session ids of the snapshot's project leads. */
+export function projectLeadIds(snapshot: FactorySnapshot): ReadonlySet<string> {
+  return new Set(snapshot.projects.flatMap((p) => (p.pl ? [p.pl.session_id] : [])));
 }
 
 /** `m:ss` for a demo video's length. */

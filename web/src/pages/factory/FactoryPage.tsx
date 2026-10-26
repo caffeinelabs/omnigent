@@ -19,7 +19,7 @@ import { HealthStrip } from "@/components/factory/board/HealthStrip";
 import { needsYou } from "@/components/factory/board/boardModel";
 import { ProjectDrawer } from "@/components/factory/board/ProjectDrawer";
 import { DecisionsRail } from "@/components/factory/decisions/DecisionsRail";
-import { useFactoryNow } from "@/components/factory/factoryClock";
+import { useFactoryServerNowS } from "@/components/factory/factoryClock";
 import { FactoryLoadError } from "@/components/factory/FactoryLoadError";
 import { ReviewDrawer } from "@/components/factory/review/ReviewDrawer";
 import {
@@ -39,6 +39,13 @@ import { ApiError } from "@/lib/sessionsApi";
 type CockpitTab = "board" | "activity";
 
 const FLASH_MS = 1200;
+
+/**
+ * The cockpit re-reads its snapshot at least this often while visible: quiet
+ * supervisor ticks, polls and probes push no frame, and the health strip ages
+ * their stamps against the clock (the ETag keeps an unchanged read cheap).
+ */
+export const COCKPIT_MIN_REFRESH_MS = 60_000;
 
 /** Scroll an element into view and flash a ring around it (still under reduced motion). */
 export function jumpTo(targetId: string): void {
@@ -124,9 +131,9 @@ function TabSwitch({ tab, onChange }: { tab: CockpitTab; onChange: (tab: Cockpit
   );
 }
 
-function Cockpit({ snapshot }: { snapshot: FactorySnapshot }) {
+function Cockpit({ snapshot, clockOffsetS }: { snapshot: FactorySnapshot; clockOffsetS: number }) {
   const [params, setParams] = useSearchParams();
-  const nowS = Math.floor(useFactoryNow().getTime() / 1000);
+  const nowS = useFactoryServerNowS(clockOffsetS);
   const wide = useMediaQuery(WIDE_BOARD_QUERY);
   const tab: CockpitTab = params.get("tab") === "activity" ? "activity" : "board";
   const projectSlug = params.get("project");
@@ -207,9 +214,10 @@ function Cockpit({ snapshot }: { snapshot: FactorySnapshot }) {
           )}
         </div>
         {wide && (
+          // The padding (offset by the margin) keeps a highlighted card's ring inside the scroller.
           <aside
             data-testid="factory-rail"
-            className="sticky max-h-[calc(100vh-6rem)] overflow-y-auto"
+            className="sticky -m-1 max-h-[calc(100vh-6rem)] overflow-y-auto p-1"
             style={{
               top: "calc(var(--omnigent-header-height) + var(--omnigent-inset-top) + 1rem)",
             }}
@@ -240,7 +248,9 @@ function Cockpit({ snapshot }: { snapshot: FactorySnapshot }) {
 
 export function FactoryPage() {
   const { factoryId } = useParams<{ factoryId: string }>();
-  const { data, error, isLoading, updatedAt, refetch } = useFactory(factoryId);
+  const { data, error, isLoading, updatedAt, clockOffsetS, refetch } = useFactory(factoryId, {
+    minRefreshMs: COCKPIT_MIN_REFRESH_MS,
+  });
   const missing = !data && error instanceof ApiError && error.status === 404;
   return (
     <PageScroll
@@ -270,7 +280,7 @@ export function FactoryPage() {
           This factory doesn’t exist, or you can’t see it.
         </p>
       )}
-      {data && <Cockpit snapshot={data} />}
+      {data && <Cockpit key={data.factory.id} snapshot={data} clockOffsetS={clockOffsetS} />}
     </PageScroll>
   );
 }

@@ -4,6 +4,8 @@
 // socket invalidates these keys (see SessionUpdatesProvider). While that socket
 // is down the factory reads fall back to a 15 s poll, and a failed refresh
 // keeps the last good data on screen with its age instead of blanking it.
+// Quiet ticks push nothing, so a page that ages them (the cockpit's health
+// strip) also asks for a minimum refresh.
 
 import {
   type QueryClient,
@@ -73,17 +75,22 @@ export function useFactories(options: { enabled?: boolean } = {}) {
   });
 }
 
-// Last ETag per factory, per QueryClient so separate clients (tests, embeds)
-// never send each other's validators.
-const snapshotEtags = new WeakMap<QueryClient, Map<string, string>>();
+// Last ETag and server clock offset per factory, per QueryClient so separate
+// clients (tests, embeds) never share each other's validators.
+interface SnapshotMeta {
+  etags: Map<string, string>;
+  /** Seconds the server clock ran ahead of this browser's when a body arrived. */
+  clockOffsets: Map<string, number>;
+}
+const snapshotMeta = new WeakMap<QueryClient, SnapshotMeta>();
 
-function etagsFor(queryClient: QueryClient): Map<string, string> {
-  let etags = snapshotEtags.get(queryClient);
-  if (!etags) {
-    etags = new Map();
-    snapshotEtags.set(queryClient, etags);
+function metaFor(queryClient: QueryClient): SnapshotMeta {
+  let meta = snapshotMeta.get(queryClient);
+  if (!meta) {
+    meta = { etags: new Map(), clockOffsets: new Map() };
+    snapshotMeta.set(queryClient, meta);
   }
-  return etags;
+  return meta;
 }
 
 async function readSnapshot(
@@ -91,7 +98,7 @@ async function readSnapshot(
   factoryId: string,
   signal: AbortSignal,
 ): Promise<FactorySnapshot> {
-  const etags = etagsFor(queryClient);
+  const { etags, clockOffsets } = metaFor(queryClient);
   const cached = queryClient.getQueryData<FactorySnapshot>(factoryQueryKey(factoryId));
   const etag = cached ? etags.get(factoryId) : undefined;
   const result = await fetchFactorySnapshot(factoryId, { etag, signal });
@@ -103,6 +110,7 @@ async function readSnapshot(
   }
   if (result.etag) etags.set(factoryId, result.etag);
   else etags.delete(factoryId);
+  clockOffsets.set(factoryId, result.data.server_time - Date.now() / 1000);
   return result.data;
 }
 
@@ -114,7 +122,21 @@ export interface UseFactoryResult {
   isLoading: boolean;
   /** When `data` was fetched (epoch ms), 0 before the first success. */
   updatedAt: number;
+  /**
+   * Seconds the server clock runs ahead of this browser's, measured when the
+   * snapshot body arrived (0 until a body is fetched).
+   */
+  clockOffsetS: number;
   refetch: () => void;
+}
+
+export interface UseFactoryOptions {
+  /**
+   * Re-read at least this often while the tab is visible, and on return to
+   * it, even with the socket live. Quiet supervisor ticks and polls push no
+   * frame, so a page that ages them against the clock needs this.
+   */
+  minRefreshMs?: number;
 }
 
 /**
@@ -122,14 +144,26 @@ export interface UseFactoryResult {
  *
  * @param factoryId - The factory (root session) id; `null` disables the read.
  */
-export function useFactory(factoryId: string | null | undefined): UseFactoryResult {
+export function useFactory(
+  factoryId: string | null | undefined,
+  options: UseFactoryOptions = {},
+): UseFactoryResult {
   const queryClient = useQueryClient();
-  const refetchInterval = useFallbackInterval();
+  const fallback = useFallbackInterval();
+  const { minRefreshMs } = options;
+  const refetchInterval =
+    minRefreshMs == null
+      ? fallback
+      : fallback === false
+        ? minRefreshMs
+        : Math.min(fallback, minRefreshMs);
   const query = useQuery<FactorySnapshot>({
     queryKey: factoryQueryKey(factoryId ?? ""),
     queryFn: ({ signal }) => readSnapshot(queryClient, factoryId as string, signal),
     enabled: Boolean(factoryId),
     refetchInterval,
+    // Timer refetches pause while the tab is hidden; catch up on return.
+    ...(minRefreshMs != null ? { refetchOnWindowFocus: true } : {}),
     retry: retryTransient,
   });
   const error = (query.error as Error | null) ?? null;
@@ -139,6 +173,7 @@ export function useFactory(factoryId: string | null | undefined): UseFactoryResu
     isStale: query.data !== undefined && error !== null,
     isLoading: query.isLoading,
     updatedAt: query.dataUpdatedAt,
+    clockOffsetS: factoryId ? (metaFor(queryClient).clockOffsets.get(factoryId) ?? 0) : 0,
     refetch: () => void query.refetch(),
   };
 }

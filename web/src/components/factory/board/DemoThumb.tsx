@@ -51,7 +51,9 @@ export function DemoStatusTag({
     <span
       className={cn(
         "inline-flex h-4 items-center rounded-sm px-1 font-mono text-[10px] leading-none font-semibold tracking-wide",
-        overlay ? cn("bg-background/90 shadow-xs", TONE_TEXT[tone]) : TONE_CHIP[tone],
+        overlay
+          ? cn("bg-background/95 shadow-xs ring-1 ring-black/10", TONE_TEXT[tone])
+          : TONE_CHIP[tone],
         className,
       )}
     >
@@ -110,7 +112,7 @@ export function DemoThumb({
           </span>
         </span>
       )}
-      <DemoStatusTag status={demo.status} overlay className="absolute top-1 left-1" />
+      <DemoStatusTag status={demo.status} overlay className="absolute bottom-1 left-1" />
       {length && (
         <span className="absolute right-1 bottom-1 rounded-sm bg-black/60 px-1 font-mono text-[10px] leading-4 text-white tabular-nums">
           {length}

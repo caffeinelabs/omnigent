@@ -27,6 +27,8 @@ describe("HealthStrip", () => {
     expect(item("mail")).toHaveTextContent("0 queued");
     expect(item("github")).toHaveTextContent("polled 8s ago");
     expect(item("probes")).toHaveTextContent("probed 21s ago");
+    expect(item("demos")).toHaveAttribute("data-state", "ok");
+    expect(item("demos")).toHaveTextContent("Demos7.2 MB");
     expect(item("drift")).toHaveAttribute("data-state", "amber");
     expect(item("drift")).toHaveTextContent("1 agent differs from its spec");
   });
@@ -39,6 +41,18 @@ describe("HealthStrip", () => {
     expect(item("mail")).toHaveAttribute("data-state", "amber");
     expect(item("mail")).toHaveTextContent("3 queued · oldest 15m");
     expect(item("github")).toHaveAttribute("data-state", "amber");
+  });
+
+  it("shows demo storage growing amber, then red", () => {
+    const snapshot = liveRunSnapshot();
+    snapshot.health.demo_storage_bytes = 12 * 1024 ** 3;
+    const { unmount } = renderBoard(<HealthStrip snapshot={snapshot} nowS={LIVE_RUN_NOW_S} />);
+    expect(screen.getByTestId("health-demos")).toHaveAttribute("data-state", "amber");
+    expect(screen.getByTestId("health-demos")).toHaveTextContent("Demos12.0 GB");
+    unmount();
+    snapshot.health.demo_storage_bytes = 17 * 1024 ** 3;
+    const item = renderStrip(snapshot);
+    expect(item("demos")).toHaveAttribute("data-state", "red");
   });
 
   it("offers Connect when GitHub is disconnected", () => {

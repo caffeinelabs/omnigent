@@ -55,6 +55,8 @@ export type ActivityRow =
       type: "heartbeats";
       key: string;
       events: EventView[];
+      /** Beats in the run (a `heartbeat.skipped` event tallies several). */
+      beats: number;
       delivered: number;
       skipped: number;
       failed: number;
@@ -102,6 +104,10 @@ export function buildActivityRows(
       type: "heartbeats",
       key: `hb-${run[0]!.id}`,
       events: run,
+      beats: run.reduce(
+        (sum, e) => sum + (e.kind === "heartbeat.skipped" ? skippedCount(e) : 1),
+        0,
+      ),
       delivered: run.filter((e) => e.kind === "heartbeat.delivered").length,
       skipped: run
         .filter((e) => e.kind === "heartbeat.skipped")

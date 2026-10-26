@@ -70,7 +70,26 @@ describe("PreviewPill", () => {
       expect(previewPillView(pr, project, LIVE_RUN_NOW_S)).toMatchObject({
         state: "stale",
         head: "behind",
+        text: "stale · re-probing",
       });
+    });
+
+    it("never reads 'runs <head> ≠ head' for a stale preview reported at the head", () => {
+      const { pr, project } = previewScenario("ready-head");
+      pr.preview = { ...pr.preview!, state: "stale", observed: null };
+      const view = previewPillView(pr, project, LIVE_RUN_NOW_S);
+      expect(view.text).toBe("stale · re-probing");
+      expect(view.text).not.toContain("≠");
+    });
+
+    it("names the old commit when a stale preview runs one", () => {
+      const { pr, project } = previewScenario("ready-head");
+      pr.preview = {
+        ...pr.preview!,
+        state: "stale",
+        observed: { ...pr.preview!.observed!, sha: "1a2b3c4".padEnd(40, "0") },
+      };
+      expect(previewPillView(pr, project, LIVE_RUN_NOW_S).text).toBe("runs 1a2b3c4 ≠ head");
     });
 
     it("is behind when the PR head moves past the deployed commit", () => {

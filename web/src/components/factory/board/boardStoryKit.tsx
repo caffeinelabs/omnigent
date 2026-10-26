@@ -8,7 +8,12 @@ import { Route, Routes } from "react-router-dom";
 import { FactoryPage } from "@/pages/factory/FactoryPage";
 import type { EventPage, FactorySnapshot } from "@/lib/factoryApi";
 import { LIVE_RUN_FACTORY_ID } from "../__fixtures__/liveRun";
-import { type FactoryFrameOptions, FactoryStoryFrame } from "../factoryStoryFixtures";
+import {
+  type FactoryFrameOptions,
+  FactoryStoryFrame,
+  type StoryRoutes,
+  filterEventPage,
+} from "../factoryStoryFixtures";
 import { boardActivityEvents, storySnapshot } from "./__fixtures__/boardFixtures";
 import { FactoryLiveContext } from "./factoryLive";
 
@@ -28,6 +33,11 @@ export function DocumentTheme({ theme }: { theme: "light" | "dark" }) {
 
 export const SNAPSHOT_PATH = `/v1/factory/factories/${LIVE_RUN_FACTORY_ID}`;
 export const EVENTS_PATH = `${SNAPSHOT_PATH}/events`;
+
+/** The events route over `page` (the board's fuller activity by default), filtered per request. */
+function eventsRoute(page?: EventPage): StoryRoutes[string] {
+  return (path) => ({ body: filterEventPage(page ?? boardActivityEvents(), path) });
+}
 
 export interface CockpitStoryOptions extends FactoryFrameOptions {
   snapshot?: FactorySnapshot;
@@ -55,7 +65,7 @@ export function CockpitStory({
       route={`/factory/${LIVE_RUN_FACTORY_ID}${search}`}
       routes={{
         [SNAPSHOT_PATH]: { body: snapshot ?? storySnapshot() },
-        [EVENTS_PATH]: { body: events ?? boardActivityEvents() },
+        [EVENTS_PATH]: eventsRoute(events),
         ...routes,
       }}
       {...frame}
@@ -91,7 +101,7 @@ export function BoardFrame({
     <FactoryStoryFrame
       mode="viewport"
       theme={theme}
-      routes={{ [EVENTS_PATH]: { body: boardActivityEvents() }, ...routes }}
+      routes={{ [EVENTS_PATH]: eventsRoute(), ...routes }}
     >
       <DocumentTheme theme={theme} />
       <FactoryLiveContext.Provider value>

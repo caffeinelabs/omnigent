@@ -28,6 +28,7 @@ import {
 } from "@/components/ui/select";
 import { FACTORY_FALLBACK_POLL_MS, useFactoryEvents } from "@/hooks/useFactory";
 import type { EventFilters, EventView, MemberView, ProjectView } from "@/lib/factoryApi";
+import { ApiError } from "@/lib/sessionsApi";
 import { cn } from "@/lib/utils";
 import { useFactoryLive } from "../board/factoryLive";
 import {
@@ -44,6 +45,13 @@ import {
 } from "./activityModel";
 
 const ALL = "__all__";
+
+/**
+ * Older pages load on their own while the list's end is in view, up to this
+ * many in a row; then a scroll (or the button) asks for more. Folded
+ * heartbeats can leave a page adding no rows at all.
+ */
+const AUTO_PAGES = 3;
 
 function clock(ms: number): string {
   return new Date(ms).toLocaleTimeString([], {
@@ -160,7 +168,7 @@ function EventRow({
         type="button"
         onClick={onToggle}
         aria-expanded={expanded}
-        className="flex w-full min-w-0 cursor-pointer flex-wrap items-center gap-x-2 gap-y-0.5 py-1.5 text-left text-sm hover:bg-muted/40"
+        className="flex w-full min-w-0 cursor-pointer flex-wrap items-center gap-x-2 gap-y-0.5 rounded-sm py-1.5 text-left text-sm hover:bg-muted/40 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset"
       >
         <ChevronRightIcon
           aria-hidden
@@ -198,17 +206,30 @@ function EventRow({
   );
 }
 
+/**
+ * What a ♥ row says, counting beats (one skipped event tallies several):
+ * `"4 heartbeats · 1 delivered · 3 skipped · no change"`, or one outcome for
+ * all of them (`"3 heartbeats skipped · no change"`).
+ */
+export function heartbeatText(row: Extract<ActivityRow, { type: "heartbeats" }>): string {
+  const beats = row.beats === 1 ? "1 heartbeat" : `${row.beats} heartbeats`;
+  const outcomes: [number, string][] = [
+    [row.delivered, "delivered"],
+    [row.skipped, "skipped · no change"],
+    [row.failed, "failed"],
+  ];
+  const only = outcomes.find(([count]) => count === row.beats);
+  if (only) return `${beats} ${only[1]}`;
+  const parts = outcomes.filter(([count]) => count > 0).map(([count, what]) => `${count} ${what}`);
+  return [beats, ...parts].join(" · ");
+}
+
 function HeartbeatRow({ row }: { row: Extract<ActivityRow, { type: "heartbeats" }> }) {
   const newest = row.events[0]!;
-  const parts = [
-    row.delivered > 0 ? `${row.delivered} delivered` : null,
-    row.skipped > 0 ? `${row.skipped} skipped · no change` : null,
-    row.failed > 0 ? `${row.failed} failed` : null,
-  ].filter(Boolean);
   return (
     <div
       data-testid="activity-heartbeats"
-      data-count={row.events.length}
+      data-count={row.beats}
       className="flex items-center gap-2 border-b border-border/60 py-1.5 pl-5 text-sm text-muted-foreground"
     >
       <time
@@ -221,10 +242,7 @@ function HeartbeatRow({ row }: { row: Extract<ActivityRow, { type: "heartbeats" 
         aria-hidden
         className={cn("size-3.5 shrink-0", row.failed > 0 && "text-warning")}
       />
-      <span className="truncate">
-        {row.events.length === 1 ? "1 heartbeat event" : `${row.events.length} heartbeat events`}
-        {parts.length > 0 && ` · ${parts.join(" · ")}`}
-      </span>
+      <span className="truncate">{heartbeatText(row)}</span>
     </div>
   );
 }
@@ -263,6 +281,7 @@ export function ActivityList({
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const connected = useFactoryLive();
   const project = fixedProject ?? projectFilter ?? undefined;
+  const noKinds = groups.size === 0;
   const filters: EventFilters = useMemo(() => {
     const kinds = kindsQuery(groups);
     return {
@@ -271,7 +290,8 @@ export function ActivityList({
       ...(kinds ? { kinds } : {}),
     };
   }, [project, member, groups]);
-  const query = useFactoryEvents(factoryId, filters);
+  // With every kind switched off there is nothing to ask for (an empty `kinds` means all).
+  const query = useFactoryEvents(noKinds ? null : factoryId, filters);
   const events = useMemo(() => query.data?.pages.flatMap((p) => p.data) ?? [], [query.data]);
   const rows = useMemo(
     () => buildActivityRows(events, { foldHeartbeats: !groups.has("heartbeats") }),
@@ -291,9 +311,29 @@ export function ActivityList({
   const items = virtualizer.getVirtualItems();
   const lastIndex = items.at(-1)?.index ?? -1;
   const { fetchNextPage, isFetchingNextPage } = query;
+  const pageCount = query.data?.pages.length ?? 0;
+  // Auto-loads left before the reader has to scroll; a filter change or a scroll refills it.
+  const autoPages = useRef(AUTO_PAGES);
+  const [paused, setPaused] = useState(false);
   useEffect(() => {
-    if (hasMore && !isFetchingNextPage && lastIndex >= rows.length - 1) void fetchNextPage();
-  }, [hasMore, isFetchingNextPage, lastIndex, rows.length, fetchNextPage]);
+    autoPages.current = AUTO_PAGES;
+    setPaused(false);
+  }, [filters]);
+  useEffect(() => {
+    if (!hasMore || isFetchingNextPage || paused || lastIndex < rows.length - 1) return;
+    if (autoPages.current <= 0) {
+      setPaused(true);
+      return;
+    }
+    autoPages.current -= 1;
+    void fetchNextPage();
+  }, [hasMore, isFetchingNextPage, paused, lastIndex, rows.length, pageCount, fetchNextPage]);
+  const onScroll = () => {
+    if (autoPages.current === AUTO_PAGES && !paused) return;
+    autoPages.current = AUTO_PAGES;
+    setPaused(false);
+  };
+  const loadOlder = () => void fetchNextPage();
 
   const toggleGroup = (id: KindGroupId) =>
     setGroups((current) => {
@@ -395,6 +435,9 @@ export function ActivityList({
         >
           <TriangleAlertIcon aria-hidden className="size-3.5" />
           Couldn’t load activity
+          {query.error instanceof ApiError && (
+            <span className="text-muted-foreground">(HTTP {query.error.status})</span>
+          )}
           <Button
             variant="outline"
             size="xs"
@@ -407,58 +450,82 @@ export function ActivityList({
         </p>
       )}
 
-      <div
-        ref={scrollRef}
-        data-testid="activity-scroll"
-        className={cn(
-          "min-w-0 overflow-y-auto rounded-lg border border-border bg-card px-3",
-          heightClassName,
-        )}
-      >
-        {query.isLoading && (
-          <div aria-busy="true" aria-label="Loading activity">
-            {Array.from({ length: 6 }, (_, i) => (
-              <RowSkeleton key={i} />
-            ))}
-          </div>
-        )}
-        {!query.isLoading && rows.length === 0 && query.error == null && (
-          <p
-            data-testid="activity-empty"
-            className="py-8 text-center text-sm text-muted-foreground"
-          >
-            No activity yet.
-          </p>
-        )}
-        {rows.length > 0 && (
-          <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
-            {items.map((item) => {
-              const row = rows[item.index];
-              return (
-                <div
-                  key={item.key}
-                  data-index={item.index}
-                  ref={virtualizer.measureElement}
-                  className="absolute top-0 left-0 w-full"
-                  style={{ transform: `translateY(${item.start}px)` }}
-                >
-                  {!row ? (
-                    <RowSkeleton />
-                  ) : row.type === "heartbeats" ? (
-                    <HeartbeatRow row={row} />
-                  ) : (
-                    <EventRow
-                      row={row}
-                      expanded={expanded.has(row.key)}
-                      onToggle={() => toggleRow(row.key)}
-                    />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+      {noKinds ? (
+        <p
+          data-testid="activity-no-kinds"
+          className="rounded-lg border border-dashed border-border py-8 text-center text-sm text-muted-foreground"
+        >
+          Every kind is switched off. Turn one on to see activity.
+        </p>
+      ) : query.error != null && rows.length === 0 ? null : (
+        <div
+          ref={scrollRef}
+          data-testid="activity-scroll"
+          onScroll={onScroll}
+          className={cn(
+            "min-w-0 overflow-y-auto rounded-lg border border-border bg-card px-3",
+            heightClassName,
+          )}
+        >
+          {query.isLoading && (
+            <div aria-busy="true" aria-label="Loading activity">
+              {Array.from({ length: 6 }, (_, i) => (
+                <RowSkeleton key={i} />
+              ))}
+            </div>
+          )}
+          {!query.isLoading && rows.length === 0 && query.error == null && (
+            <p
+              data-testid="activity-empty"
+              className="py-8 text-center text-sm text-muted-foreground"
+            >
+              No activity yet.
+            </p>
+          )}
+          {rows.length > 0 && (
+            <div className="relative w-full" style={{ height: virtualizer.getTotalSize() }}>
+              {items.map((item) => {
+                const row = rows[item.index];
+                return (
+                  <div
+                    key={item.key}
+                    data-index={item.index}
+                    ref={virtualizer.measureElement}
+                    className="absolute top-0 left-0 w-full"
+                    style={{ transform: `translateY(${item.start}px)` }}
+                  >
+                    {!row ? (
+                      paused && !isFetchingNextPage ? (
+                        <div className="flex justify-center py-1.5">
+                          <Button
+                            variant="ghost"
+                            size="xs"
+                            onClick={loadOlder}
+                            data-testid="activity-load-older"
+                            componentId="factory.activity.load_older"
+                          >
+                            Load older activity
+                          </Button>
+                        </div>
+                      ) : (
+                        <RowSkeleton />
+                      )
+                    ) : row.type === "heartbeats" ? (
+                      <HeartbeatRow row={row} />
+                    ) : (
+                      <EventRow
+                        row={row}
+                        expanded={expanded.has(row.key)}
+                        onToggle={() => toggleRow(row.key)}
+                      />
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </section>
   );
 }

@@ -1,7 +1,7 @@
 import { fireEvent, screen, within } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { FactorySnapshot } from "@/lib/factoryApi";
-import { LIVE_RUN_NOW_S, tenProjectsSnapshot } from "../__fixtures__/liveRun";
+import { LIVE_RUN_NOW_S, allDoneSnapshot, tenProjectsSnapshot } from "../__fixtures__/liveRun";
 import { pageScenario, storySnapshot } from "./__fixtures__/boardFixtures";
 import { renderBoard } from "./__fixtures__/renderBoard";
 import { prAnchorId, projectAnchorId } from "./boardModel";
@@ -92,6 +92,30 @@ describe("FactoryBoard", () => {
     expect(onJump).toHaveBeenLastCalledWith(projectAnchorId("db-version"));
     fireEvent.click(screen.getByTestId("needs-you-decisions"));
     expect(onDecisions).toHaveBeenCalledOnce();
+  });
+
+  it("clears the stage filter when a chip's target is on a hidden card", () => {
+    const { onJump } = renderFactoryBoard();
+    onJump.mockImplementation((id: string) => {
+      expect(document.getElementById(id)).not.toBeNull();
+    });
+    fireEvent.click(screen.getByTestId("stage-filter-building"));
+    expect(screen.queryByTestId("pr-row-9630")).toBeNull();
+    fireEvent.click(screen.getByTestId("needs-you-ready"));
+    expect(onJump).toHaveBeenLastCalledWith(prAnchorId(9630));
+    expect(screen.getByTestId("pr-row-9630")).toBeInTheDocument();
+    expect(screen.getByTestId("stage-filter-building")).toHaveAttribute("aria-pressed", "false");
+
+    // A visible target keeps the filter.
+    fireEvent.click(screen.getByTestId("stage-filter-building"));
+    fireEvent.click(screen.getByTestId("needs-you-claims"));
+    expect(screen.getByTestId("stage-filter-building")).toHaveAttribute("aria-pressed", "true");
+  });
+
+  it("opens the Done group when every project is done", () => {
+    renderFactoryBoard(allDoneSnapshot());
+    expect(screen.getByTestId("factory-all-done")).toHaveTextContent(/projects are done/);
+    expect(screen.getByTestId("factory-done-group")).toHaveAttribute("data-state", "open");
   });
 
   it("anchors the jump targets on the board", () => {

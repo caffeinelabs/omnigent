@@ -84,7 +84,10 @@ beforeEach(() => {
   connected.value = true;
   setWide(true);
 });
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
 
 describe("FactoryPage", () => {
   it("shows skeletons, never an empty board, while the first read is pending", () => {
@@ -207,6 +210,56 @@ describe("FactoryPage", () => {
     fireEvent.click(screen.getByTestId("needs-you-ready"));
     expect(scroll).toHaveBeenCalledWith(expect.objectContaining({ block: "center" }));
     expect(row).toHaveAttribute("data-highlighted", "true");
+  });
+
+  it("keeps health true on a quiet live factory, and turns red when ticks stop", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    let ticking = true;
+    let lastTick = 0;
+    let lastPoll = 0;
+    serve(() => {
+      // Nothing changes but the server's own stamps, so no frame is pushed.
+      const nowS = Math.floor(Date.now() / 1000);
+      if (ticking) {
+        lastTick = nowS - 20;
+        lastPoll = nowS - 8;
+      }
+      const snapshot = liveRunSnapshot();
+      snapshot.server_time = nowS;
+      snapshot.health.supervisor.last_tick_at = lastTick;
+      snapshot.health.github.last_poll_at = lastPoll;
+      return json(snapshot);
+    });
+    renderPage();
+    const supervisor = await screen.findByTestId("health-supervisor");
+    expect(supervisor).toHaveAttribute("data-state", "ok");
+
+    await act(() => vi.advanceTimersByTimeAsync(11 * 60_000));
+    expect(screen.getByTestId("health-supervisor")).toHaveAttribute("data-state", "ok");
+    expect(screen.getByTestId("health-github")).toHaveAttribute("data-state", "ok");
+    expect(authenticatedFetch.mock.calls.length).toBeGreaterThanOrEqual(10);
+
+    ticking = false;
+    await act(() => vi.advanceTimersByTimeAsync(11 * 60_000));
+    expect(screen.getByTestId("health-supervisor")).toHaveAttribute("data-state", "red");
+    expect(screen.getByTestId("health-github")).toHaveAttribute("data-state", "red");
+    expect(screen.getByTestId("health-github")).toHaveTextContent(/polled 1\dm ago/);
+  });
+
+  it("ages health against the server clock when the browser clock is off", async () => {
+    const skewS = 15 * 60;
+    serve(() => {
+      // The server runs 15 min behind this browser and has just ticked.
+      const serverNowS = Math.floor(Date.now() / 1000) - skewS;
+      const snapshot = liveRunSnapshot();
+      snapshot.server_time = serverNowS;
+      snapshot.health.supervisor.last_tick_at = serverNowS - 10;
+      return json(snapshot);
+    });
+    renderPage();
+    const supervisor = await screen.findByTestId("health-supervisor");
+    expect(supervisor).toHaveAttribute("data-state", "ok");
+    expect(supervisor).toHaveTextContent(/1\ds ago/);
   });
 
   it("says when the factory does not exist", async () => {

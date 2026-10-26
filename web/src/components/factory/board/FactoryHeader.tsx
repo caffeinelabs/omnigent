@@ -14,7 +14,7 @@ import { AddProjectDialog } from "../controls/AddProjectDialog";
 import { FactoryControlsMenu } from "../controls/FactoryControlsMenu";
 import { FactoryStateChip } from "../FactoryIndexCard";
 import { formatElapsed, formatUsd } from "../factoryFormat";
-import { factoryElapsed, nextChecks, untilText } from "./boardModel";
+import { factoryElapsed, nextChecks, projectLeadIds, untilText } from "./boardModel";
 import { useFactoryLive } from "./factoryLive";
 
 /** `● Live` while pushes arrive, `◌ Reconnecting · polling 15 s` while they don't. */
@@ -70,10 +70,12 @@ export function FactoryHeader({ snapshot, nowS }: { snapshot: FactorySnapshot; n
   const [adding, setAdding] = useState(false);
   const elapsed = formatElapsed(factoryElapsed(factory, nowS));
   const cost = formatUsd(factory.cost_usd);
-  const checks = factory.state === "active" ? nextChecks(factory, nowS) : null;
+  const checks =
+    factory.state === "active" ? nextChecks(factory, nowS, projectLeadIds(snapshot)) : null;
   const checkParts = [
     checks?.lead ? `${checks.lead.title} ${untilText(checks.lead.in)}` : null,
     checks?.pls != null ? `PLs ${untilText(checks.pls)}` : null,
+    ...(checks?.others ?? []).map((other) => `${other.title} ${untilText(other.in)}`),
   ].filter(Boolean);
   return (
     <header data-testid="factory-header" className="flex flex-col gap-1.5">
