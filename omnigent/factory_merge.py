@@ -43,9 +43,25 @@ import sys
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, NoReturn, TypeAlias
 from urllib.parse import quote
+
+from omnigent.factory_gates import (
+    GATE_FAIL,
+    GATE_PASS,
+    GATE_PENDING,
+    GATE_SKIP,
+    LABEL_ALLOW_PROTECTED,
+    LABEL_NO_ENV,
+    LABEL_REVERT,
+    PROTECTED_PATHS,
+    READY_GATES,
+    BranchRules,
+    check_names,
+    evaluate_snapshot,
+    protected_files,
+    status_contexts,
+)
 
 # Heterogeneous JSON payloads from ``gh --json``.
 _Json: TypeAlias = dict[str, Any]  # type: ignore[explicit-any]
@@ -53,32 +69,11 @@ _Json: TypeAlias = dict[str, Any]  # type: ignore[explicit-any]
 REPOS_ENV = "OMNIGENT_FACTORY_MERGE_REPOS"
 DEFAULT_REPOS: tuple[str, ...] = ()
 
-LABEL_NO_ENV = "factory:no-env"
-LABEL_REVERT = "factory:revert"
-LABEL_ALLOW_PROTECTED = "factory:allow-protected"
-
-PROTECTED_PATHS: tuple[str, ...] = (
-    ".github/workflows/**",
-    "deploy/**/prod/**",
-    "**/zz_generated/prod/**",
-)
-
 EXIT_MERGED = 0
 EXIT_ERROR = 1
 EXIT_GATE_FAILED = 2
 
-GATE_PASS = "pass"
-GATE_FAIL = "fail"
-GATE_SKIP = "skip"
-GATES: tuple[str, ...] = (
-    "repo",
-    "draft",
-    "checks",
-    "review",
-    "verify",
-    "mergeable",
-    "protected_paths",
-)
+GATES: tuple[str, ...] = ("repo", *READY_GATES)
 
 _VIEW_FIELDS = (
     "headRefOid,mergeable,mergeStateStatus,labels,files,baseRefName,commits,"
@@ -121,8 +116,6 @@ _MERGE_STATE_HINTS: dict[str, str] = {
 }
 
 _PR_URL = re.compile(r"https?://github\.com/([^/\s]+)/([^/\s]+)/pull/(\d+)")
-_REVIEW_MARKER = re.compile(r"<!--\s*factory:review\s+sha=([0-9a-fA-F]+)\s+verdict=(\w+)")
-_VERIFY_MARKER = re.compile(r"<!--\s*factory:verify\s+sha=([0-9a-fA-F]+)\s+result=(\w+)")
 _NO_CHECKS = re.compile(r"no (required )?checks reported")
 
 _STATE_QUERY = (
@@ -133,20 +126,6 @@ _STATE_QUERY = (
     " reviewThreads(first: 100) { pageInfo { hasNextPage } nodes { isResolved } }"
     " } } }"
 )
-
-# ``gh pr checks`` buckets; a state is mapped only when gh omits the bucket.
-_FAILING_BUCKETS = frozenset({"fail", "cancel"})
-_STATE_BUCKETS: dict[str, str] = {
-    "SUCCESS": "pass",
-    "SKIPPED": "skipping",
-    "NEUTRAL": "skipping",
-    "CANCELLED": "cancel",
-    "FAILURE": "fail",
-    "ERROR": "fail",
-    "TIMED_OUT": "fail",
-    "ACTION_REQUIRED": "fail",
-    "STARTUP_FAILURE": "fail",
-}
 
 
 class GateError(Exception):
@@ -199,16 +178,6 @@ class Verdict:
             "admin": self.admin,
             "dry_run": self.dry_run,
         }
-
-
-@dataclass(frozen=True)
-class BranchRules:
-    """What the base branch requires, from rulesets and classic protection."""
-
-    contexts: frozenset[str] = frozenset()
-    rule_types: frozenset[str] = frozenset()
-    thread_resolution: bool = False
-    classic_readable: bool = True
 
 
 @dataclass(frozen=True)
@@ -355,20 +324,6 @@ def _pr_checks(url: str, *, required: bool) -> list[_Json]:
     raise GateError(f"gh pr checks failed: {_stderr_line(proc)}")
 
 
-def _contexts(entries: object) -> set[str]:
-    """
-    Collect status-check context names from a rules or protection payload.
-
-    :param entries: e.g. ``[{"context": "ci / test", "integration_id": 1}]``, or
-        classic protection's plain ``["ci / test"]``.
-    :returns: e.g. ``{"ci / test"}``.
-    """
-    if not isinstance(entries, list):
-        return set()
-    names = [e.get("context") if isinstance(e, dict) else e for e in entries]
-    return {name for name in names if isinstance(name, str) and name}
-
-
 def _branch_rules(owner: str, repo: str, base: str, verdict: Verdict) -> BranchRules:
     """
     Read what the base branch requires: rulesets, plus classic protection when readable.
@@ -395,7 +350,7 @@ def _branch_rules(owner: str, repo: str, base: str, verdict: Verdict) -> BranchR
             continue
         rule_types.add(kind)
         if kind == "required_status_checks":
-            contexts |= _contexts(_dig(rule, "parameters", "required_status_checks"))
+            contexts |= status_contexts(_dig(rule, "parameters", "required_status_checks"))
         elif kind == "pull_request":
             resolve = _dig(rule, "parameters", "required_review_thread_resolution")
             threads = threads or resolve is True
@@ -403,8 +358,8 @@ def _branch_rules(owner: str, repo: str, base: str, verdict: Verdict) -> BranchR
     readable = True
     if classic.returncode == 0:
         protection = _json_object(classic.stdout, "the branch protection")
-        contexts |= _contexts(_dig(protection, "required_status_checks", "contexts"))
-        contexts |= _contexts(_dig(protection, "required_status_checks", "checks"))
+        contexts |= status_contexts(_dig(protection, "required_status_checks", "contexts"))
+        contexts |= status_contexts(_dig(protection, "required_status_checks", "checks"))
         threads = (
             threads or _dig(protection, "required_conversation_resolution", "enabled") is True
         )
@@ -453,62 +408,6 @@ def _changed_paths(pr: PullRequest) -> list[str]:
     return list(dict.fromkeys([*viewed, *listed]))
 
 
-def _parse_time(value: object) -> datetime | None:
-    """
-    Parse a GitHub ISO-8601 timestamp.
-
-    :param value: e.g. ``"2026-10-23T10:00:00Z"``.
-    :returns: An aware datetime, or ``None`` when absent or malformed.
-    """
-    if not isinstance(value, str) or not value:
-        return None
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-
-
-def _glob_regex(pattern: str) -> re.Pattern[str]:
-    """
-    Compile a path glob where ``**`` spans directories and ``*`` does not.
-
-    :param pattern: e.g. ``"deploy/**/prod/**"``.
-    :returns: A regex matching whole paths, e.g. ``deploy/x/prod/a.yaml``.
-    """
-    out: list[str] = []
-    index = 0
-    while index < len(pattern):
-        if pattern.startswith("**/", index):
-            out.append("(?:.*/)?")
-            index += 3
-        elif pattern.startswith("**", index):
-            out.append(".*")
-            index += 2
-        elif pattern[index] == "*":
-            out.append("[^/]*")
-            index += 1
-        elif pattern[index] == "?":
-            out.append("[^/]")
-            index += 1
-        else:
-            out.append(re.escape(pattern[index]))
-            index += 1
-    return re.compile("".join(out))
-
-
-_PROTECTED_RES: tuple[re.Pattern[str], ...] = tuple(_glob_regex(p) for p in PROTECTED_PATHS)
-
-
-def protected_files(paths: Sequence[str]) -> list[str]:
-    """
-    Return the paths that match a protected-path glob.
-
-    :param paths: Changed file paths, e.g. ``[".github/workflows/ci.yml", "src/a.ts"]``.
-    :returns: e.g. ``[".github/workflows/ci.yml"]``.
-    """
-    return [p for p in paths if any(r.fullmatch(p) for r in _PROTECTED_RES)]
-
-
 def allowed_repos() -> frozenset[str]:
     """
     Repos the gate may merge in, from ``OMNIGENT_FACTORY_MERGE_REPOS``.
@@ -521,48 +420,8 @@ def allowed_repos() -> frozenset[str]:
     return frozenset(repos or DEFAULT_REPOS)
 
 
-def _markers(pr: _Json, pattern: re.Pattern[str]) -> list[tuple[datetime, str, str]]:
-    """
-    Collect ``(time, sha, outcome)`` for every marker in comments and reviews.
-
-    :param pr: The ``gh pr view`` object.
-    :param pattern: :data:`_REVIEW_MARKER` or :data:`_VERIFY_MARKER`.
-    :returns: Markers with a timestamp, oldest first.
-    """
-    found: list[tuple[datetime, str, str]] = []
-    sources = [(c, "createdAt") for c in pr.get("comments") or [] if isinstance(c, dict)]
-    sources += [(r, "submittedAt") for r in pr.get("reviews") or [] if isinstance(r, dict)]
-    for item, time_key in sources:
-        when = _parse_time(item.get(time_key))
-        body = item.get("body")
-        if when is None or not isinstance(body, str):
-            continue
-        for sha, outcome in pattern.findall(body):
-            found.append((when, sha.lower(), outcome.upper()))
-    return sorted(found, key=lambda marker: marker[0])
-
-
-def _newest_commit_time(pr: _Json) -> datetime | None:
-    """:returns: The newest ``committedDate`` among the PR's commits."""
-    times = [
-        when
-        for commit in pr.get("commits") or []
-        if isinstance(commit, dict) and (when := _parse_time(commit.get("committedDate")))
-    ]
-    return max(times) if times else None
-
-
-def _label_names(pr: _Json) -> set[str]:
-    """:returns: The PR's label names."""
-    return {
-        label["name"]
-        for label in pr.get("labels") or []
-        if isinstance(label, dict) and isinstance(label.get("name"), str)
-    }
-
-
-def _check_repo_and_draft(pr: PullRequest, verdict: Verdict) -> None:
-    """Gate 1: an allowlisted repo and a non-draft PR."""
+def _check_repo(pr: PullRequest, verdict: Verdict) -> None:
+    """Gate 1: an allowlisted repo."""
     full = f"{pr.owner}/{pr.repo}".lower()
     allowed = allowed_repos()
     if full in allowed:
@@ -578,140 +437,33 @@ def _check_repo_and_draft(pr: PullRequest, verdict: Verdict) -> None:
             "repo",
             f"repo {full} is not in {REPOS_ENV} ({', '.join(sorted(allowed))})",
         )
-    if pr.data.get("isDraft") is False:
-        verdict.gates["draft"] = GATE_PASS
-    else:
-        verdict.fail("draft", "PR is a draft; mark it ready with `gh pr ready <url>`")
 
 
-def _bucket(check: _Json) -> str:
-    """:returns: The check's gh bucket, derived from ``state`` when absent."""
-    bucket = check.get("bucket")
-    if isinstance(bucket, str) and bucket:
-        return bucket.lower()
-    state = check.get("state")
-    return _STATE_BUCKETS.get(state.upper(), "pending") if isinstance(state, str) else "pending"
-
-
-def _check_names(checks: Sequence[_Json]) -> set[str]:
-    """:returns: The names of *checks*."""
-    return {str(check.get("name") or "?") for check in checks}
-
-
-def _check_checks(pr: PullRequest, verdict: Verdict) -> None:
+def _gather_checks(pr: PullRequest) -> list[_Json]:
     """
-    Gate 2: required checks reported, none failing or pending, one passing (or none at all).
+    Read the PR's checks the way the checks gate needs them.
 
-    Check names reported on the PR are matched against the contexts the base
-    branch requires, so a PR whose CI has not registered yet does not pass as
-    "the repo has no checks".
+    Required checks first; all checks only when none is required, or when a
+    context the base branch requires is not among them (another app may
+    report it without gh flagging it required).
+
+    :param pr: The evaluated PR.
+    :returns: Check objects with ``name``/``state``/``bucket`` and ``required``.
+    :raises GateError: On a ``gh`` failure.
     """
-    checks = _pr_checks(pr.url, required=True)
-    evaluated_all = not checks
-    if evaluated_all:
-        verdict.notes.append("no required checks; evaluated all checks")
-        checks = _pr_checks(pr.url, required=False)
-    missing = set(pr.rules.contexts) - _check_names(checks)
-    if missing and not evaluated_all:
-        # A required context reported by another app is not flagged required by gh.
-        extra = [c for c in _pr_checks(pr.url, required=False) if c.get("name") in missing]
-        checks = [*checks, *extra]
-        missing -= _check_names(extra)
-    names: dict[str, list[str]] = {"fail": [], "pending": [], "pass": [], "skipping": []}
-    for check in checks:
-        bucket = _bucket(check)
-        # An unknown bucket is not a pass: wait for it like a pending check.
-        key = "fail" if bucket in _FAILING_BUCKETS else bucket if bucket in names else "pending"
-        names[key].append(str(check.get("name") or "?"))
-    if names["fail"]:
-        verdict.fail("checks", f"failing checks: {', '.join(sorted(names['fail']))}")
-    elif names["pending"]:
-        verdict.fail(
-            "checks",
-            f"pending checks: {', '.join(sorted(names['pending']))}; rerun when they finish",
-        )
-    elif missing:
-        verdict.fail(
-            "checks",
-            f"required checks not reported yet: {', '.join(sorted(missing))}; wait for CI "
-            "to start them and rerun the gate",
-        )
-    elif checks and not names["pass"]:
-        verdict.fail("checks", "no check passed (all skipped)")
-    else:
-        verdict.gates["checks"] = GATE_PASS
-        if not checks:
-            verdict.notes.append("the repo reports no checks")
-
-
-def _check_review(pr: _Json, head: str, verdict: Verdict) -> None:
-    """Gate 3: the newest review marker for the head, after the newest commit, approves."""
-    newest_commit = _newest_commit_time(pr)
-    markers = [m for m in _markers(pr, _REVIEW_MARKER) if m[1] == head]
-    fresh = [m for m in markers if newest_commit is None or m[0] > newest_commit]
-    if not fresh:
-        stale = " (only markers older than the newest commit)" if markers else ""
-        verdict.fail(
-            "review",
-            f"no `<!-- factory:review sha={head} verdict=APPROVE -->` comment or review "
-            f"posted after the newest commit{stale}; dispatch a cross-vendor reviewer",
-        )
-    elif fresh[-1][2] != "APPROVE":
-        verdict.fail("review", f"latest review marker for {head} says {fresh[-1][2]}")
-    else:
-        verdict.gates["review"] = GATE_PASS
-
-
-def _check_verify(pr: _Json, head: str, labels: set[str], verdict: Verdict) -> None:
-    """Gate 4: the newest verify marker for the head passes, unless exempt by label."""
-    exempt = sorted(labels & {LABEL_NO_ENV, LABEL_REVERT})
-    if exempt:
-        verdict.gates["verify"] = GATE_SKIP
-        verdict.notes.append(f"verify skipped: labelled {', '.join(exempt)}")
-        return
-    markers = [m for m in _markers(pr, _VERIFY_MARKER) if m[1] == head]
-    if not markers:
-        verdict.fail(
-            "verify",
-            f"no `<!-- factory:verify sha={head} result=PASS -->` comment; send VERIFY "
-            f"to env_keeper (or label {LABEL_NO_ENV} when no env is needed)",
-        )
-    elif markers[-1][2] != "PASS":
-        verdict.fail("verify", f"latest verify marker for {head} says {markers[-1][2]}")
-    else:
-        verdict.gates["verify"] = GATE_PASS
-
-
-def _check_mergeable(pr: _Json, verdict: Verdict) -> None:
-    """Gate 5: GitHub reports the PR mergeable."""
-    mergeable = pr.get("mergeable")
-    if mergeable == "MERGEABLE":
-        verdict.gates["mergeable"] = GATE_PASS
-        return
-    hint = (
-        "GitHub is still computing it; retry shortly"
-        if mergeable == "UNKNOWN"
-        else "merge origin/main into the branch and resolve conflicts"
-    )
-    verdict.fail("mergeable", f"mergeable={mergeable} ({hint})")
-
-
-def _check_protected_paths(pr: PullRequest, labels: set[str], verdict: Verdict) -> None:
-    """Gate 6: protected paths (new or old) need the ``factory:allow-protected`` label."""
-    touched = protected_files(_changed_paths(pr))
-    if not touched:
-        verdict.gates["protected_paths"] = GATE_PASS
-    elif LABEL_ALLOW_PROTECTED in labels:
-        verdict.gates["protected_paths"] = GATE_PASS
-        verdict.notes.append(
-            f"protected paths allowed by {LABEL_ALLOW_PROTECTED}: {', '.join(touched)}"
-        )
-    else:
-        verdict.fail(
-            "protected_paths",
-            f"touches protected paths ({', '.join(touched)}); a human must add the "
-            f"{LABEL_ALLOW_PROTECTED} label",
-        )
+    required = _pr_checks(pr.url, required=True)
+    names = check_names(required)
+    others: list[_Json] = []
+    if not required or set(pr.rules.contexts) - names:
+        others = _pr_checks(pr.url, required=False)
+    return [
+        *({**check, "required": True} for check in required),
+        *(
+            {**check, "required": False}
+            for check in others
+            if str(check.get("name") or "?") not in names
+        ),
+    ]
 
 
 def evaluate(url: str) -> tuple[Verdict, PullRequest]:
@@ -745,13 +497,16 @@ def evaluate(url: str) -> tuple[Verdict, PullRequest]:
         base=base,
         rules=_branch_rules(owner, repo, base, verdict),
     )
-    labels = _label_names(data)
-    _check_repo_and_draft(pr, verdict)
-    _check_checks(pr, verdict)
-    _check_review(data, pr.head, verdict)
-    _check_verify(data, pr.head, labels, verdict)
-    _check_mergeable(data, verdict)
-    _check_protected_paths(pr, labels, verdict)
+    _check_repo(pr, verdict)
+    checks = _gather_checks(pr)
+    snapshot = {**data, "files": [{"path": path} for path in _changed_paths(pr)]}
+    report = evaluate_snapshot(snapshot, checks, pr.rules.contexts)
+    # The merge gate only merges on green: a pending gate is a failed one.
+    for gate in READY_GATES:
+        state = report.gates[gate]
+        verdict.gates[gate] = GATE_FAIL if state == GATE_PENDING else state
+    verdict.reasons.extend(report.reasons)
+    verdict.notes.extend(report.notes)
     return verdict, pr
 
 
@@ -1003,6 +758,31 @@ def main(argv: Sequence[str] | None = None) -> int:
         verdict.reasons.append(f"error: {exc}")
     print(json.dumps(verdict.to_json(), indent=2))
     return code
+
+
+__all__ = [
+    "DEFAULT_REPOS",
+    "EXIT_ERROR",
+    "EXIT_GATE_FAILED",
+    "EXIT_MERGED",
+    "GATES",
+    "GATE_FAIL",
+    "GATE_PASS",
+    "GATE_SKIP",
+    "LABEL_ALLOW_PROTECTED",
+    "LABEL_NO_ENV",
+    "LABEL_REVERT",
+    "PROTECTED_PATHS",
+    "REPOS_ENV",
+    "BranchRules",
+    "GateError",
+    "PullRequest",
+    "Verdict",
+    "allowed_repos",
+    "evaluate",
+    "main",
+    "protected_files",
+]
 
 
 if __name__ == "__main__":
