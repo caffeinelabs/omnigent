@@ -1722,8 +1722,8 @@ async def test_auto_create_codex_terminal_keeps_shell_init_out_of_remote_tui(
     starts. On a sandbox pod that init can install the repo toolchain for
     ~50s, outlasting the forwarder's thread-start deadline, so the TUI never
     connects. The TUI only renders (the app-server runs every tool), so its
-    terminal spec must unset both names while the app-server's own env is left
-    untouched.
+    terminal spec must unset both names. The app-server env is allowlisted
+    separately and is not touched here.
 
     :param tmp_path: Temporary directory for isolated bridge state.
     :param monkeypatch: Pytest monkeypatch fixture.
@@ -1744,14 +1744,14 @@ async def test_auto_create_codex_terminal_keeps_shell_init_out_of_remote_tui(
     monkeypatch.setattr("omnigent.runner._entry._make_auth_token_factory", lambda: None)
 
     class _FakeCodexAppServer:
-        """App-server stand-in whose launch env carries a shell-init var."""
+        """Minimal app-server stand-in for the TUI terminal launch."""
 
         codex_path = "/opt/codex/bin/codex"
         codex_cli_version: tuple[int, int, int] | None = None
 
         def __init__(self) -> None:
             """:returns: None."""
-            self.env = {"OPENAI_API_KEY": "sk-test", "BASH_ENV": shell_init}
+            self.env = {"OPENAI_API_KEY": "sk-test"}
             self.codex_home = tmp_path / "codex-home"
             self.listen_url: str | None = None
             self.config_overrides: list[str] = []
@@ -1835,9 +1835,6 @@ async def test_auto_create_codex_terminal_keeps_shell_init_out_of_remote_tui(
     assert set(CODEX_REMOTE_TUI_ENV_UNSET) <= set(spec.env_unset)
     # Inheritance stays on, so env_unset is what keeps the host value out.
     assert spec.inherit_env is True
-    assert "BASH_ENV" not in spec.env and "ENV" not in spec.env
-    # The strip is scoped to the TUI pane; the app-server launch env is as built.
-    assert app_server.env["BASH_ENV"] == shell_init
 
 
 @pytest.mark.asyncio
