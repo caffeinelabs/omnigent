@@ -26,6 +26,7 @@ from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.factory import (
     CADENCE_DEMO,
     CADENCE_HEARTBEATS,
+    FACTORY_ENABLED_ENV,
     LABEL_CADENCE,
     LABEL_FOLDER_PROJECT,
     LABEL_HEARTBEAT_S,
@@ -37,6 +38,7 @@ from omnigent.factory import (
     ROLE_PROJECT_LEAD,
     STATE_ACTIVE,
     clamp_label_value,
+    factory_enabled,
     factory_role_from_spec,
 )
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER
@@ -97,10 +99,19 @@ def _check_items(items: list[str], what: str, limit: int) -> list[str]:
 
 
 class PreviewIn(_Body):
-    """The project's factory-preview switch (``charter.preview``)."""
+    """
+    The project's factory-preview switch (``charter.preview``).
+
+    ``enabled`` counts only when sent: a slots-only PATCH keeps the stored
+    switch, and a new project without it follows ``env_needed``.
+    """
 
     enabled: bool = True
     slots: int | None = Field(None, ge=1, le=MAX_PREVIEW_SLOTS)
+
+    def sent_enabled(self) -> bool | None:
+        """:returns: ``enabled`` when the client sent it, else ``None``."""
+        return self.enabled if "enabled" in self.model_fields_set else None
 
 
 class _CharterFields(_Body):
@@ -131,7 +142,7 @@ class ProjectIn(_CharterFields):
 
     slug: str
     title: str | None = Field(None, max_length=256)
-    repo: str
+    repo: str = Field(max_length=256)
     base_branch: str = "main"
     goal: str = Field(min_length=1, max_length=4000)
     env_needed: bool = True
@@ -187,7 +198,9 @@ class ProjectIn(_CharterFields):
         }
         preview: dict[str, Any] = {}
         if self.preview is not None:
-            preview["enabled"] = self.preview.enabled
+            enabled = self.preview.sent_enabled()
+            if enabled is not None:
+                preview["enabled"] = enabled
             if self.preview.slots is not None:
                 preview["slots"] = self.preview.slots
         if "slots" not in preview and self.preview_slots is not None:
@@ -435,9 +448,16 @@ async def start_factory(
 
     :returns: ``(status, body)``: 201 ``{factory_id, url, created, mail_id}`` or 200.
     :raises CockpitError: 400 invalid body / ``not_a_factory_lead``, 409 when
-        the root already runs a factory with other projects.
+        the root already runs a factory with other projects, 409
+        ``factory_disabled`` when the server runs without the factory.
     :raises OmnigentError: 401/403/404 from the OWNER check on the root.
     """
+    if not factory_enabled():
+        raise CockpitError(
+            409,
+            "factory_disabled",
+            f"the factory is off on this server; start it with {FACTORY_ENABLED_ENV}=1",
+        )
     body = parse_body(StartIn, payload)
     _unique_slugs(body.projects)
     deps = factory_deps(app_state)
@@ -602,7 +622,9 @@ def merge_charter(old: Mapping[str, Any] | None, patch: CharterPatchIn) -> dict[
     if "preview_slots" in fields and patch.preview_slots is not None:
         preview["slots"] = patch.preview_slots
     if "preview" in fields and patch.preview is not None:
-        preview["enabled"] = patch.preview.enabled
+        enabled = patch.preview.sent_enabled()
+        if enabled is not None:
+            preview["enabled"] = enabled
         if patch.preview.slots is not None:
             preview["slots"] = patch.preview.slots
     merged["preview"] = preview

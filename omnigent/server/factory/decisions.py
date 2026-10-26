@@ -35,7 +35,7 @@ from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError, ControlPlan, human_name, same_id
 from omnigent.server.factory.envelope import display_title, quote_spoofed_lines
 from omnigent.server.factory.mailer import new_mail_id
-from omnigent.server.factory.membership import resolve_role, root_conversation
+from omnigent.server.factory.membership import is_top_level, resolve_role, root_conversation
 from omnigent.server.factory.schemas import DecisionOptionView, DecisionView
 from omnigent.stores.factory_store import DecisionNotFound, DecisionNotOpen, norm_id
 
@@ -304,6 +304,21 @@ async def _subject_pr(
     return mine[-1]
 
 
+async def _top_level_subject(deps: FactoryDeps, subject: str) -> str:
+    """
+    Map ``member:<sub-agent>`` to its top-level ancestor (the IC's PL).
+
+    Controls act on leads and PLs; pausing a PL stops its ICs too.
+    """
+    if not subject.startswith(control.TARGET_MEMBER_PREFIX):
+        return subject
+    conv = await control.get_conv(deps, subject[len(control.TARGET_MEMBER_PREFIX) :].strip())
+    if conv is None or is_top_level(conv):
+        return subject
+    top = await asyncio.to_thread(root_conversation, conv, deps.conversation_store)
+    return f"{control.TARGET_MEMBER_PREFIX}{top.id}"
+
+
 async def _plan_action(
     app_state: Any,
     deps: FactoryDeps,
@@ -333,6 +348,8 @@ async def _plan_action(
             raise CockpitError(409, "no_subject", f"{decision.ref} names nothing to {action}")
         if subject.startswith("pr:"):
             raise CockpitError(400, "invalid_target", f"{action} acts on a project or member")
+        if action in (ACTION_PAUSE, ACTION_RESUME):
+            subject = await _top_level_subject(deps, subject)
         return await control.plan_control(
             app_state,
             decision.factory_id,
@@ -356,6 +373,64 @@ async def _plan_action(
         "factory: %s option %s has unknown action %r", decision.ref, option.get("id"), action
     )
     return None
+
+
+async def _action_failed(
+    app_state: Any,
+    deps: FactoryDeps,
+    decision: FactoryDecision,
+    by: str,
+    plan: ControlPlan,
+    exc: Exception,
+) -> tuple[FactoryDecision, CockpitError]:
+    """
+    Record a server decision whose control raised after the answer was stored.
+
+    The receipt id is cleared (nothing is delivered), a ``factory.warning``
+    tells the cockpit, and the caller gets a 502 naming the action.
+
+    :returns: The decision as stored now and the error to raise.
+    """
+    _logger.warning(
+        "factory: %s answered but its %s failed", decision.ref, plan.action, exc_info=exc
+    )
+    try:
+        decision = (
+            await asyncio.to_thread(
+                deps.factory_store.update_decision, decision.id, delivered_mail_id=None
+            )
+            or decision
+        )
+    except Exception:  # noqa: BLE001 - best effort; the warning below still goes out
+        _logger.warning("factory: could not clear the receipt of %s", decision.ref, exc_info=True)
+    # The exception text stays in the server log; it may carry internals.
+    message = f"{decision.ref} is answered, but its {plan.action} failed ({type(exc).__name__})"
+    await events.emit(
+        app_state,
+        decision.factory_id,
+        "factory.warning",
+        severity="warning",
+        project=decision.project_slug,
+        subject=f"decision:{decision.ref}",
+        summary=message,
+        data={
+            "from": by,
+            "by": by,
+            "decision_id": decision.id,
+            "action": plan.action,
+            "target": plan.target.ref,
+            "error": type(exc).__name__,
+        },
+    )
+    view = await asyncio.to_thread(decision_view, deps, decision)
+    error = CockpitError(
+        502,
+        "action_failed",
+        f"{message}; run it from the controls instead",
+        action=plan.action,
+        decision=view,
+    )
+    return decision, error
 
 
 # ── Answer and withdraw ────────────────────────────────────────
@@ -408,6 +483,7 @@ async def answer_decision(
     by = human_name(user_id)
     label = str(option.get("label") or option_id) if option is not None else FREE_TEXT_LABEL
     planned: ControlPlan | Conversation | None = None
+    failure: CockpitError | None = None
     if decision.source != "agent" and option is not None:
         planned = await _plan_action(app_state, deps, decision, option, user_id)
 
@@ -446,7 +522,11 @@ async def answer_decision(
     if isinstance(planned, ControlPlan):
         if target is not None and mail_id is not None:
             planned.mail_ids[target.id] = mail_id
-        await control.execute_control(app_state, planned)
+        try:
+            await control.execute_control(app_state, planned)
+        except Exception as exc:  # noqa: BLE001 - the answer is stored; report, don't 500
+            answered, failure = await _action_failed(app_state, deps, answered, by, planned, exc)
+            mail_id = None
     elif target is not None and outgoing is not None:
         control.send_text(app_state, target.id, outgoing, kind=kind, mail_id=mail_id)
         if (
@@ -480,8 +560,11 @@ async def answer_decision(
             "text": control.clip(text, 300) if text else None,
             "mail_id": mail_id,
             "delivered_to_title": to_title,
+            "action_failed": failure is not None,
         },
     )
+    if failure is not None:
+        raise failure
     return AnswerResult(decision=answered, delivered_to=target, mail_id=mail_id)
 
 

@@ -77,6 +77,14 @@ async def test_pause_keeps_previews_by_default(cockpit: Cockpit) -> None:
     assert resp.json()["mail_ids"] == {pl: item.mail_id}
 
 
+async def test_pause_with_null_keep_previews_keeps_them(cockpit: Cockpit) -> None:
+    resp = await _control(cockpit, "pause", options={"keep_previews": None})
+
+    assert resp.status_code == 202, resp.text
+    assert _labels(cockpit, "pl")[F.LABEL_KEEP_PREVIEWS] == "1"
+    assert resp.json()["events"][0]["data"]["options"] == {"keep_previews": True}
+
+
 async def test_pause_can_tear_down_previews(cockpit: Cockpit) -> None:
     resp = await _control(cockpit, "pause", options={"keep_previews": False})
 
@@ -238,14 +246,27 @@ async def test_factory_resume_reaches_only_paused_members(cockpit: Cockpit) -> N
     assert (again.status_code, error_code(again)) == (409, "nothing_to_do")
 
 
-async def test_resuming_a_stopped_project_revives_it(cockpit: Cockpit) -> None:
+@pytest.mark.parametrize("by", ["member", "project"])
+async def test_resuming_a_stopped_project_revives_it(cockpit: Cockpit, by: str) -> None:
+    pl = cockpit.world.id("pl")
     await _control(cockpit, "stop")
     assert _labels(cockpit, "pl")[F.LABEL_STATE] == "done"
+    target = f"member:{pl}" if by == "member" else "project:api-version"
 
-    resp = await _control(cockpit, "resume", f"member:{cockpit.world.id('pl')}")
+    resp = await _control(cockpit, "resume", target)
 
     assert resp.status_code == 202, resp.text
     assert _labels(cockpit, "pl")[F.LABEL_STATE] == "active"
+    assert cockpit.mailer.texts_to(pl)[-1].startswith("[Factory control · RESUME · by alice]")
+
+
+async def test_only_resume_reaches_a_stopped_project(cockpit: Cockpit) -> None:
+    cockpit.store.upsert_project(cockpit.fid, "api-version", title="API version")
+    await _control(cockpit, "stop")
+
+    pause = await _control(cockpit, "pause")
+
+    assert (pause.status_code, error_code(pause)) == (409, "no_project_lead")
 
 
 async def test_factory_stop_skips_done_members(cockpit: Cockpit) -> None:
@@ -392,6 +413,22 @@ async def test_factory_wide_edit_needs_every_member(cockpit: Cockpit) -> None:
     assert _labels(cockpit, "pl")[F.LABEL_STATE] == "active"
 
 
+async def test_only_cadence_may_omit_the_target(cockpit: Cockpit) -> None:
+    path = f"/v1/factory/factories/{cockpit.fid}/control"
+
+    pause = await cockpit.post(path, {"action": "pause"})
+    blank = await cockpit.post(path, {"action": "resume", "target": " "})
+    cadence = await cockpit.post(path, {"action": "cadence", "options": {"cadence": "normal"}})
+
+    assert (pause.status_code, error_code(pause)) == (400, "invalid_target")
+    assert pause.json()["field"] == "target"
+    assert (blank.status_code, error_code(blank)) == (400, "invalid_target")
+    assert cadence.status_code == 202, cadence.text
+    assert cadence.json()["events"][0]["data"]["target"] == "factory"
+    for key in ("pl", "lead_b", "lead_a"):
+        assert _labels(cockpit, key)[F.LABEL_STATE] == "active"
+
+
 async def test_target_and_action_validation(cockpit: Cockpit) -> None:
     other = cockpit.world.id("other_lead")
     cockpit.store.upsert_project(cockpit.fid, "queued-only", title="Queued")
@@ -427,17 +464,24 @@ async def test_target_and_action_validation(cockpit: Cockpit) -> None:
         ("resume", "project:api-version", None),
         ("stop", "project:api-version", None),
         ("restart", "project:api-version", None),
+        ("relaunch", "project:db-version", None),
         ("env_status", "project:api-version", None),
         ("cadence", "factory", {"cadence": "normal"}),
         ("preview", "project:api-version", {"pr": 9653}),
     ],
 )
 async def test_one_audit_event_per_action(
-    cockpit: Cockpit, action: str, target: str, options: dict[str, Any] | None
+    cockpit: Cockpit,
+    tmp_path: Path,
+    action: str,
+    target: str,
+    options: dict[str, Any] | None,
 ) -> None:
     cockpit.store.upsert_pr(
         cockpit.fid, "caffeinelabs/app", 9653, project_slug="api-version", head_sha=HEAD
     )
+    if action == "relaunch":
+        cockpit.permissions.grant("alice", _bypass_pl(cockpit.world, tmp_path), 4)
 
     resp = await _control(cockpit, action, target, note="why", options=options)
 
@@ -500,3 +544,75 @@ async def test_cadence_is_not_acked(cockpit: Cockpit) -> None:
     await _reply(cockpit, cockpit.world.id("pl"))
 
     assert cockpit.events("control.ack") == []
+
+
+# ── The root's reply address ───────────────────────────────────
+
+
+def _solo_root(cockpit: Cockpit) -> str:
+    """Drop mutual supervision and Sentinel, as right after a factory start."""
+    world = cockpit.world
+    world.store.delete_label(cockpit.fid, F.LABEL_SUPERVISOR)
+    world.store.set_labels(world.id("lead_b"), {F.LABEL_STATE: F.STATE_DONE})
+    return cockpit.fid
+
+
+async def test_a_root_without_supervisor_replies_to_its_peer_lead(cockpit: Cockpit) -> None:
+    root = cockpit.fid
+    cockpit.world.store.delete_label(root, F.LABEL_SUPERVISOR)
+
+    resp = await _control(cockpit, "pause", f"member:{root}")
+
+    assert resp.status_code == 202, resp.text
+    [text] = cockpit.mailer.texts_to(root)
+    assert 'sys_session_post(to="peer_lead", kind="reply")' in text
+    assert "ack_on_any_post" not in resp.json()["events"][0]["data"]
+
+
+@pytest.mark.parametrize("action", ["pause", "resume", "stop", "restart"])
+async def test_a_solo_root_gets_no_reply_instruction(cockpit: Cockpit, action: str) -> None:
+    root = _solo_root(cockpit)
+    if action == "resume":
+        cockpit.world.store.set_labels(root, {F.LABEL_STATE: F.STATE_PAUSED})
+
+    resp = await _control(cockpit, action, f"member:{root}")
+
+    assert resp.status_code == 202, resp.text
+    [text] = cockpit.mailer.texts_to(root)
+    assert "sys_session_post" not in text
+    assert "; ." not in text and ", ," not in text and "then and" not in text
+    assert resp.json()["events"][0]["data"]["ack_on_any_post"] == [root]
+
+
+async def test_a_solo_root_acks_with_its_next_post_of_any_kind(cockpit: Cockpit) -> None:
+    root = _solo_root(cockpit)
+    pl = cockpit.world.id("pl")
+    resp = await _control(cockpit, "pause", "factory")
+    assert resp.status_code == 202, resp.text
+    control_id = resp.json()["events"][0]["id"]
+    root_text = cockpit.mailer.texts_to(root)[0]
+    assert root_text == (
+        "[Factory control · PAUSE · by alice] Pause: stop spawning and dispatching, checkpoint "
+        "your ledger, then wait for RESUME."
+    )
+
+    # A PL's non-reply post still does not ack; the root's does.
+    await _reply(cockpit, pl, kind="info")
+    assert cockpit.events("control.ack") == []
+    await _reply(cockpit, root, kind="request")
+    await _reply(cockpit, root, kind="info")
+
+    [ack] = cockpit.events("control.ack")
+    assert ack.from_id == root
+    assert ack.data["control_event_id"] == control_id
+
+
+async def test_a_root_with_a_supervisor_still_acks_only_on_reply(cockpit: Cockpit) -> None:
+    root = cockpit.fid
+    await _control(cockpit, "pause", f"member:{root}")
+
+    await _reply(cockpit, root, kind="info")
+    assert cockpit.events("control.ack") == []
+    await _reply(cockpit, root)
+
+    assert [a.from_id for a in cockpit.events("control.ack")] == [root]

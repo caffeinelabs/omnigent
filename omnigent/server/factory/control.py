@@ -34,6 +34,7 @@ from omnigent.factory import (
     LABEL_PROJECT,
     LABEL_ROLE,
     LABEL_STATE,
+    LABEL_SUPERVISOR,
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
     STATE_ACTIVE,
@@ -172,9 +173,14 @@ def same_id(a: str | None, b: str | None) -> bool:
         return a == b
 
 
+def is_closed(conv: Conversation | None) -> bool:
+    """:returns: Whether *conv* is missing, closed or archived (a done member is not)."""
+    return conv is None or conv.archived or is_session_closed(conv.labels, conv.title)
+
+
 def is_gone(conv: Conversation | None) -> bool:
     """:returns: Whether *conv* can no longer act: missing, closed, archived or done."""
-    if conv is None or conv.archived or is_session_closed(conv.labels, conv.title):
+    if conv is None or is_closed(conv):
         return True
     return is_top_level(conv) and conv.labels.get(LABEL_STATE) == STATE_DONE
 
@@ -215,7 +221,9 @@ def _replacement_rank(conv: Conversation) -> tuple[bool, int]:
     return conv.labels.get(LABEL_STATE) != STATE_ACTIVE, -conv.created_at
 
 
-def find_project_pl(deps: FactoryDeps, factory_id: str, slug: str | None) -> Conversation | None:
+def find_project_pl(
+    deps: FactoryDeps, factory_id: str, slug: str | None, *, include_done: bool = False
+) -> Conversation | None:
     """
     The project's current PL: the row's ``pl_session_id``, else by label.
 
@@ -225,22 +233,24 @@ def find_project_pl(deps: FactoryDeps, factory_id: str, slug: str | None) -> Con
     :param deps: Factory stores.
     :param factory_id: Root session id.
     :param slug: Project slug.
+    :param include_done: Also accept a stopped (done) PL, e.g. to resume it.
     :returns: The PL row, or ``None`` when the project has none that can act.
     """
     if not slug:
         return None
+    gone = is_closed if include_done else is_gone
     store = deps.conversation_store
     project = deps.factory_store.get_project(factory_id, slug)
     if project is not None and project.pl_session_id:
         conv = store.get_conversation(project.pl_session_id)
-        if conv is not None and not is_gone(conv):
+        if conv is not None and not gone(conv):
             return conv
     candidates = [
         m
         for m in factory_members(factory_id, store)
         if m.labels.get(LABEL_PROJECT) == slug
         and m.labels.get(LABEL_ROLE) == ROLE_PROJECT_LEAD
-        and not is_gone(m)
+        and not gone(m)
     ]
     candidates.sort(key=_replacement_rank)
     return candidates[0] if candidates else None
@@ -315,6 +325,8 @@ class ControlPlan:
     :param pr: The PR of a ``preview`` control.
     :param launch_args: Spec launch args per member id (``relaunch``).
     :param mail_ids: Pre-assigned mail ids per member id (others get new ones).
+    :param root_reply_to: Where the root replies (``supervisor`` / ``peer_lead``);
+        ``None`` before a second lead exists, so its next post of any kind acks.
     """
 
     root: Conversation
@@ -327,6 +339,7 @@ class ControlPlan:
     pr: FactoryPr | None = None
     launch_args: dict[str, list[str]] = field(default_factory=dict)
     mail_ids: dict[str, str] = field(default_factory=dict)
+    root_reply_to: str | None = None
 
     @property
     def factory_id(self) -> str:
@@ -366,10 +379,13 @@ def factory_order(members: Sequence[Conversation], root_id: str) -> list[Convers
     return sorted(members, key=rank)
 
 
-async def resolve_target(deps: FactoryDeps, root: Conversation, ref: str) -> Target:
+async def resolve_target(
+    deps: FactoryDeps, root: Conversation, ref: str, *, revive: bool = False
+) -> Target:
     """
     Resolve ``factory`` / ``project:<slug>`` / ``member:<id>`` within *root*'s factory.
 
+    :param revive: Let ``project:<slug>`` name a stopped PL when no live one exists.
     :raises CockpitError: 400 on a malformed or sub-agent target, 404 on an
         unknown one, 409 when a project has no PL to act on.
     """
@@ -382,6 +398,8 @@ async def resolve_target(deps: FactoryDeps, root: Conversation, ref: str) -> Tar
     if ref.startswith(TARGET_PROJECT_PREFIX):
         slug = ref[len(TARGET_PROJECT_PREFIX) :].strip()
         pl = await asyncio.to_thread(find_project_pl, deps, root.id, slug)
+        if pl is None and revive:
+            pl = await asyncio.to_thread(find_project_pl, deps, root.id, slug, include_done=True)
         if pl is None:
             row = await asyncio.to_thread(deps.factory_store.get_project, root.id, slug)
             if row is None:
@@ -409,7 +427,9 @@ async def resolve_target(deps: FactoryDeps, root: Conversation, ref: str) -> Tar
 
 
 def _bool_option(options: Mapping[str, Any], key: str, default: bool) -> bool:
-    value = options.get(key, default)
+    value = options.get(key)
+    if value is None:
+        return default
     if isinstance(value, str):
         return value.strip().lower() not in ("0", "false", "no", "off")
     return bool(value)
@@ -481,13 +501,34 @@ def _recipients(action: str, target: Target) -> list[Conversation]:
     return live
 
 
+def _root_reply_address(deps: FactoryDeps, root: Conversation) -> str | None:
+    """
+    Where the root lead can reply: ``supervisor`` once mutual supervision set
+    it, else ``peer_lead`` when a second lead exists, else ``None``.
+    """
+    store = deps.conversation_store
+    supervisor = root.labels.get(LABEL_SUPERVISOR)
+    if (
+        supervisor
+        and is_session_id(supervisor)
+        and not is_gone(store.get_conversation(supervisor))
+    ):
+        return "supervisor"
+    peers = [
+        m
+        for m in factory_members(root.id, store)
+        if m.labels.get(LABEL_ROLE) == ROLE_LEAD and not same_id(m.id, root.id) and not is_gone(m)
+    ]
+    return "peer_lead" if peers else None
+
+
 async def plan_control(
     app_state: Any,
     factory_id: str,
     *,
     user_id: str | None,
     action: str,
-    target: str,
+    target: str | None,
     note: str | None = None,
     options: Mapping[str, Any] | None = None,
 ) -> ControlPlan:
@@ -496,7 +537,7 @@ async def plan_control(
 
     Access: EDIT on every member acted on (and the root for a factory-wide
     action); OWNER for restart and relaunch, and on the root to stop the
-    whole factory.
+    whole factory. Only ``cadence`` may omit *target* (it is factory-wide).
 
     :raises CockpitError: On an invalid action, target or option.
     :raises OmnigentError: 401/403/404 from the access checks.
@@ -512,9 +553,11 @@ async def plan_control(
             400, "note_too_long", f"note exceeds {NOTE_MAX_CHARS} chars", field="note"
         )
     opts = dict(options or {})
-    if action == ACTION_CADENCE and not (target or "").strip():
+    if not (target or "").strip():
+        if action != ACTION_CADENCE:
+            raise CockpitError(400, "invalid_target", "target is required", field="target")
         target = TARGET_FACTORY
-    resolved = await resolve_target(deps, root, target)
+    resolved = await resolve_target(deps, root, target or "", revive=action == ACTION_RESUME)
     plan = ControlPlan(
         root=root, action=action, target=resolved, by=human_name(user_id), note=note
     )
@@ -566,6 +609,8 @@ async def plan_control(
         raise CockpitError(409, "nothing_to_do", f"no member left to {action}")
     plan.recipients = recipients
     plan.options = opts
+    if any(same_id(m.id, root.id) for m in recipients):
+        plan.root_reply_to = await asyncio.to_thread(_root_reply_address, deps, root)
 
     if resolved.kind == "factory":
         level = LEVEL_OWNER if action == ACTION_STOP else LEVEL_EDIT
@@ -591,9 +636,21 @@ async def plan_control(
 # ── Texts (spec §10) ───────────────────────────────────────────
 
 
-def _reply_hint(conv: Conversation, root_id: str) -> str:
-    to = "supervisor" if same_id(conv.id, root_id) else "parent"
-    return f'reply once: sys_session_post(to="{to}", kind="reply")'
+def _reply_hint(plan: ControlPlan, conv: Conversation) -> str | None:
+    to = plan.root_reply_to if same_id(conv.id, plan.root.id) else "parent"
+    return f'reply once: sys_session_post(to="{to}", kind="reply")' if to else None
+
+
+def _semi(reply: str | None) -> str:
+    return f"; {reply}" if reply else ""
+
+
+def _comma(reply: str | None) -> str:
+    return f", {reply}" if reply else ""
+
+
+def _and(reply: str | None) -> str:
+    return f"{reply} and " if reply else ""
 
 
 def control_header(action_label: str, by: str) -> str:
@@ -609,7 +666,7 @@ def control_text(plan: ControlPlan, member: Conversation) -> str | None:
     :param member: One recipient.
     """
     pl = member.labels.get(LABEL_ROLE) == ROLE_PROJECT_LEAD
-    reply = _reply_hint(member, plan.root.id)
+    reply = _reply_hint(plan, member)
     action = plan.action
     pr = plan.pr
     if action == ACTION_PAUSE:
@@ -618,58 +675,58 @@ def control_text(plan: ControlPlan, member: Conversation) -> str | None:
             body = (
                 "Pause the project: stop dispatching, cancel running ICs, take the dev env DOWN, "
                 "keep your factory previews up for human review, checkpoint plan.md, then "
-                f"{reply} and wait for RESUME."
+                f"{_and(reply)}wait for RESUME."
             )
         elif pl:
             body = (
                 "Pause the project: stop dispatching, cancel running ICs, take the dev env DOWN, "
                 "tear down your factory previews (env_keeper PREVIEW_DOWN pr=<n> reason=human "
                 "for each), "
-                f"checkpoint plan.md, then {reply} and wait for RESUME."
+                f"checkpoint plan.md, then {_and(reply)}wait for RESUME."
             )
         else:
             body = (
                 "Pause: stop spawning and dispatching, checkpoint your ledger, then "
-                f"{reply} and wait for RESUME."
+                f"{_and(reply)}wait for RESUME."
             )
     elif action == ACTION_RESUME:
         label = "RESUME"
         if pl:
             body = (
                 "Resume where you stopped: re-read plan.md, bring the dev env UP if you "
-                f"need it, continue; {reply}."
+                f"need it, continue{_semi(reply)}."
             )
         else:
-            body = f"Resume where you stopped: re-read your ledger and continue; {reply}."
+            body = f"Resume where you stopped: re-read your ledger and continue{_semi(reply)}."
     elif action == ACTION_STOP:
         label = "STOP"
         if pl:
             body = (
                 "Stop the project: cancel running ICs, env_keeper DOWN and PREVIEW_DOWN pr=<n> "
                 "reason=human for every preview, leave the PRs open, post a final summary to your "
-                f"lead, {reply}, then stay idle."
+                f"lead{_comma(reply)}, then stay idle."
             )
         else:
-            body = f"Stop: post a final summary, {reply}, then stay idle."
+            body = f"Stop: post a final summary{_comma(reply)}, then stay idle."
     elif action == ACTION_RESTART:
         label = "RESTART"
         body = (
             "You were restarted from the cockpit. Re-read your plan and continue where "
-            f"you stopped; {reply}."
+            f"you stopped{_semi(reply)}."
         )
     elif action == ACTION_RELAUNCH:
         label = "RELAUNCHED"
         args = " ".join(plan.launch_args.get(member.id, []))
         body = (
             f"You were relaunched with your spec's launch args ({args}). Re-read your plan and "
-            f"continue where you stopped; {reply}."
+            f"continue where you stopped{_semi(reply)}."
         )
     elif action == ACTION_PREVIEW and pr is not None:
         if plan.options.get("mode") == PREVIEW_DOWN:
             label = f"PREVIEW_DOWN pr=#{pr.number}"
             body = (
                 f"Take down the factory preview of PR #{pr.number}: send env_keeper PREVIEW_DOWN "
-                f"pr={pr.number} reason=human. Its demo stays in the cockpit; {reply}."
+                f"pr={pr.number} reason=human. Its demo stays in the cockpit{_semi(reply)}."
             )
         else:
             label = f"PREVIEW pr=#{pr.number}"
@@ -678,13 +735,13 @@ def control_text(plan: ControlPlan, member: Conversation) -> str | None:
             body = (
                 f"Deploy the factory preview of PR #{pr.number} at {at}: send env_keeper PREVIEW "
                 f"pr={pr.number}{head} (it redeploys when one exists); if that head has no "
-                f"demo yet, dispatch the demo once the preview is ready; {reply}."
+                f"demo yet, dispatch the demo once the preview is ready{_semi(reply)}."
             )
     elif action == ACTION_ENV_STATUS:
         label = "ENV STATUS"
         body = (
             "Report env status: ask env_keeper STATUS (dev env) and PREVIEW_STATUS, make "
-            f"sure each is reported with sys_factory_env, then {reply} with one line."
+            f"sure each is reported with sys_factory_env, then {reply or 'report'} with one line."
         )
     else:
         return None
@@ -804,6 +861,8 @@ async def execute_control(app_state: Any, plan: ControlPlan) -> ControlResult:
         "recipients": [norm_id(m.id) for m in plan.recipients],
         "mail_ids": mail_ids,
     }
+    if plan.root_reply_to is None and any(same_id(m, plan.root.id) for m in mail_ids):
+        data["ack_on_any_post"] = [norm_id(plan.root.id)]
     subject = f"pr:{plan.pr.repo}#{plan.pr.number}" if plan.pr is not None else plan.target.ref
     event = await events.emit(
         app_state,
@@ -825,7 +884,7 @@ async def apply_control(
     *,
     user_id: str | None,
     action: str,
-    target: str,
+    target: str | None,
     note: str | None = None,
     options: Mapping[str, Any] | None = None,
 ) -> ControlResult:
@@ -856,17 +915,19 @@ async def _ack_on_reply(app_state: Any, event: FactoryEvent) -> None:
 
     A ``message.queued`` of kind ``reply`` from a session acknowledges every
     control sent to that session in the last :data:`ACK_WINDOW_MS` that it
-    has not acknowledged yet.
+    has not acknowledged yet. A root lead with no one to reply to yet acks
+    with its next post of any kind (``ack_on_any_post``).
     """
     if event.kind != "message.queued":
         return
     data = event.data or {}
-    if data.get("kind") != "reply":
-        return
     sender = event.from_id or data.get("sender_id")
     if not isinstance(sender, str) or not is_session_id(sender):
         return
     sender = norm_id(sender)
+    is_reply = data.get("kind") == "reply"
+    if not is_reply and not same_id(sender, event.factory_id):
+        return
     deps = factory_deps(app_state)
     found = await asyncio.to_thread(
         deps.factory_store.find_events,
@@ -886,6 +947,7 @@ async def _ack_on_reply(app_state: Any, event: FactoryEvent) -> None:
             or ctl.ts > event.ts
             or sender not in (ctl_data.get("recipients") or [])
             or (ctl.id, sender) in acked
+            or (not is_reply and sender not in (ctl_data.get("ack_on_any_post") or []))
         ):
             continue
         action = ctl.kind.removeprefix("control.")

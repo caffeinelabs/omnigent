@@ -356,6 +356,61 @@ async def test_server_pause_maps_to_the_pause_control(cockpit: Cockpit) -> None:
     assert len(cockpit.events("control.pause")) == 1
 
 
+async def test_a_pause_on_a_sub_agent_pauses_its_pl(cockpit: Cockpit) -> None:
+    ic = cockpit.world.id("ic")
+    decision = _ask(
+        cockpit,
+        "ic",
+        source="storm",
+        options=[
+            {"id": "pause", "label": "Pause sender", "action": "pause", "target": f"member:{ic}"},
+            {"id": "dismiss", "label": "Dismiss", "action": "dismiss"},
+        ],
+        allow_text=False,
+        question='"IC · badge" hit the message rate limit (6/min)',
+    )
+
+    resp = await _answer(cockpit, decision, option_id="pause")
+
+    assert resp.status_code == 200, resp.text
+    pl = cockpit.world.get("pl")
+    assert pl.labels[F.LABEL_STATE] == "paused"
+    [control] = cockpit.events("control.pause")
+    assert control.data["target"] == f"member:{pl.id}"
+    assert control.data["recipients"] == [pl.id]
+    assert resp.json()["decision"]["delivered_mail_id"] == cockpit.mailer.to(pl.id)[0].mail_id
+
+
+async def test_a_failing_server_action_warns_instead_of_500(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    decision = _server_decision(cockpit)
+
+    def broken(*_args: Any, **_kwargs: Any) -> None:
+        raise RuntimeError("label write failed: secret internals")
+
+    monkeypatch.setattr(cockpit.deps.conversation_store, "set_labels", broken)
+
+    resp = await _answer(cockpit, decision, option_id="pause")
+
+    assert resp.status_code == 502, resp.text
+    assert error_code(resp) == "action_failed"
+    assert "secret internals" not in resp.text
+    assert resp.json()["decision"]["status"] == "answered"
+    assert resp.json()["decision"]["delivered_mail_id"] is None
+    stored = cockpit.store.get_decision(decision.id)
+    assert stored is not None and stored.delivered_mail_id is None
+    [warning] = cockpit.events("factory.warning")
+    assert warning.severity == "warning"
+    assert warning.summary.startswith(f"{decision.ref} is answered, but its pause failed")
+    assert warning.data["target"] == "project:api-version"
+    [answered] = cockpit.events("decision.answered")
+    assert answered.data["action_failed"] is True
+    assert answered.data["mail_id"] is None
+    again = await _answer(cockpit, decision, option_id="pause")
+    assert (again.status_code, error_code(again)) == (409, "decision_not_open")
+
+
 async def test_dismiss_and_link_options_have_no_side_effects(cockpit: Cockpit) -> None:
     dismissed = _server_decision(cockpit, key="d1")
     linked = _server_decision(cockpit, key="d2")

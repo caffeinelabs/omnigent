@@ -195,6 +195,33 @@ async def test_start_refuses_a_non_lead_session(cockpit: Cockpit, key: str) -> N
     assert cockpit.mailer.items == []
 
 
+async def test_start_refuses_when_the_factory_is_off(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    root = _new_lead(cockpit)
+    monkeypatch.delenv(F.FACTORY_ENABLED_ENV, raising=False)
+
+    resp = await _start(cockpit, _body(root))
+
+    assert (resp.status_code, error_code(resp)) == (409, "factory_disabled")
+    assert cockpit.mailer.items == []
+    assert cockpit.store.list_projects(root) == []
+    assert F.LABEL_ID not in cockpit.world.get("atlas").labels
+
+
+async def test_a_preview_without_enabled_follows_env_needed(cockpit: Cockpit) -> None:
+    root = _new_lead(cockpit)
+    projects = copy.deepcopy(PROJECTS)
+    projects[0]["preview"] = {"slots": 3}
+    projects[1]["preview"] = {"slots": 3}
+
+    assert (await _start(cockpit, _body(root, projects=projects))).status_code == 201
+
+    rows = {p.slug: p for p in cockpit.store.list_projects(root)}
+    assert rows["api-status"].charter["preview"] == {"enabled": True, "slots": 3}
+    assert rows["docs-factory-envs"].charter["preview"]["enabled"] is False
+
+
 async def test_start_refuses_a_lead_of_another_factory(cockpit: Cockpit) -> None:
     resp = await _start(cockpit, _body(cockpit.world.id("lead_b")))
 
@@ -207,6 +234,7 @@ async def test_start_refuses_a_lead_of_another_factory(cockpit: Cockpit) -> None
         (lambda b: b["projects"][1].update(slug="Bad Slug"), "projects[1].slug"),
         (lambda b: b["projects"][1].update(slug="api-status"), "projects[1].slug"),
         (lambda b: b["projects"][0].update(repo="not a repo"), "projects[0].repo"),
+        (lambda b: b["projects"][0].update(repo="o/" + "r" * 300), "projects[0].repo"),
         (lambda b: b["projects"][0].update(goal=""), "projects[0].goal"),
         (lambda b: b["projects"][0].update(priority=7), "projects[0].priority"),
         (
@@ -255,6 +283,7 @@ async def test_add_project_asks_the_root_to_spawn_its_pl(cockpit: Cockpit) -> No
     assert resp.status_code == 201, resp.text
     assert resp.json()["project"]["slug"] == "ux-env-badge"
     assert resp.json()["project"]["stage"] == "queued"
+    assert "workspace_id" not in resp.json()["project"]
     assert (dup.status_code, error_code(dup)) == (409, "slug_exists")
     [item] = cockpit.mailer.items
     assert item.target_id == root
@@ -314,6 +343,7 @@ async def test_charter_patch_sends_the_pl_a_unified_diff(cockpit: Cockpit) -> No
 
     assert resp.status_code == 200, resp.text
     assert resp.json()["changed"] is True
+    assert "workspace_id" not in resp.json()["project"]
     row = cockpit.store.get_project(cockpit.fid, "api-version")
     assert row is not None and row.charter is not None
     assert row.charter["goal"] == "Add GET /version with the git sha."
@@ -333,6 +363,44 @@ async def test_charter_patch_sends_the_pl_a_unified_diff(cockpit: Cockpit) -> No
     assert "up to 3 at once" in diff
     [event] = cockpit.events("control.charter_update")
     assert event.data["fields"] == ["goal", "preview_slots"]
+
+
+async def test_a_slots_only_preview_patch_keeps_previews_off(cockpit: Cockpit) -> None:
+    _seed_project(cockpit)
+    path = f"/v1/factory/factories/{cockpit.fid}/projects/api-version"
+    off = await cockpit.patch(path, {"preview": {"enabled": False, "slots": 2}})
+    assert off.status_code == 200, off.text
+    cockpit.mailer.items.clear()
+
+    resp = await cockpit.patch(path, {"preview": {"slots": 3}})
+
+    assert resp.status_code == 200, resp.text
+    row = cockpit.store.get_project(cockpit.fid, "api-version")
+    assert row is not None and row.charter is not None
+    assert row.charter["preview"] == {"enabled": False, "slots": 3}
+    assert all(
+        "factory previews: on" not in t for t in cockpit.mailer.texts_to(cockpit.world.id("pl"))
+    )
+    on = await cockpit.patch(path, {"preview": {"enabled": True}})
+    assert on.status_code == 200
+    row = cockpit.store.get_project(cockpit.fid, "api-version")
+    assert row is not None and row.charter is not None
+    assert row.charter["preview"]["enabled"] is True
+    assert row.charter["preview"]["slots"] == 3
+
+
+def test_merge_charter_copies_enabled_only_when_sent() -> None:
+    from omnigent.server.factory.start import CharterPatchIn, merge_charter
+
+    old = {"goal": "g", "preview": {"enabled": False, "slots": 1}}
+
+    slots = merge_charter(old, CharterPatchIn.model_validate({"preview": {"slots": 3}}))
+    legacy = merge_charter(old, CharterPatchIn.model_validate({"preview_slots": 2}))
+    enabled = merge_charter(old, CharterPatchIn.model_validate({"preview": {"enabled": True}}))
+
+    assert slots["preview"] == {"enabled": False, "slots": 3}
+    assert legacy["preview"] == {"enabled": False, "slots": 2}
+    assert enabled["preview"] == {"enabled": True, "slots": 1}
 
 
 async def test_charter_patch_without_a_change_sends_nothing(cockpit: Cockpit) -> None:

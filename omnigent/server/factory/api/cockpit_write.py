@@ -21,7 +21,7 @@ from fastapi import APIRouter, Body, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
-from omnigent.entities.factory import FactoryEvent
+from omnigent.entities.factory import FactoryEvent, FactoryProject
 from omnigent.server.factory import control, decisions, start
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError
@@ -51,12 +51,12 @@ class WithdrawBody(BaseModel):
 
 
 class ControlBody(BaseModel):
-    """``POST /v1/factory/factories/{fid}/control``."""
+    """``POST /v1/factory/factories/{fid}/control``; only ``cadence`` may omit the target."""
 
     model_config = ConfigDict(extra="forbid")
 
     action: str
-    target: str = control.TARGET_FACTORY
+    target: str | None = None
     note: str | None = None
     options: dict[str, Any] | None = None
 
@@ -85,12 +85,14 @@ async def _guard(call: Callable[[], Awaitable[_T]]) -> _T | JSONResponse:
         return JSONResponse(status_code=exc.status_code, content=exc.body(), headers=headers)
 
 
+def _row_json(row: FactoryEvent | FactoryProject) -> dict[str, Any]:
+    out = row.to_dict()
+    out.pop("workspace_id", None)
+    return out
+
+
 def _event_json(event: FactoryEvent | None) -> list[dict[str, Any]]:
-    if event is None:
-        return []
-    row = event.to_dict()
-    row.pop("workspace_id", None)
-    return [row]
+    return [] if event is None else [_row_json(event)]
 
 
 @router.post("/decisions/{decision_id}/answer", response_model=None)
@@ -211,7 +213,7 @@ async def add_project(
 
     async def run() -> dict[str, Any]:
         row = await start.add_project(request.app.state, factory_id, payload, user_id=user_id)
-        return {"project": row.to_dict()}
+        return {"project": _row_json(row)}
 
     return await _guard(run)
 
@@ -227,7 +229,7 @@ async def update_charter(
         row, changed, mail_id = await start.update_charter(
             request.app.state, factory_id, slug, payload, user_id=user_id
         )
-        return {"project": row.to_dict(), "changed": changed, "mail_id": mail_id}
+        return {"project": _row_json(row), "changed": changed, "mail_id": mail_id}
 
     return await _guard(run)
 

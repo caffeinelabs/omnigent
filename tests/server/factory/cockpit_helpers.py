@@ -16,6 +16,7 @@ from typing import Any
 import httpx
 import pytest
 
+from omnigent import factory as F
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.mailer import MAILER_STATE_ATTR, Mailer, MailItem
 from omnigent.stores.factory_store import FactoryStore
@@ -96,6 +97,7 @@ async def build_cockpit(
     from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
     from omnigent.stores.project_store.sqlalchemy_store import SqlAlchemyProjectStore
 
+    monkeypatch.setenv(F.FACTORY_ENABLED_ENV, "1")
     permissions = SqlAlchemyPermissionStore(db_uri)
     for user in ("alice", "bob", "carol"):
         permissions.ensure_user(user)
