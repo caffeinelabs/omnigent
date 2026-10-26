@@ -485,6 +485,34 @@ describe("GithubPanel", () => {
   });
 });
 
+// The PR status badge and the CI check pills are shared components; the panel
+// must render them with exactly this markup.
+describe("GithubPanel shared PR badge and check pills", () => {
+  it.each(["OPEN", "MERGED", "CLOSED", "DRAFT"])("renders the %s badge unchanged", (name) => {
+    state.info!.data!.pr!.state = name;
+    renderPanel();
+    const label = name === "DRAFT" ? "DRAFT" : name.charAt(0) + name.slice(1).toLowerCase();
+    expect(screen.getByLabelText(`Pull request status: ${label}`).outerHTML).toMatchSnapshot();
+  });
+
+  it("renders the check pills unchanged", () => {
+    state.info!.data!.pr!.checks = {
+      passing: 66,
+      failing: 2,
+      pending: 3,
+      total: 71,
+      runs: [
+        { name: "unit tests", bucket: "passing", url: null },
+        { name: "lint", bucket: "pending", url: null },
+        { name: "e2e", bucket: "failing", url: null },
+      ],
+    };
+    renderPanel();
+    const section = screen.getByText("Checks").closest("section");
+    expect(section?.outerHTML).toMatchSnapshot();
+  });
+});
+
 describe("deriveGithubPanelState", () => {
   const ready: GithubInfo = {
     object: "session.github.info",
