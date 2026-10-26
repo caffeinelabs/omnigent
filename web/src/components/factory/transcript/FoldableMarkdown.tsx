@@ -29,7 +29,8 @@ export function FoldableMarkdown({
     <div className={cn("min-w-0", className)} data-testid={testId}>
       <div
         className={cn(
-          "min-w-0 overflow-hidden",
+          // A code block that opens or closes the body drops its outer margin.
+          "min-w-0 overflow-hidden [&_.chat-code-block:first-child>div:first-child]:mt-0 [&_.chat-code-block:last-child>div:first-child]:mb-0",
           // 8 lines at the body's 1.6 line height, faded at the cut.
           folded && "max-h-[12.8em] [mask-image:linear-gradient(to_bottom,black_70%,transparent)]",
         )}

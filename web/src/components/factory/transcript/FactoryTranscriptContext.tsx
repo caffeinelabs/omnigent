@@ -4,8 +4,15 @@
 // already fills; the cockpit (or a story) can provide richer values through
 // `FactoryTranscriptContext`. Cards render without any provider at all.
 
-import { QueryClient, QueryClientContext, useQuery } from "@tanstack/react-query";
-import { createContext, useCallback, useContext, useMemo, type ReactNode } from "react";
+import { type QueryClient, QueryClientContext } from "@tanstack/react-query";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useMemo,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { useInRouterContext } from "react-router-dom";
 import type { Conversation, ConversationsPage } from "@/hooks/useConversations";
 import { FACTORY_PROJECT_LABEL_KEY, FACTORY_ROLE_LABEL_KEY } from "@/lib/factory";
@@ -45,13 +52,6 @@ export interface FactoryTranscriptEnv {
 /** Optional overrides; any field left out falls back to the cache defaults. */
 export const FactoryTranscriptContext = createContext<Partial<FactoryTranscriptEnv> | null>(null);
 
-// Lets the cache reads below run (disabled) when no QueryClient is mounted.
-let inertClient: QueryClient | null = null;
-function fallbackClient(): QueryClient {
-  inertClient ??= new QueryClient();
-  return inertClient;
-}
-
 function sessionRefFromLabels(
   title: string | null | undefined,
   labels: Record<string, string> | undefined,
@@ -86,20 +86,34 @@ export function lookupCachedSession(
 }
 
 const NO_DELIVERY = () => null;
+const NO_SUBSCRIPTION = () => () => {};
+
+/** The cached snapshot of a session, kept current; never fetches or adds a cache entry. */
+function useCachedSessionSnapshot(
+  client: QueryClient | undefined,
+  sessionId: string | null,
+): Session | undefined {
+  const subscribe = useCallback(
+    (onChange: () => void) =>
+      client && sessionId ? client.getQueryCache().subscribe(onChange) : NO_SUBSCRIPTION(),
+    [client, sessionId],
+  );
+  const read = useCallback(
+    () => (client && sessionId ? client.getQueryData<Session>(["session", sessionId]) : undefined),
+    [client, sessionId],
+  );
+  return useSyncExternalStore(subscribe, read, read);
+}
 
 /** Resolve the cards' environment: provided overrides, else cache reads. */
 export function useFactoryTranscriptEnv(): FactoryTranscriptEnv {
   const provided = useContext(FactoryTranscriptContext);
   const client = useContext(QueryClientContext);
   const conversationId = useChatStore((s) => s.conversationId);
-  const wantsSnapshot = provided?.factoryId === undefined && client !== undefined;
-  // Reads the snapshot the chat bind already fetched; `enabled: false` never fetches.
-  const { data: snapshot } = useQuery<Session>(
-    {
-      queryKey: ["session", wantsSnapshot ? conversationId : null],
-      enabled: false,
-    },
-    client ?? fallbackClient(),
+  // The snapshot the chat bind already fetched, read only without a provided id.
+  const snapshot = useCachedSessionSnapshot(
+    client,
+    provided?.factoryId === undefined ? conversationId : null,
   );
   const factoryId =
     provided?.factoryId !== undefined
@@ -140,9 +154,36 @@ export function cockpitHref(
   return `/factory/${encodeURIComponent(factoryId)}${qs ? `?${qs}` : ""}`;
 }
 
+// ASCII controls are dropped or folded by URL parsing ("/\t/x" reads as "//x").
+function hasControlChar(text: string): boolean {
+  for (let i = 0; i < text.length; i += 1) {
+    const code = text.charCodeAt(i);
+    if (code < 0x20 || code === 0x7f) return true;
+  }
+  return false;
+}
+const EXTERNAL_URL_RE = /^https?:\/\/[^/\\]/i;
+// One leading slash: "//host" and "/\host" are protocol-relative.
+const IN_APP_PATH_RE = /^\/(?![/\\])/;
+
+/**
+ * Classify a link target that may come from agent output.
+ *
+ * @param to - A candidate href, e.g. `/c/abc` or `https://app.example/`.
+ * @returns `"external"` for an absolute `http(s)` URL, `"in-app"` for a
+ *   single-slash path, `null` for anything else (`javascript:`, `data:`,
+ *   `//host`, relative text).
+ */
+export function linkTargetKind(to: string): "external" | "in-app" | null {
+  if (hasControlChar(to)) return null;
+  if (EXTERNAL_URL_RE.test(to)) return "external";
+  return IN_APP_PATH_RE.test(to) ? "in-app" : null;
+}
+
 /**
  * In-app link that works with or without a router (stories, unit tests).
- * Absolute `http(s)` targets open in a new tab.
+ * Absolute `http(s)` targets open in a new tab; any other target that is not
+ * a single-slash path renders as plain text, never as a link.
  */
 export function FactoryLink({
   to,
@@ -158,7 +199,15 @@ export function FactoryLink({
   testId?: string;
 }) {
   const inRouter = useInRouterContext();
-  const external = /^https?:\/\//.test(to);
+  const kind = linkTargetKind(to);
+  if (kind === null) {
+    return (
+      <span className={className} title={title} data-testid={testId} data-unsafe-href="">
+        {children}
+      </span>
+    );
+  }
+  const external = kind === "external";
   if (inRouter && !external) {
     return (
       <Link to={to} className={className} title={title} data-testid={testId}>

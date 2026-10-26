@@ -729,9 +729,10 @@ export function VirtualBubbleList({
   });
 
   // An assistant bubble is keyed by its first item, so a history page that
-  // continues the top turn renames it. Keep rendering it under the key its row
-  // already has: React keeps the node (a remount replays the action row's hover
-  // fade on every page) and react-virtual keeps the measured height.
+  // continues the top turn renames it (a heartbeat group likewise, by its first
+  // beat). Keep rendering it under the key its row already has: React keeps the
+  // node (a remount replays the action row's hover fade on every page, and
+  // closes an open heartbeat group) and react-virtual keeps the measured height.
   // Only a prepend can rename a bubble, and a prepend always changes the first
   // bubble's key, so the alias map is only rebuilt then.
   const firstBubbleKey = bubbles.length > 0 ? bubbleKey(bubbles[0]!) : undefined;
@@ -752,20 +753,33 @@ export function VirtualBubbleList({
     // prepend renames at most one bubble per response (the topmost, which the
     // page extends), so one entry per response is enough.
     const vanishedByResponse = new Map<string, string>();
+    // Per beat (user item id), the row key of the heartbeat group that held it.
+    const vanishedByBeat = new Map<string, string>();
     for (const bubble of renderedBubblesRef.current) {
       const key = bubbleKey(bubble);
-      if (bubble.kind === "assistant" && !currentKeys.has(key)) {
+      if (currentKeys.has(key)) continue;
+      if (bubble.kind === "assistant") {
         vanishedByResponse.set(bubble.responseId, aliases.get(key) ?? key);
+      } else if (bubble.kind === "heartbeat_group") {
+        for (const tick of bubble.ticks)
+          vanishedByBeat.set(tick.user.itemId, aliases.get(key) ?? key);
       }
     }
     for (const bubble of bubbles) {
       const key = bubbleKey(bubble);
-      if (bubble.kind !== "assistant" || aliases.has(key)) continue;
-      const aliasKey = vanishedByResponse.get(bubble.responseId);
-      if (aliasKey === undefined) continue;
+      if (aliases.has(key)) continue;
+      let aliasKey: string | undefined;
+      if (bubble.kind === "assistant") {
+        aliasKey = vanishedByResponse.get(bubble.responseId);
+        if (aliasKey !== undefined) vanishedByResponse.delete(bubble.responseId);
+      } else if (bubble.kind === "heartbeat_group") {
+        aliasKey = bubble.ticks
+          .map((tick) => vanishedByBeat.get(tick.user.itemId))
+          .find((k) => k !== undefined);
+      }
+      if (aliasKey === undefined || renamed.has(aliasKey)) continue;
       aliases.set(key, aliasKey);
       renamed.add(aliasKey);
-      vanishedByResponse.delete(bubble.responseId);
     }
     for (const key of aliases.keys()) {
       if (!currentKeys.has(key)) aliases.delete(key);

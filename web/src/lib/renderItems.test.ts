@@ -4054,6 +4054,98 @@ describe("foldFactoryHeartbeats", () => {
     expect(bubblesEqual(a, { ...b, ticks: b.ticks.slice(1) })).toBe(false);
   });
 
+  describe("beats that must stay visible", () => {
+    const beat = (seq: number): Bubble => ({
+      kind: "user",
+      itemId: `beat-${seq}`,
+      content: [
+        {
+          type: "input_text",
+          text: `[Factory heartbeat #${seq} · 2026-10-26T13:0${seq}:00Z] Reply only if something changed.`,
+        },
+      ],
+    });
+    const reply = (id: string, items: RenderItem[]): Bubble => ({
+      kind: "assistant",
+      responseId: id,
+      stableId: id,
+      lifecycle: "completed",
+      error: null,
+      items: [
+        ...items,
+        { kind: "text", itemId: `${id}-t`, text: "HEARTBEAT_OK · quiet", final: true },
+      ],
+    });
+    const call = (name: string): RenderItem => ({
+      kind: "tool",
+      itemId: `call-${name}`,
+      execution: {
+        name,
+        arguments: {},
+        argsSummary: "",
+        callId: `call-${name}`,
+        agentName: "lead",
+        executedBy: "server",
+        output: "{}",
+      },
+      output: "{}",
+      state: "output-available",
+      startedAt: null,
+      duration: undefined,
+    });
+    const seqs = (bubbles: Bubble[]) => groups(bubbles).map((g) => g.ticks.map((t) => t.seq));
+
+    it.each([
+      "sys_session_post",
+      "mcp__omnigent__sys_session_post",
+      "sys_factory_spawn",
+      "mcp__omnigent__sys_factory_pr",
+      "sys_factory_demo",
+    ])("keeps a HEARTBEAT_OK beat that called %s unfolded", (tool) => {
+      const folded = foldFactoryHeartbeats([
+        beat(1),
+        reply("r1", []),
+        beat(2),
+        reply("r2", [call(tool)]),
+        beat(3),
+        reply("r3", []),
+      ]);
+      expect(seqs(folded)).toEqual([[1], [3]]);
+      expect(folded.map((b) => b.kind)).toEqual([
+        "heartbeat_group",
+        "user",
+        "assistant",
+        "heartbeat_group",
+      ]);
+    });
+
+    it("still folds a beat that only read the roster or set its beacon", () => {
+      const folded = foldFactoryHeartbeats([
+        beat(1),
+        reply("r1", [call("sys_factory_roster"), call("mcp__omnigent__sys_factory_set")]),
+      ]);
+      expect(seqs(folded)).toEqual([[1]]);
+    });
+
+    it("folds a finished beat without any reply into the run around it", () => {
+      const folded = foldFactoryHeartbeats([
+        beat(1),
+        reply("r1", []),
+        beat(2),
+        beat(3),
+        reply("r3", []),
+      ]);
+      expect(seqs(folded)).toEqual([[1, 2, 3]]);
+      expect(groups(folded)[0]!.ticks[1]!.status).toBe("no reply");
+    });
+
+    it("leaves the newest beat without a reply alone: its turn may not have started", () => {
+      const folded = foldFactoryHeartbeats([beat(1), reply("r1", []), beat(2)]);
+      expect(seqs(folded)).toEqual([[1]]);
+      expect(folded[folded.length - 1]).toMatchObject({ kind: "user", itemId: "beat-2" });
+    });
+  });
+
   it("ends a live-candidate turn at a folded group", () => {
     // Every beat after the last real reply folded, so that reply is settled.
     expect(liveCandidateAssistantIndex(foldFactoryHeartbeats(transcript("atlas")))).toBe(-1);

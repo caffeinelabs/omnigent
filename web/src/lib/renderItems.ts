@@ -32,7 +32,11 @@ import {
   isSessionScopedDecision,
   routingExtras,
 } from "./routingDecision";
-import { heartbeatNoopReply, parseFactoryMessageCached } from "./factoryMessages";
+import {
+  heartbeatNoopReply,
+  isFactoryOutcomeCall,
+  parseFactoryMessageCached,
+} from "./factoryMessages";
 import { isSystemUserContent } from "./systemMessage";
 import type { CodexPersistMode, RememberScope } from "./types";
 import type { ActiveResponse } from "@/store/types";
@@ -234,7 +238,7 @@ export interface HeartbeatTick {
   seq: number;
   /** The beat's ISO timestamp from its header. */
   at: string;
-  /** Text after `HEARTBEAT_OK ·`, or the legacy "nothing changed" reply. */
+  /** Text after `HEARTBEAT_OK ·`, the legacy "nothing changed" reply, or "no reply". */
   status: string;
 }
 
@@ -1880,17 +1884,27 @@ function closingText(replies: AssistantBubbleT[]): string | null {
   return null;
 }
 
+/** Whether a beat's replies hold something the reader must see (pending question, post, outcome). */
+function holdsVisibleWork(reply: AssistantBubbleT): boolean {
+  return reply.items.some(
+    (it) =>
+      (it.kind === "elicitation" && it.status === "pending") ||
+      (it.kind === "tool" && isFactoryOutcomeCall(it.execution.name)),
+  );
+}
+
 function foldableTick(
   user: UserBubbleT,
   replies: AssistantBubbleT[],
   header: { seq: number; at: string },
+  turnOver: boolean,
 ): HeartbeatTick | null {
-  if (replies.length === 0) return null;
+  // A finished beat with no reply at all ("reply only if something changed").
+  if (replies.length === 0) {
+    return turnOver ? { user, replies, seq: header.seq, at: header.at, status: "no reply" } : null;
+  }
   for (const reply of replies) {
-    if (reply.lifecycle !== "completed") return null;
-    if (reply.items.some((it) => it.kind === "elicitation" && it.status === "pending")) {
-      return null;
-    }
+    if (reply.lifecycle !== "completed" || holdsVisibleWork(reply)) return null;
   }
   const text = closingText(replies);
   const noop = text === null ? null : heartbeatNoopReply(text);
@@ -1900,8 +1914,9 @@ function foldableTick(
 /**
  * Fold factory heartbeat turns that changed nothing into `heartbeat_group`
  * bubbles: a beat whose closing reply starts with `HEARTBEAT_OK` (or a short
- * legacy "Nothing changed"). Consecutive folded beats share one group. A beat
- * that did work stays as it is. Runs after `buildBubbles`, outside its reuse
+ * legacy "Nothing changed"), or a finished beat with no reply. Consecutive
+ * folded beats share one group. A beat that did work, posted, or recorded an
+ * outcome (spawn, ask, PR, preview, demo) stays as it is. Runs after `buildBubbles`, outside its reuse
  * cache, and returns `bubbles` itself when nothing folds.
  *
  * @param bubbles - The transcript's bubbles in order.
@@ -1926,7 +1941,8 @@ export function foldFactoryHeartbeats(bubbles: Bubble[], holdLastTurn = false): 
       while (end < bubbles.length && bubbles[end]!.kind === "assistant") end += 1;
       const isLastTurn = end === bubbles.length;
       const replies = bubbles.slice(i + 1, end) as AssistantBubbleT[];
-      const tick = holdLastTurn && isLastTurn ? null : foldableTick(bubble, replies, header);
+      const tick =
+        holdLastTurn && isLastTurn ? null : foldableTick(bubble, replies, header, !isLastTurn);
       if (tick) {
         out ??= bubbles.slice(0, i);
         (group ??= []).push(tick);

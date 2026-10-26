@@ -699,6 +699,30 @@ const LEGACY_NO_CHANGE_RE = /^(nothing changed|no change|no-op|HEARTBEAT_OK)/i;
 /** Longest legacy "nothing changed" reply that still folds. */
 export const LEGACY_HEARTBEAT_REPLY_MAX = 160;
 
+const MCP_PREFIX = "mcp__omnigent__";
+
+export const FACTORY_POST_TOOL = "sys_session_post";
+
+/** One-liners that stay visible after a settled turn folds (they are outcomes). */
+export const FACTORY_OUTCOME_TOOLS: ReadonlySet<string> = new Set([
+  "sys_factory_spawn",
+  "sys_factory_ask",
+  "sys_factory_pr",
+  "sys_factory_env",
+  "sys_factory_demo",
+]);
+
+/** A tool name without the claude-native `mcp__omnigent__` prefix. */
+export function factoryToolBaseName(name: string): string {
+  return name.startsWith(MCP_PREFIX) ? name.slice(MCP_PREFIX.length) : name;
+}
+
+/** Whether a tool call left something a reader must see: a post or an outcome. */
+export function isFactoryOutcomeCall(name: string): boolean {
+  const base = factoryToolBaseName(name);
+  return base === FACTORY_POST_TOOL || FACTORY_OUTCOME_TOOLS.has(base);
+}
+
 /**
  * Classify the final assistant text of a heartbeat turn.
  *

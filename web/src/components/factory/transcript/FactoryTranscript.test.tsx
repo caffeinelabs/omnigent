@@ -6,6 +6,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import { type ReactNode, useMemo } from "react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it } from "vitest";
 import { BlockRenderer } from "@/components/blocks/BlockRenderer";
 import { BubbleView } from "@/components/chat/chatBubbleParts";
@@ -19,8 +20,14 @@ import {
 } from "@/lib/renderItems";
 import { FileViewerContext } from "@/shell/FileViewerContext";
 import { FactoryPostCard } from "./FactoryPostCard";
-import { FactoryToolLine } from "./FactoryToolLine";
-import { type FactoryTranscriptEnv, FactoryTranscriptContext } from "./FactoryTranscriptContext";
+import { FactoryToolLine, inAppPath } from "./FactoryToolLine";
+import {
+  FactoryLink,
+  type FactoryTranscriptEnv,
+  FactoryTranscriptContext,
+  linkTargetKind,
+} from "./FactoryTranscriptContext";
+import { parseToolOutputJson } from "./factoryToolSummary";
 
 afterEach(cleanup);
 
@@ -265,6 +272,159 @@ describe("UserBubble factory hook", () => {
   });
 });
 
+describe("Factory marker and card text", () => {
+  it("wraps a marker's label instead of truncating it, and shows ISO stamps as times", () => {
+    render(
+      <Env>
+        <BubbleView bubble={userBubble(caseText("needs human decision ref"))} />
+      </Env>,
+    );
+    const label = screen.getByTestId("factory-marker-label");
+    expect(label.className).not.toContain("truncate");
+    expect(label).toHaveTextContent(/waiting on D-7 since \d/);
+    expect(label.textContent).not.toContain("2026-10-26T");
+  });
+
+  it("renders repeated delta bullets once each", () => {
+    const text =
+      "[Factory heartbeat #15 · 2026-10-26T14:15:00Z] 2 changes since #14: • PR #1 checks passed • PR #1 checks passed";
+    render(
+      <Env>
+        <BubbleView bubble={userBubble(text)} />
+      </Env>,
+    );
+    expect(
+      within(screen.getByTestId("factory-heartbeat-delta")).getAllByRole("listitem"),
+    ).toHaveLength(2);
+  });
+
+  it("keeps the server's note to the agent out of an approval's quote", () => {
+    render(
+      <Env>
+        <BubbleView bubble={userBubble(caseText("review approved same line"))} />
+      </Env>,
+    );
+    const card = screen.getByTestId("factory-review-card");
+    expect(card).toHaveTextContent("Approved");
+    expect(card.textContent).not.toContain("The human will merge on GitHub");
+  });
+});
+
+describe("link safety", () => {
+  it.each([
+    ["javascript:alert(1)", null],
+    ["JavaScript:alert(1)", null],
+    [" javascript:alert(1)", null],
+    ["data:text/html,<script>alert(1)</script>", null],
+    ["vbscript:msgbox(1)", null],
+    ["//evil.example/x", null],
+    ["/\\evil.example/x", null],
+    ["/\t/evil.example/x", null],
+    ["https:evil.example", null],
+    ["relative/path", null],
+    ["https://app-1.envs.sandbox.caffeinelabs.io/", "external"],
+    ["http://localhost:5173/x", "external"],
+    ["/c/abc", "in-app"],
+    ["/factory/f1?review=7", "in-app"],
+  ] as const)("classifies %j as %s", (to, kind) => {
+    expect(linkTargetKind(to)).toBe(kind);
+  });
+
+  it.each(["javascript:alert(1)", "data:text/html,x", "//evil.example/x"])(
+    "renders %j as text, with or without a router",
+    (to) => {
+      const { container, unmount } = render(<FactoryLink to={to}>Open</FactoryLink>);
+      expect(container.querySelector("a")).toBeNull();
+      expect(container).toHaveTextContent("Open");
+      unmount();
+      const routed = render(
+        <MemoryRouter>
+          <FactoryLink to={to}>Open</FactoryLink>
+        </MemoryRouter>,
+      );
+      expect(routed.container.querySelector("a")).toBeNull();
+    },
+  );
+
+  it("keeps same-origin demo links in the app and refuses other schemes", () => {
+    const origin = window.location.origin;
+    expect(inAppPath(`${origin}/factory/f1?review=7#demo`)).toBe("/factory/f1?review=7#demo");
+    expect(inAppPath("https://other.example/d")).toBe("https://other.example/d");
+    expect(inAppPath("/factory/f1")).toBe("/factory/f1");
+    expect(inAppPath("javascript:alert(1)")).toBeNull();
+    expect(inAppPath("//evil.example/x")).toBeNull();
+  });
+
+  function renderLine(
+    item: Extract<RenderItem, { kind: "tool" }>,
+    env?: Partial<FactoryTranscriptEnv>,
+  ) {
+    return render(
+      <Env env={env}>
+        <FactoryToolLine
+          name={item.execution.name}
+          arguments={item.execution.arguments}
+          output={item.output}
+          state={item.state}
+        />
+      </Env>,
+    );
+  }
+
+  const noScriptLinks = (root: HTMLElement) =>
+    [...root.querySelectorAll("a")].filter(
+      (a) => !/^(https?:\/\/|\/(?![/\\]))/.test(a.getAttribute("href") ?? ""),
+    );
+
+  it.each(["javascript:alert(document.domain)", "data:text/html,x", "//evil.example/app"])(
+    "drops a preview link to %j",
+    (app) => {
+      const item = toolItem("pl_api", "sys_factory_env", 0);
+      const { container } = renderLine({
+        ...item,
+        execution: {
+          ...item.execution,
+          arguments: { ...item.execution.arguments, urls: { app } },
+        },
+      });
+      expect(screen.getByTestId("factory-tool-line")).toHaveTextContent("Preview #9630 ready");
+      expect(screen.queryByTestId("factory-tool-open-preview")).toBeNull();
+      expect(noScriptLinks(container)).toEqual([]);
+    },
+  );
+
+  it("falls back to the cockpit review for a demo link with a script scheme", () => {
+    const item = toolItem("pl_api", "sys_factory_demo", 0);
+    const out = parseToolOutputJson(item.output)!;
+    const { container } = renderLine({
+      ...item,
+      output: JSON.stringify({ ...out, demo_url: "javascript:alert(2)" }),
+    });
+    expect(screen.getByTestId("factory-demo-open")).toHaveAttribute(
+      "href",
+      `/factory/${ATLAS.id}?review=9630`,
+    );
+    expect(noScriptLinks(container)).toEqual([]);
+  });
+
+  it("drops a GitHub link whose PR url is not http(s)", () => {
+    const item = toolItem("pl_api", "sys_factory_pr", 0);
+    const { container } = renderLine(
+      {
+        ...item,
+        execution: {
+          ...item.execution,
+          arguments: { ...item.execution.arguments, url: "javascript:alert(3)//pull/7" },
+        },
+      },
+      { factoryId: null },
+    );
+    expect(screen.getByTestId("factory-tool-line")).toHaveTextContent("PR #7 registered");
+    expect(screen.queryByTestId("factory-tool-open-github")).toBeNull();
+    expect(container.querySelectorAll("a")).toHaveLength(0);
+  });
+});
+
 describe("FactoryPostCard", () => {
   const post = () => toolItem("atlas", "sys_session_post", 0);
 
@@ -337,6 +497,36 @@ describe("FactoryPostCard", () => {
     expect(screen.getByText("restart")).toBeInTheDocument();
     fireEvent.click(screen.getAllByRole("button")[0]!);
     expect(screen.getByText("mail_60718293a4b5c6d7")).toBeInTheDocument();
+  });
+
+  it.each([
+    ["cancelled", "cancelled"],
+    ["no-output", "unconfirmed"],
+  ] as const)("never reads 'sent' for a %s call (shows %s)", (state, label) => {
+    const item = post();
+    render(
+      <Env>
+        <FactoryPostCard arguments={item.execution.arguments} output={null} state={state} />
+      </Env>,
+    );
+    expect(screen.getByTestId("factory-post-card")).toHaveAttribute("data-delivery", label);
+    const chip = screen.getByTestId("factory-post-delivery");
+    expect(chip).toHaveTextContent(label);
+    expect(chip).not.toHaveTextContent("sent");
+    expect(chip.className).not.toContain("text-success");
+  });
+
+  it("does not read 'sent' for output without a mail id", () => {
+    render(
+      <Env>
+        <FactoryPostCard
+          arguments={{ to: "lead", message: "hi" }}
+          output={JSON.stringify({ status: "queued" })}
+          state="output-available"
+        />
+      </Env>,
+    );
+    expect(screen.getByTestId("factory-post-card")).toHaveAttribute("data-delivery", "unconfirmed");
   });
 
   it("shows sending while the call runs", () => {
@@ -439,6 +629,30 @@ describe("FactoryToolLine", () => {
     const line = screen.getByTestId("factory-tool-line");
     expect(line).toHaveAttribute("data-tone", "danger");
     expect(line).toHaveTextContent("Spawn failed Lead · api-version · duplicate_project");
+  });
+
+  it.each([
+    ["atlas", "sys_factory_spawn", 1, "cancelled", "Spawn cancelled PL · api-version", "Spawned"],
+    ["pl_api", "sys_factory_pr", 1, "no-output", "PR no result #9630", "claimed ready"],
+    ["pl_api", "sys_factory_ask", 0, "cancelled", "Ask cancelled Should /version", "D-3"],
+    ["pl_api", "sys_factory_env", 0, "no-output", "Preview no result #9630 → ready", "@7767f0d"],
+    ["atlas", "sys_factory_roster", 1, "cancelled", "Roster cancelled", "members"],
+  ] as const)("%s %s #%i %s reads as unsettled", (transcript, tool, nth, state, text, absent) => {
+    renderLine({ ...toolItem(transcript, tool, nth), output: null, state });
+    const line = screen.getByTestId("factory-tool-line");
+    expect(line).toHaveAttribute("data-tone", "muted");
+    expect(line).toHaveTextContent(text);
+    expect(line).not.toHaveTextContent(absent);
+    expect(screen.queryByTestId("factory-tool-open-session")).toBeNull();
+    expect(screen.queryByTestId("factory-tool-open-preview")).toBeNull();
+  });
+
+  it("renders a cancelled demo publish as a line, not a published card", () => {
+    renderLine({ ...toolItem("pl_api", "sys_factory_demo", 0), output: null, state: "cancelled" });
+    expect(screen.queryByTestId("factory-demo-card")).toBeNull();
+    expect(screen.getByTestId("factory-tool-line")).toHaveTextContent(
+      "Demo publish cancelled PR #9630 · @7767f0d",
+    );
   });
 
   it("names a running call by what it is doing", () => {

@@ -25,6 +25,7 @@ import {
   CARD_LINK_CLASS,
   FactoryLink,
   cockpitHref,
+  linkTargetKind,
   sessionHref,
   useFactoryTranscriptEnv,
 } from "./FactoryTranscriptContext";
@@ -47,17 +48,20 @@ const TOOL_ICON: Record<string, LucideIcon> = {
 
 /**
  * Turn an absolute link on this origin (the server stamps demo links with
- * its public domain) into an in-app path; leave other links absolute.
+ * its public domain) into an in-app path; leave other `http(s)` links absolute.
+ *
+ * @returns The link, or `null` for a target that is neither (`javascript:`, `//host` …).
  */
-export function inAppPath(url: string): string {
-  if (typeof window === "undefined") return url;
+export function inAppPath(url: string): string | null {
+  const kind = linkTargetKind(url);
+  if (kind !== "external" || typeof window === "undefined") return kind ? url : null;
   try {
-    const parsed = new URL(url, window.location.origin);
+    const parsed = new URL(url);
     return parsed.origin === window.location.origin
       ? `${parsed.pathname}${parsed.search}${parsed.hash}`
       : url;
   } catch {
-    return url;
+    return null;
   }
 }
 
@@ -70,22 +74,33 @@ function RowLink({ to, label, testId }: { to: string; label: string; testId: str
   );
 }
 
+function beaconText(row: RosterRow): string {
+  return (
+    [row.health && row.health !== "ok" ? row.health : null, row.summary]
+      .filter(Boolean)
+      .join(" · ") || "—"
+  );
+}
+
+// Below 28rem the Status and Beacon columns stack under the member's name.
+const WIDE_ONLY = "@max-[28rem]/roster:hidden";
+
 function RosterTable({ rows }: { rows: RosterRow[] }) {
   if (rows.length === 0) {
     return <p className="text-sm text-muted-foreground">No members.</p>;
   }
   return (
-    <div className="max-w-full overflow-x-auto">
+    <div className="@container/roster max-w-full overflow-x-auto">
       <table
-        className="w-full min-w-[28rem] border-collapse text-left text-sm"
+        className="w-full min-w-[28rem] border-collapse text-left text-sm @max-[28rem]/roster:min-w-0"
         data-testid="factory-roster-table"
       >
         <thead className="text-muted-foreground">
           <tr className="border-b border-border">
             <th className="py-1 pr-3 font-medium">Member</th>
             <th className="py-1 pr-3 font-medium">Role</th>
-            <th className="py-1 pr-3 font-medium">Status</th>
-            <th className="py-1 font-medium">Beacon</th>
+            <th className={cn("py-1 pr-3 font-medium", WIDE_ONLY)}>Status</th>
+            <th className={cn("py-1 font-medium", WIDE_ONLY)}>Beacon</th>
           </tr>
         </thead>
         <tbody>
@@ -94,7 +109,12 @@ function RosterTable({ rows }: { rows: RosterRow[] }) {
               key={`${row.depth}:${row.id || row.title}`}
               className="border-b border-border/50 last:border-0"
             >
-              <td className={cn("max-w-[14rem] truncate py-1 pr-3", row.depth === 1 && "pl-4")}>
+              <td
+                className={cn(
+                  "max-w-[14rem] truncate py-1 pr-3 @max-[28rem]/roster:max-w-none @max-[28rem]/roster:whitespace-normal @max-[28rem]/roster:[overflow-wrap:anywhere]",
+                  row.depth === 1 && "pl-4",
+                )}
+              >
                 {row.id ? (
                   <FactoryLink to={sessionHref(row.id)} className="hover:underline">
                     {row.title}
@@ -102,23 +122,30 @@ function RosterTable({ rows }: { rows: RosterRow[] }) {
                 ) : (
                   row.title
                 )}
+                <div
+                  className={cn(
+                    "hidden text-xs @max-[28rem]/roster:block",
+                    row.warn ? "text-warning" : "text-muted-foreground",
+                  )}
+                >
+                  {[row.status, beaconText(row)].filter((t) => t && t !== "—").join(" · ")}
+                </div>
               </td>
               <td className="py-1 pr-3 whitespace-nowrap text-muted-foreground">
                 {[row.role, row.project].filter(Boolean).join(" · ") || "—"}
               </td>
-              <td className="py-1 pr-3 whitespace-nowrap text-muted-foreground">
+              <td className={cn("py-1 pr-3 whitespace-nowrap text-muted-foreground", WIDE_ONLY)}>
                 {row.status ?? "—"}
               </td>
               <td
                 className={cn(
                   "max-w-[18rem] truncate py-1",
                   row.warn ? "text-warning" : "text-muted-foreground",
+                  WIDE_ONLY,
                 )}
                 title={row.summary ?? undefined}
               >
-                {[row.health && row.health !== "ok" ? row.health : null, row.summary]
-                  .filter(Boolean)
-                  .join(" · ") || "—"}
+                {beaconText(row)}
               </td>
             </tr>
           ))}
@@ -185,11 +212,9 @@ function rowLinks(summary: FactoryToolSummary, factoryId: string | null): ReactN
 /** Published demo: status, PR at the recorded commit, what it shows, and the review link. */
 export function DemoPublishedCard({ summary }: { summary: FactoryToolSummary }) {
   const { factoryId } = useFactoryTranscriptEnv();
-  const href = summary.demoUrl
-    ? inAppPath(summary.demoUrl)
-    : summary.cockpit
-      ? cockpitHref(factoryId, summary.cockpit)
-      : null;
+  const href =
+    (summary.demoUrl ? inAppPath(summary.demoUrl) : null) ??
+    (summary.cockpit ? cockpitHref(factoryId, summary.cockpit) : null);
   const files = summary.demoFiles ?? [];
   const counts = new Map<string, number>();
   for (const f of files) counts.set(f.kind, (counts.get(f.kind) ?? 0) + 1);
@@ -256,7 +281,12 @@ export function FactoryToolLine({
     [name, args, output, state],
   );
   if (!summary) return null;
-  if (summary.tool === "sys_factory_demo" && !summary.running && !summary.error) {
+  if (
+    summary.tool === "sys_factory_demo" &&
+    !summary.running &&
+    !summary.error &&
+    !summary.unsettled
+  ) {
     return <DemoPublishedCard summary={summary} />;
   }
   const Icon = summary.running
@@ -269,6 +299,7 @@ export function FactoryToolLine({
     : null;
   const hasDetails =
     (summary.roster?.length ?? 0) > 0 || (summary.facts?.length ?? 0) > 0 || summary.error !== null;
+  const links = rowLinks(summary, factoryId);
   const line = (
     <>
       <Icon
@@ -280,6 +311,16 @@ export function FactoryToolLine({
       />
       <span className="min-w-0 truncate">
         <span className="font-semibold text-foreground">{summary.verb}</span>
+        {summary.unsettled && (
+          <>
+            {" "}
+            <KindPill
+              label={summary.unsettled}
+              tone="muted"
+              className="h-4 px-1.5 align-text-bottom text-xs"
+            />
+          </>
+        )}
         {target && <span> of {target}</span>}
         {summary.text && <span> {summary.text}</span>}
         {summary.error && <span className="text-destructive"> · {summary.error}</span>}
@@ -289,13 +330,13 @@ export function FactoryToolLine({
   return (
     <Collapsible
       defaultOpen={false}
-      className="group/factory-line not-prose w-full min-w-0"
+      className="group/factory-line not-prose w-[48rem] max-w-full min-w-0"
       data-testid="factory-tool-line"
       data-tool={summary.tool}
       data-tone={summary.tone}
     >
       {/* The chevron follows the text (like a folded tool run); links sit at the
-          right and drop to their own line when the column is too narrow. */}
+          right, and stay right-aligned when they wrap to their own line. */}
       <div className="flex w-full min-w-0 flex-wrap items-center gap-x-2 text-muted-foreground text-chat">
         {hasDetails ? (
           <CollapsibleTrigger className="flex max-w-full min-w-0 cursor-pointer items-center gap-1.5 py-0.5 text-left transition-colors hover:text-foreground">
@@ -305,8 +346,9 @@ export function FactoryToolLine({
         ) : (
           <div className="flex max-w-full min-w-0 items-center gap-1.5 py-0.5">{line}</div>
         )}
-        <span className="flex-1" aria-hidden />
-        {rowLinks(summary, factoryId)}
+        {links.length > 0 && (
+          <span className="ml-auto flex shrink-0 items-center gap-2">{links}</span>
+        )}
       </div>
       {hasDetails && (
         <CollapsibleContent className="mt-1 ml-2 space-y-2 border-l pl-3 py-1">

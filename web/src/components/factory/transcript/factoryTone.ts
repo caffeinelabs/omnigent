@@ -76,6 +76,13 @@ export function clockTimeIso(iso: string | undefined | null): string | null {
   return Number.isNaN(ms) ? null : clockTime(ms / 1000);
 }
 
+const ISO_STAMP_RE = /\b\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})/g;
+
+/** Text with every ISO stamp shown as a wall-clock time ("since 2026-10-26T13:40:12Z" → "since 14:40"). */
+export function formatIsoStamps(text: string): string {
+  return text.replace(ISO_STAMP_RE, (stamp) => clockTimeIso(stamp) ?? stamp);
+}
+
 /** First 7 characters of a commit sha. */
 export function shortSha(sha: string | undefined | null): string | null {
   return sha ? sha.slice(0, 7) : null;

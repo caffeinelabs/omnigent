@@ -93,7 +93,7 @@ export function userBubbleOf(text: string, itemId = "u_story"): Bubble {
 
 export interface FactoryFrame {
   theme?: "light" | "dark";
-  /** CSS width of the frame, e.g. `390` for a phone column. */
+  /** CSS width of the frame, e.g. `390` for a phone (a 358 px column inside its padding). */
   width?: number;
   env?: Partial<FactoryTranscriptEnv>;
 }
@@ -110,9 +110,11 @@ export function FactoryStoryFrame({
     <StoryQueryRouter route={`/c/${STORY_ENV.factoryId}`}>
       <FactoryTranscriptContext.Provider value={value}>
         <div className={cn(theme === "dark" && "dark")} data-theme-frame={theme}>
+          {/* On a phone the frame cancels the preview's p-6, so its px-4 leaves the
+              transcript's real column (viewport − 32 px). */}
           <div
-            className="flex flex-col gap-4 rounded-lg bg-background p-4 text-foreground"
-            style={width ? { width } : { width: "min(48rem, 100%)" }}
+            className="flex flex-col gap-4 rounded-lg bg-background p-4 text-foreground max-sm:-mx-6"
+            style={width ? { width, maxWidth: "100vw" } : undefined}
           >
             {children}
           </div>

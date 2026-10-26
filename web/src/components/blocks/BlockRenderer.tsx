@@ -29,11 +29,8 @@ import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react"
 import { ChevronRightIcon } from "lucide-react";
 import { FactoryPostCard } from "@/components/factory/transcript/FactoryPostCard";
 import { FactoryToolLine } from "@/components/factory/transcript/FactoryToolLine";
-import {
-  FACTORY_OUTCOME_TOOLS,
-  factoryToolBaseName,
-  isFactoryLineTool,
-} from "@/components/factory/transcript/factoryToolSummary";
+import { isFactoryLineTool } from "@/components/factory/transcript/factoryToolSummary";
+import { FACTORY_OUTCOME_TOOLS, factoryToolBaseName } from "@/lib/factoryMessages";
 import { LIVE_ITEM_PREFIX } from "@/lib/blocks";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ConversationScrollLockContext } from "@/components/ai-elements/conversation";

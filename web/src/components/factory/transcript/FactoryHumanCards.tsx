@@ -88,16 +88,30 @@ function CardShell({
   );
 }
 
+/** "<who> · <time>" kept on one line, so a wrapped header never starts with "·". */
+function Attribution({ who, time }: { who: ReactNode; time: string | null }) {
+  if (!who && !time) return null;
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1.5 whitespace-nowrap">
+      {who && <span className="min-w-0 truncate">{who}</span>}
+      {who && time && <span aria-hidden>·</span>}
+      {time && <span className="shrink-0 tabular-nums">{time}</span>}
+    </span>
+  );
+}
+
 function ByLine({ by, time }: { by?: string; time: string | null }) {
   return (
-    <>
-      {by && (
-        <span className="min-w-0 truncate">
-          by <span className="text-foreground">{by}</span>
-        </span>
-      )}
-      {time && <span className="shrink-0 tabular-nums">· {time}</span>}
-    </>
+    <Attribution
+      who={
+        by && (
+          <>
+            by <span className="text-foreground">{by}</span>
+          </>
+        )
+      }
+      time={time}
+    />
   );
 }
 
@@ -216,6 +230,8 @@ export function DecisionAnsweredCard({
   );
 }
 
+const APPROVED_AGENT_NOTE = "The human will merge on GitHub; keep the preview up.";
+
 /**
  * `[Factory review · CHANGES REQUESTED|APPROVED … PR #n @sha by <human> (cockpit)]`:
  * the verdict, the PR at the reviewed commit, and the human's text.
@@ -230,6 +246,8 @@ export function ReviewCard({
   const { factoryId } = useFactoryTranscriptEnv();
   const approved = parsed.verdict === "approved";
   const sha = shortSha(parsed.sha);
+  // An approval's same-line text is the server's instruction to the agent, not the human's words.
+  const note = approved && parsed.body === APPROVED_AGENT_NOTE ? "" : parsed.body;
   return (
     <CardShell
       testId="factory-review-card"
@@ -263,11 +281,14 @@ export function ReviewCard({
         </>
       }
     >
-      {parsed.body && (
-        <div className="border-l-2 border-border pl-3 text-ui">
-          <FoldableMarkdown text={parsed.body} />
-        </div>
-      )}
+      {note &&
+        (approved ? (
+          <p className="min-w-0 break-words text-sm text-muted-foreground">{note}</p>
+        ) : (
+          <div className="border-l-2 border-border pl-3 text-ui">
+            <FoldableMarkdown text={note} />
+          </div>
+        ))}
     </CardShell>
   );
 }
@@ -288,13 +309,15 @@ export function BriefCard({
         <>
           <ClipboardListIcon className="size-3.5 shrink-0 text-brand-accent" aria-hidden />
           <strong className="shrink-0 font-semibold text-foreground">Brief</strong>
-          <span className="min-w-0 truncate">
-            from <span className="text-foreground">{parsed.by}</span>
-            {parsed.source === "cockpit" && " via cockpit"}
-          </span>
-          {clockTime(createdAtS) && (
-            <span className="shrink-0 tabular-nums">· {clockTime(createdAtS)}</span>
-          )}
+          <Attribution
+            who={
+              <>
+                from <span className="text-foreground">{parsed.by}</span>
+                {parsed.source === "cockpit" && " via cockpit"}
+              </>
+            }
+            time={clockTime(createdAtS)}
+          />
         </>
       }
     >

@@ -2,13 +2,9 @@
 // from a call's arguments and its JSON output. Claude-native wraps MCP output
 // in a content-block list, so both shapes are accepted.
 
-import type { FactoryMarkerTone } from "@/lib/factoryMessages";
+import { type FactoryMarkerTone, factoryToolBaseName } from "@/lib/factoryMessages";
 import { isFactoryWarningHealth } from "@/lib/factory";
 import type { ToolState } from "@/lib/renderItems";
-
-const MCP_PREFIX = "mcp__omnigent__";
-
-export const FACTORY_POST_TOOL = "sys_session_post";
 
 /** Factory tools that render as a one-liner instead of the generic tool row. */
 export const FACTORY_LINE_TOOLS: ReadonlySet<string> = new Set([
@@ -20,20 +16,6 @@ export const FACTORY_LINE_TOOLS: ReadonlySet<string> = new Set([
   "sys_factory_env",
   "sys_factory_demo",
 ]);
-
-/** One-liners that stay visible after a settled turn folds (they are outcomes). */
-export const FACTORY_OUTCOME_TOOLS: ReadonlySet<string> = new Set([
-  "sys_factory_spawn",
-  "sys_factory_ask",
-  "sys_factory_pr",
-  "sys_factory_env",
-  "sys_factory_demo",
-]);
-
-/** A tool name without the claude-native `mcp__omnigent__` prefix. */
-export function factoryToolBaseName(name: string): string {
-  return name.startsWith(MCP_PREFIX) ? name.slice(MCP_PREFIX.length) : name;
-}
 
 /** Whether `name` (bare or MCP-prefixed) is a factory one-liner tool. */
 export function isFactoryLineTool(name: string): boolean {
@@ -74,6 +56,12 @@ export function parseToolOutputJson(output: string | null | undefined): Json | n
 
 function str(value: unknown): string | null {
   return typeof value === "string" && value.trim() ? value.trim() : null;
+}
+
+/** An absolute `http(s)` URL from agent-supplied data, else `null` (never `javascript:` …). */
+function httpUrl(value: unknown): string | null {
+  const url = str(value);
+  return url && /^https?:\/\/[^/\\\s]\S*$/i.test(url) ? url : null;
 }
 
 function num(value: unknown): number | null {
@@ -134,8 +122,10 @@ export interface FactoryToolSummary {
   sessionId?: string;
   /** Cockpit query to link to (needs the factory id). */
   cockpit?: Record<string, string | number>;
-  /** Off-app URL (preview app, GitHub PR). */
+  /** Off-app `http(s)` URL (preview app, GitHub PR). */
   externalUrl?: string;
+  /** Call that never returned: the turn was cancelled, or ended without a result. */
+  unsettled?: "cancelled" | "no result";
   /** Target of a `sys_factory_set` on another member. */
   targetSessionId?: string;
   roster?: RosterRow[];
@@ -321,7 +311,7 @@ function summarizePr(args: Json, out: Json | null): Partial<FactoryToolSummary> 
     pr,
     sha: str(args.head_sha) ?? undefined,
     cockpit: pr !== undefined ? { review: pr } : undefined,
-    externalUrl: url ?? undefined,
+    externalUrl: httpUrl(url) ?? undefined,
     facts,
   };
 }
@@ -342,7 +332,7 @@ function summarizeEnv(args: Json, out: Json | null): Partial<FactoryToolSummary>
   const pr = num(args.pr) ?? undefined;
   const state = str(args.state) ?? "reported";
   const urls = asObject(args.urls);
-  const app = str(urls?.app);
+  const app = httpUrl(urls?.app);
   const api = str(urls?.api);
   const sha = str(asObject(args.deployed)?.sha) ?? undefined;
   const error = toolErrorCode(out);
@@ -366,6 +356,12 @@ function summarizeEnv(args: Json, out: Json | null): Partial<FactoryToolSummary>
     cockpit: pr !== undefined ? { review: pr } : undefined,
     facts,
   };
+}
+
+/** A demo review link: absolute `http(s)` or a single-slash in-app path. */
+function demoLink(value: unknown): string | null {
+  const link = str(value);
+  return link && /^\/(?![/\\])\S*$/.test(link) ? link : httpUrl(link);
 }
 
 function summarizeDemo(args: Json, out: Json | null): Partial<FactoryToolSummary> {
@@ -402,7 +398,7 @@ function summarizeDemo(args: Json, out: Json | null): Partial<FactoryToolSummary
     pr,
     sha,
     demoStatus: status,
-    demoUrl: str(out?.demo_url) ?? str(out?.review_url) ?? undefined,
+    demoUrl: demoLink(out?.demo_url) ?? demoLink(out?.review_url) ?? undefined,
     demoTitle: str(args.title) ?? undefined,
     demoSummary: str(args.summary) ?? str(out?.summary) ?? undefined,
     demoFiles: files,
@@ -430,6 +426,12 @@ export function summarizeFactoryTool(
   const out = parseToolOutputJson(output);
   const error = toolErrorCode(out) ?? (state === "output-error" ? "failed" : null);
   const running = state === "input-available";
+  const unsettled =
+    !error && out === null && (state === "cancelled" || state === "no-output")
+      ? state === "cancelled"
+        ? "cancelled"
+        : "no result"
+      : undefined;
   let partial: Partial<FactoryToolSummary>;
   switch (tool) {
     case "sys_factory_roster":
@@ -453,6 +455,7 @@ export function summarizeFactoryTool(
     default:
       partial = summarizeDemo(args, out);
   }
+  if (unsettled) partial = unsettledSummary(tool, partial, args);
   const verb =
     (running ? RUNNING_VERB[tool] : error ? FAILED_VERB[tool] : undefined) ?? partial.verb ?? tool;
   return {
@@ -463,6 +466,53 @@ export function summarizeFactoryTool(
     tone: error ? "danger" : (partial.tone ?? "muted"),
     running,
     error,
+    unsettled,
+  };
+}
+
+/** Nouns for a call whose outcome is unknown ("Spawn" rather than "Spawned"). */
+const UNSETTLED_VERB: Record<string, string> = {
+  sys_factory_roster: "Roster",
+  sys_factory_spawn: "Spawn",
+  sys_factory_ask: "Ask",
+  sys_factory_pr: "PR",
+  sys_factory_demo: "Demo publish",
+};
+
+/**
+ * What a call that never returned attempted, without any outcome words or
+ * links: no "registered", "ready" or preview link for a call that may not have run.
+ */
+function unsettledSummary(
+  tool: string,
+  partial: Partial<FactoryToolSummary>,
+  args: Json,
+): Partial<FactoryToolSummary> {
+  const pr = partial.pr !== undefined ? `#${partial.pr}` : null;
+  let text = partial.text ?? "";
+  switch (tool) {
+    case "sys_factory_roster":
+      text = "";
+      break;
+    case "sys_factory_pr":
+      text = pr ?? "";
+      break;
+    case "sys_factory_env":
+      text = [pr, `→ ${str(args.state) ?? "?"}`].filter(Boolean).join(" ");
+      break;
+    case "sys_factory_demo":
+      text = [pr ? `PR ${pr}` : null, partial.sha ? `@${partial.sha.slice(0, 7)}` : null]
+        .filter(Boolean)
+        .join(" · ");
+      break;
+  }
+  return {
+    ...partial,
+    verb: UNSETTLED_VERB[tool] ?? partial.verb,
+    text,
+    tone: "muted",
+    externalUrl: undefined,
+    sessionId: undefined,
   };
 }
 

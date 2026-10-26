@@ -31,7 +31,7 @@ import {
   sessionHref,
   useFactoryTranscriptEnv,
 } from "./FactoryTranscriptContext";
-import { TONE_ICON, clockTime, clockTimeIso } from "./factoryTone";
+import { TONE_ICON, clockTime, clockTimeIso, formatIsoStamps } from "./factoryTone";
 
 const TOPIC_ICON: Record<FactoryMarkerTopic, LucideIcon> = {
   heartbeat: HeartIcon,
@@ -49,6 +49,16 @@ const TOPIC_ICON: Record<FactoryMarkerTopic, LucideIcon> = {
   needs_human: HandIcon,
   generic: InfoIcon,
 };
+
+/** Lines paired with keys that stay unique when two lines read the same. */
+function withUniqueKeys(lines: string[]): [string, string][] {
+  const seen = new Map<string, number>();
+  return lines.map((line) => {
+    const n = (seen.get(line) ?? 0) + 1;
+    seen.set(line, n);
+    return [`${n}:${line}`, line];
+  });
+}
 
 /**
  * Compact centred row for factory markers (notices, alerts, delivery
@@ -86,14 +96,15 @@ export function FactoryMarker({
         )
       : null;
 
+  // The label wraps rather than truncates: it is the text the human came to read.
   const labelRow = (
     <>
-      <Icon className={cn("size-3.5 shrink-0", TONE_ICON[summary.tone])} aria-hidden />
-      <strong className={cn("shrink-0 font-semibold", urgent && "text-warning")}>
-        {summary.title}
-      </strong>
-      {summary.label && <span className="min-w-0 truncate">{summary.label}</span>}
-      {time && <span className="shrink-0 tabular-nums">· {time}</span>}
+      <Icon className={cn("mt-[3px] size-3.5 shrink-0", TONE_ICON[summary.tone])} aria-hidden />
+      <span className="min-w-0 [overflow-wrap:anywhere]" data-testid="factory-marker-label">
+        <strong className={cn("font-semibold", urgent && "text-warning")}>{summary.title}</strong>
+        {summary.label && <> {formatIsoStamps(summary.label)}</>}
+        {time && <span className="whitespace-nowrap tabular-nums"> · {time}</span>}
+      </span>
     </>
   );
 
@@ -104,61 +115,68 @@ export function FactoryMarker({
       data-factory-kind={parsed.kind}
       data-topic={summary.topic}
     >
-      <div className="flex max-w-full min-w-0 flex-wrap items-center justify-center gap-x-2 gap-y-0.5">
-        {hasDetail ? (
-          <button
-            type="button"
-            onClick={() => setOpen((v) => !v)}
-            aria-expanded={open}
-            aria-controls={detailId}
-            className="flex max-w-full min-w-0 items-center gap-1.5 rounded px-1.5 py-0.5 text-left transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      {/* Label row and delta bullets share a left edge; the block is centred. */}
+      <div className="flex max-w-full min-w-0 flex-col items-start gap-0.5">
+        <div className="flex max-w-full min-w-0 flex-wrap items-center justify-center gap-x-2 gap-y-0.5">
+          {hasDetail ? (
+            <button
+              type="button"
+              onClick={() => setOpen((v) => !v)}
+              aria-expanded={open}
+              aria-controls={detailId}
+              className="flex max-w-full min-w-0 items-start gap-1.5 rounded px-1.5 py-0.5 text-left transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              {labelRow}
+              <ChevronRightIcon
+                className={cn(
+                  "mt-[3px] size-3.5 shrink-0 transition-transform",
+                  open && "rotate-90",
+                )}
+                aria-hidden
+              />
+            </button>
+          ) : (
+            <div className="flex max-w-full min-w-0 items-start gap-1.5 px-1.5 py-0.5">
+              {labelRow}
+            </div>
+          )}
+          {summary.sessionId && (
+            <FactoryLink
+              to={sessionHref(summary.sessionId)}
+              className={CARD_LINK_CLASS}
+              title={summary.sessionTitle ? `Open ${summary.sessionTitle}` : "Open session"}
+              testId="factory-marker-open-session"
+            >
+              Open session
+              <ArrowUpRightIcon className="size-3.5" aria-hidden />
+            </FactoryLink>
+          )}
+          {cockpit && (
+            <FactoryLink
+              to={cockpit}
+              className={CARD_LINK_CLASS}
+              testId="factory-marker-open-cockpit"
+            >
+              {summary.decisionId ? `Open ${summary.decisionId}` : "Open in cockpit"}
+              <ArrowUpRightIcon className="size-3.5" aria-hidden />
+            </FactoryLink>
+          )}
+        </div>
+        {parsed.delta && parsed.delta.length > 0 && (
+          // Indented to the label text: px-1.5 + the icon + gap-1.5.
+          <ul
+            className="flex max-w-[48rem] min-w-0 flex-col gap-0.5 pl-[1.625rem] text-left"
+            data-testid="factory-heartbeat-delta"
           >
-            {labelRow}
-            <ChevronRightIcon
-              className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")}
-              aria-hidden
-            />
-          </button>
-        ) : (
-          <div className="flex max-w-full min-w-0 items-center gap-1.5 px-1.5 py-0.5">
-            {labelRow}
-          </div>
-        )}
-        {summary.sessionId && (
-          <FactoryLink
-            to={sessionHref(summary.sessionId)}
-            className={CARD_LINK_CLASS}
-            title={summary.sessionTitle ? `Open ${summary.sessionTitle}` : "Open session"}
-            testId="factory-marker-open-session"
-          >
-            Open session
-            <ArrowUpRightIcon className="size-3.5" aria-hidden />
-          </FactoryLink>
-        )}
-        {cockpit && (
-          <FactoryLink
-            to={cockpit}
-            className={CARD_LINK_CLASS}
-            testId="factory-marker-open-cockpit"
-          >
-            {summary.decisionId ? `Open ${summary.decisionId}` : "Open in cockpit"}
-            <ArrowUpRightIcon className="size-3.5" aria-hidden />
-          </FactoryLink>
+            {withUniqueKeys(parsed.delta).map(([key, line]) => (
+              <li key={key} className="flex min-w-0 gap-1.5">
+                <span aria-hidden>•</span>
+                <span className="min-w-0 [overflow-wrap:anywhere]">{line}</span>
+              </li>
+            ))}
+          </ul>
         )}
       </div>
-      {parsed.delta && parsed.delta.length > 0 && (
-        <ul
-          className="flex max-w-[48rem] min-w-0 flex-col gap-0.5 text-left"
-          data-testid="factory-heartbeat-delta"
-        >
-          {parsed.delta.map((line) => (
-            <li key={line} className="flex min-w-0 gap-1.5">
-              <span aria-hidden>•</span>
-              <span className="min-w-0 break-words">{line}</span>
-            </li>
-          ))}
-        </ul>
-      )}
       {hasDetail && open && (
         <div
           id={detailId}

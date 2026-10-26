@@ -84,7 +84,11 @@ export function FactoryMessageCard({
         <FactoryRoleChip
           info={senderInfo(from)}
           shownTitle={from.title}
-          className={roleChipTone(from.role)}
+          // Same pill as the kind: outlined in the role colour, the kind tinted.
+          className={cn(
+            "h-5 rounded-full px-2 font-sans text-sm leading-[18px]",
+            roleChipTone(from.role),
+          )}
         />
         <KindPill label={kind} tone={messageKindTone(kind)} />
         {time && <span className="shrink-0 tabular-nums">{time}</span>}

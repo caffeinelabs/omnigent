@@ -1,6 +1,8 @@
 import {
+  BanIcon,
   CheckIcon,
   ChevronRightIcon,
+  CircleDashedIcon,
   CircleXIcon,
   ClockIcon,
   Loader2Icon,
@@ -36,13 +38,25 @@ export function postAliasLabel(to: string): string | null {
   return null;
 }
 
-type PostState = "sending" | "sent" | FactoryDelivery["state"];
+type PostState = "sending" | "sent" | "cancelled" | "unconfirmed" | FactoryDelivery["state"];
 
 function DeliveryChip({ state, at, reason }: { state: PostState; at?: number; reason?: string }) {
   const time = at !== undefined ? clockTime(at) : null;
   const visual = {
     sending: { icon: Loader2Icon, label: "sending", className: "text-info", spin: true },
     sent: { icon: CheckIcon, label: "sent", className: "text-muted-foreground", spin: false },
+    cancelled: {
+      icon: BanIcon,
+      label: "cancelled",
+      className: "text-muted-foreground",
+      spin: false,
+    },
+    unconfirmed: {
+      icon: CircleDashedIcon,
+      label: "unconfirmed",
+      className: "text-muted-foreground",
+      spin: false,
+    },
     queued: { icon: ClockIcon, label: "queued", className: "text-muted-foreground", spin: false },
     delivered: { icon: CheckIcon, label: "delivered", className: "text-success", spin: false },
     failed: { icon: CircleXIcon, label: "failed", className: "text-destructive", spin: false },
@@ -60,6 +74,22 @@ function DeliveryChip({ state, at, reason }: { state: PostState; at?: number; re
       {time && <span className="tabular-nums">{time}</span>}
     </span>
   );
+}
+
+/**
+ * Where a post stands. "sent" needs the server's `mail_id` receipt: a call that
+ * was cancelled or ended without a result is never shown as sent.
+ */
+function postState(
+  error: string | null,
+  mailId: string | null,
+  receipt: FactoryDelivery | null,
+  state: ToolState,
+): PostState {
+  if (error) return "failed";
+  if (state === "input-available") return "sending";
+  if (mailId) return receipt?.state ?? "sent";
+  return state === "cancelled" ? "cancelled" : "unconfirmed";
 }
 
 /**
@@ -83,11 +113,7 @@ export function FactoryPostCard({
   const targetId = post.toSessionId ?? (alias ? null : post.to);
   const title = targetId ? resolveSession(targetId)?.title : null;
   const receipt = post.mailId ? deliveryFor(post.mailId) : null;
-  const deliveryState: PostState = post.error
-    ? "failed"
-    : state === "input-available"
-      ? "sending"
-      : (receipt?.state ?? "sent");
+  const deliveryState = postState(post.error, post.mailId, receipt, state);
   // One plain line: whitespace collapsed, inline markdown marks dropped.
   const excerpt = post.message
     .replace(/\*\*|__|`/g, "")

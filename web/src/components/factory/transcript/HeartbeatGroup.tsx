@@ -49,15 +49,16 @@ export function HeartbeatGroup({
         onClick={() => setOpen((v) => !v)}
         aria-expanded={open}
         aria-controls={contentId}
-        className="flex max-w-full min-w-0 items-center gap-1.5 rounded px-1.5 py-0.5 transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        className="flex max-w-full min-w-0 items-start gap-1.5 rounded px-1.5 py-0.5 text-left transition-colors hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
         title={latest ? `Latest: ${latest}` : undefined}
       >
-        <HeartIcon className="size-3.5 shrink-0" aria-hidden />
-        <span className="min-w-0 truncate tabular-nums">
-          {`${count} heartbeat${count === 1 ? "" : "s"} · no change${range ? ` · ${range}` : ""}`}
+        <HeartIcon className="mt-[3px] size-3.5 shrink-0" aria-hidden />
+        <span className="min-w-0 tabular-nums">
+          {`${count} heartbeat${count === 1 ? "" : "s"} · no change`}
+          {range && <span className="whitespace-nowrap">{` · ${range}`}</span>}
         </span>
         <ChevronRightIcon
-          className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")}
+          className={cn("mt-[3px] size-3.5 shrink-0 transition-transform", open && "rotate-90")}
           aria-hidden
         />
       </button>
@@ -75,6 +76,7 @@ export function HeartbeatGroup({
                   {`#${tick.seq}${tickTime(tick) ? ` · ${tickTime(tick)}` : ""}`}
                 </span>
               </div>
+              {tick.replies.length === 0 && <p className="pl-[1.125rem]">No reply.</p>}
               {tick.replies.map((reply) => (
                 <div key={reply.stableId} className="min-w-0 text-foreground">
                   {renderBubble(reply)}

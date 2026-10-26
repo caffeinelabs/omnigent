@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
 import type { Bubble } from "@/lib/renderItems";
 import { Conversation, ConversationContent } from "@/components/ai-elements/conversation";
@@ -218,4 +218,60 @@ it("keeps a renamed top bubble's row across a history prepend", () => {
     "data-bubble-key",
     "user:user-1",
   );
+});
+
+it("keeps an open heartbeat group's row when a history page adds an earlier beat", () => {
+  // A group is keyed by its first beat, so a page that lands an earlier
+  // no-op beat renames it; the row must keep its node (and its open state).
+  const scrollEl = document.createElement("div");
+  Object.defineProperties(scrollEl, {
+    scrollTop: { configurable: true, writable: true, value: 0 },
+    clientHeight: { configurable: true, value: 500 },
+    scrollHeight: { configurable: true, value: 1_000 },
+  });
+  scrollEl.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
+  const tick = (seq: number) => ({
+    user: {
+      kind: "user" as const,
+      itemId: `beat-${seq}`,
+      content: [{ type: "input_text" as const, text: `[Factory heartbeat #${seq} · x]` }],
+    },
+    replies: [],
+    seq,
+    at: "",
+    status: "no reply",
+  });
+  const group = (seqs: number[]): Bubble => ({
+    kind: "heartbeat_group",
+    itemId: `hb:beat-${seqs[0]}`,
+    ticks: seqs.map(tick),
+  });
+  const transcript = (bubbles: Bubble[]) => (
+    <Conversation>
+      <ConversationContent>
+        <VirtualBubbleList
+          bubbles={bubbles}
+          scrollEl={scrollEl}
+          lastAssistantIndex={-1}
+          showsWorking={false}
+          sessionIdle
+          conversationId="conv-1"
+          hasTasks={false}
+          disableVirtualization={false}
+          onGeometryChange={vi.fn()}
+        />
+      </ConversationContent>
+    </Conversation>
+  );
+
+  const view = render(transcript([group([2, 3])]));
+  const row = view.container.querySelector<HTMLElement>('[data-index="0"]')!;
+  expect(row).toHaveAttribute("data-bubble-key", "heartbeat_group:hb:beat-2");
+  fireEvent.click(screen.getByRole("button", { expanded: false }));
+  expect(screen.getByRole("button", { expanded: true })).toBeInTheDocument();
+
+  view.rerender(transcript([group([1, 2, 3])]));
+  expect(view.container.querySelector('[data-index="0"]')).toBe(row);
+  expect(row).toHaveAttribute("data-bubble-key", "heartbeat_group:hb:beat-2");
+  expect(screen.getByRole("button", { expanded: true })).toBeInTheDocument();
 });

@@ -46,7 +46,7 @@ function ToolRow({ item }: { item: Extract<RenderItem, { kind: "tool" }> }) {
 const meta = {
   title: "Factory/Transcript/Cards",
   decorators: [withFactoryFrame],
-  parameters: { layout: "padded" },
+  parameters: { layout: "fullscreen" },
 } satisfies Meta;
 
 export default meta;
@@ -163,10 +163,15 @@ const POSTS = () => {
       label: "sending",
       item: { ...sent, output: null, state: "input-available" as const },
     },
+    { label: "cancelled", item: { ...sent, output: null, state: "cancelled" as const } },
+    { label: "unconfirmed", item: { ...sent, output: null, state: "no-output" as const } },
   ];
 };
 
-/** Outgoing posts in every delivery state: delivered, queued, sent, sending, failed. */
+/**
+ * Outgoing posts in every delivery state: delivered, queued, sent, sending,
+ * failed, and calls that never returned (cancelled, unconfirmed).
+ */
 export const PostCards: Story = {
   render: () => (
     <>
@@ -220,7 +225,7 @@ export const ToolLinesDark: Story = { ...ToolLines, parameters: { factoryFrame: 
 
 export const ToolLinesPhone: Story = { ...ToolLines, parameters: { factoryFrame: phone } };
 
-/** Calls still running, and calls the runner refused. */
+/** Calls still running, calls that never returned, and calls the runner refused. */
 export const ToolLinesLoadingAndErrors: Story = {
   render: () => {
     const spawn = fixtureTool("atlas", "sys_factory_spawn", 2);
@@ -229,6 +234,9 @@ export const ToolLinesLoadingAndErrors: Story = {
     const items: Extract<RenderItem, { kind: "tool" }>[] = [
       { ...fixtureTool("atlas", "sys_factory_roster", 1), output: null, state: "input-available" },
       { ...demo, output: null, state: "input-available" },
+      { ...fixtureTool("atlas", "sys_factory_spawn", 1), output: null, state: "cancelled" },
+      { ...fixtureTool("pl_api", "sys_factory_pr", 1), output: null, state: "no-output" },
+      { ...demo, output: null, state: "cancelled" },
       {
         ...spawn,
         execution: { ...spawn.execution, callId: "err_spawn" },

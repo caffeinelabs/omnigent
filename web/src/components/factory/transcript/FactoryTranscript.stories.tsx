@@ -21,7 +21,7 @@ function TranscriptColumn({ name, fold }: { name: TranscriptName; fold: boolean 
 const meta = {
   title: "Factory/Transcript/Transcripts",
   decorators: [withFactoryFrame],
-  parameters: { layout: "padded" },
+  parameters: { layout: "fullscreen" },
 } satisfies Meta;
 
 export default meta;
