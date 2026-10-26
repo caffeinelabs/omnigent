@@ -516,6 +516,7 @@ def test_factory_tree_messaging_supervision_and_scope(factory_stack: FactoryStac
 def test_factory_cockpit_reports_from_a_project_lead(
     factory_stack: FactoryStack, tmp_path: Path
 ) -> None:
+    from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
     from omnigent.stores.factory_store.sqlalchemy_store import SqlAlchemyFactoryStore
 
     stack = factory_stack
@@ -532,6 +533,10 @@ def test_factory_cockpit_reports_from_a_project_lead(
         stack, name=f"cockpit-pl-{run}", model=pl_model, role="project_lead"
     )
     lead = _create_session(stack, agent_id=lead_agent, title="Atlas", bind_runner=False)
+    # The labels the lead's first factory call would stamp: it is the factory root.
+    SqlAlchemyConversationStore(stack.db_uri).set_labels(
+        lead, {F.LABEL_ID: lead, F.LABEL_ROLE: F.ROLE_LEAD, F.LABEL_STATE: F.STATE_ACTIVE}
+    )
     workspace = tmp_path / "workspace"
     video = workspace / "demo" / "video.webm"
     shot = workspace / "demo" / "shots" / "01-landing.png"
@@ -608,6 +613,16 @@ def test_factory_cockpit_reports_from_a_project_lead(
                         },
                     ),
                     _call(
+                        "call_dev_env",
+                        "sys_factory_env",
+                        {
+                            "state": "ready",
+                            "env_id": run,
+                            "urls": {"app": f"https://app-{run}.envs.sandbox.caffeinelabs.io"},
+                            "deployed": {"sha": sha, "ref": "origin/main"},
+                        },
+                    ),
+                    _call(
                         "call_demo",
                         "sys_factory_demo",
                         {
@@ -629,10 +644,12 @@ def test_factory_cockpit_reports_from_a_project_lead(
     asked = _tool_output(stack, pl, "call_ask")
     registered = _tool_output(stack, pl, "call_pr")
     preview = _tool_output(stack, pl, "call_env")
+    dev_env = _tool_output(stack, pl, "call_dev_env")
     demo = _tool_output(stack, pl, "call_demo")
     assert asked["decision"] == "D-1" and asked["deduped"] is False, asked
     assert registered["project"] == slug and registered["ready"] is False, registered
     assert preview["preview"]["state"] == "ready", preview
+    assert dev_env["env"]["deployed"] == {"sha": sha, "ref": "origin/main"}, dev_env
     # The manifest's status is what gets recorded.
     assert demo["status"] == "PARTIAL", demo
     marker = f"<!-- factory:demo sha={sha} status=PARTIAL demo={demo['demo_id']} -->"
@@ -659,6 +676,18 @@ def test_factory_cockpit_reports_from_a_project_lead(
     kinds = {e.kind for e in store.list_events(lead, limit=50)}
     assert {"decision.opened", "pr.discovered", "pr.claim", "preview.reported"} <= kinds
     assert "demo.published" in kinds
+
+    # The cockpit snapshot shows the dev env, the preview and the demo with its poster.
+    snap = stack.client.get(f"/v1/factory/factories/{lead}")
+    assert snap.status_code == 200, snap.text
+    [project] = [p for p in snap.json()["projects"] if p["slug"] == slug]
+    assert project["env"]["reported"]["deployed"] == {"sha": sha, "ref": "origin/main"}
+    [pr_view] = [p for p in snap.json()["prs"] if p["number"] == number]
+    assert pr_view["preview"]["deployed"]["sha"] == sha
+    assert pr_view["demo"]["id"] == row.id and pr_view["demo"]["status"] == "PARTIAL"
+    assert pr_view["demo"]["video_file_id"] == row.files[0]["file_id"]
+    assert pr_view["demo"]["poster_file_id"] == row.files[2]["file_id"]
+    assert [s["status"] for s in pr_view["demo"]["steps"]] == ["pass", "skipped"]
 
     # The cockpit plays the video back from the server, seekable by byte range.
     video_url = f"/v1/factory/demos/{row.id}/files/{row.files[0]['file_id']}"
