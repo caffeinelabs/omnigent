@@ -5,7 +5,12 @@ The runner has no store access, so each factory tool proxies the server's
 runner's owner bearer and its tunnel-binding token (the server uses that token
 to prove the sender is who it claims). ``sys_factory_spawn`` composes those
 routes with the ordinary ``GET /v1/agents`` and the JSON ``POST /v1/sessions``
-managed create.
+managed create, and attaches the project's stored charter to the brief.
+
+The cockpit reports (``sys_factory_ask`` / ``_pr`` / ``_env`` / ``_demo``)
+call ``/v1/factory/agent/*``. ``sys_factory_demo`` is the one that reads local
+files: only allowlisted types under ``~/factory`` or the session workspace
+(symlinks followed) are uploaded, as multipart.
 
 Factory roles also get factory-scoped session reads: ``sys_session_get_history``
 and ``sys_session_get_info`` refuse targets outside the caller's factory, and
@@ -18,18 +23,33 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import os
 import re
 import time
 from collections.abc import AsyncIterator, Callable
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Final
 from urllib.parse import quote
 
 import httpx
 
 from omnigent.factory import (
+    AGENT_STAGES,
+    DECISION_CONTEXT_MAX,
+    DECISION_MAX_OPTIONS,
+    DECISION_OPTION_DESCRIPTION_MAX,
+    DECISION_OPTION_LABEL_MAX,
+    DECISION_QUESTION_MAX,
     DEFAULT_HEARTBEAT_S,
+    DEMO_CLASS_MAX_BYTES,
+    DEMO_FILE_KINDS,
+    DEMO_MANIFEST_MAX_BYTES,
+    DEMO_MAX_FILES,
+    DEMO_MAX_TOTAL_BYTES,
+    DEMO_STATUSES,
+    ENV_STATES,
     HEALTH,
     LABEL_HEARTBEAT_S,
     LABEL_ID,
@@ -40,19 +60,29 @@ from omnigent.factory import (
     LABEL_SUPERVISOR,
     MESSAGE_KINDS,
     MESSAGE_MAX_CHARS,
+    PR_CLAIMS,
+    PREVIEW_REPORT_STATES,
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
+    SENTINEL_VERDICTS,
     STATE_ACTIVE,
     STATE_DONE,
     STATES,
     SUMMARY_MAX_LEN,
     clamp_label_value,
+    demo_file_type,
     factory_role_from_spec,
+    is_full_sha,
+    parse_pr_url,
     valid_heartbeat_s,
 )
 from omnigent.native.native_coding_agents import public_agent_name
 from omnigent.tools.builtins.factory import (
     SPAWN_ROLES,
+    SYS_FACTORY_ASK,
+    SYS_FACTORY_DEMO,
+    SYS_FACTORY_ENV,
+    SYS_FACTORY_PR,
     SYS_FACTORY_ROSTER,
     SYS_FACTORY_SET,
     SYS_FACTORY_SPAWN,
@@ -102,8 +132,40 @@ _FACTORY_ERROR_CODES: Final = frozenset(
         "sender_not_bound",
         "rate_limited",
         "message_too_large",
+        "too_many_open_decisions",
+        "decision_not_open",
+        "not_a_pr_url",
+        "pr_out_of_factory",
+        "sentinel_lead_only",
+        "not_your_project",
+        "invalid_stage",
+        "invalid_state",
+        "invalid_url",
+        "preview_cap",
+        "demo_too_large",
+        "file_not_allowed",
+        "file_missing",
     }
 )
+# The server re-polls GitHub for up to 10 s before answering sys_factory_pr.
+_PR_TIMEOUT_S: Final = 30.0
+_DEMO_UPLOAD_TIMEOUT_S: Final = 120.0
+_DECISION_REF_RE: Final = re.compile(r"(?:[Dd]-)?([1-9][0-9]{0,8})")
+_ABBREV_SHA_RE: Final = re.compile(r"[0-9a-fA-F]{7,40}")
+_NOTE_MAX: Final = 1000
+_ENV_NOTE_MAX: Final = 500
+_CAPTION_MAX: Final = 200
+# Manifest artifact keys that name a file kind of their own.
+_MANIFEST_KINDS: Final = {
+    "video": "video",
+    "poster": "poster",
+    "api": "api",
+    "har": "har",
+    "trace": "trace",
+    "console": "console",
+    "script": "script",
+    "log": "log",
+}
 _STATUS_ERROR_CODES: Final = {413: "message_too_large", 429: "rate_limited"}
 _CODE_TOKEN_RE: Final = re.compile(r"[a-z][a-z0-9_]*")
 # Session ids are opaque tokens (hex uuids); refusing separators and dot
@@ -154,10 +216,12 @@ def _error_payload(status: int, body: object, text: str, tool_name: str) -> _Jso
                 )
         if (validation := _validation_message(body.get("detail"))) is not None:
             candidates.append(validation)
+        # Structured extras (e.g. preview_cap's park_candidates) reach the agent too.
         extra = {
             k: v
             for k, v in body.items()
-            if k not in {"error", "detail", "message"} and isinstance(v, (str, int, float, bool))
+            if k not in {"error", "detail", "message"}
+            and isinstance(v, (str, int, float, bool, list, dict))
         }
     code = (
         next((c for c in candidates if c in _FACTORY_ERROR_CODES), None)
@@ -220,12 +284,11 @@ async def _request(
     tool_name: str,
     params: dict[str, str | int] | None = None,
     body: _JsonObject | None = None,
+    timeout: float = _TIMEOUT_S,
 ) -> httpx.Response | str:
     """Send one server request; a transport failure becomes a JSON error string."""
     try:
-        return await server_client.request(
-            method, path, params=params, json=body, timeout=_TIMEOUT_S
-        )
+        return await server_client.request(method, path, params=params, json=body, timeout=timeout)
     except Exception as exc:  # noqa: BLE001 — any transport error becomes a tool error.
         return _error(f"{tool_name} failed: {exc}")
 
@@ -238,10 +301,17 @@ async def _passthrough(
     tool_name: str,
     params: dict[str, str | int] | None = None,
     body: _JsonObject | None = None,
+    timeout: float = _TIMEOUT_S,
 ) -> str:
     """Proxy a factory route, returning its JSON on success or ``{error}``."""
     resp = await _request(
-        server_client, method, path, tool_name=tool_name, params=params, body=body
+        server_client,
+        method,
+        path,
+        tool_name=tool_name,
+        params=params,
+        body=body,
+        timeout=timeout,
     )
     if isinstance(resp, str):
         return resp
@@ -282,6 +352,7 @@ async def execute_factory_tool(
     conversation_id: str | None,
     agent_spec: object = None,
     publish_event: _PublishEvent | None = None,
+    workspace: Path | None = None,
 ) -> str:
     """
     Dispatch one factory tool call.
@@ -292,6 +363,7 @@ async def execute_factory_tool(
     :param conversation_id: The calling session id, stamped as the sender.
     :param agent_spec: The caller's spec; spawn reads ``factory_max_pods``.
     :param publish_event: SSE publish callback for spawn's ``session.created``.
+    :param workspace: The session's workspace; demo files may live under it.
     :returns: The JSON tool result.
     """
     if server_client is None:
@@ -317,6 +389,16 @@ async def execute_factory_tool(
             caller=conversation_id,
             agent_spec=agent_spec,
             publish_event=publish_event,
+        )
+    if tool_name == SYS_FACTORY_ASK:
+        return await _ask(args, server_client=server_client, caller=conversation_id)
+    if tool_name == SYS_FACTORY_PR:
+        return await _register_pr(args, server_client=server_client, caller=conversation_id)
+    if tool_name == SYS_FACTORY_ENV:
+        return await _report_env(args, server_client=server_client, caller=conversation_id)
+    if tool_name == SYS_FACTORY_DEMO:
+        return await _publish_demo(
+            args, server_client=server_client, caller=conversation_id, workspace=workspace
         )
     return _error(f"unknown factory tool {tool_name!r}")
 
@@ -419,6 +501,20 @@ async def _set_member(
         if not isinstance(title, str) or not title.strip():
             return _error(f"{tool} 'title' must be a non-empty string")
         patch["title"] = title.strip()
+    stage = args.get("stage")
+    if stage is not None:
+        if stage not in AGENT_STAGES:
+            return _error(
+                "invalid_stage",
+                stage=stage,
+                message=f"{tool} 'stage' must be one of {sorted(AGENT_STAGES)}",
+            )
+        if target != caller:
+            return _error(
+                "not_your_project",
+                message="a project lead claims its stage on itself; omit session_id",
+            )
+        patch["stage"] = stage
     if not patch:
         return _error(f"{tool} requires at least one field to change")
     return await _passthrough(
@@ -758,6 +854,8 @@ async def _spawn_member(
     if spawn.project:
         result["project"] = spawn.project
 
+    message, charter = await _brief_with_charter(spawn, server_client=server_client, caller=caller)
+    result.update(charter)
     brief = json.loads(
         await _passthrough(
             server_client,
@@ -767,7 +865,7 @@ async def _spawn_member(
             body={
                 "from_session_id": caller,
                 "to": new_id,
-                "message": spawn.message,
+                "message": message,
                 "kind": "brief",
                 "restart": False,
             },
@@ -786,6 +884,67 @@ async def _spawn_member(
 
     _publish_created(publish_event, caller=caller, session_id=new_id, agent_id=agent_id)
     return json.dumps(result)
+
+
+_TRUNCATED_MARK: Final = " […]"
+
+
+def append_charter(message: str, charter: str) -> str:
+    """
+    Append the stored charter to a spawn brief within :data:`MESSAGE_MAX_CHARS`.
+
+    On overflow the human-written part is shortened, never the charter.
+
+    :param message: The lead's brief, e.g. ``"Start. Your charter follows."``.
+    :param charter: The rendered ``CHARTER · <slug>`` block.
+    :returns: ``"<message>\n\n<charter>"``, the message clipped to fit.
+    """
+    separator = "\n\n"
+    head = message.rstrip()
+    room = MESSAGE_MAX_CHARS - len(charter) - len(separator)
+    if room <= len(_TRUNCATED_MARK):
+        # Only a degenerate charter fills the whole budget; it still wins.
+        return charter[:MESSAGE_MAX_CHARS]
+    if len(head) > room:
+        head = head[: room - len(_TRUNCATED_MARK)].rstrip() + _TRUNCATED_MARK
+    return f"{head}{separator}{charter}"
+
+
+async def _brief_with_charter(
+    spawn: _SpawnArgs,
+    *,
+    server_client: httpx.AsyncClient,
+    caller: str,
+) -> tuple[str, _JsonObject]:
+    """
+    The brief to deliver: the lead's message plus the project's stored charter.
+
+    Best effort: no project, no stored charter (404) or a failed lookup leave
+    the message unchanged; a failure is reported back as ``charter_error``.
+
+    :returns: ``(message, result fields)``.
+    """
+    if not spawn.project:
+        return spawn.message, {}
+    resp = await _request(
+        server_client,
+        "GET",
+        "/v1/factory/agent/charter",
+        tool_name=SYS_FACTORY_SPAWN,
+        params={"from_session_id": caller, "project": spawn.project},
+    )
+    if isinstance(resp, str):
+        return spawn.message, {"charter_error": json.loads(resp)}
+    if resp.status_code == 404:
+        return spawn.message, {}
+    body = _response_body(resp)
+    if resp.status_code >= 400:
+        error = _error_payload(resp.status_code, body, resp.text, SYS_FACTORY_SPAWN)
+        return spawn.message, {"charter_error": error}
+    text = body.get("text") if isinstance(body, dict) else None
+    if not isinstance(text, str) or not text.strip():
+        return spawn.message, {}
+    return append_charter(spawn.message, text.strip()), {"charter_attached": True}
 
 
 async def _set_mutual_supervision(
@@ -1082,3 +1241,613 @@ async def scoped_session_query(
     return await scope_check(
         conversation_id, target, server_client, tool_name=tool_name, id_key=id_key
     )
+
+
+# ── Cockpit reports: decisions, PRs, envs and demos ──────────────────────────
+
+
+def _clip(value: str, limit: int) -> str:
+    """Trim free text to *limit* characters, marking the cut."""
+    return value if len(value) <= limit else value[: limit - 1] + "…"
+
+
+def _optional_bool(args: _JsonObject, key: str, default: bool) -> bool | str:
+    """A boolean argument (``None`` means the default), else a JSON error."""
+    value = args.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        return _error(f"'{key}' must be a boolean")
+    return value
+
+
+def _decision_options(raw: object) -> list[_JsonObject] | str:
+    """Validate ``sys_factory_ask`` options; returns them or a JSON error."""
+    tool = SYS_FACTORY_ASK
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        return _error(f"{tool} 'options' must be a list of {{label, description?, recommended?}}")
+    if len(raw) > DECISION_MAX_OPTIONS:
+        return _error(f"{tool} takes at most {DECISION_MAX_OPTIONS} options")
+    options: list[_JsonObject] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            return _error(f"{tool} every option must be an object with a 'label'")
+        label = entry.get("label")
+        if not isinstance(label, str) or not label.strip():
+            return _error(f"{tool} every option needs a non-empty 'label'")
+        if len(label.strip()) > DECISION_OPTION_LABEL_MAX:
+            return _error(
+                f"{tool} option labels are at most {DECISION_OPTION_LABEL_MAX} characters; "
+                "put detail in 'description'",
+                label=label,
+            )
+        option: _JsonObject = {"label": label.strip()}
+        description = entry.get("description")
+        if isinstance(description, str) and description.strip():
+            option["description"] = _clip(description.strip(), DECISION_OPTION_DESCRIPTION_MAX)
+        if entry.get("recommended") is True:
+            option["recommended"] = True
+        options.append(option)
+    return options
+
+
+async def _ask(args: _JsonObject, *, server_client: httpx.AsyncClient, caller: str) -> str:
+    """``sys_factory_ask`` → ``POST /v1/factory/agent/decisions`` (or ``…/{ref}/withdraw``)."""
+    tool = SYS_FACTORY_ASK
+    question = args.get("question")
+    withdraw = args.get("withdraw")
+    if withdraw is not None:
+        ref = _DECISION_REF_RE.fullmatch(withdraw.strip()) if isinstance(withdraw, str) else None
+        if ref is None:
+            return _error(f"{tool} 'withdraw' must be a decision you asked, e.g. 'D-7'")
+        reason = question.strip() if isinstance(question, str) else ""
+        return await _passthrough(
+            server_client,
+            "POST",
+            f"/v1/factory/agent/decisions/D-{ref.group(1)}/withdraw",
+            tool_name=tool,
+            body={"from_session_id": caller, "reason": _clip(reason, _NOTE_MAX) or None},
+        )
+    if not isinstance(question, str) or not question.strip():
+        return _error(f"{tool} requires a non-empty 'question'")
+    question = " ".join(question.split())
+    if len(question) > DECISION_QUESTION_MAX:
+        return _error(
+            f"{tool} 'question' is at most {DECISION_QUESTION_MAX} characters; "
+            "put background in 'context'",
+            length=len(question),
+        )
+    options = _decision_options(args.get("options"))
+    if isinstance(options, str):
+        return options
+    body: _JsonObject = {"from_session_id": caller, "question": question, "options": options}
+    context = args.get("context")
+    if context is not None:
+        if not isinstance(context, str):
+            return _error(f"{tool} 'context' must be a string")
+        if context.strip():
+            body["context"] = _clip(context.strip(), DECISION_CONTEXT_MAX)
+    for key in ("blocking", "allow_text"):
+        value = _optional_bool(args, key, True)
+        if isinstance(value, str):
+            return value
+        body[key] = value
+    if not options and body["allow_text"] is False:
+        return _error(f"{tool} needs options when allow_text is false")
+    dedupe_key = args.get("dedupe_key")
+    if dedupe_key is not None:
+        if not isinstance(dedupe_key, str) or not dedupe_key.strip():
+            return _error(f"{tool} 'dedupe_key' must be a non-empty string")
+        body["dedupe_key"] = dedupe_key.strip()[:64]
+    return await _passthrough(
+        server_client, "POST", "/v1/factory/agent/decisions", tool_name=tool, body=body
+    )
+
+
+def _sha_arg(tool: str, args: _JsonObject, key: str) -> str | None | _JsonObject:
+    """An optional commit sha argument, lowercased; an error dict when malformed."""
+    value = args.get(key)
+    if value is None:
+        return None
+    if not isinstance(value, str) or not _ABBREV_SHA_RE.fullmatch(value.strip()):
+        return {"error": f"{tool} '{key}' must be a commit sha (7-40 hex characters)"}
+    return value.strip().lower()
+
+
+async def _register_pr(args: _JsonObject, *, server_client: httpx.AsyncClient, caller: str) -> str:
+    """``sys_factory_pr`` → ``POST /v1/factory/agent/prs``."""
+    tool = SYS_FACTORY_PR
+    url = args.get("url")
+    if parse_pr_url(url) is None:
+        return _error(
+            "not_a_pr_url",
+            url=url if isinstance(url, str) else None,
+            message="pass a GitHub PR URL like https://github.com/<owner>/<repo>/pull/<n>",
+        )
+    assert isinstance(url, str)
+    body: _JsonObject = {"from_session_id": caller, "url": url.strip()}
+    claim = args.get("claim")
+    if claim is not None:
+        if claim not in PR_CLAIMS:
+            return _error(f"{tool} 'claim' must be one of {list(PR_CLAIMS)}")
+        body["claim"] = claim
+    verdict = args.get("sentinel_verdict")
+    if verdict is not None:
+        if verdict not in SENTINEL_VERDICTS:
+            return _error(f"{tool} 'sentinel_verdict' must be one of {list(SENTINEL_VERDICTS)}")
+        body["sentinel_verdict"] = verdict
+    head_sha = _sha_arg(tool, args, "head_sha")
+    if isinstance(head_sha, dict):
+        return json.dumps(head_sha)
+    if head_sha is not None:
+        body["head_sha"] = head_sha
+    for key, limit in (("task", 64), ("note", _NOTE_MAX)):
+        value = args.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            return _error(f"{tool} '{key}' must be a string")
+        if value.strip():
+            body[key] = _clip(value.strip(), limit)
+    return await _passthrough(
+        server_client,
+        "POST",
+        "/v1/factory/agent/prs",
+        tool_name=tool,
+        body=body,
+        timeout=_PR_TIMEOUT_S,
+    )
+
+
+def _env_body(args: _JsonObject, caller: str) -> _JsonObject | str:
+    """Validate ``sys_factory_env`` arguments into the route body, or a JSON error."""
+    tool = SYS_FACTORY_ENV
+    state = args.get("state")
+    pr = args.get("pr")
+    if pr is not None and (isinstance(pr, bool) or not isinstance(pr, int) or pr < 1):
+        return _error(f"{tool} 'pr' must be a PR number")
+    allowed = PREVIEW_REPORT_STATES if pr is not None else ENV_STATES
+    # ``starting`` reads as ``deploying`` for a preview.
+    if pr is not None and state == "starting":
+        state = "deploying"
+    if state not in allowed:
+        what = f"preview of PR #{pr}" if pr is not None else "dev env"
+        return _error(
+            "invalid_state",
+            state=state,
+            message=f"a {what} reports state as one of {list(allowed)}",
+        )
+    env_id = args.get("env_id")
+    if not isinstance(env_id, str) or not env_id.strip():
+        return _error(f"{tool} requires 'env_id'")
+    body: _JsonObject = {"from_session_id": caller, "state": state, "env_id": env_id.strip()}
+    if pr is not None:
+        body["pr"] = pr
+    urls = args.get("urls")
+    if urls is not None:
+        if not isinstance(urls, dict) or not all(
+            isinstance(v, str) for v in urls.values() if v is not None
+        ):
+            return _error(f"{tool} 'urls' must map app/api/minio/tilt_ui to URLs")
+        body["urls"] = {k: v.strip() for k, v in urls.items() if isinstance(v, str) and v.strip()}
+    deployed = args.get("deployed")
+    if deployed is not None:
+        if not isinstance(deployed, dict):
+            return _error(f"{tool} 'deployed' must be {{sha, ref}}")
+        clean: _JsonObject = {}
+        for key in ("sha", "tooling_overlay"):
+            sha = _sha_arg(tool, deployed, key)
+            if isinstance(sha, dict):
+                return json.dumps(sha)
+            if sha is not None:
+                clean[key] = sha
+        ref = deployed.get("ref")
+        if isinstance(ref, str) and ref.strip():
+            clean["ref"] = ref.strip()[:255]
+        body["deployed"] = clean
+    slot = args.get("slot")
+    if slot is not None:
+        if isinstance(slot, bool) or not isinstance(slot, int) or not 1 <= slot <= 3:
+            return _error(f"{tool} 'slot' must be 1-3")
+        body["slot"] = slot
+    for key, limit in (("namespace", 63), ("note", _ENV_NOTE_MAX)):
+        value = args.get(key)
+        if isinstance(value, str) and value.strip():
+            body[key] = _clip(value.strip(), limit)
+    resources = args.get("resources")
+    if resources is not None:
+        if not isinstance(resources, list) or not all(
+            isinstance(r, dict) and isinstance(r.get("name"), str) for r in resources
+        ):
+            return _error(f"{tool} 'resources' must be a list of {{name, status?, ready?, …}}")
+        body["resources"] = resources[:100]
+    return body
+
+
+async def _report_env(args: _JsonObject, *, server_client: httpx.AsyncClient, caller: str) -> str:
+    """``sys_factory_env`` → ``PUT /v1/factory/agent/envs``."""
+    body = _env_body(args, caller)
+    if isinstance(body, str):
+        return body
+    return await _passthrough(
+        server_client, "PUT", "/v1/factory/agent/envs", tool_name=SYS_FACTORY_ENV, body=body
+    )
+
+
+# ── sys_factory_demo ─────────────────────────────────────────────────────────
+
+
+class _DemoFileError(Exception):
+    """A demo file the runner refuses to upload."""
+
+    def __init__(self, code: str, path: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+        self.path = path
+        self.message = message
+
+    def to_json(self) -> str:
+        """:returns: The tool error."""
+        return _error(self.code, path=self.path, message=self.message)
+
+
+@dataclass(frozen=True)
+class _DemoFile:
+    """One file to upload: where it is and how the demo describes it."""
+
+    path: Path
+    name: str
+    kind: str
+    size: int
+    caption: str | None = None
+    step: int | None = None
+
+    def meta(self) -> _JsonObject:
+        """:returns: The file's entry in the upload's ``meta.files``."""
+        entry: _JsonObject = {"name": self.name, "kind": self.kind}
+        if self.caption:
+            entry["caption"] = self.caption
+        if self.step is not None:
+            entry["step"] = self.step
+        return entry
+
+
+def demo_roots(workspace: Path | None) -> list[Path]:
+    """
+    Directories demo files may be read from: ``~/factory`` and the workspace.
+
+    :param workspace: The session's workspace, if known.
+    :returns: Resolved real paths (symlinks followed).
+    """
+    roots = [Path.home() / "factory"]
+    if workspace is not None:
+        roots.append(workspace)
+    return [Path(os.path.realpath(root)) for root in roots]
+
+
+def resolve_demo_file(raw: str, roots: list[Path], base: Path | None = None) -> tuple[Path, int]:
+    """
+    Resolve one demo file path and check it against the upload rules.
+
+    ``~`` is expanded and symlinks are followed, so a link out of the allowed
+    roots is refused like any other outside path.
+
+    :param raw: The path as given, e.g. ``"~/factory/demos/9630/7767f0d/video/demo.webm"``.
+    :param roots: Allowed roots from :func:`demo_roots`.
+    :param base: Directory a relative path is resolved against.
+    :returns: ``(real path, size in bytes)``.
+    :raises _DemoFileError: ``file_not_allowed``, ``file_missing`` or ``demo_too_large``.
+    """
+    candidate = Path(os.path.expanduser(raw.strip()))
+    if not candidate.is_absolute():
+        candidate = (base or roots[-1]) / candidate
+    real = Path(os.path.realpath(candidate))
+    if not any(real == root or root in real.parents for root in roots):
+        raise _DemoFileError(
+            "file_not_allowed",
+            raw,
+            "demo files must be under ~/factory or your workspace (symlinks are followed)",
+        )
+    file_type = demo_file_type(real.name)
+    if file_type is None:
+        raise _DemoFileError(
+            "file_not_allowed",
+            raw,
+            "allowed: .webm .mp4 .png .jpg .jpeg .gif .json .har .txt .md .log .ts .zip",
+        )
+    if not real.is_file():
+        raise _DemoFileError("file_missing", raw, "no such file")
+    size = real.stat().st_size
+    cap = DEMO_CLASS_MAX_BYTES[file_type[1]]
+    if size > cap:
+        raise _DemoFileError(
+            "demo_too_large",
+            raw,
+            f"{file_type[1]} files are at most {cap // (1024 * 1024)} MB; this is {size} bytes",
+        )
+    return real, size
+
+
+def _display_name(real: Path, manifest_dir: Path | None) -> str:
+    """The file's name in the demo: relative to the manifest directory when inside it."""
+    if manifest_dir is not None and manifest_dir in real.parents:
+        return real.relative_to(manifest_dir).as_posix()
+    return real.name
+
+
+def _read_manifest(raw: object, roots: list[Path]) -> tuple[Path, _JsonObject] | str:
+    """Read the harness's ``demo.json``; returns ``(path, manifest)`` or a JSON error."""
+    if not isinstance(raw, str) or not raw.strip():
+        return _error(f"{SYS_FACTORY_DEMO} 'manifest_path' must be a path")
+    try:
+        path, size = resolve_demo_file(raw, roots)
+    except _DemoFileError as exc:
+        return exc.to_json()
+    if size > DEMO_MANIFEST_MAX_BYTES:
+        return _error("demo_too_large", path=raw, message="demo.json is at most 2 MB")
+    try:
+        manifest = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        return _error(f"{SYS_FACTORY_DEMO} could not read the manifest: {exc}", path=raw)
+    if not isinstance(manifest, dict):
+        return _error(f"{SYS_FACTORY_DEMO} the manifest must be a JSON object", path=raw)
+    return path, manifest
+
+
+def _manifest_entries(manifest: _JsonObject) -> list[tuple[str, str, str | None, int | None]]:
+    """
+    Files a manifest points at: ``(relative path, kind, caption, step)``.
+
+    The video comes first, then the step screenshots, then the other artifacts,
+    so the caps drop the least useful files.
+    """
+    artifacts = manifest.get("artifacts")
+    named: list[tuple[str, str, str | None, int | None]] = []
+    for key, rel in artifacts.items() if isinstance(artifacts, dict) else []:
+        if isinstance(key, str) and isinstance(rel, str) and rel.strip():
+            kind = _MANIFEST_KINDS.get(key, "other")
+            named.append((rel.strip(), kind, key if kind == "other" else None, None))
+    shots: list[tuple[str, str, str | None, int | None]] = []
+    steps = manifest.get("steps")
+    for step in steps if isinstance(steps, list) else []:
+        if not isinstance(step, dict):
+            continue
+        shot, number, title = step.get("screenshot"), step.get("n"), step.get("title")
+        if isinstance(shot, str) and shot.strip():
+            shots.append(
+                (
+                    shot.strip(),
+                    "screenshot",
+                    title if isinstance(title, str) else None,
+                    number if isinstance(number, int) and not isinstance(number, bool) else None,
+                )
+            )
+    videos = [entry for entry in named if entry[1] == "video"]
+    rest = [entry for entry in named if entry[1] != "video"]
+    return [*videos, *shots, *rest]
+
+
+@dataclass
+class _DemoPlan:
+    """The files of one demo upload, checked against the caps."""
+
+    files: list[_DemoFile] = field(default_factory=list)
+    skipped: list[_JsonObject] = field(default_factory=list)
+    seen: set[Path] = field(default_factory=set)
+    total: int = 0
+
+    def add(self, item: _DemoFile, *, explicit: bool) -> None:
+        """Add a file; an explicit one over a cap raises, a manifest one is skipped."""
+        if item.path in self.seen:
+            return
+        reason: str | None = None
+        if len(self.files) >= DEMO_MAX_FILES:
+            reason = f"a demo has at most {DEMO_MAX_FILES} files"
+        elif self.total + item.size > DEMO_MAX_TOTAL_BYTES:
+            reason = f"a demo is at most {DEMO_MAX_TOTAL_BYTES // (1024 * 1024)} MB in all"
+        if reason is not None:
+            if explicit:
+                raise _DemoFileError("demo_too_large", str(item.path), reason)
+            self.skipped.append({"path": item.name, "reason": reason})
+            return
+        self.seen.add(item.path)
+        self.files.append(item)
+        self.total += item.size
+
+
+def _plan_demo_files(
+    raw_files: object,
+    manifest: tuple[Path, _JsonObject] | None,
+    roots: list[Path],
+) -> _DemoPlan | str:
+    """Resolve the explicit files, then the manifest's, into one checked plan."""
+    tool = SYS_FACTORY_DEMO
+    if raw_files is None:
+        raw_files = []
+    if not isinstance(raw_files, list):
+        return _error(f"{tool} 'files' must be a list of {{path, kind, caption?}}")
+    manifest_dir = manifest[0].parent if manifest is not None else None
+    plan = _DemoPlan()
+    try:
+        for entry in raw_files:
+            if not isinstance(entry, dict) or not isinstance(entry.get("path"), str):
+                return _error(f"{tool} every file needs a 'path'")
+            kind = entry.get("kind")
+            if kind not in DEMO_FILE_KINDS:
+                return _error(f"{tool} file 'kind' must be one of {list(DEMO_FILE_KINDS)}")
+            caption = entry.get("caption")
+            step = entry.get("step")
+            path, size = resolve_demo_file(entry["path"], roots, manifest_dir)
+            plan.add(
+                _DemoFile(
+                    path=path,
+                    name=_display_name(path, manifest_dir),
+                    kind=kind,
+                    size=size,
+                    caption=_clip(caption.strip(), _CAPTION_MAX)
+                    if isinstance(caption, str) and caption.strip()
+                    else None,
+                    step=step if isinstance(step, int) and not isinstance(step, bool) else None,
+                ),
+                explicit=True,
+            )
+    except _DemoFileError as exc:
+        return exc.to_json()
+    if manifest is not None and manifest_dir is not None:
+        for rel, kind, caption, step in _manifest_entries(manifest[1]):
+            try:
+                path, size = resolve_demo_file(rel, roots, manifest_dir)
+            except _DemoFileError as exc:
+                plan.skipped.append({"path": rel, "reason": exc.message})
+                continue
+            plan.add(
+                _DemoFile(
+                    path=path,
+                    name=_display_name(path, manifest_dir),
+                    kind=kind,
+                    size=size,
+                    caption=_clip(caption, _CAPTION_MAX) if caption else None,
+                    step=step,
+                ),
+                explicit=False,
+            )
+    if not plan.files:
+        return _error(f"{tool} needs at least one file (or a manifest that lists some)")
+    return plan
+
+
+def _demo_meta(args: _JsonObject, caller: str, manifest: _JsonObject | None) -> _JsonObject | str:
+    """Validate the demo's descriptive fields into the upload ``meta``."""
+    tool = SYS_FACTORY_DEMO
+    pr_url = args.get("pr_url")
+    if parse_pr_url(pr_url) is None:
+        return _error(
+            "not_a_pr_url",
+            url=pr_url if isinstance(pr_url, str) else None,
+            message="pass a GitHub PR URL like https://github.com/<owner>/<repo>/pull/<n>",
+        )
+    assert isinstance(pr_url, str)
+    head_sha = args.get("head_sha")
+    head = head_sha.strip().lower() if isinstance(head_sha, str) else ""
+    if not is_full_sha(head):
+        return _error(f"{tool} 'head_sha' must be the full 40-character commit sha")
+    title, summary = args.get("title"), args.get("summary")
+    if not isinstance(title, str) or not title.strip():
+        return _error(f"{tool} requires a 'title'")
+    if not isinstance(summary, str):
+        summary = manifest.get("summary") if manifest else None
+    status = args.get("status") or (manifest.get("status") if manifest else None) or "PASS"
+    if status not in DEMO_STATUSES:
+        return _error(f"{tool} 'status' must be one of {list(DEMO_STATUSES)}")
+    meta: _JsonObject = {
+        "from_session_id": caller,
+        "pr_url": pr_url.strip(),
+        "head_sha": head,
+        "title": _clip(title.strip(), 256),
+        "summary": _clip(summary.strip(), 1000) if isinstance(summary, str) else "",
+        "status": status,
+    }
+    plan_source = args.get("plan_source") or (manifest.get("plan_source") if manifest else None)
+    if isinstance(plan_source, str) and plan_source.strip():
+        meta["plan_source"] = plan_source.strip()[:32]
+    preview_url = args.get("preview_url")
+    if not isinstance(preview_url, str) and manifest is not None:
+        preview = manifest.get("preview")
+        preview_url = preview.get("app") if isinstance(preview, dict) else None
+    if isinstance(preview_url, str) and preview_url.strip():
+        meta["preview_url"] = preview_url.strip()
+    if manifest is not None:
+        meta["manifest"] = manifest
+    return meta
+
+
+def _comment_path(manifest: tuple[Path, _JsonObject] | None, pr: int, head: str) -> Path:
+    """Where the PR comment body is written: next to the manifest, else ``~/factory/demos``."""
+    if manifest is not None:
+        return manifest[0].parent / "pr-comment.md"
+    return Path.home() / "factory" / "demos" / str(pr) / head[:7] / "pr-comment.md"
+
+
+def _write_comment(path: Path, markdown: str) -> str | None:
+    """Write the PR comment body; returns the path, or ``None`` when it cannot be written."""
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(markdown, encoding="utf-8")
+    except OSError:
+        _logger.warning("could not write the demo PR comment to %s", path, exc_info=True)
+        return None
+    return str(path)
+
+
+def _read_files(files: list[_DemoFile]) -> list[tuple[str, tuple[str, bytes, str]]]:
+    """Read every file into multipart ``files`` parts (one ``files`` field each)."""
+    parts: list[tuple[str, tuple[str, bytes, str]]] = []
+    for item in files:
+        content_type = (demo_file_type(item.path.name) or ("application/octet-stream", ""))[0]
+        parts.append(("files", (item.path.name, item.path.read_bytes(), content_type)))
+    return parts
+
+
+async def _publish_demo(
+    args: _JsonObject,
+    *,
+    server_client: httpx.AsyncClient,
+    caller: str,
+    workspace: Path | None,
+) -> str:
+    """
+    ``sys_factory_demo``: check and read the files, then upload them as multipart.
+
+    ``POST /v1/factory/agent/demos`` gets a ``meta`` JSON part and one
+    ``files`` part per file, in ``meta.files`` order. The server's
+    ``comment_markdown`` is also written to ``pr-comment.md`` for
+    ``gh pr comment --body-file``.
+    """
+    tool = SYS_FACTORY_DEMO
+    roots = demo_roots(workspace)
+    manifest: tuple[Path, _JsonObject] | None = None
+    if args.get("manifest_path") is not None:
+        read = _read_manifest(args.get("manifest_path"), roots)
+        if isinstance(read, str):
+            return read
+        manifest = read
+    meta = _demo_meta(args, caller, manifest[1] if manifest else None)
+    if isinstance(meta, str):
+        return meta
+    plan = await asyncio.to_thread(_plan_demo_files, args.get("files"), manifest, roots)
+    if isinstance(plan, str):
+        return plan
+    meta["files"] = [item.meta() for item in plan.files]
+    try:
+        parts = await asyncio.to_thread(_read_files, plan.files)
+    except OSError as exc:
+        return _error("file_missing", message=f"could not read a demo file: {exc}")
+    try:
+        resp = await server_client.post(
+            "/v1/factory/agent/demos",
+            params={"from_session_id": caller},
+            data={"meta": json.dumps(meta)},
+            files=parts,
+            timeout=_DEMO_UPLOAD_TIMEOUT_S,
+        )
+    except Exception as exc:  # noqa: BLE001 — any transport error becomes a tool error.
+        return _error(f"{tool} upload failed: {exc}")
+    body = _response_body(resp)
+    if resp.status_code >= 400:
+        return json.dumps(_error_payload(resp.status_code, body, resp.text, tool))
+    if not isinstance(body, dict):
+        return _error(f"{tool}: unexpected response from the server")
+    result: _JsonObject = dict(body)
+    if plan.skipped:
+        result["skipped"] = plan.skipped
+    markdown = body.get("comment_markdown")
+    parsed = parse_pr_url(meta["pr_url"])
+    if isinstance(markdown, str) and markdown and parsed is not None:
+        path = _comment_path(manifest, parsed[1], meta["head_sha"])
+        written = await asyncio.to_thread(_write_comment, path, markdown)
+        if written is not None:
+            result["comment_path"] = written
+            result["next"] = f"gh pr comment {meta['pr_url']} --body-file {written}"
+    return json.dumps(result)

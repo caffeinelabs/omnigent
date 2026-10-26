@@ -2,8 +2,8 @@
 
 A lead and a project lead (PL) run as top-level sessions on one live runner,
 each on a scripted openai-agents agent (mock LLM) whose spec declares
-``executor.config.factory_role``. The test drives the REST API and the real
-runner factory tools through seven steps:
+``executor.config.factory_role``. The first journey drives the REST API and
+the real runner factory tools through seven steps:
 
 1. the lead's first factory call (``sys_factory_roster``) stamps its labels;
 2. a second top-level session joins with factory labels (the PL);
@@ -22,6 +22,12 @@ Two steps stand in for what a claude-native member does on its own:
 - Step 5 forces the pass through a test-only debug route
   (``factory_debug_router``) on a clock shifted forward, because heartbeats
   need a member idle for at least two minutes of wall time.
+
+A second journey has a PL report to the cockpit through the real runner
+tools: it asks the human a question (``sys_factory_ask``), registers its PR
+(``sys_factory_pr``), reports the PR's factory preview (``sys_factory_env``)
+and publishes a demo of two local files (``sys_factory_demo``), which the
+server then serves back with byte ranges.
 
 The stack is this module's own (factory flag on, automatic ticks parked), so
 it never changes the shared live server other journeys use.
@@ -80,6 +86,7 @@ class FactoryStack:
     client: httpx.Client
     mock_llm_url: str
     agents_dir: Path
+    db_uri: str
 
 
 def _stop(proc: subprocess.Popen[bytes], timeout: float) -> None:
@@ -200,6 +207,7 @@ def factory_stack(
                 client=client,
                 mock_llm_url=mock_llm_server_url,
                 agents_dir=root / "agents",
+                db_uri=f"sqlite:///{root / 'factory.db'}",
             )
     finally:
         _stop(runner, 5)
@@ -249,14 +257,17 @@ def _create_session(
     title: str,
     labels: dict[str, str] | None = None,
     bind_runner: bool = True,
+    workspace: Path | None = None,
 ) -> str:
     body: dict[str, Any] = {"agent_id": agent_id, "title": title}
     if labels:
         body["labels"] = labels
+    if workspace is not None:
+        body["workspace"] = str(workspace)
     resp = stack.client.post(
         "/v1/sessions", json=body, headers={"Origin": OMNIGENT_INTERNAL_WS_ORIGIN}
     )
-    resp.raise_for_status()
+    assert resp.status_code < 400, resp.text
     session_id = str(resp.json()["id"])
     if bind_runner:
         stack.client.patch(
@@ -500,3 +511,133 @@ def test_factory_tree_messaging_supervision_and_scope(factory_stack: FactoryStac
     assert rest_post.status_code == 403, rest_post.text
     assert rest_post.json()["error"]["code"] == "session_out_of_factory"
     assert not _texts(stack, plain, "user")
+
+
+def test_factory_cockpit_reports_from_a_project_lead(
+    factory_stack: FactoryStack, tmp_path: Path
+) -> None:
+    from omnigent.stores.factory_store.sqlalchemy_store import SqlAlchemyFactoryStore
+
+    stack = factory_stack
+    run = uuid.uuid4().hex[:8]
+    pl_model = f"mock-cockpit-pl-{run}"
+    slug = f"cockpit-{run}"
+    number = 9600 + int(run[:3], 16) % 300
+    pr_url = f"https://github.com/caffeinelabs/app/pull/{number}"
+    sha = (run * 5)[:40]
+    lead_agent = _register_agent(
+        stack, name=f"cockpit-lead-{run}", model=f"mock-cockpit-lead-{run}", role="lead"
+    )
+    pl_agent = _register_agent(
+        stack, name=f"cockpit-pl-{run}", model=pl_model, role="project_lead"
+    )
+    lead = _create_session(stack, agent_id=lead_agent, title="Atlas", bind_runner=False)
+    workspace = tmp_path / "workspace"
+    video = workspace / "demo" / "video.webm"
+    shot = workspace / "demo" / "shots" / "01-landing.png"
+    shot.parent.mkdir(parents=True)
+    video.write_bytes(b"\x1aE\xdf\xa3" + bytes(range(256)) * 64)
+    shot.write_bytes(b"\x89PNG\r\n\x1a\n" + b"p" * 64)
+    pl = _create_session(
+        stack,
+        agent_id=pl_agent,
+        title=f"PL · {slug}",
+        labels={
+            F.LABEL_ID: lead,
+            F.LABEL_ROLE: F.ROLE_PROJECT_LEAD,
+            F.LABEL_PROJECT: slug,
+            F.LABEL_PARENT: lead,
+            F.LABEL_STATE: F.STATE_ACTIVE,
+        },
+        workspace=workspace,
+    )
+    # The stored project row (what the cockpit's start form writes) scopes PRs to its repo.
+    store = SqlAlchemyFactoryStore(stack.db_uri)
+    store.upsert_project(lead, slug, title="ENV badge", repo="caffeinelabs/app", pl_session_id=pl)
+    app = f"https://app-{run}-p{number}.envs.sandbox.caffeinelabs.io"
+    configure_mock_llm(
+        stack.mock_llm_url,
+        [
+            {
+                "tool_calls": [
+                    _call(
+                        "call_ask",
+                        "sys_factory_ask",
+                        {
+                            "question": f"Where should the badge go? {run}",
+                            "options": [
+                                {"label": "Header", "recommended": True},
+                                {"label": "Footer"},
+                            ],
+                        },
+                    ),
+                    _call("call_pr", "sys_factory_pr", {"url": pr_url, "claim": "opened"}),
+                    _call(
+                        "call_env",
+                        "sys_factory_env",
+                        {
+                            "state": "ready",
+                            "env_id": f"{run}-p{number}",
+                            "urls": {"app": app},
+                            "deployed": {"sha": sha},
+                            "pr": number,
+                        },
+                    ),
+                    _call(
+                        "call_demo",
+                        "sys_factory_demo",
+                        {
+                            "pr_url": pr_url,
+                            "head_sha": sha,
+                            "title": "Badge in the header",
+                            "summary": "The ENV badge shows in the header",
+                            "files": [
+                                {"path": "demo/video.webm", "kind": "video"},
+                                {"path": str(shot), "kind": "screenshot", "caption": "Header"},
+                            ],
+                            "preview_url": app,
+                        },
+                    ),
+                ]
+            },
+            {"text": f"reported {run}"},
+        ],
+        key=pl_model,
+    )
+    _run_turn(stack, pl, "Report to the cockpit.")
+
+    asked = _tool_output(stack, pl, "call_ask")
+    registered = _tool_output(stack, pl, "call_pr")
+    preview = _tool_output(stack, pl, "call_env")
+    demo = _tool_output(stack, pl, "call_demo")
+    assert asked["decision"] == "D-1" and asked["deduped"] is False, asked
+    assert registered["project"] == slug and registered["ready"] is False, registered
+    assert preview["preview"]["state"] == "ready", preview
+    assert demo["status"] == "PASS", demo
+    marker = f"<!-- factory:demo sha={sha} status=PASS demo={demo['demo_id']} -->"
+    assert demo["comment_markdown"].startswith(marker)
+    assert Path(demo["comment_path"]).read_text().startswith(marker)
+
+    [decision] = store.list_decisions(factory_id=lead, status="open")
+    assert decision.asked_by_session_id == pl and decision.project_slug == slug
+    pr = store.get_pr_by_number(lead, "caffeinelabs/app", number)
+    assert pr is not None and pr.source == "tool" and pr.project_slug == slug
+    assert pr.preview is not None and pr.preview["urls"] == {"app": app}
+    assert pr.preview["deployed"]["sha"] == sha
+    [row] = store.list_demos(lead, number)
+    assert row.id == demo["demo_id"] and row.session_id == pl and row.pr_id == pr.id
+    assert [(f["name"], f["kind"]) for f in row.files] == [
+        ("video.webm", "video"),
+        ("01-landing.png", "screenshot"),
+    ]
+    kinds = {e.kind for e in store.list_events(lead, limit=50)}
+    assert {"decision.opened", "pr.discovered", "pr.claim", "preview.reported"} <= kinds
+    assert "demo.published" in kinds
+
+    # The cockpit plays the video back from the server, seekable by byte range.
+    video_url = f"/v1/factory/demos/{row.id}/files/{row.files[0]['file_id']}"
+    full = stack.client.get(video_url)
+    part = stack.client.get(video_url, headers={"Range": "bytes=0-99"})
+    assert full.status_code == 200 and full.content == video.read_bytes()
+    assert full.headers["content-type"] == "video/webm"
+    assert part.status_code == 206 and part.content == video.read_bytes()[:100]

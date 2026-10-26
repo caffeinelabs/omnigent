@@ -17,10 +17,11 @@ Omnigent terminal) and denies:
 - ``git push`` to a protected branch, of tags, or of every branch;
 - PR writes and pushes that name a repo outside ``write_repos`` (or inside
   ``deny_repos``) by ``-R``, URL or ``GH_REPO``;
-- per role: any push or PR creation (CLI or API) by a lead or reviewer, the
+- per role: any push or PR creation (CLI or API) by a lead, reviewer or the
+  demo agent, every PR write but ``gh pr comment`` by the demo agent, the
   merge gate for anyone but the project lead, and env lifecycle
-  (``tilt up|down``, ``pnpm factory:up|down`` or the script behind it,
-  ``kubectl delete ns``) for anyone but env_keeper and the project lead.
+  (``tilt up|down|ci``, ``pnpm factory:up|down|preview`` or the script behind
+  it, ``kubectl delete ns``) for anyone but env_keeper and the project lead.
   A sub-agent is also held to its parent's guardrails (stricter wins), so the
   project lead's fence must admit what its env_keeper runs.
 
@@ -41,6 +42,7 @@ from fnmatch import fnmatchcase
 from typing import Any, TypeAlias
 
 from omnigent.factory import (
+    ROLE_DEMO,
     ROLE_ENV_KEEPER,
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
@@ -82,8 +84,8 @@ ALLOW_PROTECTED_LABEL = "factory:allow-protected"
 # Text typed into an Omnigent terminal pane runs like a shell command.
 _TERMINAL_INPUT_TOOLS: frozenset[str] = frozenset({"sys_terminal_send"})
 
-# Roles that never push or open PRs: leads delegate, reviewers only comment.
-_NO_PUSH_ROLES: frozenset[str] = frozenset({ROLE_LEAD, ROLE_REVIEWER})
+# Roles that never push or open PRs: leads delegate, reviewers and the demo agent comment.
+_NO_PUSH_ROLES: frozenset[str] = frozenset({ROLE_LEAD, ROLE_REVIEWER, ROLE_DEMO})
 
 # Commands whose arguments are data, not commands (``echo git push`` is no push).
 _INERT_HEADS: frozenset[str] = frozenset(
@@ -119,13 +121,13 @@ _PYTHON_RUNNERS: frozenset[str] = frozenset(
 )
 _PYTHON_RE = re.compile(r"python[0-9.]*")
 _MERGE_GATE_RE = re.compile(r"omnigent[./]factory_merge\b|\bimport\s+factory_merge\b")
-_ENV_SCRIPT_RE = re.compile(r"factory:(up|down)")
-# What ``pnpm factory:up|down`` runs: ``node … scripts/factory.ts up|down``.
+_ENV_SCRIPT_RE = re.compile(r"factory:(up|down|preview)")
+# What ``pnpm factory:up|down|preview`` runs: ``node … scripts/factory.ts up|down|preview``.
 _JS_RUNNERS: frozenset[str] = frozenset(
     {"node", "nodejs", "tsx", "ts-node", "bun", "bunx", "deno", "npx", "pnpx"}
 )
 _ENV_SCRIPT_FILE_RE = re.compile(r"(?:^|/)factory\.[cm]?[jt]s$")
-_ENV_SCRIPT_VERBS: frozenset[str] = frozenset({"up", "down"})
+_ENV_SCRIPT_VERBS: frozenset[str] = frozenset({"up", "down", "preview"})
 _TILT_LIFECYCLE: frozenset[str] = frozenset({"up", "down", "ci"})
 
 _KUBECTL_VALUE_FLAGS: frozenset[str] = frozenset(
@@ -170,6 +172,8 @@ _GH_RELEASE_WRITE_ACTIONS: frozenset[str] = frozenset(
 )
 _GH_VARIABLE_WRITE_ACTIONS: frozenset[str] = frozenset({"set", "delete"})
 _GH_WORKFLOW_WRITE_ACTIONS: frozenset[str] = frozenset({"run", "enable", "disable"})
+# The demo agent posts its demo comment and writes nothing else on a PR.
+_DEMO_PR_ACTIONS: frozenset[str] = frozenset({"comment"})
 _GH_LABEL_WRITE_GROUPS: frozenset[str] = frozenset({"pr", "issue"})
 _GH_LABEL_WRITE_ACTIONS: frozenset[str] = frozenset({"create", "edit"})
 
@@ -211,6 +215,14 @@ _GH_API_ACCOUNT_PATH = re.compile(
 _GH_API_PR_CREATE_PATH = re.compile(r"/repos/[^/]+/[^/]+/pulls/?")
 _GH_API_PUSH_PATH = re.compile(r"/repos/[^/]+/[^/]+/(git|contents)(/|$)")
 _GH_API_REPO = re.compile(r"/repos/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)")
+# API spellings of PR writes; for the demo agent only commenting stays open.
+_GH_API_PR_WRITE_PATH = re.compile(r"/repos/[^/]+/[^/]+/(pulls|issues)(/|$)")
+_GH_API_COMMENT_PATH = re.compile(r"/repos/[^/]+/[^/]+/issues/(\d+/comments|comments/\d+)/?")
+_GRAPHQL_PR_WRITE = re.compile(
+    r"\b(createPullRequest|updatePullRequest\w*|closePullRequest|reopenPullRequest"
+    r"|(add|submit|dismiss)PullRequestReview\w*|markPullRequestReadyForReview"
+    r"|convertPullRequestToDraft|mergePullRequest)\b"
+)
 _GRAPHQL_ADMIN_MUTATION = re.compile(
     r"\b(mergePullRequest|enablePullRequestAutoMerge|mergeBranch|createCommitOnBranch"
     r"|(create|update|delete)(BranchProtectionRule|RepositoryRuleset)"
@@ -246,6 +258,11 @@ _ENV_HINT = (
     "`kubectl get|logs`, or ask your project lead to have env_keeper act"
 )
 _HUMAN_ONLY_HINT = "human-only; escalate through your lead with [NEEDS HUMAN] if it is needed"
+_DEMO_HINT = (
+    "it only records evidence against the preview. Post the demo with "
+    "`gh pr comment <url> --body-file <comment_path>` and report DEMO PASS|PARTIAL|FAIL "
+    "to your project lead, who owns the PR and its env"
+)
 
 
 def _decision(reason: str) -> _Json:
@@ -759,7 +776,15 @@ class _RoleGuard:
                 '`gh pr review <url> --comment --body "<!-- factory:review … -->…"` '
                 "and leave fixes to the implementer."
             )
+        if self.role == ROLE_DEMO:
+            return f"The demo agent never `{what}`: {_DEMO_HINT}."
         return None
+
+    def _demo_pr_reason(self, what: str) -> str | None:
+        """DENY every PR write but commenting for the demo agent."""
+        if self.role != ROLE_DEMO:
+            return None
+        return f"`{what}` is blocked for the demo agent: {_DEMO_HINT}."
 
     def _repo_reason(self, repo: str, what: str) -> str | None:
         """
@@ -819,6 +844,10 @@ class _RoleGuard:
             reason = self._no_push_reason("gh pr create")
             if reason:
                 return reason
+        if group == "pr" and action in _GH_PR_WRITE_ACTIONS - _DEMO_PR_ACTIONS:
+            reason = self._demo_pr_reason(f"gh pr {action}")
+            if reason:
+                return reason
         if (
             group in _GH_LABEL_WRITE_GROUPS
             and action in _GH_LABEL_WRITE_ACTIONS
@@ -876,6 +905,8 @@ class _RoleGuard:
                 )
             if any(ALLOW_PROTECTED_LABEL in field for field in fields):
                 return self._label_reason()
+            if any(_GRAPHQL_PR_WRITE.search(field) for field in fields):
+                return self._demo_pr_reason("gh api graphql (pull request mutation)")
             return None
         if method not in _WRITE_METHODS:
             return None
@@ -895,6 +926,10 @@ class _RoleGuard:
                 return reason
         if _GH_API_PUSH_PATH.match(path):
             reason = self._no_push_reason("git push")
+            if reason:
+                return reason
+        if _GH_API_PR_WRITE_PATH.match(path) and not _GH_API_COMMENT_PATH.fullmatch(path):
+            reason = self._demo_pr_reason(what)
             if reason:
                 return reason
         reason = self._api_ref_reason(path, fields, what)
@@ -1068,12 +1103,12 @@ class _RoleGuard:
         return self._env_reason(f"tilt {verbs[0]}") if verbs else None
 
     def _check_package_script(self, manager: str, args: list[str]) -> str | None:
-        """DENY ``pnpm [run] factory:up|down`` for every role but env_keeper."""
+        """DENY ``pnpm [run] factory:up|down|preview`` for every role but env_keeper."""
         scripts = [arg for arg in args if _ENV_SCRIPT_RE.fullmatch(arg)]
         return self._env_reason(f"{manager} {scripts[0]}") if scripts else None
 
     def _check_env_script_file(self, runner: str, args: list[str]) -> str | None:
-        """DENY ``node … scripts/factory.ts up|down`` for every role but env_keeper."""
+        """DENY ``node … scripts/factory.ts up|down|preview`` for every role but env_keeper."""
         for index, arg in enumerate(args):
             if not _ENV_SCRIPT_FILE_RE.search(arg):
                 continue
@@ -1147,7 +1182,7 @@ def factory_role_guard(
     which keeps denying catastrophic commands (force-push, ``rm -rf /``).
 
     :param role: The agent's factory role: ``lead``, ``project_lead``, ``ic``,
-        ``env_keeper`` or ``reviewer``.
+        ``env_keeper``, ``reviewer`` or ``demo``.
     :param write_repos: Repos PR writes and URL pushes may target, e.g.
         ``["caffeinelabs/app"]``.
     :param protected_branches: Branches no agent pushes to, e.g.
@@ -1201,8 +1236,9 @@ POLICY_REGISTRY: list[dict[str, object]] = [
         "description": "DENY-only (never asks) guard for unattended software-factory agents: "
         "blocks raw `gh pr merge` (merges go through `python -m omnigent.factory_merge`), "
         "GitHub admin writes, pushes to protected branches or tags, writes to repos outside "
-        "write_repos, and role-restricted actions (lead pushes, the merge gate outside the "
-        "project lead, env lifecycle outside env_keeper).",
+        "write_repos, and role-restricted actions (lead, reviewer and demo pushes, demo PR "
+        "writes other than comments, the merge gate outside the project lead, env lifecycle "
+        "including factory previews outside env_keeper).",
         "params_schema": {
             "type": "object",
             "properties": {

@@ -20,6 +20,7 @@ from typing import Any
 import pytest
 
 from omnigent.factory import (
+    ROLE_DEMO,
     ROLE_ENV_KEEPER,
     ROLE_IC,
     ROLE_LEAD,
@@ -231,7 +232,6 @@ _ALLOWED_FOR_ALL = [
     "gh repo view caffeinelabs/app",
     "gh workflow list",
     "gh pr comment 7 --body 'please do not gh pr merge this by hand'",
-    "gh pr edit 7 --body 'see https://github.com/caffeinelabs/omnigent/pull/3'",
     "echo git push origin main",
     "grep -rn 'gh pr merge' docs/",
     "tilt get uiresources",
@@ -261,6 +261,12 @@ _ALLOWED_FOR_ALL = [
     "gh api repos/caffeinelabs/app/pulls -X GET",
     "node scripts/factory.ts status",
     "node --experimental-strip-types scripts/factory.ts urls",
+    # What the demo agent runs against a preview.
+    "node ~/factory/demo-harness/run.mjs --spec demo.spec.ts --out . --sha abc",
+    "cd ~/factory/demo-harness && npm ci && npx playwright test",
+    "curl -fsS https://app-x-p7.envs.sandbox.caffeinelabs.io/__factory/preview",
+    "gh pr comment https://github.com/caffeinelabs/app/pull/7 --body-file pr-comment.md",
+    "gh api -X POST repos/caffeinelabs/app/issues/7/comments -f body=demo",
 ]
 
 
@@ -350,17 +356,23 @@ _ENV_LIFECYCLE = [
     "scripts/factory.ts up",
     "cd wt/env && node scripts/factory.ts down",
     "npx tsx ./scripts/factory.ts up",
+    # Factory previews are env lifecycle too, every verb.
+    "pnpm factory:preview up --name p9630 --pr 9630 --sha 7767f0d",
+    "pnpm -s factory:preview list",
+    "pnpm run factory:preview down --name p9630",
+    "cd ~/workspace/wt/preview-p9630 && pnpm factory:preview status --name p9630",
+    "node --experimental-strip-types scripts/factory.ts preview up --name p1",
 ]
 
 
 @pytest.mark.parametrize(
     ("role", "command", "expected"),
-    _cases([ROLE_LEAD, ROLE_REVIEWER], _FEATURE_PUSHES + _PR_CREATES, "DENY")
+    _cases([ROLE_LEAD, ROLE_REVIEWER, ROLE_DEMO], _FEATURE_PUSHES + _PR_CREATES, "DENY")
     + _cases(_PUSHING_ROLES, _FEATURE_PUSHES + _PR_CREATES, "ALLOW"),
 )
 def test_pushes_and_pr_creation_by_role(role: str, command: str, expected: str) -> None:
     """
-    Leads (and reviewers) never push or open PRs; the others push feature branches.
+    Leads, reviewers and the demo agent never push or open PRs; the others push.
 
     A lead that pushes bypasses its project lead's review pipeline; a PL / IC /
     env_keeper that cannot push a feature branch or open a PR in
@@ -401,6 +413,51 @@ def test_env_lifecycle_is_env_keeper_or_project_lead(
     assert decision["result"] == expected, decision.get("reason")
     if expected == "DENY":
         assert "env_keeper" in decision["reason"]
+
+
+# PR writes other than commenting: fine for the PR's owners, never for the demo agent.
+_PR_WRITES = [
+    "gh pr edit 7 --body 'see https://github.com/caffeinelabs/omnigent/pull/3'",
+    "gh pr edit https://github.com/caffeinelabs/app/pull/7 --add-label factory:demo",
+    "gh pr ready 7",
+    "gh pr close 7 --comment superseded",
+    "gh pr reopen 7",
+    "gh api -X PATCH repos/caffeinelabs/app/pulls/7 -f title=x",
+    "gh api -X PATCH repos/caffeinelabs/app/issues/7 -f state=closed",
+    "gh api -X POST repos/caffeinelabs/app/issues/7/labels -f labels[]=x",
+    "gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {}) { x } }'",
+    "gh api graphql -f query='mutation { updatePullRequest(input: {}) { clientMutationId } }'",
+]
+_REVIEWS = [
+    "gh pr review 7 --comment --body '<!-- factory:review sha=abc verdict=APPROVE -->'",
+    "gh api -X POST repos/caffeinelabs/app/pulls/7/reviews -f event=COMMENT -f body=x",
+]
+
+
+@pytest.mark.parametrize(
+    ("role", "command", "expected"),
+    _cases([ROLE_DEMO], _PR_WRITES + _REVIEWS, "DENY")
+    + _cases([ROLE_PROJECT_LEAD, ROLE_IC, ROLE_ENV_KEEPER], _PR_WRITES, "ALLOW")
+    + _cases([ROLE_REVIEWER, ROLE_IC], _REVIEWS, "ALLOW"),
+)
+def test_the_demo_agent_only_comments_on_prs(role: str, command: str, expected: str) -> None:
+    """
+    The demo agent posts its demo comment and nothing else on a PR.
+
+    It records evidence; editing the PR body, reviewing, marking it ready or
+    closing it would let it act as the PR's owner or its reviewer.
+    """
+    decision = _decide(role, command)
+    assert decision["result"] == expected, decision.get("reason")
+    if expected == "DENY":
+        assert "demo agent" in decision["reason"]
+        assert "gh pr comment" in decision["reason"]
+
+
+def test_demo_comments_still_respect_write_repos() -> None:
+    outside = _decide(ROLE_DEMO, "gh pr comment https://github.com/caffeinelabs/infra/pull/5 -b x")
+    assert outside["result"] == "DENY"
+    assert "caffeinelabs/infra" in outside["reason"]
 
 
 @pytest.mark.parametrize("tool", sorted(SHELL_TOOLS))
