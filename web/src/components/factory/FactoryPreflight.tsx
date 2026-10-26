@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { CircleCheckIcon, CircleXIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { FACTORY_DOCS_URL } from "@/lib/factory";
 import { beginGithubConnect } from "@/lib/githubIntegration";
 import type { Preflight } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
@@ -55,7 +56,20 @@ function rows(preflight: Preflight, returnTo: string): PreflightRow[] {
         missingAgents.length === 0
           ? "Factory agents installed"
           : `Missing agent${missingAgents.length > 1 ? "s" : ""}: ${missingAgents.join(", ")}`,
-      fix: <span>Install the factory bundles (see docs/FACTORY.md)</span>,
+      fix: (
+        <span>
+          Install the factory bundles (see{" "}
+          <a
+            href={FACTORY_DOCS_URL}
+            target="_blank"
+            rel="noreferrer"
+            className="font-mono underline underline-offset-2 hover:text-foreground"
+          >
+            docs/FACTORY.md
+          </a>
+          )
+        </span>
+      ),
     },
     {
       key: "sandbox",
@@ -69,7 +83,14 @@ function rows(preflight: Preflight, returnTo: string): PreflightRow[] {
       label: preflight.factory_enabled
         ? "Factory enabled on this server"
         : "Factory is off on this server",
-      fix: <span>Ask an admin to set OMNIGENT_FACTORY_ENABLED=1</span>,
+      fix: (
+        <span>
+          Ask an admin to set{" "}
+          <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground">
+            OMNIGENT_FACTORY_ENABLED=1
+          </code>
+        </span>
+      ),
     },
   ];
 }
@@ -77,10 +98,13 @@ function rows(preflight: Preflight, returnTo: string): PreflightRow[] {
 /**
  * The start checklist: GitHub, the factory agents, a sandbox host and the
  * server switch, each with a fix when it fails.
+ *
+ * @param returnTo - Where the GitHub connect round-trip lands; defaults to
+ *   this page as the browser sees it (any embed basename included).
  */
 export function FactoryPreflight({
   preflight,
-  returnTo = "/factory",
+  returnTo = `${window.location.pathname}${window.location.search}`,
 }: {
   preflight: Preflight;
   returnTo?: string;

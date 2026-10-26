@@ -12,6 +12,24 @@ export const FACTORY_PROJECT_LABEL_KEY = "omnigent.factory.project";
 export const FACTORY_SUMMARY_LABEL_KEY = "omnigent.factory.summary";
 export const FACTORY_HEALTH_LABEL_KEY = "omnigent.factory.health";
 
+/** The factory guide (fork docs), linked from the cockpit's preflight checks. */
+export const FACTORY_DOCS_URL =
+  "https://github.com/caffeinelabs/omnigent/blob/staging/docs/FACTORY.md";
+
+const LEGACY_ID = /^(?:[a-z]+_)?([0-9a-f]{32})$/;
+
+/**
+ * A factory id as the server keys it: bare lowercase hex, without dashes or a
+ * legacy `conv_` prefix, so label ids match `factory_changed` frames.
+ *
+ * @returns The bare hex id, or the trimmed input when it is not a uuid.
+ */
+export function normalizeFactoryId(raw: string): string {
+  const trimmed = raw.trim();
+  const match = LEGACY_ID.exec(trimmed.toLowerCase().replaceAll("-", ""));
+  return match?.[1] ?? trimmed;
+}
+
 /** Beacon health values that need a human's eye (rendered in the warning colour). */
 const WARNING_HEALTH: ReadonlySet<string> = new Set(["degraded", "blocked", "dead"]);
 

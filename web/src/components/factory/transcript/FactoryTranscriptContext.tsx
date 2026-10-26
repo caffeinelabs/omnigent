@@ -15,13 +15,15 @@ import {
 } from "react";
 import { useInRouterContext } from "react-router-dom";
 import type { Conversation, ConversationsPage } from "@/hooks/useConversations";
-import { FACTORY_PROJECT_LABEL_KEY, FACTORY_ROLE_LABEL_KEY } from "@/lib/factory";
+import {
+  FACTORY_ID_LABEL_KEY,
+  FACTORY_PROJECT_LABEL_KEY,
+  FACTORY_ROLE_LABEL_KEY,
+  normalizeFactoryId,
+} from "@/lib/factory";
 import { Link } from "@/lib/routing";
 import type { Session } from "@/lib/types";
 import { useChatStore } from "@/store/chatStore";
-
-/** Label carrying a member's factory root id (mirrors `omnigent/factory.py`). */
-export const FACTORY_ID_LABEL_KEY = "omnigent.factory.id";
 
 export type FactoryDeliveryState = "queued" | "delivered" | "failed";
 
@@ -115,10 +117,13 @@ export function useFactoryTranscriptEnv(): FactoryTranscriptEnv {
     client,
     provided?.factoryId === undefined ? conversationId : null,
   );
+  const labelId = snapshot?.labels?.[FACTORY_ID_LABEL_KEY];
   const factoryId =
     provided?.factoryId !== undefined
       ? provided.factoryId
-      : (snapshot?.labels?.[FACTORY_ID_LABEL_KEY] ?? null);
+      : labelId
+        ? normalizeFactoryId(labelId)
+        : null;
   const providedResolve = provided?.resolveSession;
   const resolveSession = useCallback(
     (sessionId: string) => providedResolve?.(sessionId) ?? lookupCachedSession(client, sessionId),

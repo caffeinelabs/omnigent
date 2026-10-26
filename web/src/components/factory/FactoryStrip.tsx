@@ -1,19 +1,18 @@
 /**
  * The chat-header factory strip: where this session sits in its factory.
  *
- *   PL:  [factory] Atlas factory › api-version · ● Verify 18m · PR #9630 ●●●●●● · Preview ● · $7.10 · Open cockpit →
- *   IC:  [factory] Atlas factory › api-version › ic_codex:version-endpoint · PR #9630 ●●●●●● · Open cockpit →
+ *   PL:   [factory] Atlas factory › api-version ● Ready 4h 46m PR #9630 ●●●●●● Preview ● $7.10 Open cockpit →
+ *   IC:   [factory] Atlas factory › api-version › ic_codex:version-endpoint PR #9630 ●●●●●● Open cockpit →
+ *   Lead: [factory] Atlas factory 2 decisions 1 ready for review 3 projects $41.20 Open cockpit →
  *
  * Sub-agents carry no factory labels, so their root session's labels are
- * read. The head (name › project · stage) never wraps and truncates the name,
- * then the project; the other segments wrap onto a clipped second line when
- * the header is narrow, so the least important drop out whole.
+ * read. A narrow header drops the lowest-priority parts whole (see stripFit):
+ * the stage, the PR gates and the arrow into the cockpit stay longest.
  */
 
-import type { ReactNode } from "react";
+import { createContext, type ReactNode, useContext, useRef } from "react";
 import { ArrowRightIcon, ChevronRightIcon, FactoryIcon } from "lucide-react";
 import { useFactory } from "@/hooks/useFactory";
-import { useNow } from "@/hooks/useNow";
 import { useRootSessionId, useSession } from "@/hooks/useSession";
 import { isFeatureEnabled } from "@/lib/capabilities";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
@@ -22,6 +21,7 @@ import {
   FACTORY_NAME_LABEL_KEY,
   FACTORY_PROJECT_LABEL_KEY,
   FACTORY_ROLE_LABEL_KEY,
+  normalizeFactoryId,
 } from "@/lib/factory";
 import {
   READY_GATES,
@@ -33,6 +33,7 @@ import {
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { MOBILE_GLASS_PILL } from "@/shell/mobileGlass";
+import { useFactoryNow } from "./factoryClock";
 import {
   type FactoryTone,
   GATE_LABEL,
@@ -49,6 +50,7 @@ import {
   stageText,
   stageTone,
 } from "./factoryFormat";
+import { type FitPlan, NO_FIT, useStripFit } from "./stripFit";
 
 /** Where a session sits in a factory, from its own labels or its root's. */
 export interface FactoryPlacement {
@@ -69,10 +71,10 @@ function placementFrom(
   viaRoot: boolean,
   title: string | null,
 ): FactoryPlacement | null {
-  const factoryId = labels?.[FACTORY_ID_LABEL_KEY]?.trim();
-  if (!factoryId) return null;
+  const raw = labels?.[FACTORY_ID_LABEL_KEY]?.trim();
+  if (!raw) return null;
   return {
-    factoryId,
+    factoryId: normalizeFactoryId(raw),
     project: labels?.[FACTORY_PROJECT_LABEL_KEY]?.trim() || null,
     role: labels?.[FACTORY_ROLE_LABEL_KEY]?.trim() || null,
     viaRoot,
@@ -91,8 +93,22 @@ export function useFactoryPlacement(sessionId: string | null | undefined): Facto
   return own ?? (root ? placementFrom(root.labels, true, session?.title ?? null) : null);
 }
 
-/** One dot per ready gate (plus the demo badge when the project records demos). */
-export function GateDots({ gates, className }: { gates: GatesView; className?: string }) {
+/** The cockpit link for a placement (its project's card for PLs and ICs). */
+export function cockpitHref(placement: FactoryPlacement): string {
+  const base = `/factory/${encodeURIComponent(placement.factoryId)}`;
+  return placement.project ? `${base}?project=${encodeURIComponent(placement.project)}` : base;
+}
+
+/** One dot per ready gate (plus the demo gate when the project records demos). */
+export function GateDots({
+  gates,
+  prNumber,
+  className,
+}: {
+  gates: GatesView;
+  prNumber?: number;
+  className?: string;
+}) {
   const entries: [string, FactoryTone, string][] = READY_GATES.map((gate) => [
     gate,
     gateTone(gates[gate]),
@@ -100,11 +116,12 @@ export function GateDots({ gates, className }: { gates: GatesView; className?: s
   ]);
   if (gates.demo != null) entries.push(["demo", gateTone(gates.demo), `Demo ${gates.demo}`]);
   const summary = entries.map(([, , text]) => text).join(" · ");
+  const label = prNumber != null ? `PR #${prNumber} gates: ${summary}` : `Gates: ${summary}`;
   return (
     <span
       role="img"
-      aria-label={`Gates: ${summary}`}
-      title={summary}
+      aria-label={label}
+      title={label}
       data-testid="factory-gate-dots"
       className={cn("inline-flex items-center gap-0.5", className)}
     >
@@ -120,74 +137,131 @@ export function GateDots({ gates, className }: { gates: GatesView; className?: s
   );
 }
 
-function Segment({ children, className }: { children: ReactNode; className?: string }) {
+/**
+ * What a narrow header keeps longest (higher stays). A PL's project is low:
+ * its breadcrumb already names it.
+ */
+const KEEP = {
+  stage: 10,
+  decisions: 10,
+  gates: 9,
+  ready: 9,
+  preview: 8,
+  prNumber: 7,
+  projects: 7,
+  icProject: 6,
+  leadName: 6,
+  elapsed: 6,
+  plProject: 5,
+  cta: 4,
+  name: 3,
+  cost: 2,
+  title: 2,
+} as const;
+
+/** Truncating text parts: the widest they get, and the least before they hide. */
+const NAME_TEXT = { max: 160, min: 64 };
+const TITLE_TEXT = { max: 192, min: 64 };
+
+const FitContext = createContext<FitPlan>(NO_FIT);
+
+/** One part of the strip; hidden whole (or truncated) when the slot is short. */
+function Part({
+  fit,
+  keep,
+  text,
+  className,
+  children,
+  ...data
+}: {
+  fit: string;
+  keep: number;
+  text?: { max: number; min: number };
+  className?: string;
+  children: ReactNode;
+  [data: `data-${string}`]: string | undefined;
+}) {
+  const plan = useContext(FitContext);
+  const hidden = plan.hidden.has(fit);
+  const clamp = plan.clamp?.key === fit ? plan.clamp.width : undefined;
   return (
-    <span className={cn("inline-flex h-7 shrink-0 items-center gap-1.5 pr-2.5", className)}>
+    <span
+      {...data}
+      data-fit-key={fit}
+      data-fit-priority={keep}
+      data-fit-max={text?.max}
+      data-fit-min={text?.min}
+      data-fit-hidden={hidden ? "" : undefined}
+      style={text ? { maxWidth: clamp ?? text.max } : undefined}
+      className={cn(
+        "inline-flex h-7 shrink-0 items-center gap-1.5 pr-2.5",
+        text && "min-w-0",
+        className,
+        hidden && "hidden",
+      )}
+    >
       {children}
     </span>
   );
 }
 
-function PrSegment({ pr }: { pr: PrView }) {
+/** Text that truncates inside a {@link Part} with `text`. */
+function FitText({ children, className }: { children: ReactNode; className?: string }) {
   return (
-    <Segment>
-      <span className={cn("font-mono tabular-nums", pr.state === "merged" && "text-brand-accent")}>
-        PR #{pr.number}
-      </span>
-      {pr.state === "open" ? (
-        <GateDots gates={pr.gates} />
-      ) : (
-        <span className={pr.state === "merged" ? "text-brand-accent" : undefined}>{pr.state}</span>
-      )}
-    </Segment>
-  );
-}
-
-/** The derived stage (kept in the strip's head, so a narrow header never drops it). */
-function StageLabel({ project }: { project: ProjectView }) {
-  const tone = stageTone(project.stage, project.overlay);
-  return (
-    <span
-      data-testid="factory-strip-stage"
-      data-stage={project.stage}
-      className={cn("inline-flex shrink-0 items-center gap-1.5 pr-1.5", TONE_TEXT[tone])}
-    >
-      <span aria-hidden className={cn("size-1.5 rounded-full", TONE_DOT[tone])} />
-      {stageText(project.stage, project.overlay)}
+    <span data-fit-text className={cn("min-w-0 truncate", className)}>
+      {children}
     </span>
   );
 }
 
-/** PR, preview and cost of a project (only the PR for a sub-agent). */
-function ProjectSegments({
+const CHEVRON = "size-3 shrink-0 opacity-60";
+
+function PrParts({ pr }: { pr: PrView }) {
+  const merged = pr.state === "merged";
+  return (
+    <>
+      <Part fit="pr" keep={KEEP.prNumber} className="pr-1.5">
+        <span className={cn("font-mono tabular-nums", merged && "text-brand-accent")}>
+          PR #{pr.number}
+        </span>
+      </Part>
+      <Part fit="gates" keep={KEEP.gates}>
+        {pr.state === "open" ? (
+          <GateDots gates={pr.gates} prNumber={pr.number} />
+        ) : (
+          <span className={merged ? "text-brand-accent" : undefined}>{pr.state}</span>
+        )}
+      </Part>
+    </>
+  );
+}
+
+/** Stage, time in stage, PR, preview and cost of a PL's project. */
+function ProjectParts({
   snapshot,
   project,
-  placement,
   nowS,
 }: {
   snapshot: FactorySnapshot;
   project: ProjectView;
-  placement: FactoryPlacement;
   nowS: number;
 }) {
-  const prs = projectPrs(snapshot, project);
-  const pr = primaryPr(prs, placement.viaRoot ? placement.title : null);
-  if (placement.viaRoot) return pr ? <PrSegment pr={pr} /> : null;
+  const pr = primaryPr(projectPrs(snapshot, project));
   const inStage = formatElapsed(nowS - project.stage_since);
   const preview = pr?.state === "open" ? previewStatus(pr.preview, pr.head_sha) : null;
   const cost = formatUsd(project.cost_usd);
   return (
     <>
       {inStage && (
-        <Segment>
+        <Part fit="elapsed" keep={KEEP.elapsed}>
           <span className="tabular-nums" title="Time in this stage">
             {inStage}
           </span>
-        </Segment>
+        </Part>
       )}
-      {pr && <PrSegment pr={pr} />}
+      {pr && <PrParts pr={pr} />}
       {pr?.preview && preview && (
-        <Segment>
+        <Part fit="preview" keep={KEEP.preview}>
           Preview
           <span
             role="img"
@@ -197,33 +271,40 @@ function ProjectSegments({
             data-tone={preview.tone}
             className={cn("size-1.5 rounded-full", TONE_DOT[preview.tone])}
           />
-        </Segment>
+        </Part>
       )}
       {cost && (
-        <Segment>
+        <Part fit="cost" keep={KEEP.cost}>
           <span className="font-mono tabular-nums">{cost}</span>
-        </Segment>
+        </Part>
       )}
     </>
   );
 }
 
-function LeadSegments({ snapshot }: { snapshot: FactorySnapshot }) {
+/** What needs the human first, then the factory's size and cost. */
+function LeadParts({ snapshot }: { snapshot: FactorySnapshot }) {
   const { totals } = snapshot;
   const cost = formatUsd(snapshot.factory.cost_usd);
   return (
     <>
-      <Segment>{plural(snapshot.projects.length, "project")}</Segment>
-      {totals.prs_ready > 0 && (
-        <Segment className="text-success">{totals.prs_ready} ready for review</Segment>
-      )}
       {totals.decisions_open > 0 && (
-        <Segment className="text-warning">{plural(totals.decisions_open, "decision")}</Segment>
+        <Part fit="decisions" keep={KEEP.decisions} className="text-warning">
+          {plural(totals.decisions_open, "decision")}
+        </Part>
       )}
+      {totals.prs_ready > 0 && (
+        <Part fit="ready" keep={KEEP.ready} className="text-success">
+          {totals.prs_ready} ready for review
+        </Part>
+      )}
+      <Part fit="projects" keep={KEEP.projects}>
+        {plural(snapshot.projects.length, "project")}
+      </Part>
       {cost && (
-        <Segment>
+        <Part fit="cost" keep={KEEP.cost}>
           <span className="font-mono tabular-nums">{cost}</span>
-        </Segment>
+        </Part>
       )}
     </>
   );
@@ -246,7 +327,7 @@ function MobileStripButton({
       data-testid="factory-strip-mobile"
       aria-label={label}
       className={cn(
-        "relative inline-flex size-10 shrink-0 items-center justify-center text-muted-foreground md:hidden",
+        "relative inline-flex size-11 shrink-0 items-center justify-center text-muted-foreground md:hidden",
         MOBILE_GLASS_PILL,
       )}
     >
@@ -255,7 +336,7 @@ function MobileStripButton({
         <span
           aria-hidden
           className={cn(
-            "absolute top-2 right-2 size-2 rounded-full ring-2 ring-background",
+            "absolute top-2.5 right-2.5 size-2 rounded-full ring-2 ring-background",
             TONE_DOT[tone],
           )}
         />
@@ -274,18 +355,25 @@ function headlineTone(
 }
 
 function StripBody({ placement }: { placement: FactoryPlacement }) {
-  const { data: snapshot } = useFactory(placement.factoryId);
-  const now = useNow();
+  const { data: snapshot, isLoading } = useFactory(placement.factoryId);
+  const now = useFactoryNow();
+  const slotRef = useRef<HTMLDivElement>(null);
+  const stripRef = useRef<HTMLAnchorElement>(null);
+  const plan = useStripFit(slotRef, stripRef);
   const project = placement.project
     ? snapshot?.projects.find((p) => p.slug === placement.project)
     : undefined;
-  const name = snapshot?.factory.name ?? placement.nameLabel ?? "Factory";
-  const href = placement.project
-    ? `/factory/${placement.factoryId}?project=${encodeURIComponent(placement.project)}`
-    : `/factory/${placement.factoryId}`;
+  // While the first snapshot loads, a placeholder stands in for an unlabelled name.
+  const name = snapshot?.factory.name ?? placement.nameLabel ?? (isLoading ? null : "Factory");
+  const href = cockpitHref(placement);
   const stageLabel = project ? STAGE_LABEL[project.stage] : null;
-  const label = `Open cockpit: ${[name, placement.project, stageLabel].filter(Boolean).join(" · ")}`;
-  const showStage = project !== undefined && !placement.viaRoot;
+  const label = `Open cockpit: ${[name ?? "Factory", placement.project, stageLabel].filter(Boolean).join(" · ")}`;
+  const isLead = !placement.project;
+  const icPr =
+    snapshot && project && placement.viaRoot
+      ? primaryPr(projectPrs(snapshot, project), placement.title)
+      : null;
+  const tone = project && !placement.viaRoot ? stageTone(project.stage, project.overlay) : null;
   return (
     <>
       <MobileStripButton
@@ -293,74 +381,107 @@ function StripBody({ placement }: { placement: FactoryPlacement }) {
         label={label}
         tone={snapshot ? headlineTone(snapshot, project) : null}
       />
-      <Link
-        to={href}
-        componentId="chat.header.factory_strip"
-        data-testid="factory-strip"
-        data-live={snapshot ? "true" : "false"}
-        aria-label={label}
-        className={cn(
-          // basis-0 + grow up to its content: the breadcrumb is sized first and the
-          // strip takes what is left, shedding whole segments when that is short.
-          "group hidden h-7 min-w-0 grow basis-0 max-w-max flex-wrap items-center overflow-hidden rounded-md border border-border bg-card/60 pl-2 text-sm text-muted-foreground transition-colors md:flex",
-          "hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
-        )}
+      {/* Takes the header's leftover width; the strip inside hugs what fits. */}
+      <div
+        ref={slotRef}
+        data-factory-strip-slot
+        className="mr-2 hidden h-7 min-w-16 grow basis-0 items-center md:flex"
       >
-        <span
-          data-testid="factory-strip-place"
-          className={cn(
-            "inline-flex h-7 min-w-0 shrink items-center gap-1.5",
-            !showStage && "pr-2.5",
-          )}
-        >
-          <FactoryIcon aria-hidden className="size-3.5 shrink-0" />
-          <span className="min-w-0 shrink-[100] truncate font-medium text-foreground">{name}</span>
-          {/* The chevrons ride inside the truncating spans, so a squeezed name
-              never leaves a lone separator behind. */}
-          {placement.project && (
-            <span className="min-w-0 truncate text-foreground">
-              <ChevronRightIcon
-                aria-hidden
-                className="mr-1.5 inline size-3 align-[-1px] opacity-60"
-              />
-              {placement.project}
+        <FitContext.Provider value={plan}>
+          <Link
+            ref={stripRef}
+            to={href}
+            componentId="chat.header.factory_strip"
+            data-testid="factory-strip"
+            data-live={snapshot ? "true" : "false"}
+            aria-label={label}
+            title={label}
+            className={cn(
+              "group inline-flex h-7 max-w-full flex-nowrap items-center overflow-hidden rounded-md border border-border bg-card/60 pl-2 text-sm whitespace-nowrap text-muted-foreground transition-colors",
+              "hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+            )}
+          >
+            <span aria-hidden className="inline-flex h-7 shrink-0 items-center pr-1.5">
+              <FactoryIcon className="size-3.5" />
             </span>
-          )}
-          {placement.viaRoot && placement.title && (
-            <span className="min-w-0 max-w-48 shrink-[10] truncate">
-              <ChevronRightIcon
-                aria-hidden
-                className="mr-1.5 inline size-3 align-[-1px] opacity-60"
+            <Part
+              fit="name"
+              keep={isLead ? KEEP.leadName : KEEP.name}
+              text={NAME_TEXT}
+              className={isLead ? undefined : "pr-1.5"}
+            >
+              {name ? (
+                <FitText className="font-medium text-foreground">{name}</FitText>
+              ) : (
+                <span
+                  aria-hidden
+                  data-testid="factory-strip-name-loading"
+                  className="h-3 w-20 animate-pulse rounded bg-muted"
+                />
+              )}
+              {/* The name owns the separator after it, so it never stands alone. */}
+              {placement.project && <ChevronRightIcon aria-hidden className={CHEVRON} />}
+            </Part>
+            {placement.project && (
+              <Part
+                fit="project"
+                keep={placement.viaRoot ? KEEP.icProject : KEEP.plProject}
+                text={NAME_TEXT}
+                className={tone ? "pr-2" : undefined}
+              >
+                <FitText className="text-foreground">{placement.project}</FitText>
+              </Part>
+            )}
+            {placement.viaRoot && placement.title && (
+              <Part fit="title" keep={KEEP.title} text={TITLE_TEXT}>
+                <ChevronRightIcon aria-hidden className={CHEVRON} />
+                <FitText>{placement.title}</FitText>
+              </Part>
+            )}
+            {project && tone && (
+              <>
+                <span aria-hidden className="inline-flex h-7 shrink-0 items-center pr-1.5">
+                  <span className={cn("size-1.5 rounded-full", TONE_DOT[tone])} />
+                </span>
+                <Part
+                  fit="stage"
+                  keep={KEEP.stage}
+                  className={TONE_TEXT[tone]}
+                  data-testid="factory-strip-stage"
+                  data-stage={project.stage}
+                >
+                  {stageText(project.stage, project.overlay)}
+                </Part>
+              </>
+            )}
+            {snapshot && project && !placement.viaRoot && (
+              <ProjectParts
+                snapshot={snapshot}
+                project={project}
+                nowS={Math.floor(now.getTime() / 1000)}
               />
-              {placement.title}
+            )}
+            {icPr && <PrParts pr={icPr} />}
+            {snapshot && isLead && <LeadParts snapshot={snapshot} />}
+            <Part fit="cta" keep={KEEP.cta} className="pr-1 text-foreground">
+              Open cockpit
+            </Part>
+            <span
+              aria-hidden
+              className="inline-flex h-7 shrink-0 items-center pr-2 text-foreground"
+            >
+              <ArrowRightIcon className="size-3.5 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none" />
             </span>
-          )}
-          {project && showStage && <StageLabel project={project} />}
-        </span>
-        {snapshot && project && (
-          <ProjectSegments
-            snapshot={snapshot}
-            project={project}
-            placement={placement}
-            nowS={Math.floor(now.getTime() / 1000)}
-          />
-        )}
-        {snapshot && !placement.project && <LeadSegments snapshot={snapshot} />}
-        <Segment className="text-foreground">
-          Open cockpit
-          <ArrowRightIcon
-            aria-hidden
-            className="size-3.5 transition-transform group-hover:translate-x-0.5 motion-reduce:transition-none"
-          />
-        </Segment>
-      </Link>
+          </Link>
+        </FitContext.Provider>
+      </div>
     </>
   );
 }
 
 /**
  * The strip for `sessionId`; renders nothing for non-factory sessions or when
- * the factory feature is off. Desktop only (the phone header has no room).
+ * the factory feature is off. Phones get a single icon button instead.
  */
 export function FactoryStrip({ sessionId }: { sessionId: string | null | undefined }) {
   const enabled = isFeatureEnabled(useServerInfo(), "factory");

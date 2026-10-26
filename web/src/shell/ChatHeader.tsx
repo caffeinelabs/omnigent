@@ -563,6 +563,8 @@ export function ChatHeader({
       <div
         className={cn(
           "flex min-w-0 items-center gap-1 md:gap-6",
+          // The factory strip's slot takes whatever width the breadcrumb leaves.
+          "md:has-[[data-factory-strip-slot]]:grow",
           !sidebarOpen && "traffic-light-clearance",
         )}
       >

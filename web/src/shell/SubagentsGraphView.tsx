@@ -7,12 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { ZoomInIcon, ZoomOutIcon, Maximize2Icon } from "lucide-react";
 import { MAX_TREE_DEPTH, useChildSessions, type ChildSessionInfo } from "@/hooks/useChildSessions";
 import { useSession } from "@/hooks/useSession";
-import {
-  factoryInfo,
-  factoryMemberTitle,
-  factoryRoleChipText,
-  hasFactoryBeacon,
-} from "@/lib/factory";
+import { factoryInfo, factoryRoleChipText, hasFactoryBeacon } from "@/lib/factory";
 import { cn } from "@/lib/utils";
 import { nativeCodingAgentForWrapper, WRAPPER_LABEL_KEY } from "@/lib/nativeCodingAgents";
 import {
@@ -20,6 +15,7 @@ import {
   NODE_WIDTH,
   type AgentActivity,
   type AgentNodeData,
+  rootAgentLabel,
 } from "./subagentGraphLayout";
 import { activityDotClassName, sessionStatus } from "./subagentStatus";
 import { FactoryBadge, FactoryRoleChip } from "./FactoryBadge";
@@ -201,11 +197,7 @@ export function SubagentsGraphView({ conversationId, rootSessionId }: SubagentsG
 
   const wrapper = session?.labels?.[WRAPPER_LABEL_KEY];
   const nativeAgent = nativeCodingAgentForWrapper(wrapper);
-  const rootLabel =
-    factoryMemberTitle(session?.labels, session?.title) ??
-    nativeAgent?.displayName ??
-    session?.agentName ??
-    "main";
+  const rootLabel = rootAgentLabel(session, nativeAgent?.displayName);
   // Mirror the list view's ``sessionStatus`` so the root node honors
   // launching / disconnected (not just running / failed / idle).
   const rootStatus = sessionStatus(session?.status, session?.lastTaskError);

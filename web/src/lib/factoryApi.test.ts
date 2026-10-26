@@ -94,6 +94,11 @@ describe("startFactory", () => {
       workspaces: ["https://github.com/caffeinelabs/app#main"],
       title: "Atlas",
     });
+    // The same telemetry surface as any other session create.
+    expect(createSession!.headers).toMatchObject({
+      "Content-Type": "application/json",
+      "X-Omnigent-Client": "web",
+    });
     const [register] = callsTo("/v1/factory/factories");
     expect(JSON.parse(String(register!.body))).toEqual({
       root_session_id: "conv_atlas",
@@ -160,6 +165,22 @@ describe("startFactory", () => {
 
     await expect(startFactory(FORM)).rejects.toMatchObject({ code: "agent_missing" });
     expect(callsTo("/v1/sessions")).toHaveLength(0);
+  });
+
+  it("starts a blank base branch from the default branch, never `<repo>#`", async () => {
+    serve([() => json({ factory_id: "conv_atlas", url: "/factory/conv_atlas" }, 201)]);
+
+    await startFactory(
+      { ...FORM, projects: [{ ...PROJECT, base_branch: "  " }] },
+      { sleep: async () => undefined },
+    );
+
+    const [createSession] = callsTo("/v1/sessions");
+    expect(JSON.parse(String(createSession!.body)).workspaces).toEqual([
+      "https://github.com/caffeinelabs/app#main",
+    ]);
+    const [register] = callsTo("/v1/factory/factories");
+    expect(JSON.parse(String(register!.body)).projects[0].base_branch).toBe("main");
   });
 
   it("rejects a form without projects before calling the server", async () => {

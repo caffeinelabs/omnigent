@@ -5,13 +5,14 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { type ChildSessionInfo, useChildSessions } from "@/hooks/useChildSessions";
 import { useSession } from "@/hooks/useSession";
-import { factoryInfo } from "@/lib/factory";
+import { factoryInfo, factoryRoleChipText } from "@/lib/factory";
 import {
   buildGraphLayout,
   buildTree,
   childActivity,
   computeSubtreeWidths,
   layoutTree,
+  rootAgentLabel,
   type TreeNode,
 } from "./subagentGraphLayout";
 import { activityDotClassName, childStatus, sessionStatus } from "./subagentStatus";
@@ -685,6 +686,40 @@ describe("buildTree factory members", () => {
     expect(nodes.find((n) => n.id === "root")?.data.factory).toEqual(rootFactory);
     const plain = buildGraphLayout("root", "main", "idle", "Idle", null, new Map(), "root");
     expect(plain.nodes[0].data.factory).toBeNull();
+  });
+
+  it("names a factory root by its title with the role chip, not the harness", () => {
+    const labels = {
+      "omnigent.factory.id": "root",
+      "omnigent.factory.role": "lead",
+      "omnigent.wrapper": "claude-native-ui",
+    };
+    const atlas = { labels, title: "Atlas", agentName: "factory-lead" };
+    const label = rootAgentLabel(atlas, "Claude Code");
+    expect(label).toBe("Atlas");
+
+    const { nodes } = buildGraphLayout(
+      "root",
+      label,
+      "working",
+      "Working",
+      null,
+      new Map(),
+      "root",
+      factoryInfo(labels),
+    );
+    const root = nodes.find((n) => n.id === "root")!;
+    expect(root.data.label).toBe("Atlas");
+    expect(factoryRoleChipText(root.data.factory, root.data.label)).toBe("Lead");
+  });
+
+  it("keeps the harness or agent name for a session outside any factory", () => {
+    const plain = { labels: { "omnigent.wrapper": "claude-native-ui" }, title: "Fix the build" };
+    expect(rootAgentLabel({ ...plain, agentName: "claude-native-ui" }, "Claude Code")).toBe(
+      "Claude Code",
+    );
+    expect(rootAgentLabel({ labels: {}, title: "x", agentName: "polly" }, undefined)).toBe("polly");
+    expect(rootAgentLabel(undefined, undefined)).toBe("main");
   });
 });
 

@@ -14,6 +14,7 @@ import type { Session } from "@/lib/types";
 import { cn } from "@/lib/utils";
 import {
   LIVE_RUN_FACTORY_ID,
+  LIVE_RUN_NOW_S,
   factoryList,
   liveRunEvents,
   liveRunOpenDecisions,
@@ -21,6 +22,7 @@ import {
   pendingForever,
   preflightOk,
 } from "./__fixtures__/liveRun";
+import { FactoryNowContext } from "./factoryClock";
 
 /** One fake route: a body (200), a status error, or a read that never settles. */
 export type StoryResponse =
@@ -91,11 +93,14 @@ export interface FactoryFrameOptions {
   seed?: (queryClient: QueryClient) => void;
   /** Run once after mount (e.g. invalidate a seeded query to show a failed refresh). */
   afterMount?: (queryClient: QueryClient) => void;
+  /** The clock elapsed times read; pinned to the live run so captures compare. */
+  now?: Date;
   className?: string;
 }
 
 const NO_SESSIONS: Session[] = [];
 const FACTORY_ON: Record<string, boolean> = { factory: true };
+const LIVE_RUN_NOW = new Date(LIVE_RUN_NOW_S * 1000);
 
 /** Providers plus a themed, sized surface for one factory story. */
 export function FactoryStoryFrame({
@@ -108,6 +113,7 @@ export function FactoryStoryFrame({
   features = FACTORY_ON,
   seed,
   afterMount,
+  now = LIVE_RUN_NOW,
   className,
   children,
 }: FactoryFrameOptions & { children: ReactNode }) {
@@ -132,24 +138,28 @@ export function FactoryStoryFrame({
   return (
     <QueryClientProvider client={client}>
       <CapabilitiesProvider info={{ ...FALLBACK_SERVER_INFO, features }}>
-        <MemoryRouter initialEntries={[route]}>
-          <div
-            className={cn(theme === "dark" && "dark", mode === "viewport" && "fixed inset-0")}
-            data-theme-frame={theme}
-          >
+        <FactoryNowContext.Provider value={now}>
+          <MemoryRouter initialEntries={[route]}>
             <div
-              data-testid="factory-story-frame"
-              className={cn(
-                "bg-background text-foreground",
-                mode === "viewport" ? "flex h-full w-full flex-col overflow-hidden" : "rounded-lg",
-                className,
-              )}
-              style={mode === "inline" && width ? { width } : undefined}
+              className={cn(theme === "dark" && "dark", mode === "viewport" && "fixed inset-0")}
+              data-theme-frame={theme}
             >
-              {children}
+              <div
+                data-testid="factory-story-frame"
+                className={cn(
+                  "bg-background text-foreground",
+                  mode === "viewport"
+                    ? "flex h-full w-full flex-col overflow-hidden"
+                    : "rounded-lg",
+                  className,
+                )}
+                style={mode === "inline" && width ? { width } : undefined}
+              >
+                {children}
+              </div>
             </div>
-          </div>
-        </MemoryRouter>
+          </MemoryRouter>
+        </FactoryNowContext.Provider>
       </CapabilitiesProvider>
     </QueryClientProvider>
   );

@@ -51,7 +51,7 @@ import { RunningDot } from "@/components/RunningDot";
 import { shortModelName } from "@/components/CostRoutingControl";
 import { MAX_TREE_DEPTH, useChildSessions, type ChildSessionInfo } from "@/hooks/useChildSessions";
 import { useSession } from "@/hooks/useSession";
-import { factoryInfo, factoryMemberTitle, hasFactoryBeacon, isFactoryMember } from "@/lib/factory";
+import { factoryInfo, hasFactoryBeacon, isFactoryMember } from "@/lib/factory";
 import type { SessionItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -70,6 +70,7 @@ import {
   type AgentActivity,
   type AgentStatus,
 } from "./subagentStatus";
+import { rootAgentLabel } from "./subagentGraphLayout";
 import { AddAgentDialog } from "./AddAgentDialog";
 import { FactoryBadge, FactoryRoleChip } from "./FactoryBadge";
 
@@ -537,11 +538,7 @@ function MainRow({ rootSessionId, isActive }: { rootSessionId: string; isActive:
   // their agent name, with "main" only while the session loads or when it
   // carries no name.
   // A factory root reads as its title ("Atlas"), not its harness ("Claude Code").
-  const label =
-    factoryMemberTitle(session?.labels, session?.title) ??
-    nativeAgent?.displayName ??
-    session?.agentName ??
-    "main";
+  const label = rootAgentLabel(session, nativeAgent?.displayName);
   const preview = mainMessagePreview(session?.items);
   // A factory lead's own role and beacon, like its members' rows below.
   const factory = factoryInfo(session?.labels);

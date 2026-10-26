@@ -20,11 +20,7 @@ export function FactoryPage() {
   const elapsed = formatElapsed(factory?.elapsed_s);
   const cost = formatUsd(factory?.cost_usd);
   return (
-    <PageScroll
-      data-testid="factory-page"
-      maxWidthClassName="max-w-7xl"
-      contentClassName="px-4 md:px-6"
-    >
+    <PageScroll data-testid="factory-page" maxWidthClassName="max-w-7xl" contentClassName="px-6">
       <Link
         to="/factory"
         componentId="factory.page.back"

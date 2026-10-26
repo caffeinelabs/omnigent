@@ -8,7 +8,7 @@
 // `null` cost means unpriced, never zero.
 
 import { authenticatedFetch } from "./identity";
-import { ApiError } from "./sessionsApi";
+import { ApiError, sessionCreateHeaders } from "./sessionsApi";
 
 // ── Enums ──────────────────────────────────────────────────────
 
@@ -311,7 +311,11 @@ export interface GateEvidence {
   protected: string[];
 }
 
-/** The six ready gates, in display order (`demo` is a badge, not a gate). */
+/**
+ * The six gates every PR is held to, in display order. `demo` is separate
+ * because it is null when the project has no previews; when previews are on
+ * it is a ready gate too (a PASS or PARTIAL demo of the head is required).
+ */
 export const READY_GATES = [
   "draft",
   "checks",
@@ -832,6 +836,8 @@ export async function sendPrFeedback(prId: string, feedback: PrFeedbackRequest):
 
 export const FACTORY_LEAD_AGENT_NAME = "factory-lead";
 export const FACTORY_LEAD_TITLE = "Atlas";
+/** The branch a project starts from when the form leaves it blank (the server's default). */
+export const DEFAULT_BASE_BRANCH = "main";
 /** Attempts at registering the factory once its lead session exists. */
 export const START_REGISTER_ATTEMPTS = 4;
 
@@ -905,15 +911,24 @@ export async function startFactory(
   form: StartFactoryForm,
   options: { sleep?: (ms: number) => Promise<void> } = {},
 ): Promise<CreateFactoryResponse & { root_session_id: string }> {
-  const first = form.projects[0];
+  // A blank branch means the server default, so the lead's workspace never ends in `#`.
+  const projects = form.projects.map((project) => ({
+    ...project,
+    base_branch: project.base_branch.trim() || DEFAULT_BASE_BRANCH,
+  }));
+  const first = projects[0];
   if (!first) throw new Error("A factory needs at least one project");
   const agentId = await resolveAgentId(FACTORY_LEAD_AGENT_NAME);
   const session = await readJson<{ id: string }>(
-    await postJson("/v1/sessions", {
-      agent_id: agentId,
-      host_type: "managed",
-      workspaces: [`https://github.com/${first.repo}#${first.base_branch}`],
-      title: FACTORY_LEAD_TITLE,
+    await authenticatedFetch("/v1/sessions", {
+      method: "POST",
+      headers: sessionCreateHeaders(),
+      body: JSON.stringify({
+        agent_id: agentId,
+        host_type: "managed",
+        workspaces: [`https://github.com/${first.repo}#${first.base_branch}`],
+        title: FACTORY_LEAD_TITLE,
+      }),
     }),
   );
   const sleep = options.sleep ?? defaultSleep;
@@ -921,7 +936,7 @@ export async function startFactory(
     root_session_id: session.id,
     name: form.name,
     cadence: form.cadence,
-    projects: form.projects,
+    projects,
   };
   let lastError: unknown = null;
   /* oxlint-disable no-await-in-loop -- retries are sequential by design */

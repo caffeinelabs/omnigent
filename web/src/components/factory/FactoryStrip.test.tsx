@@ -1,7 +1,7 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { FALLBACK_SERVER_INFO } from "@/lib/capabilities";
 import { CapabilitiesProvider } from "@/lib/CapabilitiesContext";
 import type { Session } from "@/lib/types";
@@ -67,10 +67,7 @@ describe("FactoryStrip", () => {
     expect(strip).toHaveAttribute("href", `/factory/${LIVE_RUN_FACTORY_ID}?project=api-version`);
     expect(strip).toHaveTextContent("Atlas factory");
     expect(strip).toHaveTextContent("api-version");
-    // The stage sits in the never-wrapping head, so a narrow header keeps it.
-    const stage = within(within(strip).getByTestId("factory-strip-place")).getByTestId(
-      "factory-strip-stage",
-    );
+    const stage = within(strip).getByTestId("factory-strip-stage");
     expect(stage).toHaveAttribute("data-stage", "ready");
     expect(stage).toHaveTextContent("Ready");
     // Ready since 760 s before the fixture's now.
@@ -78,14 +75,14 @@ describe("FactoryStrip", () => {
     expect(strip).toHaveTextContent("PR #9630");
     const dots = within(strip).getByTestId("factory-gate-dots");
     expect(dots.querySelectorAll("[data-gate]")).toHaveLength(7);
-    expect(dots).toHaveAccessibleName(expect.stringContaining("CI pass"));
+    expect(dots).toHaveAccessibleName(expect.stringMatching(/^PR #9630 gates: .*CI pass/));
     expect(within(strip).getByTestId("factory-strip-preview")).toHaveAttribute("data-tone", "pass");
     expect(strip).toHaveTextContent("$7.10");
     expect(strip).toHaveTextContent("Open cockpit");
-    expect(screen.getByTestId("factory-strip-mobile")).toHaveAttribute(
-      "href",
-      `/factory/${LIVE_RUN_FACTORY_ID}?project=api-version`,
-    );
+    const mobile = screen.getByTestId("factory-strip-mobile");
+    expect(mobile).toHaveAttribute("href", `/factory/${LIVE_RUN_FACTORY_ID}?project=api-version`);
+    // The same 44 px touch target as the header's other glass pills.
+    expect(mobile).toHaveClass("size-11");
   });
 
   it("reads an IC sub-agent's factory from its root PL and shows the IC's PR", async () => {
@@ -134,16 +131,48 @@ describe("FactoryStrip", () => {
     expect(strip).toHaveTextContent("2 decisions");
   });
 
-  it("falls back to its labels while the snapshot is unavailable", async () => {
+  it("holds the name's place while the snapshot loads", async () => {
     authenticatedFetch.mockImplementation(() => pendingForever());
     const pl = plSession();
     renderStrip(pl.id, [pl]);
 
     const strip = await screen.findByTestId("factory-strip");
     expect(strip).toHaveAttribute("data-live", "false");
-    expect(strip).toHaveTextContent("Factory");
+    expect(within(strip).getByTestId("factory-strip-name-loading")).toBeInTheDocument();
+    expect(strip).not.toHaveTextContent("Factory");
     expect(strip).toHaveTextContent("api-version");
     expect(strip).toHaveTextContent("Open cockpit");
+  });
+
+  it("falls back to its labels when the snapshot is unavailable", async () => {
+    authenticatedFetch.mockImplementation(
+      async () =>
+        new Response(JSON.stringify({ error: { message: "nope" } }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        }),
+    );
+    const pl = plSession();
+    renderStrip(pl.id, [pl]);
+
+    const strip = await screen.findByTestId("factory-strip");
+    await waitFor(() => expect(strip).toHaveTextContent("Factory"));
+    expect(strip).toHaveAttribute("data-live", "false");
+    expect(within(strip).queryByTestId("factory-strip-name-loading")).toBeNull();
+    expect(strip).toHaveTextContent("api-version");
+  });
+
+  it("links a legacy-prefixed factory id to the bare id the server keys", async () => {
+    const pl = plSession();
+    const legacy = {
+      ...pl,
+      labels: { ...pl.labels, "omnigent.factory.id": `conv_${LIVE_RUN_FACTORY_ID}` },
+    };
+    renderStrip(legacy.id, [legacy]);
+
+    const strip = await screen.findByTestId("factory-strip");
+    await waitFor(() => expect(strip).toHaveAttribute("data-live", "true"));
+    expect(strip).toHaveAttribute("href", `/factory/${LIVE_RUN_FACTORY_ID}?project=api-version`);
   });
 
   it("renders nothing for a session outside any factory", () => {
@@ -158,5 +187,104 @@ describe("FactoryStrip", () => {
     const { container } = renderStrip(pl.id, [pl], { factory: false });
     expect(container).toBeEmptyDOMElement();
     expect(authenticatedFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe("FactoryStrip in a narrow header", () => {
+  /** Lay the strip out: a slot of `slot` px, its parts at `widths`, fixed parts 20 px. */
+  function mockLayout(slot: number, widths: Record<string, number>) {
+    vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return this.hasAttribute("data-factory-strip-slot") ? slot : 0;
+    });
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const key = this.dataset.fitKey;
+      const inStrip = this.parentElement?.dataset.testid === "factory-strip";
+      const width = key ? (widths[key] ?? 0) : inStrip ? 20 : 0;
+      return new DOMRect(0, 0, width, 28);
+    });
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const PL_WIDTHS = {
+    name: 90,
+    project: 80,
+    stage: 50,
+    elapsed: 50,
+    pr: 60,
+    gates: 56,
+    preview: 66,
+    cost: 46,
+    cta: 90,
+  };
+
+  function hiddenParts(strip: HTMLElement): string[] {
+    return [...strip.querySelectorAll<HTMLElement>("[data-fit-hidden]")]
+      .map((el) => el.dataset.fitKey ?? "")
+      .sort();
+  }
+
+  it("drops cost, name and the CTA label before time, the PR gates and preview", async () => {
+    mockLayout(430, PL_WIDTHS);
+    const pl = plSession();
+    renderStrip(pl.id, [pl]);
+
+    const strip = await screen.findByTestId("factory-strip");
+    await waitFor(() => expect(hiddenParts(strip)).toEqual(["cost", "cta", "name"]));
+    expect(strip.querySelector("[data-fit-key=elapsed]")).not.toHaveAttribute("data-fit-hidden");
+    // The separator after the name goes with it: no lone chevron before the project.
+    const name = strip.querySelector<HTMLElement>("[data-fit-key=name]")!;
+    expect(name.querySelector("svg")).not.toBeNull();
+    expect(name).toHaveClass("hidden");
+    expect(within(strip).getByTestId("factory-gate-dots")).toBeVisible();
+    // The arrow into the cockpit is always there.
+    expect(strip.lastElementChild?.querySelector("svg")).not.toBeNull();
+    expect(strip.lastElementChild).not.toHaveAttribute("data-fit-key");
+  });
+
+  it("keeps the stage, gates and preview in the default chat layout", async () => {
+    mockLayout(260, PL_WIDTHS);
+    const pl = plSession();
+    renderStrip(pl.id, [pl]);
+
+    const strip = await screen.findByTestId("factory-strip");
+    await waitFor(() =>
+      expect(hiddenParts(strip)).toEqual(["cost", "cta", "elapsed", "name", "pr", "project"]),
+    );
+    expect(within(strip).getByTestId("factory-strip-stage")).not.toHaveAttribute("data-fit-hidden");
+  });
+
+  it("truncates the project before hiding it", async () => {
+    // Without cost, name and the CTA label the parts need 422 px; 410 fits a 68 px project.
+    mockLayout(410, PL_WIDTHS);
+    const pl = plSession();
+    renderStrip(pl.id, [pl]);
+
+    const strip = await screen.findByTestId("factory-strip");
+    const project = strip.querySelector<HTMLElement>("[data-fit-key=project]")!;
+    await waitFor(() => expect(project.style.maxWidth).toBe("68px"));
+    expect(project).not.toHaveAttribute("data-fit-hidden");
+  });
+
+  it("keeps a lead's open decisions longest", async () => {
+    mockLayout(300, { name: 90, decisions: 80, ready: 120, projects: 75, cost: 50, cta: 90 });
+    const atlas = atlasSession();
+    renderStrip(atlas.id, [atlas]);
+
+    const strip = await screen.findByTestId("factory-strip");
+    await waitFor(() => expect(hiddenParts(strip)).toEqual(["cost", "cta", "name", "projects"]));
+    expect(strip.querySelector("[data-fit-key=decisions]")).toHaveTextContent("2 decisions");
+    // Decisions come first in reading order too.
+    const order = [...strip.querySelectorAll<HTMLElement>("[data-fit-key]")].map(
+      (el) => el.dataset.fitKey,
+    );
+    expect(order.indexOf("decisions")).toBeLessThan(order.indexOf("ready"));
+    expect(order.indexOf("ready")).toBeLessThan(order.indexOf("projects"));
   });
 });

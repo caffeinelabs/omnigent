@@ -6,11 +6,7 @@ import { Link } from "@/lib/routing";
 
 export function NewFactoryPage() {
   return (
-    <PageScroll
-      data-testid="factory-new"
-      maxWidthClassName="max-w-4xl"
-      contentClassName="px-4 md:px-6"
-    >
+    <PageScroll data-testid="factory-new" maxWidthClassName="max-w-4xl" contentClassName="px-6">
       <Link
         to="/factory"
         componentId="factory.new.back"

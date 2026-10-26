@@ -8,6 +8,7 @@ import {
   isFactoryMember,
   isFactoryPath,
   isFactoryWarningHealth,
+  normalizeFactoryId,
 } from "./factory";
 
 describe("factory labels", () => {
@@ -92,5 +93,22 @@ describe("factory roots and routes", () => {
     ["/", false],
   ])("recognises %s as a factory route: %s", (path, expected) => {
     expect(isFactoryPath(path)).toBe(expected);
+  });
+});
+
+describe("normalizeFactoryId", () => {
+  const hex = "5e57e030fab14bdb9beda6f53c453bdb";
+
+  it("keeps a bare hex id", () => {
+    expect(normalizeFactoryId(hex)).toBe(hex);
+  });
+
+  it("drops a legacy prefix, dashes and case", () => {
+    expect(normalizeFactoryId(`conv_${hex}`)).toBe(hex);
+    expect(normalizeFactoryId("5E57E030-FAB1-4BDB-9BED-A6F53C453BDB")).toBe(hex);
+  });
+
+  it("leaves anything that is not a uuid as written", () => {
+    expect(normalizeFactoryId(" atlas ")).toBe("atlas");
   });
 });

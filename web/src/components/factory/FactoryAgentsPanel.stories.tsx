@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { childSessionsQueryKey, type ChildSessionInfo } from "@/hooks/useChildSessions";
+import { SubagentsGraphView } from "@/shell/SubagentsGraphView";
 import { SubagentsPanel } from "@/shell/SubagentsPanel";
 import {
   LIVE_RUN_ATLAS_ID,
@@ -58,7 +59,11 @@ const TREE: Record<string, ChildSessionInfo[]> = {
   ],
 };
 
-function panelStory(rootId: string, theme: "light" | "dark" = "light"): Story {
+function panelStory(
+  rootId: string,
+  theme: "light" | "dark" = "light",
+  view: "list" | "graph" = "list",
+): Story {
   const root = rootId === LIVE_RUN_ATLAS_ID ? atlasSession() : plSession();
   return {
     args: { conversationId: rootId, rootSessionId: rootId },
@@ -82,9 +87,15 @@ function panelStory(rootId: string, theme: "light" | "dark" = "light"): Story {
           }
         }}
       >
-        <div className="h-[420px] w-[320px] overflow-hidden rounded-lg border bg-card">
-          <SubagentsPanel {...args} />
-        </div>
+        {view === "graph" ? (
+          <div className="h-[420px] w-[min(640px,calc(100vw-2rem))] overflow-hidden rounded-lg border bg-card">
+            <SubagentsGraphView {...args} />
+          </div>
+        ) : (
+          <div className="h-[420px] w-[320px] overflow-hidden rounded-lg border bg-card">
+            <SubagentsPanel {...args} />
+          </div>
+        )}
       </FactoryStoryFrame>
     ),
   };
@@ -102,3 +113,8 @@ type Story = StoryObj<typeof meta>;
 export const AtlasRoot = panelStory(LIVE_RUN_ATLAS_ID);
 
 export const AtlasRootDark = panelStory(LIVE_RUN_ATLAS_ID, "dark");
+
+/** The graph view's root node: "Atlas" with its Lead chip, members below. */
+export const AtlasGraph = panelStory(LIVE_RUN_ATLAS_ID, "light", "graph");
+
+export const AtlasGraphDark = panelStory(LIVE_RUN_ATLAS_ID, "dark", "graph");

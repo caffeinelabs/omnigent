@@ -73,7 +73,7 @@ export function FactoryStageCounts({ factory }: { factory: FactorySummary }) {
             data-stage={stage}
             className={cn(
               "inline-flex items-baseline gap-1",
-              n === 0 ? "text-foreground-tertiary" : "text-muted-foreground",
+              n === 0 ? "text-muted-foreground/50" : "text-muted-foreground",
               highlight && "text-success",
             )}
           >

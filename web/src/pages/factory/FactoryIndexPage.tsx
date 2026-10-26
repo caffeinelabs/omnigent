@@ -10,6 +10,7 @@ import { FactoryIcon, PlusIcon } from "lucide-react";
 import { PageScroll } from "@/components/PageScroll";
 import { FactoryIndexCard, FactoryIndexCardSkeleton } from "@/components/factory/FactoryIndexCard";
 import { FactoryLoadError } from "@/components/factory/FactoryLoadError";
+import { useFactoryNow } from "@/components/factory/factoryClock";
 import {
   FactoryPreflight,
   FactoryPreflightSkeleton,
@@ -17,7 +18,6 @@ import {
 } from "@/components/factory/FactoryPreflight";
 import { Button } from "@/components/ui/button";
 import { useFactories, usePreflight } from "@/hooks/useFactory";
-import { useNow } from "@/hooks/useNow";
 import { Link } from "@/lib/routing";
 
 function NewFactoryButton({
@@ -89,18 +89,16 @@ function FactoryEmptyState() {
 
 export function FactoryIndexPage() {
   const factories = useFactories();
-  const now = useNow();
+  const now = useFactoryNow();
   const list = factories.data?.data;
   const error = (factories.error as Error | null) ?? null;
+  // The empty state carries its own (preflight-gated) CTA, so the header has none then.
+  const headerButton = list ? list.length > 0 : error !== null;
   return (
-    <PageScroll
-      data-testid="factory-index"
-      maxWidthClassName="max-w-4xl"
-      contentClassName="px-4 md:px-6"
-    >
+    <PageScroll data-testid="factory-index" maxWidthClassName="max-w-4xl" contentClassName="px-6">
       <div className="mb-6 flex items-center justify-between gap-3">
         <h1 className="text-2xl font-semibold">Factory</h1>
-        <NewFactoryButton testId="factory-new-button" />
+        {headerButton && <NewFactoryButton testId="factory-new-button" />}
       </div>
       {error && (
         <FactoryLoadError

@@ -123,8 +123,16 @@ describe("FactoryIndexPage", () => {
       "OMNIGENT_FACTORY_ENABLED",
     );
     fireEvent.click(screen.getByRole("button", { name: "Connect GitHub" }));
-    expect(beginGithubConnect).toHaveBeenCalledWith("/factory");
+    // Back to this page as the browser sees it (an embed's basename included).
+    expect(beginGithubConnect).toHaveBeenCalledWith(
+      `${window.location.pathname}${window.location.search}`,
+    );
+    expect(screen.getByTestId("factory-preflight-agents")).toContainElement(
+      screen.getByRole("link", { name: "docs/FACTORY.md" }),
+    );
     expect(screen.getByTestId("factory-empty-new-button")).toBeDisabled();
+    // One CTA, gated like the checklist: the header has no second, enabled one.
+    expect(screen.queryByTestId("factory-new-button")).toBeNull();
   });
 
   it("offers the start button once every preflight check passes", async () => {
@@ -139,6 +147,7 @@ describe("FactoryIndexPage", () => {
     );
     expect(screen.queryByRole("button", { name: "Connect GitHub" })).toBeNull();
     expect(screen.getByTestId("factory-empty-new-button")).toHaveAttribute("href", "/factory/new");
+    expect(screen.queryByTestId("factory-new-button")).toBeNull();
   });
 
   it("shows an error with Retry instead of an empty index when the first load fails", async () => {
@@ -150,6 +159,7 @@ describe("FactoryIndexPage", () => {
     expect(alert).toHaveTextContent("Couldn’t load factories");
     expect(alert).toHaveTextContent("HTTP 503");
     expect(screen.queryByTestId("factory-empty")).toBeNull();
+    expect(screen.getByTestId("factory-new-button")).toBeInTheDocument();
 
     serve({ factories: () => json(factoryList()) });
     fireEvent.click(within(alert).getByRole("button", { name: "Retry" }));

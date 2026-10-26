@@ -113,6 +113,17 @@ const PL_HEADER: HeaderProps = {
   factoryParent: { id: LIVE_RUN_ATLAS_ID, title: "Atlas" },
 };
 
+const IC_HEADER: HeaderProps = {
+  conversationId: icSession().id,
+  isChildSession: true,
+  conversationTitle: "PL · api-version",
+  titleLinkTo: `/c/${LIVE_RUN_PL_API_ID}`,
+  subAgentName: "ic_codex",
+  projectName: null,
+};
+
+const LEAD_HEADER: HeaderProps = { conversationId: LIVE_RUN_ATLAS_ID, conversationTitle: "Atlas" };
+
 /** PL · api-version: #9630 ready, preview at head, demo passed. */
 export const ProjectLead = headerStory([plSession()], PL_HEADER);
 
@@ -136,22 +147,12 @@ export const ProjectLeadBlocked = headerStory(
 );
 
 /** An IC sub-agent: placement read from its root PL. */
-export const SubAgent = headerStory([plSession(), icSession()], {
-  conversationId: icSession().id,
-  isChildSession: true,
-  conversationTitle: "PL · api-version",
-  titleLinkTo: `/c/${LIVE_RUN_PL_API_ID}`,
-  subAgentName: "ic_codex",
-  projectName: null,
-});
+export const SubAgent = headerStory([plSession(), icSession()], IC_HEADER);
 
 /** Atlas: the whole factory at a glance. */
-export const Lead = headerStory([atlasSession()], {
-  conversationId: LIVE_RUN_ATLAS_ID,
-  conversationTitle: "Atlas",
-});
+export const Lead = headerStory([atlasSession()], LEAD_HEADER);
 
-/** The snapshot is still loading: labels only, still a way into the cockpit. */
+/** The snapshot is still loading: a placeholder holds the name, still a way into the cockpit. */
 export const SnapshotLoading = headerStory([plSession()], PL_HEADER, {
   routes: { [`/v1/factory/factories/${LIVE_RUN_FACTORY_ID}`]: "pending" },
 });
@@ -160,6 +161,51 @@ export const SnapshotLoading = headerStory([plSession()], PL_HEADER, {
 export const SnapshotUnavailable = headerStory([plSession()], PL_HEADER, {
   routes: { [`/v1/factory/factories/${LIVE_RUN_FACTORY_ID}`]: { error: 404 } },
 });
+
+/** Chat column widths with the sidebar and the right panel open (the everyday layout). */
+const DEFAULT_LAYOUT_ROWS: { width: number; note: string; props: HeaderProps }[] = [
+  { width: 602, note: "1440 px window", props: PL_HEADER },
+  { width: 690, note: "1512 px window", props: PL_HEADER },
+  { width: 809, note: "1728 px window", props: PL_HEADER },
+  { width: 1001, note: "1920 px window", props: PL_HEADER },
+  { width: 602, note: "1440 px window · IC", props: IC_HEADER },
+  { width: 809, note: "1728 px window · IC", props: IC_HEADER },
+  { width: 602, note: "1440 px window · lead", props: LEAD_HEADER },
+  { width: 809, note: "1728 px window · lead", props: LEAD_HEADER },
+  { width: 420, note: "squeezed", props: PL_HEADER },
+];
+
+function defaultLayoutStory(theme: "light" | "dark"): Story {
+  return {
+    render: () => (
+      <FactoryStoryFrame
+        theme={theme}
+        route={`/c/${LIVE_RUN_PL_API_ID}`}
+        sessions={[plSession(), icSession(), atlasSession()]}
+        className="flex flex-col gap-3 p-4"
+      >
+        {DEFAULT_LAYOUT_ROWS.map(({ width, note, props }) => (
+          <div key={`${note}-${width}`} className="flex flex-col gap-1">
+            <span className="text-xs text-muted-foreground">
+              {width} px chat column · {note}
+            </span>
+            <div
+              className="relative h-12 rounded-md border border-dashed border-border"
+              style={{ width }}
+            >
+              {header({ sidebarOpen: true, rightPanelOpen: true, ...props })}
+            </div>
+          </div>
+        ))}
+      </FactoryStoryFrame>
+    ),
+  };
+}
+
+/** The header as people use it: sidebar and right panel open, 420 to 1000 px of column. */
+export const DefaultChatLayout = defaultLayoutStory("light");
+
+export const DefaultChatLayoutDark = defaultLayoutStory("dark");
 
 /** A narrow header (a side panel open): low-priority segments drop out whole. */
 export const NarrowHeader: Story = {
