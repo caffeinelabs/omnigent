@@ -503,12 +503,25 @@ class ToolManager:
         Register the software-factory tools for specs that declare a factory role.
 
         ``executor.config.factory_role`` (see :mod:`omnigent.factory`) unlocks
-        ``sys_session_post``, ``sys_factory_roster`` and ``sys_factory_set``;
-        ``sys_factory_spawn`` (a new top-level sandbox) is for ``lead`` only.
-        All four are runner-dispatched to the server's ``/v1/factory`` routes.
+        ``sys_session_post``, ``sys_factory_roster``, ``sys_factory_set``,
+        ``sys_factory_ask`` and ``sys_factory_pr`` for every role;
+        ``sys_factory_spawn`` (a new top-level sandbox) is for ``lead`` only,
+        ``sys_factory_env`` for ``project_lead`` and ``env_keeper``, and
+        ``sys_factory_demo`` for those two and ``demo``. All are
+        runner-dispatched to the server's ``/v1/factory`` routes.
         """
-        from omnigent.factory import ROLE_LEAD, factory_role_from_spec
+        from omnigent.factory import (
+            ROLE_DEMO,
+            ROLE_ENV_KEEPER,
+            ROLE_LEAD,
+            ROLE_PROJECT_LEAD,
+            factory_role_from_spec,
+        )
         from omnigent.tools.builtins.factory import (
+            SysFactoryAskTool,
+            SysFactoryDemoTool,
+            SysFactoryEnvTool,
+            SysFactoryPrTool,
             SysFactoryRosterTool,
             SysFactorySetTool,
             SysFactorySpawnTool,
@@ -518,9 +531,19 @@ class ToolManager:
         role = factory_role_from_spec(self._spec)
         if role is None:
             return
-        tools: list[Tool] = [SysSessionPostTool(), SysFactoryRosterTool(), SysFactorySetTool()]
+        tools: list[Tool] = [
+            SysSessionPostTool(),
+            SysFactoryRosterTool(),
+            SysFactorySetTool(),
+            SysFactoryAskTool(),
+            SysFactoryPrTool(),
+        ]
         if role == ROLE_LEAD:
             tools.append(SysFactorySpawnTool())
+        if role in (ROLE_PROJECT_LEAD, ROLE_ENV_KEEPER):
+            tools.append(SysFactoryEnvTool())
+        if role in (ROLE_PROJECT_LEAD, ROLE_ENV_KEEPER, ROLE_DEMO):
+            tools.append(SysFactoryDemoTool())
         for tool in tools:
             self._tools[tool.name()] = tool
 

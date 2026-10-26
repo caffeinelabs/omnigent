@@ -11,6 +11,8 @@ their root conversation, and their role comes from their spec's
 from __future__ import annotations
 
 import os
+import re
+from collections.abc import Mapping
 from typing import Any, Final
 
 LABEL_PREFIX: Final = "omnigent.factory."
@@ -128,6 +130,177 @@ DECISION_ACTIONS: Final = frozenset(
 
 MIN_HEARTBEAT_S: Final = 120
 MAX_HEARTBEAT_S: Final = 86400
+
+# Agent reports through sys_factory_pr / sys_factory_env / sys_factory_ask.
+PR_CLAIMS: Final = ("opened", "ready_for_human_merge", "abandoned")
+SENTINEL_VERDICTS: Final = ("verified", "not_verified")
+ENV_STATES: Final = ("starting", "ready", "degraded", "failed", "parked", "down")
+"""States an agent may report for a project's dev env."""
+PREVIEW_REPORT_STATES: Final = ("deploying", "ready", "failed", "parking", "parked", "down")
+"""States an agent may report for a factory preview (``stale``/``gone`` are probed)."""
+DECISION_MAX_OPTIONS: Final = 5
+DECISION_MAX_OPEN_PER_ASKER: Final = 10
+DECISION_QUESTION_MAX: Final = 1000
+DECISION_CONTEXT_MAX: Final = 4000
+DECISION_OPTION_LABEL_MAX: Final = 60
+DECISION_OPTION_DESCRIPTION_MAX: Final = 200
+
+# Recorded demos: file types, kinds and caps (the runner pre-checks, the server enforces).
+_MIB: Final = 1024 * 1024
+DEMO_STATUSES: Final = ("PASS", "PARTIAL", "FAIL", "ERROR")
+DEMO_FILE_KINDS: Final = (
+    "video",
+    "screenshot",
+    "poster",
+    "api",
+    "har",
+    "trace",
+    "console",
+    "script",
+    "log",
+    "other",
+)
+DEMO_MANIFEST_KINDS: Final[dict[str, str]] = {
+    "video": "video",
+    "poster": "poster",
+    "api": "api",
+    "har": "har",
+    "trace": "trace",
+    "console": "console",
+    "script": "script",
+    "log": "log",
+}
+"""``demo.json`` ``artifacts`` key -> file kind; any other key is ``other``."""
+DEMO_FILE_TYPES: Final[dict[str, tuple[str, str]]] = {
+    ".webm": ("video/webm", "video"),
+    ".mp4": ("video/mp4", "video"),
+    ".png": ("image/png", "image"),
+    ".jpg": ("image/jpeg", "image"),
+    ".jpeg": ("image/jpeg", "image"),
+    ".gif": ("image/gif", "image"),
+    ".json": ("application/json", "text"),
+    ".har": ("application/json", "text"),
+    ".txt": ("text/plain; charset=utf-8", "text"),
+    ".md": ("text/markdown; charset=utf-8", "text"),
+    ".log": ("text/plain; charset=utf-8", "text"),
+    ".ts": ("text/plain; charset=utf-8", "text"),
+    ".zip": ("application/zip", "archive"),
+}
+"""Extension -> (served content type, size class). HTML and SVG are never allowed."""
+DEMO_CLASS_MAX_BYTES: Final[dict[str, int]] = {
+    "video": 50 * _MIB,
+    "image": 5 * _MIB,
+    "text": 2 * _MIB,
+    "archive": 50 * _MIB,
+}
+DEMO_MAX_FILES: Final = 30
+DEMO_MAX_TOTAL_BYTES: Final = 120 * _MIB
+DEMO_MANIFEST_MAX_BYTES: Final = 2 * _MIB
+
+
+_PR_URL_RE: Final = re.compile(
+    r"https?://github\.com/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)/pull/(\d+)"
+)
+_SHA_RE: Final = re.compile(r"[0-9a-f]{40}")
+
+
+def parse_pr_url(url: object) -> tuple[str, int] | None:
+    """
+    Parse a GitHub pull request URL.
+
+    :param url: e.g. ``"https://github.com/caffeinelabs/app/pull/9630"`` (a
+        trailing slash, query or fragment is tolerated).
+    :returns: ``("caffeinelabs/app", 9630)`` with the repo lowercased, or ``None``.
+    """
+    if not isinstance(url, str):
+        return None
+    text = url.strip().split("#", 1)[0].split("?", 1)[0].rstrip("/")
+    match = _PR_URL_RE.fullmatch(text)
+    if match is None:
+        return None
+    owner, repo, number = match.groups()
+    return f"{owner}/{repo}".lower(), int(number)
+
+
+def canonical_pr_url(repo: str, number: int) -> str:
+    """:returns: ``https://github.com/<repo>/pull/<number>``."""
+    return f"https://github.com/{repo}/pull/{number}"
+
+
+def is_full_sha(value: object) -> bool:
+    """:returns: Whether *value* is a 40-char lowercase hex commit sha."""
+    return isinstance(value, str) and _SHA_RE.fullmatch(value) is not None
+
+
+def demo_file_type(name: str) -> tuple[str, str] | None:
+    """
+    Look up a demo file's served content type and size class by extension.
+
+    :param name: File name or path, e.g. ``"shots/01-landing.png"``.
+    :returns: e.g. ``("image/png", "image")``, or ``None`` when not allowed.
+    """
+    dot = name.rfind(".")
+    if dot < 0 or "/" in name[dot:]:
+        return None
+    return DEMO_FILE_TYPES.get(name[dot:].lower())
+
+
+def demo_manifest_conflict(
+    manifest: Mapping[str, Any], pr_url: str, head_sha: str
+) -> tuple[str, str] | None:
+    """
+    Check a harness ``demo.json`` against the PR head it is published for.
+
+    :param manifest: The manifest; its ``sha`` and ``pr_url`` are checked when present.
+    :param pr_url: The PR the demo is published on.
+    :param head_sha: The full head sha the demo is published for.
+    :returns: ``(error code, message)`` when the manifest names another commit
+        or PR, else ``None``.
+    """
+    sha = manifest.get("sha")
+    if isinstance(sha, str) and sha.strip():
+        recorded = sha.strip().lower()
+        if len(recorded) < 7 or not head_sha.lower().startswith(recorded):
+            return (
+                "sha_mismatch",
+                f"demo.json was recorded at {recorded[:12]}, not at head {head_sha[:12]}",
+            )
+    url = manifest.get("pr_url")
+    if isinstance(url, str) and url.strip() and parse_pr_url(url) != parse_pr_url(pr_url):
+        return "pr_mismatch", f"demo.json is for {url.strip()[:200]}, not {pr_url[:200]}"
+    return None
+
+
+def demo_status(given: object, manifest: Mapping[str, Any] | None) -> str | tuple[str, str]:
+    """
+    The status a demo is recorded with: the manifest's when there is one.
+
+    :param given: The status the agent passed, or ``None``.
+    :param manifest: The harness's ``demo.json``, or ``None``.
+    :returns: The status, or ``(error code, message)`` when the agent's status
+        disagrees with the manifest or no valid status is given.
+    """
+    statuses = "|".join(DEMO_STATUSES)
+    if given == "":
+        given = None
+    if manifest is not None and manifest.get("status") is not None:
+        recorded = manifest["status"]
+        if recorded not in DEMO_STATUSES:
+            return "invalid_status", f"demo.json status {str(recorded)[:20]!r} is not {statuses}"
+        if given is not None and given != recorded:
+            return (
+                "status_mismatch",
+                f"demo.json says {recorded}; omit status or pass {recorded}",
+            )
+        assert isinstance(recorded, str)
+        return recorded
+    if given is None:
+        return "invalid_status", f"pass status ({statuses}) or a manifest with one"
+    if given not in DEMO_STATUSES:
+        return "invalid_status", f"status must be one of {statuses}"
+    assert isinstance(given, str)
+    return given
+
 
 LABEL_VALUE_MAX_LEN: Final = 256
 SUMMARY_MAX_LEN: Final = 120

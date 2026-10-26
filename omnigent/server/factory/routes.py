@@ -11,6 +11,7 @@ sender and target must share ``omnigent.factory.id``.
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 from fastapi import APIRouter, Query, Request
@@ -20,6 +21,7 @@ from pydantic import BaseModel
 from omnigent.entities import Conversation
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.factory import (
+    AGENT_STAGES,
     HEALTH,
     LABEL_HEALTH,
     LABEL_HEARTBEAT_S,
@@ -37,6 +39,7 @@ from omnigent.factory import (
 )
 from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER, token_bound_runner_id
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER, LEVEL_READ
+from omnigent.server.factory import live
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.envelope import display_title, format_envelope
 from omnigent.server.factory.mailer import MailItem, get_mailer, new_mail_id
@@ -111,6 +114,7 @@ class PatchSessionBody(BaseModel):
     heartbeat_s: int | None = None
     supervisor_session_id: str | None = None
     title: str | None = None
+    stage: str | None = None
 
 
 async def _get_session(deps: FactoryDeps, session_id: str) -> Conversation:
@@ -336,6 +340,10 @@ def create_factory_router() -> APIRouter:
             target = await _get_session(deps, session_id)
             target_m = await _same_factory_target(deps, sender_m, target)
         fields = body.model_fields_set - {"from_session_id"}
+        stage_project: str | None = None
+        if body.stage is not None:
+            stage_project = await _stage_claim_project(deps, sender_m, target.id, body.stage)
+            fields = fields - {"stage"}
         beacon_only = fields <= _BEACON_FIELDS
         allowed = (
             target.id == sender.id
@@ -411,6 +419,63 @@ def create_factory_router() -> APIRouter:
         if clear_supervisor:
             await asyncio.to_thread(store.delete_label, target.id, LABEL_SUPERVISOR)
         refreshed = await _get_session(deps, target.id)
-        return (await asyncio.to_thread(membership_of, refreshed, deps)).to_dict()
+        result = (await asyncio.to_thread(membership_of, refreshed, deps)).to_dict()
+        if stage_project is not None and body.stage is not None:
+            await _record_stage_claim(request, deps, sender_m, stage_project, body.stage)
+            result["agent_stage"] = body.stage
+        return result
 
     return router
+
+
+async def _stage_claim_project(
+    deps: FactoryDeps, sender: Membership, target_id: str, stage: str
+) -> str:
+    """
+    Check a ``stage`` claim: a valid stage, made by its project's current PL on itself.
+
+    :returns: The project slug the claim is for.
+    :raises FactoryRouteError: 400 ``invalid_stage`` or 403 ``not_your_project``.
+    """
+    if stage not in AGENT_STAGES:
+        raise FactoryRouteError(
+            400, "invalid_stage", f"stage must be one of {sorted(AGENT_STAGES)}"
+        )
+    project = sender.project
+    if (
+        target_id != sender.session_id
+        or sender.role != ROLE_PROJECT_LEAD
+        or not sender.is_top_level
+        or not project
+        or sender.factory_id is None
+    ):
+        raise FactoryRouteError(
+            403, "not_your_project", "only a project's lead claims its stage, on itself"
+        )
+    try:
+        current = await asyncio.to_thread(
+            resolve_target, f"project:{project}", sender, deps.conversation_store
+        )
+    except UnknownTargetError:
+        current = None
+    if current is None or current.id != sender.session_id:
+        raise FactoryRouteError(
+            403, "not_your_project", f"you are not the current lead of project {project!r}"
+        )
+    return project
+
+
+async def _record_stage_claim(
+    request: Request, deps: FactoryDeps, sender: Membership, project: str, stage: str
+) -> None:
+    """Store a PL's stage claim on its project row and refresh open cockpits."""
+    assert sender.factory_id is not None
+    await asyncio.to_thread(
+        deps.factory_store.upsert_project,
+        sender.factory_id,
+        project,
+        agent_stage=stage,
+        agent_stage_at=int(time.time()),
+        pl_session_id=sender.session_id,
+    )
+    live.announce_factory_changed(request.app.state, sender.factory_id, ["snapshot"])
