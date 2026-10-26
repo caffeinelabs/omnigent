@@ -1711,6 +1711,133 @@ async def test_auto_create_codex_terminal_starts_relay_at_session_creation(
 
 
 @pytest.mark.asyncio
+async def test_auto_create_codex_terminal_keeps_shell_init_out_of_remote_tui(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ``codex --remote`` TUI terminal strips ``BASH_ENV`` / ``ENV``.
+
+    tmux runs the pane command through ``$SHELL -c``, so an inherited
+    ``BASH_ENV`` makes bash source the deployment's shell init before codex
+    starts. On a sandbox pod that init can install the repo toolchain for
+    ~50s, outlasting the forwarder's thread-start deadline, so the TUI never
+    connects. The TUI only renders (the app-server runs every tool), so its
+    terminal spec must unset both names. The app-server env is allowlisted
+    separately and is not touched here.
+
+    :param tmp_path: Temporary directory for isolated bridge state.
+    :param monkeypatch: Pytest monkeypatch fixture.
+    :returns: None.
+    """
+    import omnigent.harnesses.codex_native.app_server as codex_app_mod
+    from omnigent.runner import app as runner_app_mod
+    from omnigent.runner.native.orchestration import CODEX_REMOTE_TUI_ENV_UNSET
+
+    session_id = "0b9f3c2e5d6a4f718293a4b5c6d7e8f9"
+    shell_init = "/etc/deployment-shell-init.sh"
+    monkeypatch.setattr(codex_native_bridge, "_BRIDGE_ROOT", tmp_path / "codex-bridge")
+    monkeypatch.setenv("OMNIGENT_RUNNER_WORKSPACE", str(tmp_path / "workspace"))
+    monkeypatch.setenv("RUNNER_SERVER_URL", "http://ap.example")
+    monkeypatch.setenv("BASH_ENV", shell_init)
+    monkeypatch.setenv("ENV", shell_init)
+    monkeypatch.delenv("DATABRICKS_CONFIG_PROFILE", raising=False)
+    monkeypatch.setattr("omnigent.runner._entry._make_auth_token_factory", lambda: None)
+
+    class _FakeCodexAppServer:
+        """Minimal app-server stand-in for the TUI terminal launch."""
+
+        codex_path = "/opt/codex/bin/codex"
+        codex_cli_version: tuple[int, int, int] | None = None
+
+        def __init__(self) -> None:
+            """:returns: None."""
+            self.env = {"OPENAI_API_KEY": "sk-test"}
+            self.codex_home = tmp_path / "codex-home"
+            self.listen_url: str | None = None
+            self.config_overrides: list[str] = []
+
+        async def start(self) -> None:
+            """:returns: None."""
+
+        async def close(self) -> None:
+            """:returns: None."""
+
+    class _FakeDiscoveryClient:
+        """No-op app-server client for the discovery path."""
+
+        def __init__(self, *, ws_url: str, client_name: str) -> None:
+            """:param ws_url: ws url. :param client_name: client name."""
+            del ws_url, client_name
+
+        async def connect(self) -> None:
+            """:returns: None."""
+
+        async def close(self) -> None:
+            """:returns: None."""
+
+    launch_captured: dict[str, Any] = {}
+
+    class _FakeResourceRegistry:
+        """Resource registry that records the launched terminal spec."""
+
+        async def launch_auxiliary_terminal(
+            self,
+            *,
+            session_id: str,
+            terminal_name: str,
+            session_key: str,
+            spec: Any,
+            resource_role: str | None = None,
+            parent_os_env: Any = None,
+        ) -> SessionResourceView:
+            """:returns: A fixed terminal resource view."""
+            del terminal_name, session_key, resource_role, parent_os_env
+            launch_captured["spec"] = spec
+            return SessionResourceView(
+                id="terminal_codex_main",
+                type="terminal",
+                session_id=session_id,
+                name="Codex",
+            )
+
+    async def _fake_discover(**kwargs: Any) -> None:
+        """:returns: None — stands in for the discovery forwarder."""
+        del kwargs
+
+    app_server = _FakeCodexAppServer()
+    monkeypatch.setattr(codex_app_mod, "build_codex_native_server", lambda **_k: app_server)
+    monkeypatch.setattr(codex_app_mod, "CodexAppServerClient", _FakeDiscoveryClient)
+    monkeypatch.setattr(runner_app_mod, "_codex_discover_thread_and_forward", _fake_discover)
+
+    agent_spec = AgentSpec(
+        spec_version=1,
+        name="codex",
+        executor=ExecutorSpec(
+            type="omnigent",
+            config={"harness": "codex-native", "model": "gpt-5-default"},
+        ),
+    )
+
+    try:
+        await _auto_create_codex_terminal(
+            session_id,
+            _FakeResourceRegistry(),  # type: ignore[arg-type]
+            lambda _sid, event: None,
+            agent_spec=agent_spec,
+            server_client=cast(httpx.AsyncClient, NullServerClient()),
+        )
+        await asyncio.sleep(0)
+    finally:
+        runner_app_mod._AUTO_CODEX_APP_SERVERS.pop(session_id, None)
+
+    spec = launch_captured["spec"]
+    assert set(CODEX_REMOTE_TUI_ENV_UNSET) == {"BASH_ENV", "ENV"}
+    assert set(CODEX_REMOTE_TUI_ENV_UNSET) <= set(spec.env_unset)
+    # Inheritance stays on, so env_unset is what keeps the host value out.
+    assert spec.inherit_env is True
+
+
+@pytest.mark.asyncio
 async def test_claude_native_first_turn_not_blocked_by_cold_bridge_notify(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
