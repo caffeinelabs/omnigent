@@ -20,7 +20,9 @@ Omnigent terminal) and denies:
 - per role: any push or PR creation (CLI or API) by a lead or reviewer, the
   merge gate for anyone but the project lead, and env lifecycle
   (``tilt up|down``, ``pnpm factory:up|down`` or the script behind it,
-  ``kubectl delete ns``) for anyone but env_keeper.
+  ``kubectl delete ns``) for anyone but env_keeper and the project lead.
+  A sub-agent is also held to its parent's guardrails (stricter wins), so the
+  project lead's fence must admit what its env_keeper runs.
 
 Line continuations are joined and heredoc bodies and single-quoted text are
 treated as data, so multi-line commands are checked as the shell runs them.
@@ -233,6 +235,10 @@ _QUOTED_RE = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"")
 
 # Marker standing in for a command nested too deeply to unwrap.
 _TOO_DEEP = "\x00too-deep"
+
+# env_keeper owns the env; the project lead must also pass, because its
+# guardrails are inherited by (and evaluated before) its env_keeper sub-agent.
+_ENV_LIFECYCLE_ROLES: frozenset[str] = frozenset({ROLE_ENV_KEEPER, ROLE_PROJECT_LEAD})
 
 _ENV_HINT = (
     "only env_keeper starts or stops the shared env. Use the URLs in "
@@ -734,8 +740,8 @@ class _RoleGuard:
         )
 
     def _env_reason(self, what: str) -> str | None:
-        """DENY env lifecycle commands for every role but env_keeper."""
-        if self.role == ROLE_ENV_KEEPER:
+        """DENY env lifecycle commands for every role but env_keeper and the project lead."""
+        if self.role in _ENV_LIFECYCLE_ROLES:
             return None
         return f"`{what}` is blocked for role {self.role}: {_ENV_HINT}."
 

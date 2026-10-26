@@ -43,7 +43,8 @@ _HANDLER = "omnigent.policies.builtins.factory.factory_role_guard"
 _ALL_ROLES = sorted(ROLES)
 _PUSHING_ROLES = [ROLE_PROJECT_LEAD, ROLE_IC, ROLE_ENV_KEEPER]
 _NON_PL_ROLES = [r for r in _ALL_ROLES if r != ROLE_PROJECT_LEAD]
-_NON_ENV_ROLES = [r for r in _ALL_ROLES if r != ROLE_ENV_KEEPER]
+_ENV_ROLES = [ROLE_ENV_KEEPER, ROLE_PROJECT_LEAD]
+_NON_ENV_ROLES = [r for r in _ALL_ROLES if r not in _ENV_ROLES]
 _MERGE_URL = "https://github.com/caffeinelabs/app/pull/7"
 
 
@@ -384,15 +385,17 @@ def test_merge_gate_is_project_lead_only(role: str, command: str, expected: str)
 
 @pytest.mark.parametrize(
     ("role", "command", "expected"),
-    _cases(_NON_ENV_ROLES, _ENV_LIFECYCLE, "DENY")
-    + _cases([ROLE_ENV_KEEPER], _ENV_LIFECYCLE, "ALLOW"),
+    _cases(_NON_ENV_ROLES, _ENV_LIFECYCLE, "DENY") + _cases(_ENV_ROLES, _ENV_LIFECYCLE, "ALLOW"),
 )
-def test_env_lifecycle_is_env_keeper_only(role: str, command: str, expected: str) -> None:
+def test_env_lifecycle_is_env_keeper_or_project_lead(
+    role: str, command: str, expected: str
+) -> None:
     """
-    Only env_keeper starts or stops the shared Tilt env.
+    Only env_keeper (and its project lead) starts or stops the shared Tilt env.
 
     An IC running ``tilt down`` or ``kubectl delete ns`` tears the env out
-    from under every sibling testing against it.
+    from under every sibling testing against it. The project lead must pass
+    too: env_keeper is its sub-agent and inherits its guardrails.
     """
     decision = _decide(role, command)
     assert decision["result"] == expected, decision.get("reason")
@@ -767,3 +770,37 @@ def test_registered_as_builtin_policy() -> None:
         validate_factory_params(_HANDLER, {"role": "ic", "write_repos": 3}) or ""
     )
     assert "Unknown params" in (validate_factory_params(_HANDLER, {"role": "ic", "x": 1}) or "")
+
+
+def _bundle_guard_args(path: str) -> dict[str, Any]:
+    """:returns: The ``factory_guard`` arguments a factory bundle spec declares."""
+    import yaml
+
+    spec = yaml.safe_load((Path(__file__).parents[2] / path).read_text())
+    policy = spec["guardrails"]["policies"]["factory_guard"]
+    return dict(policy["function"]["arguments"])
+
+
+@pytest.mark.parametrize(
+    ("child", "command", "expected"),
+    [
+        ("env_keeper", "cd /home/omnigent/workspace/wt/env && pnpm factory:up", "ALLOW"),
+        ("env_keeper", "tilt down", "ALLOW"),
+        ("ic", "pnpm factory:up", "DENY"),
+        ("reviewer", "tilt up", "DENY"),
+    ],
+)
+def test_sub_agent_passes_both_its_own_and_the_project_lead_guard(
+    child: str, command: str, expected: str
+) -> None:
+    """
+    A PL sub-agent is held to the PL's guardrails and then its own (stricter wins).
+
+    The PL's fence must therefore admit what its env_keeper runs, while each
+    IC/reviewer guard still denies the env lifecycle on its own.
+    """
+    parent = _bundle_guard_args("examples/factory/factory-pl/config.yaml")
+    own = _bundle_guard_args(f"examples/factory/factory-pl/agents/{child}/config.yaml")
+    results = [factory_role_guard(**args)(_event(command), {})["result"] for args in (parent, own)]
+    combined = "DENY" if "DENY" in results else "ALLOW"
+    assert combined == expected, results

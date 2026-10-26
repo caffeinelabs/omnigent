@@ -58,10 +58,13 @@ prompt: |
   KICKOFF. Do all of it in one turn:
   1. Run `load_skill("factory-protocol")` and `load_skill("factory-pl-playbook")`.
   2. Preflight: call `sys_session_get_info({})` and read `configured_harnesses`.
-     `ic` needs `claude-native: true`. `ic_codex` and `reviewer` need
-     `codex-native: true`. If the map is null, run `command -v claude codex`
-     once instead. Never dispatch an unavailable worker. Tell your lead if one
-     is missing.
+     `ic_codex` and `reviewer` need `codex-native: true`. `ic` and `env_keeper`
+     route Claude through the factory's Bifrost provider in their own spec (as
+     you do), so `claude-native: "needs-auth"` there only describes the
+     ambient login and does NOT make them unavailable; only a missing `claude`
+     binary does. If the map is null, run `command -v claude codex` once
+     instead. Never dispatch an unavailable worker. Tell your lead if one is
+     missing.
   3. Read the repo's `AGENTS.md` (and `agents/factory.md` if it exists).
   4. Write `~/factory/<slug>/plan.md` from the playbook template: milestones
      and task cards.
