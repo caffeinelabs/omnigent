@@ -15,6 +15,7 @@ import {
   NODE_WIDTH,
   type AgentActivity,
   type AgentNodeData,
+  rootAgentLabel,
 } from "./subagentGraphLayout";
 import { activityDotClassName, sessionStatus } from "./subagentStatus";
 import { FactoryBadge, FactoryRoleChip } from "./FactoryBadge";
@@ -196,7 +197,7 @@ export function SubagentsGraphView({ conversationId, rootSessionId }: SubagentsG
 
   const wrapper = session?.labels?.[WRAPPER_LABEL_KEY];
   const nativeAgent = nativeCodingAgentForWrapper(wrapper);
-  const rootLabel = nativeAgent?.displayName ?? session?.agentName ?? "main";
+  const rootLabel = rootAgentLabel(session, nativeAgent?.displayName);
   // Mirror the list view's ``sessionStatus`` so the root node honors
   // launching / disconnected (not just running / failed / idle).
   const rootStatus = sessionStatus(session?.status, session?.lastTaskError);

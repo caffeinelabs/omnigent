@@ -182,6 +182,8 @@ import {
 } from "@/lib/sessionFilterPreferences";
 import { ExtensionPrimaryNavigation } from "@/extensions/ExtensionPrimaryNavigation";
 import { PrimaryNavLink } from "@/shell/PrimaryNavLink";
+import { FactoryNavLink } from "@/components/factory/FactoryNavLink";
+import { isFactoryPath } from "@/lib/factory";
 import { useViewerId } from "@/hooks/useViewerId";
 import { useExtensions } from "@/extensions/ExtensionProvider";
 import { extensionPathParts, resolveExtensionPageFromPath } from "@/extensions/catalog";
@@ -392,6 +394,7 @@ function useActiveNavItem(): {
   isCanvasPage: boolean;
   isTasksPage: boolean;
   isUsagePage: boolean;
+  isFactoryPage: boolean;
   activeExtensionPageId: string | null;
   newSessionProjectName: string | null;
 } {
@@ -404,6 +407,7 @@ function useActiveNavItem(): {
   const isCanvasPage = !isExtensionRoute && leaf === "canvas";
   const isTasksPage = !isExtensionRoute && leaf === "tasks";
   const isUsagePage = !isExtensionRoute && leaf === "usage";
+  const isFactoryPage = !isExtensionRoute && isFactoryPath(location.pathname);
   const activeExtensionPageId =
     resolveExtensionPageFromPath(extensions, location.pathname)?.page.id ?? null;
   const isNewSessionRoute =
@@ -412,6 +416,7 @@ function useActiveNavItem(): {
     !isCanvasPage &&
     !isTasksPage &&
     !isUsagePage &&
+    !isFactoryPage &&
     !isExtensionRoute;
   const requestedProject = isNewSessionRoute
     ? new URLSearchParams(location.search).get("project")
@@ -427,6 +432,7 @@ function useActiveNavItem(): {
     isCanvasPage,
     isTasksPage,
     isUsagePage,
+    isFactoryPage,
     activeExtensionPageId,
     newSessionProjectName,
   };
@@ -574,6 +580,7 @@ function SidebarImpl({
   const serverInfo = useServerInfo();
   const usagePageEnabled = isFeatureEnabled(serverInfo, "usage_page");
   const canvasEnabled = isFeatureEnabled(serverInfo, "canvas");
+  const factoryEnabled = isFeatureEnabled(serverInfo, "factory");
   const [selectionMode, setSelectionMode] = useState(false);
   // Which rows the current selection targets: the flat "Sessions" list, or the
   // sessions nested inside project folders. Set when selection mode is entered
@@ -774,6 +781,7 @@ function SidebarImpl({
     isCanvasPage,
     isTasksPage,
     isUsagePage,
+    isFactoryPage,
     activeExtensionPageId,
     newSessionProjectName,
   } = useActiveNavItem();
@@ -1192,6 +1200,7 @@ function SidebarImpl({
                   )}
                 </Link>
               </Button>
+              {factoryEnabled && <FactoryNavLink active={isFactoryPage} onClick={onNavClick} />}
               {canvasEnabled && (
                 <PrimaryNavLink
                   to="/canvas"

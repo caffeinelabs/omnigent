@@ -27,6 +27,7 @@ export type SessionUpdatesFrame =
   | { type: "removed"; ids: string[] }
   | { type: "hosts_changed" }
   | { type: "projects_changed" }
+  | { type: "factory_changed"; factory_id: string; scopes: string[] }
   | { type: "heartbeat" };
 
 type FrameListener = (frame: SessionUpdatesFrame) => void;

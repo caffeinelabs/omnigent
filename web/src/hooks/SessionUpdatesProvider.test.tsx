@@ -432,6 +432,48 @@ describe("SessionUpdatesProvider projects_changed frames", () => {
   });
 });
 
+describe("SessionUpdatesProvider factory_changed frames", () => {
+  it("invalidates the factory snapshot, its events, the factory list and decisions", () => {
+    const client = new QueryClient();
+    seedConversations(client, ["conv_a"]);
+    renderProvider(client, ["/"]);
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    act(() =>
+      frameHandler()({
+        type: "factory_changed",
+        factory_id: "f4f4ba9c",
+        scopes: ["snapshot", "events", "decisions"],
+      }),
+    );
+
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
+      ["factory", "f4f4ba9c"],
+      ["factory-events", "f4f4ba9c"],
+      ["factories"],
+      ["factory-decisions"],
+    ]);
+  });
+
+  it("leaves other factories' snapshots and the session lists alone", () => {
+    const client = new QueryClient();
+    seedConversations(client, ["conv_a"]);
+    client.setQueryData(["factory", "f_other"], { factory: { id: "f_other" } });
+    client.setQueryData(["factory", "f4f4ba9c"], { factory: { id: "f4f4ba9c" } });
+    client.setQueryData(["factory-events", "f4f4ba9c", {}], { pages: [] });
+    renderProvider(client, ["/"]);
+
+    act(() =>
+      frameHandler()({ type: "factory_changed", factory_id: "f4f4ba9c", scopes: ["snapshot"] }),
+    );
+
+    expect(client.getQueryState(["factory", "f4f4ba9c"])?.isInvalidated).toBe(true);
+    expect(client.getQueryState(["factory-events", "f4f4ba9c", {}])?.isInvalidated).toBe(true);
+    expect(client.getQueryState(["factory", "f_other"])?.isInvalidated).toBe(false);
+    expect(client.getQueryState(["conversations", "", false])?.isInvalidated).toBe(false);
+  });
+});
+
 describe("SessionUpdatesProvider agent-tree freshness", () => {
   it("invalidates the child list of a sub-agent's parent and of a factory member's lead", () => {
     const client = new QueryClient();

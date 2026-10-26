@@ -1,10 +1,30 @@
 import type { ChildSessionInfo } from "@/hooks/useChildSessions";
 import { MAX_TREE_DEPTH } from "@/hooks/useChildSessions";
-import { factoryInfo, isFactoryMember, type FactoryInfo } from "@/lib/factory";
+import { factoryInfo, factoryMemberTitle, isFactoryMember, type FactoryInfo } from "@/lib/factory";
 import { nativeCodingAgentForSubagentWrapper, WRAPPER_LABEL_KEY } from "@/lib/nativeCodingAgents";
 import { childStatus, type AgentActivity } from "./subagentStatus";
 
 export type { AgentActivity };
+
+/**
+ * The root row's and node's label: a factory member's title ("Atlas") rather
+ * than its harness, else the native wrapper's product name, the agent name, or
+ * "main" while the session loads.
+ */
+export function rootAgentLabel(
+  session:
+    | { labels?: Record<string, string>; title: string | null; agentName: string | null }
+    | null
+    | undefined,
+  nativeDisplayName: string | undefined,
+): string {
+  return (
+    factoryMemberTitle(session?.labels, session?.title) ??
+    nativeDisplayName ??
+    session?.agentName ??
+    "main"
+  );
+}
 
 export interface AgentNodeData {
   label: string;

@@ -17,6 +17,16 @@ vi.mock("@/pages/ChatPage", () => ({ ChatPage: () => <div>chat page</div> }));
 vi.mock("@/pages/NotFoundPage", () => ({ NotFoundPage: () => <div>not found</div> }));
 vi.mock("@/pages/UsagePage", () => ({ UsagePage: () => <div>usage page</div> }));
 vi.mock("@/pages/CanvasPage", () => ({ CanvasPage: () => <div>canvas page</div> }));
+vi.mock("@/pages/factory/FactoryIndexPage", () => ({
+  FactoryIndexPage: () => <div>factory index page</div>,
+}));
+vi.mock("@/pages/factory/NewFactoryPage", () => ({
+  NewFactoryPage: () => <div>new factory page</div>,
+}));
+vi.mock("@/pages/factory/FactoryPage", async () => {
+  const { useParams } = await import("react-router-dom");
+  return { FactoryPage: () => <div>factory page {useParams().factoryId}</div> };
+});
 vi.mock("@/pages/SettingsPage", async () => {
   const { useLocation } = await import("react-router-dom");
   return {
@@ -107,6 +117,33 @@ describe("Canvas route", () => {
   it("renders the native Canvas page inside the shell when the feature is on", async () => {
     renderRoute("/canvas", { canvas: true });
     expect(await screen.findByText("canvas page")).toBeInTheDocument();
+    expect(screen.getByText("app shell")).toBeInTheDocument();
+  });
+});
+
+describe("Factory routes", () => {
+  it("shows a spinner, not 'not found', while server info is still loading", () => {
+    renderRoute("/factory", {}, "loading");
+    expect(screen.getByRole("status", { name: "Loading" })).toBeInTheDocument();
+    expect(screen.queryByText("not found")).toBeNull();
+  });
+
+  it.each(["/factory", "/factory/new", "/factory/f4f4ba9c"])(
+    "renders not found at %s while the factory feature is off",
+    async (path) => {
+      renderRoute(path);
+      expect(await screen.findByText("not found")).toBeInTheDocument();
+      expect(screen.queryByText(/factory/)).toBeNull();
+    },
+  );
+
+  it.each([
+    ["/factory", "factory index page"],
+    ["/factory/new", "new factory page"],
+    ["/factory/f4f4ba9c", "factory page f4f4ba9c"],
+  ])("renders %s inside the shell when the feature is on", async (path, text) => {
+    renderRoute(path, { factory: true });
+    expect(await screen.findByText(text)).toBeInTheDocument();
     expect(screen.getByText("app shell")).toBeInTheDocument();
   });
 });

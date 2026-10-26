@@ -30,6 +30,7 @@ import { OpenInVsCodeRemote } from "@/components/OpenInVsCodeRemote";
 import { ConversationBreadcrumb } from "./ConversationBreadcrumb";
 import { HeaderConversationMenu } from "./HeaderConversationMenu";
 import { HeaderProjectTag } from "./HeaderProjectTag";
+import { FactoryStrip } from "@/components/factory/FactoryStrip";
 import { HeaderTitle } from "./HeaderTitle";
 import { UNTITLED_CONVERSATION_LABEL } from "./sidebarNav";
 import { PresenceAvatars } from "@/components/PresenceAvatars";
@@ -562,6 +563,8 @@ export function ChatHeader({
       <div
         className={cn(
           "flex min-w-0 items-center gap-1 md:gap-6",
+          // The factory strip's slot takes whatever width the breadcrumb leaves.
+          "md:has-[[data-factory-strip-slot]]:grow",
           !sidebarOpen && "traffic-light-clearance",
         )}
       >
@@ -632,6 +635,8 @@ export function ChatHeader({
             className="pr-1"
           />
         )}
+        {/* Where this session sits in its software factory; renders nothing otherwise. */}
+        {!pending && conversationId && <FactoryStrip sessionId={conversationId} />}
       </div>
 
       <div

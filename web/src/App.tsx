@@ -62,6 +62,20 @@ const UsagePage = withPageView(
   "usage",
   lazy(() => import("@/pages/UsagePage").then((m) => ({ default: m.UsagePage }))),
 );
+const FactoryIndexPage = withPageView(
+  "factory",
+  lazy(() =>
+    import("@/pages/factory/FactoryIndexPage").then((m) => ({ default: m.FactoryIndexPage })),
+  ),
+);
+const NewFactoryPage = withPageView(
+  "factory_new",
+  lazy(() => import("@/pages/factory/NewFactoryPage").then((m) => ({ default: m.NewFactoryPage }))),
+);
+const FactoryPage = withPageView(
+  "factory_cockpit",
+  lazy(() => import("@/pages/factory/FactoryPage").then((m) => ({ default: m.FactoryPage }))),
+);
 const SettingsPage = lazy(() =>
   import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage })),
 );
@@ -80,6 +94,10 @@ function FeatureGatedPage({ feature, children }: { feature: FeatureKey; children
   }
   return isFeatureEnabled(info, feature) ? children : <NotFoundPage />;
 }
+
+const factoryGated = (page: ReactNode) => (
+  <FeatureGatedPage feature="factory">{page}</FeatureGatedPage>
+);
 
 interface AppProps {
   /**
@@ -186,6 +204,9 @@ function App({ basename }: AppProps = {}) {
               </FeatureGatedPage>
             }
           />
+          <Route path={`${prefix}/factory`} element={factoryGated(<FactoryIndexPage />)} />
+          <Route path={`${prefix}/factory/new`} element={factoryGated(<NewFactoryPage />)} />
+          <Route path={`${prefix}/factory/:factoryId`} element={factoryGated(<FactoryPage />)} />
           {/* Settings renders into the chat outlet so the conversations
               sidebar stays put — entering settings only swaps the card's
               content (the section nav) and the main area. The active section

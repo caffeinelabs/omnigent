@@ -40,6 +40,15 @@ function getClientSurface(): string {
   return "web";
 }
 
+/** Headers every `POST /v1/sessions` sends: JSON, client surface, title preferences. */
+export function sessionCreateHeaders(): Record<string, string> {
+  return {
+    "Content-Type": "application/json",
+    "X-Omnigent-Client": getClientSurface(),
+    ...backgroundSessionTitlesRequestHeaders(),
+  };
+}
+
 /**
  * MCP-shape elicitation response, used as the `result` argument to
  * `approve`. Mirrors MCP's `ElicitResult` (`action` + optional
@@ -510,11 +519,7 @@ export async function createSession(
   }
   const res = await authenticatedFetch("/v1/sessions", {
     method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Omnigent-Client": getClientSurface(),
-      ...backgroundSessionTitlesRequestHeaders(),
-    },
+    headers: sessionCreateHeaders(),
     body: JSON.stringify(body),
   });
   return sessionFromWire(await readJsonOrThrow<SessionResponseWire>(res));

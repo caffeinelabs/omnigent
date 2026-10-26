@@ -4,11 +4,31 @@
 // any member may carry a one-line beacon (`summary` + `health`). Mirrors the
 // label keys in `omnigent/factory.py`.
 
+export const FACTORY_ID_LABEL_KEY = "omnigent.factory.id";
+export const FACTORY_NAME_LABEL_KEY = "omnigent.factory.name";
 export const FACTORY_ROLE_LABEL_KEY = "omnigent.factory.role";
 export const FACTORY_PARENT_LABEL_KEY = "omnigent.factory.parent";
 export const FACTORY_PROJECT_LABEL_KEY = "omnigent.factory.project";
 export const FACTORY_SUMMARY_LABEL_KEY = "omnigent.factory.summary";
 export const FACTORY_HEALTH_LABEL_KEY = "omnigent.factory.health";
+
+/** The factory guide (fork docs), linked from the cockpit's preflight checks. */
+export const FACTORY_DOCS_URL =
+  "https://github.com/caffeinelabs/omnigent/blob/staging/docs/FACTORY.md";
+
+const LEGACY_ID = /^(?:[a-z]+_)?([0-9a-f]{32})$/;
+
+/**
+ * A factory id as the server keys it: bare lowercase hex, without dashes or a
+ * legacy `conv_` prefix, so label ids match `factory_changed` frames.
+ *
+ * @returns The bare hex id, or the trimmed input when it is not a uuid.
+ */
+export function normalizeFactoryId(raw: string): string {
+  const trimmed = raw.trim();
+  const match = LEGACY_ID.exec(trimmed.toLowerCase().replaceAll("-", ""));
+  return match?.[1] ?? trimmed;
+}
 
 /** Beacon health values that need a human's eye (rendered in the warning colour). */
 const WARNING_HEALTH: ReadonlySet<string> = new Set(["degraded", "blocked", "dead"]);
@@ -104,4 +124,24 @@ export function factoryBeaconText(
   const health = info.health && info.health !== "ok" ? info.health : null;
   if (health && summary) return `${health} · ${summary}`;
   return summary ?? info.health ?? "";
+}
+
+/**
+ * Title for a factory member's own row in the Agents panel (e.g. `"Atlas"`),
+ * where other sessions show their harness name.
+ *
+ * @returns The trimmed title when the session carries a factory role, else `null`.
+ */
+export function factoryMemberTitle(
+  labels: Record<string, string> | undefined,
+  title: string | null | undefined,
+): string | null {
+  const shown = title?.trim();
+  return labels?.[FACTORY_ROLE_LABEL_KEY]?.trim() && shown ? shown : null;
+}
+
+/** Whether `pathname` is a factory cockpit route (`/factory`, `/factory/new`, `/factory/<id>`). */
+export function isFactoryPath(pathname: string): boolean {
+  const segments = pathname.split("/").filter(Boolean);
+  return segments.at(-1) === "factory" || segments.at(-2) === "factory";
 }
