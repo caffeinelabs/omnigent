@@ -9,7 +9,6 @@ an agent stalls on a tool that does not exist, so it is pinned here.
 from __future__ import annotations
 
 import importlib
-import importlib.util
 import re
 from collections.abc import Iterator
 from pathlib import Path
@@ -18,11 +17,14 @@ import pytest
 import tomllib
 
 from omnigent.factory import (
+    HEALTH,
+    MESSAGE_KINDS,
     ROLE_ENV_KEEPER,
     ROLE_IC,
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
     ROLE_REVIEWER,
+    STATES,
     factory_role_from_spec,
 )
 from omnigent.policies.registry import is_registered_handler
@@ -36,13 +38,14 @@ _LEAD_DIR = _FACTORY_DIR / "factory-lead"
 _PL_DIR = _FACTORY_DIR / "factory-pl"
 _PL_SUB_AGENTS = ("env_keeper", "ic", "ic_codex", "reviewer")
 
-# The runner tools the factory adds next to the existing builtins.
-_FACTORY_TOOLS = frozenset(
-    {"sys_session_post", "sys_factory_roster", "sys_factory_set", "sys_factory_spawn"}
-)
 _FACTORY_POLICY_MODULE = "omnigent.policies.builtins.factory"
-_FACTORY_TOOLS_MODULE = "omnigent.tools.builtins.factory"
 _TOOL_TOKEN = re.compile(r"\b(sys_[a-z_]+|load_skill|read_skill_file)\b")
+# A documented call, e.g. `sys_session_post(to="parent", kind="request")`.
+_TOOL_CALL = re.compile(r"\b(sys_[a-z_]+)\(([^()]*)\)")
+_QUOTED = re.compile(r'"[^"]*"')
+_KEYWORD = re.compile(r"\b([a-z_]+)=")
+# Arguments whose documented literal values must be valid for the server.
+_ENUM_ARGS = {"kind": MESSAGE_KINDS, "state": STATES, "health": HEALTH}
 
 # Family aliases: the provider's models map turns them into concrete ids.
 _CLAUDE_MODELS = {
@@ -59,14 +62,6 @@ _ROLES = {
     "ic_codex": ROLE_IC,
     "reviewer": ROLE_REVIEWER,
 }
-
-
-def _module_available(dotted: str) -> bool:
-    """Return whether *dotted* imports here (sibling factory modules may lag)."""
-    try:
-        return importlib.util.find_spec(dotted) is not None
-    except ModuleNotFoundError:
-        return False
 
 
 @pytest.fixture(scope="module")
@@ -239,8 +234,6 @@ def test_policy_paths_are_registered_and_accept_their_arguments(
     agent: str, policy: str, path: str, arguments: dict[str, object]
 ) -> None:
     module_name, _, attr = path.rpartition(".")
-    if module_name == _FACTORY_POLICY_MODULE and not _module_available(module_name):
-        pytest.skip(f"{module_name} is not on this branch yet")
     assert is_registered_handler(path), f"{agent}.{policy}: {path} is not in the policy registry"
     factory = getattr(importlib.import_module(module_name), attr)
     assert callable(factory(**arguments)), f"{agent}.{policy} did not build an evaluator"
@@ -307,17 +300,22 @@ def test_skills_have_name_and_description_frontmatter(lead: AgentSpec, pl: Agent
 # ── Tools the prompts name ───────────────────────────────────────────────────
 
 
-def _relay_tool_names(spec: AgentSpec) -> set[str]:
-    """The Omnigent tool surface a native harness sees for *spec*."""
+def _relay_schemas(spec: AgentSpec) -> dict[str, dict[str, object]]:
+    """The Omnigent tools a native harness sees for *spec*, by name."""
     from omnigent.runner.tool_dispatch import build_native_relay_tool_schemas
 
-    names = {str(s["name"]) for s in build_native_relay_tool_schemas(spec)}
-    if not _module_available(_FACTORY_TOOLS_MODULE):
-        # Until the factory runner tools land, assume their documented gating.
-        names |= _FACTORY_TOOLS - {"sys_factory_spawn"}
-        if factory_role_from_spec(spec) == ROLE_LEAD:
-            names.add("sys_factory_spawn")
-    return names
+    return {str(s["name"]): s for s in build_native_relay_tool_schemas(spec)}
+
+
+def _relay_tool_names(spec: AgentSpec) -> set[str]:
+    return set(_relay_schemas(spec))
+
+
+def _parameter_names(schema: dict[str, object]) -> set[str]:
+    parameters = schema.get("parameters")
+    assert isinstance(parameters, dict), schema
+    properties = parameters.get("properties")
+    return set(properties) if isinstance(properties, dict) else set()
 
 
 def _skill_text(spec: AgentSpec) -> str:
@@ -345,6 +343,39 @@ def test_skills_only_name_tools_that_exist(lead: AgentSpec, pl: AgentSpec) -> No
 
 
 @pytest.mark.usefixtures("_terminal_registry")
+def test_factory_tools_are_on_each_agents_real_surface(lead: AgentSpec, pl: AgentSpec) -> None:
+    messaging = {"sys_session_post", "sys_factory_roster", "sys_factory_set"}
+    for spec in _all_specs(lead, pl):
+        names = _relay_tool_names(spec)
+        assert messaging <= names, f"{spec.name} lacks {sorted(messaging - names)}"
+        assert ("sys_factory_spawn" in names) is (spec.name == "factory-lead"), spec.name
+
+
+@pytest.mark.usefixtures("_terminal_registry")
+def test_documented_tool_calls_use_real_argument_names(lead: AgentSpec, pl: AgentSpec) -> None:
+    """Every `sys_x(arg=...)` in a prompt or skill names a real parameter and value."""
+    parameters: dict[str, set[str]] = {}
+    for spec in _all_specs(lead, pl):
+        for name, schema in _relay_schemas(spec).items():
+            parameters.setdefault(name, set()).update(_parameter_names(schema))
+    checked = 0
+    for spec in _all_specs(lead, pl):
+        for source, text in (("prompt", spec.instructions or ""), ("skills", _skill_text(spec))):
+            for tool, raw_args in _TOOL_CALL.findall(text):
+                assert tool in parameters, f"{spec.name} {source}: unknown tool {tool}"
+                for keyword in _KEYWORD.findall(_QUOTED.sub('""', raw_args)):
+                    checked += 1
+                    assert keyword in parameters[tool], (
+                        f"{spec.name} {source}: {tool}({keyword}=...) is not a parameter; "
+                        f"real ones: {sorted(parameters[tool])}"
+                    )
+                for keyword, values in _ENUM_ARGS.items():
+                    for value in re.findall(rf'\b{keyword}="([^"]*)"', raw_args):
+                        assert value in values, f"{spec.name} {source}: {tool} {keyword}={value!r}"
+    assert checked > 50, "the call pattern stopped matching the prompts"
+
+
+@pytest.mark.usefixtures("_terminal_registry")
 def test_pl_sub_agent_enum_matches_the_declared_team(pl: AgentSpec) -> None:
     from omnigent.runner.tool_dispatch import build_native_relay_tool_schemas
 
@@ -367,18 +398,24 @@ def test_prompts_carry_the_operational_contracts(lead: AgentSpec, pl: AgentSpec)
         "~/factory/ledger.md",
     ):
         assert token in lead_text, token
+    assert "READY FOR HUMAN MERGE" in lead_text and "MERGED <url>" in lead_text
     pl_text = pl.instructions or ""
     for token in (
         "In ONE response",
         'agent="env_keeper"',
         "sys_read_inbox",
         "sys_session_post",
+        "READY FOR HUMAN MERGE",
         "python -m omnigent.factory_merge",
         "sys_cancel_task",
         "sys_session_close",
         'load_skill("factory-heartbeat")',
     ):
         assert token in pl_text, token
+    # Humans merge caffeinelabs/app: the PL hands green PRs over instead.
+    assert "always for caffeinelabs/app): never merge and never run the merge gate" in " ".join(
+        pl_text.split()
+    )
     env_text = _sub_agent(pl, "env_keeper").instructions or ""
     for token in ("UP:", "STATUS:", "VERIFY ", "MERGED:", "DOWN:", "pnpm factory:up"):
         assert token in env_text, token

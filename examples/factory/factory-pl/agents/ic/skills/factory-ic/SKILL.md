@@ -53,9 +53,11 @@ main.
   - **Factory provenance**: project `<slug>`, PL `<PL session id>`, IC `<your
     session id>` (from `sys_session_get_info({})`), and author vendor `claude`
     or `codex`.
-- If the card has no env checks, add the label: `gh pr edit <url> --add-label factory:no-env`.
+- If the card has no env checks, add the label:
+  `gh api repos/<owner>/<repo>/issues/<n>/labels -f 'labels[]=factory:no-env'`.
 - When acceptance is green, run `gh pr ready <url>`.
-- Never merge. The PL merges through the factory gate after review and verify.
+- Never merge, and never enable auto-merge. Humans merge: once review, verify
+  and CI are green, your PL hands the PR over as ready for human merge.
 
 ## The env is read-only for you
 

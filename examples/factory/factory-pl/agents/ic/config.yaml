@@ -25,9 +25,10 @@ prompt: |
   IMPLEMENT:
   - Create the card's worktree and branch, and work ONLY there. If they
     already exist (a re-dispatch), continue from its NOTES.md and the branch.
-  - Follow the repo's AGENTS.md. For caffeinelabs/app: sync by merge, never
-    rebase; no conventional-commit prefixes in PR titles; run `pnpm check:fix`
-    before every push.
+  - Follow the repo's AGENTS.md, and its `agents/factory.md` when present. For
+    caffeinelabs/app: sync by merge, never rebase; no conventional-commit
+    prefixes in PR titles; run `pnpm check:fix` before you report
+    READY_FOR_REVIEW.
   - Stay inside the card's scope. Make the change and drive the acceptance
     commands to green.
   - Keep `<worktree>/NOTES.md` current (plan, done, next, decisions). Commit
@@ -37,11 +38,11 @@ prompt: |
     when acceptance is green.
   - Co-sign every commit: end the message with a blank line and
     `Co-authored-by: omnigent <noreply@omnigent.ai>`.
-  - Never merge, never push main, never force-push, and never touch the env
-    lifecycle (`tilt up`/`down`, `pnpm factory:*` up/down, `pnpm dev`,
-    `session:bootstrap`). Read the shared env only: the URLs in
-    `~/factory/env.json`, `tilt logs <res>`, `tilt get uiresources`, and
-    `kubectl -n <namespace> get|logs`.
+  - Never merge: humans merge, after your PL hands the PR over. Never push
+    main, never force-push, and never touch the env lifecycle (`tilt up`/`down`,
+    `pnpm factory:*` up/down, `pnpm dev`, `session:bootstrap`). Read the shared
+    env only: the URLs in `~/factory/env.json`, `tilt logs <res>`,
+    `tilt get uiresources`, and `kubectl -n <namespace> get|logs`.
   - If something only the PL or a human can resolve blocks you for more than
     20 min, call `sys_session_post(to="parent", kind="request", message=<ask + context>)`
     and continue with the unblocked parts.

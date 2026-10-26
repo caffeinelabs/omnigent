@@ -14,8 +14,9 @@ description: env_keeper reference for the project's shared Tilt env on the sandb
 | `pnpm -s factory:urls` | The URLs as JSON. |
 | `pnpm factory:down` | `tilt down`, deletes the namespace, and removes env.json. |
 
-`~/factory/env.json` holds `env_id`, `namespace`, `pod`, `pod_uid`,
-`urls` (ux or app, api, tilt_ui), `started_at` and `tilt_pid`. Report its URLs
+`~/factory/env.json` holds `env_id`, `namespace`, `pod`, `pod_uid`, `urls`,
+`started_at` and `tilt_pid`. `urls` has `app` (the UX), `api`, `minio` and
+`tilt_ui`; read one with `jq -r .urls.api ~/factory/env.json`. Report the URLs
 verbatim. Never build `<svc>-<id>.envs...` hostnames yourself.
 
 There is only one tilt per pod, and it belongs to you. The Tilt UI is also
@@ -66,7 +67,7 @@ first is harmless.
    /tmp/v.out -w '%{http_code}' <url>` and show the status plus a trimmed body.
 4. Post the marker and evidence:
    ```
-   gh pr comment <pr-url> --body "<!-- factory:verify sha=<sha> result=PASS env=<ux or api url> -->
+   gh pr comment <pr-url> --body "<!-- factory:verify sha=<sha> result=PASS env=<urls.app or urls.api> -->
    Verified in env <env_id> at <sha>:
    - <check> → 200 <trimmed body>"
    ```

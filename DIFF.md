@@ -22,6 +22,55 @@ Do not grow layer 3. New work lands on `develop` first and is ported to
 
 ## Entries
 
+### Software factory (PRs #104, #105, #107-#113, #106)
+
+- **What:** Runs many coding agents as one organization made of ordinary
+  sessions: two `factory-lead` sessions that supervise each other, one
+  `factory-pl` per project in its own sandbox, and the PL's co-located
+  sub-agents (`env_keeper`, `ic`, `ic_codex`, `reviewer`). Docs:
+  `docs/FACTORY.md`. All logic is in new modules; hot files get hooks of a
+  few lines. No DB migration (membership is `conversation_labels`).
+  - [#104](https://github.com/caffeinelabs/omnigent/pull/104): shared
+    vocabulary (`omnigent/factory.py`): label keys, roles, states, limits.
+  - [#105](https://github.com/caffeinelabs/omnigent/pull/105): custom-named
+    built-ins on a native harness get the native wrapper labels at create
+    time, and the web picker keeps a second claude-native built-in.
+  - [#107](https://github.com/caffeinelabs/omnigent/pull/107): `/v1/factory`
+    API (membership with lazy enrolment, roster, messages, beacon PATCH), the
+    in-memory mailer (retries, bounces, rate limits, spoof-quoted envelopes)
+    and the server-side delivery ladder; seeds `examples/factory/*` as
+    built-ins when `OMNIGENT_FACTORY_ENABLED=1`.
+  - [#108](https://github.com/caffeinelabs/omnigent/pull/108) and
+    [#111](https://github.com/caffeinelabs/omnigent/pull/111): runner tools
+    `sys_session_post`, `sys_factory_roster`, `sys_factory_set` and the
+    lead-only `sys_factory_spawn`, plus factory-scoped session reads.
+  - [#109](https://github.com/caffeinelabs/omnigent/pull/109): DENY-only
+    `factory_role_guard` policy and the merge gate
+    `python -m omnigent.factory_merge`.
+  - [#110](https://github.com/caffeinelabs/omnigent/pull/110): the org chart in
+    the Agents panel (`include_factory` children, role chips, beacon badges,
+    breadcrumb).
+  - [#112](https://github.com/caffeinelabs/omnigent/pull/112): the non-LLM
+    `FactorySupervisor` (keepalive, heartbeats, stuck/failed/blocked alerts,
+    reply notices) and its one-line status hook.
+  - [#113](https://github.com/caffeinelabs/omnigent/pull/113): the merge gate
+    merges nowhere until an operator lists a repo in
+    `OMNIGENT_FACTORY_MERGE_REPOS`.
+  - [#106](https://github.com/caffeinelabs/omnigent/pull/106): the
+    `factory-lead` and `factory-pl` bundles (prompts, skills, sub-agents,
+    Bifrost model routing), their packaging under
+    `omnigent.resources.examples`, `docs/FACTORY.md`, the end-to-end
+    `tests/integration/test_factory_tree.py`, and the reply notice's
+    `sys_session_get_history(conversation_id=…)` hint.
+- **Why:** A software-factory PoC on the standing caffeine instance: leads
+  delegate to project leads, each project's env comes up while ICs work in
+  parallel, and humans merge `caffeinelabs/app` PRs the factory hands over.
+- **Upstreamable:** Partly. The supervisor, mailer, labels, tools and org chart
+  are generic; the bundles, the guard's default repos and the Bifrost routing
+  are caffeine deployment config.
+- **Lifetime:** For the PoC. Revisit for a durable outbox (needs a migration)
+  and a GitHub App identity for markers.
+
 ### fix: pre-commit debt from the blind-merge window (this PR / #77)
 
 - **What:** Pays down lint debt accumulated while the pre-commit gate

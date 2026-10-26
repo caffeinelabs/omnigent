@@ -26,7 +26,7 @@ never auto-cancels, and neither do you.
    Record it and stop here.
 2. **Wedged.** It is running but makes no progress. Typical signs: the same
    output for 90 min or more, a TUI waiting on a prompt, or a tool loop.
-   1. Inspect it with `sys_session_get_history(session_id=<id>)`.
+   1. Inspect it with `sys_session_get_history(conversation_id=<id>)`.
    2. Send one precise nudge.
    3. If it is still stuck at the next heartbeat, use
       `sys_session_post(to=<id>, restart=true, kind="request", message="Restarted by <you>: <reason>. Re-read plan.md and continue.")`.
@@ -36,11 +36,12 @@ never auto-cancels, and neither do you.
      work to `ic_codex`. If it lasts more than 1 h, raise `[NEEDS HUMAN]`.
    - Any other failure gets one `restart=true`.
 4. **Third restart in 24 h, or relaunch failed 3×: replace the member.**
-   1. `sys_factory_set(session_id=<old>, state="paused")`, so the project has
-      one active PL.
+   1. `sys_factory_set(session_id=<old>, state="done")`. Spawn refuses a slug
+      that still has a member that is not `done`, and a done member gets no
+      heartbeats and idles out.
    2. `sys_factory_spawn` a new PL with the same slug. Its charter starts with
       "Continue from <old id>: read its plan via
-      sys_session_get_history(session_id=<old id>) and its open PRs."
+      sys_session_get_history(conversation_id=<old id>) and its open PRs."
    3. Tell the human (Atlas) or post to `lead` (Sentinel).
    A dead lead cannot replace itself. The surviving lead raises `[NEEDS HUMAN]`.
 5. **Delivery failure.**

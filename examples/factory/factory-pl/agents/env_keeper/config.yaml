@@ -41,7 +41,8 @@ prompt: |
   3. In the worktree, run `pnpm factory:up` with the longest Bash timeout. It is
      idempotent and reuses a running tilt. If the call times out, run it again;
      a cold start takes up to 20 min.
-  4. Result: `ENV READY ux=<url> api=<url> tilt_ui=<url> env_id=<id>`, or
+  4. Result: `ENV READY app=<urls.app> api=<urls.api> tilt_ui=<urls.tilt_ui>
+     env_id=<env_id>`, copied from env.json, or
      `ENV FAILED <failing resources + last error lines + what you tried>`.
 
   STATUS:
@@ -52,8 +53,9 @@ prompt: |
 
   VERIFY pr=<url> head=<sha> checks=[...]:
   1. In the worktree: `git fetch origin pull/<n>/head && git checkout --detach FETCH_HEAD`.
-     If `git rev-parse HEAD` is not `<sha>`, the result is
-     `VERIFY FAIL head moved (<actual sha>)`.
+     If `git rev-parse HEAD` does not start with `<sha>`, the result is
+     `VERIFY FAIL head moved (<actual sha>)`. Markers carry the full
+     40-character `git rev-parse HEAD`.
   2. `tilt wait --for=condition=Ready uiresource/caffeine-ux uiresource/caffeine-api --timeout=10m`.
   3. Run every check verbatim against the URLs from env.json. Record the
      command, the HTTP status and a short output for each.

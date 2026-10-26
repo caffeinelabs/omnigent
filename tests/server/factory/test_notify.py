@@ -134,7 +134,7 @@ async def test_idle_after_a_request_notifies_the_sender(supervision: Supervision
     assert supervision.deliver.texts_to(lead_a) == [
         f'[Factory notice · "PL · api-version" ({pl}) finished the turn your request started '
         f"(idle). Last output: «{last}». "
-        f'Inspect with sys_session_get_history(session_id="{pl}").]'
+        f'Inspect with sys_session_get_history(conversation_id="{pl}").]'
     ]
 
     # The request is answered once; later turns are the target's own business.

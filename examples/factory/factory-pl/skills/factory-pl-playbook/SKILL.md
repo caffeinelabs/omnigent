@@ -1,6 +1,6 @@
 ---
 name: factory-pl-playbook
-description: Project-lead playbook for the Omnigent software factory - plan.md and task-card templates, worktree and branch naming, parallel dispatch rules (env_keeper first, in the same response), the /goal convention, the review → verify → factory_merge pipeline, the definition of done, milestone reports, and the pause and done procedures.
+description: Project-lead playbook for the Omnigent software factory - plan.md and task-card templates, worktree and branch naming, parallel dispatch rules (env_keeper first, in the same response), the /goal convention, the review → verify → ready-for-human-merge pipeline (and the factory_merge gate where a repo is opted in), the definition of done, milestone reports, and the pause and done procedures.
 ---
 
 # PL playbook
@@ -9,7 +9,7 @@ description: Project-lead playbook for the Omnigent software factory - plan.md a
 
 ```
 # <slug> · plan · updated <iso>
-Charter: <goal> · DoD: <items> · Repo: caffeinelabs/<repo>#<branch> · Env needed: yes|no · Admin fallback: yes|no · Budget: <n> ICs
+Charter: <goal> · DoD: <items> · Repo: caffeinelabs/<repo>#<branch> · Env needed: yes|no · Merge policy: human|gate · Budget: <n> ICs
 Lead: <parent id> · Supervisor: <id> · Me: <id>
 Env: <env_keeper session id> · <state: starting|READY|FAILED|DOWN> · <urls from ENV READY> · last STATUS <iso>
 
@@ -17,8 +17,10 @@ Env: <env_keeper session id> · <state: starting|READY|FAILED|DOWN> · <urls fro
 1. [ ] <milestone> (tasks: t1, t2)
 
 ## Tasks
-| id | harness | session id | state | PR | head | review | verify | notes |
-|----|---------|------------|-------|----|------|--------|--------|-------|
+| id | harness | session id | state | PR | head | review | verify | handover | notes |
+|----|---------|------------|-------|----|------|--------|--------|----------|-------|
+
+`handover` is `-`, `ready <iso>` (READY FOR HUMAN MERGE posted) or `merged <sha>`.
 
 ## Open requests (sent to parent/peers, no reply yet)
 ## Log (newest first; prune to 30 lines)
@@ -61,7 +63,7 @@ Report: the RESULT block
 - Always set a task-based `title` (`version-route`, `review-version-route`),
   never a vendor name.
 
-## Review → verify → gate
+## Review → verify → handover
 
 1. The IC reports `READY_FOR_REVIEW` with the PR and head SHA. Re-run its
    acceptance commands in its worktree, and send failures back to it.
@@ -76,36 +78,52 @@ Report: the RESULT block
    Verification runs one at a time, because env_keeper takes one message at a
    time.
 4. A new commit invalidates both markers. Repeat steps 2 and 3 for the new head.
-5. Merge with `python -m omnigent.factory_merge <pr-url>` (add
-   `--admin-fallback` only if the charter allows it). Exit 0 means merged.
-   Exit 2 means a gate failed and the JSON `reasons` say which one. Exit 1 is
-   an error.
-   - The gates: repo allowlisted, not a draft, required checks green, a review
-     APPROVE for the head posted after the last commit, verify PASS for the
-     head (unless labelled `factory:no-env` or `factory:revert`), mergeable,
-     and no protected paths (`.github/workflows/**`, `deploy/**/prod/**`,
-     `**/zz_generated/prod/**`).
+5. Check readiness yourself:
+   - `gh pr view <url> --json isDraft,headRefOid,mergeable,files,labels`: not a
+     draft, mergeable, and no protected paths (`.github/workflows/**`,
+     `deploy/**/prod/**`, `**/zz_generated/prod/**`) unless the PR says so;
+   - `gh pr checks <url>`: nothing failing or pending;
+   - `gh pr view <url> --comments`: the newest review marker for `headRefOid`
+     says APPROVE and was posted after the newest commit, and the newest
+     verify marker for it says PASS (unless labelled `factory:no-env` or
+     `factory:revert`).
+6. Hand over, by the charter's merge policy:
+   - `human` (the default, and always for caffeinelabs/app): post
+     `READY FOR HUMAN MERGE <url> · head <sha> · review APPROVE · verify PASS|n/a · checks green`
+     to `parent` (kind=info). Never merge, never run the merge gate on
+     caffeinelabs/app, and never enable auto-merge or a merge queue. The IC
+     stays idle on its worktree until the PR merges or a human asks for
+     changes.
+   - `gate` (only a repo an operator opted in with `OMNIGENT_FACTORY_MERGE_REPOS`):
+     `python -m omnigent.factory_merge <pr-url>` (add `--admin-fallback` only
+     if the charter allows it). Exit 0 means merged, 2 means a gate failed
+     (the JSON `reasons` say which), 1 is an error. A `repo` failure means the
+     repo is not opted in: hand it over as `human` instead.
    - Never add `factory:allow-protected` yourself. That is a human decision.
-6. After a merge:
+7. After the PR merges (your lead posts `MERGED <url>`, the gate says
+   `merged: true`, or `gh pr view <url> --json state` reads MERGED):
    1. Send env_keeper `MERGED`.
    2. Tell the sibling ICs to run `git merge origin/main`. App repos sync by
       merge, never by rebase.
-   3. Close the IC with `sys_session_close`, or give it the next card.
+   3. Close the IC with `sys_session_close(conversation_id=<ic id>)`, or give
+      it the next card.
    4. Post the milestone to `parent`.
 
 ## Definition of done
 
 Every DoD item in the charter is observably true:
-- the PR is merged to main (link the merge commit);
+- the PR was handed over as ready for human merge, and a human merged it to
+  main (link the merge commit);
 - the env check passes against the env (when required);
 - the tests are green.
-A PR that is merely opened or approved is not done.
+A PR that is merely opened or approved is not done. Until a human merges,
+the project waits; keep the env up and the ICs on other cards.
 
 ## Milestone report (to `parent`)
 
 ```
 MILESTONE · <slug> · <task>
-PR: <url> merged as <sha> (factory_merge: merged)
+PR: <url> merged as <sha> by a human (or factory_merge: merged)
 Review: APPROVE by <reviewer id> for <head> · Verify: PASS <env url> | n/a (factory:no-env)
 Next: <next milestone or DONE>
 ```
@@ -123,6 +141,6 @@ Next: <next milestone or DONE>
   3. Re-dispatch each unfinished task with "continue from NOTES.md in <worktree>".
 - **DONE:**
   1. Post the final report to `parent`.
-  2. `sys_session_close` every IC and the reviewer.
+  2. `sys_session_close(conversation_id=<id>)` every IC and the reviewer.
   3. Send env_keeper `DOWN`, then close it.
   4. `sys_factory_set(state="done", summary="done: <PR urls>")`.

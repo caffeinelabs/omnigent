@@ -20,7 +20,7 @@ changed.
      summary: nudge it with `sys_session_post(to=<id>, kind="request",
      message="Heartbeat check: status and next step?")`.
    - Running with no activity for 90 min or more, or a stuck alert:
-     1. Inspect it with `sys_session_get_history(session_id=<id>)`.
+     1. Inspect it with `sys_session_get_history(conversation_id=<id>)`.
      2. Nudge it with one precise instruction.
      3. If it is still stuck at the next heartbeat, use
         `sys_session_post(to=<id>, restart=true, kind="request", message="Restarted by <you>: <reason>. Re-read plan.md and continue.")`.
@@ -35,8 +35,11 @@ changed.
    Atlas tells the human).
 5. Re-ask once every open request older than one heartbeat. Drop requests
    whose target is `done`.
-6. Atlas: spawn anything left under "To spawn".
-7. Update the ledger and your beacon (`sys_factory_set(title=..., summary=...)`).
-8. Atlas only: if anything changed (milestone, verified claim, blocker,
+6. Atlas: for each PR under "Ready for human merge", run
+   `gh pr view <url> --json state`. When it reads `MERGED`, post
+   `MERGED <url>` to its PL (kind=info) and move it to merged in the ledger.
+7. Atlas: spawn anything left under "To spawn".
+8. Update the ledger and your beacon (`sys_factory_set(title=..., summary=...)`).
+9. Atlas only: if anything changed (milestone, verified claim, blocker,
    decision needed), send the human the digest from the playbook. Otherwise
    end the turn with no chat output.

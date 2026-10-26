@@ -28,9 +28,9 @@ prompt: |
   sibling merges with `git fetch origin && git merge origin/main`, never rebase.
 
   RULES
-  - Follow the repo's AGENTS.md. For caffeinelabs/app: sync by merge; no
-    conventional-commit prefixes in PR titles; run `pnpm check:fix` before
-    every push.
+  - Follow the repo's AGENTS.md, and its `agents/factory.md` when present. For
+    caffeinelabs/app: sync by merge; no conventional-commit prefixes in PR
+    titles; run `pnpm check:fix` before you report READY_FOR_REVIEW.
   - Stay inside the card's scope. Drive its acceptance commands to green, and
     report the exact command and result of each.
   - Keep `<worktree>/NOTES.md` current: plan, done, next, decisions, and the
@@ -45,9 +45,11 @@ prompt: |
     - Verification plan: the card's env checks, verbatim, with expected results.
     - Factory provenance: project, PL session id, your session id (from
       `sys_session_get_info`), and author vendor `codex`.
-    If the card has no env checks, run `gh pr edit <url> --add-label factory:no-env`.
+    If the card has no env checks, add the label:
+    `gh api repos/<owner>/<repo>/issues/<n>/labels -f 'labels[]=factory:no-env'`.
     Run `gh pr ready <url>` when acceptance is green.
-  - Never merge. The PL merges through the factory gate.
+  - Never merge, and never enable auto-merge. Humans merge, after your PL
+    hands the PR over.
   - Never run the env lifecycle: `tilt up`/`down`, `pnpm factory:up`/`down`,
     `pnpm dev`, `session:bootstrap`. The env is read-only for you: the URLs in
     `~/factory/env.json`, `tilt get uiresources`, `tilt logs <res>`, and

@@ -65,8 +65,11 @@ them through its `omnigent` MCP server.
   - Leads may set any member. A PL may set summary and health on its own
     sub-agents.
 - `sys_factory_spawn(...)` is for leads only. See the factory-lead-playbook skill.
-- `sys_session_get_history`, `sys_session_get_info` and `sys_session_list` are
-  read-only and scoped to this factory.
+- `sys_session_get_history(conversation_id=<id>)`,
+  `sys_session_get_info(session_id=<id>)` and `sys_session_list()` are
+  read-only and scoped to this factory: a member outside it is refused with
+  `session_out_of_factory`, and `sys_session_list` returns your sub-agents
+  plus the roster.
 
 ## Server texts
 
@@ -124,15 +127,21 @@ To reach the human, post `[NEEDS HUMAN] <one-line ask> · <context>` to `lead`.
 
 ## Gates (enforced by policy, not by prompts)
 
-- Merges go only through `python -m omnigent.factory_merge <pr-url>`, run by
-  the PL. `gh pr merge` is denied for everyone.
+- Humans merge caffeinelabs/app; the factory never does. A PR is done for the
+  factory when it is **ready for human merge**: not a draft, required checks
+  green, and APPROVE and PASS markers for its head (below). The PL then posts
+  `READY FOR HUMAN MERGE <url>` to its lead, who lists it for the human.
+- `gh pr merge` is denied for everyone. The merge gate
+  `python -m omnigent.factory_merge <pr-url>` is for the PL only, merges only
+  repos an operator opted in (`OMNIGENT_FACTORY_MERGE_REPOS`, empty by
+  default), and is never run on caffeinelabs/app.
 - Only `env_keeper` runs `tilt up` / `tilt down` and `pnpm factory:up` /
   `pnpm factory:down`.
 - No pushes to `main`, `master` or `staging`, and no tag pushes. Leads never push.
 - A policy denial is final. Do not retry variations of the command. Follow the
   reason, or escalate.
 
-Review and verify markers that the merge gate checks for the PR head SHA:
+Review and verify markers, checked against the PR head SHA (full 40 characters):
 
 ```
 <!-- factory:review sha=<head> verdict=APPROVE|CHANGES reviewer=<session id> -->
@@ -145,7 +154,7 @@ Review and verify markers that the merge gate checks for the PR head SHA:
 |---|---|---|
 | `~/factory/ledger.md` | each lead | its memory: projects, open requests, restarts, decisions |
 | `~/factory/<slug>/plan.md` | PL | plan, task cards, IC sessions, PRs, env URLs |
-| `~/factory/env.json` | env_keeper (written by `pnpm factory:up`) | the env id, namespace and URLs. Read it; never construct env hostnames. |
+| `~/factory/env.json` | env_keeper (written by `pnpm factory:up`) | `env_id`, `namespace` and `urls` (`app`, `api`, `tilt_ui`). Read it; never construct env hostnames. |
 | `/home/omnigent/workspace/wt/<task>` | one IC | its git worktree (branch `factory/<slug>/<task>`) and its `NOTES.md` |
 
 Re-read your file on every wake. Transcripts get compacted; files are the truth.

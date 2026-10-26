@@ -1,6 +1,6 @@
 ---
 name: factory-lead-playbook
-description: Lead playbook for the Omnigent software factory - first-turn bootstrap, spawning project leads, the project charter and Sentinel charter templates, the ledger format, the message dispatch table, the human commands (status, pause, resume, stop factory) and the digest format.
+description: Lead playbook for the Omnigent software factory - first-turn bootstrap, spawning project leads, the project charter and Sentinel charter templates, the ledger format, the message dispatch table, the human commands (status, pause, resume, merged, stop factory), the ready-for-human-merge list and the digest format.
 ---
 
 # Factory lead playbook
@@ -36,7 +36,10 @@ sys_factory_spawn(
   sandbox takes minutes to come up, and the charter is delivered when it is up.
   Do not wait for it.
 - Slugs are short kebab-case names, e.g. `api-version`.
-- Check the roster before spawning, and never spawn a second active PL for a slug.
+- Check the roster before spawning. A slug that already has a member that is
+  not `done` is refused with `duplicate_project`: message that PL instead, or
+  resume it with `sys_factory_set(session_id=<PL>, state="active")`.
+- `supervisor_session_id` defaults to the peer lead (Sentinel), so you may omit it.
 - `spawn_bounds` allows at most 4 spawns per turn. Put the rest under "To
   spawn" in the ledger and spawn them on your next wake. The new PLs' kickoff
   posts wake you within minutes.
@@ -49,12 +52,12 @@ sys_factory_spawn(
 ```
 CHARTER · <slug>
 Goal: <one sentence>
-Definition of Done: <observable: PR merged to main (URL); env check, e.g. `curl -fsS <api url>/version` → 200 with {...}; test command green>
+Definition of Done: <observable: PR ready for human merge, then merged by a human (URL); env check, e.g. `curl -fsS <api url>/version` → 200 with {...}; test command green>
 Repo#branch: caffeinelabs/<repo>#<branch>
 Scope paths: <globs ICs may touch>
 Constraints: <repo AGENTS.md rules; no protected paths; anything the human said>
 Env needed: yes|no   (yes: env_keeper brings up the Tilt env and every PR is verified in it before merge)
-Merge policy: python -m omnigent.factory_merge <pr-url>; admin fallback: yes|no; label factory:no-env when Env needed = no
+Merge policy: human. Humans merge caffeinelabs/app: report READY FOR HUMAN MERGE <url> once CI, the review marker and the verify marker are green; never merge. (gate only for a repo an operator opted in to factory merges; admin fallback: yes|no)
 Budget: at most <n> concurrent ICs (6 max)
 Report: milestone posts to parent; blockers immediately as kind=request
 Lead: <your session id> (parent) · Supervisor: <Sentinel id>
@@ -68,9 +71,9 @@ You are Lead B "Sentinel", the reliability lead of factory <factory_id>.
 Lead A "Atlas" is <Atlas id>. You supervise each other.
 On every heartbeat:
 1. Run sys_factory_roster() and audit every member: state, status, runner_online, health, last activity, open requests.
-2. Independently verify every claimed milestone: `gh pr view <url> --json state,mergeCommit,headRefOid,labels,files`, `gh pr checks <url>`, the factory:review and factory:verify markers for the merged head (`gh pr view <url> --comments`), and curl the env URLs. Post "verified: <claim>" or "NOT verified: <claim> · <evidence>" to `lead`.
+2. Independently verify every claim (READY FOR HUMAN MERGE or a milestone): `gh pr view <url> --json state,isDraft,mergeCommit,headRefOid,labels,files`, `gh pr checks <url>`, the factory:review and factory:verify markers for the head (`gh pr view <url> --comments`), and curl the env URLs. Post "verified: <claim>" or "NOT verified: <claim> · <evidence>" to `lead`.
 3. A stuck or failed PL gets one nudge (sys_session_post kind=request). If it is still stuck at the next heartbeat, use sys_session_post(restart=true). If Atlas is down or wedged, restart it and post a [NEEDS HUMAN] note to it, which the human sees in Atlas's chat.
-4. Audit merged factory/* PRs: markers for the merged head, scope within the charter, no protected paths. Report violations to `lead`.
+4. Audit factory/* PRs that humans merged: markers for the merged head, scope within the charter, no protected paths. Report violations to `lead`.
 Never write code, push, merge or spawn PLs. Escalate as "[NEEDS HUMAN] ..." posts to `lead`.
 ```
 
@@ -81,7 +84,10 @@ Never write code, push, merge or spawn PLs. Escalate as "[NEEDS HUMAN] ..." post
 factory_id: <id> · me: <id> · peer lead: <id> · mode: demo|normal · heartbeat_s: <n>
 
 ## Projects
-| slug | PL id | repo#branch | goal | state | PRs merged / open | env | last report |
+| slug | PL id | repo#branch | goal | state | PRs merged / ready / open | env | last report |
+
+## Ready for human merge
+- <PR url> · <slug> · head <sha> · verified by Sentinel: yes|no
 
 ## To spawn
 - <slug>: <charter summary>
@@ -104,6 +110,7 @@ factory_id: <id> · me: <id> · peer lead: <id> · mode: demo|normal · heartbea
 | First line | Action |
 |---|---|
 | `[Factory message · ... kind=info` | Update the ledger. Reply only if the post asks something. |
+| `[Factory message` from a PL whose body starts `READY FOR HUMAN MERGE <url>` | Add it to "Ready for human merge", ask Sentinel to verify it, and list it for the human. |
 | `[Factory message · ... kind=request` | Answer with `kind="reply"`, or act and then reply. If you cannot decide, escalate to the human. |
 | `[Factory message · ... kind=reply` | Close the matching open request in the ledger. |
 | `[Factory message · ... kind=alert` | Load factory-recovery. |
@@ -125,6 +132,8 @@ factory_id: <id> · me: <id> · peer lead: <id> · mode: demo|normal · heartbea
 - `stop factory`: pause every PL as above, then
   `sys_factory_set(session_id=<Sentinel>, state="paused")`, then
   `sys_factory_set(state="paused")` for yourself. Report what was stopped.
+- `merged <url>` (or a listed PR reads MERGED in `gh pr view <url> --json state`):
+  post `MERGED <url>` to its PL (kind=info) and move it to merged in the ledger.
 - When a PL reports DONE and Sentinel has verified it, call
   `sys_factory_set(session_id=<PL>, state="done")`.
 
@@ -132,8 +141,10 @@ factory_id: <id> · me: <id> · peer lead: <id> · mode: demo|normal · heartbea
 
 ```
 FACTORY · <iso>
-| project | PRs merged / open | env | blocked on | next |
+| project | PRs merged / ready / open | env | blocked on | next |
 |---|---|---|---|---|
+READY FOR HUMAN MERGE
+- <PR url> · <slug> · CI green · review APPROVE · verify PASS|n/a · verified by Sentinel
 DECISIONS NEEDED
 1. <ask> · <context>
 Next report: <time>
