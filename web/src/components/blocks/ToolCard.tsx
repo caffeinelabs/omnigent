@@ -27,6 +27,8 @@ import {
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { FactoryToolLine } from "@/components/factory/transcript/FactoryToolLine";
+import { isFactoryLineTool } from "@/components/factory/transcript/factoryToolSummary";
 import { cn } from "@/lib/utils";
 import type { RenderItem, ToolState } from "@/lib/renderItems";
 import { iconForTool } from "@/lib/toolIcon";
@@ -251,6 +253,17 @@ export function ToolGroupSummary({ tools }: { tools: RenderItem[] }) {
       </CollapsibleTrigger>
       <CollapsibleContent className="mt-1 ml-2 space-y-1 border-l pl-3 pt-1 pb-0 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:animate-out data-[state=open]:animate-in">
         {tools.map((item) => {
+          if (item.kind === "tool" && isFactoryLineTool(item.execution.name)) {
+            return (
+              <FactoryToolLine
+                key={`tool:${item.execution.callId}`}
+                name={item.execution.name}
+                arguments={item.execution.arguments}
+                output={item.output}
+                state={item.state}
+              />
+            );
+          }
           if (item.kind === "tool") {
             return (
               <ToolCard

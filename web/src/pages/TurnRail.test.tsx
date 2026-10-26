@@ -12,6 +12,10 @@
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { railTurns } from "@/components/chat/Transcript";
+import factoryFixture from "@/lib/__fixtures__/factory-transcript.json";
+import { itemsToBlocks } from "@/lib/itemsToBlocks";
+import { buildBubbles, foldFactoryHeartbeats } from "@/lib/renderItems";
 import { TurnRail, type Turn } from "./TurnRail";
 
 // The rail calls scrollToUserMessage on click; stub it so we assert the call
@@ -190,5 +194,65 @@ describe("TurnRail", () => {
     const rail = container.querySelector(".turn-rail-fade")!;
     expect(rail).toHaveClass("pointer-events-auto");
     expect(rail.parentElement).not.toHaveClass("opacity-0");
+  });
+});
+
+describe("railTurns (ticks the transcript feeds the rail)", () => {
+  type Items = Parameters<typeof itemsToBlocks>[0];
+  const bubblesFor = (items: Items) =>
+    foldFactoryHeartbeats(buildBubbles(itemsToBlocks(items), null));
+
+  it("keeps one tick per normal user turn", () => {
+    const items = [
+      {
+        id: "u1",
+        type: "message",
+        role: "user",
+        response_id: "r1",
+        status: "completed",
+        content: [{ type: "input_text", text: "first" }],
+      },
+      {
+        id: "a1",
+        type: "message",
+        role: "assistant",
+        response_id: "r1",
+        status: "completed",
+        content: [{ type: "output_text", text: "one" }],
+      },
+      {
+        id: "u2",
+        type: "message",
+        role: "user",
+        response_id: "r2",
+        status: "completed",
+        content: [{ type: "input_text", text: "second" }],
+      },
+      {
+        id: "a2",
+        type: "message",
+        role: "assistant",
+        response_id: "r2",
+        status: "completed",
+        content: [{ type: "output_text", text: "two" }],
+      },
+    ] as Items;
+    expect(railTurns(bubblesFor(items))).toEqual([
+      { itemId: "u1", userText: "first", responsePreview: "one" },
+      { itemId: "u2", userText: "second", responsePreview: "two" },
+    ]);
+  });
+
+  it("ticks factory cards with their label and skips beats and notices", () => {
+    const turns = railTurns(bubblesFor(factoryFixture.transcripts.atlas as unknown as Items));
+    expect(turns.map((t) => t.userText)).toEqual([
+      "Brief from Luka",
+      "Factory message from Sentinel (reply)",
+      "Factory message from PL · api-version (info)",
+      "Factory control PAUSE by Luka",
+      'D-3 answered by Luka: "Short sha"',
+    ]);
+    renderRail(turns);
+    expect(screen.getAllByRole("button")).toHaveLength(5);
   });
 });

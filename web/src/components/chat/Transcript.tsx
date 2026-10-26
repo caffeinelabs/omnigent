@@ -13,12 +13,14 @@ import { ElicitationCard } from "@/components/blocks/ApprovalCard";
 import { cn } from "@/lib/utils";
 import { getCurrentAuthorId } from "@/lib/identity";
 import { hasCommandModifier } from "@/lib/hotkeys";
+import { factoryMessageLabel, parseFactoryMessageCached } from "@/lib/factoryMessages";
 import { isSystemUserContent } from "@/lib/systemMessage";
 import {
   type Bubble,
   type BubbleCache,
   buildBubbles,
   createBubbleCache,
+  foldFactoryHeartbeats,
   liveCandidateAssistantIndex,
 } from "@/lib/renderItems";
 import { useChatStore } from "@/store/chatStore";
@@ -133,17 +135,21 @@ function TranscriptImpl({
   // acked) render as trailing user bubbles so the input is visible immediately.
   const bubbleCacheRef = useRef<BubbleCache>(createBubbleCache());
   const bubbles = useMemo<Bubble[]>(() => {
-    const committed = stripGatedSubagentRoutingChips(
-      reorderCommittedRequestElicitations(
-        buildBubbles(
-          blocks,
-          activeResponse,
-          bubbleCacheRef.current,
-          interruptedResponseIds,
-          computeIsWorking(sessionStatus),
+    const committed = foldFactoryHeartbeats(
+      stripGatedSubagentRoutingChips(
+        reorderCommittedRequestElicitations(
+          buildBubbles(
+            blocks,
+            activeResponse,
+            bubbleCacheRef.current,
+            interruptedResponseIds,
+            computeIsWorking(sessionStatus),
+          ),
         ),
+        subagentRoutingOverride,
       ),
-      subagentRoutingOverride,
+      // Factory heartbeats that changed nothing fold into one row.
+      computeIsWorking(sessionStatus),
     );
     if (pendingUserMessages.length === 0) return committed;
     return mergePendingBubbles(
@@ -256,31 +262,7 @@ function TranscriptImpl({
 
   // One rail tick per real user turn, paired with a preview of the reply that
   // followed. Mirrors the transcript's loaded window and grows lazily.
-  const turns = useMemo<Turn[]>(() => {
-    const out: Turn[] = [];
-    for (let i = 0; i < display.bubbles.length; i++) {
-      const b = display.bubbles[i];
-      if (b.kind !== "user" || isSystemBubble(b)) continue;
-      let preview = "";
-      for (let j = i + 1; j < display.bubbles.length; j++) {
-        const next = display.bubbles[j];
-        if (next.kind === "user" && !isSystemBubble(next)) break;
-        if (next.kind === "assistant") {
-          const textItem = next.items.find((it) => it.kind === "text" && it.text.trim());
-          if (textItem && textItem.kind === "text") {
-            preview = textItem.text.trim();
-            break;
-          }
-        }
-      }
-      out.push({
-        itemId: b.itemId,
-        userText: extractUserText(b.content),
-        responsePreview: preview.slice(0, 240),
-      });
-    }
-    return out;
-  }, [display.bubbles]);
+  const turns = useMemo<Turn[]>(() => railTurns(display.bubbles), [display.bubbles]);
 
   const lastAssistantIndex = useMemo(
     () => liveCandidateAssistantIndex(display.streamBubbles),
@@ -436,6 +418,39 @@ function TranscriptImpl({
       </div>
     </>
   );
+}
+
+/**
+ * Rail ticks: one per real user turn (system and factory markers excluded),
+ * each with a preview of the reply that followed. A factory card's tick reads
+ * as its one-line label instead of the raw envelope.
+ */
+export function railTurns(bubbles: Bubble[]): Turn[] {
+  const out: Turn[] = [];
+  for (let i = 0; i < bubbles.length; i++) {
+    const b = bubbles[i];
+    if (b.kind !== "user" || isSystemBubble(b)) continue;
+    let preview = "";
+    for (let j = i + 1; j < bubbles.length; j++) {
+      const next = bubbles[j];
+      if (next.kind === "user" && !isSystemBubble(next)) break;
+      if (next.kind === "assistant") {
+        const textItem = next.items.find((it) => it.kind === "text" && it.text.trim());
+        if (textItem && textItem.kind === "text") {
+          preview = textItem.text.trim();
+          break;
+        }
+      }
+    }
+    const text = extractUserText(b.content);
+    const factory = parseFactoryMessageCached(text);
+    out.push({
+      itemId: b.itemId,
+      userText: factory ? factoryMessageLabel(factory) : text,
+      responsePreview: preview.slice(0, 240),
+    });
+  }
+  return out;
 }
 
 /**

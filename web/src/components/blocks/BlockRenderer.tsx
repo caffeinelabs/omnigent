@@ -27,6 +27,13 @@
 import type { ReactNode } from "react";
 import { useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ChevronRightIcon } from "lucide-react";
+import { FactoryPostCard } from "@/components/factory/transcript/FactoryPostCard";
+import { FactoryToolLine } from "@/components/factory/transcript/FactoryToolLine";
+import {
+  FACTORY_OUTCOME_TOOLS,
+  factoryToolBaseName,
+  isFactoryLineTool,
+} from "@/components/factory/transcript/factoryToolSummary";
 import { LIVE_ITEM_PREFIX } from "@/lib/blocks";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import { ConversationScrollLockContext } from "@/components/ai-elements/conversation";
@@ -722,11 +729,17 @@ function renderToolRunFragment(
 
 const ADVISE_MODELS_NAMES = new Set(["sys_advise_models", "mcp__omnigent__sys_advise_models"]);
 const SESSION_SEND_NAMES = new Set(["sys_session_send", "mcp__omnigent__sys_session_send"]);
+const FACTORY_POST_NAMES = new Set(["sys_session_post", "mcp__omnigent__sys_session_post"]);
 
 function isPersistentToolCard(item: RenderItem): boolean {
+  if (item.kind !== "tool") return false;
+  const name = item.execution.name;
   return (
-    item.kind === "tool" &&
-    (ADVISE_MODELS_NAMES.has(item.execution.name) || SESSION_SEND_NAMES.has(item.execution.name))
+    ADVISE_MODELS_NAMES.has(name) ||
+    SESSION_SEND_NAMES.has(name) ||
+    // Factory posts and outcomes (spawn, ask, PR, preview, demo) stay in view.
+    FACTORY_POST_NAMES.has(name) ||
+    FACTORY_OUTCOME_TOOLS.has(factoryToolBaseName(name))
   );
 }
 
@@ -794,6 +807,27 @@ function renderItem(
         return (
           <SmartRoutingCard
             key={key}
+            arguments={item.execution.arguments}
+            output={item.output}
+            state={item.state}
+          />
+        );
+      }
+      if (FACTORY_POST_NAMES.has(item.execution.name)) {
+        return (
+          <FactoryPostCard
+            key={key}
+            arguments={item.execution.arguments}
+            output={item.output}
+            state={item.state}
+          />
+        );
+      }
+      if (isFactoryLineTool(item.execution.name)) {
+        return (
+          <FactoryToolLine
+            key={key}
+            name={item.execution.name}
             arguments={item.execution.arguments}
             output={item.output}
             state={item.state}

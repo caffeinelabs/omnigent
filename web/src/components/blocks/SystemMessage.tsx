@@ -19,6 +19,7 @@ const KIND_ICON: Record<Exclude<SystemMessageKind, "subagent_wake">, LucideIcon>
   timer_fired: BellIcon,
   terminal_idle: TerminalIcon,
   interrupted: BanIcon,
+  factory: InfoIcon,
   generic: InfoIcon,
 };
 
