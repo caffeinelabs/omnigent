@@ -125,7 +125,7 @@ def reply_notice_text(conv: Conversation, output: str) -> str:
     return (
         f'[Factory notice · "{display_title(conv.title, conv.id)}" ({conv.id}) finished the turn '
         f"your request started (idle). Last output: «{output}». "
-        f'Inspect with sys_session_get_history(session_id="{conv.id}").]'
+        f'Inspect with sys_session_get_history(conversation_id="{conv.id}").]'
     )
 
 

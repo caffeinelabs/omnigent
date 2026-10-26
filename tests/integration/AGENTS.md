@@ -40,6 +40,7 @@ pytest tests/integration/ --integration --profile <name> --llm-api-key $KEY \
 | `test_multi_turn.py` | Three-turn context retention across dispatches |
 | `test_client_tools.py` | Tunneled client-tool results thread into the next turn's context |
 | `test_sharing.py` | An EDIT collaborator's turn sees the owner's context and completes |
+| `test_factory_tree.py` | Two factory members on their own factory-enabled stack: lazy enrolment, enveloped `sys_session_post`, reply notice, forced supervisor heartbeat, roster, out-of-factory 403 (openai-agents leg only) |
 
 One journey per file on purpose: `--dist=loadscope` groups by module,
 so separate files parallelize across xdist workers (each worker gets
