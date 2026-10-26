@@ -173,6 +173,26 @@ async def test_skips_are_reported_hourly_per_factory(quiet: Supervision) -> None
     assert event.data is not None and event.data["counts"] == {w.id("pl"): 2}
 
 
+async def test_a_failed_event_scan_delivers_the_beat_instead_of_failing_it(
+    quiet: Supervision, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s, w = quiet, quiet.world
+    await _first_beat(s)
+    store = w.app_state.factory.factory_store
+
+    def _boom(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("db hiccup")
+
+    monkeypatch.setattr(store, "list_events", _boom)
+    for _ in range(3):
+        s.clock.advance(PL_HEARTBEAT_S)
+        await s.tick()
+
+    assert len(s.deliver.texts_to(w.id("pl"))) == 4
+    labels = w.get("pl").labels
+    assert labels.get(F.LABEL_HEALTH) != F.HEALTH_DEAD and labels[F.LABEL_BEAT_N] == "4"
+
+
 async def test_quiet_beats_are_off_by_config_and_env(
     supervision: Supervision, monkeypatch: pytest.MonkeyPatch
 ) -> None:

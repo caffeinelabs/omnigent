@@ -35,6 +35,8 @@ DEFAULT_SENDER_RATE_PER_HOUR = 60
 DEFAULT_PAIR_RATE_PER_HOUR = 20
 RETRY_DELAYS_S: tuple[float, ...] = (60.0, 300.0)
 STORM_ALERT_INTERVAL_S = 3600.0
+RATE_LIMITED_EVENT_INTERVAL_S = 60.0
+"""At most one ``rate_limited`` event per sender and recipient per interval."""
 _WINDOW_S = 3600.0
 
 Deliver = Callable[..., Awaitable[DeliveryOutcome]]
@@ -148,6 +150,7 @@ class Mailer:
         self._sender_posts: dict[str, deque[float]] = {}
         self._pair_posts: dict[tuple[str, str], deque[float]] = {}
         self._storm_alerted_at: dict[str, float] = {}
+        self._refusal_logged_at: dict[tuple[str, str], float] = {}
         self._pending: dict[str, tuple[str, float]] = {}
         self._last_post: dict[tuple[str, str], float] = {}
         # One delivery at a time per target keeps a brief ahead of its follow-ups.
@@ -177,6 +180,12 @@ class Mailer:
             f for f, at in self._storm_alerted_at.items() if now - at >= STORM_ALERT_INTERVAL_S
         ]:
             del self._storm_alerted_at[factory_id]
+        for pair in [
+            k
+            for k, at in self._refusal_logged_at.items()
+            if now - at >= RATE_LIMITED_EVENT_INTERVAL_S
+        ]:
+            del self._refusal_logged_at[pair]
 
     def try_acquire(
         self, sender_id: str, target_id: str, *, factory_id: str | None = None
@@ -202,7 +211,11 @@ class Mailer:
         elif len(pair_window) >= self.pair_rate_per_hour:
             limit = f"{self.pair_rate_per_hour} posts/h to one recipient"
         if limit is not None:
-            if factory_id and not self._closed:
+            if (
+                factory_id
+                and not self._closed
+                and self._claim_refusal_log(sender_id, target_id, now)
+            ):
                 self._spawn(
                     mail_events.record_rate_limited(
                         self._app_state, factory_id, sender_id, target_id, limit, self._ms()
@@ -212,6 +225,14 @@ class Mailer:
         sender_window.append(now)
         pair_window.append(now)
         return None
+
+    def _claim_refusal_log(self, sender_id: str, target_id: str, now: float) -> bool:
+        """A looping sender logs one refusal per recipient per minute, not one per post."""
+        last = self._refusal_logged_at.get((sender_id, target_id))
+        if last is not None and now - last < RATE_LIMITED_EVENT_INTERVAL_S:
+            return False
+        self._refusal_logged_at[(sender_id, target_id)] = now
+        return True
 
     def claim_storm_alert(self, factory_id: str) -> bool:
         """

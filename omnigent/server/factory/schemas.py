@@ -646,6 +646,10 @@ class EventPage(_View):
 
     data: list[EventView]
     has_more: bool
+    next_before: int | None = None
+    """``before`` of the next page (past any hidden events the scan skipped)."""
+    next_before_id: str | None = None
+    """``before_id`` of the next page."""
 
 
 class FactoryRef(_View):

@@ -66,6 +66,7 @@ from omnigent.server.factory.envelope import display_title
 from omnigent.server.factory.mailer import get_mailer
 from omnigent.server.factory.membership import is_top_level, resolve_factory_id
 from omnigent.server.factory.notify import (
+    NEEDS_HUMAN_KIND,
     NOTIFIER_STATE_ATTR,
     BlockedEpisode,
     FactoryNotifier,
@@ -570,7 +571,13 @@ class FactorySupervisor:
         deliver = self._deliver or deliver_message
         try:
             if self.config.quiet_beats:
-                plan = await self._plan_beat(conv, now, stalled_child)
+                try:
+                    plan = await self._plan_beat(conv, now, stalled_child)
+                except Exception:  # noqa: BLE001 - a planning hiccup is not a failed beat
+                    _logger.warning(
+                        "factory: could not plan the beat of %s", conv.id, exc_info=True
+                    )
+                    plan = quiet_beats.BeatPlan(skip=False)
                 if plan.skip:
                     self._record_skip(conv, now)
                     return
@@ -663,7 +670,7 @@ class FactorySupervisor:
         if factory_id:
             await self._emit(
                 factory_id,
-                "needs_human",
+                NEEDS_HUMAN_KIND,
                 severity="critical",
                 project=project,
                 from_id=conv.id,
@@ -769,6 +776,7 @@ class FactorySupervisor:
                 episode.blocked_on,
             )
             return
+        episode.factory_id = factory_id
         prior = await prior_escalation(self._app_state, factory_id, episode)
         if prior is not None:
             # Escalated before a server roll: keep that episode's start and decision.
@@ -795,7 +803,7 @@ class FactorySupervisor:
         episode.decision_id = opened[0].id if opened else None
         await self._emit(
             factory_id,
-            "needs_human",
+            NEEDS_HUMAN_KIND,
             severity="critical",
             project=project,
             from_id=conv.id,

@@ -156,11 +156,15 @@ async def get_factory(request: Request, factory_id: str) -> Response:
     return JSONResponse(content=body, headers=headers)
 
 
-def _event_view(event: Any, titles: dict[str, str]) -> dict[str, Any]:
+def _event_view(event: Any, titles: dict[str, str], readable: set[str]) -> dict[str, Any]:
     data = dict(event.data) if event.data else None
     if data is not None:
         # The full enveloped text is kept for mail replay; the feed shows the excerpt.
         data.pop("text", None)
+        counts = data.get("counts")
+        if isinstance(counts, dict):
+            # Per-member tallies (heartbeat.skipped) name only members the viewer may read.
+            data["counts"] = {sid: n for sid, n in counts.items() if sid in readable}
     return {
         "id": event.id,
         "ts": event.ts,
@@ -217,6 +221,8 @@ async def list_factory_events(
     store = deps.factory_store
     kept: list[Any] = []
     cursor_ms, cursor_id = before, before_id
+    next_cursor: tuple[int, str] | None = None
+    scanned: tuple[int, str] | None = None
     for _ in range(_EVENT_SCAN_PAGES):
         page = await asyncio.to_thread(
             store.list_events,
@@ -231,12 +237,24 @@ async def list_factory_events(
         for event in page:
             if await visible(event):
                 kept.append(event)
-        if len(kept) > limit or len(page) <= limit:
+        if len(kept) > limit:
+            next_cursor = (kept[limit - 1].ts, kept[limit - 1].id)
+            break
+        if len(page) <= limit:
             break
         cursor_ms, cursor_id = page[-1].ts, page[-1].id
-    data = [_event_view(e, raw.titles) for e in kept[:limit]]
+        scanned = (cursor_ms, cursor_id)
+    else:
+        # The scan stopped on hidden events: resume after the last one scanned.
+        next_cursor = scanned
+    data = [_event_view(e, raw.titles, readable) for e in kept[:limit]]
     return schemas.EventPage.model_validate(
-        {"data": data, "has_more": len(kept) > limit}
+        {
+            "data": data,
+            "has_more": next_cursor is not None,
+            "next_before": next_cursor[0] if next_cursor else None,
+            "next_before_id": next_cursor[1] if next_cursor else None,
+        }
     ).model_dump(mode="json")
 
 

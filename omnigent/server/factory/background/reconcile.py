@@ -2,7 +2,8 @@
 
 For each factory root this:
 
-1. ensures the owner's sidebar folder project ``🏭 <name>`` exists;
+1. ensures the owner's sidebar folder project ``🏭 <name>`` exists (once:
+   a folder the owner deleted stays deleted);
 2. files top-level members that sit in no project into it (never moving a
    session the user filed elsewhere);
 3. creates project rows for PLs whose project label has none (title from the
@@ -25,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.factory import (
+    FOLDER_DELETED,
     LABEL_FOLDER_PROJECT,
     LABEL_NAME,
     LABEL_PROJECT,
@@ -105,8 +107,14 @@ def _ensure_folder(
     if projects is None:
         return None, False
     current = root.labels.get(LABEL_FOLDER_PROJECT)
+    if current == FOLDER_DELETED:
+        return None, False
     if current and projects.get(current, user_id=owner) is not None:
         return current, False
+    if current:
+        # The owner deleted the folder; refiling every member would undo that.
+        deps.conversation_store.set_labels(root.id, {LABEL_FOLDER_PROJECT: FOLDER_DELETED})
+        return None, False
     name = _folder_name(root)
     for candidate in (name, f"{name} · {root.id[:6]}"):
         try:

@@ -87,6 +87,24 @@ async def test_a_lost_folder_is_recreated_and_a_name_clash_gets_a_suffix(
     assert folder is not None and folder.name == f"🏭 Atlas · {world.id('lead_a')[:6]}"
 
 
+async def test_a_folder_the_owner_deleted_stays_deleted(
+    world: FactoryWorld, projects: SqlAlchemyProjectStore
+) -> None:
+    await reconcile.reconcile_once(world.app_state)
+    folder_id = world.get("lead_a").labels[F.LABEL_FOLDER_PROJECT]
+    assert projects.delete(folder_id, user_id=None)
+    for key in ("lead_a", "lead_b", "pl"):
+        world.store.set_conversation_project(world.id(key), None)
+
+    for _ in range(2):
+        report = await reconcile.reconcile_once(world.app_state)
+        assert report.folders_created == [] and report.filed == []
+
+    assert world.get("lead_a").labels[F.LABEL_FOLDER_PROJECT] == F.FOLDER_DELETED
+    assert world.get("pl").project_id is None
+    assert [p.name for p in projects.list(user_id=None)].count("🏭 Atlas") == 0
+
+
 async def test_project_rows_are_backfilled_from_pl_labels(
     world: FactoryWorld, projects: SqlAlchemyProjectStore
 ) -> None:

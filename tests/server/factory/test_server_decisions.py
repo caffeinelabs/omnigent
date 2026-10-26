@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from omnigent import factory as F
+from omnigent.server.factory import server_decisions
 from omnigent.server.factory.delivery import DeliveryOutcome
 from omnigent.server.factory.notify import (
     FactoryNotifier,
@@ -199,6 +200,77 @@ async def test_a_new_prompt_after_a_cleared_episode_escalates_again(
     assert sorted(d.status for d in _decisions(s, "blocked_approval")) == ["expired", "expired"]
 
 
+@pytest.mark.parametrize("ending", ["withdrawn", "answered", "never_stored"])
+async def test_the_same_prompt_after_a_dismissed_episode_escalates_again(
+    supervision: Supervision, monkeypatch: pytest.MonkeyPatch, ending: str
+) -> None:
+    s, w = supervision, supervision.world
+    pl, lead_a = w.id("pl"), w.id("lead_a")
+    w.store.set_labels(pl, {F.LABEL_HEARTBEAT_S: "0"})
+    _quiet_leads(s)
+    if ending == "never_stored":
+        monkeypatch.setattr(server_decisions, "open_blocked_decision", _no_decision)
+    await _edge(s, "pl", "running", blocked_on=BLOCKED_ON)
+    s.clock.advance(DEFAULT_BLOCKED_ESCALATE_S)
+    await s.tick()
+    if ending == "withdrawn":
+        [first] = _decisions(s, "blocked_approval")
+        _store(s).set_decision_status(first.id, "withdrawn")
+    elif ending == "answered":
+        [first] = _decisions(s, "blocked_approval")
+        _store(s).answer_decision(first.id, option_id="dismiss", text=None, by="user:luka")
+
+    await _edge(s, "pl", "idle", output="ok")
+    [cleared] = _store(s).find_events(lead_a, "needs_human.cleared", 0)
+    assert cleared.subject == f"session:{pl}"
+    s.clock.advance(3600)
+    await _edge(s, "pl", "running", blocked_on=BLOCKED_ON)
+    s.clock.advance(DEFAULT_BLOCKED_ESCALATE_S)
+    await s.tick()
+
+    assert len(s.deliver.texts_to(lead_a)) == 2
+    assert len(_store(s).find_events(lead_a, "needs_human", 0)) == 2
+    if ending != "never_stored":
+        statuses = sorted(d.status for d in _decisions(s, "blocked_approval"))
+        assert statuses == sorted([ending, "open"])
+
+
+async def _no_decision(*_args: Any, **_kwargs: Any) -> None:
+    return None
+
+
+async def test_a_roll_mid_episode_still_dedupes_after_an_earlier_cleared_one(
+    supervision: Supervision,
+) -> None:
+    s, w = supervision, supervision.world
+    pl, lead_a = w.id("pl"), w.id("lead_a")
+    w.store.set_labels(pl, {F.LABEL_HEARTBEAT_S: "0"})
+    _quiet_leads(s)
+    for clears in (True, False):
+        await _edge(s, "pl", "running", blocked_on=BLOCKED_ON)
+        s.clock.advance(DEFAULT_BLOCKED_ESCALATE_S)
+        await s.tick()
+        if clears:
+            await _edge(s, "pl", "idle", output="ok")
+    assert len(s.deliver.texts_to(lead_a)) == 2
+
+    # A server roll while the second episode waits: it is not escalated twice.
+
+    notifier = FactoryNotifier(w.app_state, clock=s.clock)
+    w.app_state.factory_notifier = notifier
+    register_relay_notifier(notifier)
+    s.notifier = notifier
+    s.supervisor = FactorySupervisor(
+        w.app_state, config=SupervisorConfig(), deliver=s.deliver, clock=s.clock
+    )
+    await _edge(s, "pl", "running", blocked_on=BLOCKED_ON)
+    s.clock.advance(DEFAULT_BLOCKED_ESCALATE_S)
+    await s.tick()
+
+    assert len(s.deliver.texts_to(lead_a)) == 2
+    assert [d.status for d in _decisions(s, "blocked_approval")].count("open") == 1
+
+
 # ── Storm ──────────────────────────────────────────────────────
 
 
@@ -226,4 +298,5 @@ async def test_a_message_storm_opens_a_pause_decision(
         ("pause", "pause", f"member:{pl}"),
         ("dismiss", "dismiss", None),
     ]
-    assert len(store.find_events(lead_a, "rate_limited", 0)) == 2
+    # The second refusal in the same minute is not logged again.
+    assert len(store.find_events(lead_a, "rate_limited", 0)) == 1

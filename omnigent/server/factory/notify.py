@@ -22,7 +22,8 @@ For factory members (labelled themselves, or through their root) this:
   :class:`~omnigent.server.factory.supervisor.FactorySupervisor`).
 
 Every alert and notice is also logged as an event (``alert.failed``,
-``notice.reply``). Everything here is best-effort: the hooks never raise into
+``notice.reply``); an escalated blocked episode logs ``needs_human.cleared``
+when it ends. Everything here is best-effort: the hooks never raise into
 their caller and only queue mail, so a status edge never waits on a delivery.
 """
 
@@ -56,6 +57,9 @@ FAILED_DETAIL_MAX_CHARS = 300
 NOTICE_OUTPUT_MAX_CHARS = 1200
 BLOCKED_DEDUPE_LOOKBACK_S = 86400.0
 """How far back an earlier escalation of the same prompt still counts (it survives a roll)."""
+NEEDS_HUMAN_KIND = "needs_human"
+NEEDS_HUMAN_CLEARED_KIND = "needs_human.cleared"
+"""Logged when an escalated blocked episode ends, so a later block is a new episode."""
 
 _TERMINAL_STATUSES = frozenset({"idle", "failed"})
 _BUSY_STATUSES = frozenset({"running", "waiting"})
@@ -144,6 +148,7 @@ class BlockedEpisode:
     :param since: Epoch seconds of the first blocked edge.
     :param escalated: Whether the supervisor already escalated it.
     :param decision_id: The decision opened for the human, expired when the episode clears.
+    :param factory_id: The factory it was escalated in; its end is logged there.
     """
 
     session_id: str
@@ -151,6 +156,7 @@ class BlockedEpisode:
     since: float
     escalated: bool = False
     decision_id: str | None = None
+    factory_id: str | None = None
 
 
 def session_subject(session_id: str) -> str:
@@ -165,8 +171,9 @@ async def prior_escalation(
     Find an earlier ``needs_human`` escalation of the same blocked episode.
 
     The in-memory episode is lost on a server roll, so the event log decides:
-    the newest escalation of this session for the same prompt counts unless
-    its decision expired (the episode it was for cleared). Never raises.
+    the newest escalation of this session for the same prompt counts unless a
+    ``needs_human.cleared`` of the session followed it or its decision expired
+    (both mean the episode it was for ended). Never raises.
 
     :param app_state: ``app.state`` carrying the factory deps.
     :param factory_id: The session's factory.
@@ -182,13 +189,18 @@ async def prior_escalation(
         found = await asyncio.to_thread(
             store.find_events,
             factory_id,
-            "needs_human",
+            [NEEDS_HUMAN_KIND, NEEDS_HUMAN_CLEARED_KIND],
             since_ms,
             session_subject(episode.session_id),
         )
+        cleared_ms = max((e.ts for e in found if e.kind == NEEDS_HUMAN_CLEARED_KIND), default=None)
         for event in reversed(found):
             data = event.data or {}
-            if data.get("reason") != "blocked" or data.get("blocked_on") != episode.blocked_on:
+            if event.kind != NEEDS_HUMAN_KIND or data.get("reason") != "blocked":
+                continue
+            if cleared_ms is not None and cleared_ms >= event.ts:
+                return None
+            if data.get("blocked_on") != episode.blocked_on:
                 continue
             decision_id = data.get("decision_id")
             decision = (
@@ -271,13 +283,36 @@ class FactoryNotifier:
             self._end_episode(episode)
 
     def _end_episode(self, episode: BlockedEpisode | None) -> None:
-        """Expire the decision an ended episode opened (the approval no longer waits)."""
-        if episode is None or episode.decision_id is None:
+        """
+        Log the end of an escalated episode and expire its decision.
+
+        The ``needs_human.cleared`` event tells :func:`prior_escalation` that a
+        later block on the same prompt is a new episode, whatever happened to
+        the decision (answered, withdrawn or never stored).
+        """
+        if episode is None:
             return
         try:
-            self.spawn(server_decisions.expire_decision(self._app_state, episode.decision_id))
+            if episode.escalated and episode.factory_id:
+                self.spawn(
+                    events.emit(
+                        self._app_state,
+                        episode.factory_id,
+                        NEEDS_HUMAN_CLEARED_KIND,
+                        subject=session_subject(episode.session_id),
+                        from_id=episode.session_id,
+                        summary=f"No longer waiting on a human: {episode.blocked_on}",
+                        data={
+                            "blocked_on": episode.blocked_on,
+                            "decision_id": episode.decision_id,
+                        },
+                        ts=int(self._clock() * 1000),
+                    )
+                )
+            if episode.decision_id is not None:
+                self.spawn(server_decisions.expire_decision(self._app_state, episode.decision_id))
         except RuntimeError:
-            _logger.debug("factory: no loop to expire decision %s", episode.decision_id)
+            _logger.debug("factory: no loop to end the episode of %s", episode.session_id)
 
     def prune_escalated(self, watched: set[str]) -> None:
         """

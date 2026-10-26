@@ -12,9 +12,14 @@ from omnigent import factory as F
 from omnigent.server.factory import mail_events
 from omnigent.server.factory.delivery import DeliveryOutcome
 from omnigent.server.factory.envelope import format_envelope
-from omnigent.server.factory.mailer import MAILER_STATE_ATTR, Mailer, MailItem
+from omnigent.server.factory.mailer import (
+    MAILER_STATE_ATTR,
+    RATE_LIMITED_EVENT_INTERVAL_S,
+    Mailer,
+    MailItem,
+)
 from omnigent.stores.factory_store import FactoryStore
-from tests.server.factory.conftest import FactoryApi, FactoryWorld, FakeDeliver
+from tests.server.factory.conftest import FactoryApi, FactoryWorld, FakeClock, FakeDeliver
 
 
 def _store(world: FactoryWorld) -> FactoryStore:
@@ -180,6 +185,27 @@ async def test_a_refused_post_is_logged_as_rate_limited(
     [event] = _store(world).find_events(lead, "rate_limited", 0)
     assert (event.from_id, event.to_id, event.severity) == (pl, lead, "warning")
     assert event.data == {"limit": "1 posts/h per sender"}
+
+
+async def test_a_looping_sender_logs_one_refusal_per_recipient_per_minute(
+    world: FactoryWorld, fake_deliver: FakeDeliver, no_sleep: Callable[[float], Any]
+) -> None:
+    clock = FakeClock()
+    mailer = Mailer(
+        world.app_state, deliver=fake_deliver, sleep=no_sleep, clock=clock, sender_rate_per_hour=1
+    )
+    pl, lead, ic = world.id("pl"), world.id("lead_a"), world.id("ic")
+    assert mailer.try_acquire(pl, lead, factory_id=lead) is None
+
+    for _ in range(20):
+        assert mailer.try_acquire(pl, lead, factory_id=lead) is not None
+    assert mailer.try_acquire(pl, ic, factory_id=lead) is not None
+    clock.advance(RATE_LIMITED_EVENT_INTERVAL_S)
+    assert mailer.try_acquire(pl, lead, factory_id=lead) is not None
+    await mailer.drain()
+
+    refused = _store(world).find_events(lead, "rate_limited", 0)
+    assert [e.to_id for e in refused] == [lead, ic, lead]
 
 
 async def test_the_route_envelope_carries_the_mail_id(

@@ -34,6 +34,7 @@ from omnigent.factory import (
     CADENCE_HEARTBEATS,
     CADENCE_NORMAL,
     CADENCES,
+    FOLDER_DELETED,
     LABEL_CADENCE,
     LABEL_FOLDER_PROJECT,
     LABEL_HEALTH,
@@ -339,10 +340,11 @@ def _load(deps: FactoryDeps, factory_id: str, now: float) -> _Loaded:
     closed = [m for m in everyone if is_session_closed(m.labels, m.title)]
     children: dict[str, list[Conversation]] = {}
     for member in members:
+        # The newest 200 (re-dispatches must not fall off the page), shown oldest first.
         page = store.list_conversations(
-            limit=200, kind="sub_agent", parent_conversation_id=member.id, order="asc"
+            limit=200, kind="sub_agent", parent_conversation_id=member.id, order="desc"
         )
-        children[member.id] = list(page.data)
+        children[member.id] = list(reversed(page.data))
     now_ms = int(now * 1000)
     memo: dict[tuple[Any, ...], Any] = {}
     harness = {
@@ -387,6 +389,11 @@ def _next_beat(conv: Conversation, now: float) -> int | None:
     if due < now:
         due += ((now - due) // interval + 1) * interval
     return int(due)
+
+
+def _folder_id(root: Conversation) -> str | None:
+    folder = root.labels.get(LABEL_FOLDER_PROJECT)
+    return None if folder == FOLDER_DELETED else folder
 
 
 def _cadence(root: Conversation) -> str:
@@ -862,7 +869,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
             "cadence": _cadence(root),
             "started_at": started_at,
             "root_session_id": root.id,
-            "folder_project_id": root.labels.get(LABEL_FOLDER_PROJECT),
+            "folder_project_id": _folder_id(root),
             "elapsed_s": max(0, int(now - started_at)),
             "cost_usd": cost,
             "next_beats": sorted(next_beats, key=lambda b: b["at"]),

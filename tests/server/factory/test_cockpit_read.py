@@ -350,6 +350,10 @@ async def test_events_page_newest_first_with_filters(
     page = (await _get(authed_api, path, params={"limit": 2})).json()
     assert [e["summary"] for e in page["data"]] == ["factory-wide notice", "lead asks Sentinel"]
     assert page["has_more"] is True
+    assert (page["next_before"], page["next_before_id"]) == (
+        page["data"][-1]["ts"],
+        page["data"][-1]["id"],
+    )
     first = page["data"][0]
     assert first["data"] == {"mail_id": "mail_x"}  # the full text stays server-side
     last = page["data"][-1]
@@ -367,6 +371,56 @@ async def test_events_page_newest_first_with_filters(
     assert [e["summary"] for e in mine["data"]] == ["PL reports to the lead"]
     none = (await _get(authed_api, path, params={"kinds": "pr.*,decision.*"})).json()
     assert none["data"] == []
+
+
+async def test_skip_tallies_name_only_members_the_viewer_can_read(
+    world: FactoryWorld, authed_api: FactoryApi
+) -> None:
+    seeded = _seed(world, authed_api)
+    _deps(authed_api).permission_store.grant("bob", seeded.fid, LEVEL_READ)
+    counts = {seeded.fid: 1, world.id("pl"): 2}
+    _deps(authed_api).factory_store.append_event(
+        EventDraft(
+            factory_id=seeded.fid,
+            kind="heartbeat.skipped",
+            summary="3 heartbeats skipped · no change",
+            data={"counts": counts, "since": 1, "until": 2},
+        )
+    )
+    path = f"/v1/factory/factories/{seeded.fid}/events"
+    params = {"kinds": "heartbeat.*"}
+
+    [bob] = (await _get(authed_api, path, "bob", params=params)).json()["data"]
+    [alice] = (await _get(authed_api, path, params=params)).json()["data"]
+
+    assert bob["data"]["counts"] == {seeded.fid: 1}
+    assert alice["data"]["counts"] == counts
+
+
+async def test_a_long_run_of_hidden_events_does_not_end_the_feed(
+    world: FactoryWorld, authed_api: FactoryApi
+) -> None:
+    seeded = _seed(world, authed_api)
+    _deps(authed_api).permission_store.grant("bob", seeded.fid, LEVEL_READ)
+    store = _deps(authed_api).factory_store
+    pl = world.id("pl")
+    for n in range(12):  # newer than the seeded events, all hidden from bob
+        store.append_event(
+            EventDraft(factory_id=seeded.fid, kind="pr.ready", summary=f"pl {n}", from_id=pl)
+        )
+    path = f"/v1/factory/factories/{seeded.fid}/events"
+
+    seen: list[str] = []
+    params: dict[str, Any] = {"limit": 1}
+    for _ in range(5):
+        page = (await _get(authed_api, path, "bob", params=params)).json()
+        seen += [e["summary"] for e in page["data"]]
+        if not page["has_more"]:
+            break
+        params = {"limit": 1, "before": page["next_before"], "before_id": page["next_before_id"]}
+
+    assert seen == ["factory-wide notice"]
+    assert page["has_more"] is False and page["next_before"] is None
 
 
 # ── factories list and decisions ───────────────────────────────
