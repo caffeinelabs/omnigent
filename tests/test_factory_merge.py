@@ -281,8 +281,8 @@ def _run(
 
 @pytest.fixture(autouse=True)
 def _default_repos(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Pin the allowlist to its default regardless of the caller's environment."""
-    monkeypatch.delenv(REPOS_ENV, raising=False)
+    """Opt the fixtures' repo in, regardless of the caller's environment."""
+    monkeypatch.setenv(REPOS_ENV, "caffeinelabs/app")
 
 
 @pytest.fixture(autouse=True)
@@ -677,7 +677,19 @@ def test_repo_allowlist_comes_from_the_environment(
     assert code == EXIT_GATE_FAILED
     assert verdict["gates"]["repo"] == "fail"
     monkeypatch.setenv(REPOS_ENV, " ")
-    assert allowed_repos() == {"caffeinelabs/app"}
+    assert allowed_repos() == frozenset()
+
+
+def test_merges_are_off_without_an_allowlist(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """With no allowlist the gate merges nowhere and says so."""
+    monkeypatch.delenv(REPOS_ENV, raising=False)
+    assert allowed_repos() == frozenset()
+    code, verdict = _run(monkeypatch, capsys, _FakeGh())
+    assert code == EXIT_GATE_FAILED
+    assert verdict["gates"]["repo"] == "fail"
+    assert any("factory merges are off" in r for r in verdict["reasons"])
 
 
 # ── Merge outcomes ──────────────────────────────────────────────────────────
