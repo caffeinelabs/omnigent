@@ -35,6 +35,7 @@ from omnigent.server.factory.prs import (
     FactoryScope,
     active_factories,
     apply_refresh,
+    files_gap,
     parse_factory_branch,
     pr_alias,
     pr_subject,
@@ -56,6 +57,8 @@ SLOW_FACTOR: Final = 5
 BACKOFF_START_S: Final = 60.0
 BACKOFF_MAX_S: Final = 600.0
 BACKOFF_STATUSES: Final = frozenset({401, 403, 429})
+# A non-JSON body raises ValueError; treat it like any other failed call.
+_CALL_ERRORS: Final = (GitHubApiError, httpx.HTTPError, ValueError)
 
 POLLER_STATE_ATTR: Final = "factory_pr_poller"
 """``app.state`` attribute holding the running :class:`PrPoller`."""
@@ -113,6 +116,8 @@ class PrPoller:
         self._backoff: dict[str, tuple[float, float]] = {}
         self._low_rate: set[str] = set()
         self._soft_errors: list[str] = []
+        # (repo, number) -> (head sha, every changed path) for PRs the query lists partly.
+        self._files: dict[tuple[str, int], tuple[str, list[str]]] = {}
         self.remaining: int | None = None
 
     # ── lifecycle ───────────────────────────────────────────────
@@ -193,9 +198,13 @@ class PrPoller:
         outcomes: list[str] = []
         errors: list[str] = []
         for owner, owned in by_owner.items():
-            outcome, error = await self._poll_owner(
-                owner, owned, client, store, now, forced or set()
-            )
+            try:
+                outcome, error = await self._poll_owner(
+                    owner, owned, client, store, now, forced or set()
+                )
+            except Exception as exc:  # one owner must not stop the others
+                _logger.exception("factory: PR poll for %s failed", owner)
+                outcome, error = "degraded", f"PR poll for {owner} failed: {exc}"[:512]
             outcomes.append(outcome)
             if error:
                 errors.append(error)
@@ -309,7 +318,7 @@ class PrPoller:
         for page in range(1, DISCOVERY_MAX_PAGES + 1):
             try:
                 pulls = await client.list_pulls(token, repo, state="all", page=page)
-            except (GitHubApiError, httpx.HTTPError) as exc:
+            except _CALL_ERRORS as exc:
                 if isinstance(exc, GitHubApiError) and exc.status_code in BACKOFF_STATUSES:
                     raise await self._failure(owner, exc, owner_scopes, now) from exc
                 # One unreadable repo (a typo, no access) must not stop the others.
@@ -323,12 +332,17 @@ class PrPoller:
                 if created_at < oldest_start:
                     older = True
                     break
-                await self._track_discovered(repo, pull, created_at, scopes)
+                await self._track_discovered(repo, pull, created_at, scopes, now)
             if older or len(pulls) < 100:
                 return
 
     async def _track_discovered(
-        self, repo: str, pull: dict[str, Any], created_at: int, scopes: list[FactoryScope]
+        self,
+        repo: str,
+        pull: dict[str, Any],
+        created_at: int,
+        scopes: list[FactoryScope],
+        now: float,
     ) -> None:
         head = pull.get("head") if isinstance(pull.get("head"), dict) else {}
         base = pull.get("base") if isinstance(pull.get("base"), dict) else {}
@@ -358,6 +372,18 @@ class PrPoller:
                     store.update_pr, existing.id, project_slug=slug, task=existing.task or task
                 )
             return
+        terminal: dict[str, Any] = {}
+        merged_at = parse_time(pull.get("merged_at"))
+        if merged_at is not None and merged_at.timestamp() < now - TERMINAL_PR_WINDOW_S:
+            # Merged long before we saw it (e.g. a first rollout): record it, announce nothing.
+            ended = int(merged_at.timestamp())
+            merge_sha = str(pull.get("merge_commit_sha") or "").lower()[:40]
+            terminal = {
+                "state": "merged",
+                "merged_at": ended,
+                "closed_at": ended,
+                "merged_sha": merge_sha or None,
+            }
         row, created = await asyncio.to_thread(
             store.upsert_pr,
             scope.factory_id,
@@ -372,6 +398,7 @@ class PrPoller:
             base_ref=str(base.get("ref") or "")[:255],
             head_sha=str(head.get("sha") or "").lower()[:40],
             is_draft=pull.get("draft") is True,
+            **terminal,
         )
         if created:
             await events.emit(
@@ -387,7 +414,10 @@ class PrPoller:
     # ── refresh ─────────────────────────────────────────────────
 
     def _due(self, pr: FactoryPr, now: float) -> bool:
-        if pr.last_polled_at is not None and pr.last_polled_at > now - self.interval:
+        if pr.last_polled_at is None:
+            # Never polled: refresh once, even a PR recorded as long merged.
+            return True
+        if pr.last_polled_at > now - self.interval:
             return False
         if pr.state == "open":
             return True
@@ -434,7 +464,7 @@ class PrPoller:
                 {"owner": owner_name, "name": name},
                 allow_partial=True,
             )
-        except (GitHubApiError, httpx.HTTPError) as exc:
+        except _CALL_ERRORS as exc:
             raise await self._failure(owner, exc, scopes, now) from exc
         await self._note_rate_limit(owner, result.rate_limit, scopes)
         repository = result.data.get("repository")
@@ -456,6 +486,7 @@ class PrPoller:
                 )
                 continue
             try:
+                files = await self._all_files(token, repo, pr.number, node, client)
                 await apply_refresh(
                     self._app_state,
                     pr,
@@ -463,9 +494,35 @@ class PrPoller:
                     now=int(now),
                     scope=scope,
                     required_contexts=contexts.get(str(node.get("baseRefName") or ""), ()),
+                    files=files,
                 )
             except Exception:
                 _logger.exception("factory: applying the refresh of %s failed", pr.id)
+
+    async def _all_files(
+        self, token: str, repo: str, number: int, node: dict[str, Any], client: Any
+    ) -> list[str] | None:
+        """
+        Every changed path of an open PR the query lists only partly (cached per head).
+
+        :returns: The paths, or ``None`` when the query's list is complete or
+            the listing failed (the protected-paths gate then stays pending).
+        """
+        key = (repo.lower(), number)
+        if node.get("state") != "OPEN" or files_gap(node) is None:
+            self._files.pop(key, None)
+            return None
+        head = str(node.get("headRefOid") or "").lower()
+        cached = self._files.get(key)
+        if cached is not None and cached[0] == head:
+            return cached[1]
+        try:
+            paths = await client.list_pull_files(token, repo, number)
+        except _CALL_ERRORS as exc:
+            _logger.info("factory: listing %s#%s files failed: %s", repo, number, exc)
+            return None
+        self._files[key] = (head, paths)
+        return paths
 
     async def _required_contexts(
         self, token: str, repo: str, bases: set[str], client: Any
@@ -475,7 +532,7 @@ class PrPoller:
         for base in sorted(bases):
             try:
                 rules = await client.branch_rules(token, repo, base)
-            except (GitHubApiError, httpx.HTTPError) as exc:
+            except _CALL_ERRORS as exc:
                 _logger.info("factory: %s#%s branch rules unreadable: %s", repo, base, exc)
                 continue
             out[base] = rules.contexts

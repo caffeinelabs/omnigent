@@ -11,6 +11,7 @@ from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
 import pytest
 import pytest_asyncio
 
@@ -19,6 +20,7 @@ from omnigent.server.factory.background.pr_poller import PrPoller
 from omnigent.server.factory.mailer import MAILER_STATE_ATTR, Mailer
 from omnigent.server.factory.prs import parse_factory_branch, refresh_now
 from omnigent.server.factory.schemas import GatesView
+from omnigent.server.github_app_client import GitHubAppClient
 from tests.server.factory.conftest import FactoryWorld, FakeClock, FakeDeliver
 from tests.server.factory.github_fakes import (
     FakeCheck,
@@ -29,6 +31,7 @@ from tests.server.factory.github_fakes import (
     iso,
     sha,
 )
+from tests.server.github_app_fixtures import make_config
 
 REPO = "caffeinelabs/app"
 POLL_S = 60.0
@@ -617,3 +620,184 @@ def test_rollup_keeps_the_newest_run_per_check() -> None:
     assert by_name["lint"]["state"] == "SUCCESS"
     assert by_name["deploy/preview"]["state"] == "PENDING"
     assert by_name["deploy/preview"]["url"] == "https://ci.example/deploy/preview"
+
+
+# ── Robustness ──────────────────────────────────────────────────
+
+
+async def test_a_long_merged_pr_is_recorded_without_notices(polling: Polling) -> None:
+    """A first rollout over an existing factory must not re-announce old merges."""
+    p = polling
+    created = p.clock.now + 5
+    old = p.new_pr(9650, "factory/api-version/old", created_at=created, state="MERGED")
+    old.merged_by = "luka"
+    old.merge_sha = sha("old-merge")
+    old.merged_at = old.closed_at = created + 60
+    p.clock.advance(7200)
+
+    await p.poll()
+    row = p.pr(9650)
+    assert row.state == "merged" and row.merged_at == int(created + 60)
+    assert row.merged_sha == sha("old-merge") and row.merged_by == "luka"
+    assert row.last_polled_at is not None and row.gates["mergeable"] == "pass"
+    assert p.notices(p.pl) == [] and p.notices(p.fid) == []
+    assert p.events("pr.merged") == []
+    assert len(p.events("pr.discovered")) == 1
+
+    calls = len(p.gh.graphql_calls)
+    await p.poll()
+    assert len(p.gh.graphql_calls) == calls
+
+
+async def test_an_unexpected_error_degrades_the_status_and_spares_other_owners(
+    polling: Polling, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    p = polling
+    p.new_pr()
+    await p.poll()
+    assert status.get_status("github")["state"] == "ok"
+
+    async def _boom(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(p.poller, "_refresh", _boom)
+    await p.poll()
+    github = status.get_status("github")
+    assert github["state"] == "degraded"
+    assert "database is locked" in github["error"]
+    assert github["last_poll_at"] == int(p.clock.now)
+
+
+async def test_a_non_json_github_answer_is_a_failed_call(polling: Polling) -> None:
+    p = polling
+    p.new_pr()
+    original = p.gh.handler
+
+    def garbage(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/graphql":
+            p.gh.requests.append(request)
+            return httpx.Response(200, text="<html>unicorn</html>")
+        return original(request)
+
+    p.world.app_state.github_client = GitHubAppClient(
+        make_config(), transport=httpx.MockTransport(garbage)
+    )
+    await p.poll()
+    github = status.get_status("github")
+    assert github["state"] == "degraded" and "GitHub request failed" in github["error"]
+    assert p.pr().poll_error is not None and p.pr().poll_error.startswith("GitHub request failed")
+
+
+async def test_quiet_changes_still_announce_factory_changed(
+    polling: Polling, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    p = polling
+    announced: list[str] = []
+    monkeypatch.setattr(
+        live, "announce_factory_changed", lambda _s, fid, *_a, **_k: announced.append(fid)
+    )
+    gh_pr = p.new_pr(checks=[FakeCheck("ci / test")])
+    # Registered by the agent tool: the first refresh fills the gates without a gate event.
+    p.store.upsert_pr(p.fid, REPO, 9630, project_slug="api-version", head_sha=gh_pr.head_sha)
+    await p.poll()
+    assert p.events("gate.changed") == []
+    assert announced, "the first gates must reach the cockpit"
+
+    announced.clear()
+    await p.poll()
+    assert announced == []
+
+    gh_pr.checks.append(FakeCheck("e2e"))
+    await p.poll()
+    assert p.pr().gates["evidence"]["checks"]["passing"] == 2
+    assert p.events("gate.changed") == []
+    assert announced == [p.fid]
+
+
+async def test_rename_sources_are_read_from_the_files_listing(polling: Polling) -> None:
+    p = polling
+    gh_pr = p.new_pr(checks=[FakeCheck("ci / test")])
+    gh_pr.files = ["ci/ci.yml"]
+    gh_pr.renames = {"ci/ci.yml": ".github/workflows/ci.yml"}
+    p.approve(gh_pr)
+    await p.poll()
+    gates = p.pr().gates
+    assert gates["protected_paths"] == "fail" and p.pr().ready is False
+    assert gates["evidence"]["protected"] == [".github/workflows/ci.yml"]
+    listings = [r for r in p.gh.requests if r.url.path.endswith("/files")]
+    assert len(listings) == 1
+
+    # Cached for the head: the next refresh does not list again.
+    await p.poll()
+    assert len([r for r in p.gh.requests if r.url.path.endswith("/files")]) == 1
+
+    gh_pr.labels.append("factory:allow-protected")
+    await p.poll()
+    assert p.pr().gates["protected_paths"] == "pass" and p.pr().ready is True
+
+
+async def test_more_than_100_files_hold_the_gate_when_the_listing_fails(polling: Polling) -> None:
+    p = polling
+    gh_pr = p.new_pr(checks=[FakeCheck("ci / test")])
+    gh_pr.files = [f"src/f{i}.ts" for i in range(150)] + [".github/workflows/x.yml"]
+    p.approve(gh_pr)
+    p.gh.files_status = 502
+    await p.poll()
+    gates = p.pr().gates
+    assert gates["protected_paths"] == "pending" and p.pr().ready is False
+    assert any("only 100 of 151 changed files" in r for r in gates["reasons"])
+    GatesView.model_validate(gates)
+
+    p.gh.files_status = None
+    await p.poll()
+    gates = p.pr().gates
+    assert gates["protected_paths"] == "fail"
+    assert gates["evidence"]["protected"] == [".github/workflows/x.yml"]
+
+
+def test_charter_defaults_decide_whether_previews_are_on() -> None:
+    from omnigent.entities.factory import FactoryProject
+    from omnigent.server.factory.prs import previews_on
+
+    def project(charter: dict[str, Any] | None) -> FactoryProject:
+        return FactoryProject(
+            id="a" * 32, factory_id="b" * 32, slug="x", title="X", charter=charter
+        )
+
+    assert previews_on(project({"goal": "x"})) is True
+    assert previews_on(project({"env_needed": True})) is True
+    assert previews_on(project({"env_needed": False})) is False
+    assert previews_on(project({"preview": {"enabled": False}})) is False
+    assert previews_on(project(None)) is False
+    assert previews_on(None) is False
+
+
+@pytest.mark.parametrize(
+    ("state", "teardown"),
+    [
+        ("deploying", True),
+        ("starting", True),
+        ("ready", True),
+        ("stale", True),
+        ("parked", False),
+        ("failed", False),
+        ("gone", False),
+        ("down", False),
+    ],
+)
+def test_only_live_previews_ask_for_a_teardown(state: str, teardown: bool) -> None:
+    from omnigent.entities.factory import FactoryPr
+    from omnigent.server.factory.prs import closed_notice, merged_notice
+
+    pr = FactoryPr(
+        id="a" * 32,
+        factory_id="b" * 32,
+        repo=REPO,
+        number=7,
+        url=f"https://github.com/{REPO}/pull/7",
+        merged_by="luka",
+        merged_sha="c" * 40,
+        preview={"name": "p7", "state": state},
+    )
+    assert ("tear down preview p7" in merged_notice(pr)) is teardown
+    assert ("tear down preview p7" in closed_notice(pr, "luka", None)) is teardown

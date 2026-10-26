@@ -84,6 +84,8 @@ class FakePr:
     mergeable: str = "MERGEABLE"
     labels: list[str] = field(default_factory=list)
     files: list[str] = field(default_factory=lambda: ["services/caffeine-api/src/app.ts"])
+    renames: dict[str, str] = field(default_factory=dict)
+    """New path -> old path for renamed files (the new path is also in ``files``)."""
     commits: list[tuple[str, str]] = field(default_factory=list)
     comments: list[dict[str, Any]] = field(default_factory=list)
     reviews: list[dict[str, Any]] = field(default_factory=list)
@@ -141,9 +143,20 @@ class FakePr:
             "draft": self.is_draft,
             "created_at": iso(self.created_at),
             "merged_at": iso(self.merged_at) if self.merged_at else None,
+            "merge_commit_sha": self.merge_sha,
             "head": {"ref": self.head_ref, "sha": self.head_sha},
             "base": {"ref": self.base_ref},
         }
+
+    def rest_files(self) -> list[dict[str, Any]]:
+        """:returns: The ``GET /repos/{repo}/pulls/{n}/files`` items."""
+        out: list[dict[str, Any]] = []
+        for path in self.files:
+            item: dict[str, Any] = {"filename": path, "status": "modified"}
+            if path in self.renames:
+                item.update(status="renamed", previous_filename=self.renames[path])
+            out.append(item)
+        return out
 
     def graphql(self) -> dict[str, Any]:
         """:returns: The aliased ``pullRequest`` node of the refresh query."""
@@ -167,7 +180,12 @@ class FakePr:
             "deletions": 3,
             "changedFiles": len(self.files),
             "labels": {"nodes": [{"name": name} for name in self.labels]},
-            "files": {"nodes": [{"path": path} for path in self.files]},
+            "files": {
+                "nodes": [
+                    {"path": path, "changeType": "RENAMED" if path in self.renames else "MODIFIED"}
+                    for path in self.files[:100]
+                ]
+            },
             "commits": {
                 "nodes": [{"commit": {"oid": oid, "committedDate": at}} for oid, at in commits]
             },
@@ -206,6 +224,7 @@ class FakeGitHub:
     classic: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
     remaining: int = 4800
     fail_status: int | None = None
+    files_status: int | None = None
     retry_after: int | None = None
     requests: list[httpx.Request] = field(default_factory=list)
 
@@ -243,6 +262,9 @@ class FakeGitHub:
         match = re.fullmatch(r"/repos/([^/]+/[^/]+)/pulls", path)
         if match:
             return self._pulls(match.group(1), request.url.params)
+        match = re.fullmatch(r"/repos/([^/]+/[^/]+)/pulls/(\d+)/files", path)
+        if match:
+            return self._pull_files(match.group(1), int(match.group(2)), request.url.params)
         match = re.fullmatch(r"/repos/([^/]+/[^/]+)/rules/branches/(.+)", path)
         if match:
             rules = self.rules.get((match.group(1), match.group(2)), [])
@@ -269,6 +291,16 @@ class FakeGitHub:
         pulls.sort(key=lambda p: p.created_at, reverse=True)
         chunk = pulls[(page - 1) * per_page : page * per_page]
         return httpx.Response(200, json=[p.rest() for p in chunk])
+
+    def _pull_files(self, repo: str, number: int, params: httpx.QueryParams) -> httpx.Response:
+        if self.files_status is not None:
+            return httpx.Response(self.files_status, json={"message": "nope"})
+        pr = next((p for p in self.prs if p.repo == repo and p.number == number), None)
+        if pr is None:
+            return httpx.Response(404, json={"message": "Not Found"})
+        page = int(params.get("page", "1"))
+        per_page = int(params.get("per_page", "100"))
+        return httpx.Response(200, json=pr.rest_files()[(page - 1) * per_page : page * per_page])
 
     def _graphql(self, body: dict[str, Any]) -> httpx.Response:
         variables = body.get("variables") or {}

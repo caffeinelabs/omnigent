@@ -436,3 +436,39 @@ def test_demo_marker_evidence_and_optional_gate() -> None:
     without = evaluate_snapshot(pr, _GREEN, set())
     assert DEMO_GATE not in without.gates
     assert json.loads(json.dumps(without.to_json()))["evidence"]["demo"] is None
+
+
+@pytest.mark.parametrize("status", ["BLOCKED", "stale-preview", "pass?", "x" * 80])
+def test_unknown_demo_marker_status_is_pending_and_keeps_the_view_valid(status: str) -> None:
+    pr = _snap(comments=[M._verify(), _demo_comment(status)])
+    report = evaluate_snapshot(pr, _GREEN, set(), demo_required=True)
+    assert report.gates[DEMO_GATE] == "pending"
+    assert report.ready is False
+    view = GatesView.model_validate(report.to_json())
+    assert view.demo == "pending"
+    assert view.evidence.demo is not None
+    assert view.evidence.demo.status is None
+    assert view.evidence.demo.demo_id == "fdm_1"
+    assert status.upper()[:40] in report.gate_reasons[DEMO_GATE]
+
+
+def test_unknown_demo_status_newer_than_a_pass_holds_the_gate() -> None:
+    comments = [_demo_comment("PASS", at="2026-10-23T10:20:00Z"), _demo_comment("BLOCKED")]
+    report = evaluate_snapshot(
+        _snap(comments=[M._verify(), *comments]), _GREEN, set(), demo_required=True
+    )
+    assert report.gates[DEMO_GATE] == "pending"
+    GatesView.model_validate(report.to_json())
+
+
+def test_a_files_note_holds_a_passing_protected_paths_gate() -> None:
+    pr = _snap(comments=[M._verify()])
+    note = "renamed files' old paths not listed; protected paths unchecked"
+    report = evaluate_snapshot(pr, _GREEN, set(), files_note=note)
+    assert report.gates["protected_paths"] == "pending" and report.ready is False
+    assert report.gate_reasons["protected_paths"] == note
+    assert evaluate_snapshot(pr, _GREEN, set()).gates["protected_paths"] == "pass"
+
+    touched = _snap(comments=[M._verify()], files=[{"path": ".github/workflows/ci.yml"}])
+    failing = evaluate_snapshot(touched, _GREEN, set(), files_note=note)
+    assert failing.gates["protected_paths"] == "fail"

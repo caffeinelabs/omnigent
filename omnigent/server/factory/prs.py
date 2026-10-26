@@ -35,7 +35,8 @@ from omnigent.factory_gates import (
     evaluate_snapshot,
     parse_time,
 )
-from omnigent.server.factory import events, nudge
+from omnigent.server.factory import events, live, nudge
+from omnigent.server.factory.charter import normalize_charter
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.envelope import quote_spoofed_lines
 from omnigent.server.factory.mailer import get_mailer
@@ -57,6 +58,9 @@ _REF_MAX = 255
 _POLL_ERROR_MAX = 512
 
 _STATES: Final = {"OPEN": "open", "MERGED": "merged", "CLOSED": "closed"}
+LIVE_PREVIEW_STATES: Final = frozenset({"deploying", "starting", "ready", "stale"})
+"""Preview states that still hold a deployment to tear down."""
+_GRAPHQL_FILES_MAX: Final = 100
 
 _PR_SELECTION: Final = """
       number url title state isDraft createdAt
@@ -64,7 +68,7 @@ _PR_SELECTION: Final = """
       mergedAt closedAt mergeCommit {{ oid }} mergedBy {{ login }}
       additions deletions changedFiles
       labels(first: 50) {{ nodes {{ name }} }}
-      files(first: 100) {{ nodes {{ path }} }}
+      files(first: 100) {{ nodes {{ path changeType }} }}
       commits(last: 20) {{ nodes {{ commit {{ oid committedDate }} }} }}
       head: commits(last: 1) {{ nodes {{ commit {{ oid statusCheckRollup {{
         contexts(first: 100) {{ nodes {{
@@ -163,6 +167,26 @@ def _login(obj: object, key: str) -> str | None:
     return login if isinstance(login, str) and login else None
 
 
+def files_gap(node: Mapping[str, Any]) -> str | None:
+    """
+    Why the refresh query's ``files`` may miss a changed path.
+
+    It lists the first 100 files and only the new path of a rename.
+
+    :param node: One aliased ``pullRequest`` from :func:`refresh_query`.
+    :returns: A reason, or ``None`` when ``files`` is every changed path.
+    """
+    files = _nodes(node, "files")
+    total = node.get("changedFiles")
+    if isinstance(total, int) and total > len(files):
+        return f"only {len(files)} of {total} changed files listed; protected paths unchecked"
+    if any(f.get("changeType") == "RENAMED" for f in files):
+        return "renamed files' old paths not listed; protected paths unchecked"
+    if len(files) >= _GRAPHQL_FILES_MAX and not isinstance(total, int):
+        return "the files list may be truncated; protected paths unchecked"
+    return None
+
+
 def _rollup_checks(node: Mapping[str, Any]) -> list[dict[str, Any]]:
     """The head's checks as ``{name, state, required, url}``, newest run per name."""
     heads = _nodes(node, "head")
@@ -252,7 +276,7 @@ def _sha7(sha: str | None) -> str:
 
 
 def _teardown(preview: Mapping[str, Any] | None, number: int) -> str:
-    if not isinstance(preview, Mapping) or preview.get("state") in (None, "down"):
+    if not isinstance(preview, Mapping) or preview.get("state") not in LIVE_PREVIEW_STATES:
         return ""
     return f" · tear down preview p{number}"
 
@@ -433,12 +457,16 @@ def project_lead_id(
 
 
 def previews_on(project: FactoryProject | None) -> bool:
-    """:returns: Whether the project's charter turns factory previews (and demos) on."""
+    """
+    :returns: Whether the project's stored charter turns factory previews (and
+        demos) on, read through :func:`normalize_charter` like every other
+        charter reader; ``False`` while no charter is stored.
+    """
     charter = project.charter if project is not None else None
-    if not isinstance(charter, Mapping) or charter.get("env_needed") is False:
+    if not isinstance(charter, Mapping):
         return False
-    preview = charter.get("preview")
-    return isinstance(preview, Mapping) and preview.get("enabled") is True
+    normalized = normalize_charter(charter)
+    return bool(normalized["env_needed"]) and normalized["preview"]["enabled"] is True
 
 
 # ── Applying one refresh ───────────────────────────────────────
@@ -510,6 +538,7 @@ async def apply_refresh(
     now: int,
     scope: FactoryScope,
     required_contexts: Iterable[str] = (),
+    files: Sequence[str] | None = None,
 ) -> FactoryPr | None:
     """
     Store one refreshed PR and act on what changed.
@@ -527,11 +556,19 @@ async def apply_refresh(
     :param now: Epoch seconds.
     :param scope: The PR's factory.
     :param required_contexts: Status contexts the base branch requires.
+    :param files: Every changed path (rename sources included) when read
+        separately; ``None`` uses the query's files, whose gaps hold an open
+        PR's ``protected_paths`` gate pending (see :func:`files_gap`).
     :returns: The updated row (``None`` if it vanished meanwhile).
     """
     deps = factory_deps(app_state)
     store = deps.factory_store
     pr_json, checks = normalize_pr(node)
+    files_note = None
+    if files is not None:
+        pr_json["files"] = [{"path": path} for path in files]
+    elif str(pr_json.get("state") or "OPEN").upper() == "OPEN":
+        files_note = files_gap(node)
     project = scope.projects.get(row.project_slug or "")
     demo_required = previews_on(project)
     demos: list[dict[str, Any]] = []
@@ -548,6 +585,7 @@ async def apply_refresh(
         demo_required=demo_required,
         demos=demos,
         checks_url=checks_url(row.repo, row.number),
+        files_note=files_note,
     )
     gates = report.to_json()
     gates.setdefault(DEMO_GATE, None)
@@ -581,6 +619,11 @@ async def apply_refresh(
         fields["merged_sha"] = str(merge_commit.get("oid") or "").lower() or None
         fields["merged_by"] = _login(pr_json, "mergedBy")
         fields["closed_at"] = _epoch(pr_json.get("closedAt")) or fields["merged_at"]
+    elif state == "merged" and row.merged_by is None:
+        # Recorded as merged at discovery (too old to announce): fill in the details.
+        merge_commit = pr_json.get("mergeCommit") or {}
+        fields["merged_sha"] = str(merge_commit.get("oid") or "").lower() or row.merged_sha
+        fields["merged_by"] = _login(pr_json, "mergedBy")
     elif state == "closed" and row.closed_at is None:
         fields["closed_at"] = _epoch(pr_json.get("closedAt")) or now
         out.open_closed_decision = True
@@ -717,6 +760,31 @@ async def _announce(
         out.events or row.state != pr.state or row.ready != pr.ready or row.gates != pr.gates
     ):
         await persist_stage(app_state, scope.factory_id, pr.project_slug)
+    if not out.events and _visible_change(row, pr):
+        # Events announce themselves; quiet changes (e.g. evidence) still refresh the cockpit.
+        live.announce_factory_changed(app_state, scope.factory_id, ("snapshot",))
+
+
+_VISIBLE_FIELDS: Final = (
+    "gates",
+    "ready",
+    "state",
+    "head_sha",
+    "title",
+    "is_draft",
+    "additions",
+    "deletions",
+    "changed_files",
+    "merged_by",
+    "merged_sha",
+    "human_review",
+    "poll_error",
+)
+
+
+def _visible_change(before: FactoryPr, after: FactoryPr) -> bool:
+    """Whether a refresh changed anything the cockpit shows."""
+    return any(getattr(before, name) != getattr(after, name) for name in _VISIBLE_FIELDS)
 
 
 async def _open_closed_decision(
@@ -780,12 +848,22 @@ async def _open_closed_decision(
     return decision.ref
 
 
-async def persist_stage(app_state: Any, factory_id: str, slug: str) -> str | None:
+async def persist_stage(
+    app_state: Any,
+    factory_id: str,
+    slug: str,
+    *,
+    brief_delivered: bool = True,
+    sandbox_failed: bool = False,
+) -> str | None:
     """
     Re-derive a project's stage from its PRs and store it when it changed.
 
-    Emits ``stage.changed`` on a change.
+    Emits ``stage.changed`` on a change. Every loop that stores a stage
+    should go through here so they agree on the inputs.
 
+    :param brief_delivered: Passed to :func:`derive_stage`.
+    :param sandbox_failed: Passed to :func:`derive_stage`.
     :returns: The current stage, or ``None`` when the project is unknown.
     """
     deps = factory_deps(app_state)
@@ -799,7 +877,14 @@ async def persist_stage(app_state: Any, factory_id: str, slug: str) -> str | Non
         pl_id = project_lead_id(deps, factory_id, project)
         pl_conv = deps.conversation_store.get_conversation(pl_id) if pl_id else None
         open_decisions = store.list_decisions(factory_id=factory_id, status="open")
-        result = derive_stage(project, prs, pl_conv, open_decisions)
+        result = derive_stage(
+            project,
+            prs,
+            pl_conv,
+            open_decisions,
+            brief_delivered=brief_delivered,
+            sandbox_failed=sandbox_failed,
+        )
         if result.stage != project.stage:
             store.update_project(project.id, stage=result.stage)
         return project.stage, result.stage
@@ -856,6 +941,7 @@ __all__ = [
     "changes_requested_notice",
     "checks_failed_notice",
     "closed_notice",
+    "files_gap",
     "merged_notice",
     "normalize_pr",
     "parse_factory_branch",

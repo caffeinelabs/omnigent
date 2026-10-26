@@ -51,11 +51,15 @@ DEMO_GATE: Final = "demo"
 """Also required when the project has factory previews on."""
 
 DEMO_PASSING: Final = frozenset({"PASS", "PARTIAL"})
+DEMO_STATUSES: Final = frozenset({"PASS", "PARTIAL", "FAIL", "ERROR"})
+"""Demo statuses the evidence may carry; others (e.g. ``BLOCKED``) count as pending."""
 
 REVIEW_MARKER: Final = re.compile(r"<!--\s*factory:review\s+sha=([0-9a-fA-F]+)\s+verdict=(\w+)")
 VERIFY_MARKER: Final = re.compile(r"<!--\s*factory:verify\s+sha=([0-9a-fA-F]+)\s+result=(\w+)")
 DEMO_MARKER: Final = re.compile(r"<!--\s*factory:demo\s+sha=([0-9a-fA-F]+)\b([^>]*?)-->")
 _ATTR: Final = re.compile(r"([a-z_]+)=([^\s>]+)")
+EVIDENCE_FILES_MAX: Final = 300
+"""Changed paths kept in the evidence (every path still counts for the gate)."""
 _MARKER_TAIL: Final = 400
 
 # ``gh pr checks`` buckets; a state is mapped only when gh omits the bucket.
@@ -482,7 +486,8 @@ def gate_demo(pr: _Json, head: str, labels: set[str], demos: Sequence[_Json] = (
 
     Demos come from ``<!-- factory:demo sha=… status=… demo=… -->`` markers
     and from recorded demo rows; the newest for the head decides. ``FAIL``
-    fails; ``ERROR`` or no demo yet is pending; ``factory:no-env`` skips.
+    fails; ``ERROR``, any status outside :data:`DEMO_STATUSES` (kept out of
+    the evidence) or no demo yet is pending; ``factory:no-env`` skips.
 
     :param demos: Recorded demos as ``{head_sha, status, created_at (epoch s), id}``.
     """
@@ -505,7 +510,12 @@ def gate_demo(pr: _Json, head: str, labels: set[str], demos: Sequence[_Json] = (
         )
         return GateResult(GATE_PENDING, reason)
     at, status, demo_id, url = max(seen, key=lambda item: item[0])
-    evidence = {"status": status, "sha": head, "demo_id": demo_id, "url": url, "at": int(at)}
+    # Markers are free text: only a known status reaches the typed evidence.
+    known = status if status in DEMO_STATUSES else None
+    evidence = {"status": known, "sha": head, "demo_id": demo_id, "url": url, "at": int(at)}
+    if known is None:
+        reason = f"latest demo for {head} says {status[:40]!r}, not one of PASS/PARTIAL/FAIL/ERROR"
+        return GateResult(GATE_PENDING, f"{reason}; re-run it", (), evidence)
     if status in DEMO_PASSING:
         return GateResult(GATE_PASS, None, (), evidence)
     if status == "FAIL":
@@ -523,6 +533,7 @@ def evaluate_snapshot(
     demo_required: bool = False,
     demos: Sequence[_Json] = (),
     checks_url: str | None = None,
+    files_note: str | None = None,
 ) -> GateReport:
     """
     Evaluate every gate of one PR snapshot.
@@ -536,18 +547,23 @@ def evaluate_snapshot(
     :param demo_required: Also evaluate (and require) the ``demo`` gate.
     :param demos: Recorded demos of the PR (see :func:`gate_demo`).
     :param checks_url: The PR's checks page, for the evidence.
+    :param files_note: Why ``files`` may be incomplete (e.g. rename sources
+        unknown); a passing ``protected_paths`` gate is then pending.
     :returns: The :class:`GateReport`.
     """
     head = str(pr_json.get("headRefOid") or "").lower()
     labels = label_names(pr_json)
     paths = changed_paths(pr_json)
+    protected = gate_protected_paths(paths, labels)
+    if files_note and protected.state == GATE_PASS:
+        protected = GateResult(GATE_PENDING, files_note, protected.notes, protected.evidence)
     results: dict[str, GateResult] = {
         "draft": gate_draft(pr_json),
         "checks": gate_checks(checks, required_contexts, url=checks_url),
         "review": gate_review(pr_json, head),
         "verify": gate_verify(pr_json, head, labels),
         "mergeable": gate_mergeable(pr_json),
-        "protected_paths": gate_protected_paths(paths, labels),
+        "protected_paths": protected,
     }
     if demo_required:
         results[DEMO_GATE] = gate_demo(pr_json, head, labels, demos)
@@ -561,7 +577,7 @@ def evaluate_snapshot(
         "verify": results["verify"].evidence,
         "demo": results[DEMO_GATE].evidence if DEMO_GATE in results else None,
         "mergeable": results["mergeable"].evidence,
-        "files": paths,
+        "files": paths[:EVIDENCE_FILES_MAX],
         "protected": results["protected_paths"].evidence or [],
     }
     is_open = str(pr_json.get("state") or "OPEN").upper() == "OPEN"

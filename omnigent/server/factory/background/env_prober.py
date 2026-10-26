@@ -160,6 +160,20 @@ class Probe:
         return bool(probed) and all(h.ok for h in probed)
 
 
+def same_sha(a: str | None, b: str | None) -> bool:
+    """
+    Whether two shas name the same commit; a short sha (7+ chars) matches by prefix.
+
+    :param a: e.g. ``"7767f0d"``.
+    :param b: e.g. ``"7767f0d3c1…"`` (40 chars).
+    """
+    if not a or not b:
+        return False
+    a, b = a.lower(), b.lower()
+    short, full = (a, b) if len(a) <= len(b) else (b, a)
+    return len(short) >= 7 and full.startswith(short)
+
+
 def _health(probe: Probe, fails: int) -> str:
     if probe.app is None and probe.api is None:
         return "unknown"
@@ -342,8 +356,10 @@ class EnvProber:
     ) -> Callable[[httpx.AsyncClient], Awaitable[Probe | None]]:
         async def _job(client: httpx.AsyncClient) -> Probe | None:
             env = dict(project.env or {})
-            reported = env.get("reported") or {}
-            urls = reported.get("urls") if isinstance(reported.get("urls"), Mapping) else {}
+            seen = env.get("reported")
+            reported: Mapping[str, Any] = seen if isinstance(seen, Mapping) else {}
+            raw_urls = reported.get("urls")
+            urls: Mapping[str, Any] = raw_urls if isinstance(raw_urls, Mapping) else {}
             app = safe_env_origin(urls.get("app"))
             api = safe_env_origin(urls.get("api"))
             if app is None and api is None:
@@ -362,31 +378,47 @@ class EnvProber:
                     sha = parse_sha(version_hit.body)
             hits.extend(h for h in (app_hit, api_hit) if h is not None)
             probe = Probe(app_hit, api_hit, sha, tuple(hits), "api" if sha else None)
-            await self._store_env_probe(scope, project, probe, now)
+            await self._store_env_probe(scope, project, seen, probe, now)
             return probe
 
         return _job
 
     async def _store_env_probe(
-        self, scope: FactoryScope, project: FactoryProject, probe: Probe, now: float
+        self,
+        scope: FactoryScope,
+        project: FactoryProject,
+        seen: object,
+        probe: Probe,
+        now: float,
     ) -> None:
         store = self._store()
-        current = await asyncio.to_thread(store.get_project_by_id, project.id)
-        if current is None:
+
+        def _write() -> tuple[object, str, int] | None:
+            # Read and write back to back, and only over the report this probe judged.
+            current = store.get_project_by_id(project.id)
+            if current is None:
+                return None
+            env = dict(current.env or {})
+            if env.get("reported") != seen:
+                # env_keeper reported meanwhile; the next probe judges the new env.
+                return None
+            previous = env.get("probe") if isinstance(env.get("probe"), Mapping) else {}
+            fails = int(previous.get("fails") or 0) + 1 if probe.all_failed else 0
+            health = _health(probe, fails)
+            env["probe"] = {
+                "app": probe.app.view() if probe.app else None,
+                "api": probe.api.view(probe.sha) if probe.api else None,
+                "health": health,
+                "fails": fails,
+                "at": int(now),
+            }
+            store.update_project(current.id, env=env)
+            return previous.get("health"), health, fails
+
+        written = await asyncio.to_thread(_write)
+        if written is None:
             return
-        env = dict(current.env or {})
-        previous = env.get("probe") if isinstance(env.get("probe"), Mapping) else {}
-        fails = int(previous.get("fails") or 0) + 1 if probe.all_failed else 0
-        health = _health(probe, fails)
-        env["probe"] = {
-            "app": probe.app.view() if probe.app else None,
-            "api": probe.api.view(probe.sha) if probe.api else None,
-            "health": health,
-            "fails": fails,
-            "at": int(now),
-        }
-        await asyncio.to_thread(store.update_project, current.id, env=env)
-        before = previous.get("health")
+        before, health, fails = written
         if before != health and not (before is None and health == "ok"):
             await events.emit(
                 self._app_state,
@@ -506,7 +538,7 @@ class EnvProber:
         reported = deployed.get("sha") if isinstance(deployed, Mapping) else None
         running = probe.sha or reported
         if isinstance(running, str) and running and head:
-            return "ready" if running.lower() == head.lower() else "stale"
+            return "ready" if same_sha(running, head) else "stale"
         return "ready" if state == "gone" else state
 
     async def _preview_events(
@@ -573,7 +605,7 @@ class EnvProber:
         if not probed or not isinstance(deployed, str) or not deployed:
             self._mismatch.pop(pr.id, None)
             return
-        if probed == deployed.lower():
+        if same_sha(probed, deployed):
             self._mismatch.pop(pr.id, None)
             return
         seen = self._mismatch.get(pr.id)
@@ -650,5 +682,6 @@ __all__ = [
     "EnvProber",
     "get_prober",
     "parse_sha",
+    "same_sha",
     "start",
 ]

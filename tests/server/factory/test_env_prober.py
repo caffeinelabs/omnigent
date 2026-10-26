@@ -16,7 +16,7 @@ import pytest
 import pytest_asyncio
 
 from omnigent.server.factory import live, nudge, status
-from omnigent.server.factory.background.env_prober import EnvProber, parse_sha
+from omnigent.server.factory.background.env_prober import EnvProber, parse_sha, same_sha
 from omnigent.server.factory.env_urls import safe_env_origin
 from omnigent.server.factory.mailer import MAILER_STATE_ATTR, Mailer
 from tests.server.factory.conftest import FactoryWorld, FakeClock, FakeDeliver
@@ -456,3 +456,55 @@ async def test_no_targets_reports_ok(probing: Probing) -> None:
     await probing.probe()
     assert status.get_status("probes")["state"] == "ok"
     assert probing.envs.requests == []
+
+
+@pytest.mark.parametrize(
+    ("a", "b", "same"),
+    [
+        (HEAD, HEAD, True),
+        (HEAD[:7], HEAD, True),
+        (HEAD, HEAD[:12].upper(), True),
+        (HEAD[:6], HEAD, False),
+        (sha("other")[:7], HEAD, False),
+        (None, HEAD, False),
+        ("", "", False),
+    ],
+)
+def test_same_sha_matches_a_short_sha_by_prefix(a: str | None, b: str | None, same: bool) -> None:
+    assert same_sha(a, b) is same
+
+
+async def test_a_short_version_sha_keeps_the_preview_ready(probing: Probing) -> None:
+    p = probing
+    _report_preview(p, deployed=HEAD)
+    p.envs.routes.update(
+        {f"{P_APP}/": 200, f"{P_API}/ready": 200, f"{P_API}/version": {"gitSha": HEAD[:7]}}
+    )
+    for _ in range(3):
+        await p.probe()
+    preview = p.preview()
+    assert preview["observed"]["sha"] == HEAD[:7] and preview["state"] == "ready"
+    assert p.events("preview.sha_mismatch") == []
+
+
+async def test_an_env_report_during_a_probe_wins(probing: Probing) -> None:
+    p = probing
+    _report_env(p)
+    original = p.envs.handler
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if str(request.url) == f"{APP}/":
+            # env_keeper reports a redeploy while the probe is in flight.
+            p.store.upsert_project(
+                p.fid,
+                "api-version",
+                env={"reported": {"state": "deploying", "urls": {"app": APP}, "at": 2}},
+            )
+        return original(request)
+
+    p.envs.routes.update({f"{APP}/": 200, f"{API}/ready": 200})
+    p.prober._transport = httpx.MockTransport(handler)
+    await p.probe()
+    env = p.env()
+    assert env["reported"] == {"state": "deploying", "urls": {"app": APP}, "at": 2}
+    assert "probe" not in env

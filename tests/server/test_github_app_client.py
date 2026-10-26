@@ -17,6 +17,7 @@ from omnigent.server.github_app_client import (
     BRANCH_RULES_TTL_S,
     GitHubApiError,
     GitHubAppClient,
+    graphql_operations,
 )
 from tests.server.github_app_fixtures import make_config
 
@@ -178,6 +179,65 @@ async def test_list_pulls_non_200_raises_with_the_status() -> None:
     with pytest.raises(GitHubApiError) as info:
         await _client(handler).list_pulls(_TOKEN, "caffeinelabs/app")
     assert info.value.status_code == 401
+
+
+async def test_list_pull_files_pages_and_keeps_rename_sources() -> None:
+    files: list[dict[str, Any]] = [{"filename": f"src/f{i}.ts"} for i in range(150)]
+    files.append({"filename": "ci/ci.yml", "previous_filename": ".github/workflows/ci.yml"})
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/caffeinelabs/app/pulls/7/files"
+        page, per_page = int(request.url.params["page"]), int(request.url.params["per_page"])
+        seen.append(request.url.params["page"])
+        return httpx.Response(200, json=files[(page - 1) * per_page : page * per_page])
+
+    paths = await _client(handler).list_pull_files(_TOKEN, "caffeinelabs/app", 7)
+    assert seen == ["1", "2"]
+    assert len(paths) == 152
+    assert paths[-2:] == ["ci/ci.yml", ".github/workflows/ci.yml"]
+
+
+async def test_list_pull_files_non_200_raises() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(403, json={"message": "nope"})
+
+    with pytest.raises(GitHubApiError) as info:
+        await _client(handler).list_pull_files(_TOKEN, "caffeinelabs/app", 7)
+    assert info.value.status_code == 403
+
+
+@pytest.mark.parametrize(
+    "document",
+    [
+        "mutation { addComment(input: {subjectId: 1, body: 2}) { clientMutationId } }",
+        "  # a comment\n  mutation M { x }",
+        "query A { x }\nmutation B { y }",
+        "subscription { x }",
+    ],
+)
+async def test_graphql_refuses_to_send_a_write(document: str) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        pytest.fail("a GraphQL write reached the transport")
+
+    with pytest.raises(ValueError, match="read-only"):
+        await _client(handler).graphql(_TOKEN, document)
+
+
+@pytest.mark.parametrize(
+    ("document", "operations"),
+    [
+        ('query($mutation: Int) { x(a: "mutation") { y } }', ["query"]),
+        ('query { x(body: """\nmutation { y }\n""") { z } }', ["query"]),
+        ("{ viewer { login } }", []),
+        (
+            "query A @mutation { x } fragment F on X { y }",
+            ["query", "A", "fragment", "F", "on", "X"],
+        ),
+    ],
+)
+def test_graphql_operations_reads_only_the_top_level(document: str, operations: list[str]) -> None:
+    assert graphql_operations(document) == operations
 
 
 # ── branch_rules ────────────────────────────────────────────────

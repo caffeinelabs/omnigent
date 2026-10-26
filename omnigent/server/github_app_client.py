@@ -13,6 +13,7 @@ sink in separate modules is deliberate. See
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
@@ -58,8 +59,12 @@ _BRANCH_RULES_ENDPOINT = "https://api.github.com/repos/{full_name}/rules/branche
 _BRANCH_PROTECTION_ENDPOINT = (
     "https://api.github.com/repos/{full_name}/branches/{branch}/protection"
 )
+_PULL_FILES_ENDPOINT = "https://api.github.com/repos/{full_name}/pulls/{number}/files"
 _RULES_PER_PAGE = 100
 _RULES_MAX_PAGES = 5
+# GitHub lists at most 3000 files of a PR.
+_PULL_FILES_PER_PAGE = 100
+_PULL_FILES_MAX_PAGES = 30
 BRANCH_RULES_TTL_S = 3600.0
 """How long :meth:`GitHubAppClient.branch_rules` reuses a repo/branch's rules."""
 
@@ -114,6 +119,36 @@ class GraphQLResult:
     data: dict[str, Any]
     rate_limit: RateLimit | None = None
     errors: list[dict[str, Any]] = field(default_factory=list)
+
+
+# Strings, comments, braces and names of a GraphQL document, in order.
+_GRAPHQL_TOKEN = re.compile(
+    r'"""(?:[^"\\]|\\.|"(?!""))*"""'  # block string
+    r'|"(?:[^"\\\n]|\\.)*"'  # string
+    r"|#[^\n]*"  # comment
+    r"|[{}()]|[$@]?[_A-Za-z]\w*"
+)
+_WRITE_OPERATIONS = frozenset({"mutation", "subscription"})
+
+
+def graphql_operations(document: str) -> list[str]:
+    """
+    List a GraphQL document's top-level keywords (``query``, ``mutation``, ``fragment``…).
+
+    :param document: e.g. ``"query { viewer { login } }"``.
+    :returns: Names outside any selection set or argument list, e.g. ``["query"]``.
+    """
+    depth = 0
+    names: list[str] = []
+    for match in _GRAPHQL_TOKEN.finditer(document):
+        token = match.group(0)
+        if token in ("{", "("):
+            depth += 1
+        elif token in ("}", ")"):
+            depth = max(0, depth - 1)
+        elif depth == 0 and not token.startswith(('"', "#", "$", "@")):
+            names.append(token)
+    return names
 
 
 def _int_header(headers: httpx.Headers, name: str) -> int | None:
@@ -335,7 +370,11 @@ class GitHubAppClient:
             query selects it, else the response headers).
         :raises GitHubApiError: On a non-200 status, a ``RATE_LIMITED`` error
             (``status_code=429``), or any error when not *allow_partial*.
+        :raises ValueError: When *query* holds a mutation or subscription.
         """
+        if _WRITE_OPERATIONS & set(graphql_operations(query)):
+            # This client only reads GitHub; a write must never be sent.
+            raise ValueError("GitHubAppClient.graphql only runs read-only queries")
         async with self._http_client() as client:
             resp = await client.post(
                 _GRAPHQL_ENDPOINT,
@@ -404,6 +443,43 @@ class GitHubAppClient:
             raise _api_error(f"/repos/{repo}/pulls", resp)
         batch = resp.json()
         return [pr for pr in batch if isinstance(pr, dict)] if isinstance(batch, list) else []
+
+    async def list_pull_files(self, access_token: str, repo: str, number: int) -> list[str]:
+        """List every path a PR touches, rename sources included.
+
+        Pages ``GET /repos/{repo}/pulls/{number}/files`` (GitHub stops at 3000 files).
+
+        :param access_token: A valid user access token.
+        :param repo: ``owner/name``.
+        :param number: The PR number.
+        :returns: Paths in GitHub's order; a renamed file's old path follows its new one.
+        :raises GitHubApiError: When the API call fails.
+        """
+        paths: list[str] = []
+        async with self._http_client() as client:
+            for page in range(1, _PULL_FILES_MAX_PAGES + 1):
+                resp = await client.get(
+                    _PULL_FILES_ENDPOINT.format(full_name=repo, number=int(number)),
+                    params={"per_page": _PULL_FILES_PER_PAGE, "page": page},
+                    headers={
+                        "Authorization": f"Bearer {access_token}",
+                        "Accept": "application/vnd.github+json",
+                    },
+                )
+                if resp.status_code != 200:
+                    raise _api_error(f"/repos/{repo}/pulls/{number}/files", resp)
+                batch = resp.json()
+                if not isinstance(batch, list):
+                    break
+                files = [f for f in batch if isinstance(f, dict)]
+                for item in files:
+                    for key in ("filename", "previous_filename"):
+                        value = item.get(key)
+                        if isinstance(value, str) and value:
+                            paths.append(value)
+                if len(files) < _PULL_FILES_PER_PAGE:
+                    break
+        return paths
 
     async def branch_rules(self, access_token: str, repo: str, base: str) -> BranchRules:
         """Read what *base* requires: rulesets, plus classic protection when readable.
