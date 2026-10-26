@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+from collections.abc import Mapping
 from typing import Any, Final
 
 LABEL_PREFIX: Final = "omnigent.factory."
@@ -159,6 +160,17 @@ DEMO_FILE_KINDS: Final = (
     "log",
     "other",
 )
+DEMO_MANIFEST_KINDS: Final[dict[str, str]] = {
+    "video": "video",
+    "poster": "poster",
+    "api": "api",
+    "har": "har",
+    "trace": "trace",
+    "console": "console",
+    "script": "script",
+    "log": "log",
+}
+"""``demo.json`` ``artifacts`` key -> file kind; any other key is ``other``."""
 DEMO_FILE_TYPES: Final[dict[str, tuple[str, str]]] = {
     ".webm": ("video/webm", "video"),
     ".mp4": ("video/mp4", "video"),
@@ -231,6 +243,63 @@ def demo_file_type(name: str) -> tuple[str, str] | None:
     if dot < 0 or "/" in name[dot:]:
         return None
     return DEMO_FILE_TYPES.get(name[dot:].lower())
+
+
+def demo_manifest_conflict(
+    manifest: Mapping[str, Any], pr_url: str, head_sha: str
+) -> tuple[str, str] | None:
+    """
+    Check a harness ``demo.json`` against the PR head it is published for.
+
+    :param manifest: The manifest; its ``sha`` and ``pr_url`` are checked when present.
+    :param pr_url: The PR the demo is published on.
+    :param head_sha: The full head sha the demo is published for.
+    :returns: ``(error code, message)`` when the manifest names another commit
+        or PR, else ``None``.
+    """
+    sha = manifest.get("sha")
+    if isinstance(sha, str) and sha.strip():
+        recorded = sha.strip().lower()
+        if len(recorded) < 7 or not head_sha.lower().startswith(recorded):
+            return (
+                "sha_mismatch",
+                f"demo.json was recorded at {recorded[:12]}, not at head {head_sha[:12]}",
+            )
+    url = manifest.get("pr_url")
+    if isinstance(url, str) and url.strip() and parse_pr_url(url) != parse_pr_url(pr_url):
+        return "pr_mismatch", f"demo.json is for {url.strip()[:200]}, not {pr_url[:200]}"
+    return None
+
+
+def demo_status(given: object, manifest: Mapping[str, Any] | None) -> str | tuple[str, str]:
+    """
+    The status a demo is recorded with: the manifest's when there is one.
+
+    :param given: The status the agent passed, or ``None``.
+    :param manifest: The harness's ``demo.json``, or ``None``.
+    :returns: The status, or ``(error code, message)`` when the agent's status
+        disagrees with the manifest or no valid status is given.
+    """
+    statuses = "|".join(DEMO_STATUSES)
+    if given == "":
+        given = None
+    if manifest is not None and manifest.get("status") is not None:
+        recorded = manifest["status"]
+        if recorded not in DEMO_STATUSES:
+            return "invalid_status", f"demo.json status {str(recorded)[:20]!r} is not {statuses}"
+        if given is not None and given != recorded:
+            return (
+                "status_mismatch",
+                f"demo.json says {recorded}; omit status or pass {recorded}",
+            )
+        assert isinstance(recorded, str)
+        return recorded
+    if given is None:
+        return "invalid_status", f"pass status ({statuses}) or a manifest with one"
+    if given not in DEMO_STATUSES:
+        return "invalid_status", f"status must be one of {statuses}"
+    assert isinstance(given, str)
+    return given
 
 
 LABEL_VALUE_MAX_LEN: Final = 256

@@ -16,7 +16,7 @@ import logging
 import re
 from typing import Any, Final, Literal
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, ValidationError
 from starlette.datastructures import FormData, UploadFile
@@ -33,6 +33,8 @@ from omnigent.factory import (
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
     demo_file_type,
+    demo_manifest_conflict,
+    demo_status,
     is_full_sha,
     parse_pr_url,
 )
@@ -49,7 +51,6 @@ from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.demos import (
     DemoFileIn,
     DemoUploadError,
-    check_status,
     check_upload,
     clip_meta,
     demo_file_url,
@@ -90,7 +91,7 @@ class DemoMeta(BaseModel):
     head_sha: str
     title: str
     summary: str = ""
-    status: str = "PASS"
+    status: str | None = None
     plan_source: str | None = None
     preview_url: str | None = None
     manifest: dict[str, Any] | None = None
@@ -186,6 +187,7 @@ def _record_demo(
     meta: DemoMeta,
     files: list[DemoFileIn],
     *,
+    status: str,
     repo: str,
     number: int,
     slugs: set[str],
@@ -195,7 +197,10 @@ def _record_demo(
     pr, created = ensure_pr(caller, repo, number, slugs=slugs)
     owner = caller.membership.root_session_id
     stored = _store_files(deps, owner, files)
-    title, summary, preview_url = clip_meta(meta.title, meta.summary, meta.preview_url)
+    given = meta.summary or (meta.manifest or {}).get("summary")
+    title, summary, preview_url = clip_meta(
+        meta.title, given if isinstance(given, str) else None, meta.preview_url
+    )
     manifest = link_manifest(meta.manifest, stored)
     if manifest is not None and meta.plan_source:
         manifest.setdefault("plan_source", meta.plan_source[:32])
@@ -210,7 +215,7 @@ def _record_demo(
             head_sha=meta.head_sha.lower(),
             session_id=owner,
             created_by_session=caller.session.id,
-            status=meta.status,
+            status=status,
             title=title,
             summary=summary,
             files=stored,
@@ -226,16 +231,31 @@ def _record_demo(
     return demo, urls, pr if created else None
 
 
+def _resolve_status(meta: DemoMeta) -> str:
+    """
+    The status to record: the manifest's when there is one.
+
+    :raises FactoryRouteError: 400 when the given status contradicts the
+        manifest, or the manifest is of another head or PR.
+    """
+    if meta.manifest is not None:
+        conflict = demo_manifest_conflict(meta.manifest, meta.pr_url, meta.head_sha.lower())
+        if conflict is not None:
+            raise FactoryRouteError(400, *conflict)
+    status = demo_status(meta.status, meta.manifest)
+    if isinstance(status, tuple):
+        raise FactoryRouteError(400, *status)
+    return status
+
+
 async def _publish(
-    request: Request, form: FormData, caller: AgentCaller | None
-) -> tuple[AgentCaller, FactoryDemo, dict[str, Any] | None]:
-    """Validate the parsed upload, then store it; returns the caller, demo and preview URLs."""
+    request: Request, form: FormData, caller: AgentCaller
+) -> tuple[FactoryDemo, dict[str, Any] | None]:
+    """Validate the parsed upload, then store it; returns the demo and preview URLs."""
     meta = _parse_meta(form.get("meta"))
-    if caller is None or caller.session.id != meta.from_session_id:
-        caller = await authorize_agent(request, meta.from_session_id)
-    if caller.membership.role not in DEMO_ROLES:
+    if caller.session.id != meta.from_session_id:
         raise FactoryRouteError(
-            403, "not_allowed", "demos are published by the demo agent, env_keeper or a lead"
+            400, "invalid_meta", "meta.from_session_id must match the from_session_id query"
         )
     if caller.deps.file_store is None or caller.deps.artifact_store is None:
         raise FactoryRouteError(501, "file_store_unavailable", "file store not configured")
@@ -244,40 +264,44 @@ async def _publish(
         raise FactoryRouteError(400, "not_a_pr_url", f"{meta.pr_url!r} is not a GitHub PR URL")
     if not is_full_sha(meta.head_sha.lower()):
         raise FactoryRouteError(400, "invalid_sha", "head_sha must be the 40-character sha")
+    status = _resolve_status(meta)
     repo, number = parsed
     slugs = await asyncio.to_thread(require_factory_repo, caller, repo)
     uploads = [part for part in form.getlist("files") if isinstance(part, UploadFile)]
     parts = await _read_parts(uploads)
     try:
-        check_status(meta.status)
         files = check_upload([f.model_dump() for f in meta.files], parts)
     except DemoUploadError as exc:
         raise _upload_error(exc) from exc
     demo, preview_urls, new_pr = await asyncio.to_thread(
-        _record_demo, caller, meta, files, repo=repo, number=number, slugs=slugs
+        _record_demo, caller, meta, files, status=status, repo=repo, number=number, slugs=slugs
     )
     if new_pr is not None:
         await announce_new_pr(request.app.state, caller, new_pr)
-    return caller, demo, preview_urls
+    return demo, preview_urls
 
 
 @router.post("/agent/demos", dependencies=[Depends(require_trusted_origin)])
-async def publish_demo(request: Request) -> dict[str, Any]:
+async def publish_demo(request: Request, from_session_id: str = Query(...)) -> dict[str, Any]:
     """Store a recorded demo of a PR head and return its links and PR comment."""
+    # Authenticate and bound the body before any of it is parsed or spooled.
     length = request.headers.get("content-length")
-    if length is not None and length.isdigit():
-        if int(length) > DEMO_MAX_TOTAL_BYTES + _MULTIPART_SLACK:
-            raise FactoryRouteError(413, "demo_too_large", "a demo is at most 120 MB in all")
-    # Authenticate before the body is parsed when the runner names itself up front.
-    early = request.query_params.get("from_session_id")
-    caller = await authorize_agent(request, early) if early else None
+    if length is None or not length.isdigit():
+        raise FactoryRouteError(411, "length_required", "a demo upload needs a Content-Length")
+    if int(length) > DEMO_MAX_TOTAL_BYTES + _MULTIPART_SLACK:
+        raise FactoryRouteError(413, "demo_too_large", "a demo is at most 120 MB in all")
+    caller = await authorize_agent(request, from_session_id)
+    if caller.membership.role not in DEMO_ROLES:
+        raise FactoryRouteError(
+            403, "not_allowed", "demos are published by the demo agent, env_keeper or a lead"
+        )
     form = await request.form(
         max_files=DEMO_MAX_FILES + 1,
         max_fields=8,
         max_part_size=DEMO_MANIFEST_MAX_BYTES + _MULTIPART_SLACK,
     )
     try:
-        caller, demo, preview_urls = await _publish(request, form, caller)
+        demo, preview_urls = await _publish(request, form, caller)
     finally:
         await form.close()
     base = public_base_url(str(request.base_url))
@@ -354,6 +378,7 @@ def _read_bytes(deps: FactoryDeps, file_id: str, span: tuple[int, int] | None) -
         with store._resolve(file_id).open("rb") as handle:
             handle.seek(start)
             return handle.read(end - start + 1)
+    # Other stores read the whole object per range; an S3 store needs a ranged GET.
     content = store.get(file_id)
     return content if span is None else content[span[0] : span[1] + 1]
 
@@ -362,7 +387,7 @@ def _not_found() -> OmnigentError:
     return OmnigentError("demo file not found", code=ErrorCode.NOT_FOUND)
 
 
-@router.get("/demos/{demo_id}/files/{file_id}")
+@router.api_route("/demos/{demo_id}/files/{file_id}", methods=["GET", "HEAD"])
 async def get_demo_file(request: Request, demo_id: str, file_id: str) -> Response:
     """Serve one demo file to a human who can read the demo's PL session."""
     from omnigent.server.routes._sessions.helpers import (
@@ -409,6 +434,19 @@ async def get_demo_file(request: Request, demo_id: str, file_id: str) -> Respons
     span = parse_range(request.headers.get("range"), size)
     if span is False:
         return Response(status_code=416, headers={**headers, "Content-Range": f"bytes */{size}"})
+    if request.method == "HEAD":
+        if isinstance(span, tuple):
+            start, end = span
+            return Response(
+                status_code=206,
+                media_type=content_type,
+                headers={
+                    **headers,
+                    "Content-Range": f"bytes {start}-{end}/{size}",
+                    "Content-Length": str(end - start + 1),
+                },
+            )
+        return Response(media_type=content_type, headers={**headers, "Content-Length": str(size)})
     try:
         body = await asyncio.to_thread(
             _read_bytes, deps, stored.id, span if isinstance(span, tuple) else None

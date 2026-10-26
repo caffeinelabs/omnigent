@@ -20,7 +20,7 @@ import pytest_asyncio
 
 from omnigent import factory as F
 from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
-from omnigent.server.factory import nudge, status
+from omnigent.server.factory import nudge, schemas, status
 from omnigent.server.factory.api import agent_state
 from omnigent.server.factory.context import factory_deps
 from omnigent.stores.artifact_store.local import LocalArtifactStore
@@ -340,6 +340,15 @@ async def test_sentinel_verdict_is_lead_only(cockpit: Cockpit) -> None:
     assert row.project_slug == PROJECT
 
 
+@pytest.mark.parametrize("extra", [{}, {"head_sha": SHA[:7]}])
+async def test_a_sentinel_verdict_needs_the_full_head_sha(
+    cockpit: Cockpit, extra: dict[str, Any]
+) -> None:
+    resp = await cockpit.pr("lead_b", sentinel_verdict="verified", **extra)
+    assert resp.status_code == 400 and code(resp) == "invalid_sha"
+    assert cockpit.store.list_prs(cockpit.factory_id) == []
+
+
 async def test_registration_waits_for_a_running_poller(
     cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -384,11 +393,21 @@ async def test_dev_env_report_writes_the_project_env(cockpit: Cockpit) -> None:
     assert reported["state"] == "ready"
     assert reported["env_id"] == "1a2b"
     assert reported["urls"]["tilt_ui"] == "http://localhost:10350"
-    assert reported["deployed"]["sha"] == SHA
-    assert reported["deployed"]["ref"] == "origin/main"
+    # A dev env stores DeployedRef ({sha, ref}); preview-only keys are dropped.
+    assert reported["deployed"] == {"sha": SHA, "ref": "origin/main"}
     assert reported["resources"] == [{"name": "caffeine-api", "status": "ok"}]
+    schemas.EnvView.model_validate(project.env)
     assert cockpit.store.list_prs(cockpit.factory_id) == []
     assert cockpit.kinds() == ["env.reported"]
+
+    again = await cockpit.env(
+        "env_keeper", deployed={"sha": SHA, "ref": "origin/main", "tooling_overlay": "abc1234"}
+    )
+    assert again.status_code == 200, again.text
+    project = cockpit.store.get_project(cockpit.factory_id, PROJECT)
+    assert project is not None and project.env is not None
+    assert project.env["reported"]["deployed"] == {"sha": SHA, "ref": "origin/main"}
+    schemas.EnvView.model_validate(project.env)
 
 
 async def test_preview_report_upserts_the_pr_and_writes_its_preview(cockpit: Cockpit) -> None:
@@ -416,6 +435,7 @@ async def test_preview_report_upserts_the_pr_and_writes_its_preview(cockpit: Coc
     assert preview["deployed"]["sha"] == SHA
     assert preview["deployed"]["tooling_overlay"] == "abc1234"
     deployed_at = preview["deployed"]["at"]
+    schemas.PreviewView.model_validate(preview)
     project = cockpit.store.get_project(cockpit.factory_id, PROJECT)
     assert project is not None and project.env is None
 
@@ -428,9 +448,13 @@ async def test_preview_report_upserts_the_pr_and_writes_its_preview(cockpit: Coc
     assert row.preview["state"] == "ready"
     assert row.preview["urls"] == {"app": APP, "api": API}  # kept from the first report
     assert row.preview["deployed"]["at"] == deployed_at  # same sha, same deploy
+    schemas.PreviewView.model_validate(row.preview)
 
     parked = await cockpit.env("pl", state="parked", env_id="1a2b-p9630", pr=9630)
     assert parked.status_code == 200
+    row = cockpit.store.get_pr(row.id)
+    assert row is not None and row.preview is not None
+    schemas.PreviewView.model_validate(row.preview)
     assert cockpit.kinds() == [
         "pr.discovered",
         "preview.reported",
@@ -456,6 +480,8 @@ async def test_only_env_keeper_and_the_pl_report_envs(cockpit: Cockpit, key: str
         ({"state": "deploying"}, "invalid_state"),
         ({"state": "degraded", "pr": 9630}, "invalid_state"),
         ({"deployed": {"sha": "not-a-sha"}}, "invalid_sha"),
+        ({"deployed": {"sha": "not-a-sha"}, "pr": 9631, "state": "deploying"}, "invalid_sha"),
+        ({"deployed": {"tooling_overlay": "zz"}, "pr": 9631, "state": "ready"}, "invalid_sha"),
     ],
 )
 async def test_env_reports_are_validated(
@@ -464,6 +490,9 @@ async def test_env_reports_are_validated(
     resp = await cockpit.env("env_keeper", **extra)
     assert resp.status_code == 400, resp.text
     assert code(resp) == error
+    # A refused report tracks no PR (it would have no pr.discovered event).
+    assert cockpit.store.list_prs(cockpit.factory_id) == []
+    assert cockpit.kinds() == []
 
 
 async def test_preview_cap_names_park_candidates(
@@ -489,7 +518,9 @@ async def test_preview_cap_names_park_candidates(
     assert body["max_previews"] == 2
     assert [c["pr"] for c in body["park_candidates"]] == [2, 1]
     assert body["park_candidates"][0]["preview"] == "p2"
-    assert store.get_pr_by_number(fid, REPO, 9630) is not None  # tracked, not deployed
+    # Refused before the PR row is created, so nothing is tracked half-way.
+    assert store.get_pr_by_number(fid, REPO, 9630) is None
+    assert "pr.discovered" not in cockpit.kinds()
     assert redeploy.status_code == 200
 
 

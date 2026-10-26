@@ -111,8 +111,11 @@ def test_env_schema_covers_dev_envs_and_previews() -> None:
 
 def test_demo_schema() -> None:
     params = _params(SysFactoryDemoTool)
-    assert params["required"] == ["pr_url", "head_sha", "title", "summary", "files"]
+    # A manifest can supply files, summary and status, so only these are always needed.
+    assert params["required"] == ["pr_url", "head_sha", "title"]
     assert params["properties"]["status"]["enum"] == ["PASS", "PARTIAL", "FAIL", "ERROR"]
+    # No default: a failing run must never be recorded as PASS by omission.
+    assert "default" not in params["properties"]["status"]
     item = params["properties"]["files"]["items"]
     assert item["required"] == ["path", "kind"]
     assert {"video", "screenshot", "api", "log"} <= set(item["properties"]["kind"]["enum"])
@@ -234,6 +237,11 @@ async def test_pr_registers_with_claim_and_verdict() -> None:
         ({"url": PR_URL, "claim": "merged"}, "'claim' must be one of"),
         ({"url": PR_URL, "sentinel_verdict": "ok"}, "'sentinel_verdict' must be one of"),
         ({"url": PR_URL, "head_sha": "zzz"}, "commit sha"),
+        ({"url": PR_URL, "sentinel_verdict": "verified"}, "full 40-character"),
+        (
+            {"url": PR_URL, "sentinel_verdict": "verified", "head_sha": SHA[:7]},
+            "full 40-character",
+        ),
     ],
 )
 async def test_pr_validates_locally(args: dict[str, Any], code: str) -> None:
@@ -357,7 +365,7 @@ async def test_set_stage_validates_locally() -> None:
 _CHARTER = "CHARTER · api-version\nGoal: GET /version"
 
 
-def _spawn_server(charter: Callable[[FakeServer], None]) -> FakeServer:
+def _spawn_server(charter: Callable[[FakeServer], object]) -> FakeServer:
     server = FakeServer()
     server.on("GET", f"/v1/factory/membership/{LEAD}", body=membership(LEAD, role="lead"))
     server.on("GET", "/v1/factory/roster", body=roster(member(LEAD, role="lead")))
@@ -463,10 +471,11 @@ def _parse_multipart(
     for part in message.iter_parts():
         name = part.get_param("name", header="content-disposition")
         payload = part.get_payload(decode=True)
+        assert isinstance(payload, bytes)
         if name == "meta":
             meta = json.loads(payload)
         elif name == "files":
-            files.append((part.get_filename(), payload, part.get_content_type()))
+            files.append((part.get_filename() or "", payload, part.get_content_type()))
     return meta, files
 
 
@@ -505,6 +514,7 @@ async def _demo(
                 "head_sha": SHA,
                 "title": "Version endpoint",
                 "summary": "GET /version returns the sha",
+                "status": "PASS",
                 **args,
             },
             server_client=client,
@@ -541,6 +551,8 @@ async def test_demo_uploads_meta_and_files_as_multipart(home: Path, tmp_path: Pa
     [request] = server.requests
     assert request.url.path == "/v1/factory/agent/demos"
     assert request.url.params["from_session_id"] == PL
+    # The server refuses a body without a length before parsing it.
+    assert int(request.headers["content-length"]) == len(request.content)
     meta, files = _parse_multipart(request)
     assert meta == {
         "from_session_id": PL,
@@ -575,6 +587,8 @@ async def test_demo_from_a_manifest_attaches_its_artifacts(home: Path) -> None:
     _write(home / "factory/previews/p9630/tilt-snapshot.json", b"{}")
     manifest = {
         "version": 1,
+        "pr_url": PR_URL,
+        "sha": SHA,
         "status": "PARTIAL",
         "summary": "Landing renders; build skipped",
         "plan_source": "derived",
@@ -602,7 +616,13 @@ async def test_demo_from_a_manifest_attaches_its_artifacts(home: Path) -> None:
     server = UploadServer()
     out = await _demo(
         server,
-        {"files": [], "manifest_path": str(root / "demo.json"), "summary": None},
+        {
+            "files": [],
+            "manifest_path": str(root / "demo.json"),
+            "summary": None,
+            "status": None,
+            "plan_source": "pr-body",
+        },
     )
     meta, files = _parse_multipart(server.requests[0])
     assert meta["status"] == "PARTIAL"
@@ -610,7 +630,7 @@ async def test_demo_from_a_manifest_attaches_its_artifacts(home: Path) -> None:
     assert meta["plan_source"] == "derived"
     assert meta["preview_url"] == _URLS["app"]
     assert meta["manifest"] == manifest
-    # The poster is the step screenshot: one upload, named by its manifest path.
+    # The poster is also the step screenshot: it still gets its own poster file.
     assert meta["files"] == [
         {"name": "video/demo.webm", "kind": "video"},
         {
@@ -619,11 +639,13 @@ async def test_demo_from_a_manifest_attaches_its_artifacts(home: Path) -> None:
             "caption": "Open landing",
             "step": 1,
         },
+        {"name": "shots/01-landing.png", "kind": "poster"},
         {"name": "api.json", "kind": "api"},
         {"name": "tilt-snapshot.json", "kind": "other", "caption": "tilt_snapshot"},
     ]
     assert [name for name, _, _ in files] == [
         "demo.webm",
+        "01-landing.png",
         "01-landing.png",
         "api.json",
         "tilt-snapshot.json",
@@ -678,7 +700,9 @@ async def test_demo_refuses_too_many_files(home: Path) -> None:
     [
         ({"head_sha": "7767f0d"}, "40-character"),
         ({"pr_url": "https://github.com/caffeinelabs/app"}, "not_a_pr_url"),
-        ({"status": "MAYBE"}, "'status' must be one of"),
+        ({"status": "MAYBE"}, "invalid_status"),
+        ({"status": None}, "invalid_status"),
+        ({"summary": " "}, "requires a 'summary'"),
         ({"files": []}, "at least one file"),
     ],
 )
@@ -692,6 +716,60 @@ async def test_demo_validates_the_description(
     )
     assert needle in json.dumps(out)
     assert server.requests == []
+
+
+def _manifest(home: Path, **fields: Any) -> Path:
+    root = home / "factory/demos/9630/7767f0d"
+    _write(root / "shots/01-landing.png", b"png1")
+    manifest = {
+        "pr_url": PR_URL,
+        "sha": SHA,
+        "status": "FAIL",
+        "summary": "Settings page throws",
+        "steps": [{"n": 1, "title": "Open", "screenshot": "shots/01-landing.png"}],
+        **fields,
+    }
+    return _write(root / "demo.json", json.dumps(manifest).encode())
+
+
+async def test_demo_records_the_manifest_status(home: Path) -> None:
+    path = _manifest(home)
+    server = UploadServer()
+    out = await _demo(server, {"manifest_path": str(path), "status": None, "summary": None})
+    assert "error" not in out, out
+    meta, _ = _parse_multipart(server.requests[0])
+    assert meta["status"] == "FAIL"
+    assert meta["summary"] == "Settings page throws"
+
+
+@pytest.mark.parametrize(
+    ("fields", "args", "code"),
+    [
+        # The run failed; the agent cannot publish it as PASS.
+        ({}, {"status": "PASS"}, "status_mismatch"),
+        ({"status": "BLOCKED"}, {"status": None}, "invalid_status"),
+        ({"sha": "0" * 40}, {"status": None}, "sha_mismatch"),
+        ({"sha": "zz"}, {"status": None}, "sha_mismatch"),
+        ({"pr_url": "https://github.com/caffeinelabs/app/pull/1"}, {}, "pr_mismatch"),
+    ],
+)
+async def test_demo_refuses_a_contradicting_manifest(
+    home: Path, fields: dict[str, Any], args: dict[str, Any], code: str
+) -> None:
+    path = _manifest(home, **fields)
+    server = UploadServer()
+    out = await _demo(server, {"manifest_path": str(path), **args})
+    assert out["error"] == code, out
+    assert server.requests == []
+
+
+async def test_demo_accepts_an_abbreviated_manifest_sha(home: Path) -> None:
+    path = _manifest(home, sha=SHA[:7], status="PASS")
+    server = UploadServer()
+    out = await _demo(server, {"manifest_path": str(path)})
+    assert "error" not in out, out
+    meta, _ = _parse_multipart(server.requests[0])
+    assert meta["status"] == "PASS"
 
 
 async def test_demo_server_refusal_is_reported(home: Path) -> None:

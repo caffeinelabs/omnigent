@@ -35,6 +35,7 @@ from omnigent.factory import (
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
     SENTINEL_VERDICTS,
+    is_full_sha,
     parse_pr_url,
 )
 from omnigent.server.factory import events, nudge, status
@@ -335,6 +336,11 @@ async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
                 403, "sentinel_lead_only", "only a lead records a Sentinel verdict"
             )
     head_sha = _sha(body.head_sha)
+    if body.sentinel_verdict is not None and not is_full_sha(head_sha or ""):
+        # Consumers compare it with the PR's 40-character head.
+        raise FactoryRouteError(
+            400, "invalid_sha", "a sentinel_verdict needs the full 40-character head_sha"
+        )
     note = _clip(body.note, 1000)
     slugs = await asyncio.to_thread(require_factory_repo, caller, repo)
     task = _clip(body.task, 64)
@@ -460,7 +466,15 @@ def _check_urls(urls: dict[str, str]) -> dict[str, str]:
     return clean
 
 
-def _deployed(body: EnvBody, previous: dict[str, Any] | None, now: int) -> dict[str, Any]:
+def _deployed(
+    body: EnvBody, previous: dict[str, Any] | None, now: int, *, preview: bool
+) -> dict[str, Any]:
+    """
+    The ``deployed`` object to store, shaped like its read contract.
+
+    A dev env keeps ``{sha, ref}`` (``DeployedRef``); a preview also keeps
+    ``at`` and ``tooling_overlay`` (``PreviewDeployed``).
+    """
     deployed: dict[str, Any] = {}
     sha = _sha(body.deployed.get("sha"))
     if sha:
@@ -468,6 +482,8 @@ def _deployed(body: EnvBody, previous: dict[str, Any] | None, now: int) -> dict[
     ref = _clip(body.deployed.get("ref"), 255)
     if ref:
         deployed["ref"] = ref
+    if not preview:
+        return deployed
     overlay = _sha(body.deployed.get("tooling_overlay"))
     if overlay:
         deployed["tooling_overlay"] = overlay
@@ -493,7 +509,9 @@ def _report_dev_env(caller: AgentCaller, body: EnvBody, urls: dict[str, str]) ->
         "state": body.state,
         "env_id": body.env_id.strip(),
         "urls": urls,
-        "deployed": _deployed(body, previous.get("deployed") if previous else None, now),
+        "deployed": _deployed(
+            body, previous.get("deployed") if previous else None, now, preview=False
+        ),
         "resources": _resources(body),
         "note": _clip(body.note, 500),
         "at": now,
@@ -545,17 +563,19 @@ def _report_preview(
     assert body.pr is not None
     repo, slugs = _preview_repo(caller, body.pr)
     store = caller.deps.factory_store
-    row, created = ensure_pr(caller, repo, body.pr, slugs=slugs)
-    previous = dict(row.preview or {})
-    if body.state == "deploying" and not _is_live(row):
+    existing = store.get_pr_by_number(caller.factory_id, repo, body.pr)
+    if body.state == "deploying" and (existing is None or not _is_live(existing)):
+        # Read-then-write: two racing deploys may both pass; the next report catches it.
         live = [
             pr
             for pr in store.list_prs(caller.factory_id, states=["open"])
-            if pr.id != row.id and _is_live(pr)
+            if (existing is None or pr.id != existing.id) and _is_live(pr)
         ]
         cap = max_previews()
         if len(live) >= cap:
             raise _PreviewCap(live, cap)
+    row, created = ensure_pr(caller, repo, body.pr, slugs=slugs)
+    previous = dict(row.preview or {})
     now = int(time.time())
     preview = dict(previous)
     preview.update(
@@ -564,7 +584,7 @@ def _report_preview(
             "env_id": body.env_id.strip(),
             "state": body.state,
             "urls": urls or previous.get("urls") or {},
-            "deployed": _deployed(body, previous.get("deployed"), now)
+            "deployed": _deployed(body, previous.get("deployed"), now, preview=True)
             or previous.get("deployed")
             or {},
             "resources": _resources(body) or previous.get("resources") or [],
@@ -600,6 +620,9 @@ async def report_env(request: Request, body: EnvBody) -> Any:
         raise FactoryRouteError(400, "invalid_env_id", "env_id is required")
     body = body.model_copy(update={"state": state})
     urls = _check_urls(body.urls)
+    # Refuse a bad sha before any row is touched.
+    _sha(body.deployed.get("sha"))
+    _sha(body.deployed.get("tooling_overlay"))
     app_state = request.app.state
     project = caller.membership.project
     if body.pr is None:

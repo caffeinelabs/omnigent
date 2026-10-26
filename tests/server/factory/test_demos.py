@@ -95,6 +95,7 @@ class DemoEnv:
             "head_sha": SHA,
             "title": "Version endpoint",
             "summary": "GET /version returns the deployed sha",
+            "status": "PASS",
             "files": entries if entries is not None else _default_entries(),
             **meta,
         }
@@ -361,25 +362,146 @@ async def test_demo_publishers(demo_env: DemoEnv, key: str) -> None:
     assert resp.status_code == 200, resp.text
 
 
-async def test_meta_sender_must_match_the_authenticated_one(demo_env: DemoEnv) -> None:
+async def _raw_upload(env: DemoEnv, query: str | None, meta_sender: str, **kwargs: Any) -> Any:
     body = {
-        "from_session_id": demo_env.id("demo"),
+        "from_session_id": env.id(meta_sender),
         "pr_url": PR_URL,
         "head_sha": SHA,
         "title": "t",
+        "status": "PASS",
         "files": [{"name": "a.png", "kind": "screenshot"}],
     }
-    # The query names the IC (no demo rights); meta claims the demo agent.
-    resp = await demo_env.api.client.post(
+    params = {"from_session_id": env.id(query)} if query else {}
+    return await env.api.client.post(
         "/v1/factory/agent/demos",
-        params={"from_session_id": demo_env.id("ic")},
+        params=params,
         data={"meta": json.dumps(body)},
         files=[("files", ("a.png", PNG, "image/png"))],
+        **kwargs,
     )
-    # Re-authenticated as the meta sender, which is allowed to publish.
-    assert resp.status_code == 200
+
+
+async def test_the_query_sender_is_authenticated_before_the_body(demo_env: DemoEnv) -> None:
+    # The query names the IC (no demo rights): refused before the body is parsed.
+    as_ic = await _raw_upload(demo_env, "ic", "demo")
+    # The query names the demo agent; meta cannot claim another sender.
+    claims_pl = await _raw_upload(demo_env, "demo", "pl")
+    no_query = await _raw_upload(demo_env, None, "demo")
+
+    assert as_ic.status_code == 403 and code(as_ic) == "not_allowed"
+    assert claims_pl.status_code == 400 and code(claims_pl) == "invalid_meta"
+    assert no_query.status_code == 422
+    assert demo_env.store.list_demos(demo_env.id("lead_a")) == []
+
+
+async def test_a_body_without_a_length_is_refused(demo_env: DemoEnv) -> None:
+    async def chunks() -> AsyncIterator[bytes]:
+        yield b"--x\r\n"
+
+    resp = await demo_env.api.client.post(
+        "/v1/factory/agent/demos",
+        params={"from_session_id": demo_env.id("demo")},
+        content=chunks(),
+        headers={"content-type": "multipart/form-data; boundary=x"},
+    )
+    assert resp.status_code == 411 and code(resp) == "length_required"
+
+
+@pytest.mark.parametrize(
+    ("manifest", "status", "error"),
+    [
+        # demo.json says FAIL; the agent cannot record it as PASS.
+        ({**MANIFEST, "status": "FAIL"}, "PASS", "status_mismatch"),
+        ({**MANIFEST, "status": "BLOCKED"}, None, "invalid_status"),
+        ({**MANIFEST, "sha": "0" * 40}, None, "sha_mismatch"),
+        (
+            {**MANIFEST, "pr_url": "https://github.com/caffeinelabs/app/pull/1"},
+            None,
+            "pr_mismatch",
+        ),
+        (None, None, "invalid_status"),
+    ],
+)
+async def test_upload_refuses_a_status_the_manifest_contradicts(
+    demo_env: DemoEnv, manifest: dict[str, Any] | None, status: str | None, error: str
+) -> None:
+    resp = await demo_env.upload(manifest=manifest, status=status)
+    assert resp.status_code == 400, resp.text
+    assert code(resp) == error
+    assert demo_env.store.list_demos(demo_env.id("lead_a")) == []
+    assert demo_env.file_store.list(demo_env.id("pl"), limit=50).data == []
+
+
+async def test_upload_records_the_manifest_status(demo_env: DemoEnv) -> None:
+    manifest = {**MANIFEST, "status": "PARTIAL", "sha": SHA, "pr_url": PR_URL}
+    resp = await demo_env.upload(manifest=manifest, status=None, summary="")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "PARTIAL"
+    assert "status=PARTIAL" in resp.json()["comment_markdown"].splitlines()[0]
     demo = demo_env.store.get_demo(resp.json()["demo_id"])
-    assert demo is not None and demo.created_by_session == demo_env.id("demo")
+    assert demo is not None and demo.status == "PARTIAL"
+    assert demo.summary == MANIFEST["summary"]
+
+
+async def test_a_poster_that_is_also_a_screenshot_keeps_both_roles(demo_env: DemoEnv) -> None:
+    files = [*_default_files()[:2], ("01-landing.png", PNG, "image/png")]
+    entries = [*_default_entries()[:2], {"name": "shots/01-landing.png", "kind": "poster"}]
+    resp = await demo_env.upload(files=files, entries=entries, manifest=MANIFEST)
+    assert resp.status_code == 200, resp.text
+    demo = demo_env.store.get_demo(resp.json()["demo_id"])
+    assert demo is not None and demo.manifest is not None
+    shot, poster = demo.files[1]["file_id"], demo.files[2]["file_id"]
+    assert [f["kind"] for f in demo.files] == ["video", "screenshot", "poster"]
+    assert demo.manifest["steps"][0]["screenshot_file_id"] == shot
+    assert demo.manifest["artifact_file_ids"]["poster"] == poster
+
+
+async def test_har_uploads_lose_their_credentials(demo_env: DemoEnv) -> None:
+    har = {
+        "log": {
+            "entries": [
+                {
+                    "request": {
+                        "url": "https://api-1a2b-p9630.envs.sandbox.caffeinelabs.io/auth",
+                        "headers": [
+                            {"name": "Authorization", "value": "Bearer synthetic-secret"},
+                            {"name": "Accept", "value": "application/json"},
+                        ],
+                        "cookies": [{"name": "sid", "value": "cookie-secret"}],
+                    },
+                    "response": {
+                        "status": 200,
+                        "headers": [{"name": "set-cookie", "value": "sid=cookie-secret"}],
+                    },
+                }
+            ]
+        }
+    }
+    resp = await demo_env.upload(
+        files=[("network.har", json.dumps(har).encode(), "application/json")],
+        entries=[{"name": "network.har", "kind": "har"}],
+    )
+    assert resp.status_code == 200, resp.text
+    demo = demo_env.store.get_demo(resp.json()["demo_id"])
+    assert demo is not None
+    stored = demo_env.artifacts.get(demo.files[0]["file_id"])
+    assert b"secret" not in stored
+    entry = json.loads(stored)["log"]["entries"][0]
+    assert entry["request"]["headers"] == [
+        {"name": "Authorization", "value": "[redacted]"},
+        {"name": "Accept", "value": "application/json"},
+    ]
+    assert entry["request"]["cookies"] == [{"name": "sid", "value": "[redacted]"}]
+    assert demo.files[0]["bytes"] == len(stored)
+
+
+@pytest.mark.parametrize("content", [b"not json", b'{"log": {}}'])
+async def test_a_har_that_is_not_one_is_refused(demo_env: DemoEnv, content: bytes) -> None:
+    resp = await demo_env.upload(
+        files=[("network.har", content, "application/json")],
+        entries=[{"name": "network.har", "kind": "har"}],
+    )
+    assert resp.status_code == 415 and code(resp) == "file_not_allowed"
 
 
 # ── Serving ────────────────────────────────────────────────────
@@ -443,6 +565,20 @@ async def test_range_requests_are_206(
     assert resp.headers["content-range"] == f"bytes {start}-{end}/{len(VIDEO)}"
     assert resp.headers["content-length"] == str(end - start + 1)
     assert resp.headers["accept-ranges"] == "bytes"
+
+
+async def test_head_reports_the_size_without_a_body(demo_env: DemoEnv) -> None:
+    urls = await _published(demo_env)
+    full = await demo_env.api.client.head(urls["video"])
+    part = await demo_env.api.client.head(urls["video"], headers={"Range": "bytes=0-9"})
+
+    assert full.status_code == 200 and full.content == b""
+    assert full.headers["content-length"] == str(len(VIDEO))
+    assert full.headers["content-type"] == "video/webm"
+    assert full.headers["accept-ranges"] == "bytes"
+    assert part.status_code == 206 and part.content == b""
+    assert part.headers["content-range"] == f"bytes 0-9/{len(VIDEO)}"
+    assert part.headers["content-length"] == "10"
 
 
 @pytest.mark.parametrize("header", [f"bytes={len(VIDEO)}-", "bytes=50-10", "bytes=-0"])

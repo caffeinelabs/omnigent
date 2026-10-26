@@ -45,10 +45,10 @@ from omnigent.factory import (
     DEFAULT_HEARTBEAT_S,
     DEMO_CLASS_MAX_BYTES,
     DEMO_FILE_KINDS,
+    DEMO_MANIFEST_KINDS,
     DEMO_MANIFEST_MAX_BYTES,
     DEMO_MAX_FILES,
     DEMO_MAX_TOTAL_BYTES,
-    DEMO_STATUSES,
     ENV_STATES,
     HEALTH,
     LABEL_HEARTBEAT_S,
@@ -71,6 +71,8 @@ from omnigent.factory import (
     SUMMARY_MAX_LEN,
     clamp_label_value,
     demo_file_type,
+    demo_manifest_conflict,
+    demo_status,
     factory_role_from_spec,
     is_full_sha,
     parse_pr_url,
@@ -145,6 +147,9 @@ _FACTORY_ERROR_CODES: Final = frozenset(
         "demo_too_large",
         "file_not_allowed",
         "file_missing",
+        "status_mismatch",
+        "sha_mismatch",
+        "pr_mismatch",
     }
 )
 # The server re-polls GitHub for up to 10 s before answering sys_factory_pr.
@@ -155,17 +160,6 @@ _ABBREV_SHA_RE: Final = re.compile(r"[0-9a-fA-F]{7,40}")
 _NOTE_MAX: Final = 1000
 _ENV_NOTE_MAX: Final = 500
 _CAPTION_MAX: Final = 200
-# Manifest artifact keys that name a file kind of their own.
-_MANIFEST_KINDS: Final = {
-    "video": "video",
-    "poster": "poster",
-    "api": "api",
-    "har": "har",
-    "trace": "trace",
-    "console": "console",
-    "script": "script",
-    "log": "log",
-}
 _STATUS_ERROR_CODES: Final = {413: "message_too_large", 429: "rate_limited"}
 _CODE_TOKEN_RE: Final = re.compile(r"[a-z][a-z0-9_]*")
 # Session ids are opaque tokens (hex uuids); refusing separators and dot
@@ -1381,6 +1375,8 @@ async def _register_pr(args: _JsonObject, *, server_client: httpx.AsyncClient, c
     head_sha = _sha_arg(tool, args, "head_sha")
     if isinstance(head_sha, dict):
         return json.dumps(head_sha)
+    if verdict is not None and not is_full_sha(head_sha or ""):
+        return _error(f"{tool} a 'sentinel_verdict' needs the full 40-character 'head_sha'")
     if head_sha is not None:
         body["head_sha"] = head_sha
     for key, limit in (("task", 64), ("note", _NOTE_MAX)):
@@ -1607,7 +1603,7 @@ def _manifest_entries(manifest: _JsonObject) -> list[tuple[str, str, str | None,
     named: list[tuple[str, str, str | None, int | None]] = []
     for key, rel in artifacts.items() if isinstance(artifacts, dict) else []:
         if isinstance(key, str) and isinstance(rel, str) and rel.strip():
-            kind = _MANIFEST_KINDS.get(key, "other")
+            kind = DEMO_MANIFEST_KINDS.get(key, "other")
             named.append((rel.strip(), kind, key if kind == "other" else None, None))
     shots: list[tuple[str, str, str | None, int | None]] = []
     steps = manifest.get("steps")
@@ -1631,16 +1627,23 @@ def _manifest_entries(manifest: _JsonObject) -> list[tuple[str, str, str | None,
 
 @dataclass
 class _DemoPlan:
-    """The files of one demo upload, checked against the caps."""
+    """
+    The files of one demo upload, checked against the caps.
+
+    A path is uploaded once, except that the poster gets its own copy even
+    when it is also a step screenshot (the harness's usual setup), so the demo
+    always has a ``poster`` file.
+    """
 
     files: list[_DemoFile] = field(default_factory=list)
     skipped: list[_JsonObject] = field(default_factory=list)
-    seen: set[Path] = field(default_factory=set)
+    seen: set[tuple[Path, bool]] = field(default_factory=set)
     total: int = 0
 
     def add(self, item: _DemoFile, *, explicit: bool) -> None:
         """Add a file; an explicit one over a cap raises, a manifest one is skipped."""
-        if item.path in self.seen:
+        key = (item.path, item.kind == "poster")
+        if key in self.seen:
             return
         reason: str | None = None
         if len(self.files) >= DEMO_MAX_FILES:
@@ -1652,7 +1655,7 @@ class _DemoPlan:
                 raise _DemoFileError("demo_too_large", str(item.path), reason)
             self.skipped.append({"path": item.name, "reason": reason})
             return
-        self.seen.add(item.path)
+        self.seen.add(key)
         self.files.append(item)
         self.total += item.size
 
@@ -1736,20 +1739,26 @@ def _demo_meta(args: _JsonObject, caller: str, manifest: _JsonObject | None) -> 
     title, summary = args.get("title"), args.get("summary")
     if not isinstance(title, str) or not title.strip():
         return _error(f"{tool} requires a 'title'")
-    if not isinstance(summary, str):
+    if not isinstance(summary, str) or not summary.strip():
         summary = manifest.get("summary") if manifest else None
-    status = args.get("status") or (manifest.get("status") if manifest else None) or "PASS"
-    if status not in DEMO_STATUSES:
-        return _error(f"{tool} 'status' must be one of {list(DEMO_STATUSES)}")
+    if not isinstance(summary, str) or not summary.strip():
+        return _error(f"{tool} requires a 'summary' (or a manifest with one)")
+    mismatch = demo_manifest_conflict(manifest, pr_url, head) if manifest else None
+    if mismatch is not None:
+        return _error(mismatch[0], message=mismatch[1])
+    status = demo_status(args.get("status"), manifest)
+    if isinstance(status, tuple):
+        return _error(status[0], message=status[1])
     meta: _JsonObject = {
         "from_session_id": caller,
         "pr_url": pr_url.strip(),
         "head_sha": head,
         "title": _clip(title.strip(), 256),
-        "summary": _clip(summary.strip(), 1000) if isinstance(summary, str) else "",
+        "summary": _clip(summary.strip(), 1000),
         "status": status,
     }
-    plan_source = args.get("plan_source") or (manifest.get("plan_source") if manifest else None)
+    # The harness's plan source is a fact about the run, so it wins over the argument.
+    plan_source = (manifest.get("plan_source") if manifest else None) or args.get("plan_source")
     if isinstance(plan_source, str) and plan_source.strip():
         meta["plan_source"] = plan_source.strip()[:32]
     preview_url = args.get("preview_url")

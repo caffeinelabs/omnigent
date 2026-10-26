@@ -538,6 +538,30 @@ def test_factory_cockpit_reports_from_a_project_lead(
     shot.parent.mkdir(parents=True)
     video.write_bytes(b"\x1aE\xdf\xa3" + bytes(range(256)) * 64)
     shot.write_bytes(b"\x89PNG\r\n\x1a\n" + b"p" * 64)
+    # The harness's demo.json; the PR comment is written next to it, inside tmp_path.
+    manifest = workspace / "demo" / "demo.json"
+    manifest.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "pr_url": pr_url,
+                "sha": sha,
+                "status": "PARTIAL",
+                "summary": "The ENV badge shows in the header; build skipped",
+                "steps": [
+                    {
+                        "n": 1,
+                        "title": "Open the header",
+                        "kind": "ui",
+                        "status": "pass",
+                        "screenshot": "shots/01-landing.png",
+                    },
+                    {"n": 2, "title": "Draft build", "kind": "ui", "status": "skipped"},
+                ],
+                "artifacts": {"video": "video.webm", "poster": "shots/01-landing.png"},
+            }
+        )
+    )
     pl = _create_session(
         stack,
         agent_id=pl_agent,
@@ -590,11 +614,7 @@ def test_factory_cockpit_reports_from_a_project_lead(
                             "pr_url": pr_url,
                             "head_sha": sha,
                             "title": "Badge in the header",
-                            "summary": "The ENV badge shows in the header",
-                            "files": [
-                                {"path": "demo/video.webm", "kind": "video"},
-                                {"path": str(shot), "kind": "screenshot", "caption": "Header"},
-                            ],
+                            "manifest_path": "demo/demo.json",
                             "preview_url": app,
                         },
                     ),
@@ -613,9 +633,11 @@ def test_factory_cockpit_reports_from_a_project_lead(
     assert asked["decision"] == "D-1" and asked["deduped"] is False, asked
     assert registered["project"] == slug and registered["ready"] is False, registered
     assert preview["preview"]["state"] == "ready", preview
-    assert demo["status"] == "PASS", demo
-    marker = f"<!-- factory:demo sha={sha} status=PASS demo={demo['demo_id']} -->"
+    # The manifest's status is what gets recorded.
+    assert demo["status"] == "PARTIAL", demo
+    marker = f"<!-- factory:demo sha={sha} status=PARTIAL demo={demo['demo_id']} -->"
     assert demo["comment_markdown"].startswith(marker)
+    assert demo["comment_path"] == str(workspace / "demo" / "pr-comment.md")
     assert Path(demo["comment_path"]).read_text().startswith(marker)
 
     [decision] = store.list_decisions(factory_id=lead, status="open")
@@ -626,10 +648,14 @@ def test_factory_cockpit_reports_from_a_project_lead(
     assert pr.preview["deployed"]["sha"] == sha
     [row] = store.list_demos(lead, number)
     assert row.id == demo["demo_id"] and row.session_id == pl and row.pr_id == pr.id
+    assert row.status == "PARTIAL" and row.summary.startswith("The ENV badge")
     assert [(f["name"], f["kind"]) for f in row.files] == [
         ("video.webm", "video"),
-        ("01-landing.png", "screenshot"),
+        ("shots/01-landing.png", "screenshot"),
+        ("shots/01-landing.png", "poster"),
     ]
+    assert row.manifest is not None
+    assert row.manifest["artifact_file_ids"]["poster"] == row.files[2]["file_id"]
     kinds = {e.kind for e in store.list_events(lead, limit=50)}
     assert {"decision.opened", "pr.discovered", "pr.claim", "preview.reported"} <= kinds
     assert "demo.published" in kinds

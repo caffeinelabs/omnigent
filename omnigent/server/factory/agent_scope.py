@@ -9,7 +9,6 @@ repo of one of its projects, and a sub-agent writes for its root PL's project.
 from __future__ import annotations
 
 import asyncio
-import os
 import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
@@ -19,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 
 from omnigent.factory import canonical_pr_url
 from omnigent.server.factory.context import FactoryDeps, factory_deps
+from omnigent.server.factory.env_urls import env_domain, safe_env_origin
 from omnigent.server.factory.envelope import display_title
 from omnigent.server.factory.membership import Membership, membership_of
 from omnigent.server.factory.routes import (
@@ -30,9 +30,6 @@ from omnigent.server.factory.routes import (
 if TYPE_CHECKING:
     from omnigent.entities import Conversation
     from omnigent.entities.factory import FactoryPr
-
-PREVIEW_DOMAIN_ENV: Final = "OMNIGENT_FACTORY_PREVIEW_DOMAIN"
-DEFAULT_PREVIEW_DOMAIN: Final = "envs.sandbox.caffeinelabs.io"
 
 _WORKSPACE_REPO_RE: Final = re.compile(
     r"(?:https://github\.com/|git@github\.com:)([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+?)(?:\.git)?/?"
@@ -228,26 +225,21 @@ async def announce_new_pr(app_state: Any, caller: AgentCaller, pr: FactoryPr) ->
     )
 
 
-def preview_domain() -> str:
-    """:returns: The domain factory previews and dev envs are served under."""
-    return os.environ.get(PREVIEW_DOMAIN_ENV, "").strip().lower() or DEFAULT_PREVIEW_DOMAIN
-
-
 def env_url_error(key: str, url: str) -> str | None:
     """
     Check one reported env URL.
 
-    App, API and MinIO URLs are probed by the server, so they must be https on
-    the env domain (an SSRF guard); the Tilt UI link only needs to be http(s).
+    App, API and MinIO URLs are probed by the server, so they must pass the
+    prober's own SSRF guard (https, one label under the env domain); the Tilt
+    UI link only needs to be http(s).
 
     :param key: ``app`` / ``api`` / ``minio`` / ``tilt_ui``.
     :returns: Why the URL is refused, or ``None``.
     """
     if key == "tilt_ui":
         return None if _LINK_RE.fullmatch(url) else "must be an http(s) URL"
-    pattern = rf"https://[a-z0-9-]+\.{re.escape(preview_domain())}(?:/[^\s<>\"'`]*)?"
-    if re.fullmatch(pattern, url) is None:
-        return f"must be https://<host>.{preview_domain()}/…"
+    if safe_env_origin(url) is None:
+        return f"must be https://<host>.{env_domain()}/…"
     return None
 
 
@@ -259,7 +251,6 @@ __all__ = [
     "env_url_error",
     "factory_repos",
     "pr_project",
-    "preview_domain",
     "repo_from_workspace",
     "require_factory_repo",
 ]

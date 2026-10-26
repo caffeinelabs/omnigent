@@ -473,7 +473,10 @@ class SysFactoryPrTool(Tool):
                     },
                     "head_sha": {
                         "type": "string",
-                        "description": "The head commit your claim or verdict is about.",
+                        "description": (
+                            "The head commit your claim or verdict is about "
+                            "(the full 40-character sha with sentinel_verdict)."
+                        ),
                     },
                     "note": {
                         "type": "string",
@@ -592,9 +595,13 @@ class SysFactoryDemoTool(Tool):
             ".gif .json .har .txt .md .log .ts .zip; video ≤ 50 MB, image ≤ 5 MB, "
             f"text/json ≤ 2 MB, ≤ {DEMO_MAX_FILES} files, ≤ 120 MB in all). With "
             "manifest_path (the harness's demo.json) the steps, timings and the "
-            "artifacts it lists are attached too. Returns {demo_id, demo_url, "
-            "status, files, comment_markdown}: post comment_markdown on the PR with "
-            "`gh pr comment <url> --body-file <file>` (none for ERROR)."
+            "artifacts it lists are attached too, the demo is recorded with the "
+            "manifest's status (a different `status` is refused), its summary is "
+            "used when you pass none, and its sha must be head_sha; `files` is "
+            "then optional. Without a manifest, pass files, summary and status. "
+            "Returns {demo_id, demo_url, status, files, comment_markdown}: post "
+            "comment_markdown on the PR with `gh pr comment <url> --body-file "
+            "<file>` (none for ERROR)."
         )
 
     def get_schema(self) -> dict[str, Any]:
@@ -628,7 +635,14 @@ class SysFactoryDemoTool(Tool):
                         "maxLength": 1000,
                         "description": "What the demo shows, one or two sentences.",
                     },
-                    "status": {"type": "string", "enum": list(DEMO_STATUSES), "default": "PASS"},
+                    "status": {
+                        "type": "string",
+                        "enum": list(DEMO_STATUSES),
+                        "description": (
+                            "The run's outcome. Required without manifest_path; "
+                            "with it, omit it (the manifest's status is used)."
+                        ),
+                    },
                     "files": {"type": "array", "items": demo_file, "maxItems": DEMO_MAX_FILES},
                     "manifest_path": {
                         "type": "string",
@@ -644,7 +658,7 @@ class SysFactoryDemoTool(Tool):
                     },
                     "preview_url": {"type": "string", "description": "Preview app URL."},
                 },
-                "required": ["pr_url", "head_sha", "title", "summary", "files"],
+                "required": ["pr_url", "head_sha", "title"],
                 "additionalProperties": False,
             },
         )

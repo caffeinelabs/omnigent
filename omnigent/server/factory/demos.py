@@ -9,6 +9,7 @@ PR, carrying the ``factory:demo`` marker the gates read.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -20,9 +21,9 @@ from omnigent.entities.factory import FactoryDemo
 from omnigent.factory import (
     DEMO_CLASS_MAX_BYTES,
     DEMO_FILE_KINDS,
+    DEMO_MANIFEST_KINDS,
     DEMO_MAX_FILES,
     DEMO_MAX_TOTAL_BYTES,
-    DEMO_STATUSES,
     demo_file_type,
 )
 
@@ -35,6 +36,10 @@ _SUMMARY_MAX: Final = 1000
 _URL_MAX: Final = 512
 _CAPTION_MAX: Final = 200
 _NAME_MAX: Final = 255
+_HAR_SECRET_HEADERS: Final = frozenset(
+    {"authorization", "proxy-authorization", "cookie", "set-cookie", "x-api-key"}
+)
+_REDACTED: Final = "[redacted]"
 
 
 class DemoUploadError(Exception):
@@ -96,6 +101,51 @@ def safe_filename(name: str) -> str:
     return cleaned[-_NAME_MAX:]
 
 
+def _redact_pairs(pairs: object) -> None:
+    """Blank the value of every secret-bearing ``{name, value}`` header in place."""
+    for pair in pairs if isinstance(pairs, list) else []:
+        if (
+            isinstance(pair, dict)
+            and str(pair.get("name", "")).lower() in _HAR_SECRET_HEADERS
+            and "value" in pair
+        ):
+            pair["value"] = _REDACTED
+
+
+def redact_har(content: bytes) -> bytes:
+    """
+    Strip credentials from a HAR: auth and cookie headers, and every cookie value.
+
+    The harness redacts its HARs already; this is the server's own pass, since a
+    preview's synthetic-session bearer token would otherwise be stored.
+
+    :param content: The uploaded ``.har`` (JSON).
+    :returns: The redacted HAR, re-serialized.
+    :raises DemoUploadError: 415 when it is not a JSON HAR.
+    """
+    try:
+        har = json.loads(content)
+    except ValueError as exc:
+        raise DemoUploadError(415, "file_not_allowed", "a .har file must be JSON") from exc
+    log = har.get("log") if isinstance(har, dict) else None
+    entries = log.get("entries") if isinstance(log, dict) else None
+    if not isinstance(entries, list):
+        raise DemoUploadError(415, "file_not_allowed", "a .har file needs log.entries")
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        for side in ("request", "response"):
+            message = entry.get(side)
+            if not isinstance(message, dict):
+                continue
+            _redact_pairs(message.get("headers"))
+            cookies = message.get("cookies")
+            for cookie in cookies if isinstance(cookies, list) else []:
+                if isinstance(cookie, dict) and "value" in cookie:
+                    cookie["value"] = _REDACTED
+    return json.dumps(har, ensure_ascii=False).encode("utf-8")
+
+
 def check_upload(
     entries: Sequence[Mapping[str, Any]], parts: Sequence[tuple[str, bytes]]
 ) -> list[DemoFileIn]:
@@ -133,6 +183,8 @@ def check_upload(
                 "demo_too_large",
                 f"{uploaded!r}: {size_class} files are at most {cap // (1024 * 1024)} MB",
             )
+        if filename.lower().endswith(".har"):
+            content = redact_har(content)
         total += len(content)
         if total > DEMO_MAX_TOTAL_BYTES:
             raise DemoUploadError(
@@ -168,16 +220,6 @@ def check_upload(
     return files
 
 
-def check_status(value: object) -> str:
-    """:raises DemoUploadError: 400 when *value* is not a demo status."""
-    if value not in DEMO_STATUSES:
-        raise DemoUploadError(
-            400, "invalid_status", f"status must be one of {list(DEMO_STATUSES)}"
-        )
-    assert isinstance(value, str)
-    return value
-
-
 def link_manifest(
     manifest: Mapping[str, Any] | None, stored: Sequence[Mapping[str, Any]]
 ) -> dict[str, Any] | None:
@@ -193,14 +235,22 @@ def link_manifest(
     """
     if manifest is None:
         return None
-    by_name = {str(f.get("name")): str(f.get("file_id")) for f in stored}
-    # A file outside the manifest's directory is stored under its basename.
+    # (name, kind) and name → file id, first upload wins; a file outside the
+    # manifest's directory is stored under its basename.
+    by_name: dict[tuple[str, str | None], str] = {}
     for f in stored:
-        by_name.setdefault(str(f.get("name")).rsplit("/", 1)[-1], str(f.get("file_id")))
+        name, kind, file_id = str(f.get("name")), f.get("kind"), str(f.get("file_id"))
+        for key in (name, name.rsplit("/", 1)[-1]):
+            by_name.setdefault((key, kind), file_id)
+            by_name.setdefault((key, None), file_id)
 
-    def file_id_of(rel: str) -> str | None:
+    def file_id_of(rel: str, kind: str) -> str | None:
         rel = rel.strip()
-        return by_name.get(rel) or by_name.get(rel.rsplit("/", 1)[-1])
+        base = rel.rsplit("/", 1)[-1]
+        for key in ((rel, kind), (base, kind), (rel, None), (base, None)):
+            if key in by_name:
+                return by_name[key]
+        return None
 
     linked = dict(manifest)
     steps = manifest.get("steps")
@@ -208,7 +258,7 @@ def link_manifest(
         new_steps: list[Any] = []
         for step in steps:
             if isinstance(step, dict) and isinstance(step.get("screenshot"), str):
-                file_id = file_id_of(step["screenshot"])
+                file_id = file_id_of(step["screenshot"], "screenshot")
                 if file_id is not None:
                     step = {**step, "screenshot_file_id": file_id}
             new_steps.append(step)
@@ -218,7 +268,8 @@ def link_manifest(
         linked["artifact_file_ids"] = {
             key: file_id
             for key, rel in artifacts.items()
-            if isinstance(rel, str) and (file_id := file_id_of(rel)) is not None
+            if isinstance(rel, str)
+            and (file_id := file_id_of(rel, DEMO_MANIFEST_KINDS.get(key, "other"))) is not None
         }
     return linked
 
@@ -383,12 +434,12 @@ def render_demo_comment(
 __all__ = [
     "DemoFileIn",
     "DemoUploadError",
-    "check_status",
     "check_upload",
     "clip_meta",
     "demo_file_url",
     "link_manifest",
     "public_base_url",
+    "redact_har",
     "render_demo_comment",
     "review_url",
     "safe_filename",
