@@ -118,6 +118,37 @@ describe("useFactory", () => {
     expect(authenticatedFetch.mock.calls.length).toBe(reconnected);
   });
 
+  it("re-reads at least every minRefreshMs while the socket is live", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    authenticatedFetch.mockImplementation(async () => json(liveRunSnapshot()));
+    const client = newClient();
+    const { result } = renderHook(() => useFactory(FID, { minRefreshMs: 60_000 }), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(authenticatedFetch).toHaveBeenCalledTimes(1);
+    await act(() => vi.advanceTimersByTimeAsync(60_000 + 10));
+    expect(authenticatedFetch).toHaveBeenCalledTimes(2);
+    await act(() => vi.advanceTimersByTimeAsync(60_000));
+    expect(authenticatedFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it("measures the server clock against the browser's when a body arrives", async () => {
+    const snapshot = liveRunSnapshot();
+    snapshot.server_time = Math.floor(Date.now() / 1000) + 300;
+    authenticatedFetch.mockResolvedValueOnce(json(snapshot, 200, { ETag: '"v1"' }));
+    const client = newClient();
+    const { result } = renderHook(() => useFactory(FID), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(result.current.clockOffsetS).toBeGreaterThan(298);
+    expect(result.current.clockOffsetS).toBeLessThanOrEqual(300);
+
+    // A 304 keeps the body, so it keeps the offset measured with it.
+    authenticatedFetch.mockResolvedValueOnce(new Response(null, { status: 304 }));
+    await act(() => client.invalidateQueries({ queryKey: factoryQueryKey(FID) }));
+    expect(result.current.clockOffsetS).toBeGreaterThan(298);
+  });
+
   it("does not read anything without a factory id", () => {
     const { result } = renderHook(() => useFactory(null), { wrapper: wrapperFor(newClient()) });
     expect(result.current.data).toBeUndefined();

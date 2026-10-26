@@ -19,7 +19,7 @@ import { CHAT_COLUMN_WIDTH } from "./chatLayout";
  * purpose — `ready` clears the band and `failed` renders its own
  * error band.
  */
-const SANDBOX_STAGE_LABELS: Record<string, string | undefined> = {
+export const SANDBOX_STAGE_LABELS: Record<string, string | undefined> = {
   provisioning: "Provisioning sandbox",
   cloning: "Cloning repository",
   starting: "Connecting host",

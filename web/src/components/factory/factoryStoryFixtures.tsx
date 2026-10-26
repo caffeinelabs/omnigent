@@ -9,6 +9,7 @@ import { type ReactNode, useEffect, useState } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { FALLBACK_SERVER_INFO } from "@/lib/capabilities";
 import { CapabilitiesProvider } from "@/lib/CapabilitiesContext";
+import type { EventPage } from "@/lib/factoryApi";
 import { getOmnigentHostConfig, setOmnigentHostConfig } from "@/lib/host";
 import type { Session } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -30,7 +31,30 @@ export type StoryResponse =
   | { error: number; message?: string }
   | "pending";
 
-export type StoryRoutes = Record<string, StoryResponse | (() => StoryResponse)>;
+/** A route answers with a fixed response, or computes one from the request path (query included). */
+export type StoryRoutes = Record<string, StoryResponse | ((path: string) => StoryResponse)>;
+
+/**
+ * An events page narrowed the way the server narrows it: `project`, `member`
+ * (from or to) and `kinds` (exact kinds or `prefix.*` patterns) from `path`'s query.
+ */
+export function filterEventPage(page: EventPage, path: string): EventPage {
+  const query = new URL(path, "http://story").searchParams;
+  const project = query.get("project");
+  const member = query.get("member");
+  const kinds = (query.get("kinds") ?? "").split(",").filter(Boolean);
+  const kindMatches = (kind: string) =>
+    kinds.some((k) => (k.endsWith(".*") ? kind.startsWith(k.slice(0, -1)) : kind === k));
+  return {
+    ...page,
+    data: page.data.filter(
+      (e) =>
+        (!project || e.project_slug === project) &&
+        (!member || e.from_id === member || e.to_id === member) &&
+        (kinds.length === 0 || kindMatches(e.kind)),
+    ),
+  };
+}
 
 /** The live run, as `/v1/factory/*` serves it. */
 export function liveRunRoutes(): StoryRoutes {
@@ -38,7 +62,9 @@ export function liveRunRoutes(): StoryRoutes {
     "/v1/factory/factories": { body: factoryList() },
     "/v1/factory/preflight": { body: preflightOk() },
     [`/v1/factory/factories/${LIVE_RUN_FACTORY_ID}`]: { body: liveRunSnapshot() },
-    [`/v1/factory/factories/${LIVE_RUN_FACTORY_ID}/events`]: { body: liveRunEvents() },
+    [`/v1/factory/factories/${LIVE_RUN_FACTORY_ID}/events`]: (path) => ({
+      body: filterEventPage(liveRunEvents(), path),
+    }),
     "/v1/factory/decisions": { body: liveRunOpenDecisions() },
   };
 }
@@ -69,7 +95,7 @@ function storyFetcher(routes: StoryRoutes) {
     const route = routes[path.split("?")[0] ?? path];
     // Anything the factory doesn't own goes out as it would without the kit.
     if (route === undefined) return globalThis.fetch(path, init);
-    return respond(typeof route === "function" ? route() : route);
+    return respond(typeof route === "function" ? route(path) : route);
   };
 }
 

@@ -10,3 +10,14 @@ export function useFactoryNow(): Date {
   const live = useNow();
   return pinned ?? live;
 }
+
+/**
+ * "Now" in epoch seconds on the server's clock: the browser clock shifted by
+ * `offsetS` (server minus browser), so a skewed laptop clock doesn't age the
+ * server's stamps. A pinned clock is used as is.
+ */
+export function useFactoryServerNowS(offsetS: number): number {
+  const pinned = useContext(FactoryNowContext);
+  const now = useFactoryNow();
+  return Math.floor(now.getTime() / 1000 + (pinned ? 0 : offsetS));
+}

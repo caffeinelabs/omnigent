@@ -3,15 +3,22 @@ import { Route, Routes } from "react-router-dom";
 import { FACTORIES_QUERY_KEY, factoryQueryKey } from "@/hooks/useFactory";
 import { FactoryPage } from "@/pages/factory/FactoryPage";
 import { NewFactoryPage } from "@/pages/factory/NewFactoryPage";
-import { LIVE_RUN_FACTORY_ID, liveRunSnapshot } from "./__fixtures__/liveRun";
+import { LIVE_RUN_FACTORY_ID } from "./__fixtures__/liveRun";
+import { storySnapshot } from "./board/__fixtures__/boardFixtures";
 import { FactoryStoryFrame, type FactoryFrameOptions } from "./factoryStoryFixtures";
 
 const SNAPSHOT_PATH = `/v1/factory/factories/${LIVE_RUN_FACTORY_ID}`;
 
-function cockpitStory(frame: FactoryFrameOptions = {}): Story {
+// The snapshot carries inline demo stills: stories have no demo file server.
+function cockpitStory({ routes, ...frame }: FactoryFrameOptions = {}): Story {
   return {
     render: () => (
-      <FactoryStoryFrame mode="viewport" route={`/factory/${LIVE_RUN_FACTORY_ID}`} {...frame}>
+      <FactoryStoryFrame
+        mode="viewport"
+        route={`/factory/${LIVE_RUN_FACTORY_ID}`}
+        routes={{ [SNAPSHOT_PATH]: { body: storySnapshot() }, ...routes }}
+        {...frame}
+      >
         <Routes>
           <Route path="/factory/:factoryId" element={<FactoryPage />} />
         </Routes>
@@ -43,7 +50,7 @@ export const NotFound = cockpitStory({ routes: { [SNAPSHOT_PATH]: { error: 404 }
 export const RefreshError = cockpitStory({
   routes: { [SNAPSHOT_PATH]: { error: 503 } },
   seed: (client) =>
-    client.setQueryData(factoryQueryKey(LIVE_RUN_FACTORY_ID), liveRunSnapshot(), {
+    client.setQueryData(factoryQueryKey(LIVE_RUN_FACTORY_ID), storySnapshot(), {
       updatedAt: new Date(2026, 9, 26, 14, 2).getTime(),
     }),
   afterMount: (client) => {

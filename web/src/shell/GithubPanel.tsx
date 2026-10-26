@@ -50,13 +50,13 @@ import {
 import { FileDiff } from "@pierre/diffs/react";
 import { parsePatchFiles, type FileDiffMetadata } from "@pierre/diffs";
 import { cn } from "@/lib/utils";
-import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { MessageResponse } from "@/components/ai-elements/message";
+import { CheckPill } from "@/components/github/CheckPill";
+import { PullRequestStatus } from "@/components/github/PrStateBadge";
 import {
   Select,
   SelectContent,
@@ -77,7 +77,6 @@ import {
   useSetGithubPreference,
   useUpdateSessionPr,
   type GithubChangedFile,
-  type GithubCheckRun,
   type GithubChecks,
   type GithubComment,
   type GithubInfo,
@@ -249,37 +248,6 @@ function IconButton({
   );
 }
 
-/** Compact PR state shown beside the title in the shared panel header. */
-function PullRequestStatus({ state }: { state: string }) {
-  const normalized = state.toUpperCase();
-  const visual =
-    normalized === "OPEN"
-      ? {
-          label: "Open",
-          className: "border-green-500/25 bg-green-500/10 text-green-700 dark:text-green-400",
-        }
-      : normalized === "MERGED"
-        ? {
-            label: "Merged",
-            className: "border-brand-accent/25 bg-brand-accent/10 text-brand-accent",
-          }
-        : normalized === "CLOSED"
-          ? {
-              label: "Closed",
-              className: "border-red-500/25 bg-red-500/10 text-red-700 dark:text-red-400",
-            }
-          : { label: state, className: "border-border bg-muted text-muted-foreground" };
-
-  return (
-    <Badge
-      aria-label={`Pull request status: ${visual.label}`}
-      className={cn("h-5 rounded-full border px-2 py-px text-xs leading-none", visual.className)}
-    >
-      {visual.label}
-    </Badge>
-  );
-}
-
 // GitHub-style status icons (a file glyph carrying the change kind) instead of
 // bare A/M/D/R letters — quicker to recognize at a glance.
 const STATUS_META: Record<
@@ -425,67 +393,6 @@ function GithubFileSection({
         </div>
       )}
     </div>
-  );
-}
-
-/**
- * A CI-status pill (e.g. "✓ 66 passed"); hovering it reveals the individual job
- * names in that bucket, each with the status icon and a divider between rows.
- * Renders nothing when the bucket is empty. The full list shows — the card is
- * height-capped and scrolls.
- */
-function CheckPill({
-  label,
-  count,
-  runs,
-  icon,
-  className,
-}: {
-  label: string;
-  count: number;
-  /** All checks; filtered to this pill's bucket for the hover list. */
-  runs: GithubCheckRun[];
-  icon: React.ReactNode;
-  /** Tint for the pill + icon. */
-  className: string;
-}) {
-  if (count === 0) return null;
-  const names = runs.filter((r) => r.name);
-  return (
-    <HoverCard openDelay={100} closeDelay={100}>
-      <HoverCardTrigger asChild>
-        <button
-          type="button"
-          className={cn(
-            "inline-flex cursor-pointer items-center gap-0.5 rounded-full border px-1.5 py-px text-xs tabular-nums",
-            className,
-          )}
-        >
-          {icon}
-          {count} {label}
-        </button>
-      </HoverCardTrigger>
-      <HoverCardContent
-        side="bottom"
-        align="start"
-        className="max-h-64 w-auto max-w-xs overflow-y-auto p-1"
-      >
-        {names.length === 0 ? (
-          <p className="px-1.5 py-1 text-muted-foreground">No job details.</p>
-        ) : (
-          <ul className="divide-y divide-border">
-            {names.map((r) => (
-              <li key={r.url ?? r.name} className="flex items-center gap-2 px-1.5 py-1.5">
-                <span className="shrink-0">{icon}</span>
-                <span className="truncate" title={r.name}>
-                  {r.name}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
-      </HoverCardContent>
-    </HoverCard>
   );
 }
 
