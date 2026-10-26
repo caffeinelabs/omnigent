@@ -60,8 +60,9 @@ function DecisionCard({
       className={cn(
         "flex flex-col gap-1.5 rounded-lg border bg-card p-3 text-sm",
         decision.blocking ? "border-warning/40" : "border-border",
+        // An outline, not a ring: dark mode's glass card rule owns box-shadow.
         highlighted &&
-          "animate-[user-msg-flash_800ms_ease-out] ring-2 ring-ring/60 motion-reduce:animate-none",
+          "animate-[user-msg-flash_800ms_ease-out] outline-2 outline-ring outline-solid motion-reduce:animate-none",
       )}
     >
       <p

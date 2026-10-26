@@ -1,4 +1,4 @@
-import { screen } from "@testing-library/react";
+import { fireEvent, screen } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import { LIVE_RUN_NOW_S } from "../__fixtures__/liveRun";
 import {
@@ -46,6 +46,24 @@ describe("PreviewPill", () => {
   it("offers no link for a parked preview", () => {
     renderPill("parked");
     expect(screen.queryByTestId("preview-open-9630")).toBeNull();
+  });
+
+  it("shows the whole namespace and hosts in its details, wrapping only after dots and dashes", async () => {
+    const { pr, pill } = renderPill("behind-head");
+    fireEvent.focus(pill.closest("button") as HTMLElement);
+    const namespace = await screen.findByText("Namespace");
+    const value = namespace.nextElementSibling as HTMLElement;
+    const preview = pr.preview!;
+    expect(value).toHaveTextContent(preview.namespace as string);
+    const host = (preview.urls.app as string).replace(/^https:\/\//, "");
+    const link = screen.getByTitle(preview.urls.app as string);
+    expect(link).toHaveTextContent(host);
+    for (const el of [value, link]) {
+      for (const wbr of el.querySelectorAll("wbr")) {
+        expect(wbr.previousSibling?.textContent).toMatch(/[.-]$/);
+      }
+      expect(el.querySelectorAll("wbr").length).toBeGreaterThan(1);
+    }
   });
 
   describe("head match", () => {

@@ -9,6 +9,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import { cn } from "@/lib/utils";
 import { type FactoryTone, TONE_DOT, shortSha } from "../factoryFormat";
 import { ageText } from "./boardModel";
+import { BreakableText } from "./BreakableText";
 
 /** Tone and word of a dev env from the report and the probe. */
 export function devEnvStatus(env: EnvView): { tone: FactoryTone; word: string } {
@@ -41,9 +42,9 @@ function Url({ label, url }: { label: string; url: string | null }) {
         target="_blank"
         rel="noreferrer"
         title={url}
-        className="min-w-0 truncate font-mono underline-offset-2 hover:underline"
+        className="min-w-0 font-mono break-words underline-offset-2 hover:underline"
       >
-        {url.replace(/^https:\/\//, "")}
+        <BreakableText text={url.replace(/^https:\/\//, "")} />
       </a>
     </li>
   );

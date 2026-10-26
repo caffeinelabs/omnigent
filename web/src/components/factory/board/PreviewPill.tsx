@@ -11,6 +11,7 @@ import { prPreviewUrl } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
 import { type FactoryTone, TONE_DOT, TONE_TEXT, formatElapsed, shortSha } from "../factoryFormat";
 import { ageText, prHasNoEnv, previewHeadTruth } from "./boardModel";
+import { BreakableText } from "./BreakableText";
 
 export type PreviewPillState = PreviewView["state"] | "none" | "no-env";
 
@@ -83,10 +84,10 @@ function UrlRow({ label, url }: { label: string; url: string | null }) {
         href={url}
         target="_blank"
         rel="noreferrer"
-        className="min-w-0 font-mono break-all text-foreground underline-offset-2 hover:underline"
+        className="min-w-0 font-mono break-words text-foreground underline-offset-2 hover:underline"
         title={url}
       >
-        {url.replace(/^https:\/\//, "")}
+        <BreakableText text={url.replace(/^https:\/\//, "")} />
       </a>
     </li>
   );
@@ -123,7 +124,9 @@ function PreviewDetails({ pr, preview, nowS }: { pr: PrView; preview: PreviewVie
         {preview.namespace && (
           <>
             <dt className="text-muted-foreground">Namespace</dt>
-            <dd className="font-mono break-all">{preview.namespace}</dd>
+            <dd className="font-mono break-words">
+              <BreakableText text={preview.namespace} />
+            </dd>
           </>
         )}
         {preview.resources.length > 0 && (

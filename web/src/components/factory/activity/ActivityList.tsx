@@ -168,7 +168,8 @@ function EventRow({
         type="button"
         onClick={onToggle}
         aria-expanded={expanded}
-        className="flex w-full min-w-0 cursor-pointer flex-wrap items-center gap-x-2 gap-y-0.5 rounded-sm py-1.5 text-left text-sm hover:bg-muted/40 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset"
+        // Bleeds into the list's padding so the inset focus ring clears the row's content.
+        className="-mx-1.5 flex w-[calc(100%+0.75rem)] min-w-0 cursor-pointer flex-wrap items-center gap-x-2 gap-y-0.5 rounded-sm px-1.5 py-1.5 text-left text-sm hover:bg-muted/40 focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none focus-visible:ring-inset"
       >
         <ChevronRightIcon
           aria-hidden
