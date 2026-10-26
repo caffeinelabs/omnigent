@@ -4,6 +4,8 @@
 // any member may carry a one-line beacon (`summary` + `health`). Mirrors the
 // label keys in `omnigent/factory.py`.
 
+export const FACTORY_ID_LABEL_KEY = "omnigent.factory.id";
+export const FACTORY_NAME_LABEL_KEY = "omnigent.factory.name";
 export const FACTORY_ROLE_LABEL_KEY = "omnigent.factory.role";
 export const FACTORY_PARENT_LABEL_KEY = "omnigent.factory.parent";
 export const FACTORY_PROJECT_LABEL_KEY = "omnigent.factory.project";
@@ -104,4 +106,24 @@ export function factoryBeaconText(
   const health = info.health && info.health !== "ok" ? info.health : null;
   if (health && summary) return `${health} · ${summary}`;
   return summary ?? info.health ?? "";
+}
+
+/**
+ * Title for a factory member's own row in the Agents panel (e.g. `"Atlas"`),
+ * where other sessions show their harness name.
+ *
+ * @returns The trimmed title when the session carries a factory role, else `null`.
+ */
+export function factoryMemberTitle(
+  labels: Record<string, string> | undefined,
+  title: string | null | undefined,
+): string | null {
+  const shown = title?.trim();
+  return labels?.[FACTORY_ROLE_LABEL_KEY]?.trim() && shown ? shown : null;
+}
+
+/** Whether `pathname` is a factory cockpit route (`/factory`, `/factory/new`, `/factory/<id>`). */
+export function isFactoryPath(pathname: string): boolean {
+  const segments = pathname.split("/").filter(Boolean);
+  return segments.at(-1) === "factory" || segments.at(-2) === "factory";
 }

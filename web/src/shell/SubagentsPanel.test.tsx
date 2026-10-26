@@ -1740,6 +1740,62 @@ describe("SubagentsPanel factory members", () => {
     expect(badge.dataset.warning).toBe("true");
   });
 
+  it("titles a factory root's main row by its session title, not its harness", () => {
+    useSessionMock.mockReturnValue({
+      session: {
+        id: "conv_root",
+        agentName: "claude-native-ui",
+        status: "idle",
+        title: "Atlas",
+        items: [],
+        pendingElicitations: [],
+        labels: {
+          "omnigent.wrapper": "claude-code-native-ui",
+          "omnigent.factory.id": "conv_root",
+          "omnigent.factory.role": "lead",
+        },
+      },
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof useSession>);
+    mockChildTree({ conv_root: [] });
+
+    const { getByTestId } = renderPanel({ rootSessionId: "conv_root" });
+
+    const main = getByTestId("subagent-main-row");
+    expect(main).toHaveTextContent("Atlas");
+    expect(main).not.toHaveTextContent("Claude Code");
+    // The title doesn't say the role, so the chip does.
+    expect(within(main).getByTestId("subagent-factory-role").textContent).toBe("Lead");
+  });
+
+  it("keeps the harness name on a factory root that has no title yet", () => {
+    useSessionMock.mockReturnValue({
+      session: {
+        id: "conv_root",
+        agentName: "claude-native-ui",
+        status: "idle",
+        title: "  ",
+        items: [],
+        pendingElicitations: [],
+        labels: {
+          "omnigent.wrapper": "claude-code-native-ui",
+          "omnigent.factory.role": "project_lead",
+          "omnigent.factory.project": "api-version",
+        },
+      },
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof useSession>);
+    mockChildTree({ conv_root: [] });
+
+    const { getByTestId } = renderPanel({ rootSessionId: "conv_root" });
+
+    const main = getByTestId("subagent-main-row");
+    expect(main).toHaveTextContent("Claude Code");
+    expect(within(main).getByTestId("subagent-factory-role").textContent).toBe("PL · api-version");
+  });
+
   it("nests a factory member's own sub-agents under it", () => {
     mockChildTree({
       conv_root: [factoryRow("conv_pl", PL_LABELS)],

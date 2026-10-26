@@ -2,9 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   factoryBeaconText,
   factoryInfo,
+  factoryMemberTitle,
   factoryRoleChipText,
   hasFactoryBeacon,
   isFactoryMember,
+  isFactoryPath,
   isFactoryWarningHealth,
 } from "./factory";
 
@@ -62,5 +64,33 @@ describe("factory labels", () => {
     expect(info && factoryBeaconText(info, 3)).toBe("blocked · abc…");
     const ok = factoryInfo({ "omnigent.factory.summary": "fine", "omnigent.factory.health": "ok" });
     expect(ok && factoryBeaconText(ok)).toBe("fine");
+  });
+});
+
+describe("factory roots and routes", () => {
+  it("titles a member with a role by its own title, everything else not at all", () => {
+    const lead = { "omnigent.factory.role": "lead" };
+    expect(factoryMemberTitle(lead, " Atlas ")).toBe("Atlas");
+    expect(factoryMemberTitle(lead, "")).toBeNull();
+    expect(factoryMemberTitle(lead, null)).toBeNull();
+    expect(factoryMemberTitle({ "omnigent.factory.summary": "x" }, "Atlas")).toBeNull();
+    expect(factoryMemberTitle(undefined, "Atlas")).toBeNull();
+  });
+
+  it("names the demo role", () => {
+    expect(factoryRoleChipText(factoryInfo({ "omnigent.factory.role": "demo" }))).toBe("Demo");
+  });
+
+  it.each([
+    ["/factory", true],
+    ["/factory/new", true],
+    ["/factory/f4f4ba9c", true],
+    ["/ml/omnigent-embed/factory/f4f4ba9c", true],
+    ["/factory/f4f4ba9c/", true],
+    ["/c/conv_factory", false],
+    ["/inbox", false],
+    ["/", false],
+  ])("recognises %s as a factory route: %s", (path, expected) => {
+    expect(isFactoryPath(path)).toBe(expected);
   });
 });

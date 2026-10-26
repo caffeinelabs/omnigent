@@ -12,6 +12,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { Conversation } from "@/hooks/useConversations";
+import type * as UseFactoryModule from "@/hooks/useFactory";
 import {
   markConversationSeen,
   resetReadStateForTests,
@@ -67,6 +68,15 @@ const {
   // prove a folder fetches its members independently of the global window.
   projectSessionsMock: { current: {} as Record<string, unknown[]> },
   useHostsMock: vi.fn(),
+}));
+
+// The Factory entry's trailing dot and badge roll up the factory list.
+const { factoriesRef } = vi.hoisted(() => ({
+  factoriesRef: { current: undefined as { data: unknown[] } | undefined },
+}));
+vi.mock("@/hooks/useFactory", async (importOriginal) => ({
+  ...(await importOriginal<typeof UseFactoryModule>()),
+  useFactories: () => ({ data: factoriesRef.current }),
 }));
 
 vi.mock("@/hooks/useHosts", () => ({
@@ -959,6 +969,55 @@ describe("Sidebar session list", () => {
     expect(canvas).toHaveAttribute("aria-current", "page");
     expect(canvas).toHaveClass("bg-[var(--sidebar-active)]");
     expect(screen.getByTestId("new-chat-button")).not.toHaveClass("bg-[var(--sidebar-active)]");
+  });
+
+  it("hides Factory navigation while the release feature is off", () => {
+    mockConversations(THREE_TYPE_CONVERSATIONS);
+    renderSidebar(true, "/factory");
+
+    expect(screen.queryByTestId("factory-nav")).toBeNull();
+  });
+
+  it("renders Factory between Inbox and Canvas and highlights it on a cockpit route", () => {
+    mockConversations(THREE_TYPE_CONVERSATIONS);
+    factoriesRef.current = undefined;
+    renderSidebar(true, "/factory/f4f4ba9c", undefined, {
+      ...FALLBACK_SERVER_INFO,
+      features: { factory: true, canvas: true },
+    });
+
+    const factory = screen.getByTestId("factory-nav");
+    expect(factory).toHaveAttribute("href", "/factory");
+    expect(factory).toHaveTextContent("Factory");
+    expect(factory).toHaveAttribute("aria-current", "page");
+    expect(screen.getByTestId("new-chat-button")).not.toHaveClass("bg-[var(--sidebar-active)]");
+    const inbox = screen.getByTestId("inbox-button");
+    const canvas = screen.getByTestId("canvas-nav");
+    expect(inbox.compareDocumentPosition(factory) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(factory.compareDocumentPosition(canvas) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // No factory data yet: neither the running dot nor the badge.
+    expect(within(factory).queryByTestId("factory-nav-badge")).toBeNull();
+    expect(within(factory).queryByTestId("running-dot")).toBeNull();
+  });
+
+  it("badges Factory with open decisions plus PRs ready for review across factories", () => {
+    mockConversations(THREE_TYPE_CONVERSATIONS);
+    factoriesRef.current = {
+      data: [
+        { id: "f1", decisions_open: 2, prs_ready: 1, members_running: 3 },
+        { id: "f2", decisions_open: 0, prs_ready: 1, members_running: 0 },
+      ],
+    };
+    renderSidebar(true, "/", undefined, { ...FALLBACK_SERVER_INFO, features: { factory: true } });
+
+    const factory = screen.getByTestId("factory-nav");
+    expect(factory).not.toHaveAttribute("aria-current");
+    const badge = within(factory).getByTestId("factory-nav-badge");
+    expect(badge).toHaveTextContent("4");
+    expect(badge).toHaveAccessibleName("4 factory items need you");
+    expect(badge).toHaveClass("bg-warning/15", "text-warning");
+    expect(within(factory).getByTestId("running-dot")).toBeInTheDocument();
+    factoriesRef.current = undefined;
   });
 
   it("keeps filtering visible while session selection remains hover-revealed", () => {

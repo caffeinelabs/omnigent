@@ -13,6 +13,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from enum import StrEnum
 
+from omnigent.factory import factory_enabled
+
 FEATURES_ENV_VAR = "OMNIGENT_FEATURES"
 _REMOVED_HARNESS_INSTALL_ENV_VAR = "OMNIGENT_HARNESS_INSTALL_ENABLED"
 
@@ -23,6 +25,7 @@ class Feature(StrEnum):
     USAGE_PAGE = "usage_page"
     HARNESS_INSTALL = "harness_install"
     CANVAS = "canvas"
+    FACTORY = "factory"
 
 
 @dataclass(frozen=True)
@@ -55,6 +58,12 @@ FEATURE_DEFINITIONS: tuple[FeatureDefinition, ...] = (
         owner="web",
         review_by_release="0.15.0",
     ),
+    FeatureDefinition(
+        feature=Feature.FACTORY,
+        description="Web Factory cockpit: board, previews, demos and decisions",
+        owner="factory",
+        review_by_release="0.16.0",
+    ),
 )
 
 
@@ -69,9 +78,15 @@ class FeatureFlags:
         return feature in self.enabled_features
 
     def frontend_dict(self) -> dict[str, bool]:
-        """Return every frontend-visible feature and its resolved value."""
+        """
+        Return every frontend-visible feature and its resolved value.
+
+        The factory cockpit is also on wherever the factory itself is enabled
+        (``OMNIGENT_FACTORY_ENABLED=1``), so one switch turns on both.
+        """
         return {
             definition.feature.value: self.enabled(definition.feature)
+            or (definition.feature is Feature.FACTORY and factory_enabled())
             for definition in FEATURE_DEFINITIONS
             if definition.frontend_visible
         }

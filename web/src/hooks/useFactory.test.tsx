@@ -1,0 +1,183 @@
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
+import { act, renderHook, waitFor } from "@testing-library/react";
+import type { ReactNode } from "react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { liveRunSnapshot } from "@/components/factory/__fixtures__/liveRun";
+import {
+  FACTORY_FALLBACK_POLL_MS,
+  factoryQueryKey,
+  useFactories,
+  useFactory,
+  useFactoryDecisionCount,
+  useFactoryEvents,
+} from "./useFactory";
+import { useSessionUpdatesConnected } from "./useSessionUpdatesConnected";
+
+const authenticatedFetch = vi.fn();
+vi.mock("@/lib/identity", () => ({
+  authenticatedFetch: (...args: unknown[]) => authenticatedFetch(...args),
+}));
+vi.mock("./useSessionUpdatesConnected", () => ({ useSessionUpdatesConnected: vi.fn() }));
+
+function json(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { "Content-Type": "application/json", ...headers },
+  });
+}
+
+function wrapperFor(client: QueryClient) {
+  return function Wrapper({ children }: { children: ReactNode }) {
+    return <QueryClientProvider client={client}>{children}</QueryClientProvider>;
+  };
+}
+
+function newClient(): QueryClient {
+  return new QueryClient({ defaultOptions: { queries: { retry: false } } });
+}
+
+const FID = "f4f4ba9c77725331b12f0fa7072dc4d3";
+
+beforeEach(() => {
+  authenticatedFetch.mockReset();
+  vi.mocked(useSessionUpdatesConnected).mockReturnValue(true);
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe("useFactory", () => {
+  it("keeps the last snapshot on screen when a refresh fails, and says so", async () => {
+    const snapshot = liveRunSnapshot();
+    authenticatedFetch.mockResolvedValueOnce(json(snapshot, 200, { ETag: '"v1"' }));
+    const client = newClient();
+    const { result } = renderHook(() => useFactory(FID), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    const firstUpdate = result.current.updatedAt;
+    expect(result.current.isStale).toBe(false);
+    expect(firstUpdate).toBeGreaterThan(0);
+
+    authenticatedFetch.mockResolvedValueOnce(json({ error: { message: "down" } }, 503));
+    await act(() => client.invalidateQueries({ queryKey: factoryQueryKey(FID) }));
+
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    expect(result.current.data?.factory.name).toBe("Atlas factory");
+    expect(result.current.isStale).toBe(true);
+    expect(result.current.updatedAt).toBe(firstUpdate);
+  });
+
+  it("revalidates with the ETag and keeps the same object on a 304", async () => {
+    authenticatedFetch.mockResolvedValueOnce(json(liveRunSnapshot(), 200, { ETag: '"v1"' }));
+    const client = newClient();
+    const { result } = renderHook(() => useFactory(FID), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    const first = result.current.data;
+
+    authenticatedFetch.mockResolvedValueOnce(new Response(null, { status: 304 }));
+    await act(() => client.invalidateQueries({ queryKey: factoryQueryKey(FID) }));
+
+    await waitFor(() => expect(authenticatedFetch).toHaveBeenCalledTimes(2));
+    expect(authenticatedFetch.mock.calls[1]![1]).toMatchObject({
+      headers: { "If-None-Match": '"v1"' },
+    });
+    await waitFor(() => expect(result.current.isLoading).toBe(false));
+    expect(result.current.data).toBe(first);
+    expect(result.current.error).toBeNull();
+  });
+
+  it("polls every 15 s only while the session-updates socket is down", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    authenticatedFetch.mockImplementation(async () => json(liveRunSnapshot()));
+    vi.mocked(useSessionUpdatesConnected).mockReturnValue(true);
+    const client = newClient();
+    const { result, rerender } = renderHook(() => useFactory(FID), {
+      wrapper: wrapperFor(client),
+    });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(authenticatedFetch).toHaveBeenCalledTimes(1);
+
+    // Live socket: frames drive freshness, so no timer refetch.
+    await act(() => vi.advanceTimersByTimeAsync(FACTORY_FALLBACK_POLL_MS * 2));
+    expect(authenticatedFetch).toHaveBeenCalledTimes(1);
+
+    vi.mocked(useSessionUpdatesConnected).mockReturnValue(false);
+    rerender();
+    await act(() => vi.advanceTimersByTimeAsync(FACTORY_FALLBACK_POLL_MS + 10));
+    expect(authenticatedFetch.mock.calls.length).toBeGreaterThanOrEqual(2);
+    const afterOnePoll = authenticatedFetch.mock.calls.length;
+    await act(() => vi.advanceTimersByTimeAsync(FACTORY_FALLBACK_POLL_MS));
+    expect(authenticatedFetch.mock.calls.length).toBe(afterOnePoll + 1);
+
+    vi.mocked(useSessionUpdatesConnected).mockReturnValue(true);
+    rerender();
+    const reconnected = authenticatedFetch.mock.calls.length;
+    await act(() => vi.advanceTimersByTimeAsync(FACTORY_FALLBACK_POLL_MS * 2));
+    expect(authenticatedFetch.mock.calls.length).toBe(reconnected);
+  });
+
+  it("does not read anything without a factory id", () => {
+    const { result } = renderHook(() => useFactory(null), { wrapper: wrapperFor(newClient()) });
+    expect(result.current.data).toBeUndefined();
+    expect(result.current.isLoading).toBe(false);
+    expect(authenticatedFetch).not.toHaveBeenCalled();
+  });
+
+  it("does not retry a 404", async () => {
+    authenticatedFetch.mockResolvedValue(json({ error: { message: "nope" } }, 404));
+    const client = new QueryClient();
+    const { result } = renderHook(() => useFactory(FID), { wrapper: wrapperFor(client) });
+    await waitFor(() => expect(result.current.error).not.toBeNull());
+    expect(authenticatedFetch).toHaveBeenCalledTimes(1);
+    expect(result.current.isStale).toBe(false);
+  });
+});
+
+describe("factory list, events and decisions", () => {
+  it("lists factories", async () => {
+    authenticatedFetch.mockResolvedValue(json({ data: [{ id: "f1" }] }));
+    const { result } = renderHook(() => useFactories(), { wrapper: wrapperFor(newClient()) });
+    await waitFor(() => expect(result.current.data?.data).toHaveLength(1));
+    expect(authenticatedFetch).toHaveBeenCalledWith("/v1/factory/factories");
+  });
+
+  it("stays idle when disabled (feature off)", () => {
+    renderHook(() => useFactories({ enabled: false }), { wrapper: wrapperFor(newClient()) });
+    expect(authenticatedFetch).not.toHaveBeenCalled();
+  });
+
+  it("pages events by the oldest event time", async () => {
+    authenticatedFetch
+      .mockResolvedValueOnce(
+        json({
+          data: [
+            { id: "e2", ts: 2000 },
+            { id: "e1", ts: 1000 },
+          ],
+          has_more: true,
+        }),
+      )
+      .mockResolvedValueOnce(json({ data: [{ id: "e0", ts: 500 }], has_more: false }));
+    const { result } = renderHook(() => useFactoryEvents(FID, { project: "api-version" }), {
+      wrapper: wrapperFor(newClient()),
+    });
+    await waitFor(() => expect(result.current.hasNextPage).toBe(true));
+    await act(() => result.current.fetchNextPage());
+    await waitFor(() => expect(result.current.data?.pages).toHaveLength(2));
+    expect(result.current.hasNextPage).toBe(false);
+    const second = new URL(String(authenticatedFetch.mock.calls[1]![0]), "http://x");
+    expect(second.searchParams.get("before")).toBe("1000");
+    expect(second.searchParams.get("project")).toBe("api-version");
+  });
+
+  it("counts open decisions", async () => {
+    authenticatedFetch.mockResolvedValue(json({ data: [], count: 3 }));
+    const { result } = renderHook(() => useFactoryDecisionCount(), {
+      wrapper: wrapperFor(newClient()),
+    });
+    await waitFor(() => expect(result.current).toBe(3));
+    expect(authenticatedFetch).toHaveBeenCalledWith(
+      "/v1/factory/decisions?status=open&count_only=1",
+    );
+  });
+});

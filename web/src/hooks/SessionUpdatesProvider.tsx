@@ -20,6 +20,7 @@ import { type QueryClient, useQueryClient } from "@tanstack/react-query";
 import { getCurrentUserId } from "@/lib/identity";
 import { useActiveConversationId } from "@/hooks/useActiveConversationId";
 import { childSessionsQueryKey, type ChildSessionInfo } from "@/hooks/useChildSessions";
+import { factoryInvalidationKeys } from "@/hooks/useFactory";
 import { FACTORY_PARENT_LABEL_KEY } from "@/lib/factory";
 import {
   isSessionArchiving,
@@ -330,6 +331,13 @@ export function SessionUpdatesProvider({ children }: { children: ReactNode }) {
           // refresh the project-row caches here to converge without a reload.
           void queryClient.invalidateQueries({ queryKey: ["projects"] });
           void queryClient.invalidateQueries({ queryKey: ["project-config"] });
+          return;
+        case "factory_changed":
+          // A factory's board, activity or decisions moved; the snapshot
+          // refetch is ETag-conditional, so a no-op change costs a 304.
+          for (const queryKey of factoryInvalidationKeys(frame.factory_id)) {
+            void queryClient.invalidateQueries({ queryKey });
+          }
           return;
         case "removed":
           for (const id of frame.ids) commentsFingerprintsRef.current.delete(id);

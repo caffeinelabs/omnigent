@@ -51,7 +51,7 @@ import { RunningDot } from "@/components/RunningDot";
 import { shortModelName } from "@/components/CostRoutingControl";
 import { MAX_TREE_DEPTH, useChildSessions, type ChildSessionInfo } from "@/hooks/useChildSessions";
 import { useSession } from "@/hooks/useSession";
-import { factoryInfo, hasFactoryBeacon, isFactoryMember } from "@/lib/factory";
+import { factoryInfo, factoryMemberTitle, hasFactoryBeacon, isFactoryMember } from "@/lib/factory";
 import type { SessionItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
@@ -536,7 +536,12 @@ function MainRow({ rootSessionId, isActive }: { rootSessionId: string; isActive:
   // of the spec's YAML name (e.g. "claude-native-ui"); other agents show
   // their agent name, with "main" only while the session loads or when it
   // carries no name.
-  const label = nativeAgent?.displayName ?? session?.agentName ?? "main";
+  // A factory root reads as its title ("Atlas"), not its harness ("Claude Code").
+  const label =
+    factoryMemberTitle(session?.labels, session?.title) ??
+    nativeAgent?.displayName ??
+    session?.agentName ??
+    "main";
   const preview = mainMessagePreview(session?.items);
   // A factory lead's own role and beacon, like its members' rows below.
   const factory = factoryInfo(session?.labels);

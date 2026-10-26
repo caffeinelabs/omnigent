@@ -6,6 +6,7 @@ import dataclasses
 
 import pytest
 
+from omnigent.factory import FACTORY_ENABLED_ENV
 from omnigent.server.feature_flags import (
     FEATURE_DEFINITIONS,
     FEATURES_ENV_VAR,
@@ -13,6 +14,11 @@ from omnigent.server.feature_flags import (
     FeatureFlags,
     resolve_feature_flags,
 )
+
+
+@pytest.fixture(autouse=True)
+def _factory_off(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv(FACTORY_ENABLED_ENV, raising=False)
 
 
 def test_features_default_off() -> None:
@@ -23,6 +29,7 @@ def test_features_default_off() -> None:
         "usage_page": False,
         "harness_install": False,
         "canvas": False,
+        "factory": False,
     }
 
 
@@ -55,6 +62,32 @@ def test_canvas_is_a_frontend_visible_feature() -> None:
     assert flags.enabled(Feature.CANVAS)
     assert flags.frontend_dict()["canvas"] is True
     assert flags.enabled_names() == ("canvas",)
+
+
+def test_factory_is_enabled_by_the_features_list() -> None:
+    flags = resolve_feature_flags({FEATURES_ENV_VAR: "factory"})
+
+    assert flags.enabled(Feature.FACTORY)
+    assert flags.frontend_dict()["factory"] is True
+
+
+def test_factory_follows_the_factory_switch(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv(FACTORY_ENABLED_ENV, "1")
+    flags = resolve_feature_flags({})
+
+    # The cockpit shows wherever the factory runs, without listing it twice.
+    assert flags.frontend_dict()["factory"] is True
+    assert flags.frontend_dict()["canvas"] is False
+    assert not flags.enabled(Feature.FACTORY)
+
+
+@pytest.mark.parametrize("value", ["", "0", "true", "yes"])
+def test_factory_switch_other_values_keep_the_cockpit_off(
+    monkeypatch: pytest.MonkeyPatch, value: str
+) -> None:
+    monkeypatch.setenv(FACTORY_ENABLED_ENV, value)
+
+    assert resolve_feature_flags({}).frontend_dict()["factory"] is False
 
 
 def test_unknown_feature_fails_with_known_names() -> None:
