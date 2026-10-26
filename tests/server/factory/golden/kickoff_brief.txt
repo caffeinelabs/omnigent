@@ -1,0 +1,16 @@
+FACTORY BRIEF · Atlas factory
+Started by Luka from the cockpit. Cadence: demo (heartbeats: leads 300 s, PLs 600 s).
+Cockpit: /factory/ffffffffffffffffffffffffffffffff
+
+Projects (2). Their charters are stored on the server and attach automatically when you spawn each PL:
+1. api-version · API version endpoint · P1 · caffeinelabs/app#main · env + previews (3)
+   Goal: GET /version on caffeine-api returns the deployed commit.
+2. docs-factory-envs · Factory envs docs · P2 · caffeinelabs/app#main · no env
+   Goal: Add docs/factory-envs.md.
+
+First turn:
+1. sys_factory_set(heartbeat_s=300). If the roster has no other lead, spawn Sentinel (playbook charter, heartbeat_s=300).
+2. Spawn one PL per project, in the order above, never a duplicate: sys_factory_spawn(agent="factory-pl", role="project_lead", project="<slug>", title="PL · <slug>", workspaces=["https://github.com/<repo>#<branch>"], heartbeat_s=600, message="Start. Your charter follows.").
+3. Reply with at most 5 lines and the cockpit link. Questions for the human go through sys_factory_ask, not chat.
+
+Guardrails: humans merge; the factory never merges and never runs `gh pr merge` or the merge gate. PLs report READY FOR HUMAN MERGE <url>.

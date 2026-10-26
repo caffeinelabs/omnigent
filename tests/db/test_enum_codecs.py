@@ -41,6 +41,28 @@ _CODECS = [
         ec.encode_scheduled_task_run_status,
         ec.decode_scheduled_task_run_status,
     ),
+    (
+        ec.FACTORY_PROJECT_STAGE,
+        ec.encode_factory_project_stage,
+        ec.decode_factory_project_stage,
+    ),
+    (ec.FACTORY_PR_STATE, ec.encode_factory_pr_state, ec.decode_factory_pr_state),
+    (
+        ec.FACTORY_DECISION_SOURCE,
+        ec.encode_factory_decision_source,
+        ec.decode_factory_decision_source,
+    ),
+    (
+        ec.FACTORY_DECISION_STATUS,
+        ec.encode_factory_decision_status,
+        ec.decode_factory_decision_status,
+    ),
+    (
+        ec.FACTORY_EVENT_SEVERITY,
+        ec.encode_factory_event_severity,
+        ec.decode_factory_event_severity,
+    ),
+    (ec.FACTORY_DEMO_STATUS, ec.encode_factory_demo_status, ec.decode_factory_demo_status),
 ]
 
 
@@ -128,3 +150,24 @@ def test_shipped_codes_are_stable() -> None:
         "failed": 4,
         "skipped": 5,
     }
+    assert ec.FACTORY_PROJECT_STAGE == {
+        "queued": 1,
+        "planning": 2,
+        "building": 3,
+        "review": 4,
+        "verify": 5,
+        "ready": 6,
+        "merged": 7,
+        "done": 8,
+    }
+    assert ec.FACTORY_PR_STATE == {"open": 1, "merged": 2, "closed": 3}
+    assert ec.FACTORY_DECISION_SOURCE == {
+        "agent": 1,
+        "relaunch_failed": 2,
+        "blocked_approval": 3,
+        "pr_closed": 4,
+        "storm": 5,
+    }
+    assert ec.FACTORY_DECISION_STATUS == {"open": 1, "answered": 2, "withdrawn": 3, "expired": 4}
+    assert ec.FACTORY_EVENT_SEVERITY == {"info": 0, "notice": 1, "warning": 2, "critical": 3}
+    assert ec.FACTORY_DEMO_STATUS == {"PASS": 1, "PARTIAL": 2, "FAIL": 3, "ERROR": 4}

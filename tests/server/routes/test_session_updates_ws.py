@@ -886,3 +886,32 @@ def test_projects_changed_event_forwards_to_client(
         sessions_routes.user_session_stream.publish(ALICE, {"type": "projects_changed"})
         frame = _recv_until(ws, {"projects_changed"})
         assert frame["type"] == "projects_changed"
+
+
+def test_factory_changed_event_forwards_to_client(app: FastAPI, stores, fast_rescan: None) -> None:
+    """A ``factory_changed`` discovery event reaches the client as its own frame.
+
+    The cockpit refetches its snapshot on this frame; the stream forwards only
+    the frame's type, factory id and scopes.
+    """
+    s1 = _seed_session(stores, owner=ALICE, title="watched")
+    with TestClient(app).websocket_connect(
+        "/v1/sessions/updates", headers={"X-Forwarded-Email": ALICE}
+    ) as ws:
+        ws.send_text(json.dumps({"type": "watch", "session_ids": [s1]}))
+        _recv_until(ws, {"snapshot"})
+        sessions_routes.user_session_stream.publish(
+            ALICE,
+            {
+                "type": "factory_changed",
+                "factory_id": "f" * 32,
+                "scopes": ["snapshot", "decisions"],
+                "internal": "not forwarded",
+            },
+        )
+        frame = _recv_until(ws, {"factory_changed"})
+        assert frame == {
+            "type": "factory_changed",
+            "factory_id": "f" * 32,
+            "scopes": ["snapshot", "decisions"],
+        }

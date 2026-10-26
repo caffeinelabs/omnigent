@@ -1,0 +1,1281 @@
+{
+  "factory": {
+    "id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+    "name": "Atlas factory",
+    "state": "active",
+    "cadence": "demo",
+    "started_at": 1793006280,
+    "root_session_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+    "folder_project_id": "8456d2c0b3f15f919dc828bdc2a27efd",
+    "elapsed_s": 11520,
+    "cost_usd": 20.58,
+    "next_beats": [
+      {
+        "session_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+        "title": "Atlas",
+        "at": 1793017860
+      },
+      {
+        "session_id": "b408c5f09ff659e6b907fd9f688829e9",
+        "title": "PL · api-version",
+        "at": 1793018040
+      },
+      {
+        "session_id": "a2fc64b9e92e54c8b2f0f78038df202d",
+        "title": "PL · db-version",
+        "at": 1793018340
+      }
+    ],
+    "url": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3"
+  },
+  "health": {
+    "supervisor": {
+      "last_tick_at": 1793017788,
+      "ok": true
+    },
+    "mail": {
+      "queued": 0,
+      "oldest_queued_s": null
+    },
+    "github": {
+      "state": "ok",
+      "last_poll_at": 1793017792,
+      "error": null,
+      "rate_limit_remaining": 4821
+    },
+    "probes": {
+      "state": "ok",
+      "last_run_at": 1793017779
+    },
+    "drifted_members": 1,
+    "demo_storage_bytes": 7533983
+  },
+  "projects": [
+    {
+      "slug": "api-version",
+      "title": "API version endpoint",
+      "repo": "caffeinelabs/app",
+      "base_branch": "main",
+      "priority": 1,
+      "charter": {
+        "goal": "Expose the deployed commit: GET /version on caffeine-api and an \"API version\" row in Settings.",
+        "dod": [
+          "curl -fsS {api}/version → 200 with gitSha = the deployed sha",
+          "pnpm -F caffeine-api test"
+        ],
+        "scope_paths": [
+          "services/caffeine-api/**",
+          "services/caffeine-ux/src/settings/**",
+          "services/caffeine-ux/src/api/**"
+        ],
+        "constraints": null,
+        "env_needed": true,
+        "preview": {
+          "enabled": true,
+          "slots": 2,
+          "tooling_ref": "factory/preview-tooling"
+        },
+        "preview_slots": 2,
+        "demo_focus": "Open Settings → About and show the API version row with the short sha; call GET /version.",
+        "demo": "Open Settings → About and show the API version row with the short sha; call GET /version.",
+        "budget_ics": 3,
+        "version_path": "/version",
+        "health_path": "/ready"
+      },
+      "stage": "ready",
+      "stage_since": 1793017040,
+      "overlay": null,
+      "overlay_reason": null,
+      "agent_stage": "ready",
+      "claim_mismatch": false,
+      "pl": {
+        "session_id": "b408c5f09ff659e6b907fd9f688829e9",
+        "title": "PL · api-version",
+        "role": "project_lead",
+        "status": "idle",
+        "harness": "claude-native",
+        "running": false,
+        "health": "ok",
+        "summary": "READY FOR HUMAN MERGE #9630",
+        "last_activity_at": 1793017440,
+        "cost_usd": 3.4,
+        "has_launch_drift": false,
+        "url": "/c/b408c5f09ff659e6b907fd9f688829e9"
+      },
+      "team": [
+        {
+          "session_id": "827319c3ac5b55d3a0998a2c6ac6cdcd",
+          "title": "env_keeper",
+          "role": "env_keeper",
+          "status": "idle",
+          "harness": "claude-native",
+          "running": false,
+          "health": "ok",
+          "summary": "preview p9630 ready at 7767f0d",
+          "last_activity_at": 1793016900,
+          "cost_usd": 1.05,
+          "has_launch_drift": false,
+          "url": "/c/827319c3ac5b55d3a0998a2c6ac6cdcd"
+        },
+        {
+          "session_id": "2a45dc3fefe355e295e9c88c6fcc8c1b",
+          "title": "demo-version-endpoint",
+          "role": "demo",
+          "status": "idle",
+          "harness": "claude-native",
+          "running": false,
+          "health": "ok",
+          "summary": "Demo PASS · 4 steps",
+          "last_activity_at": 1793016960,
+          "cost_usd": 0.92,
+          "has_launch_drift": false,
+          "url": "/c/2a45dc3fefe355e295e9c88c6fcc8c1b"
+        },
+        {
+          "session_id": "9c5729417ac856a58105fd08ab3637f7",
+          "title": "ic_codex:version-endpoint",
+          "role": "ic",
+          "status": "idle",
+          "harness": "codex-native",
+          "running": false,
+          "health": "ok",
+          "summary": "PR #9630 opened, review fixes pushed",
+          "last_activity_at": 1793015700,
+          "cost_usd": 1.73,
+          "has_launch_drift": false,
+          "url": "/c/9c5729417ac856a58105fd08ab3637f7"
+        }
+      ],
+      "env": {
+        "reported": {
+          "state": "ready",
+          "env_id": "b693ef0a-2c6683-a38d",
+          "urls": {
+            "app": "https://app-b693ef0a-2c6683-a38d.envs.sandbox.caffeinelabs.io",
+            "api": "https://api-b693ef0a-2c6683-a38d.envs.sandbox.caffeinelabs.io",
+            "minio": "https://minio-b693ef0a-2c6683-a38d.envs.sandbox.caffeinelabs.io",
+            "tilt_ui": "https://10350-omnigent-managed-b693ef0a-2c6683.sessions.sandbox.caffeinelabs.io"
+          },
+          "deployed": {
+            "sha": "8c1d2e0b7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e2d",
+            "ref": "main"
+          },
+          "resources": [
+            {
+              "name": "postgres",
+              "status": "ok"
+            },
+            {
+              "name": "valkey",
+              "status": "ok"
+            },
+            {
+              "name": "minio",
+              "status": "ok"
+            },
+            {
+              "name": "elasticmq",
+              "status": "ok"
+            },
+            {
+              "name": "caffeine-db",
+              "status": "ok"
+            },
+            {
+              "name": "caffeine-api",
+              "status": "ok"
+            },
+            {
+              "name": "caffeine-ux",
+              "status": "ok"
+            }
+          ],
+          "note": null,
+          "at": 1793014800
+        },
+        "probe": {
+          "app": {
+            "code": 200,
+            "ms": 142
+          },
+          "api": {
+            "code": 200,
+            "ms": 38,
+            "sha": "8c1d2e0b7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e2d"
+          },
+          "health": "ok",
+          "fails": 0,
+          "at": 1793017779
+        }
+      },
+      "pr_ids": ["f74d5967c53455139e85ba1b402a5bd4"],
+      "open_decision_ids": [],
+      "cost_usd": 7.1,
+      "elapsed_s": 11400,
+      "provisioning": null,
+      "keep_previews": true,
+      "paused_by": null
+    },
+    {
+      "slug": "db-version",
+      "title": "DB version endpoint",
+      "repo": "caffeinelabs/app",
+      "base_branch": "main",
+      "priority": 1,
+      "charter": {
+        "goal": "GET /db/version on caffeine-api returns the latest applied migration (name, applied_at).",
+        "dod": [
+          "curl -fsS {api}/db/version → 200 with a migration name",
+          "pnpm -F caffeine-api test"
+        ],
+        "scope_paths": ["services/caffeine-api/**"],
+        "constraints": null,
+        "env_needed": true,
+        "preview": {
+          "enabled": true,
+          "slots": 2,
+          "tooling_ref": "factory/preview-tooling"
+        },
+        "preview_slots": 2,
+        "demo_focus": "Call GET /db/version and show the latest migration name.",
+        "demo": "Call GET /db/version and show the latest migration name.",
+        "budget_ics": 3,
+        "version_path": "/version",
+        "health_path": "/ready"
+      },
+      "stage": "building",
+      "stage_since": 1793014500,
+      "overlay": "blocked",
+      "overlay_reason": "Blocked on D-2",
+      "agent_stage": "review",
+      "claim_mismatch": true,
+      "pl": {
+        "session_id": "a2fc64b9e92e54c8b2f0f78038df202d",
+        "title": "PL · db-version",
+        "role": "project_lead",
+        "status": "running",
+        "harness": "claude-native",
+        "running": true,
+        "health": "ok",
+        "summary": "Waiting on D-2 · IC continues on the route",
+        "last_activity_at": 1793017780,
+        "cost_usd": 2.95,
+        "has_launch_drift": false,
+        "url": "/c/a2fc64b9e92e54c8b2f0f78038df202d"
+      },
+      "team": [
+        {
+          "session_id": "d289bc6187e25a7391d640cc597531a1",
+          "title": "env_keeper",
+          "role": "env_keeper",
+          "status": "running",
+          "harness": "claude-native",
+          "running": true,
+          "health": "ok",
+          "summary": "dev env up at main@8c1d2e0",
+          "last_activity_at": 1793017755,
+          "cost_usd": 0.61,
+          "has_launch_drift": false,
+          "url": "/c/d289bc6187e25a7391d640cc597531a1"
+        },
+        {
+          "session_id": "c849bd6aaca659b9b67b3b970caa2316",
+          "title": "ic:db-version-route",
+          "role": "ic",
+          "status": "running",
+          "harness": "claude-native",
+          "running": true,
+          "health": "ok",
+          "summary": "writing route test",
+          "last_activity_at": 1793017795,
+          "cost_usd": 1.84,
+          "has_launch_drift": false,
+          "url": "/c/c849bd6aaca659b9b67b3b970caa2316"
+        }
+      ],
+      "env": {
+        "reported": {
+          "state": "ready",
+          "env_id": "c41e9b07-7d0f12-5b3e",
+          "urls": {
+            "app": "https://app-c41e9b07-7d0f12-5b3e.envs.sandbox.caffeinelabs.io",
+            "api": "https://api-c41e9b07-7d0f12-5b3e.envs.sandbox.caffeinelabs.io",
+            "minio": "https://minio-c41e9b07-7d0f12-5b3e.envs.sandbox.caffeinelabs.io",
+            "tilt_ui": "https://10350-omnigent-managed-c41e9b07-7d0f12.sessions.sandbox.caffeinelabs.io"
+          },
+          "deployed": {
+            "sha": "8c1d2e0b7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e2d",
+            "ref": "main"
+          },
+          "resources": [
+            {
+              "name": "postgres",
+              "status": "ok"
+            },
+            {
+              "name": "valkey",
+              "status": "ok"
+            },
+            {
+              "name": "minio",
+              "status": "ok"
+            },
+            {
+              "name": "elasticmq",
+              "status": "ok"
+            },
+            {
+              "name": "caffeine-db",
+              "status": "ok"
+            },
+            {
+              "name": "caffeine-api",
+              "status": "ok"
+            },
+            {
+              "name": "caffeine-ux",
+              "status": "ok"
+            }
+          ],
+          "note": null,
+          "at": 1793015100
+        },
+        "probe": {
+          "app": {
+            "code": 200,
+            "ms": 142
+          },
+          "api": {
+            "code": 200,
+            "ms": 38,
+            "sha": "8c1d2e0b7a6f5e4d3c2b1a0f9e8d7c6b5a4f3e2d"
+          },
+          "health": "ok",
+          "fails": 0,
+          "at": 1793017779
+        }
+      },
+      "pr_ids": ["8f15c0f9a98e5831a39615fb58f35036"],
+      "open_decision_ids": ["a9d44647df3050199c1577ba21f16b67"],
+      "cost_usd": 5.4,
+      "elapsed_s": 11390,
+      "provisioning": null,
+      "keep_previews": true,
+      "paused_by": null
+    },
+    {
+      "slug": "docs-factory-envs",
+      "title": "Factory envs docs",
+      "repo": "caffeinelabs/app",
+      "base_branch": "main",
+      "priority": 2,
+      "charter": {
+        "goal": "Add docs/factory-envs.md: how factory envs and previews work and how to review them.",
+        "dod": ["docs/factory-envs.md renders on GitHub"],
+        "scope_paths": ["docs/**"],
+        "constraints": null,
+        "env_needed": false,
+        "preview": {
+          "enabled": false,
+          "slots": 2
+        },
+        "preview_slots": 2,
+        "demo_focus": null,
+        "demo": null,
+        "budget_ics": 3
+      },
+      "stage": "done",
+      "stage_since": 1793013600,
+      "overlay": null,
+      "overlay_reason": null,
+      "agent_stage": "merged",
+      "claim_mismatch": false,
+      "pl": {
+        "session_id": "5c571c3bb0265fe294313259e2174cb5",
+        "title": "PL · docs-factory-envs",
+        "role": "project_lead",
+        "status": "idle",
+        "harness": "claude-native",
+        "running": false,
+        "health": "ok",
+        "summary": "done · #9632 merged",
+        "last_activity_at": 1793013600,
+        "cost_usd": 2.1,
+        "has_launch_drift": false,
+        "url": "/c/5c571c3bb0265fe294313259e2174cb5"
+      },
+      "team": [],
+      "env": null,
+      "pr_ids": ["4536eb8341255afcb53b1bbe6f3f4578"],
+      "open_decision_ids": [],
+      "cost_usd": 2.1,
+      "elapsed_s": 6600,
+      "provisioning": null,
+      "keep_previews": true,
+      "paused_by": null
+    }
+  ],
+  "prs": [
+    {
+      "id": "f74d5967c53455139e85ba1b402a5bd4",
+      "project_slug": "api-version",
+      "repo": "caffeinelabs/app",
+      "number": 9630,
+      "url": "https://github.com/caffeinelabs/app/pull/9630",
+      "title": "feat(api): GET /version and a Settings \"API version\" row",
+      "task": "version-endpoint",
+      "head_sha": "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16",
+      "head_ref": "factory/api-version/version-endpoint",
+      "base_ref": "main",
+      "state": "open",
+      "is_draft": false,
+      "additions": 112,
+      "deletions": 4,
+      "changed_files": 6,
+      "gates": {
+        "draft": "pass",
+        "checks": "pass",
+        "review": "pass",
+        "verify": "pass",
+        "mergeable": "pass",
+        "protected_paths": "pass",
+        "demo": "pass",
+        "reasons": [],
+        "notes": [],
+        "evidence": {
+          "checks": {
+            "passing": 14,
+            "failing": 0,
+            "pending": 0,
+            "total": 14,
+            "url": "https://github.com/caffeinelabs/app/pull/9630/checks",
+            "failing_names": []
+          },
+          "review": {
+            "verdict": "APPROVE",
+            "sha": "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16",
+            "url": "https://github.com/caffeinelabs/app/pull/9630#issuecomment-3448812201",
+            "at": 1793016120,
+            "by": "reviewer (codex)"
+          },
+          "verify": {
+            "result": "PASS",
+            "sha": "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16",
+            "env": "b693ef0a-2c6683-a38d-p9630",
+            "url": "https://github.com/caffeinelabs/app/pull/9630#issuecomment-3448840117",
+            "at": 1793016780
+          },
+          "demo": {
+            "status": "PASS",
+            "sha": "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16",
+            "demo_id": "df2503ab72c051c6bdfa1e15f1570e31",
+            "url": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3?review=9630",
+            "at": 1793016960
+          },
+          "mergeable": "MERGEABLE",
+          "files": [
+            "services/caffeine-api/src/modules/version/version.route.ts",
+            "services/caffeine-api/src/modules/version/version.route.test.ts",
+            "services/caffeine-api/src/app.ts",
+            "services/caffeine-ux/src/settings/AboutSection.tsx",
+            "services/caffeine-ux/src/settings/AboutSection.test.tsx",
+            "services/caffeine-ux/src/api/version.ts"
+          ],
+          "protected": []
+        }
+      },
+      "ready": true,
+      "ready_since": 1793017040,
+      "sentinel": {
+        "verdict": "verified",
+        "head_sha": "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16",
+        "note": "preview /__factory/preview = head; /version 200; Settings row shows 7767f0d",
+        "by": "Lead B · Sentinel",
+        "at": 1793016240
+      },
+      "human_review": null,
+      "preview": {
+        "name": "p9630",
+        "env_id": "b693ef0a-2c6683-a38d-p9630",
+        "namespace": "env-b693ef0a-2c6683-a38d-p9630",
+        "urls": {
+          "app": "https://app-b693ef0a-2c6683-a38d-p9630.envs.sandbox.caffeinelabs.io",
+          "api": "https://api-b693ef0a-2c6683-a38d-p9630.envs.sandbox.caffeinelabs.io",
+          "minio": "https://minio-b693ef0a-2c6683-a38d-p9630.envs.sandbox.caffeinelabs.io",
+          "tilt_ui": null
+        },
+        "state": "ready",
+        "deployed": {
+          "sha": "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16",
+          "ref": "factory/api-version/version-endpoint",
+          "at": 1793016660,
+          "tooling_overlay": "3f2a9c1e8b7d6054a1c2e3f4b5a69788d0e1f2a3"
+        },
+        "observed": {
+          "sha": "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16",
+          "at": 1793017779,
+          "reachable": true,
+          "failures": 0
+        },
+        "resources": [
+          {
+            "name": "postgres",
+            "ready": true,
+            "restarts": 0
+          },
+          {
+            "name": "valkey",
+            "ready": true,
+            "restarts": 0
+          },
+          {
+            "name": "minio",
+            "ready": true,
+            "restarts": 0
+          },
+          {
+            "name": "elasticmq",
+            "ready": true,
+            "restarts": 0
+          },
+          {
+            "name": "caffeine-db",
+            "ready": true,
+            "restarts": 0
+          },
+          {
+            "name": "caffeine-api",
+            "ready": true,
+            "restarts": 0
+          },
+          {
+            "name": "caffeine-ux",
+            "ready": true,
+            "restarts": 0
+          }
+        ],
+        "stable_url": "/v1/factory/prs/f74d5967c53455139e85ba1b402a5bd4/preview",
+        "note": null,
+        "slot": null,
+        "reported_at": 1793016700,
+        "probe": null
+      },
+      "demo": {
+        "id": "df2503ab72c051c6bdfa1e15f1570e31",
+        "status": "PASS",
+        "head_sha": "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16",
+        "is_current_head": true,
+        "title": "GET /version and the Settings API version row",
+        "summary": "Landing renders; GET /version returns caffeine-api at 7767f0d; Settings → About shows API version 7767f0d. Draft build skipped: needs the build tier.",
+        "plan_source": "pr-body",
+        "duration_s": 41.2,
+        "console_errors": 0,
+        "steps": [
+          {
+            "n": 1,
+            "title": "Open the landing page logged out",
+            "kind": "ui",
+            "status": "pass",
+            "screenshot_file_id": "c0c065650c0152e0999938b527a007a8",
+            "duration_ms": 5120,
+            "note": null,
+            "api_calls": null
+          },
+          {
+            "n": 2,
+            "title": "GET /version",
+            "kind": "api",
+            "status": "pass",
+            "screenshot_file_id": null,
+            "duration_ms": 38,
+            "note": "body.gitSha equals the deployed sha",
+            "api_calls": [0]
+          },
+          {
+            "n": 3,
+            "title": "Settings → About shows the API version",
+            "kind": "ui",
+            "status": "pass",
+            "screenshot_file_id": "877a1262a0fe53eaac6bef95eaa3d3da",
+            "duration_ms": 8410,
+            "note": null,
+            "api_calls": null
+          },
+          {
+            "n": 4,
+            "title": "Draft build flow",
+            "kind": "ui",
+            "status": "skipped",
+            "screenshot_file_id": null,
+            "duration_ms": null,
+            "note": "needs build tier (not in factory envs)",
+            "api_calls": null
+          }
+        ],
+        "files": [
+          {
+            "id": "582739a11eb35310bcef05b4070a30a4",
+            "name": "demo.webm",
+            "kind": "video",
+            "caption": "Full run · 0:41",
+            "content_type": "video/webm",
+            "bytes": 3482113,
+            "size": 3482113,
+            "url": "/v1/factory/demos/df2503ab72c051c6bdfa1e15f1570e31/files/582739a11eb35310bcef05b4070a30a4",
+            "step": null
+          },
+          {
+            "id": "83c66f0cd43855869ed9aaf5cb7a0893",
+            "name": "poster.png",
+            "kind": "poster",
+            "caption": "Landing page, logged out",
+            "content_type": "image/png",
+            "bytes": 184220,
+            "size": 184220,
+            "url": "/v1/factory/demos/df2503ab72c051c6bdfa1e15f1570e31/files/83c66f0cd43855869ed9aaf5cb7a0893",
+            "step": null
+          },
+          {
+            "id": "c0c065650c0152e0999938b527a007a8",
+            "name": "01-landing.png",
+            "kind": "screenshot",
+            "caption": "Landing renders logged out",
+            "content_type": "image/png",
+            "bytes": 201544,
+            "size": 201544,
+            "url": "/v1/factory/demos/df2503ab72c051c6bdfa1e15f1570e31/files/c0c065650c0152e0999938b527a007a8",
+            "step": 1
+          },
+          {
+            "id": "877a1262a0fe53eaac6bef95eaa3d3da",
+            "name": "03-settings-version.png",
+            "kind": "screenshot",
+            "caption": "Settings → About shows API version 7767f0d",
+            "content_type": "image/png",
+            "bytes": 176903,
+            "size": 176903,
+            "url": "/v1/factory/demos/df2503ab72c051c6bdfa1e15f1570e31/files/877a1262a0fe53eaac6bef95eaa3d3da",
+            "step": 3
+          },
+          {
+            "id": "ccdd2f9d5b7f5efb95a5e955040c7737",
+            "name": "03-settings-version-tooltip.png",
+            "kind": "screenshot",
+            "caption": "Hover shows the full commit and deploy time",
+            "content_type": "image/png",
+            "bytes": 168377,
+            "size": 168377,
+            "url": "/v1/factory/demos/df2503ab72c051c6bdfa1e15f1570e31/files/ccdd2f9d5b7f5efb95a5e955040c7737",
+            "step": 3
+          },
+          {
+            "id": "af14797752795dd38747210b6da3b001",
+            "name": "api.json",
+            "kind": "api",
+            "caption": "GET /version → 200",
+            "content_type": "application/json",
+            "bytes": 2311,
+            "size": 2311,
+            "url": "/v1/factory/demos/df2503ab72c051c6bdfa1e15f1570e31/files/af14797752795dd38747210b6da3b001",
+            "step": 2
+          },
+          {
+            "id": "faf04efb515759549a277802b60449ce",
+            "name": "demo.spec.ts",
+            "kind": "script",
+            "caption": "The Playwright script that ran",
+            "content_type": "text/plain",
+            "bytes": 1874,
+            "size": 1874,
+            "url": "/v1/factory/demos/df2503ab72c051c6bdfa1e15f1570e31/files/faf04efb515759549a277802b60449ce",
+            "step": null
+          },
+          {
+            "id": "f8faebf0375d565f83af5fab83a7a10d",
+            "name": "network.har",
+            "kind": "har",
+            "caption": "Network log (redacted)",
+            "content_type": "application/json",
+            "bytes": 412090,
+            "size": 412090,
+            "url": "/v1/factory/demos/df2503ab72c051c6bdfa1e15f1570e31/files/f8faebf0375d565f83af5fab83a7a10d",
+            "step": null
+          }
+        ],
+        "video_file_id": "582739a11eb35310bcef05b4070a30a4",
+        "poster_file_id": "83c66f0cd43855869ed9aaf5cb7a0893",
+        "preview_url": "https://app-b693ef0a-2c6683-a38d-p9630.envs.sandbox.caffeinelabs.io",
+        "created_at": 1793016960,
+        "by": "demo-version-endpoint"
+      },
+      "older_demos": 1,
+      "merged": null,
+      "closed_at": null,
+      "last_polled_at": 1793017792,
+      "poll_error": null,
+      "source": "discovered"
+    },
+    {
+      "id": "8f15c0f9a98e5831a39615fb58f35036",
+      "project_slug": "db-version",
+      "repo": "caffeinelabs/app",
+      "number": 9631,
+      "url": "https://github.com/caffeinelabs/app/pull/9631",
+      "title": "feat(api): GET /db/version returns the latest applied migration",
+      "task": "db-version-route",
+      "head_sha": "5e1c2d4a9b8f7e6d5c4b3a2918f7e6d5c4b3a291",
+      "head_ref": "factory/db-version/db-version-route",
+      "base_ref": "main",
+      "state": "open",
+      "is_draft": true,
+      "additions": 64,
+      "deletions": 2,
+      "changed_files": 4,
+      "gates": {
+        "draft": "pending",
+        "checks": "pending",
+        "review": "pending",
+        "verify": "pending",
+        "mergeable": "pass",
+        "protected_paths": "pass",
+        "demo": "pending",
+        "reasons": [
+          "draft",
+          "checks pending: 5 of 14",
+          "no review marker for 5e1c2d4",
+          "no verify marker for 5e1c2d4",
+          "no demo for 5e1c2d4"
+        ],
+        "notes": [],
+        "evidence": {
+          "checks": {
+            "passing": 9,
+            "failing": 0,
+            "pending": 5,
+            "total": 14,
+            "url": "https://github.com/caffeinelabs/app/pull/9631/checks",
+            "failing_names": []
+          },
+          "review": null,
+          "verify": null,
+          "demo": null,
+          "mergeable": "MERGEABLE",
+          "files": [
+            "services/caffeine-api/src/modules/db/db-version.route.ts",
+            "services/caffeine-api/src/modules/db/db-version.route.test.ts",
+            "services/caffeine-api/src/modules/db/index.ts",
+            "services/caffeine-api/src/app.ts"
+          ],
+          "protected": []
+        }
+      },
+      "ready": false,
+      "ready_since": null,
+      "sentinel": null,
+      "human_review": null,
+      "preview": {
+        "name": "p9631",
+        "env_id": "c41e9b07-7d0f12-5b3e-p9631",
+        "namespace": "env-c41e9b07-7d0f12-5b3e-p9631",
+        "urls": {
+          "app": "https://app-c41e9b07-7d0f12-5b3e-p9631.envs.sandbox.caffeinelabs.io",
+          "api": "https://api-c41e9b07-7d0f12-5b3e-p9631.envs.sandbox.caffeinelabs.io",
+          "minio": "https://minio-c41e9b07-7d0f12-5b3e-p9631.envs.sandbox.caffeinelabs.io",
+          "tilt_ui": null
+        },
+        "state": "stale",
+        "deployed": {
+          "sha": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d",
+          "ref": "factory/db-version/db-version-route",
+          "at": 1793015400,
+          "tooling_overlay": "3f2a9c1e8b7d6054a1c2e3f4b5a69788d0e1f2a3"
+        },
+        "observed": {
+          "sha": "1a2b3c4d5e6f708192a3b4c5d6e7f8091a2b3c4d",
+          "at": 1793017767,
+          "reachable": true,
+          "failures": 0
+        },
+        "resources": [
+          {
+            "name": "postgres",
+            "ready": true,
+            "restarts": 0
+          },
+          {
+            "name": "valkey",
+            "ready": true,
+            "restarts": 0
+          },
+          {
+            "name": "minio",
+            "ready": true,
+            "restarts": 0
+          },
+          {
+            "name": "elasticmq",
+            "ready": true,
+            "restarts": 0
+          },
+          {
+            "name": "caffeine-db",
+            "ready": true,
+            "restarts": 0
+          },
+          {
+            "name": "caffeine-api",
+            "ready": true,
+            "restarts": 0
+          },
+          {
+            "name": "caffeine-ux",
+            "ready": true,
+            "restarts": 0
+          }
+        ],
+        "stable_url": "/v1/factory/prs/8f15c0f9a98e5831a39615fb58f35036/preview",
+        "note": "head moved to 5e1c2d4; redeploy after review",
+        "slot": null,
+        "reported_at": 1793015450,
+        "probe": null
+      },
+      "demo": null,
+      "older_demos": 0,
+      "merged": null,
+      "closed_at": null,
+      "last_polled_at": 1793017792,
+      "poll_error": null,
+      "source": "tool"
+    },
+    {
+      "id": "4536eb8341255afcb53b1bbe6f3f4578",
+      "project_slug": "docs-factory-envs",
+      "repo": "caffeinelabs/app",
+      "number": 9632,
+      "url": "https://github.com/caffeinelabs/app/pull/9632",
+      "title": "docs: factory envs and previews",
+      "task": "factory-envs-doc",
+      "head_sha": "f01e2d3c4b5a69788796a5b4c3d2e1f0a9b8c7d6",
+      "head_ref": "factory/docs-factory-envs/factory-envs-doc",
+      "base_ref": "main",
+      "state": "merged",
+      "is_draft": false,
+      "additions": 87,
+      "deletions": 0,
+      "changed_files": 1,
+      "gates": {
+        "draft": "pass",
+        "checks": "pass",
+        "review": "pass",
+        "verify": "skip",
+        "mergeable": "pass",
+        "protected_paths": "pass",
+        "demo": null,
+        "reasons": [],
+        "notes": ["factory:no-env: verify skipped"],
+        "evidence": {
+          "checks": {
+            "passing": 6,
+            "failing": 0,
+            "pending": 0,
+            "total": 6,
+            "url": "https://github.com/caffeinelabs/app/pull/9632/checks",
+            "failing_names": []
+          },
+          "review": {
+            "verdict": "APPROVE",
+            "sha": "f01e2d3c4b5a69788796a5b4c3d2e1f0a9b8c7d6",
+            "url": "https://github.com/caffeinelabs/app/pull/9632#issuecomment-3448701945",
+            "at": 1793010900,
+            "by": "reviewer (claude)"
+          },
+          "verify": null,
+          "demo": null,
+          "mergeable": "MERGEABLE",
+          "files": ["docs/factory-envs.md"],
+          "protected": []
+        }
+      },
+      "ready": false,
+      "ready_since": null,
+      "sentinel": null,
+      "human_review": null,
+      "preview": null,
+      "demo": null,
+      "older_demos": 0,
+      "merged": {
+        "by": "luka",
+        "sha": "9be04c1f2e3d4c5b6a7980f1e2d3c4b5a6978f01",
+        "at": 1793013500
+      },
+      "closed_at": 1793013500,
+      "last_polled_at": 1793014100,
+      "poll_error": null,
+      "source": "discovered"
+    }
+  ],
+  "decisions": [
+    {
+      "id": "a9d44647df3050199c1577ba21f16b67",
+      "ref": "D-2",
+      "number": 2,
+      "factory_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+      "project_slug": "db-version",
+      "asked_by_session_id": "a2fc64b9e92e54c8b2f0f78038df202d",
+      "asked_by_title": "PL · db-version",
+      "asked_by_role": "project_lead",
+      "source": "agent",
+      "blocking": true,
+      "question": "Which table is the source of truth for the DB version: knex_migrations or schema_migrations?",
+      "context": "Both exist in caffeine-db.\n- `knex_migrations`: 212 rows, latest 2026-10-20.\n- `schema_migrations`: 3 legacy rows from 2024.",
+      "options": [
+        {
+          "id": "a",
+          "label": "knex_migrations",
+          "description": "Latest applied migration name and time",
+          "recommended": true,
+          "action": null,
+          "href": null,
+          "target": null
+        },
+        {
+          "id": "b",
+          "label": "schema_migrations",
+          "description": null,
+          "recommended": false,
+          "action": null,
+          "href": null,
+          "target": null
+        }
+      ],
+      "allow_text": true,
+      "status": "open",
+      "answer_option_id": null,
+      "answer_text": null,
+      "answered_by": null,
+      "answered_at": null,
+      "delivered_mail_id": null,
+      "delivered_at": null,
+      "delivered_to_title": null,
+      "created_at": 1793017080,
+      "updated_at": 1793017080
+    },
+    {
+      "id": "176d6b5479215203bd985355ae160221",
+      "ref": "D-3",
+      "number": 3,
+      "factory_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+      "project_slug": null,
+      "asked_by_session_id": null,
+      "asked_by_title": null,
+      "asked_by_role": null,
+      "source": "relaunch_failed",
+      "blocking": true,
+      "question": "\"Lead B · Sentinel\" relaunch failed 3× (runner_unavailable)",
+      "context": "The supervisor tried to relaunch Sentinel's sandbox three times since 11:58.",
+      "options": [
+        {
+          "id": "restart",
+          "label": "Restart",
+          "description": null,
+          "recommended": false,
+          "action": "restart",
+          "href": null,
+          "target": "member:713c96e676515bd992f5c15015101a2e"
+        },
+        {
+          "id": "relaunch",
+          "label": "Relaunch with spec mode",
+          "description": null,
+          "recommended": true,
+          "action": "relaunch",
+          "href": null,
+          "target": "member:713c96e676515bd992f5c15015101a2e"
+        },
+        {
+          "id": "pause",
+          "label": "Pause Sentinel",
+          "description": null,
+          "recommended": false,
+          "action": "pause",
+          "href": null,
+          "target": "member:713c96e676515bd992f5c15015101a2e"
+        },
+        {
+          "id": "dismiss",
+          "label": "Dismiss",
+          "description": null,
+          "recommended": false,
+          "action": "dismiss",
+          "href": null,
+          "target": null
+        }
+      ],
+      "allow_text": false,
+      "status": "open",
+      "answer_option_id": null,
+      "answer_text": null,
+      "answered_by": null,
+      "answered_at": null,
+      "delivered_mail_id": null,
+      "delivered_at": null,
+      "delivered_to_title": null,
+      "created_at": 1793017680,
+      "updated_at": 1793017680
+    },
+    {
+      "id": "039a2b237a60529588e6676f6ea0aa66",
+      "ref": "D-1",
+      "number": 1,
+      "factory_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+      "project_slug": "api-version",
+      "asked_by_session_id": "b408c5f09ff659e6b907fd9f688829e9",
+      "asked_by_title": "PL · api-version",
+      "asked_by_role": "project_lead",
+      "source": "agent",
+      "blocking": true,
+      "question": "Where should the API version show in the UI: Settings → About, or the footer?",
+      "context": null,
+      "options": [
+        {
+          "id": "a",
+          "label": "Settings → About",
+          "description": null,
+          "recommended": true,
+          "action": null,
+          "href": null,
+          "target": null
+        },
+        {
+          "id": "b",
+          "label": "Footer",
+          "description": null,
+          "recommended": false,
+          "action": null,
+          "href": null,
+          "target": null
+        }
+      ],
+      "allow_text": true,
+      "status": "answered",
+      "answer_option_id": "a",
+      "answer_text": "Settings, next to the build number.",
+      "answered_by": "Luka",
+      "answered_at": 1793010000,
+      "delivered_mail_id": "mail_3f9a1c2b7d4e5f60",
+      "delivered_at": 1793010005,
+      "delivered_to_title": "PL · api-version",
+      "created_at": 1793009400,
+      "updated_at": 1793010005
+    }
+  ],
+  "members": [
+    {
+      "session_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+      "title": "Atlas",
+      "role": "lead",
+      "status": "idle",
+      "health": "ok",
+      "summary": "2 projects in flight · #9630 ready for you",
+      "harness": "claude-native",
+      "running": false,
+      "last_activity_at": 1793017560,
+      "cost_usd": 4.12,
+      "url": "/c/f4f4ba9c77725331b12f0fa7072dc4d3",
+      "project": null,
+      "parent_session_id": null,
+      "is_top_level": true,
+      "state": "active",
+      "heartbeat_s": 300,
+      "launch_drift": {
+        "fields": ["permission_mode"],
+        "stored": {
+          "permission_mode": "auto"
+        },
+        "spec": {
+          "permission_mode": "bypassPermissions"
+        }
+      }
+    },
+    {
+      "session_id": "713c96e676515bd992f5c15015101a2e",
+      "title": "Lead B · Sentinel",
+      "role": "lead",
+      "status": "failed",
+      "health": "dead",
+      "summary": "relaunch failed 3× (runner_unavailable)",
+      "harness": "claude-native",
+      "running": false,
+      "last_activity_at": 1793016300,
+      "cost_usd": 1.86,
+      "url": "/c/713c96e676515bd992f5c15015101a2e",
+      "project": null,
+      "parent_session_id": null,
+      "is_top_level": true,
+      "state": "active",
+      "heartbeat_s": 300,
+      "launch_drift": null
+    },
+    {
+      "session_id": "b408c5f09ff659e6b907fd9f688829e9",
+      "title": "PL · api-version",
+      "role": "project_lead",
+      "status": "idle",
+      "health": "ok",
+      "summary": "READY FOR HUMAN MERGE #9630",
+      "harness": "claude-native",
+      "running": false,
+      "last_activity_at": 1793017440,
+      "cost_usd": 3.4,
+      "url": "/c/b408c5f09ff659e6b907fd9f688829e9",
+      "project": "api-version",
+      "parent_session_id": null,
+      "is_top_level": true,
+      "state": "active",
+      "heartbeat_s": 600,
+      "launch_drift": null
+    },
+    {
+      "session_id": "827319c3ac5b55d3a0998a2c6ac6cdcd",
+      "title": "env_keeper",
+      "role": "env_keeper",
+      "status": "idle",
+      "health": "ok",
+      "summary": "preview p9630 ready at 7767f0d",
+      "harness": "claude-native",
+      "running": false,
+      "last_activity_at": 1793016900,
+      "cost_usd": 1.05,
+      "url": "/c/827319c3ac5b55d3a0998a2c6ac6cdcd",
+      "project": "api-version",
+      "parent_session_id": "b408c5f09ff659e6b907fd9f688829e9",
+      "is_top_level": false,
+      "state": null,
+      "heartbeat_s": null,
+      "launch_drift": null
+    },
+    {
+      "session_id": "2a45dc3fefe355e295e9c88c6fcc8c1b",
+      "title": "demo-version-endpoint",
+      "role": "demo",
+      "status": "idle",
+      "health": "ok",
+      "summary": "Demo PASS · 4 steps",
+      "harness": "claude-native",
+      "running": false,
+      "last_activity_at": 1793016960,
+      "cost_usd": 0.92,
+      "url": "/c/2a45dc3fefe355e295e9c88c6fcc8c1b",
+      "project": "api-version",
+      "parent_session_id": "b408c5f09ff659e6b907fd9f688829e9",
+      "is_top_level": false,
+      "state": null,
+      "heartbeat_s": null,
+      "launch_drift": null
+    },
+    {
+      "session_id": "9c5729417ac856a58105fd08ab3637f7",
+      "title": "ic_codex:version-endpoint",
+      "role": "ic",
+      "status": "idle",
+      "health": "ok",
+      "summary": "PR #9630 opened, review fixes pushed",
+      "harness": "codex-native",
+      "running": false,
+      "last_activity_at": 1793015700,
+      "cost_usd": 1.73,
+      "url": "/c/9c5729417ac856a58105fd08ab3637f7",
+      "project": "api-version",
+      "parent_session_id": "b408c5f09ff659e6b907fd9f688829e9",
+      "is_top_level": false,
+      "state": null,
+      "heartbeat_s": null,
+      "launch_drift": null
+    },
+    {
+      "session_id": "a2fc64b9e92e54c8b2f0f78038df202d",
+      "title": "PL · db-version",
+      "role": "project_lead",
+      "status": "running",
+      "health": "ok",
+      "summary": "Waiting on D-2 · IC continues on the route",
+      "harness": "claude-native",
+      "running": true,
+      "last_activity_at": 1793017780,
+      "cost_usd": 2.95,
+      "url": "/c/a2fc64b9e92e54c8b2f0f78038df202d",
+      "project": "db-version",
+      "parent_session_id": null,
+      "is_top_level": true,
+      "state": "active",
+      "heartbeat_s": 600,
+      "launch_drift": null
+    },
+    {
+      "session_id": "d289bc6187e25a7391d640cc597531a1",
+      "title": "env_keeper",
+      "role": "env_keeper",
+      "status": "running",
+      "health": "ok",
+      "summary": "dev env up at main@8c1d2e0",
+      "harness": "claude-native",
+      "running": true,
+      "last_activity_at": 1793017755,
+      "cost_usd": 0.61,
+      "url": "/c/d289bc6187e25a7391d640cc597531a1",
+      "project": "db-version",
+      "parent_session_id": "a2fc64b9e92e54c8b2f0f78038df202d",
+      "is_top_level": false,
+      "state": null,
+      "heartbeat_s": null,
+      "launch_drift": null
+    },
+    {
+      "session_id": "c849bd6aaca659b9b67b3b970caa2316",
+      "title": "ic:db-version-route",
+      "role": "ic",
+      "status": "running",
+      "health": "ok",
+      "summary": "writing route test",
+      "harness": "claude-native",
+      "running": true,
+      "last_activity_at": 1793017795,
+      "cost_usd": 1.84,
+      "url": "/c/c849bd6aaca659b9b67b3b970caa2316",
+      "project": "db-version",
+      "parent_session_id": "a2fc64b9e92e54c8b2f0f78038df202d",
+      "is_top_level": false,
+      "state": null,
+      "heartbeat_s": null,
+      "launch_drift": null
+    },
+    {
+      "session_id": "5c571c3bb0265fe294313259e2174cb5",
+      "title": "PL · docs-factory-envs",
+      "role": "project_lead",
+      "status": "idle",
+      "health": "ok",
+      "summary": "done · #9632 merged",
+      "harness": "claude-native",
+      "running": false,
+      "last_activity_at": 1793013600,
+      "cost_usd": 2.1,
+      "url": "/c/5c571c3bb0265fe294313259e2174cb5",
+      "project": "docs-factory-envs",
+      "parent_session_id": null,
+      "is_top_level": true,
+      "state": "done",
+      "heartbeat_s": 600,
+      "launch_drift": null
+    }
+  ],
+  "hidden_projects": 0,
+  "totals": {
+    "cost_usd": 20.58,
+    "prs_open": 2,
+    "prs_ready": 1,
+    "prs_merged": 1,
+    "decisions_open": 2
+  },
+  "server_time": 1793017800
+}

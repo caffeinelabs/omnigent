@@ -116,6 +116,7 @@ from omnigent.stores import (
 )
 from omnigent.stores.comment_store import CommentStore
 from omnigent.stores.conversation_store import SessionConnectivity, runner_seen_is_fresh
+from omnigent.stores.factory_store import FactoryStore
 from omnigent.stores.host_store import HostStore
 from omnigent.stores.permission_store import PermissionStore
 from omnigent.stores.policy_store import PolicyStore
@@ -1142,6 +1143,7 @@ def create_app(
     permission_store: PermissionStore | None = None,
     scheduled_task_store: ScheduledTaskStore | None = None,
     project_store: ProjectStore | None = None,
+    factory_store: FactoryStore | None = None,
     auth_provider: AuthProvider | None = None,
     host_store: HostStore | None = None,
     account_store: Any | None = None,  # SqlAlchemyAccountStore — accounts mode only
@@ -1197,6 +1199,8 @@ def create_app(
     :param project_store: Store for first-class projects (owner-private
         containers that group sessions). ``None`` disables the
         ``/v1/projects`` CRUD endpoints.
+    :param factory_store: The software-factory cockpit's read model. ``None``
+        falls back to an in-memory store.
     :param auth_provider: Pre-constructed auth provider for
         identity resolution. ``None`` disables auth (anonymous
         access). **Required** when ``permission_store`` is
@@ -2758,6 +2762,8 @@ def create_app(
         file_store=file_store,
         artifact_store=artifact_store,
         runner_tunnel_tokens=runner_tunnel_tokens,
+        factory_store=factory_store,
+        project_store=project_store,
     )
     app.include_router(
         create_imports_router(
