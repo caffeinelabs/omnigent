@@ -440,7 +440,7 @@ const REPLY_NOTICE_RE =
 const PR_NOTICE_RE = /^PR (\S+)#(\d+) (.*)$/;
 const URL_TAIL_RE = / · (https?:\/\/\S+)$/;
 const CONTROL_NOTICE_RE =
-  /^(.+) (paused|resumed|stopped|restarted|relaunched|previewed|updated) (.+) via cockpit$/;
+  /^(.+) (paused|resumed|stopped|restarted|relaunched|previewed|updated|requested) (.+) via cockpit$/;
 const FAILED_RE = /^"(.+)" \(([\w-]+)\) failed: ([\s\S]*)$/;
 const STUCK_RE = /^"(.+)" \(([\w-]+)\) running with no progress for (\S+?)\./;
 const STORM_RE = /^message storm · "(.+?)" \(([\w-]+)\) hit the limit of ([^;]+);/;

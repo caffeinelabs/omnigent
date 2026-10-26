@@ -208,6 +208,7 @@ describe("summarizeFactoryMarker", () => {
       "warning",
     ],
     ["[Factory notice · Luka paused PL · db via cockpit]", "control", "muted"],
+    ["[Factory notice · Luka requested env status of project db via cockpit]", "control", "muted"],
     ['[Factory alert · "PL · db" (abc) failed: boom]', "alert", "danger"],
     [
       '[Factory alert · "PL · db" (abc) running with no progress for 47m. Inspect.]',
