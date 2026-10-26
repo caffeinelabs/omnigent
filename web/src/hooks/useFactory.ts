@@ -14,7 +14,9 @@ import {
 import { useSessionUpdatesConnected } from "@/hooks/useSessionUpdatesConnected";
 import { ApiError } from "@/lib/sessionsApi";
 import {
+  type EventCursor,
   type EventFilters,
+  type EventPage,
   type FactoryListResponse,
   type FactorySnapshot,
   type OpenDecisionsResponse,
@@ -141,16 +143,28 @@ export function useFactory(factoryId: string | null | undefined): UseFactoryResu
   };
 }
 
-/** A factory's activity, newest first, paged backwards by event time. */
+/**
+ * The cursor of the page after `page`: the server's, else its oldest event.
+ * Time plus id, so events sharing a millisecond are never skipped.
+ */
+export function nextEventCursor(page: EventPage): EventCursor | undefined {
+  if (!page.has_more) return undefined;
+  if (page.next_before != null) {
+    return { before: page.next_before, before_id: page.next_before_id ?? null };
+  }
+  const oldest = page.data.at(-1);
+  return oldest ? { before: oldest.ts, before_id: oldest.id } : undefined;
+}
+
+/** A factory's activity, newest first, paged backwards by event time and id. */
 export function useFactoryEvents(factoryId: string | null | undefined, filters: EventFilters = {}) {
   const refetchInterval = useFallbackInterval();
   return useInfiniteQuery({
     queryKey: factoryEventsQueryKey(factoryId ?? "", filters),
     queryFn: ({ pageParam }) =>
-      fetchFactoryEvents(factoryId as string, { ...filters, before: pageParam }),
-    initialPageParam: null as number | null,
-    getNextPageParam: (lastPage) =>
-      lastPage.has_more && lastPage.data.length > 0 ? lastPage.data.at(-1)!.ts : undefined,
+      fetchFactoryEvents(factoryId as string, { ...filters, cursor: pageParam }),
+    initialPageParam: null as EventCursor | null,
+    getNextPageParam: nextEventCursor,
     enabled: Boolean(factoryId),
     refetchInterval,
     retry: retryTransient,

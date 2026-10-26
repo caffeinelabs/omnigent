@@ -246,7 +246,7 @@ describe("factory request helpers", () => {
     authenticatedFetch.mockResolvedValue(json({ data: [], has_more: false }));
 
     await fetchFactoryEvents("f1", {
-      before: 1793017800000,
+      cursor: { before: 1793017800000, before_id: "ev9" },
       project: "api-version",
       kinds: ["dispatch", "gate.changed"],
     });
@@ -255,6 +255,7 @@ describe("factory request helpers", () => {
     expect(url.pathname).toBe("/v1/factory/factories/f1/events");
     expect(Object.fromEntries(url.searchParams)).toEqual({
       before: "1793017800000",
+      before_id: "ev9",
       limit: "100",
       project: "api-version",
       kinds: "dispatch,gate.changed",

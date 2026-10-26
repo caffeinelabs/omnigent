@@ -546,6 +546,15 @@ export interface FactoryListResponse {
 export interface EventPage {
   data: EventView[];
   has_more: boolean;
+  /** The next page's cursor (it skips past events the viewer cannot read). */
+  next_before?: number | null;
+  next_before_id?: string | null;
+}
+
+/** Where an older page of events starts: strictly before `(before, before_id)`. */
+export interface EventCursor {
+  before: number;
+  before_id: string | null;
 }
 
 export interface OpenDecisionItem {
@@ -739,10 +748,13 @@ export async function fetchFactorySnapshot(
  */
 export async function fetchFactoryEvents(
   factoryId: string,
-  options: EventFilters & { before?: number | null } = {},
+  options: EventFilters & { cursor?: EventCursor | null } = {},
 ): Promise<EventPage> {
   const params = new URLSearchParams();
-  if (options.before != null) params.set("before", String(options.before));
+  if (options.cursor) {
+    params.set("before", String(options.cursor.before));
+    if (options.cursor.before_id) params.set("before_id", options.cursor.before_id);
+  }
   params.set("limit", String(options.limit ?? 100));
   if (options.project) params.set("project", options.project);
   if (options.member) params.set("member", options.member);

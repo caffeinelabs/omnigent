@@ -9,8 +9,10 @@ import {
   useFactories,
   useFactory,
   useFactoryDecisionCount,
+  nextEventCursor,
   useFactoryEvents,
 } from "./useFactory";
+import type { EventPage } from "@/lib/factoryApi";
 import { useSessionUpdatesConnected } from "./useSessionUpdatesConnected";
 
 const authenticatedFetch = vi.fn();
@@ -146,7 +148,7 @@ describe("factory list, events and decisions", () => {
     expect(authenticatedFetch).not.toHaveBeenCalled();
   });
 
-  it("pages events by the oldest event time", async () => {
+  it("pages events by the server's (time, id) cursor", async () => {
     authenticatedFetch
       .mockResolvedValueOnce(
         json({
@@ -155,6 +157,9 @@ describe("factory list, events and decisions", () => {
             { id: "e1", ts: 1000 },
           ],
           has_more: true,
+          // Past hidden events the viewer cannot read.
+          next_before: 900,
+          next_before_id: "e1h",
         }),
       )
       .mockResolvedValueOnce(json({ data: [{ id: "e0", ts: 500 }], has_more: false }));
@@ -166,8 +171,23 @@ describe("factory list, events and decisions", () => {
     await waitFor(() => expect(result.current.data?.pages).toHaveLength(2));
     expect(result.current.hasNextPage).toBe(false);
     const second = new URL(String(authenticatedFetch.mock.calls[1]![0]), "http://x");
-    expect(second.searchParams.get("before")).toBe("1000");
+    expect(second.searchParams.get("before")).toBe("900");
+    expect(second.searchParams.get("before_id")).toBe("e1h");
     expect(second.searchParams.get("project")).toBe("api-version");
+  });
+
+  it("falls back to the oldest event's time and id, so same-ms events are not skipped", () => {
+    const page = (extra: Partial<EventPage>): EventPage => ({
+      data: [
+        { id: "e2", ts: 1000 },
+        { id: "e1", ts: 1000 },
+      ] as EventPage["data"],
+      has_more: true,
+      ...extra,
+    });
+    expect(nextEventCursor(page({}))).toEqual({ before: 1000, before_id: "e1" });
+    expect(nextEventCursor(page({ has_more: false }))).toBeUndefined();
+    expect(nextEventCursor(page({ data: [] }))).toBeUndefined();
   });
 
   it("counts open decisions", async () => {
