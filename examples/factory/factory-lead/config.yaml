@@ -173,6 +173,7 @@ guardrails:
         arguments:
           role: lead
           write_repos: [caffeinelabs/app]
+          push_ref_prefixes: [factory/]
     spawn_bounds:
       type: function
       function:

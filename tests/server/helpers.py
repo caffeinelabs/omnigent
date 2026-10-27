@@ -732,6 +732,33 @@ def register_test_runner(
     )
 
 
+def factory_guardrails(role: str) -> dict[str, Any]:
+    """
+    The ``guardrails:`` block every factory-role spec must carry to upload.
+
+    :param role: The spec's ``executor.config.factory_role``, e.g. ``"lead"``.
+    :returns: ``blast_radius`` plus ``factory_role_guard`` for *role*.
+    """
+    return {
+        "policies": {
+            "blast_radius": {
+                "type": "function",
+                "function": {
+                    "path": "omnigent.policies.builtins.orchestration.blast_radius",
+                    "arguments": {"gate_pushes": False},
+                },
+            },
+            "factory_guard": {
+                "type": "function",
+                "function": {
+                    "path": "omnigent.policies.builtins.factory.factory_role_guard",
+                    "arguments": {"role": role, "write_repos": ["caffeinelabs/app"]},
+                },
+            },
+        }
+    }
+
+
 def build_agent_bundle(
     name: str,
     description: str | None = None,
@@ -845,6 +872,8 @@ def build_agent_bundle(
             }
             if "description" in sa:
                 sa_config["description"] = sa["description"]
+            if "guardrails" in sa:
+                sa_config["guardrails"] = sa["guardrails"]
             sa_bytes = yaml.dump(sa_config).encode()
             sa_info = tarfile.TarInfo(
                 name=f"agents/{sa['name']}/config.yaml",

@@ -26,11 +26,15 @@ from omnigent.factory import (
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
     ROLE_REVIEWER,
-    ROLES,
 )
 from omnigent.policies.builtins import BUILTIN_POLICY_MODULES
 from omnigent.policies.builtins._shell import SHELL_TOOLS
-from omnigent.policies.builtins.factory import MERGE_GATE_HINT, factory_role_guard
+from omnigent.policies.builtins.factory import (
+    GUARD_ROLES,
+    MERGE_GATE_HINT,
+    ROLE_PLANNER,
+    factory_role_guard,
+)
 from omnigent.policies.registry import (
     get_entry,
     is_registered_handler,
@@ -41,9 +45,10 @@ from omnigent.runner.policy import RunnerToolPolicyGate
 from omnigent.spec import load
 
 _HANDLER = "omnigent.policies.builtins.factory.factory_role_guard"
-_ALL_ROLES = sorted(ROLES)
+_ALL_ROLES = sorted(GUARD_ROLES)
 _PUSHING_ROLES = [ROLE_PROJECT_LEAD, ROLE_IC, ROLE_ENV_KEEPER]
-_NON_PL_ROLES = [r for r in _ALL_ROLES if r != ROLE_PROJECT_LEAD]
+_NO_PUSH_ROLES = [ROLE_LEAD, ROLE_REVIEWER, ROLE_DEMO, ROLE_PLANNER]
+_COMMENTING_ROLES = [r for r in _ALL_ROLES if r != ROLE_PLANNER]
 _ENV_ROLES = [ROLE_ENV_KEEPER, ROLE_PROJECT_LEAD]
 _NON_ENV_ROLES = [r for r in _ALL_ROLES if r not in _ENV_ROLES]
 _MERGE_URL = "https://github.com/caffeinelabs/app/pull/7"
@@ -195,6 +200,10 @@ _DENIED_FOR_ALL = [
     # A quoted interpreter still runs its heredoc; double-quoted backticks run.
     "\"bash\" <<'EOF'\ngh pr merge 7\nEOF",
     'git commit -m "explain `gh pr merge 7`"',
+    # Process substitution runs its body, even under a read-only command.
+    "diff <(gh pr merge 7) notes.md",
+    "cat <(git push origin main)",
+    "tee >(gh pr merge 7) < notes.md",
 ]
 
 
@@ -231,7 +240,6 @@ _ALLOWED_FOR_ALL = [
     "gh release view v1.0.0",
     "gh repo view caffeinelabs/app",
     "gh workflow list",
-    "gh pr comment 7 --body 'please do not gh pr merge this by hand'",
     "echo git push origin main",
     "grep -rn 'gh pr merge' docs/",
     "tilt get uiresources",
@@ -248,11 +256,8 @@ _ALLOWED_FOR_ALL = [
     _nested("git status", 3),
     # Heredoc bodies and quoted messages are prose, not commands.
     "git commit -m \"$(cat <<'EOF'\nfix env\n\n1) run tilt up; then gh pr merge 7\nEOF\n)\"",
-    "gh pr comment 7 --body \"$(cat <<'EOF'\n| step | cmd |\n| up | pnpm factory:up |\n"
-    'git push origin main is blocked\nEOF\n)"',
     "cat <<-EOF > notes.md\n\tkubectl delete ns env-abc\n\tEOF",
     "git commit -m 'docs: never gh pr merge; use the gate | always'",
-    "gh pr comment 7 --body 'Ready.\nNext: tilt down && git push origin main'",
     # Single-quoted substitutions are literal; multi-word quoted text is prose.
     "git commit -m 'docs: explain `tilt up` and $(gh pr merge 7)'",
     'git commit -m "Fix sh" -m "$(cat <<\'EOF\'\nthen tilt up and gh pr merge 7\nEOF\n)"',
@@ -265,14 +270,28 @@ _ALLOWED_FOR_ALL = [
     "node ~/factory/demo-harness/run.mjs --spec demo.spec.ts --out . --sha abc",
     "cd ~/factory/demo-harness && npm ci && npx playwright test",
     "curl -fsS https://app-x-p7.envs.sandbox.caffeinelabs.io/__factory/preview",
+]
+
+
+# PR comments: every role but the read-only planner posts them.
+_PR_COMMENTS = [
+    "gh pr comment 7 --body 'please do not gh pr merge this by hand'",
+    "gh pr comment 7 --body \"$(cat <<'EOF'\n| step | cmd |\n| up | pnpm factory:up |\n"
+    'git push origin main is blocked\nEOF\n)"',
+    "gh pr comment 7 --body 'Ready.\nNext: tilt down && git push origin main'",
     "gh pr comment https://github.com/caffeinelabs/app/pull/7 --body-file pr-comment.md",
     "gh api -X POST repos/caffeinelabs/app/issues/7/comments -f body=demo",
+    'gh api graphql -f query=\'mutation { addComment(input: {subjectId: "x", body: "d"}) '
+    "{ clientMutationId } }'",
 ]
 
 
 @pytest.mark.parametrize(
     ("role", "command", "expected"),
-    _cases(_ALL_ROLES, _DENIED_FOR_ALL, "DENY") + _cases(_ALL_ROLES, _ALLOWED_FOR_ALL, "ALLOW"),
+    _cases(_ALL_ROLES, _DENIED_FOR_ALL, "DENY")
+    + _cases(_ALL_ROLES, _ALLOWED_FOR_ALL, "ALLOW")
+    + _cases(_COMMENTING_ROLES, _PR_COMMENTS, "ALLOW")
+    + _cases([ROLE_PLANNER], _PR_COMMENTS, "DENY"),
 )
 def test_rules_for_every_role(role: str, command: str, expected: str) -> None:
     """
@@ -295,7 +314,8 @@ def test_raw_merge_reason_points_to_the_gate(role: str) -> None:
     assert decision["result"] == "DENY"
     assert MERGE_GATE_HINT in decision["reason"]
     assert MERGE_GATE_HINT == (
-        "merges go through `python -m omnigent.factory_merge <pr-url>` run by the project lead"
+        "humans merge; the factory hands PRs over as READY FOR HUMAN MERGE "
+        "(`python -m omnigent.factory_merge --dry-run <pr-url>` only reports the gates)"
     )
 
 
@@ -303,7 +323,6 @@ def test_raw_merge_reason_points_to_the_gate(role: str) -> None:
 
 _FEATURE_PUSHES = [
     "git push -u origin factory/app/t1",
-    "git push origin HEAD",
     "git push origin HEAD:factory/app/t1",
     "git push --set-upstream origin HEAD:refs/heads/factory/app/t1",
     "git push https://github.com/caffeinelabs/app.git factory/app/t1",
@@ -324,14 +343,36 @@ _PR_CREATES = [
     "  --body \"$(cat <<'EOF'\n## Summary\nrun tilt up, then gh pr merge 7\nEOF\n)\"",
     "gh api -X POST repos/caffeinelabs/app/pulls -f head=factory/x -f base=main -f title=t",
 ]
+# The merge gate merges unless it runs with --dry-run: denied for every role.
 _MERGE_GATE_RUNS = [
     f"python -m omnigent.factory_merge {_MERGE_URL}",
     f"python -m \\\n  omnigent.factory_merge {_MERGE_URL}",
     f"python3 -m omnigent.factory_merge {_MERGE_URL} --admin-fallback",
-    f"cd wt && uv run python -m omnigent.factory_merge {_MERGE_URL} --dry-run",
     f"/usr/bin/python3.12 -m omnigent.factory_merge {_MERGE_URL}",
     "python -c 'from omnigent.factory_merge import main; main([\"x\"])'",
+    'python -c \'from omnigent.factory_merge import main; main(["--dry-run", "x"])\'',
     f"python omnigent/factory_merge.py {_MERGE_URL}",
+    f"cd wt && uv run python -m omnigent.factory_merge {_MERGE_URL}",
+    f"python -m omnigent.factory_merge {_MERGE_URL} --dry",
+    f"python -m omnigent.factory_merge -- --dry-run {_MERGE_URL}",
+    f"python -m omnigent.factory_merge --dry-run {_MERGE_URL}; "
+    f"python -m omnigent.factory_merge {_MERGE_URL}",
+    f"python - <<'EOF'\nfrom omnigent.factory_merge import main\nmain(['{_MERGE_URL}'])\nEOF",
+    f"OMNIGENT_FACTORY_MERGE_REPOS=caffeinelabs/app python -m omnigent.factory_merge {_MERGE_URL}",
+    f"OMNIGENT_FACTORY_MERGE_REPOS=caffeinelabs/app python -m omnigent.factory_merge "
+    f"--dry-run {_MERGE_URL}",
+    f"env OMNIGENT_FACTORY_MERGE_REPOS=caffeinelabs/app python -m omnigent.factory_merge "
+    f"{_MERGE_URL}",
+    f"export OMNIGENT_FACTORY_MERGE_REPOS=caffeinelabs/app; "
+    f"python -m omnigent.factory_merge {_MERGE_URL}",
+]
+# A dry run only reports the gates: allowed for every role.
+_MERGE_GATE_DRY_RUNS = [
+    f"python -m omnigent.factory_merge --dry-run {_MERGE_URL}",
+    f"python -m omnigent.factory_merge {_MERGE_URL} --dry-run",
+    f"cd wt && uv run python -m omnigent.factory_merge {_MERGE_URL} --dry-run",
+    f"python3 omnigent/factory_merge.py --dry-run {_MERGE_URL}",
+    f"python -m omnigent.factory_merge --dry-run {_MERGE_URL} | jq .gates",
 ]
 _ENV_LIFECYCLE = [
     "tilt up",
@@ -367,7 +408,7 @@ _ENV_LIFECYCLE = [
 
 @pytest.mark.parametrize(
     ("role", "command", "expected"),
-    _cases([ROLE_LEAD, ROLE_REVIEWER, ROLE_DEMO], _FEATURE_PUSHES + _PR_CREATES, "DENY")
+    _cases(_NO_PUSH_ROLES, _FEATURE_PUSHES + _PR_CREATES, "DENY")
     + _cases(_PUSHING_ROLES, _FEATURE_PUSHES + _PR_CREATES, "ALLOW"),
 )
 def test_pushes_and_pr_creation_by_role(role: str, command: str, expected: str) -> None:
@@ -384,15 +425,20 @@ def test_pushes_and_pr_creation_by_role(role: str, command: str, expected: str) 
 
 @pytest.mark.parametrize(
     ("role", "command", "expected"),
-    _cases(_NON_PL_ROLES, _MERGE_GATE_RUNS, "DENY")
-    + _cases([ROLE_PROJECT_LEAD], _MERGE_GATE_RUNS, "ALLOW"),
+    _cases(_ALL_ROLES, _MERGE_GATE_RUNS, "DENY")
+    + _cases(_ALL_ROLES, _MERGE_GATE_DRY_RUNS, "ALLOW"),
 )
-def test_merge_gate_is_project_lead_only(role: str, command: str, expected: str) -> None:
-    """Only the project lead runs ``python -m omnigent.factory_merge``."""
+def test_merge_gate_runs_only_as_a_dry_run(role: str, command: str, expected: str) -> None:
+    """
+    No role merges: the gate runs only with ``--dry-run``, as a verdict tool.
+
+    A DENY → ALLOW here lets an unattended agent merge into a base (or widen
+    the merge allowlist inline); an ALLOW → DENY stops a PL reading its gates.
+    """
     decision = _decide(role, command)
     assert decision["result"] == expected, decision.get("reason")
     if expected == "DENY":
-        assert "project lead" in decision["reason"]
+        assert "OMNIGENT_FACTORY_" in decision["reason"] or "--dry-run" in decision["reason"]
 
 
 @pytest.mark.parametrize(
@@ -500,6 +546,316 @@ def test_non_shell_events_are_allowed() -> None:
     }
 
 
+# ── Tier 0: push-ref allowlist, server knobs, merge lockout ─────────────────
+
+# The red-team table: every one must be denied for every role.
+_RED_TEAM = [
+    "git push origin HEAD:temp-main",
+    "git push origin :factory/x",
+    "git push",
+    "git push --mirror",
+    f"OMNIGENT_FACTORY_MERGE_REPOS=caffeinelabs/app python -m omnigent.factory_merge {_MERGE_URL}",
+    "env OMNIGENT_FACTORY_X=1 cmd",
+    "export OMNIGENT_FACTORY_X=1; cmd",
+]
+# Config in (or set before) the command that sends an explicit factory/ push
+# elsewhere: a worktree made with ``-b … origin/temp-main`` tracks temp-main, so
+# push.default=upstream lands there; remote/url config repoints the repo.
+_PUSH_CONFIG_REDIRECTS = [
+    "git -c push.default=upstream push origin factory/a/b",
+    "git -c remote.origin.push=refs/heads/factory/a/b:refs/heads/temp-main "
+    "push origin factory/a/b",
+    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=upstream "
+    "git push origin factory/a/b",
+    "git config push.default upstream && git push origin factory/a/b",
+    "git -c url.https://github.com/caffeinelabs/infra.pushInsteadOf="
+    "https://github.com/caffeinelabs/app push origin factory/a/b",
+    "PD=upstream git --config-env push.default=PD push origin factory/a/b",
+    "git --config-env=push.default=PD push origin factory/a/b",
+    "git -C wt -c push.default=tracking push -u origin factory/a/b",
+    "git -c include.path=/tmp/push.cfg push origin factory/a/b",
+    "export GIT_CONFIG_PARAMETERS=\"'push.default'='upstream'\"",
+    "export GIT_CONFIG_COUNT=1",
+    "env GIT_CONFIG_GLOBAL=/tmp/g git push origin factory/a/b",
+    "GIT_CONFIG_PARAMETERS=x bash -c 'git push origin factory/a/b'",
+    # An inline alias or include hides a push behind another name.
+    "git -c alias.p='push origin factory/a/b:temp-main' p",
+    "git -c include.path=/tmp/alias.cfg ship",
+    # Persistent config writes that steer a later push.
+    "git config push.default upstream",
+    "git config --global push.default current",
+    "git config --add remote.origin.push HEAD:temp-main",
+    "git config remote.origin.pushurl https://github.com/caffeinelabs/infra",
+    "git config remote.origin.url git@github.com:caffeinelabs/infra.git",
+    "git config remote.origin.mirror true",
+    "git config set remote.origin.pushurl https://github.com/caffeinelabs/infra",
+    "git config --file .git/config url.git@github.com:caffeinelabs/infra.pushInsteadOf "
+    "https://github.com/caffeinelabs/app",
+    "git config --global url.https://github.com/caffeinelabs/infra.insteadOf "
+    "https://github.com/caffeinelabs/app",
+    "git config branch.factory/a/b.merge refs/heads/temp-main",
+    "git config alias.ship 'push origin factory/a/b:temp-main'",
+    "git config --replace-all remote.origin.push HEAD:temp-main",
+    "git config --rename-section remote.infra remote.origin",
+    "git config -e",
+    "git remote set-url origin https://github.com/caffeinelabs/infra",
+    "git remote set-url --push origin https://github.com/caffeinelabs/infra",
+    "git remote add infra https://github.com/caffeinelabs/infra",
+    "git remote rename origin old",
+    # Pushes in other spellings.
+    "git --attr-source HEAD push origin HEAD:temp-main",
+    "git send-pack origin HEAD:temp-main",
+]
+# Reading config, and config that cannot steer a push, stays open.
+_HARMLESS_GIT_CONFIG = [
+    "git config user.email ic@factory",
+    "git config --global user.name ic",
+    "git config --get push.default",
+    "git config get remote.origin.url",
+    "git config --list --show-origin",
+    "git config push.default",
+    "git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'",
+    "git -c user.name=ic -c user.email=ic@factory commit -m wip",
+    "git -c core.quotepath=off status",
+    "GIT_CONFIG_NOSYSTEM=1 git status",
+    "echo $GIT_CONFIG_GLOBAL",
+    "git remote -v",
+    "git remote get-url origin",
+    "git log -- omnigent/factory_merge.py",
+    "git diff origin/main -- omnigent/factory_merge.py",
+    "ls omnigent/factory_merge.py",
+]
+# Every push whose destination is not an explicit branch under factory/.
+_OFF_PREFIX_PUSHES = [
+    "git push origin temp-main",
+    "git push origin HEAD:refs/heads/temp-main",
+    "git push origin factory/app/t1:temp-main",
+    "git push origin HEAD",
+    "git push origin @",
+    "git push -u origin HEAD",
+    "git push origin",
+    "git push -u origin",
+    "cd wt && git push",
+    "git -C /home/omnigent/workspace/wt/t1 push",
+    "git push origin feature/x",
+    "git push origin HEAD:feature",
+    "git push origin HEAD:factory",
+    "git push origin HEAD:factory/",
+    "git push origin factory-x",
+    "git push origin HEAD:refs/notes/commits",
+    "git push origin HEAD:refs/for/main",
+    "git push origin 'refs/heads/*:refs/heads/*'",
+    "git push origin 'refs/heads/fact*:refs/heads/fact*'",
+    "git push --delete origin factory/app/t1",
+    "git push -d origin factory/app/t1",
+    "git push --prune origin 'refs/heads/factory/*:refs/heads/factory/*'",
+    "git push origin factory/app/t1 :factory/app/old",
+    "gh api repos/caffeinelabs/app/git/refs -f ref=refs/heads/feature -f sha=abc",
+    "gh api -X PATCH repos/caffeinelabs/app/git/refs/heads/temp-main -f sha=abc",
+    "gh api -X DELETE repos/caffeinelabs/app/git/refs/heads/factory/app/t1",
+    "gh api -X PUT repos/caffeinelabs/app/contents/docs/x.md -f branch=feature "
+    "-f message=m -f content=eA==",
+]
+# Explicit pushes under factory/ stay open to every pushing role.
+_PREFIX_PUSHES = [
+    "git push -u origin factory/a/b",
+    "git push origin factory/a/b",
+    "git push origin HEAD:factory/a/b",
+    "git push origin HEAD:refs/heads/factory/a/b",
+    "git push origin refs/heads/factory/a/b",
+    "git push origin factory/a/b factory/a/c",
+    "git push origin 'refs/heads/factory/*:refs/heads/factory/*'",
+    "git push --set-upstream origin factory/a/b",
+]
+# Reading the knobs is fine; only setting them is denied.
+_FACTORY_ENV_READS = [
+    "echo $OMNIGENT_FACTORY_MERGE_REPOS",
+    'echo "${OMNIGENT_FACTORY_MERGE_REPOS:-unset}"',
+    "printenv OMNIGENT_FACTORY_MERGE_REPOS",
+    "env | grep OMNIGENT_FACTORY_",
+    "grep -rn OMNIGENT_FACTORY_ docs/FACTORY.md",
+    'test -z "$OMNIGENT_FACTORY_MERGE_REPOS" && echo empty',
+]
+_FACTORY_ENV_WRITES = [
+    "OMNIGENT_FACTORY_MERGE_REPOS=caffeinelabs/app gh pr view 7",
+    "export OMNIGENT_FACTORY_MERGE_REPOS",
+    "export A=1 OMNIGENT_FACTORY_MERGE_REPOS=caffeinelabs/app",
+    "env -i OMNIGENT_FACTORY_MERGE_REPOS=x bash",
+    "/usr/bin/env OMNIGENT_FACTORY_MERGE_REPOS=x python -m pytest",
+    "declare -x OMNIGENT_FACTORY_MERGE_REPOS=x",
+    ": ${OMNIGENT_FACTORY_MERGE_REPOS:=caffeinelabs/app}",
+    "OMNIGENT_FACTORY_MERGE_REPOS+=,caffeinelabs/app",
+    "bash -c 'OMNIGENT_FACTORY_X=1 make'",
+    "read OMNIGENT_FACTORY_MERGE_REPOS < repos.txt",
+    "printf -v OMNIGENT_FACTORY_MERGE_REPOS %s caffeinelabs/app",
+]
+
+
+@pytest.mark.parametrize(
+    ("role", "command", "expected"),
+    _cases(_ALL_ROLES, _RED_TEAM, "DENY")
+    + _cases(_ALL_ROLES, _OFF_PREFIX_PUSHES, "DENY")
+    + _cases(_ALL_ROLES, _FACTORY_ENV_WRITES, "DENY")
+    + _cases(_ALL_ROLES, _PUSH_CONFIG_REDIRECTS, "DENY")
+    + _cases(_ALL_ROLES, _HARMLESS_GIT_CONFIG, "ALLOW")
+    + _cases(_PUSHING_ROLES, _PREFIX_PUSHES, "ALLOW")
+    + _cases(_NO_PUSH_ROLES, _PREFIX_PUSHES, "DENY")
+    + _cases(_ALL_ROLES, _FACTORY_ENV_READS, "ALLOW"),
+)
+def test_tier0_push_allowlist_and_server_knobs(role: str, command: str, expected: str) -> None:
+    """
+    Agents push only explicit ``factory/**`` branches and never set server knobs.
+
+    A wrong ALLOW lets an agent move ``temp-main`` (or any base), delete a
+    branch, or widen ``OMNIGENT_FACTORY_MERGE_REPOS`` inline; a wrong DENY
+    stops an IC pushing its feature branch.
+    """
+    decision = _decide(role, command)
+    assert decision["result"] == expected, decision.get("reason")
+    if expected == "DENY":
+        assert isinstance(decision["reason"], str) and decision["reason"]
+
+
+@pytest.mark.parametrize(
+    "command", ["git push", "git push origin", "git push origin HEAD", "git push -u origin HEAD"]
+)
+def test_implicit_pushes_say_how_to_push_explicitly(command: str) -> None:
+    """The hint is the exact command the IC skill documents."""
+    decision = _decide(ROLE_IC, command)
+    assert decision["result"] == "DENY"
+    assert "git push origin factory/<slug>/<task>" in decision["reason"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git -c push.default=upstream push origin factory/a/b",
+        "git config push.default upstream",
+        "GIT_CONFIG_COUNT=1 git push origin factory/a/b",
+    ],
+)
+def test_push_config_reasons_say_how_to_push(command: str) -> None:
+    """Every push-config denial names the explicit push the IC skill documents."""
+    decision = _decide(ROLE_IC, command)
+    assert decision["result"] == "DENY"
+    assert "git push origin factory/<slug>/<task>" in decision["reason"]
+
+
+def test_temp_main_is_protected_by_default() -> None:
+    reason = _decide(ROLE_IC, "git push origin HEAD:temp-main")["reason"]
+    assert "protected branch `temp-main`" in reason
+    api = _decide(ROLE_IC, "gh api -X PATCH repos/caffeinelabs/app/git/refs/heads/temp-main")
+    assert api["result"] == "DENY"
+
+
+def test_server_knob_reason_explains_the_rule() -> None:
+    reason = _decide(ROLE_PROJECT_LEAD, "export OMNIGENT_FACTORY_X=1; cmd")["reason"]
+    assert "OMNIGENT_FACTORY_" in reason and "human-only" in reason
+
+
+def test_infra_is_denied_whatever_the_spec_says() -> None:
+    """``deny_repos`` cannot drop caffeinelabs/infra, even next to write_repos."""
+    params: dict[str, Any] = {"write_repos": ["caffeinelabs/infra"], "deny_repos": []}
+    decision = _decide(ROLE_IC, "gh pr create -R caffeinelabs/infra --fill", **params)
+    assert decision["result"] == "DENY"
+    assert "caffeinelabs/infra" in decision["reason"]
+
+
+# ── Planner and smith profiles ──────────────────────────────────────────────
+
+_PLANNER_DENIED = [
+    "gh pr create --fill",
+    "gh pr edit 7 --title x",
+    "gh pr merge 7",
+    "gh pr close 7",
+    "gh pr review 7 --approve",
+    "gh pr comment 7 --body plan",
+    "gh issue comment 3 --body plan",
+    "gh issue create --title x --body y",
+    "gh api -X POST repos/caffeinelabs/app/issues/7/comments -f body=x",
+    "gh api -X PATCH repos/caffeinelabs/app/pulls/7 -f title=x",
+    "gh api graphql -f query='mutation { addPullRequestReview(input: {}) { x } }'",
+    'gh api graphql -f query=\'mutation { addComment(input: {subjectId: "x", body: "p"}) '
+    "{ clientMutationId } }'",
+    'gh api graphql -f query=\'mutation { createIssue(input: {repositoryId: "r", title: "t"}) '
+    "{ issue { number } } }'",
+    "gh api graphql -F query=@q.graphql -f q='mutation { closeIssue(input: {}) { x } }'",
+    "git push origin factory/plan/x",
+    "tilt up",
+    "pnpm factory:preview up --name p1",
+    "kubectl delete ns env-abc",
+]
+_PLANNER_ALLOWED = [
+    "git fetch origin && git worktree add --detach /tmp/plan origin/temp-main",
+    "gh pr view 7 --json files",
+    "gh pr list --state open",
+    "gh issue view 3",
+    "rg -n 'version' apps/",
+    "node scope-graph.mjs plan.json",
+    "python3 analyse.py > ~/factory/plans/p1.json",
+    f"python -m omnigent.factory_merge --dry-run {_MERGE_URL}",
+]
+
+
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [pytest.param(c, "DENY", id=c[:60]) for c in _PLANNER_DENIED]
+    + [pytest.param(c, "ALLOW", id=c[:60]) for c in _PLANNER_ALLOWED],
+)
+def test_planner_reads_and_runs_local_commands_only(command: str, expected: str) -> None:
+    """The planner analyses; it never pushes, writes PRs or issues, or runs envs."""
+    decision = _decide(ROLE_PLANNER, command)
+    assert decision["result"] == expected, decision.get("reason")
+
+
+def test_planner_reasons_name_the_planner() -> None:
+    for command in ("gh pr comment 7 --body x", "git push origin factory/a/b"):
+        assert "planner" in _decide(ROLE_PLANNER, command)["reason"]
+
+
+_SMITH_ALLOWED = [
+    "git push -u origin factory/self/guard/t1",
+    "git push origin HEAD:factory/self/guard/t1",
+    "gh pr create -R caffeinelabs/omnigent --base staging --head factory/self/guard/t1 --fill",
+    "gh pr comment https://github.com/caffeinelabs/omnigent/pull/140 --body ok",
+    "python -m omnigent.factory_merge --dry-run https://github.com/caffeinelabs/omnigent/pull/1",
+]
+_SMITH_DENIED = [
+    "git push origin factory/app/t1",
+    "git push origin staging",
+    "git push origin HEAD:main",
+    "git push",
+    "gh pr create -R caffeinelabs/infra --fill",
+    "gh pr create -R caffeinelabs/app --fill",
+    "git push https://github.com/caffeinelabs/infra.git factory/self/x",
+    "gh pr merge https://github.com/caffeinelabs/omnigent/pull/140 --squash",
+    "python -m omnigent.factory_merge https://github.com/caffeinelabs/omnigent/pull/140",
+    "OMNIGENT_FACTORY_MERGE_REPOS=caffeinelabs/omnigent python -m omnigent.factory_merge x",
+]
+
+
+@pytest.mark.parametrize("role", [ROLE_PROJECT_LEAD, ROLE_IC])
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [pytest.param(c, "ALLOW", id=c[:60]) for c in _SMITH_ALLOWED]
+    + [pytest.param(c, "DENY", id=c[:60]) for c in _SMITH_DENIED],
+)
+def test_smith_profile_matrix(role: str, command: str, expected: str) -> None:
+    """
+    The smith lane writes PRs to omnigent from ``factory/self/**`` and never merges.
+
+    Registered for Tier 2 (off): a wrong ALLOW would let self-modification
+    touch infra, app or a base branch, or merge its own PR.
+    """
+    decision = _decide(role, command, profile="smith")
+    assert decision["result"] == expected, decision.get("reason")
+
+
+def test_unknown_profile_is_rejected() -> None:
+    with pytest.raises(ValueError, match="profile must be one of"):
+        factory_role_guard(role=ROLE_IC, profile="admin")
+
+
 # ── Parameters ──────────────────────────────────────────────────────────────
 
 
@@ -519,7 +875,14 @@ def test_custom_repo_and_branch_parameters() -> None:
         "DENY"
     )
     assert _decide(ROLE_IC, "git push origin release", **params)["result"] == "DENY"
-    assert _decide(ROLE_IC, "git push origin main", **params)["result"] == "ALLOW"
+    # Outside push_ref_prefixes, an unprotected branch is still not pushable.
+    assert _decide(ROLE_IC, "git push origin main", **params)["result"] == "DENY"
+    assert _decide(ROLE_IC, "git push origin factory/x/y", **params)["result"] == "ALLOW"
+    custom = {**params, "push_ref_prefixes": ["release/", "refs/heads/team"]}
+    assert _decide(ROLE_IC, "git push origin release/1.2", **custom)["result"] == "ALLOW"
+    assert _decide(ROLE_IC, "git push origin HEAD:team/x", **custom)["result"] == "ALLOW"
+    assert _decide(ROLE_IC, "git push origin factory/x/y", **custom)["result"] == "DENY"
+    assert _decide(ROLE_IC, "git push origin teamwork", **custom)["result"] == "DENY"
 
 
 def test_scalar_parameters_are_accepted() -> None:
@@ -763,7 +1126,19 @@ def _verdicts(gate: RunnerToolPolicyGate, commands: list[str]) -> list[tuple[str
         (ROLE_IC, "rm -rf build", "allow", None),
         (ROLE_IC, "gh pr create --fill", "allow", None),
         (ROLE_IC, "gh pr create \\\n  --title x \\\n  --body y", "allow", None),
-        (ROLE_PROJECT_LEAD, f"python -m omnigent.factory_merge {_MERGE_URL}", "allow", None),
+        (
+            ROLE_PROJECT_LEAD,
+            f"python -m omnigent.factory_merge {_MERGE_URL}",
+            "deny",
+            "factory_guard",
+        ),
+        (
+            ROLE_PROJECT_LEAD,
+            f"python -m omnigent.factory_merge --dry-run {_MERGE_URL}",
+            "allow",
+            None,
+        ),
+        (ROLE_IC, "git push", "deny", "factory_guard"),
         (ROLE_ENV_KEEPER, "cd wt/env && pnpm factory:up", "allow", None),
         (ROLE_ENV_KEEPER, "kubectl delete ns env-abc", "allow", None),
     ],
@@ -818,10 +1193,13 @@ def test_registered_as_builtin_policy() -> None:
                 "write_repos": ["caffeinelabs/app"],
                 "protected_branches": ["main"],
                 "deny_repos": ["caffeinelabs/infra"],
+                "push_ref_prefixes": ["factory/"],
             },
         )
         is None
     )
+    assert validate_factory_params(_HANDLER, {"role": "planner"}) is None
+    assert validate_factory_params(_HANDLER, {"role": "ic", "profile": "smith"}) is None
     assert "Missing required params" in (validate_factory_params(_HANDLER, {}) or "")
     assert "must be array" in (
         validate_factory_params(_HANDLER, {"role": "ic", "write_repos": 3}) or ""

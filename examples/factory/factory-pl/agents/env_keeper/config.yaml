@@ -155,3 +155,4 @@ guardrails:
         arguments:
           role: env_keeper
           write_repos: [caffeinelabs/app]
+          push_ref_prefixes: [factory/]

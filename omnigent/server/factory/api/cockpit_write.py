@@ -8,7 +8,9 @@ Routes (user JWT; access per route, see each module):
 - ``POST /v1/factory/factories``, ``POST …/{fid}/projects``,
   ``PATCH …/{fid}/projects/{slug}`` (:mod:`..start`)
 
-Refusals render as ``{"error": {"code", "message", "field"?}, ...}``.
+Every route here carries :func:`~omnigent.server.factory.origin.require_human_origin`
+(403 ``human_only`` for runner tokens, runner tunnel headers and untrusted
+origins). Refusals render as ``{"error": {"code", "message", "field"?}, ...}``.
 """
 
 from __future__ import annotations
@@ -26,6 +28,7 @@ from omnigent.server.factory import control, decisions, start
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.envelope import display_title
+from omnigent.server.factory.origin import HUMAN_ORIGIN
 from omnigent.server.routes._auth_helpers import get_user_id
 
 router = APIRouter(prefix="/v1/factory", tags=["factory"])
@@ -95,7 +98,7 @@ def _event_json(event: FactoryEvent | None) -> list[dict[str, Any]]:
     return [] if event is None else [_row_json(event)]
 
 
-@router.post("/decisions/{decision_id}/answer", response_model=None)
+@router.post("/decisions/{decision_id}/answer", response_model=None, dependencies=HUMAN_ORIGIN)
 async def answer_decision(
     request: Request, decision_id: str, body: AnswerBody
 ) -> dict[str, Any] | JSONResponse:
@@ -122,7 +125,7 @@ async def answer_decision(
     return await _guard(run)
 
 
-@router.post("/decisions/{decision_id}/withdraw", response_model=None)
+@router.post("/decisions/{decision_id}/withdraw", response_model=None, dependencies=HUMAN_ORIGIN)
 async def withdraw_decision(
     request: Request, decision_id: str, body: WithdrawBody | None = None
 ) -> dict[str, Any] | JSONResponse:
@@ -142,7 +145,12 @@ async def withdraw_decision(
     return await _guard(run)
 
 
-@router.post("/factories/{factory_id}/control", status_code=202, response_model=None)
+@router.post(
+    "/factories/{factory_id}/control",
+    status_code=202,
+    response_model=None,
+    dependencies=HUMAN_ORIGIN,
+)
 async def post_control(
     request: Request, factory_id: str, body: ControlBody
 ) -> dict[str, Any] | JSONResponse:
@@ -164,7 +172,9 @@ async def post_control(
     return await _guard(run)
 
 
-@router.post("/prs/{pr_id}/refresh", status_code=202, response_model=None)
+@router.post(
+    "/prs/{pr_id}/refresh", status_code=202, response_model=None, dependencies=HUMAN_ORIGIN
+)
 async def refresh_pr(request: Request, pr_id: str) -> dict[str, Any] | JSONResponse:
     """Ask the GitHub poller to refresh one PR now (1 per PR per 10 s)."""
     _, user_id = _caller(request)
@@ -176,7 +186,7 @@ async def refresh_pr(request: Request, pr_id: str) -> dict[str, Any] | JSONRespo
     return await _guard(run)
 
 
-@router.post("/prs/{pr_id}/feedback", response_model=None)
+@router.post("/prs/{pr_id}/feedback", response_model=None, dependencies=HUMAN_ORIGIN)
 async def pr_feedback(
     request: Request, pr_id: str, body: FeedbackBody
 ) -> dict[str, Any] | JSONResponse:
@@ -192,7 +202,7 @@ async def pr_feedback(
     return await _guard(run)
 
 
-@router.post("/factories", response_model=None)
+@router.post("/factories", response_model=None, dependencies=HUMAN_ORIGIN)
 async def start_factory(request: Request, payload: Annotated[Any, Body()]) -> JSONResponse:
     """Start a factory on an existing root lead session (201, or 200 when already started)."""
     _, user_id = _caller(request)
@@ -204,7 +214,12 @@ async def start_factory(request: Request, payload: Annotated[Any, Body()]) -> JS
     return await _guard(run)
 
 
-@router.post("/factories/{factory_id}/projects", status_code=201, response_model=None)
+@router.post(
+    "/factories/{factory_id}/projects",
+    status_code=201,
+    response_model=None,
+    dependencies=HUMAN_ORIGIN,
+)
 async def add_project(
     request: Request, factory_id: str, payload: Annotated[Any, Body()]
 ) -> dict[str, Any] | JSONResponse:
@@ -218,7 +233,9 @@ async def add_project(
     return await _guard(run)
 
 
-@router.patch("/factories/{factory_id}/projects/{slug}", response_model=None)
+@router.patch(
+    "/factories/{factory_id}/projects/{slug}", response_model=None, dependencies=HUMAN_ORIGIN
+)
 async def update_charter(
     request: Request, factory_id: str, slug: str, payload: Annotated[Any, Body()]
 ) -> dict[str, Any] | JSONResponse:

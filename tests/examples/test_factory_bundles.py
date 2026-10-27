@@ -263,6 +263,7 @@ def test_policy_set_per_role(lead: AgentSpec, pl: AgentSpec) -> None:
         assert guard.arguments == {
             "role": factory_role_from_spec(spec),
             "write_repos": ["caffeinelabs/app"],
+            "push_ref_prefixes": ["factory/"],
         }, spec.name
         bounds = policies.get("spawn_bounds")
         if spec.name == "factory-lead":
@@ -456,8 +457,10 @@ def test_prompts_carry_the_operational_contracts(lead: AgentSpec, pl: AgentSpec)
         "[Factory review · CHANGES REQUESTED",
     ):
         assert token in pl_text, token
-    # Humans merge caffeinelabs/app: the PL hands green PRs over instead.
-    assert "never merge and never run the merge gate on it" in " ".join(pl_text.split())
+    # Humans merge every repo: the PL hands green PRs over and runs the gate only as a dry run.
+    flat = " ".join(pl_text.split())
+    assert "Humans merge every repo" in flat
+    assert "python -m omnigent.factory_merge --dry-run <url>" in flat
     env_text = _sub_agent(pl, "env_keeper").instructions or ""
     for token in (
         "UP base=<base>:",
@@ -820,6 +823,55 @@ def test_documented_commands_pass_their_guards(skill: Path, roles: tuple[str, ..
         for role in roles:
             decision = _guard(role, block)
             assert decision["result"] == "ALLOW", f"{role} denied:\n{block}\n{decision}"
+
+
+_GIT_PUSH = re.compile(r"`(git push[^`]*)`")
+
+
+@pytest.mark.parametrize(
+    "path",
+    [
+        _PL_DIR / "agents/ic/skills/factory-ic/SKILL.md",
+        _PL_DIR / "agents/ic_codex/config.yaml",
+    ],
+    ids=["factory-ic", "ic_codex"],
+)
+def test_ics_always_push_with_an_explicit_refspec(path: Path) -> None:
+    """
+    The IC prompts push ``factory/<slug>/<task>`` explicitly; the guard denies bare pushes.
+
+    Each documented push that is not quoted as denied must pass both the IC's
+    and its PL's guard, and the bare spellings must be denied by both.
+    """
+    text = " ".join(path.read_text(encoding="utf-8").split())
+    assert "explicit refspec: `git push -u origin factory/<slug>/<task>`" in text
+    pushes = _GIT_PUSH.findall(text)
+    allowed = [c for c in pushes if c not in ("git push", "git push origin HEAD")]
+    assert allowed, path
+    roles = (ROLE_IC, ROLE_PROJECT_LEAD)
+    for command in allowed:
+        concrete = command.replace("<slug>", "api-version").replace("<task>", "t1")
+        for role in roles:
+            assert _guard(role, concrete)["result"] == "ALLOW", (role, concrete)
+    for bare in ("git push", "git push origin HEAD"):
+        assert f"`{bare}`" in text, bare
+        for role in roles:
+            assert _guard(role, bare)["result"] == "DENY", (role, bare)
+
+
+def test_every_factory_guard_carries_the_push_ref_allowlist() -> None:
+    """Every shipped ``factory_guard`` names its push-ref prefixes explicitly."""
+    configs = sorted(_FACTORY_DIR.glob("**/config.yaml"))
+    guarded = 0
+    for config in configs:
+        spec = yaml.safe_load(config.read_text(encoding="utf-8"))
+        policies = ((spec or {}).get("guardrails") or {}).get("policies") or {}
+        guard = policies.get("factory_guard")
+        if guard is None:
+            continue
+        guarded += 1
+        assert guard["function"]["arguments"]["push_ref_prefixes"] == ["factory/"], config
+    assert guarded == 7
 
 
 def test_preview_lifecycle_stays_with_env_keeper() -> None:

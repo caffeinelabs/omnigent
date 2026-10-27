@@ -168,6 +168,86 @@ async def test_title_goes_through_the_rename_path(world: FactoryWorld, api: Fact
     assert bad.status_code == 400
 
 
+def _label_events(api: FactoryApi, factory_id: str) -> list[Any]:
+    """:returns: The factory's ``label.changed`` events, oldest first."""
+    rows = factory_deps(api.app.state).factory_store.list_events(factory_id, limit=500)
+    return [e for e in reversed(rows) if e.kind == "label.changed"]
+
+
+async def test_label_writes_emit_label_changed(world: FactoryWorld, api: FactoryApi) -> None:
+    """Every label a PATCH changes is audited: field, old, new value and the agent."""
+    lead_a, pl = world.id("lead_a"), world.id("pl")
+
+    resp = await _patch(api, lead_a, pl, state="paused", heartbeat_s=0)
+    again = await _patch(api, lead_a, pl, state="paused")
+    cleared = await _patch(api, lead_a, pl, supervisor_session_id="")
+
+    assert resp.status_code == again.status_code == cleared.status_code == 200
+    events = _label_events(api, lead_a)
+    assert [(e.data["field"], e.data["from"], e.data["to"]) for e in events] == [
+        ("state", "active", "paused"),
+        ("heartbeat_s", "600", "0"),
+        ("supervisor_session_id", world.id("lead_b"), None),
+    ]
+    first = events[0]
+    assert first.data["label"] == F.LABEL_STATE
+    assert first.data["by"] == lead_a
+    assert first.data["by_kind"] == "agent"
+    assert first.data["by_role"] == "lead"
+    assert first.project_slug == "api-version"
+    assert first.to_id == pl
+    assert first.summary == "PL · api-version · state: active → paused"
+
+
+async def test_beacon_writes_on_a_sub_agent_are_audited_too(
+    world: FactoryWorld, api: FactoryApi
+) -> None:
+    pl, ic = world.id("pl"), world.id("ic")
+
+    resp = await _patch(api, pl, ic, summary="writing tests", health="ok")
+
+    assert resp.status_code == 200
+    fields = {e.data["field"]: e.data["to"] for e in _label_events(api, world.id("lead_a"))}
+    assert fields == {"summary": "writing tests", "health": "ok"}
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        "def_version",
+        "default_repo",
+        "default_base",
+        "mode",
+        "engine_mode",
+        "autonomy_projects",
+        "omnigent.factory.engine_mode",
+    ],
+)
+async def test_server_only_labels_are_refused(
+    world: FactoryWorld, api: FactoryApi, field: str
+) -> None:
+    lead_a = world.id("lead_a")
+    before = world.get("lead_a").labels
+
+    resp = await _patch(api, lead_a, lead_a, state="paused", **{field: "enforce"})
+
+    assert resp.status_code == 422, resp.text
+    assert _code(resp) == "server_only_label"
+    assert world.get("lead_a").labels == before
+    assert _label_events(api, lead_a) == []
+
+
+async def test_other_unknown_fields_are_still_ignored(
+    world: FactoryWorld, api: FactoryApi
+) -> None:
+    pl = world.id("pl")
+
+    resp = await _patch(api, pl, pl, health="ok", cadence="demo")
+
+    assert resp.status_code == 200, resp.text
+    assert world.get("pl").labels[F.LABEL_HEALTH] == "ok"
+
+
 # ── mounting ────────────────────────────────────────────
 
 

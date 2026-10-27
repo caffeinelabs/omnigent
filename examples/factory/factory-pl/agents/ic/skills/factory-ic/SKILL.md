@@ -14,7 +14,7 @@ you branch from it, sync with it and open the PR against it.
 
 ```
 git -C <repo> fetch origin
-git -C <repo> worktree add -b factory/<slug>/<task> /home/omnigent/workspace/wt/<task> origin/<base>
+git -C <repo> worktree add --no-track -b factory/<slug>/<task> /home/omnigent/workspace/wt/<task> origin/<base>
 cd /home/omnigent/workspace/wt/<task>
 echo NOTES.md >> "$(git rev-parse --git-common-dir)/info/exclude"   # NOTES.md stays out of the PR
 ```
@@ -44,9 +44,12 @@ you are restarted or replaced.
 
 ## WIP cadence
 
-Commit and push to your branch at least hourly:
-`git push -u origin factory/<slug>/<task>`. Never force-push, and never push
-`<base>` or main.
+Commit and push to your branch at least hourly, always with an explicit
+refspec: `git push -u origin factory/<slug>/<task>`. A bare `git push` or
+`git push origin HEAD` is denied (the guard cannot see where it goes), and so
+is any branch outside `factory/`, `git -c …` on a push, and writes to push,
+remote, url or branch config. Never force-push, and never push `<base>` or
+main.
 
 ## PR
 

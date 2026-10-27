@@ -37,7 +37,12 @@ from starlette.responses import JSONResponse, RedirectResponse, Response
 
 from omnigent.server.accounts_store import SqlAlchemyAccountStore
 from omnigent.server.admin_list import AdminList, promote_if_listed
-from omnigent.server.auth import _RESERVED_USERS, RESERVED_USER_LOCAL, UnifiedAuthProvider
+from omnigent.server.auth import (
+    _RESERVED_USERS,
+    RESERVED_USER_LOCAL,
+    UnifiedAuthProvider,
+    runner_origin,
+)
 from omnigent.server.oidc import mint_session_cookie
 from omnigent.server.passwords import (
     InvalidPasswordError,
@@ -260,6 +265,21 @@ def create_accounts_auth_router(
     _session_cookie = config.session_cookie_name
     _session_max_age = config.session_ttl_hours * 3600
 
+    def _refuse_runner(request: Request) -> Response | None:
+        """
+        403 when a runner (an agent acting as its owner) calls a credential route.
+
+        A runner bearer must never become a browser cookie, a password or a new
+        account: those would pass every human-only check.
+        """
+        reason = runner_origin(request, auth_provider)
+        if reason is None:
+            return None
+        return JSONResponse(
+            status_code=403,
+            content={"error": f"people only; the request carries {reason}"},
+        )
+
     # ── Login / logout / me ───────────────────────────────────────
 
     @router.post("/login")
@@ -393,6 +413,8 @@ def create_accounts_auth_router(
     @router.post("/invite")
     async def invite(request: Request, body: InviteRequest) -> Response:
         """Mint a single-use invite URL (admin only)."""
+        if (refused := _refuse_runner(request)) is not None:
+            return refused
         admin_id = auth_provider.get_user_id(request)
         if admin_id is None or not account_store.is_admin(admin_id):
             return JSONResponse(status_code=403, content={"error": "admin only"})
@@ -614,6 +636,8 @@ def create_accounts_auth_router(
         browser session in as the same user — zero password
         re-entry. TTL is intentionally short (default 10 min).
         """
+        if (refused := _refuse_runner(request)) is not None:
+            return refused
         user_id = auth_provider.get_user_id(request)
         if user_id is None:
             return JSONResponse(status_code=401, content={"error": "not authenticated"})
@@ -753,6 +777,8 @@ def create_accounts_auth_router(
         the plaintext exactly once to the calling admin who
         then DMs it to the user out-of-band. No SMTP needed.
         """
+        if (refused := _refuse_runner(request)) is not None:
+            return refused
         admin_id = auth_provider.get_user_id(request)
         if admin_id is None or not account_store.is_admin(admin_id):
             return JSONResponse(status_code=403, content={"error": "admin only"})
@@ -776,6 +802,8 @@ def create_accounts_auth_router(
     @router.post("/users/me/password")
     async def change_own_password(request: Request, body: ChangePasswordRequest) -> Response:
         """Self-serve password change (requires old password)."""
+        if (refused := _refuse_runner(request)) is not None:
+            return refused
         user_id = auth_provider.get_user_id(request)
         if user_id is None:
             return JSONResponse(status_code=401, content={"error": "not authenticated"})

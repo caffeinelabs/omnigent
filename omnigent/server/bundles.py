@@ -8,6 +8,10 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.spec import AgentSpec, ExtractionError, ToolRuntime, load
+from omnigent.spec.types import FunctionPolicySpec
+
+FACTORY_GUARD_HANDLER = "omnigent.policies.builtins.factory.factory_role_guard"
+BLAST_RADIUS_HANDLER = "omnigent.policies.builtins.orchestration.blast_radius"
 
 
 def _is_dotted_callable_path(path: str) -> bool:
@@ -52,6 +56,48 @@ def _reject_uploaded_callable_tools(spec: AgentSpec) -> None:
             )
     for sub in spec.sub_agents:
         _reject_uploaded_callable_tools(sub)
+
+
+def _unconditional_policies(spec: AgentSpec, handler: str) -> list[FunctionPolicySpec]:
+    """:returns: *spec*'s function policies calling *handler* with no label condition."""
+    policies = spec.guardrails.policies if spec.guardrails is not None else None
+    return [
+        policy
+        for policy in policies or []
+        if isinstance(policy, FunctionPolicySpec)
+        and policy.function is not None
+        and policy.function.path == handler
+        and not policy.condition
+    ]
+
+
+def reject_unguarded_factory_specs(spec: AgentSpec) -> None:
+    """Reject a factory-role (sub-)agent that is not fenced by the factory guards.
+
+    A spec whose ``executor.config.factory_role`` is set must carry
+    ``factory_role_guard`` with that same role plus ``blast_radius``, both
+    unconditional (a label ``condition`` could switch them off). Recurses into
+    sub-agents, which each run their own spec.
+
+    :param spec: The parsed (sub-)agent spec to check.
+    :raises OmnigentError: ``INVALID_INPUT`` naming the unguarded agent.
+    """
+    config = spec.executor.config if spec.executor is not None else None
+    role = config.get("factory_role") if isinstance(config, dict) else None
+    if role is not None:
+        guards = _unconditional_policies(spec, FACTORY_GUARD_HANDLER)
+        matching = [
+            p for p in guards if p.function and (p.function.arguments or {}).get("role") == role
+        ]
+        if not matching or not _unconditional_policies(spec, BLAST_RADIUS_HANDLER):
+            raise OmnigentError(
+                f"agent {spec.name!r} declares factory_role {role!r} but lacks an "
+                f"unconditional factory_role_guard with role {role!r} plus blast_radius; "
+                "factory agents always run fenced",
+                code=ErrorCode.INVALID_INPUT,
+            )
+    for sub in spec.sub_agents:
+        reject_unguarded_factory_specs(sub)
 
 
 def _cwd_escapes_workspace(spec_cwd: str) -> bool:
@@ -100,7 +146,8 @@ def validate_agent_bundle(
         this on :func:`omnigent.server.auth.local_single_user_enabled`.
     :returns: The validated :class:`AgentSpec`.
     :raises OmnigentError: If the bundle is invalid, the spec is
-        missing a name, or (when *enforce_handler_allowlist*) a policy
+        missing a name, a factory-role (sub-)agent lacks its guards, or
+        (when *enforce_handler_allowlist*) a policy
         names an unregistered handler, ``os_env.cwd`` is an absolute or
         escaping path, or a tool declares a server-side Python ``callable:``.
     """
@@ -129,6 +176,8 @@ def validate_agent_bundle(
             "agent spec must include a name",
             code=ErrorCode.INVALID_INPUT,
         )
+    # Every server, trusted or not: a factory role is never run without its fence.
+    reject_unguarded_factory_specs(spec)
 
     # Both guards below apply only to untrusted uploads, gated on the same
     # trust signal as the handler allowlist: a trusted single-user/local server

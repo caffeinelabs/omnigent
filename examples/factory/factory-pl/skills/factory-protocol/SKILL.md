@@ -175,10 +175,9 @@ the cockpit.
   the head when it has a factory preview. The server computes these gates;
   `sys_factory_pr` returns them. The PL then posts
   `READY FOR HUMAN MERGE <url> · head <sha7>` to its lead.
-- `gh pr merge` is denied for everyone. The merge gate
-  `python -m omnigent.factory_merge <pr-url>` is for the PL only, merges only
-  repos an operator opted in (`OMNIGENT_FACTORY_MERGE_REPOS`, empty by
-  default), and is never run on caffeinelabs/app.
+- `gh pr merge` is denied for everyone, and so is the merge gate without
+  `--dry-run`: `python -m omnigent.factory_merge --dry-run <pr-url>` only
+  reports the gates. Humans merge every repo.
 - Only `env_keeper` (and its PL) runs `tilt up|down|ci`, `pnpm factory:up|down|preview`
   and `scripts/factory.ts up|down|preview`.
 - Every factory PR targets its project's base branch: the charter's

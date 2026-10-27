@@ -1412,6 +1412,37 @@ def test_unauthed_cannot_mint_magic_link(accounts_app: TestClient) -> None:
     assert resp.status_code == 401
 
 
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        ("POST", "/auth/magic", None),
+        (
+            "POST",
+            "/auth/users/me/password",
+            {"old_password": "admin-pw-12345", "new_password": "runner-pw-12345"},
+        ),
+        ("POST", "/auth/invite", {}),
+        ("POST", "/auth/users/admin/reset", None),
+    ],
+)
+def test_runner_tokens_never_become_human_credentials(
+    accounts_app: TestClient, method: str, path: str, body: dict[str, str] | None
+) -> None:
+    """A runner bearer authenticates as its owner but never mints a cookie, password or account."""
+    token = create_auth_provider().mint_runner_token("admin", 600)
+    assert token is not None
+
+    resp = accounts_app.request(
+        method, path, json=body, headers={"Authorization": f"Bearer {token}"}
+    )
+
+    assert resp.status_code == 403, resp.text
+    assert "runner token" in resp.json()["error"]
+    # The owner's own login still works: only the runner's bearer is refused.
+    admin = _login(accounts_app, "admin", "admin-pw-12345")
+    assert admin.post("/auth/magic").status_code == 200
+
+
 # ── Members admin (integration) ───────────────────────────────────
 
 

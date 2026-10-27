@@ -16,6 +16,7 @@ import logging
 import os
 import secrets
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import httpx
@@ -55,6 +56,7 @@ def mint_session_token(
     cookie_secret: bytes,
     ttl_seconds: int,
     provider: str,
+    extra_claims: Mapping[str, str] | None = None,
 ) -> str:
     """
     Mint a signed session JWT with a second-granularity lifetime.
@@ -71,10 +73,14 @@ def mint_session_token(
     :param ttl_seconds: Token lifetime in seconds.
     :param provider: Identity provider name, e.g. ``"google"`` or
         ``"accounts"``. Stored as an informational claim.
+    :param extra_claims: Additional informational claims, e.g.
+        ``{"org": "runner"}`` on a runner token. They never override the
+        standard ones above, and the validator ignores claims it does not know.
     :returns: An HS256-signed JWT string.
     """
     now = int(time.time())
-    payload = {
+    payload: dict[str, object] = {
+        **(extra_claims or {}),
         "sub": user_id,
         "iat": now,
         "exp": now + ttl_seconds,

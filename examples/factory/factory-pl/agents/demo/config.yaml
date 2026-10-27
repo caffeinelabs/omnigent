@@ -89,3 +89,4 @@ guardrails:
         arguments:
           role: demo
           write_repos: [caffeinelabs/app]
+          push_ref_prefixes: [factory/]
