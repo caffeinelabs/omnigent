@@ -1,25 +1,16 @@
 /**
- * The decisions rail: what the agents asked the human, blocking ones first.
- *
- * Placeholder until the decisions package lands: read-only cards (question,
- * context, options with the recommended one starred) and a link to answer in
- * the asker's chat. Its replacement keeps these props.
+ * The decisions rail: what the agents and the supervisor asked the human,
+ * blocking first, then oldest. Each card answers in one click and shows its
+ * delivery receipt; cards answered here stay until the page reloads, older
+ * answers fold into "Answered (n)".
  */
 
-import {
-  ChevronRightIcon,
-  CircleCheckIcon,
-  MessageSquareIcon,
-  TriangleAlertIcon,
-} from "lucide-react";
-import { useEffect, useRef } from "react";
+import { useState } from "react";
+import { ChevronRightIcon, CircleCheckIcon } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { DecisionView } from "@/lib/factoryApi";
-import { Link } from "@/lib/routing";
-import { cn } from "@/lib/utils";
 import { decisionAnchorId } from "../board/boardModel";
-import { useFactoryNow } from "../factoryClock";
-import { formatElapsed } from "../factoryFormat";
+import { DecisionCard, DecisionReceipt, answerLabel } from "./DecisionCard";
 
 export interface DecisionsRailProps {
   /** The factory (root session) id answers post to. */
@@ -34,111 +25,32 @@ function matches(decision: DecisionView, id: string | null): boolean {
   return id != null && (decision.id === id || decision.ref === id);
 }
 
-function DecisionCard({
-  decision,
-  highlighted,
-  nowS,
-}: {
-  decision: DecisionView;
-  highlighted: boolean;
-  nowS: number;
-}) {
-  const ref = useRef<HTMLElement>(null);
-  useEffect(() => {
-    if (highlighted) ref.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [highlighted]);
-  const waited = formatElapsed(nowS - decision.created_at);
-  const asker =
-    decision.asked_by_title ?? (decision.source === "agent" ? "An agent" : "The supervisor");
-  return (
-    <article
-      ref={ref}
-      id={decisionAnchorId(decision.ref)}
-      data-testid={`decision-card-${decision.ref}`}
-      data-blocking={decision.blocking ? "true" : "false"}
-      data-highlighted={highlighted ? "true" : undefined}
-      className={cn(
-        "flex flex-col gap-1.5 rounded-lg border bg-card p-3 text-sm",
-        decision.blocking ? "border-warning/40" : "border-border",
-        // An outline, not a ring: dark mode's glass card rule owns box-shadow.
-        highlighted &&
-          "animate-[user-msg-flash_800ms_ease-out] outline-2 outline-ring outline-solid motion-reduce:animate-none",
-      )}
-    >
-      <p
-        className={cn(
-          "flex flex-wrap items-center gap-x-1.5 font-medium",
-          decision.blocking ? "text-warning" : "text-muted-foreground",
-        )}
-      >
-        {decision.blocking && <TriangleAlertIcon aria-hidden className="size-3.5" />}
-        <span>{decision.blocking ? "Blocking" : "Question"}</span>
-        {decision.project_slug && <span className="font-normal">· {decision.project_slug}</span>}
-        <span className="font-mono font-normal">· {decision.ref}</span>
-        {waited && <span className="ml-auto font-normal tabular-nums">{waited}</span>}
-      </p>
-      <p className="text-muted-foreground">{asker} asks</p>
-      <p className="text-ui text-foreground">{decision.question}</p>
-      {decision.context && (
-        <Collapsible>
-          <CollapsibleTrigger className="group inline-flex items-center gap-1 text-muted-foreground hover:text-foreground">
-            <ChevronRightIcon
-              aria-hidden
-              className="size-3.5 transition-transform group-data-[state=open]:rotate-90"
-            />
-            Context
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <p className="mt-1 whitespace-pre-wrap text-muted-foreground">{decision.context}</p>
-          </CollapsibleContent>
-        </Collapsible>
-      )}
-      {decision.options.length > 0 && (
-        <ul className="flex flex-wrap gap-1">
-          {decision.options.map((option, i) => (
-            <li
-              key={option.id}
-              title={option.description ?? undefined}
-              className={cn(
-                "inline-flex h-6 items-center gap-1 rounded-md border px-1.5",
-                option.recommended
-                  ? "border-foreground/30 text-foreground"
-                  : "border-border text-muted-foreground",
-              )}
-            >
-              <span className="font-mono text-muted-foreground">{i + 1}</span>
-              {option.label}
-              {option.recommended && <span className="text-warning">★</span>}
-            </li>
-          ))}
-        </ul>
-      )}
-      {decision.asked_by_session_id && (
-        <Link
-          to={`/c/${decision.asked_by_session_id}`}
-          componentId="factory.decision.open_asker"
-          className="inline-flex items-center gap-1 self-start text-muted-foreground hover:text-foreground"
-        >
-          <MessageSquareIcon aria-hidden className="size-3.5" />
-          Answer in chat
-        </Link>
-      )}
-    </article>
-  );
+/** Open decisions in rail order: blocking first, then the longest waiting. */
+export function orderOpenDecisions(decisions: DecisionView[]): DecisionView[] {
+  return decisions
+    .filter((d) => d.status === "open")
+    .sort((a, b) => Number(b.blocking) - Number(a.blocking) || a.created_at - b.created_at);
 }
 
 export function DecisionsRail({ decisions, highlightId }: DecisionsRailProps) {
-  const nowS = Math.floor(useFactoryNow().getTime() / 1000);
-  const open = decisions
-    .filter((d) => d.status === "open")
-    .sort((a, b) => Number(b.blocking) - Number(a.blocking) || a.created_at - b.created_at);
-  const answered = decisions.filter((d) => d.status === "answered");
+  // Answered from this rail: their cards stay (with the receipt) instead of folding away.
+  const [mine, setMine] = useState<Record<string, DecisionView>>({});
+  const open = orderOpenDecisions(decisions);
+  const kept = Object.values(mine).map(
+    (local) => decisions.find((d) => d.id === local.id && d.status !== "open") ?? local,
+  );
+  const cards = [...open, ...kept.filter((d) => !open.some((o) => o.id === d.id))];
+  const answered = decisions
+    .filter((d) => d.status === "answered" && !(d.id in mine))
+    .sort((a, b) => (b.answered_at ?? 0) - (a.answered_at ?? 0));
+  const remember = (stored: DecisionView) => setMine((prev) => ({ ...prev, [stored.id]: stored }));
+
   return (
     <section data-testid="decisions-rail" aria-label="Decisions" className="flex flex-col gap-2">
       <h2 className="text-sm font-medium text-muted-foreground">
         Decisions · <span className="tabular-nums">{open.length}</span> open
       </h2>
-      {open.length === 0 && (
+      {cards.length === 0 && (
         <p
           data-testid="decisions-empty"
           className="flex items-start gap-1.5 rounded-lg border border-dashed border-border p-3 text-sm text-muted-foreground"
@@ -147,17 +59,20 @@ export function DecisionsRail({ decisions, highlightId }: DecisionsRailProps) {
           Nothing needs you. Agents ask here instead of in chat.
         </p>
       )}
-      {open.map((decision) => (
+      {cards.map((decision) => (
         <DecisionCard
           key={decision.id}
           decision={decision}
           highlighted={matches(decision, highlightId)}
-          nowS={nowS}
+          onAnswered={remember}
         />
       ))}
       {answered.length > 0 && (
         <Collapsible>
-          <CollapsibleTrigger className="group inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+          <CollapsibleTrigger
+            data-testid="decisions-answered-toggle"
+            className="group inline-flex cursor-pointer items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+          >
             <ChevronRightIcon
               aria-hidden
               className="size-3.5 transition-transform group-data-[state=open]:rotate-90"
@@ -165,20 +80,22 @@ export function DecisionsRail({ decisions, highlightId }: DecisionsRailProps) {
             Answered ({answered.length})
           </CollapsibleTrigger>
           <CollapsibleContent>
-            <ul className="mt-1 flex flex-col gap-1 text-sm">
+            <ul data-testid="decisions-answered" className="mt-1 flex flex-col gap-2">
               {answered.map((d) => (
-                <li key={d.id} className="text-muted-foreground">
-                  <span className="font-mono">{d.ref}</span>{" "}
-                  <span className="text-foreground">
-                    “
-                    {d.answer_text ??
-                      d.options.find((o) => o.id === d.answer_option_id)?.label ??
-                      "answered"}
-                    ”
-                  </span>
-                  {d.answered_by && ` · ${d.answered_by}`}
-                  {d.delivered_at != null &&
-                    ` · delivered${d.delivered_to_title ? ` to ${d.delivered_to_title}` : ""} ✓`}
+                <li
+                  key={d.id}
+                  id={decisionAnchorId(d.ref)}
+                  className="flex flex-col gap-0.5 border-l-2 border-border pl-2.5 text-sm"
+                >
+                  <p className="min-w-0 text-muted-foreground">
+                    <span className="font-mono">{d.ref}</span>{" "}
+                    <span className="text-foreground">“{answerLabel(d)}”</span>
+                    {d.answered_by && ` · ${d.answered_by}`}
+                  </p>
+                  <p className="line-clamp-1 text-muted-foreground" title={d.question}>
+                    {d.question}
+                  </p>
+                  <DecisionReceipt decision={d} />
                 </li>
               ))}
             </ul>

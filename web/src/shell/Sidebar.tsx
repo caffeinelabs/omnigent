@@ -154,7 +154,7 @@ import { SessionStateBadge } from "@/components/SessionStateBadge";
 import { useSessionRunnerOnline } from "@/hooks/RunnerHealthProvider";
 import { useActiveRootSessionId } from "@/hooks/useSession";
 import { useCommentInbox } from "@/hooks/useCommentInbox";
-import { sumPendingApprovals } from "@/lib/inbox";
+import { inboxBadgeLabel, sumPendingApprovals } from "@/lib/inbox";
 import { isSessionStoppable } from "@/lib/sessionStop";
 import { isImeCompositionKeyEvent } from "@/lib/ime";
 import { useHasSessionDraft } from "@/lib/sessionDrafts";
@@ -183,6 +183,7 @@ import {
 import { ExtensionPrimaryNavigation } from "@/extensions/ExtensionPrimaryNavigation";
 import { PrimaryNavLink } from "@/shell/PrimaryNavLink";
 import { FactoryNavLink } from "@/components/factory/FactoryNavLink";
+import { useFactoryDecisionCount } from "@/hooks/useFactory";
 import { isFactoryPath } from "@/lib/factory";
 import { useViewerId } from "@/hooks/useViewerId";
 import { useExtensions } from "@/extensions/ExtensionProvider";
@@ -762,7 +763,9 @@ function SidebarImpl({
   // page lists. Comment queries are shared with the page/FileViewer
   // (same ["comments", id] keys), so this adds no duplicate fetches.
   const unseenComments = useCommentInbox(loadedRows).items.length;
-  const inboxCount = pendingApprovals + unseenComments;
+  // And factory decisions waiting on the human (the Inbox mirrors them).
+  const factoryDecisions = useFactoryDecisionCount({ enabled: factoryEnabled });
+  const inboxCount = pendingApprovals + unseenComments + factoryDecisions;
 
   // Row-Link click handler. The Link navigates natively (so modifier/middle
   // clicks open tabs); we only close the drawer on a plain primary click on
@@ -1182,11 +1185,7 @@ function SidebarImpl({
                   Inbox
                   {inboxCount > 0 && (
                     <span
-                      aria-label={
-                        inboxCount === 1
-                          ? "1 inbox item waiting"
-                          : `${inboxCount} inbox items waiting`
-                      }
+                      aria-label={inboxBadgeLabel(inboxCount, factoryDecisions)}
                       className={cn(
                         "ml-auto inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-10 font-medium text-[var(--sidebar-active-foreground)] tabular-nums",
                         // The active Inbox row already paints the translucent

@@ -36,7 +36,7 @@ export const GATE_ORDER: readonly GateKey[] = [
 
 export const GATE_KEY_LABEL: Record<GateKey, string> = { ...GATE_LABEL, demo: "Demo" };
 
-const STATE_WORD: Record<GateState, string> = {
+export const STATE_WORD: Record<GateState, string> = {
   pass: "passed",
   pending: "pending",
   fail: "failed",
@@ -44,7 +44,7 @@ const STATE_WORD: Record<GateState, string> = {
   unknown: "unknown",
 };
 
-const STATE_ICON: Record<GateState, typeof CircleCheckIcon> = {
+export const STATE_ICON: Record<GateState, typeof CircleCheckIcon> = {
   pass: CircleCheckIcon,
   pending: CircleDotIcon,
   fail: CircleXIcon,
@@ -61,7 +61,7 @@ const STATE_CHIP: Record<GateState, string> = {
   unknown: "border-dashed border-muted-foreground/50 text-muted-foreground",
 };
 
-const STATE_ICON_TONE: Record<GateState, string> = {
+export const STATE_ICON_TONE: Record<GateState, string> = {
   pass: "text-success",
   pending: "text-warning",
   fail: "text-destructive",

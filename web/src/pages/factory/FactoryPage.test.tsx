@@ -177,6 +177,19 @@ describe("FactoryPage", () => {
     expect(location).toContain("review=9631");
   });
 
+  it("gives the review drawer the PR's project: its PL chat and the reviewer's session", async () => {
+    serve();
+    renderPage("?review=9630");
+    const drawer = await screen.findByTestId("review-drawer");
+    expect(within(drawer).getByTestId("review-open-pl")).toHaveAttribute(
+      "href",
+      "/c/b408c5f09ff659e6b907fd9f688829e9",
+    );
+    expect(within(drawer).getByTestId("review-preview-slot")).toHaveTextContent(
+      "Kept up until merge or close · 2 slots for this project",
+    );
+  });
+
   it("highlights ?decision in the rail and points the blocked card at it", async () => {
     serve();
     renderPage("?decision=D-2");

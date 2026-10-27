@@ -71,12 +71,16 @@ const {
 }));
 
 // The Factory entry's trailing dot and badge roll up the factory list.
-const { factoriesRef } = vi.hoisted(() => ({
+const { factoriesRef, decisionCountRef } = vi.hoisted(() => ({
   factoriesRef: { current: undefined as { data: unknown[] } | undefined },
+  // Open factory decisions the Inbox badge adds (only while the factory is on).
+  decisionCountRef: { current: 0 },
 }));
 vi.mock("@/hooks/useFactory", async (importOriginal) => ({
   ...(await importOriginal<typeof UseFactoryModule>()),
   useFactories: () => ({ data: factoriesRef.current }),
+  useFactoryDecisionCount: ({ enabled = true }: { enabled?: boolean } = {}) =>
+    enabled ? decisionCountRef.current : 0,
 }));
 
 vi.mock("@/hooks/useHosts", () => ({
@@ -912,6 +916,29 @@ describe("Sidebar session list", () => {
       "text-[var(--sidebar-active-foreground)]",
     );
     expect(badge.className).not.toContain("brand-accent");
+  });
+
+  it("counts open factory decisions in the Inbox badge and says so", () => {
+    mockConversations([conv("conv_awaiting", "Claude Code", { pending_elicitations_count: 2 })]);
+    decisionCountRef.current = 3;
+    renderSidebar(true, "/", undefined, { ...FALLBACK_SERVER_INFO, features: { factory: true } });
+
+    const inbox = screen.getByTestId("inbox-button");
+    const badge = within(inbox).getByLabelText(
+      "5 inbox items waiting, 3 of them factory decisions",
+    );
+    expect(badge).toHaveTextContent("5");
+    decisionCountRef.current = 0;
+  });
+
+  it("leaves factory decisions out of the Inbox badge while the factory is off", () => {
+    mockConversations([conv("conv_awaiting", "Claude Code", { pending_elicitations_count: 2 })]);
+    decisionCountRef.current = 3;
+    renderSidebar();
+
+    const inbox = screen.getByTestId("inbox-button");
+    expect(within(inbox).getByLabelText("2 inbox items waiting")).toHaveTextContent("2");
+    decisionCountRef.current = 0;
   });
 
   it("lets the active Inbox row show through the count badge", () => {

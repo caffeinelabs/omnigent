@@ -640,6 +640,21 @@ export interface PrFeedbackRequest {
   text?: string;
 }
 
+/** `POST /v1/factory/prs/{id}/feedback`: the review as stored and the PL's mail id. */
+export interface PrFeedbackResponse {
+  pr_id: string;
+  human_review: HumanReviewView | null;
+  mail_id: string | null;
+}
+
+/** `POST /v1/factory/decisions/{id}/answer` refused with 409: someone answered first. */
+export interface DecisionConflictBody {
+  status?: DecisionStatus;
+  answered_by?: string | null;
+  answered_at?: number | null;
+  decision?: DecisionView;
+}
+
 // ── Transport ──────────────────────────────────────────────────
 
 /**
@@ -785,6 +800,15 @@ export function prPreviewUrl(prId: string): string {
   return `/v1/factory/prs/${enc(prId)}/preview`;
 }
 
+/**
+ * Read a demo's JSON file (`api.json`, `console.json`) from the demo store.
+ *
+ * @param url - The file's same-origin URL (`DemoFileView.url` or {@link demoFileUrl}).
+ */
+export async function fetchDemoJson(url: string, signal?: AbortSignal): Promise<unknown> {
+  return readJson(await authenticatedFetch(url, { signal }));
+}
+
 // ── Writes ─────────────────────────────────────────────────────
 
 export async function createFactory(body: CreateFactoryRequest): Promise<CreateFactoryResponse> {
@@ -840,7 +864,10 @@ export async function refreshFactoryPr(prId: string): Promise<unknown> {
   return readJson(await postJson(`/v1/factory/prs/${enc(prId)}/refresh`, {}));
 }
 
-export async function sendPrFeedback(prId: string, feedback: PrFeedbackRequest): Promise<unknown> {
+export async function sendPrFeedback(
+  prId: string,
+  feedback: PrFeedbackRequest,
+): Promise<PrFeedbackResponse> {
   return readJson(await postJson(`/v1/factory/prs/${enc(prId)}/feedback`, feedback));
 }
 

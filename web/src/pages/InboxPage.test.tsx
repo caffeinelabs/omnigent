@@ -20,7 +20,11 @@ import type { Conversation } from "@/hooks/useConversations";
 import * as conversationsHook from "@/hooks/useConversations";
 import * as commentInboxHook from "@/hooks/useCommentInbox";
 import * as sessionsApi from "@/lib/sessionsApi";
+import type * as identity from "@/lib/identity";
 import type { CommentInbox } from "@/hooks/useCommentInbox";
+import { inboxDecisionItems } from "@/components/factory/decisions/__fixtures__/decisionFixtures";
+import { FALLBACK_SERVER_INFO } from "@/lib/capabilities";
+import { CapabilitiesProvider } from "@/lib/CapabilitiesContext";
 
 // Minimal ApprovalCard stub: renders the message and an Accept button that
 // forwards to the page's submit handler. The real card's form/preview UX is
@@ -61,7 +65,17 @@ vi.mock("@/hooks/useConversations", async (importActual) => ({
   useConversations: vi.fn(),
 }));
 vi.mock("@/hooks/useCommentInbox", () => ({ useCommentInbox: vi.fn() }));
-vi.mock("@/lib/sessionsApi", () => ({ getSession: vi.fn(), approve: vi.fn() }));
+vi.mock("@/lib/sessionsApi", async (importActual) => ({
+  ...(await importActual<typeof sessionsApi>()),
+  getSession: vi.fn(),
+  approve: vi.fn(),
+}));
+// Factory decisions come over `/v1/factory/decisions` (the factory API client).
+const authenticatedFetch = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/identity", async (importActual) => ({
+  ...(await importActual<typeof identity>()),
+  authenticatedFetch,
+}));
 
 function conversation(overrides: Partial<Conversation> = {}): Conversation {
   return {
@@ -109,16 +123,20 @@ function commentInboxStub(overrides: Partial<CommentInbox> = {}): CommentInbox {
   };
 }
 
-function renderPage() {
+function renderPage(options: { factory?: boolean } = {}) {
   // Fresh client per render so cached queries never leak between tests.
   const queryClient = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <MemoryRouter>
-        <InboxPage />
-      </MemoryRouter>
+      <CapabilitiesProvider
+        info={{ ...FALLBACK_SERVER_INFO, features: { factory: options.factory ?? false } }}
+      >
+        <MemoryRouter>
+          <InboxPage />
+        </MemoryRouter>
+      </CapabilitiesProvider>
     </QueryClientProvider>,
   );
 }
@@ -406,5 +424,93 @@ describe("InboxPage comments and errors", () => {
     expect(retryFailed).toHaveBeenCalled();
     // The error path also suppresses the empty state.
     expect(screen.queryByText("Nothing waiting on you")).not.toBeInTheDocument();
+  });
+});
+
+describe("InboxPage factory decisions", () => {
+  function json(body: unknown, status = 200): Response {
+    return new Response(JSON.stringify(body), {
+      status,
+      headers: { "Content-Type": "application/json" },
+    });
+  }
+
+  function serveDecisions(items = inboxDecisionItems()) {
+    authenticatedFetch.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (path.startsWith("/v1/factory/decisions?status=open")) {
+        return json({ data: items, count: items.length });
+      }
+      if (path.endsWith("/answer") && init?.method === "POST") {
+        const decision = items.find((i) => path.includes(i.decision.id))!.decision;
+        return json({
+          decision: {
+            ...decision,
+            status: "answered",
+            answer_option_id: "a",
+            answered_by: "Luka",
+            delivered_mail_id: "mail_1",
+          },
+        });
+      }
+      return json({ error: { message: `unexpected ${path}` } }, 404);
+    });
+  }
+
+  beforeEach(() => {
+    authenticatedFetch.mockReset();
+  });
+
+  it("lists open decisions above approvals, grouped by factory, with the cockpit link", async () => {
+    serveDecisions();
+    const row = conversation({ id: "sess_a" });
+    vi.mocked(conversationsHook.useConversations).mockReturnValue(conversationsStub([row]));
+    vi.mocked(sessionsApi.getSession).mockResolvedValue({
+      pendingElicitations: [rawElicitation("el_1", "Run the migration?")],
+    } as unknown as Awaited<ReturnType<typeof sessionsApi.getSession>>);
+    renderPage({ factory: true });
+    const section = await screen.findByTestId("inbox-factory-decisions");
+    expect(section).toHaveTextContent("Factory decisions · 3 open");
+    const atlas = within(section).getByTestId("inbox-factory-f4f4ba9c77725331b12f0fa7072dc4d3");
+    expect(within(atlas).getByTestId("decision-card-D-2")).toBeInTheDocument();
+    expect(within(atlas).getByTestId("decision-card-D-3")).toBeInTheDocument();
+    expect(
+      within(atlas).getByTestId("inbox-open-cockpit-f4f4ba9c77725331b12f0fa7072dc4d3"),
+    ).toHaveAttribute("href", "/factory/f4f4ba9c77725331b12f0fa7072dc4d3");
+    const docs = within(section).getByTestId("inbox-factory-0d6e1c2b3a4f5e6d7c8b9a0f1e2d3c4b");
+    expect(docs).toHaveTextContent("Docs factory");
+    const approval = await screen.findByTestId("inbox-item");
+    expect(
+      section.compareDocumentPosition(approval) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    expect(screen.getByText(/3 decisions · 1 approval waiting/)).toBeInTheDocument();
+  });
+
+  it("answers a decision in place", async () => {
+    serveDecisions();
+    renderPage({ factory: true });
+    const card = await screen.findByTestId("decision-card-D-2");
+    fireEvent.click(within(card).getByTestId("decision-option-D-2-0"));
+    await waitFor(() => expect(card).toHaveAttribute("data-status", "answered"));
+    const post = authenticatedFetch.mock.calls.find(([path]) => String(path).endsWith("/answer"))!;
+    expect(post[0]).toBe("/v1/factory/decisions/a9d44647df3050199c1577ba21f16b67/answer");
+    expect(JSON.parse((post[1] as RequestInit).body as string)).toEqual({ option_id: "a" });
+    expect(within(card).getByTestId("decision-receipt-D-2")).toHaveTextContent(
+      "Answered · delivering…",
+    );
+  });
+
+  it("keeps the empty state away while decisions wait, and shows it when none do", async () => {
+    serveDecisions([]);
+    renderPage({ factory: true });
+    expect(await screen.findByText("Nothing waiting on you")).toBeInTheDocument();
+    expect(screen.queryByTestId("inbox-factory-decisions")).toBeNull();
+  });
+
+  it("asks for nothing when the factory is off", async () => {
+    serveDecisions();
+    renderPage();
+    expect(await screen.findByText("Nothing waiting on you")).toBeInTheDocument();
+    expect(screen.queryByTestId("inbox-factory-decisions")).toBeNull();
+    expect(authenticatedFetch).not.toHaveBeenCalled();
   });
 });

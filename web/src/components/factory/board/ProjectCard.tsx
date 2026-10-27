@@ -17,6 +17,7 @@ import { RunningDot } from "@/components/RunningDot";
 import type { FactorySnapshot, PrView, ProjectView } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
 import { ProjectControlsMenu } from "../controls/ProjectControlsMenu";
+import { ReadyForMergeBanner } from "../review/ReadyForMergeBanner";
 import { STAGE_LABEL, formatElapsed, formatUsd, plural } from "../factoryFormat";
 import { ageText, projectAnchorId, projectElapsed, projectPrList } from "./boardModel";
 import { DevEnvPill } from "./DevEnvPill";
@@ -340,6 +341,18 @@ export function ProjectCard({
               nowS={nowS}
               onReview={onReview}
               isNew={newPrIds?.has(pr.id) ?? false}
+              readyBanner={
+                !paused && (
+                  <ReadyForMergeBanner
+                    pr={pr}
+                    variant="card"
+                    project={project}
+                    factoryId={snapshot.factory.id}
+                    onReview={onReview}
+                    nowS={nowS}
+                  />
+                )
+              }
             />
           ))}
           {closed.length > CLOSED_PRS_SHOWN && (

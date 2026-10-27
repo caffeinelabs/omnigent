@@ -8,7 +8,7 @@
  * folds under the Needs-you strip below that.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { ArrowLeftIcon } from "lucide-react";
 import { PageScroll } from "@/components/PageScroll";
 import { ActivityList } from "@/components/factory/activity/ActivityList";
@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { useFactory } from "@/hooks/useFactory";
+import { snapshotNotices, useFactoryNotifications } from "@/hooks/useFactoryNotifications";
 import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
 import type { FactorySnapshot } from "@/lib/factoryApi";
 import { Link, useParams, useSearchParams } from "@/lib/routing";
@@ -140,6 +141,7 @@ function Cockpit({ snapshot, clockOffsetS }: { snapshot: FactorySnapshot; clockO
   const review = params.get("review");
   const decision = params.get("decision");
   const [panelOpen, setPanelOpen] = useState(decision != null);
+  useFactoryNotifications(useMemo(() => snapshotNotices(snapshot), [snapshot]));
 
   const setParam = useCallback(
     (key: string, value: string | null) =>
@@ -240,6 +242,8 @@ function Cockpit({ snapshot, clockOffsetS }: { snapshot: FactorySnapshot; clockO
           pr={reviewPr}
           demo={reviewPr?.demo ?? null}
           onClose={() => setParam("review", null)}
+          snapshot={snapshot}
+          nowS={nowS}
         />
       )}
     </div>
