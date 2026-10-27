@@ -14,6 +14,9 @@ Enum-like columns are SMALLINT codes guarded by CHECK constraints (see
 ``omnigent.db.enum_codecs``), JSON and free text are compressed blobs
 (``CompressedText`` -> LargeBinary), and times are epoch-second integers except
 ``factory_events.ts``, which is epoch milliseconds.
+
+Each table and index is created only when missing: CockroachDB bootstraps from
+the current models and then replays every revision after its baseline.
 """
 
 from __future__ import annotations
@@ -22,6 +25,7 @@ from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from sqlalchemy.schema import SchemaItem
 
 from omnigent.db.db_models import Uuid16
 
@@ -35,9 +39,22 @@ def _workspace_id() -> sa.Column:
     return sa.Column("workspace_id", sa.BigInteger(), nullable=False, server_default="0")
 
 
+def _create_table(existing: set[str], name: str, *elements: SchemaItem) -> None:
+    if name not in existing:
+        op.create_table(name, *elements)
+
+
+def _create_index(inspector: sa.Inspector, name: str, table: str, columns: list[str]) -> None:
+    if name not in {index["name"] for index in inspector.get_indexes(table)}:
+        op.create_index(name, table, columns, unique=False)
+
+
 def upgrade() -> None:
-    """Create the five factory cockpit tables."""
-    op.create_table(
+    """Create the five factory cockpit tables, skipping any that already exist."""
+    inspector = sa.inspect(op.get_bind())
+    tables = set(inspector.get_table_names())
+    _create_table(
+        tables,
         "factory_projects",
         _workspace_id(),
         sa.Column("id", Uuid16(), nullable=False),
@@ -64,7 +81,8 @@ def upgrade() -> None:
         sa.UniqueConstraint("workspace_id", "factory_id", "slug", name="uq_factory_projects_slug"),
     )
 
-    op.create_table(
+    _create_table(
+        tables,
         "factory_prs",
         _workspace_id(),
         sa.Column("id", Uuid16(), nullable=False),
@@ -107,14 +125,15 @@ def upgrade() -> None:
             "workspace_id", "factory_id", "repo", "number", name="uq_factory_prs_number"
         ),
     )
-    op.create_index(
+    _create_index(
+        inspector,
         "ix_factory_prs_poll",
         "factory_prs",
         ["workspace_id", "state", "last_polled_at", "id"],
-        unique=False,
     )
 
-    op.create_table(
+    _create_table(
+        tables,
         "factory_decisions",
         _workspace_id(),
         sa.Column("id", Uuid16(), nullable=False),
@@ -150,20 +169,21 @@ def upgrade() -> None:
             "workspace_id", "factory_id", "number", name="uq_factory_decisions_number"
         ),
     )
-    op.create_index(
+    _create_index(
+        inspector,
         "ix_factory_decisions_status",
         "factory_decisions",
         ["workspace_id", "factory_id", "status", "created_at", "id"],
-        unique=False,
     )
-    op.create_index(
+    _create_index(
+        inspector,
         "ix_factory_decisions_dedupe",
         "factory_decisions",
         ["workspace_id", "factory_id", "dedupe_key", "id"],
-        unique=False,
     )
 
-    op.create_table(
+    _create_table(
+        tables,
         "factory_events",
         _workspace_id(),
         # uuid7 (time-ordered) stored as 16 raw bytes.
@@ -182,20 +202,21 @@ def upgrade() -> None:
         sa.CheckConstraint("severity IN (0, 1, 2, 3)", name="ck_factory_events_severity"),
         sa.PrimaryKeyConstraint("workspace_id", "id"),
     )
-    op.create_index(
+    _create_index(
+        inspector,
         "ix_factory_events_factory_ts",
         "factory_events",
         ["workspace_id", "factory_id", "ts", "id"],
-        unique=False,
     )
-    op.create_index(
+    _create_index(
+        inspector,
         "ix_factory_events_kind_ts",
         "factory_events",
         ["workspace_id", "kind", "ts", "id"],
-        unique=False,
     )
 
-    op.create_table(
+    _create_table(
+        tables,
         "factory_demos",
         _workspace_id(),
         sa.Column("id", Uuid16(), nullable=False),
@@ -218,11 +239,11 @@ def upgrade() -> None:
         sa.CheckConstraint("status IN (1, 2, 3, 4)", name="ck_factory_demos_status"),
         sa.PrimaryKeyConstraint("workspace_id", "id"),
     )
-    op.create_index(
+    _create_index(
+        inspector,
         "ix_factory_demos_pr",
         "factory_demos",
         ["workspace_id", "factory_id", "pr_number", "created_at", "id"],
-        unique=False,
     )
 
 
