@@ -135,7 +135,15 @@ class _View(BaseModel):
 class _ClassView(_View):
     """A view whose ``class_`` attribute is the JSON key ``class``."""
 
-    model_config = ConfigDict(extra="forbid", validate_by_name=True, serialize_by_alias=True)
+    # populate_by_name and the by_alias dump default also hold on pydantic < 2.11,
+    # which has neither validate_by_name nor serialize_by_alias.
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, serialize_by_alias=True)
+
+    def model_dump(self, *, by_alias: bool | None = True, **kwargs: Any) -> dict[str, Any]:
+        return super().model_dump(by_alias=by_alias, **kwargs)
+
+    def model_dump_json(self, *, by_alias: bool | None = True, **kwargs: Any) -> str:
+        return super().model_dump_json(by_alias=by_alias, **kwargs)
 
 
 # ── Round-3 building blocks (live "now", loop chips, summaries, viewer) ──

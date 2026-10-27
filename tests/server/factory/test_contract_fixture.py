@@ -182,6 +182,15 @@ def test_round3_views_reject_unknown_fields(raw3: dict[str, Any]) -> None:
         IssueView.model_validate(dict(issue, klass="incident"))
 
 
+def test_class_views_take_the_attribute_name_and_dump_the_json_key(raw3: dict[str, Any]) -> None:
+    raw = raw3["issues"][0]
+    fields = {k: v for k, v in raw.items() if k != "class"}
+    by_name = IssueView(**fields, class_=raw["class"])
+    assert by_name == IssueView.model_validate(raw)
+    assert by_name.model_dump(mode="json", exclude_unset=True) == raw
+    assert '"class":' in by_name.model_dump_json() and "class_" not in by_name.model_dump_json()
+
+
 def test_round3_has_the_mission_control_shape(r3: Round3) -> None:
     snap = r3.snapshot
     slugs = [p.slug for p in snap.projects]
