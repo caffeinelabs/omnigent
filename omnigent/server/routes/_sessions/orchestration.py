@@ -1426,7 +1426,10 @@ def _accumulate_session_usage(
 
     new_current = conversation_store.increment_session_usage(session_id, delta)
     # Per-user daily rollup (policy-gated; this is the per-turn delta).
-    _record_daily_cost(conv, cost_delta, conversation_store)
+    turn_in = input_tokens + cache_read_input_tokens + cache_creation_input_tokens
+    _record_daily_cost(
+        conv, cost_delta, conversation_store, tokens=(turn_in, output_tokens), model=llm_model
+    )
     return _priced_cost_for_display(new_current)
 
 
@@ -1658,7 +1661,15 @@ def _persist_native_cumulative_usage(
     new_cost = float(current.get("total_cost_usd", 0.0) or 0.0)
     # Non-negative by the monotonic clamp above; ``max(0.0, ...)`` keeps the
     # daily rollup from ever being clawed back even if that invariant changes.
-    _record_daily_cost(conv, max(0.0, new_cost - old_cost), conversation_store)
+    from omnigent.server.factory.telemetry.cost import token_growth
+
+    _record_daily_cost(
+        conv,
+        max(0.0, new_cost - old_cost),
+        conversation_store,
+        tokens=token_growth(old_tokens, current),
+        model=model_name if isinstance(model_name, str) else None,
+    )
     return _priced_cost_for_display(current)
 
 

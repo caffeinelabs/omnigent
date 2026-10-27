@@ -258,6 +258,7 @@ if they stay silent the board is still right.
 | `GET /v1/factory/demos/{demo_id}/files/{file_id}` | human (READ on the PL) | Demo files with Range/206 (a ranged read of the store) and ETag; only images and video inline, never HTML or SVG. |
 | `POST /v1/factory/agent/decisions`, `POST …/agent/prs`, `PUT …/agent/envs`, `POST …/agent/demos` (multipart), `GET …/agent/charter` | runner (the tools below) | Agent reports. |
 | `GET /v1/factory/preflight` | human | GitHub connected, agents seeded, sandbox host, factory enabled; `default_repo`, `default_base` and `max_projects` for the start form. |
+| `GET /v1/factory/factories/{fid}/spans?kind=&project=&pr_id=&task_id=&since=`, `GET /v1/factory/prs/{id}/timeline`, `GET …/{fid}/cost?group_by=day,project,role,agent,model`, `GET …/{fid}/export?tables=&format=ndjson\|csv` | human (READ on the root; hidden projects dropped) | Telemetry (see below). The export streams and never carries transcript content. |
 
 ### Tools
 
@@ -507,6 +508,7 @@ transcript folds.
 | `OMNIGENT_FACTORY_PREVIEW_TOOLING_REF` | empty (recommended: `main`) | caffeinelabs/app ref the preview tooling is overlaid from onto PR heads that predate it; stored in new charters. Not the project's base branch. Empty: env_keeper uses `main`. |
 | `OMNIGENT_FACTORY_QUIET_BEATS`, `OMNIGENT_FACTORY_MAIL_REPLAY` | on | `0` turns off skipping unchanged heartbeats / replaying queued mail after a restart. |
 | `OMNIGENT_FACTORY_INVARIANTS` | on | `0` leaves the `factory_invariants` admin default policy unseeded (see Invariants). |
+| `OMNIGENT_IMAGE_TAG`, `OMNIGENT_SERVER_SHA` | unset | Image tag and commit recorded in the platform version (`factory_versions`). |
 
 ### Rollback
 
@@ -523,6 +525,42 @@ transcript folds.
 - **App tooling.** The preview tooling is part of caffeinelabs/app main
   (caffeinelabs/app#9640). PR heads that include it use their own copy; only
   older heads read it from the overlay ref (`main`).
+
+## Telemetry
+
+Durable facts every metric builds on (`omnigent/server/factory/telemetry/`):
+
+- **Retention.** The nightly prune drops only `message.*`, `notice.*` and
+  `preview.health` after 14 days and `heartbeat.*` after 2; every lifecycle
+  event is kept. `pr.claim` stores `claim_mismatch`; PRs record GitHub's
+  `opened_at` and `first_ready_at` (`ready_at` stays the latest).
+- **Versions.** After the bundle seed the server upserts its platform version
+  (`factory_versions`: image tag, server sha, each factory bundle's content
+  sha, the `OMNIGENT_FACTORY_*` knobs with secrets redacted), deduped by
+  content hash. Members carry `omnigent.factory.version` and
+  `omnigent.factory.bundle=<agent_id>/<sha12>` from factory start (the root
+  lead), spawn, restart (cockpit or peer) and relaunch.
+- **Spans** (`factory_spans`, never pruned, idempotent on `dedupe_key`). An
+  event-log recorder writes `project`, `stage`, `ready_wait`, `decision`,
+  `task`, `env`, `preview`, `demo`, `incident`, `intervention` and `proposal`
+  spans; every GitHub refresh writes `pr`, one `pr_round` per head and one
+  `gate` per head and gate with `attrs.first_pass`; the supervisor puts a
+  sub-agent's cost on its `task` span. Spans carry the version id and the
+  root's `def_version`. Only a sha seen as the PR's head (`headRefOid`, a
+  `gate.changed` event) opens a round; marker shas other than 7-40 hex are
+  ignored, and a verdict on a sha without a round adds nothing.
+- **Cost ledger** (`factory_cost_daily`). Every turn's display cost and
+  tokens, booked by factory, project (`""` for the leads), role, agent, model
+  and UTC day from the session's labels or its root's.
+- **Heal.** The nightly loop rebuilds and closes spans from the PR, decision,
+  demo and project tables, the sessions and the remaining events before it
+  prunes; a second run changes nothing, and the first one backfills. Each
+  section, PR and replayed event heals on its own (a failure skips only it),
+  and a span a live writer closed after heal read the log keeps that close.
+- **Export.** Rows the cockpit hides are dropped (sessions outside the
+  factory need READ, as in the activity feed); summaries that quote agent
+  text (mail, reasons, blockers, free-text labels) and free-text data keys
+  are left out; CSV cells that start with `= + - @` are prefixed with `'`.
 
 ## Safety
 
@@ -709,6 +747,7 @@ with a managed sandbox launcher configured.
 | Tier-0 invariants | `omnigent/policies/builtins/factory_invariants.py`, `omnigent/server/factory/origin.py`, `custom_bundle.py`, `omnigent/server/bundles.py` | `tests/policies/test_factory_invariants.py`, `tests/server/factory/test_human_origin.py`, `tests/server/test_bundle_validation_factory.py` |
 | Org chart and badges | `omnigent/server/factory/org_chart.py`, `web/src/lib/factory.ts` | `tests/server/routes/test_child_sessions_include_factory.py`, web tests |
 | Base lane and demo mirror | `omnigent/server/factory/base.py`, `demo_mirror.py`, `omnigent/factory_gates.py` (`base` gate) | `tests/server/factory/test_base_watcher.py`, `test_demo_mirror.py`, `tests/test_factory_gates.py` |
+| Telemetry | `omnigent/server/factory/telemetry/`, `api/telemetry_read.py`, `background/prune.py` | `tests/server/factory/test_telemetry_*.py` (replays `fixtures/live_run_2026_10_26.json`), `test_prune.py` |
 | Bundles | `examples/factory/` | `tests/examples/`, `tests/server/factory/test_factory_agents_listed.py` |
 | Demo harness | `examples/factory/factory-pl/agents/demo/skills/factory-demo/harness/` | `tests/examples/test_factory_demo_harness.py` (runs `factory_demo_harness.test.mjs` under `node --test`); `node run.mjs --selftest` records real demos of a local fixture |
 | End to end | — | `tests/integration/test_factory_tree.py` (live server and runner, mock LLM) |

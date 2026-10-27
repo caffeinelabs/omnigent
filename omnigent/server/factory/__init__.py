@@ -106,9 +106,9 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
     Start the factory's background services for one server lifespan.
 
     The mailer always (replaying mail a previous process left undelivered);
-    the supervisor (and the status-edge notifier it reads) and the
-    auto-discovered ``background`` services only when
-    ``OMNIGENT_FACTORY_ENABLED=1``.
+    the telemetry recorders (spans and the cost ledger), the supervisor (and
+    the status-edge notifier it reads) and the auto-discovered ``background``
+    services only when ``OMNIGENT_FACTORY_ENABLED=1``.
 
     :param app_state: ``app.state`` of an app passed to
         :func:`register_factory_routes`.
@@ -131,11 +131,14 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
         await mailer.replay_undelivered()
     stop_supervision: Callable[[], Awaitable[None]] | None = None
     stop_background: Callable[[], Awaitable[None]] | None = None
+    stop_telemetry: Callable[[], None] | None = None
     unseed_invariants = _seed_invariants()
     if factory_enabled():
+        from omnigent.server.factory import telemetry
         from omnigent.server.factory.background import start_all
         from omnigent.server.factory.supervisor import start_supervision
 
+        stop_telemetry = telemetry.start(app_state)
         stop_supervision = start_supervision(app_state)
         started = ["supervisor"]
         stop_background = await start_all(app_state, started=started)
@@ -148,6 +151,8 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
             await stop_background()
         if stop_supervision is not None:
             await stop_supervision()
+        if stop_telemetry is not None:
+            stop_telemetry()
         await mailer.close()
         if getattr(app_state, MAILER_STATE_ATTR, None) is mailer:
             setattr(app_state, MAILER_STATE_ATTR, None)

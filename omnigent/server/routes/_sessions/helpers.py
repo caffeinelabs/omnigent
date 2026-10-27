@@ -2055,6 +2055,9 @@ def _record_daily_cost(
     conv: Conversation | None,
     delta_usd: float,
     conversation_store: ConversationStore,
+    *,
+    tokens: tuple[int, int] = (0, 0),
+    model: str | None = None,
 ) -> None:
     """
     Add a turn's LLM cost to the session owner's daily rollup.
@@ -2087,7 +2090,13 @@ def _record_daily_cost(
     :param delta_usd: The turn's cost in USD; ``<= 0`` is a no-op.
     :param conversation_store: Store for the owner lookup and the
         daily-cost UPSERT.
+    :param tokens: The turn's ``(input, output)`` tokens (factory cost ledger).
+    :param model: The model that ran the turn (factory cost ledger).
     """
+    # Factory sessions also book the turn in the factory's own cost ledger.
+    from omnigent.server.factory.telemetry import cost as factory_cost
+
+    factory_cost.record(conv, delta_usd, tokens, model)
     if conv is None or delta_usd <= 0:
         return
     owner = conversation_store.get_session_owner(conv.id)

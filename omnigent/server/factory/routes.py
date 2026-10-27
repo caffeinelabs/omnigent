@@ -57,6 +57,7 @@ from omnigent.server.factory.membership import (
 )
 from omnigent.server.factory.roster import build_roster
 from omnigent.server.factory.server_decisions import open_storm_decision
+from omnigent.server.factory.telemetry import versions
 from omnigent.server.routes._auth_helpers import (
     get_user_id,
     require_access,
@@ -349,6 +350,11 @@ def create_factory_router() -> APIRouter:
                 project=target_m.project or sender_m.project,
             )
         )
+        if body.restart:
+            # The peer comes back on this platform version and its agent's current bundle.
+            stamp = await asyncio.to_thread(versions.member_labels, deps, target)
+            if stamp:
+                await asyncio.to_thread(deps.conversation_store.set_labels, target.id, stamp)
         return {"mail_id": mail_id, "to_session_id": target.id, "status": "queued"}
 
     @router.patch("/sessions/{session_id}")

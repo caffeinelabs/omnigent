@@ -297,6 +297,25 @@ async def test_pr_registration_upserts_the_row_and_records_claims(cockpit: Cockp
     assert len(cockpit.store.list_prs(cockpit.factory_id)) == 1
 
 
+async def test_the_claim_event_carries_claim_mismatch(cockpit: Cockpit) -> None:
+    def claims() -> list[dict[str, Any]]:
+        found = cockpit.store.find_events(cockpit.factory_id, "pr.claim", 0)
+        return [e.data or {} for e in found]
+
+    first = (await cockpit.pr("pl", claim="ready_for_human_merge")).json()
+    assert first["claim_mismatch"] is True
+    cockpit.store.update_pr(first["pr_id"], ready=True)
+    second = (await cockpit.pr("pl", claim="ready_for_human_merge")).json()
+    assert second["claim_mismatch"] is False
+    await cockpit.pr("ic", claim="opened")
+
+    assert [(d["claim"], d["claim_mismatch"], d["server_ready"]) for d in claims()] == [
+        ("ready_for_human_merge", True, False),
+        ("ready_for_human_merge", False, True),
+        ("opened", False, True),
+    ]
+
+
 async def test_pr_registration_returns_the_review_links(
     cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -394,6 +413,10 @@ async def test_registration_waits_for_a_running_poller(
     assert body["gates"] == gates
     assert body["reasons"] == ["checks failing: lint"]
     assert body["claim_mismatch"] is True
+    # The stored claim is judged against the refreshed gates too.
+    (claim,) = cockpit.store.find_events(cockpit.factory_id, "pr.claim", 0)
+    assert claim.data is not None
+    assert (claim.data["claim_mismatch"], claim.data["refreshed"]) == (True, True)
 
 
 # ── Envs and previews ──────────────────────────────────────────

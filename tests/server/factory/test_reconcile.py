@@ -358,14 +358,15 @@ def test_repo_from_labels(labels: dict[str, str], expected: tuple[Any, Any]) -> 
 # ── retention ──────────────────────────────────────────────────
 
 
-async def test_prune_drops_old_events_and_older_heartbeats(world: FactoryWorld) -> None:
+async def test_prune_drops_old_mail_and_older_heartbeats(world: FactoryWorld) -> None:
     store = _fstore(world)
     fid = world.id("lead_a")
     now = 1_800_000_000_000
     day = 86_400_000
     for kind, age_days in (
         ("pr.ready", 15),
-        ("pr.ready", 13),
+        ("message.delivered", 15),
+        ("message.delivered", 13),
         ("heartbeat.delivered", 3),
         ("heartbeat.skipped", 1),
     ):
@@ -378,7 +379,8 @@ async def test_prune_drops_old_events_and_older_heartbeats(world: FactoryWorld) 
     left = store.find_events(fid, "*", 0)
     assert sorted((e.kind, (now - e.ts) // day) for e in left) == [
         ("heartbeat.skipped", 1),
-        ("pr.ready", 13),
+        ("message.delivered", 13),
+        ("pr.ready", 15),
     ]
 
 

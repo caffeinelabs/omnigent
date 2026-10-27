@@ -2,9 +2,10 @@
 
 ``sys_factory_ask`` opens decisions, ``sys_factory_pr`` registers PRs and
 claims, ``sys_factory_env`` reports dev envs and factory previews, and
-``sys_factory_spawn`` reads a project's stored charter. Callers authenticate
-as ``from_session_id`` like ``/v1/factory/messages``; the project always comes
-from the caller's root PL, so a member only writes its own project's records.
+``sys_factory_spawn`` reads a project's stored charter and the version labels
+it stamps on the new member. Callers authenticate as ``from_session_id`` like
+``/v1/factory/messages``; the project always comes from the caller's root PL,
+so a member only writes its own project's records.
 """
 
 from __future__ import annotations
@@ -52,6 +53,7 @@ from omnigent.server.factory.api.pr_preview import preview_stable_path
 from omnigent.server.factory.charter import project_base_branch, render_pl_charter
 from omnigent.server.factory.demos import public_base_url, review_url
 from omnigent.server.factory.routes import FactoryRouteError
+from omnigent.server.factory.telemetry import versions
 from omnigent.stores.factory_store import DecisionNotOpen, norm_id
 
 router = APIRouter(prefix="/v1/factory/agent", tags=["factory"])
@@ -403,6 +405,12 @@ async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
         row = updated or row
     if created:
         await announce_new_pr(app_state, caller, row)
+    nudge.nudge("prs", row.id)
+    refreshed = await _await_refresh(caller, row.id)
+    if refreshed is not None:
+        row = refreshed
+    # Against the fresh gates, and stored with the claim (claim calibration).
+    claim_mismatch = body.claim == "ready_for_human_merge" and not row.ready
     if body.claim is not None or body.sentinel_verdict is not None:
         what = body.claim or f"sentinel {body.sentinel_verdict}"
         await events.emit(
@@ -420,12 +428,11 @@ async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
                 "sentinel_verdict": body.sentinel_verdict,
                 "head_sha": head_sha,
                 "note": note,
+                "claim_mismatch": claim_mismatch,
+                "server_ready": row.ready,
+                "refreshed": refreshed is not None,
             },
         )
-    nudge.nudge("prs", row.id)
-    refreshed = await _await_refresh(caller, row.id)
-    if refreshed is not None:
-        row = refreshed
     gates = dict(row.gates or {})
     project_base = await asyncio.to_thread(_project_base, caller, row.project_slug)
     base = public_base_url(str(request.base_url))
@@ -447,7 +454,7 @@ async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
         "gates": gates,
         "reasons": list(gates.get("reasons") or []),
         "refreshed": refreshed is not None,
-        "claim_mismatch": body.claim == "ready_for_human_merge" and not row.ready,
+        "claim_mismatch": claim_mismatch,
     }
     if not gates:
         reply["note"] = "gates come from the server's GitHub poller and are not computed yet"
@@ -745,3 +752,18 @@ async def get_charter(
             404, "charter_not_found", f"project {project!r} has no stored charter"
         )
     return {"project": row.slug, "text": render_pl_charter(row)}
+
+
+# ── Versions ───────────────────────────────────────────────────
+
+
+@router.get("/version")
+async def get_version_labels(
+    request: Request,
+    from_session_id: str = Query(...),
+    agent_id: str | None = Query(None),
+) -> dict[str, Any]:
+    """The version and bundle labels a member spawned now carries (``sys_factory_spawn``)."""
+    caller = await authorize_agent(request, from_session_id)
+    labels = await asyncio.to_thread(versions.labels_for_agent, caller.deps.agent_store, agent_id)
+    return {"version_id": versions.current_version_id(), "labels": labels}
