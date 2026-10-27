@@ -4,9 +4,11 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { liveRunOpenDecisions, liveRunSnapshot } from "@/components/factory/__fixtures__/liveRun";
 import { showNotification } from "@/lib/browserNotifications";
+import type { FactorySnapshot, ViewerBlock } from "@/lib/factoryApi";
 import {
   type FactoryNotice,
   decisionNotices,
+  isForViewer,
   snapshotNotices,
   useFactoryNotifications,
 } from "./useFactoryNotifications";
@@ -85,5 +87,73 @@ describe("factory notices", () => {
       body: "Which table is the source of truth for the DB version: knex_migrations or schema_migrations?",
       path: "/factory/f4f4ba9c77725331b12f0fa7072dc4d3?decision=D-2",
     });
+  });
+});
+
+function viewer(
+  role: ViewerBlock["role"],
+  level: number,
+  userId = "opal@caffeine.ai",
+): ViewerBlock {
+  const can = {
+    post: level >= 2,
+    answer: level >= 2,
+    review: level >= 2,
+    control: level >= 2,
+    intervene: level >= 2,
+    apply_projects: level >= 2,
+    apply_tuning: level >= 3,
+    restart: level >= 3,
+    stop: level >= 3,
+    invite: level >= 3,
+    settings: level >= 3,
+    terminal: level >= 4,
+    start: level >= 4,
+  };
+  return { user_id: userId, role, level, is_creator: role === "creator", can };
+}
+
+function sharedSnapshot(me: ViewerBlock): FactorySnapshot {
+  const snapshot = liveRunSnapshot();
+  const [first, second] = snapshot.decisions.filter((d) => d.status === "open" && d.blocking);
+  first!.assignee = "owners";
+  second!.assignee = "mia@caffeine.ai";
+  snapshot.viewer = me;
+  return snapshot;
+}
+
+describe("notices in a shared factory", () => {
+  it("an operator hears only decisions for operators or for them", () => {
+    const snapshot = sharedSnapshot(viewer("operator", 2));
+    const decisions = snapshotNotices(snapshot).filter((n) => n.key.startsWith("decision:"));
+    expect(decisions).toEqual([]);
+    const mine = sharedSnapshot(viewer("operator", 2, "mia@caffeine.ai"));
+    expect(snapshotNotices(mine).filter((n) => n.key.startsWith("decision:"))).toHaveLength(1);
+  });
+
+  it("an owner hears owner decisions and dead members; a viewer hears nothing", () => {
+    const owner = sharedSnapshot(viewer("owner", 3));
+    owner.members[0]!.health = "dead";
+    const keys = snapshotNotices(owner).map((n) => n.key);
+    expect(keys.filter((k) => k.startsWith("decision:"))).toHaveLength(1);
+    expect(keys).toContain(`dead:${owner.members[0]!.session_id}`);
+    expect(snapshotNotices(sharedSnapshot(viewer("viewer", 1)))).toEqual([]);
+  });
+
+  it("a claim makes a decision its claimer's", () => {
+    const snapshot = liveRunSnapshot();
+    const decision = { ...snapshot.decisions[0]!, assignee: null, claimed_by: "mia@caffeine.ai" };
+    expect(isForViewer(decision, viewer("operator", 2))).toBe(false);
+    expect(isForViewer(decision, viewer("operator", 2, "mia@caffeine.ai"))).toBe(true);
+    expect(isForViewer({ ...decision, claimed_by: null }, viewer("operator", 2))).toBe(true);
+    expect(isForViewer({ ...decision, claimed_by: null }, null)).toBe(true);
+  });
+
+  it("the Inbox drops decisions the server says are not mine", () => {
+    const items = liveRunOpenDecisions().data;
+    const marked = items.map((item, i) => ({ ...item, mine: i !== 0 }));
+    const keys = decisionNotices(marked).map((n) => n.key);
+    expect(keys).not.toContain(`decision:${items[0]!.decision.id}`);
+    expect(decisionNotices(items).length).toBeGreaterThan(keys.length);
   });
 });

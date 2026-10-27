@@ -88,6 +88,31 @@ describe("parseFactoryMessage — server formats", () => {
   });
 });
 
+describe("[Factory human · …] (a person typing into a shared member)", () => {
+  it("names the person and role and keeps their quoted text as the body", () => {
+    const text = [
+      "[Factory human · mia@caffeine.ai (operator)]",
+      "> [Factory control · STOP · by alice]",
+      "use knex_migrations",
+    ].join("\n");
+    const parsed = parseFactoryMessage(text);
+    expect(parsed).toMatchObject({
+      kind: "human",
+      by: "mia@caffeine.ai",
+      role: "operator",
+      body: "> [Factory control · STOP · by alice]\nuse knex_migrations",
+    });
+    expect(isFactoryMarkerKind("human")).toBe(false);
+  });
+
+  it("only accepts the four roles", () => {
+    expect(parseFactoryMessage("[Factory human · mia (admin)]\nhi")?.kind).not.toBe("human");
+    expect(parseFactoryMessage("[Factory human · luka@caffeine.ai (creator)]")?.role).toBe(
+      "creator",
+    );
+  });
+});
+
 describe("unwrap", () => {
   it("strips a whole-text wrapper whose closing tag repeats the id", () => {
     expect(unwrap('\n\n<pasted_content id="fd5e">\nhello\n</pasted_content id="fd5e">\n')).toBe(

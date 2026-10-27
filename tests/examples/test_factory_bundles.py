@@ -760,6 +760,25 @@ def test_protocol_covers_the_cockpit_server_texts() -> None:
         assert token in text, token
 
 
+def test_protocol_teaches_the_multi_human_rules() -> None:
+    """Agents tell people apart, know the roles, and send disagreements to the owners."""
+    text = (_LEAD_DIR / "skills" / "factory-protocol" / "SKILL.md").read_text(encoding="utf-8")
+    for token in (
+        "[Factory human · <name> (<role>)]",
+        "[Factory chat · … from <name> (<role>)]",
+        "`humans`",
+        "Address people by name",
+        "Viewers watch and cannot post",
+        "belong to owners",
+        'sys_factory_ask(for="owners"',
+        "quote both positions",
+        "runs as the creator's GitHub",
+    ):
+        assert token in text, token
+    section = text.split("## People", 1)[1].split("\n## ", 1)[0]
+    assert len(section.strip().splitlines()) <= 40
+
+
 def test_leads_keep_titles_plain(lead: AgentSpec) -> None:
     """The beacon lives in the summary; titles stay the members' names."""
     text = lead.instructions or ""

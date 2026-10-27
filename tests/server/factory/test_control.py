@@ -383,7 +383,7 @@ async def test_relaunch_refuses_sub_agents_and_specs_without_args(cockpit: Cockp
         ("carol", "pause", "project:api-version", 202),
         ("carol", "resume", "project:api-version", 202),
         ("carol", "env_status", "project:api-version", 202),
-        ("carol", "stop", "project:api-version", 202),
+        ("carol", "stop", "project:api-version", 403),
         ("carol", "restart", "project:api-version", 403),
         ("carol", "relaunch", "project:api-version", 403),
         ("carol", "stop", "factory", 403),
@@ -403,6 +403,26 @@ async def test_edit_vs_owner_matrix(
         assert cockpit.mailer.items == []
         assert _labels(cockpit, "pl")[F.LABEL_STATE] == "active"
         assert [e for e in cockpit.events() if e.kind.startswith("control.")] == []
+
+
+@pytest.mark.parametrize(
+    ("action", "target"),
+    [
+        ("stop", "project:api-version"),
+        ("restart", "project:api-version"),
+        ("stop", "factory"),
+    ],
+)
+async def test_manage_is_enough_for_owner_controls(
+    cockpit: Cockpit, action: str, target: str
+) -> None:
+    for key in ("lead_a", "lead_b", "pl"):
+        cockpit.permissions.grant("dora", cockpit.world.id(key), 3)
+
+    resp = await _control(cockpit, action, target, user="dora")
+
+    assert resp.status_code == 202, resp.text
+    assert resp.json()["events"][0]["data"]["by"] == "dora"
 
 
 async def test_factory_wide_edit_needs_every_member(cockpit: Cockpit) -> None:

@@ -24,7 +24,7 @@ from omnigent.factory import (
     ACTION_RESTART,
     LABEL_PROJECT,
 )
-from omnigent.server.factory import events
+from omnigent.server.factory import decision_routing, events
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.envelope import display_title
 from omnigent.stores.factory_store import DecisionNotFound, DecisionNotOpen
@@ -101,17 +101,26 @@ async def open_decision(
     project: str | None,
     asked_by: str | None,
     context: str | None = None,
+    assignee: str | None = None,
+    proposal_kind: str | None = None,
 ) -> tuple[FactoryDecision, bool] | None:
     """
     Open a server decision (or find the open one with the same key). Never raises.
 
     A new decision emits ``decision.opened``.
 
+    :param assignee: ``owners``, ``operators`` or a user id; by default the
+        source's (:func:`~omnigent.server.factory.decision_routing.default_assignee`).
+    :param proposal_kind: For ``proposal`` decisions, the proposal's kind.
     :returns: ``(decision, deduped)``, or ``None`` when it could not be stored.
     """
     store = _store(app_state)
     if store is None:
         return None
+    if assignee is None:
+        assignee = await asyncio.to_thread(
+            _default_assignee, app_state, factory_id, source, project, options, proposal_kind
+        )
     try:
         row, deduped = await asyncio.to_thread(
             lambda: store.create_decision(
@@ -125,6 +134,7 @@ async def open_decision(
                 project_slug=project,
                 asked_by_session_id=asked_by,
                 context=_clip(context, _CONTEXT_MAX) if context else None,
+                assignee=assignee,
             )
         )
     except Exception:  # noqa: BLE001 - the NEEDS HUMAN text still reaches the agents
@@ -141,9 +151,29 @@ async def open_decision(
             to_id="human",
             subject=f"decision:{row.ref}",
             summary=f"{row.ref}: {row.question}",
-            data={"decision_id": row.id, "source": source},
+            data={"decision_id": row.id, "source": source, "assignee": row.assignee},
         )
     return row, deduped
+
+
+def _default_assignee(
+    app_state: Any,
+    factory_id: str,
+    source: str,
+    project: str | None,
+    options: list[dict[str, Any]],
+    proposal_kind: str | None,
+) -> str:
+    deps = getattr(app_state, FACTORY_STATE_ATTR, None)
+    human_owner = None
+    if isinstance(deps, FactoryDeps):
+        try:
+            human_owner = decision_routing.human_owner_of(deps, factory_id, project)
+        except Exception:  # noqa: BLE001 - the source's default still routes it
+            _logger.warning("factory: could not read the human owner of %s", project)
+    return decision_routing.default_assignee(
+        source, human_owner=human_owner, proposal_kind=proposal_kind, options=options
+    )
 
 
 async def expire_decision(app_state: Any, decision_id: str) -> FactoryDecision | None:

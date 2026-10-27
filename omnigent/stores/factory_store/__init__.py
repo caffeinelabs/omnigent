@@ -813,6 +813,27 @@ class FactoryStore(ABC):
         """
 
     @abstractmethod
+    def route_decision(
+        self,
+        decision_id: str,
+        *,
+        claimable_by: str | None = None,
+        assignee_was: str | None = None,
+        **fields: Any,
+    ) -> FactoryDecision:
+        """
+        Update an open decision's routing fields (compare-and-set on ``status=open``).
+
+        :param claimable_by: Also require it unclaimed or claimed by this user.
+        :param assignee_was: Also require this assignee (``None`` = any).
+        :param fields: Any of :data:`DECISION_UPDATE_FIELDS`, e.g. ``assignee``.
+        :returns: The updated row.
+        :raises DecisionNotOpen: When a condition fails (carries the current
+            row: still ``open`` means the claim or assignee changed).
+        :raises DecisionNotFound: When the id is unknown.
+        """
+
+    @abstractmethod
     def list_decisions(
         self,
         factory_ids: Sequence[str] | None = None,
@@ -1893,6 +1914,29 @@ class InMemoryFactoryStore(FactoryStore):
             current = self.get_decision(decision_id)
             if current is None:
                 return None
+            row = replace(current, **copy.deepcopy(fields), updated_at=now_s())
+            self._decisions[(self._ws(), row.id)] = row
+            return _detach(row)
+
+    def route_decision(
+        self,
+        decision_id: str,
+        *,
+        claimable_by: str | None = None,
+        assignee_was: str | None = None,
+        **fields: Any,
+    ) -> FactoryDecision:
+        check_fields(fields, DECISION_UPDATE_FIELDS, "route_decision")
+        with self._lock:
+            current = self.get_decision(decision_id)
+            if current is None:
+                raise DecisionNotFound(decision_id)
+            if (
+                current.status != "open"
+                or (claimable_by is not None and current.claimed_by not in (None, claimable_by))
+                or (assignee_was is not None and current.assignee != assignee_was)
+            ):
+                raise DecisionNotOpen(current)
             row = replace(current, **copy.deepcopy(fields), updated_at=now_s())
             self._decisions[(self._ws(), row.id)] = row
             return _detach(row)

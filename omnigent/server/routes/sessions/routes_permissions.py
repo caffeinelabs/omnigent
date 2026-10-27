@@ -34,8 +34,6 @@ from omnigent.server.auth import (
     LEVEL_READ,
     RESERVED_USER_PUBLIC,
     AuthProvider,
-    SharingMode,
-    workspace_sharing_blocked,
 )
 from omnigent.server.routes._auth_helpers import (
     get_session_owner_id as _get_session_owner_id,
@@ -54,6 +52,7 @@ from omnigent.server.routes._sessions.common import (
 from omnigent.server.routes._sessions.helpers import (
     _announce_session_added,
 )
+from omnigent.server.routes._sharing import require_sharing_allows
 from omnigent.server.schemas import (
     AgentObject,
     GrantPermissionRequest,
@@ -116,34 +115,7 @@ def register_permissions_routes(
         )
         # Server-wide sharing policy gate (see SharingMode). Applied only
         # to *new* grants — revoke/list and owner grants are unaffected.
-        # ``getattr`` default keeps a hand-built app (a router mounted without
-        # create_app, e.g. in a focused test) from AttributeError-ing; every
-        # production path sets these via create_app.
-        _sharing_mode = getattr(request.app.state, "sharing_mode", lambda: SharingMode.ON)()
-        if _sharing_mode == SharingMode.OFF:
-            raise OmnigentError(
-                "Sharing has been disabled for this Omnigent server.",
-                code=ErrorCode.FORBIDDEN,
-            )
-        # RESTRICTED_READ_ONLY blocks sharing entirely (even read) for a session
-        # whose cwd is a home dir or the filesystem root — that workspace is too
-        # broad to expose. Other sessions fall through to the read-only cap.
-        if _sharing_mode == SharingMode.RESTRICTED_READ_ONLY:
-            _conv = await asyncio.to_thread(conversation_store.get_conversation, session_id)
-            if _conv is not None and workspace_sharing_blocked(_conv.workspace):
-                raise OmnigentError(
-                    "This session's working directory (a home or root directory) "
-                    "cannot be shared on this Omnigent server.",
-                    code=ErrorCode.FORBIDDEN,
-                )
-        if (
-            _sharing_mode in (SharingMode.READ_ONLY, SharingMode.RESTRICTED_READ_ONLY)
-            and body.level > LEVEL_READ
-        ):
-            raise OmnigentError(
-                "Sharing is limited to read-only access on this Omnigent server.",
-                code=ErrorCode.FORBIDDEN,
-            )
+        await require_sharing_allows(request.app.state, conversation_store, session_id, body.level)
         if permission_store is None:
             raise OmnigentError(
                 "Permissions not enabled",
@@ -265,6 +237,12 @@ def register_permissions_routes(
                     f"Leave the parent session {conv.parent_conversation_id!r} instead.",
                     code=ErrorCode.INVALID_INPUT,
                 )
+        # A factory member's grants follow the factory's roster (its People page).
+        from omnigent.server.factory.people import managed_grant_conflict
+
+        conflict = await managed_grant_conflict(request.app.state, session_id, target_user_id)
+        if conflict is not None:
+            raise conflict
         existing = await asyncio.to_thread(permission_store.get, target_user_id, session_id)
         if existing is not None and existing.level == LEVEL_OWNER:
             raise OmnigentError(

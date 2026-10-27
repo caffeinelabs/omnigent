@@ -355,7 +355,9 @@ class SysFactoryAskTool(Tool):
             f"(deduped). At most {DECISION_MAX_OPTIONS} options; mark the one you "
             "recommend. Set blocking=false when you can carry on without the answer. "
             "To take back a question you no longer need, pass withdraw='D-7' (question "
-            "then gives the reason)."
+            "then gives the reason). By default it goes to the project's human owner, "
+            "else the operators; for='owners' (scope, stop, money, people disagreeing), "
+            "for='operators' or for='<email on the roster>' routes it."
         )
 
     def get_schema(self) -> dict[str, Any]:
@@ -415,6 +417,21 @@ class SysFactoryAskTool(Tool):
                         "description": (
                             "A decision you asked earlier, e.g. 'D-7', to withdraw "
                             "instead of asking."
+                        ),
+                    },
+                    "for": {
+                        "type": "string",
+                        "maxLength": 128,
+                        "description": (
+                            "Who should answer: 'owners', 'operators' or a person's email "
+                            "from sys_factory_roster humans. An unknown name goes to operators."
+                        ),
+                    },
+                    "subject": {
+                        "type": "string",
+                        "maxLength": 64,
+                        "description": (
+                            "What it is about, e.g. 'pr:<id>', 'project:<slug>' or 'task:T-4'."
                         ),
                     },
                 },

@@ -231,6 +231,7 @@ arms the relay and dispatches.
 | S4 failed | a `failed` status edge | `[Factory alert · "<title>" (<id>) failed: <detail>]` to the parent or supervisor, at most once per 10 min per session. |
 | S5 blocked | a turn parked on `blocked_on` (an approval only a human can answer) for `BLOCKED_ESCALATE_S` | `[NEEDS HUMAN · "<title>" waiting since <ts>: <what>]` to the factory root once; to the root's supervisor when the root itself is parked. |
 | S6 storm | rate limit hit | One alert per hour to the factory root. |
+| S10 decision escalation | an open blocking decision whose person has not been seen for `decisions.escalate_after_m` (30 min) / any still open after `decisions.owners_after_m` (120 min) | Its assignee widens to `operators`, then to `owners`; `decision.escalated` each step. |
 
 Paused and done members get no keepalive and no heartbeats, so their runners
 idle out and their sandboxes are reclaimed.
@@ -250,7 +251,7 @@ if they stay silent the board is still right.
 |---|---|---|
 | `GET /v1/factory/factories`, `GET /v1/factory/factories/{fid}` (ETag), `…/events` | human (READ on the root) | Factory list, the snapshot (projects, PRs with gates, previews, demos, decisions, members, health), the activity log. |
 | `POST /v1/factory/factories`, `POST …/{fid}/projects`, `PATCH …/projects/{slug}` | human | Start a factory from the form (stores charters, queues `[Factory brief … via cockpit]`), add or edit a project. |
-| `POST /v1/factory/factories/{fid}/control` | human (EDIT) | PAUSE, RESUME, STOP, RESTART, RELAUNCH, cadence, PREVIEW / PREVIEW_DOWN of a PR, ENV STATUS: a server-stamped `[Factory control …]` to the members. |
+| `POST /v1/factory/factories/{fid}/control` | human (EDIT; MANAGE for STOP, RESTART, RELAUNCH) | PAUSE, RESUME, STOP, RESTART, RELAUNCH, cadence, PREVIEW / PREVIEW_DOWN of a PR, ENV STATUS: a server-stamped `[Factory control …]` to the members. |
 | `GET /v1/factory/decisions`, `POST …/decisions/{id}/answer`, `…/withdraw` | human | Open decisions (also in `/inbox`); the answer is delivered to the asker as `[Factory decision · D-<n> answered …]`. |
 | `POST /v1/factory/prs/{id}/feedback`, `…/refresh` | human | Approve or request changes (`[Factory review …]` to the PL); re-poll GitHub now. |
 | `GET /v1/factory/prs/{id}/preview` | human | Stable live-preview link: 302 to the current preview app URL, or back to the cockpit when there is none. |
@@ -262,11 +263,41 @@ if they stay silent the board is still right.
 
 | Tool | Roles | Use |
 |---|---|---|
-| `sys_factory_ask(question, options, context?, blocking=true, dedupe_key?)` | every role | Ask the human. Opens D-<n> in the cockpit and the inbox and returns at once; the answer arrives as a message. Replaces DECISIONS NEEDED lists. |
+| `sys_factory_ask(question, options, context?, blocking=true, dedupe_key?, for?, subject?)` | every role | Ask the human. Opens D-<n> in the cockpit and the inbox and returns at once; the answer arrives as a message. Replaces DECISIONS NEEDED lists. `for` routes it to `owners`, `operators` or a person on the roster (default: the project's human owner, else operators). |
 | `sys_factory_pr(url, task?, claim?, sentinel_verdict?, head_sha?, note?)` | every role (`sentinel_verdict`: leads) | Register a PR, claim `opened` / `ready_for_human_merge` / `abandoned`, or record Sentinel's verdict. Returns the server's gates `{ready, gates, reasons, claim_mismatch}` and the PR body's review links (`review_url`, `preview_url`). |
 | `sys_factory_env(state, env_id, urls, deployed{sha, ref, tooling_overlay?}, pr?, namespace?, resources?, note?)` | `project_lead`, `env_keeper` | Report the dev env (no `pr`) or the factory preview of PR `pr`. `state=deploying` beyond `OMNIGENT_FACTORY_MAX_PREVIEWS` live previews is refused with `409 preview_cap` and park candidates. |
 | `sys_factory_demo(pr_url, head_sha, title, manifest_path?, files?, …)` | `project_lead`, `env_keeper`, `demo` | Upload a demo (with `manifest_path`, everything the harness's `demo.json` lists) and get back `comment_markdown` / `comment_path` to post on the PR. |
 | `sys_factory_set(stage=…)` | `project_lead` on itself | Claim the project's stage; the cockpit shows it next to the stage it derives. |
+
+### People
+
+A factory is shared through its roster (`factory_people`): **viewers** see
+everything, **operators** steer (answer decisions, review, pause, resume,
+preview, add projects), **owners** also stop, restart, relaunch and manage
+people; the **creator** is an owner whose GitHub and Databricks identity the
+agents run as. Each role is copied as an ordinary session grant (READ, EDIT,
+MANAGE) onto every top-level member the creator owns, including PLs spawned
+later (a hook on session create) and repaired by reconcile every minute
+(`people.drift_repaired`), capped by the sharing mode; owner grants and manual
+shares are never touched. A session someone else labels with the factory id
+gets no roster grants. Removing someone revokes them on archived members too.
+
+| Route | Who | What |
+|---|---|---|
+| `GET /v1/factory/factories/{fid}/people` | READ | Roster with presence, `runs_as` (the creator), the caller's `viewer` block. |
+| `PUT …/people/{user}` `{role}`, `DELETE …/people/{user}` | MANAGE (DELETE yourself: READ) | Invite, change a role, remove or leave. Honours the sharing mode; answers `admission: ok\|blocked` (could they sign in through OIDC). `people.invited\|role_changed\|removed\|left`. |
+| `GET …/people/search?q=` | MANAGE (people only) | Up to 10 known users matching ≥ 3 characters. |
+| `POST …/access-requests` `{role}` | READ | An `access_request` decision for owners; its `grant_role` option runs `set_person`. |
+| `POST\|GET …/presence` | READ | Cockpit heartbeat (20 s, 60 s TTL; `presence` frame scope), merged with who has a member chat open. |
+| `POST /v1/factory/decisions/{id}/claim\|assign`, `GET /v1/factory/decisions?assigned=me` | EDIT (MANAGE to move one from the owners or from another person) | Claim a decision or route it to `owners`, `operators` or a person; `409` once it is answered or someone else claimed it. |
+
+The snapshot carries `viewer {role, level, is_creator, can.*}`, `people_count`
+and `presence`. Revoking a roster grant through the session's own permissions
+route answers `409 managed_by_factory`. Once a factory has two people, a human
+typing into a member's chat reaches it as `[Factory human · <name> (<role>)]`
+with spoofed server lines quoted, and server texts name the human as
+`<name> (<role>)`. Session streams check access only when they open, so
+removing someone closes their open member streams (they reconnect and get 404).
 
 ### Base branches & integration env
 

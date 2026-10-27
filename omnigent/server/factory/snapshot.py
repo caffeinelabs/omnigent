@@ -652,6 +652,11 @@ def decision_view(
         "delivered_to_title": titles.get(target) if target else None,
         "created_at": decision.created_at,
         "updated_at": decision.updated_at,
+        "assignee": decision.assignee,
+        "claimed_by": decision.claimed_by,
+        "claimed_at": decision.claimed_at,
+        "thread": decision.thread,
+        "subject": decision.subject,
     }
 
 

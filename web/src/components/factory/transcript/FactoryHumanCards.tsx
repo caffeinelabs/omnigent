@@ -1,6 +1,7 @@
-// Compact cards for what a human sent through the cockpit: controls (pause,
-// preview, charter update …), answered decisions, PR reviews and the brief.
-// Each names the human and shows their text.
+// Compact cards for what a human sent: cockpit controls (pause, preview,
+// charter update …), answered decisions, PR reviews, the brief, and a message
+// a person typed into a shared factory member. Each names the human and shows
+// their text.
 
 import {
   ActivityIcon,
@@ -22,6 +23,7 @@ import {
 } from "lucide-react";
 import type { ReactNode } from "react";
 import type { FactoryMarkerTone, ParsedFactoryMessage } from "@/lib/factoryMessages";
+import { userColor, userInitials } from "@/lib/userBadge";
 import { cn } from "@/lib/utils";
 import { FACTORY_CARD_CLASS, FACTORY_CARD_HEADER_CLASS, KindPill } from "./FactoryMessageCard";
 import {
@@ -318,6 +320,53 @@ export function BriefCard({
             }
             time={clockTime(createdAtS)}
           />
+        </>
+      }
+    >
+      {parsed.body && <FoldableMarkdown text={parsed.body} />}
+    </CardShell>
+  );
+}
+
+const ROLE_TONE: Record<string, FactoryMarkerTone> = {
+  creator: "accent",
+  owner: "accent",
+  operator: "info",
+  viewer: "muted",
+};
+
+/**
+ * `[Factory human · <name> (<role>)]`: a person typing into a shared member's
+ * chat. Their avatar, name and role, then their text (lines that imitated a
+ * server notice arrive quoted).
+ */
+export function HumanMessageCard({
+  parsed,
+  createdAtS,
+}: {
+  parsed: ParsedFactoryMessage;
+  createdAtS?: number;
+}) {
+  const name = parsed.by ?? "human";
+  const role = parsed.role ?? "viewer";
+  return (
+    <CardShell
+      testId="factory-human-card"
+      data={{ "data-person": name, "data-person-role": role }}
+      header={
+        <>
+          <span
+            aria-hidden
+            className="inline-flex size-5 shrink-0 items-center justify-center rounded-full text-xs font-medium text-white"
+            style={{ backgroundColor: userColor(name) }}
+          >
+            {userInitials(name)}
+          </span>
+          <strong className="min-w-0 truncate font-semibold text-foreground" title={name}>
+            {name}
+          </strong>
+          <KindPill label={role} tone={ROLE_TONE[role] ?? "muted"} />
+          <Attribution who={null} time={clockTime(createdAtS)} />
         </>
       }
     >

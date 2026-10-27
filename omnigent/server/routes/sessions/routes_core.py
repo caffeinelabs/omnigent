@@ -39,6 +39,7 @@ from omnigent.entities import (
 )
 from omnigent.entities.permission import SessionPermission
 from omnigent.errors import ErrorCategory, ErrorCode, ErrorImpact, ErrorPhase, OmnigentError
+from omnigent.factory import LABEL_ID as FACTORY_LABEL_ID
 from omnigent.factory import LABEL_PREFIX as FACTORY_LABEL_PREFIX
 from omnigent.models.model_override import validate_model_override
 from omnigent.runner.identity import (
@@ -697,6 +698,11 @@ def register_core_routes(
             await asyncio.to_thread(permission_store.ensure_user, user_id)
             await asyncio.to_thread(permission_store.grant, user_id, resp.id, LEVEL_OWNER)
             resp.permission_level = await _get_permission_level(user_id, resp.id, permission_store)
+        # A new factory member gets the factory roster's grants (its people see it).
+        if permission_store is not None and conv is not None and conv.labels.get(FACTORY_LABEL_ID):
+            from omnigent.server.factory.people import mirror_member_on_create
+
+            await mirror_member_on_create(request.app.state, conv)
         # Push the new session to this user's other open tabs (see the
         # multipart path above for the rationale).
         _announce_session_added(user_id, resp.id)

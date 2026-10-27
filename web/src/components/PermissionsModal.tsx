@@ -16,7 +16,14 @@ import {
   useState,
 } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { CheckIcon, LinkIcon, QrCodeIcon, Trash2Icon, UserPlusIcon } from "lucide-react";
+import {
+  CheckIcon,
+  FactoryIcon,
+  LinkIcon,
+  QrCodeIcon,
+  Trash2Icon,
+  UserPlusIcon,
+} from "lucide-react";
 import { QRCodeSVG } from "qrcode.react";
 import { Button } from "@/components/ui/button";
 import {
@@ -42,16 +49,19 @@ import {
   usePermissions,
   useRevokePermission,
 } from "@/hooks/usePermissions";
+import { useFactories } from "@/hooks/useFactory";
 import { useSession } from "@/hooks/useSession";
 import { useUserSearch } from "@/hooks/useUserSearch";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
 import { updateSession } from "@/lib/sessionsApi";
 import { getOmnigentTransformShareLink, getOmnigentUserSearch } from "@/lib/host";
 import { workspaceSharingBlocked } from "@/lib/permissionsApi";
-import { useRebasePath } from "@/lib/routing";
+import { Link, useRebasePath } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 
 const PUBLIC_USER = "__public__";
+const FACTORY_ID_LABEL = "omnigent.factory.id";
+const FACTORY_NAME_LABEL = "omnigent.factory.name";
 
 /** Numeric permission level → display label for fixed (non-editable) rows. */
 const LEVEL_LABELS: Record<number, string> = {
@@ -114,6 +124,15 @@ export function PermissionsModal({
   // chat agent has none, so the toggle would be inert — hide it there.
   const hasWorkspace = !!session?.workspace;
   const workspaceShared = session?.shareWorkspaceFiles ?? false;
+  // A top-level factory member's grants follow the factory's roster (its
+  // People page); a sub-agent's are its own.
+  const factoryId =
+    (!session?.parentSessionId && session?.labels?.[FACTORY_ID_LABEL]?.replace(/-/g, "")) || null;
+  const factories = useFactories({ enabled: open && factoryId !== null });
+  const factoryName =
+    session?.labels?.[FACTORY_NAME_LABEL] ||
+    factories.data?.data.find((f) => f.id === factoryId)?.name ||
+    null;
 
   const userGrants = (permissions ?? []).filter((p) => p.user_id !== PUBLIC_USER);
   const publicGrant = (permissions ?? []).find((p) => p.user_id === PUBLIC_USER);
@@ -204,6 +223,28 @@ export function PermissionsModal({
             </div>
           </DialogDescription>
         </DialogHeader>
+
+        {factoryId && (
+          <div
+            role="note"
+            className="flex min-w-0 items-start gap-2 rounded-lg border border-info/40 bg-info/5 px-3 py-2 text-sm"
+            data-testid="share-factory-managed"
+          >
+            <FactoryIcon className="mt-0.5 size-4 shrink-0 text-info" aria-hidden />
+            <p className="min-w-0 flex-1">
+              Managed by factory{" "}
+              <span className="font-medium text-foreground">{factoryName ?? "this factory"}</span>.
+              Its people get access to every agent; their grants here follow the factory.
+            </p>
+            <Link
+              to={`/factory/${factoryId}`}
+              className="shrink-0 font-medium text-info underline-offset-2 hover:underline"
+              onClick={() => onOpenChange(false)}
+            >
+              Manage people
+            </Link>
+          </div>
+        )}
 
         {/* Public toggle — hidden when the server disables public access. */}
         {publicSharingEnabled && (

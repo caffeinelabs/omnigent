@@ -1,5 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { ServerInfo, SharingMode } from "@/lib/capabilities";
@@ -21,6 +22,10 @@ vi.mock("@/hooks/useSession", () => ({
 }));
 vi.mock("@/lib/sessionsApi", () => ({
   updateSession: vi.fn(),
+}));
+// A factory member's banner names its factory from the factory list.
+vi.mock("@/hooks/useFactory", () => ({
+  useFactories: vi.fn(() => ({ data: undefined })),
 }));
 
 // Stub the QR renderer so tests can assert the encoded deep-link value via a
@@ -45,6 +50,7 @@ vi.mock("@/lib/host", async (importOriginal) => {
 
 import * as api from "@/lib/permissionsApi";
 import * as host from "@/lib/host";
+import { useFactories } from "@/hooks/useFactory";
 import { useSession } from "@/hooks/useSession";
 import { updateSession } from "@/lib/sessionsApi";
 import type { Session } from "@/lib/types";
@@ -889,5 +895,60 @@ describe("PermissionsModal", () => {
         expect(updateSessionMock).toHaveBeenCalledWith("conv_abc", { shareWorkspaceFiles: false }),
       );
     });
+  });
+});
+
+describe("PermissionsModal — factory members", () => {
+  const FID = "f4f4ba9c-7772-5331-b12f-0fa7072dc4d3";
+
+  function renderMember(labels: Record<string, string>, parentSessionId: string | null = null) {
+    listMock.mockResolvedValue([]);
+    useSessionMock.mockReturnValue({
+      session: sessionWith({ labels, parentSessionId }),
+      isLoading: false,
+      error: null,
+    } as unknown as ReturnType<typeof useSession>);
+    const Wrapper = createWrapper();
+    render(
+      <MemoryRouter>
+        <PermissionsModal sessionId="conv_abc" open={true} onOpenChange={() => {}} />
+      </MemoryRouter>,
+      { wrapper: Wrapper },
+    );
+  }
+
+  it("says a factory manages the grants and links to its people", () => {
+    vi.mocked(useFactories).mockReturnValue({
+      data: { data: [{ id: FID.replace(/-/g, ""), name: "Atlas factory" }] },
+    } as unknown as ReturnType<typeof useFactories>);
+    renderMember({ "omnigent.factory.id": FID });
+
+    const banner = screen.getByTestId("share-factory-managed");
+    expect(banner.textContent).toContain("Managed by factory Atlas factory");
+    expect(within(banner).getByRole("link", { name: "Manage people" })).toHaveAttribute(
+      "href",
+      `/factory/${FID.replace(/-/g, "")}`,
+    );
+  });
+
+  it("names the factory from the root's own label", () => {
+    vi.mocked(useFactories).mockReturnValue({ data: undefined } as unknown as ReturnType<
+      typeof useFactories
+    >);
+    renderMember({ "omnigent.factory.id": FID, "omnigent.factory.name": "Root factory" });
+
+    expect(screen.getByTestId("share-factory-managed").textContent).toContain("Root factory");
+  });
+
+  it("shows no banner outside a factory", () => {
+    renderMember({});
+
+    expect(screen.queryByTestId("share-factory-managed")).toBeNull();
+  });
+
+  it("shows no banner on a sub-agent, whose grants the factory does not manage", () => {
+    renderMember({ "omnigent.factory.id": FID }, "conv_parent");
+
+    expect(screen.queryByTestId("share-factory-managed")).toBeNull();
   });
 });

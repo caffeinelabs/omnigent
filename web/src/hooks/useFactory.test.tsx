@@ -221,14 +221,14 @@ describe("factory list, events and decisions", () => {
     expect(nextEventCursor(page({ data: [] }))).toBeUndefined();
   });
 
-  it("counts open decisions", async () => {
+  it("counts open decisions assigned to the viewer or their role", async () => {
     authenticatedFetch.mockResolvedValue(json({ data: [], count: 3 }));
     const { result } = renderHook(() => useFactoryDecisionCount(), {
       wrapper: wrapperFor(newClient()),
     });
     await waitFor(() => expect(result.current).toBe(3));
     expect(authenticatedFetch).toHaveBeenCalledWith(
-      "/v1/factory/decisions?status=open&count_only=1",
+      "/v1/factory/decisions?status=open&assigned=me&count_only=1",
     );
   });
 });

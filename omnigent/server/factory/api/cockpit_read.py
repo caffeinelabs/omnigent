@@ -19,7 +19,8 @@ from omnigent.entities import Conversation
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.factory import LABEL_NAME, factory_enabled
 from omnigent.server.auth import LEVEL_READ, RESERVED_USER_LOCAL
-from omnigent.server.factory import schemas
+from omnigent.server.factory import decision_routing, people, schemas
+from omnigent.server.factory.api.presence import entries_for
 from omnigent.server.factory.charter import server_default_base
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.envelope import display_title
@@ -72,10 +73,27 @@ async def _root(user_id: str | None, factory_id: str, deps: FactoryDeps) -> Conv
     return conv
 
 
-async def _view(request: Request, user_id: str | None, root: Conversation) -> dict[str, Any]:
+async def _view(
+    request: Request, user_id: str | None, root: Conversation, *, viewer: bool = True
+) -> dict[str, Any]:
     deps = factory_deps(request.app.state)
     raw = await get_snapshot(request.app.state, root)
-    return filter_snapshot(raw, await readable_for(user_id, raw, deps))
+    readable = await readable_for(user_id, raw, deps)
+    body = filter_snapshot(raw, readable)
+    if viewer:
+        # Per viewer and never cached: role, levers, roster size and who is here.
+        block, count = await asyncio.to_thread(_viewer_fields, deps, root.id, user_id)
+        body["viewer"] = block
+        body["people_count"] = count
+        body["presence"] = entries_for(root.id, raw.top_level_of, readable)
+    return body
+
+
+def _viewer_fields(
+    deps: FactoryDeps, factory_id: str, user_id: str | None
+) -> tuple[dict[str, Any], int]:
+    block = schemas.ViewerBlock.model_validate(people.viewer_block(deps, factory_id, user_id))
+    return block.model_dump(mode="json"), people.people_count(deps, factory_id)
 
 
 def _etag_matches(header: str | None, etag: str) -> bool:
@@ -143,7 +161,7 @@ async def list_factories(request: Request) -> dict[str, Any]:
         if root.id not in readable:
             continue
         try:
-            summaries.append(summary_from(await _view(request, user_id, root)))
+            summaries.append(summary_from(await _view(request, user_id, root, viewer=False)))
         except Exception:  # one broken factory must not hide the others
             _logger.exception("factory: could not summarise factory %s", root.id)
     summaries.sort(key=lambda s: s["started_at"] or 0, reverse=True)
@@ -340,6 +358,7 @@ async def list_open_decisions(
     request: Request,
     status: str = Query("open", description="A status or a comma-separated list."),
     count_only: bool = Query(False),
+    assigned: str = Query("all", description="'me': only decisions for me or my role."),
 ) -> dict[str, Any]:
     """Decisions across every factory the caller can read (the Inbox mirror and its count)."""
     deps = factory_deps(request.app.state)
@@ -349,6 +368,8 @@ async def list_open_decisions(
         raise FactoryRouteError(
             400, "invalid_status", f"status must be among {sorted(_DECISION_STATUSES)}"
         )
+    if assigned not in ("me", "all"):
+        raise FactoryRouteError(400, "invalid_assigned", "assigned must be 'me' or 'all'")
     roots = await asyncio.to_thread(list_factory_roots, deps.conversation_store)
     readable_roots = await asyncio.to_thread(readable_set, user_id, [r.id for r in roots], deps)
     by_id = {bare_id(r.id): r for r in roots if r.id in readable_roots}
@@ -364,6 +385,16 @@ async def list_open_decisions(
     visible = [
         d for d in rows if not d.asked_by_session_id or d.asked_by_session_id in readable_askers
     ]
+    levels = await asyncio.to_thread(
+        lambda: {fid: people.viewer_level(deps, by_id[fid].id, user_id) for fid in by_id}
+    )
+    mine = {
+        d.id
+        for d in visible
+        if decision_routing.is_mine(d, user_id, levels.get(bare_id(d.factory_id), 0))
+    }
+    if assigned == "me":
+        visible = [d for d in visible if d.id in mine]
     if count_only:
         return schemas.OpenDecisionsResponse(count=len(visible)).model_dump(mode="json")
     titles, roles = await asyncio.to_thread(_decision_titles, deps, readable_askers)
@@ -380,6 +411,7 @@ async def list_open_decisions(
             {
                 "factory": {"id": bare_id(root.id), "name": _factory_name(root)},
                 "decision": decision_view(decision, titles, roles, delivered),
+                "mine": decision.id in mine,
             }
         )
     return schemas.OpenDecisionsResponse.model_validate(

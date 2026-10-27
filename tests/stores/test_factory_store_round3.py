@@ -21,6 +21,8 @@ from omnigent.db.db_models import workspace_scope
 from omnigent.db.utils import get_or_create_engine
 from omnigent.stores.factory_store import (
     TEXT_BOUNDS,
+    DecisionNotFound,
+    DecisionNotOpen,
     DefinitionVersionExists,
     FactoryStore,
     InMemoryFactoryStore,
@@ -130,6 +132,31 @@ def test_decision_assignment_columns(store: FactoryStore) -> None:
     for source in ("proposal", "access_request", "done_check"):
         other, _ = store.create_decision(FID, dedupe_key=source, question="?", source=source)
         assert other.source == source
+
+
+def test_route_decision_is_a_compare_and_set(store: FactoryStore) -> None:
+    row, _ = store.create_decision(FID, dedupe_key="ask:1", question="?", assignee="operators")
+
+    claimed = store.route_decision(row.id, claimable_by=MIA, claimed_by=MIA, claimed_at=5)
+    again = store.route_decision(row.id, claimable_by=MIA, claimed_at=6)
+    with pytest.raises(DecisionNotOpen) as lost:
+        store.route_decision(row.id, claimable_by=LUKA, claimed_by=LUKA)
+    with pytest.raises(DecisionNotOpen):
+        store.route_decision(row.id, assignee_was="owners", assignee=LUKA)
+    moved = store.route_decision(row.id, assignee_was="operators", assignee="owners")
+    store.answer_decision(row.id, option_id=None, text="done", by=MIA)
+    with pytest.raises(DecisionNotOpen) as closed:
+        store.route_decision(row.id, assignee="operators")
+    with pytest.raises(DecisionNotFound):
+        store.route_decision(uuid.uuid4().hex, assignee="owners")
+
+    assert (claimed.claimed_by, again.claimed_at) == (MIA, 6)
+    assert lost.value.decision.status == "open" and lost.value.decision.claimed_by == MIA
+    assert moved.assignee == "owners"
+    assert closed.value.decision.status == "answered"
+    assert store.get_decision(row.id).assignee == "owners"  # type: ignore[union-attr]
+    with pytest.raises(TypeError):
+        store.route_decision(row.id, status="open")
 
 
 # ── People ─────────────────────────────────────────────────────

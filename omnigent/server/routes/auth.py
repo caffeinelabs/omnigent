@@ -37,7 +37,11 @@ from omnigent.server.oidc import (
     generate_code_verifier,
     mint_session_cookie,
 )
-from omnigent.server.oidc_access import OidcAdmissionPolicy, resolve_allowed_domains_path
+from omnigent.server.oidc_access import (
+    OidcAdmissionPolicy,
+    register_admission_policy,
+    resolve_allowed_domains_path,
+)
 from omnigent.server.routes.device_auth import issue_login_grant
 from omnigent.stores.permission_store import PermissionStore
 
@@ -136,6 +140,7 @@ def create_auth_router(
         invited_lookup=invite_store,
         config_allowed_domains=allowed_domains,
     )
+    register_admission_policy(admission)
 
     # Cookie names and secure flag depend on HTTP vs HTTPS (derived
     # from redirect_uri). The __Host- prefix requires HTTPS — using

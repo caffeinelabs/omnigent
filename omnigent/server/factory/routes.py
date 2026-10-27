@@ -271,7 +271,9 @@ def create_factory_router() -> APIRouter:
         )
         # Labels are not an ACL: list only sessions this user can read.
         visible = [m for m in members if await _can_read(user_id, m.id, deps)]
-        return await build_roster(sender_m.factory_id, visible, deps, request.app.state)
+        return await build_roster(
+            sender_m.factory_id, visible, deps, request.app.state, humans=True
+        )
 
     @router.post("/messages", status_code=202)
     async def post_message(request: Request, body: PostMessageBody) -> dict[str, Any]:

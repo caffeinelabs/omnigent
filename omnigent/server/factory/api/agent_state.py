@@ -18,7 +18,7 @@ from typing import Any, Final
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from omnigent.entities.factory import FactoryDecision, FactoryPr
 from omnigent.factory import (
@@ -38,7 +38,7 @@ from omnigent.factory import (
     is_full_sha,
     parse_pr_url,
 )
-from omnigent.server.factory import events, nudge, status
+from omnigent.server.factory import decision_routing, events, nudge, status
 from omnigent.server.factory.agent_scope import (
     AgentCaller,
     announce_new_pr,
@@ -79,7 +79,9 @@ class AskOption(BaseModel):
 
 
 class AskBody(BaseModel):
-    """``POST /v1/factory/agent/decisions``."""
+    """``POST /v1/factory/agent/decisions``; ``for`` names who should answer."""
+
+    model_config = ConfigDict(populate_by_name=True)
 
     from_session_id: str
     question: str
@@ -88,6 +90,8 @@ class AskBody(BaseModel):
     blocking: bool = True
     allow_text: bool = True
     dedupe_key: str | None = None
+    for_: str | None = Field(default=None, alias="for")
+    subject: str | None = None
 
 
 class WithdrawBody(BaseModel):
@@ -200,6 +204,8 @@ async def ask_decision(request: Request, body: AskBody) -> dict[str, Any]:
     key = (body.dedupe_key or "").strip()[:64] or default_dedupe_key(project, question)
     store = caller.deps.factory_store
     asker = norm_id(caller.session.id)
+    assignee, warning = await asyncio.to_thread(_assignee_for, caller, body.for_, project)
+    subject = _clip(body.subject, decision_routing.SUBJECT_MAX)
 
     def _open_or_create() -> tuple[FactoryDecision, bool]:
         open_rows = store.list_decisions(factory_id=caller.factory_id, status="open", limit=1000)
@@ -224,6 +230,8 @@ async def ask_decision(request: Request, body: AskBody) -> dict[str, Any]:
             project_slug=project,
             asked_by_session_id=caller.session.id,
             context=_clip(body.context, DECISION_CONTEXT_MAX),
+            assignee=assignee,
+            subject=subject,
         )
 
     row, deduped = await asyncio.to_thread(_open_or_create)
@@ -237,9 +245,30 @@ async def ask_decision(request: Request, body: AskBody) -> dict[str, Any]:
             from_id=caller.session.id,
             subject=f"decision:{row.ref}",
             summary=f"{caller.title} asks {row.ref}: {question}",
-            data={"decision_id": row.id, "number": row.number, "blocking": row.blocking},
+            data={
+                "decision_id": row.id,
+                "number": row.number,
+                "blocking": row.blocking,
+                "assignee": row.assignee,
+            },
         )
-    return _decision_reply(row, deduped=deduped)
+    reply = _decision_reply(row, deduped=deduped)
+    reply["assignee"] = row.assignee or decision_routing.ASSIGNEE_OPERATORS
+    if warning:
+        reply["warning"] = warning
+    return reply
+
+
+def _assignee_for(
+    caller: AgentCaller, wanted: str | None, project: str | None
+) -> tuple[str, str | None]:
+    """:returns: ``(assignee, warning)`` for ``sys_factory_ask(for=…)``, else the default."""
+    deps = caller.deps
+    assignee, warning = decision_routing.resolve_for(deps, caller.factory_id, wanted)
+    if assignee is None:
+        owner = decision_routing.human_owner_of(deps, caller.factory_id, project)
+        assignee = decision_routing.default_assignee("agent", human_owner=owner)
+    return assignee, warning
 
 
 def _find_decision(caller: AgentCaller, ref: str) -> FactoryDecision | None:

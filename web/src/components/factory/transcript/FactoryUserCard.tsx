@@ -1,13 +1,19 @@
 import { type ParsedFactoryMessage, isFactoryMarkerKind } from "@/lib/factoryMessages";
 import { cn } from "@/lib/utils";
-import { BriefCard, ControlCard, DecisionAnsweredCard, ReviewCard } from "./FactoryHumanCards";
+import {
+  BriefCard,
+  ControlCard,
+  DecisionAnsweredCard,
+  HumanMessageCard,
+  ReviewCard,
+} from "./FactoryHumanCards";
 import { FactoryMarker } from "./FactoryMarker";
 import { FactoryMessageCard } from "./FactoryMessageCard";
 
 /**
  * Render a parsed factory text that arrived as a user-role message: a card
- * for messages, briefs, controls, decisions and reviews, a marker row for
- * everything else. Cards are turns, so they carry the user-message anchor
+ * for messages, briefs, controls, decisions, reviews and a person's typed
+ * message (`human`), a marker row for everything else. Cards are turns, so they carry the user-message anchor
  * the turn rail and the latest-turn spacer scroll to; markers do not.
  */
 export function FactoryUserCard({
@@ -38,6 +44,9 @@ export function FactoryUserCard({
       break;
     case "review":
       card = <ReviewCard {...props} />;
+      break;
+    case "human":
+      card = <HumanMessageCard {...props} />;
       break;
     default:
       card = <FactoryMarker {...props} />;

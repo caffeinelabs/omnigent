@@ -821,7 +821,9 @@ class DecisionOptionView(_View):
 
     :param action: A server action id (``restart``, ``relaunch``, ...) run on answer.
     :param href: A link-only option (e.g. ``/inbox``).
-    :param target: What the action acts on, e.g. ``"member:<id>"`` or ``"project:<slug>"``.
+    :param target: What the action acts on, e.g. ``"member:<id>"``, ``"project:<slug>"``
+        or ``"person:<user id>"``.
+    :param role: The roster role a ``grant_role`` option gives.
     """
 
     id: str
@@ -831,6 +833,7 @@ class DecisionOptionView(_View):
     action: str | None = None
     href: str | None = None
     target: str | None = None
+    role: PersonRole | None = None
 
 
 class DecisionView(_View):
@@ -970,8 +973,15 @@ class FactoryRef(_View):
 
 
 class OpenDecisionItem(_View):
+    """
+    One decision in the cross-factory list.
+
+    :param mine: Assigned to the caller, or to a role they hold.
+    """
+
     factory: FactoryRef
     decision: DecisionView
+    mine: bool | None = None
 
 
 class OpenDecisionsResponse(_View):
