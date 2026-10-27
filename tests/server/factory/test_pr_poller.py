@@ -8,7 +8,7 @@ Notices go through the real mailer into a recorder, and time is a fake clock.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import httpx
@@ -568,11 +568,17 @@ def test_notice_without_a_preview_keeps_the_spec_text() -> None:
     )
     assert merged_notice(pr) == (
         f"[Factory notice · PR {REPO}#7 merged by @luka as ccccccc · https://github.com/{REPO}"
-        "/pull/7] Run your post-merge steps: env_keeper MERGED pr=7, sync sibling worktrees "
+        "/pull/7] Run your post-merge steps: env_keeper MERGED pr=7 base=main, sync sibling "
+        "worktrees "
         "(git merge origin/main), post the milestone to your lead."
     )
     assert closed_notice(pr, "luka", None) == (
         f"[Factory notice · PR {REPO}#7 closed without merge by @luka]"
+    )
+    on_temp = replace(pr, base_ref="temp-main")
+    assert merged_notice(on_temp).endswith(
+        "env_keeper MERGED pr=7 base=temp-main, sync sibling worktrees "
+        "(git merge origin/temp-main), post the milestone to your lead."
     )
 
 
@@ -597,6 +603,26 @@ async def test_required_contexts_come_from_cached_branch_rules(polling: Polling)
     assert p.pr().gates["checks"] == "pass" and p.pr().ready is True
     rules_reads = [r for r in p.gh.requests if "/rules/branches/" in r.url.path]
     assert len(rules_reads) == 1
+
+
+async def test_a_pr_against_another_branch_than_the_project_base_is_held(
+    polling: Polling,
+) -> None:
+    """A temp-main project's PR opened against main never reads ready; retargeting fixes it."""
+    p = polling
+    p.store.upsert_project(p.fid, "api-version", base_branch="temp-main")
+    gh_pr = p.new_pr(checks=[FakeCheck("ci / test")])
+    p.approve(gh_pr)
+    await p.poll()
+    row = p.pr()
+    assert row.ready is False and row.gates["mergeable"] == "fail"
+    assert row.gates["reasons"] == [
+        "base=main, but the project's base branch is temp-main "
+        "(retarget: gh pr edit 9630 --base temp-main)"
+    ]
+    gh_pr.base_ref = "temp-main"
+    await p.poll()
+    assert p.pr().gates["mergeable"] == "pass" and p.pr().ready is True
 
 
 def test_rollup_keeps_the_newest_run_per_check() -> None:

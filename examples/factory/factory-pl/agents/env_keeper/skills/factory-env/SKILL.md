@@ -1,16 +1,18 @@
 ---
 name: factory-env
-description: env_keeper reference for the project's Tilt envs on the sandbox cluster - the dev env (pnpm factory:up|status|urls|down, env.json), per-PR factory previews (pnpm -s factory:preview up|status|down|list, preview.json, the tooling overlay from origin/main for heads that predate it), reporting with sys_factory_env, the verify marker, reading Tilt, the failure table, and recovery after a sandbox wake.
+description: env_keeper reference for the project's Tilt envs on the sandbox cluster - the dev env at origin/<base>, the project's base branch (pnpm factory:up|status|urls|down, env.json), per-PR factory previews (pnpm -s factory:preview up|status|down|list, preview.json, the tooling overlay from the tooling ref for heads that predate it), reporting with sys_factory_env, the verify marker, reading Tilt, the failure table, and recovery after a sandbox wake.
 ---
 
 # factory-env
 
-Two kinds of env, both yours:
+Two kinds of env, both yours. `<base>` is the project's base branch: the
+charter's `Base branch:` (default `main`), which the PL sends as `base=<base>`
+on UP, PREVIEW and MERGED. Every factory PR targets it.
 
 | | Dev env | Factory preview |
 |---|---|---|
 | For | ICs, while they code | humans and the demo agent, while a PR waits for review |
-| Commit | origin/main (moves on MERGED) | exactly one PR head (moves on a new PREVIEW) |
+| Commit | origin/<base> (moves on MERGED) | exactly one PR head (moves on a new PREVIEW) |
 | Process | one long-running `tilt up` (port 10350) | one-shot `tilt ci --port 0`; objects keep running after it exits |
 | Worktree | `/home/omnigent/workspace/wt/env` | `/home/omnigent/workspace/wt/preview-p<n>` |
 | Namespace | `env-<id>` | `env-<id>-p<n>` |
@@ -18,7 +20,7 @@ Two kinds of env, both yours:
 | Report | `sys_factory_env(...)` without `pr` | `sys_factory_env(pr=<n>, ...)` |
 
 Previews never touch the dev env. VERIFY is PREVIEW: there is no "check out
-the PR in the dev env, then go back to main" any more.
+the PR in the dev env, then go back to the base" any more.
 
 ## Dev env (run in `/home/omnigent/workspace/wt/env`)
 
@@ -29,9 +31,13 @@ the PR in the dev env, then go back to main" any more.
 | `pnpm -s factory:urls` | The URLs as JSON. |
 | `pnpm factory:down` | `tilt down`, deletes the namespace, removes env.json. |
 
-UP:
-1. If the worktree does not exist:
-   `git -C <repo> fetch origin && git -C <repo> worktree add --detach /home/omnigent/workspace/wt/env origin/main`.
+UP base=<base>:
+1. `git -C <repo> fetch origin`. If the worktree does not exist:
+   `git -C <repo> worktree add --detach /home/omnigent/workspace/wt/env origin/<base>`.
+   If it exists but is not on that branch's history
+   (`git -C /home/omnigent/workspace/wt/env merge-base --is-ancestor HEAD origin/<base>`
+   fails, e.g. it was made for another base), move it:
+   `git -C /home/omnigent/workspace/wt/env checkout --detach origin/<base>`.
 2. So humans can watch: `sys_terminal_launch(terminal="tilt", session="log")`, then
    `sys_terminal_send(terminal="tilt", session="log", text="tail -n +1 -F /tmp/tilt.log")`.
 3. `pnpm factory:up` with the longest Bash timeout; run it again on a timeout.
@@ -39,7 +45,7 @@ UP:
 
 ```
 sys_factory_env(state="ready", env_id=<env_id>, urls={app, api, minio, tilt_ui},
-  deployed={sha: <git -C wt/env rev-parse HEAD>, ref: "origin/main"}, resources=[{name, status, detail}])
+  deployed={sha: <git -C wt/env rev-parse HEAD>, ref: "origin/<base>"}, resources=[{name, status, detail}])
 ```
 
 Resources: `tilt get uiresources -o json | jq -c '[.items[] | {name: .metadata.name, status: .status.runtimeStatus, detail: ((.status.buildHistory // [])[0].error // "" | split("\n")[0])}]'`.
@@ -50,8 +56,9 @@ fail, `"failed"` when it is unusable (put the diagnosis in `note`), and
 ## Factory previews (run in the preview worktree)
 
 The preview CLI is `scripts/factory.ts preview` in caffeinelabs/app, on main
-since caffeinelabs/app#9640. A PR head based on current main has it, and the
-`factory:preview` script with it (`-s` keeps stdout pure JSON):
+since caffeinelabs/app#9640. A PR head whose history includes it (current
+main, or a base branch cut from it) has it, and the `factory:preview` script
+with it (`-s` keeps stdout pure JSON):
 
 ```bash
 pnpm -s factory:preview up --name p<n> --pr <n> --sha <40-char sha>
@@ -60,8 +67,8 @@ pnpm -s factory:preview list                 # this pod's preview namespaces
 pnpm -s factory:preview down --name p<n>
 ```
 
-A head based on an older main has no `preview` subcommand: PREVIEW overlays
-the tooling from origin/main (step 4) and runs the same commands with node,
+A head that predates it has no `preview` subcommand: PREVIEW overlays the
+tooling from the tooling ref, `main` (step 4), and runs the same commands with node,
 because the root `package.json` is never overlaid:
 `node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/factory.ts preview up|status|list|down …`.
 
@@ -70,10 +77,10 @@ Below, `FP` stands for `pnpm -s factory:preview` in a checkout whose
 `node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/factory.ts preview`;
 type it out in full. `FP` needs a checkout with the preview tooling, that is
 one where `grep -q "case 'preview'" scripts/factory.ts` succeeds: a preview
-worktree after step 4, or `wt/env` once it is at an origin/main that includes
-caffeinelabs/app#9640. A `wt/env` created before that stays on its old main
+worktree after step 4, or `wt/env` once it is at an origin/<base> that includes
+caffeinelabs/app#9640. A `wt/env` created before that stays on its old commit
 until the next MERGED, and there `FP` prints usage and exits 1; move it first
-with `git -C /home/omnigent/workspace/wt/env fetch origin && git -C /home/omnigent/workspace/wt/env checkout --detach origin/main`
+with `git -C /home/omnigent/workspace/wt/env fetch origin && git -C /home/omnigent/workspace/wt/env checkout --detach origin/<base>`
 (Tilt live-updates the dev env; report it with the new `deployed.sha`).
 Never set `FACTORY_DIR` for previews (they live under `~/factory/previews/`).
 `up` refuses unless HEAD is `--sha` and the worktree is clean apart from the
@@ -93,12 +100,13 @@ stderr; stdout is only JSON):
  "synthetic_secret_file": "/home/omnigent/factory/previews/p9630/synthetic-secret"}
 ```
 
-### PREVIEW pr=<n> head=<sha> [checks=[...]] [tooling=<ref>]
+### PREVIEW pr=<n> head=<sha> base=<base> [checks=[...]] [tooling=<ref>]
 
-1. **Head.** `gh pr view <n> --repo caffeinelabs/app --json headRefOid,state -q '.state + " " + .headRefOid'`.
+1. **Head.** `gh pr view <n> --repo caffeinelabs/app --json headRefOid,state,baseRefName -q '.state + " " + .headRefOid + " " + .baseRefName'`.
    Use the sha as `<sha>` (full 40 chars); if it differs from `head`, say
-   "head moved from <head7>" in the result. A PR that is not `OPEN` gets
-   `PREVIEW SKIPPED not-open`.
+   "head moved from <head7>" in the result. Use `baseRefName` as `<base>`
+   below (for a factory PR it is the command's `base=`). A PR that is not
+   `OPEN` gets `PREVIEW SKIPPED not-open`.
 2. **Claim the slot.**
    `sys_factory_env(pr=<n>, state="deploying", env_id=<env_id from an earlier preview.json, else "p<n>">, urls={}, deployed={sha: <sha>, ref: "pull/<n>/head"})`.
    A `preview_cap` error means the factory runs its maximum of live previews:
@@ -107,7 +115,7 @@ stderr; stdout is only JSON):
 3. **Worktree at the head.**
    ```bash
    W=/home/omnigent/workspace/wt/preview-p<n>
-   git -C <repo> fetch origin pull/<n>/head main
+   git -C <repo> fetch origin pull/<n>/head <base>
    test -d "$W" || git -C <repo> worktree add --detach "$W" <sha>
    git -C "$W" reset -q --hard && git -C "$W" clean -fdq && git -C "$W" checkout -q --detach <sha>
    test "$(git -C "$W" rev-parse HEAD)" = "<sha>"
@@ -122,12 +130,13 @@ stderr; stdout is only JSON):
    means `main`.
    ```bash
    cd /home/omnigent/workspace/wt/preview-p<n>
+   BASE=<base>   # the PR's baseRefName (step 1)
    REF=main   # or the command's tooling=<ref>
    TOOLING=""
    if ! grep -q "case 'preview'" scripts/factory.ts 2>/dev/null; then
      P=(Tiltfile scripts/factory.ts deploy/tilt deploy/services/src/builders/tilt.ts \
         ':(glob)deploy/services/*/src/tilt.ts' ':(glob)deploy/services/*/zz_generated/tilt/**')
-     CONFLICT=$(git diff --name-only origin/main...HEAD -- "${P[@]}")
+     CONFLICT=$(git diff --name-only "origin/$BASE...HEAD" -- "${P[@]}")
      if [ -n "$CONFLICT" ]; then echo "tooling-conflict: $CONFLICT"; exit 3; fi
      git fetch -q origin "$REF" && TOOLING=$(git rev-parse FETCH_HEAD) \
        && git checkout "$TOOLING" -- "${P[@]}" || { echo "tooling-fetch-failed"; exit 4; }
@@ -139,20 +148,21 @@ stderr; stdout is only JSON):
        --experimental-strip-types scripts/factory.ts preview up --name p<n> --pr <n> --sha <sha>
    fi
    ```
-   - A head based on current main has `scripts/factory.ts preview` and the
-     `factory:preview` script: nothing is overlaid, `TOOLING` stays empty and
-     `preview.json` says `"tooling_overlay": null`.
-   - A head based on an older main has no `preview` subcommand: the tooling
-     files are overlaid from origin/main (`git fetch origin main`), and the CLI
-     runs with node. Product code stays exactly the PR head; on an old head
+   - A head that has `scripts/factory.ts preview` and the `factory:preview`
+     script: nothing is overlaid, `TOOLING` stays empty and `preview.json`
+     says `"tooling_overlay": null`.
+   - A head that predates the tooling has no `preview` subcommand: the
+     tooling files are overlaid from the tooling ref (`git fetch origin "$REF"`),
+     and the CLI runs with node. Product code stays exactly the PR head; on an old head
      the Tiltfile falls back to the overlaid committed `zz_generated/tilt`
      manifests. Never overlay the root `package.json`,
      `deploy/package.json` or `deploy/pnpm-lock.yaml`.
-   - Exit 3 with `tooling-conflict`: the PR is based on an older main and
-     changes the tooling itself, so it cannot be overlaid. Report
+   - Exit 3 with `tooling-conflict`: the PR predates the tooling and its diff
+     against origin/<base> changes the tooling itself, so it cannot be
+     overlaid. Report
      `sys_factory_env(pr=<n>, state="failed", env_id=…, urls={}, deployed={sha: <sha>}, note="tooling-conflict: <files>")`
-     and reply `PREVIEW SKIPPED tooling-conflict <files>`. Merging origin/main
-     into the PR gives it the tooling natively.
+     and reply `PREVIEW SKIPPED tooling-conflict <files>`. Merging origin/<base>
+     into the PR gives it the tooling natively once <base> has it.
    - Exit 4 with `tooling-fetch-failed`: the tooling ref could not be fetched
      or checked out, so nothing was deployed (see the failure table).
    - On a timeout run the same block again: it waits for the previous run's
@@ -219,12 +229,12 @@ Previews of this pod that are missing from `list` are gone. Result: one line
 per preview, `PREVIEW STATUS p<n> ready|stale|failed|gone sha=<sha7> · <note>`;
 the PL redeploys the ones that are not ready with PREVIEW.
 
-### MERGED pr=<n> / CLOSED pr=<n>
+### MERGED pr=<n> base=<base> / CLOSED pr=<n>
 
 - MERGED: PREVIEW_DOWN reason=merged, then
-  `git -C /home/omnigent/workspace/wt/env fetch origin && git -C /home/omnigent/workspace/wt/env checkout --detach origin/main`
+  `git -C /home/omnigent/workspace/wt/env fetch origin && git -C /home/omnigent/workspace/wt/env checkout --detach origin/<base>`
   (Tilt live-updates the dev env), then report the dev env with the new
-  `deployed.sha`. Result: `ENV OK at <sha7> · PREVIEW DOWN p<n>`.
+  `deployed.sha` (`deployed.ref` stays `origin/<base>`). Result: `ENV OK at <sha7> · PREVIEW DOWN p<n>`.
 - CLOSED: PREVIEW_DOWN reason=closed.
 
 ## Reading Tilt
@@ -250,7 +260,7 @@ the PL redeploys the ones that are not ready with PREVIEW.
 | Namespace owned by another pod UID | Never adopt it; the reaper deletes it. Report it. |
 | `HEAD is …, not …` | Step 3 was skipped or the head moved: check out `<sha>` again. |
 | `uncommitted changes outside the factory tooling: …` | Something besides the overlay changed the worktree: `git reset -q --hard && git clean -fdq`, then redo step 4. |
-| Exit 4, `tooling-fetch-failed` | A network error: retry once. If `git ls-remote origin <tooling ref>` prints nothing, the ref does not exist (only a `tooling=` override can be missing; `main` always has the tooling): report `PREVIEW FAILED p<n> tooling ref <ref> not found`; a PREVIEW without `tooling=` overlays from origin/main. |
+| Exit 4, `tooling-fetch-failed` | A network error: retry once. If `git ls-remote origin <tooling ref>` prints nothing, the ref does not exist (only a `tooling=` override can be missing; `main` always has the tooling): report `PREVIEW FAILED p<n> tooling ref <ref> not found`; a PREVIEW without `tooling=` overlays from `main`. |
 | `/__factory/preview` 404 or the app's HTML | The routes were rendered without preview mode: the tooling overlay is missing or `tilt up` ran instead of `preview up`. Check `kubectl -n <ns> get httproute,httproutefilter,configmap/factory-preview`. |
 | `HTTPRouteFilter` or route denied | Report the Kyverno message; never hand-edit routes. |
 | `pid … holds …/up.lock` | Another `up` of that preview runs; wait for it. |
@@ -267,5 +277,5 @@ the evidence. Do not edit the repo.
 A wake gives the pod a new UID, so every env id changes and the old
 namespaces are reaped. If env.json's `pod_uid` is not `$OMNIGENT_POD_UID`, or
 `FP status` says preview.json "describes … from an earlier sandbox pod", that
-env is gone. Run UP (and PREVIEW for each open PR the PL lists) again and
+env is gone. Run UP base=<base> (and PREVIEW for each open PR the PL lists) again and
 report the NEW URLs. A `pnpm factory:down` first is harmless.

@@ -446,15 +446,32 @@ def gate_verify(pr: _Json, head: str, labels: set[str]) -> GateResult:
     return GateResult(GATE_PASS, None, (), evidence)
 
 
-def gate_mergeable(pr: _Json) -> GateResult:
-    """GitHub reports the PR mergeable (``UNKNOWN`` while it is still computing)."""
+def gate_mergeable(pr: _Json, expected_base: str | None = None) -> GateResult:
+    """
+    GitHub reports the PR mergeable (``UNKNOWN`` while it is still computing).
+
+    :param pr: The PR snapshot (``mergeable``, ``baseRefName``, ``number`` or ``url``).
+    :param expected_base: The project's base branch, e.g. ``"temp-main"``. A
+        PR whose known ``baseRefName`` differs fails: it would merge into the
+        wrong branch. ``None`` skips that check.
+    :returns: The gate's :class:`GateResult`.
+    """
     mergeable = pr.get("mergeable")
+    actual_base = pr.get("baseRefName")
+    if expected_base and actual_base and actual_base != expected_base:
+        number = pr.get("number") or pr.get("url") or "<pr>"
+        reason = (
+            f"base={actual_base}, but the project's base branch is {expected_base} "
+            f"(retarget: gh pr edit {number} --base {expected_base})"
+        )
+        return GateResult(GATE_FAIL, reason, (), mergeable)
     if mergeable == "MERGEABLE":
         return GateResult(GATE_PASS, evidence=mergeable)
     if mergeable == "UNKNOWN":
         reason = "mergeable=UNKNOWN (GitHub is still computing it; retry shortly)"
         return GateResult(GATE_PENDING, reason, (), mergeable)
-    reason = f"mergeable={mergeable} (merge origin/main into the branch and resolve conflicts)"
+    base = actual_base or "main"
+    reason = f"mergeable={mergeable} (merge origin/{base} into the branch and resolve conflicts)"
     return GateResult(GATE_FAIL, reason, (), mergeable)
 
 
@@ -534,6 +551,7 @@ def evaluate_snapshot(
     demos: Sequence[_Json] = (),
     checks_url: str | None = None,
     files_note: str | None = None,
+    expected_base: str | None = None,
 ) -> GateReport:
     """
     Evaluate every gate of one PR snapshot.
@@ -549,6 +567,8 @@ def evaluate_snapshot(
     :param checks_url: The PR's checks page, for the evidence.
     :param files_note: Why ``files`` may be incomplete (e.g. rename sources
         unknown); a passing ``protected_paths`` gate is then pending.
+    :param expected_base: The project's base branch; a PR targeting another
+        branch fails ``mergeable`` (see :func:`gate_mergeable`).
     :returns: The :class:`GateReport`.
     """
     head = str(pr_json.get("headRefOid") or "").lower()
@@ -562,7 +582,7 @@ def evaluate_snapshot(
         "checks": gate_checks(checks, required_contexts, url=checks_url),
         "review": gate_review(pr_json, head),
         "verify": gate_verify(pr_json, head, labels),
-        "mergeable": gate_mergeable(pr_json),
+        "mergeable": gate_mergeable(pr_json, expected_base),
         "protected_paths": protected,
     }
     if demo_required:

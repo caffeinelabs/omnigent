@@ -20,14 +20,16 @@ prompt: |
   tools (`sys_session_post`, ...) come from the `omnigent` MCP server.
 
   WORKTREE. The repo is the checkout you start in (`git rev-parse --show-toplevel`).
-  The branch name `factory/<slug>/<task>` is load-bearing: the server finds
-  your PR by it. Never rename it.
+  `<base>` is the card's `Base:` branch, the project's base branch (`main`
+  when the card names none, e.g. `temp-main`): branch from it, sync with it
+  and open the PR against it. The branch name `factory/<slug>/<task>` is
+  load-bearing: the server finds your PR by it. Never rename it.
     git -C <repo> fetch origin
-    git -C <repo> worktree add -b factory/<slug>/<task> /home/omnigent/workspace/wt/<task> origin/main
+    git -C <repo> worktree add -b factory/<slug>/<task> /home/omnigent/workspace/wt/<task> origin/<base>
     echo NOTES.md >> "$(git -C /home/omnigent/workspace/wt/<task> rev-parse --git-common-dir)/info/exclude"
   Work ONLY in that worktree. On a re-dispatch (`<task>-r<k>`) the worktree
   exists: read its NOTES.md and continue on the same branch and PR. Sync after
-  sibling merges with `git fetch origin && git merge origin/main`, never rebase.
+  sibling merges with `git fetch origin && git merge origin/<base>`, never rebase.
 
   RULES
   - Follow the repo's AGENTS.md, and its `agents/factory.md` when present. For
@@ -38,11 +40,11 @@ prompt: |
   - Keep `<worktree>/NOTES.md` current: plan, done, next, decisions, and the
     PR, branch and head. It is untracked and is the handoff if you are replaced.
   - Commit and push WIP to `factory/<slug>/<task>` at least hourly. Never
-    force-push and never push main.
+    force-push and never push `<base>` or main.
   - Co-sign every commit: end the message with a blank line and
     `Co-authored-by: omnigent <noreply@omnigent.ai>`.
   - Open a draft PR early: `gh pr create --draft --repo caffeinelabs/<repo>
-    --base main --head factory/<slug>/<task>`, then register it at once with
+    --base <base> --head factory/<slug>/<task>`, then register it at once with
     `sys_factory_pr(url=<pr url>, task=<task>, claim="opened")`. Fill the repo
     template and add these sections:
     - Verification plan: the card's env checks, verbatim, with expected results.

@@ -49,7 +49,7 @@ from omnigent.server.factory.agent_scope import (
     require_factory_repo,
 )
 from omnigent.server.factory.api.pr_preview import preview_stable_path
-from omnigent.server.factory.charter import render_pl_charter
+from omnigent.server.factory.charter import project_base_branch, render_pl_charter
 from omnigent.server.factory.demos import public_base_url, review_url
 from omnigent.server.factory.routes import FactoryRouteError
 from omnigent.stores.factory_store import DecisionNotOpen, norm_id
@@ -316,6 +316,14 @@ def _sha(value: str | None) -> str | None:
     return value
 
 
+def _project_base(caller: AgentCaller, slug: str | None) -> str | None:
+    """:returns: The base branch of project *slug* (``None`` when it is unknown)."""
+    if not slug:
+        return None
+    project = caller.deps.factory_store.get_project(caller.factory_id, slug)
+    return project_base_branch(project) if project is not None else None
+
+
 @router.post("/prs")
 async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
     """Track a PR (and a claim about it), then answer with fresh server gates."""
@@ -390,6 +398,7 @@ async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
     if refreshed is not None:
         row = refreshed
     gates = dict(row.gates or {})
+    project_base = await asyncio.to_thread(_project_base, caller, row.project_slug)
     base = public_base_url(str(request.base_url))
     reply: dict[str, Any] = {
         "pr_id": row.id,
@@ -400,6 +409,9 @@ async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
         "repo": row.repo,
         "number": row.number,
         "project": row.project_slug,
+        # The PR's base and the branch its project's PRs must target (Sentinel compares them).
+        "base_ref": row.base_ref or None,
+        "project_base": project_base,
         "state": row.state,
         "head_sha": row.head_sha or None,
         "ready": row.ready,

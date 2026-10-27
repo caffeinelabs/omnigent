@@ -181,8 +181,12 @@ the cockpit.
   default), and is never run on caffeinelabs/app.
 - Only `env_keeper` (and its PL) runs `tilt up|down|ci`, `pnpm factory:up|down|preview`
   and `scripts/factory.ts up|down|preview`.
-- No pushes to `main`, `master` or `staging`, and no tag pushes. Leads,
-  reviewers and the demo agent never push; the demo agent only comments.
+- Every factory PR targets its project's base branch: the charter's
+  `Base branch:` (default `main`, e.g. `temp-main` for a test base). The dev
+  env tracks it, and ICs branch from it and sync with it.
+- No pushes to `main`, `master`, `staging` or a project's base branch, and no
+  tag pushes. Leads, reviewers and the demo agent never push; the demo agent
+  only comments.
 - A policy denial is final. Do not retry variations of the command. Follow the
   reason, or escalate.
 

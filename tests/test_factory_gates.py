@@ -325,6 +325,36 @@ def test_ready_needs_an_open_pr_with_every_gate_passing() -> None:
     assert evaluate_snapshot(labelled, _GREEN, set()).ready is True
 
 
+@pytest.mark.parametrize(("base", "expected"), [("temp-main", "temp-main"), (None, "main")])
+def test_a_conflict_names_the_prs_own_base(base: str | None, expected: str) -> None:
+    """The fix-it hint merges the PR's base branch, so a temp-main PR is not told to merge main."""
+    report = evaluate_snapshot(_snap(mergeable="CONFLICTING", baseRefName=base), _GREEN, set())
+    assert report.gate_reasons["mergeable"] == (
+        f"mergeable=CONFLICTING (merge origin/{expected} into the branch and resolve conflicts)"
+    )
+
+
+def test_a_pr_against_another_branch_than_the_project_base_is_not_ready() -> None:
+    """A temp-main project's PR opened against main fails ``mergeable`` with the retarget fix."""
+    wrong = evaluate_snapshot(
+        _snap(baseRefName="main", number=9630), _GREEN, set(), expected_base="temp-main"
+    )
+    assert wrong.ready is False
+    assert wrong.gates["mergeable"] == "fail"
+    assert wrong.gate_reasons["mergeable"] == (
+        "base=main, but the project's base branch is temp-main "
+        "(retarget: gh pr edit 9630 --base temp-main)"
+    )
+    right = evaluate_snapshot(
+        _snap(baseRefName="temp-main"), _GREEN, set(), expected_base="temp-main"
+    )
+    assert right.ready is True
+    # An unknown base (or no project) skips the check.
+    unknown = _snap(baseRefName=None)
+    assert evaluate_snapshot(unknown, _GREEN, set(), expected_base="temp-main").ready is True
+    assert evaluate_snapshot(_snap(baseRefName="main"), _GREEN, set()).ready is True
+
+
 def test_report_json_is_the_cockpit_gates_view() -> None:
     """The stored gates validate as ``GatesView`` with check, review and verify evidence."""
     checks = [

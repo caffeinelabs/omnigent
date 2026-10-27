@@ -36,7 +36,11 @@ from omnigent.factory_gates import (
     parse_time,
 )
 from omnigent.server.factory import events, live, nudge
-from omnigent.server.factory.charter import normalize_charter
+from omnigent.server.factory.charter import (
+    DEFAULT_BASE_BRANCH,
+    normalize_charter,
+    project_base_branch,
+)
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.envelope import quote_spoofed_lines
 from omnigent.server.factory.mailer import get_mailer
@@ -320,12 +324,13 @@ def merged_notice(pr: FactoryPr, *, for_lead: bool = False) -> str:
             f"{head}] Info only (project {project}): its project lead runs the post-merge steps."
         )
     teardown = _teardown(pr.preview, pr.number)
-    env_step = f"env_keeper MERGED pr={pr.number}" + (
+    base = pr.base_ref or DEFAULT_BASE_BRANCH
+    env_step = f"env_keeper MERGED pr={pr.number} base={base}" + (
         " (tear down its preview)" if teardown else ""
     )
     return (
         f"{head}{teardown}] Run your post-merge steps: {env_step}, sync sibling worktrees "
-        "(git merge origin/main), post the milestone to your lead."
+        f"(git merge origin/{base}), post the milestone to your lead."
     )
 
 
@@ -586,6 +591,8 @@ async def apply_refresh(
         demos=demos,
         checks_url=checks_url(row.repo, row.number),
         files_note=files_note,
+        # A PR opened against another branch than the project's base never reads ready.
+        expected_base=project_base_branch(project) if project is not None else None,
     )
     gates = report.to_json()
     gates.setdefault(DEMO_GATE, None)

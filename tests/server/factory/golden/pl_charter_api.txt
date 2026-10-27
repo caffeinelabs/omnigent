@@ -6,6 +6,7 @@ Definition of Done:
 - curl -fsS {api}/version → 200
 - pnpm -F caffeine-api test
 Repo#branch: caffeinelabs/app#main · branches factory/api-version/<task>
+Base branch: main (open every PR against it; the dev env tracks origin/main)
 Scope paths: services/caffeine-api/**
 Constraints: none beyond the repo AGENTS.md rules
 Env needed: yes · factory previews: on, one per runnable PR at its head, up to 3 at once · preview tooling ref main

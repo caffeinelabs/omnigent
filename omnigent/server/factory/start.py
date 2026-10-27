@@ -44,10 +44,12 @@ from omnigent.factory import (
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER
 from omnigent.server.factory import control, events
 from omnigent.server.factory.charter import (
+    DEFAULT_BASE_BRANCH,
     DEFAULT_BUDGET_ICS,
     MAX_PREVIEW_SLOTS,
     normalize_charter,
     preview_tooling_ref,
+    project_base_branch,
     render_kickoff_brief,
     render_pl_charter,
 )
@@ -70,7 +72,11 @@ FOLDER_ICON: Final = "🏭"
 MAX_PROJECTS: Final = 12
 _SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
 _REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-_BRANCH_RE = re.compile(r"^(?!/)(?!.*\.\.)(?!.*//)[A-Za-z0-9._/-]{1,255}$")
+# A branch git accepts: no leading "-", "." or "/", no "..", "//" or "/.", no ".lock"
+# component and no trailing "/" or ".".
+_BRANCH_RE = re.compile(
+    r"^(?![-./])(?!.*\.\.)(?!.*//)(?!.*/\.)(?!.*\.lock(?:/|$))(?!.*[/.]$)[A-Za-z0-9._/-]{1,255}$"
+)
 _URL_PATH_RE = re.compile(r"^/[A-Za-z0-9._~/-]{0,199}$")
 
 _M = TypeVar("_M", bound=BaseModel)
@@ -143,7 +149,7 @@ class ProjectIn(_CharterFields):
     slug: str
     title: str | None = Field(None, max_length=256)
     repo: str = Field(max_length=256)
-    base_branch: str = "main"
+    base_branch: str = DEFAULT_BASE_BRANCH
     goal: str = Field(min_length=1, max_length=4000)
     env_needed: bool = True
     version_path: str | None = None
@@ -172,6 +178,10 @@ class ProjectIn(_CharterFields):
     @field_validator("base_branch")
     @classmethod
     def _branch(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            # The form's empty branch field means the default base.
+            return DEFAULT_BASE_BRANCH
         if not _BRANCH_RE.match(value):
             raise ValueError("base_branch is not a valid branch name")
         return value
@@ -384,7 +394,7 @@ def kickoff_text(
 def add_project_text(by: str, mail_id: str, project: FactoryProject, cadence: str) -> str:
     """:returns: The root lead's request to spawn a PL for a project added later."""
     beats = CADENCE_HEARTBEATS.get(cadence, CADENCE_HEARTBEATS[CADENCE_DEMO])
-    workspace = f"https://github.com/{project.repo}#{project.base_branch or 'main'}"
+    workspace = f"https://github.com/{project.repo}#{project_base_branch(project)}"
     return (
         f"{brief_header(by, mail_id)} Human added project {project.slug}. Spawn its PL now: "
         f"sys_factory_spawn(agent='factory-pl', role='project_lead', title='PL · {project.slug}', "

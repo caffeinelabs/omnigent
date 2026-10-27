@@ -23,6 +23,7 @@ RETIRED_PREVIEW_TOOLING_REFS: Final = frozenset(
 DEFAULT_PREVIEW_SLOTS: Final = 2
 MAX_PREVIEW_SLOTS: Final = 3
 DEFAULT_BUDGET_ICS: Final = 3
+DEFAULT_BASE_BRANCH: Final = "main"
 FIXED_DOD: Final = "PR ready for human merge"
 
 
@@ -110,9 +111,20 @@ def normalize_charter(
     return out
 
 
+def project_base_branch(project: FactoryProject) -> str:
+    """:returns: The branch the project's PRs target, e.g. ``"temp-main"`` (default ``main``)."""
+    return _text(project.base_branch) or DEFAULT_BASE_BRANCH
+
+
 def _repo_ref(project: FactoryProject) -> str:
     repo = project.repo or "(repo not set)"
-    return f"{repo}#{project.base_branch or 'main'}"
+    return f"{repo}#{project_base_branch(project)}"
+
+
+def _base_line(project: FactoryProject, charter: Mapping[str, Any]) -> str:
+    base = project_base_branch(project)
+    env = f"; the dev env tracks origin/{base}" if charter["env_needed"] else ""
+    return f"Base branch: {base} (open every PR against it{env})"
 
 
 def _env_line(charter: Mapping[str, Any]) -> str:
@@ -154,6 +166,7 @@ def render_pl_charter(project: FactoryProject) -> str:
         f"- {_fixed_dod(charter)}",
         *(f"- {item}" for item in charter["dod"]),
         f"Repo#branch: {_repo_ref(project)} · branches factory/{project.slug}/<task>",
+        _base_line(project, charter),
         f"Scope paths: {', '.join(charter['scope_paths']) or '(whole repo)'}",
         f"Constraints: {charter['constraints'] or 'none beyond the repo AGENTS.md rules'}",
         _env_line(charter),
@@ -259,11 +272,13 @@ def render_kickoff_brief(
 
 
 __all__ = [
+    "DEFAULT_BASE_BRANCH",
     "FIXED_DOD",
     "PREVIEW_TOOLING_REF_ENV",
     "RETIRED_PREVIEW_TOOLING_REFS",
     "normalize_charter",
     "preview_tooling_ref",
+    "project_base_branch",
     "render_kickoff_brief",
     "render_pl_charter",
 ]

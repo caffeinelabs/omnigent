@@ -310,6 +310,17 @@ async def test_pr_registration_returns_the_review_links(
     assert body["preview_url"].startswith("https://omnigent.example.com/v1/factory/prs/")
 
 
+async def test_pr_registration_returns_the_projects_base_branch(cockpit: Cockpit) -> None:
+    """Sentinel compares the PR's base with ``project_base`` from the same reply."""
+    body = (await cockpit.pr("pl")).json()
+    assert (body["project_base"], body["base_ref"]) == ("main", None)
+
+    cockpit.store.upsert_project(cockpit.factory_id, PROJECT, base_branch="temp-main")
+    cockpit.store.update_pr(body["pr_id"], base_ref="main")
+    body = (await cockpit.pr("pl")).json()
+    assert (body["project_base"], body["base_ref"]) == ("temp-main", "main")
+
+
 async def test_a_pr_on_a_foreign_repo_is_refused(cockpit: Cockpit) -> None:
     foreign = await cockpit.pr("pl", url="https://github.com/caffeinelabs/infra/pull/12")
     not_pr = await cockpit.pr("pl", url="https://github.com/caffeinelabs/app/issues/12")

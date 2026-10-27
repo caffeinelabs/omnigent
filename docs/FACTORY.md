@@ -266,6 +266,26 @@ if they stay silent the board is still right.
 | `sys_factory_demo(pr_url, head_sha, title, manifest_path?, files?, …)` | `project_lead`, `env_keeper`, `demo` | Upload a demo (with `manifest_path`, everything the harness's `demo.json` lists) and get back `comment_markdown` / `comment_path` to post on the PR. |
 | `sys_factory_set(stage=…)` | `project_lead` on itself | Claim the project's stage; the cockpit shows it next to the stage it derives. |
 
+### Base branches
+
+Each project has a **base branch**: the branch picked next to the repo in the
+New factory and Add project forms (stored as `base_branch`, default `main`;
+fixed once the project exists). The PL's charter carries it as `Base branch:
+<branch> (open every PR against it; the dev env tracks origin/<branch>)`, and
+the PL passes it on every dispatch: env_keeper `UP base=<branch>`, `PREVIEW …
+base=<branch>` and `MERGED pr=<n> base=<branch>`, and `Base: <branch>` on
+every task card. ICs branch from origin/<branch>, sync with `git merge
+origin/<branch>` and open PRs with `--base <branch>`; reviewers and Sentinel
+flag a PR whose `baseRefName` differs, and the server fails its `mergeable`
+gate (with the `gh pr edit <n> --base <branch>` fix) so it never reads READY
+FOR HUMAN MERGE; `sys_factory_pr` returns the PR's `base_ref` next to the
+project's `project_base`. The dev env tracks origin/<branch> and moves on each
+merge into it. To trial the factory without touching `main`, cut
+a test branch such as `temp-main` from main, start the project as
+`caffeinelabs/app#temp-main`, and every factory PR lands there. The preview
+tooling ref (`OMNIGENT_FACTORY_PREVIEW_TOOLING_REF`, default `main`) is
+separate: it only names where heads that predate the tooling get it from.
+
 ### Factory previews
 
 A **factory preview** is the app deployed at one PR head so humans (and the
@@ -275,22 +295,25 @@ preview envs are a different thing.)
 - **Shape.** Namespace `env-<base>-p<n>` next to the PL's dev env, deployed by
   a one-shot `tilt ci --port 0` that leaves the objects running. A new head is
   redeployed into the same namespace. The PL's dev env stays one
-  long-running `tilt up` at origin/main for the ICs; previews never touch it.
+  long-running `tilt up` at origin/<base> (the project's base branch) for the
+  ICs; previews never touch it.
 - **Entry point.** `scripts/factory.ts preview up|status|down|list` in
   caffeinelabs/app (`pnpm factory:preview`), with a Tiltfile preview mode that
   stamps `GET /__factory/preview` (`{repo, pr, sha, short, deployed_at, env_id}`,
   an Envoy direct response) and an `x-factory-commit` header on the app and API
   hosts, and creates the `factory-env-secrets` synthetic-session secret. It
-  is on caffeinelabs/app main since caffeinelabs/app#9640, so a PR head based
-  on current main runs it natively (`pnpm -s factory:preview up …`). A head
-  based on an older main has no `preview` subcommand: env_keeper fetches
-  origin `main` and overlays the tooling files from origin/main (never the
+  is on caffeinelabs/app main since caffeinelabs/app#9640, so a PR head that
+  includes it (current main, or a base branch cut from it) runs it natively
+  (`pnpm -s factory:preview up …`). A head that predates it has no `preview`
+  subcommand: env_keeper fetches the tooling ref (`main`) and overlays the
+  tooling files from it (never the
   root `package.json` or the deploy lockfile), then runs the CLI with `node`
   directly. The tooling ref is `main`; `OMNIGENT_FACTORY_PREVIEW_TOOLING_REF`,
   which the charter carries, can point the overlay at another ref; a charter
   that still names the deleted tooling branch reads as `main`. An old-base
-  PR that changes the tooling itself gets `PREVIEW SKIPPED tooling-conflict`;
-  its PL asks the author to merge origin/main (the new head has the tooling
+  PR whose diff against origin/<base> changes the tooling itself gets
+  `PREVIEW SKIPPED tooling-conflict`; its PL asks the author to merge
+  origin/<base> (the new head has the tooling
   natively), or the human whether to review it without a preview (label
   `factory:no-env`).
 - **Slots.** A PL keeps at most its charter's `preview.slots` live previews
@@ -360,7 +383,7 @@ Docs-only PRs are labelled `factory:no-env` and skip the preview and the demo.
 | `[Factory review · CHANGES REQUESTED on PR #<n> @<sha7> by <human> (cockpit)]` / `[Factory review · APPROVED PR #<n> …]` | the PL | A human's review from the cockpit. |
 | `[Factory notice · PR <repo>#<n> READY FOR HUMAN MERGE · 6/6 gates · head <sha7>]` | the PL and the lead | Gates turned green. |
 | `[Factory notice · PR <repo>#<n> checks failed: <names> (head <sha7>)]` | the PL | Dispatch a fix. |
-| `[Factory notice · PR <repo>#<n> merged by @<login> as <sha7> · <url> · tear down preview p<n>]` | the PL (and the lead, info) | Post-merge steps: env_keeper `MERGED pr=<n>`. |
+| `[Factory notice · PR <repo>#<n> merged by @<login> as <sha7> · <url> · tear down preview p<n>]` | the PL (and the lead, info) | Post-merge steps: env_keeper `MERGED pr=<n> base=<base>`; sibling ICs merge origin/<base> (the PR's base). |
 | `[Factory notice · PR <repo>#<n> closed without merge by @<login>]` | the PL | env_keeper `CLOSED pr=<n>`; a decision asks whether to abandon or rework. |
 | `[Factory notice · preview p<n> unreachable · redeploy]` / `[Factory notice · preview p<n> idle 72h · park it]` | the PL | Redeploy or park the preview. |
 
@@ -379,7 +402,7 @@ transcript folds.
 | `OMNIGENT_DOMAIN` | unset | Public host of this server, e.g. `omnigent.caffeinelabs.io`. Demo PR comments and `demo_url` use it for absolute links; unset, they use the address the runner called. |
 | `OMNIGENT_FACTORY_MAX_PREVIEWS` | `8` | Live previews per factory. |
 | `OMNIGENT_FACTORY_PREVIEW_TTL_H` | `72` | Hours without human attention before a preview gets a park notice. |
-| `OMNIGENT_FACTORY_PREVIEW_TOOLING_REF` | empty (recommended: `main`) | caffeinelabs/app ref the preview tooling is overlaid from onto PR heads based on an older main; stored in new charters. Empty: env_keeper uses `main`. |
+| `OMNIGENT_FACTORY_PREVIEW_TOOLING_REF` | empty (recommended: `main`) | caffeinelabs/app ref the preview tooling is overlaid from onto PR heads that predate it; stored in new charters. Not the project's base branch. Empty: env_keeper uses `main`. |
 | `OMNIGENT_FACTORY_QUIET_BEATS`, `OMNIGENT_FACTORY_MAIL_REPLAY` | on | `0` turns off skipping unchanged heartbeats / replaying queued mail after a restart. |
 
 ### Rollback
@@ -395,8 +418,8 @@ transcript folds.
 - **Data.** The cockpit tables come from one additive, forward-only migration;
   an older image ignores them. Demo files stay in the artifact store.
 - **App tooling.** The preview tooling is part of caffeinelabs/app main
-  (caffeinelabs/app#9640). PR heads based on current main use their own copy;
-  only heads based on an older main read it from the overlay ref (`main`).
+  (caffeinelabs/app#9640). PR heads that include it use their own copy; only
+  older heads read it from the overlay ref (`main`).
 
 ## Safety
 

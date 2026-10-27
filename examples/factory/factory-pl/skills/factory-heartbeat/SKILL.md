@@ -28,7 +28,7 @@ curl. Do the sweep in one turn.
    - Failed: re-dispatch the task, or switch between `ic` and `ic_codex`.
 3. Envs, when the env is needed:
    - After a wake (the roster shows a new runner, or env_keeper says the env
-     is gone): env_keeper `UP`, and `PREVIEW pr=<n> head=<sha>` for every PR
+     is gone): env_keeper `UP base=<base>`, and `PREVIEW pr=<n> head=<sha> base=<base>` for every PR
      awaiting human review.
    - A dev env not READY: env_keeper `STATUS`.
    - A preview that waits for a slot (`PREVIEW CAPPED`): send its PREVIEW again.
