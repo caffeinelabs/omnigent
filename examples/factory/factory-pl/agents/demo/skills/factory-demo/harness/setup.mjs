@@ -5,7 +5,7 @@ import { mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { setTimeout as sleep } from 'node:timers/promises';
 import { fileURLToPath } from 'node:url';
-import { BAKED_BROWSERS_PATH, selectBrowsersPath } from './lib.mjs';
+import { BAKED_BROWSERS_PATH, GIF, gifArgs, selectBrowsersPath } from './lib.mjs';
 
 export const HARNESS = dirname(fileURLToPath(import.meta.url));
 export const PLAYWRIGHT_CLI = join(HARNESS, 'node_modules', '@playwright', 'test', 'cli.js');
@@ -30,6 +30,22 @@ export function runLogged(command, args, options, log) {
   if (res.stdout?.trim()) log(res.stdout.trim().slice(-4000));
   if (res.stderr?.trim()) log(res.stderr.trim().slice(-4000));
   return res;
+}
+
+/**
+ * Render the demo video as a GIF (ffmpeg) for the PR comment. One over
+ * GIF.maxBytes is retried smaller once, then dropped.
+ * @returns {boolean} Whether `gif` was written.
+ */
+export function makeGif(video, gif, log) {
+  for (const options of [{}, { width: 600, fps: 6 }]) {
+    if (runLogged('ffmpeg', gifArgs(video, gif, options), {}, log).status !== 0) break;
+    const size = statSync(gif).size;
+    if (size <= GIF.maxBytes) return true;
+    log(`demo.gif is ${size} bytes, over ${GIF.maxBytes}`);
+  }
+  rmSync(gif, { force: true });
+  return false;
 }
 
 // Demo agents share ~/factory/demo-harness: one `npm ci` at a time.

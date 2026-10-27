@@ -30,6 +30,17 @@ const FULL_SHA = /^[0-9a-f]{40}$/;
 export const BODY_MAX_BYTES = 8 * 1024;
 export const BAKED_BROWSERS_PATH = '/opt/ms-playwright';
 
+/** demo.gif for the PR comment: 800 px wide, 8 fps, at most 20 s and 5 MB (the mirror's cap). */
+export const GIF = Object.freeze({ width: 800, fps: 8, maxSeconds: 20, maxBytes: 5 * 1024 * 1024 });
+
+/** ffmpeg arguments turning the demo video into a looping GIF with one palette. */
+export function gifArgs(input, output, { width = GIF.width, fps = GIF.fps, maxSeconds = GIF.maxSeconds } = {}) {
+  const filter =
+    `fps=${fps},scale=${width}:-2:flags=lanczos,split[a][b];` +
+    '[a]palettegen=max_colors=128:stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=5';
+  return ['-y', '-loglevel', 'error', '-t', String(maxSeconds), '-i', input, '-vf', filter, '-loop', '0', output];
+}
+
 /** @returns {number} The process exit code for a demo status (unknown → ERROR). */
 export function exitCodeFor(status) {
   return Object.hasOwn(EXIT, status) ? EXIT[status] : EXIT.ERROR;

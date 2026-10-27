@@ -4,7 +4,9 @@
 stores each file (a session file of the caller's root PL, or an object in the
 factory artifact store when one is configured; see
 :mod:`omnigent.server.factory.demo_storage`) and records a ``factory_demos``
-row. ``GET /v1/factory/demos/{demo_id}/files/{file_id}`` serves one file to a
+row; with a mirror repo configured it then copies the poster and GIF to GitHub
+for the PR comment (:mod:`omnigent.server.factory.demo_mirror`).
+``GET /v1/factory/demos/{demo_id}/files/{file_id}`` serves one file to a
 human with READ on that PL session: the type comes only from the extension
 allowlist, images and video play inline, everything else downloads, and single
 byte ranges are honoured (read as a span from the store, at most 4 MiB per
@@ -51,6 +53,7 @@ from omnigent.server.factory.agent_scope import (
     require_factory_repo,
 )
 from omnigent.server.factory.context import FactoryDeps, factory_deps
+from omnigent.server.factory.demo_mirror import mirror_for_comment
 from omnigent.server.factory.demo_storage import (
     DemoStoreUnavailableError,
     discard_factory_entries,
@@ -282,8 +285,8 @@ def _resolve_status(meta: DemoMeta) -> str:
 
 async def _publish(
     request: Request, form: FormData, caller: AgentCaller
-) -> tuple[FactoryDemo, dict[str, Any] | None]:
-    """Validate the parsed upload, then store it; returns the demo and preview URLs."""
+) -> tuple[FactoryDemo, dict[str, Any] | None, list[DemoFileIn]]:
+    """Validate the parsed upload, then store it; returns the demo, preview URLs and files."""
     meta = _parse_meta(form.get("meta"))
     if caller.session.id != meta.from_session_id:
         raise FactoryRouteError(
@@ -316,7 +319,7 @@ async def _publish(
         raise _store_unavailable() from exc
     if new_pr is not None:
         await announce_new_pr(request.app.state, caller, new_pr)
-    return demo, preview_urls
+    return demo, preview_urls, files
 
 
 @router.post("/agent/demos", dependencies=[Depends(require_trusted_origin)])
@@ -339,10 +342,12 @@ async def publish_demo(request: Request, from_session_id: str = Query(...)) -> d
         max_part_size=DEMO_MANIFEST_MAX_BYTES + _MULTIPART_SLACK,
     )
     try:
-        demo, preview_urls = await _publish(request, form, caller)
+        demo, preview_urls, files = await _publish(request, form, caller)
     finally:
         await form.close()
     base = public_base_url(str(request.base_url))
+    # Stored first; the GitHub copy for reviewers is best effort and bounded.
+    embeds = await mirror_for_comment(request.app.state, demo, files, base_url=base)
     subject = f"pr:{demo.repo}#{demo.pr_number}"
     await events.emit(
         request.app.state,
@@ -370,7 +375,9 @@ async def publish_demo(request: Request, from_session_id: str = Query(...)) -> d
             }
             for f in demo.files
         ],
-        "comment_markdown": render_demo_comment(demo, base_url=base, preview_urls=preview_urls),
+        "comment_markdown": render_demo_comment(
+            demo, base_url=base, preview_urls=preview_urls, embeds=embeds
+        ),
     }
 
 

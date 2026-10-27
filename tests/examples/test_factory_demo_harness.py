@@ -145,3 +145,114 @@ def test_scrubbed_trace_is_a_valid_zip_without_credentials(tmp_path: Path) -> No
         "value": "[redacted]",
     }
     assert blobs["resources/page.jpeg"].startswith(b"\xff\xd8")
+
+
+def _node_or_skip() -> str:
+    node = shutil.which("node")
+    if node is None or _node_major(node) < 18:
+        pytest.skip("the harness needs node 18 or newer")
+    return node
+
+
+def test_the_gif_is_800_px_8_fps_and_at_most_20_s() -> None:
+    node = _node_or_skip()
+    script = (
+        "const { GIF, gifArgs } = await import(process.argv[1]);"
+        "console.log(JSON.stringify({ GIF, args: gifArgs('in.webm', 'out.gif') }));"
+    )
+    proc = subprocess.run(
+        [node, "--input-type=module", "-e", script, (_HARNESS / "lib.mjs").as_uri()],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=True,
+    )
+    out = json.loads(proc.stdout)
+    assert out["GIF"] == {"width": 800, "fps": 8, "maxSeconds": 20, "maxBytes": 5 * 1024 * 1024}
+    args = out["args"]
+    assert args[args.index("-t") + 1] == "20"
+    assert args.index("-t") < args.index("-i")
+    assert args[args.index("-vf") + 1].startswith("fps=8,scale=800:-2:")
+    assert args[-1] == "out.gif"
+
+
+@pytest.mark.skipif(shutil.which("ffmpeg") is None, reason="ffmpeg is not installed locally")
+def test_the_harness_turns_the_demo_video_into_a_gif(tmp_path: Path) -> None:
+    """``makeGif`` (what run.mjs calls) writes a GIF the mirror can embed."""
+    node = _node_or_skip()
+    ffmpeg = shutil.which("ffmpeg")
+    assert ffmpeg is not None
+    video = tmp_path / "demo.webm"
+    made = subprocess.run(
+        [
+            ffmpeg,
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=duration=22:size=1280x800:rate=10",
+            "-c:v",
+            "libvpx",
+            "-deadline",
+            "realtime",
+            "-cpu-used",
+            "8",
+            str(video),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=180,
+        check=False,
+    )
+    if made.returncode != 0:
+        pytest.skip(f"ffmpeg cannot encode a test webm here: {made.stderr[-300:]}")
+    gif = tmp_path / "demo.gif"
+    script = (
+        "const [setup, video, gif] = process.argv.slice(1);"
+        "const { makeGif } = await import(setup);"
+        "const lines = [];"
+        "const ok = makeGif(video, gif, (line) => lines.push(line));"
+        "console.log(JSON.stringify({ ok, lines }));"
+    )
+    proc = subprocess.run(
+        [
+            node,
+            "--input-type=module",
+            "-e",
+            script,
+            (_HARNESS / "setup.mjs").as_uri(),
+            str(video),
+            str(gif),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=300,
+        check=False,
+    )
+    assert proc.returncode == 0, proc.stderr
+    result = json.loads(proc.stdout.strip().splitlines()[-1])
+    assert result["ok"] is True, result["lines"]
+    data = gif.read_bytes()
+    assert data[:6] == b"GIF89a"
+    assert int.from_bytes(data[6:8], "little") == 800
+    assert len(data) <= 5 * 1024 * 1024
+    ffprobe = shutil.which("ffprobe")
+    if ffprobe is not None:
+        probe = subprocess.run(
+            [
+                ffprobe,
+                "-v",
+                "error",
+                "-show_entries",
+                "format=duration",
+                "-of",
+                "default=nw=1:nk=1",
+                str(gif),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=True,
+        )
+        assert float(probe.stdout.strip()) <= 20.5

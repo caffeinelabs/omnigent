@@ -383,11 +383,43 @@ def _links_line(demo: FactoryDemo, link: Any) -> str:
     return " · ".join(parts)
 
 
+@dataclass(frozen=True)
+class DemoEmbeds:
+    """
+    Images of a demo mirrored to GitHub, embedded in its PR comment.
+
+    :param gif_url: ``https://github.com/<repo>/blob/<commit>/<path>/demo.gif?raw=true``.
+    :param poster_url: The poster's URL in the same form.
+    """
+
+    gif_url: str | None = None
+    poster_url: str | None = None
+
+
+def step_table(demo: FactoryDemo, base_url: str) -> list[str]:
+    """:returns: The demo's ``| # | Step | Result |`` table lines (empty without steps)."""
+    rows = _step_rows(demo, lambda file_id: demo_file_url(base_url, demo.id, file_id))
+    return ["| # | Step | Result |", "|---|------|--------|", *rows] if rows else []
+
+
+def _embed_lines(demo: FactoryDemo, embeds: DemoEmbeds | None) -> list[str]:
+    if embeds is None or not (embeds.gif_url or embeds.poster_url):
+        return []
+    lines = [""]
+    alt = f"Demo of PR #{demo.pr_number} at {demo.head_sha[:7]}"
+    if embeds.gif_url:
+        lines.append(f"![{alt}]({embeds.gif_url})")
+    if embeds.poster_url:
+        lines.append(f'<img src="{embeds.poster_url}" width="320" alt="Demo poster">')
+    return lines
+
+
 def render_demo_comment(
     demo: FactoryDemo,
     *,
     base_url: str,
     preview_urls: Mapping[str, str] | None = None,
+    embeds: DemoEmbeds | None = None,
 ) -> str | None:
     """
     Render the PR comment for a demo, with the ``factory:demo`` marker.
@@ -395,6 +427,8 @@ def render_demo_comment(
     :param demo: The stored demo (files carry ``file_id``; steps are linked).
     :param base_url: Public origin, e.g. ``"https://omnigent.caffeinelabs.io"``.
     :param preview_urls: The preview's ``app`` / ``api`` URLs, if known.
+    :param embeds: The GIF and poster mirrored to GitHub; without them the
+        comment carries only the cockpit links.
     :returns: Markdown, or ``None`` for an ERROR demo (it gets no PR comment).
     """
     if demo.status == "ERROR":
@@ -418,11 +452,12 @@ def render_demo_comment(
         if urls.get("api"):
             preview += f" · API {urls['api']}"
         lines.append(preview)
+    lines += _embed_lines(demo, embeds)
     if demo.summary:
         lines += ["", _cell(demo.summary)]
-    rows = _step_rows(demo, link)
-    if rows:
-        lines += ["", "| # | Step | Result |", "|---|------|--------|", *rows]
+    table = step_table(demo, base_url)
+    if table:
+        lines += ["", *table]
     links = _links_line(demo, link)
     if links:
         lines += ["", links]
@@ -434,6 +469,7 @@ def render_demo_comment(
 
 
 __all__ = [
+    "DemoEmbeds",
     "DemoFileIn",
     "DemoUploadError",
     "check_upload",
@@ -445,4 +481,5 @@ __all__ = [
     "render_demo_comment",
     "review_url",
     "safe_filename",
+    "step_table",
 ]
