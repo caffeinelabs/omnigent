@@ -190,6 +190,8 @@ async def test_spans_carry_the_platform_version_and_the_roots_def_version(
 
     (pr,) = r.spans("pr")
     assert (pr.version_id, pr.def_version) == ("a" * 32, 7)
+    # Before this server recorded a version, the root's version label stands in.
+    monkeypatch.setattr(versions, "current_version_id", lambda: None)
     r.world.store.set_labels(r.fid, {F.LABEL_VERSION: "b" * 32})
     spans.reset()
     await r.step(

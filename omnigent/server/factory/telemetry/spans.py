@@ -296,8 +296,9 @@ def span_context(deps: FactoryDeps, factory_id: str) -> SpanContext:
     """
     The version and definition a factory's new spans carry (cached 60 s).
 
-    The root's ``omnigent.factory.version`` label wins over the server's own
-    version; ``def_version`` is the root's pinned definition (empty before one).
+    ``version_id`` is the platform version this server recorded (the root's
+    ``omnigent.factory.version`` label before it has one); ``def_version`` is
+    the root's pinned definition (empty before one).
     """
     now = time.monotonic()
     cached = _contexts.get(factory_id)
@@ -310,7 +311,7 @@ def span_context(deps: FactoryDeps, factory_id: str) -> SpanContext:
     except Exception:  # noqa: BLE001 - spans are written without a version then
         _logger.debug("factory spans: no root labels for %s", factory_id, exc_info=True)
     ctx = SpanContext(
-        version_id=labels.get(LABEL_VERSION) or versions.current_version_id(),
+        version_id=versions.current_version_id() or labels.get(LABEL_VERSION),
         def_version=_int(labels.get(LABEL_DEF_VERSION)),
     )
     if len(_contexts) > _CONTEXTS_MAX:
