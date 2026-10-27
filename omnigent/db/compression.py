@@ -20,9 +20,16 @@ a backfill:
   ``TEXT``). They are detected by the absent sentinel — or, under SQLite's
   dynamic typing, by arriving as ``str`` — and returned unchanged. Each such
   row re-frames itself the next time it is written.
+* **Frames in a PostgreSQL column that is still ``TEXT``** (the binary-type
+  migration never ran there) arrive as bytea hex text, ``\\x0000…``: PostgreSQL
+  accepts the bound ``bytea`` through its bytea→text assignment cast. They are
+  recognised by that prefix and unwrapped, so such a column reads back
+  correctly without a backfill.
 """
 
 from __future__ import annotations
+
+import re
 
 import zstandard
 from sqlalchemy import LargeBinary
@@ -41,6 +48,10 @@ _MIN_COMPRESS_BYTES = 64
 # Write-once / read-rarely columns, so favour ratio over speed. The payloads are
 # small enough that the window size a high level implies never fills.
 _LEVEL = 19
+# A frame rendered as PostgreSQL bytea hex text: ``\x`` + sentinel + a known
+# codec + hex payload. Plaintext would have to be a literal ``\x0000``/``\x0001``
+# followed only by hex digits, and must still decode as a frame.
+_PG_HEX_FRAME = re.compile(r"\\x00(?:00|01)(?:[0-9a-fA-F]{2})*")
 
 
 def encode(text: str | None) -> bytes | None:
@@ -63,25 +74,47 @@ def decode(value: bytes | str | memoryview | None) -> str | None:
     """Inverse of :func:`encode`; also passes through legacy unframed text.
 
     :param value: The stored column value: framed bytes, legacy UTF-8 bytes,
-        a legacy ``str`` (SQLite dynamic typing), a ``memoryview`` (some
-        drivers), or ``None``.
+        a ``str`` from a text-typed column (legacy plaintext, or a frame as
+        PostgreSQL bytea hex text), a ``memoryview`` (some drivers), or ``None``.
     :returns: The decoded plaintext, or ``None`` when *value* is ``None``.
     """
     if value is None:
         return None
-    # SQLite is dynamically typed: a value written before the column became a
-    # BLOB comes back as ``str``. It is legacy plaintext, unchanged.
     if isinstance(value, str):
-        return value
+        return _decode_text(value)
     if isinstance(value, memoryview):
         value = value.tobytes()
     if not value or value[0] != _SENTINEL:
         # Empty, or legacy UTF-8 text (no sentinel — cannot start with NUL).
         return value.decode("utf-8")
+    return _decode_frame(value)
+
+
+def _decode_frame(value: bytes) -> str:
+    """Decode ``sentinel + codec + payload`` bytes."""
     codec, payload = value[1], value[2:]
     if codec == _CODEC_ZSTD:
         return zstandard.ZstdDecompressor().decompress(payload).decode("utf-8")
     return payload.decode("utf-8")
+
+
+def _decode_text(value: str) -> str:
+    """Decode a value the driver returned as ``str`` (the column is text-typed).
+
+    Usually legacy plaintext — under SQLite's dynamic typing a value written
+    before the column became a BLOB comes back as ``str`` — returned unchanged.
+    A frame that PostgreSQL stored in a ``TEXT`` column comes back as bytea hex
+    text (``\\x0000…``) and is unwrapped.
+
+    :param value: The stored text.
+    :returns: The decoded plaintext.
+    """
+    if not _PG_HEX_FRAME.fullmatch(value):
+        return value
+    try:
+        return _decode_frame(bytes.fromhex(value[2:]))
+    except (zstandard.ZstdError, UnicodeDecodeError):
+        return value  # Not a frame after all: plaintext that only looked like one.
 
 
 class CompressedText(TypeDecorator[str]):

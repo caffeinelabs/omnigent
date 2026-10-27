@@ -77,3 +77,55 @@ def test_memoryview_is_accepted() -> None:
 def test_empty_bytes_decode_to_empty_string() -> None:
     """A legacy empty ``TEXT`` value (empty bytes) decodes to ``''``."""
     assert decode(b"") == ""
+
+
+# ── frames stored in a PostgreSQL column that is still TEXT ─────────────────
+#
+# PostgreSQL accepts a bound bytea into a TEXT column through its bytea→text
+# assignment cast and stores the hex rendering, ``\x0000…``, which the driver
+# then returns as ``str``.
+
+
+def _pg_hex(blob: bytes | None) -> str:
+    """What a TEXT column holds after PostgreSQL casts *blob* to text."""
+    assert blob is not None
+    return "\\x" + blob.hex()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        json.dumps({"icon": "🏭"}),  # small -> raw codec
+        json.dumps({"history": [{"turn": i} for i in range(200)]}),  # zstd codec
+        "",
+    ],
+    ids=["raw", "zstd", "empty"],
+)
+def test_pg_hex_text_frame_decodes(value: str) -> None:
+    """A frame stored as bytea hex text decodes to the original value."""
+    assert decode(_pg_hex(encode(value))) == value
+
+
+def test_pg_hex_text_frame_accepts_upper_case_digits() -> None:
+    """Hex digits are case-insensitive."""
+    blob = encode('{"a":1}')
+    assert blob is not None
+    assert decode("\\x" + blob.hex().upper()) == '{"a":1}'
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "\\x",  # no frame bytes
+        "\\x41",  # hex, but no sentinel
+        "\\x0002" + "41",  # sentinel with an unknown codec
+        "\\x000",  # odd number of digits
+        "\\x0000zz",  # not hex
+        "\\x0001deadbeef",  # zstd codec id, but not a zstd frame
+        "\\x0000ff",  # raw codec id, but not UTF-8
+        "C:\\x0000",  # does not start with the prefix
+    ],
+)
+def test_text_that_only_resembles_a_pg_hex_frame_is_unchanged(text: str) -> None:
+    """Plaintext is only unwrapped when it is a well-formed frame."""
+    assert decode(text) == text
