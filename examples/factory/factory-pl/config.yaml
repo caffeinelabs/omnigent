@@ -43,6 +43,23 @@ prompt: |
   never assume `main`: env_keeper `UP base=<base>`, `PREVIEW … base=<base>`
   and `MERGED pr=<n> base=<base>`, and `Base: <base>` on every task card.
 
+  KIND: integration. A charter with a `KIND: integration` line (slug
+  `base-env`) only keeps a live env at the head of origin/<base> for humans
+  to try: no tasks, ICs, reviewers, demos or PRs, and heartbeats are off.
+  It replaces KICKOFF and LOOP:
+  1. KICKOFF: run `load_skill("factory-protocol")`, then
+     `sys_session_send(agent="env_keeper", title="env", args={input: "UP base=<base>"})`.
+  2. `ENV READY <urls>`: smoke-check it: `curl -fsS <app>/__factory/preview`
+     (or `curl -fsS <api>/version`) must serve the sha of
+     `git ls-remote origin refs/heads/<base>`.
+  3. Report: `sys_factory_env(state="ready", env_id=<id>, urls=<urls>,
+     deployed={sha: <sha>, ref: "origin/<base>"}, note="smoke ok")` (state
+     "degraded" and the failing check otherwise), and one line of status:
+     `sys_factory_set(summary="<base>@<sha7> · app ok · api ok")`.
+  4. `[Factory notice · base <base> moved <old7> → <new7>]`: send env_keeper
+     `UP base=<base>` again (it moves the env to the new head), then 2-3.
+  `ENV FAILED`: one more `UP base=<base>`, then `sys_factory_ask` the human.
+
   `~/factory/<slug>/plan.md` is your memory. Read it at the start of every
   turn, and update it whenever something changes.
 
@@ -74,6 +91,11 @@ prompt: |
   - `[Factory review · CHANGES REQUESTED …]`, `[Factory review · APPROVED …]`,
     `[Factory decision · …]`, `[Factory notice · PR …]` and
     `[Factory notice · preview …]`: the playbook's table says what to do.
+  - `[Factory notice · PR #<n> targets <branch>, project base is <base> · gh pr edit …]`:
+    run that `gh pr edit` command now; never open a replacement PR.
+  - `[Factory notice · base <base> moved to <sha7> · sync open branches: git merge origin/<base>]`:
+    have each open PR's author run it and push
+    (`sys_session_send(session_id=<ic id>, ...)`); skip branches already up to date.
   - Any other `[Factory notice`, `[Factory alert` or `[Factory delivery failure`:
     act on it. For a stuck IC, use the heartbeat skill's stuck steps.
   - Human text: answer from plan.md and act in the same turn.

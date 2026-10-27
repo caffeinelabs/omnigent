@@ -34,9 +34,8 @@ the PR in the dev env, then go back to the base" any more.
 UP base=<base>:
 1. `git -C <repo> fetch origin`. If the worktree does not exist:
    `git -C <repo> worktree add --detach /home/omnigent/workspace/wt/env origin/<base>`.
-   If it exists but is not on that branch's history
-   (`git -C /home/omnigent/workspace/wt/env merge-base --is-ancestor HEAD origin/<base>`
-   fails, e.g. it was made for another base), move it:
+   If it exists, move it to the current head (the base may have moved, or it
+   was made for another base):
    `git -C /home/omnigent/workspace/wt/env checkout --detach origin/<base>`.
 2. So humans can watch: `sys_terminal_launch(terminal="tilt", session="log")`, then
    `sys_terminal_send(terminal="tilt", session="log", text="tail -n +1 -F /tmp/tilt.log")`.

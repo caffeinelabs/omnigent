@@ -115,6 +115,8 @@ Stored in `conversation_labels`; no schema change. Defined in
 | `omnigent.factory.last_beat` | top-level | ISO time of the last delivered heartbeat (written by the supervisor, so restart-safe). |
 | `omnigent.factory.summary` | any | Beacon line, at most 120 characters (longer values are clamped). |
 | `omnigent.factory.health` | any | `ok`, `degraded`, `blocked` or `dead`. |
+| `omnigent.factory.default_repo` / `default_base` | root | The factory's default repo and base (start form); a project's blank base inherits it. |
+| `omnigent.factory.base_head.<key>` | root | `<sha> <moved_at> <repo>#<base>`: the head the base watcher last saw (server-written). |
 
 **Lazy enrolment.** The first `/v1/factory` call from a top-level session whose
 spec declares `lead` or `project_lead`, and that has no `omnigent.factory.id`,
@@ -254,7 +256,7 @@ if they stay silent the board is still right.
 | `GET /v1/factory/prs/{id}/preview` | human | Stable live-preview link: 302 to the current preview app URL, or back to the cockpit when there is none. |
 | `GET /v1/factory/demos/{demo_id}/files/{file_id}` | human (READ on the PL) | Demo files with Range/206 (a ranged read of the store) and ETag; only images and video inline, never HTML or SVG. |
 | `POST /v1/factory/agent/decisions`, `POST …/agent/prs`, `PUT …/agent/envs`, `POST …/agent/demos` (multipart), `GET …/agent/charter` | runner (the tools below) | Agent reports. |
-| `GET /v1/factory/preflight` | human | GitHub connected, agents seeded, sandbox host, factory enabled. |
+| `GET /v1/factory/preflight` | human | GitHub connected, agents seeded, sandbox host, factory enabled; `default_repo`, `default_base` and `max_projects` for the start form. |
 
 ### Tools
 
@@ -266,25 +268,56 @@ if they stay silent the board is still right.
 | `sys_factory_demo(pr_url, head_sha, title, manifest_path?, files?, …)` | `project_lead`, `env_keeper`, `demo` | Upload a demo (with `manifest_path`, everything the harness's `demo.json` lists) and get back `comment_markdown` / `comment_path` to post on the PR. |
 | `sys_factory_set(stage=…)` | `project_lead` on itself | Claim the project's stage; the cockpit shows it next to the stage it derives. |
 
-### Base branches
+### Base branches & integration env
 
-Each project has a **base branch**: the branch picked next to the repo in the
-New factory and Add project forms (stored as `base_branch`, default `main`;
-fixed once the project exists). The PL's charter carries it as `Base branch:
-<branch> (open every PR against it; the dev env tracks origin/<branch>)`, and
-the PL passes it on every dispatch: env_keeper `UP base=<branch>`, `PREVIEW …
-base=<branch>` and `MERGED pr=<n> base=<branch>`, and `Base: <branch>` on
-every task card. ICs branch from origin/<branch>, sync with `git merge
-origin/<branch>` and open PRs with `--base <branch>`; reviewers and Sentinel
-flag a PR whose `baseRefName` differs, and the server fails its `mergeable`
-gate (with the `gh pr edit <n> --base <branch>` fix) so it never reads READY
-FOR HUMAN MERGE; `sys_factory_pr` returns the PR's `base_ref` next to the
-project's `project_base`. The dev env tracks origin/<branch> and moves on each
-merge into it. To trial the factory without touching `main`, cut
-a test branch such as `temp-main` from main, start the project as
-`caffeinelabs/app#temp-main`, and every factory PR lands there. The preview
-tooling ref (`OMNIGENT_FACTORY_PREVIEW_TOOLING_REF`, default `main`) is
-separate: it only names where heads that predate the tooling get it from.
+Each project has a **base branch**: the branch every PR of the project
+targets. The New factory form has a factory-level **Default repo & base** row
+(prefilled from `OMNIGENT_FACTORY_DEFAULT_BASE`, e.g.
+`caffeinelabs/app#temp-main`, which `GET /v1/factory/preflight` returns as
+`default_repo` / `default_base`); the root records it in the
+`omnigent.factory.default_repo` / `default_base` labels. A project's base
+resolves to its own branch, then the factory default (for the default repo),
+then `main`; Add project resolves the same way. It is stored as
+`base_branch` and fixed once the project exists.
+
+- **Charter and dispatch.** The PL's charter carries `Base branch: <branch>
+  (open every PR against it; the dev env tracks origin/<branch>)`, and the PL
+  passes it on every dispatch: env_keeper `UP base=<branch>`, `PREVIEW …
+  base=<branch>` and `MERGED pr=<n> base=<branch>`, and `Base: <branch>` on
+  every task card. ICs branch from origin/<branch>, sync with `git merge
+  origin/<branch>` and open PRs with `--base <branch>`.
+- **Base gate.** Every PR has a `base` gate: pass when `baseRefName` is the
+  project's base, fail otherwise (evidence `PR targets main; project base is
+  temp-main` with the `gh pr edit <url> --base <branch>` fix), pending while
+  GitHub has not reported it. The first failure sends the PL one
+  `[Factory notice · PR #<n> targets main, project base is temp-main · gh pr
+  edit <url> --base temp-main]`. A PR off its base never reads READY FOR HUMAN
+  MERGE; `sys_factory_pr` returns its `base_ref` next to `project_base`.
+- **Base watcher** (`server/factory/base.py`). The PR poller's GraphQL query
+  also reads the head of every `(repo, base)` the active factories watch (a
+  query of its own every 2 min when no PR of the repo is due) and records it
+  on the root (`omnigent.factory.base_head.<key>`). When the head moves it
+  emits `base.moved {repo, base, from, to, pr}`, mails the integration PL to
+  redeploy and every work PL with an open PR on that base `[Factory notice ·
+  base temp-main moved to <sha7> · sync open branches: git merge
+  origin/temp-main]` (at most every 30 min per PL), and runs the
+  `on_base_moved` hooks. Merges nobody registered are caught the same way.
+- **Integration env.** With "Keep a live env at `<base>`" on (the default
+  when the base is not `main`), the start also creates project `base-env`
+  with `charter.kind = "integration"`: an ordinary PL plus env_keeper keeping
+  Tilt at the head of origin/<base> for humans to try. Atlas spawns its PL
+  with `heartbeat_s=0`; it opens no tasks, ICs or PRs, sends env_keeper `UP
+  base=<base>` at KICKOFF and on every `[Factory notice · base <base> moved
+  <old7> → <new7>]`, smoke-checks `<app>/__factory/preview` (or
+  `<api>/version`) and reports with `sys_factory_env`. The snapshot shows it
+  as `factory.base = {repo, branch, head_sha, moved_at, env, env_project}`;
+  it is left out of the stage strip.
+- **temp-main.** To trial the factory without touching `main`, cut a test
+  branch such as `temp-main` from main and start the factory on
+  `caffeinelabs/app#temp-main`; every factory PR lands there and humans merge
+  them. The preview tooling ref (`OMNIGENT_FACTORY_PREVIEW_TOOLING_REF`,
+  default `main`) is separate: it only names where heads that predate the
+  tooling get it from.
 
 ### Factory previews
 
@@ -358,6 +391,35 @@ preview envs are a different thing.)
   image 5 MB, text 2 MB, 30 files and 120 MB per demo. The PR gets one comment per head with
   `<!-- factory:demo sha=<head> status=… demo=<id> -->`, the step table and
   links; the demo gate reads it.
+- With ffmpeg, `run.mjs` also renders `video/demo.gif` (the first 20 s at
+  800 px and 8 fps, at most 5 MB) for the demo mirror below.
+
+### Demo mirror
+
+GitHub reviewers see the demo in the PR itself through a reviewer-facing copy
+in a private repo (`OMNIGENT_FACTORY_DEMO_MIRROR_REPO`, e.g.
+`caffeinelabs/factory-demos`; unset, nothing is mirrored).
+
+- **Writer.** The server, inside `POST /v1/factory/agent/demos` after the
+  files are stored, with a 10 s timeout, through the Git Data API as the
+  factory creator (the connection the PR poller uses). Agents gain no write
+  repo.
+- **Layout.** Each demo gets its own branch `d/<factory8>/pr-<n>-<sha7>` with
+  one parentless commit holding `<project>/pr-<n>/<sha7>/{poster.png,
+  demo.gif, steps.md}`; a re-recorded head moves its branch.
+- **Budget.** At most 6 REST calls per demo: `GET /rate_limit` (skipped when a
+  reading from the last 5 min exists), a blob each for the poster (≤ 2 MB) and
+  the GIF (≤ 5 MB), a tree with `steps.md` inline, the commit and the ref. It
+  is skipped while fewer than 500 core calls remain.
+- **Comment.** On success `comment_markdown` embeds
+  `https://github.com/<repo>/blob/<commit>/<path>/demo.gif?raw=true` and the
+  poster (they render for org members who can read the repo); on a failure or
+  timeout it keeps the cockpit links only. Events: `demo.mirrored`,
+  `demo.mirror_failed`, `demo.mirror_skipped`.
+- **Never read back.** The factory artifact store stays the store of record;
+  the cockpit plays demos from it and never reads GitHub. The repo needs a
+  first commit (the Git Data API refuses an empty repository); old `d/*`
+  branches may be deleted by a human.
 
 ### Pipeline (per runnable PR)
 
@@ -381,7 +443,10 @@ Docs-only PRs are labelled `factory:no-env` and skip the preview and the demo.
 | `[Factory control · <ACTION> · by <human>] <instructions>` | the affected members | A human command; the member replies once. |
 | `[Factory decision · D-<n> answered by <human> · "<option>"]` | the asker | The answer to `sys_factory_ask`. |
 | `[Factory review · CHANGES REQUESTED on PR #<n> @<sha7> by <human> (cockpit)]` / `[Factory review · APPROVED PR #<n> …]` | the PL | A human's review from the cockpit. |
-| `[Factory notice · PR <repo>#<n> READY FOR HUMAN MERGE · 6/6 gates · head <sha7>]` | the PL and the lead | Gates turned green. |
+| `[Factory notice · PR <repo>#<n> READY FOR HUMAN MERGE · 7/7 gates · head <sha7>]` | the PL and the lead | Gates turned green (8/8 with the demo gate). |
+| `[Factory notice · PR #<n> targets <branch>, project base is <base> · gh pr edit <url> --base <base>]` | the PL | The base gate failed: retarget the PR. |
+| `[Factory notice · base <base> moved to <sha7> · sync open branches: git merge origin/<base>]` | work PLs with an open PR on the base | Sync open branches. |
+| `[Factory notice · base <base> moved <old7> → <new7>]` | the integration PL | Redeploy the live env at the new head. |
 | `[Factory notice · PR <repo>#<n> checks failed: <names> (head <sha7>)]` | the PL | Dispatch a fix. |
 | `[Factory notice · PR <repo>#<n> merged by @<login> as <sha7> · <url> · tear down preview p<n>]` | the PL (and the lead, info) | Post-merge steps: env_keeper `MERGED pr=<n> base=<base>`; sibling ICs merge origin/<base> (the PR's base). |
 | `[Factory notice · PR <repo>#<n> closed without merge by @<login>]` | the PL | env_keeper `CLOSED pr=<n>`; a decision asks whether to abandon or rework. |
@@ -401,6 +466,8 @@ transcript folds.
 | `OMNIGENT_FACTORY_PREVIEW_DOMAIN` | `envs.sandbox.caffeinelabs.io` | The only domain env and preview URLs may use (SSRF guard). `OMNIGENT_ENV_DOMAIN` (the sandboxes' env domain) is read when it is unset. |
 | `OMNIGENT_DOMAIN` | unset | Public host of this server, e.g. `omnigent.caffeinelabs.io`. Demo PR comments and `demo_url` use it for absolute links; unset, they use the address the runner called. |
 | `OMNIGENT_FACTORY_MAX_PREVIEWS` | `8` | Live previews per factory. |
+| `OMNIGENT_FACTORY_DEFAULT_BASE` | unset | `owner/repo#branch` new factories default to (the start form's Default repo & base); a bare `owner/repo` means its `main`. |
+| `OMNIGENT_FACTORY_DEMO_MIRROR_REPO` | unset | Private `owner/repo` demo posters and GIFs are mirrored to for the PR comment; unset, nothing is mirrored. |
 | `OMNIGENT_FACTORY_PREVIEW_TTL_H` | `72` | Hours without human attention before a preview gets a park notice. |
 | `OMNIGENT_FACTORY_PREVIEW_TOOLING_REF` | empty (recommended: `main`) | caffeinelabs/app ref the preview tooling is overlaid from onto PR heads that predate it; stored in new charters. Not the project's base branch. Empty: env_keeper uses `main`. |
 | `OMNIGENT_FACTORY_QUIET_BEATS`, `OMNIGENT_FACTORY_MAIL_REPLAY` | on | `0` turns off skipping unchanged heartbeats / replaying queued mail after a restart. |
@@ -543,6 +610,7 @@ with a managed sandbox launcher configured.
 | Runner tools and scoped reads | `omnigent/tools/builtins/factory.py`, `omnigent/runner/factory_dispatch.py` | `tests/runner/test_factory_*.py` |
 | Role guard and merge gate | `omnigent/policies/builtins/factory.py`, `omnigent/factory_merge.py` | `tests/policies/test_factory_role_guard.py`, `tests/test_factory_merge.py` |
 | Org chart and badges | `omnigent/server/factory/org_chart.py`, `web/src/lib/factory.ts` | `tests/server/routes/test_child_sessions_include_factory.py`, web tests |
+| Base lane and demo mirror | `omnigent/server/factory/base.py`, `demo_mirror.py`, `omnigent/factory_gates.py` (`base` gate) | `tests/server/factory/test_base_watcher.py`, `test_demo_mirror.py`, `tests/test_factory_gates.py` |
 | Bundles | `examples/factory/` | `tests/examples/`, `tests/server/factory/test_factory_agents_listed.py` |
 | Demo harness | `examples/factory/factory-pl/agents/demo/skills/factory-demo/harness/` | `tests/examples/test_factory_demo_harness.py` (runs `factory_demo_harness.test.mjs` under `node --test`); `node run.mjs --selftest` records real demos of a local fixture |
 | End to end | — | `tests/integration/test_factory_tree.py` (live server and runner, mock LLM) |
