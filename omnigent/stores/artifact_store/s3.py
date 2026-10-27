@@ -202,6 +202,34 @@ class S3ArtifactStore(ArtifactStore):
                 raise KeyError(key) from None
             raise
 
+    def read_range(self, key: str, start: int, end: int) -> bytes:
+        """
+        Read the inclusive byte span ``start``..``end`` with a ranged GET.
+
+        Only the span crosses the network, so seeking in a large video does
+        not download the whole object.
+
+        :param key: Forward-slash-separated artifact key.
+        :param start: First byte offset, e.g. ``0``.
+        :param end: Last byte offset, inclusive, e.g. ``1023``.
+        :returns: The span's bytes; fewer when the object ends before *end*.
+        :raises KeyError: If no object exists for the key.
+        """
+        from botocore.exceptions import ClientError
+
+        try:
+            resp = self._client.get_object(
+                Bucket=self._bucket, Key=self._resolve(key), Range=f"bytes={start}-{end}"
+            )
+            data = resp["Body"].read()
+        except ClientError as exc:
+            if _is_not_found(exc):
+                raise KeyError(key) from None
+            raise
+        if not isinstance(data, bytes):
+            raise TypeError(f"S3 object body returned {type(data).__name__}, expected bytes")
+        return data
+
     def delete(self, key: str) -> None:
         """
         Remove an object. No-op if the key does not exist (S3 ``DeleteObject``

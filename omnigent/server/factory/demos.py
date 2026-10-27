@@ -1,10 +1,12 @@
 """Recorded demos: storing an upload and rendering its PR comment.
 
-A demo's files are ordinary session files owned by the caller's root PL
-(``file_store`` metadata plus ``artifact_store`` bytes), so they also show in
-the PL session's Files panel; the ``factory_demos`` row ties them to a PR
-head. :func:`render_demo_comment` is the markdown the demo agent posts on the
-PR, carrying the ``factory:demo`` marker the gates read.
+A demo's files are session files owned by the caller's root PL (``file_store``
+metadata plus ``artifact_store`` bytes, so they also show in the PL session's
+Files panel), or objects in the factory artifact store when
+``OMNIGENT_FACTORY_ARTIFACT_LOCATION`` is set (see
+:mod:`omnigent.server.factory.demo_storage`); the ``factory_demos`` row ties
+them to a PR head. :func:`render_demo_comment` is the markdown the demo agent
+posts on the PR, carrying the ``factory:demo`` marker the gates read.
 """
 
 from __future__ import annotations

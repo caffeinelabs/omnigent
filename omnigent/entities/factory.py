@@ -295,7 +295,9 @@ class FactoryDemo:
     :param status: ``PASS`` / ``PARTIAL`` / ``FAIL`` / ``ERROR``.
     :param title: Short title.
     :param summary: What the demo shows, ≤ 1000 chars.
-    :param files: ``[{file_id, name, kind, caption, content_type, bytes, step?}]``.
+    :param files: ``[{file_id, name, kind, caption, content_type, bytes, filename?,
+        step?, store?, key?}]``; ``store`` and ``key`` locate a file kept in a
+        factory artifact store, else it is a session file of *session_id*.
     :param manifest: The harness ``demo.json`` (steps, plan_source, timings), or ``None``.
     :param pr_id: ``factory_prs`` row id, when known.
     :param preview_url: Preview app URL the demo ran against.
