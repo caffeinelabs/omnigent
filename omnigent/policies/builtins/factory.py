@@ -54,6 +54,7 @@ from omnigent.factory import (
     ROLE_DEMO,
     ROLE_ENV_KEEPER,
     ROLE_LEAD,
+    ROLE_PLANNER,
     ROLE_PROJECT_LEAD,
     ROLE_REVIEWER,
     ROLES,
@@ -84,9 +85,6 @@ MERGE_GATE_HINT = (
     "(`python -m omnigent.factory_merge --dry-run <pr-url>` only reports the gates)"
 )
 
-# TODO: import ROLE_PLANNER from omnigent.factory once the round-3 vocabulary lands there.
-ROLE_PLANNER = "planner"
-
 DEFAULT_WRITE_REPOS: tuple[str, ...] = ("caffeinelabs/app",)
 DEFAULT_PROTECTED_BRANCHES: tuple[str, ...] = ("main", "master", "staging", "temp-main")
 DEFAULT_DENY_REPOS: tuple[str, ...] = ("caffeinelabs/infra", "caffeinelabs/omnigent")
@@ -111,7 +109,7 @@ ALLOW_PROTECTED_LABEL = "factory:allow-protected"
 _TERMINAL_INPUT_TOOLS: frozenset[str] = frozenset({"sys_terminal_send"})
 
 # Every role the guard accepts (the planner is a read-only sub-agent).
-GUARD_ROLES: frozenset[str] = frozenset(ROLES | {ROLE_PLANNER})
+GUARD_ROLES: frozenset[str] = ROLES
 
 # Roles that never push or open PRs: leads delegate, reviewers and the demo
 # agent comment, the planner only reads.

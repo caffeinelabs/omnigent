@@ -2,8 +2,10 @@
 
 ``web/src/lib/factoryApi.ts`` mirrors these types and
 ``web/src/components/factory/__fixtures__/snapshot.liveRun.json`` validates
-against :class:`FactorySnapshot`, so change both sides together. Models forbid
-unknown keys: snapshot builders map store rows field by field.
+against :class:`FactorySnapshot` (``snapshot.round3.json`` against the round-3
+views too), so change both sides together. Models forbid unknown keys:
+snapshot builders map store rows field by field. Round-3 additions to the
+snapshot are optional, so older servers and clients keep working.
 
 Times are epoch seconds, except :attr:`EventView.ts` (epoch milliseconds).
 Money is USD; ``None`` means unpriced or unknown, never zero.
@@ -18,7 +20,7 @@ from pydantic import BaseModel, ConfigDict, Field
 Stage = Literal["queued", "planning", "building", "review", "verify", "ready", "merged", "done"]
 AgentStage = Literal["planning", "building", "review", "verify", "ready", "merged"]
 Overlay = Literal["paused", "blocked", "failed", "pr_closed"]
-Role = Literal["lead", "project_lead", "ic", "env_keeper", "reviewer", "demo"]
+Role = Literal["lead", "project_lead", "ic", "env_keeper", "reviewer", "demo", "planner"]
 MemberState = Literal["active", "paused", "done"]
 Cadence = Literal["demo", "normal"]
 GateState = Literal["pass", "pending", "fail", "skip", "unknown"]
@@ -35,13 +37,238 @@ DemoFileKind = Literal[
     "video", "screenshot", "poster", "api", "har", "trace", "console", "script", "log", "other"
 ]
 ProjectKind = Literal["work", "integration", "self"]
-DecisionSource = Literal["agent", "relaunch_failed", "blocked_approval", "pr_closed", "storm"]
+DecisionSource = Literal[
+    "agent",
+    "relaunch_failed",
+    "blocked_approval",
+    "pr_closed",
+    "storm",
+    "proposal",
+    "loop",
+    "access_request",
+    "done_check",
+]
 DecisionStatus = Literal["open", "answered", "withdrawn", "expired"]
 Severity = Literal["info", "notice", "warning", "critical"]
+
+# Round 3.
+PersonRole = Literal["viewer", "operator", "owner"]
+ViewerRole = Literal["viewer", "operator", "owner", "creator"]
+ProjectStatus = Literal["active", "cancelled", "merged", "done"]
+DependsMode = Literal["merged", "ready"]
+EngineMode = Literal["observe", "assist", "enforce"]
+ActorKind = Literal["human", "agent", "server"]
+ChatAuthorKind = Literal["human", "agent", "system"]
+ChatCardType = Literal["decision", "proposal", "control", "pr", "demo", "loop", "issue", "system"]
+ThreadKind = Literal["factory", "improvements", "project", "pr"]
+ProposalKind = Literal["projects", "tuning", "rules", "code"]
+ProposalStatus = Literal[
+    "pending",
+    "applied",
+    "trial",
+    "kept",
+    "reverted",
+    "rejected",
+    "expired",
+    "withdrawn",
+    "refused",
+    "undone",
+    "awaiting_cosign",
+]
+ProposalApproval = Literal["auto", "operator", "owner"]
+ProposalClass = Literal["A", "B", "human"]
+TaskKind = Literal["implement", "test", "docs", "spike", "ops", "adhoc"]
+TaskState = Literal[
+    "planned", "ready", "running", "review", "blocked", "done", "failed", "cancelled"
+]
+TaskHarness = Literal["ic", "ic_codex"]
+LoopKind = Literal[
+    "implement", "review", "verify", "demo", "ci", "claim", "plan", "intake", "improve"
+]
+LoopState = Literal[
+    "running",
+    "converged",
+    "stalled",
+    "thrashing",
+    "exhausted",
+    "escalated",
+    "cancelled",
+    "superseded",
+]
+IssueClass = Literal["incident", "finding", "retro"]
+IssueSource = Literal["detector", "sentinel", "human", "agent", "server"]
+IssueStatus = Literal["open", "acked", "snoozed", "resolved", "wontfix"]
+SpanKind = Literal[
+    "project",
+    "stage",
+    "pr",
+    "pr_round",
+    "gate",
+    "ready_wait",
+    "decision",
+    "task",
+    "loop",
+    "loop_iter",
+    "wait",
+    "env",
+    "preview",
+    "demo",
+    "incident",
+    "intervention",
+    "proposal",
+    "chat_turn",
+    "spawn",
+    "turn",
+    "tool",
+]
+SpanOutcome = Literal[
+    "open", "ok", "fail", "abandoned", "superseded", "timeout", "cancelled", "exhausted"
+]
+DefinitionSource = Literal["seed", "human", "proposal", "revert"]
+NowFlag = Literal["repeat", "quiet", "disconnected"]
 
 
 class _View(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class _ClassView(_View):
+    """A view whose ``class_`` attribute is the JSON key ``class``."""
+
+    # populate_by_name and the by_alias dump default also hold on pydantic < 2.11,
+    # which has neither validate_by_name nor serialize_by_alias.
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, serialize_by_alias=True)
+
+    def model_dump(self, *, by_alias: bool | None = True, **kwargs: Any) -> dict[str, Any]:
+        return super().model_dump(by_alias=by_alias, **kwargs)
+
+    def model_dump_json(self, *, by_alias: bool | None = True, **kwargs: Any) -> str:
+        return super().model_dump_json(by_alias=by_alias, **kwargs)
+
+
+# ── Round-3 building blocks (live "now", loop chips, summaries, viewer) ──
+
+
+class NowState(_View):
+    """
+    What one agent is doing right now, as the server observed it.
+
+    :param status: ``idle`` / ``running`` / ``waiting`` / ``failed``.
+    :param tool_arg: The tool's main argument, redacted, ≤ 80 chars.
+    :param tool_since: When the current tool call started (epoch seconds).
+    :param ctx_pct: Context window use, only when the harness reports it.
+    """
+
+    session_id: str
+    status: str
+    turn_n: int | None = None
+    tool: str | None = None
+    tool_arg: str | None = Field(default=None, max_length=80)
+    tool_since: int | None = None
+    last_event_at: int | None = None
+    model: str | None = None
+    cost_usd: float | None = None
+    usd_per_h: float | None = None
+    ctx_pct: float | None = None
+    flags: list[NowFlag] = Field(default_factory=list)
+
+
+class LoopChipView(_View):
+    """
+    A compact loop badge on a PR, task or project row, e.g. ``implement 3/3``.
+
+    :param limit: The iteration budget, when the loop has one.
+    """
+
+    id: str
+    kind: LoopKind
+    state: LoopState
+    iteration: int
+    limit: int | None = None
+
+
+class TasksSummaryView(_View):
+    """
+    A project's work graph at a glance.
+
+    :param critical_path_min: Remaining critical-path estimate in minutes.
+    """
+
+    total: int = 0
+    done: int = 0
+    ready: int = 0
+    running: int = 0
+    blocked: int = 0
+    failed: int = 0
+    critical_path_min: int | None = None
+
+
+class LoopsSummaryView(_View):
+    """Loop counts of a project by state."""
+
+    running: int = 0
+    converged: int = 0
+    stalled: int = 0
+    thrashing: int = 0
+    exhausted: int = 0
+    escalated: int = 0
+
+
+class ViewerCan(_View):
+    """Which levers the viewer may pull (the web disables the rest)."""
+
+    post: bool = False
+    answer: bool = False
+    review: bool = False
+    control: bool = False
+    intervene: bool = False
+    apply_projects: bool = False
+    apply_tuning: bool = False
+    restart: bool = False
+    stop: bool = False
+    invite: bool = False
+    settings: bool = False
+    terminal: bool = False
+    start: bool = False
+
+
+class ViewerBlock(_View):
+    """
+    The requesting user's place in the factory (computed per viewer, never cached).
+
+    :param level: Session permission level on the root (1 read … 4 owner).
+    """
+
+    user_id: str | None = None
+    role: ViewerRole
+    level: int = Field(ge=0, le=4)
+    is_creator: bool = False
+    can: ViewerCan = Field(default_factory=ViewerCan)
+
+
+class PresenceEntry(_View):
+    """
+    One human currently in the factory.
+
+    :param location: ``overview`` / ``room:<thread>`` / ``project:<slug>`` /
+        ``pr:<id>`` / ``agent:<sid>`` / ``graph`` / … .
+    :param sessions: Member sessions the person has open.
+    """
+
+    user_id: str
+    name: str | None = None
+    location: str | None = None
+    idle: bool = False
+    since: int | None = None
+    sessions: list[str] = Field(default_factory=list)
+
+
+class CountsView(_View):
+    """Header counters of the round-3 objects."""
+
+    issues_open: int = 0
+    proposals_pending: int = 0
+    on_trial: int = 0
 
 
 # ── Members ─────────────────────────────────────────────────────
@@ -103,6 +330,7 @@ class MemberView(_View):
     cost_usd: float | None = None
     launch_drift: LaunchDriftView | None = None
     url: str
+    now: NowState | None = None
 
 
 # ── Factory header and health ──────────────────────────────────
@@ -506,6 +734,11 @@ class PrView(_View):
     last_polled_at: int | None = None
     poll_error: str | None = None
     source: Literal["tool", "discovered"] | None = None
+    task_id: str | None = None
+    task_ref: str | None = None
+    opened_at: int | None = None
+    first_ready_at: int | None = None
+    loops: list[LoopChipView] | None = None
 
 
 # ── Projects ───────────────────────────────────────────────────
@@ -567,6 +800,16 @@ class ProjectView(_View):
     provisioning: ProvisioningView | None = None
     keep_previews: bool = True
     paused_by: str | None = None
+    kind: ProjectKind | None = None
+    status: ProjectStatus | None = None
+    parent_slug: str | None = None
+    closed_at: int | None = None
+    depends_on: list[str] | None = None
+    depends_mode: DependsMode | None = None
+    human_owner: str | None = None
+    tasks_summary: TasksSummaryView | None = None
+    loops_summary: LoopsSummaryView | None = None
+    def_version: int | None = None
 
 
 # ── Decisions and events ───────────────────────────────────────
@@ -617,6 +860,11 @@ class DecisionView(_View):
     delivered_to_title: str | None = None
     created_at: int
     updated_at: int
+    assignee: str | None = None
+    claimed_by: str | None = None
+    claimed_at: int | None = None
+    thread: str | None = None
+    subject: str | None = None
 
 
 class EventView(_View):
@@ -645,6 +893,7 @@ class TotalsView(_View):
     prs_ready: int = 0
     prs_merged: int = 0
     decisions_open: int = 0
+    usd_per_h: float | None = None
 
 
 class FactorySnapshot(_View):
@@ -653,6 +902,8 @@ class FactorySnapshot(_View):
 
     :param decisions: Open decisions plus the last 10 answered.
     :param hidden_projects: Projects whose PL the viewer cannot read.
+    :param viewer: The requesting user's role and levers.
+    :param def_version: The factory definition version in force.
     """
 
     factory: FactoryView
@@ -664,6 +915,12 @@ class FactorySnapshot(_View):
     hidden_projects: int = 0
     totals: TotalsView
     server_time: int
+    viewer: ViewerBlock | None = None
+    people_count: int | None = None
+    presence: list[PresenceEntry] | None = None
+    counts: CountsView | None = None
+    def_version: int | None = None
+    engine_mode: EngineMode | None = None
 
 
 class FactorySummary(_View):
@@ -752,8 +1009,368 @@ class Preflight(_View):
     max_projects: int = 10
 
 
+# ── Round 3: people, Room, proposals, work graph, loops, issues, telemetry ──
+
+
+class PersonView(_View):
+    """
+    One human on the factory roster.
+
+    :param name: Display name, when the user store has one.
+    :param present: In the factory right now (presence heartbeat).
+    """
+
+    user_id: str
+    name: str | None = None
+    role: PersonRole
+    is_creator: bool = False
+    invited_by: str | None = None
+    invited_at: int
+    last_seen_at: int | None = None
+    present: bool = False
+    location: str | None = None
+    idle: bool = False
+    notify: dict[str, Any] | None = None
+
+
+class ChatCardView(_View):
+    """
+    A structured object mirrored into a thread as a live card.
+
+    :param ref: e.g. ``"D-7"``, ``"C-4"``, ``"!9630"`` or ``"INC-13"``.
+    :param id: Row id of the object, when it has one.
+    """
+
+    type: ChatCardType
+    ref: str | None = None
+    id: str | None = None
+
+
+class RoutedView(_View):
+    """Delivery of one message to one agent."""
+
+    session_id: str
+    title: str | None = None
+    mail_id: str | None = None
+    delivered_at: int | None = None
+    replied_at: int | None = None
+
+
+class ChatMessageView(_View):
+    """
+    One Room message.
+
+    :param seq: Per-factory sequence (shared by every thread).
+    :param author: User id, session id, or ``"server"``.
+    :param auto_reply: The server posted the agent's turn output for it.
+    """
+
+    id: str
+    factory_id: str
+    thread: str
+    seq: int
+    author_kind: ChatAuthorKind
+    author: str
+    author_title: str | None = None
+    author_role: str | None = None
+    body: str
+    mentions: list[str] = Field(default_factory=list)
+    refs: list[str] = Field(default_factory=list)
+    reply_to: str | None = None
+    card: ChatCardView | None = None
+    routed: list[RoutedView] = Field(default_factory=list)
+    auto_reply: bool = False
+    created_at: int
+
+
+class ThreadView(_View):
+    """
+    One Room thread.
+
+    :param key: ``factory``, ``improvements``, ``project:<slug>`` or ``pr:<id>``.
+    :param title: Display name, e.g. ``"#db-version"`` or ``"!9631"``.
+    :param responder_session_id: The agent that answers by default.
+    """
+
+    key: str
+    kind: ThreadKind
+    title: str
+    project_slug: str | None = None
+    pr_id: str | None = None
+    pr_number: int | None = None
+    responder_session_id: str | None = None
+    responder_title: str | None = None
+    last_seq: int = 0
+    last_at: int | None = None
+    messages: int = 0
+    unread: int = 0
+
+
+class ExpectedEffectView(_View):
+    """The metric a proposal expects to move."""
+
+    metric: str
+    direction: Literal["up", "down"]
+    delta: float | None = None
+
+
+class ProposalView(_ClassView):
+    """
+    A proposed change, ``C-<number>``: a project plan or a definition change.
+
+    :param class_: Tier-1 approval class (JSON key ``class``).
+    :param ops: Project ops or definition patches ``{op, path, value}``.
+    :param analysis: The planner's analysis (cohesion, hub files, size estimates).
+    :param evidence: Ids the proposal cites, e.g. ``["F-9", "D-2"]``.
+    """
+
+    id: str
+    ref: str
+    number: int
+    factory_id: str
+    kind: ProposalKind
+    status: ProposalStatus
+    approval: ProposalApproval
+    class_: ProposalClass | None = Field(default=None, alias="class")
+    title: str
+    ops: list[dict[str, Any]] = Field(default_factory=list)
+    before: Any = None
+    after: Any = None
+    rationale: str = ""
+    analysis: Any = None
+    evidence: list[Any] = Field(default_factory=list)
+    expected_effect: ExpectedEffectView | None = None
+    warnings: list[str] = Field(default_factory=list)
+    author_kind: ActorKind
+    author: str
+    author_title: str | None = None
+    author_role: str | None = None
+    on_behalf_of: str | None = None
+    cosigned_by: str | None = None
+    thread: str | None = None
+    reply_to_chat: str | None = None
+    decision_id: str | None = None
+    decision_ref: str | None = None
+    based_on: dict[str, Any] | None = None
+    trial_until: int | None = None
+    undo_until: int | None = None
+    result: dict[str, Any] | None = None
+    def_version_from: int | None = None
+    def_version_to: int | None = None
+    decided_by: str | None = None
+    decided_at: int | None = None
+    applied_at: int | None = None
+    reverted_at: int | None = None
+    reverted_by: str | None = None
+    created_at: int
+    updated_at: int
+
+
+class TaskCardView(_View):
+    """
+    What a worker is told to do.
+
+    :param acceptance: Commands the PL runs verbatim to accept the work.
+    """
+
+    text: str | None = None
+    acceptance: list[str] = Field(default_factory=list)
+    env_checks: list[str] = Field(default_factory=list)
+    preview: bool | None = None
+    demo_focus: str | None = None
+    harness: TaskHarness | None = None
+
+
+class TaskBudgetView(_View):
+    attempts: int | None = None
+    usd: float | None = None
+
+
+class TaskView(_View):
+    """
+    One node of the work graph, ``T-<number>``.
+
+    :param key: Branch suffix (``factory/<slug>/<key>``).
+    :param deps: Task keys, ``project:<slug>`` and ``decision:D-n``.
+    :param wave: Layer of the ready-order (1 = startable now), when computed.
+    :param critical: On the project's critical path.
+    :param waiting_on: Unmet dependencies.
+    """
+
+    id: str
+    ref: str
+    number: int
+    project_slug: str
+    key: str
+    title: str
+    kind: TaskKind
+    state: TaskState
+    card: TaskCardView = Field(default_factory=TaskCardView)
+    deps: list[str] = Field(default_factory=list)
+    scope: list[str] = Field(default_factory=list)
+    priority: int = Field(default=2, ge=0, le=3)
+    estimate_min: int | None = None
+    vendor: str | None = None
+    session_ids: list[str] = Field(default_factory=list)
+    pr_id: str | None = None
+    pr_number: int | None = None
+    attempts: int = 0
+    budget: TaskBudgetView | None = None
+    cost_usd: float | None = None
+    created_by: str
+    created_via: ActorKind
+    def_version: int | None = None
+    started_at: int | None = None
+    closed_at: int | None = None
+    created_at: int
+    updated_at: int
+    wave: int | None = None
+    critical: bool = False
+    waiting_on: list[str] = Field(default_factory=list)
+    loop: LoopChipView | None = None
+
+
+class LoopSpentView(_View):
+    """
+    What a loop has used so far.
+
+    :param per_head: Iterations per head sha (verify/demo loops).
+    """
+
+    attempts: int = 0
+    usd: float | None = None
+    wall_s: int | None = None
+    per_head: dict[str, int] = Field(default_factory=dict)
+    env_retries: int = 0
+
+
+class LoopView(_View):
+    """
+    One loop (implement, review, verify, demo, ci, claim, plan, intake, improve).
+
+    :param subject: e.g. ``"task:<id>"`` or ``"pr:<id>@<sha7>"``.
+    :param limit: The iteration budget from :attr:`spec`, when it has one.
+    :param spec: The resolved budgets the loop started with.
+    """
+
+    id: str
+    kind: LoopKind
+    subject: str
+    project_slug: str | None = None
+    task_id: str | None = None
+    task_ref: str | None = None
+    pr_id: str | None = None
+    pr_number: int | None = None
+    state: LoopState
+    iteration: int = 0
+    limit: int | None = None
+    spec: dict[str, Any] = Field(default_factory=dict)
+    spent: LoopSpentView = Field(default_factory=LoopSpentView)
+    last_verdict: str | None = None
+    last_reason: str | None = None
+    decision_id: str | None = None
+    decision_ref: str | None = None
+    def_version: int | None = None
+    started_at: int
+    updated_at: int
+    ended_at: int | None = None
+
+
+class IssueView(_ClassView):
+    """
+    An incident (``INC-n``), finding (``F-n``) or retro.
+
+    :param class_: JSON key ``class``.
+    :param ref: ``None`` for retros.
+    :param target: e.g. ``"member:<id>"``, ``"pr:<id>"`` or ``"project:<slug>"``.
+    :param runbook: Action ids the incident page offers, e.g. ``["interrupt", "redispatch"]``.
+    """
+
+    id: str
+    ref: str | None = None
+    class_: IssueClass = Field(alias="class")
+    number: int
+    rule: str
+    category: str | None = None
+    severity: Severity
+    source: IssueSource
+    project_slug: str | None = None
+    target: str
+    target_title: str | None = None
+    summary: str
+    body: str | None = None
+    evidence: Any = None
+    status: IssueStatus
+    assignee: str | None = None
+    snoozed_until: int | None = None
+    acked_by: str | None = None
+    resolved_by: str | None = None
+    count: int = 1
+    first_seen: int
+    last_seen: int
+    resolved_at: int | None = None
+    proposal_id: str | None = None
+    proposal_ref: str | None = None
+    def_version: int | None = None
+    runbook: list[str] = Field(default_factory=list)
+
+
+class SpanView(_View):
+    """One span; ``started_at`` and ``ended_at`` are epoch milliseconds."""
+
+    id: str
+    trace_key: str
+    parent_id: str | None = None
+    kind: SpanKind
+    name: str
+    project_slug: str | None = None
+    pr_id: str | None = None
+    task_id: str | None = None
+    loop_id: str | None = None
+    head_sha: str | None = None
+    session_id: str | None = None
+    role: str | None = None
+    agent_name: str | None = None
+    actor: str | None = None
+    started_at: int
+    ended_at: int | None = None
+    outcome: SpanOutcome
+    attempt: int | None = None
+    cost_usd: float | None = None
+    tokens_in: int | None = None
+    tokens_out: int | None = None
+    version_id: str | None = None
+    def_version: int | None = None
+    attrs: dict[str, Any] | None = None
+
+
+class DefinitionView(_View):
+    """
+    One version of the factory's Tier-1 definition.
+
+    :param pinned: The version the factory runs (``omnigent.factory.def_version``).
+    :param doc: Engine, cadence, supervisor, mail, previews, caps, loops,
+        budgets, autonomy, decisions, alerts, models and rules.
+    """
+
+    factory_id: str
+    version: int
+    parent_version: int | None = None
+    hash: str
+    created_by: str
+    created_via: DefinitionSource
+    proposal_id: str | None = None
+    proposal_ref: str | None = None
+    created_at: int
+    pinned: bool = False
+    doc: dict[str, Any] = Field(default_factory=dict)
+
+
 __all__ = [
+    "ChatMessageView",
+    "CountsView",
     "DecisionView",
+    "DefinitionView",
     "DemoListResponse",
     "DemoView",
     "EnvView",
@@ -764,12 +1381,22 @@ __all__ = [
     "FactorySnapshot",
     "FactorySummary",
     "HealthView",
+    "IssueView",
+    "LoopView",
     "MemberRef",
     "MemberView",
+    "NowState",
     "OpenDecisionsResponse",
+    "PersonView",
     "PrView",
     "Preflight",
+    "PresenceEntry",
     "PreviewView",
     "ProjectDemoView",
     "ProjectView",
+    "ProposalView",
+    "SpanView",
+    "TaskView",
+    "ThreadView",
+    "ViewerBlock",
 ]

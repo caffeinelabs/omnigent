@@ -63,6 +63,54 @@ _CODECS = [
         ec.decode_factory_event_severity,
     ),
     (ec.FACTORY_DEMO_STATUS, ec.encode_factory_demo_status, ec.decode_factory_demo_status),
+    (
+        ec.FACTORY_PROJECT_STATUS,
+        ec.encode_factory_project_status,
+        ec.decode_factory_project_status,
+    ),
+    (ec.FACTORY_PERSON_ROLE, ec.encode_factory_person_role, ec.decode_factory_person_role),
+    (
+        ec.FACTORY_CHAT_AUTHOR_KIND,
+        ec.encode_factory_chat_author_kind,
+        ec.decode_factory_chat_author_kind,
+    ),
+    (ec.FACTORY_ACTOR_KIND, ec.encode_factory_actor_kind, ec.decode_factory_actor_kind),
+    (ec.FACTORY_PROPOSAL_KIND, ec.encode_factory_proposal_kind, ec.decode_factory_proposal_kind),
+    (
+        ec.FACTORY_PROPOSAL_STATUS,
+        ec.encode_factory_proposal_status,
+        ec.decode_factory_proposal_status,
+    ),
+    (
+        ec.FACTORY_PROPOSAL_APPROVAL,
+        ec.encode_factory_proposal_approval,
+        ec.decode_factory_proposal_approval,
+    ),
+    (
+        ec.FACTORY_PROPOSAL_CLASS,
+        ec.encode_factory_proposal_class,
+        ec.decode_factory_proposal_class,
+    ),
+    (ec.FACTORY_TASK_KIND, ec.encode_factory_task_kind, ec.decode_factory_task_kind),
+    (ec.FACTORY_TASK_STATE, ec.encode_factory_task_state, ec.decode_factory_task_state),
+    (ec.FACTORY_LOOP_KIND, ec.encode_factory_loop_kind, ec.decode_factory_loop_kind),
+    (ec.FACTORY_LOOP_STATE, ec.encode_factory_loop_state, ec.decode_factory_loop_state),
+    (ec.FACTORY_ISSUE_CLASS, ec.encode_factory_issue_class, ec.decode_factory_issue_class),
+    (ec.FACTORY_ISSUE_SOURCE, ec.encode_factory_issue_source, ec.decode_factory_issue_source),
+    (ec.FACTORY_ISSUE_STATUS, ec.encode_factory_issue_status, ec.decode_factory_issue_status),
+    (ec.FACTORY_SPAN_KIND, ec.encode_factory_span_kind, ec.decode_factory_span_kind),
+    (ec.FACTORY_SPAN_OUTCOME, ec.encode_factory_span_outcome, ec.decode_factory_span_outcome),
+    (
+        ec.FACTORY_DEFINITION_VIA,
+        ec.encode_factory_definition_via,
+        ec.decode_factory_definition_via,
+    ),
+    (
+        ec.FACTORY_FEEDBACK_TARGET,
+        ec.encode_factory_feedback_target,
+        ec.decode_factory_feedback_target,
+    ),
+    (ec.FACTORY_FEEDBACK_KIND, ec.encode_factory_feedback_kind, ec.decode_factory_feedback_kind),
 ]
 
 
@@ -167,6 +215,10 @@ def test_shipped_codes_are_stable() -> None:
         "blocked_approval": 3,
         "pr_closed": 4,
         "storm": 5,
+        "proposal": 6,
+        "loop": 7,
+        "access_request": 8,
+        "done_check": 9,
     }
     assert ec.FACTORY_DECISION_STATUS == {"open": 1, "answered": 2, "withdrawn": 3, "expired": 4}
     assert ec.FACTORY_EVENT_SEVERITY == {"info": 0, "notice": 1, "warning": 2, "critical": 3}

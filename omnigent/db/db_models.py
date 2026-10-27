@@ -1697,6 +1697,10 @@ class SqlFactoryProject(OmnigentBase):
     :param agent_stage: The PL's own stage claim, shown as a subtitle.
     :param pl_session_id: The project's current PL session, once spawned.
     :param env: JSON dev-env truth: ``{reported: {...}, probe: {...}}``.
+    :param status: Lifecycle code (FACTORY_PROJECT_STATUS): active, cancelled, merged, done.
+    :param parent_slug: The project this one was split from, or merged into.
+    :param def_version: Factory definition version in force when the row was created.
+    :param version_id: ``factory_versions`` row of the platform that created it.
     """
 
     __tablename__ = "factory_projects"
@@ -1725,10 +1729,16 @@ class SqlFactoryProject(OmnigentBase):
     created_by: Mapped[str] = mapped_column(String(128), nullable=False)
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
     updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    status: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="1")
+    parent_slug: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    closed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    def_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    version_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
 
     __table_args__ = (
         CheckConstraint("priority IN (0, 1, 2, 3)", name="ck_factory_projects_priority"),
         CheckConstraint("stage IN (1, 2, 3, 4, 5, 6, 7, 8)", name="ck_factory_projects_stage"),
+        CheckConstraint("status IN (1, 2, 3, 4)", name="ck_factory_projects_status"),
         UniqueConstraint("workspace_id", "factory_id", "slug", name="uq_factory_projects_slug"),
     )
 
@@ -1745,6 +1755,9 @@ class SqlFactoryPr(OmnigentBase):
     :param preview: JSON factory-preview truth for this PR, or ``None``.
     :param source: How the PR was found: ``tool`` or ``discovered``.
     :param last_polled_at: Last GitHub refresh; ``None`` means due now.
+    :param opened_at: GitHub ``createdAt`` of the PR.
+    :param first_ready_at: When every ready gate first passed (``ready_at`` is the latest).
+    :param task_id: The ``factory_tasks`` row the PR's branch binds to.
     """
 
     __tablename__ = "factory_prs"
@@ -1787,6 +1800,10 @@ class SqlFactoryPr(OmnigentBase):
     poll_error: Mapped[str | None] = mapped_column(String(512), nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
     updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    opened_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    first_ready_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    task_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    version_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
 
     __table_args__ = (
         CheckConstraint("state IN (1, 2, 3)", name="ck_factory_prs_state"),
@@ -1811,6 +1828,9 @@ class SqlFactoryDecision(OmnigentBase):
     :param status: Code of ``open``/``answered``/``withdrawn``/``expired``.
     :param dedupe_key: A re-ask with the same key while open returns this row.
     :param delivered_mail_id: Mail id of the answer delivered to the asker.
+    :param assignee: ``owners``, ``operators`` or a user id; ``None`` means operators.
+    :param thread: Room thread the decision's card lives in, e.g. ``"project:db-version"``.
+    :param subject: What it is about, e.g. ``"task:T-4"`` or ``"proposal:C-4"``.
     """
 
     __tablename__ = "factory_decisions"
@@ -1843,9 +1863,16 @@ class SqlFactoryDecision(OmnigentBase):
     delivered_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
     updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    assignee: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    claimed_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    claimed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    thread: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    subject: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     __table_args__ = (
-        CheckConstraint("source IN (1, 2, 3, 4, 5)", name="ck_factory_decisions_source"),
+        CheckConstraint(
+            "source IN (1, 2, 3, 4, 5, 6, 7, 8, 9)", name="ck_factory_decisions_source"
+        ),
         CheckConstraint("status IN (1, 2, 3, 4)", name="ck_factory_decisions_status"),
         CheckConstraint("blocking IN (0, 1)", name="ck_factory_decisions_blocking"),
         CheckConstraint("allow_text IN (0, 1)", name="ck_factory_decisions_allow_text"),
@@ -1947,6 +1974,529 @@ class SqlFactoryDemo(OmnigentBase):
             "workspace_id",
             "factory_id",
             "pr_number",
+            "created_at",
+            "id",
+        ),
+    )
+
+
+# ── Software-factory round 3 ───────────────────────────────────────────────
+# People, the Room, proposals, the work graph, loops, issues, telemetry,
+# versioned definitions and feedback. Same conventions as the cockpit tables:
+# workspace-led keys, Uuid16 ids, SMALLINT enum codes, compressed JSON, no
+# foreign keys. Times are epoch seconds except factory_spans (epoch ms).
+
+
+def _ws_column() -> Mapped[int]:
+    return mapped_column(
+        BigInteger,
+        primary_key=True,
+        nullable=False,
+        server_default="0",
+        default=current_workspace_id,
+    )
+
+
+class SqlFactoryPerson(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_people``: one human on a factory's roster.
+
+    :param role: Code of ``viewer``/``operator``/``owner`` (FACTORY_PERSON_ROLE).
+    :param is_creator: 1 for the human who started the factory.
+    :param notify: JSON notification preferences, or ``None`` for defaults.
+    """
+
+    __tablename__ = "factory_people"
+
+    workspace_id: Mapped[int] = _ws_column()
+    factory_id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    role: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    is_creator: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="0")
+    invited_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    invited_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_seen_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    notify: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("role IN (1, 2, 3)", name="ck_factory_people_role"),
+        CheckConstraint("is_creator IN (0, 1)", name="ck_factory_people_is_creator"),
+        # The factories a user is on.
+        Index("ix_factory_people_user", "workspace_id", "user_id", "factory_id"),
+    )
+
+
+class SqlFactoryChatMessage(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_chat_messages``: the Room, append-only.
+
+    :param thread: ``factory``, ``improvements``, ``project:<slug>`` or ``pr:<id>``.
+    :param seq: Per-factory sequence, shared by every thread.
+    :param author_kind: Code of ``human``/``agent``/``system`` (FACTORY_CHAT_AUTHOR_KIND).
+    :param card: JSON ``{type, ref}`` of a mirrored object, or ``None``.
+    :param routed: JSON ``[{session_id, mail_id, delivered_at, replied_at}]``.
+    :param auto_reply: 1 when the server posted a turn's output for a silent agent.
+    """
+
+    __tablename__ = "factory_chat_messages"
+
+    workspace_id: Mapped[int] = _ws_column()
+    id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    factory_id: Mapped[str] = mapped_column(Uuid16, nullable=False)
+    thread: Mapped[str] = mapped_column(String(80), nullable=False)
+    seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    author_kind: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    author: Mapped[str] = mapped_column(String(128), nullable=False)
+    author_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    body: Mapped[str] = mapped_column(CompressedText, nullable=False)
+    mentions: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    refs: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    reply_to: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    card: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    routed: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    auto_reply: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="0")
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("author_kind IN (1, 2, 3)", name="ck_factory_chat_messages_author_kind"),
+        CheckConstraint("auto_reply IN (0, 1)", name="ck_factory_chat_messages_auto_reply"),
+        UniqueConstraint("workspace_id", "factory_id", "seq", name="uq_factory_chat_messages_seq"),
+        Index(
+            "ix_factory_chat_messages_thread",
+            "workspace_id",
+            "factory_id",
+            "thread",
+            "seq",
+            "id",
+        ),
+    )
+
+
+class SqlFactoryChatRead(OmnigentBase):
+    """SQLAlchemy model for ``factory_chat_reads``: a user's read mark per thread."""
+
+    __tablename__ = "factory_chat_reads"
+
+    workspace_id: Mapped[int] = _ws_column()
+    factory_id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    user_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    thread: Mapped[str] = mapped_column(String(80), primary_key=True)
+    last_seq: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class SqlFactoryProposal(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_proposals``: a proposed change, shown as ``C-<number>``.
+
+    :param kind: Code of ``projects``/``tuning``/``rules``/``code``.
+    :param status: Code of FACTORY_PROPOSAL_STATUS (``pending`` … ``awaiting_cosign``).
+    :param approval: Who must approve: ``auto``/``operator``/``owner``.
+    :param class_: Tier-1 approval class ``A``/``B``/``human`` (column ``class``).
+    :param ops: JSON list of changes (project ops or definition patches).
+    :param based_on: JSON ``{slug: updated_at}`` of the rows the proposal read.
+    :param dedupe_key: A re-proposal with the same key returns this row.
+    """
+
+    __tablename__ = "factory_proposals"
+
+    workspace_id: Mapped[int] = _ws_column()
+    id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    factory_id: Mapped[str] = mapped_column(Uuid16, nullable=False)
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    kind: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    status: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="1")
+    approval: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    class_: Mapped[int | None] = mapped_column("class", SmallInteger, nullable=True)
+    title: Mapped[str] = mapped_column(String(256), nullable=False)
+    ops: Mapped[str] = mapped_column(CompressedText, nullable=False)
+    before: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    after: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    rationale: Mapped[str] = mapped_column(CompressedText, nullable=False)
+    analysis: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    evidence: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    expected_effect: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    warnings: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    author_kind: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    author: Mapped[str] = mapped_column(String(128), nullable=False)
+    author_role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    on_behalf_of: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    cosigned_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    thread: Mapped[str | None] = mapped_column(String(80), nullable=True)
+    reply_to_chat: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    decision_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    based_on: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    trial_until: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    undo_until: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    result: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    def_version_from: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    def_version_to: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    decided_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    decided_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    applied_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reverted_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    reverted_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    dedupe_key: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("kind IN (1, 2, 3, 4)", name="ck_factory_proposals_kind"),
+        CheckConstraint(
+            "status IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)", name="ck_factory_proposals_status"
+        ),
+        CheckConstraint("approval IN (1, 2, 3)", name="ck_factory_proposals_approval"),
+        CheckConstraint("class IN (1, 2, 3)", name="ck_factory_proposals_class"),
+        CheckConstraint("author_kind IN (1, 2, 3)", name="ck_factory_proposals_author_kind"),
+        UniqueConstraint(
+            "workspace_id", "factory_id", "number", name="uq_factory_proposals_number"
+        ),
+        UniqueConstraint(
+            "workspace_id", "factory_id", "dedupe_key", name="uq_factory_proposals_dedupe"
+        ),
+        Index("ix_factory_proposals_status", "workspace_id", "factory_id", "status", "id"),
+    )
+
+
+class SqlFactoryTask(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_tasks``: one node of the work graph, ``T-<number>``.
+
+    :param key: Branch suffix, unique within the project, e.g. ``"route"``.
+    :param kind: Code of FACTORY_TASK_KIND.
+    :param state: Code of FACTORY_TASK_STATE.
+    :param card: JSON task card (do-text, acceptance, env_checks, preview, ...).
+    :param deps: JSON list of task keys, ``project:<slug>`` and ``decision:D-n``.
+    :param scope: JSON list of path globs.
+    :param created_via: Code of ``human``/``agent``/``server`` (FACTORY_ACTOR_KIND).
+    """
+
+    __tablename__ = "factory_tasks"
+
+    workspace_id: Mapped[int] = _ws_column()
+    id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    factory_id: Mapped[str] = mapped_column(Uuid16, nullable=False)
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    project_slug: Mapped[str] = mapped_column(String(64), nullable=False)
+    key: Mapped[str] = mapped_column(String(64), nullable=False)
+    title: Mapped[str] = mapped_column(String(256), nullable=False)
+    kind: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    state: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="1")
+    card: Mapped[str] = mapped_column(CompressedText, nullable=False)
+    deps: Mapped[str] = mapped_column(CompressedText, nullable=False)
+    scope: Mapped[str] = mapped_column(CompressedText, nullable=False)
+    priority: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="2")
+    estimate_min: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    vendor: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    session_ids: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    pr_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    budget: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_via: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    def_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    closed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("kind IN (1, 2, 3, 4, 5, 6)", name="ck_factory_tasks_kind"),
+        CheckConstraint("state IN (1, 2, 3, 4, 5, 6, 7, 8)", name="ck_factory_tasks_state"),
+        CheckConstraint("priority IN (0, 1, 2, 3)", name="ck_factory_tasks_priority"),
+        CheckConstraint("created_via IN (1, 2, 3)", name="ck_factory_tasks_created_via"),
+        UniqueConstraint(
+            "workspace_id", "factory_id", "project_slug", "key", name="uq_factory_tasks_key"
+        ),
+        UniqueConstraint("workspace_id", "factory_id", "number", name="uq_factory_tasks_number"),
+        Index("ix_factory_tasks_state", "workspace_id", "factory_id", "state", "id"),
+    )
+
+
+class SqlFactoryLoop(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_loops``: one loop per ``(kind, subject)``.
+
+    :param kind: Code of FACTORY_LOOP_KIND.
+    :param subject: What it loops on, e.g. ``"task:<id>"`` or ``"pr:<id>@<sha>"``.
+    :param state: Code of FACTORY_LOOP_STATE.
+    :param spec: JSON snapshot of the resolved budgets the loop started with.
+    :param spent: JSON ``{attempts, usd, wall_s, per_head, env_retries}``.
+    """
+
+    __tablename__ = "factory_loops"
+
+    workspace_id: Mapped[int] = _ws_column()
+    id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    factory_id: Mapped[str] = mapped_column(Uuid16, nullable=False)
+    kind: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    subject: Mapped[str] = mapped_column(String(64), nullable=False)
+    project_slug: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    task_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    pr_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    state: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="1")
+    iteration: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    spec: Mapped[str] = mapped_column(CompressedText, nullable=False)
+    spent: Mapped[str] = mapped_column(CompressedText, nullable=False)
+    last_verdict: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    last_reason: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    decision_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    def_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    started_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    ended_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("kind IN (1, 2, 3, 4, 5, 6, 7, 8, 9)", name="ck_factory_loops_kind"),
+        CheckConstraint("state IN (1, 2, 3, 4, 5, 6, 7, 8)", name="ck_factory_loops_state"),
+        UniqueConstraint(
+            "workspace_id", "factory_id", "kind", "subject", name="uq_factory_loops_subject"
+        ),
+        Index("ix_factory_loops_state", "workspace_id", "factory_id", "state", "id"),
+    )
+
+
+class SqlFactoryIssue(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_issues``: incidents (``INC-n``), findings (``F-n``), retros.
+
+    :param class_: Code of ``incident``/``finding``/``retro`` (column ``class``).
+    :param number: Sequence per factory and class.
+    :param rule: Detector rule, e.g. ``"agent.repeat"``.
+    :param severity: 0 info … 3 critical (FACTORY_EVENT_SEVERITY).
+    :param target: What it is about, e.g. ``"member:<id>"`` or ``"pr:<id>"``.
+    :param dedupe_key: Detectors re-raise the same row through this key.
+    :param count: How many times the condition was seen.
+    """
+
+    __tablename__ = "factory_issues"
+
+    workspace_id: Mapped[int] = _ws_column()
+    id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    factory_id: Mapped[str] = mapped_column(Uuid16, nullable=False)
+    class_: Mapped[int] = mapped_column("class", SmallInteger, nullable=False)
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    rule: Mapped[str] = mapped_column(String(48), nullable=False)
+    category: Mapped[str | None] = mapped_column(String(48), nullable=True)
+    severity: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="1")
+    source: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    project_slug: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    target: Mapped[str] = mapped_column(String(128), nullable=False)
+    summary: Mapped[str] = mapped_column(String(300), nullable=False)
+    body: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    evidence: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    status: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="1")
+    assignee: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    snoozed_until: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    acked_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    resolved_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    dedupe_key: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    count: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    first_seen: Mapped[int] = mapped_column(Integer, nullable=False)
+    last_seen: Mapped[int] = mapped_column(Integer, nullable=False)
+    resolved_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    proposal_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    version_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    def_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("class IN (1, 2, 3)", name="ck_factory_issues_class"),
+        CheckConstraint("severity IN (0, 1, 2, 3)", name="ck_factory_issues_severity"),
+        CheckConstraint("source IN (1, 2, 3, 4, 5)", name="ck_factory_issues_source"),
+        CheckConstraint("status IN (1, 2, 3, 4, 5)", name="ck_factory_issues_status"),
+        UniqueConstraint(
+            "workspace_id", "factory_id", "class", "number", name="uq_factory_issues_number"
+        ),
+        UniqueConstraint(
+            "workspace_id", "factory_id", "dedupe_key", name="uq_factory_issues_dedupe"
+        ),
+        Index(
+            "ix_factory_issues_status",
+            "workspace_id",
+            "factory_id",
+            "status",
+            "severity",
+            "id",
+        ),
+    )
+
+
+class SqlFactorySpan(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_spans``: OTel-shaped durations, never pruned.
+
+    :param id: A uuid7 (time-ordered) in a :class:`Uuid16` column.
+    :param trace_key: Groups a span tree, e.g. ``"pr:<id>"`` or ``"task:<id>"``.
+    :param kind: Code of FACTORY_SPAN_KIND.
+    :param started_at: Epoch milliseconds.
+    :param ended_at: Epoch milliseconds, ``None`` while open.
+    :param outcome: Code of FACTORY_SPAN_OUTCOME.
+    :param dedupe_key: Writers are idempotent through this key.
+    """
+
+    __tablename__ = "factory_spans"
+
+    workspace_id: Mapped[int] = _ws_column()
+    id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    factory_id: Mapped[str] = mapped_column(Uuid16, nullable=False)
+    trace_key: Mapped[str] = mapped_column(String(80), nullable=False)
+    parent_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    kind: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    name: Mapped[str] = mapped_column(String(64), nullable=False)
+    project_slug: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pr_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    task_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    loop_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    head_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    session_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    role: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    agent_name: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    actor: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    started_at: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    ended_at: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    outcome: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="1")
+    attempt: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    tokens_in: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    tokens_out: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    version_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    def_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dedupe_key: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    attrs: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21)",
+            name="ck_factory_spans_kind",
+        ),
+        CheckConstraint("outcome IN (1, 2, 3, 4, 5, 6, 7, 8)", name="ck_factory_spans_outcome"),
+        UniqueConstraint(
+            "workspace_id", "factory_id", "dedupe_key", name="uq_factory_spans_dedupe"
+        ),
+        Index("ix_factory_spans_kind", "workspace_id", "factory_id", "kind", "started_at", "id"),
+        Index("ix_factory_spans_pr", "workspace_id", "pr_id", "started_at", "id"),
+        Index("ix_factory_spans_task", "workspace_id", "task_id", "started_at", "id"),
+        Index("ix_factory_spans_ended", "workspace_id", "factory_id", "ended_at", "id"),
+    )
+
+
+class SqlFactoryCostDaily(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_cost_daily``: the per-day cost ledger.
+
+    :param project_slug: ``""`` for the leads.
+    :param day_utc: ``YYYY-MM-DD``.
+    """
+
+    __tablename__ = "factory_cost_daily"
+
+    workspace_id: Mapped[int] = _ws_column()
+    factory_id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    project_slug: Mapped[str] = mapped_column(String(64), primary_key=True)
+    role: Mapped[str] = mapped_column(String(16), primary_key=True)
+    agent_name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    model: Mapped[str] = mapped_column(String(64), primary_key=True)
+    day_utc: Mapped[str] = mapped_column(String(10), primary_key=True)
+    cost_usd: Mapped[float] = mapped_column(Float, nullable=False, server_default="0")
+    tokens_in: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    tokens_out: Mapped[int] = mapped_column(BigInteger, nullable=False, server_default="0")
+    turns: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+
+class SqlFactoryVersion(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_versions``: a platform version (image, bundles, knobs).
+
+    :param bundles: JSON ``{name: {agent_id, version, content_sha}}``.
+    :param knobs: JSON ``{OMNIGENT_FACTORY_*: value}``.
+    :param content_hash: sha256 of the canonical JSON; one row per distinct content.
+    """
+
+    __tablename__ = "factory_versions"
+
+    workspace_id: Mapped[int] = _ws_column()
+    id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    image_tag: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    server_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    bundles: Mapped[str] = mapped_column(CompressedText, nullable=False)
+    knobs: Mapped[str] = mapped_column(CompressedText, nullable=False)
+    content_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    note: Mapped[str | None] = mapped_column(String(256), nullable=True)
+
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "content_hash", name="uq_factory_versions_hash"),
+    )
+
+
+class SqlFactoryDefinition(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_definitions``: versioned Tier-1 factory settings.
+
+    :param doc: The FactoryDefinition as JSON.
+    :param hash: sha256 of the canonical JSON of *doc*.
+    :param created_via: Code of ``seed``/``human``/``proposal``/``revert``.
+    """
+
+    __tablename__ = "factory_definitions"
+
+    workspace_id: Mapped[int] = _ws_column()
+    factory_id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    version: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    parent_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    doc: Mapped[str] = mapped_column(CompressedText, nullable=False)
+    hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_via: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    proposal_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("created_via IN (1, 2, 3, 4)", name="ck_factory_definitions_created_via"),
+    )
+
+
+class SqlFactoryFeedback(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_feedback``: ratings, tags and human calibration.
+
+    :param target_kind: Code of FACTORY_FEEDBACK_TARGET.
+    :param target_id: Row id or ref of the target, e.g. a PR id or ``"D-7"``.
+    :param kind: Code of FACTORY_FEEDBACK_KIND.
+    :param tags: JSON list, e.g. closure reasons or root causes.
+    """
+
+    __tablename__ = "factory_feedback"
+
+    workspace_id: Mapped[int] = _ws_column()
+    id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    factory_id: Mapped[str] = mapped_column(Uuid16, nullable=False)
+    project_slug: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    target_kind: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    target_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    head_sha: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    author_kind: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    author: Mapped[str] = mapped_column(String(128), nullable=False)
+    kind: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    rating: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    tags: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    body: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    def_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "target_kind IN (1, 2, 3, 4, 5, 6, 7, 8)", name="ck_factory_feedback_target_kind"
+        ),
+        CheckConstraint("author_kind IN (1, 2, 3)", name="ck_factory_feedback_author_kind"),
+        CheckConstraint("kind IN (1, 2, 3, 4, 5, 6)", name="ck_factory_feedback_kind"),
+        Index(
+            "ix_factory_feedback_target",
+            "workspace_id",
+            "factory_id",
+            "target_kind",
             "created_at",
             "id",
         ),

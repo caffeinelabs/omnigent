@@ -62,6 +62,17 @@ PROJECT_KINDS: Final = (PROJECT_KIND_WORK, PROJECT_KIND_INTEGRATION, PROJECT_KIN
 """``charter.kind``: product work, the live env at the base head, or factory self-work."""
 INTEGRATION_ENV_SLUG: Final = "base-env"
 """Slug of the integration project a factory started with a live base env gets."""
+LABEL_DEF_VERSION: Final = "omnigent.factory.def_version"
+"""Pinned ``factory_definitions`` version of the factory (root only)."""
+LABEL_VERSION: Final = "omnigent.factory.version"
+"""``factory_versions`` id of the platform a member was spawned or relaunched on."""
+LABEL_BUNDLE: Final = "omnigent.factory.bundle"
+"""Bundle a member runs, ``<agent_id>/<sha12>``."""
+LABEL_MODE: Final = "omnigent.factory.mode"
+"""``normal``, or ``eval`` for a benchmark factory (root only)."""
+MODE_NORMAL: Final = "normal"
+MODE_EVAL: Final = "eval"
+MODES: Final = (MODE_NORMAL, MODE_EVAL)
 
 ROLE_LEAD: Final = "lead"
 ROLE_PROJECT_LEAD: Final = "project_lead"
@@ -69,8 +80,18 @@ ROLE_IC: Final = "ic"
 ROLE_ENV_KEEPER: Final = "env_keeper"
 ROLE_REVIEWER: Final = "reviewer"
 ROLE_DEMO: Final = "demo"
+ROLE_PLANNER: Final = "planner"
+"""Read-only sub-agent of a lead that decomposes work into project proposals."""
 ROLES: Final = frozenset(
-    {ROLE_LEAD, ROLE_PROJECT_LEAD, ROLE_IC, ROLE_ENV_KEEPER, ROLE_REVIEWER, ROLE_DEMO}
+    {
+        ROLE_LEAD,
+        ROLE_PROJECT_LEAD,
+        ROLE_IC,
+        ROLE_ENV_KEEPER,
+        ROLE_REVIEWER,
+        ROLE_DEMO,
+        ROLE_PLANNER,
+    }
 )
 TOP_LEVEL_ROLES: Final = frozenset({ROLE_LEAD, ROLE_PROJECT_LEAD})
 
@@ -129,6 +150,14 @@ ACTION_DISMISS: Final = "dismiss"
 ACTION_ABANDON_TASK: Final = "abandon_task"
 ACTION_REWORK: Final = "rework"
 ACTION_REDEPLOY_PREVIEW: Final = "redeploy_preview"
+ACTION_APPLY_PROPOSAL: Final = "apply_proposal"
+ACTION_KEEP_PROPOSAL: Final = "keep_proposal"
+ACTION_REVERT_PROPOSAL: Final = "revert_proposal"
+ACTION_RAISE_BUDGET: Final = "raise_budget"
+ACTION_SWITCH_VENDOR: Final = "switch_vendor"
+ACTION_FRESH_RESTART: Final = "fresh_restart"
+ACTION_MARK_DONE: Final = "mark_done"
+ACTION_GRANT_ROLE: Final = "grant_role"
 DECISION_ACTIONS: Final = frozenset(
     {
         ACTION_RESTART,
@@ -139,7 +168,28 @@ DECISION_ACTIONS: Final = frozenset(
         ACTION_ABANDON_TASK,
         ACTION_REWORK,
         ACTION_REDEPLOY_PREVIEW,
+        ACTION_APPLY_PROPOSAL,
+        ACTION_KEEP_PROPOSAL,
+        ACTION_REVERT_PROPOSAL,
+        ACTION_RAISE_BUDGET,
+        ACTION_SWITCH_VENDOR,
+        ACTION_FRESH_RESTART,
+        ACTION_MARK_DONE,
+        ACTION_GRANT_ROLE,
     }
+)
+
+# Who opened a decision; order matches the stored codes (db/enum_codecs.py).
+DECISION_SOURCES: Final = (
+    "agent",
+    "relaunch_failed",
+    "blocked_approval",
+    "pr_closed",
+    "storm",
+    "proposal",
+    "loop",
+    "access_request",
+    "done_check",
 )
 
 MIN_HEARTBEAT_S: Final = 120
@@ -314,6 +364,196 @@ def demo_status(given: object, manifest: Mapping[str, Any] | None) -> str | tupl
         return "invalid_status", f"status must be one of {statuses}"
     assert isinstance(given, str)
     return given
+
+
+# ── Round 3: people, Room, proposals, work graph, loops, issues, telemetry ──
+# Each tuple lists its names in stored-code order (db/enum_codecs.py).
+
+PROJECT_STATUSES: Final = ("active", "cancelled", "merged", "done")
+"""Project lifecycle; only ``active`` projects run."""
+
+PERSON_ROLES: Final = ("viewer", "operator", "owner")
+"""Roster roles, weakest first; the creator is an owner flagged ``is_creator``."""
+ACTOR_KINDS: Final = ("human", "agent", "server")
+CHAT_AUTHOR_KINDS: Final = ("human", "agent", "system")
+
+ENGINE_MODES: Final = ("observe", "assist", "enforce")
+"""Per-factory engine stages, least to most enforcing."""
+
+THREAD_FACTORY: Final = "factory"
+THREAD_IMPROVEMENTS: Final = "improvements"
+THREAD_PROJECT_PREFIX: Final = "project:"
+THREAD_PR_PREFIX: Final = "pr:"
+FIXED_THREADS: Final = (THREAD_FACTORY, THREAD_IMPROVEMENTS)
+THREAD_PREFIXES: Final = (THREAD_PROJECT_PREFIX, THREAD_PR_PREFIX)
+"""Room thread keys are a fixed thread, ``project:<slug>`` or ``pr:<pr row id>``."""
+THREAD_MAX_LEN: Final = 80
+CHAT_MESSAGE_MAX_CHARS: Final = 4000
+
+PROPOSAL_KINDS: Final = ("projects", "tuning", "rules", "code")
+PROPOSAL_STATUSES: Final = (
+    "pending",
+    "applied",
+    "trial",
+    "kept",
+    "reverted",
+    "rejected",
+    "expired",
+    "withdrawn",
+    "refused",
+    "undone",
+    "awaiting_cosign",
+)
+PROPOSAL_OPEN_STATUSES: Final = frozenset({"pending", "awaiting_cosign"})
+PROPOSAL_APPROVALS: Final = ("auto", "operator", "owner")
+PROPOSAL_CLASSES: Final = ("A", "B", "human")
+PROJECT_OPS: Final = ("create", "update", "split", "merge", "cancel")
+"""Ops of a ``projects`` proposal."""
+
+TASK_KINDS: Final = ("implement", "test", "docs", "spike", "ops", "adhoc")
+TASK_STATES: Final = (
+    "planned",
+    "ready",
+    "running",
+    "review",
+    "blocked",
+    "done",
+    "failed",
+    "cancelled",
+)
+TASK_CLOSED_STATES: Final = frozenset({"done", "failed", "cancelled"})
+TASK_KEY_RE: Final = re.compile(r"^[a-z0-9][a-z0-9-]{0,47}$")
+"""A task key is its branch suffix: ``factory/<slug>/<key>``."""
+PROJECT_SLUG_RE: Final = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
+"""A project slug, as the start form validates it."""
+
+LOOP_KINDS: Final = (
+    "implement",
+    "review",
+    "verify",
+    "demo",
+    "ci",
+    "claim",
+    "plan",
+    "intake",
+    "improve",
+)
+LOOP_STATES: Final = (
+    "running",
+    "converged",
+    "stalled",
+    "thrashing",
+    "exhausted",
+    "escalated",
+    "cancelled",
+    "superseded",
+)
+LOOP_ENDED_STATES: Final = frozenset({"converged", "cancelled", "superseded"})
+
+ISSUE_CLASSES: Final = ("incident", "finding", "retro")
+ISSUE_SOURCES: Final = ("detector", "sentinel", "human", "agent", "server")
+ISSUE_STATUSES: Final = ("open", "acked", "snoozed", "resolved", "wontfix")
+ISSUE_OPEN_STATUSES: Final = frozenset({"open", "acked", "snoozed"})
+ISSUE_SEVERITIES: Final = ("info", "notice", "warning", "critical")
+
+SPAN_KINDS: Final = (
+    "project",
+    "stage",
+    "pr",
+    "pr_round",
+    "gate",
+    "ready_wait",
+    "decision",
+    "task",
+    "loop",
+    "loop_iter",
+    "wait",
+    "env",
+    "preview",
+    "demo",
+    "incident",
+    "intervention",
+    "proposal",
+    "chat_turn",
+    "spawn",
+    "turn",
+    "tool",
+)
+SPAN_OUTCOMES: Final = (
+    "open",
+    "ok",
+    "fail",
+    "abandoned",
+    "superseded",
+    "timeout",
+    "cancelled",
+    "exhausted",
+)
+
+DEFINITION_SOURCES: Final = ("seed", "human", "proposal", "revert")
+"""How a factory definition version was created (``created_via``)."""
+
+FEEDBACK_TARGETS: Final = (
+    "pr",
+    "demo",
+    "decision",
+    "project",
+    "member",
+    "factory",
+    "issue",
+    "proposal",
+)
+FEEDBACK_KINDS: Final = (
+    "rating",
+    "useful",
+    "unneeded",
+    "closure",
+    "calibration",
+    "root_cause",
+)
+
+# Seeded taxonomies (Tier 0: never changed through the factory).
+CLOSURE_REASONS: Final = (
+    "wrong_scope",
+    "wrong_approach",
+    "quality",
+    "missing_tests",
+    "ux",
+    "superseded",
+    "not_needed",
+    "test_run",
+    "infra",
+)
+ROOT_CAUSES: Final = (
+    "charter_unclear",
+    "task_too_big",
+    "env_flaky",
+    "ci_flaky",
+    "tool_error",
+    "prompt_gap",
+    "reviewer_miss",
+    "waiting_on_human",
+    "coordination",
+    "platform_bug",
+)
+
+
+def thread_kind(key: object) -> str | None:
+    """
+    Classify a Room thread key.
+
+    :param key: e.g. ``"factory"``, ``"project:db-version"`` or ``"pr:<id>"``.
+    :returns: ``factory`` / ``improvements`` / ``project`` / ``pr``, or ``None``
+        when *key* is not a thread key.
+    """
+    if not isinstance(key, str) or not key or len(key) > THREAD_MAX_LEN:
+        return None
+    if key in FIXED_THREADS:
+        return key
+    for prefix in THREAD_PREFIXES:
+        if key.startswith(prefix) and len(key) > len(prefix):
+            return prefix[:-1]
+    return None
 
 
 LABEL_VALUE_MAX_LEN: Final = 256

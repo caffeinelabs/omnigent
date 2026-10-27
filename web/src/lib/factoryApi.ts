@@ -4,8 +4,9 @@
 // field for field and in its snake_case wire shape: the live-run fixture
 // (`components/factory/__fixtures__/snapshot.liveRun.json`) validates against
 // the pydantic models and is imported here unchanged, so change both sides
-// together. Times are epoch seconds except `EventView.ts` (milliseconds); a
-// `null` cost means unpriced, never zero.
+// together. Times are epoch seconds except `EventView.ts` and `SpanView`
+// times (milliseconds); a `null` cost means unpriced, never zero. Round-3
+// additions to existing views are optional: older servers omit them.
 
 import { authenticatedFetch } from "./identity";
 import { ApiError, sessionCreateHeaders } from "./sessionsApi";
@@ -29,7 +30,8 @@ export const FACTORY_STAGES: readonly FactoryStage[] = [
 
 export type AgentStage = "planning" | "building" | "review" | "verify" | "ready" | "merged";
 export type FactoryOverlay = "paused" | "blocked" | "failed" | "pr_closed";
-export type FactoryRole = "lead" | "project_lead" | "ic" | "env_keeper" | "reviewer" | "demo";
+export type FactoryRole =
+  "lead" | "project_lead" | "ic" | "env_keeper" | "reviewer" | "demo" | "planner";
 export type MemberState = "active" | "paused" | "done";
 export type FactoryCadence = "demo" | "normal";
 export type GateState = "pass" | "pending" | "fail" | "skip" | "unknown";
@@ -55,9 +57,182 @@ export type DemoFileKind =
 /** `charter.kind`: product work, the live env at the base head, or factory self-work. */
 export type ProjectKind = "work" | "integration" | "self";
 export type DecisionSource =
-  "agent" | "relaunch_failed" | "blocked_approval" | "pr_closed" | "storm";
+  | "agent"
+  | "relaunch_failed"
+  | "blocked_approval"
+  | "pr_closed"
+  | "storm"
+  | "proposal"
+  | "loop"
+  | "access_request"
+  | "done_check";
 export type DecisionStatus = "open" | "answered" | "withdrawn" | "expired";
 export type EventSeverity = "info" | "notice" | "warning" | "critical";
+
+// Round 3.
+export type PersonRole = "viewer" | "operator" | "owner";
+export type ViewerRole = PersonRole | "creator";
+export type ProjectStatus = "active" | "cancelled" | "merged" | "done";
+export type DependsMode = "merged" | "ready";
+export type EngineMode = "observe" | "assist" | "enforce";
+export type ActorKind = "human" | "agent" | "server";
+export type ChatAuthorKind = "human" | "agent" | "system";
+export type ChatCardType =
+  "decision" | "proposal" | "control" | "pr" | "demo" | "loop" | "issue" | "system";
+export type ThreadKind = "factory" | "improvements" | "project" | "pr";
+export type ProposalKind = "projects" | "tuning" | "rules" | "code";
+export type ProposalStatus =
+  | "pending"
+  | "applied"
+  | "trial"
+  | "kept"
+  | "reverted"
+  | "rejected"
+  | "expired"
+  | "withdrawn"
+  | "refused"
+  | "undone"
+  | "awaiting_cosign";
+export type ProposalApproval = "auto" | "operator" | "owner";
+export type ProposalClass = "A" | "B" | "human";
+export type TaskKind = "implement" | "test" | "docs" | "spike" | "ops" | "adhoc";
+export type TaskState =
+  "planned" | "ready" | "running" | "review" | "blocked" | "done" | "failed" | "cancelled";
+export type TaskHarness = "ic" | "ic_codex";
+export type LoopKind =
+  "implement" | "review" | "verify" | "demo" | "ci" | "claim" | "plan" | "intake" | "improve";
+export type LoopState =
+  | "running"
+  | "converged"
+  | "stalled"
+  | "thrashing"
+  | "exhausted"
+  | "escalated"
+  | "cancelled"
+  | "superseded";
+export type IssueClass = "incident" | "finding" | "retro";
+export type IssueSource = "detector" | "sentinel" | "human" | "agent" | "server";
+export type IssueStatus = "open" | "acked" | "snoozed" | "resolved" | "wontfix";
+export type SpanKind =
+  | "project"
+  | "stage"
+  | "pr"
+  | "pr_round"
+  | "gate"
+  | "ready_wait"
+  | "decision"
+  | "task"
+  | "loop"
+  | "loop_iter"
+  | "wait"
+  | "env"
+  | "preview"
+  | "demo"
+  | "incident"
+  | "intervention"
+  | "proposal"
+  | "chat_turn"
+  | "spawn"
+  | "turn"
+  | "tool";
+export type SpanOutcome =
+  "open" | "ok" | "fail" | "abandoned" | "superseded" | "timeout" | "cancelled" | "exhausted";
+export type DefinitionSource = "seed" | "human" | "proposal" | "revert";
+export type NowFlag = "repeat" | "quiet" | "disconnected";
+
+// ── Round-3 building blocks ────────────────────────────────────
+
+/** What one agent is doing right now, as the server observed it. */
+export interface NowState {
+  session_id: string;
+  /** `idle` / `running` / `waiting` / `failed`. */
+  status: string;
+  turn_n: number | null;
+  tool: string | null;
+  /** The tool's main argument, redacted, ≤ 80 chars. */
+  tool_arg: string | null;
+  tool_since: number | null;
+  last_event_at: number | null;
+  model: string | null;
+  cost_usd: number | null;
+  usd_per_h: number | null;
+  /** Only when the harness reports it. */
+  ctx_pct: number | null;
+  flags: NowFlag[];
+}
+
+/** A compact loop badge, e.g. `implement 3/3`. */
+export interface LoopChipView {
+  id: string;
+  kind: LoopKind;
+  state: LoopState;
+  iteration: number;
+  limit: number | null;
+}
+
+export interface TasksSummaryView {
+  total: number;
+  done: number;
+  ready: number;
+  running: number;
+  blocked: number;
+  failed: number;
+  critical_path_min: number | null;
+}
+
+export interface LoopsSummaryView {
+  running: number;
+  converged: number;
+  stalled: number;
+  thrashing: number;
+  exhausted: number;
+  escalated: number;
+}
+
+/** Which levers the viewer may pull; the cockpit disables the rest. */
+export interface ViewerCan {
+  post: boolean;
+  answer: boolean;
+  review: boolean;
+  control: boolean;
+  intervene: boolean;
+  apply_projects: boolean;
+  apply_tuning: boolean;
+  restart: boolean;
+  stop: boolean;
+  invite: boolean;
+  settings: boolean;
+  terminal: boolean;
+  start: boolean;
+}
+
+/** The requesting user's place in the factory (per viewer, never cached). */
+export interface ViewerBlock {
+  user_id: string | null;
+  role: ViewerRole;
+  /** Session permission level on the root (1 read … 4 owner). */
+  level: number;
+  is_creator: boolean;
+  can: ViewerCan;
+}
+
+/** One human currently in the factory. */
+export interface PresenceEntry {
+  user_id: string;
+  name: string | null;
+  /** `overview` / `room:<thread>` / `project:<slug>` / `pr:<id>` / `agent:<sid>` / … */
+  location: string | null;
+  idle: boolean;
+  since: number | null;
+  /** Member sessions the person has open. */
+  sessions: string[];
+}
+
+export interface CountsView {
+  issues_open: number;
+  proposals_pending: number;
+  on_trial: number;
+}
 
 // ── Members ────────────────────────────────────────────────────
 
@@ -103,6 +278,7 @@ export interface MemberView {
   cost_usd: number | null;
   launch_drift: LaunchDriftView | null;
   url: string;
+  now?: NowState | null;
 }
 
 // ── Factory header and health ──────────────────────────────────
@@ -425,6 +601,12 @@ export interface PrView {
   last_polled_at: number | null;
   poll_error: string | null;
   source: "tool" | "discovered" | null;
+  task_id?: string | null;
+  /** The bound task, e.g. `T-4`. */
+  task_ref?: string | null;
+  opened_at?: number | null;
+  first_ready_at?: number | null;
+  loops?: LoopChipView[] | null;
 }
 
 // ── Projects ───────────────────────────────────────────────────
@@ -477,6 +659,17 @@ export interface ProjectView {
   provisioning: { stage: string; label: string } | null;
   keep_previews: boolean;
   paused_by: string | null;
+  kind?: ProjectKind | null;
+  status?: ProjectStatus | null;
+  /** The project this one was split from or merged into. */
+  parent_slug?: string | null;
+  closed_at?: number | null;
+  depends_on?: string[] | null;
+  depends_mode?: DependsMode | null;
+  human_owner?: string | null;
+  tasks_summary?: TasksSummaryView | null;
+  loops_summary?: LoopsSummaryView | null;
+  def_version?: number | null;
 }
 
 // ── Decisions and events ───────────────────────────────────────
@@ -520,6 +713,14 @@ export interface DecisionView {
   delivered_to_title: string | null;
   created_at: number;
   updated_at: number;
+  /** `owners`, `operators` or a user id; absent or null means operators. */
+  assignee?: string | null;
+  claimed_by?: string | null;
+  claimed_at?: number | null;
+  /** Room thread of its card, e.g. `project:db-version`. */
+  thread?: string | null;
+  /** e.g. `task:T-4`, `pr:<id>`, `proposal:C-4`. */
+  subject?: string | null;
 }
 
 /** One activity row. `ts` is epoch milliseconds. */
@@ -546,6 +747,7 @@ export interface TotalsView {
   prs_ready: number;
   prs_merged: number;
   decisions_open: number;
+  usd_per_h?: number | null;
 }
 
 /** `GET /v1/factory/factories/{fid}`: everything one cockpit page renders. */
@@ -561,6 +763,302 @@ export interface FactorySnapshot {
   hidden_projects: number;
   totals: TotalsView;
   server_time: number;
+  viewer?: ViewerBlock | null;
+  people_count?: number | null;
+  presence?: PresenceEntry[] | null;
+  counts?: CountsView | null;
+  /** The factory definition version in force. */
+  def_version?: number | null;
+  engine_mode?: EngineMode | null;
+}
+
+// ── Round 3: people, Room, proposals, work graph, loops, issues ─
+
+/** One human on the factory roster. */
+export interface PersonView {
+  user_id: string;
+  name: string | null;
+  role: PersonRole;
+  is_creator: boolean;
+  invited_by: string | null;
+  invited_at: number;
+  last_seen_at: number | null;
+  present: boolean;
+  location: string | null;
+  idle: boolean;
+  notify: Record<string, unknown> | null;
+}
+
+/** A structured object mirrored into a thread as a live card. */
+export interface ChatCardView {
+  type: ChatCardType;
+  /** e.g. `D-7`, `C-4`, `!9630`, `INC-13`. */
+  ref: string | null;
+  id: string | null;
+}
+
+/** Delivery of one message to one agent. */
+export interface RoutedView {
+  session_id: string;
+  title: string | null;
+  mail_id: string | null;
+  delivered_at: number | null;
+  replied_at: number | null;
+}
+
+/** One Room message. `seq` is per factory, shared by every thread. */
+export interface ChatMessageView {
+  id: string;
+  factory_id: string;
+  thread: string;
+  seq: number;
+  author_kind: ChatAuthorKind;
+  /** User id, session id, or `server`. */
+  author: string;
+  author_title: string | null;
+  author_role: string | null;
+  body: string;
+  mentions: string[];
+  refs: string[];
+  reply_to: string | null;
+  card: ChatCardView | null;
+  routed: RoutedView[];
+  /** The server posted the agent's turn output for it. */
+  auto_reply: boolean;
+  created_at: number;
+}
+
+/** One Room thread: `factory`, `improvements`, `project:<slug>` or `pr:<id>`. */
+export interface ThreadView {
+  key: string;
+  kind: ThreadKind;
+  /** e.g. `#db-version` or `!9631`. */
+  title: string;
+  project_slug: string | null;
+  pr_id: string | null;
+  pr_number: number | null;
+  responder_session_id: string | null;
+  responder_title: string | null;
+  last_seq: number;
+  last_at: number | null;
+  messages: number;
+  unread: number;
+}
+
+export interface ExpectedEffectView {
+  metric: string;
+  direction: "up" | "down";
+  delta: number | null;
+}
+
+/** A proposed change, `C-<number>`: a project plan or a definition change. */
+export interface ProposalView {
+  id: string;
+  ref: string;
+  number: number;
+  factory_id: string;
+  kind: ProposalKind;
+  status: ProposalStatus;
+  approval: ProposalApproval;
+  /** Tier-1 approval class. */
+  class: ProposalClass | null;
+  title: string;
+  /** Project ops or definition patches `{op, path, value}`. */
+  ops: Record<string, unknown>[];
+  before: unknown;
+  after: unknown;
+  rationale: string;
+  /** The planner's analysis (cohesion, hub files, size estimates). */
+  analysis: unknown;
+  /** Ids the proposal cites, e.g. `F-9`, `D-2`. */
+  evidence: unknown[];
+  expected_effect: ExpectedEffectView | null;
+  warnings: string[];
+  author_kind: ActorKind;
+  author: string;
+  author_title: string | null;
+  author_role: string | null;
+  on_behalf_of: string | null;
+  cosigned_by: string | null;
+  thread: string | null;
+  reply_to_chat: string | null;
+  decision_id: string | null;
+  decision_ref: string | null;
+  based_on: Record<string, unknown> | null;
+  trial_until: number | null;
+  undo_until: number | null;
+  result: Record<string, unknown> | null;
+  def_version_from: number | null;
+  def_version_to: number | null;
+  decided_by: string | null;
+  decided_at: number | null;
+  applied_at: number | null;
+  reverted_at: number | null;
+  reverted_by: string | null;
+  created_at: number;
+  updated_at: number;
+}
+
+/** What a worker is told to do. */
+export interface TaskCardView {
+  text: string | null;
+  /** Commands the PL runs verbatim to accept the work. */
+  acceptance: string[];
+  env_checks: string[];
+  preview: boolean | null;
+  demo_focus: string | null;
+  harness: TaskHarness | null;
+}
+
+/** One node of the work graph, `T-<number>`. */
+export interface TaskView {
+  id: string;
+  ref: string;
+  number: number;
+  project_slug: string;
+  /** Branch suffix: `factory/<slug>/<key>`. */
+  key: string;
+  title: string;
+  kind: TaskKind;
+  state: TaskState;
+  card: TaskCardView;
+  /** Task keys, `project:<slug>` and `decision:D-n`. */
+  deps: string[];
+  scope: string[];
+  priority: number;
+  estimate_min: number | null;
+  vendor: string | null;
+  session_ids: string[];
+  pr_id: string | null;
+  pr_number: number | null;
+  attempts: number;
+  budget: { attempts: number | null; usd: number | null } | null;
+  cost_usd: number | null;
+  created_by: string;
+  created_via: ActorKind;
+  def_version: number | null;
+  started_at: number | null;
+  closed_at: number | null;
+  created_at: number;
+  updated_at: number;
+  /** Layer of the ready order (1 = startable now), when computed. */
+  wave: number | null;
+  critical: boolean;
+  waiting_on: string[];
+  loop: LoopChipView | null;
+}
+
+export interface LoopSpentView {
+  attempts: number;
+  usd: number | null;
+  wall_s: number | null;
+  per_head: Record<string, number>;
+  env_retries: number;
+}
+
+/** One loop: implement, review, verify, demo, ci, claim, plan, intake, improve. */
+export interface LoopView {
+  id: string;
+  kind: LoopKind;
+  /** e.g. `task:<id>` or `pr:<id>@<sha7>`. */
+  subject: string;
+  project_slug: string | null;
+  task_id: string | null;
+  task_ref: string | null;
+  pr_id: string | null;
+  pr_number: number | null;
+  state: LoopState;
+  iteration: number;
+  limit: number | null;
+  /** The resolved budgets the loop started with. */
+  spec: Record<string, unknown>;
+  spent: LoopSpentView;
+  last_verdict: string | null;
+  last_reason: string | null;
+  decision_id: string | null;
+  decision_ref: string | null;
+  def_version: number | null;
+  started_at: number;
+  updated_at: number;
+  ended_at: number | null;
+}
+
+/** An incident (`INC-n`), finding (`F-n`) or retro (no ref). */
+export interface IssueView {
+  id: string;
+  ref: string | null;
+  class: IssueClass;
+  number: number;
+  rule: string;
+  category: string | null;
+  severity: EventSeverity;
+  source: IssueSource;
+  project_slug: string | null;
+  /** e.g. `member:<id>`, `pr:<id>`, `project:<slug>`. */
+  target: string;
+  target_title: string | null;
+  summary: string;
+  body: string | null;
+  evidence: unknown;
+  status: IssueStatus;
+  assignee: string | null;
+  snoozed_until: number | null;
+  acked_by: string | null;
+  resolved_by: string | null;
+  count: number;
+  first_seen: number;
+  last_seen: number;
+  resolved_at: number | null;
+  proposal_id: string | null;
+  proposal_ref: string | null;
+  def_version: number | null;
+  /** Action ids the incident page offers. */
+  runbook: string[];
+}
+
+/** One span; `started_at` and `ended_at` are epoch milliseconds. */
+export interface SpanView {
+  id: string;
+  trace_key: string;
+  parent_id: string | null;
+  kind: SpanKind;
+  name: string;
+  project_slug: string | null;
+  pr_id: string | null;
+  task_id: string | null;
+  loop_id: string | null;
+  head_sha: string | null;
+  session_id: string | null;
+  role: string | null;
+  agent_name: string | null;
+  actor: string | null;
+  started_at: number;
+  ended_at: number | null;
+  outcome: SpanOutcome;
+  attempt: number | null;
+  cost_usd: number | null;
+  tokens_in: number | null;
+  tokens_out: number | null;
+  version_id: string | null;
+  def_version: number | null;
+  attrs: Record<string, unknown> | null;
+}
+
+/** One version of the factory's Tier-1 definition. */
+export interface DefinitionView {
+  factory_id: string;
+  version: number;
+  parent_version: number | null;
+  hash: string;
+  created_by: string;
+  created_via: DefinitionSource;
+  proposal_id: string | null;
+  proposal_ref: string | null;
+  created_at: number;
+  /** The version the factory runs. */
+  pinned: boolean;
+  /** Engine, cadence, loops, budgets, autonomy, alerts, models, rules, … */
+  doc: Record<string, unknown>;
 }
 
 /** One card on the factory index (`GET /v1/factory/factories`). */
