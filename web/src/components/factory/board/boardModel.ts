@@ -36,8 +36,15 @@ export function boardStage(stage: FactoryStage): BoardStage {
 /** Projects per board stage, every stage present. */
 export function stageCounts(projects: ProjectView[]): Record<BoardStage, number> {
   const counts = Object.fromEntries(BOARD_STAGES.map((s) => [s, 0])) as Record<BoardStage, number>;
-  for (const project of projects) counts[boardStage(project.stage)] += 1;
+  for (const project of projects) {
+    if (!isIntegrationProject(project)) counts[boardStage(project.stage)] += 1;
+  }
   return counts;
+}
+
+/** The live env at the base head (`base-env`): not pipeline work, so never in the stage strip. */
+export function isIntegrationProject(project: ProjectView): boolean {
+  return project.charter?.kind === "integration";
 }
 
 /**

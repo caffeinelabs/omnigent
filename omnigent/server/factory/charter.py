@@ -8,12 +8,24 @@ mangle it. ``normalize_charter`` gives the stored charter one shape.
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 from collections.abc import Mapping, Sequence
 from typing import Any, Final
 
 from omnigent.entities.factory import FactoryProject
-from omnigent.factory import CADENCE_DEMO, CADENCE_HEARTBEATS, ROLE_LEAD, ROLE_PROJECT_LEAD
+from omnigent.factory import (
+    CADENCE_DEMO,
+    CADENCE_HEARTBEATS,
+    PROJECT_KIND_INTEGRATION,
+    PROJECT_KIND_WORK,
+    PROJECT_KINDS,
+    ROLE_LEAD,
+    ROLE_PROJECT_LEAD,
+)
+
+_logger = logging.getLogger(__name__)
 
 PREVIEW_TOOLING_REF_ENV: Final = "OMNIGENT_FACTORY_PREVIEW_TOOLING_REF"
 # The branch that carried the preview tooling before it reached app main; it is deleted.
@@ -25,6 +37,52 @@ MAX_PREVIEW_SLOTS: Final = 3
 DEFAULT_BUDGET_ICS: Final = 3
 DEFAULT_BASE_BRANCH: Final = "main"
 FIXED_DOD: Final = "PR ready for human merge"
+DEFAULT_BASE_ENV: Final = "OMNIGENT_FACTORY_DEFAULT_BASE"
+"""``owner/repo#branch`` new factories default to, e.g. ``caffeinelabs/app#temp-main``."""
+
+REPO_RE: Final = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
+# A branch git accepts: no leading "-", "." or "/", no "..", "//" or "/.", no ".lock"
+# component and no trailing "/" or ".".
+BRANCH_RE: Final = re.compile(
+    r"^(?![-./])(?!.*\.\.)(?!.*//)(?!.*/\.)(?!.*\.lock(?:/|$))(?!.*[/.]$)[A-Za-z0-9._/-]{1,255}$"
+)
+
+
+def server_default_base() -> tuple[str | None, str | None]:
+    """
+    The server's default repo and base for new factories (``OMNIGENT_FACTORY_DEFAULT_BASE``).
+
+    :returns: e.g. ``("caffeinelabs/app", "temp-main")``; ``(None, None)`` when
+        unset or malformed; ``(repo, None)`` for a bare ``owner/repo``.
+    """
+    raw = os.environ.get(DEFAULT_BASE_ENV, "").strip()
+    if not raw:
+        return None, None
+    repo, _, branch = (part.strip() for part in raw.partition("#"))
+    if not REPO_RE.match(repo) or (branch and not BRANCH_RE.match(branch)):
+        _logger.warning("factory: ignoring malformed %s=%r", DEFAULT_BASE_ENV, raw)
+        return None, None
+    return repo, branch or None
+
+
+def resolve_base_branch(
+    value: str | None, repo: str | None, default_repo: str | None, default_base: str | None
+) -> str:
+    """
+    The base branch a project targets.
+
+    The project's own value wins, then the factory's default base (only for
+    the factory's default repo, when one is set), then ``main``.
+
+    :returns: e.g. ``"temp-main"``.
+    """
+    own = _text(value)
+    if own:
+        return own
+    same_repo = not default_repo or not repo or repo.lower() == default_repo.lower()
+    if default_base and same_repo:
+        return default_base
+    return DEFAULT_BASE_BRANCH
 
 
 def preview_tooling_ref() -> str | None:
@@ -73,9 +131,10 @@ def normalize_charter(
 
     :param raw: A charter as submitted (start form, PATCH, backfill), or ``None``.
     :param tooling_ref: Preview tooling ref to record when previews are on.
-    :returns: ``{goal, dod, scope_paths, constraints, env_needed, preview{enabled,
-        slots, tooling_ref?}, preview_slots, demo_focus, demo, budget_ics,
-        version_path?, health_path?}``.
+    :returns: ``{kind, goal, dod, scope_paths, constraints, env_needed,
+        preview{enabled, slots, tooling_ref?}, preview_slots, demo_focus, demo,
+        budget_ics, version_path?, health_path?}``; ``kind`` is ``work`` unless
+        it is one of :data:`~omnigent.factory.PROJECT_KINDS`.
     """
     src = dict(raw or {})
     preview_in = src.get("preview") if isinstance(src.get("preview"), Mapping) else {}
@@ -92,7 +151,9 @@ def normalize_charter(
     if enabled and ref:
         preview["tooling_ref"] = ref
     demo_focus = _text(src.get("demo_focus")) or _text(src.get("demo"))
+    kind = src.get("kind")
     out: dict[str, Any] = {
+        "kind": kind if kind in PROJECT_KINDS else PROJECT_KIND_WORK,
         "goal": _text(src.get("goal")) or "",
         "dod": _texts(src.get("dod")),
         "scope_paths": _texts(src.get("scope_paths")),
@@ -149,6 +210,34 @@ def _fixed_dod(charter: Mapping[str, Any]) -> str:
     return f"{FIXED_DOD}: {proof}"
 
 
+def project_kind(project: FactoryProject) -> str:
+    """:returns: The project's ``charter.kind``: ``work``, ``integration`` or ``self``."""
+    return normalize_charter(project.charter)["kind"]
+
+
+def _integration_charter(project: FactoryProject, charter: Mapping[str, Any]) -> str:
+    """The CHARTER of an integration project: a live env at the base head, nothing else."""
+    base = project_base_branch(project)
+    return "\n".join(
+        [
+            f"CHARTER · {project.slug}",
+            (
+                f"KIND: integration · keep a live env at the head of {_repo_ref(project)}; "
+                "no tasks, ICs or PRs"
+            ),
+            f"Title: {project.title} · priority P{project.priority}",
+            f"Goal: {charter['goal'] or f'Keep the env at the head of origin/{base}.'}",
+            f"Repo#branch: {_repo_ref(project)}",
+            f"Base branch: {base} (the env tracks origin/{base}; redeploy it when the base moves)",
+            "Env needed: yes · factory previews: off",
+            (
+                "Merge policy: human. You open no PRs and merge nothing; humans merge into "
+                f"{base} on GitHub."
+            ),
+        ]
+    )
+
+
 def render_pl_charter(project: FactoryProject) -> str:
     """
     Render the CHARTER block for a project's PL.
@@ -157,6 +246,8 @@ def render_pl_charter(project: FactoryProject) -> str:
     :returns: Plain text starting ``CHARTER · <slug>``.
     """
     charter = normalize_charter(project.charter)
+    if charter["kind"] == PROJECT_KIND_INTEGRATION:
+        return _integration_charter(project, charter)
     repo = project.repo or "the repo"
     lines = [
         f"CHARTER · {project.slug}",
@@ -197,7 +288,9 @@ def render_pl_charter(project: FactoryProject) -> str:
 
 def _project_line(index: int, project: FactoryProject) -> str:
     charter = normalize_charter(project.charter)
-    if not charter["env_needed"]:
+    if charter["kind"] == PROJECT_KIND_INTEGRATION:
+        env = "integration env (heartbeat 0)"
+    elif not charter["env_needed"]:
         env = "no env"
     elif charter["preview"]["enabled"]:
         env = f"env + previews ({charter['preview']['slots']})"
@@ -230,6 +323,7 @@ def render_kickoff_brief(
     """
     beats = CADENCE_HEARTBEATS.get(cadence, CADENCE_HEARTBEATS[CADENCE_DEMO])
     lead_s, pl_s = beats[ROLE_LEAD], beats[ROLE_PROJECT_LEAD]
+    integration = [p.slug for p in projects if project_kind(p) == PROJECT_KIND_INTEGRATION]
     lines = [
         f"FACTORY BRIEF · {name}",
         (
@@ -257,6 +351,12 @@ def render_kickoff_brief(
             'sys_factory_spawn(agent="factory-pl", role="project_lead", project="<slug>", '
             'title="PL · <slug>", workspaces=["https://github.com/<repo>#<branch>"], '
             f'heartbeat_s={pl_s}, message="Start. Your charter follows.").'
+            + (
+                f" Spawn {', '.join(integration)} the same way but with heartbeat_s=0: "
+                "it keeps the live env at its base head and wakes only on notices."
+                if integration
+                else ""
+            )
         ),
         (
             "3. Reply with at most 5 lines and the cockpit link. Questions for the human "
@@ -272,13 +372,19 @@ def render_kickoff_brief(
 
 
 __all__ = [
+    "BRANCH_RE",
     "DEFAULT_BASE_BRANCH",
+    "DEFAULT_BASE_ENV",
     "FIXED_DOD",
     "PREVIEW_TOOLING_REF_ENV",
+    "REPO_RE",
     "RETIRED_PREVIEW_TOOLING_REFS",
     "normalize_charter",
     "preview_tooling_ref",
     "project_base_branch",
+    "project_kind",
     "render_kickoff_brief",
     "render_pl_charter",
+    "resolve_base_branch",
+    "server_default_base",
 ]

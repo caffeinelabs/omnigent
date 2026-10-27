@@ -20,6 +20,7 @@ from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.factory import LABEL_NAME, factory_enabled
 from omnigent.server.auth import LEVEL_READ, RESERVED_USER_LOCAL
 from omnigent.server.factory import schemas
+from omnigent.server.factory.charter import server_default_base
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.envelope import display_title
 from omnigent.server.factory.membership import resolve_role
@@ -37,6 +38,7 @@ from omnigent.server.factory.snapshot import (
     snapshot_etag,
     summary_from,
 )
+from omnigent.server.factory.start import max_projects
 from omnigent.server.routes._auth_helpers import require_access, require_user
 
 _logger = logging.getLogger(__name__)
@@ -91,7 +93,7 @@ def _factory_name(root: Conversation) -> str:
 
 @router.get("/preflight")
 async def get_preflight(request: Request) -> dict[str, Any]:
-    """Can this user start a factory here: GitHub, agents, sandbox host, flag."""
+    """Can this user start a factory here (GitHub, agents, host, flag), and its defaults."""
     deps = factory_deps(request.app.state)
     user_id = require_user(request, deps.auth_provider)
     state = request.app.state
@@ -117,11 +119,15 @@ async def get_preflight(request: Request) -> dict[str, Any]:
             return False
 
     lead, pl = await asyncio.to_thread(lambda: (_agent("factory-lead"), _agent("factory-pl")))
+    default_repo, default_base = server_default_base()
     return schemas.Preflight(
         github=schemas.PreflightGithub(connected=connected, login=login),
         agents=schemas.PreflightAgents(factory_lead=lead, factory_pl=pl),
         sandbox_host=getattr(state, "sandbox_config", None) is not None,
         factory_enabled=factory_enabled(),
+        default_repo=default_repo,
+        default_base=default_base or ("main" if default_repo else None),
+        max_projects=max_projects(),
     ).model_dump(mode="json")
 
 

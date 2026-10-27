@@ -208,6 +208,21 @@ function Detail({
         </>
       );
     }
+    case "base": {
+      const b = evidence.base;
+      if (!b?.actual) return passed ? PASSED_NO_DETAILS : "GitHub has not reported the base yet";
+      return (
+        <>
+          targets <span className="font-mono">{b.actual}</span>
+          {b.expected && b.expected !== b.actual && (
+            <>
+              <Sep />
+              project base <span className="font-mono">{b.expected}</span>
+            </>
+          )}
+        </>
+      );
+    }
     case "mergeable":
       return `GitHub says ${(evidence.mergeable ?? "unknown").toLowerCase()}`;
     case "protected_paths":

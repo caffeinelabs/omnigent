@@ -6,6 +6,9 @@
  * Shared by the New factory form, Add project and Edit charter (`mode
  * "charter"` locks what a charter edit cannot change). Test ids are
  * `<prefix>-<field>-<index>`, e.g. `factory-new-slug-0`.
+ *
+ * Also the New factory form's factory-level "Default repo & base" row
+ * ({@link FactoryDefaultsFields}).
  */
 
 import { type ReactNode, useRef, useState } from "react";
@@ -18,6 +21,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { FieldError, FieldRow, NumberSlider, Segmented } from "./formParts";
 import {
+  type FactoryDefaultsDraft,
   FIXED_DOD,
   MAX_BUDGET,
   MAX_SLOTS,
@@ -159,6 +163,80 @@ function ListEditor({
         {addLabel}
       </Button>
     </div>
+  );
+}
+
+/**
+ * The factory's default repo and base (new projects start on it) and the
+ * "Keep a live env at <base>" switch: a `base-env` project whose PL keeps
+ * Tilt at the head of the base and redeploys when it moves.
+ */
+export function FactoryDefaultsFields({
+  defaults,
+  onChange,
+  onLiveEnv,
+  error,
+}: {
+  defaults: FactoryDefaultsDraft;
+  /** A new repo (and its default branch, when listed) or a new base. */
+  onChange: (repo: string, branch: string) => void;
+  onLiveEnv: (on: boolean) => void;
+  error?: string;
+}) {
+  const base = defaults.branch.trim() || "main";
+  const repo = defaults.repo.trim();
+  return (
+    <>
+      <FieldRow
+        label="Default repo & base"
+        htmlFor="factory-new-default-repo"
+        error={error}
+        errorTestId="factory-new-error-defaults"
+        hint="New projects start on it; a project may pick another branch. Factory PRs target the base."
+      >
+        <div className="grid min-w-0 gap-2 @md:grid-cols-[minmax(0,1fr)_minmax(8rem,12rem)]">
+          <RepoCombobox
+            id="factory-new-default-repo"
+            value={defaults.repo}
+            testId="factory-new-default-repo"
+            invalid={Boolean(error)}
+            onSelect={(next, branch) => onChange(next, branch ?? (defaults.branch || "main"))}
+          />
+          <BranchCombobox
+            repo={defaults.repo}
+            value={defaults.branch}
+            testId="factory-new-default-branch"
+            onChange={(branch) => onChange(defaults.repo, branch)}
+          />
+        </div>
+      </FieldRow>
+      <FieldRow
+        label="Live env"
+        labelAlign="text"
+        hint={
+          repo
+            ? `A base-env project keeps Tilt at the head of ${repo}#${base} for humans to try and redeploys it when the base moves (one more sandbox, no heartbeats).`
+            : "Pick a default repo to keep a live env at its base."
+        }
+      >
+        <label
+          className={cn(
+            "inline-flex items-center gap-2 pt-0.5 text-sm",
+            !repo && "text-muted-foreground",
+          )}
+        >
+          <Switch
+            checked={defaults.liveEnv && Boolean(repo)}
+            disabled={!repo}
+            data-testid="factory-new-live-env"
+            aria-label={`Keep a live env at ${base}`}
+            onCheckedChange={onLiveEnv}
+            className={SWITCH_TRACK}
+          />
+          Keep a live env at <span className="font-mono">{base}</span>
+        </label>
+      </FieldRow>
+    </>
   );
 }
 

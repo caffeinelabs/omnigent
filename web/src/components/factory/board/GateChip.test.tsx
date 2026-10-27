@@ -1,7 +1,7 @@
 import { fireEvent, screen, within } from "@testing-library/react";
 import { describe, expect, it } from "vitest";
 import type { PrView } from "@/lib/factoryApi";
-import { LIVE_RUN_NOW_S } from "../__fixtures__/liveRun";
+import { LIVE_RUN_NOW_S, liveRunSnapshot } from "../__fixtures__/liveRun";
 import { GATE_STATES, gateScenario, prByNumber, storySnapshot } from "./__fixtures__/boardFixtures";
 import { renderBoard } from "./__fixtures__/renderBoard";
 import { GATE_ORDER, GateChip, type GateKey, gateState, shownGates } from "./GateChip";
@@ -26,8 +26,9 @@ describe("GateChip", () => {
     const pr = gateScenario(state);
     renderBoard(<Row pr={pr} />);
     const gates = shownGates(pr);
-    for (const gate of gates.filter((g) => state !== "pending" || g !== "mergeable")) {
-      if (state === "pending" && gate === "protected_paths") continue;
+    // The pending scenario is #9631 as recorded: it targets its base and has no conflicts.
+    const settled = new Set<GateKey>(["base", "mergeable", "protected_paths"]);
+    for (const gate of gates.filter((g) => state !== "pending" || !settled.has(g))) {
       expect(screen.getByTestId(`gate-${gate}-${pr.number}`)).toHaveAttribute("data-state", state);
     }
   });
@@ -41,6 +42,27 @@ describe("GateChip", () => {
     renderBoard(<Row pr={api} />);
     expect(screen.getByTestId("gate-checks-9630")).toHaveTextContent("CI 14/14");
     expect(screen.getByTestId("gate-checks-9630")).toHaveAccessibleName("CI passed");
+  });
+
+  it("hides the Base chip for a server that sends no base gate", () => {
+    const old = liveRunSnapshot().prs.find((p) => p.number === 9630)!;
+    expect(shownGates(old)).not.toContain("base");
+    expect(shownGates(old)).toContain("checks");
+  });
+
+  it("shows which branch a PR targets and the project's base", async () => {
+    const ok = prByNumber(storySnapshot(), 9630);
+    const { unmount } = renderBoard(<Row pr={ok} />);
+    expect(screen.getByTestId("gate-base-9630")).toHaveAccessibleName("Base passed");
+    expect(await evidence(ok, "base")).toHaveTextContent("Targets main (the project’s base).");
+    unmount();
+
+    const wrong = gateScenario("fail");
+    renderBoard(<Row pr={wrong} />);
+    expect(screen.getByTestId("gate-base-9631")).toHaveAttribute("data-state", "fail");
+    const card = await evidence(wrong, "base");
+    expect(card).toHaveTextContent("Targets main; the project’s base is temp-main.");
+    expect(card).toHaveTextContent("gh pr edit https://github.com/caffeinelabs/app/pull/9631");
   });
 
   it("reads unknown while GitHub can't be polled, but keeps a skip", () => {

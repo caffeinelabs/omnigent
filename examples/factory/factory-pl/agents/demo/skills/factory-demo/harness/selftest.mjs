@@ -1,7 +1,7 @@
 // `node run.mjs --selftest`: record demos of a local fixture preview and check the outputs.
 // Covers a PARTIAL run (exit 0), a FAIL run (exit 1) and a stale preview (exit 3).
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:http';
@@ -200,6 +200,11 @@ export async function selftest({ harnessDir, keep = false }) {
       check(results, 'PARTIAL status', manifest.status === 'PARTIAL', manifest.status);
       check(results, '5 steps (4 run, 1 skipped)', manifest.steps.length === 5, JSON.stringify(manifest.steps));
       check(results, 'video recorded', existsSync(join(pass, 'video', 'demo.webm')));
+      if (spawnSync('ffmpeg', ['-version'], { stdio: 'ignore' }).status === 0) {
+        const gif = join(pass, 'video', 'demo.gif');
+        const magic = existsSync(gif) ? readFileSync(gif).subarray(0, 6).toString('latin1') : '';
+        check(results, 'demo.gif for the PR comment', manifest.artifacts.gif === 'video/demo.gif' && magic === 'GIF89a');
+      }
       const shots = existsSync(join(pass, 'shots')) ? readdirSync(join(pass, 'shots')) : [];
       check(results, 'two UI screenshots', shots.length === 2, shots.join(', '));
       check(

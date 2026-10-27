@@ -39,7 +39,7 @@ import {
   scrubTraceZip,
   sha7,
 } from './lib.mjs';
-import { HARNESS, PLAYWRIGHT_CLI, browserEnv, ensureDeps, runLogged } from './setup.mjs';
+import { HARNESS, PLAYWRIGHT_CLI, browserEnv, ensureDeps, makeGif, runLogged } from './setup.mjs';
 const USAGE =
   'usage: node run.mjs --spec <demo.spec.ts> --out <dir> --app <url> --api <url> --pr <pr url> ' +
   '--sha <40-char sha> [--synthetic-secret-file <path>] [--summary <text>] [--plan-source pr-body|derived] ' +
@@ -286,6 +286,10 @@ function collect(args, steps, status, secrets, log) {
   artifacts.log = 'run.log';
   const shot = steps.find((s) => s.kind === 'ui' && s.status === 'pass' && s.screenshot)?.screenshot;
   const ffmpeg = artifacts.video && hasFfmpeg();
+  // The GitHub mirror embeds demo.gif in the PR comment; the cockpit plays the video.
+  if (ffmpeg && makeGif(join(out, artifacts.video), join(out, 'video', 'demo.gif'), log)) {
+    artifacts.gif = 'video/demo.gif';
+  }
   if (shot) {
     artifacts.poster = shot;
   } else if (ffmpeg) {

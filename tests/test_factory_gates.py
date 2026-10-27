@@ -19,6 +19,7 @@ import tests.test_factory_merge as M
 from omnigent import factory_merge
 from omnigent.factory_gates import (
     DEMO_GATE,
+    READY_GATES,
     REVIEW_MARKER,
     VERIFY_MARKER,
     evaluate_snapshot,
@@ -334,25 +335,46 @@ def test_a_conflict_names_the_prs_own_base(base: str | None, expected: str) -> N
     )
 
 
-def test_a_pr_against_another_branch_than_the_project_base_is_not_ready() -> None:
-    """A temp-main project's PR opened against main fails ``mergeable`` with the retarget fix."""
-    wrong = evaluate_snapshot(
-        _snap(baseRefName="main", number=9630), _GREEN, set(), expected_base="temp-main"
-    )
-    assert wrong.ready is False
-    assert wrong.gates["mergeable"] == "fail"
-    assert wrong.gate_reasons["mergeable"] == (
-        "base=main, but the project's base branch is temp-main "
-        "(retarget: gh pr edit 9630 --base temp-main)"
-    )
-    right = evaluate_snapshot(
+def test_the_base_gate_passes_on_the_project_base() -> None:
+    """A temp-main project's PR against temp-main passes ``base``, with the evidence."""
+    report = evaluate_snapshot(
         _snap(baseRefName="temp-main"), _GREEN, set(), expected_base="temp-main"
     )
-    assert right.ready is True
-    # An unknown base (or no project) skips the check.
-    unknown = _snap(baseRefName=None)
-    assert evaluate_snapshot(unknown, _GREEN, set(), expected_base="temp-main").ready is True
-    assert evaluate_snapshot(_snap(baseRefName="main"), _GREEN, set()).ready is True
+    assert report.gates["base"] == "pass"
+    assert report.ready is True
+    assert report.evidence["base"] == {"actual": "temp-main", "expected": "temp-main"}
+    # Without a project any base passes, so the merge gate reads it green too.
+    assert evaluate_snapshot(_snap(baseRefName="main"), _GREEN, set()).gates["base"] == "pass"
+
+
+def test_the_base_gate_fails_on_another_branch_with_the_retarget_fix() -> None:
+    """A temp-main project's PR opened against main fails ``base`` (and only it)."""
+    wrong = evaluate_snapshot(_snap(baseRefName="main"), _GREEN, set(), expected_base="temp-main")
+    assert wrong.ready is False
+    assert wrong.gates["base"] == "fail"
+    assert all(s == "pass" for g, s in wrong.gates.items() if g != "base"), wrong.gates
+    assert wrong.gate_reasons["base"] == (
+        f"PR targets main; project base is temp-main (retarget: gh pr edit {M._URL} "
+        "--base temp-main)"
+    )
+    assert wrong.evidence["base"] == {"actual": "main", "expected": "temp-main"}
+    assert GatesView.model_validate(wrong.to_json()).evidence.base is not None
+
+
+def test_the_base_gate_waits_while_the_base_is_unknown() -> None:
+    """GitHub not reporting the PR's base yet keeps ``base`` pending, never ready."""
+    unknown = evaluate_snapshot(_snap(baseRefName=None), _GREEN, set(), expected_base="temp-main")
+    assert unknown.gates["base"] == "pending"
+    assert unknown.ready is False
+    assert unknown.gate_reasons["base"] == (
+        "the PR's base branch is not known yet; it must target temp-main"
+    )
+    assert unknown.evidence["base"] == {"actual": None, "expected": "temp-main"}
+
+
+def test_the_base_gate_is_a_ready_gate() -> None:
+    assert READY_GATES.index("base") == 1
+    assert GatesView().base == "unknown"
 
 
 def test_report_json_is_the_cockpit_gates_view() -> None:

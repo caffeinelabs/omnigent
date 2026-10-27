@@ -26,6 +26,7 @@ export type GateKey = ReadyGate | "demo";
 /** Chip order on a PR row; `demo` only shows when the project records demos. */
 export const GATE_ORDER: readonly GateKey[] = [
   "draft",
+  "base",
   "checks",
   "review",
   "verify",
@@ -76,9 +77,14 @@ export function gateState(pr: PrView, gate: GateKey): GateState | null {
   return pr.poll_error && state !== "skip" ? "unknown" : state;
 }
 
-/** Gates a PR row shows, in order (the demo gate only when it applies). */
+/**
+ * Gates a PR row shows, in order: the demo gate only when it applies, and a
+ * gate an older server does not send (`base`) not at all.
+ */
 export function shownGates(pr: PrView): GateKey[] {
-  return GATE_ORDER.filter((gate) => gate !== "demo" || pr.gates.demo != null);
+  return GATE_ORDER.filter((gate) =>
+    gate === "demo" ? pr.gates.demo != null : pr.gates[gate] !== undefined,
+  );
 }
 
 function chipText(pr: PrView, gate: GateKey): string {
@@ -91,6 +97,7 @@ function chipText(pr: PrView, gate: GateKey): string {
 
 const REASON_MATCH: Record<GateKey, RegExp> = {
   draft: /draft/i,
+  base: /\bbase\b|targets/i,
   checks: /check|ci\b/i,
   review: /review/i,
   verify: /verify/i,
@@ -220,6 +227,23 @@ function GateEvidence({ pr, gate, nowS }: { pr: PrView; gate: GateKey; nowS: num
           </Row>
           {d.url && <EvidenceLink href={d.url}>Watch the demo</EvidenceLink>}
         </>
+      );
+    }
+    case "base": {
+      const b = evidence.base;
+      if (!b?.actual) return <Row>GitHub has not reported the PR’s base yet.</Row>;
+      return (
+        <Row>
+          Targets <span className="font-mono">{b.actual}</span>
+          {b.expected && b.expected !== b.actual ? (
+            <>
+              ; the project’s base is <span className="font-mono">{b.expected}</span>
+            </>
+          ) : (
+            b.expected && " (the project’s base)"
+          )}
+          .
+        </Row>
       );
     }
     case "mergeable":

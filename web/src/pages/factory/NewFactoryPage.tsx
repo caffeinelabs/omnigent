@@ -1,8 +1,10 @@
 /**
  * New factory (`/factory/new`): a structured start form instead of a chat
- * prompt. Name, cadence and one section per project (goal, definition of
- * done, repo, env, "Preview & demo" and its demo focus), a live summary of
- * what will start, inline validation and a draft kept in this browser.
+ * prompt. Name, cadence, the factory's default repo & base (prefilled from
+ * the server's preflight) with its "Keep a live env" switch, and one section
+ * per project (goal, definition of done, repo, env, "Preview & demo" and its
+ * demo focus), a live summary of what will start, inline validation and a
+ * draft kept in this browser.
  *
  * Submitting runs the two-call start: create Atlas, then store the charters;
  * a failed second call is retried against the same Atlas.
@@ -24,20 +26,20 @@ import { PageScroll } from "@/components/PageScroll";
 import { FactoryPreflight, preflightPasses } from "@/components/factory/FactoryPreflight";
 import { ageText } from "@/components/factory/board/boardModel";
 import { FieldRow, Segmented, suppressImplicitSubmit } from "@/components/factory/start/formParts";
-import { ProjectFields } from "@/components/factory/start/ProjectFields";
+import { FactoryDefaultsFields, ProjectFields } from "@/components/factory/start/ProjectFields";
 import {
   type FactoryDraft,
   type FormErrors,
-  MAX_PROJECTS,
   type ProjectDraft,
   type ProjectErrors,
   type StoredDraft,
   cadenceBeatsText,
   clearDraft,
+  defaultProject,
+  defaultsFromPreflight,
   draftHasContent,
   duplicateProject,
   emptyFactoryDraft,
-  emptyProject,
   exampleProjects,
   fieldShown,
   hasErrors,
@@ -45,8 +47,11 @@ import {
   mapServerField,
   saveDraft,
   sentence,
+  toDefaultsInput,
   toProjectInput,
   validateFactory,
+  withDefaults,
+  workProjectCap,
 } from "@/components/factory/start/projectForm";
 import { StartSummaryCard } from "@/components/factory/start/StartSummary";
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert";
@@ -73,6 +78,7 @@ const PHASE_TEXT: Record<StartFactoryStep, string> = {
 
 interface ServerErrors {
   name?: string;
+  defaults?: string;
   byProject: ProjectErrors[];
 }
 
@@ -122,13 +128,29 @@ export function NewFactoryPage() {
   const submittingRef = useRef(false);
   const formRef = useRef<HTMLFormElement>(null);
 
-  const errors: FormErrors = useMemo(() => validateFactory(draft), [draft]);
+  const maxProjects = preflight.data?.max_projects ?? null;
+  const errors: FormErrors = useMemo(
+    () => validateFactory(draft, maxProjects),
+    [draft, maxProjects],
+  );
+  const projectCap = maxProjects != null ? workProjectCap(maxProjects, draft.defaults) : null;
+  const canAddProject = projectCap == null || draft.projects.length < projectCap;
   const blocked = preflight.data !== undefined && !preflightPasses(preflight.data);
   const busy = phase !== "idle";
   const phaseText = phase === "idle" ? null : PHASE_TEXT[phase];
   // A failed start's Atlas is reused only while it sits on the first project's repo and branch.
   const reusableRoot = root && root.workspace === workspaceOf(draft.projects[0]) ? root.id : null;
   const retrying = failure?.rootSessionId != null && failure.rootSessionId === reusableRoot;
+
+  // Prefill the default repo & base from the server once, while the form is untouched.
+  const prefilled = useRef(false);
+  useEffect(() => {
+    if (prefilled.current || !preflight.data) return;
+    prefilled.current = true;
+    const suggested = defaultsFromPreflight(preflight.data);
+    if (dirty || !suggested.repo) return;
+    setDraft((current) => withDefaults(current, suggested.repo, suggested.branch));
+  }, [preflight.data, dirty]);
 
   // Keep the draft in this browser while the user edits (never the untouched form), but
   // not while the saved one waits for Restore or Discard: it would overwrite it.
@@ -163,7 +185,12 @@ export function NewFactoryPage() {
     setStored(null);
   };
   const loadExample = () => {
-    update({ name: "Atlas factory", cadence: "demo", projects: exampleProjects() });
+    update({
+      name: "Atlas factory",
+      cadence: "demo",
+      defaults: draft.defaults,
+      projects: exampleProjects(draft.defaults),
+    });
     setServerErrors(NO_SERVER_ERRORS);
   };
 
@@ -183,6 +210,11 @@ export function NewFactoryPage() {
       const target = mapServerField(cause.field);
       if (target && "name" in target) {
         setServerErrors({ name: sentence(cause.message), byProject: [] });
+        focusFirstError();
+        return;
+      }
+      if (target && "defaults" in target) {
+        setServerErrors({ defaults: sentence(cause.message), byProject: [] });
         focusFirstError();
         return;
       }
@@ -214,6 +246,7 @@ export function NewFactoryPage() {
         {
           name: draft.name.trim(),
           cadence: draft.cadence,
+          defaults: toDefaultsInput(draft.defaults),
           projects: draft.projects.map(toProjectInput),
         },
         { rootSessionId: reusableRoot, onStep: setPhase },
@@ -232,6 +265,7 @@ export function NewFactoryPage() {
   };
 
   const nameError = serverErrors.name ?? (attempted ? errors.name : undefined);
+  const defaultsError = serverErrors.defaults ?? errors.defaults;
   const projectCount = draft.projects.length;
 
   return (
@@ -349,13 +383,30 @@ export function NewFactoryPage() {
                   ]}
                 />
               </FieldRow>
+              <FactoryDefaultsFields
+                defaults={draft.defaults}
+                error={defaultsError}
+                onChange={(repo, branch) => {
+                  update(withDefaults(draft, repo, branch));
+                  setServerErrors((prev) => ({ ...prev, defaults: undefined }));
+                }}
+                onLiveEnv={(liveEnv) =>
+                  update({
+                    ...draft,
+                    defaults: { ...draft.defaults, liveEnv, liveEnvTouched: true },
+                  })
+                }
+              />
             </section>
 
             <div className="flex min-w-0 items-center justify-between gap-2">
               <h2 className="text-ui font-semibold">
                 Projects{" "}
-                <span className="font-normal text-muted-foreground tabular-nums">
-                  {projectCount}/{MAX_PROJECTS}
+                <span
+                  data-testid="factory-new-project-count"
+                  className="font-normal text-muted-foreground tabular-nums"
+                >
+                  {projectCap != null ? `${projectCount}/${projectCap}` : projectCount}
                 </span>
               </h2>
               <Button
@@ -389,7 +440,7 @@ export function NewFactoryPage() {
                 showAllErrors={attempted}
                 onChange={(next) => updateProject(index, next)}
                 onDuplicate={
-                  projectCount < MAX_PROJECTS
+                  canAddProject
                     ? () => {
                         const copy = duplicateProject(
                           project,
@@ -412,8 +463,10 @@ export function NewFactoryPage() {
             <Button
               type="button"
               variant="outline"
-              onClick={() => update({ ...draft, projects: [...draft.projects, emptyProject()] })}
-              disabled={projectCount >= MAX_PROJECTS}
+              onClick={() =>
+                update({ ...draft, projects: [...draft.projects, defaultProject(draft.defaults)] })
+              }
+              disabled={!canAddProject}
               data-testid="factory-new-add-project"
               componentId="factory.new.add_project"
               className="self-start"

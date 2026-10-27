@@ -244,7 +244,7 @@ async def test_pr_lifecycle_events_and_notices_fire_once(polling: Polling) -> No
     assert p.stage() == "ready"
     head7 = gh_pr.head_sha[:7]
     ready_header = (
-        f"[Factory notice · PR {REPO}#9630 READY FOR HUMAN MERGE · 6/6 gates · head {head7}]"
+        f"[Factory notice · PR {REPO}#9630 READY FOR HUMAN MERGE · 7/7 gates · head {head7}]"
     )
     assert [t.split("]")[0] + "]" for t in p.notices(p.pl)] == [ready_header]
     assert len(p.notices(lead, "READY FOR HUMAN MERGE")) == 1
@@ -302,10 +302,10 @@ async def test_pr_lifecycle_events_and_notices_fire_once(polling: Polling) -> No
     assert len(transitions) == len(set(transitions))
 
     # Past the 10-minute terminal window the merged PR is no longer polled.
-    calls = len(p.gh.graphql_calls)
+    calls = len(p.gh.pr_queries)
     await p.poll(advance=601)
     await p.poll()
-    assert len(p.gh.graphql_calls) == calls
+    assert len(p.gh.pr_queries) == calls
 
 
 async def test_failed_checks_notify_the_pl_once(polling: Polling) -> None:
@@ -404,7 +404,7 @@ async def test_demo_gate_when_previews_are_on(polling: Polling) -> None:
     )
     await p.poll()
     assert p.pr().gates["demo"] == "pass" and p.pr().ready is True
-    assert "7/7 gates" in p.notices(p.pl, "READY")[0]
+    assert "8/8 gates" in p.notices(p.pl, "READY")[0]
 
 
 async def test_untracked_pr_records_a_poll_error(polling: Polling) -> None:
@@ -473,11 +473,11 @@ async def test_low_rate_limit_slows_polling_and_warns_once(polling: Polling) -> 
     warnings = p.events("factory.warning")
     assert len(warnings) == 1 and "GitHub API budget low (300 left)" in warnings[0].summary
 
-    calls = len(p.gh.graphql_calls)
+    calls = len(p.gh.pr_queries)
     await p.poll()
-    assert len(p.gh.graphql_calls) == calls  # not due at the slower cadence
+    assert len(p.gh.pr_queries) == calls  # not due at the slower cadence
     await p.poll(advance=POLL_S * 5)
-    assert len(p.gh.graphql_calls) == calls + 1
+    assert len(p.gh.pr_queries) == calls + 1
     assert len(p.events("factory.warning")) == 1
 
     p.gh.remaining = 4000
@@ -490,13 +490,13 @@ async def test_refresh_now_polls_a_pr_that_is_not_due(polling: Polling) -> None:
     p.new_pr()
     await p.poll()
     row = p.pr()
-    calls = len(p.gh.graphql_calls)
+    calls = len(p.gh.pr_queries)
     assert await refresh_now(p.world.app_state, row.id) is True
     assert p.store.get_pr(row.id).last_polled_at is None
     keys = await nudge.wait("prs", 0)
     assert keys == {row.id}
     await p.poll(advance=1, forced=keys)
-    assert len(p.gh.graphql_calls) == calls + 1
+    assert len(p.gh.pr_queries) == calls + 1
     assert await refresh_now(p.world.app_state, "not-a-pr") is False
 
 
@@ -542,14 +542,14 @@ async def test_service_polls_on_start_and_on_nudge(polling: Polling) -> None:
         if p.pr() is not None and p.pr().last_polled_at is not None:
             break
         await asyncio.sleep(0.01)
-    calls = len(p.gh.graphql_calls)
+    calls = len(p.gh.pr_queries)
     assert calls == 1
     await refresh_now(p.world.app_state, p.pr().id)
     for _ in range(100):
-        if len(p.gh.graphql_calls) > calls:
+        if len(p.gh.pr_queries) > calls:
             break
         await asyncio.sleep(0.01)
-    assert len(p.gh.graphql_calls) == calls + 1
+    assert len(p.gh.pr_queries) == calls + 1
     await p.poller.stop()
 
 
@@ -608,21 +608,47 @@ async def test_required_contexts_come_from_cached_branch_rules(polling: Polling)
 async def test_a_pr_against_another_branch_than_the_project_base_is_held(
     polling: Polling,
 ) -> None:
-    """A temp-main project's PR opened against main never reads ready; retargeting fixes it."""
+    """A temp-main project's PR opened against main fails ``base``; the PL is told once."""
     p = polling
     p.store.upsert_project(p.fid, "api-version", base_branch="temp-main")
     gh_pr = p.new_pr(checks=[FakeCheck("ci / test")])
     p.approve(gh_pr)
     await p.poll()
     row = p.pr()
-    assert row.ready is False and row.gates["mergeable"] == "fail"
+    assert row.ready is False and row.gates["base"] == "fail"
+    assert row.gates["mergeable"] == "pass"
     assert row.gates["reasons"] == [
-        "base=main, but the project's base branch is temp-main "
-        "(retarget: gh pr edit 9630 --base temp-main)"
+        f"PR targets main; project base is temp-main (retarget: gh pr edit {gh_pr.url} "
+        "--base temp-main)"
     ]
+    assert row.gates["evidence"]["base"] == {"actual": "main", "expected": "temp-main"}
+    notice = (
+        f"[Factory notice · PR #9630 targets main, project base is temp-main · "
+        f"gh pr edit {gh_pr.url} --base temp-main]"
+    )
+    assert [t.split("]")[0] + "]" for t in p.notices(p.pl)] == [notice]
+
+    # Still wrong on the next poll: no second notice.
+    await p.poll()
+    assert len(p.notices(p.pl, "project base is temp-main")) == 1
+
     gh_pr.base_ref = "temp-main"
     await p.poll()
-    assert p.pr().gates["mergeable"] == "pass" and p.pr().ready is True
+    assert p.pr().gates["base"] == "pass" and p.pr().ready is True
+    assert len(p.notices(p.pl, "project base is temp-main")) == 1
+    changed = [(e.data["gate"], e.data["to"]) for e in p.events("gate.changed")]
+    assert ("base", "pass") in changed
+
+
+async def test_a_pr_of_a_project_without_a_base_reads_main(polling: Polling) -> None:
+    """A project row without a base (older rows) expects main."""
+    p = polling
+    p.store.upsert_project(p.fid, "api-version", base_branch=None)
+    gh_pr = p.new_pr(checks=[FakeCheck("ci / test")], base_ref="temp-main")
+    p.approve(gh_pr)
+    await p.poll()
+    assert p.pr().gates["base"] == "fail"
+    assert p.notices(p.pl, "targets temp-main, project base is main")
 
 
 def test_rollup_keeps_the_newest_run_per_check() -> None:
@@ -670,9 +696,9 @@ async def test_a_long_merged_pr_is_recorded_without_notices(polling: Polling) ->
     assert p.events("pr.merged") == []
     assert len(p.events("pr.discovered")) == 1
 
-    calls = len(p.gh.graphql_calls)
+    calls = len(p.gh.pr_queries)
     await p.poll()
-    assert len(p.gh.graphql_calls) == calls
+    assert len(p.gh.pr_queries) == calls
 
 
 async def test_an_unexpected_error_degrades_the_status_and_spares_other_owners(

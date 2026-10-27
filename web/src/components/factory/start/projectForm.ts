@@ -1,18 +1,22 @@
-// The start form's model: one draft per project section, its validation
-// (limits mirror `omnigent/server/factory/start.py`), the request it becomes,
-// the "Load example" projects (spec §12) and the localStorage draft.
+// The start form's model: the factory's default repo and base, one draft per
+// project section, its validation (limits mirror
+// `omnigent/server/factory/start.py`; the project cap comes from preflight),
+// the request it becomes, the "Load example" projects (spec §12) and the
+// localStorage draft.
 
-import type {
-  CharterPatchRequest,
-  CharterView,
-  FactoryCadence,
-  FactoryProjectInput,
-  ProjectView,
+import {
+  type CharterPatchRequest,
+  type CharterView,
+  DEFAULT_BASE_BRANCH,
+  type FactoryCadence,
+  type FactoryDefaultsInput,
+  type FactoryProjectInput,
+  type Preflight,
+  type ProjectView,
 } from "@/lib/factoryApi";
 
 // ── Limits (the server's `ProjectIn` / `StartIn`) ──────────────
 
-export const MAX_PROJECTS = 10;
 export const NAME_MAX = 80;
 export const TITLE_MAX = 256;
 export const GOAL_MAX = 4000;
@@ -32,6 +36,8 @@ export const DEFAULT_BUDGET = 3;
 export const FACTORY_PREVIEW_CAP = 8;
 /** Pods a factory may use (`factory_max_pods` of the lead bundle). */
 export const FACTORY_MAX_PODS = 12;
+/** Projects kept from a saved draft (the server refuses more than 12 anyway). */
+const DRAFT_MAX_PROJECTS = 12;
 
 export const SLUG_RE = /^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$/;
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
@@ -71,9 +77,20 @@ export interface ProjectDraft {
   constraints: string;
 }
 
+/** The factory-level "Default repo & base" row. */
+export interface FactoryDefaultsDraft {
+  repo: string;
+  branch: string;
+  /** Keep a live env at the head of the base (project `base-env`). */
+  liveEnv: boolean;
+  /** The toggle was set by hand, so it no longer follows the base. */
+  liveEnvTouched: boolean;
+}
+
 export interface FactoryDraft {
   name: string;
   cadence: FactoryCadence;
+  defaults: FactoryDefaultsDraft;
   projects: ProjectDraft[];
 }
 
@@ -98,6 +115,8 @@ export type ProjectErrors = Partial<Record<ProjectField, string>>;
 
 export interface FormErrors {
   name?: string;
+  /** The default repo & base row. */
+  defaults?: string;
   /** Errors about the project list as a whole (e.g. too many). */
   projects?: string;
   byProject: ProjectErrors[];
@@ -144,8 +163,70 @@ export function emptyProject(overrides: Partial<ProjectDraft> = {}): ProjectDraf
   };
 }
 
-export function emptyFactoryDraft(): FactoryDraft {
-  return { name: "Atlas factory", cadence: "demo", projects: [emptyProject()] };
+/** The live env is on by default for any base but `main`. */
+export function liveEnvByDefault(branch: string): boolean {
+  const base = branch.trim();
+  return base !== "" && base !== DEFAULT_BASE_BRANCH;
+}
+
+export function emptyDefaults(repo = "", branch = ""): FactoryDefaultsDraft {
+  return { repo, branch, liveEnv: liveEnvByDefault(branch), liveEnvTouched: false };
+}
+
+/** The defaults row as the server's preflight suggests it (`OMNIGENT_FACTORY_DEFAULT_BASE`). */
+export function defaultsFromPreflight(preflight: Preflight | undefined): FactoryDefaultsDraft {
+  const repo = preflight?.default_repo?.trim() ?? "";
+  return emptyDefaults(repo, repo ? preflight?.default_base?.trim() || DEFAULT_BASE_BRANCH : "");
+}
+
+export function emptyFactoryDraft(defaults: FactoryDefaultsDraft = emptyDefaults()): FactoryDraft {
+  return {
+    name: "Atlas factory",
+    cadence: "demo",
+    defaults,
+    projects: [emptyProject({ repo: defaults.repo, branch: defaults.branch || "main" })],
+  };
+}
+
+/** A new project section that starts on the factory's default repo and base. */
+export function defaultProject(defaults: FactoryDefaultsDraft): ProjectDraft {
+  return emptyProject({ repo: defaults.repo, branch: defaults.branch || "main" });
+}
+
+/**
+ * Change the default repo and base. Projects still on the old default (or
+ * blank) follow it; the live-env toggle follows the base until set by hand.
+ */
+export function withDefaults(draft: FactoryDraft, repo: string, branch: string): FactoryDraft {
+  const old = draft.defaults;
+  const sameRepo = (a: string, b: string) => a.trim().toLowerCase() === b.trim().toLowerCase();
+  const follows = (p: ProjectDraft) =>
+    (p.repo.trim() === "" || sameRepo(p.repo, old.repo)) &&
+    (p.branch.trim() === "" || p.branch.trim() === (old.branch.trim() || "main"));
+  return {
+    ...draft,
+    defaults: {
+      ...old,
+      repo,
+      branch,
+      liveEnv: old.liveEnvTouched ? old.liveEnv : liveEnvByDefault(branch),
+    },
+    projects: draft.projects.map((p) =>
+      follows(p) ? { ...p, repo, branch: branch || "main" } : p,
+    ),
+  };
+}
+
+/** The `defaults` of the start request: the live env needs a repo and a base. */
+export function toDefaultsInput(defaults: FactoryDefaultsDraft): FactoryDefaultsInput {
+  const repo = defaults.repo.trim() || null;
+  const base = defaults.branch.trim() || null;
+  return { repo, base_branch: base, integration_env: defaults.liveEnv && repo != null };
+}
+
+/** Work projects a factory of `maxProjects` PL pods can take next to its live env. */
+export function workProjectCap(maxProjects: number, defaults: FactoryDefaultsDraft): number {
+  return Math.max(1, maxProjects - (defaults.liveEnv && defaults.repo.trim() ? 1 : 0));
 }
 
 /** A copy of `project` with a fresh key and a slug that doesn't clash with `taken`. */
@@ -241,16 +322,31 @@ export function validateProject(
   return errors;
 }
 
-/** Inline errors for the whole start form. */
-export function validateFactory(draft: FactoryDraft): FormErrors {
+/**
+ * Inline errors for the whole start form.
+ *
+ * @param maxProjects - The server's `max_projects` (preflight); `null` while
+ *   it loads, when only the server checks the count.
+ */
+export function validateFactory(
+  draft: FactoryDraft,
+  maxProjects: number | null = null,
+): FormErrors {
   const errors: FormErrors = { byProject: [] };
   const name = draft.name.trim();
   if (!name) errors.name = "Name the factory";
   else if (name.length > NAME_MAX) errors.name = `At most ${NAME_MAX} characters`;
   else if (name.includes("\n")) errors.name = "One line";
+  const { repo, branch, liveEnv } = draft.defaults;
+  if (repo.trim() && !REPO_RE.test(repo.trim())) errors.defaults = "Use owner/name";
+  else if (branch.trim() && !BRANCH_RE.test(branch.trim())) {
+    errors.defaults = "Not a valid branch name";
+  } else if (liveEnv && !repo.trim()) errors.defaults = "Pick the repo the live env runs";
+  const cap = maxProjects != null ? workProjectCap(maxProjects, draft.defaults) : null;
   if (draft.projects.length === 0) errors.projects = "Add at least one project";
-  else if (draft.projects.length > MAX_PROJECTS) {
-    errors.projects = `At most ${MAX_PROJECTS} projects (a factory has ${FACTORY_MAX_PODS} pods: 2 leads plus one PL per project)`;
+  else if (cap != null && draft.projects.length > cap) {
+    const env = cap < maxProjects! ? " and one for the live env" : "";
+    errors.projects = `At most ${cap} projects (a factory runs ${maxProjects} project leads${env})`;
   }
   errors.byProject = draft.projects.map((project, i) =>
     validateProject(project, {
@@ -263,6 +359,7 @@ export function validateFactory(draft: FactoryDraft): FormErrors {
 export function hasErrors(errors: FormErrors): boolean {
   return (
     errors.name != null ||
+    errors.defaults != null ||
     errors.projects != null ||
     errors.byProject.some((p) => Object.keys(p).length > 0)
   );
@@ -467,8 +564,10 @@ export function startSummary(draft: FactoryDraft): StartSummary {
     0,
   );
   const repos = [...new Set(draft.projects.map((p) => p.repo.trim()).filter(Boolean))];
+  // The live env's PL has heartbeats off, so it adds a sandbox but no beats.
+  const liveEnv = toDefaultsInput(draft.defaults).integration_env ? 1 : 0;
   return {
-    sandboxes: 2 + draft.projects.length,
+    sandboxes: 2 + draft.projects.length + liveEnv,
     maxPreviews: Math.min(requested, FACTORY_PREVIEW_CAP),
     requestedPreviews: requested,
     heartbeats: heartbeatsPerHour(draft.cadence, 2, draft.projects.length),
@@ -478,15 +577,17 @@ export function startSummary(draft: FactoryDraft): StartSummary {
 
 // ── Load example (spec §12) ────────────────────────────────────
 
-/** The three-project demo scenario. */
-export function exampleProjects(): ProjectDraft[] {
+/** The three-project demo scenario, on the default base when it is caffeinelabs/app's. */
+export function exampleProjects(defaults?: FactoryDefaultsDraft): ProjectDraft[] {
   const repo = "caffeinelabs/app";
+  const onDefault = defaults?.repo.trim().toLowerCase() === repo && defaults.branch.trim();
+  const branch = onDefault ? defaults.branch.trim() : "main";
   return [
     emptyProject({
       title: "API status endpoint",
       slug: "api-status",
       repo,
-      branch: "main",
+      branch,
       priority: 1,
       goal: 'Add GET /status to caffeine-api returning {service, uptimeS, db: "ok" | "down"}.',
       dod: ['curl -fsS {api}/status → 200 with "db":"ok"', "pnpm -F @caffeine/api test"],
@@ -500,7 +601,7 @@ export function exampleProjects(): ProjectDraft[] {
       title: "ENV badge in the UX header",
       slug: "ux-env-badge",
       repo,
-      branch: "main",
+      branch,
       priority: 1,
       goal: "Show an “ENV <id>” badge in the caffeine-ux header when served from *.envs.sandbox.caffeinelabs.io.",
       dod: [
@@ -519,7 +620,7 @@ export function exampleProjects(): ProjectDraft[] {
       title: "Docs: factory envs",
       slug: "docs-factory-envs",
       repo,
-      branch: "main",
+      branch,
       priority: 2,
       goal: "Add docs/factory-envs.md: how factory envs and previews work and how to review them.",
       dod: ["docs/factory-envs.md renders on GitHub"],
@@ -586,6 +687,19 @@ function restoreProject(value: unknown): ProjectDraft {
   };
 }
 
+/** A stored defaults row, or null for a draft saved before it existed. */
+function restoreDefaults(value: unknown): FactoryDefaultsDraft | null {
+  if (typeof value !== "object" || value === null) return null;
+  const raw = value as Record<string, unknown>;
+  if (typeof raw.repo !== "string" || typeof raw.branch !== "string") return null;
+  const base = emptyDefaults(raw.repo, raw.branch);
+  return {
+    ...base,
+    liveEnv: typeof raw.liveEnv === "boolean" ? raw.liveEnv : base.liveEnv,
+    liveEnvTouched: raw.liveEnvTouched === true,
+  };
+}
+
 /** The saved draft, or null when there is none (or storage is unavailable). */
 export function loadDraft(): StoredDraft | null {
   try {
@@ -593,14 +707,15 @@ export function loadDraft(): StoredDraft | null {
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (!isDraft(parsed)) return null;
-    const { name, cadence, projects } = parsed.draft;
+    const { name, cadence, projects, defaults } = parsed.draft;
     if (!Array.isArray(projects)) return null;
     return {
       savedAt: parsed.savedAt,
       draft: {
         name: typeof name === "string" ? name : "",
         cadence: cadence === "normal" ? "normal" : "demo",
-        projects: projects.slice(0, MAX_PROJECTS).map(restoreProject),
+        defaults: restoreDefaults(defaults) ?? emptyDefaults(),
+        projects: projects.slice(0, DRAFT_MAX_PROJECTS).map(restoreProject),
       },
     };
   } catch {
@@ -681,9 +796,10 @@ export function fieldShown(
  */
 export function mapServerField(
   field: string | null | undefined,
-): { project: number; field: ProjectField } | { name: true } | null {
+): { project: number; field: ProjectField } | { name: true } | { defaults: true } | null {
   if (!field) return null;
   if (field === "name") return { name: true };
+  if (field.startsWith("defaults")) return { defaults: true };
   const match = /^(?:projects\[(\d+)\]\.)?([a-z_]+)/.exec(field);
   if (!match) return null;
   const mapped = SERVER_FIELDS[match[2] ?? ""];

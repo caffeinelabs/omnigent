@@ -6,6 +6,7 @@ import {
   boardSections,
   clipDuration,
   healthItems,
+  isIntegrationProject,
   needsYou,
   needsYouCount,
   formatBytes,
@@ -79,6 +80,18 @@ describe("card ordering", () => {
       ready: 1,
       merged: 1,
     });
+  });
+
+  it("leaves the live base env out of the stage counts", () => {
+    const live = liveRunSnapshot().projects;
+    const charter = live[0]!.charter!;
+    const env = project("base-env", {
+      stage: "building",
+      charter: { ...charter, kind: "integration" },
+    });
+    expect(isIntegrationProject(env)).toBe(true);
+    expect(stageCounts([...live, env])).toEqual(stageCounts(live));
+    expect(isIntegrationProject(live[0]!)).toBe(false);
   });
 });
 

@@ -34,6 +34,7 @@ DemoStepStatus = Literal["pass", "fail", "skipped"]
 DemoFileKind = Literal[
     "video", "screenshot", "poster", "api", "har", "trace", "console", "script", "log", "other"
 ]
+ProjectKind = Literal["work", "integration", "self"]
 DecisionSource = Literal["agent", "relaunch_failed", "blocked_approval", "pr_closed", "storm"]
 DecisionStatus = Literal["open", "answered", "withdrawn", "expired"]
 Severity = Literal["info", "notice", "warning", "critical"]
@@ -115,6 +116,24 @@ class NextBeatView(_View):
     at: int
 
 
+class FactoryBaseView(_View):
+    """
+    The factory's default base and the live env at its head (``base-env``).
+
+    :param head_sha: The base head the server last saw on GitHub, or ``None``.
+    :param moved_at: When the server saw it move (``None`` before the first move).
+    :param env: The integration project's env, when there is one.
+    :param env_project: Slug of the integration project, e.g. ``"base-env"``.
+    """
+
+    repo: str
+    branch: str
+    head_sha: str | None = None
+    moved_at: int | None = None
+    env: EnvView | None = None
+    env_project: str | None = None
+
+
 class FactoryView(_View):
     """The snapshot header."""
 
@@ -128,6 +147,7 @@ class FactoryView(_View):
     elapsed_s: int | None = None
     cost_usd: float | None = None
     next_beats: list[NextBeatView] = Field(default_factory=list)
+    base: FactoryBaseView | None = None
     url: str
 
 
@@ -382,6 +402,13 @@ class VerifyEvidence(_View):
     at: int | None = None
 
 
+class BaseEvidence(_View):
+    """The branch a PR targets and the one its project expects."""
+
+    actual: str | None = None
+    expected: str | None = None
+
+
 class DemoEvidence(_View):
     status: DemoStatus | None = None
     sha: str | None = None
@@ -395,6 +422,7 @@ class GateEvidence(_View):
     review: ReviewEvidence | None = None
     verify: VerifyEvidence | None = None
     demo: DemoEvidence | None = None
+    base: BaseEvidence | None = None
     mergeable: str | None = None
     files: list[str] = Field(default_factory=list)
     protected: list[str] = Field(default_factory=list)
@@ -408,6 +436,7 @@ class GatesView(_View):
     """
 
     draft: GateState = "unknown"
+    base: GateState = "unknown"
     checks: GateState = "unknown"
     review: GateState = "unknown"
     verify: GateState = "unknown"
@@ -491,6 +520,7 @@ class CharterPreview(_View):
 class CharterView(_View):
     """A project charter (``charter.normalize_charter`` shape)."""
 
+    kind: ProjectKind = "work"
     goal: str
     dod: list[str] = Field(default_factory=list)
     scope_paths: list[str] = Field(default_factory=list)
@@ -637,7 +667,12 @@ class FactorySnapshot(_View):
 
 
 class FactorySummary(_View):
-    """One card on the factory index (``GET /v1/factory/factories``)."""
+    """
+    One card on the factory index (``GET /v1/factory/factories``).
+
+    :param stage_counts: Work projects per stage (the live base env is left out).
+    :param projects_total: Work projects, the same set ``stage_counts`` counts.
+    """
 
     id: str
     name: str
@@ -700,12 +735,21 @@ class PreflightAgents(_View):
 
 
 class Preflight(_View):
-    """``GET /v1/factory/preflight``: can this user start a factory here?"""
+    """
+    ``GET /v1/factory/preflight``: can this user start a factory here?
+
+    :param default_repo: The server's default repo for new factories, e.g. ``"caffeinelabs/app"``.
+    :param default_base: Its default base branch, e.g. ``"temp-main"``.
+    :param max_projects: Projects one factory can run (one PL pod each).
+    """
 
     github: PreflightGithub
     agents: PreflightAgents
     sandbox_host: bool
     factory_enabled: bool
+    default_repo: str | None = None
+    default_base: str | None = None
+    max_projects: int = 10
 
 
 __all__ = [
@@ -715,6 +759,7 @@ __all__ = [
     "EnvView",
     "EventPage",
     "EventView",
+    "FactoryBaseView",
     "FactoryListResponse",
     "FactorySnapshot",
     "FactorySummary",

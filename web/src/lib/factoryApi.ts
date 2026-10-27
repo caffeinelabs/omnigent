@@ -52,6 +52,8 @@ export type DemoFileKind =
   | "script"
   | "log"
   | "other";
+/** `charter.kind`: product work, the live env at the base head, or factory self-work. */
+export type ProjectKind = "work" | "integration" | "self";
 export type DecisionSource =
   "agent" | "relaunch_failed" | "blocked_approval" | "pr_closed" | "storm";
 export type DecisionStatus = "open" | "answered" | "withdrawn" | "expired";
@@ -111,6 +113,18 @@ export interface NextBeatView {
   at: number;
 }
 
+/** The factory's default base, the head the server last saw and the live env at it. */
+export interface FactoryBaseView {
+  repo: string;
+  branch: string;
+  head_sha: string | null;
+  /** When the server saw the head move (null before the first move). */
+  moved_at: number | null;
+  /** The integration project's env (`base-env`), when there is one. */
+  env: EnvView | null;
+  env_project: string | null;
+}
+
 export interface FactoryView {
   id: string;
   name: string;
@@ -122,6 +136,8 @@ export interface FactoryView {
   elapsed_s: number | null;
   cost_usd: number | null;
   next_beats: NextBeatView[];
+  /** Absent from servers before the temp-main lane. */
+  base?: FactoryBaseView | null;
   url: string;
 }
 
@@ -329,18 +345,22 @@ export interface GateEvidence {
     url: string | null;
     at: number | null;
   } | null;
+  /** The branch the PR targets and the one its project expects. */
+  base?: { actual: string | null; expected: string | null } | null;
   mergeable: string | null;
   files: string[];
   protected: string[];
 }
 
 /**
- * The six gates every PR is held to, in display order. `demo` is separate
+ * The seven gates every PR is held to, in display order. `demo` is separate
  * because it is null when the project has no previews; when previews are on
  * it is a ready gate too (a PASS or PARTIAL demo of the head is required).
+ * `base` is missing from snapshots of older servers.
  */
 export const READY_GATES = [
   "draft",
+  "base",
   "checks",
   "review",
   "verify",
@@ -417,6 +437,8 @@ export interface CharterPreview {
 
 /** A project charter (`charter.normalize_charter` shape). */
 export interface CharterView {
+  /** `work` when absent (older servers). */
+  kind?: ProjectKind;
   goal: string;
   dod: string[];
   scope_paths: string[];
@@ -591,12 +613,17 @@ export interface OpenDecisionsResponse {
   count: number;
 }
 
-/** `GET /v1/factory/preflight`: can this user start a factory here? */
+/** `GET /v1/factory/preflight`: can this user start a factory here, and with what defaults? */
 export interface Preflight {
   github: { connected: boolean; login: string | null };
   agents: { factory_lead: boolean; factory_pl: boolean };
   sandbox_host: boolean;
   factory_enabled: boolean;
+  /** The server's default repo and base for new factories (`OMNIGENT_FACTORY_DEFAULT_BASE`). */
+  default_repo?: string | null;
+  default_base?: string | null;
+  /** Projects one factory can run (one PL pod each). */
+  max_projects?: number;
 }
 
 // ── Requests ───────────────────────────────────────────────────
@@ -658,11 +685,20 @@ export interface CharterPatchResponse {
   mail_id: string | null;
 }
 
+/** The factory-level default repo and base; a project's blank branch inherits it. */
+export interface FactoryDefaultsInput {
+  repo: string | null;
+  base_branch: string | null;
+  /** Keep a live env at the base head (project `base-env`). */
+  integration_env: boolean;
+}
+
 /** `POST /v1/factory/factories`. */
 export interface CreateFactoryRequest {
   root_session_id: string;
   name: string;
   cadence: FactoryCadence;
+  defaults?: FactoryDefaultsInput;
   projects: FactoryProjectInput[];
 }
 
@@ -970,8 +1006,20 @@ export const START_REGISTER_ATTEMPTS = 4;
 export interface StartFactoryForm {
   name: string;
   cadence: FactoryCadence;
+  defaults?: FactoryDefaultsInput;
   /** The first project's repo and branch become the lead's workspace. */
   projects: FactoryProjectInput[];
+}
+
+/**
+ * The branch a project's blank base resolves to: the factory default for the
+ * default repo, else `main` (the server's resolution).
+ */
+export function inheritedBase(repo: string, defaults?: FactoryDefaultsInput | null): string {
+  const base = defaults?.base_branch?.trim();
+  const defaultRepo = defaults?.repo?.trim();
+  const sameRepo = !defaultRepo || !repo || repo.toLowerCase() === defaultRepo.toLowerCase();
+  return base && sameRepo ? base : DEFAULT_BASE_BRANCH;
 }
 
 /**
@@ -1048,10 +1096,10 @@ export async function startFactory(
   form: StartFactoryForm,
   options: StartFactoryOptions = {},
 ): Promise<CreateFactoryResponse & { root_session_id: string }> {
-  // A blank branch means the server default, so the lead's workspace never ends in `#`.
+  // A blank branch means the factory default, so the lead's workspace never ends in `#`.
   const projects = form.projects.map((project) => ({
     ...project,
-    base_branch: project.base_branch.trim() || DEFAULT_BASE_BRANCH,
+    base_branch: project.base_branch.trim() || inheritedBase(project.repo, form.defaults),
   }));
   const first = projects[0];
   if (!first) throw new Error("A factory needs at least one project");
@@ -1079,6 +1127,7 @@ export async function startFactory(
     root_session_id: rootId,
     name: form.name,
     cadence: form.cadence,
+    ...(form.defaults ? { defaults: form.defaults } : {}),
     projects,
   };
   let lastError: unknown = null;

@@ -136,8 +136,9 @@ path. Use the longest Bash timeout; a run takes 1-3 minutes.
 
 | File | What |
 |---|---|
-| `demo.json` | The manifest: `version, pr_url, pr, sha, status, summary, plan_source, preview{app, api, observed_sha}, duration_s, console_errors, steps[{n, title, kind: ui/api/check, status: pass/fail/skipped, screenshot?, duration_ms?, note?, api_calls?}], artifacts{video, poster, api, har, trace? (FAIL and ERROR), console, script, log, tilt_snapshot?}` |
+| `demo.json` | The manifest: `version, pr_url, pr, sha, status, summary, plan_source, preview{app, api, observed_sha}, duration_s, console_errors, steps[{n, title, kind: ui/api/check, status: pass/fail/skipped, screenshot?, duration_ms?, note?, api_calls?}], artifacts{video, gif?, poster, api, har, trace? (FAIL and ERROR), console, script, log, tilt_snapshot?}` |
 | `video/demo.webm` | The whole run; `poster` is the first UI screenshot. |
+| `video/demo.gif` | With ffmpeg: the first 20 s at 800 px and 8 fps, at most 5 MB. The server mirrors it and the poster to GitHub and embeds them in `comment_markdown`. |
 | `shots/NN-<title>.png` | One per UI step. |
 | `api.json` | `[{i, step, method, url, status, ms, request{headers, body}, response{headers, content_type, body, bytes, truncated}}]` |
 | `console.json` | Console errors, warnings and page errors. |

@@ -49,6 +49,7 @@ from omnigent.factory import (
     LABEL_STARTED_AT,
     LABEL_STATE,
     LABEL_SUMMARY,
+    PROJECT_KIND_INTEGRATION,
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
     ROLES,
@@ -56,6 +57,7 @@ from omnigent.factory import (
     STATES,
 )
 from omnigent.server.factory import schemas, status
+from omnigent.server.factory.base import base_view
 from omnigent.server.factory.charter import normalize_charter
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.envelope import display_title
@@ -887,6 +889,9 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
             "elapsed_s": max(0, int(now - started_at)),
             "cost_usd": cost,
             "next_beats": sorted(next_beats, key=lambda b: b["at"]),
+            "base": base_view(
+                root, projects, {view["slug"]: view["env"] for view in project_views}
+            ),
             "url": f"/factory/{bare_id(factory_id)}",
         },
         "health": _health(app_state, drifted, demo_bytes),
@@ -1029,6 +1034,9 @@ def filter_snapshot(raw: RawSnapshot, readable: set[str]) -> dict[str, Any]:
     body["members"] = [m for m in body["members"] if m["session_id"] in readable]
     factory = body["factory"]
     factory["next_beats"] = [b for b in factory["next_beats"] if b["session_id"] in readable]
+    base = factory.get("base")
+    if base is not None and base.get("env_project") in hidden:
+        base["env"] = None
     if len(readable) < len(raw.top_level_of):
         member_costs = [m["cost_usd"] for m in body["members"] if m["is_top_level"]]
         factory["cost_usd"] = _sum_costs(member_costs)
@@ -1058,8 +1066,14 @@ def snapshot_etag(body: Mapping[str, Any]) -> str:
 def summary_from(body: Mapping[str, Any]) -> dict[str, Any]:
     """:returns: The ``FactorySummary`` JSON of a (filtered) snapshot."""
     factory = body["factory"]
+    # The live base env is not pipeline work: neither counted nor totalled.
+    work = [
+        p
+        for p in body["projects"]
+        if (p.get("charter") or {}).get("kind") != PROJECT_KIND_INTEGRATION
+    ]
     counts: dict[str, int] = {}
-    for project in body["projects"]:
+    for project in work:
         counts[project["stage"]] = counts.get(project["stage"], 0) + 1
     members = body["members"]
     return {
@@ -1072,7 +1086,7 @@ def summary_from(body: Mapping[str, Any]) -> dict[str, Any]:
         "elapsed_s": factory["elapsed_s"],
         "cost_usd": factory["cost_usd"],
         "stage_counts": counts,
-        "projects_total": len(body["projects"]),
+        "projects_total": len(work),
         "decisions_open": body["totals"]["decisions_open"],
         "prs_ready": body["totals"]["prs_ready"],
         "members_total": len(members),

@@ -41,14 +41,15 @@ export interface AddProjectDialogProps {
 
 function AddProjectBody({ factoryId, onOpenChange }: Omit<AddProjectDialogProps, "open">) {
   const queryClient = useQueryClient();
-  // The board's snapshot: existing slugs, and the repo most projects use.
+  // The board's snapshot: existing slugs, and the factory's default repo and base.
   const snapshot = queryClient.getQueryData<FactorySnapshot>(factoryQueryKey(factoryId));
   const taken = useMemo(() => snapshot?.projects.map((p) => p.slug) ?? [], [snapshot]);
   const [draft, setDraft] = useState(() => {
+    const base = snapshot?.factory.base;
     const first = snapshot?.projects.find((p) => p.repo);
     return emptyProject({
-      repo: first?.repo ?? "",
-      branch: first?.base_branch ?? "main",
+      repo: base?.repo ?? first?.repo ?? "",
+      branch: base?.branch ?? first?.base_branch ?? "main",
       priority: 1,
     });
   });

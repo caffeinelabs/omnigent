@@ -1041,3 +1041,89 @@ def test_real_bundles_seed_with_the_demo_harness(
         _PL_DIR / "agents/demo/skills/factory-demo/harness/run.mjs"
     ).read_bytes()
     assert not (harness / "node_modules").exists()
+
+
+# ── Temp-main lane: integration env and base notices ───────────
+
+
+def _row_pattern(row: str) -> re.Pattern[str]:
+    """A DISPATCH row's backticked header as a regex: `<x>` is one token, `…` anything."""
+    parts = re.split(r"(<[^>]+>|…)", row)
+    out = ""
+    for part in parts:
+        if part == "…":
+            out += ".*"
+        elif part.startswith("<") and part.endswith(">"):
+            out += r"\S+?"
+        else:
+            out += re.escape(part)
+    return re.compile(out)
+
+
+def test_the_integration_project_has_its_own_branch(pl: AgentSpec) -> None:
+    """A `KIND: integration` charter keeps a live env at the base head and nothing else."""
+    from omnigent.entities.factory import FactoryProject
+    from omnigent.server.factory.charter import normalize_charter, render_pl_charter
+
+    prompt = " ".join((pl.instructions or "").split())
+    section = prompt[
+        prompt.index("KIND: integration.") : prompt.index("`~/factory/<slug>/plan.md`")
+    ]
+    for token in (
+        "no tasks, ICs, reviewers, demos or PRs",
+        "heartbeats are off",
+        'sys_session_send(agent="env_keeper", title="env", args={input: "UP base=<base>"})',
+        "curl -fsS <app>/__factory/preview",
+        "curl -fsS <api>/version",
+        "git ls-remote origin refs/heads/<base>",
+        'sys_factory_env(state="ready"',
+        'ref: "origin/<base>"',
+        'sys_factory_set(summary="<base>@<sha7>',
+        "`UP base=<base>` again (it moves the env to the new head)",
+        "sys_factory_ask",
+    ):
+        assert token in section, token
+    project = FactoryProject(
+        id="c" * 32,
+        factory_id="f" * 32,
+        slug="base-env",
+        title="Base env · temp-main",
+        repo="caffeinelabs/app",
+        base_branch="temp-main",
+        charter=normalize_charter({"kind": "integration"}),
+    )
+    charter = render_pl_charter(project).splitlines()
+    assert charter[1].startswith("KIND: integration · ")
+    # env_keeper's UP moves an existing dev env to the current head of the base.
+    env = _sub_agent(pl, "env_keeper")
+    skill = (_skill_dir(env) / "factory-env" / "SKILL.md").read_text(encoding="utf-8")
+    up = " ".join(_command_section(skill, "UP base=<base>:", ("STATUS",)).split())
+    assert "If it exists, move it to the current head" in up
+    assert "checkout --detach origin/<base>" in up
+
+
+def test_base_notices_have_dispatch_rows(pl: AgentSpec) -> None:
+    """Every base-lane notice the server sends matches a row of the PL prompt."""
+    from omnigent.entities.factory import FactoryPr
+    from omnigent.server.factory.base import redeploy_notice, sync_notice
+    from omnigent.server.factory.prs import base_notice
+
+    prompt = " ".join((pl.instructions or "").split())
+    rows = re.findall(r"`(\[Factory notice · (?:PR #|base )[^`]*\])`", prompt)
+    assert len(rows) == 3, rows
+    pr = FactoryPr(
+        id="p" * 32,
+        factory_id="f" * 32,
+        repo="caffeinelabs/app",
+        number=9630,
+        url="https://github.com/caffeinelabs/app/pull/9630",
+    )
+    head, old = "a" * 40, "b" * 40
+    texts = [
+        base_notice(pr, "main", "temp-main"),
+        sync_notice("temp-main", head),
+        redeploy_notice("caffeinelabs/app", "temp-main", old, head),
+    ]
+    for text in texts:
+        header = text.split("]", 1)[0] + "]"
+        assert any(_row_pattern(row).fullmatch(header) for row in rows), header
