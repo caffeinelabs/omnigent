@@ -21,14 +21,21 @@ named CHECK constraints (``omnigent.db.enum_codecs``), JSON and free text are
 compressed blobs, times are epoch seconds (spans use epoch milliseconds), and
 there are no foreign keys. Changes to existing tables go through
 ``batch_alter_table`` so SQLite works.
+
+Every table, index, column and CHECK is created only when missing: CockroachDB
+bootstraps from the current models and then replays every revision after its
+baseline.
 """
 
 from __future__ import annotations
 
+import re
 from collections.abc import Sequence
 
 import sqlalchemy as sa
 from alembic import op
+from alembic.operations import BatchOperations
+from sqlalchemy.schema import SchemaItem
 
 from omnigent.db.db_models import Uuid16
 
@@ -48,39 +55,96 @@ def _blob(name: str, *, nullable: bool = True) -> sa.Column:
     return sa.Column(name, sa.LargeBinary(), nullable=nullable)
 
 
-def _upgrade_existing_tables() -> None:
+def _create_table(existing: set[str], name: str, *elements: SchemaItem) -> None:
+    if name not in existing:
+        op.create_table(name, *elements)
+
+
+def _create_index(inspector: sa.Inspector, name: str, table: str, columns: list[str]) -> None:
+    if name not in {index["name"] for index in inspector.get_indexes(table)}:
+        op.create_index(name, table, columns, unique=False)
+
+
+def _add_columns(
+    batch_op: BatchOperations, inspector: sa.Inspector, table: str, *columns: sa.Column
+) -> None:
+    existing = {column["name"] for column in inspector.get_columns(table)}
+    for column in columns:
+        if column.name not in existing:
+            batch_op.add_column(column)
+
+
+def _check_codes(inspector: sa.Inspector, table: str, name: str) -> set[int] | None:
+    """Return the integer codes a named CHECK lists, or ``None`` when it is absent."""
+    for check in inspector.get_check_constraints(table):
+        if check["name"] == name:
+            return {int(code) for code in re.findall(r"\b\d+\b", check["sqltext"])}
+    return None
+
+
+def _upgrade_existing_tables(inspector: sa.Inspector) -> None:
+    project_status = _check_codes(inspector, "factory_projects", "ck_factory_projects_status")
     with op.batch_alter_table("factory_projects") as batch_op:
-        # FACTORY_PROJECT_STATUS: active=1, cancelled=2, merged=3, done=4.
-        batch_op.add_column(
-            sa.Column("status", sa.SmallInteger(), nullable=False, server_default="1")
+        _add_columns(
+            batch_op,
+            inspector,
+            "factory_projects",
+            # FACTORY_PROJECT_STATUS: active=1, cancelled=2, merged=3, done=4.
+            sa.Column("status", sa.SmallInteger(), nullable=False, server_default="1"),
+            sa.Column("parent_slug", sa.String(64), nullable=True),
+            sa.Column("closed_at", sa.Integer(), nullable=True),
+            sa.Column("def_version", sa.Integer(), nullable=True),
+            sa.Column("version_id", Uuid16(), nullable=True),
         )
-        batch_op.add_column(sa.Column("parent_slug", sa.String(64), nullable=True))
-        batch_op.add_column(sa.Column("closed_at", sa.Integer(), nullable=True))
-        batch_op.add_column(sa.Column("def_version", sa.Integer(), nullable=True))
-        batch_op.add_column(sa.Column("version_id", Uuid16(), nullable=True))
-        batch_op.create_check_constraint("ck_factory_projects_status", "status IN (1, 2, 3, 4)")
+        if project_status is None:
+            batch_op.create_check_constraint(
+                "ck_factory_projects_status", "status IN (1, 2, 3, 4)"
+            )
 
     with op.batch_alter_table("factory_prs") as batch_op:
-        batch_op.add_column(sa.Column("opened_at", sa.Integer(), nullable=True))
-        batch_op.add_column(sa.Column("first_ready_at", sa.Integer(), nullable=True))
-        batch_op.add_column(sa.Column("task_id", Uuid16(), nullable=True))
-        batch_op.add_column(sa.Column("version_id", Uuid16(), nullable=True))
-
-    with op.batch_alter_table("factory_decisions") as batch_op:
-        batch_op.add_column(sa.Column("assignee", sa.String(128), nullable=True))
-        batch_op.add_column(sa.Column("claimed_by", sa.String(128), nullable=True))
-        batch_op.add_column(sa.Column("claimed_at", sa.Integer(), nullable=True))
-        batch_op.add_column(sa.Column("thread", sa.String(80), nullable=True))
-        batch_op.add_column(sa.Column("subject", sa.String(64), nullable=True))
-        batch_op.drop_constraint("ck_factory_decisions_source", type_="check")
-        # FACTORY_DECISION_SOURCE gains proposal=6, loop=7, access_request=8, done_check=9.
-        batch_op.create_check_constraint(
-            "ck_factory_decisions_source", "source IN (1, 2, 3, 4, 5, 6, 7, 8, 9)"
+        _add_columns(
+            batch_op,
+            inspector,
+            "factory_prs",
+            sa.Column("opened_at", sa.Integer(), nullable=True),
+            sa.Column("first_ready_at", sa.Integer(), nullable=True),
+            sa.Column("task_id", Uuid16(), nullable=True),
+            sa.Column("version_id", Uuid16(), nullable=True),
         )
 
+    sources = _check_codes(inspector, "factory_decisions", "ck_factory_decisions_source")
+    # FACTORY_DECISION_SOURCE gains proposal=6, loop=7, access_request=8, done_check=9.
+    widen_sources = sources is None or not {6, 7, 8, 9} <= sources
+    narrow_check = "ck_factory_decisions_source"
+    if widen_sources and sources is not None and op.get_bind().dialect.name == "cockroachdb":
+        # CockroachDB rejects re-adding a CHECK name dropped in the same transaction.
+        narrow_check = "ck_factory_decisions_source_narrow"
+        op.execute(
+            "ALTER TABLE factory_decisions RENAME CONSTRAINT "
+            f"ck_factory_decisions_source TO {narrow_check}"
+        )
+    with op.batch_alter_table("factory_decisions") as batch_op:
+        _add_columns(
+            batch_op,
+            inspector,
+            "factory_decisions",
+            sa.Column("assignee", sa.String(128), nullable=True),
+            sa.Column("claimed_by", sa.String(128), nullable=True),
+            sa.Column("claimed_at", sa.Integer(), nullable=True),
+            sa.Column("thread", sa.String(80), nullable=True),
+            sa.Column("subject", sa.String(64), nullable=True),
+        )
+        if widen_sources:
+            if sources is not None:
+                batch_op.drop_constraint(narrow_check, type_="check")
+            batch_op.create_check_constraint(
+                "ck_factory_decisions_source", "source IN (1, 2, 3, 4, 5, 6, 7, 8, 9)"
+            )
 
-def _create_people_and_room() -> None:
-    op.create_table(
+
+def _create_people_and_room(inspector: sa.Inspector, tables: set[str]) -> None:
+    _create_table(
+        tables,
         "factory_people",
         _workspace_id(),
         sa.Column("factory_id", Uuid16(), nullable=False),
@@ -96,14 +160,15 @@ def _create_people_and_room() -> None:
         sa.CheckConstraint("is_creator IN (0, 1)", name="ck_factory_people_is_creator"),
         sa.PrimaryKeyConstraint("workspace_id", "factory_id", "user_id"),
     )
-    op.create_index(
+    _create_index(
+        inspector,
         "ix_factory_people_user",
         "factory_people",
         ["workspace_id", "user_id", "factory_id"],
-        unique=False,
     )
 
-    op.create_table(
+    _create_table(
+        tables,
         "factory_chat_messages",
         _workspace_id(),
         sa.Column("id", Uuid16(), nullable=False),
@@ -131,14 +196,15 @@ def _create_people_and_room() -> None:
             "workspace_id", "factory_id", "seq", name="uq_factory_chat_messages_seq"
         ),
     )
-    op.create_index(
+    _create_index(
+        inspector,
         "ix_factory_chat_messages_thread",
         "factory_chat_messages",
         ["workspace_id", "factory_id", "thread", "seq", "id"],
-        unique=False,
     )
 
-    op.create_table(
+    _create_table(
+        tables,
         "factory_chat_reads",
         _workspace_id(),
         sa.Column("factory_id", Uuid16(), nullable=False),
@@ -150,8 +216,9 @@ def _create_people_and_room() -> None:
     )
 
 
-def _create_proposals() -> None:
-    op.create_table(
+def _create_proposals(inspector: sa.Inspector, tables: set[str]) -> None:
+    _create_table(
+        tables,
         "factory_proposals",
         _workspace_id(),
         sa.Column("id", Uuid16(), nullable=False),
@@ -212,16 +279,17 @@ def _create_proposals() -> None:
             "workspace_id", "factory_id", "dedupe_key", name="uq_factory_proposals_dedupe"
         ),
     )
-    op.create_index(
+    _create_index(
+        inspector,
         "ix_factory_proposals_status",
         "factory_proposals",
         ["workspace_id", "factory_id", "status", "id"],
-        unique=False,
     )
 
 
-def _create_work_graph() -> None:
-    op.create_table(
+def _create_work_graph(inspector: sa.Inspector, tables: set[str]) -> None:
+    _create_table(
+        tables,
         "factory_tasks",
         _workspace_id(),
         sa.Column("id", Uuid16(), nullable=False),
@@ -265,14 +333,15 @@ def _create_work_graph() -> None:
             "workspace_id", "factory_id", "number", name="uq_factory_tasks_number"
         ),
     )
-    op.create_index(
+    _create_index(
+        inspector,
         "ix_factory_tasks_state",
         "factory_tasks",
         ["workspace_id", "factory_id", "state", "id"],
-        unique=False,
     )
 
-    op.create_table(
+    _create_table(
+        tables,
         "factory_loops",
         _workspace_id(),
         sa.Column("id", Uuid16(), nullable=False),
@@ -302,16 +371,17 @@ def _create_work_graph() -> None:
             "workspace_id", "factory_id", "kind", "subject", name="uq_factory_loops_subject"
         ),
     )
-    op.create_index(
+    _create_index(
+        inspector,
         "ix_factory_loops_state",
         "factory_loops",
         ["workspace_id", "factory_id", "state", "id"],
-        unique=False,
     )
 
 
-def _create_issues() -> None:
-    op.create_table(
+def _create_issues(inspector: sa.Inspector, tables: set[str]) -> None:
+    _create_table(
+        tables,
         "factory_issues",
         _workspace_id(),
         sa.Column("id", Uuid16(), nullable=False),
@@ -356,16 +426,17 @@ def _create_issues() -> None:
             "workspace_id", "factory_id", "dedupe_key", name="uq_factory_issues_dedupe"
         ),
     )
-    op.create_index(
+    _create_index(
+        inspector,
         "ix_factory_issues_status",
         "factory_issues",
         ["workspace_id", "factory_id", "status", "severity", "id"],
-        unique=False,
     )
 
 
-def _create_telemetry() -> None:
-    op.create_table(
+def _create_telemetry(inspector: sa.Inspector, tables: set[str]) -> None:
+    _create_table(
+        tables,
         "factory_spans",
         _workspace_id(),
         # uuid7 (time-ordered) stored as 16 raw bytes.
@@ -411,9 +482,10 @@ def _create_telemetry() -> None:
         ("ix_factory_spans_task", ["workspace_id", "task_id", "started_at", "id"]),
         ("ix_factory_spans_ended", ["workspace_id", "factory_id", "ended_at", "id"]),
     ):
-        op.create_index(name, "factory_spans", columns, unique=False)
+        _create_index(inspector, name, "factory_spans", columns)
 
-    op.create_table(
+    _create_table(
+        tables,
         "factory_cost_daily",
         _workspace_id(),
         sa.Column("factory_id", Uuid16(), nullable=False),
@@ -433,7 +505,8 @@ def _create_telemetry() -> None:
         ),
     )
 
-    op.create_table(
+    _create_table(
+        tables,
         "factory_versions",
         _workspace_id(),
         sa.Column("id", Uuid16(), nullable=False),
@@ -449,8 +522,9 @@ def _create_telemetry() -> None:
     )
 
 
-def _create_definitions_and_feedback() -> None:
-    op.create_table(
+def _create_definitions_and_feedback(inspector: sa.Inspector, tables: set[str]) -> None:
+    _create_table(
+        tables,
         "factory_definitions",
         _workspace_id(),
         sa.Column("factory_id", Uuid16(), nullable=False),
@@ -469,7 +543,8 @@ def _create_definitions_and_feedback() -> None:
         sa.PrimaryKeyConstraint("workspace_id", "factory_id", "version"),
     )
 
-    op.create_table(
+    _create_table(
+        tables,
         "factory_feedback",
         _workspace_id(),
         sa.Column("id", Uuid16(), nullable=False),
@@ -496,23 +571,25 @@ def _create_definitions_and_feedback() -> None:
         sa.CheckConstraint("kind IN (1, 2, 3, 4, 5, 6)", name="ck_factory_feedback_kind"),
         sa.PrimaryKeyConstraint("workspace_id", "id"),
     )
-    op.create_index(
+    _create_index(
+        inspector,
         "ix_factory_feedback_target",
         "factory_feedback",
         ["workspace_id", "factory_id", "target_kind", "created_at", "id"],
-        unique=False,
     )
 
 
 def upgrade() -> None:
-    """Add the round-3 columns and the twelve round-3 factory tables."""
-    _upgrade_existing_tables()
-    _create_people_and_room()
-    _create_proposals()
-    _create_work_graph()
-    _create_issues()
-    _create_telemetry()
-    _create_definitions_and_feedback()
+    """Add the round-3 columns and the twelve round-3 factory tables, skipping existing ones."""
+    inspector = sa.inspect(op.get_bind())
+    tables = set(inspector.get_table_names())
+    _upgrade_existing_tables(inspector)
+    _create_people_and_room(inspector, tables)
+    _create_proposals(inspector, tables)
+    _create_work_graph(inspector, tables)
+    _create_issues(inspector, tables)
+    _create_telemetry(inspector, tables)
+    _create_definitions_and_feedback(inspector, tables)
 
 
 _NEW_TABLES: tuple[tuple[str, tuple[str, ...]], ...] = (
