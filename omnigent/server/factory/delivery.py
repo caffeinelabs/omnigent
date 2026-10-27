@@ -74,10 +74,11 @@ class DeliveryOutcome:
     retryable: bool = False
 
 
-def _message_event(text: str) -> SessionEventInput:
+def _message_event(text: str, created_by: str | None = None) -> SessionEventInput:
     return SessionEventInput(
         type="message",
         data={"role": "user", "content": [{"type": "input_text", "text": text}]},
+        created_by=created_by,
     )
 
 
@@ -164,6 +165,7 @@ async def _deliver(
     text: str,
     *,
     restart: bool,
+    created_by: str | None = None,
 ) -> DeliveryOutcome:
     deps = factory_deps(app_state)
     store = deps.conversation_store
@@ -254,7 +256,7 @@ async def _deliver(
     result = await _dispatch_session_event_to_runner(
         session_id,
         conv,
-        _message_event(text),
+        _message_event(text, created_by),
         store,
         runner_client,
         agent_name=agent_name,
@@ -266,6 +268,7 @@ async def _deliver(
         host_store=getattr(app_state, "host_store", None),
         # The envelope is not a human prompt; never derive a title from it.
         background_titles_enabled=False,
+        created_by=created_by,
     )
     if _is_native_terminal_session(conv) and result.pending_id is None:
         # The TUI did not start: dispatch recorded a failed turn instead of
@@ -280,6 +283,7 @@ async def deliver_message(
     text: str,
     *,
     restart: bool = False,
+    created_by: str | None = None,
 ) -> DeliveryOutcome:
     """
     Deliver *text* to *session_id* as a user message, waking it if needed.
@@ -290,10 +294,11 @@ async def deliver_message(
     :param text: The full message (already enveloped by the caller).
     :param restart: Stop the session (pane and host runner) first, so the
         ladder relaunches it fresh; used for wedged TUIs.
+    :param created_by: The human the message is attributed to (the bubble's author).
     :returns: The :class:`DeliveryOutcome`; never raises for delivery errors.
     """
     try:
-        return await _deliver(app_state, session_id, text, restart=restart)
+        return await _deliver(app_state, session_id, text, restart=restart, created_by=created_by)
     except (httpx.HTTPError, ConnectionError) as exc:
         _logger.info("factory delivery to %s failed: %s", session_id, exc)
         return DeliveryOutcome(False, REASON_TRANSPORT_ERROR, retryable=True)

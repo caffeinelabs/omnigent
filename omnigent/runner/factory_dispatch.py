@@ -1335,6 +1335,14 @@ async def _ask(args: _JsonObject, *, server_client: httpx.AsyncClient, caller: s
         if not isinstance(dedupe_key, str) or not dedupe_key.strip():
             return _error(f"{tool} 'dedupe_key' must be a non-empty string")
         body["dedupe_key"] = dedupe_key.strip()[:64]
+    for key, limit in (("for", 128), ("subject", 64)):
+        value = args.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            return _error(f"{tool} '{key}' must be a string")
+        if value.strip():
+            body[key] = value.strip()[:limit]
     return await _passthrough(
         server_client, "POST", "/v1/factory/agent/decisions", tool_name=tool, body=body
     )

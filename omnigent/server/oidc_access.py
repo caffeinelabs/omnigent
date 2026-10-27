@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from omnigent.server.admin_list import AdminList, MtimeCachedIdentitySet, resolve_data_dir
 
@@ -125,3 +125,31 @@ class OidcAdmissionPolicy:
         if self._invited_lookup is not None and self._invited_lookup.is_email_invited(email):
             return True
         return False
+
+
+# The policy the mounted OIDC login routes use, so other routes (the factory's
+# People invite) can tell whether an email would be let in.
+_registered_policy: OidcAdmissionPolicy | None = None
+
+
+def register_admission_policy(policy: OidcAdmissionPolicy | None) -> None:
+    """Record the policy the OIDC callback uses (``None`` forgets it).
+
+    :param policy: The login routes' admission policy.
+    """
+    global _registered_policy
+    _registered_policy = policy
+
+
+def admission_status(email: str) -> Literal["ok", "blocked"]:
+    """Whether ``email`` could sign in through the registered OIDC policy.
+
+    :param email: e.g. ``"mia@example.com"`` (compared lowercased).
+    :returns: ``"ok"`` when admitted or when no OIDC policy is mounted
+        (header, accounts and single-user modes admit by other means),
+        else ``"blocked"``.
+    """
+    policy = _registered_policy
+    if policy is None:
+        return "ok"
+    return "ok" if policy.is_admitted(email.strip().lower()) else "blocked"

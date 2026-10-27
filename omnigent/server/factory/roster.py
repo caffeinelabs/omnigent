@@ -108,6 +108,8 @@ async def build_roster(
     members: list[Conversation],
     deps: FactoryDeps,
     app_state: Any,
+    *,
+    humans: bool = False,
 ) -> dict[str, Any]:
     """
     Build the ``GET /v1/factory/roster`` body.
@@ -116,8 +118,23 @@ async def build_roster(
     :param members: Top-level members to list (already access-filtered).
     :param deps: Factory stores.
     :param app_state: ``app.state`` (runner tunnel registry).
-    :returns: ``{factory_id, members: [{…, children: [{…}]}]}``.
+    :param humans: Add ``humans``: the people on the factory roster.
+    :returns: ``{factory_id, members: [{…, children: [{…}]}], humans?: [{…}]}``.
     """
+    body = await _members_body(factory_id, members, deps, app_state)
+    if humans:
+        from omnigent.server.factory.people import roster_humans
+
+        body["humans"] = await roster_humans(app_state, factory_id)
+    return body
+
+
+async def _members_body(
+    factory_id: str,
+    members: list[Conversation],
+    deps: FactoryDeps,
+    app_state: Any,
+) -> dict[str, Any]:
     store = deps.conversation_store
     if not members:
         return {"factory_id": factory_id, "members": []}

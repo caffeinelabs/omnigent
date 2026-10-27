@@ -163,6 +163,21 @@ def snapshot(root_id: str, conversation_id: str) -> dict[str, Any]:
     }
 
 
+def viewer_conversations(root_id: str, user_id: str) -> set[str]:
+    """
+    The conversations whose streams *user_id* holds open in a session tree.
+
+    :param root_id: Root conversation of the session tree, e.g. ``"conv_root123"``.
+    :param user_id: The viewer identity, e.g. ``"alice@example.com"``.
+    :returns: Conversation ids (empty when the user views nothing there).
+    """
+    with _lock:
+        entry = _viewers.get(root_id, {}).get(user_id)
+        if entry is None:
+            return set()
+        return {connection.conversation_id for connection in entry.connections.values()}
+
+
 def _broadcast(root_id: str) -> None:
     """
     Publish the tree's viewer list to every viewed stream in the tree.

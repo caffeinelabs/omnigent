@@ -81,6 +81,8 @@ class MailItem:
     :param factory_id: The factory it belongs to (resolved from the target when unset).
     :param project: Project slug for the event log.
     :param replayed: Re-submitted from the event log after a restart.
+    :param created_by: The human the message is attributed to, e.g. a Room author.
+    :param thread: The Room thread it belongs to, e.g. ``"project:db-version"``.
     """
 
     mail_id: str
@@ -93,6 +95,8 @@ class MailItem:
     factory_id: str | None = None
     project: str | None = None
     replayed: bool = False
+    created_by: str | None = None
+    thread: str | None = None
 
 
 def new_mail_id() -> str:
@@ -337,10 +341,13 @@ class Mailer:
         """
         return await mail_events.replay_undelivered(self._app_state, self)
 
-    async def _attempt(self, session_id: str, text: str, *, restart: bool) -> DeliveryOutcome:
+    async def _attempt(
+        self, session_id: str, text: str, *, restart: bool, created_by: str | None = None
+    ) -> DeliveryOutcome:
         deliver = self._deliver or deliver_message
+        extra = {"created_by": created_by} if created_by else {}
         try:
-            return await deliver(self._app_state, session_id, text, restart=restart)
+            return await deliver(self._app_state, session_id, text, restart=restart, **extra)
         except Exception as exc:
             _logger.exception("factory delivery to %s crashed", session_id)
             return DeliveryOutcome(False, f"internal_error: {type(exc).__name__}")
@@ -391,7 +398,9 @@ class Mailer:
         delays = iter(self._retry_delays_s)
         restart = item.restart
         while True:
-            outcome = await self._attempt(item.target_id, item.text, restart=restart)
+            outcome = await self._attempt(
+                item.target_id, item.text, restart=restart, created_by=item.created_by
+            )
             if outcome.delivered:
                 if item.sender_id is not None and item.kind in PENDING_REPLY_KINDS:
                     self._pending[item.target_id] = (item.sender_id, self._clock())

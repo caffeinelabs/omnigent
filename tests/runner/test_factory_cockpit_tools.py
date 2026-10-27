@@ -175,6 +175,26 @@ async def test_ask_validates_locally(args: dict[str, Any], needle: str) -> None:
     assert server.requests == []
 
 
+async def test_ask_routes_to_a_person_and_names_its_subject() -> None:
+    reply = {"decision": "D-4", "id": "d4", "status": "open", "assignee": "operators"}
+    server = FakeServer().on("POST", "/v1/factory/agent/decisions", body=reply)
+
+    out = await _call(
+        server,
+        "sys_factory_ask",
+        {"question": "Ship it?", "for": " mia@caffeine.ai ", "subject": "pr:9f2c"},
+    )
+    bad = await _call(FakeServer(), "sys_factory_ask", {"question": "q", "for": 7})
+
+    assert out == reply
+    assert server.requests[0].body["for"] == "mia@caffeine.ai"
+    assert server.requests[0].body["subject"] == "pr:9f2c"
+    assert "'for' must be a string" in json.dumps(bad)
+    params = _params(SysFactoryAskTool)
+    assert params["properties"]["for"]["maxLength"] == 128
+    assert params["properties"]["subject"]["maxLength"] == 64
+
+
 async def test_ask_withdraw_hits_the_withdraw_route() -> None:
     server = FakeServer().on(
         "POST",

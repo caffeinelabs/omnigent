@@ -285,3 +285,53 @@ def test_bob_cannot_grant_or_escalate(live_server: str, owner_session: _OwnedSes
 
         revoke_owner = bob.delete(f"/v1/sessions/{sid}/permissions/{owner_session.owner_email}")
         assert revoke_owner.status_code == 403
+
+
+def test_factory_invite_grants_follow_the_roster(
+    live_server: str, owner_session: _OwnedSession
+) -> None:
+    """A factory invite shares every member; its grants are managed by the roster.
+
+    The owner's session becomes a factory root, Bob is invited as an operator
+    through the People API, reads the factory and the session, cannot be
+    revoked through the session's own permissions route (409), and loses
+    everything once removed from the roster.
+    """
+    sid = owner_session.session_id
+    owner = owner_session.owner
+    labels = owner.patch(
+        f"/v1/sessions/{sid}",
+        json={"labels": {"omnigent.factory.id": sid, "omnigent.factory.role": "lead"}},
+    )
+    labels.raise_for_status()
+    people = f"/v1/factory/factories/{sid}/people"
+    with _client_for(live_server, f"bob-{uuid.uuid4().hex[:6]}@e2e.test") as bob:
+        bob_email = bob.headers["X-Forwarded-Email"]
+        assert bob.get(f"/v1/factory/factories/{sid}").status_code == 404
+
+        invite = owner.put(f"{people}/{bob_email}", json={"role": "operator"})
+        assert invite.status_code == 200, invite.text
+        assert invite.json()["admission"] == "ok"
+        assert invite.json()["person"]["role"] == "operator"
+
+        # Bob now reads the factory as an operator, and its member session.
+        snapshot = bob.get(f"/v1/factory/factories/{sid}")
+        assert snapshot.status_code == 200, snapshot.text
+        assert snapshot.json()["viewer"]["role"] == "operator"
+        assert snapshot.json()["viewer"]["can"]["control"] is True
+        assert snapshot.json()["viewer"]["can"]["stop"] is False
+        assert bob.get(f"/v1/sessions/{sid}").status_code == 200
+        roster = bob.get(people)
+        assert bob_email in [p["user_id"] for p in roster.json()["data"]]
+
+        # The grant belongs to the roster: the session route refuses to revoke it.
+        revoke = owner.delete(f"/v1/sessions/{sid}/permissions/{bob_email}")
+        assert revoke.status_code == 409, revoke.text
+        assert revoke.json()["error"]["code"] == "managed_by_factory"
+        # Operators cannot invite; inviting is an owner's lever.
+        assert bob.put(f"{people}/carol@e2e.test", json={"role": "viewer"}).status_code == 403
+
+        removed = owner.delete(f"{people}/{bob_email}")
+        assert removed.status_code == 200, removed.text
+        assert bob.get(f"/v1/factory/factories/{sid}").status_code == 404
+        assert bob.get(f"/v1/sessions/{sid}").status_code == 404

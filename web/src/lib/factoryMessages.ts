@@ -17,6 +17,7 @@ export type FactoryMessageKind =
   | "control"
   | "decision"
   | "review"
+  | "human"
   | "generic";
 
 /** Who posted a `[Factory message …]`, as the server stamped it. */
@@ -47,8 +48,10 @@ export interface ParsedFactoryMessage {
   delta?: string[];
   /** Heartbeat number the delta counts from. */
   deltaSince?: number;
-  /** The human behind a control, decision, review or brief. */
+  /** The human behind a control, decision, review, brief or typed message. */
   by?: string;
+  /** Their factory role on a `[Factory human · <name> (<role>)]` message. */
+  role?: string;
   /** Control action, e.g. "PAUSE", "PREVIEW". */
   action?: string;
   pr?: number;
@@ -92,6 +95,8 @@ const DECISION_WITHDRAWN_RE = /^\[Factory decision · D-(\d+) withdrawn by (.+?)
 const REVIEW_RE = /^\[Factory review · (CHANGES REQUESTED|APPROVED)[^\]]*\]/;
 // The cockpit brief; the optional "via cockpit" also admits a bare legacy brief.
 const BRIEF_RE = /^\[Factory brief · from (.+?)( via cockpit)?(?: · id=(mail_[0-9a-f]+))?\]/;
+// A person typing into a shared factory member (server-stamped, whole first line).
+const HUMAN_RE = /^\[Factory human · (.+) \((viewer|operator|owner|creator)\)\]$/;
 // A well-formed header of a kind this parser does not know yet.
 const GENERIC_RE = /^\[Factory ([a-z][a-z ]*?)(?: · ([^\]]*))?\]/;
 const KNOWN_WORDS = new Set([
@@ -104,6 +109,7 @@ const KNOWN_WORDS = new Set([
   "decision",
   "review",
   "brief",
+  "human",
 ]);
 
 const DELTA_RE = /\b(\d+) changes? since #(\d+):\s*([\s\S]*)$/;
@@ -310,6 +316,17 @@ function parseHeader(header: string, rest: string, wrapped: boolean): ParsedFact
       by: m[1]!,
       ...(m[2] ? { source: "cockpit" } : {}),
       ...(m[3] ? { mailId: m[3] } : {}),
+    };
+  }
+  m = HUMAN_RE.exec(header);
+  if (m) {
+    return {
+      kind: "human",
+      subject: m[1]!,
+      body: joinBody("", rest),
+      wrapped,
+      by: m[1]!,
+      role: m[2]!,
     };
   }
   m = GENERIC_RE.exec(header);
@@ -687,6 +704,8 @@ export function factoryMessageLabel(p: ParsedFactoryMessage): string {
         : `${p.subject} answered by ${p.by}: "${p.option}"`;
     case "review":
       return p.subject;
+    case "human":
+      return `${p.by} (${p.role})`;
     default: {
       const summary = summarizeFactoryMarker(p);
       return summary.label ? `${summary.title}: ${summary.label}` : summary.title;

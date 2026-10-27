@@ -25,6 +25,8 @@ Each tick it reads the top-level members of every factory and applies:
   the root's supervisor when the root itself is parked.
 - **S9 preview TTL**: a ready preview no human looked at for
   ``OMNIGENT_FACTORY_PREVIEW_TTL_H`` gets one park notice to its PL per window.
+- **S10 decision escalation**: a blocking decision whose person is away widens
+  to operators, then to owners (see :mod:`~omnigent.server.factory.decision_routing`).
 
 Each tick also logs what it saw to the factory event log: heartbeats, alerts,
 and the PL ↔ sub-agent traffic (``dispatch``, ``task.done|failed``) read off
@@ -59,7 +61,14 @@ from omnigent.factory import (
     MIN_HEARTBEAT_S,
     STATE_ACTIVE,
 )
-from omnigent.server.factory import events, previews, quiet_beats, server_decisions, status
+from omnigent.server.factory import (
+    decision_routing,
+    events,
+    previews,
+    quiet_beats,
+    server_decisions,
+    status,
+)
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.delivery import DeliveryOutcome, deliver_message
 from omnigent.server.factory.envelope import display_title
@@ -378,6 +387,7 @@ class FactorySupervisor:
         await self._check_stuck(members, children, now)
         await self._escalate_blocked(store, now)
         await self._park_idle_previews(members, now)
+        await decision_routing.escalate_decisions(self._app_state, now)
         await self._report_skips(now)
         self._forget_departed({m.id for m in members}, {c.id for c in children})
         status.set_status("supervisor", last_tick_at=int(now), ok=True, error=None)

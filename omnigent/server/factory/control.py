@@ -41,7 +41,7 @@ from omnigent.factory import (
     STATE_DONE,
     STATE_PAUSED,
 )
-from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER, LEVEL_READ, RESERVED_USER_LOCAL
+from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE, LEVEL_READ, RESERVED_USER_LOCAL
 from omnigent.server.factory import events, nudge
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.envelope import display_title, quote_spoofed_lines
@@ -144,17 +144,27 @@ class CockpitError(Exception):
 # ── Shared helpers (decisions and start use them too) ───────────
 
 
-def human_name(user_id: str | None) -> str:
+def human_name(user_id: str | None, role: str | None = None) -> str:
     """
-    The name server-stamped texts show for a human, e.g. ``"alice@example.com"``.
+    The name server-stamped texts show for a human, e.g. ``"alice@example.com (operator)"``.
 
     :param user_id: Authenticated user id, or ``None`` in single-user mode.
+    :param role: Their factory role, appended when given (see
+        :func:`~omnigent.server.factory.people.human_label`).
     :returns: A one-line name without quotes or brackets; ``"human"`` when
         there is no named user.
     """
     if not user_id or user_id == RESERVED_USER_LOCAL:
         return "human"
-    return display_title(user_id, "human")
+    name = display_title(user_id, "human")
+    return f"{name} ({role})" if role else name
+
+
+async def human_label(deps: FactoryDeps, factory_id: str, user_id: str | None) -> str:
+    """:returns: :func:`human_name` with the person's role once the factory has several."""
+    from omnigent.server.factory.people import human_label as label
+
+    return await asyncio.to_thread(label, deps, factory_id, user_id)
 
 
 def clip(text: str, limit: int) -> str:
@@ -536,8 +546,9 @@ async def plan_control(
     Validate and authorize a control without side effects.
 
     Access: EDIT on every member acted on (and the root for a factory-wide
-    action); OWNER for restart and relaunch, and on the root to stop the
-    whole factory. Only ``cadence`` may omit *target* (it is factory-wide).
+    action); MANAGE (factory owners) to stop, restart and relaunch, and on the
+    root to stop the whole factory. They run as server mail, so an owner needs
+    no session ownership. Only ``cadence`` may omit *target* (it is factory-wide).
 
     :raises CockpitError: On an invalid action, target or option.
     :raises OmnigentError: 401/403/404 from the access checks.
@@ -558,9 +569,8 @@ async def plan_control(
             raise CockpitError(400, "invalid_target", "target is required", field="target")
         target = TARGET_FACTORY
     resolved = await resolve_target(deps, root, target or "", revive=action == ACTION_RESUME)
-    plan = ControlPlan(
-        root=root, action=action, target=resolved, by=human_name(user_id), note=note
-    )
+    by = await human_label(deps, root.id, user_id)
+    plan = ControlPlan(root=root, action=action, target=resolved, by=by, note=note)
 
     if action in (ACTION_RESTART, ACTION_RELAUNCH) and resolved.kind == "factory":
         raise CockpitError(
@@ -613,9 +623,10 @@ async def plan_control(
         plan.root_reply_to = await asyncio.to_thread(_root_reply_address, deps, root)
 
     if resolved.kind == "factory":
-        level = LEVEL_OWNER if action == ACTION_STOP else LEVEL_EDIT
+        level = LEVEL_MANAGE if action == ACTION_STOP else LEVEL_EDIT
         await require(deps, user_id, root.id, level)
-    member_level = LEVEL_OWNER if action in (ACTION_RESTART, ACTION_RELAUNCH) else LEVEL_EDIT
+    owner_actions = (ACTION_STOP, ACTION_RESTART, ACTION_RELAUNCH)
+    member_level = LEVEL_MANAGE if action in owner_actions else LEVEL_EDIT
     for member in recipients:
         await require(deps, user_id, member.id, member_level)
 
@@ -1092,7 +1103,7 @@ async def submit_pr_feedback(
     await require(deps, user_id, pl.id, LEVEL_EDIT)
     if pr.state != "open":
         raise CockpitError(409, "pr_not_open", f"PR #{pr.number} is {pr.state}")
-    by = human_name(user_id)
+    by = await human_label(deps, root.id, user_id)
     review = {
         "verdict": verdict,
         "text": text.strip() if text and text.strip() else None,
@@ -1144,6 +1155,7 @@ __all__ = [
     "execute_control",
     "factory_order",
     "find_project_pl",
+    "human_label",
     "human_name",
     "load_factory_root",
     "plan_control",

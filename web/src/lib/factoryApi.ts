@@ -683,8 +683,10 @@ export interface DecisionOptionView {
   action: string | null;
   /** A link-only option (e.g. `/inbox`). */
   href: string | null;
-  /** What the action acts on, e.g. `"member:<id>"` or `"project:<slug>"`. */
+  /** What the action acts on, e.g. `"member:<id>"`, `"project:<slug>"` or `"person:<user>"`. */
   target: string | null;
+  /** The roster role a `grant_role` option gives (access requests). */
+  role?: PersonRole | null;
 }
 
 /** A question for the human, shown as `ref` (`D-<number>`). */
@@ -1103,6 +1105,8 @@ export interface EventCursor {
 export interface OpenDecisionItem {
   factory: { id: string; name: string };
   decision: DecisionView;
+  /** Assigned to the caller or to a role they hold (absent on older servers). */
+  mine?: boolean | null;
 }
 
 /** `GET /v1/factory/decisions`. */
@@ -1380,9 +1384,10 @@ export async function fetchOpenDecisions(): Promise<OpenDecisionsResponse> {
   return readJson(await authenticatedFetch("/v1/factory/decisions?status=open"));
 }
 
+/** Open decisions assigned to the viewer or a role they hold (badge counts). */
 export async function fetchOpenDecisionCount(): Promise<number> {
   const body = await readJson<OpenDecisionsResponse>(
-    await authenticatedFetch("/v1/factory/decisions?status=open&count_only=1"),
+    await authenticatedFetch("/v1/factory/decisions?status=open&assigned=me&count_only=1"),
   );
   return body.count;
 }

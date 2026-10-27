@@ -136,6 +136,8 @@ async def record_queued(app_state: Any, item: MailItem, ts: int | None = None) -
             "sender_id": item.sender_id,
             "target_id": item.target_id,
             "target_title": item.target_title,
+            **({"created_by": item.created_by} if item.created_by else {}),
+            **({"thread": item.thread} if item.thread else {}),
         },
         ts=ts,
     )
@@ -234,6 +236,8 @@ async def replay_undelivered(app_state: Any, mailer: Mailer, *, now: int | None 
                 factory_id=event.factory_id,
                 project=event.project_slug,
                 replayed=True,
+                created_by=data.get("created_by"),
+                thread=data.get("thread"),
             )
         )
         count += 1

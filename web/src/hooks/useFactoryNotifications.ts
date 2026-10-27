@@ -1,13 +1,24 @@
 // Browser notifications for the factory while its page is in a background tab:
 // a new blocking decision, a PR that turned ready for review, a demo that was
-// published. Items are diffed by id between query updates; whatever is
-// already there when the page mounts never notifies. Permission is requested
-// once, app-wide, by useIdleNotifications.
+// published. In a shared factory only what is for me or my role notifies:
+// decisions assigned to me (or to operators/owners when I hold that role),
+// reviews for those who may review, and member deaths for owners. Items are
+// diffed by id between query updates; whatever is already there when the page
+// mounts never notifies. Permission is requested once, app-wide, by
+// useIdleNotifications.
 
 import { useEffect, useRef } from "react";
 import { showNotification } from "@/lib/browserNotifications";
-import type { FactorySnapshot, OpenDecisionItem } from "@/lib/factoryApi";
+import type {
+  DecisionView,
+  FactorySnapshot,
+  OpenDecisionItem,
+  ViewerBlock,
+} from "@/lib/factoryApi";
 import { useNavigate } from "@/lib/routing";
+
+const LEVEL_EDIT = 2;
+const LEVEL_MANAGE = 3;
 
 export interface FactoryNotice {
   /** Stable identity: the same item never notifies twice. */
@@ -26,13 +37,36 @@ function reviewPath(factoryId: string, number: number): string {
   return `/factory/${factoryId}?review=${number}`;
 }
 
-/** Notices one cockpit snapshot holds: blocking decisions, ready PRs, demos. */
+/**
+ * Whether a decision is for the viewer: assigned to them, or to a role they
+ * hold (operators: edit and up; owners: manage and up). A claimed decision
+ * belongs to its claimer. Without a viewer block (an older server) every
+ * decision counts.
+ */
+export function isForViewer(
+  decision: DecisionView,
+  viewer: ViewerBlock | null | undefined,
+): boolean {
+  if (!viewer) return true;
+  if (decision.claimed_by) return decision.claimed_by === viewer.user_id;
+  const assignee = decision.assignee ?? "operators";
+  if (assignee === "operators") return viewer.level >= LEVEL_EDIT;
+  if (assignee === "owners") return viewer.level >= LEVEL_MANAGE;
+  return assignee === viewer.user_id;
+}
+
+/**
+ * Notices one cockpit snapshot holds for its viewer: blocking decisions for
+ * them or their role, ready PRs and demos when they may review, dead members
+ * for owners.
+ */
 export function snapshotNotices(snapshot: FactorySnapshot): FactoryNotice[] {
   const fid = snapshot.factory.id;
   const name = snapshot.factory.name;
+  const viewer = snapshot.viewer;
   const notices: FactoryNotice[] = [];
   for (const d of snapshot.decisions) {
-    if (d.status !== "open" || !d.blocking) continue;
+    if (d.status !== "open" || !d.blocking || !isForViewer(d, viewer)) continue;
     notices.push({
       key: `decision:${d.id}`,
       title: `${name} · ${d.ref} needs you`,
@@ -40,6 +74,18 @@ export function snapshotNotices(snapshot: FactorySnapshot): FactoryNotice[] {
       path: decisionPath(fid, d.ref),
     });
   }
+  if (viewer && viewer.level >= LEVEL_MANAGE) {
+    for (const m of snapshot.members) {
+      if (!m.is_top_level || m.health !== "dead") continue;
+      notices.push({
+        key: `dead:${m.session_id}`,
+        title: `${name} · ${m.title} is dead`,
+        body: m.summary ?? "Its heartbeats keep failing; restart or relaunch it.",
+        path: `/factory/${fid}`,
+      });
+    }
+  }
+  if (viewer && !viewer.can.review) return notices;
   for (const pr of snapshot.prs) {
     if (pr.state !== "open") continue;
     if (pr.ready) {
@@ -62,10 +108,12 @@ export function snapshotNotices(snapshot: FactorySnapshot): FactoryNotice[] {
   return notices;
 }
 
-/** Notices from the Inbox's open decisions (every factory): the blocking ones. */
+/** Notices from the Inbox's open decisions (every factory): the blocking ones for me. */
 export function decisionNotices(items: OpenDecisionItem[]): FactoryNotice[] {
   return items
-    .filter(({ decision }) => decision.status === "open" && decision.blocking)
+    .filter(
+      ({ decision, mine }) => decision.status === "open" && decision.blocking && mine !== false,
+    )
     .map(({ factory, decision }) => ({
       key: `decision:${decision.id}`,
       title: `${factory.name} · ${decision.ref} needs you`,

@@ -18,9 +18,11 @@ from typing import Any, Final
 
 from omnigent.entities import Conversation
 from omnigent.entities.factory import FactoryDecision, FactoryEvent, FactoryPr
+from omnigent.errors import OmnigentError
 from omnigent.factory import (
     ACTION_ABANDON_TASK,
     ACTION_DISMISS,
+    ACTION_GRANT_ROLE,
     ACTION_PAUSE,
     ACTION_REDEPLOY_PREVIEW,
     ACTION_RELAUNCH,
@@ -29,10 +31,10 @@ from omnigent.factory import (
     ACTION_REWORK,
     LABEL_PROJECT,
 )
-from omnigent.server.auth import LEVEL_EDIT
-from omnigent.server.factory import control, events
+from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE
+from omnigent.server.factory import control, decision_routing, events, people
 from omnigent.server.factory.context import FactoryDeps, factory_deps
-from omnigent.server.factory.control import CockpitError, ControlPlan, human_name, same_id
+from omnigent.server.factory.control import CockpitError, ControlPlan, human_label, same_id
 from omnigent.server.factory.envelope import display_title, quote_spoofed_lines
 from omnigent.server.factory.mailer import new_mail_id
 from omnigent.server.factory.membership import is_top_level, resolve_role, root_conversation
@@ -82,6 +84,24 @@ class AnswerResult:
     decision: FactoryDecision
     delivered_to: Conversation | None = None
     mail_id: str | None = None
+
+
+@dataclass(frozen=True)
+class GrantPlan:
+    """
+    A ``grant_role`` option (an access request): put *user_id* on the roster as *role*.
+
+    :param target: The option's target, ``person:<user id>``.
+    """
+
+    user_id: str
+    role: str
+    target: str
+
+    @property
+    def action(self) -> str:
+        """:returns: ``grant_role``."""
+        return ACTION_GRANT_ROLE
 
 
 # ── Texts ──────────────────────────────────────────────────────
@@ -232,6 +252,11 @@ def decision_view(
         delivered_to_title=delivered_to_title,
         created_at=decision.created_at,
         updated_at=decision.updated_at,
+        assignee=decision.assignee,
+        claimed_by=decision.claimed_by,
+        claimed_at=decision.claimed_at,
+        thread=decision.thread,
+        subject=decision.subject,
     )
     return view.model_dump()
 
@@ -240,9 +265,11 @@ async def _authorize(
     deps: FactoryDeps, user_id: str | None, decision: FactoryDecision
 ) -> Conversation | None:
     """
-    EDIT on the asker (agent decisions) or the factory root (server decisions).
+    EDIT on the asker (agent decisions) or the factory root (server decisions),
+    and the decision is assigned to the caller or a role they hold.
 
     :returns: The asker row, when there is one.
+    :raises CockpitError: 403 ``not_assigned``.
     """
     await control.load_factory_root(deps, user_id, decision.factory_id)
     asker = await control.get_conv(deps, decision.asked_by_session_id)
@@ -250,7 +277,28 @@ async def _authorize(
         await control.require(deps, user_id, asker.id, LEVEL_EDIT)
     else:
         await control.require(deps, user_id, decision.factory_id, LEVEL_EDIT)
+    await require_assigned(deps, user_id, decision)
     return asker
+
+
+async def require_assigned(
+    deps: FactoryDeps, user_id: str | None, decision: FactoryDecision
+) -> None:
+    """
+    Refuse an operator acting on a decision assigned to owners or to someone else.
+
+    :raises CockpitError: 403 ``not_assigned`` naming the assignee.
+    """
+    level = await asyncio.to_thread(people.viewer_level, deps, decision.factory_id, user_id)
+    if decision_routing.may_answer(decision, user_id, level):
+        return
+    assignee = decision_routing.assignee_of(decision)
+    raise CockpitError(
+        403,
+        "not_assigned",
+        f"{decision.ref} is assigned to {assignee}; an owner can reassign it",
+        assignee=assignee,
+    )
 
 
 async def not_open_error(decision: FactoryDecision, deps: FactoryDeps) -> CockpitError:
@@ -325,16 +373,19 @@ async def _plan_action(
     decision: FactoryDecision,
     option: dict[str, Any],
     user_id: str | None,
-) -> ControlPlan | Conversation | None:
+) -> ControlPlan | GrantPlan | Conversation | None:
     """
     Validate a server decision's action before the answer is stored.
 
-    :returns: A control plan, the PL to message (abandon/rework), or ``None``
-        for no side effect (dismiss, link-only and unknown actions).
+    :returns: A control plan, a roster grant (access requests), the PL to
+        message (abandon/rework), or ``None`` for no side effect (dismiss,
+        link-only and unknown actions).
     """
     action = option.get("action")
     if not action or action == ACTION_DISMISS or option.get("href"):
         return None
+    if action == ACTION_GRANT_ROLE:
+        return await _plan_grant(app_state, deps, decision, option, user_id)
     subject = _subject(decision, option)
     if action in _CONTROL_ACTIONS:
         options: dict[str, Any] = {}
@@ -375,12 +426,37 @@ async def _plan_action(
     return None
 
 
+async def _plan_grant(
+    app_state: Any,
+    deps: FactoryDeps,
+    decision: FactoryDecision,
+    option: dict[str, Any],
+    user_id: str | None,
+) -> GrantPlan:
+    """Validate a ``grant_role`` option: ``person:<user>``, a role, MANAGE, the sharing mode."""
+    from omnigent.server.routes._sharing import require_sharing_allows
+
+    target = str(option.get("target") or "")
+    role = str(option.get("role") or people.ROLE_OPERATOR)
+    person = target.removeprefix("person:").strip()
+    if not target.startswith("person:") or not person or role not in people.ROLE_LEVELS:
+        raise CockpitError(409, "invalid_option", f"{decision.ref} names no person and role")
+    await control.require(deps, user_id, decision.factory_id, LEVEL_MANAGE)
+    try:
+        await require_sharing_allows(
+            app_state, deps.conversation_store, decision.factory_id, people.ROLE_LEVELS[role]
+        )
+    except OmnigentError as exc:
+        raise CockpitError(403, "sharing_refused", exc.message) from None
+    return GrantPlan(user_id=person, role=role, target=target)
+
+
 async def _action_failed(
     app_state: Any,
     deps: FactoryDeps,
     decision: FactoryDecision,
     by: str,
-    plan: ControlPlan,
+    plan: ControlPlan | GrantPlan,
     exc: Exception,
 ) -> tuple[FactoryDecision, CockpitError]:
     """
@@ -418,7 +494,7 @@ async def _action_failed(
             "by": by,
             "decision_id": decision.id,
             "action": plan.action,
-            "target": plan.target.ref,
+            "target": plan.target if isinstance(plan, GrantPlan) else plan.target.ref,
             "error": type(exc).__name__,
         },
     )
@@ -480,9 +556,9 @@ async def answer_decision(
             400, "text_not_allowed", f"{decision.ref} needs one of its options", field="text"
         )
 
-    by = human_name(user_id)
+    by = await human_label(deps, decision.factory_id, user_id)
     label = str(option.get("label") or option_id) if option is not None else FREE_TEXT_LABEL
-    planned: ControlPlan | Conversation | None = None
+    planned: ControlPlan | GrantPlan | Conversation | None = None
     failure: CockpitError | None = None
     if decision.source != "agent" and option is not None:
         planned = await _plan_action(app_state, deps, decision, option, user_id)
@@ -511,7 +587,8 @@ async def answer_decision(
         outgoing = answer_text(answered, by, label, text, _PL_ACTION_HINTS.get(str(action)))
         kind = "request"
     # The receipt id is stored before the mail is queued, so its delivery is never missed.
-    mail_id = new_mail_id() if target is not None and (outgoing or planned) else None
+    mailed = outgoing is not None or isinstance(planned, ControlPlan)
+    mail_id = new_mail_id() if target is not None and mailed else None
     if mail_id is not None:
         answered = (
             await asyncio.to_thread(
@@ -527,6 +604,13 @@ async def answer_decision(
         except Exception as exc:  # noqa: BLE001 - the answer is stored; report, don't 500
             answered, failure = await _action_failed(app_state, deps, answered, by, planned, exc)
             mail_id = None
+    elif isinstance(planned, GrantPlan):
+        try:
+            await people.set_person(
+                app_state, answered.factory_id, planned.user_id, planned.role, by_user=user_id
+            )
+        except Exception as exc:  # noqa: BLE001 - the answer is stored; report, don't 500
+            answered, failure = await _action_failed(app_state, deps, answered, by, planned, exc)
     elif target is not None and outgoing is not None:
         control.send_text(app_state, target.id, outgoing, kind=kind, mail_id=mail_id)
         if (
@@ -597,7 +681,7 @@ async def withdraw_decision(
         raise await not_open_error(exc.decision, deps) from None
     except DecisionNotFound:
         raise CockpitError(404, "unknown_decision", f"no decision {decision_id!r}") from None
-    by = human_name(user_id)
+    by = await human_label(deps, decision.factory_id, user_id)
     mail_id: str | None = None
     target = asker if decision.source == "agent" and not control.is_gone(asker) else None
     if target is not None:
@@ -667,9 +751,11 @@ events.add_listener(_receipt_on_delivery)
 __all__ = [
     "ANSWER_TEXT_MAX_CHARS",
     "AnswerResult",
+    "GrantPlan",
     "answer_decision",
     "answer_text",
     "decision_view",
+    "require_assigned",
     "route_answer",
     "withdraw_decision",
     "withdraw_text",

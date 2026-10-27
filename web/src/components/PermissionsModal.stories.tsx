@@ -7,15 +7,19 @@ import { StoryQueryRouter } from "@/storybook/StoryProviders";
 import { PermissionsModal } from "./PermissionsModal";
 
 const sessionId = "conversation-permissions-story";
+const FACTORY_ID = "f4f4ba9c77725331b12f0fa7072dc4d3";
 
 function modalEnvironment({
   mode,
   permissions = [],
   publicSharing = true,
+  labels,
 }: {
   mode: SharingMode;
   permissions?: Permission[];
   publicSharing?: boolean;
+  /** Session labels, e.g. a factory member's `omnigent.factory.id`. */
+  labels?: Record<string, string>;
 }): Decorator {
   return (Story) => (
     <CapabilitiesProvider
@@ -29,6 +33,12 @@ function modalEnvironment({
         route={`/c/${sessionId}`}
         seed={(queryClient) => {
           queryClient.setQueryData(["permissions", sessionId], permissions);
+          if (labels) {
+            queryClient.setQueryData(["session", sessionId], { id: sessionId, labels });
+            queryClient.setQueryData(["factories"], {
+              data: [{ id: FACTORY_ID, name: "Atlas factory" }],
+            });
+          }
         }}
       >
         <Story />
@@ -101,4 +111,19 @@ export const RestrictedHomeDirectory: Story = {
     if (!input) throw new Error("Permission user input not found");
     await fireEvent.change(input, { target: { value: "viewer@example.com" } });
   },
+};
+
+/** A factory member: the roster on the factory's People page owns these grants. */
+export const FactoryManaged: Story = {
+  decorators: [
+    modalEnvironment({
+      mode: "on",
+      labels: { "omnigent.factory.id": FACTORY_ID },
+      permissions: [
+        { user_id: "luka@caffeine.ai", conversation_id: sessionId, level: 4 },
+        { user_id: "mia@caffeine.ai", conversation_id: sessionId, level: 2 },
+        { user_id: "ops@caffeine.ai", conversation_id: sessionId, level: 1 },
+      ],
+    }),
+  ],
 };

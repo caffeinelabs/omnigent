@@ -637,6 +637,11 @@ def register_events_routes(
                 pass
             else:
                 created_by = body_created_by
+        # A person typing into a shared factory member is named and spoof-quoted.
+        if body.type == "message" and created_by is not None:
+            from omnigent.server.factory.attribution import attribute_message
+
+            body = await attribute_message(request, conv, body, created_by)
         # Validate event type at the route boundary. Anything not in
         # ``_ALLOWED_EVENT_TYPES`` is a client mistake — failing here
         # is far better than silently persisting an item the agent

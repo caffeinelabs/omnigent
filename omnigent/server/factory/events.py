@@ -79,6 +79,8 @@ def scopes_for(kind: str) -> list[str]:
     scopes = ["snapshot", "events"]
     if kind.startswith("decision.") or kind == "message.delivered":
         scopes.append("decisions")
+    if kind.startswith("people.") or kind == "access.requested":
+        scopes.append("people")
     return scopes
 
 

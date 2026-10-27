@@ -9,7 +9,9 @@ For each factory root this:
 3. creates project rows for PLs whose project label has none (title from the
    PL title, repo from the PL's managed workspace, else the root's) and links
    a missing or departed PL;
-4. persists each project's derived stage, logging ``stage.changed``.
+4. persists each project's derived stage, logging ``stage.changed``;
+5. repairs roster grants that drifted from the factory's people (a member
+   that missed the copy, a manual edit), logging ``people.drift_repaired``.
 
 A folder that fails skips only step 2 for that factory; a factory that fails is
 skipped. Either is counted in :attr:`ReconcileReport.failed`, logged at most
@@ -38,7 +40,7 @@ from omnigent.factory import (
     ROLE_PROJECT_LEAD,
     STAGE_READY,
 )
-from omnigent.server.factory import events
+from omnigent.server.factory import events, people
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.membership import factory_members
 from omnigent.server.factory.snapshot import (
@@ -75,6 +77,7 @@ class ReconcileReport:
     projects_created: list[str] = field(default_factory=list)
     pls_linked: list[str] = field(default_factory=list)
     stages_changed: list[tuple[str, str, str]] = field(default_factory=list)
+    grants_repaired: list[tuple[str, int]] = field(default_factory=list)
     # ``(factory id, step)`` for each step that failed this pass, logged or not.
     failed: list[tuple[str, str]] = field(default_factory=list)
 
@@ -296,6 +299,14 @@ async def reconcile_factory(
             summary=f"{project.title}: {old} → {new}",
             data={"from": old, "to": new, "overlay": overlay},
         )
+    try:
+        repaired = await people.repair_drift(app_state, root)
+    except Exception as exc:  # noqa: BLE001 - the next pass retries
+        _record_failure(report, root.id, "people", exc)
+    else:
+        _clear_failure(root.id, "people")
+        if repaired:
+            report.grants_repaired.append((root.id, repaired))
 
 
 async def reconcile_once(app_state: Any) -> ReconcileReport:
