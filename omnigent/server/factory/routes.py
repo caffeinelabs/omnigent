@@ -68,16 +68,25 @@ _BEACON_FIELDS = frozenset({"summary", "health"})
 class FactoryRouteError(Exception):
     """A factory-specific refusal with its own machine-readable code."""
 
-    def __init__(self, status_code: int, code: str, message: str) -> None:
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        *,
+        headers: dict[str, str] | None = None,
+    ) -> None:
         """
         :param status_code: HTTP status, e.g. ``403``.
         :param code: Error code, e.g. ``"session_out_of_factory"``.
         :param message: Human-readable detail.
+        :param headers: Extra response headers, e.g. ``{"Retry-After": "5"}``.
         """
         super().__init__(message)
         self.status_code = status_code
         self.code = code
         self.message = message
+        self.headers = headers
 
 
 async def factory_error_handler(_request: Request, exc: Exception) -> JSONResponse:
@@ -87,6 +96,7 @@ async def factory_error_handler(_request: Request, exc: Exception) -> JSONRespon
     return JSONResponse(
         status_code=exc.status_code,
         content={"error": {"code": exc.code, "message": exc.message}},
+        headers=exc.headers,
     )
 
 

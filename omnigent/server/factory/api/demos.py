@@ -7,7 +7,8 @@ factory artifact store when one is configured; see
 row. ``GET /v1/factory/demos/{demo_id}/files/{file_id}`` serves one file to a
 human with READ on that PL session: the type comes only from the extension
 allowlist, images and video play inline, everything else downloads, and single
-byte ranges are honoured (read as a span from the store) so ``<video>`` can seek.
+byte ranges are honoured (read as a span from the store, at most 4 MiB per
+response) so ``<video>`` can seek. A failing store is 503 on both routes.
 """
 
 from __future__ import annotations
@@ -51,10 +52,12 @@ from omnigent.server.factory.agent_scope import (
 )
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.demo_storage import (
+    DemoStoreUnavailableError,
     discard_factory_entries,
     file_entry,
     is_factory_entry,
     locate_demo_file,
+    put_demo_bytes,
     store_in_factory_store,
 )
 from omnigent.server.factory.demos import (
@@ -79,6 +82,11 @@ router = APIRouter(prefix="/v1/factory", tags=["factory"])
 
 DEMO_ROLES: Final = frozenset({ROLE_ENV_KEEPER, ROLE_PROJECT_LEAD, ROLE_LEAD, ROLE_DEMO})
 _MULTIPART_SLACK: Final = 1024 * 1024
+# Longest span one ranged GET answers (a shorter 206 is allowed): a seek or an
+# open-ended ``bytes=N-`` holds at most this much in memory, not the whole video.
+DEMO_MAX_SPAN_BYTES: Final = 4 * 1024 * 1024
+# Seconds a client is told to wait after the demo store failed.
+_STORE_RETRY_AFTER_S: Final = 5
 _CSP: Final = "default-src 'none'; sandbox"
 _RANGE_RE: Final = re.compile(r"bytes=(\d*)-(\d*)")
 
@@ -139,6 +147,9 @@ def _store_files(
 
     To the factory artifact store when one is configured, else as session
     files of *owner* (so they also show in its Files panel).
+
+    :raises DemoStoreUnavailableError: When the store fails; the files
+        already written are removed first.
     """
     if deps.factory_artifact_store is not None:
         return store_in_factory_store(
@@ -159,8 +170,9 @@ def _store_files(
                 content_type=item.content_type,
                 session_id=owner,
             )
-            deps.artifact_store.put(stored.id, item.content)
+            # Listed before the write, so a failed write also discards its row.
             stored_entries.append(file_entry(item, stored.id))
+            put_demo_bytes(deps.artifact_store, stored.id, item.content)
             try:
                 _publish_and_persist_resource_event(
                     owner,
@@ -296,9 +308,12 @@ async def _publish(
         files = check_upload([f.model_dump() for f in meta.files], parts)
     except DemoUploadError as exc:
         raise _upload_error(exc) from exc
-    demo, preview_urls, new_pr = await asyncio.to_thread(
-        _record_demo, caller, meta, files, status=status, repo=repo, number=number, slugs=slugs
-    )
+    try:
+        demo, preview_urls, new_pr = await asyncio.to_thread(
+            _record_demo, caller, meta, files, status=status, repo=repo, number=number, slugs=slugs
+        )
+    except DemoStoreUnavailableError as exc:
+        raise _store_unavailable() from exc
     if new_pr is not None:
         await announce_new_pr(request.app.state, caller, new_pr)
     return demo, preview_urls
@@ -396,6 +411,16 @@ def _not_found() -> OmnigentError:
     return OmnigentError("demo file not found", code=ErrorCode.NOT_FOUND)
 
 
+def _store_unavailable() -> FactoryRouteError:
+    """503 for a demo store that failed (unreachable, throttled, denied), with Retry-After."""
+    return FactoryRouteError(
+        503,
+        "artifact_store_unavailable",
+        "the demo file store is unavailable; retry shortly",
+        headers={"Retry-After": str(_STORE_RETRY_AFTER_S)},
+    )
+
+
 @router.api_route("/demos/{demo_id}/files/{file_id}", methods=["GET", "HEAD"])
 async def get_demo_file(request: Request, demo_id: str, file_id: str) -> Response:
     """Serve one demo file to a human who can read the demo's PL session."""
@@ -419,7 +444,10 @@ async def get_demo_file(request: Request, demo_id: str, file_id: str) -> Respons
     entry = next((f for f in demo.files if f.get("file_id") == file_id), None)
     if entry is None:
         raise _not_found()
-    blob = await asyncio.to_thread(locate_demo_file, deps, demo, entry)
+    try:
+        blob = await asyncio.to_thread(locate_demo_file, deps, demo, entry)
+    except DemoStoreUnavailableError as exc:
+        raise _store_unavailable() from exc
     file_type = demo_file_type(blob.filename) if blob is not None else None
     if blob is None or file_type is None:
         raise _not_found()
@@ -442,6 +470,8 @@ async def get_demo_file(request: Request, demo_id: str, file_id: str) -> Respons
     span = parse_range(request.headers.get("range"), size)
     if span is False:
         return Response(status_code=416, headers={**headers, "Content-Range": f"bytes */{size}"})
+    if isinstance(span, tuple):
+        span = (span[0], min(span[1], span[0] + DEMO_MAX_SPAN_BYTES - 1))
     if request.method == "HEAD":
         if isinstance(span, tuple):
             start, end = span
@@ -456,10 +486,13 @@ async def get_demo_file(request: Request, demo_id: str, file_id: str) -> Respons
             )
         return Response(media_type=content_type, headers={**headers, "Content-Length": str(size)})
     try:
-        # A span is read as a span (a seek, an S3 ranged GET), never the whole file.
+        # A span is a seek or an S3 ranged GET of at most DEMO_MAX_SPAN_BYTES;
+        # a request without Range reads the whole file.
         body = await asyncio.to_thread(blob.read, span if isinstance(span, tuple) else None)
     except (FileNotFoundError, KeyError) as exc:
         raise _not_found() from exc
+    except DemoStoreUnavailableError as exc:
+        raise _store_unavailable() from exc
     if isinstance(span, tuple):
         start, end = span
         return Response(

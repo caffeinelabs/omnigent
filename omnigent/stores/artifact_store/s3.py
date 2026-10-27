@@ -12,7 +12,8 @@ Credentials and the endpoint come from the standard AWS environment that
 - ``AWS_ENDPOINT_URL_S3`` (or ``AWS_ENDPOINT_URL``) — the S3 endpoint for a
   non-AWS provider, e.g. ``https://<account>.r2.cloudflarestorage.com`` for
   Cloudflare R2. Leave unset for AWS S3.
-- ``AWS_REGION`` / ``AWS_DEFAULT_REGION`` — region (R2 uses ``auto``).
+- ``AWS_REGION`` / ``AWS_DEFAULT_REGION`` — region (R2 uses ``auto``, the
+  fallback when unset; set it for AWS S3).
 
 Storage location format::
 
@@ -30,6 +31,8 @@ from pathlib import PurePosixPath, PureWindowsPath
 from typing import Any
 
 from omnigent.stores.artifact_store import ArtifactStore
+
+_MAX_POOL_CONNECTIONS = 32
 
 
 def _ensure_boto3() -> None:
@@ -122,7 +125,8 @@ def _make_client() -> Any:
         "s3",
         endpoint_url=endpoint or None,
         region_name=region,
-        config=Config(signature_version="s3v4"),
+        # Above botocore's 10, so concurrent range reads (video seeks) don't queue.
+        config=Config(signature_version="s3v4", max_pool_connections=_MAX_POOL_CONNECTIONS),
     )
 
 

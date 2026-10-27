@@ -8,6 +8,10 @@ the PL's Files panel. With ``OMNIGENT_FACTORY_ARTIFACT_LOCATION`` set (e.g.
 their only record. Such an entry carries its ``store`` location and ``key``,
 so a file is read from where it was written whatever the setting is now; an
 entry without them is a session file.
+
+A store failure other than a missing object (S3 unreachable, no credentials,
+throttled or denied, a local I/O error) is raised as
+:class:`DemoStoreUnavailableError`, which the routes answer with 503.
 """
 
 from __future__ import annotations
@@ -29,6 +33,45 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 FACTORY_ARTIFACT_LOCATION_ENV: Final = "OMNIGENT_FACTORY_ARTIFACT_LOCATION"
+
+
+class DemoStoreUnavailableError(Exception):
+    """An artifact store failed for a reason other than a missing object."""
+
+    def __init__(self, location: str, action: str) -> None:
+        """
+        :param location: The store's location, e.g. ``"s3://bucket/factory"``.
+        :param action: What failed, e.g. ``"read"``.
+        """
+        super().__init__(f"demo store {location} failed to {action}")
+        self.location = location
+        self.action = action
+
+
+def _unavailable(
+    store: ArtifactStore, action: str, key: str, exc: Exception
+) -> DemoStoreUnavailableError:
+    """Log a store failure and return the error to raise from it."""
+    _logger.warning(
+        "factory: demo store %s failed to %s %s",
+        store.storage_location,
+        action,
+        key,
+        exc_info=exc,
+    )
+    return DemoStoreUnavailableError(store.storage_location, action)
+
+
+def put_demo_bytes(store: ArtifactStore, key: str, data: bytes) -> None:
+    """
+    Write one demo file's bytes.
+
+    :raises DemoStoreUnavailableError: When the store fails.
+    """
+    try:
+        store.put(key, data)
+    except Exception as exc:
+        raise _unavailable(store, "write", key, exc) from exc
 
 
 def factory_artifact_store_from_env() -> ArtifactStore | None:
@@ -82,13 +125,15 @@ def store_in_factory_store(
     :param demo_id: Bare-hex id the demo row will get, a key segment.
     :param files: The checked uploads.
     :returns: The demo's file entries, each with ``store`` and ``key``.
+    :raises DemoStoreUnavailableError: When a write fails; the objects already
+        written are removed first.
     """
     entries: list[dict[str, Any]] = []
     try:
         for item in files:
             file_id = generate_file_id()
             key = demo_object_key(factory_id, demo_id, file_id, item.filename)
-            store.put(key, item.content)
+            put_demo_bytes(store, key, item.content)
             entries.append(
                 {**file_entry(item, file_id), "store": store.storage_location, "key": key}
             )
@@ -136,10 +181,18 @@ class DemoBlob:
         The whole file, or one inclusive span of it.
 
         :raises KeyError: When the bytes are gone.
+        :raises DemoStoreUnavailableError: When the store fails otherwise.
         """
-        if span is None:
-            return self.store.get(self.key)
-        return self.store.read_range(self.key, span[0], span[1])
+        try:
+            if span is None:
+                return self.store.get(self.key)
+            return self.store.read_range(self.key, span[0], span[1])
+        except KeyError:
+            raise
+        except FileNotFoundError:
+            raise KeyError(self.key) from None
+        except Exception as exc:
+            raise _unavailable(self.store, "read", self.key, exc) from exc
 
 
 def _store_at(deps: FactoryDeps, location: str) -> ArtifactStore:
@@ -147,6 +200,7 @@ def _store_at(deps: FactoryDeps, location: str) -> ArtifactStore:
     for store in (deps.factory_artifact_store, deps.artifact_store):
         if store is not None and store.storage_location == location:
             return store
+    # Unlocked: two threads racing here at worst open the same store twice.
     store = deps.recorded_artifact_stores.get(location)
     if store is None:
         store = deps.recorded_artifact_stores[location] = create_artifact_store(location)
@@ -162,7 +216,9 @@ def locate_demo_file(
     :param deps: The factory deps (stores).
     :param demo: The demo the file belongs to.
     :param entry: The file's entry in ``demo.files``.
-    :returns: The file, or ``None`` when it cannot be found or opened.
+    :returns: The file, or ``None`` when it cannot be found, or its recorded
+        location is malformed or needs a missing package.
+    :raises DemoStoreUnavailableError: When opening its store fails otherwise.
     """
     if is_factory_entry(entry):
         key, filename, size = entry.get("key"), entry.get("filename"), entry.get("bytes")
@@ -173,6 +229,9 @@ def locate_demo_file(
         except (ImportError, ValueError):
             _logger.warning("factory: cannot open demo store %s", entry["store"], exc_info=True)
             return None
+        except Exception as exc:
+            _logger.warning("factory: cannot open demo store %s", entry["store"], exc_info=True)
+            raise DemoStoreUnavailableError(str(entry["store"]), "open") from exc
         return DemoBlob(store=store, key=key, filename=filename, size=size)
     if deps.file_store is None or deps.artifact_store is None:
         return None
@@ -187,11 +246,13 @@ def locate_demo_file(
 __all__ = [
     "FACTORY_ARTIFACT_LOCATION_ENV",
     "DemoBlob",
+    "DemoStoreUnavailableError",
     "demo_object_key",
     "discard_factory_entries",
     "factory_artifact_store_from_env",
     "file_entry",
     "is_factory_entry",
     "locate_demo_file",
+    "put_demo_bytes",
     "store_in_factory_store",
 ]

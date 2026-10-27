@@ -4,7 +4,8 @@ With a factory store configured, publishing writes each demo file as an object
 there (no session file), records its location on the demo row, and the serving
 route reads it back from that location, a span with a ranged GET. Demos stored
 before (session files in the server's artifact store) keep being served, and
-with the variable unset nothing changes. S3 is moto.
+with the variable unset nothing changes. A store that fails is 503 on both
+routes. S3 is moto.
 """
 
 from __future__ import annotations
@@ -16,12 +17,15 @@ from typing import Any
 import boto3
 import pytest
 import pytest_asyncio
+from botocore.exceptions import ClientError, EndpointConnectionError, NoCredentialsError
 from moto import mock_aws
 
 from omnigent.server.factory import register_factory_routes
+from omnigent.server.factory.api import demos as demos_api
 from omnigent.server.factory.context import factory_deps
 from omnigent.server.factory.demo_storage import (
     FACTORY_ARTIFACT_LOCATION_ENV,
+    DemoStoreUnavailableError,
     factory_artifact_store_from_env,
     store_in_factory_store,
 )
@@ -175,9 +179,113 @@ def test_a_failed_put_discards_the_objects_already_written() -> None:
         DemoFileIn("a.png", "a.png", "screenshot", PNG, "image/png"),
         DemoFileIn("b.png", "b.png", "screenshot", PNG, "image/png"),
     ]
-    with pytest.raises(OSError, match="unreachable"):
+    with pytest.raises(DemoStoreUnavailableError) as raised:
         store_in_factory_store(store, factory_id="f" * 32, demo_id="d" * 32, files=files)
+    assert isinstance(raised.value.__cause__, OSError)
     assert store.blobs == {}
+
+
+# ── Store failures ────────────────────────────────────────────
+
+
+def _s3_error(kind: str, operation: str) -> Exception:
+    """A botocore failure of each kind an unhealthy S3 raises."""
+    if kind == "endpoint":
+        return EndpointConnectionError(endpoint_url="https://s3.example")
+    if kind == "credentials":
+        return NoCredentialsError()
+    code, status = {"slowdown": ("SlowDown", 503), "denied": ("AccessDenied", 403)}[kind]
+    return ClientError(
+        {"Error": {"Code": code}, "ResponseMetadata": {"HTTPStatusCode": status}}, operation
+    )
+
+
+def _assert_unavailable(resp: Any) -> None:
+    assert resp.status_code == 503, resp.text
+    assert resp.json()["error"]["code"] == "artifact_store_unavailable"
+    assert resp.headers["retry-after"] == "5"
+
+
+S3_FAILURES = ["endpoint", "credentials", "slowdown", "denied"]
+
+
+@pytest.mark.parametrize("kind", S3_FAILURES)
+async def test_a_failing_store_is_503_on_get(
+    s3_env: S3DemoEnv, kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s3_env.use_factory_store()
+    body = await s3_env.publish()
+
+    def _fail(**_kwargs: Any) -> Any:
+        raise _s3_error(kind, "GetObject")
+
+    monkeypatch.setattr(s3_env.client, "get_object", _fail)
+    _assert_unavailable(await s3_env.env.get(_url(body, "video")))
+    _assert_unavailable(await s3_env.env.get(_url(body, "video"), Range="bytes=0-9"))
+    # HEAD reads nothing from the store, so it still answers.
+    head = await s3_env.env.api.client.head(_url(body, "video"))
+    assert head.status_code == 200
+
+
+@pytest.mark.parametrize("kind", S3_FAILURES)
+async def test_a_failing_store_is_503_on_publish(
+    s3_env: S3DemoEnv, kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s3_env.use_factory_store()
+    real_put = s3_env.client.put_object
+    puts: list[str] = []
+
+    def _fail_second(**kwargs: Any) -> Any:
+        puts.append(kwargs["Key"])
+        if len(puts) > 1:
+            raise _s3_error(kind, "PutObject")
+        return real_put(**kwargs)
+
+    monkeypatch.setattr(s3_env.client, "put_object", _fail_second)
+    resp = await s3_env.env.upload(manifest=MANIFEST)
+
+    _assert_unavailable(resp)
+    assert len(puts) == 2
+    # The object already written is removed and no demo is recorded.
+    assert s3_env.objects() == {}
+    env = s3_env.env
+    assert env.store.list_demos(env.id("lead_a")) == []
+
+
+async def test_a_store_that_cannot_be_opened_is_503(
+    s3_env: S3DemoEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    s3_env.use_factory_store()
+    body = await s3_env.publish()
+    deps = factory_deps(s3_env.env.api.app.state)
+    deps.factory_artifact_store = None  # the recorded location must be opened again
+
+    def _fail(_location: str) -> Any:
+        raise NoCredentialsError()
+
+    monkeypatch.setattr("omnigent.server.factory.demo_storage.create_artifact_store", _fail)
+    _assert_unavailable(await s3_env.env.get(_url(body, "video")))
+
+
+async def test_a_failing_session_file_store_is_503(
+    s3_env: S3DemoEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env = s3_env.env
+    body = await s3_env.publish()
+
+    def _fail(*_args: Any) -> Any:
+        raise OSError("disk unreadable")
+
+    monkeypatch.setattr(env.artifacts, "get", _fail)
+    monkeypatch.setattr(env.artifacts, "read_range", _fail)
+    _assert_unavailable(await env.get(_url(body, "video")))
+    _assert_unavailable(await env.get(_url(body, "video"), Range="bytes=0-9"))
+
+    monkeypatch.setattr(env.artifacts, "put", _fail)
+    _assert_unavailable(await env.upload(manifest=MANIFEST))
+    # Only the first demo's files remain, with their session file rows.
+    assert len(env.store.list_demos(env.id("lead_a"))) == 1
+    assert len(env.file_store.list(env.id("pl"), limit=50).data) == 3
 
 
 # ── Serving ───────────────────────────────────────────────────
@@ -230,6 +338,27 @@ async def test_a_range_is_a_ranged_get(
     assert resp.headers["content-security-policy"] == "default-src 'none'; sandbox"
     assert "immutable" in resp.headers["cache-control"]
     # Only the span is fetched from S3.
+    assert s3_env.client.gets == [f"bytes={start}-{end}"]
+
+
+@pytest.mark.parametrize(
+    ("header", "start", "end"),
+    [("bytes=0-", 0, 99), ("bytes=100-", 100, 199), ("bytes=-500", len(VIDEO) - 500, None)],
+)
+async def test_a_long_span_is_answered_in_part(
+    s3_env: S3DemoEnv, header: str, start: int, end: int | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(demos_api, "DEMO_MAX_SPAN_BYTES", 100)
+    s3_env.use_factory_store()
+    body = await s3_env.publish()
+    resp = await s3_env.env.get(_url(body, "video"), Range=header)
+    head = await s3_env.env.api.client.head(_url(body, "video"), headers={"Range": header})
+
+    end = start + 99 if end is None else end
+    assert resp.status_code == 206 and resp.content == VIDEO[start : end + 1]
+    assert resp.headers["content-range"] == f"bytes {start}-{end}/{len(VIDEO)}"
+    assert head.headers["content-range"] == resp.headers["content-range"]
+    # Only the capped span is fetched, not the rest of the video.
     assert s3_env.client.gets == [f"bytes={start}-{end}"]
 
 
