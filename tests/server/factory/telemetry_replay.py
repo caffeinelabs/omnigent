@@ -255,6 +255,40 @@ def make_replay(
     )
 
 
+COLUMN_WIDTHS = {"head_sha": 40, "dedupe_key": 96, "role": 16, "agent_name": 64}
+"""``factory_spans`` widths PostgreSQL enforces (SQLite and the memory store do not)."""
+
+
+def strict_widths(store: Any, monkeypatch: pytest.MonkeyPatch) -> list[tuple[str, str]]:
+    """
+    Make *store* refuse over-wide span values the way PostgreSQL does.
+
+    :returns: The refused ``(column, value)`` pairs, filled as writes are refused.
+    """
+    refused: list[tuple[str, str]] = []
+
+    def check(fields: dict[str, Any]) -> None:
+        for column, width in COLUMN_WIDTHS.items():
+            value = fields.get(column)
+            if isinstance(value, str) and len(value) > width:
+                refused.append((column, value))
+                raise ValueError(f"value too long for type character varying({width})")
+
+    insert, update = store.insert_span, store.update_span
+
+    def strict_insert(factory_id: str, **fields: Any) -> Any:
+        check(fields)
+        return insert(factory_id, **fields)
+
+    def strict_update(span_id: str, **fields: Any) -> Any:
+        check(fields)
+        return update(span_id, **fields)
+
+    monkeypatch.setattr(store, "insert_span", strict_insert)
+    monkeypatch.setattr(store, "update_span", strict_update)
+    return refused
+
+
 def span_table(spans_: list[FactorySpan]) -> list[tuple[Any, ...]]:
     """Every span as a comparable tuple (heal idempotency)."""
     return sorted(
@@ -275,4 +309,4 @@ def span_table(spans_: list[FactorySpan]) -> list[tuple[Any, ...]]:
     )
 
 
-__all__ = ["Replay", "load_fixture", "make_replay", "span_table"]
+__all__ = ["Replay", "load_fixture", "make_replay", "span_table", "strict_widths"]

@@ -20,7 +20,8 @@ from omnigent.server.factory.telemetry import recorder, spans
 from omnigent.server.factory.telemetry.spans import write_span
 from omnigent.stores.factory_store import InMemoryFactoryStore
 from tests.server.factory.conftest import FactoryWorld, FakeDeliver
-from tests.server.factory.telemetry_replay import Replay, make_replay
+from tests.server.factory.github_fakes import iso
+from tests.server.factory.telemetry_replay import Replay, make_replay, strict_widths
 
 REPO = "caffeinelabs/app"
 
@@ -165,6 +166,38 @@ async def test_the_live_run_records_project_stage_task_env_decision_and_control_
     )
 
 
+async def test_marker_shas_that_were_never_a_head_open_no_round(
+    replay: Replay, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A pasted sha256, a typo or an intermediate commit in a marker: no round, no failed write."""
+    r = replay
+    refused = strict_widths(r.store, monkeypatch)
+    await r.run(until=2200)
+    pr = r.prs[9630]
+    now = r.clock.now
+    intermediate = "1" * 40
+    pr.commits.append((intermediate, iso(now - 30)))
+    pr.comment(f"<!-- factory:review sha={'ab' * 32} verdict=APPROVE -->", now, "rv")
+    pr.comment("<!-- factory:review sha=deadbee verdict=APPROVE -->", now, "rv")
+    pr.comment(f"<!-- factory:verify sha={intermediate} result=PASS env=x -->", now)
+    for step in r.fixture["steps"]:
+        if step["at"] > 2200:
+            await r.step(step)
+
+    assert refused == []
+    p30 = r.pr_id(9630)
+    (pr30,) = r.spans("pr", pr_id=p30)
+    # The refresh kept recording: the merge closed the PR.
+    assert (pr30.outcome, pr30.ended_at) == ("ok", r.ms(4000))
+    rounds = r.spans("pr_round", pr_id=p30)
+    assert [(s.head_sha, s.outcome, (s.attrs or {}).get("round")) for s in rounds] == [
+        (r.head("a"), "superseded", 1),
+        (r.head("b"), "superseded", 2),
+        (r.head("c"), "ok", 3),
+    ]
+    assert all(len(s.head_sha or "") <= 40 for s in r.spans())
+
+
 async def test_rerunning_a_refresh_writes_nothing_new(replay: Replay) -> None:
     r = replay
     await r.run()
@@ -243,6 +276,51 @@ def test_write_span_fills_missing_fields_and_overwrites_only_named_ones() -> Non
     assert (span.role, span.agent_name, span.cost_usd) == ("ic", "ic", 1.0)
     span = write_span(store, fid, **base, cost_usd=2.5, overwrite=("cost_usd",))
     assert span.cost_usd == 2.5
+
+
+def test_write_span_clips_free_text_columns() -> None:
+    store = InMemoryFactoryStore()
+    span = write_span(
+        store,
+        "f" * 32,
+        kind="task",
+        name="n" * 100,
+        dedupe_key="task:s",
+        started_at=1,
+        role="r" * 40,
+        agent_name="a" * 100,
+        actor="h" * 200,
+    )
+    assert (len(span.name), len(span.role or ""), len(span.agent_name or "")) == (64, 16, 64)
+    assert len(span.actor or "") == 128
+
+
+def test_a_close_after_heal_read_its_facts_is_kept() -> None:
+    store = InMemoryFactoryStore()
+    fid = "f" * 32
+    base: dict[str, Any] = {"kind": "env", "name": "starting", "dedupe_key": "env:x:1"}
+    write_span(store, fid, **base, started_at=1000, ended_at=3000, outcome="ok")
+    # Heal read the events at 2000, before the close landed: it neither reopens nor rewrites.
+    kept = write_span(
+        store, fid, **base, started_at=1000, outcome="open", reopen=True, keep_closed_after=2000
+    )
+    assert (kept.outcome, kept.ended_at) == ("ok", 3000)
+    kept = write_span(
+        store,
+        fid,
+        **base,
+        started_at=1000,
+        ended_at=1500,
+        outcome="fail",
+        force=True,
+        keep_closed_after=2000,
+    )
+    assert (kept.outcome, kept.ended_at) == ("ok", 3000)
+    # A close heal already knew about is still its to fix.
+    healed = write_span(
+        store, fid, **base, started_at=1000, outcome="open", reopen=True, keep_closed_after=4000
+    )
+    assert (healed.outcome, healed.ended_at) == ("open", None)
 
 
 # ── The recorder ─────────────────────────────────────────────────

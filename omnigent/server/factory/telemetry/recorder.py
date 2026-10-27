@@ -51,6 +51,7 @@ from omnigent.server.factory.telemetry.spans import (
     project_key,
     proposal_key,
     ready_wait_key,
+    session_start_ms,
     span_context,
     stage_key,
     task_key,
@@ -90,13 +91,21 @@ class Recorder:
     deps: FactoryDeps
     factory_id: str
     ctx: SpanContext = NO_CONTEXT
+    keep_closed_after: int | None = None
+    """Heal's read time (epoch ms); see :func:`.spans.write_span`."""
 
     @property
     def store(self) -> FactoryStore:
         return self.deps.factory_store
 
     def span(self, **kwargs: Any) -> FactorySpan:
-        return write_span(self.store, self.factory_id, ctx=self.ctx, **kwargs)
+        return write_span(
+            self.store,
+            self.factory_id,
+            ctx=self.ctx,
+            keep_closed_after=self.keep_closed_after,
+            **kwargs,
+        )
 
     def ensure_project(self, slug: str | None, ts: int) -> None:
         if not slug or _known_span(self.factory_id, project_key(slug)):
@@ -314,7 +323,8 @@ def _on_decision_closed(outcome: str) -> Callable[[Recorder, FactoryEvent], None
 
 def _child_start(rec: Recorder, session_id: str, ts: int) -> int:
     conv = rec.deps.conversation_store.get_conversation(session_id)
-    return min(int(conv.created_at) * 1000, ts) if conv is not None and conv.created_at else ts
+    created = session_start_ms(conv) if conv is not None else None
+    return min(created, ts) if created is not None else ts
 
 
 def _on_dispatch(rec: Recorder, e: FactoryEvent) -> None:

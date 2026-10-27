@@ -10,14 +10,20 @@ both converge on one row per dedupe key.
 A gate span starts when its head was pushed and ends at its first pass (or
 its first failure while it never passed); ``attrs.first_pass`` records
 whether the head's first verdict passed, and is never rewritten.
+
+Only a sha seen as the PR's head (a refresh's ``headRefOid``, a
+``gate.changed`` event) opens a round. Marker, evidence and demo shas are
+free text: anything but 7-40 hex is dropped, and a verdict only lands on a
+round already recorded for its sha.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections.abc import Iterable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.entities.factory import FactoryEvent, FactoryPr, FactorySpan
@@ -55,6 +61,7 @@ _logger = logging.getLogger(__name__)
 GATES: Final[tuple[str, ...]] = ("checks", "review", "verify", "demo")
 """Gates that run per head (the rest are PR properties, not runs)."""
 _DEMO_VERDICTS: Final = DEMO_PASSING | {"FAIL"}
+_SHA_RE: Final = re.compile(r"[0-9a-f]{7,40}")
 
 
 @dataclass(frozen=True)
@@ -76,8 +83,9 @@ class PrFacts:
     """
     What is known about a PR's heads and gate runs.
 
-    :param heads: Head sha -> when it was pushed (epoch ms), best known.
-    :param runs: Gate verdicts per head.
+    :param heads: Head sha -> when it was pushed (epoch ms), best known; only
+        shas seen as the PR's head.
+    :param runs: Gate verdicts per sha (a short sha matches the round it abbreviates).
     :param current_gates: Gate states of the current head (open PRs).
     """
 
@@ -92,17 +100,32 @@ def _ms(value: object) -> int | None:
     return int(when.timestamp() * 1000) if when is not None else None
 
 
-def _full_sha(sha: str, commits: Mapping[str, int]) -> str:
-    """A short marker sha as the commit's full sha, when exactly one commit matches."""
-    if sha in commits:
+def commit_sha(value: object) -> str | None:
+    """:returns: *value* as a lowercased 7-40 hex sha, else ``None``."""
+    sha = str(value or "").strip().lower()
+    return sha if _SHA_RE.fullmatch(sha) else None
+
+
+def _resolve(sha: str, known: Sequence[str]) -> str:
+    """A short sha as the one *known* sha it abbreviates, else unchanged."""
+    if sha in known:
         return sha
-    found = [oid for oid in commits if oid.startswith(sha)]
+    found = [k for k in known if k.startswith(sha)]
     return found[0] if len(found) == 1 else sha
 
 
 def pr_start(pr: FactoryPr) -> int:
     """:returns: When the PR was opened on GitHub (else first tracked), epoch ms."""
     return (pr.opened_at or pr.created_at) * 1000
+
+
+def _demo_runs(facts: PrFacts, demos: Sequence[Mapping[str, Any]]) -> None:
+    for demo in demos:
+        status = str(demo.get("status") or "").upper()
+        sha = commit_sha(demo.get("head_sha"))
+        created = demo.get("created_at")
+        if sha and status in _DEMO_VERDICTS and isinstance(created, int):
+            facts.runs.append(GateRun("demo", sha, created * 1000, status in DEMO_PASSING))
 
 
 def facts_from_refresh(
@@ -125,11 +148,12 @@ def facts_from_refresh(
     now_ms = now * 1000
     commits: dict[str, int] = {}
     for commit in pr_json.get("commits") or []:
-        oid = str(commit.get("oid") or "").lower() if isinstance(commit, Mapping) else ""
-        at = _ms(commit.get("committedDate")) if isinstance(commit, Mapping) else None
+        if not isinstance(commit, Mapping):
+            continue
+        oid, at = commit_sha(commit.get("oid")), _ms(commit.get("committedDate"))
         if oid and at is not None:
             commits[oid] = at
-    head = str(pr_json.get("headRefOid") or pr.head_sha or "").lower()
+    head = commit_sha(pr_json.get("headRefOid")) or commit_sha(pr.head_sha)
     facts = PrFacts(pr=pr)
     if head:
         facts.heads[head] = commits.get(head, now_ms)
@@ -139,20 +163,12 @@ def facts_from_refresh(
         ("demo", DEMO_MARKER, "status"),
     ):
         for hit in marker_hits(pr_json, pattern, outcome_attr=attr):
-            if gate == "demo" and hit.outcome not in _DEMO_VERDICTS:
+            sha = commit_sha(hit.sha)
+            if sha is None or (gate == "demo" and hit.outcome not in _DEMO_VERDICTS):
                 continue
             passed = hit.outcome in (DEMO_PASSING if gate == "demo" else {"APPROVE", "PASS"})
-            at = int(hit.at.timestamp() * 1000)
-            sha = _full_sha(hit.sha, commits)
-            facts.runs.append(GateRun(gate, sha, at, passed))
-            facts.heads.setdefault(sha, commits.get(sha, at))
-    for demo in demos:
-        status = str(demo.get("status") or "").upper()
-        sha = str(demo.get("head_sha") or "").lower()
-        created = demo.get("created_at")
-        if sha and status in _DEMO_VERDICTS and isinstance(created, int):
-            facts.runs.append(GateRun("demo", sha, created * 1000, status in DEMO_PASSING))
-            facts.heads.setdefault(sha, commits.get(sha, created * 1000))
+            facts.runs.append(GateRun(gate, sha, int(hit.at.timestamp() * 1000), passed))
+    _demo_runs(facts, demos)
     if head and pr.state == "open":
         facts.current_gates = {g: gates.get(g) for g in GATES}
         checks = gates.get("checks")
@@ -176,12 +192,12 @@ def facts_from_history(
     :param now: Epoch seconds.
     """
     facts = PrFacts(pr=pr)
-    head = (pr.head_sha or "").lower()
+    head = commit_sha(pr.head_sha)
     checks_at: int | None = None
     for event in events:
         data = event.data if isinstance(event.data, dict) else {}
-        sha = str(data.get("head_sha") or "").lower()
-        if event.kind != "gate.changed" or not sha:
+        sha = commit_sha(data.get("head_sha"))
+        if event.kind != "gate.changed" or sha is None:
             continue
         facts.heads.setdefault(sha, event.ts)
         gate, to = data.get("gate"), data.get("to")
@@ -199,21 +215,12 @@ def facts_from_history(
         found = evidence.get(gate)
         if not isinstance(found, Mapping) or not isinstance(found.get("at"), int):
             continue
-        marker_sha = str(found.get("sha") or "").lower()
+        sha = commit_sha(found.get("sha"))
         verdict = str(found.get(key) or "").upper()
-        if not marker_sha or (gate == "demo" and verdict not in _DEMO_VERDICTS):
+        if sha is None or (gate == "demo" and verdict not in _DEMO_VERDICTS):
             continue
-        sha = head if head and head.startswith(marker_sha) else marker_sha
-        at = int(found["at"]) * 1000
-        facts.runs.append(GateRun(gate, sha, at, verdict in passing))
-        facts.heads.setdefault(sha, at)
-    for demo in demos:
-        status = str(demo.get("status") or "").upper()
-        sha = str(demo.get("head_sha") or "").lower()
-        created = demo.get("created_at")
-        if sha and status in _DEMO_VERDICTS and isinstance(created, int):
-            facts.runs.append(GateRun("demo", sha, created * 1000, status in DEMO_PASSING))
-            facts.heads.setdefault(sha, created * 1000)
+        facts.runs.append(GateRun(gate, sha, int(found["at"]) * 1000, verdict in passing))
+    _demo_runs(facts, demos)
     if head:
         facts.heads.setdefault(head, pr_start(pr))
     if head and pr.state == "open":
@@ -313,8 +320,14 @@ def apply_facts(
     store: FactoryStore,
     facts: PrFacts,
     ctx: SpanContext = NO_CONTEXT,
+    *,
+    keep_closed_after: int | None = None,
 ) -> None:
-    """Write the pr, pr_round and gate spans *facts* imply (synchronous, idempotent)."""
+    """
+    Write the pr, pr_round and gate spans *facts* imply (synchronous, idempotent).
+
+    :param keep_closed_after: Heal's read time (epoch ms): spans closed later are left alone.
+    """
     pr = facts.pr
     fid = pr.factory_id
     common: dict[str, Any] = {"pr_id": pr.id, "project_slug": pr.project_slug}
@@ -335,6 +348,7 @@ def apply_facts(
         outcome=pr_outcome,
         force=True,
         reopen=True,
+        keep_closed_after=keep_closed_after,
         ctx=ctx,
         attrs={
             "repo": pr.repo,
@@ -347,8 +361,12 @@ def apply_facts(
     spans = store.list_spans(fid, kinds=["pr_round", "gate"], pr_id=pr.id, limit=2000)
     rounds_by_sha = {s.head_sha: s for s in spans if s.kind == "pr_round" and s.head_sha}
     gates_by_key = {s.dedupe_key: s for s in spans if s.kind == "gate"}
-    head = (pr.head_sha or "").lower()
-    for index, round_ in enumerate(_rounds(pr, facts.heads, rounds_by_sha), start=1):
+    head = commit_sha(pr.head_sha)
+    heads = {sha: at for sha, at in facts.heads.items() if commit_sha(sha) == sha}
+    rounds = _rounds(pr, heads, rounds_by_sha)
+    shas = [r.sha for r in rounds]
+    runs = [replace(run, sha=_resolve(run.sha, shas)) for run in facts.runs]
+    for index, round_ in enumerate(rounds, start=1):
         existing = rounds_by_sha.get(round_.sha)
         attrs = {"round": index}
         round_span = existing
@@ -364,6 +382,7 @@ def apply_facts(
                 outcome=round_.outcome,
                 force=True,
                 reopen=True,
+                keep_closed_after=keep_closed_after,
                 overwrite=("parent_id",),
                 ctx=ctx,
                 attrs=attrs,
@@ -373,17 +392,17 @@ def apply_facts(
             )
         assert round_span is not None
         for gate in GATES:
-            runs = sorted(
-                (r for r in facts.runs if r.gate == gate and r.sha == round_.sha),
+            mine = sorted(
+                (r for r in runs if r.gate == gate and r.sha == round_.sha),
                 key=lambda r: r.at,
             )
             key = gate_key(pr.id, round_.sha, gate)
             existing_gate = gates_by_key.get(key)
             state = facts.current_gates.get(gate) if round_.sha == head else None
             evaluated = state is not None and state != GATE_SKIP
-            if existing_gate is None and not runs and not evaluated:
+            if existing_gate is None and not mine and not evaluated:
                 continue
-            outcome, end, first_pass = _gate_target(runs, existing_gate, round_)
+            outcome, end, first_pass = _gate_target(mine, existing_gate, round_)
             gate_attrs: dict[str, Any] = {"gate": gate, "first_pass": first_pass}
             if _unchanged(existing_gate, outcome, end, gate_attrs, round_span.id):
                 continue
@@ -398,6 +417,7 @@ def apply_facts(
                 outcome=outcome,
                 force=True,
                 reopen=True,
+                keep_closed_after=keep_closed_after,
                 overwrite=("parent_id",),
                 set_once=("first_pass",),
                 ctx=ctx,
@@ -437,6 +457,7 @@ __all__ = [
     "GateRun",
     "PrFacts",
     "apply_facts",
+    "commit_sha",
     "facts_from_history",
     "facts_from_refresh",
     "pr_start",

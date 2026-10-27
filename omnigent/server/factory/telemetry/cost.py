@@ -29,6 +29,7 @@ _logger = logging.getLogger(__name__)
 TTL_S: Final = 60.0
 _CACHE_MAX: Final = 10_000
 _NAME_MAX: Final = 64
+_ROLE_MAX: Final = 16
 _INPUT_KEYS: Final = ("input_tokens", "cache_read_input_tokens", "cache_creation_input_tokens")
 
 
@@ -76,7 +77,8 @@ def _compute(deps: FactoryDeps, conv: Conversation) -> Attribution | None:
         factory_id = conv.labels.get(LABEL_ID)
         if not factory_id:
             return None
-        role = conv.labels.get(LABEL_ROLE) or ""
+        # The ledger's role column is 16 wide: a longer label must not fail every booking.
+        role = (conv.labels.get(LABEL_ROLE) or "")[:_ROLE_MAX]
         project = (conv.labels.get(LABEL_PROJECT) or "") if role == ROLE_PROJECT_LEAD else ""
         return Attribution(factory_id, project, role, (title or conv.id)[:_NAME_MAX])
     root = root_conversation(conv, deps.conversation_store)
@@ -85,7 +87,7 @@ def _compute(deps: FactoryDeps, conv: Conversation) -> Attribution | None:
         return None
     root_role = root.labels.get(LABEL_ROLE)
     project = (root.labels.get(LABEL_PROJECT) or "") if root_role == ROLE_PROJECT_LEAD else ""
-    role = resolve_role(conv, deps) or conv.sub_agent_name or ROLE_IC
+    role = (resolve_role(conv, deps) or ROLE_IC)[:_ROLE_MAX]
     name = conv.sub_agent_name or title or conv.id
     return Attribution(factory_id, project, role, name[:_NAME_MAX])
 

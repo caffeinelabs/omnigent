@@ -43,6 +43,8 @@ TERMINAL_STAGES: Final = frozenset({STAGE_MERGED, STAGE_DONE})
 """Stages that end a project span (a later stage change reopens it)."""
 CONTEXT_TTL_S: Final = 60.0
 NAME_MAX: Final = 64
+FIELD_MAX: Final[dict[str, int]] = {"role": 16, "agent_name": 64, "actor": 128}
+"""Free-text ``factory_spans`` columns, clipped to their width before a write."""
 _CONTEXTS_MAX: Final = 4096
 
 
@@ -149,9 +151,18 @@ NO_CONTEXT: Final = SpanContext()
 
 
 def _closing(
-    span: FactorySpan, ended_at: int | None, outcome: str | None, *, force: bool, reopen: bool
+    span: FactorySpan,
+    ended_at: int | None,
+    outcome: str | None,
+    *,
+    force: bool,
+    reopen: bool,
+    keep_after: int | None,
 ) -> dict[str, Any]:
     if outcome is None:
+        return {}
+    if keep_after is not None and span.ended_at is not None and span.ended_at > keep_after:
+        # Closed by a live writer after heal read its facts: heal's view is older.
         return {}
     if outcome == OPEN:
         if reopen and span.outcome != OPEN:
@@ -193,6 +204,7 @@ def write_span(
     overwrite: Iterable[str] = (),
     force: bool = False,
     reopen: bool = False,
+    keep_closed_after: int | None = None,
     ctx: SpanContext = NO_CONTEXT,
     **fields: Any,
 ) -> FactorySpan:
@@ -206,12 +218,18 @@ def write_span(
     ``started_at`` and the stamped version never change.
 
     :param started_at: Epoch milliseconds.
+    :param keep_closed_after: Heal's read time (epoch ms): a span closed after
+        it keeps its close (no reopen, no forced rewrite).
     :param ended_at: Epoch milliseconds (clamped to ``started_at``).
     :param outcome: ``open`` / ``ok`` / ``fail`` / ``abandoned`` / ….
     :param fields: Any other ``factory_spans`` column, e.g. ``pr_id`` or ``cost_usd``.
     :returns: The stored span.
     """
-    values = {k: v for k, v in fields.items() if v is not None}
+    values = {
+        k: v[: FIELD_MAX[k]] if k in FIELD_MAX and isinstance(v, str) else v
+        for k, v in fields.items()
+        if v is not None
+    }
     closed = outcome is not None and outcome != OPEN
     insert: dict[str, Any] = {**values, "outcome": outcome or OPEN}
     if closed:
@@ -234,7 +252,9 @@ def write_span(
     )
     if created:
         return span
-    updates = _closing(span, ended_at, outcome, force=force, reopen=reopen)
+    updates = _closing(
+        span, ended_at, outcome, force=force, reopen=reopen, keep_after=keep_closed_after
+    )
     merged = merged_attrs(span.attrs, attrs, set_once)
     if merged is not None:
         updates["attrs"] = merged
@@ -325,6 +345,12 @@ def reset() -> None:
     _contexts.clear()
 
 
+def session_start_ms(conv: Any) -> int | None:
+    """:returns: When a session was created (epoch ms), the start of its task span."""
+    created = getattr(conv, "created_at", None)
+    return int(created * 1000) if created else None
+
+
 def task_cost_fields(child: Any) -> dict[str, Any]:
     """:returns: ``cost_usd`` / ``tokens_in`` / ``tokens_out`` of a sub-agent's whole run."""
     usage = child.session_usage if isinstance(child.session_usage, dict) else {}
@@ -345,7 +371,7 @@ def attach_task_cost_sync(deps: FactoryDeps, factory_id: str, child: Any) -> Fac
     fields = {k: v for k, v in task_cost_fields(child).items() if v is not None}
     if not fields:
         return None
-    created = int(child.created_at * 1000) if child.created_at else int(time.time() * 1000)
+    created = session_start_ms(child) or int(time.time() * 1000)
     return write_span(
         deps.factory_store,
         factory_id,
@@ -387,6 +413,7 @@ __all__ = [
     "ABANDONED",
     "CANCELLED",
     "FAIL",
+    "FIELD_MAX",
     "NAME_MAX",
     "NO_CONTEXT",
     "OK",
@@ -413,6 +440,7 @@ __all__ = [
     "ready_wait_key",
     "reset",
     "round_key",
+    "session_start_ms",
     "span_context",
     "stage_key",
     "task_cost_fields",

@@ -7,8 +7,10 @@ source of truth (``factory_projects``, ``factory_prs``, ``factory_decisions``,
 ``factory_demos``, the sessions and the remaining events) under the live
 writers' dedupe keys, so a second run changes nothing and the first run
 backfills whatever events still exist. Spans heal creates carry no version:
-the platform that ran them is unknown. It runs from the nightly prune loop,
-before the prune.
+the platform that ran them is unknown. A span a live writer closed after heal
+read the events keeps that close. Each section, PR and replayed event heals
+on its own, so one bad row only skips itself. It runs from the nightly prune
+loop, before the prune.
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ import time
 from collections import defaultdict
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
+from functools import partial
 from typing import Any, Final
 
 from omnigent.entities.factory import FactoryEvent, FactoryPr, FactoryProject
@@ -47,6 +50,7 @@ from omnigent.server.factory.telemetry.spans import (
     preview_key,
     project_key,
     ready_wait_key,
+    session_start_ms,
     stage_key,
     task_cost_fields,
     task_key,
@@ -98,11 +102,17 @@ _DECISION_CLOSE: Final = {
 
 @dataclass
 class HealReport:
-    """What one heal pass covered."""
+    """
+    What one heal pass covered.
+
+    :param failed: Factories whose heal could not run at all.
+    :param partial: ``"<factory_id>: <part>"`` of each section, PR or event that failed.
+    """
 
     factories: int = 0
     events: int = 0
     failed: list[str] = field(default_factory=list)
+    partial: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -269,11 +279,13 @@ def _ready_waits(pr: FactoryPr, evs: list[FactoryEvent]) -> list[tuple[int, int 
 def _heal_pr(
     rec: Recorder, pr: FactoryPr, evs: list[FactoryEvent], demos: list[Any], now: int
 ) -> None:
+    # The row as of now: a refresh may have landed since the PRs were listed.
+    pr = rec.store.get_pr(pr.id) or pr
     demo_rows = [
         {"head_sha": d.head_sha, "status": d.status, "created_at": d.created_at} for d in demos
     ]
     facts = pr_rounds.facts_from_history(pr, evs, demo_rows, now=now)
-    pr_rounds.apply_facts(rec.store, facts, NO_CONTEXT)
+    pr_rounds.apply_facts(rec.store, facts, NO_CONTEXT, keep_closed_after=rec.keep_closed_after)
     parent = rec.store.get_span_by_dedupe(rec.factory_id, pr_key(pr.id))
     for start, end, outcome in _ready_waits(pr, [e for e in evs if e.kind.startswith("pr.")]):
         rec.span(
@@ -335,10 +347,11 @@ def _heal_tasks(rec: Recorder, evs: list[FactoryEvent], now: int) -> None:
     for child_id, items in by_child.items():
         conv = rec.deps.conversation_store.get_conversation(child_id)
         dispatch = next((e for e in items if e.kind == "dispatch"), None)
+        created = session_start_ms(conv) if conv is not None else None
         if dispatch is not None:
             start = dispatch.ts
-        elif conv is not None and conv.created_at:
-            start = int(conv.created_at * 1000)
+        elif created is not None:
+            start = created
         else:
             start = items[0].ts
         closes = [e for e in items if e.kind != "dispatch"]
@@ -410,37 +423,58 @@ def _heal_demos(rec: Recorder, demos: list[Any], evs: list[FactoryEvent]) -> Non
 # ── Driver ───────────────────────────────────────────────────────
 
 
-def heal_factory(deps: FactoryDeps, factory_id: str, *, now: int | None = None) -> int:
+def heal_factory(
+    deps: FactoryDeps,
+    factory_id: str,
+    *,
+    now: int | None = None,
+    failures: list[str] | None = None,
+) -> int:
     """
     Rebuild one factory's spans (synchronous, idempotent).
 
+    A section, PR or replayed event that raises is logged and skipped; the rest still heals.
+
     :param now: Epoch seconds (tests); defaults to now.
+    :param failures: Receives the name of each part that failed.
     :returns: How many events were read.
     """
     at = int(time.time()) if now is None else now
+    failed = failures if failures is not None else []
     store = deps.factory_store
     evs = iter_events(store, factory_id)
-    rec = Recorder(deps, factory_id, NO_CONTEXT)
-    _heal_projects(rec, store.list_projects(factory_id), evs, at)
-    demos = store.list_demos(factory_id, limit=_MAX_ROWS)
+    rec = Recorder(deps, factory_id, NO_CONTEXT, keep_closed_after=at * 1000)
+
+    def guarded(part: str, run: Callable[[], object]) -> None:
+        try:
+            run()
+        except Exception:  # noqa: BLE001 - one bad row must not stop the rest of the heal
+            failed.append(part)
+            _logger.warning("factory heal: %s of %s failed", part, factory_id, exc_info=True)
+
+    guarded("projects", lambda: _heal_projects(rec, store.list_projects(factory_id), evs, at))
+    demos: list[Any] = []
+    guarded("demo rows", lambda: demos.extend(store.list_demos(factory_id, limit=_MAX_ROWS)))
+    prs: list[FactoryPr] = []
+    guarded("pr rows", lambda: prs.extend(store.list_prs(factory_id)))
     pr_events: dict[str, list[FactoryEvent]] = defaultdict(list)
     for e in evs:
         pr_id = _data(e).get("pr_id")
         if isinstance(pr_id, str) and (e.kind.startswith("pr.") or e.kind == "gate.changed"):
             pr_events[pr_id].append(e)
-    for pr in store.list_prs(factory_id):
+    for pr in prs:
         mine = [
             d for d in demos if d.pr_id == pr.id or (d.repo, d.pr_number) == (pr.repo, pr.number)
         ]
-        _heal_pr(rec, pr, pr_events.get(pr.id, []), mine, at)
-    _heal_decisions(rec, evs)
-    _heal_tasks(rec, evs, at)
-    _heal_states(rec, evs)
-    _heal_demos(rec, demos, evs)
+        guarded(f"pr {pr.id}", partial(_heal_pr, rec, pr, pr_events.get(pr.id, []), mine, at))
+    guarded("decisions", partial(_heal_decisions, rec, evs))
+    guarded("tasks", partial(_heal_tasks, rec, evs, at))
+    guarded("envs and previews", partial(_heal_states, rec, evs))
+    guarded("demos", partial(_heal_demos, rec, demos, evs))
     for e in evs:
         handler = handler_for(e.kind)
         if handler is not None and e.kind.startswith(REPLAYED_PREFIXES):
-            handler(rec, e)
+            guarded(f"event {e.kind} {e.id}", partial(handler, rec, e))
     return len(evs)
 
 
@@ -463,18 +497,23 @@ async def heal_once(app_state: Any, *, now: int | None = None) -> HealReport:
         _logger.warning("factory heal: could not list factories", exc_info=True)
         return report
     for root in roots:
+        failures: list[str] = []
         try:
-            report.events += await asyncio.to_thread(heal_factory, deps, root.id, now=now)
+            report.events += await asyncio.to_thread(
+                heal_factory, deps, root.id, now=now, failures=failures
+            )
             report.factories += 1
         except Exception:  # noqa: BLE001 - one broken factory must not stop the others
             report.failed.append(root.id)
             _logger.warning("factory heal: %s failed", root.id, exc_info=True)
+        report.partial.extend(f"{root.id}: {part}" for part in failures)
     if report.factories or report.failed:
         _logger.info(
-            "factory heal: %d factory(ies), %d event(s) read, %d failed",
+            "factory heal: %d factory(ies), %d event(s) read, %d failed, %d part(s) skipped",
             report.factories,
             report.events,
             len(report.failed),
+            len(report.partial),
         )
     return report
 

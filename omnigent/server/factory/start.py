@@ -72,6 +72,7 @@ from omnigent.server.factory.membership import (
     is_top_level,
     load_session_spec,
 )
+from omnigent.server.factory.telemetry import versions
 from omnigent.server.routes._auth_helpers import get_session_owner_id
 from omnigent.stores.factory_store import norm_id
 
@@ -685,6 +686,8 @@ async def start_factory(
                 projects=have,
             )
         beats = CADENCE_HEARTBEATS[body.cadence]
+        # The root lead carries the platform version and its bundle like spawned members.
+        version_labels = await asyncio.to_thread(versions.member_labels, deps, root)
         await asyncio.to_thread(
             deps.conversation_store.set_labels,
             root.id,
@@ -695,6 +698,7 @@ async def start_factory(
                 LABEL_STARTED_AT: str(int(time.time())),
                 LABEL_STATE: STATE_ACTIVE,
                 **defaults.labels(),
+                **version_labels,
             },
         )
         root = await control.get_conv(deps, root.id) or root

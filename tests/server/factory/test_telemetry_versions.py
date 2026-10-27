@@ -147,3 +147,48 @@ async def test_a_restart_stamps_the_version_labels(
         return
     assert labels[F.LABEL_VERSION] == "d" * 32
     assert labels[F.LABEL_BUNDLE] == f"{world.get('pl').agent_id}/v1"
+
+
+async def test_starting_a_factory_stamps_the_root_lead(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.server.auth import LEVEL_OWNER
+
+    world = cockpit.world
+    monkeypatch.setattr(versions, "current_version_id", lambda: "e" * 32)
+    root = world.make_session("atlas", agent="lead", title="Atlas")
+    cockpit.permissions.grant("alice", root.id, LEVEL_OWNER)
+    body = {
+        "root_session_id": root.id,
+        "name": "Atlas factory",
+        "cadence": "demo",
+        "projects": [
+            {"slug": "docs", "title": "Docs", "repo": "caffeinelabs/app", "goal": "Add docs."}
+        ],
+    }
+    resp = await cockpit.post("/v1/factory/factories", body, user="alice")
+    assert resp.status_code == 201, resp.text
+    labels = world.get("atlas").labels
+    assert labels[F.LABEL_VERSION] == "e" * 32
+    assert labels[F.LABEL_BUNDLE] == f"{root.agent_id}/v1"
+
+
+async def test_a_peer_restart_stamps_the_version_labels(
+    world: FactoryWorld, api: FactoryApi, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(versions, "current_version_id", lambda: "f" * 32)
+    for restart in (False, True):
+        resp = await api.client.post(
+            "/v1/factory/messages",
+            json={
+                "from_session_id": world.id("lead_a"),
+                "to": world.id("pl"),
+                "message": "restarting",
+                "kind": "info",
+                "restart": restart,
+            },
+        )
+        assert resp.status_code == 202, resp.text
+        labels = world.get("pl").labels
+        assert (labels.get(F.LABEL_VERSION) == "f" * 32) is restart
+    await api.mailer.drain()

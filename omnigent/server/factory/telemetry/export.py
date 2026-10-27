@@ -29,8 +29,20 @@ from omnigent.stores.factory_store import FactoryStore, kind_matches
 
 TABLES: Final[tuple[str, ...]] = ("spans", "cost", "decisions", "prs", "demos", "events")
 FORMATS: Final[tuple[str, ...]] = ("ndjson", "csv")
-TRANSCRIPT_KINDS: Final[tuple[str, ...]] = ("message.*", "notice.*", "chat.*", "alert.failed")
-"""Events whose summary quotes agent or human messages: exported without it."""
+TRANSCRIPT_KINDS: Final[tuple[str, ...]] = (
+    "message.*",
+    "notice.*",
+    "chat.*",
+    "alert.failed",
+    "decision.withdrawn",
+    "needs_human*",
+    "label.changed",
+)
+"""Events whose summary quotes agent or human text (messages, reasons, label values)."""
+STRUCTURED_LABELS: Final = frozenset({"state", "health", "heartbeat_s", "supervisor_session_id"})
+"""``label.changed`` fields whose values are exported; others (e.g. ``summary``) are free text."""
+FORMULA_START: Final = ("=", "+", "-", "@", "\t", "\r")
+"""CSV cells starting with these are prefixed with ``'`` so a spreadsheet shows them as text."""
 TEXT_KEYS: Final = frozenset(
     {
         "text",
@@ -173,19 +185,50 @@ class Visibility:
     :param hidden_projects: Projects whose PL the viewer cannot read.
     :param members: Every session of the factory.
     :param readable: The members the viewer can read.
+    :param check: Which of some non-member sessions the viewer can read
+        (synchronous); without it non-members are visible.
     """
 
     hidden_projects: frozenset[str] = frozenset()
     members: frozenset[str] = frozenset()
     readable: frozenset[str] = field(default_factory=frozenset)
+    check: Callable[[list[str]], set[str]] | None = None
+    _outsiders: dict[str, bool] = field(
+        default_factory=dict, init=False, compare=False, repr=False
+    )
 
     def project(self, slug: str | None) -> bool:
         """:returns: Whether rows of project *slug* (``None`` = factory-wide) are visible."""
         return slug not in self.hidden_projects if slug else True
 
+    def resolve(self, session_ids: Iterable[str | None]) -> None:
+        """Check the non-member sessions among *session_ids* once each (synchronous)."""
+        unknown = sorted(
+            {
+                sid
+                for sid in session_ids
+                if sid
+                and sid not in self.readable
+                and sid not in self.members
+                and sid not in self._outsiders
+            }
+        )
+        if not unknown or self.check is None:
+            return
+        found = self.check(unknown)
+        self._outsiders.update({sid: sid in found for sid in unknown})
+
     def session(self, session_id: str | None) -> bool:
-        """:returns: Whether a row naming *session_id* is visible (non-members always are)."""
-        return session_id is None or session_id not in self.members or session_id in self.readable
+        """
+        :returns: Whether a row naming *session_id* is visible: a readable member,
+            or a non-member the viewer can read (as the cockpit's activity feed checks).
+        """
+        if session_id is None or session_id in self.readable:
+            return True
+        if session_id in self.members:
+            return False
+        self.resolve([session_id])
+        return self._outsiders.get(session_id, self.check is None)
 
 
 # ── Row projections (no transcript content) ──────────────────────
@@ -250,6 +293,16 @@ def _clean(value: Any) -> Any:
     return value
 
 
+def _event_data(event: FactoryEvent) -> dict[str, Any] | None:
+    if not isinstance(event.data, Mapping):
+        return None
+    data = _clean(event.data)
+    if event.kind == "label.changed" and data.get("field") not in STRUCTURED_LABELS:
+        data.pop("from", None)
+        data.pop("to", None)
+    return data
+
+
 def event_row(event: FactoryEvent) -> dict[str, Any]:
     """:returns: An event without message text (free-text data keys, quoting summaries)."""
     quoting = kind_matches(event.kind, TRANSCRIPT_KINDS)
@@ -263,7 +316,7 @@ def event_row(event: FactoryEvent) -> dict[str, Any]:
         "to_id": event.to_id,
         "subject": event.subject,
         "summary": None if quoting else event.summary,
-        "data": _clean(event.data) if isinstance(event.data, Mapping) else None,
+        "data": _event_data(event),
     }
 
 
@@ -295,6 +348,7 @@ def _rows(
             lambda span: span.started_at,
         )
         for page in pages:
+            vis.resolve(s.session_id for s in page)
             yield [
                 span_row(s)
                 for s in page
@@ -306,6 +360,7 @@ def _rows(
             lambda event: event.ts,
         )
         for page in pages:
+            vis.resolve(sid for e in page for sid in (e.from_id, e.to_id))
             yield [
                 event_row(e)
                 for e in page
@@ -317,6 +372,7 @@ def _rows(
         ]
     elif table == "decisions":
         rows = store.list_decisions(factory_id=factory_id, limit=100_000, newest_first=False)
+        vis.resolve(d.asked_by_session_id for d in rows)
         yield [
             decision_row(d)
             for d in rows
@@ -326,6 +382,7 @@ def _rows(
         yield [pr_row(p) for p in store.list_prs(factory_id) if vis.project(p.project_slug)]
     elif table == "demos":
         demos = store.list_demos(factory_id, limit=100_000)
+        vis.resolve(d.session_id for d in demos)
         yield [
             demo_row(d)
             for d in reversed(demos)
@@ -337,11 +394,18 @@ def _next_page(pages: Iterator[list[dict[str, Any]]]) -> list[dict[str, Any]] | 
     return next(pages, None)
 
 
+def csv_cell(value: Any) -> Any:
+    """:returns: *value* as a CSV cell: JSON for objects, text that cannot run as a formula."""
+    if isinstance(value, dict | list):
+        return json.dumps(value, sort_keys=True)
+    if isinstance(value, str) and value.startswith(FORMULA_START):
+        return f"'{value}"
+    return value
+
+
 def _csv_line(values: Iterable[Any]) -> str:
     buffer = io.StringIO()
-    csv.writer(buffer).writerow(
-        json.dumps(v, sort_keys=True) if isinstance(v, dict | list) else v for v in values
-    )
+    csv.writer(buffer).writerow(csv_cell(v) for v in values)
     return buffer.getvalue()
 
 
@@ -381,11 +445,14 @@ async def stream_export(
 __all__ = [
     "COLUMNS",
     "FORMATS",
+    "FORMULA_START",
+    "STRUCTURED_LABELS",
     "TABLES",
     "TEXT_KEYS",
     "TRANSCRIPT_KINDS",
     "Visibility",
     "cost_row",
+    "csv_cell",
     "decision_row",
     "demo_row",
     "event_row",

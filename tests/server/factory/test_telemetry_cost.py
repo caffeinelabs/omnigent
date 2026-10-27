@@ -89,6 +89,21 @@ def test_an_unpriced_turn_books_its_tokens_at_zero_cost(ledger: FactoryWorld) ->
     assert _cells(w) == [("api-version", "ic", "ic", "", DAY, 0.0, 500, 50, 1)]
 
 
+def test_a_long_role_label_is_clipped_to_the_role_column(ledger: FactoryWorld) -> None:
+    w = ledger
+    role = "a-custom-role-label-that-is-too-wide"
+    w.make_session(
+        "helper",
+        agent="lead",
+        title="Helper",
+        labels={F.LABEL_ID: w.id("lead_a"), F.LABEL_ROLE: role},
+    )
+    booked = cost.record(w.get("helper"), 0.1, (1, 1), "gpt-5", day=DAY)
+    # factory_cost_daily.role is 16 wide: PostgreSQL would refuse the whole booking.
+    assert booked is not None and booked.role == role[:16]
+    assert _cells(w) == [("", role[:16], "Helper", "gpt-5", DAY, 0.1, 1, 1, 1)]
+
+
 def test_attribution_is_cached_for_a_minute(ledger: FactoryWorld) -> None:
     w = ledger
     pl = w.get("pl")

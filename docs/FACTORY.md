@@ -538,21 +538,29 @@ Durable facts every metric builds on (`omnigent/server/factory/telemetry/`):
   (`factory_versions`: image tag, server sha, each factory bundle's content
   sha, the `OMNIGENT_FACTORY_*` knobs with secrets redacted), deduped by
   content hash. Members carry `omnigent.factory.version` and
-  `omnigent.factory.bundle=<agent_id>/<sha12>` from spawn, restart and
-  relaunch.
+  `omnigent.factory.bundle=<agent_id>/<sha12>` from factory start (the root
+  lead), spawn, restart (cockpit or peer) and relaunch.
 - **Spans** (`factory_spans`, never pruned, idempotent on `dedupe_key`). An
   event-log recorder writes `project`, `stage`, `ready_wait`, `decision`,
   `task`, `env`, `preview`, `demo`, `incident`, `intervention` and `proposal`
   spans; every GitHub refresh writes `pr`, one `pr_round` per head and one
   `gate` per head and gate with `attrs.first_pass`; the supervisor puts a
   sub-agent's cost on its `task` span. Spans carry the version id and the
-  root's `def_version`.
+  root's `def_version`. Only a sha seen as the PR's head (`headRefOid`, a
+  `gate.changed` event) opens a round; marker shas other than 7-40 hex are
+  ignored, and a verdict on a sha without a round adds nothing.
 - **Cost ledger** (`factory_cost_daily`). Every turn's display cost and
   tokens, booked by factory, project (`""` for the leads), role, agent, model
   and UTC day from the session's labels or its root's.
 - **Heal.** The nightly loop rebuilds and closes spans from the PR, decision,
   demo and project tables, the sessions and the remaining events before it
-  prunes; a second run changes nothing, and the first one backfills.
+  prunes; a second run changes nothing, and the first one backfills. Each
+  section, PR and replayed event heals on its own (a failure skips only it),
+  and a span a live writer closed after heal read the log keeps that close.
+- **Export.** Rows the cockpit hides are dropped (sessions outside the
+  factory need READ, as in the activity feed); summaries that quote agent
+  text (mail, reasons, blockers, free-text labels) and free-text data keys
+  are left out; CSV cells that start with `= + - @` are prefixed with `'`.
 
 ## Safety
 

@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import re
 import time
-from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any, Final
 
@@ -27,7 +26,12 @@ from omnigent.server.factory import schemas
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.prs import pr_subject
 from omnigent.server.factory.routes import FactoryRouteError
-from omnigent.server.factory.snapshot import get_snapshot, is_factory_root, readable_for
+from omnigent.server.factory.snapshot import (
+    get_snapshot,
+    is_factory_root,
+    readable_for,
+    readable_set,
+)
 from omnigent.server.factory.telemetry import export
 from omnigent.server.routes._auth_helpers import require_access, require_user
 from omnigent.stores.factory_store import norm_id
@@ -81,6 +85,8 @@ async def _viewer(request: Request, factory_id: str) -> _Viewer:
         hidden_projects=frozenset(hidden),
         members=frozenset(raw.top_level_of),
         readable=frozenset(readable),
+        # Sessions outside the factory: readable_set, as the activity feed checks them.
+        check=lambda ids: readable_set(user_id, ids, deps),
     )
     return _Viewer(deps=deps, root=root, vis=vis)
 
@@ -94,7 +100,8 @@ def _id(value: str | None, name: str) -> str | None:
         raise FactoryRouteError(400, f"invalid_{name}", f"{name} is not an id") from None
 
 
-def _span_views(spans: Iterable[FactorySpan], vis: export.Visibility) -> list[dict[str, Any]]:
+async def _span_views(spans: list[FactorySpan], vis: export.Visibility) -> list[dict[str, Any]]:
+    await asyncio.to_thread(vis.resolve, [s.session_id for s in spans])
     return [
         schemas.SpanView.model_validate(export.span_row(s)).model_dump(mode="json")
         for s in spans
@@ -135,7 +142,7 @@ async def list_factory_spans(
     )
     more = len(rows) > limit
     return {
-        "data": _span_views(rows[:limit], viewer.vis),
+        "data": await _span_views(rows[:limit], viewer.vis),
         "has_more": more,
         "next_since": rows[limit].started_at if more else None,
     }
@@ -164,13 +171,13 @@ async def pr_timeline(request: Request, pr_id: str) -> dict[str, Any]:
             pr.factory_id, "*", 0, pr_subject(pr.repo, pr.number), limit=TIMELINE_MAX
         )
     )
+    vis = viewer.vis
+    await asyncio.to_thread(vis.resolve, [sid for e in found for sid in (e.from_id, e.to_id)])
     return {
         "pr": export.pr_row(pr),
-        "spans": _span_views(spans, viewer.vis),
+        "spans": await _span_views(spans, vis),
         "events": [
-            export.event_row(e)
-            for e in found
-            if viewer.vis.session(e.from_id) and viewer.vis.session(e.to_id)
+            export.event_row(e) for e in found if vis.session(e.from_id) and vis.session(e.to_id)
         ],
     }
 

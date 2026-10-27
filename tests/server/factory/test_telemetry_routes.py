@@ -18,7 +18,7 @@ import pytest
 from omnigent.server.auth import LEVEL_READ
 from omnigent.server.factory import events, snapshot, status
 from omnigent.server.factory.context import factory_deps
-from omnigent.server.factory.telemetry import cost
+from omnigent.server.factory.telemetry import cost, export
 from tests.server.factory.conftest import FactoryApi, FactoryWorld, FakeDeliver
 from tests.server.factory.telemetry_replay import Replay, make_replay
 
@@ -324,6 +324,131 @@ async def test_the_csv_export_gives_each_table_a_header(
     assert sum(1 for line in lines if line[0] == "cost") == 8
     gates = next(line for line in lines if line[0] == "prs")[17]
     assert json.loads(gates)["checks"] == "pass"
+
+
+async def test_the_export_drops_reasons_blockers_and_label_text(
+    replayed: Replay, authed_api: FactoryApi
+) -> None:
+    r = replayed
+    secrets = ("SECRET withdraw reason", "SECRET blocked on", "SECRET summary label")
+    common: dict[str, Any] = {"from_id": r.world.id("pl"), "project": "api-version"}
+    await events.emit(
+        r.world.app_state,
+        r.fid,
+        "decision.withdrawn",
+        summary=f"PL withdrew D-1: {secrets[0]}",
+        data={"reason": secrets[0]},
+        **common,
+    )
+    for kind in ("needs_human", "needs_human.cleared"):
+        await events.emit(
+            r.world.app_state,
+            r.fid,
+            kind,
+            summary=f"PL waiting on a human: {secrets[1]}",
+            data={"reason": "blocked", "blocked_on": secrets[1]},
+            **common,
+        )
+    for field, old, new in (("summary", "idle", secrets[2]), ("state", "active", "blocked")):
+        await events.emit(
+            r.world.app_state,
+            r.fid,
+            "label.changed",
+            summary=f"PL · {field}: {old} → {new}",
+            data={"field": field, "label": f"omnigent.factory.{field}", "from": old, "to": new},
+            **common,
+        )
+
+    text = (await _export(authed_api, r.fid, tables="events")).text
+
+    for secret in secrets:
+        assert secret not in text
+    labels = [
+        json.loads(line)
+        for line in text.splitlines()
+        if json.loads(line)["kind"] == "label.changed"
+    ]
+    # Structured labels keep their values; free-text ones do not.
+    assert [(row["summary"], row["data"]) for row in labels] == [
+        (None, {"field": "summary", "label": "omnigent.factory.summary"}),
+        (
+            None,
+            {
+                "field": "state",
+                "label": "omnigent.factory.state",
+                "from": "active",
+                "to": "blocked",
+            },
+        ),
+    ]
+
+
+async def test_csv_cells_never_run_as_formulas(replayed: Replay, authed_api: FactoryApi) -> None:
+    r = replayed
+    title = '=HYPERLINK("https://evil.example","open")'
+    r.store.update_pr(r.pr_id(9630), title=title)
+    resp = await _export(authed_api, r.fid, tables="prs", format="csv")
+    titles = [line[5] for line in csv.reader(io.StringIO(resp.text)) if line[0] == "prs"]
+    assert f"'{title}" in titles
+    assert [export.csv_cell(v) for v in ("+1", "-2", "@x", "\tx", "ok", -3, {"a": 1})] == [
+        "'+1",
+        "'-2",
+        "'@x",
+        "'\tx",
+        "ok",
+        -3,
+        '{"a": 1}',
+    ]
+
+
+async def test_sessions_outside_the_factory_need_read_access(
+    replayed: Replay, authed_api: FactoryApi
+) -> None:
+    r = replayed
+    plain = r.world.id("plain")
+    await events.emit(
+        r.world.app_state,
+        r.fid,
+        "dispatch",
+        from_id=plain,
+        summary="from a session outside the factory",
+        data={"marker": "outsider"},
+    )
+
+    async def outsider_rows(user: str) -> list[Any]:
+        resp = await _export(authed_api, r.fid, user, tables="events")
+        return [
+            row
+            for row in map(json.loads, resp.text.splitlines())
+            if (row["data"] or {}).get("marker") == "outsider"
+        ]
+
+    # Alice can read that session, bob cannot (as in the cockpit's activity feed).
+    assert len(await outsider_rows("alice")) == 1
+    assert await outsider_rows("bob") == []
+
+
+def test_visibility_checks_each_outside_session_once() -> None:
+    asked: list[list[str]] = []
+
+    def check(ids: list[str]) -> set[str]:
+        asked.append(ids)
+        return {"out-ok"}
+
+    vis = export.Visibility(
+        members=frozenset({"m1", "m2"}), readable=frozenset({"m1"}), check=check
+    )
+    vis.resolve(["out-ok", "out-no", "m1", "m2", None, "out-ok"])
+    assert [vis.session(s) for s in (None, "m1", "m2", "out-ok", "out-no")] == [
+        True,
+        True,
+        False,
+        True,
+        False,
+    ]
+    assert asked == [["out-no", "out-ok"]]
+    # Without a check (no viewer), sessions outside the factory stay visible.
+    assert export.Visibility().session("anyone")
 
 
 async def test_the_export_validates_tables_and_format(
