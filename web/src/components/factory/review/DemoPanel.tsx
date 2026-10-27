@@ -20,7 +20,7 @@ import {
 import { ZoomableImage } from "@/components/ImageLightbox";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import type { DemoStepStatus, DemoView, PrView, ProjectView } from "@/lib/factoryApi";
+import type { DemoStepStatus, DemoView, MemberView, PrView, ProjectView } from "@/lib/factoryApi";
 import { fetchDemoJson, fetchFactoryEvents } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
 import { ageText, clipDuration, formatBytes, prNoEnvReason } from "../board/boardModel";
@@ -526,12 +526,15 @@ export function DemoPanel({
   project,
   demo,
   nowS,
+  recorder = null,
 }: {
   factoryId: string;
   pr: PrView;
   project: ProjectView | null;
   demo: DemoView | null;
   nowS: number;
+  /** The demo agent recording this PR right now (`demoRecorder`). */
+  recorder?: MemberView | null;
 }) {
   const apiFile = demo ? demoApiFile(demo) : null;
   const jumpToApi = () => {
@@ -542,7 +545,14 @@ export function DemoPanel({
 
   if (!demo) {
     const noEnv = prNoEnvReason(pr, project);
-    const empty = EMPTY_DEMO[noEnv ?? "none"];
+    const empty =
+      recorder && !noEnv
+        ? {
+            testId: "review-demo-recording",
+            title: "Recording demo…",
+            body: `${recorder.title} is recording this head in its factory preview.`,
+          }
+        : EMPTY_DEMO[noEnv ?? "none"];
     return (
       <section data-testid="review-demo" data-state="none" className="flex flex-col gap-2">
         <PanelHeading title="Demo" />
@@ -570,7 +580,8 @@ export function DemoPanel({
       {oldHead && (
         <ReviewNotice tone="warning" testId="review-demo-old-head">
           Demo is for an older head (<span className="font-mono">{shortSha(demo.head_sha)}</span>).
-          The new head <span className="font-mono">{shortSha(pr.head_sha)}</span> is not demoed yet.
+          The new head <span className="font-mono">{shortSha(pr.head_sha)}</span>{" "}
+          {recorder ? `is being recorded by ${recorder.title}.` : "is not demoed yet."}
         </ReviewNotice>
       )}
       {(demo.status === "FAIL" || demo.status === "ERROR") && (

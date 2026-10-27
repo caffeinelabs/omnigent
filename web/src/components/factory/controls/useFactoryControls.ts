@@ -6,7 +6,7 @@
 import { useCallback, useContext, useEffect, useMemo, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { showToast } from "@/components/ui/toast";
-import { factoryQueryKey, useFactoryEvents } from "@/hooks/useFactory";
+import { factoryClockOffsetS, factoryQueryKey, useFactoryEvents } from "@/hooks/useFactory";
 import {
   type EventFilters,
   type FactoryControlRequest,
@@ -124,7 +124,9 @@ function projectOf(target: string): string | null {
 export function useFactoryControls(factoryId: string): FactoryControls {
   const queryClient = useQueryClient();
   const pinned = useContext(FactoryNowContext);
-  const now = useFactoryNow().getTime();
+  // Control events carry server times: read them, and stamp clicks, on the server's clock.
+  const offsetMs = pinned ? 0 : Math.round(factoryClockOffsetS(queryClient, factoryId) * 1000);
+  const now = useFactoryNow().getTime() + offsetMs;
   const local = useSyncExternalStore(
     subscribe,
     () => stores.get(factoryId) ?? EMPTY,
@@ -137,7 +139,10 @@ export function useFactoryControls(factoryId: string): FactoryControls {
     if (page) pruneLocal(factoryId, new Set(page.map((e) => e.id)), now);
   }, [factoryId, page, now]);
 
-  const stamp = useCallback(() => (pinned ? pinned.getTime() : Date.now()), [pinned]);
+  const stamp = useCallback(
+    () => (pinned ? pinned.getTime() : Date.now() + offsetMs),
+    [pinned, offsetMs],
+  );
   const refresh = useCallback(() => {
     void queryClient.invalidateQueries({ queryKey: factoryQueryKey(factoryId) });
     void queryClient.invalidateQueries({ queryKey: ["factory-events", factoryId] });

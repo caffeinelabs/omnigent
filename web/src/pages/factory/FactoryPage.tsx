@@ -3,7 +3,8 @@
  * what needs the human, and whether the machine is alive.
  *
  * Query parameters: `?tab=board|activity`, `?project=<slug>` (project
- * drawer), `?review=<pr number>` (review drawer), `?decision=<D-n>` (highlight
+ * drawer), `?review=<pr number>` (review drawer; `&preview=unavailable` when the
+ * PR's stable preview link found no running preview), `?decision=<D-n>` (highlight
  * in the decisions rail). The rail sits beside the board from 1280 px and
  * folds under the Needs-you strip below that.
  */
@@ -173,6 +174,13 @@ function Cockpit({ snapshot, clockOffsetS }: { snapshot: FactorySnapshot; clockO
   const reviewPr = review
     ? (snapshot.prs.find((pr) => String(pr.number) === review || pr.id === review) ?? null)
     : null;
+  // The stable preview redirect adds `pr` and `preview=unavailable`; they close with the drawer.
+  const closeReview = () =>
+    setParams((prev) => {
+      const next = new URLSearchParams(prev);
+      for (const key of ["review", "pr", "preview"]) next.delete(key);
+      return next;
+    });
   const rail = (
     <DecisionsRail
       factoryId={snapshot.factory.id}
@@ -243,9 +251,10 @@ function Cockpit({ snapshot, clockOffsetS }: { snapshot: FactorySnapshot; clockO
           factoryId={snapshot.factory.id}
           pr={reviewPr}
           demo={reviewPr?.demo ?? null}
-          onClose={() => setParam("review", null)}
+          onClose={closeReview}
           snapshot={snapshot}
           nowS={nowS}
+          previewUnavailable={params.get("preview") === "unavailable"}
         />
       )}
     </div>

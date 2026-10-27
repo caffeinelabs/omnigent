@@ -272,7 +272,7 @@ async def test_factory_services_start_background_when_enabled(
 
     calls: list[str] = []
 
-    async def fake_start_all(app_state: object) -> object:
+    async def fake_start_all(app_state: object, *, started: list[str] | None = None) -> object:
         calls.append("start")
 
         async def stop() -> None:

@@ -297,6 +297,19 @@ async def test_pr_registration_upserts_the_row_and_records_claims(cockpit: Cockp
     assert len(cockpit.store.list_prs(cockpit.factory_id)) == 1
 
 
+async def test_pr_registration_returns_the_review_links(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    body = (await cockpit.pr("pl")).json()
+    assert body["review_url"] == f"http://test/factory/{cockpit.factory_id}?review=9630"
+    assert body["preview_url"] == f"http://test/v1/factory/prs/{body['pr_id']}/preview"
+
+    monkeypatch.setenv("OMNIGENT_DOMAIN", "omnigent.example.com")
+    body = (await cockpit.pr("pl")).json()
+    assert body["review_url"].startswith("https://omnigent.example.com/factory/")
+    assert body["preview_url"].startswith("https://omnigent.example.com/v1/factory/prs/")
+
+
 async def test_a_pr_on_a_foreign_repo_is_refused(cockpit: Cockpit) -> None:
     foreign = await cockpit.pr("pl", url="https://github.com/caffeinelabs/infra/pull/12")
     not_pr = await cockpit.pr("pl", url="https://github.com/caffeinelabs/app/issues/12")

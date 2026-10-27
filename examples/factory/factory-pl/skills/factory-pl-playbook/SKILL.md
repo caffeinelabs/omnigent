@@ -127,15 +127,16 @@ Report: the RESULT block
    Only a repo an operator opted in with `OMNIGENT_FACTORY_MERGE_REPOS` uses
    the gate: `python -m omnigent.factory_merge <pr-url>` (exit 0 merged, 2 a
    gate failed, 1 error). Never add `factory:allow-protected` yourself.
-8. **Review-links block**, for PRs with a demo: see below. A
-   `factory:no-env` PR gets no block.
+8. **Review-links block**: see below. A `factory:no-env` PR gets the review
+   link only.
 
 ### Review-links block
 
-The demo URL from DEMO's result is the cockpit review link,
-`<origin>/factory/<factory id>?review=<n>`; its origin is the Omnigent server.
-`pr_id` comes from `sys_factory_pr`. Run this once the first demo is
-published; running it again replaces the block:
+`sys_factory_pr` returns both links: `review_url` (the cockpit review drawer,
+`<origin>/factory/<factory id>?review=<n>`) and `preview_url` (the stable
+preview link, always the current deploy). Run this once the PR is ready (after
+the first demo when it has a preview); running it again replaces the block.
+For a `factory:no-env` PR drop the preview line:
 
 ```bash
 gh pr view <url> --json body -q .body > /tmp/pr-<n>.md
@@ -144,8 +145,8 @@ import re, sys
 path = sys.argv[1]
 body = open(path).read()
 block = """<!-- factory:review-links -->
-Review in Omnigent: <demo url>
-Live preview (always the current deploy): <origin>/v1/factory/prs/<pr_id>/preview
+Review in Omnigent: <review_url>
+Live preview (always the current deploy): <preview_url>
 <!-- /factory:review-links -->"""
 pattern = r"<!-- factory:review-links -->.*?<!-- /factory:review-links -->"
 body = re.sub(pattern, block, body, flags=re.S) if re.search(pattern, body, re.S) else body.rstrip() + "\n\n" + block + "\n"

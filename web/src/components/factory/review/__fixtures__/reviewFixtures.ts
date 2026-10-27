@@ -1,6 +1,6 @@
 // Review drawer fixtures built from the live run: one PR per drawer state
 // (ready with a video, a backend-only API demo, a demo of an older head, no
-// demo yet, a parked preview, a preview behind head, a preview deploying the
+// demo yet, one being recorded, a parked preview, a preview behind head, a preview deploying the
 // head, merged, docs-only, previews off for the project, a failed demo) and
 // the `api.json` transcripts their demos recorded. Every export is a fresh
 // copy the caller may mutate.
@@ -15,6 +15,7 @@ export const REVIEW_STATES = [
   "backend-api-demo",
   "demo-old-head",
   "no-demo",
+  "demo-recording",
   "preview-parked",
   "preview-mismatch",
   "preview-deploying",
@@ -395,6 +396,21 @@ export function reviewScenario(state: ReviewState): { snapshot: FactorySnapshot;
         slot: 2,
       };
       return { snapshot, pr: p9631 };
+    }
+    case "demo-recording": {
+      // No demo yet, and the project's demo agent is recording the head.
+      const scenario = reviewScenario("no-demo");
+      const template = scenario.snapshot.members.find((m) => m.role === "demo")!;
+      scenario.snapshot.members.push({
+        ...template,
+        session_id: "d3m0db0000000000000000000000c0de",
+        title: "demo:db-version-route",
+        project: "db-version",
+        status: "running",
+        running: true,
+        url: "/c/d3m0db0000000000000000000000c0de",
+      });
+      return scenario;
     }
     case "preview-parked": {
       p9630.preview = {

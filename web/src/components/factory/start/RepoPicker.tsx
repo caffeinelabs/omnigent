@@ -16,6 +16,7 @@ import {
   CommandList,
 } from "@/components/ui/command";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { useServerInfo } from "@/lib/CapabilitiesContext";
 import { type GithubRepo, fetchGithubBranches, fetchGithubRepos } from "@/lib/githubIntegration";
 import { cn } from "@/lib/utils";
 
@@ -25,11 +26,18 @@ const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
 export const COMBOBOX_TRIGGER_CLASS =
   "flex h-8 w-full min-w-0 cursor-pointer items-center gap-2 rounded-lg border border-input bg-transparent px-2.5 text-left text-ui outline-none transition-colors hover:border-ring/60 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 aria-invalid:border-destructive aria-invalid:ring-3 aria-invalid:ring-destructive/20 dark:bg-input/30";
 
-/** The viewer's GitHub repos (shared with New chat's picker cache). */
+/**
+ * The viewer's GitHub repos (shared with New chat's picker cache). Asked only
+ * where the server offers the GitHub connection, as New chat does: elsewhere
+ * the route 404s.
+ */
 export function useGithubRepos() {
+  const info = useServerInfo();
+  const enabled = info !== "loading" && (info.enabled_connections ?? []).includes("github");
   return useQuery({
     queryKey: ["github-repos"],
     queryFn: fetchGithubRepos,
+    enabled,
     staleTime: 5 * 60_000,
     retry: false,
   });
@@ -51,7 +59,7 @@ export function RepoCombobox({
 }) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
-  const { data, isPending, isError } = useGithubRepos();
+  const { data, isLoading } = useGithubRepos();
   const connected = data?.connected === true;
   const repos: GithubRepo[] = connected ? data.repos : [];
   const typed = search.trim();
@@ -90,7 +98,7 @@ export function RepoCombobox({
           />
           <CommandList>
             <CommandEmpty>
-              {isPending && !isError
+              {isLoading
                 ? "Loading repositories…"
                 : connected
                   ? "No repository matches. Type owner/name."

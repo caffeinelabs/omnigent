@@ -177,6 +177,28 @@ describe("FactoryPage", () => {
     expect(location).toContain("review=9631");
   });
 
+  it("explains a stable preview link that landed here, and clears it on close", async () => {
+    const snapshot = liveRunSnapshot();
+    const pr = snapshot.prs.find((p) => p.number === 9631)!;
+    pr.preview = { ...pr.preview!, state: "parked" };
+    serve(() => json(snapshot));
+    renderPage(`?review=9631&pr=${pr.id}&preview=unavailable`);
+    const drawer = await screen.findByTestId("review-drawer");
+    expect(within(drawer).getByTestId("review-preview-unavailable")).toHaveTextContent(
+      "this PR’s factory preview isn’t running (parked). Restore it under Preview",
+    );
+    fireEvent.click(within(drawer).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByTestId("review-drawer")).toBeNull());
+    expect(location).not.toMatch(/review=|preview=|pr=/);
+  });
+
+  it("says nothing about an unavailable preview that is back up", async () => {
+    serve();
+    renderPage("?review=9630&preview=unavailable");
+    const drawer = await screen.findByTestId("review-drawer");
+    expect(within(drawer).queryByTestId("review-preview-unavailable")).toBeNull();
+  });
+
   it("gives the review drawer the PR's project: its PL chat and the reviewer's session", async () => {
     serve();
     renderPage("?review=9630");

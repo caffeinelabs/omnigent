@@ -2,7 +2,7 @@
 
 For each factory root this:
 
-1. ensures the owner's sidebar folder project ``🏭 <name>`` exists (once:
+1. ensures the owner's sidebar folder project ``<name>`` (🏭 icon) exists (once:
    a folder the owner deleted stays deleted);
 2. files top-level members that sit in no project into it (never moving a
    session the user filed elsewhere);
@@ -28,7 +28,6 @@ from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.factory import (
     FOLDER_DELETED,
     LABEL_FOLDER_PROJECT,
-    LABEL_NAME,
     LABEL_PROJECT,
     LABEL_ROLE,
     ROLE_PROJECT_LEAD,
@@ -45,6 +44,7 @@ from omnigent.server.factory.snapshot import (
     pl_title_slug,
     project_stage,
 )
+from omnigent.server.factory.start import FOLDER_ICON, folder_name, is_factory_folder
 from omnigent.stores.factory_store import now_ms
 from omnigent.util.session_lifecycle import is_session_closed
 
@@ -54,7 +54,6 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 INTERVAL_S: Final = 60.0
-FOLDER_ICON: Final = "🏭"
 
 
 @dataclass
@@ -91,11 +90,6 @@ def repo_from_labels(labels: Mapping[str, str]) -> tuple[str | None, str | None]
     return None, None
 
 
-def _folder_name(root: Conversation) -> str:
-    name = root.labels.get(LABEL_NAME) or (root.title or "").strip() or "Factory"
-    return f"{FOLDER_ICON} {name}"
-
-
 def _ensure_folder(
     deps: FactoryDeps, root: Conversation, owner: str | None, claimed: set[str]
 ) -> tuple[str | None, bool]:
@@ -115,7 +109,7 @@ def _ensure_folder(
         # The owner deleted the folder; refiling every member would undo that.
         deps.conversation_store.set_labels(root.id, {LABEL_FOLDER_PROJECT: FOLDER_DELETED})
         return None, False
-    name = _folder_name(root)
+    name = folder_name(root)
     for candidate in (name, f"{name} · {root.id[:6]}"):
         try:
             folder = projects.create(
@@ -128,7 +122,7 @@ def _ensure_folder(
             if exc.code != ErrorCode.ALREADY_EXISTS:
                 raise
             existing = next((p for p in projects.list(user_id=owner) if p.name == candidate), None)
-            if existing is None or existing.id in claimed:
+            if existing is None or existing.id in claimed or not is_factory_folder(existing):
                 continue
             folder = existing
         deps.conversation_store.set_labels(root.id, {LABEL_FOLDER_PROJECT: folder.id})

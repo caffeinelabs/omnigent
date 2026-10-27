@@ -156,6 +156,10 @@ function renderLanding(): { rerender: (ui: ReactNode) => void; unmount: () => vo
     harness_install_enabled: false,
     installable_harnesses: [],
     dictation_available: false,
+    github_app_enabled: false,
+    sshpiper_host: null,
+    sshpiper_port: null,
+    sshpiper_user: null,
   };
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   function Wrapper({ children }: { children: ReactNode }) {

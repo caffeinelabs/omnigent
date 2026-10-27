@@ -11,6 +11,7 @@ cycle-free for importers that only need one piece.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from typing import TYPE_CHECKING, Any
 
@@ -25,6 +26,8 @@ if TYPE_CHECKING:
     from omnigent.stores.file_store import FileStore
     from omnigent.stores.permission_store import PermissionStore
     from omnigent.stores.project_store import ProjectStore
+
+_logger = logging.getLogger(__name__)
 
 
 def register_factory_routes(
@@ -122,7 +125,10 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
         from omnigent.server.factory.supervisor import start_supervision
 
         stop_supervision = start_supervision(app_state)
-        stop_background = await start_all(app_state)
+        started = ["supervisor"]
+        stop_background = await start_all(app_state, started=started)
+        # One line the rollout checks for: which services this process runs.
+        _logger.info("factory services started: %s", ", ".join(started))
 
     async def _stop() -> None:
         if stop_background is not None:

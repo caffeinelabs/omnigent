@@ -12,6 +12,8 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { preflightAllFailing, preflightOk } from "@/components/factory/__fixtures__/liveRun";
 import { DRAFT_KEY } from "@/components/factory/start/projectForm";
+import { CapabilitiesProvider } from "@/lib/CapabilitiesContext";
+import { FALLBACK_SERVER_INFO, type ServerInfo } from "@/lib/capabilities";
 import { useParams } from "@/lib/routing";
 import { NewFactoryPage } from "./NewFactoryPage";
 
@@ -77,17 +79,19 @@ function CockpitStub() {
   return <p data-testid="cockpit-stub">cockpit {factoryId}</p>;
 }
 
-function renderPage() {
+function renderPage(info: ServerInfo | "loading" = "loading") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
-    <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={["/factory/new"]}>
-        <Routes>
-          <Route path="/factory/new" element={<NewFactoryPage />} />
-          <Route path="/factory/:factoryId" element={<CockpitStub />} />
-        </Routes>
-      </MemoryRouter>
-    </QueryClientProvider>,
+    <CapabilitiesProvider info={info}>
+      <QueryClientProvider client={client}>
+        <MemoryRouter initialEntries={["/factory/new"]}>
+          <Routes>
+            <Route path="/factory/new" element={<NewFactoryPage />} />
+            <Route path="/factory/:factoryId" element={<CockpitStub />} />
+          </Routes>
+        </MemoryRouter>
+      </QueryClientProvider>
+    </CapabilitiesProvider>,
   );
 }
 
@@ -106,6 +110,20 @@ afterEach(() => {
 });
 
 describe("NewFactoryPage", () => {
+  it("lists GitHub repos only where the server offers the GitHub connection", async () => {
+    const calls = serve();
+    const { unmount } = renderPage({ ...FALLBACK_SERVER_INFO, enabled_connections: [] });
+    fireEvent.click(screen.getByTestId("factory-new-repo-0"));
+    expect(await screen.findByText("GitHub isn’t connected. Type owner/name.")).toBeInTheDocument();
+    expect(calls.some((c) => c.path === "/v1/connections/github/repos")).toBe(false);
+    unmount();
+
+    renderPage({ ...FALLBACK_SERVER_INFO, enabled_connections: ["github"] });
+    fireEvent.click(screen.getByTestId("factory-new-repo-0"));
+    expect(await screen.findByText("caffeinelabs/app")).toBeInTheDocument();
+    expect(calls.filter((c) => c.path === "/v1/connections/github/repos")).toHaveLength(1);
+  });
+
   it("derives the slug from the title until it is edited", () => {
     serve();
     renderPage();

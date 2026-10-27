@@ -7,6 +7,7 @@ import type {
   DemoFileView,
   DemoView,
   EventView,
+  MemberView,
   PrView,
   PreviewView,
   ProjectView,
@@ -112,6 +113,21 @@ export function demoDownloads(demo: DemoView): DemoFileView[] {
 /** The demo's `api.json`, when it recorded API calls. */
 export function demoApiFile(demo: DemoView): DemoFileView | null {
   return demo.files.find((f) => f.kind === "api") ?? null;
+}
+
+/**
+ * The demo agent recording this PR right now: a running `demo` member of its
+ * project, the one named after the PR's task when several run.
+ */
+export function demoRecorder(pr: PrView, members: readonly MemberView[]): MemberView | null {
+  const running = members.filter(
+    (m) => m.role === "demo" && m.running && m.project != null && m.project === pr.project_slug,
+  );
+  if (pr.task) {
+    const named = running.find((m) => m.title.includes(pr.task!));
+    if (named) return named;
+  }
+  return running.length === 1 ? running[0]! : null;
 }
 
 // ── API transcript (`api.json`) ────────────────────────────────

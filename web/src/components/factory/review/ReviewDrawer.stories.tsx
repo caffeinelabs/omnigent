@@ -49,8 +49,14 @@ export const DemoOldHead = review({ state: "demo-old-head" });
 /** Gates mostly green, the preview runs the head, the demo agent hasn't published yet. */
 export const NoDemo = review({ state: "no-demo" });
 
+/** No demo yet, and the project's demo agent is running: "Recording demo…". */
+export const DemoRecording = review({ state: "demo-recording" });
+
 /** The preview was parked to free a slot; Restore preview sends the control. */
 export const PreviewParked = review({ state: "preview-parked" });
+
+/** The PR's stable preview link landed here because the preview is parked. */
+export const PreviewUnavailable = review({ state: "preview-parked", previewUnavailable: true });
 
 /** The preview still runs an older commit: amber "preview behind head". */
 export const PreviewMismatch = review({ state: "preview-mismatch" });

@@ -48,7 +48,9 @@ from omnigent.server.factory.agent_scope import (
     factory_repos,
     require_factory_repo,
 )
+from omnigent.server.factory.api.pr_preview import preview_stable_path
 from omnigent.server.factory.charter import render_pl_charter
+from omnigent.server.factory.demos import public_base_url, review_url
 from omnigent.server.factory.routes import FactoryRouteError
 from omnigent.stores.factory_store import DecisionNotOpen, norm_id
 
@@ -388,9 +390,13 @@ async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
     if refreshed is not None:
         row = refreshed
     gates = dict(row.gates or {})
+    base = public_base_url(str(request.base_url))
     reply: dict[str, Any] = {
         "pr_id": row.id,
         "url": row.url,
+        # Absolute links for the PR body's review-links block.
+        "review_url": review_url(base, caller.factory_id, row.number),
+        "preview_url": f"{base}{preview_stable_path(row.id)}",
         "repo": row.repo,
         "number": row.number,
         "project": row.project_slug,

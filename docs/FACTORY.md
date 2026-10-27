@@ -54,8 +54,11 @@ SERVER: FactorySupervisor — keepalive, heartbeats, alerts, reply notices
 | `OMNIGENT_FACTORY_POST_RATE_PER_HOUR` | `60,20` | Posts per hour per sender, and per (sender, target) pair. A single number sets the sender limit and a pair limit of a third of it. |
 | `OMNIGENT_FACTORY_MERGE_REPOS` | empty | `owner/repo` list (comma or space separated) the merge gate may merge in. Empty means the gate merges nowhere. Read by the gate inside the sandbox. |
 | `OMNIGENT_BUILTIN_AGENT_DIRS` | unset | Extra built-in bundles, seeded after the defaults. Used as the prompt hotfix lane (below). |
+| `OMNIGENT_FEATURES` | unset | `factory` in the list shows the cockpit (`/factory`, the sidebar entry, the Inbox's factory decisions). It is also on wherever `OMNIGENT_FACTORY_ENABLED=1`; list it explicitly to document it, drop it (with the factory off) to hide the UI. |
 
-Invalid timing values fall back to their defaults with a warning.
+Invalid timing values fall back to their defaults with a warning. On start the
+server logs one line naming what runs, e.g. `factory services started:
+supervisor, env_prober, pr_poller, prune, reconcile`.
 
 ## Agents
 
@@ -257,7 +260,7 @@ if they stay silent the board is still right.
 | Tool | Roles | Use |
 |---|---|---|
 | `sys_factory_ask(question, options, context?, blocking=true, dedupe_key?)` | every role | Ask the human. Opens D-<n> in the cockpit and the inbox and returns at once; the answer arrives as a message. Replaces DECISIONS NEEDED lists. |
-| `sys_factory_pr(url, task?, claim?, sentinel_verdict?, head_sha?, note?)` | every role (`sentinel_verdict`: leads) | Register a PR, claim `opened` / `ready_for_human_merge` / `abandoned`, or record Sentinel's verdict. Returns the server's gates `{ready, gates, reasons, claim_mismatch}`. |
+| `sys_factory_pr(url, task?, claim?, sentinel_verdict?, head_sha?, note?)` | every role (`sentinel_verdict`: leads) | Register a PR, claim `opened` / `ready_for_human_merge` / `abandoned`, or record Sentinel's verdict. Returns the server's gates `{ready, gates, reasons, claim_mismatch}` and the PR body's review links (`review_url`, `preview_url`). |
 | `sys_factory_env(state, env_id, urls, deployed{sha, ref, tooling_overlay?}, pr?, namespace?, resources?, note?)` | `project_lead`, `env_keeper` | Report the dev env (no `pr`) or the factory preview of PR `pr`. `state=deploying` beyond `OMNIGENT_FACTORY_MAX_PREVIEWS` live previews is refused with `409 preview_cap` and park candidates. |
 | `sys_factory_demo(pr_url, head_sha, title, manifest_path?, files?, …)` | `project_lead`, `env_keeper`, `demo` | Upload a demo (with `manifest_path`, everything the harness's `demo.json` lists) and get back `comment_markdown` / `comment_path` to post on the PR. |
 | `sys_factory_set(stage=…)` | `project_lead` on itself | Claim the project's stage; the cockpit shows it next to the stage it derives. |
@@ -368,7 +371,8 @@ transcript folds.
 |---|---|---|
 | `OMNIGENT_FACTORY_PR_POLL_S` | `60` | GitHub poll interval for tracked PRs; `0` turns the poller off. |
 | `OMNIGENT_FACTORY_ENV_PROBE_S` / `OMNIGENT_FACTORY_PREVIEW_PROBE_S` | `60` / `300` | Dev env and preview probe intervals. |
-| `OMNIGENT_FACTORY_PREVIEW_DOMAIN` | `envs.sandbox.caffeinelabs.io` | The only domain env and preview URLs may use (SSRF guard). |
+| `OMNIGENT_FACTORY_PREVIEW_DOMAIN` | `envs.sandbox.caffeinelabs.io` | The only domain env and preview URLs may use (SSRF guard). `OMNIGENT_ENV_DOMAIN` (the sandboxes' env domain) is read when it is unset. |
+| `OMNIGENT_DOMAIN` | unset | Public host of this server, e.g. `omnigent.caffeinelabs.io`. Demo PR comments and `demo_url` use it for absolute links; unset, they use the address the runner called. |
 | `OMNIGENT_FACTORY_MAX_PREVIEWS` | `8` | Live previews per factory. |
 | `OMNIGENT_FACTORY_PREVIEW_TTL_H` | `72` | Hours without human attention before a preview gets a park notice. |
 | `OMNIGENT_FACTORY_PREVIEW_TOOLING_REF` | empty (recommended: `main`) | caffeinelabs/app ref the preview tooling is overlaid from onto PR heads based on an older main; stored in new charters. Empty: env_keeper uses `main`. |

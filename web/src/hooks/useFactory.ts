@@ -93,6 +93,11 @@ function metaFor(queryClient: QueryClient): SnapshotMeta {
   return meta;
 }
 
+/** Seconds the server clock ran ahead of this browser's at the factory's last snapshot (0 before one). */
+export function factoryClockOffsetS(queryClient: QueryClient, factoryId: string): number {
+  return metaFor(queryClient).clockOffsets.get(factoryId) ?? 0;
+}
+
 async function readSnapshot(
   queryClient: QueryClient,
   factoryId: string,
@@ -173,7 +178,7 @@ export function useFactory(
     isStale: query.data !== undefined && error !== null,
     isLoading: query.isLoading,
     updatedAt: query.dataUpdatedAt,
-    clockOffsetS: factoryId ? (metaFor(queryClient).clockOffsets.get(factoryId) ?? 0) : 0,
+    clockOffsetS: factoryId ? factoryClockOffsetS(queryClient, factoryId) : 0,
     refetch: () => void query.refetch(),
   };
 }
