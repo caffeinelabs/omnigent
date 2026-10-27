@@ -1198,6 +1198,50 @@ class SqlAlchemyFactoryStore(FactoryStore):
 
         return run_write_transaction(self._session_immediate, "update_decision", write)
 
+    def route_decision(
+        self,
+        decision_id: str,
+        *,
+        claimable_by: str | None = None,
+        assignee_was: str | None = None,
+        **fields: Any,
+    ) -> FactoryDecision:
+        check_fields(fields, DECISION_UPDATE_FIELDS, "route_decision")
+        did = norm_id(decision_id)
+        open_code = encode_factory_decision_status("open")
+        values = {k: dump_json(list(v or [])) if k == "options" else v for k, v in fields.items()}
+
+        def write(session: Session) -> FactoryDecision:
+            ws = current_workspace_id()
+            conditions = [
+                SqlFactoryDecision.workspace_id == ws,
+                SqlFactoryDecision.id == did,
+                SqlFactoryDecision.status == open_code,
+            ]
+            if claimable_by is not None:
+                conditions.append(
+                    or_(
+                        SqlFactoryDecision.claimed_by.is_(None),
+                        SqlFactoryDecision.claimed_by == claimable_by,
+                    )
+                )
+            if assignee_was is not None:
+                conditions.append(SqlFactoryDecision.assignee == assignee_was)
+            result = session.execute(
+                update(SqlFactoryDecision)
+                .where(*conditions)
+                .values(**values, updated_at=now_s())
+                .execution_options(synchronize_session=False)
+            )
+            row = session.get(SqlFactoryDecision, (ws, did), populate_existing=True)
+            if row is None:
+                raise DecisionNotFound(decision_id)
+            if result.rowcount != 1:  # type: ignore[attr-defined]
+                raise DecisionNotOpen(_decision(row))
+            return _decision(row)
+
+        return run_write_transaction(self._session_immediate, "route_decision", write)
+
     def list_decisions(
         self,
         factory_ids: Sequence[str] | None = None,

@@ -258,6 +258,76 @@ async def test_assign_routes_and_owners_keep_theirs(cockpit: Cockpit) -> None:
     assert moves == [("operators", "owners"), ("owners", OPAL)]
 
 
+async def test_a_personal_decision_moves_only_by_its_person_or_an_owner(
+    cockpit: Cockpit,
+) -> None:
+    row = _decision(cockpit, await _ask(cockpit, "For Mia?"))
+    url = f"/v1/factory/decisions/{row.id}/assign"
+
+    grabbed = await cockpit.post(url, {"to": OPAL}, user=OPAL)
+    handed = await cockpit.post(url, {"to": "operators"}, user=MIA)
+    back = await cockpit.post(url, {"to": MIA}, user=OPAL)
+    moved = await cockpit.post(url, {"to": OPAL}, user=OWEN)
+
+    assert (grabbed.status_code, error_code(grabbed)) == (403, "assigned_to_person")
+    assert grabbed.json()["assignee"] == MIA
+    assert handed.json()["decision"]["assignee"] == "operators"
+    assert back.json()["decision"]["assignee"] == MIA
+    assert moved.json()["decision"]["assignee"] == OPAL
+
+
+async def test_claim_and_assign_lose_to_a_concurrent_answer(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.server.factory import decisions
+
+    first = _decision(cockpit, await _ask(cockpit, **{"for": "operators"}))
+    other = _decision(cockpit, await _ask(cockpit, "Second?", **{"for": "operators"}))
+    check = decisions.require_assigned
+    resolve = decision_routing.resolve_for
+
+    async def answered_meanwhile(deps: Any, user_id: Any, decision: Any) -> None:
+        await check(deps, user_id, decision)
+        cockpit.store.answer_decision(decision.id, option_id=None, text="done", by=OWEN)
+
+    def resolve_after_answer(deps: Any, factory_id: str, wanted: str) -> Any:
+        cockpit.store.answer_decision(other.id, option_id=None, text="done", by=OWEN)
+        return resolve(deps, factory_id, wanted)
+
+    monkeypatch.setattr(decisions, "require_assigned", answered_meanwhile)
+    monkeypatch.setattr(decision_routing, "resolve_for", resolve_after_answer)
+    claim = await cockpit.post(f"/v1/factory/decisions/{first.id}/claim", {}, user=MIA)
+    assign = await cockpit.post(f"/v1/factory/decisions/{other.id}/assign", {"to": OPAL}, user=MIA)
+
+    assert (claim.status_code, error_code(claim)) == (409, "decision_not_open")
+    assert (assign.status_code, error_code(assign)) == (409, "decision_not_open")
+    assert cockpit.events("decision.claimed") == []
+    assert cockpit.events("decision.assigned") == []
+    assert cockpit.store.get_decision(other.id).assignee == "operators"  # type: ignore[union-attr]
+
+
+async def test_the_second_of_two_racing_claims_gets_409(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.server.factory import decisions
+
+    row = _decision(cockpit, await _ask(cockpit, **{"for": "operators"}))
+    check = decisions.require_assigned
+
+    async def claimed_meanwhile(deps: Any, user_id: Any, decision: Any) -> None:
+        await check(deps, user_id, decision)
+        cockpit.store.route_decision(decision.id, claimed_by=MIA, claimed_at=1)
+
+    monkeypatch.setattr(decisions, "require_assigned", claimed_meanwhile)
+
+    resp = await cockpit.post(f"/v1/factory/decisions/{row.id}/claim", {}, user=OPAL)
+
+    assert (resp.status_code, error_code(resp)) == (409, "already_claimed")
+    assert resp.json()["claimed_by"] == MIA
+    assert cockpit.store.get_decision(row.id).claimed_by == MIA  # type: ignore[union-attr]
+    assert cockpit.events("decision.claimed") == []
+
+
 async def test_assigned_me_counts_mine_and_my_roles(cockpit: Cockpit) -> None:
     await _ask(cockpit, "Mia's")
     await _ask(cockpit, "Ops'", **{"for": "operators"})
@@ -302,6 +372,28 @@ async def test_an_absent_assignee_widens_to_operators_then_owners(cockpit: Cockp
     assert await decision_routing.escalate_decisions(state, t0 + 500 * 60) == 0
     steps = [(e.data["from"], e.data["to"]) for e in cockpit.events("decision.escalated")]
     assert steps == [(MIA, "operators"), ("operators", "owners")]
+
+
+async def test_escalation_skips_a_decision_answered_or_moved_since_the_plan(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    answered = _decision(cockpit, await _ask(cockpit, "Answered?"))
+    moved = _decision(cockpit, await _ask(cockpit, "Moved?"))
+    now = float(answered.created_at) + 31 * 60
+    plan = decision_routing.plan_escalations
+
+    def stale_plan(deps: Any, at: float) -> Any:
+        steps = plan(deps, at)
+        cockpit.store.answer_decision(answered.id, option_id=None, text="done", by=MIA)
+        cockpit.store.route_decision(moved.id, assignee=OWEN)
+        return steps
+
+    monkeypatch.setattr(decision_routing, "plan_escalations", stale_plan)
+
+    assert await decision_routing.escalate_decisions(cockpit.app.state, now) == 0
+    assert cockpit.store.get_decision(answered.id).assignee == MIA  # type: ignore[union-attr]
+    assert cockpit.store.get_decision(moved.id).assignee == OWEN  # type: ignore[union-attr]
+    assert cockpit.events("decision.escalated") == []
 
 
 async def test_a_present_assignee_keeps_the_decision(cockpit: Cockpit) -> None:

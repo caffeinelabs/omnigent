@@ -12,6 +12,7 @@ import pytest
 import pytest_asyncio
 
 from omnigent import factory as F
+from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
 from omnigent.server import oidc_access
 from omnigent.server import presence as session_presence
 from omnigent.server.admin_list import AdminList
@@ -254,6 +255,156 @@ async def test_a_new_member_gets_the_roster_at_create(cockpit: Cockpit) -> None:
     assert _level(cockpit, "alice", "late_pl") == LEVEL_OWNER
 
 
+async def test_removing_revokes_grants_on_archived_members(cockpit: Cockpit) -> None:
+    await _put(cockpit, MIA, "owner")
+    cockpit.world.store.update_conversation(cockpit.world.id("pl"), archived=True)
+
+    await _put(cockpit, MIA, "viewer")
+    assert _level(cockpit, MIA, "pl") == LEVEL_READ
+    resp = await _delete(cockpit, MIA)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["revoked"] == 3
+    for key in ("lead_a", "lead_b", "pl"):
+        assert _level(cockpit, MIA, key) is None
+    assert _level(cockpit, "carol", "pl") == LEVEL_EDIT
+    assert _level(cockpit, "alice", "pl") == LEVEL_OWNER
+
+
+async def test_a_session_someone_else_labels_is_not_a_member(
+    cockpit: Cockpit, db_uri: str, tmp_path: Path
+) -> None:
+    from omnigent.server.factory.context import factory_deps
+
+    await _put(cockpit, MIA, "operator")
+    state = cockpit.app.state
+    foreign = cockpit.world.make_session(
+        "foreign",
+        agent="pl",
+        title="Carol's PL",
+        labels={F.LABEL_ID: cockpit.fid, F.LABEL_ROLE: "project_lead"},
+    )
+    cockpit.permissions.grant("carol", foreign.id, LEVEL_OWNER)
+    cockpit.permissions.grant(DAVE, foreign.id, LEVEL_READ)
+
+    managed = people.managed_sessions(factory_deps(state), cockpit.fid)
+    await people.mirror_member_on_create(state, foreign)
+    repaired = await people.repair_drift(state, cockpit.world.get("lead_a"))
+
+    assert foreign.id not in managed and cockpit.world.id("pl") in managed
+    assert repaired == 0
+    assert _level(cockpit, MIA, "foreign") is None
+    # Carol's own shares are hers to manage; the creator's members stay guarded.
+    cockpit.permissions.grant(MIA, foreign.id, LEVEL_READ)
+    assert await people.managed_grant_conflict(state, foreign.id, MIA) is None
+    assert await people.managed_grant_conflict(state, cockpit.world.id("pl"), MIA) is not None
+    await _delete(cockpit, MIA)
+    assert _level(cockpit, MIA, "foreign") == LEVEL_READ
+    # The create hook skips a labelled session a non-creator creates.
+    await _put(cockpit, OPS, "operator")
+    app = _real_app(db_uri, tmp_path, cockpit.permissions)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://test"
+    ) as client:
+        created = await client.post(
+            "/v1/sessions",
+            json={"agent_id": cockpit.world.agents["pl"], "labels": {F.LABEL_ID: cockpit.fid}},
+            headers={"X-Forwarded-Email": "carol"},
+        )
+    assert created.status_code == 201, created.text
+    assert cockpit.permissions.get(OPS, created.json()["id"]) is None
+
+
+async def test_removal_drops_the_roster_row_before_revoking(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _put(cockpit, MIA, "operator")
+    seen: list[Any] = []
+    revoke = people._revoke
+
+    def spy(deps: Any, user_id: str, session_ids: Any) -> list[str]:
+        seen.append(cockpit.store.get_person(cockpit.fid, user_id))
+        return revoke(deps, user_id, session_ids)
+
+    monkeypatch.setattr(people, "_revoke", spy)
+
+    await _delete(cockpit, MIA)
+
+    assert seen == [None]
+
+
+def test_roster_writes_for_one_factory_wait_for_each_other(cockpit: Cockpit) -> None:
+    import threading
+    import uuid
+
+    from omnigent.server.factory.context import factory_deps
+
+    deps = factory_deps(cockpit.app.state)
+    lock = people._roster_lock(cockpit.fid)
+    assert people._roster_lock(str(uuid.UUID(cockpit.fid))) is lock
+    assert people._roster_lock(cockpit.world.id("pl")) is not lock
+    done = threading.Event()
+
+    def repair() -> None:
+        people._repair_sync(deps, cockpit.fid, None)
+        done.set()
+
+    with lock:
+        worker = threading.Thread(target=repair)
+        worker.start()
+        assert not done.wait(0.3)
+    worker.join(10)
+    assert done.is_set()
+
+
+async def test_new_members_and_repairs_follow_the_sharing_mode(cockpit: Cockpit) -> None:
+    await _put(cockpit, MIA, "operator")
+    state = cockpit.app.state
+    root = cockpit.world.get("lead_a")
+    state.sharing_mode = lambda: SharingMode.READ_ONLY
+    late = cockpit.world.make_session(
+        "late_pl",
+        agent="pl",
+        title="PL · docs",
+        labels={F.LABEL_ID: cockpit.fid, F.LABEL_ROLE: "project_lead"},
+    )
+    cockpit.permissions.grant("alice", late.id, LEVEL_OWNER)
+    cockpit.permissions.revoke(MIA, cockpit.world.id("lead_b"))
+
+    await people.mirror_member_on_create(state, late)
+    repaired = await people.repair_drift(state, root)
+
+    assert _level(cockpit, MIA, "late_pl") == LEVEL_READ
+    assert repaired == 1
+    assert _level(cockpit, MIA, "lead_b") == LEVEL_READ
+    # Existing grants are not new shares: read-only keeps them.
+    assert _level(cockpit, MIA, "pl") == LEVEL_EDIT
+    state.sharing_mode = lambda: SharingMode.OFF
+    cockpit.permissions.revoke(MIA, cockpit.world.id("pl"))
+    assert await people.repair_drift(state, root) == 0
+    assert _level(cockpit, MIA, "pl") is None
+
+
+async def test_drift_announces_each_user_only_their_new_sessions(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.server.routes._sessions import helpers
+
+    await _put(cockpit, MIA, "operator")
+    await _put(cockpit, OPS, "viewer")
+    cockpit.permissions.revoke(MIA, cockpit.world.id("lead_b"))
+    cockpit.permissions.grant(OPS, cockpit.world.id("pl"), LEVEL_EDIT)
+    added: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        helpers, "_announce_session_added", lambda user, sid: added.append((user, sid))
+    )
+
+    assert await people.repair_drift(cockpit.app.state, cockpit.world.get("lead_a")) == 2
+
+    assert added == [(MIA, cockpit.world.id("lead_b"))]
+    assert _level(cockpit, OPS, "pl") == LEVEL_READ
+
+
 # ── PUT / DELETE refusals, sharing mode, admission ─────────────
 
 
@@ -328,6 +479,30 @@ async def test_the_sharing_mode_gates_invites(
         assert cockpit.store.get_person(cockpit.fid, MIA) is None
 
 
+async def test_the_sharing_mode_checks_every_member(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import dataclasses
+
+    store = cockpit.world.store
+    rows = store.get_conversations
+    pl = cockpit.world.id("pl")
+
+    def with_home(ids: list[str]) -> dict[str, Any]:
+        out = rows(ids)
+        if pl in out:
+            out[pl] = dataclasses.replace(out[pl], workspace="/home/alice")
+        return out
+
+    monkeypatch.setattr(store, "get_conversations", with_home)
+    cockpit.app.state.sharing_mode = lambda: SharingMode.RESTRICTED_READ_ONLY
+
+    resp = await _put(cockpit, MIA, "viewer")
+
+    assert (resp.status_code, error_code(resp)) == (403, "sharing_refused")
+    assert "home" in resp.json()["error"]["message"]
+
+
 async def test_admission_reports_blocked_for_a_domain_the_server_refuses(
     cockpit: Cockpit, tmp_path: Path
 ) -> None:
@@ -390,6 +565,10 @@ async def test_search_needs_three_characters_and_manage(cockpit: Cockpit) -> Non
         }
     ]
     assert operator.status_code == 403
+    agent = await cockpit.client.get(
+        f"{url}?q=user", headers={"X-Test-User": "alice", RUNNER_TUNNEL_TOKEN_HEADER: "rt_a.b"}
+    )
+    assert (agent.status_code, error_code(agent)) == (403, "human_only")
 
 
 # ── The viewer block ───────────────────────────────────────────
@@ -560,6 +739,23 @@ async def test_a_viewer_requests_operator_and_an_owner_grants_it(cockpit: Cockpi
         assert _level(cockpit, OPS, key) == LEVEL_EDIT
     [changed] = cockpit.events("people.role_changed")
     assert (changed.data["from_role"], changed.data["role"]) == ("viewer", "operator")
+
+
+async def test_granting_an_access_request_follows_the_sharing_mode(cockpit: Cockpit) -> None:
+    await _put(cockpit, OPS, "viewer")
+    resp = await cockpit.post(
+        f"/v1/factory/factories/{cockpit.fid}/access-requests", {"role": "operator"}, user=OPS
+    )
+    cockpit.app.state.sharing_mode = lambda: SharingMode.READ_ONLY
+
+    granted = await cockpit.post(
+        f"/v1/factory/decisions/{resp.json()['decision']['id']}/answer",
+        {"option_id": "grant"},
+        user="alice",
+    )
+
+    assert (granted.status_code, error_code(granted)) == (403, "sharing_refused")
+    assert cockpit.store.get_person(cockpit.fid, OPS).role == "viewer"  # type: ignore[union-attr]
 
 
 async def test_declining_an_access_request_changes_nothing(cockpit: Cockpit) -> None:

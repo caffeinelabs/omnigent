@@ -124,8 +124,10 @@ export function PermissionsModal({
   // chat agent has none, so the toggle would be inert — hide it there.
   const hasWorkspace = !!session?.workspace;
   const workspaceShared = session?.shareWorkspaceFiles ?? false;
-  // A factory member's grants follow the factory's roster (its People page).
-  const factoryId = session?.labels?.[FACTORY_ID_LABEL]?.replace(/-/g, "") || null;
+  // A top-level factory member's grants follow the factory's roster (its
+  // People page); a sub-agent's are its own.
+  const factoryId =
+    (!session?.parentSessionId && session?.labels?.[FACTORY_ID_LABEL]?.replace(/-/g, "")) || null;
   const factories = useFactories({ enabled: open && factoryId !== null });
   const factoryName =
     session?.labels?.[FACTORY_NAME_LABEL] ||

@@ -9,7 +9,8 @@ Routes (user JWT; writes carry :data:`~omnigent.server.factory.origin.HUMAN_ORIG
 - ``DELETE /v1/factory/factories/{fid}/people/{user}``: remove someone (MANAGE)
   or leave (yourself, READ).
 - ``GET /v1/factory/factories/{fid}/people/search?q=``: known users to invite
-  (≥ 3 characters, ≤ 10 results). MANAGE.
+  (≥ 3 characters, ≤ 10 results). MANAGE, and people only (the user
+  directory is not for agents).
 - ``POST /v1/factory/factories/{fid}/access-requests`` ``{role?, note?}``: a
   viewer (or operator) asks the owners for more; opens an ``access_request``
   decision whose ``grant_role`` option the server runs. READ.
@@ -27,7 +28,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict
 
 from omnigent.entities import Conversation
-from omnigent.errors import OmnigentError
 from omnigent.factory import ACTION_DISMISS, ACTION_GRANT_ROLE, PERSON_ROLES
 from omnigent.server.auth import LEVEL_MANAGE, LEVEL_READ
 from omnigent.server.factory import control, events, people, schemas, server_decisions
@@ -37,7 +37,6 @@ from omnigent.server.factory.decisions import decision_view
 from omnigent.server.factory.origin import HUMAN_ORIGIN
 from omnigent.server.oidc_access import admission_status
 from omnigent.server.routes._auth_helpers import get_user_id
-from omnigent.server.routes._sharing import require_sharing_allows
 
 router = APIRouter(prefix="/v1/factory", tags=["factory"])
 
@@ -121,7 +120,9 @@ async def list_people(request: Request, factory_id: str) -> dict[str, Any] | JSO
     return await _run(run)
 
 
-@router.get("/factories/{factory_id}/people/search", response_model=None)
+@router.get(
+    "/factories/{factory_id}/people/search", response_model=None, dependencies=HUMAN_ORIGIN
+)
 async def search_people(
     request: Request,
     factory_id: str,
@@ -187,15 +188,7 @@ async def put_person(
         person = _check_target(deps, root, target)
         if person == user_id:
             raise CockpitError(403, "cannot_change_self", "ask another owner to change your role")
-        level = people.ROLE_LEVELS[body.role]
-        sessions = await asyncio.to_thread(people.managed_sessions, deps, root.id)
-        for session_id in sessions:
-            try:
-                await require_sharing_allows(
-                    request.app.state, deps.conversation_store, session_id, level
-                )
-            except OmnigentError as exc:
-                raise CockpitError(403, "sharing_refused", exc.message) from None
+        await people.require_roster_sharing(request.app.state, root.id, body.role)
         change = await people.set_person(
             request.app.state, root.id, person, body.role, by_user=user_id
         )

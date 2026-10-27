@@ -13,6 +13,7 @@ been seen for ``decisions.escalate_after_m`` minutes (30) widens to
 from __future__ import annotations
 
 import asyncio
+import functools
 import logging
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
@@ -21,6 +22,7 @@ from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE
 from omnigent.server.factory import events
 from omnigent.server.factory import presence as factory_presence
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
+from omnigent.stores.factory_store import DecisionNotFound, DecisionNotOpen
 
 if TYPE_CHECKING:
     from omnigent.entities.factory import FactoryDecision, FactoryPerson
@@ -260,17 +262,22 @@ async def escalate_decisions(app_state: Any, now: float) -> int:
     for step in due:
         decision = step.decision
         try:
-            updated = await asyncio.to_thread(
-                deps.factory_store.update_decision,
-                decision.id,
-                assignee=step.to_assignee,
-                claimed_by=None,
-                claimed_at=None,
+            # Only while it is still open and nobody re-routed or claimed it since the plan.
+            await asyncio.to_thread(
+                functools.partial(
+                    deps.factory_store.route_decision,
+                    decision.id,
+                    claimable_by=decision.claimed_by or "",
+                    assignee_was=decision.assignee,
+                    assignee=step.to_assignee,
+                    claimed_by=None,
+                    claimed_at=None,
+                )
             )
+        except (DecisionNotOpen, DecisionNotFound):
+            continue
         except Exception:  # noqa: BLE001 - one bad row must not stop the others
             _logger.warning("factory: could not escalate %s", decision.ref, exc_info=True)
-            continue
-        if updated is None:
             continue
         done += 1
         await events.emit(

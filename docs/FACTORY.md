@@ -276,18 +276,20 @@ everything, **operators** steer (answer decisions, review, pause, resume,
 preview, add projects), **owners** also stop, restart, relaunch and manage
 people; the **creator** is an owner whose GitHub and Databricks identity the
 agents run as. Each role is copied as an ordinary session grant (READ, EDIT,
-MANAGE) onto every top-level member, including PLs spawned later (a hook on
-session create) and repaired by reconcile every minute
-(`people.drift_repaired`); owner grants and manual shares are never touched.
+MANAGE) onto every top-level member the creator owns, including PLs spawned
+later (a hook on session create) and repaired by reconcile every minute
+(`people.drift_repaired`), capped by the sharing mode; owner grants and manual
+shares are never touched. A session someone else labels with the factory id
+gets no roster grants. Removing someone revokes them on archived members too.
 
 | Route | Who | What |
 |---|---|---|
 | `GET /v1/factory/factories/{fid}/people` | READ | Roster with presence, `runs_as` (the creator), the caller's `viewer` block. |
 | `PUT …/people/{user}` `{role}`, `DELETE …/people/{user}` | MANAGE (DELETE yourself: READ) | Invite, change a role, remove or leave. Honours the sharing mode; answers `admission: ok\|blocked` (could they sign in through OIDC). `people.invited\|role_changed\|removed\|left`. |
-| `GET …/people/search?q=` | MANAGE | Up to 10 known users matching ≥ 3 characters. |
+| `GET …/people/search?q=` | MANAGE (people only) | Up to 10 known users matching ≥ 3 characters. |
 | `POST …/access-requests` `{role}` | READ | An `access_request` decision for owners; its `grant_role` option runs `set_person`. |
 | `POST\|GET …/presence` | READ | Cockpit heartbeat (20 s, 60 s TTL; `presence` frame scope), merged with who has a member chat open. |
-| `POST /v1/factory/decisions/{id}/claim\|assign`, `GET /v1/factory/decisions?assigned=me` | EDIT | Claim a decision or route it to `owners`, `operators` or a person. |
+| `POST /v1/factory/decisions/{id}/claim\|assign`, `GET /v1/factory/decisions?assigned=me` | EDIT (MANAGE to move one from the owners or from another person) | Claim a decision or route it to `owners`, `operators` or a person; `409` once it is answered or someone else claimed it. |
 
 The snapshot carries `viewer {role, level, is_creator, can.*}`, `people_count`
 and `presence`. Revoking a roster grant through the session's own permissions

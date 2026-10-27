@@ -901,10 +901,10 @@ describe("PermissionsModal", () => {
 describe("PermissionsModal — factory members", () => {
   const FID = "f4f4ba9c-7772-5331-b12f-0fa7072dc4d3";
 
-  function renderMember(labels: Record<string, string>) {
+  function renderMember(labels: Record<string, string>, parentSessionId: string | null = null) {
     listMock.mockResolvedValue([]);
     useSessionMock.mockReturnValue({
-      session: sessionWith({ labels }),
+      session: sessionWith({ labels, parentSessionId }),
       isLoading: false,
       error: null,
     } as unknown as ReturnType<typeof useSession>);
@@ -942,6 +942,12 @@ describe("PermissionsModal — factory members", () => {
 
   it("shows no banner outside a factory", () => {
     renderMember({});
+
+    expect(screen.queryByTestId("share-factory-managed")).toBeNull();
+  });
+
+  it("shows no banner on a sub-agent, whose grants the factory does not manage", () => {
+    renderMember({ "omnigent.factory.id": FID }, "conv_parent");
 
     expect(screen.queryByTestId("share-factory-managed")).toBeNull();
   });

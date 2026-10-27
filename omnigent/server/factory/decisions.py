@@ -18,7 +18,6 @@ from typing import Any, Final
 
 from omnigent.entities import Conversation
 from omnigent.entities.factory import FactoryDecision, FactoryEvent, FactoryPr
-from omnigent.errors import OmnigentError
 from omnigent.factory import (
     ACTION_ABANDON_TASK,
     ACTION_DISMISS,
@@ -434,20 +433,13 @@ async def _plan_grant(
     user_id: str | None,
 ) -> GrantPlan:
     """Validate a ``grant_role`` option: ``person:<user>``, a role, MANAGE, the sharing mode."""
-    from omnigent.server.routes._sharing import require_sharing_allows
-
     target = str(option.get("target") or "")
     role = str(option.get("role") or people.ROLE_OPERATOR)
     person = target.removeprefix("person:").strip()
     if not target.startswith("person:") or not person or role not in people.ROLE_LEVELS:
         raise CockpitError(409, "invalid_option", f"{decision.ref} names no person and role")
     await control.require(deps, user_id, decision.factory_id, LEVEL_MANAGE)
-    try:
-        await require_sharing_allows(
-            app_state, deps.conversation_store, decision.factory_id, people.ROLE_LEVELS[role]
-        )
-    except OmnigentError as exc:
-        raise CockpitError(403, "sharing_refused", exc.message) from None
+    await people.require_roster_sharing(app_state, decision.factory_id, role)
     return GrantPlan(user_id=person, role=role, target=target)
 
 

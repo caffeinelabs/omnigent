@@ -14,12 +14,18 @@ inherit through their PL, so the permission resolver does not change.
 None of them ever touches an owner grant, or the grants of a user who is not
 on the roster, so the creator's ownership and manual shares survive. The
 creator is on the roster as an ``owner`` flagged ``is_creator``.
+
+Only sessions the creator owns carry roster grants: anyone can label a session
+with a factory id, but the lead's runner and the server spawn run as the
+creator. Writes for one factory are serialized (:func:`_roster_lock`), so a
+drift repair never re-grants someone a concurrent removal just revoked.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import threading
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
@@ -32,12 +38,14 @@ from omnigent.server.auth import (
     LEVEL_READ,
     RESERVED_USER_LOCAL,
     RESERVED_USER_PUBLIC,
+    SharingMode,
 )
 from omnigent.server.factory import events, live
 from omnigent.server.factory import presence as factory_presence
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.envelope import display_title
 from omnigent.server.factory.membership import factory_members, is_top_level
+from omnigent.server.routes._sharing import sharing_mode, sharing_refusal
 from omnigent.stores.factory_store import norm_id
 
 if TYPE_CHECKING:
@@ -116,9 +124,56 @@ def creator_of(deps: FactoryDeps, factory_id: str) -> str | None:
     return get_session_owner_id(factory_id, deps.permission_store)
 
 
+def _same_id(a: str | None, b: str | None) -> bool:
+    if not a or not b:
+        return False
+    try:
+        return norm_id(a) == norm_id(b)
+    except ValueError:
+        return a == b
+
+
+_ROSTER_LOCKS: dict[str, threading.Lock] = {}
+_ROSTER_LOCKS_GUARD = threading.Lock()
+
+
+def _roster_lock(factory_id: str) -> threading.Lock:
+    """The (per process) lock serializing one factory's roster and grant writes."""
+    try:
+        key = norm_id(factory_id)
+    except ValueError:
+        key = factory_id
+    with _ROSTER_LOCKS_GUARD:
+        return _ROSTER_LOCKS.setdefault(key, threading.Lock())
+
+
+def _creator_owned(deps: FactoryDeps, factory_id: str, session_ids: Sequence[str]) -> list[str]:
+    """
+    Keep the root and the sessions the factory's creator owns, in order.
+
+    A session labelled with the factory id by anyone else is not a member
+    whose grants the roster manages.
+    """
+    ids = list(dict.fromkeys(session_ids))
+    if deps.permission_store is None:
+        return ids
+    current = _grant_levels(deps, [factory_id, *ids])
+    creator = next(
+        (u for u, level in current[factory_id].items() if level >= LEVEL_OWNER),
+        None,
+    )
+    return [
+        sid
+        for sid in ids
+        if _same_id(sid, factory_id)
+        or (creator is not None and current[sid].get(creator, 0) >= LEVEL_OWNER)
+    ]
+
+
 def managed_sessions(deps: FactoryDeps, factory_id: str) -> list[str]:
     """
-    The sessions roster grants live on: the root and every top-level member.
+    The sessions roster grants live on: the root and every live top-level
+    member the creator owns.
 
     :returns: Session ids, root first.
     """
@@ -126,7 +181,27 @@ def managed_sessions(deps: FactoryDeps, factory_id: str) -> list[str]:
     for member in factory_members(factory_id, deps.conversation_store):
         if member.id not in ids:
             ids.append(member.id)
-    return ids
+    return _creator_owned(deps, factory_id, ids)
+
+
+def _person_sessions(deps: FactoryDeps, factory_id: str, user_id: str) -> list[str]:
+    """
+    The managed sessions plus archived members where *user_id* still holds a grant.
+
+    :returns: Session ids, root first.
+    """
+    perms = deps.permission_store
+    ids = managed_sessions(deps, factory_id)
+    if perms is None:
+        return ids
+    held = [g.conversation_id for g in perms.list_for_user(user_id, limit=10_000)]
+    rows = deps.conversation_store.get_conversations([sid for sid in held if sid not in ids])
+    archived = [
+        sid
+        for sid, conv in rows.items()
+        if is_top_level(conv) and _same_id(conv.labels.get(LABEL_ID), factory_id)
+    ]
+    return ids + _creator_owned(deps, factory_id, sorted(archived))
 
 
 def ensure_creator(deps: FactoryDeps, factory_id: str) -> FactoryPerson | None:
@@ -245,14 +320,102 @@ def _grant_levels(deps: FactoryDeps, session_ids: Sequence[str]) -> dict[str, di
     return {sid: {g.user_id: g.level for g in rows.get(sid, [])} for sid in session_ids}
 
 
+def _workspaces(
+    deps: FactoryDeps, session_ids: Sequence[str], mode: SharingMode
+) -> dict[str, str | None]:
+    """:returns: Session id -> working directory, read only when *mode* checks it."""
+    if mode != SharingMode.RESTRICTED_READ_ONLY:
+        return {}
+    rows = deps.conversation_store.get_conversations(list(session_ids))
+    return {sid: conv.workspace for sid, conv in rows.items()}
+
+
+def grant_caps(
+    deps: FactoryDeps, session_ids: Sequence[str], mode: SharingMode | None
+) -> dict[str, int | None]:
+    """
+    The highest new grant the sharing mode allows on each session.
+
+    :param mode: The server's sharing mode (``None`` = no cap).
+    :returns: Session id -> level, or ``None`` where no new grant is allowed.
+    """
+    if mode is None or mode == SharingMode.ON:
+        return dict.fromkeys(session_ids, LEVEL_MANAGE)
+    workspaces = _workspaces(deps, session_ids, mode)
+    levels = (LEVEL_MANAGE, LEVEL_EDIT, LEVEL_READ)
+    return {
+        sid: next(
+            (lv for lv in levels if sharing_refusal(mode, lv, workspaces.get(sid)) is None), None
+        )
+        for sid in session_ids
+    }
+
+
+def sharing_refusal_for(
+    deps: FactoryDeps, factory_id: str, level: int, mode: SharingMode
+) -> str | None:
+    """
+    Why the sharing mode refuses a roster grant at *level*, if it does.
+
+    Synchronous; run it in a worker thread.
+
+    :returns: The refusal for the first managed session that refuses, else ``None``.
+    """
+    if mode == SharingMode.ON:
+        return None
+    sessions = managed_sessions(deps, factory_id)
+    workspaces = _workspaces(deps, sessions, mode)
+    for sid in sessions:
+        refusal = sharing_refusal(mode, level, workspaces.get(sid))
+        if refusal is not None:
+            return refusal
+    return None
+
+
+async def require_roster_sharing(app_state: Any, factory_id: str, role: str) -> None:
+    """
+    Refuse a roster *role* the sharing mode does not allow on every managed session.
+
+    :raises CockpitError: 403 ``sharing_refused``.
+    """
+    from omnigent.server.factory.control import CockpitError
+
+    mode = sharing_mode(app_state)
+    level = ROLE_LEVELS[role]
+    deps = _deps(app_state)
+    refusal = await asyncio.to_thread(sharing_refusal_for, deps, factory_id, level, mode)
+    if refusal is not None:
+        raise CockpitError(403, "sharing_refused", refusal)
+
+
+def _target(level: int, have: int | None, cap: int | None) -> int | None:
+    """
+    The grant to write for a roster *level*, or ``None`` to leave *have* as is.
+
+    Owner grants stay; lowering access is always allowed; raising it is a new
+    share, capped by the sharing mode (*cap*, ``None`` = no new grants).
+    """
+    if have is not None and (have >= LEVEL_OWNER or have == level):
+        return None
+    if have is not None and have > level:
+        return level
+    if cap is None:
+        return None
+    want = min(level, cap)
+    return want if have is None or have < want else None
+
+
 def _apply(
     deps: FactoryDeps,
     wanted: dict[str, int],
     session_ids: Sequence[str],
+    caps: dict[str, int | None] | None = None,
 ) -> list[tuple[str, str, int]]:
     """
     Write *wanted* (user -> level) onto *session_ids*, skipping owner grants.
 
+    :param caps: The sharing mode's cap per session (:func:`grant_caps`), or
+        ``None`` when the caller already checked the mode.
     :returns: ``(user, session id, level)`` for each grant written.
     """
     perms = deps.permission_store
@@ -264,10 +427,12 @@ def _apply(
         perms.ensure_user(user)
         for sid in session_ids:
             have = current.get(sid, {}).get(user)
-            if have is not None and (have >= LEVEL_OWNER or have == level):
+            cap = caps.get(sid) if caps is not None else LEVEL_MANAGE
+            want = _target(level, have, cap)
+            if want is None:
                 continue
-            perms.grant(user, sid, level)
-            written.append((user, sid, level))
+            perms.grant(user, sid, want)
+            written.append((user, sid, want))
     return written
 
 
@@ -296,18 +461,31 @@ def wanted_levels(people: Sequence[FactoryPerson]) -> dict[str, int]:
     }
 
 
-def mirror_member(deps: FactoryDeps, factory_id: str, session_id: str) -> int:
+def mirror_member(
+    deps: FactoryDeps, factory_id: str, session_id: str, *, mode: SharingMode | None = None
+) -> int:
     """
     Apply the whole roster to one session (a member that just joined).
 
-    Synchronous; run it in a worker thread.
+    Only a top-level session labelled with *factory_id* and owned by the
+    factory's creator is a member. Synchronous; run it in a worker thread.
 
+    :param mode: The server's sharing mode, which caps the grants.
     :returns: Grants written.
     """
     if deps.permission_store is None:
         return 0
-    people = deps.factory_store.list_people(factory_id)
-    return len(_apply(deps, wanted_levels(people), [session_id]))
+    conv = deps.conversation_store.get_conversation(session_id)
+    if conv is None or not is_top_level(conv):
+        return 0
+    if not _same_id(conv.labels.get(LABEL_ID), factory_id):
+        return 0
+    with _roster_lock(factory_id):
+        if session_id not in _creator_owned(deps, factory_id, [session_id]):
+            return 0
+        people = deps.factory_store.list_people(factory_id)
+        caps = grant_caps(deps, [session_id], mode)
+        return len(_apply(deps, wanted_levels(people), [session_id], caps))
 
 
 async def mirror_member_on_create(app_state: Any, conv: Conversation) -> None:
@@ -322,7 +500,8 @@ async def mirror_member_on_create(app_state: Any, conv: Conversation) -> None:
     if not isinstance(deps, FactoryDeps) or not factory_id or deps.permission_store is None:
         return
     try:
-        written = await asyncio.to_thread(mirror_member, deps, factory_id, conv.id)
+        mode = sharing_mode(app_state)
+        written = await asyncio.to_thread(mirror_member, deps, factory_id, conv.id, mode=mode)
     except Exception:  # noqa: BLE001 - reconcile repairs a missed grant within a minute
         _logger.warning("factory: could not copy the roster onto %s", conv.id, exc_info=True)
         return
@@ -362,12 +541,14 @@ def _set_sync(
     deps: FactoryDeps, factory_id: str, user_id: str, role: str, by_user: str | None
 ) -> PersonChange:
     store = deps.factory_store
-    ensure_creator(deps, factory_id)
-    before = store.get_person(factory_id, user_id)
-    row, _ = store.upsert_person(
-        factory_id, user_id, role=role, invited_by=by_user or RESERVED_USER_LOCAL
-    )
-    written = _apply(deps, {user_id: ROLE_LEVELS[role]}, managed_sessions(deps, factory_id))
+    with _roster_lock(factory_id):
+        ensure_creator(deps, factory_id)
+        before = store.get_person(factory_id, user_id)
+        row, _ = store.upsert_person(
+            factory_id, user_id, role=role, invited_by=by_user or RESERVED_USER_LOCAL
+        )
+        sessions = _person_sessions(deps, factory_id, user_id)
+        written = _apply(deps, {user_id: ROLE_LEVELS[role]}, sessions)
     return PersonChange(
         person=row,
         previous_role=before.role if before is not None else None,
@@ -422,11 +603,11 @@ async def set_person(
 
 def _remove_sync(deps: FactoryDeps, factory_id: str, user_id: str) -> PersonChange:
     store = deps.factory_store
-    before = store.get_person(factory_id, user_id)
-    sessions = managed_sessions(deps, factory_id)
-    revoked = _revoke(deps, user_id, sessions)
-    if before is not None:
-        store.delete_person(factory_id, user_id)
+    with _roster_lock(factory_id):
+        before = store.get_person(factory_id, user_id)
+        if before is not None:
+            store.delete_person(factory_id, user_id)
+        revoked = _revoke(deps, user_id, _person_sessions(deps, factory_id, user_id))
     return PersonChange(
         person=None,
         previous_role=before.role if before is not None else None,
@@ -438,7 +619,8 @@ async def remove_person(
     app_state: Any, factory_id: str, user_id: str, *, by_user: str | None
 ) -> PersonChange:
     """
-    Take *user_id* off the roster and revoke their grants on every member.
+    Take *user_id* off the roster and revoke their grants on every member,
+    archived ones included.
 
     Leaving (``by_user == user_id``) emits ``people.left``, otherwise
     ``people.removed``. The removed user gets the frame too (their refetch
@@ -473,13 +655,18 @@ async def remove_person(
     return change
 
 
-def _announce_access(
-    app_state: Any, factory_id: str, user_id: str, session_ids: Sequence[str]
-) -> None:
+def _announce_sessions(user_id: str, session_ids: Sequence[str]) -> None:
+    """Push the sessions *user_id* can now open to their sidebar."""
     from omnigent.server.routes._sessions.helpers import _announce_session_added
 
     for sid in session_ids:
         _announce_session_added(user_id, sid)
+
+
+def _announce_access(
+    app_state: Any, factory_id: str, user_id: str, session_ids: Sequence[str]
+) -> None:
+    _announce_sessions(user_id, session_ids)
     live.announce_factory_changed(app_state, factory_id, SCOPES)
 
 
@@ -507,11 +694,15 @@ class Drift:
     have: int | None
 
 
-def find_drift(deps: FactoryDeps, factory_id: str) -> list[Drift]:
+def find_drift(
+    deps: FactoryDeps, factory_id: str, *, mode: SharingMode | None = None
+) -> list[Drift]:
     """
     Grants the roster wants that differ from the stored ones (owner grants excepted).
 
     Synchronous; run it in a worker thread.
+
+    :param mode: The server's sharing mode, which caps the grants.
     """
     if deps.permission_store is None:
         return []
@@ -520,22 +711,25 @@ def find_drift(deps: FactoryDeps, factory_id: str) -> list[Drift]:
         return []
     sessions = managed_sessions(deps, factory_id)
     current = _grant_levels(deps, sessions)
+    caps = grant_caps(deps, sessions, mode)
     out = []
     for user, level in wanted.items():
         for sid in sessions:
             have = current.get(sid, {}).get(user)
-            if have != level and (have is None or have < LEVEL_OWNER):
-                out.append(Drift(user, sid, level, have))
+            want = _target(level, have, caps.get(sid))
+            if want is not None:
+                out.append(Drift(user, sid, want, have))
     return out
 
 
-def _repair_sync(deps: FactoryDeps, factory_id: str) -> list[Drift]:
-    drift = find_drift(deps, factory_id)
-    perms = deps.permission_store
-    for item in drift:
-        assert perms is not None
-        perms.ensure_user(item.user_id)
-        perms.grant(item.user_id, item.session_id, item.want)
+def _repair_sync(deps: FactoryDeps, factory_id: str, mode: SharingMode | None) -> list[Drift]:
+    with _roster_lock(factory_id):
+        drift = find_drift(deps, factory_id, mode=mode)
+        perms = deps.permission_store
+        for item in drift:
+            assert perms is not None
+            perms.ensure_user(item.user_id)
+            perms.grant(item.user_id, item.session_id, item.want)
     return drift
 
 
@@ -550,7 +744,7 @@ async def repair_drift(app_state: Any, root: Conversation) -> int:
     deps = _deps(app_state)
     if deps.permission_store is None:
         return 0
-    drift = await asyncio.to_thread(_repair_sync, deps, root.id)
+    drift = await asyncio.to_thread(_repair_sync, deps, root.id, sharing_mode(app_state))
     if not drift:
         return 0
     users = sorted({d.user_id for d in drift})
@@ -571,7 +765,9 @@ async def repair_drift(app_state: Any, root: Conversation) -> int:
         },
     )
     for user in users:
-        _announce_access(app_state, root.id, user, sorted({d.session_id for d in drift}))
+        added = sorted({d.session_id for d in drift if d.user_id == user and d.have is None})
+        _announce_sessions(user, added)
+    live.announce_factory_changed(app_state, root.id, SCOPES)
     return len(drift)
 
 
@@ -587,6 +783,8 @@ def _managed_by(deps: FactoryDeps, session_id: str, user_id: str) -> tuple[str, 
         return None
     person = deps.factory_store.get_person(factory_id, user_id)
     if person is None or person.is_creator:
+        return None
+    if session_id not in _creator_owned(deps, factory_id, [session_id]):
         return None
     return factory_id, _factory_name(deps, factory_id)
 
@@ -700,6 +898,7 @@ __all__ = [
     "creator_of",
     "ensure_creator",
     "find_drift",
+    "grant_caps",
     "human_label",
     "last_seen_at",
     "level_role",
@@ -713,9 +912,11 @@ __all__ = [
     "person_view",
     "remove_person",
     "repair_drift",
+    "require_roster_sharing",
     "role_of",
     "roster_humans",
     "set_person",
+    "sharing_refusal_for",
     "viewer_block",
     "viewer_level",
     "wanted_levels",
