@@ -46,6 +46,7 @@ from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.envelope import quote_spoofed_lines
 from omnigent.server.factory.mailer import get_mailer
 from omnigent.server.factory.stage import derive_stage
+from omnigent.server.factory.telemetry.pr_rounds import record_refresh
 from omnigent.stores.factory_store import norm_id
 from omnigent.util.session_lifecycle import is_session_closed
 
@@ -640,6 +641,12 @@ async def apply_refresh(
         fields["url"] = pr_json["url"]
     if report.ready and not row.ready:
         fields["ready_at"] = now
+    opened = _epoch(pr_json.get("createdAt"))
+    if opened is not None and row.opened_at != opened:
+        fields["opened_at"] = opened
+    if report.ready and row.first_ready_at is None:
+        # Set once; ``ready_at`` keeps meaning the latest time it became ready.
+        fields["first_ready_at"] = row.ready_at if row.ready and row.ready_at else now
     out = _Outcome()
     if state == "open":
         _gate_events(row, gates, head, out)
@@ -666,6 +673,8 @@ async def apply_refresh(
     updated = await asyncio.to_thread(store.update_pr, row.id, **fields)
     if updated is None:
         return None
+    # Telemetry: pr, pr_round and gate spans from this refresh's history (never raises).
+    await record_refresh(app_state, updated, pr_json, gates, demos, now=now)
     await _announce(app_state, deps, scope, row, updated, report, review, out)
     return updated
 

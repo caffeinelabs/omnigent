@@ -4,7 +4,7 @@ Lifecycle facts (stages, PRs, gates, decisions, controls, demos, tasks, …)
 are kept indefinitely: telemetry and the nightly span heal are built from
 them. Only chatter is pruned: mail, notices and preview probes after 14
 days, heartbeats after 2. Demo files are kept; their size shows in the
-health strip.
+health strip. The nightly span heal runs in the same loop, before the prune.
 """
 
 from __future__ import annotations
@@ -83,10 +83,13 @@ async def prune_once(app_state: Any, *, now: int | None = None) -> int:
 
 
 async def start(app_state: Any) -> Callable[[], Awaitable[None]]:
-    """Prune now and then daily."""
+    """Heal the spans, then prune, now and then daily."""
+    from omnigent.server.factory.telemetry.heal import heal_once
 
     async def _loop() -> None:
         while True:
+            # Heal reads the event log first, so it never misses what a prune drops.
+            await heal_once(app_state)
             try:
                 await prune_once(app_state)
             except asyncio.CancelledError:

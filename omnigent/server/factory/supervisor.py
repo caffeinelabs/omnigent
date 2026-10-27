@@ -88,6 +88,7 @@ from omnigent.server.factory.notify import (
     session_subject,
     unregister_relay_notifier,
 )
+from omnigent.server.factory.telemetry import spans
 from omnigent.server.routes._sessions.helpers import _session_status_from_cache
 from omnigent.server.routes._sessions.orchestration import _get_runner_client
 from omnigent.util.session_lifecycle import is_session_closed
@@ -492,6 +493,9 @@ class FactorySupervisor:
                     summary=f"{title} failed" + (f" · {task}" if task else ""),
                     **common,
                 )
+            if factory_id and previous == "running" and current in ("idle", "failed"):
+                # The run closed: its session usage becomes the task span's cost.
+                await spans.attach_task_cost(self._app_state, factory_id, child)
 
     def _stalled_parents(self, children: list[Conversation], now: float) -> set[str]:
         """Members with a sub-agent running without progress for half the stuck time."""

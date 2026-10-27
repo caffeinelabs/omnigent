@@ -1481,6 +1481,10 @@ def create_app(
         # warmup blocks deleted here.
 
         _ensure_default_agents(agent_store, artifact_store, agent_cache)
+        # The factory's platform version (image, bundles just seeded, knobs).
+        from omnigent.server.factory.telemetry.versions import record_platform_version
+
+        await record_platform_version(app_inst.state, note="server start")
 
         # Populate the policy registry (builtins + user-configured
         # modules) so GET /v1/policy-registry serves the catalog.

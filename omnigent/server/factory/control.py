@@ -53,6 +53,7 @@ from omnigent.server.factory.membership import (
     is_top_level,
     resolve_factory_id,
 )
+from omnigent.server.factory.telemetry import versions
 from omnigent.server.routes._auth_helpers import require_access
 from omnigent.stores.factory_store import norm_id
 from omnigent.util.session_lifecycle import is_session_closed
@@ -831,6 +832,9 @@ async def execute_control(app_state: Any, plan: ControlPlan) -> ControlResult:
     mail_ids: dict[str, str] = {}
     for member in plan.recipients:
         labels = _labels_for(plan, member)
+        if plan.action in (ACTION_RESTART, ACTION_RELAUNCH):
+            # It comes back on this platform version and its agent's current bundle.
+            labels.update(await asyncio.to_thread(versions.member_labels, deps, member))
         if labels:
             await asyncio.to_thread(store.set_labels, member.id, labels)
         if plan.action == ACTION_RELAUNCH:

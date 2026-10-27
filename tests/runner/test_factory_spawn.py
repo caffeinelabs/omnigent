@@ -16,6 +16,7 @@ from typing import Any
 import httpx
 
 from omnigent.factory import (
+    LABEL_BUNDLE,
     LABEL_HEARTBEAT_S,
     LABEL_ID,
     LABEL_PARENT,
@@ -23,6 +24,7 @@ from omnigent.factory import (
     LABEL_ROLE,
     LABEL_STATE,
     LABEL_SUPERVISOR,
+    LABEL_VERSION,
 )
 from omnigent.runner import factory_dispatch
 from omnigent.runner.factory_dispatch import execute_factory_tool
@@ -145,6 +147,32 @@ async def test_creates_a_top_level_managed_session_with_factory_labels() -> None
     assert result["url"] == f"/c/{_NEW}"
     assert result["status"] == "provisioning"
     assert result["brief"] == _BRIEF
+
+
+async def test_the_member_carries_the_platform_version_and_its_bundle() -> None:
+    server = _server()
+    server.on(
+        "GET",
+        "/v1/factory/agent/version",
+        body={
+            "version_id": "v" * 32,
+            "labels": {
+                LABEL_VERSION: "v" * 32,
+                LABEL_BUNDLE: f"{_AGENT_ID}/0123456789ab",
+                "omnigent.factory.role": "lead",
+            },
+        },
+    )
+
+    await _spawn(server, _PL_ARGS)
+
+    [call] = server.calls("GET", "/v1/factory/agent/version")
+    assert call.params == {"from_session_id": LEAD, "agent_id": _AGENT_ID}
+    labels = _create_call(server).body["labels"]
+    assert labels[LABEL_VERSION] == "v" * 32
+    assert labels[LABEL_BUNDLE] == f"{_AGENT_ID}/0123456789ab"
+    # Only the version labels are taken from the answer.
+    assert labels[LABEL_ROLE] == "project_lead"
 
 
 async def test_brief_is_posted_to_the_new_session_with_kind_brief() -> None:

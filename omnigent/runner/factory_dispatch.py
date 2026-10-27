@@ -51,6 +51,7 @@ from omnigent.factory import (
     DEMO_MAX_TOTAL_BYTES,
     ENV_STATES,
     HEALTH,
+    LABEL_BUNDLE,
     LABEL_HEARTBEAT_S,
     LABEL_ID,
     LABEL_PARENT,
@@ -58,6 +59,7 @@ from omnigent.factory import (
     LABEL_ROLE,
     LABEL_STATE,
     LABEL_SUPERVISOR,
+    LABEL_VERSION,
     MESSAGE_KINDS,
     MESSAGE_MAX_CHARS,
     PR_CLAIMS,
@@ -590,6 +592,26 @@ async def _resolve_builtin_agent(
     )
 
 
+async def _version_labels(
+    server_client: httpx.AsyncClient, caller: str, agent_id: str
+) -> dict[str, str]:
+    """The platform version and bundle labels for a new member; ``{}`` when unavailable."""
+    found = await _get_object(
+        server_client,
+        "/v1/factory/agent/version",
+        tool_name=SYS_FACTORY_SPAWN,
+        params={"from_session_id": caller, "agent_id": agent_id},
+    )
+    labels = found.get("labels") if isinstance(found, dict) else None
+    if not isinstance(labels, dict):
+        return {}
+    return {
+        key: value
+        for key, value in labels.items()
+        if key in (LABEL_VERSION, LABEL_BUNDLE) and isinstance(value, str) and value
+    }
+
+
 def _default_supervisor(
     role: str,
     caller: str,
@@ -811,6 +833,7 @@ async def _spawn_member(
     }
     if spawn.project:
         labels[LABEL_PROJECT] = spawn.project
+    labels.update(await _version_labels(server_client, caller, agent_id))
     create_body: _JsonObject = {
         "agent_id": agent_id,
         "host_type": "managed",
