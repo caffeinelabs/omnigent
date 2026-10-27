@@ -151,12 +151,14 @@ def test_a_runner_still_creates_a_session_with_factory_labels(
     app_and_session: tuple[FastAPI, SqlAlchemyConversationStore, str],
 ) -> None:
     app, conversations, lead_id = app_and_session
+    # Exactly the labels ``_spawn_member`` sends (runner/factory_dispatch.py).
     labels = {
         F.LABEL_ID: lead_id,
         F.LABEL_ROLE: F.ROLE_PROJECT_LEAD,
         F.LABEL_PARENT: lead_id,
         F.LABEL_SUPERVISOR: lead_id,
         F.LABEL_STATE: F.STATE_ACTIVE,
+        F.LABEL_HEARTBEAT_S: str(F.DEFAULT_HEARTBEAT_S[F.ROLE_PROJECT_LEAD]),
         F.LABEL_PROJECT: "app",
     }
 

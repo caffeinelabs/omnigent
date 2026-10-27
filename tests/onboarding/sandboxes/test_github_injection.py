@@ -5,8 +5,13 @@ Covers the pure builders (:func:`github_sandbox_env`,
 :meth:`SandboxLauncher.start_host` launch, which carries no GitHub
 credentials: the host points git and ``gh`` at the server's credential
 broker when it starts (``omnigent.host.connect`` →
-``omnigent.git_credential_github``), so no launcher injects anything
-GitHub-specific. See ``docs/GITHUB_APP_SETUP.md``.
+``omnigent.git_credential_github``), so no launcher injects a GitHub token.
+See ``docs/GITHUB_APP_SETUP.md``.
+
+SSH keys are separate and not covered by the broker: ``start_host`` takes no
+keys and nothing calls :func:`ssh_authorized_keys_setup_commands` today, so
+these tests cover the builder only and make no claim about SSH keys in the
+launch.
 """
 
 from __future__ import annotations
@@ -97,7 +102,6 @@ def test_start_host_leaves_github_credentials_to_the_broker() -> None:
         server_url="https://srv",
     )
     all_run = "\n".join(launcher.commands)
-    assert "authorized_keys" not in all_run
     assert "hosts.yml" not in all_run
     assert ".git-credentials" not in all_run
     [raw] = launcher.backgrounded
