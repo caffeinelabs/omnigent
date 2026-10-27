@@ -475,6 +475,7 @@ transcript folds.
 | `OMNIGENT_FACTORY_PREVIEW_TTL_H` | `72` | Hours without human attention before a preview gets a park notice. |
 | `OMNIGENT_FACTORY_PREVIEW_TOOLING_REF` | empty (recommended: `main`) | caffeinelabs/app ref the preview tooling is overlaid from onto PR heads that predate it; stored in new charters. Not the project's base branch. Empty: env_keeper uses `main`. |
 | `OMNIGENT_FACTORY_QUIET_BEATS`, `OMNIGENT_FACTORY_MAIL_REPLAY` | on | `0` turns off skipping unchanged heartbeats / replaying queued mail after a restart. |
+| `OMNIGENT_FACTORY_INVARIANTS` | on | `0` leaves the `factory_invariants` admin default policy unseeded (see Invariants). |
 
 ### Rollback
 
@@ -498,16 +499,20 @@ transcript folds.
   sits next to `blast_radius{gate_pushes: false}` on every factory spec. It
   only ALLOWs or DENYs, so unattended agents never stall on an approval card.
   It parses shell commands (including text typed into a terminal and argv
-  lists) and denies, among others: raw `gh pr merge` and GitHub MCP merges
-  for every role; admin writes through `gh api`, `gh repo delete|archive|edit`,
-  `gh release`, `gh secret`, `gh ruleset` and workflow toggles; pushes to
-  `main`/`master`/`staging` and tag pushes; any push or PR creation by a lead
-  or reviewer; writes to repos outside `write_repos` (default
-  `caffeinelabs/app`) or inside `deny_repos` (`caffeinelabs/infra`,
-  `caffeinelabs/omnigent`); the `factory:allow-protected` label; the merge
-  gate for anyone but a PL; every PR write but `gh pr comment` by the demo
-  agent; and env lifecycle (`tilt up|down|ci`, `pnpm factory:up|down|preview`
-  or `scripts/factory.ts up|down|preview`, `kubectl delete ns`) for anyone but
+  lists) and denies, among others: every merge for every role (raw
+  `gh pr merge`, GitHub MCP merges, and the merge gate without `--dry-run`);
+  any `OMNIGENT_FACTORY_*` assignment, `env` or `export` in a command; admin
+  writes through `gh api`, `gh repo delete|archive|edit`, `gh release`,
+  `gh secret`, `gh ruleset` and workflow toggles; every push but an explicit
+  branch under `push_ref_prefixes` (`factory/`), so bare pushes,
+  `git push origin HEAD`, deletes, tags and `main`/`master`/`staging`/`temp-main`
+  are denied; any push or PR creation by a lead, reviewer, planner or the demo
+  agent; writes to repos outside `write_repos` (default `caffeinelabs/app`) or
+  inside `deny_repos` (`caffeinelabs/infra`, always, and `caffeinelabs/omnigent`);
+  the `factory:allow-protected` label; every PR write but `gh pr comment` by
+  the demo agent and every PR or issue write by the planner; and env lifecycle
+  (`tilt up|down|ci`, `pnpm factory:up|down|preview` or
+  `scripts/factory.ts up|down|preview`, `kubectl delete ns`) for anyone but
   `env_keeper` (and its PL, whose guard its sub-agents also pass).
 - **Humans merge.** The factory never merges `caffeinelabs/app`. A PR is done
   for the factory when it is ready for human merge (not a draft, CI green, an
@@ -515,6 +520,8 @@ transcript folds.
   `READY FOR HUMAN MERGE <url>` to its lead, Sentinel verifies the claim, and
   Atlas lists it for the human.
 - **Merge gate.** `python -m omnigent.factory_merge <pr-url> [--admin-fallback] [--dry-run]`
+  is a verdict tool for agents: the guard admits it only with `--dry-run`
+  (see Invariants). Run by a human, it
   squash-merges only when the repo is in `OMNIGENT_FACTORY_MERGE_REPOS`, the PR
   is not a draft, required checks are green, the newest review marker for the
   head (after the newest commit) says APPROVE, the newest verify marker says
@@ -534,6 +541,55 @@ transcript folds.
 - **Residual risk.** Every agent acts as the human on GitHub, so markers are
   forgeable; Sentinel audits after the fact. The privileged DinD sidecar is in
   every sandbox.
+
+## Invariants (Tier 0)
+
+These rules hold for every factory and are never reachable through the
+factory itself: no prompt, rule, proposal or agent tool changes them. Each is
+enforced in code.
+
+| Invariant | Enforced by |
+|---|---|
+| The factory never merges (any repo, `temp-main` included). | The guard denies raw `gh pr merge`, MCP merges, merge-capable `gh api`/GraphQL calls and every `omnigent.factory_merge` run without `--dry-run` (`python -m`, a script path, `python -c` code, a Python heredoc), for every role. It also denies any `OMNIGENT_FACTORY_*=` assignment, `env OMNIGENT_FACTORY_…` or `export OMNIGENT_FACTORY_…`, which closes the inline `OMNIGENT_FACTORY_MERGE_REPOS=… python -m omnigent.factory_merge` override. `OMNIGENT_FACTORY_MERGE_REPOS` stays empty on the server. |
+| Agents push only `factory/**` (the `smith` profile: `factory/self/**`). | `push_ref_prefixes` in every bundle's `factory_guard`: each explicit refspec destination must be `refs/heads/<prefix>**`. A bare `git push` and `git push <remote> HEAD` are denied (their destination depends on config and the checked-out branch, which the guard cannot see), so the IC prompts always push `git push -u origin factory/<slug>/<task>`. Deletes (`:<b>`, `--delete`, `--prune`), tags, `--all`/`--mirror` and API ref writes outside the prefix are denied too. `temp-main` is in the default `protected_branches`. |
+| No writes to `caffeinelabs/infra`; none to `caffeinelabs/omnigent` outside the `smith` profile. | `deny_repos`; `caffeinelabs/infra` is denied whatever a spec passes. The `smith` profile (`write_repos: [caffeinelabs/omnigent]`, `push_ref_prefixes: [factory/self/]`, never merges) is registered for Tier 2 and unused while Tier 2 is off. |
+| Factory agents always run fenced, and never run a bundle of their own making. | `server/bundles.validate_agent_bundle` rejects any (sub-)agent spec with `executor.config.factory_role` that lacks an unconditional `factory_role_guard` with the same role plus `blast_radius`. `sys_session_create(config_path=…)` from a session whose root carries `omnigent.factory.id` gets 403 `factory_custom_bundle_denied` (`server/factory/custom_bundle.py`). |
+| Human levers come from humans. | `server/factory/origin.py:require_human_origin` on every cockpit write route (start, add project, charter, control, decision answer and withdraw, PR feedback and refresh; new human routes use `HUMAN_ORIGIN` too). It answers 403 `human_only` when the request carries the runner tunnel token header, a runner bearer (`mint_runner_token` stamps `"org": "runner"`), or an untrusted `Origin`. A person's cookie and their own CLI bearer pass. |
+| Tuning writes are audited; server-only labels stay server-only. | `PATCH /v1/factory/sessions/{id}` emits `label.changed {field, label, from, to, by, by_kind, by_role, on_behalf_of}` for each label it changes, and refuses `def_version`, `default_repo`, `default_base`, `mode`, `engine_mode` and `autonomy_projects` with 422 `server_only_label`. |
+| Invariants hold even if a bundle is wrong. | The admin default policy `factory_invariants` ([`policies/builtins/factory_invariants.py`](../omnigent/policies/builtins/factory_invariants.py)), seeded into the server-wide defaults when `OMNIGENT_FACTORY_ENABLED=1` (`OMNIGENT_FACTORY_INVARIANTS=0` leaves it out), repeats the push, deny-repo, merge and knob rules for every session whose labels carry `omnigent.factory.*`. Admin policies run after the spec's and short-circuit on DENY. |
+
+**The honest limit.** The guard is a safety net against accidents, not a
+security boundary: agents act with the creator's GitHub token, so a script,
+an alias, a `curl` to the REST API or code the guard cannot read can still
+merge. The real boundary is a factory GitHub identity without merge or admin
+rights. It is required before Tier 2 (self-modification PRs to omnigent) and
+recommended sooner.
+
+**Spike results (round 3).**
+
+- **Can an admin default policy see conversation labels?** Yes for top-level
+  members. `/policies/evaluate` builds the engine with the server-wide
+  defaults appended after the spec's policies, and every function policy
+  receives the evaluated session's labels as `event.context.labels`. The lead
+  and the PLs carry `omnigent.factory.*` labels; sub-agents (IC, ic_codex,
+  env_keeper, reviewer, demo, planner) carry none, so for them the invariant
+  policy abstains. They stay fenced by their own guard and their root PL's
+  spec guard, which bundle validation pins. Adding a default policy also
+  turns off the evaluate fast path for sessions without guardrails on that
+  server.
+- **Does a `config_path` child escape the spec guard?** Yes, before this
+  change: the child runs the uploaded spec, not its parent's, so the parent's
+  `factory_guard` does not apply to it. The server now refuses the upload
+  (403 `factory_custom_bundle_denied`); `tests/server/test_bundle_validation_factory.py`
+  proves it.
+- **Can a sandbox process read the runner bearer?** By code reading, yes.
+  Agents run unsandboxed as the runner's user (`os_env: caller_process`,
+  `sandbox: none`). The tunnel binding token is stripped from child
+  environments, but the runner's own `/proc/<pid>/environ` is readable by the
+  same user, and the binding token mints an owner bearer through
+  `POST /v1/runners/{id}/token`. The `org: runner` claim and the tunnel-header
+  check make such calls distinguishable, so human-only routes refuse them
+  either way; tokens minted before the deploy expire within their sub-hour TTL.
 
 ## Failure modes
 
@@ -613,6 +669,7 @@ with a managed sandbox launcher configured.
 | Supervisor and notices | `omnigent/server/factory/supervisor.py`, `notify.py` | `tests/server/factory/test_supervisor_*.py`, `test_notify.py` |
 | Runner tools and scoped reads | `omnigent/tools/builtins/factory.py`, `omnigent/runner/factory_dispatch.py` | `tests/runner/test_factory_*.py` |
 | Role guard and merge gate | `omnigent/policies/builtins/factory.py`, `omnigent/factory_merge.py` | `tests/policies/test_factory_role_guard.py`, `tests/test_factory_merge.py` |
+| Tier-0 invariants | `omnigent/policies/builtins/factory_invariants.py`, `omnigent/server/factory/origin.py`, `custom_bundle.py`, `omnigent/server/bundles.py` | `tests/policies/test_factory_invariants.py`, `tests/server/factory/test_human_origin.py`, `tests/server/test_bundle_validation_factory.py` |
 | Org chart and badges | `omnigent/server/factory/org_chart.py`, `web/src/lib/factory.ts` | `tests/server/routes/test_child_sessions_include_factory.py`, web tests |
 | Base lane and demo mirror | `omnigent/server/factory/base.py`, `demo_mirror.py`, `omnigent/factory_gates.py` (`base` gate) | `tests/server/factory/test_base_watcher.py`, `test_demo_mirror.py`, `tests/test_factory_gates.py` |
 | Bundles | `examples/factory/` | `tests/examples/`, `tests/server/factory/test_factory_agents_listed.py` |

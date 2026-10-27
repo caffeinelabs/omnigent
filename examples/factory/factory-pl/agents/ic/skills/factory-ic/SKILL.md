@@ -44,9 +44,11 @@ you are restarted or replaced.
 
 ## WIP cadence
 
-Commit and push to your branch at least hourly:
-`git push -u origin factory/<slug>/<task>`. Never force-push, and never push
-`<base>` or main.
+Commit and push to your branch at least hourly, always with an explicit
+refspec: `git push -u origin factory/<slug>/<task>`. A bare `git push` or
+`git push origin HEAD` is denied (the guard cannot see where it goes), and so
+is any branch outside `factory/`. Never force-push, and never push `<base>` or
+main.
 
 ## PR
 

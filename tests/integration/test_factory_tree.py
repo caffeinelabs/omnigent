@@ -69,6 +69,7 @@ from tests.e2e.conftest import (
     upload_agent,
 )
 from tests.e2e.helpers import HEALTH_TIMEOUT_S, POLL_INTERVAL_S
+from tests.server.helpers import factory_guardrails
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
 _DEBUG_ROUTER_MODULE = "tests.integration.factory_debug_router"
@@ -243,6 +244,8 @@ def _register_agent(stack: FactoryStack, *, name: str, model: str, role: str | N
                     },
                     "config": config,
                 },
+                # Factory roles upload only with their guards (bundle validation).
+                **({"guardrails": factory_guardrails(role)} if role is not None else {}),
             },
             sort_keys=False,
         )

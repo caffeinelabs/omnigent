@@ -790,6 +790,10 @@ def register_core_routes(
                 conversation_store=conversation_store,
                 runner_router=runner_router,
             )
+            # A factory member never runs a bundle of its own making (Tier 0).
+            from omnigent.server.factory.custom_bundle import deny_factory_custom_bundle
+
+            await deny_factory_custom_bundle(parsed_metadata.parent_session_id, conversation_store)
 
         bundle_bytes = await bundle.read()
         # Validate the bundle BEFORE any row exists: the external-host

@@ -8,18 +8,23 @@ returns ALLOW or DENY, and every DENY tells the agent what to do instead.
 It parses the command of every harness's shell tool (and text typed into an
 Omnigent terminal) and denies:
 
-- raw ``gh pr merge`` for every role (merges go through the
-  ``python -m omnigent.factory_merge`` gate);
+- every merge, for every role: raw ``gh pr merge``, MCP merges, and the
+  ``omnigent.factory_merge`` gate unless it runs with ``--dry-run`` (the gate
+  is a verdict tool; humans merge);
+- any ``OMNIGENT_FACTORY_*`` assignment, ``env`` or ``export`` in a command,
+  so no agent can widen a server knob such as the merge allowlist inline;
 - admin writes through ``gh api`` (merges, branch protection, rulesets,
   collaborators, secrets, webhooks, refs of protected branches or tags, org
   and account settings), and ``gh repo delete|archive|edit|rename``,
   ``gh release``, ``gh secret``, ``gh ruleset`` and ``gh workflow run``;
-- ``git push`` to a protected branch, of tags, or of every branch;
+- ``git push`` of anything but an explicit branch under ``push_ref_prefixes``
+  (``factory/`` by default): bare pushes, ``HEAD`` without a destination,
+  deletes, tags, every branch, protected branches;
 - PR writes and pushes that name a repo outside ``write_repos`` (or inside
   ``deny_repos``) by ``-R``, URL or ``GH_REPO``;
-- per role: any push or PR creation (CLI or API) by a lead, reviewer or the
-  demo agent, every PR write but ``gh pr comment`` by the demo agent, the
-  merge gate for anyone but the project lead, and env lifecycle
+- per role: any push or PR creation (CLI or API) by a lead, reviewer, planner
+  or the demo agent, every PR write but ``gh pr comment`` by the demo agent,
+  every PR or issue write by the planner, and env lifecycle
   (``tilt up|down|ci``, ``pnpm factory:up|down|preview`` or the script behind
   it, ``kubectl delete ns``) for anyone but env_keeper and the project lead.
   A sub-agent is also held to its parent's guardrails (stricter wins), so the
@@ -29,8 +34,8 @@ Line continuations are joined and heredoc bodies and single-quoted text are
 treated as data, so multi-line commands are checked as the shell runs them.
 
 Like ``blast_radius`` it is a safety net against accidents, not a security
-boundary: shell variables, aliases, scripts and remotes it cannot resolve
-(``git push origin HEAD`` while ``main`` is checked out) pass through.
+boundary: agents act with their creator's GitHub token, and shell variables,
+aliases and scripts it cannot resolve pass through.
 """
 
 from __future__ import annotations
@@ -71,12 +76,29 @@ _Json: TypeAlias = dict[str, Any]  # type: ignore[explicit-any]
 _ALLOW: _Json = {"result": "ALLOW"}
 
 MERGE_GATE_HINT = (
-    "merges go through `python -m omnigent.factory_merge <pr-url>` run by the project lead"
+    "humans merge; the factory hands PRs over as READY FOR HUMAN MERGE "
+    "(`python -m omnigent.factory_merge --dry-run <pr-url>` only reports the gates)"
 )
 
+# TODO: import ROLE_PLANNER from omnigent.factory once the round-3 vocabulary lands there.
+ROLE_PLANNER = "planner"
+
 DEFAULT_WRITE_REPOS: tuple[str, ...] = ("caffeinelabs/app",)
-DEFAULT_PROTECTED_BRANCHES: tuple[str, ...] = ("main", "master", "staging")
+DEFAULT_PROTECTED_BRANCHES: tuple[str, ...] = ("main", "master", "staging", "temp-main")
 DEFAULT_DENY_REPOS: tuple[str, ...] = ("caffeinelabs/infra", "caffeinelabs/omnigent")
+DEFAULT_PUSH_REF_PREFIXES: tuple[str, ...] = ("factory/",)
+# Denied whatever a spec passes: no factory agent ever writes infra.
+_ALWAYS_DENY_REPOS: tuple[str, ...] = ("caffeinelabs/infra",)
+
+# Named rule sets a spec selects with ``profile``; explicit arguments still win.
+# ``smith`` is the Tier-2 self-modification lane (PRs to omnigent, never merges).
+GUARD_PROFILES: dict[str, dict[str, tuple[str, ...]]] = {
+    "smith": {
+        "write_repos": ("caffeinelabs/omnigent",),
+        "deny_repos": ("caffeinelabs/infra",),
+        "push_ref_prefixes": ("factory/self/",),
+    },
+}
 
 # The merge-gate label that unlocks protected paths; only a human may set it.
 ALLOW_PROTECTED_LABEL = "factory:allow-protected"
@@ -84,8 +106,12 @@ ALLOW_PROTECTED_LABEL = "factory:allow-protected"
 # Text typed into an Omnigent terminal pane runs like a shell command.
 _TERMINAL_INPUT_TOOLS: frozenset[str] = frozenset({"sys_terminal_send"})
 
-# Roles that never push or open PRs: leads delegate, reviewers and the demo agent comment.
-_NO_PUSH_ROLES: frozenset[str] = frozenset({ROLE_LEAD, ROLE_REVIEWER, ROLE_DEMO})
+# Every role the guard accepts (the planner is a read-only sub-agent).
+GUARD_ROLES: frozenset[str] = frozenset(ROLES | {ROLE_PLANNER})
+
+# Roles that never push or open PRs: leads delegate, reviewers and the demo
+# agent comment, the planner only reads.
+_NO_PUSH_ROLES: frozenset[str] = frozenset({ROLE_LEAD, ROLE_REVIEWER, ROLE_DEMO, ROLE_PLANNER})
 
 # Commands whose arguments are data, not commands (``echo git push`` is no push).
 _INERT_HEADS: frozenset[str] = frozenset(
@@ -121,6 +147,19 @@ _PYTHON_RUNNERS: frozenset[str] = frozenset(
 )
 _PYTHON_RE = re.compile(r"python[0-9.]*")
 _MERGE_GATE_RE = re.compile(r"omnigent[./]factory_merge\b|\bimport\s+factory_merge\b")
+# The CLI spellings whose ``--dry-run`` flag the guard can see (not ``python -c`` code).
+_MERGE_GATE_CLI_RE = re.compile(r"omnigent\.factory_merge|(?:\S*/)?factory_merge\.py")
+_DRY_RUN_FLAG = "--dry-run"
+# A line that feeds a heredoc to Python: its body is code, not data.
+_PYTHON_LINE_RE = re.compile(
+    r"(?<![\w.-])(?:python[0-9.]*|uv|uvx|pipx|poetry|pdm|hatch|rye|pixi|conda)(?![\w.-])"
+)
+# Server knobs (``OMNIGENT_FACTORY_MERGE_REPOS`` …) are never set from an agent's shell.
+_FACTORY_ENV_ASSIGN_RE = re.compile(r"(?<![\w$-])OMNIGENT_FACTORY_\w*[+:]?=")
+_FACTORY_ENV_EXPORT_RE = re.compile(
+    r"(?<![\w./-])(?:export|env|declare|typeset|readonly|local|read)\b[^;&|\n]*?"
+    r"(?<![\w$])OMNIGENT_FACTORY_|\bprintf\s+-v\s*OMNIGENT_FACTORY_"
+)
 _ENV_SCRIPT_RE = re.compile(r"factory:(up|down|preview)")
 # What ``pnpm factory:up|down|preview`` runs: ``node … scripts/factory.ts up|down|preview``.
 _JS_RUNNERS: frozenset[str] = frozenset(
@@ -235,6 +274,27 @@ _PUSH_VALUE_OPTS: frozenset[str] = frozenset(
 )
 _PUSH_TAG_FLAGS: frozenset[str] = frozenset({"--tags", "--follow-tags"})
 _PUSH_ALL_FLAGS: frozenset[str] = frozenset({"--all", "--branches", "--mirror"})
+# Remote branch deletes (``--prune`` deletes those without a local twin).
+_PUSH_DELETE_FLAGS: frozenset[str] = frozenset({"--delete", "--prune"})
+# A refspec source without a destination that names the checked-out branch.
+_PUSH_HEAD_SOURCES: frozenset[str] = frozenset({"HEAD", "@"})
+
+# The planner reads only: no issue writes either.
+_GH_ISSUE_WRITE_ACTIONS: frozenset[str] = frozenset(
+    {
+        "create",
+        "edit",
+        "close",
+        "reopen",
+        "comment",
+        "delete",
+        "transfer",
+        "pin",
+        "unpin",
+        "lock",
+        "unlock",
+    }
+)
 
 # Unquoted statement separators, as returned by the quote-aware lexer.
 _SEPARATOR_RE = re.compile(r"[;&|\n]+")
@@ -258,6 +318,15 @@ _ENV_HINT = (
     "`kubectl get|logs`, or ask your project lead to have env_keeper act"
 )
 _HUMAN_ONLY_HINT = "human-only; escalate through your lead with [NEEDS HUMAN] if it is needed"
+_PLANNER_HINT = (
+    "the planner only reads and analyses. Write your plan file and return it to the lead, "
+    "whose project leads open the PRs"
+)
+_FACTORY_ENV_REASON = (
+    "Setting `OMNIGENT_FACTORY_*` in a command (assignment, `env` or `export`) is blocked: "
+    f"factory server knobs are {_HUMAN_ONLY_HINT}. Quoting one in prose? Put the text in a "
+    "file and pass it with `--body-file` / `-F`."
+)
 _DEMO_HINT = (
     "it only records evidence against the preview. Post the demo with "
     "`gh pr comment <url> --body-file <comment_path>` and report DEMO PASS|PARTIAL|FAIL "
@@ -352,7 +421,7 @@ def _blank_quoted_prose(line: str) -> str:
     return _QUOTED_RE.sub(lambda m: " " if re.search(r"\s", m.group(0)) else m.group(0), line)
 
 
-def _logical_lines(command: str) -> str:
+def _split_heredocs(command: str) -> tuple[str, list[str]]:
     """
     Join line continuations and drop heredoc bodies, which are data.
 
@@ -363,11 +432,13 @@ def _logical_lines(command: str) -> str:
     (``bash <<EOF``) is kept, because its body does run.
 
     :param command: A command line, possibly spanning several lines.
-    :returns: *command* with continuations joined and without the bodies (and
-        closing delimiters) of heredocs.
+    :returns: ``(text, python_bodies)``: *command* with continuations joined
+        and without the bodies (and closing delimiters) of heredocs, plus the
+        dropped bodies of heredocs on a line that runs Python (they are code).
     """
     lines = command.split("\n")
     kept: list[str] = []
+    python_bodies: list[str] = []
     index = 0
     while index < len(lines):
         line = lines[index]
@@ -384,8 +455,16 @@ def _logical_lines(command: str) -> str:
             body = [ln.lstrip("\t") if strip_tabs else ln for ln in lines[index:]]
             # Without a closing delimiter it may not be a heredoc at all: keep the rest.
             if delimiter in body:
-                index += body.index(delimiter) + 1
-    return "\n".join(kept)
+                end = body.index(delimiter)
+                if _PYTHON_LINE_RE.search(line):
+                    python_bodies.append("\n".join(body[:end]))
+                index += end + 1
+    return "\n".join(kept), python_bodies
+
+
+def _logical_lines(command: str) -> str:
+    """:returns: *command* with continuations joined and heredoc bodies dropped."""
+    return _split_heredocs(command)[0]
 
 
 def _substitution_end(command: str, start: int, closer: str) -> int | None:
@@ -646,29 +725,53 @@ def _github_url_repos(args: Sequence[str]) -> list[str]:
     return repos
 
 
+def _ref_prefixes(values: Sequence[str]) -> tuple[str, ...]:
+    """
+    Normalize push-ref prefixes to bare branch prefixes ending in ``/``.
+
+    :param values: e.g. ``["factory/", "refs/heads/factory/self"]``.
+    :returns: e.g. ``("factory/", "factory/self/")``; empty entries are dropped.
+    """
+    out: list[str] = []
+    for value in values:
+        prefix = value.strip().removeprefix("refs/heads/").lstrip("/")
+        if prefix:
+            out.append(prefix if prefix.endswith("/") else f"{prefix}/")
+    return tuple(out)
+
+
 class _RoleGuard:
-    """Classifies one command's statements against a role's factory rules."""
+    """Classifies one command's statements against a role's factory rules.
+
+    ``role=None`` checks only the role-independent invariants (pushes, deny
+    repos, merges, server knobs), for the admin invariant policy.
+    """
 
     def __init__(
         self,
         *,
-        role: str,
+        role: str | None,
         write_repos: Sequence[str],
         protected_branches: Sequence[str],
         deny_repos: Sequence[str],
+        push_ref_prefixes: Sequence[str] = DEFAULT_PUSH_REF_PREFIXES,
     ) -> None:
         """
         Store the normalized rule parameters.
 
-        :param role: Factory role, e.g. ``"ic"``.
+        :param role: Factory role, e.g. ``"ic"``, or ``None`` for invariants only.
         :param write_repos: Repos PR writes and pushes may target.
         :param protected_branches: Branches no agent pushes to.
         :param deny_repos: Repos no agent writes to, even if listed in *write_repos*.
+        :param push_ref_prefixes: Branch prefixes pushes may target, e.g. ``["factory/"]``.
         """
         self.role = role
         self.write_repos = frozenset(r for r in map(_normalize_repo, write_repos) if r)
-        self.deny_repos = frozenset(r for r in map(_normalize_repo, deny_repos) if r)
+        self.deny_repos = frozenset(
+            r for r in map(_normalize_repo, [*deny_repos, *_ALWAYS_DENY_REPOS]) if r
+        )
         self.protected = tuple(b for b in protected_branches if b)
+        self.push_prefixes = _ref_prefixes(push_ref_prefixes)
 
     # ── Entry point ─────────────────────────────────────────────────────
 
@@ -679,6 +782,10 @@ class _RoleGuard:
         :param command: A shell command line, e.g. ``"cd x && gh pr merge 1"``.
         :returns: The reason, or ``None`` to ALLOW.
         """
+        if _FACTORY_ENV_ASSIGN_RE.search(command) or _FACTORY_ENV_EXPORT_RE.search(command):
+            return _FACTORY_ENV_REASON
+        if any(_MERGE_GATE_RE.search(body) for body in _split_heredocs(command)[1]):
+            return self._merge_gate_reason(None, [])
         gh_repos = tuple(
             repo
             for match in _GH_REPO_ENV_RE.finditer(command)
@@ -737,33 +844,45 @@ class _RoleGuard:
         if name in _JS_RUNNERS:
             return self._check_env_script_file(name, args)
         if _PYTHON_RE.fullmatch(name) or name in _PYTHON_RUNNERS:
-            if any(_MERGE_GATE_RE.search(arg) for arg in args):
-                return self._merge_gate_reason()
+            for index, arg in enumerate(args):
+                if _MERGE_GATE_RE.search(arg):
+                    return self._merge_gate_reason(arg, args[index + 1 :])
             return None
         if name.startswith("factory_merge"):
-            return self._merge_gate_reason()
+            return self._merge_gate_reason(name, args)
         return None
 
     # ── Role rules ──────────────────────────────────────────────────────
 
-    def _merge_gate_reason(self) -> str | None:
-        """DENY the merge gate for every role but the project lead."""
-        if self.role == ROLE_PROJECT_LEAD:
+    def _merge_gate_reason(self, gate: str | None, args: Sequence[str]) -> str | None:
+        """
+        DENY the merge gate unless it runs with ``--dry-run`` (every role).
+
+        :param gate: The token naming the gate, e.g. ``"omnigent.factory_merge"``;
+            ``None`` (or ``python -c`` code) when its flags cannot be seen.
+        :param args: The gate's arguments.
+        :returns: A DENY reason, or ``None`` for a dry run.
+        """
+        flags = list(args[: args.index("--")] if "--" in args else args)
+        if gate and _MERGE_GATE_CLI_RE.fullmatch(gate) and _DRY_RUN_FLAG in flags:
             return None
         return (
-            f"Only the project lead runs the merge gate ({MERGE_GATE_HINT}). "
-            "Report READY_FOR_REVIEW with the PR URL and head SHA, or "
-            '`sys_session_post(to="parent", kind="request")`, and let your project lead merge.'
+            "The merge gate is a verdict tool only: the factory never merges "
+            f"({MERGE_GATE_HINT}). Read the gates with "
+            "`python -m omnigent.factory_merge --dry-run <pr-url>`; the project lead then "
+            "posts READY FOR HUMAN MERGE, and everyone else reports READY_FOR_REVIEW to it."
         )
 
     def _env_reason(self, what: str) -> str | None:
         """DENY env lifecycle commands for every role but env_keeper and the project lead."""
-        if self.role in _ENV_LIFECYCLE_ROLES:
+        if self.role is None or self.role in _ENV_LIFECYCLE_ROLES:
             return None
         return f"`{what}` is blocked for role {self.role}: {_ENV_HINT}."
 
     def _no_push_reason(self, what: str) -> str | None:
-        """DENY pushes and PR creation for leads and reviewers."""
+        """DENY pushes and PR creation for leads, reviewers, the demo agent and the planner."""
+        if self.role not in _NO_PUSH_ROLES:
+            return None
         if self.role == ROLE_LEAD:
             return (
                 f"Leads never `{what}`: delegate the change to a project lead "
@@ -778,13 +897,19 @@ class _RoleGuard:
             )
         if self.role == ROLE_DEMO:
             return f"The demo agent never `{what}`: {_DEMO_HINT}."
-        return None
+        return f"The planner never `{what}`: {_PLANNER_HINT}."
 
     def _demo_pr_reason(self, what: str) -> str | None:
         """DENY every PR write but commenting for the demo agent."""
         if self.role != ROLE_DEMO:
             return None
         return f"`{what}` is blocked for the demo agent: {_DEMO_HINT}."
+
+    def _planner_reason(self, what: str) -> str | None:
+        """DENY every PR and issue write for the planner."""
+        if self.role != ROLE_PLANNER:
+            return None
+        return f"`{what}` is blocked for the planner: {_PLANNER_HINT}."
 
     def _repo_reason(self, repo: str, what: str) -> str | None:
         """
@@ -800,7 +925,8 @@ class _RoleGuard:
                 f"`{what}` targets {repo}, which factory agents never write to "
                 f"(writable: {allowed}); changes there are {_HUMAN_ONLY_HINT}."
             )
-        if repo not in self.write_repos:
+        # The invariant policy has no write_repos: only deny_repos binds it.
+        if self.role is not None and repo not in self.write_repos:
             return (
                 f"`{what}` targets {repo}, outside this factory's write_repos ({allowed}); "
                 f"changes there are {_HUMAN_ONLY_HINT}."
@@ -817,6 +943,20 @@ class _RoleGuard:
         if "*" in branch:
             return any(fnmatchcase(protected, branch) for protected in self.protected)
         return branch in self.protected
+
+    def _ref_allowed(self, branch: str) -> bool:
+        """
+        Whether a push may target *branch* (``push_ref_prefixes``).
+
+        :param branch: e.g. ``"factory/app/t1"``.
+        :returns: ``True`` when it lies strictly under an allowed prefix.
+        """
+        return any(branch.startswith(p) and len(branch) > len(p) for p in self.push_prefixes)
+
+    def _push_hint(self) -> str:
+        """:returns: The explicit push to suggest, e.g. ``git push origin factory/<s>/<t>``."""
+        prefix = self.push_prefixes[0] if self.push_prefixes else "factory/"
+        return f"`git push origin {prefix}<slug>/<task>`"
 
     # ── gh ──────────────────────────────────────────────────────────────
 
@@ -835,13 +975,19 @@ class _RoleGuard:
             return self._check_gh_api(args[args.index("api") + 1 :], gh_repos)
         if group == "pr" and action == "merge":
             suffix = (
-                "Run the gate yourself once review and verify markers are posted."
+                "Hand it over with READY FOR HUMAN MERGE to your lead."
                 if self.role == ROLE_PROJECT_LEAD
                 else "Report READY_FOR_REVIEW to your project lead instead."
             )
             return f"Raw `gh pr merge` is blocked: {MERGE_GATE_HINT}. {suffix}"
         if group == "pr" and action == "create":
             reason = self._no_push_reason("gh pr create")
+            if reason:
+                return reason
+        if (group == "pr" and action in _GH_PR_WRITE_ACTIONS) or (
+            group == "issue" and action in _GH_ISSUE_WRITE_ACTIONS
+        ):
+            reason = self._planner_reason(f"gh {group} {action}")
             if reason:
                 return reason
         if group == "pr" and action in _GH_PR_WRITE_ACTIONS - _DEMO_PR_ACTIONS:
@@ -906,7 +1052,8 @@ class _RoleGuard:
             if any(ALLOW_PROTECTED_LABEL in field for field in fields):
                 return self._label_reason()
             if any(_GRAPHQL_PR_WRITE.search(field) for field in fields):
-                return self._demo_pr_reason("gh api graphql (pull request mutation)")
+                what = "gh api graphql (pull request mutation)"
+                return self._planner_reason(what) or self._demo_pr_reason(what)
             return None
         if method not in _WRITE_METHODS:
             return None
@@ -928,16 +1075,18 @@ class _RoleGuard:
             reason = self._no_push_reason("git push")
             if reason:
                 return reason
-        if _GH_API_PR_WRITE_PATH.match(path) and not _GH_API_COMMENT_PATH.fullmatch(path):
-            reason = self._demo_pr_reason(what)
+        if _GH_API_PR_WRITE_PATH.match(path):
+            reason = self._planner_reason(what)
+            if not reason and not _GH_API_COMMENT_PATH.fullmatch(path):
+                reason = self._demo_pr_reason(what)
             if reason:
                 return reason
-        reason = self._api_ref_reason(path, fields, what)
+        reason = self._api_ref_reason(path, fields, what, method)
         if reason:
             return reason
         if "/contents/" in path and method in {"PUT", "DELETE"}:
             branch = _field_value(fields, "branch")
-            if not branch or self._branch_is_protected(branch):
+            if not branch or self._branch_is_protected(branch) or not self._ref_allowed(branch):
                 return (
                     f"`{what}` would commit straight to "
                     f"{branch or 'the default branch'}: commit in your worktree and push a "
@@ -957,17 +1106,22 @@ class _RoleGuard:
                     return reason
         return None
 
-    def _api_ref_reason(self, path: str, fields: Sequence[str], what: str) -> str | None:
+    def _api_ref_reason(
+        self, path: str, fields: Sequence[str], what: str, method: str = "POST"
+    ) -> str | None:
         """
-        DENY API ref writes that move a protected branch or create/move a tag.
+        DENY API ref writes that delete a ref or touch one outside ``push_ref_prefixes``.
 
         :param path: Normalized endpoint, e.g. ``"/repos/o/r/git/refs/heads/main"``.
         :param fields: ``key=value`` fields, e.g. ``["ref=refs/tags/v1", "sha=…"]``.
         :param what: The command for the message.
+        :param method: The HTTP method, e.g. ``"PATCH"``.
         :returns: A DENY reason, or ``None``.
         """
         if "/git/refs" not in path:
             return None
+        if method == "DELETE":
+            return self._delete_reason()
         refs = [path.split("/git/refs", 1)[1].lstrip("/")]
         ref_field = _field_value(fields, "ref")
         if ref_field:
@@ -982,6 +1136,8 @@ class _RoleGuard:
                     f"`{what}` moves protected branch `{branch}`: push a feature branch "
                     f"and open a PR; {MERGE_GATE_HINT}."
                 )
+            if branch and not self._ref_allowed(branch):
+                return self._prefix_reason(branch, what)
         return None
 
     # ── git ─────────────────────────────────────────────────────────────
@@ -1006,6 +1162,10 @@ class _RoleGuard:
     def _check_push(self, args: list[str]) -> str | None:
         """
         Classify ``git push`` flags, remote and refspecs.
+
+        Only explicit refspecs whose destination is a branch under
+        ``push_ref_prefixes`` pass; anything whose destination depends on
+        config or the checked-out branch (a bare push, ``HEAD``) is denied.
 
         :param args: Arguments after ``git push``, e.g. ``["-u", "origin", "HEAD:main"]``.
         :returns: A DENY reason, or ``None``.
@@ -1037,8 +1197,11 @@ class _RoleGuard:
         if _PUSH_ALL_FLAGS.intersection(flags):
             return (
                 "`git push --all/--branches/--mirror` is blocked: it pushes every branch, "
-                "including protected ones. Push your one feature branch instead."
+                f"including protected ones. Push your one feature branch: {self._push_hint()}."
             )
+        short = [f for f in flags if not f.startswith("--") and f not in _PUSH_VALUE_OPTS]
+        if _PUSH_DELETE_FLAGS.intersection(flags) or any("d" in f[1:] for f in short):
+            return self._delete_reason()
         remotes = [*repo_values, *positionals[:1]]
         for remote in remotes:
             repo = _repo_from_url(remote)
@@ -1048,6 +1211,11 @@ class _RoleGuard:
         # ``git push origin tag v1`` is git's spelling of ``refs/tags/v1:refs/tags/v1``.
         if "tag" in positionals[1:]:
             return self._tag_reason()
+        if len(positionals) < 2:
+            return (
+                "A bare `git push` is blocked: its destination comes from upstream config the "
+                f"guard cannot see. Push explicitly: {self._push_hint()}."
+            )
         for refspec in positionals[1:]:
             reason = self._refspec_reason(refspec)
             if reason:
@@ -1056,16 +1224,23 @@ class _RoleGuard:
 
     def _refspec_reason(self, refspec: str) -> str | None:
         """
-        DENY a refspec whose destination is a protected branch or a tag.
+        DENY a refspec whose destination is not a branch under ``push_ref_prefixes``.
 
-        :param refspec: e.g. ``"main"``, ``"HEAD:refs/heads/main"``, ``"+x:main"``.
+        :param refspec: e.g. ``"factory/a/b"``, ``"HEAD:refs/heads/main"``, ``"+x:main"``.
         :returns: A DENY reason, or ``None``.
         """
         source, colon, dest = refspec.lstrip("+").partition(":")
         if colon and not source and not dest:
             return (
                 "`git push <remote> :` pushes every matching branch, including protected "
-                "ones. Push your one feature branch instead."
+                f"ones. Push your one feature branch: {self._push_hint()}."
+            )
+        if colon and not source:
+            return self._delete_reason()
+        if not colon and source in _PUSH_HEAD_SOURCES:
+            return (
+                f"`git push <remote> {source}` is blocked: it pushes whatever branch is checked "
+                f"out. Push explicitly: {self._push_hint()}."
             )
         target = dest if colon else source
         # git resolves ``heads/main`` / ``tags/v1`` under ``refs/`` too.
@@ -1076,19 +1251,45 @@ class _RoleGuard:
             if fnmatchcase("refs/tags/x", full):
                 return self._tag_reason()
             hits = [b for b in self.protected if fnmatchcase(f"refs/heads/{b}", full)]
-            return self._protected_push_reason(hits[0]) if hits else None
+            if hits:
+                return self._protected_push_reason(hits[0])
+            literal = full.split("*", 1)[0].removeprefix("refs/heads/")
+            if full.startswith("refs/heads/") and any(
+                literal.startswith(p) for p in self.push_prefixes
+            ):
+                return None
+            return self._prefix_reason(target, "git push")
         if name.startswith("tags/"):
             return self._tag_reason()
+        if target.startswith("refs/") and not name.startswith("heads/"):
+            return self._prefix_reason(target, "git push")
         branch = name.removeprefix("heads/")
         if branch in self.protected:
             return self._protected_push_reason(branch)
+        if not self._ref_allowed(branch):
+            return self._prefix_reason(branch, "git push")
         return None
 
     def _protected_push_reason(self, branch: str) -> str:
         """DENY a push to a protected branch."""
         return (
             f"`git push` to protected branch `{branch}` is blocked: push a feature branch "
-            f"(factory/<project>/<task>) and open a PR; {MERGE_GATE_HINT}."
+            f"({self._push_hint()}) and open a PR; {MERGE_GATE_HINT}."
+        )
+
+    def _prefix_reason(self, ref: str, what: str) -> str:
+        """DENY a ref write outside ``push_ref_prefixes``."""
+        allowed = ", ".join(f"{p}**" for p in self.push_prefixes) or "none"
+        return (
+            f"`{what}` to `{ref}` is blocked: factory agents push only branches under "
+            f"{allowed}. Push explicitly: {self._push_hint()}, and open a PR against the base."
+        )
+
+    def _delete_reason(self) -> str:
+        """DENY deleting remote branches."""
+        return (
+            "Deleting remote branches with `git push` is blocked: closing PRs and cleaning up "
+            f"branches are {_HUMAN_ONLY_HINT}."
         )
 
     def _tag_reason(self) -> str:
@@ -1167,44 +1368,18 @@ def _command_of(event: _Json) -> str | None:
     return None
 
 
-def factory_role_guard(
-    *,
-    role: str,
-    write_repos: Sequence[str] = DEFAULT_WRITE_REPOS,
-    protected_branches: Sequence[str] = DEFAULT_PROTECTED_BRANCHES,
-    deny_repos: Sequence[str] = DEFAULT_DENY_REPOS,
-) -> Callable[[_Json, _Json], _Json]:
+def guard_evaluator(guard: _RoleGuard, *, prefix: str = "") -> Callable[[_Json, _Json], _Json]:
     """
-    Factory: DENY-only guard for one software-factory role.
+    Wrap a :class:`_RoleGuard` as a V0 policy evaluator.
 
-    Returns ALLOW or DENY, never ASK, so unattended agents never stall on an
-    approval prompt. Attach it next to ``blast_radius{gate_pushes: false}``,
-    which keeps denying catastrophic commands (force-push, ``rm -rf /``).
-
-    :param role: The agent's factory role: ``lead``, ``project_lead``, ``ic``,
-        ``env_keeper``, ``reviewer`` or ``demo``.
-    :param write_repos: Repos PR writes and URL pushes may target, e.g.
-        ``["caffeinelabs/app"]``.
-    :param protected_branches: Branches no agent pushes to, e.g.
-        ``["main", "master", "staging"]``.
-    :param deny_repos: Repos no agent writes to even if listed in
-        *write_repos*, e.g. ``["caffeinelabs/infra"]``.
-    :returns: An evaluator ``fn(event, config)`` returning a V0 decision.
-    :raises ValueError: If *role* is not a factory role (the runner then
-        fails closed and denies every tool call).
+    :param guard: The rule set to apply.
+    :param prefix: Text put before every DENY reason, e.g. ``"Factory invariant: "``.
+    :returns: ``fn(event, config)`` returning ALLOW or DENY, never ASK.
     """
-    if role not in ROLES:
-        raise ValueError(f"factory_role_guard: role must be one of {sorted(ROLES)}, got {role!r}")
-    guard = _RoleGuard(
-        role=role,
-        write_repos=_as_list(write_repos),
-        protected_branches=_as_list(protected_branches),
-        deny_repos=_as_list(deny_repos),
-    )
 
     def _evaluate(event: _Json, config: _Json) -> _Json:  # noqa: ARG001
         """
-        Classify a tool call for this factory role.
+        Classify a tool call.
 
         :param event: V0 event; only shell / terminal-input tool calls and
             GitHub MCP merges are inspected.
@@ -1214,19 +1389,127 @@ def factory_role_guard(
         if not isinstance(event, dict):
             return _ALLOW
         if _is_mcp_merge(event):
-            return _decision(f"GitHub MCP merges are blocked: {MERGE_GATE_HINT}.")
+            return _decision(f"{prefix}GitHub MCP merges are blocked: {MERGE_GATE_HINT}.")
         command = _command_of(event)
         if not command:
             return _ALLOW
         reason = guard.check_command(command)
-        return _decision(reason) if reason else _ALLOW
+        return _decision(f"{prefix}{reason}") if reason else _ALLOW
 
     return _evaluate
+
+
+def build_guard(
+    *,
+    role: str | None,
+    write_repos: Sequence[str] | str | None = None,
+    protected_branches: Sequence[str] | str | None = None,
+    deny_repos: Sequence[str] | str | None = None,
+    push_ref_prefixes: Sequence[str] | str | None = None,
+    profile: str | None = None,
+) -> _RoleGuard:
+    """
+    Resolve guard parameters: explicit argument, then *profile*, then the default.
+
+    :param role: A factory role, or ``None`` for the role-independent invariants.
+    :param write_repos: See :func:`factory_role_guard`.
+    :param protected_branches: See :func:`factory_role_guard`.
+    :param deny_repos: See :func:`factory_role_guard`.
+    :param push_ref_prefixes: See :func:`factory_role_guard`.
+    :param profile: A :data:`GUARD_PROFILES` name, e.g. ``"smith"``.
+    :returns: The configured rule set.
+    :raises ValueError: On an unknown *profile*.
+    """
+    if profile is not None and profile not in GUARD_PROFILES:
+        raise ValueError(
+            f"factory_role_guard: profile must be one of {sorted(GUARD_PROFILES)}, got {profile!r}"
+        )
+    preset = GUARD_PROFILES.get(profile or "", {})
+
+    def _pick(value: Sequence[str] | str | None, key: str, default: Sequence[str]) -> list[str]:
+        return _as_list(value) if value is not None else list(preset.get(key, default))
+
+    return _RoleGuard(
+        role=role,
+        write_repos=_pick(write_repos, "write_repos", DEFAULT_WRITE_REPOS),
+        protected_branches=_pick(
+            protected_branches, "protected_branches", DEFAULT_PROTECTED_BRANCHES
+        ),
+        deny_repos=_pick(deny_repos, "deny_repos", DEFAULT_DENY_REPOS),
+        push_ref_prefixes=_pick(push_ref_prefixes, "push_ref_prefixes", DEFAULT_PUSH_REF_PREFIXES),
+    )
+
+
+def factory_role_guard(
+    *,
+    role: str,
+    write_repos: Sequence[str] | None = None,
+    protected_branches: Sequence[str] | None = None,
+    deny_repos: Sequence[str] | None = None,
+    push_ref_prefixes: Sequence[str] | None = None,
+    profile: str | None = None,
+) -> Callable[[_Json, _Json], _Json]:
+    """
+    Factory: DENY-only guard for one software-factory role.
+
+    Returns ALLOW or DENY, never ASK, so unattended agents never stall on an
+    approval prompt. Attach it next to ``blast_radius{gate_pushes: false}``,
+    which keeps denying catastrophic commands (force-push, ``rm -rf /``).
+
+    :param role: The agent's factory role: ``lead``, ``project_lead``, ``ic``,
+        ``env_keeper``, ``reviewer``, ``demo`` or ``planner``.
+    :param write_repos: Repos PR writes and URL pushes may target, e.g.
+        ``["caffeinelabs/app"]``.
+    :param protected_branches: Branches no agent pushes to, e.g.
+        ``["main", "master", "staging", "temp-main"]``.
+    :param deny_repos: Repos no agent writes to even if listed in
+        *write_repos*, e.g. ``["caffeinelabs/infra"]`` (infra is always denied).
+    :param push_ref_prefixes: Branch prefixes a push may target, e.g.
+        ``["factory/"]``; every other destination is denied.
+    :param profile: A named rule set from :data:`GUARD_PROFILES` (``smith``)
+        supplying the defaults of the arguments above.
+    :returns: An evaluator ``fn(event, config)`` returning a V0 decision.
+    :raises ValueError: If *role* is not a factory role or *profile* is
+        unknown (the runner then fails closed and denies every tool call).
+    """
+    if role not in GUARD_ROLES:
+        raise ValueError(
+            f"factory_role_guard: role must be one of {sorted(GUARD_ROLES)}, got {role!r}"
+        )
+    return guard_evaluator(
+        build_guard(
+            role=role,
+            write_repos=write_repos,
+            protected_branches=protected_branches,
+            deny_repos=deny_repos,
+            push_ref_prefixes=push_ref_prefixes,
+            profile=profile,
+        )
+    )
 
 
 # ── Registry ─────────────────────────────────────────────────────────────────
 
 _STRING_LIST: dict[str, object] = {"type": "array", "items": {"type": "string"}}
+
+# Parameters shared by the role guard and the admin invariant policy.
+SHARED_PARAMS: dict[str, dict[str, object]] = {
+    "protected_branches": {
+        **_STRING_LIST,
+        "description": "Branches no factory agent may push to.",
+        "default": list(DEFAULT_PROTECTED_BRANCHES),
+    },
+    "deny_repos": {
+        **_STRING_LIST,
+        "description": "owner/repo values never written to, even if in write_repos.",
+        "default": list(DEFAULT_DENY_REPOS),
+    },
+    "push_ref_prefixes": {
+        **_STRING_LIST,
+        "description": "Branch prefixes pushes may target; every other destination is denied.",
+        "default": list(DEFAULT_PUSH_REF_PREFIXES),
+    },
+}
 
 POLICY_REGISTRY: list[dict[str, object]] = [
     {
@@ -1234,17 +1517,19 @@ POLICY_REGISTRY: list[dict[str, object]] = [
         "kind": "factory",
         "name": "Software Factory Role Guard",
         "description": "DENY-only (never asks) guard for unattended software-factory agents: "
-        "blocks raw `gh pr merge` (merges go through `python -m omnigent.factory_merge`), "
-        "GitHub admin writes, pushes to protected branches or tags, writes to repos outside "
-        "write_repos, and role-restricted actions (lead, reviewer and demo pushes, demo PR "
-        "writes other than comments, the merge gate outside the project lead, env lifecycle "
-        "including factory previews outside env_keeper).",
+        "blocks every merge (raw `gh pr merge`, MCP merges, and "
+        "`python -m omnigent.factory_merge` without --dry-run), OMNIGENT_FACTORY_* settings "
+        "in commands, GitHub admin writes, pushes outside push_ref_prefixes (bare pushes, "
+        "HEAD, deletes, tags, protected branches), writes to repos outside write_repos, and "
+        "role-restricted actions (lead, reviewer, planner and demo pushes, demo PR writes "
+        "other than comments, planner PR and issue writes, env lifecycle including factory "
+        "previews outside env_keeper).",
         "params_schema": {
             "type": "object",
             "properties": {
                 "role": {
                     "type": "string",
-                    "enum": sorted(ROLES),
+                    "enum": sorted(GUARD_ROLES),
                     "description": "The agent's factory role.",
                 },
                 "write_repos": {
@@ -1252,15 +1537,12 @@ POLICY_REGISTRY: list[dict[str, object]] = [
                     "description": "owner/repo values PR writes and URL pushes may target.",
                     "default": list(DEFAULT_WRITE_REPOS),
                 },
-                "protected_branches": {
-                    **_STRING_LIST,
-                    "description": "Branches no factory agent may push to.",
-                    "default": list(DEFAULT_PROTECTED_BRANCHES),
-                },
-                "deny_repos": {
-                    **_STRING_LIST,
-                    "description": "owner/repo values never written to, even if in write_repos.",
-                    "default": list(DEFAULT_DENY_REPOS),
+                **SHARED_PARAMS,
+                "profile": {
+                    "type": "string",
+                    "enum": sorted(GUARD_PROFILES),
+                    "description": "Named rule set supplying the defaults (smith: PRs to "
+                    "omnigent from factory/self/** branches, never merges).",
                 },
             },
             "required": ["role"],

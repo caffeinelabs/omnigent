@@ -84,9 +84,17 @@ class Cockpit:
 
 
 async def build_cockpit(
-    world: FactoryWorld, db_uri: str, monkeypatch: pytest.MonkeyPatch
+    world: FactoryWorld,
+    db_uri: str,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    auth_provider: Any = None,
 ) -> AsyncIterator[Cockpit]:
-    """Yield a :class:`Cockpit` over *world* (use from an async fixture)."""
+    """
+    Yield a :class:`Cockpit` over *world* (use from an async fixture).
+
+    :param auth_provider: Request identity; header auth (``X-Test-User``) when ``None``.
+    """
     from fastapi import FastAPI
     from fastapi.responses import JSONResponse
 
@@ -107,7 +115,7 @@ async def build_cockpit(
     for key in ("lead_a", "pl"):
         permissions.grant("carol", world.id(key), LEVEL_EDIT)
     projects = SqlAlchemyProjectStore(db_uri)
-    auth: Any = HeaderAuth()
+    auth: Any = auth_provider if auth_provider is not None else HeaderAuth()
 
     app = FastAPI()
     register_factory_routes(

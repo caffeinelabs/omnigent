@@ -16,7 +16,7 @@ from typing import Any
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 from omnigent.entities import Conversation
 from omnigent.errors import ErrorCode, OmnigentError
@@ -25,6 +25,7 @@ from omnigent.factory import (
     HEALTH,
     LABEL_HEALTH,
     LABEL_HEARTBEAT_S,
+    LABEL_PREFIX,
     LABEL_STATE,
     LABEL_SUMMARY,
     LABEL_SUPERVISOR,
@@ -39,7 +40,7 @@ from omnigent.factory import (
 )
 from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER, token_bound_runner_id
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER, LEVEL_READ
-from omnigent.server.factory import live
+from omnigent.server.factory import events, live
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.envelope import display_title, format_envelope
 from omnigent.server.factory.mailer import MailItem, get_mailer, new_mail_id
@@ -63,6 +64,19 @@ from omnigent.server.routes._auth_helpers import (
 )
 
 _BEACON_FIELDS = frozenset({"summary", "health"})
+
+# Labels only the server (or an owner, through it) writes: an agent naming one is refused.
+SERVER_ONLY_LABEL_FIELDS: frozenset[str] = frozenset(
+    {"def_version", "default_repo", "default_base", "mode", "engine_mode", "autonomy_projects"}
+)
+# Audit names of the labels ``PATCH /sessions/{id}`` writes.
+_LABEL_FIELDS: dict[str, str] = {
+    LABEL_STATE: "state",
+    LABEL_HEALTH: "health",
+    LABEL_SUMMARY: "summary",
+    LABEL_HEARTBEAT_S: "heartbeat_s",
+    LABEL_SUPERVISOR: "supervisor_session_id",
+}
 
 
 class FactoryRouteError(Exception):
@@ -115,7 +129,12 @@ class PostMessageBody(BaseModel):
 
 
 class PatchSessionBody(BaseModel):
-    """``PATCH /v1/factory/sessions/{id}`` body; unset fields are left alone."""
+    """``PATCH /v1/factory/sessions/{id}`` body; unset fields are left alone.
+
+    Unknown keys are kept (and ignored) so a server-only label can be refused by name.
+    """
+
+    model_config = ConfigDict(extra="allow")
 
     from_session_id: str
     state: str | None = None
@@ -343,13 +362,22 @@ def create_factory_router() -> APIRouter:
         sender_m = await asyncio.to_thread(membership_of, sender, deps)
         if sender_m.factory_id is None:
             raise _out_of_factory("from_session_id is not a factory member")
+        server_only = _server_only_fields(body)
+        if server_only:
+            raise FactoryRouteError(
+                422,
+                "server_only_label",
+                f"{', '.join(server_only)} can only be set by the server or a factory owner, "
+                "never by an agent; propose the change instead",
+            )
         if session_id == sender.id:
             target, target_m = sender, sender_m
         else:
             await require_access(user_id, session_id, LEVEL_EDIT, deps.permission_store, store)
             target = await _get_session(deps, session_id)
             target_m = await _same_factory_target(deps, sender_m, target)
-        fields = body.model_fields_set - {"from_session_id"}
+        declared = set(PatchSessionBody.model_fields) - {"from_session_id"}
+        fields = body.model_fields_set & declared
         stage_project: str | None = None
         if body.stage is not None:
             stage_project = await _stage_claim_project(deps, sender_m, target.id, body.stage)
@@ -428,6 +456,10 @@ def create_factory_router() -> APIRouter:
             await asyncio.to_thread(store.set_labels, target.id, labels)
         if clear_supervisor:
             await asyncio.to_thread(store.delete_label, target.id, LABEL_SUPERVISOR)
+        written: dict[str, str | None] = {**labels}
+        if clear_supervisor:
+            written[LABEL_SUPERVISOR] = None
+        await _audit_label_writes(request, sender_m, target, target_m, written, user_id)
         refreshed = await _get_session(deps, target.id)
         result = (await asyncio.to_thread(membership_of, refreshed, deps)).to_dict()
         if stage_project is not None and body.stage is not None:
@@ -436,6 +468,56 @@ def create_factory_router() -> APIRouter:
         return result
 
     return router
+
+
+def _server_only_fields(body: PatchSessionBody) -> list[str]:
+    """:returns: The server-only labels *body* tries to set, by short name, sorted."""
+    named = {key.removeprefix(LABEL_PREFIX) for key in (body.model_extra or {})}
+    return sorted(named & SERVER_ONLY_LABEL_FIELDS)
+
+
+async def _audit_label_writes(
+    request: Request,
+    sender: Membership,
+    target: Conversation,
+    target_m: Membership,
+    written: dict[str, str | None],
+    user_id: str | None,
+) -> None:
+    """
+    Emit ``label.changed {field, from, to, by}`` for each label whose value changed.
+
+    :param written: Label key → new value (``None`` for a deleted label).
+    :param user_id: The human whose credentials the agent acts with.
+    """
+    if sender.factory_id is None:
+        return
+    for key, new in written.items():
+        old = target.labels.get(key)
+        if old == new:
+            continue
+        field = _LABEL_FIELDS.get(key, key.removeprefix(LABEL_PREFIX))
+        await events.emit(
+            request.app.state,
+            sender.factory_id,
+            "label.changed",
+            project=target_m.project,
+            from_id=sender.session_id,
+            to_id=target.id,
+            subject=f"session:{target.id}",
+            summary=f"{display_title(target.title, target.id)} · {field}: "
+            f"{old if old is not None else '∅'} → {new if new is not None else '∅'}",
+            data={
+                "field": field,
+                "label": key,
+                "from": old,
+                "to": new,
+                "by": sender.session_id,
+                "by_kind": "agent",
+                "by_role": sender.role,
+                "on_behalf_of": user_id,
+            },
+        )
 
 
 async def _stage_claim_project(

@@ -77,3 +77,4 @@ guardrails:
         arguments:
           role: reviewer
           write_repos: [caffeinelabs/app]
+          push_ref_prefixes: [factory/]

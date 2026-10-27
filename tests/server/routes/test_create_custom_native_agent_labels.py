@@ -28,7 +28,7 @@ from omnigent.harness_plugins import CLAUDE_NATIVE_CODING_AGENT
 from omnigent.server.managed_hosts import ManagedLaunchTracker, parse_sandbox_config
 from omnigent.server.routes.sessions import routes_core
 from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
-from tests.server.helpers import create_test_agent
+from tests.server.helpers import create_test_agent, factory_guardrails
 
 _CLAUDE_NATIVE = {"type": "omnigent", "config": {"harness": "claude-native"}}
 _CODEX_NATIVE = {"type": "omnigent", "config": {"harness": "codex-native"}}
@@ -42,6 +42,7 @@ async def _seed_builtin(
     name: str,
     executor: dict[str, Any],
     sub_agents: list[dict[str, Any]] | None = None,
+    guardrails: dict[str, Any] | None = None,
 ) -> str:
     """
     Register a built-in (template) agent over a freshly uploaded bundle.
@@ -55,9 +56,12 @@ async def _seed_builtin(
     :param name: Built-in agent name, e.g. ``"factory-lead"``.
     :param executor: Executor block of the bundle spec.
     :param sub_agents: Optional sub-agent config dicts for the bundle.
+    :param guardrails: Optional ``guardrails:`` block (factory roles need one).
     :returns: The built-in agent id.
     """
-    source = await create_test_agent(client, name=name, executor=executor, sub_agents=sub_agents)
+    source = await create_test_agent(
+        client, name=name, executor=executor, sub_agents=sub_agents, guardrails=guardrails
+    )
     store = SqlAlchemyAgentStore(db_uri)
     uploaded = store.get(str(source["id"]))
     assert uploaded is not None
@@ -281,7 +285,9 @@ async def test_factory_agent_spec_owns_its_launch_permission_mode(
             "factory_role": "lead",
         },
     }
-    agent_id = await _seed_builtin(client, db_uri, "factory-lead", executor)
+    agent_id = await _seed_builtin(
+        client, db_uri, "factory-lead", executor, guardrails=factory_guardrails("lead")
+    )
 
     resp = await client.post(
         "/v1/sessions",

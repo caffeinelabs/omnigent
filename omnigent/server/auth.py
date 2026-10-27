@@ -45,6 +45,10 @@ _AUTH_ENABLED_ENV = "OMNIGENT_AUTH_ENABLED"
 
 RESERVED_USER_LOCAL = "local"
 RESERVED_USER_PUBLIC = "__public__"
+# Claim stamped on bearers minted for managed runners, so human-only routes
+# can tell an agent's callback from the human it acts for.
+ORIGIN_CLAIM = "org"
+RUNNER_ORIGIN = "runner"
 _RESERVED_USERS = frozenset({RESERVED_USER_LOCAL, RESERVED_USER_PUBLIC})
 _TRUTHY_STRINGS = ("1", "true", "yes")
 
@@ -410,6 +414,22 @@ class AuthProvider(ABC):
         """
         return None
 
+    def session_token_claims(
+        self,
+        request: HTTPConnection,  # noqa: ARG002
+    ) -> tuple[str, dict[str, object]] | None:
+        """
+        Return the verified claims of the session token *request* authenticates with.
+
+        Default: ``None`` — providers without signed session tokens (header
+        or proxy identity) have no claims to report.
+
+        :param request: The incoming HTTP request or WebSocket.
+        :returns: ``(transport, claims)`` with transport ``"cookie"`` or
+            ``"bearer"``, or ``None`` when no valid token is presented.
+        """
+        return None
+
 
 class UnifiedAuthProvider(AuthProvider):
     """Unified authentication provider that supports header-based,
@@ -555,7 +575,52 @@ class UnifiedAuthProvider(AuthProvider):
             cookie_config.cookie_secret,
             ttl_seconds,
             self._source,
+            extra_claims={ORIGIN_CLAIM: RUNNER_ORIGIN},
         )
+
+    def _session_token(self, request: HTTPConnection) -> tuple[str, str] | None:
+        """
+        Pick the token :meth:`_check_cookie` validates: the cookie, else the bearer.
+
+        :param request: The incoming HTTP request or WebSocket.
+        :returns: ``(token, "cookie" | "bearer")``, or ``None`` when absent.
+        """
+        cookie_config = self._oidc_config if self._source == "oidc" else self._accounts_config
+        if cookie_config is None:
+            return None
+        token = request.cookies.get(cookie_config.session_cookie_name)
+        if token:
+            return token, "cookie"
+        # Fall back to Bearer token for CLI clients.
+        auth_header = request.headers.get("Authorization", "")
+        if auth_header.startswith("Bearer ") and auth_header[7:]:
+            return auth_header[7:], "bearer"
+        return None
+
+    def session_token_claims(
+        self, request: HTTPConnection
+    ) -> tuple[str, dict[str, object]] | None:
+        """
+        Return the verified claims of the cookie or bearer token on *request*.
+
+        :param request: The incoming HTTP request or WebSocket.
+        :returns: ``(transport, claims)``, or ``None`` outside oidc/accounts
+            mode or when no valid token is presented.
+        """
+        import jwt
+
+        if self._source not in ("oidc", "accounts"):
+            return None
+        cookie_config = self._oidc_config if self._source == "oidc" else self._accounts_config
+        found = self._session_token(request)
+        if cookie_config is None or found is None:
+            return None
+        token, transport = found
+        try:
+            claims = jwt.decode(token, cookie_config.cookie_secret, algorithms=["HS256"])
+        except jwt.InvalidTokenError:
+            return None
+        return transport, dict(claims)
 
     def _check_cookie(self, request: HTTPConnection) -> str | None:
         """Validate the session cookie or Bearer token and return the
@@ -585,15 +650,10 @@ class UnifiedAuthProvider(AuthProvider):
         cookie_config = self._oidc_config if self._source == "oidc" else self._accounts_config
         if cookie_config is None:
             return None
-        cookie_name = cookie_config.session_cookie_name
-        token = request.cookies.get(cookie_name)
-        if not token:
-            # Fall back to Bearer token for CLI clients.
-            auth_header = request.headers.get("Authorization", "")
-            if auth_header.startswith("Bearer "):
-                token = auth_header[7:]
-        if not token:
+        found = self._session_token(request)
+        if found is None:
             return None
+        token = found[0]
 
         cache_key = hmac_digest(token, cookie_config.cookie_secret)
         cached = self._cookie_cache.get(cache_key)

@@ -39,8 +39,10 @@ prompt: |
     report the exact command and result of each.
   - Keep `<worktree>/NOTES.md` current: plan, done, next, decisions, and the
     PR, branch and head. It is untracked and is the handoff if you are replaced.
-  - Commit and push WIP to `factory/<slug>/<task>` at least hourly. Never
-    force-push and never push `<base>` or main.
+  - Commit and push WIP to `factory/<slug>/<task>` at least hourly, always
+    with an explicit refspec: `git push -u origin factory/<slug>/<task>`. A
+    bare `git push` or `git push origin HEAD` is denied, and so is any branch
+    outside `factory/`. Never force-push and never push `<base>` or main.
   - Co-sign every commit: end the message with a blank line and
     `Co-authored-by: omnigent <noreply@omnigent.ai>`.
   - Open a draft PR early: `gh pr create --draft --repo caffeinelabs/<repo>
@@ -117,3 +119,4 @@ guardrails:
         arguments:
           role: ic
           write_repos: [caffeinelabs/app]
+          push_ref_prefixes: [factory/]

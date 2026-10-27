@@ -131,6 +131,7 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
         await mailer.replay_undelivered()
     stop_supervision: Callable[[], Awaitable[None]] | None = None
     stop_background: Callable[[], Awaitable[None]] | None = None
+    unseed_invariants = _seed_invariants()
     if factory_enabled():
         from omnigent.server.factory.background import start_all
         from omnigent.server.factory.supervisor import start_supervision
@@ -142,6 +143,7 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
         _logger.info("factory services started: %s", ", ".join(started))
 
     async def _stop() -> None:
+        unseed_invariants()
         if stop_background is not None:
             await stop_background()
         if stop_supervision is not None:
@@ -151,6 +153,21 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
             setattr(app_state, MAILER_STATE_ATTR, None)
 
     return _stop
+
+
+def _seed_invariants() -> Callable[[], None]:
+    """Add the Tier-0 invariant policy to the server-wide defaults when the factory is on."""
+    from omnigent.policies.builtins.factory_invariants import (
+        invariants_enabled,
+        seed_invariant_policy,
+    )
+    from omnigent.runtime import get_caps
+
+    if not invariants_enabled():
+        return lambda: None
+    unseed = seed_invariant_policy(get_caps().default_policies)
+    _logger.info("factory invariant policy seeded as a server-wide default policy")
+    return unseed
 
 
 __all__ = ["register_factory_routes", "start_factory_services"]

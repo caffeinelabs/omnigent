@@ -99,3 +99,4 @@ guardrails:
         arguments:
           role: ic
           write_repos: [caffeinelabs/app]
+          push_ref_prefixes: [factory/]
