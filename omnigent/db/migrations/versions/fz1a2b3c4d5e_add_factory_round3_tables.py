@@ -45,6 +45,8 @@ branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
 _SPAN_KINDS = ", ".join(str(code) for code in range(1, 22))
+# CockroachDB parks the pre-round-3 source CHECK under this name before dropping it.
+_NARROW_SOURCE_CHECK = "ck_factory_decisions_source_narrow"
 
 
 def _workspace_id() -> sa.Column:
@@ -113,12 +115,14 @@ def _upgrade_existing_tables(inspector: sa.Inspector) -> None:
         )
 
     sources = _check_codes(inspector, "factory_decisions", "ck_factory_decisions_source")
+    # Left behind when a CockroachDB run with per-statement DDL commits stops after the rename.
+    stale_narrow = _check_codes(inspector, "factory_decisions", _NARROW_SOURCE_CHECK) is not None
     # FACTORY_DECISION_SOURCE gains proposal=6, loop=7, access_request=8, done_check=9.
     widen_sources = sources is None or not {6, 7, 8, 9} <= sources
     narrow_check = "ck_factory_decisions_source"
     if widen_sources and sources is not None and op.get_bind().dialect.name == "cockroachdb":
         # CockroachDB rejects re-adding a CHECK name dropped in the same transaction.
-        narrow_check = "ck_factory_decisions_source_narrow"
+        narrow_check = _NARROW_SOURCE_CHECK
         op.execute(
             "ALTER TABLE factory_decisions RENAME CONSTRAINT "
             f"ck_factory_decisions_source TO {narrow_check}"
@@ -140,6 +144,8 @@ def _upgrade_existing_tables(inspector: sa.Inspector) -> None:
             batch_op.create_check_constraint(
                 "ck_factory_decisions_source", "source IN (1, 2, 3, 4, 5, 6, 7, 8, 9)"
             )
+        if stale_narrow:
+            batch_op.drop_constraint(_NARROW_SOURCE_CHECK, type_="check")
 
 
 def _create_people_and_room(inspector: sa.Inspector, tables: set[str]) -> None:
@@ -626,6 +632,7 @@ def downgrade() -> None:
     # The narrowed CHECK would reject rows opened from a round-3 source.
     op.execute("DELETE FROM factory_decisions WHERE source > 5")
     with op.batch_alter_table("factory_decisions") as batch_op:
+        # Re-adding the same CHECK name fails on CockroachDB 23.2; CRDB downgrades are unsupported.
         batch_op.drop_constraint("ck_factory_decisions_source", type_="check")
         batch_op.create_check_constraint(
             "ck_factory_decisions_source", "source IN (1, 2, 3, 4, 5)"

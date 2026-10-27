@@ -131,6 +131,17 @@ def _regress_to_cockpit(uri: str, engine: Engine) -> str:
     return "fy1a2b3c4d5e"
 
 
+def _regress_to_interrupted_widening(uri: str, engine: Engine) -> str:
+    """Leave only the parked narrow source CHECK, as when fz1 stops right after its rename."""
+    revision = _regress_to_cockpit(uri, engine)
+    _run_ddl(
+        uri,
+        "ALTER TABLE factory_decisions RENAME CONSTRAINT "
+        "ck_factory_decisions_source TO ck_factory_decisions_source_narrow",
+    )
+    return revision
+
+
 def test_cockroachdb_bootstrap_is_at_head(db_uri: str) -> None:
     engine = _crdb_engine(db_uri)
     assert _get_current_db_revision(engine) == _get_head_db_revision(db_uri)
@@ -176,8 +187,8 @@ def test_cockroachdb_upgrades_from_supported_baseline(db_uri: str) -> None:
 
 @pytest.mark.parametrize(
     "regress",
-    [_regress_to_pre_factory, _regress_to_cockpit],
-    ids=["pre_factory", "cockpit"],
+    [_regress_to_pre_factory, _regress_to_cockpit, _regress_to_interrupted_widening],
+    ids=["pre_factory", "cockpit", "interrupted_widening"],
 )
 def test_cockroachdb_upgrades_factory_schema_from_earlier_revisions(
     scratch_crdb_uri: str, regress: Callable[[str, Engine], str]
