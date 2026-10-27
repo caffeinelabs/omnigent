@@ -2,9 +2,11 @@
 
 Not a test module. :class:`FakeGitHub` serves ``GET /repos/{repo}/pulls``,
 the branch rules and protection reads, and the poller's GraphQL refresh
-query from in-memory :class:`FakePr` objects. Its transport fails the test
-on any request that could write to GitHub: a method other than GET, a POST
-anywhere but ``/graphql``, or a GraphQL document that is not a query.
+query (PRs and base heads) from in-memory objects. Its transport fails the
+test on any request that could write to GitHub: a method other than GET, a
+POST anywhere but ``/graphql``, or a GraphQL document that is not a query.
+:class:`FakeGitData` is the one writable slice: the demo mirror repo's Git
+Data API.
 """
 
 from __future__ import annotations
@@ -22,6 +24,7 @@ from omnigent.server.github_app_client import GitHubAppClient
 from tests.server.github_app_fixtures import make_config
 
 _ALIAS_RE = re.compile(r"(pr\d+): pullRequest\(number: (\d+)\)")
+_BASE_RE = re.compile(r'(base\d+): ref\(qualifiedName: "refs/heads/([^"]+)"\)')
 
 
 def iso(epoch: float) -> str:
@@ -220,6 +223,8 @@ class FakeGitHub:
     """In-memory GitHub; :attr:`requests` records every call."""
 
     prs: list[FakePr] = field(default_factory=list)
+    branches: dict[tuple[str, str], str] = field(default_factory=dict)
+    """``(repo, branch)`` -> head sha, for the poller's base-head reads."""
     rules: dict[tuple[str, str], list[dict[str, Any]]] = field(default_factory=dict)
     classic: dict[tuple[str, str], dict[str, Any]] = field(default_factory=dict)
     remaining: int = 4800
@@ -241,6 +246,16 @@ class FakeGitHub:
     def graphql_calls(self) -> list[httpx.Request]:
         """:returns: The GraphQL requests made so far."""
         return [r for r in self.requests if r.url.path == "/graphql"]
+
+    @property
+    def pr_queries(self) -> list[httpx.Request]:
+        """:returns: The GraphQL requests that refreshed at least one PR."""
+        return [r for r in self.graphql_calls if b"pullRequest(" in r.content]
+
+    @property
+    def base_queries(self) -> list[httpx.Request]:
+        """:returns: The GraphQL requests that read at least one base head."""
+        return [r for r in self.graphql_calls if b"ref(qualifiedName" in r.content]
 
     def handler(self, request: httpx.Request) -> httpx.Response:
         """Serve one request; fail the test on anything that could write."""
@@ -312,6 +327,9 @@ class FakeGitHub:
             repository[alias] = pr.graphql() if pr is not None else None
             if pr is None:
                 errors.append({"type": "NOT_FOUND", "path": ["repository", alias]})
+        for alias, branch in _BASE_RE.findall(body["query"]):
+            head = self.branches.get((repo, branch))
+            repository[alias] = {"target": {"oid": head}} if head else None
         payload: dict[str, Any] = {
             "data": {
                 "rateLimit": {"remaining": self.remaining, "resetAt": "2026-10-26T12:00:00Z"},
@@ -341,3 +359,75 @@ class FakeGithubStore:
 
     def get(self, user_id: str, *, with_tokens: bool = False) -> FakeConnection | None:
         return self.connections.get(user_id)
+
+
+@dataclass
+class FakeGitData:
+    """
+    The Git Data API of the demo mirror repo (the one GitHub write the factory makes).
+
+    Serves ``GET /rate_limit`` and ``POST /repos/{repo}/git/{blobs,trees,commits,refs}``
+    plus ``PATCH …/git/refs/heads/{branch}``; any other request fails the test.
+    """
+
+    repo: str = "caffeinelabs/factory-demos"
+    remaining: int = 4900
+    empty: bool = False
+    delay_s: float = 0.0
+    refs: dict[str, str] = field(default_factory=dict)
+    blobs: dict[str, bytes] = field(default_factory=dict)
+    trees: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    commits: dict[str, dict[str, Any]] = field(default_factory=dict)
+    requests: list[httpx.Request] = field(default_factory=list)
+
+    def transport(self) -> httpx.MockTransport:
+        """:returns: A transport serving this fake."""
+        return httpx.MockTransport(self.handler)
+
+    @property
+    def calls(self) -> list[tuple[str, str]]:
+        """:returns: ``(method, path)`` of every request, in order."""
+        return [(r.method, r.url.path) for r in self.requests]
+
+    async def handler(self, request: httpx.Request) -> httpx.Response:
+        """Serve one request."""
+        import asyncio
+        import base64
+
+        self.requests.append(request)
+        if self.delay_s:
+            await asyncio.sleep(self.delay_s)
+        headers = {"x-ratelimit-remaining": str(self.remaining)}
+        path = request.url.path
+        git = f"/repos/{self.repo}/git/"
+        if request.method == "GET" and path == "/rate_limit":
+            body = {"resources": {"core": {"remaining": self.remaining, "reset": 1}}}
+            return httpx.Response(200, json=body, headers=headers)
+        if not path.startswith(git):
+            pytest.fail(f"unexpected mirror request: {request.method} {request.url}")
+        kind = path[len(git) :]
+        payload = json.loads(request.content) if request.content else {}
+        if self.empty:
+            return httpx.Response(409, json={"message": "Git Repository is empty."})
+        if request.method == "POST" and kind == "blobs":
+            sha_ = sha(f"blob{len(self.blobs)}")
+            self.blobs[sha_] = base64.b64decode(payload["content"])
+            return httpx.Response(201, json={"sha": sha_}, headers=headers)
+        if request.method == "POST" and kind == "trees":
+            sha_ = sha(f"tree{len(self.trees)}")
+            self.trees[sha_] = payload["tree"]
+            return httpx.Response(201, json={"sha": sha_}, headers=headers)
+        if request.method == "POST" and kind == "commits":
+            sha_ = sha(f"commit{len(self.commits)}")
+            self.commits[sha_] = payload
+            return httpx.Response(201, json={"sha": sha_}, headers=headers)
+        if request.method == "POST" and kind == "refs":
+            if payload["ref"] in self.refs:
+                return httpx.Response(422, json={"message": "Reference already exists"})
+            self.refs[payload["ref"]] = payload["sha"]
+            return httpx.Response(201, json={"ref": payload["ref"]}, headers=headers)
+        if request.method == "PATCH" and kind.startswith("refs/heads/"):
+            ref = kind.removeprefix("refs/")
+            self.refs[f"refs/{ref}"] = payload["sha"]
+            return httpx.Response(200, json={"ref": f"refs/{ref}"}, headers=headers)
+        pytest.fail(f"unexpected mirror request: {request.method} {request.url}")

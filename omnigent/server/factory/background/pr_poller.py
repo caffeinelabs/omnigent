@@ -7,7 +7,10 @@ and at once on ``nudge("prs")``, for every active factory:
   newest first until a PR predates the factory, and track PRs whose head branch
   is ``factory/<project slug>/<task>``;
 - **refresh**: one read-only GraphQL query per repo over its open PRs (and
-  those that ended in the last 10 min), applied by :mod:`..prs`.
+  those that ended in the last 10 min), applied by :mod:`..prs`;
+- **bases**: the same query reads the head of every base branch the
+  factories watch (a query of its own every 2 min when no PR of the repo is
+  due), and :mod:`..base` acts on a moved head.
 
 It uses the factory owner's GitHub connection and never writes to GitHub.
 401/403/429 back off exponentially per owner (up to 10 min); under 500
@@ -28,6 +31,7 @@ import httpx
 
 from omnigent.entities.factory import FactoryPr
 from omnigent.factory_gates import parse_time
+from omnigent.server.factory import base as base_watch
 from omnigent.server.factory import events, nudge, status
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.prs import (
@@ -35,6 +39,7 @@ from omnigent.server.factory.prs import (
     FactoryScope,
     active_factories,
     apply_refresh,
+    base_alias,
     files_gap,
     parse_factory_branch,
     pr_alias,
@@ -51,6 +56,8 @@ PR_POLL_ENV: Final = "OMNIGENT_FACTORY_PR_POLL_S"
 DEFAULT_PR_POLL_S: Final = 60.0
 DISCOVERY_INTERVAL_S: Final = 300.0
 DISCOVERY_MAX_PAGES: Final = 5
+BASE_WATCH_INTERVAL_S: Final = 120.0
+"""Seconds between base-head reads of a repo none of whose PRs is due."""
 REFRESH_BATCH: Final = 20
 LOW_RATE_REMAINING: Final = 500
 SLOW_FACTOR: Final = 5
@@ -113,6 +120,7 @@ class PrPoller:
         self.poll_s = poll_interval_from_env() if poll_s is None else poll_s
         self._task: asyncio.Task[None] | None = None
         self._last_discovery: dict[tuple[str, str], float] = {}
+        self._last_bases: dict[tuple[str, str], float] = {}
         self._backoff: dict[str, tuple[float, float]] = {}
         self._low_rate: set[str] = set()
         self._soft_errors: list[str] = []
@@ -439,11 +447,77 @@ class PrPoller:
             for pr in await asyncio.to_thread(store.list_prs, scope.factory_id):
                 if pr.id in forced or self._due(pr, now):
                     groups.setdefault(pr.repo.lower(), []).append((scope, pr))
-        for items in groups.values():
+        bases = base_watch.bases_by_repo(scopes)
+        for key, items in groups.items():
             for start in range(0, len(items), REFRESH_BATCH):
+                # The first batch of a repo also reads its watched base heads.
+                watched = bases.get(key, []) if start == 0 else []
                 await self._refresh_batch(
-                    owner, token, items[start : start + REFRESH_BATCH], client, now, scopes
+                    owner,
+                    token,
+                    items[start : start + REFRESH_BATCH],
+                    client,
+                    now,
+                    scopes,
+                    watched,
                 )
+        every = BASE_WATCH_INTERVAL_S * (SLOW_FACTOR if self._low_rate else 1)
+        for key, watched in bases.items():
+            last = self._last_bases.get((owner, key))
+            if key in groups or (last is not None and now - last < every):
+                continue
+            await self._read_bases(owner, token, key, watched, client, now, scopes)
+
+    async def _read_bases(
+        self,
+        owner: str,
+        token: str,
+        repo: str,
+        bases: list[str],
+        client: Any,
+        now: float,
+        scopes: list[FactoryScope],
+    ) -> None:
+        """Read the watched base heads of a repo with no PR due (a query of its own)."""
+        owner_name, _, name = repo.partition("/")
+        self._last_bases[(owner, repo)] = now
+        try:
+            result = await client.graphql(
+                token,
+                refresh_query([], bases),
+                {"owner": owner_name, "name": name},
+                allow_partial=True,
+            )
+        except _CALL_ERRORS as exc:
+            if isinstance(exc, GitHubApiError) and exc.status_code in BACKOFF_STATUSES:
+                raise await self._failure(owner, exc, scopes, now) from exc
+            _logger.warning("factory: reading %s base heads failed: %s", repo, exc)
+            self._soft_errors.append(f"reading {repo} base heads failed: {exc}")
+            return
+        await self._note_rate_limit(owner, result.rate_limit, scopes)
+        repository = result.data.get("repository")
+        await self._observe_bases(
+            repo, bases, repository if isinstance(repository, dict) else {}, now, scopes
+        )
+
+    async def _observe_bases(
+        self,
+        repo: str,
+        bases: list[str],
+        repository: dict[str, Any],
+        now: float,
+        scopes: list[FactoryScope],
+    ) -> None:
+        heads: dict[str, str | None] = {}
+        for index, base in enumerate(bases):
+            node = repository.get(base_alias(index))
+            target = node.get("target") if isinstance(node, dict) else None
+            oid = target.get("oid") if isinstance(target, dict) else None
+            heads[base] = oid.lower() if isinstance(oid, str) else None
+        try:
+            await base_watch.observe(self._app_state, scopes, repo, heads, now=int(now))
+        except Exception:
+            _logger.exception("factory: observing %s base heads failed", repo)
 
     async def _refresh_batch(
         self,
@@ -453,6 +527,7 @@ class PrPoller:
         client: Any,
         now: float,
         scopes: list[FactoryScope],
+        watched: list[str] | None = None,
     ) -> None:
         repo = items[0][1].repo
         owner_name, _, name = repo.partition("/")
@@ -460,7 +535,7 @@ class PrPoller:
         try:
             result = await client.graphql(
                 token,
-                refresh_query(numbers),
+                refresh_query(numbers, watched or ()),
                 {"owner": owner_name, "name": name},
                 allow_partial=True,
             )
@@ -469,6 +544,9 @@ class PrPoller:
         await self._note_rate_limit(owner, result.rate_limit, scopes)
         repository = result.data.get("repository")
         repository = repository if isinstance(repository, dict) else {}
+        if watched:
+            self._last_bases[(owner, repo.lower())] = now
+            await self._observe_bases(repo, watched, repository, now, scopes)
         bases = {
             str(node.get("baseRefName") or "")
             for node in repository.values()

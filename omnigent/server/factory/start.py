@@ -16,6 +16,7 @@ import re
 import time
 import uuid
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import Any, Final, Literal, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
@@ -27,13 +28,17 @@ from omnigent.factory import (
     CADENCE_DEMO,
     CADENCE_HEARTBEATS,
     FACTORY_ENABLED_ENV,
+    INTEGRATION_ENV_SLUG,
     LABEL_CADENCE,
+    LABEL_DEFAULT_BASE,
+    LABEL_DEFAULT_REPO,
     LABEL_FOLDER_PROJECT,
     LABEL_HEARTBEAT_S,
     LABEL_ID,
     LABEL_NAME,
     LABEL_STARTED_AT,
     LABEL_STATE,
+    PROJECT_KIND_INTEGRATION,
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
     STATE_ACTIVE,
@@ -44,14 +49,18 @@ from omnigent.factory import (
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER
 from omnigent.server.factory import control, events
 from omnigent.server.factory.charter import (
+    BRANCH_RE,
     DEFAULT_BASE_BRANCH,
     DEFAULT_BUDGET_ICS,
     MAX_PREVIEW_SLOTS,
+    REPO_RE,
     normalize_charter,
     preview_tooling_ref,
     project_base_branch,
     render_kickoff_brief,
     render_pl_charter,
+    resolve_base_branch,
+    server_default_base,
 )
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError, human_name, same_id
@@ -70,13 +79,9 @@ _logger = logging.getLogger(__name__)
 
 FOLDER_ICON: Final = "🏭"
 MAX_PROJECTS: Final = 12
+FACTORY_POD_BUDGET: Final = 12
+"""Pods a factory may use (the lead bundle's ``factory_max_pods``): 2 leads plus the PLs."""
 _SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
-_REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-# A branch git accepts: no leading "-", "." or "/", no "..", "//" or "/.", no ".lock"
-# component and no trailing "/" or ".".
-_BRANCH_RE = re.compile(
-    r"^(?![-./])(?!.*\.\.)(?!.*//)(?!.*/\.)(?!.*\.lock(?:/|$))(?!.*[/.]$)[A-Za-z0-9._/-]{1,255}$"
-)
 _URL_PATH_RE = re.compile(r"^/[A-Za-z0-9._~/-]{0,199}$")
 
 _M = TypeVar("_M", bound=BaseModel)
@@ -143,13 +148,23 @@ class _CharterFields(_Body):
         return None if value is None else _check_items(value, "scope path", 200)
 
 
+def _branch_or_none(value: str | None) -> str | None:
+    """A git branch name, or ``None`` for an empty one."""
+    value = (value or "").strip()
+    if not value:
+        return None
+    if not BRANCH_RE.match(value):
+        raise ValueError("base_branch is not a valid branch name")
+    return value
+
+
 class ProjectIn(_CharterFields):
     """One project of the start form or ``POST …/projects``."""
 
     slug: str
     title: str | None = Field(None, max_length=256)
     repo: str = Field(max_length=256)
-    base_branch: str = DEFAULT_BASE_BRANCH
+    base_branch: str | None = None
     goal: str = Field(min_length=1, max_length=4000)
     env_needed: bool = True
     version_path: str | None = None
@@ -171,20 +186,15 @@ class ProjectIn(_CharterFields):
     @field_validator("repo")
     @classmethod
     def _repo(cls, value: str) -> str:
-        if not _REPO_RE.match(value):
+        if not REPO_RE.match(value):
             raise ValueError("repo must look like owner/name")
         return value
 
     @field_validator("base_branch")
     @classmethod
-    def _branch(cls, value: str) -> str:
-        value = value.strip()
-        if not value:
-            # The form's empty branch field means the default base.
-            return DEFAULT_BASE_BRANCH
-        if not _BRANCH_RE.match(value):
-            raise ValueError("base_branch is not a valid branch name")
-        return value
+    def _branch(cls, value: str | None) -> str | None:
+        # An empty branch means the factory's default base (see resolve_base_branch).
+        return _branch_or_none(value)
 
     @field_validator("version_path", "health_path")
     @classmethod
@@ -220,12 +230,41 @@ class ProjectIn(_CharterFields):
         return raw
 
 
+class DefaultsIn(_Body):
+    """
+    The factory-level default repo and base (``StartIn.defaults``).
+
+    Unset fields fall back to ``OMNIGENT_FACTORY_DEFAULT_BASE``.
+
+    :param integration_env: Keep a live env at the base head (project ``base-env``).
+    """
+
+    repo: str | None = Field(None, max_length=256)
+    base_branch: str | None = None
+    integration_env: bool = False
+
+    @field_validator("repo")
+    @classmethod
+    def _repo(cls, value: str | None) -> str | None:
+        if not value:
+            return None
+        if not REPO_RE.match(value):
+            raise ValueError("repo must look like owner/name")
+        return value
+
+    @field_validator("base_branch")
+    @classmethod
+    def _branch(cls, value: str | None) -> str | None:
+        return _branch_or_none(value)
+
+
 class StartIn(_Body):
     """``POST /v1/factory/factories`` body."""
 
     root_session_id: str
     name: str = Field(min_length=1, max_length=80)
     cadence: Literal["demo", "normal"] = CADENCE_DEMO
+    defaults: DefaultsIn | None = None
     projects: list[ProjectIn] = Field(min_length=1, max_length=MAX_PROJECTS)
 
     @field_validator("name")
@@ -439,16 +478,126 @@ def _lock(root_id: str) -> asyncio.Lock:
     return lock
 
 
-def _project_fields(project: ProjectIn, by: str) -> dict[str, Any]:
+@dataclass(frozen=True)
+class FactoryDefaults:
+    """
+    A factory's default repo and base (root labels ``default_repo`` / ``default_base``).
+
+    :param repo: e.g. ``"caffeinelabs/app"``, or ``None``.
+    :param base: e.g. ``"temp-main"``, or ``None``.
+    :param integration_env: Start the ``base-env`` integration project.
+    """
+
+    repo: str | None = None
+    base: str | None = None
+    integration_env: bool = False
+
+    def labels(self) -> dict[str, str]:
+        """:returns: The root labels recording these defaults (none when unset)."""
+        out: dict[str, str] = {}
+        if self.repo:
+            out[LABEL_DEFAULT_REPO] = self.repo
+        if self.base:
+            out[LABEL_DEFAULT_BASE] = self.base
+        return out
+
+    def base_for(self, project: ProjectIn) -> str:
+        """:returns: The project's base: its own, then this default (same repo), then main."""
+        return resolve_base_branch(project.base_branch, project.repo, self.repo, self.base)
+
+
+def resolve_defaults(sent: DefaultsIn | None) -> FactoryDefaults:
+    """
+    The defaults a new factory starts with: what the form sent, then the server knob.
+
+    The knob's base applies only to the knob's repo; a default repo without a
+    base defaults to ``main``.
+    """
+    knob_repo, knob_base = server_default_base()
+    repo = (sent.repo if sent else None) or knob_repo
+    base = sent.base_branch if sent else None
+    same_repo = repo is not None and knob_repo is not None and repo.lower() == knob_repo.lower()
+    if base is None and same_repo:
+        base = knob_base
+    if repo and base is None:
+        base = DEFAULT_BASE_BRANCH
+    return FactoryDefaults(repo, base, bool(sent and sent.integration_env))
+
+
+def root_defaults(root: Conversation) -> FactoryDefaults:
+    """:returns: The defaults a running factory recorded on its root."""
+    return FactoryDefaults(
+        root.labels.get(LABEL_DEFAULT_REPO) or None, root.labels.get(LABEL_DEFAULT_BASE) or None
+    )
+
+
+def max_projects() -> int:
+    """:returns: How many PL projects a factory can run (its pods minus the two leads)."""
+    return min(MAX_PROJECTS, FACTORY_POD_BUDGET - 2)
+
+
+def _project_fields(project: ProjectIn, by: str, defaults: FactoryDefaults) -> dict[str, Any]:
     return {
         "title": project.title or project.slug,
         "repo": project.repo,
-        "base_branch": project.base_branch,
+        "base_branch": defaults.base_for(project),
         "charter": normalize_charter(project.raw_charter(), tooling_ref=preview_tooling_ref()),
         "priority": project.priority,
         "stage": "queued",
         "created_by": by,
     }
+
+
+def _integration_fields(defaults: FactoryDefaults, by: str) -> dict[str, Any]:
+    """The ``base-env`` project: a PL plus env_keeper keeping Tilt at the base head."""
+    ref = f"{defaults.repo}#{defaults.base}"
+    charter = {
+        "kind": PROJECT_KIND_INTEGRATION,
+        "goal": (
+            f"Keep a live env at the head of {ref} and redeploy it whenever the base moves, "
+            "so humans can try the integrated base."
+        ),
+        "env_needed": True,
+        "preview": {"enabled": False},
+        "budget_ics": 1,
+    }
+    return {
+        "title": f"Base env · {defaults.base}",
+        "repo": defaults.repo,
+        "base_branch": defaults.base,
+        "charter": normalize_charter(charter),
+        "priority": 3,
+        "stage": "queued",
+        "created_by": by,
+    }
+
+
+def _check_integration(body: StartIn, defaults: FactoryDefaults) -> None:
+    """A live base env needs a default repo and a free ``base-env`` slug and slot."""
+    if not defaults.integration_env:
+        return
+    if not defaults.repo or not defaults.base:
+        raise CockpitError(
+            400,
+            "invalid_body",
+            "a live base env needs a default repo and base",
+            field="defaults.repo",
+        )
+    for i, project in enumerate(body.projects):
+        if project.slug == INTEGRATION_ENV_SLUG:
+            raise CockpitError(
+                400,
+                "invalid_body",
+                f"slug {INTEGRATION_ENV_SLUG!r} is the live base env's",
+                field=f"projects[{i}].slug",
+            )
+    if len(body.projects) + 1 > MAX_PROJECTS:
+        raise CockpitError(
+            400,
+            "invalid_body",
+            f"at most {MAX_PROJECTS - 1} projects next to the live base env",
+            field="projects",
+        )
 
 
 def _unique_slugs(projects: Sequence[ProjectIn]) -> None:
@@ -487,6 +636,8 @@ async def start_factory(
         )
     body = parse_body(StartIn, payload)
     _unique_slugs(body.projects)
+    defaults = resolve_defaults(body.defaults)
+    _check_integration(body, defaults)
     deps = factory_deps(app_state)
     root_id = body.root_session_id
     if not is_session_id(root_id):
@@ -515,9 +666,12 @@ async def start_factory(
         url = f"/factory/{root.id}"
         store = deps.factory_store
         existing = await asyncio.to_thread(store.list_projects, root.id)
+        wanted = [p.slug for p in body.projects]
+        if defaults.integration_env:
+            wanted.append(INTEGRATION_ENV_SLUG)
         if existing:
             have = sorted(p.slug for p in existing)
-            if have == sorted(p.slug for p in body.projects):
+            if have == sorted(wanted):
                 return 200, {"factory_id": root.id, "url": url, "created": False}
             raise CockpitError(
                 409,
@@ -536,6 +690,7 @@ async def start_factory(
                 LABEL_HEARTBEAT_S: str(beats[ROLE_LEAD]),
                 LABEL_STARTED_AT: str(int(time.time())),
                 LABEL_STATE: STATE_ACTIVE,
+                **defaults.labels(),
             },
         )
         root = await control.get_conv(deps, root.id) or root
@@ -543,10 +698,19 @@ async def start_factory(
         folder = await _file_root(deps, root, owner or user_id, body.name)
         rows = [
             await asyncio.to_thread(
-                store.upsert_project, root.id, p.slug, **_project_fields(p, by)
+                store.upsert_project, root.id, p.slug, **_project_fields(p, by, defaults)
             )
             for p in body.projects
         ]
+        if defaults.integration_env:
+            rows.append(
+                await asyncio.to_thread(
+                    store.upsert_project,
+                    root.id,
+                    INTEGRATION_ENV_SLUG,
+                    **_integration_fields(defaults, by),
+                )
+            )
         mail_id = new_mail_id()
         get_mailer(app_state).submit(
             MailItem(
@@ -572,6 +736,11 @@ async def start_factory(
             "name": body.name,
             "cadence": body.cadence,
             "projects": [r.slug for r in rows],
+            "defaults": {
+                "repo": defaults.repo,
+                "base_branch": defaults.base,
+                "integration_env": defaults.integration_env,
+            },
             "folder_project_id": folder,
             "mail_id": mail_id,
         },
@@ -601,7 +770,10 @@ async def add_project(
                 409, "slug_exists", f"project {project.slug!r} already exists", field="slug"
             )
         row = await asyncio.to_thread(
-            store.upsert_project, root.id, project.slug, **_project_fields(project, by)
+            store.upsert_project,
+            root.id,
+            project.slug,
+            **_project_fields(project, by, root_defaults(root)),
         )
     cadence = root.labels.get(LABEL_CADENCE) or CADENCE_DEMO
     mail_id = new_mail_id()
@@ -725,6 +897,8 @@ async def update_charter(
 
 __all__ = [
     "CharterPatchIn",
+    "DefaultsIn",
+    "FactoryDefaults",
     "ProjectIn",
     "StartIn",
     "add_project",
@@ -735,8 +909,11 @@ __all__ = [
     "folder_name",
     "is_factory_folder",
     "kickoff_text",
+    "max_projects",
     "merge_charter",
     "parse_body",
+    "resolve_defaults",
+    "root_defaults",
     "start_factory",
     "update_charter",
 ]

@@ -40,6 +40,7 @@ GATE_STATES: Final = frozenset({GATE_PASS, GATE_PENDING, GATE_FAIL, GATE_SKIP})
 
 READY_GATES: Final[tuple[str, ...]] = (
     "draft",
+    "base",
     "checks",
     "review",
     "verify",
@@ -446,25 +447,43 @@ def gate_verify(pr: _Json, head: str, labels: set[str]) -> GateResult:
     return GateResult(GATE_PASS, None, (), evidence)
 
 
-def gate_mergeable(pr: _Json, expected_base: str | None = None) -> GateResult:
+def gate_base(pr: _Json, expected_base: str | None = None) -> GateResult:
+    """
+    The PR targets its project's base branch.
+
+    :param pr: The PR snapshot (``baseRefName``, ``url`` or ``number``).
+    :param expected_base: The project's base branch, e.g. ``"temp-main"``;
+        ``None`` (no project) accepts any base.
+    :returns: Pass on a match; fail with the ``gh pr edit … --base`` fix when
+        the PR would merge into another branch; pending while GitHub has not
+        reported the PR's base.
+    """
+    actual = pr.get("baseRefName") if isinstance(pr.get("baseRefName"), str) else None
+    evidence = {"actual": actual or None, "expected": expected_base}
+    if expected_base is None:
+        return GateResult(GATE_PASS, evidence=evidence)
+    if not actual:
+        reason = f"the PR's base branch is not known yet; it must target {expected_base}"
+        return GateResult(GATE_PENDING, reason, (), evidence)
+    if actual != expected_base:
+        target = pr.get("url") or pr.get("number") or "<pr>"
+        reason = (
+            f"PR targets {actual}; project base is {expected_base} "
+            f"(retarget: gh pr edit {target} --base {expected_base})"
+        )
+        return GateResult(GATE_FAIL, reason, (), evidence)
+    return GateResult(GATE_PASS, evidence=evidence)
+
+
+def gate_mergeable(pr: _Json) -> GateResult:
     """
     GitHub reports the PR mergeable (``UNKNOWN`` while it is still computing).
 
-    :param pr: The PR snapshot (``mergeable``, ``baseRefName``, ``number`` or ``url``).
-    :param expected_base: The project's base branch, e.g. ``"temp-main"``. A
-        PR whose known ``baseRefName`` differs fails: it would merge into the
-        wrong branch. ``None`` skips that check.
+    :param pr: The PR snapshot (``mergeable``, ``baseRefName``).
     :returns: The gate's :class:`GateResult`.
     """
     mergeable = pr.get("mergeable")
     actual_base = pr.get("baseRefName")
-    if expected_base and actual_base and actual_base != expected_base:
-        number = pr.get("number") or pr.get("url") or "<pr>"
-        reason = (
-            f"base={actual_base}, but the project's base branch is {expected_base} "
-            f"(retarget: gh pr edit {number} --base {expected_base})"
-        )
-        return GateResult(GATE_FAIL, reason, (), mergeable)
     if mergeable == "MERGEABLE":
         return GateResult(GATE_PASS, evidence=mergeable)
     if mergeable == "UNKNOWN":
@@ -568,7 +587,7 @@ def evaluate_snapshot(
     :param files_note: Why ``files`` may be incomplete (e.g. rename sources
         unknown); a passing ``protected_paths`` gate is then pending.
     :param expected_base: The project's base branch; a PR targeting another
-        branch fails ``mergeable`` (see :func:`gate_mergeable`).
+        branch fails ``base`` (see :func:`gate_base`).
     :returns: The :class:`GateReport`.
     """
     head = str(pr_json.get("headRefOid") or "").lower()
@@ -579,10 +598,11 @@ def evaluate_snapshot(
         protected = GateResult(GATE_PENDING, files_note, protected.notes, protected.evidence)
     results: dict[str, GateResult] = {
         "draft": gate_draft(pr_json),
+        "base": gate_base(pr_json, expected_base),
         "checks": gate_checks(checks, required_contexts, url=checks_url),
         "review": gate_review(pr_json, head),
         "verify": gate_verify(pr_json, head, labels),
-        "mergeable": gate_mergeable(pr_json, expected_base),
+        "mergeable": gate_mergeable(pr_json),
         "protected_paths": protected,
     }
     if demo_required:
@@ -596,6 +616,7 @@ def evaluate_snapshot(
         "review": results["review"].evidence,
         "verify": results["verify"].evidence,
         "demo": results[DEMO_GATE].evidence if DEMO_GATE in results else None,
+        "base": results["base"].evidence,
         "mergeable": results["mergeable"].evidence,
         "files": paths[:EVIDENCE_FILES_MAX],
         "protected": results["protected_paths"].evidence or [],
@@ -631,6 +652,7 @@ __all__ = [
     "GateResult",
     "MarkerHit",
     "evaluate_snapshot",
+    "gate_base",
     "marker_hits",
     "markers",
     "protected_files",

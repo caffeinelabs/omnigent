@@ -621,6 +621,7 @@ async def test_preflight_shape(
     world: FactoryWorld, authed_api: FactoryApi, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv(F.FACTORY_ENABLED_ENV, "1")
+    monkeypatch.setenv("OMNIGENT_FACTORY_DEFAULT_BASE", "caffeinelabs/app#temp-main")
     state = authed_api.app.state
     state.github_store = SimpleNamespace(
         get=lambda user: SimpleNamespace(github_login="luka") if user == "alice" else None
@@ -635,9 +636,34 @@ async def test_preflight_shape(
         "agents": {"factory_lead": True, "factory_pl": True},
         "sandbox_host": True,
         "factory_enabled": True,
+        "default_repo": "caffeinelabs/app",
+        "default_base": "temp-main",
+        "max_projects": 10,
     }
     assert bob["github"] == {"connected": False, "login": None}
     schemas.Preflight.model_validate(bob)
+
+
+@pytest.mark.parametrize(
+    ("knob", "repo", "base"),
+    [(None, None, None), ("caffeinelabs/app", "caffeinelabs/app", "main"), ("bad", None, None)],
+)
+async def test_preflight_defaults_follow_the_knob(
+    world: FactoryWorld,
+    authed_api: FactoryApi,
+    monkeypatch: pytest.MonkeyPatch,
+    knob: str | None,
+    repo: str | None,
+    base: str | None,
+) -> None:
+    if knob is None:
+        monkeypatch.delenv("OMNIGENT_FACTORY_DEFAULT_BASE", raising=False)
+    else:
+        monkeypatch.setenv("OMNIGENT_FACTORY_DEFAULT_BASE", knob)
+
+    body = (await _get(authed_api, "/v1/factory/preflight")).json()
+
+    assert (body["default_repo"], body["default_base"]) == (repo, base)
 
 
 async def test_preflight_without_github_or_sandboxes(

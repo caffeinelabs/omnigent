@@ -10,6 +10,7 @@ Agents' claims never write these fields, and nothing here writes to GitHub.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from collections.abc import Iterable, Mapping, Sequence
@@ -136,18 +137,31 @@ def pr_alias(number: int) -> str:
     return f"pr{int(number)}"
 
 
-def refresh_query(numbers: Iterable[int]) -> str:
+def base_alias(index: int) -> str:
+    """:returns: The GraphQL alias of the *index*-th base branch in :func:`refresh_query`."""
+    return f"base{int(index)}"
+
+
+def refresh_query(numbers: Iterable[int], bases: Sequence[str] = ()) -> str:
     """
     Build the read-only query that refreshes several PRs of one repo.
 
     :param numbers: PR numbers, e.g. ``[9630, 9631]``.
-    :returns: A query taking ``$owner`` and ``$name``, one alias per PR plus ``rateLimit``.
+    :param bases: Branches whose head to read too, e.g. ``["temp-main"]``
+        (aliased :func:`base_alias` in this order); validated branch names.
+    :returns: A query taking ``$owner`` and ``$name``, one alias per PR and
+        per base plus ``rateLimit``.
     """
     parts = [
         f"    {pr_alias(n)}: pullRequest(number: {int(n)}) {{"
         + _PR_SELECTION.format(number=int(n))
         + "    }"
         for n in sorted(set(numbers))
+    ]
+    parts += [
+        f"    {base_alias(i)}: ref(qualifiedName: {json.dumps('refs/heads/' + base)}) "
+        "{ target { oid } }"
+        for i, base in enumerate(bases)
     ]
     return (
         "query($owner: String!, $name: String!) {\n"
@@ -306,6 +320,15 @@ def checks_failed_notice(pr: FactoryPr, names: Sequence[str]) -> str:
         f"[Factory notice · PR {pr.repo}#{pr.number} checks failed: {listed} "
         f"(head {_sha7(pr.head_sha)})] Dispatch a fix on {pr.head_ref or 'the branch'}. "
         f"{checks_url(pr.repo, pr.number)}"
+    )
+
+
+def base_notice(pr: FactoryPr, actual: str | None, expected: str | None) -> str:
+    """``[Factory notice · PR #<n> targets main, project base is temp-main · gh pr edit …]``."""
+    return (
+        f"[Factory notice · PR #{pr.number} targets {actual or '?'}, project base is "
+        f"{expected or '?'} · gh pr edit {pr.url} --base {expected or '?'}] Retarget it with "
+        "that command; its gates recheck on the next poll."
     )
 
 
@@ -687,6 +710,11 @@ async def _announce(
     ):
         names = (report.evidence.get("checks") or {}).get("failing_names") or []
         out.notices.append((pl_target, checks_failed_notice(pr, names)))
+    base_now = (pr.gates or {}).get("base")
+    if pr.state == "open" and base_now == GATE_FAIL and (row.gates or {}).get("base") != GATE_FAIL:
+        # Once per episode: a PR opened against the wrong branch is told how to retarget.
+        base = report.evidence.get("base") or {}
+        out.notices.append((pl_target, base_notice(pr, base.get("actual"), base.get("expected"))))
     if pr.ready and not row.ready:
         out.events.append(_event("pr.ready", f"PR #{pr.number} ready for human merge", "notice"))
         count = len(report.gates)
@@ -945,6 +973,8 @@ __all__ = [
     "FactoryScope",
     "active_factories",
     "apply_refresh",
+    "base_alias",
+    "base_notice",
     "changes_requested_notice",
     "checks_failed_notice",
     "closed_notice",
