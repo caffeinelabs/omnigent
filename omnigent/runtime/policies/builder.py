@@ -75,6 +75,11 @@ _ASK_ON_ADD_POLICY_SPEC = FunctionPolicySpec(
     ),
 )
 
+# Server-wide default policies that act only on conversations carrying a label
+# with this prefix (policy name -> prefix); the evaluate fast path skips them for
+# every other conversation instead of building an engine that would ALLOW.
+LABEL_GATED_DEFAULT_POLICIES: dict[str, str] = {}
+
 # Bounded cache of ``conversation_id -> session owner``. The owner
 # (``LEVEL_OWNER`` grantee) is immutable for a session's lifetime, so
 # caching it avoids a ``session_permissions`` lookup on every
@@ -259,7 +264,7 @@ def any_policies_apply(
     child_spec = _resolve_sub_agent_spec(spec, conversation)
     if child_spec is not None and child_spec.guardrails and child_spec.guardrails.policies:
         return True
-    if default_policies:
+    if default_policies and _server_defaults_apply(default_policies, conversation):
         return True
     if _load_default_policy_specs(policy_store):
         return True
@@ -267,6 +272,27 @@ def any_policies_apply(
     # this is a cache hit on any call after the first for this session.
     if _load_session_policy_specs(conversation_id, policy_store):
         return True
+    return False
+
+
+def _server_defaults_apply(
+    default_policies: list[PolicySpec], conversation: Conversation | None
+) -> bool:
+    """
+    Whether any server-wide default policy can act on *conversation*.
+
+    :param default_policies: ``RuntimeCaps.default_policies``.
+    :param conversation: The evaluated conversation, or ``None`` when unknown.
+    :returns: ``False`` only when every default is label-gated
+        (:data:`LABEL_GATED_DEFAULT_POLICIES`) and the conversation carries none
+        of the gating labels.
+    """
+    for policy in default_policies:
+        prefix = LABEL_GATED_DEFAULT_POLICIES.get(getattr(policy, "name", "") or "")
+        if prefix is None or conversation is None:
+            return True
+        if any(key.startswith(prefix) for key in conversation.labels):
+            return True
     return False
 
 

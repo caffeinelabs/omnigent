@@ -23,7 +23,7 @@ from starlette.requests import Request
 from omnigent.entities.factory import FactoryDecision, FactoryPr
 from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
 from omnigent.server.accounts_config import AccountsConfig
-from omnigent.server.auth import UnifiedAuthProvider
+from omnigent.server.auth import LEVEL_OWNER, UnifiedAuthProvider
 from omnigent.server.factory import nudge
 from omnigent.server.factory.api import cockpit_write
 from omnigent.server.factory.origin import require_human_origin
@@ -115,18 +115,44 @@ def _decision(cockpit: Cockpit, key: str = "k1") -> FactoryDecision:
     return decision
 
 
+def _new_root(cockpit: Cockpit) -> str:
+    conv = cockpit.world.make_session("atlas", agent="lead", title="Atlas")
+    cockpit.permissions.grant("alice", conv.id, LEVEL_OWNER)
+    return conv.id
+
+
+def _project(cockpit: Cockpit) -> str:
+    cockpit.store.upsert_project(
+        cockpit.fid,
+        "api-version",
+        title="API version",
+        repo="caffeinelabs/app",
+        charter={"goal": "Add GET /version."},
+        pl_session_id=cockpit.world.id("pl"),
+    )
+    return "api-version"
+
+
+_NEW_PROJECT = {"slug": "db-version", "repo": "caffeinelabs/app", "goal": "Show the DB version."}
+
 _Call = tuple[str, str, Any]
+# Each route with a body a person's request succeeds with.
 _ROUTES: dict[str, Callable[[Cockpit], _Call]] = {
-    "start": lambda c: ("POST", "/v1/factory/factories", {"root_session_id": c.fid}),
-    "add_project": lambda c: (
+    "start": lambda c: (
         "POST",
-        f"/v1/factory/factories/{c.fid}/projects",
-        {"slug": "db-version", "goal": "Show the DB version."},
+        "/v1/factory/factories",
+        {
+            "root_session_id": _new_root(c),
+            "name": "Atlas factory",
+            "cadence": "demo",
+            "projects": [{**_NEW_PROJECT, "env_needed": False}],
+        },
     ),
+    "add_project": lambda c: ("POST", f"/v1/factory/factories/{c.fid}/projects", _NEW_PROJECT),
     "charter": lambda c: (
         "PATCH",
-        f"/v1/factory/factories/{c.fid}/projects/api-version",
-        {"goal": "x"},
+        f"/v1/factory/factories/{c.fid}/projects/{_project(c)}",
+        {"goal": "Add GET /version with the git sha."},
     ),
     "control": lambda c: (
         "POST",
@@ -197,7 +223,7 @@ async def test_a_cross_site_cookie_request_gets_human_only(cockpit: Cockpit) -> 
 # ── People still pull the levers ─────────────────────────────────────────────
 
 
-@pytest.mark.parametrize("route", ["control", "answer", "feedback", "refresh"])
+@pytest.mark.parametrize("route", sorted(_ROUTES))
 @pytest.mark.parametrize("who", ["browser", "cli"])
 async def test_a_person_with_a_cookie_or_cli_bearer_passes(
     cockpit: Cockpit, route: str, who: str
@@ -206,7 +232,7 @@ async def test_a_person_with_a_cookie_or_cli_bearer_passes(
 
     resp = await _call(cockpit, route, headers)
 
-    assert resp.status_code in (200, 202), resp.text
+    assert resp.status_code in (200, 201, 202), resp.text
 
 
 async def test_agent_routes_keep_accepting_the_runner_token(

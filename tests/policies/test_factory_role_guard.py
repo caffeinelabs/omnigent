@@ -200,6 +200,10 @@ _DENIED_FOR_ALL = [
     # A quoted interpreter still runs its heredoc; double-quoted backticks run.
     "\"bash\" <<'EOF'\ngh pr merge 7\nEOF",
     'git commit -m "explain `gh pr merge 7`"',
+    # Process substitution runs its body, even under a read-only command.
+    "diff <(gh pr merge 7) notes.md",
+    "cat <(git push origin main)",
+    "tee >(gh pr merge 7) < notes.md",
 ]
 
 
@@ -277,6 +281,8 @@ _PR_COMMENTS = [
     "gh pr comment 7 --body 'Ready.\nNext: tilt down && git push origin main'",
     "gh pr comment https://github.com/caffeinelabs/app/pull/7 --body-file pr-comment.md",
     "gh api -X POST repos/caffeinelabs/app/issues/7/comments -f body=demo",
+    'gh api graphql -f query=\'mutation { addComment(input: {subjectId: "x", body: "d"}) '
+    "{ clientMutationId } }'",
 ]
 
 
@@ -552,6 +558,73 @@ _RED_TEAM = [
     "env OMNIGENT_FACTORY_X=1 cmd",
     "export OMNIGENT_FACTORY_X=1; cmd",
 ]
+# Config in (or set before) the command that sends an explicit factory/ push
+# elsewhere: a worktree made with ``-b … origin/temp-main`` tracks temp-main, so
+# push.default=upstream lands there; remote/url config repoints the repo.
+_PUSH_CONFIG_REDIRECTS = [
+    "git -c push.default=upstream push origin factory/a/b",
+    "git -c remote.origin.push=refs/heads/factory/a/b:refs/heads/temp-main "
+    "push origin factory/a/b",
+    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=upstream "
+    "git push origin factory/a/b",
+    "git config push.default upstream && git push origin factory/a/b",
+    "git -c url.https://github.com/caffeinelabs/infra.pushInsteadOf="
+    "https://github.com/caffeinelabs/app push origin factory/a/b",
+    "PD=upstream git --config-env push.default=PD push origin factory/a/b",
+    "git --config-env=push.default=PD push origin factory/a/b",
+    "git -C wt -c push.default=tracking push -u origin factory/a/b",
+    "git -c include.path=/tmp/push.cfg push origin factory/a/b",
+    "export GIT_CONFIG_PARAMETERS=\"'push.default'='upstream'\"",
+    "export GIT_CONFIG_COUNT=1",
+    "env GIT_CONFIG_GLOBAL=/tmp/g git push origin factory/a/b",
+    "GIT_CONFIG_PARAMETERS=x bash -c 'git push origin factory/a/b'",
+    # An inline alias or include hides a push behind another name.
+    "git -c alias.p='push origin factory/a/b:temp-main' p",
+    "git -c include.path=/tmp/alias.cfg ship",
+    # Persistent config writes that steer a later push.
+    "git config push.default upstream",
+    "git config --global push.default current",
+    "git config --add remote.origin.push HEAD:temp-main",
+    "git config remote.origin.pushurl https://github.com/caffeinelabs/infra",
+    "git config remote.origin.url git@github.com:caffeinelabs/infra.git",
+    "git config remote.origin.mirror true",
+    "git config set remote.origin.pushurl https://github.com/caffeinelabs/infra",
+    "git config --file .git/config url.git@github.com:caffeinelabs/infra.pushInsteadOf "
+    "https://github.com/caffeinelabs/app",
+    "git config --global url.https://github.com/caffeinelabs/infra.insteadOf "
+    "https://github.com/caffeinelabs/app",
+    "git config branch.factory/a/b.merge refs/heads/temp-main",
+    "git config alias.ship 'push origin factory/a/b:temp-main'",
+    "git config --replace-all remote.origin.push HEAD:temp-main",
+    "git config --rename-section remote.infra remote.origin",
+    "git config -e",
+    "git remote set-url origin https://github.com/caffeinelabs/infra",
+    "git remote set-url --push origin https://github.com/caffeinelabs/infra",
+    "git remote add infra https://github.com/caffeinelabs/infra",
+    "git remote rename origin old",
+    # Pushes in other spellings.
+    "git --attr-source HEAD push origin HEAD:temp-main",
+    "git send-pack origin HEAD:temp-main",
+]
+# Reading config, and config that cannot steer a push, stays open.
+_HARMLESS_GIT_CONFIG = [
+    "git config user.email ic@factory",
+    "git config --global user.name ic",
+    "git config --get push.default",
+    "git config get remote.origin.url",
+    "git config --list --show-origin",
+    "git config push.default",
+    "git config remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'",
+    "git -c user.name=ic -c user.email=ic@factory commit -m wip",
+    "git -c core.quotepath=off status",
+    "GIT_CONFIG_NOSYSTEM=1 git status",
+    "echo $GIT_CONFIG_GLOBAL",
+    "git remote -v",
+    "git remote get-url origin",
+    "git log -- omnigent/factory_merge.py",
+    "git diff origin/main -- omnigent/factory_merge.py",
+    "ls omnigent/factory_merge.py",
+]
 # Every push whose destination is not an explicit branch under factory/.
 _OFF_PREFIX_PUSHES = [
     "git push origin temp-main",
@@ -623,6 +696,8 @@ _FACTORY_ENV_WRITES = [
     _cases(_ALL_ROLES, _RED_TEAM, "DENY")
     + _cases(_ALL_ROLES, _OFF_PREFIX_PUSHES, "DENY")
     + _cases(_ALL_ROLES, _FACTORY_ENV_WRITES, "DENY")
+    + _cases(_ALL_ROLES, _PUSH_CONFIG_REDIRECTS, "DENY")
+    + _cases(_ALL_ROLES, _HARMLESS_GIT_CONFIG, "ALLOW")
     + _cases(_PUSHING_ROLES, _PREFIX_PUSHES, "ALLOW")
     + _cases(_NO_PUSH_ROLES, _PREFIX_PUSHES, "DENY")
     + _cases(_ALL_ROLES, _FACTORY_ENV_READS, "ALLOW"),
@@ -646,6 +721,21 @@ def test_tier0_push_allowlist_and_server_knobs(role: str, command: str, expected
 )
 def test_implicit_pushes_say_how_to_push_explicitly(command: str) -> None:
     """The hint is the exact command the IC skill documents."""
+    decision = _decide(ROLE_IC, command)
+    assert decision["result"] == "DENY"
+    assert "git push origin factory/<slug>/<task>" in decision["reason"]
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git -c push.default=upstream push origin factory/a/b",
+        "git config push.default upstream",
+        "GIT_CONFIG_COUNT=1 git push origin factory/a/b",
+    ],
+)
+def test_push_config_reasons_say_how_to_push(command: str) -> None:
+    """Every push-config denial names the explicit push the IC skill documents."""
     decision = _decide(ROLE_IC, command)
     assert decision["result"] == "DENY"
     assert "git push origin factory/<slug>/<task>" in decision["reason"]
@@ -685,6 +775,11 @@ _PLANNER_DENIED = [
     "gh api -X POST repos/caffeinelabs/app/issues/7/comments -f body=x",
     "gh api -X PATCH repos/caffeinelabs/app/pulls/7 -f title=x",
     "gh api graphql -f query='mutation { addPullRequestReview(input: {}) { x } }'",
+    'gh api graphql -f query=\'mutation { addComment(input: {subjectId: "x", body: "p"}) '
+    "{ clientMutationId } }'",
+    'gh api graphql -f query=\'mutation { createIssue(input: {repositoryId: "r", title: "t"}) '
+    "{ issue { number } } }'",
+    "gh api graphql -F query=@q.graphql -f q='mutation { closeIssue(input: {}) { x } }'",
     "git push origin factory/plan/x",
     "tilt up",
     "pnpm factory:preview up --name p1",

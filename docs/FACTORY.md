@@ -506,7 +506,8 @@ transcript folds.
   `gh secret`, `gh ruleset` and workflow toggles; every push but an explicit
   branch under `push_ref_prefixes` (`factory/`), so bare pushes,
   `git push origin HEAD`, deletes, tags and `main`/`master`/`staging`/`temp-main`
-  are denied; any push or PR creation by a lead, reviewer, planner or the demo
+  are denied, and so is git config that could redirect an explicit push (see
+  Invariants); any push or PR creation by a lead, reviewer, planner or the demo
   agent; writes to repos outside `write_repos` (default `caffeinelabs/app`) or
   inside `deny_repos` (`caffeinelabs/infra`, always, and `caffeinelabs/omnigent`);
   the `factory:allow-protected` label; every PR write but `gh pr comment` by
@@ -551,19 +552,24 @@ enforced in code.
 | Invariant | Enforced by |
 |---|---|
 | The factory never merges (any repo, `temp-main` included). | The guard denies raw `gh pr merge`, MCP merges, merge-capable `gh api`/GraphQL calls and every `omnigent.factory_merge` run without `--dry-run` (`python -m`, a script path, `python -c` code, a Python heredoc), for every role. It also denies any `OMNIGENT_FACTORY_*=` assignment, `env OMNIGENT_FACTORY_…` or `export OMNIGENT_FACTORY_…`, which closes the inline `OMNIGENT_FACTORY_MERGE_REPOS=… python -m omnigent.factory_merge` override. `OMNIGENT_FACTORY_MERGE_REPOS` stays empty on the server. |
-| Agents push only `factory/**` (the `smith` profile: `factory/self/**`). | `push_ref_prefixes` in every bundle's `factory_guard`: each explicit refspec destination must be `refs/heads/<prefix>**`. A bare `git push` and `git push <remote> HEAD` are denied (their destination depends on config and the checked-out branch, which the guard cannot see), so the IC prompts always push `git push -u origin factory/<slug>/<task>`. Deletes (`:<b>`, `--delete`, `--prune`), tags, `--all`/`--mirror` and API ref writes outside the prefix are denied too. `temp-main` is in the default `protected_branches`. |
+| Agents push only `factory/**` (the `smith` profile: `factory/self/**`). | `push_ref_prefixes` in every bundle's `factory_guard`: each explicit refspec destination must be `refs/heads/<prefix>**`. A bare `git push` and `git push <remote> HEAD` are denied (their destination depends on config and the checked-out branch, which the guard cannot see), so the IC prompts always push `git push -u origin factory/<slug>/<task>`. An explicit `<src>` still follows config: with `push.default=upstream` it lands on the branch's upstream, and `remote.<r>.push`, `pushurl` or `url.<x>.pushInsteadOf` repoint it. So the guard also denies `-c`/`--config-env` on a push, any `GIT_CONFIG_*` assignment, `git config` writes to `push.*`, `remote.<r>.url\|pushurl\|push\|mirror`, `url.*`, `branch.*`, `alias.*` and `include.*`, and `git remote add\|set-url\|rename`; the IC worktree is created with `--no-track`, so its branch has no upstream to fall back to. Deletes (`:<b>`, `--delete`, `--prune`), tags, `--all`/`--mirror` and API ref writes outside the prefix are denied too. `temp-main` is in the default `protected_branches`. |
 | No writes to `caffeinelabs/infra`; none to `caffeinelabs/omnigent` outside the `smith` profile. | `deny_repos`; `caffeinelabs/infra` is denied whatever a spec passes. The `smith` profile (`write_repos: [caffeinelabs/omnigent]`, `push_ref_prefixes: [factory/self/]`, never merges) is registered for Tier 2 and unused while Tier 2 is off. |
 | Factory agents always run fenced, and never run a bundle of their own making. | `server/bundles.validate_agent_bundle` rejects any (sub-)agent spec with `executor.config.factory_role` that lacks an unconditional `factory_role_guard` with the same role plus `blast_radius`. `sys_session_create(config_path=…)` from a session whose root carries `omnigent.factory.id` gets 403 `factory_custom_bundle_denied` (`server/factory/custom_bundle.py`). |
-| Human levers come from humans. | `server/factory/origin.py:require_human_origin` on every cockpit write route (start, add project, charter, control, decision answer and withdraw, PR feedback and refresh; new human routes use `HUMAN_ORIGIN` too). It answers 403 `human_only` when the request carries the runner tunnel token header, a runner bearer (`mint_runner_token` stamps `"org": "runner"`), or an untrusted `Origin`. A person's cookie and their own CLI bearer pass. |
-| Tuning writes are audited; server-only labels stay server-only. | `PATCH /v1/factory/sessions/{id}` emits `label.changed {field, label, from, to, by, by_kind, by_role, on_behalf_of}` for each label it changes, and refuses `def_version`, `default_repo`, `default_base`, `mode`, `engine_mode` and `autonomy_projects` with 422 `server_only_label`. |
+| Human levers come from humans. | `server/factory/origin.py:require_human_origin` on every cockpit write route (start, add project, charter, control, decision answer and withdraw, PR feedback and refresh; new human routes use `HUMAN_ORIGIN` too). It answers 403 `human_only` when the request carries the runner tunnel token header, a runner bearer (`mint_runner_token` stamps `"org": "runner"`), or an untrusted `Origin`. A person's cookie and their own CLI bearer pass. In accounts mode, `/auth/magic`, `/auth/users/me/password`, `/auth/invite` and `/auth/users/{id}/reset` refuse runners too, so a runner bearer never becomes a browser cookie, a password or an account. |
+| Agents' label writes are audited; server-only labels stay out of agents' reach. | `PATCH /v1/factory/sessions/{id}` emits `label.changed {field, label, from, to, by, by_kind, by_role, on_behalf_of}` for each label it changes, and refuses `def_version`, `default_repo`, `default_base`, `mode`, `engine_mode` and `autonomy_projects` with 422 `server_only_label`. The generic `PATCH /v1/sessions/{id}` refuses every `omnigent.factory.*` label from a runner (its tunnel header or bearer) with 403, so an agent cannot route around the audit. A person with EDIT can still set them there. |
 | Invariants hold even if a bundle is wrong. | The admin default policy `factory_invariants` ([`policies/builtins/factory_invariants.py`](../omnigent/policies/builtins/factory_invariants.py)), seeded into the server-wide defaults when `OMNIGENT_FACTORY_ENABLED=1` (`OMNIGENT_FACTORY_INVARIANTS=0` leaves it out), repeats the push, deny-repo, merge and knob rules for every session whose labels carry `omnigent.factory.*`. Admin policies run after the spec's and short-circuit on DENY. |
 
 **The honest limit.** The guard is a safety net against accidents, not a
 security boundary: agents act with the creator's GitHub token, so a script,
 an alias, a `curl` to the REST API or code the guard cannot read can still
-merge. The real boundary is a factory GitHub identity without merge or admin
-rights. It is required before Tier 2 (self-modification PRs to omnigent) and
-recommended sooner.
+merge, and git config written by editing `.git/config` or `~/.gitconfig`
+directly can still redirect a push. A lead or PL can also start a child with
+`sys_session_create(agent_id=<another agent>)`: the child runs that agent's
+spec, not the factory guard, and carries no factory labels, so
+`factory_invariants` abstains for it too. The real boundary is a factory
+GitHub identity without merge or admin rights, plus a ruleset on the base
+branches. It is required before Tier 2 (self-modification PRs to omnigent)
+and recommended sooner.
 
 **Spike results (round 3).**
 
@@ -574,9 +580,9 @@ recommended sooner.
   and the PLs carry `omnigent.factory.*` labels; sub-agents (IC, ic_codex,
   env_keeper, reviewer, demo, planner) carry none, so for them the invariant
   policy abstains. They stay fenced by their own guard and their root PL's
-  spec guard, which bundle validation pins. Adding a default policy also
-  turns off the evaluate fast path for sessions without guardrails on that
-  server.
+  spec guard, which bundle validation pins. The evaluate fast path skips
+  the invariant for sessions without factory labels, so other sessions on
+  that server build no extra engine.
 - **Does a `config_path` child escape the spec guard?** Yes, before this
   change: the child runs the uploaded spec, not its parent's, so the parent's
   `factory_guard` does not apply to it. The server now refuses the upload

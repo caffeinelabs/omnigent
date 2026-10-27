@@ -38,6 +38,8 @@ from typing import TYPE_CHECKING
 
 from starlette.requests import HTTPConnection
 
+from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
+
 logger = logging.getLogger(__name__)
 
 # Opt-in multi-user switch.
@@ -755,6 +757,27 @@ class UnifiedAuthProvider(AuthProvider):
         if self._local_single_user:
             return RESERVED_USER_LOCAL
         return None
+
+
+def runner_origin(request: HTTPConnection, provider: object) -> str | None:
+    """
+    Say why *request* comes from a runner (an agent's callback) rather than a person.
+
+    Runner bearers authenticate as the session owner, so routes that turn a
+    credential into a human one (or pull a human lever) check this first.
+
+    :param request: The incoming HTTP request or WebSocket.
+    :param provider: The server's auth provider; anything but an
+        :class:`AuthProvider` only gets the header check.
+    :returns: ``"the runner tunnel token header"`` or ``"a runner token"``, or
+        ``None`` for a request no runner made.
+    """
+    if request.headers.get(RUNNER_TUNNEL_TOKEN_HEADER) is not None:
+        return "the runner tunnel token header"
+    found = provider.session_token_claims(request) if isinstance(provider, AuthProvider) else None
+    if found is not None and found[1].get(ORIGIN_CLAIM) == RUNNER_ORIGIN:
+        return "a runner token"
+    return None
 
 
 def create_auth_provider() -> AuthProvider:

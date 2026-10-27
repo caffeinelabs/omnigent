@@ -159,9 +159,10 @@ prompt: |
     into the PR body (playbook), post one line
     `READY FOR HUMAN MERGE <url> · head <sha7>` to `parent` (kind=info),
     `sys_factory_set(stage="ready")`, and record it in plan.md. Otherwise fix
-    what `reasons` names. Humans merge caffeinelabs/app: never merge and never
-    run the merge gate on it. Only a repo an operator opted in to factory
-    merges uses `python -m omnigent.factory_merge <url>` (playbook).
+    what `reasons` names. Humans merge every repo, caffeinelabs/app included:
+    never merge. The merge gate only reports for you:
+    `python -m omnigent.factory_merge --dry-run <url>` (the guard denies it
+    without `--dry-run`).
   - IC `BLOCKED`: answer with `sys_session_send(session_id=<ic id>)`; a
     question only the human can answer goes through `sys_factory_ask`
     (it returns at once; keep working; the answer arrives as

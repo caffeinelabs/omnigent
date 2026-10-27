@@ -61,6 +61,16 @@ _DENIED = [
     "gh pr create -R caffeinelabs/infra --fill",
     "gh pr create -R caffeinelabs/omnigent --fill",
     "gh api -X PUT repos/caffeinelabs/app/pulls/7/merge",
+    # Config that sends an explicit factory/ push to temp-main or another repo.
+    "git -c push.default=upstream push origin factory/a/b",
+    "git -c remote.origin.push=refs/heads/factory/a/b:refs/heads/temp-main "
+    "push origin factory/a/b",
+    "GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=push.default GIT_CONFIG_VALUE_0=upstream "
+    "git push origin factory/a/b",
+    "git config push.default upstream && git push origin factory/a/b",
+    "git -c url.https://github.com/caffeinelabs/infra.pushInsteadOf="
+    "https://github.com/caffeinelabs/app push origin factory/a/b",
+    "git remote set-url --push origin https://github.com/caffeinelabs/infra",
 ]
 # Role rules stay with the role guard: the invariants repeat only Tier 0.
 _ALLOWED = [
@@ -72,6 +82,8 @@ _ALLOWED = [
     "gh pr create -R octo/hello --fill",
     "tilt up",
     "echo $OMNIGENT_FACTORY_MERGE_REPOS",
+    "git config user.email ic@factory",
+    "git log -- omnigent/factory_merge.py",
 ]
 
 
@@ -222,3 +234,41 @@ async def test_admin_default_policy_sees_conversation_labels(
     assert result.action == (PolicyAction.DENY if expected == "DENY" else PolicyAction.ALLOW)
     if expected == "DENY":
         assert "Factory invariant" in (result.reason or "")
+
+
+def test_plain_sessions_keep_the_evaluate_fast_path(db_uri: str) -> None:
+    """Seeding the invariant never builds an engine for a session it cannot act on."""
+    from omnigent.runtime.policies.builder import (
+        LABEL_GATED_DEFAULT_POLICIES,
+        any_policies_apply,
+    )
+    from omnigent.spec.types import AgentSpec
+    from omnigent.stores.conversation_store.sqlalchemy_store import (
+        SqlAlchemyConversationStore,
+    )
+
+    store = SqlAlchemyConversationStore(db_uri)
+    plain = store.create_conversation()
+    member = store.create_conversation()
+    store.set_labels(member.id, _FACTORY_LABELS)
+    spec = AgentSpec(spec_version=1, name="no-guardrails")
+    defaults: list[Any] = []
+
+    def applies(conv_id: str, *, with_row: bool = True) -> bool:
+        return any_policies_apply(
+            spec=spec,
+            conversation_id=conv_id,
+            default_policies=defaults,
+            policy_store=None,
+            conversation=store.get_conversation(conv_id) if with_row else None,
+        )
+
+    unseed = seed_invariant_policy(defaults)
+    try:
+        assert applies(member.id) is True
+        assert applies(plain.id) is False
+        # Without the row the fast path cannot tell, so it builds the engine.
+        assert applies(plain.id, with_row=False) is True
+    finally:
+        unseed()
+    assert LABEL_GATED_DEFAULT_POLICIES[POLICY_NAME] == F.LABEL_PREFIX

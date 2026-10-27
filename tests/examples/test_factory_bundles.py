@@ -457,8 +457,10 @@ def test_prompts_carry_the_operational_contracts(lead: AgentSpec, pl: AgentSpec)
         "[Factory review · CHANGES REQUESTED",
     ):
         assert token in pl_text, token
-    # Humans merge caffeinelabs/app: the PL hands green PRs over instead.
-    assert "never merge and never run the merge gate on it" in " ".join(pl_text.split())
+    # Humans merge every repo: the PL hands green PRs over and runs the gate only as a dry run.
+    flat = " ".join(pl_text.split())
+    assert "Humans merge every repo" in flat
+    assert "python -m omnigent.factory_merge --dry-run <url>" in flat
     env_text = _sub_agent(pl, "env_keeper").instructions or ""
     for token in (
         "UP base=<base>:",

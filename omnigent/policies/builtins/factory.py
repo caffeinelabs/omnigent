@@ -20,6 +20,10 @@ Omnigent terminal) and denies:
 - ``git push`` of anything but an explicit branch under ``push_ref_prefixes``
   (``factory/`` by default): bare pushes, ``HEAD`` without a destination,
   deletes, tags, every branch, protected branches;
+- the git config that can redirect such a push: ``-c`` / ``--config-env`` on a
+  push, ``GIT_CONFIG_*`` assignments, ``git config`` writes to ``push.*``,
+  ``remote.<r>.url|pushurl|push|mirror``, ``url.*``, ``branch.*``, ``alias.*``
+  or ``include.*``, and ``git remote add|set-url|rename``;
 - PR writes and pushes that name a repo outside ``write_repos`` (or inside
   ``deny_repos``) by ``-R``, URL or ``GH_REPO``;
 - per role: any push or PR creation (CLI or API) by a lead, reviewer, planner
@@ -136,6 +140,17 @@ _INERT_HEADS: frozenset[str] = frozenset(
         "sed",
         "awk",
         "wc",
+        "ls",
+        "stat",
+        "file",
+        "tree",
+        "du",
+        "diff",
+        "cmp",
+        "realpath",
+        "readlink",
+        "basename",
+        "dirname",
     }
 )
 # Wrappers whose command string is re-parsed wherever they appear in a statement.
@@ -262,6 +277,12 @@ _GRAPHQL_PR_WRITE = re.compile(
     r"|(add|submit|dismiss)PullRequestReview\w*|markPullRequestReadyForReview"
     r"|convertPullRequestToDraft|mergePullRequest)\b"
 )
+# GraphQL comment and issue writes (a PR comment is ``addComment`` too): the planner writes none.
+_GRAPHQL_ISSUE_WRITE = re.compile(
+    r"\b(addComment|(update|delete)IssueComment|(create|update|close|reopen|delete|transfer"
+    r"|pin|unpin)Issue|addLabelsToLabelable|removeLabelsFromLabelable|(add|remove)Assignees\w*"
+    r"|(add|remove)Reaction|(lock|unlock)Lockable|createDiscussion|addDiscussionComment)\b"
+)
 _GRAPHQL_ADMIN_MUTATION = re.compile(
     r"\b(mergePullRequest|enablePullRequestAutoMerge|mergeBranch|createCommitOnBranch"
     r"|(create|update|delete)(BranchProtectionRule|RepositoryRuleset)"
@@ -278,6 +299,79 @@ _PUSH_ALL_FLAGS: frozenset[str] = frozenset({"--all", "--branches", "--mirror"})
 _PUSH_DELETE_FLAGS: frozenset[str] = frozenset({"--delete", "--prune"})
 # A refspec source without a destination that names the checked-out branch.
 _PUSH_HEAD_SOURCES: frozenset[str] = frozenset({"HEAD", "@"})
+# Plumbing that pushes like ``git push`` but with its own syntax.
+_GIT_PUSH_PLUMBING: frozenset[str] = frozenset({"send-pack", "http-push"})
+
+# git's global options that take a separate value (``git --config-env k=V push``).
+_GIT_VALUE_OPTS: frozenset[str] = _GIT_GLOBAL_VALUE_OPTS | {"--config-env", "--attr-source"}
+# Global options that inject config for one run.
+_GIT_CONFIG_OPTS: frozenset[str] = frozenset({"-c", "--config-env"})
+# Config sections that can send a push elsewhere or hide one: push.default=upstream,
+# url.<x>.pushInsteadOf, branch.<b>.merge, an alias or an included file.
+_GIT_PUSH_CONFIG_SECTIONS: frozenset[str] = frozenset(
+    {"push", "url", "branch", "alias", "include", "includeif"}
+)
+# Per-remote keys that pick where a push lands (``remote.<r>.fetch`` stays open).
+_GIT_REMOTE_PUSH_KEYS: frozenset[str] = frozenset(
+    {"url", "pushurl", "push", "mirror", "receivepack", "vcs", "pushdefault"}
+)
+# ``git config`` options and subcommands that only read.
+_GIT_CONFIG_READ_FLAGS: frozenset[str] = frozenset(
+    {
+        "--get",
+        "--get-all",
+        "--get-regexp",
+        "--get-urlmatch",
+        "--get-color",
+        "--get-colorbool",
+        "-l",
+        "--list",
+    }
+)
+_GIT_CONFIG_READ_ACTIONS: frozenset[str] = frozenset({"get", "list"})
+_GIT_CONFIG_VALUE_FLAGS: frozenset[str] = frozenset(
+    {"-f", "--file", "--blob", "--type", "--default", "--comment", "--value", "--url"}
+)
+_GIT_CONFIG_SECTION_FLAGS: frozenset[str] = frozenset({"--rename-section", "--remove-section"})
+_GIT_CONFIG_SECTION_ACTIONS: frozenset[str] = frozenset({"rename-section", "remove-section"})
+_GIT_CONFIG_WRITE_FLAGS: frozenset[str] = frozenset(
+    {"--add", "--replace-all", "--unset", "--unset-all"}
+)
+# Sections whose renaming or removal can repoint a push.
+_GIT_GUARDED_SECTIONS: frozenset[str] = _GIT_PUSH_CONFIG_SECTIONS | {"remote"}
+# ``git remote`` actions that point a remote name at another URL.
+_GIT_REMOTE_WRITE_ACTIONS: frozenset[str] = frozenset({"add", "set-url", "rename"})
+# git subcommands whose arguments are revisions and paths, never commands to run.
+_GIT_PATH_SUBCOMMANDS: frozenset[str] = frozenset(
+    {
+        "add",
+        "annotate",
+        "blame",
+        "cat-file",
+        "checkout",
+        "commit",
+        "diff",
+        "log",
+        "ls-files",
+        "ls-tree",
+        "mv",
+        "reset",
+        "restore",
+        "rm",
+        "shortlog",
+        "show",
+        "status",
+        "switch",
+    }
+)
+# Env vars that inject git config into every git the command runs (``GIT_CONFIG_NOSYSTEM``
+# only drops config, so it stays open).
+_GIT_CONFIG_ENV = r"GIT_CONFIG(?:_(?:COUNT|PARAMETERS|GLOBAL|SYSTEM|KEY_\w*|VALUE_\w*))?(?!\w)"
+_GIT_CONFIG_ENV_ASSIGN_RE = re.compile(rf"(?<![\w$-]){_GIT_CONFIG_ENV}[+:]?=")
+_GIT_CONFIG_ENV_EXPORT_RE = re.compile(
+    r"(?<![\w./-])(?:export|env|declare|typeset|readonly|local|read)\b[^;&|\n]*?"
+    rf"(?<![\w$]){_GIT_CONFIG_ENV}|\bprintf\s+-v\s*{_GIT_CONFIG_ENV}"
+)
 
 # The planner reads only: no issue writes either.
 _GH_ISSUE_WRITE_ACTIONS: frozenset[str] = frozenset(
@@ -500,7 +594,7 @@ def _substitution_end(command: str, start: int, closer: str) -> int | None:
 
 def _extract_substitutions(command: str) -> tuple[str, list[str]]:
     """
-    Pull out ``$(…)`` / backtick bodies, leaving single-quoted text literal.
+    Pull out ``$(…)`` / backtick / ``<(…)`` bodies, leaving single-quoted text literal.
 
     ``git commit -m 'explain `tilt up`'`` runs nothing, while the same
     backticks in double quotes do. Unbalanced quoting falls back to the shared
@@ -525,6 +619,9 @@ def _extract_substitutions(command: str) -> tuple[str, list[str]]:
             index += 2
             continue
         opener = 2 if command.startswith("$(", index) else 1 if char == "`" else 0
+        # Process substitution (``diff <(gh pr merge 7) x``) runs too, outside quotes.
+        if not opener and not quote and command.startswith(("<(", ">("), index):
+            opener = 2
         if opener:
             end = _substitution_end(command, index + opener, ")" if opener == 2 else "`")
             if end is None:
@@ -725,6 +822,50 @@ def _github_url_repos(args: Sequence[str]) -> list[str]:
     return repos
 
 
+def _git_global_options(args: Sequence[str]) -> tuple[list[str], int]:
+    """
+    Read git's global options: the config they inject and where the subcommand starts.
+
+    :param args: Arguments after ``git``, e.g. ``["-c", "push.default=upstream", "push"]``.
+    :returns: The ``-c`` / ``--config-env`` entries and the subcommand's index,
+        e.g. ``(["push.default=upstream"], 2)``.
+    """
+    configs: list[str] = []
+    index = 0
+    while index < len(args) and args[index].startswith("-"):
+        token = args[index]
+        if token in _GIT_VALUE_OPTS:
+            if token in _GIT_CONFIG_OPTS and index + 1 < len(args):
+                configs.append(args[index + 1])
+            index += 2
+            continue
+        name, equals, value = token.partition("=")
+        if equals and name in _GIT_CONFIG_OPTS:
+            configs.append(value)
+        index += 1
+    return configs, index
+
+
+def _git_config_key(entry: str) -> str:
+    """:returns: The lowercase key of a ``-c`` entry, e.g. ``"push.default"``."""
+    return entry.partition("=")[0].strip().lower()
+
+
+def _git_key_redirects_push(key: str) -> bool:
+    """
+    Whether writing git config *key* can send a later push elsewhere or hide one.
+
+    :param key: A config key, e.g. ``"remote.origin.pushurl"`` or ``"push.default"``.
+    :returns: ``True`` for push.*, url.*, branch.*, alias.*, include(If).* and the
+        remote keys that pick a push's destination.
+    """
+    key = key.lower()
+    section = key.split(".", 1)[0]
+    if section in _GIT_PUSH_CONFIG_SECTIONS:
+        return True
+    return section == "remote" and key.rsplit(".", 1)[-1] in _GIT_REMOTE_PUSH_KEYS
+
+
 def _ref_prefixes(values: Sequence[str]) -> tuple[str, ...]:
     """
     Normalize push-ref prefixes to bare branch prefixes ending in ``/``.
@@ -784,6 +925,13 @@ class _RoleGuard:
         """
         if _FACTORY_ENV_ASSIGN_RE.search(command) or _FACTORY_ENV_EXPORT_RE.search(command):
             return _FACTORY_ENV_REASON
+        if _GIT_CONFIG_ENV_ASSIGN_RE.search(command) or _GIT_CONFIG_ENV_EXPORT_RE.search(command):
+            return (
+                "Setting `GIT_CONFIG_*` in a command is blocked: injected git config "
+                "(push.default, remote.<r>.push, url.<x>.pushInsteadOf, …) can send a push to "
+                "another branch or repo. Run git without it and push explicitly: "
+                f"{self._push_hint()}."
+            )
         if any(_MERGE_GATE_RE.search(body) for body in _split_heredocs(command)[1]):
             return self._merge_gate_reason(None, [])
         gh_repos = tuple(
@@ -810,8 +958,14 @@ class _RoleGuard:
         """
         if argv[0] == _TOO_DEEP:
             return "The command nests shell interpreters too deeply to check; run it directly."
-        if _token_name(argv[0]) in _INERT_HEADS:
+        head = _token_name(argv[0])
+        if head in _INERT_HEADS:
             return None
+        if head == "git":
+            configs, sub = _git_global_options(argv[1:])
+            # ``git log -- omnigent/factory_merge.py``: revisions and paths, nothing to run.
+            if not configs and sub + 1 < len(argv) and argv[sub + 1] in _GIT_PATH_SUBCOMMANDS:
+                return self._check_git(argv[1:])
         for index, token in enumerate(argv):
             reason = self._check_command_at(_token_name(token), argv[index + 1 :], gh_repos)
             if reason:
@@ -1051,6 +1205,10 @@ class _RoleGuard:
                 )
             if any(ALLOW_PROTECTED_LABEL in field for field in fields):
                 return self._label_reason()
+            if any(_GRAPHQL_ISSUE_WRITE.search(field) for field in fields):
+                reason = self._planner_reason("gh api graphql (comment or issue mutation)")
+                if reason:
+                    return reason
             if any(_GRAPHQL_PR_WRITE.search(field) for field in fields):
                 what = "gh api graphql (pull request mutation)"
                 return self._planner_reason(what) or self._demo_pr_reason(what)
@@ -1144,20 +1302,111 @@ class _RoleGuard:
 
     def _check_git(self, args: list[str]) -> str | None:
         """
-        Classify a ``git`` invocation; only ``push`` is gated.
+        Classify a ``git`` invocation: pushes, and the config that steers them.
 
         :param args: Arguments after ``git``, e.g. ``["-C", "wt", "push", "origin", "main"]``.
         :returns: A DENY reason, or ``None``.
         """
-        index = 0
-        while index < len(args) and args[index].startswith("-"):
-            index += 2 if args[index] in _GIT_GLOBAL_VALUE_OPTS else 1
-        if index >= len(args) or args[index] != "push":
+        configs, index = _git_global_options(args)
+        sub = args[index] if index < len(args) else ""
+        rest = args[index + 1 :]
+        reason = self._git_inline_config_reason(configs, sub)
+        if reason:
+            return reason
+        if sub == "config":
+            return self._git_config_reason(rest)
+        if sub == "remote":
+            return self._git_remote_reason(rest)
+        if sub not in {"push", *_GIT_PUSH_PLUMBING}:
             return None
         reason = self._no_push_reason("git push")
         if reason:
             return reason
-        return self._check_push(args[index + 1 :])
+        if sub in _GIT_PUSH_PLUMBING:
+            return f"`git {sub}` is blocked: push explicitly with {self._push_hint()}."
+        return self._check_push(rest)
+
+    def _git_inline_config_reason(self, configs: Sequence[str], sub: str) -> str | None:
+        """
+        DENY ``-c`` / ``--config-env`` on a push, and inline aliases or includes anywhere.
+
+        ``git -c push.default=upstream push origin factory/a/b`` lands on the
+        branch's upstream (``temp-main`` for a worktree made from it), and
+        ``-c alias.x='push …'`` or ``-c include.path=…`` hides a push entirely.
+
+        :param configs: The ``key=value`` entries, e.g. ``["push.default=upstream"]``.
+        :param sub: The git subcommand, e.g. ``"push"``.
+        :returns: A DENY reason, or ``None``.
+        """
+        if not configs:
+            return None
+        if sub == "push" or sub in _GIT_PUSH_PLUMBING:
+            return (
+                "`git -c` / `--config-env` on a push is blocked: inline config (push.default, "
+                "remote.<r>.push, url.<x>.pushInsteadOf, …) can send it to another branch or "
+                f"repo. Push without it: {self._push_hint()}."
+            )
+        keys = [_git_config_key(entry) for entry in configs]
+        if any(key.split(".", 1)[0] in {"alias", "include", "includeif"} for key in keys):
+            return (
+                "Inline git aliases and includes (`git -c alias.*` / `include.*`) are blocked: "
+                f"they can hide a push. Run the git command itself; push with {self._push_hint()}."
+            )
+        return None
+
+    def _git_config_reason(self, args: list[str]) -> str | None:
+        """
+        DENY ``git config`` writes to keys that steer pushes (reads stay open).
+
+        :param args: Arguments after ``git config``, e.g. ``["push.default", "upstream"]``.
+        :returns: A DENY reason, or ``None``.
+        """
+        flags = {token.split("=", 1)[0] for token in args if token.startswith("-")}
+        positionals = _positionals(args, _GIT_CONFIG_VALUE_FLAGS)
+        action = positionals[0] if positionals else ""
+        if flags & {"-e", "--edit"} or action == "edit":
+            return self._git_config_write_reason("git config --edit")
+        if flags & _GIT_CONFIG_READ_FLAGS or action in _GIT_CONFIG_READ_ACTIONS:
+            return None
+        keys: list[str] = []
+        sections: list[str] = []
+        if action in {"set", "unset"}:
+            keys = positionals[1:2]
+        elif action in _GIT_CONFIG_SECTION_ACTIONS:
+            sections = positionals[1:3]
+        elif flags & _GIT_CONFIG_SECTION_FLAGS:
+            sections = positionals[:2]
+        elif flags & _GIT_CONFIG_WRITE_FLAGS or len(positionals) > 1:
+            keys = positionals[:1]
+        hits = [key for key in keys if _git_key_redirects_push(key)] + [
+            name for name in sections if name.split(".", 1)[0].lower() in _GIT_GUARDED_SECTIONS
+        ]
+        return self._git_config_write_reason(f"git config {hits[0]}") if hits else None
+
+    def _git_config_write_reason(self, what: str) -> str:
+        """DENY a git config write that can steer a push."""
+        return (
+            f"`{what}` is blocked: push.*, remote.<r>.url|pushurl|push|mirror, url.*, branch.*, "
+            "alias.* and include.* decide where a later push lands, so factory agents never "
+            f"write them. Push explicitly: {self._push_hint()}; anything else is "
+            f"{_HUMAN_ONLY_HINT}."
+        )
+
+    def _git_remote_reason(self, args: list[str]) -> str | None:
+        """
+        DENY ``git remote add|set-url|rename``: they point a remote name at another URL.
+
+        :param args: Arguments after ``git remote``, e.g. ``["set-url", "origin", "<url>"]``.
+        :returns: A DENY reason, or ``None``.
+        """
+        positionals = _positionals(args, {"-t", "-m"})
+        action = positionals[0] if positionals else ""
+        if action not in _GIT_REMOTE_WRITE_ACTIONS:
+            return None
+        return (
+            f"`git remote {action}` is blocked: remotes decide where a push lands. Push to "
+            f"`origin` ({self._push_hint()}); remotes are {_HUMAN_ONLY_HINT}."
+        )
 
     def _check_push(self, args: list[str]) -> str | None:
         """
@@ -1166,6 +1415,8 @@ class _RoleGuard:
         Only explicit refspecs whose destination is a branch under
         ``push_ref_prefixes`` pass; anything whose destination depends on
         config or the checked-out branch (a bare push, ``HEAD``) is denied.
+        A bare ``<src>`` still follows ``push.default=upstream`` and
+        ``remote.<r>.push``, so :meth:`_check_git` gates the config that sets them.
 
         :param args: Arguments after ``git push``, e.g. ``["-u", "origin", "HEAD:main"]``.
         :returns: A DENY reason, or ``None``.

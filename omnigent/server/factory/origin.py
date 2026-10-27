@@ -19,13 +19,7 @@ from __future__ import annotations
 
 from fastapi import Depends, Request
 
-from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
-from omnigent.server.auth import (
-    ORIGIN_CLAIM,
-    RUNNER_ORIGIN,
-    AuthProvider,
-    local_single_user_enabled,
-)
+from omnigent.server.auth import local_single_user_enabled, runner_origin
 from omnigent.server.factory.context import factory_deps
 from omnigent.server.factory.routes import FactoryRouteError
 from omnigent.server.ws_origin import origin_allowed, parse_allowed_origins
@@ -40,12 +34,9 @@ def runner_origin_reason(request: Request) -> str | None:
     :param request: The incoming request.
     :returns: e.g. ``"a runner token"``, or ``None`` for a human request.
     """
-    if request.headers.get(RUNNER_TUNNEL_TOKEN_HEADER) is not None:
-        return "the runner tunnel token header"
-    provider = factory_deps(request.app.state).auth_provider
-    found = provider.session_token_claims(request) if isinstance(provider, AuthProvider) else None
-    if found is not None and found[1].get(ORIGIN_CLAIM) == RUNNER_ORIGIN:
-        return "a runner token"
+    reason = runner_origin(request, factory_deps(request.app.state).auth_provider)
+    if reason is not None:
+        return reason
     if not origin_allowed(
         request.headers.get("origin"),
         local_mode=local_single_user_enabled(),

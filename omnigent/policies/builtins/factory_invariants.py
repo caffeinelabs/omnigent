@@ -12,8 +12,11 @@ root's spec guard) and repeats the role-independent rules of
 - pushes only to explicit branches under ``push_ref_prefixes``;
 - no writes to ``deny_repos`` (``caffeinelabs/infra`` always);
 - no merges (raw, MCP, API, or the merge gate without ``--dry-run``);
-- no ``OMNIGENT_FACTORY_*`` assignments in commands.
+- no ``OMNIGENT_FACTORY_*`` assignments in commands;
+- no git config that redirects a push (``-c``/``--config-env`` on a push,
+  ``GIT_CONFIG_*``, ``git config`` writes to push/remote/url/branch/alias keys).
 
+Sessions without factory labels skip it on the evaluate fast path.
 ``OMNIGENT_FACTORY_INVARIANTS=0`` leaves it unseeded.
 """
 
@@ -94,6 +97,7 @@ def seed_invariant_policy(default_policies: list[Any]) -> Callable[[], None]:  #
     :param default_policies: ``RuntimeCaps.default_policies``, mutated in place.
     :returns: A callable that removes what this call added (a no-op otherwise).
     """
+    from omnigent.runtime.policies.builder import LABEL_GATED_DEFAULT_POLICIES
     from omnigent.spec.types import FunctionPolicySpec, FunctionRef
 
     if any(getattr(p, "name", None) == POLICY_NAME for p in default_policies):
@@ -102,6 +106,8 @@ def seed_invariant_policy(default_policies: list[Any]) -> Callable[[], None]:  #
         name=POLICY_NAME, on=None, function=FunctionRef(path=HANDLER, arguments=None)
     )
     default_policies.append(spec)
+    # Sessions without factory labels keep the evaluate fast path.
+    LABEL_GATED_DEFAULT_POLICIES[POLICY_NAME] = LABEL_PREFIX
 
     def _unseed() -> None:
         if spec in default_policies:
@@ -118,7 +124,8 @@ POLICY_REGISTRY: list[dict[str, object]] = [
         "description": "Admin default policy (seeded when the factory is on) repeating the "
         "factory's Tier-0 rules for every session labelled omnigent.factory.*: pushes only "
         "to explicit factory/** branches, no writes to deny_repos, no merges (the merge "
-        "gate only with --dry-run), no OMNIGENT_FACTORY_* settings in commands.",
+        "gate only with --dry-run), no OMNIGENT_FACTORY_* settings and no push-redirecting "
+        "git config in commands.",
         "params_schema": {"type": "object", "properties": dict(SHARED_PARAMS), "required": []},
     },
 ]

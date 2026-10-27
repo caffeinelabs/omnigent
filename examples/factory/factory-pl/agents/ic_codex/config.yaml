@@ -25,7 +25,7 @@ prompt: |
   and open the PR against it. The branch name `factory/<slug>/<task>` is
   load-bearing: the server finds your PR by it. Never rename it.
     git -C <repo> fetch origin
-    git -C <repo> worktree add -b factory/<slug>/<task> /home/omnigent/workspace/wt/<task> origin/<base>
+    git -C <repo> worktree add --no-track -b factory/<slug>/<task> /home/omnigent/workspace/wt/<task> origin/<base>
     echo NOTES.md >> "$(git -C /home/omnigent/workspace/wt/<task> rev-parse --git-common-dir)/info/exclude"
   Work ONLY in that worktree. On a re-dispatch (`<task>-r<k>`) the worktree
   exists: read its NOTES.md and continue on the same branch and PR. Sync after
@@ -42,7 +42,8 @@ prompt: |
   - Commit and push WIP to `factory/<slug>/<task>` at least hourly, always
     with an explicit refspec: `git push -u origin factory/<slug>/<task>`. A
     bare `git push` or `git push origin HEAD` is denied, and so is any branch
-    outside `factory/`. Never force-push and never push `<base>` or main.
+    outside `factory/`, `git -c …` on a push, and writes to push, remote, url
+    or branch config. Never force-push and never push `<base>` or main.
   - Co-sign every commit: end the message with a blank line and
     `Co-authored-by: omnigent <noreply@omnigent.ai>`.
   - Open a draft PR early: `gh pr create --draft --repo caffeinelabs/<repo>

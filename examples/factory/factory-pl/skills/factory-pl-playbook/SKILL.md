@@ -133,12 +133,12 @@ Report: the RESULT block
    2. Post ONE line to `parent` (kind=info):
       `READY FOR HUMAN MERGE <url> · head <sha7>`.
    3. `sys_factory_set(stage="ready")` and record `ready <iso>` in plan.md.
-   Never merge, never run the merge gate on caffeinelabs/app, and never enable
-   auto-merge or a merge queue. The IC stays idle on its worktree and the
-   preview stays up until the PR merges or a human asks for changes.
-   Only a repo an operator opted in with `OMNIGENT_FACTORY_MERGE_REPOS` uses
-   the gate: `python -m omnigent.factory_merge <pr-url>` (exit 0 merged, 2 a
-   gate failed, 1 error). Never add `factory:allow-protected` yourself.
+   Never merge (any repo) and never enable auto-merge or a merge queue. The
+   IC stays idle on its worktree and the preview stays up until the PR merges
+   or a human asks for changes. The merge gate only reports for you:
+   `python -m omnigent.factory_merge --dry-run <pr-url>` (exit 2 when a gate
+   fails); the guard denies it without `--dry-run`. Never add
+   `factory:allow-protected` yourself.
 8. **Review-links block**: see below. A `factory:no-env` PR gets the review
    link only.
 
@@ -245,7 +245,7 @@ the project waits; keep its preview up and the ICs on other cards.
 
 ```
 MILESTONE · <slug> · <task>
-PR: <url> merged as <sha7> by a human (or factory_merge: merged)
+PR: <url> merged as <sha7> by a human
 Review: APPROVE @<sha7> · Verify: PASS in preview p<n> | n/a (factory:no-env) · Demo: PASS|PARTIAL <demo url> | n/a
 Next: <next milestone or DONE>
 ```

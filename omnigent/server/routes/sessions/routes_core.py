@@ -39,6 +39,7 @@ from omnigent.entities import (
 )
 from omnigent.entities.permission import SessionPermission
 from omnigent.errors import ErrorCategory, ErrorCode, ErrorImpact, ErrorPhase, OmnigentError
+from omnigent.factory import LABEL_PREFIX as FACTORY_LABEL_PREFIX
 from omnigent.models.model_override import validate_model_override
 from omnigent.runner.identity import (
     RUNNER_TUNNEL_TOKEN_HEADER,
@@ -66,6 +67,7 @@ from omnigent.server.auth import (
     LEVEL_READ,
     AuthProvider,
     local_single_user_enabled,
+    runner_origin,
 )
 from omnigent.server.background_session_titles import (
     BackgroundSessionTitleCoordinator,
@@ -218,6 +220,32 @@ from omnigent.util.session_lifecycle import (
     labels_with_closed_status,
 )
 from omnigent.version import VERSION
+
+
+def _reject_runner_factory_labels(
+    request: Request, labels: dict[str, str], auth_provider: AuthProvider | None
+) -> None:
+    """
+    Refuse ``omnigent.factory.*`` label writes that a runner (an agent) sends here.
+
+    Agents set their factory labels through ``PATCH /v1/factory/sessions/{id}``,
+    which audits each change and refuses server-only labels. A runner bearer
+    authenticates as the owner, so this generic route would skip both.
+
+    :param request: The incoming request.
+    :param labels: The requested labels, e.g. ``{"omnigent.factory.engine_mode": "x"}``.
+    :param auth_provider: The server's auth provider.
+    :raises OmnigentError: 403 when a runner writes a factory label.
+    """
+    keys = sorted(key for key in labels if key.startswith(FACTORY_LABEL_PREFIX))
+    reason = runner_origin(request, auth_provider) if keys else None
+    if reason is not None:
+        raise OmnigentError(
+            f"labels {', '.join(keys)} are factory labels; agents set them with "
+            f"sys_factory_set (PATCH /v1/factory/sessions/{{id}}), and this request carries "
+            f"{reason}",
+            code=ErrorCode.FORBIDDEN,
+        )
 
 
 def register_core_routes(
@@ -2067,6 +2095,7 @@ def register_core_routes(
                 )
         if body.labels:
             _reject_server_reserved_label_seed(body.labels)
+            _reject_runner_factory_labels(request, body.labels, auth_provider)
             # Advisor-owned cost_control.* labels are written only by the
             # session's bound runner; gate them on runner proof BEFORE any
             # store mutation so a rejected request leaves the session untouched.
