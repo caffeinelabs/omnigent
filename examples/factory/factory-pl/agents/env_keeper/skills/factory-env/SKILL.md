@@ -1,6 +1,6 @@
 ---
 name: factory-env
-description: env_keeper reference for the project's Tilt envs on the sandbox cluster - the dev env (pnpm factory:up|status|urls|down, env.json), per-PR factory previews (scripts/factory.ts preview up|status|down|list, preview.json, the preview tooling overlay from the APP-1 branch), reporting with sys_factory_env, the verify marker, reading Tilt, the failure table, and recovery after a sandbox wake.
+description: env_keeper reference for the project's Tilt envs on the sandbox cluster - the dev env (pnpm factory:up|status|urls|down, env.json), per-PR factory previews (pnpm -s factory:preview up|status|down|list, preview.json, the tooling overlay from origin/main for heads that predate it), reporting with sys_factory_env, the verify marker, reading Tilt, the failure table, and recovery after a sandbox wake.
 ---
 
 # factory-env
@@ -49,18 +49,26 @@ fail, `"failed"` when it is unusable (put the diagnosis in `note`), and
 
 ## Factory previews (run in the preview worktree)
 
-The preview CLI lives in caffeinelabs/app `scripts/factory.ts`. Always run it
-with node directly; it works on old and new heads, and the root `package.json`
-is never overlaid:
+The preview CLI is `scripts/factory.ts preview` in caffeinelabs/app, on main
+since caffeinelabs/app#9640. A PR head based on current main has it, and the
+`factory:preview` script with it (`-s` keeps stdout pure JSON):
 
 ```bash
-node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/factory.ts preview up --name p<n> --pr <n> --sha <40-char sha>
-node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/factory.ts preview status --name p<n>   # exit 1 unless it serves preview.json's sha
-node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/factory.ts preview list                 # this pod's preview namespaces
-node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/factory.ts preview down --name p<n>
+pnpm -s factory:preview up --name p<n> --pr <n> --sha <40-char sha>
+pnpm -s factory:preview status --name p<n>   # exit 1 unless it serves preview.json's sha
+pnpm -s factory:preview list                 # this pod's preview namespaces
+pnpm -s factory:preview down --name p<n>
 ```
 
-Below, `FP` stands for `node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/factory.ts preview`;
+A head based on an older main has no `preview` subcommand: PREVIEW overlays
+the tooling from origin/main (step 4) and runs the same commands with node,
+because the root `package.json` is never overlaid:
+`node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/factory.ts preview up|status|list|down …`.
+
+Below, `FP` stands for `pnpm -s factory:preview` in a checkout whose
+`package.json` has the `factory:preview` script (`wt/env` at origin/main
+always does), else for
+`node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/factory.ts preview`;
 type it out in full. Never set `FACTORY_DIR` for previews (they live under
 `~/factory/previews/`). `up` refuses unless HEAD is `--sha` and the worktree is
 clean apart from the preview tooling, creates the namespace and the
@@ -101,33 +109,42 @@ stderr; stdout is only JSON):
    The reset and clean drop an earlier tooling overlay; ignored files such as
    `node_modules` stay.
 4. **Tooling and deploy, in ONE Bash call** (shell variables do not survive
-   between calls), with the longest Bash timeout. The tooling ref is `tooling=`
-   from the command, else the charter's "preview tooling ref", else
-   `factory/preview-tooling` (the open APP-1 PR, caffeinelabs/app#9640); drop a
-   leading `origin/`.
+   between calls), with the longest Bash timeout. The tooling ref is `main`
+   (caffeinelabs/app#9640 merged the preview tooling there); only a
+   `tooling=<ref>` in the command replaces it (drop a leading `origin/`).
    ```bash
    cd /home/omnigent/workspace/wt/preview-p<n>
+   REF=main   # or the command's tooling=<ref>
    TOOLING=""
-   if ! grep -q '"factory:preview"' package.json; then
+   if ! grep -q "case 'preview'" scripts/factory.ts 2>/dev/null; then
      P=(Tiltfile scripts/factory.ts deploy/tilt deploy/services/src/builders/tilt.ts \
         ':(glob)deploy/services/*/src/tilt.ts' ':(glob)deploy/services/*/zz_generated/tilt/**')
      CONFLICT=$(git diff --name-only origin/main...HEAD -- "${P[@]}")
      if [ -n "$CONFLICT" ]; then echo "tooling-conflict: $CONFLICT"; exit 3; fi
-     git fetch -q origin <tooling ref> && TOOLING=$(git rev-parse FETCH_HEAD) \
+     git fetch -q origin "$REF" && TOOLING=$(git rev-parse FETCH_HEAD) \
        && git checkout "$TOOLING" -- "${P[@]}" || { echo "tooling-fetch-failed"; exit 4; }
    fi
-   FACTORY_PREVIEW_TOOLING_REF="$TOOLING" node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
-     --experimental-strip-types scripts/factory.ts preview up --name p<n> --pr <n> --sha <sha>
+   if grep -q '"factory:preview"' package.json; then
+     FACTORY_PREVIEW_TOOLING_REF="$TOOLING" pnpm -s factory:preview up --name p<n> --pr <n> --sha <sha>
+   else
+     FACTORY_PREVIEW_TOOLING_REF="$TOOLING" node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON \
+       --experimental-strip-types scripts/factory.ts preview up --name p<n> --pr <n> --sha <sha>
+   fi
    ```
-   - A head without the `factory:preview` script gets the preview tooling
-     overlaid from the tooling ref. Product code stays exactly the PR head; on
-     an old head the Tiltfile falls back to the overlaid committed
-     `zz_generated/tilt` manifests. Never overlay the root `package.json`,
+   - A head based on current main has `scripts/factory.ts preview` and the
+     `factory:preview` script: nothing is overlaid, `TOOLING` stays empty and
+     `preview.json` says `"tooling_overlay": null`.
+   - A head based on an older main has no `preview` subcommand: the tooling
+     files are overlaid from origin/main (`git fetch origin main`), and the CLI
+     runs with node. Product code stays exactly the PR head; on an old head
+     the Tiltfile falls back to the overlaid committed `zz_generated/tilt`
+     manifests. Never overlay the root `package.json`,
      `deploy/package.json` or `deploy/pnpm-lock.yaml`.
-   - Exit 3 with `tooling-conflict`: the PR itself changes the tooling, so it
-     cannot be overlaid. Report
+   - Exit 3 with `tooling-conflict`: the PR is based on an older main and
+     changes the tooling itself, so it cannot be overlaid. Report
      `sys_factory_env(pr=<n>, state="failed", env_id=…, urls={}, deployed={sha: <sha>}, note="tooling-conflict: <files>")`
-     and reply `PREVIEW SKIPPED tooling-conflict <files>`.
+     and reply `PREVIEW SKIPPED tooling-conflict <files>`. Merging origin/main
+     into the PR gives it the tooling natively.
    - Exit 4 with `tooling-fetch-failed`: the tooling ref could not be fetched
      or checked out, so nothing was deployed (see the failure table).
    - On a timeout run the same block again: it waits for the previous run's
@@ -171,8 +188,8 @@ and reply `PREVIEW FAILED p<n> <diagnosis>`.
 1. First read `env_id` and `namespace` from `~/factory/previews/p<n>/preview.json`
    (`jq -r '.env_id, .namespace'`): `down` deletes that directory. Without the
    file, the namespace is `env-<env_id>`, and `FP list` names it.
-2. In `/home/omnigent/workspace/wt/preview-p<n>` (or `wt/env` if it has the
-   preview tooling): `FP down --name p<n>` (typed in full). Without a usable
+2. In `/home/omnigent/workspace/wt/preview-p<n>` (or `wt/env`, which is at
+   origin/main and has the preview tooling): `FP down --name p<n>` (typed in full). Without a usable
    checkout:
    `kubectl delete namespace <namespace> --wait=false` and
    `rm -rf ~/factory/previews/p<n>`.
@@ -186,7 +203,7 @@ by the next PREVIEW.
 
 ### PREVIEW_STATUS [pr=<n>]
 
-`FP list` (typed in full, in any checkout with the tooling), then
+`FP list` (typed in full, in `wt/env` or any other checkout with the tooling), then
 `FP status --name p<n>` for each listed or requested preview. Report each:
 `ready` when `ready` is true, else `failed` with the reason in `note`
 (`observed.sha` differs, `api_ready` false, or a note about an earlier pod).
@@ -225,7 +242,7 @@ the PL redeploys the ones that are not ready with PREVIEW.
 | Namespace owned by another pod UID | Never adopt it; the reaper deletes it. Report it. |
 | `HEAD is …, not …` | Step 3 was skipped or the head moved: check out `<sha>` again. |
 | `uncommitted changes outside the factory tooling: …` | Something besides the overlay changed the worktree: `git reset -q --hard && git clean -fdq`, then redo step 4. |
-| Exit 4, `tooling-fetch-failed` | A network error: retry once. If `git ls-remote origin <tooling ref>` prints nothing, the ref is gone (the tooling PR merged or was renamed): report `PREVIEW FAILED p<n> tooling ref <ref> not found`, and say whether origin/main has the `factory:preview` script (then the PR only needs a merge of origin/main). |
+| Exit 4, `tooling-fetch-failed` | A network error: retry once. If `git ls-remote origin <tooling ref>` prints nothing, the ref does not exist (only a `tooling=` override can be missing; `main` always has the tooling): report `PREVIEW FAILED p<n> tooling ref <ref> not found`; a PREVIEW without `tooling=` overlays from origin/main. |
 | `/__factory/preview` 404 or the app's HTML | The routes were rendered without preview mode: the tooling overlay is missing or `tilt up` ran instead of `preview up`. Check `kubectl -n <ns> get httproute,httproutefilter,configmap/factory-preview`. |
 | `HTTPRouteFilter` or route denied | Report the Kyverno message; never hand-edit routes. |
 | `pid … holds …/up.lock` | Another `up` of that preview runs; wait for it. |

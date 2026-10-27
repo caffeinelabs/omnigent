@@ -132,7 +132,7 @@ def _golden(name: str) -> str:
 def _with_ref(project: FactoryProject) -> FactoryProject:
     from dataclasses import replace
 
-    charter = normalize_charter(project.charter, tooling_ref="factory/preview-tooling")
+    charter = normalize_charter(project.charter, tooling_ref="main")
     return replace(project, charter=charter)
 
 

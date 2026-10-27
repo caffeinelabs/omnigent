@@ -277,15 +277,17 @@ preview envs are a different thing.)
   stamps `GET /__factory/preview` (`{repo, pr, sha, short, deployed_at, env_id}`,
   an Envoy direct response) and an `x-factory-commit` header on the app and API
   hosts, and creates the `factory-env-secrets` synthetic-session secret. It
-  lives on the open APP-1 PR (caffeinelabs/app#9640, branch
-  `factory/preview-tooling`); a human merges it. Until then env_keeper overlays
-  the tooling files from that branch onto PR heads that lack them (never the
-  root `package.json` or the deploy lockfile) and runs the CLI with `node`
-  directly. The ref comes from `OMNIGENT_FACTORY_PREVIEW_TOOLING_REF`, which the
-  charter carries; env_keeper falls back to `factory/preview-tooling`. A PR
-  that changes the tooling itself gets `PREVIEW SKIPPED tooling-conflict`,
-  and its PL asks the human whether to review it without a preview (label
-  `factory:no-env`) or to wait for the tooling to merge.
+  is on caffeinelabs/app main since caffeinelabs/app#9640, so a PR head based
+  on current main runs it natively (`pnpm -s factory:preview up …`). A head
+  based on an older main has no `preview` subcommand: env_keeper fetches
+  origin `main` and overlays the tooling files from origin/main (never the
+  root `package.json` or the deploy lockfile), then runs the CLI with `node`
+  directly. The tooling ref is `main`; `OMNIGENT_FACTORY_PREVIEW_TOOLING_REF`,
+  which the charter carries, can point the overlay at another ref. An old-base
+  PR that changes the tooling itself gets `PREVIEW SKIPPED tooling-conflict`;
+  its PL asks the author to merge origin/main (the new head has the tooling
+  natively), or the human whether to review it without a preview (label
+  `factory:no-env`).
 - **Slots.** A PL keeps at most its charter's `preview.slots` live previews
   (default 2, max 3); the factory at most `OMNIGENT_FACTORY_MAX_PREVIEWS` (8).
   At the factory cap env_keeper answers `PREVIEW CAPPED` with park
@@ -368,7 +370,7 @@ transcript folds.
 | `OMNIGENT_FACTORY_PREVIEW_DOMAIN` | `envs.sandbox.caffeinelabs.io` | The only domain env and preview URLs may use (SSRF guard). |
 | `OMNIGENT_FACTORY_MAX_PREVIEWS` | `8` | Live previews per factory. |
 | `OMNIGENT_FACTORY_PREVIEW_TTL_H` | `72` | Hours without human attention before a preview gets a park notice. |
-| `OMNIGENT_FACTORY_PREVIEW_TOOLING_REF` | empty | caffeinelabs/app ref with the preview tooling (`factory/preview-tooling` until APP-1 merges); stored in new charters. |
+| `OMNIGENT_FACTORY_PREVIEW_TOOLING_REF` | empty (recommended: `main`) | caffeinelabs/app ref the preview tooling is overlaid from onto PR heads based on an older main; stored in new charters. Empty: env_keeper uses `main`. |
 | `OMNIGENT_FACTORY_QUIET_BEATS`, `OMNIGENT_FACTORY_MAIL_REPLAY` | on | `0` turns off skipping unchanged heartbeats / replaying queued mail after a restart. |
 
 ### Rollback
@@ -383,8 +385,9 @@ transcript folds.
   their pods.
 - **Data.** The cockpit tables come from one additive, forward-only migration;
   an older image ignores them. Demo files stay in the artifact store.
-- **App tooling.** Nothing in caffeinelabs/app changes until a human merges
-  APP-1; until then previews depend only on the branch the overlay reads.
+- **App tooling.** The preview tooling is part of caffeinelabs/app main
+  (caffeinelabs/app#9640). PR heads based on current main use their own copy;
+  only heads based on an older main read it from the overlay ref (`main`).
 
 ## Safety
 
