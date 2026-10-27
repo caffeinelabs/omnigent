@@ -1,8 +1,9 @@
 /**
  * The project page's Overview tab: the charter (goal, done-when, scope,
  * constraints, demo focus, env and preview settings) with Edit charter, the
- * team with what each agent is doing, the project's decisions answered in
- * one click, and the PL's plan file.
+ * team with what each agent is doing, the project's decisions (open ones
+ * answered in one click, answered, withdrawn and expired ones folded), and
+ * the PL's plan file.
  */
 
 import { useState } from "react";
@@ -259,6 +260,7 @@ export function ProjectOverview({
           decisions={decisions}
           highlightId={highlightDecision}
           clockOffsetS={clockOffsetS}
+          showClosed
         />
       </div>
       <div className="min-w-0 lg:col-start-2 lg:row-start-2">

@@ -146,6 +146,38 @@ describe("ProjectPage", () => {
     );
   });
 
+  it("keeps the project's withdrawn and expired decisions on the Overview", async () => {
+    serve();
+    renderPage();
+    const toggle = await screen.findByTestId("decisions-closed-toggle");
+    expect(toggle).toHaveTextContent("Withdrawn / expired (2)");
+    fireEvent.click(toggle);
+    const closed = screen.getByTestId("decisions-closed");
+    expect(within(closed).getByTestId("decision-closed-D-4")).toHaveTextContent(
+      "D-4withdrawn · 1h agoShould /version also report the build time?",
+    );
+    expect(within(closed).getByTestId("decision-closed-D-5")).toHaveTextContent(
+      "D-5expired · 1d agoShow the API version in the footer too",
+    );
+    expect(screen.getByTestId("decisions-answered-toggle")).toHaveTextContent("Answered (1)");
+  });
+
+  it("opens the closed decisions on a ?decision= link to one of them", async () => {
+    serve();
+    renderPage("api-version", "?decision=D-4");
+    expect(await screen.findByTestId("decision-closed-D-4")).toHaveAttribute(
+      "data-highlighted",
+      "true",
+    );
+  });
+
+  it("lists no closed decisions for a project that has none", async () => {
+    serve();
+    renderPage("db-version");
+    await screen.findByTestId("decision-card-D-2");
+    expect(screen.queryByTestId("decisions-closed-toggle")).toBeNull();
+  });
+
   it("answers a blocked project's decision in one click from its Overview", async () => {
     serve();
     renderPage("db-version");

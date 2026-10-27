@@ -268,7 +268,11 @@ async def list_factory_demos(
     pr: int | None = Query(None, ge=1, description="Only demos of this PR number."),
     limit: int = Query(50, ge=1, le=DEMOS_MAX_LIMIT),
 ) -> dict[str, Any]:
-    """The factory's recorded demos, newest first, filtered to what the viewer may read."""
+    """The factory's recorded demos, newest first, filtered to what the viewer may read.
+
+    `limit` caps the rows read before that filter, so a viewer who can't see
+    some projects may get fewer than `limit` even when more exist.
+    """
     deps = factory_deps(request.app.state)
     user_id = require_user(request, deps.auth_provider)
     root = await _root(user_id, factory_id, deps)

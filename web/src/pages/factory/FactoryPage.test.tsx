@@ -180,6 +180,16 @@ describe("FactoryPage", () => {
     expect(screen.queryByTestId("factory-board")).toBeNull();
   });
 
+  it("keeps ?decision on the redirect so the decision stays highlighted", async () => {
+    serve();
+    renderPage("?project=db-version&decision=D-2");
+    expect(await screen.findByTestId("decision-card-D-2")).toHaveAttribute(
+      "data-highlighted",
+      "true",
+    );
+    expect(location).toBe(`/factory/${LIVE_RUN_FACTORY_ID}/projects/db-version?decision=D-2`);
+  });
+
   it("opens the review drawer from ?review and from a PR row", async () => {
     serve();
     renderPage("?review=9630");

@@ -396,7 +396,7 @@ export function ProjectCard({
               data-testid={`project-demos-${project.slug}`}
               componentId="factory.board.project_demos"
               title="Recorded demos of this project's PRs"
-              className="inline-flex items-center gap-1 hover:text-foreground"
+              className="inline-flex items-center gap-1 text-foreground underline-offset-2 hover:underline"
             >
               <PlayIcon aria-hidden className="size-3" />
               {plural(demos, "demo")}

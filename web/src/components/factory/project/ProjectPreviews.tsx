@@ -25,7 +25,11 @@ function DevEnvCard({ project, nowS }: { project: ProjectView; nowS: number }) {
   return (
     <SectionCard
       title="Dev env"
-      meta={`tracks ${project.base_branch ?? "the base branch"} for the ICs`}
+      meta={
+        project.charter?.env_needed === false
+          ? undefined
+          : `tracks ${project.base_branch ?? "the base branch"} for the ICs`
+      }
       testId="project-dev-env"
       action={
         status && (

@@ -248,8 +248,13 @@ function Cockpit({ snapshot, clockOffsetS }: { snapshot: FactorySnapshot; clockO
 function projectRedirect(factoryId: string | undefined, params: URLSearchParams): string | null {
   const slug = params.get("project");
   if (!factoryId || !slug) return null;
-  const review = params.get("review");
-  return projectPageHref(factoryId, slug, review ? { params: { review } } : {});
+  // The review, decision highlight and preview notice carry over.
+  const kept: Record<string, string> = {};
+  for (const key of ["review", "decision", "preview"]) {
+    const value = params.get(key);
+    if (value) kept[key] = value;
+  }
+  return projectPageHref(factoryId, slug, { params: kept });
 }
 
 export function FactoryPage() {

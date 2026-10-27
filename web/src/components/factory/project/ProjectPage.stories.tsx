@@ -61,6 +61,13 @@ export const OverviewBlocked = page({ slug: "db-version" });
 
 export const OverviewBlockedDark = page({ slug: "db-version", theme: "dark" });
 
+/** A link to withdrawn D-4: the Withdrawn / expired fold opens with it marked. */
+export const OverviewClosedDecisions = page({ search: "?decision=D-4" });
+
+export const OverviewClosedDecisionsDark = page({ search: "?decision=D-4", theme: "dark" });
+
+export const OverviewClosedDecisionsMobile = phone(page({ search: "?decision=D-4" }));
+
 // ── PRs ────────────────────────────────────────────────────────
 
 /** Both PRs with gates, Sentinel, preview, demo and Review; #9630 ready for merge. */

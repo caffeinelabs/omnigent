@@ -71,8 +71,8 @@ function previewWord(pr: PrView): string {
 export interface ProjectControlParts {
   /**
    * The project's next step, or what a control waits for: the pending chip,
-   * Resume on a paused project, Restart and Relaunch on a failed one; null
-   * when there is none.
+   * Resume on a paused or stopped (not done) project, Restart and Relaunch on
+   * a failed one; null when there is none.
    */
   quick: ReactNode | null;
   /** The ⋯ trigger with its menu and confirm dialogs. */
@@ -163,7 +163,8 @@ export function useProjectControlParts(
       onDismiss={pending.localId ? () => controls.dismiss(pending.localId!) : undefined}
       className={chipClassName}
     />
-  ) : paused || stopped ? (
+  ) : (paused || stopped) && project.stage !== "done" ? (
+    // A finished project keeps Resume in the menu, not as its next step.
     <Button
       variant="outline"
       size="xs"

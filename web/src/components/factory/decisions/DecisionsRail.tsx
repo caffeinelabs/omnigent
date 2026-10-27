@@ -2,14 +2,17 @@
  * The decisions rail: what the agents and the supervisor asked the human,
  * blocking first, then oldest. Each card answers in one click and shows its
  * delivery receipt; cards answered here stay until the page reloads, older
- * answers fold into "Answered (n)".
+ * answers fold into "Answered (n)". The project page also folds withdrawn
+ * and expired ones (`showClosed`).
  */
 
-import { useState } from "react";
-import { ChevronRightIcon, CircleCheckIcon } from "lucide-react";
+import { type ReactNode, useState } from "react";
+import { BanIcon, ChevronRightIcon, CircleCheckIcon } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { DecisionView } from "@/lib/factoryApi";
-import { decisionAnchorId } from "../board/boardModel";
+import { cn } from "@/lib/utils";
+import { ageText, decisionAnchorId } from "../board/boardModel";
+import { useFactoryServerNowS } from "../factoryClock";
 import { DecisionCard, DecisionReceipt, answerLabel } from "./DecisionCard";
 
 export interface DecisionsRailProps {
@@ -21,6 +24,8 @@ export interface DecisionsRailProps {
   highlightId: string | null;
   /** Seconds the server clock runs ahead of the browser's (wait times age on it). */
   clockOffsetS?: number;
+  /** Also fold withdrawn and expired decisions (the project page lists all of them). */
+  showClosed?: boolean;
 }
 
 function matches(decision: DecisionView, id: string | null): boolean {
@@ -34,7 +39,90 @@ export function orderOpenDecisions(decisions: DecisionView[]): DecisionView[] {
     .sort((a, b) => Number(b.blocking) - Number(a.blocking) || a.created_at - b.created_at);
 }
 
-export function DecisionsRail({ decisions, highlightId, clockOffsetS = 0 }: DecisionsRailProps) {
+/** A muted "Label (n)" fold under the cards. */
+function Fold({
+  testId,
+  label,
+  defaultOpen = false,
+  children,
+}: {
+  testId: string;
+  label: string;
+  defaultOpen?: boolean;
+  children: ReactNode;
+}) {
+  return (
+    <Collapsible defaultOpen={defaultOpen}>
+      <CollapsibleTrigger
+        data-testid={`${testId}-toggle`}
+        className="group inline-flex cursor-pointer items-center gap-1 rounded-sm text-sm text-muted-foreground hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+      >
+        <ChevronRightIcon
+          aria-hidden
+          className="size-3.5 transition-transform group-data-[state=open]:rotate-90"
+        />
+        {label}
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <ul data-testid={testId} className="mt-1 flex flex-col gap-2">
+          {children}
+        </ul>
+      </CollapsibleContent>
+    </Collapsible>
+  );
+}
+
+/** Withdrawn and expired decisions: ref, what became of it and when, the question. */
+function ClosedDecisions({
+  decisions,
+  highlightId,
+  clockOffsetS,
+}: {
+  decisions: DecisionView[];
+  highlightId: string | null;
+  clockOffsetS: number;
+}) {
+  const nowS = useFactoryServerNowS(clockOffsetS);
+  return (
+    <Fold
+      testId="decisions-closed"
+      label={`Withdrawn / expired (${decisions.length})`}
+      defaultOpen={decisions.some((d) => matches(d, highlightId))}
+    >
+      {decisions.map((d) => (
+        <li
+          key={d.id}
+          id={decisionAnchorId(d.ref)}
+          data-testid={`decision-closed-${d.ref}`}
+          data-status={d.status}
+          data-highlighted={matches(d, highlightId) ? "true" : undefined}
+          className={cn(
+            "flex flex-col gap-0.5 border-l-2 border-border pl-2.5 text-sm",
+            matches(d, highlightId) && "border-primary",
+          )}
+        >
+          <p className="flex min-w-0 items-center gap-1 text-muted-foreground">
+            <BanIcon aria-hidden className="size-3.5 shrink-0" />
+            <span className="font-mono">{d.ref}</span>
+            <span>
+              {d.status} · {ageText(nowS - d.updated_at)}
+            </span>
+          </p>
+          <p className="line-clamp-2" title={d.question}>
+            {d.question}
+          </p>
+        </li>
+      ))}
+    </Fold>
+  );
+}
+
+export function DecisionsRail({
+  decisions,
+  highlightId,
+  clockOffsetS = 0,
+  showClosed = false,
+}: DecisionsRailProps) {
   // Answered from this rail: their cards stay (with the receipt) instead of folding away.
   const [mine, setMine] = useState<Record<string, DecisionView>>({});
   const open = orderOpenDecisions(decisions);
@@ -45,6 +133,11 @@ export function DecisionsRail({ decisions, highlightId, clockOffsetS = 0 }: Deci
   const answered = decisions
     .filter((d) => d.status === "answered" && !(d.id in mine))
     .sort((a, b) => (b.answered_at ?? 0) - (a.answered_at ?? 0));
+  const closed = showClosed
+    ? decisions
+        .filter((d) => (d.status === "withdrawn" || d.status === "expired") && !(d.id in mine))
+        .sort((a, b) => b.updated_at - a.updated_at)
+    : [];
   const remember = (stored: DecisionView) => setMine((prev) => ({ ...prev, [stored.id]: stored }));
 
   return (
@@ -71,39 +164,28 @@ export function DecisionsRail({ decisions, highlightId, clockOffsetS = 0 }: Deci
         />
       ))}
       {answered.length > 0 && (
-        <Collapsible>
-          <CollapsibleTrigger
-            data-testid="decisions-answered-toggle"
-            className="group inline-flex cursor-pointer items-center gap-1 rounded-sm text-sm text-muted-foreground hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-          >
-            <ChevronRightIcon
-              aria-hidden
-              className="size-3.5 transition-transform group-data-[state=open]:rotate-90"
-            />
-            Answered ({answered.length})
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <ul data-testid="decisions-answered" className="mt-1 flex flex-col gap-2">
-              {answered.map((d) => (
-                <li
-                  key={d.id}
-                  id={decisionAnchorId(d.ref)}
-                  className="flex flex-col gap-0.5 border-l-2 border-border pl-2.5 text-sm"
-                >
-                  <p className="min-w-0 text-muted-foreground">
-                    <span className="font-mono">{d.ref}</span>{" "}
-                    <span className="text-foreground">“{answerLabel(d)}”</span>
-                    {d.answered_by && ` · ${d.answered_by}`}
-                  </p>
-                  <p className="line-clamp-1 text-muted-foreground" title={d.question}>
-                    {d.question}
-                  </p>
-                  <DecisionReceipt decision={d} />
-                </li>
-              ))}
-            </ul>
-          </CollapsibleContent>
-        </Collapsible>
+        <Fold testId="decisions-answered" label={`Answered (${answered.length})`}>
+          {answered.map((d) => (
+            <li
+              key={d.id}
+              id={decisionAnchorId(d.ref)}
+              className="flex flex-col gap-0.5 border-l-2 border-border pl-2.5 text-sm"
+            >
+              <p className="min-w-0 text-muted-foreground">
+                <span className="font-mono">{d.ref}</span>{" "}
+                <span className="text-foreground">“{answerLabel(d)}”</span>
+                {d.answered_by && ` · ${d.answered_by}`}
+              </p>
+              <p className="line-clamp-1 text-muted-foreground" title={d.question}>
+                {d.question}
+              </p>
+              <DecisionReceipt decision={d} />
+            </li>
+          ))}
+        </Fold>
+      )}
+      {closed.length > 0 && (
+        <ClosedDecisions decisions={closed} highlightId={highlightId} clockOffsetS={clockOffsetS} />
       )}
     </section>
   );

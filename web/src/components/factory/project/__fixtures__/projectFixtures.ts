@@ -1,9 +1,11 @@
 // Project page fixtures built from the live run: the api-version project with
 // a second demoed PR (#9634, a PARTIAL demo with a skipped step and console
-// errors) and #9630's earlier FAIL run, plus the demos list the server
-// serves for it. Every export is a fresh copy the caller may mutate.
+// errors), #9630's earlier FAIL run and a withdrawn and an expired decision,
+// plus the demos list the server serves for it. Every export is a fresh copy
+// the caller may mutate.
 
 import type {
+  DecisionView,
   DemoFileView,
   DemoListResponse,
   DemoView,
@@ -309,9 +311,57 @@ function uxPr(base: PrView): PrView {
   return pr;
 }
 
+/** api-version's PL withdrew D-4 an hour ago; nobody answered D-5 before it expired. */
+function closedDecisions(answered: DecisionView): DecisionView[] {
+  const closed = (
+    n: number,
+    id: string,
+    status: "withdrawn" | "expired",
+    question: string,
+    createdAt: number,
+    updatedAt: number,
+  ): DecisionView => ({
+    ...structuredClone(answered),
+    id,
+    ref: `D-${n}`,
+    number: n,
+    blocking: false,
+    question,
+    status,
+    answer_option_id: null,
+    answer_text: null,
+    answered_by: null,
+    answered_at: null,
+    delivered_mail_id: null,
+    delivered_at: null,
+    delivered_to_title: null,
+    created_at: createdAt,
+    updated_at: updatedAt,
+  });
+  return [
+    closed(
+      4,
+      "4d1e2f3a4b5c46d7e8f90a1b2c3d4e5f",
+      "withdrawn",
+      "Should /version also report the build time?",
+      NOW - 5400,
+      NOW - 3600,
+    ),
+    closed(
+      5,
+      "5e2f3a4b5c6d47e8f90a1b2c3d4e5f60",
+      "expired",
+      "Show the API version in the footer too, or only in Settings → About?",
+      NOW - 2 * 86_400,
+      NOW - 86_400,
+    ),
+  ];
+}
+
 /**
  * The api-version project with two demoed PRs (#9630 with an earlier FAIL run,
- * #9634 PARTIAL) and a stated constraint, and the demos list it serves.
+ * #9634 PARTIAL), a stated constraint and closed decisions D-4 (withdrawn) and
+ * D-5 (expired), and the demos list it serves.
  */
 export function projectScenario(): { snapshot: FactorySnapshot; demos: DemoListResponse } {
   const snapshot = liveRunSnapshot();
@@ -325,6 +375,8 @@ export function projectScenario(): { snapshot: FactorySnapshot; demos: DemoListR
     ...project.charter!,
     constraints: "Don't touch the auth middleware; /version stays public and unauthenticated.",
   };
+  const d1 = snapshot.decisions.find((d) => d.ref === "D-1")!;
+  snapshot.decisions.push(...closedDecisions(d1));
   return {
     snapshot,
     demos: { data: [listed(ux.demo!, ux), listed(p9630.demo!, p9630), earlierRun9630(p9630)] },
