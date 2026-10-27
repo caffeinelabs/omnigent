@@ -5,12 +5,15 @@ Agents set their factory labels with ``sys_factory_set`` (``PATCH
 server-only labels. A runner authenticates as the session owner, so the
 generic ``PATCH /v1/sessions/{id}`` refuses factory labels from a runner
 (its tunnel header or an ``org: runner`` bearer) before touching the store,
-while a person keeps writing them and a runner keeps writing other labels.
+while a person keeps writing them, a runner keeps writing other labels, and a
+runner still creates sessions that carry them (``sys_factory_spawn`` posts
+``POST /v1/sessions`` with the member's factory labels).
 """
 
 from __future__ import annotations
 
 import secrets
+from collections.abc import Callable
 
 import pytest
 from fastapi import FastAPI, Request
@@ -89,18 +92,22 @@ def _runner() -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _person_with_tunnel_header() -> dict[str, str]:
+    return {**_person(), RUNNER_TUNNEL_TOKEN_HEADER: "rt_abc.def"}
+
+
 _SERVER_ONLY = f"{F.LABEL_PREFIX}engine_mode"
 
 
 @pytest.mark.parametrize(
     "headers",
-    [_runner(), {**_person(), RUNNER_TUNNEL_TOKEN_HEADER: "rt_abc.def"}],
+    [_runner, _person_with_tunnel_header],
     ids=["runner-bearer", "runner-tunnel-header"],
 )
 @pytest.mark.parametrize("label", [_SERVER_ONLY, F.LABEL_ID, F.LABEL_STATE])
 def test_a_runner_cannot_write_factory_labels_here(
     app_and_session: tuple[FastAPI, SqlAlchemyConversationStore, str],
-    headers: dict[str, str],
+    headers: Callable[[], dict[str, str]],
     label: str,
 ) -> None:
     app, conversations, session_id = app_and_session
@@ -108,7 +115,7 @@ def test_a_runner_cannot_write_factory_labels_here(
     resp = TestClient(app).patch(
         f"/v1/sessions/{session_id}",
         json={"title": "smuggled", "labels": {label: "x"}},
-        headers=headers,
+        headers=headers(),
     )
 
     assert resp.status_code == 403, resp.text
@@ -138,3 +145,28 @@ def test_a_person_still_writes_factory_labels_and_a_runner_other_labels(
     assert conv is not None
     assert conv.labels[_SERVER_ONLY] == "auto"
     assert conv.labels["team"] == "ml"
+
+
+def test_a_runner_still_creates_a_session_with_factory_labels(
+    app_and_session: tuple[FastAPI, SqlAlchemyConversationStore, str],
+) -> None:
+    app, conversations, lead_id = app_and_session
+    labels = {
+        F.LABEL_ID: lead_id,
+        F.LABEL_ROLE: F.ROLE_PROJECT_LEAD,
+        F.LABEL_PARENT: lead_id,
+        F.LABEL_SUPERVISOR: lead_id,
+        F.LABEL_STATE: F.STATE_ACTIVE,
+        F.LABEL_PROJECT: "app",
+    }
+
+    resp = TestClient(app).post(
+        "/v1/sessions",
+        json={"agent_id": _AGENT_ID, "title": "PL · app", "labels": labels},
+        headers=_runner(),
+    )
+
+    assert resp.status_code == 201, resp.text
+    conv = conversations.get_conversation(resp.json()["id"])
+    assert conv is not None
+    assert {key: conv.labels.get(key) for key in labels} == labels

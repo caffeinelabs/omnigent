@@ -1,14 +1,12 @@
-"""Tests for per-user GitHub credential injection into sandboxes.
+"""Tests for per-user GitHub credentials in sandboxes.
 
 Covers the pure builders (:func:`github_sandbox_env`,
 :func:`ssh_authorized_keys_setup_commands`) and the exec-model
-:meth:`SandboxLauncher.start_host` wiring that runs them — so a connected
-user's git/``gh`` token seed and public SSH keys land in the sandbox.
-
-git/``gh`` credentials are seeded via env only; the native credential broker
-+ ``git_credential_github`` helper keep them live per operation (no on-disk
-``hosts.yml`` / ``.git-credentials`` written here). See
-``docs/GITHUB_APP_SETUP.md``.
+:meth:`SandboxLauncher.start_host` launch, which carries no GitHub
+credentials: the host points git and ``gh`` at the server's credential
+broker when it starts (``omnigent.host.connect`` →
+``omnigent.git_credential_github``), so no launcher injects anything
+GitHub-specific. See ``docs/GITHUB_APP_SETUP.md``.
 """
 
 from __future__ import annotations
@@ -89,32 +87,7 @@ def test_ssh_setup_appends_keys_deduped() -> None:
 # ── start_host wiring ────────────────────────────────────────────
 
 
-def test_start_host_injects_ssh_and_env() -> None:
-    launcher = _RecordingLauncher()
-    launcher.start_host(
-        "sb-1",
-        token="tok",
-        host_id="host_abc",
-        host_name="managed-abc",
-        server_url="https://srv",
-        github_token="ghu_tok",
-        github_login="octocat",
-        ssh_authorized_keys=("ssh-ed25519 AAAAKEY a@b",),
-    )
-    all_run = "\n".join(launcher.commands)
-    # SSH keys were written via run(); no on-disk gh/git credential files —
-    # those are vended live by the native broker + helper.
-    assert "authorized_keys" in all_run
-    assert "hosts.yml" not in all_run
-    assert ".git-credentials" not in all_run
-    # The host launch carries the per-user credential env seed.
-    [raw] = launcher.backgrounded
-    assert "GIT_TOKEN=ghu_tok" in raw
-    assert "GH_TOKEN=ghu_tok" in raw
-
-
-def test_start_host_no_identity_is_unchanged() -> None:
-    """Without a token, no ssh commands and no credential env leak in."""
+def test_start_host_leaves_github_credentials_to_the_broker() -> None:
     launcher = _RecordingLauncher()
     launcher.start_host(
         "sb-1",
@@ -125,6 +98,9 @@ def test_start_host_no_identity_is_unchanged() -> None:
     )
     all_run = "\n".join(launcher.commands)
     assert "authorized_keys" not in all_run
+    assert "hosts.yml" not in all_run
+    assert ".git-credentials" not in all_run
     [raw] = launcher.backgrounded
     assert "GIT_TOKEN" not in raw
     assert "GH_TOKEN" not in raw
+    assert "GITHUB_TOKEN" not in raw
