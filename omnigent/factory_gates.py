@@ -454,7 +454,8 @@ def gate_mergeable(pr: _Json) -> GateResult:
     if mergeable == "UNKNOWN":
         reason = "mergeable=UNKNOWN (GitHub is still computing it; retry shortly)"
         return GateResult(GATE_PENDING, reason, (), mergeable)
-    reason = f"mergeable={mergeable} (merge origin/main into the branch and resolve conflicts)"
+    base = pr.get("baseRefName") or "main"
+    reason = f"mergeable={mergeable} (merge origin/{base} into the branch and resolve conflicts)"
     return GateResult(GATE_FAIL, reason, (), mergeable)
 
 

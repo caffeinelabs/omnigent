@@ -325,6 +325,15 @@ def test_ready_needs_an_open_pr_with_every_gate_passing() -> None:
     assert evaluate_snapshot(labelled, _GREEN, set()).ready is True
 
 
+@pytest.mark.parametrize(("base", "expected"), [("temp-main", "temp-main"), (None, "main")])
+def test_a_conflict_names_the_prs_own_base(base: str | None, expected: str) -> None:
+    """The fix-it hint merges the PR's base branch, so a temp-main PR is not told to merge main."""
+    report = evaluate_snapshot(_snap(mergeable="CONFLICTING", baseRefName=base), _GREEN, set())
+    assert report.gate_reasons["mergeable"] == (
+        f"mergeable=CONFLICTING (merge origin/{expected} into the branch and resolve conflicts)"
+    )
+
+
 def test_report_json_is_the_cockpit_gates_view() -> None:
     """The stored gates validate as ``GatesView`` with check, review and verify evidence."""
     checks = [

@@ -460,13 +460,13 @@ def test_prompts_carry_the_operational_contracts(lead: AgentSpec, pl: AgentSpec)
     assert "never merge and never run the merge gate on it" in " ".join(pl_text.split())
     env_text = _sub_agent(pl, "env_keeper").instructions or ""
     for token in (
-        "UP:",
+        "UP base=<base>:",
         "STATUS:",
         "DOWN:",
-        "PREVIEW pr=<n> head=<sha>",
+        "PREVIEW pr=<n> head=<sha> base=<base>",
         "PREVIEW_DOWN pr=<n>",
         "PREVIEW_STATUS",
-        "MERGED pr=<n>",
+        "MERGED pr=<n> base=<base>",
         "CLOSED pr=<n>",
         "pnpm factory:up",
         "scripts/factory.ts preview up",
@@ -529,24 +529,119 @@ def _command_section(text: str, start: str, ends: tuple[str, ...]) -> str:
     return text[begin : min(found)] if found else text[begin:]
 
 
-def test_verify_never_returns_the_env_to_main(pl: AgentSpec) -> None:
+def test_verify_never_moves_the_dev_env(pl: AgentSpec) -> None:
     """PREVIEW (alias VERIFY) leaves the preview at the PR head; only MERGED moves the dev env."""
     env = _sub_agent(pl, "env_keeper")
     skill = (_skill_dir(env) / "factory-env" / "SKILL.md").read_text(encoding="utf-8")
     prompt = env.instructions or ""
-    reset = re.compile(r"checkout\s+(-q\s+)?--detach\s+origin/main")
+    reset = re.compile(r"checkout\s+(-q\s+)?--detach\s+origin/<base>")
     sections = {
         "prompt": _command_section(prompt, "PREVIEW pr=<n>", ("PREVIEW_DOWN",)),
         "skill": _command_section(skill, "### PREVIEW pr=<n>", ("### PREVIEW_DOWN",)),
     }
     for label, section in sections.items():
         assert "VERIFY" in section or label == "skill", label
-        assert not reset.search(section), f"{label}: the PREVIEW/VERIFY steps reset to main"
+        assert not reset.search(section), f"{label}: the PREVIEW/VERIFY steps reset to the base"
         assert "factory:verify sha=" in section, label
     merged = _command_section(skill, "### MERGED pr=<n>", ("## Reading Tilt",))
-    assert reset.search(merged), "MERGED moves the dev env to the new origin/main"
+    assert reset.search(merged), "MERGED moves the dev env to the new origin/<base>"
     assert "VERIFY is the same" in prompt
     assert "FACTORY_TILT_PORT" not in prompt + skill
+
+
+# ── Base branch ────────────────────────────────────────────────
+
+# `main` hardcoded as the PR target, the branch point, the sync source or the dev env commit.
+_HARDCODED_MAIN = re.compile(r"origin/main\b|--base main\b|merge main\b|fetch origin main\b")
+# A dev env or preview command in backticks, and what follows its fixed part.
+_ENV_COMMAND = re.compile(r"`(UP|MERGED pr=<n>|PREVIEW pr=<n> head=<sha>)((?: [^`]*)?)`")
+
+
+def _bundle_files() -> Iterator[tuple[str, str]]:
+    """Every agent-facing file of both bundles (specs and skills), whitespace folded."""
+    for path in sorted(_FACTORY_DIR.rglob("*")):
+        if path.suffix in (".md", ".yaml") and "node_modules" not in path.parts:
+            text = " ".join(path.read_text(encoding="utf-8").split())
+            yield str(path.relative_to(_FACTORY_DIR)), text
+
+
+def test_no_agent_instruction_hardcodes_main_as_the_base() -> None:
+    """PRs, worktrees, syncs and the dev env follow `<base>`; `main` is only its default."""
+    files = dict(_bundle_files())
+    assert len(files) >= 15, sorted(files)
+    for label, text in files.items():
+        hit = _HARDCODED_MAIN.search(text)
+        assert hit is None, f"{label}: {hit.group(0) if hit else ''}"
+    # The default is spelled out where the base is introduced.
+    for label in (
+        "factory-pl/config.yaml",
+        "factory-pl/skills/factory-pl-playbook/SKILL.md",
+        "factory-pl/agents/env_keeper/config.yaml",
+        "factory-pl/agents/env_keeper/skills/factory-env/SKILL.md",
+        "factory-pl/agents/ic/skills/factory-ic/SKILL.md",
+        "factory-pl/agents/ic_codex/config.yaml",
+    ):
+        assert re.search(r"`main` when|default `main`", files[label]), label
+
+
+def test_the_pl_passes_the_base_on_every_dispatch(pl: AgentSpec) -> None:
+    """Every UP, PREVIEW and MERGED the PL sends names the base, and so does every task card."""
+    playbook = (_PL_DIR / "skills/factory-pl-playbook/SKILL.md").read_text(encoding="utf-8")
+    heartbeat = (_PL_DIR / "skills/factory-heartbeat/SKILL.md").read_text(encoding="utf-8")
+    prompt = " ".join((pl.instructions or "").split())
+    assert "`Base branch:`" in prompt
+    assert 'args={input: "UP base=<base>"}' in prompt
+    sent = 0
+    for label, text in (("prompt", prompt), ("playbook", playbook), ("heartbeat", heartbeat)):
+        for command in _ENV_COMMAND.finditer(" ".join(text.split())):
+            sent += 1
+            assert command.group(2).startswith(" base=<base>"), f"{label}: {command.group(0)}"
+    assert sent >= 10, sent
+    card = _command_section(playbook, "## Task card", ("\n## ",))
+    assert "· Base: <base>\n" in card and "origin/main" not in card
+
+
+def test_sub_agents_act_on_the_base(pl: AgentSpec) -> None:
+    """env_keeper tracks origin/<base>; ICs branch, sync and open PRs on it; reviewers check it."""
+    env = _sub_agent(pl, "env_keeper")
+    env_skill = (_skill_dir(env) / "factory-env" / "SKILL.md").read_text(encoding="utf-8")
+    env_text = " ".join(((env.instructions or "") + env_skill).split())
+    for token in (
+        "worktree add --detach /home/omnigent/workspace/wt/env origin/<base>",
+        'ref: "origin/<base>"',
+        "--json headRefOid,state,baseRefName",
+        'CONFLICT=$(git diff --name-only "origin/$BASE...HEAD"',
+        "fetch origin pull/<n>/head <base>",
+    ):
+        assert token in env_text, token
+    ic = _sub_agent(pl, "ic")
+    ic_skill = (_skill_dir(ic) / "factory-ic" / "SKILL.md").read_text(encoding="utf-8")
+    codex = _sub_agent(pl, "ic_codex").instructions or ""
+    for label, text in (("factory-ic", ic_skill), ("ic_codex", codex)):
+        flat = " ".join(text.split())
+        assert "/home/omnigent/workspace/wt/<task> origin/<base>" in flat, label
+        assert "git merge origin/<base>" in flat, label
+        assert "--base <base> --head factory/<slug>/<task>" in flat, label
+    assert "--base <base>" in " ".join((ic.instructions or "").split())
+    for label, text in (
+        ("reviewer", _sub_agent(pl, "reviewer").instructions or ""),
+        ("ic", ic_skill),
+    ):
+        assert "baseRefName" in text and "`Base:`" in text, label
+
+
+def test_chat_charters_name_the_base_like_stored_ones() -> None:
+    """The lead's chat charter template carries the exact base line the server renders."""
+    from omnigent.entities.factory import FactoryProject
+    from omnigent.server.factory.charter import render_pl_charter
+
+    project = FactoryProject(
+        id="c" * 32, factory_id="f" * 32, slug="s", title="t", repo="r", base_branch="<branch>"
+    )
+    [line] = [x for x in render_pl_charter(project).splitlines() if x.startswith("Base branch:")]
+    playbook = (_LEAD_DIR / "skills/factory-lead-playbook/SKILL.md").read_text(encoding="utf-8")
+    assert f"\n{line}\n" in playbook
+    assert "baseRefName" in playbook
 
 
 # A result line a sub-agent ends its turn with, e.g. `PREVIEW SKIPPED tooling-conflict <files>`.
@@ -676,6 +771,7 @@ _PLACEHOLDERS = (
     (re.compile(r"<sha7>"), "7767f0d"),
     (re.compile(r"<repo>"), "/home/omnigent/workspace/app"),
     (re.compile(r"<tooling ref>"), "main"),
+    (re.compile(r"<base>"), "temp-main"),
     (re.compile(r"<pr url>|<url>"), "https://github.com/caffeinelabs/app/pull/9630"),
     (re.compile(r"<[^<>\n]+>"), "x"),
 )
@@ -815,7 +911,8 @@ def _commit(repo: Path, files: dict[str, str], message: str) -> str:
 
 @pytest.fixture
 def app_repo(tmp_path: Path) -> dict[str, object]:
-    """An app origin whose main gained the preview tooling, and a clone with four PR heads."""
+    """An app origin whose main gained the preview tooling, a temp-main base cut before it, and a
+    clone with five PR heads."""
     origin = tmp_path / "origin"
     origin.mkdir()
     _git(origin, "init", "-q", "-b", "main")
@@ -826,6 +923,11 @@ def app_repo(tmp_path: Path) -> dict[str, object]:
     heads = {"old": _commit(origin, {"app.txt": "feature\n"}, "old-based PR")}
     _git(origin, "checkout", "-q", "-b", "old-tooling", base)
     heads["conflict"] = _commit(origin, {"Tiltfile": "pr\n"}, "old-based tooling PR")
+    # The project's base (the deploy block's <base>) changed a tooling file main never had.
+    _git(origin, "checkout", "-q", "-b", "temp-main", base)
+    _commit(origin, {"Tiltfile": "temp-main tweak\n"}, "temp-main tweak")
+    _git(origin, "checkout", "-q", "-b", "temp-head")
+    heads["temp"] = _commit(origin, {"app.txt": "feature\n"}, "temp-main-based PR")
     _git(origin, "checkout", "-q", "main")
     new = dict.fromkeys(_TOOLING_FILES, "new\n")
     new["scripts/factory.ts"] = "switch (command) {\n    case 'preview':\n}\n"
@@ -839,7 +941,8 @@ def app_repo(tmp_path: Path) -> dict[str, object]:
     _git(origin, "checkout", "-q", "main")
     clone = tmp_path / "clone"
     _git(tmp_path, "clone", "-q", str(origin), str(clone))
-    _git(clone, "fetch", "-q", "origin", "old-head", "old-tooling", "new-head", "mixed-head")
+    branches = ("old-head", "old-tooling", "new-head", "mixed-head", "temp-head", "temp-main")
+    _git(clone, "fetch", "-q", "origin", *branches)
     stubs = tmp_path / "bin"
     stubs.mkdir()
     for tool in ("pnpm", "node"):
@@ -902,6 +1005,13 @@ def test_preview_deploy_block_overlays_only_heads_without_the_tooling(
     assert done.returncode == 3
     assert "tooling-conflict: Tiltfile" in done.stdout
     assert not log.exists()
+
+    # The conflict check diffs against the PR's base; a tooling change of the base is not the PR's.
+    done = _run_deploy(app_repo, heads["temp"])
+    assert done.returncode == 0, done.stdout + done.stderr
+    [call] = log.read_text().splitlines()
+    assert call.endswith(f"tooling={app_repo['main']}")
+    assert (clone / "app.txt").read_text() == "feature\n"
 
 
 def test_real_bundles_seed_with_the_demo_harness(

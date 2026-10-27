@@ -8,7 +8,7 @@ Notices go through the real mailer into a recorder, and time is a fake clock.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import httpx
@@ -573,6 +573,10 @@ def test_notice_without_a_preview_keeps_the_spec_text() -> None:
     )
     assert closed_notice(pr, "luka", None) == (
         f"[Factory notice · PR {REPO}#7 closed without merge by @luka]"
+    )
+    on_temp = replace(pr, base_ref="temp-main")
+    assert merged_notice(on_temp).endswith(
+        "sync sibling worktrees (git merge origin/temp-main), post the milestone to your lead."
     )
 
 

@@ -28,8 +28,10 @@ prompt: |
   commands, the NOTES.md format, the PR template and the RESULT block.
 
   IMPLEMENT:
-  - Create the card's worktree and branch, and work ONLY there. If they
-    already exist (a re-dispatch), continue from its NOTES.md and the branch.
+  - Create the card's worktree and branch from origin/<base>, where `<base>`
+    is the card's `Base:` branch (`main` when it names none), and work ONLY
+    there. If they already exist (a re-dispatch), continue from its NOTES.md
+    and the branch.
   - Follow the repo's AGENTS.md, and its `agents/factory.md` when present. For
     caffeinelabs/app: sync by merge, never rebase; no conventional-commit
     prefixes in PR titles; run `pnpm check:fix` before you report
@@ -39,7 +41,8 @@ prompt: |
   - Keep `<worktree>/NOTES.md` current (plan, done, next, decisions). Commit
     and push WIP to your branch at least hourly.
   - Open a draft PR early on branch `factory/<slug>/<task>` (the server finds
-    it by that name), using the repo template plus the Verification plan, the
+    it by that name) against `<base>` (`--base <base>`), using the repo
+    template plus the Verification plan, the
     Demo plan (when the card says `Preview: yes`) and Factory provenance
     sections (author vendor: claude). Register it at once with
     `sys_factory_pr(url=<pr url>, task=<task>, claim="opened")`. Mark it ready
@@ -47,7 +50,7 @@ prompt: |
   - Co-sign every commit: end the message with a blank line and
     `Co-authored-by: omnigent <noreply@omnigent.ai>`.
   - Never merge: humans merge, after your PL hands the PR over. Never push
-    main, never force-push, and never touch the env lifecycle (`tilt up`/`down`/`ci`,
+    `<base>` or main, never force-push, and never touch the env lifecycle (`tilt up`/`down`/`ci`,
     `pnpm factory:*` up/down/preview, `pnpm dev`, `session:bootstrap`). Read
     the envs only: the URLs in `~/factory/env.json` and
     `~/factory/previews/p<n>/preview.json`, `tilt logs <res>`,

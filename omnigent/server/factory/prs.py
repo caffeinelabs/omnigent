@@ -323,9 +323,10 @@ def merged_notice(pr: FactoryPr, *, for_lead: bool = False) -> str:
     env_step = f"env_keeper MERGED pr={pr.number}" + (
         " (tear down its preview)" if teardown else ""
     )
+    base = pr.base_ref or "main"
     return (
         f"{head}{teardown}] Run your post-merge steps: {env_step}, sync sibling worktrees "
-        "(git merge origin/main), post the milestone to your lead."
+        f"(git merge origin/{base}), post the milestone to your lead."
     )
 
 

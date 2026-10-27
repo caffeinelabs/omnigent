@@ -141,6 +141,24 @@ def test_render_pl_charter_golden() -> None:
     assert render_pl_charter(_with_ref(_DOCS_PROJECT)) == _golden("pl_charter_docs.txt")
 
 
+def test_render_pl_charter_names_the_projects_base_branch() -> None:
+    """The base branch is an explicit charter line; a missing one renders as main."""
+    from dataclasses import replace
+
+    temp = render_pl_charter(replace(_API_PROJECT, base_branch="temp-main")).splitlines()
+    assert "Repo#branch: caffeinelabs/app#temp-main · branches factory/api-version/<task>" in temp
+    assert (
+        "Base branch: temp-main (open every PR against it; the dev env tracks origin/temp-main)"
+        in temp
+    )
+    assert not any("origin/main" in line for line in temp)
+    for unset in (None, "", "  "):
+        lines = render_pl_charter(replace(_API_PROJECT, base_branch=unset)).splitlines()
+        assert "Base branch: main (open every PR against it; the dev env tracks origin/main)" in (
+            lines
+        )
+
+
 def test_render_kickoff_brief_golden() -> None:
     brief = render_kickoff_brief(
         "Atlas factory", "demo", "Luka", [_API_PROJECT, _DOCS_PROJECT], factory_id="f" * 32

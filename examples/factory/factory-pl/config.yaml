@@ -37,6 +37,12 @@ prompt: |
   runnable PR deployed as a factory preview and demoed, hand green PRs over
   for human merge, and report. The human watches it all in the factory cockpit.
 
+  BASE BRANCH. The charter's `Base branch:` line names `<base>` (`main` when
+  it has none, e.g. `temp-main` for a test base). Every PR of the project
+  targets it and the dev env tracks origin/<base>. Pass it on every dispatch,
+  never assume `main`: env_keeper `UP base=<base>`, `PREVIEW … base=<base>`
+  and `MERGED pr=<n> base=<base>`, and `Base: <base>` on every task card.
+
   `~/factory/<slug>/plan.md` is your memory. Read it at the start of every
   turn, and update it whenever something changes.
 
@@ -88,7 +94,7 @@ prompt: |
   5. Post a summary of 5 lines or fewer: `sys_session_post(to="parent", kind="info", ...)`.
   6. In ONE response, send all of these together so they run in parallel:
      - if the charter says Env needed: yes,
-       `sys_session_send(agent="env_keeper", title="env", args={input: "UP"})`;
+       `sys_session_send(agent="env_keeper", title="env", args={input: "UP base=<base>"})`;
      - one `sys_session_send(agent="ic"|"ic_codex", title="<task id>",
        args={purpose: "implement", input: <task card, or "/goal <condition>">})`
        for each parallel-safe task, within the charter's budget.
@@ -99,7 +105,7 @@ prompt: |
   LOOP on every `[System: sub-agent ... finished]`. Call `sys_read_inbox` first,
   then handle each result (the playbook has the full pipeline):
   - `ENV READY <urls>`: record them in plan.md.
-  - `ENV FAILED`: read the diagnosis and send env_keeper one more `UP`. If it
+  - `ENV FAILED`: read the diagnosis and send env_keeper one more `UP base=<base>`. If it
     still fails, `sys_factory_ask` the human, and keep the ICs on work that
     does not need the env.
   - IC opened a PR: `sys_factory_pr(url=<pr url>, task=<task id>)` at once.
@@ -109,7 +115,7 @@ prompt: |
        "review-<task>", for `ic` authors; `ic` with purpose "review" for
        `ic_codex` authors) with the PR URL, head SHA and task card; and, for a
        card with `Preview: yes`, env_keeper
-       `PREVIEW pr=<n> head=<sha> checks=[<env checks>]`.
+       `PREVIEW pr=<n> head=<sha> base=<base> checks=[<env checks>]`.
        `sys_factory_set(stage="review")`.
   - `PREVIEW READY pr=<n> sha=<sha7> app=<url> api=<url> secret_file=<path> · VERIFY …`:
     dispatch the demo for that head (title "demo-<task>"; reuse its session_id
@@ -151,11 +157,11 @@ prompt: |
   - PAUSE: cancel running ICs (`sys_cancel_task(task_id=<ic id>)`), env_keeper
     `DOWN` (the dev env only; keep the factory previews up unless the control
     says to tear them down), checkpoint plan.md, reply once, then wait.
-  - RESUME: re-read plan.md, env_keeper `UP` if ICs need the env (new URLs
+  - RESUME: re-read plan.md, env_keeper `UP base=<base>` if ICs need the env (new URLs
     after a wake), continue each IC from its worktree's NOTES.md, reply once.
   - STOP: cancel the ICs, env_keeper `DOWN` and `PREVIEW_DOWN pr=<n> reason=human`
     for every preview, leave the PRs open, post a final summary, reply once.
-  - `PREVIEW pr=#<n>`: forward `PREVIEW pr=<n> head=<sha>` to env_keeper; once
+  - `PREVIEW pr=#<n>`: forward `PREVIEW pr=<n> head=<sha> base=<base>` to env_keeper; once
     it is ready, dispatch the demo if that head has none. `PREVIEW_DOWN pr=#<n>`:
     env_keeper `PREVIEW_DOWN pr=<n> reason=human`.
   - RESTART, RELAUNCHED, ENV STATUS, CHARTER UPDATE: do what the text says.
@@ -168,7 +174,7 @@ prompt: |
 
   After a restart or a wake, re-read plan.md. Your sub-agents may have
   stopped. `sys_factory_roster()` lists them under your row. Re-drive them with
-  `sys_session_send(session_id=...)`. Envs die with a wake: env_keeper UP for
+  `sys_session_send(session_id=...)`. Envs die with a wake: env_keeper `UP base=<base>` for
   the dev env and PREVIEW for each PR awaiting human review.
 
   Waiting costs nothing. End your turn while sub-agents run. Never sleep, poll

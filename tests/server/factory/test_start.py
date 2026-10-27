@@ -146,6 +146,46 @@ async def test_the_brief_is_queued_once_with_the_golden_text(cockpit: Cockpit) -
     assert item.text == expected
 
 
+async def test_a_test_base_branch_reaches_the_charter_brief_and_spawn(cockpit: Cockpit) -> None:
+    """A project started on a test base such as temp-main targets it everywhere."""
+    from omnigent.server.factory.charter import render_pl_charter
+
+    root = _new_lead(cockpit)
+    projects = copy.deepcopy(PROJECTS)
+    projects[0]["base_branch"] = "temp-main"
+
+    resp = await _start(cockpit, _body(root, projects=projects))
+
+    assert resp.status_code == 201, resp.text
+    api = cockpit.store.get_project(root, "api-status")
+    assert api is not None and api.base_branch == "temp-main"
+    charter = render_pl_charter(api).splitlines()
+    assert "Repo#branch: caffeinelabs/app#temp-main · branches factory/api-status/<task>" in (
+        charter
+    )
+    assert (
+        "Base branch: temp-main (open every PR against it; the dev env tracks origin/temp-main)"
+        in charter
+    )
+    [brief] = cockpit.mailer.items
+    assert "api-status · API status endpoint · P1 · caffeinelabs/app#temp-main" in brief.text
+    docs = cockpit.store.get_project(root, "docs-factory-envs")
+    assert docs is not None
+    assert "Base branch: main (open every PR against it)" in render_pl_charter(docs).splitlines()
+
+    cockpit.mailer.items.clear()
+    added = {
+        "slug": "ux-env-badge",
+        "repo": "caffeinelabs/app",
+        "base_branch": "temp-main",
+        "goal": "Show an ENV badge in the UX header on factory envs.",
+    }
+    resp = await cockpit.post(f"/v1/factory/factories/{root}/projects", added, user="alice")
+    assert resp.status_code == 201, resp.text
+    [spawn] = cockpit.mailer.items
+    assert "workspaces=['https://github.com/caffeinelabs/app#temp-main']" in spawn.text
+
+
 async def test_start_is_idempotent_for_the_same_slugs(cockpit: Cockpit) -> None:
     root = _new_lead(cockpit)
     assert (await _start(cockpit, _body(root))).status_code == 201

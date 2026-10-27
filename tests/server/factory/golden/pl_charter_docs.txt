@@ -4,6 +4,7 @@ Goal: Add docs/factory-envs.md.
 Definition of Done:
 - PR ready for human merge: CI green, review and verify markers at the head
 Repo#branch: caffeinelabs/app#main · branches factory/docs-factory-envs/<task>
+Base branch: main (open every PR against it)
 Scope paths: (whole repo)
 Constraints: Docs only.
 Env needed: no · label PRs factory:no-env (no preview, no demo)
