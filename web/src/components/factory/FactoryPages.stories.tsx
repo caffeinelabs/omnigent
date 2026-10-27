@@ -3,6 +3,7 @@ import { Route, Routes } from "react-router-dom";
 import { FACTORIES_QUERY_KEY, factoryQueryKey } from "@/hooks/useFactory";
 import { FactoryPage } from "@/pages/factory/FactoryPage";
 import { NewFactoryPage } from "@/pages/factory/NewFactoryPage";
+import { GITHUB_STORY_ROUTES } from "./start/startStoryRoutes";
 import { LIVE_RUN_FACTORY_ID } from "./__fixtures__/liveRun";
 import { storySnapshot } from "./board/__fixtures__/boardFixtures";
 import { FactoryStoryFrame, type FactoryFrameOptions } from "./factoryStoryFixtures";
@@ -59,10 +60,10 @@ export const RefreshError = cockpitStory({
   },
 });
 
-/** The start form's placeholder route. */
+/** The start form (its states are under Factory/Start/New factory). */
 export const NewFactory: Story = {
   render: () => (
-    <FactoryStoryFrame mode="viewport" route="/factory/new">
+    <FactoryStoryFrame mode="viewport" route="/factory/new" routes={GITHUB_STORY_ROUTES}>
       <NewFactoryPage />
     </FactoryStoryFrame>
   ),

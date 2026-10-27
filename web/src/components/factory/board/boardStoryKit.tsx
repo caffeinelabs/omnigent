@@ -3,8 +3,9 @@
 // a switch that puts the whole document in dark mode so portalled drawers and
 // hover cards follow the story's theme.
 
-import { type ReactNode, useLayoutEffect } from "react";
+import { type ReactNode, useContext, useLayoutEffect } from "react";
 import { Route, Routes } from "react-router-dom";
+import { ForceThemeContext } from "@/components/theme/ThemeProvider";
 import { FactoryPage } from "@/pages/factory/FactoryPage";
 import type { EventPage, FactorySnapshot } from "@/lib/factoryApi";
 import { LIVE_RUN_FACTORY_ID } from "../__fixtures__/liveRun";
@@ -17,23 +18,30 @@ import {
 import { boardActivityEvents, storySnapshot } from "./__fixtures__/boardFixtures";
 import { FactoryLiveContext } from "./factoryLive";
 
-/** Puts `.dark` on <html> while mounted (portals render outside the story frame). */
+/**
+ * Puts the whole document in dark mode while mounted (portals render outside
+ * the story frame). It forces the theme provider rather than only the class,
+ * which the provider would reset.
+ */
 export function DocumentTheme({ theme }: { theme: "light" | "dark" }) {
+  const force = useContext(ForceThemeContext);
   useLayoutEffect(() => {
     if (theme !== "dark") return;
+    force?.("dark");
     const root = document.documentElement;
     const had = root.classList.contains("dark");
     root.classList.add("dark");
-    // The preview's ThemeProvider applies the system theme after mount; keep `.dark`.
+    // Without a forcing host, the provider applies the system theme after mount; keep `.dark`.
     const observer = new MutationObserver(() => {
       if (!root.classList.contains("dark")) root.classList.add("dark");
     });
     observer.observe(root, { attributes: true, attributeFilter: ["class"] });
     return () => {
       observer.disconnect();
+      force?.(undefined);
       if (!had) root.classList.remove("dark");
     };
-  }, [theme]);
+  }, [theme, force]);
   return null;
 }
 

@@ -598,6 +598,43 @@ export interface FactoryProjectInput {
   budget_ics: number;
 }
 
+/**
+ * `PATCH /v1/factory/factories/{fid}/projects/{slug}`: only the fields sent
+ * change. `env_needed`, the title, slug and repo are fixed once added.
+ */
+export interface CharterPatchRequest {
+  goal?: string;
+  dod?: string[] | null;
+  scope_paths?: string[] | null;
+  constraints?: string | null;
+  preview?: { enabled?: boolean; slots?: number };
+  demo_focus?: string | null;
+  budget_ics?: number;
+  priority?: number;
+}
+
+/** A stored project row as the add/patch routes return it. */
+export interface FactoryProjectRow {
+  slug: string;
+  title: string;
+  repo: string | null;
+  base_branch: string | null;
+  priority: number;
+  charter: CharterView | null;
+}
+
+export interface AddProjectResponse {
+  project: FactoryProjectRow;
+}
+
+export interface CharterPatchResponse {
+  project: FactoryProjectRow;
+  /** False when the rendered charter is unchanged (nothing was sent). */
+  changed: boolean;
+  /** The PL's CHARTER UPDATE mail, or null when the project has no PL yet. */
+  mail_id: string | null;
+}
+
 /** `POST /v1/factory/factories`. */
 export interface CreateFactoryRequest {
   root_session_id: string;
@@ -625,7 +662,10 @@ export interface FactoryControlRequest {
 }
 
 export interface FactoryControlResponse {
+  /** The `control.<action>` event (its id is what `control.ack` names). */
   events: EventView[];
+  /** Mail queued per recipient session id. */
+  mail_ids?: Record<string, string>;
 }
 
 export interface EventFilters {
@@ -818,15 +858,15 @@ export async function createFactory(body: CreateFactoryRequest): Promise<CreateF
 export async function addFactoryProject(
   factoryId: string,
   project: FactoryProjectInput,
-): Promise<unknown> {
+): Promise<AddProjectResponse> {
   return readJson(await postJson(`/v1/factory/factories/${enc(factoryId)}/projects`, project));
 }
 
 export async function patchFactoryProject(
   factoryId: string,
   slug: string,
-  patch: Partial<FactoryProjectInput>,
-): Promise<unknown> {
+  patch: CharterPatchRequest,
+): Promise<CharterPatchResponse> {
   return readJson(
     await postJson(`/v1/factory/factories/${enc(factoryId)}/projects/${enc(slug)}`, patch, "PATCH"),
   );
@@ -932,6 +972,18 @@ const defaultSleep = (ms: number) =>
     setTimeout(resolve, ms);
   });
 
+/** Which call of the two-call start is running. */
+export type StartFactoryStep = "lead" | "register";
+
+export interface StartFactoryOptions {
+  /** Backoff hook (tests pass a no-op). */
+  sleep?: (ms: number) => Promise<void>;
+  /** Called as each step begins (the form shows "Creating Atlas…" / "Storing charters…"). */
+  onStep?: (step: StartFactoryStep) => void;
+  /** A lead created by an earlier attempt: skip step 1 and register against it. */
+  rootSessionId?: string | null;
+}
+
 /**
  * Start a factory in two calls: create the lead (Atlas) as a managed session,
  * then register the factory against it.
@@ -939,16 +991,16 @@ const defaultSleep = (ms: number) =>
  * The lead's spec owns its launch mode, so step 1 is the ordinary session
  * create. Step 2 is idempotent per root id and is retried with the same id on
  * transient failures; a 4xx other than 404 (validation, conflict) is final.
+ * A retry after a failed step 2 passes `rootSessionId` and skips step 1.
  *
  * @param form - Name, cadence and projects (the first one's repo is the lead's workspace).
- * @param options.sleep - Backoff hook (tests pass a no-op).
  * @returns The new factory's id and cockpit url.
  * @throws StartFactoryError when the lead was created but registering failed
  *   (its `rootSessionId` names the orphan lead, so the UI can open or retry it).
  */
 export async function startFactory(
   form: StartFactoryForm,
-  options: { sleep?: (ms: number) => Promise<void> } = {},
+  options: StartFactoryOptions = {},
 ): Promise<CreateFactoryResponse & { root_session_id: string }> {
   // A blank branch means the server default, so the lead's workspace never ends in `#`.
   const projects = form.projects.map((project) => ({
@@ -957,22 +1009,28 @@ export async function startFactory(
   }));
   const first = projects[0];
   if (!first) throw new Error("A factory needs at least one project");
-  const agentId = await resolveAgentId(FACTORY_LEAD_AGENT_NAME);
-  const session = await readJson<{ id: string }>(
-    await authenticatedFetch("/v1/sessions", {
-      method: "POST",
-      headers: sessionCreateHeaders(),
-      body: JSON.stringify({
-        agent_id: agentId,
-        host_type: "managed",
-        workspaces: [`https://github.com/${first.repo}#${first.base_branch}`],
-        title: FACTORY_LEAD_TITLE,
+  let rootId = options.rootSessionId ?? null;
+  if (!rootId) {
+    options.onStep?.("lead");
+    const agentId = await resolveAgentId(FACTORY_LEAD_AGENT_NAME);
+    const session = await readJson<{ id: string }>(
+      await authenticatedFetch("/v1/sessions", {
+        method: "POST",
+        headers: sessionCreateHeaders(),
+        body: JSON.stringify({
+          agent_id: agentId,
+          host_type: "managed",
+          workspaces: [`https://github.com/${first.repo}#${first.base_branch}`],
+          title: FACTORY_LEAD_TITLE,
+        }),
       }),
-    }),
-  );
+    );
+    rootId = session.id;
+  }
+  options.onStep?.("register");
   const sleep = options.sleep ?? defaultSleep;
   const request: CreateFactoryRequest = {
-    root_session_id: session.id,
+    root_session_id: rootId,
     name: form.name,
     cadence: form.cadence,
     projects,
@@ -982,7 +1040,7 @@ export async function startFactory(
   for (let attempt = 1; attempt <= START_REGISTER_ATTEMPTS; attempt++) {
     try {
       const created = await createFactory(request);
-      return { ...created, root_session_id: session.id };
+      return { ...created, root_session_id: rootId };
     } catch (error) {
       lastError = error;
       if (!retryable(error) || attempt === START_REGISTER_ATTEMPTS) break;
@@ -993,7 +1051,7 @@ export async function startFactory(
   const reason = lastError instanceof Error ? lastError.message : String(lastError);
   throw new StartFactoryError(
     `Atlas was created but the factory was not registered: ${reason}`,
-    session.id,
+    rootId,
     lastError,
   );
 }

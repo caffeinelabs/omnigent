@@ -438,6 +438,10 @@ export function pageScenario(state: PageState): FactorySnapshot {
         paused_by: "luka",
         claim_mismatch: false,
       });
+      // A pause takes the dev env down (previews stay unless torn down).
+      if (project.env?.reported) {
+        project.env = { ...project.env, reported: { ...project.env.reported, state: "down" } };
+      }
       project.pl = project.pl && { ...project.pl, running: false, status: "idle" };
       project.team = project.team.map((m) => ({ ...m, running: false, status: "idle" }));
     }
@@ -694,6 +698,18 @@ export function boardActivityEvents(): EventPage {
       from_id: "713c96e676515bd992f5c15015101a2e",
       from_title: "Lead B · Sentinel",
       summary: "Sentinel relaunch failed (runner_unavailable)",
+    },
+    {
+      ...base,
+      id: "ev13a",
+      ts: t - 590_000,
+      kind: "control.ack",
+      project_slug: "api-version",
+      from_id: LIVE_RUN_PL_API_ID,
+      from_title: "PL · api-version",
+      subject: "project:api-version",
+      summary: "resume acknowledged",
+      data: { control_event_id: "ev13", action: "resume" },
     },
     {
       ...base,
