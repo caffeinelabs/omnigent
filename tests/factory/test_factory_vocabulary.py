@@ -207,6 +207,8 @@ def test_actor_constructors_and_attribution() -> None:
         ("#factory", Ref("thread", slug="factory")),
         ("#improvements", Ref("thread", slug="improvements")),
         ("p:db-version", Ref("project", slug="db-version")),
+        ("p:factory", Ref("project", slug="factory")),
+        ("p:improvements", Ref("project", slug="improvements")),
         ("task:db-version/route", Ref("task_key", slug="db-version", key="route")),
         ("task:db-version/route-r1", Ref("task_key", slug="db-version", key="route-r1")),
         ("  D-31 ", Ref("decision", number=31)),
@@ -257,6 +259,9 @@ def test_ref_formatters() -> None:
     assert finding_ref(7) == "F-7"
     assert pr_ref(9630) == "!9630"
     assert project_ref("db-version") == "#db-version"
+    # A project named like a Room thread keeps the explicit form, so it reads back as a project.
+    assert project_ref("factory") == "p:factory"
+    assert parse_ref(project_ref("improvements")) == Ref("project", slug="improvements")
     assert task_key_ref("db-version", "route") == "task:db-version/route"
     with pytest.raises(ValueError):
         project_ref("DB version")

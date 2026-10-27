@@ -13,7 +13,8 @@ Refs are the ids humans and agents type and the cockpit renders as chips:
 ``!9630``                 PR number 9630
 ``#db-version``           project ``db-version`` (``#factory`` and
                           ``#improvements`` are the fixed Room threads)
-``p:db-version``          project ``db-version`` (the explicit form)
+``p:db-version``          project ``db-version`` (the explicit form, and the
+                          only one for projects named like a fixed thread)
 ``task:db-version/route`` task ``route`` of project ``db-version``
 ========================  ==============================================
 """
@@ -188,6 +189,9 @@ def format_ref(ref: Ref) -> str:
         return f"{_PREFIX[ref.kind]}-{ref.number}"
     if ref.kind == "pr" and ref.number is not None:
         return f"!{ref.number}"
+    if ref.kind == "project" and ref.slug in FIXED_THREADS:
+        # ``#factory`` would read back as the Room thread.
+        return f"p:{ref.slug}"
     if ref.kind in ("project", "thread") and ref.slug:
         return f"#{ref.slug}"
     if ref.kind == "task_key" and ref.slug and ref.key:
@@ -227,7 +231,7 @@ def pr_ref(number: int) -> str:
 
 def project_ref(slug: str) -> str:
     """
-    :returns: e.g. ``"#db-version"``.
+    :returns: e.g. ``"#db-version"``, or ``"p:factory"`` for a slug that names a fixed thread.
     :raises ValueError: When *slug* is not a project slug.
     """
     if not PROJECT_SLUG_RE.match(slug):

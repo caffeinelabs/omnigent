@@ -15,16 +15,18 @@ from typing import Any
 
 import pytest
 import sqlalchemy as sa
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from omnigent.db.db_models import workspace_scope
 from omnigent.db.utils import get_or_create_engine
 from omnigent.stores.factory_store import (
+    TEXT_BOUNDS,
     DefinitionVersionExists,
     FactoryStore,
     InMemoryFactoryStore,
     ProposalStateConflict,
     canonical_hash,
+    sqlalchemy_store,
     version_content_hash,
 )
 from omnigent.stores.factory_store.sqlalchemy_store import SqlAlchemyFactoryStore
@@ -232,6 +234,18 @@ def test_chat_pages(store: FactoryStore) -> None:
     assert [m.body for m in newer] == ["m2", "m4"]
     assert [m.seq for m in store.list_chat(FID)] == list(range(1, 8))
     assert store.list_chat(OTHER_FID) == []
+
+
+def test_chat_append_replay_returns_the_stored_message(store: FactoryStore) -> None:
+    message_id = uuid.uuid4().hex
+    first = store.append_chat(
+        FID, thread="factory", author_kind="human", author=LUKA, body="hi", message_id=message_id
+    )
+    again = store.append_chat(
+        FID, thread="factory", author_kind="human", author=LUKA, body="edit", message_id=message_id
+    )
+    assert again == first and again.body == "hi"
+    assert store.next_chat_seq(FID) == 2
 
 
 def test_chat_routing_updates_and_read_marks(store: FactoryStore) -> None:
@@ -836,6 +850,98 @@ def test_dedupe_keys_hold_under_concurrency(store: FactoryStore) -> None:
     assert row.count == 6
     proposals = _race(6, lambda i: _propose(store, dedupe_key="plan"))
     assert sum(not deduped for _, deduped in proposals) == 1
+
+
+def test_definition_numbering_replays_unserialized_racers(db_uri: str) -> None:
+    """Without a sequence lock (CockroachDB), a put that loses its number takes the next one."""
+    store = SqlAlchemyFactoryStore(db_uri)
+    store._sequence_lock = None
+    versions = _race(
+        8,
+        lambda i: (
+            store.put_definition(
+                FID, doc={"i": i}, created_by="server", created_via="human"
+            ).version
+        ),
+    )
+    assert sorted(versions) == list(range(1, 9))
+    with pytest.raises(DefinitionVersionExists):
+        store.put_definition(FID, doc={}, created_by="server", created_via="human", version=3)
+
+
+class _DriverError(Exception):
+    """A DBAPI error as MySQL (``args[0]`` errno) or PostgreSQL (``sqlstate``) reports it."""
+
+    def __init__(self, *args: object, sqlstate: str | None = None) -> None:
+        super().__init__(*args)
+        self.sqlstate = sqlstate
+
+
+@pytest.mark.parametrize(
+    ("orig", "replayed"),
+    [
+        (_DriverError(1213, "Deadlock found when trying to get lock"), True),
+        (_DriverError(1205, "Lock wait timeout exceeded"), True),
+        (_DriverError("deadlock detected", sqlstate="40P01"), True),
+        (_DriverError(1146, "Table doesn't exist"), False),
+        (_DriverError("syntax error", sqlstate="42601"), False),
+    ],
+)
+def test_writes_replay_lock_conflicts(
+    db_uri: str, monkeypatch: pytest.MonkeyPatch, orig: _DriverError, replayed: bool
+) -> None:
+    store = SqlAlchemyFactoryStore(db_uri)
+    real = sqlalchemy_store.run_write_transaction
+    calls: list[str] = []
+
+    def flaky(maker: Any, operation: str, callback: Any) -> Any:
+        calls.append(operation)
+        if len(calls) == 1:
+            raise OperationalError("UPDATE factory_cost_daily", {}, orig)
+        return real(maker, operation, callback)
+
+    monkeypatch.setattr(sqlalchemy_store, "run_write_transaction", flaky)
+    monkeypatch.setattr(sqlalchemy_store, "_RETRY_PAUSE_S", 0.0)
+    cell = {"project_slug": "p", "role": "ic", "agent_name": "a", "model": "m", "day_utc": "d"}
+    if replayed:
+        assert store.add_cost_daily(FID, **cell, cost_usd=1.0).turns == 1
+        assert len(calls) == 2
+    else:
+        with pytest.raises(OperationalError):
+            store.add_cost_daily(FID, **cell, cost_usd=1.0)
+        assert len(calls) == 1
+
+
+def test_free_text_is_clipped_to_column_bounds(store: FactoryStore) -> None:
+    long = "x" * 1000
+    proposal, _ = _propose(store, title=long)
+    task, _ = store.upsert_task(FID, "db-version", "route", title=long)
+    loop, _ = store.upsert_loop(FID, "implement", "t", last_verdict=long, last_reason=long)
+    issue, _ = store.upsert_issue(
+        FID, class_="incident", rule=long, target=long, summary=long, category=long
+    )
+    span, _ = store.insert_span(FID, kind="gate", name=long, trace_key="pr:x", agent_name=long)
+    cell = {"project_slug": "p", "role": "ic", "agent_name": long, "model": long}
+    store.add_cost_daily(FID, **cell, day_utc="2026-10-27", cost_usd=1.0)
+    cost = store.add_cost_daily(FID, **cell, day_utc="2026-10-27", cost_usd=1.0)
+    version, _ = store.upsert_version(bundles={}, knobs={}, image_tag=long, note=long)
+    clipped = {
+        "proposal": proposal,
+        "task": task,
+        "loop": loop,
+        "issue": issue,
+        "span": span,
+        "cost": cost,
+        "version": version,
+    }
+    for entity, row in clipped.items():
+        for name, bound in TEXT_BOUNDS[entity].items():
+            assert getattr(row, name) == "x" * bound, (entity, name)
+    assert cost.turns == 2  # the clipped model is one ledger cell
+    updated = store.update_issue(issue.id, summary=long, rule=long)
+    assert updated is not None and (len(updated.summary), len(updated.rule)) == (300, 48)
+    renamed = store.update_proposal(proposal.id, title=long)
+    assert renamed is not None and len(renamed.title) == 256
 
 
 # ── Isolation and SQL-level guarantees ─────────────────────────

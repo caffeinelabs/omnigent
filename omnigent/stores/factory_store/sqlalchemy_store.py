@@ -5,11 +5,12 @@ from __future__ import annotations
 import builtins
 import random
 import time
-from collections.abc import Callable, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from typing import Any, TypeVar
 
 from sqlalchemy import and_, delete, func, or_, select, text, update
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -136,6 +137,8 @@ from omnigent.stores.factory_store import (
     as_list,
     canonical_hash,
     check_fields,
+    clip_text,
+    clip_value,
     default_pr_url,
     dump_json,
     load_json,
@@ -154,10 +157,26 @@ from omnigent.stores.factory_store import (
 
 _T = TypeVar("_T")
 
-# A collision on a UNIQUE key (decision number, project slug, PR number) between
-# concurrent writers is retried this many times, after a short jittered pause.
-_INTEGRITY_RETRIES = 3
+# A collision on a UNIQUE key (decision number, project slug, PR number) or a
+# lock conflict between concurrent writers is retried after a jittered,
+# exponentially growing pause. Numbered sequences get the larger budget: every
+# racer but one loses each round where nothing serializes them (CockroachDB).
+_WRITE_RETRIES = 5
+_SEQUENCE_RETRIES = 12
 _RETRY_PAUSE_S = 0.02
+_RETRY_PAUSE_MAX_S = 0.4
+
+# Lock conflicts worth replaying: MySQL deadlock (1213) and lock wait timeout
+# (1205); PostgreSQL serialization failure (40001) and deadlock (40P01).
+_TRANSIENT_MYSQL_ERRNOS = frozenset({1205, 1213})
+_TRANSIENT_SQLSTATES = frozenset({"40001", "40P01"})
+
+# Sequence locks per dialect: a transaction advisory lock, or a named lock.
+_SEQUENCE_LOCKS = {"postgresql": "advisory", "mysql": "named", "mariadb": "named"}
+
+# Seconds a MySQL writer waits for a sequence's named lock before it goes
+# ahead unserialized (the UNIQUE key and retries still keep numbers unique).
+_MYSQL_LOCK_WAIT_S = 10
 
 # Namespaces mixed into the per-factory PostgreSQL advisory lock keys, one per
 # numbered sequence (decisions D-n, chat seq, proposals C-n, tasks T-n, issues,
@@ -175,6 +194,18 @@ def _lock_key(namespace: int, workspace_id: int, factory_id: str) -> int:
     value = int.from_bytes(bytes.fromhex(factory_id)[:8], "big") ^ namespace
     value = (value ^ (workspace_id * 0x9E3779B97F4A7C15)) & ((1 << 64) - 1)
     return value - (1 << 64) if value >= (1 << 63) else value
+
+
+def _is_transient(exc: DBAPIError) -> bool:
+    """Whether *exc* is a write collision or lock conflict a replay can clear."""
+    if isinstance(exc, IntegrityError):
+        return True
+    original = exc.orig
+    state = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
+    if state in _TRANSIENT_SQLSTATES:
+        return True
+    args = getattr(original, "args", ())
+    return bool(args) and isinstance(args[0], int) and args[0] in _TRANSIENT_MYSQL_ERRNOS
 
 
 def _decision_lock_key(workspace_id: int, factory_id: str) -> int:
@@ -431,7 +462,7 @@ def _columns(entity: str, fields: Mapping[str, Any]) -> dict[str, Any]:
     json_columns = _JSON_COLUMNS.get(entity, frozenset())
     empty = _EMPTY_JSON.get(entity, {})
     out: dict[str, Any] = {}
-    for key, value in normalise_ids(fields).items():
+    for key, value in normalise_ids(clip_text(entity, fields)).items():
         if key in json_columns:
             out[key] = dump_json(empty.get(key) if value is None and key in empty else value)
         elif key in encoders:
@@ -733,24 +764,66 @@ class SqlAlchemyFactoryStore(FactoryStore):
         self._session_immediate = make_named_managed_session_maker(
             self._engine, query_name_prefix="omnigent.factory_store", immediate=True
         )
+        # How writers of one numbered sequence are serialized. SQLite's BEGIN
+        # IMMEDIATE already does; CockroachDB relies on the UNIQUE key and replays.
+        self._sequence_lock = _SEQUENCE_LOCKS.get(self._engine.dialect.name)
 
-    def _lock_sequence(self, session: Session, namespace: int, factory_id: str) -> None:
-        """Serialize per-factory numbering on PostgreSQL (SQLite BEGIN IMMEDIATE already does)."""
-        if self._engine.dialect.name == "postgresql":
-            session.execute(
-                text("SELECT pg_advisory_xact_lock(:key)"),
-                {"key": _lock_key(namespace, current_workspace_id(), factory_id)},
-            )
+    @contextmanager
+    def _mysql_sequence_lock(self, sequence: tuple[int, str] | None) -> Iterator[None]:
+        """
+        Hold a MySQL named lock on one factory sequence until the write commits.
 
-    def _write(self, operation: str, callback: Callable[[Session], _T]) -> _T:
-        """Run a write transaction, retrying UNIQUE collisions between racing writers."""
-        for attempt in range(_INTEGRITY_RETRIES + 1):
+        ``GET_LOCK`` belongs to a connection, not a transaction, so it is taken
+        on a session of its own that outlives the write transaction.
+        """
+        if sequence is None or self._sequence_lock != "named":
+            yield
+            return
+        name = f"omnigent_factory_{_lock_key(sequence[0], current_workspace_id(), sequence[1])}"
+        with self._session("lock_factory_sequence") as session:
+            held = session.execute(
+                text("SELECT GET_LOCK(:name, :wait)"),
+                {"name": name, "wait": _MYSQL_LOCK_WAIT_S},
+            ).scalar()
             try:
-                return run_write_transaction(self._session_immediate, operation, callback)
-            except IntegrityError:
-                if attempt == _INTEGRITY_RETRIES:
+                yield
+            finally:
+                if held == 1:
+                    session.execute(text("SELECT RELEASE_LOCK(:name)"), {"name": name})
+
+    def _write(
+        self,
+        operation: str,
+        callback: Callable[[Session], _T],
+        *,
+        sequence: tuple[int, str] | None = None,
+    ) -> _T:
+        """
+        Run a write transaction, replaying collisions and lock conflicts between racing writers.
+
+        :param sequence: ``(lock namespace, factory id)`` of the numbered sequence the
+            write extends. Its writers are serialized where the backend can, and get a
+            larger replay budget.
+        """
+
+        def locked(session: Session) -> _T:
+            if sequence is not None and self._sequence_lock == "advisory":
+                session.execute(
+                    text("SELECT pg_advisory_xact_lock(:key)"),
+                    {"key": _lock_key(sequence[0], current_workspace_id(), sequence[1])},
+                )
+            return callback(session)
+
+        budget = _WRITE_RETRIES if sequence is None else _SEQUENCE_RETRIES
+        for attempt in range(budget + 1):
+            try:
+                with self._mysql_sequence_lock(sequence):
+                    return run_write_transaction(self._session_immediate, operation, locked)
+            except DBAPIError as exc:
+                if attempt == budget or not _is_transient(exc):
                     raise
-                time.sleep(_RETRY_PAUSE_S * (attempt + 1) * random.random())
+                pause = min(_RETRY_PAUSE_S * 2**attempt, _RETRY_PAUSE_MAX_S)
+                time.sleep(pause * random.random())
         raise AssertionError("unreachable")
 
     # ── Projects ────────────────────────────────────────────────
@@ -996,7 +1069,6 @@ class SqlAlchemyFactoryStore(FactoryStore):
 
         def write(session: Session) -> tuple[FactoryDecision, bool]:
             ws = current_workspace_id()
-            self._lock_sequence(session, _DECISION_LOCK_NS, fid)
             existing = (
                 session.execute(
                     select(SqlFactoryDecision)
@@ -1045,7 +1117,7 @@ class SqlAlchemyFactoryStore(FactoryStore):
             session.flush()
             return _decision(row), False
 
-        return self._write("open_decision", write)
+        return self._write("open_decision", write, sequence=(_DECISION_LOCK_NS, fid))
 
     def get_decision(self, decision_id: str) -> FactoryDecision | None:
         with self._session("get_decision") as session:
@@ -1488,7 +1560,10 @@ class SqlAlchemyFactoryStore(FactoryStore):
         row_id = norm_id(message_id) if message_id else new_id()
 
         def write(session: Session) -> FactoryChatMessage:
-            self._lock_sequence(session, _CHAT_LOCK_NS, fid)
+            if message_id:
+                existing = session.get(SqlFactoryChatMessage, (current_workspace_id(), row_id))
+                if existing is not None:
+                    return _chat(existing)
             row = SqlFactoryChatMessage(
                 id=row_id,
                 factory_id=fid,
@@ -1510,7 +1585,7 @@ class SqlAlchemyFactoryStore(FactoryStore):
             session.flush()
             return _chat(row)
 
-        return self._write("post_factory_chat", write)
+        return self._write("post_factory_chat", write, sequence=(_CHAT_LOCK_NS, fid))
 
     def next_chat_seq(self, factory_id: str) -> int:
         with self._session("next_factory_chat_seq") as session:
@@ -1663,7 +1738,6 @@ class SqlAlchemyFactoryStore(FactoryStore):
 
         def write(session: Session) -> tuple[FactoryProposal, bool]:
             ws = current_workspace_id()
-            self._lock_sequence(session, _PROPOSAL_LOCK_NS, fid)
             if dedupe_key is not None:
                 existing = session.execute(
                     select(model).where(
@@ -1693,7 +1767,7 @@ class SqlAlchemyFactoryStore(FactoryStore):
             session.flush()
             return _proposal(row), False
 
-        return self._write("file_factory_proposal", write)
+        return self._write("file_factory_proposal", write, sequence=(_PROPOSAL_LOCK_NS, fid))
 
     def get_proposal(self, proposal_id: str) -> FactoryProposal | None:
         with self._session("get_factory_proposal") as session:
@@ -1812,7 +1886,6 @@ class SqlAlchemyFactoryStore(FactoryStore):
                     setattr(row, name, value)
                 row.updated_at = now
                 return _task(row), False
-            self._lock_sequence(session, _TASK_LOCK_NS, fid)
             top = session.execute(
                 select(func.max(SqlFactoryTask.number)).where(
                     SqlFactoryTask.workspace_id == current_workspace_id(),
@@ -1846,7 +1919,7 @@ class SqlAlchemyFactoryStore(FactoryStore):
             session.flush()
             return _task(row), True
 
-        return self._write("upsert_factory_task", write)
+        return self._write("upsert_factory_task", write, sequence=(_TASK_LOCK_NS, fid))
 
     def get_task(self, task_id: str) -> FactoryTask | None:
         with self._session("get_factory_task") as session:
@@ -2062,7 +2135,6 @@ class SqlAlchemyFactoryStore(FactoryStore):
 
         def write(session: Session) -> tuple[FactoryIssue, bool]:
             ws, now = current_workspace_id(), now_s()
-            self._lock_sequence(session, _ISSUE_LOCK_NS, fid)
             changes = {**fields, "rule": rule, "target": target, "summary": summary}
             if dedupe_key is not None:
                 row = session.execute(
@@ -2106,7 +2178,7 @@ class SqlAlchemyFactoryStore(FactoryStore):
             session.flush()
             return _issue(row), True
 
-        return self._write("raise_factory_issue", write)
+        return self._write("raise_factory_issue", write, sequence=(_ISSUE_LOCK_NS, fid))
 
     def get_issue(self, issue_id: str) -> FactoryIssue | None:
         with self._session("get_factory_issue") as session:
@@ -2222,7 +2294,7 @@ class SqlAlchemyFactoryStore(FactoryStore):
                 id=row_id,
                 factory_id=fid,
                 trace_key=trace_key,
-                name=name,
+                name=clip_value("span", "name", name),
                 started_at=start,
                 dedupe_key=dedupe_key,
                 **columns,
@@ -2361,6 +2433,8 @@ class SqlAlchemyFactoryStore(FactoryStore):
         turns: int = 1,
     ) -> FactoryCostDaily:
         fid = norm_id(factory_id)
+        agent_name = clip_value("cost", "agent_name", agent_name)
+        model = clip_value("cost", "model", model)
         table = SqlFactoryCostDaily
 
         def write(session: Session) -> FactoryCostDaily:
@@ -2446,6 +2520,8 @@ class SqlAlchemyFactoryStore(FactoryStore):
         server_sha: str | None = None,
         note: str | None = None,
     ) -> tuple[FactoryVersion, bool]:
+        clipped = clip_text("version", {"image_tag": image_tag, "note": note})
+        image_tag, note = clipped["image_tag"], clipped["note"]
         content_hash = version_content_hash(
             bundles=bundles, knobs=knobs, image_tag=image_tag, server_sha=server_sha
         )
@@ -2510,18 +2586,20 @@ class SqlAlchemyFactoryStore(FactoryStore):
 
         def write(session: Session) -> FactoryDefinition:
             ws = current_workspace_id()
-            self._lock_sequence(session, _DEFINITION_LOCK_NS, fid)
             number = version
             if number is None:
+                # A racer that takes this number first fails the insert on the
+                # primary key, and the replay numbers past it.
                 top = session.execute(
                     select(func.max(model.version)).where(
                         model.workspace_id == ws, model.factory_id == fid
                     )
                 ).scalar()
                 number = (top or 0) + 1
-            existing = session.get(model, (ws, fid, number))
-            if existing is not None:
-                raise DefinitionVersionExists(_definition(existing))
+            else:
+                existing = session.get(model, (ws, fid, number))
+                if existing is not None:
+                    raise DefinitionVersionExists(_definition(existing))
             row = model(
                 factory_id=fid,
                 version=number,
@@ -2537,7 +2615,7 @@ class SqlAlchemyFactoryStore(FactoryStore):
             session.flush()
             return _definition(row)
 
-        return self._write("put_factory_definition", write)
+        return self._write("put_factory_definition", write, sequence=(_DEFINITION_LOCK_NS, fid))
 
     def get_definition(self, factory_id: str, version: int) -> FactoryDefinition | None:
         with self._session("get_factory_definition") as session:

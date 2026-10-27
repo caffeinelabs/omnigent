@@ -537,6 +537,33 @@ def validate_enums(entity: str, fields: Mapping[str, Any]) -> None:
         check_priority(fields["priority"])
 
 
+# VARCHAR bounds of the free-text columns. Longer values are cut to fit, since
+# PostgreSQL raises DataError where SQLite would store them whole.
+TEXT_BOUNDS: dict[str, dict[str, int]] = {
+    "proposal": {"title": 256},
+    "task": {"title": 256},
+    "loop": {"last_verdict": 32, "last_reason": 300},
+    "issue": {"rule": 48, "category": 48, "target": 128, "summary": 300},
+    "span": {"name": 64, "agent_name": 64},
+    "cost": {"agent_name": 64, "model": 64},
+    "version": {"image_tag": 64, "note": 256},
+}
+
+
+def clip_value(entity: str, name: str, value: str) -> str:
+    """:returns: *value* cut to the column bound of ``entity.name``."""
+    return value[: TEXT_BOUNDS[entity][name]]
+
+
+def clip_text(entity: str, fields: Mapping[str, Any]) -> dict[str, Any]:
+    """A copy of *fields* with each free-text value of *entity* cut to its column bound."""
+    out = dict(fields)
+    for name in TEXT_BOUNDS.get(entity, {}).keys() & out.keys():
+        if isinstance(out[name], str):
+            out[name] = clip_value(entity, name, out[name])
+    return out
+
+
 def normalise_ids(fields: Mapping[str, Any]) -> dict[str, Any]:
     """A copy of *fields* with every Uuid16 column value as bare hex (``None`` passes)."""
     out = dict(fields)
@@ -991,6 +1018,8 @@ class FactoryStore(ABC):
         (human posts, ``sys_factory_chat``, cards, auto-replies).
 
         :param author_kind: ``human`` / ``agent`` / ``system``.
+        :param message_id: The id to store the message under. When a message with that
+            id exists, it is returned unchanged (a replayed append adds nothing).
         :raises ValueError: On an unknown author kind.
         """
 
@@ -2157,6 +2186,8 @@ class InMemoryFactoryStore(FactoryStore):
         validate_enums("chat", {"author_kind": author_kind})
         fid = norm_id(factory_id)
         with self._lock:
+            if message_id and (self._ws(), norm_id(message_id)) in self._chat:
+                return _detach(self._chat[(self._ws(), norm_id(message_id))])
             row = FactoryChatMessage(
                 id=norm_id(message_id) if message_id else new_id(),
                 factory_id=fid,
@@ -2282,7 +2313,7 @@ class InMemoryFactoryStore(FactoryStore):
         **fields: Any,
     ) -> tuple[FactoryProposal, bool]:
         check_fields(fields, PROPOSAL_FIELDS - {"title"}, "create_proposal")
-        values = copy.deepcopy(normalise_ids(fields))
+        values = clip_text("proposal", copy.deepcopy(normalise_ids(fields)))
         values.setdefault("approval", "operator")
         validate_enums("proposal", {**values, "kind": kind, "author_kind": author_kind})
         fid = norm_id(factory_id)
@@ -2297,7 +2328,7 @@ class InMemoryFactoryStore(FactoryStore):
                 factory_id=fid,
                 number=self.next_proposal_number(fid),
                 kind=kind,
-                title=title,
+                title=clip_value("proposal", "title", title),
                 author_kind=author_kind,
                 author=author,
                 dedupe_key=dedupe_key,
@@ -2354,7 +2385,7 @@ class InMemoryFactoryStore(FactoryStore):
         check_fields(fields, PROPOSAL_FIELDS, "update_proposal")
         validate_enums("proposal", fields)
         expected = as_list(expect_status)
-        values = copy.deepcopy(normalise_ids(fields))
+        values = clip_text("proposal", copy.deepcopy(normalise_ids(fields)))
         with self._lock:
             current = self._proposals.get((self._ws(), norm_id(proposal_id)))
             if current is None:
@@ -2378,7 +2409,7 @@ class InMemoryFactoryStore(FactoryStore):
     ) -> tuple[FactoryTask, bool]:
         check_fields(fields, TASK_FIELDS, "upsert_task")
         validate_enums("task", fields)
-        values = copy.deepcopy(normalise_ids(fields))
+        values = clip_text("task", copy.deepcopy(normalise_ids(fields)))
         fid = norm_id(factory_id)
         now = now_s()
         with self._lock:
@@ -2446,7 +2477,7 @@ class InMemoryFactoryStore(FactoryStore):
     def update_task(self, task_id: str, **fields: Any) -> FactoryTask | None:
         check_fields(fields, TASK_FIELDS, "update_task")
         validate_enums("task", fields)
-        values = copy.deepcopy(normalise_ids(fields))
+        values = clip_text("task", copy.deepcopy(normalise_ids(fields)))
         with self._lock:
             current = self._tasks.get((self._ws(), norm_id(task_id)))
             if current is None:
@@ -2477,7 +2508,7 @@ class InMemoryFactoryStore(FactoryStore):
     ) -> tuple[FactoryLoop, bool]:
         check_fields(fields, LOOP_FIELDS, "upsert_loop")
         validate_enums("loop", {**fields, "kind": kind})
-        values = copy.deepcopy(normalise_ids(fields))
+        values = clip_text("loop", copy.deepcopy(normalise_ids(fields)))
         fid = norm_id(factory_id)
         now = now_s()
         with self._lock:
@@ -2540,7 +2571,7 @@ class InMemoryFactoryStore(FactoryStore):
     def update_loop(self, loop_id: str, **fields: Any) -> FactoryLoop | None:
         check_fields(fields, LOOP_FIELDS, "update_loop")
         validate_enums("loop", fields)
-        values = copy.deepcopy(normalise_ids(fields))
+        values = clip_text("loop", copy.deepcopy(normalise_ids(fields)))
         with self._lock:
             current = self._loops.get((self._ws(), norm_id(loop_id)))
             if current is None:
@@ -2565,14 +2596,15 @@ class InMemoryFactoryStore(FactoryStore):
     ) -> tuple[FactoryIssue, bool]:
         check_fields(fields, ISSUE_FIELDS - {"rule", "target", "summary"}, "upsert_issue")
         validate_enums("issue", {**fields, "class_": class_})
-        values = copy.deepcopy(normalise_ids(fields))
+        values = clip_text("issue", copy.deepcopy(normalise_ids(fields)))
+        text = clip_text("issue", {"rule": rule, "target": target, "summary": summary})
         fid = norm_id(factory_id)
         now = now_s()
         with self._lock:
             if dedupe_key is not None:
                 for current in self._rows(self._issues):
                     if current.factory_id == fid and current.dedupe_key == dedupe_key:
-                        changes = {**values, "rule": rule, "target": target, "summary": summary}
+                        changes = {**values, **text}
                         changes.update(count=current.count + 1, last_seen=now)
                         if (
                             reopen
@@ -2589,9 +2621,7 @@ class InMemoryFactoryStore(FactoryStore):
                 factory_id=fid,
                 class_=class_,
                 number=self.next_issue_number(fid, class_),
-                rule=rule,
-                target=target,
-                summary=summary,
+                **text,
                 dedupe_key=dedupe_key,
                 first_seen=now,
                 last_seen=now,
@@ -2641,7 +2671,7 @@ class InMemoryFactoryStore(FactoryStore):
     def update_issue(self, issue_id: str, **fields: Any) -> FactoryIssue | None:
         check_fields(fields, ISSUE_FIELDS, "update_issue")
         validate_enums("issue", fields)
-        values = copy.deepcopy(normalise_ids(fields))
+        values = clip_text("issue", copy.deepcopy(normalise_ids(fields)))
         with self._lock:
             current = self._issues.get((self._ws(), norm_id(issue_id)))
             if current is None:
@@ -2676,7 +2706,7 @@ class InMemoryFactoryStore(FactoryStore):
     ) -> tuple[FactorySpan, bool]:
         check_fields(fields, SPAN_FIELDS - {"name"}, "insert_span")
         validate_enums("span", {**fields, "kind": kind})
-        values = copy.deepcopy(normalise_ids(fields))
+        values = clip_text("span", copy.deepcopy(normalise_ids(fields)))
         fid = norm_id(factory_id)
         start = now_ms() if started_at is None else started_at
         with self._lock:
@@ -2689,7 +2719,7 @@ class InMemoryFactoryStore(FactoryStore):
                 factory_id=fid,
                 trace_key=trace_key,
                 kind=kind,
-                name=name,
+                name=clip_value("span", "name", name),
                 started_at=start,
                 dedupe_key=dedupe_key,
                 workspace_id=self._ws(),
@@ -2713,7 +2743,7 @@ class InMemoryFactoryStore(FactoryStore):
     def update_span(self, span_id: str, **fields: Any) -> FactorySpan | None:
         check_fields(fields, SPAN_FIELDS, "update_span")
         validate_enums("span", fields)
-        values = copy.deepcopy(normalise_ids(fields))
+        values = clip_text("span", copy.deepcopy(normalise_ids(fields)))
         with self._lock:
             current = self._spans.get((self._ws(), norm_id(span_id)))
             if current is None:
@@ -2809,6 +2839,8 @@ class InMemoryFactoryStore(FactoryStore):
         turns: int = 1,
     ) -> FactoryCostDaily:
         fid = norm_id(factory_id)
+        agent_name = clip_value("cost", "agent_name", agent_name)
+        model = clip_value("cost", "model", model)
         key = (self._ws(), fid, project_slug, role, agent_name, model, day_utc)
         with self._lock:
             current = self._cost.get(key) or FactoryCostDaily(
@@ -2862,6 +2894,8 @@ class InMemoryFactoryStore(FactoryStore):
         server_sha: str | None = None,
         note: str | None = None,
     ) -> tuple[FactoryVersion, bool]:
+        clipped = clip_text("version", {"image_tag": image_tag, "note": note})
+        image_tag, note = clipped["image_tag"], clipped["note"]
         content_hash = version_content_hash(
             bundles=bundles, knobs=knobs, image_tag=image_tag, server_sha=server_sha
         )
