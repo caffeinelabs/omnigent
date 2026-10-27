@@ -99,18 +99,30 @@ function DemoMedia({ demo }: { demo: DemoView }) {
 
 // ── Steps and screenshots ──────────────────────────────────────
 
-function StepList({ demo, onApi }: { demo: DemoView; onApi: () => void }) {
+/**
+ * A demo's steps: status, title, skip reason or failure note, API calls and
+ * duration. With `onApi`, a step's API calls jump to the API call list.
+ */
+export function DemoStepList({
+  demo,
+  onApi,
+  testIdPrefix = "review",
+}: {
+  demo: DemoView;
+  onApi?: () => void;
+  testIdPrefix?: string;
+}) {
   const steps = [...demo.steps].sort((a, b) => a.n - b.n);
   if (steps.length === 0) return null;
   return (
-    <ol data-testid="review-demo-steps" className="flex flex-col gap-1">
+    <ol data-testid={`${testIdPrefix}-demo-steps`} className="flex flex-col gap-1">
       {steps.map((step) => {
         const Icon = STEP_ICON[step.status];
         const calls = step.api_calls?.length ?? 0;
         return (
           <li
             key={step.n}
-            data-testid={`review-step-${step.n}`}
+            data-testid={`${testIdPrefix}-step-${step.n}`}
             data-status={step.status}
             className="grid grid-cols-[1rem_1.25rem_minmax(0,1fr)_auto] items-start gap-x-1.5 text-sm"
           >
@@ -126,20 +138,28 @@ function StepList({ demo, onApi }: { demo: DemoView; onApi: () => void }) {
                 </span>
               )}
               {step.note && (
-                <span className="block text-muted-foreground">
+                <span
+                  className={cn(
+                    "block",
+                    step.status === "fail" ? "text-destructive/90" : "text-muted-foreground",
+                  )}
+                >
                   {step.status === "skipped" ? "Skipped: " : ""}
                   {step.note}
                 </span>
               )}
-              {calls > 0 && (
-                <button
-                  type="button"
-                  onClick={onApi}
-                  className="block cursor-pointer rounded-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
-                >
-                  {plural(calls, "API call")} ↓
-                </button>
-              )}
+              {calls > 0 &&
+                (onApi ? (
+                  <button
+                    type="button"
+                    onClick={onApi}
+                    className="block cursor-pointer rounded-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+                  >
+                    {plural(calls, "API call")} ↓
+                  </button>
+                ) : (
+                  <span className="block text-muted-foreground">{plural(calls, "API call")}</span>
+                ))}
             </span>
             <span className="font-mono text-muted-foreground tabular-nums">
               {formatMs(step.duration_ms)}
@@ -598,7 +618,7 @@ export function DemoPanel({
             {demo.summary}
           </p>
         )}
-        <StepList demo={demo} onApi={jumpToApi} />
+        <DemoStepList demo={demo} onApi={jumpToApi} />
         <Screenshots demo={demo} />
         {apiFile && <ApiCalls url={demoFileHref(demo, apiFile)} />}
         <Downloads demo={demo} />

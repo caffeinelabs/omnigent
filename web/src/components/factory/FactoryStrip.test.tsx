@@ -64,7 +64,7 @@ describe("FactoryStrip", () => {
 
     const strip = await screen.findByTestId("factory-strip");
     await waitFor(() => expect(strip).toHaveAttribute("data-live", "true"));
-    expect(strip).toHaveAttribute("href", `/factory/${LIVE_RUN_FACTORY_ID}?project=api-version`);
+    expect(strip).toHaveAttribute("href", `/factory/${LIVE_RUN_FACTORY_ID}/projects/api-version`);
     expect(strip).toHaveTextContent("Atlas factory");
     expect(strip).toHaveTextContent("api-version");
     const stage = within(strip).getByTestId("factory-strip-stage");
@@ -80,7 +80,7 @@ describe("FactoryStrip", () => {
     expect(strip).toHaveTextContent("$7.10");
     expect(strip).toHaveTextContent("Open cockpit");
     const mobile = screen.getByTestId("factory-strip-mobile");
-    expect(mobile).toHaveAttribute("href", `/factory/${LIVE_RUN_FACTORY_ID}?project=api-version`);
+    expect(mobile).toHaveAttribute("href", `/factory/${LIVE_RUN_FACTORY_ID}/projects/api-version`);
     // The same 44 px touch target as the header's other glass pills.
     expect(mobile).toHaveClass("size-11");
   });
@@ -92,7 +92,7 @@ describe("FactoryStrip", () => {
 
     const strip = await screen.findByTestId("factory-strip");
     await waitFor(() => expect(strip).toHaveAttribute("data-live", "true"));
-    expect(strip).toHaveAttribute("href", `/factory/${LIVE_RUN_FACTORY_ID}?project=api-version`);
+    expect(strip).toHaveAttribute("href", `/factory/${LIVE_RUN_FACTORY_ID}/projects/api-version`);
     expect(strip).toHaveTextContent("api-version");
     expect(strip).toHaveTextContent("ic_codex:version-endpoint");
     expect(strip).toHaveTextContent("PR #9630");
@@ -172,7 +172,7 @@ describe("FactoryStrip", () => {
 
     const strip = await screen.findByTestId("factory-strip");
     await waitFor(() => expect(strip).toHaveAttribute("data-live", "true"));
-    expect(strip).toHaveAttribute("href", `/factory/${LIVE_RUN_FACTORY_ID}?project=api-version`);
+    expect(strip).toHaveAttribute("href", `/factory/${LIVE_RUN_FACTORY_ID}/projects/api-version`);
   });
 
   it("renders nothing for a session outside any factory", () => {

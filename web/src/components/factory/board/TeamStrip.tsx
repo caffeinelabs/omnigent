@@ -26,7 +26,7 @@ export const ROLE_SHORT: Record<FactoryRole, string> = {
   demo: "demo",
 };
 
-const ROLE_NAME: Record<FactoryRole, string> = {
+export const ROLE_NAME: Record<FactoryRole, string> = {
   lead: "Lead",
   project_lead: "Project lead",
   ic: "Implementer",
@@ -65,7 +65,8 @@ export function MemberStatusDot({ member }: { member: MemberRef }) {
   return <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", tone)} />;
 }
 
-function statusWord(member: MemberRef): string {
+/** `working`, `down`, `needs response` or `idle`. */
+export function statusWord(member: MemberRef): string {
   if (member.running) return "working";
   if (dead(member)) return "down";
   if (member.status === "waiting") return "needs response";

@@ -1,6 +1,6 @@
 // `useFactoryControls(fid)`: send a cockpit control and know what it is
 // waiting for. Clicks live in a module store shared by every menu of the
-// factory (cards, drawer, header, the drift chip), so one click shows the
+// factory (cards, project page, header, the drift chip), so one click shows the
 // same pending chip everywhere; the `control.*` events then take over.
 
 import { useCallback, useContext, useEffect, useMemo, useSyncExternalStore } from "react";

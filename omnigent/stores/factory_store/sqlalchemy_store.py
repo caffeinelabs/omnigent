@@ -875,6 +875,7 @@ class SqlAlchemyFactoryStore(FactoryStore):
         pr_number: int | None = None,
         *,
         repo: str | None = None,
+        project_slug: str | None = None,
         limit: int = 100,
     ) -> builtins.list[FactoryDemo]:
         stmt = select(SqlFactoryDemo).where(
@@ -885,6 +886,8 @@ class SqlAlchemyFactoryStore(FactoryStore):
             stmt = stmt.where(SqlFactoryDemo.pr_number == pr_number)
         if repo is not None:
             stmt = stmt.where(SqlFactoryDemo.repo == repo)
+        if project_slug is not None:
+            stmt = stmt.where(SqlFactoryDemo.project_slug == project_slug)
         stmt = stmt.order_by(SqlFactoryDemo.created_at.desc(), SqlFactoryDemo.id.desc()).limit(
             limit
         )

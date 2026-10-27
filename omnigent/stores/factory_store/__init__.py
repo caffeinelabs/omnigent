@@ -562,9 +562,10 @@ class FactoryStore(ABC):
         pr_number: int | None = None,
         *,
         repo: str | None = None,
+        project_slug: str | None = None,
         limit: int = 100,
     ) -> builtins.list[FactoryDemo]:
-        """:returns: The factory's demos (optionally of one PR), newest first."""
+        """:returns: The factory's demos (optionally of one PR or project), newest first."""
 
 
 # ── In-memory implementation ───────────────────────────────────
@@ -1046,6 +1047,7 @@ class InMemoryFactoryStore(FactoryStore):
         pr_number: int | None = None,
         *,
         repo: str | None = None,
+        project_slug: str | None = None,
         limit: int = 100,
     ) -> builtins.list[FactoryDemo]:
         fid = norm_id(factory_id)
@@ -1056,6 +1058,7 @@ class InMemoryFactoryStore(FactoryStore):
                 if r.factory_id == fid
                 and (pr_number is None or r.pr_number == pr_number)
                 and (repo is None or r.repo == repo)
+                and (project_slug is None or r.project_slug == project_slug)
             ]
         rows.sort(key=lambda r: (r.created_at, r.id), reverse=True)
         return [_detach(r) for r in rows[:limit]]

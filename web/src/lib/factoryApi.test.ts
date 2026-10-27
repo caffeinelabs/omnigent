@@ -5,6 +5,7 @@ import {
   StartFactoryError,
   demoFileUrl,
   factoryErrorFromResponse,
+  fetchFactoryDemos,
   fetchFactoryEvents,
   fetchFactorySnapshot,
   prPreviewUrl,
@@ -260,6 +261,38 @@ describe("factory request helpers", () => {
       project: "api-version",
       kinds: "dispatch,gate.changed",
     });
+  });
+
+  it("lists a project's demos with its filters, and nothing extra by default", async () => {
+    const listed = { data: [{ id: "d1", pr_number: 9630, project_slug: "api-version" }] };
+    authenticatedFetch.mockResolvedValue(json(listed));
+    const signal = new AbortController().signal;
+
+    expect(
+      await fetchFactoryDemos("f 1", { project: "api-version", pr: 9630, limit: 200 }, signal),
+    ).toEqual(listed);
+    const [path, init] = authenticatedFetch.mock.calls[0]!;
+    const url = new URL(String(path), "http://x");
+    expect(url.pathname).toBe("/v1/factory/factories/f%201/demos");
+    expect(Object.fromEntries(url.searchParams)).toEqual({
+      project: "api-version",
+      pr: "9630",
+      limit: "200",
+    });
+    expect((init as RequestInit).signal).toBe(signal);
+
+    authenticatedFetch.mockResolvedValue(json({ data: [] }));
+    await fetchFactoryDemos("f1");
+    expect(authenticatedFetch.mock.calls[1]![0]).toBe("/v1/factory/factories/f1/demos");
+  });
+
+  it("raises a hidden factory's 404 from the demos list", async () => {
+    authenticatedFetch.mockResolvedValue(
+      json({ error: { code: "not_found", message: "factory not found" } }, 404),
+    );
+    const error = await fetchFactoryDemos("f1", { project: "api-version" }).catch((e) => e);
+    expect(error).toBeInstanceOf(FactoryApiError);
+    expect(error).toMatchObject({ status: 404, code: "not_found", message: "factory not found" });
   });
 
   it("builds same-origin demo file and stable preview links", () => {

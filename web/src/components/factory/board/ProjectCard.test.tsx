@@ -8,7 +8,7 @@ import { DoneProjectRow, ProjectCard } from "./ProjectCard";
 
 function renderCard(state: CardState) {
   const { snapshot, project } = cardScenario(state);
-  const handlers = { onOpenProject: vi.fn(), onReview: vi.fn(), onDecision: vi.fn() };
+  const handlers = { onReview: vi.fn(), onDecision: vi.fn() };
   renderBoard(
     <ProjectCard snapshot={snapshot} project={project} nowS={LIVE_RUN_NOW_S} {...handlers} />,
   );
@@ -176,29 +176,32 @@ describe("ProjectCard", () => {
     expect(within(card).getAllByTestId(/^launch-drift-chip-/)).toHaveLength(1);
   });
 
-  it("shows team, dev env, cost and elapsed in the footer and opens the drawer", () => {
-    const { card, onOpenProject } = renderCard("ready");
+  it("shows team, dev env, demos, cost and elapsed in the footer and links to the page", () => {
+    const { card, snapshot } = renderCard("ready");
+    const page = `/factory/${snapshot.factory.id}/projects/api-version`;
     expect(within(card).getByTestId("team-strip")).toHaveTextContent("PL");
     expect(within(card).getByTestId("dev-env-pill")).toHaveTextContent("main@8c1d2e0");
     expect(card).toHaveTextContent("$7.10");
-    fireEvent.click(within(card).getByTestId("project-open-api-version"));
-    expect(onOpenProject).toHaveBeenCalledWith("api-version");
+    expect(within(card).getByTestId("project-open-api-version")).toHaveAttribute("href", page);
+    expect(within(card).getByTestId("project-details-api-version")).toHaveAttribute("href", page);
+    const demos = within(card).getByTestId("project-demos-api-version");
+    expect(demos).toHaveTextContent("2 demos");
+    expect(demos).toHaveAttribute("href", `${page}?tab=demos`);
   });
 
-  it("done is one line in the Done group", () => {
+  it("leaves the demos link out while no PR has a demo", () => {
+    const { card } = renderCard("planning");
+    expect(within(card).queryByTestId(/^project-demos-/)).toBeNull();
+  });
+
+  it("done is one line in the Done group, linking to the project page", () => {
     const { snapshot, project } = cardScenario("done");
-    const onOpenProject = vi.fn();
-    renderBoard(
-      <DoneProjectRow
-        snapshot={snapshot}
-        project={project}
-        nowS={LIVE_RUN_NOW_S}
-        onOpenProject={onOpenProject}
-      />,
-    );
+    renderBoard(<DoneProjectRow snapshot={snapshot} project={project} nowS={LIVE_RUN_NOW_S} />);
     const row = screen.getByTestId("project-card-docs-factory-envs");
     expect(row).toHaveTextContent("merged #9632 by @luka");
-    fireEvent.click(row);
-    expect(onOpenProject).toHaveBeenCalledWith("docs-factory-envs");
+    expect(row).toHaveAttribute(
+      "href",
+      `/factory/${snapshot.factory.id}/projects/docs-factory-envs`,
+    );
   });
 });

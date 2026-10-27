@@ -1,5 +1,5 @@
 /**
- * "Edit charter" (project drawer, card ⋯): edit the goal, definition of done,
+ * "Edit charter" (project page, card ⋯): edit the goal, definition of done,
  * scope, "Preview & demo" with its demo focus, IC budget, priority and
  * constraints; review the diff; then PATCH it. The PL receives a CHARTER
  * UPDATE with the same diff, and its reply clears the pending chip.

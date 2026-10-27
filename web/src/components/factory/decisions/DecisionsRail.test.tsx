@@ -15,7 +15,11 @@ vi.mock("@/lib/identity", () => ({
 
 const NOW = new Date(LIVE_RUN_NOW_S * 1000);
 
-function renderRail(decisions: DecisionView[], highlightId: string | null = null) {
+function renderRail(
+  decisions: DecisionView[],
+  highlightId: string | null = null,
+  showClosed = false,
+) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   const ui = (list: DecisionView[]) => (
     <QueryClientProvider client={client}>
@@ -25,6 +29,7 @@ function renderRail(decisions: DecisionView[], highlightId: string | null = null
             factoryId={LIVE_RUN_FACTORY_ID}
             decisions={list}
             highlightId={highlightId}
+            showClosed={showClosed}
           />
         </FactoryNowContext.Provider>
       </MemoryRouter>
@@ -35,6 +40,25 @@ function renderRail(decisions: DecisionView[], highlightId: string | null = null
     rail: screen.getByTestId("decisions-rail"),
     rerender: (l: DecisionView[]) => view.rerender(ui(l)),
   };
+}
+
+/** The live run's decisions plus an expired D-5 and a withdrawn D-6. */
+function withClosed(): DecisionView[] {
+  return [
+    ...liveRunSnapshot().decisions,
+    { ...lateQuestion(), status: "expired", updated_at: LIVE_RUN_NOW_S - 7200 },
+    {
+      ...answeredDecision(),
+      id: "d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6d6",
+      ref: "D-6",
+      number: 6,
+      status: "withdrawn",
+      answer_option_id: null,
+      answer_text: null,
+      answered_at: null,
+      updated_at: LIVE_RUN_NOW_S - 600,
+    },
+  ];
 }
 
 beforeEach(() => {
@@ -115,5 +139,39 @@ describe("DecisionsRail", () => {
     expect(card).toHaveAttribute("data-highlighted", "true");
     expect(card.scrollIntoView).toHaveBeenCalled();
     expect(within(rail).getByTestId("decision-card-D-2")).not.toHaveAttribute("data-highlighted");
+  });
+
+  it("leaves withdrawn and expired decisions out unless asked to show them", () => {
+    const { rail } = renderRail(withClosed());
+    expect(within(rail).queryByTestId("decisions-closed-toggle")).toBeNull();
+    expect(rail).not.toHaveTextContent("D-6");
+  });
+
+  it("folds withdrawn and expired decisions, newest first, under their own toggle", () => {
+    const { rail } = renderRail(withClosed(), null, true);
+    const toggle = within(rail).getByTestId("decisions-closed-toggle");
+    expect(toggle).toHaveTextContent("Withdrawn / expired (2)");
+    expect(within(rail).queryByTestId("decisions-closed")).toBeNull();
+    fireEvent.click(toggle);
+    const rows = within(within(rail).getByTestId("decisions-closed")).getAllByTestId(
+      /^decision-closed-/,
+    );
+    expect(rows.map((r) => [r.dataset.testid, r.dataset.status])).toEqual([
+      ["decision-closed-D-6", "withdrawn"],
+      ["decision-closed-D-5", "expired"],
+    ]);
+    expect(rows[0]).toHaveTextContent("D-6withdrawn · 10m ago");
+    expect(rows[1]).toHaveTextContent("D-5expired · 2h agoShould /db/version be public");
+    // Open and answered ones stay where they were.
+    expect(rail).toHaveTextContent("Decisions · 2 open");
+    expect(within(rail).getByTestId("decisions-answered-toggle")).toHaveTextContent("Answered (1)");
+  });
+
+  it("opens the closed fold on a highlighted withdrawn decision", () => {
+    const { rail } = renderRail([{ ...lateQuestion(), status: "withdrawn" }], "D-5", true);
+    expect(within(rail).getByTestId("decision-closed-D-5")).toHaveAttribute(
+      "data-highlighted",
+      "true",
+    );
   });
 });

@@ -9,7 +9,6 @@ import { FactoryBoard } from "./FactoryBoard";
 
 function renderFactoryBoard(snapshot: FactorySnapshot = storySnapshot()) {
   const handlers = {
-    onOpenProject: vi.fn(),
     onReview: vi.fn(),
     onDecision: vi.fn(),
     onDecisions: vi.fn(),
@@ -144,7 +143,6 @@ describe("FactoryBoard", () => {
       <FactoryBoard
         snapshot={snapshot}
         nowS={LIVE_RUN_NOW_S}
-        onOpenProject={vi.fn()}
         onReview={vi.fn()}
         onDecision={vi.fn()}
         onDecisions={vi.fn()}
@@ -165,7 +163,6 @@ describe("FactoryBoard", () => {
     later.projects.find((p) => p.slug === "db-version")!.pr_ids.push("new-pr");
     const props = {
       nowS: LIVE_RUN_NOW_S,
-      onOpenProject: vi.fn(),
       onReview: vi.fn(),
       onDecision: vi.fn(),
       onDecisions: vi.fn(),
@@ -191,7 +188,6 @@ describe("FactoryBoard", () => {
     );
     const props = {
       nowS: LIVE_RUN_NOW_S,
-      onOpenProject: vi.fn(),
       onReview: vi.fn(),
       onDecision: vi.fn(),
       onDecisions: vi.fn(),

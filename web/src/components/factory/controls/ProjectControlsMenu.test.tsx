@@ -319,6 +319,17 @@ describe("ProjectControlsMenu", () => {
     expect(screen.getByTestId("control-resume-quick-api-version")).toBeInTheDocument();
   });
 
+  it("keeps Resume in the menu only on a done project", () => {
+    setup((snapshot, project) => {
+      project.stage = "done";
+      const pl = snapshot.members.find((m) => m.session_id === project.pl!.session_id)!;
+      pl.state = "done";
+    });
+    expect(screen.queryByTestId("control-resume-quick-api-version")).toBeNull();
+    open();
+    expect(screen.getByTestId("control-resume")).toBeInTheDocument();
+  });
+
   it("offers Restart and Relaunch inline on a failed project", () => {
     setup((_, project) => {
       project.overlay = "failed";

@@ -43,7 +43,7 @@ export const Default = activity();
 
 export const Dark = activity({ theme: "dark" });
 
-/** Pinned to one project (the project drawer). */
+/** Pinned to one project (the project page). */
 export const ProjectPinned = activity({ project: "db-version" });
 
 /** Heartbeats switched on: each beat is its own row. */

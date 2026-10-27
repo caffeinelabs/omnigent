@@ -466,6 +466,9 @@ def test_demo_create_get_list(store: FactoryStore) -> None:
     assert {d.id for d in store.list_demos(FID, pr_number=9630)} == {old.id, new.id}
     assert len(store.list_demos(FID)) == 3
     assert store.list_demos(FID, pr_number=9630, repo="other/repo") == []
+    assert {d.id for d in store.list_demos(FID, project_slug="api-version")} == {old.id, new.id}
+    assert [d.status for d in store.list_demos(FID, project_slug="db-version")] == ["FAIL"]
+    assert store.list_demos(FID, pr_number=9631, project_slug="api-version") == []
     assert store.get_demo(uuid.uuid4().hex) is None
     with pytest.raises(ValueError):
         store.create_demo(

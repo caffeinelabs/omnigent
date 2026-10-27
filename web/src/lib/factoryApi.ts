@@ -274,6 +274,29 @@ export interface DemoView {
   by: string | null;
 }
 
+/** One demo in a factory's demos list: the demo and the PR it records. */
+export interface ProjectDemoView extends DemoView {
+  pr_number: number;
+  /** The tracked PR's id, when the demo was linked to one. */
+  pr_id: string | null;
+  repo: string;
+  project_slug: string | null;
+}
+
+/** `GET /v1/factory/factories/{fid}/demos`: newest first. */
+export interface DemoListResponse {
+  data: ProjectDemoView[];
+}
+
+/** Filters of the demos list. */
+export interface DemoFilters {
+  project?: string;
+  /** A PR number. */
+  pr?: number;
+  /** At most this many (server default 50, max 200). */
+  limit?: number;
+}
+
 // ── PRs ────────────────────────────────────────────────────────
 
 export interface GateEvidence {
@@ -828,6 +851,29 @@ export async function fetchOpenDecisionCount(): Promise<number> {
     await authenticatedFetch("/v1/factory/decisions?status=open&count_only=1"),
   );
   return body.count;
+}
+
+/**
+ * A factory's recorded demos, newest first, as the viewer may see them.
+ *
+ * @param filters.project - Only this project's demos.
+ * @param filters.pr - Only demos of this PR number.
+ */
+export async function fetchFactoryDemos(
+  factoryId: string,
+  filters: DemoFilters = {},
+  signal?: AbortSignal,
+): Promise<DemoListResponse> {
+  const params = new URLSearchParams();
+  if (filters.project) params.set("project", filters.project);
+  if (filters.pr != null) params.set("pr", String(filters.pr));
+  if (filters.limit != null) params.set("limit", String(filters.limit));
+  const qs = params.toString();
+  return readJson(
+    await authenticatedFetch(`/v1/factory/factories/${enc(factoryId)}/demos${qs ? `?${qs}` : ""}`, {
+      signal,
+    }),
+  );
 }
 
 /** Same-origin URL of one demo file (video, screenshot, …); the server answers Range. */

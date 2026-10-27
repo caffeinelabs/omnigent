@@ -100,7 +100,16 @@ function UrlRow({ label, url }: { label: string; url: string | null }) {
   );
 }
 
-function PreviewDetails({ pr, preview, nowS }: { pr: PrView; preview: PreviewView; nowS: number }) {
+/** Head, deployed and observed sha, namespace, resources and URLs of a PR's preview. */
+export function PreviewDetails({
+  pr,
+  preview,
+  nowS,
+}: {
+  pr: PrView;
+  preview: PreviewView;
+  nowS: number;
+}) {
   const ready = preview.resources.filter((r) => r.ready ?? r.status === "ok").length;
   const truth = previewHeadTruth(preview, pr.head_sha);
   return (

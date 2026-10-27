@@ -28,7 +28,6 @@ function onCard(snapshot: FactorySnapshot, slug: string, theme: "light" | "dark"
           snapshot={snapshot}
           project={project}
           nowS={snapshot.server_time}
-          onOpenProject={() => {}}
           onReview={() => {}}
         />
       </BoardFrame>

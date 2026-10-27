@@ -1,10 +1,10 @@
 /**
- * The ⋯ menu of a project card and the project drawer: pause/resume, restart
+ * The ⋯ menu of a project card and the project page: pause/resume, restart
  * and relaunch the PL, switch its factory preview to a PR, ask for env
  * status, edit the charter and stop the project. Every lever is a server
  * control (never a chat message); a chip shows what it is waiting for, and
  * paused or failed projects get their next step inline. A card places that
- * inline part under its title (`useProjectControlParts`); the drawer keeps
+ * inline part under its title (`useProjectControlParts`); the page keeps
  * it beside the menu.
  */
 
@@ -71,15 +71,15 @@ function previewWord(pr: PrView): string {
 export interface ProjectControlParts {
   /**
    * The project's next step, or what a control waits for: the pending chip,
-   * Resume on a paused project, Restart and Relaunch on a failed one; null
-   * when there is none.
+   * Resume on a paused or stopped (not done) project, Restart and Relaunch on
+   * a failed one; null when there is none.
    */
   quick: ReactNode | null;
   /** The ⋯ trigger with its menu and confirm dialogs. */
   menu: ReactNode;
 }
 
-/** The ⋯ menu with the project's next step beside it (the drawer's header). */
+/** The ⋯ menu with the project's next step beside it (the project page's header). */
 export function ProjectControlsMenu(props: ProjectControlsMenuProps) {
   const { quick, menu } = useProjectControlParts(props);
   return (
@@ -163,7 +163,8 @@ export function useProjectControlParts(
       onDismiss={pending.localId ? () => controls.dismiss(pending.localId!) : undefined}
       className={chipClassName}
     />
-  ) : paused || stopped ? (
+  ) : (paused || stopped) && project.stage !== "done" ? (
+    // A finished project keeps Resume in the menu, not as its next step.
     <Button
       variant="outline"
       size="xs"

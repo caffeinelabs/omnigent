@@ -1,5 +1,5 @@
 """Cockpit read routes: preflight, the factory list, one factory's snapshot,
-its activity feed and the open decisions across factories.
+its activity feed, its recorded demos and the open decisions across factories.
 
 Humans call these with their own credentials. Viewing a factory needs READ on
 its root (anything else is a 404); inside it, members the viewer cannot read
@@ -31,6 +31,7 @@ from omnigent.server.factory.snapshot import (
     get_snapshot,
     is_factory_root,
     list_factory_roots,
+    project_demo_view,
     readable_for,
     readable_set,
     snapshot_etag,
@@ -43,6 +44,7 @@ _logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/v1/factory", tags=["factory"])
 
 EVENTS_MAX_LIMIT: Final = 500
+DEMOS_MAX_LIMIT: Final = 200
 _EVENT_SCAN_PAGES: Final = 5
 _DECISION_STATUSES: Final = frozenset({"open", "answered", "withdrawn", "expired"})
 _DELIVERY_LOOKUPS: Final = 50
@@ -256,6 +258,49 @@ async def list_factory_events(
             "next_before_id": next_cursor[1] if next_cursor else None,
         }
     ).model_dump(mode="json")
+
+
+@router.get("/factories/{factory_id}/demos")
+async def list_factory_demos(
+    request: Request,
+    factory_id: str,
+    project: str | None = Query(None, description="Only this project's demos."),
+    pr: int | None = Query(None, ge=1, description="Only demos of this PR number."),
+    limit: int = Query(50, ge=1, le=DEMOS_MAX_LIMIT),
+) -> dict[str, Any]:
+    """The factory's recorded demos, newest first, filtered to what the viewer may read.
+
+    `limit` caps the rows read before that filter, so a viewer who can't see
+    some projects may get fewer than `limit` even when more exist.
+    """
+    deps = factory_deps(request.app.state)
+    user_id = require_user(request, deps.auth_provider)
+    root = await _root(user_id, factory_id, deps)
+    raw = await get_snapshot(request.app.state, root)
+    readable = await readable_for(user_id, raw, deps)
+    hidden_projects = {
+        slug for slug, pl in raw.project_pl.items() if pl is not None and pl not in readable
+    }
+    rows = await asyncio.to_thread(
+        lambda: deps.factory_store.list_demos(root.id, pr, project_slug=project, limit=limit)
+    )
+    # A demo's files belong to the PL that published it (a closed one is not a member).
+    owners = {d.session_id for d in rows if d.session_id not in readable}
+    readable_owners = (
+        await asyncio.to_thread(readable_set, user_id, owners, deps) if owners else set()
+    )
+    heads = {(p["repo"], p["number"]): p["head_sha"] for p in raw.body["prs"]}
+    data: list[dict[str, Any]] = []
+    for demo in rows:
+        if demo.project_slug in hidden_projects:
+            continue
+        if demo.session_id not in readable and demo.session_id not in readable_owners:
+            continue
+        head = heads.get((demo.repo, demo.pr_number), "")
+        view = project_demo_view(demo, head, raw.titles)
+        if view is not None:
+            data.append(view)
+    return schemas.DemoListResponse.model_validate({"data": data}).model_dump(mode="json")
 
 
 def _decision_titles(
