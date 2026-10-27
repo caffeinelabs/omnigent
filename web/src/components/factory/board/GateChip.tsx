@@ -17,7 +17,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import type { GateState, PrView, ReadyGate } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
-import { GATE_LABEL, shortSha } from "../factoryFormat";
+import { GATE_LABEL, sameSha, shortSha } from "../factoryFormat";
 import { useChangedSinceMount } from "./boardHooks";
 import { ageText } from "./boardModel";
 
@@ -132,9 +132,9 @@ function Row({ children }: { children: ReactNode }) {
 function Sha({ sha, head }: { sha: string | null; head: string }) {
   if (!sha) return null;
   return (
-    <span className={cn("font-mono tabular-nums", sha !== head && "text-warning")}>
+    <span className={cn("font-mono tabular-nums", !sameSha(sha, head) && "text-warning")}>
       @{shortSha(sha)}
-      {sha !== head && " (old head)"}
+      {!sameSha(sha, head) && " (old head)"}
     </span>
   );
 }

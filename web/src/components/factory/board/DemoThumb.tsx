@@ -1,15 +1,16 @@
 /**
  * A PR's newest demo as a 16:9 thumbnail: the poster (or first step
  * screenshot), a ▶ glyph with the length when there is a video, and the
- * demo's status. Clicking it opens the review drawer.
+ * demo's status. A backend demo with no still reads as an API tile.
+ * Clicking it opens the review drawer.
  */
 
 import { useState } from "react";
-import { ImageIcon, PlayIcon } from "lucide-react";
+import { BracesIcon, ImageIcon, PlayIcon } from "lucide-react";
 import type { DemoFileView, DemoStatus, DemoView } from "@/lib/factoryApi";
 import { demoFileUrl } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
-import { type FactoryTone, TONE_CHIP, TONE_TEXT } from "../factoryFormat";
+import { type FactoryTone, TONE_CHIP, TONE_TEXT, plural } from "../factoryFormat";
 import { clipDuration } from "./boardModel";
 
 export const DEMO_STATUS_TONE: Record<DemoStatus, FactoryTone> = {
@@ -33,6 +34,13 @@ export function demoPoster(demo: DemoView): DemoFileView | null {
     if (shot) return shot;
   }
   return demo.files.find((f) => f.kind === "screenshot") ?? null;
+}
+
+/** API calls a demo recorded (by its steps), or null when it recorded none. */
+export function demoApiCallCount(demo: DemoView): number | null {
+  const byStep = demo.steps.reduce((n, step) => n + (step.api_calls?.length ?? 0), 0);
+  if (byStep > 0) return byStep;
+  return demo.files.some((f) => f.kind === "api") ? 0 : null;
 }
 
 /** `"PASS"` as a small tinted status tag. */
@@ -77,6 +85,9 @@ export function DemoThumb({
   const [broken, setBroken] = useState(false);
   const hasVideo = demo.video_file_id != null || demo.files.some((f) => f.kind === "video");
   const length = hasVideo ? clipDuration(demo.duration_s) : null;
+  const apiCalls = demoApiCallCount(demo);
+  const still = poster && !broken;
+  const kind = hasVideo ? "video" : still ? "screenshot" : apiCalls != null ? "api" : "none";
   const label = `Watch the ${demo.status} demo of #${prNumber}${length ? ` (${length})` : ""}`;
   return (
     <button
@@ -84,7 +95,7 @@ export function DemoThumb({
       onClick={onOpen}
       data-testid={`demo-thumb-${prNumber}`}
       data-status={demo.status}
-      data-kind={hasVideo ? "video" : poster ? "screenshot" : "none"}
+      data-kind={kind}
       aria-label={label}
       title={label}
       className={cn(
@@ -92,7 +103,7 @@ export function DemoThumb({
         className,
       )}
     >
-      {poster && !broken ? (
+      {still ? (
         <img
           src={fileUrl(demo, poster)}
           alt=""
@@ -100,6 +111,13 @@ export function DemoThumb({
           onError={() => setBroken(true)}
           className="absolute inset-0 size-full object-cover object-top transition-transform group-hover/thumb:scale-[1.03] motion-reduce:transition-none"
         />
+      ) : kind === "api" ? (
+        <span className="absolute inset-0 flex flex-col items-center justify-center gap-0.5 pb-3 text-muted-foreground">
+          <BracesIcon aria-hidden className="size-4" />
+          <span className="font-mono text-[10px] leading-3">
+            API{apiCalls ? ` · ${plural(apiCalls, "call")}` : ""}
+          </span>
+        </span>
       ) : (
         <span className="absolute inset-0 flex items-center justify-center text-muted-foreground/60">
           <ImageIcon aria-hidden className="size-5" />

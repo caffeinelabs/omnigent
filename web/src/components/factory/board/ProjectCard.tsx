@@ -68,9 +68,10 @@ function StatusTag({
 }) {
   if (project.stage === "ready" && !project.overlay) {
     return (
+      // Short: the ready banner below spells out "Ready for your review".
       <Tag className="bg-success/10 text-success">
         <StarIcon aria-hidden className="size-3.5 fill-current" />
-        Ready for your review
+        Ready
       </Tag>
     );
   }

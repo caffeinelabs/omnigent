@@ -6,7 +6,13 @@
  * merge box, request changes, merge on GitHub, "I merged it".
  */
 
-import { ExternalLinkIcon, MessageSquareWarningIcon, TriangleAlertIcon } from "lucide-react";
+import {
+  ExternalLinkIcon,
+  GitMergeIcon,
+  GitPullRequestClosedIcon,
+  MessageSquareWarningIcon,
+  TriangleAlertIcon,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   Sheet,
@@ -18,6 +24,7 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import type { DemoView, FactorySnapshot, PrView } from "@/lib/factoryApi";
+import { cn } from "@/lib/utils";
 import { useFactoryNow } from "../factoryClock";
 import { plural, shortSha } from "../factoryFormat";
 import { DemoPanel } from "./DemoPanel";
@@ -25,6 +32,7 @@ import { EvidencePanel } from "./EvidencePanel";
 import { PreviewPanel } from "./PreviewPanel";
 import { ReadyForMergeBanner } from "./ReadyForMergeBanner";
 import { ReviewActions } from "./ReviewActions";
+import { DotParts } from "./reviewParts";
 
 export interface ReviewDrawerProps {
   /** The factory (root session) id. */
@@ -42,8 +50,24 @@ export interface ReviewDrawerProps {
 }
 
 function StatusLine({ pr, nowS }: { pr: PrView; nowS: number }) {
-  if (pr.state !== "open") return null;
-  if (pr.ready) return <ReadyForMergeBanner pr={pr} nowS={nowS} />;
+  if (pr.state === "merged" || pr.state === "closed") {
+    const merged = pr.state === "merged";
+    const Icon = merged ? GitMergeIcon : GitPullRequestClosedIcon;
+    return (
+      <p
+        data-testid="review-state-chip"
+        data-state={pr.state}
+        className={cn(
+          "inline-flex items-center gap-1 self-start rounded-md px-2 py-0.5 text-sm",
+          merged ? "bg-brand-accent/10 text-brand-accent" : "bg-muted text-muted-foreground",
+        )}
+      >
+        <Icon aria-hidden className="size-3.5" />
+        {merged ? "Merged" : "Closed without merge"}
+      </p>
+    );
+  }
+  if (pr.ready) return <ReadyForMergeBanner pr={pr} nowS={nowS} testId="review-ready-banner" />;
   const reasons = pr.gates.reasons;
   return (
     <div className="flex flex-col gap-1">
@@ -85,8 +109,19 @@ export function ReviewDrawer({
   const members = snapshot?.members ?? [];
   return (
     <Sheet open onOpenChange={(open) => !open && onClose()}>
-      <SheetContent size="xl" data-testid="review-drawer" data-pr={pr?.number}>
-        <SheetHeader className="gap-1.5">
+      <SheetContent
+        size="xl"
+        data-testid="review-drawer"
+        data-pr={pr?.number}
+        // Escape inside a composer is the composer's (a draft must not vanish with the drawer).
+        onEscapeKeyDown={(event) => {
+          if (event.target instanceof Element && event.target.closest("[data-composer]")) {
+            event.preventDefault();
+          }
+        }}
+      >
+        {/* The header's right padding is the title row's (it clears the close button). */}
+        <SheetHeader className="gap-1.5 pr-5">
           <div className="flex min-w-0 items-center gap-2 pr-8">
             <SheetTitle className="min-w-0 truncate">
               {pr ? `Review · PR #${pr.number}` : "Review"}
@@ -106,25 +141,43 @@ export function ReviewDrawer({
           {pr ? (
             <>
               <SheetDescription className="text-ui text-foreground">{pr.title}</SheetDescription>
-              <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-sm text-muted-foreground">
-                <span className="min-w-0 truncate font-mono" title={pr.head_ref}>
-                  {pr.head_ref}
-                </span>
-                <span aria-hidden>·</span>
-                <span className="font-mono tabular-nums">{shortSha(pr.head_sha)}</span>
-                <span aria-hidden>·</span>
-                <span className="font-mono tabular-nums">
-                  <span className="text-success">+{pr.additions}</span>{" "}
-                  <span className="text-destructive">−{pr.deletions}</span>
-                </span>
-                <span aria-hidden>·</span>
-                <span>{plural(pr.changed_files, "file")}</span>
-                {pr.task && (
-                  <>
-                    <span aria-hidden>·</span>
-                    <span className="font-mono">{pr.task}</span>
-                  </>
-                )}
+              <p
+                data-testid="review-pr-meta"
+                className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-sm text-muted-foreground"
+              >
+                <DotParts
+                  parts={[
+                    {
+                      key: "ref",
+                      node: (
+                        <span className="min-w-0 truncate font-mono" title={pr.head_ref}>
+                          {pr.head_ref}
+                        </span>
+                      ),
+                    },
+                    {
+                      key: "sha",
+                      node: <span className="font-mono tabular-nums">{shortSha(pr.head_sha)}</span>,
+                    },
+                    {
+                      key: "diff",
+                      node: (
+                        <span className="font-mono whitespace-pre tabular-nums">
+                          <span className={cn(pr.additions > 0 && "text-success")}>
+                            +{pr.additions}
+                          </span>{" "}
+                          <span className={cn(pr.deletions > 0 && "text-destructive")}>
+                            −{pr.deletions}
+                          </span>
+                        </span>
+                      ),
+                    },
+                    { key: "files", node: <span>{plural(pr.changed_files, "file")}</span> },
+                    pr.task
+                      ? { key: "task", node: <span className="font-mono">{pr.task}</span> }
+                      : null,
+                  ]}
+                />
               </p>
               <StatusLine pr={pr} nowS={nowS} />
             </>

@@ -22,7 +22,7 @@ import { Button } from "@/components/ui/button";
 import type { PrView, ProjectView } from "@/lib/factoryApi";
 import { beginGithubConnect } from "@/lib/githubIntegration";
 import { cn } from "@/lib/utils";
-import { type FactoryTone, TONE_CHIP, plural, shortSha } from "../factoryFormat";
+import { type FactoryTone, TONE_CHIP, plural, sameSha, shortSha } from "../factoryFormat";
 import { useChangedSinceMount } from "./boardHooks";
 import { ageText, clipDuration, prAnchorId, prHasNoEnv, prTouchesUi } from "./boardModel";
 import { DemoStatusTag, DemoThumb } from "./DemoThumb";
@@ -66,7 +66,7 @@ function prBadges(pr: PrView): ReactNode[] {
   const badges: ReactNode[] = [];
   const s = pr.sentinel;
   if (s) {
-    const current = s.head_sha === pr.head_sha;
+    const current = sameSha(s.head_sha, pr.head_sha);
     badges.push(
       s.verdict === "verified" ? (
         <Badge

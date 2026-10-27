@@ -23,9 +23,9 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import type { DemoStepStatus, DemoView, PrView, ProjectView } from "@/lib/factoryApi";
 import { fetchDemoJson, fetchFactoryEvents } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
-import { ageText, clipDuration, formatBytes, prHasNoEnv } from "../board/boardModel";
+import { ageText, clipDuration, formatBytes, prNoEnvReason } from "../board/boardModel";
 import { DEMO_STATUS_TONE, DemoStatusTag, demoPoster } from "../board/DemoThumb";
-import { TONE_CHIP, TONE_TEXT, plural, shortSha } from "../factoryFormat";
+import { TONE_CHIP, TONE_TEXT, plural, sameSha, shortSha } from "../factoryFormat";
 import { clockTime } from "../transcript/factoryTone";
 import {
   DOWNLOAD_LABEL,
@@ -135,7 +135,7 @@ function StepList({ demo, onApi }: { demo: DemoView; onApi: () => void }) {
                 <button
                   type="button"
                   onClick={onApi}
-                  className="block cursor-pointer text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                  className="block cursor-pointer rounded-sm text-muted-foreground underline-offset-2 hover:text-foreground hover:underline focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
                 >
                   {plural(calls, "API call")} ↓
                 </button>
@@ -194,11 +194,13 @@ function Headers({ headers }: { headers: Record<string, string> }) {
   const entries = Object.entries(headers);
   if (entries.length === 0) return null;
   return (
-    <dl className="grid grid-cols-[minmax(0,10rem)_minmax(0,1fr)] gap-x-2 font-mono text-[11px] leading-4 text-muted-foreground">
+    <dl className="grid grid-cols-[fit-content(10rem)_minmax(0,1fr)] gap-x-2 font-mono text-[11px] leading-4 text-muted-foreground">
       {entries.map(([key, value]) => (
         <div key={key} className="contents">
-          <dt className="truncate">{key}</dt>
-          <dd className="break-all">{value}</dd>
+          <dt className="truncate" title={key}>
+            {key}
+          </dt>
+          <dd className="break-words">{value}</dd>
         </div>
       ))}
     </dl>
@@ -208,7 +210,7 @@ function Headers({ headers }: { headers: Record<string, string> }) {
 function Body({ body, label }: { body: string | null; label: string }) {
   if (!body) return <p className="text-sm text-muted-foreground">No {label} body.</p>;
   return (
-    <pre className="max-h-64 overflow-auto rounded-md bg-muted px-2.5 py-2 font-mono text-[11px] leading-4 whitespace-pre-wrap break-all text-foreground">
+    <pre className="max-h-64 overflow-auto rounded-md bg-muted px-2.5 py-2 font-mono text-[11px] leading-4 whitespace-pre-wrap break-words text-foreground">
       {prettyBody(body)}
     </pre>
   );
@@ -393,7 +395,14 @@ function OlderDemoList({
     return <p className="text-sm text-muted-foreground">Couldn’t load older demos.</p>;
   }
   if (list.length === 0) {
-    return <p className="text-sm text-muted-foreground">No older demo is on record.</p>;
+    // The count is the server's; the list is only what recent activity still holds.
+    return (
+      <p data-testid="review-older-demos-empty" className="text-sm text-muted-foreground">
+        {pr.older_demos > 0
+          ? "Older demos aren’t in recent activity."
+          : "No older demo is on record."}
+      </p>
+    );
   }
   return (
     <ul className="flex flex-col gap-0.5 text-sm" data-testid="review-older-demo-list">
@@ -428,7 +437,7 @@ function OlderDemos(props: { factoryId: string; pr: PrView; demo: DemoView | nul
     <Collapsible open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger
         data-testid="review-older-demos"
-        className="group inline-flex cursor-pointer items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        className="group inline-flex cursor-pointer items-center gap-1 rounded-sm text-sm text-muted-foreground hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
       >
         <HistoryIcon aria-hidden className="size-3.5" />
         {plural(props.pr.older_demos, "older demo")}
@@ -446,6 +455,25 @@ function OlderDemos(props: { factoryId: string; pr: PrView; demo: DemoView | nul
 
 // ── Panel ──────────────────────────────────────────────────────
 
+/** What the demo panel says when there is no demo, by why. */
+const EMPTY_DEMO = {
+  "no-env": {
+    testId: "review-demo-docs-only",
+    title: "Docs-only PR, no demo needed.",
+    body: "It is labelled factory:no-env: nothing runs, so there is no preview to record.",
+  },
+  "previews-off": {
+    testId: "review-demo-previews-off",
+    title: "No demo for this project.",
+    body: "Previews and demos are off for this project, so nothing is recorded.",
+  },
+  none: {
+    testId: "review-demo-empty",
+    title: "No demo yet.",
+    body: "The demo agent records one once the factory preview of this head passes verify.",
+  },
+} as const;
+
 function DemoMeta({ pr, demo }: { pr: PrView; demo: DemoView }) {
   const parts: { key: string; node: ReactNode }[] = [];
   const length = clipDuration(demo.duration_s);
@@ -455,7 +483,7 @@ function DemoMeta({ pr, demo }: { pr: PrView; demo: DemoView }) {
       <span>
         recorded {clockTime(demo.created_at)} at{" "}
         <span className="font-mono tabular-nums">{shortSha(demo.head_sha)}</span>
-        {demo.head_sha === pr.head_sha ? (
+        {sameSha(demo.head_sha, pr.head_sha) ? (
           <span className="text-success"> = head ✓</span>
         ) : (
           <span className="text-warning"> ≠ head</span>
@@ -513,27 +541,24 @@ export function DemoPanel({
   };
 
   if (!demo) {
-    const docsOnly = prHasNoEnv(pr, project);
+    const noEnv = prNoEnvReason(pr, project);
+    const empty = EMPTY_DEMO[noEnv ?? "none"];
     return (
       <section data-testid="review-demo" data-state="none" className="flex flex-col gap-2">
         <PanelHeading title="Demo" />
         <div
-          data-testid={docsOnly ? "review-demo-docs-only" : "review-demo-empty"}
+          data-testid={empty.testId}
           className="flex flex-col items-center gap-1.5 rounded-lg border border-dashed border-border px-4 py-8 text-center"
         >
-          <p className="text-ui">{docsOnly ? "Docs-only PR, no demo needed." : "No demo yet."}</p>
-          <p className="max-w-sm text-sm text-muted-foreground">
-            {docsOnly
-              ? "It is labelled factory:no-env: nothing runs, so there is no preview to record."
-              : "The demo agent records one once the factory preview of this head passes verify."}
-          </p>
+          <p className="text-ui">{empty.title}</p>
+          <p className="max-w-sm text-sm text-muted-foreground">{empty.body}</p>
         </div>
         <OlderDemos factoryId={factoryId} pr={pr} demo={null} nowS={nowS} />
       </section>
     );
   }
 
-  const oldHead = demo.head_sha !== pr.head_sha;
+  const oldHead = !sameSha(demo.head_sha, pr.head_sha);
   return (
     <section
       data-testid="review-demo"

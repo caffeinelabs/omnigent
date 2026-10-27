@@ -21,9 +21,9 @@ import { copyText } from "@/lib/clipboard";
 import type { PrView, PreviewView, ProjectView } from "@/lib/factoryApi";
 import { prPreviewUrl, sendFactoryControl } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
-import { ageText, prHasNoEnv, previewHeadTruth } from "../board/boardModel";
+import { ageText, prNoEnvReason, previewHeadTruth } from "../board/boardModel";
 import { BreakableText } from "../board/BreakableText";
-import { TONE_CHIP, TONE_DOT, shortSha } from "../factoryFormat";
+import { TONE_CHIP, TONE_DOT, sameSha, shortSha } from "../factoryFormat";
 import { absoluteUrl, previewHealth, previewLinks, previewSeenAt, statusTone } from "./reviewModel";
 import { PanelHeading, ReviewNotice } from "./reviewParts";
 
@@ -96,7 +96,7 @@ function ShaRow({
         <span
           className={cn(
             "font-mono tabular-nums",
-            sha && sha !== head && "text-warning",
+            sha && !sameSha(sha, head) && "text-warning",
             !sha && "text-muted-foreground",
           )}
         >
@@ -105,6 +105,20 @@ function ShaRow({
         {detail && <span className="text-muted-foreground"> · {detail}</span>}
       </dd>
     </>
+  );
+}
+
+/** The headline commit while a deploy is under way or just failed: the one it targets. */
+function DeployLine({ pr, preview }: { pr: PrView; preview: PreviewView }) {
+  const target = preview.deployed.sha ?? pr.head_sha;
+  return preview.state === "deploying" ? (
+    <span>
+      Deploying <span className="font-mono tabular-nums">{shortSha(target)}</span>…
+    </span>
+  ) : (
+    <span className="text-destructive">
+      Deploy of <span className="font-mono tabular-nums">{shortSha(target)}</span> failed
+    </span>
   );
 }
 
@@ -122,6 +136,9 @@ function HeadTruth({
 }) {
   const truth = previewHeadTruth(preview, pr.head_sha);
   const verb = live ? "Runs" : "Last ran";
+  // Only a running preview can match the head; a deploy in flight reports its target.
+  const running = preview.state === "ready" || preview.state === "stale";
+  const deploy = preview.state === "deploying" || preview.state === "failed";
   const sources = [preview.deployed.sha && "reported", preview.observed?.sha && "probed"].filter(
     Boolean,
   );
@@ -129,10 +146,12 @@ function HeadTruth({
     <div className="flex flex-col gap-1.5">
       <p
         data-testid="review-preview-sha"
-        data-matches-head={truth.matches ? "true" : "false"}
+        data-matches-head={running && truth.matches ? "true" : "false"}
         className="flex flex-wrap items-center gap-x-2 gap-y-1 text-ui"
       >
-        {truth.sha ? (
+        {deploy ? (
+          <DeployLine pr={pr} preview={preview} />
+        ) : truth.sha ? (
           truth.matches ? (
             <span>
               {verb} <span className="font-mono tabular-nums">{shortSha(truth.sha)}</span>{" "}
@@ -168,7 +187,7 @@ function HeadTruth({
       <dl className="grid grid-cols-[5rem_minmax(0,1fr)] gap-x-2 gap-y-0.5 text-sm">
         <ShaRow label="Head" sha={pr.head_sha} head={pr.head_sha} testId="review-head-sha" />
         <ShaRow
-          label="Deployed"
+          label={preview.state === "deploying" ? "Deploying" : "Deployed"}
           sha={preview.deployed.sha}
           head={pr.head_sha}
           testId="review-deployed-sha"
@@ -186,7 +205,8 @@ function HeadTruth({
           }
         />
       </dl>
-      {truth.reportedVsProbed && (
+      {/* Mid-deploy the probe still sees the old commit; that's expected. */}
+      {truth.reportedVsProbed && !deploy && (
         <p className="flex items-center gap-1 text-sm text-warning">
           <TriangleAlertIcon aria-hidden className="size-3.5" />
           The env_keeper’s report and the probe disagree.
@@ -196,59 +216,88 @@ function HeadTruth({
   );
 }
 
-/** One line: the host's first label (what differs per preview), then the shared domain, muted. */
+/**
+ * One line: the host's first label (what differs per preview), then the
+ * shared domain, muted. A long label keeps its service and PR ends
+ * (`app-…-p9631`) so truncation never hides the PR number.
+ */
 function HostText({ url }: { url: string }) {
   const bare = url.replace(/^https?:\/\//, "").replace(/\/$/, "");
   const dot = bare.indexOf(".");
+  const label = dot > 0 ? bare.slice(0, dot) : bare;
+  const parts = label.split("-");
+  const shown = label.length > 16 && parts.length > 2 ? `${parts[0]}-…-${parts.at(-1)}` : label;
   return (
     <span className="min-w-0 truncate">
-      {dot > 0 ? bare.slice(0, dot) : bare}
+      {shown}
       {dot > 0 && <span className="text-muted-foreground">{bare.slice(dot)}</span>}
     </span>
   );
 }
 
-function Links({ preview, reachable }: { preview: PreviewView; reachable: boolean }) {
+function Links({
+  preview,
+  reachable,
+  gone,
+}: {
+  preview: PreviewView;
+  reachable: boolean;
+  /** Parked or torn down: the URLs are the last ones, not live links. */
+  gone: boolean;
+}) {
   const links = previewLinks(preview);
   if (links.length === 0) return null;
   return (
-    <ul className="flex flex-col gap-1 text-sm">
-      {links.map((link) => (
-        <li
-          key={link.key}
-          className="grid grid-cols-[2.75rem_minmax(0,1fr)_auto] items-center gap-2"
-        >
-          <span className="text-muted-foreground">{link.key}</span>
-          <a
-            href={link.url}
-            target="_blank"
-            rel="noreferrer"
-            data-testid={`review-preview-${link.key}-link`}
-            title={link.url}
-            className={cn(
-              "inline-flex min-w-0 items-center gap-1 font-mono underline-offset-2 hover:underline",
-              reachable ? "text-foreground" : "text-muted-foreground",
-            )}
+    <div className="flex flex-col gap-1">
+      {gone && <p className="text-sm text-muted-foreground">Last URLs (not live)</p>}
+      <ul data-testid="review-preview-links" className="flex flex-col gap-1 text-sm">
+        {links.map((link) => (
+          <li
+            key={link.key}
+            className="grid grid-cols-[2.75rem_minmax(0,1fr)_auto] items-center gap-2"
           >
-            <HostText url={link.url} />
-            <ExternalLinkIcon aria-hidden className="size-3 shrink-0" />
-          </a>
-          {link.code != null ? (
-            <span
-              className={cn(
-                "rounded-sm px-1 font-mono text-[11px] leading-4 tabular-nums",
-                TONE_CHIP[statusTone(link.code)],
-              )}
-            >
-              {link.code}
-              {link.ms != null && ` · ${Math.round(link.ms)}ms`}
-            </span>
-          ) : (
-            <span />
-          )}
-        </li>
-      ))}
-    </ul>
+            <span className="text-muted-foreground">{link.key}</span>
+            {gone ? (
+              <span
+                data-testid={`review-preview-${link.key}-last-url`}
+                title={link.url}
+                className="inline-flex min-w-0 items-center font-mono text-muted-foreground/80"
+              >
+                <HostText url={link.url} />
+              </span>
+            ) : (
+              <a
+                href={link.url}
+                target="_blank"
+                rel="noreferrer"
+                data-testid={`review-preview-${link.key}-link`}
+                title={link.url}
+                className={cn(
+                  "inline-flex min-w-0 items-center gap-1 font-mono underline-offset-2 hover:underline",
+                  reachable ? "text-foreground" : "text-muted-foreground",
+                )}
+              >
+                <HostText url={link.url} />
+                <ExternalLinkIcon aria-hidden className="size-3 shrink-0" />
+              </a>
+            )}
+            {link.code != null ? (
+              <span
+                className={cn(
+                  "rounded-sm px-1 font-mono text-[11px] leading-4 tabular-nums",
+                  TONE_CHIP[statusTone(link.code)],
+                )}
+              >
+                {link.code}
+                {link.ms != null && ` · ${Math.round(link.ms)}ms`}
+              </span>
+            ) : (
+              <span />
+            )}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
@@ -294,17 +343,21 @@ function Resources({ preview }: { preview: PreviewView }) {
 }
 
 function CopyLinks({ pr, preview }: { pr: PrView; preview: PreviewView }) {
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
   const copy = () => {
     const origin = window.location.origin;
     const lines = [
       `PR #${pr.number} preview (always the current deploy): ${absoluteUrl(preview.stable_url ?? prPreviewUrl(pr.id), origin)}`,
       ...previewLinks(preview).map((l) => `${l.key}: ${l.url}`),
     ];
-    void copyText(lines.join("\n")).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
-    });
+    const flash = (state: "copied" | "failed") => {
+      setCopied(state);
+      window.setTimeout(() => setCopied("idle"), 2000);
+    };
+    copyText(lines.join("\n")).then(
+      () => flash("copied"),
+      () => flash("failed"),
+    );
   };
   return (
     <Button
@@ -312,11 +365,12 @@ function CopyLinks({ pr, preview }: { pr: PrView; preview: PreviewView }) {
       size="xs"
       onClick={copy}
       data-testid="review-preview-copy"
+      data-state={copied}
       componentId="factory.review.preview_copy"
-      className="text-muted-foreground"
+      className={cn(copied === "failed" ? "text-destructive" : "text-muted-foreground")}
     >
-      {copied ? <CheckIcon /> : <CopyIcon />}
-      {copied ? "Copied" : "Copy links"}
+      {copied === "copied" ? <CheckIcon /> : <CopyIcon />}
+      {copied === "copied" ? "Copied" : copied === "failed" ? "Couldn’t copy" : "Copy links"}
     </Button>
   );
 }
@@ -339,17 +393,21 @@ export function PreviewPanel({
   const slots = project?.charter?.preview.slots ?? project?.charter?.preview_slots ?? null;
 
   if (!preview) {
-    const noEnv = prHasNoEnv(pr, project);
+    const noEnv = prNoEnvReason(pr, project);
     return (
       <section
         data-testid="review-preview"
-        data-state={noEnv ? "no-env" : "none"}
+        data-state={noEnv ?? "none"}
         className="flex flex-col gap-2"
       >
         <PanelHeading title="Preview" />
-        {noEnv ? (
+        {noEnv === "no-env" ? (
           <p data-testid="review-preview-no-env" className="text-sm text-muted-foreground">
             No factory preview: this PR needs no env (factory:no-env), so nothing is deployed.
+          </p>
+        ) : noEnv === "previews-off" ? (
+          <p data-testid="review-preview-off" className="text-sm text-muted-foreground">
+            No factory preview: previews and demos are off for this project.
           </p>
         ) : (
           <>
@@ -382,6 +440,11 @@ export function PreviewPanel({
   const seen = previewSeenAt(preview);
   const parked = preview.state === "parked" || preview.state === "parking";
   const down = DOWN_STATES.has(preview.state);
+  // Parked or torn down: its URLs no longer answer.
+  const gone = parked || preview.state === "down" || preview.state === "gone";
+  const truth = previewHeadTruth(preview, pr.head_sha);
+  const behind = preview.state === "stale" || (preview.state === "ready" && !truth.matches);
+  const prominent = parked || down || behind;
   const stableHref = preview.stable_url ?? prPreviewUrl(pr.id);
   return (
     <section
@@ -413,7 +476,7 @@ export function PreviewPanel({
             )}
           </span>
         }
-        action={<CopyLinks pr={pr} preview={preview} />}
+        action={gone ? undefined : <CopyLinks pr={pr} preview={preview} />}
       />
       {parked && (
         <ReviewNotice tone="muted" testId="review-preview-parked">
@@ -434,7 +497,7 @@ export function PreviewPanel({
         </ReviewNotice>
       )}
       <HeadTruth pr={pr} preview={preview} nowS={nowS} live={health.reachable} />
-      <Links preview={preview} reachable={health.reachable} />
+      <Links preview={preview} reachable={health.reachable} gone={gone} />
       <div className="flex flex-wrap items-center gap-2">
         {health.reachable && (
           <Button asChild variant="outline" size="sm">
@@ -446,7 +509,7 @@ export function PreviewPanel({
         )}
         {control.enabled && (
           <Button
-            variant={parked || down ? "outline" : "ghost"}
+            variant={prominent ? "outline" : "ghost"}
             size="sm"
             onClick={control.send}
             loading={control.state.phase === "sending"}
@@ -454,7 +517,7 @@ export function PreviewPanel({
             componentId={
               parked ? "factory.review.preview_restore" : "factory.review.preview_redeploy"
             }
-            className={cn(!(parked || down) && "text-muted-foreground")}
+            className={cn(!prominent && "text-muted-foreground")}
           >
             {parked ? <RotateCcwIcon /> : <RefreshCwIcon />}
             {parked ? "Restore preview" : "Redeploy preview"}
@@ -472,9 +535,7 @@ export function PreviewPanel({
               : ""}
         </p>
       )}
-      {!(parked || preview.state === "down" || preview.state === "gone") && (
-        <Resources preview={preview} />
-      )}
+      {!gone && <Resources preview={preview} />}
       {(preview.namespace || preview.deployed.tooling_overlay) && (
         <p className="min-w-0 text-sm text-muted-foreground">
           {preview.namespace && (

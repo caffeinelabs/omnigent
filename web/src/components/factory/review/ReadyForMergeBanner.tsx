@@ -19,6 +19,7 @@ import { useFactoryNow } from "../factoryClock";
 import { plural, shortSha } from "../factoryFormat";
 import { IMergedItButton, HUMANS_MERGE } from "./ReviewActions";
 import { gateTally, sentinelVerifiedHead, uxDemoMissing } from "./reviewModel";
+import { DotParts } from "./reviewParts";
 
 export interface ReadyForMergeBannerProps {
   /** The PR; renders nothing unless it is open and ready. */
@@ -33,6 +34,8 @@ export interface ReadyForMergeBannerProps {
   onReview?: (number: number) => void;
   /** The clock ages read against (epoch seconds); the factory clock when omitted. */
   nowS?: number;
+  /** Overrides the test id (`ready-banner-<n>` on cards, `drawer-ready-banner-<n>` in drawers). */
+  testId?: string;
 }
 
 function Headline({ pr, nowS, label }: { pr: PrView; nowS: number; label: string }) {
@@ -41,14 +44,20 @@ function Headline({ pr, nowS, label }: { pr: PrView; nowS: number; label: string
   return (
     <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-0.5 text-success">
       <StarIcon aria-hidden className="size-3.5 shrink-0 fill-current" />
-      <span className="font-medium">{label}</span>
-      {/* Parts lead with their own space so the line reads as one sentence. */}
-      <span className="tabular-nums">{` · ${tally.passing}/${tally.total} gates`}</span>
-      {sentinel && (
-        <span>
-          {` · Sentinel verified${sentinel.at != null ? ` ${ageText(nowS - sentinel.at)}` : ""}`}
-        </span>
-      )}
+      <DotParts
+        parts={[
+          { key: "label", node: label, className: "font-medium" },
+          {
+            key: "gates",
+            node: `${tally.passing}/${tally.total} gates`,
+            className: "tabular-nums",
+          },
+          sentinel && {
+            key: "sentinel",
+            node: `Sentinel verified${sentinel.at != null ? ` ${ageText(nowS - sentinel.at)}` : ""}`,
+          },
+        ]}
+      />
     </span>
   );
 }
@@ -75,6 +84,7 @@ export function ReadyForMergeBanner({
   factoryId,
   onReview,
   nowS: nowProp,
+  testId,
 }: ReadyForMergeBannerProps) {
   const clockS = Math.floor(useFactoryNow().getTime() / 1000);
   const nowS = nowProp ?? clockS;
@@ -83,7 +93,7 @@ export function ReadyForMergeBanner({
   if (variant === "line") {
     return (
       <div
-        data-testid={`ready-banner-${pr.number}`}
+        data-testid={testId ?? `drawer-ready-banner-${pr.number}`}
         data-variant="line"
         className="flex flex-col gap-1 rounded-lg bg-success/10 px-3 py-1.5 text-sm"
       >
@@ -98,7 +108,7 @@ export function ReadyForMergeBanner({
   const length = demo ? clipDuration(demo.duration_s) : null;
   return (
     <div
-      data-testid={`ready-banner-${pr.number}`}
+      data-testid={testId ?? `ready-banner-${pr.number}`}
       data-variant="card"
       className="flex min-w-0 flex-col gap-3 rounded-lg border border-success/25 bg-success/5 p-3 @2xl:flex-row @2xl:items-start"
     >

@@ -55,11 +55,17 @@ export const PreviewParked = review({ state: "preview-parked" });
 /** The preview still runs an older commit: amber "preview behind head". */
 export const PreviewMismatch = review({ state: "preview-mismatch" });
 
+/** env_keeper is deploying the head: the panel names the commit it deploys, not one it ran. */
+export const PreviewDeploying = review({ state: "preview-deploying" });
+
 /** GitHub reported the merge: the action bar becomes the merged banner. */
 export const Merged = review({ state: "merged" });
 
 /** A docs-only PR (factory:no-env): no preview, no demo needed. */
 export const DocsOnly = review({ state: "docs-only" });
+
+/** The project has "Preview & demo" off: no preview, no demo, and the drawer says why. */
+export const PreviewsOff = review({ state: "previews-off" });
 
 /** The demo failed a step: the failure and console errors are called out. */
 export const DemoFail = review({ state: "demo-fail" });
@@ -75,6 +81,16 @@ export const ApiCallsError = review({
   state: "ready-with-video",
   routes: { [API_JSON]: { error: 404, message: "demo file not found" } },
 });
+
+/** "Older demos" expanded: the PR's earlier heads from its demo.published events. */
+export const OlderDemosExpanded: Story = {
+  ...review({ state: "ready-with-video" }),
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.click(await body.findByTestId("review-older-demos"));
+    await body.findByTestId("review-older-demo-list");
+  },
+};
 
 /** Request changes open, a note typed. */
 export const RequestChanges: Story = {

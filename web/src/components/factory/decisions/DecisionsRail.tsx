@@ -19,6 +19,8 @@ export interface DecisionsRailProps {
   decisions: DecisionView[];
   /** A decision id or ref (`D-3`) to scroll to and highlight (`?decision=`). */
   highlightId: string | null;
+  /** Seconds the server clock runs ahead of the browser's (wait times age on it). */
+  clockOffsetS?: number;
 }
 
 function matches(decision: DecisionView, id: string | null): boolean {
@@ -32,7 +34,7 @@ export function orderOpenDecisions(decisions: DecisionView[]): DecisionView[] {
     .sort((a, b) => Number(b.blocking) - Number(a.blocking) || a.created_at - b.created_at);
 }
 
-export function DecisionsRail({ decisions, highlightId }: DecisionsRailProps) {
+export function DecisionsRail({ decisions, highlightId, clockOffsetS = 0 }: DecisionsRailProps) {
   // Answered from this rail: their cards stay (with the receipt) instead of folding away.
   const [mine, setMine] = useState<Record<string, DecisionView>>({});
   const open = orderOpenDecisions(decisions);
@@ -65,13 +67,14 @@ export function DecisionsRail({ decisions, highlightId }: DecisionsRailProps) {
           decision={decision}
           highlighted={matches(decision, highlightId)}
           onAnswered={remember}
+          clockOffsetS={clockOffsetS}
         />
       ))}
       {answered.length > 0 && (
         <Collapsible>
           <CollapsibleTrigger
             data-testid="decisions-answered-toggle"
-            className="group inline-flex cursor-pointer items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+            className="group inline-flex cursor-pointer items-center gap-1 rounded-sm text-sm text-muted-foreground hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
           >
             <ChevronRightIcon
               aria-hidden

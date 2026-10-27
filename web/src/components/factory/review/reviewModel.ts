@@ -13,7 +13,7 @@ import type {
 } from "@/lib/factoryApi";
 import { READY_GATES, demoFileUrl, prPreviewUrl } from "@/lib/factoryApi";
 import { GATE_KEY_LABEL, type GateKey, shownGates } from "../board/GateChip";
-import { type FactoryTone, shortSha } from "../factoryFormat";
+import { type FactoryTone, sameSha, shortSha } from "../factoryFormat";
 import { previewHeadTruth } from "../board/boardModel";
 
 // ── Gates ──────────────────────────────────────────────────────
@@ -35,7 +35,7 @@ export function gateTally(pr: PrView): { passing: number; total: number } {
 
 /** Sentinel verified this exact head. */
 export function sentinelVerifiedHead(pr: PrView): boolean {
-  return pr.sentinel?.verdict === "verified" && pr.sentinel.head_sha === pr.head_sha;
+  return pr.sentinel?.verdict === "verified" && sameSha(pr.sentinel.head_sha, pr.head_sha);
 }
 
 const UX_PATH = /^services\/caffeine-ux\//;

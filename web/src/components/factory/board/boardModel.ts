@@ -12,6 +12,7 @@ import type {
   PreviewView,
   ProjectView,
 } from "@/lib/factoryApi";
+import { sameSha } from "../factoryFormat";
 
 // ── Stages and ordering ────────────────────────────────────────
 
@@ -112,22 +113,36 @@ export function previewHeadTruth(preview: PreviewView, headSha: string): Preview
   const sha = observed ?? reported;
   const matches =
     Boolean(reported ?? observed) &&
-    (reported == null || reported === headSha) &&
-    (observed == null || observed === headSha);
+    (reported == null || sameSha(reported, headSha)) &&
+    (observed == null || sameSha(observed, headSha));
   return {
     matches,
     sha,
     source: observed ? "probed" : reported ? "reported" : null,
-    reportedVsProbed: Boolean(reported && observed && reported !== observed),
+    reportedVsProbed: Boolean(reported && observed && !sameSha(reported, observed)),
   };
+}
+
+/**
+ * Why a PR will never get a preview: `no-env` (docs-only, labelled
+ * `factory:no-env`), `previews-off` (the project needs no env or has
+ * "Preview & demo" off), else null.
+ */
+export function prNoEnvReason(
+  pr: PrView,
+  project: ProjectView | null,
+): "no-env" | "previews-off" | null {
+  if (pr.gates.verify === "skip") return "no-env";
+  if (pr.gates.notes.some((note) => note.includes("factory:no-env"))) return "no-env";
+  const charter = project?.charter;
+  return charter != null && (!charter.env_needed || !charter.preview.enabled)
+    ? "previews-off"
+    : null;
 }
 
 /** A PR that will never get a preview (docs-only, `factory:no-env`, or previews off). */
 export function prHasNoEnv(pr: PrView, project: ProjectView | null): boolean {
-  if (pr.gates.verify === "skip") return true;
-  if (pr.gates.notes.some((note) => note.includes("factory:no-env"))) return true;
-  const charter = project?.charter;
-  return charter != null && (!charter.env_needed || !charter.preview.enabled);
+  return prNoEnvReason(pr, project) != null;
 }
 
 const UI_PATH = /(^|[/-])(ux|web|ui|frontend)\/|\.(tsx|jsx|vue|svelte|css|scss|html)$/;

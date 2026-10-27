@@ -1,5 +1,6 @@
 // Small building blocks the review drawer's panels share: a panel heading
-// with a muted meta line, and a tinted one-line notice.
+// with a muted meta line, a tinted one-line notice, and "a · b · c" parts
+// for flex-wrapped meta lines.
 
 import type { ReactNode } from "react";
 import { CircleXIcon, InfoIcon, TriangleAlertIcon } from "lucide-react";
@@ -60,4 +61,30 @@ export function ReviewNotice({
       <span className="min-w-0">{children}</span>
     </p>
   );
+}
+
+export interface DotPart {
+  key: string;
+  node: ReactNode;
+  className?: string;
+}
+
+/**
+ * Parts of a flex-wrapped meta line joined by "·". Each separator stays
+ * on the line of the part before it, so a wrapped line never starts with
+ * one; the text still reads "a · b · c".
+ */
+export function DotParts({ parts }: { parts: (DotPart | null | false)[] }) {
+  const shown = parts.filter((part): part is DotPart => Boolean(part));
+  return shown.map((part, i) => (
+    <span key={part.key} className={cn("inline-flex min-w-0 items-center", part.className)}>
+      {i > 0 && " "}
+      {part.node}
+      {i < shown.length - 1 && (
+        <span aria-hidden className="shrink-0 font-sans">
+          {"\u00a0·"}
+        </span>
+      )}
+    </span>
+  ));
 }

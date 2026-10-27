@@ -2,7 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DecisionView } from "@/lib/factoryApi";
 import { LIVE_RUN_NOW_S } from "../__fixtures__/liveRun";
 import { FactoryNowContext } from "../factoryClock";
@@ -70,6 +70,9 @@ function renderCard(decision: DecisionView, onAnswered = vi.fn()) {
 
 beforeEach(() => {
   authenticatedFetch.mockReset();
+});
+afterEach(() => {
+  vi.useRealTimers();
 });
 
 describe("DecisionCard", () => {
@@ -183,6 +186,60 @@ describe("DecisionCard", () => {
     );
     expect(card).toHaveAttribute("data-status", "conflict");
     expect(within(card).queryByTestId("decision-option-D-2-0")).toBeNull();
+  });
+
+  it.each([
+    ["withdrawn", "Withdrawn by the asker meanwhile"],
+    ["expired", "Expired before your answer arrived"],
+  ])("says the decision was %s on a 409, not answered", async (status, text) => {
+    answerWith(() =>
+      json(
+        {
+          error: { code: "decision_not_open", message: `D-2 is already ${status}` },
+          status,
+          answered_by: null,
+          answered_at: null,
+        },
+        409,
+      ),
+    );
+    const { card } = renderCard(agentDecision());
+    fireEvent.click(within(card).getByTestId("decision-option-D-2-0"));
+    const conflict = await within(card).findByTestId("decision-conflict-D-2");
+    expect(conflict).toHaveTextContent(text);
+    expect(conflict).not.toHaveTextContent("Already answered");
+  });
+
+  it("keeps the receipt's time and tick together so the ✓ never wraps alone", () => {
+    const { card } = renderCard(deliveredDecision());
+    const receipt = within(card).getByTestId("decision-receipt-D-1");
+    const tail = Array.from(receipt.querySelectorAll("span")).find((el) =>
+      el.className.includes("whitespace-nowrap"),
+    );
+    expect(tail).toBeDefined();
+    expect(tail!.textContent).toMatch(/^\S+.*✓$/);
+  });
+
+  it("ages the wait on the server's clock, not a skewed browser clock", () => {
+    // The browser clock runs an hour behind the server's.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime((LIVE_RUN_NOW_S - 3600) * 1000);
+    const client = new QueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <DecisionCard decision={lateQuestion()} clockOffsetS={3600} />
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const wait = screen.getByTestId("decision-wait-D-5");
+    expect(wait).toHaveTextContent("40m");
+    expect(wait).toHaveAttribute("data-late", "true");
+  });
+
+  it("names the recommended star for screen readers", () => {
+    const { card } = renderCard(agentDecision());
+    expect(within(card).getByRole("img", { name: "recommended" })).toBeInTheDocument();
   });
 
   it("shows a delivered decision's receipt", () => {

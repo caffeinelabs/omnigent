@@ -15,7 +15,7 @@ import {
   UserCheckIcon,
 } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import type { MemberView, PrView } from "@/lib/factoryApi";
+import type { GateState, MemberView, PrView } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { ageText } from "../board/boardModel";
@@ -27,7 +27,7 @@ import {
   gateState,
   shownGates,
 } from "../board/GateChip";
-import { plural, shortSha } from "../factoryFormat";
+import { plural, sameSha, shortSha } from "../factoryFormat";
 import { PanelHeading } from "./reviewParts";
 import { gateTally } from "./reviewModel";
 
@@ -60,17 +60,22 @@ function Out({ href, children, testId }: { href: string; children: ReactNode; te
 
 function AtSha({ sha, head }: { sha: string | null; head: string }) {
   if (!sha) return null;
+  const current = sameSha(sha, head);
   return (
-    <span className={cn("font-mono tabular-nums", sha !== head && "text-warning")}>
+    <span className={cn("font-mono tabular-nums", !current && "text-warning")}>
       @{shortSha(sha)}
-      {sha !== head && " (old head)"}
+      {!current && " (old head)"}
     </span>
   );
 }
 
+/** A separator that stays on the line of the part before it. */
 function Sep() {
-  return <span aria-hidden> · </span>;
+  return <span aria-hidden>{"\u00a0· "}</span>;
 }
+
+/** A gate that passes although the snapshot carries no marker for it. */
+const PASSED_NO_DETAILS = "Passed (no marker details)";
 
 /** The reviewer agent on this PR's project, for "reviewer session ↗". */
 function reviewerOf(pr: PrView, members: MemberView[]): MemberView | null {
@@ -83,15 +88,18 @@ function reviewerOf(pr: PrView, members: MemberView[]): MemberView | null {
 function Detail({
   pr,
   gate,
+  state,
   members,
   nowS,
 }: {
   pr: PrView;
   gate: GateKey;
+  state: GateState;
   members: MemberView[];
   nowS: number;
 }) {
   const { evidence } = pr.gates;
+  const passed = state === "pass";
   const when = (at: number | null) =>
     at != null ? (
       <>
@@ -104,7 +112,7 @@ function Detail({
       return pr.is_draft ? "Still a draft on GitHub" : "Marked ready on GitHub";
     case "checks": {
       const c = evidence.checks;
-      if (!c) return "No checks reported yet";
+      if (!c) return passed ? PASSED_NO_DETAILS : "No checks reported yet";
       return (
         <>
           <span className="tabular-nums">
@@ -130,7 +138,8 @@ function Detail({
     }
     case "review": {
       const r = evidence.review;
-      if (!r) return `No review marker for ${shortSha(pr.head_sha)} yet`;
+      if (!r)
+        return passed ? PASSED_NO_DETAILS : `No review marker for ${shortSha(pr.head_sha)} yet`;
       const reviewer = reviewerOf(pr, members);
       return (
         <>
@@ -162,9 +171,8 @@ function Detail({
     case "verify": {
       const v = evidence.verify;
       if (!v) {
-        return pr.gates.verify === "skip"
-          ? "No env needed (factory:no-env)"
-          : `No verify marker for ${shortSha(pr.head_sha)} yet`;
+        if (state === "skip") return "No env needed (factory:no-env)";
+        return passed ? PASSED_NO_DETAILS : `No verify marker for ${shortSha(pr.head_sha)} yet`;
       }
       return (
         <>
@@ -172,7 +180,7 @@ function Detail({
           {v.env && (
             <>
               {" "}
-              in <span className="font-mono break-all">{v.env}</span>
+              in <span className="font-mono break-words">{v.env}</span>
             </>
           )}
           {when(v.at)}
@@ -186,8 +194,13 @@ function Detail({
       );
     }
     case "demo": {
-      const d = evidence.demo;
-      if (!d) return `No demo of ${shortSha(pr.head_sha)} yet`;
+      // The snapshot's demo stands in when the gate carries no demo marker.
+      const d =
+        evidence.demo ??
+        (pr.demo
+          ? { status: pr.demo.status, sha: pr.demo.head_sha, at: pr.demo.created_at }
+          : null);
+      if (!d) return passed ? PASSED_NO_DETAILS : `No demo of ${shortSha(pr.head_sha)} yet`;
       return (
         <>
           {d.status ?? "Recorded"} <AtSha sha={d.sha} head={pr.head_sha} />
@@ -200,7 +213,7 @@ function Detail({
     case "protected_paths":
       return (
         <Collapsible>
-          <CollapsibleTrigger className="group inline-flex cursor-pointer items-center gap-1 hover:text-foreground">
+          <CollapsibleTrigger className="group inline-flex cursor-pointer items-center gap-1 rounded-sm hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none">
             {plural(evidence.files.length, "file")} ·{" "}
             {evidence.protected.length > 0 ? (
               <span className="text-destructive">{evidence.protected.length} protected</span>
@@ -258,7 +271,7 @@ function GateRow({
       <Icon aria-hidden className={cn("mt-0.5 size-3.5", STATE_ICON_TONE[state])} />
       <span className="text-foreground">{GATE_KEY_LABEL[gate]}</span>
       <span className="min-w-0 text-muted-foreground">
-        <Detail pr={pr} gate={gate} members={members} nowS={nowS} />
+        <Detail pr={pr} gate={gate} state={state} members={members} nowS={nowS} />
       </span>
     </li>
   );
@@ -267,7 +280,7 @@ function GateRow({
 function SentinelRow({ pr, nowS }: { pr: PrView; nowS: number }) {
   const s = pr.sentinel;
   const verified = s?.verdict === "verified";
-  const current = s?.head_sha === pr.head_sha;
+  const current = sameSha(s?.head_sha, pr.head_sha);
   const Icon = verified ? ShieldCheckIcon : ShieldXIcon;
   return (
     <li

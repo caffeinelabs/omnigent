@@ -12,7 +12,7 @@ import {
   reviewScenario,
   scenarioApiRoutes,
 } from "./__fixtures__/reviewFixtures";
-import { REFRESH_COOLDOWN_MS } from "./ReviewActions";
+import { HUMANS_MERGE, REFRESH_COOLDOWN_MS } from "./ReviewActions";
 import { ReviewDrawer } from "./ReviewDrawer";
 
 const authenticatedFetch = vi.fn();
@@ -219,6 +219,25 @@ describe("ReviewDrawer · demo", () => {
     expect(query).toContain("project=api-version");
   });
 
+  it("doesn't deny the count when the older demos aren't in recent activity", async () => {
+    overrides[`GET /v1/factory/factories/${LIVE_RUN_FACTORY_ID}/events`] = () =>
+      json({ data: [], has_more: false });
+    const { drawer } = renderDrawer("ready-with-video");
+    expect(within(drawer).getByTestId("review-older-demos")).toHaveTextContent("1 older demo");
+    fireEvent.click(within(drawer).getByTestId("review-older-demos"));
+    expect(await within(drawer).findByTestId("review-older-demos-empty")).toHaveTextContent(
+      "Older demos aren’t in recent activity.",
+    );
+  });
+
+  it("treats a short demo sha as the head it abbreviates", () => {
+    const { snapshot, pr } = reviewScenario("ready-with-video");
+    pr.demo = { ...pr.demo!, head_sha: pr.head_sha.slice(0, 7) };
+    const { drawer } = renderDrawer({ snapshot, pr });
+    expect(within(drawer).getByTestId("review-demo")).toHaveAttribute("data-state", "current");
+    expect(within(drawer).getByTestId("review-demo")).toHaveTextContent("= head ✓");
+  });
+
   it("warns that the demo is of an older head", () => {
     const { drawer } = renderDrawer("demo-old-head");
     expect(within(drawer).getByTestId("review-demo-old-head")).toHaveTextContent(
@@ -234,6 +253,18 @@ describe("ReviewDrawer · demo", () => {
     expect(within(drawer).getByTestId("review-demo-empty")).toHaveTextContent("No demo yet.");
   });
 
+  it("says previews are off rather than docs-only when the project turned them off", () => {
+    const { drawer } = renderDrawer("previews-off");
+    expect(within(drawer).getByTestId("review-demo-previews-off")).toHaveTextContent(
+      "Previews and demos are off for this project",
+    );
+    expect(within(drawer).getByTestId("review-preview-off")).toHaveTextContent(
+      "previews and demos are off for this project",
+    );
+    expect(drawer).not.toHaveTextContent("Docs-only");
+    expect(drawer).not.toHaveTextContent("factory:no-env");
+  });
+
   it("says a docs-only PR needs no demo and no preview", () => {
     const { drawer } = renderDrawer("docs-only");
     expect(within(drawer).getByTestId("review-demo-docs-only")).toHaveTextContent(
@@ -247,9 +278,38 @@ describe("ReviewDrawer · demo", () => {
 
   it("flags a failed demo", () => {
     const { drawer } = renderDrawer("demo-fail");
+    const gate = within(drawer).getByTestId("review-evidence-demo");
+    expect(gate).toHaveAttribute("data-state", "fail");
+    expect(gate).toHaveTextContent("FAIL @7767f0d");
     expect(within(drawer).getByTestId("review-demo-failed")).toBeInTheDocument();
     expect(within(drawer).getByTestId("review-step-3")).toHaveAttribute("data-status", "fail");
     expect(within(drawer).getByTestId("review-demo-console")).toHaveTextContent("2 console errors");
+  });
+});
+
+describe("ReviewDrawer · header", () => {
+  it("reads the ready line under its own test id, apart from the board's banner", () => {
+    const { drawer } = renderDrawer("ready-with-video");
+    expect(within(drawer).getByTestId("review-ready-banner")).toHaveTextContent(
+      "Ready for human merge · 7/7 gates",
+    );
+    expect(within(drawer).queryByTestId("ready-banner-9630")).toBeNull();
+  });
+
+  it("lines the header's padding up with the body (the title row clears the close button)", () => {
+    const { drawer } = renderDrawer("ready-with-video");
+    const header = drawer.querySelector("[data-slot=sheet-header]")!;
+    expect(header).toHaveClass("pr-5");
+    expect(header).not.toHaveClass("pr-12");
+  });
+
+  it("mutes a zero diff count and attaches separators to the part before", () => {
+    const { drawer } = renderDrawer("docs-only");
+    const meta = within(drawer).getByTestId("review-pr-meta");
+    const minus = within(meta).getByText("−0");
+    expect(minus).not.toHaveClass("text-destructive");
+    // Only no-break spaces may precede a separator.
+    expect(meta.textContent).not.toMatch(/(^| )·/);
   });
 });
 
@@ -293,6 +353,64 @@ describe("ReviewDrawer · preview", () => {
     expect(within(drawer).getByTestId("review-observed-sha")).toHaveTextContent("1a2b3c4");
   });
 
+  it("names the commit a deploy targets instead of claiming it ran", () => {
+    const { drawer } = renderDrawer("preview-deploying");
+    const sha = within(drawer).getByTestId("review-preview-sha");
+    expect(sha).toHaveTextContent("Deploying 5e1c2d4…");
+    expect(sha).not.toHaveTextContent("Runs");
+    expect(sha).not.toHaveTextContent("PR head ✓");
+    expect(sha).toHaveAttribute("data-matches-head", "false");
+  });
+
+  it("says a failed deploy failed, without matching the head", () => {
+    const { snapshot, pr } = reviewScenario("preview-deploying");
+    pr.preview = { ...pr.preview!, state: "failed" };
+    const { drawer } = renderDrawer({ snapshot, pr });
+    const sha = within(drawer).getByTestId("review-preview-sha");
+    expect(sha).toHaveTextContent("Deploy of 5e1c2d4 failed");
+    expect(sha).toHaveAttribute("data-matches-head", "false");
+  });
+
+  it("matches a short observed sha to the head by prefix, as the server does", () => {
+    const { snapshot, pr } = reviewScenario("ready-with-video");
+    pr.preview = {
+      ...pr.preview!,
+      observed: { ...pr.preview!.observed!, sha: pr.head_sha.slice(0, 7) },
+    };
+    const { drawer } = renderDrawer({ snapshot, pr });
+    const sha = within(drawer).getByTestId("review-preview-sha");
+    expect(sha).toHaveAttribute("data-matches-head", "true");
+    expect(sha).toHaveTextContent("= PR head ✓");
+    expect(within(drawer).queryByTestId("review-preview-behind")).toBeNull();
+    expect(within(drawer).getByTestId("review-observed-sha").firstElementChild).not.toHaveClass(
+      "text-warning",
+    );
+  });
+
+  it("makes Redeploy the main lever when the preview is behind head", () => {
+    const { drawer } = renderDrawer("preview-mismatch");
+    expect(within(drawer).getByTestId("review-preview-redeploy")).not.toHaveClass(
+      "text-muted-foreground",
+    );
+  });
+
+  it("keeps Redeploy quiet on a healthy preview", () => {
+    const { drawer } = renderDrawer("backend-api-demo");
+    expect(within(drawer).getByTestId("review-preview-redeploy")).toHaveClass(
+      "text-muted-foreground",
+    );
+  });
+
+  it("keeps the PR number visible in a long preview host", () => {
+    const { drawer } = renderDrawer("backend-api-demo");
+    const app = within(drawer).getByTestId("review-preview-app-link");
+    expect(app).toHaveTextContent("app-…-p9631.envs.sandbox.caffeinelabs.io");
+    expect(app).toHaveAttribute(
+      "title",
+      "https://app-c41e9b07-7d0f12-5b3e-p9631.envs.sandbox.caffeinelabs.io",
+    );
+  });
+
   it("shows probe codes and the slot when the prober measured them", () => {
     const { drawer } = renderDrawer("backend-api-demo");
     const api = within(drawer).getByTestId("review-preview-api-link").closest("li")!;
@@ -320,12 +438,20 @@ describe("ReviewDrawer · preview", () => {
     );
   });
 
-  it("speaks of a parked preview in the past, without its resources", () => {
+  it("speaks of a parked preview in the past, without its resources or live links", () => {
     const { drawer } = renderDrawer("preview-parked");
     expect(within(drawer).getByTestId("review-preview-sha")).toHaveTextContent(
       "Last ran 7767f0d = PR head ✓",
     );
+    expect(within(drawer).getByTestId("review-preview-sha")).toHaveAttribute(
+      "data-matches-head",
+      "false",
+    );
     expect(within(drawer).queryByTestId("review-preview-resources")).toBeNull();
+    expect(within(drawer).queryByTestId("review-preview-app-link")).toBeNull();
+    expect(within(drawer).getByTestId("review-preview-app-last-url")).toHaveTextContent("app-");
+    expect(within(drawer).getByTestId("review-preview")).toHaveTextContent("Last URLs (not live)");
+    expect(within(drawer).queryByTestId("review-preview-copy")).toBeNull();
   });
 
   it("says a merged PR's preview was torn down", () => {
@@ -355,6 +481,35 @@ describe("ReviewDrawer · evidence", () => {
     expect(paths).toHaveTextContent("6 files · none protected");
   });
 
+  it("shows the markers behind passing gates", () => {
+    const { drawer } = renderDrawer("no-demo");
+    expect(within(drawer).getByTestId("review-evidence-review")).toHaveTextContent(
+      "APPROVE @5e1c2d4",
+    );
+    expect(within(drawer).getByTestId("review-evidence-verify")).toHaveTextContent("PASS @5e1c2d4");
+  });
+
+  it("says a gate passed without details rather than 'no marker' next to a check", () => {
+    const { snapshot, pr } = reviewScenario("no-demo");
+    pr.gates.evidence.review = null;
+    pr.gates.evidence.verify = null;
+    const { drawer } = renderDrawer({ snapshot, pr });
+    for (const gate of ["review", "verify"]) {
+      const row = within(drawer).getByTestId(`review-evidence-${gate}`);
+      expect(row).toHaveAttribute("data-state", "pass");
+      expect(row).toHaveTextContent("Passed (no marker details)");
+      expect(row).not.toHaveTextContent("No ");
+    }
+  });
+
+  it("keeps each separator on the line of the part before it", () => {
+    const { drawer } = renderDrawer("ready-with-video");
+    const review = within(drawer).getByTestId("review-evidence-review");
+    // A no-break space before every "·": a wrapped line never starts with one.
+    expect(review.textContent).toContain("\u00a0· ");
+    expect(review.textContent).not.toMatch(/ · /);
+  });
+
   it("highlights protected files", () => {
     const { snapshot, pr } = reviewScenario("ready-with-video");
     pr.gates.evidence.protected = ["services/caffeine-api/src/app.ts"];
@@ -370,15 +525,22 @@ describe("ReviewDrawer · evidence", () => {
 });
 
 describe("ReviewDrawer · actions", () => {
-  it("approves, then opens GitHub's merge box", async () => {
-    const tab = { opener: {} } as unknown as Window;
-    const open = vi.spyOn(window, "open").mockReturnValue(tab);
+  /** A stand-in for the tab `window.open` returns. */
+  function fakeTab() {
+    return { opener: {}, closed: false, location: { href: "about:blank" }, close: vi.fn() };
+  }
+
+  it("approves, then opens GitHub's merge box in the tab the click opened", async () => {
+    const tab = fakeTab();
+    const open = vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
     const { drawer } = renderDrawer("ready-with-video");
     fireEvent.click(within(drawer).getByTestId("review-approve"));
+    // Opened within the click, so popup blockers let it through.
+    expect(open).toHaveBeenCalledWith("about:blank", "_blank");
+    expect(tab.opener).toBeNull();
     await waitFor(() =>
-      expect(open).toHaveBeenCalledWith(
+      expect(tab.location.href).toBe(
         "https://github.com/caffeinelabs/app/pull/9630#partial-pull-merging",
-        "_blank",
       ),
     );
     expect(posts("/feedback")).toEqual([
@@ -388,14 +550,14 @@ describe("ReviewDrawer · actions", () => {
         body: { verdict: "approved" },
       },
     ]);
-    expect(tab.opener).toBeNull();
     expect(within(drawer).getByTestId("review-feedback-chip")).toHaveTextContent(
       "Approved by you · sent to the PL",
     );
   });
 
-  it("does not open GitHub when the approval fails", async () => {
-    const open = vi.spyOn(window, "open").mockReturnValue(null);
+  it("closes the tab instead of opening GitHub when the approval fails", async () => {
+    const tab = fakeTab();
+    vi.spyOn(window, "open").mockReturnValue(tab as unknown as Window);
     overrides["POST /v1/factory/prs/f74d5967c53455139e85ba1b402a5bd4/feedback"] = () =>
       json({ error: { code: "pr_not_open", message: "PR #9630 is merged" } }, 409);
     const { drawer } = renderDrawer("ready-with-video");
@@ -403,7 +565,19 @@ describe("ReviewDrawer · actions", () => {
     expect(await within(drawer).findByTestId("review-feedback-error")).toHaveTextContent(
       "PR #9630 is merged",
     );
-    expect(open).not.toHaveBeenCalled();
+    expect(tab.close).toHaveBeenCalled();
+    expect(tab.location.href).toBe("about:blank");
+  });
+
+  it("links to GitHub's merge box when the browser blocked the tab", async () => {
+    vi.spyOn(window, "open").mockReturnValue(null);
+    const { drawer } = renderDrawer("ready-with-video");
+    fireEvent.click(within(drawer).getByTestId("review-approve"));
+    const link = await within(drawer).findByRole("link", { name: "open GitHub’s merge box" });
+    expect(link).toHaveAttribute(
+      "href",
+      "https://github.com/caffeinelabs/app/pull/9630#partial-pull-merging",
+    );
   });
 
   it("requests changes with the human's text, optimistically", async () => {
@@ -456,7 +630,36 @@ describe("ReviewDrawer · actions", () => {
       "https://github.com/caffeinelabs/app/pull/9630#partial-pull-merging",
     );
     expect(merge).toHaveAttribute("target", "_blank");
-    expect(merge).toHaveAttribute("aria-describedby", "review-humans-merge");
+    // The description is in the DOM whether or not the tooltip is open.
+    expect(merge).toHaveAccessibleDescription(HUMANS_MERGE);
+  });
+
+  it("keeps the drawer and the draft when Escape is pressed in the composer", () => {
+    const onClose = vi.fn();
+    const { drawer } = renderDrawer("ready-with-video", onClose);
+    fireEvent.click(within(drawer).getByTestId("review-request-changes"));
+    const text = within(drawer).getByTestId("review-feedback-text");
+    fireEvent.change(text, { target: { value: "Rename the row." } });
+    fireEvent.keyDown(text, { key: "Escape" });
+    expect(onClose).not.toHaveBeenCalled();
+    expect(within(drawer).getByTestId("review-feedback-text")).toHaveValue("Rename the row.");
+    // An empty composer folds on Escape; the drawer still stays.
+    fireEvent.change(text, { target: { value: "" } });
+    fireEvent.keyDown(text, { key: "Escape" });
+    expect(within(drawer).queryByTestId("review-feedback-text")).toBeNull();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("opens the composer below the actions that opened it", () => {
+    const { drawer } = renderDrawer("ready-with-video");
+    fireEvent.click(within(drawer).getByTestId("review-request-changes"));
+    const composer = within(drawer).getByTestId("review-feedback-composer");
+    const button = within(drawer).getByTestId("review-request-changes");
+    expect(
+      button.compareDocumentPosition(composer) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    // On phones the composer replaces Approve and Merge until it closes.
+    expect(within(drawer).getByTestId("review-approve")).toHaveClass("max-md:hidden");
   });
 
   it("rate-limits I merged it to one check per 10 s", async () => {
@@ -492,6 +695,22 @@ describe("ReviewDrawer · actions", () => {
     expect(within(drawer).getByTestId("review-i-merged-it")).toBeDisabled();
   });
 
+  it("says when the merge summary couldn't be copied", async () => {
+    vi.stubGlobal("navigator", {
+      ...navigator,
+      clipboard: { writeText: vi.fn().mockRejectedValue(new Error("denied")) },
+    });
+    const execCommand = vi.fn().mockReturnValue(false);
+    Object.defineProperty(document, "execCommand", { value: execCommand, configurable: true });
+    const { drawer } = renderDrawer("ready-with-video");
+    fireEvent.click(within(drawer).getByTestId("review-copy-summary"));
+    await waitFor(() =>
+      expect(within(drawer).getByTestId("review-copy-summary")).toHaveTextContent("Couldn’t copy"),
+    );
+    Reflect.deleteProperty(document, "execCommand");
+    vi.unstubAllGlobals();
+  });
+
   it("copies a merge summary with the gates, demo and preview links", async () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { ...navigator, clipboard: { writeText } });
@@ -518,6 +737,7 @@ describe("ReviewDrawer · actions", () => {
 
   it("shows the merged banner instead of the actions once GitHub reports the merge", () => {
     const { drawer } = renderDrawer("merged");
+    expect(within(drawer).getByTestId("review-state-chip")).toHaveTextContent("Merged");
     expect(within(drawer).getByTestId("review-merged-banner")).toHaveTextContent(
       "Merged by @luka · 4f3e2d1 · 1m ago · PL notified · preview torn down",
     );

@@ -1,8 +1,9 @@
 // Review drawer fixtures built from the live run: one PR per drawer state
 // (ready with a video, a backend-only API demo, a demo of an older head, no
-// demo yet, a parked preview, a preview behind head, merged, docs-only, a
-// failed demo) and the `api.json` transcripts their demos recorded. Every
-// export is a fresh copy the caller may mutate.
+// demo yet, a parked preview, a preview behind head, a preview deploying the
+// head, merged, docs-only, previews off for the project, a failed demo) and
+// the `api.json` transcripts their demos recorded. Every export is a fresh
+// copy the caller may mutate.
 
 import type { DemoView, FactorySnapshot, PrView } from "@/lib/factoryApi";
 import { LIVE_RUN_NOW_S, liveRunSnapshot } from "../../__fixtures__/liveRun";
@@ -16,8 +17,10 @@ export const REVIEW_STATES = [
   "no-demo",
   "preview-parked",
   "preview-mismatch",
+  "preview-deploying",
   "merged",
   "docs-only",
+  "previews-off",
   "demo-fail",
 ] as const;
 export type ReviewState = (typeof REVIEW_STATES)[number];
@@ -252,6 +255,24 @@ function pr(snapshot: FactorySnapshot, number: number): PrView {
   return found;
 }
 
+/** #9631's review and verify markers at its head (the reviewer approved, verify passed). */
+function markers9631(target: PrView) {
+  target.gates.evidence.review = {
+    verdict: "APPROVE",
+    sha: HEAD_9631,
+    url: "https://github.com/caffeinelabs/app/pull/9631#issuecomment-3448901122",
+    at: NOW - 900,
+    by: "reviewer (claude)",
+  };
+  target.gates.evidence.verify = {
+    result: "PASS",
+    sha: HEAD_9631,
+    env: "c41e9b07-7d0f12-5b3e-p9631",
+    url: "https://github.com/caffeinelabs/app/pull/9631#issuecomment-3448933370",
+    at: NOW - 600,
+  };
+}
+
 function passAll(target: PrView) {
   Object.assign(target.gates, {
     draft: "pass",
@@ -278,20 +299,7 @@ export function reviewScenario(state: ReviewState): { snapshot: FactorySnapshot;
       passAll(p9631);
       p9631.gates.demo = "pass";
       p9631.gates.evidence.checks = { ...p9631.gates.evidence.checks!, passing: 14, pending: 0 };
-      p9631.gates.evidence.review = {
-        verdict: "APPROVE",
-        sha: HEAD_9631,
-        url: "https://github.com/caffeinelabs/app/pull/9631#issuecomment-3448901122",
-        at: NOW - 900,
-        by: "reviewer (claude)",
-      };
-      p9631.gates.evidence.verify = {
-        result: "PASS",
-        sha: HEAD_9631,
-        env: "c41e9b07-7d0f12-5b3e-p9631",
-        url: "https://github.com/caffeinelabs/app/pull/9631#issuecomment-3448933370",
-        at: NOW - 600,
-      };
+      markers9631(p9631);
       p9631.gates.evidence.demo = {
         status: "PASS",
         sha: HEAD_9631,
@@ -327,9 +335,24 @@ export function reviewScenario(state: ReviewState): { snapshot: FactorySnapshot;
       const db = snapshot.projects.find((p) => p.slug === "db-version")!;
       Object.assign(db, {
         stage: "ready",
+        agent_stage: "ready",
         overlay: null,
         overlay_reason: null,
         claim_mismatch: false,
+        open_decision_ids: [],
+      });
+      // D-2 was answered, so the PL is no longer waiting on it.
+      db.pl = { ...db.pl!, summary: "#9631 ready for human merge · demo PASS at 5e1c2d4" };
+      const d2 = snapshot.decisions.find((d) => d.ref === "D-2")!;
+      Object.assign(d2, {
+        status: "answered",
+        answer_option_id: d2.options[0]?.id ?? null,
+        answered_by: "Luka",
+        answered_at: NOW - 660,
+        delivered_mail_id: "mail_5d6e7f80a1b2c3d4",
+        delivered_at: NOW - 655,
+        delivered_to_title: "PL · db-version",
+        updated_at: NOW - 655,
       });
       return { snapshot, pr: p9631 };
     }
@@ -362,6 +385,7 @@ export function reviewScenario(state: ReviewState): { snapshot: FactorySnapshot;
       p9631.gates.demo = "pending";
       p9631.gates.reasons = ["no demo for 5e1c2d4"];
       p9631.gates.evidence.checks = { ...p9631.gates.evidence.checks!, passing: 14, pending: 0 };
+      markers9631(p9631);
       p9631.preview = {
         ...p9631.preview!,
         state: "ready",
@@ -383,6 +407,17 @@ export function reviewScenario(state: ReviewState): { snapshot: FactorySnapshot;
     }
     case "preview-mismatch":
       return { snapshot, pr: p9631 };
+    case "preview-deploying": {
+      // env_keeper reports the head it is deploying; the probe still sees the old commit.
+      p9631.preview = {
+        ...p9631.preview!,
+        state: "deploying",
+        deployed: { ...p9631.preview!.deployed, sha: HEAD_9631, at: NOW - 40 },
+        note: "redeploying at 5e1c2d4",
+        reported_at: NOW - 40,
+      };
+      return { snapshot, pr: p9631 };
+    }
     case "merged": {
       Object.assign(p9630, {
         state: "merged",
@@ -412,6 +447,15 @@ export function reviewScenario(state: ReviewState): { snapshot: FactorySnapshot;
       Object.assign(docs, { stage: "ready" });
       return { snapshot, pr: p9632 };
     }
+    case "previews-off": {
+      // The project needs an env but has "Preview & demo" off.
+      const db = snapshot.projects.find((p) => p.slug === "db-version")!;
+      db.charter = { ...db.charter!, preview: { ...db.charter!.preview, enabled: false } };
+      p9631.preview = null;
+      p9631.demo = null;
+      p9631.gates.demo = null;
+      return { snapshot, pr: p9631 };
+    }
     case "demo-fail": {
       const demo = p9630.demo!;
       demo.status = "FAIL";
@@ -423,7 +467,16 @@ export function reviewScenario(state: ReviewState): { snapshot: FactorySnapshot;
         status: "fail",
         note: "expected text 7767f0d, got “unknown” after 5 s",
       };
+      // The step's screenshot shows the failure, and the hover step never ran.
+      demo.files = demo.files
+        .filter((f) => f.name !== "03-settings-version-tooltip.png")
+        .map((f) =>
+          f.name === "03-settings-version.png"
+            ? { ...f, caption: "Settings → About shows “API version: unknown”" }
+            : f,
+        );
       p9630.gates.demo = "fail";
+      p9630.gates.evidence.demo = { ...p9630.gates.evidence.demo!, status: "FAIL" };
       p9630.ready = false;
       p9630.gates.reasons = ["demo FAIL at 7767f0d"];
       return { snapshot, pr: p9630 };

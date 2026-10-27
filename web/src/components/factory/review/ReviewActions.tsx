@@ -32,6 +32,7 @@ import { ageText } from "../board/boardModel";
 import { mergeUrl } from "../board/PrRow";
 import { TONE_CHIP, shortSha } from "../factoryFormat";
 import { mergeSummary } from "./reviewModel";
+import { DotParts } from "./reviewParts";
 
 export const HUMANS_MERGE = "Humans merge caffeinelabs/app. The factory never merges.";
 
@@ -136,14 +137,24 @@ function MergedBanner({ pr, nowS }: { pr: PrView; nowS: number }) {
         />
         <GitMergeIcon aria-hidden className="size-4" />
       </span>
-      <span className="font-medium">Merged{merged?.by ? ` by @${merged.by}` : ""}</span>
-      {/* Each part leads with its own space so the banner reads as one sentence. */}
-      {merged?.sha && (
-        <span className="font-mono tabular-nums">{` · ${shortSha(merged.sha)}`}</span>
-      )}
-      {merged && <span>{` · ${ageText(nowS - merged.at)}`}</span>}
-      <span>{" · PL notified"}</span>
-      <span>{` · ${previewGone ? "preview torn down" : "preview teardown pending"}`}</span>
+      <DotParts
+        parts={[
+          {
+            key: "by",
+            node: `Merged${merged?.by ? ` by @${merged.by}` : ""}`,
+            className: "font-medium",
+          },
+          merged?.sha
+            ? { key: "sha", node: shortSha(merged.sha), className: "font-mono tabular-nums" }
+            : null,
+          merged ? { key: "at", node: ageText(nowS - merged.at) } : null,
+          { key: "pl", node: "PL notified" },
+          {
+            key: "preview",
+            node: previewGone ? "preview torn down" : "preview teardown pending",
+          },
+        ]}
+      />
     </p>
   );
 }
@@ -155,9 +166,17 @@ function ClosedBanner({ pr, nowS }: { pr: PrView; nowS: number }) {
       className="flex flex-wrap items-center gap-x-1.5 rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground"
     >
       <GitPullRequestClosedIcon aria-hidden className="size-4" />
-      <span className="font-medium text-foreground">Closed without merge</span>
-      {pr.closed_at != null && <span>{` · ${ageText(nowS - pr.closed_at)}`}</span>}
-      <span>{" · the PL was asked whether to rework or abandon it"}</span>
+      <DotParts
+        parts={[
+          {
+            key: "closed",
+            node: "Closed without merge",
+            className: "font-medium text-foreground",
+          },
+          pr.closed_at != null ? { key: "at", node: ageText(nowS - pr.closed_at) } : null,
+          { key: "pl", node: "the PL was asked whether to rework or abandon it" },
+        ]}
+      />
     </p>
   );
 }
@@ -183,7 +202,7 @@ export function ReviewActions({
   const [feedback, setFeedback] = useState<FeedbackState>({ phase: "idle" });
   const [composing, setComposing] = useState(false);
   const [text, setText] = useState("");
-  const [copied, setCopied] = useState(false);
+  const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
   const [blockedUrl, setBlockedUrl] = useState<string | null>(null);
 
   if (pr.state === "merged") return <MergedBanner pr={pr} nowS={nowS} />;
@@ -193,22 +212,27 @@ export function ReviewActions({
 
   const approve = () => {
     setFeedback({ phase: "sending", verdict: "approved" });
+    const url = mergeUrl(pr);
+    // Open the tab inside the click (popup blockers allow only that) and point
+    // it at GitHub once the approval is stored. No "noopener" feature: with it,
+    // window.open returns null even when the tab opened.
+    const tab = window.open("about:blank", "_blank");
+    if (tab) tab.opener = null;
     sendPrFeedback(pr.id, { verdict: "approved" }).then(
       () => {
         setFeedback({ phase: "sent", verdict: "approved" });
         invalidate();
-        const url = mergeUrl(pr);
-        // No "noopener" feature: with it, window.open returns null even when the tab opened.
-        const opened = window.open(url, "_blank");
-        if (opened) opened.opener = null;
+        if (tab && !tab.closed) tab.location.href = url;
         else setBlockedUrl(url);
       },
-      (error: unknown) =>
+      (error: unknown) => {
+        tab?.close();
         setFeedback({
           phase: "error",
           verdict: "approved",
           message: error instanceof Error ? error.message : String(error),
-        }),
+        });
+      },
     );
   };
 
@@ -236,6 +260,11 @@ export function ReviewActions({
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
+    // The drawer ignores Escape here; an empty composer folds, a draft stays.
+    if (event.key === "Escape") {
+      if (!text.trim()) setComposing(false);
+      return;
+    }
     if (event.key === "Enter" && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       sendChanges();
@@ -243,10 +272,14 @@ export function ReviewActions({
   };
 
   const copySummary = () => {
-    void copyText(mergeSummary(pr, project, window.location.origin, factoryId)).then(() => {
-      setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
-    });
+    const flash = (state: "copied" | "failed") => {
+      setCopied(state);
+      window.setTimeout(() => setCopied("idle"), 2000);
+    };
+    copyText(mergeSummary(pr, project, window.location.origin, factoryId)).then(
+      () => flash("copied"),
+      () => flash("failed"),
+    );
   };
 
   const chip =
@@ -269,47 +302,52 @@ export function ReviewActions({
       </span>
     ) : null;
 
+  const composer = composing && (
+    // `data-composer`: the drawer leaves Escape here to the composer.
+    <div className="flex flex-col gap-2" data-testid="review-feedback-composer" data-composer>
+      <Textarea
+        data-testid="review-feedback-text"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={onKeyDown}
+        placeholder="What should change? The PL gets this verbatim and re-dispatches the IC."
+        aria-label="Changes to request"
+        autoFocus
+        componentId="factory.review.feedback_text"
+        className="max-h-40 min-h-16 bg-background"
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          onClick={sendChanges}
+          disabled={!text.trim() || busy}
+          data-testid="review-feedback-send"
+          componentId="factory.review.feedback_send"
+          className="max-md:flex-1"
+        >
+          <SendIcon />
+          Send to PL
+        </Button>
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => setComposing(false)}
+          componentId="factory.review.feedback_cancel"
+          className="text-muted-foreground"
+        >
+          Cancel
+        </Button>
+        <span className="text-sm text-muted-foreground max-md:hidden">⌘↵ sends</span>
+      </div>
+    </div>
+  );
+
+  // While composing on a phone only "Request changes…" and the composer stay.
+  const hideWhileComposing = composing && "max-md:hidden";
+
   return (
     <TooltipProvider delayDuration={300}>
       <div data-testid="review-actions" className="flex w-full min-w-0 flex-col gap-2">
-        {composing && (
-          <div className="flex flex-col gap-2" data-testid="review-feedback-composer">
-            <Textarea
-              data-testid="review-feedback-text"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={onKeyDown}
-              placeholder="What should change? The PL gets this verbatim and re-dispatches the IC."
-              aria-label="Changes to request"
-              autoFocus
-              componentId="factory.review.feedback_text"
-              className="max-h-40 min-h-16 bg-background"
-            />
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                size="sm"
-                onClick={sendChanges}
-                disabled={!text.trim() || busy}
-                data-testid="review-feedback-send"
-                componentId="factory.review.feedback_send"
-                className="max-md:flex-1"
-              >
-                <SendIcon />
-                Send to PL
-              </Button>
-              <Button
-                size="sm"
-                variant="ghost"
-                onClick={() => setComposing(false)}
-                componentId="factory.review.feedback_cancel"
-                className="text-muted-foreground"
-              >
-                Cancel
-              </Button>
-              <span className="text-sm text-muted-foreground max-md:hidden">⌘↵ sends</span>
-            </div>
-          </div>
-        )}
         {feedback.phase === "error" && (
           <p data-testid="review-feedback-error" className="text-sm text-destructive">
             Couldn’t send {feedback.verdict === "approved" ? "the approval" : "your changes"}:{" "}
@@ -330,6 +368,9 @@ export function ReviewActions({
             .
           </p>
         )}
+        <span id="review-humans-merge" className="sr-only">
+          {HUMANS_MERGE}
+        </span>
         <div className="grid grid-cols-2 gap-2 md:flex md:flex-wrap md:items-center">
           <Tooltip>
             <TooltipTrigger asChild>
@@ -342,7 +383,7 @@ export function ReviewActions({
                 disabled={busy}
                 data-testid="review-approve"
                 componentId="factory.review.approve"
-                className="col-span-2"
+                className={cn("col-span-2", hideWhileComposing)}
               >
                 <CheckIcon />
                 Approve & open merge
@@ -359,18 +400,20 @@ export function ReviewActions({
             disabled={busy}
             data-testid="review-request-changes"
             componentId="factory.review.request_changes"
+            className={cn(composing && "max-md:col-span-2")}
           >
             <MessageSquareWarningIcon />
             Request changes…
           </Button>
           <Tooltip>
             <TooltipTrigger asChild>
-              <Button asChild size="sm" variant="outline">
+              <Button asChild size="sm" variant="outline" className={cn(hideWhileComposing)}>
                 <a
                   href={mergeUrl(pr)}
                   target="_blank"
                   rel="noreferrer"
                   data-testid="review-merge-github"
+                  // Always in the DOM, unlike the tooltip's own content.
                   aria-describedby="review-humans-merge"
                 >
                   Merge on GitHub
@@ -378,22 +421,34 @@ export function ReviewActions({
                 </a>
               </Button>
             </TooltipTrigger>
-            <TooltipContent id="review-humans-merge">{HUMANS_MERGE}</TooltipContent>
+            <TooltipContent>{HUMANS_MERGE}</TooltipContent>
           </Tooltip>
           {chip && <span className="col-span-2 md:contents">{chip}</span>}
-          <span className="col-span-2 flex items-center gap-1 md:ml-auto">
+          <span className={cn("col-span-2 flex items-center gap-1 md:ml-auto", hideWhileComposing)}>
             <Button
               size="sm"
               variant="ghost"
               onClick={copySummary}
               data-testid="review-copy-summary"
-              aria-label={copied ? "Copied" : "Copy merge summary"}
+              data-state={copied}
+              aria-label={
+                copied === "copied"
+                  ? "Copied"
+                  : copied === "failed"
+                    ? "Couldn’t copy"
+                    : "Copy merge summary"
+              }
               componentId="factory.review.copy_summary"
-              className="text-muted-foreground max-md:flex-1"
+              className={cn(
+                "max-md:flex-1",
+                copied === "failed" ? "text-destructive" : "text-muted-foreground",
+              )}
             >
-              {copied ? <CheckIcon /> : <CopyIcon />}
-              {copied ? (
+              {copied === "copied" ? <CheckIcon /> : <CopyIcon />}
+              {copied === "copied" ? (
                 "Copied"
+              ) : copied === "failed" ? (
+                "Couldn’t copy"
               ) : (
                 <>
                   <span className="max-md:hidden">Copy merge summary</span>
@@ -423,6 +478,7 @@ export function ReviewActions({
             <IMergedItButton factoryId={factoryId} pr={pr} className="max-md:flex-1" />
           </span>
         </div>
+        {composer}
       </div>
     </TooltipProvider>
   );

@@ -177,6 +177,7 @@ function Cockpit({ snapshot, clockOffsetS }: { snapshot: FactorySnapshot; clockO
       factoryId={snapshot.factory.id}
       decisions={snapshot.decisions}
       highlightId={decision}
+      clockOffsetS={clockOffsetS}
     />
   );
 

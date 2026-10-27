@@ -30,7 +30,7 @@ import { FactoryApiError, answerDecision } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { ageText, decisionAnchorId } from "../board/boardModel";
-import { useFactoryNow } from "../factoryClock";
+import { useFactoryServerNowS } from "../factoryClock";
 import { formatElapsed } from "../factoryFormat";
 import { FoldableMarkdown } from "../transcript/FoldableMarkdown";
 
@@ -44,7 +44,13 @@ type Phase =
   | { kind: "idle" }
   | { kind: "answering"; label: string }
   | { kind: "answered"; decision: DecisionView; label: string }
-  | { kind: "conflict"; by: string | null; at: number | null }
+  | {
+      kind: "conflict";
+      /** What the decision became meanwhile: answered elsewhere, withdrawn or expired. */
+      status: "answered" | "withdrawn" | "expired";
+      by: string | null;
+      at: number | null;
+    }
   | { kind: "failed"; message: string; decision: DecisionView | null }
   | { kind: "error"; message: string };
 
@@ -60,6 +66,8 @@ export interface DecisionCardProps {
   factoryName?: string;
   /** Called with the server's answered view once an answer is stored. */
   onAnswered?: (decision: DecisionView) => void;
+  /** Seconds the server clock runs ahead of the browser's (wait times age on it). */
+  clockOffsetS?: number;
   className?: string;
 }
 
@@ -107,7 +115,10 @@ export function DecisionReceipt({ decision }: { decision: DecisionView }) {
         <>
           <CheckCheckIcon aria-hidden className="size-3.5" />
           Delivered to {decision.delivered_to_title ?? "the asker"}{" "}
-          <span className="font-mono tabular-nums">{receiptTime(decision.delivered_at!)}</span> ✓
+          {/* The time and its tick wrap together, never a lone ✓. */}
+          <span className="whitespace-nowrap">
+            <span className="font-mono tabular-nums">{receiptTime(decision.delivered_at!)}</span> ✓
+          </span>
         </>
       ) : awaiting ? (
         <>
@@ -147,7 +158,11 @@ function OptionButton({
       )}
       <span className="min-w-0 truncate">{option.label}</span>
       {option.recommended && (
-        <StarIcon aria-label="recommended" className="size-3 shrink-0 fill-current text-warning" />
+        <StarIcon
+          role="img"
+          aria-label="recommended"
+          className="size-3 shrink-0 fill-current text-warning"
+        />
       )}
       {option.href && <ExternalLinkIcon aria-hidden className="size-3 shrink-0" />}
     </>
@@ -201,10 +216,11 @@ export function DecisionCard({
   highlighted = false,
   factoryName,
   onAnswered,
+  clockOffsetS = 0,
   className,
 }: DecisionCardProps) {
   const queryClient = useQueryClient();
-  const nowS = Math.floor(useFactoryNow().getTime() / 1000);
+  const nowS = useFactoryServerNowS(clockOffsetS);
   const ref = useRef<HTMLElement>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [composing, setComposing] = useState(false);
@@ -247,8 +263,10 @@ export function DecisionCard({
       (error: unknown) => {
         if (error instanceof FactoryApiError && error.status === 409) {
           const body = (error.body ?? {}) as DecisionConflictBody;
+          const now = body.status ?? body.decision?.status;
           setPhase({
             kind: "conflict",
+            status: now === "withdrawn" || now === "expired" ? now : "answered",
             by: body.answered_by ?? body.decision?.answered_by ?? null,
             at: body.answered_at ?? body.decision?.answered_at ?? null,
           });
@@ -427,7 +445,7 @@ export function DecisionCard({
       </p>
       {decision.context && (
         <Collapsible>
-          <CollapsibleTrigger className="group inline-flex cursor-pointer items-center gap-1 text-muted-foreground hover:text-foreground">
+          <CollapsibleTrigger className="group inline-flex cursor-pointer items-center gap-1 self-start rounded-sm text-muted-foreground hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none">
             <ChevronRightIcon
               aria-hidden
               className="size-3.5 transition-transform group-data-[state=open]:rotate-90"
@@ -509,7 +527,8 @@ export function DecisionCard({
                 onClick={() => setComposing(true)}
                 data-testid={`decision-answer-${decision.ref}`}
                 componentId="factory.decision.answer"
-                className="self-start text-muted-foreground"
+                // Flush with the card's text; the ghost padding shows on hover only.
+                className="-ml-2.5 self-start text-muted-foreground"
               >
                 <MessageSquareIcon />
                 Answer…
@@ -529,8 +548,11 @@ export function DecisionCard({
           className="flex items-center gap-1.5 text-muted-foreground"
         >
           <CircleAlertIcon aria-hidden className="size-3.5" />
-          Already answered{phase.by ? ` by ${phase.by}` : ""}
-          {phase.at != null ? ` ${ageText(nowS - phase.at)}` : ""}
+          {phase.status === "withdrawn"
+            ? "Withdrawn by the asker meanwhile"
+            : phase.status === "expired"
+              ? "Expired before your answer arrived"
+              : `Already answered${phase.by ? ` by ${phase.by}` : ""}${phase.at != null ? ` ${ageText(nowS - phase.at)}` : ""}`}
         </p>
       )}
 
