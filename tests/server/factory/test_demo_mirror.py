@@ -97,7 +97,7 @@ async def test_a_demo_is_mirrored_in_six_calls_on_its_own_branch(
 
     assert result.status == "mirrored", result
     prefix = f"/repos/{MIRROR}/git"
-    branch = f"d/{fid[:8]}/pr-9630-{SHA[:7]}"
+    branch = f"d/{fid[:8]}/pr-9630-{SHA[:7]}-dddddddd"
     assert git.calls == [
         ("GET", "/rate_limit"),
         ("POST", f"{prefix}/blobs"),
@@ -132,19 +132,51 @@ async def test_a_demo_is_mirrored_in_six_calls_on_its_own_branch(
     assert blob["encoding"] == "base64" and base64.b64decode(blob["content"]) in (PNG, GIF)
 
 
-async def test_a_recent_rate_reading_saves_a_call_and_a_rerun_moves_the_branch(
+async def test_a_recent_rate_reading_saves_a_call(world: FactoryWorld, git: FakeGitData) -> None:
+    await demo_mirror.mirror_demo(
+        world.app_state, _demo(world.id("lead_a")), _files(), base_url=BASE
+    )
+    git.requests.clear()
+
+    again = await demo_mirror.mirror_demo(
+        world.app_state, _demo(world.id("lead_a"), id="e" * 32), _files(), base_url=BASE
+    )
+
+    assert again.status == "mirrored" and again.calls == 5
+    assert [m for m, _ in git.calls] == ["POST"] * 5
+
+
+async def test_a_demo_rerecorded_at_the_same_head_gets_a_branch_of_its_own(
     world: FactoryWorld, git: FakeGitData
 ) -> None:
+    """A stale rate reading costs a call; the new branch still fits the 6-call budget."""
+    fid = world.id("lead_a")
+    first = await demo_mirror.mirror_demo(world.app_state, _demo(fid), _files(), base_url=BASE)
+    for owner, (_, left) in list(demo_mirror._rate_seen.items()):
+        demo_mirror._rate_seen[owner] = (0.0, left)  # read long ago
+    git.requests.clear()
+
+    again = await demo_mirror.mirror_demo(
+        world.app_state, _demo(fid, id="e" * 32), _files(), base_url=BASE
+    )
+
+    assert again.status == "mirrored", again
+    assert again.calls == 6 == len(git.calls) and git.calls[0] == ("GET", "/rate_limit")
+    assert again.branch == f"d/{fid[:8]}/pr-9630-{SHA[:7]}-eeeeeeee" != first.branch
+    # The first comment's commit stays on its own branch.
+    assert git.refs == {
+        f"refs/heads/{first.branch}": first.commit,
+        f"refs/heads/{again.branch}": again.commit,
+    }
+
+
+async def test_an_existing_branch_fails_the_mirror(world: FactoryWorld, git: FakeGitData) -> None:
     demo = _demo(world.id("lead_a"))
     await demo_mirror.mirror_demo(world.app_state, demo, _files(), base_url=BASE)
-    git.requests.clear()
 
     again = await demo_mirror.mirror_demo(world.app_state, demo, _files(), base_url=BASE)
 
-    assert again.status == "mirrored"
-    assert [m for m, _ in git.calls] == ["POST", "POST", "POST", "POST", "POST", "PATCH"]
-    assert git.calls[-1][1].endswith(f"/git/refs/heads/{again.branch}")
-    assert git.refs[f"refs/heads/{again.branch}"] == again.commit
+    assert again.status == "failed" and again.reason == f"branch {again.branch} already exists"
 
 
 async def test_a_low_rate_limit_skips_the_mirror(world: FactoryWorld, git: FakeGitData) -> None:
@@ -290,7 +322,8 @@ async def test_publishing_embeds_the_mirrored_gif(
     assert comment.splitlines()[0].startswith(f"<!-- factory:demo sha={SHA} status=PASS")
     [event] = _mirror_events(demo_env)
     assert event.kind == "demo.mirrored"
-    assert event.data["branch"] == f"d/{demo_env.id('lead_a')[:8]}/pr-9630-{SHA[:7]}"
+    demo_id = resp.json()["demo_id"]
+    assert event.data["branch"] == f"d/{demo_env.id('lead_a')[:8]}/pr-9630-{SHA[:7]}-{demo_id[:8]}"
     assert event.data["commit"] == commit and event.data["calls"] == 6
     # The cockpit still serves the demo from the store, never from GitHub.
     demo = demo_env.store.get_demo(resp.json()["demo_id"])
@@ -356,6 +389,7 @@ async def test_publishing_without_the_knob_touches_nothing(demo_env: DemoEnv) ->
 
 
 def test_mirror_names() -> None:
-    assert demo_mirror.mirror_branch("1a2b3c4d" * 4, 9630, SHA) == f"d/1a2b3c4d/pr-9630-{SHA[:7]}"
+    branch = demo_mirror.mirror_branch("1a2b3c4d" * 4, 9630, SHA, "5e6f7a8b" * 4)
+    assert branch == f"d/1a2b3c4d/pr-9630-{SHA[:7]}-5e6f7a8b"
     assert demo_mirror.mirror_dir(None, 7, sha("x")) == f"_/pr-7/{sha('x')[:7]}"
     assert all(len(kind) <= 32 for kind in ("demo.mirrored", "demo.mirror_failed", "base.moved"))

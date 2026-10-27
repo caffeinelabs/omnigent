@@ -4,8 +4,9 @@ With ``OMNIGENT_FACTORY_DEMO_MIRROR_REPO`` set (e.g. ``caffeinelabs/factory-demo
 ``POST /v1/factory/agent/demos`` copies each published demo's poster (≤ 2 MB),
 GIF (≤ 5 MB) and ``steps.md`` to that repo through the Git Data API, as the
 factory creator (the GitHub connection the PR poller reads with). Each demo
-gets a branch of its own, ``d/<factory8>/pr-<n>-<sha7>``, holding
-``<project>/pr-<n>/<sha7>/``, so concurrent demos never conflict. The PR
+gets a branch of its own, ``d/<factory8>/pr-<n>-<sha7>-<demo8>``, holding
+``<project>/pr-<n>/<sha7>/``, so concurrent demos never conflict and a demo
+re-recorded at the same head never moves an older comment's commit. The PR
 comment then embeds the GIF and the poster for reviewers on GitHub.
 
 It is a reviewer-facing copy: the factory artifact store stays the store of
@@ -92,9 +93,9 @@ def mirror_repo() -> str | None:
     return raw
 
 
-def mirror_branch(factory_id: str, number: int, sha: str) -> str:
-    """:returns: e.g. ``"d/1a2b3c4d/pr-9630-abc1234"``."""
-    return f"d/{norm_id(factory_id)[:8]}/pr-{int(number)}-{sha[:7]}"
+def mirror_branch(factory_id: str, number: int, sha: str, demo_id: str) -> str:
+    """:returns: e.g. ``"d/1a2b3c4d/pr-9630-abc1234-5e6f7a8b"``."""
+    return f"d/{norm_id(factory_id)[:8]}/pr-{int(number)}-{sha[:7]}-{norm_id(demo_id)[:8]}"
 
 
 def mirror_dir(project: str | None, number: int, sha: str) -> str:
@@ -191,23 +192,15 @@ class _GitData:
             return value
         return None
 
-    async def point_branch(self, branch: str, commit: str) -> None:
-        """Create ``refs/heads/<branch>`` at *commit*, or move it there when it exists."""
+    async def create_branch(self, branch: str, commit: str) -> None:
+        """Create ``refs/heads/<branch>`` at *commit* (each demo has its own)."""
         resp = await self.request(
             "POST", f"/repos/{self._repo}/git/refs", {"ref": f"refs/heads/{branch}", "sha": commit}
         )
-        if resp.status_code == 201:
-            return
-        if resp.status_code != 422:
+        if resp.status_code == 422:
+            raise _MirrorError(f"branch {branch} already exists")
+        if resp.status_code != 201:
             raise _MirrorError(f"creating the branch returned {resp.status_code}")
-        # A re-recorded head: its branch exists, so move it to the new commit.
-        resp = await self.request(
-            "PATCH",
-            f"/repos/{self._repo}/git/refs/heads/{branch}",
-            {"sha": commit, "force": True},
-        )
-        if resp.status_code != 200:
-            raise _MirrorError(f"moving the branch returned {resp.status_code}")
 
 
 async def _token(app_state: Any, factory_id: str) -> tuple[str, str] | str:
@@ -261,7 +254,8 @@ async def _write(
         f"Factory {norm_id(demo.factory_id)} · demo {demo.id}"
     )
     commit = await git.create("commits", {"message": message, "tree": tree, "parents": []})
-    await git.point_branch(mirror_branch(demo.factory_id, demo.pr_number, demo.head_sha), commit)
+    branch = mirror_branch(demo.factory_id, demo.pr_number, demo.head_sha, demo.id)
+    await git.create_branch(branch, commit)
     embeds = DemoEmbeds(
         gif_url=blob_url(repo, commit, paths["gif"]) if "gif" in paths else None,
         poster_url=blob_url(repo, commit, paths["poster"]) if "poster" in paths else None,
@@ -292,7 +286,7 @@ async def mirror_demo(
     owner, token = resolved
     headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github+json"}
     transport = getattr(app_state, TRANSPORT_ATTR, None)
-    branch = mirror_branch(demo.factory_id, demo.pr_number, demo.head_sha)
+    branch = mirror_branch(demo.factory_id, demo.pr_number, demo.head_sha, demo.id)
     async with httpx.AsyncClient(
         base_url=_API, headers=headers, timeout=MIRROR_TIMEOUT_S, transport=transport
     ) as http:

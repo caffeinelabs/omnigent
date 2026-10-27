@@ -450,8 +450,10 @@ class PrPoller:
         bases = base_watch.bases_by_repo(scopes)
         for key, items in groups.items():
             for start in range(0, len(items), REFRESH_BATCH):
-                # The first batch of a repo also reads its watched base heads.
-                watched = bases.get(key, []) if start == 0 else []
+                # The last batch of a repo also reads its watched base heads,
+                # so every PR merged into one is applied before its move.
+                final = start + REFRESH_BATCH >= len(items)
+                watched = bases.get(key, []) if final else []
                 await self._refresh_batch(
                     owner,
                     token,
@@ -544,9 +546,6 @@ class PrPoller:
         await self._note_rate_limit(owner, result.rate_limit, scopes)
         repository = result.data.get("repository")
         repository = repository if isinstance(repository, dict) else {}
-        if watched:
-            self._last_bases[(owner, repo.lower())] = now
-            await self._observe_bases(repo, watched, repository, now, scopes)
         bases = {
             str(node.get("baseRefName") or "")
             for node in repository.values()
@@ -576,6 +575,10 @@ class PrPoller:
                 )
             except Exception:
                 _logger.exception("factory: applying the refresh of %s failed", pr.id)
+        if watched:
+            # After the PRs: a merge and the base move it caused can land in one batch.
+            self._last_bases[(owner, repo.lower())] = now
+            await self._observe_bases(repo, watched, repository, now, scopes)
 
     async def _all_files(
         self, token: str, repo: str, number: int, node: dict[str, Any], client: Any

@@ -366,8 +366,8 @@ class FakeGitData:
     """
     The Git Data API of the demo mirror repo (the one GitHub write the factory makes).
 
-    Serves ``GET /rate_limit`` and ``POST /repos/{repo}/git/{blobs,trees,commits,refs}``
-    plus ``PATCH …/git/refs/heads/{branch}``; any other request fails the test.
+    Serves ``GET /rate_limit`` and ``POST /repos/{repo}/git/{blobs,trees,commits,refs}``;
+    any other request fails the test.
     """
 
     repo: str = "caffeinelabs/factory-demos"
@@ -426,8 +426,4 @@ class FakeGitData:
                 return httpx.Response(422, json={"message": "Reference already exists"})
             self.refs[payload["ref"]] = payload["sha"]
             return httpx.Response(201, json={"ref": payload["ref"]}, headers=headers)
-        if request.method == "PATCH" and kind.startswith("refs/heads/"):
-            ref = kind.removeprefix("refs/")
-            self.refs[f"refs/{ref}"] = payload["sha"]
-            return httpx.Response(200, json={"ref": f"refs/{ref}"}, headers=headers)
         pytest.fail(f"unexpected mirror request: {request.method} {request.url}")

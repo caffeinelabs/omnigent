@@ -16,7 +16,13 @@ from pydantic import ValidationError
 from omnigent import factory as F
 from omnigent.server.auth import LEVEL_OWNER
 from omnigent.server.factory.charter import DEFAULT_BASE_ENV, render_pl_charter
-from omnigent.server.factory.start import DefaultsIn, FactoryDefaults, ProjectIn, resolve_defaults
+from omnigent.server.factory.start import (
+    DefaultsIn,
+    FactoryDefaults,
+    ProjectIn,
+    max_projects,
+    resolve_defaults,
+)
 from tests.server.factory.cockpit_helpers import Cockpit, build_cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld
 
@@ -377,6 +383,18 @@ def test_an_empty_base_branch_is_the_factory_default(branch: str, sent: str | No
             FactoryDefaults("o/r", "dev", True),
             id="form",
         ),
+        pytest.param(
+            "caffeinelabs/app#temp-main",
+            {"repo": None, "base_branch": None},
+            FactoryDefaults(),
+            id="cleared-row-means-none",
+        ),
+        pytest.param(
+            "caffeinelabs/app#temp-main",
+            {"repo": "", "base_branch": "dev", "integration_env": True},
+            FactoryDefaults(integration_env=True),
+            id="cleared-repo-drops-the-base",
+        ),
     ],
 )
 def test_defaults_resolve_from_the_form_then_the_knob(
@@ -537,8 +555,7 @@ async def test_start_with_a_live_env_creates_base_env(cockpit: Cockpit) -> None:
     assert kinds["base-env"] == "integration" and kinds["api-status"] == "work"
     listed = await cockpit.client.get("/v1/factory/factories", headers={"X-Test-User": "alice"})
     [summary] = [f for f in listed.json()["data"] if f["id"] == body["factory"]["id"]]
-    assert sum(summary["stage_counts"].values()) == 2
-    assert summary["projects_total"] == 3
+    assert sum(summary["stage_counts"].values()) == summary["projects_total"] == 2
 
 
 @pytest.mark.parametrize(
@@ -548,6 +565,13 @@ async def test_start_with_a_live_env_creates_base_env(cockpit: Cockpit) -> None:
         (lambda b: b["projects"][1].update(slug="base-env"), "projects[1].slug"),
         (
             lambda b: b.update(projects=[PROJECTS[1] | {"slug": f"p-{i}"} for i in range(12)]),
+            "projects",
+        ),
+        # The pod budget: max_projects() PL projects, base-env included.
+        (
+            lambda b: b.update(
+                projects=[PROJECTS[1] | {"slug": f"p-{i}"} for i in range(max_projects())]
+            ),
             "projects",
         ),
     ],
@@ -566,6 +590,19 @@ async def test_a_live_env_needs_a_base_a_free_slug_and_a_slot(
     assert resp.status_code == 400, resp.text
     assert resp.json()["field"] == field
     assert cockpit.mailer.items == []
+
+
+async def test_a_live_env_fits_next_to_the_last_free_slots(cockpit: Cockpit) -> None:
+    body = _body(
+        _new_lead(cockpit),
+        defaults={"repo": "caffeinelabs/app", "base_branch": "temp-main", "integration_env": True},
+    )
+    body["projects"] = [PROJECTS[1] | {"slug": f"p-{i}"} for i in range(max_projects() - 1)]
+
+    resp = await _start(cockpit, body)
+
+    assert resp.status_code == 201, resp.text
+    assert len(cockpit.store.list_projects(resp.json()["factory_id"])) == max_projects()
 
 
 # ── Add project ────────────────────────────────────────────────

@@ -234,7 +234,8 @@ class DefaultsIn(_Body):
     """
     The factory-level default repo and base (``StartIn.defaults``).
 
-    Unset fields fall back to ``OMNIGENT_FACTORY_DEFAULT_BASE``.
+    Unset fields fall back to ``OMNIGENT_FACTORY_DEFAULT_BASE``; ``repo: null``
+    (the cleared row) means no default.
 
     :param integration_env: Keep a live env at the base head (project ``base-env``).
     """
@@ -511,9 +512,11 @@ def resolve_defaults(sent: DefaultsIn | None) -> FactoryDefaults:
     The defaults a new factory starts with: what the form sent, then the server knob.
 
     The knob's base applies only to the knob's repo; a default repo without a
-    base defaults to ``main``.
+    base defaults to ``main``. An explicit ``repo: null`` means no default.
     """
     knob_repo, knob_base = server_default_base()
+    if sent is not None and "repo" in sent.model_fields_set and sent.repo is None:
+        return FactoryDefaults(integration_env=sent.integration_env)
     repo = (sent.repo if sent else None) or knob_repo
     base = sent.base_branch if sent else None
     same_repo = repo is not None and knob_repo is not None and repo.lower() == knob_repo.lower()
@@ -591,11 +594,12 @@ def _check_integration(body: StartIn, defaults: FactoryDefaults) -> None:
                 f"slug {INTEGRATION_ENV_SLUG!r} is the live base env's",
                 field=f"projects[{i}].slug",
             )
-    if len(body.projects) + 1 > MAX_PROJECTS:
+    slots = max_projects()
+    if len(body.projects) + 1 > slots:
         raise CockpitError(
             400,
             "invalid_body",
-            f"at most {MAX_PROJECTS - 1} projects next to the live base env",
+            f"at most {slots - 1} projects next to the live base env",
             field="projects",
         )
 

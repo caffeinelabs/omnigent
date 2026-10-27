@@ -1066,10 +1066,14 @@ def snapshot_etag(body: Mapping[str, Any]) -> str:
 def summary_from(body: Mapping[str, Any]) -> dict[str, Any]:
     """:returns: The ``FactorySummary`` JSON of a (filtered) snapshot."""
     factory = body["factory"]
+    # The live base env is not pipeline work: neither counted nor totalled.
+    work = [
+        p
+        for p in body["projects"]
+        if (p.get("charter") or {}).get("kind") != PROJECT_KIND_INTEGRATION
+    ]
     counts: dict[str, int] = {}
-    for project in body["projects"]:
-        if (project.get("charter") or {}).get("kind") == PROJECT_KIND_INTEGRATION:
-            continue  # the live base env is not pipeline work
+    for project in work:
         counts[project["stage"]] = counts.get(project["stage"], 0) + 1
     members = body["members"]
     return {
@@ -1082,7 +1086,7 @@ def summary_from(body: Mapping[str, Any]) -> dict[str, Any]:
         "elapsed_s": factory["elapsed_s"],
         "cost_usd": factory["cost_usd"],
         "stage_counts": counts,
-        "projects_total": len(body["projects"]),
+        "projects_total": len(work),
         "decisions_open": body["totals"]["decisions_open"],
         "prs_ready": body["totals"]["prs_ready"],
         "members_total": len(members),

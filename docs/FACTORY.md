@@ -116,7 +116,7 @@ Stored in `conversation_labels`; no schema change. Defined in
 | `omnigent.factory.summary` | any | Beacon line, at most 120 characters (longer values are clamped). |
 | `omnigent.factory.health` | any | `ok`, `degraded`, `blocked` or `dead`. |
 | `omnigent.factory.default_repo` / `default_base` | root | The factory's default repo and base (start form); a project's blank base inherits it. |
-| `omnigent.factory.base_head.<key>` | root | `<sha> <moved_at> <repo>#<base>`: the head the base watcher last saw (server-written). |
+| `omnigent.factory.base_head.<key>` | root | `<sha> <moved_at> <repo>#<base>` (the pair as `sha256:<hex>` when too long): the head the base watcher last saw (server-written). |
 
 **Lazy enrolment.** The first `/v1/factory` call from a top-level session whose
 spec declares `lead` or `project_lead`, and that has no `omnigent.factory.id`,
@@ -275,7 +275,8 @@ targets. The New factory form has a factory-level **Default repo & base** row
 (prefilled from `OMNIGENT_FACTORY_DEFAULT_BASE`, e.g.
 `caffeinelabs/app#temp-main`, which `GET /v1/factory/preflight` returns as
 `default_repo` / `default_base`); the root records it in the
-`omnigent.factory.default_repo` / `default_base` labels. A project's base
+`omnigent.factory.default_repo` / `default_base` labels (a cleared row means
+no default, knob or not). A project's base
 resolves to its own branch, then the factory default (for the default repo),
 then `main`; Add project resolves the same way. It is stored as
 `base_branch` and fixed once the project exists.
@@ -296,8 +297,10 @@ then `main`; Add project resolves the same way. It is stored as
 - **Base watcher** (`server/factory/base.py`). The PR poller's GraphQL query
   also reads the head of every `(repo, base)` the active factories watch (a
   query of its own every 2 min when no PR of the repo is due) and records it
-  on the root (`omnigent.factory.base_head.<key>`). When the head moves it
-  emits `base.moved {repo, base, from, to, pr}`, mails the integration PL to
+  on the root (`omnigent.factory.base_head.<key>`). The heads are read with
+  the repo's last PR batch and observed after its PRs are applied, so a
+  merge and the move it caused in one poll carry the merged PR. When the head
+  moves it emits `base.moved {repo, base, from, to, pr}`, mails the integration PL to
   redeploy and every work PL with an open PR on that base `[Factory notice ·
   base temp-main moved to <sha7> · sync open branches: git merge
   origin/temp-main]` (at most every 30 min per PL), and runs the
@@ -404,9 +407,10 @@ in a private repo (`OMNIGENT_FACTORY_DEMO_MIRROR_REPO`, e.g.
   files are stored, with a 10 s timeout, through the Git Data API as the
   factory creator (the connection the PR poller uses). Agents gain no write
   repo.
-- **Layout.** Each demo gets its own branch `d/<factory8>/pr-<n>-<sha7>` with
-  one parentless commit holding `<project>/pr-<n>/<sha7>/{poster.png,
-  demo.gif, steps.md}`; a re-recorded head moves its branch.
+- **Layout.** Each demo gets its own branch `d/<factory8>/pr-<n>-<sha7>-<demo8>`
+  with one parentless commit holding `<project>/pr-<n>/<sha7>/{poster.png,
+  demo.gif, steps.md}`; a demo re-recorded at the same head gets a new branch,
+  so older comments keep their embeds.
 - **Budget.** At most 6 REST calls per demo: `GET /rate_limit` (skipped when a
   reading from the last 5 min exists), a blob each for the poster (≤ 2 MB) and
   the GIF (≤ 5 MB), a tree with `steps.md` inline, the commit and the ref. It

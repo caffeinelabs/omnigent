@@ -28,6 +28,7 @@ from omnigent.factory import (
     LABEL_DEFAULT_REPO,
     LABEL_VALUE_MAX_LEN,
     PROJECT_KIND_INTEGRATION,
+    STAGE_DONE,
     is_full_sha,
 )
 from omnigent.server.factory import events
@@ -115,6 +116,12 @@ def head_label(repo: str, base: str) -> str:
     return f"{LABEL_BASE_HEAD_PREFIX}{digest}"
 
 
+def _pair_tags(repo: str, base: str) -> tuple[str, str]:
+    """``(repo#base, sha256:<hex>)``: the pair a head value names, plain or hashed."""
+    plain = f"{repo.lower()}#{base.lower()}"
+    return plain, f"sha256:{hashlib.sha256(plain.encode()).hexdigest()}"
+
+
 def read_head(labels: Mapping[str, str], repo: str, base: str) -> BaseHead | None:
     """
     The head of ``repo#base`` recorded in *labels*.
@@ -125,7 +132,7 @@ def read_head(labels: Mapping[str, str], repo: str, base: str) -> BaseHead | Non
     parts = raw.split(" ", 2) if raw else []
     if len(parts) != 3 or not is_full_sha(parts[0]):
         return None
-    if parts[2].lower() != f"{repo.lower()}#{base.lower()}":
+    if parts[2].lower() not in _pair_tags(repo, base):
         return None
     try:
         moved_at = int(parts[1])
@@ -134,9 +141,12 @@ def read_head(labels: Mapping[str, str], repo: str, base: str) -> BaseHead | Non
     return BaseHead(parts[0], moved_at or None)
 
 
-def _head_value(head: BaseHead, repo: str, base: str) -> str | None:
+def head_value(head: BaseHead, repo: str, base: str) -> str:
+    """:returns: The label value recording *head* (the pair hashed when too long)."""
     value = f"{head.sha} {head.moved_at or 0} {repo}#{base}"
-    return value if len(value) <= LABEL_VALUE_MAX_LEN else None
+    if len(value) <= LABEL_VALUE_MAX_LEN:
+        return value
+    return f"{head.sha} {head.moved_at or 0} {_pair_tags(repo, base)[1]}"
 
 
 def default_base(root: Conversation) -> BaseKey | None:
@@ -239,23 +249,27 @@ async def _observe_one(
     app_state: Any, scope: FactoryScope, repo: str, base: str, oid: str, now: int
 ) -> BaseMove | None:
     deps = factory_deps(app_state)
-    key = head_label(repo, base)
     root = await asyncio.to_thread(deps.conversation_store.get_conversation, scope.factory_id)
     labels = root.labels if root is not None else scope.root.labels
     known = read_head(labels, repo, base)
     if known is not None and known.sha == oid:
         return None
-    value = _head_value(BaseHead(oid, now if known is not None else None), repo, base)
-    if value is not None:
-        await asyncio.to_thread(deps.conversation_store.set_labels, scope.factory_id, {key: value})
+    key = head_label(repo, base)
     if known is None:
         # The first sighting is the baseline, not a move.
+        first = {key: head_value(BaseHead(oid), repo, base)}
+        await asyncio.to_thread(deps.conversation_store.set_labels, scope.factory_id, first)
         return None
+    # Read before recording: a failed read leaves the move for the next poll.
     pr = await asyncio.to_thread(_merged_pr, deps, scope.factory_id, repo, oid)
     move = BaseMove(scope.factory_id, repo, base, known.sha, oid, now, pr)
-    notified = await asyncio.to_thread(_notices, deps, scope, move)
+    notices = await asyncio.to_thread(_notices, deps, scope, move)
+    record = {key: head_value(BaseHead(oid, now), repo, base)}
+    await asyncio.to_thread(deps.conversation_store.set_labels, scope.factory_id, record)
     mailer = get_mailer(app_state)
-    for target, text in notified:
+    for target, text, throttle in notices:
+        if throttle is not None:
+            _sync_noticed[throttle] = move.at
         try:
             mailer.notify(target, text)
         except RuntimeError:
@@ -274,7 +288,7 @@ async def _observe_one(
             "from": known.sha,
             "to": oid,
             "pr": pr,
-            "notified": [target for target, _ in notified],
+            "notified": [target for target, _, _ in notices],
         },
     )
     for hook in list(_hooks):
@@ -295,20 +309,25 @@ def _merged_pr(deps: Any, factory_id: str, repo: str, sha: str) -> int | None:
     return None
 
 
-def _notices(deps: Any, scope: FactoryScope, move: BaseMove) -> list[tuple[str, str]]:
-    """``(PL session, text)`` for every PL of a project on the moved base."""
+_Notice = tuple[str, str, tuple[str, str, str] | None]
+"""``(PL session, text, sync-throttle key or None)``."""
+
+
+def _notices(deps: Any, scope: FactoryScope, move: BaseMove) -> list[_Notice]:
+    """A notice for every PL of a live project on the moved base (nothing is recorded)."""
     open_prs = deps.factory_store.list_prs(scope.factory_id, ["open"])
-    out: list[tuple[str, str]] = []
+    out: list[_Notice] = []
     for project in scope.projects.values():
         if not project.repo or project.repo.lower() != move.repo.lower():
             continue
-        if project_base_branch(project) != move.base:
+        if project_base_branch(project) != move.base or project.stage == STAGE_DONE:
             continue
         pl = project_lead_id(deps, scope.factory_id, project)
         if pl is None:
             continue
         if project_kind(project) == PROJECT_KIND_INTEGRATION:
-            out.append((pl, redeploy_notice(move.repo, move.base, move.from_sha, move.to_sha)))
+            text = redeploy_notice(move.repo, move.base, move.from_sha, move.to_sha)
+            out.append((pl, text, None))
             continue
         if not any(
             p.project_slug == project.slug and (p.base_ref or move.base) == move.base
@@ -319,8 +338,7 @@ def _notices(deps: Any, scope: FactoryScope, move: BaseMove) -> list[tuple[str, 
         last = _sync_noticed.get(key)
         if last is not None and move.at - last < SYNC_NOTICE_MIN_GAP_S:
             continue
-        _sync_noticed[key] = move.at
-        out.append((pl, sync_notice(move.base, move.to_sha)))
+        out.append((pl, sync_notice(move.base, move.to_sha), key))
     return out
 
 
@@ -364,6 +382,7 @@ __all__ = [
     "bases_by_repo",
     "default_base",
     "head_label",
+    "head_value",
     "integration_projects",
     "observe",
     "on_base_moved",

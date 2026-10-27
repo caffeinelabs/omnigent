@@ -17,6 +17,7 @@ import pytest_asyncio
 
 from omnigent import factory as F
 from omnigent.server.factory import base, live, nudge, status
+from omnigent.server.factory.background import pr_poller
 from omnigent.server.factory.background.pr_poller import BASE_WATCH_INTERVAL_S, PrPoller
 from omnigent.server.factory.charter import normalize_charter
 from omnigent.server.factory.mailer import MAILER_STATE_ATTR, Mailer
@@ -268,6 +269,133 @@ async def test_hooks_get_the_move_and_the_merged_pr(watching: Watching) -> None:
     assert event.summary.endswith("(#9650)")
     remove()
     broken()
+
+
+def _merge(w: Watching, pr: FakePr, merge_sha: str) -> None:
+    """Merge *pr* on GitHub: the base head becomes its merge commit."""
+    pr.state = "MERGED"
+    pr.merge_sha = merge_sha
+    pr.merged_at = w.clock.now
+    pr.merged_by = "alice"
+    w.gh.branches[(REPO, BASE)] = merge_sha
+
+
+async def test_a_merge_and_its_move_in_one_poll_carry_the_pr(watching: Watching) -> None:
+    """The open PR is due every poll: its merge is applied before the move is observed."""
+    w = watching
+    seen: list[tuple[base.BaseMove, list[str]]] = []
+
+    def hook(_state: Any, move: base.BaseMove) -> None:
+        seen.append((move, [p.state for p in w.store.list_prs(w.fid)]))
+
+    remove = base.on_base_moved(hook)
+    pr = _open_pr(w)
+    await w.poll()
+    [row] = w.store.list_prs(w.fid, ["open"])
+    assert row.number == pr.number
+
+    _merge(w, pr, sha("m"))
+    await w.poll()
+
+    [event] = w.moves()
+    assert event.data["pr"] == pr.number
+    assert event.summary.endswith(f"(#{pr.number})")
+    [(move, states)] = seen
+    assert move.pr == pr.number and states == ["merged"]
+    # Its PL has no open PR left on the base: no sync notice, only the env redeploys.
+    assert w.texts("pl", "sync open branches") == []
+    assert len(w.texts("pl_env", "Redeploy")) == 1
+    assert event.data["notified"] == [w.world.id("pl_env")]
+    remove()
+
+
+async def test_the_heads_are_read_with_the_last_batch(
+    watching: Watching, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Many due PRs: the merge in any batch is applied before the heads are observed."""
+    w = watching
+    monkeypatch.setattr(pr_poller, "REFRESH_BATCH", 1)
+    first, second = _open_pr(w, 9640), _open_pr(w, 9641)
+    await w.poll()
+    assert len(w.store.list_prs(w.fid, ["open"])) == 2
+
+    for merging in (first, second):
+        w.gh.requests.clear()
+        _merge(w, merging, sha(f"m{merging.number}"))
+        await w.poll()
+        assert w.moves()[-1].data["pr"] == merging.number
+        queries = [r.content.decode() for r in w.gh.pr_queries]
+        assert len(queries) == 2 and "refs/heads/temp-main" in queries[-1]
+        assert "refs/heads/temp-main" not in queries[0]
+
+
+async def test_a_failed_read_leaves_the_move_for_the_next_poll(
+    watching: Watching, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = watching
+    _open_pr(w)
+    await w.poll()
+    real = base._merged_pr
+    calls = {"n": 0}
+
+    def flaky(*args: Any) -> int | None:
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("store down")
+        return real(*args)
+
+    monkeypatch.setattr(base, "_merged_pr", flaky)
+    w.gh.branches[(REPO, BASE)] = sha("b")
+
+    await w.poll()
+    # Not recorded, not announced, nobody mailed.
+    assert w.head() == base.BaseHead(sha("a"), None)
+    assert w.moves() == [] and w.texts("pl_env") == [] and w.texts("pl", "base") == []
+
+    await w.poll()
+    [move] = w.moves()
+    assert move.data["from"] == sha("a") and move.data["to"] == sha("b")
+    assert w.head() == base.BaseHead(sha("b"), int(w.clock.now))
+    assert len(w.texts("pl_env")) == 1 and len(w.texts("pl", "sync open branches")) == 1
+
+
+async def test_a_done_project_gets_no_notice(watching: Watching) -> None:
+    w = watching
+    await w.poll()
+    w.store.upsert_project(w.fid, F.INTEGRATION_ENV_SLUG, stage="done")
+    w.gh.branches[(REPO, BASE)] = sha("b")
+
+    await w.poll(advance=BASE_WATCH_INTERVAL_S)
+
+    [move] = w.moves()
+    assert move.data["notified"] == [] and w.texts("pl_env") == []
+
+
+def test_a_long_pair_is_recorded_under_its_digest() -> None:
+    long_base = "feature/" + "x" * 230
+    value = base.head_value(base.BaseHead(sha("b"), 1700000000), REPO, long_base)
+    assert len(value) <= F.LABEL_VALUE_MAX_LEN
+    assert value.startswith(f"{sha('b')} 1700000000 sha256:")
+    labels = {base.head_label(REPO, long_base): value}
+    assert base.read_head(labels, REPO, long_base) == base.BaseHead(sha("b"), 1700000000)
+    assert base.read_head({base.head_label(REPO, BASE): value}, REPO, BASE) is None
+    short = base.head_value(base.BaseHead(sha("b")), REPO, BASE)
+    assert short == f"{sha('b')} 0 {REPO}#{BASE}"
+
+
+async def test_a_long_base_is_watched(watching: Watching) -> None:
+    w = watching
+    long_base = "feature/" + "x" * 230
+    w.store.upsert_project(w.fid, "long", title="Long", repo=REPO, base_branch=long_base)
+    w.gh.branches[(REPO, long_base)] = sha("l")
+    await w.poll()
+    labels = w.world.get("lead_a").labels
+    assert base.read_head(labels, REPO, long_base) == base.BaseHead(sha("l"), None)
+
+    w.gh.branches[(REPO, long_base)] = sha("k")
+    await w.poll(advance=BASE_WATCH_INTERVAL_S)
+    [move] = [m for m in w.moves() if m.data["base"] == long_base]
+    assert move.data["to"] == sha("k")
 
 
 async def test_a_missing_branch_is_ignored(watching: Watching) -> None:

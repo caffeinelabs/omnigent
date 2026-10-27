@@ -667,7 +667,12 @@ class FactorySnapshot(_View):
 
 
 class FactorySummary(_View):
-    """One card on the factory index (``GET /v1/factory/factories``)."""
+    """
+    One card on the factory index (``GET /v1/factory/factories``).
+
+    :param stage_counts: Work projects per stage (the live base env is left out).
+    :param projects_total: Work projects, the same set ``stage_counts`` counts.
+    """
 
     id: str
     name: str
