@@ -73,7 +73,7 @@
         "preview": {
           "enabled": true,
           "slots": 2,
-          "tooling_ref": "factory/preview-tooling"
+          "tooling_ref": "main"
         },
         "preview_slots": 2,
         "demo_focus": "Open Settings → About and show the API version row with the short sha; call GET /version.",
@@ -234,7 +234,7 @@
         "preview": {
           "enabled": true,
           "slots": 2,
-          "tooling_ref": "factory/preview-tooling"
+          "tooling_ref": "main"
         },
         "preview_slots": 2,
         "demo_focus": "Call GET /db/version and show the latest migration name.",

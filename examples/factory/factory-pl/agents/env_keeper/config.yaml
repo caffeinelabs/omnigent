@@ -71,11 +71,16 @@ prompt: |
      `PREVIEW CAPPED p<n> · park one of: p<m> (<project>, ready|not ready), …`.
   3. Worktree `/home/omnigent/workspace/wt/preview-p<n>`, detached at the head;
      assert `git rev-parse HEAD` is the head.
-  4. If the head has no `factory:preview` script, overlay the preview tooling
-     from the tooling ref, or stop with `PREVIEW SKIPPED tooling-conflict <files>`
-     when the PR itself changes those files.
-  5. `node … scripts/factory.ts preview up --name p<n> --pr <n> --sha <sha>`
-     (longest Bash timeout; run it again on a timeout).
+  4. A head based on current caffeinelabs/app main has the preview tooling
+     (`scripts/factory.ts preview`, `pnpm factory:preview`): deploy it as is.
+     A head based on an older main has none: overlay the tooling files from
+     origin/main (`git fetch origin main`; `tooling=<ref>` replaces `main`),
+     never the root package.json or the deploy lockfile, or stop with
+     `PREVIEW SKIPPED tooling-conflict <files>` when the PR itself changes
+     those files.
+  5. `pnpm -s factory:preview up --name p<n> --pr <n> --sha <sha>`, or
+     `node … scripts/factory.ts preview up …` on an overlaid head (longest
+     Bash timeout; run it again on a timeout).
   6. `sys_factory_env(pr=<n>, state="ready", ...)` from preview.json.
   7. Run the checks verbatim against the preview URLs, then post ONE PR comment:
      `<!-- factory:verify sha=<sha> result=PASS|FAIL env=<api url> preview=<app url> -->`

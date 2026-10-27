@@ -9,7 +9,10 @@ an agent stalls on a tool that does not exist, so it is pinned here.
 from __future__ import annotations
 
 import importlib
+import os
 import re
+import shutil
+import subprocess
 import textwrap
 from collections.abc import Iterator
 from pathlib import Path
@@ -467,6 +470,7 @@ def test_prompts_carry_the_operational_contracts(lead: AgentSpec, pl: AgentSpec)
         "CLOSED pr=<n>",
         "pnpm factory:up",
         "scripts/factory.ts preview up",
+        "pnpm -s factory:preview up",
         "sys_factory_env",
     ):
         assert token in env_text, token
@@ -671,7 +675,7 @@ _PLACEHOLDERS = (
     (re.compile(r"<n>"), "9630"),
     (re.compile(r"<sha7>"), "7767f0d"),
     (re.compile(r"<repo>"), "/home/omnigent/workspace/app"),
-    (re.compile(r"<tooling ref>"), "factory/preview-tooling"),
+    (re.compile(r"<tooling ref>"), "main"),
     (re.compile(r"<pr url>|<url>"), "https://github.com/caffeinelabs/app/pull/9630"),
     (re.compile(r"<[^<>\n]+>"), "x"),
 )
@@ -744,6 +748,160 @@ def test_preview_overlay_and_harness_lookup_stay_portable() -> None:
     demo_skill = (_PL_DIR / "agents/demo/skills/factory-demo/SKILL.md").read_text(encoding="utf-8")
     assert "-printf" not in demo_skill
     assert "-x .install.lock" in demo_skill
+
+
+def test_preview_tooling_ref_is_app_main() -> None:
+    """caffeinelabs/app main carries the preview tooling; the deleted branch only maps to main."""
+    env_skill = _PL_DIR / "agents/env_keeper/skills/factory-env/SKILL.md"
+    deploy = next(b for b in _shell_blocks(env_skill) if "TOOLING=" in b)
+    assert re.search(r"^REF=main\b", deploy, re.M)
+    env_text = " ".join(env_skill.read_text(encoding="utf-8").split())
+    alias = "`tooling=factory/preview-tooling` names the deleted pre-#9640 branch and means `main`"
+    assert env_text.count("factory/preview-tooling") == 1 and alias in env_text
+    texts = [
+        env_text.replace(alias, ""),
+        (_PL_DIR / "agents/env_keeper/config.yaml").read_text(encoding="utf-8"),
+        (_PL_DIR / "skills/factory-pl-playbook/SKILL.md").read_text(encoding="utf-8"),
+        (_REPO_ROOT / "docs/FACTORY.md").read_text(encoding="utf-8"),
+    ]
+    for text in texts:
+        assert "factory/preview-tooling" not in text
+        assert "APP-1" not in text
+
+
+_TOOLING_FILES = (
+    "Tiltfile",
+    "scripts/factory.ts",
+    "deploy/tilt/postgres.yaml",
+    "deploy/services/src/builders/tilt.ts",
+    "deploy/services/api/src/tilt.ts",
+    "deploy/services/api/zz_generated/tilt/Deployment.yaml",
+)
+_STUB = (
+    '#!/bin/sh\necho "$(basename "$0") $* tooling=$FACTORY_PREVIEW_TOOLING_REF" >> "$STUB_LOG"\n'
+)
+
+
+def _git_env(path: str, **extra: str) -> dict[str, str]:
+    """A git environment free of the caller's config and of hook variables such as GIT_DIR."""
+    return {
+        "PATH": path,
+        "GIT_CONFIG_GLOBAL": os.devnull,
+        "GIT_CONFIG_NOSYSTEM": "1",
+        "GIT_AUTHOR_NAME": "t",
+        "GIT_AUTHOR_EMAIL": "t@example.test",
+        "GIT_COMMITTER_NAME": "t",
+        "GIT_COMMITTER_EMAIL": "t@example.test",
+        **extra,
+    }
+
+
+def _git(cwd: Path, *args: str) -> str:
+    env = _git_env(os.environ.get("PATH", ""))
+    done = subprocess.run(
+        ["git", *args], cwd=cwd, env=env, check=True, capture_output=True, text=True
+    )
+    return done.stdout.strip()
+
+
+def _commit(repo: Path, files: dict[str, str], message: str) -> str:
+    for name, body in files.items():
+        (repo / name).parent.mkdir(parents=True, exist_ok=True)
+        (repo / name).write_text(body, encoding="utf-8")
+    _git(repo, "add", "-A")
+    _git(repo, "commit", "-q", "-m", message)
+    return _git(repo, "rev-parse", "HEAD")
+
+
+@pytest.fixture
+def app_repo(tmp_path: Path) -> dict[str, object]:
+    """An app origin whose main gained the preview tooling, and a clone with four PR heads."""
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    _git(origin, "init", "-q", "-b", "main")
+    old = dict.fromkeys(_TOOLING_FILES, "old\n")
+    old |= {"package.json": '{"scripts": {"factory:up": "x"}}\n', "app.txt": "base\n"}
+    base = _commit(origin, old, "old main")
+    _git(origin, "checkout", "-q", "-b", "old-head")
+    heads = {"old": _commit(origin, {"app.txt": "feature\n"}, "old-based PR")}
+    _git(origin, "checkout", "-q", "-b", "old-tooling", base)
+    heads["conflict"] = _commit(origin, {"Tiltfile": "pr\n"}, "old-based tooling PR")
+    _git(origin, "checkout", "-q", "main")
+    new = dict.fromkeys(_TOOLING_FILES, "new\n")
+    new["scripts/factory.ts"] = "switch (command) {\n    case 'preview':\n}\n"
+    new["package.json"] = '{"scripts": {"factory:preview": "x"}}\n'
+    main = _commit(origin, new, "preview tooling")
+    _git(origin, "checkout", "-q", "-b", "new-head")
+    heads["new"] = _commit(origin, {"app.txt": "feature\n"}, "new-based PR")
+    _git(origin, "checkout", "-q", "-b", "mixed-head", main)
+    no_script = {"package.json": '{"scripts": {"factory:up": "x"}}\n'}
+    heads["mixed"] = _commit(origin, no_script, "PR without the factory:preview script")
+    _git(origin, "checkout", "-q", "main")
+    clone = tmp_path / "clone"
+    _git(tmp_path, "clone", "-q", str(origin), str(clone))
+    _git(clone, "fetch", "-q", "origin", "old-head", "old-tooling", "new-head", "mixed-head")
+    stubs = tmp_path / "bin"
+    stubs.mkdir()
+    for tool in ("pnpm", "node"):
+        (stubs / tool).write_text(_STUB, encoding="utf-8")
+        (stubs / tool).chmod(0o755)
+    return {"clone": clone, "heads": heads, "main": main, "stubs": stubs, "log": tmp_path / "log"}
+
+
+def _run_deploy(app_repo: dict[str, object], head: str) -> subprocess.CompletedProcess[str]:
+    clone = app_repo["clone"]
+    assert isinstance(clone, Path)
+    _git(clone, "checkout", "-q", "--detach", head)
+    env_skill = _PL_DIR / "agents/env_keeper/skills/factory-env/SKILL.md"
+    deploy = next(b for b in _shell_blocks(env_skill) if "TOOLING=" in b)
+    deploy = deploy.replace("cd /home/omnigent/workspace/wt/preview-p9630", f"cd {clone}")
+    path = f"{app_repo['stubs']}{os.pathsep}{os.environ.get('PATH', '')}"
+    env = _git_env(path, STUB_LOG=str(app_repo["log"]))
+    return subprocess.run(["bash", "-c", deploy], env=env, capture_output=True, text=True)
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_preview_deploy_block_overlays_only_heads_without_the_tooling(
+    app_repo: dict[str, object],
+) -> None:
+    """A head with the preview tooling deploys as is; an older head gets main's tooling."""
+    clone, log, heads = app_repo["clone"], app_repo["log"], app_repo["heads"]
+    assert isinstance(clone, Path) and isinstance(log, Path) and isinstance(heads, dict)
+
+    done = _run_deploy(app_repo, heads["new"])
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert log.read_text().splitlines() == [
+        "pnpm -s factory:preview up --name p9630 --pr 9630 "
+        "--sha 7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16 tooling="
+    ]
+    assert _git(clone, "status", "--porcelain") == ""
+
+    log.unlink()
+    done = _run_deploy(app_repo, heads["mixed"])
+    assert done.returncode == 0, done.stdout + done.stderr
+    [call] = log.read_text().splitlines()
+    assert call.startswith("node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON")
+    assert call.endswith("tooling=")
+    assert _git(clone, "status", "--porcelain") == ""
+
+    log.unlink()
+    done = _run_deploy(app_repo, heads["old"])
+    assert done.returncode == 0, done.stdout + done.stderr
+    [call] = log.read_text().splitlines()
+    assert call.startswith("node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON")
+    assert "scripts/factory.ts preview up --name p9630" in call
+    assert call.endswith(f"tooling={app_repo['main']}")
+    for name in _TOOLING_FILES:
+        assert (clone / name).read_text() != "old\n", name
+    assert "factory:up" in (clone / "package.json").read_text()
+    assert (clone / "app.txt").read_text() == "feature\n"
+
+    log.unlink()
+    _git(clone, "reset", "-q", "--hard")
+    done = _run_deploy(app_repo, heads["conflict"])
+    assert done.returncode == 3
+    assert "tooling-conflict: Tiltfile" in done.stdout
+    assert not log.exists()
 
 
 def test_real_bundles_seed_with_the_demo_harness(

@@ -8,7 +8,7 @@ Definition of Done:
 Repo#branch: caffeinelabs/app#main · branches factory/api-version/<task>
 Scope paths: services/caffeine-api/**
 Constraints: none beyond the repo AGENTS.md rules
-Env needed: yes · factory previews: on, one per runnable PR at its head, up to 3 at once · preview tooling ref factory/preview-tooling
+Env needed: yes · factory previews: on, one per runnable PR at its head, up to 3 at once · preview tooling ref main
 Version path: /version
 Demo focus: Call GET /version and show gitSha.
 IC budget: up to 2 ICs at once

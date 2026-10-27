@@ -88,7 +88,8 @@ Report: the RESULT block
      "review" for `ic_codex` authors, with the PR URL, the head and the card.
      It posts `<!-- factory:review sha=<head> verdict=APPROVE|CHANGES reviewer=<id> -->`;
    - `Preview: yes`: env_keeper `PREVIEW pr=<n> head=<sha> checks=[<env checks>]`
-     (add `tooling=<ref>` when the charter names a preview tooling ref).
+     (add `tooling=<ref>` only when the charter names a preview tooling ref
+     other than `main`).
 3. **PREVIEW READY** `pr=<n> sha=<sha7> app=<url> api=<url> secret_file=<path> · VERIFY PASS|FAIL`:
    env_keeper deployed the head, verified it and posted
    `<!-- factory:verify sha=<head> result=PASS|FAIL env=<api> preview=<app> -->`.
@@ -169,8 +170,8 @@ verify and demo gates pending, so it never becomes ready.
 | `ENV DOWN` | Record it. |
 | `PREVIEW READY … · VERIFY PASS` | Pipeline step 3: dispatch the demo. |
 | `PREVIEW READY … · VERIFY FAIL` | A product failure: send the failing checks to the author like review CHANGES. No demo for that head. |
-| `PREVIEW FAILED p<n> <diagnosis>` | Read the diagnosis. A failure of the PR's own code (its build, its migrations) goes to the author like review CHANGES. Otherwise send `PREVIEW pr=<n> head=<sha>` once more. If that fails too, `sys_factory_ask` the human (options: "Review without a preview" = label `factory:no-env`, or "Wait for an env fix") and record D-n in plan.md. |
-| `PREVIEW SKIPPED tooling-conflict <files>` | The PR changes the preview tooling itself, so it cannot get a preview until the tooling PR (caffeinelabs/app#9640) merges. `sys_factory_ask` the human with options "Review without a preview" (you label it `factory:no-env`; the verify and demo gates then skip) and "Wait for the preview tooling to merge" (the IC then merges origin/main and you send PREVIEW again). Record D-n in plan.md and act on the answer. |
+| `PREVIEW FAILED p<n> <diagnosis>` | Read the diagnosis. A failure of the PR's own code (its build, its migrations) goes to the author like review CHANGES. Otherwise send `PREVIEW pr=<n> head=<sha>` once more (after `tooling ref <ref> not found`, without `tooling=`: the tooling is on main). If that fails too, `sys_factory_ask` the human (options: "Review without a preview" = label `factory:no-env`, or "Wait for an env fix") and record D-n in plan.md. |
+| `PREVIEW SKIPPED tooling-conflict <files>` | The PR is based on a main older than the preview tooling (caffeinelabs/app#9640, now on main) and changes those files itself, so they cannot be overlaid. Send the author: merge origin/main into the branch and push. The new head has the tooling natively; preview it like any new head (step 6). If the author cannot merge main cleanly, `sys_factory_ask` the human with options "Review without a preview" (you label it `factory:no-env`; the verify and demo gates then skip) and "Resolve the merge first", record D-n in plan.md and act on the answer. |
 | `PREVIEW SKIPPED not-open` | The PR merged or closed; its server notice drives the rest. Drop the PREVIEW. |
 | `PREVIEW CAPPED p<n> · park one of: p<m> (<project>, …), …` | The factory-wide preview cap is reached. If a candidate is your project's and not ready, send env_keeper `PREVIEW_DOWN pr=<m> reason=human`, note "p<n> waits for a slot" in plan.md, and send the PREVIEW again when `PREVIEW DOWN p<m>` arrives. Otherwise post one line to `parent` (`kind="info"`, "PR #<n> waits for a preview slot; candidates: …") and send the PREVIEW again at your next heartbeat. |
 | `PREVIEW DOWN p<n> (<reason>)` | Set the task's preview to `parked` or `-` in plan.md. If a preview waits for a slot, send its PREVIEW now. |
