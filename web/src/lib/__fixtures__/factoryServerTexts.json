@@ -153,7 +153,7 @@
   },
   {
     "name": "notice_merged",
-    "text": "[Factory notice · PR caffeinelabs/app#9630 merged by @luka as 9c8b7a6 · https://github.com/caffeinelabs/app/pull/9630 · tear down preview p9630] Run your post-merge steps: env_keeper MERGED pr=9630 (tear down its preview), sync sibling worktrees (git merge origin/main), post the milestone to your lead.",
+    "text": "[Factory notice · PR caffeinelabs/app#9630 merged by @luka as 9c8b7a6 · https://github.com/caffeinelabs/app/pull/9630 · tear down preview p9630] Run your post-merge steps: env_keeper MERGED pr=9630 base=main (tear down its preview), sync sibling worktrees (git merge origin/main), post the milestone to your lead.",
     "expect": {
       "kind": "notice",
       "pr": 9630
