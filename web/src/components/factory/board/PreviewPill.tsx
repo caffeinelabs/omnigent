@@ -9,7 +9,14 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import type { PrView, PreviewView, ProjectView } from "@/lib/factoryApi";
 import { prPreviewUrl } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
-import { type FactoryTone, TONE_DOT, TONE_TEXT, formatElapsed, shortSha } from "../factoryFormat";
+import {
+  type FactoryTone,
+  TONE_DOT,
+  TONE_TEXT,
+  formatElapsed,
+  sameSha,
+  shortSha,
+} from "../factoryFormat";
 import { ageText, prHasNoEnv, previewHeadTruth } from "./boardModel";
 import { BreakableText } from "./BreakableText";
 
@@ -36,7 +43,7 @@ export function previewPillView(pr: PrView, project: ProjectView | null, nowS: n
   switch (preview.state) {
     case "ready":
     case "stale":
-      if (preview.state === "stale" && truth.sha === pr.head_sha) {
+      if (preview.state === "stale" && sameSha(truth.sha, pr.head_sha)) {
         // The server's last probe saw another commit, but the reading here is the head.
         return { state: "stale", tone: "warning", head: "behind", text: "stale · re-probing" };
       }

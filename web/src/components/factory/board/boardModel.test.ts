@@ -14,12 +14,14 @@ import {
   projectLeadIds,
   prAnchorId,
   prHasNoEnv,
+  prNoEnvReason,
   prTouchesUi,
   previewHeadTruth,
   projectAnchorId,
   stageCounts,
 } from "./boardModel";
 import { cardScenario, prByNumber } from "./__fixtures__/boardFixtures";
+import { sameSha } from "../factoryFormat";
 
 const NOW = LIVE_RUN_NOW_S;
 
@@ -143,6 +145,18 @@ describe("preview head truth", () => {
     expect(previewHeadTruth(p.preview!, p.head_sha).matches).toBe(false);
   });
 
+  it("matches a short sha by prefix, as the server's prober does", () => {
+    const p = pr();
+    const preview = {
+      ...p.preview!,
+      observed: { ...p.preview!.observed!, sha: p.head_sha.slice(0, 7) },
+    };
+    expect(previewHeadTruth(preview, p.head_sha)).toMatchObject({
+      matches: true,
+      reportedVsProbed: false,
+    });
+  });
+
   it("never matches an unknown commit", () => {
     const p = pr();
     const preview = {
@@ -154,6 +168,19 @@ describe("preview head truth", () => {
   });
 });
 
+describe("sameSha", () => {
+  it("matches equal shas and a 7+ char prefix either way, case-insensitively", () => {
+    const full = "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16";
+    expect(sameSha(full, full)).toBe(true);
+    expect(sameSha("7767f0d", full)).toBe(true);
+    expect(sameSha(full, "7767F0D1")).toBe(true);
+    expect(sameSha("7767f0e", full)).toBe(false);
+    expect(sameSha("7767f0", full)).toBe(false);
+    expect(sameSha(null, full)).toBe(false);
+    expect(sameSha("", "")).toBe(false);
+  });
+});
+
 describe("PR classification", () => {
   it("knows docs-only PRs need no env and UI PRs need a demo", () => {
     const snapshot = liveRunSnapshot();
@@ -162,8 +189,27 @@ describe("PR classification", () => {
     const db = snapshot.prs.find((p) => p.number === 9631)!;
     expect(prHasNoEnv(docs, null)).toBe(true);
     expect(prHasNoEnv(api, snapshot.projects[0]!)).toBe(false);
+    expect(prNoEnvReason(docs, null)).toBe("no-env");
     expect(prTouchesUi(api)).toBe(true);
     expect(prTouchesUi(db)).toBe(false);
+  });
+
+  it("tells previews switched off apart from a docs-only PR", () => {
+    const snapshot = liveRunSnapshot();
+    const db = snapshot.prs.find((p) => p.number === 9631)!;
+    const dbProject = snapshot.projects.find((p) => p.slug === "db-version")!;
+    expect(prNoEnvReason(db, dbProject)).toBeNull();
+    const off = {
+      ...dbProject,
+      charter: {
+        ...dbProject.charter!,
+        preview: { ...dbProject.charter!.preview, enabled: false },
+      },
+    };
+    expect(prNoEnvReason(db, off)).toBe("previews-off");
+    const noEnv = { ...dbProject, charter: { ...dbProject.charter!, env_needed: false } };
+    expect(prNoEnvReason(db, noEnv)).toBe("previews-off");
+    expect(prHasNoEnv(db, off)).toBe(true);
   });
 });
 

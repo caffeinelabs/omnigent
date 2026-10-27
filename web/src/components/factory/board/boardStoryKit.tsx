@@ -24,7 +24,13 @@ export function DocumentTheme({ theme }: { theme: "light" | "dark" }) {
     const root = document.documentElement;
     const had = root.classList.contains("dark");
     root.classList.add("dark");
+    // The preview's ThemeProvider applies the system theme after mount; keep `.dark`.
+    const observer = new MutationObserver(() => {
+      if (!root.classList.contains("dark")) root.classList.add("dark");
+    });
+    observer.observe(root, { attributes: true, attributeFilter: ["class"] });
     return () => {
+      observer.disconnect();
       if (!had) root.classList.remove("dark");
     };
   }, [theme]);

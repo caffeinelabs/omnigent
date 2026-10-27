@@ -17,7 +17,7 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/h
 import type { GateState, PrView, ReadyGate } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
-import { GATE_LABEL, shortSha } from "../factoryFormat";
+import { GATE_LABEL, sameSha, shortSha } from "../factoryFormat";
 import { useChangedSinceMount } from "./boardHooks";
 import { ageText } from "./boardModel";
 
@@ -36,7 +36,7 @@ export const GATE_ORDER: readonly GateKey[] = [
 
 export const GATE_KEY_LABEL: Record<GateKey, string> = { ...GATE_LABEL, demo: "Demo" };
 
-const STATE_WORD: Record<GateState, string> = {
+export const STATE_WORD: Record<GateState, string> = {
   pass: "passed",
   pending: "pending",
   fail: "failed",
@@ -44,7 +44,7 @@ const STATE_WORD: Record<GateState, string> = {
   unknown: "unknown",
 };
 
-const STATE_ICON: Record<GateState, typeof CircleCheckIcon> = {
+export const STATE_ICON: Record<GateState, typeof CircleCheckIcon> = {
   pass: CircleCheckIcon,
   pending: CircleDotIcon,
   fail: CircleXIcon,
@@ -61,7 +61,7 @@ const STATE_CHIP: Record<GateState, string> = {
   unknown: "border-dashed border-muted-foreground/50 text-muted-foreground",
 };
 
-const STATE_ICON_TONE: Record<GateState, string> = {
+export const STATE_ICON_TONE: Record<GateState, string> = {
   pass: "text-success",
   pending: "text-warning",
   fail: "text-destructive",
@@ -132,9 +132,9 @@ function Row({ children }: { children: ReactNode }) {
 function Sha({ sha, head }: { sha: string | null; head: string }) {
   if (!sha) return null;
   return (
-    <span className={cn("font-mono tabular-nums", sha !== head && "text-warning")}>
+    <span className={cn("font-mono tabular-nums", !sameSha(sha, head) && "text-warning")}>
       @{shortSha(sha)}
-      {sha !== head && " (old head)"}
+      {!sameSha(sha, head) && " (old head)"}
     </span>
   );
 }

@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { Comment } from "@/hooks/useComments";
 import type { Conversation } from "@/hooks/useConversations";
-import { collectCommentInboxItems, collectInboxItems, sumPendingApprovals } from "./inbox";
+import {
+  collectCommentInboxItems,
+  collectInboxItems,
+  inboxBadgeLabel,
+  sumPendingApprovals,
+} from "./inbox";
 
 function makeRow(overrides: Partial<Conversation> & { id: string }): Conversation {
   return {
@@ -260,5 +265,16 @@ describe("sumPendingApprovals", () => {
       makeRow({ id: "d", pending_elicitations_count: 3 }),
     ];
     expect(sumPendingApprovals(rows)).toBe(5);
+  });
+});
+
+describe("inboxBadgeLabel", () => {
+  it("names the factory decisions the count includes", () => {
+    expect(inboxBadgeLabel(1)).toBe("1 inbox item waiting");
+    expect(inboxBadgeLabel(4, 0)).toBe("4 inbox items waiting");
+    expect(inboxBadgeLabel(4, 1)).toBe("4 inbox items waiting, 1 of them a factory decision");
+    expect(inboxBadgeLabel(4, 2)).toBe("4 inbox items waiting, 2 of them factory decisions");
+    expect(inboxBadgeLabel(1, 1)).toBe("1 factory decision waiting");
+    expect(inboxBadgeLabel(3, 3)).toBe("3 factory decisions waiting");
   });
 });

@@ -132,3 +132,16 @@ export function sumPendingApprovals(rows: Conversation[]): number {
   }
   return total;
 }
+
+/**
+ * The sidebar Inbox badge's accessible name, naming the factory decisions
+ * it includes: "3 inbox items waiting, 1 of them a factory decision".
+ */
+export function inboxBadgeLabel(total: number, factoryDecisions = 0): string {
+  const base = total === 1 ? "1 inbox item waiting" : `${total} inbox items waiting`;
+  if (factoryDecisions <= 0) return base;
+  if (factoryDecisions === total) {
+    return total === 1 ? "1 factory decision waiting" : `${total} factory decisions waiting`;
+  }
+  return `${base}, ${factoryDecisions} of them ${factoryDecisions === 1 ? "a factory decision" : "factory decisions"}`;
+}

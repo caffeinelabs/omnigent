@@ -35,7 +35,7 @@
  * the prompt timing out) is what clears an approval.
  */
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQueries, useQueryClient } from "@tanstack/react-query";
 import {
   AlertTriangleIcon,
@@ -45,11 +45,16 @@ import {
   Loader2Icon,
 } from "lucide-react";
 import { ApprovalCard, type SubmitApprovalFn } from "@/components/blocks/ApprovalCard";
+import { InboxFactoryDecisions } from "@/components/factory/decisions/InboxFactoryDecisions";
 import { PageScroll } from "@/components/PageScroll";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
 import { useCommentInbox } from "@/hooks/useCommentInbox";
 import { useConversations } from "@/hooks/useConversations";
+import { useOpenFactoryDecisions } from "@/hooks/useFactory";
+import { decisionNotices, useFactoryNotifications } from "@/hooks/useFactoryNotifications";
+import { isFeatureEnabled } from "@/lib/capabilities";
+import { useServerInfo } from "@/lib/CapabilitiesContext";
 import { collectInboxItems, type InboxItem, type InboxSource } from "@/lib/inbox";
 import { relativeTime } from "@/lib/relativeTime";
 import { Link } from "@/lib/routing";
@@ -73,6 +78,16 @@ export function InboxPage() {
   const queryClient = useQueryClient();
   const { trackClick } = useOmnigentAnalytics();
   const conversationsQuery = useConversations("", false, { reconcileWhileConnected: true });
+  // Factory decisions sit above approvals: agents ask the human there instead of in chat.
+  const factoryEnabled = isFeatureEnabled(useServerInfo(), "factory");
+  const factoryDecisions = useOpenFactoryDecisions({ enabled: factoryEnabled });
+  const decisionItems = factoryEnabled ? (factoryDecisions.data?.data ?? []) : [];
+  useFactoryNotifications(
+    useMemo(
+      () => (factoryDecisions.data ? decisionNotices(factoryDecisions.data.data) : undefined),
+      [factoryDecisions.data],
+    ),
+  );
   const [responded, setResponded] = useState<RespondedMap>({});
   // Manual expand/collapse toggles keyed by elicitation id. Anything
   // not in the map falls back to the default: expanded only for the
@@ -153,7 +168,8 @@ export function InboxPage() {
     hasNextPage ||
     isFetchingNextPage ||
     snapshotQueries.some((q) => q.isLoading) ||
-    commentInbox.isLoading;
+    commentInbox.isLoading ||
+    (factoryEnabled && factoryDecisions.isLoading);
   const failedSnapshots = snapshotQueries.filter((q) => q.isError);
   const failedSessionCount = failedSnapshots.length + commentInbox.failedCount;
 
@@ -194,9 +210,11 @@ export function InboxPage() {
     <PageScroll contentClassName="px-6">
       <div className="mb-6 flex items-center justify-between">
         <h1 className="text-2xl font-semibold">Inbox</h1>
-        {(items.length > 0 || commentInbox.items.length > 0) && (
+        {(items.length > 0 || commentInbox.items.length > 0 || decisionItems.length > 0) && (
           <span className="text-ui text-muted-foreground">
             {[
+              decisionItems.length > 0 &&
+                (decisionItems.length === 1 ? "1 decision" : `${decisionItems.length} decisions`),
               items.length > 0 && (items.length === 1 ? "1 approval" : `${items.length} approvals`),
               commentInbox.items.length > 0 &&
                 (commentInbox.items.length === 1
@@ -234,17 +252,29 @@ export function InboxPage() {
         </div>
       )}
 
-      {assembling && items.length === 0 && commentInbox.items.length === 0 && (
-        <div className="flex items-center gap-2 py-12 text-ui text-muted-foreground">
-          <Loader2Icon className="size-4 animate-spin" />
-          Loading inbox…
-        </div>
+      {factoryEnabled && (
+        <InboxFactoryDecisions
+          items={decisionItems}
+          error={factoryDecisions.error}
+          onRetry={() => void factoryDecisions.refetch()}
+        />
       )}
+
+      {assembling &&
+        items.length === 0 &&
+        commentInbox.items.length === 0 &&
+        decisionItems.length === 0 && (
+          <div className="flex items-center gap-2 py-12 text-ui text-muted-foreground">
+            <Loader2Icon className="size-4 animate-spin" />
+            Loading inbox…
+          </div>
+        )}
 
       {!assembling &&
         failedSessionCount === 0 &&
         items.length === 0 &&
-        commentInbox.items.length === 0 && (
+        commentInbox.items.length === 0 &&
+        decisionItems.length === 0 && (
           <div className="flex flex-col items-center gap-2 py-16 text-center">
             <InboxIcon className="size-8 text-muted-foreground/50" />
             <p className="text-ui font-medium">Nothing waiting on you</p>

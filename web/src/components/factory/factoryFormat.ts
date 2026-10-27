@@ -128,8 +128,7 @@ export function stageText(stage: FactoryStage, overlay: FactoryOverlay | null = 
 
 /** Whether the preview runs the PR's current head (by the prober, else the report). */
 export function previewRunsHead(preview: PreviewView, headSha: string): boolean {
-  const sha = preview.observed?.sha ?? preview.deployed.sha;
-  return Boolean(sha) && sha === headSha;
+  return sameSha(preview.observed?.sha ?? preview.deployed.sha, headSha);
 }
 
 /** Tone and one-word state of a PR's factory preview. */
@@ -176,6 +175,16 @@ export function formatUsd(cost: number | null | undefined): string | null {
 
 export function shortSha(sha: string | null | undefined): string {
   return sha ? sha.slice(0, 7) : "";
+}
+
+/**
+ * Whether two shas name the same commit; a short sha (7+ chars) matches a
+ * longer one by prefix, as the server's prober compares them.
+ */
+export function sameSha(a: string | null | undefined, b: string | null | undefined): boolean {
+  if (!a || !b) return false;
+  const [short, full] = a.length <= b.length ? [a, b] : [b, a];
+  return short.length >= 7 && full.toLowerCase().startsWith(short.toLowerCase());
 }
 
 /** `n` + noun, pluralised with an `s`: `plural(1, "decision")` → `"1 decision"`. */

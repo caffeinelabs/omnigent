@@ -58,7 +58,7 @@ describe("ProjectDrawer", () => {
   it("lists PRs, the dev env truth, previews by slot, team and decisions", () => {
     const { drawer } = renderDrawer("api-version");
     expect(within(drawer).getByTestId("project-prs")).toHaveTextContent("#9630");
-    expect(within(drawer).getByTestId("ready-banner-9630")).toHaveTextContent(
+    expect(within(drawer).getByTestId("drawer-ready-banner-9630")).toHaveTextContent(
       "Ready for human merge",
     );
     const env = within(drawer).getByTestId("project-dev-env");

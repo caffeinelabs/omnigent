@@ -22,7 +22,7 @@ import { Button } from "@/components/ui/button";
 import type { PrView, ProjectView } from "@/lib/factoryApi";
 import { beginGithubConnect } from "@/lib/githubIntegration";
 import { cn } from "@/lib/utils";
-import { type FactoryTone, TONE_CHIP, plural, shortSha } from "../factoryFormat";
+import { type FactoryTone, TONE_CHIP, plural, sameSha, shortSha } from "../factoryFormat";
 import { useChangedSinceMount } from "./boardHooks";
 import { ageText, clipDuration, prAnchorId, prHasNoEnv, prTouchesUi } from "./boardModel";
 import { DemoStatusTag, DemoThumb } from "./DemoThumb";
@@ -66,7 +66,7 @@ function prBadges(pr: PrView): ReactNode[] {
   const badges: ReactNode[] = [];
   const s = pr.sentinel;
   if (s) {
-    const current = s.head_sha === pr.head_sha;
+    const current = sameSha(s.head_sha, pr.head_sha);
     badges.push(
       s.verdict === "verified" ? (
         <Badge
@@ -262,6 +262,7 @@ export function PrRow({
   nowS,
   onReview,
   isNew = false,
+  readyBanner,
 }: {
   pr: PrView;
   project: ProjectView | null;
@@ -270,6 +271,8 @@ export function PrRow({
   onReview: (number: number) => void;
   /** First seen after the board loaded: slides in. */
   isNew?: boolean;
+  /** Shown instead of the demo, preview and actions while the PR is ready. */
+  readyBanner?: ReactNode;
 }) {
   // Tracked here: the row swaps layouts when the PR merges, and only that swap pulses.
   const changed = useChangedSinceMount(pr.state);
@@ -333,76 +336,82 @@ export function PrRow({
 
       <PollError pr={pr} nowS={nowS} />
 
-      <div className="flex min-w-0 flex-col gap-2 @2xl:flex-row @2xl:items-start @2xl:justify-between @2xl:gap-4">
-        <DemoSummary pr={pr} project={project} onReview={review} />
-        <div className="shrink-0 @2xl:pt-0.5">
-          <PreviewPill pr={pr} project={project} nowS={nowS} />
-        </div>
-      </div>
+      {pr.ready && readyBanner ? (
+        readyBanner
+      ) : (
+        <>
+          <div className="flex min-w-0 flex-col gap-2 @2xl:flex-row @2xl:items-start @2xl:justify-between @2xl:gap-4">
+            <DemoSummary pr={pr} project={project} onReview={review} />
+            <div className="shrink-0 @2xl:pt-0.5">
+              <PreviewPill pr={pr} project={project} nowS={nowS} />
+            </div>
+          </div>
 
-      <div className="flex flex-wrap items-center gap-2">
-        <Button
-          size="sm"
-          variant={pr.ready ? "default" : "outline"}
-          onClick={review}
-          data-testid={`review-open-${pr.number}`}
-          componentId="factory.board.review_open"
-          className="@max-md:flex-1"
-        >
-          <PlayIcon className="size-3.5" />
-          Review
-        </Button>
-        {pr.ready ? (
-          <Button
-            asChild
-            size="sm"
-            variant="outline"
-            className="@max-md:flex-1"
-            title="Humans merge. The factory never merges."
-          >
-            <a
-              href={mergeUrl(pr)}
-              target="_blank"
-              rel="noreferrer"
-              data-testid={`merge-link-${pr.number}`}
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              size="sm"
+              variant={pr.ready ? "default" : "outline"}
+              onClick={review}
+              data-testid={`review-open-${pr.number}`}
+              componentId="factory.board.review_open"
+              className="@max-md:flex-1"
             >
-              Merge on GitHub
-              <ExternalLinkIcon className="size-3.5" />
-            </a>
-          </Button>
-        ) : (
-          <Button
-            asChild
-            size="sm"
-            variant="ghost"
-            className="text-muted-foreground @max-md:flex-1"
-          >
-            <a
-              href={pr.url}
-              target="_blank"
-              rel="noreferrer"
-              data-testid={`github-link-${pr.number}`}
-            >
-              GitHub
-              <ExternalLinkIcon className="size-3.5" />
-            </a>
-          </Button>
-        )}
-        {pr.ready && pr.ready_since != null && (
-          <span className="ml-auto text-sm text-success">
-            ready {ageText(nowS - pr.ready_since).replace(" ago", "")}
-          </span>
-        )}
-        {!pr.ready && pr.gates.reasons.length > 0 && (
-          <span className="ml-auto inline-flex min-w-0 items-center gap-1 text-sm text-muted-foreground">
-            <TriangleAlertIcon aria-hidden className="size-3 shrink-0" />
-            <span className="truncate" title={pr.gates.reasons.join(" · ")}>
-              {pr.gates.reasons[0]}
-              {pr.gates.reasons.length > 1 && ` · ${pr.gates.reasons.length - 1} more`}
-            </span>
-          </span>
-        )}
-      </div>
+              <PlayIcon className="size-3.5" />
+              Review
+            </Button>
+            {pr.ready ? (
+              <Button
+                asChild
+                size="sm"
+                variant="outline"
+                className="@max-md:flex-1"
+                title="Humans merge. The factory never merges."
+              >
+                <a
+                  href={mergeUrl(pr)}
+                  target="_blank"
+                  rel="noreferrer"
+                  data-testid={`merge-link-${pr.number}`}
+                >
+                  Merge on GitHub
+                  <ExternalLinkIcon className="size-3.5" />
+                </a>
+              </Button>
+            ) : (
+              <Button
+                asChild
+                size="sm"
+                variant="ghost"
+                className="text-muted-foreground @max-md:flex-1"
+              >
+                <a
+                  href={pr.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  data-testid={`github-link-${pr.number}`}
+                >
+                  GitHub
+                  <ExternalLinkIcon className="size-3.5" />
+                </a>
+              </Button>
+            )}
+            {pr.ready && pr.ready_since != null && (
+              <span className="ml-auto text-sm text-success">
+                ready {ageText(nowS - pr.ready_since).replace(" ago", "")}
+              </span>
+            )}
+            {!pr.ready && pr.gates.reasons.length > 0 && (
+              <span className="ml-auto inline-flex min-w-0 items-center gap-1 text-sm text-muted-foreground">
+                <TriangleAlertIcon aria-hidden className="size-3 shrink-0" />
+                <span className="truncate" title={pr.gates.reasons.join(" · ")}>
+                  {pr.gates.reasons[0]}
+                  {pr.gates.reasons.length > 1 && ` · ${pr.gates.reasons.length - 1} more`}
+                </span>
+              </span>
+            )}
+          </div>
+        </>
+      )}
     </div>
   );
 }
