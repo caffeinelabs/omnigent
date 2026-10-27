@@ -30,6 +30,7 @@ from omnigent.server.factory.charter import (
     SPAWN_SERVER,
     normalize_charter,
     preview_tooling_ref,
+    project_depends_on,
     render_pl_charter,
 )
 from omnigent.server.factory.context import FactoryDeps, factory_deps
@@ -164,6 +165,79 @@ def over_caps(active: int, adding: int, projects: Sequence[FactoryProject]) -> N
     )
 
 
+def check_dependencies(
+    rows: Sequence[FactoryProject],
+    new: Mapping[str, tuple[Sequence[str], str]],
+    *,
+    closing: Sequence[str] = (),
+) -> None:
+    """
+    Refuse ``depends_on`` that names no project, or that closes a cycle.
+
+    :param rows: The factory's projects.
+    :param new: Slug -> ``(its depends_on, the field to blame)`` for the projects
+        being created or re-pointed.
+    :param closing: Projects the same plan closes (known, but out of the graph).
+    :raises CockpitError: 400 ``unknown_dependency``, 409 ``cycle`` with the path.
+    """
+    by_slug = {p.slug: p for p in rows}
+    known = set(by_slug) | set(new)
+    for deps_, at in new.values():
+        for dep in deps_:
+            if dep not in known:
+                raise CockpitError(
+                    400, "unknown_dependency", f"depends_on {dep!r} names no project", field=at
+                )
+    graph: dict[str, list[str]] = {
+        p.slug: project_depends_on(p)[0]
+        for p in rows
+        if p.status == STATUS_ACTIVE and p.slug not in new and p.slug not in closing
+    }
+    graph.update({slug: list(deps_) for slug, (deps_, _at) in new.items()})
+
+    def alias(slug: str) -> str:
+        row = gating.resolve_alias(slug, by_slug)
+        return row.slug if row is not None else slug
+
+    cycle = gating.find_cycle({s: [alias(d) for d in ds] for s, ds in graph.items()})
+    if cycle is not None:
+        field = next(iter(new.values()))[1] if len(new) == 1 else "depends_on"
+        raise CockpitError(
+            409, "cycle", f"depends_on cycle: {' → '.join(cycle)}", field=field, path=cycle
+        )
+
+
+async def drop_unstarted(
+    app_state: Any, root: Conversation, created: Sequence[FactoryProject]
+) -> list[str]:
+    """
+    Take back projects a failed plan created before their PLs started.
+
+    Deleted when no PR points at them, else cancelled, so the spawn sweep
+    never picks them up. :returns: The slugs taken back.
+    """
+    deps = factory_deps(app_state)
+    store = deps.factory_store
+    if not created:
+        return []
+    prs = await asyncio.to_thread(store.list_prs, root.id)
+    owned = {p.project_slug for p in prs}
+    dropped: list[str] = []
+    for project in created:
+        try:
+            if project.slug in owned:
+                await asyncio.to_thread(
+                    store.update_project, project.id, status=STATUS_CANCELLED, closed_at=now_s()
+                )
+            else:
+                await asyncio.to_thread(store.delete_project, project.id)
+        except Exception:  # noqa: BLE001 - one row left behind must not hide the first error
+            _logger.warning("factory: could not take back project %s", project.slug, exc_info=True)
+            continue
+        dropped.append(project.slug)
+    return dropped
+
+
 def check_pr_map(
     owner: str,
     prs: Sequence[FactoryPr],
@@ -273,6 +347,9 @@ async def create_project_core(
     parent_slug: str | None = None,
     spawn_now: bool = True,
     proposal_ref: str | None = None,
+    check_caps: bool = True,
+    cap_allowance: int = 0,
+    check_depends: bool = True,
 ) -> tuple[FactoryProject, Started]:
     """
     Store a new project and start its PL (unless *spawn_now* is off).
@@ -280,8 +357,12 @@ async def create_project_core(
     :param defaults: The factory's default repo and base (read from the root when ``None``).
     :param parent_slug: The project it was split from.
     :param proposal_ref: The applied proposal, e.g. ``"C-4"``.
+    :param check_caps: Off when the caller checked the cap for its whole plan.
+    :param cap_allowance: Projects the caller's plan still closes after this create.
+    :param check_depends: Off when the caller checked ``depends_on`` for its whole plan.
     :returns: ``(row, how its PL starts)``.
-    :raises CockpitError: 409 ``slug_exists`` or ``over_caps``.
+    :raises CockpitError: 409 ``slug_exists`` / ``over_caps`` / ``cycle``, 400
+        ``unknown_dependency``.
     """
     deps = factory_deps(app_state)
     store = deps.factory_store
@@ -292,8 +373,11 @@ async def create_project_core(
                 409, "slug_exists", f"project {project.slug!r} already exists", field="slug"
             )
         rows = await asyncio.to_thread(store.list_projects, root.id)
-        active = sum(1 for p in rows if p.status == STATUS_ACTIVE)
-        over_caps(active, 1, rows)
+        if check_depends:
+            check_dependencies(rows, {project.slug: (project.depends_on or [], "depends_on")})
+        if check_caps:
+            active = sum(1 for p in rows if p.status == STATUS_ACTIVE)
+            over_caps(active - cap_allowance, 1, rows)
         fields = start.project_fields(project, actor_name(actor), defaults)
         fields["charter"] = {**fields["charter"], "spawn_owner": SPAWN_SERVER}
         fields["created_by"] = actor.id if actor.kind != "human" else actor_name(actor)
@@ -337,6 +421,7 @@ async def patch_project_core(
     *,
     via: str | None = None,
     inherited: Sequence[int] = (),
+    check_depends: bool = True,
 ) -> tuple[FactoryProject, str, str | None]:
     """
     Change a project's charter and send its PL a CHARTER UPDATE with the diff.
@@ -346,12 +431,21 @@ async def patch_project_core(
 
     :param via: The proposal applied, e.g. ``"C-4"``.
     :param inherited: PR numbers the project just received (split or merge).
+    :param check_depends: Off when the caller checked ``depends_on`` for its whole plan.
     :returns: ``(row, unified diff or "", mail id or None)``.
-    :raises CockpitError: 404 ``unknown_project``, 409 ``project_closed``.
+    :raises CockpitError: 404 ``unknown_project``, 409 ``project_closed`` / ``cycle``,
+        400 ``unknown_dependency``.
     """
     deps = factory_deps(app_state)
     store = deps.factory_store
     row = await _active(deps, root, slug)
+    if check_depends and "depends_on" in patch.model_fields_set:
+        if patch.depends_on and slug in patch.depends_on:
+            raise CockpitError(
+                400, "invalid_body", "a project cannot depend on itself", field="depends_on"
+            )
+        rows = await asyncio.to_thread(store.list_projects, root.id)
+        check_dependencies(rows, {slug: (patch.depends_on or [], "depends_on")})
     fields: dict[str, Any] = {
         "charter": normalize_charter(
             start.merge_charter(row.charter, patch), tooling_ref=preview_tooling_ref()
@@ -553,12 +647,21 @@ async def split_project_core(
     reason: str | None = None,
     user_id: str | None = None,
     via: str | None = None,
+    spawn_now: bool = True,
+    cap_allowance: int = 0,
+    check_depends: bool = True,
 ) -> SplitResult:
     """
     Split a project into new ones; ``keep="cancel"`` closes it, ``"umbrella"`` keeps it.
 
+    The project cap is checked once for the whole split. When a child cannot be
+    created, the children already created are taken back.
+
+    :param spawn_now: Off when the caller starts the children's PLs itself.
+    :param cap_allowance: Projects the caller's plan still closes after this split.
+    :param check_depends: Off when the caller checked ``depends_on`` for its whole plan.
     :raises CockpitError: 409 ``unmapped_prs`` when the original closes with open
-        PRs pr_map leaves behind; 409 ``slug_exists`` / ``over_caps``.
+        PRs pr_map leaves behind; 409 ``slug_exists`` / ``over_caps`` / ``cycle``.
     """
     deps = factory_deps(app_state)
     store = deps.factory_store
@@ -567,11 +670,19 @@ async def split_project_core(
     targets = {p.slug for p in into} | ({slug} if keep == KEEP_UMBRELLA else set())
     mapping = check_pr_map(slug, prs, pr_map, targets, must_cover=keep == KEEP_CANCEL)
     rows = await asyncio.to_thread(store.list_projects, root.id)
+    if check_depends:
+        check_dependencies(
+            rows,
+            {c.slug: (c.depends_on or [], f"into[{i}].depends_on") for i, c in enumerate(into)},
+            closing=[slug] if keep == KEEP_CANCEL else [],
+        )
     active = sum(1 for p in rows if p.status == STATUS_ACTIVE)
-    over_caps(active - (1 if keep == KEEP_CANCEL else 0), len(into), rows)
-    children = [
-        (
-            await create_project_core(
+    closing = 1 if keep == KEEP_CANCEL else 0
+    over_caps(active - closing - cap_allowance, len(into), rows)
+    children: list[FactoryProject] = []
+    try:
+        for child in into:
+            row, _ = await create_project_core(
                 app_state,
                 root,
                 child,
@@ -579,10 +690,13 @@ async def split_project_core(
                 parent_slug=slug,
                 spawn_now=False,
                 proposal_ref=via,
+                check_caps=False,
+                check_depends=False,
             )
-        )[0]
-        for child in into
-    ]
+            children.append(row)
+    except Exception:
+        await drop_unstarted(app_state, root, children)
+        raise
     moved = await _reassign(deps, root, slug, mapping)
     if keep == KEEP_CANCEL:
         await cancel_project_core(
@@ -595,7 +709,7 @@ async def split_project_core(
             via=via,
         )
     result = SplitResult(children)
-    for child in children:
+    for child in children if spawn_now else []:
         result.started[child.slug] = await start_project(
             app_state, root, child, actor=actor, proposal_ref=via
         )
@@ -636,6 +750,7 @@ async def merge_projects_core(
     reason: str | None = None,
     user_id: str | None = None,
     via: str | None = None,
+    check_depends: bool = True,
 ) -> FactoryProject:
     """
     Merge *absorbed* projects into *survivor*: their PLs stop, their PRs move per pr_map.
@@ -643,7 +758,9 @@ async def merge_projects_core(
     The survivor's PL gets a CHARTER UPDATE naming the inherited PRs (their previews
     died with the old pods).
 
-    :raises CockpitError: 400 on a bad plan, 409 ``unmapped_prs`` / ``project_closed``.
+    :param check_depends: Off when the caller checked ``depends_on`` for its whole plan.
+    :raises CockpitError: 400 on a bad plan, 409 ``unmapped_prs`` / ``project_closed`` /
+        ``cycle``.
     """
     deps = factory_deps(app_state)
     store = deps.factory_store
@@ -671,6 +788,12 @@ async def merge_projects_core(
             f"#{unknown[0]} is not a PR of the merged projects",
             field=f"pr_map.{unknown[0]}",
         )
+    if check_depends and patch is not None and "depends_on" in patch.model_fields_set:
+        check_dependencies(
+            rows,
+            {survivor: (patch.depends_on or [], "patch.depends_on")},
+            closing=absorbed,
+        )
     moved: dict[str, list[int]] = {}
     for slug in absorbed:
         for target, numbers in (await _reassign(deps, root, slug, mappings[slug])).items():
@@ -692,6 +815,7 @@ async def merge_projects_core(
         actor,
         via=via,
         inherited=sorted(moved.get(survivor, [])),
+        check_depends=False,
     )
     for target, numbers in moved.items():
         if target != survivor:
@@ -738,8 +862,10 @@ __all__ = [
     "actor_name",
     "cancel_project_core",
     "cap_candidates",
+    "check_dependencies",
     "check_pr_map",
     "create_project_core",
+    "drop_unstarted",
     "human_actor",
     "human_role",
     "merge_projects_core",

@@ -190,6 +190,66 @@ async def test_an_umbrella_split_keeps_the_original(cockpit: Cockpit) -> None:
     assert original is not None and original.status == "active"
 
 
+async def test_a_split_that_fails_half_way_takes_its_children_back(cockpit: Cockpit) -> None:
+    from omnigent.server.factory import projects
+    from omnigent.server.factory.actor import Actor
+    from omnigent.server.factory.control import CockpitError
+    from omnigent.server.factory.start import ProjectIn
+
+    # "api-docs" turned up between validation and the split.
+    cockpit.store.upsert_project(cockpit.fid, "api-docs", title="d", repo=REPO, status="cancelled")
+    root = cockpit.world.store.get_conversation(cockpit.fid)
+    into = [
+        ProjectIn.model_validate({**project(s), "repo": REPO}) for s in ("api-route", "api-docs")
+    ]
+
+    with pytest.raises(CockpitError) as refused:
+        await projects.split_project_core(
+            cockpit.app.state,
+            root,
+            "api-version",
+            into,
+            "cancel",
+            {},
+            Actor.human("alice", "owner"),
+        )
+
+    assert refused.value.code == "slug_exists"
+    assert cockpit.store.get_project(cockpit.fid, "api-route") is None
+    original = cockpit.store.get_project(cockpit.fid, "api-version")
+    assert original is not None and original.status == "active"
+
+
+# ── Dependencies through the human routes ──────────────────────
+
+
+async def test_the_cores_refuse_unknown_dependencies_and_cycles(cockpit: Cockpit) -> None:
+    cockpit.store.upsert_project(
+        cockpit.fid,
+        "b",
+        title="b",
+        repo=REPO,
+        charter={"goal": "g", "depends_on": ["api-version"]},
+    )
+    url = f"/v1/factory/factories/{cockpit.fid}/projects"
+
+    cycle = await cockpit.patch(f"{url}/api-version", {"depends_on": ["b"]})
+    unknown = await cockpit.patch(f"{url}/api-version", {"depends_on": ["nope"]})
+    itself = await cockpit.patch(f"{url}/api-version", {"depends_on": ["api-version"]})
+    ghost = await cockpit.post(url, project("c", depends_on=["ghost"]))
+    fine = await cockpit.post(url, project("c", depends_on=["b"]))
+
+    assert (cycle.status_code, error_code(cycle)) == (409, "cycle")
+    assert cycle.json()["path"] in (["api-version", "b", "api-version"], ["b", "api-version", "b"])
+    assert (unknown.status_code, error_code(unknown)) == (400, "unknown_dependency")
+    assert unknown.json()["field"] == "depends_on"
+    assert (itself.status_code, error_code(itself)) == (400, "invalid_body")
+    assert (ghost.status_code, error_code(ghost)) == (400, "unknown_dependency")
+    assert fine.status_code == 201, fine.text
+    row = cockpit.store.get_project(cockpit.fid, "api-version")
+    assert row is not None and "depends_on" not in (row.charter or {})
+
+
 # ── Merge ──────────────────────────────────────────────────────
 
 
@@ -232,6 +292,7 @@ async def test_merge_moves_prs_and_tells_the_survivor_what_it_inherits(cockpit: 
 
 
 async def test_charter_additions_round_trip_and_render(cockpit: Cockpit) -> None:
+    cockpit.store.upsert_project(cockpit.fid, "db-version", title="db", repo=REPO)
     resp = await cockpit.patch(
         f"/v1/factory/factories/{cockpit.fid}/projects/api-version",
         {

@@ -29,7 +29,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from omnigent.entities import Conversation
 from omnigent.entities.factory import FactoryDecision, FactoryProject, FactoryProposal
@@ -37,6 +37,7 @@ from omnigent.factory import (
     ACTION_APPLY_PROPOSAL,
     ACTION_DISMISS,
     MESSAGE_MAX_CHARS,
+    PROJECT_KIND_SELF,
     PROPOSAL_OPEN_STATUSES,
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
@@ -46,7 +47,12 @@ from omnigent.factory import (
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE
 from omnigent.server.factory import autonomy, control, events, gating, projects, spawn, start
 from omnigent.server.factory.actor import Actor, proposal_ref
-from omnigent.server.factory.charter import normalize_charter, resolve_base_branch
+from omnigent.server.factory.charter import (
+    SPAWN_LEAD,
+    normalize_charter,
+    resolve_base_branch,
+    spawn_owner,
+)
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.envelope import display_title
@@ -70,6 +76,7 @@ PROPOSAL_EXPIRY_S: Final = 72 * 3600
 UNDO_WINDOW_S: Final = 600
 GRACE_S: Final = 900
 REQUEST_WINDOW_S: Final = 24 * 3600
+ANALYSIS_MAX_BYTES: Final = 256 * 1024
 OPTION_APPLY: Final = "apply"
 OPTION_EDIT: Final = "edit"
 OPTION_REJECT: Final = "reject"
@@ -153,6 +160,13 @@ class ProposalIn(_Body):
     analysis: Any = None
     dedupe_key: str | None = Field(None, max_length=96)
     withdraw: str | None = Field(None, max_length=16)
+
+    @field_validator("analysis")
+    @classmethod
+    def _analysis(cls, value: Any) -> Any:
+        if value is not None and len(json.dumps(value, default=str)) > ANALYSIS_MAX_BYTES:
+            raise ValueError(f"analysis exceeds {ANALYSIS_MAX_BYTES // 1024} KB")
+        return value
 
 
 # ── Validation ─────────────────────────────────────────────────
@@ -346,8 +360,16 @@ def _new_project(
         raise CockpitError(
             400, "invalid_body", f"slug {project.slug!r} is used twice", field=slug_at
         )
+    if project.kind == PROJECT_KIND_SELF:
+        raise CockpitError(
+            400,
+            "invalid_body",
+            "kind 'self' projects belong to the Factory Smith lane, which is off",
+            field=f"{where}.kind",
+        )
     taken[project.slug] = where
-    return project, _needs_owner(project, ctx.repos, ctx.defaults)
+    money = autonomy.raises_budgets(None, project)
+    return project, money or _needs_owner(project, ctx.repos, ctx.defaults)
 
 
 def _parse_change(
@@ -389,7 +411,7 @@ def _parse_change(
         stored = {"op": "create", "project": project.model_dump(mode="json", exclude_unset=True)}
         return Change(index, "create", stored, "owner" if owner else "create", creates=[project])
     if isinstance(env, UpdateOp):
-        touch(env.slug, f"{where}.slug")
+        row = touch(env.slug, f"{where}.slug")
         patch = parse_body(CharterPatchIn, env.patch, prefix=f"{where}.patch")
         if not patch.model_fields_set:
             raise CockpitError(
@@ -407,7 +429,11 @@ def _parse_change(
             "slug": env.slug,
             "patch": patch.model_dump(mode="json", exclude_unset=True),
         }
-        op_class = autonomy.update_class(patch.model_fields_set)
+        op_class: autonomy.OpClass = (
+            "owner"
+            if autonomy.raises_budgets(normalize_charter(row.charter), patch)
+            else autonomy.update_class(patch.model_fields_set)
+        )
         return Change(index, "update", stored, op_class, slug=env.slug, patch=patch)
     if isinstance(env, SplitOp):
         touch(env.slug, f"{where}.slug")
@@ -444,7 +470,7 @@ def _parse_change(
             pr_map=pr_map,
         )
     if isinstance(env, MergeOp):
-        touch(env.into, f"{where}.into")
+        survivor = touch(env.into, f"{where}.into")
         for j, slug in enumerate(env.from_):
             if slug == env.into:
                 raise CockpitError(
@@ -487,11 +513,14 @@ def _parse_change(
             "patch": patch.model_dump(mode="json", exclude_unset=True) if patch else None,
             "pr_map": {str(k): v for k, v in pr_map.items()},
         }
+        raises = patch is not None and autonomy.raises_budgets(
+            normalize_charter(survivor.charter), patch
+        )
         return Change(
             index,
             "merge",
             stored,
-            "structural",
+            "owner" if raises else "structural",
             slug=env.into,
             patch=patch,
             absorbed=list(env.from_),
@@ -703,14 +732,30 @@ def check_based_on(deps: FactoryDeps, root: Conversation, based_on: Mapping[str,
 # ── Requests, refs and views ───────────────────────────────────
 
 
-def requested_by(deps: FactoryDeps, root: Conversation, reply_to: str | None) -> str | None:
+@dataclass(frozen=True)
+class Request:
+    """
+    The human ask a proposal answers.
+
+    :param user_id: The operator or owner who asked.
+    :param thread: The thread they asked in (the proposal's thread).
+    """
+
+    user_id: str
+    thread: str
+
+
+def requested_by(
+    deps: FactoryDeps, root: Conversation, reply_to: str | None, *, thread: str | None = None
+) -> Request | None:
     """
     The operator or owner whose message a proposal answers, if it is recent.
 
-    *reply_to* is a Room message (``chat_<id>``) by a person, or the mail id of
-    the human's start brief; either must be less than 24 hours old.
+    *reply_to* is a Room message (``chat_<id>``) by a person in *thread* (any
+    thread when ``None``), or the mail id of the human's start brief (the
+    ``factory`` thread); either must be less than 24 hours old.
 
-    :returns: The person's user id, or ``None`` when the agent acted on its own.
+    :returns: The ask, or ``None`` when the agent acted on its own.
     """
     ref = (reply_to or "").strip()
     if not ref:
@@ -718,10 +763,13 @@ def requested_by(deps: FactoryDeps, root: Conversation, reply_to: str | None) ->
     since = now_s() - REQUEST_WINDOW_S
     store = deps.factory_store
     if _MAIL_RE.match(ref):
+        if thread not in (None, THREAD_FACTORY):
+            return None
         for event in store.find_events(root.id, "factory.started", since * 1000, limit=50):
             data = event.data or {}
-            if data.get("mail_id") == ref and isinstance(data.get("by"), str):
-                return str(data["by"])
+            user = data.get("by_id") or data.get("by")
+            if data.get("mail_id") == ref and isinstance(user, str) and user:
+                return Request(user, THREAD_FACTORY)
         return None
     try:
         message = store.get_chat_message(ref.removeprefix(_CHAT_PREFIX))
@@ -733,7 +781,9 @@ def requested_by(deps: FactoryDeps, root: Conversation, reply_to: str | None) ->
         return None
     if message.author_role not in (None, "operator", "owner", "creator"):
         return None
-    return message.author
+    if thread is not None and message.thread != thread:
+        return None
+    return Request(message.author, message.thread)
 
 
 def find_proposal(deps: FactoryDeps, factory_id: str, ref: str) -> FactoryProposal | None:
@@ -942,7 +992,11 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
     plan = await asyncio.to_thread(
         validate, deps, root, body.changes, reason=body.reason, scope=scope
     )
-    asker = await asyncio.to_thread(requested_by, deps, root, body.reply_to)
+    ask = await asyncio.to_thread(
+        functools.partial(requested_by, deps, root, body.reply_to, thread=body.thread)
+    )
+    asker = ask.user_id if ask is not None else None
+    thread = body.thread or (ask.thread if ask is not None else None)
     mode = autonomy.autonomy_mode(root.labels)
     verdict = autonomy.decide(
         [c.op_class for c in plan.changes], requested=asker is not None, mode=mode
@@ -965,7 +1019,7 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
             evidence=[body.reply_to] if body.reply_to else [],
             author_role=role,
             on_behalf_of=asker,
-            thread=body.thread,
+            thread=thread,
             reply_to_chat=reply_chat if _is_uuid(reply_chat) else None,
             based_on=plan.based_on,
             result={"grace_until": now + GRACE_S} if verdict.grace else None,
@@ -1121,16 +1175,25 @@ async def apply_now(
         "edited": edited,
     }
     created: list[FactoryProject] = []
+    started: set[str] = set()
     try:
-        for change in plan.changes:
-            await _apply_change(app_state, root, change, actor, user_id, ref, result, created)
+        for i, change in enumerate(plan.changes):
+            closing = sum(_closes(c) for c in plan.changes[i + 1 :])
+            await _apply_change(
+                app_state, root, change, actor, user_id, ref, result, created, closing
+            )
         for project in created:
-            started = await projects.start_project(
+            how = await projects.start_project(
                 app_state, root, project, actor=actor, proposal_ref=ref
             )
-            _record_start(result, project.slug, started)
+            started.add(project.slug)
+            _record_start(result, project.slug, how)
     except Exception as exc:
         code = exc.code if isinstance(exc, CockpitError) else type(exc).__name__
+        # Projects whose PLs never started are taken back, so no sweep spawns them.
+        result["rolled_back"] = await projects.drop_unstarted(
+            app_state, root, [p for p in created if p.slug not in started]
+        )
         await asyncio.to_thread(
             lambda: store.update_proposal(
                 row.id, status="refused", result={**result, "error": code}
@@ -1166,6 +1229,13 @@ async def apply_now(
     return result
 
 
+def _closes(change: Change) -> int:
+    """:returns: How many active projects *change* closes."""
+    if change.op == "cancel" or (change.op == "split" and change.keep == "cancel"):
+        return 1
+    return len(change.absorbed) if change.op == "merge" else 0
+
+
 async def _apply_change(
     app_state: Any,
     root: Conversation,
@@ -1175,16 +1245,29 @@ async def _apply_change(
     ref: str,
     result: dict[str, Any],
     created: list[FactoryProject],
+    closing: int,
 ) -> None:
+    """
+    Run one validated change. Dependencies were checked for the whole plan.
+
+    :param closing: Projects the plan's later changes close (room under the cap).
+    """
     if change.op == "create":
         project, _ = await projects.create_project_core(
-            app_state, root, change.creates[0], actor, spawn_now=False, proposal_ref=ref
+            app_state,
+            root,
+            change.creates[0],
+            actor,
+            spawn_now=False,
+            proposal_ref=ref,
+            cap_allowance=closing,
+            check_depends=False,
         )
         created.append(project)
         result["created"].append(project.slug)
     elif change.op == "update" and change.slug and change.patch is not None:
         await projects.patch_project_core(
-            app_state, root, change.slug, change.patch, actor, via=ref
+            app_state, root, change.slug, change.patch, actor, via=ref, check_depends=False
         )
         result["updated"].append(change.slug)
     elif change.op == "cancel" and change.slug:
@@ -1210,11 +1293,13 @@ async def _apply_change(
             actor,
             user_id=user_id,
             via=ref,
+            spawn_now=False,
+            cap_allowance=closing,
+            check_depends=False,
         )
         result["split"].append(change.slug)
         result["created"].extend(c.slug for c in split.children)
-        for slug, started in split.started.items():
-            _record_start(result, slug, started)
+        created.extend(split.children)
     elif change.op == "merge" and change.slug:
         await projects.merge_projects_core(
             app_state,
@@ -1226,6 +1311,7 @@ async def _apply_change(
             actor,
             user_id=user_id,
             via=ref,
+            check_depends=False,
         )
         result["merged"].append(change.slug)
 
@@ -1285,8 +1371,8 @@ async def plan_answer(
     Validate a human's answer to a proposal decision before it is stored.
 
     Apply (or Edit & apply with *changes*) re-validates against ``based_on`` and
-    the factory as it is now; an owner-class proposal needs MANAGE. Anything else
-    (Reject, a free-text answer) rejects it with the text as the note.
+    the factory as it is now. Anything else (Reject, a free-text answer) rejects
+    it with the text as the note. Any answer to an owner-class proposal needs MANAGE.
 
     :raises CockpitError: 409 ``stale_proposal`` / ``proposal_not_pending``, the
         validation errors of :func:`validate`, 403 when an owner must approve.
@@ -1296,6 +1382,8 @@ async def plan_answer(
     actor = await asyncio.to_thread(projects.human_actor, deps, user_id, root.id)
     action = option.get("action") if option is not None else None
     if action != ACTION_APPLY_PROPOSAL:
+        if row.approval == "owner":
+            await control.require(deps, user_id, root.id, LEVEL_MANAGE)
         return ProposalAnswer(row, root, actor, user_id, apply=False, note=text)
     edited = changes is not None
     await asyncio.to_thread(check_based_on, deps, root, row.based_on or {})
@@ -1435,8 +1523,12 @@ async def undo(app_state: Any, factory_id: str, ref: str, *, user_id: str | None
     Undo an applied proposal within its window: drop created projects whose PL has
     not spawned, and send updated PLs the inverse CHARTER UPDATE.
 
-    :raises CockpitError: 409 ``undo_closed`` (not applied, window over, or not
-        undoable) or ``already_spawned`` (cancel those projects instead).
+    A project Atlas was already asked to spawn (the lead fallback) counts as spawned.
+    An owner-class proposal needs MANAGE.
+
+    :raises CockpitError: 409 ``undo_closed`` (not applied, window over, not
+        undoable, or an updated project closed since) or ``already_spawned``
+        (cancel those projects instead).
     """
     deps = factory_deps(app_state)
     store = deps.factory_store
@@ -1445,6 +1537,8 @@ async def undo(app_state: Any, factory_id: str, ref: str, *, user_id: str | None
     row = await asyncio.to_thread(find_proposal, deps, root.id, ref)
     if row is None:
         raise CockpitError(404, "unknown_proposal", f"no proposal {ref!r} in this factory")
+    if row.approval == "owner":
+        await control.require(deps, user_id, root.id, LEVEL_MANAGE)
     label = proposal_ref(row.number)
     now = now_s()
     if row.status != "applied" or row.undo_until is None or now > row.undo_until:
@@ -1460,15 +1554,31 @@ async def undo(app_state: Any, factory_id: str, ref: str, *, user_id: str | None
         )
         if project is None:
             continue
-        if project.pl_session_id or pl is not None or spawn.in_flight(root.id, slug):
+        if (
+            project.pl_session_id
+            or pl is not None
+            or spawn.in_flight(root.id, slug)
+            or spawn_owner(project) == SPAWN_LEAD
+        ):
             spawned.append(slug)
     if spawned:
         raise CockpitError(
             409,
             "already_spawned",
-            f"the PLs of {', '.join(spawned)} already spawned; cancel those projects instead",
+            f"the PLs of {', '.join(spawned)} already spawned (or Atlas was asked to spawn "
+            "them); cancel those projects instead",
             projects=spawned,
         )
+    for slug in row.before or {}:
+        current = await asyncio.to_thread(store.get_project, root.id, slug)
+        if current is None or current.status != projects.STATUS_ACTIVE:
+            state = current.status if current is not None else "gone"
+            raise CockpitError(
+                409,
+                "undo_closed",
+                f"{label} can no longer be undone: project {slug!r} is {state}",
+                project=slug,
+            )
     actor = await asyncio.to_thread(projects.human_actor, deps, user_id, root.id)
     try:
         row = (
@@ -1628,20 +1738,23 @@ async def apply_graceful(app_state: Any, factory_id: str, *, now: int | None = N
     Apply proposals whose grace period passed without an objection (``grace`` autonomy).
 
     The server answers the decision (its compare-and-set still picks one winner).
+    Nothing applies once owners left ``grace``; one failed apply skips only itself.
 
     :returns: The refs applied.
     """
     deps = factory_deps(app_state)
     store = deps.factory_store
     now = now if now is not None else now_s()
+    root = await control.get_conv(deps, factory_id)
+    if root is None or autonomy.autonomy_mode(root.labels) != autonomy.AUTONOMY_GRACE:
+        return []
     rows = await asyncio.to_thread(
         lambda: store.list_proposals(factory_id, status="pending", kind=KIND_PROJECTS, limit=500)
     )
-    root = await control.get_conv(deps, factory_id)
     applied: list[str] = []
     for row in rows:
         due = (row.result or {}).get("grace_until")
-        if root is None or not isinstance(due, int) or due > now or not row.decision_id:
+        if not isinstance(due, int) or due > now or not row.decision_id:
             continue
         label = proposal_ref(row.number)
         try:
@@ -1662,7 +1775,11 @@ async def apply_graceful(app_state: Any, factory_id: str, *, now: int | None = N
             _logger.info("factory: %s not applied after grace: %s", label, exc)
             continue
         actor = Actor.server()
-        result = await apply_now(app_state, root, row, plan, actor=actor, user_id=None)
+        try:
+            result = await apply_now(app_state, root, row, plan, actor=actor, user_id=None)
+        except Exception:  # noqa: BLE001 - refused and logged by apply_now; go on
+            _logger.warning("factory: %s failed to apply after grace", label, exc_info=True)
+            continue
         _tell_proposer(
             app_state, row, applied_text(label, "server (no objection in 15 min)", result), None
         )
@@ -1680,6 +1797,7 @@ __all__ = [
     "Plan",
     "ProposalAnswer",
     "ProposalIn",
+    "Request",
     "answer",
     "applied_text",
     "apply_graceful",

@@ -26,7 +26,7 @@ from fastapi import APIRouter, Body, Query, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
-from omnigent.factory import PROPOSAL_STATUSES, ROLE_LEAD, ROLE_PROJECT_LEAD
+from omnigent.factory import PROPOSAL_KINDS, PROPOSAL_STATUSES, ROLE_LEAD, ROLE_PROJECT_LEAD
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE
 from omnigent.server.factory import control, gating, projects, proposals
 from omnigent.server.factory.agent_scope import authorize_agent
@@ -170,6 +170,8 @@ async def list_proposals(
         statuses = [s.strip() for s in (status or "").split(",") if s.strip()] or None
         if statuses and any(s not in PROPOSAL_STATUSES for s in statuses):
             raise CockpitError(400, "invalid_status", "unknown status", field="status")
+        if kind is not None and kind not in PROPOSAL_KINDS:
+            raise CockpitError(400, "invalid_kind", "unknown kind", field="kind")
         rows = await asyncio.to_thread(
             lambda: deps.factory_store.list_proposals(
                 root.id, status=statuses, kind=kind, limit=limit

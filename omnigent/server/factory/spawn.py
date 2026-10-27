@@ -56,8 +56,10 @@ from omnigent.server.factory.charter import (
     project_base_branch,
     project_kind,
     render_pl_charter,
+    spawn_owner,
 )
 from omnigent.server.factory.context import FactoryDeps, factory_deps
+from omnigent.server.factory.envelope import quote_spoofed_lines
 from omnigent.server.factory.mailer import MailItem, get_mailer, new_mail_id
 from omnigent.server.factory.membership import factory_members, load_session_spec
 from omnigent.stores.factory_store import now_ms
@@ -313,7 +315,8 @@ def brief_text(
             f"Inherited PRs {refs}: they are yours now; run PREVIEW for them (previews died "
             "with their old pod) and track them in plan.md."
         )
-    charter = render_pl_charter(project)
+    # Goal, constraints and demo focus may come from an agent: quote notice-like lines.
+    charter = quote_spoofed_lines(render_pl_charter(project))
     text = "\n\n".join([*parts, charter])
     return text if len(text) <= MESSAGE_MAX_CHARS else text[:MESSAGE_MAX_CHARS]
 
@@ -489,6 +492,8 @@ async def _spawn_locked(
     fresh = await asyncio.to_thread(store.get_project, root.id, project.slug)
     if fresh is None or fresh.status != "active":
         return SpawnOutcome("skipped", reason="not active")
+    if spawn_owner(fresh) == SPAWN_LEAD:
+        return SpawnOutcome("skipped", reason="the lead spawns it")
     project = fresh
     existing = await asyncio.to_thread(
         find_project_pl, deps, root.id, project.slug, include_done=True
@@ -655,12 +660,29 @@ async def _failed(
     )
 
 
+def _pod_cap_answered(deps: FactoryDeps, factory_id: str, project: FactoryProject) -> bool:
+    """Whether owners already answered this project's pod-cap decision (e.g. "wait")."""
+    key = f"{POD_CAP_KEY_PREFIX}{project.slug}"
+    rows = deps.factory_store.list_decisions(
+        factory_id=factory_id, status=["answered", "withdrawn"], limit=500
+    )
+    return any(r.dedupe_key == key and r.created_at >= project.created_at for r in rows)
+
+
 async def _pod_cap_decision(
     app_state: Any, root: Conversation, project: FactoryProject, live: int, max_pods: int
 ) -> None:
-    """Owners decide what to stop; the next pass spawns once a pod is free."""
+    """
+    Owners decide what to stop; the next pass spawns once a pod is free.
+
+    Asked once per project: an answered decision is not reopened by later passes.
+    """
     from omnigent.server.factory import server_decisions
 
+    deps = factory_deps(app_state)
+    if await asyncio.to_thread(_pod_cap_answered, deps, root.id, project):
+        return
+    # Only a ``proposal:C-n`` subject links a decision to a proposal; this one is ``project:``.
     opened = await server_decisions.open_decision(
         app_state,
         root.id,
@@ -685,7 +707,7 @@ async def _pod_cap_decision(
         asked_by=None,
     )
     if opened is not None and not opened[1]:
-        store = factory_deps(app_state).factory_store
+        store = deps.factory_store
         await asyncio.to_thread(
             store.update_decision,
             opened[0].id,

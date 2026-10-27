@@ -161,3 +161,155 @@ async def test_an_agent_minor_update_applies_with_an_info_line(cockpit: Cockpit)
     assert resp.json()["status"] == "applied", resp.text
     [applied] = cockpit.events("proposal.applied")
     assert applied.data["info_line"] is True
+
+
+# ── Money is the owners' ───────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("before", "sent", "raises"),
+    [
+        ({}, {"task_usd": 5}, True),
+        ({"task_usd": 5}, {"task_usd": 9}, True),
+        ({"task_usd": 5}, {"task_usd": 5}, False),
+        ({"task_usd": 5, "project_usd": 40}, {"task_usd": 2, "project_usd": 10}, False),
+        ({"task_usd": 5, "project_usd": 40}, {"task_usd": 2}, True),
+        ({"task_usd": 5}, None, True),
+        ({}, None, False),
+    ],
+)
+def test_raising_budgets(before: dict, sent: dict | None, raises: bool) -> None:
+    from omnigent.server.factory.start import CharterPatchIn
+
+    patch = CharterPatchIn.model_validate({"budgets": sent})
+    assert autonomy.raises_budgets({"budgets": before}, patch) is raises
+    assert autonomy.raises_budgets({"budgets": before}, CharterPatchIn(goal="g")) is False
+
+
+async def test_raising_budgets_needs_an_owner_even_when_asked(cockpit: Cockpit) -> None:
+    chat = cockpit.store.append_chat(
+        cockpit.fid, thread="factory", author_kind="human", author="carol", body="go faster"
+    )
+    asked = f"chat_{chat.id}"
+
+    raise_ = await propose(
+        cockpit,
+        {"op": "update", "slug": "api-version", "patch": {"budgets": {"project_usd": 99999}}},
+        reply_to=asked,
+    )
+    create = await propose(
+        cockpit,
+        {"op": "create", "project": project("db-version", budgets={"task_usd": 5})},
+        reply_to=asked,
+    )
+
+    assert (raise_.json()["status"], raise_.json()["approval"]) == ("pending", "owner")
+    assert (create.json()["status"], create.json()["approval"]) == ("pending", "owner")
+    row = cockpit.store.get_project(cockpit.fid, "api-version")
+    assert row is not None and "budgets" not in (row.charter or {})
+    decision = cockpit.store.get_decision(
+        cockpit.store.get_proposal_by_number(cockpit.fid, 1).decision_id
+    )
+    assert decision is not None and decision.assignee == "owners"
+
+
+async def test_lowering_a_budget_is_an_ordinary_update(cockpit: Cockpit) -> None:
+    row = cockpit.store.get_project(cockpit.fid, "api-version")
+    assert row is not None
+    cockpit.store.update_project(
+        row.id, charter={**(row.charter or {}), "budgets": {"task_usd": 5.0}}
+    )
+
+    resp = await propose(
+        cockpit, {"op": "update", "slug": "api-version", "patch": {"budgets": {"task_usd": 2}}}
+    )
+
+    assert resp.json()["approval"] == "operator", resp.text
+
+
+async def test_the_human_routes_need_manage_to_raise_budgets(cockpit: Cockpit) -> None:
+    url = f"/v1/factory/factories/{cockpit.fid}/projects"
+    by_operator = await cockpit.patch(
+        f"{url}/api-version", {"budgets": {"project_usd": 500}}, user="carol"
+    )
+    add_by_operator = await cockpit.post(
+        url, project("db-version", budgets={"task_usd": 5}), user="carol"
+    )
+    goal_by_operator = await cockpit.patch(f"{url}/api-version", {"goal": "g2"}, user="carol")
+    by_owner = await cockpit.patch(f"{url}/api-version", {"budgets": {"project_usd": 500}})
+    lower_by_operator = await cockpit.patch(
+        f"{url}/api-version", {"budgets": {"project_usd": 100}}, user="carol"
+    )
+
+    assert by_operator.status_code == 403, by_operator.text
+    assert add_by_operator.status_code == 403, add_by_operator.text
+    assert goal_by_operator.status_code == 200, goal_by_operator.text
+    assert by_owner.status_code == 200, by_owner.text
+    assert lower_by_operator.status_code == 200, lower_by_operator.text
+    assert cockpit.store.get_project(cockpit.fid, "db-version") is None
+
+
+# ── Requests are scoped to their thread ────────────────────────
+
+
+async def test_a_request_counts_only_in_its_thread(cockpit: Cockpit) -> None:
+    chat = cockpit.store.append_chat(
+        cockpit.fid,
+        thread="project:api-version",
+        author_kind="human",
+        author="alice",
+        author_role="owner",
+        body="add a db project",
+    )
+
+    elsewhere = await propose(
+        cockpit,
+        {"op": "create", "project": project("a")},
+        reply_to=f"chat_{chat.id}",
+        thread="factory",
+    )
+    here = await propose(
+        cockpit, {"op": "create", "project": project("b")}, reply_to=f"chat_{chat.id}"
+    )
+
+    assert elsewhere.json()["status"] == "pending", elsewhere.text
+    assert here.json()["status"] == "applied", here.text
+    applied = cockpit.store.get_proposal_by_number(cockpit.fid, 2)
+    assert applied.thread == "project:api-version" and applied.on_behalf_of == "alice"
+
+
+async def test_the_start_brief_request_names_the_user(cockpit: Cockpit) -> None:
+    from omnigent.server.factory import events
+
+    await events.emit(
+        cockpit.app.state,
+        cockpit.fid,
+        "factory.started",
+        summary="started",
+        data={"by": "Alice Example", "by_id": "alice", "mail_id": "mail_0123456789abcdef"},
+    )
+
+    resp = await propose(
+        cockpit,
+        {"op": "create", "project": project("db-version")},
+        reply_to="mail_0123456789abcdef",
+    )
+
+    assert resp.json()["status"] == "applied", resp.text
+    assert cockpit.store.get_proposal_by_number(cockpit.fid, 1).on_behalf_of == "alice"
+
+
+async def test_grace_stops_when_owners_leave_grace(cockpit: Cockpit) -> None:
+    from omnigent.server.factory import proposals
+    from omnigent.stores.factory_store import now_s
+
+    cockpit.world.store.set_labels(cockpit.fid, {autonomy.LABEL_AUTONOMY: "grace"})
+    await propose(cockpit, {"op": "create", "project": project("db-version")})
+    cockpit.world.store.set_labels(cockpit.fid, {autonomy.LABEL_AUTONOMY: "confirm"})
+
+    late = await proposals.apply_graceful(
+        cockpit.app.state, cockpit.fid, now=now_s() + proposals.GRACE_S + 1
+    )
+
+    assert late == []
+    assert cockpit.store.get_proposal_by_number(cockpit.fid, 1).status == "pending"

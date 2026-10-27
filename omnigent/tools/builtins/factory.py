@@ -707,7 +707,7 @@ def _project_schema() -> dict[str, Any]:
                 "type": "string",
                 "description": "Defaults to the factory's default base (another needs an owner).",
             },
-            "kind": {"type": "string", "enum": ["work", "self"], "default": "work"},
+            "kind": {"type": "string", "enum": ["work"], "default": "work"},
             "goal": {"type": "string", "maxLength": 4000},
             "dod": {**text_list, "description": "Observable Definition of Done items."},
             "scope_paths": {**text_list, "description": "Path globs the ICs may touch."},
@@ -739,6 +739,7 @@ def _project_schema() -> dict[str, Any]:
             "human_owner": {"type": "string", "description": "Email of the human who owns it."},
             "budgets": {
                 "type": "object",
+                "description": "USD caps; setting or raising one needs an owner.",
                 "properties": {
                     "task_usd": {"type": "number", "minimum": 0},
                     "project_usd": {"type": "number", "minimum": 0},

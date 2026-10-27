@@ -297,18 +297,25 @@ applied proposals call with the acting person, agent or the server.
   (a create a person asked for, `reply_to` a Room message or the start
   brief's mail id) with a 10-minute Undo; the rest waits on a `proposal`
   decision (Apply, Edit & apply, Reject) that re-checks `based_on` (409
-  `stale_proposal`). Pending proposals expire after 72 h; the proposer gets
+  `stale_proposal`). Setting, raising or removing a USD `budgets` cap is the
+  owners' (owner class; the cockpit add and charter PATCH need MANAGE for it).
+  An apply that fails part-way takes back the projects it created before
+  their PLs started. Pending proposals expire after 72 h; the proposer gets
   `[Factory proposal · C-<n> applied|rejected|expired|undone …]`.
+- **Dependencies are checked by every core**: an unknown `depends_on` is 400
+  `unknown_dependency`, a cycle 409 `cycle` with its path, from the cockpit
+  forms as from proposals.
 - **Server spawn** (`server/factory/spawn.py`). An applied project's PL is
   created by the server with `sys_factory_spawn`'s exact body, in process,
   as the factory's creator (a 300 s runner token), then briefed (`[Factory
   brief · from <who> via C-<n>`), logged (`member.spawned`) and announced to
   Atlas (`[Factory notice · PL·<slug> spawned by the server · C-<n>]`). Over
-  `factory_max_pods` it opens a decision for owners and spawns once a pod is
-  free. After two failed creates, without a runner token (header auth), or
+  `factory_max_pods` it opens a decision for owners (asked once per project)
+  and spawns once a pod is free. After two failed creates, without a runner token (header auth), or
   with the root label `omnigent.factory.engine_spawn=lead`, Atlas is mailed
   the spawn call instead. `sys_factory_spawn` answers `server_owns_spawn` for
-  a PL the server runs.
+  a PL the server runs; a lead recovering a server-owned project without a PL
+  takes its spawn over.
 - **Dependencies** (`server/factory/gating.py`). A project waits on its
   `depends_on` (`project.held`) until each dependency's PR merged
   (`depends_mode=merged`) or is ready for human merge (`ready`); release runs

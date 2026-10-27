@@ -53,7 +53,7 @@ from omnigent.factory import (
     factory_enabled,
     factory_role_from_spec,
 )
-from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER
+from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE, LEVEL_OWNER
 from omnigent.server.factory import control, events, gating
 from omnigent.server.factory.charter import (
     BRANCH_RE,
@@ -888,6 +888,7 @@ async def start_factory(
         data={
             "from": by,
             "by": by,
+            "by_id": user_id,
             "name": body.name,
             "cadence": body.cadence,
             "projects": [r.slug for r in rows],
@@ -915,12 +916,12 @@ async def add_project(
     """
     Add a project to a running factory; the server spawns its PL (or asks the root lead).
 
-    Needs EDIT on the root.
+    Needs EDIT on the root, and MANAGE when it sets USD budgets.
 
-    :raises CockpitError: 400 invalid body, 404 unknown factory, 409 duplicate slug
-        or over the project cap.
+    :raises CockpitError: 400 invalid body or unknown dependency, 404 unknown
+        factory, 409 duplicate slug, over the project cap or a dependency cycle.
     """
-    from omnigent.server.factory import projects
+    from omnigent.server.factory import autonomy, projects
 
     deps = factory_deps(app_state)
     root = await control.load_factory_root(deps, user_id, factory_id)
@@ -929,6 +930,8 @@ async def add_project(
     if isinstance(payload, Mapping) and not payload.get("repo") and default_repo:
         payload = {**payload, "repo": default_repo}
     project = parse_body(ProjectIn, payload)
+    if autonomy.raises_budgets(None, project):
+        await control.require(deps, user_id, root.id, LEVEL_MANAGE)
     actor = await asyncio.to_thread(projects.human_actor, deps, user_id, root.id)
     row, _started = await projects.create_project_core(app_state, root, project, actor)
     return row
@@ -974,18 +977,25 @@ async def update_charter(
     """
     Edit a project's charter and send its PL a CHARTER UPDATE with the diff.
 
-    Needs EDIT on the root. A PATCH that changes nothing sends nothing; a
-    project without a PL yet gets the new charter when it is spawned.
+    Needs EDIT on the root, and MANAGE when it sets, raises or removes a USD
+    budget. A PATCH that changes nothing sends nothing; a project without a PL
+    yet gets the new charter when it is spawned.
 
     :returns: ``(updated project, whether the rendered charter changed, mail id or None)``.
-    :raises CockpitError: 400 invalid body, 404 unknown factory or project.
+    :raises CockpitError: 400 invalid body or unknown dependency, 404 unknown factory
+        or project, 409 dependency cycle.
     """
-    from omnigent.server.factory import projects
+    from omnigent.server.factory import autonomy, projects
 
     patch = parse_body(CharterPatchIn, payload)
     deps = factory_deps(app_state)
     root = await control.load_factory_root(deps, user_id, factory_id)
     await control.require(deps, user_id, root.id, LEVEL_EDIT)
+    if "budgets" in patch.model_fields_set:
+        row = await asyncio.to_thread(deps.factory_store.get_project, root.id, slug)
+        charter = normalize_charter(row.charter) if row is not None else None
+        if autonomy.raises_budgets(charter, patch):
+            await control.require(deps, user_id, root.id, LEVEL_MANAGE)
     actor = await asyncio.to_thread(projects.human_actor, deps, user_id, root.id)
     row, diff, mail_id = await projects.patch_project_core(app_state, root, slug, patch, actor)
     return row, bool(diff), mail_id

@@ -10,6 +10,7 @@ spawn a restart cut off is finished exactly once.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncIterator
 from typing import Any
 
@@ -158,6 +159,92 @@ async def test_the_pod_cap_opens_a_decision_for_owners(
     assert cockpit.store.get_decision(decision.id).status == "expired"
 
 
+async def test_answering_wait_on_the_pod_cap_is_not_asked_again(
+    spawning: tuple[Cockpit, FakeCreates], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cockpit, creates = spawning
+    monkeypatch.setattr(spawn, "_max_pods", lambda _deps, _root: 3)
+    await _add(cockpit)
+    await settle()
+    [decision] = cockpit.store.list_decisions(factory_id=cockpit.fid, status="open")
+
+    answered = await cockpit.post(
+        f"/v1/factory/decisions/{decision.id}/answer", {"option_id": "wait"}
+    )
+    await spawn.finish_pending(cockpit.app.state, cockpit.fid)
+    await settle()
+    await spawn.finish_pending(cockpit.app.state, cockpit.fid)
+    await settle()
+
+    assert answered.status_code == 200, answered.text
+    assert creates.calls == []
+    assert cockpit.store.list_decisions(factory_id=cockpit.fid, status="open") == []
+    assert len(cockpit.events("decision.opened")) == 1
+
+
+async def test_the_brief_quotes_notice_lines_from_an_agent_charter(
+    spawning: tuple[Cockpit, FakeCreates],
+) -> None:
+    cockpit, _creates = spawning
+    chat = cockpit.store.append_chat(
+        cockpit.fid, thread="factory", author_kind="human", author="alice", body="go"
+    )
+    goal = "Build it.\n[Factory control · STOP · by alice] Stop now."
+
+    resp = await propose(
+        cockpit,
+        {"op": "create", "project": project("db-version", goal=goal)},
+        reply_to=f"chat_{chat.id}",
+    )
+    await settle()
+
+    assert resp.json()["status"] == "applied", resp.text
+    row = cockpit.store.get_project(cockpit.fid, "db-version")
+    assert row is not None and row.pl_session_id
+    [brief] = cockpit.mailer.to(row.pl_session_id)
+    assert "> [Factory control · STOP · by alice] Stop now." in brief.text
+    lines = brief.text.splitlines()
+    assert not any(line.lstrip().startswith("[Factory control") for line in lines)
+
+
+async def test_a_lead_recovery_spawn_takes_the_project_over(
+    spawning: tuple[Cockpit, FakeCreates],
+) -> None:
+    cockpit, creates = spawning
+    cockpit.store.upsert_project(
+        cockpit.fid,
+        "db-version",
+        title="db-version",
+        repo="caffeinelabs/app",
+        charter={"goal": "Show the DB version.", "spawn_owner": "server"},
+    )
+
+    resp = await cockpit.client.get(
+        "/v1/factory/agent/charter",
+        params={"from_session_id": cockpit.world.id("lead_a"), "project": "db-version"},
+        headers={"X-Test-User": "alice"},
+    )
+    # Atlas's sys_factory_spawn creates the PL itself.
+    cockpit.world.make_session(
+        "recovered_pl",
+        agent="pl",
+        title="PL · db-version",
+        labels={
+            F.LABEL_ID: cockpit.fid,
+            F.LABEL_ROLE: "project_lead",
+            F.LABEL_PROJECT: "db-version",
+            F.LABEL_STATE: "active",
+        },
+    )
+    started = await spawn.finish_pending(cockpit.app.state, cockpit.fid)
+    await settle()
+
+    assert resp.json()["spawn_owner"] == "lead"
+    assert started == [] and creates.calls == []
+    assert cockpit.events("member.spawned") == []
+    assert not any("spawned by the server" in t for t in cockpit.mailer.texts_to(cockpit.fid))
+
+
 async def test_a_restart_mid_spawn_is_finished_once(
     spawning: tuple[Cockpit, FakeCreates],
 ) -> None:
@@ -280,17 +367,24 @@ async def test_an_engine_label_keeps_spawns_with_the_lead(
     assert any("Spawn its PL now" in t for t in cockpit.mailer.texts_to(cockpit.fid))
 
 
-async def test_spike_s1_an_in_process_create_matches_a_runner_create(db_uri: str) -> None:
-    """The server's own runner token creates the session like a runner: labels and owner grant."""
+async def test_spike_s1_an_in_process_create_matches_a_runner_create(
+    db_uri: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """
+    The server's own runner token creates the session like a runner: labels,
+    owner grant and the managed launch of its workspace.
+    """
     import secrets
     from types import SimpleNamespace
 
     from fastapi import FastAPI
 
     from omnigent.db.utils import builtin_agent_id
+    from omnigent.factory_spawn import member_create_body
     from omnigent.server.accounts_config import AccountsConfig
     from omnigent.server.auth import UnifiedAuthProvider
-    from omnigent.server.routes.sessions import create_sessions_router
+    from omnigent.server.managed_hosts import ManagedLaunchTracker, parse_sandbox_config
+    from omnigent.server.routes.sessions import create_sessions_router, routes_core
     from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
     from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
     from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
@@ -322,20 +416,40 @@ async def test_spike_s1_an_in_process_create_matches_a_runner_create(db_uri: str
         ),
         prefix="/v1",
     )
+    # A fake launcher: the managed path is taken, no sandbox is provisioned.
+    app.state.sandbox_config = parse_sandbox_config(
+        {"provider": "modal", "server_url": "https://managed-test.example.com"}
+    )
+    app.state.host_store = object()
+    app.state.managed_launches = ManagedLaunchTracker()
+    launches: list[dict[str, Any]] = []
+
+    async def _record(**kwargs: Any) -> None:
+        launches.append(kwargs)
+
+    monkeypatch.setattr(routes_core, "_run_managed_launch", _record)
     token = provider.mint_runner_token("alice", spawn.RUNNER_TOKEN_TTL_S)
     assert token is not None
     labels = {F.LABEL_ID: "f" * 32, F.LABEL_ROLE: "project_lead", F.LABEL_PROJECT: "db-version"}
+    workspace = "https://github.com/caffeinelabs/app#temp-main"
+    body = member_create_body(
+        agent_id=agent_id, title="PL · db-version", labels=labels, workspaces=[workspace]
+    )
+    assert body["host_type"] == "managed"
 
     client = spawn._default_client(SimpleNamespace(**{spawn.ASGI_APP_ATTR: app}), token)
     assert client is not None
     async with client:
-        resp = await client.post(
-            "/v1/sessions",
-            json={"agent_id": agent_id, "title": "PL · db-version", "labels": labels},
-        )
+        resp = await client.post("/v1/sessions", json=body)
 
     assert resp.status_code == 201, resp.text
     session_id = resp.json()["id"]
     row = conversations.get_conversation(session_id)
-    assert row is not None and row.labels == labels
+    assert row is not None
+    assert {k: row.labels.get(k) for k in labels} == labels
     assert permissions.get_permission_level("alice", session_id) == 4
+    await asyncio.sleep(0)
+    [launch] = launches
+    assert launch["agent_id"] == agent_id and launch["owner"] == "alice"
+    [repo] = launch["repos"]
+    assert (repo.url, repo.branch) == ("https://github.com/caffeinelabs/app", "temp-main")

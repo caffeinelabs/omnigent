@@ -47,10 +47,6 @@ export function isIntegrationProject(project: ProjectView): boolean {
   return project.charter?.kind === "integration";
 }
 
-/**
- * Card order tier: ready first, then blocked/failed, in progress, queued,
- * paused, and finished projects last (they collapse into the Done group).
- */
 /** A project that left the pipeline: done, cancelled, or merged into another. */
 export function isClosedProject(project: ProjectView): boolean {
   return (
@@ -61,6 +57,10 @@ export function isClosedProject(project: ProjectView): boolean {
   );
 }
 
+/**
+ * Card order tier: ready first, then blocked/failed, in progress, queued,
+ * paused, and finished projects last (they collapse into the Done group).
+ */
 export function projectTier(project: ProjectView): number {
   if (isClosedProject(project)) return 5;
   if (project.stage === "ready") return 0;

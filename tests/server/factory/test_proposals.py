@@ -18,8 +18,9 @@ from fastapi.routing import APIRoute
 
 from omnigent import factory as F
 from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
-from omnigent.server.factory import proposals
+from omnigent.server.factory import projects, proposals, spawn, start
 from omnigent.server.factory.api import proposals as proposals_api
+from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.origin import require_human_origin
 from omnigent.stores.factory_store import now_s
 from tests.server.factory.cockpit_helpers import Cockpit, error_code
@@ -219,9 +220,11 @@ async def test_two_concurrent_applies_apply_once(cockpit: Cockpit) -> None:
     loser = first if first.status_code == 409 else second
     winner = "alice" if loser is second else "carol"
     assert error_code(loser) in ("decision_not_open", "proposal_not_pending")
-    assert loser.json().get("answered_by", winner) == winner
-    applied = [e for e in cockpit.events() if e.kind == "proposal.applied"]
-    assert len(applied) == 1
+    body = loser.json()
+    assert body.get("answered_by") == winner or body.get("decided_by") == winner, body
+    [applied] = [e for e in cockpit.events() if e.kind == "proposal.applied"]
+    assert applied.data["by"] == winner
+    assert _proposal(cockpit).decided_by == winner
     assert len(cockpit.store.list_projects(cockpit.fid)) == 2
 
 
@@ -300,6 +303,102 @@ async def test_an_owner_class_proposal_needs_an_owner(cockpit: Cockpit) -> None:
     assert owner.status_code == 200, owner.text
 
 
+async def test_a_split_up_to_the_cap_applies(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # One project of a two-project cap: the split closes it and adds two.
+    monkeypatch.setattr(start, "max_projects", lambda: 2)
+    resp = await propose(
+        cockpit,
+        {
+            "op": "split",
+            "slug": "api-version",
+            "into": [project("api-route"), project("api-docs")],
+            "keep": "cancel",
+        },
+        reason="two milestones",
+    )
+    assert resp.json()["status"] == "pending", resp.text
+
+    applied = await _apply(cockpit, "C-1")
+
+    assert applied.status_code == 200, applied.text
+    assert _proposal(cockpit).status == "applied"
+    rows = {p.slug: p.status for p in cockpit.store.list_projects(cockpit.fid)}
+    assert rows == {"api-version": "cancelled", "api-route": "active", "api-docs": "active"}
+
+
+async def test_a_create_next_to_a_later_cancel_fits_the_cap(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(start, "max_projects", lambda: 1)
+    await propose(
+        cockpit,
+        {"op": "create", "project": project("db-version")},
+        {"op": "cancel", "slug": "api-version"},
+        reason="replace it",
+    )
+
+    resp = await _apply(cockpit, "C-1")
+
+    assert resp.status_code == 200, resp.text
+    rows = {p.slug: p.status for p in cockpit.store.list_projects(cockpit.fid)}
+    assert rows == {"api-version": "cancelled", "db-version": "active"}
+
+
+async def test_a_failed_apply_takes_back_the_projects_it_created(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await propose(
+        cockpit,
+        {"op": "create", "project": project("db-version")},
+        {
+            "op": "split",
+            "slug": "api-version",
+            "into": [project("api-route")],
+            "keep": "umbrella",
+        },
+        {"op": "create", "project": project("settings")},
+        reason="split the work",
+    )
+    real_create = projects.create_project_core
+
+    async def create_then_fail(app_state: Any, root: Any, project_in: Any, *a: Any, **k: Any):
+        if project_in.slug == "settings":
+            raise CockpitError(409, "boom", "the store said no")
+        return await real_create(app_state, root, project_in, *a, **k)
+
+    monkeypatch.setattr(projects, "create_project_core", create_then_fail)
+
+    resp = await _apply(cockpit, "C-1")
+    started = await spawn.finish_pending(cockpit.app.state, cockpit.fid)
+    await settle()
+
+    assert error_code(resp) == "boom", resp.text
+    row = _proposal(cockpit)
+    assert row.status == "refused"
+    assert row.result["rolled_back"] == ["db-version", "api-route"]
+    assert {p.slug for p in cockpit.store.list_projects(cockpit.fid)} == {"api-version"}
+    assert started == []
+    assert not any("Spawn its PL now" in t for t in cockpit.mailer.texts_to(cockpit.fid))
+
+
+async def test_a_self_project_is_refused_while_the_smith_lane_is_off(cockpit: Cockpit) -> None:
+    resp = await propose(cockpit, {"op": "create", "project": project("me", kind="self")})
+
+    assert (resp.status_code, resp.json()["field"]) == (400, "changes[0].project.kind")
+
+
+async def test_an_oversized_analysis_is_refused(cockpit: Cockpit) -> None:
+    resp = await propose(
+        cockpit,
+        {"op": "create", "project": project("db-version")},
+        analysis={"notes": "x" * (proposals.ANALYSIS_MAX_BYTES + 1)},
+    )
+
+    assert (resp.status_code, resp.json()["field"]) == (400, "analysis")
+
+
 # ── Undo, withdraw, expiry ─────────────────────────────────────
 
 
@@ -334,6 +433,65 @@ async def test_undo_after_the_pl_spawned_is_refused(cockpit: Cockpit) -> None:
 
     assert (resp.status_code, error_code(resp)) == (409, "already_spawned")
     assert _proposal(cockpit).status == "applied"
+
+
+async def test_undo_after_atlas_was_asked_to_spawn_is_refused(cockpit: Cockpit) -> None:
+    # Header auth: the create went to Atlas as a spawn request.
+    await propose(
+        cockpit,
+        {"op": "create", "project": project("db-version")},
+        reply_to=_human_chat(cockpit),
+    )
+    assert any("Spawn its PL now" in t for t in cockpit.mailer.texts_to(cockpit.fid))
+
+    resp = await cockpit.post(f"/v1/factory/factories/{cockpit.fid}/proposals/C-1/undo")
+
+    assert (resp.status_code, error_code(resp)) == (409, "already_spawned")
+    assert cockpit.store.get_project(cockpit.fid, "db-version") is not None
+
+
+async def test_undo_refuses_when_an_updated_project_closed(cockpit: Cockpit) -> None:
+    await propose(
+        cockpit,
+        {"op": "update", "slug": "api-version", "patch": {"priority": 0}},
+        reply_to=_human_chat(cockpit),
+    )
+    row = cockpit.store.get_project(cockpit.fid, "api-version")
+    assert row is not None
+    cockpit.store.update_project(row.id, status="cancelled")
+
+    resp = await cockpit.post(f"/v1/factory/factories/{cockpit.fid}/proposals/C-1/undo")
+
+    assert (resp.status_code, error_code(resp)) == (409, "undo_closed")
+    assert _proposal(cockpit).status == "applied"
+
+
+async def test_owner_class_reject_and_undo_need_an_owner(cockpit: Cockpit) -> None:
+    await propose(
+        cockpit,
+        {"op": "create", "project": project("infra", repo="caffeinelabs/infra")},
+    )
+    reject_url = f"/v1/factory/factories/{cockpit.fid}/proposals/C-1/reject"
+
+    by_operator = await cockpit.post(reject_url, {"note": "no"}, user="carol")
+    by_owner = await cockpit.post(reject_url, {"note": "no"})
+
+    assert by_operator.status_code == 403, by_operator.text
+    assert by_owner.status_code == 200, by_owner.text
+
+    await propose(
+        cockpit,
+        {"op": "update", "slug": "api-version", "patch": {"budgets": {"task_usd": 5}}},
+    )
+    applied = await _apply(cockpit, "C-2")
+    assert applied.status_code == 200, applied.text
+    undo_url = f"/v1/factory/factories/{cockpit.fid}/proposals/C-2/undo"
+
+    undo_by_operator = await cockpit.post(undo_url, user="carol")
+    undo_by_owner = await cockpit.post(undo_url)
+
+    assert undo_by_operator.status_code == 403, undo_by_operator.text
+    assert undo_by_owner.status_code == 200, undo_by_owner.text
 
 
 async def test_undo_restores_an_update(cockpit: Cockpit) -> None:
@@ -418,6 +576,11 @@ async def test_people_read_proposals_and_agents_read_projects(cockpit: Cockpit) 
         headers={"X-Test-User": "alice"},
     )
 
+    bad_kind = await cockpit.client.get(
+        f"/v1/factory/factories/{cockpit.fid}/proposals?kind=nope",
+        headers={"X-Test-User": "carol"},
+    )
+    assert (bad_kind.status_code, error_code(bad_kind)) == (400, "invalid_kind")
     assert [p["ref"] for p in listing.json()["data"]] == ["C-1"]
     assert one.json()["proposal"]["ops"][0]["project"]["slug"] == "db-version"
     assert one.json()["proposal"]["decision_ref"].startswith("D-")

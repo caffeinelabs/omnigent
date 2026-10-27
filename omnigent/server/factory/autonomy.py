@@ -17,14 +17,15 @@ owner                  owner                 owner
 =====================  ====================  =================================
 
 Under ``confirm`` every auto cell needs an operator. Over-cap plans never get
-here: validation refuses them.
+here: validation refuses them. Money is the owners': an op that sets, raises or
+removes a USD budget (:func:`raises_budgets`) is of class ``owner``.
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
 from omnigent.factory import LABEL_PREFIX
 
@@ -78,6 +79,39 @@ def autonomy_mode(labels: Mapping[str, str]) -> str:
 def update_class(fields: Iterable[str]) -> OpClass:
     """:returns: ``update_minor`` when only minor fields change, else ``update_major``."""
     return "update_minor" if set(fields) <= MINOR_UPDATE_FIELDS else "update_major"
+
+
+BUDGET_KEYS: Final = ("task_usd", "project_usd")
+
+
+def sent_budgets(body: Any) -> dict[str, float] | None:
+    """:returns: The ``budgets`` a charter body sends (``{}`` clears them), else ``None``."""
+    if "budgets" not in getattr(body, "model_fields_set", ()):
+        return None
+    budgets = getattr(body, "budgets", None)
+    return budgets.model_dump(exclude_none=True) if budgets is not None else {}
+
+
+def raises_budgets(charter: Mapping[str, Any] | None, body: Any) -> bool:
+    """
+    Whether *body* sets, raises or removes a USD cap of *charter* (owners only).
+
+    Lowering a cap, or sending the same caps, does not.
+
+    :param charter: The normalized stored charter, or ``None`` for a new project.
+    :param body: A ``ProjectIn`` or ``CharterPatchIn``.
+    """
+    sent = sent_budgets(body)
+    if sent is None:
+        return False
+    old = (charter or {}).get("budgets") or {}
+    for key in BUDGET_KEYS:
+        before, after = old.get(key), sent.get(key)
+        if before is None and after is None:
+            continue
+        if before is None or after is None or after > before:
+            return True
+    return False
 
 
 def verdict(op_class: OpClass, *, requested: bool, mode: str = DEFAULT_AUTONOMY) -> Verdict:
@@ -135,6 +169,7 @@ __all__ = [
     "AUTONOMY_GRACE",
     "AUTONOMY_MODES",
     "AUTONOMY_REQUESTED",
+    "BUDGET_KEYS",
     "DEFAULT_AUTONOMY",
     "LABEL_AUTONOMY",
     "MINOR_UPDATE_FIELDS",
@@ -145,6 +180,8 @@ __all__ = [
     "autonomy_mode",
     "combine",
     "decide",
+    "raises_budgets",
+    "sent_budgets",
     "update_class",
     "verdict",
 ]
