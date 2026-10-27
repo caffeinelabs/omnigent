@@ -506,8 +506,10 @@ class ToolManager:
         ``sys_session_post``, ``sys_factory_roster``, ``sys_factory_set``,
         ``sys_factory_ask`` and ``sys_factory_pr`` for every role;
         ``sys_factory_spawn`` (a new top-level sandbox) is for ``lead`` only,
-        ``sys_factory_env`` for ``project_lead`` and ``env_keeper``, and
-        ``sys_factory_demo`` for those two and ``demo``. The read-only
+        ``sys_factory_env`` for ``project_lead`` and ``env_keeper``,
+        ``sys_factory_demo`` for those two and ``demo``, and
+        ``sys_factory_project`` for ``lead`` and ``project_lead`` (the server
+        scopes a PL to its own project). The read-only
         ``planner`` gets the roster only. All are runner-dispatched to the
         server's ``/v1/factory`` routes.
         """
@@ -523,6 +525,7 @@ class ToolManager:
             SysFactoryAskTool,
             SysFactoryDemoTool,
             SysFactoryEnvTool,
+            SysFactoryProjectTool,
             SysFactoryPrTool,
             SysFactoryRosterTool,
             SysFactorySetTool,
@@ -545,6 +548,8 @@ class ToolManager:
         ]
         if role == ROLE_LEAD:
             tools.append(SysFactorySpawnTool())
+        if role in (ROLE_LEAD, ROLE_PROJECT_LEAD):
+            tools.append(SysFactoryProjectTool())
         if role in (ROLE_PROJECT_LEAD, ROLE_ENV_KEEPER):
             tools.append(SysFactoryEnvTool())
         if role in (ROLE_PROJECT_LEAD, ROLE_ENV_KEEPER, ROLE_DEMO):

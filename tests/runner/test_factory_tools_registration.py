@@ -4,8 +4,9 @@ The factory tools are an opt-in surface: they appear only for specs that
 declare ``executor.config.factory_role``. Every role gets messaging, roster,
 beacon, ``sys_factory_ask`` and ``sys_factory_pr``; ``sys_factory_spawn`` (a
 new top-level sandbox) is for leads, ``sys_factory_env`` for the project lead
-and env_keeper, and ``sys_factory_demo`` for those two and the demo agent. The
-read-only planner sees the roster only.
+and env_keeper, ``sys_factory_demo`` for those two and the demo agent, and
+``sys_factory_project`` for leads and project leads (the server scopes a PL to
+its own project). The read-only planner sees the roster only.
 Native harnesses see nothing but the relay, so the tools must also ride
 ``build_native_relay_tool_schemas`` — that is what puts
 ``mcp__omnigent__sys_session_post`` in front of Claude Code.
@@ -30,6 +31,7 @@ from omnigent.tools.builtins.factory import (
     SysFactoryAskTool,
     SysFactoryDemoTool,
     SysFactoryEnvTool,
+    SysFactoryProjectTool,
     SysFactoryPrTool,
     SysFactoryRosterTool,
     SysFactorySetTool,
@@ -49,10 +51,11 @@ _EVERY_ROLE = {
 _SPAWN = "sys_factory_spawn"
 _ENV = "sys_factory_env"
 _DEMO = "sys_factory_demo"
-_ALL = _EVERY_ROLE | {_SPAWN, _ENV, _DEMO}
+_PROJECT = "sys_factory_project"
+_ALL = _EVERY_ROLE | {_SPAWN, _ENV, _DEMO, _PROJECT}
 _MATRIX = {
-    "lead": _EVERY_ROLE | {_SPAWN},
-    "project_lead": _EVERY_ROLE | {_ENV, _DEMO},
+    "lead": _EVERY_ROLE | {_SPAWN, _PROJECT},
+    "project_lead": _EVERY_ROLE | {_ENV, _DEMO, _PROJECT},
     "env_keeper": _EVERY_ROLE | {_ENV, _DEMO},
     "ic": _EVERY_ROLE,
     "reviewer": _EVERY_ROLE,
@@ -175,3 +178,19 @@ async def test_execute_tool_routes_factory_tools_to_factory_dispatch() -> None:
         "/v1/factory/roster",
         {"from_session_id": LEAD},
     )
+
+
+def test_project_schema_carries_the_ops_the_server_validates() -> None:
+    from omnigent.factory import PROJECT_OPS
+
+    schema = SysFactoryProjectTool().get_schema()["function"]["parameters"]
+    changes = schema["properties"]["changes"]
+    assert (changes["minItems"], changes["maxItems"]) == (1, 12)
+    item = changes["items"]["properties"]
+    assert tuple(item["op"]["enum"]) == PROJECT_OPS
+    project = item["project"]["properties"]
+    assert {"depends_on", "depends_mode", "human_owner", "budgets", "budget_ics"} <= set(project)
+    assert item["keep"]["enum"] == ["cancel", "umbrella"]
+    # No arguments lists the projects.
+    assert schema["required"] == []
+    assert "withdraw" in schema["properties"] and "analysis_file" in schema["properties"]

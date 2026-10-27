@@ -42,7 +42,6 @@ from omnigent.factory import (
     DECISION_OPTION_DESCRIPTION_MAX,
     DECISION_OPTION_LABEL_MAX,
     DECISION_QUESTION_MAX,
-    DEFAULT_HEARTBEAT_S,
     DEMO_CLASS_MAX_BYTES,
     DEMO_FILE_KINDS,
     DEMO_MANIFEST_KINDS,
@@ -52,13 +51,6 @@ from omnigent.factory import (
     ENV_STATES,
     HEALTH,
     LABEL_BUNDLE,
-    LABEL_HEARTBEAT_S,
-    LABEL_ID,
-    LABEL_PARENT,
-    LABEL_PROJECT,
-    LABEL_ROLE,
-    LABEL_STATE,
-    LABEL_SUPERVISOR,
     LABEL_VERSION,
     MESSAGE_KINDS,
     MESSAGE_MAX_CHARS,
@@ -67,7 +59,6 @@ from omnigent.factory import (
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
     SENTINEL_VERDICTS,
-    STATE_ACTIVE,
     STATE_DONE,
     STATES,
     SUMMARY_MAX_LEN,
@@ -80,6 +71,7 @@ from omnigent.factory import (
     parse_pr_url,
     valid_heartbeat_s,
 )
+from omnigent.factory_spawn import member_create_body, member_labels
 from omnigent.native.native_coding_agents import public_agent_name
 from omnigent.tools.builtins.factory import (
     SPAWN_ROLES,
@@ -87,6 +79,7 @@ from omnigent.tools.builtins.factory import (
     SYS_FACTORY_DEMO,
     SYS_FACTORY_ENV,
     SYS_FACTORY_PR,
+    SYS_FACTORY_PROJECT,
     SYS_FACTORY_ROSTER,
     SYS_FACTORY_SET,
     SYS_FACTORY_SPAWN,
@@ -152,6 +145,16 @@ _FACTORY_ERROR_CODES: Final = frozenset(
         "status_mismatch",
         "sha_mismatch",
         "pr_mismatch",
+        "stale_proposal",
+        "slug_exists",
+        "slug_pending",
+        "over_caps",
+        "cycle",
+        "unmapped_prs",
+        "unknown_project",
+        "project_closed",
+        "proposal_not_pending",
+        "invalid_body",
     }
 )
 # The server re-polls GitHub for up to 10 s before answering sys_factory_pr.
@@ -394,6 +397,10 @@ async def execute_factory_tool(
         return await _report_env(args, server_client=server_client, caller=conversation_id)
     if tool_name == SYS_FACTORY_DEMO:
         return await _publish_demo(
+            args, server_client=server_client, caller=conversation_id, workspace=workspace
+        )
+    if tool_name == SYS_FACTORY_PROJECT:
+        return await _propose_projects(
             args, server_client=server_client, caller=conversation_id, workspace=workspace
         )
     return _error(f"unknown factory tool {tool_name!r}")
@@ -802,6 +809,9 @@ async def _spawn_member(
             members=live,
             message="mark finished members state=done or reuse an existing project lead",
         )
+    stored = await _stored_charter(spawn, server_client=server_client, caller=caller)
+    if (owned := _server_owned(spawn, stored)) is not None:
+        return owned
     if spawn.project and (existing := _live_project_member(members, spawn.project)):
         return _error(
             "duplicate_project",
@@ -820,28 +830,18 @@ async def _spawn_member(
 
     role = spawn.role
     supervisor_id = spawn.supervisor or _default_supervisor(role, caller, members)
-    heartbeat_s = spawn.heartbeat_s
-    labels: dict[str, str] = {
-        LABEL_ID: factory_id,
-        LABEL_ROLE: role,
-        LABEL_PARENT: caller,
-        LABEL_SUPERVISOR: supervisor_id,
-        LABEL_STATE: STATE_ACTIVE,
-        LABEL_HEARTBEAT_S: str(
-            heartbeat_s if heartbeat_s is not None else DEFAULT_HEARTBEAT_S[role]
-        ),
-    }
-    if spawn.project:
-        labels[LABEL_PROJECT] = spawn.project
-    labels.update(await _version_labels(server_client, caller, agent_id))
-    create_body: _JsonObject = {
-        "agent_id": agent_id,
-        "host_type": "managed",
-        "title": spawn.title,
-        "labels": labels,
-    }
-    if spawn.workspaces:
-        create_body["workspaces"] = spawn.workspaces
+    labels = member_labels(
+        factory_id=factory_id,
+        role=role,
+        parent=caller,
+        supervisor=supervisor_id,
+        heartbeat_s=spawn.heartbeat_s,
+        project=spawn.project,
+        extra=await _version_labels(server_client, caller, agent_id),
+    )
+    create_body = member_create_body(
+        agent_id=agent_id, title=spawn.title, labels=labels, workspaces=spawn.workspaces
+    )
     resp = await _request(server_client, "POST", "/v1/sessions", tool_name=tool, body=create_body)
     if isinstance(resp, str):
         return resp
@@ -871,7 +871,7 @@ async def _spawn_member(
     if spawn.project:
         result["project"] = spawn.project
 
-    message, charter = await _brief_with_charter(spawn, server_client=server_client, caller=caller)
+    message, charter = _brief_with_charter(spawn, stored)
     result.update(charter)
     brief = json.loads(
         await _passthrough(
@@ -927,22 +927,20 @@ def append_charter(message: str, charter: str) -> str:
     return f"{head}{separator}{charter}"
 
 
-async def _brief_with_charter(
+async def _stored_charter(
     spawn: _SpawnArgs,
     *,
     server_client: httpx.AsyncClient,
     caller: str,
-) -> tuple[str, _JsonObject]:
+) -> _JsonObject:
     """
-    The brief to deliver: the lead's message plus the project's stored charter.
+    Look up the project's stored charter (best effort).
 
-    Best effort: no project, no stored charter (404) or a failed lookup leave
-    the message unchanged; a failure is reported back as ``charter_error``.
-
-    :returns: ``(message, result fields)``.
+    :returns: The route's body (``text``, ``spawn_owner``, ``pl_session_id``,
+        ``held``), ``{}`` without a project or charter, or ``{"charter_error": …}``.
     """
     if not spawn.project:
-        return spawn.message, {}
+        return {}
     resp = await _request(
         server_client,
         "GET",
@@ -951,14 +949,52 @@ async def _brief_with_charter(
         params={"from_session_id": caller, "project": spawn.project},
     )
     if isinstance(resp, str):
-        return spawn.message, {"charter_error": json.loads(resp)}
+        return {"charter_error": json.loads(resp)}
     if resp.status_code == 404:
-        return spawn.message, {}
+        return {}
     body = _response_body(resp)
     if resp.status_code >= 400:
-        error = _error_payload(resp.status_code, body, resp.text, SYS_FACTORY_SPAWN)
-        return spawn.message, {"charter_error": error}
-    text = body.get("text") if isinstance(body, dict) else None
+        return {
+            "charter_error": _error_payload(resp.status_code, body, resp.text, SYS_FACTORY_SPAWN)
+        }
+    return body if isinstance(body, dict) else {}
+
+
+def _server_owned(spawn: _SpawnArgs, stored: _JsonObject) -> str | None:
+    """
+    Refuse to spawn a PL the server spawns itself (it is live, held or starting).
+
+    :returns: The ``server_owns_spawn`` error, or ``None`` to go ahead (e.g. recovery).
+    """
+    if stored.get("spawn_owner") != "server":
+        return None
+    pl = stored.get("pl_session_id")
+    if not pl and not stored.get("held") and not stored.get("spawning"):
+        return None
+    return _error(
+        "server_owns_spawn",
+        project=spawn.project,
+        session_id=pl,
+        held=bool(stored.get("held")),
+        message=(
+            "the server spawns this project's PL itself; message the live PL, or wait for "
+            "its [Factory notice · PL·<slug> spawned …]"
+        ),
+    )
+
+
+def _brief_with_charter(spawn: _SpawnArgs, stored: _JsonObject) -> tuple[str, _JsonObject]:
+    """
+    The brief to deliver: the lead's message plus the project's stored charter.
+
+    No project, no stored charter or a failed lookup leave the message
+    unchanged; a failure is reported back as ``charter_error``.
+
+    :returns: ``(message, result fields)``.
+    """
+    if "charter_error" in stored:
+        return spawn.message, {"charter_error": stored["charter_error"]}
+    text = stored.get("text")
     if not isinstance(text, str) or not text.strip():
         return spawn.message, {}
     return append_charter(spawn.message, text.strip()), {"charter_attached": True}
@@ -1891,3 +1927,79 @@ async def _publish_demo(
             result["comment_path"] = written
             result["next"] = f"gh pr comment {meta['pr_url']} --body-file {written}"
     return json.dumps(result)
+
+
+_ANALYSIS_MAX_BYTES: Final = 256 * 1024
+_PROJECT_PASSTHROUGH_KEYS: Final = (
+    "changes",
+    "rationale",
+    "reason",
+    "thread",
+    "reply_to",
+    "dedupe_key",
+    "withdraw",
+)
+
+
+def _read_analysis(raw: object, workspace: Path | None) -> tuple[object, str | None]:
+    """
+    Read a planner analysis JSON (``~/factory/plans/<id>.json``) for a proposal.
+
+    :returns: ``(parsed JSON, None)``, or ``(None, tool error)``.
+    """
+    tool = SYS_FACTORY_PROJECT
+    if not isinstance(raw, str) or not raw.strip():
+        return None, _error(f"{tool} 'analysis_file' must be a file path")
+    roots = demo_roots(workspace)
+    candidate = Path(os.path.expanduser(raw.strip()))
+    if not candidate.is_absolute():
+        candidate = roots[0] / candidate
+    real = Path(os.path.realpath(candidate))
+    if not any(real == root or root in real.parents for root in roots):
+        return None, _error(
+            "file_not_allowed", path=raw, message="analysis files live under ~/factory"
+        )
+    if real.suffix.lower() != ".json" or not real.is_file():
+        return None, _error(
+            "file_missing", path=raw, message="analysis_file must be an existing .json"
+        )
+    if real.stat().st_size > _ANALYSIS_MAX_BYTES:
+        return None, _error("file_too_large", path=raw, max_bytes=_ANALYSIS_MAX_BYTES)
+    try:
+        return json.loads(real.read_text(encoding="utf-8")), None
+    except (OSError, ValueError) as exc:
+        return None, _error("invalid_analysis", path=raw, message=str(exc)[:200])
+
+
+async def _propose_projects(
+    args: _JsonObject,
+    *,
+    server_client: httpx.AsyncClient,
+    caller: str,
+    workspace: Path | None,
+) -> str:
+    """
+    ``sys_factory_project``: file a projects proposal, withdraw one, or list projects.
+
+    The server validates and applies; the runner only attaches the planner's
+    analysis file, which lives on this machine.
+    """
+    tool = SYS_FACTORY_PROJECT
+    if not args.get("changes") and not args.get("withdraw"):
+        return await _passthrough(
+            server_client,
+            "GET",
+            "/v1/factory/agent/projects",
+            tool_name=tool,
+            params={"from_session_id": caller},
+        )
+    body: _JsonObject = {"from_session_id": caller, "kind": "projects"}
+    body.update({k: args[k] for k in _PROJECT_PASSTHROUGH_KEYS if args.get(k) is not None})
+    if args.get("analysis_file") is not None:
+        analysis, error = _read_analysis(args["analysis_file"], workspace)
+        if error is not None:
+            return error
+        body["analysis"] = analysis
+    return await _passthrough(
+        server_client, "POST", "/v1/factory/agent/proposals", tool_name=tool, body=body
+    )

@@ -169,3 +169,38 @@ def member(
         "url": f"/c/{session_id}",
         "children": children or [],
     }
+
+
+def pl_create_body(
+    *,
+    agent_id: str,
+    factory_id: str,
+    parent: str,
+    supervisor: str,
+    project: str,
+    heartbeat_s: int,
+    workspace: str,
+) -> dict[str, object]:
+    """
+    The managed ``POST /v1/sessions`` body of a PL spawn.
+
+    Shared by the ``sys_factory_spawn`` tests and the server-spawn tests, so a
+    server-spawned PL is created exactly like a lead-spawned one.
+    """
+    from omnigent import factory as F
+
+    return {
+        "agent_id": agent_id,
+        "host_type": "managed",
+        "title": f"PL · {project}",
+        "labels": {
+            F.LABEL_ID: factory_id,
+            F.LABEL_ROLE: "project_lead",
+            F.LABEL_PARENT: parent,
+            F.LABEL_PROJECT: project,
+            F.LABEL_SUPERVISOR: supervisor,
+            F.LABEL_STATE: "active",
+            F.LABEL_HEARTBEAT_S: str(heartbeat_s),
+        },
+        "workspaces": [workspace],
+    }

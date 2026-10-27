@@ -1,9 +1,10 @@
 """The cockpit report tools on the runner side.
 
-``sys_factory_ask``, ``sys_factory_pr``, ``sys_factory_env`` and
-``sys_factory_demo`` (plus ``stage`` on ``sys_factory_set`` and the charter on
-``sys_factory_spawn``) are thin proxies: they validate locally, stamp the
-caller as ``from_session_id`` and hit one ``/v1/factory/agent`` route. The demo
+``sys_factory_ask``, ``sys_factory_pr``, ``sys_factory_env``,
+``sys_factory_demo`` and ``sys_factory_project`` (plus ``stage`` on
+``sys_factory_set`` and the charter on ``sys_factory_spawn``) are thin
+proxies: they validate locally, stamp the caller as ``from_session_id`` and hit
+one ``/v1/factory/agent`` route. The demo
 tool is the exception that does real work: it decides which local files may
 leave the sandbox and uploads them as multipart.
 """
@@ -810,3 +811,143 @@ def test_demo_roots_follow_symlinks(home: Path, tmp_path: Path) -> None:
     workspace.symlink_to(real)
     roots = factory_dispatch.demo_roots(workspace)
     assert roots == [Path(os.path.realpath(home / "factory")), Path(os.path.realpath(real))]
+
+
+async def test_spawn_refuses_a_pl_the_server_runs() -> None:
+    server = _spawn_server(
+        lambda s: s.on(
+            "GET",
+            "/v1/factory/agent/charter",
+            body={"text": _CHARTER, "spawn_owner": "server", "pl_session_id": "conv_pl_live"},
+        )
+    )
+
+    out = await _call(
+        server,
+        "sys_factory_spawn",
+        {
+            "agent": "factory-pl",
+            "title": "PL · api-version",
+            "message": "m",
+            "project": "api-version",
+        },
+        caller=LEAD,
+        role="lead",
+    )
+
+    assert out["error"] == "server_owns_spawn"
+    assert out["session_id"] == "conv_pl_live"
+    assert server.calls("POST", "/v1/sessions") == []
+
+
+async def test_spawn_of_a_server_project_without_a_pl_is_recovery() -> None:
+    server = _spawn_server(
+        lambda s: s.on(
+            "GET",
+            "/v1/factory/agent/charter",
+            body={"text": _CHARTER, "spawn_owner": "server", "pl_session_id": None, "held": False},
+        )
+    )
+
+    out, message = await _spawn(server)
+
+    assert out["session_id"] == "conv_new"
+    assert message.endswith(_CHARTER)
+
+
+# ── sys_factory_project ──────────────────────────────────────────────────────
+
+
+_PROPOSAL = {"proposal": "C-1", "decision": "D-3", "status": "pending", "warnings": []}
+
+
+async def test_project_files_a_proposal_for_the_caller() -> None:
+    server = FakeServer().on("POST", "/v1/factory/agent/proposals", body=_PROPOSAL)
+    change = {"op": "create", "project": {"slug": "db-version", "goal": "g"}}
+
+    out = await _call(
+        server,
+        "sys_factory_project",
+        {"changes": [change], "rationale": "why", "reply_to": "chat_1", "dedupe_key": "k"},
+        caller=LEAD,
+        role="lead",
+    )
+
+    assert out == _PROPOSAL
+    [call] = server.calls("POST", "/v1/factory/agent/proposals")
+    assert call.body == {
+        "from_session_id": LEAD,
+        "kind": "projects",
+        "changes": [change],
+        "rationale": "why",
+        "reply_to": "chat_1",
+        "dedupe_key": "k",
+    }
+
+
+async def test_project_without_changes_lists_projects_and_withdraw_withdraws() -> None:
+    server = (
+        FakeServer()
+        .on("GET", "/v1/factory/agent/projects", body={"projects": []})
+        .on("POST", "/v1/factory/agent/proposals", body={"status": "withdrawn"})
+    )
+
+    listed = await _call(server, "sys_factory_project", {})
+    withdrawn = await _call(server, "sys_factory_project", {"withdraw": "C-1"})
+
+    assert listed == {"projects": []}
+    assert server.calls("GET", "/v1/factory/agent/projects")[0].params == {"from_session_id": PL}
+    assert withdrawn["status"] == "withdrawn"
+    [call] = server.calls("POST", "/v1/factory/agent/proposals")
+    assert call.body == {"from_session_id": PL, "kind": "projects", "withdraw": "C-1"}
+
+
+async def test_project_errors_keep_the_field_path() -> None:
+    server = FakeServer().on(
+        "POST",
+        "/v1/factory/agent/proposals",
+        status=400,
+        body={
+            "error": {
+                "code": "invalid_body",
+                "message": "slug is 1-48 lowercase letters",
+                "field": "changes[0].project.slug",
+            },
+            "field": "changes[0].project.slug",
+            "message": "slug is 1-48 lowercase letters",
+        },
+    )
+
+    out = await _call(server, "sys_factory_project", {"changes": [{"op": "create"}]})
+
+    assert out["error"] == "invalid_body"
+    assert out["field"] == "changes[0].project.slug"
+    assert out["status"] == 400
+
+
+async def test_project_attaches_the_planner_analysis(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    plans = tmp_path / "factory" / "plans"
+    plans.mkdir(parents=True)
+    (plans / "p1.json").write_text(json.dumps({"hub_files": ["src/app.ts"]}), encoding="utf-8")
+    outside = tmp_path / "elsewhere.json"
+    outside.write_text("{}", encoding="utf-8")
+    server = FakeServer().on("POST", "/v1/factory/agent/proposals", body=_PROPOSAL)
+    change = {"op": "create", "project": {"slug": "a", "goal": "g"}}
+
+    ok = await _call(
+        server,
+        "sys_factory_project",
+        {"changes": [change], "analysis_file": "~/factory/plans/p1.json"},
+    )
+    refused = await _call(
+        server, "sys_factory_project", {"changes": [change], "analysis_file": str(outside)}
+    )
+
+    assert ok == _PROPOSAL
+    [call] = server.calls("POST", "/v1/factory/agent/proposals")
+    assert call.body["analysis"] == {"hub_files": ["src/app.ts"]}
+    assert "analysis_file" not in call.body
+    assert refused["error"] == "file_not_allowed"

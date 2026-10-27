@@ -926,6 +926,18 @@ class SqlAlchemyFactoryStore(FactoryStore):
 
         return run_write_transaction(self._session_immediate, "update_project", write)
 
+    def delete_project(self, project_id: str) -> bool:
+        stmt = delete(SqlFactoryProject).where(
+            SqlFactoryProject.workspace_id == current_workspace_id(),
+            SqlFactoryProject.id == norm_id(project_id),
+        )
+
+        def write(session: Session) -> bool:
+            result = session.execute(stmt.execution_options(synchronize_session=False))
+            return bool(result.rowcount)  # type: ignore[attr-defined]
+
+        return run_write_transaction(self._session_immediate, "delete_factory_project", write)
+
     # ── PRs ─────────────────────────────────────────────────────
 
     def _pr_row(

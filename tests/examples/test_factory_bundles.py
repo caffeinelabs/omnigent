@@ -633,18 +633,64 @@ def test_sub_agents_act_on_the_base(pl: AgentSpec) -> None:
         assert "baseRefName" in text and "`Base:`" in text, label
 
 
-def test_chat_charters_name_the_base_like_stored_ones() -> None:
-    """The lead's chat charter template carries the exact base line the server renders."""
-    from omnigent.entities.factory import FactoryProject
-    from omnigent.server.factory.charter import render_pl_charter
-
-    project = FactoryProject(
-        id="c" * 32, factory_id="f" * 32, slug="s", title="t", repo="r", base_branch="<branch>"
-    )
-    [line] = [x for x in render_pl_charter(project).splitlines() if x.startswith("Base branch:")]
+def test_projects_change_only_through_proposals() -> None:
+    """No hand-written chat charters: every project goes through sys_factory_project."""
     playbook = (_LEAD_DIR / "skills/factory-lead-playbook/SKILL.md").read_text(encoding="utf-8")
-    assert f"\n{line}\n" in playbook
+    assert "Charter template (chat briefs only)" not in playbook
+    assert "CHARTER · <slug>" not in playbook
+    section = _command_section(playbook, "## Projects: only through", ("\n## ",))
+    for token in (
+        "sys_factory_project(changes=[…], rationale=…)",
+        "changes[1].project.slug",
+        "depends_on",
+        "[Factory notice · PL·<slug> spawned by the server",
+    ):
+        assert token in section, token
+    spawning = _command_section(playbook, "## Spawning a PL", ("\n## ",))
+    assert "only for Sentinel" in " ".join(spawning.split())
+    assert "server_owns_spawn" in spawning
     assert "baseRefName" in playbook
+
+
+def test_lead_dispatches_server_spawn_and_proposal_outcomes(lead: AgentSpec) -> None:
+    """The texts the server sends Atlas about projects match a DISPATCH row."""
+    from omnigent.entities.factory import FactoryProject
+    from omnigent.server.factory.proposals import applied_text, closed_text, rejected_text
+    from omnigent.server.factory.spawn import spawned_notice
+
+    prompt = " ".join((lead.instructions or "").split())
+    rows = re.findall(r"`(\[Factory (?:notice · PL·|proposal · )[^`]*\])`", prompt)
+    assert len(rows) == 2, rows
+    project = FactoryProject(id="c" * 32, factory_id="f" * 32, slug="db-version", title="t")
+    texts = [
+        spawned_notice(project, "a" * 32, "C-4"),
+        applied_text("C-4", "bob (owner)", {"spawning": ["db-version"], "held": {}}),
+        rejected_text("C-4", "bob", "too big"),
+        closed_text("C-4", "expired"),
+    ]
+    for text in texts:
+        header = text.split("]", 1)[0] + "]"
+        assert any(_row_pattern(row).fullmatch(header) for row in rows), header
+    assert "sys_factory_project" in prompt
+
+
+def test_pl_starts_from_a_server_brief_and_proposes_splits(pl: AgentSpec) -> None:
+    from omnigent.entities.factory import FactoryProject
+    from omnigent.server.factory.spawn import brief_text
+
+    prompt = " ".join((pl.instructions or "").split())
+    assert "`[Factory brief · …`: the charter. Go to KICKOFF." in prompt
+    project = FactoryProject(id="c" * 32, factory_id="f" * 32, slug="db-version", title="t")
+    brief = brief_text(project, by="bob", via="C-4", mail_id="mail_0123456789abcdef")
+    assert brief.startswith("[Factory brief · ")
+    assert "\nCHARTER · db-version" in brief
+    playbook = (_PL_DIR / "skills/factory-pl-playbook/SKILL.md").read_text(encoding="utf-8")
+    split = " ".join(_command_section(playbook, "## Splitting the project", ("\n## ",)).split())
+    assert 'sys_factory_project(changes=[{op: "split"' in split
+    assert "pr_map" in split
+    rules = " ".join(_command_section(playbook, "## Dispatch rules", ("\n## ",)).split())
+    assert "`budget_ics`" in rules and "Splitting the project" in rules
+    assert "`[Factory proposal · C-<n> …]`" in playbook
 
 
 # A result line a sub-agent ends its turn with, e.g. `PREVIEW SKIPPED tooling-conflict <files>`.

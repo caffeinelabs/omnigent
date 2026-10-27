@@ -21,6 +21,7 @@ from omnigent.factory import (
     PROJECT_KIND_INTEGRATION,
     PROJECT_KIND_WORK,
     PROJECT_KINDS,
+    PROJECT_SLUG_RE,
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
 )
@@ -37,6 +38,14 @@ MAX_PREVIEW_SLOTS: Final = 3
 DEFAULT_BUDGET_ICS: Final = 3
 DEFAULT_BASE_BRANCH: Final = "main"
 FIXED_DOD: Final = "PR ready for human merge"
+DEPENDS_MERGED: Final = "merged"
+DEPENDS_READY: Final = "ready"
+DEPENDS_MODES: Final = (DEPENDS_MERGED, DEPENDS_READY)
+"""``depends_mode``: a dependency counts once its PR merged, or once it is ready for merge."""
+SPAWN_SERVER: Final = "server"
+SPAWN_LEAD: Final = "lead"
+SPAWN_OWNERS: Final = (SPAWN_SERVER, SPAWN_LEAD)
+"""``spawn_owner``: who starts the project's PL (the server, or the lead from a brief)."""
 DEFAULT_BASE_ENV: Final = "OMNIGENT_FACTORY_DEFAULT_BASE"
 """``owner/repo#branch`` new factories default to, e.g. ``caffeinelabs/app#temp-main``."""
 
@@ -118,6 +127,25 @@ def _int(value: Any, default: int, low: int, high: int) -> int:
     return max(low, min(high, number))
 
 
+def _slugs(value: Any) -> list[str]:
+    out: list[str] = []
+    for item in _texts(value):
+        if PROJECT_SLUG_RE.match(item) and item not in out:
+            out.append(item)
+    return out
+
+
+def _budgets(value: Any) -> dict[str, float]:
+    if not isinstance(value, Mapping):
+        return {}
+    out: dict[str, float] = {}
+    for key in ("task_usd", "project_usd"):
+        raw = value.get(key)
+        if isinstance(raw, int | float) and not isinstance(raw, bool) and raw >= 0:
+            out[key] = float(raw)
+    return out
+
+
 def normalize_charter(
     raw: Mapping[str, Any] | None, *, tooling_ref: str | None = None
 ) -> dict[str, Any]:
@@ -133,8 +161,10 @@ def normalize_charter(
     :param tooling_ref: Preview tooling ref to record when previews are on.
     :returns: ``{kind, goal, dod, scope_paths, constraints, env_needed,
         preview{enabled, slots, tooling_ref?}, preview_slots, demo_focus, demo,
-        budget_ics, version_path?, health_path?}``; ``kind`` is ``work`` unless
-        it is one of :data:`~omnigent.factory.PROJECT_KINDS`.
+        budget_ics, version_path?, health_path?, depends_on?, depends_mode?,
+        human_owner?, budgets?, spawn_owner?}``; ``kind`` is ``work`` unless it is
+        one of :data:`~omnigent.factory.PROJECT_KINDS`. The optional keys are
+        stored only when set.
     """
     src = dict(raw or {})
     preview_in = src.get("preview") if isinstance(src.get("preview"), Mapping) else {}
@@ -169,6 +199,19 @@ def normalize_charter(
         path = _text(src.get(key))
         if path:
             out[key] = path
+    depends_on = _slugs(src.get("depends_on"))
+    if depends_on:
+        out["depends_on"] = depends_on
+        mode = src.get("depends_mode")
+        out["depends_mode"] = mode if mode in DEPENDS_MODES else DEPENDS_MERGED
+    owner = _text(src.get("human_owner"))
+    if owner:
+        out["human_owner"] = owner
+    budgets = _budgets(src.get("budgets"))
+    if budgets:
+        out["budgets"] = budgets
+    if src.get("spawn_owner") in SPAWN_OWNERS:
+        out["spawn_owner"] = src["spawn_owner"]
     return out
 
 
@@ -277,6 +320,7 @@ def render_pl_charter(project: FactoryProject) -> str:
         lines.append("Demo focus: none (no env)")
     lines += [
         f"IC budget: up to {charter['budget_ics']} ICs at once",
+        *_optional_lines(charter),
         (
             f"Merge policy: human. Humans merge {repo}; the factory never merges. Report "
             "READY FOR HUMAN MERGE <url> to your lead once every gate is green; never run "
@@ -284,6 +328,43 @@ def render_pl_charter(project: FactoryProject) -> str:
         ),
     ]
     return "\n".join(lines)
+
+
+def _optional_lines(charter: Mapping[str, Any]) -> list[str]:
+    """Charter lines for fields only some projects set (none for most)."""
+    lines: list[str] = []
+    if charter.get("depends_on"):
+        until = (
+            "ready for human merge"
+            if charter.get("depends_mode") == DEPENDS_READY
+            else "merged into the base"
+        )
+        lines.append(
+            f"Depends on: {', '.join(charter['depends_on'])} (the server starts you once "
+            f"each is {until})"
+        )
+    if charter.get("human_owner"):
+        lines.append(f"Human owner: {charter['human_owner']}")
+    budgets = charter.get("budgets") or {}
+    if budgets:
+        parts = [
+            f"{label} ${budgets[key]:g}"
+            for key, label in (("task_usd", "per task"), ("project_usd", "project"))
+            if key in budgets
+        ]
+        lines.append(f"Budgets: {' · '.join(parts)}")
+    return lines
+
+
+def project_depends_on(project: FactoryProject) -> tuple[list[str], str]:
+    """:returns: ``(depends_on slugs, depends_mode)`` of the project's charter."""
+    charter = normalize_charter(project.charter)
+    return list(charter.get("depends_on") or []), charter.get("depends_mode", DEPENDS_MERGED)
+
+
+def spawn_owner(project: FactoryProject) -> str | None:
+    """:returns: ``server`` or ``lead`` when the charter records who spawns the PL."""
+    return normalize_charter(project.charter).get("spawn_owner")
 
 
 def _project_line(index: int, project: FactoryProject) -> str:
@@ -310,6 +391,9 @@ def render_kickoff_brief(
     projects: Sequence[FactoryProject],
     *,
     factory_id: str | None = None,
+    brief: str | None = None,
+    held: Sequence[str] = (),
+    reply_to: str | None = None,
 ) -> str:
     """
     Render the brief the root lead receives when a human starts a factory.
@@ -319,11 +403,15 @@ def render_kickoff_brief(
     :param human: Display name of the human who started it.
     :param projects: The stored project rows, in start order.
     :param factory_id: Root session id, for the cockpit link.
+    :param brief: The human's description of the work, when they gave one.
+    :param held: Projects waiting on dependencies: the server spawns their PLs.
+    :param reply_to: The brief's mail id, which proposals answering it cite.
     :returns: Plain text (the server adds the envelope).
     """
     beats = CADENCE_HEARTBEATS.get(cadence, CADENCE_HEARTBEATS[CADENCE_DEMO])
     lead_s, pl_s = beats[ROLE_LEAD], beats[ROLE_PROJECT_LEAD]
     integration = [p.slug for p in projects if project_kind(p) == PROJECT_KIND_INTEGRATION]
+    planning = len(integration) == len(projects)
     lines = [
         f"FACTORY BRIEF · {name}",
         (
@@ -333,31 +421,61 @@ def render_kickoff_brief(
     ]
     if factory_id:
         lines.append(f"Cockpit: /factory/{factory_id}")
-    lines += [
-        "",
-        (
-            f"Projects ({len(projects)}). Their charters are stored on the server and "
-            "attach automatically when you spawn each PL:"
-        ),
-        *(_project_line(i, p) for i, p in enumerate(projects, start=1)),
-        "",
-        "First turn:",
-        (
-            f"1. sys_factory_set(heartbeat_s={lead_s}). If the roster has no other lead, "
-            f"spawn Sentinel (playbook charter, heartbeat_s={lead_s})."
-        ),
-        (
-            "2. Spawn one PL per project, in the order above, never a duplicate: "
+    if projects:
+        lines += [
+            "",
+            (
+                f"Projects ({len(projects)}). Their charters are stored on the server and "
+                "attach automatically when you spawn each PL:"
+            ),
+            *(_project_line(i, p) for i, p in enumerate(projects, start=1)),
+        ]
+    if brief:
+        lines += ["", f"Brief from {human}:", brief.strip()]
+
+    def spawn(heartbeat_s: int) -> str:
+        return (
             'sys_factory_spawn(agent="factory-pl", role="project_lead", project="<slug>", '
             'title="PL · <slug>", workspaces=["https://github.com/<repo>#<branch>"], '
-            f'heartbeat_s={pl_s}, message="Start. Your charter follows.").'
+            f'heartbeat_s={heartbeat_s}, message="Start. Your charter follows.").'
+        )
+
+    if planning:
+        step2 = (
+            "2. No projects yet: plan them from the brief. Propose them in ONE call, "
+            'sys_factory_project(changes=[{op: "create", project: {slug, title, goal, dod, '
+            "scope_paths, demo_focus, depends_on}}, …], rationale=<why this split>"
+            + (f', reply_to="{reply_to}"' if reply_to else "")
+            + "): one project per independently reviewable outcome, shared groundwork "
+            "first and the rest depends_on it. The server applies it (or asks the human) "
+            "and spawns each PL itself; never sys_factory_spawn them."
+        )
+        if integration:
+            step2 += f" Spawn {', '.join(integration)} yourself: {spawn(0)}"
+    else:
+        step2 = (
+            f"2. Spawn one PL per project, in the order above, never a duplicate: {spawn(pl_s)}"
             + (
                 f" Spawn {', '.join(integration)} the same way but with heartbeat_s=0: "
                 "it keeps the live env at its base head and wakes only on notices."
                 if integration
                 else ""
             )
+            + (
+                f" Do not spawn {', '.join(held)}: each waits for its depends_on, and the "
+                "server spawns its PL then."
+                if held
+                else ""
+            )
+        )
+    lines += [
+        "",
+        "First turn:",
+        (
+            f"1. sys_factory_set(heartbeat_s={lead_s}). If the roster has no other lead, "
+            f"spawn Sentinel (playbook charter, heartbeat_s={lead_s})."
         ),
+        step2,
         (
             "3. Reply with at most 5 lines and the cockpit link. Questions for the human "
             "go through sys_factory_ask, not chat."
@@ -375,16 +493,24 @@ __all__ = [
     "BRANCH_RE",
     "DEFAULT_BASE_BRANCH",
     "DEFAULT_BASE_ENV",
+    "DEPENDS_MERGED",
+    "DEPENDS_MODES",
+    "DEPENDS_READY",
     "FIXED_DOD",
     "PREVIEW_TOOLING_REF_ENV",
     "REPO_RE",
     "RETIRED_PREVIEW_TOOLING_REFS",
+    "SPAWN_LEAD",
+    "SPAWN_OWNERS",
+    "SPAWN_SERVER",
     "normalize_charter",
     "preview_tooling_ref",
     "project_base_branch",
+    "project_depends_on",
     "project_kind",
     "render_kickoff_brief",
     "render_pl_charter",
     "resolve_base_branch",
     "server_default_base",
+    "spawn_owner",
 ]

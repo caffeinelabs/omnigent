@@ -29,7 +29,9 @@ export const FACTORY_STAGES: readonly FactoryStage[] = [
 ];
 
 export type AgentStage = "planning" | "building" | "review" | "verify" | "ready" | "merged";
-export type FactoryOverlay = "paused" | "blocked" | "failed" | "pr_closed";
+/** `cancelled` / `merged` close a project; `waiting` holds it on its `depends_on`. */
+export type FactoryOverlay =
+  "paused" | "blocked" | "failed" | "pr_closed" | "cancelled" | "merged" | "waiting";
 export type FactoryRole =
   "lead" | "project_lead" | "ic" | "env_keeper" | "reviewer" | "demo" | "planner";
 export type MemberState = "active" | "paused" | "done";

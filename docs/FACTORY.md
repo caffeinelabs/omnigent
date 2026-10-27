@@ -250,13 +250,16 @@ if they stay silent the board is still right.
 | Route | Who | What |
 |---|---|---|
 | `GET /v1/factory/factories`, `GET /v1/factory/factories/{fid}` (ETag), `…/events` | human (READ on the root) | Factory list, the snapshot (projects, PRs with gates, previews, demos, decisions, members, health), the activity log. |
-| `POST /v1/factory/factories`, `POST …/{fid}/projects`, `PATCH …/projects/{slug}` | human | Start a factory from the form (stores charters, queues `[Factory brief … via cockpit]`), add or edit a project. |
+| `POST /v1/factory/factories`, `POST …/{fid}/projects`, `PATCH …/projects/{slug}` | human | Start a factory from the form (stores charters, queues `[Factory brief … via cockpit]`; `projects` may be empty with a `brief`), add or edit a project. |
+| `POST …/{fid}/projects/{slug}/cancel`, `…/split`, `…/merge` | human (EDIT) | Project lifecycle (see Projects and proposals). |
+| `GET …/{fid}/proposals?kind=&status=`, `GET …/proposals/{ref}`, `POST …/proposals/{ref}/apply` (`{changes?}`), `…/reject` (`{note?}`), `…/undo` | human (EDIT; MANAGE for an owner-class proposal) | Proposals `C-<n>`; apply and reject answer the mirrored decision, so one of two clicks wins. |
 | `POST /v1/factory/factories/{fid}/control` | human (EDIT; MANAGE for STOP, RESTART, RELAUNCH) | PAUSE, RESUME, STOP, RESTART, RELAUNCH, cadence, PREVIEW / PREVIEW_DOWN of a PR, ENV STATUS: a server-stamped `[Factory control …]` to the members. |
 | `GET /v1/factory/decisions`, `POST …/decisions/{id}/answer`, `…/withdraw` | human | Open decisions (also in `/inbox`); the answer is delivered to the asker as `[Factory decision · D-<n> answered …]`. |
 | `POST /v1/factory/prs/{id}/feedback`, `…/refresh` | human | Approve or request changes (`[Factory review …]` to the PL); re-poll GitHub now. |
 | `GET /v1/factory/prs/{id}/preview` | human | Stable live-preview link: 302 to the current preview app URL, or back to the cockpit when there is none. |
 | `GET /v1/factory/demos/{demo_id}/files/{file_id}` | human (READ on the PL) | Demo files with Range/206 (a ranged read of the store) and ETag; only images and video inline, never HTML or SVG. |
 | `POST /v1/factory/agent/decisions`, `POST …/agent/prs`, `PUT …/agent/envs`, `POST …/agent/demos` (multipart), `GET …/agent/charter` | runner (the tools below) | Agent reports. |
+| `POST /v1/factory/agent/proposals`, `GET …/agent/projects` | runner (`sys_factory_project`) | Propose project changes; leads for every project, a PL for its own. |
 | `GET /v1/factory/preflight` | human | GitHub connected, agents seeded, sandbox host, factory enabled; `default_repo`, `default_base` and `max_projects` for the start form. |
 | `GET /v1/factory/factories/{fid}/spans?kind=&project=&pr_id=&task_id=&since=`, `GET /v1/factory/prs/{id}/timeline`, `GET …/{fid}/cost?group_by=day,project,role,agent,model`, `GET …/{fid}/export?tables=&format=ndjson\|csv` | human (READ on the root; hidden projects dropped) | Telemetry (see below). The export streams and never carries transcript content. |
 
@@ -269,6 +272,49 @@ if they stay silent the board is still right.
 | `sys_factory_env(state, env_id, urls, deployed{sha, ref, tooling_overlay?}, pr?, namespace?, resources?, note?)` | `project_lead`, `env_keeper` | Report the dev env (no `pr`) or the factory preview of PR `pr`. `state=deploying` beyond `OMNIGENT_FACTORY_MAX_PREVIEWS` live previews is refused with `409 preview_cap` and park candidates. |
 | `sys_factory_demo(pr_url, head_sha, title, manifest_path?, files?, …)` | `project_lead`, `env_keeper`, `demo` | Upload a demo (with `manifest_path`, everything the harness's `demo.json` lists) and get back `comment_markdown` / `comment_path` to post on the PR. |
 | `sys_factory_set(stage=…)` | `project_lead` on itself | Claim the project's stage; the cockpit shows it next to the stage it derives. |
+| `sys_factory_project(changes, rationale, reason?, reply_to?, analysis_file?, dedupe_key?, withdraw?)` | `lead` (every op), `project_lead` (update, split or cancel of its own project) | Propose 1-12 project changes as one `C-<n>`; no arguments lists the projects. |
+
+### Projects and proposals
+
+Projects change through one write path, `server/factory/projects.py`: create,
+update, cancel, split and merge cores that the forms, the human routes and
+applied proposals call with the acting person, agent or the server.
+
+- **Lifecycle.** `factory_projects.status` is `active`, `cancelled`, `merged`
+  (`parent_slug` names the survivor) or `done`. Cancel stops the PL (or
+  pauses it with previews kept) and leaves its PRs open. Split and merge move
+  PRs only through `pr_map`; an open PR left on a closing project refuses
+  the plan with `unmapped_prs`, and the receiving PL's CHARTER UPDATE names
+  the inherited PRs to preview again. The snapshot overlays `cancelled`,
+  `merged → <slug>` and `waiting on …`, and folds closed projects last.
+- **Proposals** (`server/factory/proposals.py`). `sys_factory_project` is
+  validated with the cockpit's models (errors carry `changes[1].project.slug`),
+  against slugs (also those of pending proposals), the project and pod caps,
+  the factory's repos and default base, `depends_on` cycles (409 `cycle` with
+  its path) and scope overlaps (a warning). The autonomy policy
+  (`server/factory/autonomy.py`, root label `omnigent.factory.autonomy_projects`:
+  `confirm`, `requested` by default, or `grace`) decides what applies at once
+  (a create a person asked for, `reply_to` a Room message or the start
+  brief's mail id) with a 10-minute Undo; the rest waits on a `proposal`
+  decision (Apply, Edit & apply, Reject) that re-checks `based_on` (409
+  `stale_proposal`). Pending proposals expire after 72 h; the proposer gets
+  `[Factory proposal · C-<n> applied|rejected|expired|undone …]`.
+- **Server spawn** (`server/factory/spawn.py`). An applied project's PL is
+  created by the server with `sys_factory_spawn`'s exact body, in process,
+  as the factory's creator (a 300 s runner token), then briefed (`[Factory
+  brief · from <who> via C-<n>`), logged (`member.spawned`) and announced to
+  Atlas (`[Factory notice · PL·<slug> spawned by the server · C-<n>]`). Over
+  `factory_max_pods` it opens a decision for owners and spawns once a pod is
+  free. After two failed creates, without a runner token (header auth), or
+  with the root label `omnigent.factory.engine_spawn=lead`, Atlas is mailed
+  the spawn call instead. `sys_factory_spawn` answers `server_owns_spawn` for
+  a PL the server runs.
+- **Dependencies** (`server/factory/gating.py`). A project waits on its
+  `depends_on` (`project.held`) until each dependency's PR merged
+  (`depends_mode=merged`) or is ready for human merge (`ready`); release runs
+  on `stage.changed`, `pr.merged`, `pr.ready`, `base.moved` and a minute sweep
+  (`project.released`, then the spawn). The sweep also finishes a spawn a
+  restart cut off, once.
 
 ### People
 
@@ -625,7 +671,7 @@ enforced in code.
 | No writes to `caffeinelabs/infra`; none to `caffeinelabs/omnigent` outside the `smith` profile. | `deny_repos`; `caffeinelabs/infra` is denied whatever a spec passes. The `smith` profile (`write_repos: [caffeinelabs/omnigent]`, `push_ref_prefixes: [factory/self/]`, never merges) is registered for Tier 2 and unused while Tier 2 is off. |
 | Factory agents always run fenced, and never run a bundle of their own making. | `server/bundles.validate_agent_bundle` rejects any (sub-)agent spec with `executor.config.factory_role` that lacks an unconditional `factory_role_guard` with the same role plus `blast_radius`. `sys_session_create(config_path=…)` from a session whose root carries `omnigent.factory.id` gets 403 `factory_custom_bundle_denied` (`server/factory/custom_bundle.py`). |
 | Human levers come from humans. | `server/factory/origin.py:require_human_origin` on every cockpit write route (start, add project, charter, control, decision answer and withdraw, PR feedback and refresh; new human routes use `HUMAN_ORIGIN` too). It answers 403 `human_only` when the request carries the runner tunnel token header, a runner bearer (`mint_runner_token` stamps `"org": "runner"`), or an untrusted `Origin`. A person's cookie and their own CLI bearer pass. In accounts mode, `/auth/magic`, `/auth/users/me/password`, `/auth/invite` and `/auth/users/{id}/reset` refuse runners too, so a runner bearer never becomes a browser cookie, a password or an account. |
-| Agents' label writes are audited; server-only labels stay out of agents' reach. | `PATCH /v1/factory/sessions/{id}` emits `label.changed {field, label, from, to, by, by_kind, by_role, on_behalf_of}` for each label it changes, and refuses `def_version`, `default_repo`, `default_base`, `mode`, `engine_mode` and `autonomy_projects` with 422 `server_only_label`. The generic `PATCH /v1/sessions/{id}` refuses every `omnigent.factory.*` label from a runner (its tunnel header or bearer) with 403, so an agent cannot route around the audit. A person with EDIT can still set them there. |
+| Agents' label writes are audited; server-only labels stay out of agents' reach. | `PATCH /v1/factory/sessions/{id}` emits `label.changed {field, label, from, to, by, by_kind, by_role, on_behalf_of}` for each label it changes, and refuses `def_version`, `default_repo`, `default_base`, `mode`, `engine_mode`, `autonomy_projects` and `engine_spawn` with 422 `server_only_label`. The generic `PATCH /v1/sessions/{id}` refuses every `omnigent.factory.*` label from a runner (its tunnel header or bearer) with 403, so an agent cannot route around the audit. A person with EDIT can still set them there. |
 | Invariants hold even if a bundle is wrong. | The admin default policy `factory_invariants` ([`policies/builtins/factory_invariants.py`](../omnigent/policies/builtins/factory_invariants.py)), seeded into the server-wide defaults when `OMNIGENT_FACTORY_ENABLED=1` (`OMNIGENT_FACTORY_INVARIANTS=0` leaves it out), repeats the push, deny-repo, merge and knob rules for every session whose labels carry `omnigent.factory.*`. Admin policies run after the spec's and short-circuit on DENY. |
 
 **The honest limit.** The guard is a safety net against accidents, not a

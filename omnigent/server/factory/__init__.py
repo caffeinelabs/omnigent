@@ -73,6 +73,7 @@ def register_factory_routes(
         create_factory_router,
         factory_error_handler,
     )
+    from omnigent.server.factory.spawn import ASGI_APP_ATTR
     from omnigent.stores.factory_store import InMemoryFactoryStore
 
     if factory_artifact_store is None:
@@ -96,6 +97,8 @@ def register_factory_routes(
             factory_artifact_store=factory_artifact_store,
         ),
     )
+    # The server spawns PLs through its own app, in process (see factory.spawn).
+    setattr(app.state, ASGI_APP_ATTR, app)
     app.add_exception_handler(FactoryRouteError, factory_error_handler)
     app.include_router(create_factory_router())
     include_routers(app)

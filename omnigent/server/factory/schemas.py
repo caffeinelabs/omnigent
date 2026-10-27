@@ -19,7 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 Stage = Literal["queued", "planning", "building", "review", "verify", "ready", "merged", "done"]
 AgentStage = Literal["planning", "building", "review", "verify", "ready", "merged"]
-Overlay = Literal["paused", "blocked", "failed", "pr_closed"]
+Overlay = Literal["paused", "blocked", "failed", "pr_closed", "cancelled", "merged", "waiting"]
 Role = Literal["lead", "project_lead", "ic", "env_keeper", "reviewer", "demo", "planner"]
 MemberState = Literal["active", "paused", "done"]
 Cadence = Literal["demo", "normal"]

@@ -1,6 +1,6 @@
 ---
 name: factory-lead-playbook
-description: Lead playbook for the Omnigent software factory - first-turn bootstrap from a cockpit brief or a chat brief, spawning project leads (stored charters attach automatically), the chat charter and Sentinel charter templates, the ledger format, the message dispatch table, the human commands (status, pause, resume, stop factory), questions through sys_factory_ask, the ready-for-human-merge flow and the 5-line digest.
+description: Lead playbook for the Omnigent software factory - first-turn bootstrap from a cockpit brief, projects only through sys_factory_project (the server spawns their PLs), spawning project leads from a kickoff brief (stored charters attach automatically), the Sentinel charter template, the ledger format, the message dispatch table, the human commands (status, pause, resume, stop factory), questions through sys_factory_ask, the ready-for-human-merge flow and the 5-line digest.
 ---
 
 # Factory lead playbook
@@ -13,7 +13,8 @@ description: Lead playbook for the Omnigent software factory - first-turn bootst
 3. Call `sys_factory_set(heartbeat_s=3600)`, or the brief's value (300 in demo).
 4. If you are Atlas and there is no peer lead, spawn Sentinel (template below)
    with `title="Sentinel"`. Keep the returned `session_id`.
-5. Spawn one PL per project (see Spawning a PL).
+5. Spawn one PL per project the brief lists (see Spawning a PL), or propose
+   the projects of a brief that lists none (see Projects).
 6. Write the ledger and reply to the human with at most 5 lines and the
    cockpit link `/factory/<factory_id>`.
 
@@ -23,14 +24,35 @@ server. Follow it in order: Sentinel, then one PL per project with
 `message="Start. Your charter follows."`; the stored charter is appended to
 the PL's brief automatically. Questions go through `sys_factory_ask`, not chat.
 
-**From chat.** The human typed the projects. Write a charter per project from
-the template below and pass it as the PL's `message`.
+**From chat.** The human asked for projects: propose them with
+`sys_factory_project` (see Projects). Never write a charter by hand.
 
 If your first message is a `[Factory message · ... kind=brief]` that contains
 a SENTINEL CHARTER, you are Sentinel. Copy the charter into your ledger, set
 your heartbeat, and end the turn.
 
+## Projects: only through `sys_factory_project`
+
+Every project is created, changed, split, merged or cancelled with
+`sys_factory_project(changes=[…], rationale=…)`; one call is one proposal
+`C-<n>` of 1-12 changes.
+- A create a human asked for (`reply_to=` their message or brief id) applies
+  at once with Undo. Anything structural, or anything you start on your own,
+  waits for a human on its decision `D-<n>`: do not ask again.
+- Errors name the field (`changes[1].project.slug`): fix it and call again.
+  `slug_exists`: another slug. `over_caps`: finish or cancel a project
+  first. `cycle`: fix `depends_on`. `stale_proposal`: re-read and propose again.
+- Shared groundwork is its own project that the others `depends_on`. The
+  server holds those ("waiting on …") and spawns each PL once its
+  dependencies merged (or are ready for human merge, with `depends_mode`).
+- The server spawns every PL of an applied project. On
+  `[Factory notice · PL·<slug> spawned by the server`, update the ledger.
+
 ## Spawning a PL
+
+`sys_factory_spawn` is only for Sentinel, the projects of a cockpit kickoff
+brief, a `[Factory brief … Spawn its PL now` request (the server's fallback)
+and recovery. `server_owns_spawn` means the server runs that PL already.
 
 ```
 sys_factory_spawn(
@@ -45,8 +67,7 @@ sys_factory_spawn(
   sandbox takes minutes to come up, and the brief is delivered when it is up.
   Do not wait for it. Unless the result has `charter_attached: true`, the PL
   got no stored charter (none exists, or the lookup failed: `charter_error`):
-  send the charter yourself, from the template below, with
-  `sys_session_post(to=<PL id>, kind="brief", message=<charter>)`.
+  ask the human with `sys_factory_ask`.
 - Slugs are short kebab-case names, e.g. `api-version`.
 - Check the roster before spawning. A slug that already has a member that is
   not `done` is refused with `duplicate_project`: message that PL instead, or
@@ -58,29 +79,6 @@ sys_factory_spawn(
 - An `agent_not_found` error means the built-in is not seeded. Ask the human.
 - A `pod_cap` error means the roster is at `factory_max_pods`. Do not retry.
   Finish or pause a project, or ask the human.
-
-## Charter template (chat briefs only)
-
-`<branch>` is the project's base branch, the one the human named (default
-`main`, e.g. `temp-main` for a test base). Use the same branch in the PL's
-`workspaces`; every PR of the project targets it.
-
-```
-CHARTER · <slug>
-Goal: <one sentence>
-Definition of Done:
-- PR ready for human merge: CI green, review and verify markers at the head, live preview and a recorded demo
-- <observable item, e.g. `curl -fsS {api}/version` → 200 with {...}>
-Repo#branch: caffeinelabs/<repo>#<branch> · branches factory/<slug>/<task>
-Base branch: <branch> (open every PR against it; the dev env tracks origin/<branch>)
-Scope paths: <globs ICs may touch>
-Constraints: <repo AGENTS.md rules; no protected paths; anything the human said>
-Env needed: yes · factory previews: on, one per runnable PR at its head, up to 2 at once   (or: Env needed: no · label PRs factory:no-env (no preview, no demo))
-Demo focus: <what reviewers must see in each demo>
-IC budget: up to <n> ICs at once (6 max)
-Merge policy: human. Humans merge caffeinelabs/<repo>; the factory never merges. Report READY FOR HUMAN MERGE <url> to your lead once every gate is green; never run `gh pr merge` or the merge gate.
-Lead: <your session id> (parent) · Supervisor: <Sentinel id>
-```
 
 ## Sentinel charter template
 

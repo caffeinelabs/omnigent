@@ -61,6 +61,7 @@ from omnigent.server.factory.base import base_view
 from omnigent.server.factory.charter import normalize_charter
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.envelope import display_title
+from omnigent.server.factory.gating import unmet_dependencies
 from omnigent.server.factory.launch import launch_drift
 from omnigent.server.factory.membership import factory_members, load_session_spec
 from omnigent.server.factory.notify import parse_iso
@@ -258,6 +259,7 @@ def project_stage(
     pl: Conversation | None,
     open_decisions: Sequence[FactoryDecision],
     pending_briefs: set[str],
+    waiting_on: Sequence[str] = (),
 ) -> StageResult:
     """:returns: The derived stage of *project* (see :func:`.stage.derive_stage`)."""
     own = [p for p in prs if p.project_slug == project.slug]
@@ -270,6 +272,7 @@ def project_stage(
         open_decisions,
         brief_delivered=brief_delivered,
         sandbox_failed=sandbox == "failed",
+        waiting_on=waiting_on,
     )
 
 
@@ -316,6 +319,7 @@ class _Loaded:
     harness: dict[str, str | None]
     drift: dict[str, dict[str, Any] | None]
     costs: dict[str, float | None]
+    proposals_pending: int = 0
 
 
 def _harness(
@@ -378,6 +382,9 @@ def _load(deps: FactoryDeps, factory_id: str, now: float) -> _Loaded:
         harness=harness,
         drift={m.id: launch_drift(m, deps) for m in members},
         costs={m.id: subtree_cost(m, store) for m in members},
+        proposals_pending=len(
+            fstore.list_proposals(factory_id, status=["pending", "awaiting_cosign"], limit=500)
+        ),
     )
 
 
@@ -760,6 +767,22 @@ def _project_view(
         "provisioning": provisioning,
         "keep_previews": keep,
         "paused_by": paused_by.get(project.slug) if result.overlay == "paused" else None,
+        **_lifecycle(project),
+    }
+
+
+def _lifecycle(project: FactoryProject) -> dict[str, Any]:
+    """The project's kind, lifecycle status and dependencies (round-3 fields)."""
+    charter = normalize_charter(project.charter)
+    return {
+        "kind": charter["kind"],
+        "status": project.status,
+        "parent_slug": project.parent_slug,
+        "closed_at": project.closed_at,
+        "depends_on": charter.get("depends_on") or None,
+        "depends_mode": charter.get("depends_mode"),
+        "human_owner": charter.get("human_owner"),
+        "def_version": project.def_version,
     }
 
 
@@ -832,9 +855,17 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
     paused = _paused_by(loaded.controls)
     project_views: list[dict[str, Any]] = []
     project_pl: dict[str, str | None] = {}
+    by_slug = {p.slug: p for p in projects}
     for project in projects:
         pl = pick_pl(project, project.slug, loaded.members)
-        result = project_stage(project, loaded.prs, pl, loaded.open_decisions, pending)
+        waiting = (
+            unmet_dependencies(project, by_slug, loaded.prs)
+            if pl is None and project.status == "active"
+            else []
+        )
+        result = project_stage(
+            project, loaded.prs, pl, loaded.open_decisions, pending, waiting_on=waiting
+        )
         project_pl[project.slug] = pl.id if pl is not None else None
         project_views.append(
             _project_view(
@@ -849,6 +880,8 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
             )
         )
 
+    # Closed projects (cancelled, merged into another, done) fold below the live ones.
+    project_views.sort(key=lambda v: v.get("status") not in (None, "active"))
     demos_by_pr: dict[tuple[str, int], list[FactoryDemo]] = {}
     for demo in loaded.demos:  # newest first
         demos_by_pr.setdefault((demo.repo, demo.pr_number), []).append(demo)
@@ -907,6 +940,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
         "hidden_projects": 0,
         "totals": {},
         "server_time": int(now),
+        "counts": {"proposals_pending": loaded.proposals_pending},
     }
     body["totals"] = _totals(body, cost)
     validated = schemas.FactorySnapshot.model_validate(body).model_dump(mode="json")
@@ -1071,11 +1105,12 @@ def snapshot_etag(body: Mapping[str, Any]) -> str:
 def summary_from(body: Mapping[str, Any]) -> dict[str, Any]:
     """:returns: The ``FactorySummary`` JSON of a (filtered) snapshot."""
     factory = body["factory"]
-    # The live base env is not pipeline work: neither counted nor totalled.
+    # The live base env is not pipeline work, and closed projects are folded away.
     work = [
         p
         for p in body["projects"]
         if (p.get("charter") or {}).get("kind") != PROJECT_KIND_INTEGRATION
+        and p.get("status") in (None, "active")
     ]
     counts: dict[str, int] = {}
     for project in work:

@@ -55,6 +55,17 @@ describe("card ordering", () => {
     ]);
   });
 
+  it("folds cancelled and merged projects in with the done ones", () => {
+    const { active, done } = boardSections([
+      project("live", { stage: "building" }),
+      project("cancelled", { stage: "planning", overlay: "cancelled", status: "cancelled" }),
+      project("merged", { stage: "queued", overlay: "merged", status: "merged" }),
+      project("waiting", { stage: "queued", overlay: "waiting" }),
+    ]);
+    expect(active.map((p) => p.slug)).toEqual(["live", "waiting"]);
+    expect(done.map((p) => p.slug).sort()).toEqual(["cancelled", "merged"]);
+  });
+
   it("orders a tier by priority, then by the longest time in its stage", () => {
     const ordered = orderProjects([
       project("p2-old", { stage: "building", priority: 2, stage_since: 100 }),

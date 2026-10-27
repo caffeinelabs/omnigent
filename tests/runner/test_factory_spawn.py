@@ -37,6 +37,7 @@ from tests.runner.factory_fakes import (
     factory_spec,
     member,
     membership,
+    pl_create_body,
     roster,
 )
 
@@ -141,6 +142,16 @@ async def test_creates_a_top_level_managed_session_with_factory_labels() -> None
         },
         "workspaces": ["https://github.com/caffeinelabs/app#main"],
     }
+    # The server's own PL spawn sends this same body (tests/server/factory/test_server_spawn.py).
+    assert body == pl_create_body(
+        agent_id=_AGENT_ID,
+        factory_id=FACTORY,
+        parent=LEAD,
+        supervisor=PEER,
+        project="api-version",
+        heartbeat_s=600,
+        workspace="https://github.com/caffeinelabs/app#main",
+    )
     assert "parent_session_id" not in body
     assert "initial_items" not in body
     assert result["session_id"] == _NEW

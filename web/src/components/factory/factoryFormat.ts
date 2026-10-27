@@ -99,7 +99,8 @@ export function gateTone(state: GateState | null | undefined): FactoryTone {
 export function stageTone(stage: FactoryStage, overlay: FactoryOverlay | null = null): FactoryTone {
   if (overlay === "failed") return "fail";
   if (overlay === "blocked" || overlay === "pr_closed") return "warning";
-  if (overlay === "paused") return "muted";
+  if (overlay === "paused" || overlay === "waiting") return "muted";
+  if (overlay === "cancelled" || overlay === "merged") return "muted";
   switch (stage) {
     case "ready":
       return "pass";
@@ -120,6 +121,9 @@ const OVERLAY_LABEL: Record<FactoryOverlay, string> = {
   blocked: "Blocked",
   failed: "Failed",
   pr_closed: "PR closed",
+  cancelled: "Cancelled",
+  merged: "Merged",
+  waiting: "Waiting",
 };
 
 /** `"Verify"`, or `"Building · Blocked"` when an overlay applies. */

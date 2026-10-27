@@ -36,7 +36,20 @@ OVERLAY_PAUSED: Final = "paused"
 OVERLAY_BLOCKED: Final = "blocked"
 OVERLAY_FAILED: Final = "failed"
 OVERLAY_PR_CLOSED: Final = "pr_closed"
-OVERLAYS: Final = frozenset({OVERLAY_PAUSED, OVERLAY_BLOCKED, OVERLAY_FAILED, OVERLAY_PR_CLOSED})
+OVERLAY_CANCELLED: Final = "cancelled"
+OVERLAY_MERGED: Final = "merged"
+OVERLAY_WAITING: Final = "waiting"
+OVERLAYS: Final = frozenset(
+    {
+        OVERLAY_PAUSED,
+        OVERLAY_BLOCKED,
+        OVERLAY_FAILED,
+        OVERLAY_PR_CLOSED,
+        OVERLAY_CANCELLED,
+        OVERLAY_MERGED,
+        OVERLAY_WAITING,
+    }
+)
 
 # Gate values that let a PR move past a gate (skip = not applicable).
 _PASSING: Final = frozenset({"pass", "skip"})
@@ -49,8 +62,11 @@ class StageResult:
     The derived stage of one project.
 
     :param stage: One of :data:`omnigent.factory.STAGES`.
-    :param overlay: ``paused`` / ``blocked`` / ``failed`` / ``pr_closed``, or ``None``.
-    :param overlay_reason: Human text for the overlay, e.g. ``"Blocked on D-3"``.
+    :param overlay: ``paused`` / ``blocked`` / ``failed`` / ``pr_closed``, the
+        lifecycle overlays ``cancelled`` / ``merged`` (closed projects) and
+        ``waiting`` (held on its dependencies), or ``None``.
+    :param overlay_reason: Human text for the overlay, e.g. ``"Blocked on D-3"`` or
+        ``"merged → api-version"``.
     :param claim_mismatch: The PL claims a stage further along than the gates show.
     """
 
@@ -136,16 +152,21 @@ def derive_stage(
     *,
     brief_delivered: bool = True,
     sandbox_failed: bool = False,
+    waiting_on: Sequence[str] = (),
 ) -> StageResult:
     """
     Derive a project's stage and overlay from its PRs, PL and open decisions.
 
-    :param project: The project row (its ``slug`` and ``agent_stage`` are read).
+    A cancelled or merged project shows that overlay over everything else; a
+    queued one without a PL whose dependencies are unmet shows ``waiting``.
+
+    :param project: The project row (its ``slug``, ``status`` and ``agent_stage`` are read).
     :param prs: The project's PRs, any state.
     :param pl_conv: The project's PL session, or ``None`` before it is spawned.
     :param open_decisions: Open decisions of the factory (others are ignored).
     :param brief_delivered: ``False`` while the PL has not received its brief.
     :param sandbox_failed: The PL's sandbox failed to provision.
+    :param waiting_on: The project's unmet dependencies.
     :returns: The :class:`StageResult`.
     """
     labels: dict[str, str] = dict(pl_conv.labels) if pl_conv is not None else {}
@@ -170,6 +191,17 @@ def derive_stage(
         elif labels.get(LABEL_STATE) == STATE_PAUSED:
             overlay, reason = OVERLAY_PAUSED, "Paused"
 
+    status = getattr(project, "status", "active")
+    if status == "cancelled":
+        overlay, reason = OVERLAY_CANCELLED, "Cancelled"
+    elif status == "merged":
+        parent = getattr(project, "parent_slug", None)
+        overlay, reason = OVERLAY_MERGED, f"merged → {parent}" if parent else "Merged"
+    elif status == "done":
+        stage = STAGE_DONE
+    elif pl_conv is None and waiting_on:
+        overlay, reason = OVERLAY_WAITING, f"waiting on {', '.join(waiting_on)}"
+
     claim = project.agent_stage
     mismatch = claim is not None and stage_rank(claim) > stage_rank(stage)
     return StageResult(stage, overlay, reason, mismatch)
@@ -178,9 +210,12 @@ def derive_stage(
 __all__ = [
     "OVERLAYS",
     "OVERLAY_BLOCKED",
+    "OVERLAY_CANCELLED",
     "OVERLAY_FAILED",
+    "OVERLAY_MERGED",
     "OVERLAY_PAUSED",
     "OVERLAY_PR_CLOSED",
+    "OVERLAY_WAITING",
     "StageResult",
     "derive_stage",
     "pr_stage",

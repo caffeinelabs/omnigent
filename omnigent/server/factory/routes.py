@@ -68,7 +68,15 @@ _BEACON_FIELDS = frozenset({"summary", "health"})
 
 # Labels only the server (or an owner, through it) writes: an agent naming one is refused.
 SERVER_ONLY_LABEL_FIELDS: frozenset[str] = frozenset(
-    {"def_version", "default_repo", "default_base", "mode", "engine_mode", "autonomy_projects"}
+    {
+        "def_version",
+        "default_repo",
+        "default_base",
+        "mode",
+        "engine_mode",
+        "autonomy_projects",
+        "engine_spawn",
+    }
 )
 # Audit names of the labels ``PATCH /sessions/{id}`` writes.
 _LABEL_FIELDS: dict[str, str] = {
