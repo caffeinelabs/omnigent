@@ -21,7 +21,8 @@ import { previewHeadTruth } from "../board/boardModel";
 
 /** Gates that count toward "ready" (the demo gate when the project records demos). */
 export function readyGates(pr: PrView): GateKey[] {
-  return [...READY_GATES, ...(pr.gates.demo != null ? (["demo"] as const) : [])];
+  const sent = READY_GATES.filter((gate) => pr.gates[gate] !== undefined);
+  return [...sent, ...(pr.gates.demo != null ? (["demo"] as const) : [])];
 }
 
 /** `{passing, total}` over the ready gates; a skipped gate counts as passing. */

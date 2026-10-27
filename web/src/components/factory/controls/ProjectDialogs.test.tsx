@@ -77,6 +77,25 @@ describe("AddProjectDialog", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it("starts a new project on the factory's default base", () => {
+    const snapshot = liveRunSnapshot();
+    snapshot.factory.base = {
+      repo: "caffeinelabs/app",
+      branch: "temp-main",
+      head_sha: null,
+      moved_at: null,
+      env: null,
+      env_project: "base-env",
+    };
+    serveFactory(authenticatedFetch, snapshot);
+    renderControls(
+      <AddProjectDialog factoryId={snapshot.factory.id} open onOpenChange={vi.fn()} />,
+      snapshot,
+    );
+    expect(screen.getByTestId("add-project-repo-0")).toHaveTextContent("caffeinelabs/app");
+    expect(screen.getByTestId("add-project-branch-0")).toHaveTextContent("temp-main");
+  });
+
   it("refuses a slug the factory already has, and maps the server's 409 onto it", async () => {
     const { server } = setup();
     type("add-project-project-title-0", "API version");

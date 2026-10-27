@@ -1,9 +1,9 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { type ReactNode, useState } from "react";
 import { Route, Routes } from "react-router-dom";
-import { fireEvent, within } from "storybook/test";
+import { expect, fireEvent, waitFor, within } from "storybook/test";
 import { NewFactoryPage } from "@/pages/factory/NewFactoryPage";
-import { preflightAllFailing } from "../__fixtures__/liveRun";
+import { preflightAllFailing, preflightOk } from "../__fixtures__/liveRun";
 import { DocumentTheme } from "../board/boardStoryKit";
 import { FactoryStoryFrame, type StoryRoutes } from "../factoryStoryFixtures";
 import { clearDraft, emptyFactoryDraft, exampleProjects, saveDraft } from "./projectForm";
@@ -136,6 +136,49 @@ export const RegisterFailedRetry: Story = {
   play: async ({ canvasElement }) => {
     const body = await loadExample(canvasElement);
     fireEvent.click(body.getByTestId("factory-new-submit"));
+  },
+};
+
+/** The server's test base (`OMNIGENT_FACTORY_DEFAULT_BASE=caffeinelabs/app#temp-main`). */
+const TEMP_MAIN_ROUTES: StoryRoutes = {
+  "/v1/factory/preflight": {
+    body: {
+      ...preflightOk(),
+      default_repo: "caffeinelabs/app",
+      default_base: "temp-main",
+      max_projects: 10,
+    },
+  },
+};
+
+/**
+ * The default repo & base row prefilled from the server (temp-main), the
+ * "Keep a live env" switch on, and the example projects on that base.
+ */
+export const TempMainDefaults: Story = {
+  render: () => <NewFactoryStory routes={TEMP_MAIN_ROUTES} />,
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await body.findByText("Keep a live env at");
+    await waitFor(() =>
+      expect(body.getByTestId("factory-new-live-env")).toHaveAttribute("data-state", "checked"),
+    );
+    await loadExample(canvasElement);
+  },
+};
+
+export const TempMainDefaultsDark: Story = {
+  render: () => <NewFactoryStory theme="dark" routes={TEMP_MAIN_ROUTES} />,
+  play: TempMainDefaults.play,
+};
+
+/** The live env turned off by hand: the projects keep temp-main, base-env is not started. */
+export const TempMainWithoutLiveEnv: Story = {
+  render: () => <NewFactoryStory routes={TEMP_MAIN_ROUTES} />,
+  play: async (context) => {
+    await TempMainDefaults.play?.(context);
+    const body = within(context.canvasElement.ownerDocument.body);
+    fireEvent.click(body.getByTestId("factory-new-live-env"));
   },
 };
 

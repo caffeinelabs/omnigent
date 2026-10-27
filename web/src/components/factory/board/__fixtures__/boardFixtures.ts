@@ -71,9 +71,25 @@ export function withStoryMedia(snapshot: FactorySnapshot): FactorySnapshot {
   return snapshot;
 }
 
-/** The live run, with demo stills, as stories render it. */
+/**
+ * The snapshot with the `base` gate today's server computes (the live run
+ * predates it): each PR against its project's base.
+ */
+export function withBaseGates(snapshot: FactorySnapshot): FactorySnapshot {
+  for (const pr of snapshot.prs) {
+    if (pr.gates.base !== undefined) continue;
+    const project = snapshot.projects.find((p) => p.slug === pr.project_slug);
+    const expected = project?.base_branch ?? "main";
+    const actual = pr.base_ref ?? "main";
+    pr.gates.base = actual === expected ? "pass" : "fail";
+    pr.gates.evidence.base = { actual, expected };
+  }
+  return snapshot;
+}
+
+/** The live run, with demo stills and base gates, as stories render it. */
 export function storySnapshot(): FactorySnapshot {
-  return withStoryMedia(liveRunSnapshot());
+  return withBaseGates(withStoryMedia(liveRunSnapshot()));
 }
 
 // ── Lookups ────────────────────────────────────────────────────
@@ -562,6 +578,7 @@ export function gateScenario(state: (typeof GATE_STATES)[number]): PrView {
   const gates = { ...pr.gates };
   for (const key of [
     "draft",
+    "base",
     "checks",
     "review",
     "verify",
@@ -581,10 +598,12 @@ export function gateScenario(state: (typeof GATE_STATES)[number]): PrView {
         pending: 0,
         failing_names: ["api / unit", "e2e / smoke"],
       },
+      base: { actual: "main", expected: "temp-main" },
       mergeable: "CONFLICTING",
       protected: ["services/caffeine-api/src/app.ts"],
     };
     gates.reasons = [
+      "PR targets main; project base is temp-main (retarget: gh pr edit https://github.com/caffeinelabs/app/pull/9631 --base temp-main)",
       "checks failing: 2 of 14",
       "merge conflict with main",
       "touches a protected path",

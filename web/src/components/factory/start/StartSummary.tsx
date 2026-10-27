@@ -19,6 +19,7 @@ import {
   type FactoryDraft,
   previewsOn,
   startSummary,
+  toDefaultsInput,
 } from "./projectForm";
 
 function Stat({
@@ -55,6 +56,7 @@ export function StartSummaryCard({
 }) {
   const summary = startSummary(draft);
   const projects = draft.projects;
+  const liveEnv = toDefaultsInput(draft.defaults).integration_env;
 
   return (
     <aside
@@ -78,7 +80,7 @@ export function StartSummaryCard({
             className="flex min-w-0 items-baseline gap-1.5"
           >
             <span aria-hidden className="shrink-0 font-mono text-muted-foreground">
-              {i === projects.length - 1 ? "└" : "├"}
+              {i === projects.length - 1 && !liveEnv ? "└" : "├"}
             </span>
             <span className="min-w-0 truncate">
               PL <span className="font-mono">{project.slug || `project-${i + 1}`}</span>
@@ -88,13 +90,29 @@ export function StartSummaryCard({
             </span>
           </p>
         ))}
+        {liveEnv && (
+          <p
+            data-testid="factory-new-preview-base-env"
+            className="flex min-w-0 items-baseline gap-1.5"
+          >
+            <span aria-hidden className="shrink-0 font-mono text-muted-foreground">
+              └
+            </span>
+            <span className="min-w-0 truncate">
+              PL <span className="font-mono">base-env</span>
+            </span>
+            <span className="ml-auto shrink-0 truncate text-muted-foreground">
+              live env at {draft.defaults.branch.trim() || "main"}
+            </span>
+          </p>
+        )}
       </div>
       <ul className="flex flex-col gap-1.5 border-t border-border pt-3">
         <Stat icon={<BoxesIcon />} testId="factory-new-preview-sandboxes">
           <span className="tabular-nums">{summary.sandboxes}</span> sandboxes{" "}
           <span className="text-muted-foreground">
-            (2 leads + {projects.length} {projects.length === 1 ? "PL" : "PLs"}; ICs share their
-            PL’s)
+            (2 leads + {projects.length} {projects.length === 1 ? "PL" : "PLs"}
+            {liveEnv && " + the live env"}; ICs share their PL’s)
           </span>
         </Stat>
         <Stat icon={<MonitorPlayIcon />} testId="factory-new-preview-previews">

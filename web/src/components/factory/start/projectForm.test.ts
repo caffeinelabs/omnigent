@@ -2,11 +2,13 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { liveRunSnapshot } from "../__fixtures__/liveRun";
 import {
   DRAFT_KEY,
-  MAX_PROJECTS,
   charterChanges,
   clearDraft,
+  defaultProject,
+  defaultsFromPreflight,
   draftFromProject,
   duplicateProject,
+  emptyDefaults,
   emptyFactoryDraft,
   emptyProject,
   exampleProjects,
@@ -17,11 +19,14 @@ import {
   saveDraft,
   slugify,
   startSummary,
+  toDefaultsInput,
   toProjectInput,
   validateFactory,
   validateProject,
+  withDefaults,
   withSlug,
   withTitle,
+  workProjectCap,
 } from "./projectForm";
 
 function valid(overrides = {}) {
@@ -106,10 +111,29 @@ describe("validation", () => {
     expect(errors.byProject[1]?.slug).toBe("“api-status” is already used");
 
     draft.name = "Atlas";
-    draft.projects = Array.from({ length: MAX_PROJECTS + 1 }, (_, i) => valid({ slug: `p-${i}` }));
-    const many = validateFactory(draft);
-    expect(many.projects).toMatch(/^At most 10 projects/);
+    draft.projects = Array.from({ length: 11 }, (_, i) => valid({ slug: `p-${i}` }));
+    // The cap comes from the server's preflight; while it loads only the server checks.
+    expect(validateFactory(draft).projects).toBeUndefined();
+    const many = validateFactory(draft, 10);
+    expect(many.projects).toBe("At most 10 projects (a factory runs 10 project leads)");
     expect(hasErrors(many)).toBe(true);
+    draft.projects = draft.projects.slice(0, 10);
+    draft.defaults = emptyDefaults("caffeinelabs/app", "temp-main");
+    expect(validateFactory(draft, 10).projects).toBe(
+      "At most 9 projects (a factory runs 10 project leads and one for the live env)",
+    );
+  });
+
+  it("checks the defaults row", () => {
+    const draft = { ...emptyFactoryDraft(), projects: [valid()] };
+    draft.defaults = emptyDefaults("not a repo", "temp-main");
+    expect(validateFactory(draft).defaults).toBe("Use owner/name");
+    draft.defaults = emptyDefaults("caffeinelabs/app", "a..b");
+    expect(validateFactory(draft).defaults).toBe("Not a valid branch name");
+    draft.defaults = { ...emptyDefaults("", ""), liveEnv: true };
+    expect(validateFactory(draft).defaults).toBe("Pick the repo the live env runs");
+    draft.defaults = emptyDefaults("caffeinelabs/app", "temp-main");
+    expect(hasErrors(validateFactory(draft))).toBe(false);
   });
 
   it("charter edits skip the fields a PATCH cannot change", () => {
@@ -141,6 +165,79 @@ describe("request body", () => {
     const off = toProjectInput(valid({ envNeeded: false, previewEnabled: true, demoFocus: "x" }));
     expect(off.preview).toEqual({ enabled: false, slots: 2 });
     expect(off.demo_focus).toBeNull();
+  });
+});
+
+describe("default repo & base", () => {
+  it("prefills from preflight and turns the live env on for a base other than main", () => {
+    expect(defaultsFromPreflight(undefined)).toEqual(emptyDefaults());
+    const temp = defaultsFromPreflight({
+      github: { connected: true, login: "luka" },
+      agents: { factory_lead: true, factory_pl: true },
+      sandbox_host: true,
+      factory_enabled: true,
+      default_repo: "caffeinelabs/app",
+      default_base: "temp-main",
+      max_projects: 10,
+    });
+    expect(temp).toEqual({
+      repo: "caffeinelabs/app",
+      branch: "temp-main",
+      liveEnv: true,
+      liveEnvTouched: false,
+    });
+    expect(emptyDefaults("caffeinelabs/app", "main").liveEnv).toBe(false);
+  });
+
+  it("moves the projects still on the old default, and the toggle until it is set by hand", () => {
+    const draft = emptyFactoryDraft();
+    draft.projects = [
+      ...draft.projects,
+      valid({ slug: "pinned", branch: "release" }),
+      valid({ slug: "infra", repo: "caffeinelabs/infra" }),
+    ];
+    const moved = withDefaults(draft, "caffeinelabs/app", "temp-main");
+    expect(moved.projects.map((p) => `${p.repo}#${p.branch}`)).toEqual([
+      "caffeinelabs/app#temp-main",
+      "caffeinelabs/app#release",
+      "caffeinelabs/infra#main",
+    ]);
+    expect(moved.defaults.liveEnv).toBe(true);
+    const back = withDefaults(moved, "caffeinelabs/app", "main");
+    expect(back.projects[0]?.branch).toBe("main");
+    expect(back.defaults.liveEnv).toBe(false);
+    const touched = {
+      ...moved,
+      defaults: { ...moved.defaults, liveEnv: false, liveEnvTouched: true },
+    };
+    expect(withDefaults(touched, "caffeinelabs/app", "next").defaults.liveEnv).toBe(false);
+    expect(defaultProject(moved.defaults)).toMatchObject({
+      repo: "caffeinelabs/app",
+      branch: "temp-main",
+    });
+  });
+
+  it("sends the defaults, with the live env only on a repo", () => {
+    expect(toDefaultsInput(emptyDefaults("caffeinelabs/app", "temp-main"))).toEqual({
+      repo: "caffeinelabs/app",
+      base_branch: "temp-main",
+      integration_env: true,
+    });
+    expect(toDefaultsInput({ ...emptyDefaults(), liveEnv: true })).toEqual({
+      repo: null,
+      base_branch: null,
+      integration_env: false,
+    });
+    expect(workProjectCap(10, emptyDefaults("caffeinelabs/app", "temp-main"))).toBe(9);
+    expect(workProjectCap(10, emptyDefaults("caffeinelabs/app", "main"))).toBe(10);
+  });
+
+  it("puts the example projects on the default base", () => {
+    const defaults = emptyDefaults("caffeinelabs/app", "temp-main");
+    expect(exampleProjects(defaults).every((p) => p.branch === "temp-main")).toBe(true);
+    expect(exampleProjects(emptyDefaults("o/r", "dev")).every((p) => p.branch === "main")).toBe(
+      true,
+    );
   });
 });
 
@@ -177,6 +274,9 @@ describe("summary", () => {
     expect(startSummary(draft).heartbeats).toBe(4);
     draft.projects = Array.from({ length: 4 }, (_, i) => valid({ slug: `p${i}`, previewSlots: 3 }));
     expect(startSummary(draft)).toMatchObject({ maxPreviews: 8, requestedPreviews: 12 });
+    // The live env adds a sandbox but no heartbeats.
+    draft.defaults = emptyDefaults("caffeinelabs/app", "temp-main");
+    expect(startSummary(draft)).toMatchObject({ sandboxes: 7, heartbeats: 4 });
   });
 
   it("estimates heartbeats per hour from the cadence's intervals", () => {
@@ -221,6 +321,7 @@ describe("server field errors", () => {
     expect(mapServerField("projects[2].dod[3]")).toEqual({ project: 2, field: "dod" });
     expect(mapServerField("base_branch")).toEqual({ project: 0, field: "branch" });
     expect(mapServerField("name")).toEqual({ name: true });
+    expect(mapServerField("defaults.repo")).toEqual({ defaults: true });
     expect(mapServerField("root_session_id")).toBeNull();
     expect(mapServerField(null)).toBeNull();
   });
@@ -235,6 +336,10 @@ describe("draft", () => {
     expect(loadDraft()).toBeNull();
     localStorage.setItem(DRAFT_KEY, "{not json");
     expect(loadDraft()).toBeNull();
+    // A draft saved before the defaults row gets empty defaults.
+    const old = { name: "Old", cadence: "demo", projects: [valid()] };
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({ savedAt: 5, draft: old }));
+    expect(loadDraft()?.draft.defaults).toEqual(emptyDefaults());
   });
 
   it("falls back field by field when a stored project has the wrong types", () => {

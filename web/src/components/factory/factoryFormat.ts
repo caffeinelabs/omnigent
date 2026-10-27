@@ -34,6 +34,7 @@ export const STAGE_SHORT_LABEL: Record<FactoryStage, string> = {
 
 export const GATE_LABEL: Record<ReadyGate, string> = {
   draft: "Draft",
+  base: "Base",
   checks: "CI",
   review: "Review",
   verify: "Verify",

@@ -111,7 +111,9 @@ export function GateDots({
   prNumber?: number;
   className?: string;
 }) {
-  const entries: [string, FactoryTone, string][] = READY_GATES.map((gate) => [
+  // An older server sends no `base` gate.
+  const sent = READY_GATES.filter((gate) => gates[gate] !== undefined);
+  const entries: [string, FactoryTone, string][] = sent.map((gate) => [
     gate,
     gateTone(gates[gate]),
     `${GATE_LABEL[gate]} ${gates[gate]}`,

@@ -455,6 +455,80 @@ describe("NewFactoryPage", () => {
     expect(writes(calls)).toEqual([]);
   });
 
+  it("prefills the default repo & base and starts the factory on it with a live env", async () => {
+    const calls = serve({
+      preflight: {
+        ...preflightOk(),
+        default_repo: "caffeinelabs/app",
+        default_base: "temp-main",
+        max_projects: 10,
+      },
+    });
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("factory-new-default-branch")).toHaveTextContent("temp-main"),
+    );
+    expect(screen.getByTestId("factory-new-default-repo")).toHaveTextContent("caffeinelabs/app");
+    expect(screen.getByTestId("factory-new-repo-0")).toHaveTextContent("caffeinelabs/app");
+    expect(screen.getByTestId("factory-new-branch-0")).toHaveTextContent("temp-main");
+    expect(screen.getByTestId("factory-new-live-env")).toHaveAttribute("data-state", "checked");
+    expect(screen.getByTestId("factory-new-project-count")).toHaveTextContent("1/9");
+    // Nothing was typed: the prefill is not a draft worth keeping.
+    expect(localStorage.getItem(DRAFT_KEY)).toBeNull();
+
+    fireEvent.click(screen.getByTestId("factory-new-load-example"));
+    expect(screen.getByTestId("factory-new-branch-2")).toHaveTextContent("temp-main");
+    expect(screen.getByTestId("factory-new-preview-sandboxes")).toHaveTextContent("6 sandboxes");
+    fireEvent.click(screen.getByTestId("factory-new-submit"));
+    expect(await screen.findByTestId("cockpit-stub")).toBeInTheDocument();
+
+    const sent = writes(calls);
+    expect(sent[0]!.body).toMatchObject({
+      workspaces: ["https://github.com/caffeinelabs/app#temp-main"],
+    });
+    const register = sent[1]!.body as { defaults: unknown; projects: { base_branch: string }[] };
+    expect(register.defaults).toEqual({
+      repo: "caffeinelabs/app",
+      base_branch: "temp-main",
+      integration_env: true,
+    });
+    expect(register.projects.map((p) => p.base_branch)).toEqual([
+      "temp-main",
+      "temp-main",
+      "temp-main",
+    ]);
+  });
+
+  it("turns the live env off by hand and keeps it off", async () => {
+    const calls = serve({
+      preflight: {
+        ...preflightOk(),
+        default_repo: "caffeinelabs/app",
+        default_base: "temp-main",
+        max_projects: 10,
+      },
+    });
+    renderPage();
+    await waitFor(() =>
+      expect(screen.getByTestId("factory-new-live-env")).toHaveAttribute("data-state", "checked"),
+    );
+    fireEvent.click(screen.getByTestId("factory-new-live-env"));
+    expect(screen.getByTestId("factory-new-live-env")).toHaveAttribute("data-state", "unchecked");
+    expect(screen.getByTestId("factory-new-project-count")).toHaveTextContent("1/10");
+    fireEvent.click(screen.getByTestId("factory-new-load-example"));
+    fireEvent.click(screen.getByTestId("factory-new-submit"));
+    expect(await screen.findByTestId("cockpit-stub")).toBeInTheDocument();
+    const register = writes(calls)[1]!.body as { defaults: { integration_env: boolean } };
+    expect(register.defaults.integration_env).toBe(false);
+  });
+
+  it("without a server default the live env cannot be turned on", async () => {
+    serve();
+    renderPage();
+    expect(screen.getByTestId("factory-new-live-env")).toBeDisabled();
+    expect(screen.getByTestId("factory-new-default-branch")).toHaveTextContent("main");
+  });
+
   it("adds, duplicates and removes projects", () => {
     serve();
     renderPage();
