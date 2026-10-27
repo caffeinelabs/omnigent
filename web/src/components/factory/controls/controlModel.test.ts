@@ -1,12 +1,14 @@
 import { describe, expect, it } from "vitest";
+import { type EventView, FactoryApiError } from "@/lib/factoryApi";
 import { ApiError } from "@/lib/sessionsApi";
-import type { EventView } from "@/lib/factoryApi";
 import { liveRunSnapshot } from "../__fixtures__/liveRun";
 import {
   ACK_LATE_MS,
   type LocalControl,
+  REFETCH_GRACE_MS,
   cadenceEstimateText,
   controlErrorMessage,
+  localControlLive,
   pendingControls,
   pendingForProject,
   pendingText,
@@ -59,6 +61,7 @@ function local(over: Partial<LocalControl> = {}): LocalControl {
     project: "api-version",
     at: NOW,
     sent: false,
+    sentAt: null,
     eventId: null,
     recipients: null,
     error: null,
@@ -70,7 +73,7 @@ function local(over: Partial<LocalControl> = {}): LocalControl {
 describe("pendingControls", () => {
   it("shows a click at once, then waits for the recipient's ack", () => {
     expect(pendingControls([local()], [], NOW)[0]?.state).toBe("sending");
-    const sent = local({ sent: true, eventId: "ev-pause", at: NOW - 60_000 });
+    const sent = local({ sent: true, sentAt: NOW - 1000, eventId: "ev-pause", at: NOW - 60_000 });
     expect(pendingControls([sent], [], NOW)[0]?.state).toBe("waiting");
     const [fromServer] = pendingControls([sent], [control()], NOW);
     expect(fromServer).toMatchObject({ state: "waiting", localId: "c1", recipients: [PL] });
@@ -120,7 +123,12 @@ describe("pendingControls", () => {
       { id: "ev-charter", kind: "control.charter_update", subject: "project:api-version" },
       { target: undefined },
     );
-    const click = local({ action: "charter_update", sent: true, at: NOW - 61_000 });
+    const click = local({
+      action: "charter_update",
+      sent: true,
+      sentAt: NOW - 1000,
+      at: NOW - 1000,
+    });
     const pending = pendingControls([click], [charter], NOW);
     expect(pending).toHaveLength(1);
     expect(pending[0]).toMatchObject({ eventId: "ev-charter", target: "project:api-version" });
@@ -139,6 +147,59 @@ describe("pendingControls", () => {
     expect(pendingText(pendingControls([], [up], NOW)[0]!, "PL")).toBe(
       "Deploying preview #9631… waiting for PL",
     );
+  });
+
+  describe("a sent click once the server's events speak for it", () => {
+    const T = NOW - 7 * 3600_000;
+    const pause = control({ id: "e1", ts: T });
+    const acked = ack("e1", PL, T + 60_000);
+    const click = local({ sent: true, sentAt: T, eventId: "e1", at: T, recipients: [PL] });
+
+    it("confirms, then goes away, and stays away once the control ages out", () => {
+      expect(pendingText(pendingControls([click], [acked, pause], T + 120_000)[0]!, "PL")).toBe(
+        "PL paused",
+      );
+      expect(pendingControls([click], [acked, pause], T + 30 * 60_000)).toEqual([]);
+      expect(pendingControls([click], [acked, pause], NOW)).toEqual([]);
+      expect(pendingControls([click], [], NOW)).toEqual([]);
+    });
+
+    it("drops a click whose event fell off the page once the refetch had time", () => {
+      const off = T + 30 * 60_000;
+      expect(pendingControls([click], [], T + 1000)[0]?.state).toBe("waiting");
+      expect(pendingControls([click], [], off)).toEqual([]);
+      expect(localControlLive(click, new Set(), T + REFETCH_GRACE_MS + 1)).toBe(false);
+      // Still loading: nothing to go by yet, so the click stays.
+      expect(pendingControls([click], null, T + 1000)[0]?.state).toBe("waiting");
+      expect(localControlLive(click, null, T + 1000)).toBe(true);
+    });
+
+    it("drops a tracked charter update after its event ages out or leaves the page", () => {
+      const charter = local({ action: "charter_update", sent: true, sentAt: T, at: T });
+      const event = control({ id: "e-ch", kind: "control.charter_update", ts: T + 1000 });
+      expect(pendingControls([charter], [ack("e-ch", PL, T + 5000), event], NOW)).toEqual([]);
+      expect(pendingControls([charter], [], T + 30 * 60_000)).toEqual([]);
+    });
+
+    it("keeps a click whose event is on the page as the source of its chip", () => {
+      const recent = local({
+        sent: true,
+        sentAt: NOW - 1000,
+        eventId: "ev-pause",
+        at: NOW - 60_000,
+      });
+      expect(localControlLive(recent, new Set(["ev-pause"]), NOW + 10 * 60_000)).toBe(true);
+    });
+  });
+
+  it("lets an expired refusal give way to the server's control", () => {
+    const failed = local({
+      action: "stop",
+      error: "You need edit/owner access",
+      at: NOW - 120_000,
+    });
+    const [shown] = pendingControls([failed], [control({ ts: NOW - 1000 })], NOW);
+    expect(shown).toMatchObject({ action: "pause", state: "waiting" });
   });
 
   it("picks a project's control, including one on its member", () => {
@@ -168,6 +229,19 @@ describe("texts", () => {
       "You need edit/owner access",
     );
     expect(controlErrorMessage(new Error("boom"))).toBe("Boom");
+  });
+
+  it("words the server's known refusals without ids", () => {
+    const refused = (status: number, code: string) =>
+      new FactoryApiError(`'f4f4ba9c' is not a factory`, status, code, null, null);
+    expect(controlErrorMessage(refused(404, "not_a_factory"))).toBe(
+      "This factory is no longer on the server",
+    );
+    expect(controlErrorMessage(refused(409, "no_project_lead"))).toBe("The project has no PL yet");
+    expect(controlErrorMessage(refused(404, "something_else"))).toBe(
+      "Not found on the server; reload the cockpit",
+    );
+    expect(controlErrorMessage(refused(409, "pr_not_open"))).toBe("'f4f4ba9c' is not a factory");
   });
 
   it("estimates both cadences for the live factory", () => {

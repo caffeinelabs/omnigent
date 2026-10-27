@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
-import { FieldRow, NumberSlider, Segmented } from "./formParts";
+import { FieldError, FieldRow, NumberSlider, Segmented } from "./formParts";
 import {
   FIXED_DOD,
   MAX_BUDGET,
@@ -24,6 +24,7 @@ import {
   MIN_BUDGET,
   MIN_SLOTS,
   PRIORITIES,
+  type Priority,
   type ProjectDraft,
   type ProjectErrors,
   type ProjectField,
@@ -59,6 +60,12 @@ const SLOT_OPTIONS = Array.from({ length: MAX_SLOTS - MIN_SLOTS + 1 }, (_, i) =>
 }));
 const NO_ERRORS: ProjectErrors = {};
 const PRIORITY_OPTIONS = PRIORITIES.map((p) => ({ value: p, label: `P${p}` }));
+/** A stored P3 (the server allows it) stays selectable, so an edit doesn't silently change it. */
+const PRIORITY_OPTIONS_P3 = [...PRIORITY_OPTIONS, { value: 3 as Priority, label: "P3" }];
+/** The shell's inputs set `md:text-ui`; the form's values keep the caption size on every width. */
+const VALUE_TEXT = "text-sm md:text-sm";
+/** The shell's off track blends into a dark card; keep it visible. */
+const SWITCH_TRACK = "dark:data-unchecked:bg-muted-foreground/35";
 
 let rowSeq = 0;
 
@@ -125,7 +132,7 @@ function ListEditor({
               next[j] = event.target.value;
               onChange(next);
             }}
-            className={cn("h-7 text-sm", mono && "font-mono")}
+            className={cn("h-7", VALUE_TEXT, mono && "font-mono")}
           />
           <Button
             type="button"
@@ -222,7 +229,7 @@ export function ProjectFields({
                   aria-invalid={Boolean(errorOf("slug")) || undefined}
                   onBlur={touch("slug")}
                   onChange={(event) => onChange(withSlug(project, event.target.value))}
-                  className="pr-14 font-mono text-sm"
+                  className={cn("pr-14 font-mono", VALUE_TEXT)}
                 />
                 <span
                   data-testid={t("slug-mode")}
@@ -238,39 +245,40 @@ export function ProjectFields({
               </div>
             </div>
           </FieldRow>
-          <FieldRow
-            label="Repository"
-            htmlFor={id("repo")}
-            error={errorOf("repo") ?? errorOf("branch")}
-            errorTestId={t("error-repo")}
-          >
+          <FieldRow label="Repository" htmlFor={id("repo")}>
             <div className="grid min-w-0 gap-2 @md:grid-cols-[minmax(0,1fr)_minmax(8rem,12rem)]">
-              <RepoCombobox
-                id={id("repo")}
-                value={project.repo}
-                testId={t("repo")}
-                invalid={Boolean(errorOf("repo"))}
-                onSelect={(repo, branch) => {
-                  setTouched((prev) => new Set(prev).add("repo"));
-                  set({ repo, branch: branch ?? (project.branch || "main") });
-                }}
-              />
-              <BranchCombobox
-                repo={project.repo}
-                value={project.branch}
-                testId={t("branch")}
-                invalid={Boolean(errorOf("branch"))}
-                onChange={(branch) => set({ branch })}
-              />
+              <div className="flex min-w-0 flex-col gap-1">
+                <RepoCombobox
+                  id={id("repo")}
+                  value={project.repo}
+                  testId={t("repo")}
+                  invalid={Boolean(errorOf("repo"))}
+                  onSelect={(repo, branch) => {
+                    setTouched((prev) => new Set(prev).add("repo"));
+                    set({ repo, branch: branch ?? (project.branch || "main") });
+                  }}
+                />
+                <FieldError message={errorOf("repo")} testId={t("error-repo")} />
+              </div>
+              <div className="flex min-w-0 flex-col gap-1">
+                <BranchCombobox
+                  repo={project.repo}
+                  value={project.branch}
+                  testId={t("branch")}
+                  invalid={Boolean(errorOf("branch"))}
+                  onChange={(branch) => set({ branch })}
+                />
+                <FieldError message={errorOf("branch")} testId={t("error-branch")} />
+              </div>
             </div>
           </FieldRow>
         </>
       )}
-      <FieldRow label="Priority">
+      <FieldRow label="Priority" error={errorOf("priority")} errorTestId={t("error-priority")}>
         <Segmented
           label="Priority"
           value={project.priority}
-          options={PRIORITY_OPTIONS}
+          options={project.priority === 3 ? PRIORITY_OPTIONS_P3 : PRIORITY_OPTIONS}
           onChange={(priority) => set({ priority })}
           testIdPrefix={t("priority")}
         />
@@ -289,10 +297,15 @@ export function ProjectFields({
           aria-invalid={Boolean(errorOf("goal")) || undefined}
           onBlur={touch("goal")}
           onChange={(event) => set({ goal: event.target.value })}
-          className="min-h-14 text-sm"
+          className={cn("min-h-14", VALUE_TEXT)}
         />
       </FieldRow>
-      <FieldRow label="Definition of done" error={errorOf("dod")} errorTestId={t("error-dod")}>
+      <FieldRow
+        label="Definition of done"
+        labelAlign="text"
+        error={errorOf("dod")}
+        errorTestId={t("error-dod")}
+      >
         <p className="flex min-w-0 items-center gap-2 py-0.5 text-sm">
           <CheckIcon aria-hidden className="size-3.5 shrink-0 text-success" />
           <span className="min-w-0">
@@ -325,7 +338,9 @@ export function ProjectFields({
           testId={t("scope")}
           mono
           onBlur={touch("scope")}
-          emptyNote={<p className="py-0.5 text-sm text-muted-foreground">Whole repository</p>}
+          emptyNote={
+            <p className="py-0.5 text-sm text-muted-foreground italic">Whole repository</p>
+          }
         />
       </FieldRow>
       <FieldRow
@@ -341,13 +356,14 @@ export function ProjectFields({
               data-testid={t("env")}
               aria-label="Dev env"
               onCheckedChange={(envNeeded) => set({ envNeeded })}
+              className={SWITCH_TRACK}
             />
             Dev env
           </label>
           <label
             className={cn(
               "inline-flex items-center gap-2 text-sm",
-              !project.envNeeded && "opacity-50",
+              !project.envNeeded && "text-muted-foreground",
             )}
           >
             <Switch
@@ -356,6 +372,7 @@ export function ProjectFields({
               data-testid={t("preview")}
               aria-label="Preview & demo"
               onCheckedChange={(previewEnabled) => set({ previewEnabled })}
+              className={SWITCH_TRACK}
             />
             Preview & demo
           </label>
@@ -386,13 +403,20 @@ export function ProjectFields({
             value={project.demoFocus}
             placeholder='e.g. Call GET /status and show "db":"ok"'
             data-testid={t("demo")}
+            aria-invalid={Boolean(errorOf("demo")) || undefined}
             onBlur={touch("demo")}
             onChange={(event) => set({ demoFocus: event.target.value })}
-            className="min-h-10 text-sm"
+            className={cn("min-h-10", VALUE_TEXT)}
           />
         </FieldRow>
       )}
-      <FieldRow label="IC budget" htmlFor={id("budget")}>
+      <FieldRow
+        label="IC budget"
+        htmlFor={id("budget")}
+        labelAlign="text"
+        error={errorOf("budget")}
+        errorTestId={t("error-budget")}
+      >
         <NumberSlider
           id={id("budget")}
           value={project.budgetIcs}
@@ -430,9 +454,10 @@ export function ProjectFields({
               value={project.constraints}
               placeholder="Rules beyond the repo's AGENTS.md, e.g. ask before touching the schema"
               data-testid={t("constraints")}
+              aria-invalid={Boolean(errorOf("constraints")) || undefined}
               onBlur={touch("constraints")}
               onChange={(event) => set({ constraints: event.target.value })}
-              className="min-h-10 text-sm"
+              className={cn("min-h-10", VALUE_TEXT)}
             />
           </FieldRow>
           {!charter && (
@@ -451,7 +476,7 @@ export function ProjectFields({
                 aria-invalid={Boolean(errorOf("version")) || undefined}
                 onBlur={touch("version")}
                 onChange={(event) => set({ versionPath: event.target.value })}
-                className="max-w-60 font-mono text-sm"
+                className={cn("max-w-60 font-mono", VALUE_TEXT)}
               />
             </FieldRow>
           )}

@@ -1,5 +1,13 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import {
+  act,
+  createEvent,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { preflightAllFailing, preflightOk } from "@/components/factory/__fixtures__/liveRun";
@@ -188,6 +196,23 @@ describe("NewFactoryPage", () => {
     expect(screen.queryByTestId("factory-new-draft")).not.toBeInTheDocument();
   });
 
+  it("leaves the saved draft alone while Restore or Discard is pending", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const saved = {
+      savedAt: Date.now(),
+      draft: { name: "Old", cadence: "demo", projects: [{ title: "Old project", goal: "x" }] },
+    };
+    localStorage.setItem(DRAFT_KEY, JSON.stringify(saved));
+    serve();
+    renderPage();
+    type("factory-new-project-title-0", "New edits");
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(localStorage.getItem(DRAFT_KEY)).toContain("Old project");
+    fireEvent.click(screen.getByTestId("factory-new-draft-discard"));
+    await act(() => vi.advanceTimersByTimeAsync(1000));
+    expect(localStorage.getItem(DRAFT_KEY)).toContain("New edits");
+  });
+
   it("discards a draft", () => {
     localStorage.setItem(
       DRAFT_KEY,
@@ -262,13 +287,95 @@ describe("NewFactoryPage", () => {
     expect(failure).toHaveTextContent("Atlas was created, but the charters weren’t stored");
     expect(failure).toHaveTextContent("Service unavailable");
 
-    fireEvent.click(screen.getByTestId("factory-new-retry"));
+    expect(screen.getByTestId("factory-new-retry-note")).toHaveTextContent(
+      "Retry stores the charters with this Atlas.",
+    );
+    expect(screen.getByTestId("factory-new-submit")).toHaveTextContent("Retry storing charters");
+    fireEvent.click(screen.getByTestId("factory-new-submit"));
     expect(await screen.findByTestId("cockpit-stub")).toBeInTheDocument();
     const sent = writes(calls).map((c) => `${c.method} ${c.path}`);
     expect(sent.filter((c) => c === "POST /v1/sessions")).toHaveLength(1);
     expect(sent.filter((c) => c === "POST /v1/factory/factories")).toHaveLength(5);
     const last = writes(calls).at(-1)!.body as { root_session_id: string };
     expect(last.root_session_id).toBe("conv_atlas");
+  });
+
+  it("creates a new Atlas when the first project's branch changed after a failed start", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const unavailable = () => json({ error: { message: "Service unavailable" } }, 503);
+    const calls = serve({ register: [unavailable, unavailable, unavailable, unavailable] });
+    renderPage();
+    fireEvent.click(screen.getByTestId("factory-new-load-example"));
+    fireEvent.click(screen.getByTestId("factory-new-submit"));
+    await act(() => vi.advanceTimersByTimeAsync(5000));
+    await screen.findByTestId("factory-new-failure");
+
+    fireEvent.click(screen.getByTestId("factory-new-branch-0"));
+    fireEvent.change(await screen.findByTestId("factory-new-branch-0-search"), {
+      target: { value: "release" },
+    });
+    fireEvent.click(await screen.findByText("release"));
+    expect(screen.getByTestId("factory-new-branch-0")).toHaveTextContent("release");
+    expect(screen.getByTestId("factory-new-retry-note")).toHaveTextContent(
+      "The first project’s repository changed, so Start creates a new Atlas",
+    );
+    expect(screen.getByTestId("factory-new-submit")).toHaveTextContent("Start factory");
+
+    fireEvent.click(screen.getByTestId("factory-new-submit"));
+    expect(await screen.findByTestId("cockpit-stub")).toBeInTheDocument();
+    const sessions = writes(calls).filter((c) => c.path === "/v1/sessions");
+    expect(sessions).toHaveLength(2);
+    expect(sessions[1]!.body).toMatchObject({
+      workspaces: ["https://github.com/caffeinelabs/app#release"],
+    });
+  });
+
+  it("puts a server error on a field without a slot into the failure alert", async () => {
+    serve({
+      register: [
+        () =>
+          json(
+            {
+              error: { code: "invalid_body", message: "demo_focus needs previews" },
+              field: "projects[2].demo_focus",
+            },
+            400,
+          ),
+        () =>
+          json(
+            {
+              error: { code: "invalid_body", message: "priority must be at most 3" },
+              field: "projects[0].priority",
+            },
+            400,
+          ),
+      ],
+    });
+    renderPage();
+    fireEvent.click(screen.getByTestId("factory-new-load-example"));
+    fireEvent.click(screen.getByTestId("factory-new-submit"));
+    // Project 3 has no env, so it shows no demo field: the alert says it.
+    expect(await screen.findByTestId("factory-new-failure")).toHaveTextContent(
+      "Demo_focus needs previews",
+    );
+    fireEvent.click(screen.getByTestId("factory-new-submit"));
+    expect(await screen.findByTestId("factory-new-error-priority-0")).toHaveTextContent(
+      "Priority must be at most 3",
+    );
+  });
+
+  it("never submits on Enter in a one-line field", () => {
+    serve();
+    renderPage();
+    fireEvent.click(screen.getByTestId("factory-new-load-example"));
+    const title = screen.getByTestId("factory-new-project-title-0");
+    const enter = createEvent.keyDown(title, { key: "Enter" });
+    fireEvent(title, enter);
+    expect(enter.defaultPrevented).toBe(true);
+    const goal = screen.getByTestId("factory-new-goal-0");
+    const newline = createEvent.keyDown(goal, { key: "Enter" });
+    fireEvent(goal, newline);
+    expect(newline.defaultPrevented).toBe(false);
   });
 
   it("puts the server's field errors on the field", async () => {

@@ -1,7 +1,9 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EventView, FactorySnapshot, ProjectView } from "@/lib/factoryApi";
 import { LIVE_RUN_PL_API_ID, liveRunSnapshot } from "../__fixtures__/liveRun";
+import { FactoryNowContext } from "../factoryClock";
 import { ackEvent, openMenu, renderControls, serveFactory } from "./__fixtures__/controlsKit";
 import { ProjectControlsMenu } from "./ProjectControlsMenu";
 import { resetFactoryControls } from "./useFactoryControls";
@@ -15,6 +17,7 @@ vi.mock("@/hooks/useSessionUpdatesConnected", () => ({ useSessionUpdatesConnecte
 function setup(
   mutate?: (snapshot: FactorySnapshot, project: ProjectView) => void,
   events: EventView[] = [],
+  now?: Date,
 ) {
   const snapshot = liveRunSnapshot();
   const project = snapshot.projects.find((p) => p.slug === "api-version")!;
@@ -22,22 +25,26 @@ function setup(
   const server = serveFactory(authenticatedFetch, snapshot);
   server.events = events;
   const prs = snapshot.prs.filter((pr) => project.pr_ids.includes(pr.id));
-  const view = renderControls(
-    <ProjectControlsMenu
-      factoryId={snapshot.factory.id}
-      project={project}
-      prs={prs}
-      members={snapshot.members}
-    />,
-    snapshot,
+  const menu = (at?: Date) => (
+    <FactoryNowContext.Provider value={at ?? null}>
+      <ProjectControlsMenu
+        factoryId={snapshot.factory.id}
+        project={project}
+        prs={prs}
+        members={snapshot.members}
+      />
+    </FactoryNowContext.Provider>
   );
+  const view = renderControls(menu(now), snapshot);
+  /** Re-render the menu with the cockpit clock at `at`. */
+  const at = (later: Date) => view.rerender(menu(later));
   const controlPath = `/v1/factory/factories/${snapshot.factory.id}/control`;
   const controlBodies = () =>
     server
       .writes()
       .filter((c) => c.path === controlPath)
       .map((c) => c.body);
-  return { snapshot, project, server, controlBodies, ...view };
+  return { snapshot, project, server, controlBodies, at, ...view };
 }
 
 function open() {
@@ -47,6 +54,8 @@ function open() {
 beforeEach(() => {
   authenticatedFetch.mockReset();
   resetFactoryControls();
+  // Sonner replays toasts still active to a new toaster.
+  toast.dismiss();
 });
 
 describe("ProjectControlsMenu", () => {
@@ -210,6 +219,47 @@ describe("ProjectControlsMenu", () => {
     expect(screen.getByTestId("control-pending-api-version")).toHaveTextContent("PL paused");
   });
 
+  it("never brings an acknowledged pause back as unanswered once the tab sat open", async () => {
+    const start = Date.now();
+    const { server, client, snapshot, at } = setup(undefined, [], new Date(start));
+    open();
+    fireEvent.click(screen.getByTestId("control-pause"));
+    fireEvent.click(await screen.findByTestId("control-confirm"));
+    await waitFor(() =>
+      expect(screen.getByTestId("control-pending-api-version")).toHaveAttribute(
+        "data-state",
+        "waiting",
+      ),
+    );
+    const pause = {
+      ...ackEvent("ev-1", LIVE_RUN_PL_API_ID, start + 60_000),
+      id: "ev-1",
+      ts: start,
+      kind: "control.pause",
+      from_id: null,
+      project_slug: "api-version",
+      data: { target: "project:api-version", recipients: [LIVE_RUN_PL_API_ID] },
+    };
+    server.events = [ackEvent("ev-1", LIVE_RUN_PL_API_ID, start + 60_000), pause];
+    await act(() =>
+      client.invalidateQueries({ queryKey: ["factory-events", snapshot.factory.id] }),
+    );
+    at(new Date(start + 2 * 60_000));
+    await waitFor(() =>
+      expect(screen.getByTestId("control-pending-api-version")).toHaveTextContent("PL paused"),
+    );
+
+    // Overnight: the control is history, and 100 newer control events pushed it off the page.
+    at(new Date(start + 7 * 3600_000));
+    expect(screen.queryByTestId("control-pending-api-version")).not.toBeInTheDocument();
+    server.events = [];
+    await act(() =>
+      client.invalidateQueries({ queryKey: ["factory-events", snapshot.factory.id] }),
+    );
+    at(new Date(start + 30 * 60_000));
+    expect(screen.queryByTestId("control-pending-api-version")).not.toBeInTheDocument();
+  });
+
   it("offers Undo for 5 s after a pause, which sends resume", async () => {
     const { controlBodies } = setup();
     open();
@@ -222,6 +272,32 @@ describe("ProjectControlsMenu", () => {
         { action: "resume", target: "project:api-version" },
       ]),
     );
+  });
+
+  it("takes the Undo toast down when the pause is refused", async () => {
+    const { server } = setup();
+    server.failNext(403, { error: { code: "forbidden", message: "Forbidden" } });
+    const serveRest = authenticatedFetch.getMockImplementation()!;
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    authenticatedFetch.mockImplementation(async (path: string, init?: RequestInit) => {
+      if (init?.method === "POST") await held;
+      return serveRest(path, init);
+    });
+    open();
+    fireEvent.click(screen.getByTestId("control-pause"));
+    fireEvent.click(await screen.findByTestId("control-confirm"));
+    expect(await screen.findByTestId("control-undo")).toBeInTheDocument();
+    release();
+    await waitFor(() =>
+      expect(screen.getByTestId("control-pending-api-version")).toHaveAttribute(
+        "data-state",
+        "error",
+      ),
+    );
+    await waitFor(() => expect(screen.queryByTestId("control-undo")).not.toBeInTheDocument());
   });
 
   it("explains a 403 inline and in a toast", async () => {

@@ -16,7 +16,7 @@ import {
 import { RunningDot } from "@/components/RunningDot";
 import type { FactorySnapshot, PrView, ProjectView } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
-import { ProjectControlsMenu } from "../controls/ProjectControlsMenu";
+import { useProjectControlParts } from "../controls/ProjectControlsMenu";
 import { ReadyForMergeBanner } from "../review/ReadyForMergeBanner";
 import { STAGE_LABEL, formatElapsed, formatUsd, plural } from "../factoryFormat";
 import { ageText, projectAnchorId, projectElapsed, projectPrList } from "./boardModel";
@@ -232,6 +232,10 @@ export function ProjectCard({
   const ready = project.stage === "ready" && !project.overlay;
   const openProject = () => onOpenProject(project.slug);
   const showEnv = project.env != null || (charter?.env_needed === true && project.pl != null);
+  const controls = useProjectControlParts(
+    { factoryId: snapshot.factory.id, project, prs, members: snapshot.members },
+    "sm:max-w-[32rem]",
+  );
   const edge: keyof typeof EDGE | null =
     project.overlay === "failed"
       ? "fail"
@@ -290,13 +294,16 @@ export function ProjectCard({
             </p>
           )}
         </div>
-        <ProjectControlsMenu
-          factoryId={snapshot.factory.id}
-          project={project}
-          prs={prs}
-          members={snapshot.members}
-        />
+        {controls.menu}
       </header>
+      {controls.quick && (
+        <div
+          data-testid={`project-next-${project.slug}`}
+          className="-mt-1 flex min-w-0 flex-wrap items-center gap-1.5"
+        >
+          {controls.quick}
+        </div>
+      )}
 
       <div
         className={cn(

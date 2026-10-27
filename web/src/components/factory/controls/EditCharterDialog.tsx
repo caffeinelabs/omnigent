@@ -27,6 +27,7 @@ import {
   type ProjectErrors,
   charterChanges,
   draftFromProject,
+  fieldShown,
   mapServerField,
   sentence,
   validateProject,
@@ -43,6 +44,16 @@ export interface EditCharterDialogProps {
   onOpenChange: (open: boolean) => void;
 }
 
+/** Lines with keys that stay unique when a line repeats (`a`, `a#2`). */
+function keyedLines(lines: readonly string[]): { line: string; key: string }[] {
+  const seen = new Map<string, number>();
+  return lines.map((line) => {
+    const n = (seen.get(line) ?? 0) + 1;
+    seen.set(line, n);
+    return { line, key: n === 1 ? line : `${line}#${n}` };
+  });
+}
+
 /** The changed fields as a small unified diff. */
 export function CharterDiff({ changes }: { changes: CharterChange[] }) {
   return (
@@ -54,26 +65,26 @@ export function CharterDiff({ changes }: { changes: CharterChange[] }) {
         <div key={change.field} data-testid={`charter-diff-${change.field}`} className="min-w-0">
           <p className="text-sm font-medium">{change.label}</p>
           <div className="font-mono text-sm">
-            {change.before
-              .filter((line) => !change.after.includes(line))
-              .map((line) => (
+            {keyedLines(change.before.filter((line) => !change.after.includes(line))).map(
+              ({ line, key }) => (
                 <p
-                  key={`-${line}`}
+                  key={`-${key}`}
                   className="rounded-sm bg-destructive/10 px-1.5 break-words text-destructive"
                 >
                   − {line}
                 </p>
-              ))}
-            {change.after
-              .filter((line) => !change.before.includes(line))
-              .map((line) => (
+              ),
+            )}
+            {keyedLines(change.after.filter((line) => !change.before.includes(line))).map(
+              ({ line, key }) => (
                 <p
-                  key={`+${line}`}
+                  key={`+${key}`}
                   className="rounded-sm bg-success/10 px-1.5 break-words text-success"
                 >
                   + {line}
                 </p>
-              ))}
+              ),
+            )}
           </div>
         </div>
       ))}
@@ -129,7 +140,13 @@ function EditCharterBody({
     } catch (error) {
       setSending(false);
       const target = error instanceof FactoryApiError ? mapServerField(error.field) : null;
-      if (error instanceof FactoryApiError && error.status === 400 && target && "field" in target) {
+      if (
+        error instanceof FactoryApiError &&
+        error.status === 400 &&
+        target &&
+        "field" in target &&
+        fieldShown(target.field, draft, "charter")
+      ) {
         setServerErrors({ [target.field]: sentence(error.message) });
         setStep("edit");
         return;

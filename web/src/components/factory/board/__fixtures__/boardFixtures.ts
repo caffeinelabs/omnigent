@@ -438,6 +438,10 @@ export function pageScenario(state: PageState): FactorySnapshot {
         paused_by: "luka",
         claim_mismatch: false,
       });
+      // A pause takes the dev env down (previews stay unless torn down).
+      if (project.env?.reported) {
+        project.env = { ...project.env, reported: { ...project.env.reported, state: "down" } };
+      }
       project.pl = project.pl && { ...project.pl, running: false, status: "idle" };
       project.team = project.team.map((m) => ({ ...m, running: false, status: "idle" }));
     }

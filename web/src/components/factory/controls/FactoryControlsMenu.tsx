@@ -92,6 +92,7 @@ export function FactoryControlsMenu({ factoryId, factory, members }: FactoryCont
     showUndoToast({
       id: "control-undo-factory",
       text: `Pausing ${factory.name}`,
+      sent,
       onUndo: () => {
         void sent.then((res) => {
           if (res) void controls.send({ action: "resume", target: "factory" });
@@ -158,7 +159,11 @@ export function FactoryControlsMenu({ factoryId, factory, members }: FactoryCont
             <EllipsisIcon className="size-4" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" collisionPadding={12} className="w-80 backdrop-blur-md">
+        <DropdownMenuContent
+          align="end"
+          collisionPadding={12}
+          className="w-80 backdrop-blur-md dark:bg-card-solid"
+        >
           {paused ? (
             <DropdownMenuItem onSelect={resumeAll} data-testid="control-resume-all">
               <PlayIcon />

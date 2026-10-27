@@ -38,7 +38,9 @@ export function MenuSection({
         <DropdownMenuSubTrigger disabled={disabled} data-testid={testId}>
           {trigger}
         </DropdownMenuSubTrigger>
-        <DropdownMenuSubContent className={cn("backdrop-blur-md", contentClassName)}>
+        <DropdownMenuSubContent
+          className={cn("backdrop-blur-md dark:bg-card-solid", contentClassName)}
+        >
           {children}
         </DropdownMenuSubContent>
       </DropdownMenuSub>

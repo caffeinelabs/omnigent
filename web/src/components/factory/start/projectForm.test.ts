@@ -204,6 +204,14 @@ describe("charter diff", () => {
       demo_focus: "Show the Settings footer",
     });
   });
+
+  it("keeps a stored P3 instead of counting it as a change", () => {
+    const project = { ...liveRunSnapshot().projects[0]!, priority: 3 };
+    const draft = draftFromProject(project);
+    expect(draft.priority).toBe(3);
+    draft.goal = "A new goal";
+    expect(charterChanges(project, draft).patch).toEqual({ goal: "A new goal" });
+  });
 });
 
 describe("server field errors", () => {
@@ -226,6 +234,31 @@ describe("draft", () => {
     clearDraft();
     expect(loadDraft()).toBeNull();
     localStorage.setItem(DRAFT_KEY, "{not json");
+    expect(loadDraft()).toBeNull();
+  });
+
+  it("falls back field by field when a stored project has the wrong types", () => {
+    localStorage.setItem(
+      DRAFT_KEY,
+      JSON.stringify({
+        savedAt: 1000,
+        draft: {
+          name: 7,
+          cadence: "hourly",
+          projects: [{ title: "Kept", dod: null, scopePaths: [1], priority: 9, previewSlots: "2" }],
+        },
+      }),
+    );
+    const stored = loadDraft()!;
+    expect(stored.draft).toMatchObject({ name: "", cadence: "demo" });
+    expect(stored.draft.projects[0]).toMatchObject({
+      title: "Kept",
+      dod: [""],
+      scopePaths: [],
+      priority: 1,
+      previewSlots: 2,
+    });
+    localStorage.setItem(DRAFT_KEY, JSON.stringify({ savedAt: 1, draft: { projects: "x" } }));
     expect(loadDraft()).toBeNull();
   });
 });

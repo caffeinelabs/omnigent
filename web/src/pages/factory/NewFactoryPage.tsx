@@ -23,12 +23,13 @@ import {
 import { PageScroll } from "@/components/PageScroll";
 import { FactoryPreflight, preflightPasses } from "@/components/factory/FactoryPreflight";
 import { ageText } from "@/components/factory/board/boardModel";
-import { FieldRow, Segmented } from "@/components/factory/start/formParts";
+import { FieldRow, Segmented, suppressImplicitSubmit } from "@/components/factory/start/formParts";
 import { ProjectFields } from "@/components/factory/start/ProjectFields";
 import {
   type FactoryDraft,
   type FormErrors,
   MAX_PROJECTS,
+  type ProjectDraft,
   type ProjectErrors,
   type StoredDraft,
   cadenceBeatsText,
@@ -38,6 +39,7 @@ import {
   emptyFactoryDraft,
   emptyProject,
   exampleProjects,
+  fieldShown,
   hasErrors,
   loadDraft,
   mapServerField,
@@ -80,6 +82,17 @@ interface Failure {
   rootSessionId: string | null;
 }
 
+/** An Atlas created by a failed start, and the workspace it was created on. */
+interface CreatedRoot {
+  id: string;
+  workspace: string;
+}
+
+/** Atlas's workspace: the first project's repo and branch. */
+function workspaceOf(project: ProjectDraft | undefined): string {
+  return project ? `${project.repo.trim()}#${project.branch.trim()}` : "";
+}
+
 const NO_SERVER_ERRORS: ServerErrors = { byProject: [] };
 
 function accessMessage(error: unknown): string {
@@ -105,7 +118,7 @@ export function NewFactoryPage() {
   const [serverErrors, setServerErrors] = useState<ServerErrors>(NO_SERVER_ERRORS);
   const [phase, setPhase] = useState<Phase>("idle");
   const [failure, setFailure] = useState<Failure | null>(null);
-  const rootRef = useRef<string | null>(null);
+  const [root, setRoot] = useState<CreatedRoot | null>(null);
   const submittingRef = useRef(false);
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -113,13 +126,17 @@ export function NewFactoryPage() {
   const blocked = preflight.data !== undefined && !preflightPasses(preflight.data);
   const busy = phase !== "idle";
   const phaseText = phase === "idle" ? null : PHASE_TEXT[phase];
+  // A failed start's Atlas is reused only while it sits on the first project's repo and branch.
+  const reusableRoot = root && root.workspace === workspaceOf(draft.projects[0]) ? root.id : null;
+  const retrying = failure?.rootSessionId != null && failure.rootSessionId === reusableRoot;
 
-  // Keep the draft in this browser while the user edits (never the untouched form).
+  // Keep the draft in this browser while the user edits (never the untouched form), but
+  // not while the saved one waits for Restore or Discard: it would overwrite it.
   useEffect(() => {
-    if (!dirty) return;
+    if (!dirty || stored) return;
     const timer = window.setTimeout(() => saveDraft(draft), DRAFT_SAVE_MS);
     return () => window.clearTimeout(timer);
-  }, [draft, dirty]);
+  }, [draft, dirty, stored]);
 
   const update = (next: FactoryDraft) => {
     setDraft(next);
@@ -160,7 +177,7 @@ export function NewFactoryPage() {
     });
   };
 
-  const applyError = (error: unknown) => {
+  const applyError = (error: unknown, atlasId: string | null) => {
     const cause = error instanceof StartFactoryError ? error.cause : error;
     if (cause instanceof FactoryApiError && cause.status === 400) {
       const target = mapServerField(cause.field);
@@ -169,7 +186,8 @@ export function NewFactoryPage() {
         focusFirstError();
         return;
       }
-      if (target) {
+      // A field the section doesn't show falls through to the failure alert.
+      if (target && fieldShown(target.field, draft.projects[target.project])) {
         const byProject: ProjectErrors[] = [];
         byProject[target.project] = { [target.field]: sentence(cause.message) };
         setServerErrors({ byProject });
@@ -177,7 +195,7 @@ export function NewFactoryPage() {
         return;
       }
     }
-    setFailure({ message: sentence(accessMessage(cause)), rootSessionId: rootRef.current });
+    setFailure({ message: sentence(accessMessage(cause)), rootSessionId: atlasId });
   };
 
   const submit = async () => {
@@ -190,6 +208,7 @@ export function NewFactoryPage() {
     submittingRef.current = true;
     setFailure(null);
     setServerErrors(NO_SERVER_ERRORS);
+    const workspace = workspaceOf(draft.projects[0]);
     try {
       const result = await startFactory(
         {
@@ -197,15 +216,16 @@ export function NewFactoryPage() {
           cadence: draft.cadence,
           projects: draft.projects.map(toProjectInput),
         },
-        { rootSessionId: rootRef.current, onStep: setPhase },
+        { rootSessionId: reusableRoot, onStep: setPhase },
       );
       clearDraft();
       void queryClient.invalidateQueries({ queryKey: FACTORIES_QUERY_KEY });
       navigate(`/factory/${result.factory_id}`);
     } catch (error) {
-      if (error instanceof StartFactoryError) rootRef.current = error.rootSessionId;
+      const atlas = error instanceof StartFactoryError ? error.rootSessionId : reusableRoot;
+      setRoot(atlas ? { id: atlas, workspace } : null);
       setPhase("idle");
-      applyError(error);
+      applyError(error, atlas);
     } finally {
       submittingRef.current = false;
     }
@@ -283,6 +303,7 @@ export function NewFactoryPage() {
             id="factory-new-form"
             noValidate
             aria-label="New factory"
+            onKeyDown={suppressImplicitSubmit}
             onSubmit={(event) => {
               event.preventDefault();
               void submit();
@@ -420,18 +441,12 @@ export function NewFactoryPage() {
                 <AlertDescription className="flex flex-col gap-2">
                   <span>{failure.message}</span>
                   {failure.rootSessionId && (
-                    <span className="flex flex-wrap items-center gap-2">
-                      <Button
-                        type="button"
-                        size="xs"
-                        variant="outline"
-                        onClick={() => void submit()}
-                        disabled={busy}
-                        data-testid="factory-new-retry"
-                      >
-                        <RotateCcwIcon />
-                        Retry storing charters
-                      </Button>
+                    <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                      <span data-testid="factory-new-retry-note">
+                        {retrying
+                          ? "Retry stores the charters with this Atlas."
+                          : "The first project’s repository changed, so Start creates a new Atlas; this one stays in your chats."}
+                      </span>
                       <Link
                         to={`/c/${failure.rootSessionId}`}
                         componentId="factory.new.open_atlas"
@@ -470,10 +485,20 @@ export function NewFactoryPage() {
                 form="factory-new-form"
                 disabled={busy || blocked}
                 data-testid="factory-new-submit"
+                data-retry={retrying || undefined}
                 componentId="factory.new.submit"
               >
-                Start factory
-                <ArrowRightIcon />
+                {retrying ? (
+                  <>
+                    <RotateCcwIcon />
+                    Retry storing charters
+                  </>
+                ) : (
+                  <>
+                    Start factory
+                    <ArrowRightIcon />
+                  </>
+                )}
               </Button>
             </div>
           </div>

@@ -2,13 +2,16 @@
  * The ⋯ menu of a project card and the project drawer: pause/resume, restart
  * and relaunch the PL, switch its factory preview to a PR, ask for env
  * status, edit the charter and stop the project. Every lever is a server
- * control (never a chat message); a chip beside the menu shows what it is
- * waiting for, and paused or failed projects get their next step inline.
+ * control (never a chat message); a chip shows what it is waiting for, and
+ * paused or failed projects get their next step inline. A card places that
+ * inline part under its title (`useProjectControlParts`); the drawer keeps
+ * it beside the menu.
  */
 
-import { useState } from "react";
+import { type ReactNode, useState } from "react";
 import {
   EllipsisIcon,
+  GitPullRequestIcon,
   MessageSquareIcon,
   PauseIcon,
   PencilIcon,
@@ -57,18 +60,46 @@ type DialogKind = "pause" | "stop" | "restart" | "relaunch" | "charter";
 const LIVE_PREVIEW = new Set(["deploying", "ready", "stale"]);
 
 function previewWord(pr: PrView): string {
-  const state = pr.preview?.state;
-  if (!state || state === "down") return "no preview";
-  if (state === "stale") return "preview behind head";
-  return `preview ${state}`;
+  const preview = pr.preview;
+  if (!preview || preview.state === "down") return "no preview";
+  if (preview.state === "stale") return "preview behind head";
+  if (preview.state === "ready" && preview.deployed.sha === pr.head_sha)
+    return "at head · redeploy";
+  return `preview ${preview.state}`;
 }
 
-export function ProjectControlsMenu({
-  factoryId,
-  project,
-  prs,
-  members,
-}: ProjectControlsMenuProps) {
+export interface ProjectControlParts {
+  /**
+   * The project's next step, or what a control waits for: the pending chip,
+   * Resume on a paused project, Restart and Relaunch on a failed one; null
+   * when there is none.
+   */
+  quick: ReactNode | null;
+  /** The ⋯ trigger with its menu and confirm dialogs. */
+  menu: ReactNode;
+}
+
+/** The ⋯ menu with the project's next step beside it (the drawer's header). */
+export function ProjectControlsMenu(props: ProjectControlsMenuProps) {
+  const { quick, menu } = useProjectControlParts(props);
+  return (
+    <span className="flex min-w-0 shrink-0 items-center justify-end gap-1">
+      {quick}
+      {menu}
+    </span>
+  );
+}
+
+/**
+ * The project's controls as two parts the caller places: a card keeps only
+ * the ⋯ in its header and puts the next step on its own row, so a wide chip
+ * never squeezes the title.
+ */
+export function useProjectControlParts(
+  { factoryId, project, prs, members }: ProjectControlsMenuProps,
+  /** Classes for the pending chip, e.g. a wider cap on a row of its own. */
+  chipClassName?: string,
+): ProjectControlParts {
   const controls = useFactoryControls(factoryId);
   const [dialog, setDialog] = useState<DialogKind | null>(null);
   const target = `project:${project.slug}` as const;
@@ -98,6 +129,7 @@ export function ProjectControlsMenu({
     showUndoToast({
       id: `control-undo-${project.slug}`,
       text: `Pausing ${project.title}`,
+      sent,
       onUndo: () => {
         void sent.then((res) => {
           if (res) void controls.send({ action: "resume", target });
@@ -122,53 +154,55 @@ export function ProjectControlsMenu({
     );
   const live = openPrs.filter((pr) => pr.preview && LIVE_PREVIEW.has(pr.preview.state));
 
-  return (
-    <span className="flex min-w-0 shrink-0 items-center justify-end gap-1">
-      {pending ? (
-        <PendingChip
-          control={pending}
-          who={pending.target.startsWith("member:") ? (pl?.title ?? "PL") : "PL"}
-          testId={`control-pending-${project.slug}`}
-          onRestart={pl ? () => setDialog("restart") : undefined}
-          onDismiss={pending.localId ? () => controls.dismiss(pending.localId!) : undefined}
-        />
-      ) : paused || stopped ? (
-        <Button
-          variant="outline"
-          size="xs"
-          onClick={resume}
-          disabled={!pl}
-          data-testid={`control-resume-quick-${project.slug}`}
-          componentId="factory.project.resume_quick"
-        >
-          <PlayIcon />
-          Resume
-        </Button>
-      ) : failed && pl ? (
-        <span className="flex items-center gap-1">
-          <Button
-            variant="outline"
-            size="xs"
-            onClick={() => setDialog("restart")}
-            data-testid={`control-restart-quick-${project.slug}`}
-            componentId="factory.project.restart_quick"
-          >
-            <RotateCcwIcon />
-            Restart
-          </Button>
-          <Button
-            variant="outline"
-            size="xs"
-            onClick={() => setDialog("relaunch")}
-            data-testid={`control-relaunch-quick-${project.slug}`}
-            componentId="factory.project.relaunch_quick"
-            className="@max-md:hidden"
-          >
-            <RefreshCwIcon />
-            Relaunch with spec
-          </Button>
-        </span>
-      ) : null}
+  const quick = pending ? (
+    <PendingChip
+      control={pending}
+      who={pending.target.startsWith("member:") ? (pl?.title ?? "PL") : "PL"}
+      testId={`control-pending-${project.slug}`}
+      onRestart={pl ? () => setDialog("restart") : undefined}
+      onDismiss={pending.localId ? () => controls.dismiss(pending.localId!) : undefined}
+      className={chipClassName}
+    />
+  ) : paused || stopped ? (
+    <Button
+      variant="outline"
+      size="xs"
+      onClick={resume}
+      disabled={!pl}
+      data-testid={`control-resume-quick-${project.slug}`}
+      componentId="factory.project.resume_quick"
+    >
+      <PlayIcon />
+      Resume
+    </Button>
+  ) : failed && pl ? (
+    <span className="flex items-center gap-1">
+      <Button
+        variant="outline"
+        size="xs"
+        onClick={() => setDialog("restart")}
+        data-testid={`control-restart-quick-${project.slug}`}
+        componentId="factory.project.restart_quick"
+      >
+        <RotateCcwIcon />
+        Restart
+      </Button>
+      <Button
+        variant="outline"
+        size="xs"
+        onClick={() => setDialog("relaunch")}
+        data-testid={`control-relaunch-quick-${project.slug}`}
+        componentId="factory.project.relaunch_quick"
+        className="@max-[40rem]:hidden"
+      >
+        <RefreshCwIcon />
+        Relaunch with spec
+      </Button>
+    </span>
+  ) : null;
+
+  const menu = (
+    <>
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
           <Button
@@ -183,7 +217,11 @@ export function ProjectControlsMenu({
             <EllipsisIcon className="size-4" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" collisionPadding={12} className="w-72 backdrop-blur-md">
+        <DropdownMenuContent
+          align="end"
+          collisionPadding={12}
+          className="w-72 backdrop-blur-md dark:bg-card-solid"
+        >
           <DropdownMenuLabel className="truncate text-sm font-normal text-muted-foreground">
             {pl ? pl.title : "No PL yet · Atlas spawns it"}
           </DropdownMenuLabel>
@@ -254,6 +292,7 @@ export function ProjectControlsMenu({
                 onSelect={() => preview(pr)}
                 data-testid={`control-preview-${pr.number}`}
               >
+                <GitPullRequestIcon />
                 <span className="font-mono tabular-nums">#{pr.number}</span>
                 <span className="font-mono text-muted-foreground">{pr.head_sha.slice(0, 7)}</span>
                 <span className="ml-auto text-sm text-muted-foreground">{previewWord(pr)}</span>
@@ -350,6 +389,7 @@ export function ProjectControlsMenu({
         open={dialog === "charter"}
         onOpenChange={close}
       />
-    </span>
+    </>
   );
+  return { quick, menu };
 }

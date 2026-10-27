@@ -3,7 +3,7 @@
 // factory (cards, drawer, header, the drift chip), so one click shows the
 // same pending chip everywhere; the `control.*` events then take over.
 
-import { useCallback, useContext, useMemo, useSyncExternalStore } from "react";
+import { useCallback, useContext, useEffect, useMemo, useSyncExternalStore } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { showToast } from "@/components/ui/toast";
 import { factoryQueryKey, useFactoryEvents } from "@/hooks/useFactory";
@@ -20,6 +20,7 @@ import {
   type PendingControl,
   ackedAction,
   controlErrorMessage,
+  localControlLive,
   pendingControls,
   pendingForProject,
 } from "./controlModel";
@@ -61,6 +62,14 @@ function patchLocal(factoryId: string, localId: string, patch: Partial<LocalCont
     factoryId,
     list.map((c) => (c.localId === localId ? { ...c, ...patch } : c)),
   );
+}
+
+/** Forget the clicks the server's events now speak for (see `localControlLive`). */
+function pruneLocal(factoryId: string, eventIds: ReadonlySet<string>, nowMs: number): void {
+  const list = stores.get(factoryId);
+  if (!list) return;
+  const kept = list.filter((c) => localControlLive(c, eventIds, nowMs));
+  if (kept.length !== list.length) setLocal(factoryId, kept);
 }
 
 /** Forget a click (its chip's dismiss button). */
@@ -123,7 +132,10 @@ export function useFactoryControls(factoryId: string): FactoryControls {
   );
   const events = useFactoryEvents(factoryId, CONTROL_EVENT_FILTERS);
   const page = events.data?.pages[0]?.data;
-  const pending = useMemo(() => pendingControls(local, page ?? [], now), [local, page, now]);
+  const pending = useMemo(() => pendingControls(local, page ?? null, now), [local, page, now]);
+  useEffect(() => {
+    if (page) pruneLocal(factoryId, new Set(page.map((e) => e.id)), now);
+  }, [factoryId, page, now]);
 
   const stamp = useCallback(() => (pinned ? pinned.getTime() : Date.now()), [pinned]);
   const refresh = useCallback(() => {
@@ -149,6 +161,7 @@ export function useFactoryControls(factoryId: string): FactoryControls {
         project: projectOf(request.target),
         at: stamp(),
         sent: false,
+        sentAt: null,
         eventId: null,
         recipients: null,
         error: null,
@@ -160,6 +173,7 @@ export function useFactoryControls(factoryId: string): FactoryControls {
         const recipients = event?.data?.recipients;
         patchLocal(factoryId, entry.localId, {
           sent: true,
+          sentAt: stamp(),
           eventId: event?.id ?? null,
           at: typeof event?.ts === "number" ? event.ts : entry.at,
           project: event?.project_slug ?? entry.project,
@@ -187,6 +201,7 @@ export function useFactoryControls(factoryId: string): FactoryControls {
         project,
         at: stamp(),
         sent: true,
+        sentAt: stamp(),
         eventId,
         recipients: null,
         error: null,

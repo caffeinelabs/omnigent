@@ -96,17 +96,23 @@ export function PendingChip({
 
 /**
  * The pill a pause leaves for 5 s: "Pausing api-version · Undo". Undo runs
- * `onUndo` (it sends resume); a newer pause of the same target replaces it.
+ * `onUndo` (it sends resume); a newer pause of the same target replaces it,
+ * and a refused pause (`sent` resolves to null) takes it down.
  */
 export function showUndoToast({
   id,
   text,
+  sent,
   onUndo,
 }: {
   id: string;
   text: string;
+  sent?: Promise<unknown>;
   onUndo: () => void;
 }): void {
+  void sent?.then((res) => {
+    if (res == null) toast.dismiss(id);
+  });
   toast.custom(
     (toastId) => (
       <div

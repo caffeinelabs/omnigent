@@ -41,7 +41,8 @@ const URL_PATH_RE = /^\/[A-Za-z0-9._~/-]{0,199}$/;
 /** The definition-of-done row every project has; it is never stored. */
 export const FIXED_DOD = "PR ready for human merge";
 
-export type Priority = 0 | 1 | 2;
+/** P0–P2 on the form; the server also stores P3, which an edit keeps. */
+export type Priority = 0 | 1 | 2 | 3;
 export const PRIORITIES: readonly Priority[] = [0, 1, 2];
 
 /** One project section of the form. */
@@ -302,7 +303,7 @@ export function draftFromProject(project: ProjectView): ProjectDraft {
     slugEdited: true,
     repo: project.repo ?? "",
     branch: project.base_branch ?? "",
-    priority: Math.min(2, Math.max(0, project.priority)) as Priority,
+    priority: Math.min(3, Math.max(0, Math.round(project.priority))) as Priority,
     goal: charter?.goal ?? "",
     dod: charter?.dod.length ? [...charter.dod] : [""],
     scopePaths: [...(charter?.scope_paths ?? [])],
@@ -539,16 +540,50 @@ export interface StoredDraft {
   draft: FactoryDraft;
 }
 
-function isDraft(value: unknown): value is StoredDraft {
+function isDraft(value: unknown): value is { savedAt: number; draft: Record<string, unknown> } {
   if (typeof value !== "object" || value === null) return false;
-  const { savedAt, draft } = value as Partial<StoredDraft>;
-  return (
-    typeof savedAt === "number" &&
-    typeof draft === "object" &&
-    draft !== null &&
-    typeof draft.name === "string" &&
-    Array.isArray(draft.projects)
-  );
+  const { savedAt, draft } = value as { savedAt?: unknown; draft?: unknown };
+  return typeof savedAt === "number" && typeof draft === "object" && draft !== null;
+}
+
+const isStringList = (value: unknown): value is string[] =>
+  Array.isArray(value) && value.every((v) => typeof v === "string");
+
+/**
+ * A stored project section, field by field: anything missing or of the wrong
+ * type (an older or corrupted draft) falls back to the empty project's value.
+ */
+function restoreProject(value: unknown): ProjectDraft {
+  const base = emptyProject();
+  if (typeof value !== "object" || value === null) return base;
+  const raw = value as Record<string, unknown>;
+  const pick = <K extends keyof ProjectDraft>(
+    key: K,
+    ok: (v: unknown) => boolean,
+  ): ProjectDraft[K] => (ok(raw[key]) ? (raw[key] as ProjectDraft[K]) : base[key]);
+  const isString = (v: unknown) => typeof v === "string";
+  const isBool = (v: unknown) => typeof v === "boolean";
+  const intIn = (min: number, max: number) => (v: unknown) =>
+    typeof v === "number" && Number.isInteger(v) && v >= min && v <= max;
+  return {
+    key: pick("key", (v) => typeof v === "string" && v !== ""),
+    title: pick("title", isString),
+    slug: pick("slug", isString),
+    slugEdited: pick("slugEdited", isBool),
+    repo: pick("repo", isString),
+    branch: pick("branch", isString),
+    priority: pick("priority", intIn(0, 3)),
+    goal: pick("goal", isString),
+    dod: pick("dod", isStringList),
+    scopePaths: pick("scopePaths", isStringList),
+    envNeeded: pick("envNeeded", isBool),
+    previewEnabled: pick("previewEnabled", isBool),
+    previewSlots: pick("previewSlots", intIn(MIN_SLOTS, MAX_SLOTS)),
+    demoFocus: pick("demoFocus", isString),
+    versionPath: pick("versionPath", isString),
+    budgetIcs: pick("budgetIcs", intIn(MIN_BUDGET, MAX_BUDGET)),
+    constraints: pick("constraints", isString),
+  };
 }
 
 /** The saved draft, or null when there is none (or storage is unavailable). */
@@ -558,9 +593,16 @@ export function loadDraft(): StoredDraft | null {
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (!isDraft(parsed)) return null;
-    // Fill fields added since the draft was saved.
-    const projects = parsed.draft.projects.map((p) => ({ ...emptyProject(), ...p }));
-    return { savedAt: parsed.savedAt, draft: { ...parsed.draft, projects } };
+    const { name, cadence, projects } = parsed.draft;
+    if (!Array.isArray(projects)) return null;
+    return {
+      savedAt: parsed.savedAt,
+      draft: {
+        name: typeof name === "string" ? name : "",
+        cadence: cadence === "normal" ? "normal" : "demo",
+        projects: projects.slice(0, MAX_PROJECTS).map(restoreProject),
+      },
+    };
   } catch {
     return null;
   }
@@ -614,6 +656,23 @@ const SERVER_FIELDS: Record<string, ProjectField> = {
   budget_ics: "budget",
   priority: "priority",
 };
+
+/**
+ * Whether a project section shows `field` (and so its error): a charter edit
+ * hides what a PATCH cannot change, and the demo focus needs previews on.
+ */
+export function fieldShown(
+  field: ProjectField,
+  project: ProjectDraft | undefined,
+  mode: "new" | "charter" = "new",
+): boolean {
+  if (!project) return false;
+  if (mode === "charter" && ["title", "slug", "repo", "branch", "version"].includes(field)) {
+    return false;
+  }
+  if (field === "demo") return previewsOn(project);
+  return true;
+}
 
 /**
  * Where a server 400's `field` lands on the form: `projects[1].slug` →

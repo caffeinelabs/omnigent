@@ -4,8 +4,28 @@
  * and a compact number slider. They reuse the shell's input tokens.
  */
 
-import type { ReactNode } from "react";
+import { type KeyboardEvent, type ReactNode, useRef } from "react";
 import { cn } from "@/lib/utils";
+
+/** An inline field error (nothing when there is none). */
+export function FieldError({ message, testId }: { message?: string | null; testId?: string }) {
+  if (!message) return null;
+  return (
+    <p role="alert" data-testid={testId} className="text-sm text-destructive">
+      {message}
+    </p>
+  );
+}
+
+/**
+ * Enter in a one-line input never submits a form: a start or an added
+ * project only happens on its button. Put on the `<form>` as `onKeyDown`.
+ */
+export function suppressImplicitSubmit(event: KeyboardEvent<HTMLFormElement>): void {
+  if (event.key !== "Enter" || event.nativeEvent.isComposing) return;
+  const target = event.target as HTMLElement;
+  if (target instanceof HTMLInputElement && target.type !== "checkbox") event.preventDefault();
+}
 
 /** A label column beside its field on wide containers, stacked on narrow ones. */
 export function FieldRow({
@@ -14,6 +34,7 @@ export function FieldRow({
   error,
   hint,
   errorTestId,
+  labelAlign = "input",
   children,
   className,
 }: {
@@ -22,9 +43,15 @@ export function FieldRow({
   error?: string | null;
   hint?: ReactNode;
   errorTestId?: string;
+  /** What the label lines up with: a 32 px input, or a first line of text (sliders, lists). */
+  labelAlign?: "input" | "text";
   children: ReactNode;
   className?: string;
 }) {
+  const labelClass = cn(
+    "text-sm font-medium text-muted-foreground",
+    labelAlign === "input" ? "@2xl:pt-1.5" : "@2xl:pt-0.5",
+  );
   return (
     <div
       className={cn(
@@ -33,18 +60,16 @@ export function FieldRow({
       )}
     >
       {htmlFor ? (
-        <label htmlFor={htmlFor} className="text-sm font-medium text-muted-foreground @2xl:pt-1.5">
+        <label htmlFor={htmlFor} className={labelClass}>
           {label}
         </label>
       ) : (
-        <span className="text-sm font-medium text-muted-foreground @2xl:pt-1.5">{label}</span>
+        <span className={labelClass}>{label}</span>
       )}
       <div className="flex min-w-0 flex-col gap-1">
         {children}
         {error ? (
-          <p role="alert" data-testid={errorTestId} className="text-sm text-destructive">
-            {error}
-          </p>
+          <FieldError message={error} testId={errorTestId} />
         ) : hint ? (
           <p className="text-sm text-muted-foreground">{hint}</p>
         ) : null}
@@ -60,7 +85,17 @@ export interface SegmentOption<T extends string | number> {
   hint?: ReactNode;
 }
 
-/** A row of mutually exclusive options in one track (radio semantics). */
+const NEXT_KEYS: Record<string, number> = {
+  ArrowRight: 1,
+  ArrowDown: 1,
+  ArrowLeft: -1,
+  ArrowUp: -1,
+};
+
+/**
+ * A row of mutually exclusive options in one track, with radio semantics:
+ * one tab stop, and the arrow keys (Home, End) move the choice.
+ */
 export function Segmented<T extends string | number>({
   value,
   options,
@@ -78,17 +113,34 @@ export function Segmented<T extends string | number>({
   disabled?: boolean;
   className?: string;
 }) {
+  const group = useRef<HTMLDivElement>(null);
+  const current = options.findIndex((option) => option.value === value);
+  const move = (event: KeyboardEvent<HTMLDivElement>) => {
+    const last = options.length - 1;
+    const step = NEXT_KEYS[event.key];
+    let next: number | null = null;
+    if (step !== undefined) next = (Math.max(current, 0) + step + options.length) % options.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = last;
+    const option = next === null ? undefined : options[next];
+    if (next === null || !option || disabled) return;
+    event.preventDefault();
+    onChange(option.value);
+    group.current?.querySelectorAll<HTMLButtonElement>('[role="radio"]')[next]?.focus();
+  };
   return (
     <div
+      ref={group}
       role="radiogroup"
       aria-label={label}
+      onKeyDown={move}
       className={cn(
         "inline-flex w-fit max-w-full flex-wrap items-center gap-0.5 self-start rounded-lg bg-muted/60 p-0.5",
         disabled && "opacity-50",
         className,
       )}
     >
-      {options.map((option) => {
+      {options.map((option, index) => {
         const active = option.value === value;
         return (
           <button
@@ -96,6 +148,7 @@ export function Segmented<T extends string | number>({
             type="button"
             role="radio"
             aria-checked={active}
+            tabIndex={active || (current === -1 && index === 0) ? 0 : -1}
             disabled={disabled}
             data-state={active ? "on" : "off"}
             data-testid={`${testIdPrefix}-${option.value}`}

@@ -63,7 +63,7 @@ function PauseBody({ onOpenChange, scope, name, livePreviews, onConfirm }: Pause
       ? "No factory previews are up right now."
       : teardown
         ? `${livePreviews} factory ${livePreviews === 1 ? "preview is" : "previews are"} torn down; demos stay in the cockpit.`
-        : `${livePreviews} factory ${livePreviews === 1 ? "preview stays" : "previews stay"} up for review; ${scope === "project" ? "the PL's pod is" : "PL pods are"} kept alive for ${livePreviews === 1 ? "it" : "them"}.`;
+        : `${livePreviews} factory ${livePreviews === 1 ? "preview stays" : "previews stay"} up for review; ${scope === "project" ? "the PL’s pod is" : "PL pods are"} kept alive for ${livePreviews === 1 ? "it" : "them"}.`;
   const items =
     scope === "project"
       ? [

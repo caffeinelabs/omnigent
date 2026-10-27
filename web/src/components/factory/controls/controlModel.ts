@@ -31,6 +31,11 @@ export const ERROR_SHOW_MS = 60_000;
 
 /** Clock skew tolerated between a click's stamp and its server event. */
 const SKEW_MS = 60_000;
+/**
+ * How long a sent click stands in for its server event while the events
+ * refetch catches up; after that the events page is the truth.
+ */
+export const REFETCH_GRACE_MS = 60_000;
 
 export type PendingState = "sending" | "waiting" | "late" | "error" | "done";
 
@@ -45,6 +50,8 @@ export interface LocalControl {
   at: number;
   /** The server took it (an id may still be unknown, e.g. a charter PATCH). */
   sent: boolean;
+  /** Cockpit clock when the server took it (`at` may be the server's own stamp). */
+  sentAt: number | null;
   /** The `control.<action>` event id the server returned. */
   eventId: string | null;
   recipients: string[] | null;
@@ -165,16 +172,42 @@ function settled(recipients: readonly string[], acked: readonly string[]): boole
 }
 
 /**
+ * Whether a click in this tab still adds something to the server's events:
+ * it is in flight, its refusal is still on show, or it was sent so recently
+ * that the events page may not have it yet. Afterwards the server is the
+ * truth, so a control that aged out or fell off the page never comes back
+ * as a click nobody replied to.
+ *
+ * @param eventIds - The ids on the events page, or null while it is loading
+ *   (sent clicks are then kept as they are).
+ */
+export function localControlLive(
+  control: LocalControl,
+  eventIds: ReadonlySet<string> | null,
+  nowMs: number,
+): boolean {
+  if (control.error) return nowMs - control.at <= ERROR_SHOW_MS;
+  if (!control.sent) return true;
+  if (nowMs - control.at > PENDING_MAX_AGE_MS) return false;
+  if (eventIds === null) return true;
+  if (control.eventId && eventIds.has(control.eventId)) return true;
+  return nowMs - (control.sentAt ?? control.at) <= REFETCH_GRACE_MS;
+}
+
+/**
  * Merge this tab's clicks with the server's control events into what each
  * target shows now: the newest control per target, or nothing once it was
  * confirmed a while ago.
+ *
+ * @param events - The newest `control.*` events, or null while they load.
  */
 export function pendingControls(
   local: readonly LocalControl[],
-  events: readonly EventView[],
+  events: readonly EventView[] | null,
   nowMs: number,
 ): PendingControl[] {
-  const derived = controlsFromEvents(events, nowMs);
+  const derived = controlsFromEvents(events ?? [], nowMs);
+  const eventIds = events ? new Set(events.map((e) => e.id)) : null;
   const byEvent = new Map(derived.map((d) => [d.eventId, d]));
   const candidates: (PendingControl & { ackedAt: number | null })[] = [];
   for (const d of derived) {
@@ -196,6 +229,7 @@ export function pendingControls(
   }
   for (const l of local) {
     if (l.eventId && byEvent.has(l.eventId)) continue;
+    if (!localControlLive(l, eventIds, nowMs)) continue;
     // A sent click whose event id is unknown is the server's newest one of its kind.
     const twin = derived.find(
       (d) => d.target === l.target && d.action === l.action && d.at >= l.at - SKEW_MS,
@@ -334,9 +368,22 @@ export function pendingShortText(control: PendingControl): string {
   }
 }
 
+/** Server refusals that name ids or internals, in the cockpit's words. */
+const REFUSAL_TEXT: Record<string, string> = {
+  not_a_factory: "This factory is no longer on the server",
+  unknown_project: "The project is no longer in this factory",
+  unknown_member: "That agent is no longer in this factory",
+  no_project_lead: "The project has no PL yet",
+};
+
 /** A refused control as the human should read it (403 → missing access). */
 export function controlErrorMessage(error: unknown): string {
-  if (error instanceof ApiError && error.status === 403) return "You need edit/owner access";
+  if (error instanceof ApiError) {
+    if (error.status === 403) return "You need edit/owner access";
+    const known = error.code ? REFUSAL_TEXT[error.code] : undefined;
+    if (known) return known;
+    if (error.status === 404) return "Not found on the server; reload the cockpit";
+  }
   if (error instanceof Error && error.message) return sentence(error.message);
   return "Something went wrong";
 }

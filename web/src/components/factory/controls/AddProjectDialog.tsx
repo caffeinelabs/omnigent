@@ -19,10 +19,12 @@ import {
 import { showToast } from "@/components/ui/toast";
 import { factoryQueryKey } from "@/hooks/useFactory";
 import { FactoryApiError, type FactorySnapshot, addFactoryProject } from "@/lib/factoryApi";
+import { suppressImplicitSubmit } from "../start/formParts";
 import { ProjectFields } from "../start/ProjectFields";
 import {
   type ProjectErrors,
   emptyProject,
+  fieldShown,
   mapServerField,
   sentence,
   toProjectInput,
@@ -82,7 +84,7 @@ function AddProjectBody({ factoryId, onOpenChange }: Omit<AddProjectDialogProps,
         const target = mapServerField(
           error.field ?? (error.code === "slug_exists" ? "slug" : null),
         );
-        if (target && "field" in target) {
+        if (target && "field" in target && fieldShown(target.field, draft)) {
           setServerErrors({ [target.field]: sentence(error.message) });
           showFirstError();
           return;
@@ -106,6 +108,7 @@ function AddProjectBody({ factoryId, onOpenChange }: Omit<AddProjectDialogProps,
         ref={formRef}
         id="add-project-form"
         noValidate
+        onKeyDown={suppressImplicitSubmit}
         onSubmit={(event) => {
           event.preventDefault();
           void submit();
@@ -156,6 +159,12 @@ export function AddProjectDialog({ factoryId, open, onOpenChange }: AddProjectDi
       <DialogContent
         data-testid="add-project-dialog"
         className="flex max-h-[85vh] flex-col gap-4 sm:max-w-2xl"
+        onOpenAutoFocus={(event) => {
+          // On a phone the keyboard would cover half the dialog before anything is read.
+          if (!window.matchMedia?.("(max-width: 639px)").matches) return;
+          event.preventDefault();
+          (event.currentTarget as HTMLElement | null)?.focus();
+        }}
       >
         <AddProjectBody factoryId={factoryId} onOpenChange={onOpenChange} />
       </DialogContent>

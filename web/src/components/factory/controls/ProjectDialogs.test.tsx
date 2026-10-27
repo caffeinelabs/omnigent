@@ -1,9 +1,9 @@
-import { fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { createEvent, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { liveRunSnapshot } from "../__fixtures__/liveRun";
 import { renderControls, serveFactory } from "./__fixtures__/controlsKit";
 import { AddProjectDialog } from "./AddProjectDialog";
-import { EditCharterDialog } from "./EditCharterDialog";
+import { CharterDiff, EditCharterDialog } from "./EditCharterDialog";
 import { resetFactoryControls } from "./useFactoryControls";
 
 const authenticatedFetch = vi.fn();
@@ -103,6 +103,44 @@ describe("AddProjectDialog", () => {
       "Project 'api-version-2' already exists",
     );
   });
+
+  it("adds a project only from its button, never on Enter in a field", () => {
+    setup();
+    const title = screen.getByTestId("add-project-project-title-0");
+    const enter = createEvent.keyDown(title, { key: "Enter" });
+    fireEvent(title, enter);
+    expect(enter.defaultPrevented).toBe(true);
+  });
+
+  it("shows a server error on a field the form has no row for in the dialog", async () => {
+    const { server } = setup();
+    type("add-project-project-title-0", "Docs only");
+    type("add-project-goal-0", "x");
+    type("add-project-dod-0-0", "y");
+    fireEvent.click(screen.getByTestId("add-project-preview-0"));
+    server.failNext(400, {
+      error: { code: "invalid_body", message: "demo_focus needs previews" },
+      field: "demo_focus",
+    });
+    fireEvent.click(screen.getByTestId("add-project-submit"));
+    expect(await screen.findByTestId("add-project-error")).toHaveTextContent(
+      "Demo_focus needs previews",
+    );
+  });
+});
+
+describe("CharterDiff", () => {
+  it("lists a repeated line twice without key clashes", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => {});
+    render(
+      <CharterDiff
+        changes={[{ field: "dod", label: "Definition of done", before: [], after: ["a", "a"] }]}
+      />,
+    );
+    expect(screen.getAllByText("+ a")).toHaveLength(2);
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
+  });
 });
 
 describe("EditCharterDialog", () => {
@@ -173,6 +211,20 @@ describe("EditCharterDialog", () => {
     fireEvent.click(await screen.findByTestId("charter-send"));
     expect(await screen.findByTestId("charter-error-dod-0")).toHaveTextContent(
       "Each DoD item is at most 300 chars",
+    );
+  });
+
+  it("puts a refusal of a field the charter edit doesn't show in the dialog", async () => {
+    const { server } = setup();
+    type("charter-goal-0", "new goal");
+    fireEvent.click(screen.getByTestId("charter-review"));
+    server.failNext(400, {
+      error: { code: "invalid_body", message: "repo is not allowed here" },
+      field: "repo",
+    });
+    fireEvent.click(await screen.findByTestId("charter-send"));
+    expect(await screen.findByTestId("charter-error")).toHaveTextContent(
+      "Repo is not allowed here",
     );
   });
 
