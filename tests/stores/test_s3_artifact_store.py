@@ -126,6 +126,8 @@ def test_make_client_uses_r2_endpoint(monkeypatch):
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
     client = _make_client()
     assert client.meta.endpoint_url == "https://acct.r2.cloudflarestorage.com"
+    # Room for concurrent range reads beyond botocore's default pool of 10.
+    assert client.meta.config.max_pool_connections == 32
 
 
 def test_non_notfound_error_propagates(s3_store, monkeypatch):
@@ -141,3 +143,25 @@ def test_non_notfound_error_propagates(s3_store, monkeypatch):
     monkeypatch.setattr(s3_store._client, "get_object", _boom)
     with pytest.raises(ClientError):
         s3_store.get("k")
+
+
+def test_read_range_is_a_ranged_get(s3_store, monkeypatch):
+    """read_range asks S3 for the span only (a ranged GET), not the whole object."""
+    data = bytes(range(256)) * 4
+    s3_store.put("video.webm", data)
+    ranges: list[str | None] = []
+    get_object = s3_store._client.get_object
+
+    def _recording(**kwargs):
+        ranges.append(kwargs.get("Range"))
+        return get_object(**kwargs)
+
+    monkeypatch.setattr(s3_store._client, "get_object", _recording)
+    assert s3_store.read_range("video.webm", 10, 19) == data[10:20]
+    assert s3_store.read_range("video.webm", 1000, 5000) == data[1000:]
+    assert ranges == ["bytes=10-19", "bytes=1000-5000"]
+
+
+def test_read_range_missing_raises_key_error(s3_store):
+    with pytest.raises(KeyError, match="gone"):
+        s3_store.read_range("gone", 0, 9)

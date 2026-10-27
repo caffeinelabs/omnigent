@@ -2,6 +2,9 @@
 
 from abc import ABC, abstractmethod
 
+S3_SCHEME = "s3://"
+DBFS_VOLUMES_PREFIX = "dbfs:/Volumes/"
+
 
 class ArtifactStore(ABC):
     """
@@ -77,3 +80,51 @@ class ArtifactStore(ABC):
         :returns: ``True`` if a blob exists, ``False`` otherwise.
         """
         ...
+
+    def read_range(self, key: str, start: int, end: int) -> bytes:
+        """
+        Read the inclusive byte span ``start``..``end`` of a blob.
+
+        This default reads the whole blob and slices it; stores that can
+        read a span directly (a file seek, an S3 ranged GET) override it.
+
+        :param key: Forward-slash-separated artifact key,
+            e.g. ``"agents/agent_abc123/bundle.tar.gz"``.
+        :param start: First byte offset, e.g. ``0``.
+        :param end: Last byte offset, inclusive, e.g. ``1023``.
+        :returns: The span's bytes; fewer when the blob ends before *end*.
+        :raises KeyError: If no blob exists for the given key.
+        """
+        return self.get(key)[start : end + 1]
+
+
+def create_artifact_store(location: str) -> ArtifactStore:
+    """
+    Open the artifact store a location names, chosen by its scheme.
+
+    ``s3://bucket[/prefix]`` opens an
+    :class:`~omnigent.stores.artifact_store.s3.S3ArtifactStore` (needs
+    ``boto3``; credentials from the standard AWS chain), ``dbfs:/Volumes/...``
+    a :class:`~omnigent.stores.artifact_store.databricks_volumes.DatabricksVolumesArtifactStore`
+    (needs ``databricks-sdk``), and anything else a
+    :class:`~omnigent.stores.artifact_store.local.LocalArtifactStore` directory.
+
+    :param location: e.g. ``"s3://my-bucket/artifacts"`` or ``"/data/artifacts"``.
+    :returns: The opened store.
+    :raises ImportError: When the backend's optional package is missing.
+    :raises ValueError: When an ``s3://`` URI has no bucket.
+    """
+    if location.startswith(S3_SCHEME):
+        from omnigent.stores.artifact_store.s3 import S3ArtifactStore
+
+        return S3ArtifactStore(location)
+    if location.startswith(DBFS_VOLUMES_PREFIX):
+        from omnigent.stores.artifact_store.databricks_volumes import (
+            DatabricksVolumesArtifactStore,
+        )
+
+        return DatabricksVolumesArtifactStore(location)
+
+    from omnigent.stores.artifact_store.local import LocalArtifactStore
+
+    return LocalArtifactStore(location)

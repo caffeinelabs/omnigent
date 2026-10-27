@@ -1,11 +1,14 @@
 """Demo routes: agents publish recorded demos, humans play them back.
 
 ``POST /v1/factory/agent/demos`` (runner auth, multipart ``meta`` + ``files``)
-stores each file as a session file of the caller's root PL and records a
-``factory_demos`` row. ``GET /v1/factory/demos/{demo_id}/files/{file_id}``
-serves one file to a human with READ on that PL session: the type comes only
-from the extension allowlist, images and video play inline, everything else
-downloads, and single byte ranges are honoured so ``<video>`` can seek.
+stores each file (a session file of the caller's root PL, or an object in the
+factory artifact store when one is configured; see
+:mod:`omnigent.server.factory.demo_storage`) and records a ``factory_demos``
+row. ``GET /v1/factory/demos/{demo_id}/files/{file_id}`` serves one file to a
+human with READ on that PL session: the type comes only from the extension
+allowlist, images and video play inline, everything else downloads, and single
+byte ranges are honoured (read as a span from the store, at most 4 MiB per
+response) so ``<video>`` can seek. A failing store is 503 on both routes.
 """
 
 from __future__ import annotations
@@ -48,6 +51,15 @@ from omnigent.server.factory.agent_scope import (
     require_factory_repo,
 )
 from omnigent.server.factory.context import FactoryDeps, factory_deps
+from omnigent.server.factory.demo_storage import (
+    DemoStoreUnavailableError,
+    discard_factory_entries,
+    file_entry,
+    is_factory_entry,
+    locate_demo_file,
+    put_demo_bytes,
+    store_in_factory_store,
+)
 from omnigent.server.factory.demos import (
     DemoFileIn,
     DemoUploadError,
@@ -62,7 +74,7 @@ from omnigent.server.factory.demos import (
 from omnigent.server.factory.routes import FactoryRouteError
 from omnigent.server.routes._auth_helpers import get_user_id, require_access
 from omnigent.server.routes._origin import require_trusted_origin
-from omnigent.stores.artifact_store.local import LocalArtifactStore
+from omnigent.stores.factory_store import new_id, norm_id
 
 _logger = logging.getLogger(__name__)
 
@@ -70,6 +82,11 @@ router = APIRouter(prefix="/v1/factory", tags=["factory"])
 
 DEMO_ROLES: Final = frozenset({ROLE_ENV_KEEPER, ROLE_PROJECT_LEAD, ROLE_LEAD, ROLE_DEMO})
 _MULTIPART_SLACK: Final = 1024 * 1024
+# Longest span one ranged GET answers (a shorter 206 is allowed): a seek or an
+# open-ended ``bytes=N-`` holds at most this much in memory, not the whole video.
+DEMO_MAX_SPAN_BYTES: Final = 4 * 1024 * 1024
+# Seconds a client is told to wait after the demo store failed.
+_STORE_RETRY_AFTER_S: Final = 5
 _CSP: Final = "default-src 'none'; sandbox"
 _RANGE_RE: Final = re.compile(r"bytes=(\d*)-(\d*)")
 
@@ -122,8 +139,22 @@ async def _read_parts(uploads: list[UploadFile]) -> list[tuple[str, bytes]]:
     return parts
 
 
-def _store_files(deps: FactoryDeps, owner: str, files: list[DemoFileIn]) -> list[dict[str, Any]]:
-    """Write each file as a session file of *owner*; returns the demo's file entries."""
+def _store_files(
+    deps: FactoryDeps, owner: str, files: list[DemoFileIn], *, factory_id: str, demo_id: str
+) -> list[dict[str, Any]]:
+    """
+    Write a demo's files; returns the demo's file entries.
+
+    To the factory artifact store when one is configured, else as session
+    files of *owner* (so they also show in its Files panel).
+
+    :raises DemoStoreUnavailableError: When the store fails; the files
+        already written are removed first.
+    """
+    if deps.factory_artifact_store is not None:
+        return store_in_factory_store(
+            deps.factory_artifact_store, factory_id=factory_id, demo_id=demo_id, files=files
+        )
     from omnigent.server.routes._sessions.helpers import (
         _publish_and_persist_resource_event,
         _stored_file_to_resource,
@@ -139,18 +170,9 @@ def _store_files(deps: FactoryDeps, owner: str, files: list[DemoFileIn]) -> list
                 content_type=item.content_type,
                 session_id=owner,
             )
-            deps.artifact_store.put(stored.id, item.content)
-            entry: dict[str, Any] = {
-                "file_id": stored.id,
-                "name": item.name,
-                "kind": item.kind,
-                "caption": item.caption,
-                "content_type": item.content_type,
-                "bytes": len(item.content),
-            }
-            if item.step is not None:
-                entry["step"] = item.step
-            stored_entries.append(entry)
+            # Listed before the write, so a failed write also discards its row.
+            stored_entries.append(file_entry(item, stored.id))
+            put_demo_bytes(deps.artifact_store, stored.id, item.content)
             try:
                 _publish_and_persist_resource_event(
                     owner,
@@ -165,14 +187,20 @@ def _store_files(deps: FactoryDeps, owner: str, files: list[DemoFileIn]) -> list
                     "factory: could not announce demo file %s", stored.id, exc_info=True
                 )
     except Exception:
-        _discard_files(deps, owner, [e["file_id"] for e in stored_entries])
+        _discard_files(deps, owner, stored_entries)
         raise
     return stored_entries
 
 
-def _discard_files(deps: FactoryDeps, owner: str, file_ids: list[str]) -> None:
+def _discard_files(deps: FactoryDeps, owner: str, entries: list[dict[str, Any]]) -> None:
     """Best-effort removal of files stored for a demo that was not recorded."""
-    for file_id in file_ids:
+    in_factory_store = [e for e in entries if is_factory_entry(e)]
+    if in_factory_store and deps.factory_artifact_store is not None:
+        discard_factory_entries(deps.factory_artifact_store, in_factory_store)
+    for entry in entries:
+        if is_factory_entry(entry):
+            continue
+        file_id = entry["file_id"]
         try:
             if deps.file_store is not None:
                 deps.file_store.delete(file_id, session_id=owner)
@@ -196,7 +224,10 @@ def _record_demo(
     deps = caller.deps
     pr, created = ensure_pr(caller, repo, number, slugs=slugs)
     owner = caller.membership.root_session_id
-    stored = _store_files(deps, owner, files)
+    demo_id = new_id()
+    stored = _store_files(
+        deps, owner, files, factory_id=norm_id(caller.factory_id), demo_id=demo_id
+    )
     given = meta.summary or (meta.manifest or {}).get("summary")
     title, summary, preview_url = clip_meta(
         meta.title, given if isinstance(given, str) else None, meta.preview_url
@@ -222,9 +253,10 @@ def _record_demo(
             manifest=manifest,
             pr_id=pr.id,
             preview_url=preview_url,
+            demo_id=demo_id,
         )
     except Exception:
-        _discard_files(deps, owner, [e["file_id"] for e in stored])
+        _discard_files(deps, owner, stored)
         raise
     preview = pr.preview or {}
     urls = preview.get("urls") if isinstance(preview.get("urls"), dict) else None
@@ -257,7 +289,10 @@ async def _publish(
         raise FactoryRouteError(
             400, "invalid_meta", "meta.from_session_id must match the from_session_id query"
         )
-    if caller.deps.file_store is None or caller.deps.artifact_store is None:
+    deps = caller.deps
+    if deps.factory_artifact_store is None and (
+        deps.file_store is None or deps.artifact_store is None
+    ):
         raise FactoryRouteError(501, "file_store_unavailable", "file store not configured")
     parsed = parse_pr_url(meta.pr_url)
     if parsed is None:
@@ -273,9 +308,12 @@ async def _publish(
         files = check_upload([f.model_dump() for f in meta.files], parts)
     except DemoUploadError as exc:
         raise _upload_error(exc) from exc
-    demo, preview_urls, new_pr = await asyncio.to_thread(
-        _record_demo, caller, meta, files, status=status, repo=repo, number=number, slugs=slugs
-    )
+    try:
+        demo, preview_urls, new_pr = await asyncio.to_thread(
+            _record_demo, caller, meta, files, status=status, repo=repo, number=number, slugs=slugs
+        )
+    except DemoStoreUnavailableError as exc:
+        raise _store_unavailable() from exc
     if new_pr is not None:
         await announce_new_pr(request.app.state, caller, new_pr)
     return demo, preview_urls
@@ -369,22 +407,18 @@ def parse_range(header: str | None, size: int) -> tuple[int, int] | Literal[Fals
     return start, min(end, size - 1)
 
 
-def _read_bytes(deps: FactoryDeps, file_id: str, span: tuple[int, int] | None) -> bytes:
-    """Read a file's bytes, or one inclusive span; a local store reads only the span."""
-    store = deps.artifact_store
-    assert store is not None
-    if span is not None and isinstance(store, LocalArtifactStore):
-        start, end = span
-        with store._resolve(file_id).open("rb") as handle:
-            handle.seek(start)
-            return handle.read(end - start + 1)
-    # Other stores read the whole object per range; an S3 store needs a ranged GET.
-    content = store.get(file_id)
-    return content if span is None else content[span[0] : span[1] + 1]
-
-
 def _not_found() -> OmnigentError:
     return OmnigentError("demo file not found", code=ErrorCode.NOT_FOUND)
+
+
+def _store_unavailable() -> FactoryRouteError:
+    """503 for a demo store that failed (unreachable, throttled, denied), with Retry-After."""
+    return FactoryRouteError(
+        503,
+        "artifact_store_unavailable",
+        "the demo file store is unavailable; retry shortly",
+        headers={"Retry-After": str(_STORE_RETRY_AFTER_S)},
+    )
 
 
 @router.api_route("/demos/{demo_id}/files/{file_id}", methods=["GET", "HEAD"])
@@ -407,19 +441,21 @@ async def get_demo_file(request: Request, demo_id: str, file_id: str) -> Respons
     await require_access(
         user_id, demo.session_id, LEVEL_READ, deps.permission_store, deps.conversation_store
     )
-    if deps.file_store is None or deps.artifact_store is None:
+    entry = next((f for f in demo.files if f.get("file_id") == file_id), None)
+    if entry is None:
         raise _not_found()
-    if not any(f.get("file_id") == file_id for f in demo.files):
-        raise _not_found()
-    stored = await asyncio.to_thread(deps.file_store.get, file_id, session_id=demo.session_id)
-    file_type = demo_file_type(stored.filename) if stored is not None else None
-    if stored is None or file_type is None:
+    try:
+        blob = await asyncio.to_thread(locate_demo_file, deps, demo, entry)
+    except DemoStoreUnavailableError as exc:
+        raise _store_unavailable() from exc
+    file_type = demo_file_type(blob.filename) if blob is not None else None
+    if blob is None or file_type is None:
         raise _not_found()
     content_type = file_type[0]
-    disposition = _attachment_disposition(stored.filename)
+    disposition = _attachment_disposition(blob.filename)
     if content_type.startswith(("image/", "video/")):
         disposition = "inline" + disposition.removeprefix("attachment")
-    etag = f'"{stored.id}"'
+    etag = f'"{file_id}"'
     headers = {
         "Accept-Ranges": "bytes",
         "ETag": etag,
@@ -430,10 +466,12 @@ async def get_demo_file(request: Request, demo_id: str, file_id: str) -> Respons
     }
     if _if_none_match_matches(request.headers.get("if-none-match"), etag):
         return Response(status_code=304, headers=headers)
-    size = stored.bytes
+    size = blob.size
     span = parse_range(request.headers.get("range"), size)
     if span is False:
         return Response(status_code=416, headers={**headers, "Content-Range": f"bytes */{size}"})
+    if isinstance(span, tuple):
+        span = (span[0], min(span[1], span[0] + DEMO_MAX_SPAN_BYTES - 1))
     if request.method == "HEAD":
         if isinstance(span, tuple):
             start, end = span
@@ -448,11 +486,13 @@ async def get_demo_file(request: Request, demo_id: str, file_id: str) -> Respons
             )
         return Response(media_type=content_type, headers={**headers, "Content-Length": str(size)})
     try:
-        body = await asyncio.to_thread(
-            _read_bytes, deps, stored.id, span if isinstance(span, tuple) else None
-        )
+        # A span is a seek or an S3 ranged GET of at most DEMO_MAX_SPAN_BYTES;
+        # a request without Range reads the whole file.
+        body = await asyncio.to_thread(blob.read, span if isinstance(span, tuple) else None)
     except (FileNotFoundError, KeyError) as exc:
         raise _not_found() from exc
+    except DemoStoreUnavailableError as exc:
+        raise _store_unavailable() from exc
     if isinstance(span, tuple):
         start, end = span
         return Response(

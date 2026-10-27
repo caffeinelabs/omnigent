@@ -42,6 +42,11 @@ class FactoryDeps:
         or ``None`` when runners prove themselves by token-bound ids only.
     :param factory_store: The cockpit read model; an in-memory store when not given.
     :param project_store: Sidebar projects (factory folders), or ``None``.
+    :param factory_artifact_store: Where new demo files go
+        (``OMNIGENT_FACTORY_ARTIFACT_LOCATION``), or ``None`` to keep them
+        session files in *artifact_store*.
+    :param recorded_artifact_stores: Stores opened for demo files recorded at
+        a location no longer configured, by location.
     """
 
     conversation_store: ConversationStore
@@ -54,6 +59,8 @@ class FactoryDeps:
     runner_tunnel_tokens: frozenset[str] | None = None
     factory_store: FactoryStore = field(default_factory=InMemoryFactoryStore)
     project_store: ProjectStore | None = None
+    factory_artifact_store: ArtifactStore | None = None
+    recorded_artifact_stores: dict[str, ArtifactStore] = field(default_factory=dict)
 
 
 def factory_deps(app_state: Any) -> FactoryDeps:

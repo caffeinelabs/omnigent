@@ -146,3 +146,14 @@ def test_rejects_symlink_escape(tmp_path):
 
     with pytest.raises(ValueError, match=r"escapes root directory"):
         store.get("evil-link")
+
+
+def test_read_range_seeks(store):
+    store.put("v.webm", b"0123456789")
+    assert store.read_range("v.webm", 2, 5) == b"2345"
+    assert store.read_range("v.webm", 8, 100) == b"89"
+
+
+def test_read_range_missing_raises_key_error(store):
+    with pytest.raises(KeyError):
+        store.read_range("missing", 0, 1)

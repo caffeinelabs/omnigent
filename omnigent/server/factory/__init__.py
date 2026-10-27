@@ -43,6 +43,7 @@ def register_factory_routes(
     runner_tunnel_tokens: frozenset[str] | None = None,
     factory_store: FactoryStore | None = None,
     project_store: ProjectStore | None = None,
+    factory_artifact_store: ArtifactStore | None = None,
 ) -> None:
     """
     Mount ``/v1/factory`` on *app* and record the stores it needs.
@@ -59,9 +60,14 @@ def register_factory_routes(
         a listed token proves a runner the way the tunnel route accepts it.
     :param factory_store: The cockpit read model; in-memory when ``None``.
     :param project_store: Sidebar projects, for filing factory sessions.
+    :param factory_artifact_store: Where demo files go; when ``None``, the
+        store ``OMNIGENT_FACTORY_ARTIFACT_LOCATION`` names, if any.
+    :raises ImportError: When that location's backend package is missing.
+    :raises ValueError: When that location is malformed.
     """
     from omnigent.server.factory.api import include_routers
     from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
+    from omnigent.server.factory.demo_storage import factory_artifact_store_from_env
     from omnigent.server.factory.routes import (
         FactoryRouteError,
         create_factory_router,
@@ -69,6 +75,10 @@ def register_factory_routes(
     )
     from omnigent.stores.factory_store import InMemoryFactoryStore
 
+    if factory_artifact_store is None:
+        factory_artifact_store = factory_artifact_store_from_env()
+    if factory_artifact_store is not None:
+        _logger.info("factory demo files go to %s", factory_artifact_store.storage_location)
     setattr(
         app.state,
         FACTORY_STATE_ATTR,
@@ -83,6 +93,7 @@ def register_factory_routes(
             runner_tunnel_tokens=runner_tunnel_tokens,
             factory_store=factory_store if factory_store is not None else InMemoryFactoryStore(),
             project_store=project_store,
+            factory_artifact_store=factory_artifact_store,
         ),
     )
     app.add_exception_handler(FactoryRouteError, factory_error_handler)

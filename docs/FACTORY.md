@@ -53,6 +53,7 @@ SERVER: FactorySupervisor — keepalive, heartbeats, alerts, reply notices
 | `OMNIGENT_FACTORY_BLOCKED_ESCALATE_S` | `1800` | A session parked on a human prompt this long is escalated as `[NEEDS HUMAN]`. |
 | `OMNIGENT_FACTORY_POST_RATE_PER_HOUR` | `60,20` | Posts per hour per sender, and per (sender, target) pair. A single number sets the sender limit and a pair limit of a third of it. |
 | `OMNIGENT_FACTORY_MERGE_REPOS` | empty | `owner/repo` list (comma or space separated) the merge gate may merge in. Empty means the gate merges nowhere. Read by the gate inside the sandbox. |
+| `OMNIGENT_FACTORY_ARTIFACT_LOCATION` | unset | Where demo files (video, screenshots, `api.json`, HAR, traces) are written: `s3://<bucket>[/<prefix>]` (credentials from the standard AWS chain, IRSA included; `AWS_REGION` must be set for AWS S3; `AWS_ENDPOINT_URL_S3` for MinIO or R2) or a directory. Unset keeps them session files of the PL in the server's artifact store, shown in its Files panel. Each demo file records the location it was written to and is always read from there, so demos stored before a change keep playing. Files are still served only through `/v1/factory/demos/…` behind omnigent auth (a Range is a ranged read of the store, at most 4 MiB per response; no presigned links). A store that fails (unreachable, throttled, denied) answers 503 `artifact_store_unavailable` with `Retry-After`. A malformed location fails server start. |
 | `OMNIGENT_BUILTIN_AGENT_DIRS` | unset | Extra built-in bundles, seeded after the defaults. Used as the prompt hotfix lane (below). |
 | `OMNIGENT_FEATURES` | unset | `factory` in the list shows the cockpit (`/factory`, the sidebar entry, the Inbox's factory decisions). It is also on wherever `OMNIGENT_FACTORY_ENABLED=1`; list it explicitly to document it, drop it (with the factory off) to hide the UI. |
 
@@ -251,7 +252,7 @@ if they stay silent the board is still right.
 | `GET /v1/factory/decisions`, `POST …/decisions/{id}/answer`, `…/withdraw` | human | Open decisions (also in `/inbox`); the answer is delivered to the asker as `[Factory decision · D-<n> answered …]`. |
 | `POST /v1/factory/prs/{id}/feedback`, `…/refresh` | human | Approve or request changes (`[Factory review …]` to the PL); re-poll GitHub now. |
 | `GET /v1/factory/prs/{id}/preview` | human | Stable live-preview link: 302 to the current preview app URL, or back to the cockpit when there is none. |
-| `GET /v1/factory/demos/{demo_id}/files/{file_id}` | human (READ on the PL) | Demo files with Range/206 and ETag; only images and video inline, never HTML or SVG. |
+| `GET /v1/factory/demos/{demo_id}/files/{file_id}` | human (READ on the PL) | Demo files with Range/206 (a ranged read of the store) and ETag; only images and video inline, never HTML or SVG. |
 | `POST /v1/factory/agent/decisions`, `POST …/agent/prs`, `PUT …/agent/envs`, `POST …/agent/demos` (multipart), `GET …/agent/charter` | runner (the tools below) | Agent reports. |
 | `GET /v1/factory/preflight` | human | GitHub connected, agents seeded, sandbox host, factory enabled. |
 
@@ -327,8 +328,11 @@ preview envs are a different thing.)
   from the trace (rewritten), the HAR, `api.json`, `console.json`, `run.log`
   and the step notes.
 - `sys_factory_demo` uploads the files into the omnigent file and artifact
-  stores (owner: the PL session). Caps: video 50 MB, image 5 MB, text 2 MB,
-  30 files and 120 MB per demo. The PR gets one comment per head with
+  stores (owner: the PL session), or, with
+  `OMNIGENT_FACTORY_ARTIFACT_LOCATION` set, into that store under
+  `demos/<factory id>/<demo id>/<file id>-<name>` (the demo row is then their
+  only record; they are not in the PL's Files panel). Caps: video 50 MB,
+  image 5 MB, text 2 MB, 30 files and 120 MB per demo. The PR gets one comment per head with
   `<!-- factory:demo sha=<head> status=… demo=<id> -->`, the step table and
   links; the demo gate reads it.
 

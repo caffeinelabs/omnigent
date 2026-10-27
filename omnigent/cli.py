@@ -1495,26 +1495,20 @@ def _create_artifact_store(location: str) -> Any:  # type: ignore[explicit-any] 
     """
     Create an artifact store based on the location URI scheme.
 
-    ``dbfs:/Volumes/...`` URIs use
+    ``s3://bucket[/prefix]`` URIs use :class:`S3ArtifactStore` (requires
+    ``boto3``), ``dbfs:/Volumes/...`` URIs use
     :class:`DatabricksVolumesArtifactStore` (requires
     ``databricks-sdk``). All other locations use
     :class:`LocalArtifactStore`.
 
     :param location: Artifact storage location, e.g.
-        ``"./artifacts"`` for local or
-        ``"dbfs:/Volumes/cat/schema/vol"`` for UC Volumes.
+        ``"./artifacts"`` for local, ``"s3://bucket/artifacts"`` for S3
+        or ``"dbfs:/Volumes/cat/schema/vol"`` for UC Volumes.
     :returns: An :class:`ArtifactStore` instance.
     """
-    if location.startswith("dbfs:/Volumes/"):
-        from omnigent.stores.artifact_store.databricks_volumes import (
-            DatabricksVolumesArtifactStore,
-        )
+    from omnigent.stores.artifact_store import create_artifact_store
 
-        return DatabricksVolumesArtifactStore(location)
-
-    from omnigent.stores.artifact_store.local import LocalArtifactStore
-
-    return LocalArtifactStore(location)
+    return create_artifact_store(location)
 
 
 def _preregister_agent(  # type: ignore[explicit-any]  # agent_store / artifact_store / agent_cache typed Any to avoid import cycle
@@ -4245,8 +4239,18 @@ def server(
 
     # Resolve relative artifact location against config file's directory
     # (only when the value came from the config file, not CLI).
-    if config_path and artifact_location is None and not Path(art_loc).is_absolute():
+    from omnigent.stores.artifact_store import S3_SCHEME
+
+    art_is_s3 = art_loc.startswith(S3_SCHEME)
+    if (
+        config_path
+        and artifact_location is None
+        and not art_is_s3
+        and not Path(art_loc).is_absolute()
+    ):
         art_loc = str(Path(config_path).parent / art_loc)
+    # An S3 store keeps the agent cache and cookie secret in the local data dir.
+    art_local_dir = _default_artifact_location() if art_is_s3 else art_loc
 
     # SQLite won't create the DB file's parent dir; do it before any store
     # connects, else a fresh <data_dir> (first run, or a cleared dir) fails
@@ -4279,7 +4283,7 @@ def server(
 
     agent_cache = AgentCache(
         artifact_store=artifact_store,
-        cache_dir=Path(art_loc) / ".cache",
+        cache_dir=Path(art_local_dir) / ".cache",
     )
     # CLI flag > config file > RuntimeCaps default (7200s = 2 hours).
     # 7200 matches RuntimeCaps.execution_timeout default.
@@ -4421,7 +4425,7 @@ def server(
 
         os.environ.setdefault(
             "OMNIGENT_ACCOUNTS_COOKIE_SECRET",
-            load_or_generate_cookie_secret(art_loc),
+            load_or_generate_cookie_secret(art_local_dir),
         )
         os.environ.setdefault("OMNIGENT_ACCOUNTS_BASE_URL", f"http://{host}:{port}")
 

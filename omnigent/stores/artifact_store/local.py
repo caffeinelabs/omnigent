@@ -119,3 +119,21 @@ class LocalArtifactStore(ArtifactStore):
         :returns: ``True`` if the file exists, ``False`` otherwise.
         """
         return self._resolve(key).exists()
+
+    def read_range(self, key: str, start: int, end: int) -> bytes:
+        """
+        Read the inclusive byte span ``start``..``end`` with a seek.
+
+        :param key: Forward-slash-separated artifact key.
+        :param start: First byte offset, e.g. ``0``.
+        :param end: Last byte offset, inclusive, e.g. ``1023``.
+        :returns: The span's bytes; fewer when the file ends before *end*.
+        :raises KeyError: If no file exists at the resolved path.
+        """
+        path = self._resolve(key)
+        try:
+            with path.open("rb") as handle:
+                handle.seek(start)
+                return handle.read(end - start + 1)
+        except FileNotFoundError:
+            raise KeyError(key) from None
