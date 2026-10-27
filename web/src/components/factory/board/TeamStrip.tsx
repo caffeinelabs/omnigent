@@ -24,6 +24,7 @@ export const ROLE_SHORT: Record<FactoryRole, string> = {
   env_keeper: "env",
   reviewer: "rev",
   demo: "demo",
+  planner: "plan",
 };
 
 export const ROLE_NAME: Record<FactoryRole, string> = {
@@ -33,6 +34,7 @@ export const ROLE_NAME: Record<FactoryRole, string> = {
   env_keeper: "Env keeper",
   reviewer: "Reviewer",
   demo: "Demo recorder",
+  planner: "Planner",
 };
 
 export function HarnessGlyph({

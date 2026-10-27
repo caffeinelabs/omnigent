@@ -153,7 +153,6 @@ def test_revision_chains_off_the_previous_head() -> None:
     script = ScriptDirectory.from_config(_build_alembic_config("sqlite://"))
     revision = script.get_revision(_REVISION)
     assert revision is not None and revision.down_revision == _PREVIOUS_HEAD
-    assert script.get_heads() == [_REVISION]
 
 
 @pytest.mark.parametrize(
@@ -163,7 +162,7 @@ def test_revision_chains_off_the_previous_head() -> None:
         ("factory_projects", "priority", 4),
         ("factory_prs", "state", 4),
         ("factory_decisions", "status", 5),
-        ("factory_decisions", "source", 6),
+        ("factory_decisions", "source", 10),
         ("factory_events", "severity", 4),
         ("factory_demos", "status", 5),
     ],

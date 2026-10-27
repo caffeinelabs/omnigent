@@ -4,7 +4,8 @@ The factory tools are an opt-in surface: they appear only for specs that
 declare ``executor.config.factory_role``. Every role gets messaging, roster,
 beacon, ``sys_factory_ask`` and ``sys_factory_pr``; ``sys_factory_spawn`` (a
 new top-level sandbox) is for leads, ``sys_factory_env`` for the project lead
-and env_keeper, and ``sys_factory_demo`` for those two and the demo agent.
+and env_keeper, and ``sys_factory_demo`` for those two and the demo agent. The
+read-only planner sees the roster only.
 Native harnesses see nothing but the relay, so the tools must also ride
 ``build_native_relay_tool_schemas`` — that is what puts
 ``mcp__omnigent__sys_session_post`` in front of Claude Code.
@@ -56,6 +57,7 @@ _MATRIX = {
     "ic": _EVERY_ROLE,
     "reviewer": _EVERY_ROLE,
     "demo": _EVERY_ROLE | {_DEMO},
+    "planner": {"sys_factory_roster"},
 }
 
 

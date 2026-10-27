@@ -151,6 +151,10 @@ FACTORY_DECISION_SOURCE: dict[str, int] = {
     "blocked_approval": 3,
     "pr_closed": 4,
     "storm": 5,
+    "proposal": 6,
+    "loop": 7,
+    "access_request": 8,
+    "done_check": 9,
 }
 
 FACTORY_DECISION_STATUS: dict[str, int] = {
@@ -173,6 +177,194 @@ FACTORY_DEMO_STATUS: dict[str, int] = {
     "PARTIAL": 2,
     "FAIL": 3,
     "ERROR": 4,
+}
+
+# Round-3 factory tables (people, Room, proposals, work graph, loops, issues,
+# telemetry, definitions, feedback).
+FACTORY_PROJECT_STATUS: dict[str, int] = {
+    "active": 1,
+    "cancelled": 2,
+    "merged": 3,
+    "done": 4,
+}
+
+FACTORY_PERSON_ROLE: dict[str, int] = {
+    "viewer": 1,
+    "operator": 2,
+    "owner": 3,
+}
+
+FACTORY_CHAT_AUTHOR_KIND: dict[str, int] = {
+    "human": 1,
+    "agent": 2,
+    "system": 3,
+}
+
+# Who acted: proposal and feedback authors, task creators.
+FACTORY_ACTOR_KIND: dict[str, int] = {
+    "human": 1,
+    "agent": 2,
+    "server": 3,
+}
+
+FACTORY_PROPOSAL_KIND: dict[str, int] = {
+    "projects": 1,
+    "tuning": 2,
+    "rules": 3,
+    "code": 4,
+}
+
+FACTORY_PROPOSAL_STATUS: dict[str, int] = {
+    "pending": 1,
+    "applied": 2,
+    "trial": 3,
+    "kept": 4,
+    "reverted": 5,
+    "rejected": 6,
+    "expired": 7,
+    "withdrawn": 8,
+    "refused": 9,
+    "undone": 10,
+    "awaiting_cosign": 11,
+}
+
+FACTORY_PROPOSAL_APPROVAL: dict[str, int] = {
+    "auto": 1,
+    "operator": 2,
+    "owner": 3,
+}
+
+FACTORY_PROPOSAL_CLASS: dict[str, int] = {
+    "A": 1,
+    "B": 2,
+    "human": 3,
+}
+
+FACTORY_TASK_KIND: dict[str, int] = {
+    "implement": 1,
+    "test": 2,
+    "docs": 3,
+    "spike": 4,
+    "ops": 5,
+    "adhoc": 6,
+}
+
+FACTORY_TASK_STATE: dict[str, int] = {
+    "planned": 1,
+    "ready": 2,
+    "running": 3,
+    "review": 4,
+    "blocked": 5,
+    "done": 6,
+    "failed": 7,
+    "cancelled": 8,
+}
+
+FACTORY_LOOP_KIND: dict[str, int] = {
+    "implement": 1,
+    "review": 2,
+    "verify": 3,
+    "demo": 4,
+    "ci": 5,
+    "claim": 6,
+    "plan": 7,
+    "intake": 8,
+    "improve": 9,
+}
+
+FACTORY_LOOP_STATE: dict[str, int] = {
+    "running": 1,
+    "converged": 2,
+    "stalled": 3,
+    "thrashing": 4,
+    "exhausted": 5,
+    "escalated": 6,
+    "cancelled": 7,
+    "superseded": 8,
+}
+
+FACTORY_ISSUE_CLASS: dict[str, int] = {
+    "incident": 1,
+    "finding": 2,
+    "retro": 3,
+}
+
+FACTORY_ISSUE_SOURCE: dict[str, int] = {
+    "detector": 1,
+    "sentinel": 2,
+    "human": 3,
+    "agent": 4,
+    "server": 5,
+}
+
+FACTORY_ISSUE_STATUS: dict[str, int] = {
+    "open": 1,
+    "acked": 2,
+    "snoozed": 3,
+    "resolved": 4,
+    "wontfix": 5,
+}
+
+FACTORY_SPAN_KIND: dict[str, int] = {
+    "project": 1,
+    "stage": 2,
+    "pr": 3,
+    "pr_round": 4,
+    "gate": 5,
+    "ready_wait": 6,
+    "decision": 7,
+    "task": 8,
+    "loop": 9,
+    "loop_iter": 10,
+    "wait": 11,
+    "env": 12,
+    "preview": 13,
+    "demo": 14,
+    "incident": 15,
+    "intervention": 16,
+    "proposal": 17,
+    "chat_turn": 18,
+    "spawn": 19,
+    "turn": 20,
+    "tool": 21,
+}
+
+FACTORY_SPAN_OUTCOME: dict[str, int] = {
+    "open": 1,
+    "ok": 2,
+    "fail": 3,
+    "abandoned": 4,
+    "superseded": 5,
+    "timeout": 6,
+    "cancelled": 7,
+    "exhausted": 8,
+}
+
+FACTORY_DEFINITION_VIA: dict[str, int] = {
+    "seed": 1,
+    "human": 2,
+    "proposal": 3,
+    "revert": 4,
+}
+
+FACTORY_FEEDBACK_TARGET: dict[str, int] = {
+    "pr": 1,
+    "demo": 2,
+    "decision": 3,
+    "project": 4,
+    "member": 5,
+    "factory": 6,
+    "issue": 7,
+    "proposal": 8,
+}
+
+FACTORY_FEEDBACK_KIND: dict[str, int] = {
+    "rating": 1,
+    "useful": 2,
+    "unneeded": 3,
+    "closure": 4,
+    "calibration": 5,
+    "root_cause": 6,
 }
 
 
@@ -216,6 +408,26 @@ for _factory_table in (
     FACTORY_DECISION_STATUS,
     FACTORY_EVENT_SEVERITY,
     FACTORY_DEMO_STATUS,
+    FACTORY_PROJECT_STATUS,
+    FACTORY_PERSON_ROLE,
+    FACTORY_CHAT_AUTHOR_KIND,
+    FACTORY_ACTOR_KIND,
+    FACTORY_PROPOSAL_KIND,
+    FACTORY_PROPOSAL_STATUS,
+    FACTORY_PROPOSAL_APPROVAL,
+    FACTORY_PROPOSAL_CLASS,
+    FACTORY_TASK_KIND,
+    FACTORY_TASK_STATE,
+    FACTORY_LOOP_KIND,
+    FACTORY_LOOP_STATE,
+    FACTORY_ISSUE_CLASS,
+    FACTORY_ISSUE_SOURCE,
+    FACTORY_ISSUE_STATUS,
+    FACTORY_SPAN_KIND,
+    FACTORY_SPAN_OUTCOME,
+    FACTORY_DEFINITION_VIA,
+    FACTORY_FEEDBACK_TARGET,
+    FACTORY_FEEDBACK_KIND,
 ):
     _CODE_TO_NAME[id(_factory_table)] = _invert(_factory_table)
 
@@ -456,3 +668,203 @@ def encode_factory_demo_status(name: str) -> int:
 def decode_factory_demo_status(code: int) -> str:
     """Decode a ``factory_demos.status`` int code to its name."""
     return _decode(FACTORY_DEMO_STATUS, code, field="factory_demos.status")
+
+
+def encode_factory_project_status(name: str) -> int:
+    """Encode a ``factory_projects.status`` name to its stable code."""
+    return _encode(FACTORY_PROJECT_STATUS, name, field="factory_projects.status")
+
+
+def decode_factory_project_status(code: int) -> str:
+    """Decode a stored ``factory_projects.status`` code to its name."""
+    return _decode(FACTORY_PROJECT_STATUS, code, field="factory_projects.status")
+
+
+def encode_factory_person_role(name: str) -> int:
+    """Encode a ``factory_people.role`` name to its stable code."""
+    return _encode(FACTORY_PERSON_ROLE, name, field="factory_people.role")
+
+
+def decode_factory_person_role(code: int) -> str:
+    """Decode a stored ``factory_people.role`` code to its name."""
+    return _decode(FACTORY_PERSON_ROLE, code, field="factory_people.role")
+
+
+def encode_factory_chat_author_kind(name: str) -> int:
+    """Encode a ``factory_chat_messages.author_kind`` name to its stable code."""
+    return _encode(FACTORY_CHAT_AUTHOR_KIND, name, field="factory_chat_messages.author_kind")
+
+
+def decode_factory_chat_author_kind(code: int) -> str:
+    """Decode a stored ``factory_chat_messages.author_kind`` code to its name."""
+    return _decode(FACTORY_CHAT_AUTHOR_KIND, code, field="factory_chat_messages.author_kind")
+
+
+def encode_factory_actor_kind(name: str) -> int:
+    """Encode a ``factory actor kind`` name to its stable code."""
+    return _encode(FACTORY_ACTOR_KIND, name, field="factory actor kind")
+
+
+def decode_factory_actor_kind(code: int) -> str:
+    """Decode a stored ``factory actor kind`` code to its name."""
+    return _decode(FACTORY_ACTOR_KIND, code, field="factory actor kind")
+
+
+def encode_factory_proposal_kind(name: str) -> int:
+    """Encode a ``factory_proposals.kind`` name to its stable code."""
+    return _encode(FACTORY_PROPOSAL_KIND, name, field="factory_proposals.kind")
+
+
+def decode_factory_proposal_kind(code: int) -> str:
+    """Decode a stored ``factory_proposals.kind`` code to its name."""
+    return _decode(FACTORY_PROPOSAL_KIND, code, field="factory_proposals.kind")
+
+
+def encode_factory_proposal_status(name: str) -> int:
+    """Encode a ``factory_proposals.status`` name to its stable code."""
+    return _encode(FACTORY_PROPOSAL_STATUS, name, field="factory_proposals.status")
+
+
+def decode_factory_proposal_status(code: int) -> str:
+    """Decode a stored ``factory_proposals.status`` code to its name."""
+    return _decode(FACTORY_PROPOSAL_STATUS, code, field="factory_proposals.status")
+
+
+def encode_factory_proposal_approval(name: str) -> int:
+    """Encode a ``factory_proposals.approval`` name to its stable code."""
+    return _encode(FACTORY_PROPOSAL_APPROVAL, name, field="factory_proposals.approval")
+
+
+def decode_factory_proposal_approval(code: int) -> str:
+    """Decode a stored ``factory_proposals.approval`` code to its name."""
+    return _decode(FACTORY_PROPOSAL_APPROVAL, code, field="factory_proposals.approval")
+
+
+def encode_factory_proposal_class(name: str) -> int:
+    """Encode a ``factory_proposals.class`` name to its stable code."""
+    return _encode(FACTORY_PROPOSAL_CLASS, name, field="factory_proposals.class")
+
+
+def decode_factory_proposal_class(code: int) -> str:
+    """Decode a stored ``factory_proposals.class`` code to its name."""
+    return _decode(FACTORY_PROPOSAL_CLASS, code, field="factory_proposals.class")
+
+
+def encode_factory_task_kind(name: str) -> int:
+    """Encode a ``factory_tasks.kind`` name to its stable code."""
+    return _encode(FACTORY_TASK_KIND, name, field="factory_tasks.kind")
+
+
+def decode_factory_task_kind(code: int) -> str:
+    """Decode a stored ``factory_tasks.kind`` code to its name."""
+    return _decode(FACTORY_TASK_KIND, code, field="factory_tasks.kind")
+
+
+def encode_factory_task_state(name: str) -> int:
+    """Encode a ``factory_tasks.state`` name to its stable code."""
+    return _encode(FACTORY_TASK_STATE, name, field="factory_tasks.state")
+
+
+def decode_factory_task_state(code: int) -> str:
+    """Decode a stored ``factory_tasks.state`` code to its name."""
+    return _decode(FACTORY_TASK_STATE, code, field="factory_tasks.state")
+
+
+def encode_factory_loop_kind(name: str) -> int:
+    """Encode a ``factory_loops.kind`` name to its stable code."""
+    return _encode(FACTORY_LOOP_KIND, name, field="factory_loops.kind")
+
+
+def decode_factory_loop_kind(code: int) -> str:
+    """Decode a stored ``factory_loops.kind`` code to its name."""
+    return _decode(FACTORY_LOOP_KIND, code, field="factory_loops.kind")
+
+
+def encode_factory_loop_state(name: str) -> int:
+    """Encode a ``factory_loops.state`` name to its stable code."""
+    return _encode(FACTORY_LOOP_STATE, name, field="factory_loops.state")
+
+
+def decode_factory_loop_state(code: int) -> str:
+    """Decode a stored ``factory_loops.state`` code to its name."""
+    return _decode(FACTORY_LOOP_STATE, code, field="factory_loops.state")
+
+
+def encode_factory_issue_class(name: str) -> int:
+    """Encode a ``factory_issues.class`` name to its stable code."""
+    return _encode(FACTORY_ISSUE_CLASS, name, field="factory_issues.class")
+
+
+def decode_factory_issue_class(code: int) -> str:
+    """Decode a stored ``factory_issues.class`` code to its name."""
+    return _decode(FACTORY_ISSUE_CLASS, code, field="factory_issues.class")
+
+
+def encode_factory_issue_source(name: str) -> int:
+    """Encode a ``factory_issues.source`` name to its stable code."""
+    return _encode(FACTORY_ISSUE_SOURCE, name, field="factory_issues.source")
+
+
+def decode_factory_issue_source(code: int) -> str:
+    """Decode a stored ``factory_issues.source`` code to its name."""
+    return _decode(FACTORY_ISSUE_SOURCE, code, field="factory_issues.source")
+
+
+def encode_factory_issue_status(name: str) -> int:
+    """Encode a ``factory_issues.status`` name to its stable code."""
+    return _encode(FACTORY_ISSUE_STATUS, name, field="factory_issues.status")
+
+
+def decode_factory_issue_status(code: int) -> str:
+    """Decode a stored ``factory_issues.status`` code to its name."""
+    return _decode(FACTORY_ISSUE_STATUS, code, field="factory_issues.status")
+
+
+def encode_factory_span_kind(name: str) -> int:
+    """Encode a ``factory_spans.kind`` name to its stable code."""
+    return _encode(FACTORY_SPAN_KIND, name, field="factory_spans.kind")
+
+
+def decode_factory_span_kind(code: int) -> str:
+    """Decode a stored ``factory_spans.kind`` code to its name."""
+    return _decode(FACTORY_SPAN_KIND, code, field="factory_spans.kind")
+
+
+def encode_factory_span_outcome(name: str) -> int:
+    """Encode a ``factory_spans.outcome`` name to its stable code."""
+    return _encode(FACTORY_SPAN_OUTCOME, name, field="factory_spans.outcome")
+
+
+def decode_factory_span_outcome(code: int) -> str:
+    """Decode a stored ``factory_spans.outcome`` code to its name."""
+    return _decode(FACTORY_SPAN_OUTCOME, code, field="factory_spans.outcome")
+
+
+def encode_factory_definition_via(name: str) -> int:
+    """Encode a ``factory_definitions.created_via`` name to its stable code."""
+    return _encode(FACTORY_DEFINITION_VIA, name, field="factory_definitions.created_via")
+
+
+def decode_factory_definition_via(code: int) -> str:
+    """Decode a stored ``factory_definitions.created_via`` code to its name."""
+    return _decode(FACTORY_DEFINITION_VIA, code, field="factory_definitions.created_via")
+
+
+def encode_factory_feedback_target(name: str) -> int:
+    """Encode a ``factory_feedback.target_kind`` name to its stable code."""
+    return _encode(FACTORY_FEEDBACK_TARGET, name, field="factory_feedback.target_kind")
+
+
+def decode_factory_feedback_target(code: int) -> str:
+    """Decode a stored ``factory_feedback.target_kind`` code to its name."""
+    return _decode(FACTORY_FEEDBACK_TARGET, code, field="factory_feedback.target_kind")
+
+
+def encode_factory_feedback_kind(name: str) -> int:
+    """Encode a ``factory_feedback.kind`` name to its stable code."""
+    return _encode(FACTORY_FEEDBACK_KIND, name, field="factory_feedback.kind")
+
+
+def decode_factory_feedback_kind(code: int) -> str:
+    """Decode a stored ``factory_feedback.kind`` code to its name."""
+    return _decode(FACTORY_FEEDBACK_KIND, code, field="factory_feedback.kind")
