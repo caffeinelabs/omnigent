@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import logging
 import uuid
 from typing import Any
 
@@ -203,6 +205,138 @@ async def test_reconcile_works_without_a_project_store(world: FactoryWorld) -> N
     assert report.folders_created == [] and report.filed == []
     assert report.projects_created == ["api-version"]
     assert F.LABEL_FOLDER_PROJECT not in world.get("lead_a").labels
+
+
+# ── failures ───────────────────────────────────────────────────
+
+
+@pytest.fixture()
+def failure_log(monkeypatch: pytest.MonkeyPatch) -> dict[tuple[str, str], float]:
+    log: dict[tuple[str, str], float] = {}
+    monkeypatch.setattr(reconcile, "_last_failure_log", log)
+    return log
+
+
+def _add_pl(world: FactoryWorld, key: str, factory_key: str, slug: str) -> None:
+    world.make_session(
+        key,
+        agent="pl",
+        title=f"PL · {slug}",
+        labels={
+            F.LABEL_ID: world.id(factory_key),
+            F.LABEL_ROLE: "project_lead",
+            F.LABEL_PROJECT: slug,
+            F.LABEL_STATE: "active",
+        },
+    )
+
+
+def _warnings(caplog: pytest.LogCaptureFixture, text: str) -> int:
+    return sum(r.levelname == "WARNING" and text in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.parametrize("broken", ["lead_a", "other_lead"])
+async def test_an_unreadable_folder_skips_only_filing_for_that_factory(
+    world: FactoryWorld,
+    projects: SqlAlchemyProjectStore,
+    failure_log: dict[tuple[str, str], float],
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    broken: str,
+) -> None:
+    await reconcile.reconcile_once(world.app_state)
+    healthy = "other_lead" if broken == "lead_a" else "lead_a"
+    bad_folder = world.get(broken).labels[F.LABEL_FOLDER_PROJECT]
+    real_get = projects.get
+
+    def get(project_id: str, *, user_id: str | None) -> Any:
+        if project_id == bad_folder:
+            raise json.JSONDecodeError("Expecting value", "\\x0000", 0)
+        return real_get(project_id, user_id=user_id)
+
+    monkeypatch.setattr(projects, "get", get)
+    _add_pl(world, "broken_pl", broken, "broken-slug")
+    _add_pl(world, "healthy_pl", healthy, "healthy-slug")
+    caplog.set_level(logging.WARNING, logger=reconcile.__name__)
+
+    report = await reconcile.reconcile_once(world.app_state)
+
+    # The healthy factory files its new member; the broken one still gets its project row.
+    assert report.filed == [world.id("healthy_pl")]
+    assert world.get("broken_pl").project_id is None
+    assert {"broken-slug", "healthy-slug"} <= set(report.projects_created)
+    assert report.failed == [(world.id(broken), "folder")]
+    message = f"folder of {world.id(broken)} failed"
+    assert _warnings(caplog, message) == 1
+
+    report = await reconcile.reconcile_once(world.app_state)
+    assert report.failed == [(world.id(broken), "folder")], "counted on every pass"
+    assert _warnings(caplog, message) == 1, "logged at most once an hour"
+
+    failure_log[(world.id(broken), "folder")] -= reconcile.FAILURE_LOG_EVERY_S
+    await reconcile.reconcile_once(world.app_state)
+    assert _warnings(caplog, message) == 2
+
+
+async def test_a_recovered_folder_logs_its_next_failure_at_once(
+    world: FactoryWorld,
+    projects: SqlAlchemyProjectStore,
+    failure_log: dict[tuple[str, str], float],
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await reconcile.reconcile_once(world.app_state)
+    bad_folder = world.get("lead_a").labels[F.LABEL_FOLDER_PROJECT]
+    real_get = projects.get
+    broken = True
+
+    def get(project_id: str, *, user_id: str | None) -> Any:
+        if broken and project_id == bad_folder:
+            raise json.JSONDecodeError("Expecting value", "\\x0000", 0)
+        return real_get(project_id, user_id=user_id)
+
+    monkeypatch.setattr(projects, "get", get)
+    caplog.set_level(logging.WARNING, logger=reconcile.__name__)
+    message = f"folder of {world.id('lead_a')} failed"
+
+    await reconcile.reconcile_once(world.app_state)
+    assert _warnings(caplog, message) == 1
+    broken = False
+    report = await reconcile.reconcile_once(world.app_state)
+    assert report.failed == []
+    assert failure_log == {}, "a success forgets the failure"
+    broken = True
+    await reconcile.reconcile_once(world.app_state)
+    assert _warnings(caplog, message) == 2, "a relapse within the hour is logged"
+
+
+@pytest.mark.parametrize("broken", ["lead_a", "other_lead"])
+async def test_a_failing_factory_does_not_stop_the_others(
+    world: FactoryWorld,
+    projects: SqlAlchemyProjectStore,
+    failure_log: dict[tuple[str, str], float],
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+    broken: str,
+) -> None:
+    healthy = "other_lead" if broken == "lead_a" else "lead_a"
+    fstore = _fstore(world)
+    real_list_projects = fstore.list_projects
+
+    def list_projects(factory_id: str) -> Any:
+        if factory_id == world.id(broken):
+            raise RuntimeError("factory store unavailable")
+        return real_list_projects(factory_id)
+
+    monkeypatch.setattr(fstore, "list_projects", list_projects)
+    caplog.set_level(logging.WARNING, logger=reconcile.__name__)
+
+    for _ in range(2):
+        report = await reconcile.reconcile_once(world.app_state)
+        assert report.failed == [(world.id(broken), "reconcile")]
+
+    assert world.get(healthy).project_id == world.get(healthy).labels[F.LABEL_FOLDER_PROJECT]
+    assert _warnings(caplog, f"reconcile of {world.id(broken)} failed") == 1
 
 
 @pytest.mark.parametrize(

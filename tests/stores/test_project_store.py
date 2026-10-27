@@ -6,6 +6,7 @@ real SQLite database, covering owner scoping and per-owner name uniqueness.
 
 from __future__ import annotations
 
+import json
 import uuid
 
 import pytest
@@ -211,6 +212,76 @@ def test_create_persists_config(store: SqlAlchemyProjectStore) -> None:
     store.create(_uid("p1"), "Configured", "alice@example.com", cfg)
     assert store.get(_uid("p1"), user_id="alice@example.com").config == cfg
     assert store.list(user_id="alice@example.com")[0].config == cfg
+
+
+_FOLDER_CONFIG = {"icon": "🏭"}
+
+
+def _stored_config(store: SqlAlchemyProjectStore) -> object:
+    """The raw ``projects.config`` value, bypassing the column type."""
+    from sqlalchemy import text as sa_text
+
+    with store._engine.connect() as conn:
+        return conn.execute(sa_text("SELECT config FROM projects")).scalar_one()
+
+
+def test_folder_config_round_trips_as_a_framed_blob(store: SqlAlchemyProjectStore) -> None:
+    """The factory folder's config is stored as a framed blob and reads back on every backend."""
+    store.create(_uid("p1"), "Atlas", "alice@example.com", _FOLDER_CONFIG)
+
+    raw = _stored_config(store)
+    assert isinstance(raw, bytes | memoryview)
+    assert bytes(raw).startswith(b"\x00")
+    assert store.get(_uid("p1"), user_id="alice@example.com").config == _FOLDER_CONFIG
+    assert store.list(user_id="alice@example.com")[0].config == _FOLDER_CONFIG
+
+
+def test_config_in_a_text_typed_column_reads_back(store: SqlAlchemyProjectStore) -> None:
+    """A ``config`` column left ``TEXT`` holds frames as bytea hex text; they still read back.
+
+    On PostgreSQL the column is retyped to ``TEXT`` so the real write path
+    produces that shape; on SQLite the shape is planted directly.
+    """
+    from sqlalchemy import text as sa_text
+
+    from omnigent.db.compression import encode
+
+    dialect = store._engine.dialect.name
+    if dialect not in ("postgresql", "sqlite"):
+        pytest.skip("reproduces PostgreSQL's bytea-to-text cast")
+    owner = "alice@example.com"
+    if dialect == "sqlite":
+        store.create(_uid("p1"), "Atlas", owner)
+        blob = encode(json.dumps(_FOLDER_CONFIG, separators=(",", ":")))
+        assert blob is not None
+        with store._engine.begin() as conn:
+            # The only row; ``id`` is stored as raw bytes, so no WHERE on it.
+            conn.execute(sa_text("UPDATE projects SET config = :c"), {"c": "\\x" + blob.hex()})
+        assert isinstance(_stored_config(store), str)
+        _assert_folder_reads_back(store, owner)
+        return
+    alter = "ALTER TABLE projects ALTER COLUMN config TYPE {} USING NULL"
+    with store._engine.begin() as conn:
+        conn.execute(sa_text(alter.format("text")))
+    try:
+        store.create(_uid("p1"), "Atlas", owner, _FOLDER_CONFIG)
+        raw = _stored_config(store)
+        assert isinstance(raw, str) and raw.startswith("\\x0000")
+        _assert_folder_reads_back(store, owner)
+    finally:
+        with store._engine.begin() as conn:
+            conn.execute(sa_text(alter.format("bytea")))
+        # Drop pooled connections whose server-side prepared plans saw the TEXT type.
+        store._engine.dispose()
+
+
+def _assert_folder_reads_back(store: SqlAlchemyProjectStore, owner: str) -> None:
+    got = store.get(_uid("p1"), user_id=owner)
+    assert got is not None and got.config == _FOLDER_CONFIG
+    assert [p.config for p in store.list(user_id=owner)] == [_FOLDER_CONFIG]
+    # An update compares against the decoded value, so an unchanged config is a no-op.
+    updated = store.update(_uid("p1"), user_id=owner, config=dict(_FOLDER_CONFIG))
+    assert updated is not None and updated.updated_at is None
 
 
 def test_update_replaces_config_and_stamps_updated_at(store: SqlAlchemyProjectStore) -> None:

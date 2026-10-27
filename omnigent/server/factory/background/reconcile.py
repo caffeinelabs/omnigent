@@ -11,6 +11,10 @@ For each factory root this:
    a missing or departed PL;
 4. persists each project's derived stage, logging ``stage.changed``.
 
+A folder that fails skips only step 2 for that factory; a factory that fails is
+skipped. Either is counted in :attr:`ReconcileReport.failed`, logged at most
+hourly per factory until it succeeds again, and the pass goes on.
+
 So a factory started from a chat (the 2026-10-26 Atlas run) shows up in the
 cockpit with no other help.
 """
@@ -19,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
@@ -54,6 +59,11 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 INTERVAL_S: Final = 60.0
+# A factory that keeps failing is logged at most this often per step, not every pass.
+FAILURE_LOG_EVERY_S: Final = 3600.0
+
+# ``(factory id, step)`` -> when its failure was last logged; cleared when the step succeeds.
+_last_failure_log: dict[tuple[str, str], float] = {}
 
 
 @dataclass
@@ -65,6 +75,45 @@ class ReconcileReport:
     projects_created: list[str] = field(default_factory=list)
     pls_linked: list[str] = field(default_factory=list)
     stages_changed: list[tuple[str, str, str]] = field(default_factory=list)
+    # ``(factory id, step)`` for each step that failed this pass, logged or not.
+    failed: list[tuple[str, str]] = field(default_factory=list)
+
+
+def _failure_log_due(factory_id: str, step: str) -> bool:
+    """
+    Whether a failure is due a log line: once per factory and step per :data:`FAILURE_LOG_EVERY_S`.
+
+    :param factory_id: The factory root session id.
+    :param step: What failed, e.g. ``"folder"``.
+    :returns: ``True`` (and the clock restarts) when the last line is older than the window.
+    """
+    now = time.monotonic()
+    last = _last_failure_log.get((factory_id, step))
+    if last is not None and now - last < FAILURE_LOG_EVERY_S:
+        return False
+    _last_failure_log[(factory_id, step)] = now
+    return True
+
+
+def _record_failure(
+    report: ReconcileReport, factory_id: str, step: str, exc: BaseException
+) -> None:
+    """
+    Count a failed step in *report* and log it ("<step> of <id> failed") when due.
+
+    :param report: The pass's report.
+    :param factory_id: The factory root session id.
+    :param step: What failed, ``"folder"`` or ``"reconcile"``.
+    :param exc: The failure, logged with its traceback.
+    """
+    report.failed.append((factory_id, step))
+    if _failure_log_due(factory_id, step):
+        _logger.warning("factory: %s of %s failed", step, factory_id, exc_info=exc)
+
+
+def _clear_failure(factory_id: str, step: str) -> None:
+    """Forget a step's last failure once it succeeds, so a relapse logs straight away."""
+    _last_failure_log.pop((factory_id, step), None)
 
 
 def repo_from_labels(labels: Mapping[str, str]) -> tuple[str | None, str | None]:
@@ -148,7 +197,13 @@ def _sync_factory(
     fstore = deps.factory_store
     factory_id = root.id
     owner = _owner(deps, factory_id)
-    folder, created = _ensure_folder(deps, root, owner, claimed)
+    try:
+        folder, created = _ensure_folder(deps, root, owner, claimed)
+    except Exception as exc:  # noqa: BLE001 - a broken folder must not block steps 3-4
+        _record_failure(report, factory_id, "folder", exc)
+        folder, created = None, False
+    else:
+        _clear_failure(factory_id, "folder")
     if created and folder:
         report.folders_created.append(folder)
     members = [
@@ -257,8 +312,10 @@ async def reconcile_once(app_state: Any) -> ReconcileReport:
         claimed = {f for rid, f in folders.items() if f and rid != root.id}
         try:
             await reconcile_factory(app_state, deps, root, claimed, report)
-        except Exception:  # noqa: BLE001 - one factory must not stop the others
-            _logger.warning("factory: reconcile of %s failed", root.id, exc_info=True)
+        except Exception as exc:  # noqa: BLE001 - one factory must not stop the others
+            _record_failure(report, root.id, "reconcile", exc)
+        else:
+            _clear_failure(root.id, "reconcile")
     return report
 
 
@@ -284,4 +341,11 @@ async def start(app_state: Any) -> Callable[[], Awaitable[None]]:
     return stop
 
 
-__all__ = ["INTERVAL_S", "ReconcileReport", "reconcile_once", "repo_from_labels", "start"]
+__all__ = [
+    "FAILURE_LOG_EVERY_S",
+    "INTERVAL_S",
+    "ReconcileReport",
+    "reconcile_once",
+    "repo_from_labels",
+    "start",
+]
