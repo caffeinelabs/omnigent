@@ -100,7 +100,7 @@ async def test_start_writes_labels_rows_and_the_folder(cockpit: Cockpit) -> None
     folder_id = labels[F.LABEL_FOLDER_PROJECT]
     folder = cockpit.project_store.get(folder_id, user_id="alice")
     assert folder is not None
-    assert folder.name == "🏭 Atlas factory"
+    assert folder.name == "Atlas factory"
     assert folder.config == {"icon": "🏭"}
     assert conv.project_id == folder_id
 
@@ -164,7 +164,9 @@ async def test_start_is_idempotent_for_the_same_slugs(cockpit: Cockpit) -> None:
 
 async def test_start_reuses_a_folder_and_keeps_a_user_chosen_project(cockpit: Cockpit) -> None:
     root = _new_lead(cockpit)
-    existing = cockpit.project_store.create("a" * 32, "🏭 Atlas factory", "alice")
+    existing = cockpit.project_store.create(
+        "a" * 32, "Atlas factory", "alice", config={"icon": "🏭"}
+    )
     mine = cockpit.project_store.create("b" * 32, "My stuff", "alice")
     cockpit.world.store.set_conversation_project(root, mine.id)
 
@@ -173,6 +175,19 @@ async def test_start_reuses_a_folder_and_keeps_a_user_chosen_project(cockpit: Co
     conv = cockpit.world.get("atlas")
     assert conv.labels[F.LABEL_FOLDER_PROJECT] == existing.id
     assert conv.project_id == mine.id
+
+
+async def test_start_does_not_adopt_a_same_named_user_project(cockpit: Cockpit) -> None:
+    root = _new_lead(cockpit)
+    mine = cockpit.project_store.create("a" * 32, "Atlas factory", "alice")
+
+    assert (await _start(cockpit, _body(root))).status_code == 201
+
+    folder_id = cockpit.world.get("atlas").labels[F.LABEL_FOLDER_PROJECT]
+    assert folder_id != mine.id
+    folder = cockpit.project_store.get(folder_id, user_id="alice")
+    assert folder is not None and folder.name == f"Atlas factory · {root[:6]}"
+    assert folder.config == {"icon": "🏭"}
 
 
 async def test_start_needs_owner_on_the_root(cockpit: Cockpit) -> None:

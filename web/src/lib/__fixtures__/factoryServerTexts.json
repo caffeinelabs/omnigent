@@ -1,0 +1,235 @@
+[
+  {
+    "name": "envelope",
+    "text": "[Factory message · from \"PL · api-version\" (b408c5f09ff659e6b907fd9f688829e9, project_lead, project=api-version) · kind=request · id=mail_0123456789abcdef · reply: sys_session_post(to=\"b408c5f09ff659e6b907fd9f688829e9\")]\nVERIFY #9630 @7767f0d",
+    "expect": {
+      "kind": "message",
+      "msgKind": "request",
+      "mailId": "mail_0123456789abcdef"
+    }
+  },
+  {
+    "name": "brief",
+    "text": "[Factory brief · from Luka via cockpit · id=mail_00000000000000aa]\nStart the factory.",
+    "expect": {
+      "kind": "brief",
+      "by": "Luka",
+      "mailId": "mail_00000000000000aa"
+    }
+  },
+  {
+    "name": "heartbeat",
+    "text": "[Factory heartbeat #12 · 2026-10-26T12:30:00Z] Run load_skill(\"factory-heartbeat\") and follow it. Reply only if something changed.",
+    "expect": {
+      "kind": "heartbeat",
+      "seq": 12
+    }
+  },
+  {
+    "name": "heartbeat_delta",
+    "text": "[Factory heartbeat #13 · 2026-10-26T12:30:00Z] 2 changes since #12: • PR #9630 ready • D-3 answered\nRun load_skill(\"factory-heartbeat\") and follow it. Reply only if something changed.",
+    "expect": {
+      "kind": "heartbeat",
+      "seq": 13,
+      "deltaSince": 12
+    }
+  },
+  {
+    "name": "control_pause",
+    "text": "[Factory control · PAUSE · by Luka] Pause the project.",
+    "expect": {
+      "kind": "control",
+      "action": "PAUSE",
+      "by": "Luka"
+    }
+  },
+  {
+    "name": "control_preview",
+    "text": "[Factory control · PREVIEW pr=#9630 · by Luka] Deploy the preview.",
+    "expect": {
+      "kind": "control",
+      "action": "PREVIEW",
+      "pr": 9630,
+      "by": "Luka"
+    }
+  },
+  {
+    "name": "control_preview_down",
+    "text": "[Factory control · PREVIEW_DOWN pr=#9630 · by Luka] Take it down.",
+    "expect": {
+      "kind": "control",
+      "action": "PREVIEW_DOWN",
+      "pr": 9630
+    }
+  },
+  {
+    "name": "control_env_status",
+    "text": "[Factory control · ENV STATUS · by Luka] Report env status.",
+    "expect": {
+      "kind": "control",
+      "action": "ENV STATUS"
+    }
+  },
+  {
+    "name": "control_charter_update",
+    "text": "[Factory control · CHARTER UPDATE · by Luka] Your charter changed: follow the new one from your next step, update plan.md, and reply once: sys_session_post(to=\"parent\", kind=\"reply\").\n```diff\n-goal: a\n+goal: b\n```",
+    "expect": {
+      "kind": "control",
+      "action": "CHARTER UPDATE",
+      "by": "Luka"
+    }
+  },
+  {
+    "name": "decision_answered",
+    "text": "[Factory decision · D-3 answered by Luka · \"Header, right\"]\nUse the right side.\nQuestion: Where should the ENV badge go?",
+    "expect": {
+      "kind": "decision",
+      "seq": 3,
+      "by": "Luka",
+      "option": "Header, right"
+    }
+  },
+  {
+    "name": "decision_withdrawn",
+    "text": "[Factory decision · D-3 withdrawn by Luka]\nNo longer needed.\nQuestion: Where should the ENV badge go?",
+    "expect": {
+      "kind": "decision",
+      "seq": 3,
+      "withdrawn": true
+    }
+  },
+  {
+    "name": "decision_info_copy",
+    "text": "[Factory notice · D-3 answered by Luka · \"Header, right\" · delivered to \"PL · api-version\"] Info copy of a blocking decision; the asker has the answer.\nQuestion: Where should the ENV badge go?",
+    "expect": {
+      "kind": "notice",
+      "decisionId": "D-3"
+    }
+  },
+  {
+    "name": "review_changes_cockpit",
+    "text": "[Factory review · CHANGES REQUESTED on PR #9630 @7767f0d by Luka (cockpit)]\nMake it uppercase.",
+    "expect": {
+      "kind": "review",
+      "verdict": "changes_requested",
+      "pr": 9630,
+      "source": "cockpit"
+    }
+  },
+  {
+    "name": "review_approved",
+    "text": "[Factory review · APPROVED PR #9630 @7767f0d by Luka (cockpit)] The human will merge on GitHub; keep the preview up.",
+    "expect": {
+      "kind": "review",
+      "verdict": "approved",
+      "pr": 9630
+    }
+  },
+  {
+    "name": "review_changes_github",
+    "text": "[Factory review · CHANGES REQUESTED on PR #9630 @7767f0d by luka (GitHub)]\nPlease rename it.",
+    "expect": {
+      "kind": "review",
+      "verdict": "changes_requested",
+      "pr": 9630,
+      "source": "GitHub"
+    }
+  },
+  {
+    "name": "notice_ready",
+    "text": "[Factory notice · PR caffeinelabs/app#9630 READY FOR HUMAN MERGE · 6/6 gates · head 7767f0d] A human merges it on GitHub; keep its preview up and do not merge it. https://github.com/caffeinelabs/app/pull/9630",
+    "expect": {
+      "kind": "notice",
+      "pr": 9630
+    }
+  },
+  {
+    "name": "notice_checks_failed",
+    "text": "[Factory notice · PR caffeinelabs/app#9630 checks failed: lint, unit (head 7767f0d)] Dispatch a fix on factory/api-version/version-endpoint. https://github.com/caffeinelabs/app/pull/9630/checks",
+    "expect": {
+      "kind": "notice",
+      "pr": 9630
+    }
+  },
+  {
+    "name": "notice_merged",
+    "text": "[Factory notice · PR caffeinelabs/app#9630 merged by @luka as 9c8b7a6 · https://github.com/caffeinelabs/app/pull/9630 · tear down preview p9630] Run your post-merge steps: env_keeper MERGED pr=9630 (tear down its preview), sync sibling worktrees (git merge origin/main), post the milestone to your lead.",
+    "expect": {
+      "kind": "notice",
+      "pr": 9630
+    }
+  },
+  {
+    "name": "notice_closed",
+    "text": "[Factory notice · PR caffeinelabs/app#9630 closed without merge by @luka · tear down preview p9630] Send env_keeper CLOSED pr=9630. D-4 asks the human whether to abandon the task or rework it; do not reopen or replace the PR until it is answered.",
+    "expect": {
+      "kind": "notice",
+      "pr": 9630
+    }
+  },
+  {
+    "name": "notice_preview_ttl",
+    "text": "[Factory notice · preview p9630 idle 72h · park it] No human has looked at the preview of PR caffeinelabs/app#9630 for 72h. Send env_keeper PREVIEW_DOWN pr=9630 reason=ttl. The demo stays reviewable; the cockpit can redeploy the preview later.",
+    "expect": {
+      "kind": "notice",
+      "pr": 9630
+    }
+  },
+  {
+    "name": "notice_preview_gone",
+    "text": "[Factory notice · preview p9630 unreachable · redeploy] PR caffeinelabs/app#9630: its factory preview failed 3 probes in a row (app no answer, api 502). Send env_keeper PREVIEW pr=9630 head=7767f0d.",
+    "expect": {
+      "kind": "notice",
+      "pr": 9630
+    }
+  },
+  {
+    "name": "notice_control",
+    "text": "[Factory notice · Luka paused project api-version via cockpit]\nback at 3",
+    "expect": {
+      "kind": "notice"
+    }
+  },
+  {
+    "name": "notice_reply",
+    "text": "[Factory notice · \"PL · api-version\" (b408c5f09ff659e6b907fd9f688829e9) finished the turn your request started (idle). Last output: «done: PR #9630 opened». Inspect with sys_session_get_history(conversation_id=\"b408c5f09ff659e6b907fd9f688829e9\").]",
+    "expect": {
+      "kind": "notice"
+    }
+  },
+  {
+    "name": "alert_failed",
+    "text": "[Factory alert · \"PL · api-version\" (b408c5f09ff659e6b907fd9f688829e9) failed: runner_unavailable]",
+    "expect": {
+      "kind": "alert"
+    }
+  },
+  {
+    "name": "alert_stuck",
+    "text": "[Factory alert · \"PL · api-version\" (b408c5f09ff659e6b907fd9f688829e9) running with no progress for 1h32m. Inspect with sys_session_get_history; nudge or cancel if wedged.]",
+    "expect": {
+      "kind": "alert"
+    }
+  },
+  {
+    "name": "needs_human_dead",
+    "text": "[NEEDS HUMAN · relaunch of \"PL · api-version\" failed 3× (runner_unavailable)]",
+    "expect": {
+      "kind": "needs_human"
+    }
+  },
+  {
+    "name": "needs_human_blocked",
+    "text": "[NEEDS HUMAN · \"PL · api-version\" waiting since 2026-10-26T12:00:00Z: approval for gh auth]",
+    "expect": {
+      "kind": "needs_human"
+    }
+  },
+  {
+    "name": "delivery_failure",
+    "text": "[Factory delivery failure · message to \"PL · api-version\" (b408c5f09ff659e6b907fd9f688829e9) undeliverable: session_closed]",
+    "expect": {
+      "kind": "delivery"
+    }
+  }
+]

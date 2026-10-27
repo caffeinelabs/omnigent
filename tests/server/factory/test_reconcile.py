@@ -44,7 +44,8 @@ async def test_the_folder_is_created_once_and_members_are_filed(
     other_id = world.get("other_lead").labels[F.LABEL_FOLDER_PROJECT]
     assert set(report.folders_created) == {folder_id, other_id}
     folder = projects.get(folder_id, user_id=None)
-    assert folder is not None and folder.name == "🏭 Atlas"
+    # The sidebar draws the 🏭 from the icon; the name doesn't repeat it.
+    assert folder is not None and folder.name == "Atlas"
     assert folder.config == {"icon": "🏭"}
     for key in ("lead_a", "lead_b", "pl"):
         assert world.get(key).project_id == folder_id
@@ -57,7 +58,7 @@ async def test_the_folder_is_created_once_and_members_are_filed(
     announced.clear()
     again = await reconcile.reconcile_once(world.app_state)
     assert again.folders_created == [] and again.filed == []
-    assert [p.name for p in projects.list(user_id=None)].count("🏭 Atlas") == 1
+    assert [p.name for p in projects.list(user_id=None)].count("Atlas") == 1
     assert {"type": "projects_changed"} not in announced
 
 
@@ -76,7 +77,9 @@ async def test_a_user_chosen_project_is_never_overridden(
 async def test_a_lost_folder_is_recreated_and_a_name_clash_gets_a_suffix(
     world: FactoryWorld, projects: SqlAlchemyProjectStore
 ) -> None:
-    clash = projects.create(project_id=uuid.uuid4().hex, name="🏭 Atlas", user_id=None)
+    clash = projects.create(
+        project_id=uuid.uuid4().hex, name="Atlas", user_id=None, config={"icon": "🏭"}
+    )
     world.store.set_labels(world.id("other_lead"), {F.LABEL_FOLDER_PROJECT: clash.id})
 
     await reconcile.reconcile_once(world.app_state)
@@ -84,7 +87,21 @@ async def test_a_lost_folder_is_recreated_and_a_name_clash_gets_a_suffix(
     folder_id = world.get("lead_a").labels[F.LABEL_FOLDER_PROJECT]
     assert folder_id != clash.id
     folder = projects.get(folder_id, user_id=None)
-    assert folder is not None and folder.name == f"🏭 Atlas · {world.id('lead_a')[:6]}"
+    assert folder is not None and folder.name == f"Atlas · {world.id('lead_a')[:6]}"
+
+
+async def test_a_same_named_user_project_is_not_adopted_as_the_folder(
+    world: FactoryWorld, projects: SqlAlchemyProjectStore
+) -> None:
+    mine = projects.create(project_id=uuid.uuid4().hex, name="Atlas", user_id=None)
+
+    await reconcile.reconcile_once(world.app_state)
+
+    folder_id = world.get("lead_a").labels[F.LABEL_FOLDER_PROJECT]
+    assert folder_id != mine.id
+    folder = projects.get(folder_id, user_id=None)
+    assert folder is not None and folder.name == f"Atlas · {world.id('lead_a')[:6]}"
+    assert folder.config == {"icon": "🏭"}
 
 
 async def test_a_folder_the_owner_deleted_stays_deleted(
@@ -102,7 +119,7 @@ async def test_a_folder_the_owner_deleted_stays_deleted(
 
     assert world.get("lead_a").labels[F.LABEL_FOLDER_PROJECT] == F.FOLDER_DELETED
     assert world.get("pl").project_id is None
-    assert [p.name for p in projects.list(user_id=None)].count("🏭 Atlas") == 0
+    assert [p.name for p in projects.list(user_id=None)].count("Atlas") == 0
 
 
 async def test_project_rows_are_backfilled_from_pl_labels(

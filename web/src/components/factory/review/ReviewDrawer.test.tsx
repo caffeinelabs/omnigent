@@ -253,6 +253,24 @@ describe("ReviewDrawer · demo", () => {
     expect(within(drawer).getByTestId("review-demo-empty")).toHaveTextContent("No demo yet.");
   });
 
+  it("says a demo is being recorded while the project's demo agent runs", () => {
+    const { drawer } = renderDrawer("demo-recording");
+    expect(within(drawer).getByTestId("review-demo-recording")).toHaveTextContent(
+      "Recording demo…demo:db-version-route is recording this head in its factory preview.",
+    );
+    expect(within(drawer).queryByTestId("review-demo-empty")).toBeNull();
+  });
+
+  it("names the agent recording a new head next to the old demo", () => {
+    const scenario = reviewScenario("demo-old-head");
+    const recorder = scenario.snapshot.members.find((m) => m.role === "demo")!;
+    recorder.running = true;
+    const { drawer } = renderDrawer(scenario);
+    expect(within(drawer).getByTestId("review-demo-old-head")).toHaveTextContent(
+      `is being recorded by ${recorder.title}.`,
+    );
+  });
+
   it("says previews are off rather than docs-only when the project turned them off", () => {
     const { drawer } = renderDrawer("previews-off");
     expect(within(drawer).getByTestId("review-demo-previews-off")).toHaveTextContent(

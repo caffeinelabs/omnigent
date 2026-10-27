@@ -1,6 +1,7 @@
 import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { useFactory } from "@/hooks/useFactory";
 import type { EventView, FactorySnapshot, ProjectView } from "@/lib/factoryApi";
 import { LIVE_RUN_PL_API_ID, liveRunSnapshot } from "../__fixtures__/liveRun";
 import { FactoryNowContext } from "../factoryClock";
@@ -324,6 +325,45 @@ describe("ProjectControlsMenu", () => {
     });
     expect(screen.getByTestId("control-restart-quick-api-version")).toBeInTheDocument();
     expect(screen.getByTestId("control-relaunch-quick-api-version")).toBeInTheDocument();
+  });
+
+  it("ages control events on the server's clock, not a skewed browser's", async () => {
+    // The browser runs an hour ahead of the server; the pause was sent just now.
+    const snapshot = liveRunSnapshot();
+    snapshot.server_time = Math.floor(Date.now() / 1000) - 3600;
+    const project = snapshot.projects.find((p) => p.slug === "api-version")!;
+    const server = serveFactory(authenticatedFetch, snapshot);
+    server.events = [
+      {
+        ...ackEvent("x", LIVE_RUN_PL_API_ID),
+        id: "ev-now",
+        ts: Date.now() - 3600_000,
+        kind: "control.pause",
+        from_id: null,
+        project_slug: "api-version",
+        data: { target: "project:api-version", recipients: [LIVE_RUN_PL_API_ID] },
+      },
+    ];
+    function Live() {
+      // The cockpit's snapshot read measures the server clock.
+      useFactory(snapshot.factory.id);
+      return (
+        <ProjectControlsMenu
+          factoryId={snapshot.factory.id}
+          project={project}
+          prs={[]}
+          members={snapshot.members}
+        />
+      );
+    }
+    renderControls(<Live />, snapshot);
+    const chip = await screen.findByTestId("control-pending-api-version");
+    await waitFor(() =>
+      expect(
+        server.calls.some((c) => c.path === `/v1/factory/factories/${snapshot.factory.id}`),
+      ).toBe(true),
+    );
+    await waitFor(() => expect(chip).toHaveAttribute("data-state", "waiting"));
   });
 
   it("turns amber after 15 min without a reply and offers a restart", async () => {

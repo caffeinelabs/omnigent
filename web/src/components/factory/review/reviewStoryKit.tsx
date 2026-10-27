@@ -40,17 +40,20 @@ export function apiFileRoutes(): StoryRoutes {
 
 export interface ReviewStoryOptions extends Omit<CockpitStoryOptions, "snapshot" | "search"> {
   state: ReviewState;
+  /** Arrive the way the PR's stable preview link does when the preview isn't running. */
+  previewUnavailable?: boolean;
 }
 
 /** The cockpit with the review drawer open on the scenario's PR. */
-export function ReviewStory({ state, routes, ...options }: ReviewStoryOptions) {
+export function ReviewStory({ state, routes, previewUnavailable, ...options }: ReviewStoryOptions) {
   const { snapshot, pr } = reviewScenario(state);
+  const search = `?review=${pr.number}${previewUnavailable ? `&pr=${pr.id}&preview=unavailable` : ""}`;
   return (
     <ImageLightboxProvider>
       <CockpitStory
         {...options}
         snapshot={withReviewMedia(snapshot)}
-        search={`?review=${pr.number}`}
+        search={search}
         routes={{ ...apiFileRoutes(), ...routes }}
       />
     </ImageLightboxProvider>

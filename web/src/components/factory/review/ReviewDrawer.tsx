@@ -32,7 +32,8 @@ import { EvidencePanel } from "./EvidencePanel";
 import { PreviewPanel } from "./PreviewPanel";
 import { ReadyForMergeBanner } from "./ReadyForMergeBanner";
 import { ReviewActions } from "./ReviewActions";
-import { DotParts } from "./reviewParts";
+import { demoRecorder } from "./reviewModel";
+import { DotParts, ReviewNotice } from "./reviewParts";
 
 export interface ReviewDrawerProps {
   /** The factory (root session) id. */
@@ -47,6 +48,8 @@ export interface ReviewDrawerProps {
   snapshot?: FactorySnapshot;
   /** The clock ages read against (epoch seconds); the factory clock when omitted. */
   nowS?: number;
+  /** The PR's stable preview link redirected here because the preview isn't running. */
+  previewUnavailable?: boolean;
 }
 
 function StatusLine({ pr, nowS }: { pr: PrView; nowS: number }) {
@@ -94,6 +97,19 @@ function StatusLine({ pr, nowS }: { pr: PrView; nowS: number }) {
   );
 }
 
+/** Why the PR's stable preview link landed here; nothing once the preview is back up. */
+function PreviewUnavailableNotice({ pr }: { pr: PrView }) {
+  const state = pr.preview?.state ?? null;
+  if (state === "ready" || state === "stale") return null;
+  return (
+    <ReviewNotice tone="warning" testId="review-preview-unavailable">
+      The preview link brought you here: this PR’s factory preview isn’t running (
+      {state ?? "not deployed"}). {state === "parked" ? "Restore" : state ? "Redeploy" : "Deploy"}{" "}
+      it under Preview to look at the PR live.
+    </ReviewNotice>
+  );
+}
+
 export function ReviewDrawer({
   factoryId,
   pr,
@@ -101,6 +117,7 @@ export function ReviewDrawer({
   onClose,
   snapshot,
   nowS: nowProp,
+  previewUnavailable = false,
 }: ReviewDrawerProps) {
   const clockS = Math.floor(useFactoryNow().getTime() / 1000);
   const nowS = nowProp ?? clockS;
@@ -180,6 +197,7 @@ export function ReviewDrawer({
                 />
               </p>
               <StatusLine pr={pr} nowS={nowS} />
+              {previewUnavailable && <PreviewUnavailableNotice pr={pr} />}
             </>
           ) : (
             <SheetDescription>This PR isn’t tracked by this factory.</SheetDescription>
@@ -187,7 +205,14 @@ export function ReviewDrawer({
         </SheetHeader>
         {pr && (
           <SheetBody className="grid grid-cols-1 content-start gap-6 md:grid-cols-[minmax(0,1.15fr)_minmax(0,1fr)]">
-            <DemoPanel factoryId={factoryId} pr={pr} project={project} demo={demo} nowS={nowS} />
+            <DemoPanel
+              factoryId={factoryId}
+              pr={pr}
+              project={project}
+              demo={demo}
+              nowS={nowS}
+              recorder={demoRecorder(pr, members)}
+            />
             <div className="flex min-w-0 flex-col gap-5 max-md:border-t max-md:border-border max-md:pt-5 md:border-l md:border-border md:pl-6">
               <PreviewPanel factoryId={factoryId} pr={pr} project={project} nowS={nowS} />
               <div className="border-t border-border pt-4">

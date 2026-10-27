@@ -6,6 +6,7 @@ import {
   apiCallPath,
   bodyPreview,
   demoDownloads,
+  demoRecorder,
   demoScreenshots,
   gateTally,
   olderDemos,
@@ -145,5 +146,30 @@ describe("olderDemos", () => {
       { demoId: "d2", sha7: "bbbbbbb", status: "PASS", at: 2000 },
       { demoId: "d1", sha7: "aaaaaaa", status: "FAIL", at: 1000 },
     ]);
+  });
+});
+
+describe("demoRecorder", () => {
+  const member = (title: string, project: string | null, running = true) => ({
+    ...liveRunSnapshot().members.find((m) => m.role === "demo")!,
+    session_id: title,
+    title,
+    project,
+    running,
+  });
+
+  it("picks the running demo agent of the PR's project", () => {
+    const p = pr(9630);
+    expect(demoRecorder(p, [member("demo:other", "db-version")])).toBeNull();
+    expect(demoRecorder(p, [member("demo:x", "api-version", false)])).toBeNull();
+    expect(demoRecorder(p, [member("demo:x", "api-version")])?.title).toBe("demo:x");
+  });
+
+  it("prefers the one named after the PR's task, and won't guess between others", () => {
+    const p = { ...pr(9630), task: "version-endpoint" };
+    const named = member("demo:demo-version-endpoint", "api-version");
+    const other = member("demo:demo-settings-row", "api-version");
+    expect(demoRecorder(p, [other, named])?.title).toBe(named.title);
+    expect(demoRecorder(p, [other, member("demo:demo-third", "api-version")])).toBeNull();
   });
 });

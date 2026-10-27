@@ -51,12 +51,15 @@ def discover_services(
     return found
 
 
-async def start_all(app_state: Any, package: str = __name__) -> StopFn:
+async def start_all(
+    app_state: Any, package: str = __name__, *, started: list[str] | None = None
+) -> StopFn:
     """
     Start every discovered service.
 
     :param app_state: ``app.state`` carrying the factory deps.
     :param package: Dotted package name to scan.
+    :param started: Receives the short name of each service that started, e.g. ``"pr_poller"``.
     :returns: An async callable that stops the started services, newest first.
     """
     stops: list[tuple[str, StopFn]] = []
@@ -64,6 +67,8 @@ async def start_all(app_state: Any, package: str = __name__) -> StopFn:
         try:
             stops.append((name, await asyncio.wait_for(start(app_state), START_TIMEOUT_S)))
             _logger.info("factory: started background service %s", name)
+            if started is not None:
+                started.append(name.rsplit(".", 1)[-1])
         except TimeoutError:
             _logger.error(
                 "factory: background service %s failed to start within %ss",

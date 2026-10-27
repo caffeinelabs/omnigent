@@ -351,7 +351,7 @@ def test_config_reads_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 async def test_factory_services_run_the_supervisor_only_when_enabled(
-    world: FactoryWorld, monkeypatch: pytest.MonkeyPatch
+    world: FactoryWorld, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
 ) -> None:
     from omnigent.server.factory import notify, start_factory_services
 
@@ -363,7 +363,12 @@ async def test_factory_services_run_the_supervisor_only_when_enabled(
 
     monkeypatch.setenv(F.FACTORY_ENABLED_ENV, "1")
     monkeypatch.setenv("OMNIGENT_FACTORY_TICK_S", "30")
-    stop = await start_factory_services(world.app_state)
+    with caplog.at_level(logging.INFO, logger="omnigent.server.factory"):
+        stop = await start_factory_services(world.app_state)
+    started = [r.getMessage() for r in caplog.records if "factory services started" in r.message]
+    assert started == [
+        "factory services started: supervisor, env_prober, pr_poller, prune, reconcile"
+    ]
     supervisor = get_supervisor(world.app_state)
     assert supervisor is not None
     assert supervisor.config.tick_s == 30

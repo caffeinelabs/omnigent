@@ -438,7 +438,8 @@ class SysFactoryPrTool(Tool):
         return (
             "Register a pull request with the factory cockpit, optionally with a claim "
             "about it, and get back the gates the server computes from GitHub: "
-            "{pr_id, ready, gates, reasons[], claim_mismatch?}. Call it right after "
+            "{pr_id, ready, gates, reasons[], claim_mismatch?, review_url, preview_url} "
+            "(review_url and preview_url are the PR body's review-links). Call it right after "
             "`gh pr create` (claim='opened'), when you report READY FOR HUMAN MERGE "
             "(claim='ready_for_human_merge'), and when a PR is dropped "
             "(claim='abandoned'). The server re-checks GitHub before answering (up "

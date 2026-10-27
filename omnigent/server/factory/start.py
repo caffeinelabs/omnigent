@@ -271,9 +271,18 @@ def parse_body(model: type[_M], payload: Any, *, prefix: str = "") -> _M:
 
 
 def folder_name(root: Conversation, name: str | None = None) -> str:
-    """:returns: e.g. ``"🏭 Atlas factory"`` (the factory name, else the root's title)."""
-    label = name or root.labels.get(LABEL_NAME) or display_title(root.title, "factory")
-    return f"{FOLDER_ICON} {label}"
+    """
+    The sidebar folder's name; the sidebar draws the 🏭 from the folder's icon.
+
+    :returns: e.g. ``"Atlas factory"`` (the factory name, else the root's title).
+    """
+    return name or root.labels.get(LABEL_NAME) or display_title(root.title, "factory")
+
+
+def is_factory_folder(project: Any) -> bool:
+    """Whether a sidebar project is a factory folder (it carries the factory icon)."""
+    config = getattr(project, "config", None)
+    return isinstance(config, Mapping) and config.get("icon") == FOLDER_ICON
 
 
 def ensure_folder(
@@ -299,18 +308,26 @@ def ensure_folder(
     if current and projects.get(current, user_id=owner) is not None:
         return current, False
     wanted = folder_name(root, name)
-    match = next((p for p in projects.list(user_id=owner) if p.name == wanted), None)
-    created = False
-    if match is None:
-        try:
-            match = projects.create(uuid.uuid4().hex, wanted, owner, config={"icon": FOLDER_ICON})
-            created = True
-        except OmnigentError as exc:
-            if exc.code != ErrorCode.ALREADY_EXISTS:
-                raise
-            match = next(p for p in projects.list(user_id=owner) if p.name == wanted)
-    deps.conversation_store.set_labels(root.id, {LABEL_FOLDER_PROJECT: match.id})
-    return match.id, created
+    # A same-named project of the user's own is never adopted: fall back to an id suffix.
+    for candidate in (wanted, f"{wanted} · {root.id[:6]}"):
+        existing = next((p for p in projects.list(user_id=owner) if p.name == candidate), None)
+        if existing is not None:
+            if not is_factory_folder(existing):
+                continue
+            match, created = existing, False
+        else:
+            try:
+                match = projects.create(
+                    uuid.uuid4().hex, candidate, owner, config={"icon": FOLDER_ICON}
+                )
+                created = True
+            except OmnigentError as exc:
+                if exc.code != ErrorCode.ALREADY_EXISTS:
+                    raise
+                continue
+        deps.conversation_store.set_labels(root.id, {LABEL_FOLDER_PROJECT: match.id})
+        return match.id, created
+    return None, False
 
 
 def file_into_folder(deps: FactoryDeps, conv: Conversation, folder_id: str) -> bool:
@@ -706,6 +723,7 @@ __all__ = [
     "ensure_folder",
     "file_into_folder",
     "folder_name",
+    "is_factory_folder",
     "kickoff_text",
     "merge_charter",
     "parse_body",
