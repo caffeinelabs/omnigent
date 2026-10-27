@@ -1,0 +1,271 @@
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { EventView, FactorySnapshot, ProjectView } from "@/lib/factoryApi";
+import { LIVE_RUN_PL_API_ID, liveRunSnapshot } from "../__fixtures__/liveRun";
+import { ackEvent, openMenu, renderControls, serveFactory } from "./__fixtures__/controlsKit";
+import { ProjectControlsMenu } from "./ProjectControlsMenu";
+import { resetFactoryControls } from "./useFactoryControls";
+
+const authenticatedFetch = vi.fn();
+vi.mock("@/lib/identity", () => ({
+  authenticatedFetch: (...args: unknown[]) => authenticatedFetch(...args),
+}));
+vi.mock("@/hooks/useSessionUpdatesConnected", () => ({ useSessionUpdatesConnected: () => true }));
+
+function setup(
+  mutate?: (snapshot: FactorySnapshot, project: ProjectView) => void,
+  events: EventView[] = [],
+) {
+  const snapshot = liveRunSnapshot();
+  const project = snapshot.projects.find((p) => p.slug === "api-version")!;
+  mutate?.(snapshot, project);
+  const server = serveFactory(authenticatedFetch, snapshot);
+  server.events = events;
+  const prs = snapshot.prs.filter((pr) => project.pr_ids.includes(pr.id));
+  const view = renderControls(
+    <ProjectControlsMenu
+      factoryId={snapshot.factory.id}
+      project={project}
+      prs={prs}
+      members={snapshot.members}
+    />,
+    snapshot,
+  );
+  const controlPath = `/v1/factory/factories/${snapshot.factory.id}/control`;
+  const controlBodies = () =>
+    server
+      .writes()
+      .filter((c) => c.path === controlPath)
+      .map((c) => c.body);
+  return { snapshot, project, server, controlBodies, ...view };
+}
+
+function open() {
+  openMenu(screen.getByTestId("project-controls-api-version"));
+}
+
+beforeEach(() => {
+  authenticatedFetch.mockReset();
+  resetFactoryControls();
+});
+
+describe("ProjectControlsMenu", () => {
+  it("pauses through the dialog, keeping previews unless asked to tear them down", async () => {
+    const { controlBodies } = setup();
+    open();
+    fireEvent.click(screen.getByTestId("control-pause"));
+    const dialog = await screen.findByTestId("control-pause-dialog");
+    expect(within(dialog).getByTestId("control-consequences")).toHaveTextContent(
+      "1 factory preview stays up for review",
+    );
+    fireEvent.click(within(dialog).getByTestId("control-teardown"));
+    fireEvent.change(within(dialog).getByTestId("control-note"), {
+      target: { value: "lunch" },
+    });
+    fireEvent.click(within(dialog).getByTestId("control-confirm"));
+    await waitFor(() =>
+      expect(controlBodies()).toEqual([
+        {
+          action: "pause",
+          target: "project:api-version",
+          note: "lunch",
+          options: { keep_previews: false },
+        },
+      ]),
+    );
+  });
+
+  it("sends the right body for every other project control", async () => {
+    const { controlBodies, snapshot } = setup((_, project) => {
+      project.overlay = "paused";
+    });
+    const pr9630 = snapshot.prs.find((pr) => pr.number === 9630)!;
+
+    open();
+    fireEvent.click(screen.getByTestId("control-resume"));
+    await waitFor(() => expect(controlBodies()).toHaveLength(1));
+
+    open();
+    fireEvent.click(screen.getByTestId("control-restart"));
+    fireEvent.change(await screen.findByTestId("control-note"), { target: { value: "stuck" } });
+    fireEvent.click(screen.getByTestId("control-confirm"));
+    await waitFor(() => expect(controlBodies()).toHaveLength(2));
+
+    open();
+    fireEvent.click(screen.getByTestId("control-relaunch"));
+    fireEvent.click(await screen.findByTestId("control-confirm"));
+    await waitFor(() => expect(controlBodies()).toHaveLength(3));
+
+    open();
+    fireEvent.click(screen.getByTestId("control-preview"));
+    fireEvent.click(await screen.findByTestId("control-preview-9630"));
+    await waitFor(() => expect(controlBodies()).toHaveLength(4));
+
+    open();
+    fireEvent.click(screen.getByTestId("control-env-status"));
+    await waitFor(() => expect(controlBodies()).toHaveLength(5));
+
+    open();
+    fireEvent.click(screen.getByTestId("control-preview"));
+    fireEvent.click(await screen.findByTestId("control-preview-down-9630"));
+    await waitFor(() => expect(controlBodies()).toHaveLength(6));
+
+    expect(controlBodies()).toEqual([
+      { action: "resume", target: "project:api-version" },
+      { action: "restart", target: "project:api-version", note: "stuck" },
+      { action: "relaunch", target: "project:api-version" },
+      { action: "preview", target: "project:api-version", options: { pr_id: pr9630.id } },
+      { action: "env_status", target: "project:api-version" },
+      {
+        action: "preview",
+        target: "project:api-version",
+        options: { pr_id: pr9630.id, mode: "down" },
+      },
+    ]);
+    expect(screen.getByTestId("control-pending-api-version")).toHaveTextContent(
+      "Taking down preview #9630… waiting for PL",
+    );
+  });
+
+  it("stops only once the slug is typed", async () => {
+    const { controlBodies } = setup();
+    open();
+    fireEvent.click(screen.getByTestId("control-stop"));
+    const confirm = await screen.findByTestId("control-confirm");
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByTestId("control-confirm-input"), {
+      target: { value: "api-versio" },
+    });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(screen.getByTestId("control-confirm-input"), {
+      target: { value: "api-version" },
+    });
+    expect(confirm).toBeEnabled();
+    fireEvent.click(confirm);
+    await waitFor(() =>
+      expect(controlBodies()).toEqual([{ action: "stop", target: "project:api-version" }]),
+    );
+  });
+
+  it("highlights the relaunch with the drift fields when the PL drifted", async () => {
+    setup((snapshot) => {
+      const pl = snapshot.members.find((m) => m.session_id === LIVE_RUN_PL_API_ID)!;
+      pl.launch_drift = {
+        fields: ["permission_mode"],
+        stored: { permission_mode: "auto" },
+        spec: { permission_mode: "bypassPermissions" },
+      };
+    });
+    expect(screen.getByTestId("project-controls-api-version")).toHaveAttribute(
+      "data-drift",
+      "true",
+    );
+    open();
+    const item = screen.getByTestId("control-relaunch");
+    expect(item).toHaveAttribute("data-drift", "true");
+    expect(within(item).getByTestId("control-relaunch-drift")).toHaveTextContent(
+      "permission mode auto → bypassPermissions",
+    );
+    fireEvent.click(item);
+    expect(await screen.findByTestId("control-drift-table")).toHaveTextContent("bypassPermissions");
+  });
+
+  it("shows no drift on the relaunch item when the launch matches the spec", () => {
+    setup();
+    open();
+    expect(screen.getByTestId("control-relaunch")).toHaveAttribute("data-drift", "false");
+    expect(screen.queryByTestId("control-relaunch-drift")).not.toBeInTheDocument();
+  });
+
+  it("is pending until the PL acknowledges, then confirms", async () => {
+    const { server, client, snapshot } = setup();
+    open();
+    fireEvent.click(screen.getByTestId("control-pause"));
+    fireEvent.click(await screen.findByTestId("control-confirm"));
+    const chip = await screen.findByTestId("control-pending-api-version");
+    await waitFor(() => expect(chip).toHaveAttribute("data-state", "waiting"));
+    expect(chip).toHaveTextContent("Pausing… waiting for PL");
+
+    // The server's event (ev-1, the first write) and the PL's ack arrive with the next read.
+    server.events = [
+      ackEvent("ev-1", LIVE_RUN_PL_API_ID),
+      {
+        ...ackEvent("ev-1", LIVE_RUN_PL_API_ID),
+        id: "ev-1",
+        kind: "control.pause",
+        from_id: null,
+        project_slug: "api-version",
+        data: { target: "project:api-version", recipients: [LIVE_RUN_PL_API_ID] },
+      },
+    ];
+    await act(() =>
+      client.invalidateQueries({ queryKey: ["factory-events", snapshot.factory.id] }),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId("control-pending-api-version")).toHaveAttribute(
+        "data-state",
+        "done",
+      ),
+    );
+    expect(screen.getByTestId("control-pending-api-version")).toHaveTextContent("PL paused");
+  });
+
+  it("offers Undo for 5 s after a pause, which sends resume", async () => {
+    const { controlBodies } = setup();
+    open();
+    fireEvent.click(screen.getByTestId("control-pause"));
+    fireEvent.click(await screen.findByTestId("control-confirm"));
+    fireEvent.click(await screen.findByTestId("control-undo"));
+    await waitFor(() =>
+      expect(controlBodies()).toEqual([
+        { action: "pause", target: "project:api-version", options: { keep_previews: true } },
+        { action: "resume", target: "project:api-version" },
+      ]),
+    );
+  });
+
+  it("explains a 403 inline and in a toast", async () => {
+    const { server } = setup();
+    server.failNext(403, { error: { code: "forbidden", message: "Forbidden" } });
+    open();
+    fireEvent.click(screen.getByTestId("control-env-status"));
+    const chip = await screen.findByTestId("control-pending-api-version");
+    await waitFor(() => expect(chip).toHaveAttribute("data-state", "error"));
+    expect(chip).toHaveTextContent("Env status: You need edit/owner access");
+    expect(await screen.findByText("You need edit/owner access")).toBeInTheDocument();
+  });
+
+  it("offers Resume inline on a paused project", () => {
+    setup((_, project) => {
+      project.overlay = "paused";
+    });
+    expect(screen.getByTestId("control-resume-quick-api-version")).toBeInTheDocument();
+  });
+
+  it("offers Restart and Relaunch inline on a failed project", () => {
+    setup((_, project) => {
+      project.overlay = "failed";
+    });
+    expect(screen.getByTestId("control-restart-quick-api-version")).toBeInTheDocument();
+    expect(screen.getByTestId("control-relaunch-quick-api-version")).toBeInTheDocument();
+  });
+
+  it("turns amber after 15 min without a reply and offers a restart", async () => {
+    setup(undefined, [
+      {
+        ...ackEvent("x", LIVE_RUN_PL_API_ID),
+        id: "ev-old",
+        ts: Date.now() - 20 * 60_000,
+        kind: "control.pause",
+        from_id: null,
+        project_slug: "api-version",
+        data: { target: "project:api-version", recipients: [LIVE_RUN_PL_API_ID] },
+      },
+    ]);
+    const chip = await screen.findByTestId("control-pending-api-version");
+    await waitFor(() => expect(chip).toHaveAttribute("data-state", "late"));
+    expect(chip).toHaveTextContent("No reply from PL in 15 min");
+    fireEvent.click(within(chip).getByTestId("control-late-restart"));
+    expect(await screen.findByTestId("control-restart-dialog")).toBeInTheDocument();
+  });
+});

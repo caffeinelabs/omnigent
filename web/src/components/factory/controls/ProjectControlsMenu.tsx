@@ -1,21 +1,25 @@
 /**
- * The ⋯ menu of a project card and the project drawer.
- *
- * Placeholder until the controls package lands: it lists the controls
- * (disabled) and links to the PL's chat. Its replacement keeps these props.
+ * The ⋯ menu of a project card and the project drawer: pause/resume, restart
+ * and relaunch the PL, switch its factory preview to a PR, ask for env
+ * status, edit the charter and stop the project. Every lever is a server
+ * control (never a chat message); a chip beside the menu shows what it is
+ * waiting for, and paused or failed projects get their next step inline.
  */
 
+import { useState } from "react";
 import {
   EllipsisIcon,
   MessageSquareIcon,
   PauseIcon,
   PencilIcon,
   PlayIcon,
+  PowerOffIcon,
   RefreshCwIcon,
   RotateCcwIcon,
   ServerIcon,
   SquareIcon,
   SquareStackIcon,
+  TriangleAlertIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -28,6 +32,14 @@ import {
 } from "@/components/ui/dropdown-menu";
 import type { MemberView, PrView, ProjectView } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
+import { cn } from "@/lib/utils";
+import { driftText } from "../board/TeamStrip";
+import { PauseDialog, RelaunchDialog, RestartDialog, TypeToConfirmDialog } from "./ControlDialogs";
+import { PendingChip, showUndoToast } from "./ControlFeedback";
+import { relaunchableDrift } from "./controlModel";
+import { EditCharterDialog } from "./EditCharterDialog";
+import { MenuSection } from "./MenuSection";
+import { useFactoryControls } from "./useFactoryControls";
 
 export interface ProjectControlsMenuProps {
   /** The factory (root session) id the controls post to. */
@@ -40,54 +52,304 @@ export interface ProjectControlsMenuProps {
   members: MemberView[];
 }
 
-const PENDING = [
-  { label: "Pause project…", icon: PauseIcon },
-  { label: "Resume project", icon: PlayIcon },
-  { label: "Restart PL…", icon: RotateCcwIcon },
-  { label: "Relaunch PL with spec mode", icon: RefreshCwIcon },
-  { label: "Switch preview to PR", icon: SquareStackIcon },
-  { label: "Ask env status", icon: ServerIcon },
-  { label: "Edit charter…", icon: PencilIcon },
-  { label: "Stop project…", icon: SquareIcon },
-];
+type DialogKind = "pause" | "stop" | "restart" | "relaunch" | "charter";
 
-export function ProjectControlsMenu({ project }: ProjectControlsMenuProps) {
+const LIVE_PREVIEW = new Set(["deploying", "ready", "stale"]);
+
+function previewWord(pr: PrView): string {
+  const state = pr.preview?.state;
+  if (!state || state === "down") return "no preview";
+  if (state === "stale") return "preview behind head";
+  return `preview ${state}`;
+}
+
+export function ProjectControlsMenu({
+  factoryId,
+  project,
+  prs,
+  members,
+}: ProjectControlsMenuProps) {
+  const controls = useFactoryControls(factoryId);
+  const [dialog, setDialog] = useState<DialogKind | null>(null);
+  const target = `project:${project.slug}` as const;
+  const pl = project.pl;
+  const plMember = pl ? members.find((m) => m.session_id === pl.session_id) : undefined;
+  const drift = relaunchableDrift(members, pl?.session_id);
+  const paused = project.overlay === "paused";
+  const stopped = plMember?.state === "done";
+  const failed = project.overlay === "failed";
+  const openPrs = prs.filter((pr) => pr.state === "open");
+  const previewsEnabled = project.charter?.preview.enabled === true;
+  const livePreviews = openPrs.filter(
+    (pr) => pr.preview && LIVE_PREVIEW.has(pr.preview.state),
+  ).length;
+  const pending = controls.pendingFor(project.slug);
+  const close = (open: boolean) => {
+    if (!open) setDialog(null);
+  };
+
+  const pause = ({ teardown, note }: { teardown: boolean; note: string }) => {
+    const sent = controls.send({
+      action: "pause",
+      target,
+      ...(note ? { note } : {}),
+      options: { keep_previews: !teardown },
+    });
+    showUndoToast({
+      id: `control-undo-${project.slug}`,
+      text: `Pausing ${project.title}`,
+      onUndo: () => {
+        void sent.then((res) => {
+          if (res) void controls.send({ action: "resume", target });
+        });
+      },
+    });
+  };
+  const resume = () => void controls.send({ action: "resume", target });
+  const restart = (note: string) =>
+    void controls.send({ action: "restart", target, ...(note ? { note } : {}) });
+  const relaunch = () => void controls.send({ action: "relaunch", target });
+  const stop = () => void controls.send({ action: "stop", target });
+  const envStatus = () => void controls.send({ action: "env_status", target });
+  const preview = (pr: PrView, mode: "up" | "down" = "up") =>
+    void controls.send(
+      {
+        action: "preview",
+        target,
+        options: mode === "down" ? { pr_id: pr.id, mode } : { pr_id: pr.id },
+      },
+      { label: `#${pr.number}` },
+    );
+  const live = openPrs.filter((pr) => pr.preview && LIVE_PREVIEW.has(pr.preview.state));
+
   return (
-    <DropdownMenu>
-      <DropdownMenuTrigger asChild>
+    <span className="flex min-w-0 shrink-0 items-center justify-end gap-1">
+      {pending ? (
+        <PendingChip
+          control={pending}
+          who={pending.target.startsWith("member:") ? (pl?.title ?? "PL") : "PL"}
+          testId={`control-pending-${project.slug}`}
+          onRestart={pl ? () => setDialog("restart") : undefined}
+          onDismiss={pending.localId ? () => controls.dismiss(pending.localId!) : undefined}
+        />
+      ) : paused || stopped ? (
         <Button
-          variant="ghost"
-          size="icon-xs"
-          aria-label={`Controls for ${project.title}`}
-          data-testid={`project-controls-${project.slug}`}
-          componentId="factory.project.controls"
-          className="text-muted-foreground"
+          variant="outline"
+          size="xs"
+          onClick={resume}
+          disabled={!pl}
+          data-testid={`control-resume-quick-${project.slug}`}
+          componentId="factory.project.resume_quick"
         >
-          <EllipsisIcon className="size-4" />
+          <PlayIcon />
+          Resume
         </Button>
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="min-w-56">
-        <DropdownMenuLabel className="text-sm font-normal text-muted-foreground">
-          Project controls are coming soon
-        </DropdownMenuLabel>
-        {PENDING.map(({ label, icon: Icon }) => (
-          <DropdownMenuItem key={label} disabled>
-            <Icon />
-            {label}
+      ) : failed && pl ? (
+        <span className="flex items-center gap-1">
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={() => setDialog("restart")}
+            data-testid={`control-restart-quick-${project.slug}`}
+            componentId="factory.project.restart_quick"
+          >
+            <RotateCcwIcon />
+            Restart
+          </Button>
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={() => setDialog("relaunch")}
+            data-testid={`control-relaunch-quick-${project.slug}`}
+            componentId="factory.project.relaunch_quick"
+            className="@max-md:hidden"
+          >
+            <RefreshCwIcon />
+            Relaunch with spec
+          </Button>
+        </span>
+      ) : null}
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon-xs"
+            aria-label={`Controls for ${project.title}`}
+            data-testid={`project-controls-${project.slug}`}
+            data-drift={drift ? "true" : undefined}
+            componentId="factory.project.controls"
+            className={cn("text-muted-foreground", drift && "text-warning")}
+          >
+            <EllipsisIcon className="size-4" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" collisionPadding={12} className="w-72 backdrop-blur-md">
+          <DropdownMenuLabel className="truncate text-sm font-normal text-muted-foreground">
+            {pl ? pl.title : "No PL yet · Atlas spawns it"}
+          </DropdownMenuLabel>
+          {paused || stopped ? (
+            <DropdownMenuItem onSelect={resume} disabled={!pl} data-testid="control-resume">
+              <PlayIcon />
+              Resume project
+            </DropdownMenuItem>
+          ) : (
+            <DropdownMenuItem
+              onSelect={() => setDialog("pause")}
+              disabled={!pl}
+              data-testid="control-pause"
+            >
+              <PauseIcon />
+              Pause project…
+            </DropdownMenuItem>
+          )}
+          <DropdownMenuItem
+            onSelect={() => setDialog("restart")}
+            disabled={!pl}
+            data-testid="control-restart"
+          >
+            <RotateCcwIcon />
+            Restart PL…
           </DropdownMenuItem>
-        ))}
-        {project.pl && (
-          <>
-            <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onSelect={() => setDialog("relaunch")}
+            disabled={!pl}
+            data-testid="control-relaunch"
+            data-drift={drift ? "true" : "false"}
+            className={cn(
+              "items-start",
+              drift && "bg-warning/10 text-warning focus:bg-warning/15 [&_svg]:text-warning",
+            )}
+          >
+            {drift ? (
+              <TriangleAlertIcon className="mt-0.5" />
+            ) : (
+              <RefreshCwIcon className="mt-0.5" />
+            )}
+            <span className="flex min-w-0 flex-col">
+              <span>Relaunch PL with spec mode</span>
+              {drift && (
+                <span data-testid="control-relaunch-drift" className="text-sm whitespace-normal">
+                  {driftText(drift)}
+                </span>
+              )}
+            </span>
+          </DropdownMenuItem>
+          <MenuSection
+            testId="control-preview"
+            disabled={!pl || !previewsEnabled || openPrs.length === 0}
+            contentClassName="min-w-60"
+            trigger={
+              <>
+                <SquareStackIcon />
+                Switch preview to PR
+              </>
+            }
+          >
+            <DropdownMenuLabel className="text-sm font-normal text-muted-foreground">
+              Deploy at the PR’s head
+            </DropdownMenuLabel>
+            {openPrs.map((pr) => (
+              <DropdownMenuItem
+                key={pr.id}
+                onSelect={() => preview(pr)}
+                data-testid={`control-preview-${pr.number}`}
+              >
+                <span className="font-mono tabular-nums">#{pr.number}</span>
+                <span className="font-mono text-muted-foreground">{pr.head_sha.slice(0, 7)}</span>
+                <span className="ml-auto text-sm text-muted-foreground">{previewWord(pr)}</span>
+              </DropdownMenuItem>
+            ))}
+            {live.length > 0 && (
+              <>
+                <DropdownMenuSeparator />
+                {live.map((pr) => (
+                  <DropdownMenuItem
+                    key={pr.id}
+                    onSelect={() => preview(pr, "down")}
+                    data-testid={`control-preview-down-${pr.number}`}
+                  >
+                    <PowerOffIcon />
+                    Take down <span className="font-mono tabular-nums">p{pr.number}</span>
+                    <span className="ml-auto text-sm text-muted-foreground">frees a slot</span>
+                  </DropdownMenuItem>
+                ))}
+              </>
+            )}
+          </MenuSection>
+          <DropdownMenuItem onSelect={envStatus} disabled={!pl} data-testid="control-env-status">
+            <ServerIcon />
+            Ask env status
+          </DropdownMenuItem>
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onSelect={() => setDialog("charter")}
+            data-testid="control-edit-charter"
+          >
+            <PencilIcon />
+            Edit charter…
+          </DropdownMenuItem>
+          {pl && (
             <DropdownMenuItem asChild>
-              <Link to={project.pl.url} componentId="factory.project.open_pl">
+              <Link to={pl.url} componentId="factory.project.open_pl">
                 <MessageSquareIcon />
                 Open PL chat
               </Link>
             </DropdownMenuItem>
-          </>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+          )}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            variant="destructive"
+            onSelect={() => setDialog("stop")}
+            disabled={!pl || stopped}
+            data-testid="control-stop"
+          >
+            <SquareIcon />
+            Stop project…
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+
+      <PauseDialog
+        open={dialog === "pause"}
+        onOpenChange={close}
+        scope="project"
+        name={project.title}
+        livePreviews={livePreviews}
+        onConfirm={pause}
+      />
+      <RestartDialog
+        open={dialog === "restart"}
+        onOpenChange={close}
+        who={pl?.title ?? "the PL"}
+        onConfirm={restart}
+      />
+      <RelaunchDialog
+        open={dialog === "relaunch"}
+        onOpenChange={close}
+        who={pl?.title ?? "the PL"}
+        drift={drift}
+        onConfirm={relaunch}
+      />
+      <TypeToConfirmDialog
+        open={dialog === "stop"}
+        onOpenChange={close}
+        title={`Stop ${project.title}?`}
+        description="The PL finishes for good. Resume brings it back later if needed."
+        consequences={[
+          "Running ICs are cancelled.",
+          "The dev env and every factory preview are torn down; demos stay in the cockpit.",
+          "PRs stay open on GitHub for you to merge or close.",
+        ]}
+        expected={project.slug}
+        confirmLabel="Stop project"
+        onConfirm={stop}
+      />
+      <EditCharterDialog
+        factoryId={factoryId}
+        project={project}
+        open={dialog === "charter"}
+        onOpenChange={close}
+      />
+    </span>
   );
 }

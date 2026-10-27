@@ -697,6 +697,18 @@ export function boardActivityEvents(): EventPage {
     },
     {
       ...base,
+      id: "ev13a",
+      ts: t - 590_000,
+      kind: "control.ack",
+      project_slug: "api-version",
+      from_id: LIVE_RUN_PL_API_ID,
+      from_title: "PL · api-version",
+      subject: "project:api-version",
+      summary: "resume acknowledged",
+      data: { control_event_id: "ev13", action: "resume" },
+    },
+    {
+      ...base,
       id: "ev13",
       ts: t - 600_000,
       kind: "control.resume",

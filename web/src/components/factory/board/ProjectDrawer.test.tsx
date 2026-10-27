@@ -51,7 +51,7 @@ describe("ProjectDrawer", () => {
     const { drawer } = renderDrawer("api-version");
     fireEvent.click(within(drawer).getByTestId("charter-edit"));
     expect(screen.getByTestId("edit-charter-dialog")).toHaveTextContent(
-      "Charter · API version endpoint",
+      "Edit charter · api-version",
     );
   });
 

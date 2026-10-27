@@ -18,6 +18,7 @@ import { FactoryHeader } from "@/components/factory/board/FactoryHeader";
 import { HealthStrip } from "@/components/factory/board/HealthStrip";
 import { needsYou } from "@/components/factory/board/boardModel";
 import { ProjectDrawer } from "@/components/factory/board/ProjectDrawer";
+import { FactoryControlsProvider } from "@/components/factory/controls/FactoryControlsContext";
 import { DecisionsRail } from "@/components/factory/decisions/DecisionsRail";
 import { useFactoryServerNowS } from "@/components/factory/factoryClock";
 import { FactoryLoadError } from "@/components/factory/FactoryLoadError";
@@ -285,7 +286,11 @@ export function FactoryPage() {
           This factory doesn’t exist, or you can’t see it.
         </p>
       )}
-      {data && <Cockpit key={data.factory.id} snapshot={data} clockOffsetS={clockOffsetS} />}
+      {data && (
+        <FactoryControlsProvider key={data.factory.id} snapshot={data}>
+          <Cockpit snapshot={data} clockOffsetS={clockOffsetS} />
+        </FactoryControlsProvider>
+      )}
     </PageScroll>
   );
 }

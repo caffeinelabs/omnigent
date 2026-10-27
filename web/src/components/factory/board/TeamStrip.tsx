@@ -13,6 +13,7 @@ import type { FactoryRole, LaunchDriftView, MemberRef, MemberView } from "@/lib/
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { activityDotClassName } from "@/shell/subagentStatus";
+import { useDriftRelaunch } from "../controls/FactoryControlsContext";
 import { formatUsd } from "../factoryFormat";
 import { ageText } from "./boardModel";
 
@@ -92,6 +93,10 @@ function MemberChip({
 }) {
   const role = member.role ? ROLE_SHORT[member.role] : "agent";
   const cost = formatUsd(member.cost_usd);
+  const relaunch = useDriftRelaunch(member.session_id);
+  const driftTitle = drift
+    ? `Launch mode differs from spec: ${driftText(drift)}`
+    : "Launch mode differs from spec";
   return (
     <span className="inline-flex items-center gap-1">
       <HoverCard openDelay={200} closeDelay={100}>
@@ -135,20 +140,28 @@ function MemberChip({
           )}
         </HoverCardContent>
       </HoverCard>
-      {member.has_launch_drift && (
-        <span
-          data-testid={`launch-drift-chip-${member.session_id}`}
-          title={
-            drift
-              ? `Launch mode differs from spec: ${driftText(drift)}`
-              : "Launch mode differs from spec"
-          }
-          className="inline-flex h-5 items-center gap-1 rounded-md bg-warning/15 px-1.5 text-sm text-warning"
-        >
-          <TriangleAlertIcon aria-hidden className="size-3" />
-          old launch mode
-        </span>
-      )}
+      {member.has_launch_drift &&
+        (relaunch ? (
+          <button
+            type="button"
+            onClick={relaunch}
+            data-testid={`launch-drift-chip-${member.session_id}`}
+            title={`${driftTitle}. Relaunch with spec mode…`}
+            className="inline-flex h-5 cursor-pointer items-center gap-1 rounded-md bg-warning/15 px-1.5 text-sm text-warning hover:bg-warning/25"
+          >
+            <TriangleAlertIcon aria-hidden className="size-3" />
+            old launch mode · relaunch
+          </button>
+        ) : (
+          <span
+            data-testid={`launch-drift-chip-${member.session_id}`}
+            title={driftTitle}
+            className="inline-flex h-5 items-center gap-1 rounded-md bg-warning/15 px-1.5 text-sm text-warning"
+          >
+            <TriangleAlertIcon aria-hidden className="size-3" />
+            old launch mode
+          </span>
+        ))}
     </span>
   );
 }
