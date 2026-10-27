@@ -72,7 +72,11 @@ FOLDER_ICON: Final = "🏭"
 MAX_PROJECTS: Final = 12
 _SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
 _REPO_RE = re.compile(r"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$")
-_BRANCH_RE = re.compile(r"^(?!/)(?!.*\.\.)(?!.*//)[A-Za-z0-9._/-]{1,255}$")
+# A branch git accepts: no leading "-", "." or "/", no "..", "//" or "/.", no ".lock"
+# component and no trailing "/" or ".".
+_BRANCH_RE = re.compile(
+    r"^(?![-./])(?!.*\.\.)(?!.*//)(?!.*/\.)(?!.*\.lock(?:/|$))(?!.*[/.]$)[A-Za-z0-9._/-]{1,255}$"
+)
 _URL_PATH_RE = re.compile(r"^/[A-Za-z0-9._~/-]{0,199}$")
 
 _M = TypeVar("_M", bound=BaseModel)
@@ -174,6 +178,10 @@ class ProjectIn(_CharterFields):
     @field_validator("base_branch")
     @classmethod
     def _branch(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            # The form's empty branch field means the default base.
+            return DEFAULT_BASE_BRANCH
         if not _BRANCH_RE.match(value):
             raise ValueError("base_branch is not a valid branch name")
         return value

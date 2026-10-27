@@ -276,8 +276,11 @@ the PL passes it on every dispatch: env_keeper `UP base=<branch>`, `PREVIEW …
 base=<branch>` and `MERGED pr=<n> base=<branch>`, and `Base: <branch>` on
 every task card. ICs branch from origin/<branch>, sync with `git merge
 origin/<branch>` and open PRs with `--base <branch>`; reviewers and Sentinel
-flag a PR whose `baseRefName` differs; the dev env tracks origin/<branch> and
-moves on each merge into it. To trial the factory without touching `main`, cut
+flag a PR whose `baseRefName` differs, and the server fails its `mergeable`
+gate (with the `gh pr edit <n> --base <branch>` fix) so it never reads READY
+FOR HUMAN MERGE; `sys_factory_pr` returns the PR's `base_ref` next to the
+project's `project_base`. The dev env tracks origin/<branch> and moves on each
+merge into it. To trial the factory without touching `main`, cut
 a test branch such as `temp-main` from main, start the project as
 `caffeinelabs/app#temp-main`, and every factory PR lands there. The preview
 tooling ref (`OMNIGENT_FACTORY_PREVIEW_TOOLING_REF`, default `main`) is

@@ -11,9 +11,11 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
+from pydantic import ValidationError
 
 from omnigent import factory as F
 from omnigent.server.auth import LEVEL_OWNER
+from omnigent.server.factory.start import ProjectIn
 from tests.server.factory.cockpit_helpers import Cockpit, build_cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld
 
@@ -290,6 +292,7 @@ async def test_start_refuses_a_lead_of_another_factory(cockpit: Cockpit) -> None
         (lambda b: b["projects"][1].update(slug="api-status"), "projects[1].slug"),
         (lambda b: b["projects"][0].update(repo="not a repo"), "projects[0].repo"),
         (lambda b: b["projects"][0].update(repo="o/" + "r" * 300), "projects[0].repo"),
+        (lambda b: b["projects"][0].update(base_branch="-x"), "projects[0].base_branch"),
         (lambda b: b["projects"][0].update(goal=""), "projects[0].goal"),
         (lambda b: b["projects"][0].update(priority=7), "projects[0].priority"),
         (
@@ -314,6 +317,23 @@ async def test_validation_errors_name_the_field(cockpit: Cockpit, mutate: Any, f
     assert resp.json()["error"]["field"] == field
     assert resp.json()["message"]
     assert cockpit.mailer.items == []
+
+
+@pytest.mark.parametrize(
+    "branch", ["-x", ".hidden", "/x", "a/.b", "a..b", "a//b", "feat/", "x.", "x.lock", "x.lock/y"]
+)
+def test_base_branch_refuses_names_git_refuses(branch: str) -> None:
+    """The branch reaches agent shell commands (`--base <branch>`), so git's rules apply."""
+    with pytest.raises(ValidationError, match="base_branch is not a valid branch name"):
+        ProjectIn(slug="s", repo="o/r", goal="g", base_branch=branch)
+
+
+@pytest.mark.parametrize(
+    ("branch", "stored"),
+    [("", "main"), ("  ", "main"), ("temp-main", "temp-main"), ("release/v1.2", "release/v1.2")],
+)
+def test_an_empty_base_branch_is_the_default(branch: str, stored: str) -> None:
+    assert ProjectIn(slug="s", repo="o/r", goal="g", base_branch=branch).base_branch == stored
 
 
 # ── Add project ────────────────────────────────────────────────
