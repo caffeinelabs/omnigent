@@ -265,15 +265,49 @@ async def test_an_unreadable_folder_skips_only_filing_for_that_factory(
     assert report.filed == [world.id("healthy_pl")]
     assert world.get("broken_pl").project_id is None
     assert {"broken-slug", "healthy-slug"} <= set(report.projects_created)
+    assert report.failed == [(world.id(broken), "folder")]
     message = f"folder of {world.id(broken)} failed"
     assert _warnings(caplog, message) == 1
 
-    await reconcile.reconcile_once(world.app_state)
+    report = await reconcile.reconcile_once(world.app_state)
+    assert report.failed == [(world.id(broken), "folder")], "counted on every pass"
     assert _warnings(caplog, message) == 1, "logged at most once an hour"
 
     failure_log[(world.id(broken), "folder")] -= reconcile.FAILURE_LOG_EVERY_S
     await reconcile.reconcile_once(world.app_state)
     assert _warnings(caplog, message) == 2
+
+
+async def test_a_recovered_folder_logs_its_next_failure_at_once(
+    world: FactoryWorld,
+    projects: SqlAlchemyProjectStore,
+    failure_log: dict[tuple[str, str], float],
+    caplog: pytest.LogCaptureFixture,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    await reconcile.reconcile_once(world.app_state)
+    bad_folder = world.get("lead_a").labels[F.LABEL_FOLDER_PROJECT]
+    real_get = projects.get
+    broken = True
+
+    def get(project_id: str, *, user_id: str | None) -> Any:
+        if broken and project_id == bad_folder:
+            raise json.JSONDecodeError("Expecting value", "\\x0000", 0)
+        return real_get(project_id, user_id=user_id)
+
+    monkeypatch.setattr(projects, "get", get)
+    caplog.set_level(logging.WARNING, logger=reconcile.__name__)
+    message = f"folder of {world.id('lead_a')} failed"
+
+    await reconcile.reconcile_once(world.app_state)
+    assert _warnings(caplog, message) == 1
+    broken = False
+    report = await reconcile.reconcile_once(world.app_state)
+    assert report.failed == []
+    assert failure_log == {}, "a success forgets the failure"
+    broken = True
+    await reconcile.reconcile_once(world.app_state)
+    assert _warnings(caplog, message) == 2, "a relapse within the hour is logged"
 
 
 @pytest.mark.parametrize("broken", ["lead_a", "other_lead"])
@@ -298,7 +332,8 @@ async def test_a_failing_factory_does_not_stop_the_others(
     caplog.set_level(logging.WARNING, logger=reconcile.__name__)
 
     for _ in range(2):
-        await reconcile.reconcile_once(world.app_state)
+        report = await reconcile.reconcile_once(world.app_state)
+        assert report.failed == [(world.id(broken), "reconcile")]
 
     assert world.get(healthy).project_id == world.get(healthy).labels[F.LABEL_FOLDER_PROJECT]
     assert _warnings(caplog, f"reconcile of {world.id(broken)} failed") == 1

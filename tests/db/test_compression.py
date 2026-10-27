@@ -129,3 +129,20 @@ def test_pg_hex_text_frame_accepts_upper_case_digits() -> None:
 def test_text_that_only_resembles_a_pg_hex_frame_is_unchanged(text: str) -> None:
     """Plaintext is only unwrapped when it is a well-formed frame."""
     assert decode(text) == text
+
+
+@pytest.mark.parametrize(
+    ("text", "unwrapped"),
+    [
+        ("\\x0000", ""),
+        ("\\x0000" + b"hi".hex(), "hi"),
+    ],
+)
+def test_text_that_is_a_well_formed_pg_hex_frame_is_unwrapped(text: str, unwrapped: str) -> None:
+    """Accepted ambiguity: plaintext that *is* a well-formed hex frame is unwrapped.
+
+    Only a ``str`` from a text-typed column reaches this path (legacy SQLite
+    rows, or a PostgreSQL column the binary-type migration skipped), and free
+    text would have to be exactly ``\\x0000`` plus UTF-8 hex digits.
+    """
+    assert decode(text) == unwrapped
