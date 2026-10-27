@@ -7,6 +7,7 @@ import { type ReactNode, useContext, useLayoutEffect } from "react";
 import { Route, Routes } from "react-router-dom";
 import { ForceThemeContext } from "@/components/theme/ThemeProvider";
 import { FactoryPage } from "@/pages/factory/FactoryPage";
+import { ProjectPage } from "@/pages/factory/ProjectPage";
 import type { EventPage, FactorySnapshot } from "@/lib/factoryApi";
 import { LIVE_RUN_FACTORY_ID } from "../__fixtures__/liveRun";
 import {
@@ -62,7 +63,7 @@ export interface CockpitStoryOptions extends FactoryFrameOptions {
   live?: boolean;
 }
 
-/** The cockpit page over the whole story viewport. */
+/** The cockpit page over the whole story viewport (a card's title opens its project page). */
 export function CockpitStory({
   snapshot,
   events,
@@ -88,6 +89,7 @@ export function CockpitStory({
       <FactoryLiveContext.Provider value={live}>
         <Routes>
           <Route path="/factory/:factoryId" element={<FactoryPage />} />
+          <Route path="/factory/:factoryId/projects/:slug" element={<ProjectPage />} />
         </Routes>
       </FactoryLiveContext.Provider>
     </FactoryStoryFrame>

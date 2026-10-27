@@ -34,6 +34,7 @@ import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { MOBILE_GLASS_PILL } from "@/shell/mobileGlass";
 import { useFactoryNow } from "./factoryClock";
+import { factoryPageHref, projectPageHref } from "./factoryRoutes";
 import {
   type FactoryTone,
   GATE_LABEL,
@@ -93,10 +94,11 @@ export function useFactoryPlacement(sessionId: string | null | undefined): Facto
   return own ?? (root ? placementFrom(root.labels, true, session?.title ?? null) : null);
 }
 
-/** The cockpit link for a placement (its project's card for PLs and ICs). */
+/** The cockpit link for a placement (its project's page for PLs and ICs). */
 export function cockpitHref(placement: FactoryPlacement): string {
-  const base = `/factory/${encodeURIComponent(placement.factoryId)}`;
-  return placement.project ? `${base}?project=${encodeURIComponent(placement.project)}` : base;
+  return placement.project
+    ? projectPageHref(placement.factoryId, placement.project)
+    : factoryPageHref(placement.factoryId);
 }
 
 /** One dot per ready gate (plus the demo gate when the project records demos). */

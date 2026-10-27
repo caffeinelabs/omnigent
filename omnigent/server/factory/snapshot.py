@@ -552,6 +552,20 @@ def _demo_view(demo: FactoryDemo, head_sha: str, titles: Mapping[str, str]) -> d
     }
 
 
+def project_demo_view(
+    demo: FactoryDemo, head_sha: str, titles: Mapping[str, str]
+) -> dict[str, Any] | None:
+    """A demo as the demos list shows it (``ProjectDemoView``), or ``None`` when it doesn't fit."""
+    view = {
+        **_demo_view(demo, head_sha, titles),
+        "pr_number": demo.pr_number,
+        "pr_id": demo.pr_id,
+        "repo": demo.repo,
+        "project_slug": demo.project_slug or None,
+    }
+    return _lenient(schemas.ProjectDemoView, view)
+
+
 def _pr_view(pr: FactoryPr, demos: Sequence[FactoryDemo], titles: Mapping[str, str]) -> dict:
     # Newest first; a demo of the current head wins a same-second tie.
     demos = sorted(demos, key=lambda d: (d.created_at, d.head_sha == pr.head_sha), reverse=True)
@@ -1081,6 +1095,7 @@ __all__ = [
     "pending_brief_targets",
     "pick_pl",
     "pl_title_slug",
+    "project_demo_view",
     "project_stage",
     "readable_for",
     "readable_set",

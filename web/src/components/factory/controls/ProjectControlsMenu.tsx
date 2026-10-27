@@ -1,10 +1,10 @@
 /**
- * The ⋯ menu of a project card and the project drawer: pause/resume, restart
+ * The ⋯ menu of a project card and the project page: pause/resume, restart
  * and relaunch the PL, switch its factory preview to a PR, ask for env
  * status, edit the charter and stop the project. Every lever is a server
  * control (never a chat message); a chip shows what it is waiting for, and
  * paused or failed projects get their next step inline. A card places that
- * inline part under its title (`useProjectControlParts`); the drawer keeps
+ * inline part under its title (`useProjectControlParts`); the page keeps
  * it beside the menu.
  */
 
@@ -79,7 +79,7 @@ export interface ProjectControlParts {
   menu: ReactNode;
 }
 
-/** The ⋯ menu with the project's next step beside it (the drawer's header). */
+/** The ⋯ menu with the project's next step beside it (the project page's header). */
 export function ProjectControlsMenu(props: ProjectControlsMenuProps) {
   const { quick, menu } = useProjectControlParts(props);
   return (

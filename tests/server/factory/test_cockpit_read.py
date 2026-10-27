@@ -1,7 +1,9 @@
-"""Cockpit read routes: access, per-member filtering, ETags, the contract, decisions, preflight."""
+"""Cockpit read routes: access, per-member filtering, ETags, the contract, demos, decisions,
+preflight."""
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Iterator
 from types import SimpleNamespace
 from typing import Any
@@ -13,6 +15,8 @@ from omnigent.entities.factory import EventDraft
 from omnigent.server.auth import LEVEL_READ
 from omnigent.server.factory import schemas, snapshot, status
 from omnigent.server.factory.context import factory_deps
+from omnigent.stores import factory_store
+from omnigent.stores.factory_store import sqlalchemy_store
 from tests.server.factory.conftest import FactoryApi, FactoryWorld
 
 HEAD = "7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16"
@@ -421,6 +425,141 @@ async def test_a_long_run_of_hidden_events_does_not_end_the_feed(
 
     assert seen == ["factory-wide notice"]
     assert page["has_more"] is False and page["next_before"] is None
+
+
+# ── demos ──────────────────────────────────────────────────────
+
+DB_HEAD = "5e1c2d4a9b8f7e6d5c4b3a2918f7e6d5c4b3a291"
+
+
+@pytest.fixture()
+def demo_clock(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Each stored row is a second newer than the last, so demos order by creation."""
+    ticks = itertools.count(1793016000)
+    for store_module in (factory_store, sqlalchemy_store):
+        monkeypatch.setattr(store_module, "now_s", lambda: next(ticks))
+
+
+def _demos_path(fid: str) -> str:
+    return f"/v1/factory/factories/{fid}/demos"
+
+
+def _seed_demos(world: FactoryWorld, api: FactoryApi) -> SimpleNamespace:
+    """The seeded factory plus a PARTIAL demo of db-version's #9631 and another factory's demo."""
+    seeded = _seed(world, api)
+    store = _deps(api).factory_store
+    db_pr, _ = store.upsert_pr(
+        seeded.fid,
+        "caffeinelabs/app",
+        9631,
+        project_slug="db-version",
+        title="feat(api): GET /db/version",
+        head_sha=DB_HEAD,
+        head_ref="factory/db-version/db-version",
+        base_ref="main",
+    )
+    db_demo = store.create_demo(
+        factory_id=seeded.fid,
+        project_slug="db-version",
+        repo="caffeinelabs/app",
+        pr_number=9631,
+        head_sha=DB_HEAD,
+        session_id=world.id("pl"),
+        created_by_session=world.id("pl"),
+        status="PARTIAL",
+        title="GET /db/version",
+        pr_id=db_pr.id,
+    )
+    other = world.id("other_lead")
+    store.create_demo(
+        factory_id=other,
+        project_slug="api-version",
+        repo="caffeinelabs/app",
+        pr_number=9630,
+        head_sha=HEAD,
+        session_id=other,
+        created_by_session=other,
+    )
+    seeded.db_demo, seeded.db_pr = db_demo, db_pr
+    return seeded
+
+
+async def test_demos_list_newest_first_with_the_pr_each_records(
+    world: FactoryWorld, authed_api: FactoryApi, demo_clock: None
+) -> None:
+    seeded = _seed_demos(world, authed_api)
+
+    resp = await _get(authed_api, _demos_path(seeded.fid))
+
+    assert resp.status_code == 200
+    listed = schemas.DemoListResponse.model_validate(resp.json()).data
+    assert [(d.pr_number, d.project_slug, d.head_sha[:7]) for d in listed] == [
+        (9631, "db-version", DB_HEAD[:7]),
+        (9630, "api-version", HEAD[:7]),
+        (9630, "api-version", "1a2b3c4"),
+    ]
+    db, current, older = listed
+    assert db.id == seeded.db_demo.id and db.status == "PARTIAL" and db.pr_id == seeded.db_pr.id
+    assert db.is_current_head
+    assert current.id == seeded.demo.id and current.is_current_head
+    assert not older.is_current_head
+    assert current.repo == "caffeinelabs/app" and current.summary.startswith("Landing renders")
+    assert current.video_file_id == "f-video" and current.poster_file_id == "f-poster"
+    assert current.files[0].url == f"/v1/factory/demos/{seeded.demo.id}/files/f-video"
+    assert [(s.n, s.status) for s in current.steps] == [(1, "pass"), (2, "pass"), (3, "skipped")]
+    assert current.steps[2].note == "needs the build tier"
+    assert current.by == "ic:task-1" and current.console_errors == 0
+    assert current.created_at > older.created_at
+
+
+async def test_demos_filter_by_project_pr_and_limit(
+    world: FactoryWorld, authed_api: FactoryApi, demo_clock: None
+) -> None:
+    seeded = _seed_demos(world, authed_api)
+    path = _demos_path(seeded.fid)
+
+    async def heads(**params: Any) -> list[str]:
+        body = (await _get(authed_api, path, params=params)).json()
+        return [d["head_sha"][:7] for d in body["data"]]
+
+    assert await heads(project="api-version") == [HEAD[:7], "1a2b3c4"]
+    assert await heads(pr=9631) == [DB_HEAD[:7]]
+    assert await heads(project="api-version", pr=9630, limit=1) == [HEAD[:7]]
+    assert await heads(project="api-version", pr=9631) == []
+    assert await heads(project="nope") == []
+    for bad in ({"limit": 0}, {"limit": 201}, {"pr": 0}):
+        assert (await _get(authed_api, path, params=bad)).status_code == 422
+
+
+async def test_demos_need_read_on_the_factory_and_on_the_pl(
+    world: FactoryWorld, authed_api: FactoryApi, demo_clock: None
+) -> None:
+    seeded = _seed_demos(world, authed_api)
+    path = _demos_path(seeded.fid)
+    permissions = _deps(authed_api).permission_store
+
+    # Like the snapshot: a factory the caller can't read doesn't exist for them.
+    refused = await _get(authed_api, path, "bob")
+    assert refused.status_code == 404 and refused.json()["error"]["code"] == "not_found"
+    assert (await authed_api.client.get(path)).status_code == 401
+    assert (await _get(authed_api, _demos_path(world.id("plain")))).status_code == 404
+
+    permissions.grant("bob", seeded.fid, LEVEL_READ)
+    assert (await _get(authed_api, path, "bob")).json() == {"data": []}
+
+    permissions.grant("bob", world.id("pl"), LEVEL_READ)
+    snapshot.reset_cache()
+    shared = (await _get(authed_api, path, "bob")).json()["data"]
+    assert [d["pr_number"] for d in shared] == [9631, 9630, 9630]
+
+
+async def test_a_factory_without_demos_lists_none(
+    world: FactoryWorld, authed_api: FactoryApi
+) -> None:
+    resp = await _get(authed_api, _demos_path(world.id("lead_a")))
+
+    assert resp.status_code == 200
+    assert resp.json() == {"data": []}
 
 
 # ── factories list and decisions ───────────────────────────────

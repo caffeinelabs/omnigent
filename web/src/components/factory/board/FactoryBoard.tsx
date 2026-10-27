@@ -17,7 +17,6 @@ import { StageStrip } from "./StageStrip";
 export interface FactoryBoardProps {
   snapshot: FactorySnapshot;
   nowS: number;
-  onOpenProject: (slug: string) => void;
   onReview: (number: number) => void;
   /** Point at one decision (a blocked card's `D-n`). */
   onDecision: (ref: string) => void;
@@ -41,7 +40,6 @@ function useNewPrIds(snapshot: FactorySnapshot): ReadonlySet<string> {
 export function FactoryBoard({
   snapshot,
   nowS,
-  onOpenProject,
   onReview,
   onDecision,
   onDecisions,
@@ -96,7 +94,6 @@ export function FactoryBoard({
               snapshot={snapshot}
               project={project}
               nowS={nowS}
-              onOpenProject={onOpenProject}
               onReview={onReview}
               onDecision={onDecision}
               newPrIds={newPrIds}
@@ -140,7 +137,6 @@ export function FactoryBoard({
                 snapshot={snapshot}
                 project={project}
                 nowS={nowS}
-                onOpenProject={onOpenProject}
               />
             ))}
           </CollapsibleContent>

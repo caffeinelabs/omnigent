@@ -89,12 +89,6 @@ export const RefreshError = cockpit({
 /** `?decision=D-2` (the blocked card's link): the rail highlights it. */
 export const DecisionHighlighted = cockpit({ search: "?decision=D-2" });
 
-export const ProjectDrawer = cockpit({ search: "?project=api-version" });
-
-export const ProjectDrawerDark = cockpit({ search: "?project=api-version", theme: "dark" });
-
-export const ProjectDrawerBlocked = cockpit({ search: "?project=db-version" });
-
 /** The review drawer's placeholder (the review package fills it). */
 export const ReviewDrawer = cockpit({ search: "?review=9630" });
 

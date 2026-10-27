@@ -450,6 +450,7 @@ describe("SessionUpdatesProvider factory_changed frames", () => {
     expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
       ["factory", "f4f4ba9c"],
       ["factory-events", "f4f4ba9c"],
+      ["factory-demos", "f4f4ba9c"],
       ["factories"],
       ["factory-decisions"],
     ]);

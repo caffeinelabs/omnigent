@@ -263,7 +263,7 @@ export interface ActivityListProps {
   factoryId: string;
   projects: ProjectView[];
   members: MemberView[];
-  /** Pin the list to one project (the project drawer); hides the project filter. */
+  /** Pin the list to one project (the project page); hides the project filter. */
   project?: string;
   /** Max height of the scrolling list (it virtualizes inside it). */
   heightClassName?: string;

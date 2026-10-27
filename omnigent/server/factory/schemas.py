@@ -334,6 +334,26 @@ class DemoView(_View):
     by: str | None = None
 
 
+class ProjectDemoView(DemoView):
+    """
+    One demo in the demos list: the demo and the PR it records.
+
+    :param pr_id: The tracked PR's id, when the demo was linked to one.
+    :param project_slug: The project the demo belongs to (``None`` when unknown).
+    """
+
+    pr_number: int
+    pr_id: str | None = None
+    repo: str
+    project_slug: str | None = None
+
+
+class DemoListResponse(_View):
+    """``GET /v1/factory/factories/{fid}/demos``: newest first."""
+
+    data: list[ProjectDemoView] = Field(default_factory=list)
+
+
 # ── PRs ────────────────────────────────────────────────────────
 
 
@@ -690,6 +710,7 @@ class Preflight(_View):
 
 __all__ = [
     "DecisionView",
+    "DemoListResponse",
     "DemoView",
     "EnvView",
     "EventPage",
@@ -704,5 +725,6 @@ __all__ = [
     "PrView",
     "Preflight",
     "PreviewView",
+    "ProjectDemoView",
     "ProjectView",
 ]

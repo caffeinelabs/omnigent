@@ -13,7 +13,6 @@ function Card({ state }: { state: CardState }) {
       snapshot={snapshot}
       project={project}
       nowS={LIVE_RUN_NOW_S}
-      onOpenProject={noop}
       onReview={noop}
       onDecision={noop}
     />

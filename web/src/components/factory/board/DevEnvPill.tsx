@@ -50,7 +50,7 @@ function Url({ label, url }: { label: string; url: string | null }) {
   );
 }
 
-/** URLs, resources, reported and probed truth of a dev env (pill hover, project drawer). */
+/** URLs, resources, reported and probed truth of a dev env (pill hover, project page). */
 export function DevEnvDetails({ env, nowS }: { env: EnvView; nowS: number }) {
   const reported = env.reported;
   const probe = env.probe;

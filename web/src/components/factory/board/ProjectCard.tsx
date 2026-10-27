@@ -1,7 +1,8 @@
 /**
  * One project on the board: title, priority and goal; the stage stepper with
- * the PL's own words beside it; its PRs; then team, dev env, cost and time.
- * Ready cards get a green edge, blocked amber, failed red; paused ones dim.
+ * the PL's own words beside it; its PRs; then team, dev env, demos, cost and
+ * time. The title and Details open the project page. Ready cards get a green
+ * edge, blocked amber, failed red; paused ones dim.
  */
 
 import type { ReactNode } from "react";
@@ -10,16 +11,25 @@ import {
   CircleXIcon,
   GitMergeIcon,
   PauseIcon,
+  PlayIcon,
   StarIcon,
   TriangleAlertIcon,
 } from "lucide-react";
 import { RunningDot } from "@/components/RunningDot";
 import type { FactorySnapshot, PrView, ProjectView } from "@/lib/factoryApi";
+import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { useProjectControlParts } from "../controls/ProjectControlsMenu";
 import { ReadyForMergeBanner } from "../review/ReadyForMergeBanner";
 import { STAGE_LABEL, formatElapsed, formatUsd, plural } from "../factoryFormat";
-import { ageText, projectAnchorId, projectElapsed, projectPrList } from "./boardModel";
+import { projectPageHref } from "../factoryRoutes";
+import {
+  ageText,
+  projectAnchorId,
+  projectDemoCount,
+  projectElapsed,
+  projectPrList,
+} from "./boardModel";
 import { DevEnvPill } from "./DevEnvPill";
 import { PrRow } from "./PrRow";
 import { ProvisioningTimeline, StageStepper } from "./StageStepper";
@@ -28,15 +38,13 @@ import { TeamStrip } from "./TeamStrip";
 /** The status rail on a card's left edge: ready green, blocked amber, failed red. */
 const EDGE = { pass: "bg-success", warning: "bg-warning", fail: "bg-destructive" } as const;
 
-/** How many merged/closed PRs a card lists before deferring to the drawer. */
+/** How many merged/closed PRs a card lists before deferring to the project page. */
 const CLOSED_PRS_SHOWN = 3;
 
 export interface ProjectCardProps {
   snapshot: FactorySnapshot;
   project: ProjectView;
   nowS: number;
-  /** Open the project drawer (`?project=<slug>`). */
-  onOpenProject: (slug: string) => void;
   /** Open the review drawer (`?review=<number>`). */
   onReview: (number: number) => void;
   /** Highlight a decision in the rail (`?decision=<ref>`). */
@@ -59,7 +67,7 @@ function Tag({ className, children }: { className: string; children: ReactNode }
 }
 
 /** The card's headline tag: why it is where it is. */
-function StatusTag({
+export function StatusTag({
   project,
   onDecision,
 }: {
@@ -132,7 +140,7 @@ function StatusTag({
 }
 
 /** `"PL says review · GitHub: building"`, shown when the PL's claim and the gates disagree. */
-function ClaimChip({ project }: { project: ProjectView }) {
+export function ClaimChip({ project }: { project: ProjectView }) {
   if (!project.claim_mismatch) return null;
   const claim = project.agent_stage
     ? STAGE_LABEL[project.agent_stage].toLowerCase()
@@ -199,15 +207,15 @@ function StageNote({ snapshot, project }: { snapshot: FactorySnapshot; project: 
   return null;
 }
 
-function ClosedPrsNote({ count, onOpen }: { count: number; onOpen: () => void }) {
+function ClosedPrsNote({ count, href }: { count: number; href: string }) {
   return (
-    <button
-      type="button"
-      onClick={onOpen}
+    <Link
+      to={href}
+      componentId="factory.board.project_prs"
       className="self-start text-sm text-muted-foreground hover:text-foreground"
     >
       {plural(count, "more PR")} in the project ▸
-    </button>
+    </Link>
   );
 }
 
@@ -215,7 +223,6 @@ export function ProjectCard({
   snapshot,
   project,
   nowS,
-  onOpenProject,
   onReview,
   onDecision,
   newPrIds,
@@ -230,7 +237,9 @@ export function ProjectCard({
   const charter = project.charter;
   const paused = project.overlay === "paused";
   const ready = project.stage === "ready" && !project.overlay;
-  const openProject = () => onOpenProject(project.slug);
+  const factoryId = snapshot.factory.id;
+  const pageHref = projectPageHref(factoryId, project.slug);
+  const demos = projectDemoCount(prs);
   const showEnv = project.env != null || (charter?.env_needed === true && project.pl != null);
   const controls = useProjectControlParts(
     { factoryId: snapshot.factory.id, project, prs, members: snapshot.members },
@@ -264,14 +273,14 @@ export function ProjectCard({
       <header className={cn("flex min-w-0 items-start gap-2", paused && "opacity-70")}>
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
-            <button
-              type="button"
-              onClick={openProject}
+            <Link
+              to={pageHref}
               data-testid={`project-open-${project.slug}`}
-              className="min-w-0 cursor-pointer truncate text-left text-ui font-semibold hover:underline"
+              componentId="factory.board.project_open"
+              className="min-w-0 truncate text-left text-ui font-semibold hover:underline"
             >
               {project.title}
-            </button>
+            </Link>
             <span
               title="Priority"
               className="shrink-0 rounded-sm border border-border px-1 font-mono text-[10px] leading-4 text-muted-foreground"
@@ -364,7 +373,10 @@ export function ProjectCard({
             />
           ))}
           {closed.length > CLOSED_PRS_SHOWN && (
-            <ClosedPrsNote count={closed.length - CLOSED_PRS_SHOWN} onOpen={openProject} />
+            <ClosedPrsNote
+              count={closed.length - CLOSED_PRS_SHOWN}
+              href={projectPageHref(factoryId, project.slug, { tab: "prs" })}
+            />
           )}
         </div>
       )}
@@ -378,48 +390,59 @@ export function ProjectCard({
         <TeamStrip pl={project.pl} team={project.team} members={snapshot.members} nowS={nowS} />
         {showEnv && <DevEnvPill env={project.env} nowS={nowS} />}
         <span className="ml-auto flex items-center gap-3 text-sm text-muted-foreground">
+          {demos > 0 && (
+            <Link
+              to={projectPageHref(factoryId, project.slug, { tab: "demos" })}
+              data-testid={`project-demos-${project.slug}`}
+              componentId="factory.board.project_demos"
+              title="Recorded demos of this project's PRs"
+              className="inline-flex items-center gap-1 hover:text-foreground"
+            >
+              <PlayIcon aria-hidden className="size-3" />
+              {plural(demos, "demo")}
+            </Link>
+          )}
           {(cost || elapsed) && (
             <span className="font-mono tabular-nums" title="Cost and time so far">
               {[cost, elapsed].filter(Boolean).join(" · ")}
             </span>
           )}
-          <button
-            type="button"
-            onClick={openProject}
-            className="inline-flex cursor-pointer items-center gap-0.5 hover:text-foreground"
+          <Link
+            to={pageHref}
+            data-testid={`project-details-${project.slug}`}
+            componentId="factory.board.project_details"
+            className="inline-flex items-center gap-0.5 hover:text-foreground"
           >
             Details
             <ChevronRightIcon aria-hidden className="size-3.5" />
-          </button>
+          </Link>
         </span>
       </footer>
     </article>
   );
 }
 
-/** A finished project inside the collapsed Done group: one line. */
+/** A finished project inside the collapsed Done group: one line, linking to its page. */
 export function DoneProjectRow({
   snapshot,
   project,
   nowS,
-  onOpenProject,
 }: {
   snapshot: FactorySnapshot;
   project: ProjectView;
   nowS: number;
-  onOpenProject: (slug: string) => void;
 }) {
   const merged = projectPrList(snapshot, project).filter((pr) => pr.merged);
   const last = merged[0];
   const cost = formatUsd(project.cost_usd);
   return (
-    <button
-      type="button"
-      onClick={() => onOpenProject(project.slug)}
+    <Link
+      to={projectPageHref(snapshot.factory.id, project.slug)}
       data-testid={`project-card-${project.slug}`}
       data-stage={project.stage}
       data-overlay={project.overlay ?? "none"}
-      className="flex w-full min-w-0 cursor-pointer items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-muted"
+      componentId="factory.board.done_project"
+      className="flex w-full min-w-0 items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:bg-muted"
     >
       <GitMergeIcon aria-hidden className="size-3.5 shrink-0 text-brand-accent" />
       <span className="shrink-0 font-medium text-foreground">{project.title}</span>
@@ -434,6 +457,6 @@ export function DoneProjectRow({
           {cost}
         </span>
       )}
-    </button>
+    </Link>
   );
 }

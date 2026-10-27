@@ -474,3 +474,8 @@ export function clipDuration(seconds: number | null | undefined): string | null 
   const s = Math.max(0, Math.round(seconds));
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
 }
+
+/** Demos a project's PRs have recorded (each PR's newest plus its older ones). */
+export function projectDemoCount(prs: readonly PrView[]): number {
+  return prs.reduce((n, pr) => n + (pr.demo ? 1 + pr.older_demos : 0), 0);
+}

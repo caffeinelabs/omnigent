@@ -128,6 +128,14 @@ async function openProjectMenu(canvasElement: HTMLElement, slug: string) {
   return screen;
 }
 
+/** api-version's ⋯ → Edit charter…. */
+async function openCharter(canvasElement: HTMLElement) {
+  const screen = await openProjectMenu(canvasElement, "api-version");
+  await userEvent.click(screen.getByTestId("control-edit-charter"));
+  await screen.findByTestId("edit-charter-dialog");
+  return screen;
+}
+
 async function openHeaderMenu(canvasElement: HTMLElement) {
   const screen = screenOf(canvasElement);
   await userEvent.click(await screen.findByTestId("factory-controls-menu"));
@@ -337,40 +345,27 @@ export const AddProjectErrors = cockpit({}, async ({ canvasElement }) => {
   await userEvent.click(screen.getByTestId("add-project-submit"));
 });
 
-/** Edit charter from the project drawer: title, repo and env are fixed once added. */
-export const EditCharter = cockpit(
-  { search: "?project=api-version" },
-  async ({ canvasElement }) => {
-    const screen = screenOf(canvasElement);
-    await userEvent.click(await screen.findByTestId("charter-edit"));
-    await screen.findByTestId("edit-charter-dialog");
-  },
-);
+/** Edit charter from the project menu: title, repo and env are fixed once added. */
+export const EditCharter = cockpit({}, async ({ canvasElement }) => {
+  await openCharter(canvasElement);
+});
 
 /** The diff the PL receives, before it is sent. */
-export const EditCharterReview = cockpit(
-  { search: "?project=api-version" },
-  async ({ canvasElement }) => {
-    const screen = screenOf(canvasElement);
-    await userEvent.click(await screen.findByTestId("charter-edit"));
-    const goal = await screen.findByTestId("charter-goal-0");
-    await userEvent.clear(goal);
-    await userEvent.type(goal, "Expose GET /version on caffeine-api with the short git sha.");
-    await userEvent.click(screen.getByTestId("charter-slots-0-3"));
-    await userEvent.click(screen.getByTestId("charter-review"));
-    await screen.findByTestId("charter-diff");
-  },
-);
+export const EditCharterReview = cockpit({}, async ({ canvasElement }) => {
+  const screen = await openCharter(canvasElement);
+  const goal = await screen.findByTestId("charter-goal-0");
+  await userEvent.clear(goal);
+  await userEvent.type(goal, "Expose GET /version on caffeine-api with the short git sha.");
+  await userEvent.click(screen.getByTestId("charter-slots-0-3"));
+  await userEvent.click(screen.getByTestId("charter-review"));
+  await screen.findByTestId("charter-diff");
+});
 
-export const EditCharterReviewDark = cockpit(
-  { search: "?project=api-version", theme: "dark" },
-  async ({ canvasElement }) => {
-    const screen = screenOf(canvasElement);
-    await userEvent.click(await screen.findByTestId("charter-edit"));
-    const goal = await screen.findByTestId("charter-goal-0");
-    await userEvent.clear(goal);
-    await userEvent.type(goal, "Expose GET /version on caffeine-api with the short git sha.");
-    await userEvent.click(screen.getByTestId("charter-review"));
-    await screen.findByTestId("charter-diff");
-  },
-);
+export const EditCharterReviewDark = cockpit({ theme: "dark" }, async ({ canvasElement }) => {
+  const screen = await openCharter(canvasElement);
+  const goal = await screen.findByTestId("charter-goal-0");
+  await userEvent.clear(goal);
+  await userEvent.type(goal, "Expose GET /version on caffeine-api with the short git sha.");
+  await userEvent.click(screen.getByTestId("charter-review"));
+  await screen.findByTestId("charter-diff");
+});

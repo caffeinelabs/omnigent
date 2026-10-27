@@ -10,6 +10,7 @@ import {
 import { boardActivityEvents } from "@/components/factory/board/__fixtures__/boardFixtures";
 import { factoryQueryKey } from "@/hooks/useFactory";
 import { FactoryPage } from "./FactoryPage";
+import { ProjectPage } from "./ProjectPage";
 
 const authenticatedFetch = vi.fn();
 vi.mock("@/lib/identity", () => ({
@@ -68,6 +69,15 @@ function renderPage(search = "", seed?: (client: QueryClient) => void) {
             element={
               <>
                 <FactoryPage />
+                <LocationProbe />
+              </>
+            }
+          />
+          <Route
+            path="/factory/:factoryId/projects/:slug"
+            element={
+              <>
+                <ProjectPage />
                 <LocationProbe />
               </>
             }
@@ -150,18 +160,24 @@ describe("FactoryPage", () => {
     expect(screen.queryByTestId("factory-board")).toBeNull();
   });
 
-  it("opens the project drawer from a card and closes it", async () => {
+  it("opens the project page from a card's title, and back from the breadcrumb", async () => {
     serve();
     renderPage();
     fireEvent.click(await screen.findByTestId("project-open-api-version"));
-    expect(await screen.findByTestId("project-drawer-api-version")).toBeInTheDocument();
-    expect(location).toContain("project=api-version");
-    fireEvent.click(
-      within(screen.getByTestId("project-drawer-api-version")).getByRole("button", {
-        name: "Close",
-      }),
-    );
-    await waitFor(() => expect(location).not.toContain("project="));
+    expect(await screen.findByTestId("project-page-api-version")).toBeInTheDocument();
+    expect(location).toBe(`/factory/${LIVE_RUN_FACTORY_ID}/projects/api-version`);
+    fireEvent.click(screen.getByTestId("project-breadcrumb-factory"));
+    expect(await screen.findByTestId("factory-board")).toBeInTheDocument();
+    expect(location).toBe(`/factory/${LIVE_RUN_FACTORY_ID}`);
+  });
+
+  it("redirects an old ?project= link to the project page, keeping ?review", async () => {
+    serve();
+    renderPage("?project=api-version&review=9630");
+    expect(await screen.findByTestId("project-page-api-version")).toBeInTheDocument();
+    expect(location).toBe(`/factory/${LIVE_RUN_FACTORY_ID}/projects/api-version?review=9630`);
+    expect(await screen.findByTestId("review-drawer")).toHaveTextContent("Review · PR #9630");
+    expect(screen.queryByTestId("factory-board")).toBeNull();
   });
 
   it("opens the review drawer from ?review and from a PR row", async () => {

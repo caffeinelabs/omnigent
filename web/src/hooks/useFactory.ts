@@ -16,6 +16,8 @@ import {
 import { useSessionUpdatesConnected } from "@/hooks/useSessionUpdatesConnected";
 import { ApiError } from "@/lib/sessionsApi";
 import {
+  type DemoFilters,
+  type DemoListResponse,
   type EventCursor,
   type EventFilters,
   type EventPage,
@@ -24,6 +26,7 @@ import {
   type OpenDecisionsResponse,
   type Preflight,
   fetchFactories,
+  fetchFactoryDemos,
   fetchFactoryEvents,
   fetchFactoryPreflight,
   fetchFactorySnapshot,
@@ -34,9 +37,18 @@ import {
 /** Poll cadence while the session-updates socket is disconnected. */
 export const FACTORY_FALLBACK_POLL_MS = 15_000;
 
+/**
+ * Factory pages re-read their snapshot at least this often while visible:
+ * quiet supervisor ticks, polls and probes push no frame, and the health strip
+ * ages their stamps against the clock (the ETag keeps an unchanged read cheap).
+ */
+export const COCKPIT_MIN_REFRESH_MS = 60_000;
+
 export const factoryQueryKey = (factoryId: string) => ["factory", factoryId] as const;
 export const factoryEventsQueryKey = (factoryId: string, filters: EventFilters = {}) =>
   ["factory-events", factoryId, filters] as const;
+export const factoryDemosQueryKey = (factoryId: string, filters: DemoFilters = {}) =>
+  ["factory-demos", factoryId, filters] as const;
 export const FACTORIES_QUERY_KEY = ["factories"] as const;
 export const FACTORY_DECISIONS_QUERY_KEY = ["factory-decisions"] as const;
 export const FACTORY_PREFLIGHT_QUERY_KEY = ["factory-preflight"] as const;
@@ -46,6 +58,7 @@ export function factoryInvalidationKeys(factoryId: string): readonly (readonly u
   return [
     factoryQueryKey(factoryId),
     ["factory-events", factoryId],
+    ["factory-demos", factoryId],
     FACTORIES_QUERY_KEY,
     FACTORY_DECISIONS_QUERY_KEY,
   ];
@@ -205,6 +218,18 @@ export function useFactoryEvents(factoryId: string | null | undefined, filters: 
       fetchFactoryEvents(factoryId as string, { ...filters, cursor: pageParam }),
     initialPageParam: null as EventCursor | null,
     getNextPageParam: nextEventCursor,
+    enabled: Boolean(factoryId),
+    refetchInterval,
+    retry: retryTransient,
+  });
+}
+
+/** A factory's recorded demos, newest first (a new demo's push refreshes them). */
+export function useFactoryDemos(factoryId: string | null | undefined, filters: DemoFilters = {}) {
+  const refetchInterval = useFallbackInterval();
+  return useQuery<DemoListResponse>({
+    queryKey: factoryDemosQueryKey(factoryId ?? "", filters),
+    queryFn: ({ signal }) => fetchFactoryDemos(factoryId as string, filters, signal),
     enabled: Boolean(factoryId),
     refetchInterval,
     retry: retryTransient,

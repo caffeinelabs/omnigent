@@ -12,13 +12,7 @@ function card(mutate?: (s: ReturnType<typeof liveRunSnapshot>) => void) {
   const project = snapshot.projects.find((p) => p.slug === "api-version")!;
   const onReview = vi.fn();
   renderBoard(
-    <ProjectCard
-      snapshot={snapshot}
-      project={project}
-      nowS={LIVE_RUN_NOW_S}
-      onOpenProject={vi.fn()}
-      onReview={onReview}
-    />,
+    <ProjectCard snapshot={snapshot} project={project} nowS={LIVE_RUN_NOW_S} onReview={onReview} />,
   );
   return { card: screen.getByTestId("project-card-api-version"), onReview };
 }
@@ -64,7 +58,6 @@ describe("ReadyForMergeBanner", () => {
         snapshot={snapshot}
         project={project}
         nowS={LIVE_RUN_NOW_S}
-        onOpenProject={vi.fn()}
         onReview={vi.fn()}
       />,
     );

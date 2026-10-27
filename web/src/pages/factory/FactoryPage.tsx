@@ -2,14 +2,14 @@
  * Factory cockpit (`/factory/:factoryId`): what is moving, what is blocked,
  * what needs the human, and whether the machine is alive.
  *
- * Query parameters: `?tab=board|activity`, `?project=<slug>` (project
- * drawer), `?review=<pr number>` (review drawer; `&preview=unavailable` when the
- * PR's stable preview link found no running preview), `?decision=<D-n>` (highlight
- * in the decisions rail). The rail sits beside the board from 1280 px and
- * folds under the Needs-you strip below that.
+ * Query parameters: `?tab=board|activity`, `?review=<pr number>` (review
+ * drawer; `&preview=unavailable` when the PR's stable preview link found no
+ * running preview), `?decision=<D-n>` (highlight in the decisions rail). An
+ * old `?project=<slug>` link redirects to that project's page. The rail sits
+ * beside the board from 1280 px and folds under the Needs-you strip below that.
  */
 
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { ArrowLeftIcon } from "lucide-react";
 import { PageScroll } from "@/components/PageScroll";
 import { ActivityList } from "@/components/factory/activity/ActivityList";
@@ -18,11 +18,11 @@ import { FactoryBoard } from "@/components/factory/board/FactoryBoard";
 import { FactoryHeader } from "@/components/factory/board/FactoryHeader";
 import { HealthStrip } from "@/components/factory/board/HealthStrip";
 import { needsYou } from "@/components/factory/board/boardModel";
-import { ProjectDrawer } from "@/components/factory/board/ProjectDrawer";
 import { FactoryControlsProvider } from "@/components/factory/controls/FactoryControlsContext";
 import { DecisionsRail } from "@/components/factory/decisions/DecisionsRail";
 import { useFactoryServerNowS } from "@/components/factory/factoryClock";
 import { FactoryLoadError } from "@/components/factory/FactoryLoadError";
+import { projectPageHref } from "@/components/factory/factoryRoutes";
 import { ReviewDrawer } from "@/components/factory/review/ReviewDrawer";
 import {
   Select,
@@ -32,23 +32,16 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { useFactory } from "@/hooks/useFactory";
+import { COCKPIT_MIN_REFRESH_MS, useFactory } from "@/hooks/useFactory";
 import { snapshotNotices, useFactoryNotifications } from "@/hooks/useFactoryNotifications";
 import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
 import type { FactorySnapshot } from "@/lib/factoryApi";
-import { Link, useParams, useSearchParams } from "@/lib/routing";
+import { Link, useNavigate, useParams, useSearchParams } from "@/lib/routing";
 import { ApiError } from "@/lib/sessionsApi";
 
 type CockpitTab = "board" | "activity";
 
 const FLASH_MS = 1200;
-
-/**
- * The cockpit re-reads its snapshot at least this often while visible: quiet
- * supervisor ticks, polls and probes push no frame, and the health strip ages
- * their stamps against the clock (the ETag keeps an unchanged read cheap).
- */
-export const COCKPIT_MIN_REFRESH_MS = 60_000;
 
 /** Scroll an element into view and flash a ring around it (still under reduced motion). */
 export function jumpTo(targetId: string): void {
@@ -139,7 +132,6 @@ function Cockpit({ snapshot, clockOffsetS }: { snapshot: FactorySnapshot; clockO
   const nowS = useFactoryServerNowS(clockOffsetS);
   const wide = useMediaQuery(WIDE_BOARD_QUERY);
   const tab: CockpitTab = params.get("tab") === "activity" ? "activity" : "board";
-  const projectSlug = params.get("project");
   const review = params.get("review");
   const decision = params.get("decision");
   const [panelOpen, setPanelOpen] = useState(decision != null);
@@ -209,7 +201,6 @@ function Cockpit({ snapshot, clockOffsetS }: { snapshot: FactorySnapshot; clockO
             <FactoryBoard
               snapshot={snapshot}
               nowS={nowS}
-              onOpenProject={(slug) => setParam("project", slug)}
               onReview={(number) => setParam("review", String(number))}
               onDecision={pointAtDecision}
               onDecisions={onDecisions}
@@ -238,14 +229,6 @@ function Cockpit({ snapshot, clockOffsetS }: { snapshot: FactorySnapshot; clockO
           </aside>
         )}
       </div>
-      {projectSlug && (
-        <ProjectDrawer
-          snapshot={snapshot}
-          slug={projectSlug}
-          nowS={nowS}
-          onClose={() => setParam("project", null)}
-        />
-      )}
       {review && (
         <ReviewDrawer
           factoryId={snapshot.factory.id}
@@ -261,11 +244,28 @@ function Cockpit({ snapshot, clockOffsetS }: { snapshot: FactorySnapshot; clockO
   );
 }
 
+/** An old `?project=<slug>` link (the project drawer) now lands on the project page. */
+function projectRedirect(factoryId: string | undefined, params: URLSearchParams): string | null {
+  const slug = params.get("project");
+  if (!factoryId || !slug) return null;
+  const review = params.get("review");
+  return projectPageHref(factoryId, slug, review ? { params: { review } } : {});
+}
+
 export function FactoryPage() {
   const { factoryId } = useParams<{ factoryId: string }>();
-  const { data, error, isLoading, updatedAt, clockOffsetS, refetch } = useFactory(factoryId, {
-    minRefreshMs: COCKPIT_MIN_REFRESH_MS,
-  });
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
+  const redirect = projectRedirect(factoryId, params);
+  useEffect(() => {
+    if (redirect) navigate(redirect, { replace: true });
+  }, [navigate, redirect]);
+  // A redirect reads nothing: the project page loads the snapshot itself.
+  const { data, error, isLoading, updatedAt, clockOffsetS, refetch } = useFactory(
+    redirect ? null : factoryId,
+    { minRefreshMs: COCKPIT_MIN_REFRESH_MS },
+  );
+  if (redirect) return null;
   const missing = !data && error instanceof ApiError && error.status === 404;
   return (
     <PageScroll
