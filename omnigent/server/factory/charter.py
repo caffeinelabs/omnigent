@@ -16,6 +16,10 @@ from omnigent.entities.factory import FactoryProject
 from omnigent.factory import CADENCE_DEMO, CADENCE_HEARTBEATS, ROLE_LEAD, ROLE_PROJECT_LEAD
 
 PREVIEW_TOOLING_REF_ENV: Final = "OMNIGENT_FACTORY_PREVIEW_TOOLING_REF"
+# The branch that carried the preview tooling before it reached app main; it is deleted.
+RETIRED_PREVIEW_TOOLING_REFS: Final = frozenset(
+    {"factory/preview-tooling", "origin/factory/preview-tooling"}
+)
 DEFAULT_PREVIEW_SLOTS: Final = 2
 MAX_PREVIEW_SLOTS: Final = 3
 DEFAULT_BUDGET_ICS: Final = 3
@@ -33,6 +37,11 @@ def _text(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _tooling_ref(value: Any) -> str | None:
+    text = _text(value)
+    return None if text in RETIRED_PREVIEW_TOOLING_REFS else text
 
 
 def _texts(value: Any) -> list[str]:
@@ -58,7 +67,8 @@ def normalize_charter(
 
     ``preview`` and ``demo_focus`` are authoritative; the older ``env_needed``,
     ``preview_slots`` and ``demo`` keys are read as fallbacks and written back
-    to match. The fixed DoD item is never stored (it is always rendered).
+    to match. The fixed DoD item is never stored (it is always rendered). A
+    retired preview tooling ref is dropped, so env_keeper falls back to ``main``.
 
     :param raw: A charter as submitted (start form, PATCH, backfill), or ``None``.
     :param tooling_ref: Preview tooling ref to record when previews are on.
@@ -77,7 +87,7 @@ def normalize_charter(
         MAX_PREVIEW_SLOTS,
     )
     preview: dict[str, Any] = {"enabled": enabled, "slots": slots}
-    ref = _text(preview_in.get("tooling_ref")) or tooling_ref
+    ref = _tooling_ref(preview_in.get("tooling_ref")) or _tooling_ref(tooling_ref)
     if enabled and ref:
         preview["tooling_ref"] = ref
     demo_focus = _text(src.get("demo_focus")) or _text(src.get("demo"))
@@ -251,6 +261,7 @@ def render_kickoff_brief(
 __all__ = [
     "FIXED_DOD",
     "PREVIEW_TOOLING_REF_ENV",
+    "RETIRED_PREVIEW_TOOLING_REFS",
     "normalize_charter",
     "preview_tooling_ref",
     "render_kickoff_brief",

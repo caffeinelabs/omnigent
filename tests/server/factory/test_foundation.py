@@ -164,6 +164,19 @@ def test_normalize_charter_shapes() -> None:
     assert normalize_charter(None)["env_needed"] is True
 
 
+@pytest.mark.parametrize("retired", ["factory/preview-tooling", "origin/factory/preview-tooling"])
+def test_normalize_charter_drops_the_retired_tooling_ref(retired: str) -> None:
+    """A charter stored while the tooling lived on its own branch falls back to main."""
+    from dataclasses import replace
+
+    stored = {"preview": {"enabled": True, "tooling_ref": retired}}
+    assert "tooling_ref" not in normalize_charter(stored)["preview"]
+    assert normalize_charter(stored, tooling_ref="main")["preview"]["tooling_ref"] == "main"
+    assert "tooling_ref" not in normalize_charter({}, tooling_ref=retired)["preview"]
+    project = replace(_API_PROJECT, charter=stored)
+    assert "preview tooling ref" not in render_pl_charter(project)
+
+
 # ── Auto-discovery ─────────────────────────────────────────────
 
 

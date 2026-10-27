@@ -66,12 +66,18 @@ because the root `package.json` is never overlaid:
 `node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/factory.ts preview up|status|list|down …`.
 
 Below, `FP` stands for `pnpm -s factory:preview` in a checkout whose
-`package.json` has the `factory:preview` script (`wt/env` at origin/main
-always does), else for
+`package.json` has the `factory:preview` script, else for
 `node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/factory.ts preview`;
-type it out in full. Never set `FACTORY_DIR` for previews (they live under
-`~/factory/previews/`). `up` refuses unless HEAD is `--sha` and the worktree is
-clean apart from the preview tooling, creates the namespace and the
+type it out in full. `FP` needs a checkout with the preview tooling, that is
+one where `grep -q "case 'preview'" scripts/factory.ts` succeeds: a preview
+worktree after step 4, or `wt/env` once it is at an origin/main that includes
+caffeinelabs/app#9640. A `wt/env` created before that stays on its old main
+until the next MERGED, and there `FP` prints usage and exits 1; move it first
+with `git -C /home/omnigent/workspace/wt/env fetch origin && git -C /home/omnigent/workspace/wt/env checkout --detach origin/main`
+(Tilt live-updates the dev env; report it with the new `deployed.sha`).
+Never set `FACTORY_DIR` for previews (they live under `~/factory/previews/`).
+`up` refuses unless HEAD is `--sha` and the worktree is clean apart from the
+preview tooling, creates the namespace and the
 `factory-env-secrets` Secret (synthetic session secret, also written to
 `~/factory/previews/p<n>/synthetic-secret`, mode 0600, never printed), runs
 `tilt ci`, waits until `<app>/__factory/preview` serves the sha and
@@ -111,7 +117,9 @@ stderr; stdout is only JSON):
 4. **Tooling and deploy, in ONE Bash call** (shell variables do not survive
    between calls), with the longest Bash timeout. The tooling ref is `main`
    (caffeinelabs/app#9640 merged the preview tooling there); only a
-   `tooling=<ref>` in the command replaces it (drop a leading `origin/`).
+   `tooling=<ref>` in the command replaces it (drop a leading `origin/`). A
+   `tooling=factory/preview-tooling` names the deleted pre-#9640 branch and
+   means `main`.
    ```bash
    cd /home/omnigent/workspace/wt/preview-p<n>
    REF=main   # or the command's tooling=<ref>
@@ -188,8 +196,8 @@ and reply `PREVIEW FAILED p<n> <diagnosis>`.
 1. First read `env_id` and `namespace` from `~/factory/previews/p<n>/preview.json`
    (`jq -r '.env_id, .namespace'`): `down` deletes that directory. Without the
    file, the namespace is `env-<env_id>`, and `FP list` names it.
-2. In `/home/omnigent/workspace/wt/preview-p<n>` (or `wt/env`, which is at
-   origin/main and has the preview tooling): `FP down --name p<n>` (typed in full). Without a usable
+2. In `/home/omnigent/workspace/wt/preview-p<n>` (or `wt/env` if it has the
+   preview tooling, see `FP`): `FP down --name p<n>` (typed in full). Without a usable
    checkout:
    `kubectl delete namespace <namespace> --wait=false` and
    `rm -rf ~/factory/previews/p<n>`.
@@ -203,7 +211,7 @@ by the next PREVIEW.
 
 ### PREVIEW_STATUS [pr=<n>]
 
-`FP list` (typed in full, in `wt/env` or any other checkout with the tooling), then
+`FP list` (typed in full, in `wt/env` or any other checkout with the preview tooling, see `FP`), then
 `FP status --name p<n>` for each listed or requested preview. Report each:
 `ready` when `ready` is true, else `failed` with the reason in `note`
 (`observed.sha` differs, `api_ready` false, or a note about an earlier pod).

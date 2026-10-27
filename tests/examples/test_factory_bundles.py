@@ -751,12 +751,15 @@ def test_preview_overlay_and_harness_lookup_stay_portable() -> None:
 
 
 def test_preview_tooling_ref_is_app_main() -> None:
-    """caffeinelabs/app main carries the preview tooling; no text points at the deleted branch."""
+    """caffeinelabs/app main carries the preview tooling; the deleted branch only maps to main."""
     env_skill = _PL_DIR / "agents/env_keeper/skills/factory-env/SKILL.md"
     deploy = next(b for b in _shell_blocks(env_skill) if "TOOLING=" in b)
     assert re.search(r"^REF=main\b", deploy, re.M)
+    env_text = " ".join(env_skill.read_text(encoding="utf-8").split())
+    alias = "`tooling=factory/preview-tooling` names the deleted pre-#9640 branch and means `main`"
+    assert env_text.count("factory/preview-tooling") == 1 and alias in env_text
     texts = [
-        env_skill.read_text(encoding="utf-8"),
+        env_text.replace(alias, ""),
         (_PL_DIR / "agents/env_keeper/config.yaml").read_text(encoding="utf-8"),
         (_PL_DIR / "skills/factory-pl-playbook/SKILL.md").read_text(encoding="utf-8"),
         (_REPO_ROOT / "docs/FACTORY.md").read_text(encoding="utf-8"),
@@ -812,7 +815,7 @@ def _commit(repo: Path, files: dict[str, str], message: str) -> str:
 
 @pytest.fixture
 def app_repo(tmp_path: Path) -> dict[str, object]:
-    """An app origin whose main gained the preview tooling, and a clone with three PR heads."""
+    """An app origin whose main gained the preview tooling, and a clone with four PR heads."""
     origin = tmp_path / "origin"
     origin.mkdir()
     _git(origin, "init", "-q", "-b", "main")
@@ -830,10 +833,13 @@ def app_repo(tmp_path: Path) -> dict[str, object]:
     main = _commit(origin, new, "preview tooling")
     _git(origin, "checkout", "-q", "-b", "new-head")
     heads["new"] = _commit(origin, {"app.txt": "feature\n"}, "new-based PR")
+    _git(origin, "checkout", "-q", "-b", "mixed-head", main)
+    no_script = {"package.json": '{"scripts": {"factory:up": "x"}}\n'}
+    heads["mixed"] = _commit(origin, no_script, "PR without the factory:preview script")
     _git(origin, "checkout", "-q", "main")
     clone = tmp_path / "clone"
     _git(tmp_path, "clone", "-q", str(origin), str(clone))
-    _git(clone, "fetch", "-q", "origin", "old-head", "old-tooling", "new-head")
+    _git(clone, "fetch", "-q", "origin", "old-head", "old-tooling", "new-head", "mixed-head")
     stubs = tmp_path / "bin"
     stubs.mkdir()
     for tool in ("pnpm", "node"):
@@ -858,7 +864,7 @@ def _run_deploy(app_repo: dict[str, object], head: str) -> subprocess.CompletedP
 def test_preview_deploy_block_overlays_only_heads_without_the_tooling(
     app_repo: dict[str, object],
 ) -> None:
-    """A head based on current main deploys as is; an older head gets main's tooling."""
+    """A head with the preview tooling deploys as is; an older head gets main's tooling."""
     clone, log, heads = app_repo["clone"], app_repo["log"], app_repo["heads"]
     assert isinstance(clone, Path) and isinstance(log, Path) and isinstance(heads, dict)
 
@@ -868,6 +874,14 @@ def test_preview_deploy_block_overlays_only_heads_without_the_tooling(
         "pnpm -s factory:preview up --name p9630 --pr 9630 "
         "--sha 7767f0d1c2a94b8e3f50d6a71b2c9e84f03d5a16 tooling="
     ]
+    assert _git(clone, "status", "--porcelain") == ""
+
+    log.unlink()
+    done = _run_deploy(app_repo, heads["mixed"])
+    assert done.returncode == 0, done.stdout + done.stderr
+    [call] = log.read_text().splitlines()
+    assert call.startswith("node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON")
+    assert call.endswith("tooling=")
     assert _git(clone, "status", "--porcelain") == ""
 
     log.unlink()

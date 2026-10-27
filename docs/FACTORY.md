@@ -283,7 +283,8 @@ preview envs are a different thing.)
   origin `main` and overlays the tooling files from origin/main (never the
   root `package.json` or the deploy lockfile), then runs the CLI with `node`
   directly. The tooling ref is `main`; `OMNIGENT_FACTORY_PREVIEW_TOOLING_REF`,
-  which the charter carries, can point the overlay at another ref. An old-base
+  which the charter carries, can point the overlay at another ref; a charter
+  that still names the deleted tooling branch reads as `main`. An old-base
   PR that changes the tooling itself gets `PREVIEW SKIPPED tooling-conflict`;
   its PL asks the author to merge origin/main (the new head has the tooling
   natively), or the human whether to review it without a preview (label
