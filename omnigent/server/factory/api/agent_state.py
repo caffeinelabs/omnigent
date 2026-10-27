@@ -403,6 +403,12 @@ async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
         row = updated or row
     if created:
         await announce_new_pr(app_state, caller, row)
+    nudge.nudge("prs", row.id)
+    refreshed = await _await_refresh(caller, row.id)
+    if refreshed is not None:
+        row = refreshed
+    # Against the fresh gates, and stored with the claim (claim calibration).
+    claim_mismatch = body.claim == "ready_for_human_merge" and not row.ready
     if body.claim is not None or body.sentinel_verdict is not None:
         what = body.claim or f"sentinel {body.sentinel_verdict}"
         await events.emit(
@@ -420,12 +426,11 @@ async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
                 "sentinel_verdict": body.sentinel_verdict,
                 "head_sha": head_sha,
                 "note": note,
+                "claim_mismatch": claim_mismatch,
+                "server_ready": row.ready,
+                "refreshed": refreshed is not None,
             },
         )
-    nudge.nudge("prs", row.id)
-    refreshed = await _await_refresh(caller, row.id)
-    if refreshed is not None:
-        row = refreshed
     gates = dict(row.gates or {})
     project_base = await asyncio.to_thread(_project_base, caller, row.project_slug)
     base = public_base_url(str(request.base_url))
@@ -447,7 +452,7 @@ async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
         "gates": gates,
         "reasons": list(gates.get("reasons") or []),
         "refreshed": refreshed is not None,
-        "claim_mismatch": body.claim == "ready_for_human_merge" and not row.ready,
+        "claim_mismatch": claim_mismatch,
     }
     if not gates:
         reply["note"] = "gates come from the server's GitHub poller and are not computed yet"
