@@ -25,11 +25,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-import httpx
 import pytest
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.testclient import TestClient
+from httpx import Response
 
 from omnigent import factory as F
 from omnigent.db.utils import builtin_agent_id
@@ -207,11 +207,11 @@ def _tunnel(token: str) -> dict[str, str]:
     return {**_runner(), RUNNER_TUNNEL_TOKEN_HEADER: token}
 
 
-def _code(resp: httpx.Response) -> str:
+def _code(resp: Response) -> str:
     return str(resp.json()["error"]["code"])
 
 
-def _child(world: World, agent_id: str, headers: dict[str, str], **extra: str) -> httpx.Response:
+def _child(world: World, agent_id: str, headers: dict[str, str], **extra: str) -> Response:
     """What ``sys_session_create(agent_id=…)`` sends from the PL."""
     return world.client().post(
         "/v1/sessions",
@@ -271,7 +271,7 @@ def test_a_child_running_a_top_level_spec_is_an_ic(world: World, agent: str) -> 
 def test_a_lead_spec_child_cannot_pause_a_lead(world: World) -> None:
     child_id = _child(world, world.agent_ids["lead"], _tunnel(_PL_TOKEN)).json()["id"]
 
-    def pause(target: str, sender: str) -> httpx.Response:
+    def pause(target: str, sender: str) -> Response:
         return world.client().patch(
             f"/v1/factory/sessions/{world.ids[target]}",
             json={"from_session_id": sender, "state": F.STATE_PAUSED, "heartbeat_s": 0},
@@ -303,7 +303,7 @@ def test_a_lead_spec_child_cannot_record_a_sentinel_verdict(world: World) -> Non
     )
     child_id = _child(world, world.agent_ids["lead"], _tunnel(_PL_TOKEN)).json()["id"]
 
-    def verdict(sender: str) -> httpx.Response:
+    def verdict(sender: str) -> Response:
         return world.client().post(
             "/v1/factory/agent/prs",
             json={
@@ -369,7 +369,7 @@ def test_a_member_running_its_own_upload_still_dispatches_sub_agents(world: Worl
         },
     )
 
-    def child(parent: str) -> httpx.Response:
+    def child(parent: str) -> Response:
         return world.client().post(
             "/v1/sessions",
             json={"agent_id": uploaded, "title": "helper", "parent_session_id": parent},
