@@ -19,7 +19,7 @@ import pytest_asyncio
 from omnigent.server.auth import LEVEL_READ
 from omnigent.server.factory import binder, events, snapshot, tasks
 from omnigent.server.factory.actor import Actor
-from omnigent.server.factory.api.graph import parse_window
+from omnigent.server.factory.api.graph import org_graph, parse_window
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.telemetry.spans import write_span
 from tests.server.factory.cockpit_helpers import Cockpit, build_cockpit, error_code
@@ -249,3 +249,46 @@ async def test_graph_scope_and_errors(cockpit: Cockpit) -> None:
     assert body["tasks"] == []
     hidden = await _graph(cockpit, user="bob", kind="work", project=SLUG)
     assert hidden.status_code == 404 and error_code(hidden) == "unknown_project"
+
+
+def test_flow_counts_now_leave_hidden_projects_out() -> None:
+    from omnigent.server.factory.api.graph import _now_counts
+
+    body = {
+        "projects": [
+            {"slug": SLUG, "stage": "building"},
+            {"slug": "secret", "stage": "building"},
+            {"slug": "db-schema", "stage": "planning"},
+        ],
+        "prs": [
+            {"project_slug": SLUG, "state": "open", "gates": {"checks": "pass"}},
+            {"project_slug": "secret", "state": "open", "gates": {"checks": "pass"}},
+        ],
+    }
+    assert _now_counts(body, None, 0, set()) == {"build": 2, "plan": 1, "review": 2}
+    assert _now_counts(body, None, 0, {"secret"}) == {"build": 1, "plan": 1, "review": 1}
+
+
+async def test_org_graph_reads_each_members_tree_in_few_queries(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    world = cockpit.world
+    for n in range(4):
+        world.make_session(
+            f"w{n}", agent="pl", title=f"helper:w{n}", parent="ic", sub_agent_name="helper"
+        )
+    calls: list[dict[str, Any]] = []
+    original = world.store.list_conversations
+
+    def counting(*args: Any, **kwargs: Any) -> Any:
+        calls.append(kwargs)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(world.store, "list_conversations", counting)
+    readable = {conv.id for conv in world.sessions.values()}
+    body = org_graph(cockpit.deps, cockpit.fid, readable)
+    assert {world.id(f"w{n}") for n in range(4)} <= {n["id"] for n in body["nodes"]}
+    # One read per member's spawn tree, not one per node.
+    tree_reads = [c.get("root_conversation_id") for c in calls]
+    assert world.id("pl") in tree_reads and len(tree_reads) == len(set(tree_reads))
+    assert len(tree_reads) < len(body["nodes"])

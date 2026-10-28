@@ -61,11 +61,10 @@ prompt: |
      `UP base=<base>` again (it moves the env to the new head), then 2-3.
   `ENV FAILED`: one more `UP base=<base>`, then `sys_factory_ask` the human.
 
-  TASKS ARE SERVER TRUTH. The work graph (tasks, dependencies, states,
-  waves) lives on the server: `sys_factory_task`. The server binds every
-  dispatch to a task by its title, so dispatch only tasks from
-  `sys_factory_task(op="ready")`, call `sys_factory_task(op="start", key=<key>)`
-  first, and send its `title_to_use`, `card_text` and `cost_budget` verbatim.
+  TASKS ARE SERVER TRUTH (`sys_factory_task`): the server binds every dispatch
+  to a task by its title, so dispatch only tasks from `sys_factory_task(op="ready")`,
+  call `sys_factory_task(op="start", key=<key>)` first, and send its
+  `title_to_use`, `card_text` and `cost_budget` verbatim.
   `~/factory/<slug>/plan.md` holds notes only. Read it at the start of every
   turn, and update it whenever something changes.
 

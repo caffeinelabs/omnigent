@@ -632,7 +632,8 @@ Tasks are a server entity (`factory_tasks`, `T-<n>`), not rows in a PL's
   States: planned → ready → running → review → done, or blocked, failed,
   cancelled.
 - **Computations** (pure, `graph.py`): the ready set; waves (a layered
-  topological order capped by free IC and preview slots, with implicit
+  topological order capped by free IC and preview slots, where ad-hoc work
+  holds an IC slot only while its worker runs, with implicit
   serialization edges between same-wave tasks whose scope globs overlap);
   the critical path (weights: the observed p50 of the task kind once 5 tasks
   ran, else the estimate, else 60 min); `scope_overlap` and `hub_file`
@@ -640,15 +641,17 @@ Tasks are a server entity (`factory_tasks`, `T-<n>`), not rows in a PL's
 - **Dispatch.** `op="ready"` returns the wave to start now with the
   server-rendered `card_text` (base, acceptance, rules, budget left) and
   `title_to_use` (`<key>`, then `<key>-r<k>`); `op="start"` counts the
-  attempt. `cost_budget` rides along only in `enforce` engine mode, never for
-  `ic_codex`. Budgets are read here; the loop engine enforces them.
+  attempt (once, even when the binder saw its dispatch first). `cost_budget`
+  rides along only in `enforce` engine mode, never for `ic_codex` and never at
+  $0. Budgets are read here; the loop engine enforces them.
 - **Binder.** Every dispatched sub-agent of a PL binds by title on
   `dispatch`, `task.done`/`task.failed` and each supervisor tick: `<key>`,
   `<key>-r<k>` (implement attempt k+1), `review-<key>`, `demo-<key>`; team
   names (`env`, env_keeper) bind nothing; anything else becomes an ad-hoc task
   plus a `task.unplanned` warning. PRs bind by branch into
-  `factory_prs.task_id`; an open PR moves its task to review and a merge
-  (a human's included) closes it. Bound sub-agent `task` spans carry the task.
+  `factory_prs.task_id`; a draft PR keeps its task running (its IC holds a
+  slot), a PR out of draft moves it to review and a merge (a human's
+  included) closes it. Bound sub-agent `task` spans carry the task.
 - **People** add and edit tasks in the cockpit (`POST|PATCH
   /factories/{fid}/tasks`, EDIT, human origin); the PL gets
   `[Factory control · TASK ADD|TASK EDIT · by …]` with the diff.

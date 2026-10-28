@@ -21,15 +21,14 @@ The server owns the tasks (`T-<n>`), their dependencies and states
 (planned → ready → running → review → done; blocked, failed, cancelled).
 - KICKOFF: one task per reviewable change, from the DoD:
   `sys_factory_task(op="upsert", tasks=[...])`. `key` is the branch suffix;
-  `deps` are task keys, `project:<slug>` or `decision:D-<n>`; `scope` globs
-  must not overlap between parallel tasks (a `scope_overlap` warning
-  serializes them). A cycle or unknown dependency is refused: fix and resend.
+  `deps` are task keys, `project:<slug>` or `decision:D-<n>`; parallel tasks'
+  `scope` globs must not overlap (`scope_overlap` serializes them). A cycle
+  or unknown dependency is refused: fix and resend.
 - Dispatch only the wave of `sys_factory_task(op="ready")`: `start` the task,
-  then send `title_to_use`, `card_text` (the server's card) and `cost_budget`
-  verbatim. Never invent a title: an unknown one becomes an ad-hoc task and a
-  warning. Re-dispatches call `start` again (`<key>-r<k>`).
-- Close with `op="done"` when its DoD item holds without a PR, `fail` or
-  `cancel` with a note; a merged PR closes its task by itself.
+  then send `title_to_use`, `card_text` and `cost_budget` verbatim. An unknown
+  title becomes an ad-hoc task and a warning. Re-dispatches `start` again.
+- A draft PR keeps its task running, out of draft it is in review, merged it
+  is done. Close the rest (ad-hoc too) with `op="done"`, `fail` or `cancel`.
 - A person's `[Factory control · TASK ADD|TASK EDIT …]` already changed the graph.
 
 ## plan.md (`~/factory/<slug>/plan.md`)

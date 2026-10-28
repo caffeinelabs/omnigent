@@ -299,3 +299,109 @@ async def test_discovered_prs_link_through_the_poller_hook(cockpit: Cockpit) -> 
     await binder.on_pr(cockpit.app.state, None, row)
     assert cockpit.store.get_pr(row.id).task_id == _task(cockpit, "docs").id  # type: ignore[union-attr]
     assert _task(cockpit, "docs").state == "review"
+
+
+async def test_a_draft_pr_keeps_its_ic_slot_until_it_leaves_draft(cockpit: Cockpit) -> None:
+    """ICs open drafts early: the task stays running (slot held) until the PR is ready."""
+    actor = Actor.agent(cockpit.world.id("pl"), "project_lead", title="PL · api-version")
+    items = [tasks.TaskIn(key=k, scope=[f"{k}/**"]) for k in ("a", "b", "c", "d", "e", "f")]
+    await tasks.upsert_tasks(cockpit.app.state, cockpit.fid, SLUG, items, actor)
+    fakes: dict[str, FakePr] = {}
+    for number, key in enumerate(("a", "b", "c"), start=9660):
+        await tasks.start_task(cockpit.app.state, cockpit.fid, SLUG, key, actor)
+        await binder.bind_session(cockpit.app.state, _child(cockpit, key))
+        fakes[key] = FakePr(REPO, number, f"factory/{SLUG}/{key}", "a" * 40, time.time() - 60)
+        fakes[key].is_draft = True
+        pr = await _refresh(cockpit, fakes[key])
+        assert pr.is_draft and pr.task_id == _task(cockpit, key).id
+    assert {_task(cockpit, k).state for k in ("a", "b", "c")} == {"running"}
+    ready = await tasks.ready_view(cockpit.app.state, cockpit.fid, SLUG)
+    assert ready["slots"]["ics_free"] == 0 and ready["wave"] == []
+
+    fakes["a"].is_draft = False
+    await _refresh(cockpit, fakes["a"])
+    assert _task(cockpit, "a").state == "review"
+    ready = await tasks.ready_view(cockpit.app.state, cockpit.fid, SLUG)
+    assert ready["slots"]["ics_free"] == 1 and [w["key"] for w in ready["wave"]] == ["d"]
+    moved = [e for e in cockpit.events("task.state") if e.data["to"] == "review"]
+    assert moved[-1].data["pr_number"] == 9660
+
+    # Back to draft: its IC codes again and takes the slot back.
+    fakes["a"].is_draft = True
+    await _refresh(cockpit, fakes["a"])
+    assert _task(cockpit, "a").state == "running"
+
+
+async def test_a_draft_on_an_unstarted_task_starts_it(cockpit: Cockpit) -> None:
+    await _plan(cockpit)
+    fake = FakePr(REPO, 9670, f"factory/{SLUG}/docs", "f" * 40, time.time() - 30)
+    fake.is_draft = True
+    await _refresh(cockpit, fake)
+    assert _task(cockpit, "docs").state == "running"
+    side = FakePr(REPO, 9671, f"factory/{SLUG}/side-draft", "e" * 40, time.time() - 30)
+    side.is_draft = True
+    await _refresh(cockpit, side)
+    adhoc = _task(cockpit, "side-draft")
+    assert adhoc.kind == "adhoc" and adhoc.state == "running"
+
+
+async def test_idle_adhoc_work_holds_no_ic_slot(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unplanned workers (e.g. an old PL's sub-agents) count only while they run."""
+    from omnigent.server.routes._sessions.common import _session_status_cache
+
+    await _plan(cockpit)
+    children = [_child(cockpit, f"Old work {n}") for n in range(3)]
+    for child in children:
+        await binder.bind_session(cockpit.app.state, child)
+    assert {t.state for t in cockpit.store.list_tasks(cockpit.fid) if t.kind == "adhoc"} == {
+        "running"
+    }
+    ready = await tasks.ready_view(cockpit.app.state, cockpit.fid, SLUG)
+    assert ready["slots"]["ics_free"] == 3
+    monkeypatch.setitem(_session_status_cache, children[0].id, "running")
+    ready = await tasks.ready_view(cockpit.app.state, cockpit.fid, SLUG)
+    assert ready["slots"]["ics_free"] == 2
+
+
+async def test_a_start_racing_its_own_dispatch_keeps_the_attempt(cockpit: Cockpit) -> None:
+    """The binder bound ``route`` before the PL's parallel ``start`` landed: still attempt 1."""
+    await _plan(cockpit)
+    actor = Actor.agent(cockpit.world.id("pl"), "project_lead", title="PL · api-version")
+    await binder.bind_session(cockpit.app.state, _child(cockpit, "route"))
+    started = await tasks.start_task(cockpit.app.state, cockpit.fid, SLUG, "route", actor)
+    assert (started["title_to_use"], started["attempt"]) == ("route", 1)
+    assert _task(cockpit, "route").attempts == 1
+    # A later start is a real retry.
+    retry = await tasks.start_task(cockpit.app.state, cockpit.fid, SLUG, "route", actor)
+    assert (retry["title_to_use"], retry["attempt"]) == ("route-r1", 2)
+    # Start first, then the bind: nothing to reuse.
+    await binder.bind_session(cockpit.app.state, _child(cockpit, "route-r1"))
+    third = await tasks.start_task(cockpit.app.state, cockpit.fid, SLUG, "route", actor)
+    assert third["attempt"] == 3
+
+
+async def test_run_ends_re_total_the_task_cost(cockpit: Cockpit) -> None:
+    from omnigent.server.factory import events
+
+    await _plan(cockpit)
+    first, retry = _child(cockpit, "route"), _child(cockpit, "route-r1")
+    cockpit.world.store.set_session_usage(first.id, {"total_cost_usd": 1.5})
+    cockpit.world.store.set_session_usage(retry.id, {"total_cost_usd": 0.75})
+    remove = binder.install()
+    try:
+        for child, kind in ((first, "task.done"), (retry, "task.failed")):
+            await events.emit(
+                cockpit.app.state,
+                cockpit.fid,
+                kind,
+                project=SLUG,
+                from_id=cockpit.world.id("pl"),
+                to_id=child.id,
+                summary=f"{child.title} ended",
+            )
+    finally:
+        remove()
+    row = _task(cockpit, "route")
+    assert row.session_ids == [first.id, retry.id] and row.cost_usd == 2.25

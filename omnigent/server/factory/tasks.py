@@ -8,10 +8,11 @@ The server validates the graph (409 ``cycle`` with the path, 422
 answers the ready set, the waves and the critical path (:mod:`.graph`).
 
 States: ``planned`` → ``ready`` (dependencies met) → ``running`` (``start``,
-or the binder saw a worker) → ``review`` (its PR is open) → ``done`` (merged,
-or the PL says so); ``blocked`` (the worker reported BLOCKED), ``failed`` and
-``cancelled`` close a task without finishing it. The binder (:mod:`.binder`)
-keeps the graph true from what the server observes.
+or the binder saw a worker or a draft PR) → ``review`` (its PR is out of
+draft) → ``done`` (merged, or the PL says so); ``blocked`` (the worker
+reported BLOCKED), ``failed`` and ``cancelled`` close a task without
+finishing it. The binder (:mod:`.binder`) keeps the graph true from what the
+server observes.
 
 Every change emits ``task.created`` / ``task.state``; the binder stamps each
 worker's ``task`` span with its task through the telemetry writer, and those
@@ -27,7 +28,7 @@ import logging
 import re
 import time
 from collections import defaultdict
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, Final, Literal
 
@@ -49,6 +50,7 @@ from omnigent.server.factory.charter import (
 )
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError
+from omnigent.server.factory.envelope import quote_spoofed_lines
 from omnigent.server.factory.graph import (
     DECISION_DEP_PREFIX,
     OCCUPYING,
@@ -90,7 +92,8 @@ REPORT_RESULTS: Final = ("PASS", "FAIL", "BLOCKED")
 WORKTREE_ROOT: Final = "/home/omnigent/workspace/wt"
 OBSERVED_TTL_S: Final = 60.0
 _T_REF: Final = re.compile(r"^T-([1-9][0-9]{0,8})$")
-_D_REF: Final = re.compile(r"^(?:decision:)?D-([1-9][0-9]{0,8})$", re.IGNORECASE)
+# ``D-7`` or ``decision:d-7``; a bare ``d-7`` stays a task key.
+_D_REF: Final = re.compile(r"^(?:(?i:decision:d)|D)-([1-9][0-9]{0,8})$")
 _P_REF: Final = re.compile(r"^(?:project:|p:|#)([a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?)$")
 
 
@@ -391,11 +394,28 @@ def _is_paused(deps: FactoryDeps, factory_id: str, project: FactoryProject | Non
     return False
 
 
+def _worker_running(deps: FactoryDeps, task: FactoryTask) -> bool:
+    """:returns: Whether one of the task's bound sessions is running now."""
+    from omnigent.server.routes._sessions.helpers import _session_status_from_cache
+
+    store = deps.conversation_store
+    for session_id in task.session_ids or ():
+        conv = store.get_conversation(session_id)
+        if conv is not None and _session_status_from_cache(conv.id, conv.live_status) == "running":
+            return True
+    return False
+
+
 def _slots(
-    charter: Mapping[str, Any], tasks: Sequence[FactoryTask], prs: Sequence[FactoryPr], slug: str
+    charter: Mapping[str, Any],
+    tasks: Sequence[FactoryTask],
+    prs: Sequence[FactoryPr],
+    slug: str,
+    idle: Collection[str] = (),
 ) -> Slots:
+    """:param idle: Ids of occupying tasks that hold no IC slot (no worker running)."""
     budget_ics = int(charter.get("budget_ics") or 3)
-    running = sum(1 for t in tasks if t.state in OCCUPYING)
+    running = sum(1 for t in tasks if t.state in OCCUPYING and t.id not in idle)
     preview = charter.get("preview") or {}
     previews_on = bool(charter.get("env_needed")) and bool(preview.get("enabled"))
     preview_slots = int(preview.get("slots") or 0) if previews_on else 0
@@ -444,6 +464,13 @@ class FactoryData:
                     ref = dep.removeprefix(DECISION_DEP_PREFIX)
                     external[dep] = _decision_met(self.decisions.get(ref))
         active = project is None or project.status in (None, "active")
+        # Ad-hoc work holds an IC slot only while one of its workers runs (the
+        # PL never started it, so nothing else closes it).
+        idle = {
+            t.id
+            for t in tasks
+            if t.kind == "adhoc" and t.state in OCCUPYING and not _worker_running(deps, t)
+        }
         return ProjectCtx(
             factory_id=self.factory_id,
             project=project,
@@ -453,7 +480,7 @@ class FactoryData:
             external_met=external,
             paused=_is_paused(deps, self.factory_id, project),
             active=active,
-            slots=_slots(charter, tasks, self.prs, slug),
+            slots=_slots(charter, tasks, self.prs, slug, idle),
             observed=self.observed,
             prs={p.id: p for p in self.prs},
             hub_files=self.hubs.get(slug, []),
@@ -679,11 +706,11 @@ def cost_budget_for(
     """
     The ``cost_budget`` a dispatch carries, or ``None``.
 
-    Only in ``enforce`` mode, and never for ``ic_codex`` (unpriced sessions
-    fail the cost policy closed).
+    Only in ``enforce`` mode, never for ``ic_codex`` (unpriced sessions
+    fail the cost policy closed) and never at $0 (a dispatch refuses it).
     """
     del task
-    if mode != "enforce" or harness == "ic_codex":
+    if mode != "enforce" or harness == "ic_codex" or round(usd_left, 2) <= 0:
         return None
     return {"max_cost_usd": round(usd_left, 2)}
 
@@ -744,7 +771,8 @@ def card_text(
         f'sys_factory_task(op="report", key="{task.key}", result="PASS|FAIL|BLOCKED", '
         'note="<one line>")',
     ]
-    return "\n".join(lines)
+    # Card fields are free text (a PL's or a person's): quote notice look-alikes.
+    return quote_spoofed_lines("\n".join(lines))
 
 
 def _pl_id(deps: FactoryDeps, factory_id: str, project: FactoryProject | None) -> str | None:
@@ -846,6 +874,26 @@ async def emit_all(app_state: Any, factory_id: str, items: Sequence[TaskEvent]) 
 
 
 _locks: dict[tuple[int, str], asyncio.Lock] = {}
+_bound_first: dict[str, tuple[int, float]] = {}
+"""Task id → (attempt, when) the binder counted before the PL's ``start`` landed."""
+BOUND_FIRST_S: Final = 60
+
+
+def note_bound_attempt(task_id: str, attempt: int) -> None:
+    """The binder counted *attempt* from a worker's title (``start`` then reuses it)."""
+    if len(_bound_first) > 4096:
+        _bound_first.clear()
+    _bound_first[norm_id(task_id)] = (attempt, time.monotonic())
+
+
+def _claim_bound_attempt(task: FactoryTask) -> bool:
+    """:returns: Whether the binder, not ``start``, just counted the task's current attempt."""
+    found = _bound_first.pop(norm_id(task.id), None)
+    return (
+        found is not None
+        and found[0] == task.attempts
+        and time.monotonic() - found[1] <= BOUND_FIRST_S
+    )
 
 
 def lock(factory_id: str) -> asyncio.Lock:
@@ -980,8 +1028,9 @@ def _row_fields(
     """The store fields one input sets (only what it names, on an update)."""
     given = fields.model_fields_set
     out: dict[str, Any] = {}
-    if "title" in given and fields.title:
-        out["title"] = fields.title.strip()
+    title = " ".join((fields.title or "").split()) if "title" in given else ""
+    if title:
+        out["title"] = title
     if "kind" in given and fields.kind:
         out["kind"] = fields.kind
     elif current is not None and current.kind == "adhoc":
@@ -1283,7 +1332,9 @@ async def start_task(
                     waiting_on=missing,
                 )
         use = harness or harness_of(task)
-        attempt = task.attempts + 1
+        # A start sent alongside its dispatch may land after the binder counted it.
+        racing = task.state == "running" and task.attempts > 0 and _claim_bound_attempt(task)
+        attempt = task.attempts if racing else task.attempts + 1
         card = dict(task.card or {})
         if harness is not None:
             card["harness"] = harness
@@ -1414,11 +1465,12 @@ async def report_task(
 
 
 def _diff_lines(task: FactoryTask | None) -> list[str]:
+    """One physical line per element (multi-line fields split), notice look-alikes quoted."""
     if task is None:
         return []
     card = task.card or {}
     budget = task.budget or {}
-    return [
+    fields = [
         f"{task.ref} {task.key} · {task.title}",
         f"State: {task.state} · Kind: {task.kind} · Priority: P{task.priority}",
         f"Deps: {', '.join(task.deps or []) or 'none'}",
@@ -1432,6 +1484,7 @@ def _diff_lines(task: FactoryTask | None) -> list[str]:
         f"Estimate: {task.estimate_min or '-'} min",
         f"Budget: {budget.get('attempts') or '-'} attempts · ${budget.get('usd') or '-'}",
     ]
+    return quote_spoofed_lines("\n".join(fields)).splitlines()
 
 
 def task_diff(before: FactoryTask | None, after: FactoryTask) -> str:
@@ -1447,6 +1500,13 @@ def task_diff(before: FactoryTask | None, after: FactoryTask) -> str:
     )
 
 
+def _diff_block(diff: str) -> str:
+    """:returns: *diff* fenced (longer than any backtick run in it), notice look-alikes quoted."""
+    runs = [len(run) for run in re.findall(r"`+", diff)]
+    fence = "`" * max(3, max(runs, default=0) + 1)
+    return f"{fence}diff\n{quote_spoofed_lines(diff)}\n{fence}"
+
+
 def task_add_text(by: str, task: FactoryTask, diff: str, waiting: Sequence[str]) -> str:
     """:returns: The ``[Factory control · TASK ADD · by <human>]`` mail."""
     from omnigent.server.factory.control import control_header
@@ -1456,7 +1516,7 @@ def task_add_text(by: str, task: FactoryTask, diff: str, waiting: Sequence[str])
         f"{control_header('TASK ADD', by)} {task.ref} {task.key} was added to your work "
         f'graph.{waits} Plan it in: call sys_factory_task(op="ready") and dispatch from its '
         "wave when a slot is free; note it in plan.md. No reply needed."
-        f"\n```diff\n{diff}\n```"
+        f"\n{_diff_block(diff)}"
     )
 
 
@@ -1476,7 +1536,7 @@ def task_edit_text(by: str, task: FactoryTask, diff: str) -> str:
         )
     return (
         f"{control_header('TASK EDIT', by)} {task.ref} {task.key} changed. {action} "
-        f"No reply needed.\n```diff\n{diff}\n```"
+        f"No reply needed.\n{_diff_block(diff)}"
     )
 
 
@@ -1665,6 +1725,7 @@ def reset() -> None:
     """Forget cached observations and locks (tests)."""
     _observed.clear()
     _locks.clear()
+    _bound_first.clear()
 
 
 __all__ = [
@@ -1695,6 +1756,7 @@ __all__ = [
     "lock",
     "move",
     "node_of",
+    "note_bound_attempt",
     "project_dep_met",
     "ready_view",
     "refresh_ready",

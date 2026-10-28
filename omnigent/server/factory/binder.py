@@ -15,8 +15,9 @@ It ties what the server observes to tasks:
   ======================== ==================================================
 
 - **PRs** by branch ``factory/<slug>/<key>`` into ``factory_prs.task_id``; the
-  task follows its PR: opened → ``review``, merged → ``done`` (a human merge
-  closes the task with no PL action).
+  task follows its PR: a draft → ``running`` (the IC still holds its slot),
+  opened or out of draft → ``review``, merged → ``done`` (a human merge closes
+  the task with no PL action).
 
 A bound session joins the task's ``session_ids`` and its sub-agent span gets
 the task id. Events: ``task.bound``, ``task.unplanned`` (plus the
@@ -66,6 +67,8 @@ _REFRESH_ON: Final = frozenset(
     {"decision.answered", "decision.withdrawn", "pr.merged", "stage.changed", "project.cancelled"}
 )
 _SEEN_MAX: Final = 20000
+_DRAFT_FROM: Final = frozenset({"planned", "ready", "failed", "review"})
+"""States a draft PR moves to ``running``: its IC still codes and holds a slot."""
 
 _seen: dict[str, None] = {}
 """Children this process already bound or found to be team members."""
@@ -278,6 +281,8 @@ def bind_sync(
     to = task.state
     if binding.loop == "implement":
         fields["attempts"] = max(task.attempts, binding.attempt)
+        if binding.attempt > task.attempts:
+            tasks.note_bound_attempt(task.id, binding.attempt)
         if vendor:
             fields["vendor"] = vendor
         if task.state in ("planned", "ready", "failed"):
@@ -442,9 +447,10 @@ def link_pr_sync(
     """
     Link a PR to its task and move the task with the PR (synchronous).
 
-    A newly linked or reopened open PR moves its task to ``review``; a merge
-    moves it to ``done``. A factory-branch PR with no task becomes an
-    ad-hoc task (open PRs only), with ``task.unplanned``.
+    A newly linked, reopened or ready-for-review open PR moves its task to
+    ``review``; a draft only marks its task ``running`` (the IC still codes and
+    holds its slot). A merge moves it to ``done``. A factory-branch PR with no
+    task becomes an ad-hoc task (open PRs only), with ``task.unplanned``.
     """
     store = deps.factory_store
     task, slug, key = _task_for_pr(deps, factory_id, pr)
@@ -461,7 +467,7 @@ def link_pr_sync(
             name,
             title=(pr.title or name)[:256],
             kind="adhoc",
-            state="review",
+            state="running" if pr.is_draft else "review",
             created_by=server.id,
             created_via="server",
             started_at=pr.opened_at or pr.created_at or int(time.time()),
@@ -502,9 +508,19 @@ def link_pr_sync(
         fields["pr_id"] = pr.id
     to, reason = task.state, None
     reopened = before is not None and before.state != "open"
+    undrafted = before is not None and before.is_draft and not pr.is_draft
+    redrafted = before is not None and not before.is_draft and pr.is_draft
     if (
         pr.state == "open"
-        and (newly or reopened)
+        and pr.is_draft
+        and (newly or reopened or redrafted)
+        and task.state in _DRAFT_FROM
+    ):
+        to, reason = "running", f"PR #{pr.number} is a draft"
+    elif (
+        pr.state == "open"
+        and not pr.is_draft
+        and (newly or reopened or undrafted)
         and task.state not in ("done", "cancelled", "review")
     ):
         to, reason = "review", f"PR #{pr.number} open"

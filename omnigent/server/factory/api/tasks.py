@@ -84,11 +84,12 @@ def _agent_actor(caller: AgentCaller) -> Actor:
 
 def _own_project(caller: AgentCaller, project: str | None = None) -> str:
     """The PL's own project (403 for anyone else, or for another project)."""
-    if caller.membership.role != ROLE_PROJECT_LEAD or not caller.membership.project:
+    membership = caller.membership
+    slug = membership.project
+    if membership.role != ROLE_PROJECT_LEAD or not membership.is_top_level or not slug:
         raise FactoryRouteError(
             403, "not_allowed", "only a project lead writes its project's tasks"
         )
-    slug = caller.membership.project
     if project and project.strip() != slug:
         raise FactoryRouteError(
             403, "not_your_project", f"you lead {slug}; tasks of {project} are its PL's"
@@ -128,7 +129,7 @@ async def agent_read(
     """The PL's own tasks (``list``, ``ready``, ``get``), or any project's for a lead."""
     caller = await authorize_agent(request, from_session_id)
     role = caller.membership.role
-    if role == ROLE_LEAD:
+    if role == ROLE_LEAD and caller.membership.is_top_level:
         if view == "ready":
             raise FactoryRouteError(403, "not_allowed", "only the project's PL dispatches")
         slug = project.strip() if project else None

@@ -276,17 +276,19 @@ def bus_graph(
 _STAGE_NOW: Final = {"planning": "plan", "building": "build"}
 
 
-def _now_counts(body: Mapping[str, Any], slug: str | None, since_s: int) -> dict[str, int]:
-    """Where projects (plan, build) and open PRs (review … ready) sit now."""
+def _now_counts(
+    body: Mapping[str, Any], slug: str | None, since_s: int, hidden: set[str]
+) -> dict[str, int]:
+    """Where visible projects (plan, build) and their open PRs (review … ready) sit now."""
     counts: Counter[str] = Counter()
     for project in body.get("projects", []):
-        if slug and project["slug"] != slug:
+        if (slug and project["slug"] != slug) or project["slug"] in hidden:
             continue
         node = _STAGE_NOW.get(project.get("stage") or "")
         if node:
             counts[node] += 1
     for pr in body.get("prs", []):
-        if slug and pr.get("project_slug") != slug:
+        if (slug and pr.get("project_slug") != slug) or pr.get("project_slug") in hidden:
             continue
         if pr.get("state") == "merged" and ((pr.get("merged") or {}).get("at") or 0) >= since_s:
             counts["merged"] += 1
@@ -333,7 +335,7 @@ def flow_graph(
         for s in spans
         if s.project_slug not in hidden
     ]
-    counts = _now_counts(body, slug, int(now - window_s))
+    counts = _now_counts(body, slug, int(now - window_s), hidden)
     return {"since_ms": since_ms, **graph.flow_graph(facts, now_counts=counts)}
 
 
@@ -373,21 +375,40 @@ def org_graph(deps: FactoryDeps, factory_id: str, readable: set[str]) -> dict[st
             "depth": depth,
         }
 
+    def children_of(top: Conversation) -> dict[str | None, list[Conversation]]:
+        # Every sub-agent under one member's spawn tree, in a few paged reads.
+        found: dict[str | None, list[Conversation]] = {}
+        after: str | None = None
+        for _ in range(ORG_MAX_NODES // _CHILD_PAGE + 1):
+            page = store.list_conversations(
+                limit=_CHILD_PAGE,
+                after=after,
+                kind="sub_agent",
+                root_conversation_id=top.root_conversation_id or top.id,
+                order="asc",
+            )
+            for child in page.data:
+                if not is_session_closed(child.labels, child.title):
+                    found.setdefault(child.parent_conversation_id, []).append(child)
+            if not page.has_more or not page.data:
+                break
+            after = page.data[-1].id
+        return found
+
     tops = [
         m
         for m in factory_members(factory_id, store)
         if not is_session_closed(m.labels, m.title) and m.id in readable
     ]
     queue: list[tuple[Conversation, Conversation, int]] = [(m, m, 0) for m in tops]
+    trees: dict[str, dict[str | None, list[Conversation]]] = {}
     while queue and len(rows) < ORG_MAX_NODES:
         conv, top, depth = queue.pop(0)
         rows.append(row(conv, top, depth))
-        page = store.list_conversations(
-            limit=_CHILD_PAGE, kind="sub_agent", parent_conversation_id=conv.id, order="desc"
-        )
-        for child in reversed(page.data):
-            if not is_session_closed(child.labels, child.title):
-                queue.append((child, top, depth + 1))
+        tree = trees.get(top.id)
+        if tree is None:
+            tree = trees[top.id] = children_of(top)
+        queue += [(child, top, depth + 1) for child in tree.get(conv.id, [])]
     return {"truncated": bool(queue), **graph.org_graph(rows)}
 
 
