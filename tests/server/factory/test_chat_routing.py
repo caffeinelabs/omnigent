@@ -137,8 +137,19 @@ def _names(route: object) -> list[str]:
                 pls={"db-version": Agent(DB.session_id, DB.name, STATE_PAUSED)},
             ),
             [],
-            ["PL · db-version is paused; Atlas is paused too, so nobody will answer yet"],
+            [
+                "PL · db-version is paused and Atlas is paused too: not delivered, "
+                "post again once PL · db-version or Atlas is back"
+            ],
             id="nobody-can-answer",
+        ),
+        pytest.param(
+            "factory",
+            [],
+            _members(atlas=Agent(ATLAS.session_id, "Atlas", STATE_PAUSED)),
+            [],
+            ["Atlas is paused: not delivered, post again once Atlas is back"],
+            id="atlas-paused",
         ),
     ],
 )

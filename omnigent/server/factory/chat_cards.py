@@ -179,6 +179,19 @@ def _issue_rows(event: Any) -> list[CardRow]:
     return [CardRow(thread, event.summary, _card("issue", ref, data.get("issue_id")))]
 
 
+_CARD_KINDS: Final = (
+    DECISION_KINDS | PR_KINDS | LOOP_KINDS | FACTORY_LINE_KINDS | PROJECT_LINE_KINDS
+) | {"demo.published", "issue.opened"}
+_CARD_PREFIXES: Final = ("proposal.", "control.", "people.")
+
+
+def shows(kind: str) -> bool:
+    """:returns: Whether events of *kind* may become cards (no I/O)."""
+    if kind in _QUIET_KINDS:
+        return False
+    return kind in _CARD_KINDS or kind.startswith(_CARD_PREFIXES)
+
+
 def plan_cards(deps: FactoryDeps, event: Any) -> list[CardRow]:
     """
     The rows one event mirrors into the Room (store reads only).
@@ -186,7 +199,7 @@ def plan_cards(deps: FactoryDeps, event: Any) -> list[CardRow]:
     :returns: ``[]`` for events the Room does not show.
     """
     kind = event.kind
-    if kind.startswith("chat.") or kind in _QUIET_KINDS:
+    if not shows(kind):
         return []
     if kind in DECISION_KINDS:
         return _decision_rows(deps, event)
@@ -219,7 +232,7 @@ async def mirror_event(app_state: Any, event: Any) -> None:
     from omnigent.server.factory import chat
 
     deps = getattr(app_state, FACTORY_STATE_ATTR, None)
-    if not isinstance(deps, FactoryDeps):
+    if not isinstance(deps, FactoryDeps) or not shows(event.kind):
         return
     try:
         rows = await asyncio.to_thread(plan_cards, deps, event)
@@ -258,4 +271,5 @@ __all__ = [
     "mirror_event",
     "plan_cards",
     "register",
+    "shows",
 ]

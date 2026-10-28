@@ -1078,6 +1078,7 @@ def test_task_tool_follows_the_role_matrix(role: str, has: bool) -> None:
     names = set(ToolManager(factory_spec(role)).get_tool_names())
     assert ("sys_factory_task" in names) is has
 
+
 # ── sys_factory_chat ─────────────────────────────────────────────────────────
 
 _CHAT_REPLY = {"id": "chat_" + "a" * 32, "seq": 12, "thread": "factory", "routed": [], "notes": []}

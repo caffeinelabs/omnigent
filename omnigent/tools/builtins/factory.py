@@ -987,6 +987,7 @@ class SysFactoryTaskTool(Tool):
             },
         )
 
+
 CHAT_MENTIONS_MAX: Final = 20
 
 

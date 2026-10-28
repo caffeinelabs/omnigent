@@ -212,3 +212,18 @@ async def test_a_repeated_event_writes_one_card_and_cards_never_route(env: RoomE
     assert card.routed == []
     assert env.deliveries.calls == []
     assert any("chat" in scopes for _, scopes in env.cockpit.announces)
+
+
+def test_only_card_kinds_reach_the_store() -> None:
+    from omnigent.server.factory.chat_cards import shows
+
+    for kind in (
+        "decision.opened",
+        "proposal.applied",
+        "pr.ready",
+        "issue.opened",
+        "people.joined",
+    ):
+        assert shows(kind), kind
+    for kind in ("chat.posted", "message.delivered", "heartbeat.sent", "people.drift_repaired"):
+        assert not shows(kind), kind

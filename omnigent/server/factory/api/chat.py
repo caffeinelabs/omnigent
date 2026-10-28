@@ -6,6 +6,9 @@ People (user JWT; writes carry :data:`~omnigent.server.factory.origin.HUMAN_ORIG
   responder, last ``seq`` and the caller's unread count. READ.
 - ``GET /v1/factory/factories/{fid}/chat?thread=&before_seq=&after_seq=&limit=``:
   a page of messages, oldest first. READ.
+
+Both leave out the threads of projects the caller's snapshot hides (a PL it
+cannot read), as the status digest does.
 - ``POST /v1/factory/factories/{fid}/chat`` ``{thread, body, reply_to?, mentions?}``:
   post as yourself; routed to the thread's agent. EDIT, 20 posts per 10 min.
 - ``PUT /v1/factory/factories/{fid}/chat/reads`` ``{thread, last_seq}``: move
@@ -38,7 +41,7 @@ from omnigent.factory import (
     THREAD_PR_PREFIX,
     THREAD_PROJECT_PREFIX,
 )
-from omnigent.server.auth import LEVEL_EDIT, RESERVED_USER_LOCAL
+from omnigent.server.auth import LEVEL_EDIT, RESERVED_USER_LOCAL, runner_origin
 from omnigent.server.factory import chat, chat_cards, control
 from omnigent.server.factory.agent_scope import authorize_agent
 from omnigent.server.factory.context import FactoryDeps, factory_deps
@@ -100,13 +103,48 @@ def _reader(user_id: str | None) -> str:
     return user_id or RESERVED_USER_LOCAL
 
 
+async def _hidden_projects(
+    request: Request, deps: FactoryDeps, root: Conversation, user_id: str | None
+) -> frozenset[str]:
+    """:returns: The slugs of projects whose PL the caller cannot read."""
+    raw = await get_snapshot(request.app.state, root)
+    readable = await readable_for(user_id, raw, deps)
+    return frozenset(
+        s for s, pl in raw.project_pl.items() if pl is not None and pl not in readable
+    )
+
+
+def _thread_project(deps: FactoryDeps, key: str) -> str | None:
+    if key.startswith(THREAD_PROJECT_PREFIX):
+        return key[len(THREAD_PROJECT_PREFIX) :]
+    if key.startswith(THREAD_PR_PREFIX):
+        try:
+            pr = deps.factory_store.get_pr(key[len(THREAD_PR_PREFIX) :])
+        except ValueError:
+            return None
+        return pr.project_slug if pr is not None else None
+    return None
+
+
+def _visible(deps: FactoryDeps, rows: Sequence[Any], hidden: frozenset[str]) -> list[Any]:
+    """:returns: *rows* without those of hidden projects' threads."""
+    projects = {key: _thread_project(deps, key) for key in {r.thread for r in rows}}
+    return [r for r in rows if projects[r.thread] not in hidden]
+
+
 # ── Threads ────────────────────────────────────────────────────
 
 
-def thread_views(deps: FactoryDeps, root: Conversation, user_id: str | None) -> list[dict]:
+def thread_views(
+    deps: FactoryDeps,
+    root: Conversation,
+    user_id: str | None,
+    hidden: frozenset[str] = frozenset(),
+) -> list[dict]:
     """
     Every thread of the Room: the fixed ones, one per project, and each PR thread with messages.
 
+    :param hidden: Project slugs left out, with their PR threads.
     :returns: ``ThreadView`` JSON, fixed threads first, then projects, then PRs (newest first).
     """
     store = deps.factory_store
@@ -118,14 +156,20 @@ def thread_views(deps: FactoryDeps, root: Conversation, user_id: str | None) -> 
     pr_keys = [k for k in stats if k.startswith(THREAD_PR_PREFIX)]
     pr_keys.sort(key=lambda k: -stats[k].last_seq)
     keys += [k for k in pr_keys if k not in keys]
-    views: list[dict[str, Any]] = []
+    threads: list[chat.Thread] = []
     for key in keys:
         try:
             thread = chat.resolve_thread(deps, root.id, key)
         except CockpitError:
             continue
+        if thread.project not in hidden:
+            threads.append(thread)
+    members = chat.members_of(deps, root, threads)
+    views: list[dict[str, Any]] = []
+    for thread in threads:
+        key = thread.key
         stat = stats.get(key)
-        answer = chat.responder(deps, root, thread)
+        answer = chat.responder(deps, root, thread, members)
         views.append(
             {
                 "key": thread.key,
@@ -162,7 +206,8 @@ async def list_threads(request: Request, factory_id: str) -> dict[str, Any] | JS
 
     async def run() -> dict[str, Any]:
         deps, user_id, root = await _root(request, factory_id)
-        return {"data": await asyncio.to_thread(thread_views, deps, root, user_id)}
+        hidden = await _hidden_projects(request, deps, root, user_id)
+        return {"data": await asyncio.to_thread(thread_views, deps, root, user_id, hidden)}
 
     return await _guard(run)
 
@@ -179,10 +224,14 @@ async def list_messages(
     """A page of messages, oldest first (the latest page unless ``after_seq``)."""
 
     async def run() -> dict[str, Any]:
-        deps, _user_id, root = await _root(request, factory_id)
+        deps, user_id, root = await _root(request, factory_id)
+        hidden = await _hidden_projects(request, deps, root, user_id)
         key = None
         if thread is not None:
-            key = (await asyncio.to_thread(chat.resolve_thread, deps, root.id, thread)).key
+            resolved = await asyncio.to_thread(chat.resolve_thread, deps, root.id, thread)
+            if resolved.project in hidden:
+                raise CockpitError(404, "unknown_project", "no such project in this factory")
+            key = resolved.key
         rows = await asyncio.to_thread(
             lambda: deps.factory_store.list_chat(
                 root.id, key, before_seq=before_seq, after_seq=after_seq, limit=limit + 1
@@ -190,6 +239,8 @@ async def list_messages(
         )
         more = len(rows) > limit
         rows = rows[:limit] if after_seq is not None else rows[-limit:]
+        if hidden and key is None:
+            rows = await asyncio.to_thread(_visible, deps, rows, hidden)
         views = await asyncio.to_thread(chat.message_views, deps, rows)
         return {"data": views, "has_more": more, "thread": key}
 
@@ -366,7 +417,10 @@ async def post_agent_message(
         if not isinstance(sender, str) or not sender:
             raise CockpitError(400, "invalid_body", "from_session_id is required", field="body")
         caller = await authorize_agent(request, sender)
-        return await chat.post_agent(request.app.state, caller, payload)
+        # A person's own credential posting as an agent is recorded on the event.
+        human = runner_origin(request, caller.deps.auth_provider) is None
+        via = caller.user_id if human and caller.user_id != RESERVED_USER_LOCAL else None
+        return await chat.post_agent(request.app.state, caller, payload, via_user=via)
 
     return await _guard(run)
 

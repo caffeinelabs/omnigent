@@ -16,9 +16,12 @@ Delivery to an agent:
 - The envelope (:func:`render_envelope`) names the thread and author, quotes
   the body (so nobody can forge a server header), adds the thread since the
   responder's last reply, the refs' live state and the reply call.
-- A delivery records ``chat.pending[target] = [(thread, chat_id, requested_at)]``.
-  When that turn ends without a ``sys_factory_chat`` to the thread, the turn's
-  output is posted for it (``auto_reply``).
+- A delivery records ``chat.pending[target] = [(thread, chat_id, requested_at)]``,
+  ``requested_at`` being when the delivering attempt began. When the turn it
+  started ends without a ``sys_factory_chat`` to the thread, the turn's output
+  is posted for it (``auto_reply``). Status edges (:func:`on_status_edge`, in
+  arrival order) tell which turn that is: a turn that was already running
+  when the mail landed leaves the entry for the next turn end.
 - Buffered messages survive a restart: a message whose routed entry has no
   mail id yet is buffered again by :meth:`Room.replay`; one already handed to
   the mailer is replayed by the mailer itself, so nothing is delivered twice.
@@ -28,6 +31,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import math
 import re
 import time
 import uuid
@@ -42,6 +46,7 @@ from omnigent.factory import (
     FIXED_THREADS,
     HEALTH_DEAD,
     LABEL_HEALTH,
+    LABEL_ID,
     LABEL_ROLE,
     LABEL_STATE,
     PROJECT_SLUG_RE,
@@ -80,6 +85,13 @@ COALESCE_MAX_S: Final = 120.0
 """A busy responder's buffered messages go out after this long at the latest."""
 IN_FLIGHT_MAX_S: Final = 600.0
 """How long a chat delivery counts as keeping its target busy without a turn end."""
+PENDING_TTL_S: Final = 3 * 3600.0
+"""A reply fallback older than this is dropped (its turn end never came)."""
+TURN_ENDS_KEPT: Final = 4
+"""Turn ends per session waiting for :meth:`Room.turn_ended` (the status hook's backlog)."""
+TRACKED_SESSIONS_MAX: Final = 4096
+REPLAY_PAGE: Final = 200
+REPLAY_PAGES_MAX: Final = 25
 REPLAY_WINDOW_S: Final = 2 * 3600
 CONTEXT_LINES: Final = 8
 CONTEXT_SCAN: Final = 60
@@ -284,30 +296,40 @@ def room_members(
         for m in mentions
         if m.startswith(chat_routing.MENTION_PL_PREFIX)
     }
+    return members_of(deps, root, [thread], slugs)
+
+
+def members_of(
+    deps: FactoryDeps, root: Conversation, threads: Sequence[Thread], slugs: Iterable[str] = ()
+) -> Members:
+    """The members every one of *threads* (and the PLs of *slugs*) may reach, read once."""
+    wanted = {t.project for t in threads if t.project} | set(slugs)
     pls: dict[str, Agent] = {}
-    for slug in sorted(s for s in slugs if s):
+    for slug in sorted(s for s in wanted if s):
         pl = find_project_pl(deps, root.id, slug, include_done=True)
         if pl is not None:
             pls[slug] = _agent(pl, f"PL · {slug}")
     sentinel = _sentinel(deps, root)
-    pr_projects: dict[str, str] = {}
-    pr_numbers: dict[str, int] = {}
-    if thread.pr is not None:
-        pr_numbers[thread.key] = thread.pr.number
-        if thread.pr.project_slug:
-            pr_projects[thread.key] = thread.pr.project_slug
+    prs = [t for t in threads if t.pr is not None]
     return Members(
         atlas=_agent(root, "Atlas"),
         sentinel=_agent(sentinel, "Sentinel") if sentinel is not None else None,
         pls=pls,
-        pr_projects=pr_projects,
-        pr_numbers=pr_numbers,
+        pr_projects={t.key: t.pr.project_slug for t in prs if t.pr and t.pr.project_slug},
+        pr_numbers={t.key: t.pr.number for t in prs if t.pr},
     )
 
 
-def responder(deps: FactoryDeps, root: Conversation, thread: Thread) -> Agent | None:
-    """:returns: Who answers a plain human message in *thread* (after any fallback)."""
-    route = chat_routing.routes(thread.key, [], room_members(deps, root, thread))
+def responder(
+    deps: FactoryDeps, root: Conversation, thread: Thread, members: Members | None = None
+) -> Agent | None:
+    """
+    :param members: Prebuilt by :func:`members_of` (one read for many threads).
+    :returns: Who answers a plain human message in *thread* (after any fallback).
+    """
+    if members is None:
+        members = room_members(deps, root, thread)
+    route = chat_routing.routes(thread.key, [], members)
     if not route.targets:
         return None
     target = route.targets[0]
@@ -639,6 +661,9 @@ class Room:
         self._in_flight: dict[str, float] = {}
         self.pending: dict[str, list[tuple[str, str, float]]] = {}
         """Responder -> ``[(thread, chat row id, requested_at)]`` awaiting its answer."""
+        self._turn_open: dict[str, float] = {}
+        self._turn_ends: dict[str, deque[float]] = {}
+        self._turn_seen: set[str] = set()
         self._last_post: dict[tuple[str, str], float] = {}
         self._human_posts: dict[str, deque[float]] = {}
         self._tasks: set[asyncio.Task[Any]] = set()
@@ -737,15 +762,21 @@ class Room:
         self._in_flight[key] = self._clock()
         return 1
 
-    def delivered(self, item: MailItem) -> None:
-        """Mailer hook: a chat mail reached its responder (register the reply fallback)."""
+    def delivered(self, item: MailItem, attempted_at: float | None = None) -> None:
+        """
+        Mailer hook: a chat mail reached its responder (register the reply fallback).
+
+        :param attempted_at: When the delivering attempt began; the turn it
+            starts begins no earlier.
+        """
         ids = envelope_ids(item.text)
         if not ids or not item.thread:
             return
         key = _key(item.target_id)
         now = self._clock()
         self._in_flight[key] = now
-        self.pending.setdefault(key, []).append((item.thread, ids[-1], now))
+        requested_at = min(now, attempted_at) if attempted_at is not None else now
+        self.pending.setdefault(key, []).append((item.thread, ids[-1], requested_at))
         try:
             self._spawn(self.set_routed(ids, key, delivered_at=int(now)))
         except RuntimeError:
@@ -756,15 +787,44 @@ class Room:
         key = _key(target_id)
         self.pending.setdefault(key, []).append((thread, norm_id(message_id), self._clock()))
 
-    def note_post(self, session_id: str, thread: str) -> list[str]:
-        """
-        Record that *session_id* answered in *thread*.
+    def answering(self, session_id: str, thread: str) -> list[str]:
+        """:returns: The pending message ids of *thread* a post by *session_id* answers."""
+        return [cid for t, cid, _ in self.pending.get(_key(session_id), []) if t == thread]
 
-        :returns: The pending message ids of that thread it answered.
+    def note_post(self, session_id: str, thread: str) -> None:
+        """Record that *session_id* answered in *thread* (after its row is stored)."""
+        self._last_post[(_key(session_id), thread)] = self._clock()
+
+    def turn_edge(self, session_id: str, status: str) -> None:
+        """
+        A status edge of a member, in arrival order (sync, no I/O).
+
+        ``running`` opens a turn; ``idle``/``failed`` queue its start for
+        :meth:`turn_ended`, which the status hook runs later.
         """
         key = _key(session_id)
-        self._last_post[(key, thread)] = self._clock()
-        return [cid for t, cid, _ in self.pending.get(key, []) if t == thread]
+        if status == "running":
+            if len(self._turn_seen) >= TRACKED_SESSIONS_MAX and key not in self._turn_seen:
+                self._turn_seen.clear()
+                self._turn_open.clear()
+            self._turn_seen.add(key)
+            self._turn_open[key] = self._clock()
+        elif status in ("idle", "failed"):
+            start = self._turn_open.pop(key, None)
+            if start is None:
+                # No turn opened: a repeated end, or a harness without running edges.
+                start = -math.inf if key in self._turn_seen else math.inf
+            ends = self._turn_ends.setdefault(key, deque(maxlen=TURN_ENDS_KEPT))
+            ends.append(start)
+
+    def _turn_start(self, key: str) -> float:
+        ends = self._turn_ends.get(key)
+        if not ends:
+            return math.inf
+        start = ends.popleft()
+        if not ends:
+            self._turn_ends.pop(key, None)
+        return start
 
     async def turn_ended(
         self, conv: Conversation, factory_id: str, data: Mapping[str, Any], *, failed: bool = False
@@ -773,11 +833,22 @@ class Room:
         A responder's turn ended: post its output where it did not answer, then
         deliver what waited for it.
 
+        Only deliveries that reached it before this turn began count; one that
+        landed mid-turn waits for the turn it starts.
+
         :returns: The threads that got an auto-reply.
         """
         key = _key(conv.id)
-        pending = self.pending.pop(key, [])
-        self._in_flight.pop(key, None)
+        started = self._turn_start(key)
+        now = self._clock()
+        fresh = [e for e in self.pending.pop(key, []) if now - e[2] < PENDING_TTL_S]
+        pending = [e for e in fresh if e[2] <= started]
+        later = [e for e in fresh if e[2] > started]
+        if later:
+            self.pending[key] = later
+            self._in_flight[key] = max(e[2] for e in later)
+        else:
+            self._in_flight.pop(key, None)
         unanswered: dict[str, str] = {}
         for thread, chat_id, requested_at in pending:
             last = self._last_post.get((key, thread))
@@ -881,11 +952,25 @@ class Room:
             return 0
         since = (now if now is not None else self._clock()) - REPLAY_WINDOW_S
 
+        def window(factory_id: str) -> list[FactoryChatMessage]:
+            """The factory's rows of the replay window, oldest first, paging back past cards."""
+            pages: list[list[FactoryChatMessage]] = []
+            before: int | None = None
+            for _ in range(REPLAY_PAGES_MAX):
+                page = deps.factory_store.list_chat(
+                    factory_id, before_seq=before, limit=REPLAY_PAGE
+                )
+                pages.insert(0, [r for r in page if r.created_at >= since])
+                if len(page) < REPLAY_PAGE or page[0].created_at < since:
+                    break
+                before = page[0].seq
+            return [r for page in pages for r in page]
+
         def scan() -> list[tuple[str, str, str, str]]:
             found: list[tuple[str, str, str, str]] = []
             for root in list_factory_roots(deps.conversation_store):
-                for row in deps.factory_store.list_chat(root.id, limit=200):
-                    if row.created_at < since or row.author_kind == "system":
+                for row in window(root.id):
+                    if row.author_kind == "system":
                         continue
                     for entry in row.routed:
                         sid = entry.get("session_id")
@@ -899,7 +984,12 @@ class Room:
             _logger.warning("factory room: could not scan the Room for replay", exc_info=True)
             return 0
         for factory_id, target, thread, message_id in queued:
-            await self.enqueue(factory_id, target, thread, message_id)
+            try:
+                await self.enqueue(factory_id, target, thread, message_id)
+            except Exception:  # noqa: BLE001 - one bad message must not stop the server starting
+                _logger.warning(
+                    "factory room: could not queue %s again", message_id, exc_info=True
+                )
         if queued:
             _logger.info("factory room: queued %d undelivered chat message(s) again", len(queued))
         return len(queued)
@@ -939,8 +1029,17 @@ def get_room(app_state: Any) -> Room:
     return room
 
 
-def _on_chat_delivered(app_state: Any, item: MailItem) -> None:
-    get_room(app_state).delivered(item)
+def _on_chat_delivered(app_state: Any, item: MailItem, attempted_at: float) -> None:
+    get_room(app_state).delivered(item, attempted_at)
+
+
+def on_status_edge(app_state: Any, conv: Conversation, status: str) -> None:
+    """Status-route hook (sync, arrival order): feed a member's turn edges to the Room."""
+    try:
+        if conv.labels.get(LABEL_ID):
+            get_room(app_state).turn_edge(conv.id, status)
+    except Exception:  # noqa: BLE001 - the Room must never break the status route
+        _logger.warning("factory room: could not record a status edge", exc_info=True)
 
 
 register_kind(CHAT_KIND, _on_chat_delivered)
@@ -999,7 +1098,8 @@ def _strings(value: object) -> list[str]:
     return [v for v in value if isinstance(v, str)] if isinstance(value, list) else []
 
 
-def _reply_target(deps: FactoryDeps, factory_id: str, reply_to: object) -> str | None:
+def _reply_target(deps: FactoryDeps, factory_id: str, thread: str, reply_to: object) -> str | None:
+    """:returns: The replied row id; ``None`` for a message of another thread (not a reply)."""
     if reply_to is None or reply_to == "":
         return None
     message_id = parse_chat_ref(reply_to)
@@ -1008,7 +1108,7 @@ def _reply_target(deps: FactoryDeps, factory_id: str, reply_to: object) -> str |
         raise CockpitError(
             404, "unknown_message", f"no message {reply_to!r} in this factory", field="reply_to"
         )
-    return norm_id(row.id)
+    return norm_id(row.id) if row.thread == thread else None
 
 
 async def post_system(
@@ -1060,6 +1160,7 @@ async def _route_and_store(
     event_kind: str,
     author_session: str | None = None,
     extra_refs: Sequence[str] = (),
+    extra_data: Mapping[str, Any] | None = None,
 ) -> Posted:
     deps = factory_deps(app_state)
     members = await asyncio.to_thread(room_members, deps, root, thread, mentions)
@@ -1100,6 +1201,7 @@ async def _route_and_store(
         "targets": [_key(t.session_id) for t in route.targets],
         "mentions": list(mentions),
         **({"reply_to": reply_to} if reply_to else {}),
+        **(extra_data or {}),
     }
     await events.emit(
         app_state,
@@ -1145,7 +1247,9 @@ async def post_human(
     deps = factory_deps(app_state)
     thread = await asyncio.to_thread(resolve_thread, deps, root.id, payload.get("thread"))
     body = _check_body(payload.get("body"))
-    reply_to = await asyncio.to_thread(_reply_target, deps, root.id, payload.get("reply_to"))
+    reply_to = await asyncio.to_thread(
+        _reply_target, deps, root.id, thread.key, payload.get("reply_to")
+    )
     raw_mentions = payload.get("mentions") or []
     if not isinstance(raw_mentions, list):
         raise CockpitError(400, "invalid_body", "mentions must be a list", field="mentions")
@@ -1193,11 +1297,18 @@ def allowed_thread(role: str | None, own_project: str | None, thread: Thread) ->
     return thread.kind in ("project", "pr") and thread.project == own_project
 
 
-async def post_agent(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any]) -> dict:
+async def post_agent(
+    app_state: Any,
+    caller: AgentCaller,
+    payload: Mapping[str, Any],
+    *,
+    via_user: str | None = None,
+) -> dict:
     """
     Post an agent's message (``sys_factory_chat`` → ``POST /v1/factory/agent/chat``).
 
     :param payload: ``{thread, message, reply_to?, mentions?, refs?}``.
+    :param via_user: The person whose credential posted it, when no runner did.
     :returns: ``{id: "chat_…", seq, thread, routed: [names], notes}``.
     :raises CockpitError: 403 ``not_allowed`` / ``thread_not_allowed``, 400/404/413 on a
         bad body, 429 ``rate_limited``.
@@ -1220,15 +1331,19 @@ async def post_agent(app_state: Any, caller: AgentCaller, payload: Mapping[str, 
             field="thread",
         )
     body = _check_body(payload.get("message"))
-    reply_to = await asyncio.to_thread(_reply_target, deps, root.id, payload.get("reply_to"))
-    mentions = chat_routing.parse_mentions(body, _strings(payload.get("mentions")))
-    extra_refs = [r.text for r in map(parse_ref, _strings(payload.get("refs"))) if r is not None]
+    reply_to = await asyncio.to_thread(
+        _reply_target, deps, root.id, thread.key, payload.get("reply_to")
+    )
+    raw_mentions = _strings(payload.get("mentions"))[: chat_routing.MAX_MENTIONS]
+    mentions = chat_routing.parse_mentions(body, raw_mentions)
+    raw_refs = _strings(payload.get("refs"))[: chat_routing.MAX_MENTIONS]
+    extra_refs = [r.text for r in map(parse_ref, raw_refs) if r is not None]
     sender = f"chat:{_key(caller.session.id)}"
     limit = get_mailer(app_state).try_acquire(sender, thread.key, factory_id=root.id)
     if limit is not None:
         raise CockpitError(429, "rate_limited", f"rate limit reached: {limit}")
     room = get_room(app_state)
-    answered = room.note_post(caller.session.id, thread.key)
+    answered = room.answering(caller.session.id, thread.key)
     actor = Actor.agent(caller.session.id, membership.role, title=caller.title)
     posted = await _route_and_store(
         app_state,
@@ -1244,7 +1359,10 @@ async def post_agent(app_state: Any, caller: AgentCaller, payload: Mapping[str, 
         event_kind=KIND_REPLIED if reply_to or answered else KIND_POSTED,
         author_session=caller.session.id,
         extra_refs=extra_refs,
+        extra_data={"via_user": via_user} if via_user else None,
     )
+    # Only a stored answer suppresses the turn's fallback post.
+    room.note_post(caller.session.id, thread.key)
     replied = list(dict.fromkeys([*([reply_to] if reply_to else []), *answered]))
     if replied:
         await room.set_routed(replied, caller.session.id, replied_at=posted.message.created_at)
@@ -1379,7 +1497,9 @@ __all__ = [
     "get_room",
     "mail_id_for",
     "member_state",
+    "members_of",
     "message_views",
+    "on_status_edge",
     "on_turn_end",
     "one_line",
     "parse_chat_ref",

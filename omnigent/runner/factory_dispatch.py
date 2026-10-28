@@ -2074,6 +2074,7 @@ async def _task(args: _JsonObject, *, server_client: httpx.AsyncClient, caller: 
     path = f"/v1/factory/agent/tasks/{quote(str(key).strip(), safe='')}/{op}"
     return await _passthrough(server_client, "POST", path, tool_name=tool, body=body)
 
+
 _CHAT_LIST_KEYS: Final = ("mentions", "refs")
 
 

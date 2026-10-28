@@ -17,7 +17,8 @@ For factory members (labelled themselves, or through their root) this:
   at most once per 10 minutes per session;
 - tells the sender of a pending ``request``/``brief`` that the turn it started
   ended, unless the target already posted back;
-- tells the Room a turn ended (:func:`omnigent.server.factory.chat.on_turn_end`);
+- tells the Room each turn edge in arrival order, then each turn end
+  (:mod:`omnigent.server.factory.chat` ``on_status_edge`` / ``on_turn_end``);
 - remembers a ``running`` edge parked on ``blocked_on`` so the supervisor can
   escalate it to the factory root (see
   :class:`~omnigent.server.factory.supervisor.FactorySupervisor`).
@@ -569,6 +570,9 @@ def schedule_factory_status_edge(
             return
         if not isinstance(getattr(app_state, FACTORY_STATE_ATTR, None), FactoryDeps):
             return
+        from omnigent.server.factory import chat  # turn edges in arrival order arm its fallback
+
+        chat.on_status_edge(app_state, conv, status)
         notifier = get_notifier(app_state)
         if notifier.wants(conv, status, data):
             notifier.spawn(on_status_edge(app_state, conv, status, dict(data)))

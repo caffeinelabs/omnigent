@@ -246,7 +246,25 @@ async def test_messages_page_by_thread_and_seq(env: RoomEnv) -> None:
     assert [m["body"] for m in older.json()["data"]] == ["m1", "m2"]
     assert [m["body"] for m in after.json()["data"]] == [f"m{i}" for i in range(5)]
     assert after.json()["has_more"] is False
-    assert len(everything.json()["data"]) == 6
+    # dave cannot read PL · api-version, so its thread is left out for him.
+    assert [m["thread"] for m in everything.json()["data"]] == ["factory"] * 5
+    owner = await env.cockpit.client.get(_chat(env), headers={"X-Test-User": "alice"})
+    assert len(owner.json()["data"]) == 6
+
+
+async def test_a_hidden_projects_threads_are_left_out(env: RoomEnv) -> None:
+    await _say(env, "plan?", thread="project:api-version")
+    dave = {"X-Test-User": "dave"}
+
+    threads = await env.cockpit.client.get(f"{_chat(env)}/threads", headers=dave)
+    page = await env.cockpit.client.get(
+        _chat(env), params={"thread": "project:api-version"}, headers=dave
+    )
+    mine = await env.cockpit.client.get(f"{_chat(env)}/threads", headers={"X-Test-User": "alice"})
+
+    assert "project:api-version" not in [t["key"] for t in threads.json()["data"]]
+    assert (page.status_code, error_code(page)) == (404, "unknown_project")
+    assert "project:api-version" in [t["key"] for t in mine.json()["data"]]
 
 
 async def test_the_status_digest_renders_the_snapshot(env: RoomEnv) -> None:
@@ -402,6 +420,21 @@ async def test_sys_factory_chat_refuses_bad_bodies(env: RoomEnv) -> None:
     assert (long.status_code, error_code(long)) == (413, "message_too_large")
     assert (unknown.status_code, error_code(unknown)) == (404, "unknown_message")
     assert (no_thread.status_code, error_code(no_thread)) == (400, "invalid_thread")
+
+
+async def test_sys_factory_chat_caps_mentions_and_names_a_person_posting_as_an_agent(
+    env: RoomEnv,
+) -> None:
+    resp = await _agent(
+        env, "lead_a", thread="factory", message="fyi", mentions=[f"@u{i}@x.io" for i in range(50)]
+    )
+
+    assert resp.status_code == 200, resp.text
+    [row] = env.messages("factory")
+    assert len(row.mentions) == 20
+    # No runner credential carried the post: the person behind it is on the event.
+    [event] = env.cockpit.events("chat.posted")
+    assert event.data["via_user"] == "alice"
 
 
 # ── Kickoff ────────────────────────────────────────────────────

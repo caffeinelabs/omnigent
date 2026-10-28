@@ -17,7 +17,8 @@ the factory's routable members (:class:`Members`, built by
 - A message an agent wrote reaches other agents only through such a mention,
   never through a thread default, so agents talking in the Room never loop.
 - A responder that is paused or gone is replaced by Atlas, with a system line
-  saying so.
+  saying so. When Atlas cannot answer either, the line says the message will
+  not be delivered (it is never queued for a resume).
 """
 
 from __future__ import annotations
@@ -213,6 +214,10 @@ def _mentioned(mention: str, members: Members) -> tuple[Agent | None, str, str |
     return pl, _pl_name(slug), None if pl else f"{_pl_name(slug)} not up yet; Atlas has it"
 
 
+def _back(agent: Agent | None, atlas: Agent | None) -> str:
+    return "Atlas" if agent is None or agent is atlas else f"{agent.name} or Atlas"
+
+
 def routes(
     thread: str,
     mentions: Sequence[str],
@@ -259,9 +264,12 @@ def routes(
             unroutable.append(name)
         if atlas is None or not atlas.live:
             state = atlas.state if atlas is not None else STATE_GONE
-            notes.append(
-                f"{reason.split(';')[0]}; Atlas is {state} too, so nobody will answer yet"
+            who = (
+                f"Atlas is {state}"
+                if agent is not None and agent is atlas
+                else f"{reason.split(';')[0]} and Atlas is {state} too"
             )
+            notes.append(f"{who}: not delivered, post again once {_back(agent, atlas)} is back")
             continue
         if atlas.session_id == author_session:
             notes.append(reason.split(";")[0])

@@ -238,6 +238,39 @@ async def test_a_restart_replays_mail_in_flight_once(env: RoomEnv) -> None:
     assert env.room.pending[env.id("lead_a")][0][1] == message_id
 
 
+async def test_a_replay_pages_back_past_card_rows(
+    env: RoomEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(chat, "REPLAY_PAGE", 3)
+    env.busy.running.add(env.id("lead_a"))
+    message_id = await _post(env, "queued under a pile of cards")
+    for i in range(7):
+        await chat.post_system(env.cockpit.app.state, env.cockpit.fid, "factory", f"card {i}")
+    await env.settle()
+
+    room = env.new_room()
+    env.busy.running.clear()
+    assert await room.replay() == 1
+    await env.settle()
+    [text] = env.deliveries.to(env.world.id("lead_a"))
+    assert chat.envelope_ids(text) == [message_id]
+
+
+async def test_a_replay_survives_a_failing_enqueue(
+    env: RoomEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    env.busy.running.add(env.id("lead_a"))
+    await _post(env, "queued")
+    await env.settle()
+    room = env.new_room()
+
+    async def broken(*_args: object) -> None:
+        raise RuntimeError("db hiccup")
+
+    monkeypatch.setattr(room, "enqueue", broken)
+    assert await room.replay() == 1
+
+
 async def test_a_delivered_message_is_never_replayed(env: RoomEnv) -> None:
     await _post(env, "delivered")
     await env.settle()
@@ -298,6 +331,155 @@ async def test_a_failed_turn_posts_nothing(env: RoomEnv) -> None:
     await env.settle()
     root = env.world.get("lead_a")
     assert await env.room.turn_ended(root, env.cockpit.fid, {"output": "x"}, failed=True) == []
+
+
+# ── Which turn answers ─────────────────────────────────────────
+
+
+def _edge(env: RoomEnv, status: str, after: float = 1.0) -> None:
+    env.clock.advance(after)
+    chat.on_status_edge(env.cockpit.app.state, env.world.get("lead_a"), status)
+
+
+async def _end(env: RoomEnv, output: str) -> list[str]:
+    _edge(env, "idle")
+    root = env.world.get("lead_a")
+    posted = await env.room.turn_ended(root, env.cockpit.fid, {"output": output})
+    await env.settle()
+    return posted
+
+
+async def test_a_timer_flush_mid_turn_waits_for_the_turn_it_starts(env: RoomEnv) -> None:
+    """Atlas is busy; the timer delivers alice's question; its running turn is not the answer."""
+    atlas = env.id("lead_a")
+    _edge(env, "running")
+    env.busy.running.add(atlas)
+    message_id = await _post(env, "status of billing?")
+    env.clock.advance(chat.COALESCE_MAX_S)
+    env.timer.release.set()
+    await asyncio.sleep(0)
+    await env.settle()
+    assert len(env.deliveries.to(env.world.id("lead_a"))) == 1
+
+    env.busy.running.clear()
+    assert await _end(env, "Spawned PL for docs; ledger updated.") == []
+    assert [m.body for m in env.messages("factory")] == ["status of billing?"]
+    assert env.room.pending[atlas][0][1] == message_id
+
+    _edge(env, "running")
+    assert await _end(env, "Billing is green; C-4 waits on you.") == ["factory"]
+    _asked, reply = env.messages("factory")
+    assert reply.auto_reply and reply.reply_to == message_id
+    assert reply.body == "Billing is green; C-4 waits on you."
+    assert atlas not in env.room.pending
+
+
+async def test_a_delivery_into_a_turn_another_mail_started_waits_too(env: RoomEnv) -> None:
+    """A heartbeat started the turn a moment before the chat mail landed."""
+    _edge(env, "running")
+    env.clock.advance(0.5)
+    await _post(env, "who owns docs?")
+    await env.settle()
+
+    assert await _end(env, "Heartbeat: all quiet.") == []
+    _edge(env, "running")
+    assert await _end(env, "PL · docs owns it.") == ["factory"]
+    assert env.messages("factory")[-1].body == "PL · docs owns it."
+
+
+async def test_a_repeated_turn_end_posts_nothing(env: RoomEnv) -> None:
+    await _post(env, "status?")
+    await env.settle()
+    _edge(env, "running")
+    assert await _end(env, "first answer") == ["factory"]
+    env.clock.advance(1)
+    await _post(env, "and docs?")
+    await env.settle()
+
+    assert await _end(env, "the same turn again") == []
+    _edge(env, "running")
+    assert await _end(env, "Docs are fine.") == ["factory"]
+    assert [m.body for m in env.messages("factory")] == [
+        "status?",
+        "first answer",
+        "and docs?",
+        "Docs are fine.",
+    ]
+
+
+async def test_a_stale_fallback_is_dropped(env: RoomEnv) -> None:
+    await _post(env, "status?")
+    await env.settle()
+    env.clock.advance(chat.PENDING_TTL_S + 1)
+    root = env.world.get("lead_a")
+
+    assert await env.room.turn_ended(root, env.cockpit.fid, {"output": "much later"}) == []
+    assert env.id("lead_a") not in env.room.pending
+
+
+async def test_the_status_route_hook_feeds_turn_edges_to_the_room(env: RoomEnv) -> None:
+    from omnigent.server.factory.notify import get_notifier, schedule_factory_status_edge
+
+    state, root = env.cockpit.app.state, env.world.get("lead_a")
+    message_id = await _post(env, "status?")
+    await env.settle()
+    env.clock.advance(1)
+    schedule_factory_status_edge(state, root, "running", {})
+    assert env.room._turn_open == {env.id("lead_a"): env.clock.now}
+
+    schedule_factory_status_edge(state, root, "idle", {"output": "All green."})
+    await get_notifier(state).drain()
+    await env.settle()
+
+    assert env.room._turn_open == {} and env.room._turn_ends == {}
+    assert env.messages("factory")[-1].reply_to == message_id
+
+
+async def test_a_failed_store_write_keeps_the_fallback(
+    env: RoomEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await _post(env, "status?")
+    await env.settle()
+
+    async def broken(*_args: object, **_kwargs: object) -> None:
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(chat, "_route_and_store", broken)
+    with pytest.raises(RuntimeError):
+        await env.cockpit.client.post(
+            "/v1/factory/agent/chat",
+            json={"from_session_id": env.world.id("lead_a"), "thread": "factory", "message": "x"},
+            headers={"X-Test-User": "alice"},
+        )
+    monkeypatch.undo()
+    root = env.world.get("lead_a")
+
+    assert await env.room.turn_ended(root, env.cockpit.fid, {"output": "turn output"}) == [
+        "factory"
+    ]
+
+
+async def test_a_reply_to_another_threads_message_is_no_reply(env: RoomEnv) -> None:
+    message_id = await _post(env, "status?")
+    await env.settle()
+    resp = await env.cockpit.client.post(
+        "/v1/factory/agent/chat",
+        json={
+            "from_session_id": env.world.id("lead_a"),
+            "thread": "improvements",
+            "message": "noted for later",
+            "reply_to": f"chat_{message_id}",
+        },
+        headers={"X-Test-User": "alice"},
+    )
+    assert resp.status_code == 200, resp.text
+    await env.settle()
+
+    [note] = env.messages("improvements")
+    assert note.reply_to is None
+    assert env.messages("factory")[0].routed[0]["replied_at"] is None
+    root = env.world.get("lead_a")
+    assert await env.room.turn_ended(root, env.cockpit.fid, {"output": "All green"}) == ["factory"]
 
 
 async def test_the_chat_map_leaves_the_mailer_reply_registry_alone(
