@@ -38,7 +38,7 @@ from omnigent.factory import (
     clamp_label_value,
     valid_heartbeat_s,
 )
-from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER, token_bound_runner_id
+from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER, LEVEL_READ
 from omnigent.server.factory import events, live
 from omnigent.server.factory.context import FactoryDeps, factory_deps
@@ -53,7 +53,7 @@ from omnigent.server.factory.membership import (
     is_top_level,
     membership_of,
     resolve_target,
-    root_conversation,
+    runner_token_binds,
 )
 from omnigent.server.factory.roster import build_roster
 from omnigent.server.factory.server_decisions import open_storm_decision
@@ -183,21 +183,14 @@ async def _authorize_sender(
     )
     sender = access.conversation or await _get_session(deps, from_session_id)
     token = request.headers.get(RUNNER_TUNNEL_TOKEN_HEADER)
-    allow_list = deps.runner_tunnel_tokens
-    # An allow-listed token proves a runner with a stable id, as on the tunnel route.
-    if token is not None and not (allow_list is not None and token.strip() in allow_list):
-        bound = token_bound_runner_id(token) if token.strip() else None
-        allowed = {sender.runner_id}
-        if not is_top_level(sender):
-            root = await asyncio.to_thread(root_conversation, sender, deps.conversation_store)
-            allowed.add(root.runner_id)
-        allowed.discard(None)
-        if bound is None or bound not in allowed:
-            raise FactoryRouteError(
-                403,
-                "sender_not_bound",
-                "the runner token does not belong to from_session_id",
-            )
+    if token is not None and not await asyncio.to_thread(
+        runner_token_binds, token, sender, deps.conversation_store, deps.runner_tunnel_tokens
+    ):
+        raise FactoryRouteError(
+            403,
+            "sender_not_bound",
+            "the runner token does not belong to from_session_id",
+        )
     sender = await asyncio.to_thread(ensure_member, sender, deps)
     return user_id, sender
 

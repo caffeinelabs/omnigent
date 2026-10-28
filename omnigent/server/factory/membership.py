@@ -34,6 +34,7 @@ from omnigent.factory import (
     TOP_LEVEL_ROLES,
     factory_role_from_spec,
 )
+from omnigent.runner.identity import token_bound_runner_id
 from omnigent.server.factory.context import FactoryDeps
 
 if TYPE_CHECKING:
@@ -188,6 +189,35 @@ def resolve_role(conv: Conversation, deps: FactoryDeps) -> str | None:
         role = conv.labels.get(LABEL_ROLE)
         return role if role in ROLES else None
     return sub_agent_role(load_session_spec(conv, deps))
+
+
+def runner_token_binds(
+    token: str | None,
+    session: Conversation,
+    store: ConversationStore,
+    allow_list: frozenset[str] | None,
+) -> bool:
+    """
+    Whether a runner tunnel token may act for *session*.
+
+    No token, or an allow-listed one (it proves a runner with a stable id, as on
+    the tunnel route), passes. Otherwise the token's runner must run *session*
+    (or, for a sub-agent, its root).
+
+    :param token: The runner tunnel token header value, or ``None``.
+    :param session: The session the caller claims to act for.
+    :param store: Store for a sub-agent's root lookup.
+    :param allow_list: The server's allow-listed tunnel tokens, if any.
+    :returns: ``False`` when the token belongs to another runner.
+    """
+    if token is None or (allow_list is not None and token.strip() in allow_list):
+        return True
+    bound = token_bound_runner_id(token) if token.strip() else None
+    allowed = {session.runner_id}
+    if not is_top_level(session):
+        allowed.add(root_conversation(session, store).runner_id)
+    allowed.discard(None)
+    return bound is not None and bound in allowed
 
 
 def ensure_member(conv: Conversation, deps: FactoryDeps) -> Conversation:

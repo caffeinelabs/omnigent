@@ -249,6 +249,34 @@ def _reject_runner_factory_labels(
         )
 
 
+async def _check_runner_factory_create(
+    request: Request,
+    labels: dict[str, str] | None,
+    *,
+    user_id: str | None,
+    auth_provider: AuthProvider | None,
+    conversation_store: ConversationStore,
+    permission_store: PermissionStore | None,
+    runner_tunnel_tokens: frozenset[str] | None,
+    bundled: bool,
+) -> None:
+    """Refuse a runner's create whose factory labels a spawn would not send (see create_guard)."""
+    if not labels or not any(key.startswith(FACTORY_LABEL_PREFIX) for key in labels):
+        return
+    from omnigent.server.factory.create_guard import check_runner_create
+
+    await check_runner_create(
+        request,
+        labels,
+        user_id=user_id,
+        auth_provider=auth_provider,
+        conversation_store=conversation_store,
+        permission_store=permission_store,
+        runner_tunnel_tokens=runner_tunnel_tokens,
+        bundled=bundled,
+    )
+
+
 def register_core_routes(
     router: APIRouter,
     *,
@@ -613,6 +641,16 @@ def register_core_routes(
             # on this route 500'd as internal_error. The human-readable
             # message survives in each entry's `msg`.
             raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
+        await _check_runner_factory_create(
+            request,
+            body.labels,
+            user_id=user_id,
+            auth_provider=auth_provider,
+            conversation_store=conversation_store,
+            permission_store=permission_store,
+            runner_tunnel_tokens=runner_tunnel_tokens,
+            bundled=False,
+        )
 
         resp, project_warnings = await _create_session_from_existing_agent(
             conversation_store,
@@ -814,6 +852,16 @@ def register_core_routes(
         parsed_metadata = project_resolution.body
         _reject_reserved_cost_control_label_seed(parsed_metadata.labels)
         _reject_server_reserved_label_seed(parsed_metadata.labels)
+        await _check_runner_factory_create(
+            request,
+            parsed_metadata.labels,
+            user_id=user_id,
+            auth_provider=auth_provider,
+            conversation_store=conversation_store,
+            permission_store=permission_store,
+            runner_tunnel_tokens=runner_tunnel_tokens,
+            bundled=True,
+        )
 
         inherited_runner_id: str | None = None
         if parsed_metadata.parent_session_id is not None:
@@ -2868,6 +2916,11 @@ def register_core_routes(
         # in generic native-wrapper UI state. Drop it whenever the agent changes.
         if switching_agent:
             dropped_label_keys_set.add(_CLAUDE_NATIVE_PERMISSION_MODE_LABEL_KEY)
+        # A runner's fork never joins a factory: members are created only by a spawn.
+        if runner_origin(request, auth_provider) is not None:
+            dropped_label_keys_set |= {
+                key for key in source.labels if key.startswith(FACTORY_LABEL_PREFIX)
+            }
         dropped_label_keys: frozenset[str] = frozenset(dropped_label_keys_set)
 
         # DANGEROUS codex full-bypass. The source's bypass label is always

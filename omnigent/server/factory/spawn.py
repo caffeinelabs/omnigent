@@ -222,18 +222,26 @@ def needs_finishing(deps: FactoryDeps, factory_id: str, pl: Conversation) -> boo
     return not rows
 
 
-def _version_labels(deps: FactoryDeps, root: Conversation, agent_id: str) -> dict[str, str]:
-    """``def_version`` from the root, plus the platform ``version`` and ``bundle`` labels."""
+def _version_labels(deps: FactoryDeps, agent_id: str) -> dict[str, str]:
+    """The platform ``version`` and ``bundle`` labels, as ``sys_factory_spawn`` sends them."""
     from omnigent.server.factory.telemetry import versions
 
-    labels: dict[str, str] = {}
-    if root.labels.get(LABEL_DEF_VERSION):
-        labels[LABEL_DEF_VERSION] = root.labels[LABEL_DEF_VERSION]
     try:
-        labels.update(versions.labels_for_agent(deps.agent_store, agent_id))
+        return versions.labels_for_agent(deps.agent_store, agent_id)
     except Exception:  # noqa: BLE001 - the labels only group telemetry by version
         _logger.warning("factory: no version labels for a new PL", exc_info=True)
-    return labels
+        return {}
+
+
+def _server_labels(root: Conversation) -> dict[str, str]:
+    """
+    Server-only labels a new PL inherits from the root (``def_version``).
+
+    The create runs on a runner token, which may not send them, so the server
+    stamps them on the new session itself.
+    """
+    pinned = root.labels.get(LABEL_DEF_VERSION)
+    return {LABEL_DEF_VERSION: pinned} if pinned else {}
 
 
 def _heartbeat(root: Conversation, project: FactoryProject) -> int:
@@ -504,7 +512,7 @@ async def _spawn_locked(
         project,
         agent_id=agent.id,
         supervisor=_supervisor(root, members),
-        extra_labels=await asyncio.to_thread(_version_labels, deps, root, agent.id),
+        extra_labels=await asyncio.to_thread(_version_labels, deps, agent.id),
     )
     async with client:
         resp = await client.post("/v1/sessions", json=body)
@@ -516,6 +524,8 @@ async def _spawn_locked(
     if resp.status_code >= 400 or not isinstance(new_id, str) or not new_id:
         await _failed(app_state, root, project, f"create returned {resp.status_code}")
         return await _after_failure(app_state, root, project, by=by, status=resp.status_code)
+    if server_labels := _server_labels(root):
+        await asyncio.to_thread(deps.conversation_store.set_labels, new_id, server_labels)
     project = (
         await asyncio.to_thread(store.update_project, project.id, pl_session_id=new_id) or project
     )

@@ -94,6 +94,8 @@ ROLES: Final = frozenset(
     }
 )
 TOP_LEVEL_ROLES: Final = frozenset({ROLE_LEAD, ROLE_PROJECT_LEAD})
+SPAWN_ROLES: Final = (ROLE_PROJECT_LEAD, ROLE_LEAD)
+"""Roles ``sys_factory_spawn`` (or the server, for a PL) creates a top-level member in."""
 
 STATE_ACTIVE: Final = "active"
 STATE_PAUSED: Final = "paused"

@@ -81,6 +81,25 @@ async def test_the_create_matches_sys_factory_spawn(
     )
 
 
+async def test_the_server_stamps_def_version_itself_after_the_create(
+    spawning: tuple[Cockpit, FakeCreates],
+) -> None:
+    cockpit, creates = spawning
+    cockpit.world.store.set_labels(cockpit.fid, {F.LABEL_DEF_VERSION: "3"})
+
+    await _add(cockpit)
+    await settle()
+
+    # A runner-token create may not carry server-only labels (create_guard).
+    [call] = creates.calls
+    assert F.LABEL_DEF_VERSION not in call["body"]["labels"]
+    row = cockpit.store.get_project(cockpit.fid, "db-version")
+    assert row is not None and row.pl_session_id
+    pl = cockpit.world.store.get_conversation(row.pl_session_id)
+    assert pl is not None
+    assert pl.labels[F.LABEL_DEF_VERSION] == "3"
+
+
 async def test_the_new_pl_is_briefed_logged_and_announced(
     spawning: tuple[Cockpit, FakeCreates],
 ) -> None:
@@ -387,7 +406,7 @@ async def test_spike_s1_an_in_process_create_matches_a_runner_create(
     from omnigent.db.utils import builtin_agent_id
     from omnigent.factory_spawn import member_create_body
     from omnigent.server.accounts_config import AccountsConfig
-    from omnigent.server.auth import UnifiedAuthProvider
+    from omnigent.server.auth import LEVEL_OWNER, UnifiedAuthProvider
     from omnigent.server.managed_hosts import ManagedLaunchTracker, parse_sandbox_config
     from omnigent.server.routes.sessions import create_sessions_router, routes_core
     from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
@@ -435,7 +454,16 @@ async def test_spike_s1_an_in_process_create_matches_a_runner_create(
     monkeypatch.setattr(routes_core, "_run_managed_launch", _record)
     token = provider.mint_runner_token("alice", spawn.RUNNER_TOKEN_TTL_S)
     assert token is not None
-    labels = {F.LABEL_ID: "f" * 32, F.LABEL_ROLE: "project_lead", F.LABEL_PROJECT: "db-version"}
+    # A runner-token create names a lead of the factory as its parent (create_guard).
+    root = conversations.create_conversation(title="Atlas", agent_id=agent_id)
+    conversations.set_labels(root.id, {F.LABEL_ID: root.id, F.LABEL_ROLE: F.ROLE_LEAD})
+    permissions.grant("alice", root.id, LEVEL_OWNER)
+    labels = {
+        F.LABEL_ID: root.id,
+        F.LABEL_ROLE: "project_lead",
+        F.LABEL_PARENT: root.id,
+        F.LABEL_PROJECT: "db-version",
+    }
     workspace = "https://github.com/caffeinelabs/app#temp-main"
     body = member_create_body(
         agent_id=agent_id, title="PL · db-version", labels=labels, workspaces=[workspace]

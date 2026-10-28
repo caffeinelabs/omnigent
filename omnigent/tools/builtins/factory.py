@@ -35,9 +35,9 @@ from omnigent.factory import (
     MIN_HEARTBEAT_S,
     PR_CLAIMS,
     PREVIEW_REPORT_STATES,
-    ROLE_LEAD,
     ROLE_PROJECT_LEAD,
     SENTINEL_VERDICTS,
+    SPAWN_ROLES,
     STAGES,
     STATES,
     SUMMARY_MAX_LEN,
@@ -70,7 +70,6 @@ FACTORY_TOOL_NAMES: Final = frozenset(
         SYS_FACTORY_CHAT,
     }
 )
-SPAWN_ROLES: Final = (ROLE_PROJECT_LEAD, ROLE_LEAD)
 AGENT_STAGE_ORDER: Final = [stage for stage in STAGES if stage in AGENT_STAGES]
 _SHA_PATTERN: Final = "^[0-9a-fA-F]{40}$"
 
