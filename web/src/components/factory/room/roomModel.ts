@@ -329,7 +329,8 @@ export function messageTime(epochS: number): string {
 
 export const DOCK_MIN_PX = 304;
 export const DOCK_MAX_PX = 560;
-export const DOCK_DEFAULT_PX = 352;
+/** 20 rem, as before the dock resized: the Overview's tables fit beside it at 1280 px. */
+export const DOCK_DEFAULT_PX = 320;
 export const DOCK_WIDTH_KEY = "omnigent.factory.roomDock.width";
 export const DOCK_TAB_KEY = "omnigent.factory.roomDock.tab";
 export const LAST_THREAD_KEY = "omnigent.factory.room.lastThread";

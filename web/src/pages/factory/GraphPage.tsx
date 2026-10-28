@@ -1,5 +1,5 @@
 /**
- * The Graph page (`/factory/:id/graph?kind=work|bus|flow|org`):
+ * The Graph page (`/factory/:id/graph?kind=work|bus|flow|org&scope=<project>`):
  *
  * - **Work**: each project's tasks in waves (columns), the critical path in
  *   bold, ready tasks ringed, blocked ones with their `D-n`, overlap
@@ -35,6 +35,7 @@ import {
   layoutFlow,
   layoutOrg,
   layoutWork,
+  workWarnings,
 } from "@/components/factory/graph/graphLayout";
 import { ProjectDependsDialog } from "@/components/factory/graph/ProjectDependsDialog";
 import { TaskInspector } from "@/components/factory/graph/TaskInspector";
@@ -90,7 +91,7 @@ function Legend({ items }: { items: [ReactNode, string][] }) {
     <ul className="flex flex-col gap-1">
       {items.map(([mark, label]) => (
         <li key={label} className="flex items-center gap-2">
-          <span className="inline-flex w-8 shrink-0 justify-center">{mark}</span>
+          <span className="inline-flex w-10 shrink-0 justify-center whitespace-nowrap">{mark}</span>
           <span className="text-muted-foreground">{label}</span>
         </li>
       ))}
@@ -193,10 +194,10 @@ function WorkView({
           <Legend
             items={[
               [
-                <span key="w" className="font-mono text-xs">
+                <span key="w" className="font-mono text-xs text-muted-foreground">
                   W1 W2
                 </span>,
-                "waves: columns of the topological order",
+                "waves: a column waits on the ones before it",
               ],
               [<Line key="c" className="border-foreground" />, "critical path (bold)"],
               [
@@ -228,7 +229,7 @@ function WorkView({
         {graph.warnings.length > 0 && (
           <SidePanel title={`Warnings · ${graph.warnings.length}`} testId="graph-work-warnings">
             <ul className="flex flex-col gap-1.5">
-              {graph.warnings.map((w) => (
+              {workWarnings(graph).map((w) => (
                 <li key={`${w.project}:${w.message}`} className="break-words text-warning">
                   {w.project && (
                     <span className="font-mono text-muted-foreground">#{w.project} </span>
@@ -251,7 +252,7 @@ function WorkView({
                 </span>
                 <ReasonGated
                   reason={gate("apply_projects").reason}
-                  className="ml-auto"
+                  className="ml-auto shrink-0"
                   testId="depends"
                 >
                   <Button
@@ -259,7 +260,8 @@ function WorkView({
                     variant="ghost"
                     onClick={() => setDepends(p.slug)}
                     data-testid={`graph-depends-${p.slug}`}
-                    className="text-muted-foreground"
+                    // On the button too: an allowed lever comes back unwrapped.
+                    className="ml-auto shrink-0 text-muted-foreground"
                   >
                     Depends on…
                   </Button>
@@ -298,10 +300,15 @@ function BusView({
   const badges = useMemo(() => busBadges(graph.edges, graph.until_ms), [graph]);
   const title = (id: string) => graph.nodes.find((n) => n.id === id)?.title ?? id;
   const messages = graph.edges.filter((e) => e.kind === "message");
+  const empty = messages.length === 0 && graph.edges.length === 0;
   return (
     <GraphGrid>
-      <div style={height ? { height } : undefined} className="min-h-[24rem]">
-        {messages.length === 0 && graph.edges.length === 0 ? (
+      {/* Empty: just the card, not a viewport-tall box with the panels far below. */}
+      <div
+        style={height && !empty ? { height } : undefined}
+        className={cn(!empty && "min-h-[24rem]")}
+      >
+        {empty ? (
           <EmptyState
             testId="graph-bus-empty"
             title="No messages in this window"
@@ -406,7 +413,8 @@ export function GraphPage() {
   const phone = useIsMobileViewport();
   const kind = (KINDS.find((k) => k.value === params.get("kind"))?.value ??
     "work") as GraphPageKind;
-  const project = params.get("project");
+  // Not `project=`: on any factory page that opens the project page.
+  const project = params.get("scope");
   const span = params.get("window") ?? (kind === "flow" ? "7d" : "1h");
   const selected = params.get("task");
   const [showDone, setShowDone] = useState(true);
@@ -458,7 +466,7 @@ export function GraphPage() {
           {(kind === "work" || kind === "flow") && (
             <Select
               value={project ?? ALL}
-              onValueChange={(v) => set({ project: v === ALL ? null : v, task: null })}
+              onValueChange={(v) => set({ scope: v === ALL ? null : v, task: null })}
             >
               <SelectTrigger
                 size="sm"

@@ -12,9 +12,13 @@ import { Button } from "@/components/ui/button";
 import { useFactory } from "@/hooks/useFactory";
 import type { DecisionView, OpenDecisionItem } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
+import { ProposalCard } from "../cards/ProposalCard";
 import { plural } from "../factoryFormat";
+import { useProposals } from "../room/roomQueries";
+import { FactoryViewerProvider } from "../shell/viewerCan";
 import { DecisionCard } from "./DecisionCard";
 import { orderOpenDecisions } from "./DecisionsRail";
+import { proposalOf } from "./decisionsPageModel";
 
 function InboxDecision({
   item,
@@ -29,8 +33,25 @@ function InboxDecision({
   answered: boolean;
   onAnswered: (decision: DecisionView) => void;
 }) {
-  const { data } = useFactory(answered ? item.factory.id : null);
+  const isProposal = item.decision.source === "proposal";
+  const { data } = useFactory(answered || isProposal ? item.factory.id : null);
+  const proposals = useProposals(item.factory.id, isProposal);
   const fresh = data?.decisions.find((d) => d.id === item.decision.id) ?? item.decision;
+  // A proposal decides on its own card: Edit & apply opens its form there.
+  const proposal = proposalOf(fresh, proposals.data?.data);
+  if (proposal) {
+    return (
+      <FactoryViewerProvider viewer={data?.viewer}>
+        <ProposalCard
+          factoryId={item.factory.id}
+          proposal={proposal}
+          snapshot={data ?? null}
+          factoryName={factoryName}
+          onDecided={() => onAnswered(fresh)}
+        />
+      </FactoryViewerProvider>
+    );
+  }
   return <DecisionCard decision={fresh} factoryName={factoryName} onAnswered={onAnswered} />;
 }
 

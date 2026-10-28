@@ -52,6 +52,37 @@ export function projectCycle(
   return visit(slug);
 }
 
+interface DependsRow {
+  slug: string;
+  title: string | null;
+  /** Why a current dependency is listed though it isn't a candidate. */
+  note: string | null;
+}
+
+/**
+ * What `slug` may depend on: the other active work projects, plus whatever it
+ * depends on now (closed, integration or gone), so those can be unchecked.
+ */
+export function dependsRows(snapshot: FactorySnapshot, slug: string): DependsRow[] {
+  const current = snapshot.projects.find((p) => p.slug === slug)?.depends_on ?? [];
+  const rows: DependsRow[] = [];
+  for (const p of snapshot.projects) {
+    if (p.slug === slug) continue;
+    const status = p.status ?? "active";
+    const candidate = status === "active" && p.kind !== "integration";
+    if (!candidate && !current.includes(p.slug)) continue;
+    rows.push({
+      slug: p.slug,
+      title: p.title,
+      note: candidate ? null : status !== "active" ? status : "integration",
+    });
+  }
+  for (const dep of current) {
+    if (!rows.some((r) => r.slug === dep)) rows.push({ slug: dep, title: null, note: "not found" });
+  }
+  return rows;
+}
+
 export function ProjectDependsDialog({
   snapshot,
   slug,
@@ -71,9 +102,7 @@ export function ProjectDependsDialog({
   const [why, setWhy] = useState("");
   const [sending, setSending] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
-  const candidates = snapshot.projects.filter(
-    (p) => p.slug !== slug && (p.status ?? "active") === "active" && p.kind !== "integration",
-  );
+  const candidates = useMemo(() => dependsRows(snapshot, slug), [snapshot, slug]);
   const cycle = useMemo(() => projectCycle(snapshot, slug, picked), [snapshot, slug, picked]);
   const unchanged =
     [...picked].sort().join(",") === [...(project?.depends_on ?? [])].sort().join(",");
@@ -138,7 +167,14 @@ export function ProjectDependsDialog({
                     className="size-3.5 accent-[var(--primary)]"
                   />
                   <span className="font-mono">#{p.slug}</span>
-                  <span className="min-w-0 truncate text-muted-foreground">{p.title}</span>
+                  {p.title && (
+                    <span className="min-w-0 truncate text-muted-foreground">{p.title}</span>
+                  )}
+                  {p.note && (
+                    <span className="ml-auto shrink-0 rounded-full bg-muted px-1.5 text-xs leading-5 text-muted-foreground">
+                      {p.note}
+                    </span>
+                  )}
                 </label>
               </li>
             );

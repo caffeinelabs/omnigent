@@ -159,6 +159,10 @@ export interface ProposalCardProps {
   clockOffsetS?: number;
   /** A compact card (the dock): the rationale and analysis fold. */
   compact?: boolean;
+  /** The factory's name, shown when cards from several factories mix (Inbox). */
+  factoryName?: string;
+  /** Called once this card applied or rejected the proposal (a list keeps the card). */
+  onDecided?: () => void;
   className?: string;
 }
 
@@ -168,6 +172,8 @@ export function ProposalCard({
   snapshot = null,
   clockOffsetS = 0,
   compact = false,
+  factoryName,
+  onDecided,
   className,
 }: ProposalCardProps) {
   const queryClient = useQueryClient();
@@ -185,6 +191,11 @@ export function ProposalCard({
   const [editing, setEditing] = useState(false);
   const state: ProposalCardState = proposalState(proposal, stale);
   const open = isOpen(state) && conflict == null;
+  // A lost race shows what the proposal became at once, not "Pending" until the refetch.
+  const chip: ProposalCardState =
+    conflict && isOpen(state) && conflict.status in STATE_LABEL
+      ? (conflict.status as ProposalCardState)
+      : state;
   const undoLeft = useCountdown(
     proposal.status === "applied" ? proposal.undo_until : null,
     clockOffsetS,
@@ -231,6 +242,7 @@ export function ProposalCard({
       setLocal(res.proposal);
       setRejecting(false);
       invalidate();
+      if (kind !== "undo") onDecided?.();
     } catch (err) {
       fail(err);
     } finally {
@@ -258,15 +270,16 @@ export function ProposalCard({
         <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
         <span className="font-mono font-medium">{proposal.ref}</span>
         <span className="text-muted-foreground">· {proposal.kind}</span>
+        {factoryName && <span className="text-muted-foreground">· {factoryName}</span>}
         <span className="min-w-0 truncate text-muted-foreground" data-testid="proposal-proposer">
-          · {proposerLine(proposal)}
+          · {proposerLine(proposal, snapshot)}
         </span>
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
           <span
             data-testid={`proposal-state-${proposal.ref}`}
-            className={cn("rounded-full px-1.5 text-xs leading-5", TONE_CHIP[STATE_TONE[state]])}
+            className={cn("rounded-full px-1.5 text-xs leading-5", TONE_CHIP[STATE_TONE[chip]])}
           >
-            {STATE_LABEL[state]}
+            {STATE_LABEL[chip]}
           </span>
           <span className="font-mono text-xs text-muted-foreground tabular-nums">
             {ageText(nowS - proposal.created_at)}
@@ -355,6 +368,16 @@ export function ProposalCard({
               Reject
             </Button>
           </ReasonGated>
+          {lever.reason && (
+            // Said inline, as decision cards do, not only in the tooltip.
+            <span
+              data-testid={`proposal-lever-reason-${proposal.ref}`}
+              title={lever.reason}
+              className="text-xs text-muted-foreground"
+            >
+              {proposalLever(proposal) === "apply_tuning" ? "for owners" : "for operators"}
+            </span>
+          )}
           {proposal.decision_ref && (
             <span className="ml-auto font-mono text-xs text-muted-foreground">
               {proposal.decision_ref}
@@ -402,6 +425,9 @@ export function ProposalCard({
         <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
           <p
             data-testid={`proposal-outcome-${proposal.ref}`}
+            title={
+              state === "refused" ? String(proposal.result?.error ?? "") || undefined : undefined
+            }
             className="min-w-0 flex-1 break-words text-muted-foreground"
           >
             {outcome}
@@ -446,6 +472,7 @@ export function ProposalCard({
             setLocal(stored);
             setError(null);
             invalidate();
+            onDecided?.();
           }}
           onRefused={fail}
         />

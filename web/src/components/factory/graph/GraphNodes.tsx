@@ -1,12 +1,13 @@
 /**
- * The Graph page's node renderers: project lanes and task cards (work),
- * agents and people (bus), pipeline stages (flow), and members (org). They
+ * The Graph page's node renderers: wave headers, project lanes and task
+ * cards (work), agents and people (bus), pipeline stages (flow), and members
+ * (org), plus the routed edge (project dependencies, loop back-edges). They
  * use the app's tokens, so both themes read the same.
  */
 
 import type { CSSProperties } from "react";
-import type { Node, NodeProps } from "@xyflow/react";
-import { Handle, Position } from "@xyflow/react";
+import type { Edge, EdgeProps, Node, NodeProps } from "@xyflow/react";
+import { BaseEdge, EdgeLabelRenderer, Handle, Position } from "@xyflow/react";
 import {
   BotIcon,
   CircleCheckIcon,
@@ -34,10 +35,13 @@ import type {
   LaneNodeData,
   OrgGroupData,
   OrgNodeData,
+  RouteEdgeData,
   TaskNodeData,
+  WaveHeadData,
 } from "./graphLayout";
 
-const HANDLE = "!size-1.5 !min-h-0 !min-w-0 !border-0 !bg-muted-foreground/40";
+// Edges meet the node's border; the anchor dots themselves would be noise.
+const HANDLE = "!size-1.5 !min-h-0 !min-w-0 !border-0 !bg-transparent !opacity-0";
 
 export const TASK_TONE: Record<TaskState, FactoryTone> = {
   planned: "muted",
@@ -56,8 +60,20 @@ const TASK_ICON: Partial<Record<TaskState, typeof CircleDotIcon>> = {
   planned: CircleDashedIcon,
 };
 
+/** A column header over the lanes: `W1`, `W2`, … */
+export function WaveHeadNode({ data }: NodeProps<Node<WaveHeadData>>) {
+  return (
+    <div
+      data-testid={`graph-wave-${data.label}`}
+      className="flex h-full w-full items-end justify-center border-b border-dashed border-border pb-0.5 font-mono text-xs font-medium text-muted-foreground"
+    >
+      {data.label}
+    </div>
+  );
+}
+
 export function LaneNode({ data }: NodeProps<Node<LaneNodeData>>) {
-  const { project } = data;
+  const { project, after } = data;
   const summary = project.summary;
   const closed = project.status != null && project.status !== "active";
   return (
@@ -68,10 +84,30 @@ export function LaneNode({ data }: NodeProps<Node<LaneNodeData>>) {
         closed && "opacity-60",
       )}
     >
-      <Handle id="top" type="target" position={Position.Top} className={HANDLE} />
+      <Handle id="right-in" type="target" position={Position.Right} className={HANDLE} />
+      <Handle id="right-out" type="source" position={Position.Right} className={HANDLE} />
       <p className="flex min-w-0 items-baseline gap-2 text-sm">
-        <span className="truncate font-medium">{project.title}</span>
-        <span className="font-mono text-xs text-muted-foreground">#{project.slug}</span>
+        <span className="min-w-0 truncate font-medium">{project.title}</span>
+        <span className="shrink-0 font-mono text-xs text-muted-foreground">#{project.slug}</span>
+        {after.length > 0 && (
+          <span
+            data-testid={`graph-lane-after-${project.slug}`}
+            className="min-w-0 truncate text-xs text-muted-foreground"
+          >
+            after{" "}
+            {after.map((a, i) => (
+              <span key={a.slug}>
+                {i > 0 && ", "}
+                <span className="font-mono">#{a.slug}</span>
+                {a.met ? (
+                  <span className="text-success"> ✓</span>
+                ) : (
+                  <span className="text-warning"> (waiting)</span>
+                )}
+              </span>
+            ))}
+          </span>
+        )}
         <span className="ml-auto shrink-0 text-xs text-muted-foreground tabular-nums">
           {summary.done}/{summary.total} done
           {summary.ready ? ` · ${summary.ready} ready` : ""}
@@ -81,7 +117,6 @@ export function LaneNode({ data }: NodeProps<Node<LaneNodeData>>) {
             : ""}
         </span>
       </p>
-      <Handle id="bottom" type="source" position={Position.Bottom} className={HANDLE} />
     </div>
   );
 }
@@ -196,14 +231,21 @@ export function BusNodeView({ data }: NodeProps<Node<BusNodeData>>) {
       ))}
       <Icon aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
       <div className="flex min-w-0 flex-1 flex-col">
-        <span className="truncate text-[13px] font-medium">{node.title}</span>
-        <span className="truncate text-muted-foreground tabular-nums">
-          {node.kind === "agent"
-            ? node.project
-              ? `#${node.project}`
-              : (node.role ?? "agent")
-            : node.kind}
-          {sent + received > 0 ? ` · ↑${sent} ↓${received}` : ""}
+        <span className="truncate text-[13px] font-medium" title={node.title}>
+          {node.title}
+        </span>
+        <span className="flex min-w-0 gap-1 text-muted-foreground">
+          <span className="min-w-0 truncate">
+            {node.kind === "agent"
+              ? node.project
+                ? `#${node.project}`
+                : (node.role ?? "agent")
+              : node.kind}
+          </span>
+          {/* The counts never truncate; the name gives way. */}
+          {sent + received > 0 && (
+            <span className="shrink-0 tabular-nums">{`↑${sent} ↓${received}`}</span>
+          )}
         </span>
       </div>
       {node.kind === "agent" && (
@@ -237,7 +279,7 @@ export function FlowNodeView({ data }: NodeProps<Node<FlowNodeData>>) {
   return (
     <div
       data-testid={`graph-flow-${node.id}`}
-      className="flex h-full w-full flex-col justify-center gap-0.5 rounded-lg border border-border bg-card px-3 text-xs shadow-sm"
+      className="flex h-full w-full flex-col justify-center gap-0.5 overflow-hidden rounded-lg border border-muted-foreground/35 bg-card px-3 text-xs whitespace-nowrap shadow-sm"
     >
       <Handle id="left" type="target" position={Position.Left} className={HANDLE} />
       <Handle
@@ -247,15 +289,17 @@ export function FlowNodeView({ data }: NodeProps<Node<FlowNodeData>>) {
         className={HANDLE}
         style={{ left: "35%" }}
       />
-      <p className="flex items-baseline justify-between gap-2">
-        <span className="text-[13px] font-medium">{FLOW_LABEL[node.id] ?? node.id}</span>
-        <span className="text-base font-semibold tabular-nums">{node.count}</span>
+      <p className="flex items-baseline justify-between gap-2 leading-5">
+        <span className="truncate text-[13px] font-medium">{FLOW_LABEL[node.id] ?? node.id}</span>
+        <span className="text-base leading-5 font-semibold tabular-nums">{node.count}</span>
       </p>
-      <p className="text-muted-foreground tabular-nums">
+      <p className="truncate leading-4 text-muted-foreground tabular-nums">
         p50 {node.p50_dwell_s != null ? formatElapsed(node.p50_dwell_s) : "—"}
         <span className="opacity-70"> (n={node.n})</span>
       </p>
-      <p className="text-muted-foreground tabular-nums">{formatUsd(node.usd) ?? "$—"}</p>
+      <p className="truncate leading-4 text-muted-foreground tabular-nums">
+        {formatUsd(node.usd) ?? "$—"}
+      </p>
       <Handle id="right" type="source" position={Position.Right} className={HANDLE} />
       <Handle
         id="bottom"
@@ -305,7 +349,85 @@ export function OrgNodeView({ data }: NodeProps<Node<OrgNodeData>>) {
   );
 }
 
+/** `M…` through `points` with corners rounded at radius `r`. */
+export function roundedPath(points: readonly { x: number; y: number }[], r = 6): string {
+  if (points.length === 0) return "";
+  const [first, ...rest] = points;
+  let d = `M ${first!.x} ${first!.y}`;
+  for (let i = 0; i < rest.length; i += 1) {
+    const at = rest[i]!;
+    const next = rest[i + 1];
+    const prev = i === 0 ? first! : rest[i - 1]!;
+    if (!next) {
+      d += ` L ${at.x} ${at.y}`;
+      break;
+    }
+    const inLen = Math.hypot(at.x - prev.x, at.y - prev.y);
+    const outLen = Math.hypot(next.x - at.x, next.y - at.y);
+    const k = Math.min(r, inLen / 2, outLen / 2);
+    if (k <= 0) {
+      d += ` L ${at.x} ${at.y}`;
+      continue;
+    }
+    const bx = at.x - ((at.x - prev.x) / inLen) * k;
+    const by = at.y - ((at.y - prev.y) / inLen) * k;
+    const ax = at.x + ((next.x - at.x) / outLen) * k;
+    const ay = at.y + ((next.y - at.y) / outLen) * k;
+    d += ` L ${bx} ${by} Q ${at.x} ${at.y} ${ax} ${ay}`;
+  }
+  return d;
+}
+
+/** A closed arrowhead at the last point, pointing along the last segment. */
+function arrowHead(points: readonly { x: number; y: number }[], size = 6): string | null {
+  const tip = points[points.length - 1];
+  const from = points[points.length - 2];
+  if (!tip || !from) return null;
+  const len = Math.hypot(tip.x - from.x, tip.y - from.y) || 1;
+  const ux = (tip.x - from.x) / len;
+  const uy = (tip.y - from.y) / len;
+  const bx = tip.x - ux * size;
+  const by = tip.y - uy * size;
+  const half = size * 0.6;
+  return `M ${tip.x} ${tip.y} L ${bx - uy * half} ${by + ux * half} L ${bx + uy * half} ${by - ux * half} Z`;
+}
+
+/**
+ * An edge drawn along the layout's own corners (`data.points`), so loops and
+ * project dependencies keep their tracks; its label sits right of `labelAt`.
+ */
+export function RouteEdge({ id, data, style }: EdgeProps<Edge<RouteEdgeData>>) {
+  const points = data?.points ?? [];
+  const head = arrowHead(points);
+  const stroke = (style?.stroke as string | undefined) ?? "var(--muted-foreground)";
+  return (
+    <>
+      <BaseEdge id={id} path={roundedPath(points)} style={style} />
+      {head && <path d={head} fill={stroke} stroke="none" />}
+      {data?.label && data.labelAt && (
+        <EdgeLabelRenderer>
+          <div
+            data-testid={`graph-edge-label-${id}`}
+            className={cn(
+              "nodrag nopan pointer-events-none absolute top-0 left-0 rounded bg-card px-1 font-mono text-[11px] leading-4 whitespace-nowrap",
+              data.kind === "back" ? "text-warning" : "text-muted-foreground",
+            )}
+            style={{
+              transform: `translate(${data.labelAt.x}px, ${data.labelAt.y}px) translateY(-50%)`,
+            }}
+          >
+            {data.label}
+          </div>
+        </EdgeLabelRenderer>
+      )}
+    </>
+  );
+}
+
+export const GRAPH_EDGE_TYPES = { route: RouteEdge };
+
 export const GRAPH_NODE_TYPES = {
+  waveHead: WaveHeadNode,
   lane: LaneNode,
   task: TaskNode,
   bus: BusNodeView,

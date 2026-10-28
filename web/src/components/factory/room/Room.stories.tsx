@@ -229,7 +229,37 @@ export const LoadError = room("/room", { room: { messages: { error: 503 } } });
 /** No threads yet besides the fixed ones (a factory just started). */
 export const NewFactory = room("/room", {
   room: {
-    threads: roomThreads().filter((t) => t.kind === "factory" || t.kind === "improvements"),
+    // The thread being read has nothing unread.
+    threads: roomThreads()
+      .filter((t) => t.kind === "factory" || t.kind === "improvements")
+      .map((t) => (t.kind === "factory" ? { ...t, unread: 0 } : t)),
     messages: roomMessages("factory").slice(0, 1),
+  },
+});
+
+const projectThread = () => roomThreads().find((t) => t.kind === "project")!;
+
+/** Many threads: 34 projects (long slugs too) and 18 PR threads; the list scrolls and truncates. */
+export const ManyThreads = room("/room", {
+  room: {
+    threads: [
+      ...roomThreads(),
+      ...Array.from({ length: 28 }, (_, i) => ({
+        ...projectThread(),
+        key: `project:scale-${i}`,
+        title: `#${i % 5 === 0 ? `a-rather-long-project-slug-number-${i}` : `scale-${i}`}`,
+        project_slug: `scale-${i}`,
+        unread: i % 7 === 0 ? 12 : 0,
+      })),
+      ...Array.from({ length: 18 }, (_, i) => ({
+        ...projectThread(),
+        key: `pr:scale${String(i).padStart(28, "0")}`,
+        kind: "pr" as const,
+        title: `!${9700 + i}`,
+        project_slug: `scale-${i}`,
+        pr_number: 9700 + i,
+        unread: i % 5 === 0 ? 3 : 0,
+      })),
+    ],
   },
 });

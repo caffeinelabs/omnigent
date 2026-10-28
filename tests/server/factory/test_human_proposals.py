@@ -103,3 +103,27 @@ async def test_only_operators_file_and_only_people(cockpit: Cockpit) -> None:
     assert (runner.status_code, error_code(runner)) == (403, "human_only")
     assert empty.status_code == 400
     assert cockpit.store.list_proposals(cockpit.fid) == []
+
+
+async def test_a_bogus_thread_is_refused_and_a_spelled_one_is_canonical(cockpit: Cockpit) -> None:
+    bogus = await _file(cockpit, _depends("settings-row", "api-version"), thread="nowhere")
+    spelled = await _file(cockpit, _depends("settings-row", "api-version"), thread="#settings-row")
+
+    assert (bogus.status_code, error_code(bogus)) == (400, "invalid_thread")
+    assert spelled.status_code == 201, spelled.text
+    proposal = spelled.json()["proposal"]
+    assert proposal["thread"] == "project:settings-row"
+    decision = cockpit.store.get_decision(proposal["decision_id"])
+    assert decision is not None and decision.thread == "project:settings-row"
+
+
+async def test_filing_the_same_edit_twice_returns_the_pending_one(cockpit: Cockpit) -> None:
+    first = await _file(cockpit, _depends("settings-row", "api-version"))
+    again = await _file(cockpit, _depends("settings-row", "api-version"))
+    other = await _file(cockpit, _depends("settings-row", "api-version"), user="carol")
+
+    assert first.status_code == 201 and again.status_code == 201
+    assert again.json()["proposal"]["ref"] == "C-1"
+    assert again.json()["decision"] == first.json()["decision"]
+    assert other.json()["proposal"]["ref"] == "C-2"
+    assert [p.number for p in cockpit.store.list_proposals(cockpit.fid)] == [2, 1]

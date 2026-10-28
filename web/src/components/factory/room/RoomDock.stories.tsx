@@ -51,6 +51,23 @@ function body(canvasElement: HTMLElement) {
   return within(canvasElement.ownerDocument.body);
 }
 
+type Play = NonNullable<Story["play"]>;
+
+/**
+ * `play` only where its control shows: the dock from 1280 px, the sheet
+ * between 768 and 1280. Elsewhere (a phone-width capture) the story stays
+ * as rendered instead of failing.
+ */
+function only(query: string, play: Play): Play {
+  return async (context) => {
+    const view = context.canvasElement.ownerDocument.defaultView;
+    if (!view?.matchMedia(query).matches) return;
+    await play(context);
+  };
+}
+const DOCK_QUERY = "(min-width: 1280px)";
+const SHEET_QUERY = "(min-width: 768px) and (max-width: 1279.98px)";
+
 const meta = {
   title: "Factory/Room dock",
   component: FactoryLayout,
@@ -75,24 +92,41 @@ export const ProjectPageDark = dock("/projects/db-version", { theme: "dark" });
 export const PrPage = dock(`/prs/${PR_9631}`);
 
 /** The thread switcher open: every thread with its unread count. */
-export const ThreadSwitcher = dock("", {}, async ({ canvasElement }) => {
-  fireEvent.pointerDown(
-    await body(canvasElement).findByTestId("room-thread-switcher", {}, { timeout: 6000 }),
-    {
-      button: 0,
-      ctrlKey: false,
-    },
-  );
-  await body(canvasElement).findByTestId("room-switch-project:db-version", {}, { timeout: 6000 });
-});
+export const ThreadSwitcher = dock(
+  "",
+  {},
+  only(DOCK_QUERY, async ({ canvasElement }) => {
+    fireEvent.pointerDown(
+      await body(canvasElement).findByTestId("room-thread-switcher", {}, { timeout: 6000 }),
+      { button: 0, ctrlKey: false },
+    );
+    await body(canvasElement).findByTestId("room-switch-project:db-version", {}, { timeout: 6000 });
+  }),
+);
 
 /** The Decisions tab: the rail, this page's project first. */
-export const DecisionsTab = dock("/projects/db-version", {}, async ({ canvasElement }) => {
-  fireEvent.mouseDown(
-    await body(canvasElement).findByTestId("room-dock-tab-decisions", {}, { timeout: 6000 }),
-  );
-  await body(canvasElement).findByTestId("decision-card-D-2", {}, { timeout: 6000 });
-});
+export const DecisionsTab = dock(
+  "/projects/db-version",
+  {},
+  only(DOCK_QUERY, async ({ canvasElement }) => {
+    fireEvent.mouseDown(
+      await body(canvasElement).findByTestId("room-dock-tab-decisions", {}, { timeout: 6000 }),
+    );
+    await body(canvasElement).findByTestId("decision-card-D-2", {}, { timeout: 6000 });
+  }),
+);
+
+/** The Decisions tab on the Overview: a proposal decides on its own card. */
+export const DecisionsTabProposal = dock(
+  "",
+  {},
+  only(DOCK_QUERY, async ({ canvasElement }) => {
+    fireEvent.mouseDown(
+      await body(canvasElement).findByTestId("room-dock-tab-decisions", {}, { timeout: 6000 }),
+    );
+    await body(canvasElement).findByTestId("proposal-card-C-4", {}, { timeout: 6000 });
+  }),
+);
 
 /** Dragged to its narrowest: cards and the composer still fit. */
 export const Narrow = dock("/projects/db-version", { width: DOCK_MIN_PX });
@@ -113,10 +147,16 @@ export const Busy = dock("", {
 export const SheetButtonTablet = dock("");
 
 /** The sheet open below 1280 px. */
-export const SheetOpenTablet = dock("", {}, async ({ canvasElement }) => {
-  fireEvent.click(await body(canvasElement).findByTestId("room-sheet-open", {}, { timeout: 6000 }));
-  await body(canvasElement).findByTestId("room-sheet", {}, { timeout: 6000 });
-});
+export const SheetOpenTablet = dock(
+  "",
+  {},
+  only(SHEET_QUERY, async ({ canvasElement }) => {
+    fireEvent.click(
+      await body(canvasElement).findByTestId("room-sheet-open", {}, { timeout: 6000 }),
+    );
+    await body(canvasElement).findByTestId("room-sheet", {}, { timeout: 6000 });
+  }),
+);
 
 export const SheetOpenTabletDark = dock("", { theme: "dark" }, SheetOpenTablet.play);
 

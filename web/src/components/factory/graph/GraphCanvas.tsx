@@ -16,7 +16,7 @@ import {
 } from "@xyflow/react";
 import { ZoomControls } from "@/shell/SubagentsGraphView";
 import { cn } from "@/lib/utils";
-import { GRAPH_NODE_TYPES } from "./GraphNodes";
+import { GRAPH_EDGE_TYPES, GRAPH_NODE_TYPES } from "./GraphNodes";
 
 import "@xyflow/react/dist/style.css";
 
@@ -47,9 +47,10 @@ const FIT_PADDING = 0.12;
 const EDGE_GAP_PX = 16;
 
 /**
- * The first view of a node set: fit, but never below `minZoom`, so a big
- * graph opens readable, to pan. One that still overflows the canvas starts
- * at its top-left corner (lane titles, the first wave) rather than centred.
+ * The first view of a node set: fit, but never below `minZoom` (near 1:1, as
+ * the nodes' type is already small), so a big graph opens readable, to pan.
+ * One that still overflows the canvas starts at its top-left corner (lane
+ * titles, the first wave) rather than centred.
  */
 function InitialView({ minZoom, fitKey }: { minZoom: number; fitKey: string }) {
   const { getNodes, getNodesBounds, setViewport } = useReactFlow();
@@ -91,7 +92,7 @@ export function GraphCanvas({
   testId,
   className,
   minZoom = 0.15,
-  fitMinZoom = 0.55,
+  fitMinZoom = 0.9,
 }: {
   nodes: Node[];
   edges: Edge[];
@@ -120,6 +121,7 @@ export function GraphCanvas({
           nodes={nodes}
           edges={toned}
           nodeTypes={GRAPH_NODE_TYPES}
+          edgeTypes={GRAPH_EDGE_TYPES}
           onNodeClick={onNodeClick}
           panOnDrag
           panOnScroll

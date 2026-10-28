@@ -37,6 +37,34 @@ describe("proposalState", () => {
     const c2 = roomProposals().find((p) => p.ref === "C-2")!;
     expect(proposalState(c2)).toBe("auto_applied");
   });
+
+  it.each([
+    ["an agent applying its own proposal", "agent", "pl-db", "pl-db", "auto_applied"],
+    [
+      "a human applying their own proposal",
+      "human",
+      "alice@caffeine.ai",
+      "alice@caffeine.ai",
+      "applied",
+    ],
+    ["a human applying an agent's proposal", "agent", "pl-db", "alice@caffeine.ai", "applied"],
+    [
+      "the server applying a human's proposal",
+      "human",
+      "alice@caffeine.ai",
+      "server",
+      "auto_applied",
+    ],
+  ] as const)("reads %s as %s", (_label, kind, author, decidedBy, expected) => {
+    const p = {
+      ...proposalInState("applied", NOW),
+      approval: "operator" as const,
+      author_kind: kind,
+      author,
+      decided_by: decidedBy,
+    };
+    expect(proposalState(p)).toBe(expected);
+  });
 });
 
 describe("changeRows", () => {
@@ -95,6 +123,21 @@ describe("lines and levers", () => {
     expect(proposerLine(proposalInState("pending"))).toBe("by Atlas for luka");
   });
 
+  it("names a co-signer by its member title, not its session id", () => {
+    const snapshot = round3Snapshot();
+    const lead = snapshot.members.find((m) => m.session_id !== snapshot.factory.root_session_id)!;
+    const p = { ...proposalInState("pending"), on_behalf_of: null };
+    expect(proposerLine({ ...p, cosigned_by: snapshot.factory.root_session_id }, snapshot)).toBe(
+      "by Atlas, co-signed Atlas",
+    );
+    expect(proposerLine({ ...p, cosigned_by: lead.session_id }, snapshot)).toBe(
+      `by Atlas, co-signed ${lead.title}`,
+    );
+    expect(proposerLine({ ...p, cosigned_by: "0123abcd" }, null)).toBe(
+      "by Atlas, co-signed another agent",
+    );
+  });
+
   it("sums the planner's analysis", () => {
     expect(analysisLine(proposalInState("pending").analysis)).toBe(
       "planner: 2 hub files · est 5 PRs",
@@ -119,7 +162,11 @@ describe("lines and levers", () => {
     expect(outcomeLine(proposalInState("rejected"), "rejected")).toBe(
       "Rejected by luka: “billing waits for Q1; keep the API contract stable”",
     );
-    expect(outcomeLine(proposalInState("refused"), "refused")).toBe("Refused: over_caps");
+    expect(outcomeLine(proposalInState("refused"), "refused")).toBe(
+      "Refused: the factory is at its project or pod limit",
+    );
+    const crashed = { ...proposalInState("refused"), result: { error: "RuntimeError" } };
+    expect(outcomeLine(crashed, "refused")).toBe("Refused: the server could not apply it");
     expect(outcomeLine(proposalInState("undone"), "undone")).toBe("Undone by mia");
   });
 

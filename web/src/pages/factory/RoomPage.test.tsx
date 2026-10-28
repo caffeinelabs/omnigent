@@ -240,6 +240,16 @@ describe("Decisions page", () => {
     expect(within(mine).getByTestId("decision-assign-bar-D-2")).toHaveTextContent("for you");
   });
 
+  it("disables Assign with Claim for a viewer, and on an owners' decision for an operator", async () => {
+    const viewer = open("/decisions", { role: "viewer" });
+    expect(await screen.findByTestId("decision-assign-D-2")).toBeDisabled();
+    expect(screen.getByTestId("decision-claim-D-2")).toBeDisabled();
+    viewer.unmount();
+    open("/decisions", { role: "operator" });
+    expect(await screen.findByTestId("decision-assign-D-34")).toBeDisabled();
+    expect(screen.getByTestId("decision-assign-D-2")).toBeEnabled();
+  });
+
   it("filters by source", async () => {
     open("/decisions");
     await screen.findByTestId("factory-decisions-page");
@@ -268,6 +278,22 @@ describe("Decisions page", () => {
   });
 });
 
+describe("Dock decisions", () => {
+  it("draws a proposal as its card, whose Edit & apply opens the form without answering", async () => {
+    open("", { role: "operator" });
+    const dock = await screen.findByTestId("room-dock");
+    fireEvent.mouseDown(within(dock).getByTestId("room-dock-tab-decisions"));
+    const card = await within(dock).findByTestId("proposal-card-C-4");
+    expect(within(dock).queryByTestId("decision-card-D-33")).toBeNull();
+    fireEvent.click(within(card).getByTestId("proposal-edit-C-4"));
+    expect(await screen.findByTestId("edit-apply-dialog")).toBeInTheDocument();
+    expect(server.calls.some((c) => c.method === "POST" && c.path.endsWith("/answer"))).toBe(false);
+    expect(server.calls.some((c) => c.method === "POST" && c.path.includes("/proposals/"))).toBe(
+      false,
+    );
+  });
+});
+
 describe("Graph page", () => {
   it("draws the work graph and opens a task's inspector", async () => {
     vi.stubGlobal(
@@ -279,11 +305,33 @@ describe("Graph page", () => {
       },
     );
     open("/graph?task=T-4");
-    expect(await screen.findByTestId("graph-work")).toHaveAttribute("data-nodes", "16");
+    // 11 tasks in 5 lanes under 3 wave headers.
+    expect(await screen.findByTestId("graph-work")).toHaveAttribute("data-nodes", "19");
     const inspector = await screen.findByTestId("graph-task-inspector");
     expect(inspector).toHaveAttribute("data-task", "T-4");
     expect(inspector).toHaveTextContent("critical path");
     expect(within(inspector).getByTestId("graph-task-card")).toBeEnabled();
+  });
+
+  it("scopes to one project without leaving the Graph", async () => {
+    vi.stubGlobal(
+      "ResizeObserver",
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    open("/graph?scope=db-version");
+    expect(await screen.findByTestId("factory-graph-page")).toBeInTheDocument();
+    await waitFor(() =>
+      expect(
+        server.calls.some(
+          (c) => c.path.includes("/graph?") && c.path.includes("project=db-version"),
+        ),
+      ).toBe(true),
+    );
+    expect(screen.queryByTestId("project-page-db-version")).toBeNull();
   });
 
   it("switches to the bus, flow and org graphs", async () => {

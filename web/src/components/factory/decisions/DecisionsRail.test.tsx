@@ -68,6 +68,20 @@ beforeEach(() => {
 });
 
 describe("DecisionsRail", () => {
+  it("links a proposal's Edit & apply to its card instead of answering it unedited", () => {
+    const proposal = round3Snapshot().decisions.find((d) => d.source === "proposal")!;
+    const { rail } = renderRail([proposal]);
+    const edit = within(rail).getByTestId(`decision-option-${proposal.ref}-1`);
+    expect(edit.tagName).toBe("A");
+    expect(edit).toHaveAttribute(
+      "href",
+      `/factory/${proposal.factory_id}/decisions?decision=${proposal.ref}`,
+    );
+    fireEvent.click(edit);
+    fireEvent.keyDown(within(rail).getByTestId(`decision-card-${proposal.ref}`), { key: "2" });
+    expect(authenticatedFetch).not.toHaveBeenCalled();
+  });
+
   it("says nothing needs the human when nothing is open", () => {
     const { rail } = renderRail([]);
     expect(within(rail).getByTestId("decisions-empty")).toHaveTextContent(

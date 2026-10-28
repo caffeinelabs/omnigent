@@ -24,9 +24,11 @@ import {
   SheetTitle,
 } from "@/components/ui/sheet";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import type { FactorySnapshot } from "@/lib/factoryApi";
+import type { DecisionView, FactorySnapshot } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
+import { ProposalCard } from "../cards/ProposalCard";
 import { DecisionsRail } from "../decisions/DecisionsRail";
+import { proposalOf } from "../decisions/decisionsPageModel";
 import { DOCK_SCROLLER_ATTRIBUTE } from "../shell/scroll";
 import type { FactoryLocation } from "../shell/shellRoutes";
 import {
@@ -40,7 +42,7 @@ import {
   saveLastThread,
   unreadTotal,
 } from "./roomModel";
-import { useRoomThreads } from "./roomQueries";
+import { useProposals, useRoomThreads } from "./roomQueries";
 import { ThreadSwitcher } from "./RoomThreadList";
 import { RoomThreadView } from "./RoomThreadView";
 
@@ -176,6 +178,25 @@ export function RoomDock({
   const [thread, pickThread] = useDockThread(snapshot, location);
   const threads = useRoomThreads(snapshot.factory.id);
   const open = snapshot.decisions.filter((d) => d.status === "open").length;
+  const proposals = useProposals(
+    snapshot.factory.id,
+    snapshot.decisions.some((d) => d.source === "proposal"),
+  );
+  // A proposal decides on its own card: Edit & apply opens its form there.
+  const proposalCard = (decision: DecisionView, onAnswered: (d: DecisionView) => void) => {
+    const proposal = proposalOf(decision, proposals.data?.data);
+    if (!proposal) return null;
+    return (
+      <ProposalCard
+        factoryId={snapshot.factory.id}
+        proposal={proposal}
+        snapshot={snapshot}
+        clockOffsetS={clockOffsetS}
+        compact
+        onDecided={() => onAnswered(decision)}
+      />
+    );
+  };
   // A `?decision=` link opens the Decisions tab to show it.
   useEffect(() => {
     if (highlightDecision) setTab("decisions");
@@ -195,7 +216,7 @@ export function RoomDock({
     >
       <TabsList
         variant="line"
-        className="h-8 w-full shrink-0 justify-start gap-3 border-b border-border bg-background"
+        className="h-8 w-full shrink-0 justify-start gap-3 border-b border-border bg-transparent"
       >
         <TabsTrigger value="room" data-testid="room-dock-tab-room" className="flex-none px-0.5">
           Room
@@ -250,6 +271,7 @@ export function RoomDock({
           pinProject={pageProjectSlug(snapshot, location)}
           clockOffsetS={clockOffsetS}
           hideHeading
+          renderCard={proposalCard}
         />
       </TabsContent>
     </Tabs>

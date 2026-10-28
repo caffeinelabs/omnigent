@@ -99,7 +99,7 @@ describe("ProposalCard states", () => {
   it.each([
     ["applied", "Applied by mia · spawning billing-schema"],
     ["auto_applied", "Applied on its own (autonomy) · spawning billing-schema"],
-    ["refused", "Refused: over_caps"],
+    ["refused", "Refused: the factory is at its project or pod limit"],
     ["rejected", "Rejected by luka: “billing waits for Q1; keep the API contract stable”"],
     ["expired", "Expired after 72 h without a decision"],
     ["withdrawn", "Withdrawn by its proposer"],
@@ -140,6 +140,7 @@ describe("ProposalCard states", () => {
     expect(await screen.findByTestId("proposal-outcome-C-4")).toHaveTextContent(
       "Already applied by mia",
     );
+    expect(screen.getByTestId("proposal-state-C-4")).toHaveTextContent("Applied");
   });
 
   it("disables every lever for a viewer, with who can", () => {

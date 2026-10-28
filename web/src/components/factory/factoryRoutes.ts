@@ -97,14 +97,17 @@ export function decisionsPageHref(
 
 export type GraphPageKind = "work" | "bus" | "flow" | "org";
 
-/** `/factory/<fid>/graph?kind=work` (Work when omitted), optionally one project or task. */
+/**
+ * `/factory/<fid>/graph?kind=work` (Work when omitted), optionally one
+ * project (`scope=`: a factory URL's `?project=` opens the project page) or task.
+ */
 export function graphPageHref(
   factoryId: string,
   options: { kind?: GraphPageKind; project?: string | null; task?: string | null } = {},
 ): string {
   const params: Record<string, string> = {};
   if (options.kind && options.kind !== "work") params.kind = options.kind;
-  if (options.project) params.project = options.project;
+  if (options.project) params.scope = options.project;
   if (options.task) params.task = options.task;
   return withQuery(`${factoryPageHref(factoryId)}/graph`, params);
 }

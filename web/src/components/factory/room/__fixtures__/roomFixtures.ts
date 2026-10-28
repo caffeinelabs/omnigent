@@ -695,7 +695,7 @@ export function roomRoutes(factoryId = ROOM_FID, options: RoomRouteOptions = {})
     [`${base}/status-digest`]: {
       body: {
         markdown:
-          "**Atlas factory** · active · 6 projects · 1 ready for human merge · 6 decisions open · $84.20\n- `api-version` ready · PL · api-version idle · !9630 ready for human merge\n- `db-version` building (blocked: D-31) · PL · db-version running",
+          "**Atlas factory** · active · 6 projects · 1 ready for human merge · 6 decisions open · $54.62\n- `api-version` ready · PL · api-version idle · !9630 ready for human merge\n- `db-version` building (blocked: D-31) · PL · db-version running",
         slug: null,
       },
     },

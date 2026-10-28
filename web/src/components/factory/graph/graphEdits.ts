@@ -13,6 +13,22 @@ export interface EditCheck {
   warnings: string[];
 }
 
+/**
+ * `message` with task keys named as the canvas names them (`route` → `T-4`):
+ * the server and these checks name tasks by key.
+ */
+export function keysToRefs(
+  tasks: readonly Pick<TaskView, "key" | "ref">[],
+  message: string,
+): string {
+  let out = message;
+  for (const task of tasks) {
+    const key = task.key.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    out = out.replace(new RegExp(`(^|[\\s(:])${key}(?=$|[\\s,;:)])`, "g"), `$1${task.ref}`);
+  }
+  return out;
+}
+
 const WILDCARD = /[*?[{]/;
 
 function normGlob(glob: string): string {

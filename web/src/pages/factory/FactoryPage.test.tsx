@@ -437,7 +437,7 @@ describe("FactoryPage · the Room dock", () => {
     const dock = await screen.findByTestId("room-dock");
     const input = await within(dock).findByTestId("room-composer-input");
     expect(within(dock).getByTestId("room-composer-identity")).toHaveTextContent(
-      "Posting as luka · owner",
+      "Posting as Luka · owner",
     );
     fireEvent.change(input, {
       target: { value: "@atlas add a project for a /health badge on settings" },

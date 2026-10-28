@@ -93,7 +93,10 @@ export function RoomContextPanel({
             </span>
           </Row>
           <Row label="Preview">
-            <PreviewPill pr={pr} project={project} nowS={nowS} />
+            {/* A flex box lets the pill shrink to the panel and truncate its text. */}
+            <span data-testid="room-context-preview" className="flex max-w-full min-w-0">
+              <PreviewPill pr={pr} project={project} nowS={nowS} />
+            </span>
           </Row>
           {pr.demo && (
             <Row label="Demo">

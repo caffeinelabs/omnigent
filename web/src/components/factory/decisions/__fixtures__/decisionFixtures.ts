@@ -129,7 +129,12 @@ export function inboxDecisionItems(): OpenDecisionItem[] {
     { factory: atlas, decision: relaunchFailedDecision() },
     {
       factory: docs,
-      decision: { ...lateQuestion(), factory_id: docs.id, project_slug: "docs-factory-envs" },
+      decision: {
+        ...lateQuestion(),
+        factory_id: docs.id,
+        project_slug: "docs-factory-envs",
+        asked_by_title: "PL · docs-factory-envs",
+      },
     },
   ];
 }

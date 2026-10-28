@@ -13,6 +13,8 @@ import {
   ORPHAN_AFTER_MS,
   TASK_W,
   type BusNodeData,
+  type LaneNodeData,
+  type RouteEdgeData,
   type TaskNodeData,
   busBadges,
   busWidth,
@@ -20,6 +22,7 @@ import {
   layoutFlow,
   layoutOrg,
   layoutWork,
+  workWarnings,
 } from "./graphLayout";
 
 describe("work graph layout (40 tasks)", () => {
@@ -66,12 +69,50 @@ describe("work graph layout (40 tasks)", () => {
     expect(layout.critical.size).toBe(20);
   });
 
+  it("routes project dependencies in a gutter right of the lanes, one track each", () => {
+    const projects = layout.edges.filter((e) => e.data?.kind === "depends_on");
+    const laneRight = Number(lanes[0]!.style!.width);
+    const tracks = projects.map((e) => (e.data as RouteEdgeData).points[1]!.x);
+    expect(new Set(tracks).size).toBe(projects.length);
+    for (const edge of projects) {
+      const points = (edge.data as RouteEdgeData).points;
+      // Out of the lane's right edge, down the gutter, back into the other lane.
+      expect(points[0]!.x).toBe(laneRight);
+      expect(points[1]!.x).toBeGreaterThan(laneRight);
+      expect(points[points.length - 1]!.x).toBe(laneRight);
+    }
+    expect(layout.width).toBeGreaterThan(laneRight);
+    const settings = lanes.find((l) => l.id === "lane:settings-row")!.data as LaneNodeData;
+    expect(settings.after).toEqual([
+      { slug: "api-version", met: true },
+      { slug: "db-version", met: false },
+    ]);
+  });
+
+  it("heads the columns W1…Wn above the lanes", () => {
+    const heads = layout.nodes.filter((n) => n.type === "waveHead");
+    expect(heads.map((n) => (n.data as { label: string }).label)).toEqual([
+      "W1",
+      "W2",
+      "W3",
+      "W4",
+      "W5",
+    ]);
+    expect(heads.every((n) => n.position.y < lanes[0]!.position.y)).toBe(true);
+    for (const node of tasks) {
+      const head = heads[(graph.layers[(node.data as TaskNodeData).task.id] ?? 1) - 1]!;
+      expect(node.position.x).toBe(head.position.x);
+    }
+  });
+
   it("rings ready tasks, chips decision blocks and flags overlaps", () => {
     const data = (ref: string) =>
       tasks.find((n) => (n.data as TaskNodeData).task.ref === ref)!.data as TaskNodeData;
     expect(data("T-5").ready).toBe(true);
     expect(data("T-8").waitsOn).toEqual([{ ref: "D-2", assignee: "mia@caffeine.ai" }]);
-    expect(data("T-6").warnings[0]).toMatch(/db-t6 and db-t7 both touch/);
+    // Warnings name tasks as the canvas does.
+    expect(data("T-6").warnings[0]).toMatch(/^T-6 and T-7 both touch/);
+    expect(workWarnings(graph)[0]!.message).toMatch(/^T-6 and T-7 both touch/);
     expect(data("T-1").ready).toBe(false);
   });
 
@@ -169,8 +210,22 @@ describe("flow and org layouts", () => {
     ]);
     expect(new Set(layout.nodes.map((n) => n.position.y)).size).toBe(1);
     const back = layout.edges.filter((e) => e.id.startsWith("back:"));
-    expect(back.map((e) => e.label)).toEqual(["changes ×3", "CI fail ×2", "FAIL(env) ×1"]);
-    expect(back.every((e) => e.sourceHandle === "bottom")).toBe(true);
+    // The shortest loop on the top level, each on its own level.
+    expect(back.map((e) => e.label)).toEqual(["CI fail ×2", "changes ×3", "FAIL(env) ×1"]);
+    const points = back.map((e) => (e.data as RouteEdgeData).points);
+    const depths = points.map((p) => p[1]!.y);
+    expect(new Set(depths).size).toBe(3);
+    expect(depths).toEqual([...depths].sort((a, b) => a - b));
+    // Into Build, deeper loops land further left: no vertical crosses a run.
+    const into = points.map((p) => p[p.length - 1]!.x);
+    expect(into[2]!).toBeLessThan(into[1]!);
+    expect(into[1]!).toBeLessThan(into[0]!);
+    // Labels start right of their own loop's way down.
+    for (const edge of back) {
+      const data = edge.data as RouteEdgeData;
+      expect(data.labelAt!.x).toBeGreaterThan(data.points[0]!.x);
+      expect(data.labelAt!.y).toBe(data.points[1]!.y);
+    }
   });
 
   it("draws every member at any depth, one column per project", () => {

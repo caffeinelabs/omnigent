@@ -105,7 +105,7 @@ export function IssueCard({
         {incident && issue.status === "open" && (
           <ReasonGated reason={gate("control").reason} testId="ack">
             <Button
-              size="xs"
+              size="sm"
               variant="outline"
               onClick={() => void ack()}
               disabled={busy}

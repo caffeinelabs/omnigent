@@ -35,11 +35,12 @@ export type ProposalCardState =
 export function proposalState(proposal: ProposalView, stale = false): ProposalCardState {
   const status: ProposalStatus = proposal.status;
   if ((status === "pending" || status === "awaiting_cosign") && stale) return "stale";
-  // Nobody clicked: the autonomy policy, the proposer itself, or the grace timer applied it.
+  // Nobody clicked: the autonomy policy, the proposing agent itself, or the
+  // grace timer applied it. A person applying their own proposal clicked.
   const unattended =
     proposal.approval === "auto" ||
     !proposal.decided_by ||
-    proposal.decided_by === proposal.author ||
+    (proposal.author_kind === "agent" && proposal.decided_by === proposal.author) ||
     proposal.decided_by === "server";
   if (status === "applied" && unattended) return "auto_applied";
   return status;
@@ -262,13 +263,29 @@ export function changeRows(proposal: ProposalView, snapshot: FactorySnapshot | n
   });
 }
 
-/** `"by Atlas for luka@caffeine.ai"`, `"by Lead B · Sentinel, co-signed Atlas"`. */
-export function proposerLine(proposal: ProposalView): string {
+/** A session id as the member it is (`Atlas`), or `another agent`. */
+function memberTitle(id: string, snapshot: FactorySnapshot | null): string {
+  if (!snapshot) return "another agent";
+  if (id === snapshot.factory.root_session_id || id === snapshot.factory.id) return "Atlas";
+  return snapshot.members.find((m) => m.session_id === id)?.title ?? "another agent";
+}
+
+/** `"by Atlas for luka"`, `"by Lead B · Sentinel, co-signed Atlas"`. */
+export function proposerLine(
+  proposal: ProposalView,
+  snapshot: FactorySnapshot | null = null,
+): string {
   const who =
-    proposal.author_title ?? (proposal.author_kind === "human" ? proposal.author : "an agent");
+    proposal.author_title ??
+    (proposal.author_kind === "human" ? proposal.author.split("@")[0] : "an agent");
   let line = `by ${who}`;
   if (proposal.on_behalf_of) line += ` for ${proposal.on_behalf_of.split("@")[0]}`;
-  if (proposal.cosigned_by) line += `, co-signed ${proposal.cosigned_by}`;
+  if (proposal.cosigned_by) {
+    const cosigner = proposal.cosigned_by.includes("@")
+      ? proposal.cosigned_by.split("@")[0]
+      : memberTitle(proposal.cosigned_by, snapshot);
+    line += `, co-signed ${cosigner}`;
+  }
   return line;
 }
 
@@ -326,6 +343,26 @@ export function createdProjects(proposal: ProposalView): Record<string, unknown>
     .map((op) => op.project as Record<string, unknown>);
 }
 
+/** A refusal's server code in words; unknown codes (exception names) read generically. */
+const REFUSAL_TEXT: Record<string, string> = {
+  over_caps: "the factory is at its project or pod limit",
+  cycle: "the dependencies would form a cycle",
+  slug_exists: "a project with that name already exists",
+  slug_taken: "a project with that name already exists",
+  slug_pending: "another pending proposal claims that name",
+  project_closed: "a project it changes is closed",
+  unknown_project: "a project it names no longer exists",
+  unknown_dependency: "it depends on a project that does not exist",
+  unmapped_prs: "open PRs were not mapped to a new project",
+  not_your_project: "the proposer may only change its own project",
+  stale_proposal: "a project changed since it was proposed",
+  invalid_body: "its changes were not valid",
+};
+
+export function refusalText(code: string | null): string {
+  return (code && REFUSAL_TEXT[code]) || "the server could not apply it";
+}
+
 /** What happened, in words, for a closed card's footer. */
 export function outcomeLine(proposal: ProposalView, state: ProposalCardState): string | null {
   const by = proposal.decided_by ? ` by ${proposal.decided_by.split("@")[0]}` : "";
@@ -344,7 +381,7 @@ export function outcomeLine(proposal: ProposalView, state: ProposalCardState): s
       return `Rejected${by}${note ? `: “${note}”` : ""}`;
     }
     case "refused":
-      return `Refused: ${str(result.error) ?? "the server could not apply it"}`;
+      return `Refused: ${refusalText(str(result.error))}`;
     case "expired":
       return "Expired after 72 h without a decision";
     case "withdrawn":

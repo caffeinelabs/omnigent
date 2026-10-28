@@ -32,7 +32,7 @@ interface FrameOptions {
   theme?: "light" | "dark";
   role?: ViewerRole;
   routes?: StoryRoutes;
-  /** Column width in px (the dock's is ~352). */
+  /** Column width in px (the dock's is 320 by default). */
   width?: number;
 }
 
@@ -149,7 +149,7 @@ export const ProposalPending = proposalStory(proposalInState("pending"));
 
 export const ProposalPendingDark = proposalStory(proposalInState("pending"), { theme: "dark" });
 
-export const ProposalPendingDock = proposalStory(proposalInState("pending"), { width: 352 });
+export const ProposalPendingDock = proposalStory(proposalInState("pending"), { width: 320 });
 
 export const ProposalPendingMobile: Story = {
   ...proposalStory(proposalInState("pending")),

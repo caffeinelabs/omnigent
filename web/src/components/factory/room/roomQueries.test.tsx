@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -144,6 +145,42 @@ describe("read marks", () => {
     expect(bus.count()).toBe(1);
     view.unmount();
     expect(bus.count()).toBe(0);
+  });
+
+  it("keeps an open channel under StrictMode's effect re-run", async () => {
+    const bus = fakeBroadcast();
+    setReadChannelFactory(bus.open);
+    let last: ReadChannel | null = null;
+    render(
+      <StrictMode>
+        <QueryClientProvider client={tab()}>
+          <Sync onChannel={(c) => (last = c)} />
+        </QueryClientProvider>
+      </StrictMode>,
+    );
+    await waitFor(() => expect(last).not.toBeNull());
+    expect(bus.count()).toBe(1);
+    const client = tab();
+    await markThreadRead(client, { factoryId: ROOM_FID, thread: "factory", lastSeq: 20 }, last);
+    expect(
+      authenticatedFetch.mock.calls.filter(([p]) => String(p).endsWith("/chat/reads")),
+    ).toHaveLength(1);
+  });
+
+  it("still moves the server's mark when the channel was closed", async () => {
+    const closed: ReadChannel = {
+      postMessage: () => {
+        throw new DOMException("BroadcastChannel is closed", "InvalidStateError");
+      },
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    const client = tab();
+    await markThreadRead(client, { factoryId: ROOM_FID, thread: "factory", lastSeq: 20 }, closed);
+    expect(unread(client, "factory")).toBe(0);
+    expect(
+      authenticatedFetch.mock.calls.filter(([p]) => String(p).endsWith("/chat/reads")),
+    ).toHaveLength(1);
   });
 
   it("marks an open, visible thread read when its newest message arrives", async () => {

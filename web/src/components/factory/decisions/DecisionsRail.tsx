@@ -6,7 +6,7 @@
  * and expired ones (`showClosed`).
  */
 
-import { type ReactNode, useState } from "react";
+import { Fragment, type ReactNode, useState } from "react";
 import { BanIcon, ChevronRightIcon, CircleCheckIcon } from "lucide-react";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { DecisionView } from "@/lib/factoryApi";
@@ -30,6 +30,15 @@ export interface DecisionsRailProps {
   hideHeading?: boolean;
   /** This project's open decisions lead (the dock on its page or its PR's). */
   pinProject?: string | null;
+  /**
+   * A card drawn in place of the decision card (the dock draws a proposal's
+   * as its ProposalCard), or null for the decision card; `onAnswered` keeps
+   * it in the rail once decided.
+   */
+  renderCard?: (
+    decision: DecisionView,
+    onAnswered: (decision: DecisionView) => void,
+  ) => ReactNode | null;
 }
 
 function matches(decision: DecisionView, id: string | null): boolean {
@@ -140,6 +149,7 @@ export function DecisionsRail({
   showClosed = false,
   hideHeading = false,
   pinProject = null,
+  renderCard,
 }: DecisionsRailProps) {
   // Answered from this rail: their cards stay (with the receipt) instead of folding away.
   const [mine, setMine] = useState<Record<string, DecisionView>>({});
@@ -172,15 +182,19 @@ export function DecisionsRail({
           Nothing needs you. Agents ask here instead of in chat.
         </p>
       )}
-      {cards.map((decision) => (
-        <DecisionCard
-          key={decision.id}
-          decision={decision}
-          highlighted={matches(decision, highlightId)}
-          onAnswered={remember}
-          clockOffsetS={clockOffsetS}
-        />
-      ))}
+      {cards.map((decision) => {
+        const custom = renderCard?.(decision, remember);
+        if (custom) return <Fragment key={decision.id}>{custom}</Fragment>;
+        return (
+          <DecisionCard
+            key={decision.id}
+            decision={decision}
+            highlighted={matches(decision, highlightId)}
+            onAnswered={remember}
+            clockOffsetS={clockOffsetS}
+          />
+        );
+      })}
       {answered.length > 0 && (
         <Fold testId="decisions-answered" label={`Answered (${answered.length})`}>
           {answered.map((d) => (
@@ -192,7 +206,7 @@ export function DecisionsRail({
               <p className="min-w-0 text-muted-foreground">
                 <span className="font-mono">{d.ref}</span>{" "}
                 <span className="text-foreground">“{answerLabel(d)}”</span>
-                {d.answered_by && ` · ${d.answered_by}`}
+                {d.answered_by && ` · ${d.answered_by.split("@")[0]}`}
               </p>
               <p className="line-clamp-1 text-muted-foreground" title={d.question}>
                 {d.question}

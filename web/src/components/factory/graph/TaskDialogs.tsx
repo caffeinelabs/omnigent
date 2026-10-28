@@ -32,7 +32,7 @@ import type { TaskHarness, TaskView } from "@/lib/factoryApi";
 import { addFactoryTask, patchFactoryTask } from "@/lib/factoryRoomApi";
 import { controlErrorMessage } from "../controls/controlModel";
 import { FieldRow, Segmented } from "../start/formParts";
-import { type EditCheck, checkTaskEdit, uniqueKey } from "./graphEdits";
+import { type EditCheck, checkTaskEdit, keysToRefs, uniqueKey } from "./graphEdits";
 
 export type TaskEditKind = "card" | "dependency" | "split";
 
@@ -42,20 +42,30 @@ const lines = (text: string) =>
     .map((l) => l.trim())
     .filter(Boolean);
 
-function CheckList({ check }: { check: EditCheck }) {
+function CheckList({
+  check,
+  tasks,
+}: {
+  check: EditCheck;
+  /** The project's tasks: messages name them by ref, as the canvas does. */
+  tasks: readonly TaskView[];
+}) {
   if (check.errors.length === 0 && check.warnings.length === 0) return null;
   return (
-    <ul data-testid="task-edit-check" className="flex flex-col gap-1 text-sm">
+    <ul
+      data-testid="task-edit-check"
+      className="flex max-h-32 shrink-0 flex-col gap-1 overflow-y-auto text-sm"
+    >
       {check.errors.map((e) => (
         <li key={e} data-kind="error" className="flex items-start gap-1.5 text-destructive">
           <CircleAlertIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-          {e}
+          {keysToRefs(tasks, e)}
         </li>
       ))}
       {check.warnings.map((w) => (
         <li key={w} data-kind="warning" className="flex items-start gap-1.5 text-warning">
           <TriangleAlertIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-          {w}
+          {keysToRefs(tasks, w)}
         </li>
       ))}
     </ul>
@@ -175,7 +185,7 @@ export function TaskEditDialog({
           acceptance: lines(acceptance),
           scope: lines(scope),
           priority,
-          ...(estimate.trim() ? { estimate_min: Number(estimate) } : {}),
+          ...(estimate.trim() ? { estimate_min: Math.round(Number(estimate)) } : {}),
           harness,
         });
         onDone?.(`${task.ref} updated; its PL gets a TASK EDIT`);
@@ -373,13 +383,14 @@ export function TaskEditDialog({
               </div>
             </FieldRow>
           )}
-          <CheckList check={check} />
-          {failure && (
-            <p role="alert" data-testid="task-edit-error" className="text-sm text-destructive">
-              {failure}
-            </p>
-          )}
         </div>
+        {/* Outside the scroller: the reason stays in view next to "Save anyway". */}
+        <CheckList check={check} tasks={projectTasks} />
+        {failure && (
+          <p role="alert" data-testid="task-edit-error" className="text-sm text-destructive">
+            {failure}
+          </p>
+        )}
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
@@ -391,7 +402,7 @@ export function TaskEditDialog({
             componentId={`factory.graph.task_${kind}`}
           >
             {sending && <Loader2Icon className="animate-spin" />}
-            {check.warnings.length > 0 ? "Save anyway" : "Save"}
+            {check.errors.length === 0 && check.warnings.length > 0 ? "Save anyway" : "Save"}
           </Button>
         </DialogFooter>
       </DialogContent>

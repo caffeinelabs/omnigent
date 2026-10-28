@@ -86,8 +86,18 @@ export const WorkTaskSelectedMobile = phone(graph("?task=T-4"));
 /** A viewer: the task's edits disabled, with who can. */
 export const WorkViewer = graph("?task=T-4", { role: "viewer" });
 
-/** + Dependency: a cycle blocks it before it is sent. */
+/** + Dependency: T-4 waiting on T-6 (which waits on T-4) is a cycle, blocked before it is sent. */
 export const WorkAddDependency = graph("?task=T-4", {}, async ({ canvasElement }) => {
+  const page = body(canvasElement);
+  fireEvent.click(await page.findByTestId("graph-task-dependency", {}, { timeout: 6000 }));
+  const dialog = await page.findByTestId("task-edit-dependency", {}, { timeout: 6000 });
+  fireEvent.keyDown(within(dialog).getByTestId("task-edit-dep"), { key: "ArrowDown" });
+  fireEvent.click(await page.findByRole("option", { name: /^T-6\b/ }, { timeout: 6000 }));
+  await within(dialog).findByTestId("task-edit-check", {}, { timeout: 6000 });
+});
+
+/** + Dependency, nothing picked yet: the picker. */
+export const WorkAddDependencyPicker = graph("?task=T-4", {}, async ({ canvasElement }) => {
   fireEvent.click(
     await body(canvasElement).findByTestId("graph-task-dependency", {}, { timeout: 6000 }),
   );
@@ -126,7 +136,7 @@ export const WorkProjectDepends = graph("", {}, async ({ canvasElement }) => {
 });
 
 /** One project's graph. */
-export const WorkOneProject = graph("?project=db-version");
+export const WorkOneProject = graph("?scope=db-version");
 
 /** No tasks yet. */
 export const WorkEmpty = graph("", {

@@ -55,15 +55,12 @@ function Group({
 }) {
   if (decisions.length === 0) return null;
   return (
-    <section
-      data-testid={testId}
-      aria-label={title}
-      className="@container flex min-w-0 flex-col gap-2"
-    >
+    <section data-testid={testId} aria-label={title} className="flex min-w-0 flex-col gap-2">
       <h3 className="text-sm font-medium text-muted-foreground">
         {title} <span className="tabular-nums">· {decisions.length}</span>
       </h3>
-      <ul className="grid min-w-0 grid-cols-1 items-start gap-3 @4xl:grid-cols-2">
+      {/* One column: cards of very different heights side by side leave holes. */}
+      <ul className="flex max-w-3xl min-w-0 flex-col gap-3">
         {decisions.map((d) => (
           <li key={d.id} className="min-w-0">
             {children(d)}

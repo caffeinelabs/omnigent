@@ -89,11 +89,11 @@ function Remedies({ factoryId, decision }: { factoryId: string; decision: Decisi
   if (decision.status !== "open") return null;
   return (
     <div className="flex min-w-0 flex-col gap-1">
-      <div className="flex flex-wrap items-center gap-1">
+      <div className="flex flex-wrap items-center gap-1.5">
         {decision.options.map((option) => (
           <ReasonGated key={option.id} reason={blocked} testId="remedy">
             <Button
-              size="xs"
+              size="sm"
               variant={option.recommended ? "default" : "outline"}
               onClick={() => void pick(option)}
               disabled={busy != null}

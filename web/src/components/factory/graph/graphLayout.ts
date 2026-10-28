@@ -1,14 +1,14 @@
 // Layouts of the four factory graphs for @xyflow/react, as pure functions of
 // the graph API's answers (tests pin them on fixtures):
 //
-// - work: one lane per project, its tasks in columns by layer (W1, W2, …),
-//   dependency and serialization edges, the critical path drawn bold, and
-//   project `depends_on` edges between lanes;
+// - work: one lane per project, its tasks in columns by layer under W1, W2,
+//   … headers, dependency and serialization edges, the critical path drawn
+//   bold, and project `depends_on` edges routed in a gutter right of the lanes;
 // - bus: humans on the left, then leads, project leads and their sub-agents,
 //   message edges as wide as their traffic, dashed when bounced or
 //   unanswered, red when an agent waits on a human; orphan and ping-pong badges;
 // - flow: the PR pipeline in a row with counts, p50 dwell and dollars per
-//   stage, loop back-edges curving under it with their counters;
+//   stage, each loop back-edge on its own level under it with its counter;
 // - org: every member and sub-agent at any depth, one column per project,
 //   indented by depth.
 
@@ -26,10 +26,11 @@ import type {
   WorkGraphResponse,
 } from "@/lib/factoryRoomApi";
 import { taskFinished } from "@/lib/factoryRoomApi";
+import { keysToRefs } from "./graphEdits";
 
 // ── Work ───────────────────────────────────────────────────────
 
-export const TASK_W = 196;
+export const TASK_W = 212;
 export const TASK_H = 58;
 export const COL_GAP = 52;
 export const ROW_GAP = 10;
@@ -37,6 +38,20 @@ export const LANE_PAD = 14;
 export const LANE_HEAD = 34;
 export const LANE_GAP = 22;
 export const LANE_MIN_W = 300;
+/** The W1…Wn header row above the lanes. */
+export const WAVE_HEAD = 26;
+/** Project dependency edges run in a gutter right of the lanes, one track each. */
+export const GUTTER_PAD = 16;
+export const GUTTER_TRACK = 12;
+
+/** A routed edge's corners in flow coordinates, and its label's anchor. */
+export interface RouteEdgeData extends Record<string, unknown> {
+  points: { x: number; y: number }[];
+  label?: string;
+  /** The label's left middle; it reads to the right of this point. */
+  labelAt?: { x: number; y: number };
+  kind?: string;
+}
 
 export interface TaskNodeData extends Record<string, unknown> {
   task: TaskView;
@@ -52,6 +67,12 @@ export interface TaskNodeData extends Record<string, unknown> {
 export interface LaneNodeData extends Record<string, unknown> {
   project: WorkGraphProject;
   columns: number;
+  /** The projects this one waits on (`met` once merged into the base). */
+  after: { slug: string; met: boolean }[];
+}
+
+export interface WaveHeadData extends Record<string, unknown> {
+  label: string;
 }
 
 export interface WorkLayout {
@@ -111,10 +132,35 @@ function warningsByTask(graph: WorkGraphResponse): Map<string, string[]> {
         (t) => t.key === key && (!warning.project || t.project_slug === warning.project),
       );
       if (!task) continue;
-      out.set(task.id, [...(out.get(task.id) ?? []), warning.message]);
+      const text = warningText(graph, warning.message, warning.project);
+      out.set(task.id, [...(out.get(task.id) ?? []), text]);
     }
   }
   return out;
+}
+
+/** What a project waits on, from its `depends_on` and the edges' `met`. */
+function afterOf(graph: WorkGraphResponse, project: WorkGraphProject): LaneNodeData["after"] {
+  return project.depends_on.map((slug) => ({
+    slug,
+    met: graph.project_edges.some((e) => e.from === slug && e.to === project.slug && e.met),
+  }));
+}
+
+/** Task keys in warning text as the canvas names them (`db-t6` → `T-6`). */
+function warningText(graph: WorkGraphResponse, message: string, project?: string): string {
+  return keysToRefs(
+    graph.tasks.filter((t) => !project || t.project_slug === project),
+    message,
+  );
+}
+
+/** The graph's warnings with task refs in place of keys. */
+export function workWarnings(graph: WorkGraphResponse): { project?: string; message: string }[] {
+  return graph.warnings.map((w) => ({
+    project: w.project,
+    message: warningText(graph, w.message, w.project),
+  }));
 }
 
 export function layoutWork(graph: WorkGraphResponse, options: WorkLayoutOptions = {}): WorkLayout {
@@ -128,7 +174,20 @@ export function layoutWork(graph: WorkGraphResponse, options: WorkLayoutOptions 
   const laneWidth = Math.max(LANE_MIN_W, LANE_PAD * 2 + columns * TASK_W + (columns - 1) * COL_GAP);
   const nodes: Node[] = [];
   const shown = new Set<string>();
-  let y = 0;
+  for (let col = 1; col <= columns; col += 1) {
+    nodes.push({
+      id: `wave:${col}`,
+      type: "waveHead",
+      position: { x: LANE_PAD + (col - 1) * (TASK_W + COL_GAP), y: 0 },
+      data: { label: `W${col}` } satisfies WaveHeadData,
+      style: { width: TASK_W, height: WAVE_HEAD - 8 },
+      draggable: false,
+      selectable: false,
+      zIndex: 0,
+    });
+  }
+  const laneTop = new Map<string, number>();
+  let y = WAVE_HEAD;
   for (const project of projects) {
     const tasks = live.filter(
       (t) => t.project_slug === project.slug && (showDone || !taskFinished(t.state)),
@@ -140,11 +199,12 @@ export function layoutWork(graph: WorkGraphResponse, options: WorkLayoutOptions 
     }
     const rows = Math.max(1, ...[...byLayer.values()].map((list) => list.length));
     const height = LANE_HEAD + rows * TASK_H + (rows - 1) * ROW_GAP + LANE_PAD;
+    laneTop.set(project.slug, y);
     nodes.push({
       id: `lane:${project.slug}`,
       type: "lane",
       position: { x: 0, y },
-      data: { project, columns } satisfies LaneNodeData,
+      data: { project, columns, after: afterOf(graph, project) } satisfies LaneNodeData,
       style: { width: laneWidth, height },
       draggable: false,
       selectable: false,
@@ -205,25 +265,58 @@ export function layoutWork(graph: WorkGraphResponse, options: WorkLayoutOptions 
       zIndex: 1,
     });
   }
-  const laneIds = new Set(projects.map((p) => p.slug));
-  for (const edge of graph.project_edges) {
-    if (!laneIds.has(edge.from) || !laneIds.has(edge.to)) continue;
+  // Shortest spans on the inner tracks, so tracks cross as little as they can.
+  const projectEdges = graph.project_edges
+    .filter((e) => laneTop.has(e.from) && laneTop.has(e.to))
+    .sort(
+      (a, b) =>
+        Math.abs(laneTop.get(a.from)! - laneTop.get(a.to)!) -
+          Math.abs(laneTop.get(b.from)! - laneTop.get(b.to)!) || a.from.localeCompare(b.from),
+    );
+  const outs = new Map<string, number>();
+  const ins = new Map<string, number>();
+  projectEdges.forEach((edge, track) => {
+    const out = outs.get(edge.from) ?? 0;
+    const into = ins.get(edge.to) ?? 0;
+    outs.set(edge.from, out + 1);
+    ins.set(edge.to, into + 1);
+    const gx = laneWidth + GUTTER_PAD + track * GUTTER_TRACK;
+    const sy = laneTop.get(edge.from)! + LANE_HEAD / 2 + out * 5;
+    const ty = laneTop.get(edge.to)! + LANE_HEAD / 2 - into * 5;
     edges.push({
       id: `project:${edge.from}>${edge.to}`,
       source: `lane:${edge.from}`,
       target: `lane:${edge.to}`,
-      sourceHandle: "bottom",
-      targetHandle: "top",
-      type: "smoothstep",
+      sourceHandle: "right-out",
+      targetHandle: "right-in",
+      type: "route",
       animated: !edge.met,
-      data: { kind: "depends_on", met: edge.met },
-      label: edge.met ? "depends on ✓" : "depends on",
+      data: {
+        kind: "depends_on",
+        met: edge.met,
+        points: [
+          { x: laneWidth, y: sy },
+          { x: gx, y: sy },
+          { x: gx, y: ty },
+          { x: laneWidth, y: ty },
+        ],
+      } satisfies RouteEdgeData & { met: boolean },
       className: "factory-edge-project",
-      style: { strokeWidth: 1.5, strokeDasharray: "6 4" },
+      style: { strokeWidth: 1.5, strokeDasharray: edge.met ? undefined : "6 4" },
       zIndex: 1,
     });
-  }
-  return { nodes, edges, columns, width: laneWidth, height: Math.max(0, y - LANE_GAP), critical };
+  });
+  const gutter = projectEdges.length
+    ? GUTTER_PAD + (projectEdges.length - 1) * GUTTER_TRACK + GUTTER_PAD
+    : 0;
+  return {
+    nodes,
+    edges,
+    columns,
+    width: laneWidth + gutter,
+    height: Math.max(0, y - LANE_GAP),
+    critical,
+  };
 }
 
 // ── Bus ────────────────────────────────────────────────────────
@@ -423,9 +516,12 @@ export function layoutBus(
 
 // ── Flow ───────────────────────────────────────────────────────
 
-export const FLOW_W = 132;
-export const FLOW_H = 76;
-const FLOW_GAP = 64;
+export const FLOW_W = 150;
+export const FLOW_H = 80;
+const FLOW_GAP = 52;
+/** Back-edges run under the row, one level each, this far apart. */
+export const FLOW_LEVEL = 24;
+const FLOW_DROP = 20;
 
 export interface FlowNodeData extends Record<string, unknown> {
   node: FlowNode;
@@ -440,6 +536,7 @@ export function layoutFlow(graph: FlowGraphResponse): { nodes: Node[]; edges: Ed
     data: { node } satisfies FlowNodeData,
     style: { width: FLOW_W, height: FLOW_H },
   }));
+  const xOf = (id: string) => index.get(id)! * (FLOW_W + FLOW_GAP);
   const edges: Edge[] = graph.edges.map((edge) => ({
     id: `fwd:${edge.from}>${edge.to}`,
     source: edge.from,
@@ -450,19 +547,51 @@ export function layoutFlow(graph: FlowGraphResponse): { nodes: Node[]; edges: Ed
     className: "factory-edge-open",
     style: { strokeWidth: 1.5 },
   }));
-  for (const back of graph.back_edges) {
-    if (!index.has(back.from) || !index.has(back.to)) continue;
+  // Shortest loops on the top level. Into a stage, deeper loops land further
+  // left; out of one, deeper loops leave further right: no two cross.
+  const backs = graph.back_edges
+    .filter((b) => index.has(b.from) && index.has(b.to))
+    .map((b) => ({ ...b, span: Math.abs(index.get(b.from)! - index.get(b.to)!) }))
+    .sort((a, b) => a.span - b.span || index.get(a.from)! - index.get(b.from)!);
+  const levelOf = new Map(backs.map((b, level) => [b, level]));
+  const inX = new Map<object, number>();
+  const outX = new Map<object, number>();
+  for (const node of graph.nodes) {
+    const incoming = backs.filter((b) => b.to === node.id);
+    incoming
+      .sort((a, b) => levelOf.get(b)! - levelOf.get(a)!)
+      .forEach((b, j) => inX.set(b, xOf(node.id) + FLOW_W * (0.14 + j * 0.11)));
+    const outgoing = backs.filter((b) => b.from === node.id);
+    outgoing
+      .sort((a, b) => levelOf.get(a)! - levelOf.get(b)!)
+      .forEach((b, j) => outX.set(b, xOf(node.id) + FLOW_W * (0.64 + j * 0.11)));
+  }
+  for (const back of backs) {
+    const depth = FLOW_H + FLOW_DROP + levelOf.get(back)! * FLOW_LEVEL;
+    const sx = outX.get(back)!;
+    const tx = inX.get(back)!;
     edges.push({
       id: `back:${back.from}>${back.to}:${back.label}`,
       source: back.from,
       target: back.to,
       sourceHandle: "bottom",
       targetHandle: "bottom-in",
-      type: "smoothstep",
+      type: "route",
       label: `${back.label} ×${back.count}`,
       className: "factory-edge-warn",
-      style: { strokeWidth: Math.min(4, 1 + back.count * 0.5), strokeDasharray: "5 4" },
-      data: { kind: "back", count: back.count },
+      style: { strokeWidth: Math.min(3, 1 + back.count * 0.4), strokeDasharray: "5 4" },
+      data: {
+        kind: "back",
+        count: back.count,
+        label: `${back.label} ×${back.count}`,
+        points: [
+          { x: sx, y: FLOW_H },
+          { x: sx, y: depth },
+          { x: tx, y: depth },
+          { x: tx, y: FLOW_H },
+        ],
+        labelAt: { x: sx + 6, y: depth },
+      } satisfies RouteEdgeData & { count: number },
     });
   }
   return { nodes, edges };

@@ -27,6 +27,7 @@ import {
   parseRoomCommand,
   roomCommandLever,
 } from "@/lib/roomCommands";
+import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
 import { cn } from "@/lib/utils";
 import { LEVER_REASON, useViewer, useViewerCan } from "../shell/viewerCan";
 import type { CommandNote } from "./useRoomCommandRunner";
@@ -80,6 +81,7 @@ export function RoomComposer({
 }: RoomComposerProps) {
   const viewer = useViewer();
   const { can, gate } = useViewerCan();
+  const phone = useIsMobileViewport();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const [text, setText] = useState("");
   const [caret, setCaret] = useState(0);
@@ -116,7 +118,13 @@ export function RoomComposer({
   );
   const lever = parse?.ok ? roomCommandLever(parse.command) : null;
   const leverReason = lever ? gate(lever).reason : null;
-  const who = viewer?.user_id ? (viewer.user_id.split("@")[0] ?? viewer.user_id) : null;
+  // The roster's name, as the presence faces and the people list show it.
+  const who = viewer?.user_id
+    ? (people?.find((p) => p.user_id === viewer.user_id)?.name ??
+      snapshot.presence?.find((p) => p.user_id === viewer.user_id)?.name ??
+      viewer.user_id.split("@")[0] ??
+      viewer.user_id)
+    : null;
   const role = viewer?.role === "creator" ? "owner" : viewer?.role;
 
   const focus = (at: number) => {
@@ -214,9 +222,12 @@ export function RoomComposer({
     }
   };
 
+  // One line that fits the dock and a phone; the hints only where there is room.
   const placeholder = canPost
-    ? `Message ${threadTitle} · @ mention · / command`
-    : "Viewers watch the Room; ask an owner for operator access to post";
+    ? compact || phone
+      ? `Message ${threadTitle}`
+      : `Message ${threadTitle} · @ mention · / command`
+    : "Viewers watch the Room";
 
   return (
     <div

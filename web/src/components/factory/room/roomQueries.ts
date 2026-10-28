@@ -4,7 +4,7 @@
 // `tasks`, …) refreshes them all. Read marks also sync between this
 // browser's tabs over a BroadcastChannel, and across devices through the server.
 
-import { useEffect, useMemo } from "react";
+import { useEffect, useState } from "react";
 import {
   type InfiniteData,
   type QueryClient,
@@ -245,7 +245,11 @@ export async function markThreadRead(
   channel: ReadChannel | null = null,
 ): Promise<void> {
   applyReadMark(queryClient, mark);
-  channel?.postMessage(mark);
+  try {
+    channel?.postMessage(mark);
+  } catch {
+    // A closed channel only costs the other tabs this mark until their next read.
+  }
   try {
     await putRoomRead(mark.factoryId, mark.thread, mark.lastSeq);
   } catch {
@@ -259,18 +263,22 @@ export async function markThreadRead(
  */
 export function useReadMarkSync(): ReadChannel | null {
   const queryClient = useQueryClient();
-  const channel = useMemo(() => newChannel(), []);
+  const [channel, setChannel] = useState<ReadChannel | null>(null);
+  // The effect owns the channel, so a StrictMode re-run opens a fresh one.
   useEffect(() => {
-    if (!channel) return;
+    const opened = newChannel();
+    if (!opened) return;
     const onMessage = (event: MessageEvent<ReadMark>) => {
       if (event.data?.factoryId && event.data.thread) applyReadMark(queryClient, event.data);
     };
-    channel.addEventListener("message", onMessage);
+    opened.addEventListener("message", onMessage);
+    setChannel(opened);
     return () => {
-      channel.removeEventListener("message", onMessage);
-      channel.close?.();
+      opened.removeEventListener("message", onMessage);
+      opened.close?.();
+      setChannel((current) => (current === opened ? null : current));
     };
-  }, [channel, queryClient]);
+  }, [queryClient]);
   return channel;
 }
 

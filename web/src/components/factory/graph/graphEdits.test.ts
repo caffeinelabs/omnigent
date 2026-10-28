@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { roomTasks } from "../room/__fixtures__/roomFixtures";
-import { checkTaskEdit, findCycle, globsOverlap, overlapWarnings, uniqueKey } from "./graphEdits";
+import { round3Snapshot } from "../shell/__fixtures__/shellFixtures";
+import {
+  checkTaskEdit,
+  findCycle,
+  globsOverlap,
+  keysToRefs,
+  overlapWarnings,
+  uniqueKey,
+} from "./graphEdits";
+import { dependsRows } from "./ProjectDependsDialog";
 
 const db = roomTasks().filter((t) => t.project_slug === "db-version");
 const task = (ref: string) => db.find((t) => t.ref === ref)!;
@@ -81,5 +90,41 @@ describe("task edit checks", () => {
   it("keys new tasks uniquely", () => {
     expect(uniqueKey("Route tests", ["route-tests"])).toBe("route-tests-2");
     expect(uniqueKey("!!!", [])).toBe("task");
+  });
+});
+
+describe("project dependency rows", () => {
+  it("lists current dependencies that are no candidates, so they can be unchecked", () => {
+    const snapshot = round3Snapshot();
+    const integration = snapshot.projects.find((p) => p.kind === "integration")!;
+    const done = snapshot.projects.find((p) => p.status === "done")!;
+    const target = snapshot.projects.find(
+      (p) => p.slug !== integration.slug && p.slug !== done.slug && p.kind !== "integration",
+    )!;
+    target.depends_on = [integration.slug, done.slug, "gone-project"];
+    const rows = dependsRows(snapshot, target.slug);
+    const note = (slug: string) => rows.find((r) => r.slug === slug)?.note;
+    expect(note(integration.slug)).toBe("integration");
+    expect(note(done.slug)).toBe("done");
+    expect(note("gone-project")).toBe("not found");
+    expect(rows.some((r) => r.slug === target.slug)).toBe(false);
+    const others = snapshot.projects.filter(
+      (p) => p.kind === "integration" && p.slug !== integration.slug,
+    );
+    for (const p of others) expect(note(p.slug)).toBeUndefined();
+  });
+});
+
+describe("keysToRefs", () => {
+  it("names tasks by ref in check messages, leaving paths and words alone", () => {
+    expect(keysToRefs(db, "That makes a cycle: schema → settings-row → route → schema")).toBe(
+      "That makes a cycle: T-1 → T-6 → T-4 → T-1",
+    );
+    expect(
+      keysToRefs(
+        db,
+        "tests and route both touch services/caffeine-api/src/modules/db/**; they run",
+      ),
+    ).toBe("T-5 and T-4 both touch services/caffeine-api/src/modules/db/**; they run");
   });
 });

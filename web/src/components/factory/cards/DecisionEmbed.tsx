@@ -125,12 +125,13 @@ export function ClaimAssignBar({
           </Button>
         </ReasonGated>
         <DropdownMenu open={menu} onOpenChange={setMenu}>
+          {/* The Button's own `disabled` wins the Slot merge, so it carries the gate too. */}
           <ReasonGated reason={assignReason} testId="assign">
             <DropdownMenuTrigger asChild>
               <Button
                 size="xs"
                 variant="ghost"
-                disabled={busy != null}
+                disabled={busy != null || assignReason != null}
                 data-testid={`decision-assign-${decision.ref}`}
                 componentId="factory.decision.assign"
               >
