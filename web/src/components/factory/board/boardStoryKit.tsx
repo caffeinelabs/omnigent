@@ -15,6 +15,7 @@ import {
   type StoryRoutes,
   filterEventPage,
 } from "../factoryStoryFixtures";
+import { shellRoutes } from "../shell/__fixtures__/shellFixtures";
 import { boardActivityEvents, storySnapshot } from "./__fixtures__/boardFixtures";
 import { FactoryLiveContext } from "./factoryLive";
 
@@ -75,13 +76,18 @@ export function CockpitStory({
   routes,
   ...frame
 }: CockpitStoryOptions) {
+  const body = snapshot ?? storySnapshot();
+  // A snapshot of another factory reads its events, people and spans under its own id.
+  const own = `/v1/factory/factories/${body.factory.id}`;
   return (
     <FactoryStoryFrame
       mode="viewport"
       theme={theme}
       route={`/factory/${LIVE_RUN_FACTORY_ID}${path}${search}`}
       routes={{
-        [SNAPSHOT_PATH]: { body: snapshot ?? storySnapshot() },
+        ...shellRoutes(body.factory.id),
+        [`${own}/events`]: eventsRoute(events),
+        [SNAPSHOT_PATH]: { body },
         [EVENTS_PATH]: eventsRoute(events),
         ...routes,
       }}

@@ -172,7 +172,16 @@ function Agents({ facts }: { facts: ProjectRowFacts }) {
   );
 }
 
-function TitleCell({ project, factoryId }: { project: ProjectView; factoryId: string }) {
+function TitleCell({
+  project,
+  factoryId,
+  slugClassName,
+}: {
+  project: ProjectView;
+  factoryId: string;
+  /** Extra classes for the slug (the full table drops it below 2xl). */
+  slugClassName?: string;
+}) {
   return (
     <span className="flex min-w-0 items-baseline gap-2">
       <Link
@@ -185,7 +194,12 @@ function TitleCell({ project, factoryId }: { project: ProjectView; factoryId: st
       >
         {project.title}
       </Link>
-      <span className="min-w-0 shrink-[2] truncate font-mono text-xs text-muted-foreground">
+      <span
+        className={cn(
+          "min-w-0 shrink-[2] truncate font-mono text-xs text-muted-foreground",
+          slugClassName,
+        )}
+      >
         {project.slug}
       </span>
     </span>
@@ -245,7 +259,11 @@ function DesktopTable({
                 )}
               >
                 <td className={cn(cell, "max-w-0")}>
-                  <TitleCell project={project} factoryId={fid} />
+                  <TitleCell
+                    project={project}
+                    factoryId={fid}
+                    slugClassName={full ? "max-2xl:hidden" : undefined}
+                  />
                 </td>
                 {full && (
                   <td className={cn(cell, "font-mono text-xs text-muted-foreground")}>
@@ -297,7 +315,9 @@ function DesktopTable({
                 )}
                 {full && (
                   <td className={cn(cell, "max-w-28 truncate text-muted-foreground max-xl:hidden")}>
-                    {facts.owner ?? "—"}
+                    <span title={facts.owner ?? undefined}>
+                      {facts.owner ? (facts.owner.split("@")[0] ?? facts.owner) : "—"}
+                    </span>
                   </td>
                 )}
                 {full && (
@@ -533,29 +553,31 @@ export function ProjectsTable({
       className="gap-2.5"
       action={
         <>
-          <Select
-            value={filter}
-            onValueChange={(v) => setFilter(v as ProjectFilter)}
-            componentId="factory.projects.filter"
-            valueHasNoPii
-          >
-            <SelectTrigger
-              size="sm"
-              aria-label="Filter projects"
-              data-testid="projects-filter"
-              className="h-7 w-40 max-sm:w-32"
+          {sections.work.length > 0 && (
+            <Select
+              value={filter}
+              onValueChange={(v) => setFilter(v as ProjectFilter)}
+              componentId="factory.projects.filter"
+              valueHasNoPii
             >
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {(Object.keys(PROJECT_FILTER_LABEL) as ProjectFilter[]).map((key) => (
-                <SelectItem key={key} value={key}>
-                  {PROJECT_FILTER_LABEL[key]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          {!phone && (
+              <SelectTrigger
+                size="sm"
+                aria-label="Filter projects"
+                data-testid="projects-filter"
+                className="h-7 w-40 max-sm:w-32"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {(Object.keys(PROJECT_FILTER_LABEL) as ProjectFilter[]).map((key) => (
+                  <SelectItem key={key} value={key}>
+                    {PROJECT_FILTER_LABEL[key]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          {!phone && sections.work.length > 0 && (
             <Button
               variant="ghost"
               size="icon-sm"

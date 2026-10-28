@@ -1,6 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { userEvent, within } from "storybook/test";
 import { ProjectsPage } from "@/pages/factory/ProjectsPage";
+import type { FactorySnapshot } from "@/lib/factoryApi";
+import { mockScreenshot, withStoryMedia } from "../board/__fixtures__/boardFixtures";
 import { CockpitStory, type CockpitStoryOptions } from "../board/boardStoryKit";
 import {
   emptyFactorySnapshot,
@@ -21,6 +23,19 @@ function projects(options: CockpitStoryOptions = {}, play?: Story["play"]): Stor
     ),
     play,
   };
+}
+
+/** Demo stills inline (stories have no demo file server). */
+function withStills(snapshot: FactorySnapshot): FactorySnapshot {
+  withStoryMedia(snapshot);
+  for (const pr of snapshot.prs) {
+    for (const file of pr.demo?.files ?? []) {
+      if (file.content_type.startsWith("image/") && !file.url.startsWith("data:")) {
+        file.url = mockScreenshot("Caffeine", "Build apps by chatting with AI");
+      }
+    }
+  }
+  return snapshot;
 }
 
 function phone(story: Story): Story {
@@ -60,7 +75,10 @@ export const NeedsAttention = projects({}, async ({ canvasElement }) => {
 /** Compact rows. */
 export const Compact = projects({}, async ({ canvasElement }) => {
   const body = within(canvasElement.ownerDocument.body);
-  await userEvent.click(await body.findByTestId("projects-density"));
+  await body.findByTestId("projects-section");
+  // Phones have one row layout: no density switch there.
+  const density = body.queryByTestId("projects-density");
+  if (density) await userEvent.click(density);
 });
 
 /** Closed projects unfolded. */
@@ -70,7 +88,7 @@ export const ClosedOpen = projects({}, async ({ canvasElement }) => {
 });
 
 /** The cards view of the same factory (the round-2 board). */
-export const Cards = projects({ search: "?view=cards" });
+export const Cards = projects({ search: "?view=cards", snapshot: withStills(round3Snapshot()) });
 
 /** A viewer: + Project is disabled. */
 export const Viewer = projects({ snapshot: round3Snapshot("viewer") });

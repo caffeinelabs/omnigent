@@ -19,10 +19,10 @@ import { Button } from "@/components/ui/button";
 import type { FactorySnapshot } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
-import { DecisionCard, assigneeText } from "../decisions/DecisionCard";
+import { DecisionCard, answerBlockedReason, assigneeText } from "../decisions/DecisionCard";
 import { formatElapsed, plural } from "../factoryFormat";
 import { factoryPageHref, prPageHref, projectPageHref } from "../factoryRoutes";
-import { useViewer } from "../shell/viewerCan";
+import { useViewer, useViewerCan } from "../shell/viewerCan";
 import {
   type NeedsItem,
   type NeedsTab,
@@ -51,6 +51,7 @@ function Row({
   clockOffsetS: number;
 }) {
   const viewer = useViewer();
+  const { can } = useViewerCan();
   const [open, setOpen] = useState(false);
   const fid = snapshot.factory.id;
   let icon = <CircleHelpIcon aria-hidden className="size-3.5 text-warning" />;
@@ -89,7 +90,9 @@ function Row({
       const who = assigneeText(decision, viewer?.user_id ?? null);
       text = `${who ? `${who} · ` : ""}${decision.project_slug ? `${decision.project_slug}: ` : ""}${decision.question}`;
       meta = formatElapsed(nowS - decision.created_at);
-      const recommended = decision.options.find((o) => o.recommended);
+      // Someone who may not answer still reads the card: the button says so.
+      const readOnly = answerBlockedReason(decision, can) != null;
+      const recommended = readOnly ? null : decision.options.find((o) => o.recommended);
       action = (
         <Button
           size="xs"
@@ -106,6 +109,8 @@ function Row({
               <span className="max-w-40 truncate max-sm:hidden">{recommended.label} ★</span>
               <span className="sm:hidden">Answer</span>
             </>
+          ) : readOnly ? (
+            "View"
           ) : (
             "Answer…"
           )}
