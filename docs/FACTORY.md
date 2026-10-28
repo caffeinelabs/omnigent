@@ -611,8 +611,7 @@ Durable facts every metric builds on (`omnigent/server/factory/telemetry/`):
   `omnigent.factory.bundle=<agent_id>/<sha12>` from factory start (the root
   lead), spawn, restart (cockpit or peer) and relaunch. A new version that
   replaces an older one is announced in every factory as `version.changed`
-  (with the bundles that changed). The Caffeine image build bakes
-  `OMNIGENT_IMAGE_TAG=staging-<sha7>` and `OMNIGENT_SERVER_SHA` in.
+  (with the bundles that changed).
 - **Spans** (`factory_spans`, never pruned, idempotent on `dedupe_key`). An
   event-log recorder writes `project`, `stage`, `ready_wait`, `decision`,
   `task`, `env`, `preview`, `demo`, `incident`, `intervention` and `proposal`
