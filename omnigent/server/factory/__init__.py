@@ -108,11 +108,12 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
     """
     Start the factory's background services for one server lifespan.
 
-    The mailer always (replaying mail a previous process left undelivered);
-    the telemetry recorders (spans and the cost ledger), the work-graph
-    binder, the supervisor (and the status-edge notifier it reads), the "now"
-    poller, the incident detectors and the auto-discovered ``background``
-    services only when ``OMNIGENT_FACTORY_ENABLED=1``.
+    The mailer and the Room always (replaying mail and chat a previous
+    process left undelivered); the telemetry recorders (spans and the cost
+    ledger), the work-graph binder, the supervisor (and the status-edge
+    notifier it reads), the "now" poller, the incident detectors and the
+    auto-discovered ``background`` services only when
+    ``OMNIGENT_FACTORY_ENABLED=1``.
 
     :param app_state: ``app.state`` of an app passed to
         :func:`register_factory_routes`.
@@ -130,9 +131,13 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
 
         return _noop
 
+    from omnigent.server.factory import chat
+
     mailer = get_mailer(app_state)
     if replay_enabled():
         await mailer.replay_undelivered()
+    # After the mailer: Room messages it already holds are not queued twice.
+    stop_room = await chat.start(app_state, replay=replay_enabled())
     stop_supervision: Callable[[], Awaitable[None]] | None = None
     stop_background: Callable[[], Awaitable[None]] | None = None
     stop_telemetry: Callable[[], None] | None = None
@@ -163,6 +168,7 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
 
     async def _stop() -> None:
         unseed_invariants()
+        await stop_room()
         if stop_ops is not None:
             await stop_ops()
         if stop_background is not None:

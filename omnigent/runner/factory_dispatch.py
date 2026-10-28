@@ -37,6 +37,7 @@ import httpx
 
 from omnigent.factory import (
     AGENT_STAGES,
+    CHAT_MESSAGE_MAX_CHARS,
     DECISION_CONTEXT_MAX,
     DECISION_MAX_OPTIONS,
     DECISION_OPTION_DESCRIPTION_MAX,
@@ -76,6 +77,7 @@ from omnigent.native.native_coding_agents import public_agent_name
 from omnigent.tools.builtins.factory import (
     SPAWN_ROLES,
     SYS_FACTORY_ASK,
+    SYS_FACTORY_CHAT,
     SYS_FACTORY_DEMO,
     SYS_FACTORY_ENV,
     SYS_FACTORY_PR,
@@ -165,6 +167,12 @@ _FACTORY_ERROR_CODES: Final = frozenset(
         "task_exists",
         "too_many_tasks",
         "duplicate_key",
+        "invalid_thread",
+        "thread_not_allowed",
+        "unknown_pr",
+        "ambiguous_pr",
+        "unknown_message",
+        "empty_message",
     }
 )
 # The server re-polls GitHub for up to 10 s before answering sys_factory_pr.
@@ -415,6 +423,8 @@ async def execute_factory_tool(
         )
     if tool_name == SYS_FACTORY_TASK:
         return await _task(args, server_client=server_client, caller=conversation_id)
+    if tool_name == SYS_FACTORY_CHAT:
+        return await _post_chat(args, server_client=server_client, caller=conversation_id)
     return _error(f"unknown factory tool {tool_name!r}")
 
 
@@ -2063,3 +2073,40 @@ async def _task(args: _JsonObject, *, server_client: httpx.AsyncClient, caller: 
             body[name] = args[name].strip()[:_NOTE_MAX] if name == "note" else args[name].strip()
     path = f"/v1/factory/agent/tasks/{quote(str(key).strip(), safe='')}/{op}"
     return await _passthrough(server_client, "POST", path, tool_name=tool, body=body)
+
+
+_CHAT_LIST_KEYS: Final = ("mentions", "refs")
+
+
+async def _post_chat(args: _JsonObject, *, server_client: httpx.AsyncClient, caller: str) -> str:
+    """``sys_factory_chat`` → ``POST /v1/factory/agent/chat`` stamped with the caller."""
+    tool = SYS_FACTORY_CHAT
+    thread = args.get("thread")
+    if not isinstance(thread, str) or not thread.strip():
+        return _error(f"{tool} requires a 'thread', e.g. 'factory' or 'project:<slug>'")
+    message = args.get("message")
+    if not isinstance(message, str) or not message.strip():
+        return _error(f"{tool} requires a non-empty 'message' string")
+    if len(message) > CHAT_MESSAGE_MAX_CHARS:
+        return _error(
+            "message_too_large",
+            max_chars=CHAT_MESSAGE_MAX_CHARS,
+            length=len(message),
+            message="keep Room posts short; link a PR, a decision or a file instead",
+        )
+    body: _JsonObject = {"from_session_id": caller, "thread": thread.strip(), "message": message}
+    reply_to = args.get("reply_to")
+    if reply_to is not None:
+        if not isinstance(reply_to, str):
+            return _error(f"{tool} 'reply_to' must be a chat_<id> string")
+        body["reply_to"] = reply_to.strip()
+    for key in _CHAT_LIST_KEYS:
+        value = args.get(key)
+        if value is None:
+            continue
+        if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
+            return _error(f"{tool} '{key}' must be a list of strings")
+        body[key] = value
+    return await _passthrough(
+        server_client, "POST", "/v1/factory/agent/chat", tool_name=tool, body=body
+    )

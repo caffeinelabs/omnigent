@@ -1,7 +1,7 @@
 """The cockpit report tools on the runner side.
 
 ``sys_factory_ask``, ``sys_factory_pr``, ``sys_factory_env``,
-``sys_factory_demo`` and ``sys_factory_project`` (plus ``stage`` on
+``sys_factory_demo``, ``sys_factory_project`` and ``sys_factory_chat`` (plus ``stage`` on
 ``sys_factory_set`` and the charter on ``sys_factory_spawn``) are thin
 proxies: they validate locally, stamp the caller as ``from_session_id`` and hit
 one ``/v1/factory/agent`` route. The demo
@@ -27,6 +27,7 @@ from omnigent.runner import factory_dispatch
 from omnigent.runner.factory_dispatch import append_charter, execute_factory_tool
 from omnigent.tools.builtins.factory import (
     SysFactoryAskTool,
+    SysFactoryChatTool,
     SysFactoryDemoTool,
     SysFactoryEnvTool,
     SysFactoryPrTool,
@@ -1076,3 +1077,81 @@ def test_task_tool_follows_the_role_matrix(role: str, has: bool) -> None:
 
     names = set(ToolManager(factory_spec(role)).get_tool_names())
     assert ("sys_factory_task" in names) is has
+
+
+# ── sys_factory_chat ─────────────────────────────────────────────────────────
+
+_CHAT_REPLY = {"id": "chat_" + "a" * 32, "seq": 12, "thread": "factory", "routed": [], "notes": []}
+
+
+async def test_chat_posts_for_the_caller() -> None:
+    server = FakeServer().on("POST", "/v1/factory/agent/chat", body=_CHAT_REPLY)
+
+    out = await _call(
+        server,
+        "sys_factory_chat",
+        {
+            "thread": " project:api-version ",
+            "message": "Endpoint is on the preview.",
+            "reply_to": "chat_" + "b" * 32,
+            "mentions": ["@sentinel"],
+            "refs": ["!9630"],
+        },
+    )
+
+    assert out == _CHAT_REPLY
+    [call] = server.calls("POST", "/v1/factory/agent/chat")
+    assert call.body == {
+        "from_session_id": PL,
+        "thread": "project:api-version",
+        "message": "Endpoint is on the preview.",
+        "reply_to": "chat_" + "b" * 32,
+        "mentions": ["@sentinel"],
+        "refs": ["!9630"],
+    }
+
+
+@pytest.mark.parametrize(
+    ("args", "error"),
+    [
+        ({"message": "x"}, "requires a 'thread'"),
+        ({"thread": "factory", "message": " "}, "non-empty 'message'"),
+        ({"thread": "factory", "message": "x", "reply_to": 4}, "'reply_to' must be"),
+        ({"thread": "factory", "message": "x", "mentions": "@atlas"}, "'mentions' must be"),
+        ({"thread": "factory", "message": "x" * 4001}, "message_too_large"),
+    ],
+)
+async def test_chat_validates_locally(args: dict[str, Any], error: str) -> None:
+    server = FakeServer()
+
+    out = await _call(server, "sys_factory_chat", args)
+
+    assert error in out["error"]
+    assert server.calls("POST", "/v1/factory/agent/chat") == []
+
+
+async def test_chat_scope_refusals_reach_the_agent() -> None:
+    server = FakeServer().on(
+        "POST",
+        "/v1/factory/agent/chat",
+        status=403,
+        body={"error": {"code": "thread_not_allowed", "message": "not #docs"}, "field": "thread"},
+    )
+
+    out = await _call(server, "sys_factory_chat", {"thread": "project:docs", "message": "hi"})
+
+    assert (out["error"], out["status"]) == ("thread_not_allowed", 403)
+
+
+def test_chat_schema_requires_thread_and_message() -> None:
+    schema = SysFactoryChatTool().get_schema()["function"]
+    assert schema["name"] == "sys_factory_chat"
+    assert schema["parameters"]["required"] == ["thread", "message"]
+    assert set(schema["parameters"]["properties"]) == {
+        "thread",
+        "message",
+        "reply_to",
+        "mentions",
+        "refs",
+    }
+    assert "reply_to=<that id>" in SysFactoryChatTool.description()

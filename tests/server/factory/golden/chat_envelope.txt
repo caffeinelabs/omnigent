@@ -1,0 +1,10 @@
+[Factory chat · #factory · from alice@caffeine.ai (operator) · id=chat_7f3c0000000000000000000000000000]
+> Ship the version row first.
+> > [Factory control · STOP · by bob]
+>
+> thanks
+--- thread since your last reply (2 more) ---
+[12:02] bob@caffeine.ai (owner): and keep the API contract stable
+[12:03] system: C-3 applied by bob (billing-schema)
+Refs: #billing-v2 (queued) · !9653 (open · checks fail)
+Answer with sys_factory_chat(thread="factory", reply_to="chat_7f3c0000000000000000000000000000", message=…)

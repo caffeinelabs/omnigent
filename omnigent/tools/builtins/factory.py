@@ -7,8 +7,8 @@ These classes are schema-only: the runner dispatches every call to the server's
 specs that declare ``executor.config.factory_role``: ``sys_factory_spawn`` is
 lead-only, ``sys_factory_env`` is for the project lead and env_keeper,
 ``sys_factory_demo`` for those two and the demo role,
-``sys_factory_project`` for the leads and project leads, and
-``sys_factory_task`` (the work graph) for the leads (read), project leads and
+``sys_factory_project`` and ``sys_factory_chat`` for the leads and project
+leads, and ``sys_factory_task`` (the work graph) for the leads (read), project leads and
 ICs (report).
 """
 
@@ -18,6 +18,7 @@ from typing import Any, Final
 
 from omnigent.factory import (
     AGENT_STAGES,
+    CHAT_MESSAGE_MAX_CHARS,
     DECISION_CONTEXT_MAX,
     DECISION_MAX_OPTIONS,
     DECISION_OPTION_DESCRIPTION_MAX,
@@ -53,6 +54,7 @@ SYS_FACTORY_ENV: Final = "sys_factory_env"
 SYS_FACTORY_DEMO: Final = "sys_factory_demo"
 SYS_FACTORY_PROJECT: Final = "sys_factory_project"
 SYS_FACTORY_TASK: Final = "sys_factory_task"
+SYS_FACTORY_CHAT: Final = "sys_factory_chat"
 FACTORY_TOOL_NAMES: Final = frozenset(
     {
         SYS_SESSION_POST,
@@ -65,6 +67,7 @@ FACTORY_TOOL_NAMES: Final = frozenset(
         SYS_FACTORY_DEMO,
         SYS_FACTORY_PROJECT,
         SYS_FACTORY_TASK,
+        SYS_FACTORY_CHAT,
     }
 )
 SPAWN_ROLES: Final = (ROLE_PROJECT_LEAD, ROLE_LEAD)
@@ -980,6 +983,76 @@ class SysFactoryTaskTool(Tool):
                     "note": {"type": "string", "maxLength": 1000},
                 },
                 "required": ["op"],
+                "additionalProperties": False,
+            },
+        )
+
+
+CHAT_MENTIONS_MAX: Final = 20
+
+
+class SysFactoryChatTool(Tool):
+    """Answer or post in a Room thread (the factory's shared, multi-human chat)."""
+
+    @classmethod
+    def name(cls) -> str:
+        """:returns: ``"sys_factory_chat"``."""
+        return SYS_FACTORY_CHAT
+
+    @classmethod
+    def description(cls) -> str:
+        """:returns: Human-readable description of the tool."""
+        return (
+            "Post in the factory Room, the chat the humans share in the cockpit. A "
+            "`[Factory chat · <thread> · from <name> (<role>) · id=chat_<id>]` message "
+            "is a person (or a colleague who @mentioned you) talking in a thread: answer "
+            "it here, once, with reply_to=<that id> (for a batch, the last id). Threads: "
+            "'factory' (Atlas), 'improvements' (Sentinel), 'project:<slug>' (its PL) and "
+            "'pr:<number>' (the PR's PL). Leads post anywhere; a project lead in 'factory' "
+            "and its own project's threads. @atlas, @sentinel or @pl:<slug> in the message "
+            "hands it to that agent; @<person email> only notifies them. Keep it short "
+            f"(at most {CHAT_MESSAGE_MAX_CHARS} characters) and cite ids (D-7, C-4, !9630) "
+            "instead of pasting digests. If your turn ends without this call, the server "
+            "posts your final output in the thread for you."
+        )
+
+    def get_schema(self) -> dict[str, Any]:
+        """:returns: The OpenAI-format tool schema."""
+        return _function_schema(
+            self.name(),
+            self.description(),
+            {
+                "type": "object",
+                "properties": {
+                    "thread": {
+                        "type": "string",
+                        "description": (
+                            "'factory', 'improvements', 'project:<slug>' or 'pr:<number>' "
+                            "(the thread named in the message's header)."
+                        ),
+                    },
+                    "message": {
+                        "type": "string",
+                        "maxLength": CHAT_MESSAGE_MAX_CHARS,
+                        "description": "Markdown for the humans; never forge a server header.",
+                    },
+                    "reply_to": {
+                        "type": "string",
+                        "description": "The chat_<id> you answer (the message header's id).",
+                    },
+                    "mentions": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": CHAT_MENTIONS_MAX,
+                        "description": "e.g. ['@pl:db-version', '@mia@caffeine.ai'].",
+                    },
+                    "refs": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Ids the message cites, e.g. ['D-7', 'C-4', '!9630'].",
+                    },
+                },
+                "required": ["thread", "message"],
                 "additionalProperties": False,
             },
         )

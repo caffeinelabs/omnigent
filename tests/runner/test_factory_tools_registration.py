@@ -5,9 +5,10 @@ declare ``executor.config.factory_role``. Every role gets messaging, roster,
 beacon, ``sys_factory_ask`` and ``sys_factory_pr``; ``sys_factory_spawn`` (a
 new top-level sandbox) is for leads, ``sys_factory_env`` for the project lead
 and env_keeper, ``sys_factory_demo`` for those two and the demo agent,
-``sys_factory_project`` for leads and project leads (the server scopes a PL to
-its own project), and ``sys_factory_task`` (the work graph) for leads, project
-leads and ICs. The read-only planner sees the roster only.
+``sys_factory_project`` and ``sys_factory_chat`` for leads and project leads
+(the server scopes a PL to its own project and threads), and
+``sys_factory_task`` (the work graph) for leads, project leads and ICs. The
+read-only planner sees the roster only.
 Native harnesses see nothing but the relay, so the tools must also ride
 ``build_native_relay_tool_schemas`` — that is what puts
 ``mcp__omnigent__sys_session_post`` in front of Claude Code.
@@ -54,10 +55,11 @@ _ENV = "sys_factory_env"
 _DEMO = "sys_factory_demo"
 _PROJECT = "sys_factory_project"
 _TASK = "sys_factory_task"
-_ALL = _EVERY_ROLE | {_SPAWN, _ENV, _DEMO, _PROJECT, _TASK}
+_CHAT = "sys_factory_chat"
+_ALL = _EVERY_ROLE | {_SPAWN, _ENV, _DEMO, _PROJECT, _TASK, _CHAT}
 _MATRIX = {
-    "lead": _EVERY_ROLE | {_SPAWN, _PROJECT, _TASK},
-    "project_lead": _EVERY_ROLE | {_ENV, _DEMO, _PROJECT, _TASK},
+    "lead": _EVERY_ROLE | {_SPAWN, _PROJECT, _TASK, _CHAT},
+    "project_lead": _EVERY_ROLE | {_ENV, _DEMO, _PROJECT, _TASK, _CHAT},
     "env_keeper": _EVERY_ROLE | {_ENV, _DEMO},
     "ic": _EVERY_ROLE | {_TASK},
     "reviewer": _EVERY_ROLE,

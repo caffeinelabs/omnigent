@@ -42,6 +42,14 @@ _WINDOW_S = 3600.0
 Deliver = Callable[..., Awaitable[DeliveryOutcome]]
 Sleep = Callable[[float], Awaitable[Any]]
 
+# Mail kinds other modules send (the Room's "chat"), each told when one of its items lands.
+_KIND_HOOKS: dict[str, Callable[[Any, MailItem, float], None]] = {}
+
+
+def register_kind(kind: str, on_delivered: Callable[[Any, MailItem, float], None]) -> None:
+    """Call ``on_delivered(app_state, item, attempt_started_at)`` after each delivered *kind*."""
+    _KIND_HOOKS[kind] = on_delivered
+
 
 def rate_limits_from_env() -> tuple[int, int]:
     """
@@ -398,12 +406,18 @@ class Mailer:
         delays = iter(self._retry_delays_s)
         restart = item.restart
         while True:
+            attempted_at = self._clock()
             outcome = await self._attempt(
                 item.target_id, item.text, restart=restart, created_by=item.created_by
             )
             if outcome.delivered:
                 if item.sender_id is not None and item.kind in PENDING_REPLY_KINDS:
                     self._pending[item.target_id] = (item.sender_id, self._clock())
+                if (hook := _KIND_HOOKS.get(item.kind)) is not None:
+                    try:
+                        hook(self._app_state, item, attempted_at)
+                    except Exception:  # noqa: BLE001 - a kind hook never fails a delivery
+                        _logger.warning("factory mail %s hook failed", item.mail_id, exc_info=True)
                 _logger.info("factory mail %s delivered to %s", item.mail_id, item.target_id)
                 return None
             # A restart's stop already ran; retries only redeliver.

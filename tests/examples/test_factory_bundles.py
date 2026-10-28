@@ -26,6 +26,7 @@ from omnigent.factory import (
     ROLE_ENV_KEEPER,
     ROLE_IC,
     ROLE_LEAD,
+    ROLE_PLANNER,
     ROLE_PROJECT_LEAD,
     ROLE_REVIEWER,
     factory_role_from_spec,
@@ -42,6 +43,7 @@ _FACTORY_DIR = _REPO_ROOT / "examples" / "factory"
 _LEAD_DIR = _FACTORY_DIR / "factory-lead"
 _PL_DIR = _FACTORY_DIR / "factory-pl"
 _PL_SUB_AGENTS = ("env_keeper", "demo", "ic", "ic_codex", "reviewer")
+_LEAD_SUB_AGENTS = ("planner",)
 
 _FACTORY_POLICY_MODULE = "omnigent.policies.builtins.factory"
 _TOOL_TOKEN = re.compile(r"\b(sys_[a-z_]+|load_skill|read_skill_file)\b")
@@ -59,6 +61,7 @@ _CLAUDE_MODELS = {
     "env_keeper": "sonnet",
     "demo": "sonnet",
     "ic": "sonnet",
+    "planner": "sonnet",
 }
 _ROLES = {
     "factory-lead": ROLE_LEAD,
@@ -68,6 +71,7 @@ _ROLES = {
     "ic": ROLE_IC,
     "ic_codex": ROLE_IC,
     "reviewer": ROLE_REVIEWER,
+    "planner": ROLE_PLANNER,
 }
 
 
@@ -92,6 +96,7 @@ def _terminal_registry(monkeypatch: pytest.MonkeyPatch) -> None:
 
 def _all_specs(lead: AgentSpec, pl: AgentSpec) -> Iterator[AgentSpec]:
     yield lead
+    yield from lead.sub_agents
     yield pl
     yield from pl.sub_agents
 
@@ -109,6 +114,8 @@ def _skill_dir(spec: AgentSpec) -> Path:
         return _LEAD_DIR / "skills"
     if spec.name == "factory-pl":
         return _PL_DIR / "skills"
+    if spec.name in _LEAD_SUB_AGENTS:
+        return _LEAD_DIR / "agents" / str(spec.name) / "skills"
     return _PL_DIR / "agents" / str(spec.name) / "skills"
 
 
@@ -131,12 +138,16 @@ def test_both_bundles_parse_with_the_expected_shape(lead: AgentSpec, pl: AgentSp
         "factory-lead-playbook",
         "factory-heartbeat",
         "factory-recovery",
+        "factory-room",
+        "factory-planning",
     }
     assert {s.name for s in pl.skills} == {
         "factory-protocol",
         "factory-pl-playbook",
         "factory-heartbeat",
+        "factory-room",
     }
+    assert list(lead.tools.agents) == list(_LEAD_SUB_AGENTS)
 
 
 def test_pl_sub_agents_resolve(pl: AgentSpec) -> None:
@@ -167,6 +178,8 @@ def test_bundle_survives_the_server_tarball_round_trip(tmp_path: Path) -> None:
             prune_invalid_sub_agents=True,
         )
         assert spec.name == bundle.name
+        if bundle == _LEAD_DIR:
+            assert [s.name for s in spec.sub_agents] == list(_LEAD_SUB_AGENTS)
     assert [s.name for s in spec.sub_agents] == sorted(_PL_SUB_AGENTS)
 
 
@@ -369,6 +382,11 @@ def test_factory_tools_are_on_each_agents_real_surface(lead: AgentSpec, pl: Agen
     messaging = {"sys_session_post", "sys_factory_roster", "sys_factory_set"}
     for spec in _all_specs(lead, pl):
         names = _relay_tool_names(spec)
+        if spec.name == "planner":
+            # The read-only planner sees the roster and nothing else of the factory.
+            assert {n for n in names if n.startswith("sys_factory_")} == {"sys_factory_roster"}
+            assert "sys_session_post" not in names
+            continue
         assert messaging <= names, f"{spec.name} lacks {sorted(messaging - names)}"
         assert ("sys_factory_spawn" in names) is (spec.name == "factory-lead"), spec.name
 
@@ -773,6 +791,9 @@ def test_demo_skill_frontmatter_and_the_demo_agent(pl: AgentSpec) -> None:
 def test_factory_tools_follow_the_role_matrix(lead: AgentSpec, pl: AgentSpec) -> None:
     has = {str(spec.name): _relay_tool_names(spec) for spec in _all_specs(lead, pl)}
     for name, tools in has.items():
+        assert ("sys_factory_chat" in tools) is (name in {"factory-lead", "factory-pl"}), name
+        if name == "planner":
+            continue
         assert {"sys_factory_ask", "sys_factory_pr"} <= tools, name
         assert ("sys_factory_env" in tools) is (name in {"factory-pl", "env_keeper"}), name
         assert ("sys_factory_demo" in tools) is (name in {"factory-pl", "env_keeper", "demo"}), (
@@ -878,6 +899,16 @@ def _guard(role: str, command: str) -> dict[str, object]:
             (ROLE_PROJECT_LEAD,),
             id="factory-pl-playbook",
         ),
+        pytest.param(
+            _LEAD_DIR / "skills/factory-planning/SKILL.md",
+            (ROLE_LEAD,),
+            id="factory-planning",
+        ),
+        pytest.param(
+            _LEAD_DIR / "agents/planner/skills/factory-plan-analysis/SKILL.md",
+            (ROLE_PLANNER, ROLE_LEAD),
+            id="factory-plan-analysis",
+        ),
     ],
 )
 def test_documented_commands_pass_their_guards(skill: Path, roles: tuple[str, ...]) -> None:
@@ -936,7 +967,7 @@ def test_every_factory_guard_carries_the_push_ref_allowlist() -> None:
             continue
         guarded += 1
         assert guard["function"]["arguments"]["push_ref_prefixes"] == ["factory/"], config
-    assert guarded == 7
+    assert guarded == 8
 
 
 def test_preview_lifecycle_stays_with_env_keeper() -> None:
@@ -1404,3 +1435,118 @@ def test_the_work_graph_tool_follows_the_role_matrix(lead: AgentSpec, pl: AgentS
     for name, tools in has.items():
         expected = name in {"factory-lead", "factory-pl", "ic", "ic_codex"}
         assert ("sys_factory_task" in tools) is expected, name
+
+
+# ── The Room and planning ──────────────────────────────────────
+
+
+def test_the_room_skill_is_shared_short_and_loaded_from_the_chat_rows(
+    lead: AgentSpec, pl: AgentSpec
+) -> None:
+    lead_copy = _LEAD_DIR / "skills" / "factory-room" / "SKILL.md"
+    pl_copy = _PL_DIR / "skills" / "factory-room" / "SKILL.md"
+    assert lead_copy.read_bytes() == pl_copy.read_bytes()
+    text = lead_copy.read_text(encoding="utf-8")
+    assert len(text.splitlines()) <= 40
+    for token in (
+        "[Factory chat · <thread> · from <name> (<role>) · id=chat_<id>]",
+        "ids=chat_a,chat_b",
+        'sys_factory_chat(thread="<from the call line>", reply_to="chat_<last id>"',
+        "sys_factory_project",
+        "sys_factory_ask(for=",
+        "turn summary",
+        "replay",
+    ):
+        assert token in text, token
+    for spec in (lead, pl):
+        prompt = " ".join((spec.instructions or "").split())
+        assert 'load_skill("factory-room")' in prompt, spec.name
+        assert "`id=mail_…` or `id=chat_…` you already handled is a replay" in prompt, spec.name
+
+
+def _chat_rows(spec: AgentSpec) -> list[str]:
+    prompt = " ".join((spec.instructions or "").split())
+    return re.findall(r"`(\[Factory chat · [^`]*)`", prompt)
+
+
+def test_server_chat_envelopes_match_a_dispatch_row(lead: AgentSpec, pl: AgentSpec) -> None:
+    """Every Room envelope the server delivers has a DISPATCH row in both prompts."""
+    from omnigent.server.factory.chat import Line, render_envelope
+
+    one = render_envelope(
+        thread="factory", title="#factory", messages=[Line("a" * 32, 0, "alice (operator)", "hi")]
+    )
+    batch = render_envelope(
+        thread="project:db-version",
+        title="#db-version",
+        messages=[Line("a" * 32, 0, "alice (operator)", "a"), Line("b" * 32, 1, "bob", "b")],
+    )
+    for spec in (lead, pl):
+        [row] = _chat_rows(spec)
+        for text in (one, batch):
+            assert _row_pattern(row).match(text.split("\n", 1)[0]), (spec.name, row)
+
+
+def test_the_lead_routes_asked_work_through_planning(lead: AgentSpec) -> None:
+    prompt = " ".join((lead.instructions or "").split())
+    start = prompt.index("ROOM:")
+    room = prompt[start : prompt.index("HUMAN (Atlas).", start)]
+    for token in (
+        'load_skill("factory-room")',
+        "sys_factory_chat",
+        'load_skill("factory-planning")',
+        "sys_factory_project",
+        "#improvements",
+    ):
+        assert token in room, token
+    assert "Humans normally talk to you through the Room" in prompt
+
+
+def test_the_pl_answers_in_its_threads_and_relays_to_its_ic(pl: AgentSpec) -> None:
+    prompt = " ".join((pl.instructions or "").split())
+    row = prompt[prompt.index("`[Factory chat · …`") : prompt.index("`[System: sub-agent`")]
+    for token in (
+        "`#<slug>`",
+        "`!<n>`",
+        "sys_session_send(session_id=<ic id>",
+        "sys_factory_chat",
+    ):
+        assert token in row, token
+
+
+def test_the_planner_is_a_read_only_sonnet_sub_agent(lead: AgentSpec) -> None:
+    planner = next(s for s in lead.sub_agents if s.name == "planner")
+    assert planner.executor.config["harness"] == "claude-native"
+    assert planner.executor.config["factory_role"] == ROLE_PLANNER
+    assert planner.executor.model == "sonnet"
+    assert planner.executor.auth == ProviderAuth(name="bifrost")
+    assert [s.name for s in planner.skills] == ["factory-plan-analysis"]
+    prompt = " ".join((planner.instructions or "").split())
+    for token in ("PLAN READY ~/factory/plans/<id>.json", "PLAN FAILED", "You only read"):
+        assert token in prompt, token
+    assert planner.spawn is False
+    for command in ("git push origin factory/x/y", "gh pr create --fill", "gh issue create -t x"):
+        assert _guard(ROLE_PLANNER, command)["result"] == "DENY", command
+
+
+def test_the_planning_skill_carries_the_contract() -> None:
+    skill = _LEAD_DIR / "skills" / "factory-planning"
+    text = " ".join((skill / "SKILL.md").read_text(encoding="utf-8").split())
+    for token in (
+        'sys_session_send(agent="planner"',
+        "PLAN id=<id> repo=<owner/name> base=<default base> script=~/factory/bin/scope-graph.mjs",
+        '{"changes": [{"op": "create"',
+        '"analysis": {',
+        'reply_to="chat_<id>", analysis_file="~/factory/plans/<id>.json")',
+        "PLAN READY",
+        "depends_on",
+        "Tightly coupled code stays in ONE project",
+        "Proposed 3 projects → C-4",
+    ):
+        assert token in text, token
+    assert (skill / "scope-graph.mjs").is_file()
+    assert (skill / "fixture" / "tsconfig.json").is_file()
+    analysis = _LEAD_DIR / "agents/planner/skills/factory-plan-analysis/SKILL.md"
+    flat = " ".join(analysis.read_text(encoding="utf-8").split())
+    assert 'worktree add --detach ~/factory/plans/wt/$ID "origin/$BASE"' in flat
+    assert "--scope" in flat and "cohesion" in flat and "shared_outside_scopes" in flat
