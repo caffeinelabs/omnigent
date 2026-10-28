@@ -172,7 +172,7 @@ LOOP_BAD: Final = {
     "loop.stalled": "stalled",
 }
 LOOP_GOOD: Final = frozenset(
-    {"loop.converged", "loop.budget_raised", "loop.iteration", "loop.started"}
+    {"loop.converged", "loop.budget_raised", "loop.iteration", "loop.started", "loop.resumed"}
 )
 _LOOP_STILL_BAD: Final = frozenset({"exhausted", "thrashing", "stalled", "escalated"})
 _PREVIEW_GONE: Final = frozenset({"gone", "failed"})

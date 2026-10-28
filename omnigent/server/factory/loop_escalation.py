@@ -31,6 +31,9 @@ from omnigent.factory import (
     ACTION_PAUSE,
     ACTION_RAISE_BUDGET,
     ACTION_SWITCH_VENDOR,
+    LABEL_STATE,
+    STATE_DONE,
+    STATE_PAUSED,
 )
 from omnigent.server.auth import LEVEL_MANAGE
 from omnigent.server.factory import control, events, issues, server_decisions, tasks
@@ -66,6 +69,9 @@ INTERCEPTED: Final = frozenset(
 )
 """Actions a loop decision runs here; ``pause`` and ``dismiss`` run as on any decision."""
 OTHER_VENDOR: Final = {"ic": "ic_codex", "ic_codex": "ic"}
+_BAD: Final = ["exhausted", "stalled", "thrashing"]
+_DECIDED: Final = ("implement", "review", "demo", "claim")
+"""Loop kinds that open a decision when they go bad, in reconcile order."""
 _STATE_WORD: Final = {"exhausted": "EXHAUSTED", "stalled": "STALLED", "thrashing": "THRASHING"}
 
 
@@ -334,25 +340,13 @@ async def _escalate(
                 app_state, facts.pl.id, escalation_text(facts, state, None), kind="info"
             )
         return
-    if current.kind == "review" and facts.task is not None:
-        # One decision per task: a review going bad with its implement loop rides on that one.
-        implement = await asyncio.to_thread(
-            store.get_loop_by_subject, fid, "implement", f"task:{norm_id(facts.task.id)}"
-        )
-        if (
-            implement is not None
-            and implement.decision_id
-            and implement.state
-            in (
-                "exhausted",
-                "stalled",
-                "thrashing",
-            )
-        ):
-            decision = await asyncio.to_thread(store.get_decision, implement.decision_id)
-            if decision is not None and decision.status == "open":
-                await asyncio.to_thread(store.update_loop, current.id, decision_id=decision.id)
-                return
+    if current.kind in ("implement", "review") and facts.task is not None:
+        # One decision per task: whichever of its implement and review loops went bad
+        # second rides on the other's open decision.
+        shared = await asyncio.to_thread(_task_decision, deps, current, facts.task)
+        if shared is not None:
+            await asyncio.to_thread(store.update_loop, current.id, decision_id=shared.id)
+            return
     if current.kind in ("plan", "ci", "intake", "improve"):
         return
     question, context, options, assignee = decision_for(facts, state)
@@ -401,6 +395,145 @@ async def _escalate(
         control.send_text(
             app_state, facts.pl.id, escalation_text(facts, state, decision.ref), kind="info"
         )
+
+
+def _task_decision(
+    deps: FactoryDeps, loop: FactoryLoop, task: FactoryTask
+) -> FactoryDecision | None:
+    """The open decision of another bad implement or review loop of *task* (synchronous)."""
+    store = deps.factory_store
+    rows = store.list_loops(
+        loop.factory_id, kinds=["implement", "review"], states=_BAD, task_id=task.id
+    )
+    for other in rows:
+        if other.id == loop.id or not other.decision_id:
+            continue
+        decision = store.get_decision(other.decision_id)
+        if decision is not None and decision.status == "open":
+            return decision
+    return None
+
+
+# ── Answered or resolved: settle and reconcile ─────────────────
+
+
+def resumed_text(facts: LoopFacts, ref: str) -> str:
+    """
+    The ``[Factory loop · RESUMED · …]`` mail: the loop runs again before anyone answered.
+
+    :param ref: The decision closed with it, e.g. ``D-31``.
+    """
+    loop = facts.loop
+    head = f"[Factory loop · RESUMED · {_what(facts)} · {_count(loop)} · {ref}]"
+    why = f"Why: {quote_spoofed_lines(loop.last_reason or 'the loop runs again')}."
+    task = facts.task
+    if task is not None and loop.kind in ("implement", "review"):
+        body = (
+            f"{ref} is closed and the hold on {task.key} is lifted: carry on (a new worker "
+            f'needs sys_factory_task(op="start", key="{task.key}") first).'
+        )
+    else:
+        body = f"{ref} is closed and the hold is lifted: carry on."
+    return f"{head} {body}\n{why}"
+
+
+async def settle(app_state: Any, deps: FactoryDeps, changed: list[FactoryLoop]) -> None:
+    """
+    Loops that left their bad state without an answer close their open decision. Never raises.
+
+    Progress, a person's changes request or budget edit, or the task closing
+    can end the stop before anyone answers it. The decision expires (unless a
+    sibling loop still rides on it) and, when the loop runs again, the PL is
+    told its hold is lifted.
+    """
+    for loop_id in dict.fromkeys(loop.id for loop in changed):
+        try:
+            await _settle(app_state, deps, loop_id)
+        except Exception:  # noqa: BLE001 - an open stale decision only costs a dismiss
+            _logger.warning("factory loops: could not settle %s", loop_id, exc_info=True)
+
+
+async def _settle(app_state: Any, deps: FactoryDeps, loop_id: str) -> None:
+    store = deps.factory_store
+    loop = await asyncio.to_thread(store.get_loop, loop_id)
+    if loop is None or not loop.decision_id or loop.state in _BAD:
+        return
+    decision = await asyncio.to_thread(store.get_decision, loop.decision_id)
+    if decision is None or decision.status != "open":
+        return
+    if await asyncio.to_thread(_still_shared, deps, loop, decision.id):
+        return
+    expired = await server_decisions.expire_decision(app_state, decision.id)
+    if expired is None or loop.state != "running":
+        return
+    facts = await asyncio.to_thread(read_facts, deps, loop)
+    if facts.pl is not None:
+        control.send_text(app_state, facts.pl.id, resumed_text(facts, expired.ref), kind="info")
+
+
+def _still_shared(deps: FactoryDeps, loop: FactoryLoop, decision_id: str) -> bool:
+    """:returns: Whether another bad loop still rides on *decision_id*."""
+    return any(
+        other.id != loop.id and norm_id(other.decision_id or "") == norm_id(decision_id)
+        for other in deps.factory_store.list_loops(loop.factory_id, states=_BAD)
+    )
+
+
+def _runs(deps: FactoryDeps, factory_id: str, slug: str | None) -> bool:
+    """:returns: Whether the factory and the project of *slug* run (neither paused nor done)."""
+    root = deps.conversation_store.get_conversation(factory_id)
+    if root is not None and root.labels.get(LABEL_STATE) == STATE_PAUSED:
+        return False
+    project = deps.factory_store.get_project(factory_id, slug) if slug else None
+    if project is None or project.status not in (None, "active"):
+        return False
+    pl = control.find_project_pl(deps, factory_id, slug)
+    return pl is not None and pl.labels.get(LABEL_STATE) not in (STATE_PAUSED, STATE_DONE)
+
+
+def _answered_action(decision: FactoryDecision) -> str | None:
+    """:returns: The action of the option an answered decision chose."""
+    for option in decision.options or []:
+        if option.get("id") == decision.answer_option_id:
+            return str(option.get("action") or "") or None
+    return None
+
+
+async def reconcile(app_state: Any, deps: FactoryDeps, factory_id: str) -> None:
+    """
+    The tick's pass over bad loops whose decision was answered without a loop action.
+
+    ``Pause project`` leaves the loop stopped: once the project and the factory
+    run again, a new decision opens (and the PL is told to hold again); a
+    project that ended meanwhile is not asked. A claim's fresh restart (the PL
+    restarted from its plan) starts the claim loop over. Dismiss, withdraw and
+    expiry leave the loop as it is. Never raises.
+    """
+    try:
+        mode = await asyncio.to_thread(engine_mode, deps, factory_id)
+        if mode == "observe":
+            return
+        store = deps.factory_store
+        rows = await asyncio.to_thread(
+            store.list_loops, factory_id, kinds=list(_DECIDED), states=_BAD
+        )
+        pending = [(row, row.decision_id) for row in rows if row.decision_id]
+        # Implement first: a review loop of the same task then rides on its new decision.
+        for loop, decision_id in sorted(pending, key=lambda pair: _DECIDED.index(pair[0].kind)):
+            decision = await asyncio.to_thread(store.get_decision, decision_id)
+            if decision is None or decision.status != "answered":
+                continue
+            action = _answered_action(decision)
+            if action == ACTION_PAUSE:
+                if await asyncio.to_thread(_runs, deps, factory_id, loop.project_slug):
+                    await _escalate(app_state, deps, loop, loop.state, mode)
+            elif action == ACTION_FRESH_RESTART and loop.kind == "claim":
+                spent = {**_spent(loop), "streak": 0}
+                await asyncio.to_thread(
+                    store.update_loop, loop.id, state="running", ended_at=None, spent=spent
+                )
+    except Exception:  # noqa: BLE001 - the next tick retries
+        _logger.warning("factory loops: reconcile failed for %s", factory_id, exc_info=True)
 
 
 async def violation(app_state: Any, loop: FactoryLoop, change: Change) -> None:
@@ -780,6 +913,8 @@ async def execute_answer(
         if key == "per_head" and loop.kind == "demo":
             spec["per_pr_heads"] = int((loop.spec or {}).get("per_pr_heads") or 6) + 1
         values = {**_spent(loop), "progress_at": int(decision.answered_at or loop.updated_at)}
+        if key == "usd":
+            values["usd_near"] = False  # budget.near fires again at 80 % of the new cap
         fields = {"spec": spec, "state": "running", "ended_at": None, "spent": values}
         if task is not None and loop.kind == "implement" and key in ("attempts", "usd"):
             budget = {**(task.budget or {}), key: value}
@@ -854,8 +989,7 @@ def _settle_siblings(
 ) -> None:
     """Loops that rode on the same decision (a review with its implement loop) follow it."""
     store = deps.factory_store
-    bad = ["exhausted", "stalled", "thrashing"]
-    for other in store.list_loops(loop.factory_id, states=bad):
+    for other in store.list_loops(loop.factory_id, states=_BAD):
         if other.id == loop.id or not other.decision_id:
             continue
         if norm_id(other.decision_id) != norm_id(decision.id):
@@ -912,6 +1046,9 @@ __all__ = [
     "loop_target",
     "plan_answer",
     "read_facts",
+    "reconcile",
+    "resumed_text",
+    "settle",
     "violation",
     "worker_of",
 ]

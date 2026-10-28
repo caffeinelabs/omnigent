@@ -1295,7 +1295,33 @@ _BUDGET = {"max_cost_usd": 9.0}
             {"agent": "env_keeper", "title": "env", "args": {"input": "UP"}}, "ALLOW", id="team"
         ),
         pytest.param(
-            {"agent": "demo", "title": "demo", "args": {"input": "x"}}, "ALLOW", id="team-title"
+            {"agent": "reviewer", "title": "review", "args": {"input": "x"}},
+            "ALLOW",
+            id="team-title",
+        ),
+        pytest.param(
+            {"agent": "ic", "title": "review", "args": {"input": "x"}},
+            "DENY",
+            id="team-title-still-needs-a-budget",
+        ),
+        pytest.param(
+            {"agent": "demo", "title": "demo", "args": {"input": "x", "cost_budget": _BUDGET}},
+            "ALLOW",
+            id="team-title-budgeted",
+        ),
+        pytest.param({"agent": "ic", "args": {"input": "x"}}, "DENY", id="untitled"),
+        pytest.param(
+            {"agent": "ic", "title": "  ", "args": {"input": "x", "cost_budget": _BUDGET}},
+            "DENY",
+            id="blank-title",
+        ),
+        pytest.param(
+            {"agent": "ic_codex", "title": None, "args": {"input": "x"}},
+            "DENY",
+            id="untitled-codex",
+        ),
+        pytest.param(
+            {"agent": "env_keeper", "args": {"input": "UP"}}, "ALLOW", id="team-untitled"
         ),
         pytest.param(
             {"session_id": "c" * 32, "args": {"input": "fix it"}},
@@ -1317,6 +1343,18 @@ def test_pl_dispatch_rules_by_engine_mode(
         assert decision["reason"].startswith("Engine mode enforce: ")
     relayed = guard(_send(mode, tool="mcp__omnigent__sys_session_send", **args), {})
     assert relayed["result"] == expected
+
+
+@pytest.mark.parametrize("mode", [None, "observe", "assist", "enforce"])
+@pytest.mark.parametrize("tool", ["sys_session_create", "mcp__omnigent__sys_session_create"])
+def test_enforce_denies_a_pl_sys_session_create(mode: str | None, tool: str) -> None:
+    """``agent_id`` hides which agent it is: a create would bypass both dispatch rules."""
+    guard = factory_role_guard(role=ROLE_PROJECT_LEAD)
+    event = _send(mode, tool=tool, agent_id="ag_1", title="anything", message="go")
+    decision = guard(event, {})
+    assert decision["result"] == ("DENY" if mode == "enforce" else "ALLOW"), decision
+    if mode == "enforce":
+        assert "not sys_session_create" in decision["reason"]
 
 
 def test_only_the_project_lead_is_held_to_the_dispatch_rules() -> None:
@@ -1348,6 +1386,12 @@ def test_dispatch_violations_name_what_is_missing() -> None:
     assert dispatch_violations({"agent": "ic", "title": "review-route-r1"}) != []
     assert dispatch_violations({"agent": "ic_codex", "title": "route-r12"}) == []
     assert dispatch_violations({"agent": "ic", "title": "route-r123"}) != []  # needs a budget
+    for untitled in ({"agent": "ic"}, {"agent": "ic", "title": ""}, {"agent": "ic", "title": 3}):
+        assert [c for c, _ in dispatch_violations(untitled)] == ["title_not_task_shaped"]
+    assert dispatch_violations({"agent": "planner"}) == []
+    assert [c for c, _ in dispatch_violations({"agent": "ic", "title": "env"})] == [
+        "no_cost_budget"
+    ]
 
 
 @pytest.mark.asyncio

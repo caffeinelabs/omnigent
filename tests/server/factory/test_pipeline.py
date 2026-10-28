@@ -466,6 +466,64 @@ async def test_observe_mode_mails_no_hints(cockpit: Cockpit) -> None:
     assert _next_mail(cockpit) == [] and cockpit.events("engine.next") == []
 
 
+@pytest.mark.parametrize(("who", "state"), [("pl", "paused"), ("pl", "done"), ("root", "paused")])
+async def test_a_paused_pl_or_factory_gets_no_next(cockpit: Cockpit, who: str, state: str) -> None:
+    """A NEXT would wake a paused PL and tell it to dispatch: the hint is dropped instead."""
+    from omnigent.factory import LABEL_STATE
+
+    target = cockpit.world.id("pl") if who == "pl" else cockpit.fid
+    cockpit.world.store.set_labels(target, {LABEL_STATE: state})
+    pr = _store_pr(cockpit, 9631, review="pending")
+    t0 = time.time()
+    await pipeline.consider_pr(cockpit.app.state, cockpit.fid, pr.id, now=t0)
+    assert await pipeline.flush_due(cockpit.app.state, t0 + 30) == 0
+    assert _next_mail(cockpit) == [] and cockpit.events("engine.next") == []
+    # Resumed: the next gate change recomputes it and it goes.
+    cockpit.world.store.set_labels(target, {LABEL_STATE: "active"})
+    await pipeline.consider_pr(cockpit.app.state, cockpit.fid, pr.id, now=t0 + 40)
+    assert await pipeline.flush_due(cockpit.app.state, t0 + 70) == 1
+    assert len(_next_mail(cockpit)) == 1
+
+
+async def test_a_ready_check_runs_once_across_concurrent_flushes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The timer's flush and the tick's flush may overlap; each project gets one READY check."""
+    import asyncio
+
+    sent: list[str] = []
+
+    async def send(_app: Any, _deps: Any, _fid: str, slug: str, _now: float) -> bool:
+        sent.append(slug)
+        await asyncio.sleep(0)
+        return True
+
+    pipeline.reset()
+    monkeypatch.setattr(pipeline, "_send_ready", send)
+    pipeline._state.ready_due.update({("f", "a"): 0.0, ("f", "b"): 0.0})
+    try:
+        await asyncio.gather(
+            pipeline._ready_due(None, None, 1.0), pipeline._ready_due(None, None, 1.0)
+        )
+    finally:
+        pipeline.reset()
+    assert sorted(sent) == ["a", "b"]
+
+
+async def test_uninstalling_cancels_the_flush_timer(cockpit: Cockpit) -> None:
+    pr = _store_pr(cockpit, 9631, review="pending")
+    remove = pipeline.install()
+    pipeline.auto_flush = True
+    try:
+        await pipeline.consider_pr(cockpit.app.state, cockpit.fid, pr.id)
+        timer = pipeline._state.timer
+        assert timer is not None
+    finally:
+        pipeline.auto_flush = False
+        remove()
+    assert timer.cancelled() and pipeline._state.timer is None
+
+
 async def test_the_event_listener_recomputes_on_gate_changes(cockpit: Cockpit) -> None:
     from omnigent.server.factory import events
 
@@ -480,10 +538,10 @@ async def test_the_event_listener_recomputes_on_gate_changes(cockpit: Cockpit) -
             summary="x",
             data={"pr_id": pr.id, "gate": "checks", "to": "pass", "head_sha": HEAD},
         )
+        queued = pipeline._state.queue[cockpit.world.id("pl").replace("-", "")]
+        assert [h.step for h in queued.values()] == ["REVIEW"]
     finally:
         remove()
-    queued = pipeline._state.queue[cockpit.world.id("pl").replace("-", "")]
-    assert [h.step for h in queued.values()] == ["REVIEW"]
 
 
 async def test_ready_waves_wait_the_grace_and_do_not_repeat(cockpit: Cockpit) -> None:

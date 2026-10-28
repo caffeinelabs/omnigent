@@ -688,16 +688,25 @@ ci, claim, plan, intake, improve); `factory_loops` keeps one row per
   *thrashing* when a fixed one returns. The supervisor tick adds wall and
   no-progress stalls, the plan loop and the `done_check` decision.
 - **Engine mode** (root label `omnigent.factory.engine_mode`, default
-  `assist`; the tick mirrors it onto every PL, where the guard reads it):
-  `observe` records (detectors open incidents); `assist` also opens a `loop`
-  decision and mails the PL `[Factory loop · EXHAUSTED|STALLED|THRASHING · …]`,
+  `assist`; stamped on a new PL and mirrored by the tick, where the guard
+  reads it): `observe` records (detectors open incidents); `assist` also opens
+  a `loop` decision and mails the PL `[Factory loop · EXHAUSTED|STALLED|THRASHING · …]`,
   plus NEXT and READY hints; `enforce` also refuses `sys_factory_task(op=start)`
-  past the budget (409 `budget_exhausted`) and the guard denies a PL dispatch
-  whose title is not task-shaped or that sends `ic`/`demo` a task without
-  `args.cost_budget` (codex-native workers are unpriced and exempt).
+  past the budget (409 `budget_exhausted`) and the guard denies a new PL
+  dispatch with no title or one that is not task-shaped, one that sends `ic`/`demo`
+  work without `args.cost_budget` (fixed team titles included; codex-native
+  workers are unpriced and exempt), and any PL `sys_session_create`.
 - **Answers.** Raise (+1 attempt by operators; money by owners), switch
   vendor, fresh restart, abandon, mark done, pause; the PL gets `BUDGET
-  RAISED`, `SWITCH VENDOR` or `FRESH RESTART` with exactly what to do.
+  RAISED`, `SWITCH VENDOR` or `FRESH RESTART` with exactly what to do. A
+  `Pause project` answer leaves the loop stopped; once the project (and the
+  factory) run again the tick opens a new decision. A stop that ends before
+  anyone answers (progress after a no-progress stall, a person's changes
+  request or task budget edit, the task closing) expires its decision, and a
+  loop running again (`loop.resumed` for a stall) mails the PL
+  `[Factory loop · RESUMED · …]`; progress does not lift a wall-budget stall.
+  `start` cites a decision only while it is open. A paused or done PL, or a
+  paused factory, gets no NEXT hints.
 - **NEXT hints.** `pipeline.next_step` (pure) walks `ci → review → verify →
   demo → sentinel → ready`; a changed `REVIEW`, `PREVIEW` or `DEMO` step is
   mailed after a 30 s grace, re-checked (a step already running is skipped),

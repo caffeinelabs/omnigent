@@ -440,7 +440,7 @@ class Change:
 
     :param what: ``started`` / ``iteration`` / ``converged`` / ``stalled`` /
         ``thrashing`` / ``exhausted`` / ``superseded`` / ``cancelled`` /
-        ``budget_violation`` / ``budget_raised``, or ``budget.near``.
+        ``resumed`` / ``budget_violation`` / ``budget_raised``, or ``budget.near``.
     :param iter_span: The ``loop_iter`` span to write: ``{n, started_ms, ended_ms,
         outcome, verdict, reason, class, head_sha}``.
     """
@@ -674,13 +674,27 @@ def _progress_text(loop: FactoryLoop) -> str:
 
 
 def _note_progress(ctx: Ctx, loop: FactoryLoop, **spent: Any) -> FactoryLoop:
-    """Progress happened: reset the no-progress clock; a stalled loop runs again."""
+    """
+    Progress happened: reset the no-progress clock; a stalled loop runs again.
+
+    A loop past its wall budget stays stalled: progress does not give the time back.
+    """
     values = _spent(loop)
     values.update(spent)
     values["progress_at"] = int(ctx.now)
     row = _update(ctx, loop, spent=values)
-    if row.state == "stalled":
+    wall_h = float((row.spec or {}).get("wall_h") or 0)
+    if row.state == "stalled" and not (wall_h and ctx.now - row.started_at >= wall_h * 3600):
         row = _transition(ctx, row, "running", "progress resumed")
+        ctx.changes.append(
+            Change(
+                row,
+                "resumed",
+                f"{_label(row)}: {_progress_text(row)} runs again · progress resumed",
+                {"reason": "progress resumed"},
+                severity="notice",
+            )
+        )
     return row
 
 
@@ -707,7 +721,7 @@ def implement_loop(ctx: Ctx, task: FactoryTask, *, create: bool = True) -> Facto
         ctx.factory_id, "implement", project=_project(ctx, task.project_slug), task=task
     )
     workers = max(0, task.attempts)
-    return _ensure(
+    row = _ensure(
         ctx,
         "implement",
         subject,
@@ -719,6 +733,10 @@ def implement_loop(ctx: Ctx, task: FactoryTask, *, create: bool = True) -> Facto
         iteration=workers,
         spent={"workers": workers, "try_open": workers > 0, "try_worker": workers or None},
     )
+    if workers:
+        # The worker that made the loop is its current try: open that iteration's span now.
+        row = _iterate(ctx, row, n=workers, verdict="DISPATCHED", reason=f"attempt {workers}")
+    return row
 
 
 def _cap(loop: FactoryLoop) -> int:
@@ -849,6 +867,8 @@ def observe_rework(
             )
         return row
     row = _verdict(ctx, row, verdict=verdict, reason=f"{source}: {reason}", ok=False, cls="code")
+    # A person asking for changes lifts a budget stop too: their try is granted.
+    revive = row.state in ("converged", "running") or (human and row.state in BAD_STATES)
     return _iterate(
         ctx,
         row,
@@ -857,8 +877,52 @@ def observe_rework(
         cls="code",
         head=head,
         spent={"progress_at": int(ctx.now), "try_open": True, "try_worker": None},
-        state="running" if row.state in ("converged", "running") else None,
+        state="running" if revive else None,
     )
+
+
+def observe_budget_edit(ctx: Ctx, task: FactoryTask, by: str) -> FactoryLoop | None:
+    """
+    A person edited *task*'s budget: its implement loop takes the new values.
+
+    An exhausted loop now under both budgets runs again (``loop.budget_raised``);
+    its open decision is closed when the change is applied.
+    """
+    row = implement_loop(ctx, task, create=False)
+    own = task.budget if isinstance(task.budget, Mapping) else {}
+    if row is None or row.state in LOOP_ENDED_STATES or not own:
+        return row
+    before = dict(row.spec or {})
+    spec = dict(before)
+    if (attempts := _number(own.get("attempts"))) is not None:
+        spec["attempts"] = int(attempts)
+    if isinstance(own.get("usd"), int | float) and not isinstance(own["usd"], bool):
+        spec["usd"] = _cast("usd", max(0.0, float(own["usd"])))
+    if spec == before:
+        return row
+    values = _spent(row)
+    if float(spec.get("usd") or 0) > float(before.get("usd") or 0):
+        values["usd_near"] = False
+    row = _update(ctx, row, spec=spec, spent=values)
+    usd, cap_usd = float(values.get("usd") or 0), float(spec.get("usd") or 0)
+    if row.state != "exhausted" or row.iteration >= _cap(row) or (cap_usd and usd >= cap_usd):
+        return row
+    row = _transition(ctx, row, "running", f"budget edited by {by}")
+    raised = [_cap_text(before), _cap_text(spec)]
+    ctx.changes.append(
+        Change(
+            row,
+            "budget_raised",
+            f"{_label(row)}: budget {raised[0]} → {raised[1]} by {by}",
+            {"raised": raised, "via": "task_edit", "by": by},
+            severity="notice",
+        )
+    )
+    return row
+
+
+def _cap_text(spec: Mapping[str, Any]) -> str:
+    return f"{spec.get('attempts') or '-'} attempts · ${float(spec.get('usd') or 0):g}"
 
 
 def observe_task_closed(ctx: Ctx, task: FactoryTask, to: str, reason: str | None) -> None:
@@ -1389,6 +1453,7 @@ OBSERVED_KINDS: Final = frozenset(
         "preview.reported",
         "preview.sha_mismatch",
         "env.reported",
+        "control.task_edit",
     }
 )
 _ENV_FAILED: Final = frozenset({"failed", "degraded", "down"})
@@ -1564,6 +1629,15 @@ def handle_event(ctx: Ctx, event: FactoryEvent) -> None:
             observe_claim(ctx, pr, data)
     elif kind == "env.reported" and event.project_slug:
         _note_env(ctx, event.project_slug, str(data.get("state") or ""))
+    elif kind == "control.task_edit" and _budget_edited(data.get("diff")):
+        task = _get_task(ctx, data.get("task_id"))
+        if task is not None:
+            observe_budget_edit(ctx, task, str(data.get("by") or "a person"))
+
+
+def _budget_edited(diff: Any) -> bool:
+    """:returns: Whether a task-edit diff changed the task's budget line."""
+    return isinstance(diff, str) and any(line.startswith("+Budget:") for line in diff.splitlines())
 
 
 def _note_env(ctx: Ctx, slug: str, state: str) -> None:
@@ -1646,8 +1720,9 @@ async def tick(
     The supervisor's per-tick hook. Never raises.
 
     Mirrors each factory's engine mode onto its PLs (the guard reads it),
-    applies the wall, no-progress, $ and plan rules, checks the project and
-    factory $ budgets, sends READY waves and flushes coalesced NEXT hints.
+    applies the wall, no-progress, $ and plan rules, re-opens the decision of
+    a loop whose project was paused from it, checks the project and factory $
+    budgets, sends READY waves and flushes coalesced NEXT hints.
     """
     from omnigent.server.factory import budgets, loop_escalation, pipeline
 
@@ -1664,6 +1739,7 @@ async def tick(
                 ctx = Ctx(deps, factory_id, at)
                 await asyncio.to_thread(tick_sync, ctx)
             await apply(app_state, ctx)
+            await loop_escalation.reconcile(app_state, deps, factory_id)
             await loop_escalation.done_checks(app_state, deps, factory_id, at)
             await budgets.check(app_state, factory_id, now=at)
             await pipeline.on_tick(app_state, factory_id, now=at)
@@ -1679,6 +1755,24 @@ def _mirror_mode(deps: FactoryDeps, factory_id: str, members: Sequence[Conversat
             continue
         if member.labels.get(ENGINE_MODE_LABEL) != mode:
             deps.conversation_store.set_labels(member.id, {ENGINE_MODE_LABEL: mode})
+
+
+def stamp_mode(deps: FactoryDeps, conv: Conversation) -> None:
+    """
+    A new project lead carries its factory's engine mode from its first turn. Never raises.
+
+    The tick mirrors later changes (:func:`_mirror_mode`); until then the guard
+    would read no mode and let an enforce-mode dispatch through.
+    """
+    factory_id = conv.labels.get(LABEL_ID)
+    if conv.labels.get(LABEL_ROLE) != ROLE_PROJECT_LEAD or not factory_id:
+        return
+    try:
+        mode = engine_mode(deps, factory_id)
+        if conv.labels.get(ENGINE_MODE_LABEL) != mode:
+            deps.conversation_store.set_labels(conv.id, {ENGINE_MODE_LABEL: mode})
+    except Exception:  # noqa: BLE001 - the next tick mirrors it
+        _logger.warning("factory loops: no engine mode on %s", conv.id, exc_info=True)
 
 
 def _paused_projects(deps: FactoryDeps, factory_id: str) -> tuple[bool, set[str]]:
@@ -1855,8 +1949,9 @@ async def apply(app_state: Any, ctx: Ctx) -> None:
             from omnigent.server.factory import loop_escalation
 
             await loop_escalation.violation(app_state, loop, change)
-    from omnigent.server.factory import pipeline
+    from omnigent.server.factory import loop_escalation, pipeline
 
+    await loop_escalation.settle(app_state, deps, [c.loop for c in ctx.changes])
     await pipeline.on_loops(app_state, fid, [c.loop for c in ctx.changes])
 
 
@@ -1999,6 +2094,23 @@ def _empty_summary() -> dict[str, int]:
 # ── sys_factory_task(op="start") in enforce mode ───────────────
 
 
+def _open_decision(deps: FactoryDeps, loop: FactoryLoop | None) -> FactoryDecision | None:
+    """:returns: The loop's decision while it is still open (an answered one is not cited)."""
+    if loop is None or not loop.decision_id:
+        return None
+    decision = deps.factory_store.get_decision(loop.decision_id)
+    return decision if decision is not None and decision.status == "open" else None
+
+
+def _exhausted_text(loop: FactoryLoop) -> str:
+    """``implement 3/3`` or, for a $ stop, ``$15.40 of $15.00 spent``."""
+    usd = float(_spent(loop).get("usd") or 0)
+    cap = float((loop.spec or {}).get("usd") or 0)
+    if cap and usd >= cap:
+        return f"${usd:.2f} of ${cap:.2f} spent"
+    return f"implement {loop.iteration}/{_cap(loop)}"
+
+
 def start_refusal(
     deps: FactoryDeps, factory_id: str, task: FactoryTask, mode: str
 ) -> CockpitError | None:
@@ -2014,8 +2126,9 @@ def start_refusal(
     store = deps.factory_store
     loop = store.get_loop_by_subject(factory_id, "implement", task_subject(task.id))
     if loop is not None:
-        exhausted = loop.state == "exhausted"
-        cap = _cap(loop)
+        if loop.state != "exhausted":
+            return None
+        what = _exhausted_text(loop)
     else:
         spec = resolve_spec(
             factory_id,
@@ -2024,19 +2137,20 @@ def start_refusal(
             task=task,
         )
         cap = int(spec["attempts"])
-        exhausted = task.attempts >= cap
-    if not exhausted:
-        return None
-    decision = (
-        store.get_decision(loop.decision_id) if loop is not None and loop.decision_id else None
-    )
+        if task.attempts < cap:
+            return None
+        what = f"implement {task.attempts}/{cap}"
+    decision = _open_decision(deps, loop)
     ref = decision.ref if decision is not None else None
-    tail = f" until {ref} is answered" if ref else "; a person raises it"
+    tail = (
+        f" until {ref} is answered"
+        if ref
+        else "; a person raises its budget (or asks for changes on its PR)"
+    )
     return CockpitError(
         409,
         "budget_exhausted",
-        f"{task_label(task)}: implement {loop.iteration if loop else task.attempts}/{cap} is "
-        f"exhausted; do not dispatch it again{tail}",
+        f"{task_label(task)}: {what} - the budget is exhausted; do not dispatch it again{tail}",
         decision=ref,
         decision_id=decision.id if decision is not None else None,
     )
@@ -2047,10 +2161,10 @@ def start_warning(deps: FactoryDeps, factory_id: str, task: FactoryTask) -> str 
     loop = deps.factory_store.get_loop_by_subject(factory_id, "implement", task_subject(task.id))
     if loop is None or loop.state != "exhausted":
         return None
-    decision = deps.factory_store.get_decision(loop.decision_id) if loop.decision_id else None
+    decision = _open_decision(deps, loop)
     ref = f" {decision.ref} is open" if decision is not None else ""
     return (
-        f"implement {loop.iteration}/{_cap(loop)} is exhausted;{ref} - this dispatch is "
+        f"{_exhausted_text(loop)}: the budget is exhausted;{ref} - this dispatch is "
         "recorded as a budget violation"
     )
 
@@ -2091,6 +2205,7 @@ __all__ = [
     "loop_chip",
     "loop_view",
     "observe_attempt",
+    "observe_budget_edit",
     "observe_checks",
     "observe_claim",
     "observe_demo",
@@ -2105,6 +2220,7 @@ __all__ = [
     "resolve_spec",
     "set_budget_resolver",
     "snapshot_fields",
+    "stamp_mode",
     "start_refusal",
     "start_warning",
     "task_label",

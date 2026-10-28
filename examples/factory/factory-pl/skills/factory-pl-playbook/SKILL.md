@@ -172,9 +172,9 @@ Report: the RESULT block
 
 CI failures and readiness (steps 5-7) come as their own `[Factory notice · PR …]`.
 
-In enforce mode `start` answers 409 `budget_exhausted` past the budget; a task
-dispatch to `ic` or `demo` without `args.cost_budget` is denied (the card's;
-`demo-<key>`: `{max_cost_usd: <budget_left.usd>}` of `op="get"`).
+In enforce mode `start` answers 409 `budget_exhausted` past the budget; a new
+dispatch without a task title, or to `ic`/`demo` without `args.cost_budget`, is denied
+(the card's; `demo-<key>`: `{max_cost_usd: <budget_left.usd>}` of `op="get"`).
 
 ### Review-links block
 

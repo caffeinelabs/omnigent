@@ -807,6 +807,12 @@ async def test_no_progress_and_wall_stall_on_a_fake_clock(
         **{"from": "running", "to": "running"},
     )
     assert implement(cockpit, "route").state == "running"
+    # Unanswered, the stall's decision closes and the PL may carry on.
+    assert cockpit.store.get_decision(decision.id).status == "expired"
+    assert cockpit.events("loop.resumed")[-1].data["loop_id"] == implement(cockpit, "route").id
+    assert cockpit.mailer.texts_to(cockpit.world.id("pl"))[-1].startswith(
+        f"[Factory loop · RESUMED · T-1 route · implement 1/3 · {decision.ref}]"
+    )
     # The wall budget (8 h) stalls a loop that keeps moving but never lands.
     clock.now = t0 + 8 * 3600
     await gate(cockpit, pr, "checks", "pending", H3)
@@ -814,6 +820,17 @@ async def test_no_progress_and_wall_stall_on_a_fake_clock(
     docs = implement(cockpit, "docs")
     assert docs.state == "stalled" and docs.last_reason == "running 8 h (wall budget 8 h)"
     assert docs.spent["wall_s"] == 8 * 3600 + 60
+    # Progress does not give the time back: it stays stalled on its open decision.
+    wall = next(d for d in loop_decisions(cockpit) if "docs" in d.question)
+    await emit(
+        cockpit,
+        "task.state",
+        task_id=task(cockpit, "docs").id,
+        result="PASS",
+        **{"from": "running", "to": "running"},
+    )
+    assert implement(cockpit, "docs").state == "stalled"
+    assert cockpit.store.get_decision(wall.id).status == "open"
 
 
 async def test_the_tick_mirrors_the_engine_mode_onto_project_leads(cockpit: Cockpit) -> None:
@@ -821,6 +838,18 @@ async def test_the_tick_mirrors_the_engine_mode_onto_project_leads(cockpit: Cock
     members = [cockpit.world.get("lead_a"), cockpit.world.get("pl")]
     await loops.tick(cockpit.app.state, members, [], now=time.time())
     assert cockpit.world.get("pl").labels[loops.ENGINE_MODE_LABEL] == "enforce"
+    assert loops.ENGINE_MODE_LABEL not in cockpit.world.get("lead_b").labels
+
+
+async def test_a_new_project_lead_gets_the_engine_mode_at_once(cockpit: Cockpit) -> None:
+    """Without it the guard would let enforce-mode dispatches through until the next tick."""
+    from omnigent.server.factory.people import mirror_member_on_create
+
+    set_mode(cockpit, "enforce")
+    assert loops.ENGINE_MODE_LABEL not in cockpit.world.get("pl").labels
+    await mirror_member_on_create(cockpit.app.state, cockpit.world.get("pl"))
+    assert cockpit.world.get("pl").labels[loops.ENGINE_MODE_LABEL] == "enforce"
+    await mirror_member_on_create(cockpit.app.state, cockpit.world.get("lead_b"))
     assert loops.ENGINE_MODE_LABEL not in cockpit.world.get("lead_b").labels
 
 
@@ -928,3 +957,289 @@ async def test_task_views_carry_their_implement_loop(cockpit: Cockpit) -> None:
         "limit": 3,
     }
     assert by_key["docs"]["loop"] is None
+
+
+# ── Answered without a loop action, or resolved without an answer ──────────
+
+
+async def exhaust(cockpit: Cockpit, key: str) -> FactoryLoop:
+    """Three failed tries: the implement loop of *key* is exhausted with an open decision."""
+    for n in range(3):
+        if n:
+            await start(cockpit, key)
+        await emit(
+            cockpit,
+            "task.state",
+            task_id=task(cockpit, key).id,
+            result="FAIL",
+            note="red",
+            **{"from": "running", "to": "running"},
+        )
+    row = implement(cockpit, key)
+    assert row.state == "exhausted" and row.decision_id
+    return row
+
+
+def pl_texts(cockpit: Cockpit) -> list[str]:
+    return cockpit.mailer.texts_to(cockpit.world.id("pl"))
+
+
+async def test_a_pause_answer_reopens_the_decision_once_the_project_runs(
+    cockpit: Cockpit,
+) -> None:
+    """Pause project leaves the $ stop in place: on resume a new decision asks again."""
+    from omnigent.factory import LABEL_STATE
+
+    await plan(cockpit, "route")
+    await start(cockpit, "route")
+    cockpit.store.update_task(task(cockpit, "route").id, cost_usd=15.5)
+    await emit(
+        cockpit,
+        "task.state",
+        task_id=task(cockpit, "route").id,
+        result="PASS",
+        **{"from": "running", "to": "running"},
+    )
+    first = loop_decisions(cockpit)[0]
+    assert [o["action"] for o in first.options] == ["raise_budget", "abandon_task", "pause"]
+    await decisions.answer_decision(
+        cockpit.app.state, first.id, user_id="alice", option_id="pause"
+    )
+    pl = cockpit.world.get("pl")
+    assert pl.labels[LABEL_STATE] == "paused"
+    set_mode(cockpit, "enforce")
+    # The answered decision is not cited: nothing would ever answer it again.
+    with pytest.raises(CockpitError) as raised:
+        await start(cockpit, "route")
+    assert raised.value.code == "budget_exhausted"
+    assert first.ref not in raised.value.message and raised.value.extra["decision"] is None
+    assert "$15.50 of $15.00 spent" in raised.value.message
+
+    members = [cockpit.world.get("lead_a"), pl]
+    await loops.tick(cockpit.app.state, members, [], now=time.time())
+    assert len(loop_decisions(cockpit)) == 1  # still paused: nobody is asked yet
+    cockpit.world.store.set_labels(pl.id, {LABEL_STATE: "active"})
+    await loops.tick(cockpit.app.state, [cockpit.world.get("lead_a"), pl], [], now=time.time())
+    second = next(d for d in loop_decisions(cockpit) if d.id != first.id)
+    assert second.status == "open" and implement(cockpit, "route").decision_id == second.id
+    assert pl_texts(cockpit)[-1].startswith(
+        f"[Factory loop · EXHAUSTED · T-1 route · implement 1/3 · {second.ref}]"
+    )
+    with pytest.raises(CockpitError) as raised:
+        await start(cockpit, "route")
+    assert raised.value.extra["decision"] == second.ref
+    # The next tick does not ask a third time.
+    await loops.tick(cockpit.app.state, [cockpit.world.get("lead_a"), pl], [], now=time.time())
+    assert len(loop_decisions(cockpit)) == 2
+
+
+@pytest.mark.parametrize(("who", "state"), [("pl", "done"), ("root", "paused")])
+async def test_a_pause_answer_is_not_asked_again_while_held(
+    cockpit: Cockpit, who: str, state: str
+) -> None:
+    """Enforce from the start: a project that ended, or a paused factory, gets no new decision."""
+    from omnigent.factory import LABEL_STATE
+
+    set_mode(cockpit, "enforce")
+    await plan(cockpit, "route")
+    await start(cockpit, "route")
+    cockpit.store.update_task(task(cockpit, "route").id, cost_usd=15.5)
+    await emit(
+        cockpit,
+        "task.state",
+        task_id=task(cockpit, "route").id,
+        result="PASS",
+        **{"from": "running", "to": "running"},
+    )
+    first = loop_decisions(cockpit)[0]
+    await decisions.answer_decision(
+        cockpit.app.state, first.id, user_id="alice", option_id="pause"
+    )
+    pl = cockpit.world.get("pl")
+    cockpit.world.store.set_labels(pl.id, {LABEL_STATE: "active"})
+    target = pl.id if who == "pl" else cockpit.fid
+    cockpit.world.store.set_labels(target, {LABEL_STATE: state})
+    members = [cockpit.world.get("lead_a"), cockpit.world.get("pl")]
+    await loops.tick(cockpit.app.state, members, [], now=time.time())
+    assert [d.id for d in loop_decisions(cockpit)] == [first.id]
+    with pytest.raises(CockpitError) as raised:
+        await start(cockpit, "route")
+    assert raised.value.extra["decision"] is None
+
+
+async def test_a_dismissed_claim_decision_is_not_asked_again(cockpit: Cockpit) -> None:
+    await plan(cockpit, "route")
+    await start(cockpit, "route")
+    pr = make_pr(cockpit, "route")
+    for _ in range(2):
+        await emit(
+            cockpit,
+            "pr.claim",
+            pr_id=pr.id,
+            claim="ready_for_human_merge",
+            head_sha=H1,
+            claim_mismatch=True,
+        )
+    decision = loop_decisions(cockpit)[0]
+    await decisions.answer_decision(
+        cockpit.app.state, decision.id, user_id="alice", option_id="dismiss"
+    )
+    members = [cockpit.world.get("lead_a"), cockpit.world.get("pl")]
+    await loops.tick(cockpit.app.state, members, [], now=time.time())
+    assert len(loop_decisions(cockpit)) == 1
+    assert loop_of(cockpit, "claim", loops.pr_subject(pr.id)).state == "exhausted"
+
+
+async def test_a_claim_fresh_restart_starts_the_claim_loop_over(cockpit: Cockpit) -> None:
+    await plan(cockpit, "route")
+    await start(cockpit, "route")
+    pr = make_pr(cockpit, "route")
+    for _ in range(2):
+        await emit(
+            cockpit,
+            "pr.claim",
+            pr_id=pr.id,
+            claim="ready_for_human_merge",
+            head_sha=H1,
+            claim_mismatch=True,
+        )
+    decision = loop_decisions(cockpit)[0]
+    await decisions.answer_decision(
+        cockpit.app.state, decision.id, user_id="alice", option_id="fresh"
+    )
+    assert cockpit.store.get_decision(decision.id).status == "answered"
+    members = [cockpit.world.get("lead_a"), cockpit.world.get("pl")]
+    await loops.tick(cockpit.app.state, members, [], now=time.time())
+    row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+    assert row.state == "running" and row.spent["streak"] == 0
+    assert len(loop_decisions(cockpit)) == 1
+
+
+async def test_a_human_changes_request_lifts_an_exhausted_loop(cockpit: Cockpit) -> None:
+    """The person's try is granted: the loop runs, its decision closes, the PL may go on."""
+    await plan(cockpit, "route")
+    await start(cockpit, "route")
+    make_pr(cockpit, "route")
+    row = await exhaust(cockpit, "route")
+    decision = cockpit.store.get_decision(row.decision_id)
+    await events.emit(
+        cockpit.app.state,
+        cockpit.fid,
+        "pr.human_review",
+        project=SLUG,
+        subject=f"pr:{REPO}#9631",
+        summary="mia requested changes",
+        data={"verdict": "changes_requested", "by": "mia (operator)", "source": "cockpit"},
+    )
+    row = implement(cockpit, "route")
+    assert (row.state, row.iteration, loops.limit_of(row)) == ("running", 4, 4)
+    assert cockpit.store.get_decision(decision.id).status == "expired"
+    assert pl_texts(cockpit)[-1] == (
+        f"[Factory loop · RESUMED · T-1 route · implement 4/4 · {decision.ref}] "
+        f"{decision.ref} is closed and the hold on route is lifted: carry on (a new worker "
+        'needs sys_factory_task(op="start", key="route") first).\n'
+        "Why: human review: changes requested by mia (operator)."
+    )
+    set_mode(cockpit, "enforce")
+    assert (
+        loops.start_refusal(cockpit.deps, cockpit.fid, task(cockpit, "route"), "enforce") is None
+    )
+
+
+async def test_a_task_budget_edit_lifts_an_exhausted_loop(cockpit: Cockpit) -> None:
+    await plan(cockpit, "route")
+    await start(cockpit, "route")
+    row = await exhaust(cockpit, "route")
+    decision = cockpit.store.get_decision(row.decision_id)
+    set_mode(cockpit, "enforce")
+    with pytest.raises(CockpitError) as raised:
+        await start(cockpit, "route")
+    assert raised.value.extra["decision"] == decision.ref
+    # An edit that leaves the budget alone changes nothing.
+    await tasks.edit_task(
+        cockpit.app.state,
+        cockpit.fid,
+        "T-1",
+        tasks.TaskEditIn(priority=1),
+        Actor.human("carol", "operator"),
+        "carol (operator)",
+    )
+    assert implement(cockpit, "route").state == "exhausted"
+    await tasks.edit_task(
+        cockpit.app.state,
+        cockpit.fid,
+        "T-1",
+        tasks.TaskEditIn(budget=tasks.TaskBudgetIn(attempts=5)),
+        Actor.human("carol", "operator"),
+        "carol (operator)",
+    )
+    row = implement(cockpit, "route")
+    assert (row.state, loops.limit_of(row)) == ("running", 5)
+    assert cockpit.store.get_decision(decision.id).status == "expired"
+    raised_event = cockpit.events("loop.budget_raised")[-1]
+    assert raised_event.data["via"] == "task_edit"
+    assert pl_texts(cockpit)[-1].startswith(
+        f"[Factory loop · RESUMED · T-1 route · implement 3/5 · {decision.ref}]"
+    )
+    assert (await start(cockpit, "route"))["attempt"] == 4
+
+
+async def test_a_loop_that_ends_by_itself_expires_its_decision(cockpit: Cockpit) -> None:
+    await plan(cockpit, "route")
+    await start(cockpit, "route")
+    row = await exhaust(cockpit, "route")
+    await tasks.close_task(cockpit.app.state, cockpit.fid, SLUG, "route", "done", _pl(cockpit))
+    assert implement(cockpit, "route").state == "converged"
+    assert cockpit.store.get_decision(row.decision_id).status == "expired"
+    assert not pl_texts(cockpit)[-1].startswith("[Factory loop · RESUMED")
+
+
+async def test_an_implement_loop_rides_on_its_review_loops_decision(cockpit: Cockpit) -> None:
+    """The review went bad first (thrash); the implement stop later joins its decision."""
+    await plan(cockpit, "route")
+    cockpit.store.update_task(task(cockpit, "route").id, budget={"attempts": 4})
+    await start(cockpit, "route")
+    pr = make_pr(cockpit, "route")
+    now = int(time.time())
+    await review(cockpit, pr, H1, "CHANGES", at=now, blocking=1, findings=["aaaa0001"])
+    await review(cockpit, pr, H2, "CHANGES", at=now + 1, blocking=1, findings=["aaaa0002"])
+    await review(cockpit, pr, H3, "CHANGES", at=now + 2, blocking=1, findings=["aaaa0001"])
+    review_loop = loop_of(cockpit, "review", loops.pr_subject(pr.id))
+    assert review_loop.state == "thrashing" and review_loop.decision_id
+    assert implement(cockpit, "route").state == "running"
+    await emit(
+        cockpit,
+        "task.state",
+        task_id=task(cockpit, "route").id,
+        result="FAIL",
+        note="red again",
+        **{"from": "running", "to": "running"},
+    )
+    row = implement(cockpit, "route")
+    assert row.state == "exhausted" and row.decision_id == review_loop.decision_id
+    assert len(loop_decisions(cockpit)) == 1
+
+
+async def test_the_first_try_opens_its_iteration_span_at_dispatch(cockpit: Cockpit) -> None:
+    await plan(cockpit, "route")
+    await start(cockpit, "route")
+    row = implement(cockpit, "route")
+    spans = cockpit.store.list_spans(cockpit.fid, kinds=["loop_iter"])
+    first = [s for s in spans if s.loop_id == row.id]
+    assert len(first) == 1 and first[0].attempt == 1 and first[0].ended_at is None
+    started = first[0].started_at
+    await emit(
+        cockpit,
+        "task.state",
+        task_id=task(cockpit, "route").id,
+        result="FAIL",
+        note="red",
+        **{"from": "running", "to": "running"},
+    )
+    closed = next(
+        s
+        for s in cockpit.store.list_spans(cockpit.fid, kinds=["loop_iter"])
+        if s.loop_id == row.id
+    )
+    assert closed.outcome == "fail" and closed.started_at == started
+    assert closed.ended_at is not None and closed.ended_at >= started

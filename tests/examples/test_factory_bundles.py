@@ -1577,13 +1577,14 @@ def test_engine_hints_and_loop_mails_have_pl_rows(pl: AgentSpec) -> None:
         LoopFacts,
         answer_text,
         escalation_text,
+        resumed_text,
     )
     from omnigent.server.factory.pipeline import MAILED, Step, hint_text
 
     prompt = " ".join((pl.instructions or "").split())
     next_rows = _rows(prompt, "[Factory engine · NEXT")
     loop_rows = _rows(prompt, "[Factory loop · ")
-    assert next_rows and len(loop_rows) == 6
+    assert next_rows and len(loop_rows) == 7
     head = "5e1c2d4" + "a" * 33
     pr = FactoryPr(
         id="p" * 32,
@@ -1647,6 +1648,7 @@ def test_engine_hints_and_loop_mails_have_pl_rows(pl: AgentSpec) -> None:
             extra=extra,
         )
         texts.append(answer_text(answer, "bob (operator)"))
+    texts.append(resumed_text(facts, "D-31"))
     for text in texts:
         header = text.split("]", 1)[0] + "]"
         assert any(p.fullmatch(header) for p in loop_rows), header

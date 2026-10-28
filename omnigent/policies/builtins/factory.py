@@ -1633,6 +1633,13 @@ DEFAULT_COST_BUDGET_AGENTS: tuple[str, ...] = ("ic", "demo")
 _DISPATCH_TOOLS: frozenset[str] = frozenset(
     {"sys_session_send", "mcp__omnigent__sys_session_send"}
 )
+_CREATE_TOOLS: frozenset[str] = frozenset(
+    {"sys_session_create", "mcp__omnigent__sys_session_create"}
+)
+_TITLE_HINT = (
+    'use the task\'s title_to_use from sys_factory_task(op="start") (`<key>`, `<key>-r<k>`), '
+    "`review-<key>` or `demo-<key>`"
+)
 
 
 def dispatch_violations(
@@ -1642,28 +1649,29 @@ def dispatch_violations(
     What a project lead's ``sys_session_send`` breaks of the loop engine's dispatch rules.
 
     A follow-up by ``session_id`` is never checked (``cost_budget`` only applies
-    when a sub-agent is first created). Fixed team titles pass.
+    when a sub-agent is first created). A new sub-agent needs a title: a task
+    title, or a fixed team name. Team names skip the title rule only; a
+    budgeted agent still needs ``cost_budget``.
 
     :param args: The tool's arguments, e.g. ``{"agent": "ic", "title": "route",
         "args": {"input": "…", "cost_budget": {"max_cost_usd": 9}}}``.
-    :param cost_budget_agents: Agents a task-titled dispatch must budget.
+    :param cost_budget_agents: Agents a new dispatch must budget.
     :returns: ``(code, message)`` pairs: ``title_not_task_shaped``, ``no_cost_budget``.
     """
     if isinstance(args.get("session_id"), str) and args["session_id"]:
         return []
     agent, title = args.get("agent"), args.get("title")
-    if not isinstance(agent, str) or not isinstance(title, str) or not title.strip():
+    if not isinstance(agent, str) or not agent or agent in TEAM_AGENTS:
         return []
-    text = title.strip()
-    if agent in TEAM_AGENTS or text in TEAM_TITLES:
-        return []
-    if not TASK_TITLE_RE.fullmatch(text):
+    text = title.strip() if isinstance(title, str) else ""
+    if not text:
+        # Untitled, the runner names it ``<agent>-<n>``: bound to no task, budgeted by nothing.
+        return [("title_not_task_shaped", f"a dispatch to {agent} needs a title: {_TITLE_HINT}")]
+    if text not in TEAM_TITLES and not TASK_TITLE_RE.fullmatch(text):
         return [
             (
                 "title_not_task_shaped",
-                f"dispatch title {text[:80]!r} is not task-shaped: use the task's title_to_use "
-                'from sys_factory_task(op="start") (`<key>`, `<key>-r<k>`), `review-<key>` or '
-                "`demo-<key>`",
+                f"dispatch title {text[:80]!r} is not task-shaped: {_TITLE_HINT}",
             )
         ]
     child = args.get("args")
@@ -1680,21 +1688,32 @@ def dispatch_violations(
     return []
 
 
+def _engine_mode(event: _Json) -> str | None:
+    context = event.get("context")
+    labels = context.get("labels") if isinstance(context, dict) else None
+    mode = labels.get(ENGINE_MODE_LABEL) if isinstance(labels, dict) else None
+    return mode if isinstance(mode, str) else None
+
+
 def _dispatch_reason(event: _Json, cost_budget_agents: Iterable[str]) -> str | None:
     """A DENY reason for a PL dispatch, only when the factory's engine mode is ``enforce``."""
     data = event.get("data")
     if not isinstance(data, dict) or not isinstance(data.get("name"), str):
         return None
-    args = _tool_call(event, _DISPATCH_TOOLS)
-    if args is None:
+    send = _tool_call(event, _DISPATCH_TOOLS)
+    create = _tool_call(event, _CREATE_TOOLS) if send is None else None
+    if send is None and create is None:
         return None
-    context = event.get("context")
-    labels = context.get("labels") if isinstance(context, dict) else None
-    mode = labels.get(ENGINE_MODE_LABEL) if isinstance(labels, dict) else None
-    if mode != ENFORCE:
+    if _engine_mode(event) != ENFORCE:
         # observe/assist: allowed; the server records the finding when it binds the worker.
         return None
-    found = dispatch_violations(args, cost_budget_agents=cost_budget_agents)
+    if create is not None:
+        # Its agent_id hides which agent it is, so neither rule can be checked.
+        return (
+            "Engine mode enforce: dispatch with sys_session_send(agent=<agent>, "
+            "title=<title_to_use>, args={..., cost_budget}), not sys_session_create."
+        )
+    found = dispatch_violations(send or {}, cost_budget_agents=cost_budget_agents)
     return f"Engine mode enforce: {found[0][1]}." if found else None
 
 
@@ -1720,7 +1739,8 @@ def guard_evaluator(
         Classify a tool call.
 
         :param event: V0 event; shell / terminal-input tool calls, GitHub MCP
-            merges and (for a project lead) ``sys_session_send`` are inspected.
+            merges and (for a project lead) ``sys_session_send`` / ``sys_session_create`` are
+            inspected.
         :param config: Runtime config dict (unused).
         :returns: ALLOW or DENY, never ASK.
         """
@@ -1799,11 +1819,11 @@ def factory_role_guard(
 
     For a project lead it also checks ``sys_session_send`` against the
     factory's engine mode (the ``omnigent.factory.engine_mode`` label the
-    server mirrors onto the PL): in ``enforce`` a dispatch whose title is not
-    task-shaped, or a task dispatch to a budgeted agent without
-    ``args.cost_budget``, is denied; ``observe`` and ``assist`` allow it and
-    the server records the finding (``task.unplanned``,
-    ``loop.budget_violation``).
+    server mirrors onto the PL): in ``enforce`` a new dispatch with no title or
+    one that is not task-shaped, a dispatch to a budgeted agent without
+    ``args.cost_budget``, and any ``sys_session_create`` are denied;
+    ``observe`` and ``assist`` allow them and the server records the finding
+    (``task.unplanned``, ``loop.budget_violation``).
 
     :param role: The agent's factory role: ``lead``, ``project_lead``, ``ic``,
         ``env_keeper``, ``reviewer``, ``demo`` or ``planner``.

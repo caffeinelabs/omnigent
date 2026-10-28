@@ -28,11 +28,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.entities.factory import FactoryLoop, FactoryPr
+from omnigent.factory import LABEL_ID, LABEL_STATE, STATE_DONE, STATE_PAUSED
 from omnigent.server.factory import control, events, tasks
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.stores.factory_store import norm_id
@@ -426,15 +427,33 @@ async def flush_due(app_state: Any, now: float | None = None) -> int:
     return sent
 
 
+def _held(deps: FactoryDeps, pl_id: str) -> str | None:
+    """
+    The PL's factory id, or ``None`` when its hints must not go (synchronous).
+
+    A paused or done PL, or a paused factory, gets no NEXT: a hint would wake
+    it and tell it to dispatch, undoing the pause. Its hints are dropped; the
+    next gate change after the resume recomputes them.
+    """
+    store = deps.conversation_store
+    conv = store.get_conversation(pl_id)
+    fid = conv.labels.get(LABEL_ID) if conv is not None else None
+    if conv is None or not fid or conv.labels.get(LABEL_STATE) in (STATE_PAUSED, STATE_DONE):
+        return None
+    root = store.get_conversation(fid)
+    if root is not None and root.labels.get(LABEL_STATE) == STATE_PAUSED:
+        return None
+    return fid
+
+
 async def _send_hints(
     app_state: Any, deps: FactoryDeps, pl_id: str, hints: list[Hint], now: float
 ) -> int:
+    fid = await asyncio.to_thread(_held, deps, pl_id)
+    if fid is None:
+        return 0
     live: list[tuple[Hint, PrFacts]] = []
     for hint in hints:
-        conv = await asyncio.to_thread(deps.conversation_store.get_conversation, pl_id)
-        fid = conv.labels.get("omnigent.factory.id") if conv is not None else None
-        if not fid:
-            continue
         facts = await asyncio.to_thread(read_pr, deps, fid, hint.pr_id)
         if facts is None:
             continue
@@ -534,9 +553,9 @@ def ready_wave(
 
 async def _ready_due(app_state: Any, deps: FactoryDeps, now: float) -> None:
     for key, when in list(_state.ready_due.items()):
-        if when > now:
+        # A concurrent flush (the timer and the tick) may have taken it already.
+        if when > now or _state.ready_due.pop(key, None) is None:
             continue
-        _state.ready_due.pop(key, None)
         factory_id, slug = key
         try:
             await _send_ready(app_state, deps, factory_id, slug, now)
@@ -678,9 +697,19 @@ async def on_tick(app_state: Any, factory_id: str, *, now: float | None = None) 
     await flush_due(app_state, at)
 
 
-def install() -> Any:
-    """Register :func:`on_event` on the event log. :returns: The uninstaller."""
-    return events.add_listener(on_event)
+def install() -> Callable[[], None]:
+    """
+    Register :func:`on_event` on the event log.
+
+    :returns: The uninstaller, which also cancels a pending flush timer.
+    """
+    remove = events.add_listener(on_event)
+
+    def _uninstall() -> None:
+        remove()
+        reset()
+
+    return _uninstall
 
 
 def reset() -> None:
