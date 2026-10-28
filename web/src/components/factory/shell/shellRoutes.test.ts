@@ -30,7 +30,8 @@ describe("factoryLocation", () => {
     ["room/project%3Adb-version", { page: "room", id: "project:db-version" }],
     ["graph", { page: "graph", id: null }],
     ["decisions", { page: "decisions", id: null }],
-    ["timeline", { page: "other", id: "timeline" }],
+    ["timeline", { page: "timeline", id: null }],
+    ["insights", { page: "other", id: "insights" }],
   ])("reads %j", (rest, expected) => {
     expect(factoryLocation(rest)).toEqual(expected);
   });

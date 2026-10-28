@@ -1,8 +1,9 @@
 /**
- * The factory's page tabs under the header (Overview, Room, Projects,
- * Graph, Activity) and, on the right, what waits on the viewer (decisions, alerts),
- * Settings and the ⌘K "Jump or act" button. Tabs scroll sideways on a narrow
- * screen rather than wrap; on a phone the bottom bar takes over.
+ * The factory's page tabs under the header (Overview, Room, Projects, Agents,
+ * Graph, Timeline, Activity) and, on the right, what waits on the viewer
+ * (decisions, alerts), Settings and the ⌘K "Jump or act" button. Tabs scroll
+ * sideways on a narrow screen rather than wrap; on a phone the bottom bar
+ * takes over.
  */
 
 import type { ReactNode } from "react";
@@ -13,12 +14,15 @@ import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import {
   activityPageHref,
+  agentsPageHref,
+  alertsPageHref,
   decisionsPageHref,
   factoryPageHref,
   graphPageHref,
   projectsPageHref,
   roomPageHref,
   settingsPageHref,
+  timelinePageHref,
 } from "../factoryRoutes";
 import { TONE_CHIP } from "../factoryFormat";
 import type { FactoryLocation, FactoryPageKey } from "./shellRoutes";
@@ -31,7 +35,7 @@ export interface FactoryTab {
   pages: FactoryPageKey[];
 }
 
-/** The tabs in order; later pages (Agents, Timeline, …) add theirs here. */
+/** The tabs in order; later pages (Insights, Improvements, …) add theirs here. */
 export const FACTORY_TABS: FactoryTab[] = [
   { key: "overview", label: "Overview", href: factoryPageHref, pages: ["overview"] },
   { key: "room", label: "Room", href: (fid) => roomPageHref(fid), pages: ["room"] },
@@ -41,7 +45,14 @@ export const FACTORY_TABS: FactoryTab[] = [
     href: projectsPageHref,
     pages: ["projects", "project", "pr"],
   },
+  {
+    key: "agents",
+    label: "Agents",
+    href: (fid) => agentsPageHref(fid),
+    pages: ["agents", "agent"],
+  },
   { key: "graph", label: "Graph", href: (fid) => graphPageHref(fid), pages: ["graph"] },
+  { key: "timeline", label: "Timeline", href: (fid) => timelinePageHref(fid), pages: ["timeline"] },
   { key: "activity", label: "Activity", href: activityPageHref, pages: ["activity"] },
 ];
 
@@ -151,15 +162,22 @@ export function FactoryTabs({
             <Count n={openDecisions} tone={mineCount > 0 ? "warning" : "muted"} />
           )}
         </Link>
-        {alerts > 0 && (
-          <span
-            data-testid="factory-tab-alerts"
-            className="inline-flex items-center gap-1 text-muted-foreground"
-          >
-            <TriangleAlertIcon aria-hidden className="size-3.5 text-warning" />
-            Alerts <Count n={alerts} tone="warning" />
-          </span>
-        )}
+        <Link
+          to={alertsPageHref(fid)}
+          componentId="factory.tab.alerts"
+          data-testid="factory-tab-alerts"
+          aria-current={["alerts", "incident"].includes(location.page) ? "page" : undefined}
+          className={cn(
+            "inline-flex items-center gap-1 rounded-md px-1 hover:text-foreground",
+            ["alerts", "incident"].includes(location.page)
+              ? "text-foreground"
+              : "text-muted-foreground",
+          )}
+        >
+          {alerts > 0 && <TriangleAlertIcon aria-hidden className="size-3.5 text-warning" />}
+          Alerts
+          {alerts > 0 && <Count n={alerts} tone="warning" />}
+        </Link>
         <Link
           to={settingsPageHref(fid)}
           componentId="factory.tab.settings"

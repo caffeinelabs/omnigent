@@ -26,8 +26,8 @@ import { CharterCard, PlanCard } from "@/components/factory/project/ProjectOverv
 import { ProjectPreviews } from "@/components/factory/project/ProjectPreviews";
 import { ProjectPrs } from "@/components/factory/project/ProjectPrs";
 import { EditCharterDialog } from "@/components/factory/controls/EditCharterDialog";
+import { ProjectLoops } from "@/components/factory/loops/LoopSections";
 import {
-  LoopsSection,
   PageSection,
   ProgressCard,
   SectionNav,
@@ -209,10 +209,10 @@ function ProjectBody({
           )}
         </PageSection>
         <PageSection id="team" title="Team" meta="agents on this project">
-          <TeamTable project={project} nowS={nowS} />
+          <TeamTable project={project} nowS={nowS} factoryId={fid} />
         </PageSection>
         <PageSection id="loops" title="Loops">
-          <LoopsSection project={project} />
+          <ProjectLoops snapshot={snapshot} project={project} nowS={nowS} />
         </PageSection>
         <PageSection id="activity" title="Activity">
           <ActivityList

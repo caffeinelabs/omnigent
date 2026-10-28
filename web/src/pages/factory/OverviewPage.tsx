@@ -1,10 +1,12 @@
 /**
  * The factory Overview (`/factory/:factoryId`), exceptions first: what needs
- * a human (mine, my role, all), the projects table, the last hour of
- * activity per project, the live feed, and whether the machine is healthy.
+ * a human (mine, my role, all; incidents with their first runbook step and
+ * agent), the projects table, the last hour of activity per project, the
+ * live feed, and whether the machine is healthy.
  */
 
 import { useMemo } from "react";
+import { useFactoryIssues } from "@/components/factory/agents/opsQueries";
 import { ActivityHeatmap } from "@/components/factory/overview/ActivityHeatmap";
 import { LiveFeed } from "@/components/factory/overview/LiveFeed";
 import { NeedsYouPanel } from "@/components/factory/overview/NeedsYouPanel";
@@ -15,12 +17,25 @@ import { projectsPageHref } from "@/components/factory/factoryRoutes";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
 import { useHashScroll } from "@/components/factory/shell/scroll";
 import { Button } from "@/components/ui/button";
+import type { IssueFilters } from "@/lib/factoryApi";
 import { Link, useSearchParams } from "@/lib/routing";
+
+/** Open and acked incidents for Needs you (round-3 servers; older ones answer 404). */
+const NEEDS_ISSUES: IssueFilters = { class: "incident", status: ["open", "acked"] };
 
 export function OverviewPage() {
   const { snapshot, nowS, clockOffsetS, wide } = useFactoryShell();
   const [params] = useSearchParams();
-  const split = useMemo(() => splitNeedsYou(snapshot), [snapshot]);
+  const issues = useFactoryIssues(snapshot.factory.id, NEEDS_ISSUES);
+  const split = useMemo(
+    () =>
+      splitNeedsYou(
+        snapshot,
+        snapshot.viewer ?? null,
+        issues.data ? { data: issues.data.data, mine: issues.data.mine } : null,
+      ),
+    [snapshot, issues.data],
+  );
   useHashScroll();
   return (
     <div data-testid="factory-overview" className="flex min-w-0 flex-col gap-4">

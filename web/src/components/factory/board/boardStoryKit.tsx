@@ -15,6 +15,7 @@ import {
   type StoryRoutes,
   filterEventPage,
 } from "../factoryStoryFixtures";
+import { opsRoutes } from "../agents/__fixtures__/opsFixtures";
 import { shellRoutes } from "../shell/__fixtures__/shellFixtures";
 import { boardActivityEvents, storySnapshot } from "./__fixtures__/boardFixtures";
 import { FactoryLiveContext } from "./factoryLive";
@@ -86,6 +87,7 @@ export function CockpitStory({
       route={`/factory/${LIVE_RUN_FACTORY_ID}${path}${search}`}
       routes={{
         ...shellRoutes(body.factory.id),
+        ...opsRoutes(body.factory.id, { snapshot: body }),
         [`${own}/events`]: eventsRoute(events),
         [SNAPSHOT_PATH]: { body },
         [EVENTS_PATH]: eventsRoute(events),

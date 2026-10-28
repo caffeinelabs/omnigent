@@ -10,7 +10,9 @@ export const ACTIVITY_KIND_GROUPS = [
   { id: "gates", label: "Gates", patterns: ["gate.*", "pr.*", "stage.*"] },
   { id: "previews", label: "Previews & demos", patterns: ["preview.*", "demo.*", "env.*"] },
   { id: "decisions", label: "Decisions", patterns: ["decision.*"] },
+  { id: "loops", label: "Tasks & loops", patterns: ["loop.*", "engine.*", "budget.*"] },
   { id: "alerts", label: "Alerts", patterns: ["alert.*", "needs_human", "needs_human.*"] },
+  { id: "issues", label: "Issues", patterns: ["issue.*", "agent.repeat"] },
   { id: "controls", label: "Controls", patterns: ["control.*", "factory.*", "project.*"] },
   { id: "heartbeats", label: "Heartbeats", patterns: ["heartbeat.*"] },
 ] as const;

@@ -2,8 +2,9 @@
  * The Overview's first panel: everything waiting on a human, split into
  * Mine (assigned to or claimed by me), Role (for operators or owners, when I
  * am one) and All. One dense row per item with its next step: Review → for a
- * ready PR, the decision's options (the full card opens in place), Open for
- * an alert or a claim the gates don't back.
+ * ready PR, the decision's options (the full card opens in place), an
+ * incident's first runbook step and its agent (one click to the Agent page),
+ * Open for an alert or a claim the gates don't back.
  */
 
 import { type ReactNode, useState } from "react";
@@ -19,9 +20,18 @@ import { Button } from "@/components/ui/button";
 import type { FactorySnapshot } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
+import { RunbookButtons } from "../alerts/IssueActions";
+import { SeverityIcon } from "../alerts/IssueCard";
+import { issueMember } from "../alerts/runbookModel";
 import { DecisionCard, answerBlockedReason, assigneeText } from "../decisions/DecisionCard";
 import { formatElapsed, plural } from "../factoryFormat";
-import { factoryPageHref, prPageHref, projectPageHref } from "../factoryRoutes";
+import {
+  agentPageHref,
+  alertPageHref,
+  factoryPageHref,
+  prPageHref,
+  projectPageHref,
+} from "../factoryRoutes";
 import { useViewer, useViewerCan } from "../shell/viewerCan";
 import {
   type NeedsItem,
@@ -70,6 +80,7 @@ function Row({
   let text: string;
   let meta: string | null = null;
   let action: ReactNode = null;
+  let lead: ReactNode = null;
   switch (item.kind) {
     case "pr": {
       const { pr } = item;
@@ -147,6 +158,40 @@ function Row({
       );
       break;
     }
+    case "issue": {
+      const { issue } = item;
+      const issueRef = issue.ref ?? issue.id;
+      const member = issueMember(snapshot, issue);
+      icon = <SeverityIcon issue={issue} />;
+      ref = issue.ref;
+      text = `${member ? "" : issue.target_title ? `${issue.target_title} · ` : ""}${issue.summary}`;
+      lead = member ? (
+        <Link
+          to={agentPageHref(fid, member.session_id)}
+          componentId="factory.overview.needs_issue_agent"
+          data-testid={`needs-issue-agent-${issueRef}`}
+          className="shrink-0 rounded-sm bg-muted px-1.5 py-0.5 font-mono text-xs hover:bg-muted/70 hover:underline"
+        >
+          {member.title}
+        </Link>
+      ) : null;
+      meta = formatElapsed(nowS - issue.first_seen);
+      action = (
+        <span className="flex items-center gap-1">
+          <RunbookButtons issue={issue} limit={1} />
+          <Button asChild size="xs" variant="outline">
+            <Link
+              to={alertPageHref(fid, issueRef)}
+              componentId="factory.overview.needs_issue"
+              data-testid={`needs-issue-${issueRef}`}
+            >
+              Open
+            </Link>
+          </Button>
+        </span>
+      );
+      break;
+    }
     case "claim": {
       icon = <TriangleAlertIcon aria-hidden className="size-3.5 text-warning" />;
       text = `${item.project.slug}: the PL’s claim doesn’t match the gates`;
@@ -172,9 +217,15 @@ function Row({
       <div className="flex min-w-0 items-center gap-2 text-sm">
         <span className="flex w-4 shrink-0 justify-center">{icon}</span>
         {ref && <span className="shrink-0 font-mono text-muted-foreground">{ref}</span>}
-        <span className="min-w-0 flex-1 truncate" title={text}>
+        {lead}
+        {/* Beside an agent chip a phone has no room left: the text takes its own line. */}
+        <span
+          className={cn("min-w-0 flex-1 truncate", lead != null && "max-sm:hidden")}
+          title={text}
+        >
           {text}
         </span>
+        {lead != null && <span className="flex-1 sm:hidden" />}
         {meta && (
           <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums max-sm:hidden">
             {meta}
@@ -182,6 +233,14 @@ function Row({
         )}
         <span className="shrink-0">{action}</span>
       </div>
+      {lead != null && (
+        <p
+          data-testid={`needs-item-text-${item.key}`}
+          className="line-clamp-2 pt-0.5 pl-6 text-sm break-words sm:hidden"
+        >
+          {text}
+        </p>
+      )}
       {open && item.kind === "decision" && (
         <div className="pt-2 pl-6">
           <DecisionCard

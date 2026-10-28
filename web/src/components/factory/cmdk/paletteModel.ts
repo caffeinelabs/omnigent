@@ -6,11 +6,15 @@ import type { FactorySnapshot } from "@/lib/factoryApi";
 import { ROLE_NAME } from "../board/TeamStrip";
 import {
   activityPageHref,
+  agentPageHref,
+  agentsPageHref,
+  alertsPageHref,
   factoryPageHref,
   prPageHref,
   projectPageHref,
   projectsPageHref,
   settingsPageHref,
+  timelinePageHref,
 } from "../factoryRoutes";
 import { STAGE_LABEL } from "../factoryFormat";
 
@@ -23,7 +27,7 @@ export interface JumpItem {
   ref: string | null;
   label: string;
   detail: string | null;
-  /** In-app path (agents open their chat). */
+  /** In-app path (agents open their Agent page). */
   href: string;
   /** Extra terms the filter matches. */
   keywords: string[];
@@ -59,6 +63,33 @@ export function jumpItems(snapshot: FactorySnapshot): JumpItem[] {
       detail: null,
       href: projectsPageHref(fid),
       keywords: ["table", "cards", "board"],
+    },
+    {
+      id: "page:agents",
+      kind: "page",
+      ref: null,
+      label: "Agents",
+      detail: null,
+      href: agentsPageHref(fid),
+      keywords: ["fleet", "now", "interrupt"],
+    },
+    {
+      id: "page:timeline",
+      kind: "page",
+      ref: null,
+      label: "Timeline",
+      detail: null,
+      href: timelinePageHref(fid),
+      keywords: ["swimlanes", "replay", "spans"],
+    },
+    {
+      id: "page:alerts",
+      kind: "page",
+      ref: null,
+      label: "Alerts",
+      detail: null,
+      href: alertsPageHref(fid),
+      keywords: ["incidents", "findings", "runbook"],
     },
     {
       id: "page:activity",
@@ -138,7 +169,7 @@ export function jumpItems(snapshot: FactorySnapshot): JumpItem[] {
       detail:
         [member.role ? ROLE_NAME[member.role] : null, member.project].filter(Boolean).join(" · ") ||
         null,
-      href: member.url,
+      href: agentPageHref(fid, member.session_id),
       keywords: [member.role ?? "", member.project ?? "", member.harness ?? ""],
     });
   }

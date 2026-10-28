@@ -23,6 +23,7 @@ import {
   pendingForever,
   preflightOk,
 } from "./__fixtures__/liveRun";
+import { opsRoutes } from "./agents/__fixtures__/opsFixtures";
 import { FactoryNowContext } from "./factoryClock";
 import { shellRoutes } from "./shell/__fixtures__/shellFixtures";
 
@@ -68,6 +69,7 @@ export function liveRunRoutes(): StoryRoutes {
     }),
     "/v1/factory/decisions": { body: liveRunOpenDecisions() },
     ...shellRoutes(),
+    ...opsRoutes(LIVE_RUN_FACTORY_ID, { snapshot: liveRunSnapshot() }),
   };
 }
 

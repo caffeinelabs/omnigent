@@ -2,7 +2,14 @@ import { describe, expect, it } from "vitest";
 import type { DecisionView } from "@/lib/factoryApi";
 import { liveRunSnapshot } from "../__fixtures__/liveRun";
 import { round3Snapshot, viewerOf } from "../shell/__fixtures__/shellFixtures";
-import { decisionScope, defaultNeedsTab, myDecisionCount, splitNeedsYou } from "./needsYouModel";
+import { PL_CACHE, issuesResponse } from "../agents/__fixtures__/opsFixtures";
+import {
+  decisionScope,
+  defaultNeedsTab,
+  issueScope,
+  myDecisionCount,
+  splitNeedsYou,
+} from "./needsYouModel";
 
 function decision(patch: Partial<DecisionView>): DecisionView {
   const base = round3Snapshot().decisions[0]!;
@@ -95,5 +102,29 @@ describe("splitNeedsYou", () => {
     const split = splitNeedsYou(liveRunSnapshot());
     expect(split.mine).toEqual([]);
     expect(split.role.map((i) => i.kind)).toEqual(expect.arrayContaining(["decision", "pr"]));
+  });
+});
+
+describe("incidents in Needs you", () => {
+  const issues = () => issuesResponse("?class=incident&status=open,acked");
+
+  it("lists open incidents first, critical on top, and drops the alert they stand for", () => {
+    const snapshot = round3Snapshot();
+    const without = splitNeedsYou(snapshot);
+    expect(without.all.some((i) => i.key === `alert:dead-${PL_CACHE}`)).toBe(true);
+    const split = splitNeedsYou(snapshot, snapshot.viewer ?? null, issues());
+    expect(split.role.slice(0, 2).map((i) => (i.kind === "issue" ? i.issue.ref : i.kind))).toEqual([
+      "INC-12",
+      "INC-13",
+    ]);
+    expect(split.all.some((i) => i.key === `alert:dead-${PL_CACHE}`)).toBe(false);
+  });
+
+  it("follows the server's mine: assigned to me is mine, my role's is role, a viewer's is other", () => {
+    const mia = viewerOf("operator");
+    const inc13 = issues().data.find((i) => i.ref === "INC-13")!;
+    expect(issueScope({ ...inc13, assignee: "mia@caffeine.ai" }, mia, new Set())).toBe("mine");
+    expect(issueScope(inc13, mia, new Set([inc13.id]))).toBe("role");
+    expect(issueScope(inc13, viewerOf("viewer"), new Set())).toBe("other");
   });
 });

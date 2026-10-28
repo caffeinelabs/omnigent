@@ -1308,10 +1308,23 @@ export interface CreateFactoryResponse {
   url: string;
 }
 
-export type FactoryControlAction =
-  "pause" | "resume" | "stop" | "restart" | "relaunch" | "cadence" | "preview" | "env_status";
+/** Levers on any agent, sub-agents included (operators; the PL is told). */
+export type InterventionAction =
+  "message" | "interrupt" | "redispatch" | "reassign" | "rerun_demo" | "rereview";
 
-export type FactoryControlTarget = "factory" | `project:${string}` | `member:${string}`;
+export type FactoryControlAction =
+  | "pause"
+  | "resume"
+  | "stop"
+  | "restart"
+  | "relaunch"
+  | "cadence"
+  | "preview"
+  | "env_status"
+  | InterventionAction;
+
+export type FactoryControlTarget =
+  "factory" | `project:${string}` | `member:${string}` | `task:${string}` | `pr:${string}`;
 
 /** `POST /v1/factory/factories/{fid}/control`. */
 export interface FactoryControlRequest {
@@ -1549,16 +1562,25 @@ export async function fetchProjectDemos(
   );
 }
 
-/** The factory's spans started at or after `since` (epoch ms), oldest first. */
+/** The factory's spans started at or after `since` (and before `until`; epoch ms), oldest first. */
 export async function fetchFactorySpans(
   factoryId: string,
-  options: { since?: number; kinds?: SpanKind[]; limit?: number; project?: string } = {},
+  options: {
+    since?: number;
+    until?: number;
+    kinds?: SpanKind[];
+    limit?: number;
+    project?: string;
+    prId?: string;
+  } = {},
   signal?: AbortSignal,
 ): Promise<SpanPage> {
   const params = new URLSearchParams();
   if (options.since != null) params.set("since", String(options.since));
+  if (options.until != null) params.set("until", String(options.until));
   if (options.kinds?.length) params.set("kind", options.kinds.join(","));
   if (options.project) params.set("project", options.project);
+  if (options.prId) params.set("pr_id", options.prId);
   params.set("limit", String(options.limit ?? 500));
   return readJson(
     await authenticatedFetch(`/v1/factory/factories/${enc(factoryId)}/spans?${params}`, {
@@ -1698,6 +1720,298 @@ export async function sendPrFeedback(
   feedback: PrFeedbackRequest,
 ): Promise<PrFeedbackResponse> {
   return readJson(await postJson(`/v1/factory/prs/${enc(prId)}/feedback`, feedback));
+}
+
+// ── Ops: fleet, agent, loops, issues ───────────────────────────
+
+/** One "Live now" line (`ts` in epoch seconds). */
+export interface LiveLineView {
+  id: string;
+  ts: number;
+  session_id: string;
+  title: string;
+  role: FactoryRole | null;
+  project: string | null;
+  kind: "tool" | "result" | "message" | "thinking" | "human";
+  tool: string | null;
+  text: string;
+  failed: boolean | null;
+}
+
+/** The compact task of an agent row. */
+export interface AgentTaskRef {
+  id: string;
+  ref: string;
+  key: string;
+  title: string;
+  state: TaskState;
+  attempts: number;
+  pr_id: string | null;
+}
+
+/** One row of the fleet (`GET …/agents`): a lead, PL or sub-agent. */
+export interface AgentRowView {
+  session_id: string;
+  title: string;
+  role: FactoryRole | null;
+  harness: string | null;
+  model: string | null;
+  project: string | null;
+  parent_session_id: string | null;
+  is_top_level: boolean;
+  status: string;
+  state: MemberState | null;
+  health: string | null;
+  summary: string | null;
+  task: AgentTaskRef | null;
+  loop: LoopChipView | null;
+  now: NowState | null;
+  /** Own cost; `subtree_cost_usd` adds its sub-agents. */
+  cost_usd: number | null;
+  subtree_cost_usd: number | null;
+  mail_in: number;
+  mail_out: number;
+  decisions_pending: number;
+  /** `repeat`, `quiet`, `disconnected` and `dead`. */
+  flags: string[];
+  /** Open issue refs on this agent, e.g. `INC-13`. */
+  issues: string[];
+  last_activity_at: number | null;
+  url: string;
+}
+
+export interface FleetLiveView {
+  polled_at: number | null;
+  interval_s: number;
+  fresh: boolean;
+  usd_per_h: number | null;
+}
+
+/** `GET /v1/factory/factories/{fid}/agents`. */
+export interface AgentsResponse {
+  data: AgentRowView[];
+  lines: LiveLineView[];
+  live: FleetLiveView;
+}
+
+/** One tool call of an agent (`started_at` epoch seconds). */
+export interface AgentToolCallView {
+  call_id: string;
+  tool: string;
+  arg: string | null;
+  started_at: number;
+  ended_at: number | null;
+  duration_s: number | null;
+  failed: boolean;
+  output_head: string | null;
+}
+
+/** One mail in or out of an agent (`ts` epoch ms, like events). */
+export interface AgentMailView {
+  id: string;
+  ts: number;
+  kind: string;
+  direction: "in" | "out";
+  peer_id: string | null;
+  peer_title: string | null;
+  mail_kind: string | null;
+  mail_id: string | null;
+  summary: string;
+}
+
+export interface CostDayView {
+  day: string;
+  cost_usd: number;
+  tokens_in: number;
+  tokens_out: number;
+  turns: number;
+}
+
+/** `GET /v1/factory/factories/{fid}/agents/{sid}`. */
+export interface AgentDetailResponse {
+  agent: AgentRowView;
+  tools: AgentToolCallView[];
+  lines: LiveLineView[];
+  mail: AgentMailView[];
+  tasks: AgentTaskRef[];
+  issues: IssueView[];
+  cost_series: CostDayView[];
+}
+
+/** `GET /v1/factory/factories/{fid}/loops`. */
+export interface LoopsResponse {
+  data: LoopView[];
+  engine_mode: EngineMode | null;
+}
+
+/** `GET /v1/factory/factories/{fid}/issues`. */
+export interface IssuesResponse {
+  data: IssueView[];
+  count: number;
+  /** Ids of the listed issues that are for the viewer or their role. */
+  mine: string[];
+}
+
+/** `GET /v1/factory/factories/{fid}/issues/{ref}`: the incident page. */
+export interface IssuePageResponse {
+  issue: IssueView;
+  mine: boolean;
+  /** Events before the incident on its target and PL, newest first. */
+  events: EventView[];
+  spans: SpanView[];
+  sessions: { session_id: string; title: string | null }[];
+}
+
+export interface IssueFilters {
+  class?: IssueClass;
+  status?: IssueStatus[];
+  project?: string;
+  limit?: number;
+}
+
+/** `GET /v1/factory/factories/{fid}/cost`, one row per group. */
+export interface CostResponse {
+  group_by: string[];
+  data: (Record<string, string | number | boolean> & { cost_usd: number; priced: boolean })[];
+  totals: { cost_usd: number; tokens_in: number; tokens_out: number; turns: number };
+}
+
+/** The fleet, with each agent's live "now" and the newest Live lines. */
+export async function fetchFactoryAgents(
+  factoryId: string,
+  filters: { project?: string; role?: string } = {},
+  signal?: AbortSignal,
+): Promise<AgentsResponse> {
+  const params = new URLSearchParams();
+  if (filters.project) params.set("project", filters.project);
+  if (filters.role) params.set("role", filters.role);
+  const qs = params.toString();
+  return readJson(
+    await authenticatedFetch(
+      `/v1/factory/factories/${enc(factoryId)}/agents${qs ? `?${qs}` : ""}`,
+      {
+        signal,
+      },
+    ),
+  );
+}
+
+/** One agent: tool calls, activity, mail, tasks, issues and cost by day. */
+export async function fetchFactoryAgent(
+  factoryId: string,
+  sessionId: string,
+  signal?: AbortSignal,
+): Promise<AgentDetailResponse> {
+  return readJson(
+    await authenticatedFetch(`/v1/factory/factories/${enc(factoryId)}/agents/${enc(sessionId)}`, {
+      signal,
+    }),
+  );
+}
+
+/** The factory's loops, newest activity first. */
+export async function fetchFactoryLoops(
+  factoryId: string,
+  filters: { project?: string; pr?: string; states?: LoopState[]; kinds?: LoopKind[] } = {},
+  signal?: AbortSignal,
+): Promise<LoopsResponse> {
+  const params = new URLSearchParams();
+  if (filters.project) params.set("project", filters.project);
+  if (filters.pr) params.set("pr", filters.pr);
+  if (filters.states?.length) params.set("state", filters.states.join(","));
+  if (filters.kinds?.length) params.set("kind", filters.kinds.join(","));
+  const qs = params.toString();
+  return readJson(
+    await authenticatedFetch(`/v1/factory/factories/${enc(factoryId)}/loops${qs ? `?${qs}` : ""}`, {
+      signal,
+    }),
+  );
+}
+
+/** Incidents, findings and retros, newest first. */
+export async function fetchFactoryIssues(
+  factoryId: string,
+  filters: IssueFilters = {},
+  signal?: AbortSignal,
+): Promise<IssuesResponse> {
+  const params = new URLSearchParams();
+  if (filters.class) params.set("class", filters.class);
+  if (filters.status?.length) params.set("status", filters.status.join(","));
+  if (filters.project) params.set("project", filters.project);
+  params.set("limit", String(filters.limit ?? 200));
+  return readJson(
+    await authenticatedFetch(`/v1/factory/factories/${enc(factoryId)}/issues?${params}`, {
+      signal,
+    }),
+  );
+}
+
+/** One incident or finding (`INC-n`, `F-n` or its id) with what preceded it. */
+export async function fetchFactoryIssue(
+  factoryId: string,
+  ref: string,
+  signal?: AbortSignal,
+): Promise<IssuePageResponse> {
+  return readJson(
+    await authenticatedFetch(`/v1/factory/factories/${enc(factoryId)}/issues/${enc(ref)}`, {
+      signal,
+    }),
+  );
+}
+
+export type IssueLifecycle =
+  | { action: "ack" }
+  | { action: "assign"; to: string | null }
+  | { action: "snooze"; minutes: number }
+  | { action: "resolve"; note?: string; root_cause?: string; wontfix?: boolean };
+
+/** Ack, assign, snooze or resolve an issue (operators). */
+export async function updateFactoryIssue(
+  factoryId: string,
+  ref: string,
+  change: IssueLifecycle,
+): Promise<{ issue: IssueView }> {
+  const { action, ...body } = change;
+  return readJson(
+    await postJson(
+      `/v1/factory/factories/${enc(factoryId)}/issues/${enc(ref)}/${action}`,
+      action === "ack" ? {} : body,
+    ),
+  );
+}
+
+/** `GET …/alerts/routing`: where incidents go (the Slack URL itself is never returned). */
+export interface AlertRoutingView {
+  cockpit: boolean;
+  browser: boolean;
+  slack: boolean;
+  slack_min_severity?: string | null;
+}
+
+export async function fetchAlertRouting(
+  factoryId: string,
+  signal?: AbortSignal,
+): Promise<AlertRoutingView> {
+  return readJson(
+    await authenticatedFetch(`/v1/factory/factories/${enc(factoryId)}/alerts/routing`, { signal }),
+  );
+}
+
+/** The cost ledger summed by `groupBy` (display cost). */
+export async function fetchFactoryCost(
+  factoryId: string,
+  options: { groupBy?: string[]; project?: string; since?: string } = {},
+  signal?: AbortSignal,
+): Promise<CostResponse> {
+  const params = new URLSearchParams();
+  params.set("group_by", (options.groupBy ?? ["day"]).join(","));
+  if (options.project) params.set("project", options.project);
+  if (options.since) params.set("since", options.since);
+  return readJson(
+    await authenticatedFetch(`/v1/factory/factories/${enc(factoryId)}/cost?${params}`, {
+      signal,
+    }),
+  );
 }
 
 // ── Start ──────────────────────────────────────────────────────

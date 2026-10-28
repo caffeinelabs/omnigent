@@ -1,11 +1,13 @@
 // Test-only fake of `/v1/factory/*` for the factory pages: the snapshot, its
 // events, a project's demos (grouped as the server groups them), the roster,
-// presence beats, controls and the Room (threads, messages, proposals,
-// graphs from the round-3 fixture). Unknown paths throw, so a test sees
-// every request the pages make.
+// presence beats, controls, the Room (threads, messages, proposals, graphs
+// from the round-3 fixture) and the ops reads (fleet, loops, issues). Unknown
+// paths throw, so a test sees every request the pages make.
 
 import type { Mock } from "vitest";
-import { LIVE_RUN_FACTORY_ID } from "@/components/factory/__fixtures__/liveRun";
+import { LIVE_RUN_FACTORY_ID, pendingForever } from "@/components/factory/__fixtures__/liveRun";
+import { opsRoutes } from "@/components/factory/agents/__fixtures__/opsFixtures";
+import type { StoryRoutes } from "@/components/factory/factoryStoryFixtures";
 import { boardActivityEvents } from "@/components/factory/board/__fixtures__/boardFixtures";
 import { filterEventPage } from "@/components/factory/factoryStoryFixtures";
 import {
@@ -14,10 +16,18 @@ import {
 } from "@/components/factory/project/__fixtures__/projectFixtures";
 import { roomMessages, roomRoutes } from "@/components/factory/room/__fixtures__/roomFixtures";
 import { round3People } from "@/components/factory/shell/__fixtures__/shellFixtures";
-import type { StoryRoutes } from "@/components/factory/factoryStoryFixtures";
 import type { EventPage, FactorySnapshot } from "@/lib/factoryApi";
 
 export const SNAPSHOT = `/v1/factory/factories/${LIVE_RUN_FACTORY_ID}`;
+
+let opsCache: StoryRoutes | null = null;
+/** The ops reads (fleet, agents, loops, issues) the pages make, from the ops fixtures. */
+function opsFallback(): StoryRoutes {
+  opsCache ??= opsRoutes(LIVE_RUN_FACTORY_ID, {
+    snapshot: projectScenario().snapshot as FactorySnapshot,
+  });
+  return opsCache;
+}
 
 export function json(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -64,6 +74,8 @@ export function serveFactory(
     snapshot?: () => Response | Promise<Response>;
     events?: () => EventPage;
     overrides?: Record<string, () => Response | Promise<Response>>;
+    /** The ops reads (fleet, agents, loops, issues); the project scenario's by default. */
+    ops?: StoryRoutes;
   } = {},
 ): FactoryServer {
   const server: FactoryServer = { calls: [], controls: [], beats: [], posts: [] };
@@ -110,12 +122,25 @@ export function serveFactory(
       return json({ message, notes: [], routed: ["Atlas"] }, 201);
     }
     if (bare === `${SNAPSHOT}/chat/reads` && method === "PUT") return json(body);
+    // A page test's own ops reads come before the Room's (both serve loops and issues).
+    if (method === "GET" && options.ops) {
+      const answer = roomAnswer(options.ops, path);
+      if (answer) return answer;
+    }
     if (method === "GET") {
       const answer = roomAnswer(room, path);
       if (answer) return answer;
     }
     // Servers before spans answer 404: the heatmap falls back to events.
     if (bare === `${SNAPSHOT}/spans`) return json({ error: { message: "not found" } }, 404);
+    const ops = method === "GET" ? (options.ops ?? opsFallback())[bare] : undefined;
+    if (ops) {
+      const found = typeof ops === "function" ? ops(path) : ops;
+      if (found === "pending") return pendingForever();
+      if ("error" in found)
+        return json({ error: { message: found.message ?? "error" } }, found.error);
+      return json(found.body, found.status ?? 200);
+    }
     throw new Error(`unexpected ${method} ${path}`);
   });
   return server;
