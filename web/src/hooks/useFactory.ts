@@ -276,6 +276,28 @@ export function useFactoryPeople(
   });
 }
 
+/** Pages of spans the heatmap reads at most (oldest first, so the newest come last). */
+export const SPAN_PAGES_MAX = 5;
+const SPAN_PAGE_SIZE = 2000;
+
+/** Every span started since `sinceMs`, following the cursor up to {@link SPAN_PAGES_MAX} pages. */
+async function readSpansSince(
+  factoryId: string,
+  sinceMs: number,
+  signal: AbortSignal,
+): Promise<SpanPage> {
+  const data: SpanPage["data"] = [];
+  let since: number | null = sinceMs;
+  /* oxlint-disable no-await-in-loop -- each page names the next cursor */
+  for (let i = 0; i < SPAN_PAGES_MAX && since != null; i += 1) {
+    const page = await fetchFactorySpans(factoryId, { since, limit: SPAN_PAGE_SIZE }, signal);
+    data.push(...page.data);
+    since = page.has_more ? page.next_since : null;
+  }
+  /* oxlint-enable no-await-in-loop */
+  return { data, has_more: since != null, next_since: since };
+}
+
 /**
  * The factory's spans since `sinceMs` (the activity heatmap). A server without
  * the spans route answers 404, which callers treat as "use events".
@@ -288,8 +310,7 @@ export function useFactorySpans(
   const refetchInterval = useFallbackInterval();
   return useQuery<SpanPage>({
     queryKey: factorySpansQueryKey(factoryId ?? "", sinceMs),
-    queryFn: ({ signal }) =>
-      fetchFactorySpans(factoryId as string, { since: sinceMs, limit: 2000 }, signal),
+    queryFn: ({ signal }) => readSpansSince(factoryId as string, sinceMs, signal),
     enabled: Boolean(factoryId) && (options.enabled ?? true),
     refetchInterval,
     retry: retryTransient,
