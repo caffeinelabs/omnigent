@@ -218,9 +218,14 @@ function Row({
         <span className="flex w-4 shrink-0 justify-center">{icon}</span>
         {ref && <span className="shrink-0 font-mono text-muted-foreground">{ref}</span>}
         {lead}
-        <span className="min-w-0 flex-1 truncate" title={text}>
+        {/* Beside an agent chip a phone has no room left: the text takes its own line. */}
+        <span
+          className={cn("min-w-0 flex-1 truncate", lead != null && "max-sm:hidden")}
+          title={text}
+        >
           {text}
         </span>
+        {lead != null && <span className="flex-1 sm:hidden" />}
         {meta && (
           <span className="shrink-0 font-mono text-xs text-muted-foreground tabular-nums max-sm:hidden">
             {meta}
@@ -228,6 +233,14 @@ function Row({
         )}
         <span className="shrink-0">{action}</span>
       </div>
+      {lead != null && (
+        <p
+          data-testid={`needs-item-text-${item.key}`}
+          className="line-clamp-2 pt-0.5 pl-6 text-sm break-words sm:hidden"
+        >
+          {text}
+        </p>
+      )}
       {open && item.kind === "decision" && (
         <div className="pt-2 pl-6">
           <DecisionCard

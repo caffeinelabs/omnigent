@@ -38,7 +38,8 @@ import { useFactoryAgents, useFactoryLoops, useIssueLifecycle } from "../agents/
 import { controlErrorMessage } from "../controls/controlModel";
 import { useFactoryControls } from "../controls/useFactoryControls";
 import { useFactoryShell } from "../shell/FactoryShellContext";
-import { LeverGated, ReasonGated, useViewer } from "../shell/viewerCan";
+import { answerBlockedReason } from "../decisions/DecisionCard";
+import { LeverGated, ReasonGated, useViewer, useViewerCan } from "../shell/viewerCan";
 import { type RunbookAction, runbookActions } from "./runbookModel";
 
 const SNOOZES = [
@@ -105,8 +106,9 @@ export function IssueLifecycleButtons({
           </Button>
         </LeverGated>
       )}
-      <LeverGated lever="control">
-        <DropdownMenu>
+      <DropdownMenu>
+        {/* The gate sits on the trigger: the menu root takes no `disabled`. */}
+        <LeverGated lever="control">
           <DropdownMenuTrigger asChild>
             <Button
               size="xs"
@@ -118,46 +120,46 @@ export function IssueLifecycleButtons({
               <ChevronDownIcon />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            <DropdownMenuLabel>Assign {ref} to</DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            {viewer?.user_id && (
-              <DropdownMenuItem
-                onSelect={() => run({ action: "assign", to: viewer.user_id }, "assigned to you")}
-              >
-                Me
-              </DropdownMenuItem>
-            )}
-            {roster.map((person) => (
-              <DropdownMenuItem
-                key={person.user_id}
-                onSelect={() =>
-                  run(
-                    { action: "assign", to: person.user_id },
-                    `assigned to ${personLabel(person.user_id)}`,
-                  )
-                }
-              >
-                {person.name ?? personLabel(person.user_id)}
-                <span className="ml-auto text-xs text-muted-foreground">{person.role}</span>
-              </DropdownMenuItem>
-            ))}
-            <DropdownMenuSeparator />
+        </LeverGated>
+        <DropdownMenuContent align="end">
+          <DropdownMenuLabel>Assign {ref} to</DropdownMenuLabel>
+          <DropdownMenuSeparator />
+          {viewer?.user_id && (
             <DropdownMenuItem
-              onSelect={() => run({ action: "assign", to: "operators" }, "assigned to operators")}
+              onSelect={() => run({ action: "assign", to: viewer.user_id }, "assigned to you")}
             >
-              Operators
+              Me
             </DropdownMenuItem>
+          )}
+          {roster.map((person) => (
             <DropdownMenuItem
-              onSelect={() => run({ action: "assign", to: "owners" }, "assigned to owners")}
+              key={person.user_id}
+              onSelect={() =>
+                run(
+                  { action: "assign", to: person.user_id },
+                  `assigned to ${personLabel(person.user_id)}`,
+                )
+              }
             >
-              Owners
+              {person.name ?? personLabel(person.user_id)}
+              <span className="ml-auto text-xs text-muted-foreground">{person.role}</span>
             </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </LeverGated>
-      <LeverGated lever="control">
-        <DropdownMenu>
+          ))}
+          <DropdownMenuSeparator />
+          <DropdownMenuItem
+            onSelect={() => run({ action: "assign", to: "operators" }, "assigned to operators")}
+          >
+            Operators
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => run({ action: "assign", to: "owners" }, "assigned to owners")}
+          >
+            Owners
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <DropdownMenu>
+        <LeverGated lever="control">
           <DropdownMenuTrigger asChild>
             <Button
               size="xs"
@@ -169,20 +171,20 @@ export function IssueLifecycleButtons({
               <ChevronDownIcon />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {SNOOZES.map((s) => (
-              <DropdownMenuItem
-                key={s.minutes}
-                onSelect={() =>
-                  run({ action: "snooze", minutes: s.minutes }, `snoozed for ${s.label}`)
-                }
-              >
-                {s.label}
-              </DropdownMenuItem>
-            ))}
-          </DropdownMenuContent>
-        </DropdownMenu>
-      </LeverGated>
+        </LeverGated>
+        <DropdownMenuContent align="end">
+          {SNOOZES.map((s) => (
+            <DropdownMenuItem
+              key={s.minutes}
+              onSelect={() =>
+                run({ action: "snooze", minutes: s.minutes }, `snoozed for ${s.label}`)
+              }
+            >
+              {s.label}
+            </DropdownMenuItem>
+          ))}
+        </DropdownMenuContent>
+      </DropdownMenu>
       <LeverGated lever="control">
         <Button
           size="xs"
@@ -320,6 +322,7 @@ export function RunbookButtons({
   size = "xs",
   className,
   onAssign,
+  omit,
 }: {
   issue: IssueView;
   limit?: number;
@@ -327,10 +330,15 @@ export function RunbookButtons({
   className?: string;
   /** The rule's `assign` step opens the lifecycle's assign menu instead. */
   onAssign?: () => void;
+  /** Action ids drawn elsewhere on the page (the Agent page's own levers). */
+  omit?: readonly string[];
 }) {
   const { factoryId } = useFactoryShell();
-  const actions = useRunbookActions(issue);
+  const viewer = useViewer();
+  const { can } = useViewerCan();
+  const all = useRunbookActions(issue);
   const { run, busy, dialogs } = useRunbook(factoryId);
+  const actions = omit ? all.filter((a) => !omit.includes(a.id)) : all;
   const shown = limit != null ? actions.slice(0, limit) : actions;
   if (shown.length === 0) return null;
   const ref = issue.ref ?? issue.id;
@@ -369,6 +377,27 @@ export function RunbookButtons({
           );
         }
         if (action.kind === "assign" && !onAssign) return null;
+        if (action.kind === "decision") {
+          // A loop decision's answer: its assignee or claimant decides, like its card.
+          return (
+            <ReasonGated
+              key={action.id}
+              reason={answerBlockedReason(action.decision, can, viewer?.user_id ?? null)}
+              testId={action.lever}
+            >
+              <Button
+                size={size}
+                variant="outline"
+                loading={busy === action.id}
+                onClick={() => void run(action)}
+                data-testid={testId}
+                componentId={`factory.runbook.${action.id}`}
+              >
+                {action.label}
+              </Button>
+            </ReasonGated>
+          );
+        }
         return (
           <LeverGated key={action.id} lever={action.lever}>
             <Button

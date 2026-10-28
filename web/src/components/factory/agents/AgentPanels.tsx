@@ -20,6 +20,7 @@ import {
 import { BubbleView, bubbleKey } from "@/components/chat/chatBubbleParts";
 import { TerminalView } from "@/components/blocks/TerminalView";
 import { Button } from "@/components/ui/button";
+import { useGithubInfo } from "@/hooks/useGithub";
 import { findAgentTerminal, useTerminals } from "@/hooks/useTerminals";
 import type {
   AgentDetailResponse,
@@ -66,8 +67,20 @@ export function AgentTabBar({
 }) {
   const mailIn = detail?.mail.filter((m) => m.direction === "in").length ?? 0;
   const mailOut = detail ? detail.mail.length - mailIn : 0;
+  const strip = useRef<HTMLDivElement | null>(null);
+  // Keep the selected tab in view on a narrow strip (only the strip scrolls, never the page).
+  useEffect(() => {
+    const box = strip.current;
+    const active = box?.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (!box || !active) return;
+    const outer = box.getBoundingClientRect();
+    const inner = active.getBoundingClientRect();
+    if (inner.left < outer.left) box.scrollLeft -= outer.left - inner.left + 16;
+    else if (inner.right > outer.right) box.scrollLeft += inner.right - outer.right + 16;
+  }, [tab]);
   return (
     <div
+      ref={strip}
       role="tablist"
       aria-label="Agent"
       data-testid="agent-tabs"
@@ -179,24 +192,27 @@ export function LivePanel({ lines, atMs }: { lines: LiveLineView[]; atMs: number
               ref={i === mark ? ref : undefined}
               data-testid={`agent-line-${line.kind}`}
               data-marked={i === mark ? "true" : undefined}
+              // Every cell on a 20px line, top-aligned: a wrapped line keeps the time and icon on its first.
               className={cn(
-                "grid min-w-0 grid-cols-[4.25rem_1rem_minmax(0,1fr)] items-baseline gap-x-2 rounded-md px-2 py-1 text-sm",
+                "grid min-w-0 grid-cols-[4.25rem_1rem_minmax(0,1fr)] items-start gap-x-2 rounded-md px-2 py-1 text-sm leading-5",
                 i === mark && "bg-warning/10 ring-1 ring-warning/40",
               )}
             >
-              <span className="font-mono text-xs whitespace-nowrap text-muted-foreground tabular-nums">
+              <span className="font-mono text-xs leading-5 whitespace-nowrap text-muted-foreground tabular-nums">
                 {clock(line.ts * 1000)}
               </span>
-              <Icon
-                aria-hidden
-                className={cn(
-                  "size-3.5 self-center",
-                  line.failed ? "text-destructive" : "text-muted-foreground",
-                )}
-              />
+              <span className="flex h-5 items-center">
+                <Icon
+                  aria-hidden
+                  className={cn(
+                    "size-3.5",
+                    line.failed ? "text-destructive" : "text-muted-foreground",
+                  )}
+                />
+              </span>
               <span
                 className={cn(
-                  "min-w-0 break-words",
+                  "min-w-0 leading-5 break-words",
                   line.kind === "tool" && "font-mono text-xs",
                   line.kind === "thinking" && "text-muted-foreground italic",
                   line.kind === "result" && "font-mono text-xs text-destructive",
@@ -409,9 +425,14 @@ export function TerminalPanel({ sessionId }: { sessionId: string }) {
 }
 
 export function DiffPanel({ sessionId }: { sessionId: string }) {
+  // The panel's own read (shared with GithubPanel's): no diff to show → no tall empty frame.
+  const info = useGithubInfo(sessionId);
+  const unavailable = info.data?.available === false;
   return (
-    <Panel testId="agent-panel-diff" className="min-h-64 overflow-hidden">
-      <div className="h-[min(70vh,44rem)] min-h-64 overflow-hidden">
+    <Panel testId="agent-panel-diff" className="overflow-hidden">
+      <div
+        className={cn("overflow-hidden", unavailable ? "max-h-64" : "h-[min(70vh,44rem)] min-h-64")}
+      >
         <GithubPanel conversationId={sessionId} />
       </div>
     </Panel>
@@ -614,19 +635,25 @@ export function CostPanel({
       ) : (
         <ol
           data-testid="agent-cost-series"
-          className="flex h-32 items-end gap-1"
+          className="flex h-36 items-end gap-1"
           aria-label="Cost by day"
         >
           {series.map((day) => (
             <li
               key={day.day}
-              className="flex h-full min-w-0 flex-1 flex-col items-center justify-end gap-1"
+              className="flex h-full min-w-0 flex-1 flex-col items-center gap-1"
               title={`${day.day}: ${formatUsd(day.cost_usd)} · ${day.turns} turns`}
             >
-              <span
-                className="w-full max-w-8 rounded-t-sm bg-session-active/70"
-                style={{ height: `${Math.max(2, (day.cost_usd / max) * 100)}%` }}
-              />
+              {/* The bar grows up to 80% of its column, leaving room for its amount above. */}
+              <span className="flex min-h-0 w-full flex-1 flex-col items-center justify-end gap-0.5">
+                <span className="font-mono text-[10px] whitespace-nowrap text-foreground/80 tabular-nums">
+                  {day.cost_usd >= 10 ? `$${Math.round(day.cost_usd)}` : formatUsd(day.cost_usd)}
+                </span>
+                <span
+                  className="w-full max-w-8 rounded-t-sm bg-session-active/70"
+                  style={{ height: `${Math.max(2, (day.cost_usd / max) * 80)}%` }}
+                />
+              </span>
               <span className="font-mono text-[10px] text-muted-foreground">
                 {day.day.slice(5)}
               </span>

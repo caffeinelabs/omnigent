@@ -21,13 +21,15 @@ import {
   assigneeLabel,
 } from "@/components/factory/alerts/IssueActions";
 import { IssueTargetLink, SeverityIcon } from "@/components/factory/alerts/IssueCard";
-import { PROPOSALS_PENDING } from "@/components/factory/alerts/runbookModel";
+import { PROPOSALS_PENDING, issuePr } from "@/components/factory/alerts/runbookModel";
 import { controlErrorMessage } from "@/components/factory/controls/controlModel";
 import { FactoryLoadError } from "@/components/factory/FactoryLoadError";
-import { TONE_CHIP, formatElapsed } from "@/components/factory/factoryFormat";
+import { TONE_CHIP, formatElapsed, shortSha } from "@/components/factory/factoryFormat";
 import {
   alertPageHref,
   alertsPageHref,
+  decisionsPageHref,
+  prPageHref,
   timelinePageHref,
 } from "@/components/factory/factoryRoutes";
 import { clock } from "@/components/factory/overview/LiveFeed";
@@ -38,6 +40,7 @@ import { DEFAULT_SHOW, buildTimeline } from "@/components/factory/timeline/timel
 import { TimelineView } from "@/components/factory/timeline/TimelineView";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
 import { showToast } from "@/components/ui/toast";
 import type { IssuePageResponse, IssueView } from "@/lib/factoryApi";
 import { Link, useParams } from "@/lib/routing";
@@ -161,48 +164,162 @@ function RootCause({ factoryId, issue }: { factoryId: string; issue: IssueView }
   );
 }
 
+/** One evidence entry: a `span:<id>`, `D-3`, `!9632`, `INC-12` string, or a detector's field. */
+interface EvidenceEntry {
+  key: string;
+  value: unknown;
+}
+
+/**
+ * The issue's evidence as entries: a list's items, a detector's dict
+ * (`{event_id, head_sha}`, `{tool, arg, count}`) field by field.
+ */
+export function evidenceEntries(evidence: unknown): EvidenceEntry[] {
+  if (evidence == null) return [];
+  if (Array.isArray(evidence)) return evidence.map((value) => ({ key: "", value }));
+  if (typeof evidence === "object")
+    return Object.entries(evidence as Record<string, unknown>).map(([key, value]) => ({
+      key,
+      value,
+    }));
+  return [{ key: "", value: evidence }];
+}
+
+const evidenceLink = "font-mono text-xs hover:underline";
+
+function EvidenceValue({
+  factoryId,
+  page,
+  entry,
+}: {
+  factoryId: string;
+  page: IssuePageResponse;
+  entry: EvidenceEntry;
+}) {
+  const { snapshot } = useFactoryShell();
+  const { key, value } = entry;
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  if (typeof value === "string" && value.startsWith("span:")) {
+    const span = page.spans.find((s) => s.id === value.slice(5));
+    if (span) {
+      return (
+        <Link
+          to={timelinePageHref(factoryId, {
+            at: (span.ended_at ?? span.started_at) + 1,
+            ...(span.project_slug ? { project: span.project_slug } : {}),
+          })}
+          componentId="factory.incident.evidence_span"
+          className={evidenceLink}
+        >
+          {span.kind} · {span.name} · {clock(span.started_at)}
+        </Link>
+      );
+    }
+  }
+  if (key === "event_id" && typeof value === "string") {
+    // The moment the detector fired on, on the Timeline.
+    const event = page.events.find((e) => e.id === value);
+    if (event) {
+      return (
+        <Link
+          to={timelinePageHref(factoryId, {
+            at: event.ts + 1,
+            ...(event.project_slug ? { project: event.project_slug } : {}),
+          })}
+          componentId="factory.incident.evidence_event"
+          className={evidenceLink}
+        >
+          {event.kind} · {clock(event.ts)}
+        </Link>
+      );
+    }
+  }
+  if (key === "head_sha" && typeof value === "string") {
+    const pr = issuePr(snapshot, page.issue);
+    return pr ? (
+      <Link
+        to={prPageHref(factoryId, pr.id)}
+        componentId="factory.incident.evidence_head"
+        className={evidenceLink}
+      >
+        !{pr.number}@{shortSha(value)}
+      </Link>
+    ) : (
+      <span className="font-mono text-xs">{shortSha(value)}</span>
+    );
+  }
+  if (typeof value === "string") {
+    const decision = /^D-\d+$/.test(value)
+      ? snapshot.decisions.find((d) => d.ref === value)
+      : undefined;
+    if (decision || /^D-\d+$/.test(value)) {
+      return (
+        <Link
+          to={decisionsPageHref(factoryId, { decision: value })}
+          componentId="factory.incident.evidence_decision"
+          className={evidenceLink}
+        >
+          {value}
+          {decision ? ` · ${decision.question}` : ""}
+        </Link>
+      );
+    }
+    if (/^(INC|F)-\d+$/.test(value)) {
+      return (
+        <Link
+          to={alertPageHref(factoryId, value)}
+          componentId="factory.incident.evidence_issue"
+          className={evidenceLink}
+        >
+          {value}
+        </Link>
+      );
+    }
+    const number = /^!(\d+)$/.exec(value)?.[1];
+    const pr = number ? snapshot.prs.find((p) => String(p.number) === number) : undefined;
+    if (pr) {
+      return (
+        <Link
+          to={prPageHref(factoryId, pr.id)}
+          componentId="factory.incident.evidence_pr"
+          className={evidenceLink}
+        >
+          {value}
+        </Link>
+      );
+    }
+  }
+  return <span className="font-mono text-xs break-all">{text}</span>;
+}
+
 function Evidence({ factoryId, page }: { factoryId: string; page: IssuePageResponse }) {
-  const items = Array.isArray(page.issue.evidence)
-    ? page.issue.evidence
-    : page.issue.evidence
-      ? [page.issue.evidence]
-      : [];
-  if (items.length === 0)
+  const entries = evidenceEntries(page.issue.evidence);
+  if (entries.length === 0)
     return <p className="text-sm text-muted-foreground">No evidence attached.</p>;
   return (
     <ul data-testid="incident-evidence" className="flex flex-col gap-1 text-sm">
-      {items.map((item) => {
-        const text = typeof item === "string" ? item : JSON.stringify(item);
-        const span =
-          typeof item === "string" && item.startsWith("span:")
-            ? page.spans.find((s) => s.id === item.slice(5))
-            : null;
-        return (
-          <li key={text} className="min-w-0 break-words">
-            {span ? (
-              <Link
-                to={timelinePageHref(factoryId, {
-                  at: (span.ended_at ?? span.started_at) + 1,
-                  ...(span.project_slug ? { project: span.project_slug } : {}),
-                })}
-                componentId="factory.incident.evidence_span"
-                className="font-mono text-xs hover:underline"
-              >
-                {span.kind} · {span.name} · {clock(span.started_at)}
-              </Link>
-            ) : (
-              <span className="font-mono text-xs">{text}</span>
-            )}
-          </li>
-        );
-      })}
+      {entries.map((entry) => (
+        <li
+          key={`${entry.key}:${typeof entry.value === "string" ? entry.value : JSON.stringify(entry.value)}`}
+          className="flex min-w-0 flex-wrap items-baseline gap-x-2 break-words"
+        >
+          {entry.key && (
+            <span className="shrink-0 text-xs text-muted-foreground">
+              {entry.key.replaceAll("_", " ")}
+            </span>
+          )}
+          <EvidenceValue factoryId={factoryId} page={page} entry={entry} />
+        </li>
+      ))}
     </ul>
   );
 }
 
 export function IncidentPage() {
+  // The router hands the param over decoded already.
   const { ref: param = "" } = useParams<{ ref: string }>();
-  const ref = issueRef(decodeURIComponent(param));
+  const ref = issueRef(param);
+  const phone = useIsMobileViewport();
   const { snapshot, nowS } = useFactoryShell();
   const fid = snapshot.factory.id;
   const query = useFactoryIssue(fid, ref);
@@ -356,7 +473,8 @@ export function IncidentPage() {
         meta={`spans and events on ${page.sessions.map((s) => s.title ?? s.session_id.slice(0, 8)).join(" and ") || "the project"}`}
         testId="incident-timeline"
       >
-        {groups.length > 0 && range ? (
+        {/* On a phone the swimlanes are too narrow to read: the steps list says it. */}
+        {phone && page.events.length > 0 ? null : groups.length > 0 && range ? (
           <TimelineView
             factoryId={fid}
             groups={groups}
@@ -380,7 +498,10 @@ export function IncidentPage() {
                 <span className="font-mono text-xs text-muted-foreground tabular-nums">
                   {clock(event.ts)}
                 </span>
-                <span className="min-w-0 truncate" title={event.summary}>
+                <span
+                  className="min-w-0 truncate max-sm:line-clamp-2 max-sm:whitespace-normal"
+                  title={event.summary}
+                >
                   <span
                     className={cn(
                       "mr-1.5 font-mono text-xs",

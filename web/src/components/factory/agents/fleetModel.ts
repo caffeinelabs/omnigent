@@ -5,10 +5,12 @@
 
 import type {
   AgentRowView,
+  DecisionView,
   FactoryRole,
   FactorySnapshot,
   MemberView,
   NowState,
+  ViewerBlock,
 } from "@/lib/factoryApi";
 import { ROLE_SHORT } from "../board/TeamStrip";
 import { type FleetFacts, type FleetQuery, type SavedView, matchesFleetQuery } from "./fleetQuery";
@@ -46,18 +48,55 @@ export function agentState(
   }
 }
 
-/** The saved views an agent falls in. */
+const normId = (id: string) => id.replace(/-/g, "").toLowerCase();
+
+/**
+ * The agents (normalized session ids) with an open decision that waits on
+ * `viewer`: claimed by them, assigned to them, or to a group they answer for
+ * (operators; owners for an owner). Null without a signed-in viewer.
+ */
+export function waitingOnViewer(
+  decisions: readonly DecisionView[],
+  viewer: ViewerBlock | null | undefined,
+): Set<string> | null {
+  if (!viewer?.user_id) return null;
+  const ids = new Set<string>();
+  for (const decision of decisions) {
+    if (decision.status !== "open" || !decision.asked_by_session_id) continue;
+    const to = decision.claimed_by ?? decision.assignee ?? "operators";
+    const mine =
+      to === viewer.user_id ||
+      (decision.claimed_by == null &&
+        ((to === "operators" && viewer.can.answer) || (to === "owners" && viewer.can.settings)));
+    if (mine) ids.add(normId(decision.asked_by_session_id));
+  }
+  return ids;
+}
+
+/**
+ * The saved views an agent falls in.
+ *
+ * @param waitingOnMe - From {@link waitingOnViewer}; without it, any agent
+ *   with a pending decision or waiting counts.
+ */
 export function savedViewsOf(
   row: AgentRowView,
   state: AgentState,
   idleMin: number | null,
+  waitingOnMe: ReadonlySet<string> | null = null,
 ): Set<SavedView> {
   const views = new Set<SavedView>();
   const rate = row.now?.usd_per_h ?? null;
   if (row.flags.includes("repeat") || (row.loop && LOOP_BAD.has(row.loop.state))) {
     views.add("looping");
   }
-  if (row.decisions_pending > 0 || state === "waiting") views.add("waiting");
+  if (
+    waitingOnMe
+      ? waitingOnMe.has(normId(row.session_id))
+      : row.decisions_pending > 0 || state === "waiting"
+  ) {
+    views.add("waiting");
+  }
   if ((rate ?? 0) >= EXPENSIVE_RATE || (row.cost_usd ?? 0) >= EXPENSIVE_COST) {
     views.add("expensive");
   }
@@ -71,7 +110,11 @@ export function savedViewsOf(
 }
 
 /** The agent's fact sheet at `nowS` (epoch seconds, the server's clock). */
-export function fleetAgent(row: AgentRowView, nowS: number): FleetAgent {
+export function fleetAgent(
+  row: AgentRowView,
+  nowS: number,
+  waitingOnMe: ReadonlySet<string> | null = null,
+): FleetAgent {
   const state = agentState(row);
   const last = row.now?.last_event_at ?? row.last_activity_at;
   const idleMin = last != null ? Math.max(0, (nowS - last) / 60) : null;
@@ -96,7 +139,7 @@ export function fleetAgent(row: AgentRowView, nowS: number): FleetAgent {
     idleMin,
     mail: row.mail_in + row.mail_out,
     decisions: row.decisions_pending,
-    views: savedViewsOf(row, state, idleMin),
+    views: savedViewsOf(row, state, idleMin, waitingOnMe),
   };
   return { row, facts, state };
 }

@@ -8,7 +8,13 @@
 
 import { useMemo } from "react";
 import { RepeatIcon } from "lucide-react";
-import type { FactorySnapshot, LoopChipView, PrView, ProjectView } from "@/lib/factoryApi";
+import type {
+  FactorySnapshot,
+  LoopChipView,
+  LoopsSummaryView,
+  PrView,
+  ProjectView,
+} from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import {
@@ -161,6 +167,40 @@ function Empty() {
   );
 }
 
+/** The project's loop counts: running, converged, exhausted, stalled or thrashing, escalated. */
+function LoopsSummary({ summary }: { summary: LoopsSummaryView }) {
+  return (
+    <p
+      data-testid="project-loops-summary"
+      className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground tabular-nums"
+    >
+      <span>
+        <span className="font-semibold text-session-active">{summary.running}</span> running
+      </span>
+      <span>
+        <span className="font-semibold text-success">{summary.converged}</span> converged
+      </span>
+      <span>
+        <span className={cn("font-semibold", summary.exhausted ? "text-destructive" : "")}>
+          {summary.exhausted}
+        </span>{" "}
+        exhausted
+      </span>
+      <span>
+        <span
+          className={cn("font-semibold", summary.stalled + summary.thrashing ? "text-warning" : "")}
+        >
+          {summary.stalled + summary.thrashing}
+        </span>{" "}
+        stalled or thrashing
+      </span>
+      <span>
+        <span className="font-semibold">{summary.escalated}</span> escalated
+      </span>
+    </p>
+  );
+}
+
 /** The project page's Loops tab: a strip per PR, then task and plan loops without a PR. */
 export function ProjectLoops({
   snapshot,
@@ -222,6 +262,31 @@ export function ProjectLoops({
     );
   }
   if (groups.perPr.length === 0 && groups.rest.length === 0) {
+    // An older server without the loops route: the snapshot's counts and per-PR chips.
+    const chipped = prs.filter((pr) => (pr.loops ?? []).length > 0);
+    if (
+      loops.error != null &&
+      isMissingRoute(loops.error) &&
+      (project.loops_summary || chipped.length)
+    ) {
+      return (
+        <div data-testid="project-loops" className="flex min-w-0 flex-col gap-3">
+          {project.loops_summary && <LoopsSummary summary={project.loops_summary} />}
+          {chipped.map((pr) => (
+            <p key={pr.id} className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
+              <Link
+                to={prPageHref(fid, pr.id)}
+                componentId="factory.project.loops_pr"
+                className="font-mono font-medium hover:underline"
+              >
+                !{pr.number}
+              </Link>
+              <LoopChips chips={pr.loops ?? []} />
+            </p>
+          ))}
+        </div>
+      );
+    }
     return (
       <EmptyState
         testId="project-loops-empty"
@@ -234,39 +299,7 @@ export function ProjectLoops({
   const summary = project.loops_summary;
   return (
     <div data-testid="project-loops" className="flex min-w-0 flex-col gap-3">
-      {summary && (
-        <p
-          data-testid="project-loops-summary"
-          className="flex flex-wrap gap-x-4 gap-y-1 text-sm text-muted-foreground tabular-nums"
-        >
-          <span>
-            <span className="font-semibold text-session-active">{summary.running}</span> running
-          </span>
-          <span>
-            <span className="font-semibold text-success">{summary.converged}</span> converged
-          </span>
-          <span>
-            <span className={cn("font-semibold", summary.exhausted ? "text-destructive" : "")}>
-              {summary.exhausted}
-            </span>{" "}
-            exhausted
-          </span>
-          <span>
-            <span
-              className={cn(
-                "font-semibold",
-                summary.stalled + summary.thrashing ? "text-warning" : "",
-              )}
-            >
-              {summary.stalled + summary.thrashing}
-            </span>{" "}
-            stalled or thrashing
-          </span>
-          <span>
-            <span className="font-semibold">{summary.escalated}</span> escalated
-          </span>
-        </p>
-      )}
+      {summary && <LoopsSummary summary={summary} />}
       {groups.perPr.map(({ pr, lines }) => (
         <div key={pr.id} className="min-w-0 rounded-xl border border-border bg-card p-4 max-md:p-3">
           <h3 className="mb-2 flex min-w-0 items-baseline gap-2 text-sm">

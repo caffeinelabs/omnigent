@@ -100,20 +100,28 @@ function joinDots(items: (ReactElement | false | null | undefined | "")[]): Reac
   );
 }
 
+const norm = (id: string) => id.replace(/-/g, "").toLowerCase();
+
 function since(nowS: number, at: number | null | undefined): string | null {
   if (at == null) return null;
   const s = Math.max(0, nowS - at);
   return s < 60 ? `${Math.floor(s)}s` : formatElapsed(s);
 }
 
+/** Runbook steps the NOW line's levers already offer on this agent. */
+const NOW_LEVERS = ["interrupt", "redispatch", "reassign", "message", "open_agent"];
+
 function IssueBanner({
   factoryId,
   issue,
   nowS,
+  onAgent,
 }: {
   factoryId: string;
   issue: IssueView;
   nowS: number;
+  /** The issue is on this agent: its lever steps are the NOW line's. */
+  onAgent: boolean;
 }) {
   return (
     <div
@@ -153,7 +161,11 @@ function IssueBanner({
           </span>
         </span>
       </span>
-      <RunbookButtons issue={issue} className="shrink-0 sm:justify-end" />
+      <RunbookButtons
+        issue={issue}
+        omit={onAgent ? NOW_LEVERS : undefined}
+        className="shrink-0 sm:justify-end"
+      />
     </div>
   );
 }
@@ -369,7 +381,13 @@ export function AgentHeader({
         </span>
       </div>
       {openIssues.map((issue) => (
-        <IssueBanner key={issue.id} factoryId={fid} issue={issue} nowS={nowS} />
+        <IssueBanner
+          key={issue.id}
+          factoryId={fid}
+          issue={issue}
+          nowS={nowS}
+          onAgent={norm(issue.target) === norm(`member:${agent.session_id}`)}
+        />
       ))}
     </header>
   );

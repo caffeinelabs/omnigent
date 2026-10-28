@@ -137,6 +137,25 @@ describe("AgentsPage", () => {
     expect(server.controls[0]).toEqual({ action: "redispatch", target: "task:T-4" });
   });
 
+  it("leaves selected agents the query hides out of the bulk levers", async () => {
+    serve();
+    renderAt("/agents?q=task:T-4");
+    await screen.findByTestId(`fleet-row-${IC_ROUTE_R2}`);
+    for (const row of screen.getAllByTestId(/^fleet-row-/)) {
+      fireEvent.click(within(row).getByRole("checkbox"));
+    }
+    fireEvent.change(screen.getByTestId("fleet-query"), { target: { value: "flag:repeat" } });
+    await waitFor(() => expect(screen.getAllByTestId(/^fleet-row-/)).toHaveLength(1));
+    expect(screen.getByTestId("fleet-bulk-count")).toHaveTextContent(
+      "1 agent selected (2 hidden by the filter)",
+    );
+    fireEvent.click(screen.getByTestId("fleet-bulk-interrupt"));
+    const dialog = await screen.findByTestId("intervention-dialog");
+    fireEvent.click(within(dialog).getByTestId("intervention-confirm"));
+    await waitFor(() => expect(server.controls).toHaveLength(1));
+    expect(server.controls[0]).toEqual({ action: "interrupt", target: `member:${IC_ROUTE_R2}` });
+  });
+
   it("shows Show on Timeline for a selection", async () => {
     serve();
     renderAt("/agents?q=flag:repeat");
@@ -224,10 +243,30 @@ describe("Alerts and the incident page", () => {
     );
   });
 
-  it("switches to findings", async () => {
+  it("switches to findings, a flaky-CI one linking its PR", async () => {
     serve();
     renderAt("/alerts?class=finding");
     expect(await screen.findByTestId("issue-card-F-7")).toBeInTheDocument();
+    // The server names the head (`pr:<id>@<sha7>`); the link still finds the PR.
+    expect(screen.getByTestId("issue-target-F-7")).toHaveTextContent("!9631");
+    expect(screen.getByTestId("issue-target-F-7")).toHaveAttribute(
+      "href",
+      `${BASE}/prs/${PR_9631}`,
+    );
+  });
+
+  it("links a finding's evidence: the event on the Timeline, the head on its PR", async () => {
+    serve();
+    renderAt("/alerts/F-7");
+    const evidence = await screen.findByTestId("incident-evidence");
+    expect(within(evidence).getByText("!9631@5e1c2d4")).toHaveAttribute(
+      "href",
+      `${BASE}/prs/${PR_9631}`,
+    );
+    expect(within(evidence).getByText(/gate\.changed/)).toHaveAttribute(
+      "href",
+      expect.stringMatching(new RegExp(`^${BASE}/timeline\\?focus=db-version&at=\\d+$`)),
+    );
   });
 
   it("disables lifecycle and runbook levers for a viewer", async () => {
@@ -235,6 +274,9 @@ describe("Alerts and the incident page", () => {
     renderAt("/alerts");
     const card = await screen.findByTestId("issue-card-INC-13");
     expect(within(card).getByTestId("issue-ack-INC-13")).toBeDisabled();
+    expect(within(card).getByTestId("issue-assign-INC-13")).toBeDisabled();
+    expect(within(card).getByTestId("issue-snooze-INC-13")).toBeDisabled();
+    expect(within(card).getByTestId("issue-resolve-INC-13")).toBeDisabled();
     expect(within(card).getByTestId("runbook-INC-13-interrupt")).toBeDisabled();
   });
 
@@ -313,5 +355,17 @@ describe("Loop UI", () => {
     const loops = await screen.findByTestId("project-loops");
     expect(within(loops).getByTestId("project-loops-pr-9631")).toBeInTheDocument();
     expect(within(loops).getByTestId("project-loops-rest")).toHaveTextContent("plan");
+  });
+
+  it("falls back to the snapshot's loop counts on a server without the loops route", async () => {
+    serve("creator", {
+      [`GET ${SNAPSHOT}/loops`]: () =>
+        json({ error: { code: "not_found", message: "no route" } }, 404),
+    });
+    renderAt("/projects/db-version#loops");
+    const summary = await screen.findByTestId("project-loops-summary");
+    expect(summary).toHaveTextContent("3 running");
+    expect(summary).toHaveTextContent("1 exhausted");
+    expect(screen.queryByTestId("project-loops-empty")).not.toBeInTheDocument();
   });
 });

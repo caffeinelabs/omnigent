@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import type { AgentRowView } from "@/lib/factoryApi";
 import { LEVER_REASON, useViewer, useViewerCan } from "../shell/viewerCan";
+import { agentState } from "./fleetModel";
 import { postingAs, useIntervene } from "./InterventionDialog";
 import { planIntervention } from "./interventionModel";
 
@@ -23,6 +24,7 @@ export function AgentComposer({ factoryId, agent }: { factoryId: string; agent: 
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const allowed = can.intervene;
+  const dead = agentState(agent) === "dead";
   const send = async () => {
     const note = text.trim();
     if (!note || sending || !allowed) return;
@@ -69,9 +71,12 @@ export function AgentComposer({ factoryId, agent }: { factoryId: string; agent: 
         data-testid="agent-composer-input"
         className="min-h-14 resize-none border-0 bg-transparent text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
       />
-      <div className="flex min-w-0 items-center gap-2">
-        <span className="min-w-0 truncate text-xs text-muted-foreground">
-          Posting as {postingAs(viewer)} · delivered after the current tool · the PL is notified
+      <div className="flex min-w-0 items-end gap-2">
+        {/* Wraps on a phone: "the PL is notified" is the promise that matters. */}
+        <span className="min-w-0 text-xs break-words text-muted-foreground">
+          Posting as {postingAs(viewer)} ·{" "}
+          {dead ? "it is dead: delivered once it relaunches" : "delivered after the current tool"} ·
+          the PL is notified
         </span>
         <Button
           type="submit"

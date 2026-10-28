@@ -31,7 +31,6 @@ import {
 import {
   isMissingRoute,
   useFactoryAgent,
-  useFactoryAgents,
   useFactoryLoops,
   useLoopSpans,
 } from "@/components/factory/agents/opsQueries";
@@ -121,9 +120,8 @@ export function AgentPage() {
     [setParams],
   );
   const query = useFactoryAgent(fid, sid, { liveMs: AGENT_POLL_MS });
-  // The header's "now" follows the fleet's row, which every `now` tick refreshes.
-  const fleet = useFactoryAgents(fid);
-  const liveRow = fleet.data?.data.find((r) => r.session_id === sid) ?? null;
+  // The header's "now" follows the snapshot's member, which every `now` tick refreshes.
+  const member = snapshot.members.find((m) => m.session_id === sid) ?? null;
   const missing = isMissingRoute(query.error);
   const detail = useMemo(
     () => query.data ?? (query.error && !query.data ? detailFromSnapshot(snapshot, sid) : null),
@@ -153,7 +151,9 @@ export function AgentPage() {
     }
     return <NotInFactory factoryId={fid} sid={sid} />;
   }
-  const agent = liveRow ?? detail.agent;
+  const agent = member?.now
+    ? { ...detail.agent, now: member.now, status: member.now.status ?? detail.agent.status }
+    : detail.agent;
   const target: InterventionTarget = {
     sessionId: agent.session_id,
     title: agent.title,

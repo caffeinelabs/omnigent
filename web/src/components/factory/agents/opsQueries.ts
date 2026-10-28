@@ -1,7 +1,8 @@
 // TanStack Query bindings for the ops pages: the fleet, one agent, loops,
-// issues and the cost ledger. Keys sit under the snapshot's `["factory", fid]`
-// so every `factory_changed` frame (the throttled `now` scope included)
-// refreshes them; the session-updates socket being down falls back to a poll.
+// issues and the cost ledger. The fleet and issues sit under the snapshot's
+// `["factory", fid]`, so `now` and `issues` frames refresh them; loops follow
+// full frames only, and the cost ledger and alert routing their stale time.
+// The session-updates socket being down falls back to a poll.
 
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useSessionUpdatesConnected } from "@/hooks/useSessionUpdatesConnected";
@@ -102,7 +103,8 @@ export function useFactoryLoops(
   const refetchInterval = useFallbackInterval();
   const project = filters.project ?? undefined;
   return useQuery<LoopsResponse>({
-    queryKey: opsKey(factoryId, "loops", project ?? null),
+    // Under the Room's key: full frames refresh it, `now` ticks don't.
+    queryKey: ["factory-room", factoryId, "ops-loops", project ?? null],
     queryFn: ({ signal }) => fetchFactoryLoops(factoryId, { project }, signal),
     enabled: Boolean(factoryId) && (options.enabled ?? true),
     refetchInterval,
@@ -182,7 +184,7 @@ export function useFactoryCost(
   options: { groupBy: string[]; project?: string | null; enabled?: boolean },
 ) {
   return useQuery<CostResponse>({
-    queryKey: opsKey(factoryId, "cost", options.groupBy, options.project ?? null),
+    queryKey: ["factory-cost", factoryId, options.groupBy, options.project ?? null],
     queryFn: ({ signal }) =>
       fetchFactoryCost(
         factoryId,
@@ -198,7 +200,7 @@ export function useFactoryCost(
 /** Where incidents go: the cockpit, browser notifications, Slack (whether set). */
 export function useAlertRouting(factoryId: string) {
   return useQuery<AlertRoutingView>({
-    queryKey: opsKey(factoryId, "alert-routing"),
+    queryKey: ["factory-alert-routing", factoryId],
     queryFn: ({ signal }) => fetchAlertRouting(factoryId, signal),
     enabled: Boolean(factoryId),
     staleTime: 5 * 60_000,

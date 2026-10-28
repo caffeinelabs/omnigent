@@ -114,20 +114,34 @@ export function FleetPerfHarness({
     onStats?.(copy);
   }, [tick, onStats]);
   const max = shown.commits.length ? Math.max(...shown.commits) : 0;
+  // A production build's Profiler never reports: after a few updates, say so.
+  const measured = shown.commits.length > 0 || tick < 3;
   return (
     <div className="flex min-w-0 flex-col gap-2">
       <p
         data-testid="fleet-perf"
+        data-tick={tick}
+        data-measured={measured ? "true" : "false"}
         data-commits={shown.commits.length}
         data-max-ms={max.toFixed(2)}
         data-ok={max <= COMMIT_BUDGET_MS ? "true" : "false"}
         className="text-xs text-muted-foreground tabular-nums"
       >
-        {rows.length} agents · update {tick} · commits {shown.commits.length} · slowest{" "}
-        {max.toFixed(1)} ms of {COMMIT_BUDGET_MS} ms · row renders {shown.rowRenders}{" "}
-        <span className={max <= COMMIT_BUDGET_MS ? "text-success" : "text-destructive"}>
-          {max <= COMMIT_BUDGET_MS ? "within budget" : "over budget"}
-        </span>
+        {rows.length} agents · update {tick} ·{" "}
+        {measured ? (
+          <>
+            commits {shown.commits.length} · slowest {max.toFixed(1)} ms of {COMMIT_BUDGET_MS} ms ·
+            row renders {shown.rowRenders}{" "}
+            <span className={max <= COMMIT_BUDGET_MS ? "text-success" : "text-destructive"}>
+              {max <= COMMIT_BUDGET_MS ? "within budget" : "over budget"}
+            </span>
+          </>
+        ) : (
+          <>
+            row renders {shown.rowRenders} · commit time not measured (this build’s React Profiler
+            is off; run Storybook in dev mode)
+          </>
+        )}
       </p>
       {table}
     </div>

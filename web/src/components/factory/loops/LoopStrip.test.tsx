@@ -11,8 +11,16 @@ import {
 } from "../agents/__fixtures__/opsFixtures";
 import { round3Snapshot, viewerOf } from "../shell/__fixtures__/shellFixtures";
 import { FactoryViewerProvider } from "../shell/viewerCan";
-import { LoopStrip } from "./LoopStrip";
-import { budgetShare, loopLines, prLoops, stateText, stripState } from "./loopStripModel";
+import { LoopStrip, verdictWord } from "./LoopStrip";
+import {
+  attemptsOf,
+  budgetShare,
+  flakeOnLoop,
+  loopLines,
+  prLoops,
+  stateText,
+  stripState,
+} from "./loopStripModel";
 
 const snapshot = round3Snapshot();
 const pr9631 = snapshot.prs.find((p) => p.id === PR_9631)!;
@@ -38,7 +46,14 @@ function stateLoops(): LoopView[] {
       last_reason: "review dry: round 2 adds no new blocking finding and fixes none",
     }),
     loop("verify", { state: "running" }),
-    loop("demo", { state: "converged", last_reason: "PASS at 5e1c2d4" }),
+    // A demo that passed at its first run (no spans: the strip reads its count and verdict).
+    loop("demo", {
+      id: "demo-pass",
+      state: "converged",
+      iteration: 1,
+      last_verdict: "PASS",
+      last_reason: "PASS at 5e1c2d4",
+    }),
   ];
 }
 
@@ -85,6 +100,37 @@ describe("loop strip states", () => {
     expect(line!.attempts[1]!.outcome).toBe("open");
   });
 
+  it("marks the last round by its verdict: an approved round of a thrashing review is ✓", () => {
+    const approved = loop("review", { state: "thrashing", iteration: 3, last_verdict: "APPROVE" });
+    expect(attemptsOf(approved, []).map((a) => a.outcome)).toEqual(["fail", "fail", "ok"]);
+    const changes = loop("review", {
+      state: "thrashing",
+      iteration: 3,
+      last_verdict: "CHANGES",
+      last_reason: "3 blocking · finding 3fa2c1d0 came back",
+    });
+    const last = attemptsOf(changes, []).at(-1)!;
+    expect(last.outcome).toBe("fail");
+    expect(verdictWord(last, "review")).toBe("CHANGES · 3 blocking");
+    // Without a verdict the loop's state decides.
+    const bare = loop("review", { state: "exhausted", iteration: 2, last_verdict: null });
+    expect(attemptsOf(bare, []).at(-1)!.outcome).toBe("fail");
+  });
+
+  it("marks CI flake from the server's `pr:<id>@<sha7>` target, on that head only", () => {
+    const ci = round3LoopList().find((l) => l.kind === "ci")!;
+    const f7 = round3IssueList().find((i) => i.ref === "F-7")!;
+    expect(f7.target).toBe(`pr:${PR_9631}@5e1c2d4`);
+    expect(flakeOnLoop(f7, ci)).toBe(true);
+    const dashed = `${PR_9631.slice(0, 8)}-${PR_9631.slice(8, 12)}-${PR_9631.slice(12)}`;
+    expect(flakeOnLoop({ ...f7, target: `pr:${dashed}@5e1c2d4` }, ci)).toBe(true);
+    expect(flakeOnLoop({ ...f7, target: `pr:${PR_9631}` }, ci)).toBe(true);
+    expect(flakeOnLoop({ ...f7, target: `pr:${PR_9631}@a1b2c3d` }, ci)).toBe(false);
+    expect(flakeOnLoop({ ...f7, status: "resolved" }, ci)).toBe(false);
+    const [line] = loopLines([ci], [], [{ ...f7, target: `pr:${PR_9631}@a1b2c3d` }]);
+    expect(line!.flake).toBeNull();
+  });
+
   it("picks the PR's own loops and its task's implement loop, implement first", () => {
     const lines = loopLines(prLoops(round3LoopList(), pr9631), timelineSpans(), round3IssueList());
     expect(lines.map((l) => l.loop.kind)).toEqual(["implement", "review", "verify", "demo", "ci"]);
@@ -127,6 +173,24 @@ describe("LoopStrip", () => {
 
   it("disables the remedies for a viewer", () => {
     renderStrip("viewer");
+    expect(screen.getByTestId("loop-remedy-raise")).toBeDisabled();
+  });
+
+  it("disables the remedies of a decision routed to owners for an operator", () => {
+    const owners = round3Snapshot("operator");
+    owners.decisions = owners.decisions.map((d) =>
+      d.ref === "D-31" ? { ...d, assignee: "owners" } : d,
+    );
+    const client = new QueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <FactoryViewerProvider viewer={owners.viewer}>
+            <LoopStrip snapshot={owners} lines={loopLines(stateLoops(), timelineSpans())} />
+          </FactoryViewerProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
     expect(screen.getByTestId("loop-remedy-raise")).toBeDisabled();
   });
 });

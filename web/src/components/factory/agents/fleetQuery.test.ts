@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { agentRows } from "./__fixtures__/opsFixtures";
-import { filterFleet, fleetAgent, fleetCounts, groupFleet } from "./fleetModel";
+import { filterFleet, fleetAgent, fleetCounts, groupFleet, waitingOnViewer } from "./fleetModel";
 import {
   globMatch,
   parseFleetQuery,
@@ -9,7 +9,7 @@ import {
   tokenize,
   toggleQueryTerm,
 } from "./fleetQuery";
-import { ROUND3_NOW_S } from "../shell/__fixtures__/shellFixtures";
+import { ROUND3_NOW_S, round3Snapshot, viewerOf } from "../shell/__fixtures__/shellFixtures";
 
 const fleet = () => agentRows().map((row) => fleetAgent(row, ROUND3_NOW_S));
 const titles = (query: string) =>
@@ -96,6 +96,25 @@ describe("fleet query on the round-3 fleet", () => {
     expect(titles("is:expensive")).toEqual(
       expect.arrayContaining(["Atlas", "ic:route-r1", "ic:route-r2"]),
     );
+  });
+
+  it("waits on me: the decisions claimed by, assigned to or routed to the viewer", () => {
+    const { decisions } = round3Snapshot();
+    const waitingFor = (role: "creator" | "operator" | "viewer") => {
+      const mine = waitingOnViewer(decisions, viewerOf(role));
+      return filterFleet(
+        agentRows().map((row) => fleetAgent(row, ROUND3_NOW_S, mine)),
+        parseFleetQuery("is:waiting"),
+      )
+        .map((a) => a.row.title)
+        .sort();
+    };
+    // D-2 (the db-version PL's) is claimed by Mia; D-33 (Atlas's) goes to operators.
+    expect(waitingFor("operator")).toEqual(["Atlas", "PL · db-version"]);
+    expect(waitingFor("creator")).not.toContain("PL · db-version");
+    expect(waitingFor("creator")).toContain("Atlas");
+    expect(waitingFor("viewer")).toEqual([]);
+    expect(waitingOnViewer(decisions, null)).toBeNull();
   });
 
   it("matches flags, tasks and loops", () => {

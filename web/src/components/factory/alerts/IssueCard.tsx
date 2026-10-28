@@ -18,7 +18,7 @@ import { cn } from "@/lib/utils";
 import { formatElapsed } from "../factoryFormat";
 import { agentPageHref, alertPageHref, prPageHref, projectPageHref } from "../factoryRoutes";
 import { IssueLifecycleButtons, RunbookButtons, assigneeLabel } from "./IssueActions";
-import { issueMember, issueTarget } from "./runbookModel";
+import { issueMember, issuePr } from "./runbookModel";
 
 export function SeverityIcon({
   issue,
@@ -76,8 +76,8 @@ export function IssueTargetLink({
   issue: IssueView;
 }) {
   const fid = snapshot.factory.id;
-  const [kind, id] = issueTarget(issue);
   const member = issueMember(snapshot, issue);
+  const pr = issuePr(snapshot, issue);
   const label = issue.target_title ?? member?.title ?? null;
   const className =
     "shrink-0 rounded-sm bg-muted px-1.5 py-0.5 font-mono text-xs hover:bg-muted/70 hover:underline";
@@ -93,15 +93,17 @@ export function IssueTargetLink({
       </Link>
     );
   }
-  if (kind === "pr") {
-    const pr = snapshot.prs.find((p) => p.id.replace(/-/g, "") === id.replace(/-/g, ""));
-    if (pr) {
-      return (
-        <Link to={prPageHref(fid, pr.id)} componentId="factory.issue.target" className={className}>
-          !{pr.number}
-        </Link>
-      );
-    }
+  if (pr) {
+    return (
+      <Link
+        to={prPageHref(fid, pr.id)}
+        componentId="factory.issue.target"
+        data-testid={`issue-target-${issue.ref ?? issue.id}`}
+        className={className}
+      >
+        !{pr.number}
+      </Link>
+    );
   }
   if (issue.project_slug) {
     return (

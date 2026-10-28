@@ -31,16 +31,25 @@ function stateLoops(): LoopView[] {
       id: "rv-thrash",
       state: "thrashing",
       iteration: 3,
-      last_reason: "finding 3fa2c1d0 came back in round 3",
+      last_verdict: "CHANGES",
+      last_reason: "3 blocking · finding 3fa2c1d0 came back in round 3",
     }),
     loop("review", {
       id: "rv-dry",
       subject: "pr:other",
       state: "stalled",
+      last_verdict: "CHANGES",
       last_reason: "review dry: round 2 adds no new blocking finding and fixes none",
     }),
     loop("verify", { state: "running" }),
-    loop("demo", { state: "converged", last_reason: "PASS at 5e1c2d4" }),
+    // A demo that passed at its first run (no spans: the strip reads its count and verdict).
+    loop("demo", {
+      id: "demo-pass",
+      state: "converged",
+      iteration: 1,
+      last_verdict: "PASS",
+      last_reason: "PASS at 5e1c2d4",
+    }),
   ];
 }
 
@@ -80,7 +89,10 @@ type Story = StoryObj<typeof meta>;
 
 // ── The strip's states ─────────────────────────────────────────
 
-/** Exhausted (r0..r2 ✗, $11.80/$15, D-31's remedies), thrashing, dry, running, converged. */
+/**
+ * Exhausted (r0..r2 ✗, $11.80/$15, D-31's remedies), thrashing (`#3 ✗ CHANGES · 3
+ * blocking`), dry, running, converged.
+ */
 export const States: Story = {
   render: () => (
     <BoardFrame width={1100}>

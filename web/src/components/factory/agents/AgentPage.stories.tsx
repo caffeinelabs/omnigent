@@ -3,7 +3,14 @@ import { userEvent, within } from "storybook/test";
 import { AgentPage } from "@/pages/factory/AgentPage";
 import { CockpitStory, type CockpitStoryOptions, SNAPSHOT_PATH } from "../board/boardStoryKit";
 import { ROUND3_NOW_S, round3Events, round3Snapshot } from "../shell/__fixtures__/shellFixtures";
-import { ENV_DB, IC_ROUTE_R2, PL_CACHE, PL_DB, agentDetail } from "./__fixtures__/opsFixtures";
+import {
+  ENV_DB,
+  IC_ROUTE_R2,
+  PL_CACHE,
+  PL_DB,
+  agentDetail,
+  agentsResponse,
+} from "./__fixtures__/opsFixtures";
 
 function agent(sid: string, options: CockpitStoryOptions = {}, play?: Story["play"]): Story {
   return {
@@ -97,6 +104,7 @@ export const AtMoment = agent(IC_ROUTE_R2, {
   search: `?tab=tools&at=${(ROUND3_NOW_S - 7 * 60) * 1000}`,
 });
 
+/** ic:route-r2's own transcript: the PL's dispatch, the failing test, the PL's hint. */
 export const Transcript = agent(IC_ROUTE_R2, { search: tab("transcript") });
 
 export const TranscriptMobile = phone(agent(IC_ROUTE_R2, { search: tab("transcript") }));
@@ -135,18 +143,40 @@ export const DeadLeadDark = agent(PL_CACHE, { theme: "dark" });
 /** The db-version env keeper, running `tilt ci`. */
 export const EnvKeeper = agent(ENV_DB);
 
-/** Long summary and tool arguments wrap or truncate in place. */
+const LONG_TITLE = "ic:route-r2-with-a-very-long-worker-name-from-a-long-task-key";
+const LONG_ARG =
+  "pnpm -F caffeine-api test -- --reporter=verbose --runInBand src/modules/db/version.test.ts src/modules/db/migrations.test.ts";
+
+/** ic:route-r2 with a long title and tool argument, in its detail and in the fleet row. */
+function longRow<T extends { title: string; now: { tool_arg: string | null } | null }>(row: T): T {
+  return { ...row, title: LONG_TITLE, now: row.now ? { ...row.now, tool_arg: LONG_ARG } : null };
+}
+
+/** Long title and tool arguments wrap or truncate in place (in the detail, the fleet and the snapshot). */
 export const LongText = agent(IC_ROUTE_R2, {
+  snapshot: (() => {
+    const snapshot = round3Snapshot();
+    snapshot.members = snapshot.members.map((m) =>
+      m.session_id === IC_ROUTE_R2
+        ? { ...m, title: LONG_TITLE, now: m.now ? { ...m.now, tool_arg: LONG_ARG } : m.now }
+        : m,
+    );
+    return snapshot;
+  })(),
   routes: {
     [`${SNAPSHOT_PATH}/agents/${IC_ROUTE_R2}`]: {
       body: (() => {
         const detail = agentDetail(IC_ROUTE_R2)!;
-        detail.agent.title = "ic:route-r2-with-a-very-long-worker-name-from-a-long-task-key";
-        if (detail.agent.now) {
-          detail.agent.now.tool_arg =
-            "pnpm -F caffeine-api test -- --reporter=verbose --runInBand src/modules/db/version.test.ts src/modules/db/migrations.test.ts";
-        }
-        return detail;
+        return { ...detail, agent: longRow(detail.agent) };
+      })(),
+    },
+    [`${SNAPSHOT_PATH}/agents`]: {
+      body: (() => {
+        const fleet = agentsResponse();
+        return {
+          ...fleet,
+          data: fleet.data.map((row) => (row.session_id === IC_ROUTE_R2 ? longRow(row) : row)),
+        };
       })(),
     },
   },

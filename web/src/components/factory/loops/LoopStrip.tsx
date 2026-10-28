@@ -21,7 +21,8 @@ import type { InterventionKind, InterventionTarget } from "../agents/interventio
 import { controlErrorMessage } from "../controls/controlModel";
 import { TONE_CHIP, type FactoryTone, formatUsd, shortSha } from "../factoryFormat";
 import { agentPageHref, alertPageHref } from "../factoryRoutes";
-import { LeverGated } from "../shell/viewerCan";
+import { answerBlockedReason } from "../decisions/DecisionCard";
+import { LeverGated, ReasonGated, useViewer, useViewerCan } from "../shell/viewerCan";
 import { type Attempt, type LoopLine, budgetShare, isBadState, stateText } from "./loopStripModel";
 
 const STATE_TONE: Record<LoopLine["state"], FactoryTone> = {
@@ -47,12 +48,15 @@ const OUTCOME: Record<string, { mark: string; tone: string }> = {
   cancelled: { mark: "–", tone: "text-muted-foreground" },
 };
 
-/** A short word of an attempt's verdict: `CI`, `CHANGES`, `PASS`. */
-function verdictWord(attempt: Attempt, kind: string): string | null {
+/** A short word of an attempt's verdict: `CI`, `CHANGES · 3 blocking`, `PASS`. */
+export function verdictWord(
+  attempt: Pick<Attempt, "verdict" | "blocking" | "outcome">,
+  kind: string,
+): string | null {
+  const verdict = attempt.verdict?.replace(/\s*fail$/i, "").trim() || null;
   if (kind === "review" && attempt.blocking != null && attempt.outcome !== "ok")
-    return `${attempt.blocking} blocking`;
-  const verdict = attempt.verdict?.replace(/\s*fail$/i, "").trim();
-  return verdict || null;
+    return [verdict, `${attempt.blocking} blocking`].filter(Boolean).join(" · ");
+  return verdict;
 }
 
 function AttemptChip({
@@ -72,7 +76,7 @@ function AttemptChip({
       <span aria-hidden className={outcome.tone}>
         {outcome.mark}
       </span>
-      {word && <span className="max-w-24 truncate text-muted-foreground">{word}</span>}
+      {word && <span className="max-w-36 truncate text-muted-foreground">{word}</span>}
       {attempt.head && kind !== "implement" && (
         <span className="font-mono text-muted-foreground max-sm:hidden">
           @{shortSha(attempt.head)}
@@ -169,18 +173,22 @@ function Remedies({
   onIntervene: (kind: InterventionKind, target: InterventionTarget) => void;
 }) {
   const queryClient = useQueryClient();
+  const viewer = useViewer();
+  const { can } = useViewerCan();
   const [busy, setBusy] = useState<string | null>(null);
   const decision = decisionOf(snapshot, line);
   const fid = snapshot.factory.id;
   if (decision) {
     const options = decision.options.filter((o) => o.action && o.action !== "dismiss").slice(0, 3);
+    // Who may answer: the decision's assignee or claimant (money goes to owners), like its card.
+    const blocked = answerBlockedReason(decision, can, viewer?.user_id ?? null);
     return (
       <span
         data-testid={`loop-remedies-${line.loop.kind}`}
         className="flex flex-wrap items-center gap-1"
       >
         {options.map((option) => (
-          <LeverGated key={option.id} lever="answer">
+          <ReasonGated key={option.id} reason={blocked} testId="answer">
             <Button
               size="xs"
               variant={option.recommended ? "secondary" : "outline"}
@@ -203,7 +211,7 @@ function Remedies({
               {option.label}
               {option.recommended ? " ★" : ""}
             </Button>
-          </LeverGated>
+          </ReasonGated>
         ))}
       </span>
     );

@@ -57,7 +57,29 @@ function Rules() {
         Rules ({ALERT_RULES.length})
       </button>
       {open && (
-        <div className="mt-2 min-w-0 overflow-x-auto rounded-xl border border-border bg-card">
+        // A phone stacks each rule as a card; wider screens get the table.
+        <ul
+          data-testid="alerts-rules-cards"
+          className="mt-2 flex min-w-0 flex-col divide-y divide-border rounded-xl border border-border bg-card sm:hidden"
+        >
+          {ALERT_RULES.map((rule) => (
+            <li key={rule.rule} className="flex min-w-0 flex-col gap-0.5 px-3 py-2 text-sm">
+              <span className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+                <span className="font-mono text-xs break-all">{rule.rule}</span>
+                <span className="text-xs text-muted-foreground">
+                  {rule.class} · {rule.severity}
+                </span>
+              </span>
+              <span className="break-words">{rule.trigger}</span>
+              <span className="text-xs text-muted-foreground">
+                Runbook: {rule.runbook.map((a) => a.replaceAll("_", " ")).join(" · ") || "—"}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {open && (
+        <div className="mt-2 min-w-0 overflow-x-auto rounded-xl border border-border bg-card max-sm:hidden">
           <table data-testid="alerts-rules" className="w-full min-w-[36rem] text-sm">
             <thead>
               <tr className="border-b border-border text-left text-xs text-muted-foreground">

@@ -4,6 +4,7 @@
 // thrashing, dry, stalled, …), budget use, the last reason and a CI flake.
 // Pure; tests pin every state.
 
+import { prTarget } from "../alerts/runbookModel";
 import type {
   IssueView,
   LoopKind,
@@ -115,7 +116,19 @@ function labelOf(kind: LoopKind, n: number): string {
   return kind === "implement" ? `r${Math.max(0, n - 1)}` : `#${n}`;
 }
 
-/** The loop's attempts from its spans, or (without spans) from its iteration count. */
+/** `ok` or `fail` from a verdict word (`APPROVE`, `PASS` / `CHANGES`, `FAIL`), else null. */
+export function verdictOutcome(verdict: string | null): SpanOutcome | null {
+  const word = (verdict ?? "").trim();
+  if (/^(approved?|pass(ed)?|ok|green|success)\b/i.test(word)) return "ok";
+  if (/^(changes|request|fail(ed)?|block(ed)?|reject(ed)?|red)\b/i.test(word)) return "fail";
+  return null;
+}
+
+/**
+ * The loop's attempts from its spans, or (without spans) from its iteration
+ * count: earlier rounds failed, the last one reads its verdict (an approved
+ * last round of a thrashing review is ✓, not ✗).
+ */
 export function attemptsOf(loop: LoopView, spans: readonly SpanView[]): Attempt[] {
   const own = spans
     .filter(
@@ -150,7 +163,11 @@ export function attemptsOf(loop: LoopView, spans: readonly SpanView[]): Attempt[
     out.push({
       label: labelOf(loop.kind, n),
       n,
-      outcome: !settled ? "open" : last && loop.state === "converged" ? "ok" : "fail",
+      outcome: !settled
+        ? "open"
+        : last
+          ? (verdictOutcome(loop.last_verdict) ?? (loop.state === "converged" ? "ok" : "fail"))
+          : "fail",
       verdict: last ? loop.last_verdict : null,
       reason: last ? loop.last_reason : null,
       blocking: last ? blockingOf(loop.last_reason) : null,
@@ -167,10 +184,33 @@ function numberOf(value: unknown): number | null {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+/** The head a per-head loop's subject names (`pr:<id>@<sha7>`), lowercased. */
+function headOf(loop: Pick<LoopView, "subject">): string | null {
+  return /@([0-9a-f]{7,40})$/i.exec(loop.subject)?.[1]?.toLowerCase() ?? null;
+}
+
+const normId = (id: string) => id.replace(/-/g, "").toLowerCase();
+
+/**
+ * Whether an open `ci.flaky` finding is on `loop`'s PR (and, when both name
+ * one, on the same head). The server names the head: `pr:<id>@<sha7>`.
+ */
+export function flakeOnLoop(
+  issue: Pick<IssueView, "rule" | "status" | "target">,
+  loop: Pick<LoopView, "pr_id" | "subject">,
+): boolean {
+  if (issue.rule !== "ci.flaky" || issue.status === "resolved" || issue.status === "wontfix")
+    return false;
+  const target = prTarget(issue.target);
+  if (!target || loop.pr_id == null || normId(target.prId) !== normId(loop.pr_id)) return false;
+  const head = headOf(loop);
+  return !target.sha || !head || head.startsWith(target.sha) || target.sha.startsWith(head);
+}
+
 /** `1/2 this head` for per-head loops (verify, demo, ci). */
 function headNote(loop: LoopView): string | null {
   if (!["verify", "demo", "ci"].includes(loop.kind)) return null;
-  const sha = /@([0-9a-f]{7,40})$/i.exec(loop.subject)?.[1] ?? null;
+  const sha = headOf(loop);
   const perHead = sha
     ? Object.entries(loop.spent.per_head ?? {}).find(
         ([head]) => head.startsWith(sha) || sha.startsWith(head),
@@ -202,16 +242,7 @@ export function loopLines(
     if (seen.has(key)) continue;
     seen.add(key);
     const usdLimit = numberOf(loop.spec.usd);
-    const flake =
-      loop.kind === "ci"
-        ? (issues.find(
-            (i) =>
-              i.rule === "ci.flaky" &&
-              i.status !== "resolved" &&
-              loop.pr_id != null &&
-              i.target.replace(/-/g, "") === `pr:${loop.pr_id.replace(/-/g, "")}`,
-          ) ?? null)
-        : null;
+    const flake = loop.kind === "ci" ? (issues.find((i) => flakeOnLoop(i, loop)) ?? null) : null;
     lines.push({
       loop,
       state: stripState(loop),

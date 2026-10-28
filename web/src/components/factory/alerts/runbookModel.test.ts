@@ -10,7 +10,13 @@ import {
 } from "../agents/__fixtures__/opsFixtures";
 import { round3Snapshot } from "../shell/__fixtures__/shellFixtures";
 import { ALERT_RULES } from "./alertRules";
-import { PROPOSALS_PENDING, type RunbookAction, runbookActions } from "./runbookModel";
+import {
+  PROPOSALS_PENDING,
+  type RunbookAction,
+  issuePr,
+  prTarget,
+  runbookActions,
+} from "./runbookModel";
 
 const snapshot = round3Snapshot();
 const FID = snapshot.factory.id;
@@ -33,7 +39,8 @@ const TARGET: Record<string, string> = {
   "bus.orphan": "factory",
   "gate.flapping": `pr:${PR_9631}`,
   "claim.mismatch": `pr:${PR_9631}`,
-  "ci.flaky": `pr:${PR_9631}`,
+  // The detector names the head it flaked on.
+  "ci.flaky": `pr:${PR_9631}@5e1c2d4`,
   "ask.unneeded": "factory",
   "task.unplanned": "project:db-version",
   "heartbeat.waste": "factory",
@@ -159,6 +166,16 @@ describe("runbook mapping per rule", () => {
       "intervene:redispatch→PL · db-version/T-4",
       "disabled:No open loop decision to answer (the engine opens one in assist mode)",
     ]);
+  });
+
+  it("reads a PR target with or without the head it names", () => {
+    expect(prTarget(`pr:${PR_9631}@5e1c2d4`)).toEqual({ prId: PR_9631, sha: "5e1c2d4" });
+    expect(prTarget(`pr:${PR_9631}`)).toEqual({ prId: PR_9631, sha: null });
+    expect(prTarget(`member:${PL_DB}`)).toBeNull();
+    expect(issuePr(snapshot, { target: `pr:${PR_9631}@5e1c2d4` })?.number).toBe(9631);
+    // A flaky-CI finding still offers its PR when the rule asks for it.
+    const flaky = { ...issueFor("ci.flaky"), runbook: ["open_pr"] };
+    expect(runbookActions(flaky, ctx).map(shape)).toEqual([`link:/factory/${FID}/prs/${PR_9631}`]);
   });
 
   it("disables what it can't resolve: a gone agent, an agent with no task", () => {

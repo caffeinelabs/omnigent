@@ -5303,11 +5303,14 @@
       "severity": "notice",
       "source": "detector",
       "project_slug": "db-version",
-      "target": "pr:8f15c0f9a98e5831a39615fb58f35036",
+      "target": "pr:8f15c0f9a98e5831a39615fb58f35036@5e1c2d4",
       "target_title": "!9631",
-      "summary": "e2e-ux fail→pass on a1b2c3d",
+      "summary": "CI failed then passed on the same head 5e1c2d4 (e2e-ux)",
       "body": null,
-      "evidence": null,
+      "evidence": {
+        "event_id": "inc-ev-gate.changed-22",
+        "head_sha": "5e1c2d4a9b8f7e6d5c4b3a2918f7e6d5c4b3a291"
+      },
       "status": "open",
       "assignee": null,
       "snoozed_until": null,

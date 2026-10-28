@@ -10,6 +10,7 @@ import type {
   IssueView,
   LoopView,
   MemberView,
+  PrView,
 } from "@/lib/factoryApi";
 import type { InterventionKind, InterventionTarget } from "../agents/interventionModel";
 import { agentPageHref, factoryPageHref, prPageHref, projectPageHref } from "../factoryRoutes";
@@ -100,6 +101,26 @@ export function issueTarget(issue: Pick<IssueView, "target">): [string, string] 
   return at === -1 ? [issue.target, ""] : [issue.target.slice(0, at), issue.target.slice(at + 1)];
 }
 
+/**
+ * A `pr:<id>` target's PR id and head: `ci.flaky` names the head it flaked on
+ * (`pr:<id>@<sha7>`). Null for any other target.
+ */
+export function prTarget(target: string): { prId: string; sha: string | null } | null {
+  if (!target.startsWith("pr:")) return null;
+  const [id, sha] = target.slice(3).split("@");
+  return id ? { prId: id, sha: sha ? sha.toLowerCase() : null } : null;
+}
+
+/** The tracked PR a `pr:` issue is on, or null. */
+export function issuePr(
+  snapshot: Pick<FactorySnapshot, "prs">,
+  issue: Pick<IssueView, "target">,
+): PrView | null {
+  const target = prTarget(issue.target);
+  if (!target) return null;
+  return snapshot.prs.find((p) => norm(p.id) === norm(target.prId)) ?? null;
+}
+
 export function memberOf(snapshot: FactorySnapshot, id: string): MemberView | null {
   return snapshot.members.find((m) => norm(m.session_id) === norm(id)) ?? null;
 }
@@ -164,7 +185,7 @@ export function runbookActions(issue: IssueView, ctx: RunbookContext): RunbookAc
   const fid = snapshot.factory.id;
   const [kind, id] = issueTarget(issue);
   const member = kind === "member" ? memberOf(snapshot, id) : null;
-  const pr = kind === "pr" ? (snapshot.prs.find((p) => norm(p.id) === norm(id)) ?? null) : null;
+  const pr = issuePr(snapshot, issue);
   const loop = kind === "loop" ? (ctx.loops?.find((l) => norm(l.id) === norm(id)) ?? null) : null;
   const project =
     issue.project_slug ??

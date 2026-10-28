@@ -5,7 +5,8 @@ import type { SpanView } from "@/lib/factoryApi";
 import { IC_ROUTE_R2, PL_DB, PR_9631, timelineSpans } from "../agents/__fixtures__/opsFixtures";
 import { ROUND3_NOW_S, round3Snapshot } from "../shell/__fixtures__/shellFixtures";
 import { DEFAULT_SHOW, asOf, buildTimeline, position, ticks, windowStart } from "./timelineModel";
-import { TimelineView } from "./TimelineView";
+import type { Bar } from "./timelineModel";
+import { TimelineView, labelledBars } from "./TimelineView";
 
 const NOW = ROUND3_NOW_S * 1000;
 const HOUR = 3_600_000;
@@ -113,6 +114,47 @@ describe("buildTimeline from span fixtures", () => {
     expect(position(NOW + 1, NOW - HOUR, NOW)).toBe(100);
     expect(ticks(NOW - HOUR, NOW).length).toBeGreaterThanOrEqual(4);
     expect(windowStart("1h", NOW, [])).toBe(NOW - HOUR);
+  });
+});
+
+describe("bar labels", () => {
+  const bar = (id: string, startMin: number, endMin: number, patch: Partial<Bar> = {}): Bar => ({
+    id,
+    kind: "tool",
+    label: "pnpm test",
+    start: NOW - HOUR + startMin * 60_000,
+    end: NOW - HOUR + endMin * 60_000,
+    open: false,
+    tone: "fail",
+    title: id,
+    target: null,
+    ...patch,
+  });
+  const from = NOW - HOUR;
+
+  it("draws a label only where it fits inside its bar", () => {
+    // 600px for an hour: 10px a minute; "pnpm test" needs ~64px.
+    const wide = bar("wide", 0, 10);
+    const narrow = bar("narrow", 20, 24);
+    expect([...labelledBars([wide, narrow], from, NOW, 600).keys()]).toEqual(["wide"]);
+    // On a phone's track the same bar is too narrow.
+    expect([...labelledBars([wide], from, NOW, 230).keys()]).toEqual([]);
+  });
+
+  it("moves a label clear of a later bar, a milestone or the as-of rule, or drops it", () => {
+    // "route-r2" needs ~58px; the work bar is 0..300px.
+    const work = bar("work", 0, 30, { kind: "work", label: "route-r2" });
+    const tool = bar("tool", 2, 4, { label: "" });
+    expect(labelledBars([work, tool], from, NOW, 600).get("work")).toBe(40);
+    // A bar drawn before it sits underneath: the label stays at the start.
+    expect(labelledBars([tool, work], from, NOW, 600).get("work")).toBe(0);
+    const mark = bar("mark", 3, 3, { kind: "milestone", label: "opened" });
+    expect(labelledBars([work, mark], from, NOW, 600).get("work")).toBe(36);
+    expect(labelledBars([work], from, NOW, 600, NOW - HOUR + 2 * 60_000).get("work")).toBe(22);
+    expect(labelledBars([work], from, NOW, 600, NOW - HOUR + 20 * 60_000).get("work")).toBe(0);
+    // Covered end to end: no label.
+    const cover = bar("cover", 0, 30, { label: "" });
+    expect(labelledBars([work, cover], from, NOW, 600).has("work")).toBe(false);
   });
 });
 

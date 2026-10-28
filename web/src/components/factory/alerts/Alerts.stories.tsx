@@ -1,7 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { userEvent, within } from "storybook/test";
 import { AlertsPage } from "@/pages/factory/AlertsPage";
-import { issuePage } from "../agents/__fixtures__/opsFixtures";
+import type { IssueView } from "@/lib/factoryApi";
+import { issuePage, issuesResponse } from "../agents/__fixtures__/opsFixtures";
 import { CockpitStory, type CockpitStoryOptions, SNAPSHOT_PATH } from "../board/boardStoryKit";
 import { round3Events, round3Snapshot } from "../shell/__fixtures__/shellFixtures";
 
@@ -100,22 +101,30 @@ export const IncidentRestartConfirm = page("/alerts/12", {}, async ({ canvasElem
   );
 });
 
-/** Resolved with a confirmed root cause. */
+function resolvedInc13(): IssueView {
+  const issue = issuePage("INC-13")!.issue;
+  return {
+    ...issue,
+    status: "resolved",
+    resolved_by: "mia@caffeine.ai",
+    resolved_at: issue.last_seen + 300,
+    category: "env_flaky",
+    acked_by: "mia@caffeine.ai",
+  };
+}
+
+/** Resolved with a confirmed root cause (the page and the issues list agree). */
 export const IncidentResolved = page("/alerts/13", {
   routes: {
-    [`${ISSUES_PATH}/INC-13`]: {
-      body: (() => {
-        const found = issuePage("INC-13")!;
-        found.issue = {
-          ...found.issue,
-          status: "resolved",
-          resolved_by: "mia@caffeine.ai",
-          resolved_at: found.issue.last_seen + 300,
-          category: "env_flaky",
-          acked_by: "mia@caffeine.ai",
-        };
-        return found;
-      })(),
+    [`${ISSUES_PATH}/INC-13`]: { body: { ...issuePage("INC-13")!, issue: resolvedInc13() } },
+    [ISSUES_PATH]: (path) => {
+      const list = issuesResponse(path);
+      return {
+        body: {
+          ...list,
+          data: list.data.map((i) => (i.ref === "INC-13" ? resolvedInc13() : i)),
+        },
+      };
     },
   },
 });

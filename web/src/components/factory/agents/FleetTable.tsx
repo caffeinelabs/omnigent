@@ -27,11 +27,32 @@ export type FleetLayout = "wide" | "medium" | "cards";
 export const MEDIUM_BELOW = 1000;
 export const CARDS_BELOW = 544;
 
+// Flags fit `repeat INC-13 1 D` without clipping; the numbers take only what they print.
 const COLUMNS: Record<Exclude<FleetLayout, "cards">, string> = {
-  wide: "grid-cols-[1.75rem_minmax(9rem,1.2fr)_2.75rem_4.25rem_minmax(7rem,0.8fr)_minmax(9rem,1.8fr)_2.75rem_3rem_3.5rem_3rem_minmax(8rem,1fr)]",
+  wide: "grid-cols-[1.75rem_minmax(10rem,1.5fr)_2.75rem_4.25rem_minmax(7rem,0.7fr)_minmax(9rem,1.5fr)_2.25rem_2.5rem_3.25rem_3rem_minmax(9.5rem,0.9fr)]",
   medium:
-    "grid-cols-[1.75rem_minmax(8rem,1.2fr)_4.25rem_minmax(6.5rem,0.8fr)_minmax(8rem,1.6fr)_3.5rem_minmax(6.5rem,0.9fr)]",
+    "grid-cols-[1.75rem_minmax(8rem,1.3fr)_4.25rem_minmax(6.5rem,0.7fr)_minmax(8rem,1.5fr)_3.25rem_minmax(8.5rem,0.9fr)]",
 };
+
+/** Characters a long title keeps at its end when it must shorten (`…endpoint-r0`). */
+const TITLE_TAIL = 9;
+
+/**
+ * A title shortened in the middle: sibling agents differ at the end
+ * (`review-version-endpoint` and `…-r0`), so the end stays visible.
+ */
+function MiddleTruncate({ text }: { text: string }) {
+  if (text.length <= TITLE_TAIL + 4) return <span className="min-w-0 truncate">{text}</span>;
+  // A space at the cut would collapse at the end of its half: keep it non-breaking.
+  const head = text.slice(0, -TITLE_TAIL).replace(/ $/, "\u00a0");
+  const tail = text.slice(-TITLE_TAIL).replace(/^ /, "\u00a0");
+  return (
+    <span className="flex min-w-0">
+      <span className="min-w-0 truncate">{head}</span>
+      <span className="shrink-0 whitespace-nowrap">{tail}</span>
+    </span>
+  );
+}
 const ROW_PX: Record<FleetLayout, number> = { wide: 36, medium: 36, cards: 68 };
 const GROUP_PX = 34;
 
@@ -248,14 +269,24 @@ export const FleetRow = memo(function FleetRow({
         to={href}
         componentId="factory.fleet.agent"
         data-testid={`fleet-agent-link-${row.session_id}`}
-        className="min-w-0 truncate font-medium hover:underline"
+        className="flex min-w-0 font-medium hover:underline"
         title={row.title}
       >
-        {row.title}
+        <MiddleTruncate text={row.title} />
       </Link>
     </span>
   );
   if (layout === "cards") {
+    const hasNow = Boolean(
+      nowText(row.now) || row.summary || agent.state === "waiting" || row.decisions_pending > 0,
+    );
+    const hasTaskLine = Boolean(
+      row.task ||
+      row.loop ||
+      row.issues.length ||
+      row.decisions_pending ||
+      row.flags.some((f) => f !== "dead" || agent.state !== "dead"),
+    );
     return (
       <div
         data-testid={`fleet-row-${row.session_id}`}
@@ -266,7 +297,7 @@ export const FleetRow = memo(function FleetRow({
           selected && "bg-muted/60",
         )}
       >
-        <span className="row-span-3 flex items-start pt-0.5">{check}</span>
+        <span className="row-span-3 flex items-start self-start pt-0.5">{check}</span>
         <span className="flex min-w-0 items-center gap-2">
           <span className="min-w-0 flex-1">{title}</span>
           <span className={cn("shrink-0 text-xs", STATE_TONE[agent.state])}>
@@ -276,16 +307,25 @@ export const FleetRow = memo(function FleetRow({
             {formatUsd(row.cost_usd) ?? "–"}
           </span>
         </span>
-        <span className="min-w-0 text-xs">
-          <NowCell agent={agent} nowS={nowS} />
-        </span>
-        <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
-          <span className="min-w-0 truncate">
-            <TaskLoop agent={agent} />
+        {/* The now line carries the age; the task line shows only when there is one. */}
+        <span className="flex min-w-0 items-center gap-2 text-xs">
+          <span className="min-w-0 flex-1">
+            {hasNow ? <NowCell agent={agent} nowS={nowS} /> : null}
           </span>
-          <Flags agent={agent} factoryId={factoryId} />
-          <span className="ml-auto shrink-0 tabular-nums">{age(nowS, row.last_activity_at)}</span>
+          <span className="shrink-0 text-muted-foreground tabular-nums">
+            {age(nowS, row.last_activity_at)}
+          </span>
         </span>
+        {hasTaskLine && (
+          <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
+            {(row.task || row.loop) && (
+              <span className="min-w-0 truncate">
+                <TaskLoop agent={agent} />
+              </span>
+            )}
+            <Flags agent={agent} factoryId={factoryId} />
+          </span>
+        )}
       </div>
     );
   }

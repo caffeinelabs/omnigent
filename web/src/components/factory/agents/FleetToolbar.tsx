@@ -18,10 +18,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
-import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
 import { cn } from "@/lib/utils";
 import { plural } from "../factoryFormat";
-import { PHONE_TAB_BAR_REM } from "../shell/PhoneTabBar";
 import { LeverGated } from "../shell/viewerCan";
 import type { FleetCounts, FleetGroupBy } from "./fleetModel";
 import {
@@ -132,26 +130,29 @@ export function FleetToolbar({
           <FilterMenu key={filter.field} {...filter} query={query} onQuery={onQuery} />
         ))}
         <span className="mx-1 h-4 w-px bg-border max-sm:hidden" aria-hidden />
-        <span className="text-xs text-muted-foreground max-sm:hidden">Saved</span>
-        {SAVED_VIEWS.map((view) => {
-          const term = `is:${view.key}`;
-          const on = queryHasTerm(query, term);
-          return (
-            <Button
-              key={view.key}
-              size="xs"
-              variant={on ? "secondary" : "ghost"}
-              aria-pressed={on}
-              title={view.hint}
-              data-testid={`fleet-view-${view.key}`}
-              componentId={`factory.fleet.view_${view.key}`}
-              onClick={() => onQuery(toggleQueryTerm(query, term))}
-              className={cn(!on && "text-muted-foreground")}
-            >
-              {view.label}
-            </Button>
-          );
-        })}
+        {/* On a phone the saved views take their own line, still labelled. */}
+        <span className="flex min-w-0 flex-wrap items-center gap-1.5 max-sm:basis-full max-sm:gap-1">
+          <span className="text-xs text-muted-foreground">Saved</span>
+          {SAVED_VIEWS.map((view) => {
+            const term = `is:${view.key}`;
+            const on = queryHasTerm(query, term);
+            return (
+              <Button
+                key={view.key}
+                size="xs"
+                variant={on ? "secondary" : "ghost"}
+                aria-pressed={on}
+                title={view.hint}
+                data-testid={`fleet-view-${view.key}`}
+                componentId={`factory.fleet.view_${view.key}`}
+                onClick={() => onQuery(toggleQueryTerm(query, term))}
+                className={cn("max-sm:px-1.5", !on && "text-muted-foreground")}
+              >
+                {view.label}
+              </Button>
+            );
+          })}
+        </span>
       </div>
       <div className="flex min-w-0 items-center gap-2">
         <div className="relative min-w-0 flex-1">
@@ -225,21 +226,22 @@ export function FleetToolbar({
 
 export function BulkBar({
   count,
+  hidden = 0,
   withTask,
   onAction,
   onTimeline,
   onClear,
 }: {
   count: number;
+  /** Selected agents the current filter hides (the levers leave them out). */
+  hidden?: number;
   /** Selected agents that work on a task (Redispatch and Reassign act on tasks). */
   withTask: number;
   onAction: (kind: InterventionKind) => void;
   onTimeline: () => void;
   onClear: () => void;
 }) {
-  // On a phone the bar sticks above the bottom tabs.
-  const phone = useIsMobileViewport();
-  if (count === 0) return null;
+  if (count === 0 && hidden === 0) return null;
   const lever = (kind: InterventionKind, label: string, disabled = false) => (
     <LeverGated lever="intervene">
       <Button
@@ -259,23 +261,26 @@ export function BulkBar({
       role="toolbar"
       aria-label="Selected agents"
       data-testid="fleet-bulk-bar"
-      className="sticky bottom-2 z-20 flex min-w-0 flex-wrap items-center gap-1.5 rounded-xl border border-border bg-background/95 px-3 py-2 shadow-sm backdrop-blur-md"
-      style={
-        phone
-          ? { bottom: `calc(${PHONE_TAB_BAR_REM + 0.5}rem + var(--omnigent-inset-bottom, 0px))` }
-          : undefined
-      }
+      // The page scroller already pads for the phone's bottom tabs.
+      className="sticky bottom-2 z-20 mb-2 flex min-w-0 flex-wrap items-center gap-1.5 rounded-xl border border-border bg-background/95 px-3 py-2 shadow-sm backdrop-blur-md"
     >
-      <span className="mr-1 text-sm font-medium tabular-nums">
+      <span data-testid="fleet-bulk-count" className="mr-1 text-sm font-medium tabular-nums">
         {plural(count, "agent")} selected
+        {hidden > 0 && (
+          <span className="font-normal text-muted-foreground">
+            {" "}
+            ({hidden} hidden by the filter)
+          </span>
+        )}
       </span>
-      {lever("message", "Message…")}
-      {lever("interrupt", "Interrupt")}
+      {lever("message", "Message…", count === 0)}
+      {lever("interrupt", "Interrupt", count === 0)}
       {lever("redispatch", "Redispatch task", withTask === 0)}
       {lever("reassign", "Reassign…", withTask === 0)}
       <Button
         size="xs"
         variant="ghost"
+        disabled={count === 0}
         onClick={onTimeline}
         data-testid="fleet-bulk-timeline"
         componentId="factory.fleet.bulk_timeline"

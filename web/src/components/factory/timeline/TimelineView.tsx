@@ -64,10 +64,68 @@ export function targetHref(factoryId: string, target: BarTarget): string {
   }
 }
 
-/** Bars narrower than this share of the window draw no label (its tooltip has it). */
-const LABEL_MIN_PCT = 4;
 /** Milestones closer than this to the next one draw only their glyph. */
 const MILESTONE_GAP_PCT = 7;
+/** A 10px label's width per character and its bar's padding, in px. */
+const LABEL_CHAR_PX = 6;
+const LABEL_PAD_PX = 10;
+
+function isMark(bar: Bar): boolean {
+  return (
+    bar.kind === "milestone" ||
+    bar.kind === "intervention" ||
+    (bar.kind === "incident" && bar.end <= bar.start)
+  );
+}
+
+function isThin(bar: Bar): boolean {
+  return (
+    bar.kind === "stage" || bar.kind === "heartbeat" || bar.kind === "round" || bar.kind === "turn"
+  );
+}
+
+/**
+ * The bars of a lane that draw their label, with where in the bar it starts
+ * (px from the bar's left): the first stretch of the bar wide enough for it
+ * that nothing painted above the bar (a later bar, a milestone, the "as of"
+ * rule) covers. Every other bar keeps its label in the tooltip.
+ *
+ * @param trackPx - The lane's track width in px.
+ */
+export function labelledBars(
+  bars: readonly Bar[],
+  from: number,
+  to: number,
+  trackPx: number,
+  replayAt: number | null = null,
+): Map<string, number> {
+  const px = (at: number) => (position(at, from, to) / 100) * trackPx;
+  const out = new Map<string, number>();
+  bars.forEach((bar, i) => {
+    if (isMark(bar) || isThin(bar) || !bar.label) return;
+    const left = px(bar.start);
+    const right = Math.max(left, px(bar.end));
+    const need = bar.label.length * LABEL_CHAR_PX + LABEL_PAD_PX;
+    // What covers the bar, as [start, end] px, left to right.
+    const covers: [number, number][] = [];
+    if (replayAt != null) covers.push([px(replayAt) - 2, px(replayAt) + 2]);
+    bars.forEach((other, j) => {
+      if (other === bar || (j < i && !isMark(other))) return;
+      const start = px(other.start);
+      if (isMark(other)) covers.push([start - 6, start + 6]);
+      else covers.push([start, Math.max(start + 1, px(other.end))]);
+    });
+    covers.sort((a, b) => a[0] - b[0]);
+    let cursor = left;
+    for (const [start, end] of covers) {
+      if (end <= cursor || start >= right) continue;
+      if (start - cursor >= need) break;
+      cursor = Math.max(cursor, end);
+    }
+    if (right - cursor >= need) out.set(bar.id, Math.round(cursor - left));
+  });
+  return out;
+}
 
 /** Milestones whose label would run into the next one's. */
 export function crowdedMilestones(bars: readonly Bar[], from: number, to: number): Set<string> {
@@ -86,13 +144,16 @@ function BarView({
   to,
   onOpen,
   quiet = false,
+  labelAt = 0,
 }: {
   bar: Bar;
   from: number;
   to: number;
   onOpen: (bar: Bar) => void;
-  /** Draw no label (crowded). */
+  /** Draw no label (crowded, covered or too narrow). */
   quiet?: boolean;
+  /** Where the label starts in the bar (px), clear of what covers it. */
+  labelAt?: number;
 }) {
   const left = position(bar.start, from, to);
   const title = `${bar.title} · ${clock(bar.start)}${bar.end > bar.start ? `–${bar.open ? "now" : clock(bar.end)}` : ""}`;
@@ -104,32 +165,36 @@ function BarView({
     "aria-label": title,
     onClick: bar.target ? () => onOpen(bar) : undefined,
   } as const;
-  if (
-    bar.kind === "milestone" ||
-    bar.kind === "intervention" ||
-    (bar.kind === "incident" && bar.end <= bar.start)
-  ) {
+  if (isMark(bar)) {
     const glyph = bar.kind === "intervention" ? "▲" : bar.kind === "incident" ? "✕" : "◆";
+    // Past the middle the label reads leftwards, so it never runs off the frame.
+    const leftward = left > 70;
     return (
       <button
         type="button"
         {...common}
         className={cn(
-          "absolute top-1/2 z-[1] inline-flex -translate-x-1/2 -translate-y-1/2 cursor-pointer items-center gap-0.5 rounded-sm px-0.5 text-[10px] leading-none whitespace-nowrap hover:bg-muted",
+          "absolute top-1/2 z-[1] inline-flex cursor-pointer items-center gap-0.5 rounded-sm px-0.5 text-[10px] leading-none whitespace-nowrap hover:bg-muted",
+          leftward ? "flex-row-reverse" : "",
           MILESTONE_TONE[bar.tone],
         )}
-        style={{ left: `${left}%` }}
+        style={{
+          left: `${left}%`,
+          transform: `translate(${leftward ? "calc(-100% + 0.4rem)" : "-0.4rem"}, -50%)`,
+        }}
       >
         <span aria-hidden>{glyph}</span>
-        {!quiet && <span className="max-md:hidden">{bar.label}</span>}
+        {/* A chip of the card's colour keeps the label legible over any bar. */}
+        {!quiet && (
+          <span className="rounded-[2px] bg-card px-0.5 py-px max-md:hidden">{bar.label}</span>
+        )}
       </button>
     );
   }
   const width = Math.max(0.35, position(bar.end, from, to) - left);
   const hatched =
     bar.kind === "wait" ? HATCH[bar.tone === "human" ? "human" : "warning"] : undefined;
-  const thin =
-    bar.kind === "stage" || bar.kind === "heartbeat" || bar.kind === "round" || bar.kind === "turn";
+  const thin = isThin(bar);
   return (
     <button
       type="button"
@@ -147,8 +212,17 @@ function BarView({
       )}
       style={{ left: `${left}%`, width: `${width}%`, ...hatched }}
     >
-      {!thin && width >= LABEL_MIN_PCT && (
-        <span className="pointer-events-none truncate">{bar.label}</span>
+      {!thin && !quiet && (
+        <span
+          className={cn(
+            "pointer-events-none truncate",
+            // Hatching shows through text: a chip keeps a wait's label legible.
+            hatched && "rounded-[2px] bg-card px-0.5 py-px",
+          )}
+          style={labelAt > 0 ? { marginLeft: labelAt } : undefined}
+        >
+          {bar.label}
+        </span>
       )}
     </button>
   );
@@ -160,6 +234,7 @@ const LaneRow = memo(function LaneRow({
   to,
   marks,
   replayAt,
+  trackPx,
   onOpen,
 }: {
   lane: Lane;
@@ -167,16 +242,21 @@ const LaneRow = memo(function LaneRow({
   to: number;
   marks: number[];
   replayAt: number | null;
+  trackPx: number;
   onOpen: (bar: Bar) => void;
 }) {
   const crowded = useMemo(() => crowdedMilestones(lane.bars, from, to), [lane.bars, from, to]);
+  const labelled = useMemo(
+    () => labelledBars(lane.bars, from, to, trackPx, replayAt),
+    [lane.bars, from, to, trackPx, replayAt],
+  );
   return (
     <div
       role="row"
       data-testid={`timeline-lane-${lane.kind}`}
       data-lane={lane.key}
       className={cn(
-        "grid min-w-0 grid-cols-[minmax(6.5rem,10rem)_minmax(0,1fr)] items-center gap-2 border-b border-border/50 last:border-0",
+        "grid min-w-0 grid-cols-[minmax(6.5rem,10rem)_minmax(0,1fr)] max-sm:grid-cols-[6.5rem_minmax(0,1fr)] items-center gap-2 border-b border-border/50 last:border-0",
         lane.kind === "stage" ? "h-5" : "h-6",
       )}
     >
@@ -226,7 +306,8 @@ const LaneRow = memo(function LaneRow({
               from={from}
               to={to}
               onOpen={onOpen}
-              quiet={crowded.has(bar.id)}
+              quiet={isMark(bar) ? crowded.has(bar.id) : !labelled.has(bar.id)}
+              labelAt={labelled.get(bar.id) ?? 0}
             />
           ))}
           {lane.endMark && lane.bars.length > 0 && (
@@ -272,6 +353,9 @@ export function TimelineView({
   // About one tick per 80 px of track (the label column takes ~10rem).
   const count = width == null ? 6 : Math.max(2, Math.min(8, Math.floor((width - 160) / 80)));
   const marks = useMemo(() => ticks(from, to, count), [from, to, count]);
+  // The track: the frame less the lane label column (6.5rem on a phone, else 10rem),
+  // the gap and the right pad.
+  const trackPx = width == null ? 600 : Math.max(0, width - (width < 600 ? 104 : 160) - 20);
   return (
     <div
       ref={frame}
@@ -282,22 +366,27 @@ export function TimelineView({
     >
       <div
         role="row"
-        className="sticky top-0 z-[2] grid h-7 grid-cols-[minmax(6.5rem,10rem)_minmax(0,1fr)] items-end gap-2 border-b border-border bg-card"
+        className="sticky top-0 z-[2] grid h-7 grid-cols-[minmax(6.5rem,10rem)_minmax(0,1fr)] max-sm:grid-cols-[6.5rem_minmax(0,1fr)] items-end gap-2 border-b border-border bg-card"
       >
         <span role="columnheader" className="pb-1 pl-3 text-xs text-muted-foreground">
           {clock(from).slice(0, 5)}–{clock(to).slice(0, 5)}
         </span>
         <div role="columnheader" className="relative h-full pr-3">
           <div className="relative h-full">
-            {marks.map((t) => (
-              <span
-                key={t}
-                className="absolute bottom-1 -translate-x-1/2 font-mono text-[10px] text-muted-foreground tabular-nums"
-                style={{ left: `${position(t, from, to)}%` }}
-              >
-                {clock(t).slice(0, 5)}
-              </span>
-            ))}
+            {marks.map((t) => {
+              const at = position(t, from, to);
+              // Ticks at the edges sit inside the frame rather than half outside it.
+              const shift = at > 96 ? "-100%" : at < 4 ? "0" : "-50%";
+              return (
+                <span
+                  key={t}
+                  className="absolute bottom-1 font-mono text-[10px] text-muted-foreground tabular-nums"
+                  style={{ left: `${at}%`, transform: `translateX(${shift})` }}
+                >
+                  {clock(t).slice(0, 5)}
+                </span>
+              );
+            })}
           </div>
         </div>
       </div>
@@ -318,6 +407,7 @@ export function TimelineView({
                 to={to}
                 marks={marks}
                 replayAt={replayAt ?? null}
+                trackPx={trackPx}
                 onOpen={onOpen}
               />
             ))}

@@ -19,6 +19,7 @@ import {
   groupFleet,
   roleLabel,
   rowsFromSnapshot,
+  waitingOnViewer,
 } from "@/components/factory/agents/fleetModel";
 import { parseFleetQuery } from "@/components/factory/agents/fleetQuery";
 import { useFleetAgents } from "@/components/factory/agents/useFleetAgents";
@@ -96,7 +97,11 @@ export function AgentsPage() {
     () => agents.data?.data ?? (fallback ? rowsFromSnapshot(snapshot) : []),
     [agents.data, fallback, snapshot],
   );
-  const fleet = useFleetAgents(rows, nowS);
+  const waitingOnMe = useMemo(
+    () => waitingOnViewer(snapshot.decisions, snapshot.viewer),
+    [snapshot.decisions, snapshot.viewer],
+  );
+  const fleet = useFleetAgents(rows, nowS, waitingOnMe);
   const parsed = useMemo(() => parseFleetQuery(query), [query]);
   const shown = useMemo(() => filterFleet(fleet, parsed), [fleet, parsed]);
   const projectOrder = useMemo(() => snapshot.projects.map((p) => p.slug), [snapshot.projects]);
@@ -117,7 +122,10 @@ export function AgentsPage() {
     });
   }, []);
   const [acting, setActing] = useState<InterventionKind | null>(null);
-  const selectedAgents = fleet.filter((a) => selected.has(a.row.session_id));
+  // Bulk levers act on the selected agents the filter shows, never hidden ones.
+  const selectedAgents = shown.filter((a) => selected.has(a.row.session_id));
+  const hiddenSelected =
+    fleet.filter((a) => selected.has(a.row.session_id)).length - selectedAgents.length;
   const targets: InterventionTarget[] = selectedAgents.map(({ row }) => ({
     sessionId: row.session_id,
     title: row.title,
@@ -212,6 +220,7 @@ export function AgentsPage() {
           )}
           <BulkBar
             count={selectedAgents.length}
+            hidden={hiddenSelected}
             withTask={targets.filter((t) => t.taskRef).length}
             onAction={setActing}
             onTimeline={() =>

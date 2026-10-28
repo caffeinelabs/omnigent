@@ -552,9 +552,97 @@ export function issuePage(ref = "INC-13"): IssuePageResponse | null {
   };
 }
 
-/** The transcript the Agent page's Transcript tab reads (newest first, as the server pages). */
-export function itemsPage(): { data: unknown[]; has_more: boolean } {
-  return { data: [...clone(transcriptFixture.transcripts.pl_api)].reverse(), has_more: true };
+/** ic:route-r2's own items: the PL's dispatch, the failing test twice, Luka's message. */
+function routeR2Items(): unknown[] {
+  const t0 = ROUND3_NOW_S - 14 * 60;
+  const base = { response_id: "resp_r2_01", status: "completed" };
+  const envelope = (from: string, fromId: string, role: string, kind: string, text: string) =>
+    `\n\n<pasted_content id="fd5e">\n[Factory message · from "${from}" (${fromId}, ${role}) · kind=${kind} · reply: sys_session_post(to="${fromId}")]\n${text}\n</pasted_content id="fd5e">\n`;
+  const bash = (n: number, at: number) => [
+    {
+      ...base,
+      id: `r2_fc_${n}`,
+      type: "function_call",
+      created_at: at,
+      model: "codex",
+      name: "Bash",
+      call_id: `call_r2_${n}`,
+      arguments: JSON.stringify({ command: "pnpm -F caffeine-api test" }),
+    },
+    {
+      ...base,
+      id: `r2_fco_${n}`,
+      type: "function_call_output",
+      created_at: at + 40,
+      call_id: `call_r2_${n}`,
+      output:
+        'FAIL src/modules/db/version.test.ts\n  ● version › reads the schema version\n    error: relation "knex_migrations" does not exist\nTests: 1 failed, 23 passed',
+    },
+  ];
+  const say = (n: number, at: number, text: string) => ({
+    ...base,
+    id: `r2_msg_${n}`,
+    type: "message",
+    role: "assistant",
+    created_at: at,
+    model: "codex",
+    content: [{ type: "output_text", text }],
+  });
+  return [
+    {
+      ...base,
+      id: "r2_msg_0",
+      type: "message",
+      role: "user",
+      created_at: t0,
+      content: [
+        {
+          type: "input_text",
+          text: envelope(
+            "PL · db-version",
+            PL_DB,
+            "project_lead",
+            "dispatch",
+            "T-4 route the version read through knex · attempt 3/3 · budget $4.\nCI failed twice on caffeine-api test; fix the test database setup first.",
+          ),
+        },
+      ],
+    },
+    say(1, t0 + 30, "Reading the test setup; the failing check is caffeine-api test."),
+    ...bash(2, t0 + 60),
+    say(3, t0 + 120, "Same failure as r1: the test database has no knex_migrations table."),
+    ...bash(4, t0 + 300),
+    {
+      ...base,
+      id: "r2_msg_5",
+      type: "message",
+      role: "user",
+      created_at: t0 + 600,
+      content: [
+        {
+          type: "input_text",
+          text: envelope(
+            "PL · db-version",
+            PL_DB,
+            "project_lead",
+            "message",
+            "Re-run with knex seed: the migrations never run in the test container.",
+          ),
+        },
+      ],
+    },
+    say(6, t0 + 640, "Adding `knex migrate:latest` to the test setup, then re-running."),
+  ];
+}
+
+/**
+ * The transcript the Agent page's Transcript tab reads (newest first, as the
+ * server pages): ic:route-r2's own, else the api-version PL's.
+ */
+export function itemsPage(sessionId?: string): { data: unknown[]; has_more: boolean } {
+  const items =
+    sessionId === IC_ROUTE_R2 ? routeR2Items() : clone(transcriptFixture.transcripts.pl_api);
+  return { data: [...items].reverse(), has_more: sessionId !== IC_ROUTE_R2 };
 }
 
 /**
@@ -616,7 +704,7 @@ export function opsRoutes(
     const detail = agentDetail(member.session_id, snapshot);
     if (detail) routes[`${base}/agents/${member.session_id}`] = { body: detail };
     routes[`/v1/sessions/${member.session_id}/stream`] = "pending";
-    routes[`/v1/sessions/${member.session_id}/items`] = { body: itemsPage() };
+    routes[`/v1/sessions/${member.session_id}/items`] = { body: itemsPage(member.session_id) };
     routes[`/v1/sessions/${member.session_id}/resources/terminals`] = { body: { data: [] } };
     routes[`/v1/sessions/${member.session_id}/resources/github`] = {
       body: { object: "session.github.info", available: false, reason: "no_os_env" },

@@ -111,8 +111,19 @@ export const Query = fleet({
 /** Saved view Looping: repeat flags and loops out of budget. */
 export const SavedLooping = fleet({ search: "?q=is%3Alooping" });
 
-/** Saved view Waiting on me. */
-export const SavedWaiting = fleet({ search: "?q=is%3Awaiting" });
+/** Saved view Waiting on me, as Mia: D-2 (claimed by her) and D-33 (for operators). */
+export const SavedWaiting = fleet({
+  snapshot: round3Snapshot("operator"),
+  search: "?q=is%3Awaiting",
+});
+
+/** A selection the query then hides: the bulk bar acts on the shown ones and says so. */
+export const BulkSelectionHidden = fleet({ search: T4 }, async ({ canvasElement }) => {
+  await selectT4(canvasElement);
+  const input = body(canvasElement).getByTestId("fleet-query");
+  await userEvent.clear(input);
+  await userEvent.type(input, "flag:repeat");
+});
 
 /** Grouped by role instead of project. */
 export const GroupedByRole = fleet({ search: "?group=role" });
@@ -190,9 +201,12 @@ export const Perf60: Story = {
   ),
   play: async ({ canvasElement }) => {
     const perf = await body(canvasElement).findByTestId("fleet-perf");
-    await waitFor(() => expect(Number(perf.dataset.commits)).toBeGreaterThanOrEqual(4), {
+    await waitFor(() => expect(Number(perf.dataset.tick)).toBeGreaterThanOrEqual(4), {
       timeout: 8000,
     });
+    // A static (production) build's Profiler is inert: nothing to hold to the budget.
+    if (perf.dataset.measured !== "true") return;
+    await expect(Number(perf.dataset.commits)).toBeGreaterThanOrEqual(4);
     await expect(Number(perf.dataset.maxMs)).toBeLessThanOrEqual(COMMIT_BUDGET_MS);
   },
 };
