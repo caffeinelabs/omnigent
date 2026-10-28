@@ -66,6 +66,7 @@ from omnigent.stores.factory_store import now_ms
 if TYPE_CHECKING:
     from omnigent.entities import Conversation
     from omnigent.entities.factory import FactoryProject
+    from omnigent.stores import ConversationStore
 
 _logger = logging.getLogger(__name__)
 
@@ -174,8 +175,15 @@ def mint_token(deps: FactoryDeps, user_id: str | None) -> str | None:
         return None
 
 
-def _max_pods(deps: FactoryDeps, root: Conversation) -> int:
-    spec = load_session_spec(root, deps)
+def pod_cap(deps: FactoryDeps, lead: Conversation) -> int | None:
+    """
+    The ``executor.config.factory_max_pods`` of *lead*'s spec (default :data:`DEFAULT_MAX_PODS`).
+
+    :returns: e.g. ``12``, or ``None`` when the spec cannot be loaded.
+    """
+    spec = load_session_spec(lead, deps)
+    if spec is None:
+        return None
     config = getattr(getattr(spec, "executor", None), "config", None)
     raw = config.get("factory_max_pods") if isinstance(config, dict) else None
     if isinstance(raw, str) and raw.strip().isdigit():
@@ -185,11 +193,20 @@ def _max_pods(deps: FactoryDeps, root: Conversation) -> int:
     return DEFAULT_MAX_PODS
 
 
-def _live_members(deps: FactoryDeps, factory_id: str) -> list[Conversation]:
+def _max_pods(deps: FactoryDeps, root: Conversation) -> int:
+    return pod_cap(deps, root) or DEFAULT_MAX_PODS
+
+
+def live_members(factory_id: str, store: ConversationStore) -> list[Conversation]:
+    """:returns: The members that hold a pod: top-level, not closed and not done."""
     from omnigent.server.factory.control import is_closed
 
-    members = factory_members(factory_id, deps.conversation_store)
+    members = factory_members(factory_id, store)
     return [m for m in members if not is_closed(m) and m.labels.get(LABEL_STATE) != STATE_DONE]
+
+
+def _live_members(deps: FactoryDeps, factory_id: str) -> list[Conversation]:
+    return live_members(factory_id, deps.conversation_store)
 
 
 def _supervisor(root: Conversation, members: list[Conversation]) -> str:
@@ -222,18 +239,26 @@ def needs_finishing(deps: FactoryDeps, factory_id: str, pl: Conversation) -> boo
     return not rows
 
 
-def _version_labels(deps: FactoryDeps, root: Conversation, agent_id: str) -> dict[str, str]:
-    """``def_version`` from the root, plus the platform ``version`` and ``bundle`` labels."""
+def _version_labels(deps: FactoryDeps, agent_id: str) -> dict[str, str]:
+    """The platform ``version`` and ``bundle`` labels, as ``sys_factory_spawn`` sends them."""
     from omnigent.server.factory.telemetry import versions
 
-    labels: dict[str, str] = {}
-    if root.labels.get(LABEL_DEF_VERSION):
-        labels[LABEL_DEF_VERSION] = root.labels[LABEL_DEF_VERSION]
     try:
-        labels.update(versions.labels_for_agent(deps.agent_store, agent_id))
+        return versions.labels_for_agent(deps.agent_store, agent_id)
     except Exception:  # noqa: BLE001 - the labels only group telemetry by version
         _logger.warning("factory: no version labels for a new PL", exc_info=True)
-    return labels
+        return {}
+
+
+def _server_labels(root: Conversation) -> dict[str, str]:
+    """
+    Server-only labels a new PL inherits from the root (``def_version``).
+
+    The create runs on a runner token, which may not send them, so the server
+    stamps them on the new session itself.
+    """
+    pinned = root.labels.get(LABEL_DEF_VERSION)
+    return {LABEL_DEF_VERSION: pinned} if pinned else {}
 
 
 def _heartbeat(root: Conversation, project: FactoryProject) -> int:
@@ -504,7 +529,7 @@ async def _spawn_locked(
         project,
         agent_id=agent.id,
         supervisor=_supervisor(root, members),
-        extra_labels=await asyncio.to_thread(_version_labels, deps, root, agent.id),
+        extra_labels=await asyncio.to_thread(_version_labels, deps, agent.id),
     )
     async with client:
         resp = await client.post("/v1/sessions", json=body)
@@ -516,6 +541,8 @@ async def _spawn_locked(
     if resp.status_code >= 400 or not isinstance(new_id, str) or not new_id:
         await _failed(app_state, root, project, f"create returned {resp.status_code}")
         return await _after_failure(app_state, root, project, by=by, status=resp.status_code)
+    if server_labels := _server_labels(root):
+        await asyncio.to_thread(deps.conversation_store.set_labels, new_id, server_labels)
     project = (
         await asyncio.to_thread(store.update_project, project.id, pl_session_id=new_id) or project
     )

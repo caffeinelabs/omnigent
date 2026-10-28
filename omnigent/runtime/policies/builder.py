@@ -26,6 +26,7 @@ import cachetools
 from omnigent.entities import Conversation
 from omnigent.entities import Policy as StoredPolicy
 from omnigent.errors import ErrorCode, OmnigentError
+from omnigent.factory import is_factory_label
 from omnigent.llms.context_window import fetch_model_pricing_with_provider
 from omnigent.policies.base import Policy
 from omnigent.policies.function import resolve_function_policy
@@ -972,10 +973,12 @@ def _seed_and_load_labels(
     """
     if existing is None:
         existing = _load_existing_labels(conversation_id, conversation_store)
+    # A spec never seeds an omnigent.factory.* label: an uploaded bundle could
+    # otherwise enrol its session in a factory (or set a server-only label).
     to_seed = {
         key: ldef.initial
         for key, ldef in label_defs.items()
-        if ldef.initial is not None and key not in existing
+        if ldef.initial is not None and key not in existing and not is_factory_label(key)
     }
     if to_seed:
         conversation_store.set_labels(conversation_id, to_seed)

@@ -121,3 +121,55 @@ def test_apply_label_writes_values_only_free_transitions(
     # Out-of-enum still rejected.
     engine.apply_label_writes({"role": "root"})
     assert engine.labels["role"] == "guest"
+
+
+def test_apply_label_writes_drops_factory_labels(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """Factory membership is server-owned: a policy (e.g. an LLM judge with
+    ``allow_set_labels`` in an uploaded bundle) never writes it, even when the
+    spec declares the key."""
+    engine = _build_engine_with_defs(
+        conversation_store,
+        {"omnigent.factory.role": LabelDef(values=["root", "lead"])},
+    )
+
+    engine.apply_label_writes(
+        {
+            "omnigent.factory.id": "f1",
+            "omnigent.factory.role": "root",
+            "omnigent.factory.engine_mode": "autonomous",
+            " Omnigent.factory.def_version": "999",
+            "team": "ml",
+        }
+    )
+
+    assert engine.labels == {"team": "ml"}
+    conv = conversation_store.get_conversation(engine.conversation_id)
+    assert conv is not None
+    assert conv.labels == {"team": "ml"}
+
+
+def test_spec_label_seeds_skip_factory_labels(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """A spec's declared ``initial`` values never seed a factory label."""
+    from omnigent.runtime.policies.builder import _seed_and_load_labels
+
+    conv = conversation_store.create_conversation()
+
+    labels = _seed_and_load_labels(
+        conversation_id=conv.id,
+        label_defs={
+            "omnigent.factory.id": LabelDef(initial=conv.id),
+            "omnigent.factory.role": LabelDef(initial="root"),
+            "omnigent.factory.engine_mode": LabelDef(initial="autonomous"),
+            "team": LabelDef(initial="ml"),
+        },
+        conversation_store=conversation_store,
+    )
+
+    assert labels == {"team": "ml"}
+    stored = conversation_store.get_conversation(conv.id)
+    assert stored is not None
+    assert stored.labels == {"team": "ml"}

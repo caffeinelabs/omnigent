@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from omnigent.errors import ErrorCode, OmnigentError
+from omnigent.factory import is_factory_label
 from omnigent.spec import AgentSpec, ExtractionError, ToolRuntime, load
 from omnigent.spec.types import FunctionPolicySpec
 
@@ -100,6 +101,28 @@ def reject_unguarded_factory_specs(spec: AgentSpec) -> None:
         reject_unguarded_factory_specs(sub)
 
 
+def reject_factory_label_defs(spec: AgentSpec) -> None:
+    """Reject a (sub-)agent spec that declares an ``omnigent.factory.*`` label.
+
+    Declared labels are seeded onto the session when its policy engine is
+    built, so such a spec could enrol its session in a factory or set a
+    server-only label. Recurses into sub-agents, which each seed their own.
+
+    :param spec: The parsed (sub-)agent spec to check.
+    :raises OmnigentError: ``INVALID_INPUT`` naming the first offending key.
+    """
+    labels = spec.guardrails.labels if spec.guardrails is not None else None
+    for key in labels or {}:
+        if is_factory_label(key):
+            raise OmnigentError(
+                f"agent {spec.name!r} declares guardrails label {key!r}; "
+                "omnigent.factory.* labels are set only by the server",
+                code=ErrorCode.INVALID_INPUT,
+            )
+    for sub in spec.sub_agents:
+        reject_factory_label_defs(sub)
+
+
 def _cwd_escapes_workspace(spec_cwd: str) -> bool:
     """Whether an agent-spec ``os_env.cwd`` would escape the session workspace.
 
@@ -146,7 +169,8 @@ def validate_agent_bundle(
         this on :func:`omnigent.server.auth.local_single_user_enabled`.
     :returns: The validated :class:`AgentSpec`.
     :raises OmnigentError: If the bundle is invalid, the spec is
-        missing a name, a factory-role (sub-)agent lacks its guards, or
+        missing a name, a factory-role (sub-)agent lacks its guards, a
+        (sub-)agent declares an ``omnigent.factory.*`` label, or
         (when *enforce_handler_allowlist*) a policy
         names an unregistered handler, ``os_env.cwd`` is an absolute or
         escaping path, or a tool declares a server-side Python ``callable:``.
@@ -176,8 +200,10 @@ def validate_agent_bundle(
             "agent spec must include a name",
             code=ErrorCode.INVALID_INPUT,
         )
-    # Every server, trusted or not: a factory role is never run without its fence.
+    # Every server, trusted or not: a factory role is never run without its fence,
+    # and no spec seeds factory membership.
     reject_unguarded_factory_specs(spec)
+    reject_factory_label_defs(spec)
 
     # Both guards below apply only to untrusted uploads, gated on the same
     # trust signal as the handler allowlist: a trusted single-user/local server

@@ -271,6 +271,10 @@ def register_agent_routes(
                 "Session has no agent binding",
                 code=ErrorCode.INTERNAL_ERROR,
             )
+        # An agent never swaps the bundle a factory member runs (Tier 0).
+        from omnigent.server.factory.custom_bundle import deny_runner_member_bundle
+
+        await deny_runner_member_bundle(request, conv, auth_provider, conversation_store)
         agent = await asyncio.to_thread(agent_store.get, conv.agent_id)
         if agent is None:
             raise OmnigentError(

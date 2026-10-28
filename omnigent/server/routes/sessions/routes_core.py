@@ -40,7 +40,7 @@ from omnigent.entities import (
 from omnigent.entities.permission import SessionPermission
 from omnigent.errors import ErrorCategory, ErrorCode, ErrorImpact, ErrorPhase, OmnigentError
 from omnigent.factory import LABEL_ID as FACTORY_LABEL_ID
-from omnigent.factory import LABEL_PREFIX as FACTORY_LABEL_PREFIX
+from omnigent.factory import is_factory_label
 from omnigent.models.model_override import validate_model_override
 from omnigent.runner.identity import (
     RUNNER_TUNNEL_TOKEN_HEADER,
@@ -238,7 +238,7 @@ def _reject_runner_factory_labels(
     :param auth_provider: The server's auth provider.
     :raises OmnigentError: 403 when a runner writes a factory label.
     """
-    keys = sorted(key for key in labels if key.startswith(FACTORY_LABEL_PREFIX))
+    keys = sorted(key for key in labels if is_factory_label(key))
     reason = runner_origin(request, auth_provider) if keys else None
     if reason is not None:
         raise OmnigentError(
@@ -247,6 +247,40 @@ def _reject_runner_factory_labels(
             f"{reason}",
             code=ErrorCode.FORBIDDEN,
         )
+
+
+async def _check_runner_factory_create(
+    request: Request,
+    labels: dict[str, str] | None,
+    *,
+    user_id: str | None,
+    auth_provider: AuthProvider | None,
+    conversation_store: ConversationStore,
+    permission_store: PermissionStore | None,
+    runner_tunnel_tokens: frozenset[str] | None,
+    agent_store: AgentStore,
+    agent_id: str | None,
+    parent_session_id: str | None,
+    bundled: bool,
+) -> None:
+    """Refuse a runner's create whose factory labels a spawn would not send (see create_guard)."""
+    if not labels or not any(is_factory_label(key) for key in labels):
+        return
+    from omnigent.server.factory.create_guard import check_runner_create
+
+    await check_runner_create(
+        request,
+        labels,
+        user_id=user_id,
+        auth_provider=auth_provider,
+        conversation_store=conversation_store,
+        permission_store=permission_store,
+        runner_tunnel_tokens=runner_tunnel_tokens,
+        agent_store=agent_store,
+        agent_id=agent_id,
+        parent_session_id=parent_session_id,
+        bundled=bundled,
+    )
 
 
 def register_core_routes(
@@ -613,6 +647,19 @@ def register_core_routes(
             # on this route 500'd as internal_error. The human-readable
             # message survives in each entry's `msg`.
             raise HTTPException(status_code=422, detail=exc.errors(include_context=False)) from exc
+        await _check_runner_factory_create(
+            request,
+            body.labels,
+            user_id=user_id,
+            auth_provider=auth_provider,
+            conversation_store=conversation_store,
+            permission_store=permission_store,
+            runner_tunnel_tokens=runner_tunnel_tokens,
+            agent_store=agent_store,
+            agent_id=body.agent_id,
+            parent_session_id=body.parent_session_id,
+            bundled=False,
+        )
 
         resp, project_warnings = await _create_session_from_existing_agent(
             conversation_store,
@@ -814,6 +861,19 @@ def register_core_routes(
         parsed_metadata = project_resolution.body
         _reject_reserved_cost_control_label_seed(parsed_metadata.labels)
         _reject_server_reserved_label_seed(parsed_metadata.labels)
+        await _check_runner_factory_create(
+            request,
+            parsed_metadata.labels,
+            user_id=user_id,
+            auth_provider=auth_provider,
+            conversation_store=conversation_store,
+            permission_store=permission_store,
+            runner_tunnel_tokens=runner_tunnel_tokens,
+            agent_store=agent_store,
+            agent_id=None,
+            parent_session_id=parsed_metadata.parent_session_id,
+            bundled=True,
+        )
 
         inherited_runner_id: str | None = None
         if parsed_metadata.parent_session_id is not None:
@@ -2868,6 +2928,9 @@ def register_core_routes(
         # in generic native-wrapper UI state. Drop it whenever the agent changes.
         if switching_agent:
             dropped_label_keys_set.add(_CLAUDE_NATIVE_PERMISSION_MODE_LABEL_KEY)
+        # A runner's fork never joins a factory: members are created only by a spawn.
+        if runner_origin(request, auth_provider) is not None:
+            dropped_label_keys_set |= {key for key in source.labels if is_factory_label(key)}
         dropped_label_keys: frozenset[str] = frozenset(dropped_label_keys_set)
 
         # DANGEROUS codex full-bypass. The source's bypass label is always
@@ -3195,7 +3258,7 @@ def register_core_routes(
         try:
             from omnigent.server.routes import sessions as _sessions_facade
 
-            await asyncio.to_thread(
+            target_loaded = await asyncio.to_thread(
                 _sessions_facade.get_agent_cache().load,
                 target_agent.id,
                 target_agent.bundle_location,
@@ -3206,6 +3269,12 @@ def register_core_routes(
                 f"Target agent bundle could not be loaded: {body.agent_id!r}",
                 code=ErrorCode.INVALID_INPUT,
             ) from exc
+        # An agent never moves a factory member off its role's factory agent.
+        from omnigent.server.factory.custom_bundle import deny_runner_member_rebind
+
+        deny_runner_member_rebind(
+            request, session, getattr(target_loaded, "spec", None), auth_provider
+        )
 
         # A model id is provider-bound, so model_override / reasoning_effort
         # carry over only within the same provider family. A native target

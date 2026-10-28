@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 from collections.abc import Mapping
 from typing import Any, Final
 
@@ -94,6 +95,8 @@ ROLES: Final = frozenset(
     }
 )
 TOP_LEVEL_ROLES: Final = frozenset({ROLE_LEAD, ROLE_PROJECT_LEAD})
+SPAWN_ROLES: Final = (ROLE_PROJECT_LEAD, ROLE_LEAD)
+"""Roles ``sys_factory_spawn`` (or the server, for a PL) creates a top-level member in."""
 
 STATE_ACTIVE: Final = "active"
 STATE_PAUSED: Final = "paused"
@@ -579,6 +582,37 @@ def factory_role_from_spec(spec: Any) -> str | None:
         return None
     role = config.get("factory_role")
     return role if isinstance(role, str) and role in ROLES else None
+
+
+def _fold_label_key(key: str) -> str:
+    """Fold *key* the way a case- and accent-insensitive collation compares it."""
+    decomposed = unicodedata.normalize("NFKD", key)
+    # Drop combining marks (accents, the dot of "İ") and invisible format characters.
+    kept = "".join(ch for ch in decomposed if unicodedata.category(ch) not in ("Mn", "Cf"))
+    return kept.strip().casefold()
+
+
+def is_factory_label(key: str) -> bool:
+    """
+    Whether *key* names an ``omnigent.factory.*`` label, as any store collation could.
+
+    Matching ignores case, surrounding space, compatibility forms (fullwidth
+    letters), accents and zero-width characters, so a key that a MySQL
+    ``*_ai_ci`` collation equates with a factory label is one too.
+
+    Only the server, a factory owner and ``sys_factory_*`` write these, so the
+    channels an agent controls (a runner's create, spec label seeds, policy
+    ``set_labels``) refuse or drop every key this matches.
+
+    :param key: A label key, e.g. ``"omnigent.factory.role"`` or ``" Omnigent.Factory.x"``.
+    :returns: ``True`` for both examples, ``False`` for ``"team"``.
+    """
+    return _fold_label_key(key).startswith(LABEL_PREFIX)
+
+
+def without_factory_labels(labels: Mapping[str, str]) -> dict[str, str]:
+    """:returns: *labels* minus every key :func:`is_factory_label` matches."""
+    return {key: value for key, value in labels.items() if not is_factory_label(key)}
 
 
 def clamp_label_value(value: str, limit: int = LABEL_VALUE_MAX_LEN) -> str:
