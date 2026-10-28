@@ -826,11 +826,12 @@ def _decision_latency(facts: Facts, w: Window) -> list[Sample]:
 
 def _escalation_extra(facts: Facts, w: Window, _s: list[Sample]) -> dict[str, Any]:
     created = [d for d in facts.decisions if w.holds(d.created_at)]
+    ids = {d.id for d in created}
     escalated = {
         (e.data or {}).get("decision_id")
         for e in facts.kind("decision.escalated")
         if w.holds(e.ts / 1000)
-    }
+    } & ids
     return {
         "escalation_rate": _r(len(escalated) / len(created), 4) if created else None,
         "opened": len(created),
@@ -1547,6 +1548,36 @@ class Filters:
             return False
         return self.def_version is None or sample.def_version == self.def_version
 
+    def keeps_project(self, slug: str | None) -> bool:
+        """Whether a row of project *slug* (``None``: factory-wide) stays in."""
+        if slug and slug in self.hidden_projects:
+            return False
+        return self.project is None or slug == self.project
+
+
+def _scoped(facts: Facts, filters: Filters) -> Facts:
+    """*facts* without the rows of projects *filters* leave out (what the extras read)."""
+    if filters.project is None and not filters.hidden_projects:
+        return facts
+
+    def rows(items: list[Any]) -> list[Any]:
+        return [
+            r for r in items if filters.keeps_project(getattr(r, "project_slug", None) or None)
+        ]
+
+    return replace(
+        facts,
+        projects=[p for p in facts.projects if filters.keeps_project(p.slug)],
+        prs=rows(facts.prs),
+        decisions=rows(facts.decisions),
+        tasks=rows(facts.tasks),
+        loops=rows(facts.loops),
+        issues=rows(facts.issues),
+        feedback=rows(facts.feedback),
+        cost=rows(facts.cost),
+        spans=rows(facts.spans),
+    )
+
 
 def evaluate_metric(
     facts: Facts, metric: Metric, window: Window, filters: Filters, group_by: str | None = None
@@ -1555,7 +1586,7 @@ def evaluate_metric(
     samples = [s for s in metric.samples(facts, window) if filters.keep(s)]
     out = dict(metric.agg(samples, window))
     if metric.extra is not None:
-        out.update(metric.extra(facts, window, samples))
+        out.update(metric.extra(_scoped(facts, filters), window, samples))
     if group_by:
         groups: dict[str, list[Sample]] = defaultdict(list)
         for sample in samples:
@@ -1642,8 +1673,9 @@ def scan_human_prompts(deps: FactoryDeps, factory_id: str, day: str) -> list[dic
     """
     Count human-authored items on the factory's members for one UTC *day*.
 
-    Room deliveries (``[Factory …`` envelopes) are left out: the chat table
-    already counts those posts. Synchronous.
+    Server envelopes (``[Factory …``, Room deliveries among them: the chat
+    table counts those posts) are left out; a person's message stamped
+    ``[Factory human · …]`` in a shared factory counts. Synchronous.
 
     :returns: ``[{role, person, project, n}]``.
     """
@@ -1674,6 +1706,8 @@ def scan_human_prompts(deps: FactoryDeps, factory_id: str, day: str) -> list[dic
 
 
 def _is_envelope(item: Any) -> bool:
+    from omnigent.server.factory.attribution import HUMAN_HEADER_PREFIX
+
     data = getattr(item, "data", None)
     content = getattr(data, "content", None)
     texts: list[str] = []
@@ -1686,7 +1720,8 @@ def _is_envelope(item: Any) -> bool:
                 text = part.get("text")
             if isinstance(text, str):
                 texts.append(text)
-    return any(t.lstrip().startswith("[Factory ") for t in texts[:1])
+    first = texts[0].lstrip() if texts else ""
+    return first.startswith("[Factory ") and not first.startswith(HUMAN_HEADER_PREFIX)
 
 
 async def record_prompt_scan(app_state: Any, factory_id: str, day: str) -> bool:

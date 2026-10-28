@@ -26,9 +26,16 @@ import threading
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+)
 
 from omnigent.factory import (
     CADENCE_DEMO,
@@ -70,6 +77,22 @@ LEGACY_LABELS: Final = (LABEL_ENGINE_MODE, LABEL_AUTONOMY, LABEL_ENGINE_SPAWN)
 """Root labels whose values move into the doc on the first resolve."""
 _ALIAS_RE: Final = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 _RULE_ID_RE: Final = re.compile(r"^R-([1-9][0-9]{0,6})$")
+_EVIDENCE_RE: Final = re.compile(r"[A-Za-z0-9!#:_./-]{1,64}")
+_RULE_EDIT_KEYS: Final = frozenset({"role", "project", "text"})
+
+
+def _evidence_id(value: str) -> str:
+    # One token: an id is quoted verbatim in server mail, so no spaces or newlines.
+    if not _EVIDENCE_RE.fullmatch(value):
+        raise ValueError(
+            "an evidence id is one token like F-9, D-2, INC-1, !42 or #slug "
+            "(letters, digits and !#:_./-, at most 64 chars)"
+        )
+    return value
+
+
+EvidenceId = Annotated[str, AfterValidator(_evidence_id)]
+"""An evidence reference of ``sys_factory_propose`` / ``sys_factory_retro``."""
 
 
 # ── The document ───────────────────────────────────────────────
@@ -954,8 +977,17 @@ def apply_changes(
         if change.op == "remove":
             rules.pop(index)
         else:
-            body = dict(change.value) if isinstance(change.value, Mapping) else {}
-            rules[index] = {**rules[index], **body, "id": change.rule_id, "origin": origin}
+            raw = change.value if isinstance(change.value, Mapping) else {}
+            body = {k: v for k, v in raw.items() if k in _RULE_EDIT_KEYS}
+            if "project" in body:
+                body["project"] = body["project"] or "*"
+            rules[index] = {
+                **rules[index],
+                **body,
+                "id": change.rule_id,
+                "origin": origin,
+                "state": rule_state,
+            }
     doc["rules"] = rules
     try:
         return FactoryDefinitionDoc.model_validate(doc).model_dump(mode="json")
@@ -1179,6 +1211,7 @@ __all__ = [
     "TRIAL_H_MAX",
     "TRIAL_H_MIN",
     "Change",
+    "EvidenceId",
     "FactoryDefinitionDoc",
     "Resolved",
     "apply_changes",

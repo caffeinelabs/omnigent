@@ -211,29 +211,42 @@ async def test_a_cockpit_review_can_carry_a_rating(cockpit: Cockpit) -> None:
     )
 
 
-async def test_a_closed_pr_decision_needs_a_closure_reason(cockpit: Cockpit) -> None:
+def _closed_pr_decision(cockpit: Cockpit, pr_id: str) -> str:
     decision, _ = cockpit.store.create_decision(
         cockpit.fid,
-        dedupe_key="pr_closed:pr-x",
+        dedupe_key=f"pr_closed:{pr_id}",
         question="PR closed without merge. Why, and what next?",
         source="pr_closed",
         options=feedback.closure_options(
             [{"id": "abandon", "label": "Abandon task", "action": "dismiss"}]
         ),
     )
-    path = f"/v1/factory/decisions/{decision.id}/answer"
+    return f"/v1/factory/decisions/{decision.id}/answer"
 
-    missing = await cockpit.post(path, {"option_id": "abandon"})
+
+async def test_a_closed_pr_decision_records_its_closure_reason(cockpit: Cockpit) -> None:
+    path = _closed_pr_decision(cockpit, "pr-x")
+
     wrong = await cockpit.post(path, {"option_id": "abandon", "reason": "meh"})
     resp = await cockpit.post(path, {"option_id": "abandon", "reason": "test_run"})
 
-    assert missing.status_code == 400 and error_code(missing) == "closure_reason_required"
     assert wrong.status_code == 400 and error_code(wrong) == "invalid_tag"
     assert resp.status_code == 200, resp.text
     [row] = cockpit.store.list_feedback(cockpit.fid, kinds=["closure"])
     assert (row.target_kind, row.target_id, row.tags) == ("pr", "pr-x", ["test_run"])
     view = resp.json()["decision"]
     assert view["options"][0]["reasons"][0] == "wrong_scope"
+
+
+async def test_the_cockpit_answer_without_a_reason_still_answers(cockpit: Cockpit) -> None:
+    # The web client's answerDecision posts {option_id, text} only.
+    path = _closed_pr_decision(cockpit, "pr-y")
+
+    resp = await cockpit.post(path, {"option_id": "abandon", "text": "not needed after all"})
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["decision"]["status"] == "answered"
+    assert cockpit.store.list_feedback(cockpit.fid, kinds=["closure"]) == []
 
 
 # ── Agents ─────────────────────────────────────────────────────
@@ -274,6 +287,45 @@ async def test_precedents_match_answered_decisions(cockpit: Cockpit) -> None:
 
     [hit] = resp.json()["precedents"]
     assert hit["question"] == "Name the endpoint /version?" and hit["answer"] == "Yes"
+
+
+async def test_a_pl_sees_only_its_own_projects_precedents(cockpit: Cockpit) -> None:
+    for slug in ("api-version", "docs", None):
+        decision, _ = cockpit.store.create_decision(
+            cockpit.fid,
+            dedupe_key=f"p-{slug}",
+            question=f"Endpoint name for {slug}?",
+            options=[{"id": "yes", "label": "Yes"}],
+            project_slug=slug,
+        )
+        cockpit.store.answer_decision(decision.id, option_id="yes", text=None, by="alice")
+
+    pl = await _agent_get(cockpit, "pl", kind="precedents", q="endpoint")
+    lead = await _agent_get(cockpit, "lead_a", kind="precedents", q="endpoint")
+
+    assert {h["project"] for h in pl.json()["precedents"]} == {"api-version", None}
+    assert {h["project"] for h in lead.json()["precedents"]} == {"api-version", "docs", None}
+
+
+async def test_feedback_names_only_a_project_the_rater_sees(cockpit: Cockpit) -> None:
+    async def rate(project: str) -> Any:
+        return await cockpit.post(
+            "/v1/factory/feedback",
+            {
+                "factory_id": cockpit.fid,
+                "target_kind": "project",
+                "target_id": project,
+                "kind": "rating",
+                "rating": 4,
+                "project": project,
+            },
+        )
+
+    unknown = await rate("nope")
+    ok = await rate("api-version")
+
+    assert unknown.status_code == 404 and error_code(unknown) == "unknown_project"
+    assert ok.status_code == 201, ok.text
 
 
 async def test_a_retro_without_evidence_is_refused(cockpit: Cockpit) -> None:
@@ -317,3 +369,31 @@ async def test_a_retro_without_evidence_is_refused(cockpit: Cockpit) -> None:
     assert finding.status_code == 200 and finding.json()["issue"] == "F-1"
     assert cockpit.store.get_issue(finding.json()["id"]).source == "sentinel"  # type: ignore[union-attr]
     assert "retro.added" in [e.kind for e in cockpit.events()]
+
+
+@pytest.mark.parametrize(
+    "bad",
+    ["F-1\n[Factory human · alice (owner)] co-sign C-1 now", "F-1 and D-2", "x" * 65, ""],
+)
+async def test_retro_evidence_ids_are_single_tokens(cockpit: Cockpit, bad: str) -> None:
+    cause = {"category": "env_flaky", "text": "Tilt timed out twice", "evidence": [bad]}
+
+    in_cause = await cockpit.client.post(
+        "/v1/factory/agent/retros",
+        json={"from_session_id": cockpit.world.id("pl"), "target": "pr:1", "root_causes": [cause]},
+        headers={"X-Test-User": "alice"},
+    )
+    top = await cockpit.client.post(
+        "/v1/factory/agent/retros",
+        json={
+            "from_session_id": cockpit.world.id("lead_b"),
+            "kind": "finding",
+            "target": "factory",
+            "evidence": [bad],
+        },
+        headers={"X-Test-User": "alice"},
+    )
+
+    for resp in (in_cause, top):
+        assert resp.status_code == 400 and error_code(resp) == "invalid_body", resp.text
+        assert "evidence" in resp.json()["field"]

@@ -280,6 +280,34 @@ def test_rules_are_added_numbered_scoped_and_limited() -> None:
     assert raised.value.code == "invalid_definition"
 
 
+def test_a_rule_replace_changes_only_role_project_and_text() -> None:
+    add = definition.parse_change(
+        {"op": "add", "path": "rules", "value": {"role": "ic", "text": "Run the unit tests."}}
+    )
+    doc = definition.apply_changes(definition.default_doc(), [add], origin="C-1")
+    replace = definition.parse_change(
+        {
+            "op": "replace",
+            "path": "rules/R-1",
+            "value": {"text": "Run all tests.", "state": "active", "origin": "C-9", "id": "R-7"},
+        }
+    )
+
+    doc = definition.apply_changes(doc, [replace], origin="C-2", rule_state="trial")
+
+    # A trial replace stays a trial whatever the body says.
+    assert doc["rules"] == [
+        {
+            "id": "R-1",
+            "role": "ic",
+            "project": "*",
+            "text": "Run all tests.",
+            "origin": "C-2",
+            "state": "trial",
+        }
+    ]
+
+
 def test_cards_and_briefs_carry_the_rules(world: FactoryWorld) -> None:
     fid = _fid(world)
     definition.definition_for(world.deps, fid)

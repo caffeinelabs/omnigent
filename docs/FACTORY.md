@@ -701,9 +701,10 @@ without) and one expected metric effect; at most 2 per agent per day.
   and `…/definition/diff?from=&to=` show them.
 
 **Tier 2: the Factory Smith lane** (code and bundle PRs to omnigent) ships
-off. It turns on only when `OMNIGENT_FACTORY_SMITH=1`, a ruleset requiring
-review protects `caffeinelabs/omnigent#staging` (read through the GitHub API
-at server start) and a dedicated factory identity
+off. It turns on only when `OMNIGENT_FACTORY_SMITH=1`, rulesets requiring
+review, CODEOWNERS review and status checks protect
+`caffeinelabs/omnigent#staging` (read through the GitHub API at server start)
+and a dedicated factory identity
 (`OMNIGENT_FACTORY_SMITH_GITHUB_LOGIN` and `…_TOKEN`) has neither admin nor
 maintain rights. `GET /v1/factory/preflight` returns `tier2 {enabled,
 reason}`. While it is off, `kind=code` proposals are recorded with their
@@ -719,11 +720,12 @@ evidence and never run.
   experiments, per-person numbers for owners), `GET …/metrics`, and the fleet
   `GET /v1/factory/insights`. Projects whose PL the viewer cannot read are left
   out. A nightly scan counts human-authored items on members
-  (`metrics.prompts`).
+  (`metrics.prompts`), including messages stamped `[Factory human · …]` in a
+  shared factory.
 - **Feedback** (`POST /v1/factory/feedback`): PR ratings (also on a cockpit
   review), demo 👍/👎, unnecessary questions, calibration of retro labels and
-  root causes. A `pr_closed` decision needs a closure reason (`reason`, from
-  the seeded list) with its answer.
+  root causes. A `pr_closed` decision's answer may carry a closure reason
+  (`reason`, from the seeded list); one without it records no closure.
 - **Retros** (`sys_factory_retro`): PLs file one after a merge, a close and at
   done; Sentinel files findings. Without evidence: 422.
 - **Sentinel's retro** (supervisor rule S12): daily after
@@ -734,7 +736,10 @@ evidence and never run.
   in `#improvements`). Owners can run it now: `POST …/retro`.
 - **Eval mode** (root label `omnigent.factory.mode=eval`): decisions are
   answered with the recommended option after 2 minutes (`answered_by
-  eval-auto`) and each project's PL is paused at READY. The benchmark charters
+  eval-auto`) and each project's PL is paused at READY. Decisions only an
+  owner may approve stay open: access requests, tuning, rules and code
+  proposals, owner-approval projects proposals and budget raises past the
+  operator cap. The benchmark charters
   are in `examples/factory/benchmarks/temp-main/`.
 
 ## Work graph

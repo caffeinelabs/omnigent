@@ -3,8 +3,9 @@
 Tier 2 turns on only when all three prerequisites hold, checked at server start:
 
 1. ``OMNIGENT_FACTORY_SMITH=1``;
-2. ``caffeinelabs/omnigent`` ``staging`` is protected: a ruleset requiring
-   pull-request review applies to it (read through the GitHub API);
+2. ``caffeinelabs/omnigent`` ``staging`` is protected: the rulesets that apply
+   to it require pull-request review with CODEOWNERS review, and status checks
+   (read through the GitHub API);
 3. a dedicated factory GitHub identity is configured
    (``OMNIGENT_FACTORY_SMITH_GITHUB_LOGIN`` with its token in
    ``OMNIGENT_FACTORY_SMITH_GITHUB_TOKEN``) and has neither admin nor maintain
@@ -88,24 +89,44 @@ async def probe(transport: Transport = None) -> dict[str, Any]:
             "reason": f"GitHub unreachable ({type(exc).__name__})",
             "checks": checks,
         }
-    found = rules.json() if rules.status_code == 200 else []
-    types = (
-        {r.get("type") for r in found if isinstance(r, dict)} if isinstance(found, list) else set()
-    )
-    checks["protected"] = "pull_request" in types
-    body = role.json() if role.status_code == 200 else {}
+    missing = _protection_gap(_json(rules, []))
+    checks["protected"] = missing is None
+    body = _json(role, {})
     checks["identity_role"] = (
         (body.get("role_name") or body.get("permission")) if isinstance(body, dict) else None
     )
     if rules.status_code != 200:
         reason = f"could not read the rulesets of {repo}#{branch} (HTTP {rules.status_code})"
-    elif not checks["protected"]:
-        reason = f"{repo}#{branch} is not protected by a ruleset requiring review"
+    elif missing is not None:
+        reason = f"{repo}#{branch} is not protected: its rulesets do not require {missing}"
     elif role.status_code != 200:
         reason = f"could not read {login}'s role on {repo} (HTTP {role.status_code})"
     elif checks["identity_role"] in _BYPASS_ROLES:
         reason = f"the factory identity {login} has {checks['identity_role']} rights"
     return {"enabled": reason is None, "reason": reason, "checks": checks}
+
+
+def _json(resp: httpx.Response, default: Any) -> Any:
+    """:returns: A 200 response's JSON, else *default* (also for a body that is not JSON)."""
+    if resp.status_code != 200:
+        return default
+    try:
+        return resp.json()
+    except ValueError:
+        return default
+
+
+def _protection_gap(found: Any) -> str | None:
+    """:returns: What the branch rules lack (review, CODEOWNERS review, CI), or ``None``."""
+    rules = [r for r in found if isinstance(r, dict)] if isinstance(found, list) else []
+    reviews = [r for r in rules if r.get("type") == "pull_request"]
+    if not reviews:
+        return "pull-request review"
+    if not any((r.get("parameters") or {}).get("require_code_owner_review") for r in reviews):
+        return "CODEOWNERS review"
+    if not any(r.get("type") == "required_status_checks" for r in rules):
+        return "status checks (CI)"
+    return None
 
 
 def status(app_state: Any = None) -> dict[str, Any]:

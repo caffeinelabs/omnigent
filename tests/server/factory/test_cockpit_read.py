@@ -401,6 +401,26 @@ async def test_skip_tallies_name_only_members_the_viewer_can_read(
     assert alice["data"]["counts"] == counts
 
 
+async def test_the_feed_never_shows_per_person_prompt_counts(
+    world: FactoryWorld, authed_api: FactoryApi
+) -> None:
+    seeded = _seed(world, authed_api)
+    counts = [{"role": "lead", "person": "bob", "project": None, "n": 3}]
+    _deps(authed_api).factory_store.append_event(
+        EventDraft(
+            factory_id=seeded.fid,
+            kind="metrics.prompts",
+            summary="3 human prompts on members",
+            data={"day": "2026-10-01", "counts": counts},
+        )
+    )
+    path = f"/v1/factory/factories/{seeded.fid}/events"
+
+    [event] = (await _get(authed_api, path, params={"kinds": "metrics.*"})).json()["data"]
+
+    assert event["data"]["counts"] == [{"role": "lead", "project": None, "n": 3}]
+
+
 async def test_a_long_run_of_hidden_events_does_not_end_the_feed(
     world: FactoryWorld, authed_api: FactoryApi
 ) -> None:

@@ -173,6 +173,80 @@ async def test_eval_mode_answers_decisions_after_two_minutes(cockpit: Cockpit) -
     assert any("purchases" in t and "eval-auto" in t for t in pl_texts)
 
 
+async def test_eval_mode_leaves_owner_decisions_to_people(cockpit: Cockpit) -> None:
+    store, fid = cockpit.store, cockpit.fid
+    filed = await cockpit.client.post(
+        "/v1/factory/agent/proposals",
+        json={
+            "from_session_id": cockpit.world.id("lead_b"),
+            "kind": "tuning",
+            "changes": [{"op": "replace", "path": "budgets.project_usd", "value": 900}],
+            "rationale": "projects run out of budget",
+            "evidence": ["F-1"],
+            "expected_effect": {"metric": "cost_usd", "direction": "up"},
+        },
+        headers={"X-Test-User": "alice"},
+    )
+    assert filed.status_code == 200 and filed.json()["class"] == "B", filed.text
+    access, _ = store.create_decision(
+        fid,
+        dedupe_key="access:bob",
+        question="bob asks for the owner role",
+        source="access_request",
+        options=[
+            {
+                "id": "grant",
+                "label": "Grant owner",
+                "action": "grant_role",
+                "target": "person:bob",
+                "role": "owner",
+                "recommended": True,
+            },
+            {"id": "decline", "label": "Decline", "action": F.ACTION_DISMISS},
+        ],
+        assignee="owners",
+    )
+    budget, _ = store.create_decision(
+        fid,
+        dedupe_key="loop:raise",
+        question="The review loop is out of rounds",
+        source="loop",
+        options=[
+            {
+                "id": "raise",
+                "label": "Raise to 6 rounds",
+                "action": F.ACTION_RAISE_BUDGET,
+                "target": "loop:x",
+                "owner_only": True,
+                "recommended": True,
+            },
+            {"id": "abandon", "label": "Abandon", "action": F.ACTION_DISMISS},
+        ],
+        assignee="owners",
+    )
+    asked, _ = store.create_decision(
+        fid,
+        dedupe_key="ask-2",
+        question="Which table name?",
+        source="agent",
+        asked_by_session_id=cockpit.world.id("pl"),
+        options=[{"id": "a", "label": "orders", "recommended": True}],
+    )
+    cockpit.world.store.set_labels(fid, {F.LABEL_MODE: F.MODE_EVAL})
+    usd = definition.value(cockpit.deps, fid, "budgets.project_usd")
+
+    due = await eval_mode.tick(cockpit.app.state, fid, time.time() + eval_mode.ANSWER_AFTER_S + 1)
+
+    assert due["answered"] == [asked.ref]
+    for decision in (access, budget):
+        assert store.get_decision(decision.id).status == "open"  # type: ignore[union-attr]
+    proposal = store.get_proposal_by_number(fid, 1)
+    assert proposal is not None and proposal.status == "pending"
+    assert store.get_decision(proposal.decision_id).status == "open"  # type: ignore[arg-type,union-attr]
+    assert definition.value(cockpit.deps, fid, "budgets.project_usd") == usd
+    assert store.get_person(fid, "bob") is None
+
+
 async def test_eval_mode_stops_a_project_at_ready(cockpit: Cockpit) -> None:
     cockpit.world.store.set_labels(cockpit.fid, {F.LABEL_MODE: F.MODE_EVAL})
     cockpit.store.upsert_project(cockpit.fid, "api-version", stage=F.STAGE_READY)

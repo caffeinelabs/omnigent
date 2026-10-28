@@ -4,7 +4,9 @@ A factory whose root carries ``omnigent.factory.mode=eval`` (the temp-main
 benchmark, ``examples/factory/benchmarks/temp-main/*.json``):
 
 - every open decision older than 2 minutes is answered with its recommended
-  option (else its first actionable one), recorded as ``answered_by="eval-auto"``;
+  option (else its first actionable one), recorded as ``answered_by="eval-auto"``,
+  except the ones only an owner may approve (access requests, Tier-1 changes,
+  owner-approval projects proposals, budget raises past the operator cap);
 - every project stops at READY: its PL is paused once its stage reaches
   ``ready`` (humans close the PRs afterwards with the reason ``test_run``).
 """
@@ -14,12 +16,21 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Mapping
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
-from omnigent.factory import ACTION_DISMISS, LABEL_MODE, MODE_EVAL, STAGE_READY
+from omnigent.factory import (
+    ACTION_DISMISS,
+    ACTION_RAISE_BUDGET,
+    LABEL_MODE,
+    MODE_EVAL,
+    STAGE_READY,
+)
 from omnigent.server.factory import control, events
-from omnigent.server.factory.context import factory_deps
+from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError
+
+if TYPE_CHECKING:
+    from omnigent.entities.factory import FactoryDecision
 
 _logger = logging.getLogger(__name__)
 
@@ -27,6 +38,8 @@ ANSWER_AFTER_S: Final = 120
 EVAL_BY: Final = "eval-auto"
 STOPPED_KIND: Final = "eval.stopped"
 AUTO_TEXT: Final = "eval-auto: proceed with your own recommendation."
+SOURCE_ACCESS_REQUEST: Final = "access_request"
+SOURCE_PROPOSAL: Final = "proposal"
 
 
 def is_eval(labels: Mapping[str, str]) -> bool:
@@ -41,6 +54,25 @@ def pick_option(options: list[dict[str, Any]]) -> dict[str, Any] | None:
         return recommended[0]
     actionable = [o for o in options if o.get("action") != ACTION_DISMISS and not o.get("href")]
     return actionable[0] if actionable else None
+
+
+def owner_only(
+    deps: FactoryDeps, decision: FactoryDecision, option: Mapping[str, Any] | None
+) -> bool:
+    """Whether answering *decision* with *option* needs an owner (eval mode leaves it open)."""
+    from omnigent.server.factory import tuning
+    from omnigent.server.factory.proposals import find_proposal
+
+    if decision.source == SOURCE_ACCESS_REQUEST:
+        return True
+    option = option or {}
+    if option.get("action") == ACTION_RAISE_BUDGET and option.get("owner_only"):
+        return True
+    if decision.source != SOURCE_PROPOSAL:
+        return False
+    ref = (decision.subject or "").removeprefix(tuning.SUBJECT_PREFIX)
+    row = find_proposal(deps, decision.factory_id, ref) if ref else None
+    return row is None or tuning.is_tier1(row) or row.approval == "owner"
 
 
 async def auto_answer(app_state: Any, factory_id: str, now: float) -> list[str]:
@@ -58,6 +90,8 @@ async def auto_answer(app_state: Any, factory_id: str, now: float) -> list[str]:
         if now - decision.created_at < ANSWER_AFTER_S:
             continue
         option = pick_option(list(decision.options or []))
+        if await asyncio.to_thread(owner_only, deps, decision, option):
+            continue
         reasons = (option or {}).get("reasons")
         try:
             await decisions.answer_decision(
@@ -139,6 +173,7 @@ __all__ = [
     "STOPPED_KIND",
     "auto_answer",
     "is_eval",
+    "owner_only",
     "pick_option",
     "stop_ready",
     "tick",

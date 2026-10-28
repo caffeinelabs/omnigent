@@ -120,16 +120,17 @@ async def test_a_month_old_lifecycle_survives_and_chatter_is_pruned(store: Facto
 
 
 async def test_chatter_keeps_its_windows(store: FactoryStore) -> None:
-    _seed(store, CHATTER, age_days=13)
-    _seed(store, ("heartbeat.delivered",), age_days=1)
+    mail = tuple(k for k in CHATTER if not k.startswith("heartbeat."))
+    beats = tuple(k for k in CHATTER if k.startswith("heartbeat."))
+    _seed(store, mail, age_days=14.5)
+    _seed(store, beats, age_days=14.5)
+    _seed(store, ("heartbeat.delivered",), age_days=15.5)
 
     deleted = await prune.prune_once(_app_state(store), now=NOW)
 
-    # Heartbeats go after 2 days, the rest of the chatter after 14.
-    assert deleted == 3
-    assert _kinds(store) == sorted(
-        [k for k in CHATTER if not k.startswith("heartbeat.")] + ["heartbeat.delivered"]
-    )
+    # Mail goes after 14 days; heartbeats after 15 (a 7-day trial and its baseline).
+    assert deleted == len(mail) + 1
+    assert _kinds(store) == sorted(beats)
 
 
 async def test_a_second_prune_deletes_nothing(store: FactoryStore) -> None:

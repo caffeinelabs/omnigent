@@ -609,7 +609,7 @@ async def answer_decision(
     Answer an open decision (``POST /v1/factory/decisions/{id}/answer``).
 
     :param changes: Edit & apply of a proposal decision: the edited changes.
-    :param reason: The closure reason a ``pr_closed`` decision requires.
+    :param reason: The closure reason of a ``pr_closed`` decision (optional).
     :param answered_by: Who the answer is recorded as (``eval-auto`` in eval mode).
 
     :raises CockpitError: 400 on a bad option/text, 404 unknown decision,

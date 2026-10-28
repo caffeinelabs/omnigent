@@ -51,13 +51,14 @@ from omnigent.server.factory import control, definition, events, live
 from omnigent.server.factory.actor import Actor, proposal_ref
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError
-from omnigent.server.factory.envelope import display_title
+from omnigent.server.factory.envelope import display_title, quote_spoofed_lines
 from omnigent.server.factory.proposals import ProposalAnswer
 from omnigent.server.factory.start import parse_body
 from omnigent.stores.factory_store import (
     DecisionNotFound,
     DecisionNotOpen,
     ProposalStateConflict,
+    norm_id,
     now_s,
 )
 
@@ -118,7 +119,7 @@ class ProposeIn(_Body):
     rule: RuleIn | None = None
     title: str | None = Field(None, max_length=200)
     rationale: str | None = Field(None, max_length=2000)
-    evidence: list[str] = Field(default_factory=list, max_length=MAX_EVIDENCE)
+    evidence: list[definition.EvidenceId] = Field(default_factory=list, max_length=MAX_EVIDENCE)
     expected_effect: EffectIn | None = None
     trial_h: int | None = Field(None, ge=definition.TRIAL_H_MIN, le=definition.TRIAL_H_MAX)
     thread: str | None = Field(None, max_length=THREAD_MAX_LEN)
@@ -137,6 +138,21 @@ class DefinitionEditIn(_Body):
 
 
 # ── Helpers ────────────────────────────────────────────────────
+
+_LOCKS_ATTR: Final = "factory_definition_locks"
+
+
+def definition_lock(app_state: Any, factory_id: str) -> asyncio.Lock:
+    """:returns: The lock around one factory's read-modify-store of its definition."""
+    locks = getattr(app_state, _LOCKS_ATTR, None)
+    if not isinstance(locks, dict):
+        locks = {}
+        setattr(app_state, _LOCKS_ATTR, locks)
+    try:
+        key = norm_id(factory_id)
+    except ValueError:
+        key = factory_id
+    return locks.setdefault(key, asyncio.Lock())
 
 
 def is_tier1(row: FactoryProposal) -> bool:
@@ -274,7 +290,7 @@ async def _update(
 
 def definition_text(header: str, lines: Sequence[str]) -> str:
     """:returns: ``[Factory definition · <header>]`` plus the diff."""
-    body = "\n".join(f"- {line}" for line in lines)
+    body = quote_spoofed_lines("\n".join(f"- {line}" for line in lines))
     return (
         f"[Factory definition · {header}]\n{body}\n"
         "These values apply now; nothing to do unless one concerns your work. "
@@ -284,7 +300,7 @@ def definition_text(header: str, lines: Sequence[str]) -> str:
 
 def rules_update_text(ref: str, by: str, lines: Sequence[str]) -> str:
     """:returns: ``[Factory control · RULES UPDATE · C-15 · by <who>]`` plus the rule diff."""
-    body = "\n".join(f"{line}" for line in lines)
+    body = quote_spoofed_lines("\n".join(lines))
     return (
         f"[Factory control · RULES UPDATE · {ref} · by {by}]\n{body}\n"
         "Call sys_factory_rules() and follow the rules it returns from now on; relay the "
@@ -295,13 +311,14 @@ def rules_update_text(ref: str, by: str, lines: Sequence[str]) -> str:
 def cosign_request_text(row: FactoryProposal, by: str, lines: Sequence[str]) -> str:
     """:returns: ``[Factory proposal · C-14 · co-sign requested by Sentinel]`` with the diff."""
     ref = proposal_ref(row.number)
-    evidence = ", ".join(str(e) for e in row.evidence or []) or "none"
+    evidence = control.clip(", ".join(str(e) for e in row.evidence or []), 400) or "none"
     effect = row.expected_effect or {}
-    body = "\n".join(f"- {line}" for line in lines)
+    expected = control.clip(f"{effect.get('metric', '?')} {effect.get('direction', '')}", 120)
+    body = quote_spoofed_lines("\n".join(f"- {line}" for line in lines))
     return (
         f"[Factory proposal · {ref} · co-sign requested by {by}]\n{body}\n"
         f"Why: {control.clip(row.rationale, 400)}\nEvidence: {evidence}\n"
-        f"Expected: {effect.get('metric', '?')} {effect.get('direction', '')}\n"
+        f"Expected: {expected}\n"
         "Check the evidence, then co-sign with "
         f'sys_factory_propose(op="cosign", kind="{row.kind}", id="{ref}"), or tell {by} why '
         "not. A co-signed change runs as a trial."
@@ -615,14 +632,20 @@ async def propose(app_state: Any, caller: AgentCaller, body: ProposeIn) -> dict[
 def _check_pl_rules(changes: Sequence[definition.Change], project: str | None) -> None:
     for change in changes:
         value = change.value if isinstance(change.value, Mapping) else {}
-        if change.op == "add" and value.get("project") == project:
-            continue
-        raise CockpitError(
-            403,
-            "not_your_project",
-            "a project lead adds rules for its own project only",
-            field="rule",
-        )
+        if change.op != "add" or value.get("project") != project:
+            raise CockpitError(
+                403,
+                "not_your_project",
+                "a project lead adds rules for its own project only",
+                field="rule",
+            )
+        if value.get("role") not in _PL_RULE_ROLES:
+            raise CockpitError(
+                403,
+                "not_your_role",
+                "a project lead adds rules for its own team: " + ", ".join(sorted(_PL_RULE_ROLES)),
+                field="rule.role",
+            )
 
 
 def _check_overlap(deps: FactoryDeps, factory_id: str, diff: Sequence[Mapping[str, Any]]) -> None:
@@ -845,6 +868,30 @@ async def apply(
     :raises CockpitError: 409 ``proposal_not_pending``; 400 ``no_change``; the
         validation errors of :func:`.definition.parse_change`.
     """
+    async with definition_lock(app_state, root.id):
+        return await _apply(
+            app_state,
+            root,
+            row,
+            actor=actor,
+            trial=trial,
+            expect=expect,
+            cosigned_by=cosigned_by,
+            note=note,
+        )
+
+
+async def _apply(
+    app_state: Any,
+    root: Conversation,
+    row: FactoryProposal,
+    *,
+    actor: Actor,
+    trial: bool,
+    expect: str | Sequence[str],
+    cosigned_by: str | None,
+    note: str | None,
+) -> FactoryProposal:
     deps = factory_deps(app_state)
     ref = proposal_ref(row.number)
     resolved = await asyncio.to_thread(definition.definition_for, deps, root.id, fresh=True)
@@ -954,6 +1001,13 @@ async def keep(
     app_state: Any, root: Conversation, row: FactoryProposal, *, actor: Actor
 ) -> FactoryProposal:
     """End a trial as kept; its trial rules become active (a new version when any)."""
+    async with definition_lock(app_state, root.id):
+        return await _keep(app_state, root, row, actor=actor)
+
+
+async def _keep(
+    app_state: Any, root: Conversation, row: FactoryProposal, *, actor: Actor
+) -> FactoryProposal:
     deps = factory_deps(app_state)
     ref = proposal_ref(row.number)
     row = await _update(deps, row, "trial", status="kept", decided_by=actor.id, decided_at=now_s())
@@ -1034,6 +1088,18 @@ async def revert(
     Revert an applied change: re-pin its parent version when it is still the one
     in force, else undo only its changes as a new ``revert`` version.
     """
+    async with definition_lock(app_state, root.id):
+        return await _revert(app_state, root, row, actor=actor, reason=reason)
+
+
+async def _revert(
+    app_state: Any,
+    root: Conversation,
+    row: FactoryProposal,
+    *,
+    actor: Actor,
+    reason: str,
+) -> FactoryProposal:
     deps = factory_deps(app_state)
     ref = proposal_ref(row.number)
     row = await _update(
@@ -1193,25 +1259,79 @@ async def pin_version(
     target = await asyncio.to_thread(deps.factory_store.get_definition, root.id, version)
     if target is None:
         raise CockpitError(404, "unknown_version", f"no definition v{version}")
-    resolved = await asyncio.to_thread(definition.definition_for, deps, root.id, fresh=True)
-    assert resolved is not None
-    if resolved.version == version:
-        return {"def_version": version, "changed": False}
     actor = await asyncio.to_thread(human_actor, deps, user_id, root.id)
-    await asyncio.to_thread(definition.pin, deps, root.id, version)
     by = projects_name(actor)
-    await deliver(
-        app_state,
-        root,
-        ref=f"v{version}",
-        by=by,
-        header=f"v{version} pinned by {by} (was v{resolved.version})",
-        before=resolved.stored,
-        after=dict(target.doc or {}),
-        version=version,
-        actor=actor,
+    async with definition_lock(app_state, root.id):
+        resolved = await asyncio.to_thread(definition.definition_for, deps, root.id, fresh=True)
+        assert resolved is not None
+        if resolved.version == version:
+            return {"def_version": version, "changed": False}
+        await asyncio.to_thread(definition.pin, deps, root.id, version)
+        await deliver(
+            app_state,
+            root,
+            ref=f"v{version}",
+            by=by,
+            header=f"v{version} pinned by {by} (was v{resolved.version})",
+            before=resolved.stored,
+            after=dict(target.doc or {}),
+            version=version,
+            actor=actor,
+        )
+        ended = await _end_trials_outside(app_state, root, version, actor=actor)
+    return {"def_version": version, "changed": True, "from": resolved.version, "ended": ended}
+
+
+def _lineage(deps: FactoryDeps, factory_id: str, version: int) -> set[int]:
+    """:returns: *version* and the versions it descends from."""
+    seen: set[int] = set()
+    current: int | None = version
+    while current is not None and current not in seen and len(seen) < 1000:
+        seen.add(current)
+        row = deps.factory_store.get_definition(factory_id, current)
+        current = row.parent_version if row is not None else None
+    return seen
+
+
+async def _end_trials_outside(
+    app_state: Any, root: Conversation, version: int, *, actor: Actor
+) -> list[str]:
+    """End the trials whose version a pin took out of force. :returns: Their refs."""
+    deps = factory_deps(app_state)
+    rows = await asyncio.to_thread(
+        lambda: deps.factory_store.list_proposals(
+            root.id, status="trial", kind=["tuning", "rules"], limit=200
+        )
     )
-    return {"def_version": version, "changed": True, "from": resolved.version}
+    if not rows:
+        return []
+    lineage = await asyncio.to_thread(_lineage, deps, root.id, version)
+    by = projects_name(actor)
+    reason = f"v{version} pinned by {by}"
+    ended: list[str] = []
+    for row in rows:
+        if row.def_version_to in lineage:
+            continue
+        try:
+            row = await _update(
+                deps,
+                row,
+                "trial",
+                status="reverted",
+                reverted_at=now_s(),
+                reverted_by=actor.id,
+                result={**(row.result or {}), "revert_reason": reason},
+            )
+        except CockpitError:
+            continue
+        ref = proposal_ref(row.number)
+        await _close_keep_decision(app_state, row, "expired")
+        await _emit(
+            app_state, row, "proposal.reverted", f"{ref} ended: {reason}", actor, reason=reason
+        )
+        await _tell(app_state, row, outcome_text(ref, f"ended: {reason}"))
+        ended.append(ref)
+    return ended
 
 
 async def human_keep_or_revert(
@@ -1227,6 +1347,10 @@ async def human_keep_or_revert(
     row = await asyncio.to_thread(find_proposal, deps, root.id, ref)
     if row is None or not is_tier1(row):
         raise CockpitError(404, "unknown_proposal", f"no tuning or rules change {ref!r}")
+    if row.kind == "code":
+        raise CockpitError(
+            409, "code_change", f"{proposal_ref(row.number)} is a code change: no version to undo"
+        )
     actor = await asyncio.to_thread(human_actor, deps, user_id, root.id)
     if action == "keep":
         if row.status != "trial":

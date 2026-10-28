@@ -216,6 +216,13 @@ def _event_view(event: Any, titles: dict[str, str], readable: set[str]) -> dict[
         if isinstance(counts, dict):
             # Per-member tallies (heartbeat.skipped) name only members the viewer may read.
             data["counts"] = {sid: n for sid, n in counts.items() if sid in readable}
+        elif isinstance(counts, list):
+            # Per-person numbers (metrics.prompts) are for owners, through the metrics API.
+            data["counts"] = [
+                {k: v for k, v in row.items() if k != "person"}
+                for row in counts
+                if isinstance(row, dict)
+            ]
     return {
         "id": event.id,
         "ts": event.ts,

@@ -3,8 +3,10 @@
 Lifecycle facts (stages, PRs, gates, decisions, controls, demos, tasks, …)
 are kept indefinitely: telemetry and the nightly span heal are built from
 them. Only chatter is pruned: mail, notices and preview probes after 14
-days, heartbeats after 2. Demo files are kept; their size shows in the
-health strip. The nightly span heal runs in the same loop, before the prune.
+days, heartbeats after 15 (a trial's baseline and trial windows, plus a day:
+``heartbeat_share`` and ``engine_wake_efficiency`` read them). Demo files are
+kept; their size shows in the health strip. The nightly span heal runs in the
+same loop, before the prune.
 """
 
 from __future__ import annotations
@@ -15,13 +17,14 @@ from collections.abc import Awaitable, Callable
 from typing import Any, Final
 
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
+from omnigent.server.factory.definition import TRIAL_H_MAX
 from omnigent.stores.factory_store import now_ms
 
 _logger = logging.getLogger(__name__)
 
 INTERVAL_S: Final = 86400.0
 EVENT_RETENTION_S: Final = 14 * 86400
-HEARTBEAT_RETENTION_S: Final = 2 * 86400
+HEARTBEAT_RETENTION_S: Final = 2 * TRIAL_H_MAX * 3600 + 86400
 
 PRUNED_KINDS: Final[tuple[str, ...]] = ("message.*", "notice.*", "preview.health")
 """The only kinds dropped after :data:`EVENT_RETENTION_S` (besides heartbeats)."""

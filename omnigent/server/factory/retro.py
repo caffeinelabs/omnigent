@@ -64,7 +64,7 @@ class _Body(BaseModel):
 class RootCauseIn(_Body):
     category: str
     text: str = Field(min_length=1, max_length=TEXT_MAX)
-    evidence: list[str] = Field(default_factory=list, max_length=20)
+    evidence: list[definition.EvidenceId] = Field(default_factory=list, max_length=20)
 
 
 class SuggestionIn(_Body):
@@ -84,7 +84,7 @@ class RetroIn(_Body):
     slowed: str | None = Field(None, max_length=TEXT_MAX)
     root_causes: list[RootCauseIn] = Field(default_factory=list, max_length=10)
     proposals: list[SuggestionIn] = Field(default_factory=list, max_length=5)
-    evidence: list[str] = Field(default_factory=list, max_length=20)
+    evidence: list[definition.EvidenceId] = Field(default_factory=list, max_length=20)
     severity: Literal["info", "notice", "warning", "critical"] | None = None
 
 

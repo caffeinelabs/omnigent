@@ -406,6 +406,29 @@ def test_group_by_and_filters(seeded: tuple[FactoryWorld, float]) -> None:
     assert set(by_person["human_prompts_per_day"]["groups"]) == {"alice", "bob"}
 
 
+def test_extras_follow_the_project_filters(seeded: tuple[FactoryWorld, float]) -> None:
+    world, now = seeded
+    window = metrics.parse_window("7d", now + 4 * H)
+    names = ["throughput", "interventions_per_merged_pr", "merge_acceptance"]
+
+    def run(filters: metrics.Filters) -> dict[str, Any]:
+        return metrics.compute(
+            world.deps, world.id("lead_a"), names, window=window, filters=filters, use_cache=False
+        )
+
+    api = run(metrics.Filters(project="api-version"))
+    no_docs = run(metrics.Filters(hidden_projects=frozenset({"docs"})))
+
+    # The open PR, the ready stage and one merged PR are docs'.
+    for v in (api, no_docs):
+        assert v["throughput"]["open_prs"] == 0
+        assert "ready" not in v["throughput"]["projects_by_stage"]
+        assert v["interventions_per_merged_pr"]["merged"] == 1
+    # The seeded closure names no project: factory-wide, so out of a project's numbers.
+    assert api["merge_acceptance"]["closure_reasons"] == {}
+    assert no_docs["merge_acceptance"]["closure_reasons"] == {"wrong_scope": 1}
+
+
 def test_the_previous_window_and_the_cache(seeded: tuple[FactoryWorld, float]) -> None:
     world, now = seeded
     window = metrics.parse_window("24h", now + 1)
@@ -430,6 +453,56 @@ def test_unknown_metric_names_are_refused(world: FactoryWorld) -> None:
         metrics.compute(
             world.deps, world.id("lead_a"), ["nope"], window=metrics.parse_window("1d")
         )
+
+
+async def test_heartbeat_metrics_survive_the_nightly_prune(world: FactoryWorld) -> None:
+    from omnigent.server.factory.background import prune
+
+    store, fid, now = world.deps.factory_store, world.id("lead_a"), time.time()
+    metrics.reset_cache()
+    for age_days in range(1, 6):
+        _event(store, fid, "heartbeat.delivered", now - age_days * D, to_id=world.id("pl"))
+    _event(store, fid, "engine.next", now - 2 * D)
+    _event(store, fid, "engine.next", now - 4 * D)
+    window = metrics.parse_window("7d", now + 1)
+    names = ["engine_wake_efficiency", "heartbeat_share"]
+
+    before = metrics.compute(world.deps, fid, names, window=window, use_cache=False)
+    await prune.prune_once(world.app_state, now=int(now * 1000))
+    after = metrics.compute(world.deps, fid, names, window=window, use_cache=False)
+
+    assert before["engine_wake_efficiency"]["value"] == pytest.approx(2 / 7, abs=1e-3)
+    for name in names:
+        assert (after[name]["n"], after[name].get("value")) == (
+            before[name]["n"],
+            before[name].get("value"),
+        )
+
+
+def test_the_prompt_scan_counts_attributed_member_chat(world: FactoryWorld) -> None:
+    from omnigent.entities.conversation import MessageData, NewConversationItem
+    from omnigent.server.factory.attribution import attributed_content, human_header
+
+    store, fid = world.store, world.id("lead_a")
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    content = attributed_content(
+        [{"type": "input_text", "text": "status?"}], human_header("bob", "operator")
+    )
+    store.append(
+        world.id("pl"),
+        [
+            NewConversationItem(
+                type="message",
+                response_id="r1",
+                data=MessageData(role="user", content=content),
+                created_by="bob",
+            )
+        ],
+    )
+
+    counts = metrics.scan_human_prompts(world.deps, fid, day)
+
+    assert counts == [{"role": "project_lead", "person": "bob", "project": "api-version", "n": 1}]
 
 
 def test_the_prompt_scan_counts_human_items_but_not_room_envelopes(world: FactoryWorld) -> None:

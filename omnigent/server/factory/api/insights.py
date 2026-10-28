@@ -301,9 +301,13 @@ async def get_fleet_insights(
 # ── Agents ─────────────────────────────────────────────────────
 
 
-def _precedents(deps: FactoryDeps, factory_id: str, q: str | None) -> list[dict[str, Any]]:
+def _precedents(
+    deps: FactoryDeps, factory_id: str, q: str | None, project: str | None
+) -> list[dict[str, Any]]:
     needle = (q or "").strip().casefold()
     rows = deps.factory_store.list_decisions(status="answered", factory_id=factory_id, limit=500)
+    if project is not None:
+        rows = [r for r in rows if r.project_slug in (None, project)]
     out = []
     for d in sorted(rows, key=lambda r: r.answered_at or 0, reverse=True):
         option = next((o for o in d.options if o.get("id") == d.answer_option_id), None)
@@ -424,7 +428,8 @@ async def get_agent_insights(
         if kind == "findings":
             return {**base, **await asyncio.to_thread(_agent_findings, deps, fid, project)}
         if kind == "precedents":
-            return {**base, "precedents": await asyncio.to_thread(_precedents, deps, fid, q)}
+            found = await asyncio.to_thread(_precedents, deps, fid, q, project)
+            return {**base, "precedents": found}
         if kind == "loops":
             return {**base, "loops": await asyncio.to_thread(_agent_loops, deps, fid, project)}
         raise CockpitError(

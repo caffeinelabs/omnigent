@@ -2,8 +2,8 @@
 
 - PR ratings 1-5 with reason tags (the PR page's Approve / Request changes);
 - demo useful 👍/👎 (+1/-1), "this question was unnecessary" on a decision;
-- the required closure reason of a ``pr_closed`` decision (its options carry
-  ``reasons``; an answer without one is refused);
+- the closure reason of a ``pr_closed`` decision (its options carry
+  ``reasons``; an answer without one records no closure);
 - "Is this right?" calibration of retro and finding labels (+1/-1, or a
   corrected category in ``tags``) and root-cause confirmations on incidents.
 
@@ -149,12 +149,27 @@ async def add(
     return row
 
 
+async def _check_project(app_state: Any, user_id: str | None, root: Any, slug: str) -> None:
+    """:raises CockpitError: 404 ``unknown_project`` unless *user_id* sees project *slug*."""
+    from omnigent.server.factory.snapshot import get_snapshot, readable_for
+
+    raw = await get_snapshot(app_state, root)
+    pl = raw.project_pl.get(slug)
+    visible = slug in raw.project_pl and (
+        pl is None or pl in await readable_for(user_id, raw, factory_deps(app_state))
+    )
+    if not visible:
+        raise CockpitError(404, "unknown_project", f"no project {slug!r}", field="project")
+
+
 async def post(app_state: Any, user_id: str | None, payload: Any) -> dict[str, Any]:
     """``POST /v1/factory/feedback``: anyone who reads the factory (viewers too) may rate."""
     body = parse_body(FeedbackIn, payload if payload is not None else {})
     deps = factory_deps(app_state)
     root = await control.load_factory_root(deps, user_id, body.factory_id)
     await control.require(deps, user_id, root.id, LEVEL_READ)
+    if body.project is not None:
+        await _check_project(app_state, user_id, root, body.project)
     row = await add(
         app_state,
         root.id,
@@ -186,24 +201,20 @@ def closure_reason(
     decision: FactoryDecision, option: Mapping[str, Any] | None, reason: str | None
 ) -> str | None:
     """
-    The closure reason an answer must carry, validated.
+    The closure reason of an answer, validated.
 
-    :returns: The reason, or ``None`` when *decision* asks for none.
-    :raises CockpitError: 400 ``closure_reason_required`` / ``invalid_tag``.
+    An answer without one is still accepted (and records no closure): the
+    cockpit's answer forms do not send a reason yet.
+
+    :returns: The reason, or ``None`` when *decision* asks for none or none was given.
+    :raises CockpitError: 400 ``invalid_tag`` for a reason outside the picker.
     """
-    if decision.source != CLOSURE_SOURCE:
+    if decision.source != CLOSURE_SOURCE or not reason:
         return None
     pickers = [o.get("reasons") for o in decision.options if isinstance(o.get("reasons"), list)]
     if not pickers:
         return None
     allowed = option.get("reasons") if option is not None else pickers[0]
-    if not reason:
-        raise CockpitError(
-            400,
-            "closure_reason_required",
-            f"pick why the PR was closed: {', '.join(CLOSURE_REASONS)}",
-            field="reason",
-        )
     if reason not in (allowed or CLOSURE_REASONS):
         raise CockpitError(
             400, "invalid_tag", f"unknown closure reason {reason!r}", field="reason"
