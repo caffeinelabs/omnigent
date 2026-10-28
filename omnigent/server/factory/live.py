@@ -123,6 +123,14 @@ def announce_factory_changed(
     pending = _Pending(scopes=set(scopes))
     _pending[key] = pending
     pending.task = loop.create_task(_flush_later(app_state, key))
+    pending.task.add_done_callback(lambda task: _forget(key, task))
+
+
+def _forget(key: tuple[int, str], task: asyncio.Task[None]) -> None:
+    """Drop *key* once its timer ends, even cancelled, so a closed loop leaves nothing behind."""
+    pending = _pending.get(key)
+    if pending is not None and pending.task is task:
+        del _pending[key]
 
 
 __all__ = ["DEBOUNCE_S", "FRAME_TYPE", "announce_factory_changed", "publish", "recipients"]

@@ -182,6 +182,18 @@ async def test_fan_out_reaches_the_owner_and_every_grantee(
     assert received == {"alice": [frame], "bob": [frame], "carol": []}
 
 
+def test_a_loop_closed_inside_the_debounce_leaves_no_pending_timer(
+    published: list[tuple[str, dict[str, Any]]],
+) -> None:
+    async def announce_and_exit() -> None:
+        live.announce_factory_changed(_state(), FID, ["snapshot"])
+
+    asyncio.run(announce_and_exit())
+
+    assert not [key for key in live._pending if key[1] == FID]
+    assert published == []
+
+
 def test_announce_outside_a_loop_publishes_at_once(
     published: list[tuple[str, dict[str, Any]]],
 ) -> None:
