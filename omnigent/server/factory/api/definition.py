@@ -30,6 +30,8 @@ from omnigent.server.factory.actor import proposal_ref
 from omnigent.server.factory.agent_scope import authorize_agent
 from omnigent.server.factory.context import factory_deps
 from omnigent.server.factory.control import CockpitError
+from omnigent.server.factory.envelope import display_title
+from omnigent.server.factory.membership import is_session_id
 from omnigent.server.factory.origin import HUMAN_ORIGIN
 from omnigent.server.factory.proposals import proposal_view
 from omnigent.server.factory.start import parse_body
@@ -64,6 +66,14 @@ class NoteBody(BaseModel):
     note: str | None = Field(None, max_length=2000)
 
 
+def _author_title(deps: Any, created_by: str) -> str | None:
+    """:returns: The member's title when *created_by* is a session id (an agent's change)."""
+    if not is_session_id(created_by):
+        return None
+    conv = deps.conversation_store.get_conversation(created_by)
+    return display_title(conv.title, conv.id) if conv is not None else None
+
+
 def _view(row: Any, pinned: int | None, deps: Any) -> dict[str, Any]:
     proposal = deps.factory_store.get_proposal(row.proposal_id) if row.proposal_id else None
     return schemas.DefinitionView.model_validate(
@@ -73,6 +83,7 @@ def _view(row: Any, pinned: int | None, deps: Any) -> dict[str, Any]:
             "parent_version": row.parent_version,
             "hash": row.hash,
             "created_by": row.created_by,
+            "created_by_title": _author_title(deps, row.created_by),
             "created_via": row.created_via,
             "proposal_id": row.proposal_id,
             "proposal_ref": proposal_ref(proposal.number) if proposal is not None else None,

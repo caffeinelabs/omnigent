@@ -436,3 +436,18 @@ async def test_events_without_spans_are_ignored() -> None:
     event = EventDraft(factory_id="f" * 32, kind="message.queued", summary="x")
     assert recorder.handler_for(event.kind) is None
     await recorder.record_event(state, InMemoryFactoryStore().append_event(event))
+
+
+async def test_spans_seed_and_carry_the_definition_before_anything_resolved_it(
+    replay: Replay,
+) -> None:
+    from omnigent import factory as F
+
+    r = replay
+    assert F.LABEL_DEF_VERSION not in r.world.get("lead_a").labels
+    spans.reset()
+    await r.run(until=1500)
+
+    (pr,) = r.spans("pr")
+    assert pr.def_version == 1
+    assert r.world.get("lead_a").labels[F.LABEL_DEF_VERSION] == "1"

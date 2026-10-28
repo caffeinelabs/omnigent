@@ -41,6 +41,7 @@ import {
   COMPOSER_COLUMN_WIDTH,
   ComposerSendButton,
 } from "@/components/composer/ChatComposer";
+import { FactoryRoomBanner } from "@/components/factory/FactoryRoomBanner";
 import { ComposerAddMenu } from "@/components/composer/ComposerAddMenu";
 import { BackgroundTaskIndicator } from "@/components/composer/BackgroundTaskIndicator";
 import { ReplyDraftBlocks } from "@/components/composer/ReplyDraftBlocks";
@@ -3384,6 +3385,11 @@ function ComposerImpl(
       {subAgentLabel ? <SubagentComposerTray label={subAgentLabel} /> : null}
       {/* Drop cue, spanning the chat column this composer belongs to. */}
       {isDragActive && dropTarget ? <FileDropOverlay container={dropTarget} /> : null}
+      {/* A factory member's chat is its machine channel; people talk in the Room. */}
+      <FactoryRoomBanner
+        sessionId={composerSessionId}
+        className={cn("mx-auto", COMPOSER_COLUMN_WIDTH)}
+      />
       <div className={cn("mx-auto", COMPOSER_COLUMN_WIDTH)}>
         <ComposerWorkspaceBar data-testid="composer-workspace-controls">
           <ComposerWorkspaceStatus

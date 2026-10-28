@@ -274,6 +274,8 @@ async def test_implement_exhausts_at_three_and_escalates_once(cockpit: Cockpit) 
     spans = cockpit.store.list_spans(cockpit.fid, kinds=["loop", "loop_iter"])
     outer = [s for s in spans if s.kind == "loop" and s.loop_id == row.id]
     assert outer and outer[0].outcome == "exhausted"
+    # The Timeline names the lane by its task.
+    assert outer[0].attrs["task_ref"] == "T-1"
     iters = sorted(
         (s for s in spans if s.kind == "loop_iter" and s.loop_id == row.id),
         key=lambda s: s.attempt or 0,

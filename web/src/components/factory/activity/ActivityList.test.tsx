@@ -147,6 +147,11 @@ describe("activity model", () => {
     expect(kindGroup("dispatch")).toBe("dispatch");
     expect(kindGroup("preview.reported")).toBe("previews");
     expect(kindGroup("something.new")).toBeNull();
+    expect(kindGroup("chat.posted")).toBe("chat");
+    expect(kindGroup("proposal.applied")).toBe("proposals");
+    expect(kindGroup("version.changed")).toBe("proposals");
+    expect(kindGroup("people.invited")).toBe("people");
+    expect(kindGroup("base.moved")).toBe("previews");
   });
 });
 

@@ -219,6 +219,40 @@ async def test_threads_list_responders_and_unread_counts(env: RoomEnv) -> None:
     assert {t["key"]: t["unread"] for t in again.json()["data"]}["factory"] == 0
 
 
+async def test_threads_carry_the_newest_unread_mention_of_the_reader(env: RoomEnv) -> None:
+    # People are mentioned by their user id (an email on real servers; plain names here).
+    store, fid = env.cockpit.store, env.cockpit.fid
+
+    def post(thread: str, body: str, mentions: list[str], author: str = "alice") -> None:
+        store.append_chat(
+            fid, thread=thread, author_kind="human", author=author, body=body, mentions=mentions
+        )
+
+    post("factory", "@carol can you look at the plan?", ["@carol"])
+    post("project:api-version", "older note for carol", ["@CAROL"])
+    post("project:api-version", "@carol env is up again", ["@carol"])
+    post("project:api-version", "one for alice", ["@alice"])
+    post("improvements", "carol's own note naming herself", ["@carol"], author="carol")
+    headers = {"X-Test-User": "carol"}
+
+    resp = await env.cockpit.client.get(f"{_chat(env)}/threads", headers=headers)
+
+    assert resp.status_code == 200, resp.text
+    threads = {t["key"]: t for t in resp.json()["data"]}
+    assert threads["factory"]["mention"]["body"] == "@carol can you look at the plan?"
+    project = threads["project:api-version"]["mention"]
+    assert project["body"] == "@carol env is up again"
+    assert threads["improvements"]["mention"] is None
+    # Reading the thread clears it.
+    await env.cockpit.client.put(
+        f"{_chat(env)}/reads",
+        json={"thread": "factory", "last_seq": threads["factory"]["last_seq"]},
+        headers=headers,
+    )
+    again = await env.cockpit.client.get(f"{_chat(env)}/threads", headers=headers)
+    assert {t["key"]: t["mention"] for t in again.json()["data"]}["factory"] is None
+
+
 async def test_messages_page_by_thread_and_seq(env: RoomEnv) -> None:
     env.busy.running.add(env.id("lead_a"))
     for i in range(5):

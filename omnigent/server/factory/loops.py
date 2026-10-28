@@ -1853,6 +1853,17 @@ _SPAN_OUTCOME: Final = {
 }
 
 
+def _task_ref_attr(deps: FactoryDeps, loop: FactoryLoop) -> dict[str, str]:
+    """``{"task_ref": "T-n"}`` for a task's loop, so its lane names the task."""
+    if not loop.task_id:
+        return {}
+    try:
+        task = deps.factory_store.get_task(loop.task_id)
+    except ValueError:
+        task = None
+    return {"task_ref": task.ref} if task is not None else {}
+
+
 def _write_spans(deps: FactoryDeps, factory_id: str, change: Change) -> None:
     loop = change.loop
     common = {
@@ -1877,7 +1888,12 @@ def _write_spans(deps: FactoryDeps, factory_id: str, change: Change) -> None:
         outcome=outcome or ("open" if reopen else None),
         force=bool(outcome),
         reopen=reopen,
-        attrs={"loop": loop.kind, "subject": loop.subject, "state": loop.state},
+        attrs={
+            "loop": loop.kind,
+            "subject": loop.subject,
+            "state": loop.state,
+            **_task_ref_attr(deps, loop),
+        },
         ctx=ctx,
         **common,
     )

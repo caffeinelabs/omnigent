@@ -932,6 +932,13 @@ export interface ThreadView {
   last_at: number | null;
   messages: number;
   unread: number;
+  /** The newest unread message that @mentions the reader. */
+  mention?: ThreadMentionView | null;
+}
+
+export interface ThreadMentionView {
+  seq: number;
+  body: string;
 }
 
 export interface ExpectedEffectView {
@@ -1140,6 +1147,8 @@ export interface DefinitionView {
   parent_version: number | null;
   hash: string;
   created_by: string;
+  /** The member's title when `created_by` is an agent's session id. */
+  created_by_title?: string | null;
   created_via: DefinitionSource;
   proposal_id: string | null;
   proposal_ref: string | null;
@@ -1873,6 +1882,8 @@ export interface IssueFilters {
   class?: IssueClass;
   status?: IssueStatus[];
   project?: string;
+  /** `me`: only issues for the viewer or a role they hold. */
+  assigned?: "me" | "all";
   limit?: number;
 }
 
@@ -1945,6 +1956,7 @@ export async function fetchFactoryIssues(
   if (filters.class) params.set("class", filters.class);
   if (filters.status?.length) params.set("status", filters.status.join(","));
   if (filters.project) params.set("project", filters.project);
+  if (filters.assigned) params.set("assigned", filters.assigned);
   params.set("limit", String(filters.limit ?? 200));
   return readJson(
     await authenticatedFetch(`/v1/factory/factories/${enc(factoryId)}/issues?${params}`, {
@@ -2419,6 +2431,8 @@ export interface VersionsResponse {
 export interface BundleMemberView {
   session_id: string;
   title: string;
+  /** The agent's name, e.g. `factory-pl` (agent ids are opaque). */
+  bundle?: string | null;
   role: string | null;
   project: string | null;
   /** `<agent id>/<sha12>` the member was launched with. */

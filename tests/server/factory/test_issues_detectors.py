@@ -959,3 +959,18 @@ def test_every_issue_write_route_requires_human_origin() -> None:
     for route in writes:
         calls = [dep.call for dep in route.dependant.dependencies]
         assert require_human_origin in calls, route.path
+
+
+async def test_new_issues_carry_the_factory_definition_version(cockpit: Cockpit) -> None:
+    from omnigent.server.factory.telemetry import spans
+
+    spans.reset()
+    row = await _incident(cockpit)
+    # The first row resolved (and seeded) the definition, so it is stamped from the start.
+    assert row.def_version == 1
+    resp = await cockpit.post(
+        _url(cockpit), {"summary": "the preview is stale", "project": "api-version"}, user="vic"
+    )
+    assert resp.status_code in (200, 201), resp.text
+    reported = cockpit.store.get_issue(resp.json()["issue"]["id"])
+    assert reported is not None and reported.def_version == 1

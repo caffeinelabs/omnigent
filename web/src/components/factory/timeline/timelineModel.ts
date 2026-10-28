@@ -245,6 +245,7 @@ export function buildTimeline(
       loopKinds.set(norm(span.loop_id), kind);
       const pr = span.pr_id ? prs.get(norm(span.pr_id)) : undefined;
       const taskRef =
+        str(span.attrs?.task_ref) ??
         snapshot.prs.find((p) => span.task_id && norm(p.task_id) === norm(span.task_id))
           ?.task_ref ??
         /\bT-\d+\b/.exec(span.name)?.[0] ??

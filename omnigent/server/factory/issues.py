@@ -38,6 +38,7 @@ from omnigent.server.factory.control import (
     require,
     same_id,
 )
+from omnigent.server.factory.telemetry import spans
 from omnigent.stores.factory_store import norm_id
 
 _logger = logging.getLogger(__name__)
@@ -171,6 +172,8 @@ async def raise_issue(
             fields["category"] = category
         if before is None and assignee is not None:
             fields["assignee"] = assignee
+        if before is None:
+            fields.update(await asyncio.to_thread(spans.stamps, deps, factory_id))
         issue, created = await asyncio.to_thread(
             lambda: deps.factory_store.upsert_issue(
                 factory_id,
@@ -589,6 +592,7 @@ async def report(
             project_slug=project or None,
             body=body,
             evidence={"reported_by": user_id or by},
+            **spans.stamps(deps, root.id),
         )
     )
     await _emit(

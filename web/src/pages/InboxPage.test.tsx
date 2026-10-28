@@ -23,7 +23,7 @@ import * as sessionsApi from "@/lib/sessionsApi";
 import type * as identity from "@/lib/identity";
 import type { CommentInbox } from "@/hooks/useCommentInbox";
 import { inboxDecisionItems } from "@/components/factory/decisions/__fixtures__/decisionFixtures";
-import { roomProposals } from "@/components/factory/room/__fixtures__/roomFixtures";
+import { roomIssues, roomProposals } from "@/components/factory/room/__fixtures__/roomFixtures";
 import { round3Snapshot } from "@/components/factory/shell/__fixtures__/shellFixtures";
 import { FALLBACK_SERVER_INFO } from "@/lib/capabilities";
 import { CapabilitiesProvider } from "@/lib/CapabilitiesContext";
@@ -505,6 +505,32 @@ describe("InboxPage factory decisions", () => {
     expect(within(atlas).getByTestId("decision-card-D-3")).toBeInTheDocument();
     expect(within(atlas).queryByTestId("decision-card-D-2")).toBeNull();
     expect(assigned.compareDocumentPosition(atlas) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("lists incidents assigned to me across factories under Assigned to you", async () => {
+    const incident = roomIssues().find((i) => i.class === "incident")!;
+    const fid = "f4f4ba9c77725331b12f0fa7072dc4d3";
+    authenticatedFetch.mockImplementation(async (path: string) => {
+      if (path.startsWith("/v1/factory/decisions?status=open")) return json({ data: [], count: 0 });
+      if (path === "/v1/factory/factories") {
+        return json({ data: [{ id: fid, name: "Atlas factory" }] });
+      }
+      if (path.startsWith(`/v1/factory/factories/${fid}/issues?`)) {
+        expect(path).toContain("assigned=me");
+        expect(path).toContain("class=incident");
+        return json({ data: [incident], count: 1, mine: [incident.id] });
+      }
+      return json({ error: { message: `unexpected ${path}` } }, 404);
+    });
+    renderPage({ factory: true });
+    const assigned = await screen.findByTestId("inbox-assigned-to-you");
+    const row = await within(assigned).findByTestId(`inbox-incident-${incident.ref}`);
+    expect(row).toHaveTextContent(incident.summary);
+    expect(row).toHaveTextContent("Atlas factory");
+    expect(row).toHaveAttribute(
+      "href",
+      `/factory/${fid}/alerts/${incident.ref!.replace("INC-", "")}`,
+    );
   });
 
   it("draws an assigned proposal as its card, whose Edit & apply never answers", async () => {

@@ -609,14 +609,19 @@ Durable facts every metric builds on (`omnigent/server/factory/telemetry/`):
   sha, the `OMNIGENT_FACTORY_*` knobs with secrets redacted), deduped by
   content hash. Members carry `omnigent.factory.version` and
   `omnigent.factory.bundle=<agent_id>/<sha12>` from factory start (the root
-  lead), spawn, restart (cockpit or peer) and relaunch.
+  lead), spawn, restart (cockpit or peer) and relaunch. A new version that
+  replaces an older one is announced in every factory as `version.changed`
+  (with the bundles that changed). The Caffeine image build bakes
+  `OMNIGENT_IMAGE_TAG=staging-<sha7>` and `OMNIGENT_SERVER_SHA` in.
 - **Spans** (`factory_spans`, never pruned, idempotent on `dedupe_key`). An
   event-log recorder writes `project`, `stage`, `ready_wait`, `decision`,
   `task`, `env`, `preview`, `demo`, `incident`, `intervention` and `proposal`
   spans; every GitHub refresh writes `pr`, one `pr_round` per head and one
   `gate` per head and gate with `attrs.first_pass`; the supervisor puts a
   sub-agent's cost on its `task` span. Spans carry the version id and the
-  root's `def_version`. Only a sha seen as the PR's head (`headRefOid`, a
+  root's `def_version` (resolving the definition first, so a new factory's
+  rows are stamped from the start); new projects and issues are stamped the
+  same way. Only a sha seen as the PR's head (`headRefOid`, a
   `gate.changed` event) opens a round; marker shas other than 7-40 hex are
   ignored, and a verdict on a sha without a round adds nothing.
 - **Cost ledger** (`factory_cost_daily`). Every turn's display cost and
@@ -762,7 +767,9 @@ evidence and never run.
   Rules, Definition (versions, diff, Revert to vN, bundle drift from
   `GET …/bundles` with Relaunch) and Findings ("Is this right?" calibration,
   Propose change). Code proposals show "Tier 2: off" with the missing
-  prerequisite and **Copy as issue**. `/improvements/:ref` is a change's page.
+  prerequisite, **Copy as issue** and **Dismiss** (owners; `POST …/reject`
+  rejects a recorded code change that has no decision). `/improvements/:ref`
+  is a change's page.
   Edit applies the edited change as the owner's own trial `C-n` and rejects
   the original with a note.
 - **Propose change** (findings, Insights tiles, incidents): owners apply it

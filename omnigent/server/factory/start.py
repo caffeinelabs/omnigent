@@ -79,7 +79,7 @@ from omnigent.server.factory.membership import (
     is_top_level,
     load_session_spec,
 )
-from omnigent.server.factory.telemetry import versions
+from omnigent.server.factory.telemetry import spans, versions
 from omnigent.server.routes._auth_helpers import get_session_owner_id
 from omnigent.stores.factory_store import norm_id
 
@@ -369,6 +369,30 @@ def _loc(loc: Sequence[Any]) -> str:
         else:
             out += f".{part}" if out else str(part)
     return out or "body"
+
+
+def _apply_modes(deps: FactoryDeps, factory_id: str, body: StartIn, by: str) -> None:
+    """
+    Make the start's autonomy and engine mode the definition's (synchronous).
+
+    The first resolve seeds them from the root labels; a definition seeded
+    earlier (e.g. by a supervisor tick after lazy enrolment) gets a new version.
+    """
+    from omnigent.server.factory import definition
+
+    resolved = definition.definition_for(deps, factory_id, fresh=True)
+    if resolved is None:
+        return
+    wanted = {
+        path: value
+        for path, value in (
+            ("engine.mode", body.engine_mode),
+            ("autonomy.projects", body.autonomy),
+        )
+        if value and resolved.get(path) != value
+    }
+    if wanted:
+        definition.set_values(deps, factory_id, wanted, created_by=by)
 
 
 def _mode_labels(body: StartIn) -> dict[str, str]:
@@ -865,12 +889,16 @@ async def start_factory(
             },
         )
         root = await control.get_conv(deps, root.id) or root
+        if mode_labels:
+            await asyncio.to_thread(_apply_modes, deps, root.id, body, user_id or by)
+            root = await control.get_conv(deps, root.id) or root
         owner = await asyncio.to_thread(get_session_owner_id, root.id, deps.permission_store)
         folder = await _file_root(deps, root, owner or user_id, body.name)
         held = [p.slug for p in body.projects if p.depends_on]
+        stamps = await asyncio.to_thread(spans.stamps, deps, root.id)
         rows = [
             await asyncio.to_thread(
-                store.upsert_project, root.id, p.slug, **_start_fields(p, by, defaults)
+                store.upsert_project, root.id, p.slug, **_start_fields(p, by, defaults), **stamps
             )
             for p in body.projects
         ]
@@ -881,6 +909,7 @@ async def start_factory(
                     root.id,
                     INTEGRATION_ENV_SLUG,
                     **_integration_fields(defaults, by),
+                    **stamps,
                 )
             )
         mail_id = new_mail_id()
