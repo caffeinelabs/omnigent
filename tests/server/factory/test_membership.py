@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import Any, cast
+
 import pytest
 from sqlalchemy import update
 
@@ -14,6 +17,7 @@ from omnigent.server.factory.membership import (
     membership_of,
     resolve_factory_id,
     resolve_target,
+    sub_agent_role,
 )
 from tests.server.factory.conftest import FactoryWorld
 
@@ -85,6 +89,24 @@ def test_sub_agents_inherit_membership_from_their_root(world: FactoryWorld) -> N
 def test_sub_agent_role_comes_from_its_spec_with_ic_default(world: FactoryWorld) -> None:
     assert membership_of(world.sessions["reviewer"], world.deps).role == "reviewer"
     assert membership_of(world.sessions["helper"], world.deps).role == "ic"
+
+
+@pytest.mark.parametrize(
+    ("spec_role", "role"),
+    [
+        (F.ROLE_LEAD, F.ROLE_IC),
+        (F.ROLE_PROJECT_LEAD, F.ROLE_IC),
+        (F.ROLE_REVIEWER, F.ROLE_REVIEWER),
+        (F.ROLE_PLANNER, F.ROLE_PLANNER),
+        (None, F.ROLE_IC),
+    ],
+)
+def test_a_sub_agent_never_takes_a_top_level_role(spec_role: str | None, role: str) -> None:
+    # A child running the factory-lead or factory-pl spec is still an ic.
+    config = {} if spec_role is None else {"factory_role": spec_role}
+    spec = SimpleNamespace(executor=SimpleNamespace(config=config))
+
+    assert sub_agent_role(cast("Any", spec)) == role
 
 
 def test_top_level_membership_reads_labels(world: FactoryWorld) -> None:

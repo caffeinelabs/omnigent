@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 from collections.abc import Mapping
 from typing import Any, Final
 
@@ -583,9 +584,21 @@ def factory_role_from_spec(spec: Any) -> str | None:
     return role if isinstance(role, str) and role in ROLES else None
 
 
+def _fold_label_key(key: str) -> str:
+    """Fold *key* the way a case- and accent-insensitive collation compares it."""
+    decomposed = unicodedata.normalize("NFKD", key)
+    # Drop combining marks (accents, the dot of "İ") and invisible format characters.
+    kept = "".join(ch for ch in decomposed if unicodedata.category(ch) not in ("Mn", "Cf"))
+    return kept.strip().casefold()
+
+
 def is_factory_label(key: str) -> bool:
     """
-    Whether *key* names an ``omnigent.factory.*`` label, ignoring case and surrounding space.
+    Whether *key* names an ``omnigent.factory.*`` label, as any store collation could.
+
+    Matching ignores case, surrounding space, compatibility forms (fullwidth
+    letters), accents and zero-width characters, so a key that a MySQL
+    ``*_ai_ci`` collation equates with a factory label is one too.
 
     Only the server, a factory owner and ``sys_factory_*`` write these, so the
     channels an agent controls (a runner's create, spec label seeds, policy
@@ -594,7 +607,7 @@ def is_factory_label(key: str) -> bool:
     :param key: A label key, e.g. ``"omnigent.factory.role"`` or ``" Omnigent.Factory.x"``.
     :returns: ``True`` for both examples, ``False`` for ``"team"``.
     """
-    return key.strip().lower().startswith(LABEL_PREFIX)
+    return _fold_label_key(key).startswith(LABEL_PREFIX)
 
 
 def without_factory_labels(labels: Mapping[str, str]) -> dict[str, str]:

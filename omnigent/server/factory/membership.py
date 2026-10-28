@@ -173,8 +173,20 @@ def load_session_spec(conv: Conversation, deps: FactoryDeps) -> AgentSpec | None
 
 
 def sub_agent_role(spec: AgentSpec | None) -> str:
-    """:returns: The sub-agent's spec role, ``ic`` when it declares none."""
-    return factory_role_from_spec(spec) or ROLE_IC
+    """
+    Return a sub-agent's factory role: its spec's, but never a top-level one.
+
+    ``lead`` and ``project_lead`` belong to top-level members, whose labels a
+    spawn sets. A child that runs a lead's or a PL's spec (a factory member can
+    create one with ``sys_session_create(agent_id=…)``) is an ``ic``, so it
+    never acts with its parent's or a lead's powers.
+
+    :param spec: The sub-agent's resolved spec, or ``None``.
+    :returns: e.g. ``"reviewer"``; ``"ic"`` when the spec declares no role or a
+        top-level one.
+    """
+    role = factory_role_from_spec(spec)
+    return ROLE_IC if role is None or role in TOP_LEVEL_ROLES else role
 
 
 def resolve_role(conv: Conversation, deps: FactoryDeps) -> str | None:

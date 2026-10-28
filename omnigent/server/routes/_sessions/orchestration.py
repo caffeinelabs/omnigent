@@ -8665,6 +8665,10 @@ async def _create_session_from_existing_agent(
             permission_store,
             conversation_store,
         )
+        # A factory member's child never runs a bundle someone uploaded (Tier 0).
+        from omnigent.server.factory.custom_bundle import deny_factory_child_agent
+
+        await deny_factory_child_agent(body.parent_session_id, agent, conversation_store)
 
     # Reject an undeclared sub-agent before persisting the row. Downstream
     # spec swaps warn and keep the parent on a miss, which is right for a

@@ -470,20 +470,40 @@ def test_a_runner_names_the_agent_of_a_member_it_creates(world: World) -> None:
     assert _nothing_created(world)
 
 
-@pytest.mark.parametrize(
+_KEY_VARIANTS = pytest.mark.parametrize(
     "key",
     [
         "Omnigent.factory.engine_mode",
         " omnigent.factory.engine_mode",
         "OMNIGENT.FACTORY.ROLE",
+        # Keys a MySQL *_ai_ci collation compares equal to a factory label.
+        "omnigent.factor\u00fd.engine_mode",
+        "omn\u0130gent.factory.role",
+        "omnigent.factory\u200b.role",
+        "\uff4fmnigent.factory.role",
     ],
+    ids=["case", "space", "upper", "accent", "dotted-i", "zero-width", "fullwidth"],
 )
+
+
+@_KEY_VARIANTS
 def test_a_runner_cannot_smuggle_a_factory_label_in_another_case(world: World, key: str) -> None:
     resp = _create(world, _spawn_labels(world, **{key: "autonomous"}), _runner())
 
     assert resp.status_code == 422, resp.text
     assert _code(resp) == "factory_label_not_allowed"
     assert _nothing_created(world)
+
+
+@_KEY_VARIANTS
+def test_a_runner_cannot_patch_a_factory_label_variant(world: World, key: str) -> None:
+    resp = world.client().patch(
+        f"/v1/sessions/{world.pl}", json={"labels": {key: F.ROLE_LEAD}}, headers=_runner()
+    )
+
+    assert resp.status_code == 403, resp.text
+    conv = world.conversations.get_conversation(world.pl)
+    assert conv is not None and key not in conv.labels
 
 
 def test_an_uploaded_spec_cannot_seed_factory_labels(world: World) -> None:
