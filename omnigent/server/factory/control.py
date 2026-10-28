@@ -100,7 +100,10 @@ VERDICTS: Final = frozenset({VERDICT_APPROVED, VERDICT_CHANGES})
 _CONTROL_KIND = "request"
 _NOTICE_KIND = "info"
 _ACKED_KINDS = frozenset(
-    {f"control.{a}" for a in CONTROL_ACTIONS if a != ACTION_CADENCE} | {"control.charter_update"}
+    {f"control.{a}" for a in CONTROL_ACTIONS if a != ACTION_CADENCE}
+    | {"control.charter_update"}
+    # Interventions whose PL text asks for a reply (see interventions.ACKED_KINDS).
+    | {"control.redispatch", "control.reassign", "control.rerun_demo", "control.rereview"}
 )
 
 
@@ -909,6 +912,19 @@ async def apply_control(
     :raises CockpitError: On an invalid action, target or option.
     :raises OmnigentError: 401/403/404 from the access checks.
     """
+    from omnigent.server.factory import interventions
+
+    if interventions.handles(action):
+        # Levers on any agent (message, interrupt, redispatch, …) are planned there.
+        return await interventions.apply_intervention(
+            app_state,
+            factory_id,
+            user_id=user_id,
+            action=action,
+            target=target,
+            note=note,
+            options=options,
+        )
     plan = await plan_control(
         app_state,
         factory_id,

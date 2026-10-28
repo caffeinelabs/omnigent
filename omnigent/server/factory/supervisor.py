@@ -63,6 +63,7 @@ from omnigent.factory import (
 )
 from omnigent.server.factory import (
     decision_routing,
+    detectors,
     events,
     previews,
     quiet_beats,
@@ -389,6 +390,7 @@ class FactorySupervisor:
         await self._escalate_blocked(store, now)
         await self._park_idle_previews(members, now)
         await decision_routing.escalate_decisions(self._app_state, now)
+        await detectors.on_tick(self._app_state, members, children, now)
         await self._report_skips(now)
         self._forget_departed({m.id for m in members}, {c.id for c in children})
         status.set_status("supervisor", last_tick_at=int(now), ok=True, error=None)
@@ -905,6 +907,10 @@ class FactorySupervisor:
             )
 
     # ── housekeeping ────────────────────────────────────────────
+
+    def child_status(self, session_id: str) -> str | None:
+        """:returns: The status the last tick saw for a sub-agent, if it tracks one."""
+        return self._child_status.get(session_id)
 
     def _forget_departed(self, member_ids: set[str], child_ids: set[str]) -> None:
         for state in (

@@ -56,12 +56,14 @@ from omnigent.factory import (
     STATE_ACTIVE,
     STATES,
 )
-from omnigent.server.factory import schemas, status
+from omnigent.server.factory import activity_now, detectors, schemas, status
+from omnigent.server.factory.activity_now import factory_usd_per_h
 from omnigent.server.factory.base import base_view
 from omnigent.server.factory.charter import normalize_charter
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.envelope import display_title
 from omnigent.server.factory.gating import unmet_dependencies
+from omnigent.server.factory.issues import counts_open
 from omnigent.server.factory.launch import launch_drift
 from omnigent.server.factory.membership import factory_members, load_session_spec
 from omnigent.server.factory.notify import parse_iso
@@ -300,6 +302,7 @@ class RawSnapshot:
     demo_owner: dict[str, str] = field(default_factory=dict)
     titles: dict[str, str] = field(default_factory=dict)
     built_at: float = 0.0
+    incident_projects: list[str | None] = field(default_factory=list)
 
 
 @dataclass
@@ -320,6 +323,8 @@ class _Loaded:
     drift: dict[str, dict[str, Any] | None]
     costs: dict[str, float | None]
     proposals_pending: int = 0
+    issues: list[Any] = field(default_factory=list)
+    now: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 def _harness(
@@ -385,6 +390,7 @@ def _load(deps: FactoryDeps, factory_id: str, now: float) -> _Loaded:
         proposals_pending=len(
             fstore.list_proposals(factory_id, status=["pending", "awaiting_cosign"], limit=500)
         ),
+        issues=fstore.list_issues(factory_id, class_="incident", statuses=["open", "acked"]),
     )
 
 
@@ -445,6 +451,7 @@ def _member_view(
         "cost_usd": loaded.costs.get(conv.id) if is_top else _own_cost(conv),
         "launch_drift": _lenient(schemas.LaunchDriftView, drift) if drift else None,
         "url": session_url(conv.id),
+        "now": _lenient(schemas.NowState, live) if (live := loaded.now.get(conv.id)) else None,
     }
 
 
@@ -824,6 +831,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
     now = time.time()
     factory_id = root.id
     loaded = await asyncio.to_thread(_load, deps, factory_id, now)
+    loaded.now = activity_now.now_states(factory_id)
     roster = await build_roster(factory_id, loaded.members, deps, app_state)
     rows = {r["session_id"]: r for r in roster["members"]}
     child_rows = {c["session_id"]: c for r in roster["members"] for c in r.get("children", [])}
@@ -940,9 +948,15 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
         "hidden_projects": 0,
         "totals": {},
         "server_time": int(now),
-        "counts": {"proposals_pending": loaded.proposals_pending},
+        "counts": {
+            "proposals_pending": loaded.proposals_pending,
+            "issues_open": counts_open(loaded.issues, frozenset()),
+        },
     }
-    body["totals"] = _totals(body, cost)
+    rate = detectors.spend_rate(factory_id)
+    body["totals"] = _totals(
+        body, cost, rate if rate is not None else factory_usd_per_h(factory_id)
+    )
     validated = schemas.FactorySnapshot.model_validate(body).model_dump(mode="json")
     return RawSnapshot(
         factory_id=bare_id(factory_id),
@@ -952,10 +966,13 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
         demo_owner={d.id: d.session_id for d in loaded.demos},
         titles=titles,
         built_at=time.monotonic(),
+        incident_projects=[i.project_slug for i in loaded.issues],
     )
 
 
-def _totals(body: Mapping[str, Any], cost: float | None) -> dict[str, Any]:
+def _totals(
+    body: Mapping[str, Any], cost: float | None, usd_per_h: float | None = None
+) -> dict[str, Any]:
     prs = body["prs"]
     return {
         "cost_usd": cost,
@@ -963,6 +980,7 @@ def _totals(body: Mapping[str, Any], cost: float | None) -> dict[str, Any]:
         "prs_ready": sum(1 for p in prs if p["state"] == "open" and p["ready"]),
         "prs_merged": sum(1 for p in prs if p["state"] == "merged"),
         "decisions_open": sum(1 for d in body["decisions"] if d["status"] == "open"),
+        "usd_per_h": usd_per_h,
     }
 
 
@@ -1076,10 +1094,16 @@ def filter_snapshot(raw: RawSnapshot, readable: set[str]) -> dict[str, Any]:
     base = factory.get("base")
     if base is not None and base.get("env_project") in hidden:
         base["env"] = None
+    rate = body["totals"].get("usd_per_h")
     if len(readable) < len(raw.top_level_of):
         member_costs = [m["cost_usd"] for m in body["members"] if m["is_top_level"]]
         factory["cost_usd"] = _sum_costs(member_costs)
-    body["totals"] = _totals(body, factory["cost_usd"])
+        rate = None
+    body["totals"] = _totals(body, factory["cost_usd"], rate)
+    body["counts"] = {
+        **(body.get("counts") or {}),
+        "issues_open": sum(1 for p in raw.incident_projects if not p or p not in hidden),
+    }
     return body
 
 

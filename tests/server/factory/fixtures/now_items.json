@@ -1,0 +1,273 @@
+{
+ "_source": "Claude Code transcript records and Codex app-server items run through omnigent.harnesses.claude_native.bridge._transcript_items_from_entry and omnigent.harnesses.codex_native.forwarder._codex_tool_call_from_item; offsets are seconds from the first item.",
+ "claude_native": [
+  {
+   "type": "message",
+   "response_id": "resp_claude_201743fa334cd761dd488adcbbf42ce6",
+   "offset_s": 0,
+   "data": {
+    "role": "user",
+    "content": [
+     {
+      "type": "input_text",
+      "text": "[Factory message \u00b7 from \"PL \u00b7 db-version\"] Implement T-4 route: GET /v1/db/version."
+     }
+    ]
+   }
+  },
+  {
+   "type": "reasoning",
+   "response_id": "resp_claude_2f8fe63a6224321de5d0a24cf30067d3",
+   "offset_s": 5,
+   "data": {
+    "agent": "ic",
+    "summary": [],
+    "content": [
+     {
+      "type": "reasoning_text",
+      "text": "Read the route file first, then run the API tests."
+     }
+    ]
+   }
+  },
+  {
+   "type": "function_call",
+   "response_id": "resp_claude_2f8fe63a6224321de5d0a24cf30067d3",
+   "offset_s": 5,
+   "data": {
+    "agent": "ic",
+    "name": "Read",
+    "arguments": "{\"file_path\":\"/workspace/app/src/routes/dbVersion.ts\"}",
+    "call_id": "toolu_read"
+   }
+  },
+  {
+   "type": "function_call_output",
+   "response_id": "resp_claude_2f8fe63a6224321de5d0a24cf30067d3",
+   "offset_s": 7,
+   "data": {
+    "call_id": "toolu_read",
+    "output": "export const dbVersion = ..."
+   }
+  },
+  {
+   "type": "function_call",
+   "response_id": "resp_claude_2f8fe63a6224321de5d0a24cf30067d3",
+   "offset_s": 27,
+   "data": {
+    "agent": "ic",
+    "name": "Edit",
+    "arguments": "{\"file_path\":\"/workspace/app/src/routes/dbVersion.ts\",\"old_string\":\"a\",\"new_string\":\"b\"}",
+    "call_id": "toolu_edit"
+   }
+  },
+  {
+   "type": "function_call_output",
+   "response_id": "resp_claude_2f8fe63a6224321de5d0a24cf30067d3",
+   "offset_s": 28,
+   "data": {
+    "call_id": "toolu_edit",
+    "output": "The file has been updated."
+   }
+  },
+  {
+   "type": "function_call",
+   "response_id": "resp_claude_2f8fe63a6224321de5d0a24cf30067d3",
+   "offset_s": 88,
+   "data": {
+    "agent": "ic",
+    "name": "Bash",
+    "arguments": "{\"command\":\"pnpm -F caffeine-api test\",\"description\":\"Run API tests\",\"timeout\":600000}",
+    "call_id": "toolu_test0"
+   }
+  },
+  {
+   "type": "function_call_output",
+   "response_id": "resp_claude_2f8fe63a6224321de5d0a24cf30067d3",
+   "offset_s": 129,
+   "data": {
+    "call_id": "toolu_test0",
+    "output": "Exit code 1\n FAIL  src/routes/dbVersion.test.ts\n  error: relation \"knex_migrations\" does not exist"
+   }
+  },
+  {
+   "type": "function_call",
+   "response_id": "resp_claude_2f8fe63a6224321de5d0a24cf30067d3",
+   "offset_s": 189,
+   "data": {
+    "agent": "ic",
+    "name": "Bash",
+    "arguments": "{\"command\":\"pnpm -F caffeine-api test\",\"description\":\"Re-run the API tests\",\"timeout\":600000}",
+    "call_id": "toolu_test1"
+   }
+  },
+  {
+   "type": "function_call_output",
+   "response_id": "resp_claude_2f8fe63a6224321de5d0a24cf30067d3",
+   "offset_s": 230,
+   "data": {
+    "call_id": "toolu_test1",
+    "output": "Exit code 1\n FAIL  src/routes/dbVersion.test.ts\n  error: relation \"knex_migrations\" does not exist"
+   }
+  },
+  {
+   "type": "function_call",
+   "response_id": "resp_claude_2f8fe63a6224321de5d0a24cf30067d3",
+   "offset_s": 290,
+   "data": {
+    "agent": "ic",
+    "name": "Bash",
+    "arguments": "{\"command\":\"pnpm -F caffeine-api test\",\"description\":\"Run tests again\",\"timeout\":600000}",
+    "call_id": "toolu_test2"
+   }
+  },
+  {
+   "type": "function_call_output",
+   "response_id": "resp_claude_2f8fe63a6224321de5d0a24cf30067d3",
+   "offset_s": 331,
+   "data": {
+    "call_id": "toolu_test2",
+    "output": "Exit code 1\n FAIL  src/routes/dbVersion.test.ts\n  error: relation \"knex_migrations\" does not exist"
+   }
+  },
+  {
+   "type": "function_call",
+   "response_id": "resp_claude_2f8fe63a6224321de5d0a24cf30067d3",
+   "offset_s": 391,
+   "data": {
+    "agent": "ic",
+    "name": "Bash",
+    "arguments": "{\"command\":\"pnpm -F caffeine-api test\",\"description\":\"Try the tests\",\"timeout\":600000}",
+    "call_id": "toolu_test3"
+   }
+  },
+  {
+   "type": "function_call_output",
+   "response_id": "resp_claude_2f8fe63a6224321de5d0a24cf30067d3",
+   "offset_s": 432,
+   "data": {
+    "call_id": "toolu_test3",
+    "output": "Exit code 1\n FAIL  src/routes/dbVersion.test.ts\n  error: relation \"knex_migrations\" does not exist"
+   }
+  },
+  {
+   "type": "function_call",
+   "response_id": "resp_claude_2f8fe63a6224321de5d0a24cf30067d3",
+   "offset_s": 492,
+   "data": {
+    "agent": "ic",
+    "name": "Bash",
+    "arguments": "{\"command\":\"pnpm -F caffeine-api test\",\"description\":\"Run API tests\",\"timeout\":600000}",
+    "call_id": "toolu_test4"
+   }
+  },
+  {
+   "type": "function_call_output",
+   "response_id": "resp_claude_2f8fe63a6224321de5d0a24cf30067d3",
+   "offset_s": 533,
+   "data": {
+    "call_id": "toolu_test4",
+    "output": "Exit code 1\n FAIL  src/routes/dbVersion.test.ts\n  error: relation \"knex_migrations\" does not exist"
+   }
+  },
+  {
+   "type": "message",
+   "response_id": "resp_claude_2f8fe63a6224321de5d0a24cf30067d3",
+   "offset_s": 563,
+   "data": {
+    "role": "assistant",
+    "agent": "ic",
+    "content": [
+     {
+      "type": "output_text",
+      "text": "The test database lacks knex_migrations; seeding it before the next run."
+     }
+    ]
+   }
+  },
+  {
+   "type": "function_call",
+   "response_id": "resp_claude_2f8fe63a6224321de5d0a24cf30067d3",
+   "offset_s": 563,
+   "data": {
+    "agent": "ic",
+    "name": "Bash",
+    "arguments": "{\"command\":\"NPM_TOKEN=notarealtoken123 pnpm -F caffeine-api db:seed && pnpm -F caffeine-api test --reporter=dot\",\"description\":\"Seed and test\"}",
+    "call_id": "toolu_seed"
+   }
+  }
+ ],
+ "codex_native": [
+  {
+   "type": "function_call",
+   "response_id": "turn_c",
+   "offset_s": 0,
+   "data": {
+    "agent": "codex",
+    "name": "shell",
+    "arguments": "{\"command\":\"/bin/zsh -lc 'git status --short'\",\"cwd\":\"/workspace/app\"}",
+    "call_id": "call_c1"
+   }
+  },
+  {
+   "type": "function_call_output",
+   "response_id": "turn_c",
+   "offset_s": 5,
+   "data": {
+    "call_id": "call_c1",
+    "output": " M src/settings/Versions.tsx\n"
+   }
+  },
+  {
+   "type": "function_call",
+   "response_id": "turn_c",
+   "offset_s": 40,
+   "data": {
+    "agent": "codex",
+    "name": "apply_patch",
+    "arguments": "{\"changes\":[{\"path\":\"/workspace/app/src/settings/Versions.tsx\",\"kind\":{\"type\":\"update\"},\"diff\":\"@@ -1 +1 @@\\n-a\\n+b\\n\"}]}",
+    "call_id": "call_c2"
+   }
+  },
+  {
+   "type": "function_call_output",
+   "response_id": "turn_c",
+   "offset_s": 45,
+   "data": {
+    "call_id": "call_c2",
+    "output": "update /workspace/app/src/settings/Versions.tsx"
+   }
+  },
+  {
+   "type": "function_call",
+   "response_id": "turn_c",
+   "offset_s": 70,
+   "data": {
+    "agent": "codex",
+    "name": "shell",
+    "arguments": "{\"command\":\"/bin/zsh -lc 'pnpm -F web test -- Versions'\",\"cwd\":\"/workspace/app\"}",
+    "call_id": "call_c3"
+   }
+  },
+  {
+   "type": "function_call_output",
+   "response_id": "turn_c",
+   "offset_s": 75,
+   "data": {
+    "call_id": "call_c3",
+    "output": "FAIL Versions.test.tsx\n  expected '1.2.3'\n[exit code: 1]"
+   }
+  },
+  {
+   "type": "function_call",
+   "response_id": "turn_c",
+   "offset_s": 130,
+   "data": {
+    "agent": "codex",
+    "name": "shell",
+    "arguments": "{\"command\":\"/bin/zsh -lc 'pnpm -F web lint'\",\"cwd\":\"/workspace/app\"}",
+    "call_id": "call_c4"
+   }
+  }
+ ]
+}
