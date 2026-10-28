@@ -2255,6 +2255,17 @@ class SqlAlchemyFactoryStore(FactoryStore):
             ).scalar_one_or_none()
             return _issue(row) if row is not None else None
 
+    def get_issue_by_dedupe(self, factory_id: str, dedupe_key: str) -> FactoryIssue | None:
+        with self._session("get_factory_issue_by_dedupe") as session:
+            row = session.execute(
+                select(SqlFactoryIssue).where(
+                    SqlFactoryIssue.workspace_id == current_workspace_id(),
+                    SqlFactoryIssue.factory_id == norm_id(factory_id),
+                    SqlFactoryIssue.dedupe_key == dedupe_key,
+                )
+            ).scalar_one_or_none()
+            return _issue(row) if row is not None else None
+
     def list_issues(
         self,
         factory_id: str,

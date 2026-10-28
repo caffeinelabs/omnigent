@@ -115,6 +115,12 @@ class PresenceRegistry:
         """:returns: How many people have the cockpit open."""
         return len(self.entries(factory_id))
 
+    def anyone(self) -> bool:
+        """:returns: Whether anyone has any factory's cockpit open."""
+        with self._lock:
+            fids = [fid for fid, users in self._entries.items() if users]
+        return any(self.entries(fid) for fid in fids)
+
     def is_present(self, factory_id: str, user_id: str) -> bool:
         """:returns: Whether *user_id* has the cockpit open now."""
         return any(e.user_id == user_id for e in self.entries(factory_id))
@@ -159,6 +165,11 @@ def presence_count(factory_id: str) -> int:
     :returns: Live cockpit viewers.
     """
     return registry.count(factory_id)
+
+
+def anyone_present() -> bool:
+    """:returns: Whether any factory's cockpit is open on this server."""
+    return registry.anyone()
 
 
 def valid_location(location: str | None) -> bool:
@@ -220,6 +231,7 @@ __all__ = [
     "LAST_SEEN_WRITE_S",
     "TTL_S",
     "PresenceRegistry",
+    "anyone_present",
     "merged_entries",
     "presence_count",
     "registry",

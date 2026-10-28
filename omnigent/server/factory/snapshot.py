@@ -63,7 +63,7 @@ from omnigent.server.factory.charter import normalize_charter
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.envelope import display_title
 from omnigent.server.factory.gating import unmet_dependencies
-from omnigent.server.factory.issues import counts_open
+from omnigent.server.factory.issues import counts_open, visible_to
 from omnigent.server.factory.launch import launch_drift
 from omnigent.server.factory.membership import factory_members, load_session_spec
 from omnigent.server.factory.notify import parse_iso
@@ -293,6 +293,7 @@ class RawSnapshot:
     :param demo_owner: Demo id -> the PL session owning its files.
     :param titles: Session id -> display title.
     :param built_at: ``time.monotonic()`` of the build.
+    :param incident_scopes: ``(project, target)`` of each open or acked incident.
     """
 
     factory_id: str
@@ -302,7 +303,7 @@ class RawSnapshot:
     demo_owner: dict[str, str] = field(default_factory=dict)
     titles: dict[str, str] = field(default_factory=dict)
     built_at: float = 0.0
-    incident_projects: list[str | None] = field(default_factory=list)
+    incident_scopes: list[tuple[str | None, str]] = field(default_factory=list)
 
 
 @dataclass
@@ -966,7 +967,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
         demo_owner={d.id: d.session_id for d in loaded.demos},
         titles=titles,
         built_at=time.monotonic(),
-        incident_projects=[i.project_slug for i in loaded.issues],
+        incident_scopes=[(i.project_slug, i.target) for i in loaded.issues],
     )
 
 
@@ -1102,7 +1103,17 @@ def filter_snapshot(raw: RawSnapshot, readable: set[str]) -> dict[str, Any]:
     body["totals"] = _totals(body, factory["cost_usd"], rate)
     body["counts"] = {
         **(body.get("counts") or {}),
-        "issues_open": sum(1 for p in raw.incident_projects if not p or p not in hidden),
+        "issues_open": sum(
+            1
+            for project, target in raw.incident_scopes
+            if visible_to(
+                project,
+                target,
+                hidden=hidden,
+                top_level_of=raw.top_level_of,
+                readable=readable,
+            )
+        ),
     }
     return body
 

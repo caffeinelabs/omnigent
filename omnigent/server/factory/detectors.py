@@ -604,6 +604,7 @@ async def tick_factory(
         open_by_rule.setdefault(row.rule, []).append(row)
     for step in (
         _dead_members,
+        _repeat_cleared,
         _quiet_cleared,
         _loops_cleared,
         _spend,
@@ -720,6 +721,31 @@ def _running(conv: Conversation) -> bool:
     from omnigent.server.routes._sessions.helpers import _session_status_from_cache
 
     return _session_status_from_cache(conv.id, conv.live_status) == "running"
+
+
+async def _repeat_cleared(
+    app_state: Any,
+    _factory_deps: FactoryDeps,
+    fid: str,
+    members: Sequence[Conversation],
+    children: Sequence[Conversation],
+    now: float,
+    open_by_rule: OpenByRule,
+) -> None:
+    """
+    Resolve ``agent.repeat`` the poller can no longer clear: the agent closed,
+    or nothing re-raised it for a whole window (no one watching, a restart).
+    """
+    rows = open_by_rule.get("agent.repeat", [])
+    if not rows:
+        return
+    alive = {_member(c.id) for c in (*members, *children)}
+    window_s = threshold(fid, "repeat_window_m") * 60
+    for row in rows:
+        if row.target not in alive:
+            await clear(app_state, fid, "agent.repeat", row.target, "agent closed")
+        elif now - row.last_seen >= window_s:
+            await clear(app_state, fid, "agent.repeat", row.target, "no repeat in the window")
 
 
 async def _quiet_cleared(
@@ -971,11 +997,16 @@ async def _bus(
                 {"count": len(msgs), "sessions": [a, b]},
             )
     await _sync(app_state, fid, "bus.pingpong", pp_hits, open_by_rule, "the exchange settled")
+    # The newest message on each (from, to) leg answers every older one the other way.
+    newest: dict[tuple[str | None, str | None], int] = {}
+    for r in mail:
+        leg = (r.from_id, r.to_id)
+        newest[leg] = max(newest.get(leg, r.ts), r.ts)
     orphan_hits: dict[str, tuple[str, str | None, Any]] = {}
     for e in mail:
         if (e.data or {}).get("kind") != "request" or now - e.ts / 1000 < orphan_s:
             continue
-        answered = any(r.from_id == e.to_id and r.to_id == e.from_id and r.ts > e.ts for r in mail)
+        answered = newest.get((e.to_id, e.from_id), e.ts) > e.ts
         if not answered:
             key = f"bus:{norm_id(e.from_id or '')}>{norm_id(e.to_id or '')}"
             hours = (now - e.ts / 1000) / 3600

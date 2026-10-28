@@ -64,6 +64,7 @@ from omnigent.server.factory.membership import (
     root_conversation,
 )
 from omnigent.stores.factory_store import norm_id
+from omnigent.util.session_lifecycle import title_without_closed_marker
 
 _logger = logging.getLogger(__name__)
 
@@ -167,7 +168,9 @@ async def _owner_member(deps: FactoryDeps, conv: Conversation) -> Conversation:
 
 
 def _worker_name(conv: Conversation) -> str | None:
-    match = _WORKER_TITLE_RE.match((conv.title or "").strip())
+    # A closed worker keeps its name before the ``:closed:<id>`` suffix.
+    title = title_without_closed_marker(conv.title) or ""
+    match = _WORKER_TITLE_RE.match(title.strip())
     return match.group("name") if match else None
 
 
@@ -544,9 +547,8 @@ async def execute_intervention(app_state: Any, plan: InterventionPlan) -> Contro
     pl = plan.pl
     if action in ACKED_KINDS_ACTIONS and pl is not None:
         mail_ids[pl.id] = send_text(app_state, pl.id, control_text(plan), kind=_CONTROL_KIND)
-    elif pl is not None and not (
-        action == ACTION_MESSAGE and same_id(pl.id, target.id if target else None)
-    ):
+    elif pl is not None and not same_id(pl.id, target.id if target else None):
+        # No notice to the agent acted on itself: it would start the turn an interrupt stopped.
         notice_mail_id = send_text(app_state, pl.id, notice_text(plan), kind=_NOTICE_KIND)
     target_role = (
         await asyncio.to_thread(resolve_role, target, deps) if target is not None else None

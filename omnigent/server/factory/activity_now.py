@@ -433,6 +433,7 @@ class _Track:
     repeats: RepeatTracker | None = None
     repeat_raised: str | None = None
     repeat_count: int = 0
+    repeat_at: float = 0.0
     quiet_raised: bool = False
     role: str | None = None
     role_known: bool = False
@@ -648,11 +649,14 @@ class ActivityPoller:
         sleep: Callable[[float], Awaitable[Any]] = asyncio.sleep,
         publish: Callable[[str], None] | None = None,
         now_registry: NowRegistry | None = None,
+        anyone_watching: Callable[[], bool] | None = None,
     ) -> None:
-        from omnigent.server.factory.presence import presence_count
+        from omnigent.server.factory.presence import anyone_present, presence_count
 
         self._app_state = app_state
         self._presence = presence or presence_count
+        # With an injected per-factory count, every root is checked against it.
+        self._anyone = anyone_watching or (anyone_present if presence is None else None)
         self._clock = clock
         self._sleep = sleep
         self.registry = now_registry or registry
@@ -709,8 +713,12 @@ class ActivityPoller:
         deps = self._deps()
         if deps is None:
             return
-        roots = await asyncio.to_thread(list_factory_roots, deps.conversation_store)
         self.reads_last_tick = {}
+        if self._anyone is not None and not self._anyone():
+            # Nobody has any cockpit open: no database reads at all.
+            self.registry.evict_idle(self._clock())
+            return
+        roots = await asyncio.to_thread(list_factory_roots, deps.conversation_store)
         for root in roots:
             if self._presence(root.id) <= 0:
                 continue
@@ -803,7 +811,7 @@ class ActivityPoller:
                 factory_id, session, roles.get(sid), track, view, worst if repeating else None
             )
         for sid in [s for s in state.tracks if s not in fresh]:
-            del state.tracks[sid]
+            await self._forget(factory_id, sid, state.tracks.pop(sid))
         if set(state.states) != set(fresh):
             changed = True
         state.states = fresh
@@ -880,6 +888,20 @@ class ActivityPoller:
             and not runner_seen_is_fresh(c.runner_last_seen, now=int(now))
         }
 
+    async def _forget(self, factory_id: str, sid: str, track: _Track) -> None:
+        """A session left the poll (closed, archived, gone): resolve what it raised."""
+        from omnigent.server.factory import detectors
+
+        target = f"member:{norm_id(sid)}"
+        if track.repeat_raised is not None:
+            await detectors.clear(
+                self._app_state, factory_id, "agent.repeat", target, "agent closed"
+            )
+        if track.quiet_raised:
+            await detectors.clear(
+                self._app_state, factory_id, "agent.quiet", target, "agent closed"
+            )
+
     async def _detect(
         self,
         factory_id: str,
@@ -896,7 +918,10 @@ class ActivityPoller:
         if repeat is not None:
             key, count, arg = repeat
             first = track.repeat_raised != key
-            if first or count > track.repeat_count:
+            now = self._clock()
+            # Re-raise a still-repeating agent now and then so its last_seen stays fresh.
+            due = now - track.repeat_at >= detectors.RERAISE_S
+            if first or count > track.repeat_count or due:
                 await detectors.agent_repeat(
                     self._app_state,
                     factory_id,
@@ -908,6 +933,7 @@ class ActivityPoller:
                     count=count,
                     first=first,
                 )
+                track.repeat_at = now
             track.repeat_raised, track.repeat_count = key, count
         elif track.repeat_raised is not None:
             track.repeat_raised, track.repeat_count = None, 0

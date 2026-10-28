@@ -154,6 +154,25 @@ async def test_interrupt_works_on_a_sub_agent_through_grant_inheritance(
     )
 
 
+async def test_interrupting_a_pl_sends_it_no_notice_that_restarts_it(
+    cockpit: Cockpit, interrupts: list[str]
+) -> None:
+    pl = cockpit.world.id("pl")
+
+    resp = await _act(cockpit, "interrupt", f"member:{pl}", note="hold on")
+
+    assert resp.status_code == 202, resp.text
+    assert interrupts == [pl]
+    assert cockpit.mailer.texts_to(pl) == []
+    data = _event(resp)["data"]
+    assert data["notice_mail_id"] is None
+    assert (data["action"], data["target_role"], data["interrupted"]) == (
+        "interrupt",
+        "project_lead",
+        True,
+    )
+
+
 async def test_interventions_need_the_operator_level(
     cockpit: Cockpit, interrupts: list[str]
 ) -> None:
@@ -281,6 +300,30 @@ async def test_redispatch_without_a_task_row_binds_by_title(
     [text] = cockpit.mailer.texts_to(pl)
     assert '"task-1-r2"' in text and cockpit.world.id("ic_r1") in text
     assert "Dispatch a fresh ic titled" in text
+
+
+async def test_redispatch_counts_closed_attempts(cockpit: Cockpit, interrupts: list[str]) -> None:
+    closed = cockpit.world.make_session(
+        "ic_r1",
+        agent="pl",
+        title="ic:task-1-r1:closed:conv_0123abcd",
+        labels={"omnigent.closed": "true"},
+        parent="pl",
+        sub_agent_name="ic",
+    )
+
+    plan = await interventions.plan_intervention(
+        cockpit.app.state,
+        cockpit.fid,
+        user_id="carol",
+        action="redispatch",
+        target="task:api-version/task-1",
+    )
+
+    assert plan.next_title == "task-1-r2"
+    # The open first attempt is still the worker to close, not the closed retry.
+    assert plan.target is not None and plan.target.id == cockpit.world.id("ic")
+    assert plan.target.id != closed.id
 
 
 async def test_reassign_switches_vendor(cockpit: Cockpit, interrupts: list[str]) -> None:

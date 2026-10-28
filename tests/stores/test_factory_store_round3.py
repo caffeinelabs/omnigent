@@ -560,6 +560,9 @@ def test_issue_dedupe_reraise_and_reopen(store: FactoryStore) -> None:
     )
     assert not created and again.id == first.id and again.number == first.number
     assert (again.count, again.summary, again.severity) == (2, "7×", "warning")
+    assert store.get_issue_by_dedupe(FID, key) == again
+    assert store.get_issue_by_dedupe(FID, "agent.repeat:member:other") is None
+    assert store.get_issue_by_dedupe(uuid.uuid4().hex, key) is None
     assert again.last_seen >= first.last_seen and again.first_seen == first.first_seen
 
     resolved = store.update_issue(first.id, status="resolved", resolved_by="server", resolved_at=9)

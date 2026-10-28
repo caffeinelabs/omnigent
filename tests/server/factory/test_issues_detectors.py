@@ -163,6 +163,52 @@ async def test_agent_repeat_dedupes_and_emits_once(world: FactoryWorld) -> None:
     assert _one(world, "agent.repeat").status == "resolved"
 
 
+async def _repeat(world: FactoryWorld, key: str = "ic") -> FactoryIssue:
+    await detectors.agent_repeat(
+        world.app_state,
+        _fid(world),
+        world.get(key),
+        role="ic",
+        project="api-version",
+        tool="Bash",
+        arg="pnpm test",
+        count=5,
+        first=True,
+    )
+    return _one(world, "agent.repeat")
+
+
+async def test_agent_repeat_resolves_on_the_tick_once_its_worker_is_closed(
+    world: FactoryWorld,
+) -> None:
+    await _repeat(world)
+    await _tick(world)
+    assert _one(world, "agent.repeat").status == "open"  # negative: open and fresh
+
+    # The PL closed the worker; the poller (or a restart) lost its track.
+    world.store.set_labels(world.id("ic"), {"omnigent.closed": "true"})
+    members = [world.get(k) for k in ("lead_a", "lead_b", "pl")]
+    children = [world.get(k) for k in ("reviewer", "helper")]
+    await detectors.tick_factory(world.app_state, _fid(world), members, children, time.time())
+
+    row = _one(world, "agent.repeat")
+    assert (row.status, row.resolved_by) == ("resolved", "server")
+    [resolved] = world.deps.factory_store.find_events(_fid(world), "issue.resolved", 0)
+    assert resolved.data["reason"] == "agent closed"
+
+
+async def test_agent_repeat_resolves_once_nothing_re_raised_it_for_a_window(
+    world: FactoryWorld,
+) -> None:
+    row = await _repeat(world)
+    await _tick(world, now=row.last_seen + 29 * 60)
+    assert _one(world, "agent.repeat").status == "open"
+
+    await _tick(world, now=row.last_seen + 30 * 60)
+
+    assert _one(world, "agent.repeat").status == "resolved"
+
+
 async def test_agent_quiet_from_a_stuck_alert_clears_when_it_stops_running(
     world: FactoryWorld,
 ) -> None:
@@ -807,6 +853,100 @@ async def test_the_slack_webhook_is_owner_set_and_never_read_back(
 
     cleared = await cockpit.client.put(route, json={"url": None}, headers={"X-Test-User": "alice"})
     assert cleared.json() == {"slack": False}
+
+
+async def test_slack_gets_escaped_text_and_a_flapping_incident_once_an_hour(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    posted: list[str] = []
+
+    async def _post(_url: str, text: str) -> None:
+        posted.append(text)
+
+    monkeypatch.setattr(issues, "slack_poster", _post)
+    await issues.set_slack_webhook(cockpit.app.state, cockpit.fid, user_id="alice", url=WEBHOOK)
+
+    attack = "<!channel> <https://evil.example|re-login here> & more"
+    resp = await cockpit.post(
+        _url(cockpit), {"summary": attack, "severity": "warning"}, user="vic"
+    )
+    assert resp.status_code == 201, resp.text
+    for _ in range(3):
+        await asyncio.sleep(0)
+
+    [text] = posted
+    assert "<" not in text and ">" not in text
+    assert text.endswith(
+        "human.report · &lt;!channel&gt; &lt;https://evil.example|re-login here&gt; &amp; more"
+    )
+
+    # A condition that flaps reopens its incident but reaches Slack once.
+    row = await _incident(cockpit)
+    await issues.clear_issue(cockpit.app.state, cockpit.fid, row.rule, row.target)
+    reopened = await _incident(cockpit)
+    for _ in range(3):
+        await asyncio.sleep(0)
+    assert reopened.status == "open" and reopened.id == row.id
+    assert len(cockpit.events("issue.opened")) == 3
+    assert len(posted) == 2
+
+
+def test_slack_text_escapes_every_part() -> None:
+    issue = FactoryIssue(
+        id="i1",
+        factory_id="f1",
+        class_="incident",
+        number=7,
+        rule="agent.repeat",
+        target="member:x",
+        summary="ic failing `echo <@U123>`",
+        severity="warning",
+    )
+
+    assert issues.slack_text(issue, "a<b>&c") == (
+        "[a&lt;b&gt;&amp;c] INC-7 · warning · agent.repeat · ic failing `echo &lt;@U123&gt;`"
+    )
+
+
+async def test_reports_are_rate_limited_per_person(cockpit: Cockpit) -> None:
+    body = {"summary": "something is off"}
+    for _ in range(issues.REPORTS_PER_HOUR):
+        assert (await cockpit.post(_url(cockpit), body, user="vic")).status_code == 201
+
+    refused = await cockpit.post(_url(cockpit), body, user="vic")
+    other = await cockpit.post(_url(cockpit), body, user="carol")
+
+    assert refused.status_code == 429 and error_code(refused) == "rate_limited"
+    assert other.status_code == 201
+
+
+async def test_the_badge_hides_incidents_of_agents_the_viewer_cannot_read(
+    cockpit: Cockpit,
+) -> None:
+    for key in ("pl", "lead_b"):
+        row = await issues.raise_issue(
+            cockpit.app.state,
+            cockpit.fid,
+            rule="agent.quiet",
+            target=f"member:{cockpit.world.id(key)}",
+            summary="quiet",
+        )
+        assert row is not None and row.project_slug is None
+    snapshot.reset_cache()
+
+    async def _badge(user: str) -> int:
+        resp = await cockpit.client.get(
+            f"/v1/factory/factories/{cockpit.fid}", headers={"X-Test-User": user}
+        )
+        return resp.json()["counts"]["issues_open"]
+
+    async def _listed(user: str) -> int:
+        resp = await cockpit.client.get(_url(cockpit), headers={"X-Test-User": user})
+        return len(resp.json()["data"])
+
+    # vic reads Lead A and the PL, not Lead B.
+    assert await _badge("vic") == await _listed("vic") == 1
+    assert await _badge("alice") == await _listed("alice") == 2
 
 
 def test_every_issue_write_route_requires_human_origin() -> None:

@@ -19,6 +19,7 @@ import hashlib
 import logging
 import re
 import time
+from collections import deque
 from collections.abc import Mapping
 from typing import Any, Final
 
@@ -63,7 +64,11 @@ SLACK_HOSTS: Final = ("https://hooks.slack.com/", "https://hooks.slack-gov.com/"
 SLACK_TIMEOUT_S: Final = 5.0
 _SLACK_CACHE_S: Final = 60.0
 SLACK_MIN_SEVERITY: Final = "warning"
+SLACK_REPOST_S: Final = 3600.0
+"""An incident that reopens is posted to Slack again at most this often."""
 _SEVERITY_RANK: Final = {"info": 0, "notice": 1, "warning": 2, "critical": 3}
+REPORTS_PER_HOUR: Final = 10
+""""Report a problem" filings one person may make per factory and hour."""
 
 
 def dedupe_key(rule: str, target: str) -> str:
@@ -199,10 +204,7 @@ async def raise_issue(
 
 
 def _find_by_key(deps: FactoryDeps, factory_id: str, key: str) -> FactoryIssue | None:
-    for issue in deps.factory_store.list_issues(factory_id, limit=2000):
-        if issue.dedupe_key == key:
-            return issue
-    return None
+    return deps.factory_store.get_issue_by_dedupe(factory_id, key)
 
 
 def open_issue_for(
@@ -322,6 +324,33 @@ def counts_open(rows: list[FactoryIssue], hidden_projects: set[str] | frozenset[
         and r.status in ("open", "acked")
         and (not r.project_slug or r.project_slug not in hidden_projects)
     )
+
+
+def visible_to(
+    project: str | None,
+    target: str,
+    *,
+    hidden: set[str] | frozenset[str],
+    top_level_of: Mapping[str, str],
+    readable: set[str] | frozenset[str],
+) -> bool:
+    """
+    Whether a viewer may see an issue: its project and its agent are readable.
+
+    :param top_level_of: Session id -> its top-level member (the snapshot's).
+    :param readable: Session ids the viewer reads.
+    """
+    if project and project in hidden:
+        return False
+    kind, _, ident = target.partition(":")
+    if kind != "member":
+        return True
+    try:
+        sid = norm_id(ident)
+    except ValueError:
+        return True
+    members = {norm_id(s): s for s in top_level_of}
+    return sid not in members or members[sid] in readable
 
 
 # ── Human lifecycle ────────────────────────────────────────────
@@ -537,6 +566,7 @@ async def report(
     deps = factory_deps(app_state)
     root = await load_factory_root(deps, user_id, factory_id)
     await require(deps, user_id, root.id, LEVEL_READ)
+    _take_report_slot(root.id, user_id)
     if project:
         row = await asyncio.to_thread(deps.factory_store.get_project, root.id, project)
         pl = row or await asyncio.to_thread(
@@ -573,6 +603,26 @@ async def report(
     )
     await route_opened(app_state, issue)
     return issue
+
+
+_reports: dict[tuple[str, str], deque[float]] = {}
+
+
+def _take_report_slot(factory_id: str, user_id: str | None) -> None:
+    """Count one report against its filer. :raises CockpitError: 429 past the hourly limit."""
+    now = time.monotonic()
+    window = _reports.setdefault((norm_id(factory_id), user_id or ""), deque())
+    while window and now - window[0] >= 3600:
+        window.popleft()
+    if len(window) >= REPORTS_PER_HOUR:
+        retry = int(3600 - (now - window[0])) + 1
+        raise CockpitError(
+            429,
+            "rate_limited",
+            f"at most {REPORTS_PER_HOUR} reports per hour",
+            retry_after=retry,
+        )
+    window.append(now)
 
 
 # ── Slack webhook (owners set it; nothing ever reads it back) ──
@@ -666,9 +716,16 @@ def routing_view(deps: FactoryDeps, factory_id: str) -> dict[str, Any]:
     }
 
 
+def slack_escape(text: str) -> str:
+    """:returns: *text* with Slack's control characters escaped (no mentions or links)."""
+    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+
 def slack_text(issue: FactoryIssue, factory_name: str) -> str:
     """:returns: The one-line Slack message of an opened incident."""
-    return f"[{factory_name}] {_label(issue)} · {issue.severity} · {issue.rule} · {issue.summary}"
+    parts = (f"[{factory_name}]", _label(issue), issue.severity, issue.rule, issue.summary)
+    head, *rest = (slack_escape(p) for p in parts)
+    return f"{head} {' · '.join(rest)}"
 
 
 async def _post_slack(url: str, text: str) -> None:
@@ -677,12 +734,13 @@ async def _post_slack(url: str, text: str) -> None:
             resp = await client.post(url, json={"text": text})
         if resp.status_code >= 400:
             _logger.warning("factory: Slack alert refused (%s)", resp.status_code)
-    except httpx.HTTPError as exc:
+    except Exception as exc:  # noqa: BLE001 - a fire-and-forget post must never raise
         # Never log the URL: it is the secret.
         _logger.warning("factory: Slack alert failed: %s", type(exc).__name__)
 
 
 _slack_tasks: set[asyncio.Task[None]] = set()
+_slack_sent: dict[tuple[str, str], float] = {}
 SlackPoster = Any
 slack_poster: Any = _post_slack
 """The coroutine that posts to Slack (tests swap it)."""
@@ -698,6 +756,16 @@ async def route_opened(app_state: Any, issue: FactoryIssue) -> None:
     url = await asyncio.to_thread(slack_webhook, deps, issue.factory_id)
     if url is None:
         return
+    # A flapping condition reopens its incident each time: post it once an hour.
+    key = (norm_id(issue.factory_id), issue.dedupe_key or issue.id)
+    now = time.monotonic()
+    last = _slack_sent.get(key)
+    if last is not None and now - last < SLACK_REPOST_S:
+        return
+    if len(_slack_sent) > 1024:
+        for stale in [k for k, at in _slack_sent.items() if now - at >= SLACK_REPOST_S]:
+            del _slack_sent[stale]
+    _slack_sent[key] = now
     from omnigent.factory import LABEL_NAME
 
     root = await asyncio.to_thread(deps.conversation_store.get_conversation, issue.factory_id)
@@ -708,8 +776,10 @@ async def route_opened(app_state: Any, issue: FactoryIssue) -> None:
 
 
 def reset() -> None:
-    """Forget cached webhooks (tests)."""
+    """Forget cached webhooks, Slack repost stamps and report counts (tests)."""
     _slack_cache.clear()
+    _slack_sent.clear()
+    _reports.clear()
 
 
 __all__ = [
@@ -735,9 +805,11 @@ __all__ = [
     "route_opened",
     "routing_view",
     "set_slack_webhook",
+    "slack_escape",
     "slack_text",
     "slack_webhook",
     "snooze",
     "unsnooze_due",
     "valid_webhook",
+    "visible_to",
 ]

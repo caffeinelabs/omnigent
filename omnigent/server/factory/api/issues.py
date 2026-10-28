@@ -132,17 +132,13 @@ def issue_view(issue: FactoryIssue, titles: Mapping[str, str]) -> dict[str, Any]
 
 def visible(ctx: FleetContext, issue: FactoryIssue) -> bool:
     """Whether the viewer may see *issue*: its project and its agent are readable."""
-    if issue.project_slug and issue.project_slug in ctx.hidden:
-        return False
-    kind, _, ident = issue.target.partition(":")
-    if kind != "member":
-        return True
-    try:
-        sid = norm_id(ident)
-    except ValueError:
-        return True
-    members = {norm_id(s): s for s in ctx.raw.top_level_of}
-    return sid not in members or members[sid] in ctx.readable
+    return issues.visible_to(
+        issue.project_slug,
+        issue.target,
+        hidden=ctx.hidden,
+        top_level_of=ctx.raw.top_level_of,
+        readable=ctx.readable,
+    )
 
 
 def _viewer_level(ctx: FleetContext) -> int:

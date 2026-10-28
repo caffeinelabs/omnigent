@@ -371,6 +371,70 @@ async def test_a_repeating_agent_raises_agent_repeat_once_and_clears(
     assert (incident.status, incident.resolved_by) == ("resolved", "server")
 
 
+async def test_a_repeat_resolves_when_its_agent_is_closed(
+    world: FactoryWorld, statuses: _Statuses
+) -> None:
+    ic = world.id("ic")
+    fid = world.id("lead_a")
+    statuses.running.add(ic)
+    _append(world, "ic", "claude_native")
+    poller, _ = _poller(world)
+    await poller.poll_factory(fid)
+    [incident] = world.deps.factory_store.list_issues(fid)
+    assert (incident.rule, incident.status) == ("agent.repeat", "open")
+
+    # The PL closes the worker (e.g. after a redispatch): the poll drops it.
+    world.store.set_labels(ic, {"omnigent.closed": "true"})
+    await poller.poll_factory(fid)
+
+    [incident] = world.deps.factory_store.list_issues(fid)
+    assert (incident.status, incident.resolved_by) == ("resolved", "server")
+    [resolved] = world.deps.factory_store.find_events(fid, "issue.resolved", 0)
+    assert resolved.data["reason"] == "agent closed"
+
+
+async def test_a_still_repeating_agent_is_re_raised_to_stay_fresh(
+    world: FactoryWorld, statuses: _Statuses
+) -> None:
+    ic = world.id("ic")
+    fid = world.id("lead_a")
+    statuses.running.add(ic)
+    _append(world, "ic", "claude_native")
+    clock = FakeClock(time.time())
+    poller, _ = _poller(world, clock=clock)
+    await poller.poll_factory(fid)
+    await poller.poll_factory(fid)
+    [incident] = world.deps.factory_store.list_issues(fid)
+    assert incident.count == 1  # the same count is not re-raised every poll
+
+    clock.advance(detectors.RERAISE_S + 1)
+    await poller.poll_factory(fid)
+
+    [incident] = [i for i in world.deps.factory_store.list_issues(fid) if i.rule == "agent.repeat"]
+    assert incident.count == 2 and incident.status == "open"
+    assert len(world.deps.factory_store.find_events(fid, "agent.repeat", 0)) == 1
+
+
+async def test_no_database_reads_while_nobody_watches_any_factory(
+    world: FactoryWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def _no_reads(_store: Any) -> list[Any]:
+        raise AssertionError("listed factory roots with nobody watching")
+
+    monkeypatch.setattr(snapshot, "list_factory_roots", _no_reads)
+    poller = ActivityPoller(
+        world.app_state,
+        presence=lambda _fid: 1,
+        publish=lambda _f: None,
+        now_registry=NowRegistry(),
+        anyone_watching=lambda: False,
+    )
+
+    await poller.tick()
+
+    assert poller.reads_last_tick == {}
+
+
 async def test_a_quiet_running_agent_raises_agent_quiet_and_clears(
     world: FactoryWorld, statuses: _Statuses
 ) -> None:
