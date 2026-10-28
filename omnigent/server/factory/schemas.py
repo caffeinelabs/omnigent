@@ -636,19 +636,31 @@ class ChecksEvidence(_View):
 
 
 class ReviewEvidence(_View):
+    """
+    The review marker shown for the head.
+
+    :param blocking: The marker's ``blocking=<n>``, when the reviewer gave one.
+    :param findings: Its ``findings=<fp,…>`` fingerprints (stable across rounds).
+    """
+
     verdict: str | None = None
     sha: str | None = None
     url: str | None = None
     at: int | None = None
     by: str | None = None
+    blocking: int | None = None
+    findings: list[str] | None = None
 
 
 class VerifyEvidence(_View):
+    """:param reason: The marker's ``reason=code:…|env:…`` (classifies a FAIL)."""
+
     result: str | None = None
     sha: str | None = None
     env: str | None = None
     url: str | None = None
     at: int | None = None
+    reason: str | None = None
 
 
 class BaseEvidence(_View):

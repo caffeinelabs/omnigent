@@ -66,6 +66,7 @@ from omnigent.server.factory import (
     decision_routing,
     detectors,
     events,
+    loops,
     previews,
     quiet_beats,
     server_decisions,
@@ -394,6 +395,8 @@ class FactorySupervisor:
         await self._park_idle_previews(members, now)
         await decision_routing.escalate_decisions(self._app_state, now)
         await detectors.on_tick(self._app_state, members, children, now)
+        # Loop engine: wall and no-progress, $ budgets, READY waves, NEXT flushes.
+        await loops.tick(self._app_state, members, children, now)
         await self._report_skips(now)
         self._forget_departed({m.id for m in members}, {c.id for c in children})
         status.set_status("supervisor", last_tick_at=int(now), ok=True, error=None)

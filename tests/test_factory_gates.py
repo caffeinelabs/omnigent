@@ -23,7 +23,9 @@ from omnigent.factory_gates import (
     REVIEW_MARKER,
     VERIFY_MARKER,
     evaluate_snapshot,
+    finding_fingerprint,
     markers,
+    review_findings,
     status_contexts,
 )
 from omnigent.server.factory.schemas import GatesView
@@ -524,3 +526,69 @@ def test_a_files_note_holds_a_passing_protected_paths_gate() -> None:
     touched = _snap(comments=[M._verify()], files=[{"path": ".github/workflows/ci.yml"}])
     failing = evaluate_snapshot(touched, _GREEN, set(), files_note=note)
     assert failing.gates["protected_paths"] == "fail"
+
+
+# ── Review marker attributes: blocking count and finding fingerprints ─────
+
+
+def _review_with(body: str, at: str = M._AFTER) -> dict[str, Any]:
+    return {"body": body, "submittedAt": at, "state": "COMMENTED", "author": {"login": "bot"}}
+
+
+def test_review_marker_attributes_reach_the_evidence() -> None:
+    fp1 = finding_fingerprint("services/api/version.ts", 41, "correctness")
+    fp2 = finding_fingerprint("services/api/version.ts", 128, "tests")
+    marker = (
+        f"<!-- factory:review sha={_HEAD} verdict=CHANGES reviewer=s-rev blocking=2 "
+        f"findings={fp1},{fp2} -->\nBlocking: …"
+    )
+    report = evaluate_snapshot(_snap(reviews=[_review_with(marker)]), _GREEN, set())
+    assert report.gates["review"] == "fail"
+    evidence = report.evidence["review"]
+    assert evidence["blocking"] == 2 and evidence["findings"] == [fp1, fp2]
+    view = GatesView.model_validate(report.to_json())
+    assert view.evidence.review is not None and view.evidence.review.findings == [fp1, fp2]
+
+
+def test_markers_without_the_attributes_read_as_before() -> None:
+    report = evaluate_snapshot(_snap(reviews=[M._review(verdict="CHANGES")]), _GREEN, set())
+    evidence = report.evidence["review"]
+    assert "blocking" not in evidence and "findings" not in evidence
+    GatesView.model_validate(report.to_json())
+
+
+@pytest.mark.parametrize(
+    ("attrs", "expected"),
+    [
+        ({"blocking": "3", "findings": "0a1b2c3d,DEADBEEF"}, (3, ("0a1b2c3d", "deadbeef"))),
+        ({"blocking": "x", "findings": "nope,0a1b2c3d,0a1b2c3d"}, (None, ("0a1b2c3d",))),
+        ({"blocking": "123456"}, (None, ())),
+        ({}, (None, ())),
+    ],
+)
+def test_review_findings_parse_leniently(
+    attrs: dict[str, str], expected: tuple[int | None, tuple[str, ...]]
+) -> None:
+    assert review_findings(attrs) == expected
+
+
+def test_finding_fingerprints_are_stable_within_ten_lines() -> None:
+    import hashlib
+
+    fp = finding_fingerprint("a.ts", 41, "correctness")
+    expected = hashlib.sha1(b"a.ts:4:correctness", usedforsecurity=False).hexdigest()[:8]
+    assert fp == expected == finding_fingerprint("a.ts", 49, "correctness")
+    assert fp != finding_fingerprint("a.ts", 50, "correctness")
+    assert fp != finding_fingerprint("a.ts", 41, "tests")
+
+
+def test_a_verify_marker_reason_classifies_the_failure() -> None:
+    body = (
+        f"<!-- factory:verify sha={_HEAD} result=FAIL env=https://api.envs "
+        "reason=env:tilt-timeout -->\nfailed"
+    )
+    pr = _snap(comments=[{"body": body, "createdAt": M._AFTER, "author": {"login": "bot"}}])
+    report = evaluate_snapshot(pr, _GREEN, set())
+    assert report.gates["verify"] == "fail"
+    assert report.evidence["verify"]["reason"] == "env:tilt-timeout"
+    GatesView.model_validate(report.to_json())

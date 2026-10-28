@@ -95,8 +95,8 @@ If the env looks broken, say so in RESULT (or post to `parent`). Do not fix it.
 
 ```
 RESULT
-status: READY_FOR_REVIEW | BLOCKED | FAILED | IN_PROGRESS
-task: <id>
+status: READY_FOR_REVIEW | BLOCKED: <reason> | FAILED | IN_PROGRESS
+task: <id> · attempt <k>/<N> (the card's first line)
 pr: <url or none>
 head: <sha>
 branch: factory/<slug>/<task> · worktree: /home/omnigent/workspace/wt/<task>
@@ -106,8 +106,10 @@ changes:
 - <file:line> · <what>
 env checks for VERIFY: [<check>, ...] | none
 open questions: <list | none>
+blocked by: <the one thing that blocked or slowed you | none>
 ```
 
+`BLOCKED: <reason>`: the card cannot pass as written; also `sys_factory_task(op="report", result="BLOCKED", note=<reason>)`.
 `READY_FOR_REVIEW` means acceptance is green, the PR is ready (not a draft) and
 pushed, and `head` is its current head.
 
@@ -122,7 +124,8 @@ pushed, and `head` is its current head.
    acceptance, scope, no protected paths, no secrets, and a `baseRefName` that
    is the card's `Base:` branch (a PR against another branch is blocking).
 4. Post:
-   `gh pr review <url> --comment --body "<!-- factory:review sha=<head> verdict=APPROVE|CHANGES reviewer=<your session id> -->` followed by the summary.
+   `gh pr review <url> --comment --body "<!-- factory:review sha=<head> verdict=APPROVE|CHANGES reviewer=<your session id> blocking=<n> findings=<fp1,fp2> -->` followed by the summary
+   (`fp` = `printf '%s' "<path>:<line/10>:<category>" | sha1sum | cut -c1-8`).
    List the blocking issues, the non-blocking issues and the suggestions, each
    with `file:line`. Use APPROVE only when there are no blocking issues.
 5. RESULT: the verdict, the head, the number of blocking issues, and the

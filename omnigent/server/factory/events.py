@@ -87,6 +87,8 @@ def scopes_for(kind: str) -> list[str]:
         scopes.append("tasks")
     if kind.startswith("chat."):
         scopes.append("chat")
+    if kind.startswith(("loop.", "engine.", "budget.")):
+        scopes.append("loops")
     return scopes
 
 

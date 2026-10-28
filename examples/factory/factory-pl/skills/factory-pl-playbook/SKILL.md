@@ -161,6 +161,21 @@ Report: the RESULT block
 8. **Review-links block**: see below. A `factory:no-env` PR gets the review
    link only.
 
+### Engine hints (NEXT, READY, loops)
+
+`[Factory engine · NEXT · …]` names a head's next step (never twice per head):
+| NEXT step | Do |
+|---|---|
+| `REVIEW head=<sha>` | step 2: the cross-vendor review of that head |
+| `PREVIEW pr=<n> head=<sha> base=<base>` | step 2: env_keeper PREVIEW with the card's checks |
+| `DEMO pr=<url> sha=<sha> app=<url> api=<url>` | step 3: dispatch the demo (add `secret_file` and the focus) |
+
+CI failures and readiness (steps 5-7) come as their own `[Factory notice · PR …]`.
+
+In enforce mode `start` answers 409 `budget_exhausted` past the budget; a task
+dispatch to `ic` or `demo` without `args.cost_budget` is denied (the card's;
+`demo-<key>`: `{max_cost_usd: <budget_left.usd>}` of `op="get"`).
+
 ### Review-links block
 
 `sys_factory_pr` returns both links: `review_url` (the PR's cockpit page,
