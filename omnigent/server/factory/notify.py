@@ -17,6 +17,7 @@ For factory members (labelled themselves, or through their root) this:
   at most once per 10 minutes per session;
 - tells the sender of a pending ``request``/``brief`` that the turn it started
   ended, unless the target already posted back;
+- tells the Room a turn ended (:func:`omnigent.server.factory.chat.on_turn_end`);
 - remembers a ``running`` edge parked on ``blocked_on`` so the supervisor can
   escalate it to the factory root (see
   :class:`~omnigent.server.factory.supervisor.FactorySupervisor`).
@@ -354,6 +355,13 @@ class FactoryNotifier:
             self._alert_failed(conv, factory_id, data)
         elif status == "idle":
             self._notify_reply(conv, factory_id, data)
+        if status in _TERMINAL_STATUSES:
+            # The Room's reply fallback and its coalesced deliveries wait for turn ends.
+            from omnigent.server.factory import chat
+
+            await chat.on_turn_end(
+                self._app_state, conv, factory_id, data, failed=status == "failed"
+            )
 
     def relayed_edge(
         self,

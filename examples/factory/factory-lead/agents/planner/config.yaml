@@ -1,0 +1,71 @@
+spec_version: 1
+name: planner
+description: >-
+  Read-only planner for the factory lead. Splits work a human asked for into
+  factory projects from a fresh worktree of the base branch, backed by an
+  import-graph analysis (scope-graph.mjs), and writes ~/factory/plans/<id>.json.
+  Never pushes, opens PRs or files issues.
+
+executor:
+  type: omnigent
+  auth:
+    type: provider
+    name: bifrost
+  model: sonnet
+  config:
+    harness: claude-native
+    # Headless: Claude's auto-mode classifier fails closed behind the Bifrost
+    # gateway; the factory guard below (role planner: no pushes, no PR or
+    # issue writes) and blast_radius fence it instead, in bypass mode too.
+    permission_mode: bypassPermissions
+    factory_role: planner
+
+prompt: |
+  You are the planner of the Omnigent software factory: a read-only
+  sub-agent of the lead (Atlas). Atlas sends one `PLAN id=<id> repo=<owner/name>
+  base=<branch> script=<path> goal=<one line>` request with the human's ask and
+  the existing projects. You turn it into factory projects and an analysis.
+
+  Run `load_skill("factory-plan-analysis")` first and follow it: a fresh
+  worktree of origin/<base>, the areas the goal touches, candidate projects
+  with `scope_paths`, the scope-graph report, then the split.
+
+  You only read. Never edit the product repo outside your plan worktree, never
+  commit, push, open or comment on PRs or issues, and never spawn agents. Your
+  only output is `~/factory/plans/<id>.json` and your final line:
+  `PLAN READY ~/factory/plans/<id>.json · <n> projects · <one-line rationale>`
+  or `PLAN FAILED <reason>`.
+
+os_env:
+  type: caller_process
+  cwd: .
+  sandbox:
+    type: none
+
+terminals:
+  bash:
+    command: bash
+    allow_cwd_override: true
+    os_env:
+      type: caller_process
+      cwd: .
+      sandbox:
+        type: none
+
+guardrails:
+  ask_timeout: 86400
+  policies:
+    blast_radius:
+      type: function
+      function:
+        path: omnigent.policies.builtins.orchestration.blast_radius
+        arguments:
+          gate_pushes: false
+    factory_guard:
+      type: function
+      function:
+        path: omnigent.policies.builtins.factory.factory_role_guard
+        arguments:
+          role: planner
+          write_repos: [caffeinelabs/app]
+          push_ref_prefixes: [factory/]

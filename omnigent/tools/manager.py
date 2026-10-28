@@ -508,11 +508,11 @@ class ToolManager:
         ``sys_factory_spawn`` (a new top-level sandbox) is for ``lead`` only,
         ``sys_factory_env`` for ``project_lead`` and ``env_keeper``,
         ``sys_factory_demo`` for those two and ``demo``,
-        ``sys_factory_project`` for ``lead`` and ``project_lead`` (the server
-        scopes a PL to its own project), and ``sys_factory_task`` for
-        ``lead``, ``project_lead`` and ``ic``. The read-only ``planner`` gets
-        the roster only. All are runner-dispatched to the server's
-        ``/v1/factory`` routes.
+        ``sys_factory_project`` and ``sys_factory_chat`` for ``lead`` and
+        ``project_lead`` (the server scopes a PL to its own project), and
+        ``sys_factory_task`` for ``lead``, ``project_lead`` and ``ic``. The
+        read-only ``planner`` gets the roster only. All are runner-dispatched
+        to the server's ``/v1/factory`` routes.
         """
         from omnigent.factory import (
             ROLE_DEMO,
@@ -525,6 +525,7 @@ class ToolManager:
         )
         from omnigent.tools.builtins.factory import (
             SysFactoryAskTool,
+            SysFactoryChatTool,
             SysFactoryDemoTool,
             SysFactoryEnvTool,
             SysFactoryProjectTool,
@@ -553,6 +554,7 @@ class ToolManager:
             tools.append(SysFactorySpawnTool())
         if role in (ROLE_LEAD, ROLE_PROJECT_LEAD):
             tools.append(SysFactoryProjectTool())
+            tools.append(SysFactoryChatTool())
         if role in (ROLE_PROJECT_LEAD, ROLE_ENV_KEEPER):
             tools.append(SysFactoryEnvTool())
         if role in (ROLE_PROJECT_LEAD, ROLE_ENV_KEEPER, ROLE_DEMO):

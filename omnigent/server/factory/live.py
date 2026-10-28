@@ -106,7 +106,8 @@ def announce_factory_changed(
     :param app_state: ``app.state`` carrying the factory deps.
     :param factory_id: Root lead session id.
     :param scopes: What changed: ``snapshot`` / ``events`` / ``decisions`` /
-        ``people`` / ``now`` (live activity, throttled to one per 2 s) / ``issues``.
+        ``people`` / ``now`` (live activity, throttled to one per 2 s) /
+        ``issues`` / ``chat``.
     """
     factory_id = _bare_id(factory_id)
     try:

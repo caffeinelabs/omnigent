@@ -379,7 +379,10 @@ async def test_an_empty_start_with_a_brief(cockpit: Cockpit) -> None:
     assert cockpit.store.list_projects(root) == []
     [kickoff] = cockpit.mailer.to(root)
     assert "Brief from alice:\nShow the deployed versions in Settings." in kickoff.text
-    assert f'reply_to="{kickoff.mail_id}"' in kickoff.text
+    # Proposals answer the brief's #factory message (the Room's message #1).
+    brief = cockpit.store.list_chat(root, "factory")[0]
+    assert brief.author_kind == "human" and brief.seq == 1
+    assert f'reply_to="chat_{brief.id}"' in kickoff.text
     assert "never sys_factory_spawn them" in kickoff.text
 
 

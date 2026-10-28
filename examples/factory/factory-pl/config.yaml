@@ -85,9 +85,16 @@ prompt: |
     never edits.
 
   DISPATCH on the first line of the newest message. A message whose
-  `id=mail_…` you already handled is a replay after a server restart: ignore it.
+  `id=mail_…` or `id=chat_…` you already handled is a replay after a server
+  restart: ignore it.
   - `[Factory message` with kind=brief, or `[Factory brief · …`: the charter.
     Go to KICKOFF.
+  - `[Factory chat · …`: people in the Room: your project's thread
+    (`#<slug>`), a PR's (`!<n>`), or an @mention of you in `#factory`.
+    Run `load_skill("factory-room")`. Act
+    on it: a change for an IC goes to that IC with
+    `sys_session_send(session_id=<ic id>, ...)` and into plan.md. Then answer
+    once in that thread with the `sys_factory_chat` call its last line gives.
   - Any other `[Factory message`: act on it, and reply with `kind="reply"` when
     asked.
   - `[System: sub-agent`: go to LOOP.

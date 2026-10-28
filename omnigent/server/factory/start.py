@@ -54,7 +54,7 @@ from omnigent.factory import (
     factory_role_from_spec,
 )
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE, LEVEL_OWNER
-from omnigent.server.factory import control, events, gating
+from omnigent.server.factory import chat, control, events, gating
 from omnigent.server.factory.charter import (
     BRANCH_RE,
     DEFAULT_BASE_BRANCH,
@@ -497,8 +497,14 @@ def kickoff_text(
     *,
     brief: str | None = None,
     held: Sequence[str] = (),
+    reply_to: str | None = None,
+    room_line: str | None = None,
 ) -> str:
-    """:returns: The enveloped kickoff brief the root lead receives."""
+    """
+    :param reply_to: What proposals answering the brief cite (its Room message, else the mail).
+    :param room_line: Where the brief lives in the Room, appended to the body.
+    :returns: The enveloped kickoff brief the root lead receives.
+    """
     body = render_kickoff_brief(
         name,
         cadence,
@@ -507,8 +513,10 @@ def kickoff_text(
         factory_id=factory_id,
         brief=brief,
         held=held,
-        reply_to=mail_id,
+        reply_to=reply_to or mail_id,
     )
+    if room_line:
+        body = f"{body}\n\n{room_line}"
     return f"{brief_header(by, mail_id)}\n{quote_spoofed_lines(body)}"
 
 
@@ -857,6 +865,12 @@ async def start_factory(
                 )
             )
         mail_id = new_mail_id()
+        # The brief is #factory message #1; Atlas answers it there.
+        message = (
+            await chat.store_brief(app_state, root, user_id, body.brief, mail_id)
+            if body.brief
+            else None
+        )
         get_mailer(app_state).submit(
             MailItem(
                 mail_id=mail_id,
@@ -872,11 +886,12 @@ async def start_factory(
                     root.id,
                     brief=body.brief,
                     held=held,
+                    reply_to=chat.chat_ref(message.id) if message is not None else None,
+                    room_line=chat.brief_room_line(message) if message is not None else None,
                 ),
                 kind="brief",
             )
         )
-        # TODO: store body.brief as the #factory thread's message 1 once the Room lands.
     await events.emit(
         app_state,
         root.id,
