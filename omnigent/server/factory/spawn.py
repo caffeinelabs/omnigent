@@ -66,6 +66,7 @@ from omnigent.stores.factory_store import now_ms
 if TYPE_CHECKING:
     from omnigent.entities import Conversation
     from omnigent.entities.factory import FactoryProject
+    from omnigent.stores import ConversationStore
 
 _logger = logging.getLogger(__name__)
 
@@ -174,8 +175,15 @@ def mint_token(deps: FactoryDeps, user_id: str | None) -> str | None:
         return None
 
 
-def _max_pods(deps: FactoryDeps, root: Conversation) -> int:
-    spec = load_session_spec(root, deps)
+def pod_cap(deps: FactoryDeps, lead: Conversation) -> int | None:
+    """
+    The ``executor.config.factory_max_pods`` of *lead*'s spec (default :data:`DEFAULT_MAX_PODS`).
+
+    :returns: e.g. ``12``, or ``None`` when the spec cannot be loaded.
+    """
+    spec = load_session_spec(lead, deps)
+    if spec is None:
+        return None
     config = getattr(getattr(spec, "executor", None), "config", None)
     raw = config.get("factory_max_pods") if isinstance(config, dict) else None
     if isinstance(raw, str) and raw.strip().isdigit():
@@ -185,11 +193,20 @@ def _max_pods(deps: FactoryDeps, root: Conversation) -> int:
     return DEFAULT_MAX_PODS
 
 
-def _live_members(deps: FactoryDeps, factory_id: str) -> list[Conversation]:
+def _max_pods(deps: FactoryDeps, root: Conversation) -> int:
+    return pod_cap(deps, root) or DEFAULT_MAX_PODS
+
+
+def live_members(factory_id: str, store: ConversationStore) -> list[Conversation]:
+    """:returns: The members that hold a pod: top-level, not closed and not done."""
     from omnigent.server.factory.control import is_closed
 
-    members = factory_members(factory_id, deps.conversation_store)
+    members = factory_members(factory_id, store)
     return [m for m in members if not is_closed(m) and m.labels.get(LABEL_STATE) != STATE_DONE]
+
+
+def _live_members(deps: FactoryDeps, factory_id: str) -> list[Conversation]:
+    return live_members(factory_id, deps.conversation_store)
 
 
 def _supervisor(root: Conversation, members: list[Conversation]) -> str:

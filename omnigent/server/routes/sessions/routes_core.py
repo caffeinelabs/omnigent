@@ -260,6 +260,7 @@ async def _check_runner_factory_create(
     runner_tunnel_tokens: frozenset[str] | None,
     agent_store: AgentStore,
     agent_id: str | None,
+    parent_session_id: str | None,
     bundled: bool,
 ) -> None:
     """Refuse a runner's create whose factory labels a spawn would not send (see create_guard)."""
@@ -277,6 +278,7 @@ async def _check_runner_factory_create(
         runner_tunnel_tokens=runner_tunnel_tokens,
         agent_store=agent_store,
         agent_id=agent_id,
+        parent_session_id=parent_session_id,
         bundled=bundled,
     )
 
@@ -655,6 +657,7 @@ def register_core_routes(
             runner_tunnel_tokens=runner_tunnel_tokens,
             agent_store=agent_store,
             agent_id=body.agent_id,
+            parent_session_id=body.parent_session_id,
             bundled=False,
         )
 
@@ -868,6 +871,7 @@ def register_core_routes(
             runner_tunnel_tokens=runner_tunnel_tokens,
             agent_store=agent_store,
             agent_id=None,
+            parent_session_id=parsed_metadata.parent_session_id,
             bundled=True,
         )
 
@@ -3254,7 +3258,7 @@ def register_core_routes(
         try:
             from omnigent.server.routes import sessions as _sessions_facade
 
-            await asyncio.to_thread(
+            target_loaded = await asyncio.to_thread(
                 _sessions_facade.get_agent_cache().load,
                 target_agent.id,
                 target_agent.bundle_location,
@@ -3265,6 +3269,12 @@ def register_core_routes(
                 f"Target agent bundle could not be loaded: {body.agent_id!r}",
                 code=ErrorCode.INVALID_INPUT,
             ) from exc
+        # An agent never moves a factory member off its role's factory agent.
+        from omnigent.server.factory.custom_bundle import deny_runner_member_rebind
+
+        deny_runner_member_rebind(
+            request, session, getattr(target_loaded, "spec", None), auth_provider
+        )
 
         # A model id is provider-bound, so model_override / reasoning_effort
         # carry over only within the same provider family. A native target

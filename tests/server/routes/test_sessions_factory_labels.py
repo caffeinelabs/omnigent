@@ -7,9 +7,11 @@ server-only labels. A runner authenticates as the session owner, so:
 - the generic ``PATCH /v1/sessions/{id}`` refuses factory labels from a runner
   (its tunnel header or an ``org: runner`` bearer) before touching the store;
 - ``POST /v1/sessions`` from a runner accepts factory labels only as
-  ``sys_factory_spawn`` sends them: the spawn labels, a spawn role, and a
-  parent that is a lead of the named factory (``server/factory/create_guard.py``);
-- a runner's fork of a factory member is an ordinary session.
+  ``sys_factory_spawn`` sends them: the spawn labels, a spawn role, a built-in
+  agent, no parent session, a parent label naming a lead of the named factory,
+  and room for the member (``server/factory/create_guard.py``);
+- a runner's fork of a factory member is an ordinary session;
+- a runner cannot switch a member to another role's agent, or replace its bundle.
 
 A person keeps writing and creating them unchanged, and a runner keeps writing
 other labels.
@@ -22,6 +24,8 @@ import secrets
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
 
 import httpx
 import pytest
@@ -35,6 +39,7 @@ from omnigent.factory_spawn import member_labels
 from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER, token_bound_runner_id
 from omnigent.server.accounts_config import AccountsConfig
 from omnigent.server.auth import LEVEL_OWNER, UnifiedAuthProvider
+from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.routes import (
     SERVER_ONLY_LABEL_FIELDS,
     FactoryRouteError,
@@ -45,6 +50,7 @@ from omnigent.server.routes.sessions import create_sessions_router
 from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
 from omnigent.stores.artifact_store.local import LocalArtifactStore
 from omnigent.stores.conversation_store.sqlalchemy_store import SqlAlchemyConversationStore
+from omnigent.stores.factory_store import InMemoryFactoryStore
 from omnigent.stores.permission_store.sqlalchemy_store import SqlAlchemyPermissionStore
 
 ALICE = "alice"
@@ -72,6 +78,7 @@ class World:
 
     app: FastAPI
     conversations: SqlAlchemyConversationStore
+    agents: SqlAlchemyAgentStore
     lead: str
     pl: str
     other_lead: str
@@ -138,7 +145,7 @@ def world(db_uri: str, tmp_path: Path) -> World:
         ),
         prefix="/v1",
     )
-    return World(app, conversations, lead, pl, other_lead, bobs_lead)
+    return World(app, conversations, agents, lead, pl, other_lead, bobs_lead)
 
 
 def _person() -> dict[str, str]:
@@ -503,6 +510,241 @@ def test_an_uploaded_spec_cannot_seed_factory_labels(world: World) -> None:
     assert resp.status_code == 400, resp.text
     assert "omnigent.factory.* labels are set only by the server" in resp.text
     assert not world.conversations.list_conversation_ids_with_label("team", "ml")
+
+
+def test_a_runner_cannot_create_a_member_as_a_child_session(world: World) -> None:
+    # A spawn never sets parent_session_id: a sub_agent child of the PL is no member.
+    resp = world.client().post(
+        "/v1/sessions",
+        json={
+            "agent_id": _AGENT_ID,
+            "title": "PL · app",
+            "parent_session_id": world.pl,
+            "labels": _spawn_labels(world, **{F.LABEL_ROLE: F.ROLE_LEAD}),
+        },
+        headers=_runner(),
+    )
+
+    assert resp.status_code == 422, resp.text
+    assert _code(resp) == "factory_member_has_parent"
+    assert _nothing_created(world)
+
+
+# ── POST /v1/sessions: what sys_factory_spawn checks before it creates ──
+
+
+class _SpecCache:
+    """An agent cache whose every spec sets ``executor.config.factory_max_pods``."""
+
+    def __init__(self, max_pods: int) -> None:
+        self.max_pods = max_pods
+
+    def load(self, agent_id: str, bundle_location: str, *, expand_env: bool = False) -> Any:
+        del agent_id, bundle_location, expand_env
+        config = {"factory_max_pods": self.max_pods}
+        return SimpleNamespace(spec=SimpleNamespace(executor=SimpleNamespace(config=config)))
+
+
+def _with_factory(world: World, *, max_pods: int | None = None) -> InMemoryFactoryStore:
+    """Register the factory's stores on the app, as ``register_factory_routes`` does."""
+    store = InMemoryFactoryStore()
+    deps = FactoryDeps(
+        conversation_store=world.conversations,
+        agent_store=world.agents,
+        agent_cache=_SpecCache(max_pods) if max_pods is not None else None,  # type: ignore[arg-type]
+        factory_store=store,
+    )
+    setattr(world.app.state, FACTORY_STATE_ATTR, deps)
+    return store
+
+
+def _members_of_app(world: World) -> list[str]:
+    return world.conversations.list_conversation_ids_with_label(F.LABEL_PROJECT, "app")
+
+
+def test_a_runner_cannot_create_a_second_live_pl_of_a_project(world: World) -> None:
+    first = _create(world, _spawn_labels(world), _runner())
+    second = _create(world, _spawn_labels(world), _runner())
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 409, second.text
+    assert _code(second) == "duplicate_project"
+    assert _members_of_app(world) == [first.json()["id"]]
+
+    # A done PL no longer holds the project.
+    world.conversations.set_labels(first.json()["id"], {F.LABEL_STATE: F.STATE_DONE})
+    third = _create(world, _spawn_labels(world), _runner())
+    assert third.status_code == 201, third.text
+
+
+def test_a_runner_cannot_create_a_member_over_the_pod_cap(world: World) -> None:
+    # Atlas and its PL already hold two pods.
+    _with_factory(world, max_pods=2)
+
+    capped = _create(world, _spawn_labels(world), _runner())
+
+    assert capped.status_code == 409, capped.text
+    assert _code(capped) == "pod_cap"
+    assert _nothing_created(world)
+
+    _with_factory(world, max_pods=3)
+    assert _create(world, _spawn_labels(world), _runner()).status_code == 201
+
+
+def test_without_a_loadable_lead_spec_the_cap_is_left_to_the_spawn(world: World) -> None:
+    _with_factory(world)
+
+    assert _create(world, _spawn_labels(world), _runner()).status_code == 201
+
+
+def test_a_runner_cannot_spawn_the_pl_of_a_held_server_project(world: World) -> None:
+    store = _with_factory(world)
+    store.upsert_project(world.lead, "base")
+    held = {"depends_on": ["base"], "spawn_owner": "server"}
+    store.upsert_project(world.lead, "app", charter=held)
+
+    resp = _create(world, _spawn_labels(world), _runner())
+
+    assert resp.status_code == 409, resp.text
+    assert _code(resp) == "server_owns_spawn"
+    assert _nothing_created(world)
+
+    # Without a hold (a lead recovering the PL), the spawn goes through.
+    store.upsert_project(world.lead, "app", charter={"spawn_owner": "server"})
+    assert _create(world, _spawn_labels(world), _runner()).status_code == 201
+
+
+def test_the_servers_own_pl_spawn_passes_with_the_factory_registered(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.server.factory import spawn
+    from omnigent.server.managed_hosts import ManagedLaunchTracker, parse_sandbox_config
+    from omnigent.server.routes.sessions import routes_core
+
+    store = _with_factory(world, max_pods=3)
+    project = store.upsert_project(world.lead, "app", charter={"spawn_owner": "server"})
+    root = world.conversations.get_conversation(world.lead)
+    assert root is not None
+    # The managed launch the body asks for is recorded, not run.
+    world.app.state.sandbox_config = parse_sandbox_config(
+        {"provider": "modal", "server_url": "https://managed-test.example.com"}
+    )
+    world.app.state.host_store = object()
+    world.app.state.managed_launches = ManagedLaunchTracker()
+
+    async def _record(**kwargs: Any) -> None:
+        del kwargs
+
+    monkeypatch.setattr(routes_core, "_run_managed_launch", _record)
+    body = spawn.create_body(root, project, agent_id=_AGENT_ID, supervisor=world.lead)
+
+    resp = world.client().post("/v1/sessions", json=body, headers=_runner())
+
+    assert resp.status_code == 201, resp.text
+    assert _members_of_app(world) == [resp.json()["id"]]
+
+
+# ── switch-agent and the member's bundle ─────────────────────────
+
+
+_PL_AGENT_ID = "2b7c1d0e9f8a4b3c8d7e6f5a4b3c2d1e"
+_LEAD_AGENT_ID = "3c8d2e1f0a9b4c5d9e8f7a6b5c4d3e2f"
+_PLAIN_AGENT_ID = "4d9e3f2a1b0c4d6e8f9a7b6c5d4e3f20"
+
+
+class _RoleCache:
+    """An agent cache whose specs name the factory role registered per agent id."""
+
+    def __init__(self, roles: dict[str, str | None]) -> None:
+        self.roles = roles
+
+    def load(self, agent_id: str, bundle_location: str, *, expand_env: bool = False) -> Any:
+        del bundle_location, expand_env
+        role = self.roles.get(agent_id)
+        config = {"factory_role": role} if role else {}
+        return SimpleNamespace(spec=SimpleNamespace(executor=SimpleNamespace(config=config)))
+
+
+@pytest.fixture
+def switchable(world: World, monkeypatch: pytest.MonkeyPatch) -> World:
+    """Three more built-ins: a PL agent, a lead agent and a plain agent."""
+    from omnigent.server.routes import sessions as sessions_mod
+
+    for agent_id, name in (
+        (_PL_AGENT_ID, "factory-pl-2"),
+        (_LEAD_AGENT_ID, "factory-lead-2"),
+        (_PLAIN_AGENT_ID, "claude"),
+    ):
+        world.agents.create(agent_id=agent_id, name=name, bundle_location=f"{agent_id}/b")
+    cache = _RoleCache({_PL_AGENT_ID: F.ROLE_PROJECT_LEAD, _LEAD_AGENT_ID: F.ROLE_LEAD})
+    monkeypatch.setattr(sessions_mod, "get_agent_cache", lambda: cache)
+    monkeypatch.setattr(sessions_mod, "_same_provider_family", lambda a, b: True)
+    monkeypatch.setattr(sessions_mod, "_agent_carries_native_fork_history", lambda a: False)
+    monkeypatch.setattr(sessions_mod, "_presentation_labels_for_agent", lambda a: {})
+
+    async def _no_reset(session_id: str) -> None:
+        del session_id
+
+    monkeypatch.setattr(sessions_mod, "_reset_runner_resources_after_switch", _no_reset)
+    return world
+
+
+def _switch(world: World, session_id: str, agent_id: str, headers: dict[str, str]) -> Any:
+    return world.client().post(
+        f"/v1/sessions/{session_id}/switch-agent", json={"agent_id": agent_id}, headers=headers
+    )
+
+
+@pytest.mark.parametrize("target", [_PLAIN_AGENT_ID, _LEAD_AGENT_ID])
+def test_a_runner_cannot_switch_a_member_off_its_roles_agent(
+    switchable: World, target: str
+) -> None:
+    resp = _switch(switchable, switchable.pl, target, _runner())
+
+    assert resp.status_code == 403, resp.text
+    assert _code(resp) == "factory_agent_required"
+    conv = switchable.conversations.get_conversation(switchable.pl)
+    assert conv is not None and conv.agent_id == _AGENT_ID
+
+
+def test_a_member_still_switches_to_its_roles_agent_and_a_person_to_any(
+    switchable: World,
+) -> None:
+    by_runner = _switch(switchable, switchable.pl, _PL_AGENT_ID, _runner())
+    by_person = _switch(switchable, switchable.lead, _PLAIN_AGENT_ID, _person())
+    plain = _create(switchable, {"team": "ml"}, _runner())
+    off_factory = _switch(switchable, plain.json()["id"], _PLAIN_AGENT_ID, _runner())
+
+    assert by_runner.status_code == 200, by_runner.text
+    assert by_person.status_code == 200, by_person.text
+    assert off_factory.status_code == 200, off_factory.text
+
+
+def test_a_runner_cannot_replace_a_members_bundle(world: World) -> None:
+    from tests.server.helpers import build_agent_bundle
+
+    # A member bound to a session-scoped agent (e.g. after a person's switch).
+    upload = _bundled_create(world, {"team": "ml"}, _person())
+    assert upload.status_code == 201, upload.text
+    member = upload.json()["session_id"]
+    world.conversations.set_labels(
+        member, {F.LABEL_ID: world.lead, F.LABEL_ROLE: F.ROLE_PROJECT_LEAD}
+    )
+
+    def _put(headers: dict[str, str]) -> httpx.Response:
+        bundle = build_agent_bundle(name="pl", description="mine")
+        return world.client().put(
+            f"/v1/sessions/{member}/agent",
+            files={"bundle": ("agent.tar.gz", bundle, "application/gzip")},
+            headers=headers,
+        )
+
+    by_runner = _put(_runner())
+    by_person = _put(_person())
+
+    assert by_runner.status_code == 403, by_runner.text
+    assert _code(by_runner) == "factory_custom_bundle_denied"
+    assert by_person.status_code == 200, by_person.text
 
 
 # ── People are unaffected ────────────────────────────────────────

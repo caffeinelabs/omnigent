@@ -9,13 +9,18 @@ body ``sys_factory_spawn`` sends (:func:`omnigent.factory_spawn.member_labels`):
 - only the spawn labels, never a server-only one (422 ``server_only_label``)
   or any other factory label (422 ``factory_label_not_allowed``);
 - a role in :data:`~omnigent.factory.SPAWN_ROLES` (403 ``spawn_role_not_allowed``);
+- a top-level session: never a ``parent_session_id`` (422 ``factory_member_has_parent``);
 - a parent that is a lead of the named factory, which the caller may edit and,
   over a tunnel, whose runner the caller is (403 ``session_out_of_factory`` /
   ``sender_not_bound``), and a supervisor in the same factory;
 - never a bundle of its own, uploaded with the create or bound by the id of a
   session-scoped agent an earlier upload made (403 ``factory_custom_bundle_denied``);
   a spawn always names a built-in or template agent by ``agent_id`` (422
-  ``agent_required`` otherwise).
+  ``agent_required`` otherwise);
+- what ``sys_factory_spawn`` checks before it creates (409): no second live PL
+  of the project (``duplicate_project``), no pod over the parent's
+  ``factory_max_pods`` (``pod_cap``) and no PL of a server-spawned project held
+  on its dependencies (``server_owns_spawn``).
 
 People's creates are not checked here.
 """
@@ -38,6 +43,7 @@ from omnigent.factory import (
     LABEL_SUPERVISOR,
     LABEL_VERSION,
     ROLE_LEAD,
+    ROLE_PROJECT_LEAD,
     SPAWN_ROLES,
     STATES,
     is_factory_label,
@@ -45,6 +51,7 @@ from omnigent.factory import (
 )
 from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
 from omnigent.server.auth import LEVEL_EDIT, runner_origin
+from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.custom_bundle import FACTORY_CUSTOM_BUNDLE_DENIED
 from omnigent.server.factory.membership import is_session_id, is_top_level, runner_token_binds
 from omnigent.server.factory.routes import SERVER_ONLY_LABEL_FIELDS, FactoryRouteError
@@ -90,6 +97,7 @@ async def check_runner_create(
     runner_tunnel_tokens: frozenset[str] | None,
     agent_store: AgentStore,
     agent_id: str | None,
+    parent_session_id: str | None = None,
     bundled: bool = False,
 ) -> None:
     """
@@ -105,6 +113,7 @@ async def check_runner_create(
     :param agent_store: Store for the *agent_id* lookup.
     :param agent_id: The agent a JSON create binds, e.g. the ``factory-pl`` row's id;
         ``None`` for a multipart create (or a project-filled one).
+    :param parent_session_id: The create's ``parent_session_id``, if any.
     :param bundled: Whether the create uploads its own bundle (multipart).
     :raises FactoryRouteError: When the create is refused.
     """
@@ -131,6 +140,13 @@ async def check_runner_create(
             f"labels {', '.join(other)} are not set when a factory member is created; "
             "the member sets its own with sys_factory_set once it runs",
         )
+    if parent_session_id is not None:
+        raise FactoryRouteError(
+            422,
+            "factory_member_has_parent",
+            "a factory member is a top-level session: sys_factory_spawn never sets "
+            "parent_session_id, and sub-agents take their role from their spec",
+        )
     await _check_agent(bundled, agent_id, agent_store)
     _check_values(labels)
     parent = await _spawning_lead(labels, conversation_store)
@@ -145,6 +161,14 @@ async def check_runner_create(
     supervisor = labels.get(LABEL_SUPERVISOR)
     if supervisor is not None:
         await _same_factory_member(supervisor, labels[LABEL_ID], conversation_store)
+    deps = getattr(request.app.state, FACTORY_STATE_ATTR, None)
+    await asyncio.to_thread(
+        _check_room,
+        labels,
+        parent,
+        conversation_store,
+        deps if isinstance(deps, FactoryDeps) else None,
+    )
 
 
 async def _check_agent(bundled: bool, agent_id: str | None, store: AgentStore) -> None:
@@ -164,6 +188,78 @@ async def _check_agent(bundled: bool, agent_id: str | None, store: AgentStore) -
             "factory members cannot run a custom bundle; spawn a built-in agent with "
             "sys_factory_spawn",
         )
+
+
+def _check_room(
+    labels: Mapping[str, str],
+    lead: Conversation,
+    store: ConversationStore,
+    deps: FactoryDeps | None,
+) -> None:
+    """
+    Refuse what ``sys_factory_spawn`` refuses before its create (runner/factory_dispatch.py).
+
+    Counts pods the way the server's own PL spawn does (``spawn.live_members``), so
+    neither spawn is refused here when its own check passed. Without factory deps
+    (or a loadable lead spec) only the duplicate check runs.
+
+    :param labels: The create's labels, already checked against a spawn's.
+    :param lead: The parent lead, whose spec sets ``factory_max_pods``.
+    :param store: Store for the factory's members.
+    :param deps: The factory's stores, or ``None`` when the factory routes are off.
+    """
+    from omnigent.server.factory import spawn
+
+    factory_id = labels[LABEL_ID]
+    project = labels.get(LABEL_PROJECT) or ""
+    members = spawn.live_members(factory_id, store)
+    twin = next(
+        (
+            m
+            for m in members
+            if project
+            and m.labels.get(LABEL_PROJECT) == project
+            and m.labels.get(LABEL_ROLE) == ROLE_PROJECT_LEAD
+        ),
+        None,
+    )
+    if twin is not None:
+        raise FactoryRouteError(
+            409,
+            "duplicate_project",
+            f"project {project!r} already has a live PL ({twin.id}): message it with "
+            "sys_session_post, or mark it done first",
+        )
+    if deps is None:
+        return
+    cap = spawn.pod_cap(deps, lead)
+    if cap is not None and len(members) >= cap:
+        raise FactoryRouteError(
+            409,
+            "pod_cap",
+            f"the factory runs {len(members)} live members (factory_max_pods {cap}); "
+            "mark finished members state=done or reuse an existing project lead",
+        )
+    if project and _server_holds(deps, factory_id, project):
+        raise FactoryRouteError(
+            409,
+            "server_owns_spawn",
+            f"the server spawns project {project!r}'s PL itself once its dependencies "
+            "are met; wait for its [Factory notice · PL·<slug> spawned …]",
+        )
+
+
+def _server_holds(deps: FactoryDeps, factory_id: str, slug: str) -> bool:
+    """Whether *slug* is a server-spawned project held on its dependencies."""
+    from omnigent.server.factory.charter import SPAWN_SERVER, spawn_owner
+    from omnigent.server.factory.gating import unmet_dependencies
+
+    store = deps.factory_store
+    rows = {p.slug: p for p in store.list_projects(factory_id)}
+    row = rows.get(slug)
+    if row is None or spawn_owner(row) != SPAWN_SERVER:
+        return False
+    return bool(unmet_dependencies(row, rows, store.list_prs(factory_id)))
 
 
 def _check_values(labels: Mapping[str, str]) -> None:
