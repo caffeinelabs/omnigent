@@ -1617,21 +1617,130 @@ def _command_of(event: _Json) -> str | None:
     return None
 
 
-def guard_evaluator(guard: _RoleGuard, *, prefix: str = "") -> Callable[[_Json, _Json], _Json]:
+# ── Project-lead dispatches (the loop engine's mode) ─────────────────────────
+
+ENGINE_MODE_LABEL = "omnigent.factory.engine_mode"
+"""Engine mode the server mirrors onto every project lead (the root holds the source)."""
+ENFORCE = "enforce"
+TASK_TITLE_RE = re.compile(r"^(review-|demo-)?[a-z0-9][a-z0-9-]{0,62}(-r\d{1,2})?$")
+"""A dispatch title the work graph binds: ``<key>``, ``<key>-r<k>``, ``review-…``, ``demo-…``."""
+TEAM_TITLES: frozenset[str] = frozenset(
+    {"env", "env_keeper", "demo", "review", "reviewer", "planner"}
+)
+TEAM_AGENTS: frozenset[str] = frozenset({ROLE_ENV_KEEPER, ROLE_PLANNER})
+# Codex-native workers (ic_codex, reviewer) are unpriced: a cost_budget would fail them closed.
+DEFAULT_COST_BUDGET_AGENTS: tuple[str, ...] = ("ic", "demo")
+_DISPATCH_TOOLS: frozenset[str] = frozenset(
+    {"sys_session_send", "mcp__omnigent__sys_session_send"}
+)
+_CREATE_TOOLS: frozenset[str] = frozenset(
+    {"sys_session_create", "mcp__omnigent__sys_session_create"}
+)
+_TITLE_HINT = (
+    'use the task\'s title_to_use from sys_factory_task(op="start") (`<key>`, `<key>-r<k>`), '
+    "`review-<key>` or `demo-<key>`"
+)
+
+
+def dispatch_violations(
+    args: _Json, *, cost_budget_agents: Iterable[str] = DEFAULT_COST_BUDGET_AGENTS
+) -> list[tuple[str, str]]:
+    """
+    What a project lead's ``sys_session_send`` breaks of the loop engine's dispatch rules.
+
+    A follow-up by ``session_id`` is never checked (``cost_budget`` only applies
+    when a sub-agent is first created). A new sub-agent needs a title: a task
+    title, or a fixed team name. Team names skip the title rule only; a
+    budgeted agent still needs ``cost_budget``.
+
+    :param args: The tool's arguments, e.g. ``{"agent": "ic", "title": "route",
+        "args": {"input": "…", "cost_budget": {"max_cost_usd": 9}}}``.
+    :param cost_budget_agents: Agents a new dispatch must budget.
+    :returns: ``(code, message)`` pairs: ``title_not_task_shaped``, ``no_cost_budget``.
+    """
+    if isinstance(args.get("session_id"), str) and args["session_id"]:
+        return []
+    agent, title = args.get("agent"), args.get("title")
+    if not isinstance(agent, str) or not agent or agent in TEAM_AGENTS:
+        return []
+    text = title.strip() if isinstance(title, str) else ""
+    if not text:
+        # Untitled, the runner names it ``<agent>-<n>``: bound to no task, budgeted by nothing.
+        return [("title_not_task_shaped", f"a dispatch to {agent} needs a title: {_TITLE_HINT}")]
+    if text not in TEAM_TITLES and not TASK_TITLE_RE.fullmatch(text):
+        return [
+            (
+                "title_not_task_shaped",
+                f"dispatch title {text[:80]!r} is not task-shaped: {_TITLE_HINT}",
+            )
+        ]
+    child = args.get("args")
+    budget = child.get("cost_budget") if isinstance(child, dict) else None
+    if agent in set(cost_budget_agents) and not budget:
+        return [
+            (
+                "no_cost_budget",
+                f"a task dispatch to {agent} needs args.cost_budget: pass the cost_budget of "
+                'the task\'s card (sys_factory_task(op="start") or op="get"); continue a '
+                "running worker with session_id=<its id> instead",
+            )
+        ]
+    return []
+
+
+def _engine_mode(event: _Json) -> str | None:
+    context = event.get("context")
+    labels = context.get("labels") if isinstance(context, dict) else None
+    mode = labels.get(ENGINE_MODE_LABEL) if isinstance(labels, dict) else None
+    return mode if isinstance(mode, str) else None
+
+
+def _dispatch_reason(event: _Json, cost_budget_agents: Iterable[str]) -> str | None:
+    """A DENY reason for a PL dispatch, only when the factory's engine mode is ``enforce``."""
+    data = event.get("data")
+    if not isinstance(data, dict) or not isinstance(data.get("name"), str):
+        return None
+    send = _tool_call(event, _DISPATCH_TOOLS)
+    create = _tool_call(event, _CREATE_TOOLS) if send is None else None
+    if send is None and create is None:
+        return None
+    if _engine_mode(event) != ENFORCE:
+        # observe/assist: allowed; the server records the finding when it binds the worker.
+        return None
+    if create is not None:
+        # Its agent_id hides which agent it is, so neither rule can be checked.
+        return (
+            "Engine mode enforce: dispatch with sys_session_send(agent=<agent>, "
+            "title=<title_to_use>, args={..., cost_budget}), not sys_session_create."
+        )
+    found = dispatch_violations(send or {}, cost_budget_agents=cost_budget_agents)
+    return f"Engine mode enforce: {found[0][1]}." if found else None
+
+
+def guard_evaluator(
+    guard: _RoleGuard,
+    *,
+    prefix: str = "",
+    cost_budget_agents: Iterable[str] | None = None,
+) -> Callable[[_Json, _Json], _Json]:
     """
     Wrap a :class:`_RoleGuard` as a V0 policy evaluator.
 
     :param guard: The rule set to apply.
     :param prefix: Text put before every DENY reason, e.g. ``"Factory invariant: "``.
+    :param cost_budget_agents: Check a project lead's dispatches against the
+        engine mode (:func:`dispatch_violations`), with these agents budgeted.
     :returns: ``fn(event, config)`` returning ALLOW or DENY, never ASK.
     """
+    budgeted = tuple(cost_budget_agents) if cost_budget_agents is not None else None
 
     def _evaluate(event: _Json, config: _Json) -> _Json:  # noqa: ARG001
         """
         Classify a tool call.
 
-        :param event: V0 event; only shell / terminal-input tool calls and
-            GitHub MCP merges are inspected.
+        :param event: V0 event; shell / terminal-input tool calls, GitHub MCP
+            merges and (for a project lead) ``sys_session_send`` / ``sys_session_create`` are
+            inspected.
         :param config: Runtime config dict (unused).
         :returns: ALLOW or DENY, never ASK.
         """
@@ -1639,6 +1748,8 @@ def guard_evaluator(guard: _RoleGuard, *, prefix: str = "") -> Callable[[_Json, 
             return _ALLOW
         if _is_mcp_merge(event):
             return _decision(f"{prefix}GitHub MCP merges are blocked: {MERGE_GATE_HINT}.")
+        if budgeted is not None and (reason := _dispatch_reason(event, budgeted)):
+            return _decision(f"{prefix}{reason}")
         command = _command_of(event)
         if not command:
             return _ALLOW
@@ -1697,6 +1808,7 @@ def factory_role_guard(
     deny_repos: Sequence[str] | None = None,
     push_ref_prefixes: Sequence[str] | None = None,
     profile: str | None = None,
+    cost_budget_agents: Sequence[str] | None = None,
 ) -> Callable[[_Json, _Json], _Json]:
     """
     Factory: DENY-only guard for one software-factory role.
@@ -1704,6 +1816,14 @@ def factory_role_guard(
     Returns ALLOW or DENY, never ASK, so unattended agents never stall on an
     approval prompt. Attach it next to ``blast_radius{gate_pushes: false}``,
     which keeps denying catastrophic commands (force-push, ``rm -rf /``).
+
+    For a project lead it also checks ``sys_session_send`` against the
+    factory's engine mode (the ``omnigent.factory.engine_mode`` label the
+    server mirrors onto the PL): in ``enforce`` a new dispatch with no title or
+    one that is not task-shaped, a dispatch to a budgeted agent without
+    ``args.cost_budget``, and any ``sys_session_create`` are denied;
+    ``observe`` and ``assist`` allow them and the server records the finding
+    (``task.unplanned``, ``loop.budget_violation``).
 
     :param role: The agent's factory role: ``lead``, ``project_lead``, ``ic``,
         ``env_keeper``, ``reviewer``, ``demo`` or ``planner``.
@@ -1717,6 +1837,9 @@ def factory_role_guard(
         ``["factory/"]``; every other destination is denied.
     :param profile: A named rule set from :data:`GUARD_PROFILES` (``smith``)
         supplying the defaults of the arguments above.
+    :param cost_budget_agents: Agents a project lead's task dispatch must give a
+        ``cost_budget`` in enforce mode (default ``ic`` and ``demo``; the
+        codex-native ``ic_codex`` and ``reviewer`` are unpriced and exempt).
     :returns: An evaluator ``fn(event, config)`` returning a V0 decision.
     :raises ValueError: If *role* is not a factory role or *profile* is
         unknown (the runner then fails closed and denies every tool call).
@@ -1724,6 +1847,13 @@ def factory_role_guard(
     if role not in GUARD_ROLES:
         raise ValueError(
             f"factory_role_guard: role must be one of {sorted(GUARD_ROLES)}, got {role!r}"
+        )
+    budgeted: tuple[str, ...] | None = None
+    if role == ROLE_PROJECT_LEAD:
+        budgeted = (
+            tuple(_as_list(cost_budget_agents))
+            if cost_budget_agents is not None
+            else DEFAULT_COST_BUDGET_AGENTS
         )
     return guard_evaluator(
         build_guard(
@@ -1733,7 +1863,8 @@ def factory_role_guard(
             deny_repos=deny_repos,
             push_ref_prefixes=push_ref_prefixes,
             profile=profile,
-        )
+        ),
+        cost_budget_agents=budgeted,
     )
 
 
@@ -1792,6 +1923,12 @@ POLICY_REGISTRY: list[dict[str, object]] = [
                     "enum": sorted(GUARD_PROFILES),
                     "description": "Named rule set supplying the defaults (smith: PRs to "
                     "omnigent from factory/self/** branches, never merges).",
+                },
+                "cost_budget_agents": {
+                    **_STRING_LIST,
+                    "description": "Project lead only: agents a task dispatch must give a "
+                    "cost_budget when the factory's engine mode is enforce.",
+                    "default": list(DEFAULT_COST_BUDGET_AGENTS),
                 },
             },
             "required": ["role"],

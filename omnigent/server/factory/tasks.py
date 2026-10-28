@@ -575,8 +575,13 @@ def task_view(
     *,
     analysis: Analysis | None = None,
     prs: Mapping[str, FactoryPr] | None = None,
+    loop: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """:returns: The :class:`~omnigent.server.factory.schemas.TaskView` JSON of a task."""
+    """
+    :returns: The :class:`~omnigent.server.factory.schemas.TaskView` JSON of a task.
+
+    :param loop: Its implement loop's chip, when known.
+    """
     pr = (prs or {}).get(task.pr_id or "")
     waves = analysis.plan.wave_of() if analysis is not None else {}
     body = {
@@ -610,7 +615,7 @@ def task_view(
         "wave": waves.get(task.key),
         "critical": analysis is not None and task.key in analysis.path,
         "waiting_on": list((analysis.waiting if analysis is not None else {}).get(task.key, [])),
-        "loop": None,
+        "loop": loop,
     }
     return schemas.TaskView.model_validate(body).model_dump(mode="json")
 
@@ -678,6 +683,8 @@ def task_budget(task: FactoryTask, project: FactoryProject | None) -> tuple[int,
     :returns: ``(attempts, usd)``: the task's override, else the charter's
         ``budgets.task_usd`` (for dollars), else the code defaults.
     """
+    from omnigent.server.factory.loops import budget as loop_budget
+
     budget = task.budget or {}
     attempts = budget.get("attempts")
     usd = budget.get("usd")
@@ -686,8 +693,12 @@ def task_budget(task: FactoryTask, project: FactoryProject | None) -> tuple[int,
         if isinstance(charter_budgets, Mapping):
             usd = charter_budgets.get("task_usd")
     return (
-        int(attempts) if isinstance(attempts, int) and attempts > 0 else DEFAULT_ATTEMPTS,
-        float(usd) if isinstance(usd, int | float) and usd >= 0 else DEFAULT_TASK_USD,
+        int(attempts)
+        if isinstance(attempts, int) and attempts > 0
+        else int(loop_budget(task.factory_id, "implement", "attempts")),
+        float(usd)
+        if isinstance(usd, int | float) and usd >= 0
+        else float(loop_budget(task.factory_id, "implement", "usd")),
     )
 
 
@@ -1218,14 +1229,24 @@ def list_view(deps: FactoryDeps, factory_id: str, slug: str | None) -> dict[str,
 
     :returns: ``{"tasks": [TaskView], "projects": [graph view + summary]}``.
     """
+    from omnigent.server.factory.loops import loop_chip
+
     data = load_factory(deps, factory_id, slug)
     slugs = [slug] if slug else sorted({t.project_slug for t in data.tasks})
+    chips = {
+        norm_id(loop.task_id): loop_chip(loop)
+        for loop in deps.factory_store.list_loops(factory_id, kinds=["implement"])
+        if loop.task_id
+    }
     tasks: list[dict[str, Any]] = []
     projects: list[dict[str, Any]] = []
     for project in slugs:
         ctx = data.project_ctx(deps, project)
         analysis = analyze(ctx)
-        tasks += [task_view(t, analysis=analysis, prs=ctx.prs) for t in ctx.tasks]
+        tasks += [
+            task_view(t, analysis=analysis, prs=ctx.prs, loop=chips.get(norm_id(t.id)))
+            for t in ctx.tasks
+        ]
         projects.append({**graph_view(ctx, analysis), "summary": summary(ctx, analysis)})
     return {"tasks": tasks, "projects": projects}
 
@@ -1331,6 +1352,13 @@ async def start_task(
                     f"{task.ref} {key} waits on {', '.join(missing)}",
                     waiting_on=missing,
                 )
+        from omnigent.server.factory import loops
+
+        mode = engine_mode(deps, factory_id)
+        refusal = loops.start_refusal(deps, factory_id, task, mode)
+        if refusal is not None:
+            raise refusal  # enforce: 409 budget_exhausted past the attempt budget
+        warning = loops.start_warning(deps, factory_id, task) if mode == "assist" else None
         use = harness or harness_of(task)
         # A start sent alongside its dispatch may land after the binder counted it.
         racing = task.state == "running" and task.attempts > 0 and _claim_bound_attempt(task)
@@ -1349,7 +1377,7 @@ async def start_task(
             card=card,
         )
         ctx.tasks = [row if t.id == row.id else t for t in ctx.tasks]
-        item = dispatch_item(deps, ctx, row, mode=engine_mode(deps, factory_id), attempt=attempt)
+        item = dispatch_item(deps, ctx, row, mode=mode, attempt=attempt)
         attempts_cap, _ = task_budget(row, ctx.project)
         out = {
             **item,
@@ -1358,6 +1386,8 @@ async def start_task(
             "usd_left": item["budget_left"]["usd"],
             "state": row.state,
         }
+        if warning:
+            out["budget_warning"] = warning
         evs = [event] if event is not None else []
         if event is not None:
             event.data["attempt"] = attempt
@@ -1366,6 +1396,11 @@ async def start_task(
     async with lock(factory_id):
         out, evs = await asyncio.to_thread(run)
     await emit_all(app_state, factory_id, evs)
+    if not evs:
+        # A re-dispatch of a running task moves no state: tell the loop engine directly.
+        from omnigent.server.factory import loops
+
+        await loops.observe_started(app_state, factory_id, slug, key, int(out["attempt"]))
     return out
 
 

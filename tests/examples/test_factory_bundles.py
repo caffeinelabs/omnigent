@@ -1550,3 +1550,178 @@ def test_the_planning_skill_carries_the_contract() -> None:
     flat = " ".join(analysis.read_text(encoding="utf-8").split())
     assert 'worktree add --detach ~/factory/plans/wt/$ID "origin/$BASE"' in flat
     assert "--scope" in flat and "cohesion" in flat and "shared_outside_scopes" in flat
+
+
+# ── Round 3: the loop engine, NEXT hints and loop mails ──────────────────────
+
+
+def _alternatives(row: str) -> list[str]:
+    """A row's ``A|B|C`` word alternatives, one row each."""
+    match = re.search(r"\b([A-Z][A-Z ]*(?:\|[A-Z][A-Z ]*)+)\b", row)
+    if match is None:
+        return [row]
+    return [row[: match.start()] + alt + row[match.end() :] for alt in match.group(1).split("|")]
+
+
+def _rows(prompt: str, prefix: str) -> list[re.Pattern[str]]:
+    found = re.findall(rf"`({re.escape(prefix)}[^`]*\])`", prompt)
+    return [_row_pattern(alt) for row in found for alt in _alternatives(row)]
+
+
+def test_engine_hints_and_loop_mails_have_pl_rows(pl: AgentSpec) -> None:
+    """Every NEXT step and every ``[Factory loop · …]`` text the server sends matches a PL row."""
+    from omnigent.entities import Conversation
+    from omnigent.entities.factory import FactoryDecision, FactoryLoop, FactoryPr, FactoryTask
+    from omnigent.server.factory.loop_escalation import (
+        LoopAnswer,
+        LoopFacts,
+        answer_text,
+        escalation_text,
+        resumed_text,
+    )
+    from omnigent.server.factory.pipeline import MAILED, Step, hint_text
+
+    prompt = " ".join((pl.instructions or "").split())
+    next_rows = _rows(prompt, "[Factory engine · NEXT")
+    loop_rows = _rows(prompt, "[Factory loop · ")
+    assert next_rows and len(loop_rows) == 7
+    head = "5e1c2d4" + "a" * 33
+    pr = FactoryPr(
+        id="p" * 32,
+        factory_id="f" * 32,
+        repo="caffeinelabs/app",
+        number=9631,
+        url="u",
+        head_sha=head,
+    )
+    args = {"checks": "lint", "pr": 9631, "app": "A", "api": "B"}
+    for name in sorted(MAILED):
+        header = hint_text(pr, Step(name, head, "CI green", args), base="temp-main")
+        assert any(p.fullmatch(header) for p in next_rows), header
+    task = FactoryTask(
+        id="t" * 32, factory_id="f" * 32, number=12, project_slug="x", key="route", title="r"
+    )
+    pl_conv = Conversation(id="c" * 32, created_at=0, updated_at=0, root_conversation_id="c" * 32)
+    texts = []
+    for kind, state, subject in (
+        ("implement", "exhausted", "task:t"),
+        ("implement", "stalled", "task:t"),
+        ("review", "thrashing", "pr:p"),
+        ("verify", "exhausted", "pr:p@5e1c2d4"),
+    ):
+        loop = FactoryLoop(
+            id="l" * 32,
+            factory_id="f" * 32,
+            kind=kind,
+            subject=subject,
+            state=state,
+            iteration=3,
+            spec={"attempts": 3, "rounds": 3, "per_head": 2},
+            last_reason="env failures 2/1" if kind == "verify" else "red",
+        )
+        facts = LoopFacts(loop=loop, task=task, pr=pr, pl=pl_conv, base="temp-main")
+        texts.append(escalation_text(facts, state, None if kind == "verify" else "D-31"))
+    decision = FactoryDecision(id="d" * 32, factory_id="f" * 32, number=31, question="q")
+    implement = FactoryLoop(
+        id="l" * 32,
+        factory_id="f" * 32,
+        kind="implement",
+        subject="task:t",
+        state="exhausted",
+        iteration=3,
+        spec={"attempts": 3},
+    )
+    facts = LoopFacts(loop=implement, task=task, pr=pr, pl=pl_conv)
+    for action, extra in (
+        ("raise_budget", {"key": "attempts", "value": 4}),
+        ("switch_vendor", {}),
+        ("fresh_restart", {}),
+    ):
+        answer = LoopAnswer(
+            action=action,
+            target="loop:l",
+            decision=decision,
+            option={"label": "x"},
+            facts=facts,
+            raised=("3", "4"),
+            vendor="ic_codex",
+            extra=extra,
+        )
+        texts.append(answer_text(answer, "bob (operator)"))
+    texts.append(resumed_text(facts, "D-31"))
+    for text in texts:
+        header = text.split("]", 1)[0] + "]"
+        assert any(p.fullmatch(header) for p in loop_rows), header
+
+
+def test_the_playbook_maps_every_next_step(pl: AgentSpec) -> None:
+    from omnigent.server.factory.pipeline import MAILED
+
+    playbook = (_PL_DIR / "skills" / "factory-pl-playbook" / "SKILL.md").read_text("utf-8")
+    section = playbook.split("### Engine hints (NEXT, READY, loops)", 1)[1].split("\n### ", 1)[0]
+    for step in MAILED:
+        assert f"| `{step}" in section, step
+    assert "budget_exhausted" in section and "args.cost_budget" in section
+    heartbeat = (_PL_DIR / "skills" / "factory-heartbeat" / "SKILL.md").read_text("utf-8")
+    assert "Never re-post a" in heartbeat
+
+
+def test_review_markers_carry_blocking_and_stable_fingerprints() -> None:
+    import hashlib
+
+    from omnigent.factory_gates import finding_fingerprint
+
+    reviewer = (_PL_DIR / "agents" / "reviewer" / "config.yaml").read_text("utf-8")
+    ic_skill = (_PL_DIR / "agents" / "ic" / "skills" / "factory-ic" / "SKILL.md").read_text(
+        "utf-8"
+    )
+    recipe = """printf '%s' "<path>:<line/10>:<category>" | sha1sum | cut -c1-8"""
+    for text in (reviewer, ic_skill):
+        assert "blocking=<n> findings=<fp1,fp2> -->" in text
+        assert recipe in text
+    assert "| file:line | category | fp | blocking finding |" in reviewer
+    # The shell recipe and the server agree on a finding's id.
+    shell = hashlib.sha1(b"src/a.ts:4:correctness", usedforsecurity=False).hexdigest()[:8]
+    assert finding_fingerprint("src/a.ts", 41, "correctness") == shell
+
+
+def test_ic_results_carry_the_attempt_and_the_blocker() -> None:
+    from omnigent.entities.factory import FactoryTask
+    from omnigent.server.factory.tasks import card_text
+
+    ic_skill = (_PL_DIR / "agents" / "ic" / "skills" / "factory-ic" / "SKILL.md").read_text(
+        "utf-8"
+    )
+    codex = (_PL_DIR / "agents" / "ic_codex" / "config.yaml").read_text("utf-8")
+    for text in (ic_skill, codex):
+        assert "status: READY_FOR_REVIEW | BLOCKED: <reason> | FAILED | IN_PROGRESS" in text
+        assert "attempt <k>/<N> (the card's first line)" in text
+        assert "blocked by: <the one thing that blocked or slowed you | none>" in text
+        assert 'result="BLOCKED", note=<reason>' in text
+    task = FactoryTask(
+        id="t" * 32, factory_id="f" * 32, number=4, project_slug="db", key="route", title="x"
+    )
+    assert card_text(task, None, pl_id="pl", attempt=2).splitlines()[0].endswith("attempt 2/3")
+
+
+def test_the_pl_guard_holds_dispatches_to_the_engine_mode(pl: AgentSpec) -> None:
+    assert pl.guardrails is not None
+    args = next(
+        dict(p.function.arguments or {})
+        for p in pl.guardrails.policies
+        if isinstance(p, FunctionPolicySpec) and p.name == "factory_guard" and p.function
+    )
+    guard = factory_role_guard(**args)
+
+    def send(mode: str) -> dict[str, object]:
+        return {
+            "type": "tool_call",
+            "data": {
+                "name": "sys_session_send",
+                "arguments": {"agent": "ic", "title": "route", "args": {"input": "x"}},
+            },
+            "context": {"labels": {"omnigent.factory.engine_mode": mode}},
+        }
+
+    assert guard(send("assist"), {})["result"] == "ALLOW"
+    assert guard(send("enforce"), {})["result"] == "DENY"

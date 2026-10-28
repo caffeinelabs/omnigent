@@ -13,6 +13,7 @@ the label) or ``skip`` (not applicable). The merge gate treats ``pending`` as
 
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -59,6 +60,9 @@ REVIEW_MARKER: Final = re.compile(r"<!--\s*factory:review\s+sha=([0-9a-fA-F]+)\s
 VERIFY_MARKER: Final = re.compile(r"<!--\s*factory:verify\s+sha=([0-9a-fA-F]+)\s+result=(\w+)")
 DEMO_MARKER: Final = re.compile(r"<!--\s*factory:demo\s+sha=([0-9a-fA-F]+)\b([^>]*?)-->")
 _ATTR: Final = re.compile(r"([a-z_]+)=([^\s>]+)")
+_FINGERPRINT: Final = re.compile(r"[0-9a-f]{8}")
+MAX_FINDINGS: Final = 50
+"""Finding fingerprints kept per review marker."""
 EVIDENCE_FILES_MAX: Final = 300
 """Changed paths kept in the evidence (every path still counts for the gate)."""
 _MARKER_TAIL: Final = 400
@@ -400,6 +404,34 @@ def _marker_evidence(hit: MarkerHit | None, key: str) -> dict[str, Any] | None:
     return {key: hit.outcome, "sha": hit.sha, "url": hit.url, "at": _epoch(hit.at)}
 
 
+def finding_fingerprint(path: str, line: int, category: str) -> str:
+    """
+    The stable id of one review finding across rounds.
+
+    :param path: Repo-relative file path, e.g. ``"services/api/version.ts"``.
+    :param line: The finding's line; nearby lines (same ten) share an id.
+    :param category: e.g. ``"correctness"``.
+    :returns: ``sha1(path + ":" + line//10 + ":" + category)[:8]``.
+    """
+    text = f"{path}:{max(0, int(line)) // 10}:{category}"
+    return hashlib.sha1(text.encode("utf-8"), usedforsecurity=False).hexdigest()[:8]
+
+
+def review_findings(attrs: Mapping[str, str]) -> tuple[int | None, tuple[str, ...]]:
+    """
+    The optional ``blocking=<n> findings=<fp1,fp2>`` attributes of a review marker.
+
+    :param attrs: The marker's ``key=value`` pairs (:attr:`MarkerHit.attrs`).
+    :returns: ``(blocking count or None, finding fingerprints)``; malformed
+        values are ignored, so markers without them read as before.
+    """
+    raw = attrs.get("blocking", "")
+    blocking = int(raw) if raw.isdigit() and len(raw) <= 4 else None
+    found = [f.strip().lower() for f in attrs.get("findings", "").split(",")]
+    prints = tuple(dict.fromkeys(f for f in found if _FINGERPRINT.fullmatch(f)))
+    return blocking, prints[:MAX_FINDINGS]
+
+
 def gate_review(pr: _Json, head: str) -> GateResult:
     """The newest review marker for the head, posted after the newest commit, approves."""
     newest_commit = newest_commit_time(pr)
@@ -410,6 +442,11 @@ def gate_review(pr: _Json, head: str) -> GateResult:
     evidence = _marker_evidence(shown, "verdict")
     if evidence is not None and shown is not None:
         evidence["by"] = shown.by
+        blocking, prints = review_findings(shown.attrs)
+        if blocking is not None:
+            evidence["blocking"] = blocking
+        if prints:
+            evidence["findings"] = list(prints)
     if not fresh:
         stale = " (only markers older than the newest commit)" if hits else ""
         reason = (
@@ -434,6 +471,10 @@ def gate_verify(pr: _Json, head: str, labels: set[str]) -> GateResult:
     evidence = _marker_evidence(shown, "result")
     if evidence is not None and shown is not None:
         evidence["env"] = shown.attrs.get("env") or shown.attrs.get("preview")
+        reason = shown.attrs.get("reason")
+        if reason:
+            # ``reason=code:<what>`` or ``reason=env:<what>`` classifies a FAIL.
+            evidence["reason"] = reason[:120]
     if not hits:
         reason = (
             f"no `<!-- factory:verify sha={head} result=PASS -->` comment; send VERIFY "
@@ -652,9 +693,11 @@ __all__ = [
     "GateResult",
     "MarkerHit",
     "evaluate_snapshot",
+    "finding_fingerprint",
     "gate_base",
     "marker_hits",
     "markers",
     "protected_files",
+    "review_findings",
     "status_contexts",
 ]

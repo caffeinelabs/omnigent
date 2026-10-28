@@ -492,11 +492,17 @@ async def mirror_member_on_create(app_state: Any, conv: Conversation) -> None:
     """
     Give a just-created factory member the roster's grants. Never raises.
 
+    A project lead also gets the factory's engine mode at once (the guard reads it).
+
     :param app_state: ``app.state`` (the factory deps may be missing).
     :param conv: The created session, labelled with its factory id.
     """
     deps = getattr(app_state, FACTORY_STATE_ATTR, None)
     factory_id = conv.labels.get(LABEL_ID)
+    if isinstance(deps, FactoryDeps) and factory_id:
+        from omnigent.server.factory.loops import stamp_mode
+
+        await asyncio.to_thread(stamp_mode, deps, conv)
     if not isinstance(deps, FactoryDeps) or not factory_id or deps.permission_store is None:
         return
     try:

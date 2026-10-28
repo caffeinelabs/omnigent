@@ -585,6 +585,10 @@ export interface GateEvidence {
     url: string | null;
     at: number | null;
     by: string | null;
+    /** The marker's `blocking=<n>`, when the reviewer gave one. */
+    blocking?: number | null;
+    /** The marker's `findings=<fp,…>` fingerprints, stable across rounds. */
+    findings?: string[] | null;
   } | null;
   verify: {
     result: string | null;
@@ -592,6 +596,8 @@ export interface GateEvidence {
     env: string | null;
     url: string | null;
     at: number | null;
+    /** `code:<what>` or `env:<what>`: how a FAIL is classified. */
+    reason?: string | null;
   } | null;
   demo: {
     status: DemoStatus | null;

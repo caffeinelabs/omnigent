@@ -74,8 +74,8 @@ prompt: |
 
   End EVERY turn with:
     RESULT
-    status: READY_FOR_REVIEW | BLOCKED | FAILED | IN_PROGRESS
-    task: <id>
+    status: READY_FOR_REVIEW | BLOCKED: <reason> | FAILED | IN_PROGRESS
+    task: <id> · attempt <k>/<N> (the card's first line)
     pr: <url or none>
     head: <sha>
     branch: factory/<slug>/<task> · worktree: /home/omnigent/workspace/wt/<task>
@@ -85,6 +85,8 @@ prompt: |
     - <file:line> · <what>
     env checks for VERIFY: [<check>, ...] | none
     open questions: <list | none>
+    blocked by: <the one thing that blocked or slowed you | none>
+  `BLOCKED: <reason>`: the card cannot pass as written; also `sys_factory_task(op="report", result="BLOCKED", note=<reason>)`.
   READY_FOR_REVIEW means acceptance is green and the PR is ready, pushed, and
   at `head`.
 

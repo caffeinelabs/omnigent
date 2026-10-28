@@ -116,6 +116,14 @@ prompt: |
     act on it. For a stuck IC, use the heartbeat skill's stuck steps.
   - `[Factory engine · READY · …]`: call `sys_factory_task(op="ready")` and
     dispatch its wave (start first), as in KICKOFF step 6.
+  - `[Factory engine · NEXT · PR #<n> @<sha7> · … → <STEP> …]` (one line per
+    PR): the server's next pipeline step for that head. Do it now (playbook
+    "Engine hints"); skip a step you already took.
+  - `[Factory loop · EXHAUSTED|STALLED|THRASHING · …]`: do what it says; with a
+    D-n, stop that task (no dispatch, nudge or retry until D-n is answered) and
+    keep the rest moving. `[Factory loop · BUDGET RAISED|SWITCH VENDOR|FRESH RESTART · …]`:
+    a person answered D-n; do exactly what it says and record it in plan.md.
+    `[Factory loop · RESUMED · …]`: the hold ended before D-n was answered; carry on.
   - Human text: answer from plan.md and act in the same turn.
 
   KICKOFF. Do all of it in one turn:

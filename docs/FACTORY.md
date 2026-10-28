@@ -669,6 +669,63 @@ Tasks are a server entity (`factory_tasks`, `T-<n>`), not rows in a PL's
   (`plan → build → review → verify → demo → ready → merged` with counts now,
   p50 dwell, dollars and loop back-edges from spans); the org (every depth).
 
+## Loop engine
+
+Every loop is explicit, bounded, observed and escalated
+(`omnigent/server/factory/loops.py`, `loop_escalation.py`, `pipeline.py`,
+`budgets.py`). `loops.CATALOGUE` holds L1–L9 (implement, review, verify, demo,
+ci, claim, plan, intake, improve); `factory_loops` keeps one row per
+`(kind, subject)` with its budget snapshot (`spec`) and `spent`.
+
+- **Facts, not narration.** An event listener maps `task.state`/`task.bound`
+  (attempts, IC `PASS|FAIL|BLOCKED` reports), `gate.changed` (CI per head with
+  flakes, review markers with `blocking=`/`findings=`, verify markers with
+  `reason=code:|env:`), `preview.reported` failed and `preview.sha_mismatch`
+  (env), `demo.published` (per head), `pr.claim` and `pr.human_review` onto
+  iterations, `loop.*` events and `loop`/`loop_iter` spans. Implement counts
+  tries: a worker, or a rework a verifier asked for; env failures do not use
+  one up. Review is *dry* when a round adds no new fingerprint and fixes none,
+  *thrashing* when a fixed one returns. The supervisor tick adds wall and
+  no-progress stalls, the plan loop and the `done_check` decision.
+- **Engine mode** (root label `omnigent.factory.engine_mode`, default
+  `assist`; stamped on a new PL and mirrored by the tick, where the guard
+  reads it): `observe` records (detectors open incidents); `assist` also opens
+  a `loop` decision and mails the PL `[Factory loop · EXHAUSTED|STALLED|THRASHING · …]`,
+  plus NEXT and READY hints; `enforce` also refuses `sys_factory_task(op=start)`
+  past the budget (409 `budget_exhausted`) and the guard denies a new PL
+  dispatch with no title or one that is not task-shaped, one that sends `ic`/`demo`
+  work without `args.cost_budget` (fixed team titles included; codex-native
+  workers are unpriced and exempt), and any PL `sys_session_create`.
+- **Answers.** Raise (+1 attempt by operators; money by owners), switch
+  vendor, fresh restart, abandon, mark done, pause; the PL gets `BUDGET
+  RAISED`, `SWITCH VENDOR` or `FRESH RESTART` with exactly what to do. A
+  `Pause project` answer leaves the loop stopped; once the project (and the
+  factory) run again the tick opens a new decision. A stop that ends before
+  anyone answers (progress after a no-progress stall, a person's changes
+  request or task budget edit, the task closing) expires its decision, and a
+  loop running again (`loop.resumed` for a stall) mails the PL
+  `[Factory loop · RESUMED · …]`; progress does not lift a wall-budget stall.
+  `start` cites a decision only while it is open. A paused or done PL, or a
+  paused factory, gets no NEXT hints.
+- **NEXT hints.** `pipeline.next_step` (pure) walks `ci → review → verify →
+  demo → sentinel → ready`; a changed `REVIEW`, `PREVIEW` or `DEMO` step is
+  mailed after a 30 s grace, re-checked (a step already running is skipped),
+  coalesced to one mail per PL per 120 s, never twice per head
+  (`engine.next`). `FIX_CI` and `HANDOVER` ride on the poller's existing
+  `checks failed` and `READY FOR HUMAN MERGE` notices. READY waves (`engine.ready_wave`) tell a PL with startable
+  tasks and free IC slots to fetch its cards.
+- **Budgets.** Project $ (`charter.budgets.project_usd`, 150) and factory $
+  per UTC day (400) from the cost ledger: 80 % `budget.near`; 100 %
+  `budget.exceeded`, plus an owners' decision (assist) or a pause with the
+  note `budget` (enforce). Budgets resolve through `loops.budget(fid, kind,
+  key)`, the seam the factory definition plugs into.
+- **Spike S2.** A claude-native PL's `sys_session_send` is an Omnigent MCP
+  tool, policy-checked server-side by `_evaluate_tool_call_policy` with a
+  fresh engine whose `event.context.labels` are the PL's labels, so the guard
+  sees `agent`, `title` and `args.cost_budget`; no after-the-fact check is needed.
+- `GET /factories/{fid}/loops?state=&project=&kind=&pr=` lists them; the
+  snapshot carries `engine_mode`, `projects[].loops_summary` and `prs[].loops`.
+
 ## Safety
 
 - **`factory_role_guard`** ([`policies/builtins/factory.py`](../omnigent/policies/builtins/factory.py))
@@ -855,6 +912,7 @@ with a managed sandbox launcher configured.
 | Org chart and badges | `omnigent/server/factory/org_chart.py`, `web/src/lib/factory.ts` | `tests/server/routes/test_child_sessions_include_factory.py`, web tests |
 | Base lane and demo mirror | `omnigent/server/factory/base.py`, `demo_mirror.py`, `omnigent/factory_gates.py` (`base` gate) | `tests/server/factory/test_base_watcher.py`, `test_demo_mirror.py`, `tests/test_factory_gates.py` |
 | Work graph | `omnigent/server/factory/tasks.py`, `graph.py`, `binder.py`, `api/tasks.py`, `api/graph.py` | `tests/server/factory/test_graph.py`, `test_binder.py`, `test_tasks_routes.py`, `test_graph_api.py` |
+| Loop engine | `omnigent/server/factory/loops.py`, `loop_escalation.py`, `pipeline.py`, `budgets.py`, `api/loops.py` | `tests/server/factory/test_loops.py`, `test_pipeline.py`, `test_budgets.py` |
 | Telemetry | `omnigent/server/factory/telemetry/`, `api/telemetry_read.py`, `background/prune.py` | `tests/server/factory/test_telemetry_*.py` (replays `fixtures/live_run_2026_10_26.json`), `test_prune.py` |
 | Bundles | `examples/factory/` | `tests/examples/`, `tests/server/factory/test_factory_agents_listed.py` |
 | Demo harness | `examples/factory/factory-pl/agents/demo/skills/factory-demo/harness/` | `tests/examples/test_factory_demo_harness.py` (runs `factory_demo_harness.test.mjs` under `node --test`); `node run.mjs --selftest` records real demos of a local fixture |

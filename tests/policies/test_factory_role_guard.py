@@ -1239,3 +1239,210 @@ def test_sub_agent_passes_both_its_own_and_the_project_lead_guard(
     results = [factory_role_guard(**args)(_event(command), {})["result"] for args in (parent, own)]
     combined = "DENY" if "DENY" in results else "ALLOW"
     assert combined == expected, results
+
+
+# ── Project-lead dispatches by engine mode ──────────────────────────────────
+
+
+def _send(mode: str | None, tool: str = "sys_session_send", **args: Any) -> dict[str, Any]:
+    """A PL's ``sys_session_send`` as the server-side engine shows it (labels in context)."""
+    labels = {"omnigent.factory.id": "f" * 32}
+    if mode is not None:
+        labels["omnigent.factory.engine_mode"] = mode
+    return {
+        "type": "tool_call",
+        "data": {"name": tool, "arguments": args},
+        "context": {"labels": labels},
+    }
+
+
+_BUDGET = {"max_cost_usd": 9.0}
+
+
+@pytest.mark.parametrize(
+    ("args", "enforce"),
+    [
+        pytest.param({"agent": "ic", "title": "route", "args": {"input": "x"}}, "DENY", id="ic"),
+        pytest.param(
+            {"agent": "ic", "title": "route-r2", "args": {"input": "x", "cost_budget": _BUDGET}},
+            "ALLOW",
+            id="ic-budgeted",
+        ),
+        pytest.param(
+            {"agent": "demo", "title": "demo-route", "args": {"input": "x"}}, "DENY", id="demo"
+        ),
+        pytest.param(
+            {"agent": "ic_codex", "title": "route", "args": {"input": "x"}},
+            "ALLOW",
+            id="ic_codex-exempt",
+        ),
+        pytest.param(
+            {"agent": "reviewer", "title": "review-route", "args": {"input": "x"}},
+            "ALLOW",
+            id="reviewer-codex-exempt",
+        ),
+        pytest.param(
+            {"agent": "ic", "title": "Fix the login bug", "args": {"input": "x"}},
+            "DENY",
+            id="not-task-shaped",
+        ),
+        pytest.param(
+            {"agent": "ic_codex", "title": "route r1", "args": {"input": "x"}},
+            "DENY",
+            id="codex-title-still-checked",
+        ),
+        pytest.param(
+            {"agent": "env_keeper", "title": "env", "args": {"input": "UP"}}, "ALLOW", id="team"
+        ),
+        pytest.param(
+            {"agent": "reviewer", "title": "review", "args": {"input": "x"}},
+            "ALLOW",
+            id="team-title",
+        ),
+        pytest.param(
+            {"agent": "ic", "title": "review", "args": {"input": "x"}},
+            "DENY",
+            id="team-title-still-needs-a-budget",
+        ),
+        pytest.param(
+            {"agent": "demo", "title": "demo", "args": {"input": "x", "cost_budget": _BUDGET}},
+            "ALLOW",
+            id="team-title-budgeted",
+        ),
+        pytest.param({"agent": "ic", "args": {"input": "x"}}, "DENY", id="untitled"),
+        pytest.param(
+            {"agent": "ic", "title": "  ", "args": {"input": "x", "cost_budget": _BUDGET}},
+            "DENY",
+            id="blank-title",
+        ),
+        pytest.param(
+            {"agent": "ic_codex", "title": None, "args": {"input": "x"}},
+            "DENY",
+            id="untitled-codex",
+        ),
+        pytest.param(
+            {"agent": "env_keeper", "args": {"input": "UP"}}, "ALLOW", id="team-untitled"
+        ),
+        pytest.param(
+            {"session_id": "c" * 32, "args": {"input": "fix it"}},
+            "ALLOW",
+            id="follow-up-by-session",
+        ),
+    ],
+)
+@pytest.mark.parametrize("mode", [None, "observe", "assist", "enforce"])
+def test_pl_dispatch_rules_by_engine_mode(
+    args: dict[str, Any], enforce: str, mode: str | None
+) -> None:
+    """Enforce denies untitled or unbudgeted task dispatches; other modes only record them."""
+    guard = factory_role_guard(role=ROLE_PROJECT_LEAD)
+    expected = enforce if mode == "enforce" else "ALLOW"
+    decision = guard(_send(mode, **args), {})
+    assert decision["result"] == expected, decision
+    if expected == "DENY":
+        assert decision["reason"].startswith("Engine mode enforce: ")
+    relayed = guard(_send(mode, tool="mcp__omnigent__sys_session_send", **args), {})
+    assert relayed["result"] == expected
+
+
+@pytest.mark.parametrize("mode", [None, "observe", "assist", "enforce"])
+@pytest.mark.parametrize("tool", ["sys_session_create", "mcp__omnigent__sys_session_create"])
+def test_enforce_denies_a_pl_sys_session_create(mode: str | None, tool: str) -> None:
+    """``agent_id`` hides which agent it is: a create would bypass both dispatch rules."""
+    guard = factory_role_guard(role=ROLE_PROJECT_LEAD)
+    event = _send(mode, tool=tool, agent_id="ag_1", title="anything", message="go")
+    decision = guard(event, {})
+    assert decision["result"] == ("DENY" if mode == "enforce" else "ALLOW"), decision
+    if mode == "enforce":
+        assert "not sys_session_create" in decision["reason"]
+
+
+def test_only_the_project_lead_is_held_to_the_dispatch_rules() -> None:
+    event = _send("enforce", agent="ic", title="Fix it", args={"input": "x"})
+    for role in _ALL_ROLES:
+        result = factory_role_guard(role=role)(event, {})["result"]
+        assert result == ("DENY" if role == ROLE_PROJECT_LEAD else "ALLOW"), role
+
+
+def test_the_budgeted_agents_are_configurable() -> None:
+    guard = factory_role_guard(role=ROLE_PROJECT_LEAD, cost_budget_agents=["ic", "reviewer"])
+    event = _send("enforce", agent="reviewer", title="review-route", args={"input": "x"})
+    assert guard(event, {})["result"] == "DENY"
+    assert (
+        validate_factory_params(_HANDLER, {"role": "project_lead", "cost_budget_agents": ["ic"]})
+        is None
+    )
+
+
+def test_dispatch_violations_name_what_is_missing() -> None:
+    from omnigent.policies.builtins.factory import dispatch_violations
+
+    assert [c for c, _ in dispatch_violations({"agent": "ic", "title": "x y"})] == [
+        "title_not_task_shaped"
+    ]
+    assert [c for c, _ in dispatch_violations({"agent": "ic", "title": "route"})] == [
+        "no_cost_budget"
+    ]
+    assert dispatch_violations({"agent": "ic", "title": "review-route-r1"}) != []
+    assert dispatch_violations({"agent": "ic_codex", "title": "route-r12"}) == []
+    assert dispatch_violations({"agent": "ic", "title": "route-r123"}) != []  # needs a budget
+    for untitled in ({"agent": "ic"}, {"agent": "ic", "title": ""}, {"agent": "ic", "title": 3}):
+        assert [c for c, _ in dispatch_violations(untitled)] == ["title_not_task_shaped"]
+    assert dispatch_violations({"agent": "planner"}) == []
+    assert [c for c, _ in dispatch_violations({"agent": "ic", "title": "env"})] == [
+        "no_cost_budget"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_spike_s2_the_server_engine_shows_the_guard_a_pl_dispatch(tmp_path: Path) -> None:
+    """
+    Spike S2: the engine that evaluates a PL's ``sys_session_send`` hands the guard
+    the call's arguments and the PL's labels (where the engine mode is mirrored).
+    """
+    from omnigent.policies.function import FunctionPolicy
+    from omnigent.policies.types import EvaluationContext
+    from omnigent.runtime.policies.engine import PolicyEngine
+    from omnigent.spec.types import (
+        FunctionPolicySpec,
+        FunctionRef,
+        Phase,
+        PhaseSelector,
+        PolicyAction,
+    )
+    from omnigent.stores.conversation_store.sqlalchemy_store import (
+        SqlAlchemyConversationStore,
+    )
+
+    store = SqlAlchemyConversationStore(f"sqlite:///{tmp_path / 's2.db'}")
+    conv = store.create_conversation()
+    spec = FunctionPolicySpec(
+        name="factory_guard",
+        on=[PhaseSelector(phase=Phase.TOOL_CALL)],
+        function=FunctionRef(path=_HANDLER),
+    )
+    policy = FunctionPolicy(spec, factory_role_guard(role=ROLE_PROJECT_LEAD))
+
+    async def evaluate(mode: str, cost_budget: dict[str, float] | None) -> PolicyAction:
+        engine = PolicyEngine(
+            policies=[policy],
+            label_defs={},
+            ask_timeout=30,
+            conversation_id=conv.id,
+            initial_labels={"omnigent.factory.engine_mode": mode},
+            conversation_store=store,
+        )
+        child = {"input": "TASK route", **({"cost_budget": cost_budget} if cost_budget else {})}
+        ctx = EvaluationContext(
+            phase=Phase.TOOL_CALL,
+            content={
+                "name": "sys_session_send",
+                "arguments": {"agent": "ic", "title": "route", "args": child},
+            },
+            tool_name="sys_session_send",
+        )
+        return (await engine.evaluate(ctx)).action
+
+    assert await evaluate("enforce", None) == PolicyAction.DENY
+    assert await evaluate("enforce", {"max_cost_usd": 9.0}) == PolicyAction.ALLOW
+    assert await evaluate("assist", None) == PolicyAction.ALLOW

@@ -56,7 +56,7 @@ from omnigent.factory import (
     STATE_ACTIVE,
     STATES,
 )
-from omnigent.server.factory import activity_now, detectors, schemas, status, tasks
+from omnigent.server.factory import activity_now, detectors, loops, schemas, status, tasks
 from omnigent.server.factory.activity_now import factory_usd_per_h
 from omnigent.server.factory.base import base_view
 from omnigent.server.factory.charter import normalize_charter
@@ -899,10 +899,15 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
     ]
     # Work graph: each project's tasks summary and each PR's task.
     task_summaries, task_refs = await asyncio.to_thread(tasks.snapshot_fields, deps, factory_id)
+    loop_summaries, loop_chips = await asyncio.to_thread(
+        loops.snapshot_fields, deps, factory_id, loaded.prs
+    )
     for view in project_views:
         view["tasks_summary"] = task_summaries.get(view["slug"])
+        view["loops_summary"] = loop_summaries.get(view["slug"])
     for pr, view in zip(loaded.prs, pr_views, strict=True):
         view["task_id"], view["task_ref"] = pr.task_id, task_refs.get(pr.task_id or "")
+        view["loops"] = loop_chips.get(norm_id(pr.id))
 
     delivered_to = {
         (e.data or {}).get("mail_id", ""): e.to_id
@@ -959,6 +964,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
             "proposals_pending": loaded.proposals_pending,
             "issues_open": counts_open(loaded.issues, frozenset()),
         },
+        "engine_mode": await asyncio.to_thread(loops.engine_mode, deps, factory_id),
     }
     rate = detectors.spend_rate(factory_id)
     body["totals"] = _totals(

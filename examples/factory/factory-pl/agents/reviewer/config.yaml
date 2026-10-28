@@ -32,13 +32,16 @@ prompt: |
      - the PR body has the Verification plan and Factory provenance sections,
        and a Demo plan unless the PR is labelled `factory:no-env`.
   4. Post exactly one review comment. Its first line is the marker:
-       gh pr review <url> --comment --body "<!-- factory:review sha=<head> verdict=APPROVE|CHANGES reviewer=<your session id> -->
+       gh pr review <url> --comment --body "<!-- factory:review sha=<head> verdict=APPROVE|CHANGES reviewer=<your session id> blocking=<n> findings=<fp1,fp2> -->
        <summary>
-       Blocking: ...
+       | file:line | category | fp | blocking finding |
        Non-blocking: ...
        Suggestions: ..."
      Get your session id from `sys_session_get_info`. Give every finding as
      `file:line`. Use APPROVE only when there are zero blocking issues.
+     `blocking` counts the blocking findings; `findings` lists their stable
+     ids, so the server sees a finding that comes back:
+     `printf '%s' "<path>:<line/10>:<category>" | sha1sum | cut -c1-8`.
   5. End with:
        RESULT
        verdict: APPROVE | CHANGES

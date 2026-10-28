@@ -39,7 +39,8 @@ curl. Do the sweep in one turn.
    holds them.
 6. Update plan.md. If anything changed, call
    `sys_factory_set(summary="<tasks done/total> · <PRs> · env <state>", health="ok"|"degraded"|"blocked")`
-   and post to `parent` only for a milestone, a blocker or a need.
+   and post to `parent` only for a milestone, a blocker or a need. Never re-post a
+   status the cockpit shows: NEXT hints carry the pipeline; you catch what they miss.
 7. If nothing needed doing, end your turn with exactly one line:
    `HEARTBEAT_OK · <status of at most 80 chars>`
    for example `HEARTBEAT_OK · 2 PRs awaiting human merge · previews up`.

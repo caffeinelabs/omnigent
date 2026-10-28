@@ -110,9 +110,9 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
 
     The mailer and the Room always (replaying mail and chat a previous
     process left undelivered); the telemetry recorders (spans and the cost
-    ledger), the work-graph binder, the supervisor (and the status-edge
-    notifier it reads), the "now" poller, the incident detectors and the
-    auto-discovered ``background`` services only when
+    ledger), the work-graph binder, the loop engine and its NEXT hints, the
+    supervisor (and the status-edge notifier it reads), the "now" poller, the
+    incident detectors and the auto-discovered ``background`` services only when
     ``OMNIGENT_FACTORY_ENABLED=1``.
 
     :param app_state: ``app.state`` of an app passed to
@@ -143,14 +143,24 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
     stop_telemetry: Callable[[], None] | None = None
     stop_ops: Callable[[], Awaitable[None]] | None = None
     stop_binder: Callable[[], None] | None = None
+    stop_loops: list[Callable[[], Any]] = []
     unseed_invariants = _seed_invariants()
     if factory_enabled():
-        from omnigent.server.factory import activity_now, binder, detectors, telemetry
+        from omnigent.server.factory import (
+            activity_now,
+            binder,
+            detectors,
+            loops,
+            pipeline,
+            telemetry,
+        )
         from omnigent.server.factory.background import start_all
         from omnigent.server.factory.supervisor import start_supervision
 
         stop_telemetry = telemetry.start(app_state)
         stop_binder = binder.install()
+        # After the binder, so a task's cost is re-totalled before the loops read it.
+        stop_loops = [loops.install(), pipeline.install()]
         stop_supervision = start_supervision(app_state)
         # Live "now" and the incident detectors (event rules; the tick rules ride the supervisor).
         remove_detectors = detectors.install()
@@ -179,6 +189,8 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
             stop_telemetry()
         if stop_binder is not None:
             stop_binder()
+        for remove in stop_loops:
+            remove()
         await mailer.close()
         if getattr(app_state, MAILER_STATE_ATTR, None) is mailer:
             setattr(app_state, MAILER_STATE_ATTR, None)

@@ -41,6 +41,7 @@ from omnigent.server.factory.schemas import DecisionOptionView, DecisionView
 from omnigent.stores.factory_store import DecisionNotFound, DecisionNotOpen, norm_id
 
 if TYPE_CHECKING:
+    from omnigent.server.factory.loop_escalation import BudgetAnswer, LoopAnswer
     from omnigent.server.factory.proposals import ProposalAnswer
 
 _logger = logging.getLogger(__name__)
@@ -378,12 +379,13 @@ async def _plan_action(
     *,
     text: str | None = None,
     changes: Any = None,
-) -> ControlPlan | GrantPlan | Conversation | ProposalAnswer | None:
+) -> ControlPlan | GrantPlan | Conversation | ProposalAnswer | LoopAnswer | BudgetAnswer | None:
     """
     Validate a server decision's action before the answer is stored.
 
     A proposal's decision (``apply_proposal``, Edit & apply, Reject) is planned
-    by :mod:`.proposals`; it runs after the compare-and-set below.
+    by :mod:`.proposals`, a loop's (raise, switch vendor, fresh restart, abandon,
+    mark done) by :mod:`.loop_escalation`; they run after the compare-and-set below.
 
     :returns: A control plan, a roster grant (access requests), the PL to
         message (abandon/rework), a proposal answer, or ``None`` for no side
@@ -395,6 +397,12 @@ async def _plan_action(
         return await proposals.plan_answer(
             app_state, decision, option, text, user_id, changes=changes
         )
+    if decision.source in ("loop", "done_check"):
+        from omnigent.server.factory import loop_escalation
+
+        planned = await loop_escalation.plan_answer(app_state, decision, option, user_id)
+        if planned is not None:
+            return planned
     if option is None:
         return None
     action = option.get("action")
@@ -465,7 +473,7 @@ async def _action_failed(
     deps: FactoryDeps,
     decision: FactoryDecision,
     by: str,
-    plan: ControlPlan | GrantPlan,
+    plan: ControlPlan | GrantPlan | LoopAnswer | BudgetAnswer,
     exc: Exception,
 ) -> tuple[FactoryDecision, CockpitError]:
     """
@@ -503,7 +511,7 @@ async def _action_failed(
             "by": by,
             "decision_id": decision.id,
             "action": plan.action,
-            "target": plan.target if isinstance(plan, GrantPlan) else plan.target.ref,
+            "target": plan.target if isinstance(plan.target, str) else plan.target.ref,
             "error": type(exc).__name__,
         },
     )
@@ -604,6 +612,7 @@ async def answer_decision(
         409 when it is no longer open (with ``answered_by``/``answered_at``).
     :raises OmnigentError: 401/403/404 from the access checks.
     """
+    from omnigent.server.factory import loop_escalation
     from omnigent.server.factory.proposals import ProposalAnswer
 
     deps = factory_deps(app_state)
@@ -637,7 +646,9 @@ async def answer_decision(
 
     by = await human_label(deps, decision.factory_id, user_id)
     label = str(option.get("label") or option_id) if option is not None else FREE_TEXT_LABEL
-    planned: ControlPlan | GrantPlan | Conversation | ProposalAnswer | None = None
+    planned: (
+        ControlPlan | GrantPlan | Conversation | ProposalAnswer | LoopAnswer | BudgetAnswer | None
+    ) = None
     failure: CockpitError | None = None
     if decision.source != "agent":
         planned = await _plan_action(
@@ -667,6 +678,8 @@ async def answer_decision(
         target = planned
         outgoing = answer_text(answered, by, label, text, _PL_ACTION_HINTS.get(str(action)))
         kind = "request"
+    elif isinstance(planned, loop_escalation.ANSWER_TYPES):
+        target, outgoing = planned.pl, planned.text(by)
     # The receipt id is stored before the mail is queued, so its delivery is never missed.
     mailed = outgoing is not None or isinstance(planned, ControlPlan)
     mail_id = new_mail_id() if target is not None and mailed else None
@@ -696,6 +709,14 @@ async def answer_decision(
             )
         except Exception as exc:  # noqa: BLE001 - the answer is stored; report, don't 500
             answered, failure = await _action_failed(app_state, deps, answered, by, planned, exc)
+    elif isinstance(planned, loop_escalation.ANSWER_TYPES):
+        try:
+            await loop_escalation.execute_answer(app_state, answered, planned)
+        except Exception as exc:  # noqa: BLE001 - the answer is stored; report, don't 500
+            answered, failure = await _action_failed(app_state, deps, answered, by, planned, exc)
+            mail_id = None
+        if failure is None and target is not None and outgoing is not None:
+            control.send_text(app_state, target.id, outgoing, kind=kind, mail_id=mail_id)
     elif target is not None and outgoing is not None:
         control.send_text(app_state, target.id, outgoing, kind=kind, mail_id=mail_id)
         if (
