@@ -192,6 +192,22 @@ describe("FactoryPage · shell", () => {
       "you no longer have access",
     );
   });
+
+  it("drops the page when a refetch says access was removed", async () => {
+    let removed = false;
+    serve(() => (removed ? json({ error: { message: "not found" } }, 404) : liveRunSnapshot()));
+    const { client } = renderAt("");
+    expect(await screen.findByTestId("factory-needs-you")).toBeInTheDocument();
+    removed = true;
+    await act(async () => {
+      await client.invalidateQueries({ queryKey: factoryQueryKey(FID) });
+    });
+    expect(await screen.findByTestId("factory-missing")).toHaveTextContent(
+      "you no longer have access",
+    );
+    expect(screen.queryByTestId("factory-needs-you")).toBeNull();
+    expect(screen.queryByTestId("factory-load-error")).toBeNull();
+  });
 });
 
 describe("FactoryPage · routes and old links", () => {

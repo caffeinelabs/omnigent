@@ -31,7 +31,11 @@ describe("factoryLocation", () => {
     ["graph", { page: "graph", id: null }],
     ["decisions", { page: "decisions", id: null }],
     ["timeline", { page: "timeline", id: null }],
-    ["insights", { page: "other", id: "insights" }],
+    ["insights", { page: "insights", id: null }],
+    ["improvements", { page: "improvements", id: null }],
+    ["improvements/C-14", { page: "proposal", id: "C-14" }],
+    ["settings/budgets", { page: "settings", id: "budgets" }],
+    ["nowhere", { page: "other", id: "nowhere" }],
   ])("reads %j", (rest, expected) => {
     expect(factoryLocation(rest)).toEqual(expected);
   });
@@ -44,6 +48,9 @@ describe("presence location", () => {
     expect(presenceLocation(factoryLocation(`prs/${PR_9630}`))).toBe(`pr:${PR_9630}`);
     expect(presenceLocation(factoryLocation("room/factory"))).toBe("room:factory");
     expect(presenceLocation(factoryLocation("nowhere"))).toBeNull();
+    expect(presenceLocation(factoryLocation("insights"))).toBe("insights");
+    expect(presenceLocation(factoryLocation("improvements/C-14"))).toBe("proposal:C-14");
+    expect(presenceWhere("improvements")).toBe("Improvements");
     // Every location fits the server's pattern.
     const pattern = /^[a-z][a-z_]{0,31}(?::[A-Za-z0-9_.:#!@/+-]{1,96})?$/;
     for (const rest of ["", "projects", "projects/a-b", `prs/${PR_9630}`, "activity", "settings"]) {

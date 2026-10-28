@@ -4,7 +4,7 @@
  * runbook; the spans and events that preceded it on the target and its PL
  * (likely culprit steps, for a human to judge); its evidence; a root-cause
  * confirm that resolves it with the cause recorded as feedback; and
- * "Propose change", which waits for the Improvements page.
+ * "Propose change", a definition change citing it for the owners.
  */
 
 import { useMemo, useState } from "react";
@@ -21,7 +21,7 @@ import {
   assigneeLabel,
 } from "@/components/factory/alerts/IssueActions";
 import { IssueTargetLink, SeverityIcon } from "@/components/factory/alerts/IssueCard";
-import { PROPOSALS_PENDING, issuePr } from "@/components/factory/alerts/runbookModel";
+import { issuePr } from "@/components/factory/alerts/runbookModel";
 import { controlErrorMessage } from "@/components/factory/controls/controlModel";
 import { FactoryLoadError } from "@/components/factory/FactoryLoadError";
 import { TONE_CHIP, formatElapsed, shortSha } from "@/components/factory/factoryFormat";
@@ -35,7 +35,11 @@ import {
 import { clock } from "@/components/factory/overview/LiveFeed";
 import { EmptyState, SectionCard } from "@/components/factory/project/projectParts";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
-import { LeverGated, ReasonGated } from "@/components/factory/shell/viewerCan";
+import { LeverGated, ReasonGated, useViewerCan } from "@/components/factory/shell/viewerCan";
+import {
+  PROPOSE_REASON,
+  ProposeChangeDialog,
+} from "@/components/factory/improvements/ProposeChangeDialog";
 import { DEFAULT_SHOW, buildTimeline } from "@/components/factory/timeline/timelineModel";
 import { TimelineView } from "@/components/factory/timeline/TimelineView";
 import { Button } from "@/components/ui/button";
@@ -73,6 +77,8 @@ function RootCause({ factoryId, issue }: { factoryId: string; issue: IssueView }
   const lifecycle = useIssueLifecycle(factoryId);
   const [cause, setCause] = useState<string | null>(issue.category);
   const [note, setNote] = useState("");
+  const [proposing, setProposing] = useState(false);
+  const { can } = useViewerCan();
   const ref = issue.ref ?? issue.id;
   const resolved = issue.status === "resolved" || issue.status === "wontfix";
   if (resolved && issue.category) {
@@ -149,10 +155,14 @@ function RootCause({ factoryId, issue }: { factoryId: string; issue: IssueView }
             Confirm cause & resolve
           </Button>
         </LeverGated>
-        <ReasonGated reason={PROPOSALS_PENDING} testId="propose">
+        <ReasonGated
+          reason={can.settings || can.apply_projects ? null : PROPOSE_REASON}
+          testId="propose"
+        >
           <Button
             size="sm"
             variant="outline"
+            onClick={() => setProposing(true)}
             data-testid="incident-propose"
             componentId="factory.incident.propose"
           >
@@ -160,6 +170,14 @@ function RootCause({ factoryId, issue }: { factoryId: string; issue: IssueView }
           </Button>
         </ReasonGated>
       </div>
+      {proposing && (
+        <ProposeChangeDialog
+          factoryId={factoryId}
+          open={proposing}
+          onOpenChange={setProposing}
+          source={{ evidence: [ref], why: issue.summary, metric: "incidents" }}
+        />
+      )}
     </div>
   );
 }

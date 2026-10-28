@@ -42,7 +42,7 @@ from omnigent.factory import (
     THREAD_PROJECT_PREFIX,
 )
 from omnigent.server.auth import LEVEL_EDIT, RESERVED_USER_LOCAL, runner_origin
-from omnigent.server.factory import chat, chat_cards, control
+from omnigent.server.factory import chat, chat_cards, control, live
 from omnigent.server.factory.agent_scope import authorize_agent
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError
@@ -291,6 +291,8 @@ async def put_read(
             thread.key,
             body.last_seq,
         )
+        # The reader's other tabs and devices refresh their unread counts.
+        live.announce_factory_changed(request.app.state, root.id, ["reads"])
         return {"thread": row.thread, "last_seq": row.last_seq}
 
     return await _guard(run)

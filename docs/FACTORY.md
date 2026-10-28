@@ -742,6 +742,50 @@ evidence and never run.
   operator cap. The benchmark charters
   are in `examples/factory/benchmarks/temp-main/`.
 
+### Insights, Improvements and Settings (cockpit)
+
+- **Insights** (`/factory/:id/insights`): KPI tiles (merged · acceptance,
+  lead time, human wait, human load against the 30–50 band, $ per merged PR,
+  incidents · MTTR, NEXT wakes), each with n, the change against the previous
+  window and a day sparkline. Below n=3 a tile reads "n=2 — inconclusive" and
+  shows no delta. Definition and platform version markers come from
+  `GET …/versions`; pressing a definition marker measures only that version
+  (`?def=`). Then Flow (stage funnel, cumulative flow, where the time went per
+  project), Loops, Quality, People (per-person numbers for owners only), Cost,
+  Reliability, Findings and retros, and Experiments, a group-by table
+  (`?group=`) and Export (NDJSON or CSV from `GET …/export`, never
+  transcripts). The Overview's health strip gets 24 h activity sparklines.
+- **Improvements** (`/factory/:id/improvements?tab=`): On trial (the live
+  scorecard from `GET …/proposals/{ref}/scorecard`: target and every guard,
+  baseline vs trial with n; Keep now, Revert), Proposed (Approve trial, Edit,
+  Reject; `awaiting_cosign` waits for the peer lead), History (every C-n),
+  Rules, Definition (versions, diff, Revert to vN, bundle drift from
+  `GET …/bundles` with Relaunch) and Findings ("Is this right?" calibration,
+  Propose change). Code proposals show "Tier 2: off" with the missing
+  prerequisite and **Copy as issue**. `/improvements/:ref` is a change's page.
+  Edit applies the edited change as the owner's own trial `C-n` and rejects
+  the original with a note.
+- **Propose change** (findings, Insights tiles, incidents): owners apply it
+  at once (`PUT …/definition`); operators file it for the owners with
+  `POST …/definition/proposals` (`{kind, changes, rationale, evidence,
+  expected_effect?}`, EDIT, human origin), which opens an owners decision;
+  approving it runs it as a trial.
+- **Settings** (`/factory/:id/settings/:section`): People, Autonomy (project
+  autonomy and engine mode), Budgets & loops, Alerts (detector thresholds,
+  decision escalation and the Slack webhook, set-only through
+  `PUT …/alerts/slack`), Rules and Definition (history, bundles, "Run retro
+  now", heartbeats, mail, previews, models). Every save is one
+  `PUT …/definition` with `base_version` (a newer version answers 409
+  `stale_definition`): an applied human `C-n` in History that one click
+  reverts. Viewers and operators see the values read-only.
+- **Feedback widgets**: 1–5 stars with reason tags on a PR review (sent with
+  Approve or Request changes, or alone once merged or closed), 👍/👎 under a
+  demo, "Unnecessary?" on an agent's decision, the required closure-reason
+  picker on a closed PR's decision, a wrap-up rating on a finished project,
+  "Is this right?" on finding and retro labels, and **Report a problem** (an
+  incident or finding as you, `POST …/issues`) on agents, PRs and projects.
+  Viewers may give feedback; it is not a lever.
+
 ## Work graph
 
 Tasks are a server entity (`factory_tasks`, `T-<n>`), not rows in a PL's
@@ -978,6 +1022,100 @@ packaged bundle.
 To iterate on a prompt before freezing it, run a session-scoped copy from a
 checkout with `sys_session_create(config_path=…)` from a Claude Code session.
 
+## Round 3 operations runbook
+
+### Deploy waves
+
+Each wave: merge the listed packages into the fork's `staging`, bump `newTag`
+to `staging-<sha7>` in an infra PR, then run the live check on
+https://omnigent.caffeinelabs.io.
+
+| Wave | Packages | Engine mode | Live check |
+|---|---|---|---|
+| 0 | base-branch and S3 PRs; infra knobs `OMNIGENT_FACTORY_ARTIFACT_LOCATION`, `OMNIGENT_FACTORY_DEFAULT_BASE`, `OMNIGENT_FACTORY_DEMO_MIRROR_REPO`; the `factory-demos` repo | — | `GET /v1/factory/preflight` shows `default_base=caffeinelabs/app#temp-main`; the server log names the S3 demo location |
+| 1 | temp-main lane, schema, Tier 0, telemetry core | observe | PRs open against `temp-main` with the Base gate green; base-env shows `temp-main@<sha>`; red-team pushes are denied; spans and the cost ledger fill |
+| 2 | people, projects through chat, the Room, UI shell | observe | invites work; chat creates projects; the server spawns PLs; the project page shows demos |
+| 3 | work graph, loop engine, ops, Room and graph UI, ops UI | **assist** | the work graph, NEXT hints, loop cards, fleet "now" and interventions work |
+| 4 | learning and Tier 1, learning UI and the multi-user E2E | assist → **enforce** after one clean run | a Tier-1 trial is kept or reverted; Insights is complete; the multi-user E2E is green |
+
+### Rollback
+
+- **Engine mode first.** An owner sets Settings ▸ Autonomy ▸ Engine mode back
+  to `observe` (a reversible `C-n`): NEXT and READY hints stop, loop budgets
+  stop refusing starts, the guard only records findings and spend never
+  auto-pauses. Binder, spans, loop state and detectors keep measuring. Use
+  `assist` to keep hints but drop enforcement.
+- **A bad change.** Improvements ▸ the change ▸ **Revert**, or Definition ▸
+  **Revert to vN** to put any stored version back; members get the diff.
+- **Everything.** `OMNIGENT_FACTORY_ENABLED=0` turns the factory built-ins
+  and supervisor off.
+- **The database is forward-only.** Never roll the image back below the
+  round-3 migration `fz1a2b3c4d5e`.
+
+### Live acceptance run
+
+Three browser profiles on https://omnigent.caffeinelabs.io: **Luka** (creator),
+**Mia** (operator, a second GitHub account admitted by OIDC; check
+`GET /v1/info` and the allowed domains first) and **Ops** (viewer). Record
+the results in `notes/ROUND3-LIVE-RUN.md`.
+
+1. **Describe it (Luka).** New factory ▸ Describe it: name "Atlas factory",
+   `caffeinelabs/app` # `temp-main`, live env on, autonomy *requested*, engine
+   *observe*, brief "Show the deployed versions in Settings: an API version
+   endpoint, a DB version endpoint, and a Settings row showing both." Expect
+   the Room on `#factory` with the brief as message #1 and base-env reaching
+   `● temp-main@<sha> = head` in about 15 min.
+2. **Agents split the work.** Atlas posts `C-1` (db-version, api-version,
+   settings-versions depending on both); the creates auto-apply with Undo and
+   two PLs spawn without an Atlas turn; settings-versions waits.
+3. **A project by chat (Luka).** "also add a small project: a docs note in
+   docs/ about the version endpoints" gives an auto-applied `C-2` and a
+   `#docs-version` thread. `/project new` opens Add project prefilled with
+   `app#temp-main`; cancel it.
+4. **Invite (Luka).** Share: Mia as Operator, Ops as Viewer; both admitted.
+5. **Join (Mia).** Every project visible, presence shows both, the composer
+   says "posting as Mia · operator".
+6. **Mini chat (Mia).** In `#db-version`: "@pl:db-version use knex_migrations
+   as the source of truth"; the PL answers in the thread within one turn; a
+   question it asks is assigned to Mia.
+7. **Viewer (Ops).** Read-only banner; composer, Apply, Answer, Pause, Share
+   and every Settings and Improvements lever disabled with tooltips; Request
+   access opens a decision Luka declines.
+8. **Work graph and loops.** Settings ▸ Autonomy ▸ Engine mode = assist.
+   Tasks, waves and the critical path on the project page; NEXT wakes in
+   Insights; PRs on `temp-main` with Base ✓; previews and demos on the PR and
+   project pages; the GitHub demo comment shows the mirrored GIF.
+9. **Something goes wrong (Mia).** An impossible acceptance exhausts
+   `implement 3/3`: incident, loop decision; Agent page ▸ Interrupt, then
+   Switch to `ic_codex`; attempt 4 runs on codex; the Timeline shows r0–r3.
+10. **Merge into temp-main (the user, on GitHub).** `base.moved` within
+    5 min; base-env redeploys; settings-versions is released once both
+    dependencies merged.
+11. **Improve.** Settings ▸ Definition ▸ **Run retro now**: a digest in
+    `#improvements` with at least 2 findings; a class-A tuning change goes on
+    trial after Atlas co-signs (Improvements shows its scorecard); a class-B
+    rule waits for Luka, who approves it (PLs get RULES UPDATE; the next card
+    carries the rule) and reverts the class-A trial in one click.
+12. **Settings (Luka).** Budgets & loops ▸ implement attempts 3 → 4 ▸ Save:
+    an applied human `C-n` in Improvements ▸ History; revert it from its page.
+13. **Insights (Ops).** Every tile shows n; version markers appear;
+    per-person numbers are hidden from the viewer.
+14. **Safety checks** (orchestrator, on an IC pod; each denied and logged):
+    `git push origin HEAD:temp-main`, a bare `git push`, the merge gate with
+    and without `OMNIGENT_FACTORY_MERGE_REPOS`, the runner bearer on
+    `POST /v1/factory/factories/{fid}/proposals/<n>/apply` (403
+    `human_only`), and `sys_session_create(config_path=…)` from an IC (403).
+    The factory merges nothing.
+15. **Record**: human prompts per day per person, interventions per merged
+    PR, $ per merged PR, iterations to converge per loop kind, first-pass
+    yield per gate, decision latency, spawn latency, base-move → redeploy time
+    and the NEXT share of wakes (Insights ▸ Export has the raw data).
+
+The automated version of steps 1, 4–7 runs as
+`tests/e2e_ui/factory_round3/test_factory_room_multi_user.py` (a multi-user
+header-auth server; GitHub and the agents are stubbed: the test posts Atlas's
+reply and proposal through the agent routes as the root's owner).
+
 ## Running locally
 
 1. Give the runner a `bifrost` provider, since the claude-native factory
@@ -1032,4 +1170,6 @@ with a managed sandbox launcher configured.
 | Telemetry | `omnigent/server/factory/telemetry/`, `api/telemetry_read.py`, `background/prune.py` | `tests/server/factory/test_telemetry_*.py` (replays `fixtures/live_run_2026_10_26.json`), `test_prune.py` |
 | Bundles | `examples/factory/` | `tests/examples/`, `tests/server/factory/test_factory_agents_listed.py` |
 | Demo harness | `examples/factory/factory-pl/agents/demo/skills/factory-demo/harness/` | `tests/examples/test_factory_demo_harness.py` (runs `factory_demo_harness.test.mjs` under `node --test`); `node run.mjs --selftest` records real demos of a local fixture |
-| End to end | — | `tests/integration/test_factory_tree.py` (live server and runner, mock LLM) |
+| Learning reads | `omnigent/server/factory/learn_view.py`, `human_tuning.py`, `api/learn.py` | `tests/server/factory/test_learn_routes.py` |
+| Learning UI | `web/src/components/factory/{insights,improvements,settings,feedback}/`, `web/src/pages/factory/{Insights,Improvements,Proposal,Settings}Page.tsx` | `web/src/pages/factory/LearnPages.test.tsx` and the component tests; stories under Factory/Insights, Improvements, Settings and Feedback |
+| End to end | — | `tests/integration/test_factory_tree.py` (live server and runner, mock LLM); `tests/e2e_ui/factory_round3/` (multi-user browser run) |

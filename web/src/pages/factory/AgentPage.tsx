@@ -35,6 +35,7 @@ import {
   useLoopSpans,
 } from "@/components/factory/agents/opsQueries";
 import { useAgentStream } from "@/components/factory/agents/useAgentStream";
+import { ReportProblemButton } from "@/components/factory/feedback/ReportProblem";
 import { FactoryLoadError } from "@/components/factory/FactoryLoadError";
 import { AGENT_TABS, type AgentTab, agentsPageHref } from "@/components/factory/factoryRoutes";
 import { clock } from "@/components/factory/overview/LiveFeed";
@@ -252,6 +253,15 @@ export function AgentPage() {
       )}
       {tab === "cost" && <CostPanel factoryId={fid} detail={detail} />}
       <AgentComposer factoryId={fid} agent={agent} />
+      <div className="flex justify-end">
+        <ReportProblemButton
+          factoryId={fid}
+          target={`member:${agent.session_id}`}
+          targetLabel={agent.title}
+          project={agent.project}
+          testId="agent-report-problem"
+        />
+      </div>
       <InterventionDialog
         factoryId={fid}
         kind={acting}

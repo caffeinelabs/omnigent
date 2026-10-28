@@ -23,6 +23,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import type { DemoStepStatus, DemoView, MemberView, PrView, ProjectView } from "@/lib/factoryApi";
 import { fetchDemoJson, fetchFactoryEvents } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
+import { DemoThumbs } from "../feedback/FeedbackWidgets";
 import { ageText, clipDuration, formatBytes, prNoEnvReason } from "../board/boardModel";
 import { DEMO_STATUS_TONE, DemoStatusTag, demoPoster } from "../board/DemoThumb";
 import { TONE_CHIP, TONE_TEXT, plural, sameSha, shortSha } from "../factoryFormat";
@@ -621,7 +622,16 @@ export function DemoPanel({
         <DemoStepList demo={demo} onApi={jumpToApi} />
         <Screenshots demo={demo} />
         {apiFile && <ApiCalls url={demoFileHref(demo, apiFile)} />}
-        <Downloads demo={demo} />
+        <div className="flex min-w-0 flex-wrap items-center justify-between gap-2">
+          <Downloads demo={demo} />
+          <DemoThumbs
+            key={demo.id}
+            factoryId={factoryId}
+            demoId={demo.id}
+            project={pr.project_slug}
+            headSha={demo.head_sha}
+          />
+        </div>
       </div>
       <OlderDemos factoryId={factoryId} pr={pr} demo={demo} nowS={nowS} />
     </section>

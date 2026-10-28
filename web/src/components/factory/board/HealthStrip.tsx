@@ -2,7 +2,7 @@
  * Is the machine alive? One line from the server's status registry: the
  * supervisor's last tick, the mail queue, the GitHub poller, the preview
  * prober, demo storage and launch-mode drift, each amber or red past its
- * threshold.
+ * threshold, with a 24 h sparkline of each part's activity when given.
  */
 
 import type { ReactNode } from "react";
@@ -11,6 +11,7 @@ import type { FactorySnapshot } from "@/lib/factoryApi";
 import { beginGithubConnect } from "@/lib/githubIntegration";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
+import { Sparkline } from "../insights/Sparkline";
 import { type HealthItem, type HealthLevel, healthItems } from "./boardModel";
 import { driftText } from "./TeamStrip";
 
@@ -32,7 +33,7 @@ function at(epochS: number | null): string | undefined {
   return epochS != null ? new Date(epochS * 1000).toLocaleString() : undefined;
 }
 
-function ItemBody({ item }: { item: HealthItem }) {
+function ItemBody({ item, spark }: { item: HealthItem; spark?: readonly number[] }) {
   return (
     <>
       <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", LEVEL_DOT[item.level])} />
@@ -42,6 +43,16 @@ function ItemBody({ item }: { item: HealthItem }) {
         {item.label}
       </span>
       <span>{item.detail}</span>
+      {spark && (
+        <Sparkline
+          series={spark}
+          width={36}
+          height={12}
+          testId={`health-spark-${item.key}`}
+          label={`${item.label}: ${spark.reduce((a, b) => a + b, 0)} events in 24 h`}
+          className="text-muted-foreground/70"
+        />
+      )}
     </>
   );
 }
@@ -59,7 +70,16 @@ function Item({ item, children }: { item: HealthItem; children?: ReactNode }) {
   );
 }
 
-export function HealthStrip({ snapshot, nowS }: { snapshot: FactorySnapshot; nowS: number }) {
+export function HealthStrip({
+  snapshot,
+  nowS,
+  sparks,
+}: {
+  snapshot: FactorySnapshot;
+  nowS: number;
+  /** Health item key → events per hour over the last 24 h. */
+  sparks?: Partial<Record<string, readonly number[]>>;
+}) {
   const items = healthItems(snapshot.health, nowS);
   const drifted = snapshot.members.filter((m) => m.launch_drift);
   return (
@@ -75,7 +95,7 @@ export function HealthStrip({ snapshot, nowS }: { snapshot: FactorySnapshot; now
               <HoverCard openDelay={150} closeDelay={100}>
                 <HoverCardTrigger asChild>
                   <span className="inline-flex cursor-default items-center gap-1.5">
-                    <ItemBody item={item} />
+                    <ItemBody item={item} spark={sparks?.[item.key]} />
                   </span>
                 </HoverCardTrigger>
                 <HoverCardContent
@@ -105,7 +125,7 @@ export function HealthStrip({ snapshot, nowS }: { snapshot: FactorySnapshot; now
         }
         return (
           <Item key={item.key} item={item}>
-            <ItemBody item={item} />
+            <ItemBody item={item} spark={sparks?.[item.key]} />
             {item.key === "github" && snapshot.health.github.state === "disconnected" && (
               <button
                 type="button"

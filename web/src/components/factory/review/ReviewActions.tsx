@@ -30,6 +30,7 @@ import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { ageText } from "../board/boardModel";
 import { mergeUrl } from "../board/PrRow";
+import { type PrRatingValue, PrRatingInput, PrRatingStandalone } from "../feedback/PrRating";
 import { TONE_CHIP, shortSha } from "../factoryFormat";
 import { LeverGated, useViewerCan } from "../shell/viewerCan";
 import { mergeSummary } from "./reviewModel";
@@ -207,12 +208,28 @@ export function ReviewActions({
   const [text, setText] = useState("");
   const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
   const [blockedUrl, setBlockedUrl] = useState<string | null>(null);
+  const [rating, setRating] = useState<PrRatingValue>({ stars: null, tags: [] });
   const canReview = useViewerCan().can.review;
 
-  if (pr.state === "merged") return <MergedBanner pr={pr} nowS={nowS} />;
-  if (pr.state === "closed") return <ClosedBanner pr={pr} nowS={nowS} />;
+  if (pr.state === "merged" || pr.state === "closed") {
+    return (
+      <div className="flex w-full min-w-0 flex-col gap-2">
+        {pr.state === "merged" ? (
+          <MergedBanner pr={pr} nowS={nowS} />
+        ) : (
+          <ClosedBanner pr={pr} nowS={nowS} />
+        )}
+        <PrRatingStandalone factoryId={factoryId} pr={pr} />
+      </div>
+    );
+  }
 
   const busy = feedback.phase === "sending";
+  // The rating rides on the review; it is stored once the review is.
+  const rated =
+    rating.stars != null
+      ? { rating: rating.stars, ...(rating.tags.length ? { tags: rating.tags } : {}) }
+      : {};
 
   const approve = () => {
     setFeedback({ phase: "sending", verdict: "approved" });
@@ -222,7 +239,7 @@ export function ReviewActions({
     // window.open returns null even when the tab opened.
     const tab = window.open("about:blank", "_blank");
     if (tab) tab.opener = null;
-    sendPrFeedback(pr.id, { verdict: "approved" }).then(
+    sendPrFeedback(pr.id, { verdict: "approved", ...rated }).then(
       () => {
         setFeedback({ phase: "sent", verdict: "approved" });
         invalidate();
@@ -246,7 +263,7 @@ export function ReviewActions({
     // Optimistic: the chip shows at once and the composer closes; an error restores both.
     setFeedback({ phase: "sending", verdict: "changes_requested" });
     setComposing(false);
-    sendPrFeedback(pr.id, { verdict: "changes_requested", text: body }).then(
+    sendPrFeedback(pr.id, { verdict: "changes_requested", text: body, ...rated }).then(
       () => {
         setFeedback({ phase: "sent", verdict: "changes_requested" });
         setText("");
@@ -371,6 +388,9 @@ export function ReviewActions({
             </a>
             .
           </p>
+        )}
+        {canReview && feedback.phase !== "sent" && (
+          <PrRatingInput value={rating} onChange={setRating} disabled={busy} />
         )}
         <span id="review-humans-merge" className="sr-only">
           {HUMANS_MERGE}

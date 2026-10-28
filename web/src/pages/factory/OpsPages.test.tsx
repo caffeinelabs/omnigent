@@ -293,7 +293,7 @@ describe("Alerts and the incident page", () => {
     );
     expect(screen.getByTestId("incident-swimlanes")).toBeInTheDocument();
     expect(screen.getByTestId("incident-events")).toHaveTextContent("dispatched route-r2");
-    expect(screen.getByTestId("incident-propose")).toBeDisabled();
+    expect(screen.getByTestId("incident-propose")).toBeEnabled();
     fireEvent.click(screen.getByTestId("incident-cause-env_flaky"));
     fireEvent.click(screen.getByTestId("incident-confirm-cause"));
     await waitFor(() => {

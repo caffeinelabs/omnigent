@@ -13,7 +13,13 @@ import type {
   PrView,
 } from "@/lib/factoryApi";
 import type { InterventionKind, InterventionTarget } from "../agents/interventionModel";
-import { agentPageHref, factoryPageHref, prPageHref, projectPageHref } from "../factoryRoutes";
+import {
+  agentPageHref,
+  factoryPageHref,
+  improvementsPageHref,
+  prPageHref,
+  projectPageHref,
+} from "../factoryRoutes";
 import type { Lever } from "../shell/viewerCan";
 
 export type RunbookAction =
@@ -87,9 +93,6 @@ export const LOOP_OPTION: Record<string, string> = {
   fresh_restart: "fresh_restart",
   abandon: "abandon_task",
 };
-
-export const PROPOSALS_PENDING =
-  "Proposing changes from findings arrives with the Improvements page";
 
 function norm(id: string): string {
   return id.replace(/-/g, "").toLowerCase();
@@ -393,7 +396,13 @@ export function runbookActions(issue: IssueView, ctx: RunbookContext): RunbookAc
         break;
       case "propose_rule":
       case "propose_cadence":
-        no(action, PROPOSALS_PENDING);
+        // Findings' "Propose change" lives on Improvements ▸ Findings.
+        out.push({
+          id: action,
+          label,
+          kind: "link",
+          href: improvementsPageHref(fid, "findings"),
+        });
         break;
       default:
         no(action, "This build doesn’t know that action yet");

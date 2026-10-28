@@ -28,6 +28,9 @@ export type FactoryPageKey =
   | "timeline"
   | "alerts"
   | "incident"
+  | "insights"
+  | "improvements"
+  | "proposal"
   | "other";
 
 export interface FactoryLocation {
@@ -66,6 +69,10 @@ export function factoryLocation(rest: string | undefined): FactoryLocation {
       return { page: "timeline", id: null };
     case "alerts":
       return second ? { page: "incident", id: second } : { page: "alerts", id: null };
+    case "insights":
+      return { page: "insights", id: null };
+    case "improvements":
+      return second ? { page: "proposal", id: second } : { page: "improvements", id: null };
     default:
       return { page: "other", id: first };
   }
@@ -95,7 +102,11 @@ export function presenceLocation(location: FactoryLocation): string | null {
     case "agents":
     case "timeline":
     case "alerts":
+    case "insights":
+    case "improvements":
       return location.page;
+    case "proposal":
+      return `proposal:${location.id}`;
     case "agent":
       return `agent:${location.id}`;
     case "incident":
@@ -138,6 +149,12 @@ export function presenceWhere(location: string | null | undefined): string {
       return "Alerts";
     case "incident":
       return "an incident";
+    case "insights":
+      return "Insights";
+    case "improvements":
+      return "Improvements";
+    case "proposal":
+      return id ? `${id}` : "a proposal";
     default:
       return kind ?? "here";
   }

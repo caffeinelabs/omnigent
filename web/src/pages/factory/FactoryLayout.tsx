@@ -256,10 +256,12 @@ export function FactoryLayout({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (target) navigate(target, { replace: true });
   }, [navigate, target]);
+  // A 404 means no factory or no access; one after data (a removed person's
+  // refetch) drops the stale page too.
+  const missing = error instanceof ApiError && error.status === 404;
   useFactoryPresence(factoryId, presenceLocation(factoryLocation(rest)), {
-    enabled: !legacy && Boolean(data),
+    enabled: !legacy && Boolean(data) && !missing,
   });
-  const missing = !data && error instanceof ApiError && error.status === 404;
   return (
     <PageScroll
       data-testid="factory-page"
@@ -291,7 +293,7 @@ export function FactoryLayout({ children }: { children: ReactNode }) {
           This factory doesn’t exist, or you no longer have access to it.
         </p>
       )}
-      {data && !legacy && (
+      {data && !legacy && !missing && (
         <FactoryControlsProvider key={data.factory.id} snapshot={data}>
           <Shell snapshot={data} clockOffsetS={clockOffsetS} updatedAt={updatedAt} rest={rest}>
             {children}

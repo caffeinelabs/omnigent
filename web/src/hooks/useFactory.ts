@@ -72,8 +72,9 @@ export const FACTORY_DECISIONS_QUERY_KEY = ["factory-decisions"] as const;
 export const FACTORY_PREFLIGHT_QUERY_KEY = ["factory-preflight"] as const;
 
 // Frame scopes that move only the snapshot (and who is where): the live "now"
-// poller, presence and issues. Anything else (or no scope) refreshes it all.
-const LIGHT_SCOPES = new Set(["now", "presence", "issues"]);
+// poller, presence and issues; `reads` (someone's read mark) moves only the
+// Room's unread counts. Anything else (or no scope) refreshes it all.
+const LIGHT_SCOPES = new Set(["now", "presence", "issues", "reads"]);
 
 /**
  * Every query a `factory_changed` frame for `factoryId` makes stale; `scopes`
@@ -86,7 +87,8 @@ export function factoryInvalidationKeys(
 ): readonly (readonly unknown[])[] {
   if (scopes?.length && scopes.every((s) => LIGHT_SCOPES.has(s))) {
     return [
-      factoryQueryKey(factoryId),
+      ...(scopes.some((s) => s !== "reads") ? [factoryQueryKey(factoryId)] : []),
+      ...(scopes.includes("reads") ? [["factory-room", factoryId, "threads"]] : []),
       ...(scopes.includes("presence") ? [["factory-people", factoryId]] : []),
       // The Room's incident and finding cards read the issues list.
       ...(scopes.includes("issues")

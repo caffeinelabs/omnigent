@@ -2,35 +2,35 @@
  * Everything under `/factory/:factoryId/*`: the factory shell (header, tabs,
  * dock, presence) around one page. Overview at the root, then Projects, a
  * project, a PR, Agents and an agent, the Timeline, Alerts and an incident,
- * Activity, the Room, Decisions, the Graph and Settings. Old cockpit links
+ * Activity, the Room, Decisions, the Graph, Insights, Improvements and a
+ * change, and Settings. Old cockpit links
  * (`?project=`, `?review=`, `?pr=…&preview=unavailable`, `?tab=activity`)
  * are sent to their pages by the shell.
  */
 
 import { CompassIcon } from "lucide-react";
-import { Navigate, Route, Routes } from "react-router-dom";
+import { Route, Routes } from "react-router-dom";
 import { ActivityList } from "@/components/factory/activity/ActivityList";
-import {
-  SETTINGS_SECTIONS,
-  factoryPageHref,
-  settingsPageHref,
-} from "@/components/factory/factoryRoutes";
-import { PeopleSettings } from "@/components/factory/people/PeopleSettings";
+import { factoryPageHref } from "@/components/factory/factoryRoutes";
 import { EmptyState } from "@/components/factory/project/projectParts";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
-import { Link, useParams } from "@/lib/routing";
+import { Link } from "@/lib/routing";
 import { AgentPage } from "./AgentPage";
 import { AgentsPage } from "./AgentsPage";
 import { AlertsPage } from "./AlertsPage";
 import { DecisionsPage } from "./DecisionsPage";
 import { FactoryLayout } from "./FactoryLayout";
 import { GraphPage } from "./GraphPage";
+import { ImprovementsPage } from "./ImprovementsPage";
 import { IncidentPage } from "./IncidentPage";
+import { InsightsPage } from "./InsightsPage";
 import { OverviewPage } from "./OverviewPage";
 import { PrPage } from "./PrPage";
+import { ProposalPage } from "./ProposalPage";
 import { ProjectPage } from "./ProjectPage";
 import { ProjectsPage } from "./ProjectsPage";
 import { RoomPage } from "./RoomPage";
+import { SettingsPage } from "./SettingsPage";
 import { TimelinePage } from "./TimelinePage";
 
 /** `/activity`: every factory event, filterable by project, member and kind. */
@@ -44,24 +44,6 @@ function ActivityPage() {
         projects={snapshot.projects}
         members={snapshot.members}
       />
-    </div>
-  );
-}
-
-/** `/settings/:section`: People today; the other sections join it. */
-function SettingsPage() {
-  const { section = "people" } = useParams<{ section: string }>();
-  const { snapshot, nowS } = useFactoryShell();
-  if (!SETTINGS_SECTIONS.includes(section as (typeof SETTINGS_SECTIONS)[number])) {
-    return <Navigate to={settingsPageHref(snapshot.factory.id)} replace />;
-  }
-  return (
-    <div data-testid="factory-settings-page" className="flex min-w-0 flex-col gap-4">
-      <div className="flex min-w-0 items-baseline gap-2">
-        <h2 className="text-base font-semibold">Settings</h2>
-        <span className="text-sm text-muted-foreground">People</span>
-      </div>
-      <PeopleSettings factoryId={snapshot.factory.id} nowS={nowS} />
     </div>
   );
 }
@@ -105,6 +87,9 @@ export function FactoryPage() {
         <Route path="room/:thread" element={<RoomPage />} />
         <Route path="decisions" element={<DecisionsPage />} />
         <Route path="graph" element={<GraphPage />} />
+        <Route path="insights" element={<InsightsPage />} />
+        <Route path="improvements" element={<ImprovementsPage />} />
+        <Route path="improvements/:ref" element={<ProposalPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="settings/:section" element={<SettingsPage />} />
         <Route path="*" element={<UnknownPage />} />

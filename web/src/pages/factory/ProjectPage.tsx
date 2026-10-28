@@ -39,6 +39,9 @@ import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext"
 import { useHashScroll } from "@/components/factory/shell/scroll";
 import { findPr } from "@/components/factory/shell/shellRoutes";
 import { plural } from "@/components/factory/factoryFormat";
+import { WrapUpRating } from "@/components/factory/feedback/FeedbackWidgets";
+import { ReportProblemButton } from "@/components/factory/feedback/ReportProblem";
+import { SectionCard } from "@/components/factory/project/projectParts";
 import type { FactorySnapshot, ProjectView } from "@/lib/factoryApi";
 import { Link, useNavigate, useParams, useSearchParams } from "@/lib/routing";
 
@@ -132,6 +135,11 @@ function ProjectBody({
   const openDecisions = decisions.filter((d) => d.status === "open").length;
   const demoRuns = prs.reduce((n, pr) => n + (pr.demo ? 1 + pr.older_demos : 0), 0);
   const active = useActiveSection(PROJECT_SECTIONS);
+  const finished =
+    project.stage === "done" ||
+    project.stage === "merged" ||
+    project.status === "done" ||
+    project.status === "merged";
   useHashScroll();
   const onReview = (number: number) =>
     navigate(prPageHref(fid, findPr(snapshot.prs, String(number))?.id ?? number));
@@ -161,7 +169,21 @@ function ProjectBody({
             <div className="flex min-w-0 flex-col gap-4">
               <ProgressCard snapshot={snapshot} project={project} nowS={nowS} />
               <PlanCard project={project} />
+              {finished && (
+                <SectionCard title="Wrap-up" testId="project-wrap-up">
+                  <WrapUpRating factoryId={fid} project={project.slug} />
+                </SectionCard>
+              )}
             </div>
+          </div>
+          <div className="mt-2 flex justify-end">
+            <ReportProblemButton
+              factoryId={fid}
+              target={`project:${project.slug}`}
+              targetLabel={project.title}
+              project={project.slug}
+              testId="project-report-problem"
+            />
           </div>
         </PageSection>
         <PageSection id="tasks" title="Tasks" meta="the project’s work graph">
