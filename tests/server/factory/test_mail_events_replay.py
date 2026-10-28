@@ -199,6 +199,8 @@ async def test_a_looping_sender_logs_one_refusal_per_recipient_per_minute(
 
     for _ in range(20):
         assert mailer.try_acquire(pl, lead, factory_id=lead) is not None
+    # Events sharing a ts sort by random id; keep the ic refusal strictly later.
+    clock.advance(1)
     assert mailer.try_acquire(pl, ic, factory_id=lead) is not None
     clock.advance(RATE_LIMITED_EVENT_INTERVAL_S)
     assert mailer.try_acquire(pl, lead, factory_id=lead) is not None
