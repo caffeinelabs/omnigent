@@ -85,7 +85,8 @@ export function jumpItems(snapshot: FactorySnapshot): JumpItem[] {
       kind: "project",
       ref: `#${project.slug}`,
       label: project.title,
-      detail: `${project.slug} · ${STAGE_LABEL[project.stage]}`,
+      // The ref already names the slug.
+      detail: STAGE_LABEL[project.stage],
       href: projectPageHref(fid, project.slug),
       keywords: [project.slug],
     });

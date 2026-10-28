@@ -113,9 +113,12 @@ describe("factory membership by label", () => {
 
   it("files a shared factory member under the Factory entry, never the viewer's own", () => {
     const labels = { "omnigent.factory.id": "f4f4ba9c" };
-    expect(isSharedFactoryMember(labels, false)).toBe(true);
-    expect(isSharedFactoryMember(labels, true)).toBe(false);
-    expect(isSharedFactoryMember({}, false)).toBe(false);
+    const readable = new Set(["f4f4ba9c"]);
+    expect(isSharedFactoryMember(labels, false, readable)).toBe(true);
+    expect(isSharedFactoryMember(labels, true, readable)).toBe(false);
+    expect(isSharedFactoryMember({}, false, readable)).toBe(false);
+    // A session shared by hand whose factory the viewer can't open stays in Shared.
+    expect(isSharedFactoryMember(labels, false, new Set())).toBe(false);
   });
 });
 

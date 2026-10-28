@@ -9,7 +9,6 @@
 
 import { FactoryIcon, PlusIcon } from "lucide-react";
 import { PageScroll } from "@/components/PageScroll";
-import { RunningDot } from "@/components/RunningDot";
 import {
   FactoryIndexCard,
   FactoryIndexCardSkeleton,
@@ -124,9 +123,11 @@ function FactoryIndexTable({ factories }: { factories: FactorySummary[] }) {
                 <td className="px-3 py-2 text-right whitespace-nowrap tabular-nums max-sm:hidden">
                   {factory.members_total}
                   {factory.members_running > 0 && (
-                    <span className="ml-1 inline-flex items-center gap-1 text-session-active">
-                      <RunningDot className="size-2" />
-                      {factory.members_running}
+                    <span
+                      className="ml-1 text-session-active"
+                      title={`${factory.members_running} working`}
+                    >
+                      ·{factory.members_running}▶
                     </span>
                   )}
                 </td>

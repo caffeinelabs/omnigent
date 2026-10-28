@@ -482,7 +482,6 @@ export interface DemoListResponse {
   data: ProjectDemoView[];
 }
 
-/** Filters of the demos list. */
 /** One PR's demos on the project page: every run, newest first. */
 export interface ProjectDemoGroupView {
   repo: string;
@@ -560,6 +559,7 @@ export interface SpanPage {
   next_since: number | null;
 }
 
+/** Filters of the demos list. */
 export interface DemoFilters {
   project?: string;
   /** A PR number. */

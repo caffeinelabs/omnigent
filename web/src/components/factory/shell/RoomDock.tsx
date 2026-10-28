@@ -30,6 +30,15 @@ export function dockThread(
   return { key: "factory", title: "#factory" };
 }
 
+/** The project a project or PR page is about (its decisions lead the dock). */
+export function pageProject(snapshot: FactorySnapshot, location: FactoryLocation): string | null {
+  if (location.page === "project") return location.id ?? null;
+  if (location.page === "pr" && location.id) {
+    return findPr(snapshot.prs, location.id)?.project_slug ?? null;
+  }
+  return null;
+}
+
 /** Where the Room goes while it isn't docked yet: the thread this page binds to. */
 export function RoomSlot({ thread }: { thread: { key: string; title: string } }) {
   return (
@@ -72,7 +81,11 @@ export function RoomDock({
       data-testid="room-dock"
       className="min-w-0 gap-3"
     >
-      <TabsList variant="line" className="h-8 w-full justify-start gap-3 border-b border-border">
+      {/* Stays put while the dock scrolls (a highlighted decision far down). */}
+      <TabsList
+        variant="line"
+        className="sticky -top-1 z-10 h-8 w-full justify-start gap-3 border-b border-border bg-background"
+      >
         <TabsTrigger value="room" data-testid="room-dock-tab-room" className="flex-none px-0.5">
           Room
         </TabsTrigger>
@@ -97,6 +110,7 @@ export function RoomDock({
           factoryId={snapshot.factory.id}
           decisions={snapshot.decisions}
           highlightId={highlightDecision}
+          pinProject={pageProject(snapshot, location)}
           clockOffsetS={clockOffsetS}
           hideHeading
         />

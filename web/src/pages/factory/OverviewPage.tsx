@@ -15,15 +15,23 @@ import { projectsPageHref } from "@/components/factory/factoryRoutes";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
 import { useHashScroll } from "@/components/factory/shell/scroll";
 import { Button } from "@/components/ui/button";
-import { Link } from "@/lib/routing";
+import { Link, useSearchParams } from "@/lib/routing";
 
 export function OverviewPage() {
-  const { snapshot, nowS, clockOffsetS } = useFactoryShell();
+  const { snapshot, nowS, clockOffsetS, wide } = useFactoryShell();
+  const [params] = useSearchParams();
   const split = useMemo(() => splitNeedsYou(snapshot), [snapshot]);
   useHashScroll();
   return (
     <div data-testid="factory-overview" className="flex min-w-0 flex-col gap-4">
-      <NeedsYouPanel snapshot={snapshot} split={split} nowS={nowS} clockOffsetS={clockOffsetS} />
+      <NeedsYouPanel
+        snapshot={snapshot}
+        split={split}
+        nowS={nowS}
+        clockOffsetS={clockOffsetS}
+        // The dock's rail highlights it when there is a dock.
+        highlightDecision={wide ? null : params.get("decision")}
+      />
       <ProjectsTable
         snapshot={snapshot}
         nowS={nowS}

@@ -19,7 +19,7 @@ from fastapi.responses import JSONResponse, Response
 from omnigent.entities import Conversation
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.factory import LABEL_NAME, factory_enabled
-from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE, LEVEL_READ, RESERVED_USER_LOCAL
+from omnigent.server.auth import LEVEL_READ, RESERVED_USER_LOCAL
 from omnigent.server.factory import decision_routing, people, schemas
 from omnigent.server.factory.api.presence import entries_for
 from omnigent.server.factory.charter import server_default_base
@@ -171,20 +171,6 @@ async def list_factories(request: Request) -> dict[str, Any]:
     return schemas.FactoryListResponse.model_validate({"data": summaries}).model_dump(mode="json")
 
 
-def _is_mine(decision: dict[str, Any], user_id: str | None, level: int) -> bool:
-    """:func:`decision_routing.is_mine` over a decision view (no assignee = operators)."""
-    if user_id is None:
-        return True
-    if decision.get("claimed_by"):
-        return decision["claimed_by"] == user_id
-    assignee = decision.get("assignee") or decision_routing.ASSIGNEE_OPERATORS
-    if assignee == decision_routing.ASSIGNEE_OPERATORS:
-        return level >= LEVEL_EDIT
-    if assignee == decision_routing.ASSIGNEE_OWNERS:
-        return level >= LEVEL_MANAGE
-    return assignee == user_id
-
-
 def _summary_extras(
     deps: FactoryDeps, factory_id: str, user_id: str | None, body: dict[str, Any]
 ) -> dict[str, Any]:
@@ -197,7 +183,11 @@ def _summary_extras(
         "viewer_role": people.level_role(level, is_creator=is_creator),
         "shared_by": None if is_creator else creator,
         "people_count": people.people_count(deps, factory_id),
-        "mine": sum(1 for d in open_decisions if _is_mine(d, user_id, level)),
+        "mine": sum(
+            1
+            for d in open_decisions
+            if decision_routing.is_mine_by(d.get("assignee"), d.get("claimed_by"), user_id, level)
+        ),
         "usd_per_h": body["totals"].get("usd_per_h"),
     }
 

@@ -132,7 +132,9 @@ export function FactoryTabs({
           className="inline-flex items-center gap-1.5 rounded-md px-1 text-muted-foreground hover:text-foreground"
         >
           Decisions
-          <Count n={openDecisions} tone={mineCount > 0 ? "warning" : "muted"} />
+          {openDecisions > 0 && (
+            <Count n={openDecisions} tone={mineCount > 0 ? "warning" : "muted"} />
+          )}
         </Link>
         {alerts > 0 && (
           <span

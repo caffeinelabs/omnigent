@@ -100,7 +100,8 @@ function useActiveSection(ids: readonly ProjectSection[]): ProjectSection {
         const first = ids.find((id) => seen.get(id));
         if (first) setActive(first);
       },
-      { rootMargin: "-20% 0px -65% 0px" },
+      // A band just under the stuck nav, where a jumped-to section's top lands.
+      { rootMargin: "-12% 0px -65% 0px" },
     );
     for (const id of ids) {
       const el = document.getElementById(id);

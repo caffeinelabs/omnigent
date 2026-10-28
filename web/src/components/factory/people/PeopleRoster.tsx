@@ -247,18 +247,23 @@ function PersonRow({
             {person.name && person.name !== person.user_id ? person.name : person.user_id}
             {self && <span className="text-muted-foreground"> (you)</span>}
           </span>
-          <span className="flex min-w-0 items-center gap-1.5 text-sm text-muted-foreground">
+          {/* On a narrow row the presence wraps under the email instead of squeezing it. */}
+          <span className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-sm text-muted-foreground">
             {person.name && person.name !== person.user_id && (
-              <span className="min-w-0 truncate">{person.user_id} ·</span>
+              <span className="max-w-full min-w-0 truncate" title={person.user_id}>
+                {person.user_id} ·
+              </span>
             )}
-            <span
-              aria-hidden
-              className={cn(
-                "size-1.5 shrink-0 rounded-full",
-                presence.here ? "bg-success" : "border border-muted-foreground/60",
-              )}
-            />
-            <span className="shrink-0">{presence.text}</span>
+            <span className="inline-flex max-w-full min-w-0 items-center gap-1.5">
+              <span
+                aria-hidden
+                className={cn(
+                  "size-1.5 shrink-0 rounded-full",
+                  presence.here ? "bg-success" : "border border-muted-foreground/60",
+                )}
+              />
+              <span className="min-w-0 truncate">{presence.text}</span>
+            </span>
           </span>
         </div>
         {person.is_creator ? (

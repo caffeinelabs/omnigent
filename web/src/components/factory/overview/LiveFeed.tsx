@@ -22,11 +22,13 @@ export const LIVE_FEED_LINES = 12;
 
 const FEED_FILTERS = { limit: 40 };
 
-function clock(ms: number): string {
+export function clock(ms: number): string {
+  // 24-hour in every locale: the column fits `08:29:48`, not `08:29:48 AM`.
   return new Date(ms).toLocaleTimeString(undefined, {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
+    hour12: false,
   });
 }
 
@@ -116,6 +118,7 @@ export function LiveFeed({ snapshot }: { snapshot: FactorySnapshot }) {
           onRetry={() => void query.refetch()}
           what="the live feed"
           testId="live-feed-error"
+          className="mb-0"
         />
       )}
       {query.isLoading && (
@@ -139,7 +142,7 @@ export function LiveFeed({ snapshot }: { snapshot: FactorySnapshot }) {
                 componentId="factory.overview.feed_line"
                 className="-mx-1.5 grid min-w-0 grid-cols-[4.25rem_minmax(0,1fr)] items-baseline gap-x-2 rounded-md px-1.5 py-0.5 text-sm hover:bg-muted"
               >
-                <span className="font-mono text-xs text-muted-foreground tabular-nums">
+                <span className="font-mono text-xs whitespace-nowrap text-muted-foreground tabular-nums">
                   {clock(event.ts)}
                 </span>
                 <span className="min-w-0 truncate" title={event.summary}>

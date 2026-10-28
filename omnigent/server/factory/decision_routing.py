@@ -155,11 +155,18 @@ def is_mine(decision: FactoryDecision, user_id: str | None, level: int) -> bool:
 
     A claimed decision belongs to its claimer only.
     """
+    return is_mine_by(decision.assignee, decision.claimed_by, user_id, level)
+
+
+def is_mine_by(
+    assignee: str | None, claimed_by: str | None, user_id: str | None, level: int
+) -> bool:
+    """:func:`is_mine` over a decision's ``assignee`` and ``claimed_by`` (e.g. of a view)."""
     if user_id is None:
         return True
-    if decision.claimed_by:
-        return decision.claimed_by == user_id
-    assignee = assignee_of(decision)
+    if claimed_by:
+        return claimed_by == user_id
+    assignee = assignee or ASSIGNEE_OPERATORS
     if assignee == ASSIGNEE_OPERATORS:
         return level >= LEVEL_EDIT
     if assignee == ASSIGNEE_OWNERS:
@@ -314,6 +321,7 @@ __all__ = [
     "escalate_decisions",
     "human_owner_of",
     "is_mine",
+    "is_mine_by",
     "may_answer",
     "plan_escalations",
     "resolve_for",

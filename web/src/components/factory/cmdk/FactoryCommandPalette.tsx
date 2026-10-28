@@ -254,13 +254,13 @@ export function FactoryCommandPalette({
                         >
                           <Icon className="text-muted-foreground" />
                           {item.ref && (
-                            <span className="shrink-0 font-mono text-sm text-muted-foreground">
+                            <span className="max-w-[40%] shrink-0 truncate font-mono text-sm text-muted-foreground">
                               {item.ref}
                             </span>
                           )}
                           <span className="min-w-0 flex-1 truncate">{item.label}</span>
                           {item.detail && (
-                            <span className="max-w-[40%] shrink-0 truncate text-right text-sm text-muted-foreground">
+                            <span className="max-w-[30%] shrink-0 truncate text-right text-sm text-muted-foreground">
                               {item.detail}
                             </span>
                           )}

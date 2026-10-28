@@ -43,6 +43,7 @@ import {
   projectSections,
   sectionsSummary,
 } from "./projectsModel";
+import { AddProjectInline } from "./AddProjectInline";
 import { StageDots } from "./StageDots";
 
 export type TableVariant = "overview" | "full";
@@ -182,21 +183,23 @@ function TitleCell({
   /** Extra classes for the slug (the full table drops it below 2xl). */
   slugClassName?: string;
 }) {
+  // One clipped line: a slug that doesn't fit after the title wraps out of
+  // sight instead of shrinking to `a…` next to a truncated title.
   return (
-    <span className="flex min-w-0 items-baseline gap-2">
+    <span className="flex h-[1lh] min-w-0 flex-wrap items-baseline gap-x-2 overflow-hidden">
       <Link
         to={projectPageHref(factoryId, project.slug)}
         componentId="factory.projects.open"
         onClick={(e) => e.stopPropagation()}
         data-testid={`projects-row-link-${project.slug}`}
-        className="min-w-0 shrink truncate font-medium text-foreground hover:underline"
+        className="max-w-full min-w-0 truncate font-medium text-foreground hover:underline"
         title={project.title}
       >
         {project.title}
       </Link>
       <span
         className={cn(
-          "min-w-0 shrink-[2] truncate font-mono text-xs text-muted-foreground",
+          "max-w-full shrink-0 truncate font-mono text-xs text-muted-foreground",
           slugClassName,
         )}
       >
@@ -207,6 +210,10 @@ function TitleCell({
 }
 
 const TH = "px-2 py-1.5 text-left text-xs font-medium whitespace-nowrap text-muted-foreground";
+
+// Below 1440 px the Room dock takes 21 rem, so priority, $/h and owner give
+// way to the project's name (they stay on the project page).
+const NARROW_HIDDEN = "max-[90rem]:hidden";
 
 function DesktopTable({
   snapshot,
@@ -230,8 +237,8 @@ function DesktopTable({
       <table data-testid="projects-table" data-density={density} className="w-full min-w-0 text-sm">
         <thead>
           <tr className="border-b border-border">
-            <th className={cn(TH, "w-[28%]")}>Project</th>
-            {full && <th className={TH}>P</th>}
+            <th className={cn(TH, "w-[28%] min-w-48")}>Project</th>
+            {full && <th className={cn(TH, NARROW_HIDDEN)}>P</th>}
             {full && <th className={cn(TH, "max-2xl:hidden")}>Repo</th>}
             <th className={TH}>Stage</th>
             <th className={cn(TH, "text-right")}>Tasks</th>
@@ -239,8 +246,8 @@ function DesktopTable({
             <th className={TH}>Loops</th>
             <th className={cn(TH, "text-right")}>Agents</th>
             <th className={cn(TH, "text-right")}>$</th>
-            {full && <th className={cn(TH, "text-right")}>$/h</th>}
-            {full && <th className={cn(TH, "max-xl:hidden")}>Owner</th>}
+            {full && <th className={cn(TH, "text-right", NARROW_HIDDEN)}>$/h</th>}
+            {full && <th className={cn(TH, NARROW_HIDDEN)}>Owner</th>}
             {full && <th className={cn(TH, "max-2xl:hidden")}>Depends on</th>}
             <th className={TH}>Flags</th>
           </tr>
@@ -266,7 +273,9 @@ function DesktopTable({
                   />
                 </td>
                 {full && (
-                  <td className={cn(cell, "font-mono text-xs text-muted-foreground")}>
+                  <td
+                    className={cn(cell, "font-mono text-xs text-muted-foreground", NARROW_HIDDEN)}
+                  >
                     P{project.priority}
                   </td>
                 )}
@@ -308,13 +317,19 @@ function DesktopTable({
                 </td>
                 {full && (
                   <td
-                    className={cn(cell, "text-right font-mono text-muted-foreground tabular-nums")}
+                    className={cn(
+                      cell,
+                      "text-right font-mono text-muted-foreground tabular-nums",
+                      NARROW_HIDDEN,
+                    )}
                   >
                     {facts.usdPerH != null ? facts.usdPerH.toFixed(1) : "—"}
                   </td>
                 )}
                 {full && (
-                  <td className={cn(cell, "max-w-28 truncate text-muted-foreground max-xl:hidden")}>
+                  <td
+                    className={cn(cell, "max-w-28 truncate text-muted-foreground", NARROW_HIDDEN)}
+                  >
                     <span title={facts.owner ?? undefined}>
                       {facts.owner ? (facts.owner.split("@")[0] ?? facts.owner) : "—"}
                     </span>
@@ -363,15 +378,12 @@ function PhoneList({
             data-testid={`projects-row-${project.slug}`}
             className="flex min-w-0 flex-col gap-1 py-2 first:pt-0 last:pb-0"
           >
-            <div className="flex min-w-0 items-start gap-2">
-              <TitleCell project={project} factoryId={fid} />
-              <span className="ml-auto shrink-0">
-                <Flags facts={facts} />
-              </span>
-            </div>
+            {/* The name gets the whole line; the slug only where there is room. */}
+            <TitleCell project={project} factoryId={fid} slugClassName="max-sm:hidden" />
             <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-sm">
               <StageDots project={project} nowS={nowS} />
               <PrCell facts={facts} factoryId={fid} />
+              <Flags facts={facts} />
               <span className="ml-auto inline-flex items-center gap-3 text-muted-foreground">
                 <Agents facts={facts} />
                 <span className="font-mono tabular-nums">{formatUsd(project.cost_usd) ?? "—"}</span>
@@ -598,10 +610,11 @@ export function ProjectsTable({
       {sections.work.length === 0 ? (
         <div
           data-testid="projects-empty"
-          className="flex items-center gap-2 py-4 text-sm text-muted-foreground"
+          className="flex flex-wrap items-center gap-2 py-4 text-sm text-muted-foreground"
         >
           <FolderKanbanIcon aria-hidden className="size-4" />
-          No projects in flight. Add one from the header, or ask Atlas.
+          No projects in flight. Ask Atlas, or
+          <AddProjectInline />
         </div>
       ) : shown.length === 0 ? (
         <p data-testid="projects-filtered-empty" className="py-3 text-sm text-muted-foreground">

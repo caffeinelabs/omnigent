@@ -26,6 +26,7 @@ import {
 import { FactoryTabs } from "@/components/factory/shell/FactoryTabs";
 import { PHONE_TAB_BAR_REM, PhoneTabBar } from "@/components/factory/shell/PhoneTabBar";
 import { RoomDock } from "@/components/factory/shell/RoomDock";
+import { DOCK_SCROLLER_ATTRIBUTE, PAGE_EXTRA_TOP } from "@/components/factory/shell/scroll";
 import {
   factoryLocation,
   legacyFactoryRedirect,
@@ -148,12 +149,17 @@ function Shell({
             {children}
           </main>
           {dock && (
-            // The padding (offset by the margin) keeps a highlighted card's ring inside the scroller.
+            // The padding (offset by the margin) keeps a highlighted card's ring inside the
+            // scroller. The page scroller's padding already clears the header, so the dock
+            // sticks 1rem under it and ends 1rem above the bottom.
             <aside
               aria-label="Room and decisions"
-              className="sticky -m-1 max-h-[calc(100vh-7rem)] overflow-y-auto p-1"
+              {...{ [DOCK_SCROLLER_ATTRIBUTE]: "" }}
+              className="sticky -m-1 overflow-y-auto overscroll-contain p-1"
               style={{
-                top: "calc(var(--omnigent-header-height) + var(--omnigent-inset-top) + 1rem)",
+                top: `calc(1rem - ${PAGE_EXTRA_TOP})`,
+                maxHeight:
+                  "calc(100dvh - var(--omnigent-header-height) - var(--omnigent-inset-top) - var(--omnigent-inset-bottom) - 2rem)",
               }}
             >
               <RoomDock
@@ -220,6 +226,7 @@ export function FactoryLayout({ children }: { children: ReactNode }) {
       data-testid="factory-page"
       maxWidthClassName="max-w-[100rem]"
       contentClassName="px-4 md:px-6"
+      extraTop={PAGE_EXTRA_TOP}
       extraBottom={phone ? `${PHONE_TAB_BAR_REM + 1.5}rem` : undefined}
     >
       <Link

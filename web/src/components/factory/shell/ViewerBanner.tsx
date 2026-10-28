@@ -36,7 +36,8 @@ export function ViewerBanner({ factoryId }: { factoryId: string }) {
       className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-lg border border-border bg-muted/40 px-3 py-2 text-sm"
     >
       <EyeIcon aria-hidden className="size-4 shrink-0 text-muted-foreground" />
-      <p className="min-w-0 flex-1 text-muted-foreground">
+      {/* At least 14rem of text: on a phone the action wraps under it. */}
+      <p className="min-w-0 flex-[1_1_14rem] text-muted-foreground">
         <span className="font-medium text-foreground">You can watch everything.</span> Ask an owner
         for operator access to post or act.
       </p>

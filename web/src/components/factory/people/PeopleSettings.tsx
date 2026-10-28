@@ -43,14 +43,15 @@ function AuditRow({ event, nowS }: { event: EventView; nowS: number }) {
   return (
     <li
       data-testid={`audit-${event.id}`}
-      className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 py-2 text-sm first:pt-0 last:pb-0 md:grid-cols-[9rem_8rem_minmax(0,1fr)_auto]"
+      className="grid min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-3 gap-y-0.5 py-2 text-sm first:pt-0 last:pb-0 md:grid-cols-[9rem_minmax(0,11rem)_minmax(0,1fr)_auto]"
     >
       <span className="text-muted-foreground tabular-nums max-md:hidden" title={clock(event.ts)}>
         {clock(event.ts)}
       </span>
       <span
+        title={event.kind}
         className={cn(
-          "self-start justify-self-start rounded-sm px-1.5 font-mono text-xs leading-5 max-md:col-span-2",
+          "max-w-full self-start justify-self-start truncate rounded-sm px-1.5 font-mono text-xs leading-5 max-md:col-span-2",
           event.kind.startsWith("people.") || event.kind.startsWith("access.")
             ? "bg-session-active/10 text-session-active"
             : "bg-muted text-muted-foreground",

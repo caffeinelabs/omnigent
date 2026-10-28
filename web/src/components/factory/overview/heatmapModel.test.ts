@@ -1,6 +1,12 @@
 import { describe, expect, it } from "vitest";
-import type { EventView, SpanView } from "@/lib/factoryApi";
-import { ROUND3_NOW_S, round3Snapshot, round3Spans } from "../shell/__fixtures__/shellFixtures";
+import type { EventView, FactorySnapshot, SpanView } from "@/lib/factoryApi";
+import {
+  ROUND3_NOW_S,
+  round3Snapshot,
+  round3Spans,
+  scaleSnapshot,
+  serverSpan,
+} from "../shell/__fixtures__/shellFixtures";
 import {
   HEATMAP_CELLS,
   eventCellKind,
@@ -8,12 +14,46 @@ import {
   heatmapFromSpans,
   heatmapStartS,
   projectNote,
+  spanCellKind,
 } from "./heatmapModel";
 
 const NOW = ROUND3_NOW_S;
 
 function span(patch: Partial<SpanView>): SpanView {
   return { ...round3Spans().data[0]!, ...patch };
+}
+
+/** The round-3 snapshot with nobody working and nothing waiting (only spans paint). */
+function quietSnapshot(): FactorySnapshot {
+  const snapshot = round3Snapshot();
+  snapshot.members = snapshot.members.map((m) => ({
+    ...m,
+    running: false,
+    now: null,
+    last_activity_at: null,
+  }));
+  snapshot.decisions = snapshot.decisions.map((d) => ({ ...d, blocking: false }));
+  snapshot.projects = snapshot.projects.map((p) =>
+    p.stage === "ready" ? { ...p, stage: "review" } : p,
+  );
+  return snapshot;
+}
+
+function eventAt(kind: string, s: number, project = "ux-badge"): EventView {
+  return {
+    id: `${kind}-${s}`,
+    ts: (heatmapStartS(NOW) + s) * 1000,
+    kind,
+    severity: "info",
+    project_slug: project,
+    from_id: null,
+    to_id: null,
+    from_title: null,
+    to_title: null,
+    subject: null,
+    summary: kind,
+    data: null,
+  };
 }
 
 describe("heatmapFromSpans", () => {
@@ -28,7 +68,7 @@ describe("heatmapFromSpans", () => {
   });
 
   it("paints a running tool over thinking, waits and CI in the same cell", () => {
-    const snapshot = round3Snapshot();
+    const snapshot = quietSnapshot();
     const startS = heatmapStartS(NOW);
     const at = (s: number) => (startS + s) * 1000;
     const rows = heatmapFromSpans(
@@ -50,7 +90,7 @@ describe("heatmapFromSpans", () => {
   });
 
   it("ignores spans outside the window and container spans", () => {
-    const snapshot = round3Snapshot();
+    const snapshot = quietSnapshot();
     const old = (heatmapStartS(NOW) - 600) * 1000;
     const rows = heatmapFromSpans(
       snapshot,
@@ -58,6 +98,86 @@ describe("heatmapFromSpans", () => {
       NOW,
     );
     expect(rows.find((r) => r.slug === "ux-badge")!.busy).toBe(0);
+  });
+
+  it("does not paint a ready env, a parked preview or the open PR round as waiting on CI", () => {
+    // What the recorder writes: env and preview state episodes named by state,
+    // open for hours, and the current head's round open while the PR is.
+    const spans = [
+      serverSpan("env", "ready", "ux-badge", 180, null),
+      serverSpan("preview", "parked", "ux-badge", 300, null),
+      serverSpan("pr_round", "0b1c2d3", "ux-badge", 240, null),
+      serverSpan("pr", "!9653", "ux-badge", 240, null),
+      serverSpan("task", "T-1 badge", "ux-badge", 240, null),
+    ];
+    const ux = heatmapFromSpans(quietSnapshot(), spans, NOW).find((r) => r.slug === "ux-badge")!;
+    expect(ux.cells.every((c) => c === "idle")).toBe(true);
+  });
+
+  it("paints env and preview transitions and open gates as waiting on CI", () => {
+    const spans = [
+      serverSpan("env", "starting", "ux-badge", 60, 56),
+      serverSpan("preview", "deploying", "ux-badge", 30, 28),
+      serverSpan("gate", "checks", "ux-badge", 6, null),
+    ];
+    const ux = heatmapFromSpans(quietSnapshot(), spans, NOW).find((r) => r.slug === "ux-badge")!;
+    expect(ux.cells.filter((c) => c === "ci").length).toBeGreaterThanOrEqual(5);
+    expect(ux.cells.at(-1)).toBe("ci");
+    expect(ux.cells[20]).toBe("idle");
+    expect(spanCellKind({ kind: "env", name: "degraded" })).toBe("ci");
+    expect(spanCellKind({ kind: "preview", name: "parking" })).toBe("ci");
+    expect(spanCellKind({ kind: "env", name: "parked" })).toBeNull();
+  });
+
+  it("takes thinking and tools from events and the members' now (no turn or tool spans)", () => {
+    const snapshot = quietSnapshot();
+    const db = snapshot.members.find((m) => m.title === "ic:route-r2")!;
+    db.running = true;
+    db.now = {
+      session_id: db.session_id,
+      status: "running",
+      turn_n: 4,
+      tool: "Bash",
+      tool_arg: "pnpm test",
+      tool_since: NOW - 5 * 60,
+      last_event_at: NOW,
+      model: null,
+      cost_usd: null,
+      usd_per_h: null,
+      ctx_pct: null,
+      flags: [],
+    };
+    const rows = heatmapFromSpans(snapshot, round3Spans().data, NOW, [
+      eventAt("message.delivered", 10),
+      eventAt("gate.changed", 130),
+    ]);
+    const ux = rows.find((r) => r.slug === "ux-badge")!;
+    expect(ux.cells[0]).toBe("thinking");
+    expect(ux.cells[1]).toBe("idle"); // gate events are the spans' to paint
+    const dbRow = rows.find((r) => r.slug === "db-version")!;
+    expect(dbRow.cells.slice(-3)).toEqual(["tool", "tool", "tool"]);
+  });
+
+  it("fills a ready PR's wait from the snapshot when no span covers it", () => {
+    const api = heatmapFromSpans(round3Snapshot(), [], NOW).find((r) => r.slug === "api-version")!;
+    expect(api.note).toMatch(/^waiting for human /);
+    expect(api.cells.at(-1)).toBe("human");
+    // Ready 12m 40s ago: the last 7 cells wait (some show the agents' last turns).
+    expect(api.cells.slice(-7).every((c) => c === "human" || c === "thinking")).toBe(true);
+    expect(api.cells.slice(0, -7).includes("human")).toBe(false);
+  });
+
+  it("ranks failing and flagged projects above quiet ones", () => {
+    const rows = heatmapFromSpans(scaleSnapshot(12, 60), [], NOW);
+    expect(rows).toHaveLength(10); // 12 less the closed docs project and base-env
+    const firstQuiet = rows.findIndex((r) => !r.attention);
+    expect(firstQuiet).toBeGreaterThan(0);
+    expect(rows.slice(firstQuiet).every((r) => !r.attention)).toBe(true);
+    // The Overview shows 8: the CI-failed claim ≠ gates clones make the cut.
+    const top8 = rows.slice(0, 8).map((r) => r.slug);
+    expect(top8).toEqual(expect.arrayContaining(["auth-8", "audit-10", "cache-warm"]));
+    expect(rows.find((r) => r.slug === "audit-10")).toMatchObject({ tone: "fail" });
+    expect(rows.slice(8).every((r) => !r.attention)).toBe(true);
   });
 
   it("puts projects that need attention first, then the busiest", () => {
@@ -69,7 +189,7 @@ describe("heatmapFromSpans", () => {
 
 describe("heatmapFromEvents (servers without spans)", () => {
   it("marks each event's cell by its kind", () => {
-    const snapshot = round3Snapshot();
+    const snapshot = quietSnapshot();
     const startS = heatmapStartS(NOW);
     const event = (kind: string, s: number): EventView => ({
       id: kind,

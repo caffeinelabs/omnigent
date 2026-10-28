@@ -39,20 +39,31 @@ const TABS: { key: NeedsTab; label: string }[] = [
   { key: "all", label: "All" },
 ];
 
+/** Whether `item` is the decision `?decision=` names (an id or `D-n`). */
+function isHighlighted(item: NeedsItem, highlight: string | null): boolean {
+  return (
+    highlight != null &&
+    item.kind === "decision" &&
+    (item.decision.id === highlight || item.decision.ref === highlight)
+  );
+}
+
 function Row({
   item,
   snapshot,
   nowS,
   clockOffsetS,
+  highlighted = false,
 }: {
   item: NeedsItem;
   snapshot: FactorySnapshot;
   nowS: number;
   clockOffsetS: number;
+  highlighted?: boolean;
 }) {
   const viewer = useViewer();
   const { can } = useViewerCan();
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(highlighted);
   const fid = snapshot.factory.id;
   let icon = <CircleHelpIcon aria-hidden className="size-3.5 text-warning" />;
   let ref: string | null = null;
@@ -91,7 +102,7 @@ function Row({
       text = `${who ? `${who} · ` : ""}${decision.project_slug ? `${decision.project_slug}: ` : ""}${decision.question}`;
       meta = formatElapsed(nowS - decision.created_at);
       // Someone who may not answer still reads the card: the button says so.
-      const readOnly = answerBlockedReason(decision, can) != null;
+      const readOnly = answerBlockedReason(decision, can, viewer?.user_id ?? null) != null;
       const recommended = readOnly ? null : decision.options.find((o) => o.recommended);
       action = (
         <Button
@@ -173,7 +184,11 @@ function Row({
       </div>
       {open && item.kind === "decision" && (
         <div className="pt-2 pl-6">
-          <DecisionCard decision={item.decision} clockOffsetS={clockOffsetS} />
+          <DecisionCard
+            decision={item.decision}
+            clockOffsetS={clockOffsetS}
+            highlighted={highlighted}
+          />
         </div>
       )}
     </li>
@@ -185,16 +200,22 @@ export function NeedsYouPanel({
   split,
   nowS,
   clockOffsetS,
+  highlightDecision = null,
 }: {
   snapshot: FactorySnapshot;
   split: NeedsYouSplit;
   nowS: number;
   clockOffsetS: number;
+  /** `?decision=` without the dock: that decision's row opens, in a tab that lists it. */
+  highlightDecision?: string | null;
 }) {
   const [picked, setPicked] = useState<NeedsTab | null>(null);
   const [showAll, setShowAll] = useState(false);
-  const tab = picked ?? defaultNeedsTab(split);
+  const fallback = defaultNeedsTab(split);
+  const lists = (key: NeedsTab) => split[key].some((i) => isHighlighted(i, highlightDecision));
+  const tab = picked ?? (highlightDecision && !lists(fallback) && lists("all") ? "all" : fallback);
   const items = split[tab];
+  const highlightAt = items.findIndex((i) => isHighlighted(i, highlightDecision));
   const total = split.all.length;
   return (
     <section
@@ -248,13 +269,17 @@ export function NeedsYouPanel({
         </p>
       ) : (
         <ul data-testid="needs-you-list" className="flex flex-col divide-y divide-border">
-          {(showAll ? items : items.slice(0, NEEDS_ROWS_SHOWN)).map((item) => (
+          {(showAll || highlightAt >= NEEDS_ROWS_SHOWN
+            ? items
+            : items.slice(0, NEEDS_ROWS_SHOWN)
+          ).map((item) => (
             <Row
               key={item.key}
               item={item}
               snapshot={snapshot}
               nowS={nowS}
               clockOffsetS={clockOffsetS}
+              highlighted={isHighlighted(item, highlightDecision)}
             />
           ))}
         </ul>

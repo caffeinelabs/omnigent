@@ -308,7 +308,7 @@ def demo_file_url(base: str, demo_id: str, file_id: str) -> str:
 
 
 def review_url(base: str, factory_id: str, pr_number: int) -> str:
-    """:returns: The cockpit Review drawer of a PR."""
+    """:returns: The cockpit link to a PR (it redirects to the PR page)."""
     return f"{base}/factory/{factory_id}?review={pr_number}"
 
 

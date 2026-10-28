@@ -458,6 +458,24 @@ describe("SessionUpdatesProvider factory_changed frames", () => {
     ]);
   });
 
+  it("re-reads only the snapshot on a live 'now' tick (no spans, events or demos)", () => {
+    const client = new QueryClient();
+    seedConversations(client, ["conv_a"]);
+    renderProvider(client, ["/"]);
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    act(() => frameHandler()({ type: "factory_changed", factory_id: "f4f4ba9c", scopes: ["now"] }));
+    act(() =>
+      frameHandler()({ type: "factory_changed", factory_id: "f4f4ba9c", scopes: ["presence"] }),
+    );
+
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
+      ["factory", "f4f4ba9c"],
+      ["factory", "f4f4ba9c"],
+      ["factory-people", "f4f4ba9c"],
+    ]);
+  });
+
   it("leaves other factories' snapshots and the session lists alone", () => {
     const client = new QueryClient();
     seedConversations(client, ["conv_a"]);

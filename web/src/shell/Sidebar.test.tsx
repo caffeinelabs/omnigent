@@ -79,6 +79,8 @@ const { factoriesRef, decisionCountRef } = vi.hoisted(() => ({
 vi.mock("@/hooks/useFactory", async (importOriginal) => ({
   ...(await importOriginal<typeof UseFactoryModule>()),
   useFactories: () => ({ data: factoriesRef.current }),
+  useReadableFactoryIds: () =>
+    new Set((factoriesRef.current?.data ?? []).map((f) => (f as { id: string }).id)),
   useFactoryDecisionCount: ({ enabled = true }: { enabled?: boolean } = {}) =>
     enabled ? decisionCountRef.current : 0,
 }));
@@ -1057,6 +1059,11 @@ describe("Sidebar session list", () => {
         owner: "luka@caffeine.ai",
         labels: { "omnigent.factory.id": "f3", "omnigent.factory.role": "lead" },
       }),
+      // Shared on its own: its factory isn't readable, so it stays in Shared.
+      conv("conv_lone_pl", "factory-pl", {
+        owner: "luka@caffeine.ai",
+        labels: { "omnigent.factory.id": "f9", "omnigent.factory.role": "pl" },
+      }),
     ]);
     factoriesRef.current = {
       data: [
@@ -1082,6 +1089,7 @@ describe("Sidebar session list", () => {
     showSharedTab();
     expect(screen.getByText("conv_shared")).toBeInTheDocument();
     expect(screen.queryByText("conv_atlas")).toBeNull();
+    expect(screen.getByText("conv_lone_pl")).toBeInTheDocument();
     factoriesRef.current = undefined;
   });
 

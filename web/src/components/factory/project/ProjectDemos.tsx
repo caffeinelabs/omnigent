@@ -523,6 +523,7 @@ export function ProjectDemos({
           onRetry={() => void query.refetch()}
           what="the demos"
           testId="project-demos-error"
+          className="mb-0"
         />
       )}
       {query.isLoading && <GallerySkeleton />}

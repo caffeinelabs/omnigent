@@ -10,7 +10,30 @@ vi.mock("@/lib/factoryApi", () => ({
 
 let visibility: DocumentVisibilityState = "visible";
 
+/** BroadcastChannel delivering at once to the other channels of its name (tabs of one browser). */
+class FakeChannel {
+  static open = new Set<FakeChannel>();
+  onmessage: ((event: MessageEvent) => void) | null = null;
+  readonly name: string;
+  constructor(name: string) {
+    this.name = name;
+    FakeChannel.open.add(this);
+  }
+  postMessage(data: unknown) {
+    for (const other of FakeChannel.open) {
+      if (other !== this && other.name === this.name) {
+        other.onmessage?.(new MessageEvent("message", { data }));
+      }
+    }
+  }
+  close() {
+    FakeChannel.open.delete(this);
+  }
+}
+
 beforeEach(() => {
+  FakeChannel.open.clear();
+  vi.stubGlobal("BroadcastChannel", FakeChannel);
   vi.useFakeTimers();
   post.mockReset();
   post.mockResolvedValue({ present: 1, heartbeat_s: 20, ttl_s: 60 });
@@ -20,6 +43,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 function bodies(): unknown[] {
@@ -100,5 +124,31 @@ describe("useFactoryPresence", () => {
     renderHook(() => useFactoryPresence("f1", "overview", { enabled: false }));
     act(() => vi.advanceTimersByTime(PRESENCE_HEARTBEAT_MS));
     expect(post).not.toHaveBeenCalled();
+  });
+
+  it("keeps quiet while hidden if another tab is visible", () => {
+    visibility = "hidden";
+    renderHook(() => useFactoryPresence("f1", "project:db-version"));
+    // Another tab of this factory, visible, beats.
+    const other = new FakeChannel("omnigent-factory-presence:f1");
+    other.postMessage({ tab: "other", visible: true });
+    post.mockClear();
+    act(() => vi.advanceTimersByTime(PRESENCE_HEARTBEAT_MS));
+    expect(post).not.toHaveBeenCalled();
+    // Once that tab closes, this one says where the viewer is.
+    other.postMessage({ tab: "other", visible: false, gone: true });
+    expect(bodies()).toEqual([{ location: "project:db-version", idle: true }]);
+  });
+
+  it("sends no leave while another tab of the factory is open; the last one leaves", () => {
+    const a = renderHook(() => useFactoryPresence("f1", "overview"));
+    const b = renderHook(() => useFactoryPresence("f1", "project:db-version"));
+    post.mockClear();
+    a.unmount();
+    expect(bodies()).not.toContainEqual({ location: null, idle: false, leave: true });
+    // The tab left open says where the viewer is.
+    expect(bodies()).toEqual([{ location: "project:db-version", idle: false }]);
+    b.unmount();
+    expect(bodies().at(-1)).toEqual({ location: null, idle: false, leave: true });
   });
 });

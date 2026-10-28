@@ -32,6 +32,7 @@ import { cn } from "@/lib/utils";
 import { ageText, decisionAnchorId } from "../board/boardModel";
 import { useFactoryServerNowS } from "../factoryClock";
 import { formatElapsed } from "../factoryFormat";
+import { DOCK_SCROLLER_ATTRIBUTE, DOCK_TABS_PX } from "../shell/scroll";
 import { LEVER_REASON, ReasonGated, useViewer, useViewerCan } from "../shell/viewerCan";
 import { FoldableMarkdown } from "../transcript/FoldableMarkdown";
 
@@ -111,14 +112,24 @@ export function assigneeText(decision: DecisionView, viewerId: string | null): s
   return assignee === viewerId ? "for you" : `for ${assignee}`;
 }
 
-/** Why the viewer may not answer `decision`, or null when they may. */
+/**
+ * Why the viewer may not answer `decision`, or null when they may. Mirrors the
+ * server (`decision_routing.may_answer`): owners answer anything; operators
+ * answer what is assigned to operators or to them, or what they claimed.
+ */
 export function answerBlockedReason(
   decision: DecisionView,
   can: { answer: boolean; settings: boolean },
+  viewerId: string | null = null,
 ): string | null {
   if (!can.answer) return LEVER_REASON.answer;
-  if (decision.assignee === "owners" && !can.settings) return "Owners answer this decision";
-  return null;
+  // No viewer id (no-auth server) or an owner: the server lets them answer.
+  if (viewerId == null || can.settings) return null;
+  const assignee = decision.assignee ?? "operators";
+  if (assignee === "operators" || assignee === viewerId) return null;
+  if (decision.claimed_by === viewerId) return null;
+  if (assignee === "owners") return "Owners answer this decision";
+  return `Assigned to ${assignee}; owners can reassign`;
 }
 
 /** The receipt line of an answered decision (also used by the rail's answered list). */
@@ -252,7 +263,7 @@ export function DecisionCard({
   const nowS = useFactoryServerNowS(clockOffsetS);
   const viewer = useViewer();
   const { can } = useViewerCan();
-  const blockedReason = answerBlockedReason(decision, can);
+  const blockedReason = answerBlockedReason(decision, can, viewer?.user_id ?? null);
   const assigned = assigneeText(decision, viewer?.user_id ?? null);
   const ref = useRef<HTMLElement>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
@@ -261,7 +272,16 @@ export function DecisionCard({
   const [picked, setPicked] = useState<string | null>(null);
 
   useEffect(() => {
-    if (highlighted) ref.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
+    const el = ref.current;
+    if (!highlighted || !el) return;
+    // In the dock, first bring the card up under the dock's tabs (the dock
+    // scrolls on its own), then scroll the page only as far as it needs.
+    const dock = el.closest<HTMLElement>(`[${DOCK_SCROLLER_ATTRIBUTE}]`);
+    if (dock) {
+      const top = el.getBoundingClientRect().top - dock.getBoundingClientRect().top;
+      dock.scrollTop += top - DOCK_TABS_PX;
+    }
+    el.scrollIntoView({ block: "nearest", behavior: "smooth" });
   }, [highlighted]);
 
   const invalidate = () => {
@@ -414,6 +434,7 @@ export function DecisionCard({
       data-highlighted={highlighted ? "true" : undefined}
       aria-label={`${decision.ref}: ${decision.question}`}
       className={cn(
+        "scroll-my-3",
         "relative flex min-w-0 flex-col gap-2 rounded-lg border bg-card p-3 text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
         open && decision.blocking
           ? serverAsked

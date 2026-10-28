@@ -117,9 +117,54 @@ export function round3People(role: ViewerRole = "creator"): PeopleResponse {
   };
 }
 
-/** The round-3 spans (`GET …/spans`): the db-version loop, its tools, waits and gates. */
+let spanSeq = 0;
+/** A span as the recorder writes it, `fromMin`..`toMin` minutes ago (null: still open). */
+export function serverSpan(
+  kind: SpanView["kind"],
+  name: string,
+  project: string,
+  fromMin: number,
+  toMin: number | null,
+  extra: Partial<SpanView> = {},
+): SpanView {
+  spanSeq += 1;
+  return {
+    ...clone(ROUND3.spans[0]!),
+    id: `span-r3-${spanSeq}`,
+    trace_key: `${kind}:${project}`,
+    task_id: null,
+    role: null,
+    agent_name: null,
+    kind,
+    name,
+    project_slug: project,
+    started_at: (ROUND3_NOW_S - fromMin * 60) * 1000,
+    ended_at: toMin == null ? null : (ROUND3_NOW_S - toMin * 60) * 1000,
+    outcome: toMin == null ? "open" : "ok",
+    ...extra,
+  };
+}
+
+/**
+ * The round-3 spans (`GET …/spans`): the db-version loop, its tools, waits
+ * and gates, plus the long-lived episodes the recorder keeps open (env and
+ * preview states, the current PR round, a ready wait).
+ */
 export function round3Spans(): SpanPage {
-  return { data: clone(ROUND3.spans), has_more: false, next_since: null };
+  spanSeq = 0;
+  const readySince = ROUND3.snapshot.projects.find((p) => p.slug === "api-version")!.stage_since;
+  const episodes = [
+    serverSpan("env", "ready", "db-version", 180, null),
+    serverSpan("env", "ready", "api-version", 300, null),
+    serverSpan("env", "starting", "ux-badge", 70, 64),
+    serverSpan("env", "ready", "ux-badge", 64, null),
+    serverSpan("preview", "deploying", "ux-badge", 8, 4),
+    serverSpan("preview", "ready", "ux-badge", 4, null),
+    serverSpan("pr_round", "0b1c2d3", "ux-badge", 120, null),
+    serverSpan("gate", "checks", "cache-warm", 24, null),
+    serverSpan("ready_wait", "ready", "api-version", (ROUND3_NOW_S - readySince) / 60, null),
+  ];
+  return { data: [...clone(ROUND3.spans), ...episodes], has_more: false, next_since: null };
 }
 
 let seq = 0;

@@ -40,10 +40,11 @@ export function PresenceFace({
       size="sm"
       data-testid={`factory-presence-${userId}`}
       data-idle={idle ? "true" : "false"}
-      className={cn("ring-2 ring-background", idle && "opacity-40 saturate-50", className)}
+      // Idle dims the fill only: the opaque base and ring keep stacked faces apart.
+      className={cn("bg-background ring-2 ring-background", className)}
     >
       <AvatarFallback
-        className="text-xs font-medium text-white"
+        className={cn("text-xs font-medium text-white", idle && "opacity-40 saturate-50")}
         style={{ backgroundColor: userColor(userId) }}
       >
         {userInitials(userId)}

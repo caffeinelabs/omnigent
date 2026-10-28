@@ -2,7 +2,7 @@
  * The last hour per project at a glance: one row of 2-minute cells per
  * project in flight (a tool running, thinking, waiting on a human, waiting on
  * CI or a preview), and on the right what it waits on now. Rows open the
- * project page. Reads spans; on a server without them, events.
+ * project page. Reads spans and events (events alone on a server without spans).
  */
 
 import { useMemo } from "react";
@@ -13,11 +13,12 @@ import { Link } from "@/lib/routing";
 import { ApiError } from "@/lib/sessionsApi";
 import { cn } from "@/lib/utils";
 import { FactoryLoadError } from "../FactoryLoadError";
-import { projectPageHref } from "../factoryRoutes";
+import { projectPageHref, projectsPageHref } from "../factoryRoutes";
 import { SectionCard } from "../project/projectParts";
 import {
   type CellKind,
   HEATMAP_CELLS,
+  HEATMAP_SPAN_KINDS,
   type HeatmapRow,
   heatmapFromEvents,
   heatmapFromSpans,
@@ -47,18 +48,24 @@ const NOTE_TONE: Record<HeatmapRow["tone"], string> = {
 
 /** Spans this far before the window still count (a wait that began earlier). */
 const LOOKBACK_MS = 6 * 3600 * 1000;
+/** The spans read starts on this grid, so its key (and the read) moves once an hour. */
+const SINCE_GRID_MS = 3600 * 1000;
 
-function useHeatmapRows(snapshot: FactorySnapshot, nowS: number, limit: number) {
+const HEATMAP_EVENT_FILTERS = { limit: 500 };
+
+function useHeatmapRows(snapshot: FactorySnapshot, nowS: number) {
   const fid = snapshot.factory.id;
-  const startS = heatmapStartS(nowS);
-  const spans = useFactorySpans(fid, startS * 1000 - LOOKBACK_MS);
+  const sinceMs =
+    Math.floor((heatmapStartS(nowS) * 1000 - LOOKBACK_MS) / SINCE_GRID_MS) * SINCE_GRID_MS;
+  const spans = useFactorySpans(fid, sinceMs, { kinds: HEATMAP_SPAN_KINDS });
   const noSpans = spans.error instanceof ApiError && spans.error.status === 404;
-  const events = useFactoryEvents(noSpans ? fid : null, { limit: 500 });
+  // Agent activity comes from events either way (no turn or tool spans yet).
+  const events = useFactoryEvents(fid, HEATMAP_EVENT_FILTERS);
+  const eventRows = events.data?.pages[0]?.data;
   const rows = useMemo(() => {
-    if (spans.data) return heatmapFromSpans(snapshot, spans.data.data, nowS, limit);
-    const page = events.data?.pages[0];
-    return page ? heatmapFromEvents(snapshot, page.data, nowS, limit) : null;
-  }, [spans.data, events.data, snapshot, nowS, limit]);
+    if (spans.data) return heatmapFromSpans(snapshot, spans.data.data, nowS, eventRows ?? []);
+    return noSpans && eventRows ? heatmapFromEvents(snapshot, eventRows, nowS) : null;
+  }, [spans.data, noSpans, eventRows, snapshot, nowS]);
   const source = spans.data ? "spans" : noSpans ? "events" : null;
   const error = noSpans ? events.error : spans.error;
   return {
@@ -79,7 +86,9 @@ export function ActivityHeatmap({
   nowS: number;
   limit?: number;
 }) {
-  const { rows, source, error, loading, refetch } = useHeatmapRows(snapshot, nowS, limit);
+  const { rows: all, source, error, loading, refetch } = useHeatmapRows(snapshot, nowS);
+  const rows = all?.slice(0, limit) ?? null;
+  const hidden = all ? all.length - (rows?.length ?? 0) : 0;
   return (
     <SectionCard
       title="Activity"
@@ -107,6 +116,7 @@ export function ActivityHeatmap({
           onRetry={refetch}
           what="the activity"
           testId="overview-heatmap-error"
+          className="mb-0"
         />
       )}
       {loading && (
@@ -172,7 +182,18 @@ export function ActivityHeatmap({
             </div>
           ))}
           <div className="grid grid-cols-[minmax(0,7rem)_minmax(0,1fr)] gap-x-3 text-xs text-muted-foreground md:grid-cols-[minmax(0,9rem)_minmax(0,1fr)_minmax(0,12rem)]">
-            <span />
+            {hidden > 0 ? (
+              <Link
+                to={projectsPageHref(snapshot.factory.id)}
+                componentId="factory.overview.heatmap_more"
+                data-testid="overview-heatmap-more"
+                className="min-w-0 truncate hover:text-foreground hover:underline"
+              >
+                +{hidden} more → Projects
+              </Link>
+            ) : (
+              <span />
+            )}
             <span className="flex justify-between tabular-nums">
               <span>−60m</span>
               <span>−30m</span>

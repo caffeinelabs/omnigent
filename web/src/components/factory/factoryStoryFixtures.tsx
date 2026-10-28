@@ -5,7 +5,7 @@
 // errors, retries) without a backend.
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { type ReactNode, useEffect, useState } from "react";
+import { type CSSProperties, type ReactNode, useEffect, useState } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { FALLBACK_SERVER_INFO } from "@/lib/capabilities";
 import { CapabilitiesProvider } from "@/lib/CapabilitiesContext";
@@ -171,6 +171,12 @@ export function FactoryStoryFrame({
             <div
               className={cn(theme === "dark" && "dark", mode === "viewport" && "fixed inset-0")}
               data-theme-frame={theme}
+              // No app header above a story: pages and sticky bars start at the top.
+              style={
+                mode === "viewport"
+                  ? ({ "--omnigent-header-height": "0px" } as CSSProperties)
+                  : undefined
+              }
             >
               <div
                 data-testid="factory-story-frame"

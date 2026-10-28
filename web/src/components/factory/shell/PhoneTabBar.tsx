@@ -165,12 +165,18 @@ export function PhoneTabBar({
         </button>
       </nav>
       <Sheet open={more} onOpenChange={setMore}>
-        <SheetContent side="bottom" size="md" data-testid="factory-phone-more-sheet">
+        {/* Six rows: a sheet sized to them, not a full-screen page. */}
+        <SheetContent
+          side="bottom"
+          size="md"
+          data-testid="factory-phone-more-sheet"
+          className="max-md:top-auto max-md:h-auto max-md:max-h-[85dvh] max-md:rounded-t-xl"
+        >
           <SheetHeader>
             <SheetTitle>More</SheetTitle>
             <SheetDescription className="sr-only">Other factory pages and actions</SheetDescription>
           </SheetHeader>
-          <SheetBody className="flex flex-col gap-0.5 pb-4">
+          <SheetBody className="flex flex-col gap-0.5 pb-[calc(1rem+var(--omnigent-safe-bottom))]">
             <MoreLink to={factoryPageHref(factoryId)} icon={LayoutDashboardIcon} onDone={close}>
               Overview
             </MoreLink>

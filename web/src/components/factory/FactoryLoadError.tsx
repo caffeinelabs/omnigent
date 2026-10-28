@@ -19,16 +19,19 @@ export function FactoryLoadError({
   onRetry,
   what = "factories",
   testId = "factory-load-error",
+  className,
 }: {
   error: Error;
   updatedAt: number;
   onRetry: () => void;
   what?: string;
   testId?: string;
+  /** Replaces the bottom margin (inside a card, where the card spaces it). */
+  className?: string;
 }) {
   const status = error instanceof ApiError ? `HTTP ${error.status}` : error.message;
   return (
-    <Alert variant="destructive" data-testid={testId} className="mb-4">
+    <Alert variant="destructive" data-testid={testId} className={className ?? "mb-4"}>
       <TriangleAlertIcon />
       <AlertTitle>
         Couldn’t {updatedAt > 0 ? "refresh" : "load"} {what}

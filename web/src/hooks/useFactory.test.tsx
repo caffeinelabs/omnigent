@@ -254,6 +254,29 @@ describe("useFactorySpans", () => {
     expect(paths[1]).toContain("since=3");
   });
 
+  it("asks for the given kinds and keeps the last spans on screen while a new window loads", async () => {
+    let release: (r: Response) => void = () => undefined;
+    authenticatedFetch
+      .mockResolvedValueOnce(json({ data: [{ id: "a", started_at: 1 }], has_more: false }))
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            release = resolve;
+          }),
+      );
+    const { result, rerender } = renderHook(
+      ({ since }) => useFactorySpans(FID, since, { kinds: ["gate", "decision"] }),
+      { wrapper: wrapperFor(newClient()), initialProps: { since: 1000 } },
+    );
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(authenticatedFetch.mock.calls[0]![0]).toContain("kind=gate%2Cdecision");
+    rerender({ since: 2000 });
+    expect(result.current.data!.data.map((s) => s.id)).toEqual(["a"]);
+    expect(result.current.isPlaceholderData).toBe(true);
+    release(json({ data: [{ id: "b", started_at: 2 }], has_more: false }));
+    await waitFor(() => expect(result.current.data!.data.map((s) => s.id)).toEqual(["b"]));
+  });
+
   it("reports a server without spans as a 404 (the heatmap falls back to events)", async () => {
     authenticatedFetch.mockResolvedValueOnce(json({ error: { message: "not found" } }, 404));
     const { result } = renderHook(() => useFactorySpans(FID, 1000), {

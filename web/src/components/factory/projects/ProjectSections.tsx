@@ -6,7 +6,7 @@
  * components.
  */
 
-import type { ReactNode } from "react";
+import { type ReactNode, useEffect, useRef } from "react";
 import {
   CircleCheckIcon,
   ListTodoIcon,
@@ -32,6 +32,7 @@ import {
 import { type ProjectSection, prPageHref, roomPageHref } from "../factoryRoutes";
 import { EmptyState, SectionCard } from "../project/projectParts";
 import { projectDecisions, projectTeam } from "../project/projectModel";
+import { PAGE_EXTRA_TOP } from "../shell/scroll";
 import { StageDots } from "./StageDots";
 
 export const SECTION_LABEL: Record<ProjectSection, string> = {
@@ -46,6 +47,10 @@ export const SECTION_LABEL: Record<ProjectSection, string> = {
   activity: "Activity",
 };
 
+/** Where a jumped-to section's top lands: under the header and the stuck nav. */
+const SECTION_SCROLL_MARGIN =
+  "calc(var(--omnigent-header-height) + var(--omnigent-inset-top) + 3.5rem)";
+
 /** The page's section links (anchors), with counts; scrolls sideways on a phone. */
 export function SectionNav({
   sections,
@@ -59,14 +64,30 @@ export function SectionNav({
   /** The Room thread link at the end. */
   room: { href: string; label: string };
 }) {
+  // On a phone the links scroll sideways: keep the active one in view.
+  const strip = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const box = strip.current;
+    const link = box?.querySelector<HTMLElement>(`[data-testid="project-nav-${active}"]`);
+    if (!box || !link) return;
+    if (link.offsetLeft < box.scrollLeft) box.scrollLeft = link.offsetLeft - 16;
+    else if (link.offsetLeft + link.offsetWidth > box.scrollLeft + box.clientWidth) {
+      box.scrollLeft = link.offsetLeft + link.offsetWidth - box.clientWidth + 16;
+    }
+  }, [active]);
   return (
     <nav
       aria-label="Project sections"
       data-testid="project-section-nav"
-      className="sticky z-10 -mx-4 border-b border-border bg-background/95 px-4 backdrop-blur-md md:-mx-1 md:px-1"
-      style={{ top: "calc(var(--omnigent-header-height) + var(--omnigent-inset-top))" }}
+      className="sticky z-10 -mx-4 border-b border-border bg-background/95 px-4 backdrop-blur-md md:mx-0 md:px-0"
+      // The page scroller's padding already clears the header; this takes back
+      // its extra 1.5rem so the nav sits right under the header.
+      style={{ top: `calc(-1 * ${PAGE_EXTRA_TOP})` }}
     >
-      <div className="flex min-w-0 items-center gap-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      <div
+        ref={strip}
+        className="relative flex min-w-0 items-center gap-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+      >
         {sections.map((section) => (
           <a
             key={section}
@@ -124,7 +145,8 @@ export function PageSection({
       id={id}
       aria-label={title}
       data-testid={`project-section-${id}`}
-      className={cn("flex min-w-0 scroll-mt-28 flex-col gap-3", className)}
+      className={cn("flex min-w-0 flex-col gap-3", className)}
+      style={{ scrollMarginTop: SECTION_SCROLL_MARGIN }}
     >
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
         <h2 className="text-base font-semibold">{title}</h2>

@@ -160,10 +160,14 @@ export function factoryIdOf(labels: Record<string, string> | undefined): string 
 /**
  * Whether a session is a member of a factory someone else shared with the
  * viewer: the sidebar lists those under its Factory entry, not in Shared.
+ * Only factories the viewer can open (`readable`) count; a session shared on
+ * its own, without its factory, stays in Shared.
  */
 export function isSharedFactoryMember(
   labels: Record<string, string> | undefined,
   ownedByViewer: boolean,
+  readable: ReadonlySet<string>,
 ): boolean {
-  return !ownedByViewer && factoryIdOf(labels) !== null;
+  const id = factoryIdOf(labels);
+  return !ownedByViewer && id !== null && readable.has(id);
 }
