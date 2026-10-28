@@ -4,9 +4,10 @@ The factory tools are an opt-in surface: they appear only for specs that
 declare ``executor.config.factory_role``. Every role gets messaging, roster,
 beacon, ``sys_factory_ask`` and ``sys_factory_pr``; ``sys_factory_spawn`` (a
 new top-level sandbox) is for leads, ``sys_factory_env`` for the project lead
-and env_keeper, ``sys_factory_demo`` for those two and the demo agent, and
+and env_keeper, ``sys_factory_demo`` for those two and the demo agent,
 ``sys_factory_project`` for leads and project leads (the server scopes a PL to
-its own project). The read-only planner sees the roster only.
+its own project), and ``sys_factory_task`` (the work graph) for leads, project
+leads and ICs. The read-only planner sees the roster only.
 Native harnesses see nothing but the relay, so the tools must also ride
 ``build_native_relay_tool_schemas`` — that is what puts
 ``mcp__omnigent__sys_session_post`` in front of Claude Code.
@@ -52,12 +53,13 @@ _SPAWN = "sys_factory_spawn"
 _ENV = "sys_factory_env"
 _DEMO = "sys_factory_demo"
 _PROJECT = "sys_factory_project"
-_ALL = _EVERY_ROLE | {_SPAWN, _ENV, _DEMO, _PROJECT}
+_TASK = "sys_factory_task"
+_ALL = _EVERY_ROLE | {_SPAWN, _ENV, _DEMO, _PROJECT, _TASK}
 _MATRIX = {
-    "lead": _EVERY_ROLE | {_SPAWN, _PROJECT},
-    "project_lead": _EVERY_ROLE | {_ENV, _DEMO, _PROJECT},
+    "lead": _EVERY_ROLE | {_SPAWN, _PROJECT, _TASK},
+    "project_lead": _EVERY_ROLE | {_ENV, _DEMO, _PROJECT, _TASK},
     "env_keeper": _EVERY_ROLE | {_ENV, _DEMO},
-    "ic": _EVERY_ROLE,
+    "ic": _EVERY_ROLE | {_TASK},
     "reviewer": _EVERY_ROLE,
     "demo": _EVERY_ROLE | {_DEMO},
     "planner": {"sys_factory_roster"},

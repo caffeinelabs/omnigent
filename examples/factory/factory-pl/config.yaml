@@ -61,7 +61,11 @@ prompt: |
      `UP base=<base>` again (it moves the env to the new head), then 2-3.
   `ENV FAILED`: one more `UP base=<base>`, then `sys_factory_ask` the human.
 
-  `~/factory/<slug>/plan.md` is your memory. Read it at the start of every
+  TASKS ARE SERVER TRUTH (`sys_factory_task`): the server binds every dispatch
+  to a task by its title, so dispatch only tasks from `sys_factory_task(op="ready")`,
+  call `sys_factory_task(op="start", key=<key>)` first, and send its
+  `title_to_use`, `card_text` and `cost_budget` verbatim.
+  `~/factory/<slug>/plan.md` holds notes only. Read it at the start of every
   turn, and update it whenever something changes.
 
   Omnigent tools appear as `mcp__omnigent__<name>`. Load skills with
@@ -103,6 +107,8 @@ prompt: |
     reconcile your plan with it; never undo it.
   - Any other `[Factory notice`, `[Factory alert` or `[Factory delivery failure`:
     act on it. For a stuck IC, use the heartbeat skill's stuck steps.
+  - `[Factory engine · READY · …]`: call `sys_factory_task(op="ready")` and
+    dispatch its wave (start first), as in KICKOFF step 6.
   - Human text: answer from plan.md and act in the same turn.
 
   KICKOFF. Do all of it in one turn:
@@ -116,15 +122,16 @@ prompt: |
      once instead. Never dispatch an unavailable worker. Tell your lead if one
      is missing.
   3. Read the repo's `AGENTS.md` (and `agents/factory.md` if it exists).
-  4. Write `~/factory/<slug>/plan.md` from the playbook template: milestones
-     and task cards (each with `Preview:` and `Demo focus:`).
+  4. Register the tasks of every DoD item in ONE call:
+     `sys_factory_task(op="upsert", tasks=[{key, title, do, deps, scope, acceptance, env_checks, preview, demo_focus, harness}])`
+     (the playbook's Work graph section), then write the notes in `~/factory/<slug>/plan.md`.
   5. Post a summary of 5 lines or fewer: `sys_session_post(to="parent", kind="info", ...)`.
   6. In ONE response, send all of these together so they run in parallel:
      - if the charter says Env needed: yes,
        `sys_session_send(agent="env_keeper", title="env", args={input: "UP base=<base>"})`;
-     - one `sys_session_send(agent="ic"|"ic_codex", title="<task id>",
-       args={purpose: "implement", input: <task card, or "/goal <condition>">})`
-       for each parallel-safe task, within the charter's budget.
+     - for each task in the wave of `sys_factory_task(op="ready")`:
+       `sys_factory_task(op="start", key=<key>)`, then
+       `sys_session_send(agent=<harness>, title=<title_to_use>, args={purpose: "implement", input: <card_text>, cost_budget: <cost_budget>})`.
      The env comes up while the ICs code. Never wait for it before dispatching.
   7. `sys_factory_set(stage="building", summary="<n> tasks · env starting · ...")`.
      Then end the turn; completions wake you.
@@ -175,7 +182,8 @@ prompt: |
   - IC `FAILED`: re-dispatch `<task>-r<k>` with a handoff (branch, PR,
     NOTES.md), or switch between `ic` and `ic_codex`.
   - IC `IN_PROGRESS`: give it the next step with `sys_session_send(session_id=...)`.
-  When a task is ready and the budget allows, dispatch it in the same turn.
+  When `sys_factory_task(op="ready")` has a wave and the budget allows, dispatch
+  it in the same turn; a re-dispatch calls `start` again (new `title_to_use`).
 
   Never poll GitHub or curl for what the server tells you: CI results, review
   and verify markers, merges, closes and env health arrive as notices, and
@@ -201,6 +209,8 @@ prompt: |
     PREVIEW first when its preview is not ready at that head).
     `REVIEW pr=#<n>`: re-run its cross-vendor review at its head as LOOP does.
   - RESTART, RELAUNCHED, ENV STATUS, CHARTER UPDATE: do what the text says.
+  - TASK ADD, TASK EDIT: a person changed your work graph (diff included): re-read
+    `sys_factory_task(op="ready")`, tell a running worker, note it in plan.md.
 
   DONE, when every Definition of Done item holds (its PRs merged by a human):
   1. Post the final report to `parent`: PR URLs and preview and demo evidence.

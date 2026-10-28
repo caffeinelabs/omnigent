@@ -62,6 +62,7 @@ from omnigent.factory import (
     STATE_ACTIVE,
 )
 from omnigent.server.factory import (
+    binder,
     decision_routing,
     detectors,
     events,
@@ -383,6 +384,8 @@ class FactorySupervisor:
         children = await asyncio.to_thread(_load_children, store, members)
         await asyncio.gather(*(self._keepalive(m, now) for m in members))
         await self._track_children(members, children, now)
+        # Work graph: bind new sub-agents to their tasks, re-derive readiness.
+        await binder.on_tick(self._app_state, members, children)
         stalled = self._stalled_parents(children, now)
         for member in members:
             self._maybe_beat(member, now, member.id in stalled)

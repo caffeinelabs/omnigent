@@ -32,7 +32,7 @@ import httpx
 from omnigent.entities.factory import FactoryPr
 from omnigent.factory_gates import parse_time
 from omnigent.server.factory import base as base_watch
-from omnigent.server.factory import events, nudge, status
+from omnigent.server.factory import binder, events, nudge, status
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.prs import (
     NUDGE_TOPIC,
@@ -408,6 +408,8 @@ class PrPoller:
             is_draft=pull.get("draft") is True,
             **terminal,
         )
+        # Work graph: link the discovered PR to its task by branch (never raises).
+        await binder.on_pr(self._app_state, None, row)
         if created:
             await events.emit(
                 self._app_state,
