@@ -1244,3 +1244,73 @@ def test_base_notices_have_dispatch_rows(pl: AgentSpec) -> None:
     for text in texts:
         header = text.split("]", 1)[0] + "]"
         assert any(_row_pattern(row).fullmatch(header) for row in rows), header
+
+
+def test_intervention_texts_have_pl_rows(pl: AgentSpec) -> None:
+    """Every text an intervention sends the PL matches a CONTROL or DISPATCH row."""
+    from omnigent.entities import Conversation
+    from omnigent.entities.factory import FactoryPr, FactoryTask
+    from omnigent.server.factory.interventions import InterventionPlan, control_text, notice_text
+
+    prompt = " ".join((pl.instructions or "").split())
+    control = prompt.split("CONTROL (`[Factory control · <ACTION> · by <human>]`):", 1)[1]
+    rows = re.findall(r"`([A-Z_]+[^`]*)`", control.split("DONE,", 1)[0])
+    notice_rows = re.findall(r"`(\[Factory notice · <human> → [^`]*\])`", prompt)
+    assert len(notice_rows) == 1, notice_rows
+
+    def conv(sid: str, title: str) -> Conversation:
+        return Conversation(
+            id=sid, created_at=0, updated_at=0, root_conversation_id=sid, title=title
+        )
+
+    root, pl_conv, ic = (
+        conv("r" * 32, "Atlas"),
+        conv("p" * 32, "PL · x"),
+        conv("i" * 32, "ic:route"),
+    )
+    task = FactoryTask(
+        id="t" * 32, factory_id=root.id, number=4, project_slug="x", key="route", title=""
+    )
+    pr = FactoryPr(
+        id="q" * 32, factory_id=root.id, repo="o/r", number=9630, url="u", head_sha="a" * 40
+    )
+    base = {
+        "root": root,
+        "ref": "",
+        "user_id": "mia",
+        "by": "mia",
+        "by_role": "operator",
+        "note": "use knex",
+        "project": "x",
+        "pl": pl_conv,
+    }
+    plans = [
+        InterventionPlan(
+            action="redispatch",
+            target=ic,
+            task=task,
+            task_key="route",
+            task_label="T-4",
+            next_title="route-r1",
+            **base,
+        ),
+        InterventionPlan(
+            action="reassign",
+            target=None,
+            task_key="route",
+            task_label="route",
+            next_title="route",
+            vendor="ic_codex",
+            **base,
+        ),
+        InterventionPlan(action="rerun_demo", target=pl_conv, pr=pr, **base),
+        InterventionPlan(action="rereview", target=pl_conv, pr=pr, **base),
+    ]
+    for plan in plans:
+        header = control_text(plan).split("]", 1)[0]
+        label = header.removeprefix("[Factory control · ").rsplit(" · by ", 1)[0]
+        assert any(_row_pattern(row).fullmatch(label) for row in rows), label
+    for action in ("message", "interrupt"):
+        plan = InterventionPlan(action=action, target=ic, **base)
+        header = notice_text(plan).split("]", 1)[0] + "]"
+        assert _row_pattern(notice_rows[0]).fullmatch(header), header

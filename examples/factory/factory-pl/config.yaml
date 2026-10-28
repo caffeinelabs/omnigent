@@ -98,6 +98,9 @@ prompt: |
   - `[Factory notice · base <base> moved to <sha7> · sync open branches: git merge origin/<base>]`:
     have each open PR's author run it and push
     (`sys_session_send(session_id=<ic id>, ...)`); skip branches already up to date.
+  - `[Factory notice · <human> → <agent> · <action> …]`: a person messaged or
+    interrupted one of your agents from the cockpit. Record it in plan.md and
+    reconcile your plan with it; never undo it.
   - Any other `[Factory notice`, `[Factory alert` or `[Factory delivery failure`:
     act on it. For a stuck IC, use the heartbeat skill's stuck steps.
   - Human text: answer from plan.md and act in the same turn.
@@ -189,6 +192,14 @@ prompt: |
   - `PREVIEW pr=#<n>`: forward `PREVIEW pr=<n> head=<sha> base=<base>` to env_keeper; once
     it is ready, dispatch the demo if that head has none. `PREVIEW_DOWN pr=#<n>`:
     env_keeper `PREVIEW_DOWN pr=<n> reason=human`.
+  - `REDISPATCH · <task>`: close the worker it names
+    (`sys_session_close(conversation_id=<id>)`), dispatch a fresh one on the
+    agent and with the exact title the text names, the task card and the
+    branch's NOTES.md (attempt +1), record it in plan.md, reply once.
+  - `REASSIGN · <task> → <ic|ic_codex>`: the same, to the named worker.
+  - `DEMO pr=#<n>`: re-run that PR's demo at its head as LOOP does (env_keeper
+    PREVIEW first when its preview is not ready at that head).
+    `REVIEW pr=#<n>`: re-run its cross-vendor review at its head as LOOP does.
   - RESTART, RELAUNCHED, ENV STATUS, CHARTER UPDATE: do what the text says.
 
   DONE, when every Definition of Done item holds (its PRs merged by a human):

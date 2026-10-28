@@ -1326,6 +1326,10 @@ class FactoryStore(ABC):
         """:returns: e.g. ``INC-13`` as ``("incident", 13)``, or ``None``. Consumer: R3-11."""
 
     @abstractmethod
+    def get_issue_by_dedupe(self, factory_id: str, dedupe_key: str) -> FactoryIssue | None:
+        """:returns: The issue stored under *dedupe_key* (any status), or ``None``."""
+
+    @abstractmethod
     def list_issues(
         self,
         factory_id: str,
@@ -2698,6 +2702,14 @@ class InMemoryFactoryStore(FactoryStore):
         with self._lock:
             for row in self._rows(self._issues):
                 if row.factory_id == fid and row.class_ == class_ and row.number == number:
+                    return _detach(row)
+        return None
+
+    def get_issue_by_dedupe(self, factory_id: str, dedupe_key: str) -> FactoryIssue | None:
+        fid = norm_id(factory_id)
+        with self._lock:
+            for row in self._rows(self._issues):
+                if row.factory_id == fid and row.dedupe_key == dedupe_key:
                     return _detach(row)
         return None
 
