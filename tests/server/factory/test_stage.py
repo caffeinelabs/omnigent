@@ -34,9 +34,17 @@ def _pl(**labels: str) -> _Conv:
     return _Conv(labels={LABEL_STATE: "active", **labels})
 
 
-def _project(agent_stage: str | None = None) -> FactoryProject:
+def _project(
+    agent_stage: str | None = None, status: str = "active", parent_slug: str | None = None
+) -> FactoryProject:
     return FactoryProject(
-        id="c" * 32, factory_id=FID, slug="api", title="API", agent_stage=agent_stage
+        id="c" * 32,
+        factory_id=FID,
+        slug="api",
+        title="API",
+        agent_stage=agent_stage,
+        status=status,
+        parent_slug=parent_slug,
     )
 
 
@@ -337,6 +345,42 @@ CASES: list[
         "planning",
         StageResult("queued", claim_mismatch=True),
     ),
+    (
+        "held on its dependencies",
+        [],
+        None,
+        [],
+        {"waiting_on": ["db-version", "api-version"]},
+        None,
+        StageResult("queued", "waiting", "waiting on db-version, api-version"),
+    ),
+    (
+        "dependencies listed but the PL runs",
+        [],
+        _pl(),
+        [],
+        {"waiting_on": ["db-version"]},
+        None,
+        StageResult("planning"),
+    ),
+    (
+        "cancelled wins over everything",
+        [_pr(checks="fail")],
+        _pl(**{LABEL_HEALTH: "dead"}),
+        [],
+        {"status": "cancelled"},
+        None,
+        StageResult("building", "cancelled", "Cancelled"),
+    ),
+    (
+        "merged into another project",
+        [],
+        None,
+        [],
+        {"status": "merged", "parent_slug": "api-v2"},
+        None,
+        StageResult("queued", "merged", "merged → api-v2"),
+    ),
 ]
 
 
@@ -353,7 +397,11 @@ def test_derive_stage(
     agent_stage: str | None,
     expected: StageResult,
 ) -> None:
-    result = derive_stage(_project(agent_stage), prs, pl, decisions, **kwargs)  # type: ignore[arg-type]
+    kwargs = dict(kwargs)
+    project = _project(
+        agent_stage, kwargs.pop("status", "active"), kwargs.pop("parent_slug", None)
+    )
+    result = derive_stage(project, prs, pl, decisions, **kwargs)  # type: ignore[arg-type]
     assert result == expected
 
 

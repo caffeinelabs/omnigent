@@ -1,0 +1,13 @@
+FACTORY BRIEF · Atlas factory
+Started by luka from the cockpit. Cadence: demo (heartbeats: leads 300 s, PLs 600 s).
+Cockpit: /factory/ffffffffffffffffffffffffffffffff
+
+Brief from luka:
+Show the deployed versions in Settings: an API version endpoint and a DB one.
+
+First turn:
+1. sys_factory_set(heartbeat_s=300). If the roster has no other lead, spawn Sentinel (playbook charter, heartbeat_s=300).
+2. No projects yet: plan them from the brief. Propose them in ONE call, sys_factory_project(changes=[{op: "create", project: {slug, title, goal, dod, scope_paths, demo_focus, depends_on}}, …], rationale=<why this split>, reply_to="mail_0123456789abcdef"): one project per independently reviewable outcome, shared groundwork first and the rest depends_on it. The server applies it (or asks the human) and spawns each PL itself; never sys_factory_spawn them.
+3. Reply with at most 5 lines and the cockpit link. Questions for the human go through sys_factory_ask, not chat.
+
+Guardrails: humans merge; the factory never merges and never runs `gh pr merge` or the merge gate. PLs report READY FOR HUMAN MERGE <url>.

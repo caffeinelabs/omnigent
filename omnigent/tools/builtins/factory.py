@@ -5,8 +5,9 @@ These classes are schema-only: the runner dispatches every call to the server's
 ``/v1/factory`` routes (and ``POST /v1/sessions`` for spawn) in
 :mod:`omnigent.runner.factory_dispatch`. ``ToolManager`` registers them only for
 specs that declare ``executor.config.factory_role``: ``sys_factory_spawn`` is
-lead-only, ``sys_factory_env`` is for the project lead and env_keeper, and
-``sys_factory_demo`` for those two and the demo role.
+lead-only, ``sys_factory_env`` is for the project lead and env_keeper,
+``sys_factory_demo`` for those two and the demo role, and
+``sys_factory_project`` for the leads and project leads.
 """
 
 from __future__ import annotations
@@ -48,6 +49,7 @@ SYS_FACTORY_ASK: Final = "sys_factory_ask"
 SYS_FACTORY_PR: Final = "sys_factory_pr"
 SYS_FACTORY_ENV: Final = "sys_factory_env"
 SYS_FACTORY_DEMO: Final = "sys_factory_demo"
+SYS_FACTORY_PROJECT: Final = "sys_factory_project"
 FACTORY_TOOL_NAMES: Final = frozenset(
     {
         SYS_SESSION_POST,
@@ -58,6 +60,7 @@ FACTORY_TOOL_NAMES: Final = frozenset(
         SYS_FACTORY_PR,
         SYS_FACTORY_ENV,
         SYS_FACTORY_DEMO,
+        SYS_FACTORY_PROJECT,
     }
 )
 SPAWN_ROLES: Final = (ROLE_PROJECT_LEAD, ROLE_LEAD)
@@ -679,6 +682,190 @@ class SysFactoryDemoTool(Tool):
                     "preview_url": {"type": "string", "description": "Preview app URL."},
                 },
                 "required": ["pr_url", "head_sha", "title"],
+                "additionalProperties": False,
+            },
+        )
+
+
+PROJECT_OPS_MAX: Final = 12
+"""Changes one ``sys_factory_project`` call (one proposal) may carry."""
+
+
+def _project_schema() -> dict[str, Any]:
+    """One project as ``sys_factory_project`` creates it (the cockpit form's fields)."""
+    text_list = {"type": "array", "items": {"type": "string"}}
+    return {
+        "type": "object",
+        "properties": {
+            "slug": {"type": "string", "description": "Kebab-case id, e.g. 'api-version'."},
+            "title": {"type": "string", "maxLength": 256},
+            "repo": {
+                "type": "string",
+                "description": "owner/name; defaults to the factory's default repo.",
+            },
+            "base_branch": {
+                "type": "string",
+                "description": "Defaults to the factory's default base (another needs an owner).",
+            },
+            "kind": {"type": "string", "enum": ["work"], "default": "work"},
+            "goal": {"type": "string", "maxLength": 4000},
+            "dod": {**text_list, "description": "Observable Definition of Done items."},
+            "scope_paths": {**text_list, "description": "Path globs the ICs may touch."},
+            "constraints": {"type": "string", "maxLength": 2000},
+            "env_needed": {"type": "boolean", "default": True},
+            "preview": {
+                "type": "object",
+                "properties": {
+                    "enabled": {"type": "boolean"},
+                    "slots": {"type": "integer", "minimum": 1, "maximum": 3},
+                },
+                "additionalProperties": False,
+            },
+            "demo_focus": {"type": "string", "maxLength": 1000},
+            "budget_ics": {"type": "integer", "minimum": 1, "maximum": 10},
+            "priority": {"type": "integer", "minimum": 0, "maximum": 3, "default": 2},
+            "depends_on": {
+                **text_list,
+                "description": "Slugs this project waits for; the server holds it until then.",
+            },
+            "depends_mode": {
+                "type": "string",
+                "enum": ["merged", "ready"],
+                "default": "merged",
+                "description": (
+                    "'merged': a dependency's PR merged; 'ready': ready for human merge."
+                ),
+            },
+            "human_owner": {"type": "string", "description": "Email of the human who owns it."},
+            "budgets": {
+                "type": "object",
+                "description": "USD caps; setting or raising one needs an owner.",
+                "properties": {
+                    "task_usd": {"type": "number", "minimum": 0},
+                    "project_usd": {"type": "number", "minimum": 0},
+                },
+                "additionalProperties": False,
+            },
+        },
+        "required": ["slug", "goal"],
+        "additionalProperties": False,
+    }
+
+
+class SysFactoryProjectTool(Tool):
+    """Propose project changes: create, update, split, merge or cancel (one proposal C-n)."""
+
+    @classmethod
+    def name(cls) -> str:
+        """:returns: ``"sys_factory_project"``."""
+        return SYS_FACTORY_PROJECT
+
+    @classmethod
+    def description(cls) -> str:
+        """:returns: Human-readable description of the tool."""
+        return (
+            "Change the factory's projects; projects change only through this tool. One "
+            f"call files one proposal C-<n> with 1-{PROJECT_OPS_MAX} changes. The server "
+            "validates it (errors name the field, e.g. changes[1].project.slug), applies it "
+            "at once when the factory's autonomy allows (a create a human asked for: pass "
+            "reply_to=<chat message id>), and otherwise opens a decision D-<n> for a human "
+            "to Apply, Edit & apply or Reject. The server spawns each new project's PL "
+            "itself (you get `[Factory notice · PL·<slug> spawned by the server · C-<n>]`) "
+            "and holds a project until its depends_on are met. The outcome arrives as "
+            "`[Factory proposal · C-<n> applied|rejected|expired …]`. Leads may use every op "
+            "on every project; a project lead may update, split or cancel its own project. "
+            "Split and merge move PRs only through pr_map ({'<PR number>': '<slug>'}). Call "
+            "it without arguments to list the projects; withdraw='C-4' takes back a pending "
+            "proposal of yours."
+        )
+
+    def get_schema(self) -> dict[str, Any]:
+        """:returns: The OpenAI-format tool schema."""
+        project = _project_schema()
+        change = {
+            "type": "object",
+            "properties": {
+                "op": {"type": "string", "enum": ["create", "update", "split", "merge", "cancel"]},
+                "project": {**project, "description": "create: the new project."},
+                "slug": {"type": "string", "description": "update, split, cancel: the project."},
+                "patch": {
+                    "type": "object",
+                    "description": (
+                        "update/merge: charter fields to change (goal, dod, scope_paths, "
+                        "constraints, preview, demo_focus, budget_ics, priority, depends_on, "
+                        "depends_mode, human_owner, budgets); unset fields stay."
+                    ),
+                },
+                "into": {
+                    "description": "split: the new projects; merge: the surviving slug.",
+                    "anyOf": [{"type": "string"}, {"type": "array", "items": project}],
+                },
+                "from": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "merge: the slugs absorbed into `into`.",
+                },
+                "keep": {
+                    "type": "string",
+                    "enum": ["cancel", "umbrella"],
+                    "default": "cancel",
+                    "description": "split: cancel the original, or keep it as an umbrella.",
+                },
+                "pr_map": {
+                    "type": "object",
+                    "additionalProperties": {"type": "string"},
+                    "description": "split/merge: open PR number -> the project that takes it.",
+                },
+                "teardown_previews": {"type": "boolean", "default": True},
+            },
+            "required": ["op"],
+            "additionalProperties": False,
+        }
+        return _function_schema(
+            self.name(),
+            self.description(),
+            {
+                "type": "object",
+                "properties": {
+                    "changes": {
+                        "type": "array",
+                        "items": change,
+                        "minItems": 1,
+                        "maxItems": PROJECT_OPS_MAX,
+                    },
+                    "rationale": {
+                        "type": "string",
+                        "maxLength": 2000,
+                        "description": "Why, for the humans who review it.",
+                    },
+                    "reason": {
+                        "type": "string",
+                        "maxLength": 500,
+                        "description": "Required for split, merge and cancel.",
+                    },
+                    "thread": {
+                        "type": "string",
+                        "description": "Room thread it answers, e.g. 'factory'.",
+                    },
+                    "reply_to": {
+                        "type": "string",
+                        "description": "The human chat message (id) it answers.",
+                    },
+                    "analysis_file": {
+                        "type": "string",
+                        "description": "Planner analysis JSON, e.g. '~/factory/plans/<id>.json'.",
+                    },
+                    "dedupe_key": {
+                        "type": "string",
+                        "maxLength": 96,
+                        "description": "A repeat call with the same key returns the same C-<n>.",
+                    },
+                    "withdraw": {
+                        "type": "string",
+                        "description": "A pending proposal of yours to take back, e.g. 'C-4'.",
+                    },
+                },
+                "required": [],
                 "additionalProperties": False,
             },
         )

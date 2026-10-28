@@ -47,12 +47,22 @@ export function isIntegrationProject(project: ProjectView): boolean {
   return project.charter?.kind === "integration";
 }
 
+/** A project that left the pipeline: done, cancelled, or merged into another. */
+export function isClosedProject(project: ProjectView): boolean {
+  return (
+    project.stage === "done" ||
+    project.overlay === "cancelled" ||
+    project.overlay === "merged" ||
+    (project.status != null && project.status !== "active")
+  );
+}
+
 /**
  * Card order tier: ready first, then blocked/failed, in progress, queued,
  * paused, and finished projects last (they collapse into the Done group).
  */
 export function projectTier(project: ProjectView): number {
-  if (project.stage === "done") return 5;
+  if (isClosedProject(project)) return 5;
   if (project.stage === "ready") return 0;
   if (
     project.overlay === "failed" ||
@@ -84,8 +94,8 @@ export function boardSections(projects: ProjectView[]): {
 } {
   const ordered = orderProjects(projects);
   return {
-    active: ordered.filter((p) => p.stage !== "done"),
-    done: ordered.filter((p) => p.stage === "done"),
+    active: ordered.filter((p) => !isClosedProject(p)),
+    done: ordered.filter(isClosedProject),
   };
 }
 

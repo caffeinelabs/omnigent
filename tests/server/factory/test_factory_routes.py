@@ -220,6 +220,7 @@ async def test_beacon_writes_on_a_sub_agent_are_audited_too(
         "mode",
         "engine_mode",
         "autonomy_projects",
+        "engine_spawn",
         "omnigent.factory.engine_mode",
     ],
 )

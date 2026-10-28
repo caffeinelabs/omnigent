@@ -690,6 +690,14 @@ class FactoryStore(ABC):
         :returns: The updated row, or ``None`` when the id is unknown.
         """
 
+    @abstractmethod
+    def delete_project(self, project_id: str) -> bool:
+        """
+        Drop a project row (an undone proposal's project whose PL never spawned).
+
+        :returns: Whether a row was deleted.
+        """
+
     # ── PRs ─────────────────────────────────────────────────────
 
     @abstractmethod
@@ -1738,6 +1746,10 @@ class InMemoryFactoryStore(FactoryStore):
             row = replace(current, **values, updated_at=now)
             self._projects[(self._ws(), row.id)] = row
             return _detach(row)
+
+    def delete_project(self, project_id: str) -> bool:
+        with self._lock:
+            return self._projects.pop((self._ws(), norm_id(project_id)), None) is not None
 
     # ── PRs ─────────────────────────────────────────────────────
 

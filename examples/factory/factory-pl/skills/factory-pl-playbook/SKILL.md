@@ -79,6 +79,9 @@ Report: the RESULT block
 - `spawn_bounds` allows at most 8 dispatches per turn, and an answer to an IC
   counts as one. Send the rest in waves.
 - Never run more concurrent ICs than the charter's budget (6 at most).
+- Work that needs more ICs than `budget_ics` across milestones that do not
+  depend on each other, or a milestone outside the charter's scope, is a
+  split, not a longer queue. See Splitting the project.
 - At most the charter's preview slots (default 2, max 3) of your PRs have a
   live preview at once. When all are taken, park the preview of a PR that is
   not ready (`PREVIEW_DOWN pr=<n> reason=human`) before deploying another.
@@ -209,6 +212,15 @@ To label a PR the human chose to review without a preview:
 | `[Factory notice · preview p<n> unreachable · redeploy]` | env_keeper `PREVIEW pr=<n> head=<sha> base=<base>` (the PR's current head). |
 | `[Factory notice · preview p<n> idle 72h · park it]` | env_keeper `PREVIEW_DOWN pr=<n> reason=ttl`. The demo stays reviewable; the cockpit can ask for a redeploy. |
 | `[Factory control · …]` | The CONTROL section of your prompt. Reply once. |
+| `[Factory proposal · C-<n> …]` | The outcome of your `sys_factory_project` proposal. Record it in plan.md; after a rejection, adapt the plan to the note. |
+
+## Splitting the project
+
+Propose it with `sys_factory_project(changes=[{op: "split", slug: "<slug>", into: [<new projects: slug, title, goal, dod, scope_paths, depends_on>], keep: "umbrella", pr_map: {"<PR number>": "<new slug>"}}], reason=<one line>, rationale=<why>)`,
+or `op: "update"` with a narrower `patch` (scope, DoD). Open PRs move only
+through `pr_map`. A human approves it on its decision; the server spawns the
+new PLs and you get `[Factory proposal · C-<n> applied|rejected …]`. Keep the
+rest moving meanwhile, and never split work that is tightly coupled.
 
 ## Questions for the human
 

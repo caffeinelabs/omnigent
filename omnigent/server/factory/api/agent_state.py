@@ -740,18 +740,62 @@ async def get_charter(
     from_session_id: str = Query(...),
     project: str = Query(...),
 ) -> dict[str, Any]:
-    """The stored charter of a project, rendered for its PL's brief (leads only)."""
+    """
+    The stored charter of a project, rendered for its PL's brief (leads only).
+
+    ``spawn_owner: "server"`` with a live, held or starting PL tells
+    ``sys_factory_spawn`` the server spawns this PL itself. Otherwise the lead
+    is recovering it: the project becomes the lead's to spawn, so the server
+    never briefs that PL a second time.
+    """
+    from omnigent.server.factory import spawn
+    from omnigent.server.factory.charter import (
+        SPAWN_LEAD,
+        SPAWN_SERVER,
+        normalize_charter,
+        spawn_owner,
+    )
+    from omnigent.server.factory.control import find_project_pl
+
     caller = await authorize_agent(request, from_session_id)
     if caller.membership.role != ROLE_LEAD:
         raise FactoryRouteError(403, "not_allowed", "only a lead reads charters to spawn PLs")
+    deps = caller.deps
     row = await asyncio.to_thread(
-        caller.deps.factory_store.get_project, caller.factory_id, project.strip()
+        deps.factory_store.get_project, caller.factory_id, project.strip()
     )
     if row is None or row.charter is None:
         raise FactoryRouteError(
             404, "charter_not_found", f"project {project!r} has no stored charter"
         )
-    return {"project": row.slug, "text": render_pl_charter(row)}
+    pl = await asyncio.to_thread(find_project_pl, deps, caller.factory_id, row.slug)
+    held = await asyncio.to_thread(_held, deps, caller.factory_id, row.slug)
+    spawning = spawn.in_flight(caller.factory_id, row.slug)
+    if spawn_owner(row) == SPAWN_SERVER and pl is None and not held and not spawning:
+        charter = {**normalize_charter(row.charter), "spawn_owner": SPAWN_LEAD}
+        row = (
+            await asyncio.to_thread(deps.factory_store.update_project, row.id, charter=charter)
+            or row
+        )
+    return {
+        "project": row.slug,
+        "text": render_pl_charter(row),
+        "status": row.status,
+        "spawn_owner": spawn_owner(row),
+        "pl_session_id": pl.id if pl is not None else None,
+        "held": held,
+        "spawning": spawning,
+    }
+
+
+def _held(deps: Any, factory_id: str, slug: str) -> bool:
+    """Whether the project waits on its dependencies now."""
+    from omnigent.server.factory.gating import unmet_dependencies
+
+    store = deps.factory_store
+    rows = {p.slug: p for p in store.list_projects(factory_id)}
+    row = rows.get(slug)
+    return row is not None and bool(unmet_dependencies(row, rows, store.list_prs(factory_id)))
 
 
 # ── Versions ───────────────────────────────────────────────────

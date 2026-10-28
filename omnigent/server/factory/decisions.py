@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.entities import Conversation
 from omnigent.entities.factory import FactoryDecision, FactoryEvent, FactoryPr
@@ -39,6 +39,9 @@ from omnigent.server.factory.mailer import new_mail_id
 from omnigent.server.factory.membership import is_top_level, resolve_role, root_conversation
 from omnigent.server.factory.schemas import DecisionOptionView, DecisionView
 from omnigent.stores.factory_store import DecisionNotFound, DecisionNotOpen, norm_id
+
+if TYPE_CHECKING:
+    from omnigent.server.factory.proposals import ProposalAnswer
 
 _logger = logging.getLogger(__name__)
 
@@ -370,16 +373,30 @@ async def _plan_action(
     app_state: Any,
     deps: FactoryDeps,
     decision: FactoryDecision,
-    option: dict[str, Any],
+    option: dict[str, Any] | None,
     user_id: str | None,
-) -> ControlPlan | GrantPlan | Conversation | None:
+    *,
+    text: str | None = None,
+    changes: Any = None,
+) -> ControlPlan | GrantPlan | Conversation | ProposalAnswer | None:
     """
     Validate a server decision's action before the answer is stored.
 
+    A proposal's decision (``apply_proposal``, Edit & apply, Reject) is planned
+    by :mod:`.proposals`; it runs after the compare-and-set below.
+
     :returns: A control plan, a roster grant (access requests), the PL to
-        message (abandon/rework), or ``None`` for no side effect (dismiss,
-        link-only and unknown actions).
+        message (abandon/rework), a proposal answer, or ``None`` for no side
+        effect (dismiss, link-only and unknown actions).
     """
+    from omnigent.server.factory import proposals
+
+    if proposals.is_mirror(decision):
+        return await proposals.plan_answer(
+            app_state, decision, option, text, user_id, changes=changes
+        )
+    if option is None:
+        return None
     action = option.get("action")
     if not action or action == ACTION_DISMISS or option.get("href"):
         return None
@@ -501,6 +518,71 @@ async def _action_failed(
     return decision, error
 
 
+async def _run_proposal_answer(
+    app_state: Any,
+    deps: FactoryDeps,
+    answered: FactoryDecision,
+    by: str,
+    answer: ProposalAnswer,
+) -> tuple[FactoryDecision, Conversation | None, str | None, CockpitError | None]:
+    """
+    Apply or reject the proposal of an answered decision; the proposer gets the outcome.
+
+    :returns: ``(decision, proposer, outcome mail id, failure)``.
+    """
+    from omnigent.server.factory import proposals
+
+    mail_id = new_mail_id()
+    answered = (
+        await asyncio.to_thread(
+            deps.factory_store.update_decision, answered.id, delivered_mail_id=mail_id
+        )
+        or answered
+    )
+    try:
+        proposer, sent = await proposals.execute_answer(app_state, answer, mail_id=mail_id)
+    except Exception as exc:  # noqa: BLE001 - the answer is stored; report, don't 500
+        _logger.warning("factory: %s answered but its proposal failed", answered.ref, exc_info=exc)
+        answered = (
+            await asyncio.to_thread(
+                deps.factory_store.update_decision, answered.id, delivered_mail_id=None
+            )
+            or answered
+        )
+        code = exc.code if isinstance(exc, CockpitError) else type(exc).__name__
+        message = f"{answered.ref} is answered, but applying its proposal failed ({code})"
+        await events.emit(
+            app_state,
+            answered.factory_id,
+            "factory.warning",
+            severity="warning",
+            project=answered.project_slug,
+            subject=f"decision:{answered.ref}",
+            summary=message,
+            data={"from": by, "by": by, "decision_id": answered.id, "error": code},
+        )
+        view = await asyncio.to_thread(decision_view, deps, answered)
+        status = exc.status_code if isinstance(exc, CockpitError) else 502
+        failure = CockpitError(
+            status,
+            code if isinstance(exc, CockpitError) else "action_failed",
+            message,
+            decision=view,
+        )
+        if isinstance(exc, CockpitError):
+            failure.extra = {**exc.extra, "decision": view}
+        return answered, None, None, failure
+    if not sent:
+        answered = (
+            await asyncio.to_thread(
+                deps.factory_store.update_decision, answered.id, delivered_mail_id=None
+            )
+            or answered
+        )
+    target = await control.get_conv(deps, proposer) if proposer else None
+    return answered, target, sent, None
+
+
 # ── Answer and withdraw ────────────────────────────────────────
 
 
@@ -511,14 +593,19 @@ async def answer_decision(
     user_id: str | None,
     option_id: str | None = None,
     text: str | None = None,
+    changes: Any = None,
 ) -> AnswerResult:
     """
     Answer an open decision (``POST /v1/factory/decisions/{id}/answer``).
+
+    :param changes: Edit & apply of a proposal decision: the edited changes.
 
     :raises CockpitError: 400 on a bad option/text, 404 unknown decision,
         409 when it is no longer open (with ``answered_by``/``answered_at``).
     :raises OmnigentError: 401/403/404 from the access checks.
     """
+    from omnigent.server.factory.proposals import ProposalAnswer
+
     deps = factory_deps(app_state)
     decision = await _load(deps, decision_id)
     asker = await _authorize(deps, user_id, decision)
@@ -550,10 +637,12 @@ async def answer_decision(
 
     by = await human_label(deps, decision.factory_id, user_id)
     label = str(option.get("label") or option_id) if option is not None else FREE_TEXT_LABEL
-    planned: ControlPlan | GrantPlan | Conversation | None = None
+    planned: ControlPlan | GrantPlan | Conversation | ProposalAnswer | None = None
     failure: CockpitError | None = None
-    if decision.source != "agent" and option is not None:
-        planned = await _plan_action(app_state, deps, decision, option, user_id)
+    if decision.source != "agent":
+        planned = await _plan_action(
+            app_state, deps, decision, option, user_id, text=text, changes=changes
+        )
 
     try:
         answered = await asyncio.to_thread(
@@ -588,7 +677,11 @@ async def answer_decision(
             )
             or answered
         )
-    if isinstance(planned, ControlPlan):
+    if isinstance(planned, ProposalAnswer):
+        answered, target, mail_id, failure = await _run_proposal_answer(
+            app_state, deps, answered, by, planned
+        )
+    elif isinstance(planned, ControlPlan):
         if target is not None and mail_id is not None:
             planned.mail_ids[target.id] = mail_id
         try:

@@ -19,7 +19,14 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Final, Literal, TypeVar
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from omnigent.entities import Conversation
 from omnigent.entities.factory import FactoryProject
@@ -46,19 +53,19 @@ from omnigent.factory import (
     factory_enabled,
     factory_role_from_spec,
 )
-from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER
-from omnigent.server.factory import control, events
+from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE, LEVEL_OWNER
+from omnigent.server.factory import control, events, gating
 from omnigent.server.factory.charter import (
     BRANCH_RE,
     DEFAULT_BASE_BRANCH,
     DEFAULT_BUDGET_ICS,
     MAX_PREVIEW_SLOTS,
     REPO_RE,
+    SPAWN_SERVER,
     normalize_charter,
     preview_tooling_ref,
     project_base_branch,
     render_kickoff_brief,
-    render_pl_charter,
     resolve_base_branch,
     server_default_base,
 )
@@ -82,6 +89,7 @@ FOLDER_ICON: Final = "🏭"
 MAX_PROJECTS: Final = 12
 FACTORY_POD_BUDGET: Final = 12
 """Pods a factory may use (the lead bundle's ``factory_max_pods``): 2 leads plus the PLs."""
+BRIEF_MAX_CHARS: Final = 8000
 _SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
 _URL_PATH_RE = re.compile(r"^/[A-Za-z0-9._~/-]{0,199}$")
 
@@ -126,6 +134,13 @@ class PreviewIn(_Body):
         return self.enabled if "enabled" in self.model_fields_set else None
 
 
+class BudgetsIn(_Body):
+    """``charter.budgets``: USD caps the loop engine enforces per task and per project."""
+
+    task_usd: float | None = Field(None, ge=0, le=10_000)
+    project_usd: float | None = Field(None, ge=0, le=100_000)
+
+
 class _CharterFields(_Body):
     """Charter fields shared by the start form, add project and the charter PATCH."""
 
@@ -137,6 +152,10 @@ class _CharterFields(_Body):
     demo: str | None = Field(None, max_length=1000)
     demo_focus: str | None = Field(None, max_length=1000)
     budget_ics: int | None = Field(None, ge=1, le=10)
+    depends_on: list[str] | None = Field(None, max_length=MAX_PROJECTS)
+    depends_mode: Literal["merged", "ready"] | None = None
+    human_owner: str | None = Field(None, max_length=256)
+    budgets: BudgetsIn | None = None
 
     @field_validator("dod")
     @classmethod
@@ -147,6 +166,34 @@ class _CharterFields(_Body):
     @classmethod
     def _scope(cls, value: list[str] | None) -> list[str] | None:
         return None if value is None else _check_items(value, "scope path", 200)
+
+    @field_validator("depends_on")
+    @classmethod
+    def _depends_on(cls, value: list[str] | None) -> list[str] | None:
+        if value is None:
+            return None
+        out: list[str] = []
+        for slug in _check_items(value, "depends_on item", 48):
+            if not _SLUG_RE.match(slug):
+                raise ValueError(f"depends_on item {slug!r} is not a project slug")
+            if slug not in out:
+                out.append(slug)
+        return out
+
+    @field_validator("human_owner")
+    @classmethod
+    def _owner(cls, value: str | None) -> str | None:
+        return _one_line(value, "human_owner") or None
+
+    def charter_extras(self) -> dict[str, Any]:
+        """:returns: The dependency, owner and budget keys as sent (unset ones left out)."""
+        out: dict[str, Any] = {}
+        for key in ("depends_on", "depends_mode", "human_owner"):
+            if key in self.model_fields_set:
+                out[key] = getattr(self, key)
+        if "budgets" in self.model_fields_set:
+            out["budgets"] = self.budgets.model_dump(exclude_none=True) if self.budgets else None
+        return out
 
 
 def _branch_or_none(value: str | None) -> str | None:
@@ -171,6 +218,7 @@ class ProjectIn(_CharterFields):
     version_path: str | None = None
     health_path: str | None = None
     priority: int = Field(2, ge=0, le=3)
+    kind: Literal["work", "self"] | None = None
 
     @field_validator("slug")
     @classmethod
@@ -178,6 +226,12 @@ class ProjectIn(_CharterFields):
         if not _SLUG_RE.match(value):
             raise ValueError("slug is 1-48 lowercase letters, digits and inner dashes")
         return value
+
+    @model_validator(mode="after")
+    def _not_its_own_dependency(self) -> ProjectIn:
+        if self.depends_on and self.slug in self.depends_on:
+            raise ValueError("a project cannot depend on itself")
+        return self
 
     @field_validator("title")
     @classmethod
@@ -216,7 +270,10 @@ class ProjectIn(_CharterFields):
             "budget_ics": self.budget_ics or DEFAULT_BUDGET_ICS,
             "version_path": self.version_path,
             "health_path": self.health_path,
+            **self.charter_extras(),
         }
+        if self.kind:
+            raw["kind"] = self.kind
         preview: dict[str, Any] = {}
         if self.preview is not None:
             enabled = self.preview.sent_enabled()
@@ -261,13 +318,24 @@ class DefaultsIn(_Body):
 
 
 class StartIn(_Body):
-    """``POST /v1/factory/factories`` body."""
+    """
+    ``POST /v1/factory/factories`` body.
+
+    :param projects: Projects to start with; none for a chat-first start.
+    :param brief: What the human wants built; Atlas plans projects from it.
+    """
 
     root_session_id: str
     name: str = Field(min_length=1, max_length=80)
     cadence: Literal["demo", "normal"] = CADENCE_DEMO
     defaults: DefaultsIn | None = None
-    projects: list[ProjectIn] = Field(min_length=1, max_length=MAX_PROJECTS)
+    projects: list[ProjectIn] = Field(default_factory=list, max_length=MAX_PROJECTS)
+    brief: str | None = Field(None, max_length=BRIEF_MAX_CHARS)
+
+    @field_validator("brief")
+    @classmethod
+    def _brief(cls, value: str | None) -> str | None:
+        return value or None
 
     @field_validator("name")
     @classmethod
@@ -426,18 +494,40 @@ def kickoff_text(
     cadence: str,
     projects: Sequence[FactoryProject],
     factory_id: str,
+    *,
+    brief: str | None = None,
+    held: Sequence[str] = (),
 ) -> str:
     """:returns: The enveloped kickoff brief the root lead receives."""
-    body = render_kickoff_brief(name, cadence, by, projects, factory_id=factory_id)
+    body = render_kickoff_brief(
+        name,
+        cadence,
+        by,
+        projects,
+        factory_id=factory_id,
+        brief=brief,
+        held=held,
+        reply_to=mail_id,
+    )
     return f"{brief_header(by, mail_id)}\n{quote_spoofed_lines(body)}"
 
 
-def add_project_text(by: str, mail_id: str, project: FactoryProject, cadence: str) -> str:
-    """:returns: The root lead's request to spawn a PL for a project added later."""
+def add_project_text(
+    by: str, mail_id: str, project: FactoryProject, cadence: str, *, human: bool = True
+) -> str:
+    """
+    :returns: The root lead's request to spawn a PL for a project added later
+        (the server's fallback when it cannot spawn the PL itself).
+    """
     beats = CADENCE_HEARTBEATS.get(cadence, CADENCE_HEARTBEATS[CADENCE_DEMO])
     workspace = f"https://github.com/{project.repo}#{project_base_branch(project)}"
+    what = (
+        f"Human added project {project.slug}."
+        if human
+        else f"Project {project.slug} was added; the server could not spawn its PL."
+    )
     return (
-        f"{brief_header(by, mail_id)} Human added project {project.slug}. Spawn its PL now: "
+        f"{brief_header(by, mail_id)} {what} Spawn its PL now: "
         f"sys_factory_spawn(agent='factory-pl', role='project_lead', title='PL · {project.slug}', "
         f"project='{project.slug}', workspaces=['{workspace}'], "
         f"heartbeat_s={beats[ROLE_PROJECT_LEAD]}, message='Start. Your charter follows.')"
@@ -457,12 +547,29 @@ def charter_diff(before: str, after: str) -> str:
     )
 
 
-def charter_update_text(by: str, diff: str) -> str:
-    """:returns: The ``[Factory control · CHARTER UPDATE · by <human>]`` text."""
+def charter_update_text(by: str, diff: str, inherited: Sequence[int] = ()) -> str:
+    """
+    :returns: The ``[Factory control · CHARTER UPDATE · by <human>]`` text.
+
+    :param inherited: PRs the project received from a split or merge.
+    """
+    reply = 'reply once: sys_session_post(to="parent", kind="reply")'
+    header = control.control_header("CHARTER UPDATE", by)
+    if not inherited:
+        return (
+            f"{header} Your charter changed: follow the new one from your next step, update "
+            f"plan.md, and {reply}.\n```diff\n{diff}\n```"
+        )
+    refs = ", ".join(f"#{n}" for n in inherited)
+    text = (
+        f"{header} Inherited PRs {refs}: they are yours now; run PREVIEW for them (their "
+        "previews died with the old pod) and track them in plan.md."
+    )
+    if not diff:
+        return f"{text} Then {reply}."
     return (
-        f"{control.control_header('CHARTER UPDATE', by)} Your charter changed: follow the new "
-        'one from your next step, update plan.md, and reply once: sys_session_post(to="parent", '
-        f'kind="reply").\n```diff\n{diff}\n```'
+        f"{text} Your charter changed too: follow the new one from your next step, and "
+        f"{reply}.\n```diff\n{diff}\n```"
     )
 
 
@@ -471,13 +578,13 @@ def charter_update_text(by: str, diff: str) -> str:
 _locks: dict[str, asyncio.Lock] = {}
 
 
-def _lock(root_id: str) -> asyncio.Lock:
+def lock(root_id: str) -> asyncio.Lock:
     """One start/add-project at a time per factory (in this process)."""
     key = norm_id(root_id)
-    lock = _locks.get(key)
-    if lock is None:
-        lock = _locks[key] = asyncio.Lock()
-    return lock
+    entry = _locks.get(key)
+    if entry is None:
+        entry = _locks[key] = asyncio.Lock()
+    return entry
 
 
 @dataclass(frozen=True)
@@ -540,7 +647,8 @@ def max_projects() -> int:
     return min(MAX_PROJECTS, FACTORY_POD_BUDGET - 2)
 
 
-def _project_fields(project: ProjectIn, by: str, defaults: FactoryDefaults) -> dict[str, Any]:
+def project_fields(project: ProjectIn, by: str, defaults: FactoryDefaults) -> dict[str, Any]:
+    """:returns: The project row a :class:`ProjectIn` is stored as."""
     return {
         "title": project.title or project.slug,
         "repo": project.repo,
@@ -618,6 +726,33 @@ def _unique_slugs(projects: Sequence[ProjectIn]) -> None:
         seen.add(project.slug)
 
 
+def _check_dependencies(projects: Sequence[ProjectIn]) -> None:
+    """A start's depends_on name projects of the same start, without a cycle."""
+    slugs = {p.slug for p in projects}
+    for i, project in enumerate(projects):
+        for dep in project.depends_on or []:
+            if dep not in slugs:
+                raise CockpitError(
+                    400,
+                    "invalid_body",
+                    f"depends_on {dep!r} is not a project of this start",
+                    field=f"projects[{i}].depends_on",
+                )
+    cycle = gating.find_cycle({p.slug: p.depends_on or [] for p in projects})
+    if cycle is not None:
+        raise CockpitError(
+            409, "cycle", f"depends_on cycle: {' → '.join(cycle)}", field="projects", path=cycle
+        )
+
+
+def _start_fields(project: ProjectIn, by: str, defaults: FactoryDefaults) -> dict[str, Any]:
+    """A start's project row; one with dependencies is the server's to spawn once they are met."""
+    fields = project_fields(project, by, defaults)
+    if project.depends_on:
+        fields["charter"] = {**fields["charter"], "spawn_owner": SPAWN_SERVER}
+    return fields
+
+
 async def start_factory(
     app_state: Any, payload: Any, *, user_id: str | None
 ) -> tuple[int, dict[str, Any]]:
@@ -641,6 +776,7 @@ async def start_factory(
         )
     body = parse_body(StartIn, payload)
     _unique_slugs(body.projects)
+    _check_dependencies(body.projects)
     defaults = resolve_defaults(body.defaults)
     _check_integration(body, defaults)
     deps = factory_deps(app_state)
@@ -660,7 +796,7 @@ async def start_factory(
             field="root_session_id",
         )
     by = human_name(user_id)
-    async with _lock(root.id):
+    async with lock(root.id):
         root = await asyncio.to_thread(ensure_member, root, deps)
         if not same_id(root.labels.get(LABEL_ID), root.id):
             raise CockpitError(
@@ -674,7 +810,7 @@ async def start_factory(
         wanted = [p.slug for p in body.projects]
         if defaults.integration_env:
             wanted.append(INTEGRATION_ENV_SLUG)
-        if existing:
+        if existing or root.labels.get(LABEL_STARTED_AT):
             have = sorted(p.slug for p in existing)
             if have == sorted(wanted):
                 return 200, {"factory_id": root.id, "url": url, "created": False}
@@ -704,9 +840,10 @@ async def start_factory(
         root = await control.get_conv(deps, root.id) or root
         owner = await asyncio.to_thread(get_session_owner_id, root.id, deps.permission_store)
         folder = await _file_root(deps, root, owner or user_id, body.name)
+        held = [p.slug for p in body.projects if p.depends_on]
         rows = [
             await asyncio.to_thread(
-                store.upsert_project, root.id, p.slug, **_project_fields(p, by, defaults)
+                store.upsert_project, root.id, p.slug, **_start_fields(p, by, defaults)
             )
             for p in body.projects
         ]
@@ -726,10 +863,20 @@ async def start_factory(
                 sender_id=None,
                 target_id=root.id,
                 target_title=root.title,
-                text=kickoff_text(by, mail_id, body.name, body.cadence, rows, root.id),
+                text=kickoff_text(
+                    by,
+                    mail_id,
+                    body.name,
+                    body.cadence,
+                    rows,
+                    root.id,
+                    brief=body.brief,
+                    held=held,
+                ),
                 kind="brief",
             )
         )
+        # TODO: store body.brief as the #factory thread's message 1 once the Room lands.
     await events.emit(
         app_state,
         root.id,
@@ -741,6 +888,7 @@ async def start_factory(
         data={
             "from": by,
             "by": by,
+            "by_id": user_id,
             "name": body.name,
             "cadence": body.cadence,
             "projects": [r.slug for r in rows],
@@ -751,8 +899,14 @@ async def start_factory(
             },
             "folder_project_id": folder,
             "mail_id": mail_id,
+            "brief": bool(body.brief),
         },
     )
+    for row in rows:
+        if row.slug in held:
+            await gating.hold(
+                app_state, root, row, list(normalize_charter(row.charter)["depends_on"])
+            )
     return 201, {"factory_id": root.id, "url": url, "created": True, "mail_id": mail_id}
 
 
@@ -760,52 +914,26 @@ async def add_project(
     app_state: Any, factory_id: str, payload: Any, *, user_id: str | None
 ) -> FactoryProject:
     """
-    Add a project to a running factory and ask the root lead to spawn its PL.
+    Add a project to a running factory; the server spawns its PL (or asks the root lead).
 
-    Needs EDIT on the root.
+    Needs EDIT on the root, and MANAGE when it sets USD budgets.
 
-    :raises CockpitError: 400 invalid body, 404 unknown factory, 409 duplicate slug.
+    :raises CockpitError: 400 invalid body or unknown dependency, 404 unknown
+        factory, 409 duplicate slug, over the project cap or a dependency cycle.
     """
-    project = parse_body(ProjectIn, payload)
+    from omnigent.server.factory import autonomy, projects
+
     deps = factory_deps(app_state)
     root = await control.load_factory_root(deps, user_id, factory_id)
     await control.require(deps, user_id, root.id, LEVEL_EDIT)
-    by = human_name(user_id)
-    store = deps.factory_store
-    async with _lock(root.id):
-        if await asyncio.to_thread(store.get_project, root.id, project.slug) is not None:
-            raise CockpitError(
-                409, "slug_exists", f"project {project.slug!r} already exists", field="slug"
-            )
-        row = await asyncio.to_thread(
-            store.upsert_project,
-            root.id,
-            project.slug,
-            **_project_fields(project, by, root_defaults(root)),
-        )
-    cadence = root.labels.get(LABEL_CADENCE) or CADENCE_DEMO
-    mail_id = new_mail_id()
-    get_mailer(app_state).submit(
-        MailItem(
-            mail_id=mail_id,
-            sender_id=None,
-            target_id=root.id,
-            target_title=root.title,
-            text=add_project_text(by, mail_id, row, cadence),
-            kind="request",
-        )
-    )
-    await events.emit(
-        app_state,
-        root.id,
-        "project.added",
-        severity="notice",
-        project=row.slug,
-        to_id=root.id,
-        subject=f"project:{row.slug}",
-        summary=f"{by} added project {row.slug} via cockpit",
-        data={"from": by, "by": by, "mail_id": mail_id},
-    )
+    default_repo = root_defaults(root).repo
+    if isinstance(payload, Mapping) and not payload.get("repo") and default_repo:
+        payload = {**payload, "repo": default_repo}
+    project = parse_body(ProjectIn, payload)
+    if autonomy.raises_budgets(None, project):
+        await control.require(deps, user_id, root.id, LEVEL_MANAGE)
+    actor = await asyncio.to_thread(projects.human_actor, deps, user_id, root.id)
+    row, _started = await projects.create_project_core(app_state, root, project, actor)
     return row
 
 
@@ -839,6 +967,7 @@ def merge_charter(old: Mapping[str, Any] | None, patch: CharterPatchIn) -> dict[
         focus = patch.demo_focus if "demo_focus" in fields else patch.demo
         merged["demo_focus"] = focus
         merged["demo"] = focus
+    merged.update(patch.charter_extras())
     return merged
 
 
@@ -848,62 +977,33 @@ async def update_charter(
     """
     Edit a project's charter and send its PL a CHARTER UPDATE with the diff.
 
-    Needs EDIT on the root. A PATCH that changes nothing sends nothing; a
-    project without a PL yet gets the new charter when it is spawned.
+    Needs EDIT on the root, and MANAGE when it sets, raises or removes a USD
+    budget. A PATCH that changes nothing sends nothing; a project without a PL
+    yet gets the new charter when it is spawned.
 
     :returns: ``(updated project, whether the rendered charter changed, mail id or None)``.
-    :raises CockpitError: 400 invalid body, 404 unknown factory or project.
+    :raises CockpitError: 400 invalid body or unknown dependency, 404 unknown factory
+        or project, 409 dependency cycle.
     """
+    from omnigent.server.factory import autonomy, projects
+
     patch = parse_body(CharterPatchIn, payload)
     deps = factory_deps(app_state)
     root = await control.load_factory_root(deps, user_id, factory_id)
     await control.require(deps, user_id, root.id, LEVEL_EDIT)
-    store = deps.factory_store
-    row = await asyncio.to_thread(store.get_project, root.id, slug)
-    if row is None:
-        raise CockpitError(404, "unknown_project", f"no project {slug!r} in this factory")
-    fields: dict[str, Any] = {
-        "charter": normalize_charter(
-            merge_charter(row.charter, patch), tooling_ref=preview_tooling_ref()
-        )
-    }
-    if "priority" in patch.model_fields_set and patch.priority is not None:
-        fields["priority"] = patch.priority
-    before = render_pl_charter(row)
-    updated = await asyncio.to_thread(store.update_project, row.id, **fields) or row
-    after = render_pl_charter(updated)
-    if before == after:
-        return updated, False, None
-    by = human_name(user_id)
-    diff = charter_diff(before, after)
-    pl = await asyncio.to_thread(control.find_project_pl, deps, root.id, slug)
-    mail_id = (
-        control.send_text(app_state, pl.id, charter_update_text(by, diff), kind="request")
-        if pl is not None
-        else None
-    )
-    await events.emit(
-        app_state,
-        root.id,
-        "control.charter_update",
-        severity="notice",
-        project=slug,
-        to_id=pl.id if pl is not None else None,
-        subject=f"project:{slug}",
-        summary=f"{by} updated the charter of project {slug}",
-        data={
-            "from": by,
-            "by": by,
-            "fields": sorted(patch.model_fields_set),
-            "diff": diff,
-            "recipients": [norm_id(pl.id)] if pl is not None else [],
-            "mail_ids": {pl.id: mail_id} if pl is not None and mail_id else {},
-        },
-    )
-    return updated, True, mail_id
+    if "budgets" in patch.model_fields_set:
+        row = await asyncio.to_thread(deps.factory_store.get_project, root.id, slug)
+        charter = normalize_charter(row.charter) if row is not None else None
+        if autonomy.raises_budgets(charter, patch):
+            await control.require(deps, user_id, root.id, LEVEL_MANAGE)
+    actor = await asyncio.to_thread(projects.human_actor, deps, user_id, root.id)
+    row, diff, mail_id = await projects.patch_project_core(app_state, root, slug, patch, actor)
+    return row, bool(diff), mail_id
 
 
 __all__ = [
+    "BRIEF_MAX_CHARS",
+    "BudgetsIn",
     "CharterPatchIn",
     "DefaultsIn",
     "FactoryDefaults",
@@ -917,9 +1017,11 @@ __all__ = [
     "folder_name",
     "is_factory_folder",
     "kickoff_text",
+    "lock",
     "max_projects",
     "merge_charter",
     "parse_body",
+    "project_fields",
     "resolve_defaults",
     "root_defaults",
     "start_factory",

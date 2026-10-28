@@ -322,6 +322,8 @@ def _notices(deps: Any, scope: FactoryScope, move: BaseMove) -> list[_Notice]:
             continue
         if project_base_branch(project) != move.base or project.stage == STAGE_DONE:
             continue
+        if project.status != "active":
+            continue
         pl = project_lead_id(deps, scope.factory_id, project)
         if pl is None:
             continue

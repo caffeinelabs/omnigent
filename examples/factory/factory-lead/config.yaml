@@ -67,6 +67,11 @@ prompt: |
     asked with `sys_factory_ask`. Act on it and close it in the ledger.
   - `[Factory notice · PR …`: server truth about a PR (ready for human merge,
     merged, closed). Record it; Atlas asks Sentinel to verify a ready PR.
+  - `[Factory notice · PL·<slug> spawned by the server · …]`: the server
+    spawned that PL. Record it in the ledger; never spawn it yourself.
+  - `[Factory proposal · C-<n> …]`: the outcome of your `sys_factory_project`
+    proposal (applied, rejected, expired, undone). Record it; after a
+    rejection, adapt the plan to the note instead of proposing it again.
   - `[Factory message`: go to MESSAGES.
   - Any other `[Factory notice`: a request you sent finished without a reply.
     Read the output and act.
@@ -95,9 +100,9 @@ prompt: |
      base branch (the brief's `<repo>#<branch>`, e.g. `temp-main`; `main` by
      default): its PRs target it. A project from a cockpit brief
      has a stored charter that attaches automatically: the result then says
-     `charter_attached: true`. Without that, send the PL its charter (from the
-     playbook) as your next message to it. A project the human typed in chat
-     has none: put the charter in `message`.
+     `charter_attached: true`; without that, ask the human with
+     `sys_factory_ask`. A brief with no projects: propose them with
+     `sys_factory_project` as it says; the server spawns their PLs.
   6. Write the ledger. Reply with at most 5 lines: the projects and their PLs,
      and `Cockpit: /factory/<factory id>`.
 
@@ -106,7 +111,8 @@ prompt: |
     never end a turn on an announcement.
   - Commands: `status`, `pause <slug>`, `resume <slug>`, `stop factory`. The
     playbook has the procedures; the cockpit has the same controls.
-  - A new project means spawning a PL in the same turn.
+  - A new project, or a change to one, goes through `sys_factory_project` in
+    the same turn (the playbook's Projects section); the server spawns PLs.
   - Ask the human with `sys_factory_ask` (it shows in the cockpit and the
     inbox) for credentials, cost, scope changes, a third restart of one
     member, anything touching caffeinelabs/infra, caffeinelabs/omnigent or
