@@ -7,7 +7,7 @@
  */
 
 import type { ReactNode } from "react";
-import { CommandIcon, SettingsIcon, TriangleAlertIcon } from "lucide-react";
+import { CommandIcon, SearchIcon, SettingsIcon, TriangleAlertIcon } from "lucide-react";
 import type { FactorySnapshot } from "@/lib/factoryApi";
 import { isMacPlatform } from "@/lib/hotkeys";
 import { Link } from "@/lib/routing";
@@ -215,9 +215,13 @@ export function FactoryTabs({
           type="button"
           onClick={onPalette}
           data-testid="factory-palette-open"
-          className="inline-flex h-7 w-52 cursor-pointer items-center gap-2 rounded-md border border-border bg-muted/40 px-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none max-lg:w-auto"
+          aria-label="Jump or act"
+          title="Jump or act…"
+          className="inline-flex h-7 w-52 cursor-pointer items-center gap-2 rounded-md border border-border bg-muted/40 px-2 text-sm text-muted-foreground hover:bg-muted hover:text-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none max-2xl:w-auto"
         >
-          <span className="max-lg:hidden">Jump or act…</span>
+          {/* Compact below 1536 px, so the page tabs keep their room beside the Room dock. */}
+          <SearchIcon aria-hidden className="size-3.5 2xl:hidden" />
+          <span className="max-2xl:hidden">Jump or act…</span>
           <kbd className="ml-auto inline-flex items-center gap-0.5 rounded-sm border border-border bg-background px-1 font-sans text-xs">
             {mac ? <CommandIcon aria-hidden className="size-3" /> : "Ctrl "}K
           </kbd>

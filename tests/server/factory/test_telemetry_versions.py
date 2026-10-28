@@ -192,3 +192,63 @@ async def test_a_peer_restart_stamps_the_version_labels(
         labels = world.get("pl").labels
         assert (labels.get(F.LABEL_VERSION) == "f" * 32) is restart
     await api.mailer.drain()
+
+
+async def test_a_new_platform_version_is_announced_in_every_factory(
+    world: FactoryWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(F.FACTORY_ENABLED_ENV, "1")
+    store = world.deps.factory_store
+    first = await versions.record_platform_version(world.app_state, names=["factory-pl"])
+    assert first is not None
+    # The first version a server records is no change.
+    assert not [e for e in store.list_events(world.id("lead_a")) if e.kind == "version.changed"]
+
+    world.agent_store.update(world.agents["pl"], f"{world.agents['pl']}/" + "c" * 64)
+    second = await versions.record_platform_version(world.app_state, names=["factory-pl"])
+    assert second is not None and second.id != first.id
+    for root in ("lead_a", "other_lead"):
+        changed = [e for e in store.list_events(world.id(root)) if e.kind == "version.changed"]
+        assert len(changed) == 1, root
+        assert changed[0].data["version_id"] == second.id
+        assert changed[0].data["previous"] == first.id
+        assert changed[0].data["bundles_changed"] == ["factory-pl"]
+
+    # A restart on the same platform announces nothing new.
+    await versions.record_platform_version(world.app_state, names=["factory-pl"])
+    assert (
+        len([e for e in store.list_events(world.id("lead_a")) if e.kind == "version.changed"]) == 1
+    )
+
+
+async def test_starting_a_factory_stamps_its_projects_with_the_versions(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.server.auth import LEVEL_OWNER
+    from omnigent.server.factory.telemetry import spans
+
+    world = cockpit.world
+    spans.reset()
+    monkeypatch.setattr(versions, "current_version_id", lambda: "e" * 32)
+    root = world.make_session("atlas", agent="lead", title="Atlas")
+    cockpit.permissions.grant("alice", root.id, LEVEL_OWNER)
+    body = {
+        "root_session_id": root.id,
+        "name": "Atlas factory",
+        "cadence": "demo",
+        "defaults": {
+            "repo": "caffeinelabs/app",
+            "base_branch": "temp-main",
+            "integration_env": True,
+        },
+        "projects": [
+            {"slug": "docs", "title": "Docs", "repo": "caffeinelabs/app", "goal": "Add docs."}
+        ],
+    }
+    resp = await cockpit.post("/v1/factory/factories", body, user="alice")
+    assert resp.status_code == 201, resp.text
+    rows = {p.slug: p for p in cockpit.store.list_projects(root.id)}
+    assert set(rows) == {"docs", "base-env"}
+    for row in rows.values():
+        assert row.def_version == 1, row.slug
+        assert row.version_id == "e" * 32, row.slug

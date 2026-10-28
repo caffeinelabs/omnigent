@@ -56,6 +56,7 @@ router = APIRouter(prefix="/v1/factory", tags=["factory"])
 
 PAGE_MAX: Final = 200
 UNREAD_CAP: Final = 99
+MENTION_PREVIEW_CHARS: Final = 200
 _T = TypeVar("_T")
 
 # Factory events become cards in the Room.
@@ -183,7 +184,7 @@ def thread_views(
                 "last_seq": stat.last_seq if stat else 0,
                 "last_at": stat.last_at if stat else None,
                 "messages": stat.messages if stat else 0,
-                "unread": _unread(deps, root.id, key, reads.get(key, 0), stat, user_id),
+                **_unread(deps, root.id, key, reads.get(key, 0), stat, user_id),
             }
         )
     return views
@@ -191,13 +192,23 @@ def thread_views(
 
 def _unread(
     deps: FactoryDeps, factory_id: str, thread: str, last_read: int, stat: Any, user_id: str | None
-) -> int:
+) -> dict[str, Any]:
+    """:returns: ``{unread, mention}``: the count and the newest unread @mention of the reader."""
     if stat is None or stat.last_seq <= last_read:
-        return 0
+        return {"unread": 0, "mention": None}
     rows = deps.factory_store.list_chat(
         factory_id, thread, after_seq=last_read, limit=UNREAD_CAP + 1
     )
-    return min(UNREAD_CAP, sum(1 for r in rows if r.author != user_id))
+    others = [r for r in rows if r.author != user_id]
+    me = f"@{user_id}".casefold() if user_id else None
+    named = [r for r in others if me and any(m.casefold() == me for m in r.mentions or ())]
+    newest = max(named, key=lambda r: r.seq, default=None)
+    mention = (
+        {"seq": newest.seq, "body": newest.body[:MENTION_PREVIEW_CHARS]}
+        if newest is not None
+        else None
+    )
+    return {"unread": min(UNREAD_CAP, len(others)), "mention": mention}
 
 
 @router.get("/factories/{factory_id}/chat/threads", response_model=None)

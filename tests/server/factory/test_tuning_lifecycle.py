@@ -469,6 +469,30 @@ async def test_a_code_change_has_no_version_to_keep_or_revert(cockpit: Cockpit) 
     assert _row(cockpit).status == "applied"
 
 
+async def test_owners_dismiss_a_code_change_recorded_while_tier2_is_off(cockpit: Cockpit) -> None:
+    await _propose(cockpit, key="lead_a", kind="code", title="Promote R-1", expected_effect=None)
+    url = f"/v1/factory/factories/{cockpit.fid}/proposals/C-1/reject"
+
+    operator = await cockpit.post(url, {"note": "no"}, user="carol")
+    owner = await cockpit.post(url, {"note": "not this quarter"})
+    again = await cockpit.post(url, {})
+
+    assert operator.status_code == 403, operator.text
+    assert owner.status_code == 200, owner.text
+    assert owner.json()["proposal"]["status"] == "rejected" and owner.json()["decision"] is None
+    row = _row(cockpit)
+    assert (row.status, row.decided_by, row.result["note"]) == (
+        "rejected",
+        "alice",
+        "not this quarter",
+    )
+    assert again.status_code == 409 and error_code(again) == "proposal_not_pending", again.text
+    rejected = [e for e in cockpit.store.list_events(cockpit.fid) if e.kind == "proposal.rejected"]
+    assert len(rejected) == 1
+    mail = cockpit.mailer.texts_to(cockpit.world.id("lead_a"))
+    assert any("C-1 rejected by" in text and "not this quarter" in text for text in mail)
+
+
 async def test_concurrent_edits_keep_both_changes(
     cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
 ) -> None:

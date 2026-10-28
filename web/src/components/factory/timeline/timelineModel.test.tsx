@@ -79,6 +79,31 @@ describe("buildTimeline from span fixtures", () => {
     expect(db.lanes.find((l) => l.kind === "agent")!.sub).toBe("PL");
   });
 
+  it("names a task's loop by the span's task ref when no PR carries it", () => {
+    const spans = timelineSpans();
+    const loop = spans.find((s) => s.kind === "loop" && s.loop_id)!;
+    const lone: SpanView = {
+      ...loop,
+      id: "f".repeat(32),
+      loop_id: "e".repeat(32),
+      pr_id: null,
+      task_id: "d".repeat(32),
+      name: "implement",
+      attrs: { ...loop.attrs, task_ref: "T-9" },
+    };
+    const iter = spans.find((s) => s.kind === "loop_iter" && s.loop_id === loop.loop_id)!;
+    const run: SpanView = {
+      ...iter,
+      id: "c".repeat(32),
+      loop_id: lone.loop_id,
+      parent_id: lone.id,
+      pr_id: null,
+      task_id: lone.task_id,
+    };
+    const found = laneOf(build({}, [...spans, lone, run]), `loop:${"e".repeat(32)}`);
+    expect(found?.lane.label).toBe("T-9 implement");
+  });
+
   it("hides heartbeats by default and shows them on request", () => {
     const beats = (groups: ReturnType<typeof build>) =>
       laneOf(groups, `agent:${PL_DB}`)!.lane.bars.filter((b) => b.kind === "heartbeat").length;

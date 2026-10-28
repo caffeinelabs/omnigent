@@ -1,6 +1,6 @@
 /**
- * The Inbox's factory sections: first "Assigned to you" (decisions and
- * proposals routed to the viewer or a role they hold, across factories),
+ * The Inbox's factory sections: first "Assigned to you" (decisions,
+ * proposals and incidents routed to the viewer or a role they hold, across factories),
  * then every other open decision grouped by factory, answerable in place
  * with the same card as the cockpit's rail. A card answered here stays and
  * follows its factory's snapshot until the delivery receipt arrives.
@@ -17,6 +17,7 @@ import { plural } from "../factoryFormat";
 import { useProposals } from "../room/roomQueries";
 import { FactoryViewerProvider } from "../shell/viewerCan";
 import { DecisionCard } from "./DecisionCard";
+import { InboxAssignedIncidents, useAssignedIncidents } from "./InboxAssignedIncidents";
 import { orderOpenDecisions } from "./DecisionsRail";
 import { proposalOf } from "./decisionsPageModel";
 
@@ -89,11 +90,12 @@ export function InboxFactoryDecisions({
   onRetry?: () => void;
 }) {
   const [mine, setMine] = useState<Record<string, OpenDecisionItem>>({});
+  const incidents = useAssignedIncidents();
   const kept = Object.values(mine).filter(
     (m) => !items.some((i) => i.decision.id === m.decision.id),
   );
   const all = [...items, ...kept];
-  if (all.length === 0 && !error) return null;
+  if (all.length === 0 && incidents.length === 0 && !error) return null;
   const remember = (item: OpenDecisionItem) => (decision: DecisionView) =>
     setMine((prev) => ({ ...prev, [decision.id]: { ...item, decision } }));
   const assigned = all.filter((i) => i.mine === true);
@@ -104,15 +106,16 @@ export function InboxFactoryDecisions({
       aria-label="Factory decisions"
       className="mb-6 flex flex-col gap-3"
     >
-      {assigned.length > 0 && (
+      {(assigned.length > 0 || incidents.length > 0) && (
         <div data-testid="inbox-assigned-to-you" className="flex flex-col gap-2">
           <h2 className="flex items-center gap-1.5 text-sm font-medium text-foreground">
             <UserRoundCheckIcon aria-hidden className="size-4 text-warning" />
             Assigned to you
             <span className="font-normal text-muted-foreground tabular-nums">
-              {` · ${assigned.filter((i) => items.includes(i)).length} open`}
+              {` · ${assigned.filter((i) => items.includes(i)).length + incidents.length} open`}
             </span>
           </h2>
+          <InboxAssignedIncidents incidents={incidents} nowS={Math.floor(Date.now() / 1000)} />
           {assigned.map((item) => (
             <InboxDecision
               key={item.decision.id}

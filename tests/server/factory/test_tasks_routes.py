@@ -18,7 +18,7 @@ import pytest
 import pytest_asyncio
 
 from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
-from omnigent.server.factory import binder, snapshot, tasks
+from omnigent.server.factory import binder, definition, snapshot, tasks
 from tests.server.factory.cockpit_helpers import Cockpit, build_cockpit, error_code
 
 SLUG = "api-version"
@@ -248,9 +248,14 @@ async def test_start_counts_attempts_and_titles(cockpit: Cockpit) -> None:
     assert ("ready", "running") in states
 
 
+def _enforce(cockpit: Cockpit) -> None:
+    # The engine mode lives in the definition (seeded as soon as anything resolves it).
+    definition.set_values(cockpit.deps, cockpit.fid, {"engine.mode": "enforce"}, created_by="test")
+
+
 async def test_enforce_mode_puts_a_cost_budget_on_priced_cards(cockpit: Cockpit) -> None:
     await _planned(cockpit)
-    cockpit.world.store.set_labels(cockpit.fid, {tasks.LABEL_ENGINE_MODE: "enforce"})
+    _enforce(cockpit)
     started = (await _op(cockpit, "route", "start")).json()
     assert started["cost_budget"] == {"max_cost_usd": 9.0}
     codex = (await _op(cockpit, "route", "start", harness="ic_codex")).json()
@@ -259,7 +264,7 @@ async def test_enforce_mode_puts_a_cost_budget_on_priced_cards(cockpit: Cockpit)
 
 async def test_an_exhausted_budget_sends_no_zero_cost_budget(cockpit: Cockpit) -> None:
     await _planned(cockpit)
-    cockpit.world.store.set_labels(cockpit.fid, {tasks.LABEL_ENGINE_MODE: "enforce"})
+    _enforce(cockpit)
     row = cockpit.store.get_task_by_key(cockpit.fid, SLUG, "route")
     assert row is not None
     cockpit.store.update_task(row.id, cost_usd=9.0)

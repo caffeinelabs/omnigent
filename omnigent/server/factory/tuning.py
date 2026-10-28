@@ -1471,30 +1471,46 @@ async def execute_answer(
             expect=list(PROPOSAL_OPEN_STATUSES),
         )
         return None, None
+    return await _reject(app_state, row, answer.actor, answer.note, mail_id)
+
+
+async def _reject(
+    app_state: Any, row: FactoryProposal, actor: Actor, note: str | None, mail_id: str | None
+) -> tuple[str | None, str | None]:
+    """Reject a pending proposal and tell its proposer. :returns: ``(proposer, mail id)``."""
+    from omnigent.server.factory.proposals import rejected_text
+
+    deps = factory_deps(app_state)
+    ref, by = proposal_ref(row.number), projects_name(actor)
     row = await _update(
         deps,
         row,
         list(PROPOSAL_OPEN_STATUSES),
         status="rejected",
-        decided_by=answer.actor.id,
+        decided_by=actor.id,
         decided_at=now_s(),
-        result={
-            **(row.result or {}),
-            "note": control.clip(answer.note, 2000) if answer.note else None,
-        },
+        result={**(row.result or {}), "note": control.clip(note, 2000) if note else None},
     )
-    await _emit(
-        app_state,
-        row,
-        "proposal.rejected",
-        f"{ref} rejected by {by}",
-        answer.actor,
-        note=answer.note,
-    )
-    from omnigent.server.factory.proposals import rejected_text
-
-    sent = await _tell(app_state, row, rejected_text(ref, by, answer.note), mail_id)
+    await _emit(app_state, row, "proposal.rejected", f"{ref} rejected by {by}", actor, note=note)
+    sent = await _tell(app_state, row, rejected_text(ref, by, note), mail_id)
     return (row.author if sent else None), (sent or None)
+
+
+async def dismiss_recorded(
+    app_state: Any, root: Conversation, row: FactoryProposal, user_id: str | None, note: str | None
+) -> FactoryProposal:
+    """
+    Reject a code proposal recorded while Tier 2 is off (it has no decision to answer). MANAGE.
+
+    :raises CockpitError: 403 below MANAGE; 409 ``proposal_not_pending``.
+    """
+    from omnigent.server.factory.projects import human_actor
+
+    deps = factory_deps(app_state)
+    await control.require(deps, user_id, root.id, LEVEL_MANAGE)
+    actor = await asyncio.to_thread(human_actor, deps, user_id, root.id)
+    await _reject(app_state, row, actor, note, None)
+    return await asyncio.to_thread(deps.factory_store.get_proposal, row.id) or row
 
 
 # ── Expiry ─────────────────────────────────────────────────────

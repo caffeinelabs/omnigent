@@ -330,14 +330,30 @@ def span_context(deps: FactoryDeps, factory_id: str) -> SpanContext:
         labels = root.labels if root is not None else {}
     except Exception:  # noqa: BLE001 - spans are written without a version then
         _logger.debug("factory spans: no root labels for %s", factory_id, exc_info=True)
+    def_version = _int(labels.get(LABEL_DEF_VERSION))
+    if def_version is None and labels:
+        # Before anything resolved the definition, seed v1 now so rows are stamped from the start.
+        from omnigent.server.factory import definition
+
+        def_version = definition.pinned_version(deps, factory_id)
     ctx = SpanContext(
         version_id=versions.current_version_id() or labels.get(LABEL_VERSION),
-        def_version=_int(labels.get(LABEL_DEF_VERSION)),
+        def_version=def_version,
     )
     if len(_contexts) > _CONTEXTS_MAX:
         _contexts.clear()
     _contexts[factory_id] = (now, ctx)
     return ctx
+
+
+def stamps(deps: FactoryDeps, factory_id: str) -> dict[str, Any]:
+    """:returns: ``{def_version, version_id}`` to stamp on a new project or issue (known ones)."""
+    ctx = span_context(deps, factory_id)
+    return {
+        k: v
+        for k, v in (("def_version", ctx.def_version), ("version_id", ctx.version_id))
+        if v is not None
+    }
 
 
 def reset() -> None:

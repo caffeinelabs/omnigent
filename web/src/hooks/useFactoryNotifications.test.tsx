@@ -4,11 +4,12 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { liveRunOpenDecisions, liveRunSnapshot } from "@/components/factory/__fixtures__/liveRun";
 import { showNotification } from "@/lib/browserNotifications";
-import type { FactorySnapshot, ViewerBlock } from "@/lib/factoryApi";
+import type { FactorySnapshot, ThreadView, ViewerBlock } from "@/lib/factoryApi";
 import {
   type FactoryNotice,
   decisionNotices,
   isForViewer,
+  mentionNotices,
   snapshotNotices,
   useFactoryNotifications,
 } from "./useFactoryNotifications";
@@ -138,6 +139,59 @@ describe("notices in a shared factory", () => {
     expect(keys.filter((k) => k.startsWith("decision:"))).toHaveLength(1);
     expect(keys).toContain(`dead:${owner.members[0]!.session_id}`);
     expect(snapshotNotices(sharedSnapshot(viewer("viewer", 1)))).toEqual([]);
+  });
+
+  it("owners hear about loops out of budget; operators don't", () => {
+    const owner = sharedSnapshot(viewer("owner", 3));
+    const project = owner.projects[0]!;
+    project.loops_summary = {
+      running: 0,
+      converged: 0,
+      stalled: 0,
+      thrashing: 0,
+      exhausted: 1,
+      escalated: 0,
+    };
+    const exhausted = snapshotNotices(owner).filter((n) => n.key.startsWith("exhausted:"));
+    expect(exhausted).toEqual([
+      expect.objectContaining({
+        key: `exhausted:${project.slug}:1`,
+        path: `/factory/${owner.factory.id}/projects/${project.slug}#loops`,
+      }),
+    ]);
+    const operator = { ...owner, viewer: viewer("operator", 2) };
+    expect(snapshotNotices(operator).some((n) => n.key.startsWith("exhausted:"))).toBe(false);
+  });
+
+  it("a Room message that mentions me notifies once per message", () => {
+    const thread = (key: string, mention: ThreadView["mention"]): ThreadView => ({
+      key,
+      kind: "project",
+      title: `#${key.split(":").pop()}`,
+      project_slug: null,
+      pr_id: null,
+      pr_number: null,
+      responder_session_id: null,
+      responder_title: null,
+      last_seq: 9,
+      last_at: null,
+      messages: 9,
+      unread: 1,
+      mention,
+    });
+    const notices = mentionNotices("fid", "Atlas factory", [
+      thread("project:db-version", { seq: 7, body: "@mia@caffeine.ai use knex_migrations" }),
+      thread("factory", null),
+    ]);
+    expect(notices).toEqual([
+      {
+        key: "mention:project:db-version:7",
+        title: "Atlas factory · #db-version mentions you",
+        body: "@mia@caffeine.ai use knex_migrations",
+        path: "/factory/fid/room/project%3Adb-version",
+      },
+    ]);
+    expect(mentionNotices("fid", "x", undefined)).toEqual([]);
   });
 
   it("a claim makes a decision its claimer's", () => {

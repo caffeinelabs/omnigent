@@ -1143,6 +1143,13 @@ class ChatMessageView(_View):
     created_at: int
 
 
+class ThreadMentionView(_View):
+    """The newest unread message in a thread that @mentions the reader (a notification)."""
+
+    seq: int
+    body: str
+
+
 class ThreadView(_View):
     """
     One Room thread.
@@ -1150,6 +1157,7 @@ class ThreadView(_View):
     :param key: ``factory``, ``improvements``, ``project:<slug>`` or ``pr:<id>``.
     :param title: Display name, e.g. ``"#db-version"`` or ``"!9631"``.
     :param responder_session_id: The agent that answers by default.
+    :param mention: The newest unread message that @mentions the reader.
     """
 
     key: str
@@ -1164,6 +1172,7 @@ class ThreadView(_View):
     last_at: int | None = None
     messages: int = 0
     unread: int = 0
+    mention: ThreadMentionView | None = None
 
 
 class ExpectedEffectView(_View):
@@ -1408,6 +1417,7 @@ class DefinitionView(_View):
     """
     One version of the factory's Tier-1 definition.
 
+    :param created_by_title: The member's title when ``created_by`` is a session id.
     :param pinned: The version the factory runs (``omnigent.factory.def_version``).
     :param doc: Engine, cadence, supervisor, mail, previews, caps, loops,
         budgets, autonomy, decisions, alerts, models and rules.
@@ -1418,6 +1428,7 @@ class DefinitionView(_View):
     parent_version: int | None = None
     hash: str
     created_by: str
+    created_by_title: str | None = None
     created_via: DefinitionSource
     proposal_id: str | None = None
     proposal_ref: str | None = None
@@ -1459,6 +1470,7 @@ __all__ = [
     "ProposalView",
     "SpanView",
     "TaskView",
+    "ThreadMentionView",
     "ThreadView",
     "ViewerBlock",
 ]

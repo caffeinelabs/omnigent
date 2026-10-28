@@ -43,7 +43,11 @@ import {
 import { ViewerBanner } from "@/components/factory/shell/ViewerBanner";
 import { PAGE_PALETTE_ATTRIBUTE } from "@/hooks/useCommandPaletteHotkey";
 import { COCKPIT_MIN_REFRESH_MS, useFactory } from "@/hooks/useFactory";
-import { snapshotNotices, useFactoryNotifications } from "@/hooks/useFactoryNotifications";
+import {
+  mentionNotices,
+  snapshotNotices,
+  useFactoryNotifications,
+} from "@/hooks/useFactoryNotifications";
 import { useFactoryPresence } from "@/hooks/useFactoryPresence";
 import { EmptyState } from "@/components/factory/project/projectParts";
 import { Button } from "@/components/ui/button";
@@ -108,10 +112,19 @@ function Shell({
   const [adding, setAdding] = useState<{ title: string | null } | null>(null);
   const [dockWidth, setDockWidth] = useDockWidth();
   const dockRef = useRef<HTMLElement>(null);
-  const roomUnread = unreadTotal(useRoomThreads(snapshot.factory.id).data?.data);
+  const threads = useRoomThreads(snapshot.factory.id).data?.data;
+  const roomUnread = unreadTotal(threads);
   const togglePalette = useCallback(() => setPalette((open) => !open), []);
   useFactoryPaletteHotkey(togglePalette);
-  useFactoryNotifications(useMemo(() => snapshotNotices(snapshot), [snapshot]));
+  useFactoryNotifications(
+    useMemo(
+      () => [
+        ...snapshotNotices(snapshot),
+        ...mentionNotices(snapshot.factory.id, snapshot.factory.name, threads),
+      ],
+      [snapshot, threads],
+    ),
+  );
   const split = useMemo(() => splitNeedsYou(snapshot), [snapshot]);
   const viewer = snapshot.viewer ?? null;
   const shell: FactoryShellValue = useMemo(

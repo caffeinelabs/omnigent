@@ -42,7 +42,8 @@ const VIA: Record<DefinitionView["created_via"], string> = {
   revert: "revert",
 };
 
-function who(by: string): string {
+function who(version: DefinitionView): string {
+  const by = version.created_by_title ?? version.created_by;
   return by.includes("@") ? by.split("@")[0]! : by;
 }
 
@@ -82,9 +83,9 @@ function VersionRow({
         {/* On a phone "by …" takes a second line instead of being cut to a letter. */}
         <span
           className="min-w-0 flex-1 truncate text-muted-foreground max-sm:order-last max-sm:basis-full max-sm:pl-11"
-          title={`by ${who(version.created_by)}`}
+          title={`by ${who(version)}`}
         >
-          by {who(version.created_by)}
+          by {who(version)}
         </span>
         <span className="shrink-0 text-xs text-muted-foreground tabular-nums max-sm:ml-auto">
           {formatElapsed(nowS - version.created_at)} ago
@@ -154,7 +155,7 @@ export function BundlesCard({ factoryId }: { factoryId: string }) {
     for (const m of bundles.data?.members ?? []) {
       if (!m.current) continue;
       const [agent, sha] = [m.current.split("/")[0]!, m.current.split("/").pop()!];
-      seen.set(agent.replace(/^builtin[-_]?/, ""), sha);
+      seen.set(m.bundle ?? agent.replace(/^builtin[-_]?/, ""), sha);
     }
     return [...seen.entries()];
   }, [bundles.data]);

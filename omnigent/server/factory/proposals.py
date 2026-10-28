@@ -1501,6 +1501,13 @@ async def answer(
     row = await asyncio.to_thread(find_proposal, deps, root.id, ref)
     if row is None:
         raise CockpitError(404, "unknown_proposal", f"no proposal {ref!r} in this factory")
+    recorded = row.kind == "code" and row.status == "pending" and not row.decision_id
+    if recorded and option_id == OPTION_REJECT:
+        # Recorded while Tier 2 is off: there is no decision, owners dismiss it here.
+        from omnigent.server.factory import tuning
+
+        fresh = await tuning.dismiss_recorded(app_state, root, row, user_id, text)
+        return {"proposal": await asyncio.to_thread(proposal_view, deps, fresh), "decision": None}
     if row.status not in PROPOSAL_OPEN_STATUSES or not row.decision_id:
         raise CockpitError(
             409,

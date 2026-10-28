@@ -77,6 +77,23 @@ async def test_versions_list_definition_and_platform_markers(cockpit: Cockpit) -
     assert [p["image_tag"] for p in body["platform"]] == ["staging-0bb15c1"]
 
 
+async def test_definition_versions_name_the_agent_that_made_them(cockpit: Cockpit) -> None:
+    fid = cockpit.fid
+    definition.definition_for(cockpit.deps, fid)
+    sentinel = cockpit.world.id("lead_b")
+    definition.set_values(cockpit.deps, fid, {"loops.review.rounds": 2}, created_by=sentinel)
+    definition.set_values(cockpit.deps, fid, {"loops.review.rounds": 3}, created_by="alice")
+
+    resp = await cockpit.client.get(
+        f"{_base(cockpit)}/definition/versions", headers={"X-Test-User": "alice"}
+    )
+
+    assert resp.status_code == 200, resp.text
+    by = {v["version"]: (v["created_by"], v["created_by_title"]) for v in resp.json()["data"]}
+    assert by[2] == (sentinel, "Lead B · Sentinel")
+    assert by[3] == ("alice", None) and by[1] == ("server", None)
+
+
 async def test_versions_need_read_access(cockpit: Cockpit) -> None:
     resp = await _get(cockpit, "/versions", user="bob")
     assert resp.status_code in (403, 404)
@@ -102,6 +119,8 @@ async def test_bundle_drift_names_members_on_an_older_bundle(cockpit: Cockpit) -
     assert first["running"].endswith("0ld0ld0ld0ld") and first["current"] != first["running"]
     atlas = next(m for m in body["members"] if m["session_id"] == world.id("lead_a"))
     assert atlas["drift"] is False
+    # Agent ids are opaque; the cockpit names a bundle by its agent.
+    assert (first["bundle"], atlas["bundle"]) == ("factory-pl", "factory-lead")
 
 
 # ── Scorecard ──────────────────────────────────────────────────

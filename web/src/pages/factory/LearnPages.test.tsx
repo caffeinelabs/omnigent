@@ -362,6 +362,19 @@ describe("Improvements", () => {
     expect(screen.getByTestId("improvements-tier2")).toHaveAttribute("data-enabled", "false");
   });
 
+  it("lets an owner dismiss a code change recorded while Tier 2 is off", async () => {
+    serve("creator", {
+      [`POST ${SNAPSHOT}/proposals/C-16/reject`]: () => json({ proposal: {}, decision: null }),
+    });
+    renderAt("/improvements?tab=proposed");
+
+    const dismiss = await screen.findByTestId("proposal-C-16-reject");
+    expect(dismiss).toHaveTextContent("Dismiss");
+    fireEvent.click(dismiss);
+
+    await waitFor(() => expect(sent("POST", `${SNAPSHOT}/proposals/C-16/reject`)).toEqual([{}]));
+  });
+
   it.each(["viewer", "operator"] as const)("disables every Tier-1 lever for a %s", async (role) => {
     serve(role);
     renderAt("/improvements?tab=proposed");

@@ -167,7 +167,59 @@ async def record_platform_version(
         "new" if created else "unchanged",
         bundles or "no bundles",
     )
+    if created:
+        await announce_version(app_state, deps, version)
     return version
+
+
+def _changed_bundles(old: FactoryVersion | None, new: FactoryVersion) -> list[str]:
+    before = old.bundles if old is not None else {}
+    return sorted(
+        name
+        for name, row in new.bundles.items()
+        if (before.get(name) or {}).get("content_sha") != (row or {}).get("content_sha")
+    )
+
+
+async def announce_version(app_state: Any, deps: FactoryDeps, version: FactoryVersion) -> int:
+    """
+    Emit ``version.changed`` in every factory when a new platform version replaces an older one.
+
+    The first version a server ever records is no change. Never raises.
+
+    :returns: How many factories were told.
+    """
+    from omnigent.server.factory import events
+    from omnigent.server.factory.snapshot import list_factory_roots
+
+    try:
+        recent = await asyncio.to_thread(deps.factory_store.list_versions, 5)
+        previous = next((v for v in recent if v.id != version.id), None)
+        if previous is None:
+            return 0
+        roots = await asyncio.to_thread(list_factory_roots, deps.conversation_store)
+    except Exception:  # noqa: BLE001 - telemetry must not block startup
+        _logger.warning(
+            "factory: could not announce platform version %s", version.id, exc_info=True
+        )
+        return 0
+    changed = _changed_bundles(previous, version)
+    label = version.image_tag or version.id[:8]
+    summary = f"platform version {label}" + (f": {', '.join(changed)} changed" if changed else "")
+    data = {
+        "version_id": version.id,
+        "previous": previous.id,
+        "image_tag": version.image_tag,
+        "server_sha": version.server_sha,
+        "bundles_changed": changed,
+        "by": "server",
+        "by_kind": "server",
+    }
+    for root in roots:
+        await events.emit(
+            app_state, root.id, "version.changed", summary=summary, data=data, subject="factory"
+        )
+    return len(roots)
 
 
 def current_version_id() -> str | None:

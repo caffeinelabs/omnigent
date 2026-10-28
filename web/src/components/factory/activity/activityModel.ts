@@ -8,12 +8,31 @@ export const ACTIVITY_KIND_GROUPS = [
   { id: "messages", label: "Messages", patterns: ["message.*", "notice.*", "rate_limited"] },
   { id: "dispatch", label: "Dispatch", patterns: ["dispatch", "task.*"] },
   { id: "gates", label: "Gates", patterns: ["gate.*", "pr.*", "stage.*"] },
-  { id: "previews", label: "Previews & demos", patterns: ["preview.*", "demo.*", "env.*"] },
+  {
+    id: "previews",
+    label: "Previews & demos",
+    patterns: ["preview.*", "demo.*", "env.*", "base.*"],
+  },
   { id: "decisions", label: "Decisions", patterns: ["decision.*"] },
+  { id: "chat", label: "Chat", patterns: ["chat.*"] },
+  {
+    id: "proposals",
+    label: "Proposals",
+    patterns: [
+      "proposal.*",
+      "definition.*",
+      "rules.*",
+      "version.*",
+      "label.changed",
+      "feedback.*",
+      "retro.*",
+    ],
+  },
   { id: "loops", label: "Tasks & loops", patterns: ["loop.*", "engine.*", "budget.*"] },
   { id: "alerts", label: "Alerts", patterns: ["alert.*", "needs_human", "needs_human.*"] },
   { id: "issues", label: "Issues", patterns: ["issue.*", "agent.repeat"] },
   { id: "controls", label: "Controls", patterns: ["control.*", "factory.*", "project.*"] },
+  { id: "people", label: "People", patterns: ["people.*", "access.*", "member.*"] },
   { id: "heartbeats", label: "Heartbeats", patterns: ["heartbeat.*"] },
 ] as const;
 

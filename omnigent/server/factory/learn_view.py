@@ -86,8 +86,9 @@ def bundle_drift(
     deps: FactoryDeps, factory_id: str, hidden_projects: frozenset[str] = frozenset()
 ) -> dict[str, Any]:
     """
-    :returns: ``{members: [{session_id, title, role, project, running, current,
-        drift}], drifted}`` for the live members of the factory (hidden projects left out).
+    :returns: ``{members: [{session_id, title, bundle (the agent's name), role,
+        project, running, current, drift}], drifted}`` for the live members of the
+        factory (hidden projects left out).
     """
     from omnigent.server.factory.membership import factory_members
 
@@ -101,10 +102,12 @@ def bundle_drift(
             continue
         running = labels.get(LABEL_BUNDLE) or None
         current = versions.labels_for_agent(deps.agent_store, member.agent_id).get(LABEL_BUNDLE)
+        agent = deps.agent_store.get(member.agent_id) if member.agent_id else None
         out.append(
             {
                 "session_id": member.id,
                 "title": display_title(member.title, member.id),
+                "bundle": agent.name if agent is not None else None,
                 "role": labels.get(LABEL_ROLE) or None,
                 "project": project,
                 "running": running,

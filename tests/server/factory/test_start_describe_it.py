@@ -14,7 +14,7 @@ import pytest
 import pytest_asyncio
 
 from omnigent.server.auth import LEVEL_OWNER
-from omnigent.server.factory import autonomy, tasks
+from omnigent.server.factory import autonomy, definition, tasks
 from omnigent.server.factory.charter import DEFAULT_BASE_ENV
 from tests.server.factory.cockpit_helpers import Cockpit, build_cockpit
 from tests.server.factory.conftest import FactoryWorld
@@ -59,13 +59,31 @@ async def test_autonomy_and_engine_mode_land_on_the_root(cockpit: Cockpit) -> No
     )
 
     assert resp.status_code == 201, resp.text
-    labels = cockpit.world.get("atlas").labels
-    assert labels[autonomy.LABEL_AUTONOMY] == "grace"
-    assert labels[tasks.LABEL_ENGINE_MODE] == "observe"
+    # The start's events resolve the definition, which takes the modes in from the root labels.
+    assert definition.autonomy_mode(cockpit.deps, root) == "grace"
+    assert definition.engine_mode(cockpit.deps, root) == "observe"
     rows = {p.slug for p in cockpit.store.list_projects(root)}
     assert rows == {"base-env"}
     [first] = cockpit.store.list_chat(root, "factory", limit=5)[:1]
     assert first.body == "Show the deployed versions in Settings."
+
+
+async def test_modes_win_over_a_definition_seeded_before_the_start(cockpit: Cockpit) -> None:
+    from omnigent import factory as F
+
+    root = _lead(cockpit)
+    # Lazy enrolment, then a supervisor tick, resolve the definition before the start.
+    cockpit.world.store.set_labels(root, {F.LABEL_ID: root, F.LABEL_ROLE: F.ROLE_LEAD})
+    seeded = definition.definition_for(cockpit.deps, root, fresh=True)
+    assert seeded is not None and seeded.get("engine.mode") == "assist"
+
+    resp = await cockpit.post(
+        "/v1/factory/factories", _describe(root, autonomy="grace", engine_mode="observe")
+    )
+
+    assert resp.status_code == 201, resp.text
+    assert definition.engine_mode(cockpit.deps, root) == "observe"
+    assert definition.autonomy_mode(cockpit.deps, root) == "grace"
 
 
 async def test_unset_modes_keep_the_defaults(cockpit: Cockpit) -> None:

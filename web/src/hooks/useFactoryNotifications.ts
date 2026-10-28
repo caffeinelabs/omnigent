@@ -1,8 +1,9 @@
 // Browser notifications for the factory while its page is in a background tab:
 // a new blocking decision, a PR that turned ready for review, a demo that was
-// published. In a shared factory only what is for me or my role notifies:
-// decisions assigned to me (or to operators/owners when I hold that role),
-// reviews for those who may review, and member deaths for owners. Items are
+// published, a Room message that @mentions me. In a shared factory only what
+// is for me or my role notifies: decisions assigned to me (or to
+// operators/owners when I hold that role), reviews for those who may review,
+// and member deaths and exhausted loops for owners. Items are
 // diffed by id between query updates; whatever is already there when the page
 // mounts never notifies. Permission is requested once, app-wide, by
 // useIdleNotifications.
@@ -13,6 +14,7 @@ import type {
   DecisionView,
   FactorySnapshot,
   OpenDecisionItem,
+  ThreadView,
   ViewerBlock,
 } from "@/lib/factoryApi";
 import { useNavigate } from "@/lib/routing";
@@ -84,6 +86,17 @@ export function snapshotNotices(snapshot: FactorySnapshot): FactoryNotice[] {
         path: `/factory/${fid}`,
       });
     }
+    // A budget that ran out is the owners' to raise (or to stop the work).
+    for (const p of snapshot.projects) {
+      const exhausted = p.loops_summary?.exhausted ?? 0;
+      if (exhausted <= 0) continue;
+      notices.push({
+        key: `exhausted:${p.slug}:${exhausted}`,
+        title: `${name} · ${p.slug}: ${exhausted === 1 ? "a loop" : `${exhausted} loops`} out of budget`,
+        body: "Raise the budget, switch vendor, restart fresh or abandon the task.",
+        path: `/factory/${fid}/projects/${encodeURIComponent(p.slug)}#loops`,
+      });
+    }
   }
   if (viewer && !viewer.can.review) return notices;
   for (const pr of snapshot.prs) {
@@ -106,6 +119,26 @@ export function snapshotNotices(snapshot: FactorySnapshot): FactoryNotice[] {
     }
   }
   return notices;
+}
+
+/** Room messages that @mention the viewer and are still unread, one per thread. */
+export function mentionNotices(
+  factoryId: string,
+  factoryName: string,
+  threads: ThreadView[] | undefined,
+): FactoryNotice[] {
+  return (threads ?? []).flatMap((thread) =>
+    thread.mention
+      ? [
+          {
+            key: `mention:${thread.key}:${thread.mention.seq}`,
+            title: `${factoryName} · ${thread.title} mentions you`,
+            body: thread.mention.body,
+            path: `/factory/${factoryId}/room/${encodeURIComponent(thread.key)}`,
+          },
+        ]
+      : [],
+  );
 }
 
 /** Notices from the Inbox's open decisions (every factory): the blocking ones for me. */

@@ -3,7 +3,7 @@
  * proposed and co-signed it, its class, the evidence and the metric it
  * should move, and the levers its state offers. On trial: progress, the live
  * scorecard, Keep now and Revert. Pending: Approve trial, Edit, Reject.
- * Code (Tier 2 off): the reason and "Copy as issue". Owners pull every lever;
+ * Code (Tier 2 off): the reason, Dismiss and "Copy as issue". Owners pull every lever;
  * everyone else sees them disabled with who can.
  */
 
@@ -161,6 +161,8 @@ export function LearnProposalCard({
   const code = proposal.kind === "code";
   // A code change runs through a decision only while Tier 2 is on.
   const pending = proposal.status === "pending" && (!code || Boolean(proposal.decision_id));
+  // Recorded while Tier 2 is off: owners can still dismiss it.
+  const recorded = code && proposal.status === "pending" && !proposal.decision_id;
   const revertable = !code && ["trial", "applied", "kept"].includes(proposal.status);
   const effect = effectText(proposal);
   const busy = decide.isPending || answer.isPending;
@@ -357,7 +359,7 @@ export function LearnProposalCard({
             </Button>
           </ReasonGated>
         )}
-        {pending && (
+        {(pending || recorded) && (
           <ReasonGated reason={ownerReason} testId={`proposal-${proposal.ref}-reject`}>
             <Button
               size="sm"
@@ -369,7 +371,7 @@ export function LearnProposalCard({
               className="text-muted-foreground"
             >
               <XIcon />
-              Reject
+              {recorded ? "Dismiss" : "Reject"}
             </Button>
           </ReasonGated>
         )}

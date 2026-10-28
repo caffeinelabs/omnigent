@@ -47,12 +47,19 @@ export function StageDots({
   const tone = stageTone(project.stage, project.overlay);
   const age = formatElapsed(nowS - project.stage_since);
   const running = project.pl?.running === true;
+  // A project held on its dependencies says so instead of a bare "Queued".
+  const waiting = project.overlay === "waiting";
+  const deps = project.depends_on ?? [];
+  const label = waiting ? "Waiting" : STAGE_SHORT_LABEL[project.stage];
+  const title = waiting
+    ? `Waiting on ${deps.length ? deps.join(", ") : "its dependencies"}`
+    : `${STAGE_SHORT_LABEL[project.stage]}${project.overlay ? ` · ${project.overlay}` : ""}`;
   return (
     <span
       data-testid={`stage-dots-${project.slug}`}
       data-stage={project.stage}
       className="inline-flex min-w-0 items-center gap-2"
-      title={`${STAGE_SHORT_LABEL[project.stage]}${project.overlay ? ` · ${project.overlay}` : ""}`}
+      title={title}
     >
       <span aria-hidden className="inline-flex shrink-0 items-center gap-[3px]">
         {stepStates(project.stage).map(({ stage, state }) => (
@@ -73,9 +80,7 @@ export function StageDots({
           />
         ))}
       </span>
-      <span className={cn("shrink-0 text-sm", LABEL_TONE[tone])}>
-        {STAGE_SHORT_LABEL[project.stage]}
-      </span>
+      <span className={cn("shrink-0 text-sm", LABEL_TONE[tone])}>{label}</span>
       {showAge && age && (
         <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{age}</span>
       )}

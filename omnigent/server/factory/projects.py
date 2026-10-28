@@ -35,6 +35,7 @@ from omnigent.server.factory.charter import (
 )
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError, human_name
+from omnigent.server.factory.telemetry import spans
 from omnigent.stores.factory_store import norm_id, now_s
 
 _logger = logging.getLogger(__name__)
@@ -386,6 +387,7 @@ async def create_project_core(
         fields["created_by"] = actor.id if actor.kind != "human" else actor_name(actor)
         if parent_slug:
             fields["parent_slug"] = parent_slug
+        fields.update(await asyncio.to_thread(spans.stamps, deps, root.id))
         row = await asyncio.to_thread(store.upsert_project, root.id, project.slug, **fields)
     started = Started("none")
     if spawn_now:
