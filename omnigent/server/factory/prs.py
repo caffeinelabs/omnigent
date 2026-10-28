@@ -675,6 +675,10 @@ async def apply_refresh(
         return None
     # Telemetry: pr, pr_round and gate spans from this refresh's history (never raises).
     await record_refresh(app_state, updated, pr_json, gates, demos, now=now)
+    # Work graph: the PR's branch names its task; the task follows the PR (never raises).
+    from omnigent.server.factory import binder
+
+    await binder.on_pr(app_state, row, updated)
     await _announce(app_state, deps, scope, row, updated, report, review, out)
     return updated
 

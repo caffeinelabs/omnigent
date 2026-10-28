@@ -56,7 +56,7 @@ from omnigent.factory import (
     STATE_ACTIVE,
     STATES,
 )
-from omnigent.server.factory import activity_now, detectors, schemas, status
+from omnigent.server.factory import activity_now, detectors, schemas, status, tasks
 from omnigent.server.factory.activity_now import factory_usd_per_h
 from omnigent.server.factory.base import base_view
 from omnigent.server.factory.charter import normalize_charter
@@ -897,6 +897,12 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
     pr_views = [
         _pr_view(pr, demos_by_pr.get((pr.repo, pr.number), []), titles) for pr in loaded.prs
     ]
+    # Work graph: each project's tasks summary and each PR's task.
+    task_summaries, task_refs = await asyncio.to_thread(tasks.snapshot_fields, deps, factory_id)
+    for view in project_views:
+        view["tasks_summary"] = task_summaries.get(view["slug"])
+    for pr, view in zip(loaded.prs, pr_views, strict=True):
+        view["task_id"], view["task_ref"] = pr.task_id, task_refs.get(pr.task_id or "")
 
     delivered_to = {
         (e.data or {}).get("mail_id", ""): e.to_id

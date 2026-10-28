@@ -15,6 +15,23 @@ env tracks origin/<base>. Pass it on every dispatch, never assume `main`:
   `MERGED pr=<n> base=<base>`;
 - ICs and reviewers: the task card's `Base: <base>` line.
 
+## Work graph (server truth)
+
+The server owns the tasks (`T-<n>`), their dependencies and states
+(planned → ready → running → review → done; blocked, failed, cancelled).
+- KICKOFF: one task per reviewable change, from the DoD:
+  `sys_factory_task(op="upsert", tasks=[...])`. `key` is the branch suffix;
+  `deps` are task keys, `project:<slug>` or `decision:D-<n>`; `scope` globs
+  must not overlap between parallel tasks (a `scope_overlap` warning
+  serializes them). A cycle or unknown dependency is refused: fix and resend.
+- Dispatch only the wave of `sys_factory_task(op="ready")`: `start` the task,
+  then send `title_to_use`, `card_text` (the server's card) and `cost_budget`
+  verbatim. Never invent a title: an unknown one becomes an ad-hoc task and a
+  warning. Re-dispatches call `start` again (`<key>-r<k>`).
+- Close with `op="done"` when its DoD item holds without a PR, `fail` or
+  `cancel` with a note; a merged PR closes its task by itself.
+- A person's `[Factory control · TASK ADD|TASK EDIT …]` already changed the graph.
+
 ## plan.md (`~/factory/<slug>/plan.md`)
 
 ```
@@ -26,9 +43,9 @@ Dev env: <env_keeper session id> · <starting|READY|FAILED|DOWN> · <urls from E
 ## Milestones
 1. [ ] <milestone> (tasks: t1, t2)
 
-## Tasks
-| id | harness | session | state | PR | head | review | preview | demo | handover | notes |
-|----|---------|---------|-------|----|------|--------|---------|------|----------|-------|
+## Task notes (states live on the server: sys_factory_task(op="list"))
+| id | session | PR | head | review | preview | demo | handover | notes |
+|----|---------|----|------|--------|---------|------|----------|-------|
 
 `preview` is `-`, `p<n> <sha7>` or `parked`; `demo` is `-`, `PASS|PARTIAL|FAIL <sha7> <demo url>`;
 `handover` is `-`, `ready <iso>` or `merged <sha7>`.
@@ -38,7 +55,7 @@ Dev env: <env_keeper session id> · <starting|READY|FAILED|DOWN> · <urls from E
 ## Log (newest first; prune to 30 lines)
 ```
 
-## Task card (the IC's input)
+## Task card (the IC's input; `card_text` renders it from the task)
 
 ```
 TASK <id> · <title>
@@ -89,8 +106,8 @@ Report: the RESULT block
   `"/goal <condition>"`, and `/goal` is the first token. Put the whole task
   card, the acceptance commands and the PR requirement inside the condition.
   Never use it for reviews or demos.
-- Always set a task-based `title` (`version-route`, `review-version-route`,
-  `demo-version-route`), never a vendor name.
+- Always dispatch with the task's `title_to_use` (`version-route`,
+  `version-route-r1`); reviews and demos use `review-<key>` and `demo-<key>`.
 
 ## Pipeline: review → preview → demo → handover
 

@@ -83,6 +83,8 @@ def scopes_for(kind: str) -> list[str]:
         scopes.append("people")
     if kind.startswith("proposal."):
         scopes += ["proposals", "decisions"]
+    if kind.startswith(("task.", "control.task_")):
+        scopes.append("tasks")
     return scopes
 
 

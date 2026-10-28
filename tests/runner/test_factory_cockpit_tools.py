@@ -951,3 +951,128 @@ async def test_project_attaches_the_planner_analysis(
     assert call.body["analysis"] == {"hub_files": ["src/app.ts"]}
     assert "analysis_file" not in call.body
     assert refused["error"] == "file_not_allowed"
+
+
+# ── sys_factory_task (the work graph) ─────────────────────────────────────────
+
+
+def test_task_schema_and_description() -> None:
+    from omnigent.tools.builtins.factory import SysFactoryTaskTool
+
+    params = _params(SysFactoryTaskTool)
+    assert params["required"] == ["op"]
+    assert params["properties"]["op"]["enum"] == [
+        "upsert",
+        "ready",
+        "start",
+        "done",
+        "fail",
+        "cancel",
+        "get",
+        "list",
+        "report",
+    ]
+    assert params["properties"]["tasks"]["maxItems"] == 30
+    item = params["properties"]["tasks"]["items"]
+    assert item["required"] == ["key"]
+    assert {"key", "deps", "scope", "acceptance", "env_checks", "do", "harness"} <= set(
+        item["properties"]
+    )
+    assert params["properties"]["result"]["enum"] == ["PASS", "FAIL", "BLOCKED"]
+    text = SysFactoryTaskTool.description()
+    for token in ("title_to_use", "card_text", "cost_budget", "op='report'", "not_ready"):
+        assert token in text, token
+
+
+async def test_task_upsert_puts_the_tasks_with_the_caller() -> None:
+    reply = {"created": ["route"], "ready": ["route"], "waves": [["route"]]}
+    server = FakeServer().on("PUT", "/v1/factory/agent/tasks", body=reply)
+    tasks = [{"key": "route", "deps": [], "acceptance": ["pnpm test"]}]
+    out = await _call(server, "sys_factory_task", {"op": "upsert", "tasks": tasks})
+    assert out == reply
+    [call] = server.requests
+    assert call.body == {"from_session_id": PL, "tasks": tasks}
+
+
+async def test_task_reads_use_the_view_parameter() -> None:
+    server = (
+        FakeServer()
+        .on("GET", "/v1/factory/agent/tasks", body={"wave": []})
+        .on("GET", "/v1/factory/agent/tasks", body={"task": {"key": "route"}})
+        .on("GET", "/v1/factory/agent/tasks", body={"tasks": []})
+    )
+    await _call(server, "sys_factory_task", {"op": "ready"})
+    await _call(server, "sys_factory_task", {"op": "get", "key": "route"})
+    await _call(server, "sys_factory_task", {"op": "list", "project": "db"}, role="lead")
+    assert [r.params for r in server.requests] == [
+        {"from_session_id": PL, "view": "ready"},
+        {"from_session_id": PL, "view": "get", "key": "route"},
+        {"from_session_id": PL, "view": "list", "project": "db"},
+    ]
+
+
+async def test_task_transitions_post_to_the_key() -> None:
+    reply = {"title_to_use": "route-r1", "attempt": 2, "card_text": "TASK route"}
+    server = (
+        FakeServer()
+        .on("POST", "/v1/factory/agent/tasks/route/start", body=reply)
+        .on("POST", "/v1/factory/agent/tasks/route/report", body={"recorded": "BLOCKED"})
+    )
+    out = await _call(server, "sys_factory_task", {"op": "start", "key": "route", "harness": "ic"})
+    assert out == reply
+    await _call(
+        server,
+        "sys_factory_task",
+        {"op": "report", "key": "route", "result": "BLOCKED", "note": "  no db  "},
+        role="ic",
+    )
+    assert server.requests[0].body == {"from_session_id": PL, "harness": "ic"}
+    assert server.requests[1].body == {
+        "from_session_id": PL,
+        "result": "BLOCKED",
+        "note": "no db",
+    }
+
+
+@pytest.mark.parametrize(
+    ("args", "needle"),
+    [
+        ({}, "'op' must be one of"),
+        ({"op": "upsert"}, "non-empty 'tasks'"),
+        ({"op": "start"}, "needs the task 'key'"),
+        ({"op": "done", "key": "../../sessions"}, "needs the task 'key'"),
+        ({"op": "get", "key": "Route"}, "needs the task 'key'"),
+    ],
+)
+async def test_task_validates_locally(args: dict[str, Any], needle: str) -> None:
+    server = FakeServer()
+    out = await _call(server, "sys_factory_task", args)
+    assert needle in json.dumps(out)
+    assert server.requests == []
+
+
+async def test_task_server_errors_keep_their_code_and_extras() -> None:
+    body = {"error": {"code": "cycle", "message": "a → b → a"}, "path": ["a", "b", "a"]}
+    server = FakeServer().on("PUT", "/v1/factory/agent/tasks", status=409, body=body)
+    out = await _call(server, "sys_factory_task", {"op": "upsert", "tasks": [{"key": "a"}]})
+    assert out["error"] == "cycle" and out["status"] == 409
+    assert out["path"] == ["a", "b", "a"]
+
+
+@pytest.mark.parametrize(
+    ("role", "has"),
+    [
+        ("lead", True),
+        ("project_lead", True),
+        ("ic", True),
+        ("env_keeper", False),
+        ("reviewer", False),
+        ("demo", False),
+        ("planner", False),
+    ],
+)
+def test_task_tool_follows_the_role_matrix(role: str, has: bool) -> None:
+    from omnigent.tools.manager import ToolManager
+
+    names = set(ToolManager(factory_spec(role)).get_tool_names())
+    assert ("sys_factory_task" in names) is has

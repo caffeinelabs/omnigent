@@ -260,6 +260,8 @@ if they stay silent the board is still right.
 | `GET /v1/factory/demos/{demo_id}/files/{file_id}` | human (READ on the PL) | Demo files with Range/206 (a ranged read of the store) and ETag; only images and video inline, never HTML or SVG. |
 | `POST /v1/factory/agent/decisions`, `POST …/agent/prs`, `PUT …/agent/envs`, `POST …/agent/demos` (multipart), `GET …/agent/charter` | runner (the tools below) | Agent reports. |
 | `POST /v1/factory/agent/proposals`, `GET …/agent/projects` | runner (`sys_factory_project`) | Propose project changes; leads for every project, a PL for its own. |
+| `GET /v1/factory/factories/{fid}/tasks?project=`, `POST …/{fid}/tasks`, `PATCH …/{fid}/tasks/{id or T-n}`, `GET …/{fid}/graph?kind=work\|bus\|flow\|org&project=&window=` | human (READ; EDIT and human origin to write) | The work graph (see below); adds and edits mail the PL `[Factory control · TASK ADD\|TASK EDIT …]`. |
+| `PUT /v1/factory/agent/tasks`, `GET …/agent/tasks?view=list\|ready\|get`, `POST …/agent/tasks/{key}/start\|done\|fail\|cancel\|report` | runner (`sys_factory_task`) | The PL writes its project's tasks; leads read; the bound worker reports. |
 | `GET /v1/factory/preflight` | human | GitHub connected, agents seeded, sandbox host, factory enabled; `default_repo`, `default_base` and `max_projects` for the start form. |
 | `GET /v1/factory/factories/{fid}/spans?kind=&project=&pr_id=&task_id=&since=`, `GET /v1/factory/prs/{id}/timeline`, `GET …/{fid}/cost?group_by=day,project,role,agent,model`, `GET …/{fid}/export?tables=&format=ndjson\|csv` | human (READ on the root; hidden projects dropped) | Telemetry (see below). The export streams and never carries transcript content. |
 
@@ -271,6 +273,7 @@ if they stay silent the board is still right.
 | `sys_factory_pr(url, task?, claim?, sentinel_verdict?, head_sha?, note?)` | every role (`sentinel_verdict`: leads) | Register a PR, claim `opened` / `ready_for_human_merge` / `abandoned`, or record Sentinel's verdict. Returns the server's gates `{ready, gates, reasons, claim_mismatch}` and the PR body's review links (`review_url`, `preview_url`). |
 | `sys_factory_env(state, env_id, urls, deployed{sha, ref, tooling_overlay?}, pr?, namespace?, resources?, note?)` | `project_lead`, `env_keeper` | Report the dev env (no `pr`) or the factory preview of PR `pr`. `state=deploying` beyond `OMNIGENT_FACTORY_MAX_PREVIEWS` live previews is refused with `409 preview_cap` and park candidates. |
 | `sys_factory_demo(pr_url, head_sha, title, manifest_path?, files?, …)` | `project_lead`, `env_keeper`, `demo` | Upload a demo (with `manifest_path`, everything the harness's `demo.json` lists) and get back `comment_markdown` / `comment_path` to post on the PR. |
+| `sys_factory_task(op, tasks?, key?, project?, harness?, result?, note?)` | `project_lead` (own project), `lead` (`get`, `list`), `ic` (`report` on its own task) | The work graph: `upsert`, `ready` (the wave with `title_to_use`, `card_text`, `cost_budget`), `start`, `done`, `fail`, `cancel`, `get`, `list`, `report`. |
 | `sys_factory_set(stage=…)` | `project_lead` on itself | Claim the project's stage; the cockpit shows it next to the stage it derives. |
 | `sys_factory_project(changes, rationale, reason?, reply_to?, analysis_file?, dedupe_key?, withdraw?)` | `lead` (every op), `project_lead` (update, split or cancel of its own project) | Propose 1-12 project changes as one `C-<n>`; no arguments lists the projects. |
 
@@ -615,6 +618,46 @@ Durable facts every metric builds on (`omnigent/server/factory/telemetry/`):
   text (mail, reasons, blockers, free-text labels) and free-text data keys
   are left out; CSV cells that start with `= + - @` are prefixed with `'`.
 
+## Work graph
+
+Tasks are a server entity (`factory_tasks`, `T-<n>`), not rows in a PL's
+`plan.md` (`omnigent/server/factory/tasks.py`, `graph.py`, `binder.py`):
+
+- **Tasks.** A PL registers its project's tasks at kickoff
+  (`sys_factory_task(op="upsert")`): `key` (the branch suffix of
+  `factory/<slug>/<key>`), kind, card (do, acceptance, env checks, preview,
+  demo focus, harness), `deps` (task keys, `project:<slug>`,
+  `decision:D-<n>`), scope globs, priority and estimate. A cycle is refused
+  with 409 `cycle` and its path, an unknown dependency with 422 `unknown_dep`.
+  States: planned → ready → running → review → done, or blocked, failed,
+  cancelled.
+- **Computations** (pure, `graph.py`): the ready set; waves (a layered
+  topological order capped by free IC and preview slots, with implicit
+  serialization edges between same-wave tasks whose scope globs overlap);
+  the critical path (weights: the observed p50 of the task kind once 5 tasks
+  ran, else the estimate, else 60 min); `scope_overlap` and `hub_file`
+  (from a planner analysis) warnings.
+- **Dispatch.** `op="ready"` returns the wave to start now with the
+  server-rendered `card_text` (base, acceptance, rules, budget left) and
+  `title_to_use` (`<key>`, then `<key>-r<k>`); `op="start"` counts the
+  attempt. `cost_budget` rides along only in `enforce` engine mode, never for
+  `ic_codex`. Budgets are read here; the loop engine enforces them.
+- **Binder.** Every dispatched sub-agent of a PL binds by title on
+  `dispatch`, `task.done`/`task.failed` and each supervisor tick: `<key>`,
+  `<key>-r<k>` (implement attempt k+1), `review-<key>`, `demo-<key>`; team
+  names (`env`, env_keeper) bind nothing; anything else becomes an ad-hoc task
+  plus a `task.unplanned` warning. PRs bind by branch into
+  `factory_prs.task_id`; an open PR moves its task to review and a merge
+  (a human's included) closes it. Bound sub-agent `task` spans carry the task.
+- **People** add and edit tasks in the cockpit (`POST|PATCH
+  /factories/{fid}/tasks`, EDIT, human origin); the PL gets
+  `[Factory control · TASK ADD|TASK EDIT · by …]` with the diff.
+- **Graphs.** `GET /factories/{fid}/graph?kind=work|bus|flow|org`: the work
+  graph; the bus (message edges with counts, p50 reply latency, bounces,
+  unanswered requests; spawn, supervise, alert and waits-on edges); the flow
+  (`plan → build → review → verify → demo → ready → merged` with counts now,
+  p50 dwell, dollars and loop back-edges from spans); the org (every depth).
+
 ## Safety
 
 - **`factory_role_guard`** ([`policies/builtins/factory.py`](../omnigent/policies/builtins/factory.py))
@@ -800,6 +843,7 @@ with a managed sandbox launcher configured.
 | Tier-0 invariants | `omnigent/policies/builtins/factory_invariants.py`, `omnigent/server/factory/origin.py`, `custom_bundle.py`, `omnigent/server/bundles.py` | `tests/policies/test_factory_invariants.py`, `tests/server/factory/test_human_origin.py`, `tests/server/test_bundle_validation_factory.py` |
 | Org chart and badges | `omnigent/server/factory/org_chart.py`, `web/src/lib/factory.ts` | `tests/server/routes/test_child_sessions_include_factory.py`, web tests |
 | Base lane and demo mirror | `omnigent/server/factory/base.py`, `demo_mirror.py`, `omnigent/factory_gates.py` (`base` gate) | `tests/server/factory/test_base_watcher.py`, `test_demo_mirror.py`, `tests/test_factory_gates.py` |
+| Work graph | `omnigent/server/factory/tasks.py`, `graph.py`, `binder.py`, `api/tasks.py`, `api/graph.py` | `tests/server/factory/test_graph.py`, `test_binder.py`, `test_tasks_routes.py`, `test_graph_api.py` |
 | Telemetry | `omnigent/server/factory/telemetry/`, `api/telemetry_read.py`, `background/prune.py` | `tests/server/factory/test_telemetry_*.py` (replays `fixtures/live_run_2026_10_26.json`), `test_prune.py` |
 | Bundles | `examples/factory/` | `tests/examples/`, `tests/server/factory/test_factory_agents_listed.py` |
 | Demo harness | `examples/factory/factory-pl/agents/demo/skills/factory-demo/harness/` | `tests/examples/test_factory_demo_harness.py` (runs `factory_demo_harness.test.mjs` under `node --test`); `node run.mjs --selftest` records real demos of a local fixture |

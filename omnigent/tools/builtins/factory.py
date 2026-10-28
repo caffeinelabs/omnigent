@@ -6,8 +6,10 @@ These classes are schema-only: the runner dispatches every call to the server's
 :mod:`omnigent.runner.factory_dispatch`. ``ToolManager`` registers them only for
 specs that declare ``executor.config.factory_role``: ``sys_factory_spawn`` is
 lead-only, ``sys_factory_env`` is for the project lead and env_keeper,
-``sys_factory_demo`` for those two and the demo role, and
-``sys_factory_project`` for the leads and project leads.
+``sys_factory_demo`` for those two and the demo role,
+``sys_factory_project`` for the leads and project leads, and
+``sys_factory_task`` (the work graph) for the leads (read), project leads and
+ICs (report).
 """
 
 from __future__ import annotations
@@ -50,6 +52,7 @@ SYS_FACTORY_PR: Final = "sys_factory_pr"
 SYS_FACTORY_ENV: Final = "sys_factory_env"
 SYS_FACTORY_DEMO: Final = "sys_factory_demo"
 SYS_FACTORY_PROJECT: Final = "sys_factory_project"
+SYS_FACTORY_TASK: Final = "sys_factory_task"
 FACTORY_TOOL_NAMES: Final = frozenset(
     {
         SYS_SESSION_POST,
@@ -61,6 +64,7 @@ FACTORY_TOOL_NAMES: Final = frozenset(
         SYS_FACTORY_ENV,
         SYS_FACTORY_DEMO,
         SYS_FACTORY_PROJECT,
+        SYS_FACTORY_TASK,
     }
 )
 SPAWN_ROLES: Final = (ROLE_PROJECT_LEAD, ROLE_LEAD)
@@ -866,6 +870,116 @@ class SysFactoryProjectTool(Tool):
                     },
                 },
                 "required": [],
+                "additionalProperties": False,
+            },
+        )
+
+
+TASK_OPS: Final = ("upsert", "ready", "start", "done", "fail", "cancel", "get", "list", "report")
+TASK_UPSERT_MAX: Final = 30
+
+
+class SysFactoryTaskTool(Tool):
+    """Read and write the project's work graph (tasks, dependencies, waves, cards)."""
+
+    @classmethod
+    def name(cls) -> str:
+        """:returns: ``"sys_factory_task"``."""
+        return SYS_FACTORY_TASK
+
+    @classmethod
+    def description(cls) -> str:
+        """:returns: Human-readable description of the tool."""
+        return (
+            "The work graph: the server owns your project's tasks, their dependencies and "
+            "states, and binds every sub-agent you dispatch to a task by its title. Project "
+            f"leads (own project): op='upsert' registers or updates up to {TASK_UPSERT_MAX} "
+            "tasks {key (the branch suffix, factory/<slug>/<key>), title, kind, do, deps "
+            "(task keys, 'project:<slug>', 'decision:D-<n>'), scope (path globs), "
+            "acceptance (commands run verbatim), env_checks, preview, demo_focus, harness, "
+            "estimate_min, priority} and answers {ready, waves, critical_path, warnings} "
+            "(a cycle is refused with its path, an unknown dependency with its name); "
+            "op='ready' returns the wave to dispatch now, each task with title_to_use, "
+            "harness, card_text and cost_budget when present, plus next_waves, blocked and "
+            "slots; op='start' (key) begins the next attempt and returns title_to_use, "
+            "attempt, of, usd_left and card_text (409 not_ready lists what it waits on); "
+            "dispatch with exactly those: sys_session_send(agent=<harness>, "
+            "title=<title_to_use>, args={input: <card_text>, cost_budget: <cost_budget>}). "
+            "op='done', 'fail' or 'cancel' (key, note) closes a task; a merged PR closes "
+            "its task by itself. op='get' (key) and op='list' read (leads: any project). "
+            "ICs: op='report' (key, result PASS|FAIL|BLOCKED, note) for the task you were "
+            "dispatched for."
+        )
+
+    def get_schema(self) -> dict[str, Any]:
+        """:returns: The OpenAI-format tool schema."""
+        text_list = {"type": "array", "items": {"type": "string"}}
+        task = {
+            "type": "object",
+            "properties": {
+                "key": {
+                    "type": "string",
+                    "pattern": "^[a-z0-9][a-z0-9-]{0,47}$",
+                    "description": "Branch suffix, e.g. 'version-route'.",
+                },
+                "title": {"type": "string", "maxLength": 256},
+                "kind": {
+                    "type": "string",
+                    "enum": ["implement", "test", "docs", "spike", "ops"],
+                    "default": "implement",
+                },
+                "do": {"type": "string", "maxLength": 4000, "description": "The precise change."},
+                "deps": {
+                    **text_list,
+                    "description": "Task keys, 'project:<slug>' or 'decision:D-<n>'.",
+                },
+                "scope": {**text_list, "description": "Path globs the worker may touch."},
+                "acceptance": {**text_list, "description": "Commands that must all pass."},
+                "env_checks": {
+                    **text_list,
+                    "description": "Checks env_keeper runs against the PR's preview.",
+                },
+                "preview": {"type": "boolean", "description": "The PR gets a factory preview."},
+                "demo_focus": {"type": "string", "maxLength": 1000},
+                "harness": {"type": "string", "enum": ["ic", "ic_codex"]},
+                "estimate_min": {"type": "integer", "minimum": 1, "maximum": 10080},
+                "priority": {"type": "integer", "minimum": 0, "maximum": 3},
+            },
+            "required": ["key"],
+            "additionalProperties": False,
+        }
+        return _function_schema(
+            self.name(),
+            self.description(),
+            {
+                "type": "object",
+                "properties": {
+                    "op": {"type": "string", "enum": list(TASK_OPS)},
+                    "tasks": {
+                        "type": "array",
+                        "items": task,
+                        "minItems": 1,
+                        "maxItems": TASK_UPSERT_MAX,
+                        "description": "upsert: the tasks to create or update.",
+                    },
+                    "key": {"type": "string", "description": "The task key (not for list)."},
+                    "project": {
+                        "type": "string",
+                        "description": "Leads: the project to read (list, get).",
+                    },
+                    "harness": {
+                        "type": "string",
+                        "enum": ["ic", "ic_codex"],
+                        "description": "start: switch the worker for this attempt.",
+                    },
+                    "result": {
+                        "type": "string",
+                        "enum": ["PASS", "FAIL", "BLOCKED"],
+                        "description": "report: your RESULT.",
+                    },
+                    "note": {"type": "string", "maxLength": 1000},
+                },
+                "required": ["op"],
                 "additionalProperties": False,
             },
         )

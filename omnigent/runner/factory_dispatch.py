@@ -83,7 +83,9 @@ from omnigent.tools.builtins.factory import (
     SYS_FACTORY_ROSTER,
     SYS_FACTORY_SET,
     SYS_FACTORY_SPAWN,
+    SYS_FACTORY_TASK,
     SYS_SESSION_POST,
+    TASK_OPS,
 )
 from omnigent.util.session_lifecycle import is_session_closed
 
@@ -155,6 +157,14 @@ _FACTORY_ERROR_CODES: Final = frozenset(
         "project_closed",
         "proposal_not_pending",
         "invalid_body",
+        "unknown_dep",
+        "unknown_task",
+        "not_ready",
+        "task_closed",
+        "not_your_task",
+        "task_exists",
+        "too_many_tasks",
+        "duplicate_key",
     }
 )
 # The server re-polls GitHub for up to 10 s before answering sys_factory_pr.
@@ -403,6 +413,8 @@ async def execute_factory_tool(
         return await _propose_projects(
             args, server_client=server_client, caller=conversation_id, workspace=workspace
         )
+    if tool_name == SYS_FACTORY_TASK:
+        return await _task(args, server_client=server_client, caller=conversation_id)
     return _error(f"unknown factory tool {tool_name!r}")
 
 
@@ -2003,3 +2015,51 @@ async def _propose_projects(
     return await _passthrough(
         server_client, "POST", "/v1/factory/agent/proposals", tool_name=tool, body=body
     )
+
+
+_TASK_KEY_RE: Final = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
+_TASK_WRITE_OPS: Final = frozenset({"start", "done", "fail", "cancel", "report"})
+
+
+async def _task(args: _JsonObject, *, server_client: httpx.AsyncClient, caller: str) -> str:
+    """
+    ``sys_factory_task``: the work graph's routes (``/v1/factory/agent/tasks``).
+
+    ``upsert`` is a PUT, ``ready``/``get``/``list`` are reads, and ``start``,
+    ``done``, ``fail``, ``cancel`` and ``report`` post to the task's key.
+    """
+    tool = SYS_FACTORY_TASK
+    op = args.get("op")
+    if op not in TASK_OPS:
+        return _error(f"{tool} 'op' must be one of {list(TASK_OPS)}")
+    key = args.get("key")
+    if op == "upsert":
+        items = args.get("tasks")
+        if not isinstance(items, list) or not items:
+            return _error(f"{tool} op='upsert' needs a non-empty 'tasks' list")
+        return await _passthrough(
+            server_client,
+            "PUT",
+            "/v1/factory/agent/tasks",
+            tool_name=tool,
+            body={"from_session_id": caller, "tasks": items},
+        )
+    if op in ("get", *_TASK_WRITE_OPS) and not (
+        isinstance(key, str) and _TASK_KEY_RE.fullmatch(key.strip())
+    ):
+        return _error(f"{tool} op={op!r} needs the task 'key' (its branch suffix)")
+    if op in ("ready", "get", "list"):
+        params: dict[str, str | int] = {"from_session_id": caller, "view": op}
+        if op == "get":
+            params["key"] = str(key).strip()
+        if isinstance(args.get("project"), str) and args["project"].strip():
+            params["project"] = args["project"].strip()
+        return await _passthrough(
+            server_client, "GET", "/v1/factory/agent/tasks", tool_name=tool, params=params
+        )
+    body: _JsonObject = {"from_session_id": caller}
+    for name in ("harness", "result", "note"):
+        if isinstance(args.get(name), str) and args[name].strip():
+            body[name] = args[name].strip()[:_NOTE_MAX] if name == "note" else args[name].strip()
+    path = f"/v1/factory/agent/tasks/{quote(str(key).strip(), safe='')}/{op}"
+    return await _passthrough(server_client, "POST", path, tool_name=tool, body=body)

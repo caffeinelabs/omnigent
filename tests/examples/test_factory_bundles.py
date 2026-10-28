@@ -1314,3 +1314,93 @@ def test_intervention_texts_have_pl_rows(pl: AgentSpec) -> None:
         plan = InterventionPlan(action=action, target=ic, **base)
         header = notice_text(plan).split("]", 1)[0] + "]"
         assert _row_pattern(notice_rows[0]).fullmatch(header), header
+
+
+# ── Round 3: the work graph is server truth ─────────────────────────────────
+
+
+def test_pl_dispatches_from_the_server_work_graph(pl: AgentSpec) -> None:
+    """KICKOFF registers tasks; every dispatch is a started task with its server card."""
+    prompt = " ".join((pl.instructions or "").split())
+    for token in (
+        "TASKS ARE SERVER TRUTH",
+        'sys_factory_task(op="upsert", tasks=[{key, title, do, deps, scope, acceptance',
+        'sys_factory_task(op="ready")',
+        'sys_factory_task(op="start", key=<key>)',
+        "sys_session_send(agent=<harness>, title=<title_to_use>, args={purpose: "
+        '"implement", input: <card_text>, cost_budget: <cost_budget>})',
+        "`title_to_use`, `card_text` and `cost_budget` verbatim",
+        "`~/factory/<slug>/plan.md` holds notes only",
+        "a re-dispatch calls `start` again",
+    ):
+        assert token in prompt, token
+    kickoff = prompt[prompt.index("KICKOFF. Do all of it") : prompt.index("LOOP on every")]
+    assert kickoff.index('op="upsert"') < kickoff.index('op="ready"') < kickoff.index('op="start"')
+    playbook = (_PL_DIR / "skills" / "factory-pl-playbook" / "SKILL.md").read_text("utf-8")
+    section = playbook.split("## Work graph (server truth)", 1)[1].split("\n## ", 1)[0]
+    assert len(section.strip().splitlines()) <= 20
+    for token in ('op="upsert"', 'op="ready"', "`start`", "title_to_use", "card_text", "ad-hoc"):
+        assert token in section, token
+    assert "states live on the server" in playbook
+
+
+def test_task_mails_and_the_ready_wake_have_rows(pl: AgentSpec) -> None:
+    """TASK ADD / TASK EDIT (people) and READY (the engine) each match a PL row."""
+    from omnigent.entities.factory import FactoryTask
+    from omnigent.server.factory.tasks import task_add_text, task_edit_text
+
+    prompt = " ".join((pl.instructions or "").split())
+    control = prompt[prompt.index("CONTROL (`[Factory control") : prompt.index("DONE, when")]
+    assert "TASK ADD, TASK EDIT: a person changed your work graph" in control
+    assert '`[Factory engine · READY · …]`: call `sys_factory_task(op="ready")`' in prompt
+    task = FactoryTask(
+        id="t" * 32, factory_id="f" * 32, number=7, project_slug="db", key="docs", title="Docs"
+    )
+    for text, label in (
+        (task_add_text("mia", task, "+x", []), "TASK ADD"),
+        (task_edit_text("mia", task, "-a\n+b"), "TASK EDIT"),
+    ):
+        header = text.split("]", 1)[0] + "]"
+        assert header == f"[Factory control · {label} · by mia]"
+        assert 'sys_factory_task(op="ready")' in text or 'op="get"' in text
+
+
+def test_server_cards_keep_the_ic_contract() -> None:
+    """The server-rendered card names the base the way the IC prompts parse it."""
+    from omnigent.entities.factory import FactoryProject, FactoryTask
+    from omnigent.server.factory.tasks import card_text
+
+    project = FactoryProject(
+        id="p" * 32,
+        factory_id="f" * 32,
+        slug="db",
+        title="DB",
+        repo="caffeinelabs/app",
+        base_branch="temp-main",
+    )
+    task = FactoryTask(
+        id="t" * 32,
+        factory_id="f" * 32,
+        number=4,
+        project_slug="db",
+        key="route",
+        title="GET /db/version",
+        card={"acceptance": ["pnpm test"], "preview": True},
+    )
+    lines = card_text(task, project, pl_id="pl1", attempt=2).splitlines()
+    assert lines[0] == "TASK route · GET /db/version · T-4 · attempt 2/3"
+    base = next(line for line in lines if " · Base: " in line)
+    assert base.split(" · Base: ", 1)[1].split(" ", 1)[0] == "temp-main"
+    assert "origin/temp-main" in base and "--base temp-main" in base
+    assert "Branch: factory/db/route" in " ".join(lines)
+    assert "- pnpm test" in lines
+    for name in ("ic", "ic_codex"):
+        assert "Base:" in (_PL_DIR / "agents" / name / "config.yaml").read_text("utf-8")
+
+
+@pytest.mark.usefixtures("_terminal_registry")
+def test_the_work_graph_tool_follows_the_role_matrix(lead: AgentSpec, pl: AgentSpec) -> None:
+    has = {str(spec.name): _relay_tool_names(spec) for spec in _all_specs(lead, pl)}
+    for name, tools in has.items():
+        expected = name in {"factory-lead", "factory-pl", "ic", "ic_codex"}
+        assert ("sys_factory_task" in tools) is expected, name
