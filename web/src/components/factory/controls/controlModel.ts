@@ -7,6 +7,7 @@ import type {
   EventView,
   FactoryCadence,
   FactoryControlAction,
+  InterventionAction,
   LaunchDriftView,
   MemberView,
 } from "@/lib/factoryApi";
@@ -18,7 +19,7 @@ import { heartbeatsPerHour, sentence } from "../start/projectForm";
  * control with `mode: "down"` reads as `preview_down`.
  */
 export type AckedAction =
-  Exclude<FactoryControlAction, "cadence"> | "preview_down" | "charter_update";
+  Exclude<FactoryControlAction, "cadence" | InterventionAction> | "preview_down" | "charter_update";
 
 /** No reply after this long: the chip turns amber and offers a restart. */
 export const ACK_LATE_MS = 15 * 60_000;

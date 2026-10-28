@@ -23,6 +23,11 @@ export type FactoryPageKey =
   | "room"
   | "decisions"
   | "graph"
+  | "agents"
+  | "agent"
+  | "timeline"
+  | "alerts"
+  | "incident"
   | "other";
 
 export interface FactoryLocation {
@@ -55,6 +60,12 @@ export function factoryLocation(rest: string | undefined): FactoryLocation {
       return { page: "decisions", id: null };
     case "graph":
       return { page: "graph", id: null };
+    case "agents":
+      return second ? { page: "agent", id: second } : { page: "agents", id: null };
+    case "timeline":
+      return { page: "timeline", id: null };
+    case "alerts":
+      return second ? { page: "incident", id: second } : { page: "alerts", id: null };
     default:
       return { page: "other", id: first };
   }
@@ -81,6 +92,14 @@ export function presenceLocation(location: FactoryLocation): string | null {
       return "decisions";
     case "graph":
       return "graph";
+    case "agents":
+    case "timeline":
+    case "alerts":
+      return location.page;
+    case "agent":
+      return `agent:${location.id}`;
+    case "incident":
+      return `incident:${location.id}`;
     default:
       return null;
   }
@@ -111,6 +130,14 @@ export function presenceWhere(location: string | null | undefined): string {
       return "Graph";
     case "agent":
       return "an agent page";
+    case "agents":
+      return "Agents";
+    case "timeline":
+      return "the Timeline";
+    case "alerts":
+      return "Alerts";
+    case "incident":
+      return "an incident";
     default:
       return kind ?? "here";
   }

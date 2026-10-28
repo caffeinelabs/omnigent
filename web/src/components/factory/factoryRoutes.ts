@@ -77,6 +77,63 @@ export function activityPageHref(factoryId: string): string {
   return `${factoryPageHref(factoryId)}/activity`;
 }
 
+/** `/factory/<fid>/agents`, optionally with a query (`?q=…`, `?view=looping`, `?select=…`). */
+export function agentsPageHref(factoryId: string, params?: Record<string, string>): string {
+  return withQuery(`${factoryPageHref(factoryId)}/agents`, params);
+}
+
+/** The Agent page's tabs. */
+export const AGENT_TABS = [
+  "live",
+  "tools",
+  "transcript",
+  "terminal",
+  "diff",
+  "mail",
+  "task",
+  "cost",
+] as const;
+export type AgentTab = (typeof AGENT_TABS)[number];
+
+/** `/factory/<fid>/agents/<sid>`, on `tab` (Live when omitted), at a moment (`at`, epoch ms). */
+export function agentPageHref(
+  factoryId: string,
+  sessionId: string,
+  options: { tab?: AgentTab; at?: number } = {},
+): string {
+  const params: Record<string, string | number> = {};
+  if (options.tab && options.tab !== "live") params.tab = options.tab;
+  if (options.at != null) params.at = Math.round(options.at);
+  return withQuery(`${agentsPageHref(factoryId)}/${enc(sessionId)}`, params);
+}
+
+/**
+ * `/factory/<fid>/timeline`, narrowed to a project (`?focus=`; `?project=` is
+ * the old drawer link) or agents, replayed `at` a moment (ms).
+ */
+export function timelinePageHref(
+  factoryId: string,
+  options: { project?: string | null; agents?: string[]; at?: number; window?: string } = {},
+): string {
+  const params: Record<string, string | number> = {};
+  if (options.project) params.focus = options.project;
+  if (options.agents?.length) params.agents = options.agents.join(",");
+  if (options.window) params.window = options.window;
+  if (options.at != null) params.at = Math.round(options.at);
+  return withQuery(`${factoryPageHref(factoryId)}/timeline`, params);
+}
+
+/** `/factory/<fid>/alerts`. */
+export function alertsPageHref(factoryId: string): string {
+  return `${factoryPageHref(factoryId)}/alerts`;
+}
+
+/** An incident's or finding's page: `INC-12` → `/alerts/12`, `F-7` → `/alerts/F-7`. */
+export function alertPageHref(factoryId: string, ref: string): string {
+  const incident = /^INC-(\d+)$/i.exec(ref);
+  return `${alertsPageHref(factoryId)}/${enc(incident ? incident[1]! : ref)}`;
+}
+
 /** `/factory/<fid>/settings/<section>`. */
 export function settingsPageHref(factoryId: string, section: SettingsSection = "people"): string {
   return `${factoryPageHref(factoryId)}/settings/${section}`;

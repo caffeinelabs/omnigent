@@ -5262,7 +5262,7 @@
       "proposal_id": null,
       "proposal_ref": null,
       "def_version": 7,
-      "runbook": ["restart", "relaunch", "pause", "open_agent"]
+      "runbook": ["restart", "relaunch", "pause_project", "open_agent"]
     },
     {
       "id": "ef6d473e8d9355dc946fddc1932b07c7",
@@ -5349,7 +5349,7 @@
       "proposal_id": "dd3f09aec78b584da0c200582a664d58",
       "proposal_ref": "C-14",
       "def_version": 7,
-      "runbook": []
+      "runbook": ["propose_cadence"]
     },
     {
       "id": "cdd87811afeb553ea1d4cf087537cd66",

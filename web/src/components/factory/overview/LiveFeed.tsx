@@ -14,7 +14,7 @@ import { cn } from "@/lib/utils";
 import { kindPill } from "../activity/activityModel";
 import { useFactoryLive } from "../board/factoryLive";
 import { FactoryLoadError } from "../FactoryLoadError";
-import { activityPageHref, prPageHref, projectPageHref } from "../factoryRoutes";
+import { activityPageHref, agentPageHref, prPageHref, projectPageHref } from "../factoryRoutes";
 import { SectionCard } from "../project/projectParts";
 
 /** Lines the feed shows. */
@@ -97,7 +97,7 @@ export function LiveFeed({ snapshot }: { snapshot: FactorySnapshot }) {
             <li key={member.session_id} className="flex min-w-0 items-center gap-2 text-sm">
               <RadioIcon aria-hidden className="size-3.5 shrink-0 text-session-active" />
               <Link
-                to={member.url}
+                to={agentPageHref(snapshot.factory.id, member.session_id)}
                 componentId="factory.overview.feed_now"
                 className="shrink-0 truncate font-medium hover:underline"
               >

@@ -1,9 +1,10 @@
 /**
  * Everything under `/factory/:factoryId/*`: the factory shell (header, tabs,
  * dock, presence) around one page. Overview at the root, then Projects, a
- * project, a PR, Activity, the Room, Decisions, the Graph and Settings.
- * Old cockpit links (`?project=`, `?review=`, `?pr=…&preview=unavailable`,
- * `?tab=activity`) are sent to their pages by the shell.
+ * project, a PR, Agents and an agent, the Timeline, Alerts and an incident,
+ * Activity, the Room, Decisions, the Graph and Settings. Old cockpit links
+ * (`?project=`, `?review=`, `?pr=…&preview=unavailable`, `?tab=activity`)
+ * are sent to their pages by the shell.
  */
 
 import { CompassIcon } from "lucide-react";
@@ -18,14 +19,19 @@ import { PeopleSettings } from "@/components/factory/people/PeopleSettings";
 import { EmptyState } from "@/components/factory/project/projectParts";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
 import { Link, useParams } from "@/lib/routing";
+import { AgentPage } from "./AgentPage";
+import { AgentsPage } from "./AgentsPage";
+import { AlertsPage } from "./AlertsPage";
 import { DecisionsPage } from "./DecisionsPage";
 import { FactoryLayout } from "./FactoryLayout";
 import { GraphPage } from "./GraphPage";
+import { IncidentPage } from "./IncidentPage";
 import { OverviewPage } from "./OverviewPage";
 import { PrPage } from "./PrPage";
 import { ProjectPage } from "./ProjectPage";
 import { ProjectsPage } from "./ProjectsPage";
 import { RoomPage } from "./RoomPage";
+import { TimelinePage } from "./TimelinePage";
 
 /** `/activity`: every factory event, filterable by project, member and kind. */
 function ActivityPage() {
@@ -89,6 +95,11 @@ export function FactoryPage() {
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="projects/:slug" element={<ProjectPage />} />
         <Route path="prs/:prId" element={<PrPage />} />
+        <Route path="agents" element={<AgentsPage />} />
+        <Route path="agents/:sid" element={<AgentPage />} />
+        <Route path="timeline" element={<TimelinePage />} />
+        <Route path="alerts" element={<AlertsPage />} />
+        <Route path="alerts/:ref" element={<IncidentPage />} />
         <Route path="activity" element={<ActivityPage />} />
         <Route path="room" element={<RoomPage />} />
         <Route path="room/:thread" element={<RoomPage />} />

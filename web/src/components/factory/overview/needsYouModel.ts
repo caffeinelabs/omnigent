@@ -1,11 +1,13 @@
 // The Overview's Needs-you list, split by whom it waits on: "mine" (assigned
 // to me, or claimed by me), "role" (assigned to a role I hold: operators or
 // owners) and everything else. Decisions follow their assignee and claim;
-// PRs ready for review and alerts are for operators. Pure; tests pin it.
+// incidents follow the server's "mine"; PRs ready for review and alerts are
+// for operators. Pure; tests pin it.
 
 import type {
   DecisionView,
   FactorySnapshot,
+  IssueView,
   PrView,
   ProjectView,
   ViewerBlock,
@@ -18,7 +20,15 @@ export type NeedsItem =
   | { kind: "decision"; key: string; scope: NeedsScope; at: number; decision: DecisionView }
   | { kind: "pr"; key: string; scope: NeedsScope; at: number; pr: PrView }
   | { kind: "alert"; key: string; scope: NeedsScope; at: number; alert: FactoryAlert }
-  | { kind: "claim"; key: string; scope: NeedsScope; at: number; project: ProjectView };
+  | { kind: "claim"; key: string; scope: NeedsScope; at: number; project: ProjectView }
+  | { kind: "issue"; key: string; scope: NeedsScope; at: number; issue: IssueView };
+
+/** Open incidents as the issues route lists them, with which ones are the viewer's. */
+export interface NeedsIssues {
+  data: readonly IssueView[];
+  /** Ids of the issues for the viewer or their role. */
+  mine: readonly string[];
+}
 
 export interface NeedsYouSplit {
   mine: NeedsItem[];
@@ -43,8 +53,28 @@ export function decisionScope(decision: DecisionView, viewer: ViewerBlock | null
   return assignee === me ? "mine" : "other";
 }
 
+/** Whom an open incident waits on: me (assigned to me), my role (the server's "mine"), others. */
+export function issueScope(
+  issue: IssueView,
+  viewer: ViewerBlock | null,
+  mine: ReadonlySet<string>,
+): NeedsScope {
+  if (viewer?.user_id && issue.assignee === viewer.user_id) return "mine";
+  if (mine.has(issue.id) || !viewer) return "role";
+  return "other";
+}
+
+const SEVERITY_RANK: Record<IssueView["severity"], number> = {
+  critical: 0,
+  warning: 1,
+  notice: 2,
+  info: 3,
+};
+
 function rank(item: NeedsItem): number {
   switch (item.kind) {
+    case "issue":
+      return item.issue.severity === "critical" ? -1 : 0;
     case "alert":
       return 0;
     case "decision":
@@ -69,12 +99,33 @@ function ordered(items: NeedsItem[]): NeedsItem[] {
 export function splitNeedsYou(
   snapshot: FactorySnapshot,
   viewer: ViewerBlock | null = snapshot.viewer ?? null,
+  issues: NeedsIssues | null = null,
 ): NeedsYouSplit {
   const needs = needsYou(snapshot);
   const operator = viewer ? viewer.level >= LEVEL_EDIT : true;
   const opScope: NeedsScope = operator ? "role" : "other";
+  const incidents = (issues?.data ?? []).filter(
+    (i) => i.class === "incident" && (i.status === "open" || i.status === "acked"),
+  );
+  // An incident on a member or PR stands in for the snapshot's alert about it.
+  const covered = new Set(incidents.map((i) => i.target.replace(/-/g, "").toLowerCase()));
+  const alerts = needs.alerts.filter((alert) => {
+    const dead = /^dead-(.+)$/.exec(alert.key);
+    return !(dead && covered.has(`member:${dead[1]!.replace(/-/g, "").toLowerCase()}`));
+  });
+  const mineIds = new Set(issues?.mine ?? []);
   const items: NeedsItem[] = [
-    ...needs.alerts.map((alert): NeedsItem => ({
+    ...incidents
+      .slice()
+      .sort((a, b) => SEVERITY_RANK[a.severity] - SEVERITY_RANK[b.severity])
+      .map((issue): NeedsItem => ({
+        kind: "issue",
+        key: `issue:${issue.id}`,
+        scope: issueScope(issue, viewer, mineIds),
+        at: issue.first_seen,
+        issue,
+      })),
+    ...alerts.map((alert): NeedsItem => ({
       kind: "alert",
       key: `alert:${alert.key}`,
       scope: opScope,

@@ -8,15 +8,18 @@ import { useState } from "react";
 import {
   ActivityIcon,
   BellIcon,
+  BotIcon,
   CommandIcon,
   EllipsisIcon,
   FolderKanbanIcon,
+  GanttChartIcon,
   GitForkIcon,
   LayoutDashboardIcon,
   ListChecksIcon,
   MessagesSquareIcon,
   SettingsIcon,
   Share2Icon,
+  SirenIcon,
 } from "lucide-react";
 import {
   Sheet,
@@ -30,12 +33,15 @@ import { Link, useNavigate } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import {
   activityPageHref,
+  agentsPageHref,
+  alertsPageHref,
   decisionsPageHref,
   factoryPageHref,
   graphPageHref,
   projectsPageHref,
   roomPageHref,
   settingsPageHref,
+  timelinePageHref,
 } from "../factoryRoutes";
 import type { FactoryLocation } from "./shellRoutes";
 
@@ -172,7 +178,18 @@ export function PhoneTabBar({
           aria-expanded={more}
           className={cn(
             "flex min-w-0 flex-1 cursor-pointer flex-col items-center justify-center gap-0.5 text-xs",
-            ["activity", "settings", "decisions", "graph", "other"].includes(location.page)
+            [
+              "activity",
+              "settings",
+              "decisions",
+              "graph",
+              "agents",
+              "agent",
+              "timeline",
+              "alerts",
+              "incident",
+              "other",
+            ].includes(location.page)
               ? "text-foreground"
               : "text-muted-foreground",
           )}
@@ -182,7 +199,7 @@ export function PhoneTabBar({
         </button>
       </nav>
       <Sheet open={more} onOpenChange={setMore}>
-        {/* A few rows: a sheet sized to them, not a full-screen page. */}
+        {/* A handful of rows: a sheet sized to them, not a full-screen page. */}
         <SheetContent
           side="bottom"
           size="md"
@@ -197,11 +214,20 @@ export function PhoneTabBar({
             <MoreLink to={factoryPageHref(factoryId)} icon={LayoutDashboardIcon} onDone={close}>
               Overview
             </MoreLink>
+            <MoreLink to={agentsPageHref(factoryId)} icon={BotIcon} onDone={close}>
+              Agents
+            </MoreLink>
             <MoreLink to={decisionsPageHref(factoryId)} icon={ListChecksIcon} onDone={close}>
               Decisions
             </MoreLink>
             <MoreLink to={graphPageHref(factoryId)} icon={GitForkIcon} onDone={close}>
               Graph
+            </MoreLink>
+            <MoreLink to={timelinePageHref(factoryId)} icon={GanttChartIcon} onDone={close}>
+              Timeline
+            </MoreLink>
+            <MoreLink to={alertsPageHref(factoryId)} icon={SirenIcon} onDone={close}>
+              Alerts
             </MoreLink>
             <MoreLink to={activityPageHref(factoryId)} icon={ActivityIcon} onDone={close}>
               Activity

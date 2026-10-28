@@ -7,13 +7,7 @@
  */
 
 import { type ReactNode, useEffect, useRef } from "react";
-import {
-  CircleCheckIcon,
-  ListTodoIcon,
-  MessagesSquareIcon,
-  RepeatIcon,
-  TriangleAlertIcon,
-} from "lucide-react";
+import { CircleCheckIcon, ListTodoIcon, MessagesSquareIcon, TriangleAlertIcon } from "lucide-react";
 import type { FactorySnapshot, ProjectView } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
@@ -29,7 +23,7 @@ import {
   previewStatus,
   shortSha,
 } from "../factoryFormat";
-import { type ProjectSection, prPageHref, roomPageHref } from "../factoryRoutes";
+import { type ProjectSection, agentPageHref, prPageHref, roomPageHref } from "../factoryRoutes";
 import { EmptyState, SectionCard } from "../project/projectParts";
 import { projectDecisions, projectTeam } from "../project/projectModel";
 import { PAGE_EXTRA_TOP } from "../shell/scroll";
@@ -370,8 +364,19 @@ export function TasksSection({ project }: { project: ProjectView }) {
   );
 }
 
-/** Every agent on the project: PL first, what each is doing, harness, spend and last activity. */
-export function TeamTable({ project, nowS }: { project: ProjectView; nowS: number }) {
+/**
+ * Every agent on the project: PL first, what each is doing, harness, spend
+ * and last activity; with `factoryId` each opens its Agent page.
+ */
+export function TeamTable({
+  project,
+  nowS,
+  factoryId,
+}: {
+  project: ProjectView;
+  nowS: number;
+  factoryId?: string;
+}) {
   const team = projectTeam(project);
   if (team.length === 0) {
     return (
@@ -406,7 +411,7 @@ export function TeamTable({ project, nowS }: { project: ProjectView; nowS: numbe
                   <MemberStatusDot member={member} />
                   <HarnessGlyph harness={member.harness} className="size-3.5 shrink-0" />
                   <Link
-                    to={member.url}
+                    to={factoryId ? agentPageHref(factoryId, member.session_id) : member.url}
                     componentId="factory.project.member"
                     className="min-w-0 truncate font-medium hover:underline"
                   >
@@ -438,49 +443,6 @@ export function TeamTable({ project, nowS }: { project: ProjectView; nowS: numbe
           ))}
         </tbody>
       </table>
-    </div>
-  );
-}
-
-/** Loops of the project (implement, review, verify, demo, CI) once the engine reports them. */
-export function LoopsSection({ project }: { project: ProjectView }) {
-  const loops = project.loops_summary;
-  if (!loops) {
-    return (
-      <EmptyState
-        testId="project-loops-empty"
-        icon={<RepeatIcon aria-hidden className="size-6 text-muted-foreground/50" />}
-        title="No loops reported yet"
-        body="Implement, review, verify and demo loops show here with their attempts, budget and why they stopped."
-      />
-    );
-  }
-  const parts: [string, number, string][] = [
-    ["running", loops.running, "text-session-active"],
-    ["converged", loops.converged, "text-success"],
-    ["stalled", loops.stalled, "text-warning"],
-    ["thrashing", loops.thrashing, "text-warning"],
-    ["exhausted", loops.exhausted, "text-destructive"],
-    ["escalated", loops.escalated, "text-warning"],
-  ];
-  return (
-    <div
-      data-testid="project-loops-summary"
-      className="flex flex-wrap gap-x-6 gap-y-2 rounded-xl border border-border bg-card px-4 py-3 text-sm"
-    >
-      {parts.map(([label, n, tone]) => (
-        <span key={label} className="inline-flex items-baseline gap-1.5">
-          <span
-            className={cn(
-              "text-lg font-semibold tabular-nums",
-              n > 0 ? tone : "text-muted-foreground",
-            )}
-          >
-            {n}
-          </span>
-          <span className="text-muted-foreground">{label}</span>
-        </span>
-      ))}
     </div>
   );
 }
