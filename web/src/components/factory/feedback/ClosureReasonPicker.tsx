@@ -46,7 +46,7 @@ export function ClosureReasonPicker({
         size="sm"
         aria-label="Why it closed"
         data-testid={`decision-closure-${decisionRef}`}
-        className="w-48 basis-full sm:basis-auto"
+        className="w-60 max-w-full"
       >
         <SelectValue placeholder="Why it closed (required)" />
       </SelectTrigger>

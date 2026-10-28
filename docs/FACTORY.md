@@ -1042,9 +1042,10 @@ https://omnigent.caffeinelabs.io.
 
 - **Engine mode first.** An owner sets Settings ▸ Autonomy ▸ Engine mode back
   to `observe` (a reversible `C-n`): NEXT and READY hints stop, loop budgets
-  stop refusing starts, the guard only records findings and spend never
-  auto-pauses. Binder, spans, loop state and detectors keep measuring. Use
-  `assist` to keep hints but drop enforcement.
+  stop refusing starts, the dispatch guard does nothing (no warning, no
+  deny), a stuck loop only opens an issue, and spend only posts a notice,
+  never auto-pauses. Binder, spans, loop state and detectors keep measuring.
+  Use `assist` to keep hints and warnings but drop enforcement.
 - **A bad change.** Improvements ▸ the change ▸ **Revert**, or Definition ▸
   **Revert to vN** to put any stored version back; members get the diff.
 - **Everything.** `OMNIGENT_FACTORY_ENABLED=0` turns the factory built-ins

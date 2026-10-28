@@ -64,7 +64,7 @@ function VersionRow({
       data-testid={`definition-v${version.version}`}
       data-pinned={version.pinned ? "true" : undefined}
       className={cn(
-        "flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-sm",
+        "flex min-w-0 items-center gap-2 rounded-md px-2 py-1 text-sm max-sm:items-start",
         selected && "bg-muted/70",
       )}
     >
@@ -72,12 +72,22 @@ function VersionRow({
         type="button"
         onClick={onSelect}
         aria-pressed={selected}
-        className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left"
+        className="flex min-w-0 flex-1 cursor-pointer flex-wrap items-center gap-x-2 text-left sm:flex-nowrap"
       >
         <span className="w-9 shrink-0 font-mono font-medium">v{version.version}</span>
-        <span className="shrink-0 text-xs text-muted-foreground">{VIA[version.created_via]}</span>
-        <span className="min-w-0 flex-1 truncate text-muted-foreground">
-          by {who(version.created_by)} · {formatElapsed(nowS - version.created_at)} ago
+        {/* Fixed width, so every row's "by" starts at the same x. */}
+        <span className="w-14 shrink-0 text-xs text-muted-foreground">
+          {VIA[version.created_via]}
+        </span>
+        {/* On a phone "by …" takes a second line instead of being cut to a letter. */}
+        <span
+          className="min-w-0 flex-1 truncate text-muted-foreground max-sm:order-last max-sm:basis-full max-sm:pl-11"
+          title={`by ${who(version.created_by)}`}
+        >
+          by {who(version.created_by)}
+        </span>
+        <span className="shrink-0 text-xs text-muted-foreground tabular-nums max-sm:ml-auto">
+          {formatElapsed(nowS - version.created_at)} ago
         </span>
       </button>
       {version.proposal_ref && (
@@ -109,11 +119,14 @@ function BundleRow({ member }: { member: BundleMemberView }) {
   return (
     <li
       data-testid={`bundle-${member.session_id}`}
-      className="flex min-w-0 items-center gap-2 py-1 text-sm max-sm:flex-wrap"
+      className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5 py-1 text-sm"
     >
-      <span className="min-w-0 flex-1 truncate">{member.title}</span>
+      {/* On a phone the member's name gets its own line, so Relaunch says whom it relaunches. */}
+      <span className="min-w-0 flex-1 max-sm:basis-full max-sm:break-words sm:truncate">
+        {member.title}
+      </span>
       <span
-        className="truncate font-mono text-xs text-muted-foreground"
+        className="min-w-0 truncate font-mono text-xs text-muted-foreground max-sm:flex-1"
         title={`running ${member.running} · current ${member.current}`}
       >
         {member.running?.split("/").pop()} → {member.current?.split("/").pop()}
@@ -160,15 +173,17 @@ export function BundlesCard({ factoryId }: { factoryId: string }) {
         </p>
       ) : (
         <>
-          <p className="flex min-w-0 flex-wrap gap-x-3 gap-y-1 font-mono text-xs text-muted-foreground">
-            <PackageIcon aria-hidden className="size-3.5" />
-            {current.length === 0
-              ? "no bundle labels yet"
-              : current.map(([agent, sha]) => (
-                  <span key={agent}>
-                    {agent}@{sha.slice(0, 8)}
-                  </span>
-                ))}
+          <p className="flex min-w-0 items-start gap-2 font-mono text-xs text-muted-foreground">
+            <PackageIcon aria-hidden className="mt-px size-3.5 shrink-0" />
+            <span className="flex min-w-0 flex-wrap gap-x-3 gap-y-1">
+              {current.length === 0
+                ? "no bundle labels yet"
+                : current.map(([agent, sha]) => (
+                    <span key={agent}>
+                      {agent}@{sha.slice(0, 8)}
+                    </span>
+                  ))}
+            </span>
           </p>
           {drifted.length === 0 ? (
             <p data-testid="definition-bundles-ok" className="text-sm text-muted-foreground">
@@ -275,7 +290,7 @@ export function DefinitionPanel({
           ) : undefined
         }
       >
-        <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
+        <div className="grid min-w-0 gap-3 lg:grid-cols-[minmax(0,26rem)_minmax(0,1fr)]">
           <ol data-testid="definition-version-list" className="flex min-w-0 flex-col gap-0.5">
             {rows.map((row) => (
               <VersionRow
@@ -320,29 +335,32 @@ export function DefinitionPanel({
               </Select>
               <span className="text-muted-foreground">→ v{target ?? "—"}</span>
               {targetRow && !targetRow.pinned && (
-                <ReasonGated reason={ownerReason} testId="definition-pin" className="ml-auto">
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    loading={pin.isPending}
-                    onClick={() =>
-                      pin.mutate(targetRow.version, {
-                        onSuccess: (r) =>
-                          showToast(
-                            r.changed
-                              ? `v${r.def_version} is in force again${r.ended?.length ? ` · ended ${r.ended.join(", ")}` : ""}`
-                              : `v${r.def_version} was already in force`,
-                          ),
-                        onError: (e) => setFailure(controlErrorMessage(e)),
-                      })
-                    }
-                    data-testid="definition-pin"
-                    componentId="factory.definition.pin"
-                  >
-                    <RotateCcwIcon />
-                    Revert to v{targetRow.version}
-                  </Button>
-                </ReasonGated>
+                // The wrapper aligns it right whether or not the lever is gated.
+                <span className="ml-auto">
+                  <ReasonGated reason={ownerReason} testId="definition-pin">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      loading={pin.isPending}
+                      onClick={() =>
+                        pin.mutate(targetRow.version, {
+                          onSuccess: (r) =>
+                            showToast(
+                              r.changed
+                                ? `v${r.def_version} is in force again${r.ended?.length ? ` · ended ${r.ended.join(", ")}` : ""}`
+                                : `v${r.def_version} was already in force`,
+                            ),
+                          onError: (e) => setFailure(controlErrorMessage(e)),
+                        })
+                      }
+                      data-testid="definition-pin"
+                      componentId="factory.definition.pin"
+                    >
+                      <RotateCcwIcon />
+                      Revert to v{targetRow.version}
+                    </Button>
+                  </ReasonGated>
+                </span>
               )}
             </div>
             {base == null ? (

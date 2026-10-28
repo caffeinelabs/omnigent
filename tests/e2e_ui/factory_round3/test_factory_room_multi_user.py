@@ -3,7 +3,10 @@
 Alice starts a factory with "Describe it", invites Bob (operator) and Carol
 (viewer) from Share, Bob posts in ``#factory``, Atlas (the agent stub)
 replies and files a proposal, Bob applies it and the project appears. Carol
-sees everything with every lever disabled (each control asserted). Bob is
+sees everything with every lever disabled (each control asserted: pause,
+stop, Share, the agent's levers, the composer, apply, answer, approve, edit,
+reject, revert, Revert to vN, the settings form, Slack, rules, retro, invite,
+propose). Bob is
 refused Stop until Alice makes him an owner. Unread badges move together in
 two of Alice's browser contexts. Bob is removed and his cockpit says he no
 longer has access.
@@ -202,6 +205,17 @@ def test_factory_room_multi_user(people: Callable[[str], Person]) -> None:
     )
     question = asked["decision"]
 
+    # Alice tunes a setting: an applied human change (v2) Carol can see but not revert.
+    edited = alice.api.put(
+        f"/v1/factory/factories/{fid}/definition",
+        json={
+            "changes": [{"op": "replace", "path": "cadence.lead", "value": 7200}],
+            "note": "Slower lead beats while we watch.",
+        },
+    )
+    assert edited.status_code in (200, 201), edited.text
+    human_change = edited.json()["proposal"]
+
     # 6. Carol sees everything, with every lever disabled.
     carol_page = carol.page()
     _goto(carol_page, base)
@@ -210,6 +224,16 @@ def test_factory_room_multi_user(people: Callable[[str], Person]) -> None:
     carol_page.get_by_test_id("factory-controls-menu").click()
     _disabled(carol_page.get_by_test_id("control-stop-factory"))
     carol_page.keyboard.press("Escape")
+    carol_page.get_by_test_id("factory-share").click()
+    share = carol_page.get_by_test_id("share-dialog")
+    expect(share.get_by_test_id("people-roster")).to_be_visible(timeout=FRAME_S)
+    _disabled(share.get_by_test_id("people-invite-email"))
+    _disabled(share.get_by_test_id("people-invite-submit"))
+    carol_page.keyboard.press("Escape")
+    expect(share).to_have_count(0)
+    _goto(carol_page, f"{base}/agents/{fid}")
+    for lever in ("agent-interrupt", "agent-message", "agent-composer-input"):
+        _disabled(carol_page.get_by_test_id(lever))
     _goto(carol_page, f"{base}/room/factory")
     expect(
         carol_page.get_by_text("Please split this: the API endpoint first.").first
@@ -225,15 +249,25 @@ def test_factory_room_multi_user(people: Callable[[str], Person]) -> None:
     _goto(carol_page, f"{base}/improvements?tab=proposed")
     for lever in ("approve", "edit", "reject"):
         _disabled(carol_page.get_by_test_id(f"proposal-{tuning}-{lever}"))
+    _goto(carol_page, f"{base}/improvements/{human_change}")
+    _disabled(carol_page.get_by_test_id(f"proposal-{human_change}-revert"))
+    # Settings: values only, no form; each owner lever shown disabled.
     _goto(carol_page, f"{base}/settings/budgets")
-    expect(carol_page.get_by_test_id("settings-read-only")).to_be_visible()
+    expect(carol_page.get_by_test_id("settings-read-only")).to_be_visible(timeout=FRAME_S)
     expect(carol_page.get_by_test_id("setting-input-loops.implement.attempts")).to_have_count(0)
-    _disabled(carol_page.get_by_test_id("settings-save"))
+    expect(carol_page.get_by_test_id("settings-save")).to_have_count(0)
+    _goto(carol_page, f"{base}/settings/alerts")
+    _disabled(carol_page.get_by_test_id("settings-slack-url"))
+    _disabled(carol_page.get_by_test_id("settings-slack-save"))
+    _goto(carol_page, f"{base}/settings/rules")
+    _disabled(carol_page.get_by_test_id("rules-add"))
+    _goto(carol_page, f"{base}/settings/definition")
+    carol_page.get_by_test_id("definition-v1").get_by_role("button").first.click()
+    _disabled(carol_page.get_by_test_id("definition-pin"))
+    _disabled(carol_page.get_by_test_id("definition-retro"))
     _goto(carol_page, f"{base}/settings/people")
     expect(carol_page.get_by_test_id("people-roster")).to_be_visible(timeout=FRAME_S)
-    invite = carol_page.get_by_test_id("people-invite-submit")
-    if invite.count():
-        _disabled(invite)
+    _disabled(carol_page.get_by_test_id("people-invite-submit"))
     _goto(carol_page, f"{base}/insights")
     _disabled(carol_page.get_by_test_id("kpi-merge_acceptance-propose"))
     expect(carol_page.get_by_test_id("insights-people-owners-only")).to_be_visible()

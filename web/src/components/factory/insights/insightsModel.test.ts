@@ -8,6 +8,7 @@ import {
   formatValue,
   headline,
   markPosition,
+  metricLabel,
   nState,
   nText,
   promptBand,
@@ -16,7 +17,10 @@ import {
   windowDays,
   windowSeconds,
 } from "./insightsModel";
+import type { EventView } from "@/lib/factoryApi";
 import { allMetrics, versionsResponse } from "./__fixtures__/learnFixtures";
+import { hourlyCounts } from "./healthSparks";
+import { sparkTotal } from "./Sparkline";
 
 describe("headline", () => {
   it("reads value, then p50, then sums a per-key breakdown", () => {
@@ -120,5 +124,34 @@ describe("the human-load band", () => {
     expect(band.band).toEqual([30, 50]);
     expect(band.inBand).toBe(true);
     expect(splitText(band.split)).toBe("L58 P36 O6");
+  });
+});
+
+describe("health sparks", () => {
+  const H = 3_600_000;
+  const now = 1000 * H;
+  const at = (hoursAgo: number): EventView =>
+    ({ id: `e${hoursAgo}`, ts: now - hoursAgo * H + 1, kind: "message.sent" }) as EventView;
+
+  it("counts events per hour, oldest hour first", () => {
+    const series = hourlyCounts([at(1), at(1), at(3)], now);
+    expect(series).toHaveLength(24);
+    expect(series[23]).toBe(2);
+    expect(series[21]).toBe(1);
+    expect(sparkTotal(series)).toBe(3);
+  });
+
+  it("leaves the hours a capped read did not reach unknown, not zero", () => {
+    const series = hourlyCounts([at(1), at(3)], now, 24, now - 5 * H + 10);
+    expect(series.slice(0, 20).every((v) => v === null)).toBe(true);
+    expect(series.slice(20)).toEqual([0, 1, 0, 1]);
+  });
+});
+
+describe("metricLabel", () => {
+  it("reads metric keys as people say them", () => {
+    expect(metricLabel("cost_per_merged_pr")).toBe("$ / merged PR");
+    expect(metricLabel("heartbeat_usd_per_day")).toBe("heartbeat $ / day");
+    expect(metricLabel("loop_exhaustion_rate")).toBe("loop exhaustion rate");
   });
 });

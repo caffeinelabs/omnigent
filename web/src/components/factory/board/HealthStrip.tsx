@@ -11,7 +11,7 @@ import type { FactorySnapshot } from "@/lib/factoryApi";
 import { beginGithubConnect } from "@/lib/githubIntegration";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
-import { Sparkline } from "../insights/Sparkline";
+import { SparkBars, sparkTotal } from "../insights/Sparkline";
 import { type HealthItem, type HealthLevel, healthItems } from "./boardModel";
 import { driftText } from "./TeamStrip";
 
@@ -33,7 +33,9 @@ function at(epochS: number | null): string | undefined {
   return epochS != null ? new Date(epochS * 1000).toLocaleString() : undefined;
 }
 
-function ItemBody({ item, spark }: { item: HealthItem; spark?: readonly number[] }) {
+function ItemBody({ item, spark }: { item: HealthItem; spark?: readonly (number | null)[] }) {
+  // A quiet day draws nothing: an empty baseline would read as a blank underline.
+  const total = spark ? sparkTotal(spark) : 0;
   return (
     <>
       <span aria-hidden className={cn("size-1.5 shrink-0 rounded-full", LEVEL_DOT[item.level])} />
@@ -43,14 +45,14 @@ function ItemBody({ item, spark }: { item: HealthItem; spark?: readonly number[]
         {item.label}
       </span>
       <span>{item.detail}</span>
-      {spark && (
-        <Sparkline
+      {spark && total > 0 && (
+        <SparkBars
           series={spark}
           width={36}
           height={12}
           testId={`health-spark-${item.key}`}
-          label={`${item.label}: ${spark.reduce((a, b) => a + b, 0)} events in 24 h`}
-          className="text-muted-foreground/70"
+          label={`${item.label}: ${total} events in ${spark.some((v) => v == null) ? "the hours read of " : ""}the last 24 h`}
+          className="text-muted-foreground"
         />
       )}
     </>
@@ -77,8 +79,8 @@ export function HealthStrip({
 }: {
   snapshot: FactorySnapshot;
   nowS: number;
-  /** Health item key → events per hour over the last 24 h. */
-  sparks?: Partial<Record<string, readonly number[]>>;
+  /** Health item key → events per hour over the last 24 h (null: an hour not read). */
+  sparks?: Partial<Record<string, readonly (number | null)[]>>;
 }) {
   const items = healthItems(snapshot.health, nowS);
   const drifted = snapshot.members.filter((m) => m.launch_drift);

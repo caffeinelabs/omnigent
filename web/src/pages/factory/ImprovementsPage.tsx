@@ -8,7 +8,7 @@
  * `#improvements` discussion sit under the tabs.
  */
 
-import { type ReactElement, type ReactNode, useMemo, useState } from "react";
+import { type ReactElement, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
 import { FlaskConicalIcon, InfoIcon, LightbulbIcon, MessagesSquareIcon } from "lucide-react";
 import {
   STATE_LABEL,
@@ -26,12 +26,14 @@ import {
   roomPageHref,
   settingsPageHref,
 } from "@/components/factory/factoryRoutes";
+import { useFactoryIssues } from "@/components/factory/agents/opsQueries";
 import { DefinitionPanel } from "@/components/factory/improvements/DefinitionPanel";
-import { FindingsTab } from "@/components/factory/improvements/FindingsTab";
+import { FINDINGS_FILTERS, FindingsTab } from "@/components/factory/improvements/FindingsTab";
 import {
   improvementCounts,
   onTrial,
   proposed,
+  tier2Plain,
 } from "@/components/factory/improvements/improvementsModel";
 import { LearnProposalCard } from "@/components/factory/improvements/LearnProposalCard";
 import {
@@ -61,9 +63,10 @@ const TAB_LABEL: Record<ImprovementTab, string> = {
   findings: "Findings",
 };
 
-/** "Tier 2: off ⓘ" with the missing prerequisite on hover. */
+/** "Tier 2: off ⓘ" with the missing prerequisite in plain words (the raw one on hover). */
 export function Tier2Line({ tier2 }: { tier2: Tier2StatusView | null | undefined }) {
   if (!tier2) return null;
+  const plain = tier2Plain(tier2.reason);
   return (
     <span
       data-testid="improvements-tier2"
@@ -80,8 +83,8 @@ export function Tier2Line({ tier2 }: { tier2: Tier2StatusView | null | undefined
         {tier2.enabled ? "on" : "off"}
       </span>
       <InfoIcon aria-hidden className="size-3.5" />
-      {!tier2.enabled && tier2.reason && (
-        <span className="max-w-[22rem] truncate max-md:hidden">· {tier2.reason}</span>
+      {!tier2.enabled && plain && (
+        <span className="max-w-[22rem] truncate max-md:hidden">· {plain}</span>
       )}
     </span>
   );
@@ -240,6 +243,7 @@ export function ImprovementsPage() {
     : "trial";
   const proposals = useLearnProposals(fid);
   const definition = useFactoryDefinition(fid);
+  const findings = useFactoryIssues(fid, FINDINGS_FILTERS);
   const [proposing, setProposing] = useState<ProposeSource | null>(null);
   const all = useMemo(() => proposals.data ?? [], [proposals.data]);
   const counts = improvementCounts(all);
@@ -275,16 +279,20 @@ export function ImprovementsPage() {
     </ReasonGated>
   );
 
+  // Counts show only once their data has loaded: a 0 while loading would be wrong.
+  const loaded = proposals.data != null;
   const count = (key: ImprovementTab): number | null => {
     switch (key) {
       case "trial":
-        return counts.trial;
+        return loaded ? counts.trial : null;
       case "proposed":
-        return counts.proposed;
+        return loaded ? counts.proposed : null;
       case "history":
-        return counts.history;
+        return loaded ? counts.history : null;
       case "rules":
-        return rules.length;
+        return definition.data ? rules.length : null;
+      case "findings":
+        return findings.data ? findings.data.data.length : null;
       default:
         return null;
     }
@@ -292,27 +300,44 @@ export function ImprovementsPage() {
 
   const loading = proposals.isLoading && !proposals.data;
   const failed = proposals.error && !proposals.data;
+  const findingsCount = count("findings");
+  const rulesCount = count("rules");
+  const strip = useRef<HTMLDivElement | null>(null);
+  // Keep the selected tab in view on a narrow strip (only the strip scrolls).
+  useEffect(() => {
+    const box = strip.current;
+    const active = box?.querySelector<HTMLElement>('[aria-selected="true"]');
+    if (!box || !active) return;
+    const outer = box.getBoundingClientRect();
+    const inner = active.getBoundingClientRect();
+    if (inner.left < outer.left) box.scrollLeft -= outer.left - inner.left + 16;
+    else if (inner.right > outer.right) box.scrollLeft += inner.right - outer.right + 16;
+    // Counts arriving later widen the tabs: keep the selected one in view then too.
+  }, [tab, loaded, findingsCount, rulesCount]);
 
   return (
     <div data-testid="factory-improvements-page" className="flex min-w-0 flex-col gap-3">
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
         <h1 className="text-base font-semibold">Improvements</h1>
-        <span
-          data-testid="improvements-counts"
-          className="text-sm text-muted-foreground tabular-nums"
-        >
-          On trial {counts.trial} · Proposed {counts.proposed} · Kept {counts.kept} · Reverted{" "}
-          {counts.reverted}
-        </span>
+        {loaded && (
+          <span
+            data-testid="improvements-counts"
+            className="text-sm text-muted-foreground tabular-nums"
+          >
+            On trial {counts.trial} · Proposed {counts.proposed} · Kept {counts.kept} · Reverted{" "}
+            {counts.reverted}
+          </span>
+        )}
         <span className="ml-auto">
           <Tier2Line tier2={tier2} />
         </span>
       </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 border-b border-border">
+      <div className="flex min-w-0 items-center gap-3 border-b border-border">
         <div
+          ref={strip}
           role="tablist"
           aria-label="Improvements"
-          className="-mb-px flex min-w-0 flex-1 flex-wrap items-center gap-x-3"
+          className="-mb-px flex min-w-0 flex-1 items-center gap-3 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
         >
           {IMPROVEMENT_TABS.map((key) => {
             const n = count(key);
@@ -335,7 +360,7 @@ export function ImprovementsPage() {
                   )
                 }
                 className={cn(
-                  "inline-flex h-8 shrink-0 cursor-pointer items-center gap-1 border-b-2 px-0.5 text-sm font-medium",
+                  "inline-flex h-8 shrink-0 cursor-pointer items-center gap-1 border-b-2 px-0.5 text-sm font-medium whitespace-nowrap focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
                   tab === key
                     ? "border-foreground text-foreground"
                     : "border-transparent text-muted-foreground hover:text-foreground",
@@ -356,10 +381,12 @@ export function ImprovementsPage() {
           to={roomPageHref(fid, improvementsThread)}
           componentId="factory.improvements.thread"
           data-testid="improvements-thread"
-          className="inline-flex shrink-0 items-center gap-1 pb-1 text-sm text-muted-foreground hover:text-foreground"
+          aria-label="Discuss in #improvements"
+          title="Discuss in #improvements"
+          className="inline-flex h-8 shrink-0 items-center gap-1 text-sm whitespace-nowrap text-muted-foreground hover:text-foreground"
         >
           <MessagesSquareIcon aria-hidden className="size-3.5" />
-          discuss in #improvements
+          <span className="max-sm:hidden">discuss in #improvements</span>
         </Link>
       </div>
       {tab === "definition" ? (

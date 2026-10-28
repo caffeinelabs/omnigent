@@ -4,9 +4,13 @@
  * keep the evidence it came from and the metric it should move. Owners apply
  * it at once as a human `C-n` (a trial by default when editing); operators
  * file it for the owners, who approve it as a trial. Viewers can't.
+ *
+ * Editing carries every change of the proposal (each one editable, a rule
+ * keeping its project), applies them together and only then rejects the
+ * original, so it can't be approved on top of the edit.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { type ReactNode, useId, useMemo, useState } from "react";
 import { CircleAlertIcon, LightbulbIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -30,13 +34,20 @@ import {
 import { Switch } from "@/components/ui/switch";
 import { Textarea } from "@/components/ui/textarea";
 import { showToast } from "@/components/ui/toast";
-import type { DefinitionChange, ProposalView } from "@/lib/factoryApi";
-import { rejectProposal } from "@/lib/factoryRoomApi";
+import type {
+  DefinitionChange,
+  DefinitionDoc,
+  DefinitionEditResponse,
+  DefinitionResponse,
+  ProposalView,
+} from "@/lib/factoryApi";
 import { useNavigate } from "@/lib/routing";
+import { cn } from "@/lib/utils";
 import { controlErrorMessage } from "../controls/controlModel";
 import { improvementPageHref } from "../factoryRoutes";
-import { METRIC_NAMES, humanize } from "../insights/insightsModel";
+import { METRIC_NAMES, metricLabel } from "../insights/insightsModel";
 import {
+  useAnswerProposal,
   useDefinitionEdit,
   useFactoryDefinition,
   useProposeChange,
@@ -54,6 +65,7 @@ import {
   getPath,
   parseDraft,
 } from "../settings/settingsModel";
+import { useOptionalFactoryShell } from "../shell/FactoryShellContext";
 import { useViewerCan } from "../shell/viewerCan";
 
 /** What the dialog starts from. */
@@ -77,9 +89,311 @@ const GROUPS = [
 
 export const PROPOSE_REASON = "Operators can propose changes";
 
-function initialPath(source: ProposeSource | undefined, editing: ProposalView | null): string {
-  const op = editing?.ops.find((o) => typeof o.path === "string" && o.path !== "rules");
-  return (op?.path as string | undefined) ?? source?.path ?? "loops.implement.attempts";
+/** One change in the dialog: a setting, a rule (added or edited), or one kept as is (a removal). */
+export type ChangeRow =
+  | { kind: "setting"; key: string; path: string; value: string | null }
+  | {
+      kind: "rule";
+      key: string;
+      op: "add" | "replace";
+      /** `rules`, or `rules.R-3` for an edit of an existing rule. */
+      path: string;
+      ruleId: string | null;
+      role: string;
+      project: string;
+      text: string;
+    }
+  | { kind: "fixed"; key: string; change: DefinitionChange; label: string };
+
+function rulePath(path: string): string | null {
+  const dotted = path.replace(/^\//, "").replaceAll("/", ".");
+  if (dotted !== "rules" && !dotted.startsWith("rules.")) return null;
+  return dotted;
+}
+
+/** The rows a pending proposal's ops edit as (every op, in order). */
+export function rowsOf(ops: readonly Record<string, unknown>[], doc?: DefinitionDoc): ChangeRow[] {
+  return ops.map((op, i) => {
+    const key = `op-${i}`;
+    const raw = String(op.path ?? "");
+    const verb = String(op.op ?? "replace") as DefinitionChange["op"];
+    const rules = rulePath(raw);
+    if (rules == null) {
+      return {
+        kind: "setting",
+        key,
+        path: raw.replace(/^\//, "").replaceAll("/", "."),
+        value: draftOf(op.value),
+      };
+    }
+    const ruleId = rules === "rules" ? null : rules.slice("rules.".length);
+    if (verb === "remove" || (verb === "replace" && ruleId == null)) {
+      return {
+        kind: "fixed",
+        key,
+        change: { op: verb, path: rules, ...(op.value !== undefined ? { value: op.value } : {}) },
+        label: ruleId ? `Remove rule ${ruleId}` : `${verb} rules`,
+      };
+    }
+    const value = (op.value ?? {}) as { role?: string; project?: string; text?: string };
+    const existing = ruleId ? doc?.rules?.find((r) => r.id === ruleId) : undefined;
+    return {
+      kind: "rule",
+      key,
+      op: verb === "add" ? "add" : "replace",
+      path: rules,
+      ruleId,
+      role: value.role ?? existing?.role ?? "*",
+      project: value.project ?? existing?.project ?? "*",
+      text: value.text ?? existing?.text ?? "",
+    };
+  });
+}
+
+type Parsed = { change: DefinitionChange } | { error: string };
+
+/** One row's change against the definition in force, or why it can't be sent. */
+export function parseRow(row: ChangeRow, definition: DefinitionResponse | undefined): Parsed {
+  if (row.kind === "fixed") return { change: row.change };
+  if (row.kind === "rule") {
+    const text = row.text.trim();
+    if (!text) return { error: "Write the rule" };
+    return {
+      change: { op: row.op, path: row.path, value: { role: row.role, project: row.project, text } },
+    };
+  }
+  const field = fieldFor(row.path);
+  if (!field) return { error: "Pick a setting" };
+  const doc = definition?.effective;
+  const shown = row.value ?? draftOf(getPath(doc, row.path));
+  const result = parseDraft(field, shown, definition?.bounds[row.path]);
+  if ("error" in result) return result;
+  if (result.value === getPath(doc, row.path)) return { error: "That is the value in force" };
+  return { change: { op: "replace", path: row.path, value: result.value } };
+}
+
+function newRows(source: ProposeSource | undefined): ChangeRow[] {
+  return [
+    {
+      kind: "setting",
+      key: "setting",
+      path: source?.path ?? "loops.implement.attempts",
+      value: null,
+    },
+    {
+      kind: "rule",
+      key: "rule",
+      op: "add",
+      path: "rules",
+      ruleId: null,
+      role: "ic",
+      project: "*",
+      text: "",
+    },
+  ];
+}
+
+/** A field with its name shown above it (placeholders vanish once a value is in). */
+function Labeled({
+  label,
+  htmlFor,
+  className,
+  children,
+}: {
+  label: string;
+  htmlFor: string;
+  className?: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className={cn("flex min-w-0 flex-col gap-1", className)}>
+      <label htmlFor={htmlFor} className="text-xs font-medium text-muted-foreground">
+        {label}
+      </label>
+      {children}
+    </div>
+  );
+}
+
+function SettingRowFields({
+  row,
+  definition,
+  onChange,
+}: {
+  row: Extract<ChangeRow, { kind: "setting" }>;
+  definition: DefinitionResponse | undefined;
+  onChange: (row: ChangeRow) => void;
+}) {
+  const id = useId();
+  const field = fieldFor(row.path);
+  const current = draftOf(getPath(definition?.effective, row.path));
+  const value = row.value ?? current;
+  const set = (next: string) => onChange({ ...row, value: next });
+  return (
+    <div className="flex min-w-0 flex-col gap-2">
+      <Labeled label="Setting" htmlFor={`${id}-path`}>
+        <Select
+          value={row.path}
+          onValueChange={(path) => onChange({ ...row, path, value: null })}
+          componentId="factory.propose.path"
+          valueHasNoPii
+        >
+          <SelectTrigger id={`${id}-path`} data-testid="propose-path" className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {GROUPS.map((g) => (
+              <SelectGroup key={g.title}>
+                <SelectLabel>{g.title}</SelectLabel>
+                {g.groups
+                  .flatMap((x) => x.fields)
+                  .map((f) => (
+                    <SelectItem key={f.path} value={f.path}>
+                      {f.label}{" "}
+                      <span className="font-mono text-xs text-muted-foreground">{f.path}</span>
+                    </SelectItem>
+                  ))}
+              </SelectGroup>
+            ))}
+          </SelectContent>
+        </Select>
+      </Labeled>
+      <Labeled label="New value" htmlFor={`${id}-value`}>
+        <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
+          <span className="text-muted-foreground">
+            now <span className="font-mono text-foreground">{current || "—"}</span> →
+          </span>
+          {field?.kind === "select" ? (
+            <Select
+              value={value}
+              onValueChange={set}
+              componentId="factory.propose.option"
+              valueHasNoPii
+            >
+              <SelectTrigger
+                id={`${id}-value`}
+                size="sm"
+                data-testid="propose-value"
+                className="w-40"
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {field.options?.map((o) => (
+                  <SelectItem key={o.value} value={o.value}>
+                    {o.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          ) : field?.kind === "bool" ? (
+            <Switch
+              id={`${id}-value`}
+              checked={value === "true"}
+              onCheckedChange={(c) => set(c ? "true" : "false")}
+              data-testid="propose-value"
+              componentId="factory.propose.toggle"
+            />
+          ) : (
+            <Input
+              id={`${id}-value`}
+              value={value}
+              onChange={(e) => set(e.target.value)}
+              data-testid="propose-value"
+              componentId="factory.propose.value"
+              className="h-7 w-28 font-mono"
+            />
+          )}
+          {field?.unit && <span className="text-xs text-muted-foreground">{field.unit}</span>}
+        </div>
+      </Labeled>
+    </div>
+  );
+}
+
+function RuleRowFields({
+  row,
+  projects,
+  onChange,
+}: {
+  row: Extract<ChangeRow, { kind: "rule" }>;
+  projects: readonly string[];
+  onChange: (row: ChangeRow) => void;
+}) {
+  const id = useId();
+  const scopes =
+    row.project !== "*" && !projects.includes(row.project) ? [...projects, row.project] : projects;
+  return (
+    <div className="flex min-w-0 flex-col gap-2">
+      {row.ruleId && (
+        <p className="text-xs text-muted-foreground">
+          Changes rule <span className="font-mono">{row.ruleId}</span>
+        </p>
+      )}
+      <div className="flex min-w-0 flex-wrap gap-2">
+        <Labeled label="Role" htmlFor={`${id}-role`}>
+          <Select
+            value={row.role}
+            onValueChange={(role) => onChange({ ...row, role })}
+            componentId="factory.propose.role"
+            valueHasNoPii
+          >
+            <SelectTrigger
+              id={`${id}-role`}
+              size="sm"
+              data-testid="propose-rule-role"
+              className="w-44"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {RULE_ROLES.map((r) => (
+                <SelectItem key={r} value={r}>
+                  {roleLabel(r)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Labeled>
+        <Labeled label="Project" htmlFor={`${id}-project`}>
+          <Select
+            value={row.project}
+            onValueChange={(project) => onChange({ ...row, project })}
+            componentId="factory.propose.project"
+          >
+            <SelectTrigger
+              id={`${id}-project`}
+              size="sm"
+              data-testid="propose-rule-project"
+              className="w-44"
+            >
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="*">every project</SelectItem>
+              {scopes.map((slug) => (
+                <SelectItem key={slug} value={slug}>
+                  #{slug}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Labeled>
+      </div>
+      <Labeled label="Rule" htmlFor={`${id}-text`}>
+        <Textarea
+          id={`${id}-text`}
+          value={row.text}
+          onChange={(e) => onChange({ ...row, text: e.target.value })}
+          maxLength={RULE_TEXT_MAX}
+          placeholder="e.g. Decide reversible naming and API-shape choices yourself."
+          data-testid="propose-rule-text"
+          componentId="factory.propose.rule"
+          className="min-h-16 bg-background"
+        />
+      </Labeled>
+    </div>
+  );
 }
 
 export function ProposeChangeDialog({
@@ -96,20 +410,24 @@ export function ProposeChangeDialog({
   /** A pending tuning or rules proposal to edit (owners). */
   editing?: ProposalView | null;
 }) {
+  const id = useId();
   const navigate = useNavigate();
   const { can } = useViewerCan();
+  const shell = useOptionalFactoryShell();
+  const projects = useMemo(
+    () => shell?.snapshot.projects.map((p) => p.slug) ?? [],
+    [shell?.snapshot.projects],
+  );
   const owner = can.settings;
   const definition = useFactoryDefinition(open ? factoryId : "");
   const edit = useDefinitionEdit(factoryId);
   const propose = useProposeChange(factoryId);
-  const editingRule = editing?.ops.find(
-    (o) => o.path === "rules" || String(o.path).startsWith("rules"),
+  const answer = useAnswerProposal(factoryId);
+  const [rows, setRows] = useState<ChangeRow[]>(() =>
+    editing ? rowsOf(editing.ops) : newRows(source),
   );
-  const [mode, setMode] = useState<"setting" | "rule">(editingRule ? "rule" : "setting");
-  const [path, setPath] = useState(() => initialPath(source, editing));
-  const [value, setValue] = useState("");
-  const [role, setRole] = useState("ic");
-  const [ruleText, setRuleText] = useState("");
+  const [mode, setMode] = useState<"setting" | "rule">("setting");
+  const [touched, setTouched] = useState(false);
   const [why, setWhy] = useState(editing?.rationale ?? source?.why ?? "");
   const [evidence, setEvidence] = useState(
     (editing?.evidence.map(String) ?? source?.evidence ?? []).join(", "),
@@ -120,87 +438,97 @@ export function ProposeChangeDialog({
   );
   const [trial, setTrial] = useState(editing != null);
   const [failure, setFailure] = useState<string | null>(null);
+  // The edit applied but the original is still pending: only its reject is left to do.
+  const [applied, setApplied] = useState<DefinitionEditResponse | null>(null);
 
-  const doc = definition.data?.effective;
-  const field = fieldFor(path);
-  const current = draftOf(getPath(doc, path));
-  // Start the value on what is in force (or what the edited proposal asked for).
-  useEffect(() => {
-    if (!open || !doc) return;
-    const asked = editing?.ops.find((o) => o.path === path)?.value;
-    setValue(asked !== undefined ? draftOf(asked) : draftOf(getPath(doc, path)));
-  }, [open, doc, path, editing]);
-  useEffect(() => {
-    const asked = editingRule?.value as { role?: string; text?: string } | undefined;
-    if (asked?.role) setRole(asked.role);
-    if (asked?.text) setRuleText(asked.text);
-  }, [editingRule]);
+  const active = editing ? rows : rows.filter((r) => r.kind === mode);
+  const parsed = active.map((row) => ({ row, result: parseRow(row, definition.data) }));
+  const problems = parsed.flatMap(({ row, result }) =>
+    "error" in result
+      ? [
+          active.length > 1 && row.kind === "setting"
+            ? `${row.path}: ${result.error}`
+            : result.error,
+        ]
+      : [],
+  );
+  const changes = parsed.flatMap(({ result }) => ("change" in result ? [result.change] : []));
+  const update = (next: ChangeRow) => {
+    setTouched(true);
+    setRows((all) => all.map((r) => (r.key === next.key ? next : r)));
+  };
 
-  const parsed = useMemo(() => {
-    if (mode === "rule") {
-      const text = ruleText.trim();
-      return text ? { value: { role, project: "*", text } } : { error: "Write the rule" };
-    }
-    if (!field) return { error: "Pick a setting" };
-    const result = parseDraft(field, value, definition.data?.bounds[path]);
-    if ("error" in result) return result;
-    return result.value === getPath(doc, path) ? { error: "That is the value in force" } : result;
-  }, [mode, ruleText, role, field, value, definition.data, path, doc]);
-
-  const busy = edit.isPending || propose.isPending;
+  const busy = edit.isPending || propose.isPending || answer.isPending;
   const ids = evidence
     .split(/[\s,]+/)
     .map((s) => s.trim())
     .filter(Boolean);
   const blocked = !owner && !can.apply_projects ? PROPOSE_REASON : null;
+  const metrics: readonly string[] =
+    metric && !(METRIC_NAMES as readonly string[]).includes(metric)
+      ? [...METRIC_NAMES, metric]
+      : METRIC_NAMES;
 
-  const submit = () => {
-    if ("error" in parsed || !why.trim() || blocked) return;
+  const done = (ref: string, text: string) => {
+    onOpenChange(false);
+    showToast(text);
+    navigate(improvementPageHref(factoryId, ref));
+  };
+
+  const appliedText = (saved: DefinitionEditResponse) =>
+    `${saved.proposal} applied${saved.status === "trial" ? " on trial" : ""} · v${saved.def_version ?? "?"}`;
+
+  /** Reject the edited original; on failure say so and offer it again. */
+  const rejectOriginal = async (saved: DefinitionEditResponse) => {
+    if (!editing) return done(saved.proposal, appliedText(saved));
+    try {
+      await answer.mutateAsync({
+        ref: editing.ref,
+        verb: "reject",
+        note: `Edited and applied as ${saved.proposal}`,
+      });
+      setApplied(null);
+      done(saved.proposal, `${appliedText(saved)} · ${editing.ref} rejected`);
+    } catch (error) {
+      setApplied(saved);
+      setFailure(
+        `Applied as ${saved.proposal}, but ${editing.ref} is still pending (${controlErrorMessage(error)}). Reject it so it can't be approved on top of your edit.`,
+      );
+    }
+  };
+
+  const submit = async () => {
     setFailure(null);
-    const change: DefinitionChange =
-      mode === "rule"
-        ? { op: "add", path: "rules", value: parsed.value }
-        : { op: "replace", path, value: parsed.value };
+    if (applied) {
+      await rejectOriginal(applied);
+      return;
+    }
+    if (problems.length > 0 || changes.length === 0 || !why.trim() || blocked) return;
     const effect = metric ? { metric, direction } : undefined;
-    const done = (ref: string, text: string) => {
-      onOpenChange(false);
-      showToast(text);
-      navigate(improvementPageHref(factoryId, ref));
-    };
-    const fail = (error: unknown) => setFailure(controlErrorMessage(error));
     if (owner) {
-      const note = editing ? `Edited from ${editing.ref}: ${why.trim()}` : why.trim();
-      edit.mutate(
-        {
-          changes: [change],
+      const cited = ids.length ? ` (evidence: ${ids.join(", ")})` : "";
+      const note = `${editing ? `Edited from ${editing.ref}: ` : ""}${why.trim()}${cited}`;
+      let saved: DefinitionEditResponse;
+      try {
+        saved = await edit.mutateAsync({
+          changes,
           note,
           ...(trial ? { trial: true } : {}),
           ...(effect ? { expected_effect: effect } : {}),
           ...(definition.data ? { base_version: definition.data.def_version } : {}),
-        },
-        {
-          onSuccess: (saved) => {
-            if (editing) {
-              void rejectProposal(
-                factoryId,
-                editing.ref,
-                `Edited and applied as ${saved.proposal}`,
-              );
-            }
-            done(
-              saved.proposal,
-              `${saved.proposal} applied${trial ? " on trial" : ""} · v${saved.def_version ?? "?"}`,
-            );
-          },
-          onError: fail,
-        },
-      );
+        });
+      } catch (error) {
+        setFailure(controlErrorMessage(error));
+        return;
+      }
+      await rejectOriginal(saved);
       return;
     }
+    const rules = changes.every((c) => rulePath(c.path) != null);
     propose.mutate(
       {
-        kind: mode === "rule" ? "rules" : "tuning",
-        changes: [change],
+        kind: rules ? "rules" : "tuning",
+        changes,
         rationale: why.trim(),
         evidence: ids,
         ...(effect ? { expected_effect: effect } : {}),
@@ -208,10 +536,12 @@ export function ProposeChangeDialog({
       {
         onSuccess: (res) =>
           done(res.proposal.ref, `${res.proposal.ref} sent to the owners as ${res.decision}`),
-        onError: fail,
+        onError: (error) => setFailure(controlErrorMessage(error)),
       },
     );
   };
+
+  const showProblem = problems.length > 0 && (touched || editing != null) && !applied;
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -226,195 +556,143 @@ export function ProposeChangeDialog({
           </DialogTitle>
           <DialogDescription>
             {owner
-              ? "Applies now as your change (a new definition version you can revert)."
+              ? editing
+                ? `Applies your edit now as a new definition version you can revert, then rejects ${editing.ref}.`
+                : "Applies now as your change (a new definition version you can revert)."
               : "Goes to the owners as a proposal; approving it runs it as a trial."}{" "}
             Rules are advisory text and never widen a policy or gate.
           </DialogDescription>
         </DialogHeader>
-        <div
-          role="radiogroup"
-          aria-label="Change"
-          className="inline-flex self-start rounded-lg bg-muted p-[3px]"
-        >
-          {(["setting", "rule"] as const).map((m) => (
-            <button
-              key={m}
-              type="button"
-              role="radio"
-              aria-checked={mode === m}
-              data-testid={`propose-mode-${m}`}
-              onClick={() => setMode(m)}
-              className={
-                mode === m
-                  ? "h-6 cursor-pointer rounded-md bg-background px-2 text-sm font-medium shadow-sm dark:bg-input/30"
-                  : "h-6 cursor-pointer rounded-md px-2 text-sm font-medium text-muted-foreground hover:text-foreground"
+        {!editing && (
+          <div
+            role="radiogroup"
+            aria-label="Change"
+            className="inline-flex self-start rounded-lg bg-muted p-[3px]"
+            onKeyDown={(e) => {
+              if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+                e.preventDefault();
+                const next = mode === "setting" ? "rule" : "setting";
+                setMode(next);
+                e.currentTarget.querySelector<HTMLButtonElement>(`[data-mode="${next}"]`)?.focus();
               }
+            }}
+          >
+            {(["setting", "rule"] as const).map((m) => (
+              <button
+                key={m}
+                type="button"
+                role="radio"
+                aria-checked={mode === m}
+                // Roving focus: only the chosen one is in the tab order (and takes the dialog's first focus).
+                tabIndex={mode === m ? 0 : -1}
+                data-mode={m}
+                data-testid={`propose-mode-${m}`}
+                onClick={() => setMode(m)}
+                className={cn(
+                  "h-6 cursor-pointer rounded-md px-2 text-sm font-medium focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+                  mode === m
+                    ? "bg-background shadow-sm dark:bg-input/30"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {m === "setting" ? "A setting" : "A rule"}
+              </button>
+            ))}
+          </div>
+        )}
+        <div className="flex min-w-0 flex-col gap-3" data-testid="propose-changes">
+          {active.map((row, i) => (
+            <div
+              key={row.key}
+              data-testid={`propose-change-${i}`}
+              className={cn(active.length > 1 && "rounded-lg border border-border p-2.5")}
             >
-              {m === "setting" ? "A setting" : "A rule"}
-            </button>
+              {active.length > 1 && (
+                <p className="mb-1.5 text-xs text-muted-foreground">
+                  Change {i + 1} of {active.length}
+                </p>
+              )}
+              {row.kind === "setting" ? (
+                <SettingRowFields row={row} definition={definition.data} onChange={update} />
+              ) : row.kind === "rule" ? (
+                <RuleRowFields row={row} projects={projects} onChange={update} />
+              ) : (
+                <p className="font-mono text-sm text-muted-foreground">{row.label}</p>
+              )}
+            </div>
           ))}
         </div>
-        {mode === "setting" ? (
-          <div className="flex min-w-0 flex-col gap-2">
-            <Select
-              value={path}
-              onValueChange={setPath}
-              componentId="factory.propose.path"
-              valueHasNoPii
-            >
-              <SelectTrigger aria-label="Setting" data-testid="propose-path" className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {GROUPS.map((g) => (
-                  <SelectGroup key={g.title}>
-                    <SelectLabel>{g.title}</SelectLabel>
-                    {g.groups
-                      .flatMap((x) => x.fields)
-                      .map((f) => (
-                        <SelectItem key={f.path} value={f.path}>
-                          {f.label}{" "}
-                          <span className="font-mono text-xs text-muted-foreground">{f.path}</span>
-                        </SelectItem>
-                      ))}
-                  </SelectGroup>
-                ))}
-              </SelectContent>
-            </Select>
-            <div className="flex min-w-0 flex-wrap items-center gap-2 text-sm">
-              <span className="text-muted-foreground">
-                now <span className="font-mono text-foreground">{current || "—"}</span> →
-              </span>
-              {field?.kind === "select" ? (
+        <Labeled label="Why" htmlFor={`${id}-why`}>
+          <Textarea
+            id={`${id}-why`}
+            value={why}
+            onChange={(e) => setWhy(e.target.value)}
+            placeholder="What the evidence shows"
+            rows={2}
+            data-testid="propose-why"
+            componentId="factory.propose.why"
+          />
+        </Labeled>
+        <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+          <Labeled label="Evidence" htmlFor={`${id}-evidence`}>
+            <Input
+              id={`${id}-evidence`}
+              value={evidence}
+              onChange={(e) => setEvidence(e.target.value)}
+              placeholder="F-9, INC-13, D-2"
+              data-testid="propose-evidence"
+              componentId="factory.propose.evidence"
+              className="h-7 font-mono text-xs"
+            />
+          </Labeled>
+          <Labeled label="Expected to move" htmlFor={`${id}-metric`}>
+            <span className="flex items-center gap-1.5">
+              <Select
+                value={metric || "none"}
+                onValueChange={(m) => setMetric(m === "none" ? "" : m)}
+                componentId="factory.propose.metric"
+                valueHasNoPii
+              >
+                <SelectTrigger
+                  id={`${id}-metric`}
+                  size="sm"
+                  data-testid="propose-metric"
+                  className="w-48"
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">no target metric</SelectItem>
+                  {metrics.map((m) => (
+                    <SelectItem key={m} value={m}>
+                      {metricLabel(m)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {metric && (
                 <Select
-                  value={value}
-                  onValueChange={setValue}
-                  componentId="factory.propose.option"
+                  value={direction}
+                  onValueChange={(d) => setDirection(d as "up" | "down")}
+                  componentId="factory.propose.direction"
                   valueHasNoPii
                 >
                   <SelectTrigger
                     size="sm"
-                    aria-label="New value"
-                    data-testid="propose-value"
-                    className="w-40"
+                    aria-label="Direction"
+                    data-testid="propose-direction"
+                    className="w-24"
                   >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {field.options?.map((o) => (
-                      <SelectItem key={o.value} value={o.value}>
-                        {o.label}
-                      </SelectItem>
-                    ))}
+                    <SelectItem value="down">↓ down</SelectItem>
+                    <SelectItem value="up">↑ up</SelectItem>
                   </SelectContent>
                 </Select>
-              ) : field?.kind === "bool" ? (
-                <Switch
-                  checked={value === "true"}
-                  onCheckedChange={(c) => setValue(c ? "true" : "false")}
-                  aria-label="New value"
-                  data-testid="propose-value"
-                  componentId="factory.propose.toggle"
-                />
-              ) : (
-                <Input
-                  value={value}
-                  onChange={(e) => setValue(e.target.value)}
-                  aria-label="New value"
-                  data-testid="propose-value"
-                  componentId="factory.propose.value"
-                  className="h-7 w-28 font-mono"
-                />
               )}
-              {field?.unit && <span className="text-xs text-muted-foreground">{field.unit}</span>}
-            </div>
-          </div>
-        ) : (
-          <div className="flex min-w-0 flex-col gap-2">
-            <Select
-              value={role}
-              onValueChange={setRole}
-              componentId="factory.propose.role"
-              valueHasNoPii
-            >
-              <SelectTrigger size="sm" aria-label="Role" className="w-44">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {RULE_ROLES.map((r) => (
-                  <SelectItem key={r} value={r}>
-                    {roleLabel(r)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <Textarea
-              value={ruleText}
-              onChange={(e) => setRuleText(e.target.value)}
-              maxLength={RULE_TEXT_MAX}
-              placeholder="e.g. Decide reversible naming and API-shape choices yourself."
-              aria-label="Rule text"
-              data-testid="propose-rule-text"
-              componentId="factory.propose.rule"
-              className="min-h-16 bg-background"
-            />
-          </div>
-        )}
-        <Textarea
-          value={why}
-          onChange={(e) => setWhy(e.target.value)}
-          placeholder="Why: what the evidence shows"
-          aria-label="Why"
-          rows={2}
-          data-testid="propose-why"
-          componentId="factory.propose.why"
-        />
-        <div className="grid min-w-0 gap-2 sm:grid-cols-[1fr_auto]">
-          <Input
-            value={evidence}
-            onChange={(e) => setEvidence(e.target.value)}
-            placeholder="Evidence: F-9, INC-13, D-2"
-            aria-label="Evidence"
-            data-testid="propose-evidence"
-            componentId="factory.propose.evidence"
-            className="h-7 font-mono text-xs"
-          />
-          <span className="flex items-center gap-1.5">
-            <Select
-              value={metric || "none"}
-              onValueChange={(m) => setMetric(m === "none" ? "" : m)}
-              componentId="factory.propose.metric"
-              valueHasNoPii
-            >
-              <SelectTrigger size="sm" aria-label="Expected to move" className="w-48">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="none">no target metric</SelectItem>
-                {METRIC_NAMES.map((m) => (
-                  <SelectItem key={m} value={m}>
-                    {humanize(m)}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            {metric && (
-              <Select
-                value={direction}
-                onValueChange={(d) => setDirection(d as "up" | "down")}
-                componentId="factory.propose.direction"
-                valueHasNoPii
-              >
-                <SelectTrigger size="sm" aria-label="Direction" className="w-16">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="down">↓</SelectItem>
-                  <SelectItem value="up">↑</SelectItem>
-                </SelectContent>
-              </Select>
-            )}
-          </span>
+            </span>
+          </Labeled>
         </div>
         {owner && (
           <label className="inline-flex items-center gap-2 text-sm text-muted-foreground">
@@ -422,15 +700,19 @@ export function ProposeChangeDialog({
               size="sm"
               checked={trial}
               onCheckedChange={setTrial}
+              data-testid="propose-trial"
               componentId="factory.propose.trial"
             />
             Run as a 48 h trial (guard metrics decide keep or revert)
           </label>
         )}
-        {"error" in parsed && (mode === "rule" ? ruleText : value) !== "" && (
-          <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
-            <CircleAlertIcon aria-hidden className="size-3.5" />
-            {parsed.error}
+        {showProblem && (
+          <p
+            data-testid="propose-problem"
+            className="flex items-center gap-1.5 text-sm text-muted-foreground"
+          >
+            <CircleAlertIcon aria-hidden className="size-3.5 shrink-0" />
+            {problems.join(" · ")}
           </p>
         )}
         {failure && (
@@ -444,17 +726,26 @@ export function ProposeChangeDialog({
             onClick={() => onOpenChange(false)}
             componentId="factory.propose.cancel"
           >
-            Cancel
+            {applied ? "Close" : "Cancel"}
           </Button>
           <Button
-            onClick={submit}
+            onClick={() => void submit()}
             loading={busy}
-            disabled={"error" in parsed || !why.trim() || Boolean(blocked)}
+            disabled={
+              !applied &&
+              (problems.length > 0 || changes.length === 0 || !why.trim() || Boolean(blocked))
+            }
             title={blocked ?? undefined}
             data-testid="propose-submit"
             componentId="factory.propose.submit"
           >
-            {owner ? (editing ? "Apply edited change" : "Apply as my change") : "Propose to owners"}
+            {applied && editing
+              ? `Reject ${editing.ref}`
+              : owner
+                ? editing
+                  ? "Apply edited change"
+                  : "Apply as my change"
+                : "Propose to owners"}
           </Button>
         </DialogFooter>
       </DialogContent>

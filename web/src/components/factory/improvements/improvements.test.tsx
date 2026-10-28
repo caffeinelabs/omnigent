@@ -9,9 +9,11 @@ import {
   issueText,
   onTrial,
   proposed,
+  tier2Plain,
   trialProgress,
   verdictText,
 } from "./improvementsModel";
+import { rowsOf } from "./ProposeChangeDialog";
 import { ScorecardLine, ScorecardTable } from "./Scorecard";
 
 const FID = "f4f4ba9c77725331b12f0fa7072dc4d3";
@@ -21,6 +23,39 @@ function byRef(ref: string) {
 }
 
 describe("improvements model", () => {
+  it("says why Tier 2 is off without server setting names", () => {
+    expect(tier2Plain("OMNIGENT_FACTORY_SMITH is not 1")).toBe("not switched on for this server");
+    expect(tier2Plain("no factory GitHub identity configured (OMNIGENT_FACTORY_SMITH_LOGIN)")).toBe(
+      "no factory GitHub identity configured",
+    );
+    expect(tier2Plain("caffeinelabs/omnigent#staging is not protected")).toBe(
+      "caffeinelabs/omnigent#staging is not protected",
+    );
+    expect(tier2Plain(null)).toBeNull();
+  });
+
+  it("edits every op of a proposal, a rule keeping its project and id", () => {
+    const rows = rowsOf(
+      [
+        { op: "replace", path: "cadence.lead", value: 7200 },
+        { op: "add", path: "rules", value: { role: "ic", project: "api-version", text: "T" } },
+        { op: "replace", path: "rules.R-3", value: { text: "Shorter." } },
+        { op: "remove", path: "rules.R-4" },
+      ],
+      {
+        rules: [
+          { id: "R-3", role: "pl", project: "db", text: "Long.", origin: null, state: "active" },
+        ],
+      },
+    );
+    expect(rows).toMatchObject([
+      { kind: "setting", path: "cadence.lead", value: "7200" },
+      { kind: "rule", op: "add", path: "rules", role: "ic", project: "api-version", text: "T" },
+      { kind: "rule", op: "replace", path: "rules.R-3", ruleId: "R-3", role: "pl", project: "db" },
+      { kind: "fixed", change: { op: "remove", path: "rules.R-4" }, label: "Remove rule R-4" },
+    ]);
+  });
+
   it("counts and sorts the tabs", () => {
     // The page reads Tier-1 kinds only (projects proposals live in the Room).
     const all = learnProposals().filter((p) => p.kind !== "projects");
@@ -44,7 +79,7 @@ describe("improvements model", () => {
     const [rule] = changeLines(byRef("C-15"));
     expect(rule).toMatchObject({ sign: "+", path: "rules", before: null });
     expect(rule!.after).toContain("role=project_lead");
-    expect(effectText(byRef("C-14"))).toBe("heartbeat usd per day ↓ by 0.3");
+    expect(effectText(byRef("C-14"))).toBe("heartbeat $ / day ↓ by $0.30");
   });
 
   it("links evidence ids to their pages", () => {
@@ -69,7 +104,7 @@ describe("improvements model", () => {
 describe("scorecard", () => {
   it("renders the target and every guard against the baseline", () => {
     const card = scorecard("C-14")!;
-    expect(verdictText(card)).toBe("on track to keep · n=31/24");
+    expect(verdictText(card)).toBe("on track to keep · 31 of 24 heartbeat hours");
     render(<ScorecardTable card={card} testId="card" />);
 
     const table = screen.getByTestId("card");
@@ -93,6 +128,6 @@ describe("scorecard", () => {
       "data-status",
       "no_data",
     );
-    expect(verdictText(card)).toBe("reverted · guard regressed: human_prompts_per_day");
+    expect(verdictText(card)).toBe("reverted · guard regressed: human prompts / day");
   });
 });

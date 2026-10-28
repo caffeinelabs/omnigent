@@ -349,6 +349,24 @@ export function humanize(key: string): string {
   return key.replaceAll("_", " ");
 }
 
+// Metric names whose words alone read poorly ("cost per merged pr").
+const METRIC_LABEL: Record<string, string> = {
+  cost_per_merged_pr: "$ / merged PR",
+  cost_usd: "cost $",
+  wasted_usd: "$ wasted",
+  heartbeat_usd_per_day: "heartbeat $ / day",
+  human_prompts_per_day: "human prompts / day",
+  interventions_per_merged_pr: "interventions / merged PR",
+  decisions_per_pr: "decisions / PR",
+  engine_wake_efficiency: "NEXT wakes",
+  time_to_first_pr: "time to first PR",
+};
+
+/** A metric key as people read it: `cost_per_merged_pr` → `$ / merged PR`. */
+export function metricLabel(key: string): string {
+  return METRIC_LABEL[key] ?? humanize(key);
+}
+
 /** The Daisy band of human prompts per day (30–50), and the lead/PL/other split. */
 export function promptBand(result: MetricResult | null | undefined): {
   perDay: number | null;

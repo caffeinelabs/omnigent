@@ -10,6 +10,7 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Final
 
@@ -26,6 +27,11 @@ if TYPE_CHECKING:
 DEF_VERSIONS_MAX: Final = 50
 PLATFORM_VERSIONS_MAX: Final = 20
 _SCORED: Final = frozenset({"trial", "kept", "reverted"})
+SCORECARD_TTL_S: Final = 60
+"""A live scorecard is reused this long: every open card refetches on each full frame."""
+_SCORECARD_MAX: Final = 256
+_scorecards: dict[tuple[str, int], tuple[int, dict[str, Any]]] = {}
+_scorecards_lock = threading.Lock()
 
 
 def _proposal_refs(deps: FactoryDeps, ids: Iterable[str]) -> dict[str, str]:
@@ -124,7 +130,18 @@ def scorecard(deps: FactoryDeps, row: FactoryProposal, now: int) -> dict[str, An
         return {**stored, "live": False}
     if row.status != "trial" and row.trial_until is None:
         return None
-    return {**evaluate.evaluate_trial(deps, row, now).to_dict(), "live": row.status == "trial"}
+    # Keyed on the row's last update, so a keep, revert or edit is never served stale.
+    key = (row.id, int(row.updated_at or 0))
+    with _scorecards_lock:
+        hit = _scorecards.get(key)
+    if hit is not None and now - hit[0] < SCORECARD_TTL_S:
+        return hit[1]
+    card = {**evaluate.evaluate_trial(deps, row, now).to_dict(), "live": row.status == "trial"}
+    with _scorecards_lock:
+        if len(_scorecards) >= _SCORECARD_MAX:
+            _scorecards.clear()
+        _scorecards[key] = (now, card)
+    return card
 
 
 __all__ = ["bundle_drift", "scorecard", "version_markers"]

@@ -111,3 +111,76 @@ export function Sparkline({
     </svg>
   );
 }
+
+/** The known total of a series (null buckets left out). */
+export function sparkTotal(series: readonly (number | null)[]): number {
+  return series.reduce<number>((sum, v) => sum + (v ?? 0), 0);
+}
+
+/**
+ * Tiny bars, one per bucket (the health strip's hours): a busy hour stands
+ * out, a quiet one stays empty, and an unknown one (`null`) is a faint stub.
+ */
+export function SparkBars({
+  series,
+  width = 36,
+  height = 12,
+  label,
+  className,
+  testId,
+}: {
+  series: readonly (number | null)[];
+  width?: number;
+  height?: number;
+  label?: string;
+  className?: string;
+  testId?: string;
+}) {
+  const max = Math.max(...series.map((v) => v ?? 0), 0) || 1;
+  const step = series.length ? width / series.length : width;
+  const bar = Math.max(1, step - 0.5);
+  return (
+    <svg
+      data-testid={testId}
+      role={label ? "img" : undefined}
+      aria-label={label}
+      aria-hidden={label ? undefined : true}
+      viewBox={`0 0 ${width} ${height}`}
+      width={width}
+      height={height}
+      className={cn("shrink-0", className)}
+    >
+      {/* A faint box, so the day's frame reads as a chart even with one busy hour. */}
+      <rect
+        x={0}
+        y={0}
+        width={width}
+        height={height}
+        rx={2}
+        fill="currentColor"
+        fillOpacity={0.08}
+      />
+      {series
+        .map((v, i) => ({ v, x: i * step }))
+        .map(({ v, x }) => {
+          if (v == null) {
+            return (
+              <rect
+                key={x}
+                x={x}
+                y={height - 2}
+                width={bar}
+                height={2}
+                fill="currentColor"
+                fillOpacity={0.15}
+              />
+            );
+          }
+          if (v <= 0) return null;
+          // At least 2px, so one event in an hour is still visible.
+          const h = Math.max(2, (v / max) * height);
+          return <rect key={x} x={x} y={height - h} width={bar} height={h} fill="currentColor" />;
+        })}
+    </svg>
+  );
+}

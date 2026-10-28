@@ -7,7 +7,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { FlaskConicalIcon, RotateCcwIcon, SaveIcon } from "lucide-react";
+import { FlaskConicalIcon, LockIcon, RotateCcwIcon, SaveIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -24,11 +24,15 @@ import {
   type DefinitionResponse,
   FactoryApiError,
 } from "@/lib/factoryApi";
+import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
 import { Link } from "@/lib/routing";
+import { cn } from "@/lib/utils";
 import { controlErrorMessage } from "../controls/controlModel";
 import { improvementPageHref } from "../factoryRoutes";
 import { useDefinitionEdit } from "../insights/learnQueries";
-import { LEVER_REASON, ReasonGated, useViewerCan } from "../shell/viewerCan";
+import { useOptionalFactoryShell } from "../shell/FactoryShellContext";
+import { stickyBottom } from "../shell/scroll";
+import { LEVER_REASON, useViewerCan } from "../shell/viewerCan";
 import {
   type FieldGroup,
   type SettingField,
@@ -39,6 +43,19 @@ import {
 } from "./settingsModel";
 
 export const TRIAL_HOURS = [24, 48, 72, 168] as const;
+
+/** "outside 1–10": a value in force that the bounds no longer allow (e.g. from an env ceiling). */
+function outsideBounds(
+  bounds: readonly [number, number] | undefined,
+  field: SettingField,
+  current: string,
+): string | null {
+  if (!bounds || field.kind !== "number" || current === "") return null;
+  const value = Number(current);
+  if (!Number.isFinite(value) || (value >= bounds[0] && value <= bounds[1])) return null;
+  if (field.path.startsWith("cadence.") && value === 0) return null;
+  return `In force but outside ${bounds[0]}–${bounds[1]}: the next save must bring it back in range.`;
+}
 
 function boundsText(bounds: readonly [number, number] | undefined, field: SettingField) {
   if (!bounds || field.kind !== "number") return null;
@@ -114,7 +131,10 @@ function FieldInput({
         aria-label={field.label}
         data-testid={`setting-input-${field.path}`}
         componentId="factory.settings.value"
-        className="h-7 w-24 text-right tabular-nums max-sm:flex-1"
+        className={cn(
+          "h-7 max-sm:flex-1",
+          field.kind === "number" ? "w-24 text-right tabular-nums" : "w-32",
+        )}
       />
       {field.unit && <span className="w-10 text-xs text-muted-foreground">{field.unit}</span>}
     </span>
@@ -163,6 +183,8 @@ export function DefinitionForm({
 }) {
   const { can } = useViewerCan();
   const readOnlyReason = can.settings ? null : LEVER_REASON.settings;
+  const phone = useIsMobileViewport();
+  const wide = useOptionalFactoryShell()?.wide ?? true;
   const fields = useMemo(() => groups.flatMap((g) => g.fields), [groups]);
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [note, setNote] = useState("");
@@ -207,6 +229,15 @@ export function DefinitionForm({
 
   return (
     <div data-testid={testId} className="flex min-w-0 flex-col gap-4">
+      {readOnlyReason && (
+        <p
+          data-testid="settings-read-only"
+          className="flex items-center gap-2 rounded-lg border border-border bg-muted/50 px-3 py-2 text-sm text-muted-foreground"
+        >
+          <LockIcon aria-hidden className="size-3.5 shrink-0" />
+          {readOnlyReason}. You see the values in force (v{definition.def_version}).
+        </p>
+      )}
       {groups.map((group) => (
         <section
           key={group.title}
@@ -227,6 +258,7 @@ export function DefinitionForm({
               const error = errors[field.path] ?? null;
               const range = boundsText(bounds[field.path], field);
               const option = field.options?.find((o) => o.value === value);
+              const outside = outsideBounds(bounds[field.path], field, current);
               return (
                 <li
                   key={field.path}
@@ -255,6 +287,14 @@ export function DefinitionForm({
                         className="text-xs text-destructive"
                       >
                         {error}
+                      </span>
+                    )}
+                    {outside && !changed && (
+                      <span
+                        data-testid={`setting-outside-${field.path}`}
+                        className="text-xs text-warning"
+                      >
+                        {outside}
                       </span>
                     )}
                   </label>
@@ -289,103 +329,112 @@ export function DefinitionForm({
           </ul>
         </section>
       ))}
-      <div
-        data-testid="settings-save-bar"
-        className="sticky bottom-2 z-10 flex min-w-0 flex-col gap-2 rounded-xl border border-border bg-card-solid p-3 shadow-sm max-xl:bottom-[calc(4rem+env(safe-area-inset-bottom))]"
-      >
-        {readOnlyReason ? (
-          <p data-testid="settings-read-only" className="text-sm text-muted-foreground">
-            {readOnlyReason}. You see the values in force (v{definition.def_version}).
-          </p>
-        ) : changes.length > 0 ? (
-          <ul data-testid="settings-pending" className="flex flex-col font-mono text-xs">
-            {changes.map((c) => (
-              <li key={c.path} className="truncate">
-                {changeLine(c, effective)}
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <p className="text-sm text-muted-foreground max-sm:hidden">
-            v{definition.def_version} is in force. Every save is a new version you can revert.
-          </p>
-        )}
-        <div className="flex min-w-0 flex-wrap items-center gap-2">
-          <Input
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            placeholder="Why (goes into History)"
-            aria-label="Note"
-            disabled={Boolean(readOnlyReason) || edit.isPending}
-            data-testid="settings-note"
-            componentId="factory.settings.note"
-            className="h-7 min-w-0 flex-1 basis-56"
-          />
-          <label className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
-            <Switch
-              checked={trial}
-              onCheckedChange={setTrial}
-              disabled={Boolean(readOnlyReason)}
-              size="sm"
-              data-testid="settings-trial"
-              componentId="factory.settings.trial"
-            />
-            <FlaskConicalIcon aria-hidden className="size-3.5" />
-            Trial
-          </label>
-          {trial && (
-            <Select
-              value={String(trialH)}
-              onValueChange={(v) => setTrialH(Number(v))}
-              componentId="factory.settings.trial_h"
-              valueHasNoPii
-            >
-              <SelectTrigger size="sm" className="w-20" aria-label="Trial length">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {TRIAL_HOURS.map((h) => (
-                  <SelectItem key={h} value={String(h)}>
-                    {h} h
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          )}
-          <Button
-            size="sm"
-            variant="ghost"
-            onClick={() => {
-              setDraft({});
-              setFailure(null);
-            }}
-            disabled={!dirty || edit.isPending}
-            componentId="factory.settings.reset"
-            className="text-muted-foreground"
+      {!readOnlyReason && (
+        // Opaque from the bar down to the scroller's edge (or the phone's tabs),
+        // reaching its right edge, so nothing shows below or beside the bar.
+        <div
+          data-testid="settings-save-dock"
+          className="sticky z-10 -mr-4 bg-background pt-2 pr-4 max-md:-ml-4 max-md:pl-4 md:-mr-6 md:pr-6"
+          style={{
+            bottom: stickyBottom(phone, wide),
+            paddingBottom: phone ? "0.5rem" : "calc(0.75rem + var(--omnigent-inset-bottom, 0px))",
+          }}
+        >
+          <div
+            data-testid="settings-save-bar"
+            // Below 1280 px the Room button floats bottom-right: keep Save clear of it.
+            className="flex min-w-0 flex-col gap-2 rounded-xl border border-border bg-card-solid p-3 shadow-sm md:max-xl:mr-32"
           >
-            <RotateCcwIcon />
-            Reset
-          </Button>
-          <ReasonGated reason={readOnlyReason} testId="settings">
-            <Button
-              size="sm"
-              onClick={save}
-              loading={edit.isPending}
-              disabled={changes.length === 0 || Object.keys(errors).length > 0}
-              data-testid="settings-save"
-              componentId="factory.settings.save"
-            >
-              <SaveIcon />
-              Save{changes.length > 1 ? ` ${changes.length} changes` : ""}
-            </Button>
-          </ReasonGated>
+            {changes.length > 0 ? (
+              <ul data-testid="settings-pending" className="flex flex-col font-mono text-xs">
+                {changes.map((c) => (
+                  <li key={c.path} className="truncate">
+                    {changeLine(c, effective)}
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-sm text-muted-foreground max-sm:hidden">
+                v{definition.def_version} is in force. Every save is a new version you can revert.
+              </p>
+            )}
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              <Input
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                placeholder="Why (goes into History)"
+                aria-label="Note"
+                disabled={edit.isPending}
+                data-testid="settings-note"
+                componentId="factory.settings.note"
+                className="h-7 min-w-0 flex-1 basis-56"
+              />
+              <label className="inline-flex items-center gap-1.5 text-sm text-muted-foreground">
+                <Switch
+                  checked={trial}
+                  onCheckedChange={setTrial}
+                  size="sm"
+                  data-testid="settings-trial"
+                  componentId="factory.settings.trial"
+                  // The default track is near invisible on the dark bar.
+                  className="dark:data-unchecked:bg-muted-foreground/45"
+                />
+                <FlaskConicalIcon aria-hidden className="size-3.5" />
+                Trial
+              </label>
+              {trial && (
+                <Select
+                  value={String(trialH)}
+                  onValueChange={(v) => setTrialH(Number(v))}
+                  componentId="factory.settings.trial_h"
+                  valueHasNoPii
+                >
+                  <SelectTrigger size="sm" className="w-20" aria-label="Trial length">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {TRIAL_HOURS.map((h) => (
+                      <SelectItem key={h} value={String(h)}>
+                        {h} h
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setDraft({});
+                  setFailure(null);
+                }}
+                disabled={!dirty || edit.isPending}
+                componentId="factory.settings.reset"
+                className="text-muted-foreground"
+              >
+                <RotateCcwIcon />
+                Reset
+              </Button>
+              <Button
+                size="sm"
+                onClick={save}
+                loading={edit.isPending}
+                disabled={changes.length === 0 || Object.keys(errors).length > 0}
+                data-testid="settings-save"
+                componentId="factory.settings.save"
+              >
+                <SaveIcon />
+                Save{changes.length > 1 ? ` ${changes.length} changes` : ""}
+              </Button>
+            </div>
+            {failure && (
+              <p data-testid="settings-error" className="text-sm text-destructive">
+                Couldn’t save: {failure}
+              </p>
+            )}
+          </div>
         </div>
-        {failure && (
-          <p data-testid="settings-error" className="text-sm text-destructive">
-            Couldn’t save: {failure}
-          </p>
-        )}
-      </div>
+      )}
     </div>
   );
 }

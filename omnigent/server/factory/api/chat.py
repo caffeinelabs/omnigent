@@ -291,8 +291,9 @@ async def put_read(
             thread.key,
             body.last_seq,
         )
-        # The reader's other tabs and devices refresh their unread counts.
-        live.announce_factory_changed(request.app.state, root.id, ["reads"])
+        # The reader's other tabs and devices refresh their unread counts (only when it moved).
+        if row.last_seq == body.last_seq:
+            live.announce_factory_changed(request.app.state, root.id, ["reads"])
         return {"thread": row.thread, "last_seq": row.last_seq}
 
     return await _guard(run)

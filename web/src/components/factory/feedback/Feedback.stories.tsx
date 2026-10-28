@@ -127,6 +127,17 @@ export const PrRatingMerged = frame(
   <PrRatingStandalone factoryId={FID} pr={reviewScenario("merged").pr} />,
 );
 
+/** The merged PR's rating sent: the thanks line replaces the stars. */
+export const PrRatingSent: Story = {
+  ...PrRatingMerged,
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.click(await body.findByTestId("pr-rating-stars-4"));
+    await userEvent.click(await body.findByTestId("pr-rating-send"));
+    await body.findByTestId("pr-rating-sent");
+  },
+};
+
 // ── Demo, decision, wrap-up, calibration ───────────────────────
 
 export const DemoUseful = frame(
@@ -167,6 +178,16 @@ export const ClosureReasonDark = frame(
 export const ClosureReasonPicking: Story = {
   ...ClosureReason,
   play: click("decision-closure-D-21"),
+};
+
+/** "Superseded" chosen: Rework and Abandon are enabled. */
+export const ClosureReasonChosen: Story = {
+  ...ClosureReason,
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.click(await body.findByTestId("decision-closure-D-21"));
+    await userEvent.click(await body.findByRole("option", { name: /superseded/i }));
+  },
 };
 
 export const WrapUp: Story = {

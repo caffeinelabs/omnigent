@@ -36,6 +36,7 @@ import {
   effectText,
   evidenceHref,
   issueText,
+  tier2Plain,
   trialProgress,
 } from "./improvementsModel";
 import { ProposeChangeDialog } from "./ProposeChangeDialog";
@@ -184,7 +185,11 @@ export function LearnProposalCard({
       {
         onSuccess: () =>
           showToast(
-            verb === "apply" ? `${proposal.ref} approved · on trial` : `${proposal.ref} rejected`,
+            verb === "reject"
+              ? `${proposal.ref} rejected`
+              : code
+                ? `${proposal.ref} approved · the Smith lane takes it`
+                : `${proposal.ref} approved · on trial`,
           ),
         onError: fail,
       },
@@ -219,14 +224,23 @@ export function LearnProposalCard({
             {proposal.class === "human" ? "human" : `class ${proposal.class}`}
           </span>
         )}
-        <span className="min-w-0 flex-1 truncate font-medium">{proposal.title}</span>
-        {isTrial && <TrialBar proposal={proposal} nowS={nowS} />}
+        {/* On a phone the title takes its own line under the chips, unclipped. */}
         <span
-          data-testid={`proposal-${proposal.ref}-state`}
-          className={cn("rounded-md px-1.5 py-0.5 text-xs", TONE_CHIP[STATE_TONE[state]])}
+          data-testid={`proposal-${proposal.ref}-title`}
+          title={proposal.title}
+          className="min-w-0 flex-1 font-medium max-sm:order-last max-sm:basis-full max-sm:break-words sm:truncate"
         >
-          {isTrial && <FlaskConicalIcon aria-hidden className="mr-1 inline size-3" />}
-          {STATE_LABEL[state]}
+          {proposal.title}
+        </span>
+        <span className="ml-auto inline-flex shrink-0 items-center gap-2">
+          {isTrial && <TrialBar proposal={proposal} nowS={nowS} />}
+          <span
+            data-testid={`proposal-${proposal.ref}-state`}
+            className={cn("rounded-md px-1.5 py-0.5 text-xs", TONE_CHIP[STATE_TONE[state]])}
+          >
+            {isTrial && <FlaskConicalIcon aria-hidden className="mr-1 inline size-3" />}
+            {STATE_LABEL[state]}
+          </span>
         </span>
       </header>
       <p className="text-xs text-muted-foreground">
@@ -253,9 +267,15 @@ export function LearnProposalCard({
           data-testid={`proposal-${proposal.ref}-tier2`}
           className="rounded-lg bg-muted px-2.5 py-1.5 text-xs text-muted-foreground"
         >
-          {tier2?.enabled
-            ? "The Factory Smith lane is on: an approved code change becomes a Smith project and a PR to omnigent."
-            : `Smith lane disabled${tier2?.reason ? ` (${tier2.reason})` : ""}: recorded with its evidence, never run.`}
+          {tier2?.enabled ? (
+            "The Factory Smith lane is on: an approved code change becomes a Smith project and a PR to omnigent."
+          ) : (
+            <span title={tier2?.reason ?? undefined}>
+              Smith lane off
+              {tier2Plain(tier2?.reason) ? ` (${tier2Plain(tier2?.reason)})` : ""}: recorded with
+              its evidence, never run.
+            </span>
+          )}
         </p>
       )}
       {scored && card && (
@@ -308,34 +328,34 @@ export function LearnProposalCard({
             </Button>
           </ReasonGated>
         )}
+        {pending && (
+          <ReasonGated reason={ownerReason} testId={`proposal-${proposal.ref}-approve`}>
+            <Button
+              size="sm"
+              onClick={() => respond("apply")}
+              disabled={busy}
+              data-testid={`proposal-${proposal.ref}-approve`}
+              componentId="factory.improvements.approve"
+            >
+              {code ? <CheckIcon /> : <FlaskConicalIcon />}
+              {code ? "Approve" : "Approve trial"}
+            </Button>
+          </ReasonGated>
+        )}
         {pending && !code && (
-          <>
-            <ReasonGated reason={ownerReason} testId={`proposal-${proposal.ref}-approve`}>
-              <Button
-                size="sm"
-                onClick={() => respond("apply")}
-                disabled={busy}
-                data-testid={`proposal-${proposal.ref}-approve`}
-                componentId="factory.improvements.approve"
-              >
-                <FlaskConicalIcon />
-                Approve trial
-              </Button>
-            </ReasonGated>
-            <ReasonGated reason={ownerReason} testId={`proposal-${proposal.ref}-edit`}>
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => setEditing(true)}
-                disabled={busy}
-                data-testid={`proposal-${proposal.ref}-edit`}
-                componentId="factory.improvements.edit"
-              >
-                <PencilIcon />
-                Edit
-              </Button>
-            </ReasonGated>
-          </>
+          <ReasonGated reason={ownerReason} testId={`proposal-${proposal.ref}-edit`}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setEditing(true)}
+              disabled={busy}
+              data-testid={`proposal-${proposal.ref}-edit`}
+              componentId="factory.improvements.edit"
+            >
+              <PencilIcon />
+              Edit
+            </Button>
+          </ReasonGated>
         )}
         {pending && (
           <ReasonGated reason={ownerReason} testId={`proposal-${proposal.ref}-reject`}>
@@ -370,7 +390,8 @@ export function LearnProposalCard({
             Copy as issue
           </Button>
         )}
-        {proposal.thread && (
+        {/* The list links #improvements once, above the tabs; the change's own page links it here. */}
+        {expanded && proposal.thread && (
           <Link
             to={roomPageHref(factoryId, proposal.thread)}
             componentId="factory.improvements.discuss"

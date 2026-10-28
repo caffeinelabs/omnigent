@@ -84,6 +84,16 @@ export const LoadError = page("/insights", {
   learn: { insights: { error: 503, message: "metrics unavailable" } },
 });
 
+/** The version markers can't be read: the row says so with Retry (not "none yet"). */
+export const VersionsError = page("/insights", {
+  routes: {
+    [`/v1/factory/factories/${round3Snapshot().factory.id}/versions`]: {
+      error: 503,
+      message: "unavailable",
+    },
+  },
+});
+
 /** Ops (viewer): every number, no per-person table, Propose change disabled. */
 export const Viewer = page("/insights", { role: "viewer" });
 
@@ -139,7 +149,7 @@ function Tiles({
   const days = fixtureDays();
   return (
     <BoardFrame theme={theme} width={1100} routes={learnRoutes(SNAPSHOT_PATH.split("/").pop()!)}>
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] gap-2 p-4">
+      <div className="grid grid-cols-2 gap-2 p-4 sm:grid-cols-4">
         {KPI_SPECS.map((spec) => (
           <KpiTile
             key={spec.name}

@@ -7,13 +7,14 @@ import { resetFactoryControls } from "@/components/factory/controls/useFactoryCo
 import type { StoryRoutes } from "@/components/factory/factoryStoryFixtures";
 import {
   type LearnRouteOptions,
+  learnProposals,
   learnRoutes,
 } from "@/components/factory/insights/__fixtures__/learnFixtures";
 import {
   round3Events,
   round3Snapshot,
 } from "@/components/factory/shell/__fixtures__/shellFixtures";
-import type { ViewerRole } from "@/lib/factoryApi";
+import type { ProposalView, ViewerRole } from "@/lib/factoryApi";
 import { FactoryPage } from "./FactoryPage";
 import { type FactoryServer, SNAPSHOT, json, serveFactory } from "./testServer";
 
@@ -162,6 +163,14 @@ describe("Insights", () => {
     expect(screen.getByTestId("kpi-merge_acceptance-propose")).toBeDisabled();
   });
 
+  it("marks small groups inconclusive in the group-by table", async () => {
+    serve();
+    renderAt("/insights?group=project");
+
+    const table = await screen.findByTestId("insights-group-table");
+    await waitFor(() => expect(table.querySelector("[data-small-n]")).not.toBeNull());
+  });
+
   it("measures one definition version when its marker is pressed", async () => {
     serve();
     renderAt("/insights");
@@ -169,6 +178,9 @@ describe("Insights", () => {
     fireEvent.click(await screen.findByTestId("insights-mark-def-7"));
 
     await waitFor(() => expect(location).toContain("def=7"));
+    expect(await screen.findByTestId("insights-def-filter")).toHaveTextContent(
+      "Measuring definition v7 only",
+    );
     await waitFor(() =>
       expect(
         server.calls.some((c) => c.path.includes("/insights?") && c.path.includes("def_version=7")),
@@ -239,7 +251,9 @@ describe("Settings", () => {
     expect(screen.getByTestId("setting-value-loops.implement.attempts")).toHaveTextContent(
       "3 tries",
     );
-    expect(screen.getByTestId("settings-save")).toBeDisabled();
+    // No disabled form to scroll past: the values, with one line saying who can change them.
+    expect(screen.queryByTestId("settings-save")).toBeNull();
+    expect(screen.queryByTestId("settings-save-bar")).toBeNull();
   });
 
   it("sets the Slack webhook without ever showing it", async () => {
@@ -341,7 +355,7 @@ describe("Improvements", () => {
     renderAt("/improvements?tab=proposed");
 
     expect(await screen.findByTestId("proposal-C-16-tier2")).toHaveTextContent(
-      "Smith lane disabled (OMNIGENT_FACTORY_SMITH is not 1)",
+      "Smith lane off (not switched on for this server)",
     );
     expect(screen.getByTestId("proposal-C-16-copy-issue")).toBeEnabled();
     expect(screen.queryByTestId("proposal-C-16-approve")).toBeNull();
@@ -356,6 +370,24 @@ describe("Improvements", () => {
       ["approve", "edit", "reject"].map((lever) => screen.findByTestId(`proposal-C-15-${lever}`)),
     );
     for (const lever of levers) expect(lever).toBeDisabled();
+  });
+
+  it("shows no counts until the proposals have loaded", async () => {
+    serve("creator", {}, { proposals: "pending" });
+    renderAt("/improvements");
+
+    expect(await screen.findByTestId("improvements-loading")).toBeInTheDocument();
+    expect(screen.queryByTestId("improvements-counts")).toBeNull();
+    expect(screen.getByTestId("improvements-tab-trial")).toHaveTextContent(/^On trial$/);
+  });
+
+  it("names the member who decided, not their session id", async () => {
+    serve();
+    renderAt("/improvements/C-14");
+
+    const record = await screen.findByTestId("proposal-record");
+    await waitFor(() => expect(record).toHaveTextContent(/Decided\s*Atlas/));
+    expect(record).not.toHaveTextContent(/[0-9a-f]{32}/);
   });
 
   it("lists the definition's versions with a diff and bundle drift", async () => {
@@ -395,6 +427,155 @@ describe("Improvements", () => {
       ]),
     );
     await waitFor(() => expect(location).toContain("/improvements/C-19"));
+  });
+});
+
+// ── Edit on a pending proposal ─────────────────────────────────
+
+/** The fixture's proposals with `pending` in place of the pending ones. */
+function pendingOnly(pending: ProposalView[]): LearnRouteOptions {
+  const all = [...learnProposals().filter((p) => p.status !== "pending"), ...pending];
+  return {
+    proposals: (path: string) => {
+      const kind = new URL(path, "http://x").searchParams.get("kind");
+      return { body: { data: all.filter((p) => !kind || p.kind === kind) } };
+    },
+  };
+}
+
+function c15With(fields: Partial<ProposalView>): ProposalView {
+  return { ...learnProposals().find((p) => p.ref === "C-15")!, ...fields };
+}
+
+const MULTI = (): ProposalView =>
+  c15With({
+    id: "4040404040404040404040404040404a",
+    ref: "C-40",
+    number: 40,
+    kind: "tuning",
+    title: "Slower heartbeats for leads",
+    ops: [
+      { op: "replace", path: "cadence.lead", value: 7200 },
+      { op: "replace", path: "cadence.project_lead", value: 14400 },
+    ],
+    before: null,
+    after: null,
+  });
+
+const APPLIED = { proposal: "C-30", proposal_id: "c30", status: "trial", def_version: 9 };
+
+describe("Edit on a pending proposal", { timeout: 20_000 }, () => {
+  it("keeps a project-scoped rule on its project", async () => {
+    const scoped = c15With({
+      ops: [
+        {
+          op: "add",
+          path: "rules",
+          value: { role: "ic", project: "api-version", text: "Run unit tests first." },
+        },
+      ],
+    });
+    serve(
+      "creator",
+      {
+        [`PUT ${SNAPSHOT}/definition`]: () => json(APPLIED),
+        [`POST ${SNAPSHOT}/proposals/C-15/reject`]: () => json({ proposal: {}, decision: {} }),
+      },
+      pendingOnly([scoped]),
+    );
+    renderAt("/improvements?tab=proposed");
+
+    fireEvent.click(await screen.findByTestId("proposal-C-15-edit"));
+    const dialog = await screen.findByTestId("propose-change-dialog");
+    expect(within(dialog).getByTestId("propose-rule-project")).toHaveTextContent("#api-version");
+    fireEvent.change(within(dialog).getByTestId("propose-rule-text"), {
+      target: { value: "Run the unit tests first." },
+    });
+    const submit = within(dialog).getByTestId("propose-submit");
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(sent("PUT", `${SNAPSHOT}/definition`)).toHaveLength(1));
+    const body = sent("PUT", `${SNAPSHOT}/definition`)[0] as { changes: unknown[]; note: string };
+    expect(body.changes).toEqual([
+      {
+        op: "add",
+        path: "rules",
+        value: { role: "ic", project: "api-version", text: "Run the unit tests first." },
+      },
+    ]);
+    expect(body.note).toMatch(/^Edited from C-15: .*\(evidence: D-1, D-2/);
+    await waitFor(() =>
+      expect(sent("POST", `${SNAPSHOT}/proposals/C-15/reject`)).toEqual([
+        { note: "Edited and applied as C-30" },
+      ]),
+    );
+    await waitFor(() => expect(location).toContain("/improvements/C-30"));
+  });
+
+  it("applies every change of a multi-change proposal, then rejects the original", async () => {
+    serve(
+      "creator",
+      {
+        [`PUT ${SNAPSHOT}/definition`]: () => json(APPLIED),
+        [`POST ${SNAPSHOT}/proposals/C-40/reject`]: () => json({ proposal: {}, decision: {} }),
+      },
+      pendingOnly([MULTI()]),
+    );
+    renderAt("/improvements?tab=proposed");
+
+    fireEvent.click(await screen.findByTestId("proposal-C-40-edit"));
+    const dialog = await screen.findByTestId("propose-change-dialog");
+    const second = within(dialog).getByTestId("propose-change-1");
+    expect(within(dialog).getByTestId("propose-change-0")).toHaveTextContent("Change 1 of 2");
+    await waitFor(() => expect(within(second).getByTestId("propose-value")).toHaveValue("14400"));
+    fireEvent.change(within(second).getByTestId("propose-value"), { target: { value: "21600" } });
+    fireEvent.click(within(dialog).getByTestId("propose-submit"));
+
+    await waitFor(() => expect(sent("PUT", `${SNAPSHOT}/definition`)).toHaveLength(1));
+    expect((sent("PUT", `${SNAPSHOT}/definition`)[0] as { changes: unknown[] }).changes).toEqual([
+      { op: "replace", path: "cadence.lead", value: 7200 },
+      { op: "replace", path: "cadence.project_lead", value: 21600 },
+    ]);
+    await waitFor(() => expect(sent("POST", `${SNAPSHOT}/proposals/C-40/reject`)).toHaveLength(1));
+    const order = server.calls.map((c) => `${c.method} ${c.path.split("?")[0]}`);
+    expect(order.indexOf(`POST ${SNAPSHOT}/proposals/C-40/reject`)).toBeGreaterThan(
+      order.indexOf(`PUT ${SNAPSHOT}/definition`),
+    );
+  });
+
+  it("says the original is still pending when its reject fails, and retries only the reject", async () => {
+    let rejectOk = false;
+    serve(
+      "creator",
+      {
+        [`PUT ${SNAPSHOT}/definition`]: () => json(APPLIED),
+        [`POST ${SNAPSHOT}/proposals/C-40/reject`]: () =>
+          rejectOk
+            ? json({ proposal: {}, decision: {} })
+            : json({ error: { code: "conflict", message: "decision busy" } }, 409),
+      },
+      pendingOnly([MULTI()]),
+    );
+    renderAt("/improvements?tab=proposed");
+
+    fireEvent.click(await screen.findByTestId("proposal-C-40-edit"));
+    const dialog = await screen.findByTestId("propose-change-dialog");
+    const submit = within(dialog).getByTestId("propose-submit");
+    await waitFor(() => expect(submit).toBeEnabled());
+    fireEvent.click(submit);
+
+    expect(await within(dialog).findByTestId("propose-error")).toHaveTextContent(
+      "Applied as C-30, but C-40 is still pending",
+    );
+    expect(submit).toHaveTextContent("Reject C-40");
+    expect(location).not.toContain("/improvements/C-30");
+    rejectOk = true;
+    fireEvent.click(submit);
+
+    await waitFor(() => expect(sent("POST", `${SNAPSHOT}/proposals/C-40/reject`)).toHaveLength(2));
+    expect(sent("PUT", `${SNAPSHOT}/definition`)).toHaveLength(1);
+    await waitFor(() => expect(location).toContain("/improvements/C-30"));
   });
 });
 

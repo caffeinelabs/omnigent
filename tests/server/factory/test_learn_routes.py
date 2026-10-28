@@ -16,6 +16,7 @@ import pytest
 import pytest_asyncio
 
 from omnigent import factory as F
+from omnigent.server.auth import LEVEL_READ
 from omnigent.server.factory import definition, tuning
 from omnigent.server.factory.actor import Actor
 from omnigent.server.factory.telemetry import metrics, versions
@@ -138,6 +139,48 @@ async def test_a_trial_has_a_live_scorecard_with_every_guard(cockpit: Cockpit) -
     assert card["baseline_window"][1] == start and end <= int(time.time()) + 1
 
 
+async def test_a_live_scorecard_is_reused_for_a_minute(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.server.factory import evaluate, learn_view
+
+    fid = cockpit.fid
+    definition.definition_for(cockpit.deps, fid)
+    row, _ = cockpit.store.create_proposal(
+        fid,
+        kind="tuning",
+        title="loops.review.rounds 3→2",
+        author_kind="human",
+        author="alice",
+        approval="owner",
+        class_="human",
+        ops=[_change("loops.review.rounds", 2)],
+        result={"trial_h": 24},
+    )
+    await tuning.apply(
+        cockpit.app.state,
+        cockpit.world.get("lead_a"),
+        row,
+        actor=Actor.human("alice", "owner"),
+        trial=True,
+    )
+    runs: list[str] = []
+    real = evaluate.evaluate_trial
+    monkeypatch.setattr(
+        evaluate, "evaluate_trial", lambda deps, r, now: runs.append(r.id) or real(deps, r, now)
+    )
+    fresh = cockpit.store.get_proposal(row.id)
+    assert fresh is not None
+    now = int(time.time())
+
+    first = learn_view.scorecard(cockpit.deps, fresh, now)
+    again = learn_view.scorecard(cockpit.deps, fresh, now + 30)
+    later = learn_view.scorecard(cockpit.deps, fresh, now + learn_view.SCORECARD_TTL_S + 1)
+
+    assert first == again and later is not None
+    assert len(runs) == 2
+
+
 async def test_a_projects_proposal_has_no_scorecard(cockpit: Cockpit) -> None:
     cockpit.store.create_proposal(
         cockpit.fid, kind="projects", title="x", author_kind="human", author="alice"
@@ -240,13 +283,15 @@ async def test_bad_changes_are_refused(
 
 
 async def test_viewers_and_strangers_cannot_propose(cockpit: Cockpit) -> None:
-    resp = await _post(
-        cockpit,
-        "/definition/proposals",
-        {"changes": [_change("cadence.lead", 7200)], "rationale": "slower"},
-        user="bob",
-    )
-    assert resp.status_code in (403, 404)
+    body = {"changes": [_change("cadence.lead", 7200)], "rationale": "slower"}
+    stranger = await _post(cockpit, "/definition/proposals", body, user="bob")
+    assert stranger.status_code in (403, 404)
+
+    cockpit.permissions.grant("dave", cockpit.fid, LEVEL_READ)
+    assert (await _get(cockpit, "/versions", user="dave")).status_code == 200
+    viewer = await _post(cockpit, "/definition/proposals", body, user="dave")
+    assert viewer.status_code == 403, viewer.text
+    assert cockpit.store.list_proposals(cockpit.fid, kind=["tuning", "rules"]) == []
 
 
 # ── Read marks reach the reader's other tabs ───────────────────
@@ -275,3 +320,14 @@ async def test_a_read_mark_announces_a_reads_frame(
 
     assert resp.status_code == 200, resp.text
     assert ["reads"] in frames
+
+    # A mark that doesn't move (an older tab catching up) wakes nobody.
+    frames.clear()
+    stale = await cockpit.client.put(
+        f"{_base(cockpit)}/chat/reads",
+        json={"thread": "factory", "last_seq": 0},
+        headers={"X-Test-User": "alice"},
+    )
+    assert stale.status_code == 200, stale.text
+    assert stale.json()["last_seq"] == 1
+    assert frames == []

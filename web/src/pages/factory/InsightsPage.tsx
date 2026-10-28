@@ -32,9 +32,11 @@ import {
   formatValue,
   headline,
   markPosition,
+  nState,
   nText,
   versionMarks,
   windowDays,
+  windowSeconds,
 } from "@/components/factory/insights/insightsModel";
 import {
   useFactoryInsights,
@@ -66,6 +68,7 @@ import {
 import { showToast } from "@/components/ui/toast";
 import {
   type IssueView,
+  type MetricAggregate,
   type MetricGroupBy,
   type MetricResult,
   fetchFactoryExport,
@@ -126,6 +129,26 @@ function Segmented<T extends string>({
   );
 }
 
+/** One grouped value with its n; below n=3 it is muted and called inconclusive. */
+function GroupValue({ agg, unit }: { agg: MetricAggregate | undefined; unit: string }) {
+  if (!agg) return <span className="text-muted-foreground">—</span>;
+  const small = nState(agg.n) !== "ok";
+  return (
+    <span
+      data-small-n={small ? "true" : undefined}
+      title={small ? nText(agg.n) : undefined}
+      className="inline-flex items-baseline gap-1 tabular-nums"
+    >
+      <span className={small ? "text-muted-foreground" : undefined}>
+        {formatValue(headline(agg), unit)}
+      </span>
+      <span className={cn("text-xs", small ? "text-warning" : "text-muted-foreground")}>
+        n={agg.n}
+      </span>
+    </span>
+  );
+}
+
 function GroupTable({
   metrics,
   group,
@@ -152,15 +175,14 @@ function GroupTable({
         {keys.map((key) => (
           <li key={key} className="flex min-w-0 flex-col gap-1 px-3 py-2 text-sm">
             <span className="truncate font-medium">{key || "—"}</span>
-            <span className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-xs">
+            <span className="grid grid-cols-1 gap-y-0.5 text-xs">
               {KPI_SPECS.map((spec) => {
                 const metric = metrics[spec.name];
-                const agg = metric?.groups?.[key];
                 return (
                   <span key={spec.name} className="flex min-w-0 justify-between gap-2">
                     <span className="truncate text-muted-foreground">{spec.title}</span>
-                    <span className="shrink-0 tabular-nums">
-                      {agg ? formatValue(headline(agg), metric?.unit ?? "") : "—"}
+                    <span className="shrink-0">
+                      <GroupValue agg={metric?.groups?.[key]} unit={metric?.unit ?? ""} />
                     </span>
                   </span>
                 );
@@ -193,11 +215,9 @@ function GroupTable({
                 <td className="max-w-[12rem] truncate px-3 py-1.5">{key || "—"}</td>
                 {KPI_SPECS.map((spec) => {
                   const metric = metrics[spec.name];
-                  const agg = metric?.groups?.[key];
                   return (
-                    <td key={spec.name} className="px-3 py-1.5 text-right tabular-nums">
-                      {agg ? formatValue(headline(agg), metric?.unit ?? "") : "—"}
-                      {agg && <span className="ml-1 text-xs text-muted-foreground">n={agg.n}</span>}
+                    <td key={spec.name} className="px-3 py-1.5 text-right">
+                      <GroupValue agg={metric?.groups?.[key]} unit={metric?.unit ?? ""} />
                     </td>
                   );
                 })}
@@ -206,9 +226,16 @@ function GroupTable({
           </tbody>
         </table>
       </div>
+      <p className="text-xs text-muted-foreground">
+        Values with n below 3 are shown muted: too few samples to compare.
+      </p>
     </>
   );
 }
+
+// Seven tiles: all in a row when the column is wide, else 4 + 3 (never 5 + 2).
+const KPI_GRID =
+  "grid min-w-0 grid-cols-2 gap-2 @xl/insights:grid-cols-3 @3xl/insights:grid-cols-4 @7xl/insights:grid-cols-7";
 
 function Loading() {
   return (
@@ -218,7 +245,7 @@ function Loading() {
       data-testid="insights-loading"
       className="flex flex-col gap-3"
     >
-      <div className="grid grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] gap-2">
+      <div className={KPI_GRID}>
         {KPI_SPECS.map((spec) => (
           <div key={spec.name} className="h-28 animate-pulse rounded-xl bg-muted/70" />
         ))}
@@ -281,12 +308,12 @@ export function InsightsPage() {
 
   const win = insights.data?.window ?? null;
   const days = useMemo(() => (win ? windowDays(win.since, win.until) : []), [win]);
+  // Without the insights window (still loading or failed), mark versions over the picked window.
+  const since = win?.since ?? Math.floor(nowS / 3600) * 3600 - windowSeconds(windowKey);
   const marks = useMemo(
     () =>
-      win && versions.data
-        ? versionMarks(versions.data.definition, versions.data.platform, win.since)
-        : [],
-    [win, versions.data],
+      versions.data ? versionMarks(versions.data.definition, versions.data.platform, since) : [],
+    [since, versions.data],
   );
   const sparkMarks = win
     ? marks
@@ -352,9 +379,23 @@ export function InsightsPage() {
   const projectTitle = (slug: string) =>
     snapshot.projects.find((p) => p.slug === slug)?.title ?? slug;
   const noData = data ? KPI_SPECS.every((k) => !(data.insights.kpis[k.name]?.n ?? 0)) : false;
+  const defRows = versions.data?.definition ?? [];
+  const defSince = defRows.find((d) => d.version === defVersion)?.created_at ?? null;
+  const defUntil =
+    defVersion != null ? (defRows.find((d) => d.version > defVersion)?.created_at ?? null) : null;
+  const experiments = data?.insights.experiments;
+  const hasFindings = data
+    ? data.insights.findings.length > 0 || data.insights.retros.length > 0
+    : false;
+  const hasExperiments = experiments
+    ? experiments.on_trial + experiments.kept + experiments.reverted > 0
+    : false;
 
   return (
-    <div data-testid="factory-insights-page" className="flex min-w-0 flex-col gap-3">
+    <div
+      data-testid="factory-insights-page"
+      className="@container/insights flex min-w-0 flex-col gap-3"
+    >
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2">
         <h1 className="text-base font-semibold">Insights</h1>
         <Segmented
@@ -443,6 +484,17 @@ export function InsightsPage() {
         <span className="text-muted-foreground">versions</span>
         {versions.isLoading ? (
           <span className="h-5 w-40 animate-pulse rounded-md bg-muted" />
+        ) : versions.error && !versions.data ? (
+          <span data-testid="insights-versions-error" className="text-muted-foreground">
+            couldn’t load them ·{" "}
+            <button
+              type="button"
+              onClick={() => void versions.refetch()}
+              className="cursor-pointer underline-offset-2 hover:text-foreground hover:underline"
+            >
+              Retry
+            </button>
+          </span>
         ) : marks.length === 0 ? (
           <span className="text-muted-foreground">none recorded yet</span>
         ) : (
@@ -475,16 +527,31 @@ export function InsightsPage() {
             );
           })
         )}
-        {defVersion != null && (
-          <button
-            type="button"
-            onClick={() => set("def", null)}
-            className="cursor-pointer text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
-          >
-            all versions
-          </button>
-        )}
       </div>
+      {defVersion != null && (
+        <p
+          data-testid="insights-def-filter"
+          className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-border bg-muted/50 px-3 py-1.5 text-sm"
+        >
+          <span className="font-medium">Measuring definition v{defVersion} only</span>
+          {defSince != null && (
+            <span className="text-muted-foreground">
+              since {new Date(defSince * 1000).toLocaleString()}
+              {defUntil != null ? ` until v${defVersion + 1}` : " (in force)"}
+            </span>
+          )}
+          <Button
+            size="xs"
+            variant="ghost"
+            onClick={() => set("def", null)}
+            data-testid="insights-def-clear"
+            componentId="factory.insights.def_clear"
+            className="ml-auto"
+          >
+            Clear
+          </Button>
+        </p>
+      )}
       {insights.isLoading && !insights.data ? (
         <Loading />
       ) : insights.error && !insights.data ? (
@@ -497,10 +564,7 @@ export function InsightsPage() {
         />
       ) : (
         <>
-          <div
-            data-testid="insights-kpis"
-            className="grid min-w-0 grid-cols-[repeat(auto-fill,minmax(11rem,1fr))] gap-2 max-sm:grid-cols-2"
-          >
+          <div data-testid="insights-kpis" className={KPI_GRID}>
             {KPI_SPECS.map((spec) => {
               const metric = insights.data?.kpis[spec.name];
               const series = daySeries(byDay.data?.metrics[spec.name]?.groups, days);
@@ -543,26 +607,33 @@ export function InsightsPage() {
           {group !== "factory" && <GroupTable metrics={grouped.data?.metrics} group={group} />}
           {data ? (
             <>
-              <FlowSection data={data} projectTitle={projectTitle} />
-              <LoopsSection data={data} />
-              <QualitySection data={data} />
-              <PeopleSection data={data} owner={owner} />
-              <CostSection data={data} />
-              <ReliabilitySection data={data} />
-              <FindingsSection
-                factoryId={fid}
-                insights={data.insights}
-                proposeFor={(issue: IssueView) =>
-                  proposeButton(
-                    {
-                      evidence: [issue.ref ?? issue.id],
-                      why: issue.summary,
-                    },
-                    `insights-finding-propose-${issue.ref ?? issue.id}`,
-                  )
-                }
-              />
-              <ExperimentsSection factoryId={fid} data={data} />
+              {/* With nothing measured, the sections would be dashes only: just the empty state. */}
+              {!noData && (
+                <>
+                  <FlowSection data={data} projectTitle={projectTitle} />
+                  <LoopsSection data={data} />
+                  <QualitySection data={data} />
+                  <PeopleSection data={data} owner={owner} />
+                  <CostSection data={data} />
+                  <ReliabilitySection data={data} />
+                </>
+              )}
+              {(!noData || hasFindings) && (
+                <FindingsSection
+                  factoryId={fid}
+                  insights={data.insights}
+                  proposeFor={(issue: IssueView) =>
+                    proposeButton(
+                      {
+                        evidence: [issue.ref ?? issue.id],
+                        why: issue.summary,
+                      },
+                      `insights-finding-propose-${issue.ref ?? issue.id}`,
+                    )
+                  }
+                />
+              )}
+              {(!noData || hasExperiments) && <ExperimentsSection factoryId={fid} data={data} />}
             </>
           ) : all.error ? (
             <FactoryLoadError

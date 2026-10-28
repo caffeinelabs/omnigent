@@ -206,19 +206,22 @@ export function RulesEditor({
             {rules.length} · at most 20 per role, 500 characters each · advisory, never widen a
             policy or gate
           </span>
-          <ReasonGated reason={reason} testId="rules-add" className="ml-auto">
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setDraft({ id: null, role: "ic", project: "*", text: "" })}
-              disabled={draft != null}
-              data-testid="rules-add"
-              componentId="factory.rules.add"
-            >
-              <PlusIcon />
-              Add rule
-            </Button>
-          </ReasonGated>
+          {/* The wrapper aligns it right whether or not the lever is gated. */}
+          <span className="ml-auto">
+            <ReasonGated reason={reason} testId="rules-add">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setDraft({ id: null, role: "ic", project: "*", text: "" })}
+                disabled={draft != null}
+                data-testid="rules-add"
+                componentId="factory.rules.add"
+              >
+                <PlusIcon />
+                Add rule
+              </Button>
+            </ReasonGated>
+          </span>
         </div>
         <RulesTable
           factoryId={factoryId}

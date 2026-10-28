@@ -7,7 +7,7 @@
 
 import { type ReactNode, useMemo } from "react";
 import { SearchCheckIcon } from "lucide-react";
-import type { IssueView } from "@/lib/factoryApi";
+import type { IssueFilters, IssueView } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { useFactoryIssues } from "../agents/opsQueries";
 import { CalibrationButtons } from "../feedback/FeedbackWidgets";
@@ -47,7 +47,7 @@ function IssueRow({
           <span className="text-xs text-muted-foreground">retro</span>
         )}
         <span className="min-w-0 flex-1 break-words">{issue.summary}</span>
-        <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+        <span className="shrink-0 text-xs text-muted-foreground tabular-nums max-sm:basis-full">
           {issue.project_slug ? `#${issue.project_slug} · ` : ""}
           {issue.count > 1 ? `×${issue.count} · ` : ""}
           {formatElapsed(nowS - issue.last_seen)} ago · {issue.source}
@@ -73,6 +73,13 @@ function IssueRow({
   );
 }
 
+/** The open findings the tab lists (the page's tab badge reads the same query). */
+export const FINDINGS_FILTERS: IssueFilters = {
+  class: "finding",
+  status: ["open", "acked"],
+  limit: 200,
+};
+
 export function FindingsTab({
   factoryId,
   nowS,
@@ -82,11 +89,7 @@ export function FindingsTab({
   nowS: number;
   proposeFor: (issue: IssueView) => ReactNode;
 }) {
-  const findings = useFactoryIssues(factoryId, {
-    class: "finding",
-    status: ["open", "acked"],
-    limit: 200,
-  });
+  const findings = useFactoryIssues(factoryId, FINDINGS_FILTERS);
   const retros = useFactoryIssues(factoryId, { class: "retro", limit: 50 });
   const rows = useMemo(
     () =>

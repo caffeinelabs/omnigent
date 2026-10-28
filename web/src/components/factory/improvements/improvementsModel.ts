@@ -12,7 +12,7 @@ import {
   prPageHref,
   projectPageHref,
 } from "../factoryRoutes";
-import { formatValue, goodDirection } from "../insights/insightsModel";
+import { formatValue, goodDirection, metricLabel } from "../insights/insightsModel";
 
 export interface ImprovementCounts {
   trial: number;
@@ -137,26 +137,49 @@ export function effectText(proposal: ProposalView): string | null {
   const effect = proposal.expected_effect;
   if (!effect) return null;
   const arrow = effect.direction === "up" ? "↑" : "↓";
-  return `${effect.metric.replaceAll("_", " ")} ${arrow}${effect.delta != null ? ` by ${Math.abs(effect.delta)}` : ""}`;
+  const by =
+    effect.delta != null ? ` by ${metricValue(effect.metric, Math.abs(effect.delta))}` : "";
+  return `${metricLabel(effect.metric)} ${arrow}${by}`;
+}
+
+/** A Tier-2 reason in plain words: server setting names stay in the tooltip. */
+export function tier2Plain(reason: string | null | undefined): string | null {
+  if (!reason) return null;
+  if (/_SMITH\b.*\bis not 1/.test(reason)) return "not switched on for this server";
+  return reason
+    .replace(/\s*\(OMNIGENT_[A-Z0-9_]+\)/g, "")
+    .replace(/\bOMNIGENT_[A-Z0-9_]+\b/g, "a server setting");
+}
+
+/** What a trial's n counts: heartbeat hours for a cadence change, else merged PRs. */
+export function nCounts(card: ScorecardView): string {
+  return card.min_n >= 24 ? "heartbeat hours" : card.min_n === 1 ? "merged PR" : "merged PRs";
 }
 
 /** The scorecard's verdict as a chip: what the server would do now. */
 export function verdictText(card: ScorecardView): string {
-  const tail = `n=${card.n}/${card.min_n}`;
+  const tail = `${card.n} of ${card.min_n} ${nCounts(card)}`;
   switch (card.outcome) {
     case "kept":
       return card.live ? `on track to keep · ${tail}` : `kept · ${tail}`;
     case "reverted":
-      return card.live ? `a guard regressed · would revert` : `reverted · ${card.reason}`;
+      return card.live
+        ? `a guard regressed · would revert`
+        : `reverted · ${readableReason(card.reason)}`;
     default:
-      return `inconclusive so far · ${card.reason}`;
+      return `inconclusive so far · ${readableReason(card.reason)}`;
   }
+}
+
+/** The server's reason with metric keys as people read them. */
+function readableReason(reason: string): string {
+  return reason.replace(/\b[a-z]+(?:_[a-z]+)+\b/g, (key) => metricLabel(key));
 }
 
 /** A guard or target value in its metric's unit. */
 export function metricValue(metric: string, value: number | null | undefined): string {
   const unit =
-    metric === "cost_per_merged_pr"
+    metric === "cost_per_merged_pr" || /(^|_)usd(_|$)/.test(metric)
       ? "usd"
       : metric === "human_prompts_per_day"
         ? "per_day"

@@ -10,6 +10,7 @@ import type { ReactNode } from "react";
 import { ChevronLeftIcon, FileQuestionIcon } from "lucide-react";
 import { Navigate } from "react-router-dom";
 import { ProposalCard } from "@/components/factory/cards/ProposalCard";
+import { actorName } from "@/components/factory/cards/proposalModel";
 import { FactoryLoadError } from "@/components/factory/FactoryLoadError";
 import { formatElapsed } from "@/components/factory/factoryFormat";
 import {
@@ -144,7 +145,7 @@ export function ProposalPage() {
               ? ([
                   [
                     "Decided",
-                    `${p.decided_by}${p.decided_at ? ` · ${formatElapsed(nowS - p.decided_at)} ago` : ""}`,
+                    `${actorName(p.decided_by, snapshot)}${p.decided_at ? ` · ${formatElapsed(nowS - p.decided_at)} ago` : ""}`,
                   ],
                 ] as [string, ReactNode][])
               : []),
@@ -164,7 +165,7 @@ export function ProposalPage() {
               ? ([
                   [
                     "Reverted",
-                    `${p.reverted_by ?? "server"} · ${formatElapsed(nowS - p.reverted_at)} ago${typeof result.revert_reason === "string" ? ` · ${result.revert_reason}` : ""}`,
+                    `${actorName(p.reverted_by, snapshot)} · ${formatElapsed(nowS - p.reverted_at)} ago${typeof result.revert_reason === "string" ? ` · ${result.revert_reason}` : ""}`,
                   ],
                 ] as [string, ReactNode][])
               : []),

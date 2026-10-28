@@ -4,6 +4,7 @@
 
 import { useEffect } from "react";
 import { useLocation } from "@/lib/routing";
+import { PHONE_TAB_BAR_REM } from "./PhoneTabBar";
 
 const FLASH_MS = 1200;
 
@@ -12,6 +13,25 @@ const FLASH_MS = 1200;
  * bars offset by it, since a scroller's padding counts toward `top`.
  */
 export const PAGE_EXTRA_TOP = "1.5rem";
+
+/**
+ * The factory page scroller's bottom padding beyond the inset: room for the
+ * phone's tabs, or for the Room button below 1280 px.
+ */
+export function pageExtraBottom(phone: boolean, wide: boolean): string {
+  return phone ? `${PHONE_TAB_BAR_REM + 1.5}rem` : wide ? "2rem" : "4.5rem";
+}
+
+/**
+ * `bottom` for a bar stuck to the page scroller's bottom edge (on a phone, to
+ * the top of its tabs): the scroller's bottom padding counts, so it is taken out.
+ */
+export function stickyBottom(phone: boolean, wide: boolean): string {
+  const extra = pageExtraBottom(phone, wide);
+  return phone
+    ? `calc(${PHONE_TAB_BAR_REM}rem - ${extra})`
+    : `calc(0px - ${extra} - var(--omnigent-inset-bottom, 0px))`;
+}
 
 /** Marks the dock's own scroller (a highlighted card scrolls within it first). */
 export const DOCK_SCROLLER_ATTRIBUTE = "data-dock-scroller";

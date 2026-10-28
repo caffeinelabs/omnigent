@@ -154,6 +154,8 @@ export function KpiTile({
   const delta = state === "ok" ? kpiDelta(view, metric, spec) : null;
   const deltaLabel = formatDelta(delta, view.unit);
   const band = spec.name === "human_prompts_per_day" ? promptBand(metric) : null;
+  // A line needs two points; a lone dot (and the markers around it) reads as noise.
+  const drawn = series.filter((v) => v != null).length >= 2;
   return (
     <article
       data-testid={`kpi-${spec.name}`}
@@ -161,8 +163,10 @@ export function KpiTile({
       title={metric?.definition}
       className="flex min-w-0 flex-col gap-1 rounded-xl border border-border bg-card px-3 py-2.5"
     >
-      <div className="flex min-w-0 items-baseline gap-2">
-        <h3 className="min-w-0 truncate text-xs font-medium text-muted-foreground">{spec.title}</h3>
+      <div className="flex min-w-0 items-start gap-2">
+        <h3 className="min-w-0 text-xs leading-4 font-medium text-muted-foreground">
+          {spec.title}
+        </h3>
         <span
           data-testid={`kpi-${spec.name}-n`}
           className={cn(
@@ -181,7 +185,7 @@ export function KpiTile({
             state === "ok" ? "text-foreground" : "text-muted-foreground",
           )}
         >
-          {view.primary}
+          {state === "none" ? "—" : view.primary}
         </span>
         {deltaLabel && (
           <span
@@ -198,23 +202,31 @@ export function KpiTile({
           {nText(n)}
         </p>
       ) : (
-        view.sub && <p className="min-w-0 truncate text-xs text-muted-foreground">{view.sub}</p>
+        view.sub && (
+          <p className="line-clamp-2 min-w-0 text-xs text-muted-foreground" title={view.sub}>
+            {view.sub}
+          </p>
+        )
       )}
       {band && band.perDay != null && state === "ok" && (
         <BandMeter perDay={band.perDay} band={band.band} />
       )}
       <div className="mt-auto flex min-w-0 items-end gap-2 pt-1">
-        <Sparkline
-          series={series}
-          marks={marks}
-          width={120}
-          height={22}
-          testId={`kpi-${spec.name}-spark`}
-          className={cn(
-            "min-w-0 flex-1",
-            state === "ok" ? "text-chart-1" : "text-muted-foreground/50",
-          )}
-        />
+        {drawn ? (
+          <Sparkline
+            series={series}
+            marks={marks}
+            width={120}
+            height={22}
+            testId={`kpi-${spec.name}-spark`}
+            className={cn(
+              "min-w-0 flex-1",
+              state === "ok" ? "text-chart-1" : "text-muted-foreground/50",
+            )}
+          />
+        ) : (
+          <span aria-hidden className="h-[22px] min-w-0 flex-1" />
+        )}
         {action}
       </div>
     </article>

@@ -265,13 +265,13 @@ export function parseDraft(
     default: {
       if (!text) return { error: "Required" };
       const value = Number(text);
-      if (!Number.isFinite(value)) return { error: "A number" };
-      if (field.integer && !Number.isInteger(value)) return { error: "A whole number" };
+      if (!Number.isFinite(value)) return { error: "Must be a number" };
+      if (field.integer && !Number.isInteger(value)) return { error: "Must be a whole number" };
       if (field.path.startsWith("cadence.") && value !== 0 && (value < 120 || value > 86_400)) {
-        return { error: "0 (off) or 120–86400" };
+        return { error: "Must be 0 (off) or 120–86400" };
       }
       if (bounds && (value < bounds[0] || value > bounds[1])) {
-        return { error: `${bounds[0]}–${bounds[1]}` };
+        return { error: `Must be ${bounds[0]}–${bounds[1]}` };
       }
       return { value };
     }

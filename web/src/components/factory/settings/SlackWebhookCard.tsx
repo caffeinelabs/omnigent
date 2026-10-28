@@ -45,12 +45,29 @@ export function SlackWebhookCard({ factoryId }: { factoryId: string }) {
     >
       <div className="flex min-w-0 flex-wrap items-baseline gap-2">
         <h2 className="text-ui font-semibold">Slack</h2>
-        <span data-testid="settings-slack-state" className="text-sm text-muted-foreground">
-          {routing.isLoading
-            ? "checking…"
-            : set
-              ? `● webhook set · warning and critical incidents are posted (min ${routing.data?.slack_min_severity ?? "warning"})`
-              : "○ no webhook: incidents stay in the cockpit and browser notifications"}
+        <span
+          data-testid="settings-slack-state"
+          className="inline-flex min-w-0 items-baseline gap-1.5 text-sm text-muted-foreground"
+        >
+          {routing.isLoading ? (
+            "checking…"
+          ) : set ? (
+            <>
+              <span aria-hidden className="size-2 shrink-0 self-center rounded-full bg-success" />
+              <span>
+                <span className="text-success">webhook set</span> · warning and critical incidents
+                are posted (min {routing.data?.slack_min_severity ?? "warning"})
+              </span>
+            </>
+          ) : (
+            <>
+              <span
+                aria-hidden
+                className="size-2 shrink-0 self-center rounded-full border border-muted-foreground"
+              />
+              no webhook: incidents stay in the cockpit and browser notifications
+            </>
+          )}
         </span>
       </div>
       <p className="text-sm text-muted-foreground">
@@ -80,7 +97,7 @@ export function SlackWebhookCard({ factoryId }: { factoryId: string }) {
             data-testid="settings-slack-save"
             componentId="factory.settings.slack_save"
           >
-            {set ? "Replace" : "Save"}
+            {set ? "Replace webhook" : "Set webhook"}
           </Button>
         </ReasonGated>
         {set && (

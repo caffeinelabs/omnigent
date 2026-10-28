@@ -207,7 +207,7 @@ export function UnneededButton({
     return (
       <span
         data-testid={`decision-unneeded-sent-${decisionRef}`}
-        className="inline-flex items-center gap-1 text-xs text-muted-foreground"
+        className="inline-flex items-center gap-1 self-start text-xs text-muted-foreground"
       >
         <CheckIcon aria-hidden className="size-3 text-success" />
         Marked unnecessary
@@ -231,7 +231,7 @@ export function UnneededButton({
         )
       }
       data-testid={`decision-unneeded-${decisionRef}`}
-      className="cursor-pointer text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-60"
+      className="cursor-pointer self-start text-xs text-muted-foreground underline-offset-2 hover:text-foreground hover:underline disabled:opacity-60"
     >
       Unnecessary?
     </button>

@@ -9,8 +9,8 @@ import { CheckIcon, MinusIcon, XIcon } from "lucide-react";
 import type { ScorecardView } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
 import { TONE_CHIP, TONE_TEXT } from "../factoryFormat";
-import { humanize } from "../insights/insightsModel";
-import { metricValue, targetTone, verdictText } from "./improvementsModel";
+import { metricLabel } from "../insights/insightsModel";
+import { metricValue, nCounts, targetTone, verdictText } from "./improvementsModel";
 
 const GUARD_LABEL: Record<string, string> = {
   merge_acceptance: "acceptance",
@@ -41,19 +41,19 @@ export function ScorecardLine({ card, testId }: { card: ScorecardView; testId?: 
           key={g.metric}
           data-testid={testId ? `${testId}-guard-${g.metric}` : undefined}
           data-status={g.status}
-          title={`${humanize(g.metric)}: ${metricValue(g.metric, g.baseline)} → ${metricValue(g.metric, g.trial)} (allowed ${g.allowed})`}
+          title={`${metricLabel(g.metric)}: ${metricValue(g.metric, g.baseline)} → ${metricValue(g.metric, g.trial)} (allowed ${g.allowed})`}
           className={cn(
             "inline-flex items-center gap-0.5 whitespace-nowrap",
             g.status === "regressed" && "font-medium text-destructive",
           )}
         >
-          {GUARD_LABEL[g.metric] ?? humanize(g.metric)}
+          {GUARD_LABEL[g.metric] ?? metricLabel(g.metric)}
           <GuardIcon status={g.status} />
         </span>
       ))}
       {card.target.metric && (
         <span className={cn("whitespace-nowrap", TONE_TEXT[tone])}>
-          target {humanize(card.target.metric)}{" "}
+          target {metricLabel(card.target.metric)}{" "}
           {metricValue(card.target.metric, card.target.baseline)} →{" "}
           {metricValue(card.target.metric, card.target.trial)}
         </span>
@@ -69,7 +69,7 @@ export function ScorecardTable({ card, testId }: { card: ScorecardView; testId?:
       ? [
           {
             key: "target",
-            label: `${humanize(card.target.metric)} (target ${card.target.direction === "up" ? "↑" : "↓"})`,
+            label: `${metricLabel(card.target.metric)} (target ${card.target.direction === "up" ? "↑" : "↓"})`,
             base: metricValue(card.target.metric, card.target.baseline),
             trial: metricValue(card.target.metric, card.target.trial),
             n: null as string | null,
@@ -80,7 +80,7 @@ export function ScorecardTable({ card, testId }: { card: ScorecardView; testId?:
       : []),
     ...card.guards.map((g) => ({
       key: g.metric,
-      label: humanize(g.metric),
+      label: metricLabel(g.metric),
       base: metricValue(g.metric, g.baseline),
       trial: metricValue(g.metric, g.trial),
       n: `${g.n_baseline} / ${g.n_trial}`,
@@ -106,7 +106,7 @@ export function ScorecardTable({ card, testId }: { card: ScorecardView; testId?:
           {verdictText(card)}
         </span>
         <span className="text-xs text-muted-foreground">
-          min n {card.min_n} merged PRs (24 h of beats for cadence)
+          kept once n reaches {card.min_n} {nCounts(card)}, the target is met and every guard holds
         </span>
       </p>
       <ul className="flex min-w-0 flex-col divide-y divide-border sm:hidden">

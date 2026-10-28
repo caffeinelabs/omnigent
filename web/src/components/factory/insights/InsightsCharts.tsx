@@ -129,6 +129,12 @@ export function DayBarChart({
   );
 }
 
+// One grid per list (rows are subgrids): every track starts and ends at the same
+// x, so equal values draw equal bars whatever the width of their value labels.
+const LIST_GRID =
+  "grid min-w-0 grid-cols-[minmax(0,8.5rem)_minmax(0,1fr)_auto] items-center gap-x-2 gap-y-1 text-sm max-sm:grid-cols-[minmax(0,6.5rem)_minmax(0,1fr)_auto]";
+const ROW_SUBGRID = "col-span-3 grid min-w-0 grid-cols-subgrid items-center";
+
 export interface MeterRow {
   key: string;
   label?: ReactNode;
@@ -164,12 +170,12 @@ export function MeterList({
   }
   const max = unit === "share" ? 1 : Math.max(...rows.map((r) => r.value ?? 0), 0) || 1;
   return (
-    <ul data-testid={testId} className="flex min-w-0 flex-col gap-1">
+    <ul data-testid={testId} className={LIST_GRID}>
       {rows.map((row) => (
         <li
           key={row.key}
           data-testid={testId ? `${testId}-${row.key}` : undefined}
-          className="grid min-w-0 grid-cols-[minmax(0,8.5rem)_minmax(0,1fr)_auto] items-center gap-2 text-sm max-sm:grid-cols-[minmax(0,6.5rem)_minmax(0,1fr)_auto]"
+          className={ROW_SUBGRID}
         >
           <span className="min-w-0 truncate text-muted-foreground" title={row.key}>
             {row.label ?? humanize(row.key)}
@@ -234,12 +240,12 @@ export function StackedRows({
           </li>
         ))}
       </ul>
-      <ul className="flex min-w-0 flex-col gap-1">
+      <ul className={LIST_GRID}>
         {rows.map((row) => (
           <li
             key={row.key}
             data-testid={testId ? `${testId}-${row.key}` : undefined}
-            className="grid min-w-0 grid-cols-[minmax(0,8.5rem)_minmax(0,1fr)_auto] items-center gap-2 text-sm max-sm:grid-cols-[minmax(0,6.5rem)_minmax(0,1fr)_auto]"
+            className={ROW_SUBGRID}
           >
             <span className="min-w-0 truncate text-muted-foreground" title={row.label}>
               {row.label}

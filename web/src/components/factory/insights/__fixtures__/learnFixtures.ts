@@ -1023,7 +1023,7 @@ export interface LearnRouteOptions {
   /** Replace the Insights read (e.g. `"pending"` or an error). */
   insights?: StoryResponse;
   definition?: StoryResponse;
-  proposals?: StoryResponse;
+  proposals?: StoryResponse | ((path: string) => StoryResponse);
 }
 
 function query(path: string): URLSearchParams {

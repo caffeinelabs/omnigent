@@ -4,7 +4,11 @@ import { ImprovementsPage } from "@/pages/factory/ImprovementsPage";
 import type { ViewerRole } from "@/lib/factoryApi";
 import { CockpitStory, type CockpitStoryOptions } from "../board/boardStoryKit";
 import { round3Events, round3Snapshot } from "../shell/__fixtures__/shellFixtures";
-import { type LearnRouteOptions, learnRoutes } from "../insights/__fixtures__/learnFixtures";
+import {
+  type LearnRouteOptions,
+  learnProposals,
+  learnRoutes,
+} from "../insights/__fixtures__/learnFixtures";
 
 const FID = round3Snapshot().factory.id;
 
@@ -85,6 +89,39 @@ export const EditProposal = page(
   click("proposal-C-15-edit"),
 );
 
+/** Edit on a two-change proposal: every change is carried, each editable. */
+export const EditMultiChange = page(
+  "/improvements",
+  {
+    search: "?tab=proposed",
+    learn: {
+      proposals: (path) => ({
+        body: {
+          data: [
+            ...learnProposals().filter((p) => p.status !== "pending"),
+            {
+              ...learnProposals().find((p) => p.ref === "C-15")!,
+              id: "4040404040404040404040404040404a",
+              ref: "C-40",
+              number: 40,
+              kind: "tuning",
+              title: "Slower heartbeats for both leads",
+              ops: [
+                { op: "replace", path: "cadence.lead", value: 7200 },
+                { op: "replace", path: "cadence.project_lead", value: 14400 },
+              ],
+              before: null,
+              after: null,
+              expected_effect: { metric: "heartbeat_share", direction: "down", delta: 0.1 },
+            },
+          ].filter((p) => p.kind === new URL(path, "http://story").searchParams.get("kind")),
+        },
+      }),
+    },
+  },
+  click("proposal-C-40-edit"),
+);
+
 /** Tier 2 on: the code change can be approved like any other. */
 export const ProposedTier2On = page("/improvements", {
   search: "?tab=proposed",
@@ -129,6 +166,17 @@ export const DefinitionViewer = page("/improvements", {
   role: "viewer",
 });
 
+/** An older version picked: its diff and Revert to v5. */
+export const DefinitionOlderVersion = page(
+  "/improvements",
+  { search: "?tab=definition" },
+  async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    const row = await body.findByTestId("definition-v5");
+    await userEvent.click(within(row).getAllByRole("button")[0]!);
+  },
+);
+
 /** Findings with "Is this right?" and Propose change; Sentinel's retro below. */
 export const Findings = page("/improvements", { search: "?tab=findings" });
 
@@ -170,6 +218,9 @@ export const ProposalReverted = page("/improvements/C-12");
 
 /** C-16: a code change recorded while Tier 2 is off; Copy as issue. */
 export const ProposalCode = page("/improvements/C-16");
+
+/** C-17: Luka's applied Settings edit (a human change), with Revert. */
+export const ProposalHumanApplied = page("/improvements/C-17", { learn: { afterSave: true } });
 
 /** C-4: a projects proposal shows the Room's card (Apply, Edit & apply, Reject). */
 export const ProposalProjects = page("/improvements/C-4");
