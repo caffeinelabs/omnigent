@@ -45,9 +45,40 @@ export const ROOM_FID = round3Snapshot().factory.id;
 export const ROOM_NOW_S = ROUND3_NOW_S;
 export const ATLAS_ID = round3Snapshot().factory.root_session_id;
 
-/** The Room's threads as `GET …/chat/threads` lists them (Luka's unread counts). */
-export function roomThreads(): ThreadView[] {
-  return clone(ROUND3.threads);
+/**
+ * The Room's threads as `GET …/chat/threads` lists them (Luka's unread
+ * counts): the fixed ones, one per project of `snapshot` (quiet ones with no
+ * messages yet), then the PR threads.
+ */
+export function roomThreads(snapshot: FactorySnapshot = round3Snapshot()): ThreadView[] {
+  const recorded = clone(ROUND3.threads);
+  const projects = snapshot.projects.map((project): ThreadView => {
+    const key = `project:${project.slug}`;
+    const found = recorded.find((t) => t.key === key);
+    if (found) return found;
+    const pl = snapshot.members.find(
+      (m) => m.role === "project_lead" && m.project === project.slug,
+    );
+    return {
+      key,
+      kind: "project",
+      title: `#${project.slug}`,
+      project_slug: project.slug,
+      pr_id: null,
+      pr_number: null,
+      responder_session_id: pl?.session_id ?? snapshot.factory.root_session_id,
+      responder_title: pl?.title ?? "Atlas",
+      last_seq: 0,
+      last_at: null,
+      messages: 0,
+      unread: 0,
+    };
+  });
+  return [
+    ...recorded.filter((t) => t.kind === "factory" || t.kind === "improvements"),
+    ...projects,
+    ...recorded.filter((t) => t.kind === "pr"),
+  ];
 }
 
 /** Every Room message of the round-3 fixture, oldest first. */

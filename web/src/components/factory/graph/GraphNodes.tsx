@@ -212,7 +212,8 @@ export function BusNodeView({ data }: NodeProps<Node<BusNodeData>>) {
       {badges.map((badge) => (
         <span
           key={badge}
-          className="absolute -top-2 right-2 rounded-full bg-warning px-1.5 text-[10px] leading-4 text-white"
+          // Above the border, clear of the title.
+          className="absolute -top-3.5 right-2 rounded-full bg-warning px-1.5 text-[10px] leading-4 text-white"
         >
           {badge}
         </span>

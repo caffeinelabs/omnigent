@@ -35,3 +35,43 @@ export function useViewportFill(
   }, [ref, bottomPx, minPx]);
   return height;
 }
+
+/**
+ * Where a sticky panel's top sits in the viewport, kept current while the
+ * page scrolls it up to where it sticks, so the panel can end at the
+ * viewport's bottom from the first frame (the Room dock's composer).
+ */
+export function useStickyTop(
+  ref: RefObject<HTMLElement | null>,
+  /** Whether the panel is mounted (measured again when it comes back). */
+  shown = true,
+): number | null {
+  const [top, setTop] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    const el = ref.current;
+    if (!el || !shown) return;
+    const scroller = el.closest<HTMLElement>('[data-testid="factory-page"]');
+    let frame = 0;
+    const measure = () => {
+      frame = 0;
+      const next = Math.max(0, Math.round(el.getBoundingClientRect().top));
+      setTop((prev) => (prev === next ? prev : next));
+    };
+    const schedule = () => {
+      if (!frame) frame = window.requestAnimationFrame(measure);
+    };
+    measure();
+    scroller?.addEventListener("scroll", schedule, { passive: true });
+    window.addEventListener("resize", schedule);
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(schedule);
+    const column = scroller?.firstElementChild ?? null;
+    if (observer && column) observer.observe(column);
+    return () => {
+      if (frame) window.cancelAnimationFrame(frame);
+      scroller?.removeEventListener("scroll", schedule);
+      window.removeEventListener("resize", schedule);
+      observer?.disconnect();
+    };
+  }, [ref, shown]);
+  return top;
+}

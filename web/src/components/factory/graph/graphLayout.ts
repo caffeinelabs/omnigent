@@ -231,7 +231,8 @@ export function layoutWork(graph: WorkGraphResponse, options: WorkLayoutOptions 
 export const BUS_W = 168;
 export const BUS_H = 44;
 const BUS_COL = 300;
-const BUS_ROW = 88;
+// Room between rows for the ping-pong badge and edge labels.
+const BUS_ROW = 104;
 
 export const PING_PONG_MIN = 6;
 export const ORPHAN_AFTER_MS = 2 * 3600 * 1000;

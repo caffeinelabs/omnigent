@@ -309,7 +309,7 @@ export function DescribeItForm({
                 </>
               ) : (
                 <>
-                  Start factory → #factory
+                  Start factory in #factory
                   <ArrowRightIcon />
                 </>
               )}

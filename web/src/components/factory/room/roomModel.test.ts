@@ -74,10 +74,15 @@ describe("threads", () => {
   it("groups fixed threads, projects in board order, then PRs", () => {
     const groups = groupThreads(roomThreads(), snapshot);
     expect(groups.fixed.map((t) => t.key)).toEqual(["factory", "improvements"]);
+    // Every project has a thread; a closed one sinks.
     expect(groups.projects.map((t) => t.key)).toEqual([
       "project:api-version",
       "project:db-version",
+      "project:ux-badge",
       "project:cache-warm",
+      "project:settings-row",
+      "project:base-env",
+      "project:docs-factory-envs",
     ]);
     expect(groups.prs.map((t) => t.title)).toEqual(["!9631"]);
   });

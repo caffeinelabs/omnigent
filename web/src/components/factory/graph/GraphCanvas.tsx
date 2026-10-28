@@ -4,9 +4,16 @@
  * tones mapped onto the app's tokens.
  */
 
-import { type MouseEvent, useMemo } from "react";
+import { type MouseEvent, useEffect, useMemo, useRef } from "react";
 import type { Edge, Node } from "@xyflow/react";
-import { Background, ReactFlow, ReactFlowProvider } from "@xyflow/react";
+import {
+  Background,
+  ReactFlow,
+  ReactFlowProvider,
+  getViewportForBounds,
+  useReactFlow,
+  useStore,
+} from "@xyflow/react";
 import { ZoomControls } from "@/shell/SubagentsGraphView";
 import { cn } from "@/lib/utils";
 import { GRAPH_NODE_TYPES } from "./GraphNodes";
@@ -36,6 +43,47 @@ export function toneEdges(edges: readonly Edge[]): Edge[] {
   }));
 }
 
+const FIT_PADDING = 0.12;
+const EDGE_GAP_PX = 16;
+
+/**
+ * The first view of a node set: fit, but never below `minZoom`, so a big
+ * graph opens readable, to pan. One that still overflows the canvas starts
+ * at its top-left corner (lane titles, the first wave) rather than centred.
+ */
+function InitialView({ minZoom, fitKey }: { minZoom: number; fitKey: string }) {
+  const { getNodes, getNodesBounds, setViewport } = useReactFlow();
+  // Controlled nodes never get `nodesInitialized`; the lookup's sizes tell.
+  const measured = useStore((s) => {
+    if (s.nodeLookup.size === 0) return false;
+    for (const node of s.nodeLookup.values()) {
+      if (!node.measured.width || !node.measured.height) return false;
+    }
+    return true;
+  });
+  const width = useStore((s) => s.width);
+  const height = useStore((s) => s.height);
+  const maxZoom = useStore((s) => s.maxZoom);
+  const fitted = useRef<string | null>(null);
+  useEffect(() => {
+    if (!measured || !width || !height || fitted.current === fitKey) return;
+    const nodes = getNodes();
+    if (nodes.length === 0) return;
+    fitted.current = fitKey;
+    // The instance's bounds use the measured sizes.
+    const bounds = getNodesBounds(nodes);
+    const view = getViewportForBounds(bounds, width, height, minZoom, maxZoom, FIT_PADDING);
+    const wide = bounds.width * view.zoom + 2 * EDGE_GAP_PX > width;
+    const tall = bounds.height * view.zoom + 2 * EDGE_GAP_PX > height;
+    void setViewport({
+      x: wide ? EDGE_GAP_PX - bounds.x * view.zoom : view.x,
+      y: tall ? EDGE_GAP_PX - bounds.y * view.zoom : view.y,
+      zoom: view.zoom,
+    });
+  }, [measured, width, height, maxZoom, minZoom, fitKey, getNodes, getNodesBounds, setViewport]);
+  return null;
+}
+
 export function GraphCanvas({
   nodes,
   edges,
@@ -55,6 +103,8 @@ export function GraphCanvas({
   fitMinZoom?: number;
 }) {
   const toned = useMemo(() => toneEdges(edges), [edges]);
+  // A new node set (scope, hidden done tasks) gets a fresh first view.
+  const fitKey = useMemo(() => nodes.map((n) => n.id).join(","), [nodes]);
   return (
     <div
       data-testid={testId}
@@ -71,9 +121,6 @@ export function GraphCanvas({
           edges={toned}
           nodeTypes={GRAPH_NODE_TYPES}
           onNodeClick={onNodeClick}
-          fitView
-          // Readable first: a big graph opens zoomed in, to pan, not as a thumbnail.
-          fitViewOptions={{ padding: 0.12, minZoom: fitMinZoom }}
           panOnDrag
           panOnScroll
           zoomOnDoubleClick={false}
@@ -84,6 +131,7 @@ export function GraphCanvas({
           minZoom={minZoom}
           maxZoom={2.5}
         >
+          <InitialView minZoom={fitMinZoom} fitKey={fitKey} />
           <Background bgColor="var(--card)" />
           <ZoomControls />
         </ReactFlow>

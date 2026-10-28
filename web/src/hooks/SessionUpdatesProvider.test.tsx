@@ -477,6 +477,23 @@ describe("SessionUpdatesProvider factory_changed frames", () => {
     ]);
   });
 
+  it("re-reads the snapshot, the index and the Room's issue cards on an issues frame", () => {
+    const client = new QueryClient();
+    seedConversations(client, ["conv_a"]);
+    renderProvider(client, ["/"]);
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    act(() =>
+      frameHandler()({ type: "factory_changed", factory_id: "f4f4ba9c", scopes: ["issues"] }),
+    );
+
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
+      ["factory", "f4f4ba9c"],
+      ["factories"],
+      ["factory-room", "f4f4ba9c", "issues"],
+    ]);
+  });
+
   it("leaves other factories' snapshots and the session lists alone", () => {
     const client = new QueryClient();
     seedConversations(client, ["conv_a"]);

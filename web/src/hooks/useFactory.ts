@@ -88,7 +88,10 @@ export function factoryInvalidationKeys(
     return [
       factoryQueryKey(factoryId),
       ...(scopes.includes("presence") ? [["factory-people", factoryId]] : []),
-      ...(scopes.includes("issues") ? [FACTORIES_QUERY_KEY] : []),
+      // The Room's incident and finding cards read the issues list.
+      ...(scopes.includes("issues")
+        ? [FACTORIES_QUERY_KEY, ["factory-room", factoryId, "issues"]]
+        : []),
     ];
   }
   return [

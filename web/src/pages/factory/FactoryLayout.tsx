@@ -6,7 +6,7 @@
  * factory's palette; Share and Add project open from anywhere in it.
  */
 
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ArrowLeftIcon } from "lucide-react";
 import { PageScroll } from "@/components/PageScroll";
 import { WIDE_BOARD_QUERY, useMediaQuery } from "@/components/factory/board/boardHooks";
@@ -32,6 +32,7 @@ import {
 } from "@/components/factory/room/RoomDock";
 import { unreadTotal } from "@/components/factory/room/roomModel";
 import { useRoomThreads } from "@/components/factory/room/roomQueries";
+import { useStickyTop } from "@/components/factory/room/useViewportFill";
 import { PHONE_TAB_BAR_REM, PhoneTabBar } from "@/components/factory/shell/PhoneTabBar";
 import { PAGE_EXTRA_TOP } from "@/components/factory/shell/scroll";
 import {
@@ -48,6 +49,10 @@ import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
 import type { FactorySnapshot } from "@/lib/factoryApi";
 import { Link, useNavigate, useParams, useSearchParams } from "@/lib/routing";
 import { ApiError } from "@/lib/sessionsApi";
+
+/** The dock's height once stuck 1rem under the header, ending 1rem above the bottom. */
+const DOCK_STUCK_HEIGHT =
+  "calc(100dvh - var(--omnigent-header-height) - var(--omnigent-inset-top) - var(--omnigent-inset-bottom) - 2rem)";
 
 function ShellSkeleton() {
   return (
@@ -100,6 +105,7 @@ function Shell({
   const [palette, setPalette] = useState(false);
   const [adding, setAdding] = useState<{ title: string | null } | null>(null);
   const [dockWidth, setDockWidth] = useDockWidth();
+  const dockRef = useRef<HTMLElement>(null);
   const roomUnread = unreadTotal(useRoomThreads(snapshot.factory.id).data?.data);
   const togglePalette = useCallback(() => setPalette((open) => !open), []);
   useFactoryPaletteHotkey(togglePalette);
@@ -123,6 +129,7 @@ function Shell({
     [snapshot, clockOffsetS, nowS, updatedAt, location, wide],
   );
   const dock = wide && location.page !== "room" && location.page !== "settings";
+  const dockTop = useStickyTop(dockRef, dock);
   const sheet = !wide && !phone && location.page !== "room";
   return (
     <FactoryShellContext.Provider value={shell}>
@@ -164,10 +171,16 @@ function Shell({
               aria-label="Room and decisions"
               data-testid="room-dock-column"
               className="sticky flex flex-col"
+              ref={dockRef}
               style={{
                 top: `calc(1rem - ${PAGE_EXTRA_TOP})`,
+                // Down to 1rem above the viewport's bottom from wherever it starts,
+                // so the composer shows before the page scrolls the dock up.
                 height:
-                  "calc(100dvh - var(--omnigent-header-height) - var(--omnigent-inset-top) - var(--omnigent-inset-bottom) - 2rem)",
+                  dockTop == null
+                    ? DOCK_STUCK_HEIGHT
+                    : `calc(100dvh - var(--omnigent-inset-bottom) - 1rem - ${dockTop}px)`,
+                maxHeight: DOCK_STUCK_HEIGHT,
               }}
             >
               <DockResizeHandle width={dockWidth} onWidth={setDockWidth} />

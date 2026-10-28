@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite";
 import { type ReactNode, useMemo } from "react";
 import { fireEvent, within } from "storybook/test";
 import type { ChatMessageView, ProposalView, ViewerRole } from "@/lib/factoryApi";
+import { withStoryMedia } from "../board/__fixtures__/boardFixtures";
 import { DocumentTheme } from "../board/boardStoryKit";
 import { FactoryStoryFrame, type StoryRoutes } from "../factoryStoryFixtures";
 import {
@@ -22,6 +23,9 @@ import { RoomCard } from "./RoomCard";
 import { RoomCardContext, type RoomCardData } from "./RoomCardContext";
 
 const NOW = new Date(ROOM_NOW_S * 1000);
+
+/** The round-3 snapshot with the demo's stills inline (stories have no file server). */
+const storyRound3 = (role?: ViewerRole) => withStoryMedia(round3Snapshot(role));
 const APPLY = `/v1/factory/factories/${ROOM_FID}/proposals/C-4/apply`;
 
 interface FrameOptions {
@@ -39,7 +43,7 @@ function Frame({
   width = 640,
   children,
 }: FrameOptions & { children: ReactNode }) {
-  const snapshot = useMemo(() => round3Snapshot(role), [role]);
+  const snapshot = useMemo(() => storyRound3(role), [role]);
   const data: RoomCardData = useMemo(
     () => ({
       factoryId: ROOM_FID,
@@ -94,7 +98,7 @@ function proposalStory(
 }
 
 const sources = (role: ViewerRole = "creator"): RefSources => ({
-  snapshot: round3Snapshot(role),
+  snapshot: storyRound3(role),
   proposals: roomProposals(),
   people: round3People(role).data,
   viewerId: round3Snapshot(role).viewer?.user_id ?? null,
