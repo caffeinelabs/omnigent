@@ -180,12 +180,15 @@ def pl_create_body(
     project: str,
     heartbeat_s: int,
     workspace: str,
+    version_labels: dict[str, str] | None = None,
 ) -> dict[str, object]:
     """
     The managed ``POST /v1/sessions`` body of a PL spawn.
 
     Shared by the ``sys_factory_spawn`` tests and the server-spawn tests, so a
     server-spawned PL is created exactly like a lead-spawned one.
+
+    :param version_labels: The ``version`` / ``bundle`` labels the spawn adds, if any.
     """
     from omnigent import factory as F
 
@@ -201,6 +204,7 @@ def pl_create_body(
             F.LABEL_SUPERVISOR: supervisor,
             F.LABEL_STATE: "active",
             F.LABEL_HEARTBEAT_S: str(heartbeat_s),
+            **(version_labels or {}),
         },
         "workspaces": [workspace],
     }

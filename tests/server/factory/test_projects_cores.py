@@ -126,6 +126,19 @@ async def test_cancel_stops_the_pl_and_leaves_its_prs_open(cockpit: Cockpit) -> 
     assert (again.status_code, error_code(again)) == (409, "project_closed")
 
 
+async def test_an_operator_cancels_a_project(cockpit: Cockpit) -> None:
+    # A member STOP needs MANAGE; cancelling a project is an operator's call.
+    resp = await cockpit.post(
+        _url(cockpit, "api-version", "cancel"), {"reason": "r"}, user="carol"
+    )
+
+    assert resp.status_code == 200, resp.text
+    [stop] = cockpit.mailer.texts_to(cockpit.world.id("pl"))
+    assert stop.startswith("[Factory control · STOP · by carol]")
+    row = cockpit.store.get_project(cockpit.fid, "api-version")
+    assert row is not None and row.status == "cancelled"
+
+
 async def test_cancel_can_keep_previews_for_review(cockpit: Cockpit) -> None:
     resp = await cockpit.post(
         _url(cockpit, "api-version", "cancel"), {"reason": "r", "teardown_previews": False}

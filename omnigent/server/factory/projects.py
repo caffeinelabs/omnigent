@@ -552,12 +552,18 @@ async def _stop_pl(
     *,
     teardown_previews: bool,
 ) -> dict[str, str]:
-    """STOP the project's PL (or PAUSE it with previews kept); :returns: its mail ids."""
+    """
+    STOP the project's PL (or PAUSE it with previews kept); :returns: its mail ids.
+
+    The caller authorized the cancel (operators may cancel), so the control runs
+    with the factory creator's access, which a member STOP needs.
+    """
     deps = factory_deps(app_state)
     pl = await asyncio.to_thread(control.find_project_pl, deps, root.id, slug)
     if pl is None:
         return {}
-    acting = user_id or actor.user_id or await asyncio.to_thread(spawn.creator_of, deps, root)
+    creator = await asyncio.to_thread(spawn.creator_of, deps, root)
+    acting = creator or user_id or actor.user_id
     action = control.ACTION_STOP if teardown_previews else control.ACTION_PAUSE
     try:
         plan = await control.plan_control(
@@ -594,7 +600,7 @@ async def cancel_project_core(
 
     Its PRs stay open; closing them is a human decision.
 
-    :param user_id: Whose access the stop control runs with (default: the actor, else the creator).
+    :param user_id: Whose access the stop runs with when the factory has no creator.
     :raises CockpitError: 404 ``unknown_project``, 409 ``project_closed``.
     """
     deps = factory_deps(app_state)

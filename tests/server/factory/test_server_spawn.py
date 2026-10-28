@@ -56,23 +56,28 @@ def _add(cockpit: Cockpit, slug: str = "db-version", **extra: Any) -> Any:
 async def test_the_create_matches_sys_factory_spawn(
     spawning: tuple[Cockpit, FakeCreates],
 ) -> None:
+    from omnigent.server.factory.telemetry import versions
+
     cockpit, creates = spawning
 
     resp = await _add(cockpit)
     await settle()
 
     assert resp.status_code == 201, resp.text
+    agent_id = cockpit.world.agents["pl"]
     [call] = creates.calls
     assert call["path"] == "/v1/sessions"
     assert call["authorization"] == "Bearer runner-token-for-alice-300"
     assert call["body"] == pl_create_body(
-        agent_id=cockpit.world.agents["pl"],
+        agent_id=agent_id,
         factory_id=cockpit.fid,
         parent=cockpit.fid,
         supervisor=cockpit.world.id("lead_b"),
         project="db-version",
         heartbeat_s=600,
         workspace="https://github.com/caffeinelabs/app#temp-main",
+        # The same version and bundle labels sys_factory_spawn reads from /agent/version.
+        version_labels=versions.labels_for_agent(cockpit.deps.agent_store, agent_id),
     )
 
 

@@ -23,7 +23,6 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
-import inspect
 import logging
 import time
 from collections.abc import Callable
@@ -223,24 +222,17 @@ def needs_finishing(deps: FactoryDeps, factory_id: str, pl: Conversation) -> boo
     return not rows
 
 
-def _version_labels(app_state: Any, root: Conversation) -> dict[str, str]:
-    """``def_version`` from the root, and the platform ``version`` once telemetry records it."""
-    from omnigent.factory import LABEL_VERSION
+def _version_labels(deps: FactoryDeps, root: Conversation, agent_id: str) -> dict[str, str]:
+    """``def_version`` from the root, plus the platform ``version`` and ``bundle`` labels."""
+    from omnigent.server.factory.telemetry import versions
 
     labels: dict[str, str] = {}
     if root.labels.get(LABEL_DEF_VERSION):
         labels[LABEL_DEF_VERSION] = root.labels[LABEL_DEF_VERSION]
     try:
-        from omnigent.server.factory.telemetry import versions  # type: ignore[attr-defined]
-    except ImportError:
-        return labels
-    current = getattr(versions, "current_version_id", None)
-    try:
-        version = current(app_state) if callable(current) else None
-    except Exception:  # noqa: BLE001 - the label is informational
-        version = None
-    if isinstance(version, str) and version:
-        labels[LABEL_VERSION] = version
+        labels.update(versions.labels_for_agent(deps.agent_store, agent_id))
+    except Exception:  # noqa: BLE001 - the labels only group telemetry by version
+        _logger.warning("factory: no version labels for a new PL", exc_info=True)
     return labels
 
 
@@ -330,21 +322,12 @@ def spawned_notice(project: FactoryProject, session_id: str, via: str) -> str:
     )
 
 
-async def _mirror_people(app_state: Any, factory_id: str, session_id: str) -> None:
-    """Copy the factory's people grants onto the new PL, once the people module exists."""
-    try:
-        from omnigent.server.factory import people  # type: ignore[attr-defined]
-    except ImportError:
-        return
-    mirror = getattr(people, "mirror_member", None)
-    if mirror is None:
-        return
-    try:
-        result = mirror(app_state, factory_id, session_id)
-        if inspect.isawaitable(result):
-            await result
-    except Exception:  # noqa: BLE001 - reconcile repairs grant drift every minute
-        _logger.warning("factory: could not mirror people onto %s", session_id, exc_info=True)
+async def _mirror_people(app_state: Any, pl: Conversation | None) -> None:
+    """Copy the factory's people roster onto the new PL (idempotent; never raises)."""
+    from omnigent.server.factory.people import mirror_member_on_create
+
+    if pl is not None:
+        await mirror_member_on_create(app_state, pl)
 
 
 # ── The lead fallback ──────────────────────────────────────────
@@ -521,7 +504,7 @@ async def _spawn_locked(
         project,
         agent_id=agent.id,
         supervisor=_supervisor(root, members),
-        extra_labels=_version_labels(app_state, root),
+        extra_labels=await asyncio.to_thread(_version_labels, deps, root, agent.id),
     )
     async with client:
         resp = await client.post("/v1/sessions", json=body)
@@ -601,7 +584,7 @@ async def _finish(
     from omnigent.server.factory.control import send_text
 
     deps = factory_deps(app_state)
-    await _mirror_people(app_state, root.id, session_id)
+    await _mirror_people(app_state, pl)
     mail_id = brief_mail_id(session_id)
     if not await asyncio.to_thread(_brief_queued, deps, root.id, mail_id):
         inherited = await asyncio.to_thread(_inherited_prs, deps, root.id, project.slug)
@@ -705,13 +688,12 @@ async def _pod_cap_decision(
         blocking=False,
         project=project.slug,
         asked_by=None,
+        assignee="owners",
     )
     if opened is not None and not opened[1]:
-        store = deps.factory_store
         await asyncio.to_thread(
-            store.update_decision,
+            deps.factory_store.update_decision,
             opened[0].id,
-            assignee="owners",
             subject=_project_subject(project.slug),
         )
 
