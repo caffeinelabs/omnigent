@@ -1,5 +1,5 @@
 /**
- * The project page's Demos tab: one card per PR with its newest demo. The
+ * The project page's Demos section: one card per PR with its newest demo. The
  * poster plays inline (`<video>` over the same-origin demo file route), then
  * the status, which commit and when it was recorded, the step tally, the
  * steps with skip reasons and failure notes, console errors, API calls and
@@ -21,30 +21,29 @@ import { ZoomableImage } from "@/components/ImageLightbox";
 import { RunningDot } from "@/components/RunningDot";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { useFactoryDemos } from "@/hooks/useFactory";
+import { useProjectDemos } from "@/hooks/useFactory";
 import type { DemoView, MemberView, PrView, ProjectDemoView, ProjectView } from "@/lib/factoryApi";
 import { prPreviewUrl } from "@/lib/factoryApi";
+import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { ageText, clipDuration, prNoEnvReason } from "../board/boardModel";
 import { DemoStatusTag, demoApiCallCount, demoPoster } from "../board/DemoThumb";
 import { FactoryLoadError } from "../FactoryLoadError";
+import { prPageHref } from "../factoryRoutes";
 import { plural, sameSha, shortSha } from "../factoryFormat";
 import { DemoStepList } from "../review/DemoPanel";
 import { demoFileHref, demoRecorder, demoScreenshots, demoVideo } from "../review/reviewModel";
 import { DotParts, ReviewNotice } from "../review/reviewParts";
 import {
   type DemoGroup,
+  demoGroupsFrom,
   demosSummary,
   githubPrUrl,
-  groupDemosByPr,
   stepTally,
   tallyText,
   undemoedPrs,
 } from "./projectModel";
 import { EmptyState } from "./projectParts";
-
-/** Demos the tab asks for: every run of the project's PRs, up to the server's cap. */
-export const PROJECT_DEMOS_LIMIT = 200;
 
 // ── Media ──────────────────────────────────────────────────────
 
@@ -283,15 +282,15 @@ function previewHref(pr: PrView | null): string | null {
 }
 
 function DemoCard({
+  factoryId,
   group,
   members,
   nowS,
-  onReview,
 }: {
+  factoryId: string;
   group: DemoGroup;
   members: readonly MemberView[];
   nowS: number;
-  onReview: (number: number) => void;
 }) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [runsOpen, setRunsOpen] = useState(false);
@@ -375,14 +374,14 @@ function DemoCard({
         <Collapsible open={runsOpen} onOpenChange={setRunsOpen} className="mt-auto">
           <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
             {pr ? (
-              <Button
-                size="sm"
-                variant="outline"
-                onClick={() => onReview(pr.number)}
-                data-testid={`demo-review-${prNumber}`}
-                componentId="factory.project.demo_review"
-              >
-                Open review
+              <Button asChild size="sm" variant="outline">
+                <Link
+                  to={prPageHref(factoryId, pr.id)}
+                  data-testid={`demo-review-${prNumber}`}
+                  componentId="factory.project.demo_review"
+                >
+                  Open PR page
+                </Link>
               </Button>
             ) : (
               <Button asChild size="sm" variant="outline">
@@ -503,7 +502,6 @@ export function ProjectDemos({
   prs,
   members,
   nowS,
-  onReview,
 }: {
   factoryId: string;
   project: ProjectView;
@@ -511,11 +509,9 @@ export function ProjectDemos({
   prs: PrView[];
   members: readonly MemberView[];
   nowS: number;
-  /** Open the review drawer for a PR. */
-  onReview: (number: number) => void;
 }) {
-  const query = useFactoryDemos(factoryId, { project: project.slug, limit: PROJECT_DEMOS_LIMIT });
-  const groups = query.data ? groupDemosByPr(query.data.data, prs) : [];
+  const query = useProjectDemos(factoryId, project.slug);
+  const groups = query.data ? demoGroupsFrom(query.data.data, prs) : [];
   const pending = query.data ? undemoedPrs(prs, groups) : [];
   const previewsOn = project.charter?.preview.enabled === true;
   return (
@@ -527,6 +523,7 @@ export function ProjectDemos({
           onRetry={() => void query.refetch()}
           what="the demos"
           testId="project-demos-error"
+          className="mb-0"
         />
       )}
       {query.isLoading && <GallerySkeleton />}
@@ -551,10 +548,10 @@ export function ProjectDemos({
             {groups.map((group) => (
               <DemoCard
                 key={group.key}
+                factoryId={factoryId}
                 group={group}
                 members={members}
                 nowS={nowS}
-                onReview={onReview}
               />
             ))}
           </div>

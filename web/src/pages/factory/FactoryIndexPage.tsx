@@ -1,6 +1,7 @@
 /**
  * Factory index (`/factory`): one card per factory the viewer can see, with
- * its pipeline counts and what needs the human, plus the way to start one.
+ * its pipeline counts and what needs the human (a dense table once there are
+ * more than three), who shared it and as what, plus the way to start one.
  *
  * Never shows the empty state before the list settles; a failed refresh keeps
  * the last cards under an alert with Retry.
@@ -8,7 +9,14 @@
 
 import { FactoryIcon, PlusIcon } from "lucide-react";
 import { PageScroll } from "@/components/PageScroll";
-import { FactoryIndexCard, FactoryIndexCardSkeleton } from "@/components/factory/FactoryIndexCard";
+import {
+  FactoryIndexCard,
+  FactoryIndexCardSkeleton,
+  FactoryStateChip,
+  sharedLine,
+} from "@/components/factory/FactoryIndexCard";
+import { factoryPageHref } from "@/components/factory/factoryRoutes";
+import { formatUsd } from "@/components/factory/factoryFormat";
 import { FactoryLoadError } from "@/components/factory/FactoryLoadError";
 import { useFactoryNow } from "@/components/factory/factoryClock";
 import {
@@ -18,7 +26,8 @@ import {
 } from "@/components/factory/FactoryPreflight";
 import { Button } from "@/components/ui/button";
 import { useFactories, usePreflight } from "@/hooks/useFactory";
-import { Link } from "@/lib/routing";
+import type { FactorySummary } from "@/lib/factoryApi";
+import { Link, useNavigate } from "@/lib/routing";
 
 function NewFactoryButton({
   testId,
@@ -44,6 +53,96 @@ function NewFactoryButton({
         New factory
       </Link>
     </Button>
+  );
+}
+
+/** Cards up to this many factories; a dense table past it. */
+export const INDEX_TABLE_AFTER = 3;
+
+const TH = "px-3 py-2 text-left text-xs font-medium whitespace-nowrap text-muted-foreground";
+
+/** Every factory as one row: state, $/h, what needs you, agents, people, cost. */
+function FactoryIndexTable({ factories }: { factories: FactorySummary[] }) {
+  const navigate = useNavigate();
+  return (
+    <div className="min-w-0 overflow-x-auto rounded-xl border border-border bg-card">
+      <table data-testid="factory-list-table" className="w-full min-w-0 text-sm">
+        <thead>
+          <tr className="border-b border-border">
+            <th className={`${TH} w-[40%]`}>Factory</th>
+            <th className={TH}>State</th>
+            <th className={`${TH} text-right max-md:hidden`}>$/h</th>
+            <th className={`${TH} text-right`}>Needs you</th>
+            <th className={`${TH} text-right max-sm:hidden`}>Agents</th>
+            <th className={`${TH} text-right max-md:hidden`}>People</th>
+            <th className={`${TH} text-right max-sm:hidden`}>$</th>
+          </tr>
+        </thead>
+        <tbody>
+          {factories.map((factory) => {
+            const shared = sharedLine(factory);
+            const mine = factory.mine ?? factory.decisions_open;
+            return (
+              <tr
+                key={factory.id}
+                data-testid={`factory-row-${factory.id}`}
+                onClick={() => navigate(factoryPageHref(factory.id))}
+                className="cursor-pointer border-b border-border/60 last:border-0 hover:bg-muted/50"
+              >
+                <td className="max-w-0 px-3 py-2">
+                  <Link
+                    to={factoryPageHref(factory.id)}
+                    componentId="factory.index.row"
+                    onClick={(e) => e.stopPropagation()}
+                    className="block truncate font-medium hover:underline"
+                  >
+                    {factory.name}
+                  </Link>
+                  {shared && (
+                    <span className="block truncate text-xs text-muted-foreground">{shared}</span>
+                  )}
+                </td>
+                <td className="px-3 py-2">
+                  <FactoryStateChip state={factory.state} />
+                </td>
+                <td className="px-3 py-2 text-right font-mono text-muted-foreground tabular-nums max-md:hidden">
+                  {factory.usd_per_h != null ? formatUsd(factory.usd_per_h) : "—"}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums">
+                  {mine > 0 ? (
+                    <span className="rounded-full bg-warning/15 px-1.5 text-xs font-medium text-warning">
+                      {mine}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                  {factory.prs_ready > 0 && (
+                    <span className="ml-1.5 text-xs text-success">★{factory.prs_ready}</span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-right whitespace-nowrap tabular-nums max-sm:hidden">
+                  {factory.members_total}
+                  {factory.members_running > 0 && (
+                    <span
+                      className="ml-1 text-session-active"
+                      title={`${factory.members_running} working`}
+                    >
+                      ·{factory.members_running}▶
+                    </span>
+                  )}
+                </td>
+                <td className="px-3 py-2 text-right text-muted-foreground tabular-nums max-md:hidden">
+                  {factory.people_count ?? "—"}
+                </td>
+                <td className="px-3 py-2 text-right font-mono tabular-nums max-sm:hidden">
+                  {formatUsd(factory.cost_usd) ?? "—"}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
@@ -113,7 +212,8 @@ export function FactoryIndexPage() {
           <FactoryIndexCardSkeleton />
         </div>
       )}
-      {list && list.length > 0 && (
+      {list && list.length > INDEX_TABLE_AFTER && <FactoryIndexTable factories={list} />}
+      {list && list.length > 0 && list.length <= INDEX_TABLE_AFTER && (
         <div className="flex flex-col gap-3" data-testid="factory-list">
           {list.map((factory) => (
             <FactoryIndexCard key={factory.id} factory={factory} now={now} />

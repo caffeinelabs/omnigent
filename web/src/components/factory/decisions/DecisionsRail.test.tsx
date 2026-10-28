@@ -6,7 +6,8 @@ import type { DecisionView } from "@/lib/factoryApi";
 import { LIVE_RUN_FACTORY_ID, LIVE_RUN_NOW_S, liveRunSnapshot } from "../__fixtures__/liveRun";
 import { FactoryNowContext } from "../factoryClock";
 import { answeredDecision, lateQuestion } from "./__fixtures__/decisionFixtures";
-import { DecisionsRail } from "./DecisionsRail";
+import { round3Snapshot } from "../shell/__fixtures__/shellFixtures";
+import { DecisionsRail, orderOpenDecisions } from "./DecisionsRail";
 
 const authenticatedFetch = vi.fn();
 vi.mock("@/lib/identity", () => ({
@@ -173,5 +174,15 @@ describe("DecisionsRail", () => {
       "data-highlighted",
       "true",
     );
+  });
+});
+
+describe("orderOpenDecisions", () => {
+  it("puts the page's project first, then blocking, then the longest waiting", () => {
+    const decisions = round3Snapshot().decisions;
+    const plain = orderOpenDecisions(decisions).map((d) => d.ref);
+    const pinned = orderOpenDecisions(decisions, "cache-warm").map((d) => d.ref);
+    expect(pinned[0]).toBe("D-3");
+    expect(pinned.slice(1)).toEqual(plain.filter((ref) => ref !== "D-3"));
   });
 });

@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils";
 import { ageText, prNoEnvReason, previewHeadTruth } from "../board/boardModel";
 import { BreakableText } from "../board/BreakableText";
 import { TONE_CHIP, TONE_DOT, sameSha, shortSha } from "../factoryFormat";
+import { LeverGated } from "../shell/viewerCan";
 import { absoluteUrl, previewHealth, previewLinks, previewSeenAt, statusTone } from "./reviewModel";
 import { PanelHeading, ReviewNotice } from "./reviewParts";
 
@@ -416,17 +417,19 @@ export function PreviewPanel({
             </p>
             {control.enabled && (
               <div>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  onClick={control.send}
-                  loading={control.state.phase === "sending"}
-                  data-testid="review-preview-redeploy"
-                  componentId="factory.review.preview_deploy"
-                >
-                  <RefreshCwIcon />
-                  Deploy preview
-                </Button>
+                <LeverGated lever="review">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={control.send}
+                    loading={control.state.phase === "sending"}
+                    data-testid="review-preview-redeploy"
+                    componentId="factory.review.preview_deploy"
+                  >
+                    <RefreshCwIcon />
+                    Deploy preview
+                  </Button>
+                </LeverGated>
               </div>
             )}
             <ControlStatus state={control.state} pr={pr} />
@@ -508,20 +511,22 @@ export function PreviewPanel({
           </Button>
         )}
         {control.enabled && (
-          <Button
-            variant={prominent ? "outline" : "ghost"}
-            size="sm"
-            onClick={control.send}
-            loading={control.state.phase === "sending"}
-            data-testid={parked ? "review-preview-restore" : "review-preview-redeploy"}
-            componentId={
-              parked ? "factory.review.preview_restore" : "factory.review.preview_redeploy"
-            }
-            className={cn(!prominent && "text-muted-foreground")}
-          >
-            {parked ? <RotateCcwIcon /> : <RefreshCwIcon />}
-            {parked ? "Restore preview" : "Redeploy preview"}
-          </Button>
+          <LeverGated lever="review">
+            <Button
+              variant={prominent ? "outline" : "ghost"}
+              size="sm"
+              onClick={control.send}
+              loading={control.state.phase === "sending"}
+              data-testid={parked ? "review-preview-restore" : "review-preview-redeploy"}
+              componentId={
+                parked ? "factory.review.preview_restore" : "factory.review.preview_redeploy"
+              }
+              className={cn(!prominent && "text-muted-foreground")}
+            >
+              {parked ? <RotateCcwIcon /> : <RefreshCwIcon />}
+              {parked ? "Restore preview" : "Redeploy preview"}
+            </Button>
+          </LeverGated>
         )}
       </div>
       <ControlStatus state={control.state} pr={pr} />

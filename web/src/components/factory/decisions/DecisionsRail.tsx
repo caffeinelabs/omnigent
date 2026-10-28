@@ -26,17 +26,33 @@ export interface DecisionsRailProps {
   clockOffsetS?: number;
   /** Also fold withdrawn and expired decisions (the project page lists all of them). */
   showClosed?: boolean;
+  /** Leave out the "Decisions · n open" line (a tab or section already says it). */
+  hideHeading?: boolean;
+  /** This project's open decisions lead (the dock on its page or its PR's). */
+  pinProject?: string | null;
 }
 
 function matches(decision: DecisionView, id: string | null): boolean {
   return id != null && (decision.id === id || decision.ref === id);
 }
 
-/** Open decisions in rail order: blocking first, then the longest waiting. */
-export function orderOpenDecisions(decisions: DecisionView[]): DecisionView[] {
+/**
+ * Open decisions in rail order: `pinProject`'s first, then blocking, then the
+ * longest waiting.
+ */
+export function orderOpenDecisions(
+  decisions: DecisionView[],
+  pinProject: string | null = null,
+): DecisionView[] {
+  const pinned = (d: DecisionView) => Number(pinProject != null && d.project_slug === pinProject);
   return decisions
     .filter((d) => d.status === "open")
-    .sort((a, b) => Number(b.blocking) - Number(a.blocking) || a.created_at - b.created_at);
+    .sort(
+      (a, b) =>
+        pinned(b) - pinned(a) ||
+        Number(b.blocking) - Number(a.blocking) ||
+        a.created_at - b.created_at,
+    );
 }
 
 /** A muted "Label (n)" fold under the cards. */
@@ -122,10 +138,12 @@ export function DecisionsRail({
   highlightId,
   clockOffsetS = 0,
   showClosed = false,
+  hideHeading = false,
+  pinProject = null,
 }: DecisionsRailProps) {
   // Answered from this rail: their cards stay (with the receipt) instead of folding away.
   const [mine, setMine] = useState<Record<string, DecisionView>>({});
-  const open = orderOpenDecisions(decisions);
+  const open = orderOpenDecisions(decisions, pinProject);
   const kept = Object.values(mine).map(
     (local) => decisions.find((d) => d.id === local.id && d.status !== "open") ?? local,
   );
@@ -142,7 +160,7 @@ export function DecisionsRail({
 
   return (
     <section data-testid="decisions-rail" aria-label="Decisions" className="flex flex-col gap-2">
-      <h2 className="text-sm font-medium text-muted-foreground">
+      <h2 className={cn("text-sm font-medium text-muted-foreground", hideHeading && "sr-only")}>
         Decisions · <span className="tabular-nums">{open.length}</span> open
       </h2>
       {cards.length === 0 && (

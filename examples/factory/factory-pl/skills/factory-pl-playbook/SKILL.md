@@ -163,7 +163,7 @@ Report: the RESULT block
 
 ### Review-links block
 
-`sys_factory_pr` returns both links: `review_url` (the cockpit review drawer,
+`sys_factory_pr` returns both links: `review_url` (the PR's cockpit page,
 `<origin>/factory/<factory id>?review=<n>`) and `preview_url` (the stable
 preview link, always the current deploy). Run this once the PR is ready (after
 the first demo when it has a preview); running it again replaces the block.

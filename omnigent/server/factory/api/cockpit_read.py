@@ -1,5 +1,6 @@
 """Cockpit read routes: preflight, the factory list, one factory's snapshot,
-its activity feed, its recorded demos and the open decisions across factories.
+its activity feed, its recorded demos (all, or one project's grouped by PR)
+and the open decisions across factories.
 
 Humans call these with their own credentials. Viewing a factory needs READ on
 its root (anything else is a 404); inside it, members the viewer cannot read
@@ -161,11 +162,34 @@ async def list_factories(request: Request) -> dict[str, Any]:
         if root.id not in readable:
             continue
         try:
-            summaries.append(summary_from(await _view(request, user_id, root, viewer=False)))
+            body = await _view(request, user_id, root, viewer=False)
+            extras = await asyncio.to_thread(_summary_extras, deps, root.id, user_id, body)
+            summaries.append({**summary_from(body), **extras})
         except Exception:  # one broken factory must not hide the others
             _logger.exception("factory: could not summarise factory %s", root.id)
     summaries.sort(key=lambda s: s["started_at"] or 0, reverse=True)
     return schemas.FactoryListResponse.model_validate({"data": summaries}).model_dump(mode="json")
+
+
+def _summary_extras(
+    deps: FactoryDeps, factory_id: str, user_id: str | None, body: dict[str, Any]
+) -> dict[str, Any]:
+    """The index card's per-viewer fields: role, who shared it, roster size, mine, $/h."""
+    level = people.viewer_level(deps, factory_id, user_id)
+    creator = people.creator_of(deps, factory_id) if deps.permission_store is not None else None
+    is_creator = user_id is None or creator == user_id
+    open_decisions = [d for d in body["decisions"] if d["status"] == "open"]
+    return {
+        "viewer_role": people.level_role(level, is_creator=is_creator),
+        "shared_by": None if is_creator else creator,
+        "people_count": people.people_count(deps, factory_id),
+        "mine": sum(
+            1
+            for d in open_decisions
+            if decision_routing.is_mine_by(d.get("assignee"), d.get("claimed_by"), user_id, level)
+        ),
+        "usd_per_h": body["totals"].get("usd_per_h"),
+    }
 
 
 @router.get("/factories/{factory_id}")
@@ -325,6 +349,79 @@ async def list_factory_demos(
         if view is not None:
             data.append(view)
     return schemas.DemoListResponse.model_validate({"data": data}).model_dump(mode="json")
+
+
+@router.get("/factories/{factory_id}/projects/{slug}/demos")
+async def list_project_demos(
+    request: Request,
+    factory_id: str,
+    slug: str,
+    limit: int = Query(DEMOS_MAX_LIMIT, ge=1, le=DEMOS_MAX_LIMIT),
+) -> dict[str, Any]:
+    """Every recorded demo of one project's PRs, grouped by PR, newest first.
+
+    Groups are ordered by their newest run and each group lists every run
+    (newest first) with its files, steps, status, head sha and time. A project
+    whose PL the viewer cannot read is a 404, like an unknown slug.
+    """
+    deps = factory_deps(request.app.state)
+    user_id = require_user(request, deps.auth_provider)
+    root = await _root(user_id, factory_id, deps)
+    raw = await get_snapshot(request.app.state, root)
+    readable = await readable_for(user_id, raw, deps)
+    pl = raw.project_pl.get(slug, "")
+    if slug not in raw.project_pl or (pl is not None and pl not in readable):
+        raise FactoryRouteError(404, "project_not_found", f"no project {slug!r} in this factory")
+    project_prs = {
+        (p["repo"], p["number"]): p for p in raw.body["prs"] if p.get("project_slug") == slug
+    }
+    rows = await asyncio.to_thread(_project_demo_rows, deps, root.id, slug, project_prs, limit)
+    owners = {d.session_id for d in rows if d.session_id not in readable}
+    readable_owners = (
+        await asyncio.to_thread(readable_set, user_id, owners, deps) if owners else set()
+    )
+    groups: dict[tuple[str, int], dict[str, Any]] = {}
+    count = 0
+    for demo in rows:
+        if demo.session_id not in readable and demo.session_id not in readable_owners:
+            continue
+        pr = project_prs.get((demo.repo, demo.pr_number))
+        head = pr["head_sha"] if pr else ""
+        view = project_demo_view(demo, head, raw.titles)
+        if view is None:
+            continue
+        key = (demo.repo, demo.pr_number)
+        if key not in groups:
+            groups[key] = {
+                "repo": demo.repo,
+                "pr_number": demo.pr_number,
+                "pr_id": pr["id"] if pr else demo.pr_id,
+                "head_sha": head,
+                "runs": [],
+            }
+        groups[key]["runs"].append(view)
+        count += 1
+    return schemas.ProjectDemosResponse.model_validate(
+        {"data": list(groups.values()), "count": count}
+    ).model_dump(mode="json")
+
+
+def _project_demo_rows(
+    deps: FactoryDeps,
+    factory_id: str,
+    slug: str,
+    project_prs: dict[tuple[str, int], dict[str, Any]],
+    limit: int,
+) -> list[Any]:
+    """The project's demos plus unlabelled demos of its PRs, newest first, at most *limit*."""
+    store = deps.factory_store
+    rows = {d.id: d for d in store.list_demos(factory_id, project_slug=slug, limit=limit)}
+    for repo, number in project_prs:
+        for demo in store.list_demos(factory_id, number, repo=repo, limit=limit):
+            if not demo.project_slug or demo.project_slug == slug:
+                rows.setdefault(demo.id, demo)
+    ordered = sorted(rows.values(), key=lambda d: (d.created_at, d.id), reverse=True)
+    return ordered[:limit]
 
 
 def _decision_titles(

@@ -21,6 +21,9 @@ const CHORD_PREFIX_SURFACE = ".monaco-editor";
 /** xterm: forwards the CONTROL variant to the PTY as ^K (kill-to-end-of-line). */
 const PTY_SURFACE = ".xterm";
 
+/** A page with its own ⌘K palette (the factory cockpit) marks its root with this. */
+export const PAGE_PALETTE_ATTRIBUTE = "data-command-k-owner";
+
 /** True when the event is the command-palette chord: the platform command
  *  modifier + K, no Alt/Shift. */
 export function isCommandPaletteHotkey(
@@ -81,6 +84,8 @@ export function useCommandPaletteHotkey(
         !e.getModifierState("AltGraph") &&
         e.code === "KeyS";
       if (!sessionSearch && !isCommandPaletteHotkey(e, isMac)) return;
+      // A page with its own palette takes the chord.
+      if (!sessionSearch && document.querySelector(`[${PAGE_PALETTE_ATTRIBUTE}]`)) return;
       // Leave the chord to a surface that actually consumes it.
       if (focusOwnsHotkey(e)) return;
       // Claim the chord: preventDefault drops the browser default (Ctrl+K

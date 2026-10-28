@@ -11,7 +11,9 @@ import type {
   DemoView,
   FactorySnapshot,
   PrView,
+  ProjectDemoGroupView,
   ProjectDemoView,
+  ProjectDemosResponse,
 } from "@/lib/factoryApi";
 import { LIVE_RUN_NOW_S, liveRunSnapshot } from "../../__fixtures__/liveRun";
 
@@ -396,4 +398,33 @@ export function filterDemos(list: DemoListResponse, path: string): DemoListRespo
       )
       .slice(0, limit),
   };
+}
+
+/**
+ * One project's demos as `GET …/projects/{slug}/demos` serves them: grouped
+ * by PR, groups and runs newest first, with each PR's current head.
+ */
+export function projectDemosOf(
+  list: DemoListResponse,
+  slug: string,
+  prs: readonly PrView[] = [],
+): ProjectDemosResponse {
+  const runs = list.data
+    .filter((d) => d.project_slug === slug)
+    .sort((a, b) => b.created_at - a.created_at);
+  const groups = new Map<string, ProjectDemoGroupView>();
+  for (const run of runs) {
+    const key = `${run.repo}#${run.pr_number}`;
+    const pr = prs.find((p) => p.repo === run.repo && p.number === run.pr_number);
+    const group = groups.get(key) ?? {
+      repo: run.repo,
+      pr_number: run.pr_number,
+      pr_id: pr?.id ?? run.pr_id,
+      head_sha: pr?.head_sha ?? "",
+      runs: [],
+    };
+    group.runs.push(run);
+    groups.set(key, group);
+  }
+  return { data: [...groups.values()], count: runs.length };
 }

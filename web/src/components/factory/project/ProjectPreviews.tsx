@@ -15,6 +15,7 @@ import { DevEnvDetails, devEnvStatus } from "../board/DevEnvPill";
 import { PreviewDetails, PreviewPill } from "../board/PreviewPill";
 import { useFactoryControls } from "../controls/useFactoryControls";
 import { TONE_DOT, plural } from "../factoryFormat";
+import { LeverGated } from "../shell/viewerCan";
 import { EmptyState, SectionCard } from "./projectParts";
 
 const LIVE = new Set(["deploying", "ready", "stale"]);
@@ -117,20 +118,22 @@ function PreviewCard({
             </Button>
           )}
           {onDeploy && (
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={onDeploy}
-              disabled={deploying}
-              data-testid={`project-preview-redeploy-${pr.number}`}
-              componentId="factory.project.preview_redeploy"
-              title="Deploy the PR's head to its factory preview"
-            >
-              <RefreshCwIcon
-                className={cn(deploying && "animate-spin motion-reduce:animate-none")}
-              />
-              {preview && preview.state !== "down" ? "Redeploy" : "Deploy preview"}
-            </Button>
+            <LeverGated lever="review">
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={onDeploy}
+                disabled={deploying}
+                data-testid={`project-preview-redeploy-${pr.number}`}
+                componentId="factory.project.preview_redeploy"
+                title="Deploy the PR's head to its factory preview"
+              >
+                <RefreshCwIcon
+                  className={cn(deploying && "animate-spin motion-reduce:animate-none")}
+                />
+                {preview && preview.state !== "down" ? "Redeploy" : "Deploy preview"}
+              </Button>
+            </LeverGated>
           )}
         </div>
       )}

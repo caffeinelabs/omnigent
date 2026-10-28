@@ -11,6 +11,8 @@ import {
   useFactoryDecisionCount,
   nextEventCursor,
   useFactoryEvents,
+  useFactorySpans,
+  useProjectDemos,
 } from "./useFactory";
 import type { EventPage } from "@/lib/factoryApi";
 import { useSessionUpdatesConnected } from "./useSessionUpdatesConnected";
@@ -229,6 +231,71 @@ describe("factory list, events and decisions", () => {
     await waitFor(() => expect(result.current).toBe(3));
     expect(authenticatedFetch).toHaveBeenCalledWith(
       "/v1/factory/decisions?status=open&assigned=me&count_only=1",
+    );
+  });
+});
+
+describe("useFactorySpans", () => {
+  it("follows the cursor so the newest spans are never cut off", async () => {
+    const span = (id: string, at: number) => ({ id, started_at: at });
+    authenticatedFetch
+      .mockResolvedValueOnce(
+        json({ data: [span("a", 1), span("b", 2)], has_more: true, next_since: 3 }),
+      )
+      .mockResolvedValueOnce(json({ data: [span("c", 3)], has_more: false, next_since: null }));
+    const { result } = renderHook(() => useFactorySpans(FID, 1000), {
+      wrapper: wrapperFor(newClient()),
+    });
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(result.current.data!.data.map((s) => s.id)).toEqual(["a", "b", "c"]);
+    expect(result.current.data!.has_more).toBe(false);
+    const paths = authenticatedFetch.mock.calls.map(([path]) => path as string);
+    expect(paths[0]).toContain(`/v1/factory/factories/${FID}/spans?since=1000&limit=2000`);
+    expect(paths[1]).toContain("since=3");
+  });
+
+  it("asks for the given kinds and keeps the last spans on screen while a new window loads", async () => {
+    let release: (r: Response) => void = () => undefined;
+    authenticatedFetch
+      .mockResolvedValueOnce(json({ data: [{ id: "a", started_at: 1 }], has_more: false }))
+      .mockImplementationOnce(
+        () =>
+          new Promise<Response>((resolve) => {
+            release = resolve;
+          }),
+      );
+    const { result, rerender } = renderHook(
+      ({ since }) => useFactorySpans(FID, since, { kinds: ["gate", "decision"] }),
+      { wrapper: wrapperFor(newClient()), initialProps: { since: 1000 } },
+    );
+    await waitFor(() => expect(result.current.data).toBeDefined());
+    expect(authenticatedFetch.mock.calls[0]![0]).toContain("kind=gate%2Cdecision");
+    rerender({ since: 2000 });
+    expect(result.current.data!.data.map((s) => s.id)).toEqual(["a"]);
+    expect(result.current.isPlaceholderData).toBe(true);
+    release(json({ data: [{ id: "b", started_at: 2 }], has_more: false }));
+    await waitFor(() => expect(result.current.data!.data.map((s) => s.id)).toEqual(["b"]));
+  });
+
+  it("reports a server without spans as a 404 (the heatmap falls back to events)", async () => {
+    authenticatedFetch.mockResolvedValueOnce(json({ error: { message: "not found" } }, 404));
+    const { result } = renderHook(() => useFactorySpans(FID, 1000), {
+      wrapper: wrapperFor(newClient()),
+    });
+    await waitFor(() => expect(result.current.error).toBeTruthy());
+    expect((result.current.error as { status?: number }).status).toBe(404);
+  });
+});
+
+describe("useProjectDemos", () => {
+  it("reads one project's demos route", async () => {
+    authenticatedFetch.mockResolvedValueOnce(json({ data: [], count: 0 }));
+    const { result } = renderHook(() => useProjectDemos(FID, "db version"), {
+      wrapper: wrapperFor(newClient()),
+    });
+    await waitFor(() => expect(result.current.data).toEqual({ data: [], count: 0 }));
+    expect(authenticatedFetch.mock.calls[0]![0]).toBe(
+      `/v1/factory/factories/${FID}/projects/db%20version/demos`,
     );
   });
 });

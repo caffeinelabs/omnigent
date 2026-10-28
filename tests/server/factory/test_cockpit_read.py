@@ -562,6 +562,85 @@ async def test_a_factory_without_demos_lists_none(
     assert resp.json() == {"data": []}
 
 
+def _project_demos_path(fid: str, slug: str) -> str:
+    return f"/v1/factory/factories/{fid}/projects/{slug}/demos"
+
+
+async def test_project_demos_group_every_run_by_pr_newest_first(
+    world: FactoryWorld, authed_api: FactoryApi, demo_clock: None
+) -> None:
+    seeded = _seed_demos(world, authed_api)
+    store = _deps(authed_api).factory_store
+    # A run filed without its project still belongs to the project's PR.
+    unlabelled = store.create_demo(
+        factory_id=seeded.fid,
+        project_slug="",
+        repo="caffeinelabs/app",
+        pr_number=9630,
+        head_sha="9f8e7d6",
+        session_id=world.id("pl"),
+        created_by_session=world.id("pl"),
+        status="FAIL",
+    )
+
+    resp = await _get(authed_api, _project_demos_path(seeded.fid, "api-version"))
+
+    assert resp.status_code == 200
+    body = schemas.ProjectDemosResponse.model_validate(resp.json())
+    assert body.count == 3
+    assert [(g.repo, g.pr_number, g.pr_id, g.head_sha) for g in body.data] == [
+        ("caffeinelabs/app", 9630, seeded.pr.id, HEAD)
+    ]
+    runs = body.data[0].runs
+    assert [r.id for r in runs] == [unlabelled.id, seeded.demo.id, runs[2].id]
+    assert [r.head_sha[:7] for r in runs] == ["9f8e7d6", HEAD[:7], "1a2b3c4"]
+    assert [r.is_current_head for r in runs] == [False, True, False]
+    assert runs[1].files[0].url == f"/v1/factory/demos/{seeded.demo.id}/files/f-video"
+    assert [(s.n, s.status) for s in runs[1].steps] == [(1, "pass"), (2, "pass"), (3, "skipped")]
+    # The other factory's demo of the same PR number never leaks in.
+    assert all(r.project_slug in ("api-version", None) for r in runs)
+
+    limited = await _get(
+        authed_api, _project_demos_path(seeded.fid, "api-version"), params={"limit": 1}
+    )
+    assert limited.json()["count"] == 1
+
+
+async def test_project_demos_of_an_unknown_or_hidden_project_are_404(
+    world: FactoryWorld, authed_api: FactoryApi, demo_clock: None
+) -> None:
+    seeded = _seed_demos(world, authed_api)
+    path = _project_demos_path(seeded.fid, "api-version")
+    permissions = _deps(authed_api).permission_store
+
+    missing = await _get(authed_api, _project_demos_path(seeded.fid, "nope"))
+    assert missing.status_code == 404 and missing.json()["error"]["code"] == "project_not_found"
+    assert (await _get(authed_api, path, "bob")).status_code == 404
+
+    permissions.grant("bob", seeded.fid, LEVEL_READ)
+    hidden = await _get(authed_api, path, "bob")
+    assert hidden.status_code == 404 and hidden.json()["error"]["code"] == "project_not_found"
+
+    permissions.grant("bob", world.id("pl"), LEVEL_READ)
+    snapshot.reset_cache()
+    shared = (await _get(authed_api, path, "bob")).json()
+    assert shared["count"] == 2 and shared["data"][0]["pr_number"] == 9630
+
+
+async def test_a_project_without_demos_lists_no_groups(
+    world: FactoryWorld, authed_api: FactoryApi
+) -> None:
+    seeded = _seed(world, authed_api)
+    _deps(authed_api).factory_store.upsert_project(
+        seeded.fid, "docs", title="Docs", repo="caffeinelabs/app", base_branch="main"
+    )
+
+    resp = await _get(authed_api, _project_demos_path(seeded.fid, "docs"))
+
+    assert resp.status_code == 200
+    assert resp.json() == {"data": [], "count": 0}
+
+
 # ── factories list and decisions ───────────────────────────────
 
 
@@ -583,6 +662,24 @@ async def test_the_factory_list_shows_what_the_caller_can_read(
     bob = (await _get(authed_api, "/v1/factory/factories", "bob")).json()["data"]
     assert [f["id"] for f in bob] == [seeded.fid]
     assert bob[0]["projects_total"] == 0 and bob[0]["decisions_open"] == 1
+
+
+async def test_the_factory_list_says_who_shared_it_and_what_is_mine(
+    world: FactoryWorld, authed_api: FactoryApi
+) -> None:
+    seeded = _seed(world, authed_api)
+    permissions = _deps(authed_api).permission_store
+
+    alice = (await _get(authed_api, "/v1/factory/factories")).json()["data"]
+    atlas = next(f for f in alice if f["id"] == seeded.fid)
+    assert atlas["viewer_role"] == "creator" and atlas["shared_by"] is None
+    # Both open decisions default to operators, which the creator is.
+    assert atlas["mine"] == 2 and atlas["people_count"] >= 1
+
+    permissions.grant("bob", seeded.fid, LEVEL_READ)
+    bob = (await _get(authed_api, "/v1/factory/factories", "bob")).json()["data"]
+    assert bob[0]["viewer_role"] == "viewer" and bob[0]["shared_by"] == "alice"
+    assert bob[0]["mine"] == 0
 
 
 async def test_open_decisions_across_factories_skip_unreadable_ones(

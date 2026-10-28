@@ -335,7 +335,7 @@ export function SessionUpdatesProvider({ children }: { children: ReactNode }) {
         case "factory_changed":
           // A factory's board, activity or decisions moved; the snapshot
           // refetch is ETag-conditional, so a no-op change costs a 304.
-          for (const queryKey of factoryInvalidationKeys(frame.factory_id)) {
+          for (const queryKey of factoryInvalidationKeys(frame.factory_id, frame.scopes)) {
             void queryClient.invalidateQueries({ queryKey });
           }
           return;

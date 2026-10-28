@@ -9,6 +9,7 @@ import { CircleCheckIcon, ChevronRightIcon, EyeOffIcon, FolderKanbanIcon } from 
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
 import type { FactorySnapshot } from "@/lib/factoryApi";
 import { STAGE_LABEL, plural } from "../factoryFormat";
+import { AddProjectInline } from "../projects/AddProjectInline";
 import { type BoardStage, boardSections, boardStage, needsYou } from "./boardModel";
 import { NeedsYouStrip } from "./NeedsYouStrip";
 import { DoneProjectRow, ProjectCard } from "./ProjectCard";
@@ -81,8 +82,9 @@ export function FactoryBoard({
           <FolderKanbanIcon aria-hidden className="size-6 text-muted-foreground/50" />
           <p className="text-ui font-medium">No projects yet</p>
           <p className="max-w-prose text-sm text-muted-foreground">
-            The lead files each project here as it starts its project lead. Add one from the header.
+            The lead files each project here as it starts its project lead.
           </p>
+          <AddProjectInline />
         </div>
       )}
 

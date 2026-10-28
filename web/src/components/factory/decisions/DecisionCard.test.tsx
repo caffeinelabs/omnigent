@@ -15,7 +15,9 @@ import {
   lateQuestion,
   relaunchFailedDecision,
 } from "./__fixtures__/decisionFixtures";
-import { DecisionCard } from "./DecisionCard";
+import { FactoryViewerProvider } from "../shell/viewerCan";
+import { viewerOf } from "../shell/__fixtures__/shellFixtures";
+import { DecisionCard, answerBlockedReason } from "./DecisionCard";
 
 const authenticatedFetch = vi.fn();
 vi.mock("@/lib/identity", () => ({
@@ -336,5 +338,53 @@ describe("DecisionCard", () => {
     expect(card).toHaveTextContent("Question · db-version · D-5");
     const blocking = renderCard(agentDecision()).card;
     expect(within(blocking).getByTestId("decision-wait-D-2")).not.toHaveAttribute("data-late");
+  });
+});
+
+describe("who may answer (decision_routing.may_answer)", () => {
+  const operator = viewerOf("operator");
+  const owner = viewerOf("owner");
+  const forLuka = (): DecisionView => ({ ...agentDecision(), assignee: "luka@caffeine.ai" });
+
+  it("blocks an operator from a decision assigned to someone else", () => {
+    expect(answerBlockedReason(forLuka(), operator.can, operator.user_id)).toBe(
+      "Assigned to luka@caffeine.ai; owners can reassign",
+    );
+    expect(
+      answerBlockedReason(
+        { ...agentDecision(), assignee: "owners" },
+        operator.can,
+        operator.user_id,
+      ),
+    ).toBe("Owners answer this decision");
+  });
+
+  it("lets operators answer their own, the operators’ and what they claimed; owners anything", () => {
+    const mine = { ...agentDecision(), assignee: operator.user_id };
+    expect(answerBlockedReason(mine, operator.can, operator.user_id)).toBeNull();
+    expect(answerBlockedReason(agentDecision(), operator.can, operator.user_id)).toBeNull();
+    const claimed = { ...forLuka(), claimed_by: operator.user_id };
+    expect(answerBlockedReason(claimed, operator.can, operator.user_id)).toBeNull();
+    expect(answerBlockedReason(forLuka(), owner.can, owner.user_id)).toBeNull();
+    // A server without user ids lets everyone with the answer lever through.
+    expect(answerBlockedReason(forLuka(), operator.can, null)).toBeNull();
+  });
+
+  it("renders the card's options disabled with the reason for that operator", () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    render(
+      <Frame client={client}>
+        <FactoryViewerProvider viewer={operator}>
+          <DecisionCard decision={forLuka()} />
+        </FactoryViewerProvider>
+      </Frame>,
+    );
+    const card = screen.getByTestId("decision-card-D-2");
+    const options = within(card)
+      .getAllByRole("button")
+      .filter((b) => b.closest("[data-lever-disabled]"));
+    expect(options.length).toBeGreaterThan(0);
+    expect(options.every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
+    expect(card).toHaveTextContent("for luka@caffeine.ai");
   });
 });

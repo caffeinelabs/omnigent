@@ -183,8 +183,8 @@ import {
 import { ExtensionPrimaryNavigation } from "@/extensions/ExtensionPrimaryNavigation";
 import { PrimaryNavLink } from "@/shell/PrimaryNavLink";
 import { FactoryNavLink } from "@/components/factory/FactoryNavLink";
-import { useFactoryDecisionCount } from "@/hooks/useFactory";
-import { isFactoryPath } from "@/lib/factory";
+import { useFactoryDecisionCount, useReadableFactoryIds } from "@/hooks/useFactory";
+import { isFactoryPath, isSharedFactoryMember } from "@/lib/factory";
 import { useViewerId } from "@/hooks/useViewerId";
 import { useExtensions } from "@/extensions/ExtensionProvider";
 import { extensionPathParts, resolveExtensionPageFromPath } from "@/extensions/catalog";
@@ -764,7 +764,7 @@ function SidebarImpl({
   // (same ["comments", id] keys), so this adds no duplicate fetches.
   const unseenComments = useCommentInbox(loadedRows).items.length;
   // And factory decisions waiting on the human (the Inbox mirrors them).
-  const factoryDecisions = useFactoryDecisionCount({ enabled: factoryEnabled });
+  const factoryDecisions = useFactoryDecisionCount({ enabled: factoryEnabled }) ?? 0;
   const inboxCount = pendingApprovals + unseenComments + factoryDecisions;
 
   // Row-Link click handler. The Link navigates natively (so modifier/middle
@@ -1645,6 +1645,8 @@ function ConversationList({
   const viewerId = useViewerId();
   const isMobile = useIsMobileViewport();
   const serverInfo = useServerInfo();
+  const factoryEnabled = isFeatureEnabled(serverInfo, "factory");
+  const readableFactories = useReadableFactoryIds(factoryEnabled);
   // Host metadata is shared by every row tooltip. Resolve it once at the list
   // owner so ordinary rows do not each create their own polling observer.
   const { data: hosts = [] } = useHosts({ includeSandbox: true });
@@ -1804,14 +1806,20 @@ function ConversationList({
     // unloaded page. We render it as a folder with a "No sessions" placeholder
     // rather than hiding it (matches the target sidebar layout).
 
-    // Sessions: the remainder — not pinned, not filed.
+    // Sessions: the remainder — not pinned, not filed. Members of a factory
+    // shared with the viewer sit under the Factory entry instead.
+    const factoryMember = (c: Conversation) =>
+      factoryEnabled &&
+      isSharedFactoryMember(c.labels, isOwnedByViewer(c, viewerId), readableFactories);
     const sessions = sortByUpdatedAtDesc(
-      tabScoped.filter((c) => !pinnedIdSet.has(c.id) && !filedIds.has(c.id)),
+      tabScoped.filter((c) => !pinnedIdSet.has(c.id) && !filedIds.has(c.id) && !factoryMember(c)),
       activeOverride,
       frozenKeys,
     );
     return { pinned, sessions, projectGroups };
   }, [
+    factoryEnabled,
+    readableFactories,
     allConversations,
     pinnedConversations,
     pinnedSet,

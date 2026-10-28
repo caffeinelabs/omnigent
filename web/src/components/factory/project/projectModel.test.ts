@@ -1,9 +1,16 @@
 import { describe, expect, it } from "vitest";
 import type { DemoListResponse, ProjectDemoView } from "@/lib/factoryApi";
 import { projectPrList } from "../board/boardModel";
-import { projectPageHref, projectTab } from "../factoryRoutes";
-import { EARLIER_9630_DEMO_ID, UX_DEMO_ID, projectScenario } from "./__fixtures__/projectFixtures";
+import { projectPageHref, projectSection } from "../factoryRoutes";
 import {
+  EARLIER_9630_DEMO_ID,
+  UX_DEMO_ID,
+  projectDemosOf,
+  projectScenario,
+} from "./__fixtures__/projectFixtures";
+import {
+  demoGroupsFrom,
+  demoRunCount,
   demosSummary,
   groupDemosByPr,
   projectDecisions,
@@ -65,15 +72,47 @@ describe("project lists", () => {
   });
 });
 
+describe("demoGroupsFrom (the server's per-PR groups)", () => {
+  it("keeps the groups' order, the newest run on the card and older runs under it", () => {
+    const { demos, prs, snapshot } = scenario();
+    const response = projectDemosOf(demos, "api-version", snapshot.prs);
+    const groups = demoGroupsFrom(response.data, prs);
+    expect(groups.map((g) => [g.prNumber, g.latest.id, g.earlier.map((r) => r.id)])).toEqual([
+      [9634, UX_DEMO_ID, []],
+      [9630, "df2503ab72c051c6bdfa1e15f1570e31", [EARLIER_9630_DEMO_ID]],
+    ]);
+    expect(demoRunCount(groups)).toBe(response.count);
+    expect(groups[1]!.pr?.number).toBe(9630);
+  });
+
+  it("re-sorts a group's runs newest first and drops an empty group", () => {
+    const { demos, prs, snapshot } = scenario();
+    const response = projectDemosOf(demos, "api-version", snapshot.prs);
+    const g9630 = response.data.find((g) => g.pr_number === 9630)!;
+    g9630.runs.reverse();
+    const groups = demoGroupsFrom([...response.data, { ...g9630, pr_number: 1, runs: [] }], prs);
+    expect(groups).toHaveLength(2);
+    expect(groups[1]!.latest.id).toBe("df2503ab72c051c6bdfa1e15f1570e31");
+  });
+
+  it("finds the PR by id first, else by repo and number; an untracked PR has none", () => {
+    const { demos, prs, snapshot } = scenario();
+    const [first] = projectDemosOf(demos, "api-version", snapshot.prs).data;
+    expect(demoGroupsFrom([{ ...first!, pr_id: null }], prs)[0]!.pr?.number).toBe(9634);
+    expect(demoGroupsFrom([{ ...first!, pr_id: null, pr_number: 1 }], prs)[0]!.pr).toBeNull();
+  });
+});
+
 describe("project page links", () => {
-  it("encodes the factory and slug, and leaves Overview out of the query", () => {
+  it("encodes the factory and slug; a section is an anchor, Overview is the top", () => {
     expect(projectPageHref("f 1", "a/b")).toBe("/factory/f%201/projects/a%2Fb");
-    expect(projectPageHref("f1", "api", { tab: "overview" })).toBe("/factory/f1/projects/api");
-    expect(projectPageHref("f1", "api", { tab: "demos", params: { review: 9630 } })).toBe(
-      "/factory/f1/projects/api?tab=demos&review=9630",
+    expect(projectPageHref("f1", "api", { section: "overview" })).toBe("/factory/f1/projects/api");
+    expect(projectPageHref("f1", "api", { section: "demos", params: { decision: "D-2" } })).toBe(
+      "/factory/f1/projects/api?decision=D-2#demos",
     );
-    expect(projectTab("demos")).toBe("demos");
-    expect(projectTab("board")).toBe("overview");
-    expect(projectTab(null)).toBe("overview");
+    expect(projectSection("demos")).toBe("demos");
+    expect(projectSection("#prs")).toBe("prs");
+    expect(projectSection("board")).toBeNull();
+    expect(projectSection(null)).toBeNull();
   });
 });

@@ -9,11 +9,14 @@
 
 import {
   type QueryClient,
+  keepPreviousData,
   useInfiniteQuery,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import { useMemo } from "react";
 import { useSessionUpdatesConnected } from "@/hooks/useSessionUpdatesConnected";
+import { normalizeFactoryId } from "@/lib/factory";
 import { ApiError } from "@/lib/sessionsApi";
 import {
   type DemoFilters,
@@ -24,14 +27,21 @@ import {
   type FactoryListResponse,
   type FactorySnapshot,
   type OpenDecisionsResponse,
+  type PeopleResponse,
   type Preflight,
+  type ProjectDemosResponse,
+  type SpanKind,
+  type SpanPage,
   fetchFactories,
   fetchFactoryDemos,
   fetchFactoryEvents,
+  fetchFactoryPeople,
   fetchFactoryPreflight,
   fetchFactorySnapshot,
+  fetchFactorySpans,
   fetchOpenDecisionCount,
   fetchOpenDecisions,
+  fetchProjectDemos,
 } from "@/lib/factoryApi";
 
 /** Poll cadence while the session-updates socket is disconnected. */
@@ -49,16 +59,44 @@ export const factoryEventsQueryKey = (factoryId: string, filters: EventFilters =
   ["factory-events", factoryId, filters] as const;
 export const factoryDemosQueryKey = (factoryId: string, filters: DemoFilters = {}) =>
   ["factory-demos", factoryId, filters] as const;
+export const projectDemosQueryKey = (factoryId: string, slug: string) =>
+  ["factory-demos", factoryId, "project", slug] as const;
+export const factoryPeopleQueryKey = (factoryId: string) => ["factory-people", factoryId] as const;
+export const factorySpansQueryKey = (
+  factoryId: string,
+  sinceMs: number,
+  kinds: readonly SpanKind[] | null = null,
+) => ["factory-spans", factoryId, sinceMs, kinds] as const;
 export const FACTORIES_QUERY_KEY = ["factories"] as const;
 export const FACTORY_DECISIONS_QUERY_KEY = ["factory-decisions"] as const;
 export const FACTORY_PREFLIGHT_QUERY_KEY = ["factory-preflight"] as const;
 
-/** Every query a `factory_changed` frame for `factoryId` makes stale. */
-export function factoryInvalidationKeys(factoryId: string): readonly (readonly unknown[])[] {
+// Frame scopes that move only the snapshot (and who is where): the live "now"
+// poller, presence and issues. Anything else (or no scope) refreshes it all.
+const LIGHT_SCOPES = new Set(["now", "presence", "issues"]);
+
+/**
+ * Every query a `factory_changed` frame for `factoryId` makes stale; `scopes`
+ * (the frame's) narrows a light frame to the snapshot, so a "now" tick never
+ * re-reads spans, events or demos.
+ */
+export function factoryInvalidationKeys(
+  factoryId: string,
+  scopes?: readonly string[] | null,
+): readonly (readonly unknown[])[] {
+  if (scopes?.length && scopes.every((s) => LIGHT_SCOPES.has(s))) {
+    return [
+      factoryQueryKey(factoryId),
+      ...(scopes.includes("presence") ? [["factory-people", factoryId]] : []),
+      ...(scopes.includes("issues") ? [FACTORIES_QUERY_KEY] : []),
+    ];
+  }
   return [
     factoryQueryKey(factoryId),
     ["factory-events", factoryId],
     ["factory-demos", factoryId],
+    ["factory-people", factoryId],
+    ["factory-spans", factoryId],
     FACTORIES_QUERY_KEY,
     FACTORY_DECISIONS_QUERY_KEY,
   ];
@@ -86,6 +124,17 @@ export function useFactories(options: { enabled?: boolean } = {}) {
     refetchInterval,
     retry: retryTransient,
   });
+}
+
+const NO_FACTORY_IDS: ReadonlySet<string> = new Set();
+
+/** The ids of the factories the viewer can open (empty until they load). */
+export function useReadableFactoryIds(enabled = true): ReadonlySet<string> {
+  const { data } = useFactories({ enabled });
+  return useMemo(
+    () => (data ? new Set(data.data.map((f) => normalizeFactoryId(f.id))) : NO_FACTORY_IDS),
+    [data],
+  );
 }
 
 // Last ETag and server clock offset per factory, per QueryClient so separate
@@ -236,6 +285,84 @@ export function useFactoryDemos(factoryId: string | null | undefined, filters: D
   });
 }
 
+/** Every demo of one project's PRs, grouped by PR (the project page's Demos section). */
+export function useProjectDemos(factoryId: string | null | undefined, slug: string) {
+  const refetchInterval = useFallbackInterval();
+  return useQuery<ProjectDemosResponse>({
+    queryKey: projectDemosQueryKey(factoryId ?? "", slug),
+    queryFn: ({ signal }) => fetchProjectDemos(factoryId as string, slug, signal),
+    enabled: Boolean(factoryId && slug),
+    refetchInterval,
+    retry: retryTransient,
+  });
+}
+
+/** The factory roster (Share dialog, People settings); a frame on `people` refreshes it. */
+export function useFactoryPeople(
+  factoryId: string | null | undefined,
+  options: { enabled?: boolean } = {},
+) {
+  const refetchInterval = useFallbackInterval();
+  return useQuery<PeopleResponse>({
+    queryKey: factoryPeopleQueryKey(factoryId ?? ""),
+    queryFn: ({ signal }) => fetchFactoryPeople(factoryId as string, signal),
+    enabled: Boolean(factoryId) && (options.enabled ?? true),
+    refetchInterval,
+    retry: retryTransient,
+  });
+}
+
+/** Pages of spans the heatmap reads at most (oldest first, so the newest come last). */
+export const SPAN_PAGES_MAX = 5;
+const SPAN_PAGE_SIZE = 2000;
+
+/** Every span started since `sinceMs`, following the cursor up to {@link SPAN_PAGES_MAX} pages. */
+async function readSpansSince(
+  factoryId: string,
+  sinceMs: number,
+  kinds: readonly SpanKind[] | null,
+  signal: AbortSignal,
+): Promise<SpanPage> {
+  const data: SpanPage["data"] = [];
+  let since: number | null = sinceMs;
+  const filter = kinds?.length ? { kinds: [...kinds] } : {};
+  /* oxlint-disable no-await-in-loop -- each page names the next cursor */
+  for (let i = 0; i < SPAN_PAGES_MAX && since != null; i += 1) {
+    const page = await fetchFactorySpans(
+      factoryId,
+      { since, limit: SPAN_PAGE_SIZE, ...filter },
+      signal,
+    );
+    data.push(...page.data);
+    since = page.has_more ? page.next_since : null;
+  }
+  /* oxlint-enable no-await-in-loop */
+  return { data, has_more: since != null, next_since: since };
+}
+
+/**
+ * The factory's spans since `sinceMs` (the activity heatmap), optionally of
+ * `kinds` only. A new `sinceMs` keeps the previous page on screen until it
+ * loads. A server without the spans route answers 404, which callers treat
+ * as "use events".
+ */
+export function useFactorySpans(
+  factoryId: string | null | undefined,
+  sinceMs: number,
+  options: { enabled?: boolean; kinds?: readonly SpanKind[] } = {},
+) {
+  const refetchInterval = useFallbackInterval();
+  const kinds = options.kinds ?? null;
+  return useQuery<SpanPage>({
+    queryKey: factorySpansQueryKey(factoryId ?? "", sinceMs, kinds),
+    queryFn: ({ signal }) => readSpansSince(factoryId as string, sinceMs, kinds, signal),
+    enabled: Boolean(factoryId) && (options.enabled ?? true),
+    placeholderData: keepPreviousData,
+    refetchInterval,
+    retry: retryTransient,
+  });
+}
+
 /** Open decisions across every factory the viewer can see (Inbox mirror). */
 export function useOpenFactoryDecisions(options: { enabled?: boolean } = {}) {
   const refetchInterval = useFallbackInterval();
@@ -248,8 +375,8 @@ export function useOpenFactoryDecisions(options: { enabled?: boolean } = {}) {
   });
 }
 
-/** How many decisions wait on the viewer (badge counts); 0 until known. */
-export function useFactoryDecisionCount(options: { enabled?: boolean } = {}): number {
+/** How many decisions wait on the viewer (badge counts); undefined until known. */
+export function useFactoryDecisionCount(options: { enabled?: boolean } = {}): number | undefined {
   const refetchInterval = useFallbackInterval();
   const { data } = useQuery<number>({
     queryKey: [...FACTORY_DECISIONS_QUERY_KEY, "count"],
@@ -258,7 +385,7 @@ export function useFactoryDecisionCount(options: { enabled?: boolean } = {}): nu
     refetchInterval,
     retry: retryTransient,
   });
-  return data ?? 0;
+  return data;
 }
 
 /** Can this viewer start a factory here (GitHub, agents, sandbox host, flag)? */

@@ -602,6 +602,27 @@ class DemoListResponse(_View):
     data: list[ProjectDemoView] = Field(default_factory=list)
 
 
+class ProjectDemoGroup(_View):
+    """
+    One PR's demos on the project page: every run, newest first.
+
+    :param head_sha: The PR's current head as the board tracks it (``""`` when untracked).
+    """
+
+    repo: str
+    pr_number: int
+    pr_id: str | None = None
+    head_sha: str = ""
+    runs: list[ProjectDemoView] = Field(default_factory=list)
+
+
+class ProjectDemosResponse(_View):
+    """``GET /v1/factory/factories/{fid}/projects/{slug}/demos``: groups by newest run."""
+
+    data: list[ProjectDemoGroup] = Field(default_factory=list)
+    count: int = 0
+
+
 # ── PRs ────────────────────────────────────────────────────────
 
 
@@ -950,6 +971,11 @@ class FactorySummary(_View):
     members_running: int = 0
     drifted_members: int = 0
     url: str
+    viewer_role: ViewerRole | None = None
+    shared_by: str | None = None
+    people_count: int | None = None
+    mine: int | None = None
+    usd_per_h: float | None = None
 
 
 class FactoryListResponse(_View):
@@ -1402,7 +1428,9 @@ __all__ = [
     "Preflight",
     "PresenceEntry",
     "PreviewView",
+    "ProjectDemoGroup",
     "ProjectDemoView",
+    "ProjectDemosResponse",
     "ProjectView",
     "ProposalView",
     "SpanView",

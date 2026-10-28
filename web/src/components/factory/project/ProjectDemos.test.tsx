@@ -10,7 +10,7 @@ import {
   EARLIER_9630_DEMO_ID,
   UX_DEMO_ID,
   UX_PR_ID,
-  filterDemos,
+  projectDemosOf,
   projectScenario,
 } from "./__fixtures__/projectFixtures";
 import { ProjectDemos } from "./ProjectDemos";
@@ -21,7 +21,7 @@ vi.mock("@/lib/identity", () => ({
 }));
 vi.mock("@/hooks/useSessionUpdatesConnected", () => ({ useSessionUpdatesConnected: () => true }));
 
-const DEMOS = `/v1/factory/factories/${LIVE_RUN_FACTORY_ID}/demos`;
+const PROJECTS = `/v1/factory/factories/${LIVE_RUN_FACTORY_ID}/projects/`;
 const UX_FILES = `/v1/factory/demos/${UX_DEMO_ID}/files`;
 
 function json(body: unknown, status = 200): Response {
@@ -31,17 +31,19 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+/** `GET …/projects/{slug}/demos` over `list`, grouped by PR as the server groups it. */
 function serve(list: () => DemoListResponse | Response | Promise<Response>) {
   authenticatedFetch.mockImplementation(async (path: string) => {
-    if (!path.startsWith(DEMOS)) throw new Error(`unexpected ${path}`);
+    const slug = path.startsWith(PROJECTS) ? path.slice(PROJECTS.length).split("/")[0] : null;
+    if (!slug || !path.endsWith("/demos")) throw new Error(`unexpected ${path}`);
     const body = await list();
-    return body instanceof Response ? body : json(filterDemos(body, path));
+    const { snapshot } = projectScenario();
+    return body instanceof Response ? body : json(projectDemosOf(body, slug, snapshot.prs));
   });
 }
 
 function renderDemos(slug = "api-version", snapshot: FactorySnapshot = projectScenario().snapshot) {
   const project = snapshot.projects.find((p) => p.slug === slug)!;
-  const onReview = vi.fn();
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   render(
     <QueryClientProvider client={client}>
@@ -53,13 +55,11 @@ function renderDemos(slug = "api-version", snapshot: FactorySnapshot = projectSc
             prs={projectPrList(snapshot, project)}
             members={snapshot.members}
             nowS={LIVE_RUN_NOW_S}
-            onReview={onReview}
           />
         </ImageLightboxProvider>
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  return { onReview };
 }
 
 beforeEach(() => {
@@ -161,11 +161,13 @@ describe("ProjectDemos", () => {
     expect(card).toHaveAttribute("data-status", "PASS");
   });
 
-  it("opens the PR's review and its live preview", async () => {
+  it("links the PR page and its live preview", async () => {
     serve(() => projectScenario().demos);
-    const { onReview } = renderDemos();
-    fireEvent.click(await screen.findByTestId("demo-review-9634"));
-    expect(onReview).toHaveBeenCalledWith(9634);
+    renderDemos();
+    expect(await screen.findByTestId("demo-review-9634")).toHaveAttribute(
+      "href",
+      `/factory/${LIVE_RUN_FACTORY_ID}/prs/${UX_PR_ID}`,
+    );
     expect(screen.getByTestId("demo-preview-9634")).toHaveAttribute(
       "href",
       `/v1/factory/prs/${UX_PR_ID}/preview`,
@@ -184,7 +186,7 @@ describe("ProjectDemos", () => {
   });
 
   it("says when previews and demos are off for the project", async () => {
-    serve(() => ({ data: [] }));
+    serve(() => ({ data: [] }) as DemoListResponse);
     renderDemos("docs-factory-envs");
     expect(await screen.findByTestId("project-demos-empty")).toHaveTextContent(
       "Previews and demos are off for this project",

@@ -117,6 +117,12 @@ function Chip({
   );
 }
 
+/** `Shared with you by luka@… · operator`, or null for the viewer's own factory. */
+export function sharedLine(factory: FactorySummary): string | null {
+  if (!factory.shared_by) return null;
+  return `Shared with you by ${factory.shared_by}${factory.viewer_role ? ` · ${factory.viewer_role}` : ""}`;
+}
+
 /** What waits on the human, then the team size; omits zero counts. */
 function NeedsYou({ factory }: { factory: FactorySummary }) {
   const agents =
@@ -128,7 +134,12 @@ function NeedsYou({ factory }: { factory: FactorySummary }) {
       data-testid="factory-needs-you"
       className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1"
     >
-      {factory.decisions_open > 0 && (
+      {(factory.mine ?? 0) > 0 && (
+        <Chip tone="warning" icon={<TriangleAlertIcon aria-hidden className="size-3" />}>
+          {factory.mine} for you
+        </Chip>
+      )}
+      {factory.decisions_open > 0 && factory.mine == null && (
         <Chip tone="warning" icon={<TriangleAlertIcon aria-hidden className="size-3" />}>
           {plural(factory.decisions_open, "decision")}
         </Chip>
@@ -180,6 +191,11 @@ export function FactoryIndexCard({ factory, now }: { factory: FactorySummary; no
           {cost ?? "—"}
         </span>
       </div>
+      {sharedLine(factory) && (
+        <p data-testid="factory-shared-line" className="-mt-1 text-sm text-muted-foreground">
+          {sharedLine(factory)}
+        </p>
+      )}
       <FactoryStageCounts factory={factory} />
       <div className="flex items-end justify-between gap-3">
         <NeedsYou factory={factory} />

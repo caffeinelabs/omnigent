@@ -1,310 +1,139 @@
 /**
- * Factory cockpit (`/factory/:factoryId`): what is moving, what is blocked,
- * what needs the human, and whether the machine is alive.
- *
- * Query parameters: `?tab=board|activity`, `?review=<pr number>` (review
- * drawer; `&preview=unavailable` when the PR's stable preview link found no
- * running preview), `?decision=<D-n>` (highlight in the decisions rail). An
- * old `?project=<slug>` link redirects to that project's page. The rail sits
- * beside the board from 1280 px and folds under the Needs-you strip below that.
+ * Everything under `/factory/:factoryId/*`: the factory shell (header, tabs,
+ * dock, presence) around one page. Overview at the root, then Projects, a
+ * project, a PR, Activity, the Room and Settings ▸ People. Old cockpit links
+ * (`?project=`, `?review=`, `?pr=…&preview=unavailable`, `?tab=activity`)
+ * are sent to their pages by the shell.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeftIcon } from "lucide-react";
-import { PageScroll } from "@/components/PageScroll";
+import { CompassIcon, MessagesSquareIcon } from "lucide-react";
+import { Navigate, Route, Routes } from "react-router-dom";
 import { ActivityList } from "@/components/factory/activity/ActivityList";
-import { WIDE_BOARD_QUERY, useMediaQuery } from "@/components/factory/board/boardHooks";
-import { FactoryBoard } from "@/components/factory/board/FactoryBoard";
-import { FactoryHeader } from "@/components/factory/board/FactoryHeader";
-import { HealthStrip } from "@/components/factory/board/HealthStrip";
-import { needsYou } from "@/components/factory/board/boardModel";
-import { FactoryControlsProvider } from "@/components/factory/controls/FactoryControlsContext";
 import { DecisionsRail } from "@/components/factory/decisions/DecisionsRail";
-import { useFactoryServerNowS } from "@/components/factory/factoryClock";
-import { FactoryLoadError } from "@/components/factory/FactoryLoadError";
-import { projectPageHref } from "@/components/factory/factoryRoutes";
-import { ReviewDrawer } from "@/components/factory/review/ReviewDrawer";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { COCKPIT_MIN_REFRESH_MS, useFactory } from "@/hooks/useFactory";
-import { snapshotNotices, useFactoryNotifications } from "@/hooks/useFactoryNotifications";
-import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
-import type { FactorySnapshot } from "@/lib/factoryApi";
-import { Link, useNavigate, useParams, useSearchParams } from "@/lib/routing";
-import { ApiError } from "@/lib/sessionsApi";
+  SETTINGS_SECTIONS,
+  factoryPageHref,
+  settingsPageHref,
+} from "@/components/factory/factoryRoutes";
+import { PeopleSettings } from "@/components/factory/people/PeopleSettings";
+import { EmptyState } from "@/components/factory/project/projectParts";
+import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
+import { RoomSlot, dockThread } from "@/components/factory/shell/RoomDock";
+import { Link, useParams, useSearchParams } from "@/lib/routing";
+import { FactoryLayout } from "./FactoryLayout";
+import { OverviewPage } from "./OverviewPage";
+import { PrPage } from "./PrPage";
+import { ProjectPage } from "./ProjectPage";
+import { ProjectsPage } from "./ProjectsPage";
 
-type CockpitTab = "board" | "activity";
-
-const FLASH_MS = 1200;
-
-/** Scroll an element into view and flash a ring around it (still under reduced motion). */
-export function jumpTo(targetId: string): void {
-  const el = document.getElementById(targetId);
-  if (!el) return;
-  const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false;
-  el.scrollIntoView({ behavior: reduce ? "auto" : "smooth", block: "center" });
-  el.dataset.highlighted = "true";
-  if (!reduce) {
-    el.animate?.(
-      [
-        { boxShadow: "0 0 0 0 var(--ring)" },
-        { boxShadow: "0 0 0 4px var(--ring)", offset: 0.2 },
-        { boxShadow: "0 0 0 0 transparent" },
-      ],
-      { duration: 900, easing: "ease-out" },
-    );
-  }
-  window.setTimeout(() => delete el.dataset.highlighted, FLASH_MS);
+/** `/activity`: every factory event, filterable by project, member and kind. */
+function ActivityPage() {
+  const { snapshot } = useFactoryShell();
+  return (
+    <div data-testid="factory-activity-page" className="flex min-w-0 flex-col gap-3">
+      <h2 className="text-base font-semibold">Activity</h2>
+      <ActivityList
+        factoryId={snapshot.factory.id}
+        projects={snapshot.projects}
+        members={snapshot.members}
+      />
+    </div>
+  );
 }
 
-function CockpitSkeleton() {
+/** `/room/:thread?`: the Room's page; until it lands, the thread's slot and the decisions. */
+function RoomPage() {
+  const { snapshot, location, clockOffsetS } = useFactoryShell();
+  const [params] = useSearchParams();
+  const thread = location.id
+    ? {
+        key: location.id,
+        title: location.id.startsWith("project:")
+          ? `#${location.id.slice(8)}`
+          : location.id.startsWith("pr:")
+            ? dockThread(snapshot, { page: "pr", id: location.id.slice(3) }).title
+            : `#${location.id}`,
+      }
+    : { key: "factory", title: "#factory" };
   return (
     <div
-      aria-busy="true"
-      aria-label="Loading factory"
-      data-testid="factory-loading"
-      className="flex flex-col gap-4"
+      data-testid="factory-room-page"
+      className="grid min-w-0 grid-cols-1 items-start gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]"
     >
-      <div className="flex items-center gap-3">
-        <div className="h-7 w-56 animate-pulse rounded bg-muted" />
-        <div className="ml-auto h-7 w-28 animate-pulse rounded bg-muted" />
+      <div className="flex min-w-0 flex-col gap-3">
+        <h2 className="inline-flex items-center gap-2 text-base font-semibold">
+          <MessagesSquareIcon aria-hidden className="size-4 text-muted-foreground" />
+          Room
+        </h2>
+        <RoomSlot thread={thread} />
       </div>
-      <div className="h-4 w-3/4 animate-pulse rounded bg-muted" />
-      <div className="h-4 w-1/2 animate-pulse rounded bg-muted" />
-      {[0, 1].map((i) => (
-        <div key={i} className="flex flex-col gap-3 rounded-xl border border-border bg-card p-4">
-          <div className="h-5 w-48 animate-pulse rounded bg-muted" />
-          <div className="h-3 w-full animate-pulse rounded bg-muted" />
-          <div className="h-20 w-full animate-pulse rounded-lg bg-muted" />
-          <div className="h-4 w-2/3 animate-pulse rounded bg-muted" />
-        </div>
-      ))}
+      <div className="flex min-w-0 flex-col gap-3">
+        <h2 className="text-base font-semibold">Decisions</h2>
+        <DecisionsRail
+          factoryId={snapshot.factory.id}
+          decisions={snapshot.decisions}
+          highlightId={params.get("decision")}
+          clockOffsetS={clockOffsetS}
+        />
+      </div>
     </div>
   );
 }
 
-function TabSwitch({ tab, onChange }: { tab: CockpitTab; onChange: (tab: CockpitTab) => void }) {
-  const mobile = useIsMobileViewport();
-  if (mobile) {
-    return (
-      <Select value={tab} onValueChange={(v) => onChange(v as CockpitTab)}>
-        <SelectTrigger
-          size="sm"
-          aria-label="View"
-          data-testid="factory-tab-select"
-          className="w-40"
-        >
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value="board">Board</SelectItem>
-          <SelectItem value="activity">Activity</SelectItem>
-        </SelectContent>
-      </Select>
-    );
+/** `/settings/:section`: People today; the other sections join it. */
+function SettingsPage() {
+  const { section = "people" } = useParams<{ section: string }>();
+  const { snapshot, nowS } = useFactoryShell();
+  if (!SETTINGS_SECTIONS.includes(section as (typeof SETTINGS_SECTIONS)[number])) {
+    return <Navigate to={settingsPageHref(snapshot.factory.id)} replace />;
   }
   return (
-    <Tabs
-      value={tab}
-      onValueChange={(v) => onChange(v as CockpitTab)}
-      componentId="factory.cockpit.tab"
-    >
-      <TabsList variant="line" data-testid="factory-tabs" className="h-8">
-        <TabsTrigger value="board" data-testid="factory-tab-board" className="px-2">
-          Board
-        </TabsTrigger>
-        <TabsTrigger value="activity" data-testid="factory-tab-activity" className="px-2">
-          Activity
-        </TabsTrigger>
-      </TabsList>
-    </Tabs>
+    <div data-testid="factory-settings-page" className="flex min-w-0 flex-col gap-4">
+      <div className="flex min-w-0 items-baseline gap-2">
+        <h2 className="text-base font-semibold">Settings</h2>
+        <span className="text-sm text-muted-foreground">People</span>
+      </div>
+      <PeopleSettings factoryId={snapshot.factory.id} nowS={nowS} />
+    </div>
   );
 }
 
-function Cockpit({ snapshot, clockOffsetS }: { snapshot: FactorySnapshot; clockOffsetS: number }) {
-  const [params, setParams] = useSearchParams();
-  const nowS = useFactoryServerNowS(clockOffsetS);
-  const wide = useMediaQuery(WIDE_BOARD_QUERY);
-  const tab: CockpitTab = params.get("tab") === "activity" ? "activity" : "board";
-  const review = params.get("review");
-  const decision = params.get("decision");
-  const [panelOpen, setPanelOpen] = useState(decision != null);
-  useFactoryNotifications(useMemo(() => snapshotNotices(snapshot), [snapshot]));
-
-  const setParam = useCallback(
-    (key: string, value: string | null) =>
-      setParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          if (value == null) next.delete(key);
-          else next.set(key, value);
-          return next;
-        },
-        { replace: key === "decision" || key === "tab" },
-      ),
-    [setParams],
-  );
-
-  const pointAtDecision = (ref: string) => {
-    setParam("decision", ref);
-    if (!wide) setPanelOpen(true);
-  };
-  const onDecisions = () => {
-    if (!wide) {
-      setPanelOpen((open) => !open);
-      return;
-    }
-    const first = needsYou(snapshot).openDecisions[0];
-    if (first) setParam("decision", first.ref);
-  };
-  const reviewPr = review
-    ? (snapshot.prs.find((pr) => String(pr.number) === review || pr.id === review) ?? null)
-    : null;
-  // The stable preview redirect adds `pr` and `preview=unavailable`; they close with the drawer.
-  const closeReview = () =>
-    setParams((prev) => {
-      const next = new URLSearchParams(prev);
-      for (const key of ["review", "pr", "preview"]) next.delete(key);
-      return next;
-    });
-  const rail = (
-    <DecisionsRail
-      factoryId={snapshot.factory.id}
-      decisions={snapshot.decisions}
-      highlightId={decision}
-      clockOffsetS={clockOffsetS}
+/** A factory path this build has no page for yet. */
+function UnknownPage() {
+  const { snapshot } = useFactoryShell();
+  return (
+    <EmptyState
+      testId="factory-unknown-page"
+      icon={<CompassIcon aria-hidden className="size-6 text-muted-foreground/50" />}
+      title="No such page in this factory"
+      body={
+        <Link
+          to={factoryPageHref(snapshot.factory.id)}
+          componentId="factory.unknown.back"
+          className="underline underline-offset-2 hover:text-foreground"
+        >
+          Back to the Overview
+        </Link>
+      }
     />
   );
-
-  return (
-    <div className="flex min-w-0 flex-col gap-4">
-      <div className="flex min-w-0 flex-col gap-2.5">
-        <FactoryHeader snapshot={snapshot} nowS={nowS} />
-        <HealthStrip snapshot={snapshot} nowS={nowS} />
-      </div>
-      <TabSwitch tab={tab} onChange={(next) => setParam("tab", next === "board" ? null : next)} />
-      <div
-        data-testid="factory-layout"
-        data-wide={wide ? "true" : "false"}
-        className={
-          wide ? "grid grid-cols-[minmax(0,1fr)_18rem] items-start gap-6" : "flex min-w-0 flex-col"
-        }
-      >
-        <div className="min-w-0">
-          {tab === "board" ? (
-            <FactoryBoard
-              snapshot={snapshot}
-              nowS={nowS}
-              onReview={(number) => setParam("review", String(number))}
-              onDecision={pointAtDecision}
-              onDecisions={onDecisions}
-              onJump={jumpTo}
-              decisionsPanel={wide ? undefined : rail}
-              decisionsExpanded={panelOpen}
-            />
-          ) : (
-            <ActivityList
-              factoryId={snapshot.factory.id}
-              projects={snapshot.projects}
-              members={snapshot.members}
-            />
-          )}
-        </div>
-        {wide && (
-          // The padding (offset by the margin) keeps a highlighted card's ring inside the scroller.
-          <aside
-            data-testid="factory-rail"
-            className="sticky -m-1 max-h-[calc(100vh-6rem)] overflow-y-auto p-1"
-            style={{
-              top: "calc(var(--omnigent-header-height) + var(--omnigent-inset-top) + 1rem)",
-            }}
-          >
-            {rail}
-          </aside>
-        )}
-      </div>
-      {review && (
-        <ReviewDrawer
-          factoryId={snapshot.factory.id}
-          pr={reviewPr}
-          demo={reviewPr?.demo ?? null}
-          onClose={closeReview}
-          snapshot={snapshot}
-          nowS={nowS}
-          previewUnavailable={params.get("preview") === "unavailable"}
-        />
-      )}
-    </div>
-  );
-}
-
-/** An old `?project=<slug>` link (the project drawer) now lands on the project page. */
-function projectRedirect(factoryId: string | undefined, params: URLSearchParams): string | null {
-  const slug = params.get("project");
-  if (!factoryId || !slug) return null;
-  // The review, decision highlight and preview notice carry over.
-  const kept: Record<string, string> = {};
-  for (const key of ["review", "decision", "preview"]) {
-    const value = params.get(key);
-    if (value) kept[key] = value;
-  }
-  return projectPageHref(factoryId, slug, { params: kept });
 }
 
 export function FactoryPage() {
-  const { factoryId } = useParams<{ factoryId: string }>();
-  const [params] = useSearchParams();
-  const navigate = useNavigate();
-  const redirect = projectRedirect(factoryId, params);
-  useEffect(() => {
-    if (redirect) navigate(redirect, { replace: true });
-  }, [navigate, redirect]);
-  // A redirect reads nothing: the project page loads the snapshot itself.
-  const { data, error, isLoading, updatedAt, clockOffsetS, refetch } = useFactory(
-    redirect ? null : factoryId,
-    { minRefreshMs: COCKPIT_MIN_REFRESH_MS },
-  );
-  if (redirect) return null;
-  const missing = !data && error instanceof ApiError && error.status === 404;
   return (
-    <PageScroll
-      data-testid="factory-page"
-      maxWidthClassName="max-w-7xl"
-      contentClassName="px-4 md:px-6"
-    >
-      <Link
-        to="/factory"
-        componentId="factory.page.back"
-        className="mb-3 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-      >
-        <ArrowLeftIcon aria-hidden className="size-3.5" />
-        Factory
-      </Link>
-      {error && !missing && (
-        <FactoryLoadError
-          error={error}
-          updatedAt={data ? updatedAt : 0}
-          onRetry={refetch}
-          what="this factory"
-        />
-      )}
-      {isLoading && <CockpitSkeleton />}
-      {missing && (
-        <p data-testid="factory-missing" className="text-ui text-muted-foreground">
-          This factory doesn’t exist, or you can’t see it.
-        </p>
-      )}
-      {data && (
-        <FactoryControlsProvider key={data.factory.id} snapshot={data}>
-          <Cockpit snapshot={data} clockOffsetS={clockOffsetS} />
-        </FactoryControlsProvider>
-      )}
-    </PageScroll>
+    <FactoryLayout>
+      <Routes>
+        <Route index element={<OverviewPage />} />
+        <Route path="projects" element={<ProjectsPage />} />
+        <Route path="projects/:slug" element={<ProjectPage />} />
+        <Route path="prs/:prId" element={<PrPage />} />
+        <Route path="activity" element={<ActivityPage />} />
+        <Route path="room" element={<RoomPage />} />
+        <Route path="room/:thread" element={<RoomPage />} />
+        <Route path="settings" element={<SettingsPage />} />
+        <Route path="settings/:section" element={<SettingsPage />} />
+        <Route path="*" element={<UnknownPage />} />
+      </Routes>
+    </FactoryLayout>
   );
 }

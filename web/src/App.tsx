@@ -76,10 +76,6 @@ const FactoryPage = withPageView(
   "factory_cockpit",
   lazy(() => import("@/pages/factory/FactoryPage").then((m) => ({ default: m.FactoryPage }))),
 );
-const ProjectPage = withPageView(
-  "factory_project",
-  lazy(() => import("@/pages/factory/ProjectPage").then((m) => ({ default: m.ProjectPage }))),
-);
 const SettingsPage = lazy(() =>
   import("@/pages/SettingsPage").then((m) => ({ default: m.SettingsPage })),
 );
@@ -210,11 +206,7 @@ function App({ basename }: AppProps = {}) {
           />
           <Route path={`${prefix}/factory`} element={factoryGated(<FactoryIndexPage />)} />
           <Route path={`${prefix}/factory/new`} element={factoryGated(<NewFactoryPage />)} />
-          <Route path={`${prefix}/factory/:factoryId`} element={factoryGated(<FactoryPage />)} />
-          <Route
-            path={`${prefix}/factory/:factoryId/projects/:slug`}
-            element={factoryGated(<ProjectPage />)}
-          />
+          <Route path={`${prefix}/factory/:factoryId/*`} element={factoryGated(<FactoryPage />)} />
           {/* Settings renders into the chat outlet so the conversations
               sidebar stays put — entering settings only swaps the card's
               content (the section nav) and the main area. The active section

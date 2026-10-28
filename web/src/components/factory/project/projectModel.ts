@@ -7,6 +7,7 @@ import type {
   FactorySnapshot,
   MemberRef,
   PrView,
+  ProjectDemoGroupView,
   ProjectDemoView,
   ProjectView,
 } from "@/lib/factoryApi";
@@ -64,6 +65,41 @@ export function groupDemosByPr(demos: readonly ProjectDemoView[], prs: readonly 
   });
 }
 
+/**
+ * The server's per-PR groups (every run, newest first) as cards: each with
+ * the PR as the board tracks it, its newest run and the earlier ones. Groups
+ * keep the server's order (by newest run); runs are re-sorted defensively.
+ */
+export function demoGroupsFrom(
+  groups: readonly ProjectDemoGroupView[],
+  prs: readonly PrView[],
+): DemoGroup[] {
+  return groups.flatMap((group): DemoGroup[] => {
+    const [latest, ...earlier] = [...group.runs].sort(newestFirst);
+    if (!latest) return [];
+    return [
+      {
+        key: `${group.repo}#${group.pr_number}`,
+        repo: group.repo,
+        prNumber: group.pr_number,
+        pr:
+          prs.find(
+            (p) =>
+              (group.pr_id != null && p.id === group.pr_id) ||
+              (p.repo === group.repo && p.number === group.pr_number),
+          ) ?? null,
+        latest,
+        earlier,
+      },
+    ];
+  });
+}
+
+/** Runs across every group. */
+export function demoRunCount(groups: readonly DemoGroup[]): number {
+  return groups.reduce((n, g) => n + 1 + g.earlier.length, 0);
+}
+
 /** Open PRs with no demo recorded yet (in the list or on the snapshot). */
 export function undemoedPrs(prs: readonly PrView[], groups: readonly DemoGroup[]): PrView[] {
   const demoed = new Set(groups.map((g) => g.key));
@@ -100,8 +136,7 @@ export function tallyText(tally: StepTally): string {
 
 /** `"2 PRs · 3 runs"`. */
 export function demosSummary(groups: readonly DemoGroup[]): string {
-  const runs = groups.reduce((n, g) => n + 1 + g.earlier.length, 0);
-  return `${plural(groups.length, "PR")} · ${plural(runs, "run")}`;
+  return `${plural(groups.length, "PR")} · ${plural(demoRunCount(groups), "run")}`;
 }
 
 /** Where a PR lives on GitHub when the board doesn't track it. */

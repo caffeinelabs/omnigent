@@ -37,6 +37,7 @@ import type { MemberView, PrView, ProjectView } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { driftText } from "../board/TeamStrip";
+import { LEVER_REASON, LeverGated, useViewerCan } from "../shell/viewerCan";
 import { PauseDialog, RelaunchDialog, RestartDialog, TypeToConfirmDialog } from "./ControlDialogs";
 import { PendingChip, showUndoToast } from "./ControlFeedback";
 import { relaunchableDrift } from "./controlModel";
@@ -101,6 +102,7 @@ export function useProjectControlParts(
   chipClassName?: string,
 ): ProjectControlParts {
   const controls = useFactoryControls(factoryId);
+  const viewerCan = useViewerCan();
   const [dialog, setDialog] = useState<DialogKind | null>(null);
   const target = `project:${project.slug}` as const;
   const pl = project.pl;
@@ -154,51 +156,57 @@ export function useProjectControlParts(
     );
   const live = openPrs.filter((pr) => pr.preview && LIVE_PREVIEW.has(pr.preview.state));
 
+  const { can } = viewerCan;
   const quick = pending ? (
     <PendingChip
       control={pending}
       who={pending.target.startsWith("member:") ? (pl?.title ?? "PL") : "PL"}
       testId={`control-pending-${project.slug}`}
-      onRestart={pl ? () => setDialog("restart") : undefined}
+      onRestart={pl && can.restart ? () => setDialog("restart") : undefined}
       onDismiss={pending.localId ? () => controls.dismiss(pending.localId!) : undefined}
       className={chipClassName}
     />
   ) : (paused || stopped) && project.stage !== "done" ? (
     // A finished project keeps Resume in the menu, not as its next step.
-    <Button
-      variant="outline"
-      size="xs"
-      onClick={resume}
-      disabled={!pl}
-      data-testid={`control-resume-quick-${project.slug}`}
-      componentId="factory.project.resume_quick"
-    >
-      <PlayIcon />
-      Resume
-    </Button>
+    <LeverGated lever="control">
+      <Button
+        variant="outline"
+        size="xs"
+        onClick={resume}
+        disabled={!pl}
+        data-testid={`control-resume-quick-${project.slug}`}
+        componentId="factory.project.resume_quick"
+      >
+        <PlayIcon />
+        Resume
+      </Button>
+    </LeverGated>
   ) : failed && pl ? (
     <span className="flex items-center gap-1">
-      <Button
-        variant="outline"
-        size="xs"
-        onClick={() => setDialog("restart")}
-        data-testid={`control-restart-quick-${project.slug}`}
-        componentId="factory.project.restart_quick"
-      >
-        <RotateCcwIcon />
-        Restart
-      </Button>
-      <Button
-        variant="outline"
-        size="xs"
-        onClick={() => setDialog("relaunch")}
-        data-testid={`control-relaunch-quick-${project.slug}`}
-        componentId="factory.project.relaunch_quick"
-        className="@max-[40rem]:hidden"
-      >
-        <RefreshCwIcon />
-        Relaunch with spec
-      </Button>
+      <LeverGated lever="restart">
+        <Button
+          variant="outline"
+          size="xs"
+          onClick={() => setDialog("restart")}
+          data-testid={`control-restart-quick-${project.slug}`}
+          componentId="factory.project.restart_quick"
+        >
+          <RotateCcwIcon />
+          Restart
+        </Button>
+      </LeverGated>
+      <LeverGated lever="restart" className="@max-[40rem]:hidden">
+        <Button
+          variant="outline"
+          size="xs"
+          onClick={() => setDialog("relaunch")}
+          data-testid={`control-relaunch-quick-${project.slug}`}
+          componentId="factory.project.relaunch_quick"
+        >
+          <RefreshCwIcon />
+          Relaunch with spec
+        </Button>
+      </LeverGated>
     </span>
   ) : null;
 
@@ -226,15 +234,27 @@ export function useProjectControlParts(
           <DropdownMenuLabel className="truncate text-sm font-normal text-muted-foreground">
             {pl ? pl.title : "No PL yet · Atlas spawns it"}
           </DropdownMenuLabel>
+          {!can.control && (
+            <DropdownMenuLabel
+              data-testid="control-read-only"
+              className="text-sm font-normal whitespace-normal text-muted-foreground"
+            >
+              {LEVER_REASON.control}.
+            </DropdownMenuLabel>
+          )}
           {paused || stopped ? (
-            <DropdownMenuItem onSelect={resume} disabled={!pl} data-testid="control-resume">
+            <DropdownMenuItem
+              onSelect={resume}
+              disabled={!pl || !can.control}
+              data-testid="control-resume"
+            >
               <PlayIcon />
               Resume project
             </DropdownMenuItem>
           ) : (
             <DropdownMenuItem
               onSelect={() => setDialog("pause")}
-              disabled={!pl}
+              disabled={!pl || !can.control}
               data-testid="control-pause"
             >
               <PauseIcon />
@@ -243,7 +263,7 @@ export function useProjectControlParts(
           )}
           <DropdownMenuItem
             onSelect={() => setDialog("restart")}
-            disabled={!pl}
+            disabled={!pl || !can.restart}
             data-testid="control-restart"
           >
             <RotateCcwIcon />
@@ -251,7 +271,7 @@ export function useProjectControlParts(
           </DropdownMenuItem>
           <DropdownMenuItem
             onSelect={() => setDialog("relaunch")}
-            disabled={!pl}
+            disabled={!pl || !can.restart}
             data-testid="control-relaunch"
             data-drift={drift ? "true" : "false"}
             className={cn(
@@ -275,7 +295,7 @@ export function useProjectControlParts(
           </DropdownMenuItem>
           <MenuSection
             testId="control-preview"
-            disabled={!pl || !previewsEnabled || openPrs.length === 0}
+            disabled={!pl || !previewsEnabled || openPrs.length === 0 || !can.control}
             contentClassName="min-w-60"
             trigger={
               <>
@@ -316,13 +336,18 @@ export function useProjectControlParts(
               </>
             )}
           </MenuSection>
-          <DropdownMenuItem onSelect={envStatus} disabled={!pl} data-testid="control-env-status">
+          <DropdownMenuItem
+            onSelect={envStatus}
+            disabled={!pl || !can.control}
+            data-testid="control-env-status"
+          >
             <ServerIcon />
             Ask env status
           </DropdownMenuItem>
           <DropdownMenuSeparator />
           <DropdownMenuItem
             onSelect={() => setDialog("charter")}
+            disabled={!can.apply_projects}
             data-testid="control-edit-charter"
           >
             <PencilIcon />
@@ -340,7 +365,7 @@ export function useProjectControlParts(
           <DropdownMenuItem
             variant="destructive"
             onSelect={() => setDialog("stop")}
-            disabled={!pl || stopped}
+            disabled={!pl || stopped || !can.stop}
             data-testid="control-stop"
           >
             <SquareIcon />

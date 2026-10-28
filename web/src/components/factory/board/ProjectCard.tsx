@@ -375,7 +375,7 @@ export function ProjectCard({
           {closed.length > CLOSED_PRS_SHOWN && (
             <ClosedPrsNote
               count={closed.length - CLOSED_PRS_SHOWN}
-              href={projectPageHref(factoryId, project.slug, { tab: "prs" })}
+              href={projectPageHref(factoryId, project.slug, { section: "prs" })}
             />
           )}
         </div>
@@ -392,7 +392,7 @@ export function ProjectCard({
         <span className="ml-auto flex items-center gap-3 text-sm text-muted-foreground">
           {demos > 0 && (
             <Link
-              to={projectPageHref(factoryId, project.slug, { tab: "demos" })}
+              to={projectPageHref(factoryId, project.slug, { section: "demos" })}
               data-testid={`project-demos-${project.slug}`}
               componentId="factory.board.project_demos"
               title="Recorded demos of this project's PRs"

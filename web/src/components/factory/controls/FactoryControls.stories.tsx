@@ -113,8 +113,12 @@ function FreshControls({ routes, ...props }: CockpitStoryOptions) {
   );
 }
 
+// Project cards (with their ⋯ menu, chips and team strip) live on the Projects
+// page's Cards view.
+const CARDS = { path: "/projects", search: "?view=cards" } as const;
+
 function cockpit(options: CockpitStoryOptions = {}, play?: Story["play"]): Story {
-  return { render: () => <FreshControls {...options} />, play };
+  return { render: () => <FreshControls {...CARDS} {...options} />, play };
 }
 
 function screenOf(canvasElement: HTMLElement) {
