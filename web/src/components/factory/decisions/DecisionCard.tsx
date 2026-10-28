@@ -32,6 +32,7 @@ import { cn } from "@/lib/utils";
 import { ageText, decisionAnchorId } from "../board/boardModel";
 import { useFactoryServerNowS } from "../factoryClock";
 import { formatElapsed } from "../factoryFormat";
+import { decisionsPageHref } from "../factoryRoutes";
 import { DOCK_SCROLLER_ATTRIBUTE, DOCK_TABS_PX } from "../shell/scroll";
 import { LEVER_REASON, ReasonGated, useViewer, useViewerCan } from "../shell/viewerCan";
 import { FoldableMarkdown } from "../transcript/FoldableMarkdown";
@@ -104,12 +105,25 @@ export function assigneeText(decision: DecisionView, viewerId: string | null): s
   if (decision.claimed_by) {
     return decision.claimed_by === viewerId
       ? "claimed by you"
-      : `claimed by ${decision.claimed_by}`;
+      : `claimed by ${decision.claimed_by.split("@")[0]}`;
   }
   const assignee = decision.assignee ?? null;
   if (!assignee || assignee === "operators") return null;
   if (assignee === "owners") return "for owners";
-  return assignee === viewerId ? "for you" : `for ${assignee}`;
+  return assignee === viewerId ? "for you" : `for ${assignee.split("@")[0]}`;
+}
+
+/**
+ * Where an option leads instead of answering: its own `href`, or, for a
+ * proposal's "Edit & apply", the proposal's card on the Decisions page
+ * (answering here would apply it unedited).
+ */
+export function optionHref(decision: DecisionView, option: DecisionOptionView): string | null {
+  if (option.href) return option.href;
+  if (decision.source === "proposal" && option.id === "edit") {
+    return decisionsPageHref(decision.factory_id, { decision: decision.ref });
+  }
+  return null;
 }
 
 /**
@@ -189,6 +203,7 @@ function OptionButton({
   onPick: (option: DecisionOptionView) => void;
 }) {
   const testId = `decision-option-${decision.ref}-${index}`;
+  const href = optionHref(decision, option);
   const body = (
     <>
       {index < KEY_OPTIONS && (
@@ -202,7 +217,7 @@ function OptionButton({
           className="size-3 shrink-0 fill-current text-warning"
         />
       )}
-      {option.href && <ExternalLinkIcon aria-hidden className="size-3 shrink-0" />}
+      {href && <ExternalLinkIcon aria-hidden className="size-3 shrink-0" />}
     </>
   );
   const className = cn(
@@ -210,8 +225,8 @@ function OptionButton({
     option.recommended && "border-foreground/25",
     picked && "border-ring bg-muted",
   );
-  if (option.href) {
-    const external = /^https?:/.test(option.href);
+  if (href) {
+    const external = /^https?:/.test(href);
     return (
       <Button
         asChild
@@ -221,11 +236,11 @@ function OptionButton({
         title={option.description ?? undefined}
       >
         {external ? (
-          <a href={option.href} target="_blank" rel="noreferrer" data-testid={testId}>
+          <a href={href} target="_blank" rel="noreferrer" data-testid={testId}>
             {body}
           </a>
         ) : (
-          <Link to={option.href} componentId="factory.decision.option_link" data-testid={testId}>
+          <Link to={href} componentId="factory.decision.option_link" data-testid={testId}>
             {body}
           </Link>
         )}
@@ -343,7 +358,7 @@ export function DecisionCard({
   };
 
   const pick = (option: DecisionOptionView) => {
-    if (option.href) return;
+    if (optionHref(decision, option)) return;
     setPicked(option.id);
     const draft = text.trim();
     submit(
@@ -374,7 +389,7 @@ export function DecisionCard({
     if (event.metaKey || event.ctrlKey || event.altKey) return;
     if (!/^[1-5]$/.test(event.key)) return;
     const option = decision.options[Number(event.key) - 1];
-    if (!option || option.href) return;
+    if (!option || optionHref(decision, option)) return;
     event.preventDefault();
     pick(option);
   };

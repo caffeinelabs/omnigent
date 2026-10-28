@@ -29,6 +29,7 @@ import {
   sentence,
   toProjectInput,
   validateProject,
+  withTitle,
 } from "../start/projectForm";
 import { controlErrorMessage } from "./controlModel";
 
@@ -37,9 +38,15 @@ export interface AddProjectDialogProps {
   factoryId: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
+  /** A title to start from (`/project new <title>` in the Room). */
+  initialTitle?: string | null;
 }
 
-function AddProjectBody({ factoryId, onOpenChange }: Omit<AddProjectDialogProps, "open">) {
+function AddProjectBody({
+  factoryId,
+  onOpenChange,
+  initialTitle = null,
+}: Omit<AddProjectDialogProps, "open">) {
   const queryClient = useQueryClient();
   // The board's snapshot: existing slugs, and the factory's default repo and base.
   const snapshot = queryClient.getQueryData<FactorySnapshot>(factoryQueryKey(factoryId));
@@ -47,11 +54,12 @@ function AddProjectBody({ factoryId, onOpenChange }: Omit<AddProjectDialogProps,
   const [draft, setDraft] = useState(() => {
     const base = snapshot?.factory.base;
     const first = snapshot?.projects.find((p) => p.repo);
-    return emptyProject({
+    const project = emptyProject({
       repo: base?.repo ?? first?.repo ?? "",
       branch: base?.branch ?? first?.base_branch ?? "main",
       priority: 1,
     });
+    return initialTitle ? withTitle(project, initialTitle) : project;
   });
   const [attempted, setAttempted] = useState(false);
   const [sending, setSending] = useState(false);
@@ -154,7 +162,12 @@ function AddProjectBody({ factoryId, onOpenChange }: Omit<AddProjectDialogProps,
   );
 }
 
-export function AddProjectDialog({ factoryId, open, onOpenChange }: AddProjectDialogProps) {
+export function AddProjectDialog({
+  factoryId,
+  open,
+  onOpenChange,
+  initialTitle = null,
+}: AddProjectDialogProps) {
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -167,7 +180,11 @@ export function AddProjectDialog({ factoryId, open, onOpenChange }: AddProjectDi
           (event.currentTarget as HTMLElement | null)?.focus();
         }}
       >
-        <AddProjectBody factoryId={factoryId} onOpenChange={onOpenChange} />
+        <AddProjectBody
+          factoryId={factoryId}
+          onOpenChange={onOpenChange}
+          initialTitle={initialTitle}
+        />
       </DialogContent>
     </Dialog>
   );

@@ -86,3 +86,38 @@ export function settingsPageHref(factoryId: string, section: SettingsSection = "
 export function roomPageHref(factoryId: string, thread?: string | null): string {
   return `${factoryPageHref(factoryId)}/room${thread ? `/${enc(thread)}` : ""}`;
 }
+
+/** `/factory/<fid>/decisions` (open first; `?decision=D-7` highlights one). */
+export function decisionsPageHref(
+  factoryId: string,
+  params?: Record<string, string | number>,
+): string {
+  return withQuery(`${factoryPageHref(factoryId)}/decisions`, params);
+}
+
+export type GraphPageKind = "work" | "bus" | "flow" | "org";
+
+/**
+ * `/factory/<fid>/graph?kind=work` (Work when omitted), optionally one
+ * project (`scope=`: a factory URL's `?project=` opens the project page) or task.
+ */
+export function graphPageHref(
+  factoryId: string,
+  options: { kind?: GraphPageKind; project?: string | null; task?: string | null } = {},
+): string {
+  const params: Record<string, string> = {};
+  if (options.kind && options.kind !== "work") params.kind = options.kind;
+  if (options.project) params.scope = options.project;
+  if (options.task) params.task = options.task;
+  return withQuery(`${factoryPageHref(factoryId)}/graph`, params);
+}
+
+/** `/factory/<fid>/alerts/<n>`: an incident's page. */
+export function incidentPageHref(factoryId: string, number: string | number): string {
+  return `${factoryPageHref(factoryId)}/alerts/${enc(String(number))}`;
+}
+
+/** `/factory/<fid>/improvements/<n>`: a proposal's or finding's page. */
+export function improvementPageHref(factoryId: string, ref: string): string {
+  return `${factoryPageHref(factoryId)}/improvements/${enc(ref)}`;
+}

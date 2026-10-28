@@ -94,6 +94,7 @@ function shellOf(snapshot: FactorySnapshot, prId: string): FactoryShellValue {
     openShare: vi.fn(),
     openPalette: vi.fn(),
     openAddProject: vi.fn(),
+    openAddProjectTitled: vi.fn(),
   };
 }
 

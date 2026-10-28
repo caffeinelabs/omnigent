@@ -1,6 +1,7 @@
 /**
- * New factory (`/factory/new`): a structured start form instead of a chat
- * prompt. Name, cadence, the factory's default repo & base (prefilled from
+ * New factory (`/factory/new`), two ways: **Form** (projects spelled out) or
+ * **Describe it** (`?mode=describe`: a brief Atlas plans from in #factory).
+ * The Form is a structured start form instead of a chat prompt. Name, cadence, the factory's default repo & base (prefilled from
  * the server's preflight) with its "Keep a live env" switch, and one section
  * per project (goal, definition of done, repo, env, "Preview & demo" and its
  * demo focus), a live summary of what will start, inline validation and a
@@ -26,6 +27,7 @@ import { PageScroll } from "@/components/PageScroll";
 import { FactoryPreflight, preflightPasses } from "@/components/factory/FactoryPreflight";
 import { ageText } from "@/components/factory/board/boardModel";
 import { FieldRow, Segmented, suppressImplicitSubmit } from "@/components/factory/start/formParts";
+import { DescribeItForm } from "@/components/factory/start/DescribeItForm";
 import { FactoryDefaultsFields, ProjectFields } from "@/components/factory/start/ProjectFields";
 import {
   type FactoryDraft,
@@ -65,7 +67,7 @@ import {
   type StartFactoryStep,
   startFactory,
 } from "@/lib/factoryApi";
-import { Link, useNavigate } from "@/lib/routing";
+import { Link, useNavigate, useSearchParams } from "@/lib/routing";
 
 const DRAFT_SAVE_MS = 400;
 
@@ -110,8 +112,18 @@ function accessMessage(error: unknown): string {
   return String(error);
 }
 
+type StartMode = "form" | "describe";
+
 export function NewFactoryPage() {
   const navigate = useNavigate();
+  const [params, setParams] = useSearchParams();
+  const mode: StartMode = params.get("mode") === "describe" ? "describe" : "form";
+  const setMode = (next: StartMode) => {
+    const nextParams = new URLSearchParams(params);
+    if (next === "describe") nextParams.set("mode", "describe");
+    else nextParams.delete("mode");
+    setParams(nextParams, { replace: true });
+  };
   const queryClient = useQueryClient();
   const preflight = usePreflight();
   const [draft, setDraft] = useState<FactoryDraft>(emptyFactoryDraft);
@@ -282,10 +294,24 @@ export function NewFactoryPage() {
         <ArrowLeftIcon aria-hidden className="size-3.5" />
         Factory
       </Link>
-      <div className="mb-4 flex min-w-0 flex-wrap items-baseline justify-between gap-x-4 gap-y-1">
-        <h1 className="text-2xl font-semibold">New factory</h1>
+      <div className="mb-4 flex min-w-0 flex-wrap items-center justify-between gap-x-4 gap-y-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-2">
+          <h1 className="text-2xl font-semibold">New factory</h1>
+          <Segmented<StartMode>
+            label="How to start"
+            value={mode}
+            onChange={setMode}
+            testIdPrefix="factory-new-mode"
+            options={[
+              { value: "form", label: "Form" },
+              { value: "describe", label: "Describe it" },
+            ]}
+          />
+        </div>
         <p className="text-sm text-muted-foreground">
-          Two leads supervise one project lead per project; humans review and merge.
+          {mode === "describe"
+            ? "Say what to build; Atlas proposes the projects in #factory for you to apply."
+            : "Two leads supervise one project lead per project; humans review and merge."}
         </p>
       </div>
 
@@ -302,7 +328,9 @@ export function NewFactoryPage() {
         </Alert>
       )}
 
-      {stored && (
+      {mode === "describe" && <DescribeItForm preflight={preflight.data} blocked={blocked} />}
+
+      {mode === "form" && stored && (
         <div
           data-testid="factory-new-draft"
           className="mb-4 flex min-w-0 flex-wrap items-center gap-x-3 gap-y-2 rounded-xl border border-border bg-card px-4 py-2.5 text-sm"
@@ -330,7 +358,7 @@ export function NewFactoryPage() {
         </div>
       )}
 
-      <div className="@container">
+      <div className={mode === "form" ? "@container" : "hidden"}>
         <div className="grid min-w-0 grid-cols-1 items-start gap-x-6 gap-y-4 @4xl:grid-cols-[minmax(0,1fr)_18rem]">
           <form
             ref={formRef}

@@ -385,6 +385,6 @@ describe("who may answer (decision_routing.may_answer)", () => {
       .filter((b) => b.closest("[data-lever-disabled]"));
     expect(options.length).toBeGreaterThan(0);
     expect(options.every((b) => (b as HTMLButtonElement).disabled)).toBe(true);
-    expect(card).toHaveTextContent("for luka@caffeine.ai");
+    expect(card).toHaveTextContent("for luka");
   });
 });

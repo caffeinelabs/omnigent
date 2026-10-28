@@ -1,6 +1,6 @@
 /**
  * The factory's page tabs under the header (Overview, Room, Projects,
- * Activity) and, on the right, what waits on the viewer (decisions, alerts),
+ * Graph, Activity) and, on the right, what waits on the viewer (decisions, alerts),
  * Settings and the ⌘K "Jump or act" button. Tabs scroll sideways on a narrow
  * screen rather than wrap; on a phone the bottom bar takes over.
  */
@@ -13,7 +13,9 @@ import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import {
   activityPageHref,
+  decisionsPageHref,
   factoryPageHref,
+  graphPageHref,
   projectsPageHref,
   roomPageHref,
   settingsPageHref,
@@ -29,7 +31,7 @@ export interface FactoryTab {
   pages: FactoryPageKey[];
 }
 
-/** The tabs in order; later pages (Agents, Graph, Timeline, …) add theirs here. */
+/** The tabs in order; later pages (Agents, Timeline, …) add theirs here. */
 export const FACTORY_TABS: FactoryTab[] = [
   { key: "overview", label: "Overview", href: factoryPageHref, pages: ["overview"] },
   { key: "room", label: "Room", href: (fid) => roomPageHref(fid), pages: ["room"] },
@@ -39,6 +41,7 @@ export const FACTORY_TABS: FactoryTab[] = [
     href: projectsPageHref,
     pages: ["projects", "project", "pr"],
   },
+  { key: "graph", label: "Graph", href: (fid) => graphPageHref(fid), pages: ["graph"] },
   { key: "activity", label: "Activity", href: activityPageHref, pages: ["activity"] },
 ];
 
@@ -90,12 +93,15 @@ export function FactoryTabs({
   snapshot,
   location,
   mineCount,
+  roomUnread = 0,
   onPalette,
 }: {
   snapshot: FactorySnapshot;
   location: FactoryLocation;
   /** Open decisions assigned to the viewer or their role. */
   mineCount: number;
+  /** Unread Room messages across threads. */
+  roomUnread?: number;
   onPalette: () => void;
 }) {
   const fid = snapshot.factory.id;
@@ -120,16 +126,25 @@ export function FactoryTabs({
           >
             {tab.label}
             {tab.key === "projects" && projects > 0 && <Count n={projects} />}
+            {tab.key === "room" && roomUnread > 0 && (
+              <span data-testid="factory-tab-room-unread">
+                <Count n={roomUnread} />
+              </span>
+            )}
           </TabLink>
         ))}
       </div>
       <div className="flex shrink-0 items-center gap-2 pb-1 text-sm max-md:hidden">
         <Link
-          to={`${factoryPageHref(fid)}#needs-you`}
+          to={decisionsPageHref(fid)}
           componentId="factory.tab.decisions"
           data-testid="factory-tab-decisions"
           title={`${openDecisions} open · ${mineCount} for you or your role`}
-          className="inline-flex items-center gap-1.5 rounded-md px-1 text-muted-foreground hover:text-foreground"
+          aria-current={location.page === "decisions" ? "page" : undefined}
+          className={cn(
+            "inline-flex items-center gap-1.5 rounded-md px-1 hover:text-foreground",
+            location.page === "decisions" ? "text-foreground" : "text-muted-foreground",
+          )}
         >
           Decisions
           {openDecisions > 0 && (

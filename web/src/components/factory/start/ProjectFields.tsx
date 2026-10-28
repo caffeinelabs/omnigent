@@ -176,12 +176,15 @@ export function FactoryDefaultsFields({
   onChange,
   onLiveEnv,
   error,
+  idPrefix = "factory-new",
 }: {
   defaults: FactoryDefaultsDraft;
   /** A new repo (and its default branch, when listed) or a new base. */
   onChange: (repo: string, branch: string) => void;
   onLiveEnv: (on: boolean) => void;
   error?: string;
+  /** Prefix of the element and test ids (two forms may sit on one page). */
+  idPrefix?: string;
 }) {
   const base = defaults.branch.trim() || "main";
   const repo = defaults.repo.trim();
@@ -189,23 +192,23 @@ export function FactoryDefaultsFields({
     <>
       <FieldRow
         label="Default repo & base"
-        htmlFor="factory-new-default-repo"
+        htmlFor={`${idPrefix}-default-repo`}
         error={error}
-        errorTestId="factory-new-error-defaults"
+        errorTestId={`${idPrefix}-error-defaults`}
         hint="New projects start on it; a project may pick another branch. Factory PRs target the base."
       >
         <div className="grid min-w-0 gap-2 @md:grid-cols-[minmax(0,1fr)_minmax(8rem,12rem)]">
           <RepoCombobox
-            id="factory-new-default-repo"
+            id={`${idPrefix}-default-repo`}
             value={defaults.repo}
-            testId="factory-new-default-repo"
+            testId={`${idPrefix}-default-repo`}
             invalid={Boolean(error)}
             onSelect={(next, branch) => onChange(next, branch ?? (defaults.branch || "main"))}
           />
           <BranchCombobox
             repo={defaults.repo}
             value={defaults.branch}
-            testId="factory-new-default-branch"
+            testId={`${idPrefix}-default-branch`}
             onChange={(branch) => onChange(defaults.repo, branch)}
           />
         </div>
@@ -228,7 +231,7 @@ export function FactoryDefaultsFields({
           <Switch
             checked={defaults.liveEnv && Boolean(repo)}
             disabled={!repo}
-            data-testid="factory-new-live-env"
+            data-testid={`${idPrefix}-live-env`}
             aria-label={`Keep a live env at ${base}`}
             onCheckedChange={onLiveEnv}
             className={SWITCH_TRACK}

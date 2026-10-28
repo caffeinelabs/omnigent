@@ -453,6 +453,7 @@ describe("SessionUpdatesProvider factory_changed frames", () => {
       ["factory-demos", "f4f4ba9c"],
       ["factory-people", "f4f4ba9c"],
       ["factory-spans", "f4f4ba9c"],
+      ["factory-room", "f4f4ba9c"],
       ["factories"],
       ["factory-decisions"],
     ]);
@@ -473,6 +474,23 @@ describe("SessionUpdatesProvider factory_changed frames", () => {
       ["factory", "f4f4ba9c"],
       ["factory", "f4f4ba9c"],
       ["factory-people", "f4f4ba9c"],
+    ]);
+  });
+
+  it("re-reads the snapshot, the index and the Room's issue cards on an issues frame", () => {
+    const client = new QueryClient();
+    seedConversations(client, ["conv_a"]);
+    renderProvider(client, ["/"]);
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    act(() =>
+      frameHandler()({ type: "factory_changed", factory_id: "f4f4ba9c", scopes: ["issues"] }),
+    );
+
+    expect(invalidate.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
+      ["factory", "f4f4ba9c"],
+      ["factories"],
+      ["factory-room", "f4f4ba9c", "issues"],
     ]);
   });
 

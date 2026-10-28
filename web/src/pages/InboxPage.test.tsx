@@ -23,6 +23,8 @@ import * as sessionsApi from "@/lib/sessionsApi";
 import type * as identity from "@/lib/identity";
 import type { CommentInbox } from "@/hooks/useCommentInbox";
 import { inboxDecisionItems } from "@/components/factory/decisions/__fixtures__/decisionFixtures";
+import { roomProposals } from "@/components/factory/room/__fixtures__/roomFixtures";
+import { round3Snapshot } from "@/components/factory/shell/__fixtures__/shellFixtures";
 import { FALLBACK_SERVER_INFO } from "@/lib/capabilities";
 import { CapabilitiesProvider } from "@/lib/CapabilitiesContext";
 
@@ -483,6 +485,51 @@ describe("InboxPage factory decisions", () => {
       section.compareDocumentPosition(approval) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     expect(screen.getByText(/3 decisions · 1 approval waiting/)).toBeInTheDocument();
+  });
+
+  it("puts what is assigned to the viewer first, across factories", async () => {
+    const items = inboxDecisionItems();
+    items[0] = { ...items[0]!, mine: true };
+    items[2] = { ...items[2]!, mine: true };
+    serveDecisions(items);
+    renderPage({ factory: true });
+    const assigned = await screen.findByTestId("inbox-assigned-to-you");
+    expect(assigned).toHaveTextContent("Assigned to you · 2 open");
+    expect(within(assigned).getByTestId("decision-card-D-2")).toHaveTextContent("Atlas factory");
+    expect(
+      within(assigned).getByTestId(`decision-card-${items[2]!.decision.ref}`),
+    ).toHaveTextContent("Docs factory");
+    const section = screen.getByTestId("inbox-factory-decisions");
+    expect(section).toHaveTextContent("Factory decisions · 1 open");
+    const atlas = within(section).getByTestId("inbox-factory-f4f4ba9c77725331b12f0fa7072dc4d3");
+    expect(within(atlas).getByTestId("decision-card-D-3")).toBeInTheDocument();
+    expect(within(atlas).queryByTestId("decision-card-D-2")).toBeNull();
+    expect(assigned.compareDocumentPosition(atlas) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("draws an assigned proposal as its card, whose Edit & apply never answers", async () => {
+    const snapshot = round3Snapshot("operator");
+    const decision = snapshot.decisions.find((d) => d.source === "proposal")!;
+    const items = [
+      { factory: { id: snapshot.factory.id, name: "Atlas factory" }, decision, mine: true },
+    ];
+    const base = `/v1/factory/factories/${snapshot.factory.id}`;
+    authenticatedFetch.mockImplementation(async (path: string) => {
+      if (path.startsWith("/v1/factory/decisions?status=open")) {
+        return json({ data: items, count: items.length });
+      }
+      if (path.startsWith(`${base}/proposals?`)) return json({ data: roomProposals() });
+      if (path === base) return json(snapshot);
+      return json({ error: { message: `unexpected ${path}` } }, 404);
+    });
+    renderPage({ factory: true });
+    const assigned = await screen.findByTestId("inbox-assigned-to-you");
+    const card = await within(assigned).findByTestId("proposal-card-C-4");
+    expect(card).toHaveTextContent("Atlas factory");
+    fireEvent.click(within(card).getByTestId("proposal-edit-C-4"));
+    expect(await screen.findByTestId("edit-apply-dialog")).toBeInTheDocument();
+    const posts = authenticatedFetch.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(posts).toEqual([]);
   });
 
   it("answers a decision in place", async () => {
