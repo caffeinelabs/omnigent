@@ -1,7 +1,7 @@
 /**
- * The project page's PRs tab: every PR of the project with its gates, Sentinel
- * and human review, preview, demo and the Review action (the review drawer
- * opens on this page). Open PRs first; merged and closed ones fold to a line.
+ * The project page's PRs section: every PR of the project with its gates, Sentinel
+ * and human review, preview, demo and the Review action (it opens the PR
+ * page). Open PRs first; merged and closed ones fold to a line.
  */
 
 import { GitPullRequestIcon } from "lucide-react";

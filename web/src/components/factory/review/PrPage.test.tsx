@@ -1,6 +1,6 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ImageLightboxProvider } from "@/components/ImageLightbox";
 import type { FactorySnapshot, PrView } from "@/lib/factoryApi";
@@ -12,8 +12,10 @@ import {
   reviewScenario,
   scenarioApiRoutes,
 } from "./__fixtures__/reviewFixtures";
+import { PrPage } from "@/pages/factory/PrPage";
+import { FactoryControlsProvider } from "../controls/FactoryControlsContext";
+import { FactoryShellContext, type FactoryShellValue } from "../shell/FactoryShellContext";
 import { HUMANS_MERGE, REFRESH_COOLDOWN_MS } from "./ReviewActions";
-import { ReviewDrawer } from "./ReviewDrawer";
 
 const authenticatedFetch = vi.fn();
 vi.mock("@/lib/identity", () => ({
@@ -80,30 +82,49 @@ function posts(suffix: string): Call[] {
 
 const NOW = new Date(LIVE_RUN_NOW_S * 1000);
 
-function renderDrawer(
-  scenario: ReviewState | { snapshot: FactorySnapshot; pr: PrView },
-  onClose = vi.fn(),
-) {
-  const { snapshot, pr } = typeof scenario === "string" ? reviewScenario(scenario) : scenario;
+function shellOf(snapshot: FactorySnapshot, prId: string): FactoryShellValue {
+  return {
+    factoryId: snapshot.factory.id,
+    snapshot,
+    clockOffsetS: 0,
+    nowS: LIVE_RUN_NOW_S,
+    updatedAt: Date.now(),
+    location: { page: "pr", id: prId },
+    wide: true,
+    openShare: vi.fn(),
+    openPalette: vi.fn(),
+    openAddProject: vi.fn(),
+  };
+}
+
+function renderPrPage(snapshot: FactorySnapshot, prId: string, search = "") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const shell = shellOf(snapshot, prId);
   render(
     <QueryClientProvider client={client}>
-      <MemoryRouter>
+      <MemoryRouter initialEntries={[`/factory/${snapshot.factory.id}/prs/${prId}${search}`]}>
         <ImageLightboxProvider>
           <FactoryNowContext.Provider value={NOW}>
-            <ReviewDrawer
-              factoryId={snapshot.factory.id}
-              pr={pr}
-              demo={pr.demo}
-              onClose={onClose}
-              snapshot={snapshot}
-            />
+            <FactoryShellContext.Provider value={shell}>
+              <FactoryControlsProvider snapshot={snapshot}>
+                <Routes>
+                  <Route path="/factory/:factoryId/prs/:prId" element={<PrPage />} />
+                </Routes>
+              </FactoryControlsProvider>
+            </FactoryShellContext.Provider>
           </FactoryNowContext.Provider>
         </ImageLightboxProvider>
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  return { drawer: screen.getByTestId("review-drawer"), pr, snapshot, onClose };
+}
+
+/** The PR page of a review scenario (its PR replaces the snapshot's copy). */
+function renderDrawer(scenario: ReviewState | { snapshot: FactorySnapshot; pr: PrView }) {
+  const { snapshot, pr } = typeof scenario === "string" ? reviewScenario(scenario) : scenario;
+  snapshot.prs = [pr, ...snapshot.prs.filter((p) => p.id !== pr.id)];
+  renderPrPage(snapshot, pr.id);
+  return { drawer: screen.getByTestId("pr-page"), pr, snapshot };
 }
 
 beforeEach(() => {
@@ -117,7 +138,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("ReviewDrawer · demo", () => {
+describe("PR page · demo", () => {
   it("plays the demo inline from the demo file route, metadata only up front", () => {
     const { drawer, pr } = renderDrawer("ready-with-video");
     const video = within(drawer).getByTestId("review-demo-video");
@@ -214,7 +235,7 @@ describe("ReviewDrawer · demo", () => {
     const list = await within(drawer).findByTestId("review-older-demo-list");
     expect(list).toHaveTextContent("bfbef12");
     expect(list).toHaveTextContent("PASS");
-    const query = calls.find((c) => c.path.includes("/events"))!.path;
+    const query = calls.find((c) => c.path.includes("kinds=demo.published"))!.path;
     expect(query).toContain("kinds=demo.published");
     expect(query).toContain("project=api-version");
   });
@@ -305,7 +326,7 @@ describe("ReviewDrawer · demo", () => {
   });
 });
 
-describe("ReviewDrawer · header", () => {
+describe("PR page · header", () => {
   it("reads the ready line under its own test id, apart from the board's banner", () => {
     const { drawer } = renderDrawer("ready-with-video");
     expect(within(drawer).getByTestId("review-ready-banner")).toHaveTextContent(
@@ -314,11 +335,22 @@ describe("ReviewDrawer · header", () => {
     expect(within(drawer).queryByTestId("ready-banner-9630")).toBeNull();
   });
 
-  it("lines the header's padding up with the body (the title row clears the close button)", () => {
+  it("is a page, not a drawer: no dialog, the PR's breadcrumb and its project", () => {
     const { drawer } = renderDrawer("ready-with-video");
-    const header = drawer.querySelector("[data-slot=sheet-header]")!;
-    expect(header).toHaveClass("pr-5");
-    expect(header).not.toHaveClass("pr-12");
+    expect(screen.queryByRole("dialog")).toBeNull();
+    expect(document.querySelector("[data-slot=sheet-content]")).toBeNull();
+    expect(within(drawer).getByTestId("pr-breadcrumb")).toHaveTextContent("api-version");
+    expect(within(drawer).getByTestId("pr-breadcrumb-project")).toHaveAttribute(
+      "href",
+      `/factory/${LIVE_RUN_FACTORY_ID}/projects/api-version#prs`,
+    );
+    expect(within(drawer).getByTestId("pr-gates")).toBeInTheDocument();
+    expect(within(drawer).getByTestId("pr-loops")).toBeInTheDocument();
+  });
+
+  it("checks the base against the project's base branch", () => {
+    const { drawer } = renderDrawer("ready-with-video");
+    expect(within(drawer).getByTestId("review-pr-base")).toHaveTextContent("base main");
   });
 
   it("mutes a zero diff count and attaches separators to the part before", () => {
@@ -331,7 +363,7 @@ describe("ReviewDrawer · header", () => {
   });
 });
 
-describe("ReviewDrawer · preview", () => {
+describe("PR page · preview", () => {
   it("says the preview runs the PR head, reported and probed", () => {
     const { drawer } = renderDrawer("ready-with-video");
     const sha = within(drawer).getByTestId("review-preview-sha");
@@ -483,7 +515,7 @@ describe("ReviewDrawer · preview", () => {
   });
 });
 
-describe("ReviewDrawer · evidence", () => {
+describe("PR page · evidence", () => {
   it("gives every gate its evidence, the reviewer session and Sentinel's note", () => {
     const { drawer } = renderDrawer("ready-with-video");
     expect(within(drawer).getByTestId("review-evidence-checks")).toHaveTextContent("14/14 passing");
@@ -542,7 +574,7 @@ describe("ReviewDrawer · evidence", () => {
   });
 });
 
-describe("ReviewDrawer · actions", () => {
+describe("PR page · actions", () => {
   /** A stand-in for the tab `window.open` returns. */
   function fakeTab() {
     return { opener: {}, closed: false, location: { href: "about:blank" }, close: vi.fn() };
@@ -652,20 +684,18 @@ describe("ReviewDrawer · actions", () => {
     expect(merge).toHaveAccessibleDescription(HUMANS_MERGE);
   });
 
-  it("keeps the drawer and the draft when Escape is pressed in the composer", () => {
-    const onClose = vi.fn();
-    const { drawer } = renderDrawer("ready-with-video", onClose);
+  it("keeps the draft when Escape is pressed in the composer", () => {
+    const { drawer } = renderDrawer("ready-with-video");
     fireEvent.click(within(drawer).getByTestId("review-request-changes"));
     const text = within(drawer).getByTestId("review-feedback-text");
     fireEvent.change(text, { target: { value: "Rename the row." } });
     fireEvent.keyDown(text, { key: "Escape" });
-    expect(onClose).not.toHaveBeenCalled();
     expect(within(drawer).getByTestId("review-feedback-text")).toHaveValue("Rename the row.");
-    // An empty composer folds on Escape; the drawer still stays.
+    // An empty composer folds on Escape; the page stays.
     fireEvent.change(text, { target: { value: "" } });
     fireEvent.keyDown(text, { key: "Escape" });
     expect(within(drawer).queryByTestId("review-feedback-text")).toBeNull();
-    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByTestId("pr-page")).toBeInTheDocument();
   });
 
   it("opens the composer below the actions that opened it", () => {
@@ -765,16 +795,57 @@ describe("ReviewDrawer · actions", () => {
 
   it("names a PR it doesn't track", () => {
     const { snapshot } = reviewScenario("ready-with-video");
-    const client = new QueryClient();
-    render(
-      <QueryClientProvider client={client}>
-        <MemoryRouter>
-          <ReviewDrawer factoryId={snapshot.factory.id} pr={null} demo={null} onClose={vi.fn()} />
-        </MemoryRouter>
-      </QueryClientProvider>,
+    renderPrPage(snapshot, "nope");
+    expect(screen.getByTestId("pr-missing")).toHaveTextContent(
+      "This factory doesn’t track PR nope",
     );
-    expect(screen.getByTestId("review-drawer")).toHaveTextContent(
-      "This PR isn’t tracked by this factory.",
-    );
+  });
+
+  it("resolves a PR number to the PR", () => {
+    const { snapshot, pr } = reviewScenario("ready-with-video");
+    renderPrPage(snapshot, String(pr.number));
+    expect(screen.getByTestId("pr-page")).toHaveAttribute("data-pr", String(pr.number));
+  });
+
+  it("says the stable preview link found no running preview", () => {
+    const { snapshot, pr } = reviewScenario("preview-parked");
+    snapshot.prs = [pr, ...snapshot.prs.filter((p) => p.id !== pr.id)];
+    renderPrPage(snapshot, pr.id, "?preview=unavailable");
+    expect(screen.getByTestId("review-preview-unavailable")).toBeInTheDocument();
+  });
+});
+
+describe("PR page · viewer", () => {
+  it("disables every review lever for a viewer, with who can", () => {
+    const { snapshot, pr } = reviewScenario("ready-with-video");
+    snapshot.viewer = {
+      user_id: "ops@caffeine.ai",
+      role: "viewer",
+      level: 1,
+      is_creator: false,
+      can: {
+        post: false,
+        answer: false,
+        review: false,
+        control: false,
+        intervene: false,
+        apply_projects: false,
+        apply_tuning: false,
+        restart: false,
+        stop: false,
+        invite: false,
+        settings: false,
+        terminal: false,
+        start: false,
+      },
+    };
+    snapshot.prs = [pr, ...snapshot.prs.filter((p) => p.id !== pr.id)];
+    renderPrPage(snapshot, pr.id);
+    for (const id of ["review-approve", "review-request-changes", "review-i-merged-it"]) {
+      expect(screen.getByTestId(id)).toBeDisabled();
+    }
+    // Reading stays open: GitHub, the PL's chat, the merge summary.
+    expect(screen.getByTestId("review-merge-github")).toHaveAttribute("href");
+    expect(screen.getByTestId("review-copy-summary")).toBeEnabled();
   });
 });

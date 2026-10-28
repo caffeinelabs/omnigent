@@ -1027,7 +1027,7 @@ describe("Sidebar session list", () => {
     expect(within(factory).queryByTestId("running-dot")).toBeNull();
   });
 
-  it("badges Factory with open decisions plus PRs ready for review across factories", () => {
+  it("badges Factory with the decisions assigned to the viewer or their role", () => {
     mockConversations(THREE_TYPE_CONVERSATIONS);
     factoriesRef.current = {
       data: [
@@ -1035,6 +1035,7 @@ describe("Sidebar session list", () => {
         { id: "f2", decisions_open: 0, prs_ready: 1, members_running: 0 },
       ],
     };
+    decisionCountRef.current = 4;
     renderSidebar(true, "/", undefined, { ...FALLBACK_SERVER_INFO, features: { factory: true } });
 
     const factory = screen.getByTestId("factory-nav");
@@ -1044,6 +1045,43 @@ describe("Sidebar session list", () => {
     expect(badge).toHaveAccessibleName("4 factory items need you");
     expect(badge).toHaveClass("bg-warning/15", "text-warning");
     expect(within(factory).getByTestId("running-dot")).toBeInTheDocument();
+    factoriesRef.current = undefined;
+    decisionCountRef.current = 0;
+  });
+
+  it("lists factories shared with the viewer under Factory, and their members not in Shared", () => {
+    mockConversations([
+      conv("conv_mine", "Claude Code"),
+      conv("conv_shared", "Claude Code", { owner: "other@example.com" }),
+      conv("conv_atlas", "factory-lead", {
+        owner: "luka@caffeine.ai",
+        labels: { "omnigent.factory.id": "f3", "omnigent.factory.role": "lead" },
+      }),
+    ]);
+    factoriesRef.current = {
+      data: [
+        {
+          id: "f3",
+          name: "Atlas factory",
+          shared_by: "luka@caffeine.ai",
+          viewer_role: "operator",
+          mine: 2,
+          decisions_open: 3,
+          prs_ready: 0,
+          members_running: 1,
+        },
+      ],
+    };
+    renderSidebar(true, "/", undefined, { ...FALLBACK_SERVER_INFO, features: { factory: true } });
+
+    const shared = screen.getByTestId("factory-nav-shared-f3");
+    expect(shared).toHaveTextContent("Atlas factory");
+    expect(shared).toHaveTextContent("2");
+    expect(shared).toHaveAttribute("href", "/factory/f3");
+    expect(shared).toHaveAttribute("title", "Shared with you by luka@caffeine.ai · operator");
+    showSharedTab();
+    expect(screen.getByText("conv_shared")).toBeInTheDocument();
+    expect(screen.queryByText("conv_atlas")).toBeNull();
     factoriesRef.current = undefined;
   });
 

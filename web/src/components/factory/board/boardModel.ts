@@ -44,7 +44,7 @@ export function stageCounts(projects: ProjectView[]): Record<BoardStage, number>
 
 /** The live env at the base head (`base-env`): not pipeline work, so never in the stage strip. */
 export function isIntegrationProject(project: ProjectView): boolean {
-  return project.charter?.kind === "integration";
+  return project.charter?.kind === "integration" || project.kind === "integration";
 }
 
 /** A project that left the pipeline: done, cancelled, or merged into another. */

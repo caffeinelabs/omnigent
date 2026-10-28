@@ -7,10 +7,13 @@ import {
   liveRunSnapshot,
   pendingForever,
 } from "@/components/factory/__fixtures__/liveRun";
-import { boardActivityEvents } from "@/components/factory/board/__fixtures__/boardFixtures";
+import { resetFactoryControls } from "@/components/factory/controls/useFactoryControls";
+import { round3Snapshot } from "@/components/factory/shell/__fixtures__/shellFixtures";
 import { factoryQueryKey } from "@/hooks/useFactory";
+import type { FactorySnapshot } from "@/lib/factoryApi";
+import { isMacPlatform } from "@/lib/hotkeys";
 import { FactoryPage } from "./FactoryPage";
-import { ProjectPage } from "./ProjectPage";
+import { type FactoryServer, SNAPSHOT, json, serveFactory } from "./testServer";
 
 const authenticatedFetch = vi.fn();
 vi.mock("@/lib/identity", () => ({
@@ -21,28 +24,18 @@ vi.mock("@/hooks/useSessionUpdatesConnected", () => ({
   useSessionUpdatesConnected: () => connected.value,
 }));
 
-const SNAPSHOT = `/v1/factory/factories/${LIVE_RUN_FACTORY_ID}`;
+const FID = LIVE_RUN_FACTORY_ID;
+const PR_9630 = "f74d5967c53455139e85ba1b402a5bd4";
 
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), {
-    status,
-    headers: { "Content-Type": "application/json" },
-  });
-}
-
-function serve(snapshot: () => Response | Promise<Response> = () => json(liveRunSnapshot())) {
-  authenticatedFetch.mockImplementation(async (path: string) => {
-    if (path.startsWith(`${SNAPSHOT}/events`)) return json(boardActivityEvents());
-    if (path === SNAPSHOT) return snapshot();
-    throw new Error(`unexpected ${path}`);
-  });
-}
-
-function setWide(wide: boolean) {
+function setWidth({ wide, phone = false }: { wide: boolean; phone?: boolean }) {
   vi.stubGlobal(
     "matchMedia",
     vi.fn((query: string) => ({
-      matches: query.includes("min-width: 1280px") ? wide : false,
+      matches: query.includes("min-width: 1280px")
+        ? wide
+        : query.includes("max-width: 767.98px")
+          ? phone
+          : false,
       media: query,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
@@ -53,31 +46,22 @@ function setWide(wide: boolean) {
 let location = "";
 function LocationProbe() {
   const loc = useLocation();
-  location = loc.pathname + loc.search;
+  location = loc.pathname + loc.search + loc.hash;
   return null;
 }
 
-function renderPage(search = "", seed?: (client: QueryClient) => void) {
+function renderAt(path: string, seed?: (client: QueryClient) => void) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   seed?.(client);
-  render(
+  const view = render(
     <QueryClientProvider client={client}>
-      <MemoryRouter initialEntries={[`/factory/${LIVE_RUN_FACTORY_ID}${search}`]}>
+      <MemoryRouter initialEntries={[`/factory/${FID}${path}`]}>
         <Routes>
           <Route
-            path="/factory/:factoryId"
+            path="/factory/:factoryId/*"
             element={
               <>
                 <FactoryPage />
-                <LocationProbe />
-              </>
-            }
-          />
-          <Route
-            path="/factory/:factoryId/projects/:slug"
-            element={
-              <>
-                <ProjectPage />
                 <LocationProbe />
               </>
             }
@@ -86,246 +70,299 @@ function renderPage(search = "", seed?: (client: QueryClient) => void) {
       </MemoryRouter>
     </QueryClientProvider>,
   );
-  return client;
+  return { client, ...view };
+}
+
+let server: FactoryServer;
+function serve(snapshot: () => FactorySnapshot | Response | Promise<Response> = liveRunSnapshot) {
+  server = serveFactory(authenticatedFetch, {
+    snapshot: async () => {
+      const body = await snapshot();
+      return body instanceof Response ? body : json(body);
+    },
+  });
 }
 
 beforeEach(() => {
   authenticatedFetch.mockReset();
   connected.value = true;
-  setWide(true);
+  resetFactoryControls();
+  setWidth({ wide: true });
 });
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
-describe("FactoryPage", () => {
-  it("shows skeletons, never an empty board, while the first read is pending", () => {
+describe("FactoryPage · shell", () => {
+  it("shows the shell skeleton, never an empty page, while the first read is pending", () => {
     serve(() => pendingForever());
-    renderPage();
+    renderAt("");
     expect(screen.getByTestId("factory-loading")).toBeInTheDocument();
-    expect(screen.queryByTestId("factory-board-empty")).toBeNull();
-    expect(screen.queryByTestId("factory-missing")).toBeNull();
+    expect(screen.queryByTestId("factory-needs-you")).toBeNull();
   });
 
-  it("renders header, health, needs-you, stage strip, cards and the decisions rail", async () => {
+  it("frames the Overview with the header, tabs and the Room dock", async () => {
     serve();
-    renderPage();
-    expect(await screen.findByTestId("factory-header")).toHaveTextContent("Atlas factory");
+    renderAt("");
+    const header = await screen.findByTestId("factory-header");
+    expect(header).toHaveTextContent("Atlas factory");
     expect(screen.getByTestId("factory-live-dot")).toHaveAttribute("data-state", "live");
-    expect(screen.getByTestId("factory-health-strip")).toBeInTheDocument();
+    expect(screen.getByTestId("factory-tab-overview")).toHaveAttribute("aria-current", "page");
     expect(screen.getByTestId("factory-needs-you")).toBeInTheDocument();
-    expect(screen.getByTestId("factory-stage-strip")).toBeInTheDocument();
-    expect(screen.getByTestId("project-card-api-version")).toBeInTheDocument();
-    const rail = screen.getByTestId("factory-rail");
-    expect(within(rail).getByTestId("decision-card-D-2")).toBeInTheDocument();
+    expect(screen.getByTestId("projects-table")).toBeInTheDocument();
+    expect(screen.getByTestId("overview-heatmap")).toBeInTheDocument();
+    expect(screen.getByTestId("overview-live-feed")).toBeInTheDocument();
+    expect(screen.getByTestId("factory-health-strip")).toBeInTheDocument();
+    const dock = screen.getByTestId("room-dock");
+    expect(within(dock).getByTestId("decision-card-D-2")).toBeInTheDocument();
   });
 
-  it("says when updates are not live and it is polling", async () => {
-    connected.value = false;
+  it("shows the base, engine mode and definition version only when the server sends them", async () => {
+    serve(() => round3Snapshot());
+    renderAt("");
+    await screen.findByTestId("factory-header");
+    expect(screen.getByTestId("factory-engine-mode")).toHaveTextContent("assist");
+    expect(screen.getByTestId("factory-def-version")).toHaveTextContent("def v7");
+    expect(screen.getByTestId("factory-base-line")).toHaveTextContent("app#temp-main@57ab671");
+    expect(screen.getByTestId("factory-base-line")).toHaveAttribute("data-env", "ready");
+    expect(screen.getByTestId("factory-presence")).toHaveAttribute("data-count", "2");
+  });
+
+  it("leaves the chips out on an older server", async () => {
     serve();
-    renderPage();
-    const dot = await screen.findByTestId("factory-live-dot");
-    expect(dot).toHaveAttribute("data-state", "reconnecting");
-    expect(dot).toHaveTextContent("Reconnecting · polling 15 s");
+    renderAt("");
+    await screen.findByTestId("factory-header");
+    expect(screen.queryByTestId("factory-engine-mode")).toBeNull();
+    expect(screen.queryByTestId("factory-def-version")).toBeNull();
+    expect(screen.queryByTestId("factory-base-line")).toBeNull();
+  });
+
+  it("drops the dock below 1280 px", async () => {
+    setWidth({ wide: false });
+    serve();
+    renderAt("");
+    await screen.findByTestId("factory-needs-you");
+    expect(screen.getByTestId("factory-layout")).toHaveAttribute("data-wide", "false");
+    expect(screen.queryByTestId("room-dock")).toBeNull();
+  });
+
+  it("swaps the top tabs for the bottom tabs on a phone", async () => {
+    setWidth({ wide: false, phone: true });
+    serve();
+    renderAt("");
+    await screen.findByTestId("factory-needs-you");
+    expect(screen.queryByTestId("factory-tabs")).toBeNull();
+    const bar = screen.getByTestId("factory-phone-tabs");
+    expect(within(bar).getByTestId("factory-phone-room")).toHaveTextContent("Room");
+    expect(within(bar).getByTestId("factory-phone-needs-you")).toHaveTextContent("Needs you");
+    expect(within(bar).getByTestId("factory-phone-projects")).toHaveTextContent("Projects");
+    expect(within(bar).getByTestId("factory-phone-more")).toHaveTextContent("More");
   });
 
   it("keeps stale data under an error alert when a refresh fails, and retries", async () => {
     let fail = true;
-    serve(() => (fail ? json({ error: { message: "down" } }, 503) : json(liveRunSnapshot())));
-    const client = renderPage("", (c) =>
-      c.setQueryData(factoryQueryKey(LIVE_RUN_FACTORY_ID), liveRunSnapshot(), {
+    serve(() => (fail ? json({ error: { message: "down" } }, 503) : liveRunSnapshot()));
+    const { client } = renderAt("", (c) =>
+      c.setQueryData(factoryQueryKey(FID), liveRunSnapshot(), {
         updatedAt: new Date(2026, 9, 26, 14, 2).getTime(),
       }),
     );
     await act(async () => {
-      await client.invalidateQueries({ queryKey: factoryQueryKey(LIVE_RUN_FACTORY_ID) });
+      await client.invalidateQueries({ queryKey: factoryQueryKey(FID) });
     });
     const alert = await screen.findByTestId("factory-load-error");
     expect(alert).toHaveTextContent("Couldn’t refresh this factory");
-    expect(alert).toHaveTextContent(/HTTP 503 · showing data from \d{1,2}:02/);
-    expect(screen.getByTestId("project-card-api-version")).toBeInTheDocument();
+    expect(screen.getByTestId("factory-needs-you")).toBeInTheDocument();
     fail = false;
     fireEvent.click(screen.getByTestId("factory-load-error-retry"));
     await waitFor(() => expect(screen.queryByTestId("factory-load-error")).toBeNull());
   });
 
-  it("switches to the Activity tab through ?tab", async () => {
+  it("says a removed person no longer has access", async () => {
+    serve(() => json({ error: { message: "not found" } }, 404));
+    renderAt("");
+    expect(await screen.findByTestId("factory-missing")).toHaveTextContent(
+      "you no longer have access",
+    );
+  });
+});
+
+describe("FactoryPage · routes and old links", () => {
+  it.each([
+    ["?project=api-version", `/factory/${FID}/projects/api-version`],
+    ["?project=db-version&decision=D-2", `/factory/${FID}/projects/db-version?decision=D-2`],
+    ["?review=9630", `/factory/${FID}/prs/${PR_9630}`],
+    [
+      `?review=9630&pr=${PR_9630}&preview=unavailable`,
+      `/factory/${FID}/prs/${PR_9630}?preview=unavailable`,
+    ],
+    [`?pr=${PR_9630}&preview=unavailable`, `/factory/${FID}/prs/${PR_9630}?preview=unavailable`],
+    ["?project=api-version&review=9630", `/factory/${FID}/prs/${PR_9630}`],
+    ["?tab=activity", `/factory/${FID}/activity`],
+    ["?tab=board", `/factory/${FID}`],
+    ["?tab=board&decision=D-2", `/factory/${FID}?decision=D-2`],
+    ["/projects/api-version?tab=prs", `/factory/${FID}/projects/api-version#prs`],
+    ["/projects/api-version?review=9630", `/factory/${FID}/prs/${PR_9630}`],
+  ])("sends %s to %s", async (from, to) => {
     serve();
-    renderPage();
-    const tab = await screen.findByTestId("factory-tab-activity");
-    fireEvent.mouseDown(tab);
-    await waitFor(() => expect(location).toContain("tab=activity"));
-    expect(await screen.findByTestId("activity-list")).toBeInTheDocument();
-    expect(screen.queryByTestId("factory-board")).toBeNull();
+    renderAt(from);
+    await waitFor(() => expect(location).toBe(to));
+    expect(await screen.findByTestId("factory-shell")).toBeInTheDocument();
   });
 
-  it("opens the project page from a card's title, and back from the breadcrumb", async () => {
+  it("lands an old ?review= link from a PR body on the PR page", async () => {
     serve();
-    renderPage();
+    renderAt("?review=9630");
+    const page = await screen.findByTestId("pr-page");
+    expect(page).toHaveAttribute("data-pr", "9630");
+    expect(page).toHaveTextContent("Ready for human merge");
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("explains a stable preview link that landed on the PR page", async () => {
+    serve(() => {
+      const snapshot = liveRunSnapshot();
+      const pr = snapshot.prs.find((p) => p.number === 9630)!;
+      pr.preview = { ...pr.preview!, state: "parked" };
+      return snapshot;
+    });
+    renderAt(`?review=9630&pr=${PR_9630}&preview=unavailable`);
+    expect(await screen.findByTestId("review-preview-unavailable")).toHaveTextContent(
+      "this PR’s factory preview isn’t running (parked)",
+    );
+  });
+
+  it("names a PR number the factory doesn't track", async () => {
+    serve();
+    renderAt("?review=9999");
+    await waitFor(() => expect(location).toBe(`/factory/${FID}/prs/9999`));
+    expect(await screen.findByTestId("pr-missing")).toHaveTextContent("9999");
+  });
+
+  it("moves between pages from the tabs", async () => {
+    serve();
+    renderAt("");
+    fireEvent.click(await screen.findByTestId("factory-tab-projects"));
+    expect(await screen.findByTestId("factory-projects-page")).toBeInTheDocument();
+    expect(location).toBe(`/factory/${FID}/projects`);
+    fireEvent.click(screen.getByTestId("factory-tab-activity"));
+    expect(await screen.findByTestId("activity-list")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("factory-tab-settings"));
+    expect(await screen.findByTestId("people-settings")).toBeInTheDocument();
+    expect(location).toBe(`/factory/${FID}/settings/people`);
+    fireEvent.click(screen.getByTestId("factory-tab-room"));
+    expect(await screen.findByTestId("room-dock-slot")).toHaveAttribute("data-thread", "factory");
+  });
+
+  it("opens a project's page from its table row, never a drawer", async () => {
+    serve();
+    renderAt("");
+    fireEvent.click(await screen.findByTestId("projects-row-link-api-version"));
+    expect(await screen.findByTestId("project-page-api-version")).toBeInTheDocument();
+    expect(location).toBe(`/factory/${FID}/projects/api-version`);
+    expect(screen.queryByRole("dialog")).toBeNull();
+  });
+
+  it("shows the round-2 cards on Projects for a few projects, the table past four", async () => {
+    serve();
+    renderAt("/projects");
+    expect(await screen.findByTestId("factory-projects-page")).toHaveAttribute(
+      "data-view",
+      "cards",
+    );
     fireEvent.click(await screen.findByTestId("project-open-api-version"));
     expect(await screen.findByTestId("project-page-api-version")).toBeInTheDocument();
-    expect(location).toBe(`/factory/${LIVE_RUN_FACTORY_ID}/projects/api-version`);
-    fireEvent.click(screen.getByTestId("project-breadcrumb-factory"));
-    expect(await screen.findByTestId("factory-board")).toBeInTheDocument();
-    expect(location).toBe(`/factory/${LIVE_RUN_FACTORY_ID}`);
   });
 
-  it("redirects an old ?project= link to the project page, keeping ?review", async () => {
-    serve();
-    renderPage("?project=api-version&review=9630");
-    expect(await screen.findByTestId("project-page-api-version")).toBeInTheDocument();
-    expect(location).toBe(`/factory/${LIVE_RUN_FACTORY_ID}/projects/api-version?review=9630`);
-    expect(await screen.findByTestId("review-drawer")).toHaveTextContent("Review · PR #9630");
-    expect(screen.queryByTestId("factory-board")).toBeNull();
+  it("defaults Projects to the table for the round-3 factory", async () => {
+    serve(() => round3Snapshot());
+    renderAt("/projects");
+    expect(await screen.findByTestId("factory-projects-page")).toHaveAttribute(
+      "data-view",
+      "table",
+    );
+    expect(screen.getByTestId("projects-envs")).toHaveTextContent("base-env");
+    expect(screen.getByTestId("projects-closed")).toHaveTextContent("Closed (1)");
   });
 
-  it("keeps ?decision on the redirect so the decision stays highlighted", async () => {
+  it("says when a factory path has no page", async () => {
     serve();
-    renderPage("?project=db-version&decision=D-2");
-    expect(await screen.findByTestId("decision-card-D-2")).toHaveAttribute(
+    renderAt("/nowhere");
+    expect(await screen.findByTestId("factory-unknown-page")).toBeInTheDocument();
+  });
+});
+
+describe("FactoryPage · presence, ⌘K and sharing", () => {
+  it("beats presence with the page the viewer is on, and moves with them", async () => {
+    serve();
+    const { unmount } = renderAt("");
+    await screen.findByTestId("factory-needs-you");
+    await waitFor(() => expect(server.beats).toContainEqual({ location: "overview", idle: false }));
+    fireEvent.click(screen.getByTestId("projects-row-link-db-version"));
+    await waitFor(() =>
+      expect(server.beats).toContainEqual({ location: "project:db-version", idle: false }),
+    );
+    unmount();
+    await waitFor(() =>
+      expect(server.beats).toContainEqual({ location: null, idle: false, leave: true }),
+    );
+  });
+
+  it("opens the palette on ⌘K, jumps to a project and runs a slash command", async () => {
+    serve();
+    renderAt("");
+    await screen.findByTestId("factory-needs-you");
+    const mac = isMacPlatform();
+    fireEvent.keyDown(window, { key: "k", metaKey: mac, ctrlKey: !mac });
+    const input = await screen.findByTestId("factory-palette-input");
+    fireEvent.change(input, { target: { value: "db-version" } });
+    fireEvent.click(await screen.findByTestId("factory-palette-item-project:db-version"));
+    expect(await screen.findByTestId("project-page-db-version")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("factory-palette-open"));
+    fireEvent.change(await screen.findByTestId("factory-palette-input"), {
+      target: { value: "/pause #db-version" },
+    });
+    fireEvent.click(await screen.findByTestId("factory-palette-run"));
+    await waitFor(() =>
+      expect(server.controls).toEqual([{ action: "pause", target: "project:db-version" }]),
+    );
+  });
+
+  it("opens Share from the header and invites through the people API", async () => {
+    serve(() => round3Snapshot());
+    renderAt("");
+    fireEvent.click(await screen.findByTestId("factory-share"));
+    const dialog = await screen.findByTestId("share-dialog");
+    expect(await within(dialog).findByTestId("people-row-mia@caffeine.ai")).toBeInTheDocument();
+    expect(within(dialog).getByTestId("share-credential-line")).toHaveTextContent(
+      "Agents act as luka@caffeine.ai’s GitHub & Databricks",
+    );
+  });
+
+  it("disables every header lever for a viewer, with Request access", async () => {
+    serve(() => round3Snapshot("viewer"));
+    renderAt("");
+    expect(await screen.findByTestId("factory-viewer-banner")).toBeInTheDocument();
+    expect(screen.getByTestId("factory-add-project")).toBeDisabled();
+    expect(screen.getByTestId("factory-pause-all")).toBeDisabled();
+    expect(screen.getByTestId("factory-request-access")).toBeEnabled();
+  });
+
+  it("highlights ?decision in the dock", async () => {
+    serve();
+    renderAt("?decision=D-2");
+    const dock = await screen.findByTestId("room-dock");
+    expect(within(dock).getByTestId("decision-card-D-2")).toHaveAttribute(
       "data-highlighted",
       "true",
     );
-    expect(location).toBe(`/factory/${LIVE_RUN_FACTORY_ID}/projects/db-version?decision=D-2`);
   });
 
-  it("opens the review drawer from ?review and from a PR row", async () => {
+  it("reads the snapshot once for the whole shell", async () => {
     serve();
-    renderPage("?review=9630");
-    const drawer = await screen.findByTestId("review-drawer");
-    expect(drawer).toHaveTextContent("Review · PR #9630");
-    expect(drawer).toHaveTextContent("Ready for human merge");
-    fireEvent.click(within(drawer).getByRole("button", { name: "Close" }));
-    await waitFor(() => expect(screen.queryByTestId("review-drawer")).toBeNull());
-    fireEvent.click(screen.getByTestId("review-open-9631"));
-    expect(await screen.findByTestId("review-drawer")).toHaveTextContent("Review · PR #9631");
-    expect(location).toContain("review=9631");
-  });
-
-  it("explains a stable preview link that landed here, and clears it on close", async () => {
-    const snapshot = liveRunSnapshot();
-    const pr = snapshot.prs.find((p) => p.number === 9631)!;
-    pr.preview = { ...pr.preview!, state: "parked" };
-    serve(() => json(snapshot));
-    renderPage(`?review=9631&pr=${pr.id}&preview=unavailable`);
-    const drawer = await screen.findByTestId("review-drawer");
-    expect(within(drawer).getByTestId("review-preview-unavailable")).toHaveTextContent(
-      "this PR’s factory preview isn’t running (parked). Restore it under Preview",
-    );
-    fireEvent.click(within(drawer).getByRole("button", { name: "Close" }));
-    await waitFor(() => expect(screen.queryByTestId("review-drawer")).toBeNull());
-    expect(location).not.toMatch(/review=|preview=|pr=/);
-  });
-
-  it("says nothing about an unavailable preview that is back up", async () => {
-    serve();
-    renderPage("?review=9630&preview=unavailable");
-    const drawer = await screen.findByTestId("review-drawer");
-    expect(within(drawer).queryByTestId("review-preview-unavailable")).toBeNull();
-  });
-
-  it("gives the review drawer the PR's project: its PL chat and the reviewer's session", async () => {
-    serve();
-    renderPage("?review=9630");
-    const drawer = await screen.findByTestId("review-drawer");
-    expect(within(drawer).getByTestId("review-open-pl")).toHaveAttribute(
-      "href",
-      "/c/b408c5f09ff659e6b907fd9f688829e9",
-    );
-    expect(within(drawer).getByTestId("review-preview-slot")).toHaveTextContent(
-      "Kept up until merge or close · 2 slots for this project",
-    );
-  });
-
-  it("highlights ?decision in the rail and points the blocked card at it", async () => {
-    serve();
-    renderPage("?decision=D-2");
-    expect(await screen.findByTestId("decision-card-D-2")).toHaveAttribute(
-      "data-highlighted",
-      "true",
-    );
-    expect(screen.getByTestId("decision-card-D-3")).not.toHaveAttribute("data-highlighted");
-    fireEvent.click(screen.getByTestId("needs-you-decisions"));
-    expect(location).toContain("decision=D-2");
-  });
-
-  it("folds the rail into the Needs-you strip below 1280 px", async () => {
-    setWide(false);
-    serve();
-    renderPage();
-    await screen.findByTestId("factory-board");
-    expect(screen.queryByTestId("factory-rail")).toBeNull();
-    expect(screen.queryByTestId("decisions-rail")).toBeNull();
-    fireEvent.click(screen.getByTestId("needs-you-decisions"));
-    const panel = screen.getByTestId("needs-you-decisions-panel");
-    expect(within(panel).getByTestId("decision-card-D-2")).toBeInTheDocument();
-  });
-
-  it("scrolls to and flashes what a Needs-you chip points at", async () => {
-    serve();
-    renderPage();
-    const row = await screen.findByTestId("pr-row-9630");
-    const scroll = vi.fn();
-    row.scrollIntoView = scroll;
-    fireEvent.click(screen.getByTestId("needs-you-ready"));
-    expect(scroll).toHaveBeenCalledWith(expect.objectContaining({ block: "center" }));
-    expect(row).toHaveAttribute("data-highlighted", "true");
-  });
-
-  it("keeps health true on a quiet live factory, and turns red when ticks stop", async () => {
-    vi.useFakeTimers({ shouldAdvanceTime: true });
-    let ticking = true;
-    let lastTick = 0;
-    let lastPoll = 0;
-    serve(() => {
-      // Nothing changes but the server's own stamps, so no frame is pushed.
-      const nowS = Math.floor(Date.now() / 1000);
-      if (ticking) {
-        lastTick = nowS - 20;
-        lastPoll = nowS - 8;
-      }
-      const snapshot = liveRunSnapshot();
-      snapshot.server_time = nowS;
-      snapshot.health.supervisor.last_tick_at = lastTick;
-      snapshot.health.github.last_poll_at = lastPoll;
-      return json(snapshot);
-    });
-    renderPage();
-    const supervisor = await screen.findByTestId("health-supervisor");
-    expect(supervisor).toHaveAttribute("data-state", "ok");
-
-    await act(() => vi.advanceTimersByTimeAsync(11 * 60_000));
-    expect(screen.getByTestId("health-supervisor")).toHaveAttribute("data-state", "ok");
-    expect(screen.getByTestId("health-github")).toHaveAttribute("data-state", "ok");
-    expect(authenticatedFetch.mock.calls.length).toBeGreaterThanOrEqual(10);
-
-    ticking = false;
-    await act(() => vi.advanceTimersByTimeAsync(11 * 60_000));
-    expect(screen.getByTestId("health-supervisor")).toHaveAttribute("data-state", "red");
-    expect(screen.getByTestId("health-github")).toHaveAttribute("data-state", "red");
-    expect(screen.getByTestId("health-github")).toHaveTextContent(/polled 1\dm ago/);
-  });
-
-  it("ages health against the server clock when the browser clock is off", async () => {
-    const skewS = 15 * 60;
-    serve(() => {
-      // The server runs 15 min behind this browser and has just ticked.
-      const serverNowS = Math.floor(Date.now() / 1000) - skewS;
-      const snapshot = liveRunSnapshot();
-      snapshot.server_time = serverNowS;
-      snapshot.health.supervisor.last_tick_at = serverNowS - 10;
-      return json(snapshot);
-    });
-    renderPage();
-    const supervisor = await screen.findByTestId("health-supervisor");
-    expect(supervisor).toHaveAttribute("data-state", "ok");
-    expect(supervisor).toHaveTextContent(/1\ds ago/);
-  });
-
-  it("says when the factory does not exist", async () => {
-    serve(() => json({ error: { message: "not found" } }, 404));
-    renderPage();
-    expect(await screen.findByTestId("factory-missing")).toBeInTheDocument();
+    renderAt("/projects/api-version");
+    await screen.findByTestId("project-page-api-version");
+    expect(server.calls.filter((c) => c.method === "GET" && c.path === SNAPSHOT)).toHaveLength(1);
   });
 });

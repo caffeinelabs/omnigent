@@ -17,6 +17,7 @@ import { HarnessGlyph, MemberStatusDot, ROLE_NAME, statusWord } from "../board/T
 import { EditCharterDialog } from "../controls/EditCharterDialog";
 import { DecisionsRail } from "../decisions/DecisionsRail";
 import { formatUsd, plural } from "../factoryFormat";
+import { LeverGated } from "../shell/viewerCan";
 import { projectDecisions, projectTeam } from "./projectModel";
 import { SectionCard } from "./projectParts";
 
@@ -70,7 +71,7 @@ function CharterSettings({ charter }: { charter: CharterView }) {
   );
 }
 
-function CharterCard({ project, onEdit }: { project: ProjectView; onEdit: () => void }) {
+export function CharterCard({ project, onEdit }: { project: ProjectView; onEdit: () => void }) {
   const charter = project.charter;
   const demoFocus = charter?.demo_focus ?? charter?.demo;
   return (
@@ -78,16 +79,18 @@ function CharterCard({ project, onEdit }: { project: ProjectView; onEdit: () => 
       title="Charter"
       testId="project-charter"
       action={
-        <Button
-          variant="outline"
-          size="xs"
-          onClick={onEdit}
-          data-testid="charter-edit"
-          componentId="factory.project.edit_charter"
-        >
-          <PencilIcon />
-          Edit charter
-        </Button>
+        <LeverGated lever="apply_projects">
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={onEdit}
+            data-testid="charter-edit"
+            componentId="factory.project.edit_charter"
+          >
+            <PencilIcon />
+            Edit charter
+          </Button>
+        </LeverGated>
       }
     >
       {charter ? (
@@ -144,7 +147,7 @@ function CharterCard({ project, onEdit }: { project: ProjectView; onEdit: () => 
   );
 }
 
-function TeamCard({ project, nowS }: { project: ProjectView; nowS: number }) {
+export function TeamCard({ project, nowS }: { project: ProjectView; nowS: number }) {
   const team = projectTeam(project);
   const working = team.filter((m) => m.running).length;
   return (
@@ -205,7 +208,7 @@ function TeamCard({ project, nowS }: { project: ProjectView; nowS: number }) {
   );
 }
 
-function PlanCard({ project }: { project: ProjectView }) {
+export function PlanCard({ project }: { project: ProjectView }) {
   const path = `~/factory/${project.slug}/plan.md`;
   return (
     <SectionCard title="Plan" testId="project-plan">

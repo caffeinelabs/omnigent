@@ -10,12 +10,15 @@ import {
 import { pageScenario, storySnapshot, withStoryMedia } from "./__fixtures__/boardFixtures";
 import { CockpitStory, type CockpitStoryOptions, SNAPSHOT_PATH } from "./boardStoryKit";
 
+/** The Projects page in its Cards view: the round-2 board, reused. */
 function cockpit(options: CockpitStoryOptions = {}): Story {
-  return { render: () => <CockpitStory {...options} /> };
+  return {
+    render: () => <CockpitStory path="/projects" search="?view=cards" {...options} />,
+  };
 }
 
 const meta = {
-  title: "Factory/Cockpit",
+  title: "Factory/Projects cards",
   component: FactoryPage,
   parameters: { layout: "fullscreen" },
 } satisfies Meta<typeof FactoryPage>;
@@ -28,7 +31,7 @@ export const Live = cockpit();
 
 export const LiveDark = cockpit({ theme: "dark" });
 
-/** Phone layout: cards stack, gates wrap 3×2, tabs become a select. */
+/** Phone layout: cards stack, gates wrap 3×2, the bottom tabs take over. */
 export const Mobile: Story = { ...cockpit(), globals: { viewport: { value: "mobile2" } } };
 
 /** Both PRs ready: the factory waits only on the human. */
@@ -86,12 +89,14 @@ export const RefreshError = cockpit({
     void client.invalidateQueries({ queryKey: factoryQueryKey(LIVE_RUN_FACTORY_ID) }),
 });
 
-/** `?decision=D-2` (the blocked card's link): the rail highlights it. */
-export const DecisionHighlighted = cockpit({ search: "?decision=D-2" });
+/** `?decision=D-2` (the blocked card's link): the dock highlights it. */
+export const DecisionHighlighted = cockpit({ search: "?view=cards&decision=D-2" });
 
-/** The review drawer's placeholder (the review package fills it). */
-export const ReviewDrawer = cockpit({ search: "?review=9630" });
+/** The factory's Activity page. */
+export const ActivityPage: Story = {
+  render: () => <CockpitStory path="/activity" />,
+};
 
-export const ActivityTab = cockpit({ search: "?tab=activity" });
-
-export const ActivityTabDark = cockpit({ search: "?tab=activity", theme: "dark" });
+export const ActivityPageDark: Story = {
+  render: () => <CockpitStory path="/activity" theme="dark" />,
+};

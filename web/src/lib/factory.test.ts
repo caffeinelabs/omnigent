@@ -6,7 +6,9 @@ import {
   factoryRoleChipText,
   hasFactoryBeacon,
   isFactoryMember,
+  factoryIdOf,
   isFactoryPath,
+  isSharedFactoryMember,
   isFactoryWarningHealth,
   normalizeFactoryId,
 } from "./factory";
@@ -88,11 +90,32 @@ describe("factory roots and routes", () => {
     ["/factory/f4f4ba9c", true],
     ["/ml/omnigent-embed/factory/f4f4ba9c", true],
     ["/factory/f4f4ba9c/", true],
+    ["/factory/f4f4ba9c/projects/db-version", true],
+    ["/factory/f4f4ba9c/prs/f74d5967", true],
+    ["/ml/omnigent-embed/factory/f4f4ba9c/settings/people", true],
     ["/c/conv_factory", false],
+    ["/c/factory", false],
     ["/inbox", false],
     ["/", false],
   ])("recognises %s as a factory route: %s", (path, expected) => {
     expect(isFactoryPath(path)).toBe(expected);
+  });
+});
+
+describe("factory membership by label", () => {
+  it("reads the factory id a session carries, bare", () => {
+    expect(factoryIdOf({ "omnigent.factory.id": "conv_F4F4BA9C77725331B12F0FA7072DC4D3" })).toBe(
+      "f4f4ba9c77725331b12f0fa7072dc4d3",
+    );
+    expect(factoryIdOf({})).toBeNull();
+    expect(factoryIdOf(undefined)).toBeNull();
+  });
+
+  it("files a shared factory member under the Factory entry, never the viewer's own", () => {
+    const labels = { "omnigent.factory.id": "f4f4ba9c" };
+    expect(isSharedFactoryMember(labels, false)).toBe(true);
+    expect(isSharedFactoryMember(labels, true)).toBe(false);
+    expect(isSharedFactoryMember({}, false)).toBe(false);
   });
 });
 

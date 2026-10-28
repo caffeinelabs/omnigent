@@ -186,7 +186,7 @@ describe("ProjectCard", () => {
     expect(within(card).getByTestId("project-details-api-version")).toHaveAttribute("href", page);
     const demos = within(card).getByTestId("project-demos-api-version");
     expect(demos).toHaveTextContent("2 demos");
-    expect(demos).toHaveAttribute("href", `${page}?tab=demos`);
+    expect(demos).toHaveAttribute("href", `${page}#demos`);
   });
 
   it("leaves the demos link out while no PR has a demo", () => {

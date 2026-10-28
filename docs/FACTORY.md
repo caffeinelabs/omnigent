@@ -239,8 +239,15 @@ idle out and their sandboxes are reclaimed.
 ## Cockpit, previews and demos
 
 The human runs the factory from the **cockpit** (`/factory`, one factory at
-`/factory/<factory id>`; `?review=<pr number>` opens a PR's review drawer and
-`&decision=D-<n>` a decision). Everything on it comes from the server: a
+`/factory/<factory id>`). Every primary object has a page under it: the
+Overview (`/`), Projects (`/projects`), a project (`/projects/<slug>`, its
+sections as anchors such as `#demos`), a PR (`/prs/<pr id>`; a PR number
+resolves too), Activity (`/activity`), the Room (`/room`) and Settings ▸
+People (`/settings/people`); `?decision=D-<n>` highlights a decision and ⌘K
+jumps or runs a slash command. Old links still land: `?review=<n>` and
+`?pr=<id>&preview=unavailable` (PR bodies, the stable preview link) open the
+PR page, `?project=<slug>` the project page, `?tab=activity` Activity.
+Everything on it comes from the server: a
 GitHub poller computes each PR's gates, a prober checks envs and previews, and
 an event log records what agents did. Agents add detail through four tools;
 if they stay silent the board is still right.
@@ -249,7 +256,8 @@ if they stay silent the board is still right.
 
 | Route | Who | What |
 |---|---|---|
-| `GET /v1/factory/factories`, `GET /v1/factory/factories/{fid}` (ETag), `…/events` | human (READ on the root) | Factory list, the snapshot (projects, PRs with gates, previews, demos, decisions, members, health), the activity log. |
+| `GET /v1/factory/factories`, `GET /v1/factory/factories/{fid}` (ETag), `…/events` | human (READ on the root) | Factory list (with the viewer's role, who shared it and what is theirs), the snapshot (projects, PRs with gates, previews, demos, decisions, members, health), the activity log. |
+| `GET /v1/factory/factories/{fid}/projects/{slug}/demos` | human (READ on the root and the project's PL) | Every recorded demo of the project's PRs, grouped by PR (groups and runs newest first): the project page's Demos section. |
 | `POST /v1/factory/factories`, `POST …/{fid}/projects`, `PATCH …/projects/{slug}` | human | Start a factory from the form (stores charters, queues `[Factory brief … via cockpit]`; `projects` may be empty with a `brief`), add or edit a project. |
 | `POST …/{fid}/projects/{slug}/cancel`, `…/split`, `…/merge` | human (EDIT) | Project lifecycle (see Projects and proposals). |
 | `GET …/{fid}/proposals?kind=&status=`, `GET …/proposals/{ref}`, `POST …/proposals/{ref}/apply` (`{changes?}`), `…/reject` (`{note?}`), `…/undo` | human (EDIT; MANAGE for an owner-class proposal) | Proposals `C-<n>`; apply and reject answer the mirrored decision, so one of two clicks wins. |

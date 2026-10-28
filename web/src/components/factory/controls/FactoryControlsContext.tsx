@@ -2,10 +2,12 @@
  * Lets board pieces outside the menus reach a control: the team strip's
  * "old launch mode" chip opens the same relaunch confirm as the project
  * menu. Without the provider (a lone card in a story) the chip stays a label.
+ * It also gates every lever below it on the snapshot's viewer block.
  */
 
 import { type ReactNode, createContext, useCallback, useContext, useMemo, useState } from "react";
 import type { FactorySnapshot, MemberView } from "@/lib/factoryApi";
+import { FactoryViewerProvider } from "../shell/viewerCan";
 import { RelaunchDialog } from "./ControlDialogs";
 import { useFactoryControls } from "./useFactoryControls";
 
@@ -26,14 +28,15 @@ export function FactoryControlsProvider({
   const controls = useFactoryControls(snapshot.factory.id);
   const [member, setMember] = useState<MemberView | null>(null);
   const members = snapshot.members;
+  const canRestart = snapshot.viewer?.can.restart !== false;
   const relaunchFor = useCallback(
     (sessionId: string) => {
       const found = members.find((m) => m.session_id === sessionId);
-      // Only leads and PLs relaunch; a PL manages its own sub-agents.
-      if (!found?.is_top_level) return null;
+      // Only leads and PLs relaunch (owners); a PL manages its own sub-agents.
+      if (!found?.is_top_level || !canRestart) return null;
       return () => setMember(found);
     },
-    [members],
+    [members, canRestart],
   );
   const value = useMemo(() => ({ relaunchFor }), [relaunchFor]);
   const target =
@@ -44,7 +47,7 @@ export function FactoryControlsProvider({
         : null;
   return (
     <FactoryControlsContext.Provider value={value}>
-      {children}
+      <FactoryViewerProvider viewer={snapshot.viewer}>{children}</FactoryViewerProvider>
       <RelaunchDialog
         open={member != null}
         onOpenChange={(open) => {

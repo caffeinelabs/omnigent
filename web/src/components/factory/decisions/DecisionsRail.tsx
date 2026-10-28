@@ -26,6 +26,8 @@ export interface DecisionsRailProps {
   clockOffsetS?: number;
   /** Also fold withdrawn and expired decisions (the project page lists all of them). */
   showClosed?: boolean;
+  /** Leave out the "Decisions · n open" line (a tab or section already says it). */
+  hideHeading?: boolean;
 }
 
 function matches(decision: DecisionView, id: string | null): boolean {
@@ -122,6 +124,7 @@ export function DecisionsRail({
   highlightId,
   clockOffsetS = 0,
   showClosed = false,
+  hideHeading = false,
 }: DecisionsRailProps) {
   // Answered from this rail: their cards stay (with the receipt) instead of folding away.
   const [mine, setMine] = useState<Record<string, DecisionView>>({});
@@ -142,7 +145,7 @@ export function DecisionsRail({
 
   return (
     <section data-testid="decisions-rail" aria-label="Decisions" className="flex flex-col gap-2">
-      <h2 className="text-sm font-medium text-muted-foreground">
+      <h2 className={cn("text-sm font-medium text-muted-foreground", hideHeading && "sr-only")}>
         Decisions · <span className="tabular-nums">{open.length}</span> open
       </h2>
       {cards.length === 0 && (

@@ -6,6 +6,7 @@ import { cn } from "@/lib/utils";
 import { allDoneSnapshot, factoryList, summaryOf } from "./__fixtures__/liveRun";
 import { FactoryNavLink } from "./FactoryNavLink";
 import { FactoryStoryFrame, type FactoryFrameOptions } from "./factoryStoryFixtures";
+import { sharedFactoryList } from "./shell/__fixtures__/shellFixtures";
 
 /** The sidebar's primary nav as Sidebar lays it out, with the Factory entry in place. */
 function SidebarNav({ factoryActive = false }: { factoryActive?: boolean }) {
@@ -106,3 +107,21 @@ export const Quiet = navStory({ data: [summaryOf(allDoneSnapshot())] });
 
 /** The list is still loading: the plain entry, nothing guessed. */
 export const Loading = navStory("pending");
+
+/** Factories shared with the viewer sit under the entry (their members leave Shared sessions). */
+export const SharedWithYou = navStory(sharedFactoryList());
+
+export const SharedWithYouDark = navStory(sharedFactoryList(), { theme: "dark" });
+
+/** On a shared factory's page: its row reads as the current one. */
+export const SharedActive: Story = {
+  render: () => (
+    <FactoryStoryFrame
+      route={`/factory/${sharedFactoryList().data[0]!.id}`}
+      routes={{ "/v1/factory/factories": { body: sharedFactoryList() } }}
+      className="p-4"
+    >
+      <SidebarNav factoryActive />
+    </FactoryStoryFrame>
+  ),
+};

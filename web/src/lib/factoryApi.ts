@@ -483,6 +483,83 @@ export interface DemoListResponse {
 }
 
 /** Filters of the demos list. */
+/** One PR's demos on the project page: every run, newest first. */
+export interface ProjectDemoGroupView {
+  repo: string;
+  pr_number: number;
+  pr_id: string | null;
+  /** The PR's current head as the board tracks it (`""` when untracked). */
+  head_sha: string;
+  runs: ProjectDemoView[];
+}
+
+/** `GET /v1/factory/factories/{fid}/projects/{slug}/demos`: groups by their newest run. */
+export interface ProjectDemosResponse {
+  data: ProjectDemoGroupView[];
+  count: number;
+}
+
+/** Whether an invitee could sign in through the server's OIDC policy. */
+export type Admission = "ok" | "blocked";
+
+/** `GET /v1/factory/factories/{fid}/people`. */
+export interface PeopleResponse {
+  data: PersonView[];
+  /** Whose GitHub and Databricks identity the agents use. */
+  runs_as: { user_id: string; name: string } | null;
+  count: number;
+  viewer: ViewerBlock;
+}
+
+/** `PUT /v1/factory/factories/{fid}/people/{user}`. */
+export interface PutPersonResponse {
+  person: PersonView;
+  created: boolean;
+  previous_role: PersonRole | null;
+  /** Members the role was granted on. */
+  granted: number;
+  admission: Admission;
+}
+
+/** `DELETE /v1/factory/factories/{fid}/people/{user}`. */
+export interface RemovePersonResponse {
+  removed: string;
+  left: boolean;
+  previous_role: PersonRole | null;
+  revoked: number;
+}
+
+/** `GET /v1/factory/factories/{fid}/people/search`: someone to invite. */
+export interface PersonSearchResult {
+  user_id: string;
+  name: string;
+  /** A user the server already knows (else a typed email). */
+  known: boolean;
+  role: PersonRole | null;
+  admission: Admission;
+}
+
+/** `POST /v1/factory/factories/{fid}/access-requests`. */
+export interface AccessRequestResponse {
+  decision: DecisionView;
+  deduped: boolean;
+}
+
+/** `GET|POST /v1/factory/factories/{fid}/presence`. */
+export interface PresenceResponse {
+  data?: PresenceEntry[];
+  present?: number;
+  heartbeat_s: number;
+  ttl_s: number;
+}
+
+/** `GET /v1/factory/factories/{fid}/spans`: oldest first. */
+export interface SpanPage {
+  data: SpanView[];
+  has_more: boolean;
+  next_since: number | null;
+}
+
 export interface DemoFilters {
   project?: string;
   /** A PR number. */
@@ -1083,6 +1160,14 @@ export interface FactorySummary {
   members_running: number;
   drifted_members: number;
   url: string;
+  /** The viewer's role in this factory (absent on older servers). */
+  viewer_role?: ViewerRole | null;
+  /** Who started the factory, when it is not the viewer ("Shared with you by …"). */
+  shared_by?: string | null;
+  people_count?: number | null;
+  /** Open decisions assigned to the viewer or a role they hold. */
+  mine?: number | null;
+  usd_per_h?: number | null;
 }
 
 export interface FactoryListResponse {
@@ -1436,7 +1521,112 @@ export async function fetchDemoJson(url: string, signal?: AbortSignal): Promise<
   return readJson(await authenticatedFetch(url, { signal }));
 }
 
+/** Every demo of one project's PRs, grouped by PR (newest run first). */
+export async function fetchProjectDemos(
+  factoryId: string,
+  slug: string,
+  signal?: AbortSignal,
+): Promise<ProjectDemosResponse> {
+  return readJson(
+    await authenticatedFetch(
+      `/v1/factory/factories/${enc(factoryId)}/projects/${enc(slug)}/demos`,
+      {
+        signal,
+      },
+    ),
+  );
+}
+
+/** The factory's spans started at or after `since` (epoch ms), oldest first. */
+export async function fetchFactorySpans(
+  factoryId: string,
+  options: { since?: number; kinds?: SpanKind[]; limit?: number; project?: string } = {},
+  signal?: AbortSignal,
+): Promise<SpanPage> {
+  const params = new URLSearchParams();
+  if (options.since != null) params.set("since", String(options.since));
+  if (options.kinds?.length) params.set("kind", options.kinds.join(","));
+  if (options.project) params.set("project", options.project);
+  params.set("limit", String(options.limit ?? 500));
+  return readJson(
+    await authenticatedFetch(`/v1/factory/factories/${enc(factoryId)}/spans?${params}`, {
+      signal,
+    }),
+  );
+}
+
+/** The roster, who agents run as and the caller's own levers. */
+export async function fetchFactoryPeople(
+  factoryId: string,
+  signal?: AbortSignal,
+): Promise<PeopleResponse> {
+  return readJson(
+    await authenticatedFetch(`/v1/factory/factories/${enc(factoryId)}/people`, { signal }),
+  );
+}
+
+/** Known users matching `query` (owners only; at least 3 characters). */
+export async function searchFactoryPeople(
+  factoryId: string,
+  query: string,
+  signal?: AbortSignal,
+): Promise<{ data: PersonSearchResult[] }> {
+  return readJson(
+    await authenticatedFetch(
+      `/v1/factory/factories/${enc(factoryId)}/people/search?q=${enc(query)}`,
+      { signal },
+    ),
+  );
+}
+
 // ── Writes ─────────────────────────────────────────────────────
+
+/** Invite `userId` as `role`, or change their role (owners). */
+export async function putFactoryPerson(
+  factoryId: string,
+  userId: string,
+  role: PersonRole,
+): Promise<PutPersonResponse> {
+  return readJson(
+    await postJson(
+      `/v1/factory/factories/${enc(factoryId)}/people/${enc(userId)}`,
+      { role },
+      "PUT",
+    ),
+  );
+}
+
+/** Remove `userId` from the roster (owners), or leave (yourself). */
+export async function removeFactoryPerson(
+  factoryId: string,
+  userId: string,
+): Promise<RemovePersonResponse> {
+  return readJson(
+    await authenticatedFetch(`/v1/factory/factories/${enc(factoryId)}/people/${enc(userId)}`, {
+      method: "DELETE",
+    }),
+  );
+}
+
+/** Ask the owners for `role`; they answer an `access_request` decision. */
+export async function requestFactoryAccess(
+  factoryId: string,
+  body: { role?: "operator" | "owner"; note?: string } = {},
+): Promise<AccessRequestResponse> {
+  return readJson(await postJson(`/v1/factory/factories/${enc(factoryId)}/access-requests`, body));
+}
+
+/**
+ * The cockpit's presence heartbeat: where the viewer is (`overview`,
+ * `project:<slug>`, `pr:<id>`, …) and whether the tab is idle; `leave` drops
+ * them at once.
+ */
+export async function postFactoryPresence(
+  factoryId: string,
+  body: { location: string | null; idle: boolean; leave?: boolean },
+): Promise<PresenceResponse> {
+  return readJson(await postJson(`/v1/factory/factories/${enc(factoryId)}/presence`, body));
+}
 
 export async function createFactory(body: CreateFactoryRequest): Promise<CreateFactoryResponse> {
   return readJson(await postJson("/v1/factory/factories", body));

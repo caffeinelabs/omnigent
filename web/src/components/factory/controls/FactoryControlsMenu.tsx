@@ -36,6 +36,7 @@ import { cadenceBeatsText } from "../start/projectForm";
 import { PauseDialog, RelaunchDialog, TypeToConfirmDialog } from "./ControlDialogs";
 import { PendingChip, showUndoToast } from "./ControlFeedback";
 import { cadenceEstimates } from "./controlModel";
+import { LEVER_REASON, LeverGated, useViewerCan } from "../shell/viewerCan";
 import { MenuSection } from "./MenuSection";
 import { useFactoryControls } from "./useFactoryControls";
 
@@ -55,6 +56,7 @@ const CADENCE_NAME: Record<FactoryCadence, string> = { demo: "Demo", normal: "No
 export function FactoryControlsMenu({ factoryId, factory, members }: FactoryControlsMenuProps) {
   const queryClient = useQueryClient();
   const controls = useFactoryControls(factoryId);
+  const { can } = useViewerCan();
   const [dialog, setDialog] = useState<"pause" | "stop" | null>(null);
   const [relaunching, setRelaunching] = useState<MemberView | null>(null);
   const paused = factory.state === "paused";
@@ -122,28 +124,32 @@ export function FactoryControlsMenu({ factoryId, factory, members }: FactoryCont
         />
       )}
       {paused ? (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={resumeAll}
-          data-testid="factory-pause-all"
-          componentId="factory.header.resume_all"
-        >
-          <PlayIcon className="size-3.5" />
-          <span className="max-sm:sr-only">Resume all</span>
-        </Button>
+        <LeverGated lever="control">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={resumeAll}
+            data-testid="factory-pause-all"
+            componentId="factory.header.resume_all"
+          >
+            <PlayIcon className="size-3.5" />
+            <span className="max-sm:sr-only">Resume all</span>
+          </Button>
+        </LeverGated>
       ) : (
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => setDialog("pause")}
-          disabled={done}
-          data-testid="factory-pause-all"
-          componentId="factory.header.pause_all"
-        >
-          <PauseIcon className="size-3.5" />
-          <span className="max-sm:sr-only">Pause all</span>
-        </Button>
+        <LeverGated lever="control">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => setDialog("pause")}
+            disabled={done}
+            data-testid="factory-pause-all"
+            componentId="factory.header.pause_all"
+          >
+            <PauseIcon className="size-3.5" />
+            <span className="max-sm:sr-only">Pause all</span>
+          </Button>
+        </LeverGated>
       )}
       <DropdownMenu>
         <DropdownMenuTrigger asChild>
@@ -164,15 +170,27 @@ export function FactoryControlsMenu({ factoryId, factory, members }: FactoryCont
           collisionPadding={12}
           className="w-80 backdrop-blur-md dark:bg-card-solid"
         >
+          {!can.control && (
+            <DropdownMenuLabel
+              data-testid="control-read-only"
+              className="text-sm font-normal whitespace-normal text-muted-foreground"
+            >
+              {LEVER_REASON.control}; owners can stop the factory.
+            </DropdownMenuLabel>
+          )}
           {paused ? (
-            <DropdownMenuItem onSelect={resumeAll} data-testid="control-resume-all">
+            <DropdownMenuItem
+              onSelect={resumeAll}
+              disabled={!can.control}
+              data-testid="control-resume-all"
+            >
               <PlayIcon />
               Resume all
             </DropdownMenuItem>
           ) : (
             <DropdownMenuItem
               onSelect={() => setDialog("pause")}
-              disabled={done}
+              disabled={done || !can.control}
               data-testid="control-pause-all"
             >
               <PauseIcon />
@@ -202,6 +220,7 @@ export function FactoryControlsMenu({ factoryId, factory, members }: FactoryCont
             {(["demo", "normal"] as const).map((cadence) => (
               <DropdownMenuItem
                 key={cadence}
+                disabled={!can.control}
                 onSelect={() => void setCadence(cadence)}
                 data-testid={`control-cadence-${cadence}`}
                 data-checked={cadence === factory.cadence ? "true" : "false"}
@@ -217,6 +236,7 @@ export function FactoryControlsMenu({ factoryId, factory, members }: FactoryCont
           {drifted.map((lead) => (
             <DropdownMenuItem
               key={lead.session_id}
+              disabled={!can.restart}
               onSelect={() => setRelaunching(lead)}
               data-testid={`control-relaunch-${lead.session_id}`}
               data-drift="true"
@@ -258,11 +278,13 @@ export function FactoryControlsMenu({ factoryId, factory, members }: FactoryCont
           <DropdownMenuItem
             variant="destructive"
             onSelect={() => setDialog("stop")}
-            disabled={done}
+            disabled={done || !can.stop}
+            title={can.stop ? undefined : LEVER_REASON.stop}
             data-testid="control-stop-factory"
           >
             <SquareIcon />
             Stop factory…
+            {!can.stop && <span className="ml-auto text-xs text-muted-foreground">owners</span>}
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

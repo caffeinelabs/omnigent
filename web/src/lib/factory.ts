@@ -140,8 +140,30 @@ export function factoryMemberTitle(
   return labels?.[FACTORY_ROLE_LABEL_KEY]?.trim() && shown ? shown : null;
 }
 
-/** Whether `pathname` is a factory cockpit route (`/factory`, `/factory/new`, `/factory/<id>`). */
+/**
+ * Whether `pathname` is a factory page: `/factory`, `/factory/new`,
+ * `/factory/<id>` and any page under it (`/factory/<id>/prs/<pr>`), behind an
+ * embed prefix too. A session whose id happens to read "factory" is not.
+ */
 export function isFactoryPath(pathname: string): boolean {
   const segments = pathname.split("/").filter(Boolean);
-  return segments.at(-1) === "factory" || segments.at(-2) === "factory";
+  const at = segments.indexOf("factory");
+  return at >= 0 && segments[at - 1] !== "c";
+}
+
+/** The factory a session belongs to (`omnigent.factory.id`), bare hex, or null. */
+export function factoryIdOf(labels: Record<string, string> | undefined): string | null {
+  const raw = labels?.[FACTORY_ID_LABEL_KEY]?.trim();
+  return raw ? normalizeFactoryId(raw) : null;
+}
+
+/**
+ * Whether a session is a member of a factory someone else shared with the
+ * viewer: the sidebar lists those under its Factory entry, not in Shared.
+ */
+export function isSharedFactoryMember(
+  labels: Record<string, string> | undefined,
+  ownedByViewer: boolean,
+): boolean {
+  return !ownedByViewer && factoryIdOf(labels) !== null;
 }

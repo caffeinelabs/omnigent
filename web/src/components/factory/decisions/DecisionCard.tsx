@@ -32,6 +32,7 @@ import { cn } from "@/lib/utils";
 import { ageText, decisionAnchorId } from "../board/boardModel";
 import { useFactoryServerNowS } from "../factoryClock";
 import { formatElapsed } from "../factoryFormat";
+import { LEVER_REASON, ReasonGated, useViewer, useViewerCan } from "../shell/viewerCan";
 import { FoldableMarkdown } from "../transcript/FoldableMarkdown";
 
 /** An open decision waits this long before its wait time turns red. */
@@ -97,6 +98,29 @@ function kindLabel(decision: DecisionView): string {
   return decision.blocking ? "Blocking" : "Question";
 }
 
+/** `"for you"`, `"for owners"`, `"for mia@…"`; null for the default (operators). */
+export function assigneeText(decision: DecisionView, viewerId: string | null): string | null {
+  if (decision.claimed_by) {
+    return decision.claimed_by === viewerId
+      ? "claimed by you"
+      : `claimed by ${decision.claimed_by}`;
+  }
+  const assignee = decision.assignee ?? null;
+  if (!assignee || assignee === "operators") return null;
+  if (assignee === "owners") return "for owners";
+  return assignee === viewerId ? "for you" : `for ${assignee}`;
+}
+
+/** Why the viewer may not answer `decision`, or null when they may. */
+export function answerBlockedReason(
+  decision: DecisionView,
+  can: { answer: boolean; settings: boolean },
+): string | null {
+  if (!can.answer) return LEVER_REASON.answer;
+  if (decision.assignee === "owners" && !can.settings) return "Owners answer this decision";
+  return null;
+}
+
 /** The receipt line of an answered decision (also used by the rail's answered list). */
 export function DecisionReceipt({ decision }: { decision: DecisionView }) {
   const delivered = decision.delivered_at != null;
@@ -140,6 +164,7 @@ function OptionButton({
   option,
   index,
   disabled,
+  blockedReason,
   picked,
   onPick,
 }: {
@@ -147,6 +172,8 @@ function OptionButton({
   option: DecisionOptionView;
   index: number;
   disabled: boolean;
+  /** Why the viewer may not answer (the option is disabled with this tooltip). */
+  blockedReason: string | null;
   picked: boolean;
   onPick: (option: DecisionOptionView) => void;
 }) {
@@ -195,19 +222,21 @@ function OptionButton({
     );
   }
   return (
-    <Button
-      variant="outline"
-      size="sm"
-      onClick={() => onPick(option)}
-      disabled={disabled}
-      data-testid={testId}
-      data-recommended={option.recommended ? "true" : undefined}
-      title={option.description ?? undefined}
-      componentId="factory.decision.option"
-      className={className}
-    >
-      {body}
-    </Button>
+    <ReasonGated reason={blockedReason} testId="answer">
+      <Button
+        variant="outline"
+        size="sm"
+        onClick={() => onPick(option)}
+        disabled={disabled}
+        data-testid={testId}
+        data-recommended={option.recommended ? "true" : undefined}
+        title={blockedReason ? undefined : (option.description ?? undefined)}
+        componentId="factory.decision.option"
+        className={className}
+      >
+        {body}
+      </Button>
+    </ReasonGated>
   );
 }
 
@@ -221,6 +250,10 @@ export function DecisionCard({
 }: DecisionCardProps) {
   const queryClient = useQueryClient();
   const nowS = useFactoryServerNowS(clockOffsetS);
+  const viewer = useViewer();
+  const { can } = useViewerCan();
+  const blockedReason = answerBlockedReason(decision, can);
+  const assigned = assigneeText(decision, viewer?.user_id ?? null);
   const ref = useRef<HTMLElement>(null);
   const [phase, setPhase] = useState<Phase>({ kind: "idle" });
   const [composing, setComposing] = useState(false);
@@ -250,7 +283,7 @@ export function DecisionCard({
   const busy = phase.kind === "answering";
 
   const submit = (answer: { option_id?: string; text?: string }, label: string) => {
-    if (busy || !open) return;
+    if (busy || !open || blockedReason) return;
     setPhase({ kind: "answering", label });
     answerDecision(decision.id, answer).then(
       ({ decision: stored }) => {
@@ -423,6 +456,12 @@ export function DecisionCard({
           {" · "}
           <span className="font-mono">{decision.ref}</span>
         </span>
+        {assigned && (
+          <span
+            data-testid={`decision-assignee-${decision.ref}`}
+            className="font-normal text-muted-foreground"
+          >{` · ${assigned}`}</span>
+        )}
         {open ? (
           <span
             data-testid={`decision-wait-${decision.ref}`}
@@ -485,6 +524,7 @@ export function DecisionCard({
                     option={option}
                     index={i}
                     disabled={busy}
+                    blockedReason={blockedReason}
                     picked={picked === option.id}
                     onPick={pick}
                   />
@@ -494,7 +534,7 @@ export function DecisionCard({
           )}
           {decision.allow_text &&
             !busy &&
-            (composing ? (
+            (composing && !blockedReason ? (
               <div className="flex flex-col gap-1.5">
                 <Textarea
                   data-testid={`decision-text-${decision.ref}`}
@@ -521,18 +561,20 @@ export function DecisionCard({
                 </div>
               </div>
             ) : (
-              <Button
-                variant="ghost"
-                size="sm"
-                onClick={() => setComposing(true)}
-                data-testid={`decision-answer-${decision.ref}`}
-                componentId="factory.decision.answer"
-                // Flush with the card's text; the ghost padding shows on hover only.
-                className="-ml-2.5 self-start text-muted-foreground"
-              >
-                <MessageSquareIcon />
-                Answer…
-              </Button>
+              <ReasonGated reason={blockedReason} className="self-start" testId="answer">
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setComposing(true)}
+                  data-testid={`decision-answer-${decision.ref}`}
+                  componentId="factory.decision.answer"
+                  // Flush with the card's text; the ghost padding shows on hover only.
+                  className="-ml-2.5 self-start text-muted-foreground"
+                >
+                  <MessageSquareIcon />
+                  Answer…
+                </Button>
+              </ReasonGated>
             ))}
           {phase.kind === "error" && (
             <p data-testid={`decision-error-${decision.ref}`} className="text-destructive">

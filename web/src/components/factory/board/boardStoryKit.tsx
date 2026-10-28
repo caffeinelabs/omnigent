@@ -1,5 +1,5 @@
-// Story-only kit for the cockpit board: the cockpit page mounted on a fake
-// `/v1/factory/*` (the live-run fixtures by default), a component frame, and
+// Story-only kit for the factory pages: any page of the factory shell mounted
+// on a fake `/v1/factory/*` (the live-run fixtures by default), a component frame, and
 // a switch that puts the whole document in dark mode so portalled drawers and
 // hover cards follow the story's theme.
 
@@ -7,7 +7,6 @@ import { type ReactNode, useContext, useLayoutEffect } from "react";
 import { Route, Routes } from "react-router-dom";
 import { ForceThemeContext } from "@/components/theme/ThemeProvider";
 import { FactoryPage } from "@/pages/factory/FactoryPage";
-import { ProjectPage } from "@/pages/factory/ProjectPage";
 import type { EventPage, FactorySnapshot } from "@/lib/factoryApi";
 import { LIVE_RUN_FACTORY_ID } from "../__fixtures__/liveRun";
 import {
@@ -57,16 +56,19 @@ function eventsRoute(page?: EventPage): StoryRoutes[string] {
 export interface CockpitStoryOptions extends FactoryFrameOptions {
   snapshot?: FactorySnapshot;
   events?: EventPage;
-  /** Query string after `/factory/<id>`, e.g. `?project=api-version`. */
+  /** The page under `/factory/<id>`, e.g. `/projects` (the Overview when omitted). */
+  path?: string;
+  /** Query string after the page, e.g. `?project=api-version`. */
   search?: string;
   /** Pushes arrive (`● Live`); `false` shows the reconnecting state. */
   live?: boolean;
 }
 
-/** The cockpit page over the whole story viewport (a card's title opens its project page). */
+/** A factory page over the whole story viewport (links move between its pages). */
 export function CockpitStory({
   snapshot,
   events,
+  path = "",
   search = "",
   live = true,
   theme = "light",
@@ -77,7 +79,7 @@ export function CockpitStory({
     <FactoryStoryFrame
       mode="viewport"
       theme={theme}
-      route={`/factory/${LIVE_RUN_FACTORY_ID}${search}`}
+      route={`/factory/${LIVE_RUN_FACTORY_ID}${path}${search}`}
       routes={{
         [SNAPSHOT_PATH]: { body: snapshot ?? storySnapshot() },
         [EVENTS_PATH]: eventsRoute(events),
@@ -88,8 +90,7 @@ export function CockpitStory({
       <DocumentTheme theme={theme} />
       <FactoryLiveContext.Provider value={live}>
         <Routes>
-          <Route path="/factory/:factoryId" element={<FactoryPage />} />
-          <Route path="/factory/:factoryId/projects/:slug" element={<ProjectPage />} />
+          <Route path="/factory/:factoryId/*" element={<FactoryPage />} />
         </Routes>
       </FactoryLiveContext.Provider>
     </FactoryStoryFrame>

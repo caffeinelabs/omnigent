@@ -1,151 +1,66 @@
 /**
- * One factory project (`/factory/:factoryId/projects/:slug`), from the same
- * live snapshot as the cockpit: the header, then tabs synced to `?tab=`:
- * Overview (charter, team, decisions, plan), PRs, Demos, Previews & envs and
- * Activity. `?review=<pr number>` opens the review drawer over the page and
- * `?decision=<D-n>` highlights a decision on the Overview.
+ * One factory project (`/factory/:factoryId/projects/:slug`) as a page of
+ * anchored sections: Overview (charter, progress, plan), Tasks, PRs, Demos
+ * (every recorded run, playing inline, older runs per PR), Previews & env,
+ * Decisions, Team, Loops and Activity, with a link to the project's Room
+ * thread. `#demos` and the other section ids scroll to their section;
+ * `?decision=<D-n>` highlights a decision.
  */
 
-import { type ReactNode, useCallback, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { ChevronRightIcon } from "lucide-react";
-import { PageScroll } from "@/components/PageScroll";
 import { ActivityList } from "@/components/factory/activity/ActivityList";
-import { projectDemoCount, projectPrList } from "@/components/factory/board/boardModel";
-import { FactoryControlsProvider } from "@/components/factory/controls/FactoryControlsContext";
-import { useFactoryServerNowS } from "@/components/factory/factoryClock";
-import { type ProjectTab, factoryPageHref, projectTab } from "@/components/factory/factoryRoutes";
-import { FactoryLoadError } from "@/components/factory/FactoryLoadError";
+import { projectPrList } from "@/components/factory/board/boardModel";
+import { DecisionsRail } from "@/components/factory/decisions/DecisionsRail";
+import {
+  PROJECT_SECTIONS,
+  type ProjectSection,
+  factoryPageHref,
+  prPageHref,
+  projectsPageHref,
+} from "@/components/factory/factoryRoutes";
 import { ProjectDemos } from "@/components/factory/project/ProjectDemos";
 import { ProjectHeader } from "@/components/factory/project/ProjectHeader";
-import { ProjectOverview } from "@/components/factory/project/ProjectOverview";
+import { projectDecisions } from "@/components/factory/project/projectModel";
+import { CharterCard, PlanCard } from "@/components/factory/project/ProjectOverview";
 import { ProjectPreviews } from "@/components/factory/project/ProjectPreviews";
 import { ProjectPrs } from "@/components/factory/project/ProjectPrs";
-import { ReviewDrawer } from "@/components/factory/review/ReviewDrawer";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { COCKPIT_MIN_REFRESH_MS, useFactory } from "@/hooks/useFactory";
-import { snapshotNotices, useFactoryNotifications } from "@/hooks/useFactoryNotifications";
+import { EditCharterDialog } from "@/components/factory/controls/EditCharterDialog";
+import {
+  LoopsSection,
+  PageSection,
+  ProgressCard,
+  SectionNav,
+  TasksSection,
+  TeamTable,
+  roomLink,
+} from "@/components/factory/projects/ProjectSections";
+import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
+import { useHashScroll } from "@/components/factory/shell/scroll";
+import { findPr } from "@/components/factory/shell/shellRoutes";
+import { plural } from "@/components/factory/factoryFormat";
 import type { FactorySnapshot, ProjectView } from "@/lib/factoryApi";
-import { Link, useParams, useSearchParams } from "@/lib/routing";
-import { ApiError } from "@/lib/sessionsApi";
+import { Link, useNavigate, useParams, useSearchParams } from "@/lib/routing";
 
-function Breadcrumb({
-  factoryId,
-  factoryName,
-  projectTitle,
-}: {
-  factoryId: string;
-  factoryName: string | null;
-  projectTitle: string;
-}) {
-  const sep = <ChevronRightIcon aria-hidden className="size-3.5 shrink-0 opacity-60" />;
+function Breadcrumb({ factoryId, title }: { factoryId: string; title: string }) {
   return (
-    <nav aria-label="Breadcrumb" data-testid="project-breadcrumb" className="mb-3">
+    <nav aria-label="Breadcrumb" data-testid="project-breadcrumb">
       <ol className="flex min-w-0 items-center gap-1 text-sm text-muted-foreground">
         <li className="shrink-0">
           <Link
-            to="/factory"
-            componentId="factory.project.crumb_index"
+            to={projectsPageHref(factoryId)}
+            componentId="factory.project.crumb_projects"
             className="hover:text-foreground"
           >
-            Factory
+            Projects
           </Link>
         </li>
-        <li className="flex min-w-0 shrink items-center gap-1">
-          {sep}
-          <Link
-            to={factoryPageHref(factoryId)}
-            componentId="factory.project.crumb_factory"
-            data-testid="project-breadcrumb-factory"
-            className="min-w-0 truncate hover:text-foreground"
-          >
-            {factoryName ?? "…"}
-          </Link>
-        </li>
-        <li className="flex min-w-0 shrink-[2] items-center gap-1" aria-current="page">
-          {sep}
-          <span className="min-w-0 truncate text-foreground">{projectTitle}</span>
+        <li className="flex min-w-0 items-center gap-1" aria-current="page">
+          <ChevronRightIcon aria-hidden className="size-3.5 shrink-0 opacity-60" />
+          <span className="min-w-0 truncate text-foreground">{title}</span>
         </li>
       </ol>
     </nav>
-  );
-}
-
-function ProjectSkeleton() {
-  return (
-    <div
-      aria-busy="true"
-      aria-label="Loading project"
-      data-testid="project-loading"
-      className="flex flex-col gap-4"
-    >
-      <div className="flex items-center gap-3">
-        <div className="h-7 w-64 animate-pulse rounded bg-muted" />
-        <div className="ml-auto h-7 w-32 animate-pulse rounded bg-muted" />
-      </div>
-      <div className="h-4 w-80 max-w-full animate-pulse rounded bg-muted" />
-      <div className="h-20 w-full animate-pulse rounded-xl bg-muted" />
-      <div className="flex gap-4">
-        {[0, 1, 2, 3, 4].map((i) => (
-          <div key={i} className="h-5 w-20 animate-pulse rounded bg-muted" />
-        ))}
-      </div>
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_22rem]">
-        <div className="h-64 animate-pulse rounded-xl bg-muted" />
-        <div className="h-40 animate-pulse rounded-xl bg-muted" />
-      </div>
-    </div>
-  );
-}
-
-const TAB_LABEL: Record<ProjectTab, string> = {
-  overview: "Overview",
-  prs: "PRs",
-  demos: "Demos",
-  previews: "Previews & envs",
-  activity: "Activity",
-};
-
-function TabCount({ n }: { n: number }) {
-  return (
-    <span className="rounded-full bg-muted px-1.5 text-xs leading-4 font-normal text-muted-foreground tabular-nums">
-      {n}
-    </span>
-  );
-}
-
-/** Line tabs that scroll sideways on a phone rather than wrap. */
-function ProjectTabSwitch({
-  tab,
-  counts,
-  onChange,
-}: {
-  tab: ProjectTab;
-  counts: Partial<Record<ProjectTab, number>>;
-  onChange: (tab: ProjectTab) => void;
-}) {
-  return (
-    <Tabs
-      value={tab}
-      onValueChange={(v) => onChange(projectTab(v))}
-      componentId="factory.project.tab"
-      className="min-w-0"
-    >
-      <div className="-mx-4 overflow-x-auto border-b border-border px-4 [scrollbar-width:none] md:mx-0 md:px-0 [&::-webkit-scrollbar]:hidden">
-        <TabsList variant="line" data-testid="project-tabs" className="h-9 gap-3">
-          {(Object.keys(TAB_LABEL) as ProjectTab[]).map((key) => (
-            <TabsTrigger
-              key={key}
-              value={key}
-              data-testid={`project-tab-${key}`}
-              className="flex-none px-0.5"
-            >
-              {TAB_LABEL[key]}
-              {counts[key] != null && counts[key] > 0 && <TabCount n={counts[key]} />}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </div>
-    </Tabs>
   );
 }
 
@@ -164,169 +79,169 @@ function NotOnBoard({ factoryId, slug }: { factoryId: string; slug: string }) {
       </p>
       <Link
         to={factoryPageHref(factoryId)}
-        componentId="factory.project.back_to_board"
+        componentId="factory.project.back_to_overview"
         className="text-sm underline underline-offset-2 hover:text-foreground"
       >
-        Back to the board
+        Back to the Overview
       </Link>
     </div>
   );
 }
 
+/** The section the reader is in: the last one whose top passed a line near the top. */
+function useActiveSection(ids: readonly ProjectSection[]): ProjectSection {
+  const [active, setActive] = useState<ProjectSection>(ids[0] ?? "overview");
+  useEffect(() => {
+    if (typeof IntersectionObserver === "undefined") return;
+    const seen = new Map<string, boolean>();
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) seen.set(entry.target.id, entry.isIntersecting);
+        const first = ids.find((id) => seen.get(id));
+        if (first) setActive(first);
+      },
+      { rootMargin: "-20% 0px -65% 0px" },
+    );
+    for (const id of ids) {
+      const el = document.getElementById(id);
+      if (el) observer.observe(el);
+    }
+    return () => observer.disconnect();
+  }, [ids]);
+  return active;
+}
+
 function ProjectBody({
   snapshot,
   project,
+  nowS,
   clockOffsetS,
 }: {
   snapshot: FactorySnapshot;
   project: ProjectView;
+  nowS: number;
   clockOffsetS: number;
 }) {
-  const [params, setParams] = useSearchParams();
-  const nowS = useFactoryServerNowS(clockOffsetS);
-  const tab = projectTab(params.get("tab"));
-  const review = params.get("review");
+  const [params] = useSearchParams();
+  const navigate = useNavigate();
+  const [editing, setEditing] = useState(false);
+  const fid = snapshot.factory.id;
   const prs = projectPrList(snapshot, project);
-  useFactoryNotifications(useMemo(() => snapshotNotices(snapshot), [snapshot]));
-
-  const setParam = useCallback(
-    (key: string, value: string | null, replace = false) =>
-      setParams(
-        (prev) => {
-          const next = new URLSearchParams(prev);
-          if (value == null) next.delete(key);
-          else next.set(key, value);
-          return next;
-        },
-        { replace },
-      ),
-    [setParams],
-  );
-  const onReview = (number: number) => setParam("review", String(number));
-  const onDecision = (ref: string) => {
-    setParams((prev) => {
-      const next = new URLSearchParams(prev);
-      next.delete("tab");
-      next.set("decision", ref);
-      return next;
-    });
+  const decisions = projectDecisions(snapshot, project);
+  const openDecisions = decisions.filter((d) => d.status === "open").length;
+  const demoRuns = prs.reduce((n, pr) => n + (pr.demo ? 1 + pr.older_demos : 0), 0);
+  const active = useActiveSection(PROJECT_SECTIONS);
+  useHashScroll();
+  const onReview = (number: number) =>
+    navigate(prPageHref(fid, findPr(snapshot.prs, String(number))?.id ?? number));
+  const onDecision = (ref: string) =>
+    navigate(`?decision=${encodeURIComponent(ref)}#decisions`, { replace: true });
+  const counts: Partial<Record<ProjectSection, number>> = {
+    tasks: project.tasks_summary?.total ?? 0,
+    prs: prs.length,
+    demos: demoRuns,
+    decisions: openDecisions,
+    team: (project.pl ? 1 : 0) + project.team.length,
   };
-  const reviewPr = review
-    ? (snapshot.prs.find((pr) => String(pr.number) === review || pr.id === review) ?? null)
-    : null;
-  const closeReview = () =>
-    setParams((prev) => {
-      const next = new URLSearchParams(prev);
-      for (const key of ["review", "pr", "preview"]) next.delete(key);
-      return next;
-    });
-
-  let body: ReactNode;
-  switch (tab) {
-    case "prs":
-      body = <ProjectPrs snapshot={snapshot} project={project} nowS={nowS} onReview={onReview} />;
-      break;
-    case "demos":
-      body = (
-        <ProjectDemos
-          factoryId={snapshot.factory.id}
-          project={project}
-          prs={prs}
-          members={snapshot.members}
-          nowS={nowS}
-          onReview={onReview}
-        />
-      );
-      break;
-    case "previews":
-      body = <ProjectPreviews snapshot={snapshot} project={project} nowS={nowS} />;
-      break;
-    case "activity":
-      body = (
-        <ActivityList
-          factoryId={snapshot.factory.id}
-          projects={snapshot.projects}
-          members={snapshot.members}
-          project={project.slug}
-        />
-      );
-      break;
-    default:
-      body = (
-        <ProjectOverview
-          snapshot={snapshot}
-          project={project}
-          nowS={nowS}
-          clockOffsetS={clockOffsetS}
-          highlightDecision={params.get("decision")}
-        />
-      );
-  }
-
   return (
     <div data-testid={`project-page-${project.slug}`} className="flex min-w-0 flex-col gap-4">
+      <Breadcrumb factoryId={fid} title={project.title} />
       <ProjectHeader snapshot={snapshot} project={project} nowS={nowS} onDecision={onDecision} />
-      <ProjectTabSwitch
-        tab={tab}
-        counts={{ prs: prs.length, demos: projectDemoCount(prs) }}
-        onChange={(next) => setParam("tab", next === "overview" ? null : next, true)}
+      <SectionNav
+        sections={PROJECT_SECTIONS}
+        counts={counts}
+        active={active}
+        room={roomLink(fid, project)}
       />
-      <div data-testid="project-tab-panel" data-tab={tab} className="min-w-0">
-        {body}
+      <div className="flex min-w-0 flex-col gap-8">
+        <PageSection id="overview" title="Overview">
+          <div className="grid min-w-0 grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,22rem)]">
+            <CharterCard project={project} onEdit={() => setEditing(true)} />
+            <div className="flex min-w-0 flex-col gap-4">
+              <ProgressCard snapshot={snapshot} project={project} nowS={nowS} />
+              <PlanCard project={project} />
+            </div>
+          </div>
+        </PageSection>
+        <PageSection id="tasks" title="Tasks" meta="the project’s work graph">
+          <TasksSection project={project} />
+        </PageSection>
+        <PageSection
+          id="prs"
+          title="PRs"
+          meta={prs.length > 0 ? plural(prs.length, "PR") : undefined}
+        >
+          <ProjectPrs snapshot={snapshot} project={project} nowS={nowS} onReview={onReview} />
+        </PageSection>
+        <PageSection id="demos" title="Demos" meta="every recorded run, newest first">
+          <ProjectDemos
+            factoryId={fid}
+            project={project}
+            prs={prs}
+            members={snapshot.members}
+            nowS={nowS}
+          />
+        </PageSection>
+        <PageSection id="previews" title="Previews & env">
+          <ProjectPreviews snapshot={snapshot} project={project} nowS={nowS} />
+        </PageSection>
+        <PageSection
+          id="decisions"
+          title="Decisions"
+          meta={openDecisions > 0 ? `${openDecisions} open` : undefined}
+        >
+          {decisions.length > 0 ? (
+            <div className="max-w-3xl">
+              <DecisionsRail
+                factoryId={fid}
+                decisions={decisions}
+                highlightId={params.get("decision")}
+                clockOffsetS={clockOffsetS}
+                showClosed
+                hideHeading
+              />
+            </div>
+          ) : (
+            <p data-testid="project-decisions-empty" className="text-sm text-muted-foreground">
+              Nothing asked yet. Questions from the PL and the supervisor land here.
+            </p>
+          )}
+        </PageSection>
+        <PageSection id="team" title="Team" meta="agents on this project">
+          <TeamTable project={project} nowS={nowS} />
+        </PageSection>
+        <PageSection id="loops" title="Loops">
+          <LoopsSection project={project} />
+        </PageSection>
+        <PageSection id="activity" title="Activity">
+          <ActivityList
+            factoryId={fid}
+            projects={snapshot.projects}
+            members={snapshot.members}
+            project={project.slug}
+            heightClassName="max-h-[min(60vh,36rem)]"
+          />
+        </PageSection>
       </div>
-      {review && (
-        <ReviewDrawer
-          factoryId={snapshot.factory.id}
-          pr={reviewPr}
-          demo={reviewPr?.demo ?? null}
-          onClose={closeReview}
-          snapshot={snapshot}
-          nowS={nowS}
-          previewUnavailable={params.get("preview") === "unavailable"}
-        />
-      )}
+      <EditCharterDialog
+        factoryId={fid}
+        project={project}
+        open={editing}
+        onOpenChange={setEditing}
+      />
     </div>
   );
 }
 
 export function ProjectPage() {
-  const { factoryId = "", slug = "" } = useParams<{ factoryId: string; slug: string }>();
-  const { data, error, isLoading, updatedAt, clockOffsetS, refetch } = useFactory(factoryId, {
-    minRefreshMs: COCKPIT_MIN_REFRESH_MS,
-  });
-  const missing = !data && error instanceof ApiError && error.status === 404;
-  const project = data?.projects.find((p) => p.slug === slug) ?? null;
+  const { slug = "" } = useParams<{ slug: string }>();
+  const { snapshot, nowS, clockOffsetS } = useFactoryShell();
+  const project = useMemo(
+    () => snapshot.projects.find((p) => p.slug === slug) ?? null,
+    [snapshot, slug],
+  );
+  if (!project) return <NotOnBoard factoryId={snapshot.factory.id} slug={slug} />;
   return (
-    <PageScroll
-      data-testid="project-page"
-      maxWidthClassName="max-w-7xl"
-      contentClassName="px-4 md:px-6"
-    >
-      <Breadcrumb
-        factoryId={factoryId}
-        factoryName={data?.factory.name ?? null}
-        projectTitle={project?.title ?? slug}
-      />
-      {error && !missing && (
-        <FactoryLoadError
-          error={error}
-          updatedAt={data ? updatedAt : 0}
-          onRetry={refetch}
-          what="this project"
-        />
-      )}
-      {isLoading && <ProjectSkeleton />}
-      {missing && (
-        <p data-testid="factory-missing" className="text-ui text-muted-foreground">
-          This factory doesn’t exist, or you can’t see it.
-        </p>
-      )}
-      {data && !project && <NotOnBoard factoryId={factoryId} slug={slug} />}
-      {data && project && (
-        <FactoryControlsProvider key={data.factory.id} snapshot={data}>
-          <ProjectBody snapshot={data} project={project} clockOffsetS={clockOffsetS} />
-        </FactoryControlsProvider>
-      )}
-    </PageScroll>
+    <ProjectBody snapshot={snapshot} project={project} nowS={nowS} clockOffsetS={clockOffsetS} />
   );
 }

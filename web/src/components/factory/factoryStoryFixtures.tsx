@@ -24,6 +24,7 @@ import {
   preflightOk,
 } from "./__fixtures__/liveRun";
 import { FactoryNowContext } from "./factoryClock";
+import { shellRoutes } from "./shell/__fixtures__/shellFixtures";
 
 /** One fake route: a body (200), a status error, or a read that never settles. */
 export type StoryResponse =
@@ -66,6 +67,7 @@ export function liveRunRoutes(): StoryRoutes {
       body: filterEventPage(liveRunEvents(), path),
     }),
     "/v1/factory/decisions": { body: liveRunOpenDecisions() },
+    ...shellRoutes(),
   };
 }
 

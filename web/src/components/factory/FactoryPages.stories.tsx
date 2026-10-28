@@ -21,7 +21,7 @@ function cockpitStory({ routes, ...frame }: FactoryFrameOptions = {}): Story {
         {...frame}
       >
         <Routes>
-          <Route path="/factory/:factoryId" element={<FactoryPage />} />
+          <Route path="/factory/:factoryId/*" element={<FactoryPage />} />
         </Routes>
       </FactoryStoryFrame>
     ),
@@ -37,7 +37,7 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-/** The cockpit header from the live snapshot (the board lands below it). */
+/** The factory shell over the Overview, from the live snapshot. */
 export const Header = cockpitStory();
 
 export const HeaderDark = cockpitStory({ theme: "dark" });

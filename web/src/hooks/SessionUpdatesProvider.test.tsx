@@ -451,6 +451,8 @@ describe("SessionUpdatesProvider factory_changed frames", () => {
       ["factory", "f4f4ba9c"],
       ["factory-events", "f4f4ba9c"],
       ["factory-demos", "f4f4ba9c"],
+      ["factory-people", "f4f4ba9c"],
+      ["factory-spans", "f4f4ba9c"],
       ["factories"],
       ["factory-decisions"],
     ]);

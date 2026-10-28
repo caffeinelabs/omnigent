@@ -31,6 +31,7 @@ import { cn } from "@/lib/utils";
 import { ageText } from "../board/boardModel";
 import { mergeUrl } from "../board/PrRow";
 import { TONE_CHIP, shortSha } from "../factoryFormat";
+import { LeverGated, useViewerCan } from "../shell/viewerCan";
 import { mergeSummary } from "./reviewModel";
 import { DotParts } from "./reviewParts";
 
@@ -96,23 +97,25 @@ export function IMergedItButton({
   };
   return (
     <span className={cn("inline-flex items-center gap-2", className)}>
-      <Button
-        variant="ghost"
-        size={size}
-        onClick={check}
-        disabled={checking}
-        data-testid={testId}
-        data-state={checking ? "checking" : "idle"}
-        componentId="factory.review.i_merged_it"
-        title="Merged on GitHub? The poller checks now instead of on its next round."
-        className="text-muted-foreground max-md:flex-1"
-      >
-        <RefreshCwIcon
-          className={cn(checking && "animate-spin motion-reduce:animate-none")}
-          aria-hidden
-        />
-        {checking ? "Checking…" : "I merged it"}
-      </Button>
+      <LeverGated lever="review" className="max-md:flex-1">
+        <Button
+          variant="ghost"
+          size={size}
+          onClick={check}
+          disabled={checking}
+          data-testid={testId}
+          data-state={checking ? "checking" : "idle"}
+          componentId="factory.review.i_merged_it"
+          title="Merged on GitHub? The poller checks now instead of on its next round."
+          className="text-muted-foreground max-md:flex-1"
+        >
+          <RefreshCwIcon
+            className={cn(checking && "animate-spin motion-reduce:animate-none")}
+            aria-hidden
+          />
+          {checking ? "Checking…" : "I merged it"}
+        </Button>
+      </LeverGated>
       {note && (
         <span data-testid={`${testId}-note`} className="text-sm text-muted-foreground">
           {note}
@@ -204,6 +207,7 @@ export function ReviewActions({
   const [text, setText] = useState("");
   const [copied, setCopied] = useState<"idle" | "copied" | "failed">("idle");
   const [blockedUrl, setBlockedUrl] = useState<string | null>(null);
+  const canReview = useViewerCan().can.review;
 
   if (pr.state === "merged") return <MergedBanner pr={pr} nowS={nowS} />;
   if (pr.state === "closed") return <ClosedBanner pr={pr} nowS={nowS} />;
@@ -372,39 +376,55 @@ export function ReviewActions({
           {HUMANS_MERGE}
         </span>
         <div className="grid grid-cols-2 gap-2 md:flex md:flex-wrap md:items-center">
-          <Tooltip>
-            <TooltipTrigger asChild>
+          {canReview ? (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="sm"
+                  // Filled only once every gate is green; approving earlier stays possible.
+                  variant={pr.ready ? "default" : "outline"}
+                  onClick={approve}
+                  loading={busy && feedback.verdict === "approved"}
+                  disabled={busy}
+                  data-testid="review-approve"
+                  componentId="factory.review.approve"
+                  className={cn("col-span-2", hideWhileComposing)}
+                >
+                  <CheckIcon />
+                  Approve & open merge
+                  <ExternalLinkIcon />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{HUMANS_MERGE}</TooltipContent>
+            </Tooltip>
+          ) : (
+            <LeverGated lever="review" className="col-span-2 *:w-full">
               <Button
                 size="sm"
-                // Filled only once every gate is green; approving earlier stays possible.
-                variant={pr.ready ? "default" : "outline"}
-                onClick={approve}
-                loading={busy && feedback.verdict === "approved"}
-                disabled={busy}
+                variant="outline"
                 data-testid="review-approve"
                 componentId="factory.review.approve"
-                className={cn("col-span-2", hideWhileComposing)}
               >
                 <CheckIcon />
                 Approve & open merge
-                <ExternalLinkIcon />
               </Button>
-            </TooltipTrigger>
-            <TooltipContent>{HUMANS_MERGE}</TooltipContent>
-          </Tooltip>
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setComposing((v) => !v)}
-            aria-expanded={composing}
-            disabled={busy}
-            data-testid="review-request-changes"
-            componentId="factory.review.request_changes"
-            className={cn(composing && "max-md:col-span-2")}
-          >
-            <MessageSquareWarningIcon />
-            Request changes…
-          </Button>
+            </LeverGated>
+          )}
+          <LeverGated lever="review" className="*:w-full">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setComposing((v) => !v)}
+              aria-expanded={composing}
+              disabled={busy}
+              data-testid="review-request-changes"
+              componentId="factory.review.request_changes"
+              className={cn(composing && "max-md:col-span-2")}
+            >
+              <MessageSquareWarningIcon />
+              Request changes…
+            </Button>
+          </LeverGated>
           <Tooltip>
             <TooltipTrigger asChild>
               <Button asChild size="sm" variant="outline" className={cn(hideWhileComposing)}>

@@ -7,7 +7,6 @@ import { Route, Routes } from "react-router-dom";
 import { ImageLightboxProvider } from "@/components/ImageLightbox";
 import type { DemoListResponse, DemoView, FactorySnapshot } from "@/lib/factoryApi";
 import { FactoryPage } from "@/pages/factory/FactoryPage";
-import { ProjectPage } from "@/pages/factory/ProjectPage";
 import { LIVE_RUN_FACTORY_ID } from "../__fixtures__/liveRun";
 import { boardActivityEvents, mockScreenshot } from "../board/__fixtures__/boardFixtures";
 import { DocumentTheme, EVENTS_PATH, SNAPSHOT_PATH } from "../board/boardStoryKit";
@@ -27,10 +26,12 @@ import {
   UX_DEMO_ID,
   apiCalls9634,
   filterDemos,
+  projectDemosOf,
   projectScenario,
 } from "./__fixtures__/projectFixtures";
 
 export const DEMOS_PATH = `${SNAPSHOT_PATH}/demos`;
+export const projectDemosPath = (slug: string) => `${SNAPSHOT_PATH}/projects/${slug}/demos`;
 
 /** How long the committed sample recording runs. */
 const SAMPLE_SECONDS = 9.3;
@@ -82,7 +83,7 @@ export interface ProjectStoryOptions extends FactoryFrameOptions {
   /** The demos route: a list (filtered per request), a read that never settles, or an error. */
   demos?: DemoListResponse | "pending" | { error: number; message?: string };
   slug?: string;
-  /** Query string after the project path, e.g. `?tab=demos`. */
+  /** Query string and hash after the project path, e.g. `#demos`. */
   search?: string;
   /** Pushes arrive (`● Live`); `false` shows the reconnecting state. */
   live?: boolean;
@@ -105,6 +106,14 @@ export function ProjectStory({
   const list = fixed
     ? null
     : withDemoMedia((demos as DemoListResponse | undefined) ?? scenario.demos);
+  const shown = withProjectMedia(snapshot ?? scenario.snapshot);
+  // Every project's demos route, grouped the way the server groups them.
+  const projectDemoRoutes = Object.fromEntries(
+    shown.projects.map((p) => [
+      projectDemosPath(p.slug),
+      list ? { body: projectDemosOf(list, p.slug, shown.prs) } : fixed!,
+    ]),
+  );
   return (
     <ImageLightboxProvider>
       <FactoryStoryFrame
@@ -112,9 +121,10 @@ export function ProjectStory({
         theme={theme}
         route={`/factory/${LIVE_RUN_FACTORY_ID}/projects/${slug}${search}`}
         routes={{
-          [SNAPSHOT_PATH]: { body: withProjectMedia(snapshot ?? scenario.snapshot) },
+          [SNAPSHOT_PATH]: { body: shown },
           [EVENTS_PATH]: (path) => ({ body: filterEventPage(boardActivityEvents(), path) }),
           [DEMOS_PATH]: list ? (path) => ({ body: filterDemos(list, path) }) : fixed!,
+          ...projectDemoRoutes,
           ...apiFileRoutes(),
           [`/v1/factory/demos/${UX_DEMO_ID}/files/${UX_API_FILE_ID}`]: { body: apiCalls9634() },
           ...routes,
@@ -124,8 +134,7 @@ export function ProjectStory({
         <DocumentTheme theme={theme} />
         <FactoryLiveContext.Provider value={live}>
           <Routes>
-            <Route path="/factory/:factoryId" element={<FactoryPage />} />
-            <Route path="/factory/:factoryId/projects/:slug" element={<ProjectPage />} />
+            <Route path="/factory/:factoryId/*" element={<FactoryPage />} />
           </Routes>
         </FactoryLiveContext.Provider>
       </FactoryStoryFrame>

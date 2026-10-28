@@ -24,14 +24,20 @@ import {
   type FactoryListResponse,
   type FactorySnapshot,
   type OpenDecisionsResponse,
+  type PeopleResponse,
   type Preflight,
+  type ProjectDemosResponse,
+  type SpanPage,
   fetchFactories,
   fetchFactoryDemos,
   fetchFactoryEvents,
+  fetchFactoryPeople,
   fetchFactoryPreflight,
   fetchFactorySnapshot,
+  fetchFactorySpans,
   fetchOpenDecisionCount,
   fetchOpenDecisions,
+  fetchProjectDemos,
 } from "@/lib/factoryApi";
 
 /** Poll cadence while the session-updates socket is disconnected. */
@@ -49,6 +55,11 @@ export const factoryEventsQueryKey = (factoryId: string, filters: EventFilters =
   ["factory-events", factoryId, filters] as const;
 export const factoryDemosQueryKey = (factoryId: string, filters: DemoFilters = {}) =>
   ["factory-demos", factoryId, filters] as const;
+export const projectDemosQueryKey = (factoryId: string, slug: string) =>
+  ["factory-demos", factoryId, "project", slug] as const;
+export const factoryPeopleQueryKey = (factoryId: string) => ["factory-people", factoryId] as const;
+export const factorySpansQueryKey = (factoryId: string, sinceMs: number) =>
+  ["factory-spans", factoryId, sinceMs] as const;
 export const FACTORIES_QUERY_KEY = ["factories"] as const;
 export const FACTORY_DECISIONS_QUERY_KEY = ["factory-decisions"] as const;
 export const FACTORY_PREFLIGHT_QUERY_KEY = ["factory-preflight"] as const;
@@ -59,6 +70,8 @@ export function factoryInvalidationKeys(factoryId: string): readonly (readonly u
     factoryQueryKey(factoryId),
     ["factory-events", factoryId],
     ["factory-demos", factoryId],
+    ["factory-people", factoryId],
+    ["factory-spans", factoryId],
     FACTORIES_QUERY_KEY,
     FACTORY_DECISIONS_QUERY_KEY,
   ];
@@ -231,6 +244,53 @@ export function useFactoryDemos(factoryId: string | null | undefined, filters: D
     queryKey: factoryDemosQueryKey(factoryId ?? "", filters),
     queryFn: ({ signal }) => fetchFactoryDemos(factoryId as string, filters, signal),
     enabled: Boolean(factoryId),
+    refetchInterval,
+    retry: retryTransient,
+  });
+}
+
+/** Every demo of one project's PRs, grouped by PR (the project page's Demos section). */
+export function useProjectDemos(factoryId: string | null | undefined, slug: string) {
+  const refetchInterval = useFallbackInterval();
+  return useQuery<ProjectDemosResponse>({
+    queryKey: projectDemosQueryKey(factoryId ?? "", slug),
+    queryFn: ({ signal }) => fetchProjectDemos(factoryId as string, slug, signal),
+    enabled: Boolean(factoryId && slug),
+    refetchInterval,
+    retry: retryTransient,
+  });
+}
+
+/** The factory roster (Share dialog, People settings); a frame on `people` refreshes it. */
+export function useFactoryPeople(
+  factoryId: string | null | undefined,
+  options: { enabled?: boolean } = {},
+) {
+  const refetchInterval = useFallbackInterval();
+  return useQuery<PeopleResponse>({
+    queryKey: factoryPeopleQueryKey(factoryId ?? ""),
+    queryFn: ({ signal }) => fetchFactoryPeople(factoryId as string, signal),
+    enabled: Boolean(factoryId) && (options.enabled ?? true),
+    refetchInterval,
+    retry: retryTransient,
+  });
+}
+
+/**
+ * The factory's spans since `sinceMs` (the activity heatmap). A server without
+ * the spans route answers 404, which callers treat as "use events".
+ */
+export function useFactorySpans(
+  factoryId: string | null | undefined,
+  sinceMs: number,
+  options: { enabled?: boolean } = {},
+) {
+  const refetchInterval = useFallbackInterval();
+  return useQuery<SpanPage>({
+    queryKey: factorySpansQueryKey(factoryId ?? "", sinceMs),
+    queryFn: ({ signal }) =>
+      fetchFactorySpans(factoryId as string, { since: sinceMs, limit: 2000 }, signal),
+    enabled: Boolean(factoryId) && (options.enabled ?? true),
     refetchInterval,
     retry: retryTransient,
   });

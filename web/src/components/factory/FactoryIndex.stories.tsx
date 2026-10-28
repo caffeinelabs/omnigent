@@ -9,6 +9,7 @@ import {
   tenProjectsFactoryList,
 } from "./__fixtures__/liveRun";
 import { FactoryStoryFrame, type FactoryFrameOptions } from "./factoryStoryFixtures";
+import { sharedFactoryList } from "./shell/__fixtures__/shellFixtures";
 
 // The index page over the whole story viewport, so its breakpoints follow
 // the captured width (1280 desktop, 390 phone).
@@ -97,3 +98,25 @@ const staleThenFailing: FactoryFrameOptions = {
 export const RefreshErrorKeepsCards = indexStory(staleThenFailing);
 
 export const RefreshErrorKeepsCardsDark = indexStory({ ...staleThenFailing, theme: "dark" });
+
+/** More than three factories: the dense table, "Shared with you by … · role" and what is yours. */
+export const DenseTableShared = indexStory({
+  routes: { "/v1/factory/factories": { body: sharedFactoryList() } },
+});
+
+export const DenseTableSharedDark = indexStory({
+  theme: "dark",
+  routes: { "/v1/factory/factories": { body: sharedFactoryList() } },
+});
+
+export const DenseTableSharedMobile: Story = {
+  ...DenseTableShared,
+  globals: { viewport: { value: "mobile2" } },
+};
+
+/** Two factories, one shared with you: cards say who shared it and as what. */
+export const SharedCards = indexStory({
+  routes: {
+    "/v1/factory/factories": { body: { data: sharedFactoryList().data.slice(0, 2) } },
+  },
+});
