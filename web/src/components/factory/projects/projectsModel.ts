@@ -9,19 +9,14 @@ import type {
   PrView,
   ProjectView,
 } from "@/lib/factoryApi";
-import { isIntegrationProject, orderProjects, projectPrList } from "../board/boardModel";
+import {
+  isClosedProject,
+  isIntegrationProject,
+  orderProjects,
+  projectPrList,
+} from "../board/boardModel";
 import { gateState, shownGates, GATE_KEY_LABEL, STATE_WORD } from "../board/GateChip";
 import { type FactoryTone, primaryPr } from "../factoryFormat";
-
-/** Projects past their work: done, merged or cancelled. */
-export function isClosedProject(project: ProjectView): boolean {
-  return (
-    project.stage === "done" ||
-    project.status === "cancelled" ||
-    project.status === "merged" ||
-    project.status === "done"
-  );
-}
 
 export interface ProjectSections {
   work: ProjectView[];
@@ -76,7 +71,7 @@ export function matchesFilter(
     case "ready":
       return project.stage === "ready";
     case "waiting":
-      return project.stage === "queued";
+      return project.stage === "queued" || project.overlay === "waiting";
     case "paused":
       return project.overlay === "paused";
   }
@@ -173,6 +168,14 @@ export function projectRowFacts(snapshot: FactorySnapshot, project: ProjectView)
       label: "failed",
       tone: "fail",
       title: project.overlay_reason ?? "Failed",
+    });
+  }
+  if (project.overlay === "waiting" && (project.depends_on?.length ?? 0) > 0) {
+    flags.push({
+      key: "waiting",
+      label: `after ${project.depends_on!.join(", ")}`,
+      tone: "muted",
+      title: project.overlay_reason ?? "Waits on the projects it depends on",
     });
   }
   if (project.overlay === "pr_closed") {

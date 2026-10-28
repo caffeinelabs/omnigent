@@ -5,7 +5,7 @@
 // instead. Pure; tests pin it.
 
 import type { EventView, FactorySnapshot, ProjectView, SpanKind, SpanView } from "@/lib/factoryApi";
-import { isIntegrationProject } from "../board/boardModel";
+import { isClosedProject, isIntegrationProject } from "../board/boardModel";
 import { formatElapsed } from "../factoryFormat";
 
 export const HEATMAP_WINDOW_S = 60 * 60;
@@ -88,6 +88,10 @@ export function projectNote(
     };
   }
   if (project.overlay === "paused") return { note: "paused", tone: "muted" };
+  if (project.overlay === "waiting") {
+    const deps = project.depends_on ?? [];
+    return { note: deps.length ? `waiting on ${deps.join(", ")}` : "waiting", tone: "muted" };
+  }
   if (project.stage === "ready") {
     return {
       note: `waiting for human ${formatElapsed(nowS - project.stage_since)}`,
@@ -100,7 +104,7 @@ export function projectNote(
 
 /** The projects a heatmap shows: work in flight, the busiest first. */
 function rowProjects(snapshot: FactorySnapshot): ProjectView[] {
-  return snapshot.projects.filter((p) => p.stage !== "done" && !isIntegrationProject(p));
+  return snapshot.projects.filter((p) => !isClosedProject(p) && !isIntegrationProject(p));
 }
 
 function finish(

@@ -1,13 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { liveRunSnapshot } from "../__fixtures__/liveRun";
 import { round3Snapshot, scaleSnapshot } from "../shell/__fixtures__/shellFixtures";
-import {
-  isClosedProject,
-  matchesFilter,
-  projectRowFacts,
-  projectSections,
-  sectionsSummary,
-} from "./projectsModel";
+import { isClosedProject } from "../board/boardModel";
+import { matchesFilter, projectRowFacts, projectSections, sectionsSummary } from "./projectsModel";
 
 describe("projectSections", () => {
   it("splits work in flight, the base env and closed projects", () => {
