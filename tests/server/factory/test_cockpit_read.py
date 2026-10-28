@@ -736,6 +736,7 @@ async def test_preflight_shape(
         "default_repo": "caffeinelabs/app",
         "default_base": "temp-main",
         "max_projects": 10,
+        "tier2": {"enabled": False, "reason": "OMNIGENT_FACTORY_SMITH is not 1", "checks": None},
     }
     assert bob["github"] == {"connected": False, "login": None}
     schemas.Preflight.model_validate(bob)

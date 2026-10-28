@@ -9,7 +9,9 @@ lead-only, ``sys_factory_env`` is for the project lead and env_keeper,
 ``sys_factory_demo`` for those two and the demo role,
 ``sys_factory_project`` and ``sys_factory_chat`` for the leads and project
 leads, and ``sys_factory_task`` (the work graph) for the leads (read), project leads and
-ICs (report).
+ICs (report). Learning: ``sys_factory_rules`` for every role, ``sys_factory_propose`` and
+``sys_factory_retro`` for leads and project leads, ``sys_factory_insights`` for those and
+the planner.
 """
 
 from __future__ import annotations
@@ -55,6 +57,10 @@ SYS_FACTORY_DEMO: Final = "sys_factory_demo"
 SYS_FACTORY_PROJECT: Final = "sys_factory_project"
 SYS_FACTORY_TASK: Final = "sys_factory_task"
 SYS_FACTORY_CHAT: Final = "sys_factory_chat"
+SYS_FACTORY_PROPOSE: Final = "sys_factory_propose"
+SYS_FACTORY_RULES: Final = "sys_factory_rules"
+SYS_FACTORY_INSIGHTS: Final = "sys_factory_insights"
+SYS_FACTORY_RETRO: Final = "sys_factory_retro"
 FACTORY_TOOL_NAMES: Final = frozenset(
     {
         SYS_SESSION_POST,
@@ -68,6 +74,10 @@ FACTORY_TOOL_NAMES: Final = frozenset(
         SYS_FACTORY_PROJECT,
         SYS_FACTORY_TASK,
         SYS_FACTORY_CHAT,
+        SYS_FACTORY_PROPOSE,
+        SYS_FACTORY_RULES,
+        SYS_FACTORY_INSIGHTS,
+        SYS_FACTORY_RETRO,
     }
 )
 AGENT_STAGE_ORDER: Final = [stage for stage in STAGES if stage in AGENT_STAGES]
@@ -1052,6 +1062,267 @@ class SysFactoryChatTool(Tool):
                     },
                 },
                 "required": ["thread", "message"],
+                "additionalProperties": False,
+            },
+        )
+
+
+# ── Learning and Tier 1 ────────────────────────────────────────
+
+PROPOSE_CHANGES_MAX: Final = 20
+EVIDENCE_MAX: Final = 20
+INSIGHT_KINDS: Final = ("kpis", "metrics", "findings", "precedents", "loops")
+RULE_TEXT_MAX: Final = 500
+
+
+class SysFactoryProposeTool(Tool):
+    """Propose a change to the factory itself: tuning, a rule, or code (Tier 2, gated)."""
+
+    @classmethod
+    def name(cls) -> str:
+        """:returns: ``"sys_factory_propose"``."""
+        return SYS_FACTORY_PROPOSE
+
+    @classmethod
+    def description(cls) -> str:
+        """:returns: Human-readable description of the tool."""
+        return (
+            "Propose a change to the factory definition (C-<n>), co-sign one, or withdraw "
+            "yours. kind='tuning' changes settings by path ({op:'replace', path:"
+            "'cadence.project_lead', value:10800}); kind='rules' adds a rule "
+            "(rule={role, project?, text}) or removes one ({op:'remove', path:'rules/R-3'}); "
+            "kind='code' records a code or bundle change (it never runs while Tier 2 is off). "
+            "Cite evidence ids (F-n, D-n, INC-n, !pr) and one expected_effect {metric, "
+            "direction}; without evidence the server refuses (422). The server decides the "
+            "class: A (cheaper or safer) runs as a trial once the other lead co-signs with "
+            "op='cosign', id='C-<n>' (never your own); B (rules, money, engine, autonomy) "
+            "waits for an owner. Guardrails, gates and metric definitions are Tier 0: "
+            "refused (422 tier0). A project lead proposes rules for its own project only. "
+            "At most 2 proposals per day."
+        )
+
+    def get_schema(self) -> dict[str, Any]:
+        """:returns: The OpenAI-format tool schema."""
+        change = {
+            "type": "object",
+            "properties": {
+                "op": {"type": "string", "enum": ["replace", "add", "remove"]},
+                "path": {
+                    "type": "string",
+                    "description": "e.g. 'cadence.project_lead', 'loops.review.rounds', "
+                    "'rules' (add) or 'rules/R-3' (replace, remove).",
+                },
+                "value": {
+                    "description": "The new value (a rule: {role, project, text}).",
+                    "anyOf": [
+                        {"type": "number"},
+                        {"type": "string"},
+                        {"type": "boolean"},
+                        {"type": "object"},
+                    ],
+                },
+            },
+            "required": ["op", "path"],
+            "additionalProperties": False,
+        }
+        return _function_schema(
+            self.name(),
+            self.description(),
+            {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["tuning", "rules", "code"]},
+                    "op": {
+                        "type": "string",
+                        "enum": ["propose", "cosign", "withdraw"],
+                        "default": "propose",
+                    },
+                    "id": {"type": "string", "description": "cosign/withdraw: e.g. 'C-14'."},
+                    "changes": {"type": "array", "items": change, "maxItems": PROPOSE_CHANGES_MAX},
+                    "rule": {
+                        "type": "object",
+                        "properties": {
+                            "role": {
+                                "type": "string",
+                                "description": "lead, project_lead, ic, reviewer, env_keeper, "
+                                "demo, planner or '*'.",
+                            },
+                            "project": {"type": "string", "description": "A slug, or '*'."},
+                            "text": {"type": "string", "maxLength": RULE_TEXT_MAX},
+                        },
+                        "required": ["role", "text"],
+                        "additionalProperties": False,
+                    },
+                    "title": {"type": "string", "maxLength": 200},
+                    "rationale": {"type": "string", "maxLength": 2000},
+                    "evidence": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "maxItems": EVIDENCE_MAX,
+                        "description": "Ids that show the problem, e.g. ['F-9', 'D-2', '!9630'].",
+                    },
+                    "expected_effect": {
+                        "type": "object",
+                        "properties": {
+                            "metric": {
+                                "type": "string",
+                                "description": "A catalog metric, e.g. 'decision_latency'.",
+                            },
+                            "direction": {"type": "string", "enum": ["up", "down"]},
+                            "delta": {"type": "number"},
+                        },
+                        "required": ["metric", "direction"],
+                        "additionalProperties": False,
+                    },
+                    "trial_h": {"type": "integer", "minimum": 24, "maximum": 168},
+                    "thread": {"type": "string", "description": "Defaults to 'improvements'."},
+                    "dedupe_key": {"type": "string", "maxLength": 96},
+                },
+                "required": ["kind"],
+                "additionalProperties": False,
+            },
+        )
+
+
+class SysFactoryRulesTool(Tool):
+    """Read the factory definition's rules for your role and project."""
+
+    @classmethod
+    def name(cls) -> str:
+        """:returns: ``"sys_factory_rules"``."""
+        return SYS_FACTORY_RULES
+
+    @classmethod
+    def description(cls) -> str:
+        """:returns: Human-readable description of the tool."""
+        return (
+            "Return the factory's current rules for your role and project: "
+            "{def_version, rules: [{id, text, state}]}. Call it at kickoff and whenever a "
+            "`[Factory control · RULES UPDATE · …]` arrives, and follow the rules. They are "
+            "advisory text owners approved; they never widen a policy or a gate."
+        )
+
+    def get_schema(self) -> dict[str, Any]:
+        """:returns: The OpenAI-format tool schema."""
+        return _function_schema(
+            self.name(),
+            self.description(),
+            {"type": "object", "properties": {}, "required": [], "additionalProperties": False},
+        )
+
+
+class SysFactoryInsightsTool(Tool):
+    """Read the factory's numbers: KPIs, metrics, findings, decision precedents, loops."""
+
+    @classmethod
+    def name(cls) -> str:
+        """:returns: ``"sys_factory_insights"``."""
+        return SYS_FACTORY_INSIGHTS
+
+    @classmethod
+    def description(cls) -> str:
+        """:returns: Human-readable description of the tool."""
+        return (
+            "Read-only factory insights. kind='kpis' (default): the headline numbers with n "
+            "and the change against the previous window; 'metrics' with names='a,b' and an "
+            "optional group_by (day, project, role, agent, version, def_version); 'findings': "
+            "open findings, recent retros and humans' calibration of past labels; "
+            "'precedents' with q='<words>': the 5 latest answered decisions that match, "
+            "check them before asking a human; 'loops': loops running or stuck. window is "
+            "e.g. '24h' or '7d'. A project lead sees its own project (plus factory KPIs). "
+            "Every number carries n: small n means inconclusive."
+        )
+
+    def get_schema(self) -> dict[str, Any]:
+        """:returns: The OpenAI-format tool schema."""
+        return _function_schema(
+            self.name(),
+            self.description(),
+            {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": list(INSIGHT_KINDS), "default": "kpis"},
+                    "window": {"type": "string", "description": "e.g. '24h', '7d' (default)."},
+                    "names": {"type": "string", "description": "metrics: comma-separated names."},
+                    "group_by": {"type": "string"},
+                    "q": {"type": "string", "maxLength": 200, "description": "precedents: words."},
+                },
+                "required": [],
+                "additionalProperties": False,
+            },
+        )
+
+
+class SysFactoryRetroTool(Tool):
+    """File a retro or a finding, with evidence."""
+
+    @classmethod
+    def name(cls) -> str:
+        """:returns: ``"sys_factory_retro"``."""
+        return SYS_FACTORY_RETRO
+
+    @classmethod
+    def description(cls) -> str:
+        """:returns: Human-readable description of the tool."""
+        return (
+            "Record a retro (after a PR merged or closed, or a project done: at most 5 lines) "
+            "or a finding (a failure pattern Sentinel coded). Map each root cause onto the "
+            "taxonomy (charter_unclear, task_too_big, env_flaky, ci_flaky, tool_error, "
+            "prompt_gap, reviewer_miss, waiting_on_human, coordination, platform_bug) and "
+            "cite evidence ids (D-n, F-n, INC-n, !pr, T-n); a call without evidence is "
+            "refused (422). target is 'project:<slug>', 'pr:<number>' or 'factory'."
+        )
+
+    def get_schema(self) -> dict[str, Any]:
+        """:returns: The OpenAI-format tool schema."""
+        refs = {"type": "array", "items": {"type": "string"}, "maxItems": EVIDENCE_MAX}
+        return _function_schema(
+            self.name(),
+            self.description(),
+            {
+                "type": "object",
+                "properties": {
+                    "kind": {"type": "string", "enum": ["retro", "finding"], "default": "retro"},
+                    "target": {"type": "string"},
+                    "summary": {"type": "string", "maxLength": 300},
+                    "went_well": {"type": "string", "maxLength": 1000},
+                    "slowed": {"type": "string", "maxLength": 1000},
+                    "root_causes": {
+                        "type": "array",
+                        "maxItems": 10,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "category": {"type": "string"},
+                                "text": {"type": "string", "maxLength": 1000},
+                                "evidence": refs,
+                            },
+                            "required": ["category", "text", "evidence"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "proposals": {
+                        "type": "array",
+                        "maxItems": 5,
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "area": {"type": "string"},
+                                "change": {"type": "string", "maxLength": 1000},
+                                "expected_effect": {"type": "string", "maxLength": 300},
+                                "metric": {"type": "string"},
+                            },
+                            "required": ["area", "change"],
+                            "additionalProperties": False,
+                        },
+                    },
+                    "evidence": refs,
+                    "severity": {
+                        "type": "string",
+                        "enum": ["info", "notice", "warning", "critical"],
+                    },
+                },
+                "required": ["target"],
                 "additionalProperties": False,
             },
         )

@@ -84,6 +84,14 @@ them through its `omnigent` MCP server.
 - `sys_factory_demo(pr_url, head_sha, title, manifest_path?, …)` publishes a
   recorded demo; it returns the PR comment to post. The demo agent, env_keeper
   and PLs only.
+- `sys_factory_rules()` returns the factory's rules for your role and project.
+  Follow them; they never widen a policy or a gate.
+- `sys_factory_insights(kind, window?)` (leads, PLs, the planner): KPIs with n,
+  metrics, findings, loops, and `precedents` (with `q=`): check them before
+  `sys_factory_ask`.
+- `sys_factory_retro(target, root_causes=[{category, text, evidence}], …)` and
+  `sys_factory_propose(kind, …)` (leads, PLs): retros with evidence ids, and
+  changes to the factory itself (a PL proposes rules for its project only).
 - `sys_session_get_history(conversation_id=<id>)`,
   `sys_session_get_info(session_id=<id>)` and `sys_session_list()` are
   read-only and scoped to this factory: a member outside it is refused with
@@ -117,6 +125,10 @@ The server also sends:
 - `[Factory notice · preview p<n> …]`: a factory preview went unreachable or
   idle.
 - `[Factory notice · ...]`: a turn you requested finished without a reply.
+- `[Factory definition · v<n> · …]`: the factory's settings changed (a new
+  version, often on trial). Record it; act only on what concerns you.
+- `[Factory control · RULES UPDATE · C-<n> · by <who>]`: the rules changed.
+  Call `sys_factory_rules()` and follow them from now on.
 - `[Factory heartbeat #<n> · <iso>]`: a periodic wake, with the changes since
   the last one. Run your heartbeat skill.
 - `[Factory alert · ...]`: a member is stuck, failed, or a message storm happened.

@@ -1,0 +1,25 @@
+{
+  "slug": "bench-ui-env-badge",
+  "title": "Benchmark: environment badge in the app header",
+  "repo": "caffeinelabs/app",
+  "base_branch": "temp-main",
+  "kind": "work",
+  "goal": "Show a small badge in the caffeine-ux header on non-production builds naming the environment and the short build sha, so reviewers can tell a preview from production at a glance.",
+  "dod": [
+    "non-production builds render a badge with the environment name and the 7-char build sha in the header",
+    "production builds render no badge",
+    "a component test covers both cases"
+  ],
+  "scope_paths": [
+    "services/caffeine-ux/**"
+  ],
+  "constraints": "Use the existing design-system components; no new dependencies.",
+  "env_needed": true,
+  "preview": {
+    "enabled": true,
+    "slots": 1
+  },
+  "demo_focus": "open the preview app and screenshot the header badge showing the preview's sha",
+  "budget_ics": 1,
+  "priority": 2
+}

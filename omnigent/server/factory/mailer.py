@@ -218,10 +218,11 @@ class Mailer:
             self._pair_posts.setdefault((sender_id, target_id), deque()), now
         )
         limit = None
-        if len(sender_window) >= self.sender_rate_per_hour:
-            limit = f"{self.sender_rate_per_hour} posts/h per sender"
-        elif len(pair_window) >= self.pair_rate_per_hour:
-            limit = f"{self.pair_rate_per_hour} posts/h to one recipient"
+        sender_rate, pair_rate = self._limits(factory_id)
+        if len(sender_window) >= sender_rate:
+            limit = f"{sender_rate} posts/h per sender"
+        elif len(pair_window) >= pair_rate:
+            limit = f"{pair_rate} posts/h to one recipient"
         if limit is not None:
             if (
                 factory_id
@@ -237,6 +238,15 @@ class Mailer:
         sender_window.append(now)
         pair_window.append(now)
         return None
+
+    def _limits(self, factory_id: str | None) -> tuple[int, int]:
+        """The factory definition's ``mail.*`` (capped by this mailer's own limits)."""
+        from omnigent.server.factory import definition
+
+        found = definition.mail_limits(self._app_state, factory_id)
+        if found is None:
+            return self.sender_rate_per_hour, self.pair_rate_per_hour
+        return min(found[0], self.sender_rate_per_hour), min(found[1], self.pair_rate_per_hour)
 
     def _claim_refusal_log(self, sender_id: str, target_id: str, now: float) -> bool:
         """A looping sender logs one refusal per recipient per minute, not one per post."""

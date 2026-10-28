@@ -20,7 +20,7 @@ from omnigent.entities import Conversation
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.factory import LABEL_NAME, factory_enabled
 from omnigent.server.auth import LEVEL_READ, RESERVED_USER_LOCAL
-from omnigent.server.factory import decision_routing, people, schemas
+from omnigent.server.factory import decision_routing, people, schemas, tier2
 from omnigent.server.factory.api.presence import entries_for
 from omnigent.server.factory.charter import server_default_base
 from omnigent.server.factory.context import FactoryDeps, factory_deps
@@ -147,6 +147,7 @@ async def get_preflight(request: Request) -> dict[str, Any]:
         default_repo=default_repo,
         default_base=default_base or ("main" if default_repo else None),
         max_projects=max_projects(),
+        tier2=schemas.Tier2Status.model_validate(tier2.status(state)),
     ).model_dump(mode="json")
 
 

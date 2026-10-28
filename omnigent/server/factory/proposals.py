@@ -627,6 +627,7 @@ def _scope_warnings(ctx: _Context, changes: Sequence[Change]) -> list[str]:
 
 
 def _preview_warning(ctx: _Context, changes: Sequence[Change]) -> list[str]:
+    from omnigent.server.factory import definition
     from omnigent.server.factory.api.agent_state import max_previews
 
     slots = 0
@@ -639,7 +640,7 @@ def _preview_warning(ctx: _Context, changes: Sequence[Change]) -> list[str]:
             charter = normalize_charter(project.raw_charter())
             if charter["preview"]["enabled"]:
                 slots += charter["preview"]["slots"]
-    cap = max_previews()
+    cap = definition.int_value(None, ctx.root.id, "previews.max", max_previews())
     if slots > cap:
         return [f"preview_slots: projects ask for {slots} preview slots; the factory runs {cap}"]
     return []
@@ -997,7 +998,7 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
     )
     asker = ask.user_id if ask is not None else None
     thread = body.thread or (ask.thread if ask is not None else None)
-    mode = autonomy.autonomy_mode(root.labels)
+    mode = await asyncio.to_thread(autonomy.factory_autonomy, deps, root)
     verdict = autonomy.decide(
         [c.op_class for c in plan.changes], requested=asker is not None, mode=mode
     )
@@ -1377,7 +1378,11 @@ async def plan_answer(
     :raises CockpitError: 409 ``stale_proposal`` / ``proposal_not_pending``, the
         validation errors of :func:`validate`, 403 when an owner must approve.
     """
+    from omnigent.server.factory import tuning
+
     deps = factory_deps(app_state)
+    if (tier1 := await tuning.plan_answer(app_state, decision, option, text, user_id)) is not None:
+        return tier1
     row, root = await _load_for_decision(deps, decision)
     actor = await asyncio.to_thread(projects.human_actor, deps, user_id, root.id)
     action = option.get("action") if option is not None else None
@@ -1420,6 +1425,10 @@ async def execute_answer(
     :param mail_id: The id to send the proposer's outcome mail under (the decision's receipt).
     :returns: ``(proposer session id or None, mail id or None)``.
     """
+    from omnigent.server.factory import tuning
+
+    if isinstance(answer, tuning.TuningAnswer):
+        return await tuning.execute_answer(app_state, answer, mail_id=mail_id)
     deps = factory_deps(app_state)
     row = answer.proposal
     ref = proposal_ref(row.number)
@@ -1746,7 +1755,9 @@ async def apply_graceful(app_state: Any, factory_id: str, *, now: int | None = N
     store = deps.factory_store
     now = now if now is not None else now_s()
     root = await control.get_conv(deps, factory_id)
-    if root is None or autonomy.autonomy_mode(root.labels) != autonomy.AUTONOMY_GRACE:
+    if root is None or (
+        await asyncio.to_thread(autonomy.factory_autonomy, deps, root) != autonomy.AUTONOMY_GRACE
+    ):
         return []
     rows = await asyncio.to_thread(
         lambda: store.list_proposals(factory_id, status="pending", kind=KIND_PROJECTS, limit=500)

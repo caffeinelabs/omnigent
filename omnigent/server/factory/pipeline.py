@@ -392,6 +392,13 @@ def offer(facts: PrFacts, step: Step, now: float) -> Hint | None:
     return hint
 
 
+def hints_on(deps: FactoryDeps, factory_id: str) -> bool:
+    """:returns: ``definition.engine.next_hints`` (on by default)."""
+    from omnigent.server.factory import definition
+
+    return definition.value(deps, factory_id, "engine.next_hints", True) is not False
+
+
 def due_at(pl_id: str) -> float | None:
     """:returns: When the PL's queued hints may go (grace and coalescing), or ``None``."""
     queued = _state.queue.get(norm_id(pl_id))
@@ -466,7 +473,7 @@ async def _send_hints(
         return 0
     fid = norm_id(live[0][1].pr.factory_id)
     mode = await asyncio.to_thread(tasks.engine_mode, deps, fid)
-    if mode == "observe":
+    if mode == "observe" or not await asyncio.to_thread(hints_on, deps, fid):
         return 0
     text = "\n".join(h.text for h, _ in live)
     mail_id = control.send_text(app_state, pl_id, text, kind="info")
@@ -572,7 +579,7 @@ async def _send_ready(
     app_state: Any, deps: FactoryDeps, factory_id: str, slug: str, now: float
 ) -> bool:
     mode = await asyncio.to_thread(tasks.engine_mode, deps, factory_id)
-    if mode == "observe":
+    if mode == "observe" or not await asyncio.to_thread(hints_on, deps, factory_id):
         return False
     found = await asyncio.to_thread(ready_wave, deps, factory_id, slug)
     if found is None:

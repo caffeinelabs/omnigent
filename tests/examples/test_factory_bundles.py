@@ -140,6 +140,7 @@ def test_both_bundles_parse_with_the_expected_shape(lead: AgentSpec, pl: AgentSp
         "factory-recovery",
         "factory-room",
         "factory-planning",
+        "factory-retro",
     }
     assert {s.name for s in pl.skills} == {
         "factory-protocol",
@@ -383,8 +384,12 @@ def test_factory_tools_are_on_each_agents_real_surface(lead: AgentSpec, pl: Agen
     for spec in _all_specs(lead, pl):
         names = _relay_tool_names(spec)
         if spec.name == "planner":
-            # The read-only planner sees the roster and nothing else of the factory.
-            assert {n for n in names if n.startswith("sys_factory_")} == {"sys_factory_roster"}
+            # The read-only planner sees the roster, the rules and the insights.
+            assert {n for n in names if n.startswith("sys_factory_")} == {
+                "sys_factory_roster",
+                "sys_factory_rules",
+                "sys_factory_insights",
+            }
             assert "sys_session_post" not in names
             continue
         assert messaging <= names, f"{spec.name} lacks {sorted(messaging - names)}"
@@ -678,7 +683,8 @@ def test_lead_dispatches_server_spawn_and_proposal_outcomes(lead: AgentSpec) -> 
 
     prompt = " ".join((lead.instructions or "").split())
     rows = re.findall(r"`(\[Factory (?:notice · PL·|proposal · )[^`]*\])`", prompt)
-    assert len(rows) == 2, rows
+    # Spawn notices, proposal outcomes and the peer lead's co-sign request.
+    assert len(rows) == 3, rows
     project = FactoryProject(id="c" * 32, factory_id="f" * 32, slug="db-version", title="t")
     texts = [
         spawned_notice(project, "a" * 32, "C-4"),
@@ -1725,3 +1731,140 @@ def test_the_pl_guard_holds_dispatches_to_the_engine_mode(pl: AgentSpec) -> None
 
     assert guard(send("assist"), {})["result"] == "ALLOW"
     assert guard(send("enforce"), {})["result"] == "DENY"
+
+
+# ── Round 3: learning and Tier 1 (the definition, rules, retros, benchmarks) ──
+
+
+def _header(text: str) -> str:
+    return text.split("]", 1)[0] + "]"
+
+
+def test_definition_rules_and_retro_texts_have_lead_rows(lead: AgentSpec) -> None:
+    """Every Tier-1 text a lead receives matches one of its DISPATCH rows."""
+    from omnigent.entities.factory import FactoryProposal
+    from omnigent.server.factory.retro import retro_text
+    from omnigent.server.factory.tuning import (
+        cosign_request_text,
+        definition_text,
+        outcome_text,
+        rules_update_text,
+    )
+
+    prompt = " ".join((lead.instructions or "").split())
+    rows = [
+        _row_pattern(row)
+        for row in re.findall(r"`(\[Factory [^`]*)`", prompt)
+        if row.endswith(("]", "…"))
+    ] + [_row_pattern(row) for row in re.findall(r"`(\[Factory heartbeat · retro)`", prompt)]
+    row = FactoryProposal(
+        id="p" * 32, factory_id="f" * 32, number=14, kind="tuning", title="t", rationale="r"
+    )
+    texts = [
+        cosign_request_text(row, "Sentinel", ["cadence.project_lead: 7200 → 10800"]),
+        outcome_text("C-14", "on trial until 2026-10-30 12:00 UTC · v8"),
+        definition_text("v8 · C-14 by Sentinel, co-signed by Atlas · trial 48h", ["x"]),
+        rules_update_text("C-15", "alice", ['+ R-1 · lead · "x"']),
+    ]
+    for text in texts:
+        assert any(p.match(_header(text)) for p in rows), _header(text)
+    assert retro_text("24h", 3.0).startswith("[Factory heartbeat · retro")
+    assert any(p.match(retro_text("24h", 3.0)) for p in rows)
+    # The retro row comes before the generic heartbeat row: first match wins.
+    assert prompt.index("`[Factory heartbeat · retro`") < prompt.index("`[Factory heartbeat`")
+    assert prompt.index("co-sign requested by") < prompt.index("`[Factory proposal · C-<n> …]`")
+
+
+def test_the_pl_reads_the_rules_and_files_retros(pl: AgentSpec) -> None:
+    from omnigent.server.factory.tuning import definition_text, rules_update_text
+
+    prompt = " ".join((pl.instructions or "").split())
+    control = prompt[prompt.index("CONTROL (`[Factory control") : prompt.index("DONE, when")]
+    assert "RULES UPDATE: call `sys_factory_rules()`" in control
+    assert _header(rules_update_text("C-15", "alice", [])) == (
+        "[Factory control · RULES UPDATE · C-15 · by alice]"
+    )
+    kickoff = prompt[prompt.index("KICKOFF. Do all") : prompt.index("LOOP on every")]
+    assert "`sys_factory_rules()`" in kickoff
+    assert "`[Factory definition · v<n> · …]`" in prompt
+    assert _row_pattern("[Factory definition · v<n> · …]").match(
+        _header(definition_text("v3 · C-2 by alice", []))
+    )
+    retro = prompt[prompt.index("RETRO. After") :]
+    assert "sys_factory_retro(" in retro and "evidence" in retro and "at most 5 lines" in retro
+
+
+def test_the_retro_skill_carries_the_contract() -> None:
+    text = (_LEAD_DIR / "skills" / "factory-retro" / "SKILL.md").read_text("utf-8")
+    from omnigent.factory import ROOT_CAUSES
+
+    for cause in ROOT_CAUSES:
+        assert cause in text, cause
+    for token in (
+        "Open coding",
+        "Axial coding",
+        "count × cost",
+        "at most 2 per day",
+        'sys_factory_chat(thread="improvements"',
+        'op="cosign"',
+        "Never your own",
+        "tier0",
+        "| heartbeat_share high | slower `cadence.project_lead` (class A) |",
+    ):
+        assert token in text, token
+
+
+def test_protocol_teaches_the_learning_tools() -> None:
+    text = (_LEAD_DIR / "skills" / "factory-protocol" / "SKILL.md").read_text("utf-8")
+    for token in (
+        "`sys_factory_rules()`",
+        "`precedents`",
+        "`sys_factory_retro(",
+        "`sys_factory_propose(kind, …)`",
+        "`[Factory definition · v<n> · …]`",
+        "`[Factory control · RULES UPDATE · C-<n> · by <who>]`",
+    ):
+        assert token in text, token
+
+
+def test_learning_prompt_deltas_stay_small() -> None:
+    """The learning rows add at most 40 lines per bundle (prompt plus protocol)."""
+    lead_text = (_LEAD_DIR / "config.yaml").read_text("utf-8")
+    pl_text = (_PL_DIR / "config.yaml").read_text("utf-8")
+    protocol = (_LEAD_DIR / "skills" / "factory-protocol" / "SKILL.md").read_text("utf-8")
+
+    def lines_with(text: str, *tokens: str) -> int:
+        return sum(1 for line in text.splitlines() if any(t in line for t in tokens))
+
+    learning = (
+        "sys_factory_rules",
+        "sys_factory_propose",
+        "sys_factory_insights",
+        "sys_factory_retro",
+        "Factory definition",
+        "RULES UPDATE",
+        "co-sign",
+        "retro",
+    )
+    assert lines_with(lead_text, *learning) + lines_with(protocol, *learning) <= 40
+    assert lines_with(pl_text, *learning) + lines_with(protocol, *learning) <= 40
+
+
+@pytest.mark.parametrize(
+    "path",
+    sorted((_FACTORY_DIR / "benchmarks" / "temp-main").glob("*.json")),
+    ids=lambda p: p.stem,
+)
+def test_benchmark_charters_are_valid_projects(path: Path) -> None:
+    import json
+
+    from omnigent.server.factory.start import ProjectIn
+
+    project = ProjectIn.model_validate(json.loads(path.read_text("utf-8")))
+    assert project.slug.startswith("bench-")
+    assert project.goal and project.dod and project.scope_paths
+
+
+def test_there_are_three_benchmarks() -> None:
+    names = sorted(p.stem for p in (_FACTORY_DIR / "benchmarks" / "temp-main").glob("*.json"))
+    assert names == ["api-build-info", "docs-factory-previews", "ui-env-badge"]

@@ -67,7 +67,9 @@ def _pl(cockpit: Cockpit) -> Actor:
 
 
 def set_mode(cockpit: Cockpit, mode: str) -> None:
-    cockpit.world.store.set_labels(cockpit.fid, {tasks.LABEL_ENGINE_MODE: mode})
+    from omnigent.server.factory import definition
+
+    definition.set_values(cockpit.deps, cockpit.fid, {"engine.mode": mode}, created_by="test")
 
 
 async def plan(cockpit: Cockpit, *keys: str) -> None:

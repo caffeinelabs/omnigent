@@ -10,7 +10,7 @@ import pytest
 import pytest_asyncio
 
 from omnigent import factory as F
-from omnigent.server.factory import budgets, decisions, loops, tasks
+from omnigent.server.factory import budgets, decisions, loops
 from omnigent.server.factory.control import CockpitError
 from tests.server.factory.cockpit_helpers import Cockpit, build_cockpit
 
@@ -37,7 +37,9 @@ async def cockpit(
 
 
 def set_mode(cockpit: Cockpit, mode: str) -> None:
-    cockpit.world.store.set_labels(cockpit.fid, {tasks.LABEL_ENGINE_MODE: mode})
+    from omnigent.server.factory import definition
+
+    definition.set_values(cockpit.deps, cockpit.fid, {"engine.mode": mode}, created_by="test")
 
 
 def spend(cockpit: Cockpit, usd: float, *, project: str = SLUG, now: float | None = None) -> None:

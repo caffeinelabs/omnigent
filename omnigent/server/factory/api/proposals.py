@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from omnigent.factory import PROPOSAL_KINDS, PROPOSAL_STATUSES, ROLE_LEAD, ROLE_PROJECT_LEAD
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE
-from omnigent.server.factory import control, gating, projects, proposals
+from omnigent.server.factory import control, gating, projects, proposals, tuning
 from omnigent.server.factory.agent_scope import authorize_agent
 from omnigent.server.factory.charter import normalize_charter
 from omnigent.server.factory.context import factory_deps
@@ -76,6 +76,8 @@ async def post_agent_proposal(
         if not isinstance(sender, str) or not sender:
             raise CockpitError(400, "invalid_body", "from_session_id is required", field="body")
         caller = await authorize_agent(request, sender)
+        if body.get("kind") in tuning.KINDS:
+            return await tuning.handle(request.app.state, caller, body)
         return await proposals.propose(request.app.state, caller, body)
 
     return await _guard(run)

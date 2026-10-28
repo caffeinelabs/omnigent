@@ -510,9 +510,12 @@ class ToolManager:
         ``sys_factory_demo`` for those two and ``demo``,
         ``sys_factory_project`` and ``sys_factory_chat`` for ``lead`` and
         ``project_lead`` (the server scopes a PL to its own project), and
-        ``sys_factory_task`` for ``lead``, ``project_lead`` and ``ic``. The
-        read-only ``planner`` gets the roster only. All are runner-dispatched
-        to the server's ``/v1/factory`` routes.
+        ``sys_factory_task`` for ``lead``, ``project_lead`` and ``ic``;
+        ``sys_factory_rules`` for every role, ``sys_factory_propose``,
+        ``sys_factory_insights`` and ``sys_factory_retro`` for ``lead`` and
+        ``project_lead``. The read-only ``planner`` gets the roster, the rules
+        and the insights. All are runner-dispatched to the server's
+        ``/v1/factory`` routes.
         """
         from omnigent.factory import (
             ROLE_DEMO,
@@ -528,9 +531,13 @@ class ToolManager:
             SysFactoryChatTool,
             SysFactoryDemoTool,
             SysFactoryEnvTool,
+            SysFactoryInsightsTool,
             SysFactoryProjectTool,
+            SysFactoryProposeTool,
             SysFactoryPrTool,
+            SysFactoryRetroTool,
             SysFactoryRosterTool,
+            SysFactoryRulesTool,
             SysFactorySetTool,
             SysFactorySpawnTool,
             SysFactoryTaskTool,
@@ -541,7 +548,12 @@ class ToolManager:
         if role is None:
             return
         if role == ROLE_PLANNER:
-            self._tools[SysFactoryRosterTool.name()] = SysFactoryRosterTool()
+            for planner_tool in (
+                SysFactoryRosterTool(),
+                SysFactoryRulesTool(),
+                SysFactoryInsightsTool(),
+            ):
+                self._tools[planner_tool.name()] = planner_tool
             return
         tools: list[Tool] = [
             SysSessionPostTool(),
@@ -549,12 +561,14 @@ class ToolManager:
             SysFactorySetTool(),
             SysFactoryAskTool(),
             SysFactoryPrTool(),
+            SysFactoryRulesTool(),
         ]
         if role == ROLE_LEAD:
             tools.append(SysFactorySpawnTool())
         if role in (ROLE_LEAD, ROLE_PROJECT_LEAD):
             tools.append(SysFactoryProjectTool())
             tools.append(SysFactoryChatTool())
+            tools += [SysFactoryProposeTool(), SysFactoryInsightsTool(), SysFactoryRetroTool()]
         if role in (ROLE_PROJECT_LEAD, ROLE_ENV_KEEPER):
             tools.append(SysFactoryEnvTool())
         if role in (ROLE_PROJECT_LEAD, ROLE_ENV_KEEPER, ROLE_DEMO):

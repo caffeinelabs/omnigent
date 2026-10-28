@@ -56,7 +56,15 @@ from omnigent.factory import (
     STATE_ACTIVE,
     STATES,
 )
-from omnigent.server.factory import activity_now, detectors, loops, schemas, status, tasks
+from omnigent.server.factory import (
+    activity_now,
+    definition,
+    detectors,
+    loops,
+    schemas,
+    status,
+    tasks,
+)
 from omnigent.server.factory.activity_now import factory_usd_per_h
 from omnigent.server.factory.base import base_view
 from omnigent.server.factory.charter import normalize_charter
@@ -324,6 +332,8 @@ class _Loaded:
     drift: dict[str, dict[str, Any] | None]
     costs: dict[str, float | None]
     proposals_pending: int = 0
+    on_trial: int = 0
+    def_version: int | None = None
     issues: list[Any] = field(default_factory=list)
     now: dict[str, dict[str, Any]] = field(default_factory=dict)
 
@@ -391,6 +401,8 @@ def _load(deps: FactoryDeps, factory_id: str, now: float) -> _Loaded:
         proposals_pending=len(
             fstore.list_proposals(factory_id, status=["pending", "awaiting_cosign"], limit=500)
         ),
+        on_trial=len(fstore.list_proposals(factory_id, status="trial", limit=500)),
+        def_version=definition.pinned_version(deps, factory_id),
         issues=fstore.list_issues(factory_id, class_="incident", statuses=["open", "acked"]),
     )
 
@@ -963,7 +975,9 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
         "counts": {
             "proposals_pending": loaded.proposals_pending,
             "issues_open": counts_open(loaded.issues, frozenset()),
+            "on_trial": loaded.on_trial,
         },
+        "def_version": loaded.def_version,
         "engine_mode": await asyncio.to_thread(loops.engine_mode, deps, factory_id),
     }
     rate = detectors.spend_rate(factory_id)

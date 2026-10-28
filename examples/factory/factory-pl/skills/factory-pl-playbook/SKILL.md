@@ -243,7 +243,7 @@ To label a PR the human chose to review without a preview:
 | `[Factory notice · preview p<n> unreachable · redeploy]` | env_keeper `PREVIEW pr=<n> head=<sha> base=<base>` (the PR's current head). |
 | `[Factory notice · preview p<n> idle 72h · park it]` | env_keeper `PREVIEW_DOWN pr=<n> reason=ttl`. The demo stays reviewable; the cockpit can ask for a redeploy. |
 | `[Factory control · …]` | The CONTROL section of your prompt. Reply once. |
-| `[Factory proposal · C-<n> …]` | The outcome of your `sys_factory_project` proposal. Record it in plan.md; after a rejection, adapt the plan to the note. |
+| `[Factory proposal · C-<n> …]` | The outcome of your `sys_factory_project` or `sys_factory_propose` proposal. Record it in plan.md; after a rejection, adapt the plan to the note. |
 
 ## Splitting the project
 

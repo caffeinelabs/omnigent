@@ -39,7 +39,7 @@ from omnigent.factory import (
     is_full_sha,
     parse_pr_url,
 )
-from omnigent.server.factory import decision_routing, events, nudge, status
+from omnigent.server.factory import decision_routing, definition, events, nudge, status
 from omnigent.server.factory.agent_scope import (
     AgentCaller,
     announce_new_pr,
@@ -625,7 +625,7 @@ def _report_preview(
             for pr in store.list_prs(caller.factory_id, states=["open"])
             if (existing is None or pr.id != existing.id) and _is_live(pr)
         ]
-        cap = max_previews()
+        cap = definition.int_value(caller.deps, caller.factory_id, "previews.max", max_previews())
         if len(live) >= cap:
             raise _PreviewCap(live, cap)
     row, created = ensure_pr(caller, repo, body.pr, slugs=slugs)

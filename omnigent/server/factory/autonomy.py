@@ -76,6 +76,13 @@ def autonomy_mode(labels: Mapping[str, str]) -> str:
     return value if value in AUTONOMY_MODES else DEFAULT_AUTONOMY
 
 
+def factory_autonomy(deps: Any, root: Any) -> str:
+    """:returns: ``definition.autonomy.projects`` of *root*'s factory (else its label)."""
+    from omnigent.server.factory import definition
+
+    return definition.autonomy_mode(deps, root.id) or autonomy_mode(root.labels)
+
+
 def update_class(fields: Iterable[str]) -> OpClass:
     """:returns: ``update_minor`` when only minor fields change, else ``update_major``."""
     return "update_minor" if set(fields) <= MINOR_UPDATE_FIELDS else "update_major"

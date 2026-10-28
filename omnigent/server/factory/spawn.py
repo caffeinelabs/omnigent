@@ -25,7 +25,7 @@ import asyncio
 import hashlib
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
@@ -46,7 +46,7 @@ from omnigent.factory import (
     STATE_DONE,
 )
 from omnigent.factory_spawn import member_create_body, member_labels
-from omnigent.server.factory import events
+from omnigent.server.factory import definition, events
 from omnigent.server.factory.actor import Actor
 from omnigent.server.factory.charter import (
     SPAWN_LEAD,
@@ -261,9 +261,11 @@ def _server_labels(root: Conversation) -> dict[str, str]:
     return {LABEL_DEF_VERSION: pinned} if pinned else {}
 
 
-def _heartbeat(root: Conversation, project: FactoryProject) -> int:
+def _heartbeat(root: Conversation, project: FactoryProject, default: int | None = None) -> int:
     if project_kind(project) == PROJECT_KIND_INTEGRATION:
         return 0
+    if default is not None:
+        return default
     cadence = root.labels.get(LABEL_CADENCE) or CADENCE_DEMO
     beats = CADENCE_HEARTBEATS.get(cadence, CADENCE_HEARTBEATS[CADENCE_DEMO])
     return beats[ROLE_PROJECT_LEAD]
@@ -276,19 +278,21 @@ def create_body(
     agent_id: str,
     supervisor: str,
     extra_labels: dict[str, str] | None = None,
+    heartbeat_s: int | None = None,
 ) -> dict[str, Any]:
     """
     The ``POST /v1/sessions`` body of a PL, as ``sys_factory_spawn`` builds it for Atlas.
 
     :param root: The factory root (Atlas): the PL's parent.
     :param supervisor: The peer lead (Sentinel), else the root.
+    :param heartbeat_s: The definition's PL cadence (else the root's cadence label's).
     """
     labels = member_labels(
         factory_id=root.id,
         role=ROLE_PROJECT_LEAD,
         parent=root.id,
         supervisor=supervisor,
-        heartbeat_s=_heartbeat(root, project),
+        heartbeat_s=_heartbeat(root, project, heartbeat_s),
         project=project.slug,
         extra=extra_labels,
     )
@@ -314,12 +318,14 @@ def brief_text(
     via: str,
     mail_id: str,
     inherited: list[int] | None = None,
+    rules: Sequence[str] = (),
 ) -> str:
     """
-    The brief a server-spawned PL starts from: header, the inherited PRs, the charter.
+    The brief a server-spawned PL starts from: header, the inherited PRs, the rules, the charter.
 
     :param by: Who made the project, e.g. ``"bob"`` or ``"Atlas"``.
     :param via: ``C-4`` or ``cockpit``.
+    :param rules: The factory definition's rules for this PL, e.g. ``["R-3: …"]``.
     """
     head = (
         f"[Factory brief · from {by} via {via} · id={mail_id}] The server spawned you as the "
@@ -331,6 +337,11 @@ def brief_text(
         parts.append(
             f"Inherited PRs {refs}: they are yours now; run PREVIEW for them (previews died "
             "with their old pod) and track them in plan.md."
+        )
+    if rules:
+        lines = "\n".join(f"- {quote_spoofed_lines(r)}" for r in rules)
+        parts.append(
+            f"Rules (factory definition; sys_factory_rules() has the current list):\n{lines}"
         )
     # Goal, constraints and demo focus may come from an agent: quote notice-like lines.
     charter = quote_spoofed_lines(render_pl_charter(project))
@@ -404,7 +415,10 @@ def spawn_mode(app_state: Any, root: Conversation, project: FactoryProject) -> t
     creates, when no runner token can be minted, or without an app to call.
     """
     deps = factory_deps(app_state)
-    if (root.labels.get(LABEL_ENGINE_SPAWN) or "").strip() == SPAWN_LEAD:
+    spawner = definition.value(deps, root.id, "engine.spawn") or root.labels.get(
+        LABEL_ENGINE_SPAWN
+    )
+    if (spawner or "").strip() == SPAWN_LEAD:
         return SPAWN_LEAD, "engine_spawn=lead"
     if _failures(deps, root.id, project) >= MAX_SERVER_FAILURES:
         return SPAWN_LEAD, f"{MAX_SERVER_FAILURES} failed creates"
@@ -530,6 +544,9 @@ async def _spawn_locked(
         agent_id=agent.id,
         supervisor=_supervisor(root, members),
         extra_labels=await asyncio.to_thread(_version_labels, deps, agent.id),
+        heartbeat_s=await asyncio.to_thread(
+            definition.heartbeat_default, deps, root, ROLE_PROJECT_LEAD
+        ),
     )
     async with client:
         resp = await client.post("/v1/sessions", json=body)
@@ -615,13 +632,23 @@ async def _finish(
     mail_id = brief_mail_id(session_id)
     if not await asyncio.to_thread(_brief_queued, deps, root.id, mail_id):
         inherited = await asyncio.to_thread(_inherited_prs, deps, root.id, project.slug)
+        rules = await asyncio.to_thread(
+            definition.rule_texts, deps, root.id, ROLE_PROJECT_LEAD, project.slug
+        )
         get_mailer(app_state).submit(
             MailItem(
                 mail_id=mail_id,
                 sender_id=None,
                 target_id=session_id,
                 target_title=pl.title if pl is not None else None,
-                text=brief_text(project, by=by, via=via, mail_id=mail_id, inherited=inherited),
+                text=brief_text(
+                    project,
+                    by=by,
+                    via=via,
+                    mail_id=mail_id,
+                    inherited=inherited,
+                    rules=rules,
+                ),
                 kind="brief",
                 factory_id=root.id,
                 project=project.slug,
