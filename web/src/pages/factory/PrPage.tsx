@@ -10,6 +10,7 @@
 
 import type { ReactNode } from "react";
 import { ChevronRightIcon, ExternalLinkIcon, MessagesSquareIcon } from "lucide-react";
+import { ReportProblemButton } from "@/components/factory/feedback/ReportProblem";
 import { GateChip, shownGates } from "@/components/factory/board/GateChip";
 import {
   factoryPageHref,
@@ -160,6 +161,15 @@ function PrBody({ snapshot, pr, nowS }: { snapshot: FactorySnapshot; pr: PrView;
             <span className="font-mono text-muted-foreground">!{pr.number}</span> {pr.title}
           </h1>
           <div className="flex shrink-0 items-center gap-2">
+            <ReportProblemButton
+              factoryId={fid}
+              target={`pr:${pr.id}`}
+              targetLabel={`!${pr.number}`}
+              project={pr.project_slug}
+              size="sm"
+              testId="pr-report-problem"
+              className="max-sm:hidden"
+            />
             {room}
             <Button asChild variant="outline" size="sm">
               <a href={pr.url} target="_blank" rel="noreferrer" data-testid="review-open-pr">

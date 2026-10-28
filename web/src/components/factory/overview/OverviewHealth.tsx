@@ -12,6 +12,7 @@ import { cn } from "@/lib/utils";
 import { nextChecks, projectLeadIds, untilText } from "../board/boardModel";
 import { HealthStrip } from "../board/HealthStrip";
 import { formatUsd } from "../factoryFormat";
+import { useHealthSparks } from "../insights/healthSparks";
 
 /** Loops across every project (absent until the server sends loop summaries). */
 export function loopTotals(snapshot: FactorySnapshot): {
@@ -57,6 +58,7 @@ function Chip({
 }
 
 export function OverviewHealth({ snapshot, nowS }: { snapshot: FactorySnapshot; nowS: number }) {
+  const sparks = useHealthSparks(snapshot.factory.id, nowS);
   const loops = loopTotals(snapshot);
   const counts = snapshot.counts ?? null;
   const perHour = snapshot.totals.usd_per_h;
@@ -75,7 +77,7 @@ export function OverviewHealth({ snapshot, nowS }: { snapshot: FactorySnapshot; 
       data-testid="overview-health"
       className="flex min-w-0 flex-col gap-1.5 rounded-xl border border-border bg-card px-4 py-3 max-md:px-3"
     >
-      <HealthStrip snapshot={snapshot} nowS={nowS} />
+      <HealthStrip snapshot={snapshot} nowS={nowS} sparks={sparks.data} />
       {(extras || checkParts.length > 0) && (
         <ul className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
           {loops && (

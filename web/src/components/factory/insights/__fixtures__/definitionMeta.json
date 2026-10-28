@@ -1,0 +1,254 @@
+{
+  "bounds": {
+    "cadence.lead": [0, 86400],
+    "cadence.project_lead": [0, 86400],
+    "cadence.demo_project_lead": [0, 86400],
+    "supervisor.stuck_s": [900, 14400],
+    "supervisor.blocked_escalate_s": [900, 14400],
+    "mail.sender_rate": [1, 60.0],
+    "mail.pair_rate": [1, 20.0],
+    "previews.ttl_h": [0, 72.0],
+    "previews.max": [1, 8.0],
+    "previews.env_probe_s": [0, 3600],
+    "previews.preview_probe_s": [0, 3600],
+    "caps.max_projects": [1, 10.0],
+    "loops.implement.attempts": [1, 6],
+    "loops.implement.usd": [0.5, 50],
+    "loops.implement.wall_h": [1, 72],
+    "loops.implement.no_progress_s": [600, 14400],
+    "loops.review.rounds": [1, 6],
+    "loops.verify.per_head": [1, 5],
+    "loops.verify.env_retries": [0, 3],
+    "loops.demo.per_head": [1, 5],
+    "loops.demo.per_pr_heads": [1, 12],
+    "loops.ci.flake_reruns": [0, 3],
+    "loops.claim.mismatches": [1, 5],
+    "loops.plan.stall_h": [1, 168],
+    "loops.intake.revisions": [1, 6],
+    "loops.improve.usd": [0.5, 10],
+    "budgets.project_usd": [1, 1000],
+    "budgets.factory_usd_per_day": [1, 5000],
+    "budgets.usd_per_hour_alert": [1, 200],
+    "decisions.escalate_after_m": [5, 240],
+    "decisions.escalate_owners_after_m": [15, 1440],
+    "alerts.repeat_tool_n": [2, 50],
+    "alerts.repeat_window_m": [5, 240],
+    "alerts.quiet_m": [2, 120],
+    "alerts.ready_unreviewed_h": [0.5, 72],
+    "alerts.decision_waiting_m": [5, 480],
+    "alerts.mail_stuck_m": [2, 120],
+    "alerts.spend_window_m": [5, 240],
+    "alerts.pingpong_n": [2, 50],
+    "alerts.pingpong_window_m": [5, 240],
+    "alerts.orphan_h": [0.5, 48],
+    "alerts.gate_flaps": [2, 20],
+    "alerts.gate_flap_window_h": [0.5, 48],
+    "alerts.ask_unneeded_n": [1, 20],
+    "alerts.ask_unneeded_s": [30, 1800],
+    "alerts.heartbeat_waste_usd": [0.5, 100],
+    "alerts.dead_ticks": [1, 10]
+  },
+  "env_ceilings": [
+    "caps.max_projects",
+    "mail.pair_rate",
+    "mail.sender_rate",
+    "previews.max",
+    "previews.ttl_h"
+  ],
+  "classes": [
+    {
+      "paths": "cadence.*",
+      "class": "A when slower, else B (0 = off is B)"
+    },
+    {
+      "paths": "loops.*.attempts|rounds|per_head|usd",
+      "class": "A when lower, else B"
+    },
+    {
+      "paths": "loops.* (other keys)",
+      "class": "B"
+    },
+    {
+      "paths": "mail.*",
+      "class": "A when lower, else B"
+    },
+    {
+      "paths": "supervisor.*, alerts.*, decisions.*",
+      "class": "A"
+    },
+    {
+      "paths": "previews.*, caps.*",
+      "class": "B"
+    },
+    {
+      "paths": "rules",
+      "class": "B (owners), as a trial"
+    },
+    {
+      "paths": "engine.*, autonomy.*, budgets.*, models.*",
+      "class": "B (owners)"
+    },
+    {
+      "paths": "anything else, Tier 0",
+      "class": "refused: 422 tier0"
+    }
+  ],
+  "paths": [
+    "alerts.ask_unneeded_n",
+    "alerts.ask_unneeded_s",
+    "alerts.dead_ticks",
+    "alerts.decision_waiting_m",
+    "alerts.gate_flap_window_h",
+    "alerts.gate_flaps",
+    "alerts.heartbeat_waste_usd",
+    "alerts.mail_stuck_m",
+    "alerts.orphan_h",
+    "alerts.pingpong_n",
+    "alerts.pingpong_window_m",
+    "alerts.quiet_m",
+    "alerts.ready_unreviewed_h",
+    "alerts.repeat_tool_n",
+    "alerts.repeat_window_m",
+    "alerts.spend_window_m",
+    "autonomy.projects",
+    "budgets.factory_usd_per_day",
+    "budgets.project_usd",
+    "budgets.usd_per_hour_alert",
+    "cadence.demo_project_lead",
+    "cadence.lead",
+    "cadence.project_lead",
+    "caps.max_projects",
+    "decisions.escalate_after_m",
+    "decisions.escalate_owners_after_m",
+    "engine.mode",
+    "engine.next_hints",
+    "engine.spawn",
+    "loops.ci.flake_reruns",
+    "loops.claim.mismatches",
+    "loops.demo.per_head",
+    "loops.demo.per_pr_heads",
+    "loops.implement.attempts",
+    "loops.implement.no_progress_s",
+    "loops.implement.usd",
+    "loops.implement.wall_h",
+    "loops.improve.usd",
+    "loops.intake.revisions",
+    "loops.plan.stall_h",
+    "loops.review.rounds",
+    "loops.verify.env_retries",
+    "loops.verify.per_head",
+    "mail.pair_rate",
+    "mail.sender_rate",
+    "models.ic",
+    "models.planner",
+    "models.reviewer",
+    "previews.env_probe_s",
+    "previews.max",
+    "previews.preview_probe_s",
+    "previews.ttl_h",
+    "supervisor.blocked_escalate_s",
+    "supervisor.quiet_beats",
+    "supervisor.stuck_s"
+  ],
+  "default_doc": {
+    "engine": {
+      "mode": "assist",
+      "spawn": "server",
+      "next_hints": true
+    },
+    "cadence": {
+      "lead": 3600,
+      "project_lead": 7200,
+      "demo_project_lead": 600
+    },
+    "supervisor": {
+      "stuck_s": 5400,
+      "blocked_escalate_s": 1800,
+      "quiet_beats": true
+    },
+    "mail": {
+      "sender_rate": 60,
+      "pair_rate": 20
+    },
+    "previews": {
+      "ttl_h": 72.0,
+      "max": 8,
+      "env_probe_s": 60,
+      "preview_probe_s": 300
+    },
+    "caps": {
+      "max_projects": 10
+    },
+    "loops": {
+      "implement": {
+        "attempts": 3,
+        "usd": 15.0,
+        "wall_h": 8,
+        "no_progress_s": 3600
+      },
+      "review": {
+        "rounds": 3
+      },
+      "verify": {
+        "per_head": 2,
+        "env_retries": 1
+      },
+      "demo": {
+        "per_head": 2,
+        "per_pr_heads": 6
+      },
+      "ci": {
+        "flake_reruns": 1
+      },
+      "claim": {
+        "mismatches": 2
+      },
+      "plan": {
+        "stall_h": 24
+      },
+      "intake": {
+        "revisions": 3
+      },
+      "improve": {
+        "usd": 3.0
+      }
+    },
+    "budgets": {
+      "project_usd": 150.0,
+      "factory_usd_per_day": 400.0,
+      "usd_per_hour_alert": 15.0
+    },
+    "autonomy": {
+      "projects": "requested"
+    },
+    "decisions": {
+      "escalate_after_m": 30,
+      "escalate_owners_after_m": 120
+    },
+    "alerts": {
+      "repeat_tool_n": 5,
+      "repeat_window_m": 30,
+      "quiet_m": 10,
+      "ready_unreviewed_h": 4.0,
+      "decision_waiting_m": 30,
+      "mail_stuck_m": 10,
+      "spend_window_m": 30,
+      "pingpong_n": 6,
+      "pingpong_window_m": 30,
+      "orphan_h": 2.0,
+      "gate_flaps": 3,
+      "gate_flap_window_h": 2.0,
+      "ask_unneeded_n": 3,
+      "ask_unneeded_s": 120,
+      "heartbeat_waste_usd": 5.0,
+      "dead_ticks": 2
+    },
+    "models": {
+      "ic": null,
+      "reviewer": null,
+      "planner": null
+    },
+    "rules": [],
+    "rule_seq": 0
+  }
+}

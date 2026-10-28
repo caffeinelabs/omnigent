@@ -270,6 +270,14 @@ function memberTitle(id: string, snapshot: FactorySnapshot | null): string {
   return snapshot.members.find((m) => m.session_id === id)?.title ?? "another agent";
 }
 
+/** Who decided or reverted: a person's name, a member's title, or "the server". */
+export function actorName(id: string | null, snapshot: FactorySnapshot | null): string {
+  if (!id || id === "server") return "the server";
+  if (id.includes("@")) return id.split("@")[0]!;
+  const title = memberTitle(id, snapshot);
+  return title === "another agent" && /^[0-9a-f]{32}$/.test(id) ? "an agent" : title;
+}
+
 /** `"by Atlas for luka"`, `"by Lead B · Sentinel, co-signed Atlas"`. */
 export function proposerLine(
   proposal: ProposalView,

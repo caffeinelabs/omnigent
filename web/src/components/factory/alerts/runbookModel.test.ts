@@ -10,13 +10,7 @@ import {
 } from "../agents/__fixtures__/opsFixtures";
 import { round3Snapshot } from "../shell/__fixtures__/shellFixtures";
 import { ALERT_RULES } from "./alertRules";
-import {
-  PROPOSALS_PENDING,
-  type RunbookAction,
-  issuePr,
-  prTarget,
-  runbookActions,
-} from "./runbookModel";
+import { type RunbookAction, issuePr, prTarget, runbookActions } from "./runbookModel";
 
 const snapshot = round3Snapshot();
 const FID = snapshot.factory.id;
@@ -132,9 +126,9 @@ const EXPECTED: Record<string, string[]> = {
   "gate.flapping": [`link:/factory/${FID}/prs/${PR_9631}`],
   "claim.mismatch": [`link:/factory/${FID}/prs/${PR_9631}`, "intervene:message→PL · db-version"],
   "ci.flaky": [],
-  "ask.unneeded": [`disabled:${PROPOSALS_PENDING}`],
+  "ask.unneeded": [`link:/factory/${FID}/improvements?tab=findings`],
   "task.unplanned": [`link:/factory/${FID}/projects/db-version#tasks`],
-  "heartbeat.waste": [`disabled:${PROPOSALS_PENDING}`],
+  "heartbeat.waste": [`link:/factory/${FID}/improvements?tab=findings`],
   "human.report": [`link:/factory/${FID}/agents/${IC_ROUTE_R2}`],
 };
 

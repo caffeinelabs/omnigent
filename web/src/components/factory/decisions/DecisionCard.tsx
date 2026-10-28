@@ -36,6 +36,8 @@ import { decisionsPageHref } from "../factoryRoutes";
 import { DOCK_SCROLLER_ATTRIBUTE, DOCK_TABS_PX } from "../shell/scroll";
 import { LEVER_REASON, ReasonGated, useViewer, useViewerCan } from "../shell/viewerCan";
 import { FoldableMarkdown } from "../transcript/FoldableMarkdown";
+import { ClosureReasonPicker, closureReasons } from "../feedback/ClosureReasonPicker";
+import { UnneededButton } from "../feedback/FeedbackWidgets";
 
 /** An open decision waits this long before its wait time turns red. */
 export const DECISION_RED_AFTER_S = 30 * 60;
@@ -285,6 +287,10 @@ export function DecisionCard({
   const [composing, setComposing] = useState(false);
   const [text, setText] = useState("");
   const [picked, setPicked] = useState<string | null>(null);
+  // A closed PR's answer names why it closed (the required closure-reason picker).
+  const reasons = closureReasons(decision);
+  const [reason, setReason] = useState<string | null>(null);
+  const needsReason = reasons.length > 0 && reason == null;
 
   useEffect(() => {
     const el = ref.current;
@@ -317,10 +323,13 @@ export function DecisionCard({
   const open = decision.status === "open" && answered == null && phase.kind !== "conflict";
   const busy = phase.kind === "answering";
 
-  const submit = (answer: { option_id?: string; text?: string }, label: string) => {
+  const submit = (
+    answer: { option_id?: string; text?: string; reason?: string },
+    label: string,
+  ) => {
     if (busy || !open || blockedReason) return;
     setPhase({ kind: "answering", label });
-    answerDecision(decision.id, answer).then(
+    answerDecision(decision.id, reason ? { ...answer, reason } : answer).then(
       ({ decision: stored }) => {
         setPhase({ kind: "answered", decision: stored, label });
         setText("");
@@ -358,7 +367,7 @@ export function DecisionCard({
   };
 
   const pick = (option: DecisionOptionView) => {
-    if (optionHref(decision, option)) return;
+    if (optionHref(decision, option) || needsReason) return;
     setPicked(option.id);
     const draft = text.trim();
     submit(
@@ -371,7 +380,7 @@ export function DecisionCard({
 
   const sendText = () => {
     const draft = text.trim();
-    if (!draft) return;
+    if (!draft || needsReason) return;
     setPicked(null);
     submit({ text: draft }, draft);
   };
@@ -552,19 +561,31 @@ export function DecisionCard({
             </p>
           ) : (
             decision.options.length > 0 && (
-              <div className="flex flex-wrap gap-1.5">
-                {decision.options.map((option, i) => (
-                  <OptionButton
-                    key={option.id}
-                    decision={decision}
-                    option={option}
-                    index={i}
-                    disabled={busy}
-                    blockedReason={blockedReason}
-                    picked={picked === option.id}
-                    onPick={pick}
+              <div className="flex flex-col gap-1.5">
+                {/* The required reason gets its own row, above the options it unlocks. */}
+                {reasons.length > 0 && (
+                  <ClosureReasonPicker
+                    decisionRef={decision.ref}
+                    reasons={reasons}
+                    value={reason}
+                    onChange={setReason}
+                    disabled={Boolean(blockedReason)}
                   />
-                ))}
+                )}
+                <div className="flex flex-wrap gap-1.5">
+                  {decision.options.map((option, i) => (
+                    <OptionButton
+                      key={option.id}
+                      decision={decision}
+                      option={option}
+                      index={i}
+                      disabled={busy || needsReason}
+                      blockedReason={blockedReason}
+                      picked={picked === option.id}
+                      onPick={pick}
+                    />
+                  ))}
+                </div>
               </div>
             )
           )}
@@ -586,14 +607,17 @@ export function DecisionCard({
                   <Button
                     size="sm"
                     onClick={sendText}
-                    disabled={!text.trim()}
+                    disabled={!text.trim() || needsReason}
+                    title={needsReason ? "Pick why it closed first" : undefined}
                     data-testid={`decision-send-${decision.ref}`}
                     componentId="factory.decision.send"
                   >
                     <SendIcon />
                     Send
                   </Button>
-                  <span className="text-muted-foreground">⌘↵</span>
+                  <span className="text-muted-foreground">
+                    {needsReason ? "Pick why it closed first" : "⌘↵"}
+                  </span>
                 </div>
               </div>
             ) : (
@@ -658,6 +682,14 @@ export function DecisionCard({
         </>
       )}
 
+      {decision.source === "agent" && (open || answered) && (
+        <UnneededButton
+          factoryId={decision.factory_id}
+          decisionId={decision.id}
+          decisionRef={decision.ref}
+          project={decision.project_slug}
+        />
+      )}
       {decision.asked_by_session_id && open && (
         <Link
           to={`/c/${decision.asked_by_session_id}`}

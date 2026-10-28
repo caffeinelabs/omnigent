@@ -772,6 +772,8 @@ export interface DecisionOptionView {
   target: string | null;
   /** The roster role a `grant_role` option gives (access requests). */
   role?: PersonRole | null;
+  /** A required picker: the answer names one of these (a closed PR's closure reason). */
+  reasons?: string[] | null;
 }
 
 /** A question for the human, shown as `ref` (`D-<number>`). */
@@ -1219,6 +1221,8 @@ export interface Preflight {
   default_base?: string | null;
   /** Projects one factory can run (one PL pod each). */
   max_projects?: number;
+  /** The Factory Smith lane (code PRs to omnigent): off until its prerequisites hold. */
+  tier2?: Tier2StatusView | null;
 }
 
 // ── Requests ───────────────────────────────────────────────────
@@ -1351,6 +1355,9 @@ export interface EventFilters {
 export interface PrFeedbackRequest {
   verdict: "approved" | "changes_requested";
   text?: string;
+  /** 1–5 stars with reason tags, stored as feedback on the PR. */
+  rating?: number;
+  tags?: string[];
 }
 
 /** `POST /v1/factory/prs/{id}/feedback`: the review as stored and the PL's mail id. */
@@ -1696,7 +1703,7 @@ export async function sendFactoryControl(
  */
 export async function answerDecision(
   decisionId: string,
-  answer: { option_id?: string; text?: string },
+  answer: { option_id?: string; text?: string; reason?: string },
 ): Promise<{ decision: DecisionView }> {
   return readJson(await postJson(`/v1/factory/decisions/${enc(decisionId)}/answer`, answer));
 }
@@ -2182,4 +2189,514 @@ export async function startFactory(
     rootId,
     lastError,
   );
+}
+
+// ── Round 3: learning (Insights, Improvements, Settings, feedback) ──
+//
+// Mirrors `omnigent/server/factory/api/{insights,definition,feedback,learn,
+// issues,telemetry_read}.py`. Metric values carry `n`; a missing number is
+// `null` (no data), never zero.
+
+/** The Factory Smith lane (code PRs to omnigent); `reason` says which prerequisite is missing. */
+export interface Tier2StatusView {
+  enabled: boolean;
+  reason: string | null;
+  checks?: Record<string, unknown> | null;
+}
+
+export type MetricFamily = "flow" | "loops" | "quality" | "human" | "cost" | "reliability";
+export type MetricGroupBy =
+  "day" | "project" | "role" | "agent" | "person" | "version" | "def_version";
+
+/** One aggregate of a metric: a value, p50/p90, a per-key breakdown or a mix, always with n. */
+export interface MetricAggregate {
+  n: number;
+  value?: number | null;
+  p50?: number | null;
+  p90?: number | null;
+  total?: number | null;
+  by?: Record<string, MetricAggregate>;
+  mix?: Record<string, { count: number; share: number | null }>;
+  peak?: number;
+  mean?: number | null;
+  bounce_rate?: number | null;
+  queue_age_p90_s?: number | null;
+  env_ready_share?: number | null;
+  preview_ready_share?: number | null;
+  /** Metric-specific extras (closure reasons, the prompt band, $ by model, …). */
+  [extra: string]: unknown;
+}
+
+/** One catalog metric over the window (`groups` when grouped, `previous` for KPI tiles). */
+export interface MetricResult extends MetricAggregate {
+  name: string;
+  family: MetricFamily;
+  title: string;
+  unit: string;
+  definition: string;
+  groups?: Record<string, MetricAggregate>;
+  previous?: MetricAggregate;
+  /** Headline now minus headline in the previous window. */
+  delta?: number | null;
+  /** `unavailable` when the metric failed on the server (the others still show). */
+  error?: string;
+}
+
+export interface MetricCatalogEntry {
+  name: string;
+  family: MetricFamily;
+  title: string;
+  unit: string;
+  definition: string;
+}
+
+export interface InsightsWindowView {
+  since: number;
+  until: number;
+  label: string;
+}
+
+/** Per-person numbers (owners only). */
+export interface PersonInsightsView {
+  decisions_answered: number;
+  decision_p50_s: number | null;
+  chat_posts: number;
+  interventions: number;
+  escalated_away: number;
+}
+
+/** `GET /v1/factory/factories/{fid}/insights`. */
+export interface InsightsResponse {
+  window: InsightsWindowView;
+  def_version: number | null;
+  kpis: Record<string, MetricResult>;
+  findings: IssueView[];
+  findings_open: number;
+  incidents_open: number;
+  incidents: IssueView[];
+  /** The latest retro per project (`project_slug` null: factory-wide). */
+  retros: IssueView[];
+  experiments: { on_trial: number; kept: number; reverted: number };
+  catalog: MetricCatalogEntry[];
+  people?: Record<string, PersonInsightsView>;
+}
+
+/** `GET …/metrics`. */
+export interface MetricsResponse {
+  window: InsightsWindowView;
+  group_by: MetricGroupBy | null;
+  metrics: Record<string, MetricResult>;
+}
+
+export interface InsightsFilters {
+  /** `24h`, `7d`, `30d`… (the server's default is 7d). */
+  window?: string;
+  project?: string | null;
+  version?: string | null;
+  def_version?: number | null;
+}
+
+export interface DefinitionRule {
+  id: string;
+  role: string;
+  project: string;
+  text: string;
+  origin: string | null;
+  state: "trial" | "active";
+}
+
+/** The definition doc: engine, cadence, loops, budgets, autonomy, alerts, models, rules, … */
+export type DefinitionDoc = Record<string, unknown> & { rules?: DefinitionRule[] };
+
+/** `GET …/definition`: the version in force, effective values, bounds, classes and trials. */
+export interface DefinitionResponse {
+  def_version: number;
+  version: DefinitionView | null;
+  effective: DefinitionDoc;
+  /** Path → `[min, max]` (an env ceiling already applied). */
+  bounds: Record<string, [number, number]>;
+  env_ceilings: string[];
+  classes: { paths: string; class: string }[];
+  paths: string[];
+  on_trial: ProposalView[];
+  tier2: Tier2StatusView;
+}
+
+export interface DefinitionVersionsResponse {
+  data: DefinitionView[];
+  pinned: number | null;
+}
+
+export interface DefinitionDiffEntry {
+  path: string;
+  before: unknown;
+  after: unknown;
+}
+
+export interface DefinitionDiffResponse {
+  from: number;
+  to: number;
+  changes: DefinitionDiffEntry[];
+  lines: string[];
+}
+
+/** A settings value is replaced; a rule is added at `rules` and changed at `rules/R-<n>`. */
+export interface DefinitionChange {
+  op: "replace" | "add" | "remove";
+  path: string;
+  value?: unknown;
+}
+
+export interface EffectInput {
+  metric: string;
+  direction: "up" | "down";
+  delta?: number;
+}
+
+/** `PUT …/definition`: an owner's edit, applied at once as a human `C-n`. */
+export interface DefinitionEditRequest {
+  changes: DefinitionChange[];
+  note?: string;
+  trial?: boolean;
+  trial_h?: number;
+  expected_effect?: EffectInput;
+  /** The version the edit was made on; a newer one in force answers 409 `stale_definition`. */
+  base_version?: number;
+}
+
+export interface DefinitionEditResponse {
+  proposal: string;
+  proposal_id: string;
+  status: ProposalStatus;
+  def_version: number | null;
+}
+
+export interface PinResponse {
+  def_version: number;
+  changed: boolean;
+  from?: number;
+  ended?: string[];
+}
+
+/** `POST …/definition/proposals`: an operator's change for the owners. */
+export interface HumanChangeRequest {
+  kind?: "tuning" | "rules";
+  changes: DefinitionChange[];
+  rationale: string;
+  evidence?: string[];
+  expected_effect?: EffectInput;
+  trial_h?: number;
+}
+
+export interface HumanChangeResponse {
+  proposal: ProposalView;
+  decision: string;
+}
+
+export interface DefinitionMarker {
+  version: number;
+  created_at: number;
+  created_via: DefinitionSource;
+  created_by: string;
+  proposal_ref: string | null;
+  pinned: boolean;
+}
+
+export interface PlatformMarker {
+  id: string;
+  created_at: number;
+  image_tag: string | null;
+  server_sha: string | null;
+  current: boolean;
+}
+
+/** `GET …/versions`: definition and platform versions, oldest first. */
+export interface VersionsResponse {
+  definition: DefinitionMarker[];
+  platform: PlatformMarker[];
+}
+
+export interface BundleMemberView {
+  session_id: string;
+  title: string;
+  role: string | null;
+  project: string | null;
+  /** `<agent id>/<sha12>` the member was launched with. */
+  running: string | null;
+  /** The bundle the server seeds now. */
+  current: string | null;
+  drift: boolean;
+}
+
+/** `GET …/bundles`. */
+export interface BundlesResponse {
+  members: BundleMemberView[];
+  drifted: number;
+}
+
+export interface GuardView {
+  metric: string;
+  baseline: number | null;
+  trial: number | null;
+  n_baseline: number;
+  n_trial: number;
+  /** e.g. `≥ baseline − 10 pp`. */
+  allowed: string;
+  status: "ok" | "regressed" | "no_data";
+}
+
+/** A trial against its baseline: the server's evaluation (live while on trial). */
+export interface ScorecardView {
+  outcome: "kept" | "reverted" | "inconclusive";
+  reason: string;
+  n: number;
+  min_n: number;
+  target: {
+    metric: string | null;
+    met: boolean;
+    baseline?: number | null;
+    trial?: number | null;
+    direction?: "up" | "down" | null;
+  };
+  guards: GuardView[];
+  trial_window: [number, number];
+  baseline_window: [number, number];
+  evaluated_at: number;
+  live: boolean;
+}
+
+export interface ScorecardResponse {
+  proposal: string;
+  scorecard: ScorecardView | null;
+}
+
+export type FeedbackTargetKind =
+  "pr" | "demo" | "decision" | "project" | "member" | "factory" | "issue" | "proposal";
+export type FeedbackKind =
+  "rating" | "useful" | "unneeded" | "closure" | "calibration" | "root_cause";
+
+/** `POST /v1/factory/feedback` (viewers too). */
+export interface FeedbackRequest {
+  factory_id: string;
+  target_kind: FeedbackTargetKind;
+  target_id: string;
+  kind: FeedbackKind;
+  /** 1–5 for ratings, +1/−1 for thumbs and calibration. */
+  rating?: number;
+  tags?: string[];
+  body?: string;
+  head_sha?: string;
+  project?: string;
+}
+
+export interface FeedbackView {
+  id: string;
+  factory_id: string;
+  target_kind: FeedbackTargetKind;
+  target_id: string;
+  author_kind: ActorKind;
+  author: string;
+  kind: FeedbackKind;
+  project_slug: string | null;
+  head_sha: string | null;
+  rating: number | null;
+  tags: string[];
+  body: string | null;
+  def_version: number | null;
+  created_at: number;
+}
+
+/** `POST …/issues`: "Report a problem" (anyone who reads the factory). */
+export interface ReportIssueRequest {
+  summary: string;
+  body?: string;
+  /** e.g. `member:<sid>`, `pr:<id>`, `project:<slug>`. */
+  target?: string;
+  class?: "incident" | "finding";
+  severity?: "info" | "notice" | "warning";
+  project?: string;
+}
+
+function factoryUrl(factoryId: string, rest: string): string {
+  return `/v1/factory/factories/${enc(factoryId)}${rest}`;
+}
+
+function insightsQuery(filters: InsightsFilters, extra: Record<string, string> = {}): string {
+  const params = new URLSearchParams(extra);
+  if (filters.window) params.set("window", filters.window);
+  if (filters.project) params.set("project", filters.project);
+  if (filters.version) params.set("version", filters.version);
+  if (filters.def_version != null) params.set("def_version", String(filters.def_version));
+  const qs = params.toString();
+  return qs ? `?${qs}` : "";
+}
+
+/** KPI tiles (with n and deltas), findings, incidents, retros, experiments. */
+export async function fetchFactoryInsights(
+  factoryId: string,
+  filters: InsightsFilters = {},
+  signal?: AbortSignal,
+): Promise<InsightsResponse> {
+  return readJson(
+    await authenticatedFetch(factoryUrl(factoryId, `/insights${insightsQuery(filters)}`), {
+      signal,
+    }),
+  );
+}
+
+/** Catalog metrics (every one when `names` is empty), grouped when `groupBy` is set. */
+export async function fetchFactoryMetrics(
+  factoryId: string,
+  options: InsightsFilters & { names?: readonly string[]; groupBy?: MetricGroupBy | null } = {},
+  signal?: AbortSignal,
+): Promise<MetricsResponse> {
+  const extra: Record<string, string> = {};
+  if (options.names?.length) extra.names = options.names.join(",");
+  if (options.groupBy) extra.group_by = options.groupBy;
+  return readJson(
+    await authenticatedFetch(factoryUrl(factoryId, `/metrics${insightsQuery(options, extra)}`), {
+      signal,
+    }),
+  );
+}
+
+export async function fetchFactoryVersions(
+  factoryId: string,
+  signal?: AbortSignal,
+): Promise<VersionsResponse> {
+  return readJson(await authenticatedFetch(factoryUrl(factoryId, "/versions"), { signal }));
+}
+
+export async function fetchFactoryBundles(
+  factoryId: string,
+  signal?: AbortSignal,
+): Promise<BundlesResponse> {
+  return readJson(await authenticatedFetch(factoryUrl(factoryId, "/bundles"), { signal }));
+}
+
+export async function fetchFactoryDefinition(
+  factoryId: string,
+  signal?: AbortSignal,
+): Promise<DefinitionResponse> {
+  return readJson(await authenticatedFetch(factoryUrl(factoryId, "/definition"), { signal }));
+}
+
+export async function fetchDefinitionVersions(
+  factoryId: string,
+  signal?: AbortSignal,
+): Promise<DefinitionVersionsResponse> {
+  return readJson(
+    await authenticatedFetch(factoryUrl(factoryId, "/definition/versions?limit=100"), { signal }),
+  );
+}
+
+export async function fetchDefinitionDiff(
+  factoryId: string,
+  from: number,
+  to: number,
+  signal?: AbortSignal,
+): Promise<DefinitionDiffResponse> {
+  return readJson(
+    await authenticatedFetch(factoryUrl(factoryId, `/definition/diff?from=${from}&to=${to}`), {
+      signal,
+    }),
+  );
+}
+
+/** An owner's edit: applied at once as a human `C-n` (a trial only when asked). */
+export async function putFactoryDefinition(
+  factoryId: string,
+  edit: DefinitionEditRequest,
+): Promise<DefinitionEditResponse> {
+  return readJson(await postJson(factoryUrl(factoryId, "/definition"), edit, "PUT"));
+}
+
+/** Put a stored version back in force (owners). */
+export async function pinFactoryDefinition(
+  factoryId: string,
+  version: number,
+): Promise<PinResponse> {
+  return readJson(await postJson(factoryUrl(factoryId, "/definition/pin"), { version }));
+}
+
+/** An operator's tuning or rules proposal; owners approve it as a trial. */
+export async function proposeDefinitionChange(
+  factoryId: string,
+  request: HumanChangeRequest,
+): Promise<HumanChangeResponse> {
+  return readJson(await postJson(factoryUrl(factoryId, "/definition/proposals"), request));
+}
+
+/** One proposal (`C-4`, `4` or its id). */
+export async function fetchFactoryProposal(
+  factoryId: string,
+  ref: string,
+  signal?: AbortSignal,
+): Promise<{ proposal: ProposalView }> {
+  return readJson(
+    await authenticatedFetch(factoryUrl(factoryId, `/proposals/${enc(ref)}`), { signal }),
+  );
+}
+
+export async function fetchProposalScorecard(
+  factoryId: string,
+  ref: string,
+  signal?: AbortSignal,
+): Promise<ScorecardResponse> {
+  return readJson(
+    await authenticatedFetch(factoryUrl(factoryId, `/proposals/${enc(ref)}/scorecard`), {
+      signal,
+    }),
+  );
+}
+
+/** End a trial now and keep it, or revert it (re-pins the parent version). Owners. */
+export async function decideTrial(
+  factoryId: string,
+  ref: string,
+  action: "keep" | "revert",
+  note?: string,
+): Promise<{ proposal: ProposalView }> {
+  return readJson(
+    await postJson(factoryUrl(factoryId, `/proposals/${enc(ref)}/${action}`), note ? { note } : {}),
+  );
+}
+
+/** Ask Sentinel for a retro now (owners; at most one per hour). */
+export async function requestFactoryRetro(
+  factoryId: string,
+): Promise<{ sent: boolean; subject: string }> {
+  return readJson(await postJson(factoryUrl(factoryId, "/retro"), {}));
+}
+
+export async function postFactoryFeedback(
+  request: FeedbackRequest,
+): Promise<{ feedback: FeedbackView }> {
+  return readJson(await postJson("/v1/factory/feedback", request));
+}
+
+/** "Report a problem": files an incident or finding as you. */
+export async function reportFactoryIssue(
+  factoryId: string,
+  request: ReportIssueRequest,
+): Promise<{ issue: IssueView }> {
+  return readJson(await postJson(factoryUrl(factoryId, "/issues"), request));
+}
+
+/** Set (or clear with `null`) the Slack webhook; the server never returns it. Owners. */
+export async function putSlackWebhook(
+  factoryId: string,
+  url: string | null,
+): Promise<{ slack: boolean }> {
+  return readJson(await postJson(factoryUrl(factoryId, "/alerts/slack"), { url }, "PUT"));
+}
+
+/** The telemetry export (never transcripts) as a file body. */
+export async function fetchFactoryExport(
+  factoryId: string,
+  format: "ndjson" | "csv",
+): Promise<Blob> {
+  const res = await authenticatedFetch(factoryUrl(factoryId, `/export?format=${format}`));
+  if (!res.ok) throw await factoryErrorFromResponse(res);
+  return res.blob();
 }

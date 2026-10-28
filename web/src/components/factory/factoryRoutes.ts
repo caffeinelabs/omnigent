@@ -28,8 +28,26 @@ export function projectSectionId(section: ProjectSection): string {
 }
 
 /** Settings sections under `/factory/<fid>/settings/<section>`. */
-export const SETTINGS_SECTIONS = ["people"] as const;
+export const SETTINGS_SECTIONS = [
+  "people",
+  "autonomy",
+  "budgets",
+  "alerts",
+  "rules",
+  "definition",
+] as const;
 export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
+
+/** The Improvements page's tabs (`?tab=`), On trial first. */
+export const IMPROVEMENT_TABS = [
+  "trial",
+  "proposed",
+  "history",
+  "rules",
+  "definition",
+  "findings",
+] as const;
+export type ImprovementTab = (typeof IMPROVEMENT_TABS)[number];
 
 const enc = encodeURIComponent;
 
@@ -177,4 +195,21 @@ export function incidentPageHref(factoryId: string, number: string | number): st
 /** `/factory/<fid>/improvements/<n>`: a proposal's or finding's page. */
 export function improvementPageHref(factoryId: string, ref: string): string {
   return `${factoryPageHref(factoryId)}/improvements/${enc(ref)}`;
+}
+
+/** `/factory/<fid>/insights`, with its window, grouping and filters as a query. */
+export function insightsPageHref(factoryId: string, params?: Record<string, string>): string {
+  return withQuery(`${factoryPageHref(factoryId)}/insights`, params);
+}
+
+/** `/factory/<fid>/improvements` on `tab` (On trial when omitted). */
+export function improvementsPageHref(
+  factoryId: string,
+  tab?: ImprovementTab,
+  params?: Record<string, string>,
+): string {
+  return withQuery(`${factoryPageHref(factoryId)}/improvements`, {
+    ...(tab && tab !== "trial" ? { tab } : {}),
+    ...params,
+  });
 }

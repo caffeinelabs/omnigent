@@ -15,11 +15,13 @@ import {
   GanttChartIcon,
   GitForkIcon,
   LayoutDashboardIcon,
+  LightbulbIcon,
   ListChecksIcon,
   MessagesSquareIcon,
   SettingsIcon,
   Share2Icon,
   SirenIcon,
+  TrendingUpIcon,
 } from "lucide-react";
 import {
   Sheet,
@@ -38,6 +40,8 @@ import {
   decisionsPageHref,
   factoryPageHref,
   graphPageHref,
+  improvementsPageHref,
+  insightsPageHref,
   projectsPageHref,
   roomPageHref,
   settingsPageHref,
@@ -225,6 +229,12 @@ export function PhoneTabBar({
             </MoreLink>
             <MoreLink to={timelinePageHref(factoryId)} icon={GanttChartIcon} onDone={close}>
               Timeline
+            </MoreLink>
+            <MoreLink to={insightsPageHref(factoryId)} icon={TrendingUpIcon} onDone={close}>
+              Insights
+            </MoreLink>
+            <MoreLink to={improvementsPageHref(factoryId)} icon={LightbulbIcon} onDone={close}>
+              Improvements
             </MoreLink>
             <MoreLink to={alertsPageHref(factoryId)} icon={SirenIcon} onDone={close}>
               Alerts

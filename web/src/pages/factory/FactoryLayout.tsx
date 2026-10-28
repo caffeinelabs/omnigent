@@ -7,7 +7,7 @@
  */
 
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { ArrowLeftIcon } from "lucide-react";
+import { ArrowLeftIcon, LockIcon } from "lucide-react";
 import { PageScroll } from "@/components/PageScroll";
 import { WIDE_BOARD_QUERY, useMediaQuery } from "@/components/factory/board/boardHooks";
 import { FactoryHeader } from "@/components/factory/board/FactoryHeader";
@@ -33,8 +33,8 @@ import {
 import { unreadTotal } from "@/components/factory/room/roomModel";
 import { useRoomThreads } from "@/components/factory/room/roomQueries";
 import { useStickyTop } from "@/components/factory/room/useViewportFill";
-import { PHONE_TAB_BAR_REM, PhoneTabBar } from "@/components/factory/shell/PhoneTabBar";
-import { PAGE_EXTRA_TOP } from "@/components/factory/shell/scroll";
+import { PhoneTabBar } from "@/components/factory/shell/PhoneTabBar";
+import { PAGE_EXTRA_TOP, pageExtraBottom } from "@/components/factory/shell/scroll";
 import {
   factoryLocation,
   legacyFactoryRedirect,
@@ -45,6 +45,8 @@ import { PAGE_PALETTE_ATTRIBUTE } from "@/hooks/useCommandPaletteHotkey";
 import { COCKPIT_MIN_REFRESH_MS, useFactory } from "@/hooks/useFactory";
 import { snapshotNotices, useFactoryNotifications } from "@/hooks/useFactoryNotifications";
 import { useFactoryPresence } from "@/hooks/useFactoryPresence";
+import { EmptyState } from "@/components/factory/project/projectParts";
+import { Button } from "@/components/ui/button";
 import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
 import type { FactorySnapshot } from "@/lib/factoryApi";
 import { Link, useNavigate, useParams, useSearchParams } from "@/lib/routing";
@@ -256,10 +258,12 @@ export function FactoryLayout({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (target) navigate(target, { replace: true });
   }, [navigate, target]);
+  // A 404 means no factory or no access; one after data (a removed person's
+  // refetch) drops the stale page too.
+  const missing = error instanceof ApiError && error.status === 404;
   useFactoryPresence(factoryId, presenceLocation(factoryLocation(rest)), {
-    enabled: !legacy && Boolean(data),
+    enabled: !legacy && Boolean(data) && !missing,
   });
-  const missing = !data && error instanceof ApiError && error.status === 404;
   return (
     <PageScroll
       data-testid="factory-page"
@@ -267,7 +271,7 @@ export function FactoryLayout({ children }: { children: ReactNode }) {
       contentClassName="px-4 md:px-6"
       extraTop={PAGE_EXTRA_TOP}
       // Room for the phone's bottom tabs, or the Room button below 1280 px.
-      extraBottom={phone ? `${PHONE_TAB_BAR_REM + 1.5}rem` : wide ? undefined : "4.5rem"}
+      extraBottom={pageExtraBottom(phone, wide)}
     >
       <Link
         to="/factory"
@@ -287,11 +291,22 @@ export function FactoryLayout({ children }: { children: ReactNode }) {
       )}
       {(isLoading || legacy) && !missing && <ShellSkeleton />}
       {missing && (
-        <p data-testid="factory-missing" className="text-ui text-muted-foreground">
-          This factory doesn’t exist, or you no longer have access to it.
-        </p>
+        <EmptyState
+          testId="factory-missing"
+          icon={<LockIcon aria-hidden className="size-6 text-muted-foreground/50" />}
+          title="No access to this factory"
+          body="This factory doesn’t exist, or you no longer have access to it. Ask one of its owners to share it with you again."
+          action={
+            <Button asChild size="sm" variant="outline" className="mt-1">
+              <Link to="/factory" componentId="factory.missing.back">
+                <ArrowLeftIcon />
+                Back to factories
+              </Link>
+            </Button>
+          }
+        />
       )}
-      {data && !legacy && (
+      {data && !legacy && !missing && (
         <FactoryControlsProvider key={data.factory.id} snapshot={data}>
           <Shell snapshot={data} clockOffsetS={clockOffsetS} updatedAt={updatedAt} rest={rest}>
             {children}

@@ -19,6 +19,8 @@ import {
   decisionsPageHref,
   factoryPageHref,
   graphPageHref,
+  improvementsPageHref,
+  insightsPageHref,
   projectsPageHref,
   roomPageHref,
   settingsPageHref,
@@ -53,6 +55,13 @@ export const FACTORY_TABS: FactoryTab[] = [
   },
   { key: "graph", label: "Graph", href: (fid) => graphPageHref(fid), pages: ["graph"] },
   { key: "timeline", label: "Timeline", href: (fid) => timelinePageHref(fid), pages: ["timeline"] },
+  { key: "insights", label: "Insights", href: (fid) => insightsPageHref(fid), pages: ["insights"] },
+  {
+    key: "improvements",
+    label: "Improvements",
+    href: (fid) => improvementsPageHref(fid),
+    pages: ["improvements", "proposal"],
+  },
   { key: "activity", label: "Activity", href: activityPageHref, pages: ["activity"] },
 ];
 
@@ -120,6 +129,7 @@ export function FactoryTabs({
   const projects = snapshot.projects.filter((p) => p.stage !== "done").length;
   const alerts = snapshot.counts?.issues_open ?? 0;
   const openDecisions = snapshot.decisions.filter((d) => d.status === "open").length;
+  const onTrial = snapshot.counts?.on_trial ?? 0;
   const mac = isMacPlatform();
   return (
     <nav
@@ -137,6 +147,15 @@ export function FactoryTabs({
           >
             {tab.label}
             {tab.key === "projects" && projects > 0 && <Count n={projects} />}
+            {tab.key === "improvements" && onTrial > 0 && (
+              <span
+                data-testid="factory-tab-on-trial"
+                title={`${onTrial} definition change${onTrial === 1 ? "" : "s"} on trial`}
+                className="text-xs font-normal text-muted-foreground tabular-nums"
+              >
+                · {onTrial} trial
+              </span>
+            )}
             {tab.key === "room" && roomUnread > 0 && (
               <span data-testid="factory-tab-room-unread">
                 <Count n={roomUnread} />
@@ -183,7 +202,7 @@ export function FactoryTabs({
           componentId="factory.tab.settings"
           data-testid="factory-tab-settings"
           aria-label="Settings"
-          title="Settings · People"
+          title="Settings"
           aria-current={location.page === "settings" ? "page" : undefined}
           className={cn(
             "inline-flex size-7 items-center justify-center rounded-md hover:bg-muted hover:text-foreground",
