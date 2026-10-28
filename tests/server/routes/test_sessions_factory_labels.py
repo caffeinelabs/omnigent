@@ -431,6 +431,80 @@ def test_a_runner_cannot_create_a_member_from_its_own_bundle(world: World) -> No
     assert _nothing_created(world)
 
 
+def test_a_runner_cannot_bind_a_member_to_the_agent_its_own_upload_made(world: World) -> None:
+    # Step 1: an ordinary upload (no factory labels) makes a session-scoped agent.
+    upload = _bundled_create(world, {"team": "ml"}, _runner())
+    assert upload.status_code == 201, upload.text
+    own_agent = upload.json()["agent_id"]
+    assert own_agent != _AGENT_ID
+
+    # Step 2: the exact spawn body, bound to that agent by id.
+    resp = world.client().post(
+        "/v1/sessions",
+        json={"agent_id": own_agent, "title": "PL · app", "labels": _spawn_labels(world)},
+        headers=_runner(),
+    )
+
+    assert resp.status_code == 403, resp.text
+    assert _code(resp) == "factory_custom_bundle_denied"
+    assert _nothing_created(world)
+
+
+def test_a_runner_names_the_agent_of_a_member_it_creates(world: World) -> None:
+    # A project create may leave agent_id to the project's default; a spawn never does.
+    resp = world.client().post(
+        "/v1/sessions",
+        json={"project_id": "proj_x", "title": "PL · app", "labels": _spawn_labels(world)},
+        headers=_runner(),
+    )
+
+    assert resp.status_code == 422, resp.text
+    assert _code(resp) == "agent_required"
+    assert _nothing_created(world)
+
+
+@pytest.mark.parametrize(
+    "key",
+    [
+        "Omnigent.factory.engine_mode",
+        " omnigent.factory.engine_mode",
+        "OMNIGENT.FACTORY.ROLE",
+    ],
+)
+def test_a_runner_cannot_smuggle_a_factory_label_in_another_case(world: World, key: str) -> None:
+    resp = _create(world, _spawn_labels(world, **{key: "autonomous"}), _runner())
+
+    assert resp.status_code == 422, resp.text
+    assert _code(resp) == "factory_label_not_allowed"
+    assert _nothing_created(world)
+
+
+def test_an_uploaded_spec_cannot_seed_factory_labels(world: World) -> None:
+    from tests.server.helpers import build_agent_bundle
+
+    bundle = build_agent_bundle(
+        name="pl",
+        guardrails={
+            "labels": {
+                F.LABEL_ID: {"initial": world.lead},
+                F.LABEL_ROLE: {"initial": "root"},
+                _SERVER_ONLY: {"initial": "autonomous"},
+            }
+        },
+    )
+
+    resp = world.client().post(
+        "/v1/sessions",
+        data={"metadata": json.dumps({"title": "probe", "labels": {"team": "ml"}})},
+        files={"bundle": ("agent.tar.gz", bundle, "application/gzip")},
+        headers=_runner(),
+    )
+
+    assert resp.status_code == 400, resp.text
+    assert "omnigent.factory.* labels are set only by the server" in resp.text
+    assert not world.conversations.list_conversation_ids_with_label("team", "ml")
+
+
 # ── People are unaffected ────────────────────────────────────────
 
 

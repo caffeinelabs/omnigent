@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import replace
 from typing import Any
 
+from omnigent.factory import is_factory_label
 from omnigent.llms.context_window import ModelPricing, compute_llm_cost
 from omnigent.policies.base import Policy
 from omnigent.policies.types import EvaluationContext, PolicyResult
@@ -488,8 +489,10 @@ class PolicyEngine:
 
         - The key has a declared ``LabelDef.values`` list and
           the new value is not in it.
+        - The key is an ``omnigent.factory.*`` label, which only
+          the server and the factory routes write.
 
-        Keys with no ``LabelDef`` are set freely (omnigent
+        Other keys with no ``LabelDef`` are set freely (omnigent
         parity — "unschema'd labels set freely"). The engine
         applies the filtered dict in a single UPSERT through
         the store so either every surviving write lands or
@@ -812,7 +815,7 @@ class PolicyEngine:
         set_labels: dict[str, str],
     ) -> dict[str, str]:
         """
-        Drop writes that violate a declared :class:`LabelDef`.
+        Drop writes that violate a declared :class:`LabelDef`, and factory labels.
 
         Called before persistence. Silent-drop semantics match
         POLICIES.md §10 / §13 — runtime label failures don't
@@ -825,6 +828,9 @@ class PolicyEngine:
         """
         result: dict[str, str] = {}
         for key, value in set_labels.items():
+            # Factory membership is server-owned; a policy never writes it.
+            if is_factory_label(key):
+                continue
             ldef = self.label_defs.get(key)
             if ldef is None:
                 result[key] = value

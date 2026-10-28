@@ -583,6 +583,25 @@ def factory_role_from_spec(spec: Any) -> str | None:
     return role if isinstance(role, str) and role in ROLES else None
 
 
+def is_factory_label(key: str) -> bool:
+    """
+    Whether *key* names an ``omnigent.factory.*`` label, ignoring case and surrounding space.
+
+    Only the server, a factory owner and ``sys_factory_*`` write these, so the
+    channels an agent controls (a runner's create, spec label seeds, policy
+    ``set_labels``) refuse or drop every key this matches.
+
+    :param key: A label key, e.g. ``"omnigent.factory.role"`` or ``" Omnigent.Factory.x"``.
+    :returns: ``True`` for both examples, ``False`` for ``"team"``.
+    """
+    return key.strip().lower().startswith(LABEL_PREFIX)
+
+
+def without_factory_labels(labels: Mapping[str, str]) -> dict[str, str]:
+    """:returns: *labels* minus every key :func:`is_factory_label` matches."""
+    return {key: value for key, value in labels.items() if not is_factory_label(key)}
+
+
 def clamp_label_value(value: str, limit: int = LABEL_VALUE_MAX_LEN) -> str:
     """Trim a label value to *limit* characters (labels are short scalars)."""
     return value if len(value) <= limit else value[: limit - 1] + "…"

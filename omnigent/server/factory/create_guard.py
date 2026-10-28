@@ -12,7 +12,10 @@ body ``sys_factory_spawn`` sends (:func:`omnigent.factory_spawn.member_labels`):
 - a parent that is a lead of the named factory, which the caller may edit and,
   over a tunnel, whose runner the caller is (403 ``session_out_of_factory`` /
   ``sender_not_bound``), and a supervisor in the same factory;
-- never a bundle of its own (403 ``factory_custom_bundle_denied``).
+- never a bundle of its own, uploaded with the create or bound by the id of a
+  session-scoped agent an earlier upload made (403 ``factory_custom_bundle_denied``);
+  a spawn always names a built-in or template agent by ``agent_id`` (422
+  ``agent_required`` otherwise).
 
 People's creates are not checked here.
 """
@@ -37,6 +40,7 @@ from omnigent.factory import (
     ROLE_LEAD,
     SPAWN_ROLES,
     STATES,
+    is_factory_label,
     valid_heartbeat_s,
 )
 from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
@@ -51,6 +55,7 @@ if TYPE_CHECKING:
 
     from omnigent.entities import Conversation
     from omnigent.stores import ConversationStore
+    from omnigent.stores.agent_store import AgentStore
     from omnigent.stores.permission_store import PermissionStore
 
 SPAWN_LABELS: Final = frozenset(
@@ -70,8 +75,8 @@ SPAWN_LABELS: Final = frozenset(
 
 
 def _factory_keys(labels: Mapping[str, str] | None) -> list[str]:
-    """:returns: The ``omnigent.factory.*`` keys of *labels*, sorted."""
-    return sorted(key for key in labels or {} if key.startswith(LABEL_PREFIX))
+    """:returns: The ``omnigent.factory.*`` keys of *labels* (any case or padding), sorted."""
+    return sorted(key for key in labels or {} if is_factory_label(key))
 
 
 async def check_runner_create(
@@ -83,6 +88,8 @@ async def check_runner_create(
     conversation_store: ConversationStore,
     permission_store: PermissionStore | None,
     runner_tunnel_tokens: frozenset[str] | None,
+    agent_store: AgentStore,
+    agent_id: str | None,
     bundled: bool = False,
 ) -> None:
     """
@@ -95,6 +102,9 @@ async def check_runner_create(
     :param conversation_store: Store for the parent and supervisor lookups.
     :param permission_store: Store for the caller's access to the parent.
     :param runner_tunnel_tokens: The server's allow-listed tunnel tokens, if any.
+    :param agent_store: Store for the *agent_id* lookup.
+    :param agent_id: The agent a JSON create binds, e.g. the ``factory-pl`` row's id;
+        ``None`` for a multipart create (or a project-filled one).
     :param bundled: Whether the create uploads its own bundle (multipart).
     :raises FactoryRouteError: When the create is refused.
     """
@@ -121,13 +131,7 @@ async def check_runner_create(
             f"labels {', '.join(other)} are not set when a factory member is created; "
             "the member sets its own with sys_factory_set once it runs",
         )
-    if bundled:
-        raise FactoryRouteError(
-            403,
-            FACTORY_CUSTOM_BUNDLE_DENIED,
-            "factory members cannot run a custom bundle; spawn a built-in agent with "
-            "sys_factory_spawn",
-        )
+    await _check_agent(bundled, agent_id, agent_store)
     _check_values(labels)
     parent = await _spawning_lead(labels, conversation_store)
     await require_access(user_id, parent.id, LEVEL_EDIT, permission_store, conversation_store)
@@ -141,6 +145,25 @@ async def check_runner_create(
     supervisor = labels.get(LABEL_SUPERVISOR)
     if supervisor is not None:
         await _same_factory_member(supervisor, labels[LABEL_ID], conversation_store)
+
+
+async def _check_agent(bundled: bool, agent_id: str | None, store: AgentStore) -> None:
+    """Refuse an uploaded bundle, or a bound agent that an upload made (session-scoped)."""
+    if not bundled and agent_id is None:
+        raise FactoryRouteError(
+            422,
+            "agent_required",
+            "a factory member is created with agent_id naming a built-in agent; spawn it "
+            "with sys_factory_spawn",
+        )
+    agent = None if agent_id is None else await asyncio.to_thread(store.get, agent_id)
+    if bundled or (agent is not None and agent.session_id is not None):
+        raise FactoryRouteError(
+            403,
+            FACTORY_CUSTOM_BUNDLE_DENIED,
+            "factory members cannot run a custom bundle; spawn a built-in agent with "
+            "sys_factory_spawn",
+        )
 
 
 def _check_values(labels: Mapping[str, str]) -> None:

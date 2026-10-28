@@ -442,3 +442,47 @@ def test_reject_uploaded_callable_tools_recurses_into_sub_agents() -> None:
     root.sub_agents = [sub]
     with pytest.raises(OmnigentError, match=r"may not declare a server-side Python callable tool"):
         _reject_uploaded_callable_tools(root)
+
+
+# ── no spec seeds factory membership ───────────────────────
+
+
+@pytest.mark.parametrize(
+    "key", ["omnigent.factory.id", "omnigent.factory.engine_mode", " Omnigent.Factory.role"]
+)
+@pytest.mark.parametrize("enforce", [True, False], ids=["untrusted", "trusted-local"])
+def test_validate_bundle_rejects_factory_label_defs(key: str, enforce: bool) -> None:
+    """A declared label is seeded onto the session, so a spec never declares a factory one."""
+    config = _MIN_CONFIG.format(name="seeder") + yaml.safe_dump(
+        {"guardrails": {"labels": {key: {"initial": "x"}, "team": {"initial": "ml"}}}}
+    )
+
+    with pytest.raises(OmnigentError, match=r"omnigent\.factory\.\* labels are set only"):
+        validate_agent_bundle(
+            _make_bundle_bytes({"config.yaml": config}), enforce_handler_allowlist=enforce
+        )
+
+
+def test_validate_bundle_keeps_other_label_defs() -> None:
+    config = _MIN_CONFIG.format(name="seeder") + yaml.safe_dump(
+        {"guardrails": {"labels": {"team": {"initial": "ml"}}}}
+    )
+
+    spec = validate_agent_bundle(_make_bundle_bytes({"config.yaml": config}))
+
+    assert spec.guardrails is not None and spec.guardrails.labels is not None
+    assert spec.guardrails.labels["team"].initial == "ml"
+
+
+def test_reject_factory_label_defs_recurses_into_sub_agents() -> None:
+    from omnigent.server.bundles import reject_factory_label_defs
+    from omnigent.spec import AgentSpec
+    from omnigent.spec.types import GuardrailsSpec, LabelDef
+
+    sub = AgentSpec(name="ic", spec_version=1)
+    sub.guardrails = GuardrailsSpec(labels={"omnigent.factory.role": LabelDef(initial="lead")})
+    root = AgentSpec(name="root", spec_version=1)
+    root.sub_agents = [sub]
+
+    with pytest.raises(OmnigentError, match=r"'ic' declares guardrails label"):
+        reject_factory_label_defs(root)
