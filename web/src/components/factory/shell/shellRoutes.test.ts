@@ -28,7 +28,9 @@ describe("factoryLocation", () => {
     ["settings/people", { page: "settings", id: "people" }],
     ["room", { page: "room", id: null }],
     ["room/project%3Adb-version", { page: "room", id: "project:db-version" }],
-    ["graph", { page: "other", id: "graph" }],
+    ["graph", { page: "graph", id: null }],
+    ["decisions", { page: "decisions", id: null }],
+    ["timeline", { page: "other", id: "timeline" }],
   ])("reads %j", (rest, expected) => {
     expect(factoryLocation(rest)).toEqual(expected);
   });

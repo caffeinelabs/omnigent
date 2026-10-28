@@ -88,6 +88,7 @@ beforeEach(() => {
   connected.value = true;
   resetFactoryControls();
   setWidth({ wide: true });
+  localStorage.clear();
 });
 afterEach(() => {
   vi.useRealTimers();
@@ -115,7 +116,12 @@ describe("FactoryPage · shell", () => {
     expect(screen.getByTestId("overview-live-feed")).toBeInTheDocument();
     expect(screen.getByTestId("factory-health-strip")).toBeInTheDocument();
     const dock = screen.getByTestId("room-dock");
-    expect(within(dock).getByTestId("decision-card-D-2")).toBeInTheDocument();
+    expect(dock).toHaveAttribute("data-thread", "factory");
+    expect(await within(dock).findByTestId("room-message-1")).toHaveTextContent(
+      "Show the deployed versions in Settings",
+    );
+    fireEvent.mouseDown(within(dock).getByTestId("room-dock-tab-decisions"));
+    expect(await within(dock).findByTestId("decision-card-D-2")).toBeInTheDocument();
   });
 
   it("shows the base, engine mode and definition version only when the server sends them", async () => {
@@ -252,7 +258,17 @@ describe("FactoryPage · routes and old links", () => {
     expect(await screen.findByTestId("people-settings")).toBeInTheDocument();
     expect(location).toBe(`/factory/${FID}/settings/people`);
     fireEvent.click(screen.getByTestId("factory-tab-room"));
-    expect(await screen.findByTestId("room-dock-slot")).toHaveAttribute("data-thread", "factory");
+    expect(await screen.findByTestId("factory-room-page")).toHaveAttribute(
+      "data-thread",
+      "factory",
+    );
+    // The Room page holds the thread itself: no dock beside it.
+    expect(screen.queryByTestId("room-dock")).toBeNull();
+    fireEvent.click(screen.getByTestId("factory-tab-graph"));
+    expect(await screen.findByTestId("factory-graph-page")).toHaveAttribute("data-kind", "work");
+    fireEvent.click(screen.getByTestId("factory-tab-decisions"));
+    expect(await screen.findByTestId("factory-decisions-page")).toBeInTheDocument();
+    expect(location).toBe(`/factory/${FID}/decisions`);
   });
 
   it("opens a project's page from its table row, never a drawer", async () => {
@@ -364,5 +380,77 @@ describe("FactoryPage · presence, ⌘K and sharing", () => {
     renderAt("/projects/api-version");
     await screen.findByTestId("project-page-api-version");
     expect(server.calls.filter((c) => c.method === "GET" && c.path === SNAPSHOT)).toHaveLength(1);
+  });
+});
+
+describe("FactoryPage · the Room dock", () => {
+  it("follows the page: #slug on a project page, !n on a PR page, the last thread elsewhere", async () => {
+    serve();
+    renderAt("/projects/db-version");
+    const dock = await screen.findByTestId("room-dock");
+    expect(dock).toHaveAttribute("data-thread", "project:db-version");
+    expect(within(dock).getByTestId("room-thread-title")).toHaveTextContent("#db-version");
+    fireEvent.click(await screen.findByTestId("factory-tab-projects"));
+    await waitFor(() =>
+      expect(screen.getByTestId("room-dock")).toHaveAttribute("data-thread", "project:db-version"),
+    );
+    fireEvent.click(screen.getByTestId("factory-tab-overview"));
+    await screen.findByTestId("factory-needs-you");
+    // Off project and PR pages the dock keeps the last thread it showed.
+    expect(screen.getByTestId("room-dock")).toHaveAttribute("data-thread", "project:db-version");
+  });
+
+  it("binds a PR page to its !n thread", async () => {
+    serve();
+    renderAt(`/prs/${PR_9630}`);
+    const dock = await screen.findByTestId("room-dock");
+    expect(dock).toHaveAttribute("data-thread", `pr:${PR_9630}`);
+    expect(within(dock).getByTestId("room-thread-title")).toHaveTextContent("!9630");
+  });
+
+  it("keeps its width from the last drag", async () => {
+    localStorage.setItem("omnigent.factory.roomDock.width", "420");
+    serve();
+    renderAt("");
+    const layout = await screen.findByTestId("factory-layout");
+    expect(layout.style.gridTemplateColumns).toBe("minmax(0,1fr) 420px");
+    fireEvent.keyDown(screen.getByTestId("room-dock-resize"), { key: "ArrowLeft" });
+    expect(layout.style.gridTemplateColumns).toBe("minmax(0,1fr) 436px");
+    expect(localStorage.getItem("omnigent.factory.roomDock.width")).toBe("436");
+  });
+
+  it("is a bottom sheet with the unread count below 1280 px", async () => {
+    setWidth({ wide: false });
+    serve(() => round3Snapshot());
+    renderAt("");
+    const button = await screen.findByTestId("room-sheet-open");
+    expect(await screen.findByTestId("room-sheet-unread")).toHaveTextContent("6");
+    expect(screen.queryByTestId("room-dock")).toBeNull();
+    fireEvent.click(button);
+    expect(await screen.findByTestId("room-sheet")).toBeInTheDocument();
+    expect(screen.getByTestId("room-dock")).toHaveAttribute("data-thread", "factory");
+  });
+
+  it("posts from the dock as the viewer", async () => {
+    serve(() => round3Snapshot());
+    renderAt("");
+    const dock = await screen.findByTestId("room-dock");
+    const input = await within(dock).findByTestId("room-composer-input");
+    expect(within(dock).getByTestId("room-composer-identity")).toHaveTextContent(
+      "Posting as luka · owner",
+    );
+    fireEvent.change(input, {
+      target: { value: "@atlas add a project for a /health badge on settings" },
+    });
+    fireEvent.click(within(dock).getByTestId("room-composer-send"));
+    await waitFor(() =>
+      expect(server.posts).toEqual([
+        {
+          thread: "factory",
+          body: "@atlas add a project for a /health badge on settings",
+          mentions: ["@atlas"],
+        },
+      ]),
+    );
   });
 });

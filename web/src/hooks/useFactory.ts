@@ -97,6 +97,8 @@ export function factoryInvalidationKeys(
     ["factory-demos", factoryId],
     ["factory-people", factoryId],
     ["factory-spans", factoryId],
+    // The Room, proposals, graphs, loops and issues.
+    ["factory-room", factoryId],
     FACTORIES_QUERY_KEY,
     FACTORY_DECISIONS_QUERY_KEY,
   ];

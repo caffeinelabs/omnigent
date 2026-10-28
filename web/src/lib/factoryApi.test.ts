@@ -184,9 +184,40 @@ describe("startFactory", () => {
     expect(JSON.parse(String(register!.body)).projects[0].base_branch).toBe("main");
   });
 
-  it("rejects a form without projects before calling the server", async () => {
-    await expect(startFactory({ ...FORM, projects: [] })).rejects.toThrow("at least one project");
+  it("rejects a form without projects or a default repo before calling the server", async () => {
+    await expect(startFactory({ ...FORM, projects: [] })).rejects.toThrow(
+      "a project or a default repository",
+    );
     expect(authenticatedFetch).not.toHaveBeenCalled();
+  });
+
+  it("starts chat-first (Describe it) on the default repo with the brief and modes", async () => {
+    serve([() => json({ factory_id: "conv_atlas", url: "/factory/conv_atlas" }, 201)]);
+
+    await startFactory(
+      {
+        ...FORM,
+        projects: [],
+        defaults: { repo: "caffeinelabs/app", base_branch: "temp-main", integration_env: true },
+        brief: "  Show the deployed versions in Settings.  ",
+        autonomy: "requested",
+        engineMode: "observe",
+      },
+      { sleep: async () => undefined },
+    );
+
+    const [createSession] = callsTo("/v1/sessions");
+    expect(JSON.parse(String(createSession!.body)).workspaces).toEqual([
+      "https://github.com/caffeinelabs/app#temp-main",
+    ]);
+    const [register] = callsTo("/v1/factory/factories");
+    expect(JSON.parse(String(register!.body))).toMatchObject({
+      projects: [],
+      brief: "Show the deployed versions in Settings.",
+      autonomy: "requested",
+      engine_mode: "observe",
+      defaults: { repo: "caffeinelabs/app", base_branch: "temp-main", integration_env: true },
+    });
   });
 });
 

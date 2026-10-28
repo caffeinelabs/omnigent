@@ -23,6 +23,8 @@ export interface FactoryShellValue {
   openShare: () => void;
   openPalette: () => void;
   openAddProject: () => void;
+  /** Add project starting from a title (`/project new <title>` in the Room). */
+  openAddProjectTitled: (title: string | null) => void;
 }
 
 export const FactoryShellContext = createContext<FactoryShellValue | null>(null);

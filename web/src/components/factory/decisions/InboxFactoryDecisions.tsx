@@ -1,12 +1,13 @@
 /**
- * The Inbox's "Factory decisions" section: every open decision across the
- * factories the viewer can see, grouped by factory, answerable in place with
- * the same card as the cockpit's rail. A card answered here stays and
+ * The Inbox's factory sections: first "Assigned to you" (decisions and
+ * proposals routed to the viewer or a role they hold, across factories),
+ * then every other open decision grouped by factory, answerable in place
+ * with the same card as the cockpit's rail. A card answered here stays and
  * follows its factory's snapshot until the delivery receipt arrives.
  */
 
 import { useState } from "react";
-import { ArrowRightIcon, FactoryIcon, TriangleAlertIcon } from "lucide-react";
+import { ArrowRightIcon, FactoryIcon, TriangleAlertIcon, UserRoundCheckIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useFactory } from "@/hooks/useFactory";
 import type { DecisionView, OpenDecisionItem } from "@/lib/factoryApi";
@@ -17,17 +18,20 @@ import { orderOpenDecisions } from "./DecisionsRail";
 
 function InboxDecision({
   item,
+  factoryName,
   answered,
   onAnswered,
 }: {
   item: OpenDecisionItem;
+  /** Named on the card when cards of several factories mix ("Assigned to you"). */
+  factoryName?: string;
   /** Answered here: follow the factory snapshot for the delivery receipt. */
   answered: boolean;
   onAnswered: (decision: DecisionView) => void;
 }) {
   const { data } = useFactory(answered ? item.factory.id : null);
   const fresh = data?.decisions.find((d) => d.id === item.decision.id) ?? item.decision;
-  return <DecisionCard decision={fresh} onAnswered={onAnswered} />;
+  return <DecisionCard decision={fresh} factoryName={factoryName} onAnswered={onAnswered} />;
 }
 
 interface Group {
@@ -70,17 +74,41 @@ export function InboxFactoryDecisions({
   const all = [...items, ...kept];
   if (all.length === 0 && !error) return null;
   const remember = (item: OpenDecisionItem) => (decision: DecisionView) =>
-    setMine((prev) => ({ ...prev, [decision.id]: { factory: item.factory, decision } }));
+    setMine((prev) => ({ ...prev, [decision.id]: { ...item, decision } }));
+  const assigned = all.filter((i) => i.mine === true);
+  const rest = all.filter((i) => i.mine !== true);
   return (
     <section
       data-testid="inbox-factory-decisions"
       aria-label="Factory decisions"
       className="mb-6 flex flex-col gap-3"
     >
-      <h2 className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground">
-        Factory decisions
-        <span className="tabular-nums">{` · ${items.length} open`}</span>
-      </h2>
+      {assigned.length > 0 && (
+        <div data-testid="inbox-assigned-to-you" className="flex flex-col gap-2">
+          <h2 className="flex items-center gap-1.5 text-sm font-medium text-foreground">
+            <UserRoundCheckIcon aria-hidden className="size-4 text-warning" />
+            Assigned to you
+            <span className="font-normal text-muted-foreground tabular-nums">
+              {` · ${assigned.filter((i) => items.includes(i)).length} open`}
+            </span>
+          </h2>
+          {assigned.map((item) => (
+            <InboxDecision
+              key={item.decision.id}
+              item={item}
+              factoryName={item.factory.name}
+              answered={item.decision.id in mine}
+              onAnswered={remember(item)}
+            />
+          ))}
+        </div>
+      )}
+      {(rest.length > 0 || error) && (
+        <h2 className="flex items-center gap-1.5 text-sm font-medium text-muted-foreground">
+          Factory decisions
+          <span className="tabular-nums">{` · ${rest.filter((i) => items.includes(i)).length} open`}</span>
+        </h2>
+      )}
       {error && (
         <p
           data-testid="inbox-factory-decisions-error"
@@ -95,7 +123,7 @@ export function InboxFactoryDecisions({
           )}
         </p>
       )}
-      {groupByFactory(all).map((group) => (
+      {groupByFactory(rest).map((group) => (
         <div
           key={group.factory.id}
           data-testid={`inbox-factory-${group.factory.id}`}

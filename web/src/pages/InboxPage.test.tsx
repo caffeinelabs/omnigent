@@ -485,6 +485,26 @@ describe("InboxPage factory decisions", () => {
     expect(screen.getByText(/3 decisions · 1 approval waiting/)).toBeInTheDocument();
   });
 
+  it("puts what is assigned to the viewer first, across factories", async () => {
+    const items = inboxDecisionItems();
+    items[0] = { ...items[0]!, mine: true };
+    items[2] = { ...items[2]!, mine: true };
+    serveDecisions(items);
+    renderPage({ factory: true });
+    const assigned = await screen.findByTestId("inbox-assigned-to-you");
+    expect(assigned).toHaveTextContent("Assigned to you · 2 open");
+    expect(within(assigned).getByTestId("decision-card-D-2")).toHaveTextContent("Atlas factory");
+    expect(
+      within(assigned).getByTestId(`decision-card-${items[2]!.decision.ref}`),
+    ).toHaveTextContent("Docs factory");
+    const section = screen.getByTestId("inbox-factory-decisions");
+    expect(section).toHaveTextContent("Factory decisions · 1 open");
+    const atlas = within(section).getByTestId("inbox-factory-f4f4ba9c77725331b12f0fa7072dc4d3");
+    expect(within(atlas).getByTestId("decision-card-D-3")).toBeInTheDocument();
+    expect(within(atlas).queryByTestId("decision-card-D-2")).toBeNull();
+    expect(assigned.compareDocumentPosition(atlas) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("answers a decision in place", async () => {
     serveDecisions();
     renderPage({ factory: true });

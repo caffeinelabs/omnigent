@@ -24,9 +24,16 @@ import {
   type FactoryShellValue,
 } from "@/components/factory/shell/FactoryShellContext";
 import { FactoryTabs } from "@/components/factory/shell/FactoryTabs";
+import {
+  DockResizeHandle,
+  RoomDock,
+  RoomSheetButton,
+  useDockWidth,
+} from "@/components/factory/room/RoomDock";
+import { unreadTotal } from "@/components/factory/room/roomModel";
+import { useRoomThreads } from "@/components/factory/room/roomQueries";
 import { PHONE_TAB_BAR_REM, PhoneTabBar } from "@/components/factory/shell/PhoneTabBar";
-import { RoomDock } from "@/components/factory/shell/RoomDock";
-import { DOCK_SCROLLER_ATTRIBUTE, PAGE_EXTRA_TOP } from "@/components/factory/shell/scroll";
+import { PAGE_EXTRA_TOP } from "@/components/factory/shell/scroll";
 import {
   factoryLocation,
   legacyFactoryRedirect,
@@ -91,7 +98,9 @@ function Shell({
   const location = useMemo(() => factoryLocation(rest), [rest]);
   const [sharing, setSharing] = useState(false);
   const [palette, setPalette] = useState(false);
-  const [adding, setAdding] = useState(false);
+  const [adding, setAdding] = useState<{ title: string | null } | null>(null);
+  const [dockWidth, setDockWidth] = useDockWidth();
+  const roomUnread = unreadTotal(useRoomThreads(snapshot.factory.id).data?.data);
   const togglePalette = useCallback(() => setPalette((open) => !open), []);
   useFactoryPaletteHotkey(togglePalette);
   useFactoryNotifications(useMemo(() => snapshotNotices(snapshot), [snapshot]));
@@ -108,11 +117,13 @@ function Shell({
       wide,
       openShare: () => setSharing(true),
       openPalette: () => setPalette(true),
-      openAddProject: () => setAdding(true),
+      openAddProject: () => setAdding({ title: null }),
+      openAddProjectTitled: (title: string | null) => setAdding({ title }),
     }),
     [snapshot, clockOffsetS, nowS, updatedAt, location, wide],
   );
   const dock = wide && location.page !== "room" && location.page !== "settings";
+  const sheet = !wide && !phone && location.page !== "room";
   return (
     <FactoryShellContext.Provider value={shell}>
       <div
@@ -125,13 +136,14 @@ function Shell({
           snapshot={snapshot}
           nowS={nowS}
           onShare={() => setSharing(true)}
-          onAddProject={() => setAdding(true)}
+          onAddProject={() => setAdding({ title: null })}
         />
         {!phone && (
           <FactoryTabs
             snapshot={snapshot}
             location={location}
             mineCount={myDecisionCount(split)}
+            roomUnread={roomUnread}
             onPalette={() => setPalette(true)}
           />
         )}
@@ -139,29 +151,26 @@ function Shell({
         <div
           data-testid="factory-layout"
           data-wide={dock ? "true" : "false"}
-          className={
-            dock
-              ? "grid grid-cols-[minmax(0,1fr)_20rem] items-start gap-6 pt-1"
-              : "flex min-w-0 flex-col pt-1"
-          }
+          className={dock ? "grid items-start gap-6 pt-1" : "flex min-w-0 flex-col pt-1"}
+          style={dock ? { gridTemplateColumns: `minmax(0,1fr) ${dockWidth}px` } : undefined}
         >
           <main className="min-w-0" data-testid="factory-page-body">
             {children}
           </main>
           {dock && (
-            // The padding (offset by the margin) keeps a highlighted card's ring inside the
-            // scroller. The page scroller's padding already clears the header, so the dock
+            // The page scroller's padding already clears the header, so the dock
             // sticks 1rem under it and ends 1rem above the bottom.
             <aside
               aria-label="Room and decisions"
-              {...{ [DOCK_SCROLLER_ATTRIBUTE]: "" }}
-              className="sticky -m-1 overflow-y-auto overscroll-contain p-1"
+              data-testid="room-dock-column"
+              className="sticky flex flex-col"
               style={{
                 top: `calc(1rem - ${PAGE_EXTRA_TOP})`,
-                maxHeight:
+                height:
                   "calc(100dvh - var(--omnigent-header-height) - var(--omnigent-inset-top) - var(--omnigent-inset-bottom) - 2rem)",
               }}
             >
+              <DockResizeHandle width={dockWidth} onWidth={setDockWidth} />
               <RoomDock
                 snapshot={snapshot}
                 location={location}
@@ -172,11 +181,20 @@ function Shell({
           )}
         </div>
       </div>
+      {sheet && (
+        <RoomSheetButton
+          snapshot={snapshot}
+          location={location}
+          highlightDecision={params.get("decision")}
+          clockOffsetS={clockOffsetS}
+        />
+      )}
       {phone && (
         <PhoneTabBar
           factoryId={snapshot.factory.id}
           location={location}
           needsYou={split.mine.length + split.role.length}
+          roomUnread={roomUnread}
           onShare={() => setSharing(true)}
           onPalette={() => setPalette(true)}
         />
@@ -193,9 +211,16 @@ function Shell({
         open={palette}
         onOpenChange={setPalette}
         onShare={() => setSharing(true)}
-        onAddProject={() => setAdding(true)}
+        onAddProject={() => setAdding({ title: null })}
       />
-      <AddProjectDialog factoryId={snapshot.factory.id} open={adding} onOpenChange={setAdding} />
+      <AddProjectDialog
+        // A fresh form per opening, so `/project new <title>` prefills it.
+        key={adding ? `add:${adding.title ?? ""}` : "add"}
+        factoryId={snapshot.factory.id}
+        open={adding != null}
+        initialTitle={adding?.title ?? null}
+        onOpenChange={(open) => !open && setAdding(null)}
+      />
     </FactoryShellContext.Provider>
   );
 }
@@ -209,6 +234,7 @@ export function FactoryLayout({ children }: { children: ReactNode }) {
   const [params] = useSearchParams();
   const navigate = useNavigate();
   const phone = useIsMobileViewport();
+  const wide = useMediaQuery(WIDE_BOARD_QUERY);
   const { data, error, isLoading, updatedAt, clockOffsetS, refetch } = useFactory(factoryId, {
     minRefreshMs: COCKPIT_MIN_REFRESH_MS,
   });
@@ -227,7 +253,8 @@ export function FactoryLayout({ children }: { children: ReactNode }) {
       maxWidthClassName="max-w-[100rem]"
       contentClassName="px-4 md:px-6"
       extraTop={PAGE_EXTRA_TOP}
-      extraBottom={phone ? `${PHONE_TAB_BAR_REM + 1.5}rem` : undefined}
+      // Room for the phone's bottom tabs, or the Room button below 1280 px.
+      extraBottom={phone ? `${PHONE_TAB_BAR_REM + 1.5}rem` : wide ? undefined : "4.5rem"}
     >
       <Link
         to="/factory"

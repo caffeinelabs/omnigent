@@ -14,7 +14,16 @@ import {
 
 /** The pages the shell routes to, keyed by their first path segment. */
 export type FactoryPageKey =
-  "overview" | "projects" | "project" | "pr" | "activity" | "settings" | "room" | "other";
+  | "overview"
+  | "projects"
+  | "project"
+  | "pr"
+  | "activity"
+  | "settings"
+  | "room"
+  | "decisions"
+  | "graph"
+  | "other";
 
 export interface FactoryLocation {
   page: FactoryPageKey;
@@ -42,6 +51,10 @@ export function factoryLocation(rest: string | undefined): FactoryLocation {
       return { page: "settings", id: second ?? "people" };
     case "room":
       return { page: "room", id: second ?? null };
+    case "decisions":
+      return { page: "decisions", id: null };
+    case "graph":
+      return { page: "graph", id: null };
     default:
       return { page: "other", id: first };
   }
@@ -64,6 +77,10 @@ export function presenceLocation(location: FactoryLocation): string | null {
       return "settings";
     case "room":
       return location.id ? `room:${location.id}` : "room";
+    case "decisions":
+      return "decisions";
+    case "graph":
+      return "graph";
     default:
       return null;
   }
@@ -88,6 +105,10 @@ export function presenceWhere(location: string | null | undefined): string {
       return "Settings";
     case "room":
       return id ? `Room ${id}` : "the Room";
+    case "decisions":
+      return "Decisions";
+    case "graph":
+      return "Graph";
     case "agent":
       return "an agent page";
     default:

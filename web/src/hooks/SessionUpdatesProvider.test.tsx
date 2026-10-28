@@ -453,6 +453,7 @@ describe("SessionUpdatesProvider factory_changed frames", () => {
       ["factory-demos", "f4f4ba9c"],
       ["factory-people", "f4f4ba9c"],
       ["factory-spans", "f4f4ba9c"],
+      ["factory-room", "f4f4ba9c"],
       ["factories"],
       ["factory-decisions"],
     ]);

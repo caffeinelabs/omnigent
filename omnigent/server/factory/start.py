@@ -323,6 +323,8 @@ class StartIn(_Body):
 
     :param projects: Projects to start with; none for a chat-first start.
     :param brief: What the human wants built; Atlas plans projects from it.
+    :param autonomy: Which project proposals apply on their own (unset: ``requested``).
+    :param engine_mode: How far the engine acts (unset: ``assist``).
     """
 
     root_session_id: str
@@ -331,6 +333,8 @@ class StartIn(_Body):
     defaults: DefaultsIn | None = None
     projects: list[ProjectIn] = Field(default_factory=list, max_length=MAX_PROJECTS)
     brief: str | None = Field(None, max_length=BRIEF_MAX_CHARS)
+    autonomy: Literal["confirm", "requested", "grace"] | None = None
+    engine_mode: Literal["observe", "assist", "enforce"] | None = None
 
     @field_validator("brief")
     @classmethod
@@ -365,6 +369,19 @@ def _loc(loc: Sequence[Any]) -> str:
         else:
             out += f".{part}" if out else str(part)
     return out or "body"
+
+
+def _mode_labels(body: StartIn) -> dict[str, str]:
+    """The root labels holding the start's autonomy and engine mode (until the definition does)."""
+    from omnigent.server.factory.autonomy import LABEL_AUTONOMY
+    from omnigent.server.factory.tasks import LABEL_ENGINE_MODE
+
+    labels: dict[str, str] = {}
+    if body.autonomy:
+        labels[LABEL_AUTONOMY] = body.autonomy
+    if body.engine_mode:
+        labels[LABEL_ENGINE_MODE] = body.engine_mode
+    return labels
 
 
 def parse_body(model: type[_M], payload: Any, *, prefix: str = "") -> _M:
@@ -832,6 +849,7 @@ async def start_factory(
         beats = CADENCE_HEARTBEATS[body.cadence]
         # The root lead carries the platform version and its bundle like spawned members.
         version_labels = await asyncio.to_thread(versions.member_labels, deps, root)
+        mode_labels = _mode_labels(body)
         await asyncio.to_thread(
             deps.conversation_store.set_labels,
             root.id,
@@ -843,6 +861,7 @@ async def start_factory(
                 LABEL_STATE: STATE_ACTIVE,
                 **defaults.labels(),
                 **version_labels,
+                **mode_labels,
             },
         )
         root = await control.get_conv(deps, root.id) or root

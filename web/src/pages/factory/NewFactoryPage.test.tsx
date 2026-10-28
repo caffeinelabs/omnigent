@@ -79,15 +79,25 @@ function CockpitStub() {
   return <p data-testid="cockpit-stub">cockpit {factoryId}</p>;
 }
 
-function renderPage(info: ServerInfo | "loading" = "loading") {
+function RoomStub() {
+  const { factoryId, thread } = useParams<{ factoryId: string; thread: string }>();
+  return (
+    <p data-testid="room-stub">
+      room {factoryId} {thread}
+    </p>
+  );
+}
+
+function renderPage(info: ServerInfo | "loading" = "loading", path = "/factory/new") {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   return render(
     <CapabilitiesProvider info={info}>
       <QueryClientProvider client={client}>
-        <MemoryRouter initialEntries={["/factory/new"]}>
+        <MemoryRouter initialEntries={[path]}>
           <Routes>
             <Route path="/factory/new" element={<NewFactoryPage />} />
             <Route path="/factory/:factoryId" element={<CockpitStub />} />
+            <Route path="/factory/:factoryId/room/:thread" element={<RoomStub />} />
           </Routes>
         </MemoryRouter>
       </QueryClientProvider>
@@ -540,5 +550,97 @@ describe("NewFactoryPage", () => {
     fireEvent.click(screen.getByTestId("factory-new-remove-0"));
     expect(screen.getByTestId("factory-new-slug-0")).toHaveValue("second");
     expect(screen.queryByTestId("factory-new-project-2")).not.toBeInTheDocument();
+  });
+});
+
+describe("NewFactoryPage · Describe it", () => {
+  const BRIEF = "Show the deployed versions in Settings: an API and a DB version endpoint.";
+  const preflight = () => ({
+    ...preflightOk(),
+    default_repo: "caffeinelabs/app",
+    default_base: "temp-main",
+  });
+
+  it("switches modes from the header and keeps the form's draft", async () => {
+    serve({ preflight: preflight() });
+    renderPage();
+    type("factory-new-name", "Kept name");
+    fireEvent.click(screen.getByTestId("factory-new-mode-describe"));
+    expect(await screen.findByTestId("factory-describe")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("factory-new-mode-form"));
+    expect((screen.getByTestId("factory-new-name") as HTMLInputElement).value).toBe("Kept name");
+  });
+
+  it("validates the name, the default repo and the brief before anything is sent", async () => {
+    const calls = serve({ preflight: { ...preflightOk(), default_repo: null } });
+    renderPage("loading", "/factory/new?mode=describe");
+    await screen.findByTestId("factory-describe");
+    type("factory-describe-name", "");
+    fireEvent.click(screen.getByTestId("factory-describe-submit"));
+    expect(await screen.findByTestId("factory-describe-error-name")).toHaveTextContent(
+      "Name the factory",
+    );
+    expect(screen.getByTestId("factory-describe-error-brief")).toHaveTextContent(
+      "Describe what the factory should build",
+    );
+    expect(screen.getByTestId("factory-describe-error-defaults")).toHaveTextContent(
+      "Pick the repo the factory works on",
+    );
+    type("factory-describe-brief", "too short");
+    expect(screen.getByTestId("factory-describe-error-brief")).toHaveTextContent("Say a bit more");
+    expect(writes(calls)).toEqual([]);
+  });
+
+  it("starts chat-first on the preflight's repo#base and lands on #factory", async () => {
+    const calls = serve({ preflight: preflight() });
+    renderPage("loading", "/factory/new?mode=describe");
+    await waitFor(() =>
+      expect(screen.getByTestId("factory-describe-default-repo")).toHaveTextContent(
+        "caffeinelabs/app",
+      ),
+    );
+    type("factory-describe-brief", BRIEF);
+    fireEvent.click(screen.getByTestId("factory-describe-autonomy-grace"));
+    fireEvent.click(screen.getByTestId("factory-describe-engine-assist"));
+    fireEvent.click(screen.getByTestId("factory-describe-submit"));
+    expect(await screen.findByTestId("room-stub")).toHaveTextContent("room conv_atlas factory");
+    const session = writes(calls).find((c) => c.path === "/v1/sessions")!;
+    expect((session.body as { workspaces: string[] }).workspaces).toEqual([
+      "https://github.com/caffeinelabs/app#temp-main",
+    ]);
+    const register = writes(calls).find((c) => c.path === "/v1/factory/factories")!;
+    expect(register.body).toMatchObject({
+      name: "Atlas factory",
+      projects: [],
+      brief: BRIEF,
+      autonomy: "grace",
+      engine_mode: "assist",
+      defaults: { repo: "caffeinelabs/app", base_branch: "temp-main", integration_env: true },
+    });
+  });
+
+  it("puts a refused brief on its field", async () => {
+    serve({
+      preflight: preflight(),
+      register: [
+        () =>
+          json(
+            { error: { code: "invalid_body", message: "brief is too long" }, field: "brief" },
+            400,
+          ),
+      ],
+    });
+    renderPage("loading", "/factory/new?mode=describe");
+    await waitFor(() =>
+      expect(screen.getByTestId("factory-describe-default-repo")).toHaveTextContent(
+        "caffeinelabs/app",
+      ),
+    );
+    type("factory-describe-brief", BRIEF);
+    fireEvent.click(screen.getByTestId("factory-describe-submit"));
+    expect(await screen.findByTestId("factory-describe-error-brief")).toHaveTextContent(
+      "Brief is too long",
+    );
+    expect(screen.getByTestId("factory-describe-submit")).toHaveTextContent("Retry");
   });
 });

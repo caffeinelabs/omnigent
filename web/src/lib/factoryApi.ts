@@ -1295,6 +1295,12 @@ export interface CreateFactoryRequest {
   cadence: FactoryCadence;
   defaults?: FactoryDefaultsInput;
   projects: FactoryProjectInput[];
+  /** A chat-first start: what to build; Atlas plans projects from it in `#factory`. */
+  brief?: string;
+  /** Which project proposals apply on their own (the server default is `requested`). */
+  autonomy?: "confirm" | "requested" | "grace";
+  /** How far the engine acts (the server default is `assist`). */
+  engine_mode?: EngineMode;
 }
 
 export interface CreateFactoryResponse {
@@ -1708,8 +1714,12 @@ export interface StartFactoryForm {
   name: string;
   cadence: FactoryCadence;
   defaults?: FactoryDefaultsInput;
-  /** The first project's repo and branch become the lead's workspace. */
+  /** The first project's repo and branch become the lead's workspace (else the defaults'). */
   projects: FactoryProjectInput[];
+  /** "Describe it": no projects, a brief Atlas plans from. */
+  brief?: string;
+  autonomy?: CreateFactoryRequest["autonomy"];
+  engineMode?: EngineMode;
 }
 
 /**
@@ -1803,7 +1813,12 @@ export async function startFactory(
     base_branch: project.base_branch.trim() || inheritedBase(project.repo, form.defaults),
   }));
   const first = projects[0];
-  if (!first) throw new Error("A factory needs at least one project");
+  // A chat-first start runs Atlas on the factory's default repo and base.
+  const defaultRepo = form.defaults?.repo?.trim();
+  const workspaceRepo = first?.repo ?? defaultRepo;
+  const workspaceBase =
+    first?.base_branch ?? inheritedBase(defaultRepo ?? "", form.defaults ?? null);
+  if (!workspaceRepo) throw new Error("A factory needs a project or a default repository");
   let rootId = options.rootSessionId ?? null;
   if (!rootId) {
     options.onStep?.("lead");
@@ -1815,7 +1830,7 @@ export async function startFactory(
         body: JSON.stringify({
           agent_id: agentId,
           host_type: "managed",
-          workspaces: [`https://github.com/${first.repo}#${first.base_branch}`],
+          workspaces: [`https://github.com/${workspaceRepo}#${workspaceBase}`],
           title: FACTORY_LEAD_TITLE,
         }),
       }),
@@ -1830,6 +1845,9 @@ export async function startFactory(
     cadence: form.cadence,
     ...(form.defaults ? { defaults: form.defaults } : {}),
     projects,
+    ...(form.brief?.trim() ? { brief: form.brief.trim() } : {}),
+    ...(form.autonomy ? { autonomy: form.autonomy } : {}),
+    ...(form.engineMode ? { engine_mode: form.engineMode } : {}),
   };
   let lastError: unknown = null;
   /* oxlint-disable no-await-in-loop -- retries are sequential by design */

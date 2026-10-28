@@ -11,7 +11,9 @@ import {
   CommandIcon,
   EllipsisIcon,
   FolderKanbanIcon,
+  GitForkIcon,
   LayoutDashboardIcon,
+  ListChecksIcon,
   MessagesSquareIcon,
   SettingsIcon,
   Share2Icon,
@@ -28,7 +30,9 @@ import { Link, useNavigate } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import {
   activityPageHref,
+  decisionsPageHref,
   factoryPageHref,
+  graphPageHref,
   projectsPageHref,
   roomPageHref,
   settingsPageHref,
@@ -44,6 +48,7 @@ function Tab({
   icon: Icon,
   active,
   badge,
+  tone = "warning",
   testId,
 }: {
   to: string;
@@ -51,6 +56,7 @@ function Tab({
   icon: typeof BellIcon;
   active: boolean;
   badge?: number;
+  tone?: "warning" | "primary";
   testId: string;
 }) {
   return (
@@ -67,7 +73,13 @@ function Tab({
       <span className="relative">
         <Icon aria-hidden className="size-5" />
         {badge != null && badge > 0 && (
-          <span className="absolute -top-1 -right-2.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full bg-warning px-1 text-[10px] font-medium text-white tabular-nums">
+          <span
+            data-testid={`${testId}-badge`}
+            className={cn(
+              "absolute -top-1 -right-2.5 inline-flex h-4 min-w-4 items-center justify-center rounded-full px-1 text-[10px] font-medium tabular-nums",
+              tone === "primary" ? "bg-primary text-primary-foreground" : "bg-warning text-white",
+            )}
+          >
             {badge}
           </span>
         )}
@@ -105,6 +117,7 @@ export function PhoneTabBar({
   factoryId,
   location,
   needsYou,
+  roomUnread = 0,
   onShare,
   onPalette,
 }: {
@@ -112,6 +125,8 @@ export function PhoneTabBar({
   location: FactoryLocation;
   /** What waits on the viewer (the Needs you badge). */
   needsYou: number;
+  /** Unread Room messages (the Room tab's badge). */
+  roomUnread?: number;
   onShare: () => void;
   onPalette: () => void;
 }) {
@@ -131,6 +146,8 @@ export function PhoneTabBar({
           label="Room"
           icon={MessagesSquareIcon}
           active={location.page === "room"}
+          badge={roomUnread}
+          tone="primary"
           testId="factory-phone-room"
         />
         <Tab
@@ -155,7 +172,7 @@ export function PhoneTabBar({
           aria-expanded={more}
           className={cn(
             "flex min-w-0 flex-1 cursor-pointer flex-col items-center justify-center gap-0.5 text-xs",
-            ["activity", "settings", "other"].includes(location.page)
+            ["activity", "settings", "decisions", "graph", "other"].includes(location.page)
               ? "text-foreground"
               : "text-muted-foreground",
           )}
@@ -165,7 +182,7 @@ export function PhoneTabBar({
         </button>
       </nav>
       <Sheet open={more} onOpenChange={setMore}>
-        {/* Six rows: a sheet sized to them, not a full-screen page. */}
+        {/* A few rows: a sheet sized to them, not a full-screen page. */}
         <SheetContent
           side="bottom"
           size="md"
@@ -179,6 +196,12 @@ export function PhoneTabBar({
           <SheetBody className="flex flex-col gap-0.5 pb-[calc(1rem+var(--omnigent-safe-bottom))]">
             <MoreLink to={factoryPageHref(factoryId)} icon={LayoutDashboardIcon} onDone={close}>
               Overview
+            </MoreLink>
+            <MoreLink to={decisionsPageHref(factoryId)} icon={ListChecksIcon} onDone={close}>
+              Decisions
+            </MoreLink>
+            <MoreLink to={graphPageHref(factoryId)} icon={GitForkIcon} onDone={close}>
+              Graph
             </MoreLink>
             <MoreLink to={activityPageHref(factoryId)} icon={ActivityIcon} onDone={close}>
               Activity
