@@ -591,6 +591,13 @@ ENV OMNIGENT_BUILTIN_AGENT_DIRS=/opt/omnigent/agents/jcode.yaml
 # artifact store.
 RUN mkdir -p /data/artifacts
 
+# The image tag and commit the factory records as its platform version
+# (empty unless the build passes them).
+ARG OMNIGENT_IMAGE_TAG=
+ARG OMNIGENT_SERVER_SHA=
+ENV OMNIGENT_IMAGE_TAG=${OMNIGENT_IMAGE_TAG} \
+    OMNIGENT_SERVER_SHA=${OMNIGENT_SERVER_SHA}
+
 ENV PORT=8000 \
     HOST=0.0.0.0 \
     ARTIFACT_DIR=/data/artifacts
