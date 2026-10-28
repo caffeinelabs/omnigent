@@ -109,7 +109,8 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
     Start the factory's background services for one server lifespan.
 
     The mailer and the Room always (replaying mail and chat a previous
-    process left undelivered); the telemetry recorders (spans and the cost
+    process left undelivered), with the factory definition resolver and the
+    Tier-2 gate probe; the telemetry recorders (spans and the cost
     ledger), the work-graph binder, the loop engine and its NEXT hints, the
     supervisor (and the status-edge notifier it reads), the "now" poller, the
     incident detectors and the auto-discovered ``background`` services only when
@@ -131,8 +132,11 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
 
         return _noop
 
-    from omnigent.server.factory import chat
+    from omnigent.server.factory import chat, definition, tier2
 
+    # The per-factory definition feeds loop budgets, detector thresholds and timings.
+    restore_definition = definition.install(app_state)
+    stop_tier2 = tier2.start_probe(app_state)
     mailer = get_mailer(app_state)
     if replay_enabled():
         await mailer.replay_undelivered()
@@ -178,6 +182,8 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
 
     async def _stop() -> None:
         unseed_invariants()
+        await stop_tier2()
+        restore_definition()
         await stop_room()
         if stop_ops is not None:
             await stop_ops()

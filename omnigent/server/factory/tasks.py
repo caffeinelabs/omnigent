@@ -186,7 +186,11 @@ def harness_of(task: FactoryTask) -> str:
 
 
 def engine_mode(deps: FactoryDeps, factory_id: str) -> str:
-    """:returns: The factory's engine mode from its root label (``assist`` by default)."""
+    """:returns: ``definition.engine.mode`` (the root label, else ``assist``, without one)."""
+    from omnigent.server.factory import definition
+
+    if (mode := definition.engine_mode(deps, factory_id)) is not None:
+        return mode
     root = deps.conversation_store.get_conversation(factory_id)
     mode = root.labels.get(LABEL_ENGINE_MODE) if root is not None else None
     return mode if mode in ("observe", "assist", "enforce") else DEFAULT_ENGINE_MODE
@@ -196,10 +200,11 @@ def role_rules(deps: FactoryDeps, factory_id: str, role: str, project: str | Non
     """
     The factory definition's rules for *role* in *project*, appended to cards.
 
-    Empty until versioned factory definitions carry rules.
+    :returns: e.g. ``["R-3: Run the package's unit tests before every push."]``.
     """
-    del deps, factory_id, role, project
-    return []
+    from omnigent.server.factory import definition
+
+    return definition.rule_texts(deps, factory_id, role, project)
 
 
 def node_of(task: FactoryTask) -> TaskNode:

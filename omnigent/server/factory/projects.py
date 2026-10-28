@@ -150,7 +150,10 @@ def over_caps(active: int, adding: int, projects: Sequence[FactoryProject]) -> N
 
     :raises CockpitError: 409 ``over_caps`` listing done and park candidates.
     """
-    cap = start.max_projects()
+    from omnigent.server.factory import definition
+
+    fid = projects[0].factory_id if projects else None
+    cap = definition.int_value(None, fid, "caps.max_projects", start.max_projects())
     if active + adding <= cap:
         return
     candidates = cap_candidates(projects)

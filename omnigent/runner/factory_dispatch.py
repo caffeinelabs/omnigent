@@ -80,9 +80,13 @@ from omnigent.tools.builtins.factory import (
     SYS_FACTORY_CHAT,
     SYS_FACTORY_DEMO,
     SYS_FACTORY_ENV,
+    SYS_FACTORY_INSIGHTS,
     SYS_FACTORY_PR,
     SYS_FACTORY_PROJECT,
+    SYS_FACTORY_PROPOSE,
+    SYS_FACTORY_RETRO,
     SYS_FACTORY_ROSTER,
+    SYS_FACTORY_RULES,
     SYS_FACTORY_SET,
     SYS_FACTORY_SPAWN,
     SYS_FACTORY_TASK,
@@ -173,6 +177,19 @@ _FACTORY_ERROR_CODES: Final = frozenset(
         "ambiguous_pr",
         "unknown_message",
         "empty_message",
+        "tier0",
+        "evidence_required",
+        "self_cosign",
+        "not_peer",
+        "daily_quota",
+        "path_busy",
+        "no_change",
+        "out_of_bounds",
+        "unknown_metric",
+        "unknown_category",
+        "invalid_definition",
+        "unknown_rule",
+        "not_allowed",
     }
 )
 # The server re-polls GitHub for up to 10 s before answering sys_factory_pr.
@@ -425,6 +442,10 @@ async def execute_factory_tool(
         return await _task(args, server_client=server_client, caller=conversation_id)
     if tool_name == SYS_FACTORY_CHAT:
         return await _post_chat(args, server_client=server_client, caller=conversation_id)
+    if tool_name in _LEARNING_TOOLS:
+        return await _learning(
+            tool_name, args, server_client=server_client, caller=conversation_id
+        )
     return _error(f"unknown factory tool {tool_name!r}")
 
 
@@ -2110,3 +2131,46 @@ async def _post_chat(args: _JsonObject, *, server_client: httpx.AsyncClient, cal
     return await _passthrough(
         server_client, "POST", "/v1/factory/agent/chat", tool_name=tool, body=body
     )
+
+
+_LEARNING_TOOLS: Final = frozenset(
+    {SYS_FACTORY_PROPOSE, SYS_FACTORY_RULES, SYS_FACTORY_INSIGHTS, SYS_FACTORY_RETRO}
+)
+_PROPOSE_KINDS: Final = ("tuning", "rules", "code")
+_INSIGHT_PARAMS: Final = ("kind", "window", "names", "group_by", "q")
+
+
+async def _learning(
+    tool: str, args: _JsonObject, *, server_client: httpx.AsyncClient, caller: str
+) -> str:
+    """``sys_factory_propose|rules|insights|retro``: one ``/v1/factory/agent`` route each."""
+    if tool == SYS_FACTORY_RULES:
+        return await _passthrough(
+            server_client,
+            "GET",
+            "/v1/factory/agent/rules",
+            tool_name=tool,
+            params={"from_session_id": caller},
+        )
+    if tool == SYS_FACTORY_INSIGHTS:
+        params: dict[str, str | int] = {"from_session_id": caller}
+        for key in _INSIGHT_PARAMS:
+            value = args.get(key)
+            if isinstance(value, str) and value.strip():
+                params[key] = value.strip()
+        return await _passthrough(
+            server_client, "GET", "/v1/factory/agent/insights", tool_name=tool, params=params
+        )
+    if tool == SYS_FACTORY_PROPOSE and args.get("kind") not in _PROPOSE_KINDS:
+        return _error(f"{tool} 'kind' must be one of {list(_PROPOSE_KINDS)}")
+    if tool == SYS_FACTORY_RETRO and not (
+        isinstance(args.get("target"), str) and args["target"].strip()
+    ):
+        return _error(f"{tool} requires a 'target', e.g. 'project:<slug>' or 'pr:<number>'")
+    body: _JsonObject = {**args, "from_session_id": caller}
+    path = (
+        "/v1/factory/agent/proposals"
+        if tool == SYS_FACTORY_PROPOSE
+        else "/v1/factory/agent/retros"
+    )
+    return await _passthrough(server_client, "POST", path, tool_name=tool, body=body)

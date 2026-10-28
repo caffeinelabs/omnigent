@@ -21,10 +21,10 @@ from typing import Annotated, Any, TypeVar
 
 from fastapi import APIRouter, Body, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from omnigent.entities.factory import FactoryEvent, FactoryProject
-from omnigent.server.factory import control, decisions, start
+from omnigent.server.factory import control, decisions, feedback, start
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.envelope import display_title
@@ -43,6 +43,7 @@ class AnswerBody(BaseModel):
 
     option_id: str | None = None
     text: str | None = None
+    reason: str | None = Field(None, max_length=32)
 
 
 class WithdrawBody(BaseModel):
@@ -71,6 +72,8 @@ class FeedbackBody(BaseModel):
 
     verdict: str
     text: str | None = None
+    rating: int | None = Field(None, ge=1, le=5)
+    tags: list[str] = Field(default_factory=list, max_length=8)
 
 
 def _caller(request: Request) -> tuple[FactoryDeps, str | None]:
@@ -112,6 +115,7 @@ async def answer_decision(
             user_id=user_id,
             option_id=body.option_id,
             text=body.text,
+            reason=body.reason,
         )
         to = result.delivered_to
         view = await asyncio.to_thread(
@@ -196,6 +200,9 @@ async def pr_feedback(
     async def run() -> dict[str, Any]:
         pr, mail_id = await control.submit_pr_feedback(
             request.app.state, pr_id, user_id=user_id, verdict=body.verdict, text=body.text
+        )
+        await feedback.record_pr_rating(
+            request.app.state, pr, user_id, body.rating, [t[:32] for t in body.tags], body.text
         )
         return {"pr_id": pr.id, "human_review": pr.human_review, "mail_id": mail_id}
 

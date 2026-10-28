@@ -602,17 +602,21 @@ async def answer_decision(
     option_id: str | None = None,
     text: str | None = None,
     changes: Any = None,
+    reason: str | None = None,
+    answered_by: str | None = None,
 ) -> AnswerResult:
     """
     Answer an open decision (``POST /v1/factory/decisions/{id}/answer``).
 
     :param changes: Edit & apply of a proposal decision: the edited changes.
+    :param reason: The closure reason of a ``pr_closed`` decision (optional).
+    :param answered_by: Who the answer is recorded as (``eval-auto`` in eval mode).
 
     :raises CockpitError: 400 on a bad option/text, 404 unknown decision,
         409 when it is no longer open (with ``answered_by``/``answered_at``).
     :raises OmnigentError: 401/403/404 from the access checks.
     """
-    from omnigent.server.factory import loop_escalation
+    from omnigent.server.factory import feedback, loop_escalation
     from omnigent.server.factory.proposals import ProposalAnswer
 
     deps = factory_deps(app_state)
@@ -644,7 +648,8 @@ async def answer_decision(
             400, "text_not_allowed", f"{decision.ref} needs one of its options", field="text"
         )
 
-    by = await human_label(deps, decision.factory_id, user_id)
+    closure = feedback.closure_reason(decision, option, reason)
+    by = answered_by or await human_label(deps, decision.factory_id, user_id)
     label = str(option.get("label") or option_id) if option is not None else FREE_TEXT_LABEL
     planned: (
         ControlPlan | GrantPlan | Conversation | ProposalAnswer | LoopAnswer | BudgetAnswer | None
@@ -663,6 +668,8 @@ async def answer_decision(
         raise await not_open_error(exc.decision, deps) from None
     except DecisionNotFound:
         raise CockpitError(404, "unknown_decision", f"no decision {decision_id!r}") from None
+    if closure is not None:
+        await feedback.record_closure(app_state, answered, closure, user_id)
 
     target: Conversation | None = None
     outgoing: str | None = None

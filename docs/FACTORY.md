@@ -154,6 +154,10 @@ relay surface (Claude Code sees `mcp__omnigent__<name>`).
   the caller for a lead; spawning a second lead while the caller has no
   supervisor makes the two leads supervise each other.
 
+- `sys_factory_rules()` (every role), `sys_factory_insights(kind, …)` (leads,
+  PLs, the planner), `sys_factory_retro(…)` and `sys_factory_propose(kind, …)`
+  (leads and PLs) — see Self-modification.
+
 For factory roles, `sys_session_get_history`, `sys_session_get_info` and
 `sys_session_list` are scoped to the caller's factory: reading another
 factory's or a non-member's session returns `session_out_of_factory`, and
@@ -573,6 +577,8 @@ transcript folds.
 | `OMNIGENT_FACTORY_QUIET_BEATS`, `OMNIGENT_FACTORY_MAIL_REPLAY` | on | `0` turns off skipping unchanged heartbeats / replaying queued mail after a restart. |
 | `OMNIGENT_FACTORY_INVARIANTS` | on | `0` leaves the `factory_invariants` admin default policy unseeded (see Invariants). |
 | `OMNIGENT_IMAGE_TAG`, `OMNIGENT_SERVER_SHA` | unset | Image tag and commit recorded in the platform version (`factory_versions`). |
+| `OMNIGENT_FACTORY_RETRO_HOUR` | `6` | UTC hour after which Sentinel gets its daily retro beat. |
+| `OMNIGENT_FACTORY_SMITH`, `…_SMITH_GITHUB_LOGIN`, `…_SMITH_GITHUB_TOKEN`, `…_SMITH_REPO` | off | Tier 2 prerequisites (see Self-modification); the repo defaults to `caffeinelabs/omnigent#staging`. |
 
 ### Rollback
 
@@ -625,6 +631,116 @@ Durable facts every metric builds on (`omnigent/server/factory/telemetry/`):
   factory need READ, as in the activity feed); summaries that quote agent
   text (mail, reasons, blockers, free-text labels) and free-text data keys
   are left out; CSV cells that start with `= + - @` are prefixed with `'`.
+
+## Self-modification
+
+Agents may change the factory, never silently and never its guardrails
+(`omnigent/server/factory/definition.py`, `tuning.py`, `evaluate.py`).
+
+**Tier 0** stays in code: policies, gates, the merge gate, the guard, marker
+formats, setting bounds, the approval classes, metric and benchmark
+definitions and secrets. A change naming any of them, or any path outside the
+schema, is refused with 422 `tier0`.
+
+**Tier 1: the versioned definition.** Each factory has immutable versions in
+`factory_definitions`; the root label `omnigent.factory.def_version` pins the
+one in force. `definition_for(fid)` (5 s cache) reads each value from the
+doc, then today's env default, then the code default, and clamps it to the
+code bounds (an env value outside them widens them) and to the env ceilings
+of `mail.*`, `previews.ttl_h|max` and `caps.max_projects`. v1 is seeded on the
+first read from today's env, and the root's `engine_mode`,
+`autonomy_projects` and `engine_spawn` labels move into it. The doc holds
+`engine` (mode, spawn, next_hints), `cadence` (lead, project_lead,
+demo_project_lead), `supervisor` (stuck_s, blocked_escalate_s, quiet_beats),
+`mail`, `previews` (TTL, max, probe intervals), `caps`, `loops.*` budgets,
+`budgets`, `autonomy`, `decisions` (escalation minutes), `alerts` (detector
+thresholds), `models` (aliases) and `rules`. The supervisor
+(`SupervisorConfig.for_factory`), the mailer, previews, the env prober, the
+loop engine, the detectors, decision escalation, PL spawns, task cards and
+briefs all read it.
+
+| Paths | Class |
+|---|---|
+| `cadence.*` | A when slower, else B (0 = off is B) |
+| `loops.*.attempts\|rounds\|per_head\|usd` | A when lower, else B |
+| other `loops.*` | B |
+| `mail.*` | A when lower, else B |
+| `supervisor.*`, `alerts.*`, `decisions.*` | A |
+| `previews.*`, `caps.*`, `rules` | B |
+| `engine.*`, `autonomy.*`, `budgets.*`, `models.*` | B (owners) |
+
+**Proposals** (`C-n`, `sys_factory_propose`): leads propose tuning, rules and
+code; a PL proposes rules for its own project. Each cites evidence ids (422
+without) and one expected metric effect; at most 2 per agent per day.
+
+- **A** goes to the other lead, who co-signs
+  (`sys_factory_propose(op="cosign", kind=…, id="C-n")`; never their own).
+  It applies at once as a new version on **trial** (default 48 h).
+- **B** opens an owners `proposal` decision; Approve applies it as a trial.
+- **People** edit with `PUT /v1/factory/factories/{fid}/definition`
+  (`{changes, note?, trial?, base_version?}`, MANAGE, human origin): a human
+  `C-n` applied at once.
+- **Delivery.** Each version change mails the members
+  `[Factory definition · vN · C-n by … · trial 48h]` with the diff; rule
+  changes send `[Factory control · RULES UPDATE · C-n · by …]` to the roles they
+  concern. A cadence change moves members still on the old default. Rules
+  reach agents through `sys_factory_rules()` (`GET /v1/factory/agent/rules`),
+  task cards and PL briefs; they never widen a policy or a gate.
+- **Evaluation** (`evaluate.py`, on the supervisor tick): at the end of the
+  trial window it is compared with the same-length baseline before it. A
+  regressed guard (merge acceptance −10 pp, $ per merged PR +10 %, incidents
+  +1, human prompts per day +20 %, loop exhaustion +10 pp) reverts
+  automatically; target met with n ≥ 3 merged PRs (24 h of beats for a
+  cadence change) keeps it; anything else asks the owners "Keep or revert
+  C-n?" (recommended: revert). Never auto-kept. A trial nobody decides reverts
+  at 2× its window.
+- **Revert** (`POST …/proposals/{ref}/revert`, owners, one click) re-pins the
+  parent version when it is still in force, else undoes only that change as a
+  `revert` version. `…/keep` ends a trial early; `…/definition/pin {version}`
+  puts any stored version back. `GET …/definition`, `…/definition/versions`
+  and `…/definition/diff?from=&to=` show them.
+
+**Tier 2: the Factory Smith lane** (code and bundle PRs to omnigent) ships
+off. It turns on only when `OMNIGENT_FACTORY_SMITH=1`, rulesets requiring
+review, CODEOWNERS review and status checks protect
+`caffeinelabs/omnigent#staging` (read through the GitHub API at server start)
+and a dedicated factory identity
+(`OMNIGENT_FACTORY_SMITH_GITHUB_LOGIN` and `…_TOKEN`) has neither admin nor
+maintain rights. `GET /v1/factory/preflight` returns `tier2 {enabled,
+reason}`. While it is off, `kind=code` proposals are recorded with their
+evidence and never run.
+
+### Learning
+
+- **Metrics** (`telemetry/metrics.py`): the catalog (flow, loops, quality,
+  human load, cost, reliability) with an explicit definition per metric,
+  always with n, grouped by day, project, role, agent, person (owners only),
+  version or def_version; 5-minute cache. `GET …/insights` (KPI tiles with the
+  delta against the previous window, findings, incidents, retros,
+  experiments, per-person numbers for owners), `GET …/metrics`, and the fleet
+  `GET /v1/factory/insights`. Projects whose PL the viewer cannot read are left
+  out. A nightly scan counts human-authored items on members
+  (`metrics.prompts`), including messages stamped `[Factory human · …]` in a
+  shared factory.
+- **Feedback** (`POST /v1/factory/feedback`): PR ratings (also on a cockpit
+  review), demo 👍/👎, unnecessary questions, calibration of retro labels and
+  root causes. A `pr_closed` decision's answer may carry a closure reason
+  (`reason`, from the seeded list); one without it records no closure.
+- **Retros** (`sys_factory_retro`): PLs file one after a merge, a close and at
+  done; Sentinel files findings. Without evidence: 422.
+- **Sentinel's retro** (supervisor rule S12): daily after
+  `OMNIGENT_FACTORY_RETRO_HOUR` (UTC, default 6; not on the factory's first
+  day) and at each project done, Sentinel gets
+  `[Factory heartbeat · retro · window 24h · budget $3]` and runs the
+  `factory-retro` skill (open and axial coding, at most 2 proposals, a digest
+  in `#improvements`). Owners can run it now: `POST …/retro`.
+- **Eval mode** (root label `omnigent.factory.mode=eval`): decisions are
+  answered with the recommended option after 2 minutes (`answered_by
+  eval-auto`) and each project's PL is paused at READY. Decisions only an
+  owner may approve stay open: access requests, tuning, rules and code
+  proposals, owner-approval projects proposals and budget raises past the
+  operator cap. The benchmark charters
+  are in `examples/factory/benchmarks/temp-main/`.
 
 ## Work graph
 

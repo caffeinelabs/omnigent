@@ -1155,3 +1155,136 @@ def test_chat_schema_requires_thread_and_message() -> None:
         "refs",
     }
     assert "reply_to=<that id>" in SysFactoryChatTool.description()
+
+
+# ── Learning: sys_factory_propose / rules / insights / retro ─────────────────
+
+
+def test_learning_schemas() -> None:
+    from omnigent.tools.builtins.factory import (
+        SysFactoryInsightsTool,
+        SysFactoryProposeTool,
+        SysFactoryRetroTool,
+        SysFactoryRulesTool,
+    )
+
+    propose = _params(SysFactoryProposeTool)
+    assert propose["required"] == ["kind"]
+    assert propose["properties"]["kind"]["enum"] == ["tuning", "rules", "code"]
+    assert propose["properties"]["op"]["enum"] == ["propose", "cosign", "withdraw"]
+    assert propose["properties"]["trial_h"] == {"type": "integer", "minimum": 24, "maximum": 168}
+    assert propose["properties"]["expected_effect"]["required"] == ["metric", "direction"]
+    assert "422" in SysFactoryProposeTool.description()
+    assert _params(SysFactoryRulesTool)["properties"] == {}
+    insights = _params(SysFactoryInsightsTool)
+    assert insights["properties"]["kind"]["enum"] == [
+        "kpis",
+        "metrics",
+        "findings",
+        "precedents",
+        "loops",
+    ]
+    retro = _params(SysFactoryRetroTool)
+    assert retro["required"] == ["target"]
+    cause = retro["properties"]["root_causes"]["items"]
+    assert cause["required"] == ["category", "text", "evidence"]
+
+
+async def test_propose_posts_the_change_with_the_caller() -> None:
+    reply = {"proposal": "C-14", "status": "awaiting_cosign", "class": "A"}
+    server = FakeServer().on("POST", "/v1/factory/agent/proposals", body=reply)
+    args = {
+        "kind": "tuning",
+        "changes": [{"op": "replace", "path": "cadence.project_lead", "value": 10800}],
+        "rationale": "beats skipped",
+        "evidence": ["F-9"],
+        "expected_effect": {"metric": "heartbeat_share", "direction": "down"},
+    }
+
+    out = await _call(server, "sys_factory_propose", args, caller=LEAD, role="lead")
+
+    assert out == reply
+    [call] = server.calls("POST", "/v1/factory/agent/proposals")
+    assert call.body == {**args, "from_session_id": LEAD}
+
+
+async def test_propose_validates_the_kind_locally() -> None:
+    server = FakeServer()
+    out = await _call(server, "sys_factory_propose", {"kind": "projects"})
+    assert "'kind' must be one of" in out["error"]
+    assert server.calls("POST", "/v1/factory/agent/proposals") == []
+
+
+async def test_propose_refusals_keep_their_code() -> None:
+    server = FakeServer().on(
+        "POST",
+        "/v1/factory/agent/proposals",
+        status=422,
+        body={"error": {"code": "tier0", "message": "gates.review is Tier 0"}},
+    )
+    out = await _call(server, "sys_factory_propose", {"kind": "tuning", "changes": []})
+    assert (out["error"], out["status"]) == ("tier0", 422)
+
+
+async def test_rules_and_insights_read_for_the_caller() -> None:
+    rules = {"def_version": 3, "rules": [{"id": "R-1", "text": "x"}]}
+    server = (
+        FakeServer()
+        .on("GET", "/v1/factory/agent/rules", body=rules)
+        .on("GET", "/v1/factory/agent/insights", body={"kind": "precedents", "precedents": []})
+    )
+
+    got = await _call(server, "sys_factory_rules", {})
+    insights = await _call(
+        server, "sys_factory_insights", {"kind": "precedents", "q": " port ", "window": "7d"}
+    )
+
+    assert got == rules
+    assert insights["kind"] == "precedents"
+    [rules_call] = server.calls("GET", "/v1/factory/agent/rules")
+    assert rules_call.params == {"from_session_id": PL}
+    [call] = server.calls("GET", "/v1/factory/agent/insights")
+    assert call.params == {
+        "from_session_id": PL,
+        "kind": "precedents",
+        "q": "port",
+        "window": "7d",
+    }
+
+
+async def test_retro_posts_and_needs_a_target() -> None:
+    server = FakeServer().on("POST", "/v1/factory/agent/retros", body={"issue": "F-3"})
+    args = {
+        "target": "pr:9630",
+        "root_causes": [{"category": "env_flaky", "text": "Tilt", "evidence": ["D-1"]}],
+    }
+
+    missing = await _call(server, "sys_factory_retro", {"root_causes": []})
+    out = await _call(server, "sys_factory_retro", args)
+
+    assert "requires a 'target'" in missing["error"]
+    assert out == {"issue": "F-3"}
+    [call] = server.calls("POST", "/v1/factory/agent/retros")
+    assert call.body == {**args, "from_session_id": PL}
+
+
+@pytest.mark.parametrize(
+    ("role", "propose", "insights"),
+    [
+        ("lead", True, True),
+        ("project_lead", True, True),
+        ("ic", False, False),
+        ("env_keeper", False, False),
+        ("reviewer", False, False),
+        ("demo", False, False),
+        ("planner", False, True),
+    ],
+)
+def test_learning_tools_follow_the_role_matrix(role: str, propose: bool, insights: bool) -> None:
+    from omnigent.tools.manager import ToolManager
+
+    names = set(ToolManager(factory_spec(role)).get_tool_names())
+    assert "sys_factory_rules" in names
+    assert ("sys_factory_propose" in names) is propose
+    assert ("sys_factory_retro" in names) is propose
+    assert ("sys_factory_insights" in names) is insights

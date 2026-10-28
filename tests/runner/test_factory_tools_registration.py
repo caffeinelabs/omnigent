@@ -56,15 +56,17 @@ _DEMO = "sys_factory_demo"
 _PROJECT = "sys_factory_project"
 _TASK = "sys_factory_task"
 _CHAT = "sys_factory_chat"
-_ALL = _EVERY_ROLE | {_SPAWN, _ENV, _DEMO, _PROJECT, _TASK, _CHAT}
+_RULES = "sys_factory_rules"
+_LEARN = {"sys_factory_propose", "sys_factory_insights", "sys_factory_retro"}
+_ALL = _EVERY_ROLE | {_SPAWN, _ENV, _DEMO, _PROJECT, _TASK, _CHAT, _RULES} | _LEARN
 _MATRIX = {
-    "lead": _EVERY_ROLE | {_SPAWN, _PROJECT, _TASK, _CHAT},
-    "project_lead": _EVERY_ROLE | {_ENV, _DEMO, _PROJECT, _TASK, _CHAT},
-    "env_keeper": _EVERY_ROLE | {_ENV, _DEMO},
-    "ic": _EVERY_ROLE | {_TASK},
-    "reviewer": _EVERY_ROLE,
-    "demo": _EVERY_ROLE | {_DEMO},
-    "planner": {"sys_factory_roster"},
+    "lead": _EVERY_ROLE | {_SPAWN, _PROJECT, _TASK, _CHAT, _RULES} | _LEARN,
+    "project_lead": _EVERY_ROLE | {_ENV, _DEMO, _PROJECT, _TASK, _CHAT, _RULES} | _LEARN,
+    "env_keeper": _EVERY_ROLE | {_ENV, _DEMO, _RULES},
+    "ic": _EVERY_ROLE | {_TASK, _RULES},
+    "reviewer": _EVERY_ROLE | {_RULES},
+    "demo": _EVERY_ROLE | {_DEMO, _RULES},
+    "planner": {"sys_factory_roster", _RULES, "sys_factory_insights"},
 }
 
 
@@ -122,7 +124,7 @@ def test_native_relays_carry_the_cockpit_tools(harness: str, role: str) -> None:
     spec = factory_spec(role, harness=harness)
     relayed = {s["name"]: s for s in build_native_relay_tool_schemas(spec)}
     assert set(relayed) & _ALL == _MATRIX[role]
-    for name in _MATRIX[role] - {"sys_factory_roster"}:
+    for name in _MATRIX[role] - {"sys_factory_roster", _RULES}:  # these take no arguments
         assert relayed[name]["parameters"]["properties"], name
 
 

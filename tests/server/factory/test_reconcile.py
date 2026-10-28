@@ -367,8 +367,8 @@ async def test_prune_drops_old_mail_and_older_heartbeats(world: FactoryWorld) ->
         ("pr.ready", 15),
         ("message.delivered", 15),
         ("message.delivered", 13),
-        ("heartbeat.delivered", 3),
-        ("heartbeat.skipped", 1),
+        ("heartbeat.delivered", 16),
+        ("heartbeat.skipped", 3),
     ):
         store.append_event(
             EventDraft(factory_id=fid, kind=kind, summary=kind, ts=now - age_days * day)
@@ -378,7 +378,7 @@ async def test_prune_drops_old_mail_and_older_heartbeats(world: FactoryWorld) ->
 
     left = store.find_events(fid, "*", 0)
     assert sorted((e.kind, (now - e.ts) // day) for e in left) == [
-        ("heartbeat.skipped", 1),
+        ("heartbeat.skipped", 3),
         ("message.delivered", 13),
         ("pr.ready", 15),
     ]

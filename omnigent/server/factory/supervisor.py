@@ -66,6 +66,7 @@ from omnigent.server.factory import (
     decision_routing,
     detectors,
     events,
+    learning,
     loops,
     previews,
     quiet_beats,
@@ -111,6 +112,8 @@ DEFAULT_TICK_S = 60.0
 DEFAULT_KEEPALIVE_S = 600.0
 DEFAULT_STUCK_S = 5400.0
 DEFAULT_BLOCKED_ESCALATE_S = 1800.0
+BLOCKED_FLOOR_S = 900.0
+"""The lowest blocked-escalation time a factory definition may set."""
 
 KEEPALIVE_TIMEOUT_S = 10.0
 DEAD_AFTER_FAILURES = 3
@@ -179,6 +182,12 @@ class SupervisorConfig:
             quiet_beats=quiet_beats.quiet_beats_enabled(),
             preview_ttl_h=previews.preview_ttl_h(),
         )
+
+    def for_factory(self, factory_id: str | None) -> SupervisorConfig:
+        """:returns: These timings with the factory definition's (stuck, blocked, beats, TTL)."""
+        from omnigent.server.factory import definition
+
+        return definition.supervisor_config(self, factory_id)
 
 
 def heartbeat_text(n: int, now: float, delta: str | None = None) -> str:
@@ -397,6 +406,8 @@ class FactorySupervisor:
         await detectors.on_tick(self._app_state, members, children, now)
         # Loop engine: wall and no-progress, $ budgets, READY waves, NEXT flushes.
         await loops.tick(self._app_state, members, children, now)
+        # Learning: trial evaluation, the Sentinel retro (S12), eval mode, the prompt scan.
+        await learning.on_tick(self._app_state, members, now)
         await self._report_skips(now)
         self._forget_departed({m.id for m in members}, {c.id for c in children})
         status.set_status("supervisor", last_tick_at=int(now), ok=True, error=None)
@@ -592,7 +603,7 @@ class FactorySupervisor:
         delta = None
         deliver = self._deliver or deliver_message
         try:
-            if self.config.quiet_beats:
+            if self.config.for_factory(conv.labels.get(LABEL_ID)).quiet_beats:
                 try:
                     plan = await self._plan_beat(conv, now, stalled_child)
                 except Exception:  # noqa: BLE001 - a planning hiccup is not a failed beat
@@ -728,7 +739,8 @@ class FactorySupervisor:
         mailer = None
         for conv in (*members, *children):
             stalled_s = now - float(conv.updated_at)
-            if not _is_running(conv) or stalled_s < self.config.stuck_s:
+            fid = roots.get(conv.id if conv.id in roots else conv.parent_conversation_id or "")
+            if not _is_running(conv) or stalled_s < self.config.for_factory(fid).stuck_s:
                 self._stuck_alerted.pop(conv.id, None)
                 continue
             # One alert per episode: progress moves updated_at and starts a new one.
@@ -767,7 +779,8 @@ class FactorySupervisor:
         notifier = self._notifier()
         if notifier is None:
             return
-        for episode in notifier.blocked_due(now, self.config.blocked_escalate_s):
+        floor = min(self.config.blocked_escalate_s, BLOCKED_FLOOR_S)
+        for episode in notifier.blocked_due(now, floor):
             # Claimed before the first await so an overlapping tick skips it.
             episode.escalated = True
             try:
@@ -787,6 +800,9 @@ class FactorySupervisor:
         factory_id = await asyncio.to_thread(resolve_factory_id, conv, store) if conv else None
         if conv is None or not factory_id or is_session_closed(conv.labels, conv.title):
             notifier.drop_episode(episode)
+            return
+        if self._clock() - episode.since < self.config.for_factory(factory_id).blocked_escalate_s:
+            episode.escalated = False  # not due under this factory's definition yet
             return
         # A parked root shows its own prompt; typing into it could answer that
         # prompt, so its supervisor (the peer lead) hears instead.
@@ -855,6 +871,9 @@ class FactorySupervisor:
         for member in members:
             by_factory.setdefault(member.labels[LABEL_ID], []).append(member)
         for factory_id, factory_members in by_factory.items():
+            ttl_h = self.config.for_factory(factory_id).preview_ttl_h
+            if ttl_h is None:
+                continue
             try:
                 await self._park_factory_previews(store, factory_id, factory_members, now, ttl_h)
             except Exception:  # noqa: BLE001 - one factory's store error must not stop the rest

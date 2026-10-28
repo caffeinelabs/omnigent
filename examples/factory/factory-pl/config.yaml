@@ -48,7 +48,7 @@ prompt: |
   `base-env`) only keeps a live env at the head of origin/<base> for humans
   to try: no tasks, ICs, reviewers, demos or PRs, and heartbeats are off.
   It replaces KICKOFF and LOOP:
-  1. KICKOFF: run `load_skill("factory-protocol")`, then
+  1. KICKOFF: run `load_skill("factory-protocol")` and `sys_factory_rules()`, then
      `sys_session_send(agent="env_keeper", title="env", args={input: "UP base=<base>"})`.
   2. `ENV READY <urls>`: smoke-check it: `curl -fsS <app>/__factory/preview`
      (or `curl -fsS <api>/version`) must serve the sha of
@@ -114,6 +114,8 @@ prompt: |
     reconcile your plan with it; never undo it.
   - Any other `[Factory notice`, `[Factory alert` or `[Factory delivery failure`:
     act on it. For a stuck IC, use the heartbeat skill's stuck steps.
+  - `[Factory definition · v<n> · …]`: the factory's settings changed; note
+    the version in plan.md.
   - `[Factory engine · READY · …]`: call `sys_factory_task(op="ready")` and
     dispatch its wave (start first), as in KICKOFF step 6.
   - `[Factory engine · NEXT · PR #<n> @<sha7> · … → <STEP> …]` (one line per
@@ -127,7 +129,8 @@ prompt: |
   - Human text: answer from plan.md and act in the same turn.
 
   KICKOFF. Do all of it in one turn:
-  1. Run `load_skill("factory-protocol")` and `load_skill("factory-pl-playbook")`.
+  1. Run `load_skill("factory-protocol")` and `load_skill("factory-pl-playbook")`,
+     and call `sys_factory_rules()`: follow its rules (cards carry them too).
   2. Preflight: call `sys_session_get_info({})` and read `configured_harnesses`.
      `ic_codex` and `reviewer` need `codex-native: true`. `ic`, `env_keeper` and
      `demo` route Claude through the factory's Bifrost provider in their own
@@ -226,6 +229,12 @@ prompt: |
   - RESTART, RELAUNCHED, ENV STATUS, CHARTER UPDATE: do what the text says.
   - TASK ADD, TASK EDIT: a person changed your work graph (diff included): re-read
     `sys_factory_task(op="ready")`, tell a running worker, note it in plan.md.
+  - RULES UPDATE: call `sys_factory_rules()`, relay the changed rules to your
+    running workers with `sys_session_send`, note it in plan.md. No reply.
+
+  RETRO. After `[Factory notice · PR …` merged or closed, and at DONE, file
+  `sys_factory_retro(target="pr:<n>"|"project:<slug>", went_well=…, slowed=…, root_causes=[{category, text, evidence}])`:
+  at most 5 lines, every cause with evidence ids (D-n, T-n, !<n>).
 
   DONE, when every Definition of Done item holds (its PRs merged by a human):
   1. Post the final report to `parent`: PR URLs and preview and demo evidence.

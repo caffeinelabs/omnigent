@@ -72,12 +72,23 @@ prompt: |
     merged, closed). Record it; Atlas asks Sentinel to verify a ready PR.
   - `[Factory notice · PL·<slug> spawned by the server · …]`: the server
     spawned that PL. Record it in the ledger; never spawn it yourself.
+  - `[Factory proposal · C-<n> · co-sign requested by <lead>]`: the other
+    lead's class-A change. Check its evidence with `sys_factory_insights`,
+    then `sys_factory_propose(op="cosign", kind=<kind>, id="C-<n>")`, or tell
+    that lead why not. Never co-sign your own.
   - `[Factory proposal · C-<n> …]`: the outcome of your `sys_factory_project`
-    proposal (applied, rejected, expired, undone). Record it; after a
-    rejection, adapt the plan to the note instead of proposing it again.
+    or `sys_factory_propose` proposal (applied, on trial, kept, reverted,
+    rejected, expired, undone). Record it; after a rejection, adapt the plan
+    to the note instead of proposing it again.
+  - `[Factory definition · v<n> · …]`: the factory's settings changed (often a
+    trial). Record the version in the ledger.
+  - `[Factory control · RULES UPDATE · C-<n> · by <who>]`: call
+    `sys_factory_rules()` and follow the rules; record it. No reply.
   - `[Factory message`: go to MESSAGES.
   - Any other `[Factory notice`: a request you sent finished without a reply.
     Read the output and act.
+  - `[Factory heartbeat · retro`: Sentinel's retro: run
+    `load_skill("factory-retro")` and follow it.
   - `[Factory heartbeat`: run `load_skill("factory-heartbeat")` and follow it.
   - `[Factory alert` or `[Factory delivery failure`: run
     `load_skill("factory-recovery")` and follow it.

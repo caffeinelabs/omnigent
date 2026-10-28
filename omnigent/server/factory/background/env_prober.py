@@ -349,7 +349,8 @@ class EnvProber:
             return False
         probe = env.get("probe") if isinstance(env.get("probe"), Mapping) else {}
         at = probe.get("at")
-        return force or not isinstance(at, int | float) or at <= now - self.env_s
+        every = self._every(project.factory_id, "previews.env_probe_s", self.env_s)
+        return force or not isinstance(at, int | float) or at <= now - every
 
     def _env_job(
         self, scope: FactoryScope, project: FactoryProject, now: float
@@ -439,7 +440,18 @@ class EnvProber:
             return False
         probe = preview.get("probe") if isinstance(preview.get("probe"), Mapping) else {}
         at = probe.get("at")
-        return force or not isinstance(at, int | float) or at <= now - self.preview_s
+        every = self._every(pr.factory_id, "previews.preview_probe_s", self.preview_s)
+        return force or not isinstance(at, int | float) or at <= now - every
+
+    @staticmethod
+    def _every(factory_id: str, path: str, default: float) -> float:
+        """The factory definition's probe interval (0 there skips its probes until forced)."""
+        from omnigent.server.factory import definition
+
+        found = definition.value(None, factory_id, path)
+        if isinstance(found, int | float) and not isinstance(found, bool):
+            return float(found) if found > 0 else float("inf")
+        return default
 
     def _preview_job(
         self, scope: FactoryScope, pr: FactoryPr, now: float

@@ -189,20 +189,11 @@ class Escalation:
 
 def _settings(deps: FactoryDeps, factory_id: str) -> tuple[int, int]:
     """``(escalate_after_m, owners_after_m)`` from the factory definition, else the defaults."""
-    escalate, owners = ESCALATE_AFTER_M, OWNERS_AFTER_M
-    try:
-        definition = deps.factory_store.latest_definition(factory_id)
-    except Exception:  # noqa: BLE001 - the defaults apply
-        definition = None
-    block = (definition.doc or {}).get("decisions") if definition is not None else None
-    if isinstance(block, dict):
-        value = block.get("escalate_after_m")
-        if isinstance(value, int) and value > 0:
-            escalate = value
-        value = block.get("owners_after_m")
-        if isinstance(value, int) and value > 0:
-            owners = value
-    return escalate, owners
+    from omnigent.server.factory import definition
+
+    escalate = definition.int_value(deps, factory_id, "decisions.escalate_after_m", 0)
+    owners = definition.int_value(deps, factory_id, "decisions.escalate_owners_after_m", 0)
+    return escalate if escalate > 0 else ESCALATE_AFTER_M, owners if owners > 0 else OWNERS_AFTER_M
 
 
 def _away_since(deps: FactoryDeps, decision: FactoryDecision, user_id: str) -> float | None:

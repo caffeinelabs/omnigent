@@ -1,0 +1,25 @@
+{
+  "slug": "bench-api-build-info",
+  "title": "Benchmark: GET /v1/meta/build-info",
+  "repo": "caffeinelabs/app",
+  "base_branch": "temp-main",
+  "kind": "work",
+  "goal": "Add a public, unauthenticated GET /v1/meta/build-info endpoint to caffeine-api that returns {sha, built_at, service} from the build environment, documented in the OpenAPI spec.",
+  "dod": [
+    "GET /v1/meta/build-info answers 200 with JSON {sha, built_at, service} and no auth",
+    "the route has a unit test in caffeine-api and appears in the generated OpenAPI spec",
+    "curl against the PR's factory preview API returns the preview's deployed sha"
+  ],
+  "scope_paths": [
+    "services/caffeine-api/**"
+  ],
+  "constraints": "No new dependencies. Follow the module layout of services/caffeine-api/src/modules.",
+  "env_needed": true,
+  "preview": {
+    "enabled": true,
+    "slots": 1
+  },
+  "demo_focus": "curl the endpoint on the preview and show the JSON body next to the deployed sha",
+  "budget_ics": 1,
+  "priority": 2
+}

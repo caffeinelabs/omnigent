@@ -1,0 +1,24 @@
+{
+  "slug": "bench-docs-previews",
+  "title": "Benchmark: document factory previews in HACKING.md",
+  "repo": "caffeinelabs/app",
+  "base_branch": "temp-main",
+  "kind": "work",
+  "goal": "Add a short 'Factory previews' section to HACKING.md: what a per-PR preview is, where its URLs come from, how long it lives, and how to check which commit it runs.",
+  "dod": [
+    "HACKING.md has a 'Factory previews' section of at most 30 lines",
+    "every command in the section runs as written",
+    "the markdown linter passes"
+  ],
+  "scope_paths": [
+    "HACKING.md",
+    "documentation/**"
+  ],
+  "constraints": "Docs only: no code changes.",
+  "env_needed": false,
+  "preview": {
+    "enabled": false
+  },
+  "budget_ics": 1,
+  "priority": 3
+}

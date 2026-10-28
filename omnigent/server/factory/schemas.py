@@ -857,6 +857,7 @@ class DecisionOptionView(_View):
     :param target: What the action acts on, e.g. ``"member:<id>"``, ``"project:<slug>"``
         or ``"person:<user id>"``.
     :param role: The roster role a ``grant_role`` option gives.
+    :param reasons: A required picker: the answer must name one of these (closure reasons).
     """
 
     id: str
@@ -867,6 +868,7 @@ class DecisionOptionView(_View):
     href: str | None = None
     target: str | None = None
     role: PersonRole | None = None
+    reasons: list[str] | None = None
 
 
 class DecisionView(_View):
@@ -1039,6 +1041,14 @@ class PreflightAgents(_View):
     factory_pl: bool
 
 
+class Tier2Status(_View):
+    """The Factory Smith lane: off until its prerequisites hold (``reason`` says which not)."""
+
+    enabled: bool = False
+    reason: str | None = None
+    checks: dict[str, Any] | None = None
+
+
 class Preflight(_View):
     """
     ``GET /v1/factory/preflight``: can this user start a factory here?
@@ -1046,6 +1056,7 @@ class Preflight(_View):
     :param default_repo: The server's default repo for new factories, e.g. ``"caffeinelabs/app"``.
     :param default_base: Its default base branch, e.g. ``"temp-main"``.
     :param max_projects: Projects one factory can run (one PL pod each).
+    :param tier2: Whether agents may open code PRs to omnigent (off by default).
     """
 
     github: PreflightGithub
@@ -1055,6 +1066,7 @@ class Preflight(_View):
     default_repo: str | None = None
     default_base: str | None = None
     max_projects: int = 10
+    tier2: Tier2Status | None = None
 
 
 # ── Round 3: people, Room, proposals, work graph, loops, issues, telemetry ──

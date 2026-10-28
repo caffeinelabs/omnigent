@@ -410,7 +410,7 @@ async def test_non_blocking_decisions_and_custom_windows(cockpit: Cockpit) -> No
     loud = _decision(cockpit, await _ask(cockpit, "Now?"))
     cockpit.store.put_definition(
         cockpit.fid,
-        doc={"decisions": {"escalate_after_m": 5, "owners_after_m": 10}},
+        doc={"decisions": {"escalate_after_m": 5, "escalate_owners_after_m": 15}},
         created_by="alice",
         created_via="human",
     )

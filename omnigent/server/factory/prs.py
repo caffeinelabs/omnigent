@@ -842,6 +842,8 @@ async def _open_closed_decision(
     pl_id: str | None,
     closed_by: str | None,
 ) -> str | None:
+    from omnigent.server.factory.feedback import closure_options
+
     target = f"project:{pr.project_slug}" if pr.project_slug else None
     task = pr.task or pr.head_ref or f"#{pr.number}"
     try:
@@ -851,30 +853,33 @@ async def _open_closed_decision(
             dedupe_key=f"pr_closed:{pr.id}",
             question=(
                 f"PR {pr.repo}#{pr.number} ({task}) was closed without merge by "
-                f"@{closed_by or 'unknown'}. What should the factory do?"
+                f"@{closed_by or 'unknown'}. Why was it closed, and what should the factory "
+                "do?"
             ),
             source="pr_closed",
             blocking=False,
             allow_text=True,
             project_slug=pr.project_slug,
             context=f"{pr.title}\n{pr.url}",
-            options=[
-                {
-                    "id": "abandon",
-                    "label": "Abandon task",
-                    "description": "Drop the task; the PL tears down its preview.",
-                    "action": "abandon_task",
-                    "target": target,
-                },
-                {
-                    "id": "rework",
-                    "label": "Ask PL to rework",
-                    "description": "Tell the PL what to change; it opens a new PR.",
-                    "action": "rework",
-                    "target": target,
-                },
-                {"id": "dismiss", "label": "Dismiss", "action": "dismiss"},
-            ],
+            options=closure_options(
+                [
+                    {
+                        "id": "abandon",
+                        "label": "Abandon task",
+                        "description": "Drop the task; the PL tears down its preview.",
+                        "action": "abandon_task",
+                        "target": target,
+                    },
+                    {
+                        "id": "rework",
+                        "label": "Ask PL to rework",
+                        "description": "Tell the PL what to change; it opens a new PR.",
+                        "action": "rework",
+                        "target": target,
+                    },
+                    {"id": "dismiss", "label": "Dismiss", "action": "dismiss"},
+                ]
+            ),
         )
     except Exception:  # noqa: BLE001 - the close notice still goes out
         _logger.warning(

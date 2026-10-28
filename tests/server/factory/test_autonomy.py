@@ -300,12 +300,15 @@ async def test_the_start_brief_request_names_the_user(cockpit: Cockpit) -> None:
 
 
 async def test_grace_stops_when_owners_leave_grace(cockpit: Cockpit) -> None:
-    from omnigent.server.factory import proposals
+    from omnigent.server.factory import definition, proposals
     from omnigent.stores.factory_store import now_s
 
     cockpit.world.store.set_labels(cockpit.fid, {autonomy.LABEL_AUTONOMY: "grace"})
     await propose(cockpit, {"op": "create", "project": project("db-version")})
-    cockpit.world.store.set_labels(cockpit.fid, {autonomy.LABEL_AUTONOMY: "confirm"})
+    # The label moved into the definition on the first resolve; owners change it there.
+    definition.set_values(
+        cockpit.deps, cockpit.fid, {"autonomy.projects": "confirm"}, created_by="alice"
+    )
 
     late = await proposals.apply_graceful(
         cockpit.app.state, cockpit.fid, now=now_s() + proposals.GRACE_S + 1
