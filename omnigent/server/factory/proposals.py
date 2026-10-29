@@ -251,19 +251,21 @@ def _protected_repos() -> frozenset[str]:
 
 
 def factory_repo_set(deps: FactoryDeps, root: Conversation) -> set[str]:
-    """:returns: The repos the factory works on: its projects', its default and the root's."""
-    from omnigent.server.factory.agent_scope import repo_from_workspace
-    from omnigent.server.managed_hosts import read_managed_repo_workspaces
+    """
+    The repos an agent's new project may use without an owner.
 
-    repos = {p.repo.lower() for p in deps.factory_store.list_projects(root.id) if p.repo}
-    defaults = start.root_defaults(root)
-    if defaults.repo:
-        repos.add(defaults.repo.lower())
-    for workspace in read_managed_repo_workspaces(root.labels):
-        repo = repo_from_workspace(workspace)
-        if repo:
-            repos.add(repo)
-    return repos
+    Only repos a human gave the factory count: its default and its live
+    projects' (:func:`omnigent.server.factory.guard_repos.human_repos`, the
+    rows the factory guards read). A project row reconcile backfilled from a
+    PL a lead spawned, and the root's ``omnigent.sandbox.repo.*`` labels, carry
+    a repo an agent chose, so they never count: otherwise a lead could spawn a
+    PL on any repo, propose a project there and have the guards let it write.
+
+    :returns: Lowercase ``owner/repo`` values, e.g. ``{"caffeinelabs/app"}``.
+    """
+    from omnigent.server.factory.guard_repos import human_repos
+
+    return human_repos(deps.factory_store, root)
 
 
 def _with_default_repo(raw: Any, defaults: start.FactoryDefaults) -> Any:
@@ -274,7 +276,9 @@ def _with_default_repo(raw: Any, defaults: start.FactoryDefaults) -> Any:
 
 def _needs_owner(project: ProjectIn, repos: set[str], defaults: start.FactoryDefaults) -> bool:
     """A project off the factory's repos, off the default base, or on a protected repo."""
-    repo = project.repo.lower()
+    from omnigent.policies.builtins.github import _normalize_repo
+
+    repo = _normalize_repo(project.repo) or project.repo.lower()
     if repo not in repos or repo in _protected_repos():
         return True
     expected = resolve_base_branch(None, project.repo, defaults.repo, defaults.base)

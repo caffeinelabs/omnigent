@@ -28,7 +28,10 @@ Omnigent terminal) and denies:
   (or inside ``deny_repos``) by ``-R``, URL or ``GH_REPO``. For a factory
   member the server replaces ``write_repos`` with ``factory_repos``, the repos
   of its factory projects (:mod:`omnigent.server.factory.guard_repos`), so a
-  project on any repo can push to and open PRs on its own repo;
+  project on any repo can push to and open PRs on its own repo. Targets are
+  read the way gh and git read them (any host case, a root dot, ``www.``), and
+  one that names no GitHub repo (``-R $R``, ``git push $URL``, another host,
+  ``..`` segments) is denied rather than assumed to be allowed;
 - per role: any push or PR creation (CLI or API) by a lead, reviewer, planner
   or the demo agent, every PR write but ``gh pr comment`` by the demo agent,
   every PR or issue write by the planner, and env lifecycle
@@ -52,6 +55,7 @@ import shlex
 from collections.abc import Callable, Iterable, Sequence
 from fnmatch import fnmatchcase
 from typing import Any, TypeAlias
+from urllib.parse import urlsplit
 
 from omnigent.factory import (
     ROLE_DEMO,
@@ -224,6 +228,20 @@ _GH_PR_WRITE_ACTIONS: frozenset[str] = frozenset(
 _GH_REPO_ADMIN_ACTIONS: frozenset[str] = frozenset(
     {"delete", "archive", "unarchive", "edit", "rename"}
 )
+# ``gh repo create --push`` / ``fork`` write code to a repo no project names;
+# ``sync <repo>`` resets a branch of that repo (``--force``) to another repo's.
+_GH_REPO_CREATE_ACTIONS: frozenset[str] = frozenset({"create", "fork", "sync"})
+_GH_REPO_SYNC_VALUE_FLAGS: frozenset[str] = frozenset(
+    {"-b", "--branch", "-s", "--source", "-R", "--repo"}
+)
+# A GitHub host as gh and git reach it: any case, ``www.`` or another
+# subdomain (gh maps ``*.github.com`` to github.com), an optional root dot.
+_GITHUB_HOST_RE = re.compile(r"(?:[a-z0-9-]+\.)*github\.com\.?", re.IGNORECASE)
+_REPO_PART_RE = re.compile(r"[A-Za-z0-9._-]+")
+# A token that starts with a URL scheme (``https:``, ``ssh:``, ``git::https:``).
+_URL_SCHEME_RE = re.compile(r"^[A-Za-z][A-Za-z0-9+.-]*:")
+# A value the shell expands at run time; the guard sees only its spelling.
+_SHELL_EXPANSION_RE = re.compile(r"[$`]")
 _GH_RELEASE_WRITE_ACTIONS: frozenset[str] = frozenset(
     {"create", "delete", "edit", "upload", "delete-asset"}
 )
@@ -272,6 +290,13 @@ _GH_API_ACCOUNT_PATH = re.compile(
 _GH_API_PR_CREATE_PATH = re.compile(r"/repos/[^/]+/[^/]+/pulls/?")
 _GH_API_PUSH_PATH = re.compile(r"/repos/[^/]+/[^/]+/(git|contents)(/|$)")
 _GH_API_REPO = re.compile(r"/repos/([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+)")
+# A write endpoint whose repo is spelled out (or gh's placeholders); a shell
+# expansion may follow it (``repos/o/r/issues/$N/comments``), not precede it.
+_GH_API_LITERAL_REPO = re.compile(
+    r"^/repos/(?:[A-Za-z0-9._-]+|\{owner\})/(?:[A-Za-z0-9._-]+|\{repo\})(?=/|$)"
+)
+# Percent-encoded ``.``, ``/`` or ``\``: a server that decodes them sees another path.
+_ENCODED_SEPARATOR_RE = re.compile(r"%(?:2e|2f|5c)", re.IGNORECASE)
 # API spellings of PR writes; for the demo agent only commenting stays open.
 _GH_API_PR_WRITE_PATH = re.compile(r"/repos/[^/]+/[^/]+/(pulls|issues)(/|$)")
 _GH_API_COMMENT_PATH = re.compile(r"/repos/[^/]+/[^/]+/issues/(\d+/comments|comments/\d+)/?")
@@ -775,7 +800,8 @@ def _flag_values(args: Sequence[str], names: Iterable[str]) -> list[str]:
             values.append(value)
             continue
         if not token.startswith("--") and len(token) > 2 and token[:2] in wanted:
-            values.append(token[2:])
+            # gh's flag parser reads ``-R=x`` as ``x``, like ``-Rx``.
+            values.append(token[2:].removeprefix("="))
     return values
 
 
@@ -806,23 +832,109 @@ def _api_path(endpoint: str) -> str:
     return "/" + path.lstrip("/")
 
 
-def _github_url_repos(args: Sequence[str]) -> list[str]:
+def _github_url_repos(args: Sequence[str]) -> list[tuple[str, str]]:
     """
     Repos named by GitHub URL arguments (not by URLs quoted inside a body/title).
 
+    A ``scheme://`` argument is read the way gh reads a PR URL
+    (:func:`_github_target`); one that names no GitHub repo yields ``""`` so
+    the caller fails closed.
+
     :param args: ``gh`` arguments, e.g. ``["comment", "https://github.com/o/r/pull/1"]``.
-    :returns: Lowercase ``owner/repo`` values, e.g. ``["o/r"]``.
+    :returns: ``(argument, owner/repo)`` pairs, e.g.
+        ``[("https://github.com/o/r/pull/1", "o/r")]``; the repo is lowercase,
+        and ``""`` for a URL that names none (``https://API.github.com/o/r/pull/1``
+        reads as ``o/r``, ``https://example.com/o/r/pull/1`` as ``""``).
     """
-    repos: list[str] = []
+    repos: list[tuple[str, str]] = []
     for index, token in enumerate(args):
         if index > 0 and args[index - 1] in _GH_TEXT_FLAGS:
             continue
         if any(ch.isspace() for ch in token):
             continue
+        if "://" in token and _URL_SCHEME_RE.match(token):
+            repos.append((token, _github_target(token)))
+            continue
         repo = _repo_from_url(token)
         if repo:
-            repos.append(repo)
+            repos.append((token, repo))
     return repos
+
+
+def _is_remote_url(remote: str) -> bool:
+    """
+    Whether a ``git push`` remote is a URL rather than a remote name or a local path.
+
+    Like git: ``scheme://…``, or scp-style ``[user@]host:path`` (a ``:``
+    before any ``/``).
+
+    :param remote: e.g. ``"origin"``, ``"../clone"``, ``"git@github.com:o/r"``.
+    :returns: ``True`` for the URL forms.
+    """
+    if "://" in remote:
+        return True
+    head, colon, _ = remote.partition(":")
+    return bool(colon) and "/" not in head
+
+
+def _github_target(value: str) -> str:
+    """
+    The GitHub repo a write target names, or ``""`` when it names none.
+
+    Reads a ``-R`` / ``--repo`` / ``GH_REPO`` value, a ``git push`` URL or a
+    PR URL the way gh and git do: ``owner/repo``, ``HOST/owner/repo``,
+    ``scheme://[user[:token]@]HOST[:port]/owner/repo[.git][/…]`` and
+    scp-style ``[user@]HOST:owner/repo[.git]``, where HOST is github.com in
+    any case, a subdomain of it, with or without a trailing dot. Anything else
+    (another host, a shell expansion, ``.`` / ``..`` segments, percent
+    escapes, an ambiguous ``user@host``) yields ``""``, which callers deny:
+    a target the guard cannot read is never assumed to be an allowed one.
+
+    :param value: e.g. ``"GitHub.com/Octo/Repo"`` or
+        ``"https://x-access-token:t@github.com./octo/repo.git"``.
+    :returns: Lowercase ``owner/repo`` (``"octo/repo"``), or ``""``.
+    """
+    value = value.strip()
+    if not value or _SHELL_EXPANSION_RE.search(value) or "\\" in value:
+        return ""
+    if any(ch.isspace() or ord(ch) < 0x20 for ch in value):
+        return ""
+    if "://" in value:
+        try:
+            parts = urlsplit(value)
+        except ValueError:
+            return ""
+        userinfo, _, hostport = parts.netloc.rpartition("@")
+        if "@" in userinfo:
+            return ""
+        host, _, port = hostport.partition(":")
+        if port and not port.isdigit():
+            return ""
+        path = parts.path
+    else:
+        head, colon, rest = value.partition(":")
+        if colon and "/" not in head:
+            host, path = head.rpartition("@")[2], rest
+        else:
+            segments = value.split("/")
+            if len(segments) == 2:
+                host, path = "github.com", value
+            elif len(segments) == 3:
+                host, path = segments[0], "/".join(segments[1:])
+            else:
+                return ""
+    if not _GITHUB_HOST_RE.fullmatch(host) or "%" in path:
+        return ""
+    segments = path.removeprefix("/").split("/")
+    if len(segments) < 2 or any(seg in (".", "..") for seg in segments):
+        return ""
+    owner, name = segments[0], segments[1]
+    name = name[:-4] if name.lower().endswith(".git") else name
+    if not _REPO_PART_RE.fullmatch(owner) or not _REPO_PART_RE.fullmatch(name):
+        return ""
+    if name in (".", ".."):
+        return ""
+    return f"{owner}/{name}".lower()
 
 
 def _git_global_options(args: Sequence[str]) -> tuple[list[str], int]:
@@ -941,10 +1053,9 @@ class _RoleGuard:
             )
         if any(_MERGE_GATE_RE.search(body) for body in _split_heredocs(command)[1]):
             return self._merge_gate_reason(None, [])
+        # ``""`` for a value that names no repo (``GH_REPO=$R``): it fails closed.
         gh_repos = tuple(
-            repo
-            for match in _GH_REPO_ENV_RE.finditer(command)
-            if (repo := _normalize_repo(match.group(2)))
+            _github_target(match.group(2)) for match in _GH_REPO_ENV_RE.finditer(command)
         )
         for argv in _invocations(command):
             reason = self._check_statement(argv, gh_repos)
@@ -1099,6 +1210,25 @@ class _RoleGuard:
             )
         return None
 
+    def _target_reason(self, value: str, repo: str, what: str) -> str | None:
+        """
+        DENY a write whose named target is outside the factory's scope or unreadable.
+
+        :param value: The target as written, e.g. ``"-R $R"``'s ``"$R"``.
+        :param repo: :func:`_github_target` of *value*; ``""`` when it names no repo.
+        :param what: The command, e.g. ``"gh pr create"``.
+        :returns: A DENY reason, or ``None`` when *repo* is writable.
+        """
+        if not repo:
+            shown = value if len(value) <= 80 else value[:77] + "..."
+            return (
+                f"`{what}` targets `{shown}`, which the guard cannot read as a GitHub "
+                "owner/repo (a shell expansion, another host, or an odd spelling). Name "
+                "the repo literally (`--repo owner/repo`, `https://github.com/owner/repo`) "
+                f"or push to `origin`: {self._push_hint()}."
+            )
+        return self._repo_reason(repo, what)
+
     def _branch_is_protected(self, branch: str) -> bool:
         """
         Whether a push destination branch (possibly a wildcard) hits a protected one.
@@ -1166,14 +1296,32 @@ class _RoleGuard:
             and any(ALLOW_PROTECTED_LABEL in arg for arg in args)
         ):
             return self._label_reason()
-        if group == "pr" and action in _GH_PR_WRITE_ACTIONS:
-            repos = [_normalize_repo(v) for v in _flag_values(args, _GH_REPO_FLAGS)]
-            for repo in [*repos, *_github_url_repos(args), *gh_repos]:
-                reason = self._repo_reason(repo, f"gh pr {action}") if repo else None
+        if (group == "pr" and action in _GH_PR_WRITE_ACTIONS) or (
+            group == "issue" and action in _GH_ISSUE_WRITE_ACTIONS
+        ):
+            # Every target gh may write to must be readable and writable: -R,
+            # a URL argument and GH_REPO, whichever of them gh ends up using.
+            what = f"gh {group} {action}"
+            targets = [(v, _github_target(v)) for v in _flag_values(args, _GH_REPO_FLAGS)]
+            targets += _github_url_repos(args)
+            targets += [("GH_REPO=…", repo) for repo in gh_repos]
+            for value, repo in targets:
+                reason = self._target_reason(value, repo, what)
                 if reason:
                     return reason
         if group == "repo" and action in _GH_REPO_ADMIN_ACTIONS:
             return f"`gh repo {action}` is blocked: repository settings are {_HUMAN_ONLY_HINT}."
+        # A ``gh repo sync`` naming no repo only fast-forwards the local clone.
+        if (
+            group == "repo"
+            and action in _GH_REPO_CREATE_ACTIONS
+            and (action != "sync" or len(_positionals(args, _GH_REPO_SYNC_VALUE_FLAGS)) > 2)
+        ):
+            return (
+                f"`gh repo {action}` is blocked: creating, forking and syncing repositories "
+                f"are {_HUMAN_ONLY_HINT}. Push your branch to your project's repo instead: "
+                f"{self._push_hint()}."
+            )
         if group == "release" and action in _GH_RELEASE_WRITE_ACTIONS:
             return f"`gh release {action}` is blocked: releases and tags are {_HUMAN_ONLY_HINT}."
         if group == "secret" or (group == "variable" and action in _GH_VARIABLE_WRITE_ACTIONS):
@@ -1229,6 +1377,19 @@ class _RoleGuard:
             return None
         path = _api_path(endpoint)
         what = f"gh api -X {method} {path}"
+        if (
+            any(seg in (".", "..") for seg in path.split("/"))
+            or _ENCODED_SEPARATOR_RE.search(path)
+            or "\\" in path
+            or (_SHELL_EXPANSION_RE.search(path) and not _GH_API_LITERAL_REPO.match(path))
+        ):
+            # ``repos/o/app/../infra``, ``repos/o/$R/…`` or ``%2e%2e``: the repo
+            # the call reaches is not the one it spells.
+            return (
+                f"`{what}` is blocked: the guard cannot tell which repo it writes (`.` / `..` "
+                "segments, an escaped separator, or a shell expansion before the repo). "
+                "Spell the endpoint out, e.g. `repos/<owner>/<repo>/pulls`."
+            )
         if _GH_API_ADMIN_PATH.search(path):
             return (
                 f"`{what}` is blocked: the factory never writes merges, branch protection, "
@@ -1271,7 +1432,7 @@ class _RoleGuard:
             return self._repo_reason(f"{match.group(1)}/{match.group(2)}".lower(), what)
         if "{owner}" in path or "{repo}" in path:
             for repo in gh_repos:
-                reason = self._repo_reason(repo, what)
+                reason = self._target_reason("GH_REPO=…", repo, what)
                 if reason:
                     return reason
         return None
@@ -1467,8 +1628,13 @@ class _RoleGuard:
             return self._delete_reason()
         remotes = [*repo_values, *positionals[:1]]
         for remote in remotes:
-            repo = _repo_from_url(remote)
-            reason = self._repo_reason(repo, "git push") if repo else None
+            if _SHELL_EXPANSION_RE.search(remote) or _is_remote_url(remote):
+                # A URL (or a value the shell fills in) must name a writable
+                # GitHub repo; ``origin`` and local paths are not URLs.
+                reason = self._target_reason(remote, _github_target(remote), "git push")
+            else:
+                repo = _repo_from_url(remote)
+                reason = self._repo_reason(repo, "git push") if repo else None
             if reason:
                 return reason
         # ``git push origin tag v1`` is git's spelling of ``refs/tags/v1:refs/tags/v1``.
@@ -1492,6 +1658,12 @@ class _RoleGuard:
         :param refspec: e.g. ``"factory/a/b"``, ``"HEAD:refs/heads/main"``, ``"+x:main"``.
         :returns: A DENY reason, or ``None``.
         """
+        if _SHELL_EXPANSION_RE.search(refspec):
+            # ``factory/$X`` with ``X='x:main'`` (or ``'x main'``) pushes main.
+            return (
+                f"`git push <remote> {refspec}` is blocked: the shell fills in the "
+                f"destination, which the guard cannot see. Push explicitly: {self._push_hint()}."
+            )
         source, colon, dest = refspec.lstrip("+").partition(":")
         if colon and not source and not dest:
             return (

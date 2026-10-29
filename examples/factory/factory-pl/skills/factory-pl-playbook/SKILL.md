@@ -75,8 +75,10 @@ Report: the RESULT block
   syncs with it and opens the PR with `--base <base>`.
 - `Preview: yes` when the change is runnable: it touches `services/**`,
   `libs/**`, `generated/**` or `content/**`, and the charter has previews on.
-  `no` for docs-only and tooling-only changes; the IC labels the PR
-  `factory:no-env` and it gets no preview and no demo.
+  `no` for docs-only and tooling-only changes, and for every change on a repo
+  other than caffeinelabs/app (the factory preview tooling exists only
+  there); the IC labels the PR `factory:no-env` and it gets no preview and no
+  demo.
 - UX changes need a demo with video and screenshots; backend changes need API
   calls in the demo. Write the demo focus so a reviewer knows what to look at.
 - Task ids are short kebab-case names, e.g. `version-route`. A re-dispatch is

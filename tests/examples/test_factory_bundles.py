@@ -296,6 +296,21 @@ def test_policy_set_per_role(lead: AgentSpec, pl: AgentSpec) -> None:
             assert bounds is None, spec.name
 
 
+def test_no_factory_agent_declares_an_mcp_server(lead: AgentSpec, pl: AgentSpec) -> None:
+    """
+    Pins where the factory guard's repos are decided: the server.
+
+    The server's engine gives each member's guard the repos of its projects
+    (``factory_repos``); the runner-side gate builds the bundle guard with its
+    static defaults. That is safe only while every GitHub write is a shell
+    command, which the runner hands to the server's ``/policies/evaluate``. A
+    GitHub MCP server would be gated on the runner with the wrong repos, so
+    adding one needs its calls routed through the server first.
+    """
+    for spec in _all_specs(lead, pl):
+        assert spec.mcp_servers == [], (spec.name, [m.name for m in spec.mcp_servers])
+
+
 def test_bypass_mode_always_comes_with_the_deny_only_guards(
     lead: AgentSpec, pl: AgentSpec
 ) -> None:

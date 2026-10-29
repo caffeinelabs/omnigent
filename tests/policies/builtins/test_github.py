@@ -28,7 +28,7 @@ import pytest
 
 from omnigent.policies.builtins._shell import SHELL_TOOLS
 from omnigent.policies.builtins.github import _DEFAULT_SHELL_TOOLS as _github_default_shell_tools
-from omnigent.policies.builtins.github import github_policy
+from omnigent.policies.builtins.github import _repo_from_url, github_policy
 from omnigent.policies.builtins.orchestration import _SHELL_TOOLS as _orchestration_shell_tools
 from omnigent.policies.builtins.working_dir import (
     _DEFAULT_SHELL_TOOLS as _working_dir_default_shell_tools,
@@ -709,6 +709,34 @@ def test_shell_lookalike_host_write_not_allowed_as_github(command: str) -> None:
     """
     policy = github_policy(read_all=True, write_repos=["octo/hello"], write_branches=["main"])
     assert _action(policy(_sh(command))) == "ASK"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("https://GITHUB.COM/Octo/Secret", "octo/secret"),
+        ("https://GitHub.com/octo/secret.git", "octo/secret"),
+        ("https://github.com./octo/secret", "octo/secret"),
+        ("https://x-access-token:t@GITHUB.COM./octo/secret.git", "octo/secret"),
+        ("https://www.github.com/octo/secret/pull/1", "octo/secret"),
+        ("https://github.com:443/octo/secret", "octo/secret"),
+        ("git@GitHub.com:octo/secret.git", "octo/secret"),
+        ("git@github.com:123/secret.git", "123/secret"),
+        # Still not GitHub: look-alikes and hosts that only end in github.com.
+        ("https://evil-github.com/octo/secret", ""),
+        ("https://github.com.evil.example/octo/secret", ""),
+    ],
+)
+def test_url_host_matches_in_any_case_and_with_a_root_dot(value: str, expected: str) -> None:
+    """gh lowercases hosts and DNS / TLS ignore case and the root dot: they are github.com."""
+    assert _repo_from_url(value) == expected
+
+
+def test_shell_push_to_an_uppercase_host_is_gated() -> None:
+    """``GITHUB.COM`` used to name no repo, so a push there was never checked."""
+    policy = github_policy(write_repos=[_REPO], write_branches=["main"])
+    result = policy(_sh("git push https://GITHUB.COM/octo/secret.git main"))
+    assert result is not None and result["result"] == "DENY"
 
 
 @pytest.mark.parametrize(
