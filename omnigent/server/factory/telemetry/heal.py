@@ -32,6 +32,7 @@ from omnigent.server.factory.telemetry.recorder import (
     decision_span,
     demo_span,
     handler_for,
+    pr_id_of,
     state_attrs,
 )
 from omnigent.server.factory.telemetry.spans import (
@@ -310,30 +311,37 @@ def _heal_pr(
 # ── Decisions, tasks, envs, previews, demos ──────────────────────
 
 
-def _heal_decisions(rec: Recorder, evs: list[FactoryEvent]) -> None:
+def _heal_decision(rec: Recorder, row: Any, by_ref: dict[tuple[str, str], int]) -> None:
+    subject = f"decision:{row.ref}"
+    opened = by_ref.get(("decision.opened", subject), row.created_at * 1000)
+    close = _DECISION_CLOSE.get(row.status)
+    if close is None:
+        decision_span(rec, row, started_at=opened)
+        return
+    kind, outcome = close
+    fallback = (row.answered_at or row.updated_at or row.created_at) * 1000
+    end = by_ref.get((kind, subject), fallback)
+    decision_span(
+        rec,
+        row,
+        started_at=min(opened, end),
+        ended_at=end,
+        outcome=outcome,
+        by=row.answered_by,
+    )
+
+
+def _heal_decisions(
+    rec: Recorder, evs: list[FactoryEvent], guarded: Callable[[str, Callable[[], object]], None]
+) -> None:
     rows = rec.store.list_decisions(factory_id=rec.factory_id, limit=_MAX_ROWS, newest_first=False)
     by_ref: dict[tuple[str, str], int] = {}
     for e in evs:
         if e.kind.startswith("decision.") and e.subject:
             by_ref.setdefault((e.kind, e.subject), e.ts)
     for row in rows:
-        subject = f"decision:{row.ref}"
-        opened = by_ref.get(("decision.opened", subject), row.created_at * 1000)
-        close = _DECISION_CLOSE.get(row.status)
-        if close is None:
-            decision_span(rec, row, started_at=opened)
-            continue
-        kind, outcome = close
-        fallback = (row.answered_at or row.updated_at or row.created_at) * 1000
-        end = by_ref.get((kind, subject), fallback)
-        decision_span(
-            rec,
-            row,
-            started_at=min(opened, end),
-            ended_at=end,
-            outcome=outcome,
-            by=row.answered_by,
-        )
+        # One decision that cannot be written must not skip the rest.
+        guarded(f"decision {row.ref} {row.id}", partial(_heal_decision, rec, row, by_ref))
 
 
 def _heal_tasks(rec: Recorder, evs: list[FactoryEvent], now: int) -> None:
@@ -397,8 +405,10 @@ def _heal_states(rec: Recorder, evs: list[FactoryEvent]) -> None:
         attrs = state_attrs(data)
         if e.kind == "env.reported" and e.project_slug:
             envs[e.project_slug].append((e.ts, state, attrs))
-        elif e.kind in ("preview.reported", "preview.parked") and data.get("pr_id"):
-            pr_id = str(data["pr_id"])
+        elif e.kind in ("preview.reported", "preview.parked"):
+            pr_id = pr_id_of(rec, data.get("pr_id"), e.project_slug)
+            if pr_id is None:
+                continue
             previews[pr_id].append((e.ts, state, attrs))
             preview_project.setdefault(pr_id, e.project_slug)
     for slug, items in envs.items():
@@ -467,7 +477,7 @@ def heal_factory(
             d for d in demos if d.pr_id == pr.id or (d.repo, d.pr_number) == (pr.repo, pr.number)
         ]
         guarded(f"pr {pr.id}", partial(_heal_pr, rec, pr, pr_events.get(pr.id, []), mine, at))
-    guarded("decisions", partial(_heal_decisions, rec, evs))
+    guarded("decisions", partial(_heal_decisions, rec, evs, guarded))
     guarded("tasks", partial(_heal_tasks, rec, evs, at))
     guarded("envs and previews", partial(_heal_states, rec, evs))
     guarded("demos", partial(_heal_demos, rec, demos, evs))

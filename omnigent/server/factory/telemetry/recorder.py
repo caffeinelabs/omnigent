@@ -13,20 +13,24 @@ stored event and writes the span the event opens, extends or closes:
   (``needs_human``, ``issue.*``), zero-length ``intervention`` (controls) and
   ``proposal`` spans.
 
-Handlers are synchronous and run in a worker thread; a failure is logged and
-heal rebuilds the span.
+Handlers are synchronous and run in a worker thread; a failure is logged with
+the event id (and the span column, for a value that is not a row id) and heal
+rebuilds the span. Ids read from event data or a decision's subject go through
+:func:`pr_id_of` / :func:`pr_for_ref`, so a PR number never reaches an id column.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
-from omnigent.entities.factory import FactoryEvent, FactorySpan
+from omnigent.entities.factory import FactoryEvent, FactoryPr, FactorySpan
+from omnigent.factory import parse_pr_url
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.telemetry.spans import (
     ABANDONED,
@@ -39,6 +43,7 @@ from omnigent.server.factory.telemetry.spans import (
     TERMINAL_STAGES,
     TIMEOUT,
     SpanContext,
+    SpanFieldError,
     close_open,
     decision_key,
     demo_key,
@@ -53,10 +58,12 @@ from omnigent.server.factory.telemetry.spans import (
     ready_wait_key,
     session_start_ms,
     span_context,
+    span_ids,
     stage_key,
     task_key,
     write_span,
 )
+from omnigent.stores.factory_store import norm_id
 
 if TYPE_CHECKING:
     from omnigent.stores.factory_store import FactoryStore
@@ -64,6 +71,8 @@ if TYPE_CHECKING:
 _logger = logging.getLogger(__name__)
 
 _KNOWN_MAX: Final = 4096
+_PR_REF_RE: Final = re.compile(r"(?:(?P<repo>[\w.-]+/[\w.-]+)\s*)?[#!]?\s*(?P<number>\d{1,9})")
+"""A PR by number: ``9724``, ``#9724``, ``!9724`` or ``owner/repo#9724``."""
 
 _known: OrderedDict[tuple[str, str], None] = OrderedDict()
 """Spans this process already ensured exist (``(factory_id, dedupe_key)``)."""
@@ -125,7 +134,8 @@ class Recorder:
         self, kind: str, state: str, key: str, ts: int, attrs: dict[str, Any], **subject: Any
     ) -> None:
         """Extend the open *kind* episode of a subject in *state*, or close it and start one."""
-        project, pr_id = subject.get("project_slug"), subject.get("pr_id")
+        project = subject.get("project_slug")
+        pr_id = span_ids({"pr_id": subject.get("pr_id")})["pr_id"]
         current = self.store.list_open_spans(
             self.factory_id, kind, project_slug=project, pr_id=pr_id
         )
@@ -151,6 +161,66 @@ def _str(value: Any) -> str | None:
 
 def _title(summary: str) -> str:
     return summary.split(" · ", 1)[0].strip()
+
+
+def row_id(value: Any) -> str | None:
+    """:returns: *value* as a bare-hex row id, or ``None`` when it is no uuid."""
+    if not isinstance(value, str) or not value:
+        return None
+    try:
+        return norm_id(value)
+    except ValueError:
+        return None
+
+
+def pr_for_ref(
+    store: FactoryStore, factory_id: str, ref: Any, *, project: str | None = None
+) -> FactoryPr | None:
+    """
+    The factory PR a reference names, or ``None``.
+
+    :param ref: The ``factory_prs`` row id, or the PR as ``9724``, ``#9724``,
+        ``!9724``, ``owner/repo#9724`` or its URL; a trailing ``@<sha>`` is ignored.
+    :param project: When a bare number matches PRs of several repos, prefer this project's.
+    """
+    if isinstance(ref, int) and not isinstance(ref, bool):
+        ref = str(ref)
+    if not isinstance(ref, str):
+        return None
+    text = ref.partition("@")[0].strip()
+    fid = norm_id(factory_id)
+    pr_id = row_id(text)
+    if pr_id is not None:
+        pr = store.get_pr(pr_id)
+        return pr if pr is not None and norm_id(pr.factory_id) == fid else None
+    parsed = parse_pr_url(text)
+    if parsed is None:
+        match = _PR_REF_RE.fullmatch(text)
+        if match is None:
+            return None
+        parsed = (match["repo"] or "", int(match["number"]))
+    repo, number = parsed[0].lower(), parsed[1]
+    found = [
+        p
+        for p in store.list_prs(fid)
+        if p.number == number and (not repo or p.repo.lower() == repo)
+    ]
+    mine = [p for p in found if project and p.project_slug == project]
+    pool = mine or found
+    return max(pool, key=lambda p: p.created_at) if pool else None
+
+
+def pr_id_of(rec: Recorder, value: Any, project: str | None = None) -> str | None:
+    """
+    The ``factory_prs`` row id an event's ``pr_id`` names.
+
+    A row id passes as is (no read); a number or ``owner/repo#n`` is looked up.
+    """
+    found = row_id(value)
+    if found is not None:
+        return found
+    pr = pr_for_ref(rec.store, rec.factory_id, value, project=project)
+    return pr.id if pr is not None else None
 
 
 def _on_factory_started(rec: Recorder, e: FactoryEvent) -> None:
@@ -211,7 +281,7 @@ def _on_project_closed(outcome: str) -> Callable[[Recorder, FactoryEvent], None]
 
 
 def _pr_fields(rec: Recorder, e: FactoryEvent) -> tuple[str, dict[str, Any]] | None:
-    pr_id = _str(_data(e).get("pr_id"))
+    pr_id = pr_id_of(rec, _data(e).get("pr_id"), e.project_slug)
     if pr_id is None:
         return None
     parent = rec.store.get_span_by_dedupe(rec.factory_id, pr_key(pr_id))
@@ -244,7 +314,7 @@ def _on_pr_ready(rec: Recorder, e: FactoryEvent) -> None:
 
 def _on_pr_unready(outcome: str) -> Callable[[Recorder, FactoryEvent], None]:
     def handle(rec: Recorder, e: FactoryEvent) -> None:
-        pr_id = _str(_data(e).get("pr_id"))
+        pr_id = pr_id_of(rec, _data(e).get("pr_id"), e.project_slug)
         if pr_id:
             close_open(
                 rec.store,
@@ -260,7 +330,7 @@ def _on_pr_unready(outcome: str) -> Callable[[Recorder, FactoryEvent], None]:
 
 def _decision_row(rec: Recorder, e: FactoryEvent) -> Any:
     """The decision an event is about: ``data.decision_id``, else its ``decision:D-n`` subject."""
-    decision_id = _str(_data(e).get("decision_id"))
+    decision_id = row_id(_data(e).get("decision_id"))
     if decision_id is not None:
         return rec.store.get_decision(decision_id)
     ref = (e.subject or "").removeprefix("decision:")
@@ -277,11 +347,16 @@ def decision_span(
     ended_at: int | None = None,
     outcome: str | None = None,
     by: str | None = None,
-    pr_id: str | None = None,
+    pr_id: Any = None,
 ) -> None:
-    """Write the span of one decision (``factory_decisions`` row)."""
+    """
+    Write the span of one decision (``factory_decisions`` row).
+
+    :param pr_id: The PR an event names (``data.pr_id``); else the PR is
+        resolved from the decision (:func:`decision_pr_id`).
+    """
     closed = outcome is not None and outcome != OPEN
-    subject = row.subject or ""
+    linked = pr_id_of(rec, pr_id, row.project_slug) if pr_id else None
     rec.span(
         kind="decision",
         name=row.ref,
@@ -290,21 +365,40 @@ def decision_span(
         ended_at=ended_at,
         outcome=outcome,
         project_slug=row.project_slug,
-        pr_id=pr_id or (subject.removeprefix("pr:") if subject.startswith("pr:") else None),
+        pr_id=linked or decision_pr_id(rec, row),
         session_id=row.asked_by_session_id,
         actor=by if outcome == OK else None,
         attrs={
             "source": row.source,
             "blocking": row.blocking,
+            **({"subject": row.subject} if row.subject else {}),
             **({"answered_by": by} if closed and by else {}),
         },
     )
 
 
+def decision_pr_id(rec: Recorder, row: Any) -> str | None:
+    """
+    The ``factory_prs`` row id a decision is about, or ``None``.
+
+    From its ``pr:<ref>`` subject (agents write a number as often as a row id),
+    else the PR a ``pr_closed`` decision asks about. A subject naming no PR
+    of the factory links nothing; the span keeps the subject in its attrs.
+    """
+    subject = (row.subject or "").strip()
+    if subject[:3].lower() == "pr:":
+        pr = pr_for_ref(rec.store, rec.factory_id, subject[3:], project=row.project_slug)
+        return pr.id if pr is not None else None
+    key = row.dedupe_key or ""
+    if row.source == "pr_closed" and key.startswith("pr_closed:"):
+        return row_id(key.removeprefix("pr_closed:"))
+    return None
+
+
 def _on_decision_opened(rec: Recorder, e: FactoryEvent) -> None:
     row = _decision_row(rec, e)
     if row is not None:
-        decision_span(rec, row, started_at=e.ts, pr_id=_str(_data(e).get("pr_id")))
+        decision_span(rec, row, started_at=e.ts, pr_id=_data(e).get("pr_id"))
 
 
 def _on_decision_closed(outcome: str) -> Callable[[Recorder, FactoryEvent], None]:
@@ -385,7 +479,7 @@ def _on_env(rec: Recorder, e: FactoryEvent) -> None:
 
 def _on_preview(rec: Recorder, e: FactoryEvent) -> None:
     data = _data(e)
-    pr_id, state = _str(data.get("pr_id")), _str(data.get("state"))
+    pr_id, state = pr_id_of(rec, data.get("pr_id"), e.project_slug), _str(data.get("state"))
     if not pr_id or not state:
         return
     attrs = state_attrs(data)
@@ -423,7 +517,7 @@ def demo_span(rec: Recorder, demo: Any, published_ms: int) -> None:
 
 
 def _on_demo(rec: Recorder, e: FactoryEvent) -> None:
-    demo_id = _str(_data(e).get("demo_id"))
+    demo_id = row_id(_data(e).get("demo_id"))
     demo = rec.store.get_demo(demo_id) if demo_id else None
     if demo is not None:
         demo_span(rec, demo, e.ts)
@@ -590,8 +684,19 @@ async def record_event(app_state: Any, event: FactoryEvent) -> None:
         return
     try:
         await asyncio.to_thread(record_sync, deps, event)
+    except SpanFieldError as exc:
+        _logger.warning(
+            "factory spans: could not record %s (event %s): %s=%r is not a row id",
+            event.kind,
+            event.id,
+            exc.field,
+            exc.value,
+            exc_info=True,
+        )
     except Exception:  # noqa: BLE001 - heal rebuilds what a failed write missed
-        _logger.warning("factory spans: could not record %s", event.kind, exc_info=True)
+        _logger.warning(
+            "factory spans: could not record %s (event %s)", event.kind, event.id, exc_info=True
+        )
 
 
 def reset() -> None:
@@ -602,11 +707,15 @@ def reset() -> None:
 __all__ = [
     "PROPOSAL_OUTCOMES",
     "Recorder",
+    "decision_pr_id",
     "decision_span",
     "demo_span",
     "handler_for",
+    "pr_for_ref",
+    "pr_id_of",
     "record_event",
     "record_sync",
     "reset",
+    "row_id",
     "state_attrs",
 ]

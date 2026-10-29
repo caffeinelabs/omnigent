@@ -25,6 +25,7 @@ from omnigent.factory import LABEL_DEF_VERSION, LABEL_VERSION, STAGE_DONE, STAGE
 from omnigent.server.factory import events
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.telemetry import versions
+from omnigent.stores.factory_store import norm_id
 
 if TYPE_CHECKING:
     from omnigent.stores.factory_store import FactoryStore
@@ -45,7 +46,43 @@ CONTEXT_TTL_S: Final = 60.0
 NAME_MAX: Final = 64
 FIELD_MAX: Final[dict[str, int]] = {"role": 16, "agent_name": 64, "actor": 128}
 """Free-text ``factory_spans`` columns, clipped to their width before a write."""
+ID_COLUMNS: Final = frozenset(
+    {"parent_id", "pr_id", "task_id", "loop_id", "session_id", "version_id"}
+)
+"""``factory_spans`` columns that hold row ids (32-hex uuids), never numbers or refs."""
 _CONTEXTS_MAX: Final = 4096
+
+
+class SpanFieldError(ValueError):
+    """
+    A span id column was given something that is not a row id (a PR number, a ref, a slug).
+
+    :param field: The column, e.g. ``"pr_id"``.
+    :param value: What it was given, e.g. ``"9724"``.
+    """
+
+    def __init__(self, field: str, value: Any) -> None:
+        super().__init__(f"factory_spans.{field} takes a row id, got {value!r}")
+        self.field = field
+        self.value = value
+
+
+def span_ids(fields: Mapping[str, Any]) -> dict[str, Any]:
+    """
+    A copy of *fields* with each id column as bare hex (``None`` passes).
+
+    :raises SpanFieldError: Naming the first id column whose value is not a uuid.
+    """
+    out = dict(fields)
+    for key in sorted(ID_COLUMNS & out.keys()):
+        value = out[key]
+        if value is None:
+            continue
+        try:
+            out[key] = norm_id(value)
+        except (ValueError, TypeError, AttributeError) as exc:
+            raise SpanFieldError(key, value) from exc
+    return out
 
 
 # ── Keys ─────────────────────────────────────────────────────────
@@ -224,12 +261,15 @@ def write_span(
     :param outcome: ``open`` / ``ok`` / ``fail`` / ``abandoned`` / ….
     :param fields: Any other ``factory_spans`` column, e.g. ``pr_id`` or ``cost_usd``.
     :returns: The stored span.
+    :raises SpanFieldError: When an id column (``pr_id``, ``session_id``, …) is not a row id.
     """
-    values = {
-        k: v[: FIELD_MAX[k]] if k in FIELD_MAX and isinstance(v, str) else v
-        for k, v in fields.items()
-        if v is not None
-    }
+    values = span_ids(
+        {
+            k: v[: FIELD_MAX[k]] if k in FIELD_MAX and isinstance(v, str) else v
+            for k, v in fields.items()
+            if v is not None
+        }
+    )
     closed = outcome is not None and outcome != OPEN
     insert: dict[str, Any] = {**values, "outcome": outcome or OPEN}
     if closed:
@@ -286,11 +326,11 @@ def close_open(
     :param name: Only spans with this name.
     :param project_slug: Only this project's spans (likewise *pr_id*, *session_id*).
     :returns: The spans closed.
+    :raises SpanFieldError: When *pr_id* or *session_id* is not a row id.
     """
     closed: list[FactorySpan] = []
-    found = store.list_open_spans(
-        factory_id, kind, project_slug=project_slug, pr_id=pr_id, session_id=session_id
-    )
+    ids = span_ids({"pr_id": pr_id, "session_id": session_id})
+    found = store.list_open_spans(factory_id, kind, project_slug=project_slug, **ids)
     for span in found:
         if span.started_at > ended_at or (name is not None and span.name != name):
             continue
@@ -309,6 +349,18 @@ def _int(value: str | None) -> int | None:
     try:
         return int(value) if value else None
     except ValueError:
+        return None
+
+
+def _version_label(labels: Mapping[str, str], factory_id: str) -> str | None:
+    """The root's version label, when it is a ``factory_versions`` id (it stamps every span)."""
+    value = labels.get(LABEL_VERSION)
+    if not value:
+        return None
+    try:
+        return norm_id(value)
+    except ValueError:
+        _logger.warning("factory spans: %s has a version label %r, not an id", factory_id, value)
         return None
 
 
@@ -337,7 +389,7 @@ def span_context(deps: FactoryDeps, factory_id: str) -> SpanContext:
 
         def_version = definition.pinned_version(deps, factory_id)
     ctx = SpanContext(
-        version_id=versions.current_version_id() or labels.get(LABEL_VERSION),
+        version_id=versions.current_version_id() or _version_label(labels, factory_id),
         def_version=def_version,
     )
     if len(_contexts) > _CONTEXTS_MAX:
@@ -430,6 +482,7 @@ __all__ = [
     "CANCELLED",
     "FAIL",
     "FIELD_MAX",
+    "ID_COLUMNS",
     "NAME_MAX",
     "NO_CONTEXT",
     "OK",
@@ -438,6 +491,7 @@ __all__ = [
     "TERMINAL_STAGES",
     "TIMEOUT",
     "SpanContext",
+    "SpanFieldError",
     "attach_task_cost",
     "attach_task_cost_sync",
     "close_open",
@@ -458,6 +512,7 @@ __all__ = [
     "round_key",
     "session_start_ms",
     "span_context",
+    "span_ids",
     "stage_key",
     "task_cost_fields",
     "task_key",
