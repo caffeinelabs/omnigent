@@ -375,6 +375,8 @@ const REFUSAL_TEXT: Record<string, string> = {
   unknown_project: "The project is no longer in this factory",
   unknown_member: "That agent is no longer in this factory",
   no_project_lead: "The project has no PL yet",
+  has_pl: "The project already has a PL; resume or restart it",
+  spawn_in_flight: "Its PL is already being created",
 };
 
 /** A refused control as the human should read it (403 → missing access). */

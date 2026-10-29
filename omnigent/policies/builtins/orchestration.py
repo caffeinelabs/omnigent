@@ -17,6 +17,7 @@ from typing import Any, TypeAlias
 
 from omnigent.policies.builtins._shell import SHELL_TOOLS
 from omnigent.policies.builtins.safety import NATIVE_WRITE_TOOLS
+from omnigent.policies.turns import event_turn
 
 # Heterogeneous JSON-shaped maps — the V0 policy event + decision payloads.
 _Json: TypeAlias = dict[str, Any]  # type: ignore[explicit-any]
@@ -25,6 +26,8 @@ _Json: TypeAlias = dict[str, Any]  # type: ignore[explicit-any]
 _ALLOW: _Json = {"result": "ALLOW"}
 
 _SPAWN_BOUNDS_STATE_KEY = "_policy_spawn_bounds_dispatches"
+# Per-turn counts live under ``<prefix><turn id>``.
+_SPAWN_BOUNDS_TURN_PREFIX = f"{_SPAWN_BOUNDS_STATE_KEY}@"
 
 
 def _decision(result: str, reason: str) -> _Json:
@@ -432,12 +435,19 @@ def spawn_bounds(
 
     Counts the *dispatch_tools* tool calls within a single orchestrator turn
     and DENIES once *max_dispatches_per_turn* is exceeded, forcing fan-out in
-    bounded waves rather than an unbounded fleet. The count is persisted in
-    ``session_state`` because the deployed server rebuilds its policy engine
-    for every tool call. Every request-phase event resets the persisted count
-    — that is each inbound user-role message, including a sub-agent wake
-    notice — so a wave collected by a wake gets a fresh budget. The closure
-    remains the runner-local fallback, reset through ``reset_turn``.
+    bounded waves rather than an unbounded fleet.
+
+    The deployed server rebuilds its policy engine for every tool call, so the
+    count is persisted in ``session_state``, keyed by the turn id the server
+    stamps on every event (``event["context"]["turn"]``). The server starts a
+    new turn id for every inbound user-role message, whatever sent it (a human,
+    factory mail, a heartbeat, a decision answer, a sub-agent wake notice), so
+    each turn gets a fresh budget without depending on a request-phase event
+    reaching this evaluator. Neither a policy nor the agent can write the turn
+    id. Events without one (the runner-local gate, or a session whose turn
+    predates stamping) use a single per-session count that each request-phase
+    event resets, and the closure remains the runner-local fallback, reset
+    through ``reset_turn``.
 
     :param max_dispatches_per_turn: Maximum worker dispatches allowed in one
         turn, e.g. ``5``.
@@ -448,6 +458,8 @@ def spawn_bounds(
     """
     counted = set(dispatch_tools)
     state = {"count": 0}
+    # The turn the closure count belongs to (``None``: no server turn id).
+    counted_turn: dict[str, str | None] = {"turn": None}
 
     def _evaluate(event: _Json) -> _Json:
         """
@@ -468,7 +480,11 @@ def spawn_bounds(
         if _tool_call(event, counted) is None:
             return _ALLOW
         session_state = event.get("session_state") or {}
-        persisted = session_state.get(_SPAWN_BOUNDS_STATE_KEY, 0)
+        turn = event_turn(event)
+        key = _SPAWN_BOUNDS_STATE_KEY if turn is None else f"{_SPAWN_BOUNDS_TURN_PREFIX}{turn}"
+        if counted_turn["turn"] != turn:
+            counted_turn["turn"], state["count"] = turn, 0
+        persisted = session_state.get(key, 0)
         persisted_count = persisted if isinstance(persisted, int) else 0
         # A fresh server engine starts the closure at 0 and reads the
         # persisted count; the runner gate has no session_state and keeps
@@ -486,21 +502,30 @@ def spawn_bounds(
         # Increment rather than set: an ASK from another policy defers this
         # write until approval, and replaying an absolute count would wind
         # back the dispatches counted in between.
-        result["state_updates"] = [
-            {"key": _SPAWN_BOUNDS_STATE_KEY, "action": "increment", "value": 1},
-        ]
+        updates: list[_Json] = [{"key": key, "action": "increment", "value": 1}]
+        if turn is not None:
+            # Drop the counts of earlier turns (and the per-session count).
+            updates.extend(
+                {"key": stale, "action": "delete"}
+                for stale in session_state
+                if stale != key
+                and (
+                    stale == _SPAWN_BOUNDS_STATE_KEY or stale.startswith(_SPAWN_BOUNDS_TURN_PREFIX)
+                )
+            )
+        result["state_updates"] = updates
         return result
 
     def reset_turn() -> None:
         """
         Reset the closure's per-turn dispatch counter at each turn boundary.
 
-        Clears only the runner-local closure; the persisted count in
-        ``session_state`` is reset by the request-phase event instead.
+        Clears only the runner-local closure; persisted counts are keyed by
+        the server's turn id (or reset by the request-phase event).
 
         :returns: ``None``.
         """
-        state["count"] = 0
+        counted_turn["turn"], state["count"] = None, 0
 
     # FunctionPolicy looks for this attribute to reset per-turn state.
     _evaluate.reset_turn = reset_turn  # type: ignore[attr-defined]

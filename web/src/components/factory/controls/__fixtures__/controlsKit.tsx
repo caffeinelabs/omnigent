@@ -79,6 +79,9 @@ export function serveFactory(fetchMock: Mock, snapshot: FactorySnapshot): FakeFa
     if (method === "POST" && path === `${base}/projects`) {
       return json({ project: { ...(body as object), charter: null } }, 201);
     }
+    if (method === "POST" && path.startsWith(`${base}/projects/`) && path.endsWith("/start")) {
+      return json({ project: {}, started: "server", waiting_on: [], mail_id: null });
+    }
     if (method === "PATCH" && path.startsWith(`${base}/projects/`)) {
       return json({ project: {}, changed: true, mail_id: "mail_0123456789abcdef" });
     }

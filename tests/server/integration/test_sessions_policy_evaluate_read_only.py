@@ -507,3 +507,31 @@ async def test_request_phase_skips_gate_when_web_prompt_pending(
     # Skipped → clean ALLOW, and the ASK gate was never entered.
     assert resp.json()["result"] == "POLICY_ACTION_ALLOW"
     assert gate_ran["called"] is False, "dedup must skip the gate when a web prompt is pending"
+
+
+async def test_read_only_prompt_hook_does_not_start_a_turn(
+    auth_client: httpx.AsyncClient,
+    db_uri: str,
+) -> None:
+    """
+    Only an editor's REQUEST-phase hook starts a policy turn.
+
+    A new turn id restarts per-turn budgets (``spawn_bounds``), so a
+    LEVEL_READ collaborator posting ``PHASE_REQUEST`` must not mint one.
+    """
+    from omnigent.policies.turns import TURN_LABEL
+
+    agent = await create_test_agent(auth_client, user=OWNER)
+    session_id = await _create_session_as(auth_client, OWNER, agent["id"])
+    _grant_access(db_uri, READER, session_id, LEVEL_READ)
+    _grant_access(db_uri, EDITOR, session_id, LEVEL_EDIT)
+
+    for user in (READER, EDITOR):
+        resp = await auth_client.post(
+            f"/v1/sessions/{session_id}/policies/evaluate",
+            json=_request_request("next"),
+            headers={"X-Forwarded-Email": user},
+        )
+        assert resp.status_code == 200, resp.text
+        has_turn = TURN_LABEL in _get_labels(db_uri, session_id)
+        assert has_turn is (user == EDITOR), user

@@ -68,6 +68,7 @@ from omnigent.native.native_coding_agents import (
     native_coding_agent_for_harness,
     native_coding_agent_for_wrapper_label,
 )
+from omnigent.policies.turns import TURN_LABEL
 from omnigent.policies.types import EvaluationContext
 from omnigent.runner.identity import (
     token_bound_runner_id,
@@ -9468,7 +9469,8 @@ def _reject_server_reserved_label_seed(labels: dict[str, str] | None) -> None:
 
     Keys in this set are written exclusively by server internals and must
     not be client-settable — doing so would let callers forge security-
-    critical metadata (e.g. the policy-evaluation actor identity).
+    critical metadata (e.g. the policy-evaluation actor identity). The
+    server-stamped turn id is removed from *labels* in place instead.
 
     :param labels: The client-supplied label mapping, or ``None``.
     :raises OmnigentError: 400 when any reserved key is present.
@@ -9480,6 +9482,11 @@ def _reject_server_reserved_label_seed(labels: dict[str, str] | None) -> None:
             f"label {_TURN_ACTOR_LABEL!r} is server-internal and cannot be set by clients",
             code=ErrorCode.INVALID_INPUT,
         )
+    # The turn id keys per-turn policy budgets, so a client must not set it.
+    # Dropped rather than rejected: clients that copy a session's labels into
+    # a new one (antigravity rotation) would otherwise fail.
+    for key in [k for k in labels if k.strip().casefold() == TURN_LABEL]:
+        del labels[key]
     # The archive timestamp is stamped by the server on the archive transition
     # only; a client write would forge the retention clock, including on shared
     # sessions the caller does not own.

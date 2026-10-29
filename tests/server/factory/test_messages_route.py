@@ -116,8 +116,14 @@ async def test_reply_clears_the_pending_request(world: FactoryWorld, api: Factor
 
 async def test_lazy_enrols_the_sender(world: FactoryWorld, api: FactoryApi) -> None:
     fresh = world.make_session("fresh_lead", agent="lead", title="Fresh lead")
+    pl = world.make_session(
+        "fresh_pl",
+        agent="pl",
+        title="PL · fresh",
+        labels={F.LABEL_ID: fresh.id, F.LABEL_ROLE: "project_lead"},
+    )
 
-    resp = await _post(api, fresh.id, "lead", "hello me")
+    resp = await _post(api, fresh.id, pl.id, "hello")
 
     assert resp.status_code == 202
     assert world.get("fresh_lead").labels[F.LABEL_ID] == fresh.id
@@ -150,6 +156,17 @@ async def test_unknown_targets_and_kinds(world: FactoryWorld, api: FactoryApi) -
     resp = await _post(api, world.id("lead_a"), "lead", kind="gossip")
     assert resp.status_code == 400
     assert _error_code(resp) == "invalid_kind"
+
+
+async def test_a_member_cannot_message_itself(world: FactoryWorld, api: FactoryApi) -> None:
+    """Delivery starts a turn (fresh per-turn budgets), so self-mail is refused."""
+    lead = world.id("lead_a")
+    for to in (lead, "lead"):
+        resp = await _post(api, lead, to)
+        assert resp.status_code == 400, to
+        assert _error_code(resp) == "self_target"
+    await api.mailer.drain()
+    assert api.deliver.calls == []
 
 
 async def test_message_size_limit(world: FactoryWorld, api: FactoryApi) -> None:

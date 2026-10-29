@@ -161,6 +161,11 @@ class EventContext(TypedDict, total=False):
         labels, e.g. ``{"cost_control.plan": "{...}"}``. Populated by
         the server-side engine; empty on paths that don't carry labels
         (the runner-local gate). Read via ``event["context"]["labels"]``.
+    :param turn: Opaque id of the session turn this event belongs to, e.g.
+        ``"turn_3f2a9c0d1e4b5a6f"``. The server stamps a fresh one whenever a
+        new user-role message starts a turn (any source), so per-turn state
+        keyed by it resets on every turn. ``None`` on paths without labels
+        (the runner-local gate). Read via ``event["context"]["turn"]``.
     """
 
     actor: ActorContext
@@ -174,6 +179,7 @@ class EventContext(TypedDict, total=False):
     model: str | None
     harness: str | None
     labels: dict[str, str]
+    turn: str | None
 
 
 class PolicyEvent(TypedDict, total=False):
