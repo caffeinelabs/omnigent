@@ -16,7 +16,8 @@ review     ``pr:<id>``              one ``factory:review`` marker
 verify     ``pr:<id>@<sha7>``       one verify marker or ``PREVIEW FAILED``
 demo       ``pr:<id>@<sha7>``       one recorded demo at the head
 ci         ``pr:<id>@<sha7>``       one completed check-suite verdict
-claim      ``pr:<id>``              one READY claim or Sentinel verdict
+claim      ``pr:<id>``              one READY claim or Sentinel verdict; an
+                                    early claim (only pending gates) waits
 plan       ``project:<slug>``       a task closed (stall: none in 24 h)
 ========== ======================== ==========================================
 
@@ -62,6 +63,7 @@ from omnigent.factory import (
     ROLE_PROJECT_LEAD,
     STATE_PAUSED,
 )
+from omnigent.factory_gates import DEMO_GATE, GATE_FAIL, GATE_PENDING, READY_GATES
 from omnigent.server.factory import events, tasks
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.control import CockpitError
@@ -219,8 +221,8 @@ CATALOGUE: Final[dict[str, LoopSpec]] = {
             "Sentinel verified the head",
             "project_lead",
             "Sentinel and the server's gates",
-            "a sentinel verdict or claim_mismatch at the head",
-            {"met": "verified at the head", "budget": "mismatches on consecutive claims"},
+            "a sentinel verdict or a READY claim at the head (an early claim only waits)",
+            {"met": "verified at the head", "budget": "refuted claims in a row"},
             ("mismatches",),
             "finding, plus a fresh restart of the PL from its plan",
             (ACTION_FRESH_RESTART,),
@@ -440,7 +442,8 @@ class Change:
 
     :param what: ``started`` / ``iteration`` / ``converged`` / ``stalled`` /
         ``thrashing`` / ``exhausted`` / ``superseded`` / ``cancelled`` /
-        ``resumed`` / ``budget_violation`` / ``budget_raised``, or ``budget.near``.
+        ``resumed`` / ``waiting`` / ``budget_violation`` / ``budget_raised``,
+        or ``budget.near``.
     :param iter_span: The ``loop_iter`` span to write: ``{n, started_ms, ended_ms,
         outcome, verdict, reason, class, head_sha}``.
     """
@@ -1309,9 +1312,105 @@ def _ci(ctx: Ctx, pr: FactoryPr, sha: str, to: str) -> FactoryLoop:
 
 # ── Claim (L6) ─────────────────────────────────────────────────
 
+CLAIM_HELD: Final = "held"
+CLAIM_EARLY: Final = "early"
+CLAIM_REFUTED: Final = "refuted"
+_CLAIM_GATES: Final = (*READY_GATES, DEMO_GATE)
+_WAIT_WORDS: Final = {"checks": "CI", "protected_paths": "protected paths"}
+
+
+def claim_status(pr: FactoryPr, head: str | None = None) -> tuple[str, list[str]]:
+    """
+    Judge a READY claim on *pr* against the server's gates (pure).
+
+    ``held``: the PR is ready. ``refuted``: the PR is not open or is a draft,
+    a gate failed, or the claim names another head than the PR's (it moved).
+    ``early``: nothing refutes it, the server still waits on gates (CI
+    running, mergeable computing, no review, verify or demo on the head yet,
+    or no gates computed yet). Only a refuted claim counts as a mismatch.
+
+    :param head: The head the claim names (7-40 hex), when it names one.
+    :returns: The status and what is behind it: the pending gates when early;
+        the failing gates, ``draft``, ``head`` or ``state`` when refuted.
+    """
+    if pr.ready:
+        return CLAIM_HELD, []
+    if pr.state != "open":
+        return CLAIM_REFUTED, ["state"]
+    gates = pr.gates if isinstance(pr.gates, Mapping) else {}
+    if pr.is_draft or gates.get("draft") == GATE_PENDING:
+        return CLAIM_REFUTED, ["draft"]
+    failing = [name for name in _CLAIM_GATES if gates.get(name) == GATE_FAIL]
+    if failing:
+        return CLAIM_REFUTED, failing
+    actual, named = (pr.head_sha or "").lower(), (head or "").lower()
+    if actual and named and not actual.startswith(named):
+        return CLAIM_REFUTED, ["head"]
+    return CLAIM_EARLY, [name for name in _CLAIM_GATES if gates.get(name) == GATE_PENDING]
+
+
+def wait_words(gates: Iterable[str]) -> str:
+    """:returns: e.g. ``"CI, review"`` for pending gates (``"gates"`` for none)."""
+    return ", ".join(_WAIT_WORDS.get(g, g) for g in gates) or "gates"
+
+
+def _claim_early(
+    ctx: Ctx, row: FactoryLoop, pr: FactoryPr, head: str, data: Mapping[str, Any]
+) -> FactoryLoop:
+    """
+    A READY claim that only pending gates disagree with: no iteration, the streak stands.
+
+    The PL is told to wait once per head (``waiting``) and :func:`observe_ready`
+    lands the claim when the gates pass; a loop held on a decision only counts it.
+    """
+    values = _spent(row)
+    sha7 = (head or pr.head_sha or "")[:7] or "?"
+    if head:
+        values["claimed_head"] = head
+    values["early"] = int(values.get("early") or 0) + 1
+    if row.state not in ("running", "converged"):
+        # A loop held on a decision (or ended) keeps its reason and hold.
+        return _update(ctx, row, spent=values)
+    told = values.get("waiting") == sha7
+    values["waiting"] = sha7
+    pending = [str(g) for g in data.get("claim_gates") or [] if isinstance(g, str)][:8]
+    reason = f"{wait_words(pending)} pending on {sha7}"
+    fields: dict[str, Any] = {
+        "spent": values,
+        "last_verdict": "EARLY",
+        "last_reason": _clip(reason),
+    }
+    if row.state == "converged":
+        fields.update(state="running", ended_at=None)
+    row = _update(ctx, row, **fields)
+    if not told:
+        ctx.changes.append(
+            Change(
+                row,
+                "waiting",
+                f"{_label(row)}: READY claim early · {reason}",
+                {"head": sha7, "pending": pending, "reason": reason},
+            )
+        )
+    return row
+
+
+def observe_ready(ctx: Ctx, pr: FactoryPr) -> FactoryLoop | None:
+    """The gates passed at the head an early READY claim waits on: that claim held."""
+    row = ctx.store.get_loop_by_subject(ctx.factory_id, "claim", pr_subject(pr.id))
+    if row is None:
+        return None
+    values = _spent(row)
+    waiting = str(values.get("waiting") or "")
+    if not waiting or not (pr.head_sha or "").lower().startswith(waiting):
+        return row
+    values.update(waiting=None, streak=0)
+    reason = f"gates green at {waiting}: the early READY claim held"
+    return _update(ctx, row, spent=values, last_verdict="CLAIMED", last_reason=reason)
+
 
 def observe_claim(ctx: Ctx, pr: FactoryPr, data: Mapping[str, Any]) -> FactoryLoop | None:
-    """A READY claim (mismatch or not) or a Sentinel verdict on *pr*."""
+    """A READY claim (held, early or refuted) or a Sentinel verdict on *pr*."""
     claim, sentinel = data.get("claim"), data.get("sentinel_verdict")
     if claim != "ready_for_human_merge" and sentinel is None:
         return None
@@ -1339,18 +1438,25 @@ def observe_claim(ctx: Ctx, pr: FactoryPr, data: Mapping[str, Any]) -> FactoryLo
             state="running" if row.state != "running" else None,
         )
         return _transition(ctx, row, "converged", f"verified at {head[:7]}")
+    if sentinel is None and data.get("claim_status") == CLAIM_EARLY:
+        return _claim_early(ctx, row, pr, head, data)
     mismatch = bool(data.get("claim_mismatch")) or sentinel == "not_verified"
     values["streak"] = int(values.get("streak") or 0) + 1 if mismatch else 0
+    values["waiting"] = None
     if claim == "ready_for_human_merge" and head:
         values["claimed_head"] = head
     verdict = (
         "NOT_VERIFIED" if sentinel == "not_verified" else ("MISMATCH" if mismatch else "CLAIMED")
     )
+    refuted = [str(g) for g in data.get("claim_gates") or [] if isinstance(g, str)][:8]
+    reason = f"READY claim at {head[:7]}" + (
+        f" refuted: {', '.join(refuted)}" if mismatch and refuted else ""
+    )
     row = _iterate(
         ctx,
         row,
         verdict=verdict,
-        reason=_clip(data.get("note")) or f"READY claim at {head[:7]}",
+        reason=_clip(data.get("note")) or reason,
         ok=not mismatch if mismatch else None,
         spent=values,
         state="running" if row.state == "converged" else None,
@@ -1449,6 +1555,7 @@ OBSERVED_KINDS: Final = frozenset(
         "gate.changed",
         "pr.human_review",
         "pr.claim",
+        "pr.ready",
         "demo.published",
         "preview.reported",
         "preview.sha_mismatch",
@@ -1627,6 +1734,10 @@ def handle_event(ctx: Ctx, event: FactoryEvent) -> None:
         pr = _pr_of_event(ctx, event, data)
         if pr is not None:
             observe_claim(ctx, pr, data)
+    elif kind == "pr.ready":
+        pr = _pr_of_event(ctx, event, data)
+        if pr is not None:
+            observe_ready(ctx, pr)
     elif kind == "env.reported" and event.project_slug:
         _note_env(ctx, event.project_slug, str(data.get("state") or ""))
     elif kind == "control.task_edit" and _budget_edited(data.get("diff")):
@@ -1965,6 +2076,10 @@ async def apply(app_state: Any, ctx: Ctx) -> None:
             from omnigent.server.factory import loop_escalation
 
             await loop_escalation.violation(app_state, loop, change)
+        elif change.what == "waiting" and mode != "observe":
+            from omnigent.server.factory import loop_escalation
+
+            await loop_escalation.wait_notice(app_state, deps, loop, change)
     from omnigent.server.factory import loop_escalation, pipeline
 
     await loop_escalation.settle(app_state, deps, [c.loop for c in ctx.changes])
@@ -2199,6 +2314,9 @@ __all__ = [
     "ACTIVE_STATES",
     "BAD_STATES",
     "CATALOGUE",
+    "CLAIM_EARLY",
+    "CLAIM_HELD",
+    "CLAIM_REFUTED",
     "DEFAULT_BUDGETS",
     "LOOP_KINDS",
     "Change",
@@ -2209,6 +2327,7 @@ __all__ = [
     "check_clock",
     "check_plan",
     "check_spend",
+    "claim_status",
     "classify",
     "dry",
     "engine_mode",
@@ -2226,6 +2345,7 @@ __all__ = [
     "observe_claim",
     "observe_demo",
     "observe_failure",
+    "observe_ready",
     "observe_review",
     "observe_rework",
     "observe_verify",
@@ -2244,4 +2364,5 @@ __all__ = [
     "thrashed",
     "tick",
     "tick_sync",
+    "wait_words",
 ]

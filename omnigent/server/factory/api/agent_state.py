@@ -39,7 +39,7 @@ from omnigent.factory import (
     is_full_sha,
     parse_pr_url,
 )
-from omnigent.server.factory import decision_routing, definition, events, nudge, status
+from omnigent.server.factory import decision_routing, definition, events, loops, nudge, status
 from omnigent.server.factory.agent_scope import (
     AgentCaller,
     announce_new_pr,
@@ -411,6 +411,10 @@ async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
         row = refreshed
     # Against the fresh gates, and stored with the claim (claim calibration).
     claim_mismatch = body.claim == "ready_for_human_merge" and not row.ready
+    # Only a refuted claim counts against the claim loop; an early one waits for the gates.
+    claim_status, claim_gates = (
+        loops.claim_status(row, head_sha) if body.claim == "ready_for_human_merge" else (None, [])
+    )
     if body.claim is not None or body.sentinel_verdict is not None:
         what = body.claim or f"sentinel {body.sentinel_verdict}"
         await events.emit(
@@ -429,6 +433,8 @@ async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
                 "head_sha": head_sha,
                 "note": note,
                 "claim_mismatch": claim_mismatch,
+                "claim_status": claim_status,
+                "claim_gates": claim_gates,
                 "server_ready": row.ready,
                 "refreshed": refreshed is not None,
             },
@@ -455,6 +461,8 @@ async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
         "reasons": list(gates.get("reasons") or []),
         "refreshed": refreshed is not None,
         "claim_mismatch": claim_mismatch,
+        "claim_status": claim_status,
+        "claim_gates": claim_gates,
     }
     if not gates:
         reply["note"] = "gates come from the server's GitHub poller and are not computed yet"

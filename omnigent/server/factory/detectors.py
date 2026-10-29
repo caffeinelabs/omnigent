@@ -41,6 +41,7 @@ from omnigent.factory import (
 from omnigent.server.factory import events, issues
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.envelope import display_title
+from omnigent.server.factory.loops import CLAIM_EARLY
 from omnigent.stores.conversation_store import runner_seen_is_fresh
 from omnigent.stores.factory_store import norm_id
 
@@ -387,6 +388,9 @@ async def _on_claim(app_state: Any, event: FactoryEvent, data: Mapping[str, Any]
     if not isinstance(pr_id, str):
         return
     target = f"pr:{pr_id}"
+    if data.get("claim_status") == CLAIM_EARLY:
+        # Only pending gates disagree: the PL waits, nothing is refuted (or held) yet.
+        return
     if data.get("claim_mismatch"):
         await _raise(
             app_state,

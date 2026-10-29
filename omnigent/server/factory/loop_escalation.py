@@ -12,13 +12,16 @@ answer's compare-and-set) updates the loop and the task and mails the PL
 exactly what to do: ``BUDGET RAISED``, ``SWITCH VENDOR`` or ``FRESH
 RESTART``; ``abandon_task`` and ``mark_done`` answer as a decision with an
 instruction line; ``pause`` and ``dismiss`` run as on any server decision.
-Operators may raise attempts by one; money is for owners.
+Operators may raise attempts by one; money is for owners. A READY claim that
+only pending gates disagree with gets ``[Factory loop · WAIT · …]`` instead
+(:func:`wait_notice`): it opens nothing and uses no claim attempt.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
@@ -43,10 +46,12 @@ from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.envelope import quote_spoofed_lines
 from omnigent.server.factory.loops import (
     Change,
+    _clip,
     _spent,
     engine_mode,
     limit_of,
     task_label,
+    wait_words,
 )
 from omnigent.stores.factory_store import norm_id
 
@@ -534,6 +539,40 @@ async def reconcile(app_state: Any, deps: FactoryDeps, factory_id: str) -> None:
                 )
     except Exception:  # noqa: BLE001 - the next tick retries
         _logger.warning("factory loops: reconcile failed for %s", factory_id, exc_info=True)
+
+
+def wait_text(facts: LoopFacts, pending: Sequence[str], sha7: str) -> str:
+    """The ``[Factory loop · WAIT · PR #<n> · CI pending on <sha7>]`` mail: an early claim."""
+    head = f"[Factory loop · WAIT · {_what(facts)} · {wait_words(pending)} pending on {sha7}]"
+    body = (
+        "Your READY claim came early: no gate failed, so it uses no claim attempt. Do not "
+        "claim again; the server marks the PR ready and sends READY FOR HUMAN MERGE when "
+        "the gates pass."
+    )
+    gates = facts.pr.gates if facts.pr is not None and isinstance(facts.pr.gates, dict) else {}
+    # One flattened line after "Pending:", so a reason never starts a line of its own.
+    reasons = [_clip(str(r), 200) for r in gates.get("reasons") or [] if r][:3]
+    if reasons:
+        body += "\nPending: " + "; ".join(r for r in reasons if r)
+    return f"{head} {body}"
+
+
+async def wait_notice(
+    app_state: Any, deps: FactoryDeps, loop: FactoryLoop, change: Change
+) -> None:
+    """Tell the PL its READY claim came early, unless the gates passed meanwhile. Never raises."""
+    try:
+        current = await asyncio.to_thread(deps.factory_store.get_loop, loop.id)
+        sha7 = str(change.data.get("head") or "")
+        if current is None or _spent(current).get("waiting") != sha7:
+            return
+        facts = await asyncio.to_thread(read_facts, deps, current)
+        if facts.pl is None or (facts.pr is not None and facts.pr.ready):
+            return
+        pending = [str(g) for g in change.data.get("pending") or []]
+        control.send_text(app_state, facts.pl.id, wait_text(facts, pending, sha7), kind="info")
+    except Exception:  # noqa: BLE001 - the loop.waiting event already records it
+        _logger.warning("factory loops: no WAIT notice for %s", loop.id, exc_info=True)
 
 
 async def violation(app_state: Any, loop: FactoryLoop, change: Change) -> None:
@@ -1050,5 +1089,7 @@ __all__ = [
     "resumed_text",
     "settle",
     "violation",
+    "wait_notice",
+    "wait_text",
     "worker_of",
 ]

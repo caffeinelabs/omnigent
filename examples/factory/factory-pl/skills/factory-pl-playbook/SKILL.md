@@ -139,12 +139,19 @@ Report: the RESULT block
      the current head, then DEMO.
    - `DEMO ERROR`: send DEMO once more; if it fails again, ask the human
      (`sys_factory_ask`) and say so in plan.md.
-5. **Readiness.** `sys_factory_pr(url=<url>, claim="ready_for_human_merge", head_sha=<sha>)`.
-   The server re-checks GitHub and answers `{ready, gates, reasons, claim_mismatch}`
+5. **Readiness.** Claim only when the required checks are green on the head
+   (and its review, verify and demo passed there; CI can run 15+ min):
+   `sys_factory_pr(url=<url>, claim="ready_for_human_merge", head_sha=<sha>)`.
+   The server re-checks GitHub and answers `{ready, gates, reasons, claim_mismatch, claim_status}`
    (gates: draft, CI, review, verify, demo, mergeable, protected paths).
    - `ready: true`: hand over (step 7).
-   - otherwise fix what `reasons` names: a draft (`gh pr ready` by the IC),
-     failing CI (dispatch a fix), a missing or stale marker (re-run that step).
+   - `claim_status: "early"`: gates are only pending (CI running, mergeable
+     computing, a marker not posted yet). It uses no claim attempt and you get
+     `[Factory loop · WAIT · …]`; do not claim again. Start any step `reasons`
+     says is missing (review, PREVIEW, demo), then wait for the notice below.
+   - `claim_status: "refuted"` (a failed gate, a draft, a moved head): it counts
+     toward the claim budget. Fix what `reasons` names: a draft (`gh pr ready` by
+     the IC), failing CI (dispatch a fix), a failed marker (re-run that step).
    The server also sends `[Factory notice · PR … READY FOR HUMAN MERGE …]`
    when the gates turn green; treat it the same way.
 6. **A new head** invalidates the review, verify and demo for the old one:

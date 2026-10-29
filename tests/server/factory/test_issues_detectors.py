@@ -488,6 +488,18 @@ async def test_claim_mismatch(world: FactoryWorld) -> None:
     assert _one(world, "claim.mismatch").status == "resolved"
 
 
+async def test_an_early_claim_is_no_mismatch(world: FactoryWorld) -> None:
+    """Only pending gates disagree (CI running): no finding, and an open one stays open."""
+    pr = _pr(world)
+    data = {"pr_id": pr.id, "claim": "ready_for_human_merge", "claim_mismatch": True}
+    await _emit(world, "pr.claim", data={**data, "claim_status": "early"})
+    assert _issues(world) == []
+    await _emit(world, "pr.claim", data={**data, "claim_status": "refuted"})
+    await _emit(world, "pr.claim", data={**data, "claim_status": "early"})
+    row = _one(world, "claim.mismatch")
+    assert (row.count, row.status) == (1, "open")
+
+
 async def test_ci_flaky_is_a_fact(world: FactoryWorld) -> None:
     pr = _pr(world)
     other = "b" * 40

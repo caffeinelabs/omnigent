@@ -314,6 +314,9 @@ async def test_the_claim_event_carries_claim_mismatch(cockpit: Cockpit) -> None:
         ("ready_for_human_merge", False, True),
         ("opened", False, True),
     ]
+    # No gate failed before the poller ran: early (it waits), then held.
+    assert [d["claim_status"] for d in claims()] == ["early", "held", None]
+    assert first["claim_status"] == "early" and second["claim_status"] == "held"
 
 
 async def test_pr_registration_returns_the_review_links(
@@ -413,10 +416,12 @@ async def test_registration_waits_for_a_running_poller(
     assert body["gates"] == gates
     assert body["reasons"] == ["checks failing: lint"]
     assert body["claim_mismatch"] is True
+    assert (body["claim_status"], body["claim_gates"]) == ("refuted", ["checks"])
     # The stored claim is judged against the refreshed gates too.
     (claim,) = cockpit.store.find_events(cockpit.factory_id, "pr.claim", 0)
     assert claim.data is not None
     assert (claim.data["claim_mismatch"], claim.data["refreshed"]) == (True, True)
+    assert (claim.data["claim_status"], claim.data["claim_gates"]) == ("refuted", ["checks"])
 
 
 # ── Envs and previews ──────────────────────────────────────────

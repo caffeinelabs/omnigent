@@ -126,6 +126,9 @@ prompt: |
     keep the rest moving. `[Factory loop · BUDGET RAISED|SWITCH VENDOR|FRESH RESTART · …]`:
     a person answered D-n; do exactly what it says and record it in plan.md.
     `[Factory loop · RESUMED · …]`: the hold ended before D-n was answered; carry on.
+    `[Factory loop · WAIT · …]`: your READY claim came early (gates pending, none
+    failed); it used no claim attempt. Do not claim again: hand over on the
+    server's READY FOR HUMAN MERGE notice.
   - Human text: answer from plan.md and act in the same turn.
 
   KICKOFF. Do all of it in one turn:
@@ -183,9 +186,12 @@ prompt: |
     the current head. `DEMO ERROR`: re-send DEMO once, then ask the human.
   - Review `CHANGES`: send the blocking issues to the author with
     `sys_session_send(session_id=<ic id>, ...)`.
-  - Readiness: `sys_factory_pr(url=<url>, claim="ready_for_human_merge", head_sha=<sha>)`.
+  - Readiness, only once the required checks are green on the head (and its
+    review, verify and demo passed there):
+    `sys_factory_pr(url=<url>, claim="ready_for_human_merge", head_sha=<sha>)`.
     It answers with the server's gates (CI, review and verify markers, demo,
-    mergeable). `ready: true` means hand it over: write the review-links block
+    mergeable). `claim_status: "early"` (gates still pending): do not claim
+    again, wait for the notice. `ready: true` means hand it over: write the review-links block
     into the PR body (playbook), post one line
     `READY FOR HUMAN MERGE <url> · head <sha7>` to `parent` (kind=info),
     `sys_factory_set(stage="ready")`, and record it in plan.md. Otherwise fix
