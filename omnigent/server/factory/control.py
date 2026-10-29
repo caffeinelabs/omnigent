@@ -53,6 +53,8 @@ from omnigent.server.factory.membership import (
     is_top_level,
     resolve_factory_id,
 )
+from omnigent.server.factory.prs import NUDGE_TOPIC, human_hold_reason, persist_stage
+from omnigent.server.factory.stage import changes_requested_on_head
 from omnigent.server.factory.telemetry import versions
 from omnigent.server.routes._auth_helpers import require_access
 from omnigent.stores.factory_store import norm_id
@@ -1101,7 +1103,10 @@ async def submit_pr_feedback(
     """
     Record a human review from the cockpit and tell the PR's PL. Never calls GitHub.
 
-    Needs EDIT on the PL session.
+    A change request takes the PR out of ready at once (``pr.not_ready``, the
+    project's stage re-derived); it is ready again once the gates pass on a new
+    head. An approval that lifts a change request on the same head asks the
+    poller to re-read the gates. Needs EDIT on the PL session.
 
     :returns: ``(updated PR, mail id)``.
     :raises CockpitError: 400 on a bad verdict or text, 404 unknown PR, 409
@@ -1132,7 +1137,15 @@ async def submit_pr_feedback(
         "head_sha": pr.head_sha or None,
         "source": "cockpit",
     }
-    updated = await asyncio.to_thread(deps.factory_store.update_pr, pr.id, human_review=review)
+    fields: dict[str, Any] = {"human_review": review}
+    if verdict == VERDICT_CHANGES:
+        fields["ready"] = False
+    lifted = verdict == VERDICT_APPROVED and changes_requested_on_head(
+        pr.human_review, pr.head_sha
+    )
+    if lifted:
+        fields["last_polled_at"] = None
+    updated = await asyncio.to_thread(deps.factory_store.update_pr, pr.id, **fields)
     mail_id = send_text(app_state, pl.id, review_text(pr, verdict, by, text), kind=_CONTROL_KIND)
     word = "approved" if verdict == VERDICT_APPROVED else "requested changes on"
     await events.emit(
@@ -1154,6 +1167,22 @@ async def submit_pr_feedback(
             "source": "cockpit",
         },
     )
+    if verdict == VERDICT_CHANGES and pr.ready:
+        await events.emit(
+            app_state,
+            root.id,
+            "pr.not_ready",
+            severity="notice",
+            project=pr.project_slug,
+            to_id=pl.id,
+            subject=f"pr:{pr.repo}#{pr.number}",
+            summary=f"PR #{pr.number} no longer ready",
+            data={"pr_id": pr.id, "reasons": [human_hold_reason(review)]},
+        )
+    if lifted:
+        nudge.nudge(NUDGE_TOPIC, pr.id)
+    if pr.project_slug:
+        await persist_stage(app_state, root.id, pr.project_slug)
     return updated or pr, mail_id
 
 

@@ -36,6 +36,7 @@ from omnigent.entities.factory import FactoryLoop, FactoryPr
 from omnigent.factory import LABEL_ID, LABEL_STATE, STATE_DONE, STATE_PAUSED
 from omnigent.server.factory import control, events, tasks
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
+from omnigent.server.factory.stage import changes_requested_on_head
 from omnigent.stores.factory_store import norm_id
 
 if TYPE_CHECKING:
@@ -141,6 +142,8 @@ def next_step(
             return Step(WAIT_HUMAN, head, f"{loop.kind} {loop.state}")
     if pr.is_draft or gates.get("draft") == "pending":
         return Step(NONE, head, "a draft: its author is still coding")
+    if changes_requested_on_head(pr.human_review, head):
+        return Step(NONE, head, "human CHANGES: the author reworks")
     checks = gates.get("checks")
     if checks == "fail":
         names = list(_evidence(gates, "checks").get("failing_names") or [])[:6]

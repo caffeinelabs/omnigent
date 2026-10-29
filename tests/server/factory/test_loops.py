@@ -779,6 +779,9 @@ async def test_two_refuted_claims_in_a_row_exhaust_the_claim_loop(cockpit: Cockp
     assert decision.options[0]["action"] == "fresh_restart"
 
 
+_CHANGES_H1 = {"verdict": "changes_requested", "head_sha": H1, "by": "luka", "at": 1}
+
+
 def _claim_pr(**fields: Any) -> FactoryPr:
     base: dict[str, Any] = {
         "id": "p" * 32,
@@ -811,6 +814,10 @@ def _claim_pr(**fields: Any) -> FactoryPr:
         ({}, H2, ("refuted", ["head"])),
         ({"state": "closed"}, H1, ("refuted", ["state"])),
         ({"ready": True, "gates": {"checks": "pass"}}, H2, ("held", [])),
+        ({"human_review": _CHANGES_H1, "gates": {}}, H1, ("refuted", ["changes requested"])),
+        ({"human_review": _CHANGES_H1, "ready": True}, H1, ("refuted", ["changes requested"])),
+        ({"human_review": _CHANGES_H1}, H2, ("refuted", ["head"])),
+        ({"human_review": _CHANGES_H1, "head_sha": H2}, H2, ("early", ["checks"])),
     ],
 )
 def test_a_ready_claim_is_held_early_or_refuted(
@@ -1106,6 +1113,23 @@ async def test_any_gate_failing_at_the_waited_head_refutes_the_early_claim(
     assert row.spent["waiting"] is None
     [iteration] = [e for e in cockpit.events("loop.iteration") if e.data["kind"] == "claim"]
     assert (iteration.data["late"], iteration.data["refuted"]) == (True, [name])
+
+
+async def test_a_human_change_request_lapses_the_early_claim_it_outran(
+    cockpit: Cockpit,
+) -> None:
+    """A human asks for changes while an early claim waits on CI: no strike for the PL."""
+    await plan(cockpit, "route")
+    pr = make_pr(cockpit, "route")
+    await gate(cockpit, pr, "checks", "pending", H1)
+    await _early(cockpit, pr, H1, ["checks"])
+    assert loop_of(cockpit, "claim", loops.pr_subject(pr.id)).spent["waiting"] == "aaaaaaa"
+    cockpit.store.update_pr(pr.id, human_review=_CHANGES_H1)
+    await gate(cockpit, pr, "checks", "pass", H1)
+    row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+    assert (row.iteration, row.spent.get("streak") or 0, row.last_verdict) == (0, 0, "LAPSED")
+    assert row.last_reason == "changes requested at aaaaaaa: the READY claim lapsed"
+    assert row.spent["waiting"] is None
 
 
 async def test_a_claim_judged_on_stale_gates_is_judged_again_when_observed(

@@ -69,6 +69,7 @@ from omnigent.factory_gates import DEMO_GATE, GATE_FAIL, GATE_PENDING, READY_GAT
 from omnigent.server.factory import events, tasks
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.control import CockpitError
+from omnigent.server.factory.stage import changes_requested_on_head, ready_for_human
 from omnigent.server.factory.telemetry.spans import span_context, write_span
 from omnigent.stores.factory_store import norm_id
 
@@ -1341,16 +1342,18 @@ def claim_status(pr: FactoryPr, head: str | None = None) -> tuple[str, list[str]
 
     ``held``: the PR is ready (it is handed over at its head, whichever head
     the claim names). ``refuted``: the PR is not open or is a draft, a gate
-    failed, or the claim names another head than the PR's (it moved).
+    failed, a human asked for changes on its head, or the claim names another
+    head than the PR's (it moved).
     ``early``: nothing refutes it, the server still waits on gates (CI
     running, mergeable computing, no review, verify or demo on the head yet,
     or no gates computed yet). Only a refuted claim counts as a mismatch.
 
     :param head: The head the claim names (7-40 hex), when it names one.
     :returns: The status and what is behind it: the pending gates when early;
-        the failing gates, ``draft``, ``head`` or ``state`` when refuted.
+        the failing gates, ``draft``, ``changes requested``, ``head`` or
+        ``state`` when refuted.
     """
-    if pr.ready:
+    if ready_for_human(pr):
         return CLAIM_HELD, []
     if pr.state != "open":
         return CLAIM_REFUTED, ["state"]
@@ -1362,6 +1365,8 @@ def claim_status(pr: FactoryPr, head: str | None = None) -> tuple[str, list[str]
         return CLAIM_REFUTED, failing
     if head and not _at_head(pr, head):
         return CLAIM_REFUTED, ["head"]
+    if changes_requested_on_head(pr.human_review, pr.head_sha):
+        return CLAIM_REFUTED, ["changes requested"]
     return CLAIM_EARLY, [name for name in _CLAIM_GATES if gates.get(name) == GATE_PENDING]
 
 
@@ -1478,6 +1483,11 @@ def _judge_wait(ctx: Ctx, row: FactoryLoop, pr: FactoryPr | None) -> FactoryLoop
     if not _at_head(pr, sha7):
         return _end_wait(
             ctx, row, held=False, reason=f"head moved past {sha7}: the READY claim lapsed"
+        )
+    if changes_requested_on_head(pr.human_review, pr.head_sha):
+        # A human outran the gates: the claim made before it is not the PL's miss.
+        return _end_wait(
+            ctx, row, held=False, reason=f"changes requested at {sha7}: the READY claim lapsed"
         )
     status, gates = claim_status(pr, sha7)
     if status == CLAIM_HELD:

@@ -13,7 +13,7 @@ import {
 } from "lucide-react";
 import type { PrView } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
-import { plural, sameSha, shortSha } from "../factoryFormat";
+import { changesRequestedOnHead, plural, readyForHuman, sameSha, shortSha } from "../factoryFormat";
 import { ReadyForMergeBanner } from "./ReadyForMergeBanner";
 import { DotParts, ReviewNotice } from "./reviewParts";
 
@@ -97,17 +97,30 @@ export function StatusLine({ pr, nowS }: { pr: PrView; nowS: number }) {
       </p>
     );
   }
-  if (pr.ready) return <ReadyForMergeBanner pr={pr} nowS={nowS} testId="review-ready-banner" />;
-  const reasons = pr.gates.reasons;
+  if (readyForHuman(pr)) {
+    return <ReadyForMergeBanner pr={pr} nowS={nowS} testId="review-ready-banner" />;
+  }
+  const review = pr.human_review;
+  const held = changesRequestedOnHead(pr);
+  // Held by a human: every gate may pass, but only a new head can be ready again.
+  const reasons = held ? ["waits on a new head", ...pr.gates.reasons] : pr.gates.reasons;
   return (
     <div className="flex flex-col gap-1">
-      {pr.human_review?.verdict === "changes_requested" && (
+      {review?.verdict === "changes_requested" && (
         <p
           data-testid="review-changes-requested"
-          className="inline-flex items-center gap-1 self-start rounded-md bg-warning/15 px-2 py-0.5 text-sm text-warning"
+          data-head={held ? "current" : "old"}
+          className="inline-flex max-w-full min-w-0 items-start gap-1 self-start rounded-md bg-warning/15 px-2 py-0.5 text-sm text-warning"
         >
-          <MessageSquareWarningIcon aria-hidden className="size-3.5" />
-          Changes requested by {pr.human_review.by} · the PL is on it
+          <MessageSquareWarningIcon aria-hidden className="mt-[0.2em] size-3.5 shrink-0" />
+          <span className="min-w-0 break-words">
+            Changes requested by {review.by}
+            {review.head_sha && " on "}
+            {review.head_sha && (
+              <span className="font-mono tabular-nums">{shortSha(review.head_sha)}</span>
+            )}
+            {held ? " · the PL is on it" : " (old head)"}
+          </span>
         </p>
       )}
       <p

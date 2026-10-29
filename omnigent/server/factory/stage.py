@@ -6,7 +6,7 @@ it is compared against the derived stage to flag "claim ≠ gates".
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
@@ -86,12 +86,26 @@ def _gate(pr: FactoryPr, name: str) -> str:
     return value if isinstance(value, str) else "unknown"
 
 
-def _changes_requested_on_head(pr: FactoryPr) -> bool:
-    review: dict[str, Any] = pr.human_review or {}
-    if review.get("verdict") != "changes_requested":
+def changes_requested_on_head(review: Mapping[str, Any] | None, head: str | None) -> bool:
+    """
+    A human asked for changes on *head* (or on a head nobody recorded).
+
+    Such a head is never ready for a human: the hold lifts with a new head or an approval.
+
+    :param review: The PR's ``human_review``.
+    :param head: The PR's current head sha.
+    """
+    if not isinstance(review, Mapping) or review.get("verdict") != "changes_requested":
         return False
     sha = review.get("head_sha")
-    return not sha or not pr.head_sha or sha == pr.head_sha
+    if not isinstance(sha, str) or not sha or not head:
+        return True
+    return sha.lower() == head.lower()
+
+
+def ready_for_human(pr: FactoryPr) -> bool:
+    """:returns: Every gate of *pr* passes and no human change request holds its head."""
+    return bool(pr.ready) and not changes_requested_on_head(pr.human_review, pr.head_sha)
 
 
 def pr_stage(pr: FactoryPr) -> str:
@@ -102,13 +116,13 @@ def pr_stage(pr: FactoryPr) -> str:
     is building; review not passing is review; anything else short of ready
     (verify pending/failed/skipped, mergeable, protected paths) is verify.
     """
-    if pr.ready:
+    if ready_for_human(pr):
         return STAGE_READY
     if (
         pr.is_draft
         or _gate(pr, "draft") not in _PASSING
         or _gate(pr, "checks") not in _PASSING
-        or _changes_requested_on_head(pr)
+        or changes_requested_on_head(pr.human_review, pr.head_sha)
     ):
         return STAGE_BUILDING
     if _gate(pr, "review") not in _PASSING:
@@ -120,7 +134,7 @@ def _stage_from_prs(prs: Sequence[FactoryPr]) -> tuple[str, str | None]:
     if not prs:
         return STAGE_PLANNING, None
     open_prs = [p for p in prs if p.state == "open"]
-    if any(p.ready for p in open_prs):
+    if any(ready_for_human(p) for p in open_prs):
         return STAGE_READY, None
     if open_prs:
         return min((pr_stage(p) for p in open_prs), key=stage_rank), None
@@ -217,7 +231,9 @@ __all__ = [
     "OVERLAY_PR_CLOSED",
     "OVERLAY_WAITING",
     "StageResult",
+    "changes_requested_on_head",
     "derive_stage",
     "pr_stage",
+    "ready_for_human",
     "stage_rank",
 ]

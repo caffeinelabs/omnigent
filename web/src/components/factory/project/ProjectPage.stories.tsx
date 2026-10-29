@@ -8,7 +8,7 @@ import {
   UX_PR_NUMBER,
   projectScenario,
 } from "./__fixtures__/projectFixtures";
-import { round3Snapshot } from "../shell/__fixtures__/shellFixtures";
+import { requestChanges, round3Snapshot } from "../shell/__fixtures__/shellFixtures";
 import { ProjectStory, type ProjectStoryOptions } from "./projectStoryKit";
 
 function page(options: ProjectStoryOptions = {}, play?: Story["play"]): Story {
@@ -17,6 +17,11 @@ function page(options: ProjectStoryOptions = {}, play?: Story["play"]): Story {
 
 function phone(story: Story): Story {
   return { ...story, globals: { viewport: { value: "mobile2" } } };
+}
+
+/** api-version a minute after Luka asked for changes on #9630: held at its head. */
+function changesRequested(): FactorySnapshot {
+  return requestChanges(projectScenario().snapshot, 9630);
 }
 
 /** db-version back in planning, before its first PR. */
@@ -81,6 +86,19 @@ export const PrsMerged = page({ slug: "docs-factory-envs", search: "#prs" });
 
 /** A project still planning: no PRs yet. */
 export const PrsEmpty = page({ slug: "db-version", search: "#prs", snapshot: planning() });
+
+/** #9630 right after "Request changes": Building, the change request on its row, no merge link. */
+export const PrsChangesRequested = page({ search: "#prs", snapshot: changesRequested() });
+
+export const PrsChangesRequestedDark = page({
+  search: "#prs",
+  snapshot: changesRequested(),
+  theme: "dark",
+});
+
+export const PrsChangesRequestedMobile = phone(
+  page({ search: "#prs", snapshot: changesRequested() }),
+);
 
 // ── Demos ──────────────────────────────────────────────────────
 

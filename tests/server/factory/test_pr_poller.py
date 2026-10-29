@@ -388,6 +388,73 @@ async def test_github_changes_requested_review_reaches_the_pl(polling: Polling) 
     assert p.stage() == "building"
 
 
+async def test_a_human_change_request_holds_ready_until_a_new_head_passes(
+    polling: Polling,
+) -> None:
+    p = polling
+    gh_pr = p.new_pr(checks=[FakeCheck("ci / test")])
+    p.approve(gh_pr)
+    await p.poll()
+    assert p.pr().ready is True and p.stage() == "ready"
+    old_head = gh_pr.head_sha
+
+    gh_pr.review("Give the pill top spacing.", p.clock.now + 30, "CHANGES_REQUESTED", "luka")
+    await p.poll()
+    await p.poll()
+    row = p.pr()
+    # Every gate still passes at the head, but the human holds it.
+    assert row.ready is False and row.gates["review"] == "pass" and row.gates["verify"] == "pass"
+    assert p.stage() == "building"
+    [not_ready] = p.events("pr.not_ready")
+    assert not_ready.data["reasons"] == [f"changes requested by luka @{old_head[:7]}"]
+    assert len(p.events("pr.ready")) == 1
+    assert len(p.notices(p.pl, "READY FOR HUMAN MERGE")) == 1
+
+    gh_pr.push(sha("spacing"), p.clock.now + 10, checks=[FakeCheck("ci / test")])
+    await p.poll()
+    assert p.pr().ready is False and p.stage() == "review"
+    p.approve(gh_pr)
+    await p.poll()
+    row = p.pr()
+    assert row.ready is True and row.ready_at == int(p.clock.now)
+    assert row.human_review["head_sha"] == old_head
+    assert p.stage() == "ready"
+    assert len(p.events("pr.ready")) == 2
+    assert len(p.notices(p.pl, "READY FOR HUMAN MERGE")) == 2
+
+
+async def test_a_cockpit_review_stored_mid_poll_is_not_overwritten(
+    polling: Polling, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    p = polling
+    gh_pr = p.new_pr(checks=[FakeCheck("ci / test")])
+    p.approve(gh_pr)
+    await p.poll()
+    row = p.pr()
+    assert row.ready is True
+    review = {
+        "verdict": "changes_requested",
+        "text": "Pad the pill.",
+        "by": "luka",
+        "at": int(p.clock.now),
+        "head_sha": gh_pr.head_sha,
+        "source": "cockpit",
+    }
+    query = p.gh._graphql
+
+    def human_clicks_meanwhile(body: dict[str, Any]) -> httpx.Response:
+        # The cockpit stores the review while the poller's query is in flight.
+        if p.pr().human_review is None:
+            p.store.update_pr(row.id, human_review=review, ready=False)
+        return query(body)
+
+    monkeypatch.setattr(p.gh, "_graphql", human_clicks_meanwhile)
+    await p.poll()
+    row = p.pr()
+    assert row.ready is False and row.human_review == review
+    assert p.events("pr.not_ready") == [] and len(p.events("pr.ready")) == 1
+
+
 async def test_demo_gate_when_previews_are_on(polling: Polling) -> None:
     p = polling
     p.store.upsert_project(

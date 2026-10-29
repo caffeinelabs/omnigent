@@ -31,7 +31,15 @@ import { cn } from "@/lib/utils";
 import { ageText } from "../board/boardModel";
 import { devEnvStatus } from "../board/DevEnvPill";
 import { STATE_ICON_TONE } from "../board/GateChip";
-import { TONE_CHIP, TONE_DOT, TONE_TEXT, formatUsd, plural, shortSha } from "../factoryFormat";
+import {
+  TONE_CHIP,
+  TONE_DOT,
+  TONE_TEXT,
+  formatUsd,
+  plural,
+  readyForHuman,
+  shortSha,
+} from "../factoryFormat";
 import { prPageHref, projectPageHref } from "../factoryRoutes";
 import { SectionCard } from "../project/projectParts";
 import {
@@ -112,7 +120,7 @@ function PrCell({ facts, factoryId }: { facts: ProjectRowFacts; factoryId: strin
         onClick={(e) => e.stopPropagation()}
         className={cn(
           "shrink-0 font-mono tabular-nums hover:underline",
-          pr.ready ? "text-success" : "text-foreground",
+          readyForHuman(pr) ? "text-success" : "text-foreground",
         )}
         title={pr.title}
       >

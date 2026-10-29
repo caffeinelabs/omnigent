@@ -26,6 +26,25 @@ export const ReadyWithVideo = review({ state: "ready-with-video" });
 
 export const ReadyWithVideoDark = review({ state: "ready-with-video", theme: "dark" });
 
+/**
+ * Right after "Request changes" on #9630: every gate still passes at 7767f0d,
+ * but the head is held. No ready banner; the change request and "waits on a
+ * new head" instead.
+ */
+export const ChangesRequested = review({ state: "changes-requested" });
+
+export const ChangesRequestedDark = review({ state: "changes-requested", theme: "dark" });
+
+export const ChangesRequestedMobile: Story = {
+  ...review({ state: "changes-requested" }),
+  globals: { viewport: { value: "mobile2" } },
+};
+
+export const ChangesRequestedMobileDark: Story = {
+  ...review({ state: "changes-requested", theme: "dark" }),
+  globals: { viewport: { value: "mobile2" } },
+};
+
 /** A backend-only PR: no video, the demo is its API transcript (one call expanded). */
 export const BackendApiDemo: Story = {
   ...review({ state: "backend-api-demo" }),

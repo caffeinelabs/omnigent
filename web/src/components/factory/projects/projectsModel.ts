@@ -16,7 +16,7 @@ import {
   projectPrList,
 } from "../board/boardModel";
 import { gateState, shownGates, GATE_KEY_LABEL, STATE_WORD } from "../board/GateChip";
-import { type FactoryTone, primaryPr } from "../factoryFormat";
+import { type FactoryTone, changesRequestedOnHead, primaryPr, shortSha } from "../factoryFormat";
 
 export interface ProjectSections {
   work: ProjectView[];
@@ -146,6 +146,17 @@ export function projectRowFacts(snapshot: FactorySnapshot, project: ProjectView)
   const summary = project.tasks_summary;
   const loops = loopsText(project);
   const flags: RowFlag[] = [];
+  const held = prs.find((p) => p.state === "open" && changesRequestedOnHead(p));
+  if (held?.human_review) {
+    flags.push({
+      key: "changes",
+      label: "changes requested",
+      tone: "warning",
+      title:
+        `${held.human_review.by} asked for changes on !${held.number} @${shortSha(held.head_sha)}; ` +
+        "ready again once a new head passes the gates",
+    });
+  }
   for (const decision of openDecisions(snapshot, project)) {
     flags.push({
       key: decision.id,

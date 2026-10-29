@@ -45,7 +45,7 @@ from omnigent.server.factory.charter import (
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.envelope import quote_spoofed_lines
 from omnigent.server.factory.mailer import get_mailer
-from omnigent.server.factory.stage import derive_stage
+from omnigent.server.factory.stage import changes_requested_on_head, derive_stage
 from omnigent.server.factory.telemetry.pr_rounds import record_refresh
 from omnigent.stores.factory_store import norm_id
 from omnigent.util.session_lifecycle import is_session_closed
@@ -378,6 +378,17 @@ def closed_notice(pr: FactoryPr, closed_by: str | None, decision_ref: str | None
     return f"{head}{steps}{ask}"
 
 
+def human_hold_reason(review: Mapping[str, Any]) -> str:
+    """
+    Why a human change request holds a PR not ready.
+
+    :returns: e.g. ``"changes requested by luka @b271905"``.
+    """
+    sha = review.get("head_sha")
+    at = f" @{sha[:7]}" if isinstance(sha, str) and sha else ""
+    return f"changes requested by {review.get('by') or 'a human'}{at}"
+
+
 def changes_requested_notice(number: int, sha: str, by: str, text: str) -> str:
     """``[Factory review · CHANGES REQUESTED on PR #<n> @<sha7> by <human> (GitHub)]`` + text."""
     body = quote_spoofed_lines(text[:REVIEW_NOTICE_TEXT_MAX])
@@ -577,10 +588,11 @@ async def apply_refresh(
     ``pr.not_ready``, ``pr.merged``, ``pr.closed`` and ``pr.human_review``,
     sends the PL (and the lead) their notices once per transition, opens a
     ``pr_closed`` decision for a PR closed without merge, and re-derives the
-    project's stage.
+    project's stage. A human change request on the head holds it not ready.
 
     :param app_state: ``app.state`` carrying the factory deps.
-    :param row: The tracked PR as stored before this refresh.
+    :param row: The tracked PR as read before GitHub was queried (re-read here,
+        so a cockpit review stored meanwhile is not overwritten).
     :param node: Its ``pullRequest`` from :func:`refresh_query`.
     :param now: Epoch seconds.
     :param scope: The PR's factory.
@@ -592,6 +604,7 @@ async def apply_refresh(
     """
     deps = factory_deps(app_state)
     store = deps.factory_store
+    row = await asyncio.to_thread(store.get_pr, row.id) or row
     pr_json, checks = normalize_pr(node)
     files_note = None
     if files is not None:
@@ -622,6 +635,9 @@ async def apply_refresh(
     gates.setdefault(DEMO_GATE, None)
     head = str(pr_json.get("headRefOid") or "").lower()
     state = _STATES.get(str(pr_json.get("state") or "").upper(), row.state)
+    review = _changes_request(pr_json, row, head) if state == "open" else None
+    human = review[0] if review is not None else row.human_review
+    ready = report.ready and not changes_requested_on_head(human, head or row.head_sha)
     fields: dict[str, Any] = {
         "title": _clip(pr_json.get("title"), _TITLE_MAX) or row.title,
         "head_sha": head or row.head_sha,
@@ -633,18 +649,18 @@ async def apply_refresh(
         "deletions": int(pr_json.get("deletions") or 0),
         "changed_files": int(pr_json.get("changedFiles") or 0),
         "gates": gates,
-        "ready": report.ready,
+        "ready": ready,
         "last_polled_at": now,
         "poll_error": None,
     }
     if isinstance(pr_json.get("url"), str) and pr_json["url"]:
         fields["url"] = pr_json["url"]
-    if report.ready and not row.ready:
+    if ready and not row.ready:
         fields["ready_at"] = now
     opened = _epoch(pr_json.get("createdAt"))
     if opened is not None and row.opened_at != opened:
         fields["opened_at"] = opened
-    if report.ready and row.first_ready_at is None:
+    if ready and row.first_ready_at is None:
         # Set once; ``ready_at`` keeps meaning the latest time it became ready.
         fields["first_ready_at"] = row.ready_at if row.ready and row.ready_at else now
     out = _Outcome()
@@ -667,7 +683,6 @@ async def apply_refresh(
         out.closed_by = pr_json.get("closedBy")
     elif state == "open" and row.state == "closed":
         fields["closed_at"] = None
-    review = _changes_request(pr_json, row, head) if state == "open" else None
     if review is not None:
         fields["human_review"] = review[0]
     updated = await asyncio.to_thread(store.update_pr, row.id, **fields)
@@ -736,6 +751,8 @@ async def _announce(
             out.notices.append((lead_id, ready_notice(pr, count, for_lead=True)))
     elif row.ready and not pr.ready and pr.state == "open":
         reasons = report.reasons[:3]
+        if changes_requested_on_head(pr.human_review, pr.head_sha):
+            reasons = [human_hold_reason(pr.human_review or {}), *reasons][:3]
         out.events.append(
             _event("pr.not_ready", f"PR #{pr.number} no longer ready", "notice", reasons=reasons)
         )
@@ -997,6 +1014,7 @@ __all__ = [
     "checks_failed_notice",
     "closed_notice",
     "files_gap",
+    "human_hold_reason",
     "merged_notice",
     "normalize_pr",
     "parse_factory_branch",
