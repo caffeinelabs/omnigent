@@ -120,9 +120,11 @@ The server also sends:
 - `[Factory decision · D-<n> answered by <human> · "<option>"]`: the answer to
   a `sys_factory_ask` question (or `… withdrawn`).
 - `[Factory review · CHANGES REQUESTED on PR #<n> …]` or
-  `[Factory review · APPROVED PR #<n> …]`: a human's review from the cockpit.
+  `[Factory review · APPROVED PR #<n> …]`: a human's review from the cockpit
+  or GitHub.
 - `[Factory notice · PR <repo>#<n> …]`: server truth about a PR: READY FOR
-  HUMAN MERGE, checks failed, merged, closed without merge.
+  HUMAN MERGE, checks failed, merged, closed without merge, a change request
+  dismissed on GitHub.
 - `[Factory notice · preview p<n> …]`: a factory preview went unreachable or
   idle.
 - `[Factory notice · ...]`: a turn you requested finished without a reply.

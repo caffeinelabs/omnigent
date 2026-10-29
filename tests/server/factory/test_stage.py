@@ -168,6 +168,25 @@ CASES: list[
         [],
         {},
         "ready",
+        # The PL's READY claim predates the human's request: not its mismatch.
+        StageResult("building"),
+    ),
+    (
+        "PL still claims ready right after a human change request",
+        [_pr(human_review=_CHANGES_ON_HEAD)],
+        _pl(),
+        [],
+        {},
+        "ready",
+        StageResult("building"),
+    ),
+    (
+        "claim ahead of gates on a new head after human changes",
+        [_pr(checks="pending", human_review=_CHANGES_ON_OLD)],
+        _pl(),
+        [],
+        {},
+        "ready",
         StageResult("building", claim_mismatch=True),
     ),
     (

@@ -206,6 +206,36 @@ async def test_approval_lifting_a_change_request_on_the_head_rereads_the_gates(
     # Still held until the poller re-reads the gates; no second not-ready.
     assert row.ready is False and len(cockpit.events("pr.not_ready")) == 1
 
+    # Toggling again within the "refresh now" limit records the review, no new GitHub read.
+    assert (await _feedback(cockpit, pr, verdict="changes_requested")).status_code == 200
+    cockpit.store.update_pr(pr.id, last_polled_at=1_700_000_200)
+    assert (await _feedback(cockpit, pr, user="carol", verdict="approved")).status_code == 200
+    row = cockpit.store.get_pr(pr.id)
+    assert row is not None and row.human_review is not None
+    assert row.human_review["verdict"] == "approved"
+    assert row.last_polled_at == 1_700_000_200
+    assert await nudge.wait("prs", 0) is None
+
+
+async def test_the_snapshot_never_lists_a_held_head_as_ready(cockpit: Cockpit) -> None:
+    """A stored ``ready`` that lags a human's change request (e.g. a poll racing it)."""
+    pr = _ready_pr(cockpit)
+    held = {
+        "verdict": "changes_requested",
+        "text": "Pad it.",
+        "by": "alice",
+        "at": 1_700_000_050,
+        "head_sha": HEAD,
+        "source": "cockpit",
+    }
+    cockpit.store.update_pr(pr.id, human_review=held)
+
+    body = await _snapshot(cockpit)
+
+    assert body["totals"]["prs_ready"] == 0
+    [view] = [p for p in body["prs"] if p["id"] == pr.id]
+    assert view["ready"] is False
+
 
 async def test_feedback_needs_edit_on_the_pl(cockpit: Cockpit) -> None:
     pr = _pr(cockpit)

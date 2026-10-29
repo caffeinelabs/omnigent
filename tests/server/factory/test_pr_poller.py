@@ -423,6 +423,94 @@ async def test_a_human_change_request_holds_ready_until_a_new_head_passes(
     assert len(p.notices(p.pl, "READY FOR HUMAN MERGE")) == 2
 
 
+async def test_a_github_approval_by_the_same_human_lifts_their_change_request(
+    polling: Polling,
+) -> None:
+    p = polling
+    gh_pr = p.new_pr(checks=[FakeCheck("ci / test")])
+    p.approve(gh_pr)
+    await p.poll()
+    head = gh_pr.head_sha
+    gh_pr.review("Pad it.", p.clock.now + 30, "CHANGES_REQUESTED", "luka")
+    await p.poll()
+    assert p.pr().ready is False and p.stage() == "building"
+
+    # Someone else's approval leaves luka's request standing.
+    gh_pr.review("Fine by me.", p.clock.now + 30, "APPROVED", "ana")
+    await p.poll()
+    assert p.pr().ready is False and p.pr().human_review["verdict"] == "changes_requested"
+
+    approved_at = p.clock.now + 30
+    gh_pr.review("LGTM after all.", approved_at, "APPROVED", "luka")
+    await p.poll()
+    await p.poll()
+    row = p.pr()
+    assert row.ready is True and p.stage() == "ready"
+    assert row.human_review == {
+        "verdict": "approved",
+        "source": "github",
+        "text": "LGTM after all.",
+        "by": "luka",
+        "at": int(approved_at),
+        "head_sha": head,
+    }
+    reviews = p.events("pr.human_review")
+    assert [(e.data["verdict"], e.data["source"]) for e in reviews] == [
+        ("changes_requested", "github"),
+        ("approved", "github"),
+    ]
+    approvals = p.notices(p.pl, "[Factory review · APPROVED")
+    assert len(approvals) == 1
+    assert approvals[0].startswith(
+        f"[Factory review · APPROVED PR #9630 @{head[:7]} by luka (GitHub)]"
+    )
+    assert approvals[0].endswith("\nLGTM after all.")
+    assert len(p.events("pr.ready")) == 2
+    assert len(p.notices(p.pl, "READY FOR HUMAN MERGE")) == 2
+
+    # A later request from them holds the head again.
+    gh_pr.review("One more thing.", p.clock.now + 30, "CHANGES_REQUESTED", "luka")
+    await p.poll()
+    row = p.pr()
+    assert row.ready is False and row.human_review["text"] == "One more thing."
+    assert p.stage() == "building"
+
+
+async def test_a_github_change_request_dismissed_on_github_lifts_the_hold(
+    polling: Polling,
+) -> None:
+    p = polling
+    gh_pr = p.new_pr(checks=[FakeCheck("ci / test")])
+    p.approve(gh_pr)
+    await p.poll()
+    head = gh_pr.head_sha
+    gh_pr.review("Pad it.", p.clock.now + 30, "CHANGES_REQUESTED", "luka")
+    await p.poll()
+    gh_pr.review("And the margin.", p.clock.now + 30, "CHANGES_REQUESTED", "luka")
+    await p.poll()
+    assert p.pr().ready is False and p.pr().human_review["text"] == "And the margin."
+
+    gh_pr.dismiss("luka")
+    await p.poll()
+    await p.poll()
+    row = p.pr()
+    # luka's earlier request is superseded by the dismissed one, so nothing holds the head.
+    assert row.ready is True and row.human_review is None and p.stage() == "ready"
+    reviews = p.events("pr.human_review")
+    assert [e.data["verdict"] for e in reviews] == [
+        "changes_requested",
+        "changes_requested",
+        "dismissed",
+    ]
+    assert reviews[-1].data["by"] == "luka" and reviews[-1].data["head_sha"] == head
+    dismissed = p.notices(p.pl, "dismissed on GitHub")
+    assert len(dismissed) == 1
+    assert dismissed[0].startswith(
+        f"[Factory notice · PR {REPO}#9630 change request by luka @{head[:7]} dismissed on GitHub]"
+    )
+    assert len(p.events("pr.ready")) == 2
+
+
 async def test_a_cockpit_review_stored_mid_poll_is_not_overwritten(
     polling: Polling, monkeypatch: pytest.MonkeyPatch
 ) -> None:

@@ -76,7 +76,7 @@ from omnigent.server.factory.launch import launch_drift
 from omnigent.server.factory.membership import factory_members, load_session_spec
 from omnigent.server.factory.notify import parse_iso
 from omnigent.server.factory.roster import build_roster, session_url
-from omnigent.server.factory.stage import StageResult, derive_stage
+from omnigent.server.factory.stage import StageResult, derive_stage, ready_for_human
 from omnigent.stores.factory_store import norm_id
 from omnigent.util.session_lifecycle import is_session_closed
 
@@ -619,7 +619,7 @@ def _pr_view(pr: FactoryPr, demos: Sequence[FactoryDemo], titles: Mapping[str, s
         "deletions": pr.deletions,
         "changed_files": pr.changed_files,
         "gates": _lenient(schemas.GatesView, pr.gates or {}) or schemas.GatesView().model_dump(),
-        "ready": pr.ready,
+        "ready": ready_for_human(pr),
         "ready_since": pr.ready_at,
         "sentinel": _lenient(schemas.SentinelView, pr.sentinel),
         "human_review": _lenient(schemas.HumanReviewView, pr.human_review),

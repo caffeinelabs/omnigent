@@ -1106,7 +1106,8 @@ async def submit_pr_feedback(
     A change request takes the PR out of ready at once (``pr.not_ready``, the
     project's stage re-derived); it is ready again once the gates pass on a new
     head. An approval that lifts a change request on the same head asks the
-    poller to re-read the gates. Needs EDIT on the PL session.
+    poller to re-read the gates (within the "refresh now" limit). Needs EDIT
+    on the PL session.
 
     :returns: ``(updated PR, mail id)``.
     :raises CockpitError: 400 on a bad verdict or text, 404 unknown PR, 409
@@ -1143,7 +1144,9 @@ async def submit_pr_feedback(
     lifted = verdict == VERDICT_APPROVED and changes_requested_on_head(
         pr.human_review, pr.head_sha
     )
-    if lifted:
+    # Re-read now within the refresh limit; otherwise the next regular poll lifts it.
+    repoll = lifted and refresh_limiter.acquire(pr.id) is None
+    if repoll:
         fields["last_polled_at"] = None
     updated = await asyncio.to_thread(deps.factory_store.update_pr, pr.id, **fields)
     mail_id = send_text(app_state, pl.id, review_text(pr, verdict, by, text), kind=_CONTROL_KIND)
@@ -1179,7 +1182,7 @@ async def submit_pr_feedback(
             summary=f"PR #{pr.number} no longer ready",
             data={"pr_id": pr.id, "reasons": [human_hold_reason(review)]},
         )
-    if lifted:
+    if repoll:
         nudge.nudge(NUDGE_TOPIC, pr.id)
     if pr.project_slug:
         await persist_stage(app_state, root.id, pr.project_slug)

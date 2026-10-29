@@ -551,7 +551,8 @@ Docs-only PRs are labelled `factory:no-env` and skip the preview and the demo.
 | `[Factory brief · from <human> via cockpit · id=mail_…]` | the root lead | Start: spawn Sentinel and one PL per project; charters attach automatically. |
 | `[Factory control · <ACTION> · by <human>] <instructions>` | the affected members | A human command; the member replies once. |
 | `[Factory decision · D-<n> answered by <human> · "<option>"]` | the asker | The answer to `sys_factory_ask`. |
-| `[Factory review · CHANGES REQUESTED on PR #<n> @<sha7> by <human> (cockpit)]` / `[Factory review · APPROVED PR #<n> …]` | the PL | A human's review from the cockpit. |
+| `[Factory review · CHANGES REQUESTED on PR #<n> @<sha7> by <human> (cockpit\|GitHub)]` / `[Factory review · APPROVED PR #<n> …]` | the PL | A human's review from the cockpit or GitHub. A change request holds that head out of ready until a new head passes, the human approves, or (GitHub) it is dismissed. |
+| `[Factory notice · PR <repo>#<n> change request by <human> @<sha7> dismissed on GitHub]` | the PL | The head is no longer held. |
 | `[Factory notice · PR <repo>#<n> READY FOR HUMAN MERGE · 7/7 gates · head <sha7>]` | the PL and the lead | Gates turned green (8/8 with the demo gate). |
 | `[Factory notice · PR #<n> targets <branch>, project base is <base> · gh pr edit <url> --base <base>]` | the PL | The base gate failed: retarget the PR. |
 | `[Factory notice · base <base> moved to <sha7> · sync open branches: git merge origin/<base>]` | work PLs with an open PR on the base | Sync open branches. |

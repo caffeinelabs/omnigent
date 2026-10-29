@@ -136,6 +136,11 @@ class FakePr:
             }
         )
 
+    def dismiss(self, login: str) -> None:
+        """Dismiss *login*'s newest review: GitHub keeps it, with state DISMISSED."""
+        mine = [r for r in self.reviews if r["author"]["login"] == login]
+        mine[-1]["state"] = "DISMISSED"
+
     def rest(self) -> dict[str, Any]:
         """:returns: The ``GET /repos/{repo}/pulls`` item."""
         return {

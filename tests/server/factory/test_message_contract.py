@@ -157,6 +157,16 @@ def render_texts() -> list[dict[str, Any]]:
             prs.changes_requested_notice(9630, HEAD, "luka", "Please rename it."),
             {"kind": "review", "verdict": "changes_requested", "pr": 9630, "source": "GitHub"},
         ),
+        (
+            "review_approved_github",
+            prs.approved_notice(9630, HEAD, "luka", "LGTM after all."),
+            {"kind": "review", "verdict": "approved", "pr": 9630, "source": "GitHub"},
+        ),
+        (
+            "notice_change_request_dismissed",
+            prs.dismissed_notice(pr, HEAD, "luka"),
+            {"kind": "notice", "pr": 9630},
+        ),
         ("notice_ready", prs.ready_notice(pr, 6), {"kind": "notice", "pr": 9630}),
         (
             "notice_checks_failed",

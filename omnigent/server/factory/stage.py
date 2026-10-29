@@ -67,7 +67,9 @@ class StageResult:
         ``waiting`` (held on its dependencies), or ``None``.
     :param overlay_reason: Human text for the overlay, e.g. ``"Blocked on D-3"`` or
         ``"merged → api-version"``.
-    :param claim_mismatch: The PL claims a stage further along than the gates show.
+    :param claim_mismatch: The PL claims a stage further along than the gates show
+        (not while a human's change request holds an open PR's head: that drop
+        is the human's, and the PL hears of it by mail).
     """
 
     stage: str
@@ -217,7 +219,10 @@ def derive_stage(
         overlay, reason = OVERLAY_WAITING, f"waiting on {', '.join(waiting_on)}"
 
     claim = project.agent_stage
-    mismatch = claim is not None and stage_rank(claim) > stage_rank(stage)
+    held = any(
+        p.state == "open" and changes_requested_on_head(p.human_review, p.head_sha) for p in prs
+    )
+    mismatch = claim is not None and stage_rank(claim) > stage_rank(stage) and not held
     return StageResult(stage, overlay, reason, mismatch)
 
 

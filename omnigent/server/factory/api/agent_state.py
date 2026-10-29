@@ -52,7 +52,9 @@ from omnigent.server.factory.agent_scope import (
 from omnigent.server.factory.api.pr_preview import preview_stable_path
 from omnigent.server.factory.charter import project_base_branch, render_pl_charter
 from omnigent.server.factory.demos import public_base_url, review_url
+from omnigent.server.factory.prs import human_hold_reason
 from omnigent.server.factory.routes import FactoryRouteError
+from omnigent.server.factory.stage import changes_requested_on_head
 from omnigent.server.factory.telemetry import versions
 from omnigent.stores.factory_store import DecisionNotOpen, norm_id
 
@@ -410,8 +412,11 @@ async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
     if refreshed is not None:
         row = refreshed
     ready_claim = body.claim == "ready_for_human_merge"
+    # A human's change request holds the head even while the stored ready lags.
+    held = changes_requested_on_head(row.human_review, row.head_sha)
+    server_ready = row.ready and not held
     # Against the fresh gates, and stored with the claim (claim calibration).
-    claim_mismatch = ready_claim and not row.ready
+    claim_mismatch = ready_claim and not server_ready
     # Only a refuted claim counts against the claim loop; an early one waits for the gates.
     claim_status, claim_gates = loops.claim_status(row, head_sha) if ready_claim else (None, [])
     # A READY claim is about the head it was judged at, even when it names none.
@@ -436,11 +441,14 @@ async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
                 "claim_mismatch": claim_mismatch,
                 "claim_status": claim_status,
                 "claim_gates": claim_gates,
-                "server_ready": row.ready,
+                "server_ready": server_ready,
                 "refreshed": refreshed is not None,
             },
         )
     gates = dict(row.gates or {})
+    reasons = list(gates.get("reasons") or [])
+    if held:
+        reasons.insert(0, human_hold_reason(row.human_review or {}))
     project_base = await asyncio.to_thread(_project_base, caller, row.project_slug)
     base = public_base_url(str(request.base_url))
     reply: dict[str, Any] = {
@@ -457,9 +465,9 @@ async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
         "project_base": project_base,
         "state": row.state,
         "head_sha": row.head_sha or None,
-        "ready": row.ready,
+        "ready": server_ready,
         "gates": gates,
-        "reasons": list(gates.get("reasons") or []),
+        "reasons": reasons,
         "refreshed": refreshed is not None,
         # True only when refuted: an early claim has nothing to fix, it waits for the gates.
         "claim_mismatch": claim_status == loops.CLAIM_REFUTED,

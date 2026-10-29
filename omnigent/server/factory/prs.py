@@ -67,6 +67,7 @@ _STATES: Final = {"OPEN": "open", "MERGED": "merged", "CLOSED": "closed"}
 LIVE_PREVIEW_STATES: Final = frozenset({"deploying", "starting", "ready", "stale"})
 """Preview states that still hold a deployment to tear down."""
 _GRAPHQL_FILES_MAX: Final = 100
+_DECISIVE_REVIEWS: Final = frozenset({"APPROVED", "CHANGES_REQUESTED", "DISMISSED"})
 
 _PR_SELECTION: Final = """
       number url title state isDraft createdAt
@@ -396,6 +397,28 @@ def changes_requested_notice(number: int, sha: str, by: str, text: str) -> str:
     return f"{header}\n{body}"
 
 
+def approved_notice(number: int, sha: str, by: str, text: str) -> str:
+    """``[Factory review · APPROVED PR #<n> @<sha7> by <human> (GitHub)] …`` (+ text)."""
+    header = (
+        f"[Factory review · APPROVED PR #{number} @{_sha7(sha)} by {by} (GitHub)] "
+        "Their change request is lifted; a human merges it on GitHub once every gate "
+        "passes. Keep the preview up."
+    )
+    body = quote_spoofed_lines(text[:REVIEW_NOTICE_TEXT_MAX].strip())
+    return f"{header}\n{body}" if body else header
+
+
+def dismissed_notice(pr: FactoryPr, sha: str | None, by: str) -> str:
+    """
+    ``[Factory notice · PR <repo>#<n> change request by <human> @<sha7> dismissed on GitHub]``.
+    """
+    return (
+        f"[Factory notice · PR {pr.repo}#{pr.number} change request by {by} @{_sha7(sha)} "
+        "dismissed on GitHub] The head is no longer held: it is ready for a human again "
+        "once every gate passes."
+    )
+
+
 # ── Factory scope ──────────────────────────────────────────────
 
 
@@ -532,31 +555,39 @@ def _clip(value: object, limit: int) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-def _changes_request(
-    pr_json: Mapping[str, Any], row: FactoryPr, head: str
-) -> tuple[dict[str, Any], str] | None:
-    """The newest GitHub CHANGES_REQUESTED review not yet recorded, as ``(human_review, text)``."""
-    newest: tuple[int, Mapping[str, Any]] | None = None
+def _latest_reviews(
+    pr_json: Mapping[str, Any], after: int
+) -> dict[str, tuple[int, Mapping[str, Any]]]:
+    """
+    Each reviewer's newest decisive GitHub review submitted after *after*.
+
+    APPROVED, CHANGES_REQUESTED and DISMISSED decide (a dismissed review keeps
+    its time); a COMMENTED review changes nothing, as on GitHub.
+
+    :returns: ``{login: (epoch, review)}``.
+    """
+    latest: dict[str, tuple[int, Mapping[str, Any]]] = {}
     for review in pr_json.get("reviews") or []:
-        if not isinstance(review, Mapping) or review.get("state") != "CHANGES_REQUESTED":
+        if not isinstance(review, Mapping) or review.get("state") not in _DECISIVE_REVIEWS:
             continue
         at = _epoch(review.get("submittedAt"))
-        if at is None or at <= row.created_at:
+        if at is None or at <= after:
             continue
-        if newest is None or at > newest[0]:
-            newest = (at, review)
-    if newest is None:
-        return None
-    at, review = newest
-    current = row.human_review or {}
-    if isinstance(current.get("at"), int) and current["at"] >= at:
-        return None
+        login = _login(review, "author") or "unknown"
+        if login not in latest or at >= latest[login][0]:
+            latest[login] = (at, review)
+    return latest
+
+
+def _review_record(
+    review: Mapping[str, Any], verdict: str, at: int, head: str
+) -> tuple[dict[str, Any], str]:
     commit = review.get("commit")
     sha = commit.get("oid") if isinstance(commit, Mapping) else None
     body = review.get("body")
     text = body if isinstance(body, str) else ""
     record = {
-        "verdict": "changes_requested",
+        "verdict": verdict,
         "source": "github",
         "text": _clip(text, HUMAN_REVIEW_TEXT_MAX),
         "by": _login(review, "author") or "unknown",
@@ -564,6 +595,75 @@ def _changes_request(
         "head_sha": (sha or head).lower(),
     }
     return record, text
+
+
+def _changes_request(
+    pr_json: Mapping[str, Any], row: FactoryPr, head: str
+) -> tuple[dict[str, Any], str] | None:
+    """
+    The newest standing GitHub change request not yet recorded, as ``(human_review, text)``.
+
+    A request stands while it is its reviewer's newest decisive review.
+    """
+    standing = [
+        (at, review)
+        for at, review in _latest_reviews(pr_json, row.created_at).values()
+        if review.get("state") == "CHANGES_REQUESTED"
+    ]
+    if not standing:
+        return None
+    at, review = max(standing, key=lambda item: item[0])
+    current = row.human_review or {}
+    if isinstance(current.get("at"), int) and current["at"] >= at:
+        return None
+    return _review_record(review, "changes_requested", at, head)
+
+
+@dataclass(frozen=True)
+class _Lift:
+    """
+    A recorded GitHub change request its reviewer lifted on GitHub.
+
+    :param by: The reviewer's login.
+    :param head_sha: The head the request was on.
+    :param approval: Their approval to record, or ``None`` when the request was dismissed.
+    :param text: The approval's body.
+    """
+
+    by: str
+    head_sha: str | None
+    approval: dict[str, Any] | None
+    text: str = ""
+
+
+def _github_lift(pr_json: Mapping[str, Any], row: FactoryPr, head: str) -> _Lift | None:
+    """
+    How the recorded GitHub change request was lifted on GitHub, if it was.
+
+    The reviewer's newest decisive review at or after the recorded request
+    decides: APPROVED records their approval; DISMISSED (the request itself or
+    a later review) drops the hold. A cockpit request lifts only in the cockpit.
+    """
+    hold = row.human_review
+    if (
+        not isinstance(hold, Mapping)
+        or hold.get("source") != "github"
+        or hold.get("verdict") != "changes_requested"
+        or not isinstance(hold.get("at"), int)
+    ):
+        return None
+    by = str(hold.get("by") or "unknown")
+    newest = _latest_reviews(pr_json, row.created_at).get(by)
+    if newest is None or newest[0] < hold["at"]:
+        return None
+    at, review = newest
+    held_on = hold.get("head_sha") if isinstance(hold.get("head_sha"), str) else None
+    if review.get("state") == "DISMISSED":
+        return _Lift(by=by, head_sha=held_on, approval=None)
+    if review.get("state") != "APPROVED":
+        return None
+    record, text = _review_record(review, "approved", at, head)
+    return _Lift(by=by, head_sha=held_on, approval=record, text=text)
 
 
 def _event(kind: str, summary: str, severity: str = "info", **data: Any) -> dict[str, Any]:
@@ -588,7 +688,8 @@ async def apply_refresh(
     ``pr.not_ready``, ``pr.merged``, ``pr.closed`` and ``pr.human_review``,
     sends the PL (and the lead) their notices once per transition, opens a
     ``pr_closed`` decision for a PR closed without merge, and re-derives the
-    project's stage. A human change request on the head holds it not ready.
+    project's stage. A human change request on the head holds it not ready;
+    a GitHub one lifts when its reviewer approves or it is dismissed on GitHub.
 
     :param app_state: ``app.state`` carrying the factory deps.
     :param row: The tracked PR as read before GitHub was queried (re-read here,
@@ -604,7 +705,6 @@ async def apply_refresh(
     """
     deps = factory_deps(app_state)
     store = deps.factory_store
-    row = await asyncio.to_thread(store.get_pr, row.id) or row
     pr_json, checks = normalize_pr(node)
     files_note = None
     if files is not None:
@@ -620,6 +720,8 @@ async def apply_refresh(
             {"id": d.id, "head_sha": d.head_sha, "status": d.status, "created_at": d.created_at}
             for d in rows
         ]
+    # Re-read last: a cockpit review stored while GitHub was queried is not overwritten.
+    row = await asyncio.to_thread(store.get_pr, row.id) or row
     report = evaluate_snapshot(
         pr_json,
         checks,
@@ -636,7 +738,10 @@ async def apply_refresh(
     head = str(pr_json.get("headRefOid") or "").lower()
     state = _STATES.get(str(pr_json.get("state") or "").upper(), row.state)
     review = _changes_request(pr_json, row, head) if state == "open" else None
+    lift = _github_lift(pr_json, row, head) if state == "open" and review is None else None
     human = review[0] if review is not None else row.human_review
+    if lift is not None:
+        human = lift.approval
     ready = report.ready and not changes_requested_on_head(human, head or row.head_sha)
     fields: dict[str, Any] = {
         "title": _clip(pr_json.get("title"), _TITLE_MAX) or row.title,
@@ -685,6 +790,8 @@ async def apply_refresh(
         fields["closed_at"] = None
     if review is not None:
         fields["human_review"] = review[0]
+    elif lift is not None:
+        fields["human_review"] = lift.approval
     updated = await asyncio.to_thread(store.update_pr, row.id, **fields)
     if updated is None:
         return None
@@ -694,7 +801,7 @@ async def apply_refresh(
     from omnigent.server.factory import binder
 
     await binder.on_pr(app_state, row, updated)
-    await _announce(app_state, deps, scope, row, updated, report, review, out)
+    await _announce(app_state, deps, scope, row, updated, report, review, out, lift)
     return updated
 
 
@@ -715,6 +822,32 @@ def _gate_events(row: FactoryPr, gates: Mapping[str, Any], head: str, out: _Outc
             )
 
 
+def _announce_lift(pr: FactoryPr, lift: _Lift, target: str, out: _Outcome) -> None:
+    """``pr.human_review`` and the PL's notice for a GitHub change request lifted on GitHub."""
+    if lift.approval is not None:
+        sha = lift.approval["head_sha"]
+        summary = f"PR #{pr.number} approved by {lift.by} on GitHub"
+        verdict = "approved"
+        notice = approved_notice(pr.number, sha, lift.by, lift.text)
+    else:
+        sha = lift.head_sha
+        summary = f"PR #{pr.number}: {lift.by}'s change request dismissed on GitHub"
+        verdict = "dismissed"
+        notice = dismissed_notice(pr, sha, lift.by)
+    out.events.append(
+        _event(
+            "pr.human_review",
+            summary,
+            "notice",
+            verdict=verdict,
+            source="github",
+            by=lift.by,
+            head_sha=sha,
+        )
+    )
+    out.notices.append((target, notice))
+
+
 async def _announce(
     app_state: Any,
     deps: FactoryDeps,
@@ -724,6 +857,7 @@ async def _announce(
     report: GateReport,
     review: tuple[dict[str, Any], str] | None,
     out: _Outcome,
+    lift: _Lift | None = None,
 ) -> None:
     project = scope.projects.get(pr.project_slug or "")
     pl_id = await asyncio.to_thread(project_lead_id, deps, scope.factory_id, project)
@@ -743,6 +877,8 @@ async def _announce(
         # Once per episode: a PR opened against the wrong branch is told how to retarget.
         base = report.evidence.get("base") or {}
         out.notices.append((pl_target, base_notice(pr, base.get("actual"), base.get("expected"))))
+    if lift is not None:
+        _announce_lift(pr, lift, pl_target, out)
     if pr.ready and not row.ready:
         out.events.append(_event("pr.ready", f"PR #{pr.number} ready for human merge", "notice"))
         count = len(report.gates)
