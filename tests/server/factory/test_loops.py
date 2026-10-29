@@ -8,7 +8,7 @@ emitted here through the real event log with the loop listener installed.
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import pytest
@@ -18,15 +18,20 @@ from omnigent.entities.factory import FactoryLoop, FactoryPr, FactoryTask
 from omnigent.server.factory import (
     budgets,
     decisions,
+    detectors,
     events,
+    issues,
     loops,
+    nudge,
     pipeline,
+    prs,
     tasks,
 )
 from omnigent.server.factory.actor import Actor
 from omnigent.server.factory.control import CockpitError
 from tests.server.factory.cockpit_helpers import Cockpit, build_cockpit
 from tests.server.factory.conftest import FakeClock
+from tests.server.factory.github_fakes import FakeCheck, FakePr
 
 SLUG = "api-version"
 REPO = "caffeinelabs/app"
@@ -772,6 +777,543 @@ async def test_two_refuted_claims_in_a_row_exhaust_the_claim_loop(cockpit: Cockp
     decision = loop_decisions(cockpit)[0]
     assert decision.assignee == "owners"
     assert decision.options[0]["action"] == "fresh_restart"
+
+
+def _claim_pr(**fields: Any) -> FactoryPr:
+    base: dict[str, Any] = {
+        "id": "p" * 32,
+        "factory_id": "f" * 32,
+        "repo": REPO,
+        "number": 9724,
+        "url": "u",
+        "head_sha": H1,
+        "state": "open",
+        "gates": {"draft": "pass", "checks": "pending", "review": "pass", "mergeable": "pass"},
+    }
+    return FactoryPr(**{**base, **fields})
+
+
+@pytest.mark.parametrize(
+    ("fields", "head", "expected"),
+    [
+        ({}, H1, ("early", ["checks"])),
+        ({}, H1[:7], ("early", ["checks"])),
+        (
+            {"gates": {"checks": "pass", "mergeable": "pending", "verify": "pending"}},
+            None,
+            ("early", ["verify", "mergeable"]),
+        ),
+        ({"gates": {}}, H1, ("early", [])),
+        ({"gates": {"checks": "fail", "review": "pending"}}, H1, ("refuted", ["checks"])),
+        ({"gates": {"checks": "pass", "demo": "fail"}}, H1, ("refuted", ["demo"])),
+        ({"gates": {"draft": "pending", "checks": "pending"}}, H1, ("refuted", ["draft"])),
+        ({"is_draft": True}, H1, ("refuted", ["draft"])),
+        ({}, H2, ("refuted", ["head"])),
+        ({"state": "closed"}, H1, ("refuted", ["state"])),
+        ({"ready": True, "gates": {"checks": "pass"}}, H2, ("held", [])),
+    ],
+)
+def test_a_ready_claim_is_held_early_or_refuted(
+    fields: dict[str, Any], head: str | None, expected: tuple[str, list[str]]
+) -> None:
+    assert loops.claim_status(_claim_pr(**fields), head) == expected
+
+
+async def test_an_early_claim_uses_no_attempt_and_keeps_the_streak(cockpit: Cockpit) -> None:
+    await plan(cockpit, "route")
+    await start(cockpit, "route")
+    pr = make_pr(cockpit, "route")
+    pl = cockpit.world.id("pl")
+
+    async def claim(status: str, gates: list[str]) -> None:
+        await emit(
+            cockpit,
+            "pr.claim",
+            pr_id=pr.id,
+            claim="ready_for_human_merge",
+            head_sha=H1,
+            claim_mismatch=True,
+            claim_status=status,
+            claim_gates=gates,
+        )
+
+    await claim("refuted", ["checks"])
+    for _ in range(3):
+        await claim("early", ["checks"])
+    row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+    assert (row.state, row.iteration, row.spent["streak"]) == ("running", 1, 1)
+    assert (row.last_verdict, row.last_reason) == ("EARLY", "CI pending on aaaaaaa")
+    assert row.spent["early"] == 3 and row.spent["claimed_head"] == H1[:12]
+    waits = [t for t in cockpit.mailer.texts_to(pl) if t.startswith("[Factory loop · WAIT")]
+    assert waits == [
+        "[Factory loop · WAIT · PR #9631 · CI pending on aaaaaaa] Your READY claim came early: "
+        "no gate failed, so it uses no claim attempt. Do not claim again; the server marks the "
+        "PR ready and sends READY FOR HUMAN MERGE when the gates pass."
+    ]
+    assert kinds(cockpit).count("loop.waiting") == 1
+    # The second refuted claim in a row (the early ones between do not reset it) exhausts it.
+    await claim("refuted", ["checks"])
+    exhausted = (
+        "exhausted",
+        2,
+        "2 READY claims in a row the server's gates or Sentinel refuted",
+    )
+    row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+    assert (row.state, row.spent["streak"], row.last_reason) == exhausted
+    # Held on its decision: a later early claim is counted, nothing else changes.
+    await claim("early", ["checks"])
+    row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+    assert (row.state, row.spent["streak"], row.last_reason) == exhausted
+    assert row.spent["early"] == 4
+    assert len([t for t in cockpit.mailer.texts_to(pl) if "[Factory loop · WAIT" in t]) == 1
+
+
+async def test_an_early_claim_mails_nothing_in_observe_mode(cockpit: Cockpit) -> None:
+    set_mode(cockpit, "observe")
+    await plan(cockpit, "route")
+    pr = make_pr(cockpit, "route")
+    await emit(
+        cockpit,
+        "pr.claim",
+        pr_id=pr.id,
+        claim="ready_for_human_merge",
+        head_sha=H1,
+        claim_mismatch=True,
+        claim_status="early",
+        claim_gates=["checks"],
+    )
+    assert loop_of(cockpit, "claim", loops.pr_subject(pr.id)).last_verdict == "EARLY"
+    assert "loop.waiting" in kinds(cockpit)
+    assert not any("[Factory loop" in t for t in cockpit.mailer.texts_to(cockpit.world.id("pl")))
+
+
+# ── L6 claim end to end: the PR route, the poller, the detectors ──
+
+
+@pytest.fixture()
+def watched() -> Iterator[None]:
+    """The detectors run on every event too (``claim.mismatch``, ``loop.*`` incidents)."""
+    detectors.reset()
+    issues.reset()
+    nudge.reset()
+    remove = detectors.install()
+    try:
+        yield
+    finally:
+        remove()
+        detectors.reset()
+        issues.reset()
+        nudge.reset()
+
+
+def _github_pr(*checks: FakeCheck) -> FakePr:
+    """PR #9724 at H1: approved, no env, its required check as given."""
+    now = time.time()
+    fake = FakePr(
+        REPO,
+        9724,
+        f"factory/{SLUG}/route",
+        H1,
+        now - 900,
+        base_ref="temp-main",
+        labels=["factory:no-env"],
+        checks=list(checks),
+    )
+    fake.comment(f"<!-- factory:review sha={H1} verdict=APPROVE -->", now - 60)
+    return fake
+
+
+async def _poll(cockpit: Cockpit, fake: FakePr) -> FactoryPr:
+    """One GitHub poller refresh of *fake*."""
+    row = cockpit.store.get_pr_by_number(cockpit.fid, REPO, fake.number)
+    if row is None:
+        row, _ = cockpit.store.upsert_pr(
+            cockpit.fid, REPO, fake.number, project_slug=SLUG, head_ref=fake.head_ref
+        )
+    [scope] = [s for s in prs.active_factories(cockpit.deps) if s.factory_id == cockpit.fid]
+    updated = await prs.apply_refresh(
+        cockpit.app.state, row, fake.graphql(), now=int(time.time()), scope=scope
+    )
+    assert updated is not None
+    return updated
+
+
+async def _claim_ready(cockpit: Cockpit, fake: FakePr) -> dict[str, Any]:
+    """The PL's ``sys_factory_pr(claim="ready_for_human_merge", head_sha=…)``."""
+    body = {
+        "from_session_id": cockpit.world.id("pl"),
+        "url": fake.url,
+        "claim": "ready_for_human_merge",
+        "head_sha": fake.head_sha,
+    }
+    resp = await cockpit.post("/v1/factory/agent/prs", body)
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+def _issue_rules(cockpit: Cockpit) -> list[str]:
+    return [i.rule for i in cockpit.store.list_issues(cockpit.fid, limit=100)]
+
+
+@pytest.mark.usefixtures("watched")
+async def test_a_claim_while_ci_runs_waits_and_the_pr_turns_ready_without_another(
+    cockpit: Cockpit,
+) -> None:
+    fake = _github_pr(FakeCheck("tests-rollout-scheduled", status="IN_PROGRESS"))
+    pr = await _poll(cockpit, fake)
+    assert (pr.ready, (pr.gates or {}).get("checks")) == (False, "pending")
+    pl = cockpit.world.id("pl")
+
+    for _ in range(3):
+        body = await _claim_ready(cockpit, fake)
+        assert (body["ready"], body["claim_mismatch"]) == (False, False)
+        assert (body["claim_status"], body["claim_gates"]) == ("early", ["checks"])
+    row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+    # No claim attempt used, nothing escalated, the PL told once.
+    assert (row.state, row.iteration, row.spent.get("streak") or 0) == ("running", 0, 0)
+    assert loop_decisions(cockpit) == []
+    assert not {"claim.mismatch", "loop.exhausted"} & set(_issue_rules(cockpit))
+    waits = [t for t in cockpit.mailer.texts_to(pl) if t.startswith("[Factory loop · WAIT")]
+    assert len(waits) == 1
+    assert waits[0].startswith("[Factory loop · WAIT · PR #9724 · CI pending on aaaaaaa]")
+    assert "Pending: pending checks: tests-rollout-scheduled" in waits[0]
+    claims = len(cockpit.events("pr.claim"))
+
+    # CI goes green: the gates move the PR to ready, no new claim needed.
+    fake.checks = [FakeCheck("tests-rollout-scheduled")]
+    pr = await _poll(cockpit, fake)
+    assert pr.ready
+    assert len(cockpit.events("pr.claim")) == claims
+    assert [e.kind for e in cockpit.events("pr.ready")] == ["pr.ready"]
+    assert any("READY FOR HUMAN MERGE" in t for t in cockpit.mailer.texts_to(pl))
+    row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+    assert (row.state, row.iteration, row.last_verdict) == ("running", 0, "CLAIMED")
+    assert (row.spent["waiting"], row.spent["waiting_since"]) == (None, None)
+    assert row.last_reason == "gates green at aaaaaaa: the early READY claim held"
+    step = pipeline.next_step(
+        pr, pr.gates or {}, cockpit.store.list_loops(cockpit.fid, pr_id=pr.id), None, [], None
+    )
+    assert step.name == pipeline.ASK_SENTINEL
+    assert loop_decisions(cockpit) == []
+    assert "loop.exhausted" not in _issue_rules(cockpit)
+
+
+@pytest.mark.usefixtures("watched")
+async def test_a_claim_on_failed_ci_is_refuted_and_counted(cockpit: Cockpit) -> None:
+    fake = _github_pr(FakeCheck("tests-rollout-scheduled", conclusion="FAILURE"))
+    pr = await _poll(cockpit, fake)
+    for _ in range(2):
+        body = await _claim_ready(cockpit, fake)
+        assert (body["claim_status"], body["claim_gates"]) == ("refuted", ["checks"])
+    row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+    assert (row.state, row.iteration, row.spent["streak"]) == ("exhausted", 2, 2)
+    assert row.last_verdict == "MISMATCH"
+    [decision] = loop_decisions(cockpit)
+    assert decision.options[0]["action"] == "fresh_restart"
+    assert {"claim.mismatch", "loop.exhausted"} <= set(_issue_rules(cockpit))
+    pl = cockpit.world.id("pl")
+    assert not any(t.startswith("[Factory loop · WAIT") for t in cockpit.mailer.texts_to(pl))
+
+
+@pytest.mark.usefixtures("watched")
+async def test_an_early_claim_is_refuted_when_its_check_then_fails(cockpit: Cockpit) -> None:
+    """CI goes red at the head an early claim waits on: it counts after all, as before."""
+    fake = _github_pr(FakeCheck("tests-rollout-scheduled", status="IN_PROGRESS"))
+    pr = await _poll(cockpit, fake)
+    pl = cockpit.world.id("pl")
+    for i, head in enumerate((H1, H2)):
+        if i:
+            now = time.time()
+            fake.push(
+                head, now - 100, [FakeCheck("tests-rollout-scheduled", status="IN_PROGRESS")]
+            )
+            fake.comment(f"<!-- factory:review sha={head} verdict=APPROVE -->", now - 50)
+            pr = await _poll(cockpit, fake)
+        body = await _claim_ready(cockpit, fake)
+        assert (body["claim_status"], body["claim_mismatch"]) == ("early", False)
+        row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+        assert (row.last_verdict, row.spent["waiting"]) == ("EARLY", head[:7])
+        fake.checks = [FakeCheck("tests-rollout-scheduled", conclusion="FAILURE")]
+        pr = await _poll(cockpit, fake)
+        assert (pr.gates or {}).get("checks") == "fail"
+        row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+        assert (row.iteration, row.spent["streak"], row.last_verdict) == (i + 1, i + 1, "MISMATCH")
+        assert (row.spent["waiting"], row.spent["waiting_since"]) == (None, None)
+        if not i:
+            assert (row.state, row.last_reason) == (
+                "running",
+                "READY claim at aaaaaaa refuted: checks",
+            )
+    assert (row.state, row.last_reason) == (
+        "exhausted",
+        "2 READY claims in a row the server's gates or Sentinel refuted",
+    )
+    [decision] = loop_decisions(cockpit)
+    assert decision.options[0]["action"] == "fresh_restart"
+    assert {"claim.mismatch", "loop.exhausted"} <= set(_issue_rules(cockpit))
+    waits = [t for t in cockpit.mailer.texts_to(pl) if t.startswith("[Factory loop · WAIT")]
+    assert [w.split("]", 1)[0] for w in waits] == [
+        "[Factory loop · WAIT · PR #9724 · CI pending on aaaaaaa",
+        "[Factory loop · WAIT · PR #9724 · CI pending on bbbbbbb",
+    ]
+    # A third early claim on the exhausted loop only counts: no WAIT, no new decision.
+    fake.push(H3, time.time(), [FakeCheck("tests-rollout-scheduled", status="IN_PROGRESS")])
+    await _poll(cockpit, fake)
+    assert (await _claim_ready(cockpit, fake))["claim_status"] == "early"
+    row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+    assert (row.state, row.spent["early"], row.spent.get("waiting")) == ("exhausted", 3, None)
+    assert len(loop_decisions(cockpit)) == 1
+    assert len([t for t in cockpit.mailer.texts_to(pl) if "[Factory loop · WAIT" in t]) == 2
+
+
+async def _early(cockpit: Cockpit, pr: FactoryPr, head: str, gates: list[str]) -> None:
+    await emit(
+        cockpit,
+        "pr.claim",
+        pr_id=pr.id,
+        claim="ready_for_human_merge",
+        head_sha=head,
+        claim_mismatch=True,
+        claim_status="early",
+        claim_gates=gates,
+    )
+
+
+@pytest.mark.parametrize(
+    ("name", "to", "evidence"),
+    [
+        ("review", "fail", {"verdict": "CHANGES", "sha": H1, "at": 1, "blocking": 1}),
+        ("verify", "fail", {"sha": H1, "at": 1, "reason": "code: 500 on /status"}),
+        ("demo", "fail", {}),
+        ("mergeable", "fail", {}),
+        ("draft", "pending", {}),
+    ],
+)
+async def test_any_gate_failing_at_the_waited_head_refutes_the_early_claim(
+    cockpit: Cockpit, name: str, to: str, evidence: dict[str, Any]
+) -> None:
+    await plan(cockpit, "route")
+    pr = make_pr(cockpit, "route")
+    await gate(cockpit, pr, "checks", "pass", H1)
+    if name != "draft":
+        await gate(cockpit, pr, name, "pending", H1)
+    await _early(cockpit, pr, H1, [name])
+    assert loop_of(cockpit, "claim", loops.pr_subject(pr.id)).spent["waiting"] == "aaaaaaa"
+    await gate(cockpit, pr, name, to, H1, **evidence)
+    row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+    assert (row.iteration, row.spent["streak"], row.last_verdict) == (1, 1, "MISMATCH")
+    assert row.last_reason == f"READY claim at aaaaaaa refuted: {name}"
+    assert row.spent["waiting"] is None
+    [iteration] = [e for e in cockpit.events("loop.iteration") if e.data["kind"] == "claim"]
+    assert (iteration.data["late"], iteration.data["refuted"]) == (True, [name])
+
+
+async def test_a_claim_judged_on_stale_gates_is_judged_again_when_observed(
+    cockpit: Cockpit,
+) -> None:
+    """The route said early, but CI failed before the loop saw the claim: refuted, no WAIT."""
+    await plan(cockpit, "route")
+    pr = make_pr(cockpit, "route")
+    await gate(cockpit, pr, "checks", "fail", H1)
+    await _early(cockpit, pr, H1, ["checks"])
+    row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+    assert (row.iteration, row.spent["streak"], row.last_verdict) == (1, 1, "MISMATCH")
+    assert row.spent["early"] == 1 and row.spent.get("waiting") is None
+    assert "loop.waiting" not in kinds(cockpit)
+
+
+async def test_a_new_head_or_a_closed_pr_lapses_the_wait_without_counting(
+    cockpit: Cockpit,
+) -> None:
+    await plan(cockpit, "route")
+    pr = make_pr(cockpit, "route")
+    pl = cockpit.world.id("pl")
+    await gate(cockpit, pr, "checks", "pending", H1)
+    await _early(cockpit, pr, H1, ["checks"])
+    # The IC merges the base in: CI restarts on H2, the claim at H1 lapses.
+    await gate(cockpit, pr, "checks", "pending", H2)
+    row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+    assert (row.state, row.iteration, row.spent.get("streak") or 0) == ("running", 0, 0)
+    assert (row.last_verdict, row.last_reason) == (
+        "LAPSED",
+        "head moved past aaaaaaa: the READY claim lapsed",
+    )
+    assert row.spent["waiting"] is None
+    # An early claim at the new head waits on it and says so once more.
+    await _early(cockpit, pr, H2, ["checks"])
+    assert loop_of(cockpit, "claim", loops.pr_subject(pr.id)).spent["waiting"] == "bbbbbbb"
+    waits = [t for t in cockpit.mailer.texts_to(pl) if t.startswith("[Factory loop · WAIT")]
+    assert len(waits) == 2 and "CI pending on bbbbbbb" in waits[1]
+    # Closed without merge: the tick lapses the wait too.
+    cockpit.store.update_pr(pr.id, state="closed")
+    members = [cockpit.world.get("lead_a"), cockpit.world.get("pl")]
+    await loops.tick(cockpit.app.state, members, [], now=time.time())
+    row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+    assert (row.state, row.iteration, row.last_verdict) == ("running", 0, "LAPSED")
+    assert row.last_reason == "PR closed: the READY claim at bbbbbbb lapsed"
+
+
+async def test_an_early_claim_seen_after_the_pr_turned_ready_holds_at_once(
+    cockpit: Cockpit,
+) -> None:
+    """The poller won the race (pr.ready first): no wait is left behind, no WAIT mail."""
+    await plan(cockpit, "route")
+    pr = make_pr(cockpit, "route")
+    pl = cockpit.world.id("pl")
+    cockpit.store.update_pr(pr.id, ready=True, gates={"checks": "pass", "draft": "pass"})
+    await emit(cockpit, "pr.ready", pr_id=pr.id)
+    await _early(cockpit, pr, H1, ["checks"])
+    row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+    assert (row.state, row.last_verdict, row.spent.get("waiting")) == ("running", "CLAIMED", None)
+    assert "loop.waiting" not in kinds(cockpit)
+    # Sentinel verifies H1; the base moves on (mergeable recomputes): a re-claim waits and says so.
+    await emit(cockpit, "pr.claim", pr_id=pr.id, sentinel_verdict="verified", head_sha=H1)
+    assert loop_of(cockpit, "claim", loops.pr_subject(pr.id)).state == "converged"
+    cockpit.store.update_pr(pr.id, ready=False, gates={"checks": "pass", "mergeable": "pending"})
+    await _early(cockpit, pr, H1, ["mergeable"])
+    row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+    assert (row.state, row.last_verdict, row.spent["waiting"]) == ("running", "EARLY", "aaaaaaa")
+    waits = [t for t in cockpit.mailer.texts_to(pl) if t.startswith("[Factory loop · WAIT")]
+    assert [w.split("]", 1)[0] for w in waits] == [
+        "[Factory loop · WAIT · PR #9631 · mergeable pending on aaaaaaa"
+    ]
+    # Sentinel verifies again: the loop converges and keeps no wait.
+    await emit(cockpit, "pr.claim", pr_id=pr.id, sentinel_verdict="verified", head_sha=H1)
+    row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+    assert (row.state, row.spent["waiting"], row.spent["waiting_since"]) == (
+        "converged",
+        None,
+        None,
+    )
+
+
+@pytest.mark.usefixtures("watched")
+async def test_a_wait_on_a_hung_check_stalls_and_keep_waiting_raises_wait_h(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Implement converged on an earlier head, CI hangs on this one: a bounded wait, a decision."""
+    clock = FakeClock()
+    monkeypatch.setattr(loops, "_clock", clock)
+    await plan(cockpit, "route")
+    await start(cockpit, "route")
+    pr = make_pr(cockpit, "route")
+    pl = cockpit.world.id("pl")
+    members = [cockpit.world.get("lead_a"), cockpit.world.get("lead_b"), cockpit.world.get("pl")]
+    await gate(cockpit, pr, "checks", "pending", H1)
+    await gate(cockpit, pr, "checks", "pass", H1)
+    assert implement(cockpit, "route").state == "converged"
+    await gate(cockpit, pr, "checks", "pending", H2)
+    await _early(cockpit, pr, H2, ["checks"])
+    subject = loops.pr_subject(pr.id)
+    await loops.tick(cockpit.app.state, members, [], now=clock.advance(3600))
+    # Another early claim mid-wait: no new mail, the wait still counts from the first.
+    await _early(cockpit, pr, H2, ["checks"])
+    assert loop_of(cockpit, "claim", subject).state == "running"
+    await loops.tick(cockpit.app.state, members, [], now=clock.advance(3600))
+    row = loop_of(cockpit, "claim", subject)
+    assert (row.state, row.last_reason) == ("stalled", "READY claim at bbbbbbb waited 2 h on CI")
+    assert (row.iteration, row.spent["early"]) == (0, 2)
+    [decision] = loop_decisions(cockpit)
+    assert [o["label"] for o in decision.options] == ["Keep waiting", "Pause project", "Dismiss"]
+    assert decision.options[0]["recommended"]
+    assert decision.question == "PR #9631: claim 0/2 stalled - what next?"
+    assert "loop.stalled" in _issue_rules(cockpit)
+    assert cockpit.mailer.texts_to(pl)[-1] == (
+        f"[Factory loop · STALLED · PR #9631 · claim 0/2 · {decision.ref}] PR #9631 still "
+        "waits on its gates: re-run a check that hung, do not claim READY again; the server "
+        "sends READY FOR HUMAN MERGE when they pass.\n"
+        "Why: READY claim at bbbbbbb waited 2 h on CI. Keep the rest of the project moving."
+    )
+    assert len([t for t in cockpit.mailer.texts_to(pl) if "[Factory loop · WAIT" in t]) == 1
+
+    await decisions.answer_decision(
+        cockpit.app.state, decision.id, user_id="carol", option_id="wait"
+    )
+    row = loop_of(cockpit, "claim", subject)
+    assert (row.state, row.spec["wait_h"], row.spent["waiting"]) == ("running", 4, "bbbbbbb")
+    assert cockpit.mailer.texts_to(pl)[-1] == (
+        f"[Factory loop · BUDGET RAISED · T-1 · claim wait_h 2 h→4 h by carol · "
+        f"{decision.ref}] Keep waiting for the gates of PR #9631; do not claim READY again: "
+        "the server sends READY FOR HUMAN MERGE when they pass."
+    )
+    await loops.tick(cockpit.app.state, members, [], now=clock.advance(3600))
+    assert loop_of(cockpit, "claim", subject).state == "running"
+    await loops.tick(cockpit.app.state, members, [], now=clock.advance(3600))
+    row = loop_of(cockpit, "claim", subject)
+    assert (row.state, row.last_reason) == ("stalled", "READY claim at bbbbbbb waited 4 h on CI")
+    [again] = [d for d in loop_decisions(cockpit) if d.status == "open"]
+    assert again.id != decision.id
+    # The check passes at last: the PR turns ready, the claim held, the stall ends unanswered.
+    cockpit.store.update_pr(pr.id, ready=True, gates={"checks": "pass"})
+    await emit(cockpit, "pr.ready", pr_id=pr.id)
+    row = loop_of(cockpit, "claim", subject)
+    assert (row.state, row.last_verdict, row.spent["waiting"]) == ("running", "CLAIMED", None)
+    assert cockpit.store.get_decision(again.id).status == "expired"
+    assert cockpit.mailer.texts_to(pl)[-1].startswith(
+        f"[Factory loop · RESUMED · PR #9631 · claim 0/2 · {again.ref}]"
+    )
+    assert "loop.stalled" not in [
+        i.rule for i in cockpit.store.list_issues(cockpit.fid, limit=100) if i.status == "open"
+    ]
+
+
+async def test_a_paused_project_does_not_stall_a_wait(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.factory import LABEL_STATE
+
+    clock = FakeClock()
+    monkeypatch.setattr(loops, "_clock", clock)
+    await plan(cockpit, "route")
+    pr = make_pr(cockpit, "route")
+    await gate(cockpit, pr, "checks", "pending", H1)
+    await _early(cockpit, pr, H1, ["checks"])
+    pl = cockpit.world.get("pl")
+    cockpit.world.store.set_labels(pl.id, {LABEL_STATE: "paused"})
+    members = [cockpit.world.get("lead_a"), cockpit.world.get("pl")]
+    await loops.tick(cockpit.app.state, members, [], now=clock.advance(3 * 3600))
+    assert loop_of(cockpit, "claim", loops.pr_subject(pr.id)).state == "running"
+    cockpit.world.store.set_labels(pl.id, {LABEL_STATE: "active"})
+    await loops.tick(cockpit.app.state, members, [], now=clock.advance(60))
+    row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+    assert (row.state, row.last_reason) == ("stalled", "READY claim at aaaaaaa waited 3 h on CI")
+
+
+async def test_a_stalled_wait_that_ends_refuted_swaps_its_decision(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    clock = FakeClock()
+    monkeypatch.setattr(loops, "_clock", clock)
+    await plan(cockpit, "route")
+    pr = make_pr(cockpit, "route")
+    pl = cockpit.world.id("pl")
+    members = [cockpit.world.get("lead_a"), cockpit.world.get("pl")]
+    await emit(
+        cockpit,
+        "pr.claim",
+        pr_id=pr.id,
+        claim="ready_for_human_merge",
+        head_sha=H1,
+        claim_mismatch=True,
+        claim_status="refuted",
+        claim_gates=["checks"],
+    )
+    await gate(cockpit, pr, "checks", "pending", H1)
+    await _early(cockpit, pr, H1, ["checks"])
+    await loops.tick(cockpit.app.state, members, [], now=clock.advance(2 * 3600))
+    [wait] = loop_decisions(cockpit)
+    assert loop_of(cockpit, "claim", loops.pr_subject(pr.id)).state == "stalled"
+    # The hung check finally fails: the second refuted claim in a row exhausts the loop.
+    await gate(cockpit, pr, "checks", "fail", H1)
+    row = loop_of(cockpit, "claim", loops.pr_subject(pr.id))
+    assert (row.state, row.iteration, row.spent["streak"]) == ("exhausted", 2, 2)
+    assert cockpit.store.get_decision(wait.id).status == "expired"
+    [exhausted] = [d for d in loop_decisions(cockpit) if d.status == "open"]
+    assert exhausted.options[0]["action"] == "fresh_restart"
+    assert row.decision_id == exhausted.id
+    assert cockpit.mailer.texts_to(pl)[-1].startswith(
+        f"[Factory loop · EXHAUSTED · PR #9631 · claim 2/2 · {exhausted.ref}] Hold PR #9631"
+    )
 
 
 # ── Wall and no-progress (fake clock) ──────────────────────────

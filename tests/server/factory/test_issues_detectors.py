@@ -488,6 +488,35 @@ async def test_claim_mismatch(world: FactoryWorld) -> None:
     assert _one(world, "claim.mismatch").status == "resolved"
 
 
+async def test_an_early_claim_is_no_mismatch(world: FactoryWorld) -> None:
+    """Only pending gates disagree (CI running): no finding, and an open one stays open."""
+    pr = _pr(world)
+    data = {"pr_id": pr.id, "claim": "ready_for_human_merge", "claim_mismatch": True}
+    await _emit(world, "pr.claim", data={**data, "claim_status": "early"})
+    assert _issues(world) == []
+    await _emit(world, "pr.claim", data={**data, "claim_status": "refuted"})
+    await _emit(world, "pr.claim", data={**data, "claim_status": "early"})
+    row = _one(world, "claim.mismatch")
+    assert (row.count, row.status) == (1, "open")
+
+
+async def test_a_late_refutation_is_a_mismatch_until_the_pr_turns_ready(
+    world: FactoryWorld,
+) -> None:
+    """A gate failed at the head an early claim waited on (the claim loop says so)."""
+    pr = _pr(world)
+    loop = {"loop_id": "l" * 32, "kind": "claim", "pr_id": pr.id, "verdict": "MISMATCH"}
+    await _emit(world, "loop.iteration", data=loop)
+    assert _issues(world) == []
+    late = {**loop, "late": True, "head": "aaaaaaa", "refuted": ["checks"]}
+    await _emit(world, "loop.iteration", data=late)
+    row = _one(world, "claim.mismatch")
+    assert (row.target, row.status) == (f"pr:{pr.id}", "open")
+    assert row.evidence is not None and row.evidence["refuted"] == ["checks"]
+    await _emit(world, "pr.ready", data={"pr_id": pr.id})
+    assert _one(world, "claim.mismatch").status == "resolved"
+
+
 async def test_ci_flaky_is_a_fact(world: FactoryWorld) -> None:
     pr = _pr(world)
     other = "b" * 40

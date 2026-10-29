@@ -293,7 +293,8 @@ async def test_pr_registration_upserts_the_row_and_records_claims(cockpit: Cockp
 
     again = (await cockpit.pr("pl", url=PR_URL + "/", claim="ready_for_human_merge")).json()
     assert again["pr_id"] == row.id
-    assert again["claim_mismatch"] is True
+    # No gates computed yet: early, nothing to fix (only a refuted claim is a mismatch).
+    assert (again["claim_status"], again["claim_mismatch"]) == ("early", False)
     assert len(cockpit.store.list_prs(cockpit.factory_id)) == 1
 
 
@@ -303,7 +304,8 @@ async def test_the_claim_event_carries_claim_mismatch(cockpit: Cockpit) -> None:
         return [e.data or {} for e in found]
 
     first = (await cockpit.pr("pl", claim="ready_for_human_merge")).json()
-    assert first["claim_mismatch"] is True
+    # The reply flags only a refuted claim; the event keeps "not ready" for calibration.
+    assert (first["claim_status"], first["claim_mismatch"]) == ("early", False)
     cockpit.store.update_pr(first["pr_id"], ready=True)
     second = (await cockpit.pr("pl", claim="ready_for_human_merge")).json()
     assert second["claim_mismatch"] is False
@@ -313,6 +315,24 @@ async def test_the_claim_event_carries_claim_mismatch(cockpit: Cockpit) -> None:
         ("ready_for_human_merge", True, False),
         ("ready_for_human_merge", False, True),
         ("opened", False, True),
+    ]
+    # No gate failed before the poller ran: early (it waits), then held.
+    assert [d["claim_status"] for d in claims()] == ["early", "held", None]
+    assert first["claim_status"] == "early" and second["claim_status"] == "held"
+
+
+async def test_a_ready_claim_without_a_head_is_stored_at_the_judged_head(
+    cockpit: Cockpit,
+) -> None:
+    """The claim loop pins it to the head its gates were judged at, not a later one."""
+    first = (await cockpit.pr("pl", claim="opened")).json()
+    cockpit.store.update_pr(first["pr_id"], head_sha="c" * 40, gates={"checks": "pending"})
+    body = (await cockpit.pr("pl", claim="ready_for_human_merge")).json()
+    assert body["claim_status"] == "early"
+    data = [e.data or {} for e in cockpit.store.find_events(cockpit.factory_id, "pr.claim", 0)]
+    assert [(d["claim"], d["head_sha"]) for d in data] == [
+        ("opened", None),
+        ("ready_for_human_merge", "c" * 40),
     ]
 
 
@@ -413,10 +433,12 @@ async def test_registration_waits_for_a_running_poller(
     assert body["gates"] == gates
     assert body["reasons"] == ["checks failing: lint"]
     assert body["claim_mismatch"] is True
+    assert (body["claim_status"], body["claim_gates"]) == ("refuted", ["checks"])
     # The stored claim is judged against the refreshed gates too.
     (claim,) = cockpit.store.find_events(cockpit.factory_id, "pr.claim", 0)
     assert claim.data is not None
     assert (claim.data["claim_mismatch"], claim.data["refreshed"]) == (True, True)
+    assert (claim.data["claim_status"], claim.data["claim_gates"]) == ("refuted", ["checks"])
 
 
 # ── Envs and previews ──────────────────────────────────────────

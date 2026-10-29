@@ -12,13 +12,17 @@ answer's compare-and-set) updates the loop and the task and mails the PL
 exactly what to do: ``BUDGET RAISED``, ``SWITCH VENDOR`` or ``FRESH
 RESTART``; ``abandon_task`` and ``mark_done`` answer as a decision with an
 instruction line; ``pause`` and ``dismiss`` run as on any server decision.
-Operators may raise attempts by one; money is for owners.
+Operators may raise attempts by one; money is for owners. A READY claim that
+only pending gates disagree with gets ``[Factory loop · WAIT · …]`` instead
+(:func:`wait_notice`): it opens nothing and uses no claim attempt. A wait past
+the claim loop's ``wait_h`` stalls it: a ``Keep waiting`` decision.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
@@ -42,11 +46,15 @@ from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.envelope import quote_spoofed_lines
 from omnigent.server.factory.loops import (
+    CLAIM_EARLY,
+    DEFAULT_BUDGETS,
     Change,
     _spent,
+    claim_status,
     engine_mode,
     limit_of,
     task_label,
+    wait_words,
 )
 from omnigent.stores.factory_store import norm_id
 
@@ -249,6 +257,30 @@ def decision_for(
             ],
             None,
         )
+    if loop.kind == "claim" and state == "stalled":
+        return (
+            question,
+            "\n".join(
+                [
+                    *context,
+                    "A gate the PL's early READY claim waits on has not finished (a hung CI "
+                    "run?). The PR turns ready by itself once its gates pass.",
+                ]
+            ),
+            [
+                _option(
+                    "wait",
+                    "Keep waiting",
+                    ACTION_RAISE_BUDGET,
+                    target,
+                    wait=True,
+                    recommended=True,
+                ),
+                *pause,
+                _option("dismiss", "Dismiss", ACTION_DISMISS, target),
+            ],
+            None,
+        )
     if loop.kind == "claim":
         return (
             question,
@@ -308,6 +340,11 @@ def escalation_text(facts: LoopFacts, state: str, ref: str | None) -> str:
         return f"{head} {body}\n{why}"
     if facts.task is not None and loop.kind in ("implement", "review"):
         body = f"Do not dispatch {facts.task.key} again{until}."
+    elif loop.kind == "claim" and state == "stalled" and facts.pr is not None:
+        body = (
+            f"PR #{facts.pr.number} still waits on its gates: re-run a check that hung, do not "
+            "claim READY again; the server sends READY FOR HUMAN MERGE when they pass."
+        )
     elif facts.pr is not None:
         body = f"Hold PR #{facts.pr.number}{until}."
     else:
@@ -350,11 +387,13 @@ async def _escalate(
     if current.kind in ("plan", "ci", "intake", "improve"):
         return
     question, context, options, assignee = decision_for(facts, state)
+    # A claim's hung wait asks something else than its refuted claims: its own decision.
+    wait = current.kind == "claim" and state == "stalled"
     opened = await server_decisions.open_decision(
         app_state,
         fid,
         source=SOURCE_LOOP,
-        dedupe_key=f"loop:{current.id}",
+        dedupe_key=f"loop:{current.id}" + (":wait" if wait else ""),
         question=question,
         context=context,
         options=options,
@@ -367,6 +406,10 @@ async def _escalate(
         return
     decision, deduped = opened
     await asyncio.to_thread(store.update_loop, current.id, decision_id=decision.id)
+    previous = current.decision_id
+    if current.kind == "claim" and previous and norm_id(previous) != norm_id(decision.id):
+        # A wait that stalled, then ended refuted: its "Keep waiting?" no longer applies.
+        await server_decisions.expire_decision(app_state, previous)
     if deduped:
         return
     await events.emit(
@@ -534,6 +577,48 @@ async def reconcile(app_state: Any, deps: FactoryDeps, factory_id: str) -> None:
                 )
     except Exception:  # noqa: BLE001 - the next tick retries
         _logger.warning("factory loops: reconcile failed for %s", factory_id, exc_info=True)
+
+
+def wait_text(facts: LoopFacts, pending: Sequence[str], sha7: str) -> str:
+    """The ``[Factory loop · WAIT · PR #<n> · CI pending on <sha7>]`` mail: an early claim."""
+    head = f"[Factory loop · WAIT · {_what(facts)} · {wait_words(pending)} pending on {sha7}]"
+    body = (
+        "Your READY claim came early: no gate failed, so it uses no claim attempt. Do not "
+        "claim again; the server marks the PR ready and sends READY FOR HUMAN MERGE when "
+        "the gates pass."
+    )
+    gates = facts.pr.gates if facts.pr is not None and isinstance(facts.pr.gates, dict) else {}
+    # One flattened line after "Pending:", so a reason never starts a line of its own.
+    reasons = [" ".join(str(r).split())[:200] for r in gates.get("reasons") or [] if r][:3]
+    if any(reasons):
+        body += "\nPending: " + "; ".join(r for r in reasons if r)
+    return f"{head} {body}"
+
+
+async def wait_notice(
+    app_state: Any, deps: FactoryDeps, loop: FactoryLoop, change: Change
+) -> None:
+    """
+    Tell the PL its READY claim came early, unless it landed meanwhile. Never raises.
+
+    Landed: the loop no longer waits on that head, or the PR's gates now hold
+    or refute the claim (the PL gets the READY FOR HUMAN MERGE or the
+    checks-failed notice instead).
+    """
+    try:
+        current = await asyncio.to_thread(deps.factory_store.get_loop, loop.id)
+        sha7 = str(change.data.get("head") or "")
+        if current is None or _spent(current).get("waiting") != sha7:
+            return
+        facts = await asyncio.to_thread(read_facts, deps, current)
+        if facts.pl is None:
+            return
+        if facts.pr is not None and claim_status(facts.pr, sha7)[0] != CLAIM_EARLY:
+            return
+        pending = [str(g) for g in change.data.get("pending") or []]
+        control.send_text(app_state, facts.pl.id, wait_text(facts, pending, sha7), kind="info")
+    except Exception:  # noqa: BLE001 - the loop.waiting event already records it
+        _logger.warning("factory loops: no WAIT notice for %s", loop.id, exc_info=True)
 
 
 async def violation(app_state: Any, loop: FactoryLoop, change: Change) -> None:
@@ -729,7 +814,8 @@ async def plan_answer(
     spec = dict(loop.spec or {})
     if action == ACTION_RAISE_BUDGET:
         key, step = _raise_key(loop, option)
-        before = spec.get(key) or 0
+        # A claim loop from before ``wait_h`` existed waited the default (the step) so far.
+        before = spec.get(key) or (step if key == "wait_h" else 0)
         after = before + step if key != "usd" else round(float(before) * 2 or step, 2)
         answer.raised = (_fmt(key, before), _fmt(key, after))
         answer.extra = {"key": key, "value": after}
@@ -775,14 +861,16 @@ def _raise_key(loop: FactoryLoop, option: dict[str, Any]) -> tuple[str, float]:
         if isinstance(value, int | float) and not isinstance(value, bool) and value > 0:
             return key, value
     if option.get("wait"):
-        return "wall_h", float((loop.spec or {}).get("wall_h") or 8)
+        key = "wait_h" if loop.kind == "claim" else "wall_h"
+        default = DEFAULT_BUDGETS["claim" if loop.kind == "claim" else "implement"][key]
+        return key, float((loop.spec or {}).get(key) or default)
     return ("rounds" if loop.kind == "review" else "attempts"), 1
 
 
 def _fmt(key: str, value: Any) -> str:
     if key == "usd":
         return f"${float(value):.0f}"
-    if key == "wall_h":
+    if key in ("wall_h", "wait_h"):
         return f"{float(value):g} h"
     return str(int(value)) if isinstance(value, int | float) else str(value)
 
@@ -813,6 +901,12 @@ def answer_text(answer: LoopAnswer, by: str) -> str:
             body = (
                 "Re-run the demo at the PR's head (env_keeper PREVIEW first when its preview "
                 "is not ready at that head)."
+            )
+        elif what == "wait_h":
+            number = facts.pr.number if facts.pr is not None else "<n>"
+            body = (
+                f"Keep waiting for the gates of PR #{number}; do not claim READY again: the "
+                "server sends READY FOR HUMAN MERGE when they pass."
             )
         elif what == "wall_h":
             body = f"Keep {key} running; give its worker the next step if it waits on you."
@@ -1050,5 +1144,7 @@ __all__ = [
     "resumed_text",
     "settle",
     "violation",
+    "wait_notice",
+    "wait_text",
     "worker_of",
 ]

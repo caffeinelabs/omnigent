@@ -283,7 +283,7 @@ if they stay silent the board is still right.
 | Tool | Roles | Use |
 |---|---|---|
 | `sys_factory_ask(question, options, context?, blocking=true, dedupe_key?, for?, subject?)` | every role | Ask the human. Opens D-<n> in the cockpit and the inbox and returns at once; the answer arrives as a message. Replaces DECISIONS NEEDED lists. `for` routes it to `owners`, `operators` or a person on the roster (default: the project's human owner, else operators). |
-| `sys_factory_pr(url, task?, claim?, sentinel_verdict?, head_sha?, note?)` | every role (`sentinel_verdict`: leads) | Register a PR, claim `opened` / `ready_for_human_merge` / `abandoned`, or record Sentinel's verdict. Returns the server's gates `{ready, gates, reasons, claim_mismatch}` and the PR body's review links (`review_url`, `preview_url`). |
+| `sys_factory_pr(url, task?, claim?, sentinel_verdict?, head_sha?, note?)` | every role (`sentinel_verdict`: leads) | Register a PR, claim `opened` / `ready_for_human_merge` / `abandoned`, or record Sentinel's verdict. Returns the server's gates `{ready, gates, reasons, claim_mismatch, claim_status}` and the PR body's review links (`review_url`, `preview_url`). |
 | `sys_factory_env(state, env_id, urls, deployed{sha, ref, tooling_overlay?}, pr?, namespace?, resources?, note?)` | `project_lead`, `env_keeper` | Report the dev env (no `pr`) or the factory preview of PR `pr`. `state=deploying` beyond `OMNIGENT_FACTORY_MAX_PREVIEWS` live previews is refused with `409 preview_cap` and park candidates. |
 | `sys_factory_demo(pr_url, head_sha, title, manifest_path?, files?, …)` | `project_lead`, `env_keeper`, `demo` | Upload a demo (with `manifest_path`, everything the harness's `demo.json` lists) and get back `comment_markdown` / `comment_path` to post on the PR. |
 | `sys_factory_task(op, tasks?, key?, project?, harness?, result?, note?)` | `project_lead` (own project), `lead` (`get`, `list`), `ic` (`report` on its own task) | The work graph: `upsert`, `ready` (the wave with `title_to_use`, `card_text`, `cost_budget`), `start`, `done`, `fail`, `cancel`, `get`, `list`, `report`. |
@@ -858,6 +858,18 @@ ci, claim, plan, intake, improve); `factory_loops` keeps one row per
   one up. Review is *dry* when a round adds no new fingerprint and fixes none,
   *thrashing* when a fixed one returns. The supervisor tick adds wall and
   no-progress stalls, the plan loop and the `done_check` decision.
+- **Claims** (`loops.claim_status`, judged on the fresh gates and stored on
+  `pr.claim`): `held` (ready), `refuted` (a failed gate, a draft, a moved head,
+  a PR not open; or Sentinel `not_verified`) or `early` (only pending gates:
+  CI running, mergeable computing, no review, verify or demo on the head yet).
+  Only refuted claims count toward `mismatches` (and `sys_factory_pr` answers
+  `claim_mismatch: true` only for them); an early one uses no iteration,
+  raises no `claim.mismatch` and mails the PL `[Factory loop · WAIT · …]` once
+  per head. The claim loop then waits on that head: `pr.ready` there holds the
+  claim, a gate failing there (`gate.changed`) refutes it after all (counted,
+  `claim.mismatch`), a new head or a closed PR lapses it, and a wait past
+  `loops.claim.wait_h` (2 h) stalls the loop (`loop.stalled`, a `Keep waiting`
+  decision that raises `wait_h`).
 - **Engine mode** (root label `omnigent.factory.engine_mode`, default
   `assist`; stamped on a new PL and mirrored by the tick, where the guard
   reads it): `observe` records (detectors open incidents); `assist` also opens

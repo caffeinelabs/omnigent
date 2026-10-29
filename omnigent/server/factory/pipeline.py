@@ -135,7 +135,9 @@ def next_step(
     if pr.state != "open" or not head:
         return Step(NONE, head, "the PR is not open")
     for loop in loops:
-        if loop.kind in _HUMAN_LOOPS and loop.state in _BAD:
+        # A claim stalled on its wait only asks whether to keep waiting: the gates move on.
+        waits = loop.kind == "claim" and loop.state == "stalled"
+        if loop.kind in _HUMAN_LOOPS and loop.state in _BAD and not waits:
             return Step(WAIT_HUMAN, head, f"{loop.kind} {loop.state}")
     if pr.is_draft or gates.get("draft") == "pending":
         return Step(NONE, head, "a draft: its author is still coding")
