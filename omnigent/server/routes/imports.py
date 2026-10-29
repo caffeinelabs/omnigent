@@ -23,6 +23,7 @@ from omnigent.host.frames import HostImportLocalByIdFrame, HostImportLocalFrame,
 from omnigent.native.native_coding_agents import native_coding_agent_for_harness
 from omnigent.server.auth import LEVEL_OWNER, AuthProvider
 from omnigent.server.host_registry import HostConnection, HostRegistry
+from omnigent.server.managed_host_isolation import foreign_managed_host_error, is_managed_host
 from omnigent.server.routes._auth_helpers import require_access, require_user
 from omnigent.server.routes._content_type import require_json_content_type
 from omnigent.server.routes._host_launch import host_absent_error, resolve_host_owner
@@ -306,6 +307,34 @@ def create_imports_router(
     """Create the local-session import router."""
     router = APIRouter()
 
+    async def _authorize_import_host(user_id: str | None, host_id: str) -> str | None:
+        """Authorize binding an imported session to *host_id* (``/imports``).
+
+        A registered host must be the caller's (:func:`resolve_host_owner`:
+        403 for another user's) and never a managed sandbox: a sandbox runs
+        only the session it was provisioned for, and an imported session is
+        never that session. The CLI posts its own machine's host identity,
+        which may never have registered with THIS server; the import then
+        proceeds unbound rather than failing (or persisting a binding to a
+        host the server cannot attribute to the caller).
+
+        :param user_id: Authenticated caller, or ``None`` when auth is disabled.
+        :param host_id: The ``host_id`` the import names.
+        :returns: The host id to bind, or ``None`` to import unbound.
+        :raises HTTPException: 403 when the host belongs to another user.
+        :raises OmnigentError: 400 when the host is a managed sandbox.
+        """
+        if host_store is None:
+            return host_id
+        if await asyncio.to_thread(host_store.get_host, host_id) is None:
+            return None
+        host = await asyncio.to_thread(
+            resolve_host_owner, user_id=user_id, host_id=host_id, host_store=host_store
+        )
+        if is_managed_host(host):
+            raise foreign_managed_host_error(host_id, code=ErrorCode.INVALID_INPUT)
+        return host_id
+
     async def _persist_import(
         *,
         source: ImportSource,
@@ -423,6 +452,13 @@ def create_imports_router(
         """Import one normalized transcript, optionally replacing its prior import."""
         user_id = require_user(request, auth_provider)
         items = [item.to_item() for item in body.items]
+        bind_host_id: str | None = None
+        if body.host_id is not None and body.workspace is not None:
+            # The host is bound only alongside a workspace (see _persist_import).
+            # Checked before anything is written (a forced re-import deletes the
+            # prior row below): the bind target must be the caller's, never a
+            # managed sandbox.
+            bind_host_id = await _authorize_import_host(user_id, body.host_id)
         existing = await asyncio.to_thread(
             conversation_store.find_conversation_by_external_session_id,
             body.external_session_id,
@@ -454,7 +490,7 @@ def create_imports_router(
             user_id=user_id,
             native_title=body.title,
             project_id=body.project_id,
-            host_id=body.host_id,
+            host_id=bind_host_id,
         )
 
         response.status_code = 201
@@ -482,6 +518,11 @@ def create_imports_router(
         user_id = require_user(request, auth_provider)
         # Owns-host check + live connection, mirroring the runner-launch path.
         host = resolve_host_owner(user_id=user_id, host_id=body.host_id, host_store=host_store)
+        if is_managed_host(host):
+            # Every imported session would be bound to the sandbox, which only
+            # runs the session it was provisioned for. Refused before any read
+            # reaches the host.
+            raise foreign_managed_host_error(body.host_id, code=ErrorCode.INVALID_INPUT)
         host_conn = host_registry.get(body.host_id)
         if host_conn is None:
             # A live host absent from THIS replica is a wrong-replica landing, not

@@ -1027,6 +1027,8 @@ class ConversationStore(ABC):
         key: str,
         value: str | None = None,
         limit: int = 2000,
+        *,
+        include_archived: bool = False,
     ) -> list[str]:
         """
         Return ids of non-archived conversations carrying a label.
@@ -1034,13 +1036,15 @@ class ConversationStore(ABC):
         A reverse index over ``conversation_labels``: e.g. every member of a
         software factory is the set of sessions labelled
         ``omnigent.factory.id == <root id>``. Archived conversations are
-        excluded, mirroring :meth:`list_projects`. No ACL filter — callers
-        that surface the result to a user must check access per id.
+        excluded by default, mirroring :meth:`list_projects`. No ACL filter —
+        callers that surface the result to a user must check access per id.
 
         :param key: Label key to match, e.g. ``"omnigent.factory.id"``.
         :param value: When set, only rows whose value equals it, e.g.
             ``"conv_root123"``. ``None`` matches any value.
         :param limit: Maximum number of ids to return.
+        :param include_archived: Also match archived conversations (e.g. the
+            owner of a managed sandbox claim, which archiving does not release).
         :returns: Matching conversation ids, oldest conversation first.
         """
         ...

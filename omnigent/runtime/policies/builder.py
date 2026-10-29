@@ -37,7 +37,7 @@ from omnigent.policies.schema import (
 )
 from omnigent.policies.types import PolicyLLMClient
 from omnigent.runtime.credentials.databricks import resolve_databricks_workspace
-from omnigent.runtime.policies.engine import PolicyEngine
+from omnigent.runtime.policies.engine import PolicyEngine, is_sandbox_label
 from omnigent.spec.types import (
     DEFAULT_ASK_TIMEOUT,
     AgentSpec,
@@ -1026,10 +1026,15 @@ def _seed_and_load_labels(
         existing = _load_existing_labels(conversation_id, conversation_store)
     # A spec never seeds an omnigent.factory.* label: an uploaded bundle could
     # otherwise enrol its session in a factory (or set a server-only label).
+    # Nor an omnigent.sandbox.* one: a seeded claim would take over another
+    # session's managed sandbox.
     to_seed = {
         key: ldef.initial
         for key, ldef in label_defs.items()
-        if ldef.initial is not None and key not in existing and not is_factory_label(key)
+        if ldef.initial is not None
+        and key not in existing
+        and not is_factory_label(key)
+        and not is_sandbox_label(key)
     }
     if to_seed:
         conversation_store.set_labels(conversation_id, to_seed)

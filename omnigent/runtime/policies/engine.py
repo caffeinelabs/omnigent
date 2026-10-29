@@ -31,6 +31,26 @@ from omnigent.spec.types import (
 )
 from omnigent.stores.conversation_store import ConversationStore
 
+# Server-owned managed-sandbox labels (the sandbox's owner claim, the repos a
+# relaunch re-clones). Mirrors the server's ``MANAGED_SANDBOX_LABEL_NAMESPACE``
+# (a test cross-checks it); a policy write or spec seed forging one could claim
+# another session's sandbox, so neither ever lands under it.
+SANDBOX_LABEL_NAMESPACE = "omnigent.sandbox."
+
+
+def is_sandbox_label(key: str) -> bool:
+    """
+    Return whether *key* is a server-owned managed-sandbox label.
+
+    Matched like the turn id: surrounding whitespace and case are ignored, so
+    a near-miss spelling cannot slip past.
+
+    :param key: A label key, e.g. ``"omnigent.sandbox.host_id"``.
+    :returns: ``True`` for any key in the ``omnigent.sandbox.`` namespace.
+    """
+    return key.strip().casefold().startswith(SANDBOX_LABEL_NAMESPACE)
+
+
 # Number of recent conversation items the engine fetches from
 # the conversation store and threads onto :class:`EvaluationContext`
 # before dispatching to each policy. ``PromptPolicy``'s classifier
@@ -492,6 +512,8 @@ class PolicyEngine:
           the new value is not in it.
         - The key is an ``omnigent.factory.*`` label, which only
           the server and the factory routes write.
+        - The key is an ``omnigent.sandbox.*`` label (managed-sandbox
+          ownership and relaunch state), which only the server writes.
         - The key is the server-stamped turn id (``omnigent.turn``).
 
         Other keys with no ``LabelDef`` are set freely (omnigent
@@ -817,7 +839,7 @@ class PolicyEngine:
         set_labels: dict[str, str],
     ) -> dict[str, str]:
         """
-        Drop writes that violate a declared :class:`LabelDef`, factory labels and the turn id.
+        Drop writes that violate a declared :class:`LabelDef`, and server-owned labels.
 
         Called before persistence. Silent-drop semantics match
         POLICIES.md §10 / §13 — runtime label failures don't
@@ -830,9 +852,15 @@ class PolicyEngine:
         """
         result: dict[str, str] = {}
         for key, value in set_labels.items():
-            # Factory membership and the turn id are server-owned; a policy
-            # never writes them (a forged turn id would reset per-turn caps).
-            if is_factory_label(key) or key.strip().casefold() == TURN_LABEL:
+            # Factory membership, managed-sandbox state and the turn id are
+            # server-owned; a policy never writes them (a forged turn id would
+            # reset per-turn caps, a forged sandbox claim would take over
+            # another session's sandbox).
+            if (
+                is_factory_label(key)
+                or key.strip().casefold() == TURN_LABEL
+                or is_sandbox_label(key)
+            ):
                 continue
             ldef = self.label_defs.get(key)
             if ldef is None:

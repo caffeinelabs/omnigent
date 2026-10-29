@@ -12,16 +12,21 @@ The policy:
 
 * A managed host admits a session when the session's spawn-tree root (the
   session itself, or the top-level session a sub-agent descends from) owns
-  it. Ownership is the server-written claim label
+  it, or when the session itself holds the claim (a sub-agent created with a
+  sandbox of its own). Ownership is the server-written claim label
   :data:`MANAGED_HOST_CLAIM_LABEL_KEY`: stamped when the managed launch binds
   the session, carried by a live-terminal transfer (the native ``/clear`` /
   ``/fork`` rotation), never inherited by a fork, never client-writable (the
   whole ``omnigent.sandbox.`` label namespace is server-reserved).
 * A root bound before claims existed carries none. It is admitted when it is
   already bound to the host, unless positive evidence shows the binding was
-  borrowed: the session was created by a scheduled-task fire, which never
-  provisions a sandbox, so a fired session bound to a managed host is always
-  on another session's sandbox.
+  borrowed: another session holds the host's claim (the sandbox was
+  provisioned for that session), or the session was created by a
+  scheduled-task fire, which never provisions a sandbox, so a fired session
+  bound to a managed host is always on another session's sandbox.
+* Only the session the sandbox belongs to takes it down when it is deleted
+  (:func:`session_owns_managed_host`): a sub-agent riding its root's sandbox,
+  or a borrower bound to it, never terminates it.
 * Shared hosts (a user's laptop, SSH hosts, anything without a
   ``sandbox_provider``) admit every session, exactly as before.
 """
@@ -30,7 +35,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any, Final
+from typing import Any, Final, cast
 
 from omnigent.entities import Conversation
 from omnigent.errors import ErrorCode, OmnigentError
@@ -83,6 +88,7 @@ def managed_host_admits(
     host: object,
     *,
     fired_by_schedule: bool = False,
+    claimed_by_another: bool = False,
 ) -> bool:
     """
     Decide whether the session tree rooted at *root* may run on *host*.
@@ -91,6 +97,9 @@ def managed_host_admits(
     :param host: The host the tree would run on.
     :param fired_by_schedule: Whether *root* was created by a scheduled-task
         fire. Only consulted for a claim-less root.
+    :param claimed_by_another: Whether a session other than *root* holds the
+        host's claim. Only consulted for a claim-less root: the sandbox was
+        provisioned for the claimant, so a claim-less binding to it is borrowed.
     :returns: ``True`` for shared hosts; for a managed host, ``True`` only
         when the tree owns it.
     """
@@ -102,7 +111,34 @@ def managed_host_admits(
         return claim == host_id
     if root.host_id != host_id:
         return False
-    return not fired_by_schedule
+    return not fired_by_schedule and not claimed_by_another
+
+
+def managed_host_claimed_by_another(
+    host_id: str,
+    conversation_id: str,
+    conversation_store: Any,
+) -> bool:
+    """
+    Return whether a session other than *conversation_id* claims *host_id*.
+
+    Archived sessions count: archiving does not release a sandbox, so an
+    archived owner still owns its pod. Store failures propagate — a refusal
+    here would release (and re-provision) a legitimate legacy owner, so an
+    unanswerable question fails the request instead of guessing.
+
+    :param host_id: The managed host.
+    :param conversation_id: The claim-less root being checked.
+    :param conversation_store: Store with the label reverse index.
+    :returns: ``True`` when another session holds the claim.
+    """
+    claimants = conversation_store.list_conversation_ids_with_label(
+        MANAGED_HOST_CLAIM_LABEL_KEY,
+        host_id,
+        limit=2,
+        include_archived=True,
+    )
+    return any(claimant != conversation_id for claimant in claimants)
 
 
 def session_fired_by_schedule(conversation_id: str, scheduled_task_store: Any | None) -> bool:
@@ -148,13 +184,76 @@ def session_may_use_host(
     """
     if not is_managed_host(host):
         return True
+    host_id = getattr(host, "host_id", None)
+    if _holds_claim(conv, host_id):
+        # The sandbox was provisioned for this very session (e.g. a sub-agent
+        # created with its own managed sandbox).
+        return True
     root = spawn_tree_root(conv, conversation_store)
-    fired = (
-        MANAGED_HOST_CLAIM_LABEL_KEY not in (root.labels or {})
-        and root.host_id == getattr(host, "host_id", None)
-        and session_fired_by_schedule(root.id, scheduled_task_store)
+    # Borrowed-binding evidence only matters for a claim-less root already
+    # bound to the host (everything else is decided by the claim / binding).
+    legacy_bound = (
+        isinstance(host_id, str)
+        and MANAGED_HOST_CLAIM_LABEL_KEY not in (root.labels or {})
+        and root.host_id == host_id
     )
-    return managed_host_admits(root, host, fired_by_schedule=fired)
+    fired = legacy_bound and session_fired_by_schedule(root.id, scheduled_task_store)
+    claimed_by_another = (
+        legacy_bound
+        and not fired
+        and managed_host_claimed_by_another(cast(str, host_id), root.id, conversation_store)
+    )
+    return managed_host_admits(
+        root,
+        host,
+        fired_by_schedule=fired,
+        claimed_by_another=claimed_by_another,
+    )
+
+
+def session_owns_managed_host(
+    conv: Conversation,
+    host: object | None,
+    conversation_store: Any,
+    *,
+    scheduled_task_store: Any | None = None,
+) -> bool:
+    """
+    Decide whether *conv* is itself the session *host* was provisioned for.
+
+    Stricter than :func:`session_may_use_host`: a sub-agent may RUN on its
+    root's sandbox but never owns it, so deleting one must not terminate the
+    sandbox. Only the session holding the claim itself (the sandbox was
+    provisioned for it, or a live terminal carried the claim to it), or a
+    legacy claim-less top-level session bound to the host with no evidence of
+    borrowing, owns it.
+
+    Synchronous (store reads); run it via ``asyncio.to_thread`` on the loop.
+
+    :param conv: The session (e.g. one being deleted).
+    :param host: The host it is bound to, or ``None``.
+    :param conversation_store: Store used for the claim reverse lookup.
+    :param scheduled_task_store: Optional store supplying the legacy
+        borrowed-binding evidence.
+    :returns: ``True`` only for a managed host owned by *conv* itself.
+    """
+    if not is_managed_host(host):
+        return False
+    if _holds_claim(conv, getattr(host, "host_id", None)):
+        return True
+    if conv.kind == "sub_agent" or (conv.root_conversation_id or conv.id) != conv.id:
+        return False
+    return session_may_use_host(
+        conv, host, conversation_store, scheduled_task_store=scheduled_task_store
+    )
+
+
+def _holds_claim(conv: Conversation, host_id: object) -> bool:
+    """Whether *conv* itself carries the server-written claim on *host_id*."""
+    return (
+        isinstance(host_id, str)
+        and (conv.labels or {}).get(MANAGED_HOST_CLAIM_LABEL_KEY) == host_id
+    )
 
 
 def foreign_managed_host_message(host_id: str) -> str:
@@ -189,6 +288,7 @@ async def require_host_admits_new_session(
     parent_session_id: str | None,
     host_store: Any | None,
     conversation_store: Any,
+    scheduled_task_store: Any | None = None,
 ) -> None:
     """
     Reject a session create that names another session's managed host.
@@ -204,6 +304,9 @@ async def require_host_admits_new_session(
     :param parent_session_id: The create's parent, or ``None`` (top-level).
     :param host_store: Persistent host registrations, or ``None`` (skip).
     :param conversation_store: Store used to resolve the parent's root.
+    :param scheduled_task_store: Optional store supplying the legacy
+        borrowed-binding evidence for the parent's root (a sub-agent of a
+        fired session bound to the sandbox is refused here, not at launch).
     :raises OmnigentError: 400 when the host is another session's sandbox.
     """
     if host_store is None:
@@ -216,7 +319,11 @@ async def require_host_admits_new_session(
     if parent_session_id is not None:
         parent = await asyncio.to_thread(conversation_store.get_conversation, parent_session_id)
         if parent is not None and await asyncio.to_thread(
-            session_may_use_host, parent, host, conversation_store
+            session_may_use_host,
+            parent,
+            host,
+            conversation_store,
+            scheduled_task_store=scheduled_task_store,
         ):
             return
     raise foreign_managed_host_error(host_id, code=ErrorCode.INVALID_INPUT)
@@ -229,8 +336,10 @@ __all__ = [
     "foreign_managed_host_message",
     "is_managed_host",
     "managed_host_admits",
+    "managed_host_claimed_by_another",
     "require_host_admits_new_session",
     "session_fired_by_schedule",
     "session_may_use_host",
+    "session_owns_managed_host",
     "spawn_tree_root",
 ]

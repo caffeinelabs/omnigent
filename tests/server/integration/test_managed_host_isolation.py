@@ -38,6 +38,7 @@ from omnigent.server.managed_host_isolation import MANAGED_HOST_CLAIM_LABEL_KEY
 from omnigent.server.managed_hosts import parse_sandbox_config
 from omnigent.server.scheduled import fire as fire_mod
 from omnigent.server.scheduled.fire import FireDeps, build_run_now
+from omnigent.session_import import IMPORT_SOURCE_LABEL_KEY
 from omnigent.stores.agent_store.sqlalchemy_store import SqlAlchemyAgentStore
 from omnigent.stores.artifact_store.local import LocalArtifactStore
 from omnigent.stores.comment_store.sqlalchemy_store import SqlAlchemyCommentStore
@@ -425,3 +426,131 @@ async def test_deleting_borrowed_binding_keeps_the_members_sandbox(env: _Env) ->
     assert env.fake.terminated == []
     assert env.host_store.get_host(pod_id) is not None
     assert env.conv_store.get_conversation(pl_id).host_id == pod_id  # type: ignore[union-attr]
+
+
+async def _seed_claude_native_agent(env: _Env, db_uri: str) -> None:
+    """Register the built-in agent an import binds to (lifespan is not run)."""
+    from omnigent.db.utils import builtin_agent_id
+
+    src = await create_test_agent(env.client, name="claude-native-ui-src")
+    store = SqlAlchemyAgentStore(db_uri)
+    uploaded = store.get(str(src["id"]))
+    assert uploaded is not None
+    store.create(
+        builtin_agent_id("claude-native-ui"),
+        name="claude-native-ui",
+        bundle_location=uploaded.bundle_location,
+    )
+
+
+def _import_payload(host_id: str) -> dict[str, object]:
+    return {
+        "source": "claude",
+        "external_session_id": f"isolation-{uuid.uuid4().hex}",
+        "workspace": "/root",
+        "host_id": host_id,
+        "items": [
+            {
+                "type": "message",
+                "response_id": "claude:turn-1",
+                "data": {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            },
+        ],
+    }
+
+
+async def test_imports_naming_the_sandbox_are_refused(env: _Env, db_uri: str) -> None:
+    """POST /v1/imports and /v1/imports/local never bind a session to another
+    session's pod (an imported session is never the one the pod was made for)."""
+    agent = await create_test_agent(env.client, name="isolation-agent")
+    pl_id, pod_id = await _start_factory_member(env, agent["id"])
+    pod = env.pods[pod_id]
+    await _seed_claude_native_agent(env, db_uri)
+
+    imported = await env.client.post("/v1/imports", json=_import_payload(pod_id))
+    assert imported.status_code == 400, imported.text
+    assert "managed sandbox" in imported.text
+
+    local = await env.client.post(
+        "/v1/imports/local", json={"host_id": pod_id, "source": "claude", "limit": 5}
+    )
+    assert local.status_code == 400, local.text
+    assert "managed sandbox" in local.text
+
+    # Nothing was created, let alone launched on the pod.
+    assert env.conv_store.list_conversation_ids_with_label(IMPORT_SOURCE_LABEL_KEY) == []
+    assert [frame.session_id for frame in pod.launches] == [pl_id]
+    # An import naming a host this server never registered still lands, unbound.
+    unbound = await env.client.post(
+        "/v1/imports", json={**_import_payload(pod_id), "host_id": uuid.uuid4().hex}
+    )
+    assert unbound.status_code == 201, unbound.text
+    unbound_row = env.conv_store.get_conversation(unbound.json()["session_id"])
+    assert unbound_row is not None and unbound_row.host_id is None
+
+
+async def test_claimless_binding_to_a_claimed_sandbox_never_runs_there(env: _Env) -> None:
+    """A claim-less session bound to the PL's pod by any path (a pre-fix import,
+    no scheduled-run evidence) is a borrower because the PL holds the claim: a
+    runner launch naming the pod is refused, a message moves it onto a sandbox
+    of its own, and the pod only ever runs the PL."""
+    agent = await create_test_agent(env.client, name="isolation-agent")
+    pl_id, pod_id = await _start_factory_member(env, agent["id"])
+    pod = env.pods[pod_id]
+    borrower = env.conv_store.create_conversation(
+        agent_id=agent["id"], title="imported", host_id=pod_id, workspace="/root"
+    )
+    assert MANAGED_HOST_CLAIM_LABEL_KEY not in borrower.labels
+
+    launch = await env.client.post(
+        f"/v1/hosts/{pod_id}/runners",
+        json={"session_id": borrower.id, "workspace": "/root"},
+    )
+    assert launch.status_code == 409, launch.text
+    assert "managed sandbox" in launch.text
+
+    await env.client.post(
+        f"/v1/sessions/{borrower.id}/events",
+        json={
+            "type": "message",
+            "data": {"role": "user", "content": [{"type": "input_text", "text": "go"}]},
+        },
+        timeout=30.0,
+    )
+    repaired = env.conv_store.get_conversation(borrower.id)
+    assert repaired is not None
+    assert repaired.host_id is not None and repaired.host_id != pod_id
+    assert repaired.labels[MANAGED_HOST_CLAIM_LABEL_KEY] == repaired.host_id
+    assert {frame.session_id for frame in env.pods[repaired.host_id].launches} == {borrower.id}
+
+    assert [frame.session_id for frame in pod.launches] == [pl_id]
+    assert env.fake.terminated == []
+
+
+async def test_only_deleting_the_owner_terminates_its_sandbox(env: _Env) -> None:
+    """A sub-agent of the PL may name the PL's pod, but deleting it leaves the
+    pod running (it never owned it); deleting the PL itself tears it down."""
+    agent = await create_test_agent(env.client, name="isolation-agent")
+    pl_id, pod_id = await _start_factory_member(env, agent["id"])
+    child = await env.client.post(
+        "/v1/sessions",
+        json={
+            "agent_id": agent["id"],
+            "parent_session_id": pl_id,
+            "host_id": pod_id,
+            "workspace": "/root/workspace",
+        },
+    )
+    assert child.status_code == 201, child.text
+    child_row = env.conv_store.get_conversation(child.json()["id"])
+    assert child_row is not None and child_row.host_id == pod_id
+
+    deleted_child = await env.client.delete(f"/v1/sessions/{child_row.id}")
+    assert deleted_child.status_code == 200, deleted_child.text
+    assert env.fake.terminated == []
+    assert env.host_store.get_host(pod_id) is not None
+
+    deleted_pl = await env.client.delete(f"/v1/sessions/{pl_id}")
+    assert deleted_pl.status_code == 200, deleted_pl.text
+    assert len(env.fake.terminated) == 1
+    assert env.host_store.get_host(pod_id) is None

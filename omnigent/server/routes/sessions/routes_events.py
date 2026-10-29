@@ -232,7 +232,7 @@ from omnigent.stores import AgentStore, ConversationStore
 from omnigent.stores.artifact_store import ArtifactStore
 from omnigent.stores.conversation_store import RUNNER_LIVENESS_TTL_S, runner_seen_is_fresh
 from omnigent.stores.file_store import FileStore
-from omnigent.stores.host_store import host_is_live
+from omnigent.stores.host_store import Host, host_is_live
 from omnigent.stores.permission_store import PermissionStore
 from omnigent.telemetry import emit as _tel_emit
 from omnigent.telemetry.events import SessionDeletedEvent as _TelSessionDeletedEvent
@@ -2473,6 +2473,25 @@ def register_events_routes(
             )
             for fid in deleted_file_ids:
                 await asyncio.to_thread(artifact_store.delete, fid)
+        # Decide BEFORE the row (and its claim label) is gone whether this
+        # session itself owns the managed sandbox it is bound to. Only the
+        # session the sandbox belongs to takes it down: a sub-agent riding its
+        # root's sandbox, or a session bound to another session's sandbox (a
+        # borrowed binding), must leave it running.
+        owned_managed_host: Host | None = None
+        host_store_for_managed = getattr(request.app.state, "host_store", None)
+        if conv.host_id is not None and host_store_for_managed is not None:
+            from omnigent.server.managed_host_isolation import session_owns_managed_host
+
+            bound_host = await asyncio.to_thread(host_store_for_managed.get_host, conv.host_id)
+            if bound_host is not None and await asyncio.to_thread(
+                session_owns_managed_host,
+                conv,
+                bound_host,
+                conversation_store,
+                scheduled_task_store=getattr(request.app.state, "scheduled_task_store", None),
+            ):
+                owned_managed_host = bound_host
         _interrupt_fenced_sessions.discard(session_id)
         _intentional_stop_sessions.discard(session_id)
         deleted = await conversation_store.delete_conversation(session_id)
@@ -2505,40 +2524,23 @@ def register_events_routes(
         managed_launches_for_delete = getattr(request.app.state, "managed_launches", None)
         if managed_launches_for_delete is not None:
             managed_launches_for_delete.finish(session_id)
-        # Managed-host cleanup: when the session's host is backed by a
-        # server-provisioned sandbox (host_type="managed"), terminate
-        # the sandbox and delete the host row — which also revokes its
-        # launch token. Best-effort by design — the provider's lifetime
-        # cap reaps stragglers. External (laptop) hosts have no
-        # sandbox_id and are never touched.
-        host_store_for_managed = getattr(request.app.state, "host_store", None)
-        if conv.host_id is not None and host_store_for_managed is not None:
-            from omnigent.server.managed_host_isolation import session_may_use_host
+        # Managed-host cleanup: when the session owns a server-provisioned
+        # sandbox (host_type="managed"; decided above, before the delete),
+        # terminate the sandbox and delete the host row — which also revokes
+        # its launch token. Best-effort by design — the provider's lifetime
+        # cap reaps stragglers. External (laptop) hosts have no sandbox_id
+        # and are never touched.
+        if owned_managed_host is not None and host_store_for_managed is not None:
+            from omnigent.server.managed_hosts import terminate_managed_host
 
-            bound_host = await asyncio.to_thread(host_store_for_managed.get_host, conv.host_id)
-            # A session bound to ANOTHER session's sandbox (a borrowed binding)
-            # must not take that sandbox down with it.
-            if (
-                bound_host is not None
-                and bound_host.sandbox_provider is not None
-                and await asyncio.to_thread(
-                    session_may_use_host,
-                    conv,
-                    bound_host,
-                    conversation_store,
-                    scheduled_task_store=getattr(request.app.state, "scheduled_task_store", None),
-                )
-            ):
-                from omnigent.server.managed_hosts import terminate_managed_host
-
-                await terminate_managed_host(
-                    bound_host,
-                    host_store_for_managed,
-                    # Supplies the launcher for the provider-side
-                    # terminate; None (config removed since launch)
-                    # still deletes the row and revokes the token.
-                    getattr(request.app.state, "sandbox_config", None),
-                )
+            await terminate_managed_host(
+                owned_managed_host,
+                host_store_for_managed,
+                # Supplies the launcher for the provider-side
+                # terminate; None (config removed since launch)
+                # still deletes the row and revokes the token.
+                getattr(request.app.state, "sandbox_config", None),
+            )
         try:
             import hashlib as _hashlib
             import time as _time

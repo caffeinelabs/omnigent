@@ -919,6 +919,7 @@ def register_core_routes(
                 parent_session_id=parsed_metadata.parent_session_id,
                 host_store=getattr(request.app.state, "host_store", None),
                 conversation_store=conversation_store,
+                scheduled_task_store=getattr(request.app.state, "scheduled_task_store", None),
             )
             os_env = getattr(spec, "os_env", None)
             canonical_workspace = await validate_uploaded_bundle_host_workspace(

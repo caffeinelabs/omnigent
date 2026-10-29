@@ -8821,6 +8821,7 @@ async def _create_session_from_existing_agent(
             parent_session_id=body.parent_session_id,
             host_store=getattr(request.app.state, "host_store", None),
             conversation_store=conversation_store,
+            scheduled_task_store=getattr(request.app.state, "scheduled_task_store", None),
         )
 
     # Top-level Smart Routing: "auto" on a native wrapper agent means the client

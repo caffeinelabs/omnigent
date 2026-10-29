@@ -141,37 +141,50 @@ def _get_image_compression_gate() -> asyncio.Semaphore:
     return _image_compression_gate
 
 
-async def _carry_managed_host_claim(
+async def _transfer_managed_host_claim(
     request: Request,
     source: Conversation,
-    target_session_id: str,
     conversation_store: Any,
-) -> None:
+) -> str | None:
     """
-    Carry a managed-sandbox claim along with a transferred live terminal.
+    Decide what a live-terminal transfer out of *source* may carry.
 
     The native ``/clear`` / ``/fork`` rotation moves the running terminal to a
-    fresh session; when the source's tree owns the managed sandbox the terminal
-    lives in, the rotated-to session joins that tree (see
-    :mod:`omnigent.server.managed_host_isolation`).
+    fresh session together with the source's host binding. On a managed
+    sandbox that binding is only carried when the source's tree owns the
+    sandbox; the rotated-to session then joins that tree through the claim
+    (see :mod:`omnigent.server.managed_host_isolation`). A source bound to
+    ANOTHER session's sandbox (a borrowed binding) is refused before anything
+    moves, so the transfer can never hand that sandbox to a further session.
+
+    Only a real claim is carried: a legacy claim-less tree moves its binding
+    alone (the target is then a claim-less root bound to the sandbox, exactly
+    as before claims existed). Minting a claim from legacy evidence would turn
+    every other claim-less root bound to the sandbox — possibly its actual
+    owner — into a borrower.
 
     :param request: The transfer request (supplies the host store).
-    :param source: The session the terminal moved out of (host-bound).
-    :param target_session_id: The session the terminal moved into.
-    :param conversation_store: Store holding both rows.
+    :param source: The session the terminal moves out of.
+    :param conversation_store: Store holding the rows.
+    :returns: The managed host id to stamp as the target's claim, or ``None``
+        when there is no claim to carry (unbound, shared host, legacy tree).
+    :raises OmnigentError: 409 when the source is bound to a managed sandbox
+        its tree does not own.
     """
     from omnigent.server.managed_host_isolation import (
         MANAGED_HOST_CLAIM_LABEL_KEY,
+        foreign_managed_host_error,
         is_managed_host,
         session_may_use_host,
+        spawn_tree_root,
     )
 
     host_store = getattr(request.app.state, "host_store", None)
     if host_store is None or source.host_id is None:
-        return
+        return None
     host = await asyncio.to_thread(host_store.get_host, source.host_id)
     if not is_managed_host(host):
-        return
+        return None
     if not await asyncio.to_thread(
         session_may_use_host,
         source,
@@ -179,12 +192,13 @@ async def _carry_managed_host_claim(
         conversation_store,
         scheduled_task_store=getattr(request.app.state, "scheduled_task_store", None),
     ):
-        return
-    await asyncio.to_thread(
-        conversation_store.set_labels,
-        target_session_id,
-        {MANAGED_HOST_CLAIM_LABEL_KEY: source.host_id},
-    )
+        raise foreign_managed_host_error(source.host_id)
+    if (source.labels or {}).get(MANAGED_HOST_CLAIM_LABEL_KEY) == source.host_id:
+        return source.host_id
+    root = await asyncio.to_thread(spawn_tree_root, source, conversation_store)
+    if (root.labels or {}).get(MANAGED_HOST_CLAIM_LABEL_KEY) != source.host_id:
+        return None
+    return source.host_id
 
 
 def register_resources_routes(
@@ -1417,6 +1431,9 @@ def register_resources_routes(
                 code=ErrorCode.INVALID_INPUT,
             )
         await _validate_session(target_session_id, request, LEVEL_EDIT)
+        # Before the runner moves anything: a terminal living in another
+        # session's managed sandbox never takes that sandbox along.
+        carried_claim = await _transfer_managed_host_claim(request, conv, conversation_store)
 
         path = f"/v1/sessions/{session_id}/resources/terminals/{terminal_id}/transfer"
         status, payload = await _proxy_post_to_runner(
@@ -1453,7 +1470,14 @@ def register_resources_routes(
                 conv.workspace,
                 conv.git_branch,
             )
-            await _carry_managed_host_claim(request, conv, target_session_id, conversation_store)
+            if carried_claim is not None:
+                from omnigent.server.managed_host_isolation import MANAGED_HOST_CLAIM_LABEL_KEY
+
+                await asyncio.to_thread(
+                    conversation_store.set_labels,
+                    target_session_id,
+                    {MANAGED_HOST_CLAIM_LABEL_KEY: carried_claim},
+                )
 
         _publish_and_persist_resource_event(
             session_id,

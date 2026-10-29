@@ -44,7 +44,12 @@ type ImportMode = "recent" | "session";
 export function ImportSessionsPanel() {
   const queryClient = useQueryClient();
   const { data: hosts } = useHosts({ refetchOnFocus: true });
-  const onlineHosts = useMemo(() => (hosts ?? []).filter((h) => h.status === "online"), [hosts]);
+  // A managed (cloud) sandbox runs only the session it was provisioned for, so
+  // the server refuses to import into one; offer only the caller's own machines.
+  const onlineHosts = useMemo(
+    () => (hosts ?? []).filter((h) => h.status === "online" && !h.sandbox_provider),
+    [hosts],
+  );
   const [hostId, setHostId] = useState<string | null>(null);
   const [source, setSource] = useState<ImportSourceSelector>("all");
   const [limit, setLimit] = useState(25);
