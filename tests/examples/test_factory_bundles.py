@@ -1235,12 +1235,23 @@ def test_the_integration_project_has_its_own_branch(pl: AgentSpec) -> None:
     from omnigent.server.factory.charter import normalize_charter, render_pl_charter
 
     prompt = " ".join((pl.instructions or "").split())
-    section = prompt[
-        prompt.index("KIND: integration.") : prompt.index("`~/factory/<slug>/plan.md`")
-    ]
+    pointer = prompt[prompt.index("KIND: integration.") : prompt.index("TASKS ARE SERVER TRUTH")]
     for token in (
         "no tasks, ICs, reviewers, demos or PRs",
         "heartbeats are off",
+        'Instead of KICKOFF and LOOP, run `load_skill("factory-pl-playbook")`',
+        '"Integration env"',
+    ):
+        assert token in pointer, token
+    # The steps live in the playbook, which keeps the prompt under the tmux cap.
+    playbook = (_PL_DIR / "skills" / "factory-pl-playbook" / "SKILL.md").read_text("utf-8")
+    section = " ".join(
+        _command_section(playbook, "## Integration env (`KIND: integration`)", ("\n## ",)).split()
+    )
+    for token in (
+        "no tasks, ICs, reviewers, demos or PRs",
+        "heartbeats are off",
+        "These steps replace KICKOFF and LOOP",
         'sys_session_send(agent="env_keeper", title="env", args={input: "UP base=<base>"})',
         "curl -fsS <app>/__factory/preview",
         "curl -fsS <api>/version",
@@ -1269,6 +1280,31 @@ def test_the_integration_project_has_its_own_branch(pl: AgentSpec) -> None:
     up = " ".join(_command_section(skill, "UP base=<base>:", ("STATUS",)).split())
     assert "If it exists, move it to the current head" in up
     assert "checkout --detach origin/<base>" in up
+
+
+def test_the_kickoff_preflight_lives_in_the_playbook(pl: AgentSpec) -> None:
+    """KICKOFF step 2 points at the playbook's worker preflight, which keeps every rule."""
+    prompt = " ".join((pl.instructions or "").split())
+    kickoff = prompt[prompt.index("KICKOFF. Do all") : prompt.index("LOOP on every")]
+    for token in (
+        'the playbook\'s "Preflight"',
+        '`claude-native: "needs-auth"` does NOT make',
+        "Never dispatch an unavailable worker",
+    ):
+        assert token in kickoff, token
+    playbook = (_PL_DIR / "skills" / "factory-pl-playbook" / "SKILL.md").read_text("utf-8")
+    section = " ".join(_command_section(playbook, "## Preflight", ("\n## ",)).split())
+    for token in (
+        "`sys_session_get_info({})`",
+        "`configured_harnesses`",
+        "`command -v claude codex`",
+        "`ic_codex` and `reviewer` need `codex-native: true`",
+        '`claude-native: "needs-auth"`',
+        "does NOT make them unavailable",
+        "only a missing `claude` binary does",
+        "Never dispatch an unavailable worker. Tell your lead",
+    ):
+        assert token in section, token
 
 
 def test_base_notices_have_dispatch_rows(pl: AgentSpec) -> None:
