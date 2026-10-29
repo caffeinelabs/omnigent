@@ -51,6 +51,9 @@ export const PL_DB = "a2fc64b9e92e54c8b2f0f78038df202d";
 export const PL_CACHE = "9d803e0e87b5587d844039f6cd433257";
 export const ENV_DB = "d289bc6187e25a7391d640cc597531a1";
 export const PR_9631 = "8f15c0f9a98e5831a39615fb58f35036";
+/** Why the dead cache-warm PL's relaunch failed, as the server records it. */
+export const PL_CACHE_DEAD_REASON =
+  "terminal_failed_to_start: RuntimeError: tmux launch failed (rc=1): command too long";
 
 const norm = (id: string | null | undefined) => (id ?? "").replace(/-/g, "").toLowerCase();
 
@@ -85,6 +88,7 @@ function rowOf(member: MemberView, tasks: TaskView[], issues: IssueView[]): Agen
     status: member.now?.status ?? member.status,
     state: member.state,
     health: member.health,
+    last_error: member.session_id === PL_CACHE ? PL_CACHE_DEAD_REASON : null,
     summary: member.summary,
     task: task
       ? {

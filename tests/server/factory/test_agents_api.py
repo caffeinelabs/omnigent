@@ -194,6 +194,26 @@ async def test_one_agent_has_tools_mail_tasks_issues_and_cost(
     ]
 
 
+async def test_a_dead_agent_row_says_why_it_failed(cockpit: Cockpit) -> None:
+    w = cockpit.world
+    pl, ic = w.id("pl"), w.id("ic")
+    cause = "terminal_failed_to_start: RuntimeError: tmux launch failed (rc=1): command too long"
+    w.store.set_labels(
+        pl, {"omnigent.factory.health": "dead", "omnigent.factory.dead_reason": cause}
+    )
+    snapshot.reset_cache()
+
+    resp = await _get(cockpit, f"/v1/factory/factories/{cockpit.fid}/agents/{pl}")
+
+    assert resp.status_code == 200, resp.text
+    agent = resp.json()["agent"]
+    assert (agent["health"], agent["last_error"]) == ("dead", cause)
+    fleet = await _get(cockpit, f"/v1/factory/factories/{cockpit.fid}/agents")
+    rows = {r["session_id"]: r for r in fleet.json()["data"]}
+    assert rows[pl]["last_error"] == cause
+    assert rows[ic]["last_error"] is None
+
+
 async def test_viewers_only_see_agents_they_may_read(cockpit: Cockpit) -> None:
     w = cockpit.world
 

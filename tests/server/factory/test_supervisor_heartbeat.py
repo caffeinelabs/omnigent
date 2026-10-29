@@ -456,7 +456,12 @@ async def test_a_recovered_member_drops_its_dead_stamp(supervision: Supervision)
     w, clock = supervision.world, supervision.clock
     pl = w.id("pl")
     w.store.set_labels(
-        pl, {F.LABEL_HEALTH: F.HEALTH_DEAD, F.LABEL_DEAD_ALERTED_AT: str(int(clock.now))}
+        pl,
+        {
+            F.LABEL_HEALTH: F.HEALTH_DEAD,
+            F.LABEL_DEAD_ALERTED_AT: str(int(clock.now)),
+            F.LABEL_DEAD_REASON: "terminal_failed_to_start",
+        },
     )
 
     clock.advance(PL_HEARTBEAT_S)
@@ -465,6 +470,7 @@ async def test_a_recovered_member_drops_its_dead_stamp(supervision: Supervision)
     labels = w.get("pl").labels
     assert labels[F.LABEL_HEALTH] == F.HEALTH_OK
     assert F.LABEL_DEAD_ALERTED_AT not in labels
+    assert F.LABEL_DEAD_REASON not in labels
 
 
 async def test_beats_and_failures_are_logged_as_events(supervision: Supervision) -> None:
@@ -501,6 +507,67 @@ async def test_a_dead_member_raises_a_needs_human_event(supervision: Supervision
     [event] = store.find_events(w.id("lead_a"), "needs_human", 0)
     assert event.from_id == pl and event.severity == "critical"
     assert event.data == {"reason": "relaunch_failed", "detail": "runner_unavailable"}
+
+
+async def test_a_dead_member_carries_the_runner_error_everywhere(
+    supervision: Supervision,
+) -> None:
+    """The failed-beat event, NEEDS HUMAN event and alert and the dead label name the cause."""
+    w, clock = supervision.world, supervision.clock
+    pl, lead_b = w.id("pl"), w.id("lead_b")
+    for lead in (w.id("lead_a"), lead_b):
+        w.store.set_labels(lead, {F.LABEL_HEARTBEAT_S: "0"})
+    error = "RuntimeError: tmux launch failed (rc=1): command too long"
+    cause = f"terminal_failed_to_start: {error}"
+    supervision.deliver.outcomes[pl] = [
+        DeliveryOutcome(False, "terminal_failed_to_start", retryable=True, detail=error)
+    ] * 3
+    clock.advance(PL_HEARTBEAT_S)
+    for _ in range(3):
+        await supervision.tick()
+        clock.advance(300)
+
+    store = w.app_state.factory.factory_store
+    last_failed = store.find_events(w.id("lead_a"), "heartbeat.failed", 0)[-1]
+    assert last_failed.data == {
+        "reason": "terminal_failed_to_start",
+        "failures": 3,
+        "detail": error,
+    }
+    assert last_failed.summary == f"Heartbeat to PL · api-version failed: {cause}"
+    [event] = store.find_events(w.id("lead_a"), "needs_human", 0)
+    assert event.data == {
+        "reason": "relaunch_failed",
+        "detail": "terminal_failed_to_start",
+        "error": error,
+    }
+    assert event.summary == f"PL · api-version: relaunch failed 3× ({cause})"
+    assert w.get("pl").labels[F.LABEL_DEAD_REASON] == cause
+    assert supervision.deliver.texts_to(lead_b) == [
+        f'[NEEDS HUMAN · relaunch of "PL · api-version" failed 3× ({cause})]'
+    ]
+
+
+async def test_a_dead_member_keeps_its_latest_cause(supervision: Supervision) -> None:
+    w, clock = supervision.world, supervision.clock
+    pl = w.id("pl")
+    supervision.deliver.outcomes[pl] = [DeliveryOutcome(False, "runner_unavailable")] * 3 + [
+        DeliveryOutcome(False, "terminal_failed_to_start", detail="RuntimeError: boom")
+    ]
+    clock.advance(PL_HEARTBEAT_S)
+    for _ in range(3):
+        await supervision.tick()
+        clock.advance(300)
+    assert w.get("pl").labels[F.LABEL_DEAD_REASON] == "runner_unavailable"
+
+    # Inside the alert interval no new alert goes out, but the cause follows the failure.
+    await supervision.tick()
+    assert (
+        w.get("pl").labels[F.LABEL_DEAD_REASON] == "terminal_failed_to_start: RuntimeError: boom"
+    )
+    assert (
+        len(w.app_state.factory.factory_store.find_events(w.id("lead_a"), "needs_human", 0)) == 1
+    )
 
 
 async def test_the_tick_reports_supervisor_health(supervision: Supervision) -> None:

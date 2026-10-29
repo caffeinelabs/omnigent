@@ -1815,6 +1815,11 @@ export interface AgentRowView {
   status: string;
   state: MemberState | null;
   health: string | null;
+  /**
+   * Why it last failed: the dead reason while dead, else its last failed
+   * turn's underlying error, e.g. `"RuntimeError: tmux launch failed (rc=1): command too long"`.
+   */
+  last_error?: string | null;
   summary: string | null;
   task: AgentTaskRef | null;
   loop: LoopChipView | null;

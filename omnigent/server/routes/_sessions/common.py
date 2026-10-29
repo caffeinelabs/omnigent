@@ -298,6 +298,10 @@ _LAST_TASK_ERROR_CAUSE_LABEL_KEY: str = "omnigent.last_task_error_cause"
 _LAST_TASK_ERROR_REMEDIATION_LABEL_KEY: str = "omnigent.last_task_error_remediation"
 
 
+# The runner's underlying error line when the message only points at its log.
+_LAST_TASK_ERROR_DETAIL_LABEL_KEY: str = "omnigent.last_task_error_detail"
+
+
 _LABEL_VALUE_MAX_LEN: int = LABEL_VALUE_MAX_LEN
 
 
@@ -1007,6 +1011,7 @@ __all__ = [
     "_LAST_CONTEXT_WINDOW_LABEL_KEY",
     "_LAST_TASK_ERROR_CAUSE_LABEL_KEY",
     "_LAST_TASK_ERROR_CODE_LABEL_KEY",
+    "_LAST_TASK_ERROR_DETAIL_LABEL_KEY",
     "_LAST_TASK_ERROR_MESSAGE_LABEL_KEY",
     "_LAST_TASK_ERROR_REMEDIATION_LABEL_KEY",
     "_LAST_TASK_ERROR_TITLE_LABEL_KEY",

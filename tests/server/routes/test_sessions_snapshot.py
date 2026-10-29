@@ -2675,7 +2675,46 @@ async def test_persist_error_labels_clears_stale_structured_fields() -> None:
     assert labels["omnigent.last_task_error_title"] == ""
     assert labels["omnigent.last_task_error_cause"] == ""
     assert labels["omnigent.last_task_error_remediation"] == ""
+    assert labels["omnigent.last_task_error_detail"] == ""
     assert _last_task_error_from_labels(labels) == {
         "code": "runner_error",
         "message": "turn setup failed",
+    }
+
+
+@pytest.mark.asyncio
+async def test_persist_error_labels_keep_the_runner_detail_sanitized() -> None:
+    """A relayed ``detail`` is stored as one redacted line and projected back.
+
+    The runner's terminal-start message only names its log; ``detail`` is the
+    real cause the factory and the cockpit show, so it must survive a reload.
+    It comes from a remote runner, so the server keeps only its first line and
+    redacts secret-shaped values again.
+    """
+    from omnigent.server.routes.sessions import _last_task_error_from_labels
+    from omnigent.server.schemas import ErrorDetail
+
+    captured: dict[str, dict[str, str]] = {}
+
+    class _MockStore:
+        def set_labels(self, session_id: str, updates: dict[str, str]) -> None:
+            captured[session_id] = updates
+
+    error = ErrorDetail(
+        code="native_terminal_start_failed",
+        message="Native Claude terminal failed to start; see the runner log for details: x",
+        detail="RuntimeError: tmux launch failed (rc=1): command too long\n  File secret.py",
+    )
+    await _persist_session_status_error_labels(
+        "cc33dd44ee55ff667788990011223344", error, _MockStore()
+    )  # type: ignore[arg-type]
+
+    labels = captured["cc33dd44ee55ff667788990011223344"]
+    assert labels["omnigent.last_task_error_detail"] == (
+        "RuntimeError: tmux launch failed (rc=1): command too long"
+    )
+    assert _last_task_error_from_labels(labels) == {
+        "code": "native_terminal_start_failed",
+        "message": "Native Claude terminal failed to start; see the runner log for details: x",
+        "detail": "RuntimeError: tmux launch failed (rc=1): command too long",
     }

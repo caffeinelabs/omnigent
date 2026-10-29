@@ -32,6 +32,7 @@ from typing import TYPE_CHECKING, Any, Final
 from omnigent.factory import (
     HEALTH_DEAD,
     ISSUE_OPEN_STATUSES,
+    LABEL_DEAD_REASON,
     LABEL_HEALTH,
     LABEL_ID,
     LABEL_PROJECT,
@@ -234,6 +235,10 @@ def _member(sid: str) -> str:
 
 def _title(conv: Conversation) -> str:
     return display_title(conv.title, conv.id)
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 # ── Activity poller hooks ──────────────────────────────────────
@@ -724,7 +729,13 @@ async def _dead_members(
         target = _member(conv.id)
         project = conv.labels.get(LABEL_PROJECT)
         if conv.labels.get(LABEL_HEALTH) == HEALTH_DEAD:
-            hits[target] = (f"{_title(conv)} dead · relaunch failed", project, {"health": "dead"})
+            reason = conv.labels.get(LABEL_DEAD_REASON)
+            summary = f"{_title(conv)} dead · relaunch failed"
+            hits[target] = (
+                _clip(f"{summary}: {reason}" if reason else summary, issues.SUMMARY_MAX),
+                project,
+                {"health": "dead", **({"reason": reason} if reason else {})},
+            )
             continue
         down = None
         if conv.labels.get(LABEL_STATE) == STATE_ACTIVE and sandbox_stage(conv.id) is None:

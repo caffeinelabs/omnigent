@@ -114,6 +114,18 @@ async def test_member_dead_from_the_health_label_and_relaunch_failure(world: Fac
     assert (row.status, row.resolved_by) == ("resolved", "server")
 
 
+async def test_member_dead_incident_names_the_relaunch_error(world: FactoryWorld) -> None:
+    """The incident says why the relaunch failed, not just that it did."""
+    pl = world.id("pl")
+    cause = "terminal_failed_to_start: RuntimeError: tmux launch failed (rc=1): command too long"
+    world.store.set_labels(pl, {F.LABEL_HEALTH: F.HEALTH_DEAD, F.LABEL_DEAD_REASON: cause})
+    await _tick(world)
+
+    row = _one(world, "member.dead")
+    assert row.summary == f"PL · api-version dead · relaunch failed: {cause}"
+    assert row.evidence == {"health": "dead", "reason": cause}
+
+
 async def test_member_dead_when_its_pod_is_gone_for_two_ticks(world: FactoryWorld) -> None:
     tunnels, hosts = _Registry(), _Registry()
     world.app_state.tunnel_registry = tunnels

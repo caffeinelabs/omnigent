@@ -188,7 +188,8 @@ class SysFactoryRosterTool(Tool):
         return (
             "List your software factory: every top-level member (leads and project "
             "leads) with role, project, supervisor, status, runner connectivity, "
-            "last activity, heartbeat, state, health, summary and URL, plus each "
+            "last activity, heartbeat, state, health, last_error (why it last failed, "
+            "e.g. the runner's terminal start error), summary and URL, plus each "
             "member's sub-agents. Your first call also registers you as a factory "
             "member if you are not one yet."
         )

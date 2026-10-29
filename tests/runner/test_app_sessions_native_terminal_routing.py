@@ -258,8 +258,8 @@ async def test_create_session_terminal_ensure_failure_returns_json_without_live_
 
     assert resp.status_code == 500
     # Structured code is preserved; the message names the runner log file so
-    # the reader can find the cause. The raw ImportError text ("requires the
-    # 'claude' CLI") must not appear in the HTTP body — only in that log.
+    # the reader can find the full trace there. The raw ImportError text
+    # ("requires the 'claude' CLI") stays out of the message.
     body = resp.json()
     error = body["error"]
     error_id = error["error_id"]
@@ -272,6 +272,8 @@ async def test_create_session_terminal_ensure_failure_returns_json_without_live_
         f"see the runner log for details: {pinned_runner_log} Error ID: {error_id}."
     )
     assert "requires the 'claude' CLI" not in error["message"]
+    # The cause rides separately, one line, for the server and the factory.
+    assert error["detail"] == "ImportError: Native Claude requires the 'claude' CLI on PATH."
 
 
 @dataclass

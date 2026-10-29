@@ -73,7 +73,7 @@ from omnigent.policies.types import EvaluationContext
 from omnigent.runner.identity import (
     token_bound_runner_id,
 )
-from omnigent.runner.launch_failure import classify_native_turn_error
+from omnigent.runner.launch_failure import classify_native_turn_error, failure_detail
 from omnigent.runner.routing import RunnerRouter
 from omnigent.runner.subagent_routing import ROUTING_DECISION_LABEL_KEY
 from omnigent.runner.transports.ws_tunnel.registry import TunnelRegistry
@@ -177,6 +177,7 @@ from omnigent.server.routes._sessions.common import (  # noqa: F401
     _LABEL_VALUE_MAX_LEN,
     _LAST_TASK_ERROR_CAUSE_LABEL_KEY,
     _LAST_TASK_ERROR_CODE_LABEL_KEY,
+    _LAST_TASK_ERROR_DETAIL_LABEL_KEY,
     _LAST_TASK_ERROR_MESSAGE_LABEL_KEY,
     _LAST_TASK_ERROR_REMEDIATION_LABEL_KEY,
     _LAST_TASK_ERROR_TITLE_LABEL_KEY,
@@ -4731,6 +4732,7 @@ async def _persist_session_status_error_labels(
             _LAST_TASK_ERROR_TITLE_LABEL_KEY: _truncate_label(error.title or ""),
             _LAST_TASK_ERROR_CAUSE_LABEL_KEY: _truncate_label(error.cause or ""),
             _LAST_TASK_ERROR_REMEDIATION_LABEL_KEY: _truncate_label(error.remediation or ""),
+            _LAST_TASK_ERROR_DETAIL_LABEL_KEY: _truncate_label(failure_detail(error.detail) or ""),
         }
         if error is not None
         else {
@@ -4739,6 +4741,7 @@ async def _persist_session_status_error_labels(
             _LAST_TASK_ERROR_TITLE_LABEL_KEY: "",
             _LAST_TASK_ERROR_CAUSE_LABEL_KEY: "",
             _LAST_TASK_ERROR_REMEDIATION_LABEL_KEY: "",
+            _LAST_TASK_ERROR_DETAIL_LABEL_KEY: "",
         }
     )
     try:
@@ -4761,8 +4764,9 @@ def _last_task_error_from_labels(labels: Mapping[str, str]) -> dict[str, str] | 
     become public ``last_task_error`` data for snapshots and child summaries.
 
     :param labels: Conversation labels, usually after closed-status projection.
-    :returns: ``{"code": "...", "message": "..."}``, or ``None`` when either
-        value is absent/cleared.
+    :returns: ``{"code": "...", "message": "..."}`` plus any of ``title``,
+        ``cause``, ``remediation`` and ``detail``, or ``None`` when code or
+        message is absent/cleared.
     """
     raw_error_code = labels.get(_LAST_TASK_ERROR_CODE_LABEL_KEY)
     raw_error_message = labels.get(_LAST_TASK_ERROR_MESSAGE_LABEL_KEY)
@@ -4775,6 +4779,7 @@ def _last_task_error_from_labels(labels: Mapping[str, str]) -> dict[str, str] | 
             ("title", _LAST_TASK_ERROR_TITLE_LABEL_KEY),
             ("cause", _LAST_TASK_ERROR_CAUSE_LABEL_KEY),
             ("remediation", _LAST_TASK_ERROR_REMEDIATION_LABEL_KEY),
+            ("detail", _LAST_TASK_ERROR_DETAIL_LABEL_KEY),
         ):
             value = labels.get(label)
             if value:
@@ -6119,6 +6124,28 @@ def _native_terminal_failure_from_runner_response(
     )
 
 
+def _native_terminal_failure_detail(resp: httpx.Response) -> str | None:
+    """
+    Read the runner's underlying error line from a failed terminal-ensure response.
+
+    The runner's ``message`` points at its log; ``error.detail`` carries the
+    first line of the real cause. Re-sanitized here because the runner is
+    remote.
+
+    :param resp: Non-2xx response from
+        ``POST /v1/sessions/{id}/resources/terminals``.
+    :returns: e.g. ``"RuntimeError: tmux launch failed (rc=1): command too long"``,
+        or ``None`` when the runner sent none (older runners).
+    """
+    try:
+        body = resp.json()
+    except ValueError:
+        return None
+    raw_error = body.get("error") if isinstance(body, dict) else None
+    raw_detail = raw_error.get("detail") if isinstance(raw_error, dict) else None
+    return failure_detail(raw_detail) if isinstance(raw_detail, str) else None
+
+
 def _native_terminal_ensure_transport_error(
     exc: httpx.HTTPError | ConnectionError,
     *,
@@ -6159,6 +6186,8 @@ class _NativeTerminalEnsureOutcome:
         create the terminal (fails the turn with a durable banner), or
         ``None`` when the terminal is ready / the failure was not
         definitive.
+    :param detail: The runner's underlying error line for *error*, e.g.
+        ``"RuntimeError: tmux launch failed (rc=1): command too long"``.
     :param policy_notice: Human-readable reason that tool-call policy
         enforcement is NOT active for this session (fail-open — codex too
         old or the hook could not be trusted), or ``None`` when
@@ -6168,6 +6197,7 @@ class _NativeTerminalEnsureOutcome:
 
     error: ErrorData | None
     policy_notice: str | None = None
+    detail: str | None = None
 
 
 def _policy_notice_from_ensure_response(resp: httpx.Response) -> str | None:
@@ -7232,10 +7262,13 @@ class _SessionEventDispatchResult:
         ``"pending_a1b2c3"`` — surfaced to the sender so it can adopt
         the id and dedupe against the snapshot. ``None`` for non-native
         events (already persisted, so no separate pending entry).
+    :param error: Why a native terminal message failed its turn instead
+        of reaching the terminal; ``None`` otherwise.
     """
 
     item_id: str | None
     pending_id: str | None
+    error: ErrorDetail | None = None
 
 
 def _extract_persistent_item_from_sse(
@@ -10902,6 +10935,7 @@ __all__ = [
     "_native_coding_agent_for_spec",
     "_native_subagent_wrapper_labels_from_spec",
     "_native_terminal_ensure_transport_error",
+    "_native_terminal_failure_detail",
     "_native_terminal_failure_from_runner_response",
     "_native_terminal_name_for_harness",
     "_notify_runner_of_bundled_child",

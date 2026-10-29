@@ -60,6 +60,7 @@ from omnigent.native.native_coding_agents import (
 )
 from omnigent.native.native_dispatch import resolve_hook
 from omnigent.process_logging import process_log_reference
+from omnigent.runner.launch_failure import exception_detail
 from omnigent.runner.resource_registry import (
     ANTIGRAVITY_NATIVE_TERMINAL_ROLE,
     CLAUDE_NATIVE_TERMINAL_ROLE,
@@ -6295,11 +6296,15 @@ def _native_terminal_start_error_payload(exc: BaseException, runtime_name: str) 
     :param exc: Exception raised by the native terminal creation path,
         e.g. ``ImportError("Native Codex requires the 'codex' CLI on PATH.")``.
     :param runtime_name: Human-readable runtime name, e.g. ``"Codex"``.
-    :returns: ``{"code": ..., "message": ...}`` payload for SSE and
-        JSON error responses. Known actionable configuration errors surface
-        their safe message directly; other causes point to the runner log.
+    :returns: ``{"code": ..., "error_id": ..., "message": ...}`` payload for
+        SSE and JSON error responses. Known actionable configuration errors
+        surface their safe message directly; other causes point to the runner
+        log and add ``detail``: the exception's first line, secrets redacted
+        and length-capped (the traceback stays in the log), so the server and
+        the factory can name the real cause.
     """
     error_id = f"err_{uuid.uuid4().hex}"
+    detail: str | None = None
     _logger.warning(
         "Native %s terminal start failed; error_id=%s: %s",
         runtime_name,
@@ -6330,11 +6335,15 @@ def _native_terminal_start_error_payload(exc: BaseException, runtime_name: str) 
             f"Native {runtime_name} terminal failed to start; "
             f"see the runner log for details: {log_reference}"
         )
-    return {
+        detail = exception_detail(exc)
+    payload = {
         "code": _NATIVE_TERMINAL_START_FAILED_CODE,
         "error_id": error_id,
         "message": f"{message} Error ID: {error_id}.",
     }
+    if detail:
+        payload["detail"] = detail
+    return payload
 
 
 def _publish_native_terminal_start_error(

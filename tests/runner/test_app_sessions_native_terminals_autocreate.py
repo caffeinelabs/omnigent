@@ -61,6 +61,7 @@ from omnigent.runner.app import (
     _publish_terminal_pending,
     _terminal_lookup_miss_log_state,
 )
+from omnigent.runner.launch_failure import FAILURE_DETAIL_MAX_CHARS
 from omnigent.runner.resource_registry import (
     CLAUDE_NATIVE_TERMINAL_ROLE,
     KIRO_NATIVE_TERMINAL_ROLE,
@@ -2400,9 +2401,10 @@ def test_publish_native_terminal_start_error_emits_failed_status_only(
     and then publish/persist a second error when the user message
     fast-fails against the same terminal.
 
-    The published/returned message names the runner's log file — the raw
-    exception text (which can embed paths/CLI details) is logged there for
-    operators, not surfaced on the session stream.
+    The published/returned message names the runner's log file; the full
+    exception and traceback are logged there for operators. Only the
+    exception's first line, redacted and length-capped, rides along as
+    ``detail`` so the server and the factory can name the real cause.
 
     :param caplog: Pytest log capture fixture, used to confirm the raw
         cause is logged server-side.
@@ -2421,7 +2423,7 @@ def test_publish_native_terminal_start_error_emits_failed_status_only(
             ImportError("Native Codex requires the 'codex' CLI on PATH."),
         )
 
-    # Client-safe payload pointing at the runner log — no raw exception text.
+    # The message points at the runner log; ``detail`` names the cause in one line.
     error_id = error["error_id"]
     assert error_id.startswith("err_")
     assert len(error_id) == 36
@@ -2434,10 +2436,11 @@ def test_publish_native_terminal_start_error_emits_failed_status_only(
             f"see the runner log for details: {pinned_runner_log} "
             f"Error ID: {error_id}."
         ),
+        "detail": "ImportError: Native Codex requires the 'codex' CLI on PATH.",
     }
-    # The raw cause must NOT leak into the surfaced message, but MUST be
-    # logged for operators. If this fails, the redaction regressed (raw
-    # text back in the payload) or the server-side log was dropped.
+    # The raw cause stays out of the message (it lives in ``detail``) and
+    # MUST be logged for operators. If this fails, the message regressed or
+    # the server-side log was dropped.
     assert "requires the 'codex' CLI" not in error["message"]
     assert "requires the 'codex' CLI on PATH." in caplog.text
     assert error_id in caplog.text
@@ -2449,6 +2452,46 @@ def test_publish_native_terminal_start_error_emits_failed_status_only(
         },
     ]
     assert all(p.session_id == "415c9954e2fe4b9276083a4d2c66f689" for p in published)
+
+
+def test_native_terminal_start_error_detail_is_one_redacted_capped_line(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """
+    ``detail`` carries the cause, never a traceback or a secret.
+
+    The live failure was a tmux launch error whose only trace was the runner
+    log, so the factory guessed the cause. ``detail`` keeps the first line of
+    the exception, redacts secret-shaped values and caps the length; the log
+    still has everything.
+
+    :param caplog: Pytest log capture fixture.
+    """
+    published: list[_PublishedEvent] = []
+    secret = "not-a-real-key-123"
+    exc = RuntimeError(
+        f"tmux launch failed (rc=1): command too long ANTHROPIC_API_KEY={secret}\n"
+        "Traceback (most recent call last):\n  File x.py"
+    )
+
+    with caplog.at_level(logging.WARNING):
+        error = _publish_native_terminal_start_error(
+            lambda sid, event: published.append(_PublishedEvent(session_id=sid, event=event)),
+            "415c9954e2fe4b9276083a4d2c66f691",
+            "Claude",
+            exc,
+        )
+
+    assert error["detail"] == (
+        "RuntimeError: tmux launch failed (rc=1): command too long ANTHROPIC_API_KEY=[REDACTED]"
+    )
+    assert secret not in str(published)
+    assert "Traceback" in caplog.text
+    long_error = _publish_native_terminal_start_error(
+        lambda *_: None, "415c9954e2fe4b9276083a4d2c66f692", "Claude", RuntimeError("x" * 1000)
+    )
+    assert len(long_error["detail"]) == FAILURE_DETAIL_MAX_CHARS
+    assert long_error["detail"].endswith("…")
 
 
 def test_publish_native_terminal_start_error_redacts_mismatch_path(

@@ -4,7 +4,10 @@ import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   IC_ROUTE_R2,
+  PL_CACHE,
+  PL_CACHE_DEAD_REASON,
   PR_9631,
+  agentDetail,
   opsRoutes,
   round3IssueList,
   spansResponse,
@@ -212,6 +215,25 @@ describe("AgentPage", () => {
       .getAllByTestId("agent-tool-call")
       .filter((li) => li.className.includes("ring-1"));
     expect(marked).toHaveLength(1);
+  });
+
+  it("shows why a dead agent failed: the runner's error beside its incident", async () => {
+    serve();
+    renderAt(`/agents/${PL_CACHE}`);
+    expect(await screen.findByTestId("agent-last-error")).toHaveTextContent(PL_CACHE_DEAD_REASON);
+    expect(screen.getByTestId("agent-header")).toHaveAttribute("data-state", "dead");
+    expect(screen.getByTestId("agent-issue-INC-12")).toBeInTheDocument();
+  });
+
+  it("leaves the error to the incident banner when its summary already quotes it", async () => {
+    const detail = agentDetail(PL_CACHE)!;
+    detail.issues = detail.issues.map((i) =>
+      i.ref === "INC-12" ? { ...i, summary: `PL · cache-warm dead · ${PL_CACHE_DEAD_REASON}` } : i,
+    );
+    serve("creator", { [`GET ${SNAPSHOT}/agents/${PL_CACHE}`]: () => json(detail) });
+    renderAt(`/agents/${PL_CACHE}`);
+    expect(await screen.findByTestId("agent-issue-INC-12")).toHaveTextContent(PL_CACHE_DEAD_REASON);
+    expect(screen.queryByTestId("agent-last-error")).not.toBeInTheDocument();
   });
 
   it("says when the agent isn't in this factory", async () => {

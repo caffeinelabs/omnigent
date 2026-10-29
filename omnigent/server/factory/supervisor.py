@@ -49,6 +49,7 @@ from omnigent.factory import (
     HEALTH_OK,
     LABEL_BEAT_N,
     LABEL_DEAD_ALERTED_AT,
+    LABEL_DEAD_REASON,
     LABEL_HEALTH,
     LABEL_HEARTBEAT_S,
     LABEL_ID,
@@ -57,6 +58,7 @@ from omnigent.factory import (
     LABEL_PROJECT,
     LABEL_STATE,
     LABEL_SUPERVISOR,
+    LABEL_VALUE_MAX_LEN,
     MAX_HEARTBEAT_S,
     MIN_HEARTBEAT_S,
     STATE_ACTIVE,
@@ -75,7 +77,7 @@ from omnigent.server.factory import (
 )
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.delivery import DeliveryOutcome, deliver_message
-from omnigent.server.factory.envelope import display_title
+from omnigent.server.factory.envelope import display_title, failure_text
 from omnigent.server.factory.mailer import get_mailer
 from omnigent.server.factory.membership import is_top_level, resolve_factory_id
 from omnigent.server.factory.notify import (
@@ -228,7 +230,11 @@ def stuck_alert_text(conv: Conversation, idle_s: float) -> str:
 
 
 def dead_alert_text(conv: Conversation, reason: str) -> str:
-    """:returns: The ``[NEEDS HUMAN · relaunch … failed 3× …]`` text."""
+    """
+    :param reason: The failure, with its underlying error when known (see
+        :func:`~omnigent.server.factory.envelope.failure_text`).
+    :returns: The ``[NEEDS HUMAN · relaunch … failed 3× …]`` text.
+    """
     return (
         f'[NEEDS HUMAN · relaunch of "{display_title(conv.title, conv.id)}" failed '
         f"{DEAD_AFTER_FAILURES}× ({reason})]"
@@ -253,6 +259,10 @@ def _heartbeat_interval(conv: Conversation) -> int | None:
 
 def _is_running(conv: Conversation) -> bool:
     return _session_status_from_cache(conv.id, conv.live_status) == "running"
+
+
+def _clip(text: str, limit: int) -> str:
+    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def _int_label(conv: Conversation, key: str) -> int:
@@ -625,7 +635,7 @@ class FactorySupervisor:
             if outcome.delivered:
                 await self._beat_delivered(conv, n)
             else:
-                await self._beat_failed(conv, outcome.reason or "unknown")
+                await self._beat_failed(conv, outcome.reason or "unknown", outcome.detail)
         except Exception:  # noqa: BLE001 - bookkeeping must not kill the task silently
             _logger.warning("factory heartbeat bookkeeping for %s failed", conv.id, exc_info=True)
 
@@ -641,8 +651,9 @@ class FactorySupervisor:
         store = self._store()
         if store is not None:
             await asyncio.to_thread(store.set_labels, conv.id, labels)
-            if LABEL_DEAD_ALERTED_AT in conv.labels:
-                await asyncio.to_thread(store.delete_label, conv.id, LABEL_DEAD_ALERTED_AT)
+            for stale in (LABEL_DEAD_ALERTED_AT, LABEL_DEAD_REASON):
+                if stale in conv.labels:
+                    await asyncio.to_thread(store.delete_label, conv.id, stale)
         factory_id = conv.labels.get(LABEL_ID)
         title = display_title(conv.title, conv.id)
         await self._emit(
@@ -660,8 +671,19 @@ class FactorySupervisor:
             )
         _logger.info("factory heartbeat #%d delivered to %s", n, conv.id)
 
-    async def _beat_failed(self, conv: Conversation, reason: str) -> None:
+    async def _beat_failed(
+        self, conv: Conversation, reason: str, detail: str | None = None
+    ) -> None:
+        """
+        Count a failed beat; the third in an hour marks the member dead and alerts.
+
+        :param reason: e.g. ``"terminal_failed_to_start"``.
+        :param detail: The underlying error, e.g. the runner's
+            ``"RuntimeError: tmux launch failed (rc=1): command too long"``;
+            carried into the event, alert, decision and the dead-reason label.
+        """
         now = self._clock()
+        cause = failure_text(reason, detail)
         self._last_beat_failure[conv.id] = now
         window = self._beat_failures.setdefault(conv.id, deque())
         while window and window[0] <= now - FAILURE_WINDOW_S:
@@ -670,12 +692,15 @@ class FactorySupervisor:
         _logger.warning(
             "factory heartbeat to %s failed (%s); %d failure(s) in the last hour",
             conv.id,
-            reason,
+            cause,
             len(window),
         )
         factory_id = conv.labels.get(LABEL_ID)
         project = conv.labels.get(LABEL_PROJECT)
         title = display_title(conv.title, conv.id)
+        data: dict[str, Any] = {"reason": reason, "failures": len(window)}
+        if detail:
+            data["detail"] = detail
         await self._emit(
             factory_id,
             "heartbeat.failed",
@@ -683,20 +708,30 @@ class FactorySupervisor:
             project=project,
             to_id=conv.id,
             subject=session_subject(conv.id),
-            summary=f"Heartbeat to {title} failed: {reason}",
-            data={"reason": reason, "failures": len(window)},
+            summary=f"Heartbeat to {title} failed: {cause}",
+            data=data,
         )
         if len(window) < DEAD_AFTER_FAILURES:
             return
+        store = self._store()
+        dead_reason = _clip(cause, LABEL_VALUE_MAX_LEN)
         alerted = _int_label(conv, LABEL_DEAD_ALERTED_AT)
         if alerted and now - alerted < DEAD_ALERT_INTERVAL_S:
+            # Already alerted: keep the recorded cause current for the incident.
+            if store is not None and conv.labels.get(LABEL_DEAD_REASON) != dead_reason:
+                await asyncio.to_thread(
+                    store.set_labels, conv.id, {LABEL_DEAD_REASON: dead_reason}
+                )
             return
-        store = self._store()
         if store is not None:
             await asyncio.to_thread(
                 store.set_labels,
                 conv.id,
-                {LABEL_HEALTH: HEALTH_DEAD, LABEL_DEAD_ALERTED_AT: str(int(now))},
+                {
+                    LABEL_HEALTH: HEALTH_DEAD,
+                    LABEL_DEAD_ALERTED_AT: str(int(now)),
+                    LABEL_DEAD_REASON: dead_reason,
+                },
             )
         targets = dict.fromkeys(t for t in (conv.labels.get(LABEL_SUPERVISOR), factory_id) if t)
         targets.pop(conv.id, None)
@@ -708,22 +743,31 @@ class FactorySupervisor:
                 project=project,
                 from_id=conv.id,
                 subject=session_subject(conv.id),
-                summary=f"{title}: relaunch failed {DEAD_AFTER_FAILURES}× ({reason})",
-                data={"reason": "relaunch_failed", "detail": reason},
+                summary=f"{title}: relaunch failed {DEAD_AFTER_FAILURES}× ({cause})",
+                data={
+                    "reason": "relaunch_failed",
+                    "detail": reason,
+                    **({"error": detail} if detail else {}),
+                },
             )
             if conv.labels.get(LABEL_HEALTH) != HEALTH_DEAD:
                 await server_decisions.open_relaunch_failed_decision(
-                    self._app_state, conv, factory_id, reason, DEAD_AFTER_FAILURES
+                    self._app_state,
+                    conv,
+                    factory_id,
+                    reason,
+                    DEAD_AFTER_FAILURES,
+                    detail=detail,
                 )
         if not targets:
             _logger.warning(
-                "factory session %s is dead (%s) and has no supervisor to tell", conv.id, reason
+                "factory session %s is dead (%s) and has no supervisor to tell", conv.id, cause
             )
             return
         mailer = get_mailer(self._app_state)
         for target in targets:
             mailer.notify(
-                target, dead_alert_text(conv, reason), factory_id=factory_id, project=project
+                target, dead_alert_text(conv, cause), factory_id=factory_id, project=project
             )
 
     # ── S3 stuck ────────────────────────────────────────────────

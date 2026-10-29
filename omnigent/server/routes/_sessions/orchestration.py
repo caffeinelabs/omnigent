@@ -280,6 +280,7 @@ from omnigent.server.routes._sessions.helpers import (
     _native_coding_agent_for_spec,
     _native_subagent_wrapper_labels_from_spec,
     _native_terminal_ensure_transport_error,
+    _native_terminal_failure_detail,
     _native_terminal_failure_from_runner_response,
     _native_terminal_name_for_harness,
     _NativeTerminalEnsureOutcome,
@@ -4483,6 +4484,7 @@ async def _ensure_native_terminal_ready(
     )
     return _NativeTerminalEnsureOutcome(
         error=_native_terminal_failure_from_runner_response(resp, display_name=display_name),
+        detail=_native_terminal_failure_detail(resp),
     )
 
 
@@ -4495,6 +4497,7 @@ async def _persist_native_terminal_failure(
     runner_router: RunnerRouter | None,
     *,
     created_by: str | None,
+    detail: str | None = None,
 ) -> str:
     """
     Persist a consumed user message and terminal-start error.
@@ -4525,6 +4528,9 @@ async def _persist_native_terminal_failure(
         in-process / test setups where the global client is used.
     :param created_by: Authenticated posting actor, e.g.
         ``"alice@example.com"``; ``None`` in single-user mode.
+    :param detail: The runner's underlying error line, e.g.
+        ``"RuntimeError: tmux launch failed (rc=1): command too long"``;
+        stored with the session failure as ``last_task_error.detail``.
     :returns: Store-assigned id of the consumed user message item.
     """
     turn_id = generate_task_id()
@@ -4553,10 +4559,13 @@ async def _persist_native_terminal_failure(
     if error_persist_result == "persisted":
         _publish_error_event(session_id, error)
     _publish_terminal_pending(session_id, False)
+    status_error = ErrorDetail(code=error.code, message=error.message, detail=detail)
+    # Persist before publishing so a reload on the ``failed`` edge sees the cause.
+    await _persist_session_status_error_labels(session_id, status_error, conversation_store)
     _publish_status(
         session_id,
         "failed",
-        ErrorDetail(code=error.code, message=error.message),
+        status_error,
         failure_origin="native_terminal_boot_failed",
     )
     # A boot failure on a native sub-agent must wake the parent — mirror
@@ -6219,8 +6228,17 @@ async def _dispatch_session_event_to_runner_impl(
                 ensure_outcome.error,
                 runner_router,
                 created_by=created_by,
+                detail=ensure_outcome.detail,
             )
-            return _SessionEventDispatchResult(item_id=item_id, pending_id=None)
+            return _SessionEventDispatchResult(
+                item_id=item_id,
+                pending_id=None,
+                error=ErrorDetail(
+                    code=ensure_outcome.error.code,
+                    message=ensure_outcome.error.message,
+                    detail=ensure_outcome.detail,
+                ),
+            )
         if ensure_outcome.policy_notice is not None:
             # Terminal is up but policy enforcement is off (fail-open). Post
             # a durable, non-fatal banner; the user message still forwards.
