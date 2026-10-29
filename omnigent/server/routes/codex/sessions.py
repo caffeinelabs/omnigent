@@ -32,6 +32,7 @@ from omnigent.server.routes.sessions import (
     _forward_session_change_to_runner,
     _launch_runner_on_host,
     _maybe_relaunch_managed_sandbox,
+    _repair_foreign_managed_binding,
     _RunnerForwardResult,
     _wait_for_runner_client,
 )
@@ -344,6 +345,17 @@ async def _launch_runner_for_codex_goal(
         permission_store,
         conversation_store,
     )
+    # A binding to another session's managed sandbox is moved off it first.
+    if await _repair_foreign_managed_binding(
+        session_id=session_id,
+        conv=conv,
+        app_state=request.app.state,
+        conversation_store=conversation_store,
+    ):
+        refreshed = await asyncio.to_thread(conversation_store.get_conversation, session_id)
+        if refreshed is None or refreshed.host_id is None:
+            return None
+        conv = refreshed
     tunnel_registry = getattr(request.app.state, "tunnel_registry", None)
     runner_client = await _wait_for_existing_codex_goal_runner(
         session_id=session_id,

@@ -2513,8 +2513,22 @@ def register_events_routes(
         # sandbox_id and are never touched.
         host_store_for_managed = getattr(request.app.state, "host_store", None)
         if conv.host_id is not None and host_store_for_managed is not None:
+            from omnigent.server.managed_host_isolation import session_may_use_host
+
             bound_host = await asyncio.to_thread(host_store_for_managed.get_host, conv.host_id)
-            if bound_host is not None and bound_host.sandbox_provider is not None:
+            # A session bound to ANOTHER session's sandbox (a borrowed binding)
+            # must not take that sandbox down with it.
+            if (
+                bound_host is not None
+                and bound_host.sandbox_provider is not None
+                and await asyncio.to_thread(
+                    session_may_use_host,
+                    conv,
+                    bound_host,
+                    conversation_store,
+                    scheduled_task_store=getattr(request.app.state, "scheduled_task_store", None),
+                )
+            ):
                 from omnigent.server.managed_hosts import terminate_managed_host
 
                 await terminate_managed_host(

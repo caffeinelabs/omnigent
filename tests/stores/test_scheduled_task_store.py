@@ -1240,3 +1240,43 @@ def test_get_running_run_by_conversation_is_workspace_scoped(
     with workspace_scope(11):
         found = store.get_running_run_by_conversation(_uid("conv_ws"))
         assert found is not None and found.id == _uid("run_ws")
+
+
+# ── has_run_for_conversation (managed-sandbox borrowed-binding evidence) ─────
+
+
+def test_has_run_for_conversation_matches_any_run_status(
+    store: SqlAlchemyScheduledTaskStore,
+) -> None:
+    """A fired conversation is recognised whatever its run's status — the
+    question is where the session came from, not whether its run is live."""
+    run_id = _seed_running_run(store, "fired")
+    assert store.has_run_for_conversation(_uid("conv_fired")) is True
+    store.update_run(run_id, status="failed", finished_at=202)
+    assert store.has_run_for_conversation(_uid("conv_fired")) is True
+    assert store.has_run_for_conversation(_uid("conv_interactive")) is False
+
+
+def test_has_run_for_conversation_is_workspace_scoped(
+    store: SqlAlchemyScheduledTaskStore,
+) -> None:
+    """Like every store read, the lookup only sees the current workspace."""
+    with workspace_scope(12):
+        store.create(
+            scheduled_task_id=_uid("task_ws12"),
+            name="ws",
+            prompt="p",
+            rrule="FREQ=MINUTELY",
+            user_id="a",
+            agent_id=_uid("ag"),
+            timezone="UTC",
+        )
+        store.create_run(
+            run_id=_uid("run_ws12"),
+            scheduled_task_id=_uid("task_ws12"),
+            status="failed",
+            scheduled_at=100,
+            conversation_id=_uid("conv_ws12"),
+        )
+        assert store.has_run_for_conversation(_uid("conv_ws12")) is True
+    assert store.has_run_for_conversation(_uid("conv_ws12")) is False

@@ -13,7 +13,9 @@ firing:
    a task that pinned no ``workspace`` (research / summaries / chat-only) starts
    the runner in the host's home directory. A pinned host that is missing or
    offline — and an owner with no live host at all — records a failed/skipped
-   run instead of a running run.
+   run instead of a running run. A managed sandbox host belongs to the one
+   session it was provisioned for, so it is never resolved and never pinnable
+   (see :mod:`omnigent.server.managed_host_isolation`).
 #. **Creates a session** bound to the task's agent, carrying the resolved
    ``workspace`` / ``host_id`` and the stored ``model_override`` /
    ``reasoning_effort``.
@@ -56,6 +58,11 @@ from omnigent.db.db_models import workspace_scope
 from omnigent.entities import Conversation, ScheduledTask
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.server.auth import LEVEL_OWNER, RESERVED_USER_LOCAL
+from omnigent.server.managed_host_isolation import (
+    MANAGED_HOST_NOT_SHAREABLE,
+    foreign_managed_host_message,
+    is_managed_host,
+)
 from omnigent.server.routes._session_create_validation import (
     validate_existing_host_workspace,
     validate_session_agent,
@@ -524,11 +531,13 @@ async def _resolve_effective_task(deps: FireDeps, task: ScheduledTask) -> Schedu
 
 
 async def _resolve_owner_host(deps: FireDeps, task: ScheduledTask) -> str:
-    """Pick the owner's most-recently-active online host for an unpinned task.
+    """Pick the owner's most-recently-active online connected host for an unpinned task.
 
     ``list_hosts`` returns the owner's hosts most-recently-active first and
     includes offline ones, so the first that is live in the registry is the
-    natural default. First-online is the v1 tiebreak.
+    natural default. First-online is the v1 tiebreak. Managed sandbox hosts are
+    skipped: each belongs to the one session it was provisioned for, and a
+    fired session is never that session.
     """
     if deps.host_store is None or deps.host_registry is None:
         raise _CannotLaunchScheduledFire(
@@ -538,10 +547,13 @@ async def _resolve_owner_host(deps: FireDeps, task: ScheduledTask) -> str:
     owner = task.user_id or RESERVED_USER_LOCAL
     hosts = await asyncio.to_thread(deps.host_store.list_hosts, owner)
     for host in hosts:
+        if is_managed_host(host):
+            continue
         if deps.host_registry.get(host.host_id) is not None:
             return str(host.host_id)
     raise _CannotLaunchScheduledFire(
-        "no online host is available for the scheduled task owner",
+        "no online connected host is available for the scheduled task owner "
+        "(managed sandbox hosts belong to their own session and are never used)",
         error_code="no_online_host",
     )
 
@@ -916,7 +928,9 @@ async def _authorize_pinned_host(deps: FireDeps, task: ScheduledTask, host_id: s
     check so a task pinning another owner's host is rejected before any RPC
     reaches that host. ``get_host`` is a local DB lookup — it never contacts the
     host. When ``user_id`` is ``None`` (single-user / auth disabled) the owner
-    check is skipped, matching the preflight and the rest of the server.
+    check is skipped, matching the preflight and the rest of the server. A
+    managed sandbox host is refused even for its owner: it runs only the
+    session it was provisioned for, never a fired session.
     """
     if deps.host_store is None:
         raise _CannotLaunchScheduledFire(
@@ -933,6 +947,11 @@ async def _authorize_pinned_host(deps: FireDeps, task: ScheduledTask, host_id: s
         raise _CannotLaunchScheduledFire(
             f"connected host {host_id!r} is not owned by the scheduled task owner",
             error_code="host_not_owned",
+        )
+    if is_managed_host(host):
+        raise _CannotLaunchScheduledFire(
+            foreign_managed_host_message(host_id),
+            error_code=MANAGED_HOST_NOT_SHAREABLE,
         )
 
 
@@ -1000,6 +1019,10 @@ def _make_connected_host_dispatch(deps: FireDeps) -> LaunchDispatch:
             conversation_store=deps.conversation_store,
             permission_store=deps.permission_store,
         )
+        # The preflight already refused it; a fired session is never the
+        # session a managed sandbox was provisioned for.
+        if is_managed_host(target.host):
+            raise RuntimeError(foreign_managed_host_message(host_id))
 
         attempt = await _launch_runner_on_host(
             target.conv,

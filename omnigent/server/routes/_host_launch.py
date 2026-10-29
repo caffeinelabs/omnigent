@@ -21,6 +21,7 @@ from __future__ import annotations
 import functools
 import importlib.util
 from dataclasses import dataclass
+from typing import Any
 
 from fastapi import HTTPException
 
@@ -28,6 +29,10 @@ from omnigent.entities import Conversation
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.server.auth import LEVEL_OWNER
 from omnigent.server.host_registry import HostConnection, HostRegistry
+from omnigent.server.managed_host_isolation import (
+    foreign_managed_host_error,
+    session_may_use_host,
+)
 from omnigent.server.permissions import check_session_access
 from omnigent.stores import ConversationStore
 from omnigent.stores.host_store import Host, HostStore, host_is_live
@@ -143,6 +148,7 @@ def resolve_host_launch(
     host_registry: HostRegistry,
     conversation_store: ConversationStore,
     permission_store: PermissionStore | None,
+    scheduled_task_store: Any | None = None,
 ) -> HostLaunchTarget:
     """
     Resolve and authorize a host runner launch.
@@ -165,6 +171,9 @@ def resolve_host_launch(
         session-access check for sub-agent parent delegation).
     :param permission_store: Session permission store, or ``None`` to
         skip the session-owner check (auth disabled).
+    :param scheduled_task_store: Optional store supplying the evidence that a
+        session bound to a managed sandbox was created by a scheduled fire
+        (and therefore borrowed it); ``None`` skips that evidence.
     :returns: A :class:`HostLaunchTarget` with the validated host,
         connection, and conversation.
     :raises HTTPException: 404 if the host or session is missing (or the
@@ -173,7 +182,9 @@ def resolve_host_launch(
         a different user.
     :raises OmnigentError: 409 (CONFLICT) if the host is genuinely offline,
         or 400 (WRONG_REPLICA) if it is live but its tunnel is on another
-        replica (a wrong-replica landing — the caller re-addresses keyless).
+        replica (a wrong-replica landing — the caller re-addresses keyless);
+        409 (CONFLICT) if the host is a managed sandbox provisioned for a
+        different session tree.
     """
     host = resolve_host_owner(
         user_id=user_id,
@@ -201,5 +212,12 @@ def resolve_host_launch(
         conversation_store,
     ):
         raise HTTPException(status_code=404, detail="session not found")
+
+    # A managed sandbox runs only the session tree it was provisioned for: the
+    # caller owning the host (same user) is not enough to borrow it.
+    if not session_may_use_host(
+        conv, host, conversation_store, scheduled_task_store=scheduled_task_store
+    ):
+        raise foreign_managed_host_error(host_id)
 
     return HostLaunchTarget(host=host, conn=conn, conv=conv)

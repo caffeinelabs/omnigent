@@ -195,9 +195,14 @@ _INSTANCE_SCOPED_LABEL_KEYS = frozenset(
 # ``MANAGED_REPO_LABEL_KEY``; a store test cross-checks it so a rename there
 # fails loudly here.
 _SANDBOX_REPO_LABEL_KEY = "omnigent.sandbox.repo"
+# The managed sandbox host this session's tree owns; a fork must never inherit
+# it (the clone would run in the source's sandbox). Mirrors the server's
+# ``MANAGED_HOST_CLAIM_LABEL_KEY``; a store test cross-checks it.
+_SANDBOX_HOST_CLAIM_LABEL_KEY = "omnigent.sandbox.host_id"
 _FORK_ONLY_DROPPED_LABEL_KEYS = IMPORT_PROVENANCE_LABEL_KEYS | {
     ARCHIVED_AT_LABEL_KEY,
     _SANDBOX_REPO_LABEL_KEY,
+    _SANDBOX_HOST_CLAIM_LABEL_KEY,
 }
 
 

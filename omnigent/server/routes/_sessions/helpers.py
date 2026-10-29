@@ -100,6 +100,11 @@ from omnigent.server.auth import (
     RESERVED_USER_PUBLIC,
 )
 from omnigent.server.host_registry import HostConnection, HostRegistry, RunnerExitReports
+from omnigent.server.managed_host_isolation import (
+    foreign_managed_host_error,
+    is_managed_host,
+    session_may_use_host,
+)
 from omnigent.server.managed_hosts import (
     MANAGED_SANDBOX_LABEL_NAMESPACE,
     ManagedHostLaunch,
@@ -5526,6 +5531,14 @@ async def _launch_runner_on_host_impl(
                 error_code="session_not_found",
                 error="session was deleted while its relaunch was in flight",
             )
+        # Last line of the managed-sandbox boundary: whatever path got here, a
+        # sandbox never spawns a runner for a session tree it was not
+        # provisioned for.
+        host_record = getattr(host_conn, "host_record", None)
+        if is_managed_host(host_record) and not await asyncio.to_thread(
+            session_may_use_host, fresh, host_record, conversation_store
+        ):
+            raise foreign_managed_host_error(host_conn.host_id)
         if fresh.runner_id and fresh.runner_id != conv.runner_id:
             last = _relaunch_last_attempt.get(conv.id)
             if last is not None and last.runner_id == fresh.runner_id:

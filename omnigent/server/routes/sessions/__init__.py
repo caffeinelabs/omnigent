@@ -651,6 +651,7 @@ from omnigent.server.routes._sessions.orchestration import (
     _recover_subagent_status_forward_via_parent as _recover_subagent_status_forward_via_parent,
     _register_policy_elicitation as _register_policy_elicitation,
     _relay_runner_stream as _relay_runner_stream,
+    _repair_foreign_managed_binding as _repair_foreign_managed_binding,
     _resolve_elicitation as _resolve_elicitation,
     _run_managed_launch as _run_managed_launch,
     _run_managed_wake as _run_managed_wake,

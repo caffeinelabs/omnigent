@@ -141,6 +141,52 @@ def _get_image_compression_gate() -> asyncio.Semaphore:
     return _image_compression_gate
 
 
+async def _carry_managed_host_claim(
+    request: Request,
+    source: Conversation,
+    target_session_id: str,
+    conversation_store: Any,
+) -> None:
+    """
+    Carry a managed-sandbox claim along with a transferred live terminal.
+
+    The native ``/clear`` / ``/fork`` rotation moves the running terminal to a
+    fresh session; when the source's tree owns the managed sandbox the terminal
+    lives in, the rotated-to session joins that tree (see
+    :mod:`omnigent.server.managed_host_isolation`).
+
+    :param request: The transfer request (supplies the host store).
+    :param source: The session the terminal moved out of (host-bound).
+    :param target_session_id: The session the terminal moved into.
+    :param conversation_store: Store holding both rows.
+    """
+    from omnigent.server.managed_host_isolation import (
+        MANAGED_HOST_CLAIM_LABEL_KEY,
+        is_managed_host,
+        session_may_use_host,
+    )
+
+    host_store = getattr(request.app.state, "host_store", None)
+    if host_store is None or source.host_id is None:
+        return
+    host = await asyncio.to_thread(host_store.get_host, source.host_id)
+    if not is_managed_host(host):
+        return
+    if not await asyncio.to_thread(
+        session_may_use_host,
+        source,
+        host,
+        conversation_store,
+        scheduled_task_store=getattr(request.app.state, "scheduled_task_store", None),
+    ):
+        return
+    await asyncio.to_thread(
+        conversation_store.set_labels,
+        target_session_id,
+        {MANAGED_HOST_CLAIM_LABEL_KEY: source.host_id},
+    )
+
+
 def register_resources_routes(
     router: APIRouter,
     *,
@@ -1407,6 +1453,7 @@ def register_resources_routes(
                 conv.workspace,
                 conv.git_branch,
             )
+            await _carry_managed_host_claim(request, conv, target_session_id, conversation_store)
 
         _publish_and_persist_resource_event(
             session_id,

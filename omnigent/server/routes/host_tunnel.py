@@ -276,7 +276,7 @@ def create_host_tunnel_router(
                 return
 
             stage = "registration"
-            await asyncio.to_thread(
+            host_record = await asyncio.to_thread(
                 host_store.upsert_on_connect,
                 host_id=host_id,
                 name=frame.name,
@@ -293,6 +293,7 @@ def create_host_tunnel_router(
                 ws,
                 frame,
                 owner=tunnel_owner,
+                host_record=host_record,
             )
             # Delivered on the handshake, never persisted: a replica that just
             # started learns the host's gateway backing here, so a server

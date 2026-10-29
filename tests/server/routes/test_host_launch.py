@@ -28,6 +28,7 @@ class _FakeHost:
     user_id: str = "alice"
     status: str = "online"
     updated_at: int = field(default_factory=now_epoch)
+    sandbox_provider: str | None = None
 
 
 @dataclass
@@ -147,6 +148,62 @@ class TestResolveHostLaunch:
         )
         assert result.host.host_id == "host_1"
         assert result.conv.id == "s1"
+
+    @staticmethod
+    def _launch_on_pod(conv: Conversation, *, scheduled_task_store: object = None) -> object:
+        pod = _FakeHost(host_id="pod_1", user_id="alice", sandbox_provider="kubernetes")
+        return resolve_host_launch(
+            user_id="alice",
+            host_id="pod_1",
+            session_id=conv.id,
+            host_store=_FakeHostStore(hosts={"pod_1": pod}),
+            host_registry=_FakeHostRegistry(conns={"pod_1": object()}),
+            conversation_store=_FakeConversationStore(convs={conv.id: conv}),
+            permission_store=None,
+            scheduled_task_store=scheduled_task_store,
+        )
+
+    def test_managed_sandbox_refuses_a_session_it_was_not_provisioned_for(self) -> None:
+        """Owning the host (same user) is not enough: another session's managed
+        sandbox refuses the launch with a 409 naming the boundary."""
+        stranger = Conversation(id="s2", created_at=1, updated_at=1, root_conversation_id="s2")
+        with pytest.raises(OmnigentError) as exc_info:
+            self._launch_on_pod(stranger)
+        assert exc_info.value.code == ErrorCode.CONFLICT
+        assert "managed sandbox" in exc_info.value.message
+
+    def test_managed_sandbox_admits_its_claimed_owner(self) -> None:
+        from omnigent.server.managed_host_isolation import MANAGED_HOST_CLAIM_LABEL_KEY
+
+        owner = Conversation(
+            id="pl",
+            created_at=1,
+            updated_at=1,
+            root_conversation_id="pl",
+            host_id="pod_1",
+            workspace="/root/workspace",
+            labels={MANAGED_HOST_CLAIM_LABEL_KEY: "pod_1"},
+        )
+        assert self._launch_on_pod(owner).conv.id == "pl"  # type: ignore[attr-defined]
+
+    def test_managed_sandbox_refuses_a_fired_session_bound_to_it(self) -> None:
+        """A scheduled-fire session left bound to the pod (pre-claim row) is
+        refused once the run history shows where it came from."""
+
+        class _Runs:
+            def has_run_for_conversation(self, conversation_id: str) -> bool:
+                return conversation_id == "hello"
+
+        fired = Conversation(
+            id="hello",
+            created_at=1,
+            updated_at=1,
+            root_conversation_id="hello",
+            host_id="pod_1",
+            workspace="/root",
+        )
+        with pytest.raises(OmnigentError):
+            self._launch_on_pod(fired, scheduled_task_store=_Runs())
 
 
 # ── host_absent_error (single-replica vs sharded) ─────────────────────
