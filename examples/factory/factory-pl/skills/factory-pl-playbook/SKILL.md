@@ -1,6 +1,6 @@
 ---
 name: factory-pl-playbook
-description: Project-lead playbook for the Omnigent software factory - plan.md and task-card templates (Preview and Demo focus), worktree and branch naming, parallel dispatch rules, the /goal convention, the review → factory preview → demo → ready-for-human-merge pipeline, the env_keeper and demo results table (preview failures, tooling conflicts, the preview cap), the server message table (reviews, decisions, PR and preview notices), the PR review-links block, questions through sys_factory_ask, the definition of done, milestone reports, and the pause and done procedures.
+description: Project-lead playbook for the Omnigent software factory - the integration env (KIND: integration), the kickoff worker preflight, plan.md and task-card templates (Preview and Demo focus), worktree and branch naming, parallel dispatch rules, the /goal convention, the review → factory preview → demo → ready-for-human-merge pipeline, the env_keeper and demo results table (preview failures, tooling conflicts, the preview cap), the server message table (reviews, decisions, PR and preview notices), the PR review-links block, questions through sys_factory_ask, the definition of done, milestone reports, and the pause and done procedures.
 ---
 
 # PL playbook
@@ -14,6 +14,37 @@ env tracks origin/<base>. Pass it on every dispatch, never assume `main`:
 - env_keeper: `UP base=<base>`, `PREVIEW pr=<n> head=<sha> base=<base> …` and
   `MERGED pr=<n> base=<base>`;
 - ICs and reviewers: the task card's `Base: <base>` line.
+
+## Integration env (`KIND: integration`)
+
+A charter with a `KIND: integration` line (slug `base-env`) only keeps a live
+env at the head of origin/<base> for humans to try: no tasks, ICs, reviewers,
+demos or PRs, and heartbeats are off. These steps replace KICKOFF and LOOP:
+1. Run `load_skill("factory-protocol")` and `sys_factory_rules()`, then
+   `sys_session_send(agent="env_keeper", title="env", args={input: "UP base=<base>"})`.
+2. `ENV READY <urls>`: smoke-check it: `curl -fsS <app>/__factory/preview`
+   (or `curl -fsS <api>/version`) must serve the sha of
+   `git ls-remote origin refs/heads/<base>`.
+3. Report: `sys_factory_env(state="ready", env_id=<id>, urls=<urls>,
+   deployed={sha: <sha>, ref: "origin/<base>"}, note="smoke ok")` (state
+   "degraded" and the failing check otherwise), and one line of status:
+   `sys_factory_set(summary="<base>@<sha7> · app ok · api ok")`.
+4. `[Factory notice · base <base> moved <old7> → <new7>]`: send env_keeper
+   `UP base=<base>` again (it moves the env to the new head), then 2-3.
+
+`ENV FAILED`: one more `UP base=<base>`, then `sys_factory_ask` the human.
+
+## Preflight (KICKOFF step 2)
+
+Call `sys_session_get_info({})` and read `configured_harnesses`; if the map
+is null, run `command -v claude codex` once instead.
+- `ic_codex` and `reviewer` need `codex-native: true`.
+- `ic`, `env_keeper` and `demo` route Claude through the factory's Bifrost
+  provider in their own spec (as you do), so `claude-native: "needs-auth"`
+  there only describes the ambient login and does NOT make them unavailable;
+  only a missing `claude` binary does.
+
+Never dispatch an unavailable worker. Tell your lead if one is missing.
 
 ## Work graph (server truth)
 
