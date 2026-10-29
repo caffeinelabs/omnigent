@@ -9,6 +9,7 @@ import {
   issueText,
   onTrial,
   proposed,
+  revertToast,
   tier2Plain,
   trialProgress,
   verdictText,
@@ -80,6 +81,31 @@ describe("improvements model", () => {
     expect(rule).toMatchObject({ sign: "+", path: "rules", before: null });
     expect(rule!.after).toContain("role=project_lead");
     expect(effectText(byRef("C-14"))).toBe("heartbeat $ / day ↓ by $0.30");
+  });
+
+  it("shows a rule a pending change adds without an id", () => {
+    const text = "Claim READY only when sys_factory_pr says ready.";
+    const rule = { role: "project_lead", project: "*", text, origin: null, state: "trial" };
+    const pending = {
+      ...byRef("C-15"),
+      before: { "rules.new": null },
+      after: { "rules.new": rule },
+    };
+    expect(changeLines(pending)).toEqual([
+      { sign: "+", path: "rules.new", before: null, after: `role=project_lead · “${text}”` },
+    ]);
+  });
+
+  it("says what a revert left in force", () => {
+    const reverted = byRef("C-12");
+    const after = (result: Record<string, unknown> | null) => ({ ...reverted, result });
+    expect(revertToast(after({ revert_def_version: 7, revert_changed: true }))).toBe(
+      "C-12 reverted · v7 in force",
+    );
+    expect(revertToast(after({ revert_def_version: 9, revert_changed: false }))).toBe(
+      "C-12 reverted · later changes had replaced it, no new version",
+    );
+    expect(revertToast(after(null))).toBe("C-12 reverted · parent version back in force");
   });
 
   it("links evidence ids to their pages", () => {

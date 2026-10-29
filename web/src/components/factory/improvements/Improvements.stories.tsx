@@ -178,6 +178,80 @@ export const EditMultiChange = page(
   click("proposal-C-40-edit"),
 );
 
+/**
+ * Two rule changes filed on v4. C-41 adds a rule: it has no id until it applies,
+ * so it never claims the R-n another pending change takes first. C-42 edits R-3,
+ * which changed in v5 since: the server refuses to apply it over that edit.
+ */
+export const ProposedStale = page("/improvements", {
+  search: "?tab=proposed",
+  learn: {
+    proposals: (path) => {
+      const c15 = learnProposals().find((p) => p.ref === "C-15")!;
+      const r3 = {
+        id: "R-3",
+        role: "ic",
+        project: "*",
+        text: "Run the package's unit tests before every push.",
+        origin: "C-9",
+        state: "active",
+      };
+      const added = {
+        role: "project_lead",
+        project: "*",
+        text: "Claim READY only when sys_factory_pr says ready.",
+        origin: null,
+        state: "trial",
+      };
+      return {
+        body: {
+          data: [
+            ...learnProposals().filter((p) => p.status !== "pending"),
+            {
+              ...c15,
+              id: "4141414141414141414141414141414a",
+              ref: "C-41",
+              number: 41,
+              title: "PLs claim READY only when the gates agree",
+              ops: [{ op: "add", path: "rules", value: added }],
+              before: { "rules.new": null },
+              after: { "rules.new": added },
+              based_on: { def_version: 4 },
+            },
+            {
+              ...c15,
+              id: "4242424242424242424242424242424a",
+              ref: "C-42",
+              number: 42,
+              title: "ICs also lint before every push",
+              ops: [
+                {
+                  op: "replace",
+                  path: "rules.R-3",
+                  value: { text: "Run the unit tests and the linter before every push." },
+                },
+              ],
+              before: { "rules.R-3": r3 },
+              after: {
+                "rules.R-3": {
+                  ...r3,
+                  text: "Run the unit tests and the linter before every push.",
+                },
+              },
+              based_on: { def_version: 4 },
+              warnings: [
+                "C-42 is stale against v5: rules.R-3 changed since it was proposed on v4. Reject it and re-propose against v5.",
+              ],
+            },
+          ].filter((p) => p.kind === new URL(path, "http://story").searchParams.get("kind")),
+        },
+      };
+    },
+  },
+});
+
+export const ProposedStaleMobile = phone(ProposedStale);
+
 /** Tier 2 on: the code change can be approved like any other. */
 export const ProposedTier2On = page("/improvements", {
   search: "?tab=proposed",

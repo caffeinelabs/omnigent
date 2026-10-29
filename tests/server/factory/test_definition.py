@@ -308,6 +308,62 @@ def test_a_rule_replace_changes_only_role_project_and_text() -> None:
     ]
 
 
+def _add(text: str) -> definition.Change:
+    return definition.parse_change(
+        {"op": "add", "path": "rules", "value": {"role": "ic", "text": text}}
+    )
+
+
+def test_moved_paths_name_what_changed_since_a_proposal_read_it() -> None:
+    doc = definition.apply_changes(
+        definition.default_doc(), [_add("Lint.")], origin="C-1", rule_state="trial"
+    )
+    before = {"loops.review.rounds": 3, "rules.R-1": doc["rules"][0], "rules.new": None}
+    kept = {**doc, "rules": [{**doc["rules"][0], "state": "active"}]}
+    edited = definition.apply_changes(
+        doc,
+        [definition.parse_change({"op": "replace", "path": "rules/R-1", "value": {"text": "x"}})],
+    )
+    removed = definition.apply_changes(
+        doc, [definition.parse_change({"op": "remove", "path": "rules/R-1"})]
+    )
+    tuned = definition.apply_changes(
+        doc,
+        [definition.parse_change({"op": "replace", "path": "loops.review.rounds", "value": 2})],
+    )
+
+    assert definition.moved_paths(before, doc) == []
+    # Keeping a trial is no change of the rule; an addition never moves.
+    assert definition.moved_paths(before, kept) == []
+    assert definition.moved_paths(before, edited) == ["rules.R-1"]
+    assert definition.moved_paths(before, removed) == ["rules.R-1"]
+    assert definition.moved_paths(before, tuned) == ["loops.review.rounds"]
+
+
+def test_a_version_built_on_an_older_pin_numbers_rules_past_every_stored_one(
+    world: FactoryWorld,
+) -> None:
+    fid = _fid(world)
+    resolved = definition.definition_for(world.deps, fid)
+    assert resolved is not None
+    definition.store_version(
+        world.deps,
+        fid,
+        definition.apply_changes(resolved.stored, [_add("A.")]),
+        created_by="alice",
+        created_via="human",
+        parent_version=1,
+    )
+    definition.pin(world.deps, fid, 1)
+
+    v3 = definition.set_values(world.deps, fid, {"loops.review.rounds": 2}, created_by="alice")
+    floor = definition.rule_floor(world.deps, fid)
+    doc = definition.apply_changes(v3.doc, [_add("B.")], min_rule_seq=floor)
+
+    assert (v3.doc["rules"], v3.doc["rule_seq"], floor) == ([], 1, 1)
+    assert [r["id"] for r in doc["rules"]] == ["R-2"]
+
+
 def test_cards_and_briefs_carry_the_rules(world: FactoryWorld) -> None:
     fid = _fid(world)
     definition.definition_for(world.deps, fid)

@@ -17,6 +17,7 @@ import {
   MessagesSquareIcon,
   PencilIcon,
   RotateCcwIcon,
+  TriangleAlertIcon,
   XIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -44,6 +45,7 @@ import {
   effectText,
   evidenceHref,
   issueText,
+  revertToast,
   tier2Plain,
   trialProgress,
 } from "./improvementsModel";
@@ -181,12 +183,8 @@ export function LearnProposalCard({
     decide.mutate(
       { ref: proposal.ref, action: verb },
       {
-        onSuccess: () =>
-          showToast(
-            verb === "keep"
-              ? `${proposal.ref} kept`
-              : `${proposal.ref} reverted · parent version back in force`,
-          ),
+        onSuccess: (data) =>
+          showToast(verb === "keep" ? `${proposal.ref} kept` : revertToast(data.proposal)),
         onError: fail,
       },
     );
@@ -274,6 +272,17 @@ export function LearnProposalCard({
         {proposal.status === "awaiting_cosign" && " · waiting for the peer lead to co-sign"}
       </p>
       <ChangeList proposal={proposal} />
+      {/* A code change says why Tier 2 is off in its own box below. */}
+      {!code && proposal.warnings.length > 0 && (
+        <ul data-testid={`proposal-${proposal.ref}-warnings`} className="flex flex-col gap-0.5">
+          {proposal.warnings.map((warning) => (
+            <li key={warning} className="flex items-start gap-1.5 text-xs text-warning">
+              <TriangleAlertIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+              <span className="min-w-0 break-words">{warning}</span>
+            </li>
+          ))}
+        </ul>
+      )}
       {proposal.rationale && (
         <p className="text-sm break-words text-foreground/90">{proposal.rationale}</p>
       )}

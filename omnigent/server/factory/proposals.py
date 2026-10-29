@@ -821,10 +821,43 @@ def proposal_view(deps: FactoryDeps, row: FactoryProposal) -> dict[str, Any]:
         decision_ref=decision.ref if decision is not None else None,
         author_title=author_title,
     )
+    if row.kind in ("tuning", "rules"):
+        data.update(_definition_preview(deps, row))
     known = set(ProposalView.model_fields) | {"class"}
     return ProposalView.model_validate({k: v for k, v in data.items() if k in known}).model_dump(
         mode="json", by_alias=True
     )
+
+
+_DEFINITION_APPLIED: Final = frozenset({"trial", "applied", "kept", "reverted"})
+"""A tuning or rules change in these applied: its ``before``/``after`` name real rule ids."""
+
+
+def _definition_preview(deps: FactoryDeps, row: FactoryProposal) -> dict[str, Any]:
+    """
+    A definition change not applied yet: rules it adds carry no id (rows filed
+    before ids were left to apply time included); an open one says when it went stale.
+    """
+    from omnigent.server.factory import tuning
+
+    if row.status in _DEFINITION_APPLIED:
+        return {}
+    before, after = row.before or {}, row.after or {}
+    shown = tuning.preview(
+        [{"path": p, "before": before.get(p), "after": after.get(p)} for p in {**before, **after}]
+    )
+    out: dict[str, Any] = {
+        "before": {d["path"]: d["before"] for d in shown},
+        "after": {d["path"]: d["after"] for d in shown},
+    }
+    if row.status in PROPOSAL_OPEN_STATUSES:
+        version, moved = tuning.stale_paths(deps, row, fresh=False)
+        if moved:
+            out["warnings"] = [
+                *(row.warnings or []),
+                tuning.stale_error(row, version, moved).message,
+            ]
+    return out
 
 
 def _reply(row: FactoryProposal, *, deduped: bool = False, decision: str | None = None) -> dict:

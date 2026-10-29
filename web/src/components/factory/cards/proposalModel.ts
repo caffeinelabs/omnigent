@@ -30,7 +30,8 @@ export type ProposalCardState =
 /**
  * The card's state. A proposal applied without a person's click (autonomy,
  * the grace timer) is `auto_applied`; `stale` is a pending one the server
- * refused to apply because a project changed since.
+ * refused to apply because a project (or the definition setting or rule it
+ * changes) changed since.
  */
 export function proposalState(proposal: ProposalView, stale = false): ProposalCardState {
   const status: ProposalStatus = proposal.status;
@@ -371,6 +372,19 @@ export function refusalText(code: string | null): string {
   return (code && REFUSAL_TEXT[code]) || "the server could not apply it";
 }
 
+/** Whether *proposal* changes the factory definition (it goes stale on a definition change). */
+function changesDefinition(proposal: ProposalView): boolean {
+  return proposal.kind === "tuning" || proposal.kind === "rules";
+}
+
+/** Why a definition change was refused as stale: what it changes moved since. */
+function staleDefinitionText(proposal: ProposalView): string {
+  const result = proposal.result ?? {};
+  const paths = list(result.paths);
+  const against = typeof result.stale_against === "number" ? ` in v${result.stale_against}` : "";
+  return `${paths.length ? paths.join(", ") : "what it changes"} changed${against} since it was proposed; ask for a fresh proposal`;
+}
+
 /** What happened, in words, for a closed card's footer. */
 export function outcomeLine(proposal: ProposalView, state: ProposalCardState): string | null {
   const by = proposal.decided_by ? ` by ${proposal.decided_by.split("@")[0]}` : "";
@@ -388,8 +402,13 @@ export function outcomeLine(proposal: ProposalView, state: ProposalCardState): s
       const note = str(result.note);
       return `Rejected${by}${note ? `: “${note}”` : ""}`;
     }
-    case "refused":
-      return `Refused: ${refusalText(str(result.error))}`;
+    case "refused": {
+      const code = str(result.error);
+      if (code === "stale_proposal" && changesDefinition(proposal)) {
+        return `Refused: ${staleDefinitionText(proposal)}`;
+      }
+      return `Refused: ${refusalText(code)}`;
+    }
     case "expired":
       return "Expired after 72 h without a decision";
     case "withdrawn":
@@ -397,7 +416,9 @@ export function outcomeLine(proposal: ProposalView, state: ProposalCardState): s
     case "undone":
       return `Undone${proposal.reverted_by ? ` by ${proposal.reverted_by.split("@")[0]}` : ""}`;
     case "stale":
-      return "A project changed since this was proposed; ask for a fresh proposal or reject it";
+      return changesDefinition(proposal)
+        ? "The definition changed since this was proposed; ask for a fresh proposal or reject it"
+        : "A project changed since this was proposed; ask for a fresh proposal or reject it";
     default:
       return null;
   }
