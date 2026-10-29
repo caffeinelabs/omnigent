@@ -9,6 +9,9 @@ to the agents unchanged) and is deduplicated per episode through its
 - blocked on an approval (S5): a session parked on a human prompt; expired
   when the episode clears.
 - message storm: a sender that hit its post rate limit.
+
+Once their project ended (cancelled, merged, or its PL wrapped it up) these
+and the loop decisions have nothing left to act on: the tick expires them.
 """
 
 from __future__ import annotations
@@ -23,6 +26,7 @@ from omnigent.factory import (
     ACTION_RELAUNCH,
     ACTION_RESTART,
     LABEL_PROJECT,
+    STAGE_DONE,
 )
 from omnigent.server.factory import decision_routing, events
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
@@ -31,7 +35,7 @@ from omnigent.stores.factory_store import DecisionNotFound, DecisionNotOpen
 
 if TYPE_CHECKING:
     from omnigent.entities import Conversation
-    from omnigent.entities.factory import FactoryDecision
+    from omnigent.entities.factory import FactoryDecision, FactoryProject
     from omnigent.server.factory.membership import Membership
 
 _logger = logging.getLogger(__name__)
@@ -39,6 +43,11 @@ _logger = logging.getLogger(__name__)
 SOURCE_RELAUNCH_FAILED: Final = "relaunch_failed"
 SOURCE_BLOCKED: Final = "blocked_approval"
 SOURCE_STORM: Final = "storm"
+PROJECT_RUN_SOURCES: Final = frozenset(
+    {SOURCE_RELAUNCH_FAILED, SOURCE_BLOCKED, SOURCE_STORM, "loop", "done_check"}
+)
+"""Supervisor decisions about a project's running work (``loop`` and ``done_check``
+are :mod:`.loop_escalation`'s); a PR closure's feedback and proposals outlive it."""
 _QUESTION_MAX: Final = 1000
 _CONTEXT_MAX: Final = 4000
 
@@ -176,10 +185,13 @@ def _default_assignee(
     )
 
 
-async def expire_decision(app_state: Any, decision_id: str) -> FactoryDecision | None:
+async def expire_decision(
+    app_state: Any, decision_id: str, *, why: str = "the situation cleared"
+) -> FactoryDecision | None:
     """
     Expire an open server decision whose episode ended. Never raises.
 
+    :param why: The end of the event's summary, e.g. ``"docs is done"``.
     :returns: The expired decision, or ``None`` when it was no longer open.
     """
     store = _store(app_state)
@@ -199,7 +211,7 @@ async def expire_decision(app_state: Any, decision_id: str) -> FactoryDecision |
         project=row.project_slug,
         from_id=row.asked_by_session_id,
         subject=f"decision:{row.ref}",
-        summary=f"{row.ref} expired: the situation cleared",
+        summary=f"{row.ref} expired: {why}",
         data={"decision_id": row.id, "source": row.source},
     )
     return row
@@ -220,6 +232,50 @@ async def expire_by_key(app_state: Any, factory_id: str, dedupe_key: str) -> Non
     for row in rows:
         if row.dedupe_key == dedupe_key:
             await expire_decision(app_state, row.id)
+
+
+def project_ended(project: FactoryProject | None) -> str | None:
+    """:returns: How *project* ended (``"done"``, ``"cancelled"``, ``"merged"``), or ``None``."""
+    if project is None:
+        return None
+    if project.status not in (None, "active"):
+        return str(project.status)
+    return STAGE_DONE if project.stage == STAGE_DONE else None
+
+
+async def expire_for_ended_projects(app_state: Any, factory_id: str) -> list[FactoryDecision]:
+    """
+    Expire the open supervisor decisions of projects that ended. Never raises.
+
+    "Mark it done?" for a project its PL already wrapped up, or a relaunch of
+    a PL that finished, has nobody left to act; it would wait in Needs you forever.
+
+    :returns: The decisions expired.
+    """
+    store = _store(app_state)
+    if store is None:
+        return []
+    try:
+        rows = await asyncio.to_thread(
+            store.list_decisions, status="open", factory_id=factory_id, limit=500
+        )
+        rows = [r for r in rows if r.source in PROJECT_RUN_SOURCES and r.project_slug]
+        if not rows:
+            return []
+        projects = await asyncio.to_thread(store.list_projects, factory_id)
+    except Exception:  # noqa: BLE001 - the next tick retries
+        _logger.warning("factory: could not read the decisions of %s", factory_id, exc_info=True)
+        return []
+    ended = {p.slug: how for p in projects if (how := project_ended(p)) is not None}
+    expired = []
+    for row in rows:
+        how = ended.get(row.project_slug or "")
+        if how is None:
+            continue
+        done = await expire_decision(app_state, row.id, why=f"{row.project_slug} is {how}")
+        if done is not None:
+            expired.append(done)
+    return expired
 
 
 def _member_target(conv: Conversation) -> str:
@@ -323,16 +379,19 @@ async def open_storm_decision(
 
 
 __all__ = [
+    "PROJECT_RUN_SOURCES",
     "SOURCE_BLOCKED",
     "SOURCE_RELAUNCH_FAILED",
     "SOURCE_STORM",
     "blocked_key",
     "expire_by_key",
     "expire_decision",
+    "expire_for_ended_projects",
     "open_blocked_decision",
     "open_decision",
     "open_relaunch_failed_decision",
     "open_storm_decision",
+    "project_ended",
     "relaunch_failed_key",
     "storm_key",
 ]

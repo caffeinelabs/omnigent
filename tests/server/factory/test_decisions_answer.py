@@ -496,6 +496,33 @@ async def test_abandon_and_rework_message_the_pl(cockpit: Cockpit) -> None:
     )
 
 
+async def test_abandon_is_recorded_with_nobody_to_tell_when_the_pl_is_gone(
+    cockpit: Cockpit,
+) -> None:
+    """The PL wrapped up: the answer is stored and says so instead of a 409."""
+    options = [
+        {"id": "abandon", "label": "Abandon task", "action": "abandon_task"},
+        {"id": "dismiss", "label": "Dismiss", "action": "dismiss"},
+    ]
+    abandon = _ask(cockpit, None, source="pr_closed", options=options, key="a")
+    dismiss = _ask(cockpit, None, source="pr_closed", options=options, key="d")
+    cockpit.world.store.set_labels(cockpit.world.id("pl"), {F.LABEL_STATE: F.STATE_DONE})
+
+    resp = await _answer(cockpit, abandon, user="carol", option_id="abandon")
+    quiet = await _answer(cockpit, dismiss, user="carol", option_id="dismiss")
+
+    assert resp.status_code == 200, resp.text
+    view = resp.json()["decision"]
+    assert view["status"] == "answered" and view["nobody_to_tell"] is True
+    assert view["delivered_mail_id"] is None and view["delivered_at"] == view["answered_at"]
+    assert cockpit.mailer.items == []
+    # A dismiss never tells anyone: it is just answered.
+    assert quiet.json()["decision"]["nobody_to_tell"] is False
+    assert quiet.json()["decision"]["delivered_at"] is None
+    told = {e.subject: e.data["nobody_to_tell"] for e in cockpit.events("decision.answered")}
+    assert told == {f"decision:{abandon.ref}": True, f"decision:{dismiss.ref}": False}
+
+
 # ── Withdraw ───────────────────────────────────────────────────
 
 

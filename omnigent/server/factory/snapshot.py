@@ -677,6 +677,7 @@ def decision_view(
         "delivered_mail_id": decision.delivered_mail_id,
         "delivered_at": decision.delivered_at,
         "delivered_to_title": titles.get(target) if target else None,
+        "nobody_to_tell": decision.nobody_to_tell,
         "created_at": decision.created_at,
         "updated_at": decision.updated_at,
         "assignee": decision.assignee,

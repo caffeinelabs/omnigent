@@ -10,8 +10,10 @@ import {
   agentDecision,
   answeredAndDelivered,
   answeredDecision,
+  answeredNobodyToTell,
   blockedApprovalDecision,
   deliveredDecision,
+  doneCheckDecision,
   lateQuestion,
   relaunchFailedDecision,
 } from "./__fixtures__/decisionFixtures";
@@ -210,6 +212,50 @@ describe("DecisionCard", () => {
     const conflict = await within(card).findByTestId("decision-conflict-D-2");
     expect(conflict).toHaveTextContent(text);
     expect(conflict).not.toHaveTextContent("Already answered");
+  });
+
+  it("shows the server's reason for any other 409, not a lost race", async () => {
+    answerWith(() =>
+      json(
+        {
+          error: { code: "no_project_lead", message: "D-11 has no project lead to tell" },
+        },
+        409,
+      ),
+    );
+    const { card, onAnswered } = renderCard(doneCheckDecision());
+    fireEvent.click(within(card).getByTestId("decision-option-D-11-0"));
+    const error = await within(card).findByTestId("decision-error-D-11");
+    expect(error).toHaveTextContent("Couldn’t answer: D-11 has no project lead to tell");
+    expect(error).not.toHaveTextContent("Try again");
+    expect(within(card).queryByTestId("decision-conflict-D-11")).toBeNull();
+    // Still open: the options come back (Not yet stays one click away).
+    expect(card).toHaveAttribute("data-status", "open");
+    expect(within(card).getByTestId("decision-option-D-11-1")).toBeEnabled();
+    expect(onAnswered).not.toHaveBeenCalled();
+  });
+
+  it("says nobody was told when the PL was gone", async () => {
+    answerWith(() => json({ decision: answeredNobodyToTell() }));
+    const { card, onAnswered, rerender } = renderCard(doneCheckDecision());
+    fireEvent.click(within(card).getByTestId("decision-option-D-11-0"));
+    await waitFor(() =>
+      expect(within(card).getByTestId("decision-receipt-D-11")).toHaveAttribute(
+        "data-state",
+        "recorded",
+      ),
+    );
+    expect(within(card).getByTestId("decision-receipt-D-11")).toHaveTextContent(
+      "No PL to tell — recorded",
+    );
+    expect(card).toHaveAttribute("data-status", "answered");
+    expect(onAnswered).toHaveBeenCalledOnce();
+    // The snapshot's view says the same once it catches up.
+    rerender(answeredNobodyToTell());
+    expect(within(card).getByTestId("decision-receipt-D-11")).toHaveTextContent(
+      "No PL to tell — recorded",
+    );
+    expect(within(card).getByTestId("decision-receipt-D-11")).not.toHaveTextContent("Delivered");
   });
 
   it("keeps the receipt's time and tick together so the ✓ never wraps alone", () => {

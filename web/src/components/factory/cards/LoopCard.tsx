@@ -13,9 +13,9 @@ import { factoryInvalidationKeys } from "@/hooks/useFactory";
 import {
   type DecisionOptionView,
   type DecisionView,
-  FactoryApiError,
   type LoopView,
   answerDecision,
+  isDecisionConflict,
 } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
 import { answerBlockedReason, answerLabel } from "../decisions/DecisionCard";
@@ -67,7 +67,7 @@ function Remedies({ factoryId, decision }: { factoryId: string; decision: Decisi
         void queryClient.invalidateQueries({ queryKey: key });
       }
     } catch (err) {
-      if (err instanceof FactoryApiError && err.status === 409) {
+      if (isDecisionConflict(err)) {
         const by = (err.body as { answered_by?: string } | null)?.answered_by;
         setError(`Already answered${by ? ` by ${by}` : ""}`);
       } else {

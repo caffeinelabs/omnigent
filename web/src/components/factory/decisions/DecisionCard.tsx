@@ -2,9 +2,10 @@
  * One decision an agent (or the supervisor) asked the human, answered in
  * one click: an option button, or free text. The answer shows at once as
  * "Answered · delivering…" (rolled back if the POST fails), then as a
- * receipt once the server delivers it to the asker. A lost race reads
- * "Already answered by X". Keyboard: 1–5 pick an option on the focused
- * card, ⌘↵ sends the text.
+ * receipt once the server delivers it to the asker, or "No PL to tell —
+ * recorded" when nobody is left to receive it. A lost race reads "Already
+ * answered by X"; any other refusal shows the server's reason. Keyboard:
+ * 1–5 pick an option on the focused card, ⌘↵ sends the text.
  */
 
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
@@ -12,6 +13,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import {
   BanIcon,
   CheckCheckIcon,
+  CheckIcon,
   ChevronRightIcon,
   CircleAlertIcon,
   ExternalLinkIcon,
@@ -26,7 +28,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/component
 import { Textarea } from "@/components/ui/textarea";
 import { factoryInvalidationKeys } from "@/hooks/useFactory";
 import type { DecisionConflictBody, DecisionOptionView, DecisionView } from "@/lib/factoryApi";
-import { FactoryApiError, answerDecision } from "@/lib/factoryApi";
+import { FactoryApiError, answerDecision, isDecisionConflict } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { ageText, decisionAnchorId } from "../board/boardModel";
@@ -57,7 +59,8 @@ type Phase =
       at: number | null;
     }
   | { kind: "failed"; message: string; decision: DecisionView | null }
-  | { kind: "error"; message: string };
+  /** The POST failed; `refused` when the server said no (a 4xx), so a retry won't help. */
+  | { kind: "error"; message: string; refused: boolean };
 
 export type DecisionCardStatus =
   "open" | "answering" | "answered" | "delivered" | "conflict" | "withdrawn" | "expired";
@@ -148,21 +151,34 @@ export function answerBlockedReason(
   return `Assigned to ${assignee}; owners can reassign`;
 }
 
+/** `No PL to tell — recorded`: the receipt of an answer nobody was left to receive. */
+export function nobodyToTellText(decision: DecisionView): string {
+  return decision.project_slug ? "No PL to tell — recorded" : "Nobody to tell — recorded";
+}
+
 /** The receipt line of an answered decision (also used by the rail's answered list). */
 export function DecisionReceipt({ decision }: { decision: DecisionView }) {
-  const delivered = decision.delivered_at != null;
+  const nobody = decision.nobody_to_tell === true;
+  const delivered = !nobody && decision.delivered_at != null;
   // A delivery is pending while the answer's mail id waits for its receipt.
   const awaiting = !delivered && decision.delivered_mail_id != null;
   return (
     <p
       data-testid={`decision-receipt-${decision.ref}`}
-      data-state={delivered ? "delivered" : awaiting ? "delivering" : "answered"}
+      data-state={
+        nobody ? "recorded" : delivered ? "delivered" : awaiting ? "delivering" : "answered"
+      }
       className={cn(
         "flex flex-wrap items-center gap-x-1 text-sm",
         delivered ? "text-success" : "text-muted-foreground",
       )}
     >
-      {delivered ? (
+      {nobody ? (
+        <>
+          <CheckIcon aria-hidden className="size-3.5" />
+          {nobodyToTellText(decision)}
+        </>
+      ) : delivered ? (
         <>
           <CheckCheckIcon aria-hidden className="size-3.5" />
           Delivered to {decision.delivered_to_title ?? "the asker"}{" "}
@@ -338,7 +354,7 @@ export function DecisionCard({
         onAnswered?.(stored);
       },
       (error: unknown) => {
-        if (error instanceof FactoryApiError && error.status === 409) {
+        if (isDecisionConflict(error)) {
           const body = (error.body ?? {}) as DecisionConflictBody;
           const now = body.status ?? body.decision?.status;
           setPhase({
@@ -361,6 +377,7 @@ export function DecisionCard({
         setPhase({
           kind: "error",
           message: error instanceof Error ? error.message : String(error),
+          refused: error instanceof FactoryApiError && error.status >= 400 && error.status < 500,
         });
       },
     );
@@ -409,7 +426,7 @@ export function DecisionCard({
       : phase.kind === "conflict"
         ? "conflict"
         : answered
-          ? answered.delivered_at != null
+          ? answered.delivered_at != null && !answered.nobody_to_tell
             ? "delivered"
             : "answered"
           : busy
@@ -637,8 +654,14 @@ export function DecisionCard({
               </ReasonGated>
             ))}
           {phase.kind === "error" && (
-            <p data-testid={`decision-error-${decision.ref}`} className="text-destructive">
-              Couldn’t send: {phase.message}. Try again.
+            <p
+              data-testid={`decision-error-${decision.ref}`}
+              data-refused={phase.refused ? "true" : undefined}
+              className="text-destructive"
+            >
+              {phase.refused
+                ? `Couldn’t answer: ${phase.message}`
+                : `Couldn’t send: ${phase.message}. Try again.`}
             </p>
           )}
         </>
