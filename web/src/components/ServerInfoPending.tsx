@@ -5,16 +5,19 @@ import { Spinner } from "@/components/ui/spinner";
 import { retryServerInfoNow } from "@/lib/capabilities";
 import { useServerInfoProbe } from "@/lib/CapabilitiesContext";
 
-/** Whole seconds until `at`, re-rendering every second while counting down. */
+/**
+ * Whole seconds until `at`, re-rendering every second while counting down.
+ * Reads the clock on each render rather than from state, so a new `at` after
+ * an attempt in flight (when no tick ran) never counts from a stale time.
+ */
 function useSecondsUntil(at: number | null): number | null {
-  const [now, setNow] = useState(() => Date.now());
+  const [, setTick] = useState(0);
   useEffect(() => {
     if (at === null) return;
-    setNow(Date.now());
-    const timer = setInterval(() => setNow(Date.now()), 1_000);
+    const timer = setInterval(() => setTick((tick) => tick + 1), 1_000);
     return () => clearInterval(timer);
   }, [at]);
-  return at === null ? null : Math.max(1, Math.ceil((at - now) / 1_000));
+  return at === null ? null : Math.max(1, Math.ceil((at - Date.now()) / 1_000));
 }
 
 /**

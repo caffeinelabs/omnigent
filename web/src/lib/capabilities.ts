@@ -395,18 +395,46 @@ function isTransientStatus(status: number): boolean {
   return status >= 500 || status === 408 || status === 429;
 }
 
+/**
+ * How long one ``/v1/info`` attempt may take before it counts as transient.
+ * A stalled connection (blackholed TCP, a proxy holding the request) would
+ * otherwise park the probe until the browser gives up, with no retry offered.
+ */
+export const SERVER_INFO_ATTEMPT_TIMEOUT_MS = 10_000;
+
 /** One ``/v1/info`` attempt: the parsed info, the off sentinel, or TRANSIENT. */
-async function probeServerInfoOnce(): Promise<ServerInfo | typeof TRANSIENT> {
+async function fetchServerInfo(signal: AbortSignal): Promise<ServerInfo | typeof TRANSIENT> {
   try {
     // Route through the host transport (`hostFetch`) so the embed hits the
     // proxied omnigent API; standalone `hostFetch` falls back to plain
     // `fetch("/v1/info")`, preserving the original behavior.
-    const res = await hostFetch("/v1/info");
+    const res = await hostFetch("/v1/info", { signal });
     if (res.ok) return parseServerInfo((await res.json()) as Partial<ServerInfo>);
     return isTransientStatus(res.status) ? TRANSIENT : FALLBACK_SERVER_INFO;
   } catch {
-    // Network failure, or a 2xx whose body never arrived intact.
+    // Network failure, a timed-out attempt, or a 2xx whose body never arrived intact.
     return TRANSIENT;
+  }
+}
+
+/**
+ * One attempt, capped at {@link SERVER_INFO_ATTEMPT_TIMEOUT_MS}. The cap is a
+ * race as well as an abort, so a host fetcher that ignores the signal still
+ * can't hold the probe.
+ */
+async function probeServerInfoOnce(): Promise<ServerInfo | typeof TRANSIENT> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<typeof TRANSIENT>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(TRANSIENT);
+    }, SERVER_INFO_ATTEMPT_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([fetchServerInfo(controller.signal), timedOut]);
+  } finally {
+    clearTimeout(timer);
   }
 }
 
@@ -457,8 +485,9 @@ function waitForRetry(delayMs: number): Promise<void> {
 /**
  * Fetch ``/v1/info`` and cache the answer for the page's lifetime.
  *
- * A transient failure (network error, 5xx, 408/429, unreadable body) is
- * retried with backoff until the server answers, and the probe state reports
+ * A transient failure (network error, 5xx, 408/429, unreadable body, or an
+ * attempt that outlasts {@link SERVER_INFO_ATTEMPT_TIMEOUT_MS}) is retried
+ * with backoff until the server answers, and the probe state reports
  * ``retrying`` meanwhile so the UI can say so. The returned promise settles
  * only with a real answer: a failed probe must not read as "every feature is
  * off" (that rendered "Page not found" on a release-feature route). Any other

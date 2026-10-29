@@ -30,6 +30,29 @@ describe("ServerUnreachable", () => {
     expect(screen.getByTestId("server-unreachable-status")).toHaveTextContent("Retrying in 3s");
   });
 
+  // No tick runs while an attempt is in flight, so the next countdown must not
+  // start from the clock as it was before that attempt.
+  it("counts the next wait from now after an attempt in flight", () => {
+    vi.useFakeTimers();
+    const view = render(
+      <ServerUnreachable failures={1} retryAt={Date.now() + 1_000} onRetry={vi.fn()} />,
+    );
+    view.rerender(<ServerUnreachable failures={1} retryAt={null} onRetry={vi.fn()} />);
+    // Record every text the status line takes from here on, including a frame
+    // an effect replaces before the test can look.
+    const status = screen.getByTestId("server-unreachable-status");
+    const observer = new MutationObserver(() => {});
+    observer.observe(status, { subtree: true, characterData: true, characterDataOldValue: true });
+    // The attempt hangs for 5 s, then fails; the next wait is 2 s.
+    vi.setSystemTime(Date.now() + 5_000);
+    view.rerender(
+      <ServerUnreachable failures={2} retryAt={Date.now() + 2_000} onRetry={vi.fn()} />,
+    );
+    const values = [...observer.takeRecords().map((r) => r.oldValue), status.textContent];
+    observer.disconnect();
+    expect(values).toEqual(["Retrying…", "Retrying in 2s"]);
+  });
+
   it("says it is retrying while an attempt is in flight", () => {
     render(<ServerUnreachable failures={3} retryAt={null} onRetry={vi.fn()} />);
     expect(screen.getByTestId("server-unreachable-status")).toHaveTextContent("Retrying…");

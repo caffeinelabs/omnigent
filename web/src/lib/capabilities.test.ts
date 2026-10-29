@@ -358,6 +358,29 @@ describe("resolveServerInfo retries an unreachable server", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
+  it("gives up on an attempt that stalls and retries it", async () => {
+    let aborted: AbortSignal | undefined;
+    fetchMock
+      .mockImplementationOnce((_path: string, init?: RequestInit) => {
+        aborted = init?.signal ?? undefined;
+        return new Promise<never>(() => {});
+      })
+      .mockResolvedValueOnce(mockJsonResponse({ features: { factory: true } }));
+    const { resolveServerInfo, getServerInfoProbeState, SERVER_INFO_ATTEMPT_TIMEOUT_MS } =
+      await load();
+    const result = resolveServerInfo();
+
+    await vi.advanceTimersByTimeAsync(SERVER_INFO_ATTEMPT_TIMEOUT_MS - 1);
+    expect(getServerInfoProbeState()).toEqual({ kind: "pending" });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(aborted?.aborted).toBe(true);
+    expect(getServerInfoProbeState()).toMatchObject({ kind: "retrying", failures: 1 });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(result).resolves.toMatchObject({ features: { factory: true } });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("shares one probe between callers and caches the answer", async () => {
     fetchMock.mockResolvedValueOnce(mockJsonResponse({ features: { canvas: true } }));
     const { resolveServerInfo } = await load();
