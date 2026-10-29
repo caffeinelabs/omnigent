@@ -291,9 +291,12 @@ async def test_an_owner_rejects_a_rule(cockpit: Cockpit) -> None:
 
     assert resp.status_code == 200, resp.text
     assert _row(cockpit).status == "rejected"
+    # The reason is stored on the proposal (cards show it) and reaches the proposer verbatim.
+    assert _row(cockpit).result["note"] == "too vague"
+    assert resp.json()["proposal"]["result"]["note"] == "too vague"
     assert definition.definition_for(cockpit.deps, cockpit.fid).version == 1  # type: ignore[union-attr]
     assert any(
-        t.startswith("[Factory proposal · C-1 rejected by alice")
+        t.startswith('[Factory proposal · C-1 rejected by alice: "too vague"]')
         for t in _texts(cockpit, "lead_b")
     )
 

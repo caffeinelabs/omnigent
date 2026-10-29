@@ -248,6 +248,35 @@ export const ProposalRejecting = proposalStory(
   },
 );
 
+/** A reason longer than the note box: it scrolls in place, so "Reject C-4" stays under the cursor. */
+async function rejectWithLongNote({ canvasElement }: { canvasElement: HTMLElement }) {
+  const body = within(canvasElement.ownerDocument.body);
+  fireEvent.click(await body.findByTestId("proposal-reject-C-4", {}, { timeout: 6000 }));
+  fireEvent.change(await body.findByTestId("proposal-reject-note-C-4"), {
+    target: {
+      value:
+        "Billing waits for Q1: finance hasn't signed off on the invoice schema.\nKeep the API contract stable until then, and split the schema work out so it can land on its own.\nRe-propose after the finance review on the 14th.",
+    },
+  });
+}
+
+export const ProposalRejectingLongNote = proposalStory(
+  proposalInState("pending"),
+  {},
+  rejectWithLongNote,
+);
+
+export const ProposalRejectingLongNoteDark = proposalStory(
+  proposalInState("pending"),
+  { theme: "dark" },
+  rejectWithLongNote,
+);
+
+export const ProposalRejectingLongNoteMobile: Story = {
+  ...proposalStory(proposalInState("pending"), {}, rejectWithLongNote),
+  globals: { viewport: { value: "mobile2" } },
+};
+
 /** Edit & apply: the proposed projects in the start form's fields. */
 export const ProposalEditApply = proposalStory(
   proposalInState("pending"),

@@ -371,8 +371,82 @@ describe("Improvements", () => {
     const dismiss = await screen.findByTestId("proposal-C-16-reject");
     expect(dismiss).toHaveTextContent("Dismiss");
     fireEvent.click(dismiss);
+    expect(sent("POST", `${SNAPSHOT}/proposals/C-16/reject`)).toEqual([]);
+    fireEvent.click(screen.getByTestId("proposal-reject-confirm-C-16"));
 
     await waitFor(() => expect(sent("POST", `${SNAPSHOT}/proposals/C-16/reject`)).toEqual([{}]));
+  });
+
+  it("asks why before rejecting a pending change, as the Decisions card does", async () => {
+    serve("creator", {
+      [`POST ${SNAPSHOT}/proposals/C-15/reject`]: () => json({ proposal: {}, decision: {} }),
+    });
+    renderAt("/improvements?tab=proposed");
+
+    fireEvent.click(await screen.findByTestId("proposal-C-15-reject"));
+    const form = screen.getByTestId("proposal-reject-form-C-15");
+    expect(sent("POST", `${SNAPSHOT}/proposals/C-15/reject`)).toEqual([]);
+    // The levers make way for the form; Approve can't be hit by mistake.
+    expect(screen.queryByTestId("proposal-C-15-approve")).toBeNull();
+    const note = within(form).getByTestId("proposal-reject-note-C-15");
+    expect(note).toHaveAttribute("placeholder", "Why not? The proposer reads this (optional)");
+    fireEvent.change(note, { target: { value: "Plan human-only steps in the charter instead" } });
+    fireEvent.click(within(form).getByTestId("proposal-reject-confirm-C-15"));
+
+    await waitFor(() =>
+      expect(sent("POST", `${SNAPSHOT}/proposals/C-15/reject`)).toEqual([
+        { note: "Plan human-only steps in the charter instead" },
+      ]),
+    );
+    await waitFor(() => expect(screen.queryByTestId("proposal-reject-form-C-15")).toBeNull());
+  });
+
+  it("closes the reject form on Cancel without sending", async () => {
+    serve();
+    renderAt("/improvements?tab=proposed");
+
+    fireEvent.click(await screen.findByTestId("proposal-C-15-reject"));
+    fireEvent.click(screen.getByTestId("proposal-reject-cancel-C-15"));
+
+    expect(screen.queryByTestId("proposal-reject-form-C-15")).toBeNull();
+    expect(screen.getByTestId("proposal-C-15-approve")).toBeEnabled();
+    expect(sent("POST", `${SNAPSHOT}/proposals/C-15/reject`)).toEqual([]);
+  });
+
+  it("keeps the form and its note when the reject fails", async () => {
+    serve("creator", {
+      [`POST ${SNAPSHOT}/proposals/C-15/reject`]: () =>
+        json({ error: { code: "unavailable", message: "try again" } }, 503),
+    });
+    renderAt("/improvements?tab=proposed");
+
+    fireEvent.click(await screen.findByTestId("proposal-C-15-reject"));
+    fireEvent.change(screen.getByTestId("proposal-reject-note-C-15"), {
+      target: { value: "too vague" },
+    });
+    fireEvent.click(screen.getByTestId("proposal-reject-confirm-C-15"));
+
+    expect(await screen.findByTestId("proposal-C-15-error")).toBeInTheDocument();
+    expect(screen.getByTestId("proposal-reject-note-C-15")).toHaveValue("too vague");
+    expect(screen.getByTestId("proposal-reject-confirm-C-15")).toBeEnabled();
+  });
+
+  it("shows the reject note on a rejected change", async () => {
+    const rejected = {
+      ...learnProposals().find((p) => p.ref === "C-15")!,
+      status: "rejected" as const,
+      decided_by: "luka@caffeine.ai",
+      result: { note: "Plan human-only steps in the charter instead" },
+    };
+    serve("creator", {
+      [`GET ${SNAPSHOT}/proposals/C-15`]: () => json({ proposal: rejected }),
+    });
+    renderAt("/improvements/C-15");
+
+    expect(await screen.findByTestId("proposal-C-15-outcome")).toHaveTextContent(
+      "Rejected by luka: “Plan human-only steps in the charter instead”",
+    );
+    expect(screen.queryByTestId("proposal-C-15-reject")).toBeNull();
   });
 
   it.each(["viewer", "operator"] as const)("disables every Tier-1 lever for a %s", async (role) => {

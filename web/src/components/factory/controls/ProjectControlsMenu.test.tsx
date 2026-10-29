@@ -85,6 +85,25 @@ describe("ProjectControlsMenu", () => {
     );
   });
 
+  it.each([
+    ["control-restart", "control-restart-dialog"],
+    ["control-pause", "control-pause-dialog"],
+  ])("%s keeps its buttons put while the note grows", async (lever, dialogId) => {
+    setup();
+    open();
+    fireEvent.click(screen.getByTestId(lever));
+    const dialog = await screen.findByTestId(dialogId);
+    const note = within(dialog).getByTestId("control-note");
+    fireEvent.change(note, { target: { value: "line\n".repeat(30) } });
+    // The note scrolls in a fixed box inside the scrolling body; the footer sits outside it.
+    expect(note).toHaveClass("field-sizing-fixed");
+    expect(note.closest('[data-slot="dialog-body"]')).not.toBeNull();
+    const confirm = within(dialog).getByTestId("control-confirm");
+    expect(confirm.closest('[data-slot="dialog-body"]')).toBeNull();
+    expect(confirm.closest('[data-slot="dialog-footer"]')).not.toBeNull();
+    expect(dialog).toHaveClass("max-h-[85vh]", "flex-col");
+  });
+
   it("sends the right body for every other project control", async () => {
     const { controlBodies, snapshot } = setup((_, project) => {
       project.overlay = "paused";

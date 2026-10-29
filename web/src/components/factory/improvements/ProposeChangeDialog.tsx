@@ -32,7 +32,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Switch } from "@/components/ui/switch";
-import { Textarea } from "@/components/ui/textarea";
 import { showToast } from "@/components/ui/toast";
 import type {
   DefinitionChange,
@@ -45,6 +44,7 @@ import { useNavigate } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { controlErrorMessage } from "../controls/controlModel";
 import { improvementPageHref } from "../factoryRoutes";
+import { DialogBody, NoteTextarea, STICKY_DIALOG } from "../formParts";
 import { METRIC_NAMES, metricLabel } from "../insights/insightsModel";
 import {
   useAnswerProposal,
@@ -381,7 +381,7 @@ function RuleRowFields({
         </Labeled>
       </div>
       <Labeled label="Rule" htmlFor={`${id}-text`}>
-        <Textarea
+        <NoteTextarea
           id={`${id}-text`}
           value={row.text}
           onChange={(e) => onChange({ ...row, text: e.target.value })}
@@ -389,7 +389,7 @@ function RuleRowFields({
           placeholder="e.g. Decide reversible naming and API-shape choices yourself."
           data-testid="propose-rule-text"
           componentId="factory.propose.rule"
-          className="min-h-16 bg-background"
+          className="bg-background"
         />
       </Labeled>
     </div>
@@ -547,7 +547,7 @@ export function ProposeChangeDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         data-testid="propose-change-dialog"
-        className="flex max-h-[85vh] flex-col gap-4 overflow-y-auto sm:max-w-lg"
+        className={`${STICKY_DIALOG} gap-4 sm:max-w-lg`}
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -563,163 +563,167 @@ export function ProposeChangeDialog({
             Rules are advisory text and never widen a policy or gate.
           </DialogDescription>
         </DialogHeader>
-        {!editing && (
-          <div
-            role="radiogroup"
-            aria-label="Change"
-            className="inline-flex self-start rounded-lg bg-muted p-[3px]"
-            onKeyDown={(e) => {
-              if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
-                e.preventDefault();
-                const next = mode === "setting" ? "rule" : "setting";
-                setMode(next);
-                e.currentTarget.querySelector<HTMLButtonElement>(`[data-mode="${next}"]`)?.focus();
-              }
-            }}
-          >
-            {(["setting", "rule"] as const).map((m) => (
-              <button
-                key={m}
-                type="button"
-                role="radio"
-                aria-checked={mode === m}
-                // Roving focus: only the chosen one is in the tab order (and takes the dialog's first focus).
-                tabIndex={mode === m ? 0 : -1}
-                data-mode={m}
-                data-testid={`propose-mode-${m}`}
-                onClick={() => setMode(m)}
-                className={cn(
-                  "h-6 cursor-pointer rounded-md px-2 text-sm font-medium focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
-                  mode === m
-                    ? "bg-background shadow-sm dark:bg-input/30"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
+        <DialogBody>
+          {!editing && (
+            <div
+              role="radiogroup"
+              aria-label="Change"
+              className="inline-flex self-start rounded-lg bg-muted p-[3px]"
+              onKeyDown={(e) => {
+                if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(e.key)) {
+                  e.preventDefault();
+                  const next = mode === "setting" ? "rule" : "setting";
+                  setMode(next);
+                  e.currentTarget
+                    .querySelector<HTMLButtonElement>(`[data-mode="${next}"]`)
+                    ?.focus();
+                }
+              }}
+            >
+              {(["setting", "rule"] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  role="radio"
+                  aria-checked={mode === m}
+                  // Roving focus: only the chosen one is in the tab order (and takes the dialog's first focus).
+                  tabIndex={mode === m ? 0 : -1}
+                  data-mode={m}
+                  data-testid={`propose-mode-${m}`}
+                  onClick={() => setMode(m)}
+                  className={cn(
+                    "h-6 cursor-pointer rounded-md px-2 text-sm font-medium focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+                    mode === m
+                      ? "bg-background shadow-sm dark:bg-input/30"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {m === "setting" ? "A setting" : "A rule"}
+                </button>
+              ))}
+            </div>
+          )}
+          <div className="flex min-w-0 flex-col gap-3" data-testid="propose-changes">
+            {active.map((row, i) => (
+              <div
+                key={row.key}
+                data-testid={`propose-change-${i}`}
+                className={cn(active.length > 1 && "rounded-lg border border-border p-2.5")}
               >
-                {m === "setting" ? "A setting" : "A rule"}
-              </button>
+                {active.length > 1 && (
+                  <p className="mb-1.5 text-xs text-muted-foreground">
+                    Change {i + 1} of {active.length}
+                  </p>
+                )}
+                {row.kind === "setting" ? (
+                  <SettingRowFields row={row} definition={definition.data} onChange={update} />
+                ) : row.kind === "rule" ? (
+                  <RuleRowFields row={row} projects={projects} onChange={update} />
+                ) : (
+                  <p className="font-mono text-sm text-muted-foreground">{row.label}</p>
+                )}
+              </div>
             ))}
           </div>
-        )}
-        <div className="flex min-w-0 flex-col gap-3" data-testid="propose-changes">
-          {active.map((row, i) => (
-            <div
-              key={row.key}
-              data-testid={`propose-change-${i}`}
-              className={cn(active.length > 1 && "rounded-lg border border-border p-2.5")}
-            >
-              {active.length > 1 && (
-                <p className="mb-1.5 text-xs text-muted-foreground">
-                  Change {i + 1} of {active.length}
-                </p>
-              )}
-              {row.kind === "setting" ? (
-                <SettingRowFields row={row} definition={definition.data} onChange={update} />
-              ) : row.kind === "rule" ? (
-                <RuleRowFields row={row} projects={projects} onChange={update} />
-              ) : (
-                <p className="font-mono text-sm text-muted-foreground">{row.label}</p>
-              )}
-            </div>
-          ))}
-        </div>
-        <Labeled label="Why" htmlFor={`${id}-why`}>
-          <Textarea
-            id={`${id}-why`}
-            value={why}
-            onChange={(e) => setWhy(e.target.value)}
-            placeholder="What the evidence shows"
-            rows={2}
-            data-testid="propose-why"
-            componentId="factory.propose.why"
-          />
-        </Labeled>
-        <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-          <Labeled label="Evidence" htmlFor={`${id}-evidence`}>
-            <Input
-              id={`${id}-evidence`}
-              value={evidence}
-              onChange={(e) => setEvidence(e.target.value)}
-              placeholder="F-9, INC-13, D-2"
-              data-testid="propose-evidence"
-              componentId="factory.propose.evidence"
-              className="h-7 font-mono text-xs"
+          <Labeled label="Why" htmlFor={`${id}-why`}>
+            <NoteTextarea
+              id={`${id}-why`}
+              value={why}
+              onChange={(e) => setWhy(e.target.value)}
+              placeholder="What the evidence shows"
+              rows={2}
+              data-testid="propose-why"
+              componentId="factory.propose.why"
             />
           </Labeled>
-          <Labeled label="Expected to move" htmlFor={`${id}-metric`}>
-            <span className="flex items-center gap-1.5">
-              <Select
-                value={metric || "none"}
-                onValueChange={(m) => setMetric(m === "none" ? "" : m)}
-                componentId="factory.propose.metric"
-                valueHasNoPii
-              >
-                <SelectTrigger
-                  id={`${id}-metric`}
-                  size="sm"
-                  data-testid="propose-metric"
-                  className="w-48"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">no target metric</SelectItem>
-                  {metrics.map((m) => (
-                    <SelectItem key={m} value={m}>
-                      {metricLabel(m)}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {metric && (
+          <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+            <Labeled label="Evidence" htmlFor={`${id}-evidence`}>
+              <Input
+                id={`${id}-evidence`}
+                value={evidence}
+                onChange={(e) => setEvidence(e.target.value)}
+                placeholder="F-9, INC-13, D-2"
+                data-testid="propose-evidence"
+                componentId="factory.propose.evidence"
+                className="h-7 font-mono text-xs"
+              />
+            </Labeled>
+            <Labeled label="Expected to move" htmlFor={`${id}-metric`}>
+              <span className="flex items-center gap-1.5">
                 <Select
-                  value={direction}
-                  onValueChange={(d) => setDirection(d as "up" | "down")}
-                  componentId="factory.propose.direction"
+                  value={metric || "none"}
+                  onValueChange={(m) => setMetric(m === "none" ? "" : m)}
+                  componentId="factory.propose.metric"
                   valueHasNoPii
                 >
                   <SelectTrigger
+                    id={`${id}-metric`}
                     size="sm"
-                    aria-label="Direction"
-                    data-testid="propose-direction"
-                    className="w-24"
+                    data-testid="propose-metric"
+                    className="w-48"
                   >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="down">↓ down</SelectItem>
-                    <SelectItem value="up">↑ up</SelectItem>
+                    <SelectItem value="none">no target metric</SelectItem>
+                    {metrics.map((m) => (
+                      <SelectItem key={m} value={m}>
+                        {metricLabel(m)}
+                      </SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
-              )}
-            </span>
-          </Labeled>
-        </div>
-        {owner && (
-          <label className="inline-flex items-center gap-2 text-sm text-muted-foreground">
-            <Switch
-              size="sm"
-              checked={trial}
-              onCheckedChange={setTrial}
-              data-testid="propose-trial"
-              componentId="factory.propose.trial"
-            />
-            Run as a 48 h trial (guard metrics decide keep or revert)
-          </label>
-        )}
-        {showProblem && (
-          <p
-            data-testid="propose-problem"
-            className="flex items-center gap-1.5 text-sm text-muted-foreground"
-          >
-            <CircleAlertIcon aria-hidden className="size-3.5 shrink-0" />
-            {problems.join(" · ")}
-          </p>
-        )}
-        {failure && (
-          <p role="alert" data-testid="propose-error" className="text-sm text-destructive">
-            {failure}
-          </p>
-        )}
+                {metric && (
+                  <Select
+                    value={direction}
+                    onValueChange={(d) => setDirection(d as "up" | "down")}
+                    componentId="factory.propose.direction"
+                    valueHasNoPii
+                  >
+                    <SelectTrigger
+                      size="sm"
+                      aria-label="Direction"
+                      data-testid="propose-direction"
+                      className="w-24"
+                    >
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="down">↓ down</SelectItem>
+                      <SelectItem value="up">↑ up</SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
+              </span>
+            </Labeled>
+          </div>
+          {owner && (
+            <label className="inline-flex items-center gap-2 text-sm text-muted-foreground">
+              <Switch
+                size="sm"
+                checked={trial}
+                onCheckedChange={setTrial}
+                data-testid="propose-trial"
+                componentId="factory.propose.trial"
+              />
+              Run as a 48 h trial (guard metrics decide keep or revert)
+            </label>
+          )}
+          {showProblem && (
+            <p
+              data-testid="propose-problem"
+              className="flex items-center gap-1.5 text-sm text-muted-foreground"
+            >
+              <CircleAlertIcon aria-hidden className="size-3.5 shrink-0" />
+              {problems.join(" · ")}
+            </p>
+          )}
+          {failure && (
+            <p role="alert" data-testid="propose-error" className="text-sm text-destructive">
+              {failure}
+            </p>
+          )}
+        </DialogBody>
         <DialogFooter>
           <Button
             variant="outline"

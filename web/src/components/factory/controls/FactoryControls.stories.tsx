@@ -313,6 +313,25 @@ export const RestartDialog = cockpit({}, async ({ canvasElement }) => {
   );
 });
 
+/** A note longer than its box scrolls in place: Restart stays under the cursor. */
+async function restartWithLongNote({ canvasElement }: { canvasElement: HTMLElement }) {
+  const screen = await openProjectMenu(canvasElement, "db-version");
+  await userEvent.click(screen.getByTestId("control-restart"));
+  await userEvent.click(await screen.findByTestId("control-note"));
+  await userEvent.paste(
+    "The migration test was flaky; re-run it first.\nIf it fails again, skip the backfill step and open a decision for the schema owner.\nKeep the preview up for review.\nDon't touch the billing tables.",
+  );
+}
+
+export const RestartDialogLongNote = cockpit({}, restartWithLongNote);
+
+export const RestartDialogLongNoteDark = cockpit({ theme: "dark" }, restartWithLongNote);
+
+export const RestartDialogLongNoteMobile: Story = {
+  ...cockpit({}, restartWithLongNote),
+  globals: { viewport: { value: "mobile2" } },
+};
+
 /** Relaunch with spec mode, showing the stored and spec launch args. */
 export const RelaunchDialog = cockpit(
   { snapshot: plDriftSnapshot() },

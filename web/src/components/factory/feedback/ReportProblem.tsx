@@ -18,7 +18,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import { showToast } from "@/components/ui/toast";
 import { factoryInvalidationKeys } from "@/hooks/useFactory";
 import { type ReportIssueRequest, reportFactoryIssue } from "@/lib/factoryApi";
@@ -26,6 +25,7 @@ import { useNavigate } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { controlErrorMessage } from "../controls/controlModel";
 import { alertPageHref } from "../factoryRoutes";
+import { DialogBody, NoteTextarea, STICKY_DIALOG } from "../formParts";
 
 export const SUMMARY_MAX = 200;
 
@@ -95,7 +95,7 @@ export function ReportProblemDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         data-testid="report-problem-dialog"
-        className="flex flex-col gap-4 sm:max-w-md"
+        className={`${STICKY_DIALOG} gap-4 sm:max-w-md`}
       >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -107,54 +107,56 @@ export function ReportProblemDialog({
             Alerts as you, and into the next retro.
           </DialogDescription>
         </DialogHeader>
-        <div
-          role="radiogroup"
-          aria-label="Kind"
-          className="inline-flex self-start rounded-lg bg-muted p-[3px]"
-        >
-          {(["incident", "finding"] as const).map((c) => (
-            <button
-              key={c}
-              type="button"
-              role="radio"
-              aria-checked={cls === c}
-              data-testid={`report-problem-${c}`}
-              onClick={() => setCls(c)}
-              className={cn(
-                "h-6 cursor-pointer rounded-md px-2 text-sm font-medium",
-                cls === c
-                  ? "bg-background text-foreground shadow-sm dark:bg-input/30"
-                  : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              {c === "incident" ? "Wrong now" : "Process gap"}
-            </button>
-          ))}
-        </div>
-        <Input
-          value={summary}
-          onChange={(e) => setSummary(e.target.value)}
-          maxLength={SUMMARY_MAX}
-          placeholder="What's wrong, in one line"
-          aria-label="Summary"
-          autoFocus
-          data-testid="report-problem-summary"
-          componentId="factory.report.summary"
-        />
-        <Textarea
-          value={body}
-          onChange={(e) => setBody(e.target.value)}
-          placeholder="Details (optional): what you expected, what happened"
-          aria-label="Details"
-          rows={3}
-          data-testid="report-problem-body"
-          componentId="factory.report.body"
-        />
-        {failure && (
-          <p role="alert" data-testid="report-problem-error" className="text-sm text-destructive">
-            {failure}
-          </p>
-        )}
+        <DialogBody>
+          <div
+            role="radiogroup"
+            aria-label="Kind"
+            className="inline-flex self-start rounded-lg bg-muted p-[3px]"
+          >
+            {(["incident", "finding"] as const).map((c) => (
+              <button
+                key={c}
+                type="button"
+                role="radio"
+                aria-checked={cls === c}
+                data-testid={`report-problem-${c}`}
+                onClick={() => setCls(c)}
+                className={cn(
+                  "h-6 cursor-pointer rounded-md px-2 text-sm font-medium",
+                  cls === c
+                    ? "bg-background text-foreground shadow-sm dark:bg-input/30"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {c === "incident" ? "Wrong now" : "Process gap"}
+              </button>
+            ))}
+          </div>
+          <Input
+            value={summary}
+            onChange={(e) => setSummary(e.target.value)}
+            maxLength={SUMMARY_MAX}
+            placeholder="What's wrong, in one line"
+            aria-label="Summary"
+            autoFocus
+            data-testid="report-problem-summary"
+            componentId="factory.report.summary"
+          />
+          <NoteTextarea
+            value={body}
+            onChange={(e) => setBody(e.target.value)}
+            placeholder="Details (optional): what you expected, what happened"
+            aria-label="Details"
+            rows={3}
+            data-testid="report-problem-body"
+            componentId="factory.report.body"
+          />
+          {failure && (
+            <p role="alert" data-testid="report-problem-error" className="text-sm text-destructive">
+              {failure}
+            </p>
+          )}
+        </DialogBody>
         <DialogFooter>
           <Button
             variant="outline"
