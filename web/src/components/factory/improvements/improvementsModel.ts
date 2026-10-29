@@ -142,6 +142,18 @@ export function effectText(proposal: ProposalView): string | null {
   return `${metricLabel(effect.metric)} ${arrow}${by}`;
 }
 
+/** The toast after a revert: the version now in force, or that nothing was left to undo. */
+export function revertToast(proposal: ProposalView): string {
+  const result = proposal.result ?? {};
+  if (result.revert_changed === false) {
+    return `${proposal.ref} reverted · later changes had replaced it, no new version`;
+  }
+  const version = result.revert_def_version;
+  return typeof version === "number"
+    ? `${proposal.ref} reverted · v${version} in force`
+    : `${proposal.ref} reverted · parent version back in force`;
+}
+
 /** A Tier-2 reason in plain words: server setting names stay in the tooltip. */
 export function tier2Plain(reason: string | null | undefined): string | null {
   if (!reason) return null;

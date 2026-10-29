@@ -45,6 +45,7 @@ import {
   effectText,
   evidenceHref,
   issueText,
+  revertToast,
   tier2Plain,
   trialProgress,
 } from "./improvementsModel";
@@ -182,12 +183,8 @@ export function LearnProposalCard({
     decide.mutate(
       { ref: proposal.ref, action: verb },
       {
-        onSuccess: () =>
-          showToast(
-            verb === "keep"
-              ? `${proposal.ref} kept`
-              : `${proposal.ref} reverted · parent version back in force`,
-          ),
+        onSuccess: (data) =>
+          showToast(verb === "keep" ? `${proposal.ref} kept` : revertToast(data.proposal)),
         onError: fail,
       },
     );

@@ -829,6 +829,10 @@ def proposal_view(deps: FactoryDeps, row: FactoryProposal) -> dict[str, Any]:
     )
 
 
+_DEFINITION_APPLIED: Final = frozenset({"trial", "applied", "kept", "reverted"})
+"""A tuning or rules change in these applied: its ``before``/``after`` name real rule ids."""
+
+
 def _definition_preview(deps: FactoryDeps, row: FactoryProposal) -> dict[str, Any]:
     """
     A definition change not applied yet: rules it adds carry no id (rows filed
@@ -836,7 +840,7 @@ def _definition_preview(deps: FactoryDeps, row: FactoryProposal) -> dict[str, An
     """
     from omnigent.server.factory import tuning
 
-    if row.def_version_to is not None:
+    if row.status in _DEFINITION_APPLIED:
         return {}
     before, after = row.before or {}, row.after or {}
     shown = tuning.preview(

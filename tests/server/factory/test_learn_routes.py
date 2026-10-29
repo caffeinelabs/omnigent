@@ -259,6 +259,11 @@ async def test_an_owner_approves_it_as_a_trial(cockpit: Cockpit) -> None:
         },
     )
     assert filed.status_code == 201, filed.text
+    # Pending, the rule has no id yet: it gets one when it applies.
+    row = cockpit.store.get_proposal_by_number(cockpit.fid, 1)
+    assert row is not None and list(row.after) == ["rules.new"]
+    assert "id" not in row.after["rules.new"] and row.based_on == {"def_version": 1}
+    assert row.title.startswith("+ new rule · ic · ")
 
     operator = await _post(cockpit, "/proposals/C-1/apply", {}, user="carol")
     owner = await _post(cockpit, "/proposals/C-1/apply", {}, user="alice")
@@ -266,6 +271,9 @@ async def test_an_owner_approves_it_as_a_trial(cockpit: Cockpit) -> None:
     assert operator.status_code == 403, operator.text
     assert owner.status_code == 200, owner.text
     assert owner.json()["proposal"]["status"] == "trial"
+    row = cockpit.store.get_proposal_by_number(cockpit.fid, 1)
+    assert row is not None and list(row.after) == ["rules.R-1"]
+    assert row.title.startswith("+ R-1 · ic · ")
     resolved = definition.definition_for(cockpit.deps, cockpit.fid, fresh=True)
     assert resolved is not None
     [rule] = resolved.doc["rules"]

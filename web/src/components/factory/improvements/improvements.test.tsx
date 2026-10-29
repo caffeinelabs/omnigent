@@ -9,6 +9,7 @@ import {
   issueText,
   onTrial,
   proposed,
+  revertToast,
   tier2Plain,
   trialProgress,
   verdictText,
@@ -93,6 +94,18 @@ describe("improvements model", () => {
     expect(changeLines(pending)).toEqual([
       { sign: "+", path: "rules.new", before: null, after: `role=project_lead · “${text}”` },
     ]);
+  });
+
+  it("says what a revert left in force", () => {
+    const reverted = byRef("C-12");
+    const after = (result: Record<string, unknown> | null) => ({ ...reverted, result });
+    expect(revertToast(after({ revert_def_version: 7, revert_changed: true }))).toBe(
+      "C-12 reverted · v7 in force",
+    );
+    expect(revertToast(after({ revert_def_version: 9, revert_changed: false }))).toBe(
+      "C-12 reverted · later changes had replaced it, no new version",
+    );
+    expect(revertToast(after(null))).toBe("C-12 reverted · parent version back in force");
   });
 
   it("links evidence ids to their pages", () => {

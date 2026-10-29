@@ -67,7 +67,7 @@ async def propose_change(
     diff = tuning.preview(definition.diff(resolved.stored, after))
     if not diff:
         raise CockpitError(400, "no_change", "the definition already has these values")
-    await asyncio.to_thread(tuning._check_overlap, deps, root.id, diff)
+    await asyncio.to_thread(tuning._check_overlap, deps, root.id, diff, resolved.stored)
     actor = await asyncio.to_thread(projects.human_actor, deps, user_id, root.id)
     trial_h = body.trial_h or definition.TRIAL_H_DEFAULT
     row, _ = await asyncio.to_thread(

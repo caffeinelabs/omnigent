@@ -249,6 +249,20 @@ def _title(diff: Sequence[Mapping[str, Any]], fallback: str) -> str:
     return control.clip(" · ".join(lines) if lines else fallback, 256)
 
 
+def _applied_title(row: FactoryProposal, applied: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    """
+    ``{"title": …}`` naming what *row* applied (its real rule ids) when its title
+    was made from its pending diff; ``{}`` for a title its author wrote.
+    """
+    before, after = row.before or {}, row.after or {}
+    pending = [
+        {"path": p, "before": before.get(p), "after": after.get(p)} for p in {**before, **after}
+    ]
+    if row.title not in (_title(pending, row.kind), _title(preview(pending), row.kind)):
+        return {}
+    return {"title": _title(applied, row.kind)}
+
+
 def _effect(body: EffectIn | None) -> dict[str, Any] | None:
     from omnigent.server.factory.telemetry.metrics import CATALOG
 
@@ -632,7 +646,7 @@ async def propose(app_state: Any, caller: AgentCaller, body: ProposeIn) -> dict[
     diff = preview(definition.diff(resolved.stored, after))
     if not diff:
         raise CockpitError(400, "no_change", "the definition already has these values")
-    await asyncio.to_thread(_check_overlap, deps, root.id, diff)
+    await asyncio.to_thread(_check_overlap, deps, root.id, diff, resolved.stored)
     klass = _klass(diff)
     peer = await asyncio.to_thread(_peer_lead, deps, root.id, author) if klass == "A" else None
     warnings: list[str] = []
@@ -705,23 +719,49 @@ def _check_pl_rules(changes: Sequence[definition.Change], project: str | None) -
             )
 
 
-def _check_overlap(deps: FactoryDeps, factory_id: str, diff: Sequence[Mapping[str, Any]]) -> None:
-    paths = {str(d["path"]) for d in diff if not str(d["path"]).startswith("rules.")}
-    if not paths:
+def _check_overlap(
+    deps: FactoryDeps,
+    factory_id: str,
+    diff: Sequence[Mapping[str, Any]],
+    stored: Mapping[str, Any],
+) -> None:
+    """
+    409 ``path_busy`` when an open or trial change already changes a setting of
+    *diff*, or an open one edits or removes a rule *diff* does. A stale open
+    proposal (something it changes moved since, see :func:`stale_paths`) holds
+    nothing: it can no longer apply, so its replacement may be filed.
+    """
+    settings = {str(d["path"]) for d in diff if not str(d["path"]).startswith("rules.")}
+    rules = {
+        str(d["path"])
+        for d in diff
+        if str(d["path"]).startswith("rules.") and d.get("before") is not None
+    }
+    if not settings and not rules:
         return
     rows = deps.factory_store.list_proposals(
-        factory_id, status=["pending", "awaiting_cosign", "trial"], kind=["tuning"], limit=200
+        factory_id,
+        status=["pending", "awaiting_cosign", "trial"],
+        kind=["tuning", "rules"],
+        limit=200,
     )
     for row in rows:
-        taken = paths & set((row.after or {}).keys())
-        if taken:
-            raise CockpitError(
-                409,
-                "path_busy",
-                f"{proposal_ref(row.number)} ({row.status}) already changes "
-                + ", ".join(sorted(taken)),
-                proposal=proposal_ref(row.number),
-            )
+        before = row.before or {}
+        is_open = row.status in PROPOSAL_OPEN_STATUSES
+        taken = settings & set((row.after or {}).keys())
+        if is_open:
+            taken |= rules & {p for p, v in before.items() if v is not None}
+        if not taken:
+            continue
+        if is_open and definition.moved_paths(before, stored):
+            continue  # Stale: approving it is refused, so it holds nothing.
+        raise CockpitError(
+            409,
+            "path_busy",
+            f"{proposal_ref(row.number)} ({row.status}) already changes "
+            + ", ".join(sorted(taken)),
+            proposal=proposal_ref(row.number),
+        )
 
 
 async def _record_code(
@@ -981,6 +1021,7 @@ async def _apply(
         deps,
         row,
         expect,
+        **_applied_title(row, applied),
         status="trial" if trial else "applied",
         cosigned_by=cosigned_by,
         decided_by=actor.id,
@@ -1100,6 +1141,37 @@ async def _refuse_stale(
         ),
     )
     raise error
+
+
+async def _tell_stale(
+    app_state: Any, row: FactoryProposal, version: int, moved: Sequence[str]
+) -> None:
+    """Tell the proposer, once per version, that an owner could not apply stale *row*."""
+    deps = factory_deps(app_state)
+    result = row.result or {}
+    if result.get("stale_told") == version:
+        return
+    try:
+        await asyncio.to_thread(
+            lambda: deps.factory_store.update_proposal(
+                row.id,
+                expect_status=list(PROPOSAL_OPEN_STATUSES),
+                result={**result, "stale_told": version},
+            )
+        )
+    except ProposalStateConflict:
+        return
+    await _tell(
+        app_state,
+        row,
+        outcome_text(
+            proposal_ref(row.number),
+            f"is stale against v{version}",
+            f"{', '.join(moved)} changed since you proposed it, so an owner could not "
+            f"apply it. Re-propose against v{version} if it still applies; record it "
+            "in the ledger.",
+        ),
+    )
 
 
 def _hhmm(ts: int | None) -> str:
@@ -1259,6 +1331,19 @@ async def _revert(
                 )
             )
             version = stored.version
+    row = (
+        await asyncio.to_thread(
+            lambda: deps.factory_store.update_proposal(
+                row.id,
+                result={
+                    **(row.result or {}),
+                    "revert_def_version": version,
+                    "revert_changed": changed,
+                },
+            )
+        )
+        or row
+    )
     if changed:
         await deliver(
             app_state,
@@ -1537,6 +1622,7 @@ async def plan_answer(
         if row.kind != "code":
             version, moved = await asyncio.to_thread(stale_paths, deps, row)
             if moved:
+                await _tell_stale(app_state, row, version, moved)
                 raise stale_error(row, version, moved)
         return TuningAnswer(row, root, actor, user_id, apply=True, action=OPTION_APPLY)
     return TuningAnswer(row, root, actor, user_id, apply=False, note=text, action=OPTION_REJECT)

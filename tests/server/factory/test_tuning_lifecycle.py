@@ -530,6 +530,7 @@ async def test_two_rules_proposed_on_one_version_get_their_own_ids(cockpit: Cock
     row = _row(cockpit, 2)
     assert (row.status, row.def_version_from, row.def_version_to) == ("trial", 2, 3)
     assert list(row.after) == ["rules.R-2"] and row.after["rules.R-2"]["origin"] == "C-2"
+    assert row.title == '+ R-2 · project_lead · "Plan human-only steps first."'
     update = [t for t in _texts(cockpit, "pl") if "RULES UPDATE · C-2" in t][-1]
     assert '+ R-2 · project_lead · "Plan human-only steps first."' in update
 
@@ -653,10 +654,137 @@ async def test_reverting_a_change_keeps_a_later_change_to_the_same_setting(
     resp = await cockpit.post(f"/v1/factory/factories/{cockpit.fid}/proposals/C-1/revert", {})
 
     assert resp.status_code == 200, resp.text
-    assert _row(cockpit).status == "reverted"
+    row = _row(cockpit)
+    assert row.status == "reverted"
+    # Nothing was left to undo: no new version, and the card says so.
+    assert (row.result["revert_changed"], row.result["revert_def_version"]) == (False, 3)
     resolved = definition.definition_for(cockpit.deps, cockpit.fid, fresh=True)
     assert resolved is not None and resolved.version == 3
     assert resolved.doc["loops"]["review"]["rounds"] == 1
+
+
+async def test_the_live_c2_that_claimed_r1_applies_as_r2_after_c1(cockpit: Cockpit) -> None:
+    for text in ("A.", "B."):
+        resp = await _propose(
+            cockpit,
+            kind="rules",
+            rule={"role": "project_lead", "text": text},
+            expected_effect=RULE_EFFECT,
+        )
+        assert resp.status_code == 200, resp.text
+    # C-2 as rows filed before ids moved to apply time stored it: claiming R-1 like C-1.
+    c2 = _row(cockpit, 2)
+    claimed = {**c2.after["rules.new"], "id": "R-1"}
+    cockpit.store.update_proposal(
+        c2.id,
+        title='+ R-1 · project_lead · "B."',
+        before={"rules.R-1": None},
+        after={"rules.R-1": claimed},
+        based_on=None,
+    )
+    assert (await _answer(cockpit, "C-1")).status_code == 200
+    assert _rules(cockpit) == [("R-1", "A.")]
+    view = await _view(cockpit, "C-2")
+    assert list(view["after"]) == ["rules.new"] and view["warnings"] == []
+
+    resp = await _answer(cockpit, "C-2")
+
+    # Neither overwrites C-1's R-1 nor duplicates it: C-2 is R-2 everywhere.
+    assert resp.status_code == 200, resp.text
+    assert _rules(cockpit) == [("R-1", "A."), ("R-2", "B.")]
+    row = _row(cockpit, 2)
+    assert list(row.after) == ["rules.R-2"] and row.title == '+ R-2 · project_lead · "B."'
+
+
+async def test_a_pending_rule_added_after_a_revert_re_pins_skips_the_reverted_id(
+    cockpit: Cockpit,
+) -> None:
+    for text in ("A.", "B."):
+        resp = await _propose(
+            cockpit,
+            kind="rules",
+            rule={"role": "project_lead", "text": text},
+            expected_effect=RULE_EFFECT,
+        )
+        assert resp.status_code == 200, resp.text
+    assert (await _answer(cockpit, "C-1")).status_code == 200
+    reverted = await cockpit.post(f"/v1/factory/factories/{cockpit.fid}/proposals/C-1/revert", {})
+    assert reverted.status_code == 200, reverted.text
+    assert _rules(cockpit) == []
+    result = _row(cockpit, 1).result
+    assert (result["revert_changed"], result["revert_def_version"]) == (True, 1)
+
+    resp = await _answer(cockpit, "C-2")
+
+    assert resp.status_code == 200, resp.text
+    assert _rules(cockpit) == [("R-2", "B.")]
+
+
+async def test_two_open_proposals_cannot_edit_the_same_rule_until_one_goes_stale(
+    cockpit: Cockpit,
+) -> None:
+    await _put(cockpit, {"op": "add", "path": "rules", "value": {"role": "ic", "text": "Lint."}})
+    removal = [{"op": "remove", "path": "rules/R-1"}]
+    edit = [{"op": "replace", "path": "rules/R-1", "value": {"text": "Lint and test."}}]
+    first = await _propose(cockpit, kind="rules", changes=removal, expected_effect=RULE_EFFECT)
+    assert first.status_code == 200, first.text
+
+    busy = await _propose(cockpit, kind="rules", changes=edit, expected_effect=RULE_EFFECT)
+
+    assert busy.status_code == 409 and error_code(busy) == "path_busy", busy.text
+    assert "C-2 (pending) already changes rules.R-1" in busy.text
+    # R-1 changes under C-2: approving it is refused, so it no longer holds R-1.
+    await _put(
+        cockpit,
+        {"op": "replace", "path": "rules/R-1", "value": {"text": "Lint, then type-check."}},
+    )
+    again = await _propose(cockpit, kind="rules", changes=edit, expected_effect=RULE_EFFECT)
+    assert again.status_code == 200, again.text
+
+
+async def test_approving_a_stale_proposal_tells_its_proposer_once(cockpit: Cockpit) -> None:
+    await _put(cockpit, {"op": "add", "path": "rules", "value": {"role": "ic", "text": "Lint."}})
+    filed = await _propose(
+        cockpit,
+        kind="rules",
+        changes=[{"op": "remove", "path": "rules/R-1"}],
+        expected_effect=RULE_EFFECT,
+    )
+    assert filed.status_code == 200, filed.text
+    await _put(
+        cockpit,
+        {"op": "replace", "path": "rules/R-1", "value": {"text": "Lint, then type-check."}},
+    )
+
+    for _ in range(2):
+        resp = await _answer(cockpit, "C-2")
+        assert resp.status_code == 409 and error_code(resp) == "stale_proposal", resp.text
+
+    told = [t for t in _texts(cockpit, "lead_b") if "C-2 is stale against v3" in t]
+    assert len(told) == 1 and "Re-propose against v3" in told[0], told
+    assert _row(cockpit, 2).status == "pending"
+
+
+def test_an_applied_rule_change_shows_its_real_rule_ids(cockpit: Cockpit) -> None:
+    from omnigent.server.factory.proposals import proposal_view
+
+    rule = {"id": "R-3", "role": "ic", "project": "*", "text": "Lint first.", "state": "trial"}
+    # Applied, though its def_version_to was never written.
+    row, _ = cockpit.store.create_proposal(
+        cockpit.fid,
+        kind="rules",
+        title="lint",
+        author_kind="human",
+        author="alice",
+        status="trial",
+        ops=[{"op": "add", "path": "rules", "value": rule}],
+        before={"rules.R-3": None},
+        after={"rules.R-3": rule},
+    )
+
+    view = proposal_view(cockpit.deps, row)
+
+    assert view["after"] == {"rules.R-3": rule}
 
 
 # ── Code (Tier 2 off) and expiry ───────────────────────────────
