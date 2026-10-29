@@ -199,7 +199,7 @@ export function LearnProposalCard({
           setRejecting(false);
           showToast(
             verb === "reject"
-              ? `${proposal.ref} ${recorded ? "dismissed" : "rejected"}${note && proposal.author_kind === "agent" ? ` · ${proposal.author_title ?? "the proposer"} gets your note` : ""}`
+              ? `${proposal.ref} ${recorded ? "dismissed" : "rejected"}${note && proposal.author_kind === "agent" ? " · the proposer gets your note" : ""}`
               : code
                 ? `${proposal.ref} approved · the Smith lane takes it`
                 : `${proposal.ref} approved · on trial`,

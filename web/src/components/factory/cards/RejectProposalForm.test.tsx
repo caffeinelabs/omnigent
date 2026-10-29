@@ -1,7 +1,7 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { DialogBody, NoteTextarea } from "../formParts";
-import { REJECT_NOTE_PLACEHOLDER, RejectProposalForm } from "./RejectProposalForm";
+import { REJECT_NOTE_MAX, REJECT_NOTE_PLACEHOLDER, RejectProposalForm } from "./RejectProposalForm";
 
 function renderForm(props: Partial<Parameters<typeof RejectProposalForm>[0]> = {}) {
   const onConfirm = vi.fn();
@@ -64,6 +64,12 @@ describe("RejectProposalForm", () => {
     renderForm({ verb: "Dismiss" });
     expect(screen.getByTestId("proposal-reject-confirm-C-2")).toHaveTextContent("Dismiss C-2");
     expect(screen.getByLabelText("Reason to dismiss C-2")).toBeInTheDocument();
+  });
+
+  it("caps the note at the server's limit, so a long reason can't 422 on send", () => {
+    const { note } = renderForm();
+    expect(REJECT_NOTE_MAX).toBe(2000);
+    expect(note()).toHaveAttribute("maxlength", "2000");
   });
 
   it("keeps the note box's height as the note grows, so the buttons stay put", () => {

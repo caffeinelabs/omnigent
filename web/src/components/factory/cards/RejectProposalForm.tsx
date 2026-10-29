@@ -10,6 +10,8 @@ import { Button } from "@/components/ui/button";
 import { NoteTextarea } from "../formParts";
 
 export const REJECT_NOTE_PLACEHOLDER = "Why not? The proposer reads this (optional)";
+/** The server's cap on a reject note (`RejectBody.note`). */
+export const REJECT_NOTE_MAX = 2000;
 
 export interface RejectProposalFormProps {
   /** `C-4`. */
@@ -46,6 +48,7 @@ export function RejectProposalForm({
         onChange={(event) => setNote(event.target.value)}
         onKeyDown={onKeyDown}
         placeholder={REJECT_NOTE_PLACEHOLDER}
+        maxLength={REJECT_NOTE_MAX}
         aria-label={`Reason to ${verb.toLowerCase()} ${proposalRef}`}
         data-testid={`proposal-reject-note-${proposalRef}`}
         componentId="factory.proposal.reject_note"

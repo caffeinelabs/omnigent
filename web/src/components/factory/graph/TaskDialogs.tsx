@@ -26,11 +26,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { factoryInvalidationKeys } from "@/hooks/useFactory";
 import type { TaskHarness, TaskView } from "@/lib/factoryApi";
 import { addFactoryTask, patchFactoryTask } from "@/lib/factoryRoomApi";
 import { controlErrorMessage } from "../controls/controlModel";
+import { NoteTextarea } from "../formParts";
 import { FieldRow, Segmented } from "../start/formParts";
 import { type EditCheck, checkTaskEdit, keysToRefs, uniqueKey } from "./graphEdits";
 
@@ -246,7 +246,7 @@ export function TaskEditDialog({
                 />
               </FieldRow>
               <FieldRow label="Do" htmlFor="task-edit-do" labelAlign="text">
-                <Textarea
+                <NoteTextarea
                   id="task-edit-do"
                   value={text}
                   onChange={(e) => setText(e.target.value)}
@@ -260,7 +260,7 @@ export function TaskEditDialog({
                 labelAlign="text"
                 hint="One command per line; the PL runs them verbatim."
               >
-                <Textarea
+                <NoteTextarea
                   id="task-edit-acceptance"
                   value={acceptance}
                   onChange={(e) => setAcceptance(e.target.value)}
@@ -275,7 +275,7 @@ export function TaskEditDialog({
                 labelAlign="text"
                 hint="Path globs, one per line."
               >
-                <Textarea
+                <NoteTextarea
                   id="task-edit-scope"
                   value={scope}
                   onChange={(e) => setScope(e.target.value)}
