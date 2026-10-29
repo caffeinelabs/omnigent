@@ -385,6 +385,13 @@ _IDLE_WATCHER_JOIN_TIMEOUT_S = 1.0
 # pane in submission order, so the program sees one contiguous stream.
 _SEND_KEYS_LITERAL_CHARS_PER_CALL = 1024
 
+# The cap covers a whole ``;``-joined sequence (tmux 3.5a: 16364 packed bytes).
+# A launch sequence above this half-cap margin runs its pane command from a
+# private script instead (see :func:`_write_launch_script`).
+_TMUX_INLINE_LAUNCH_MAX_BYTES = 8 * 1024
+_LAUNCH_SCRIPT_DIR_PREFIX = "launch-"
+_LAUNCH_SCRIPT_PREFIX = "tmux-launch-"
+
 
 class _IdleDetector:
     """
@@ -1116,7 +1123,12 @@ class TerminalInstance:
         )
 
     async def launch(self, *, cwd: Path | None = None) -> None:
-        """Start the tmux session."""
+        """Start the tmux session.
+
+        A pane command too long for tmux's single-message command cap (e.g. a
+        native CLI carrying its system prompt in argv) runs from a private
+        launch script; shorter commands are passed to ``new-session`` inline.
+        """
         if self.running:
             return
         effective_cwd = str(cwd or self.private_dir)
@@ -1181,9 +1193,10 @@ class TerminalInstance:
             inner_cmd = [launcher_path, *self.args]
         else:
             inner_cmd = [self.command, *self.args]
-        inner_str = " ".join(_shell_quote(c) for c in inner_cmd)
+        command_str = " ".join(_shell_quote(c) for c in inner_cmd)
+        inner_str = command_str
         if self.tmux_start_on_attach:
-            inner_str = f"tmux wait-for {_TMUX_START_ON_ATTACH_CHANNEL}; exec {inner_str}"
+            inner_str = f"tmux wait-for {_TMUX_START_ON_ATTACH_CHANNEL}; exec {command_str}"
 
         option_commands = [
             *_tmux_managed_option_commands(
@@ -1216,9 +1229,9 @@ class TerminalInstance:
             if self.keep_alive_after_exit
             else []
         )
-        cmd = [
-            *self._tmux_base_cmd(),
-            *_tmux_command_sequence(
+
+        def launch_sequence(pane_command: str) -> list[str]:
+            return _tmux_command_sequence(
                 [
                     *option_commands,
                     [
@@ -1236,21 +1249,47 @@ class TerminalInstance:
                         "24",
                         "-c",
                         effective_cwd,
-                        inner_str,
+                        pane_command,
                     ],
                     *pane_died_hook,
                 ]
-            ),
-        ]
+            )
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.DEVNULL,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
-        _, stderr = await proc.communicate()
+        sequence = launch_sequence(inner_str)
+        launch_script: Path | None = None
+        packed_bytes = _tmux_packed_command_bytes(sequence)
+        if packed_bytes > _TMUX_INLINE_LAUNCH_MAX_BYTES:
+            launch_script = _write_launch_script(
+                self.private_dir,
+                command_str,
+                start_on_attach=self.tmux_start_on_attach,
+            )
+            sequence = launch_sequence(f". {_shell_quote(str(launch_script))}")
+            logger.info(
+                "tmux launch command for terminal %s:%s is %d bytes (inline limit %d); "
+                "running it from a private launch script",
+                self.name,
+                self.session_key,
+                packed_bytes,
+                _TMUX_INLINE_LAUNCH_MAX_BYTES,
+            )
+        cmd = [*self._tmux_base_cmd(), *sequence]
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+            _, stderr = await proc.communicate()
+        except BaseException:
+            if launch_script is not None:
+                _discard_launch_script(launch_script)
+            raise
         if proc.returncode != 0:
+            if launch_script is not None:
+                _discard_launch_script(launch_script)
             raise RuntimeError(
                 f"tmux launch failed (rc={proc.returncode}): {stderr.decode().strip()}"
             )
@@ -2131,6 +2170,87 @@ class TerminalInstance:
                 f"tmux command failed (rc={proc.returncode}): {' '.join(cmd)}: {detail}"
             )
         return proc.stdout.decode()
+
+
+def _tmux_packed_command_bytes(argv: list[str]) -> int:
+    """
+    Return the size tmux's client packs *argv* into for one command message.
+
+    Mirrors the client's own accounting (``strlen(arg) + 1`` per argument,
+    over the bytes the OS hands it) so the inline-launch threshold is checked
+    against what tmux will actually send.
+
+    :param argv: Tmux command argv after the client options, e.g.
+        ``["set-option", "-g", "mouse", "on", ";", "new-session", "bash"]``.
+    :returns: Packed size in bytes, e.g. ``40``.
+    """
+    return sum(len(os.fsencode(arg)) + 1 for arg in argv)
+
+
+def _write_launch_script(
+    parent: Path,
+    command_str: str,
+    *,
+    start_on_attach: bool,
+) -> Path:
+    """
+    Write a pane command too long for tmux's command cap to a private script.
+
+    The script is sourced (``. <script>``) by the same default shell that
+    would otherwise have run the command via ``-c``, so quoting, environment
+    and shell are unchanged. It removes itself and its directory first, then
+    ``exec``s the command so the pane's process is the CLI itself (the
+    claude-native status watcher keys on ``#{pane_pid}``). The argv can carry
+    credential-bearing flags, so the directory is created 0700 and the file
+    0600, both under a fresh unique name.
+
+    :param parent: Directory to create the per-launch script directory in;
+        the terminal's private dir, e.g.
+        ``Path("/tmp/omnigent-terminal-ab12")``.
+    :param command_str: Shell-quoted pane command, e.g.
+        ``"claude --append-system-prompt '...'"``.
+    :param start_on_attach: Whether to block on the start-on-attach channel
+        before exec'ing the command, as the inline form does.
+    :returns: Path to the written script.
+    """
+    launch_dir = Path(tempfile.mkdtemp(prefix=_LAUNCH_SCRIPT_DIR_PREFIX, dir=parent))
+    try:
+        fd, raw_path = tempfile.mkstemp(prefix=_LAUNCH_SCRIPT_PREFIX, suffix=".sh", dir=launch_dir)
+    except BaseException:
+        with contextlib.suppress(OSError):
+            launch_dir.rmdir()
+        raise
+    script = Path(raw_path)
+    exec_line = f"exec {command_str}"
+    if start_on_attach:
+        exec_line = f"tmux wait-for {_TMUX_START_ON_ATTACH_CHANNEL}; {exec_line}"
+    body = (
+        f"command rm -f -- {_shell_quote(str(script))} && "
+        f"command rmdir -- {_shell_quote(str(launch_dir))}\n"
+        f"{exec_line}\n"
+    )
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            # Same encoding the OS applies to argv strings, so the bytes the
+            # CLI receives match the inline form exactly.
+            handle.write(os.fsencode(body))
+    except BaseException:
+        _discard_launch_script(script)
+        raise
+    return script
+
+
+def _discard_launch_script(script: Path) -> None:
+    """
+    Remove a launch script and its per-launch directory, best effort.
+
+    :param script: Path returned by :func:`_write_launch_script`.
+    :returns: None.
+    """
+    with contextlib.suppress(OSError):
+        script.unlink(missing_ok=True)
+    with contextlib.suppress(OSError):
+        script.parent.rmdir()
 
 
 def _shell_quote(s: str) -> str:
