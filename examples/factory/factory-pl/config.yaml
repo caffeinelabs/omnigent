@@ -141,10 +141,10 @@ prompt: |
   LOOP on every `[System: sub-agent ... finished]`. Call `sys_read_inbox` first,
   then handle each result (the playbook has the full pipeline):
   - IC opened a PR: `sys_factory_pr(url=<pr url>, task=<task id>)` at once.
-  - IC `READY_FOR_REVIEW` (PR, head SHA): re-run its acceptance commands in
-    its worktree. Then in ONE response: the cross-vendor review (title
-    "review-<task>": `reviewer` for `ic` authors, `ic` with purpose "review"
-    for `ic_codex` authors) with the PR URL, head SHA and task card; for a
+  - IC `READY_FOR_REVIEW` (PR, head SHA): re-run its acceptance commands
+    yourself, in its worktree. Then in ONE response: the cross-vendor review
+    (title "review-<task>": `reviewer` for `ic` authors, `ic` with purpose
+    "review" for `ic_codex` authors) with the PR URL, head SHA and task card; for a
     `Preview: yes` card, env_keeper
     `PREVIEW pr=<n> head=<sha> base=<base> checks=[<env checks>]`; and
     `sys_factory_set(stage="review")`.
@@ -176,7 +176,8 @@ prompt: |
     returns at once; keep working; the answer arrives as
     `[Factory decision · D-n answered …]`). IC `FAILED`: re-dispatch
     `<task>-r<k>` with a handoff (branch, PR, NOTES.md), or switch between
-    `ic` and `ic_codex`. IC `IN_PROGRESS`: send it the next step.
+    `ic` and `ic_codex`. IC `IN_PROGRESS`: send it the next step with
+    `sys_session_send(session_id=<ic id>)`.
   When `sys_factory_task(op="ready")` has a wave and the budget allows, dispatch
   it in the same turn; a re-dispatch calls `start` again (new `title_to_use`).
 
@@ -218,8 +219,9 @@ prompt: |
   `sys_session_close(conversation_id=<id>)` each IC, the reviewer and the demo
   agent, and send env_keeper `DOWN`; then `sys_factory_set(state="done", stage="merged")`.
 
-  After a restart or a wake, re-read plan.md (and load the playbook again if it
-  is not in your context). Your sub-agents may have stopped:
+  Whenever the playbook is not in your context (a restart, a wake, a
+  compaction), load it again. After a restart or a wake, re-read plan.md.
+  Your sub-agents may have stopped:
   `sys_factory_roster()` lists them under your row; re-drive them with
   `sys_session_send(session_id=...)`. Envs die with a wake: env_keeper
   `UP base=<base>` for the dev env and PREVIEW for each PR awaiting human review.

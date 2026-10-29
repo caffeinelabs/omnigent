@@ -9,6 +9,19 @@ tmux 3.5a rejects anything above 16364 packed bytes with "command too long",
 so the agent's terminal never starts. A sandbox pod keeps its runner until the
 pod is recreated, while the server serves the bundle, so the bundles must stay
 under the cap with a margin for every pod still running an old runner.
+
+The old runner is modelled by today's ``terminal.py`` with the launch script
+disabled. The reference runners are omnigent be66797 and 258d4c3: apart from
+#161's launch-script branch in ``terminal.py``, their ``terminal.py`` and argv
+builders (``harnesses/claude_native/bridge.py``, ``runner/native/orchestration.py``,
+``inner/bundle_skills.py``, ``inner/prompt.py``) match staging 535d042 byte for
+byte. If the inline tmux sequence or those builders change, re-check this
+model against those commits.
+
+Every factory agent is held to the claude-native bound, including the
+codex-native ones (``ic_codex``, ``reviewer``), which write their instructions
+to ``config.toml`` rather than argv: an over-constraint, kept so any agent can
+switch to claude-native.
 """
 
 from __future__ import annotations
