@@ -494,6 +494,7 @@ def register_core_routes(
             host_registry=host_registry,
             conversation_store=conversation_store,
             permission_store=permission_store,
+            scheduled_task_store=getattr(request.app.state, "scheduled_task_store", None),
         )
         conn = target.conn
         binding_token = secrets.token_urlsafe(32)
@@ -905,10 +906,21 @@ def register_core_routes(
         # (mirroring the JSON path — a bad workspace never produces a
         # session) and persist the canonical path the host returned.
         if parsed_metadata.host_id is not None:
+            from omnigent.server.managed_host_isolation import (
+                require_host_admits_new_session,
+            )
             from omnigent.server.routes._session_create_validation import (
                 validate_uploaded_bundle_host_workspace,
             )
 
+            await require_host_admits_new_session(
+                user_id=user_id,
+                host_id=parsed_metadata.host_id,
+                parent_session_id=parsed_metadata.parent_session_id,
+                host_store=getattr(request.app.state, "host_store", None),
+                conversation_store=conversation_store,
+                scheduled_task_store=getattr(request.app.state, "scheduled_task_store", None),
+            )
             os_env = getattr(spec, "os_env", None)
             canonical_workspace = await validate_uploaded_bundle_host_workspace(
                 user_id=user_id,

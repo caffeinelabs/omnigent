@@ -108,6 +108,26 @@ def test_fork_drops_sandbox_repo_label(
     assert MANAGED_REPO_LABEL_KEY not in fork.labels
 
 
+def test_fork_drops_managed_host_claim_label(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """A fork is a new session: it must never inherit the source's claim on its
+    managed sandbox, or the clone could run inside the source's sandbox. Uses the
+    server constant so a rename on either side fails here."""
+    from omnigent.server.managed_host_isolation import MANAGED_HOST_CLAIM_LABEL_KEY
+
+    source = conversation_store.create_conversation()
+    conversation_store.set_labels(
+        source.id,
+        {MANAGED_HOST_CLAIM_LABEL_KEY: "21ff0b1851d246639ebf87735bce7167", "kept": "yes"},
+    )
+
+    fork = conversation_store.fork_conversation(source.id)
+
+    assert fork.labels["kept"] == "yes"
+    assert MANAGED_HOST_CLAIM_LABEL_KEY not in fork.labels
+
+
 def test_fork_drops_per_repo_sandbox_labels(
     conversation_store: SqlAlchemyConversationStore,
 ) -> None:

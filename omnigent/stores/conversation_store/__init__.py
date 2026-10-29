@@ -195,9 +195,14 @@ _INSTANCE_SCOPED_LABEL_KEYS = frozenset(
 # ``MANAGED_REPO_LABEL_KEY``; a store test cross-checks it so a rename there
 # fails loudly here.
 _SANDBOX_REPO_LABEL_KEY = "omnigent.sandbox.repo"
+# The managed sandbox host this session's tree owns; a fork must never inherit
+# it (the clone would run in the source's sandbox). Mirrors the server's
+# ``MANAGED_HOST_CLAIM_LABEL_KEY``; a store test cross-checks it.
+_SANDBOX_HOST_CLAIM_LABEL_KEY = "omnigent.sandbox.host_id"
 _FORK_ONLY_DROPPED_LABEL_KEYS = IMPORT_PROVENANCE_LABEL_KEYS | {
     ARCHIVED_AT_LABEL_KEY,
     _SANDBOX_REPO_LABEL_KEY,
+    _SANDBOX_HOST_CLAIM_LABEL_KEY,
 }
 
 
@@ -1022,6 +1027,8 @@ class ConversationStore(ABC):
         key: str,
         value: str | None = None,
         limit: int = 2000,
+        *,
+        include_archived: bool = False,
     ) -> list[str]:
         """
         Return ids of non-archived conversations carrying a label.
@@ -1029,13 +1036,15 @@ class ConversationStore(ABC):
         A reverse index over ``conversation_labels``: e.g. every member of a
         software factory is the set of sessions labelled
         ``omnigent.factory.id == <root id>``. Archived conversations are
-        excluded, mirroring :meth:`list_projects`. No ACL filter — callers
-        that surface the result to a user must check access per id.
+        excluded by default, mirroring :meth:`list_projects`. No ACL filter —
+        callers that surface the result to a user must check access per id.
 
         :param key: Label key to match, e.g. ``"omnigent.factory.id"``.
         :param value: When set, only rows whose value equals it, e.g.
             ``"conv_root123"``. ``None`` matches any value.
         :param limit: Maximum number of ids to return.
+        :param include_archived: Also match archived conversations (e.g. the
+            owner of a managed sandbox claim, which archiving does not release).
         :returns: Matching conversation ids, oldest conversation first.
         """
         ...

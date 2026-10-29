@@ -25,6 +25,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from omnigent.entities import ScheduledTask, ScheduledTaskRun
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.server.auth import RESERVED_USER_LOCAL, AuthProvider
+from omnigent.server.managed_host_isolation import foreign_managed_host_error, is_managed_host
 from omnigent.server.routes._auth_helpers import require_user
 from omnigent.server.routes._host_launch import resolve_host_owner
 from omnigent.server.routes._session_create_validation import (
@@ -256,6 +257,8 @@ def create_scheduled_tasks_router(
             agent=agent,
             agent_cache=agent_cache,
         )
+        if host_id is not None:
+            await _reject_managed_host_pin(request, host_id=host_id, user_id=user_id)
         if workspace is None:
             # No pinned workspace: the fire path defaults it to the launch host's
             # HOME, so there is nothing to validate against the host boundary
@@ -296,6 +299,27 @@ def create_scheduled_tasks_router(
             host_registry=getattr(request.app.state, "host_registry", None),
         )
         return canonical_workspace, validated_model, validated_effort
+
+    async def _reject_managed_host_pin(
+        request: Request,
+        *,
+        host_id: str,
+        user_id: str | None,
+    ) -> None:
+        """Refuse a pin on a managed sandbox host (it runs only its own session).
+
+        Checked only for a host the caller owns; any other host is left to the
+        ownership checks below so the 403/404 contract (and what it reveals)
+        is unchanged.
+        """
+        host_store = getattr(request.app.state, "host_store", None)
+        if host_store is None:
+            return
+        host = await asyncio.to_thread(host_store.get_host, host_id)
+        if host is None or (user_id is not None and host.user_id != user_id):
+            return
+        if is_managed_host(host):
+            raise foreign_managed_host_error(host_id, code=ErrorCode.INVALID_INPUT)
 
     def _require_owned(scheduled_task_id: str, owner: str | None) -> ScheduledTask:
         """Load a task the caller owns, or raise 404.

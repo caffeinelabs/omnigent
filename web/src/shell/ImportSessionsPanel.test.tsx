@@ -66,6 +66,57 @@ describe("ImportSessionsPanel", () => {
     expect(screen.queryByTestId("import-submit")).toBeNull();
   });
 
+  it("never offers a managed sandbox as the import host", async () => {
+    useHostsMock.mockReturnValue({
+      data: [
+        {
+          host_id: "pod_1",
+          name: "managed-21ff0b18",
+          owner: "alice",
+          status: "online",
+          sandbox_provider: "kubernetes",
+        },
+        { host_id: "host_1", name: "mac-laptop", owner: "alice", status: "online" },
+      ],
+    } as unknown as ReturnType<typeof useHosts>);
+    importLocalSessionsMock.mockResolvedValue({
+      imported: 0,
+      alreadyImported: 0,
+      failed: 0,
+      sessions: [],
+    });
+
+    renderPanel();
+    expect(screen.queryByText("managed-21ff0b18")).toBeNull();
+    fireEvent.click(screen.getByTestId("import-submit"));
+
+    await waitFor(() =>
+      expect(importLocalSessionsMock).toHaveBeenCalledWith(
+        "host_1",
+        "all",
+        25,
+        expect.any(Function),
+      ),
+    );
+  });
+
+  it("prompts to start a host when only managed sandboxes are online", () => {
+    useHostsMock.mockReturnValue({
+      data: [
+        {
+          host_id: "pod_1",
+          name: "managed-21ff0b18",
+          owner: "alice",
+          status: "online",
+          sandbox_provider: "kubernetes",
+        },
+      ],
+    } as unknown as ReturnType<typeof useHosts>);
+    renderPanel();
+    expect(screen.getByTestId("import-no-hosts")).toBeInTheDocument();
+    expect(screen.queryByTestId("import-submit")).toBeNull();
+  });
+
   it("imports and lists each new session by title (null title falls back)", async () => {
     useHostsMock.mockReturnValue({
       data: [{ host_id: "host_1", name: "mac-laptop", owner: "alice", status: "online" }],

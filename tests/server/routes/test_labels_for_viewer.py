@@ -48,3 +48,13 @@ def test_still_collapses_the_pin_family() -> None:
     # This viewer's pin surfaces as the canonical bare key; others' don't leak.
     assert viewer.get("omnigent.pinned") == "1721760000000"
     assert not any(k.startswith("omnigent.pinned.") for k in viewer)
+
+
+def test_hides_the_managed_host_claim() -> None:
+    """The server-only managed-host claim never reaches a client: the native
+    rotation flows copy every label they read into a new session's create,
+    which would 400 on the reserved ``omnigent.sandbox.`` namespace."""
+    from omnigent.server.managed_host_isolation import MANAGED_HOST_CLAIM_LABEL_KEY
+
+    labels = {MANAGED_HOST_CLAIM_LABEL_KEY: "21ff0b1851d246639ebf87735bce7167", "kept": "yes"}
+    assert _labels_for_viewer(labels, "alice@example.com") == {"kept": "yes"}

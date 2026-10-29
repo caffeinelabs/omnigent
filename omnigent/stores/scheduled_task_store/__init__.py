@@ -296,6 +296,21 @@ class ScheduledTaskStore(ABC):
         """
         ...
 
+    def has_run_for_conversation(self, conversation_id: str) -> bool:
+        """
+        Return whether a scheduled-task fire created *conversation_id*.
+
+        Any run status counts: the question is the conversation's origin, not
+        whether its run is still live. Workspace-scoped like every other read.
+        Concrete with a ``False`` default so a store without the reverse index
+        reports "no evidence" rather than failing.
+
+        :param conversation_id: The conversation to look up.
+        :returns: ``True`` when at least one run row references it.
+        """
+        del conversation_id
+        return False
+
     @abstractmethod
     def list_running_runs_for_tasks(
         self,

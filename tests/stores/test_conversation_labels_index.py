@@ -52,6 +52,28 @@ def test_excludes_archived_conversations(
     }
 
 
+def test_include_archived_matches_archived_conversations_too(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """The managed-sandbox claim lookup counts an archived owner: archiving a
+    session does not release the sandbox it owns."""
+    kept = conversation_store.create_conversation()
+    archived = conversation_store.create_conversation()
+    for conv in (kept, archived):
+        conversation_store.set_labels(conv.id, {KEY: "f1"})
+    conversation_store.update_conversation(archived.id, archived=True)
+
+    assert set(
+        conversation_store.list_conversation_ids_with_label(KEY, "f1", include_archived=True)
+    ) == {kept.id, archived.id}
+    assert (
+        conversation_store.list_conversation_ids_with_label(KEY, "nope", include_archived=True)
+        == []
+    )
+    # The default still hides archived rows.
+    assert conversation_store.list_conversation_ids_with_label(KEY, "f1") == [kept.id]
+
+
 def test_limit_caps_the_result(conversation_store: SqlAlchemyConversationStore) -> None:
     for _ in range(5):
         conv = conversation_store.create_conversation()

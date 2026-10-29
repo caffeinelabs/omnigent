@@ -25,13 +25,16 @@ import threading
 import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import TYPE_CHECKING, Any, Protocol
 
 from cachetools import TTLCache
 
 from omnigent._platform import normalize_interactive_shells
 from omnigent.db.db_models import InvalidUuidError, current_workspace_id, uuid_to_bytes
 from omnigent.host.frames import HostHelloFrame
+
+if TYPE_CHECKING:
+    from omnigent.stores.host_store import Host
 
 _logger = logging.getLogger(__name__)
 
@@ -259,6 +262,10 @@ class HostConnection:
         ``error_code``, and ``error``.
     :param pending_model_options: Per-``request_id`` futures for pre-launch
         model catalogs resolved by the selected host.
+    :param host_record: The ``hosts`` row as registered on connect, or
+        ``None`` when the registering path did not supply it. Lets runner
+        launch paths that only hold the connection tell a managed sandbox
+        host (``sandbox_provider`` set) from a shared one.
     """
 
     workspace_id: int
@@ -321,6 +328,7 @@ class HostConnection:
     pending_import_local: dict[str, asyncio.Queue[tuple[str, dict[str, Any]]]] = field(
         default_factory=dict,
     )
+    host_record: Host | None = None
 
 
 class HostRegistry:
@@ -353,6 +361,7 @@ class HostRegistry:
         hello: HostHelloFrame,
         owner: str | None,
         workspace_id: int | None = None,
+        host_record: Host | None = None,
     ) -> HostConnection:
         """Register a host connection (newest wins).
 
@@ -376,6 +385,8 @@ class HostRegistry:
             (``0`` in single-tenant deployments); captured into the
             connection so ``send_text`` need not read request context
             from the sender loop.
+        :param host_record: The ``hosts`` row the tunnel just upserted,
+            kept on the connection (see :attr:`HostConnection.host_record`).
         :returns: The new :class:`HostConnection`. Its ``host_id`` is
             the canonical form (see :func:`_canonical_host_id`).
         """
@@ -391,6 +402,7 @@ class HostRegistry:
             outbound_queue=asyncio.Queue(),
             connected_at=now,
             last_frame_at=now,
+            host_record=host_record,
         )
         with self._lock:
             key = (ws_id, host_id)

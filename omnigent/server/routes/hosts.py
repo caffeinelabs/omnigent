@@ -797,6 +797,7 @@ def create_hosts_router(
             host_registry=host_registry,
             conversation_store=conversation_store,
             permission_store=permission_store,
+            scheduled_task_store=getattr(request.app.state, "scheduled_task_store", None),
         )
         conn = target.conn
 

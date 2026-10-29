@@ -500,6 +500,20 @@ class SqlAlchemyScheduledTaskStore(ScheduledTaskStore):
             row = session.execute(stmt).scalars().first()
             return _run_to_entity(row) if row is not None else None
 
+    def has_run_for_conversation(self, conversation_id: str) -> bool:
+        """Whether any run (any status) references *conversation_id*.
+
+        Backed by ``ix_scheduled_task_runs_conversation_id``.
+        """
+        with self._session("select_has_run_for_conversation") as session:
+            stmt = (
+                select(SqlScheduledTaskRun.id)
+                .where(SqlScheduledTaskRun.workspace_id == current_workspace_id())
+                .where(SqlScheduledTaskRun.conversation_id == conversation_id)
+                .limit(1)
+            )
+            return session.execute(stmt).first() is not None
+
     def list_running_runs_for_tasks(
         self,
         scheduled_task_ids: builtins.list[str],

@@ -173,3 +173,65 @@ def test_spec_label_seeds_skip_factory_labels(
     stored = conversation_store.get_conversation(conv.id)
     assert stored is not None
     assert stored.labels == {"team": "ml"}
+
+
+def test_apply_label_writes_drops_sandbox_labels(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """Managed-sandbox state is server-owned: a policy forging the owner claim
+    could take over another session's sandbox, so it never lands — even when
+    the spec declares the key."""
+    engine = _build_engine_with_defs(
+        conversation_store,
+        {"omnigent.sandbox.host_id": LabelDef()},
+    )
+
+    engine.apply_label_writes(
+        {
+            "omnigent.sandbox.host_id": "21ff0b1851d246639ebf87735bce7167",
+            "omnigent.sandbox.repo.0": "https://github.com/acme/app",
+            " Omnigent.Sandbox.host_id": "x",
+            "team": "ml",
+        }
+    )
+
+    assert engine.labels == {"team": "ml"}
+    conv = conversation_store.get_conversation(engine.conversation_id)
+    assert conv is not None
+    assert conv.labels == {"team": "ml"}
+
+
+def test_spec_label_seeds_skip_sandbox_labels(
+    conversation_store: SqlAlchemyConversationStore,
+) -> None:
+    """A spec's declared ``initial`` never seeds a managed-sandbox claim."""
+    from omnigent.runtime.policies.builder import _seed_and_load_labels
+
+    conv = conversation_store.create_conversation()
+
+    labels = _seed_and_load_labels(
+        conversation_id=conv.id,
+        label_defs={
+            "omnigent.sandbox.host_id": LabelDef(initial="21ff0b1851d246639ebf87735bce7167"),
+            "team": LabelDef(initial="ml"),
+        },
+        conversation_store=conversation_store,
+    )
+
+    assert labels == {"team": "ml"}
+
+
+def test_sandbox_label_namespace_matches_the_server_constant() -> None:
+    """The engine hard-codes the namespace (runtime never imports the server);
+    a rename on the server side must fail here, not silently re-open writes."""
+    from omnigent.runtime.policies.engine import SANDBOX_LABEL_NAMESPACE, is_sandbox_label
+    from omnigent.server.managed_host_isolation import MANAGED_HOST_CLAIM_LABEL_KEY
+    from omnigent.server.managed_hosts import (
+        MANAGED_REPO_LABEL_KEY,
+        MANAGED_SANDBOX_LABEL_NAMESPACE,
+    )
+
+    assert SANDBOX_LABEL_NAMESPACE == MANAGED_SANDBOX_LABEL_NAMESPACE
+    assert is_sandbox_label(MANAGED_HOST_CLAIM_LABEL_KEY)
+    assert is_sandbox_label(MANAGED_REPO_LABEL_KEY)
+    assert not is_sandbox_label("omnigent.sandboxed")

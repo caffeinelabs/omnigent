@@ -4977,7 +4977,7 @@ async def test_concurrent_relaunch_messages_kick_a_single_launch(
         session_id=None,
     )
     dead_host = SimpleNamespace(
-        sandbox_provider="modal", user_id=_OWNER, status="offline", updated_at=0
+        host_id="host_1", sandbox_provider="modal", user_id=_OWNER, status="offline", updated_at=0
     )
     app_state = SimpleNamespace(
         host_store=SimpleNamespace(get_host=lambda _hid: dead_host, is_online=lambda _hid: False),
@@ -4987,7 +4987,10 @@ async def test_concurrent_relaunch_messages_kick_a_single_launch(
         host_registry=None,
         tunnel_registry=None,
     )
-    conv = SimpleNamespace(labels={}, host_id="host_1", agent_id=builtin.id)
+    # The session owns the sandbox it is bound to (see managed_host_isolation):
+    # a claim-less root bound to it that no other session claims.
+    conv = SimpleNamespace(id="conv_1", labels={}, host_id="host_1", agent_id=builtin.id)
+    no_other_claimant = SimpleNamespace(list_conversation_ids_with_label=lambda *_a, **_k: [])
 
     engaged = await asyncio.gather(
         *(
@@ -4995,7 +4998,7 @@ async def test_concurrent_relaunch_messages_kick_a_single_launch(
                 session_id="conv_1",
                 conv=conv,
                 app_state=app_state,
-                conversation_store=SimpleNamespace(),
+                conversation_store=no_other_claimant,
             )
             for _ in range(2)
         )

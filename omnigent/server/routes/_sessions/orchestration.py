@@ -131,6 +131,13 @@ from omnigent.server.background_session_titles import (
 from omnigent.server.bundles import bundle_location, validate_agent_bundle
 from omnigent.server.factory.notify import schedule_factory_relayed_status
 from omnigent.server.host_registry import HostConnection, HostRegistry, RunnerExitReports
+from omnigent.server.managed_host_isolation import (
+    MANAGED_HOST_CLAIM_LABEL_KEY,
+    foreign_managed_host_message,
+    is_managed_host,
+    require_host_admits_new_session,
+    session_may_use_host,
+)
 from omnigent.server.managed_hosts import (
     MANAGED_REPO_LABEL_KEY,
     ManagedHostLaunch,
@@ -319,6 +326,7 @@ from omnigent.server.routes._sessions.helpers import (
     _session_status_with_child_rollup,
     _SessionEventDispatchResult,
     _signal_terminal_resolved_harness_elicitation,
+    _spawn_superseded_runner_stop,
     _spec_harness,
     _stop_session_via_runner,
     _usage_by_model_for_display,
@@ -820,6 +828,10 @@ def _labels_for_viewer(labels: dict[str, str], user_id: str | None) -> dict[str,
       ``omnigent.sandbox.repo`` as the space-joined list so clients that read
       the bare key (e.g. the fork dialog) see every repo.
 
+    The server-only managed-host claim is dropped: the native rotation flows
+    copy every label they read into a new session's create, which would 400
+    on the reserved key (the server carries the claim itself on transfer).
+
     :param labels: The stored conversation labels.
     :param user_id: The requesting viewer, or ``None`` in single-user mode.
     :returns: A copy with the pin and sandbox-repo families collapsed to their
@@ -835,6 +847,7 @@ def _labels_for_viewer(labels: dict[str, str], user_id: str | None) -> dict[str,
         and not k.startswith(f"{PINNED_LABEL_KEY}.")
         and k != MANAGED_REPO_LABEL_KEY
         and not k.startswith(f"{MANAGED_REPO_LABEL_KEY}.")
+        and k != MANAGED_HOST_CLAIM_LABEL_KEY
     }
     if my_pin is not None:
         cleaned[PINNED_LABEL_KEY] = my_pin
@@ -3208,6 +3221,13 @@ async def _bind_and_launch_managed_runner(
             session_id, "failed", "session was deleted while its sandbox was provisioning"
         )
         return
+    # Claim the sandbox for this session's tree, so no other session can be
+    # bound to or launched on it (see managed_host_isolation).
+    await asyncio.to_thread(
+        conversation_store.set_labels,
+        session_id,
+        {MANAGED_HOST_CLAIM_LABEL_KEY: managed.host_id},
+    )
     # Host bound; what remains is launching the runner and waiting
     # for its tunnel.
     _publish_sandbox_status(session_id, "connecting")
@@ -3215,12 +3235,22 @@ async def _bind_and_launch_managed_runner(
     if host_registry is not None:
         host_conn = host_registry.get(managed.host_id)
         if host_conn is not None:
-            launch_attempt = await _launch_runner_on_host(
-                conv,
-                conversation_store,
-                host_registry,
-                host_conn,
-            )
+            try:
+                launch_attempt = await _launch_runner_on_host(
+                    conv,
+                    conversation_store,
+                    host_registry,
+                    host_conn,
+                )
+            except OmnigentError as exc:
+                # A structured refusal; same teardown rule as a harness refusal.
+                if relaunch_host is None:
+                    host = await asyncio.to_thread(host_store.get_host, managed.host_id)
+                    if host is not None:
+                        await terminate_managed_host(host, host_store, sandbox_config)
+                tracker.fail(session_id, exc.message)
+                _publish_sandbox_status(session_id, "failed", exc.message)
+                return
             if launch_attempt.error_code == _HARNESS_NOT_CONFIGURED_ERROR_CODE:
                 # The sandbox image should bake in the harness, but if the
                 # host refuses, fail the launch loudly (mirroring the
@@ -3257,6 +3287,173 @@ async def _bind_and_launch_managed_runner(
             return
     tracker.finish(session_id)
     _publish_sandbox_status(session_id, "ready")
+
+
+async def _repair_foreign_managed_binding(
+    *,
+    session_id: str,
+    conv: Conversation,
+    app_state: Any,
+    conversation_store: ConversationStore,
+) -> bool:
+    """
+    Repair-on-read: move a session off a managed sandbox its tree does not own.
+
+    A session bound to another session's managed host (see
+    :mod:`omnigent.server.managed_host_isolation`) — e.g. a scheduled fire that
+    borrowed a factory member's pod before that was refused — must never launch,
+    wake or relaunch on that sandbox. Its binding is released (the session is
+    treated as hostless) and, for a top-level session, a sandbox of its own is
+    provisioned in the background; the caller parks on the launch tracker the
+    same way a managed create's first message does.
+
+    :param session_id: Session/conversation identifier.
+    :param conv: The caller's (possibly stale) session row.
+    :param app_state: ``request.app.state`` — supplies the stores, tracker,
+        sandbox config and registries.
+    :param conversation_store: Store holding the session row.
+    :returns: ``True`` when the binding moved (a repair ran here or
+        concurrently) — re-read the row and re-resolve the runner; ``False``
+        when the binding is not foreign.
+    :raises OmnigentError: 409 when the binding was released but this server
+        cannot provision a sandbox; 503 when the re-provision failed.
+    """
+    host_store = getattr(app_state, "host_store", None)
+    if host_store is None or conv.host_id is None:
+        return False
+    host = await asyncio.to_thread(host_store.get_host, conv.host_id)
+    if host is None or not is_managed_host(host):
+        return False
+    scheduled_task_store = getattr(app_state, "scheduled_task_store", None)
+    if await asyncio.to_thread(
+        session_may_use_host,
+        conv,
+        host,
+        conversation_store,
+        scheduled_task_store=scheduled_task_store,
+    ):
+        return False
+    # Act only on the current row: a concurrent repair may have rebound it.
+    fresh = await asyncio.to_thread(conversation_store.get_conversation, session_id)
+    if fresh is None:
+        return False
+    if fresh.host_id != conv.host_id:
+        return True
+    if await asyncio.to_thread(
+        session_may_use_host,
+        fresh,
+        host,
+        conversation_store,
+        scheduled_task_store=scheduled_task_store,
+    ):
+        return False
+    foreign_host_id = conv.host_id
+    tracker = cast(ManagedLaunchTracker | None, getattr(app_state, "managed_launches", None))
+    launch = tracker.get(session_id) if tracker is not None else None
+    if launch is not None and not launch.settled.is_set():
+        await _await_settled_managed_launch(launch)
+        return True
+    _logger.warning(
+        "Session %s is bound to managed host %s, which belongs to another session; "
+        "releasing the binding",
+        session_id,
+        foreign_host_id,
+        extra={"session_id": session_id},
+    )
+    host_registry = cast(HostRegistry | None, getattr(app_state, "host_registry", None))
+    if (
+        fresh.runner_id is not None
+        and host_registry is not None
+        and host_registry.get(foreign_host_id) is not None
+    ):
+        _spawn_superseded_runner_stop(session_id, foreign_host_id, fresh.runner_id, host_registry)
+    await asyncio.to_thread(conversation_store.clear_host_binding, session_id)
+    if fresh.kind == "sub_agent":
+        # A sub-agent rides its root's runner; it never gets a sandbox of its own.
+        return True
+    sandbox_config = cast(
+        ManagedSandboxDeployment | None, getattr(app_state, "sandbox_config", None)
+    )
+    if tracker is None or sandbox_config is None or not sandbox_config.managed_launch_supported:
+        raise OmnigentError(
+            f"{foreign_managed_host_message(foreign_host_id)}. The session was "
+            "released from it and this server cannot provision a sandbox of its own; "
+            "bind it to one of your hosts",
+            code=ErrorCode.CONFLICT,
+        )
+    launch = tracker.get(session_id)
+    if launch is None or launch.settled.is_set():
+        _kick_managed_reprovision(
+            session_id=session_id,
+            conv=fresh,
+            owner=host.user_id,
+            sandbox_config=sandbox_config,
+            tracker=tracker,
+            conversation_store=conversation_store,
+            host_store=host_store,
+            app_state=app_state,
+        )
+        launch = tracker.get(session_id)
+    if launch is not None:
+        await _await_settled_managed_launch(launch)
+    return True
+
+
+def _kick_managed_reprovision(
+    *,
+    session_id: str,
+    conv: Conversation,
+    owner: str,
+    sandbox_config: ManagedSandboxDeployment,
+    tracker: ManagedLaunchTracker,
+    conversation_store: ConversationStore,
+    host_store: HostStore,
+    app_state: Any,
+) -> None:
+    """
+    Provision a FRESH sandbox for a session released from a foreign one.
+
+    Same background pipeline as a managed create (new host identity, bind,
+    runner launch, claim stamp), on the deployment's default provider with the
+    session's recorded repositories, if any. Synchronous so no ``await`` falls
+    between the caller's ``tracker.get`` check and the ``tracker.begin`` claim.
+
+    :param session_id: Session/conversation identifier.
+    :param conv: The session row (supplies repo labels and the bound agent).
+    :param owner: User the new sandbox acts for (the released host's owner,
+        who is the session's owner).
+    :param sandbox_config: The deployment's sandbox config.
+    :param tracker: The app's launch tracker.
+    :param conversation_store: Store holding the session row.
+    :param host_store: Persistent host registrations.
+    :param app_state: ``request.app.state`` — supplies the registries and the
+        agent store.
+    """
+    from omnigent.server.managed_hosts import parse_repo_workspace
+
+    try:
+        repos = [parse_repo_workspace(w) for w in read_managed_repo_workspaces(conv.labels)]
+    except ValueError:
+        repos = []
+    tracker.begin(session_id)
+    _publish_sandbox_status(session_id, "provisioning")
+    task = asyncio.create_task(
+        _run_managed_launch(
+            session_id=session_id,
+            owner=owner,
+            sandbox_config=sandbox_config,
+            repos=repos,
+            tracker=tracker,
+            conversation_store=conversation_store,
+            host_store=host_store,
+            host_registry=getattr(app_state, "host_registry", None),
+            tunnel_registry=getattr(app_state, "tunnel_registry", None),
+            agent_store=getattr(app_state, "agent_store", None),
+            agent_id=conv.agent_id,
+        )
+    )
+    _managed_launch_tasks.add(task)
+    task.add_done_callback(_managed_launch_tasks.discard)
 
 
 async def _maybe_relaunch_managed_sandbox(
@@ -3296,6 +3493,14 @@ async def _maybe_relaunch_managed_sandbox(
         falls through to the normal unavailable handling.
     :raises OmnigentError: 503 when the relaunch failed or timed out.
     """
+    # Never relaunch ANOTHER session's sandbox on this session's behalf.
+    if await _repair_foreign_managed_binding(
+        session_id=session_id,
+        conv=conv,
+        app_state=app_state,
+        conversation_store=conversation_store,
+    ):
+        return True
     host_store = getattr(app_state, "host_store", None)
     sandbox_config = getattr(app_state, "sandbox_config", None)
     tracker = getattr(app_state, "managed_launches", None)
@@ -3400,8 +3605,18 @@ async def _maybe_wake_stale_resumable_managed_sandbox(
     :param conv: Current conversation row.
     :param app_state: ``request.app.state`` — supplies stores and registries.
     :param conversation_store: Store holding the session row.
-    :returns: ``True`` when a managed wake ran and settled.
+    :returns: ``True`` when a managed wake (or a foreign-binding repair) ran
+        and settled.
     """
+    # Every message / wake ladder enters here first for a host-bound session,
+    # so this is where a binding to another session's sandbox gets repaired.
+    if await _repair_foreign_managed_binding(
+        session_id=session_id,
+        conv=conv,
+        app_state=app_state,
+        conversation_store=conversation_store,
+    ):
+        return True
     host_store = getattr(app_state, "host_store", None)
     sandbox_config = getattr(app_state, "sandbox_config", None)
     if host_store is None or sandbox_config is None or conv.host_id is None:
@@ -3488,6 +3703,8 @@ async def ensure_runner_connected(
     whose runner merely went to sleep transparently reconnects it, instead of
     dead-ending on a 502. Only the wakeable states recover here:
 
+    * bound to ANOTHER session's managed sandbox → released and moved onto a
+      sandbox of its own first (:func:`_repair_foreign_managed_binding`);
     * runner already connected → returned as-is (the common fast path);
     * host online, pinned runner still booting → wait the connect grace
       (``_HOST_BOUND_RUNNER_CONNECT_GRACE_S``, racing a ``host.runner_status``
@@ -3523,6 +3740,16 @@ async def ensure_runner_connected(
     async def _reread() -> Conversation:
         refreshed = await asyncio.to_thread(conversation_store.get_conversation, session_id)
         return refreshed if refreshed is not None else conv
+
+    # Before trusting a live runner: one running in another session's sandbox
+    # is stopped and the session moved onto a sandbox of its own.
+    if await _repair_foreign_managed_binding(
+        session_id=session_id,
+        conv=conv,
+        app_state=app_state,
+        conversation_store=conversation_store,
+    ):
+        conv = await _reread()
 
     # Fast path: a live runner tunnel is already reachable.
     runner_client = await _get_runner_client(
@@ -4018,6 +4245,10 @@ async def _run_managed_wake(
     except HTTPException as exc:
         tracker.fail(session_id, str(exc.detail))
         _publish_sandbox_status(session_id, "failed", str(exc.detail))
+    except OmnigentError as exc:
+        # A structured refusal (e.g. the sandbox belongs to another session).
+        tracker.fail(session_id, exc.message)
+        _publish_sandbox_status(session_id, "failed", exc.message)
     except Exception:  # noqa: BLE001
         # Fire-and-forget task — settle the tracker (else a waiting message
         # POST hangs to its timeout) and never escape as an unhandled-task
@@ -8580,6 +8811,18 @@ async def _create_session_from_existing_agent(
         permission_store=permission_store,
         conversation_store=conversation_store,
     )
+    if body.host_id is not None:
+        # Another session's managed sandbox is never a create target (a new
+        # top-level session provisions its own via host_type="managed"); refuse
+        # before routing or workspace validation contacts the host.
+        await require_host_admits_new_session(
+            user_id=user_id,
+            host_id=body.host_id,
+            parent_session_id=body.parent_session_id,
+            host_store=getattr(request.app.state, "host_store", None),
+            conversation_store=conversation_store,
+            scheduled_task_store=getattr(request.app.state, "scheduled_task_store", None),
+        )
 
     # Top-level Smart Routing: "auto" on a native wrapper agent means the client
     # picked Smart Routing with no bundle agent, and its ``agent_id`` is only a
@@ -10493,6 +10736,7 @@ __all__ = [
     "_recover_subagent_status_forward_via_parent",
     "_register_policy_elicitation",
     "_relay_runner_stream",
+    "_repair_foreign_managed_binding",
     "_resolve_elicitation",
     "_run_managed_launch",
     "_run_managed_wake",

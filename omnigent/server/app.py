@@ -1644,6 +1644,9 @@ def create_app(
     app.state.background_title_coordinator = background_title_coordinator
     app.state.host_registry = host_registry
     app.state.host_store = host_store
+    # Read by the managed-sandbox isolation checks (a fired session is never a
+    # managed sandbox's owner); None when scheduled tasks are not wired.
+    app.state.scheduled_task_store = scheduled_task_store
     # SSHPiper gateway config (fork feature): advertised on /v1/info so the web
     # UI can offer "Open in VS Code" (Remote-SSH); None hides it.
     app.state.sshpiper_config = sshpiper_config

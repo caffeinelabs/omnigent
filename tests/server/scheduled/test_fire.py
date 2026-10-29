@@ -199,6 +199,8 @@ class FakePermissionStore:
 class _FakeHost:
     host_id: str
     user_id: str
+    # Non-None marks a server-managed (per-session) sandbox host.
+    sandbox_provider: str | None = None
 
 
 class FakeHostStore:
@@ -759,7 +761,11 @@ async def test_connected_host_dispatch_uses_resolved_local_owner(
         return type(
             "Target",
             (),
-            {"conv": kwargs["conversation_store"].get_conversation("conv_1"), "conn": object()},
+            {
+                "conv": kwargs["conversation_store"].get_conversation("conv_1"),
+                "conn": object(),
+                "host": _FakeHost("host_1", RESERVED_USER_LOCAL),
+            },
         )()
 
     async def _launch_runner_on_host(
@@ -973,6 +979,111 @@ async def test_unset_host_no_online_host_records_failed() -> None:
     assert len(store.runs) == 1
     assert store.runs[0]["status"] == "failed"
     assert store.runs[0]["error_code"] == "no_online_host"
+    assert store.runs[0]["conversation_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_unset_host_never_resolves_another_sessions_managed_sandbox() -> None:
+    """The live incident: the owner's most-recently-active online host was a
+    factory member's managed sandbox pod. An unpinned fire must not borrow it —
+    it records an honest no_online_host failure and creates no session (before
+    the fix it created a session bound to that pod and launched a runner in it).
+    """
+    conv_store = FakeConversationStore()
+    store = FakeScheduledTaskStore(
+        rows={"task_1": _task(user_id="alice@example.com", host_id=None, workspace=None)}
+    )
+    launched: list[Any] = []
+
+    async def _launch(conv: Any, task: Any) -> None:
+        launched.append(conv)
+
+    on_fire = build_on_fire(
+        _deps(
+            store,
+            conversation_store=conv_store,
+            host_store=FakeHostStore(
+                {"pl_pod": _FakeHost("pl_pod", "alice@example.com", sandbox_provider="kubernetes")}
+            ),
+            host_registry=FakeHostRegistry(online={"pl_pod"}),
+        ),
+        launch_dispatch=_launch,
+    )
+    await on_fire(0, "task_1")
+    await _drain()
+
+    assert launched == []
+    assert conv_store.created == []
+    assert len(store.runs) == 1
+    assert store.runs[0]["status"] == "failed"
+    assert store.runs[0]["error_code"] == "no_online_host"
+    assert store.runs[0]["conversation_id"] is None
+
+
+@pytest.mark.asyncio
+async def test_unset_host_skips_managed_sandbox_for_connected_host() -> None:
+    """With both online, the fire picks the owner's connected host even when a
+    managed sandbox is more recently active (listed first)."""
+    conv_store = FakeConversationStore()
+    store = FakeScheduledTaskStore(
+        rows={"task_1": _task(user_id="alice@example.com", host_id=None, workspace="/repo")}
+    )
+    launched: list[Any] = []
+
+    async def _launch(conv: Any, task: Any) -> None:
+        launched.append(task)
+
+    on_fire = build_on_fire(
+        _deps(
+            store,
+            conversation_store=conv_store,
+            host_store=FakeHostStore(
+                {
+                    "pl_pod": _FakeHost(
+                        "pl_pod", "alice@example.com", sandbox_provider="kubernetes"
+                    ),
+                    "laptop": _FakeHost("laptop", "alice@example.com"),
+                }
+            ),
+            host_registry=FakeHostRegistry(online={"pl_pod", "laptop"}),
+        ),
+        launch_dispatch=_launch,
+    )
+    await on_fire(0, "task_1")
+    await _drain()
+
+    assert [c["host_id"] for c in conv_store.created] == ["laptop"]
+    assert [t.host_id for t in launched] == ["laptop"]
+    assert store.runs[0]["status"] == "running"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("workspace", [None, "/root/workspace"])
+async def test_pinned_managed_sandbox_records_failed(workspace: str | None) -> None:
+    """A task pinned to a managed sandbox host (e.g. by an agent reading its own
+    host_id) is refused at fire time — with or without a pinned workspace —
+    before any RPC reaches the sandbox and without creating a session."""
+    conv_store = FakeConversationStore()
+    store = FakeScheduledTaskStore(
+        rows={"task_1": _task(user_id="alice@example.com", host_id="pl_pod", workspace=workspace)}
+    )
+    deps = _deps(
+        store,
+        conversation_store=conv_store,
+        host_store=FakeHostStore(
+            {"pl_pod": _FakeHost("pl_pod", "alice@example.com", sandbox_provider="kubernetes")}
+        ),
+        host_registry=FakeHostRegistry(online={"pl_pod"}),
+    )
+    # The real (default) dispatch carries the preflight that enforces the pin.
+    on_fire = build_on_fire(deps)
+    await on_fire(0, "task_1")
+    await _drain()
+
+    assert conv_store.created == []
+    assert len(store.runs) == 1
+    assert store.runs[0]["status"] == "failed"
+    assert store.runs[0]["error_code"] == "managed_host_not_shareable"
     assert store.runs[0]["conversation_id"] is None
 
 

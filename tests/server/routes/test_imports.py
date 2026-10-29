@@ -821,3 +821,96 @@ async def test_import_local_offline_host_is_conflict(db_uri: str) -> None:
         )
     assert res.status_code == 409
     assert res.json()["error"]["code"] == ErrorCode.CONFLICT
+
+
+def _authed_import_client(db_uri: str, user_id: str) -> httpx.AsyncClient:
+    """Imports router with a real host store and an authenticated caller."""
+    app = FastAPI()
+    app.include_router(
+        create_imports_router(
+            SqlAlchemyConversationStore(db_uri),
+            SqlAlchemyAgentStore(db_uri),
+            auth_provider=SimpleNamespace(get_user_id=lambda _request: user_id),  # type: ignore[arg-type]
+            host_registry=HostRegistry(),
+            host_store=HostStore(db_uri),
+        ),
+        prefix="/v1",
+    )
+
+    @app.exception_handler(OmnigentError)
+    async def _handle(_request: Request, exc: OmnigentError) -> JSONResponse:
+        return JSONResponse(
+            status_code=exc.http_status,
+            content={"error": {"code": exc.code, "message": exc.message}},
+        )
+
+    return httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test")
+
+
+def _bound_import(external_session_id: str, host_id: str) -> dict[str, object]:
+    return {
+        "source": "claude",
+        "external_session_id": external_session_id,
+        "workspace": "/repo",
+        "host_id": host_id,
+        "items": [
+            {
+                "type": "message",
+                "response_id": "claude:turn-1",
+                "data": {"role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+            }
+        ],
+    }
+
+
+async def test_import_host_binding_is_owner_checked_and_never_a_managed_sandbox(
+    db_uri: str,
+) -> None:
+    """``/v1/imports`` binds to a host only when the caller may: another user's
+    host is 403 and a managed sandbox (which runs only the session it was made
+    for) is 400 — both before anything is written. The caller's own shared host
+    binds; an identity this server never registered imports unbound."""
+    _seed_claude_agent(db_uri)
+    hosts = HostStore(db_uri)
+    alice, bob = "alice@example.com", "bob@example.com"
+    laptop = "0123456789abcdef0123456789abcdef"
+    bobs_laptop = "1123456789abcdef0123456789abcdef"
+    sandbox = "2123456789abcdef0123456789abcdef"
+    unknown = "3123456789abcdef0123456789abcdef"
+    hosts.upsert_on_connect(laptop, "laptop", alice)
+    hosts.upsert_on_connect(bobs_laptop, "bobs-laptop", bob)
+    hosts.register_managed_host(
+        host_id=sandbox,
+        name="managed-21ff0b18",
+        user_id=alice,
+        token="t" * 32,
+        provider="kubernetes",
+        sandbox_id="sb-1",
+        token_expires_at=2_000_000_000,
+    )
+    store = SqlAlchemyConversationStore(db_uri)
+
+    async with _authed_import_client(db_uri, alice) as client:
+        foreign = await client.post("/v1/imports", json=_bound_import("ext-foreign", bobs_laptop))
+        managed = await client.post("/v1/imports", json=_bound_import("ext-managed", sandbox))
+        own = await client.post("/v1/imports", json=_bound_import("ext-own", laptop))
+        unregistered = await client.post("/v1/imports", json=_bound_import("ext-unknown", unknown))
+        local = await client.post(
+            "/v1/imports/local", json={"host_id": sandbox, "source": "claude", "limit": 5}
+        )
+
+    assert foreign.status_code == 403, foreign.text
+    assert store.find_conversation_by_external_session_id("ext-foreign") is None
+    assert managed.status_code == 400, managed.text
+    assert "managed sandbox" in managed.json()["error"]["message"]
+    assert store.find_conversation_by_external_session_id("ext-managed") is None
+    assert local.status_code == 400, local.text
+    assert "managed sandbox" in local.json()["error"]["message"]
+
+    assert own.status_code == 201, own.text
+    own_row = store.get_conversation(own.json()["session_id"])
+    assert own_row is not None and own_row.host_id == laptop
+    assert unregistered.status_code == 201, unregistered.text
+    unregistered_row = store.get_conversation(unregistered.json()["session_id"])
+    assert unregistered_row is not None and unregistered_row.host_id is None
+    assert unregistered_row.workspace == "/repo"
