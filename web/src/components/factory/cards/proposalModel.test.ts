@@ -170,6 +170,24 @@ describe("lines and levers", () => {
     expect(outcomeLine(proposalInState("undone"), "undone")).toBe("Undone by mia");
   });
 
+  it("says a stale definition change moved in the definition, not in a project", () => {
+    const rule = roomProposals().find((p) => p.ref === "C-15")!;
+    expect(outcomeLine(rule, "stale")).toBe(
+      "The definition changed since this was proposed; ask for a fresh proposal or reject it",
+    );
+    expect(outcomeLine(proposalInState("pending"), "stale")).toBe(
+      "A project changed since this was proposed; ask for a fresh proposal or reject it",
+    );
+    const refused = {
+      ...rule,
+      status: "refused" as const,
+      result: { error: "stale_proposal", stale_against: 5, paths: ["rules.R-3"] },
+    };
+    expect(outcomeLine(refused, "refused")).toBe(
+      "Refused: rules.R-3 changed in v5 since it was proposed; ask for a fresh proposal",
+    );
+  });
+
   it("needs an owner for tuning and owner-class proposals", () => {
     expect(proposalLever(proposalInState("pending"))).toBe("apply_projects");
     expect(proposalLever({ ...proposalInState("pending"), approval: "owner" })).toBe(

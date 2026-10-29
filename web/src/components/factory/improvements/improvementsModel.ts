@@ -92,8 +92,8 @@ export interface ChangeLine {
 }
 
 /**
- * What a tuning or rules proposal changes: its applied `before`/`after` maps
- * once it ran (rule ids included), else its ops against `before`.
+ * What a tuning or rules proposal changes: its `before`/`after` maps (rule ids
+ * once it ran; a rule it adds is `rules.new` until then), else its ops.
  */
 export function changeLines(proposal: ProposalView): ChangeLine[] {
   const before = (proposal.before ?? {}) as Record<string, unknown>;

@@ -82,6 +82,19 @@ describe("improvements model", () => {
     expect(effectText(byRef("C-14"))).toBe("heartbeat $ / day ↓ by $0.30");
   });
 
+  it("shows a rule a pending change adds without an id", () => {
+    const text = "Claim READY only when sys_factory_pr says ready.";
+    const rule = { role: "project_lead", project: "*", text, origin: null, state: "trial" };
+    const pending = {
+      ...byRef("C-15"),
+      before: { "rules.new": null },
+      after: { "rules.new": rule },
+    };
+    expect(changeLines(pending)).toEqual([
+      { sign: "+", path: "rules.new", before: null, after: `role=project_lead · “${text}”` },
+    ]);
+  });
+
   it("links evidence ids to their pages", () => {
     expect(evidenceHref(FID, "F-9")).toBe(`/factory/${FID}/alerts/F-9`);
     expect(evidenceHref(FID, "INC-13")).toBe(`/factory/${FID}/alerts/13`);

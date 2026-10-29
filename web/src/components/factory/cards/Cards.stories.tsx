@@ -194,6 +194,41 @@ export const ProposalStale = proposalStory(
   },
 );
 
+/** A rule edit refused because its rule changed since: the definition, not a project. */
+export const ProposalRuleStale = proposalStory(
+  roomProposals().find((p) => p.ref === "C-15")!,
+  {
+    routes: {
+      [`/v1/factory/factories/${ROOM_FID}/proposals/C-15/apply`]: {
+        body: {
+          error: {
+            code: "stale_proposal",
+            message:
+              "C-15 is stale against v5: rules.R-3 changed since it was proposed on v4. Reject it and re-propose against v5.",
+          },
+          def_version: 5,
+          paths: ["rules.R-3"],
+        },
+        status: 409,
+      },
+    },
+  },
+  async ({ canvasElement }) => {
+    fireEvent.click(
+      await within(canvasElement.ownerDocument.body).findByTestId(
+        "proposal-apply-C-15",
+        {},
+        { timeout: 6000 },
+      ),
+    );
+    await within(canvasElement.ownerDocument.body).findByTestId(
+      "proposal-stale-C-15",
+      {},
+      { timeout: 6000 },
+    );
+  },
+);
+
 /** Someone else applied it first. */
 export const ProposalRaceLost = proposalStory(
   proposalInState("pending"),

@@ -64,7 +64,7 @@ async def propose_change(
     resolved = await asyncio.to_thread(definition.definition_for, deps, root.id, fresh=True)
     assert resolved is not None
     after = definition.apply_changes(resolved.stored, changes, rule_state="trial")
-    diff = definition.diff(resolved.stored, after)
+    diff = tuning.preview(definition.diff(resolved.stored, after))
     if not diff:
         raise CockpitError(400, "no_change", "the definition already has these values")
     await asyncio.to_thread(tuning._check_overlap, deps, root.id, diff)
@@ -80,8 +80,7 @@ async def propose_change(
             approval="owner",
             class_="B",
             ops=tuning._stored_ops(changes),
-            before={d["path"]: d["before"] for d in diff},
-            after={d["path"]: d["after"] for d in diff},
+            **tuning._pending_fields(diff, resolved.version),
             rationale=body.rationale,
             evidence=list(body.evidence),
             expected_effect=effect,

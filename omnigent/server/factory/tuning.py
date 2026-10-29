@@ -24,7 +24,7 @@ import asyncio
 import logging
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -80,6 +80,8 @@ OPTION_KEEP: Final = "keep"
 OPTION_REVERT: Final = "revert"
 SUBJECT_PREFIX: Final = "proposal:"
 SCOPE: Final = "definition"
+NEW_RULE: Final = "rules.new"
+"""How an unapplied proposal names a rule it adds: the ``R-n`` comes when it applies."""
 _LEAD_RULE_ROLES: Final = frozenset({ROLE_LEAD, "planner", "*"})
 _PL_RULE_ROLES: Final = frozenset(
     {ROLE_PROJECT_LEAD, "ic", "ic_codex", "reviewer", "env_keeper", "demo", "*"}
@@ -176,6 +178,62 @@ def _stored_ops(changes: Sequence[definition.Change]) -> list[dict[str, Any]]:
             op["value"] = change.value
         out.append(op)
     return out
+
+
+def preview(diff: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    """
+    *diff* as an unapplied proposal shows it. An added rule has no id yet
+    (``rules.new``, ``rules.new-2``, …): open proposals never claim the same ``R-n``.
+    """
+    out: list[dict[str, Any]] = []
+    added = 0
+    for entry in diff:
+        path, after = str(entry["path"]), entry.get("after")
+        if (
+            path.startswith("rules.")
+            and entry.get("before") is None
+            and isinstance(after, Mapping)
+        ):
+            added += 1
+            path = NEW_RULE if added == 1 else f"{NEW_RULE}-{added}"
+            after = {k: v for k, v in after.items() if k != "id"}
+        out.append({**entry, "path": path, "after": after})
+    return out
+
+
+def _pending_fields(diff: Sequence[Mapping[str, Any]], version: int) -> dict[str, Any]:
+    """The ``before``/``after``/``based_on`` of an unapplied proposal read at *version*."""
+    return {
+        "before": {d["path"]: d["before"] for d in diff},
+        "after": {d["path"]: d["after"] for d in diff},
+        "based_on": {"def_version": version},
+    }
+
+
+def stale_error(row: FactoryProposal, version: int, paths: Sequence[str]) -> CockpitError:
+    """:returns: The 409 ``stale_proposal`` of *row* against *version* (*paths* moved)."""
+    ref = proposal_ref(row.number)
+    base = (row.based_on or {}).get("def_version")
+    since = f" on v{base}" if isinstance(base, int) else ""
+    return CockpitError(
+        409,
+        "stale_proposal",
+        f"{ref} is stale against v{version}: {', '.join(paths)} changed since it was "
+        f"proposed{since}. Reject it and re-propose against v{version}.",
+        proposal=ref,
+        def_version=version,
+        paths=list(paths),
+    )
+
+
+def stale_paths(
+    deps: FactoryDeps, row: FactoryProposal, *, fresh: bool = True
+) -> tuple[int, list[str]]:
+    """:returns: The version in force and the paths of open *row* that moved since it was made."""
+    resolved = definition.definition_for(deps, row.factory_id, fresh=fresh)
+    if resolved is None:
+        return 0, []
+    return resolved.version, definition.moved_paths(row.before or {}, resolved.stored)
 
 
 def _klass(diff: Sequence[Mapping[str, Any]]) -> str:
@@ -571,7 +629,7 @@ async def propose(app_state: Any, caller: AgentCaller, body: ProposeIn) -> dict[
     resolved = await asyncio.to_thread(definition.definition_for, deps, root.id, fresh=True)
     assert resolved is not None
     after = definition.apply_changes(resolved.stored, changes, rule_state="trial")
-    diff = definition.diff(resolved.stored, after)
+    diff = preview(definition.diff(resolved.stored, after))
     if not diff:
         raise CockpitError(400, "no_change", "the definition already has these values")
     await asyncio.to_thread(_check_overlap, deps, root.id, diff)
@@ -594,8 +652,7 @@ async def propose(app_state: Any, caller: AgentCaller, body: ProposeIn) -> dict[
             approval="auto" if klass == "A" else "owner",
             class_=klass,
             ops=_stored_ops(changes),
-            before={d["path"]: d["before"] for d in diff},
-            after={d["path"]: d["after"] for d in diff},
+            **_pending_fields(diff, resolved.version),
             rationale=body.rationale or "",
             evidence=list(body.evidence),
             expected_effect=effect,
@@ -896,9 +953,17 @@ async def _apply(
     ref = proposal_ref(row.number)
     resolved = await asyncio.to_thread(definition.definition_for, deps, root.id, fresh=True)
     assert resolved is not None
+    moved = definition.moved_paths(row.before or {}, resolved.stored)
+    if moved:
+        await _refuse_stale(app_state, row, expect, resolved.version, moved, actor)
+    floor = await asyncio.to_thread(definition.rule_floor, deps, root.id)
     changes = _changes(row.ops)
     after = definition.apply_changes(
-        resolved.stored, changes, origin=ref, rule_state="trial" if trial else "active"
+        resolved.stored,
+        changes,
+        origin=ref,
+        rule_state="trial" if trial else "active",
+        min_rule_seq=floor,
     )
     applied = definition.diff(resolved.stored, after)
     if not applied:
@@ -989,6 +1054,54 @@ async def _apply(
     return row
 
 
+async def _refuse_stale(
+    app_state: Any,
+    row: FactoryProposal,
+    expect: str | Sequence[str],
+    version: int,
+    moved: Sequence[str],
+    actor: Actor,
+) -> NoReturn:
+    """Refuse *row*: what it changes moved since it was proposed. Never overwrites it."""
+    deps = factory_deps(app_state)
+    ref = proposal_ref(row.number)
+    error = stale_error(row, version, moved)
+    row = await _update(
+        deps,
+        row,
+        expect,
+        status="refused",
+        result={
+            **(row.result or {}),
+            "reason": "stale",
+            "error": error.code,
+            "stale_against": version,
+            "paths": list(moved),
+        },
+    )
+    await _emit(
+        app_state,
+        row,
+        "proposal.refused",
+        f"{ref} refused: stale against v{version} ({', '.join(moved)} changed since)",
+        actor,
+        error=error.code,
+        def_version=version,
+        paths=list(moved),
+    )
+    await _tell(
+        app_state,
+        row,
+        outcome_text(
+            ref,
+            f"not applied: stale against v{version}",
+            f"{', '.join(moved)} changed since you proposed it. Re-propose against "
+            f"v{version} if it still applies; record it in the ledger.",
+        ),
+    )
+    raise error
+
+
 def _hhmm(ts: int | None) -> str:
     from datetime import UTC, datetime
 
@@ -1061,14 +1174,18 @@ def revert_doc(
     doc, old = definition.full_doc(current), definition.full_doc(base)
     rules = {r["id"]: r for r in doc.get("rules") or []}
     base_rules = {r["id"]: r for r in old.get("rules") or []}
-    for path in row.after or {}:
+    for path, value in (row.after or {}).items():
         if path.startswith("rules."):
             rule_id = path.removeprefix("rules.")
+            if not definition.same_rule(rules.get(rule_id), value):
+                continue  # Changed again since: that later change stays.
             if rule_id in base_rules:
                 rules[rule_id] = base_rules[rule_id]
             else:
                 rules.pop(rule_id, None)
             continue
+        if definition.get_path(doc, path) != value:
+            continue  # Changed again since: that later change stays.
         definition.set_path(doc, path, definition.get_path(old, path))
     for rule_id in [r for r, v in rules.items() if v.get("origin") == ref and r not in base_rules]:
         rules.pop(rule_id, None)
@@ -1120,34 +1237,40 @@ async def _revert(
     )
     base = dict(base_row.doc or {}) if base_row is not None else {}
     by = projects_name(actor)
+    changed = True
     if resolved.version == row.def_version_to and base_row is not None:
         await asyncio.to_thread(definition.pin, deps, root.id, base_row.version)
         version, after = base_row.version, base
     else:
         after = revert_doc(resolved.stored, base, row)
-        stored = await asyncio.to_thread(
-            lambda: definition.store_version(
-                deps,
-                root.id,
-                after,
-                created_by=actor.id,
-                created_via="revert",
-                parent_version=resolved.version,
-                proposal_id=row.id,
+        # Later changes replaced everything it changed: nothing is left to undo.
+        changed = bool(definition.diff(resolved.stored, after))
+        version = resolved.version
+        if changed:
+            stored = await asyncio.to_thread(
+                lambda: definition.store_version(
+                    deps,
+                    root.id,
+                    after,
+                    created_by=actor.id,
+                    created_via="revert",
+                    parent_version=resolved.version,
+                    proposal_id=row.id,
+                )
             )
+            version = stored.version
+    if changed:
+        await deliver(
+            app_state,
+            root,
+            ref=ref,
+            by=by,
+            header=f"v{version} · {ref} reverted by {by}: {control.clip(reason, 80)}",
+            before=resolved.stored,
+            after=after,
+            version=version,
+            actor=actor,
         )
-        version = stored.version
-    await deliver(
-        app_state,
-        root,
-        ref=ref,
-        by=by,
-        header=f"v{version} · {ref} reverted by {by}: {control.clip(reason, 80)}",
-        before=resolved.stored,
-        after=after,
-        version=version,
-        actor=actor,
-    )
     await _close_keep_decision(app_state, row, "expired")
     await _emit(
         app_state,
@@ -1211,7 +1334,7 @@ async def human_edit(
         )
     changes = _changes(body.changes)
     after = definition.apply_changes(resolved.stored, changes)
-    diff = definition.diff(resolved.stored, after)
+    diff = preview(definition.diff(resolved.stored, after))
     if not diff:
         raise CockpitError(400, "no_change", "the definition already has these values")
     kind = "rules" if all(c.path == "rules" for c in changes) else "tuning"
@@ -1226,8 +1349,7 @@ async def human_edit(
             approval="owner",
             class_="human",
             ops=_stored_ops(changes),
-            before={d["path"]: d["before"] for d in diff},
-            after={d["path"]: d["after"] for d in diff},
+            **_pending_fields(diff, resolved.version),
             rationale=body.note or "",
             expected_effect=_effect(body.expected_effect),
             author_role=actor.role,
@@ -1412,6 +1534,10 @@ async def plan_answer(
             409, "proposal_not_pending", f"{label} is {row.status}", status=row.status
         )
     if action == ACTION_APPLY_PROPOSAL:
+        if row.kind != "code":
+            version, moved = await asyncio.to_thread(stale_paths, deps, row)
+            if moved:
+                raise stale_error(row, version, moved)
         return TuningAnswer(row, root, actor, user_id, apply=True, action=OPTION_APPLY)
     return TuningAnswer(row, root, actor, user_id, apply=False, note=text, action=OPTION_REJECT)
 
@@ -1563,8 +1689,11 @@ __all__ = [
     "keep",
     "pin_version",
     "plan_answer",
+    "preview",
     "propose",
     "revert",
     "revert_doc",
     "rules_update_text",
+    "stale_error",
+    "stale_paths",
 ]

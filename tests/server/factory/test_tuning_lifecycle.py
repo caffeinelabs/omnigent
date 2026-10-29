@@ -437,6 +437,228 @@ async def test_pin_puts_an_old_version_back_and_ends_its_trials(cockpit: Cockpit
     )
 
 
+# ── Proposals filed on the same version ────────────────────────
+
+RULE_EFFECT = {"metric": "review_rounds", "direction": "down"}
+
+
+async def _put(cockpit: Cockpit, *changes: dict[str, Any], trial: bool = False) -> None:
+    resp = await cockpit.client.put(
+        f"/v1/factory/factories/{cockpit.fid}/definition",
+        json={"changes": list(changes), "trial": trial},
+        headers={"X-Test-User": "alice"},
+    )
+    assert resp.status_code == 200, resp.text
+
+
+async def _answer(cockpit: Cockpit, ref: str) -> httpx.Response:
+    row = _row(cockpit, int(ref.removeprefix("C-")))
+    return await cockpit.post(
+        f"/v1/factory/decisions/{row.decision_id}/answer", {"option_id": "apply"}
+    )
+
+
+async def _view(cockpit: Cockpit, ref: str) -> dict[str, Any]:
+    resp = await cockpit.client.get(
+        f"/v1/factory/factories/{cockpit.fid}/proposals/{ref}", headers={"X-Test-User": "alice"}
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()["proposal"]
+
+
+def _rules(cockpit: Cockpit) -> list[tuple[str, str]]:
+    resolved = definition.definition_for(cockpit.deps, cockpit.fid, fresh=True)
+    assert resolved is not None
+    return [(r["id"], r["text"]) for r in resolved.stored["rules"]]
+
+
+def test_a_preview_names_added_rules_without_an_id() -> None:
+    def rule(rule_id: str, text: str) -> dict[str, Any]:
+        return {"id": rule_id, "role": "ic", "project": "*", "text": text, "state": "trial"}
+
+    diff = [
+        {"path": "loops.review.rounds", "before": 3, "after": 2},
+        {"path": "rules.R-2", "before": rule("R-2", "Old."), "after": None},
+        {"path": "rules.R-4", "before": None, "after": rule("R-4", "Lint.")},
+        {"path": "rules.R-5", "before": None, "after": rule("R-5", "Test.")},
+    ]
+
+    shown = tuning.preview(diff)
+
+    assert [d["path"] for d in shown] == [
+        "loops.review.rounds",
+        "rules.R-2",
+        "rules.new",
+        "rules.new-2",
+    ]
+    assert definition.diff_lines(shown) == [
+        "loops.review.rounds: 3 → 2",
+        '- R-2 · ic · "Old."',
+        '+ new rule · ic · "Lint."',
+        '+ new rule · ic · "Test."',
+    ]
+
+
+async def test_two_rules_proposed_on_one_version_get_their_own_ids(cockpit: Cockpit) -> None:
+    for text in ("Claim only when sys_factory_pr says ready.", "Plan human-only steps first."):
+        resp = await _propose(
+            cockpit,
+            kind="rules",
+            rule={"role": "project_lead", "text": text},
+            expected_effect=RULE_EFFECT,
+        )
+        assert resp.status_code == 200, resp.text
+    # Neither claims an id while pending: R-1 is whichever applies first.
+    for number in (1, 2):
+        row = _row(cockpit, number)
+        assert list(row.after) == ["rules.new"] and row.based_on == {"def_version": 1}
+        assert "id" not in row.after["rules.new"]
+        assert row.title.startswith("+ new rule · project_lead")
+        decision = cockpit.store.get_decision(row.decision_id)
+        assert decision is not None and "+ new rule · project_lead" in decision.context
+
+    assert (await _answer(cockpit, "C-1")).status_code == 200
+    pending = await _view(cockpit, "C-2")
+    assert list(pending["after"]) == ["rules.new"] and pending["warnings"] == []
+    applied = await _answer(cockpit, "C-2")
+
+    assert applied.status_code == 200, applied.text
+    assert _rules(cockpit) == [
+        ("R-1", "Claim only when sys_factory_pr says ready."),
+        ("R-2", "Plan human-only steps first."),
+    ]
+    row = _row(cockpit, 2)
+    assert (row.status, row.def_version_from, row.def_version_to) == ("trial", 2, 3)
+    assert list(row.after) == ["rules.R-2"] and row.after["rules.R-2"]["origin"] == "C-2"
+    update = [t for t in _texts(cockpit, "pl") if "RULES UPDATE · C-2" in t][-1]
+    assert '+ R-2 · project_lead · "Plan human-only steps first."' in update
+
+
+def test_a_pending_row_filed_with_a_provisional_rule_id_shows_none(cockpit: Cockpit) -> None:
+    from omnigent.server.factory.proposals import proposal_view
+
+    rule = {"id": "R-1", "role": "ic", "project": "*", "text": "Lint first.", "state": "trial"}
+    row, _ = cockpit.store.create_proposal(
+        cockpit.fid,
+        kind="rules",
+        title="lint",
+        author_kind="human",
+        author="alice",
+        status="rejected",
+        ops=[{"op": "add", "path": "rules", "value": rule}],
+        before={"rules.R-1": None},
+        after={"rules.R-1": rule},
+    )
+
+    view = proposal_view(cockpit.deps, row)
+
+    assert view["before"] == {"rules.new": None}
+    assert view["after"] == {"rules.new": {k: v for k, v in rule.items() if k != "id"}}
+
+
+async def test_a_rule_edit_whose_rule_changed_since_is_refused_as_stale(
+    cockpit: Cockpit,
+) -> None:
+    await _put(cockpit, {"op": "add", "path": "rules", "value": {"role": "ic", "text": "Lint."}})
+    filed = await _propose(
+        cockpit,
+        kind="rules",
+        changes=[{"op": "replace", "path": "rules/R-1", "value": {"text": "Lint and test."}}],
+        expected_effect=RULE_EFFECT,
+    )
+    assert filed.status_code == 200, filed.text
+    await _put(
+        cockpit,
+        {"op": "replace", "path": "rules/R-1", "value": {"text": "Lint, then type-check."}},
+    )
+    message = "C-2 is stale against v3: rules.R-1 changed since it was proposed on v2."
+    assert any(w.startswith(message) for w in (await _view(cockpit, "C-2"))["warnings"])
+
+    answered = await _answer(cockpit, "C-2")
+
+    assert answered.status_code == 409 and error_code(answered) == "stale_proposal"
+    assert answered.json()["error"]["message"].startswith(message)
+    assert answered.json()["paths"] == ["rules.R-1"]
+    assert _rules(cockpit) == [("R-1", "Lint, then type-check.")]
+    # The owner still rejects it; nothing was decided for them.
+    assert _row(cockpit, 2).status == "pending"
+
+    # A race past that check (apply under the lock) refuses it the same way.
+    with pytest.raises(Exception) as raised:
+        await tuning.apply(
+            cockpit.app.state,
+            cockpit.world.get("lead_a"),
+            _row(cockpit, 2),
+            actor=Actor.server(),
+            trial=True,
+        )
+    assert getattr(raised.value, "code", None) == "stale_proposal"
+    row = _row(cockpit, 2)
+    assert (row.status, row.result["reason"], row.result["stale_against"]) == (
+        "refused",
+        "stale",
+        3,
+    )
+    assert _rules(cockpit) == [("R-1", "Lint, then type-check.")]
+    assert any("C-2 not applied: stale against v3" in t for t in _texts(cockpit, "lead_b"))
+
+
+async def test_a_reverted_rule_id_is_never_handed_to_another_rule(cockpit: Cockpit) -> None:
+    await _put(
+        cockpit, {"op": "add", "path": "rules", "value": {"role": "ic", "text": "A."}}, trial=True
+    )
+    filed = await _propose(
+        cockpit,
+        kind="rules",
+        changes=[{"op": "remove", "path": "rules/R-1"}],
+        expected_effect=RULE_EFFECT,
+    )
+    assert filed.status_code == 200, filed.text
+    reverted = await cockpit.post(f"/v1/factory/factories/{cockpit.fid}/proposals/C-1/revert", {})
+    assert reverted.status_code == 200, reverted.text
+    # v1 (no rules) is back in force; a version built on it still numbers past R-1.
+    await _put(cockpit, {"op": "replace", "path": "loops.review.rounds", "value": 2})
+    await _put(cockpit, {"op": "add", "path": "rules", "value": {"role": "ic", "text": "B."}})
+    assert _rules(cockpit) == [("R-2", "B.")]
+
+    answered = await _answer(cockpit, "C-2")
+
+    # The removal named the reverted R-1: it never touches B.
+    assert answered.status_code == 409 and error_code(answered) == "stale_proposal"
+    assert _rules(cockpit) == [("R-2", "B.")]
+
+
+async def test_a_class_a_change_whose_setting_moved_is_refused_at_cosign(
+    cockpit: Cockpit,
+) -> None:
+    await _propose(cockpit, changes=_cadence(1200))
+    await _put(cockpit, *_cadence(900))
+
+    resp = await _propose(cockpit, key="lead_a", op="cosign", id="C-1")
+
+    assert resp.status_code == 409 and error_code(resp) == "stale_proposal", resp.text
+    assert "cadence.demo_project_lead changed since it was proposed on v1" in resp.text
+    assert definition.value(cockpit.deps, cockpit.fid, "cadence.demo_project_lead") == 900
+    assert _row(cockpit).status == "refused"
+    assert "proposal.refused" in [e.kind for e in cockpit.events()]
+    assert any("C-1 not applied: stale against v2" in t for t in _texts(cockpit, "lead_b"))
+
+
+async def test_reverting_a_change_keeps_a_later_change_to_the_same_setting(
+    cockpit: Cockpit,
+) -> None:
+    await _put(cockpit, {"op": "replace", "path": "loops.review.rounds", "value": 2})
+    await _put(cockpit, {"op": "replace", "path": "loops.review.rounds", "value": 1})
+
+    resp = await cockpit.post(f"/v1/factory/factories/{cockpit.fid}/proposals/C-1/revert", {})
+
+    assert resp.status_code == 200, resp.text
+    assert _row(cockpit).status == "reverted"
+    resolved = definition.definition_for(cockpit.deps, cockpit.fid, fresh=True)
+    assert resolved is not None and resolved.version == 3
+    assert resolved.doc["loops"]["review"]["rounds"] == 1
+
+
 # ── Code (Tier 2 off) and expiry ───────────────────────────────
 
 

@@ -793,6 +793,9 @@ def store_version(
 ) -> FactoryDefinition:
     """Store *doc* as the next version and pin it. :returns: The new version."""
     validated = FactoryDefinitionDoc.model_validate(doc).model_dump(mode="json")
+    # Carry the highest rule number forward, so a version built on a re-pinned
+    # older one never hands out a rule id another version already used.
+    validated["rule_seq"] = max(validated["rule_seq"], rule_floor(deps, factory_id))
     row = deps.factory_store.put_definition(
         factory_id,
         doc=validated,
@@ -931,13 +934,25 @@ def _check_bounds(path: str, value: Any, field: str) -> None:
         )
 
 
+def rule_seq(doc: Mapping[str, Any]) -> int:
+    """:returns: The highest rule number *doc* has used (its ``rule_seq`` or a rule id)."""
+    numbers = [
+        int(m.group(1))
+        for r in doc.get("rules") or []
+        if isinstance(r, Mapping) and (m := _RULE_ID_RE.match(str(r.get("id"))))
+    ]
+    return max([int(doc.get("rule_seq") or 0), *numbers], default=0)
+
+
 def next_rule_id(doc: Mapping[str, Any]) -> str:
     """:returns: The next free ``R-<n>`` of *doc*."""
-    numbers = [
-        int(m.group(1)) for r in doc.get("rules") or [] if (m := _RULE_ID_RE.match(r["id"]))
-    ]
-    seq = max([int(doc.get("rule_seq") or 0), *numbers], default=0)
-    return f"R-{seq + 1}"
+    return f"R-{rule_seq(doc) + 1}"
+
+
+def rule_floor(deps: FactoryDeps, factory_id: str) -> int:
+    """:returns: The highest rule number any stored version used (``0`` when none)."""
+    latest = deps.factory_store.latest_definition(factory_id)
+    return rule_seq(latest.doc or {}) if latest is not None else 0
 
 
 def apply_changes(
@@ -946,13 +961,16 @@ def apply_changes(
     *,
     origin: str | None = None,
     rule_state: str = "active",
+    min_rule_seq: int = 0,
 ) -> dict[str, Any]:
     """
+    :param min_rule_seq: Added rules number past this (see :func:`rule_floor`).
     :returns: A new stored doc with *changes* applied (validated by the model).
     :raises CockpitError: 422 ``invalid_definition`` when the result does not validate,
         404 ``unknown_rule`` for a missing rule.
     """
     doc = _merge(default_doc(), stored)
+    doc["rule_seq"] = max(rule_seq(doc), min_rule_seq)
     rules: list[dict[str, Any]] = [dict(r) for r in doc.get("rules") or []]
     for change in changes:
         if change.path != "rules":
@@ -1022,6 +1040,41 @@ def diff(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[dict[str, 
     return out
 
 
+def _rule_key(rule: Mapping[str, Any]) -> tuple[Any, Any, Any]:
+    return rule.get("role"), rule.get("project") or "*", rule.get("text")
+
+
+def same_rule(a: Any, b: Any) -> bool:
+    """Whether *a* and *b* (rule dicts or ``None``) say the same; trial/active and origin aside."""
+    if isinstance(a, Mapping) and isinstance(b, Mapping):
+        return _rule_key(a) == _rule_key(b)
+    return a is None and b is None
+
+
+def moved_paths(before: Mapping[str, Any], stored: Mapping[str, Any]) -> list[str]:
+    """
+    The paths of a proposal's *before* (``{path: value}`` as it read the definition)
+    whose value *stored* no longer has.
+
+    A rule addition (``before`` ``None``) never moves: it takes a fresh id when it
+    applies. A replaced or removed rule moves once its role, scope or text changed
+    or it is gone; its trial/active state does not count.
+    """
+    doc = _merge(default_doc(), stored)
+    rules = {str(r.get("id")): r for r in doc.get("rules") or [] if isinstance(r, Mapping)}
+    out: list[str] = []
+    for path, was in before.items():
+        if not path.startswith("rules."):
+            if get_path(doc, path) != was:
+                out.append(path)
+            continue
+        if not isinstance(was, Mapping):
+            continue
+        if not same_rule(rules.get(path.removeprefix("rules.")), was):
+            out.append(path)
+    return out
+
+
 def diff_lines(changes: Iterable[Mapping[str, Any]], limit: int = 12) -> list[str]:
     """:returns: One line per change, e.g. ``"cadence.project_lead: 7200 → 10800"``."""
     lines: list[str] = []
@@ -1029,7 +1082,8 @@ def diff_lines(changes: Iterable[Mapping[str, Any]], limit: int = 12) -> list[st
         before, after = change.get("before"), change.get("after")
         if str(change.get("path", "")).startswith("rules."):
             if before is None and isinstance(after, Mapping):
-                lines.append(f'+ {after["id"]} · {after["role"]} · "{after["text"]}"')
+                rule_id = after.get("id") or "new rule"
+                lines.append(f'+ {rule_id} · {after["role"]} · "{after["text"]}"')
             elif after is None and isinstance(before, Mapping):
                 lines.append(f'- {before["id"]} · {before["role"]} · "{before["text"]}"')
             elif isinstance(after, Mapping):
@@ -1232,10 +1286,14 @@ __all__ = [
     "int_value",
     "invalidate",
     "mail_limits",
+    "moved_paths",
     "parse_change",
     "pin",
+    "rule_floor",
+    "rule_seq",
     "rule_texts",
     "rules_for",
+    "same_rule",
     "seed_doc",
     "store_version",
     "supervisor_config",
