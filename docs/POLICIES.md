@@ -501,6 +501,14 @@ def block_domains(blocked_domains: list[str]) -> callable:
 
 `state_updates` supports four actions: `"set"`, `"increment"`, `"delete"`, `"append"`.
 
+Per-turn state should be keyed by `event["context"]["turn"]`: an opaque id the
+server stamps whenever a new user-role message starts a turn (a human prompt,
+factory mail, a heartbeat, a decision answer, a sub-agent wake, a prompt typed
+into a native terminal). Neither policies nor API clients can set it. It is
+`None` on paths without a server-side engine (the runner-local gate), which
+keep resetting on the `request` event and `reset_turn`. `spawn_bounds` counts
+its dispatches this way.
+
 ### Making policies discoverable
 
 To make custom policies appear in the UI, export a `POLICY_REGISTRY` list from your module:
