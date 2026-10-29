@@ -92,6 +92,8 @@ STALE_TASK_S: Final = 600
 """A sub-agent idle this long without a ``task.done`` is closed from its session."""
 _PAGE: Final = 1000
 _MAX_ROWS: Final = 100_000
+_MAX_FAILED_IN_A_ROW: Final = 10
+"""Decisions failing back to back: the cause is not the row (the store is down), stop."""
 _PROJECT_CLOSE: Final = {"project.cancelled": CANCELLED, "project.merged": SUPERSEDED}
 _STATUS_CLOSE: Final = {"cancelled": CANCELLED, "merged": SUPERSEDED, "done": OK}
 _DECISION_CLOSE: Final = {
@@ -114,6 +116,10 @@ class HealReport:
     events: int = 0
     failed: list[str] = field(default_factory=list)
     partial: list[str] = field(default_factory=list)
+
+
+_Guarded = Callable[[str, Callable[[], object]], bool]
+"""Runs one part of a heal; logs and records a failure. :returns: Whether it succeeded."""
 
 
 @dataclass
@@ -331,17 +337,21 @@ def _heal_decision(rec: Recorder, row: Any, by_ref: dict[tuple[str, str], int]) 
     )
 
 
-def _heal_decisions(
-    rec: Recorder, evs: list[FactoryEvent], guarded: Callable[[str, Callable[[], object]], None]
-) -> None:
+def _heal_decisions(rec: Recorder, evs: list[FactoryEvent], guarded: _Guarded) -> None:
     rows = rec.store.list_decisions(factory_id=rec.factory_id, limit=_MAX_ROWS, newest_first=False)
     by_ref: dict[tuple[str, str], int] = {}
     for e in evs:
         if e.kind.startswith("decision.") and e.subject:
             by_ref.setdefault((e.kind, e.subject), e.ts)
+    in_a_row = 0
     for row in rows:
         # One decision that cannot be written must not skip the rest.
-        guarded(f"decision {row.ref} {row.id}", partial(_heal_decision, rec, row, by_ref))
+        if guarded(f"decision {row.ref} {row.id}", partial(_heal_decision, rec, row, by_ref)):
+            in_a_row = 0
+            continue
+        in_a_row += 1
+        if in_a_row >= _MAX_FAILED_IN_A_ROW:
+            raise RuntimeError(f"{in_a_row} decisions failed in a row; skipping the rest")
 
 
 def _heal_tasks(rec: Recorder, evs: list[FactoryEvent], now: int) -> None:
@@ -433,6 +443,23 @@ def _heal_demos(rec: Recorder, demos: list[Any], evs: list[FactoryEvent]) -> Non
 # ── Driver ───────────────────────────────────────────────────────
 
 
+def _group_pr_events(
+    rec: Recorder, evs: list[FactoryEvent], into: dict[str, list[FactoryEvent]]
+) -> None:
+    """
+    Group the ``pr.*`` and ``gate.changed`` events by the PR row they name.
+
+    ``data.pr_id`` is resolved as the live recorder resolves it (:func:`pr_id_of`),
+    so an event naming ``9724`` heals onto the same PR (and ready wait) it was
+    recorded on, not beside it from ``pr.ready_at``.
+    """
+    for e in evs:
+        if e.kind.startswith("pr.") or e.kind == "gate.changed":
+            pr_id = pr_id_of(rec, _data(e).get("pr_id"), e.project_slug)
+            if pr_id is not None:
+                into[pr_id].append(e)
+
+
 def heal_factory(
     deps: FactoryDeps,
     factory_id: str,
@@ -455,23 +482,24 @@ def heal_factory(
     evs = iter_events(store, factory_id)
     rec = Recorder(deps, factory_id, NO_CONTEXT, keep_closed_after=at * 1000)
 
-    def guarded(part: str, run: Callable[[], object]) -> None:
+    def guarded(part: str, run: Callable[[], object]) -> bool:
         try:
             run()
         except Exception:  # noqa: BLE001 - one bad row must not stop the rest of the heal
             failed.append(part)
             _logger.warning("factory heal: %s of %s failed", part, factory_id, exc_info=True)
+            return False
+        return True
 
     guarded("projects", lambda: _heal_projects(rec, store.list_projects(factory_id), evs, at))
     demos: list[Any] = []
     guarded("demo rows", lambda: demos.extend(store.list_demos(factory_id, limit=_MAX_ROWS)))
     prs: list[FactoryPr] = []
-    guarded("pr rows", lambda: prs.extend(store.list_prs(factory_id)))
+    if guarded("pr rows", lambda: prs.extend(store.list_prs(factory_id))):
+        rec.know_prs(prs)
     pr_events: dict[str, list[FactoryEvent]] = defaultdict(list)
-    for e in evs:
-        pr_id = _data(e).get("pr_id")
-        if isinstance(pr_id, str) and (e.kind.startswith("pr.") or e.kind == "gate.changed"):
-            pr_events[pr_id].append(e)
+    if not guarded("pr events", partial(_group_pr_events, rec, evs, pr_events)):
+        prs.clear()  # Without its events a PR would heal from its row alone, beside its spans.
     for pr in prs:
         mine = [
             d for d in demos if d.pr_id == pr.id or (d.repo, d.pr_number) == (pr.repo, pr.number)

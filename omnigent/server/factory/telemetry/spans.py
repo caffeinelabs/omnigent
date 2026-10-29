@@ -251,7 +251,8 @@ def write_span(
     On a merge: an open span is closed with *ended_at*/*outcome* (a closed
     one only with *force*, or reopened with ``outcome="open"`` and *reopen*);
     *attrs* are merged (keys in *set_once* keep a stored non-null value);
-    *fields* fill columns that are still null (those in *overwrite* replace).
+    *fields* fill columns that are still null (those in *overwrite* replace),
+    and a derived trace key follows a newly filled ``pr_id``/``project_slug``.
     ``started_at`` and the stamped version never change.
 
     :param started_at: Epoch milliseconds.
@@ -303,6 +304,15 @@ def write_span(
         current = getattr(span, key, None)
         if (key in replace and current != value) or current is None:
             updates[key] = value
+    if trace_key is None and ("pr_id" in updates or "project_slug" in updates):
+        # A span linked late (its PR registered after it opened) joins the PR's tree.
+        was = trace_key_for(pr_id=span.pr_id, project=span.project_slug)
+        now = trace_key_for(
+            pr_id=updates.get("pr_id", span.pr_id),
+            project=updates.get("project_slug", span.project_slug),
+        )
+        if span.trace_key == was and now != was:
+            updates["trace_key"] = now
     if not updates:
         return span
     return store.update_span(span.id, **updates) or span

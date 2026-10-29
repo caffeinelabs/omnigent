@@ -682,6 +682,20 @@ def test_span_range_queries_and_ids(store: FactoryStore) -> None:
     assert store.list_spans(FID, project_slug="api-version") == []
 
 
+def test_a_span_moves_to_another_trace(store: FactoryStore) -> None:
+    """A decision span linked to its PR late joins the PR's trace (R3-05 recorder)."""
+    pr_id = uuid.uuid4().hex
+    span, _ = store.insert_span(
+        FID, kind="decision", name="D-1", trace_key="project:db-version", started_at=1_000
+    )
+
+    moved = store.update_span(span.id, pr_id=pr_id, trace_key=f"pr:{pr_id}")
+
+    assert moved is not None and (moved.pr_id, moved.trace_key) == (pr_id, f"pr:{pr_id}")
+    assert [s.id for s in store.list_spans(FID, trace_key=f"pr:{pr_id}")] == [span.id]
+    assert store.list_spans(FID, trace_key="project:db-version") == []
+
+
 # ── Cost ledger ────────────────────────────────────────────────
 
 

@@ -144,12 +144,44 @@ async def test_a_decision_about_a_pr_not_yet_registered_keeps_its_span_and_links
     await _opened(w, row, 1000)
     (span,) = _spans(w, "decision")
     assert (span.pr_id, span.outcome, (span.attrs or {})["subject"]) == (None, "open", "pr:9725")
+    assert span.trace_key == f"project:{PROJECT}"
 
     pr = _pr(w, 9725)
     await _answered(w, row, 4000)
 
     (span,) = _spans(w, "decision")
     assert (span.outcome, span.ended_at, span.actor, span.pr_id) == ("ok", 4000, "luka", pr.id)
+    # Linked late, it joins the PR's trace like a decision linked when it opened.
+    assert span.trace_key == f"pr:{pr.id}"
+    assert "could not record" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    ("kind", "outcome"),
+    [("decision.expired", spans.TIMEOUT), ("decision.withdrawn", spans.CANCELLED)],
+)
+async def test_an_expired_or_withdrawn_decision_about_a_pr_number_closes_on_that_pr(
+    recorded: FactoryWorld, kind: str, outcome: str, caplog: pytest.LogCaptureFixture
+) -> None:
+    w = recorded
+    caplog.set_level(logging.WARNING, logger=LOGGER)
+    pr = _pr(w, 9724)
+    row = _decision(w, "badge", subject="pr:9724")
+
+    await _opened(w, row, 1000)
+    await events.emit(
+        w.app_state,
+        _fid(w),
+        kind,
+        project=PROJECT,
+        subject=f"decision:{row.ref}",
+        summary=kind,
+        data={"decision_id": row.id},
+        ts=5000,
+    )
+
+    (span,) = _spans(w, "decision")
+    assert (span.pr_id, span.outcome, span.ended_at, span.actor) == (pr.id, outcome, 5000, None)
     assert "could not record" not in caplog.text
 
 
@@ -165,6 +197,42 @@ async def test_a_bare_pr_number_prefers_the_pr_of_the_decisions_project(
 
     (span,) = _spans(w, "decision")
     assert span.pr_id == mine.id
+
+
+async def test_a_bare_pr_number_never_links_another_projects_pr(
+    recorded: FactoryWorld,
+) -> None:
+    w = recorded
+    other = _pr(w, 42, repo="caffeinelabs/api", project="db-version")
+    row = _decision(w, "which", subject="pr:42")
+
+    await _opened(w, row, 1000)
+    (span,) = _spans(w, "decision")
+    assert (span.pr_id, span.trace_key) == (None, f"project:{PROJECT}")
+
+    # The asker's own #42 registered later is the one the decision links (pr_id is set once).
+    mine = _pr(w, 42)
+    await _answered(w, row, 4000)
+    heal.heal_factory(w.deps, _fid(w), failures=[])
+
+    (span,) = _spans(w, "decision")
+    assert (span.pr_id, span.trace_key) == (mine.id, f"pr:{mine.id}")
+    assert _spans(w, "decision", pr_id=other.id) == []
+
+
+async def test_a_pr_number_with_its_repo_or_of_no_project_links_from_any_project(
+    recorded: FactoryWorld,
+) -> None:
+    w = recorded
+    other = _pr(w, 42, repo="caffeinelabs/api", project="db-version")
+    loose, _ = _store(w).upsert_pr(_fid(w), REPO, 7)
+    for key, subject in (("a", "pr:caffeinelabs/api#42"), ("b", "pr:#7")):
+        await _opened(w, _decision(w, key, subject=subject), 10)
+
+    assert [(s.name, s.pr_id) for s in _spans(w, "decision")] == [
+        ("D-1", other.id),
+        ("D-2", loose.id),
+    ]
 
 
 async def test_a_pr_of_another_factory_or_no_pr_at_all_links_nothing(
@@ -236,6 +304,56 @@ async def test_one_decision_heal_cannot_write_skips_only_itself(
     assert [s.name for s in _spans(w, "decision")] == ["D-2"]
 
 
+async def test_decision_heal_stops_after_ten_failures_in_a_row(
+    world: FactoryWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = world
+    for i in range(25):
+        _decision(w, f"k{i}")
+
+    def down(*_a: Any, **_k: Any) -> None:
+        raise RuntimeError("store down")
+
+    monkeypatch.setattr(heal, "decision_span", down)
+    failures: list[str] = []
+
+    heal.heal_factory(w.deps, _fid(w), failures=failures)
+
+    assert [f.split(" ", 2)[:2] for f in failures[:-1]] == [
+        ["decision", f"D-{i}"] for i in range(1, 11)
+    ]
+    assert failures[-1] == "decisions"
+
+
+async def test_heal_lists_the_factorys_prs_once_for_every_pr_number(
+    world: FactoryWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = world
+    monkeypatch.setattr(live, "announce_factory_changed", lambda *_a, **_k: None)
+    monkeypatch.setattr(events, "_listeners", [])
+    pr = _pr(w, 9724)
+    for i in range(20):
+        _decision(w, f"k{i}", subject="pr:9724")
+    for ts in (10, 20):
+        await events.emit(
+            w.app_state, _fid(w), "pr.ready", summary="ready", data={"pr_id": 9724}, ts=ts
+        )
+    store = _store(w)
+    calls: list[str] = []
+    real = type(store).list_prs
+
+    def counted(self: Any, *a: Any, **k: Any) -> Any:
+        calls.append("list_prs")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(type(store), "list_prs", counted)
+
+    heal.heal_factory(w.deps, _fid(w), failures=[])
+
+    assert len(calls) == 1
+    assert {s.pr_id for s in _spans(w, "decision")} == {pr.id}
+
+
 # ── PR and preview events ────────────────────────────────────────
 
 
@@ -268,6 +386,67 @@ async def test_pr_and_preview_events_naming_a_pr_number_land_on_its_row(
         (pr.id, "ready", None),
     ]
     assert "could not record" not in caplog.text
+
+
+@pytest.mark.parametrize(
+    "ref", [9724, "9724", "#9724", "caffeinelabs/app#9724"], ids=["int", "str", "hash", "repo"]
+)
+async def test_heal_keeps_the_one_ready_wait_recorded_for_a_pr_number(
+    recorded: FactoryWorld, ref: Any
+) -> None:
+    w = recorded
+    pr = _pr(w, 9724)
+    ready_s = 1_700_000_000
+    _store(w).update_pr(pr.id, ready=True, ready_at=ready_s)
+    await events.emit(
+        w.app_state, _fid(w), "pr.ready", summary="ready", data={"pr_id": ref},
+        ts=ready_s * 1000 + 437,
+    )  # fmt: skip
+    (live_wait,) = _spans(w, "ready_wait")
+    failures: list[str] = []
+
+    heal.heal_factory(w.deps, _fid(w), now=ready_s + 3600, failures=failures)
+
+    # Heal reads the event the live recorder read, not pr.ready_at beside it.
+    assert failures == []
+    (wait,) = _spans(w, "ready_wait")
+    assert (wait.id, wait.pr_id, wait.started_at, wait.outcome) == (
+        live_wait.id,
+        pr.id,
+        ready_s * 1000 + 437,
+        "open",
+    )
+
+
+async def test_heal_builds_ready_waits_from_pr_events_naming_a_pr_number(
+    world: FactoryWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    w = world
+    monkeypatch.setattr(live, "announce_factory_changed", lambda *_a, **_k: None)
+    monkeypatch.setattr(events, "_listeners", [])
+    pr = _pr(w, 9724)
+    _store(w).update_pr(pr.id, ready=True, ready_at=1_700_000_000)
+    for kind, ts, ref in (
+        ("pr.ready", 1_700_000_000_437, 9724),
+        ("pr.not_ready", 1_700_000_100_000, "9724"),
+        ("pr.ready", 1_700_000_200_000, "#9724"),
+        ("pr.merged", 1_700_000_300_000, "caffeinelabs/app#9724"),
+    ):
+        await events.emit(
+            w.app_state, _fid(w), kind, project=PROJECT, summary=kind, data={"pr_id": ref}, ts=ts
+        )
+    failures: list[str] = []
+
+    for _ in range(2):  # a second run changes nothing
+        heal.heal_factory(w.deps, _fid(w), now=1_700_001_000, failures=failures)
+
+        assert failures == []
+        assert [
+            (s.pr_id, s.started_at, s.ended_at, s.outcome) for s in _spans(w, "ready_wait")
+        ] == [
+            (pr.id, 1_700_000_000_437, 1_700_000_100_000, "superseded"),
+            (pr.id, 1_700_000_200_000, 1_700_000_300_000, "ok"),
+        ]
 
 
 async def test_events_naming_no_known_pr_write_no_span_and_no_error(
@@ -348,6 +527,21 @@ def test_close_open_names_the_id_column_a_non_id_was_given_for() -> None:
     with pytest.raises(SpanFieldError) as raised:
         close_open(store, "f" * 32, "incident", ended_at=5, session_id="PL · ux-env-badge")
     assert raised.value.field == "session_id"
+
+
+def test_a_span_linked_late_follows_its_pr_trace_unless_its_trace_was_given() -> None:
+    store = InMemoryFactoryStore()
+    fid, pr_id = "f" * 32, uuid.uuid4().hex
+    common: dict[str, Any] = {"kind": "decision", "name": "D-1", "started_at": 1}
+    derived = write_span(store, fid, dedupe_key="a", project_slug=PROJECT, **common)
+    given = write_span(store, fid, dedupe_key="b", trace_key="task:t", **common)
+    assert (derived.trace_key, given.trace_key) == (f"project:{PROJECT}", "task:t")
+
+    derived = write_span(store, fid, dedupe_key="a", pr_id=pr_id, **common)
+    given = write_span(store, fid, dedupe_key="b", pr_id=pr_id, **common)
+
+    assert (derived.pr_id, derived.trace_key) == (pr_id, f"pr:{pr_id}")
+    assert (given.pr_id, given.trace_key) == (pr_id, "task:t")
 
 
 def test_write_span_stores_and_keys_ids_as_bare_hex() -> None:

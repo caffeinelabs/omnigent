@@ -25,8 +25,8 @@ import asyncio
 import logging
 import re
 from collections import OrderedDict
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Iterable, Mapping, Sequence
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.entities.factory import FactoryEvent, FactoryPr, FactorySpan
@@ -102,10 +102,25 @@ class Recorder:
     ctx: SpanContext = NO_CONTEXT
     keep_closed_after: int | None = None
     """Heal's read time (epoch ms); see :func:`.spans.write_span`."""
+    _prs: list[FactoryPr] | None = field(default=None, init=False, repr=False)
 
     @property
     def store(self) -> FactoryStore:
         return self.deps.factory_store
+
+    def prs(self) -> list[FactoryPr]:
+        """This factory's PRs, listed once per recorder (one event live, one heal run)."""
+        if self._prs is None:
+            self._prs = list(self.store.list_prs(self.factory_id))
+        return self._prs
+
+    def know_prs(self, prs: Iterable[FactoryPr]) -> None:
+        """Use *prs* (already listed by the caller) as this factory's PRs."""
+        self._prs = list(prs)
+
+    def pr(self, ref: Any, project: str | None = None) -> FactoryPr | None:
+        """:func:`pr_for_ref` over :meth:`prs`."""
+        return pr_for_ref(self.store, self.factory_id, ref, project=project, prs=self.prs)
 
     def span(self, **kwargs: Any) -> FactorySpan:
         return write_span(
@@ -174,14 +189,22 @@ def row_id(value: Any) -> str | None:
 
 
 def pr_for_ref(
-    store: FactoryStore, factory_id: str, ref: Any, *, project: str | None = None
+    store: FactoryStore,
+    factory_id: str,
+    ref: Any,
+    *,
+    project: str | None = None,
+    prs: Callable[[], Sequence[FactoryPr]] | None = None,
 ) -> FactoryPr | None:
     """
     The factory PR a reference names, or ``None``.
 
     :param ref: The ``factory_prs`` row id, or the PR as ``9724``, ``#9724``,
         ``!9724``, ``owner/repo#9724`` or its URL; a trailing ``@<sha>`` is ignored.
-    :param project: When a bare number matches PRs of several repos, prefer this project's.
+    :param project: The asker's project. A bare number names this project's PR
+        (or one of no project), never another project's; with a repo, this
+        project's PR is preferred when several factory PRs match.
+    :param prs: Lists the factory's PRs (a recorder's memo); default: the store.
     """
     if isinstance(ref, int) and not isinstance(ref, bool):
         ref = str(ref)
@@ -200,13 +223,17 @@ def pr_for_ref(
             return None
         parsed = (match["repo"] or "", int(match["number"]))
     repo, number = parsed[0].lower(), parsed[1]
-    found = [
-        p
-        for p in store.list_prs(fid)
-        if p.number == number and (not repo or p.repo.lower() == repo)
-    ]
+    rows = prs() if prs is not None else store.list_prs(fid)
+    found = [p for p in rows if p.number == number and (not repo or p.repo.lower() == repo)]
     mine = [p for p in found if project and p.project_slug == project]
-    pool = mine or found
+    if mine or not project:
+        pool = mine or found
+    elif repo:
+        pool = found
+    else:
+        # A bare number in one project's question is that project's PR: linking
+        # another project's PR #n would stick (write_span only fills a null pr_id).
+        pool = [p for p in found if not p.project_slug]
     return max(pool, key=lambda p: p.created_at) if pool else None
 
 
@@ -219,7 +246,7 @@ def pr_id_of(rec: Recorder, value: Any, project: str | None = None) -> str | Non
     found = row_id(value)
     if found is not None:
         return found
-    pr = pr_for_ref(rec.store, rec.factory_id, value, project=project)
+    pr = rec.pr(value, project)
     return pr.id if pr is not None else None
 
 
@@ -387,7 +414,7 @@ def decision_pr_id(rec: Recorder, row: Any) -> str | None:
     """
     subject = (row.subject or "").strip()
     if subject[:3].lower() == "pr:":
-        pr = pr_for_ref(rec.store, rec.factory_id, subject[3:], project=row.project_slug)
+        pr = rec.pr(subject[3:], row.project_slug)
         return pr.id if pr is not None else None
     key = row.dedupe_key or ""
     if row.source == "pr_closed" and key.startswith("pr_closed:"):
