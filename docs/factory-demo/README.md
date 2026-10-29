@@ -42,6 +42,12 @@ previews can be parked. Restore a parked preview, or redeploy a preview that is
 behind the head, unreachable or failed. PRs labelled `factory:no-env` get no
 preview and no demo.
 
+## Known limits
+
+Factory previews run only the core tier; app building is not available yet, and
+the chat waits for `caffeine-ai/opencode-manager`. In a preview, the UI is the
+Vite dev server, so the first load can be slow.
+
 ## Recorded demos
 
 The project's **Demos** section shows one card per PR with its newest demo.
