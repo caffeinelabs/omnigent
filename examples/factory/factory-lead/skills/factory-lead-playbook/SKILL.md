@@ -74,8 +74,12 @@ sys_factory_spawn(
   resume it with `sys_factory_set(session_id=<PL>, state="active")`.
 - `supervisor_session_id` defaults to the peer lead (Sentinel), so omit it.
 - `spawn_bounds` allows at most 4 spawns per turn. Put the rest under "To
-  spawn" in the ledger and spawn them on your next wake. The new PLs' kickoff
-  posts wake you within minutes.
+  spawn" in the ledger and spawn them on your next wake (every message,
+  heartbeat or answer starts a new turn with a fresh budget). The new PLs'
+  kickoff posts wake you within minutes.
+- When a human should start a PL instead, point them at **Start PL** in that
+  project's ⋯ menu in the cockpit. Name only cockpit controls that exist:
+  Pause, Resume, Restart PL, Relaunch PL, Start PL, Edit charter, Stop.
 - An `agent_not_found` error means the built-in is not seeded. Ask the human.
 - A `pod_cap` error means the roster is at `factory_max_pods`. Do not retry.
   Finish or pause a project, or ask the human.

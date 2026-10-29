@@ -321,6 +321,9 @@ def create_factory_router() -> APIRouter:
                     "restart_not_allowed",
                     "restart is for top-level peers, from a lead or the target's supervisor",
                 )
+        if target.id == sender.id:
+            # Delivery starts a turn, which restarts per-turn budgets (spawn_bounds).
+            raise FactoryRouteError(400, "self_target", "a member cannot message itself")
         mailer = get_mailer(request.app.state)
         limit = mailer.try_acquire(sender.id, target.id, factory_id=sender_m.factory_id)
         if limit is not None:

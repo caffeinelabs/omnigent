@@ -10,7 +10,8 @@ The callable receives two arguments: ``event`` and ``config``.
         "target": "<tool-name-or-None>",
         "data": <phase-specific-payload>,
         "context": {"actor": {"run_as": "...", "client_id": "..."},
-                    "usage": {"input_tokens": N, ...}},
+                    "usage": {"input_tokens": N, ...},
+                    "turn": "<server-stamped-turn-id-or-None>"},
         "session_state": {...},
         "llm_client": <PolicyLLMClient-or-None>,
         "request_data": <original-tool-call-on-TOOL_RESULT>,
@@ -46,6 +47,7 @@ from typing import Protocol, cast
 
 from omnigent.policies.base import Policy
 from omnigent.policies.schema import PolicyEvent
+from omnigent.policies.turns import turn_from_labels
 from omnigent.policies.types import EvaluationContext, PolicyResult
 from omnigent.spec.types import (
     FunctionPolicySpec,
@@ -234,6 +236,9 @@ def _build_event(ctx: EvaluationContext) -> PolicyEvent:
             "harness": ctx.harness,
             # Conversation labels (engine hot cache), empty when unpopulated.
             "labels": dict(ctx.labels) if ctx.labels is not None else {},
+            # The server-stamped id of the turn this event belongs to; ``None``
+            # on paths without labels (the runner-local gate).
+            "turn": turn_from_labels(ctx.labels),
             # Subtree-scoped cumulative cost (this conversation + its
             # descendants only), injected by the engine only when a
             # subagent_cost_budget policy is present; empty dict otherwise.

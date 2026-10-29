@@ -19,6 +19,7 @@ from typing import Any
 from omnigent.factory import is_factory_label
 from omnigent.llms.context_window import ModelPricing, compute_llm_cost
 from omnigent.policies.base import Policy
+from omnigent.policies.turns import TURN_LABEL
 from omnigent.policies.types import EvaluationContext, PolicyResult
 from omnigent.spec.types import (
     DEFAULT_ASK_TIMEOUT,
@@ -491,6 +492,7 @@ class PolicyEngine:
           the new value is not in it.
         - The key is an ``omnigent.factory.*`` label, which only
           the server and the factory routes write.
+        - The key is the server-stamped turn id (``omnigent.turn``).
 
         Other keys with no ``LabelDef`` are set freely (omnigent
         parity — "unschema'd labels set freely"). The engine
@@ -815,7 +817,7 @@ class PolicyEngine:
         set_labels: dict[str, str],
     ) -> dict[str, str]:
         """
-        Drop writes that violate a declared :class:`LabelDef`, and factory labels.
+        Drop writes that violate a declared :class:`LabelDef`, factory labels and the turn id.
 
         Called before persistence. Silent-drop semantics match
         POLICIES.md §10 / §13 — runtime label failures don't
@@ -828,8 +830,9 @@ class PolicyEngine:
         """
         result: dict[str, str] = {}
         for key, value in set_labels.items():
-            # Factory membership is server-owned; a policy never writes it.
-            if is_factory_label(key):
+            # Factory membership and the turn id are server-owned; a policy
+            # never writes them (a forged turn id would reset per-turn caps).
+            if is_factory_label(key) or key.strip().casefold() == TURN_LABEL:
                 continue
             ldef = self.label_defs.get(key)
             if ldef is None:

@@ -338,6 +338,49 @@ async def start_project(
     return Started(outcome.path, outcome.mail_id)
 
 
+async def start_missing_pl_core(
+    app_state: Any, root: Conversation, slug: str, actor: Actor
+) -> tuple[FactoryProject, Started]:
+    """
+    Start the PL of an active project that has none (the cockpit's Start PL).
+
+    The server spawns it, even when the charter had left the spawn to the lead;
+    unmet dependencies still hold it.
+
+    :raises CockpitError: 404 ``unknown_project``, 409 ``project_closed``,
+        ``has_pl`` (resume or restart that PL instead) or ``spawn_in_flight``.
+    """
+    deps = factory_deps(app_state)
+    row = await _active(deps, root, slug)
+    pl = await asyncio.to_thread(control.find_project_pl, deps, root.id, slug, include_done=True)
+    if pl is not None:
+        raise CockpitError(
+            409, "has_pl", f"project {slug!r} already has a PL; resume or restart it", pl=pl.id
+        )
+    if spawn.in_flight(root.id, slug):
+        raise CockpitError(409, "spawn_in_flight", f"the PL of {slug!r} is being created")
+    charter = normalize_charter(row.charter)
+    if charter.get("spawn_owner") != SPAWN_SERVER:
+        charter["spawn_owner"] = SPAWN_SERVER
+        row = (
+            await asyncio.to_thread(deps.factory_store.update_project, row.id, charter=charter)
+            or row
+        )
+    started = await start_project(app_state, root, row, actor=actor)
+    by = actor_name(actor)
+    await events.emit(
+        app_state,
+        root.id,
+        "project.pl_start",
+        severity="notice",
+        project=slug,
+        subject=f"project:{slug}",
+        summary=f"{by} started the PL of {slug} ({started.path})",
+        data=_event_data(actor, path=started.path, waiting_on=list(started.waiting_on)),
+    )
+    return row, started
+
+
 # ── Create ─────────────────────────────────────────────────────
 
 
@@ -884,5 +927,6 @@ __all__ = [
     "patch_project_core",
     "restore_project_core",
     "split_project_core",
+    "start_missing_pl_core",
     "start_project",
 ]

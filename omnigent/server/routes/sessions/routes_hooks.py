@@ -32,6 +32,7 @@ from omnigent.runtime.policies.builder import (
     build_policy_engine,
 )
 from omnigent.runtime.policies.engine import PolicyEngine
+from omnigent.runtime.policies.turns import begin_turn
 from omnigent.server._elicitation_registry import (
     _harness_elicitation_owners,
     _harness_elicitation_registry,
@@ -735,6 +736,10 @@ def register_hooks_routes(
                 f"Session {session_id!r} not found.",
                 code=ErrorCode.NOT_FOUND,
             )
+        if phase == Phase.REQUEST and not is_read_only:
+            # The harness is submitting a prompt to its model: a new turn, and
+            # per-turn policy budgets restart even when the gate below dedups.
+            await asyncio.to_thread(begin_turn, conversation_store, session_id)
         # Dedup the native request-phase gate. A native session's
         # ``UserPromptSubmit`` hook posts ``PHASE_REQUEST`` here for *every*
         # prompt, but a web-UI prompt was already gated server-side by

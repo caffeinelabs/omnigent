@@ -1293,6 +1293,16 @@ export interface CharterPatchResponse {
   mail_id: string | null;
 }
 
+/** `POST …/projects/{slug}/start`: how a missing PL starts. */
+export interface StartPlResponse {
+  project: FactoryProjectRow;
+  /** `server` (spawning), `lead` (Atlas was asked), `held` (waiting on dependencies). */
+  started: string;
+  /** The unmet dependencies of a held project. */
+  waiting_on: string[];
+  mail_id: string | null;
+}
+
 /** The factory-level default repo and base; a project's blank branch inherits it. */
 export interface FactoryDefaultsInput {
   repo: string | null;
@@ -1696,6 +1706,16 @@ export async function patchFactoryProject(
 ): Promise<CharterPatchResponse> {
   return readJson(
     await postJson(`/v1/factory/factories/${enc(factoryId)}/projects/${enc(slug)}`, patch, "PATCH"),
+  );
+}
+
+/** Start the PL of a project that has none (owners and operators). */
+export async function startFactoryProjectPl(
+  factoryId: string,
+  slug: string,
+): Promise<StartPlResponse> {
+  return readJson(
+    await postJson(`/v1/factory/factories/${enc(factoryId)}/projects/${enc(slug)}/start`, {}),
   );
 }
 

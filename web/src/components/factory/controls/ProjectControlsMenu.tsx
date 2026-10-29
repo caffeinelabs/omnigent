@@ -1,13 +1,14 @@
 /**
  * The ⋯ menu of a project card and the project page: pause/resume, restart
- * and relaunch the PL, switch its factory preview to a PR, ask for env
- * status, edit the charter and stop the project. Every lever is a server
+ * and relaunch the PL (or start a missing one), switch its factory preview to
+ * a PR, ask for env status, edit the charter and stop the project. Every lever is a server
  * control (never a chat message); a chip shows what it is waiting for, and
  * paused or failed projects get their next step inline. A card places that
  * inline part under its title (`useProjectControlParts`); the page keeps
  * it beside the menu.
  */
 
+import { useQueryClient } from "@tanstack/react-query";
 import { type ReactNode, useState } from "react";
 import {
   EllipsisIcon,
@@ -23,6 +24,7 @@ import {
   SquareIcon,
   SquareStackIcon,
   TriangleAlertIcon,
+  UserPlusIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -33,14 +35,21 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import type { MemberView, PrView, ProjectView } from "@/lib/factoryApi";
+import { showToast } from "@/components/ui/toast";
+import { factoryQueryKey } from "@/hooks/useFactory";
+import {
+  type MemberView,
+  type PrView,
+  type ProjectView,
+  startFactoryProjectPl,
+} from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { driftText } from "../board/TeamStrip";
 import { LEVER_REASON, LeverGated, useViewerCan } from "../shell/viewerCan";
 import { PauseDialog, RelaunchDialog, RestartDialog, TypeToConfirmDialog } from "./ControlDialogs";
 import { PendingChip, showUndoToast } from "./ControlFeedback";
-import { relaunchableDrift } from "./controlModel";
+import { controlErrorMessage, relaunchableDrift } from "./controlModel";
 import { EditCharterDialog } from "./EditCharterDialog";
 import { MenuSection } from "./MenuSection";
 import { useFactoryControls } from "./useFactoryControls";
@@ -102,6 +111,7 @@ export function useProjectControlParts(
   chipClassName?: string,
 ): ProjectControlParts {
   const controls = useFactoryControls(factoryId);
+  const queryClient = useQueryClient();
   const viewerCan = useViewerCan();
   const [dialog, setDialog] = useState<DialogKind | null>(null);
   const target = `project:${project.slug}` as const;
@@ -117,6 +127,12 @@ export function useProjectControlParts(
     (pr) => pr.preview && LIVE_PREVIEW.has(pr.preview.state),
   ).length;
   const pending = controls.pendingFor(project.slug);
+  // A missing PL the server is not already starting or holding on dependencies.
+  const startable =
+    !pl &&
+    (project.status ?? "active") === "active" &&
+    project.overlay !== "waiting" &&
+    !project.provisioning;
   const close = (open: boolean) => {
     if (!open) setDialog(null);
   };
@@ -145,6 +161,21 @@ export function useProjectControlParts(
   const relaunch = () => void controls.send({ action: "relaunch", target });
   const stop = () => void controls.send({ action: "stop", target });
   const envStatus = () => void controls.send({ action: "env_status", target });
+  const startPl = async () => {
+    try {
+      const res = await startFactoryProjectPl(factoryId, project.slug);
+      void queryClient.invalidateQueries({ queryKey: factoryQueryKey(factoryId) });
+      showToast(
+        res.started === "held"
+          ? `${project.title} waits on ${res.waiting_on.join(", ")}; its PL starts after them`
+          : res.started === "lead"
+            ? `Atlas was asked to start the PL of ${project.title}`
+            : `Requested the PL of ${project.title}; it appears here once created`,
+      );
+    } catch (error) {
+      showToast(`PL not started: ${controlErrorMessage(error)}`);
+    }
+  };
   const preview = (pr: PrView, mode: "up" | "down" = "up") =>
     void controls.send(
       {
@@ -232,7 +263,7 @@ export function useProjectControlParts(
           className="w-72 backdrop-blur-md dark:bg-card-solid"
         >
           <DropdownMenuLabel className="truncate text-sm font-normal text-muted-foreground">
-            {pl ? pl.title : "No PL yet · Atlas spawns it"}
+            {pl ? pl.title : "No PL yet"}
           </DropdownMenuLabel>
           {!can.control && (
             <DropdownMenuLabel
@@ -241,6 +272,16 @@ export function useProjectControlParts(
             >
               {LEVER_REASON.control}.
             </DropdownMenuLabel>
+          )}
+          {!pl && (
+            <DropdownMenuItem
+              onSelect={() => void startPl()}
+              disabled={!startable || !can.apply_projects}
+              data-testid="control-start-pl"
+            >
+              <UserPlusIcon />
+              Start PL
+            </DropdownMenuItem>
           )}
           {paused || stopped ? (
             <DropdownMenuItem

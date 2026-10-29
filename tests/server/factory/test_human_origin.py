@@ -135,6 +135,14 @@ def _project(cockpit: Cockpit) -> str:
 
 _NEW_PROJECT = {"slug": "db-version", "repo": "caffeinelabs/app", "goal": "Show the DB version."}
 
+
+def _unstaffed_project(cockpit: Cockpit) -> str:
+    cockpit.store.upsert_project(
+        cockpit.fid, "db-version", title="DB version", repo="caffeinelabs/app", charter={}
+    )
+    return "db-version"
+
+
 _Call = tuple[str, str, Any]
 # Each route with a body a person's request succeeds with.
 _ROUTES: dict[str, Callable[[Cockpit], _Call]] = {
@@ -171,6 +179,11 @@ _ROUTES: dict[str, Callable[[Cockpit], _Call]] = {
         {"verdict": "approved"},
     ),
     "refresh": lambda c: ("POST", f"/v1/factory/prs/{_pr(c).id}/refresh", None),
+    "start_pl": lambda c: (
+        "POST",
+        f"/v1/factory/factories/{c.fid}/projects/{_unstaffed_project(c)}/start",
+        None,
+    ),
 }
 
 

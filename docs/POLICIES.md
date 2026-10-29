@@ -501,6 +501,19 @@ def block_domains(blocked_domains: list[str]) -> callable:
 
 `state_updates` supports four actions: `"set"`, `"increment"`, `"delete"`, `"append"`.
 
+Per-turn state should be keyed by `event["context"]["turn"]`: an opaque id the
+server stamps whenever it starts a turn with a new user-role message (a human
+prompt, a skill slash command, factory mail, a heartbeat, a decision answer, a
+sub-agent wake) and whenever a native harness's prompt hook posts a `request`
+event (which covers prompts typed into the terminal of a harness that has one).
+Neither policies nor API clients can set it. A prompt typed into the terminal
+of a native harness without a prompt hook starts no new turn id. A message that
+arrives while a turn runs stamps a new id at once, so per-turn budgets restart
+for the rest of that model turn. The id is `None` on paths without a
+server-side engine (the runner-local gate), which keep resetting on the
+`request` event and `reset_turn`. `spawn_bounds` counts its dispatches this
+way, and also resets on every `request` event.
+
 ### Making policies discoverable
 
 To make custom policies appear in the UI, export a `POLICY_REGISTRY` list from your module:

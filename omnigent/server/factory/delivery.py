@@ -7,7 +7,9 @@ sub-agent binding, run the session-init handshake after a relaunch, arm the
 relay, then dispatch. It composes the module-level helpers that route uses
 rather than re-entering the route, so it works with no HTTP request and no
 live sender (the sender's pod may already be gone). Unlike the route it skips
-the target's input-policy check; the factory's policies act on tool calls.
+the target's input-policy check; the factory's policies act on tool calls. The
+dispatch still starts a new policy turn, so per-turn budgets (``spawn_bounds``)
+restart for every delivered message.
 """
 
 from __future__ import annotations

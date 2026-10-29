@@ -12,6 +12,7 @@ People (user JWT; writes carry ``require_human_origin``):
 - ``GET /v1/factory/factories/{fid}/proposals?kind=&status=``, ``GET …/proposals/{ref}``
 - ``POST …/proposals/{ref}/apply`` (``{changes?}`` for Edit & apply), ``…/reject``, ``…/undo``
 - ``POST /v1/factory/factories/{fid}/projects/{slug}/cancel|split|merge``
+- ``POST /v1/factory/factories/{fid}/projects/{slug}/start``: start a missing PL
 
 Refusals render as ``{"error": {code, message, field?}, ...}``.
 """
@@ -341,6 +342,29 @@ async def cancel_project(
             user_id=user_id,
         )
         return {"project": _row(row)}
+
+    return await _guard(run)
+
+
+@router.post(
+    "/factories/{factory_id}/projects/{slug}/start",
+    response_model=None,
+    dependencies=HUMAN_ORIGIN,
+)
+async def start_project_pl(
+    request: Request, factory_id: str, slug: str
+) -> dict[str, Any] | JSONResponse:
+    """Start the PL of a project that has none (owners and operators)."""
+
+    async def run() -> dict[str, Any]:
+        _deps, _user_id, root, actor = await _human(request, factory_id)
+        row, started = await projects.start_missing_pl_core(request.app.state, root, slug, actor)
+        return {
+            "project": _row(row),
+            "started": started.path,
+            "waiting_on": list(started.waiting_on),
+            "mail_id": started.mail_id,
+        }
 
     return await _guard(run)
 

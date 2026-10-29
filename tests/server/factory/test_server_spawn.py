@@ -21,7 +21,7 @@ from omnigent import factory as F
 from omnigent.server.factory import spawn
 from omnigent.server.factory.charter import spawn_owner
 from tests.runner.factory_fakes import pl_create_body
-from tests.server.factory.cockpit_helpers import Cockpit
+from tests.server.factory.cockpit_helpers import Cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld
 from tests.server.factory.projects_helpers import (
     FakeCreates,
@@ -486,3 +486,72 @@ async def test_spike_s1_an_in_process_create_matches_a_runner_create(
     assert launch["agent_id"] == agent_id and launch["owner"] == "alice"
     [repo] = launch["repos"]
     assert (repo.url, repo.branch) == ("https://github.com/caffeinelabs/app", "temp-main")
+
+
+# ── Start PL (cockpit) ─────────────────────────────────────────
+
+
+def _unstaffed(cockpit: Cockpit, slug: str = "db-version", **charter: Any) -> str:
+    """A project whose PL was left to Atlas and never spawned."""
+    cockpit.store.upsert_project(
+        cockpit.fid,
+        slug,
+        title=slug,
+        repo="caffeinelabs/app",
+        base_branch="temp-main",
+        charter={"goal": f"Build {slug}.", **charter},
+    )
+    return f"/v1/factory/factories/{cockpit.fid}/projects/{slug}/start"
+
+
+async def test_start_pl_spawns_a_missing_pl_from_the_cockpit(
+    spawning: tuple[Cockpit, FakeCreates],
+) -> None:
+    cockpit, creates = spawning
+    url = _unstaffed(cockpit, spawn_owner="lead")
+
+    resp = await cockpit.post(url, user="carol")  # an operator
+    await settle()
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["started"] == "server"
+    [call] = creates.calls
+    assert call["body"]["labels"][F.LABEL_PROJECT] == "db-version"
+    row = cockpit.store.get_project(cockpit.fid, "db-version")
+    assert row is not None and row.pl_session_id and spawn_owner(row) == "server"
+    [started] = cockpit.events("project.pl_start")
+    assert started.data["by_kind"] == "human" and started.data["path"] == "server"
+    assert [e.data["via"] for e in cockpit.events("member.spawned")] == ["cockpit"]
+
+
+async def test_start_pl_refuses_projects_that_have_a_pl_or_are_closed(
+    spawning: tuple[Cockpit, FakeCreates],
+) -> None:
+    cockpit, creates = spawning
+    staffed = await cockpit.post(f"/v1/factory/factories/{cockpit.fid}/projects/api-version/start")
+    url = _unstaffed(cockpit)
+    row = cockpit.store.get_project(cockpit.fid, "db-version")
+    assert row is not None
+    cockpit.store.update_project(row.id, status="cancelled")
+    closed = await cockpit.post(url)
+    viewer = await cockpit.post(url, user="bob")
+
+    assert (staffed.status_code, error_code(staffed)) == (409, "has_pl")
+    assert (closed.status_code, error_code(closed)) == (409, "project_closed")
+    assert viewer.status_code in (403, 404)
+    assert creates.calls == []
+    assert cockpit.events("project.pl_start") == []
+
+
+async def test_start_pl_still_waits_on_dependencies(
+    spawning: tuple[Cockpit, FakeCreates],
+) -> None:
+    cockpit, creates = spawning
+    url = _unstaffed(cockpit, depends_on=["api-version"])
+
+    resp = await cockpit.post(url)
+    await settle()
+
+    assert resp.status_code == 200, resp.text
+    assert (resp.json()["started"], resp.json()["waiting_on"]) == ("held", ["api-version"])
+    assert creates.calls == []

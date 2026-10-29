@@ -1,4 +1,4 @@
-import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, screen, waitFor, within } from "@testing-library/react";
 import { toast } from "sonner";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useFactory } from "@/hooks/useFactory";
@@ -310,6 +310,50 @@ describe("ProjectControlsMenu", () => {
     await waitFor(() => expect(chip).toHaveAttribute("data-state", "error"));
     expect(chip).toHaveTextContent("Env status: You need edit/owner access");
     expect(await screen.findByText("You need edit/owner access")).toBeInTheDocument();
+  });
+
+  it("starts a missing PL from the menu", async () => {
+    const { server, snapshot } = setup((_, project) => {
+      project.pl = null;
+    });
+    open();
+    expect(screen.getByText("No PL yet")).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId("control-start-pl"));
+    const startPath = `/v1/factory/factories/${snapshot.factory.id}/projects/api-version/start`;
+    await waitFor(() =>
+      expect(server.writes().map((c) => [c.method, c.path])).toEqual([["POST", startPath]]),
+    );
+    expect(
+      await screen.findByText(
+        "Requested the PL of API version endpoint; it appears here once created",
+      ),
+    ).toBeInTheDocument();
+  });
+
+  it("explains a refused Start PL", async () => {
+    const { server } = setup((_, project) => {
+      project.pl = null;
+    });
+    server.failNext(409, { error: { code: "has_pl", message: "project already has a PL" } });
+    open();
+    fireEvent.click(screen.getByTestId("control-start-pl"));
+    expect(
+      await screen.findByText("PL not started: The project already has a PL; resume or restart it"),
+    ).toBeInTheDocument();
+  });
+
+  it("offers Start PL only for a project without a PL that nothing else is starting", () => {
+    setup();
+    open();
+    expect(screen.queryByTestId("control-start-pl")).toBeNull();
+    cleanup();
+
+    setup((_, project) => {
+      project.pl = null;
+      project.overlay = "waiting";
+    });
+    open();
+    expect(screen.getByTestId("control-start-pl")).toHaveAttribute("aria-disabled", "true");
   });
 
   it("offers Resume inline on a paused project", () => {
