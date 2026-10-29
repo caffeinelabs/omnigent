@@ -336,6 +336,32 @@ describe("PR page · header", () => {
     expect(within(drawer).queryByTestId("ready-banner-9630")).toBeNull();
   });
 
+  it("takes the PR out of ready the moment a human asks for changes on its head", () => {
+    const { drawer } = renderDrawer("changes-requested");
+    expect(within(drawer).queryByTestId("review-ready-banner")).toBeNull();
+    const chip = within(drawer).getByTestId("review-changes-requested");
+    expect(chip).toHaveAttribute("data-head", "current");
+    expect(chip).toHaveTextContent("Changes requested by Luka on 7767f0d · the PL is on it");
+    expect(within(drawer).getByTestId("review-not-ready")).toHaveTextContent(
+      "Not ready yet · waits on a new head",
+    );
+  });
+
+  it("shows no ready banner on a held head even when a stale snapshot says ready", () => {
+    const scenario = reviewScenario("changes-requested");
+    scenario.pr.ready = true;
+    const { drawer } = renderDrawer(scenario);
+    expect(within(drawer).queryByTestId("review-ready-banner")).toBeNull();
+    expect(within(drawer).getByTestId("review-changes-requested")).toBeInTheDocument();
+  });
+
+  it("names a change request on an older head as such", () => {
+    const { drawer } = renderDrawer("demo-old-head");
+    const chip = within(drawer).getByTestId("review-changes-requested");
+    expect(chip).toHaveAttribute("data-head", "old");
+    expect(chip).toHaveTextContent("Changes requested by Luka on 7767f0d (old head)");
+  });
+
   it("is a page, not a drawer: no dialog, the PR's breadcrumb and its project", () => {
     const { drawer } = renderDrawer("ready-with-video");
     expect(screen.queryByRole("dialog")).toBeNull();

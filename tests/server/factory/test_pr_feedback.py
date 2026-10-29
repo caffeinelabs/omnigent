@@ -12,7 +12,7 @@ import pytest_asyncio
 
 from omnigent.entities.factory import FactoryPr
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_READ
-from omnigent.server.factory import control, nudge
+from omnigent.server.factory import control, nudge, snapshot
 from omnigent.server.factory.schemas import HumanReviewView
 from tests.server.factory.cockpit_helpers import Cockpit, build_cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld, FakeClock
@@ -112,6 +112,129 @@ async def test_approval_tells_the_pl_to_keep_the_preview(cockpit: Cockpit) -> No
     ]
     review = cockpit.store.get_pr(pr.id).human_review  # type: ignore[union-attr]
     assert review is not None and review["verdict"] == "approved" and review["text"] is None
+
+
+_ALL_PASS = {
+    **dict.fromkeys(
+        ("draft", "base", "checks", "review", "verify", "mergeable", "protected_paths"), "pass"
+    ),
+    "reasons": [],
+    "notes": [],
+    "evidence": {},
+}
+
+
+def _ready_pr(cockpit: Cockpit) -> FactoryPr:
+    cockpit.store.upsert_project(
+        cockpit.fid,
+        "api-version",
+        title="API version",
+        repo="caffeinelabs/app",
+        pl_session_id=cockpit.world.id("pl"),
+    )
+    pr = _pr(cockpit, gates=_ALL_PASS, ready=True, ready_at=1_700_000_000)
+    project = cockpit.store.get_project(cockpit.fid, "api-version")
+    assert project is not None
+    cockpit.store.update_project(project.id, stage="ready")
+    return pr
+
+
+async def _snapshot(cockpit: Cockpit) -> dict[str, Any]:
+    snapshot.reset_cache()
+    resp = await cockpit.client.get(
+        f"/v1/factory/factories/{cockpit.fid}", headers={"X-Test-User": "alice"}
+    )
+    assert resp.status_code == 200, resp.text
+    return resp.json()
+
+
+async def test_changes_requested_takes_a_ready_pr_out_of_ready_at_once(cockpit: Cockpit) -> None:
+    pr = _ready_pr(cockpit)
+    before = await _snapshot(cockpit)
+    assert before["totals"]["prs_ready"] == 1
+    assert [p["stage"] for p in before["projects"] if p["slug"] == "api-version"] == ["ready"]
+
+    resp = await _feedback(cockpit, pr, verdict="changes_requested", text="Pad the pill.")
+
+    assert resp.status_code == 200, resp.text
+    row = cockpit.store.get_pr(pr.id)
+    assert row is not None and row.ready is False
+    assert row.gates["review"] == "pass"  # the gates stand; the human holds the head
+    [not_ready] = cockpit.events("pr.not_ready")
+    assert not_ready.data == {"pr_id": pr.id, "reasons": ["changes requested by alice @b2c3d4e"]}
+    assert not_ready.to_id == cockpit.world.id("pl")
+    project = cockpit.store.get_project(cockpit.fid, "api-version")
+    assert project is not None and project.stage == "building"
+    [stage] = cockpit.events("stage.changed")
+    assert stage.data == {"from": "ready", "to": "building"}
+    after = await _snapshot(cockpit)
+    assert after["totals"]["prs_ready"] == 0
+    [view] = [p for p in after["prs"] if p["id"] == pr.id]
+    assert view["ready"] is False
+    assert view["human_review"]["verdict"] == "changes_requested"
+    assert [p["stage"] for p in after["projects"] if p["slug"] == "api-version"] == ["building"]
+    # The sidebar's "needs you" fallback counts the list's ready PRs.
+    listed = await cockpit.client.get("/v1/factory/factories", headers={"X-Test-User": "alice"})
+    [summary] = [f for f in listed.json()["data"] if f["id"] == cockpit.fid]
+    assert summary["prs_ready"] == 0
+
+
+async def test_changes_on_a_pr_short_of_ready_emit_no_not_ready(cockpit: Cockpit) -> None:
+    pr = _pr(cockpit, gates={**_ALL_PASS, "verify": "pending"}, ready=False)
+
+    resp = await _feedback(cockpit, pr, verdict="changes_requested", text="Rename it.")
+
+    assert resp.status_code == 200, resp.text
+    assert cockpit.events("pr.not_ready") == []
+    assert len(cockpit.events("pr.human_review")) == 1
+
+
+async def test_approval_lifting_a_change_request_on_the_head_rereads_the_gates(
+    cockpit: Cockpit,
+) -> None:
+    pr = _ready_pr(cockpit)
+    assert (await _feedback(cockpit, pr, verdict="changes_requested", text="x")).status_code == 200
+    cockpit.store.update_pr(pr.id, last_polled_at=1_700_000_100)
+    assert await nudge.wait("prs", 0) is None
+
+    resp = await _feedback(cockpit, pr, user="carol", verdict="approved")
+
+    assert resp.status_code == 200, resp.text
+    row = cockpit.store.get_pr(pr.id)
+    assert row is not None and row.last_polled_at is None
+    assert await nudge.wait("prs", 0) == {pr.id}
+    # Still held until the poller re-reads the gates; no second not-ready.
+    assert row.ready is False and len(cockpit.events("pr.not_ready")) == 1
+
+    # Toggling again within the "refresh now" limit records the review, no new GitHub read.
+    assert (await _feedback(cockpit, pr, verdict="changes_requested")).status_code == 200
+    cockpit.store.update_pr(pr.id, last_polled_at=1_700_000_200)
+    assert (await _feedback(cockpit, pr, user="carol", verdict="approved")).status_code == 200
+    row = cockpit.store.get_pr(pr.id)
+    assert row is not None and row.human_review is not None
+    assert row.human_review["verdict"] == "approved"
+    assert row.last_polled_at == 1_700_000_200
+    assert await nudge.wait("prs", 0) is None
+
+
+async def test_the_snapshot_never_lists_a_held_head_as_ready(cockpit: Cockpit) -> None:
+    """A stored ``ready`` that lags a human's change request (e.g. a poll racing it)."""
+    pr = _ready_pr(cockpit)
+    held = {
+        "verdict": "changes_requested",
+        "text": "Pad it.",
+        "by": "alice",
+        "at": 1_700_000_050,
+        "head_sha": HEAD,
+        "source": "cockpit",
+    }
+    cockpit.store.update_pr(pr.id, human_review=held)
+
+    body = await _snapshot(cockpit)
+
+    assert body["totals"]["prs_ready"] == 0
+    [view] = [p for p in body["prs"] if p["id"] == pr.id]
+    assert view["ready"] is False
 
 
 async def test_feedback_needs_edit_on_the_pl(cockpit: Cockpit) -> None:

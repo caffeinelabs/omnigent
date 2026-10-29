@@ -22,7 +22,7 @@ import {
   stageCounts,
 } from "./boardModel";
 import { cardScenario, prByNumber } from "./__fixtures__/boardFixtures";
-import { sameSha } from "../factoryFormat";
+import { changesRequestedOnHead, primaryPr, readyForHuman, sameSha } from "../factoryFormat";
 
 const NOW = LIVE_RUN_NOW_S;
 
@@ -128,6 +128,25 @@ describe("needs you", () => {
     });
   });
 
+  it("stops offering a PR for review once a human asked for changes on its head", () => {
+    const snapshot = liveRunSnapshot();
+    const pr = snapshot.prs.find((p) => p.number === 9630)!;
+    // The snapshot may still say ready (an older server, a refresh in flight).
+    pr.human_review = {
+      verdict: "changes_requested",
+      text: "Pad the row.",
+      by: "Luka",
+      at: NOW - 30,
+      head_sha: pr.head_sha,
+      source: "cockpit",
+    };
+    expect(needsYou(snapshot).readyPrs).toEqual([]);
+    expect(needsYouCount(needsYou(snapshot))).toBe(4);
+    // A new head that passes the gates is ready again.
+    pr.head_sha = "9e8d7c6b5a4f3e2d1c0b9a8f7e6d5c4b3a2f1e0d";
+    expect(needsYou(snapshot).readyPrs.map((p) => p.number)).toEqual([9630]);
+  });
+
   it("points a failed project's alert at its card", () => {
     const { snapshot } = cardScenario("failed");
     const alert = needsYou(snapshot).alerts.find((a) => a.text.startsWith("PL · db-version"));
@@ -202,6 +221,52 @@ describe("sameSha", () => {
     expect(sameSha("7767f0", full)).toBe(false);
     expect(sameSha(null, full)).toBe(false);
     expect(sameSha("", "")).toBe(false);
+  });
+});
+
+describe("changes requested on the head", () => {
+  const review = (head_sha: string | null, verdict: "approved" | "changes_requested") => ({
+    verdict,
+    text: null,
+    by: "Luka",
+    at: NOW,
+    head_sha,
+    source: "cockpit" as const,
+  });
+
+  it("holds only the head the change request was made on", () => {
+    const pr = prByNumber(liveRunSnapshot(), 9630);
+    const head = pr.head_sha;
+    expect(changesRequestedOnHead({ ...pr, human_review: null })).toBe(false);
+    expect(changesRequestedOnHead({ ...pr, human_review: review(head, "approved") })).toBe(false);
+    expect(changesRequestedOnHead({ ...pr, human_review: review(head, "changes_requested") })).toBe(
+      true,
+    );
+    const upper = review(head.toUpperCase(), "changes_requested");
+    expect(changesRequestedOnHead({ ...pr, human_review: upper })).toBe(true);
+    const old = review("1".repeat(40), "changes_requested");
+    expect(changesRequestedOnHead({ ...pr, human_review: old })).toBe(false);
+    expect(changesRequestedOnHead({ ...pr, human_review: review(null, "changes_requested") })).toBe(
+      true,
+    );
+  });
+
+  it("is ready for a human only when open, ready and not held", () => {
+    const pr = prByNumber(liveRunSnapshot(), 9630);
+    expect(readyForHuman(pr)).toBe(true);
+    expect(readyForHuman({ ...pr, human_review: review(pr.head_sha, "changes_requested") })).toBe(
+      false,
+    );
+    expect(readyForHuman({ ...pr, ready: false })).toBe(false);
+    expect(readyForHuman({ ...pr, state: "merged" })).toBe(false);
+  });
+
+  it("does not headline a held PR as the project's ready one", () => {
+    const pr = prByNumber(liveRunSnapshot(), 9630);
+    const held = { ...pr, human_review: review(pr.head_sha, "changes_requested") };
+    const other = { ...pr, id: "other", number: 9700, ready: false };
+    expect(primaryPr([other, held])?.number).toBe(9700);
+    expect(primaryPr([other, pr])?.number).toBe(9630);
   });
 });
 

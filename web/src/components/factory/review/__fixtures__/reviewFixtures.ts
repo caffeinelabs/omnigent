@@ -1,5 +1,6 @@
 // Review drawer fixtures built from the live run: one PR per drawer state
-// (ready with a video, a backend-only API demo, a demo of an older head, no
+// (ready with a video, changes requested on that head, a backend-only API
+// demo, a demo of an older head, no
 // demo yet, one being recorded, a parked preview, a preview behind head, a preview deploying the
 // head, merged, docs-only, previews off for the project, a failed demo) and
 // the `api.json` transcripts their demos recorded. Every export is a fresh
@@ -12,6 +13,7 @@ const NOW = LIVE_RUN_NOW_S;
 
 export const REVIEW_STATES = [
   "ready-with-video",
+  "changes-requested",
   "backend-api-demo",
   "demo-old-head",
   "no-demo",
@@ -296,6 +298,21 @@ export function reviewScenario(state: ReviewState): { snapshot: FactorySnapshot;
   switch (state) {
     case "ready-with-video":
       return { snapshot, pr: p9630 };
+    case "changes-requested": {
+      // Every gate still passes at the head, but a human asked for changes on it.
+      p9630.ready = false;
+      p9630.human_review = {
+        verdict: "changes_requested",
+        text: "Give the version row top spacing; it sits flush against the section header.",
+        by: "Luka",
+        at: NOW - 45,
+        head_sha: HEAD_9630,
+        source: "cockpit",
+      };
+      const api = snapshot.projects.find((p) => p.slug === "api-version")!;
+      Object.assign(api, { stage: "building", stage_since: NOW - 45 });
+      return { snapshot, pr: p9630 };
+    }
     case "backend-api-demo": {
       passAll(p9631);
       p9631.gates.demo = "pass";

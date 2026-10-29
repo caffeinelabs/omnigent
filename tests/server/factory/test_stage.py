@@ -9,7 +9,14 @@ import pytest
 
 from omnigent.entities.factory import FactoryDecision, FactoryPr, FactoryProject
 from omnigent.factory import LABEL_HEALTH, LABEL_STATE, STAGES
-from omnigent.server.factory.stage import OVERLAYS, StageResult, derive_stage, pr_stage
+from omnigent.server.factory.stage import (
+    OVERLAYS,
+    StageResult,
+    changes_requested_on_head,
+    derive_stage,
+    pr_stage,
+    ready_for_human,
+)
 
 FID = "f" * 32
 PL_ID = "a" * 32
@@ -153,6 +160,43 @@ CASES: list[
         {},
         None,
         StageResult("review"),
+    ),
+    (
+        "human changes on a ready head (stored ready not yet cleared)",
+        [_pr(ready=True, human_review=_CHANGES_ON_HEAD)],
+        _pl(),
+        [],
+        {},
+        "ready",
+        # The PL's READY claim predates the human's request: not its mismatch.
+        StageResult("building"),
+    ),
+    (
+        "PL still claims ready right after a human change request",
+        [_pr(human_review=_CHANGES_ON_HEAD)],
+        _pl(),
+        [],
+        {},
+        "ready",
+        StageResult("building"),
+    ),
+    (
+        "claim ahead of gates on a new head after human changes",
+        [_pr(checks="pending", human_review=_CHANGES_ON_OLD)],
+        _pl(),
+        [],
+        {},
+        "ready",
+        StageResult("building", claim_mismatch=True),
+    ),
+    (
+        "ready on a new head after human changes",
+        [_pr(ready=True, human_review=_CHANGES_ON_OLD)],
+        _pl(),
+        [],
+        {},
+        None,
+        StageResult("ready"),
     ),
     (
         "ready wins over building",
@@ -414,3 +458,30 @@ def test_table_covers_every_stage_and_overlay() -> None:
 
 def test_pr_stage_is_ready_for_a_ready_pr_even_with_stale_gates() -> None:
     assert pr_stage(_pr(ready=True, checks="pending")) == "ready"
+
+
+@pytest.mark.parametrize(
+    ("review", "head", "held"),
+    [
+        (None, HEAD, False),
+        ({"verdict": "approved", "head_sha": HEAD}, HEAD, False),
+        (_CHANGES_ON_HEAD, HEAD, True),
+        (_CHANGES_ON_HEAD, HEAD.upper(), True),
+        (_CHANGES_ON_OLD, HEAD, False),
+        ({"verdict": "changes_requested", "head_sha": None}, HEAD, True),
+        (_CHANGES_ON_HEAD, None, True),
+        ("changes_requested", HEAD, False),
+    ],
+)
+def test_a_change_request_holds_only_the_head_it_was_made_on(
+    review: object, head: str | None, held: bool
+) -> None:
+    assert changes_requested_on_head(review, head) is held  # type: ignore[arg-type]
+
+
+def test_a_held_head_is_not_ready_for_a_human() -> None:
+    held = _pr(ready=True, human_review=_CHANGES_ON_HEAD)
+    assert ready_for_human(held) is False
+    assert pr_stage(held) == "building"
+    assert ready_for_human(_pr(ready=True, human_review=_CHANGES_ON_OLD)) is True
+    assert ready_for_human(_pr(human_review=_CHANGES_ON_OLD)) is False

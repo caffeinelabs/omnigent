@@ -22,7 +22,15 @@ import { Button } from "@/components/ui/button";
 import type { PrView, ProjectView } from "@/lib/factoryApi";
 import { beginGithubConnect } from "@/lib/githubIntegration";
 import { cn } from "@/lib/utils";
-import { type FactoryTone, TONE_CHIP, plural, sameSha, shortSha } from "../factoryFormat";
+import {
+  type FactoryTone,
+  TONE_CHIP,
+  changesRequestedOnHead,
+  plural,
+  readyForHuman,
+  sameSha,
+  shortSha,
+} from "../factoryFormat";
 import { useChangedSinceMount } from "./boardHooks";
 import { ageText, clipDuration, prAnchorId, prHasNoEnv, prTouchesUi } from "./boardModel";
 import { DemoStatusTag, DemoThumb } from "./DemoThumb";
@@ -93,14 +101,16 @@ function prBadges(pr: PrView): ReactNode[] {
   }
   const review = pr.human_review;
   if (review?.verdict === "changes_requested") {
+    const held = changesRequestedOnHead(pr);
     badges.push(
       <Badge
         key="human"
         testId={`changes-requested-${pr.number}`}
-        tone="warning"
+        tone={held ? "warning" : "muted"}
         title={review.text ?? undefined}
       >
         Changes requested by {review.by}
+        {!held && " (old head)"}
       </Badge>,
     );
   } else if (review?.verdict === "approved") {
@@ -279,12 +289,17 @@ export function PrRow({
   if (pr.state !== "open") return <ClosedPrRow pr={pr} nowS={nowS} pulse={changed !== null} />;
   const review = () => onReview(pr.number);
   const badges = prBadges(pr);
+  const ready = readyForHuman(pr);
+  // Held by a human: the gates may all pass, but only a new head can be ready.
+  const reasons = changesRequestedOnHead(pr)
+    ? ["waits on a new head", ...pr.gates.reasons]
+    : pr.gates.reasons;
   return (
     <div
       id={prAnchorId(pr.number)}
       data-testid={`pr-row-${pr.number}`}
       data-state={pr.state}
-      data-ready={pr.ready ? "true" : "false"}
+      data-ready={ready ? "true" : "false"}
       className={cn(
         "@container flex min-w-0 flex-col gap-2.5 rounded-lg border border-border bg-background p-3 dark:bg-background/40",
         isNew && "animate-in duration-300 fade-in-0 slide-in-from-top-1 motion-reduce:animate-none",
@@ -295,7 +310,7 @@ export function PrRow({
           aria-hidden
           className={cn(
             "size-3.5 shrink-0 self-center",
-            pr.ready ? "text-success" : "text-muted-foreground",
+            ready ? "text-success" : "text-muted-foreground",
           )}
         />
         <a
@@ -336,7 +351,7 @@ export function PrRow({
 
       <PollError pr={pr} nowS={nowS} />
 
-      {pr.ready && readyBanner ? (
+      {ready && readyBanner ? (
         readyBanner
       ) : (
         <>
@@ -350,7 +365,7 @@ export function PrRow({
           <div className="flex flex-wrap items-center gap-2">
             <Button
               size="sm"
-              variant={pr.ready ? "default" : "outline"}
+              variant={ready ? "default" : "outline"}
               onClick={review}
               data-testid={`review-open-${pr.number}`}
               componentId="factory.board.review_open"
@@ -359,7 +374,7 @@ export function PrRow({
               <PlayIcon className="size-3.5" />
               Review
             </Button>
-            {pr.ready ? (
+            {ready ? (
               <Button
                 asChild
                 size="sm"
@@ -395,17 +410,20 @@ export function PrRow({
                 </a>
               </Button>
             )}
-            {pr.ready && pr.ready_since != null && (
+            {ready && pr.ready_since != null && (
               <span className="ml-auto text-sm text-success">
                 ready {ageText(nowS - pr.ready_since).replace(" ago", "")}
               </span>
             )}
-            {!pr.ready && pr.gates.reasons.length > 0 && (
-              <span className="ml-auto inline-flex min-w-0 items-center gap-1 text-sm text-muted-foreground">
+            {!ready && reasons.length > 0 && (
+              <span
+                data-testid={`pr-not-ready-${pr.number}`}
+                className="ml-auto inline-flex min-w-0 items-center gap-1 text-sm text-muted-foreground"
+              >
                 <TriangleAlertIcon aria-hidden className="size-3 shrink-0" />
-                <span className="truncate" title={pr.gates.reasons.join(" · ")}>
-                  {pr.gates.reasons[0]}
-                  {pr.gates.reasons.length > 1 && ` · ${pr.gates.reasons.length - 1} more`}
+                <span className="truncate" title={reasons.join(" · ")}>
+                  {reasons[0]}
+                  {reasons.length > 1 && ` · ${reasons.length - 1} more`}
                 </span>
               </span>
             )}

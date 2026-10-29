@@ -16,7 +16,7 @@ import { DemoStatusTag, DemoThumb } from "../board/DemoThumb";
 import { PreviewPill } from "../board/PreviewPill";
 import { mergeUrl } from "../board/PrRow";
 import { useFactoryNow } from "../factoryClock";
-import { plural, shortSha } from "../factoryFormat";
+import { plural, readyForHuman, shortSha } from "../factoryFormat";
 import { IMergedItButton, HUMANS_MERGE } from "./ReviewActions";
 import { gateTally, sentinelVerifiedHead, uxDemoMissing } from "./reviewModel";
 import { DotParts } from "./reviewParts";
@@ -88,7 +88,7 @@ export function ReadyForMergeBanner({
 }: ReadyForMergeBannerProps) {
   const clockS = Math.floor(useFactoryNow().getTime() / 1000);
   const nowS = nowProp ?? clockS;
-  if (pr.state !== "open" || !pr.ready) return null;
+  if (!readyForHuman(pr)) return null;
 
   if (variant === "line") {
     return (

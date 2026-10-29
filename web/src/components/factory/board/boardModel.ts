@@ -12,7 +12,7 @@ import type {
   PreviewView,
   ProjectView,
 } from "@/lib/factoryApi";
-import { sameSha } from "../factoryFormat";
+import { readyForHuman, sameSha } from "../factoryFormat";
 
 // ── Stages and ordering ────────────────────────────────────────
 
@@ -105,7 +105,7 @@ export function boardSections(projects: ProjectView[]): {
 export function projectPrList(snapshot: FactorySnapshot, project: ProjectView): PrView[] {
   const ids = new Set(project.pr_ids);
   const prs = snapshot.prs.filter((pr) => ids.has(pr.id));
-  const rank = (pr: PrView) => (pr.state === "open" ? (pr.ready ? 0 : 1) : 2);
+  const rank = (pr: PrView) => (pr.state === "open" ? (readyForHuman(pr) ? 0 : 1) : 2);
   return prs.sort((a, b) => rank(a) - rank(b) || b.number - a.number);
 }
 
@@ -198,7 +198,7 @@ function deadMember(member: MemberView): boolean {
 /** Everything waiting on the human, newest blocking decisions first. */
 export function needsYou(snapshot: FactorySnapshot): NeedsYou {
   const open = snapshot.prs.filter((pr) => pr.state === "open");
-  const readyPrs = open.filter((pr) => pr.ready);
+  const readyPrs = open.filter(readyForHuman);
   const openDecisions = snapshot.decisions
     .filter((d) => d.status === "open")
     .sort((a, b) => Number(b.blocking) - Number(a.blocking) || a.created_at - b.created_at);

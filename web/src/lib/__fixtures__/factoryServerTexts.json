@@ -136,6 +136,24 @@
     }
   },
   {
+    "name": "review_approved_github",
+    "text": "[Factory review · APPROVED PR #9630 @7767f0d by luka (GitHub)] Their change request is lifted; a human merges it on GitHub once every gate passes. Keep the preview up.\nLGTM after all.",
+    "expect": {
+      "kind": "review",
+      "verdict": "approved",
+      "pr": 9630,
+      "source": "GitHub"
+    }
+  },
+  {
+    "name": "notice_change_request_dismissed",
+    "text": "[Factory notice · PR caffeinelabs/app#9630 change request by luka @7767f0d dismissed on GitHub] The head is no longer held: it is ready for a human again once every gate passes.",
+    "expect": {
+      "kind": "notice",
+      "pr": 9630
+    }
+  },
+  {
     "name": "notice_ready",
     "text": "[Factory notice · PR caffeinelabs/app#9630 READY FOR HUMAN MERGE · 6/6 gates · head 7767f0d] A human merges it on GitHub; keep its preview up and do not merge it. https://github.com/caffeinelabs/app/pull/9630",
     "expect": {

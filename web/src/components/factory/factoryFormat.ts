@@ -197,6 +197,22 @@ export function plural(n: number, noun: string): string {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
 
+/**
+ * A human asked for changes on the PR's current head (or on an unrecorded
+ * head): it waits on a new head, as the server holds it.
+ */
+export function changesRequestedOnHead(pr: Pick<PrView, "human_review" | "head_sha">): boolean {
+  const review = pr.human_review;
+  if (review?.verdict !== "changes_requested") return false;
+  if (!review.head_sha || !pr.head_sha) return true;
+  return review.head_sha.toLowerCase() === pr.head_sha.toLowerCase();
+}
+
+/** Open, every gate passes and no change request holds its head: a human can review it. */
+export function readyForHuman(pr: PrView): boolean {
+  return pr.state === "open" && pr.ready && !changesRequestedOnHead(pr);
+}
+
 /** The project's PRs in snapshot order. */
 export function projectPrs(snapshot: FactorySnapshot, project: ProjectView): PrView[] {
   const ids = new Set(project.pr_ids);
@@ -211,7 +227,7 @@ export function primaryPr(prs: PrView[], task?: string | null): PrView | null {
   const byTask = task ? prs.find((pr) => pr.task && task.includes(pr.task)) : undefined;
   if (byTask) return byTask;
   return (
-    prs.find((pr) => pr.state === "open" && pr.ready) ??
+    prs.find(readyForHuman) ??
     prs.find((pr) => pr.state === "open") ??
     [...prs].reverse().find((pr) => pr.state === "merged") ??
     null

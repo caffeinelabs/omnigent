@@ -1,7 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { DecisionView } from "@/lib/factoryApi";
 import { liveRunSnapshot } from "../__fixtures__/liveRun";
-import { round3Snapshot, viewerOf } from "../shell/__fixtures__/shellFixtures";
+import {
+  changesRequestedSnapshot,
+  round3Snapshot,
+  viewerOf,
+} from "../shell/__fixtures__/shellFixtures";
 import { PL_CACHE, issuesResponse } from "../agents/__fixtures__/opsFixtures";
 import {
   decisionScope,
@@ -50,6 +54,14 @@ describe("decisionScope", () => {
 });
 
 describe("splitNeedsYou", () => {
+  it("drops the Review item of a PR a human just asked changes on", () => {
+    const before = splitNeedsYou(round3Snapshot());
+    expect(before.all.some((i) => i.kind === "pr" && i.pr.number === 9630)).toBe(true);
+    const after = splitNeedsYou(changesRequestedSnapshot());
+    expect(after.all.some((i) => i.kind === "pr")).toBe(false);
+    expect(after.all).toHaveLength(before.all.length - 1);
+  });
+
   it("splits the round-3 factory for Mia (operator): D-2 is hers, the rest her role's or others'", () => {
     const snapshot = round3Snapshot("operator");
     const split = splitNeedsYou(snapshot);

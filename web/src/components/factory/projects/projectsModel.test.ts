@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { liveRunSnapshot } from "../__fixtures__/liveRun";
-import { round3Snapshot, scaleSnapshot } from "../shell/__fixtures__/shellFixtures";
+import {
+  changesRequestedSnapshot,
+  round3Snapshot,
+  scaleSnapshot,
+} from "../shell/__fixtures__/shellFixtures";
 import { isClosedProject } from "../board/boardModel";
 import { matchesFilter, projectRowFacts, projectSections, sectionsSummary } from "./projectsModel";
 
@@ -55,6 +59,25 @@ describe("projectRowFacts", () => {
     const row = snapshot.projects.find((p) => p.slug === "settings-row")!;
     expect(projectRowFacts(snapshot, row).dependsOn).toEqual(["api-version", "db-version"]);
     expect(projectRowFacts(snapshot, row).pr).toBeNull();
+  });
+
+  it("flags a project whose PR a human asked changes on, until a new head", () => {
+    const snapshot = changesRequestedSnapshot();
+    const api = snapshot.projects.find((p) => p.slug === "api-version")!;
+    expect(api.stage).toBe("building");
+    const facts = projectRowFacts(snapshot, api);
+    expect(facts.pr?.number).toBe(9630);
+    expect(facts.flags[0]).toMatchObject({
+      key: "changes",
+      label: "changes requested",
+      tone: "warning",
+      title:
+        "luka@caffeine.ai asked for changes on !9630 @7767f0d; " +
+        "ready again once a new head passes the gates",
+    });
+    expect(matchesFilter(snapshot, api, "ready")).toBe(false);
+    snapshot.prs.find((p) => p.number === 9630)!.head_sha = "9".repeat(40);
+    expect(projectRowFacts(snapshot, api).flags.some((f) => f.key === "changes")).toBe(false);
   });
 
   it("leaves tasks and loops out on a round-2 server", () => {

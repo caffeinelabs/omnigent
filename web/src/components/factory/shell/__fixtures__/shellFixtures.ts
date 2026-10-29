@@ -250,6 +250,63 @@ export function round3Events(): EventPage {
   return { data, has_more: false };
 }
 
+/** What Luka asked of #9630 from the cockpit in {@link changesRequestedSnapshot}. */
+export const CHANGES_REQUESTED_TEXT =
+  "Give the version row top spacing; it sits flush against the section header.";
+
+/**
+ * *snapshot* as the server serves it a minute after a human asked for changes
+ * on PR *number* from the cockpit: every gate still passes at the head, but
+ * the head is held not ready and its project is back to building until a new
+ * head passes the gates. Mutates and returns *snapshot*.
+ */
+export function requestChanges(
+  snapshot: FactorySnapshot,
+  number: number,
+  by = "luka@caffeine.ai",
+): FactorySnapshot {
+  const now = snapshot.server_time;
+  const pr = snapshot.prs.find((p) => p.number === number)!;
+  const wasReady = pr.ready;
+  pr.ready = false;
+  pr.human_review = {
+    verdict: "changes_requested",
+    text: CHANGES_REQUESTED_TEXT,
+    by,
+    at: now - 60,
+    head_sha: pr.head_sha,
+    source: "cockpit",
+  };
+  const project = snapshot.projects.find((p) => p.slug === pr.project_slug)!;
+  Object.assign(project, { stage: "building", stage_since: now - 60, agent_stage: "building" });
+  if (project.pl) project.pl = { ...project.pl, summary: "human CHANGES · IC r1 fixing" };
+  if (wasReady) snapshot.totals = { ...snapshot.totals, prs_ready: snapshot.totals.prs_ready - 1 };
+  return snapshot;
+}
+
+/** The round-3 factory a minute after Luka asked for changes on #9630 (api-version). */
+export function changesRequestedSnapshot(role: ViewerRole = "creator"): FactorySnapshot {
+  return requestChanges(round3Snapshot(role), 9630);
+}
+
+/** {@link round3Events} with the change request on #9630 on top. */
+export function changesRequestedEvents(): EventPage {
+  const page = round3Events();
+  const extra = { project_slug: "api-version", severity: "notice" as const };
+  return {
+    ...page,
+    data: [
+      event(0.9, "stage.changed", "api-version: ready → building", extra),
+      event(1, "pr.not_ready", "PR #9630 no longer ready", extra),
+      event(1, "pr.human_review", "luka@caffeine.ai requested changes on PR #9630 @7767f0d", {
+        ...extra,
+        data: { by: "luka@caffeine.ai", verdict: "changes_requested" },
+      }),
+      ...page.data,
+    ],
+  };
+}
+
 /** Only the audit kinds of {@link round3Events} (people, access, controls). */
 export function round3AuditEvents(): EventPage {
   const page = round3Events();

@@ -6,6 +6,8 @@ import { LIVE_RUN_FACTORY_ID } from "../__fixtures__/liveRun";
 import { storySnapshot } from "../board/__fixtures__/boardFixtures";
 import { CockpitStory, type CockpitStoryOptions, SNAPSHOT_PATH } from "../board/boardStoryKit";
 import {
+  changesRequestedEvents,
+  changesRequestedSnapshot,
   emptyFactorySnapshot,
   round3Events,
   round3Snapshot,
@@ -94,6 +96,29 @@ export const RoundTwoServer = overview({
   events: undefined,
   routes: { [SPANS_PATH]: { error: 404, message: "not found" } },
 });
+
+// ── After a human review ───────────────────────────────────────
+
+function changesRequested(options: CockpitStoryOptions = {}): Story {
+  return overview({
+    snapshot: changesRequestedSnapshot(),
+    events: changesRequestedEvents(),
+    ...options,
+  });
+}
+
+/**
+ * A minute after Luka asked for changes on #9630: api-version is back to
+ * Building with a "changes requested" flag, and Needs you no longer offers
+ * its Review (it returns once a new head passes the gates).
+ */
+export const ChangesRequested = changesRequested();
+
+export const ChangesRequestedDark = changesRequested({ theme: "dark" });
+
+export const ChangesRequestedMobile = phone(changesRequested());
+
+export const ChangesRequestedMobileDark = phone(changesRequested({ theme: "dark" }));
 
 /** Long project titles and a long question truncate in place. */
 export const LongText = overview({

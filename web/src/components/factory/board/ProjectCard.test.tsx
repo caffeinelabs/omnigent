@@ -4,6 +4,7 @@ import { SANDBOX_STAGE_LABELS } from "@/pages/ChatIndicators";
 import { LIVE_RUN_NOW_S } from "../__fixtures__/liveRun";
 import { CARD_STATES, type CardState, cardScenario } from "./__fixtures__/boardFixtures";
 import { renderBoard } from "./__fixtures__/renderBoard";
+import { requestChanges } from "../shell/__fixtures__/shellFixtures";
 import { DoneProjectRow, ProjectCard } from "./ProjectCard";
 
 function renderCard(state: CardState) {
@@ -107,6 +108,47 @@ describe("ProjectCard", () => {
     );
     fireEvent.click(within(card).getByTestId("review-open-9630"));
     expect(onReview).toHaveBeenCalledWith(9630);
+  });
+
+  it("a human change request takes the PR out of ready until a new head", () => {
+    const { snapshot, project } = cardScenario("ready");
+    requestChanges(snapshot, 9630);
+    renderBoard(
+      <ProjectCard
+        snapshot={snapshot}
+        project={project}
+        nowS={LIVE_RUN_NOW_S}
+        onReview={vi.fn()}
+        onDecision={vi.fn()}
+      />,
+    );
+    const card = screen.getByTestId("project-card-api-version");
+    expect(card).toHaveAttribute("data-stage", "building");
+    expect(card).not.toHaveTextContent("Ready for your review");
+    const row = within(card).getByTestId("pr-row-9630");
+    expect(row).toHaveAttribute("data-ready", "false");
+    expect(within(row).queryByTestId("merge-link-9630")).toBeNull();
+    expect(within(row).getByTestId("changes-requested-9630")).toHaveTextContent(
+      /^Changes requested by luka@caffeine\.ai$/,
+    );
+    expect(within(row).getByTestId("pr-not-ready-9630")).toHaveTextContent("waits on a new head");
+    cleanup();
+
+    // The IC pushed a new head: the old change request no longer holds it.
+    snapshot.prs.find((p) => p.number === 9630)!.head_sha = "9".repeat(40);
+    renderBoard(
+      <ProjectCard
+        snapshot={snapshot}
+        project={project}
+        nowS={LIVE_RUN_NOW_S}
+        onReview={vi.fn()}
+        onDecision={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("changes-requested-9630")).toHaveTextContent(
+      "Changes requested by luka@caffeine.ai (old head)",
+    );
+    expect(screen.queryByTestId("pr-not-ready-9630")).toBeNull();
   });
 
   it("blocked links to its decision and has an amber edge", () => {

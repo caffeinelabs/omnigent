@@ -336,6 +336,33 @@ async def test_a_ready_claim_without_a_head_is_stored_at_the_judged_head(
     ]
 
 
+async def test_a_human_hold_is_why_a_passing_pr_is_not_ready(cockpit: Cockpit) -> None:
+    first = (await cockpit.pr("pl", claim="opened")).json()
+    head = "c" * 40
+    cockpit.store.update_pr(
+        first["pr_id"],
+        head_sha=head,
+        gates={"checks": "pass", "reasons": []},
+        # The stored ready lags the human's request.
+        ready=True,
+        human_review={
+            "verdict": "changes_requested",
+            "text": "Pad it.",
+            "by": "luka",
+            "at": 1,
+            "head_sha": head,
+            "source": "cockpit",
+        },
+    )
+    body = (await cockpit.pr("pl", claim="ready_for_human_merge")).json()
+    assert body["ready"] is False
+    assert body["reasons"] == [f"changes requested by luka @{head[:7]}"]
+    assert (body["claim_status"], body["claim_gates"]) == ("refuted", ["changes requested"])
+    claim = cockpit.store.find_events(cockpit.factory_id, "pr.claim", 0)[-1]
+    assert claim.data is not None
+    assert (claim.data["server_ready"], claim.data["claim_mismatch"]) == (False, True)
+
+
 async def test_pr_registration_returns_the_review_links(
     cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
 ) -> None:
