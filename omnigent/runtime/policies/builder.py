@@ -18,8 +18,9 @@ will start instantiating them as those phases ship.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
-from typing import Any
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
+from typing import Any, TypeAlias
 
 import cachetools
 
@@ -80,6 +81,18 @@ _ASK_ON_ADD_POLICY_SPEC = FunctionPolicySpec(
 # with this prefix (policy name -> prefix); the evaluate fast path skips them for
 # every other conversation instead of building an engine that would ALLOW.
 LABEL_GATED_DEFAULT_POLICIES: dict[str, str] = {}
+
+PolicyArgumentResolver: TypeAlias = Callable[
+    [Conversation, Conversation], Mapping[str, object] | None
+]
+"""``(conversation, its spawn-tree root) -> factory kwargs``, or ``None`` to keep the spec's."""
+
+# Server-owned arguments of function policies (handler path -> resolver). The
+# kwargs a resolver returns override the spec's own for that conversation's
+# engine: they come from server state no agent writes, e.g. the repos of a
+# factory member's projects (``omnigent.server.factory.guard_repos``). Each
+# resolver runs once per engine build.
+SERVER_POLICY_ARGUMENTS: dict[str, PolicyArgumentResolver] = {}
 
 # Bounded cache of ``conversation_id -> session owner``. The owner
 # (``LEVEL_OWNER`` grantee) is immutable for a session's lifetime, so
@@ -706,7 +719,7 @@ def build_policy_engine(
                 agent_llm=spec.llm,
                 connection_override=effective_connection_override,
             )
-            for s in all_policy_specs
+            for s in _with_server_arguments(all_policy_specs, conv, root_conv)
         ],
         label_defs=label_defs,
         # A sub-agent's ASKs resolve under its own declared timeout; fall
@@ -728,6 +741,44 @@ def build_policy_engine(
         root_conversation_id=root_conversation_id,
         llm_client=llm_client,
     )
+
+
+def _with_server_arguments(
+    specs: list[PolicySpec],
+    conversation: Conversation | None,
+    root: Conversation | None,
+) -> list[PolicySpec]:
+    """
+    Merge :data:`SERVER_POLICY_ARGUMENTS` into the specs of one engine build.
+
+    A policy declared twice (a PL's guard and its sub-agent's own, or a spec
+    guard and an admin default sharing a resolver) sees one value: each
+    resolver runs at most once per build.
+
+    :param specs: The policies about to be instantiated, in run order.
+    :param conversation: The evaluated conversation (fresh row), or ``None``.
+    :param root: Its spawn-tree root, or ``None`` when unknown (then *conversation*).
+    :returns: *specs*, with resolved kwargs set on the registered handlers.
+    """
+    if not SERVER_POLICY_ARGUMENTS or conversation is None:
+        return specs
+    resolved: dict[PolicyArgumentResolver, Mapping[str, object] | None] = {}
+    out: list[PolicySpec] = []
+    for policy in specs:
+        ref = policy.function if isinstance(policy, FunctionPolicySpec) else None
+        resolver = SERVER_POLICY_ARGUMENTS.get(ref.path) if ref is not None else None
+        if not isinstance(policy, FunctionPolicySpec) or ref is None or resolver is None:
+            out.append(policy)
+            continue
+        if resolver not in resolved:
+            resolved[resolver] = resolver(conversation, root or conversation)
+        overrides = resolved[resolver]
+        if overrides is None:
+            out.append(policy)
+            continue
+        arguments = {**(ref.arguments or {}), **overrides}
+        out.append(replace(policy, function=FunctionRef(path=ref.path, arguments=arguments)))
+    return out
 
 
 def _resolve_server_llm_connection(

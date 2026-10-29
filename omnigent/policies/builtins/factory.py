@@ -24,8 +24,11 @@ Omnigent terminal) and denies:
   push, ``GIT_CONFIG_*`` assignments, ``git config`` writes to ``push.*``,
   ``remote.<r>.url|pushurl|push|mirror``, ``url.*``, ``branch.*``, ``alias.*``
   or ``include.*``, and ``git remote add|set-url|rename``;
-- PR writes and pushes that name a repo outside ``write_repos`` (or inside
-  ``deny_repos``) by ``-R``, URL or ``GH_REPO``;
+- PR writes, API writes and pushes that name a repo outside ``write_repos``
+  (or inside ``deny_repos``) by ``-R``, URL or ``GH_REPO``. For a factory
+  member the server replaces ``write_repos`` with ``factory_repos``, the repos
+  of its factory projects (:mod:`omnigent.server.factory.guard_repos`), so a
+  project on any repo can push to and open PRs on its own repo;
 - per role: any push or PR creation (CLI or API) by a lead, reviewer, planner
   or the demo agent, every PR write but ``gh pr comment`` by the demo agent,
   every PR or issue write by the planner, and env lifecycle
@@ -91,6 +94,8 @@ DEFAULT_DENY_REPOS: tuple[str, ...] = ("caffeinelabs/infra", "caffeinelabs/omnig
 DEFAULT_PUSH_REF_PREFIXES: tuple[str, ...] = ("factory/",)
 # Denied whatever a spec passes: no factory agent ever writes infra.
 _ALWAYS_DENY_REPOS: tuple[str, ...] = ("caffeinelabs/infra",)
+FACTORY_REPOS_ARG = "factory_repos"
+"""The guard argument the server sets per member (see :func:`build_guard`); bundles never do."""
 
 # Named rule sets a spec selects with ``profile``; explicit arguments still win.
 # ``smith`` is the Tier-2 self-modification lane (PRs to omnigent, never merges).
@@ -894,6 +899,7 @@ class _RoleGuard:
         protected_branches: Sequence[str],
         deny_repos: Sequence[str],
         push_ref_prefixes: Sequence[str] = DEFAULT_PUSH_REF_PREFIXES,
+        from_projects: bool = False,
     ) -> None:
         """
         Store the normalized rule parameters.
@@ -903,8 +909,11 @@ class _RoleGuard:
         :param protected_branches: Branches no agent pushes to.
         :param deny_repos: Repos no agent writes to, even if listed in *write_repos*.
         :param push_ref_prefixes: Branch prefixes pushes may target, e.g. ``["factory/"]``.
+        :param from_projects: *write_repos* are the server-resolved repos of the
+            member's factory projects (only changes the DENY wording).
         """
         self.role = role
+        self.from_projects = from_projects
         self.write_repos = frozenset(r for r in map(_normalize_repo, write_repos) if r)
         self.deny_repos = frozenset(
             r for r in map(_normalize_repo, [*deny_repos, *_ALWAYS_DENY_REPOS]) if r
@@ -1079,8 +1088,13 @@ class _RoleGuard:
             )
         # The invariant policy has no write_repos: only deny_repos binds it.
         if self.role is not None and repo not in self.write_repos:
+            scope = (
+                "not a repo of your factory projects"
+                if self.from_projects
+                else "outside this factory's write_repos"
+            )
             return (
-                f"`{what}` targets {repo}, outside this factory's write_repos ({allowed}); "
+                f"`{what}` targets {repo}, {scope} (writable: {allowed}); "
                 f"changes there are {_HUMAN_ONLY_HINT}."
             )
         return None
@@ -1767,9 +1781,17 @@ def build_guard(
     deny_repos: Sequence[str] | str | None = None,
     push_ref_prefixes: Sequence[str] | str | None = None,
     profile: str | None = None,
+    factory_repos: Sequence[str] | str | None = None,
 ) -> _RoleGuard:
     """
     Resolve guard parameters: explicit argument, then *profile*, then the default.
+
+    *factory_repos* (set by the server, never by a bundle) wins over all three
+    for the writable repos: a factory member writes exactly the repos of its
+    factory projects. A project repo on the default deny list
+    (``caffeinelabs/omnigent``) is lifted from it, because a human picked it for
+    the project; an explicit *deny_repos* still binds, and
+    ``caffeinelabs/infra`` is denied whatever is passed.
 
     :param role: A factory role, or ``None`` for the role-independent invariants.
     :param write_repos: See :func:`factory_role_guard`.
@@ -1777,6 +1799,7 @@ def build_guard(
     :param deny_repos: See :func:`factory_role_guard`.
     :param push_ref_prefixes: See :func:`factory_role_guard`.
     :param profile: A :data:`GUARD_PROFILES` name, e.g. ``"smith"``.
+    :param factory_repos: See :func:`factory_role_guard`.
     :returns: The configured rule set.
     :raises ValueError: On an unknown *profile*.
     """
@@ -1789,14 +1812,22 @@ def build_guard(
     def _pick(value: Sequence[str] | str | None, key: str, default: Sequence[str]) -> list[str]:
         return _as_list(value) if value is not None else list(preset.get(key, default))
 
+    writable = _pick(write_repos, "write_repos", DEFAULT_WRITE_REPOS)
+    denied = _pick(deny_repos, "deny_repos", DEFAULT_DENY_REPOS)
+    if factory_repos is not None:
+        writable = _as_list(factory_repos)
+        if deny_repos is None:
+            lifted = {_normalize_repo(repo) for repo in writable}
+            denied = [repo for repo in denied if _normalize_repo(repo) not in lifted]
     return _RoleGuard(
         role=role,
-        write_repos=_pick(write_repos, "write_repos", DEFAULT_WRITE_REPOS),
+        write_repos=writable,
         protected_branches=_pick(
             protected_branches, "protected_branches", DEFAULT_PROTECTED_BRANCHES
         ),
-        deny_repos=_pick(deny_repos, "deny_repos", DEFAULT_DENY_REPOS),
+        deny_repos=denied,
         push_ref_prefixes=_pick(push_ref_prefixes, "push_ref_prefixes", DEFAULT_PUSH_REF_PREFIXES),
+        from_projects=factory_repos is not None,
     )
 
 
@@ -1809,6 +1840,7 @@ def factory_role_guard(
     push_ref_prefixes: Sequence[str] | None = None,
     profile: str | None = None,
     cost_budget_agents: Sequence[str] | None = None,
+    factory_repos: Sequence[str] | None = None,
 ) -> Callable[[_Json, _Json], _Json]:
     """
     Factory: DENY-only guard for one software-factory role.
@@ -1827,8 +1859,9 @@ def factory_role_guard(
 
     :param role: The agent's factory role: ``lead``, ``project_lead``, ``ic``,
         ``env_keeper``, ``reviewer``, ``demo`` or ``planner``.
-    :param write_repos: Repos PR writes and URL pushes may target, e.g.
-        ``["caffeinelabs/app"]``.
+    :param write_repos: Repos PR writes and URL pushes may target outside a
+        factory, e.g. ``["caffeinelabs/app"]`` (the default). Ignored for a
+        factory member, whose *factory_repos* the server sets.
     :param protected_branches: Branches no agent pushes to, e.g.
         ``["main", "master", "staging", "temp-main"]``.
     :param deny_repos: Repos no agent writes to even if listed in
@@ -1840,6 +1873,12 @@ def factory_role_guard(
     :param cost_budget_agents: Agents a project lead's task dispatch must give a
         ``cost_budget`` in enforce mode (default ``ic`` and ``demo``; the
         codex-native ``ic_codex`` and ``reviewer`` are unpriced and exempt).
+    :param factory_repos: Set by the server when it builds a factory member's
+        policy engine, never by a bundle: the repos of the member's factory
+        projects (its own project's for a project lead and its sub-agents, all
+        of them for a lead), e.g. ``["caffeinelabs/omnigent"]``. They replace
+        *write_repos* and are lifted from the default *deny_repos*
+        (:func:`build_guard`). ``None`` outside a factory.
     :returns: An evaluator ``fn(event, config)`` returning a V0 decision.
     :raises ValueError: If *role* is not a factory role or *profile* is
         unknown (the runner then fails closed and denies every tool call).
@@ -1863,6 +1902,7 @@ def factory_role_guard(
             deny_repos=deny_repos,
             push_ref_prefixes=push_ref_prefixes,
             profile=profile,
+            factory_repos=factory_repos,
         ),
         cost_budget_agents=budgeted,
     )
@@ -1900,7 +1940,8 @@ POLICY_REGISTRY: list[dict[str, object]] = [
         "blocks every merge (raw `gh pr merge`, MCP merges, and "
         "`python -m omnigent.factory_merge` without --dry-run), OMNIGENT_FACTORY_* settings "
         "in commands, GitHub admin writes, pushes outside push_ref_prefixes (bare pushes, "
-        "HEAD, deletes, tags, protected branches), writes to repos outside write_repos, and "
+        "HEAD, deletes, tags, protected branches), writes to repos outside write_repos (for "
+        "a factory member: outside its factory projects' repos, set by the server), and "
         "role-restricted actions (lead, reviewer, planner and demo pushes, demo PR writes "
         "other than comments, planner PR and issue writes, env lifecycle including factory "
         "previews outside env_keeper).",
@@ -1914,7 +1955,9 @@ POLICY_REGISTRY: list[dict[str, object]] = [
                 },
                 "write_repos": {
                     **_STRING_LIST,
-                    "description": "owner/repo values PR writes and URL pushes may target.",
+                    "description": "owner/repo values PR writes and URL pushes may target "
+                    "outside a factory; for a factory member the server uses the repos of "
+                    "its factory projects instead.",
                     "default": list(DEFAULT_WRITE_REPOS),
                 },
                 **SHARED_PARAMS,

@@ -147,7 +147,7 @@ Report: the RESULT block
    when the gates turn green; treat it the same way.
 6. **A new head** invalidates the review, verify and demo for the old one:
    repeat steps 2-5 for it. The preview is redeployed in place.
-7. **Handover** (always human for caffeinelabs/app):
+7. **Handover** (always to a human, on every repo):
    1. Write the review-links block into the PR body (step 8).
    2. Post ONE line to `parent` (kind=info):
       `READY FOR HUMAN MERGE <url> · head <sha7>`.

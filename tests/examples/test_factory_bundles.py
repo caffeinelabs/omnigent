@@ -274,9 +274,9 @@ def test_policy_set_per_role(lead: AgentSpec, pl: AgentSpec) -> None:
         assert blast.path == "omnigent.policies.builtins.orchestration.blast_radius"
         assert blast.arguments == {"gate_pushes": False}
         assert guard.path == f"{_FACTORY_POLICY_MODULE}.factory_role_guard"
+        # No write_repos: the server sets each member's factory_repos from its projects.
         assert guard.arguments == {
             "role": factory_role_from_spec(spec),
-            "write_repos": ["caffeinelabs/app"],
             "push_ref_prefixes": ["factory/"],
         }, spec.name
         bounds = policies.get("spawn_bounds")

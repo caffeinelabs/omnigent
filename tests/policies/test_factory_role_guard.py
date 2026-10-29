@@ -891,6 +891,114 @@ def test_scalar_parameters_are_accepted() -> None:
     assert decision["result"] == "ALLOW"
 
 
+# ── factory_repos: the server-resolved repos of a member's projects ─────────
+
+_OMNI = "caffeinelabs/omnigent"
+_OMNI_PR = "https://github.com/caffeinelabs/omnigent/pull/160"
+# A docs project on caffeinelabs/omnigent#staging (the round-3 E2E finding).
+_DOCS_ALLOWED = [
+    "gh pr create --draft --repo caffeinelabs/omnigent --base staging "
+    "--head factory/docs/guide --title x --body-file b.md",
+    "gh pr create -R caffeinelabs/omnigent --fill",
+    f"gh pr edit {_OMNI_PR} --title x",
+    f"gh pr comment {_OMNI_PR} --body hi",
+    "GH_REPO=caffeinelabs/omnigent gh pr ready 160",
+    "gh api -X POST repos/caffeinelabs/omnigent/issues/160/comments -f body=x",
+    "git push -u origin factory/docs/guide",
+    "git push https://github.com/caffeinelabs/omnigent.git factory/docs/guide",
+    "git push git@github.com:caffeinelabs/omnigent.git HEAD:factory/docs/guide",
+]
+_DOCS_DENIED = [
+    # Outside the project's repos, including the factory's old static default.
+    "gh pr create -R caffeinelabs/app --fill",
+    "gh pr create -R octo/hello --fill",
+    "git push https://github.com/caffeinelabs/app.git factory/docs/guide",
+    "gh api -X POST repos/octo/hello/issues/1/comments -f body=x",
+    # infra stays denied whatever the repos are.
+    "gh pr create -R caffeinelabs/infra --fill",
+    # Merges stay denied on the project's own repo too.
+    "gh pr merge -R caffeinelabs/omnigent 160 --squash",
+    f"gh pr merge {_OMNI_PR} --admin",
+    "gh api -X PUT repos/caffeinelabs/omnigent/pulls/160/merge",
+    f"python -m omnigent.factory_merge {_OMNI_PR}",
+    f"OMNIGENT_FACTORY_MERGE_REPOS=caffeinelabs/omnigent python -m omnigent.factory_merge "
+    f"{_OMNI_PR}",
+    # Protected branches and refs outside factory/ stay unpushable.
+    "git push origin staging",
+    "git push https://github.com/caffeinelabs/omnigent.git HEAD:staging",
+    "git push origin HEAD:main",
+    "git push origin docs/guide",
+    "gh api -X PATCH repos/caffeinelabs/omnigent/git/refs/heads/staging -f sha=abc",
+]
+
+
+@pytest.mark.parametrize("role", _PUSHING_ROLES)
+@pytest.mark.parametrize(
+    ("command", "expected"),
+    [pytest.param(c, "ALLOW", id=c[:60]) for c in _DOCS_ALLOWED]
+    + [pytest.param(c, "DENY", id=c[:60]) for c in _DOCS_DENIED],
+)
+def test_factory_repos_let_a_project_write_its_own_repo(
+    role: str, command: str, expected: str
+) -> None:
+    """
+    A project on caffeinelabs/omnigent pushes to and opens PRs on it, and nowhere else.
+
+    The server passes the member's project repos as ``factory_repos``; they
+    replace ``write_repos`` (even an explicit one) and lift omnigent from the
+    default deny list. Merges, protected branches and infra are untouched.
+    """
+    params: dict[str, Any] = {"write_repos": ["caffeinelabs/app"], "factory_repos": [_OMNI]}
+    decision = _decide(role, command, **params)
+    assert decision["result"] == expected, decision.get("reason")
+
+
+def test_factory_repos_name_the_member_repos_in_the_reason() -> None:
+    reason = _decide(ROLE_IC, "gh pr create -R caffeinelabs/app --fill", factory_repos=[_OMNI])
+    assert reason["result"] == "DENY"
+    assert (
+        "not a repo of your factory projects (writable: caffeinelabs/omnigent)"
+        in (reason["reason"])
+    )
+
+
+def test_a_lead_writes_every_factory_repo_but_never_pushes_or_opens_prs() -> None:
+    params: dict[str, Any] = {"factory_repos": ["caffeinelabs/app", _OMNI]}
+    for repo in ("caffeinelabs/app", _OMNI):
+        comment = _decide(ROLE_LEAD, f"gh pr comment -R {repo} 7 --body ok", **params)
+        assert comment["result"] == "ALLOW", comment.get("reason")
+        assert _decide(ROLE_LEAD, f"gh pr create -R {repo} --fill", **params)["result"] == "DENY"
+        assert _decide(ROLE_LEAD, f"gh pr merge -R {repo} 7", **params)["result"] == "DENY"
+    outside = _decide(ROLE_LEAD, "gh pr comment -R octo/hello 7 --body ok", **params)
+    assert outside["result"] == "DENY"
+    assert _decide(ROLE_LEAD, "git push origin factory/x/y", **params)["result"] == "DENY"
+
+
+def test_no_factory_repos_writes_no_named_repo() -> None:
+    """A member whose project has no repo yet writes none (fail closed, not the default)."""
+    for repo in ("caffeinelabs/app", _OMNI):
+        decision = _decide(ROLE_IC, f"gh pr create -R {repo} --fill", factory_repos=[])
+        assert decision["result"] == "DENY"
+        assert "writable: none" in decision["reason"]
+
+
+def test_factory_repos_never_lift_infra_or_an_explicit_deny() -> None:
+    infra = _decide(
+        ROLE_IC, "gh pr create -R caffeinelabs/infra --fill", factory_repos=["caffeinelabs/infra"]
+    )
+    assert infra["result"] == "DENY"
+    explicit = {"factory_repos": [_OMNI], "deny_repos": [_OMNI]}
+    assert _decide(ROLE_IC, f"gh pr create -R {_OMNI} --fill", **explicit)["result"] == "DENY"
+
+
+def test_without_factory_repos_the_static_defaults_still_apply() -> None:
+    """Outside a factory nothing changes: app is writable, omnigent and infra are not."""
+    assert _decide(ROLE_IC, "gh pr create -R caffeinelabs/app --fill")["result"] == "ALLOW"
+    omni = _decide(ROLE_IC, f"gh pr create -R {_OMNI} --fill")
+    assert omni["result"] == "DENY"
+    assert "never write to" in omni["reason"]
+
+
 @pytest.mark.parametrize("role", ["", "admin", "IC", "lead "])
 def test_unknown_role_is_rejected(role: str) -> None:
     """A typo'd role fails loudly; the runner then fails closed (see below)."""
@@ -1205,6 +1313,9 @@ def test_registered_as_builtin_policy() -> None:
         validate_factory_params(_HANDLER, {"role": "ic", "write_repos": 3}) or ""
     )
     assert "Unknown params" in (validate_factory_params(_HANDLER, {"role": "ic", "x": 1}) or "")
+    # factory_repos is the server's: no session or admin policy can set it.
+    server_only = {"role": "ic", "factory_repos": ["caffeinelabs/omnigent"]}
+    assert "Unknown params" in (validate_factory_params(_HANDLER, server_only) or "")
 
 
 def _bundle_guard_args(path: str) -> dict[str, Any]:

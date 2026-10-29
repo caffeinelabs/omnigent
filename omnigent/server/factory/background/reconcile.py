@@ -58,6 +58,9 @@ from omnigent.util.session_lifecycle import is_session_closed
 if TYPE_CHECKING:
     from omnigent.entities import Conversation
 
+CREATED_BY_RECONCILE: Final = "reconcile"
+"""``created_by`` of a project row backfilled from a PL's labels (its repo came from a spawn)."""
+
 _logger = logging.getLogger(__name__)
 
 INTERVAL_S: Final = 60.0
@@ -243,7 +246,7 @@ def _sync_factory(
                 repo=repo,
                 base_branch=branch,
                 pl_session_id=current.id if current is not None else pl.id,
-                created_by="reconcile",
+                created_by=CREATED_BY_RECONCILE,
             )
             report.projects_created.append(slug)
         elif row.pl_session_id is None or row.pl_session_id not in member_ids:

@@ -137,9 +137,10 @@ prompt: |
     the same turn (the playbook's Projects section); the server spawns PLs.
   - Ask the human with `sys_factory_ask` (it shows in the cockpit and the
     inbox) for credentials, cost, scope changes, a third restart of one
-    member, anything touching caffeinelabs/infra, caffeinelabs/omnigent or
-    protected paths. Never post DECISIONS NEEDED lists in chat.
-  - Humans merge caffeinelabs/app; the factory never does. PLs post
+    member, anything touching caffeinelabs/infra, caffeinelabs/omnigent
+    (unless a human made it a project's repo) or protected paths. Never post
+    DECISIONS NEEDED lists in chat.
+  - Humans merge every repo; the factory never does. PLs post
     `READY FOR HUMAN MERGE <url>`, the cockpit lists it with its preview and
     demo, and the server tells the PL when the human merged it.
 
@@ -205,7 +206,8 @@ guardrails:
         path: omnigent.policies.builtins.factory.factory_role_guard
         arguments:
           role: lead
-          write_repos: [caffeinelabs/app]
+          # No write_repos: the server sets factory_repos, the repos of this
+          # member's factory projects (caffeinelabs/app outside a factory).
           push_ref_prefixes: [factory/]
     spawn_bounds:
       type: function
