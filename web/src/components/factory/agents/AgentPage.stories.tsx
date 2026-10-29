@@ -135,10 +135,12 @@ export const CostDark = agent(IC_ROUTE_R2, { search: tab("cost"), theme: "dark" 
 /** The db-version PL, waiting on D-2: no task, its wait in the summary. */
 export const ProjectLead = agent(PL_DB);
 
-/** The dead cache-warm PL: INC-12 with Restart, Relaunch, Pause project. */
+/** The dead cache-warm PL: the runner's last error, INC-12 with Restart, Relaunch, Pause project. */
 export const DeadLead = agent(PL_CACHE);
 
 export const DeadLeadDark = agent(PL_CACHE, { theme: "dark" });
+
+export const DeadLeadMobile = phone(agent(PL_CACHE));
 
 /** The db-version env keeper, running `tilt ci`. */
 export const EnvKeeper = agent(ENV_DB);

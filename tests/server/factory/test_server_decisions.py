@@ -91,6 +91,26 @@ async def test_relaunch_failed_opens_exactly_one_decision_per_episode(
     assert sorted(d.status for d in _decisions(s, "relaunch_failed")) == ["expired", "open"]
 
 
+async def test_relaunch_failed_names_the_runner_error(supervision: Supervision) -> None:
+    """The decision quotes the runner's error, so nobody has to guess the cause."""
+    s, w = supervision, supervision.world
+    pl = w.id("pl")
+    _quiet_leads(s)
+    error = "RuntimeError: tmux launch failed (rc=1): command too long"
+    s.deliver.outcomes[pl] = [
+        DeliveryOutcome(False, "terminal_failed_to_start", retryable=True, detail=error)
+    ] * 3
+
+    s.clock.advance(PL_HEARTBEAT_S)
+    await _fail_three_times(s)
+
+    [decision] = _decisions(s, "relaunch_failed")
+    assert decision.question == (
+        f'"PL · api-version" relaunch failed 3× (terminal_failed_to_start: {error})'
+    )
+    assert decision.context.startswith(f"Last error: `{error}`")
+
+
 async def test_relaunch_failed_survives_a_supervisor_restart(supervision: Supervision) -> None:
     s, w = supervision, supervision.world
     pl = w.id("pl")

@@ -924,6 +924,10 @@ class ErrorDetail(BaseModel):
         Paired with ``title``.
     :param remediation: Optional concrete next step to fix it, e.g. a command
         to run. ``None`` when there is no single clear fix.
+    :param detail: Optional underlying error the runner hit, one line with
+        secrets redacted, e.g.
+        ``"RuntimeError: tmux launch failed (rc=1): command too long"``. Set
+        when ``message`` only points at the runner log.
     """
 
     code: str
@@ -931,6 +935,7 @@ class ErrorDetail(BaseModel):
     title: str | None = None
     cause: str | None = None
     remediation: str | None = None
+    detail: str | None = None
 
 
 class IncompleteDetails(BaseModel):

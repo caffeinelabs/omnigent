@@ -929,6 +929,54 @@ async def test_native_subagent_terminal_boot_failure_wakes_parent(
 
 
 @pytest.mark.asyncio
+async def test_native_subagent_terminal_boot_failure_tells_the_parent_the_runner_error(
+    client: httpx.AsyncClient,
+) -> None:
+    """The parent's result names the runner's underlying error, not just its log."""
+    sid = "01d6217454439d2ce8fdace0d4e089b2"
+    log_message = (
+        "Native Claude terminal failed to start; see the runner log for details: "
+        "~/.omnigent/logs/runner.log Error ID: err_1."
+    )
+    fake_runner = _FakeRunnerClient(
+        responses={
+            f"/v1/sessions/{sid}/resources/terminals": (
+                500,
+                {
+                    "error": {
+                        "code": "native_terminal_start_failed",
+                        "message": log_message,
+                        "detail": "RuntimeError: tmux launch failed (rc=1): command too long",
+                    }
+                },
+            ),
+        }
+    )
+    set_runner_router(_FakeRunnerRouter(fake_runner))  # type: ignore[arg-type]
+    set_runner_client(fake_runner)  # type: ignore[arg-type]
+
+    resp = await client.post(
+        f"/v1/sessions/{sid}/events",
+        json={
+            "type": "message",
+            "data": {"role": "user", "content": [{"type": "input_text", "text": "review"}]},
+        },
+    )
+
+    assert resp.status_code == 202, resp.text
+    forward_url, forward_body = fake_runner.post_json_calls[-1]
+    assert forward_url == f"/v1/sessions/{sid}/events"
+    assert forward_body == {
+        "type": "external_session_status",
+        "data": {
+            "status": "failed",
+            "output": f"{log_message} Cause: RuntimeError: tmux launch failed (rc=1): "
+            "command too long",
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_native_subagent_terminal_boot_failure_surfaces_unreachable_runner(
     client: httpx.AsyncClient,
 ) -> None:
@@ -4215,6 +4263,79 @@ async def test_native_dispatch_fast_fails_and_consumes_message_on_terminal_error
     assert len(errors) == 1
     assert errors[0].data.code == "native_terminal_start_failed"
     assert errors[0].data.message == "Native Claude requires the 'claude' CLI on PATH."
+
+
+@pytest.mark.asyncio
+async def test_native_dispatch_failure_stores_the_runner_error_detail() -> None:
+    """The runner's underlying error rides the failed turn into labels and the result.
+
+    The runner's ``message`` only points at its log. Its ``detail`` (the
+    exception's first line) is re-sanitized, stored on the session failure as
+    ``last_task_error.detail`` and returned to callers such as the factory.
+    """
+    from omnigent.server.routes.sessions import (
+        _dispatch_session_event_to_runner,
+        _last_task_error_from_labels,
+    )
+
+    sid = "64a784c3aa907d1774f44313546947c6"
+    store = _ConversationStore()
+    conv = store.get_conversation(sid)
+    assert conv is not None
+    log_message = (
+        "Native Claude terminal failed to start; see the runner log for details: "
+        "~/.omnigent/logs/runner.log Error ID: err_1."
+    )
+    client = _FakeRunnerClient(
+        responses={
+            f"/v1/sessions/{sid}/resources/terminals": (
+                500,
+                {
+                    "error": {
+                        "code": "native_terminal_start_failed",
+                        "message": log_message,
+                        "detail": (
+                            "RuntimeError: tmux launch failed (rc=1): command too long "
+                            "token=s3cr3t-value\nTraceback (most recent call last):"
+                        ),
+                    }
+                },
+            )
+        }
+    )
+    body = SessionEventInput(
+        type="message",
+        data={"role": "user", "content": [{"type": "input_text", "text": "brief"}]},
+    )
+
+    result = await _dispatch_session_event_to_runner(
+        sid,
+        conv,
+        body,
+        store,  # type: ignore[arg-type]
+        client,  # type: ignore[arg-type]
+        agent_name="claude-native-ui",
+        file_store=None,
+        artifact_store=None,
+    )
+
+    detail = "RuntimeError: tmux launch failed (rc=1): command too long token=[REDACTED]"
+    assert result.pending_id is None
+    assert result.error is not None
+    assert (result.error.code, result.error.message, result.error.detail) == (
+        "native_terminal_start_failed",
+        log_message,
+        detail,
+    )
+    labels = store.get_conversation(sid).labels  # type: ignore[union-attr]
+    assert _last_task_error_from_labels(labels) == {
+        "code": "native_terminal_start_failed",
+        "message": log_message,
+        "detail": detail,
+    }
+    # The transcript banner keeps the runner's message as is.
+    [error] = [i for i in store.appended_items if i.type == "error"]
+    assert error.data.message == log_message
 
 
 @pytest.mark.asyncio

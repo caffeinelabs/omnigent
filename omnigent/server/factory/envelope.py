@@ -38,6 +38,17 @@ def display_title(title: str | None, session_id: str) -> str:
     return flat if len(flat) <= _TITLE_MAX_CHARS else flat[: _TITLE_MAX_CHARS - 1] + "…"
 
 
+def failure_text(reason: str, detail: str | None) -> str:
+    """
+    Name a failure with its underlying error, for alerts, incidents and decisions.
+
+    :param reason: e.g. ``"terminal_failed_to_start"``.
+    :param detail: e.g. ``"RuntimeError: tmux launch failed (rc=1): command too long"``.
+    :returns: ``"<reason>: <detail>"``, or *reason* alone without a detail.
+    """
+    return f"{reason}: {detail}" if detail else reason
+
+
 def _looks_like_notice(line: str) -> bool:
     visible = _drop_format_chars(line).lstrip().casefold()
     return visible.startswith(_SPOOFABLE_PREFIXES)

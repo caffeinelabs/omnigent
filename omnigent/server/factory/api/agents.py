@@ -29,6 +29,7 @@ from omnigent.server.auth import LEVEL_READ
 from omnigent.server.factory import activity_now, detectors
 from omnigent.server.factory.actor import task_ref
 from omnigent.server.factory.context import FactoryDeps, factory_deps
+from omnigent.server.factory.delivery import member_last_error
 from omnigent.server.factory.routes import FactoryRouteError
 from omnigent.server.factory.snapshot import (
     RawSnapshot,
@@ -196,6 +197,7 @@ def agent_rows(ctx: FleetContext, extras: _Extras) -> list[dict[str, Any]]:
                 "status": (now or {}).get("status") or member["status"],
                 "state": member["state"],
                 "health": member["health"],
+                "last_error": member_last_error(conv.labels) if conv is not None else None,
                 "summary": member["summary"],
                 "task": task_view(task) if task is not None else None,
                 "loop": _loop_chip(task, extras.loops),

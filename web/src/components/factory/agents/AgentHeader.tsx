@@ -1,9 +1,9 @@
 /**
  * The top of an Agent page: who it is (role, model, which PL's pod, task and
  * attempt, PR, who else is watching), the NOW line (what it runs, for how
- * long, turn, spend), a banner per open issue with its runbook, and the
- * levers: Interrupt (at once; the PL is told), Redispatch, Reassign and
- * Message. Every lever reads `can.intervene`.
+ * long, turn, spend), the last error of a dead or failed agent, a banner per
+ * open issue with its runbook, and the levers: Interrupt (at once; the PL is
+ * told), Redispatch, Reassign and Message. Every lever reads `can.intervene`.
  */
 
 import { Fragment, type ReactElement, type ReactNode } from "react";
@@ -206,6 +206,13 @@ export function AgentHeader({
   const hasTask = agent.task != null;
   const budgetUsd = typeof loop?.spec.usd === "number" ? loop.spec.usd : null;
   const openIssues = issues.filter((i) => i.status !== "resolved" && i.status !== "wontfix");
+  // The runner's real cause, unless an open issue's banner already quotes it.
+  const lastError =
+    (state === "dead" || state === "failed") &&
+    agent.last_error &&
+    !openIssues.some((i) => i.summary.includes(agent.last_error!))
+      ? agent.last_error
+      : null;
   return (
     <header data-testid="agent-header" data-state={state} className="flex min-w-0 flex-col gap-2.5">
       <Crumbs factoryId={fid} agent={agent} parentTitle={parent?.title ?? null} />
@@ -380,6 +387,18 @@ export function AgentHeader({
           </LeverGated>
         </span>
       </div>
+      {lastError && (
+        <p
+          data-testid="agent-last-error"
+          className="flex min-w-0 items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm"
+        >
+          <TriangleAlertIcon aria-hidden className="mt-0.5 size-3.5 shrink-0 text-destructive" />
+          <span className="min-w-0">
+            <span className="mr-1.5 font-medium">Last error</span>
+            <span className="font-mono text-xs break-words">{lastError}</span>
+          </span>
+        </p>
+      )}
       {openIssues.map((issue) => (
         <IssueBanner
           key={issue.id}

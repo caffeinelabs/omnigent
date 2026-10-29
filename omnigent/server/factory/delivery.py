@@ -17,6 +17,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -24,8 +25,14 @@ import httpx
 
 from omnigent.entities import Conversation
 from omnigent.errors import ErrorCode, OmnigentError
+from omnigent.factory import HEALTH_DEAD, LABEL_DEAD_REASON, LABEL_HEALTH
+from omnigent.runner.launch_failure import failure_detail
 from omnigent.server.factory.context import factory_deps
-from omnigent.server.routes._sessions.helpers import _stop_session_host_runner
+from omnigent.server.factory.envelope import failure_text
+from omnigent.server.routes._sessions.helpers import (
+    _last_task_error_from_labels,
+    _stop_session_host_runner,
+)
 from omnigent.server.routes._sessions.orchestration import (
     _await_settled_managed_launch,
     _dispatch_session_event_to_runner,
@@ -40,7 +47,7 @@ from omnigent.server.routes._sessions.orchestration import (
     _stop_session_via_runner,
     ensure_runner_connected,
 )
-from omnigent.server.schemas import SessionEventInput
+from omnigent.server.schemas import ErrorDetail, SessionEventInput
 from omnigent.stores import ConversationStore
 from omnigent.util.session_lifecycle import is_session_closed
 
@@ -69,11 +76,43 @@ class DeliveryOutcome:
     :param reason: Why it was not delivered, e.g. ``"runner_unavailable"``.
     :param retryable: Whether a later attempt may succeed (runner down,
         503, transport error) as opposed to a permanent refusal.
+    :param detail: The underlying error behind *reason* when known, e.g.
+        ``"RuntimeError: tmux launch failed (rc=1): command too long"``.
     """
 
     delivered: bool
     reason: str | None = None
     retryable: bool = False
+    detail: str | None = None
+
+    def describe(self) -> str:
+        """:returns: :func:`failure_text` of this outcome's reason and detail."""
+        return failure_text(self.reason or "unknown", self.detail)
+
+
+def member_last_error(labels: Mapping[str, str]) -> str | None:
+    """
+    Why a member last failed, for the roster and the cockpit.
+
+    :param labels: The member's conversation labels.
+    :returns: The dead reason while it is dead, else its last failed turn's
+        underlying error (or message), e.g.
+        ``"RuntimeError: tmux launch failed (rc=1): command too long"``;
+        ``None`` when its last turn did not fail.
+    """
+    if labels.get(LABEL_HEALTH) == HEALTH_DEAD and (reason := labels.get(LABEL_DEAD_REASON)):
+        return reason
+    error = _last_task_error_from_labels(labels)
+    if error is None:
+        return None
+    return error.get("detail") or failure_detail(error["message"])
+
+
+def _error_detail(error: ErrorDetail | None) -> str | None:
+    """:returns: The runner's underlying error line, else the error's message, one line."""
+    if error is None:
+        return None
+    return failure_detail(error.detail) or failure_detail(error.message)
 
 
 def _message_event(text: str, created_by: str | None = None) -> SessionEventInput:
@@ -275,7 +314,12 @@ async def _deliver(
     if _is_native_terminal_session(conv) and result.pending_id is None:
         # The TUI did not start: dispatch recorded a failed turn instead of
         # typing the message, so retry and eventually bounce.
-        return DeliveryOutcome(False, REASON_TERMINAL_FAILED_TO_START, retryable=True)
+        return DeliveryOutcome(
+            False,
+            REASON_TERMINAL_FAILED_TO_START,
+            retryable=True,
+            detail=_error_detail(result.error),
+        )
     return DeliveryOutcome(True)
 
 

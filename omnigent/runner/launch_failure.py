@@ -18,15 +18,56 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Final
 
+from omnigent.cli_diagnostics import redact_secrets
 from omnigent.cli_invocation import cli_invocation
 
 __all__ = [
+    "FAILURE_DETAIL_MAX_CHARS",
     "FailureDiagnosis",
     "classify_native_turn_error",
     "classify_terminal_failure",
     "describe_failure_code",
+    "exception_detail",
+    "failure_detail",
 ]
+
+#: Longest underlying-error line a failure payload carries to clients; fits
+#: a 256-char label even behind a reason such as ``"terminal_failed_to_start: "``.
+FAILURE_DETAIL_MAX_CHARS: Final = 200
+
+
+def failure_detail(text: str | None) -> str | None:
+    """Reduce raw error text to one line that is safe to show to clients.
+
+    Keeps the first non-blank line (never a traceback), redacts secret-shaped
+    values, and caps the length.
+
+    :param text: Raw error text, e.g.
+        ``"tmux launch failed (rc=1): command too long\\n..."``.
+    :returns: The cleaned line, or ``None`` when *text* has none.
+    """
+    line = next((ln.strip() for ln in (text or "").splitlines() if ln.strip()), "")
+    if not line:
+        return None
+    line = redact_secrets(line)
+    if len(line) > FAILURE_DETAIL_MAX_CHARS:
+        line = line[: FAILURE_DETAIL_MAX_CHARS - 1] + "…"
+    return line
+
+
+def exception_detail(exc: BaseException) -> str:
+    """Name an exception as ``"<Type>: <first line>"`` for a failure payload.
+
+    :param exc: The failure, e.g.
+        ``RuntimeError("tmux launch failed (rc=1): command too long")``.
+    :returns: e.g. ``"RuntimeError: tmux launch failed (rc=1): command too long"``,
+        or just the type name when the exception has no text.
+    """
+    name = type(exc).__name__
+    line = failure_detail(str(exc))
+    return (failure_detail(f"{name}: {line}") or name) if line else name
 
 
 @dataclass(frozen=True)

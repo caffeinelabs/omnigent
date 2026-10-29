@@ -25,7 +25,7 @@ from typing import Any
 from omnigent.factory import PENDING_REPLY_KINDS
 from omnigent.server.factory import mail_events
 from omnigent.server.factory.delivery import DeliveryOutcome, deliver_message
-from omnigent.server.factory.envelope import display_title
+from omnigent.server.factory.envelope import display_title, failure_text
 
 _logger = logging.getLogger(__name__)
 
@@ -396,23 +396,27 @@ class Mailer:
         )
         try:
             async with self.target_slot(item.target_id):
-                reason = await self._deliver_with_retries(item)
+                failed = await self._deliver_with_retries(item)
         finally:
             self._queued.pop(item.mail_id, None)
         done_at = self._ms()
-        if reason is None:
+        if failed is None:
             self._log_after(
                 queued, lambda: mail_events.record_delivered(self._app_state, item, done_at)
             )
             return
+        reason, detail = failed.reason or "unknown", failed.detail
         self._log_after(
-            queued, lambda: mail_events.record_bounced(self._app_state, item, reason, done_at)
+            queued,
+            lambda: mail_events.record_bounced(
+                self._app_state, item, reason, done_at, detail=detail
+            ),
         )
         # Bounce outside the target's lock: waking the sender can take minutes.
-        await self._bounce(item, reason)
+        await self._bounce(item, failure_text(reason, detail))
 
-    async def _deliver_with_retries(self, item: MailItem) -> str | None:
-        """:returns: ``None`` once delivered, else the final failure reason."""
+    async def _deliver_with_retries(self, item: MailItem) -> DeliveryOutcome | None:
+        """:returns: ``None`` once delivered, else the final failed outcome."""
         delays = iter(self._retry_delays_s)
         restart = item.restart
         while True:
@@ -443,11 +447,13 @@ class Mailer:
                 delay,
             )
             await self._sleep(delay)
-        reason = outcome.reason or "unknown"
         _logger.warning(
-            "factory mail %s to %s undeliverable: %s", item.mail_id, item.target_id, reason
+            "factory mail %s to %s undeliverable: %s",
+            item.mail_id,
+            item.target_id,
+            outcome.describe(),
         )
-        return reason
+        return outcome
 
     async def _bounce(self, item: MailItem, reason: str) -> None:
         if item.sender_id is None or item.sender_id == item.target_id:

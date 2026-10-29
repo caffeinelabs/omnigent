@@ -15,6 +15,7 @@ import os
 from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.server.factory import events
+from omnigent.server.factory.envelope import failure_text
 from omnigent.stores.factory_store import now_ms
 
 if TYPE_CHECKING:
@@ -150,15 +151,21 @@ async def record_delivered(app_state: Any, item: MailItem, ts: int | None = None
 
 
 async def record_bounced(
-    app_state: Any, item: MailItem, reason: str, ts: int | None = None
+    app_state: Any,
+    item: MailItem,
+    reason: str,
+    ts: int | None = None,
+    *,
+    detail: str | None = None,
 ) -> None:
-    """Log ``message.bounced`` with the final failure reason."""
+    """Log ``message.bounced`` with the final failure reason and its underlying error."""
+    data = {"reason": reason, **({"detail": detail} if detail else {})}
     await _emit(
         app_state,
         item,
         KIND_BOUNCED,
-        f"Undeliverable ({reason}): {mail_excerpt(item.text)}",
-        {"reason": reason},
+        f"Undeliverable ({failure_text(reason, detail)}): {mail_excerpt(item.text)}",
+        data,
         severity="warning",
         ts=ts,
     )

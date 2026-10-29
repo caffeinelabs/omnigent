@@ -76,6 +76,7 @@ from omnigent.policies.types import (
     EvaluationContext,
     PolicyResult,
 )
+from omnigent.runner.launch_failure import failure_detail
 from omnigent.runner.mcp_execution_registry import (
     MCP_OPERATION_ID_PARAM,
     RUNNER_MCP_EXECUTION_DETACHED_CODE,
@@ -280,6 +281,7 @@ from omnigent.server.routes._sessions.helpers import (
     _native_coding_agent_for_spec,
     _native_subagent_wrapper_labels_from_spec,
     _native_terminal_ensure_transport_error,
+    _native_terminal_failure_detail,
     _native_terminal_failure_from_runner_response,
     _native_terminal_name_for_harness,
     _NativeTerminalEnsureOutcome,
@@ -4483,6 +4485,7 @@ async def _ensure_native_terminal_ready(
     )
     return _NativeTerminalEnsureOutcome(
         error=_native_terminal_failure_from_runner_response(resp, display_name=display_name),
+        detail=_native_terminal_failure_detail(resp),
     )
 
 
@@ -4495,6 +4498,7 @@ async def _persist_native_terminal_failure(
     runner_router: RunnerRouter | None,
     *,
     created_by: str | None,
+    detail: str | None = None,
 ) -> str:
     """
     Persist a consumed user message and terminal-start error.
@@ -4525,6 +4529,9 @@ async def _persist_native_terminal_failure(
         in-process / test setups where the global client is used.
     :param created_by: Authenticated posting actor, e.g.
         ``"alice@example.com"``; ``None`` in single-user mode.
+    :param detail: The runner's underlying error line, e.g.
+        ``"RuntimeError: tmux launch failed (rc=1): command too long"``;
+        stored with the session failure as ``last_task_error.detail``.
     :returns: Store-assigned id of the consumed user message item.
     """
     turn_id = generate_task_id()
@@ -4553,10 +4560,13 @@ async def _persist_native_terminal_failure(
     if error_persist_result == "persisted":
         _publish_error_event(session_id, error)
     _publish_terminal_pending(session_id, False)
+    status_error = ErrorDetail(code=error.code, message=error.message, detail=detail)
+    # Persist before publishing so a reload on the ``failed`` edge sees the cause.
+    await _persist_session_status_error_labels(session_id, status_error, conversation_store)
     _publish_status(
         session_id,
         "failed",
-        ErrorDetail(code=error.code, message=error.message),
+        status_error,
         failure_origin="native_terminal_boot_failed",
     )
     # A boot failure on a native sub-agent must wake the parent — mirror
@@ -4567,6 +4577,7 @@ async def _persist_native_terminal_failure(
         conv,
         error,
         runner_router,
+        detail=status_error.detail,
     )
     return consumed.id
 
@@ -4663,6 +4674,8 @@ async def _forward_native_subagent_terminal_failure(
     conv: Conversation,
     error: ErrorData,
     runner_router: RunnerRouter | None,
+    *,
+    detail: str | None = None,
 ) -> None:
     """
     Wake the parent runner when a native sub-agent fails to boot its terminal.
@@ -4686,6 +4699,10 @@ async def _forward_native_subagent_terminal_failure(
     :param error: Boot error to relay to the parent as the turn result.
     :param runner_router: Router used to resolve the sub-agent's runner,
         or ``None`` (then the global client is used).
+    :param detail: The runner's underlying error line when *error* only
+        points at its log, e.g.
+        ``"RuntimeError: tmux launch failed (rc=1): command too long"``;
+        appended to the parent's result text.
     :returns: None.
     :raises OmnigentError: If the parent's runner could not be reached
         or rejected the forwarded failure status — dropping it would
@@ -4697,7 +4714,10 @@ async def _forward_native_subagent_terminal_failure(
         "type": _EXTERNAL_SESSION_STATUS_TYPE,
         # ``output`` is the parent-inbox result text on a failed edge
         # (runner: ``output or "...turn failed"``); pass the real error.
-        "data": {"status": "failed", "output": error.message},
+        "data": {
+            "status": "failed",
+            "output": f"{error.message} Cause: {detail}" if detail else error.message,
+        },
     }
     runner_result = await _forward_session_change_to_runner(
         session_id,
@@ -6219,8 +6239,17 @@ async def _dispatch_session_event_to_runner_impl(
                 ensure_outcome.error,
                 runner_router,
                 created_by=created_by,
+                detail=ensure_outcome.detail,
             )
-            return _SessionEventDispatchResult(item_id=item_id, pending_id=None)
+            return _SessionEventDispatchResult(
+                item_id=item_id,
+                pending_id=None,
+                error=ErrorDetail(
+                    code=ensure_outcome.error.code,
+                    message=ensure_outcome.error.message,
+                    detail=ensure_outcome.detail,
+                ),
+            )
         if ensure_outcome.policy_notice is not None:
             # Terminal is up but policy enforcement is off (fail-open). Post
             # a durable, non-fatal banner; the user message still forwards.
@@ -6784,6 +6813,10 @@ async def _relay_runner_stream_once(
                                 if isinstance(raw_err, dict)
                                 else None
                             )
+                            if status_error is not None and status_error.detail is not None:
+                                # The runner is remote: clean its error line once,
+                                # before the event, labels and factory see it.
+                                status_error.detail = failure_detail(status_error.detail)
                             if status == "failed" and status_error is not None:
                                 await _persist_session_status_error_labels(
                                     session_id,
@@ -6826,6 +6859,7 @@ async def _relay_runner_stream_once(
                                 status,
                                 raw_blocked_on,
                                 status_error.message if status_error is not None else None,
+                                status_error.detail if status_error is not None else None,
                             )
                         if status == "running":
                             text_acc.clear()

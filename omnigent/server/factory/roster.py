@@ -16,6 +16,7 @@ from omnigent.factory import (
     LABEL_SUPERVISOR,
 )
 from omnigent.server.factory.context import FactoryDeps
+from omnigent.server.factory.delivery import member_last_error
 from omnigent.server.factory.membership import load_session_spec, sub_agent_role
 from omnigent.server.routes._sessions.helpers import _session_status_from_cache
 from omnigent.server.routes._sessions.orchestration import (
@@ -97,6 +98,7 @@ async def _children(
             "last_activity_at": summary.updated_at,
             "summary": child.labels.get(LABEL_SUMMARY),
             "health": child.labels.get(LABEL_HEALTH),
+            "last_error": member_last_error(child.labels),
             "url": session_url(child.id),
         }
         for child, summary in zip(children, summaries, strict=True)
@@ -159,6 +161,7 @@ async def _members_body(
                 "heartbeat_s": _int_or_none(labels.get(LABEL_HEARTBEAT_S)),
                 "state": labels.get(LABEL_STATE),
                 "health": labels.get(LABEL_HEALTH),
+                "last_error": member_last_error(labels),
                 "summary": labels.get(LABEL_SUMMARY),
                 "url": session_url(member.id),
                 "children": kids,

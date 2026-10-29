@@ -34,7 +34,7 @@ from omnigent.factory import (
 )
 from omnigent.server.factory import decision_routing, events
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
-from omnigent.server.factory.envelope import display_title
+from omnigent.server.factory.envelope import display_title, failure_text
 from omnigent.stores.factory_store import DecisionNotFound, DecisionNotOpen
 
 if TYPE_CHECKING:
@@ -286,21 +286,37 @@ def _member_target(conv: Conversation) -> str:
 
 
 async def open_relaunch_failed_decision(
-    app_state: Any, conv: Conversation, factory_id: str, reason: str, failures: int
+    app_state: Any,
+    conv: Conversation,
+    factory_id: str,
+    reason: str,
+    failures: int,
+    *,
+    detail: str | None = None,
 ) -> tuple[FactoryDecision, bool] | None:
-    """S2b: ask what to do with a member whose relaunch failed *failures* times."""
+    """
+    S2b: ask what to do with a member whose relaunch failed *failures* times.
+
+    :param reason: e.g. ``"terminal_failed_to_start"``.
+    :param detail: The underlying error, e.g. the runner's
+        ``"RuntimeError: tmux launch failed (rc=1): command too long"``, so
+        nobody has to guess the cause from *reason* alone.
+    """
     title = display_title(conv.title, conv.id)
     project = conv.labels.get(LABEL_PROJECT)
     pause_target = f"project:{project}" if project else _member_target(conv)
+    # A backtick in the error would end the markdown code span early.
+    quoted = (detail or "").replace("`", "'")
+    cause = f"Last error: `{quoted}`\n\n" if detail else ""
     return await open_decision(
         app_state,
         factory_id,
         source=SOURCE_RELAUNCH_FAILED,
         dedupe_key=relaunch_failed_key(conv.id),
-        question=f'"{title}" relaunch failed {failures}× ({reason})',
+        question=f'"{title}" relaunch failed {failures}× ({failure_text(reason, detail)})',
         context=(
-            "Its heartbeat could not wake or relaunch it. Restart stops and redelivers; "
-            "relaunch first restores the launch mode its spec declares."
+            f"{cause}Its heartbeat could not wake or relaunch it. Restart stops and "
+            "redelivers; relaunch first restores the launch mode its spec declares."
         ),
         options=[
             _option("restart", "Restart", action=ACTION_RESTART, target=_member_target(conv)),

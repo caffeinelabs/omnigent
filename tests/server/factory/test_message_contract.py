@@ -20,7 +20,7 @@ from omnigent.entities import Conversation
 from omnigent.entities.factory import FactoryDecision, FactoryPr
 from omnigent.server.factory import control, decisions, prs, start
 from omnigent.server.factory.background.env_prober import Hit, Probe, _gone_notice
-from omnigent.server.factory.envelope import format_envelope
+from omnigent.server.factory.envelope import failure_text, format_envelope
 from omnigent.server.factory.mailer import bounce_text
 from omnigent.server.factory.notify import failed_alert_text, reply_notice_text
 from omnigent.server.factory.previews import ttl_notice_text
@@ -199,6 +199,17 @@ def render_texts() -> list[dict[str, Any]]:
         ("alert_stuck", stuck_alert_text(pl, 5520), {"kind": "alert"}),
         ("needs_human_dead", dead_alert_text(pl, "runner_unavailable"), {"kind": "needs_human"}),
         (
+            "needs_human_dead_runner_error",
+            dead_alert_text(
+                pl,
+                failure_text(
+                    "terminal_failed_to_start",
+                    "RuntimeError: tmux launch failed (rc=1): command too long",
+                ),
+            ),
+            {"kind": "needs_human"},
+        ),
+        (
             "needs_human_blocked",
             blocked_escalation_text("PL · api-version", NOW - 1800, "approval for gh auth"),
             {"kind": "needs_human"},
@@ -206,6 +217,17 @@ def render_texts() -> list[dict[str, Any]]:
         (
             "delivery_failure",
             bounce_text("PL · api-version", PL, "session_closed"),
+            {"kind": "delivery"},
+        ),
+        (
+            "delivery_failure_runner_error",
+            bounce_text(
+                "PL · api-version",
+                PL,
+                failure_text(
+                    "terminal_failed_to_start", "RuntimeError: tmux launch failed (rc=1)"
+                ),
+            ),
             {"kind": "delivery"},
         ),
     ]

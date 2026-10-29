@@ -480,6 +480,39 @@ async def test_a_relayed_failed_edge_alerts_with_the_shared_debounce(
 
 
 @pytest.mark.usefixtures("_status_cache")
+async def test_a_relayed_terminal_start_failure_alert_names_the_runner_error(
+    supervision: Supervision,
+) -> None:
+    w = supervision.world
+    pl, lead_a, lead_b = w.id("pl"), w.id("lead_a"), w.id("lead_b")
+    _quiet(supervision)
+    message = (
+        "Native Claude terminal failed to start; see the runner log for details: "
+        "~/.omnigent/logs/runner.log Error ID: err_1."
+    )
+    # What the runner's auto-create publishes; the relay cleans the detail again
+    # (first line, secrets redacted) because the runner is remote.
+    error = {
+        "code": "native_terminal_start_failed",
+        "message": message,
+        "detail": "RuntimeError: tmux launch failed (rc=1): command too long "
+        "Authorization: Bearer abc.def\nTraceback (most recent call last):",
+    }
+
+    await _relay(supervision, "pl", {"status": "failed", "error": error})
+
+    cause = "RuntimeError: tmux launch failed (rc=1): command too long Authorization: [REDACTED]"
+    detail = f"{cause} — {message}"
+    assert supervision.deliver.texts_to(lead_b) == [
+        f'[Factory alert · "PL · api-version" ({pl}) failed: {detail}]'
+    ]
+    [failed] = w.app_state.factory.factory_store.find_events(lead_a, "alert.failed", 0)
+    assert failed.data == {"detail": detail}
+    # The stored failure carries the same cleaned line.
+    assert w.get("pl").labels["omnigent.last_task_error_detail"] == cause
+
+
+@pytest.mark.usefixtures("_status_cache")
 async def test_relayed_edges_of_non_members_are_dropped(supervision: Supervision) -> None:
     w, clock = supervision.world, supervision.clock
     plain = w.id("plain")

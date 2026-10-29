@@ -115,14 +115,32 @@ def _blocked_on(status: str, value: object) -> str | None:
 
 
 def _failure_detail(data: dict[str, Any]) -> str:
+    """
+    Describe a ``failed`` edge for its alert.
+
+    :param data: The edge's data: ``output`` (the last assistant text), else
+        ``error`` as a message string or an error dict whose ``detail`` is the
+        runner's underlying error line, e.g. ``{"message": "Native Claude
+        terminal failed to start; see the runner log …", "detail":
+        "RuntimeError: tmux launch failed (rc=1): command too long"}``.
+    :returns: One line, the underlying error first so a cut keeps it, e.g.
+        ``"RuntimeError: tmux launch failed (rc=1): command too long — Native
+        Claude terminal failed to start; …"``.
+    """
     output = data.get("output")
     if isinstance(output, str) and output.strip():
         return excerpt(output, FAILED_DETAIL_MAX_CHARS)
     error = data.get("error")
+    cause: object = None
     if isinstance(error, dict):
+        cause = error.get("detail")
         error = error.get("message")
-    if isinstance(error, str) and error.strip():
-        return excerpt(error, FAILED_DETAIL_MAX_CHARS)
+    message = error.strip() if isinstance(error, str) else ""
+    cause = cause.strip() if isinstance(cause, str) else ""
+    if cause:
+        return excerpt(f"{cause} — {message}" if message else cause, FAILED_DETAIL_MAX_CHARS)
+    if message:
+        return excerpt(message, FAILED_DETAIL_MAX_CHARS)
     return "no error detail"
 
 
@@ -370,6 +388,7 @@ class FactoryNotifier:
         status: str,
         blocked_on: object = None,
         error_message: str | None = None,
+        error_detail: str | None = None,
     ) -> None:
         """
         Apply one relayed runner ``session.status`` edge (sync, no I/O).
@@ -383,22 +402,26 @@ class FactoryNotifier:
         :param status: ``running`` / ``waiting`` / ``idle`` / ``failed``.
         :param blocked_on: The edge's ``blocked_on`` field, if any.
         :param error_message: The runner's error message on a ``failed`` edge.
+        :param error_detail: The runner's underlying error line when
+            *error_message* only points at its log, e.g.
+            ``"RuntimeError: tmux launch failed (rc=1): command too long"``.
         """
         if status not in _BUSY_STATUSES and status not in _TERMINAL_STATUSES:
             return
         known = session_id in self._blocked
         episode = self._track_blocked(session_id, _blocked_on(status, blocked_on))
+        error = {"message": error_message, "detail": error_detail}
         if episode is not None and not known:
-            self.spawn(self._check_relayed(session_id, status, episode, error_message))
+            self.spawn(self._check_relayed(session_id, status, episode, error))
         elif status == "failed" and not self._failed_debounced(session_id):
-            self.spawn(self._check_relayed(session_id, status, None, error_message))
+            self.spawn(self._check_relayed(session_id, status, None, error))
 
     async def _check_relayed(
         self,
         session_id: str,
         status: str,
         episode: BlockedEpisode | None,
-        error_message: str | None,
+        error: dict[str, str | None],
     ) -> None:
         try:
             deps = getattr(self._app_state, FACTORY_STATE_ATTR, None)
@@ -412,7 +435,7 @@ class FactoryNotifier:
                 self.drop_episode(episode)
                 return
             if status == "failed":
-                self._alert_failed(conv, factory_id, {"error": error_message})
+                self._alert_failed(conv, factory_id, {"error": error})
         except Exception:  # noqa: BLE001 - a factory reaction must never break the relay
             _logger.warning(
                 "factory: relayed status edge handling failed for %s", session_id, exc_info=True
@@ -614,6 +637,7 @@ def schedule_factory_relayed_status(
     status: str,
     blocked_on: object = None,
     error_message: str | None = None,
+    error_detail: str | None = None,
 ) -> None:
     """
     Relay hook: feed one runner ``session.status`` edge to the factory.
@@ -625,12 +649,14 @@ def schedule_factory_relayed_status(
     :param status: The relayed status, e.g. ``"running"``.
     :param blocked_on: The event's raw ``blocked_on`` field, if any.
     :param error_message: The runner's error message on a ``failed`` edge.
+    :param error_detail: The runner's underlying error line, e.g.
+        ``"RuntimeError: tmux launch failed (rc=1): command too long"``.
     """
     try:
         notifier = _relay_notifier
         if notifier is None or not factory_enabled():
             return
-        notifier.relayed_edge(session_id, status, blocked_on, error_message)
+        notifier.relayed_edge(session_id, status, blocked_on, error_message, error_detail)
     except Exception:  # noqa: BLE001 - the relay must not fail on the factory
         _logger.warning(
             "factory: could not apply relayed status edge for %s", session_id, exc_info=True

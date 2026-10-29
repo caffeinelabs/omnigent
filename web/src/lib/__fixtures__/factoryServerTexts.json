@@ -237,6 +237,13 @@
     }
   },
   {
+    "name": "needs_human_dead_runner_error",
+    "text": "[NEEDS HUMAN · relaunch of \"PL · api-version\" failed 3× (terminal_failed_to_start: RuntimeError: tmux launch failed (rc=1): command too long)]",
+    "expect": {
+      "kind": "needs_human"
+    }
+  },
+  {
     "name": "needs_human_blocked",
     "text": "[NEEDS HUMAN · \"PL · api-version\" waiting since 2026-10-26T12:00:00Z: approval for gh auth]",
     "expect": {
@@ -246,6 +253,13 @@
   {
     "name": "delivery_failure",
     "text": "[Factory delivery failure · message to \"PL · api-version\" (b408c5f09ff659e6b907fd9f688829e9) undeliverable: session_closed]",
+    "expect": {
+      "kind": "delivery"
+    }
+  },
+  {
+    "name": "delivery_failure_runner_error",
+    "text": "[Factory delivery failure · message to \"PL · api-version\" (b408c5f09ff659e6b907fd9f688829e9) undeliverable: terminal_failed_to_start: RuntimeError: tmux launch failed (rc=1)]",
     "expect": {
       "kind": "delivery"
     }

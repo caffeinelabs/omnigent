@@ -59,6 +59,7 @@ async def test_roster_lists_members_and_their_sub_agents(
         "heartbeat_s": 600,
         "state": "active",
         "health": "ok",
+        "last_error": None,
         "summary": "2 ICs on /version",
         "url": f"/c/{pl}",
     }
@@ -80,6 +81,37 @@ async def test_roster_lists_members_and_their_sub_agents(
     assert lead_row["role"] == "lead"
     assert lead_row["runner_online"] is False
     assert lead_row["children"] == []
+
+
+async def test_roster_says_why_a_member_last_failed(world: FactoryWorld, api: FactoryApi) -> None:
+    pl, ic = world.id("pl"), world.id("ic")
+    cause = "terminal_failed_to_start: RuntimeError: tmux launch failed (rc=1): command too long"
+    world.store.set_labels(pl, {F.LABEL_HEALTH: F.HEALTH_DEAD, F.LABEL_DEAD_REASON: cause})
+    world.store.set_labels(
+        ic,
+        {
+            "omnigent.last_task_error_code": "native_terminal_start_failed",
+            "omnigent.last_task_error_message": "Native Claude terminal failed to start; see x",
+            "omnigent.last_task_error_detail": "RuntimeError: tmux launch failed (rc=1)",
+        },
+    )
+    world.store.set_labels(
+        world.id("reviewer"),
+        {
+            "omnigent.last_task_error_code": "runner_disconnected",
+            "omnigent.last_task_error_message": "Runner disconnected unexpectedly.",
+        },
+    )
+
+    roster = await _roster(api, world.id("lead_a"))
+
+    pl_row = next(m for m in roster["members"] if m["session_id"] == pl)
+    assert pl_row["last_error"] == cause
+    children = {c["session_id"]: c for c in pl_row["children"]}
+    assert children[ic]["last_error"] == "RuntimeError: tmux launch failed (rc=1)"
+    # Without a runner detail, the failure's own message.
+    assert children[world.id("reviewer")]["last_error"] == "Runner disconnected unexpectedly."
+    assert children[world.id("helper")]["last_error"] is None
 
 
 async def test_roster_excludes_archived_members(world: FactoryWorld, api: FactoryApi) -> None:

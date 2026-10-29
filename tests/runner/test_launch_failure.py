@@ -5,10 +5,13 @@ from __future__ import annotations
 import pytest
 
 from omnigent.runner.launch_failure import (
+    FAILURE_DETAIL_MAX_CHARS,
     FailureDiagnosis,
     classify_native_turn_error,
     classify_terminal_failure,
     describe_failure_code,
+    exception_detail,
+    failure_detail,
 )
 
 # The tail Claude Code prints when refusing --dangerously-skip-permissions as
@@ -190,3 +193,42 @@ def test_describe_failure_code_known(code: str, expected_substring: str) -> None
 @pytest.mark.parametrize("code", [None, "", "some_unknown_code"])
 def test_describe_failure_code_unknown(code: str | None) -> None:
     assert describe_failure_code(code) is None
+
+
+# ── failure details surfaced to clients ─────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        (
+            "tmux launch failed (rc=1): command too long",
+            "tmux launch failed (rc=1): command too long",
+        ),
+        ("\n  first real line  \nTraceback (most recent call last):", "first real line"),
+        ("Authorization: Bearer abc.def", "Authorization: [REDACTED]"),
+        (
+            "connect postgresql://app:hunter2@db:5432/x failed",
+            "connect postgresql://[REDACTED]@db:5432/x failed",
+        ),
+        ("", None),
+        ("   \n  ", None),
+        (None, None),
+    ],
+)
+def test_failure_detail_keeps_one_redacted_line(raw: str | None, expected: str | None) -> None:
+    assert failure_detail(raw) == expected
+
+
+def test_failure_detail_caps_the_length() -> None:
+    detail = failure_detail("x" * 1000)
+    assert detail is not None
+    assert len(detail) == FAILURE_DETAIL_MAX_CHARS
+    assert detail.endswith("…")
+
+
+def test_exception_detail_names_the_type() -> None:
+    exc = RuntimeError("tmux launch failed (rc=1): command too long\nstderr tail")
+    assert exception_detail(exc) == "RuntimeError: tmux launch failed (rc=1): command too long"
+    # An exception without text still says what failed.
+    assert exception_detail(TimeoutError()) == "TimeoutError"

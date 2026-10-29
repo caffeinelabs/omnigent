@@ -31,8 +31,9 @@ Do the sweep in one turn.
      request, which wakes or relaunches it. If it is wedged, use `restart=true`.
      Count every restart in the ledger. The third restart in 24 h goes to
      factory-recovery (replace the member).
-   - Health `degraded`, `blocked` or `dead`: read its summary and history.
-     Unblock it or escalate.
+   - Health `degraded`, `blocked` or `dead`: read its summary, `last_error`
+     and history. Unblock it or escalate. When you escalate, quote
+     `last_error` verbatim instead of guessing a cause.
 4. Check the peer lead. If it is offline, a post wakes it. If it is wedged,
    restart it. If it is dead, ask the human with `sys_factory_ask` (blocking).
 5. Re-ask once every open request older than one heartbeat. Drop requests

@@ -26,6 +26,7 @@ from omnigent.server.routes._sessions.common import (
     _interrupt_fenced_sessions,
 )
 from omnigent.server.routes._sessions.helpers import _SessionEventDispatchResult
+from omnigent.server.schemas import ErrorDetail
 from tests.server.factory.conftest import FactoryWorld, FakeDeliver
 
 CLIENT: Any = object()  # stands in for the runner's httpx client
@@ -42,6 +43,7 @@ class Ladder:
         self.heal_result: Any = None
         self.native = False
         self.terminal_fails = False
+        self.terminal_error: ErrorDetail | None = None
         self.stale_wake = False
         self.dispatch_error: BaseException | None = None
         self.dispatched: list[dict[str, Any]] = []
@@ -104,7 +106,9 @@ class Ladder:
             return _SessionEventDispatchResult(item_id="item_1", pending_id=None)
         # A native terminal that fails to start yields a failure turn, no pending input.
         if self.terminal_fails:
-            return _SessionEventDispatchResult(item_id="item_err", pending_id=None)
+            return _SessionEventDispatchResult(
+                item_id="item_err", pending_id=None, error=self.terminal_error
+            )
         return _SessionEventDispatchResult(item_id=None, pending_id="pending_1")
 
     async def _maybe_wake_stale_resumable_managed_sandbox(
@@ -256,6 +260,42 @@ async def test_native_terminal_that_fails_to_start_is_retryable(
 
     ladder.terminal_fails = False
     assert (await deliver_message(world.app_state, pl, "hello PL")).delivered
+
+
+async def test_terminal_start_failure_carries_the_runner_error(
+    world: FactoryWorld, ladder: Ladder
+) -> None:
+    pl = world.id("pl")
+    ladder.bound[pl] = CLIENT
+    ladder.native = True
+    ladder.terminal_fails = True
+    ladder.terminal_error = ErrorDetail(
+        code="native_terminal_start_failed",
+        message="Native Claude terminal failed to start; see the runner log for details: x",
+        detail="RuntimeError: tmux launch failed (rc=1): command too long",
+    )
+
+    outcome = await deliver_message(world.app_state, pl, "hello PL")
+
+    assert outcome == DeliveryOutcome(
+        False,
+        "terminal_failed_to_start",
+        retryable=True,
+        detail="RuntimeError: tmux launch failed (rc=1): command too long",
+    )
+    assert outcome.describe() == (
+        "terminal_failed_to_start: RuntimeError: tmux launch failed (rc=1): command too long"
+    )
+
+    # An older runner sends no detail: its message is the best there is.
+    ladder.terminal_error = ErrorDetail(
+        code="native_terminal_start_failed",
+        message="Native Claude terminal failed to start; see the runner log for details: x",
+    )
+    outcome = await deliver_message(world.app_state, pl, "hello PL")
+    assert outcome.detail == (
+        "Native Claude terminal failed to start; see the runner log for details: x"
+    )
 
 
 async def test_stale_resumable_sandbox_is_woken_before_dispatch(
@@ -431,6 +471,33 @@ async def test_permanent_failure_bounces_without_retry(
     assert len(fake_deliver.texts_to(pl)) == 1
     assert no_sleep.delays == []  # type: ignore[attr-defined]
     assert "undeliverable: session_closed" in fake_deliver.texts_to(world.id("lead_a"))[0]
+
+
+async def test_bounce_names_the_runner_error(
+    world: FactoryWorld,
+    fake_deliver: FakeDeliver,
+    no_sleep: Callable[[float], Any],
+) -> None:
+    pl, lead = world.id("pl"), world.id("lead_a")
+    fake_deliver.outcomes[pl] = [
+        DeliveryOutcome(
+            False, "terminal_failed_to_start", detail="RuntimeError: tmux launch failed (rc=1)"
+        )
+    ]
+    mailer = Mailer(world.app_state, deliver=fake_deliver, sleep=no_sleep)
+
+    mailer.submit(_item(world))
+    await mailer.drain()
+
+    assert fake_deliver.texts_to(lead) == [
+        f'[Factory delivery failure · message to "PL · api-version" ({pl}) '
+        "undeliverable: terminal_failed_to_start: RuntimeError: tmux launch failed (rc=1)]"
+    ]
+    store = world.app_state.factory.factory_store
+    [bounced] = store.find_events(None, "message.bounced", 0)
+    assert bounced.data["reason"] == "terminal_failed_to_start"
+    assert bounced.data["detail"] == "RuntimeError: tmux launch failed (rc=1)"
+    assert "RuntimeError: tmux launch failed (rc=1)" in bounced.summary
 
 
 async def test_retry_success_records_pending_reply(
