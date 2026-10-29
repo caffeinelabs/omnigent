@@ -523,6 +523,27 @@ async def test_abandon_is_recorded_with_nobody_to_tell_when_the_pl_is_gone(
     assert told == {f"decision:{abandon.ref}": True, f"decision:{dismiss.ref}": False}
 
 
+async def test_an_agent_answer_with_nobody_left_is_recorded(cockpit: Cockpit) -> None:
+    """The asker closed, its PL wrapped up and the root lead finished: nobody to tell."""
+    world = cockpit.world
+    decision = _ask(cockpit, "ic")
+    world.store.set_labels(world.id("ic"), {CLOSED_LABEL_KEY: "true"})
+    for key in ("pl", "lead_a"):
+        world.store.set_labels(world.id(key), {F.LABEL_STATE: F.STATE_DONE})
+
+    resp = await _answer(cockpit, decision, user="alice", option_id="1")
+
+    assert resp.status_code == 200, resp.text
+    view = resp.json()["decision"]
+    assert view["status"] == "answered" and view["nobody_to_tell"] is True
+    assert view["delivered_mail_id"] is None and view["delivered_to_title"] is None
+    assert view["delivered_at"] == view["answered_at"]
+    assert cockpit.mailer.items == []
+    [answered] = cockpit.events("decision.answered")
+    assert answered.data["nobody_to_tell"] is True and answered.to_id is None
+    assert answered.summary.endswith(" · nobody to tell")
+
+
 # ── Withdraw ───────────────────────────────────────────────────
 
 

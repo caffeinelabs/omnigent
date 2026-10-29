@@ -10,14 +10,18 @@ to the agents unchanged) and is deduplicated per episode through its
   when the episode clears.
 - message storm: a sender that hit its post rate limit.
 
-Once their project ended (cancelled, merged, or its PL wrapped it up) these
-and the loop decisions have nothing left to act on: the tick expires them.
+Once their project closed (cancelled, merged or done) these and the loop
+decisions have nothing left to act on: the reconcile pass expires them
+(:func:`ended_project_decisions`). A project whose PL only wrapped up (its
+stage is done; a Stop does that too, and Resume brings the PL back) loses
+just its "Mark it done?": its loop decisions stay answerable.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.factory import (
@@ -47,7 +51,10 @@ PROJECT_RUN_SOURCES: Final = frozenset(
     {SOURCE_RELAUNCH_FAILED, SOURCE_BLOCKED, SOURCE_STORM, "loop", "done_check"}
 )
 """Supervisor decisions about a project's running work (``loop`` and ``done_check``
-are :mod:`.loop_escalation`'s); a PR closure's feedback and proposals outlive it."""
+are :mod:`.loop_escalation`'s), expired once it closed; a PR closure's feedback
+and proposals outlive it."""
+WRAPPED_UP_SOURCES: Final = frozenset({"done_check"})
+"""Expired already when the project's stage is done: "Mark it done?" was answered by its PL."""
 _QUESTION_MAX: Final = 1000
 _CONTEXT_MAX: Final = 4000
 
@@ -243,39 +250,35 @@ def project_ended(project: FactoryProject | None) -> str | None:
     return STAGE_DONE if project.stage == STAGE_DONE else None
 
 
-async def expire_for_ended_projects(app_state: Any, factory_id: str) -> list[FactoryDecision]:
+def ended_project_decisions(
+    projects: Iterable[FactoryProject], decisions: Iterable[FactoryDecision]
+) -> list[tuple[FactoryDecision, str]]:
     """
-    Expire the open supervisor decisions of projects that ended. Never raises.
+    The open supervisor decisions of *projects* that have nothing left to act on.
 
-    "Mark it done?" for a project its PL already wrapped up, or a relaunch of
-    a PL that finished, has nobody left to act; it would wait in Needs you forever.
+    A closed project (cancelled, merged or done) takes all of
+    :data:`PROJECT_RUN_SOURCES` with it. A project whose PL wrapped it up
+    (stage done, still active) takes only :data:`WRAPPED_UP_SOURCES`: a Stop
+    sets that stage too and Resume brings the PL back, so a stopped loop's
+    decision (Raise budget, Switch vendor, Abandon) must stay open for it.
 
-    :returns: The decisions expired.
+    :param projects: The factory's projects.
+    :param decisions: Its open decisions (others are skipped).
+    :returns: ``(decision, why)`` pairs, e.g. ``(D-11, "docs is done")``.
     """
-    store = _store(app_state)
-    if store is None:
-        return []
-    try:
-        rows = await asyncio.to_thread(
-            store.list_decisions, status="open", factory_id=factory_id, limit=500
-        )
-        rows = [r for r in rows if r.source in PROJECT_RUN_SOURCES and r.project_slug]
-        if not rows:
-            return []
-        projects = await asyncio.to_thread(store.list_projects, factory_id)
-    except Exception:  # noqa: BLE001 - the next tick retries
-        _logger.warning("factory: could not read the decisions of %s", factory_id, exc_info=True)
-        return []
-    ended = {p.slug: how for p in projects if (how := project_ended(p)) is not None}
-    expired = []
-    for row in rows:
-        how = ended.get(row.project_slug or "")
-        if how is None:
+    by_slug = {p.slug: p for p in projects}
+    out: list[tuple[FactoryDecision, str]] = []
+    for row in decisions:
+        if row.status != "open" or row.source not in PROJECT_RUN_SOURCES:
             continue
-        done = await expire_decision(app_state, row.id, why=f"{row.project_slug} is {how}")
-        if done is not None:
-            expired.append(done)
-    return expired
+        project = by_slug.get(row.project_slug or "")
+        if project is None:
+            continue
+        if project.status not in (None, "active"):
+            out.append((row, f"{project.slug} is {project.status}"))
+        elif project.stage == STAGE_DONE and row.source in WRAPPED_UP_SOURCES:
+            out.append((row, f"{project.slug} is {STAGE_DONE}"))
+    return out
 
 
 def _member_target(conv: Conversation) -> str:
@@ -383,10 +386,11 @@ __all__ = [
     "SOURCE_BLOCKED",
     "SOURCE_RELAUNCH_FAILED",
     "SOURCE_STORM",
+    "WRAPPED_UP_SOURCES",
     "blocked_key",
+    "ended_project_decisions",
     "expire_by_key",
     "expire_decision",
-    "expire_for_ended_projects",
     "open_blocked_decision",
     "open_decision",
     "open_relaunch_failed_decision",

@@ -59,7 +59,10 @@ type Phase =
       at: number | null;
     }
   | { kind: "failed"; message: string; decision: DecisionView | null }
-  /** The POST failed; `refused` when the server said no (a 4xx), so a retry won't help. */
+  /**
+   * The POST failed; `refused` when the server said no ({@link isAnswerRefused}),
+   * so a retry won't help.
+   */
   | { kind: "error"; message: string; refused: boolean };
 
 export type DecisionCardStatus =
@@ -149,6 +152,14 @@ export function answerBlockedReason(
   if (decision.claimed_by === viewerId) return null;
   if (assignee === "owners") return "Owners answer this decision";
   return `Assigned to ${assignee}; owners can reassign`;
+}
+
+/** Statuses whose refusal a retry won't change (unlike 401, 408 or 429). */
+const REFUSED_STATUSES: ReadonlySet<number> = new Set([400, 403, 404, 409, 422]);
+
+/** Whether the server refused the answer for a reason a retry won't change. */
+export function isAnswerRefused(error: unknown): boolean {
+  return error instanceof FactoryApiError && REFUSED_STATUSES.has(error.status);
 }
 
 /** `No PL to tell — recorded`: the receipt of an answer nobody was left to receive. */
@@ -374,11 +385,15 @@ export function DecisionCard({
         }
         // Roll back: the options come back and the draft stays for a retry.
         setPicked(null);
+        const refused = isAnswerRefused(error);
         setPhase({
           kind: "error",
           message: error instanceof Error ? error.message : String(error),
-          refused: error instanceof FactoryApiError && error.status >= 400 && error.status < 500,
+          refused,
         });
+        // The server said no: the decision may have changed under the card (a
+        // proposal that moved on), so its options refresh now, not at the next poll.
+        if (refused) invalidate();
       },
     );
   };

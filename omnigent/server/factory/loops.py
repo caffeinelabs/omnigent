@@ -2008,11 +2008,10 @@ async def tick(
 
     Mirrors each factory's engine mode onto its PLs (the guard reads it),
     applies the wall, no-progress, $ and plan rules, re-opens the decision of
-    a loop whose project was paused from it, expires the supervisor decisions
-    of projects that ended, checks the project and factory $ budgets, sends
-    READY waves and flushes coalesced NEXT hints.
+    a loop whose project was paused from it, checks the project and factory $
+    budgets, sends READY waves and flushes coalesced NEXT hints.
     """
-    from omnigent.server.factory import budgets, loop_escalation, pipeline, server_decisions
+    from omnigent.server.factory import budgets, loop_escalation, pipeline
 
     deps = _deps(app_state)
     if deps is None:
@@ -2028,7 +2027,6 @@ async def tick(
                 await asyncio.to_thread(tick_sync, ctx)
             await apply(app_state, ctx)
             await loop_escalation.reconcile(app_state, deps, factory_id)
-            await server_decisions.expire_for_ended_projects(app_state, factory_id)
             await loop_escalation.done_checks(app_state, deps, factory_id, at)
             await budgets.check(app_state, factory_id, now=at)
             await pipeline.on_tick(app_state, factory_id, now=at)

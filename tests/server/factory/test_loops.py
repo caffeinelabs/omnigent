@@ -1910,50 +1910,131 @@ async def test_a_claim_fresh_restart_is_recorded_when_there_is_no_pl_to_restart(
     assert [e for e in cockpit.events() if e.kind == "control.restart"] == []
 
 
-@pytest.mark.parametrize(
-    ("field", "value", "why"),
-    [("stage", "done", "is done"), ("status", "cancelled", "is cancelled")],
-)
-async def test_the_tick_expires_supervisor_decisions_of_a_project_that_ended(
-    cockpit: Cockpit, field: str, value: str, why: str
+def side_decision(cockpit: Cockpit, source: str, key: str) -> Any:
+    """An open decision of *source* about the project (dismiss only)."""
+    row, _ = cockpit.store.create_decision(
+        cockpit.fid,
+        dedupe_key=key,
+        question=f"{source} about {SLUG}",
+        source=source,
+        options=[{"id": "dismiss", "label": "Dismiss", "action": "dismiss"}],
+        project_slug=SLUG,
+    )
+    return row
+
+
+def status_of(cockpit: Cockpit, decision_id: str) -> str | None:
+    row = cockpit.store.get_decision(decision_id)
+    return row.status if row is not None else None
+
+
+def stage_of(cockpit: Cockpit) -> str | None:
+    project = cockpit.store.get_project(cockpit.fid, SLUG)
+    return project.stage if project is not None else None
+
+
+async def reconcile_pass(cockpit: Cockpit) -> Any:
+    """One background reconcile pass: stages persisted, ended projects' decisions expired."""
+    from omnigent.server.factory.background import reconcile
+
+    return await reconcile.reconcile_once(cockpit.app.state)
+
+
+@pytest.mark.parametrize("status", ["cancelled", "merged", "done"])
+async def test_reconcile_expires_the_supervisor_decisions_of_a_closed_project(
+    cockpit: Cockpit, status: str
 ) -> None:
-    asked = await ask_mark_done(cockpit)
-    relaunch, _ = cockpit.store.create_decision(
-        cockpit.fid,
-        dedupe_key="relaunch_failed:pl",
-        question='"PL · api-version" relaunch failed 3×',
-        source="relaunch_failed",
-        options=[{"id": "dismiss", "label": "Dismiss", "action": "dismiss"}],
-        project_slug=SLUG,
-    )
-    closure, _ = cockpit.store.create_decision(
-        cockpit.fid,
-        dedupe_key="pr_closed:9631",
-        question="PR #9631 closed without merge. Why?",
-        source="pr_closed",
-        options=[{"id": "dismiss", "label": "Dismiss", "action": "dismiss"}],
-        project_slug=SLUG,
-    )
-    members = [cockpit.world.get("lead_a"), cockpit.world.get("pl")]
-    await loops.tick(cockpit.app.state, members, [], now=time.time())
-    assert {d.status for d in cockpit.store.list_decisions(factory_id=cockpit.fid)} == {"open"}
+    await plan(cockpit, "route")
+    await start(cockpit, "route")
+    loop_row = await exhaust(cockpit, "route")
+    done_check = side_decision(cockpit, "done_check", f"done_check:{SLUG}")
+    relaunch = side_decision(cockpit, "relaunch_failed", "relaunch_failed:pl")
+    closure = side_decision(cockpit, "pr_closed", "pr_closed:9631")
+    stopped = [loop_row.decision_id or "", done_check.id, relaunch.id]
+    await reconcile_pass(cockpit)
+    assert {status_of(cockpit, d) for d in [*stopped, closure.id]} == {"open"}
 
     project = cockpit.store.get_project(cockpit.fid, SLUG)
     assert project is not None
-    cockpit.store.update_project(project.id, **{field: value})
-    await loops.tick(cockpit.app.state, members, [], now=time.time())
+    cockpit.store.update_project(project.id, status=status)
+    report = await reconcile_pass(cockpit)
 
-    def status(decision_id: str) -> str | None:
-        row = cockpit.store.get_decision(decision_id)
-        return row.status if row is not None else None
-
-    assert (status(asked.id), status(relaunch.id)) == ("expired", "expired")
-    assert status(closure.id) == "open"  # a closed PR's feedback outlives the project
+    assert [status_of(cockpit, d) for d in stopped] == ["expired"] * 3
+    assert status_of(cockpit, closure.id) == "open"  # a closed PR's feedback outlives it
+    refs = [row.ref for d in stopped if (row := cockpit.store.get_decision(d)) is not None]
+    assert len(refs) == 3
+    assert sorted(report.decisions_expired) == sorted((r, f"{SLUG} is {status}") for r in refs)
     summaries = sorted(e.summary for e in cockpit.events("decision.expired"))
-    assert summaries == [
-        f"{asked.ref} expired: {SLUG} {why}",
-        f"{relaunch.ref} expired: {SLUG} {why}",
-    ]
+    assert summaries == sorted(f"{r} expired: {SLUG} is {status}" for r in refs)
+    # Nothing is left to expire on the next pass.
+    assert (await reconcile_pass(cockpit)).decisions_expired == []
+
+
+async def test_reconcile_expires_only_mark_done_when_the_pl_wrapped_up(cockpit: Cockpit) -> None:
+    """D-11: the PL ran DONE (stage done, project still active): "Mark it done?" goes."""
+    from omnigent.factory import LABEL_STATE
+
+    asked = await ask_mark_done(cockpit)
+    relaunch = side_decision(cockpit, "relaunch_failed", "relaunch_failed:pl")
+    loop_ask = side_decision(cockpit, "loop", "loop:other")
+    await reconcile_pass(cockpit)
+    assert status_of(cockpit, asked.id) == "open"
+
+    cockpit.world.store.set_labels(cockpit.world.id("pl"), {LABEL_STATE: "done"})
+    report = await reconcile_pass(cockpit)
+
+    assert stage_of(cockpit) == "done"
+    assert status_of(cockpit, asked.id) == "expired"
+    assert report.decisions_expired == [(asked.ref, f"{SLUG} is done")]
+    # Resume can bring the PL back: these stay, answerable with nobody to tell.
+    assert (status_of(cockpit, relaunch.id), status_of(cockpit, loop_ask.id)) == ("open", "open")
+    [expired] = cockpit.events("decision.expired")
+    assert expired.summary == f"{asked.ref} expired: {SLUG} is done"
+
+
+async def test_a_stopped_then_resumed_project_keeps_its_loop_decision(cockpit: Cockpit) -> None:
+    """
+    Review of #168: Stop sets the PL done (stage done) and Resume revives it.
+    The exhausted loop's decision must survive the stop, so the human can
+    still Raise budget, Switch vendor or Abandon after the resume.
+    """
+    from omnigent.factory import LABEL_STATE
+
+    await plan(cockpit, "route")
+    await start(cockpit, "route")
+    row = await exhaust(cockpit, "route")
+    decision_id = row.decision_id or ""
+    pl_id = cockpit.world.id("pl")
+
+    def members() -> list[Any]:
+        return [cockpit.world.get("lead_a"), cockpit.world.get("pl")]
+
+    cockpit.world.store.set_labels(pl_id, {LABEL_STATE: "done"})  # Stop
+    await reconcile_pass(cockpit)
+    assert stage_of(cockpit) == "done"
+    for _ in range(3):
+        await loops.tick(cockpit.app.state, members(), [], now=time.time())
+        await reconcile_pass(cockpit)
+    assert status_of(cockpit, decision_id) == "open"
+    assert cockpit.events("decision.expired") == []
+
+    cockpit.world.store.set_labels(pl_id, {LABEL_STATE: "active"})  # Resume
+    await reconcile_pass(cockpit)
+    await loops.tick(cockpit.app.state, members(), [], now=time.time())
+    assert stage_of(cockpit) != "done"
+    assert status_of(cockpit, decision_id) == "open"
+    assert implement(cockpit, "route").decision_id == decision_id
+    before = len(pl_texts(cockpit))
+
+    result = await decisions.answer_decision(
+        cockpit.app.state, decision_id, user_id="carol", option_id="raise"
+    )
+
+    assert result.delivered_to is not None and result.delivered_to.id == pl_id
+    assert not result.decision.nobody_to_tell
+    assert len(pl_texts(cockpit)) == before + 1
+    assert pl_texts(cockpit)[-1].startswith("[Factory loop · BUDGET RAISED · T-1 · implement 3→4")
+    assert implement(cockpit, "route").state == "running"
 
 
 async def test_no_done_check_for_a_project_its_pl_already_wrapped_up(cockpit: Cockpit) -> None:

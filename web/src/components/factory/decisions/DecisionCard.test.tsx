@@ -19,7 +19,7 @@ import {
 } from "./__fixtures__/decisionFixtures";
 import { FactoryViewerProvider } from "../shell/viewerCan";
 import { viewerOf } from "../shell/__fixtures__/shellFixtures";
-import { DecisionCard, answerBlockedReason } from "./DecisionCard";
+import { DecisionCard, answerBlockedReason, nobodyToTellText } from "./DecisionCard";
 
 const authenticatedFetch = vi.fn();
 vi.mock("@/lib/identity", () => ({
@@ -69,7 +69,7 @@ function renderCard(decision: DecisionView, onAnswered = vi.fn()) {
         <DecisionCard decision={next} onAnswered={onAnswered} />
       </Frame>,
     );
-  return { card, onAnswered, rerender };
+  return { card, onAnswered, rerender, client };
 }
 
 beforeEach(() => {
@@ -223,16 +223,38 @@ describe("DecisionCard", () => {
         409,
       ),
     );
-    const { card, onAnswered } = renderCard(doneCheckDecision());
+    const { card, onAnswered, client } = renderCard(doneCheckDecision());
+    const invalidate = vi.spyOn(client, "invalidateQueries");
     fireEvent.click(within(card).getByTestId("decision-option-D-11-0"));
     const error = await within(card).findByTestId("decision-error-D-11");
     expect(error).toHaveTextContent("Couldn’t answer: D-11 has no project lead to tell");
     expect(error).not.toHaveTextContent("Try again");
+    expect(error).toHaveAttribute("data-refused", "true");
     expect(within(card).queryByTestId("decision-conflict-D-11")).toBeNull();
     // Still open: the options come back (Not yet stays one click away).
     expect(card).toHaveAttribute("data-status", "open");
     expect(within(card).getByTestId("decision-option-D-11-1")).toBeEnabled();
     expect(onAnswered).not.toHaveBeenCalled();
+    // The decision may have changed under the card: it refreshes now, not at the next poll.
+    expect(invalidate).toHaveBeenCalled();
+  });
+
+  it.each([401, 408, 429, 503])("keeps “Try again” for a %i a retry can fix", async (status) => {
+    answerWith(() => json({ error: { message: "slow down" } }, status));
+    const { card, client } = renderCard(doneCheckDecision());
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    fireEvent.click(within(card).getByTestId("decision-option-D-11-0"));
+    const error = await within(card).findByTestId("decision-error-D-11");
+    expect(error).toHaveTextContent("Couldn’t send: slow down. Try again.");
+    expect(error).not.toHaveAttribute("data-refused");
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  it("names the PL in the receipt only when the decision has a project", () => {
+    expect(nobodyToTellText(answeredNobodyToTell())).toBe("No PL to tell — recorded");
+    expect(nobodyToTellText({ ...answeredNobodyToTell(), project_slug: null })).toBe(
+      "Nobody to tell — recorded",
+    );
   });
 
   it("says nobody was told when the PL was gone", async () => {
