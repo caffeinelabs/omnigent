@@ -308,6 +308,8 @@ function isOnLoginPath(): boolean {
 /**
  * Fetch the current user identity from the server.
  * Called once on app load; subsequent calls return the cached value.
+ * An unreachable server (network error or 5xx) resolves to null without
+ * caching it, so the next caller probes again.
  *
  * When the server returns 401 with a ``login_url`` (OIDC mode),
  * redirects the browser to the login page.
@@ -315,45 +317,53 @@ function isOnLoginPath(): boolean {
 export async function resolveIdentity(): Promise<string | null> {
   if (identityResolved) return currentUserId;
   if (identityPromise) return identityPromise;
-  identityPromise = (async () => {
-    try {
-      const res = await hostFetch("/v1/me");
-      if (res.status === 401) {
-        // OIDC / accounts mode: server requires authentication.
-        // Redirect to the login URL provided in the response body —
-        // unless we're already there (avoid an infinite reload loop
-        // when the LoginPage itself calls resolveIdentity).
-        try {
-          const data = (await res.json()) as {
-            user_id: null;
-            login_url?: string;
-          };
-          if (data.login_url) {
-            serverLoginUrl = data.login_url;
-            if (!isOnLoginPath()) {
-              redirectToLogin(data.login_url);
-              return null;
-            }
-          }
-        } catch {
-          // Response body was not JSON — fall through.
-        }
-      }
-      if (res.ok) {
-        const data = (await res.json()) as {
-          user_id: string | null;
-          is_admin?: boolean;
-        };
-        currentUserId = data.user_id;
-        currentIsAdmin = data.is_admin ?? false;
-      }
-    } catch {
-      // Server unreachable — leave as null.
-    }
-    identityResolved = true;
-    return currentUserId;
-  })();
+  // `.then` runs after the assignment below, so a transient outcome can clear it.
+  identityPromise = probeIdentity().then((outcome) => {
+    if (outcome === "resolved") identityResolved = true;
+    if (outcome === "transient") identityPromise = null;
+    return outcome === "redirecting" ? null : currentUserId;
+  });
   return identityPromise;
+}
+
+/** One `/v1/me` attempt; "transient" when the server couldn't answer (network error, 5xx). */
+async function probeIdentity(): Promise<"resolved" | "redirecting" | "transient"> {
+  try {
+    const res = await hostFetch("/v1/me");
+    if (res.status === 401) {
+      // OIDC / accounts mode: server requires authentication.
+      // Redirect to the login URL provided in the response body —
+      // unless we're already there (avoid an infinite reload loop
+      // when the LoginPage itself calls resolveIdentity).
+      try {
+        const data = (await res.json()) as {
+          user_id: null;
+          login_url?: string;
+        };
+        if (data.login_url) {
+          serverLoginUrl = data.login_url;
+          if (!isOnLoginPath()) {
+            redirectToLogin(data.login_url);
+            return "redirecting";
+          }
+        }
+      } catch {
+        // Response body was not JSON — fall through.
+      }
+    }
+    if (res.ok) {
+      const data = (await res.json()) as {
+        user_id: string | null;
+        is_admin?: boolean;
+      };
+      currentUserId = data.user_id;
+      currentIsAdmin = data.is_admin ?? false;
+    }
+    return res.status >= 500 ? "transient" : "resolved";
+  } catch {
+    // Server unreachable — leave as null and let the next caller retry.
+    return "transient";
+  }
 }
 
 /** Return the cached user ID (null before resolveIdentity completes). */

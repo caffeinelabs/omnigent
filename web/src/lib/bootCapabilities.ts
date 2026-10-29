@@ -1,30 +1,12 @@
-import type { ServerInfo } from "./capabilities";
-
-export const SERVER_INFO_OFFLINE_FALLBACK: ServerInfo = {
-  accounts_enabled: false,
-  single_user: false,
-  login_url: null,
-  needs_setup: false,
-  databricks_features: false,
-  managed_sandboxes_enabled: false,
-  sandbox_provider: null,
-  sandbox_providers: [],
-  enabled_connections: [],
-  sharing_mode: "on",
-  public_sharing_enabled: true,
-  server_version: null,
-  smart_routing_enabled: false,
-  smart_routing_sources: { external: false, oss: false },
-  github_app_enabled: false,
-  sshpiper_host: null,
-  sshpiper_port: null,
-  sshpiper_user: null,
-  features: {},
-  harness_install_enabled: false,
-  installable_harnesses: [],
-  dictation_available: false,
-  branding: null,
-};
+import { useEffect, useSyncExternalStore } from "react";
+import {
+  getCachedServerInfo,
+  getServerInfoProbeState,
+  resolveServerInfo,
+  subscribeServerInfoProbe,
+  type ServerInfo,
+  type ServerInfoProbeState,
+} from "./capabilities";
 
 /**
  * Race a boot probe against a timeout so first paint never waits on a
@@ -45,12 +27,20 @@ export function withBootTimeout<T>(settled: Promise<T>, fallback: T, timeoutMs =
   return Promise.race([settled, timer]);
 }
 
-export function createBootServerInfo(
-  settled: Promise<ServerInfo>,
-  timeoutMs = 1500,
-): { initial: Promise<ServerInfo>; settled: Promise<ServerInfo> } {
-  return {
-    initial: withBootTimeout(settled, SERVER_INFO_OFFLINE_FALLBACK, timeoutMs),
-    settled,
-  };
+/**
+ * The boot `/v1/info` answer for `CapabilitiesProvider`: `"loading"` until the
+ * probe has one (first attempt, or retrying an unreachable server), plus the
+ * probe's progress so routes can tell the two apart. Starts the probe if no
+ * one has yet; it is shared and cached, so every caller reads the same answer.
+ */
+export function useBootServerInfo(): {
+  info: ServerInfo | "loading";
+  probe: ServerInfoProbeState;
+} {
+  const probe = useSyncExternalStore(subscribeServerInfoProbe, getServerInfoProbeState);
+  useEffect(() => {
+    void resolveServerInfo();
+  }, []);
+  const info = probe.kind === "settled" ? (getCachedServerInfo() ?? "loading") : "loading";
+  return { info, probe };
 }

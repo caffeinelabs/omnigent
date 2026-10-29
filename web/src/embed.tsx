@@ -25,14 +25,13 @@
 
 import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
 import { ThemeProvider as NextThemesProvider } from "next-themes";
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useMemo, useState } from "react";
 import App from "./App";
 import { TooltipProvider } from "./components/ui/tooltip";
 import { ImageLightboxProvider } from "./components/ImageLightbox";
 import { RunnerHealthProvider } from "./hooks/RunnerHealthProvider";
-import { CapabilitiesContext } from "./lib/CapabilitiesContext";
-import { createBootServerInfo } from "./lib/bootCapabilities";
-import { resolveServerInfo, type ServerInfo } from "./lib/capabilities";
+import { CapabilitiesProvider } from "./lib/CapabilitiesContext";
+import { useBootServerInfo } from "./lib/bootCapabilities";
 import { EmbeddedProvider } from "./lib/embedded";
 import {
   type OmnigentHostConfig,
@@ -118,31 +117,20 @@ export interface OmnigentAppProps extends OmnigentHostConfig {
 /**
  * Runs `main.tsx`'s boot-time `/v1/info` probe inside the embed tree.
  *
- * Standalone resolves the probe BEFORE its first render and renders the whole
- * app under `<CapabilitiesProvider>`. The embed is rendered synchronously by
- * the host, so there's no "await then render" seam — instead we hold the
- * context at the default `"loading"` and flip it once the probe resolves.
+ * The embed is rendered synchronously by the host, so the context starts at
+ * `"loading"` and flips once the probe has an answer (retrying an unreachable
+ * server meanwhile, which routes that depend on the answer show).
  *
  * WITHOUT this provider, `useServerInfo()` returns the context default
- * (`"loading"`) forever, so `App` hits its `if (info === "loading") return
- * null` guard and the embed renders a permanently blank `.omnigent-app` div.
+ * (`"loading"`) forever, so feature-gated routes never open.
  */
 function EmbedCapabilitiesProvider({ children }: { children: ReactNode }) {
-  const [info, setInfo] = useState<ServerInfo | "loading">("loading");
-  useEffect(() => {
-    let alive = true;
-    const boot = createBootServerInfo(resolveServerInfo());
-    void boot.initial.then((resolved) => {
-      if (alive) setInfo(resolved);
-    });
-    void boot.settled.then((resolved) => {
-      if (alive) setInfo(resolved);
-    });
-    return () => {
-      alive = false;
-    };
-  }, []);
-  return <CapabilitiesContext.Provider value={info}>{children}</CapabilitiesContext.Provider>;
+  const { info, probe } = useBootServerInfo();
+  return (
+    <CapabilitiesProvider info={info} probe={probe}>
+      {children}
+    </CapabilitiesProvider>
+  );
 }
 
 function OmnigentProviders({

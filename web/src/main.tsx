@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { StrictMode, useEffect, useState } from "react";
+import { StrictMode, useEffect } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import App from "./App.tsx";
@@ -9,10 +9,10 @@ import { ImageLightboxProvider } from "./components/ImageLightbox";
 import { RunnerHealthProvider } from "./hooks/RunnerHealthProvider";
 import { QueueFlushProvider } from "./hooks/QueueFlushProvider";
 import { SessionUpdatesProvider } from "./hooks/SessionUpdatesProvider";
-import { resolveServerInfo, type ServerInfo } from "./lib/capabilities";
+import { resolveServerInfo } from "./lib/capabilities";
 import { CapabilitiesProvider } from "./lib/CapabilitiesContext";
 import { ExtensionProvider } from "./extensions/ExtensionProvider";
-import { createBootServerInfo, withBootTimeout } from "./lib/bootCapabilities";
+import { useBootServerInfo, withBootTimeout } from "./lib/bootCapabilities";
 import { isLoginRedirectPending, resolveIdentity } from "./lib/identity";
 import { hideNativeChatTerminalBar } from "./lib/nativeChatTerminalBar";
 import { initNativeInsets } from "./lib/nativeInsets";
@@ -95,30 +95,19 @@ if (typeof window !== "undefined") {
 applyCustomTheme(readCustomTheme());
 applyThemePalette(readThemePalette());
 
-// Probe /v1/info BEFORE the first render so the route table knows
-// whether to mount accounts routes. The probe is unauthed and the
-// failure path resolves to "accounts off" — so even a stalled or
-// missing server doesn't deadlock first paint. We add a small
-// safety timeout (1.5s) so users on a flaky network still get
-// something on screen.
-const bootServerInfo = createBootServerInfo(resolveServerInfo());
+// Start the /v1/info probe BEFORE the first render so the route table
+// learns early whether to mount accounts routes. First paint doesn't wait
+// on it: the shell renders with info "loading", and an unreachable server
+// is retried with backoff while routes that depend on the answer say so.
+void resolveServerInfo();
 
-// Same 1.5s safety net for the identity probe: a hung /v1/me must not
+// A 1.5s safety net for the identity probe: a hung /v1/me must not
 // deadlock first paint. On timeout we render anyway and the app degrades
 // exactly as it did before this gate existed.
 const bootIdentityGate = withBootTimeout<string | null>(bootIdentity, null);
 
-function RootApp({ initialInfo }: { initialInfo: ServerInfo | "loading" }) {
-  const [info, setInfo] = useState<ServerInfo | "loading">(initialInfo);
-  useEffect(() => {
-    let alive = true;
-    void bootServerInfo.settled.then((resolved) => {
-      if (alive) setInfo(resolved);
-    });
-    return () => {
-      alive = false;
-    };
-  }, []);
+function RootApp() {
+  const { info, probe } = useBootServerInfo();
   useEffect(() => {
     if (info === "loading") return;
     if (info.branding?.app_name) document.title = info.branding.app_name;
@@ -134,7 +123,7 @@ function RootApp({ initialInfo }: { initialInfo: ServerInfo | "loading" }) {
     link.href = faviconUrl;
   }, [info]);
   return (
-    <CapabilitiesProvider info={info}>
+    <CapabilitiesProvider info={info} probe={probe}>
       <QueryClientProvider client={queryClient}>
         <ExtensionProvider>
           <ThemeProvider>
@@ -159,12 +148,12 @@ function RootApp({ initialInfo }: { initialInfo: ServerInfo | "loading" }) {
 }
 
 // Mount immediately so the shell renders before the server probes settle.
-// The CapabilitiesProvider starts with "loading"; bootServerInfo.settled
-// updates it once /v1/info returns (see RootApp's useEffect above).
+// The CapabilitiesProvider starts with "loading" and RootApp swaps in the
+// /v1/info answer once the probe has one (see useBootServerInfo).
 const root = createRoot(document.getElementById("root")!);
 root.render(
   <StrictMode>
-    <RootApp initialInfo="loading" />
+    <RootApp />
   </StrictMode>,
 );
 

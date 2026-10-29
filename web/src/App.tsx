@@ -3,7 +3,7 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { ChatPage as ChatPageImpl } from "@/pages/ChatPage";
 import { NotFoundPage as NotFoundPageImpl } from "@/pages/NotFoundPage";
 import { useOmnigentPageView } from "@/lib/analytics";
-import { Spinner } from "@/components/ui/spinner";
+import { ServerInfoPending } from "@/components/ServerInfoPending";
 import { isFeatureEnabled, type FeatureKey } from "@/lib/capabilities";
 import { useServerInfo } from "@/lib/CapabilitiesContext";
 import { AppShell } from "@/shell/AppShell";
@@ -81,18 +81,18 @@ const SettingsPage = lazy(() =>
 );
 
 // A release-feature route stays registered so a hard load never falls through
-// to the catch-all "Page not found" while the /v1/info probe is in flight; the
-// gate is decided inside once the probe resolves.
+// to the catch-all "Page not found" while the /v1/info probe has no answer (in
+// flight, or retrying an unreachable server); the gate is decided once it has.
 function FeatureGatedPage({ feature, children }: { feature: FeatureKey; children: ReactNode }) {
   const info = useServerInfo();
-  if (info === "loading") {
-    return (
-      <div className="flex min-h-0 flex-1 items-center justify-center">
-        <Spinner className="size-5 text-muted-foreground" aria-label="Loading" />
-      </div>
-    );
-  }
+  if (info === "loading") return <ServerInfoPending />;
   return isFeatureEnabled(info, feature) ? children : <NotFoundPage />;
+}
+
+// The catch-all: until /v1/info answers, an unmatched path may be a route the
+// answer registers (accounts pages), so it isn't "not found" yet.
+function UnmatchedRoute() {
+  return useServerInfo() === "loading" ? <ServerInfoPending /> : <NotFoundPage />;
 }
 
 const factoryGated = (page: ReactNode) => (
@@ -145,10 +145,10 @@ interface AppProps {
  * loop with ``identity.ts``'s 401 redirect. Both pages own their
  * own minimal layout (centered card, no chrome).
  *
- * The wildcard route renders `<NotFoundPage />` for anything else. The
- * server's SPA fallback (`_SPAStaticFiles`) hands any extensionless URL
- * to the SPA, so unmatched paths land here after the bundle boots
- * rather than a server 404.
+ * The wildcard route renders `<NotFoundPage />` for anything else once
+ * the probe has answered. The server's SPA fallback (`_SPAStaticFiles`)
+ * hands any extensionless URL to the SPA, so unmatched paths land here
+ * after the bundle boots rather than a server 404.
  */
 function App({ basename }: AppProps = {}) {
   // Embedded: match the absolute pathname (`${basename}/...`). Standalone
@@ -233,7 +233,7 @@ function App({ basename }: AppProps = {}) {
             path={`${prefix}/policies`}
             element={<Navigate to={`${prefix}/settings/policies`} replace />}
           />
-          <Route path={basename ? `${prefix}/*` : "*"} element={<NotFoundPage />} />
+          <Route path={basename ? `${prefix}/*` : "*"} element={<UnmatchedRoute />} />
         </Route>
       </Routes>
     </Suspense>
