@@ -6,9 +6,12 @@ session, before the harness can act on it:
 - every user message the server dispatches to a runner (web/API prompts,
   factory mail, heartbeats, decision answers, wake notices, scheduled runs),
   in ``_dispatch_session_event_to_runner_impl``;
+- every skill slash command it forwards (``/fanout …``), in
+  ``_dispatch_skill_slash_command_to_runner``;
 - every request-phase hook a native harness posts when it submits a prompt to
   its model (``POST /sessions/{id}/policies/evaluate`` with ``PHASE_REQUEST``),
-  which also covers prompts typed straight into the terminal.
+  which also covers prompts typed straight into the terminal of a harness
+  that has such a hook (one without it starts no new turn id there).
 
 The id lands in the server-owned :data:`~omnigent.policies.turns.TURN_LABEL`
 label, which the policy engine exposes as ``event["context"]["turn"]``.

@@ -170,7 +170,7 @@ export function useProjectControlParts(
           ? `${project.title} waits on ${res.waiting_on.join(", ")}; its PL starts after them`
           : res.started === "lead"
             ? `Atlas was asked to start the PL of ${project.title}`
-            : `Starting the PL of ${project.title}`,
+            : `Requested the PL of ${project.title}; it appears here once created`,
       );
     } catch (error) {
       showToast(`PL not started: ${controlErrorMessage(error)}`);

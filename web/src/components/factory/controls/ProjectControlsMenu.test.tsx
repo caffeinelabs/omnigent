@@ -323,7 +323,11 @@ describe("ProjectControlsMenu", () => {
     await waitFor(() =>
       expect(server.writes().map((c) => [c.method, c.path])).toEqual([["POST", startPath]]),
     );
-    expect(await screen.findByText("Starting the PL of API version endpoint")).toBeInTheDocument();
+    expect(
+      await screen.findByText(
+        "Requested the PL of API version endpoint; it appears here once created",
+      ),
+    ).toBeInTheDocument();
   });
 
   it("explains a refused Start PL", async () => {

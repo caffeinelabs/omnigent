@@ -163,9 +163,10 @@ class EventContext(TypedDict, total=False):
         (the runner-local gate). Read via ``event["context"]["labels"]``.
     :param turn: Opaque id of the session turn this event belongs to, e.g.
         ``"turn_3f2a9c0d1e4b5a6f"``. The server stamps a fresh one whenever a
-        new user-role message starts a turn (any source), so per-turn state
-        keyed by it resets on every turn. ``None`` on paths without labels
-        (the runner-local gate). Read via ``event["context"]["turn"]``.
+        new user-role message starts a turn (the sources are listed in
+        :mod:`omnigent.policies.turns`), so per-turn state keyed by it resets
+        on every turn. ``None`` on paths without labels (the runner-local
+        gate). Read via ``event["context"]["turn"]``.
     """
 
     actor: ActorContext

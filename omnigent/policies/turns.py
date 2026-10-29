@@ -1,8 +1,9 @@
 """Turn identity for per-turn policy state.
 
 A *turn* starts whenever a new user-role message reaches a session: a human
-prompt, factory mail, a heartbeat, a decision answer, a sub-agent wake notice,
-or a prompt typed straight into a native terminal. The server stamps a fresh
+prompt, a skill slash command, factory mail, a heartbeat, a decision answer, a
+sub-agent wake notice, or a prompt a native harness submits through its prompt
+hook (including one typed into its terminal). The server stamps a fresh
 opaque id into the server-owned :data:`TURN_LABEL` label at each of those
 starts (see :mod:`omnigent.runtime.policies.turns`), and every policy event
 carries it as ``event["context"]["turn"]``. Per-turn policies (e.g.

@@ -174,6 +174,21 @@ async def test_request_event_still_resets_when_no_turn_id_is_stamped(
     assert await session.call("sys_session_send") == ALLOW
 
 
+@pytest.mark.asyncio
+async def test_request_event_resets_a_stamped_turn_too(
+    store: SqlAlchemyConversationStore,
+) -> None:
+    """A turn start seen only as a request-phase event (no new stamp) still resets."""
+    session = _Session(store, _spec(1, ["sys_session_send"]))
+    turn = session.new_turn()
+    assert await session.calls("sys_session_send", 2) == [ALLOW, DENY]
+    request = EvaluationContext(phase=Phase.REQUEST, content="go")
+    await session.engine().evaluate(request)
+    assert session.state() == {_STATE_KEY: 0}
+    assert await session.calls("sys_session_send", 2) == [ALLOW, DENY]
+    assert session.state() == {f"{_STATE_KEY}@{turn}": 2}
+
+
 def _event(tool: str, turn: str | None) -> dict[str, Any]:
     return {
         "type": "tool_call",

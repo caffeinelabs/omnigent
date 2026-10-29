@@ -54,7 +54,8 @@ them through its `omnigent` MCP server.
   - The body is at most 8000 chars. Keep it to 20 lines or fewer.
   - Limits: 60 posts per hour per sender and 20 per hour per (sender, target).
   - Errors: `403 session_out_of_factory`, `403 restart_not_allowed`,
-    `400 unknown_target`, `413` (too long) and `429 rate_limited`.
+    `400 unknown_target`, `400 self_target` (you cannot mail yourself), `413`
+    (too long) and `429 rate_limited`.
 - `sys_session_send` is **only** for your own sub-agents. Use `agent=` and
   `title=` to start or continue a task, or `session_id=` for a child you
   already have. Its completion wakes you with `[System: sub-agent ... finished]`.

@@ -85,6 +85,7 @@ from omnigent.runtime import (
 )
 from omnigent.runtime.agent_cache import AgentCache
 from omnigent.runtime.policies.engine import PolicyEngine
+from omnigent.runtime.policies.turns import begin_turn
 from omnigent.runtime.tool_output import cap_tool_output
 from omnigent.server import presence, session_live_state
 from omnigent.server._elicitation_registry import (
@@ -6897,6 +6898,9 @@ async def _dispatch_skill_slash_command_to_runner(
         arguments,
         runner_client,
     )
+    # The skill's hidden user message starts a turn, like every user message
+    # the server dispatches: per-turn policy budgets (spawn_bounds) restart.
+    await asyncio.to_thread(begin_turn, conversation_store, session_id)
 
     response_id = f"turn_{uuid.uuid4().hex}"
     meta_content = [{"type": "input_text", "text": meta_text}]

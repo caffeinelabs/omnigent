@@ -444,10 +444,12 @@ def spawn_bounds(
     factory mail, a heartbeat, a decision answer, a sub-agent wake notice), so
     each turn gets a fresh budget without depending on a request-phase event
     reaching this evaluator. Neither a policy nor the agent can write the turn
-    id. Events without one (the runner-local gate, or a session whose turn
-    predates stamping) use a single per-session count that each request-phase
-    event resets, and the closure remains the runner-local fallback, reset
-    through ``reset_turn``.
+    id. Every request-phase event still resets the counts as well (the
+    per-session one and the per-turn ones), so a turn start that only reaches
+    this evaluator as a request-phase event gets a fresh budget too. Events
+    without a turn id (the runner-local gate, or a session whose turn predates
+    stamping) use the single per-session count, and the closure remains the
+    runner-local fallback, reset through ``reset_turn``.
 
     :param max_dispatches_per_turn: Maximum worker dispatches allowed in one
         turn, e.g. ``5``.
@@ -469,18 +471,28 @@ def spawn_bounds(
             ``data["name"]`` is one of *dispatch_tools*.
         :returns: ALLOW, or DENY once the per-turn cap is exceeded.
         """
+        session_state = event.get("session_state") or {}
+        turn = event_turn(event)
         if event.get("type") == "request":
+            # A new user-role message: reset the per-session count and drop
+            # every per-turn count, the current turn's included, so a turn
+            # start that reaches this evaluator only as a request-phase event
+            # (without a fresh turn id) still gets a fresh budget.
             state["count"] = 0
+            stale_turns = {
+                key for key in session_state if key.startswith(_SPAWN_BOUNDS_TURN_PREFIX)
+            }
+            if turn is not None:
+                stale_turns.add(f"{_SPAWN_BOUNDS_TURN_PREFIX}{turn}")
             return {
                 "result": "ALLOW",
                 "state_updates": [
                     {"key": _SPAWN_BOUNDS_STATE_KEY, "action": "set", "value": 0},
+                    *({"key": key, "action": "delete"} for key in sorted(stale_turns)),
                 ],
             }
         if _tool_call(event, counted) is None:
             return _ALLOW
-        session_state = event.get("session_state") or {}
-        turn = event_turn(event)
         key = _SPAWN_BOUNDS_STATE_KEY if turn is None else f"{_SPAWN_BOUNDS_TURN_PREFIX}{turn}"
         if counted_turn["turn"] != turn:
             counted_turn["turn"], state["count"] = turn, 0
