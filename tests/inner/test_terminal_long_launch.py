@@ -21,6 +21,9 @@ import pytest
 import omnigent.inner.terminal as terminal_mod
 from omnigent.inner.terminal import TerminalInstance
 
+# tmux, POSIX shells and 0700/0600 mode bits.
+pytestmark = pytest.mark.posix_only
+
 # tmux 3.5a's effective cap on one packed command message (16384 minus the
 # imsg header and argc word); the client fails above it.
 _TMUX_COMMAND_CAP_BYTES = 16_364
@@ -187,14 +190,19 @@ async def test_long_launch_command_runs_from_private_script(
     assert stat.S_IMODE(launch_dir.stat().st_mode) == 0o700
     assert stat.S_IMODE(script.stat().st_mode) == 0o600
 
-    remove_line, exec_line, trailing = script.read_bytes().decode().split("\n", 2)
+    remove_script, remove_dir, exec_line, trailing = script.read_bytes().decode().split("\n", 3)
     quote = terminal_mod._shell_quote
-    assert remove_line == f"command rm -f -- {quote(str(script))} && command rmdir -- " + quote(
-        str(launch_dir)
+    quoted_script, quoted_dir = quote(str(script)), quote(str(launch_dir))
+    assert remove_script == (
+        f"{{ command rm -f -- {quoted_script} || "
+        f"command -p rm -f -- {quoted_script}; }} 2>/dev/null"
+    )
+    assert remove_dir == (
+        f"{{ command rmdir -- {quoted_dir} || command -p rmdir -- {quoted_dir}; }} 2>/dev/null"
     )
     quoted = " ".join(terminal_mod._shell_quote(arg) for arg in ["claude", *long_args])
-    # The quoted prompt spans lines; everything after the first line is the
-    # exec of exactly the argv the inline form would have run.
+    # The quoted prompt spans lines; everything after the two removal lines is
+    # the exec of exactly the argv the inline form would have run.
     assert f"{exec_line}\n{trailing}" == f"exec {quoted}\n"
 
 
@@ -213,8 +221,8 @@ async def test_long_launch_script_waits_for_attach_before_exec(
 
     [launch_dir] = _launch_dirs(tmp_path)
     [script] = list(launch_dir.iterdir())
-    second_line = script.read_text().split("\n")[1]
-    assert second_line.startswith("tmux wait-for omnigent-start-on-attach; exec claude ")
+    exec_line = script.read_text().split("\n")[2]
+    assert exec_line.startswith("tmux wait-for omnigent-start-on-attach; exec claude ")
 
 
 @pytest.mark.asyncio
@@ -281,6 +289,37 @@ def test_launch_script_round_trips_argv_and_removes_itself(tmp_path: Path) -> No
     )
 
     assert out.read_bytes() == payload.encode()
+    assert not script.exists()
+    assert _launch_dirs(tmp_path) == []
+
+
+@pytest.mark.skipif(shutil.which("sh") is None, reason="requires a POSIX shell")
+def test_launch_script_removes_itself_without_rm_on_path(tmp_path: Path) -> None:
+    """
+    A pane ``PATH`` with no ``rm``/``rmdir`` still removes the script.
+
+    The script holds the full argv, so its removal must not depend on the
+    launch environment (``inherit_env=False`` can hand the pane a bare
+    ``PATH``); it falls back to the shell's default utility path.
+    """
+    sh = shutil.which("sh")
+    assert sh is not None
+    out = tmp_path / "out.txt"
+    # Builtins only, so the command itself runs without a usable PATH.
+    argv = [sh, "-c", 'printf "%s" "$1" > "$2"', "sh", "payload", str(out)]
+    command_str = " ".join(terminal_mod._shell_quote(arg) for arg in argv)
+    script = terminal_mod._write_launch_script(tmp_path, command_str, start_on_attach=False)
+    empty_path = tmp_path / "empty-bin"
+    empty_path.mkdir()
+
+    subprocess.run(
+        [sh, "-c", f". {terminal_mod._shell_quote(str(script))}"],
+        check=True,
+        timeout=30,
+        env={"PATH": str(empty_path)},
+    )
+
+    assert out.read_text() == "payload"
     assert not script.exists()
     assert _launch_dirs(tmp_path) == []
 

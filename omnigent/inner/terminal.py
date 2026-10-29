@@ -2200,9 +2200,12 @@ def _write_launch_script(
     would otherwise have run the command via ``-c``, so quoting, environment
     and shell are unchanged. It removes itself and its directory first, then
     ``exec``s the command so the pane's process is the CLI itself (the
-    claude-native status watcher keys on ``#{pane_pid}``). The argv can carry
-    credential-bearing flags, so the directory is created 0700 and the file
-    0600, both under a fresh unique name.
+    claude-native status watcher keys on ``#{pane_pid}``). Removal falls back
+    to ``command -p`` (the shell's default utility path) when the pane's
+    ``PATH`` has no ``rm``/``rmdir``, so it does not depend on the launch
+    environment; :meth:`TerminalInstance.close` remains the backstop. The argv
+    can carry credential-bearing flags, so the directory is created 0700 and
+    the file 0600, both under a fresh unique name.
 
     :param parent: Directory to create the per-launch script directory in;
         the terminal's private dir, e.g.
@@ -2224,9 +2227,12 @@ def _write_launch_script(
     exec_line = f"exec {command_str}"
     if start_on_attach:
         exec_line = f"tmux wait-for {_TMUX_START_ON_ATTACH_CHANNEL}; {exec_line}"
+    quoted_script = _shell_quote(str(script))
+    quoted_dir = _shell_quote(str(launch_dir))
     body = (
-        f"command rm -f -- {_shell_quote(str(script))} && "
-        f"command rmdir -- {_shell_quote(str(launch_dir))}\n"
+        f"{{ command rm -f -- {quoted_script} || "
+        f"command -p rm -f -- {quoted_script}; }} 2>/dev/null\n"
+        f"{{ command rmdir -- {quoted_dir} || command -p rmdir -- {quoted_dir}; }} 2>/dev/null\n"
         f"{exec_line}\n"
     )
     try:
