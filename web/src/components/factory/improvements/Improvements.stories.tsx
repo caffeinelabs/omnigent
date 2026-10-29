@@ -42,6 +42,38 @@ function click(testId: string): Story["play"] {
   };
 }
 
+/** A reason long enough to wrap past the note box's three lines (it scrolls; the buttons hold). */
+const LONG_REASON =
+  "Plan human-only steps up front in the charter instead: the fork's docs project waited 3034 s on people because nobody listed the steps agents can't take. A rule every PL reads would fire on repos it doesn't fit. Re-propose it scoped to repos agents can't write.";
+
+/** Reject (or Dismiss) `ref` and write a long reason in the shared form. */
+function rejecting(ref: string): Story["play"] {
+  return async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.click(await body.findByTestId(`proposal-${ref}-reject`));
+    await userEvent.click(await body.findByTestId(`proposal-reject-note-${ref}`));
+    await userEvent.paste(LONG_REASON);
+  };
+}
+
+/** C-15 as an owner rejected it, with the note its proposer got. */
+function rejectedRoutes(): CockpitStoryOptions["routes"] {
+  const c15 = learnProposals().find((p) => p.ref === "C-15")!;
+  return {
+    [`/v1/factory/factories/${FID}/proposals/C-15`]: {
+      body: {
+        proposal: {
+          ...c15,
+          status: "rejected",
+          decided_by: "luka@caffeine.ai",
+          decided_at: c15.created_at + 600,
+          result: { note: LONG_REASON },
+        },
+      },
+    },
+  };
+}
+
 const meta = {
   title: "Factory/Improvements",
   component: ImprovementsPage,
@@ -81,6 +113,30 @@ export const ProposedOperator = page("/improvements", {
   search: "?tab=proposed",
   role: "operator",
 });
+
+/** Reject C-15: the same reason form as the Decisions card, a long reason scrolling in place. */
+export const ProposedRejecting = page(
+  "/improvements",
+  { search: "?tab=proposed" },
+  rejecting("C-15"),
+);
+
+export const ProposedRejectingDark = page(
+  "/improvements",
+  { search: "?tab=proposed", theme: "dark" },
+  rejecting("C-15"),
+);
+
+export const ProposedRejectingMobile = phone(
+  page("/improvements", { search: "?tab=proposed" }, rejecting("C-15")),
+);
+
+/** Dismiss C-16 (recorded while the Smith lane is off): the same form, "Dismiss C-16". */
+export const ProposedDismissing = page(
+  "/improvements",
+  { search: "?tab=proposed" },
+  rejecting("C-16"),
+);
 
 /** Edit C-15 before approving: the change dialog prefilled, applied as a trial. */
 export const EditProposal = page(
@@ -224,6 +280,18 @@ export const ProposalHumanApplied = page("/improvements/C-17", { learn: { afterS
 
 /** C-4: a projects proposal shows the Room's card (Apply, Edit & apply, Reject). */
 export const ProposalProjects = page("/improvements/C-4");
+
+/** C-15 rejected: who rejected it and the reason its proposer got. */
+export const ProposalRejected = page("/improvements/C-15", { routes: rejectedRoutes() });
+
+export const ProposalRejectedDark = page("/improvements/C-15", {
+  routes: rejectedRoutes(),
+  theme: "dark",
+});
+
+export const ProposalRejectedMobile = phone(
+  page("/improvements/C-15", { routes: rejectedRoutes() }),
+);
 
 export const ProposalViewer = page("/improvements/C-15", { role: "viewer" });
 

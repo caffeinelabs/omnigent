@@ -16,13 +16,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
 import { showToast } from "@/components/ui/toast";
 import { factoryQueryKey } from "@/hooks/useFactory";
 import { type FactoryControlRequest, sendFactoryControl } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
 import { controlErrorMessage } from "../controls/controlModel";
 import { plural } from "../factoryFormat";
+import { DialogBody, NoteTextarea, STICKY_DIALOG } from "../formParts";
 import { useViewer } from "../shell/viewerCan";
 import {
   INTERVENTION_LABEL,
@@ -141,91 +141,93 @@ function Body({
           Every intervention is posted as you and notifies the PL.
         </DialogDescription>
       </DialogHeader>
-      <ul
-        data-testid="intervention-consequences"
-        className="flex list-disc flex-col gap-1 pl-5 text-sm"
-      >
-        {consequences(kind, vendor).map((item) => (
-          <li key={item}>{item}</li>
-        ))}
-      </ul>
-      <div className="flex min-w-0 flex-col gap-1.5">
-        <span className="text-sm text-muted-foreground">
-          {kind === "message" || kind === "interrupt" ? "Agents" : "Tasks"}
-        </span>
-        <div
-          data-testid="intervention-targets"
-          className="flex max-h-28 min-w-0 flex-wrap gap-1 overflow-y-auto"
+      <DialogBody>
+        <ul
+          data-testid="intervention-consequences"
+          className="flex list-disc flex-col gap-1 pl-5 text-sm"
         >
-          {plan.labels.map((label) => (
-            <span
-              key={label}
-              className="inline-flex h-6 max-w-full items-center truncate rounded-md bg-muted px-2 font-mono text-xs"
-            >
-              {label}
-            </span>
+          {consequences(kind, vendor).map((item) => (
+            <li key={item}>{item}</li>
           ))}
-          {plan.skipped.map((skip) => (
-            <span
-              key={skip.title}
-              title={skip.reason}
-              data-testid="intervention-skipped"
-              className="inline-flex h-6 max-w-full items-center truncate rounded-md border border-dashed border-border px-2 font-mono text-xs text-muted-foreground line-through"
-            >
-              {skip.title}
-            </span>
-          ))}
-        </div>
-        {plan.skipped.length > 0 && (
-          <span className="text-xs text-muted-foreground">
-            {plural(plan.skipped.length, "agent")} skipped: no task to {kind}.
+        </ul>
+        <div className="flex min-w-0 flex-col gap-1.5">
+          <span className="text-sm text-muted-foreground">
+            {kind === "message" || kind === "interrupt" ? "Agents" : "Tasks"}
           </span>
-        )}
-      </div>
-      {kind === "reassign" && (
-        <fieldset className="flex flex-col gap-1.5">
-          <legend className="mb-1.5 text-sm text-muted-foreground">Switch to</legend>
-          <div role="radiogroup" className="inline-flex w-fit rounded-lg bg-muted p-[3px]">
-            {VENDORS.map((option) => (
-              <button
-                key={option.value}
-                type="button"
-                role="radio"
-                aria-checked={vendor === option.value}
-                data-testid={`intervention-vendor-${option.value}`}
-                onClick={() => setVendor(option.value)}
-                className={cn(
-                  "h-7 cursor-pointer rounded-md px-2.5 text-sm font-medium focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
-                  vendor === option.value
-                    ? "bg-background text-foreground shadow-sm dark:bg-input/30"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
+          <div
+            data-testid="intervention-targets"
+            className="flex max-h-28 min-w-0 flex-wrap gap-1 overflow-y-auto"
+          >
+            {plan.labels.map((label) => (
+              <span
+                key={label}
+                className="inline-flex h-6 max-w-full items-center truncate rounded-md bg-muted px-2 font-mono text-xs"
               >
-                {option.label}
-              </button>
+                {label}
+              </span>
+            ))}
+            {plan.skipped.map((skip) => (
+              <span
+                key={skip.title}
+                title={skip.reason}
+                data-testid="intervention-skipped"
+                className="inline-flex h-6 max-w-full items-center truncate rounded-md border border-dashed border-border px-2 font-mono text-xs text-muted-foreground line-through"
+              >
+                {skip.title}
+              </span>
             ))}
           </div>
-        </fieldset>
-      )}
-      <label className="flex flex-col gap-1.5 text-sm">
-        <span className="text-muted-foreground">
-          {kind === "message" ? "Message" : "Note for the PL (optional)"}
-          <span className="ml-1 text-xs">· posting as {postingAs(viewer)}</span>
-        </span>
-        <Textarea
-          value={note}
-          autoFocus={kind === "message"}
-          placeholder={
-            kind === "message"
-              ? "What should they do next? Delivered after the current tool."
-              : "Why, or what to try instead"
-          }
-          aria-label={kind === "message" ? "Message" : "Note"}
-          data-testid="intervention-note"
-          onChange={(event) => setNote(event.target.value)}
-          className="min-h-16 text-sm"
-        />
-      </label>
+          {plan.skipped.length > 0 && (
+            <span className="text-xs text-muted-foreground">
+              {plural(plan.skipped.length, "agent")} skipped: no task to {kind}.
+            </span>
+          )}
+        </div>
+        {kind === "reassign" && (
+          <fieldset className="flex flex-col gap-1.5">
+            <legend className="mb-1.5 text-sm text-muted-foreground">Switch to</legend>
+            <div role="radiogroup" className="inline-flex w-fit rounded-lg bg-muted p-[3px]">
+              {VENDORS.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={vendor === option.value}
+                  data-testid={`intervention-vendor-${option.value}`}
+                  onClick={() => setVendor(option.value)}
+                  className={cn(
+                    "h-7 cursor-pointer rounded-md px-2.5 text-sm font-medium focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
+                    vendor === option.value
+                      ? "bg-background text-foreground shadow-sm dark:bg-input/30"
+                      : "text-muted-foreground hover:text-foreground",
+                  )}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          </fieldset>
+        )}
+        <label className="flex flex-col gap-1.5 text-sm">
+          <span className="text-muted-foreground">
+            {kind === "message" ? "Message" : "Note for the PL (optional)"}
+            <span className="ml-1 text-xs">· posting as {postingAs(viewer)}</span>
+          </span>
+          <NoteTextarea
+            value={note}
+            autoFocus={kind === "message"}
+            placeholder={
+              kind === "message"
+                ? "What should they do next? Delivered after the current tool."
+                : "Why, or what to try instead"
+            }
+            aria-label={kind === "message" ? "Message" : "Note"}
+            data-testid="intervention-note"
+            onChange={(event) => setNote(event.target.value)}
+            className="text-sm"
+          />
+        </label>
+      </DialogBody>
       <DialogFooter>
         <Button
           variant="outline"
@@ -258,7 +260,7 @@ export function InterventionDialog(props: DialogProps) {
       <DialogContent
         data-testid="intervention-dialog"
         data-kind={kind ?? undefined}
-        className="sm:max-w-md"
+        className={`${STICKY_DIALOG} sm:max-w-md`}
       >
         {kind && <Body {...props} kind={kind} />}
       </DialogContent>

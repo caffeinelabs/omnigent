@@ -24,7 +24,6 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
-import { Textarea } from "@/components/ui/textarea";
 import { factoryInvalidationKeys } from "@/hooks/useFactory";
 import {
   FactoryApiError,
@@ -55,6 +54,7 @@ import {
   proposalState,
   proposerLine,
 } from "./proposalModel";
+import { RejectProposalForm } from "./RejectProposalForm";
 import { useCountdown } from "./useCountdown";
 
 const KIND_ICON: Record<ProposalKind, typeof ListTreeIcon> = {
@@ -187,7 +187,6 @@ export function ProposalCard({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState<Busy>(null);
   const [rejecting, setRejecting] = useState(false);
-  const [note, setNote] = useState("");
   const [editing, setEditing] = useState(false);
   const state: ProposalCardState = proposalState(proposal, stale);
   const open = isOpen(state) && conflict == null;
@@ -387,38 +386,14 @@ export function ProposalCard({
       )}
 
       {open && rejecting && (
-        <div className="flex flex-col gap-1.5" data-testid={`proposal-reject-form-${proposal.ref}`}>
-          <Textarea
-            value={note}
-            onChange={(event) => setNote(event.target.value)}
-            placeholder="Why not? The proposer reads this (optional)"
-            aria-label={`Reason to reject ${proposal.ref}`}
-            data-testid={`proposal-reject-note-${proposal.ref}`}
-            componentId="factory.proposal.reject_note"
-            className="min-h-14 bg-background"
-            autoFocus
-          />
-          <div className="flex items-center gap-1.5">
-            <Button
-              size="sm"
-              variant="destructive"
-              onClick={() =>
-                void run("reject", () =>
-                  rejectProposal(factoryId, proposal.ref, note.trim() || undefined),
-                )
-              }
-              disabled={busy != null}
-              data-testid={`proposal-reject-confirm-${proposal.ref}`}
-              componentId="factory.proposal.reject_confirm"
-            >
-              {busy === "reject" && <Loader2Icon className="animate-spin" />}
-              Reject {proposal.ref}
-            </Button>
-            <Button size="sm" variant="ghost" onClick={() => setRejecting(false)}>
-              Cancel
-            </Button>
-          </div>
-        </div>
+        <RejectProposalForm
+          proposalRef={proposal.ref}
+          busy={busy != null}
+          onConfirm={(note) =>
+            void run("reject", () => rejectProposal(factoryId, proposal.ref, note))
+          }
+          onCancel={() => setRejecting(false)}
+        />
       )}
 
       {!open && outcome && (

@@ -17,12 +17,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { Textarea } from "@/components/ui/textarea";
 import { factoryInvalidationKeys } from "@/hooks/useFactory";
 import type { FactorySnapshot } from "@/lib/factoryApi";
 import { proposeProjects } from "@/lib/factoryRoomApi";
 import { cn } from "@/lib/utils";
 import { controlErrorMessage } from "../controls/controlModel";
+import { DialogBody, NoteTextarea, STICKY_DIALOG } from "../formParts";
 
 /** A cycle the edit would make among project `depends_on` (`a → b → a`), or null. */
 export function projectCycle(
@@ -130,7 +130,7 @@ export function ProjectDependsDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         data-testid="project-depends-dialog"
-        className="flex max-h-[85vh] flex-col gap-4 sm:max-w-lg"
+        className={`${STICKY_DIALOG} gap-4 sm:max-w-lg`}
       >
         <DialogHeader>
           <DialogTitle>
@@ -141,66 +141,68 @@ export function ProjectDependsDialog({
             waits until the ones it depends on merge into the base.
           </DialogDescription>
         </DialogHeader>
-        <ul className="flex flex-col gap-1">
-          {candidates.length === 0 && (
-            <li className="text-sm text-muted-foreground">No other active projects.</li>
+        <DialogBody>
+          <ul className="flex flex-col gap-1">
+            {candidates.length === 0 && (
+              <li className="text-sm text-muted-foreground">No other active projects.</li>
+            )}
+            {candidates.map((p) => {
+              const on = picked.includes(p.slug);
+              return (
+                <li key={p.slug}>
+                  <label
+                    className={cn(
+                      "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted",
+                      on && "bg-muted/60",
+                    )}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      data-testid={`project-depends-${p.slug}`}
+                      onChange={() =>
+                        setPicked((prev) =>
+                          on ? prev.filter((s) => s !== p.slug) : [...prev, p.slug],
+                        )
+                      }
+                      className="size-3.5 accent-[var(--primary)]"
+                    />
+                    <span className="font-mono">#{p.slug}</span>
+                    {p.title && (
+                      <span className="min-w-0 truncate text-muted-foreground">{p.title}</span>
+                    )}
+                    {p.note && (
+                      <span className="ml-auto shrink-0 rounded-full bg-muted px-1.5 text-xs leading-5 text-muted-foreground">
+                        {p.note}
+                      </span>
+                    )}
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+          <NoteTextarea
+            value={why}
+            onChange={(e) => setWhy(e.target.value)}
+            placeholder="Why (shown on the proposal)"
+            rows={2}
+            componentId="factory.graph.depends_why"
+          />
+          {cycle && (
+            <p
+              data-testid="project-depends-cycle"
+              className="flex items-start gap-1.5 text-sm text-destructive"
+            >
+              <CircleAlertIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+              That makes a cycle: {cycle.map((s) => `#${s}`).join(" → ")}
+            </p>
           )}
-          {candidates.map((p) => {
-            const on = picked.includes(p.slug);
-            return (
-              <li key={p.slug}>
-                <label
-                  className={cn(
-                    "flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-muted",
-                    on && "bg-muted/60",
-                  )}
-                >
-                  <input
-                    type="checkbox"
-                    checked={on}
-                    data-testid={`project-depends-${p.slug}`}
-                    onChange={() =>
-                      setPicked((prev) =>
-                        on ? prev.filter((s) => s !== p.slug) : [...prev, p.slug],
-                      )
-                    }
-                    className="size-3.5 accent-[var(--primary)]"
-                  />
-                  <span className="font-mono">#{p.slug}</span>
-                  {p.title && (
-                    <span className="min-w-0 truncate text-muted-foreground">{p.title}</span>
-                  )}
-                  {p.note && (
-                    <span className="ml-auto shrink-0 rounded-full bg-muted px-1.5 text-xs leading-5 text-muted-foreground">
-                      {p.note}
-                    </span>
-                  )}
-                </label>
-              </li>
-            );
-          })}
-        </ul>
-        <Textarea
-          value={why}
-          onChange={(e) => setWhy(e.target.value)}
-          placeholder="Why (shown on the proposal)"
-          rows={2}
-          componentId="factory.graph.depends_why"
-        />
-        {cycle && (
-          <p
-            data-testid="project-depends-cycle"
-            className="flex items-start gap-1.5 text-sm text-destructive"
-          >
-            <CircleAlertIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
-            That makes a cycle: {cycle.map((s) => `#${s}`).join(" → ")}
-          </p>
-        )}
-        {failure && (
-          <p role="alert" className="text-sm text-destructive">
-            {failure}
-          </p>
-        )}
+          {failure && (
+            <p role="alert" className="text-sm text-destructive">
+              {failure}
+            </p>
+          )}
+        </DialogBody>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel

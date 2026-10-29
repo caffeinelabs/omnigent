@@ -1,7 +1,8 @@
 /**
  * The cockpit's confirm dialogs: pause (with what it does and the "also tear
  * down previews" choice), type-to-confirm stops, a restart note and the
- * relaunch-with-spec diff. Every confirm button is `control-confirm`.
+ * relaunch-with-spec diff. Every confirm button is `control-confirm`; a
+ * dialog with a note keeps it put while the note is typed (pinned footer).
  */
 
 import { type ReactNode, useState } from "react";
@@ -15,8 +16,8 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
-import { Textarea } from "@/components/ui/textarea";
 import type { LaunchDriftView } from "@/lib/factoryApi";
+import { DialogBody, NoteTextarea, STICKY_DIALOG } from "../formParts";
 
 /** Start a confirm dialog on its confirm button rather than its first option. */
 function focusConfirm(event: Event): void {
@@ -88,30 +89,33 @@ function PauseBody({ onOpenChange, scope, name, livePreviews, onConfirm }: Pause
           Agents finish their current step, then wait for Resume.
         </DialogDescription>
       </DialogHeader>
-      <Consequences items={items} />
-      <label className="flex items-start gap-2 text-sm">
-        <input
-          type="checkbox"
-          checked={teardown}
-          data-testid="control-teardown"
-          onChange={(event) => setTeardown(event.target.checked)}
-          className="mt-1 size-3.5 shrink-0 cursor-pointer rounded-sm accent-primary outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
-        />
-        <span>
-          Also tear down previews
-          <span className="block text-muted-foreground">
-            Frees their namespaces; reviewers lose the live app until the next deploy.
+      <DialogBody>
+        <Consequences items={items} />
+        <label className="flex items-start gap-2 text-sm">
+          <input
+            type="checkbox"
+            checked={teardown}
+            data-testid="control-teardown"
+            onChange={(event) => setTeardown(event.target.checked)}
+            className="mt-1 size-3.5 shrink-0 cursor-pointer rounded-sm accent-primary outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+          />
+          <span>
+            Also tear down previews
+            <span className="block text-muted-foreground">
+              Frees their namespaces; reviewers lose the live app until the next deploy.
+            </span>
           </span>
-        </span>
-      </label>
-      <Textarea
-        value={note}
-        placeholder="Note for the agents (optional)"
-        aria-label="Note"
-        data-testid="control-note"
-        onChange={(event) => setNote(event.target.value)}
-        className="min-h-12 text-sm"
-      />
+        </label>
+        <NoteTextarea
+          value={note}
+          rows={2}
+          placeholder="Note for the agents (optional)"
+          aria-label="Note"
+          data-testid="control-note"
+          onChange={(event) => setNote(event.target.value)}
+          className="text-sm"
+        />
+      </DialogBody>
       <DialogFooter>
         <Button variant="outline" onClick={() => onOpenChange(false)}>
           Cancel
@@ -135,7 +139,7 @@ export function PauseDialog(props: PauseDialogProps) {
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
       <DialogContent
         data-testid="control-pause-dialog"
-        className="sm:max-w-md"
+        className={`${STICKY_DIALOG} sm:max-w-md`}
         onOpenAutoFocus={focusConfirm}
       >
         <PauseBody {...props} />
@@ -235,14 +239,16 @@ function RestartBody({ onOpenChange, who, onConfirm }: RestartDialogProps) {
           Its turn is stopped and it starts again on the same sandbox, re-reading its plan.
         </DialogDescription>
       </DialogHeader>
-      <Textarea
-        value={note}
-        placeholder="Why, or what to do first (optional)"
-        aria-label="Note"
-        data-testid="control-note"
-        onChange={(event) => setNote(event.target.value)}
-        className="min-h-16 text-sm"
-      />
+      <DialogBody>
+        <NoteTextarea
+          value={note}
+          placeholder="Why, or what to do first (optional)"
+          aria-label="Note"
+          data-testid="control-note"
+          onChange={(event) => setNote(event.target.value)}
+          className="text-sm"
+        />
+      </DialogBody>
       <DialogFooter>
         <Button variant="outline" onClick={() => onOpenChange(false)}>
           Cancel
@@ -265,7 +271,10 @@ function RestartBody({ onOpenChange, who, onConfirm }: RestartDialogProps) {
 export function RestartDialog(props: RestartDialogProps) {
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent data-testid="control-restart-dialog" className="sm:max-w-md">
+      <DialogContent
+        data-testid="control-restart-dialog"
+        className={`${STICKY_DIALOG} sm:max-w-md`}
+      >
         <RestartBody {...props} />
       </DialogContent>
     </Dialog>

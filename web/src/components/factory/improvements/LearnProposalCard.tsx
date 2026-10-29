@@ -3,8 +3,9 @@
  * proposed and co-signed it, its class, the evidence and the metric it
  * should move, and the levers its state offers. On trial: progress, the live
  * scorecard, Keep now and Revert. Pending: Approve trial, Edit, Reject.
- * Code (Tier 2 off): the reason, Dismiss and "Copy as issue". Owners pull every lever;
- * everyone else sees them disabled with who can.
+ * Code (Tier 2 off): the reason, Dismiss and "Copy as issue". Reject and
+ * Dismiss ask for the reason the proposer reads, as every proposal card does.
+ * Owners pull every lever; everyone else sees them disabled with who can.
  */
 
 import { useState } from "react";
@@ -25,7 +26,14 @@ import { copyText } from "@/lib/clipboard";
 import type { FactorySnapshot, ProposalView, Tier2StatusView } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
-import { STATE_LABEL, STATE_TONE, proposalState, proposerLine } from "../cards/proposalModel";
+import {
+  STATE_LABEL,
+  STATE_TONE,
+  actorName,
+  proposalState,
+  proposerLine,
+} from "../cards/proposalModel";
+import { RejectProposalForm } from "../cards/RejectProposalForm";
 import { controlErrorMessage } from "../controls/controlModel";
 import { TONE_CHIP, formatElapsed } from "../factoryFormat";
 import { improvementPageHref, roomPageHref } from "../factoryRoutes";
@@ -157,6 +165,7 @@ export function LearnProposalCard({
   const decide = useDecideTrial(factoryId);
   const answer = useAnswerProposal(factoryId);
   const [editing, setEditing] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
   const [failure, setFailure] = useState<string | null>(null);
   const code = proposal.kind === "code";
   // A code change runs through a decision only while Tier 2 is on.
@@ -181,21 +190,30 @@ export function LearnProposalCard({
         onError: fail,
       },
     );
-  const respond = (verb: "apply" | "reject") =>
+  const respond = (verb: "apply" | "reject", note?: string) => {
+    setFailure(null);
     answer.mutate(
-      { ref: proposal.ref, verb },
+      { ref: proposal.ref, verb, note },
       {
-        onSuccess: () =>
+        onSuccess: () => {
+          setRejecting(false);
           showToast(
             verb === "reject"
-              ? `${proposal.ref} rejected`
+              ? `${proposal.ref} ${recorded ? "dismissed" : "rejected"}${note && proposal.author_kind === "agent" ? " · the proposer gets your note" : ""}`
               : code
                 ? `${proposal.ref} approved · the Smith lane takes it`
                 : `${proposal.ref} approved · on trial`,
-          ),
+          );
+        },
         onError: fail,
       },
     );
+  };
+  const rejectNote =
+    proposal.status === "rejected" && typeof proposal.result?.note === "string"
+      ? proposal.result.note
+      : null;
+  const rejectedBy = proposal.decided_by ? ` by ${actorName(proposal.decided_by, snapshot)}` : "";
 
   return (
     <article
@@ -300,110 +318,131 @@ export function LearnProposalCard({
       {scored && scorecard.isLoading && (
         <p className="text-xs text-muted-foreground">Scoring against the baseline…</p>
       )}
-      <footer className="flex min-w-0 flex-wrap items-center gap-2">
-        {isTrial && (
-          <ReasonGated reason={ownerReason} testId={`proposal-${proposal.ref}-keep`}>
-            <Button
-              size="sm"
-              onClick={() => run("keep")}
-              disabled={busy}
-              data-testid={`proposal-${proposal.ref}-keep`}
-              componentId="factory.improvements.keep"
-            >
-              <CheckIcon />
-              Keep now
-            </Button>
-          </ReasonGated>
-        )}
-        {revertable && (
-          <ReasonGated reason={ownerReason} testId={`proposal-${proposal.ref}-revert`}>
+      {rejectNote && (
+        <p
+          data-testid={`proposal-${proposal.ref}-outcome`}
+          className="min-w-0 text-sm break-words text-muted-foreground"
+        >
+          {`${code && !proposal.decision_id ? "Dismissed" : "Rejected"}${rejectedBy}: “${rejectNote}”`}
+        </p>
+      )}
+      {rejecting && (pending || recorded) ? (
+        <RejectProposalForm
+          proposalRef={proposal.ref}
+          verb={recorded ? "Dismiss" : "Reject"}
+          busy={answer.isPending}
+          onConfirm={(note) => respond("reject", note)}
+          onCancel={() => setRejecting(false)}
+        />
+      ) : (
+        <footer className="flex min-w-0 flex-wrap items-center gap-2">
+          {isTrial && (
+            <ReasonGated reason={ownerReason} testId={`proposal-${proposal.ref}-keep`}>
+              <Button
+                size="sm"
+                onClick={() => run("keep")}
+                disabled={busy}
+                data-testid={`proposal-${proposal.ref}-keep`}
+                componentId="factory.improvements.keep"
+              >
+                <CheckIcon />
+                Keep now
+              </Button>
+            </ReasonGated>
+          )}
+          {revertable && (
+            <ReasonGated reason={ownerReason} testId={`proposal-${proposal.ref}-revert`}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => run("revert")}
+                disabled={busy}
+                data-testid={`proposal-${proposal.ref}-revert`}
+                componentId="factory.improvements.revert"
+              >
+                <RotateCcwIcon />
+                Revert
+              </Button>
+            </ReasonGated>
+          )}
+          {pending && (
+            <ReasonGated reason={ownerReason} testId={`proposal-${proposal.ref}-approve`}>
+              <Button
+                size="sm"
+                onClick={() => respond("apply")}
+                disabled={busy}
+                data-testid={`proposal-${proposal.ref}-approve`}
+                componentId="factory.improvements.approve"
+              >
+                {code ? <CheckIcon /> : <FlaskConicalIcon />}
+                {code ? "Approve" : "Approve trial"}
+              </Button>
+            </ReasonGated>
+          )}
+          {pending && !code && (
+            <ReasonGated reason={ownerReason} testId={`proposal-${proposal.ref}-edit`}>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setEditing(true)}
+                disabled={busy}
+                data-testid={`proposal-${proposal.ref}-edit`}
+                componentId="factory.improvements.edit"
+              >
+                <PencilIcon />
+                Edit
+              </Button>
+            </ReasonGated>
+          )}
+          {(pending || recorded) && (
+            <ReasonGated reason={ownerReason} testId={`proposal-${proposal.ref}-reject`}>
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => {
+                  setFailure(null);
+                  setRejecting(true);
+                }}
+                disabled={busy}
+                data-testid={`proposal-${proposal.ref}-reject`}
+                componentId="factory.improvements.reject"
+                className="text-muted-foreground"
+              >
+                <XIcon />
+                {recorded ? "Dismiss" : "Reject"}
+              </Button>
+            </ReasonGated>
+          )}
+          {code && (
             <Button
               size="sm"
               variant="outline"
-              onClick={() => run("revert")}
-              disabled={busy}
-              data-testid={`proposal-${proposal.ref}-revert`}
-              componentId="factory.improvements.revert"
+              onClick={() =>
+                copyText(issueText(proposal, factoryName, window.location.origin)).then(
+                  () => showToast(`${proposal.ref} copied as an issue`),
+                  () => showToast("Couldn’t copy"),
+                )
+              }
+              data-testid={`proposal-${proposal.ref}-copy-issue`}
+              componentId="factory.improvements.copy_issue"
             >
-              <RotateCcwIcon />
-              Revert
+              <ClipboardCopyIcon />
+              Copy as issue
             </Button>
-          </ReasonGated>
-        )}
-        {pending && (
-          <ReasonGated reason={ownerReason} testId={`proposal-${proposal.ref}-approve`}>
-            <Button
-              size="sm"
-              onClick={() => respond("apply")}
-              disabled={busy}
-              data-testid={`proposal-${proposal.ref}-approve`}
-              componentId="factory.improvements.approve"
+          )}
+          {/* The list links #improvements once, above the tabs; the change's own page links it here. */}
+          {expanded && proposal.thread && (
+            <Link
+              to={roomPageHref(factoryId, proposal.thread)}
+              componentId="factory.improvements.discuss"
+              className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
             >
-              {code ? <CheckIcon /> : <FlaskConicalIcon />}
-              {code ? "Approve" : "Approve trial"}
-            </Button>
-          </ReasonGated>
-        )}
-        {pending && !code && (
-          <ReasonGated reason={ownerReason} testId={`proposal-${proposal.ref}-edit`}>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setEditing(true)}
-              disabled={busy}
-              data-testid={`proposal-${proposal.ref}-edit`}
-              componentId="factory.improvements.edit"
-            >
-              <PencilIcon />
-              Edit
-            </Button>
-          </ReasonGated>
-        )}
-        {(pending || recorded) && (
-          <ReasonGated reason={ownerReason} testId={`proposal-${proposal.ref}-reject`}>
-            <Button
-              size="sm"
-              variant="ghost"
-              onClick={() => respond("reject")}
-              disabled={busy}
-              data-testid={`proposal-${proposal.ref}-reject`}
-              componentId="factory.improvements.reject"
-              className="text-muted-foreground"
-            >
-              <XIcon />
-              {recorded ? "Dismiss" : "Reject"}
-            </Button>
-          </ReasonGated>
-        )}
-        {code && (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() =>
-              copyText(issueText(proposal, factoryName, window.location.origin)).then(
-                () => showToast(`${proposal.ref} copied as an issue`),
-                () => showToast("Couldn’t copy"),
-              )
-            }
-            data-testid={`proposal-${proposal.ref}-copy-issue`}
-            componentId="factory.improvements.copy_issue"
-          >
-            <ClipboardCopyIcon />
-            Copy as issue
-          </Button>
-        )}
-        {/* The list links #improvements once, above the tabs; the change's own page links it here. */}
-        {expanded && proposal.thread && (
-          <Link
-            to={roomPageHref(factoryId, proposal.thread)}
-            componentId="factory.improvements.discuss"
-            className="ml-auto inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
-          >
-            <MessagesSquareIcon aria-hidden className="size-3.5" />
-            discuss in #{proposal.thread}
-          </Link>
-        )}
-      </footer>
+              <MessagesSquareIcon aria-hidden className="size-3.5" />
+              discuss in #{proposal.thread}
+            </Link>
+          )}
+        </footer>
+      )}
       {failure && (
         <p data-testid={`proposal-${proposal.ref}-error`} className="text-sm text-destructive">
           {failure}
