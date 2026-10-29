@@ -112,6 +112,26 @@ def _loop(kind: str, state: str = "running", **spent: Any) -> FactoryLoop:
             id="ci-loop-is-not-a-human-wait",
         ),
         pytest.param(
+            _pr(),
+            _gates(checks="fail"),
+            [_loop("claim", "stalled", waiting="5e1c2d4")],
+            None,
+            None,
+            "FIX_CI",
+            "CI failed",
+            id="a-stalled-claim-wait-holds-nothing",
+        ),
+        pytest.param(
+            _pr(),
+            _gates(),
+            [_loop("claim", "exhausted")],
+            None,
+            None,
+            "WAIT_HUMAN",
+            "claim exhausted",
+            id="claim-exhausted",
+        ),
+        pytest.param(
             _pr(), _gates(checks="fail"), [], None, None, "FIX_CI", "CI failed", id="checks-fail"
         ),
         pytest.param(

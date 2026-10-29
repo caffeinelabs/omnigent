@@ -1674,7 +1674,20 @@ def test_engine_hints_and_loop_mails_have_pl_rows(pl: AgentSpec) -> None:
     claim = FactoryLoop(
         id="l" * 32, factory_id="f" * 32, kind="claim", subject="pr:p", spec={"mismatches": 2}
     )
-    texts.append(wait_text(LoopFacts(loop=claim, pr=pr, pl=pl_conv), ["checks"], "5e1c2d4"))
+    claim_facts = LoopFacts(loop=claim, task=task, pr=pr, pl=pl_conv)
+    texts.append(wait_text(claim_facts, ["checks"], "5e1c2d4"))
+    # A hung wait: STALLED, then a person's "Keep waiting".
+    texts.append(escalation_text(claim_facts, "stalled", "D-31"))
+    keep = LoopAnswer(
+        action="raise_budget",
+        target="loop:l",
+        decision=decision,
+        option={"label": "Keep waiting", "wait": True},
+        facts=claim_facts,
+        raised=("2 h", "4 h"),
+        extra={"key": "wait_h", "value": 4},
+    )
+    texts.append(answer_text(keep, "bob (operator)"))
     for text in texts:
         header = text.split("]", 1)[0] + "]"
         assert any(p.fullmatch(header) for p in loop_rows), header

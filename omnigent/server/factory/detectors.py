@@ -360,8 +360,12 @@ async def _on_event(app_state: Any, event: FactoryEvent) -> None:
         target = _loop_target(event)
         for rule in LOOP_BAD if target else ():
             await clear(app_state, fid, rule, target or "", kind)
+        if kind == "loop.iteration" and data.get("kind") == "claim" and data.get("late"):
+            await _on_late_refutation(app_state, event, data)
     elif kind == "pr.claim" and data.get("claim") == "ready_for_human_merge":
         await _on_claim(app_state, event, data)
+    elif kind == "pr.ready" and isinstance(data.get("pr_id"), str):
+        await clear(app_state, fid, "claim.mismatch", f"pr:{data['pr_id']}", "the PR turned ready")
     elif kind == "gate.changed" and data.get("gate") == "checks":
         await _on_checks(app_state, event, data)
     elif kind == "decision.answered":
@@ -403,6 +407,24 @@ async def _on_claim(app_state: Any, event: FactoryEvent, data: Mapping[str, Any]
         )
     else:
         await clear(app_state, event.factory_id, "claim.mismatch", target, "a later claim held")
+
+
+async def _on_late_refutation(
+    app_state: Any, event: FactoryEvent, data: Mapping[str, Any]
+) -> None:
+    """``claim.mismatch`` for an early READY claim a gate refuted later (claim loop verdict)."""
+    pr_id = data.get("pr_id")
+    if not isinstance(pr_id, str):
+        return
+    await _raise(
+        app_state,
+        event.factory_id,
+        "claim.mismatch",
+        f"pr:{pr_id}",
+        f"{event.summary} · a gate failed after the READY claim",
+        project=event.project_slug,
+        evidence={"event_id": event.id, **_pick(data, "head", "refuted")},
+    )
 
 
 async def _on_checks(app_state: Any, event: FactoryEvent, data: Mapping[str, Any]) -> None:

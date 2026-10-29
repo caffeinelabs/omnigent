@@ -862,9 +862,14 @@ ci, claim, plan, intake, improve); `factory_loops` keeps one row per
   `pr.claim`): `held` (ready), `refuted` (a failed gate, a draft, a moved head,
   a PR not open; or Sentinel `not_verified`) or `early` (only pending gates:
   CI running, mergeable computing, no review, verify or demo on the head yet).
-  Only refuted claims count toward `mismatches`; an early one uses no
-  iteration, raises no `claim.mismatch`, mails the PL `[Factory loop · WAIT · …]`
-  once per head and holds when `pr.ready` fires at that head.
+  Only refuted claims count toward `mismatches` (and `sys_factory_pr` answers
+  `claim_mismatch: true` only for them); an early one uses no iteration,
+  raises no `claim.mismatch` and mails the PL `[Factory loop · WAIT · …]` once
+  per head. The claim loop then waits on that head: `pr.ready` there holds the
+  claim, a gate failing there (`gate.changed`) refutes it after all (counted,
+  `claim.mismatch`), a new head or a closed PR lapses it, and a wait past
+  `loops.claim.wait_h` (2 h) stalls the loop (`loop.stalled`, a `Keep waiting`
+  decision that raises `wait_h`).
 - **Engine mode** (root label `omnigent.factory.engine_mode`, default
   `assist`; stamped on a new PL and mirrored by the tick, where the guard
   reads it): `observe` records (detectors open incidents); `assist` also opens

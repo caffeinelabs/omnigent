@@ -409,12 +409,13 @@ async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
     refreshed = await _await_refresh(caller, row.id)
     if refreshed is not None:
         row = refreshed
+    ready_claim = body.claim == "ready_for_human_merge"
     # Against the fresh gates, and stored with the claim (claim calibration).
-    claim_mismatch = body.claim == "ready_for_human_merge" and not row.ready
+    claim_mismatch = ready_claim and not row.ready
     # Only a refuted claim counts against the claim loop; an early one waits for the gates.
-    claim_status, claim_gates = (
-        loops.claim_status(row, head_sha) if body.claim == "ready_for_human_merge" else (None, [])
-    )
+    claim_status, claim_gates = loops.claim_status(row, head_sha) if ready_claim else (None, [])
+    # A READY claim is about the head it was judged at, even when it names none.
+    claim_head = head_sha or ((row.head_sha or None) if ready_claim else None)
     if body.claim is not None or body.sentinel_verdict is not None:
         what = body.claim or f"sentinel {body.sentinel_verdict}"
         await events.emit(
@@ -430,7 +431,7 @@ async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
                 "pr_id": row.id,
                 "claim": body.claim,
                 "sentinel_verdict": body.sentinel_verdict,
-                "head_sha": head_sha,
+                "head_sha": claim_head,
                 "note": note,
                 "claim_mismatch": claim_mismatch,
                 "claim_status": claim_status,
@@ -460,7 +461,8 @@ async def register_pr(request: Request, body: PrBody) -> dict[str, Any]:
         "gates": gates,
         "reasons": list(gates.get("reasons") or []),
         "refreshed": refreshed is not None,
-        "claim_mismatch": claim_mismatch,
+        # True only when refuted: an early claim has nothing to fix, it waits for the gates.
+        "claim_mismatch": claim_status == loops.CLAIM_REFUTED,
         "claim_status": claim_status,
         "claim_gates": claim_gates,
     }

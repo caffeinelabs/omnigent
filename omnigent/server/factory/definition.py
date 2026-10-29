@@ -167,6 +167,7 @@ class CiLoop(_Block):
 
 class ClaimLoop(_Block):
     mismatches: int = 2
+    wait_h: float = 2
 
 
 class PlanLoop(_Block):
@@ -341,6 +342,7 @@ BOUNDS: Final[dict[str, tuple[float, float]]] = {
     "loops.demo.per_pr_heads": (1, 12),
     "loops.ci.flake_reruns": (0, 3),
     "loops.claim.mismatches": (1, 5),
+    "loops.claim.wait_h": (1, 24),
     "loops.plan.stall_h": (1, 168),
     "loops.intake.revisions": (1, 6),
     "loops.improve.usd": (0.5, 10),

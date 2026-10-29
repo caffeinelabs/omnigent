@@ -149,6 +149,8 @@ Report: the RESULT block
      computing, a marker not posted yet). It uses no claim attempt and you get
      `[Factory loop · WAIT · …]`; do not claim again. Start any step `reasons`
      says is missing (review, PREVIEW, demo), then wait for the notice below.
+     A gate that then fails at that head counts as a refuted claim; a wait past
+     2 h stalls the claim loop (`[Factory loop · STALLED · …]`: re-run a hung check).
    - `claim_status: "refuted"` (a failed gate, a draft, a moved head): it counts
      toward the claim budget. Fix what `reasons` names: a draft (`gh pr ready` by
      the IC), failing CI (dispatch a fix), a failed marker (re-run that step).

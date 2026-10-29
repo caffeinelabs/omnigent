@@ -17,7 +17,9 @@ verify     ``pr:<id>@<sha7>``       one verify marker or ``PREVIEW FAILED``
 demo       ``pr:<id>@<sha7>``       one recorded demo at the head
 ci         ``pr:<id>@<sha7>``       one completed check-suite verdict
 claim      ``pr:<id>``              one READY claim or Sentinel verdict; an
-                                    early claim (only pending gates) waits
+                                    early claim (only pending gates) waits:
+                                    it lands when a gate fails (refuted) or
+                                    passes (held), stalls after ``wait_h``
 plan       ``project:<slug>``       a task closed (stall: none in 24 h)
 ========== ======================== ==========================================
 
@@ -110,7 +112,7 @@ DEFAULT_BUDGETS: Final[dict[str, dict[str, float]]] = {
     "verify": {"per_head": 2, "env_retries": 1},
     "demo": {"per_head": 2, "per_pr_heads": 6},
     "ci": {"flake_reruns": 1},
-    "claim": {"mismatches": 2},
+    "claim": {"mismatches": 2, "wait_h": 2},
     "plan": {"stall_h": 24},
     "intake": {"revisions": 3},
     "improve": {"usd": 3.0},
@@ -222,9 +224,13 @@ CATALOGUE: Final[dict[str, LoopSpec]] = {
             "project_lead",
             "Sentinel and the server's gates",
             "a sentinel verdict or a READY claim at the head (an early claim only waits)",
-            {"met": "verified at the head", "budget": "refuted claims in a row"},
-            ("mismatches",),
-            "finding, plus a fresh restart of the PL from its plan",
+            {
+                "met": "verified at the head",
+                "budget": "refuted claims in a row",
+                "no_progress": "an early claim's pending gates still pend after wait_h",
+            },
+            ("mismatches", "wait_h"),
+            "finding, plus a fresh restart of the PL from its plan; a hung wait: keep waiting",
             (ACTION_FRESH_RESTART,),
         ),
         LoopSpec(
@@ -553,12 +559,14 @@ def _iterate(
     ok: bool | None = None,
     spent: Mapping[str, Any] | None = None,
     state: str | None = None,
+    extra: Mapping[str, Any] | None = None,
 ) -> FactoryLoop:
     """
     Record one iteration (``loop.iteration`` and its ``loop_iter`` span).
 
     :param n: The iteration number (default: the next one).
     :param ok: The iteration's outcome, when it has one now.
+    :param extra: More ``loop.iteration`` event data.
     """
     number = n if n is not None else loop.iteration + 1
     values = _spent(loop)
@@ -587,7 +595,13 @@ def _iterate(
             row,
             "iteration",
             text + (f" · {reason}" if reason else ""),
-            {"iteration": number, "verdict": verdict, "reason": _clip(reason), "class": cls},
+            {
+                **(extra or {}),
+                "iteration": number,
+                "verdict": verdict,
+                "reason": _clip(reason),
+                "class": cls,
+            },
             iter_span={
                 "n": number,
                 "started_ms": started if ok is not None else ctx.ms,
@@ -1317,14 +1331,17 @@ CLAIM_EARLY: Final = "early"
 CLAIM_REFUTED: Final = "refuted"
 _CLAIM_GATES: Final = (*READY_GATES, DEMO_GATE)
 _WAIT_WORDS: Final = {"checks": "CI", "protected_paths": "protected paths"}
+_WAITING: Final = ("running", "stalled")
+"""Claim loop states a wait lives in (``stalled``: it outlasted ``wait_h``)."""
 
 
 def claim_status(pr: FactoryPr, head: str | None = None) -> tuple[str, list[str]]:
     """
     Judge a READY claim on *pr* against the server's gates (pure).
 
-    ``held``: the PR is ready. ``refuted``: the PR is not open or is a draft,
-    a gate failed, or the claim names another head than the PR's (it moved).
+    ``held``: the PR is ready (it is handed over at its head, whichever head
+    the claim names). ``refuted``: the PR is not open or is a draft, a gate
+    failed, or the claim names another head than the PR's (it moved).
     ``early``: nothing refutes it, the server still waits on gates (CI
     running, mergeable computing, no review, verify or demo on the head yet,
     or no gates computed yet). Only a refuted claim counts as a mismatch.
@@ -1343,15 +1360,133 @@ def claim_status(pr: FactoryPr, head: str | None = None) -> tuple[str, list[str]
     failing = [name for name in _CLAIM_GATES if gates.get(name) == GATE_FAIL]
     if failing:
         return CLAIM_REFUTED, failing
-    actual, named = (pr.head_sha or "").lower(), (head or "").lower()
-    if actual and named and not actual.startswith(named):
+    if head and not _at_head(pr, head):
         return CLAIM_REFUTED, ["head"]
     return CLAIM_EARLY, [name for name in _CLAIM_GATES if gates.get(name) == GATE_PENDING]
+
+
+def _at_head(pr: FactoryPr, sha: str) -> bool:
+    """:returns: Whether *sha* (7-40 hex) names the PR's current head."""
+    actual, named = (pr.head_sha or "").lower(), sha.lower()
+    return bool(actual and named) and actual.startswith(named)
 
 
 def wait_words(gates: Iterable[str]) -> str:
     """:returns: e.g. ``"CI, review"`` for pending gates (``"gates"`` for none)."""
     return ", ".join(_WAIT_WORDS.get(g, g) for g in gates) or "gates"
+
+
+def _count_claim(
+    ctx: Ctx,
+    row: FactoryLoop,
+    *,
+    mismatch: bool,
+    verdict: str,
+    reason: str,
+    head: str | None = None,
+    extra: Mapping[str, Any] | None = None,
+) -> FactoryLoop:
+    """
+    One judged claim or Sentinel verdict: an iteration; it ends any wait.
+
+    A mismatch extends the streak of refuted claims, which exhausts the loop at
+    its ``mismatches`` budget; anything else restarts it.
+    """
+    values = _spent(row)
+    values["streak"] = int(values.get("streak") or 0) + 1 if mismatch else 0
+    values.update(waiting=None, waiting_since=None)
+    if head:
+        values["claimed_head"] = head
+    row = _iterate(
+        ctx,
+        row,
+        verdict=verdict,
+        reason=reason,
+        ok=False if mismatch else None,
+        spent=values,
+        state="running" if row.state in ("converged", "stalled") else None,
+        extra=extra,
+    )
+    limit = int((row.spec or {}).get("mismatches") or 0)
+    if limit and values["streak"] >= limit and row.state == "running":
+        return _transition(
+            ctx,
+            row,
+            "exhausted",
+            f"{values['streak']} READY claims in a row the server's gates or Sentinel refuted",
+            limit=limit,
+        )
+    return row
+
+
+def _refute_wait(ctx: Ctx, row: FactoryLoop, sha7: str, gates: Sequence[str]) -> FactoryLoop:
+    """A gate failed at the head an early READY claim waits on: that claim counts as refuted."""
+    failed = [str(g) for g in gates][:8]
+    return _count_claim(
+        ctx,
+        row,
+        mismatch=True,
+        verdict="MISMATCH",
+        reason=f"READY claim at {sha7} refuted: {', '.join(failed) or 'gates'}",
+        extra={"late": True, "head": sha7, "refuted": failed},
+    )
+
+
+def _end_wait(ctx: Ctx, row: FactoryLoop, *, held: bool, reason: str) -> FactoryLoop:
+    """
+    An early READY claim's wait ends without a refutation (no iteration).
+
+    *held*: the gates passed at the head it waited on, so the claim held and
+    the streak restarts. Otherwise it lapsed: the head moved past it or the PR
+    closed. A loop stalled on the wait runs again (its decision expires).
+    """
+    values = _spent(row)
+    values.update(waiting=None, waiting_since=None)
+    if held:
+        values["streak"] = 0
+    row = _update(
+        ctx,
+        row,
+        spent=values,
+        last_verdict="CLAIMED" if held else "LAPSED",
+        last_reason=_clip(reason),
+    )
+    if row.state == "stalled":
+        row = _transition(ctx, row, "running", reason)
+        ctx.changes.append(
+            Change(
+                row,
+                "resumed",
+                f"{_label(row)}: {_progress_text(row)} runs again · {reason}",
+                {"reason": _clip(reason)},
+                severity="notice",
+            )
+        )
+    return row
+
+
+def _judge_wait(ctx: Ctx, row: FactoryLoop, pr: FactoryPr | None) -> FactoryLoop:
+    """Judge the early READY claim *row* waits on against *pr* as it is now."""
+    sha7 = str(_spent(row).get("waiting") or "")
+    if not sha7 or row.state not in _WAITING:
+        return row
+    if pr is None or pr.state != "open":
+        state = pr.state if pr is not None else "gone"
+        return _end_wait(
+            ctx, row, held=False, reason=f"PR {state}: the READY claim at {sha7} lapsed"
+        )
+    if not _at_head(pr, sha7):
+        return _end_wait(
+            ctx, row, held=False, reason=f"head moved past {sha7}: the READY claim lapsed"
+        )
+    status, gates = claim_status(pr, sha7)
+    if status == CLAIM_HELD:
+        return _end_wait(
+            ctx, row, held=True, reason=f"gates green at {sha7}: the early READY claim held"
+        )
+    if status == CLAIM_REFUTED:
+        return _refute_wait(ctx, row, sha7, gates)
+    return row
 
 
 def _claim_early(
@@ -1360,20 +1495,39 @@ def _claim_early(
     """
     A READY claim that only pending gates disagree with: no iteration, the streak stands.
 
-    The PL is told to wait once per head (``waiting``) and :func:`observe_ready`
-    lands the claim when the gates pass; a loop held on a decision only counts it.
+    It is judged again on the gates as stored now (the poller may have moved
+    since the route answered): a gate that failed meanwhile refutes it, a PR
+    that turned ready holds it. Otherwise the loop waits on the head
+    (``waiting`` since ``waiting_since``) and the PL is told once per head;
+    :func:`observe_wait` lands the claim when a gate fails or all pass and
+    :func:`check_wait` stalls a wait past ``wait_h``. A loop held on a
+    decision (or ended) only counts it.
     """
     values = _spent(row)
-    sha7 = (head or pr.head_sha or "")[:7] or "?"
+    sha7 = (head or pr.head_sha or "")[:7].lower()
+    values["early"] = int(values.get("early") or 0) + 1
     if head:
         values["claimed_head"] = head
-    values["early"] = int(values.get("early") or 0) + 1
-    if row.state not in ("running", "converged"):
-        # A loop held on a decision (or ended) keeps its reason and hold.
-        return _update(ctx, row, spent=values)
+    row = _update(ctx, row, spent=values)
+    if values.get("waiting") and values["waiting"] != sha7:
+        row = _judge_wait(ctx, row, pr)  # a wait on an older head lapses
+    if row.state not in ("running", "converged") or not sha7 or not _at_head(pr, sha7):
+        # Held on a decision, or the head moved since the route judged it.
+        return row
+    values = _spent(row)
+    status, gates = claim_status(pr, sha7)
+    if status == CLAIM_HELD:
+        values.update(waiting=None, waiting_since=None, streak=0)
+        reason = f"gates green at {sha7}: the early READY claim held"
+        return _update(ctx, row, spent=values, last_verdict="CLAIMED", last_reason=reason)
+    if status == CLAIM_REFUTED:
+        return _refute_wait(ctx, row, sha7, gates)
     told = values.get("waiting") == sha7
+    if not told:
+        values["waiting_since"] = int(ctx.now)
     values["waiting"] = sha7
-    pending = [str(g) for g in data.get("claim_gates") or [] if isinstance(g, str)][:8]
+    named = [str(g) for g in data.get("claim_gates") or [] if isinstance(g, str)][:8]
+    pending = named or gates
     reason = f"{wait_words(pending)} pending on {sha7}"
     fields: dict[str, Any] = {
         "spent": values,
@@ -1395,18 +1549,43 @@ def _claim_early(
     return row
 
 
-def observe_ready(ctx: Ctx, pr: FactoryPr) -> FactoryLoop | None:
-    """The gates passed at the head an early READY claim waits on: that claim held."""
+def observe_wait(ctx: Ctx, pr: FactoryPr) -> FactoryLoop | None:
+    """A gate of *pr* moved or it turned ready: judge the early READY claim it waits on."""
     row = ctx.store.get_loop_by_subject(ctx.factory_id, "claim", pr_subject(pr.id))
     if row is None:
         return None
-    values = _spent(row)
-    waiting = str(values.get("waiting") or "")
-    if not waiting or not (pr.head_sha or "").lower().startswith(waiting):
-        return row
-    values.update(waiting=None, streak=0)
-    reason = f"gates green at {waiting}: the early READY claim held"
-    return _update(ctx, row, spent=values, last_verdict="CLAIMED", last_reason=reason)
+    return _judge_wait(ctx, row, pr)
+
+
+def check_wait(ctx: Ctx, loop: FactoryLoop, pr: FactoryPr | None, *, paused: bool) -> FactoryLoop:
+    """
+    The clock rule of an early READY claim's wait (fake-clock testable).
+
+    Judges it again first (an event it missed), then stalls a running claim
+    loop whose wait outlasted ``wait_h``: a check that never finishes reaches
+    a person (``loop.stalled`` and a decision) instead of holding the PR.
+    """
+    loop = _judge_wait(ctx, loop, pr)
+    values = _spent(loop)
+    sha7 = str(values.get("waiting") or "")
+    if not sha7 or loop.state != "running" or paused or pr is None:
+        return loop
+    since = values.get("waiting_since")
+    if not isinstance(since, int | float):
+        values["waiting_since"] = int(ctx.now)
+        return _update(ctx, loop, spent=values)
+    wait_h = float((loop.spec or {}).get("wait_h") or budget(ctx.factory_id, "claim", "wait_h"))
+    waited = int(ctx.now - since)
+    if not wait_h or waited < wait_h * 3600:
+        return loop
+    _, pending = claim_status(pr, sha7)
+    return _transition(
+        ctx,
+        loop,
+        "stalled",
+        f"READY claim at {sha7} waited {waited // 3600} h on {wait_words(pending)}",
+        wait=True,
+    )
 
 
 def observe_claim(ctx: Ctx, pr: FactoryPr, data: Mapping[str, Any]) -> FactoryLoop | None:
@@ -1427,7 +1606,7 @@ def observe_claim(ctx: Ctx, pr: FactoryPr, data: Mapping[str, Any]) -> FactoryLo
     head = str(data.get("head_sha") or pr.head_sha or "")[:12]
     values = _spent(row)
     if sentinel == "verified" and (not head or pr.head_sha.startswith(head[:7])):
-        values["streak"] = 0
+        values.update(streak=0, waiting=None, waiting_since=None)
         row = _iterate(
             ctx,
             row,
@@ -1441,10 +1620,6 @@ def observe_claim(ctx: Ctx, pr: FactoryPr, data: Mapping[str, Any]) -> FactoryLo
     if sentinel is None and data.get("claim_status") == CLAIM_EARLY:
         return _claim_early(ctx, row, pr, head, data)
     mismatch = bool(data.get("claim_mismatch")) or sentinel == "not_verified"
-    values["streak"] = int(values.get("streak") or 0) + 1 if mismatch else 0
-    values["waiting"] = None
-    if claim == "ready_for_human_merge" and head:
-        values["claimed_head"] = head
     verdict = (
         "NOT_VERIFIED" if sentinel == "not_verified" else ("MISMATCH" if mismatch else "CLAIMED")
     )
@@ -1452,25 +1627,14 @@ def observe_claim(ctx: Ctx, pr: FactoryPr, data: Mapping[str, Any]) -> FactoryLo
     reason = f"READY claim at {head[:7]}" + (
         f" refuted: {', '.join(refuted)}" if mismatch and refuted else ""
     )
-    row = _iterate(
+    return _count_claim(
         ctx,
         row,
+        mismatch=mismatch,
         verdict=verdict,
         reason=_clip(data.get("note")) or reason,
-        ok=not mismatch if mismatch else None,
-        spent=values,
-        state="running" if row.state == "converged" else None,
+        head=head if claim == "ready_for_human_merge" else None,
     )
-    limit = int((row.spec or {}).get("mismatches") or 0)
-    if limit and values["streak"] >= limit and row.state == "running":
-        return _transition(
-            ctx,
-            row,
-            "exhausted",
-            f"{values['streak']} READY claims in a row the server's gates or Sentinel refuted",
-            limit=limit,
-        )
-    return row
 
 
 # ── Plan (L7) and the clock rules ──────────────────────────────
@@ -1677,6 +1841,8 @@ def handle_event(ctx: Ctx, event: FactoryEvent) -> None:
                 default_class="code",
                 key=f"verify:{found.get('sha')}@{found.get('at')}",
             )
+        # A READY claim waiting on this PR lands when a gate fails or the head moves on.
+        observe_wait(ctx, pr)
     elif kind == "preview.reported" and data.get("state") == "failed":
         pr = _get_pr(ctx, data.get("pr_id"))
         if pr is not None and pr.state == "open" and pr.head_sha:
@@ -1737,7 +1903,7 @@ def handle_event(ctx: Ctx, event: FactoryEvent) -> None:
     elif kind == "pr.ready":
         pr = _pr_of_event(ctx, event, data)
         if pr is not None:
-            observe_ready(ctx, pr)
+            observe_wait(ctx, pr)
     elif kind == "env.reported" and event.project_slug:
         _note_env(ctx, event.project_slug, str(data.get("state") or ""))
     elif kind == "control.task_edit" and _budget_edited(data.get("diff")):
@@ -1901,7 +2067,7 @@ def _paused_projects(deps: FactoryDeps, factory_id: str) -> tuple[bool, set[str]
 
 
 def tick_sync(ctx: Ctx) -> None:
-    """The clock rules over one factory (synchronous): wall, no progress, $, plan."""
+    """The clock rules over one factory (synchronous): wall, no progress, $, claim waits, plan."""
     root_paused, paused = _paused_projects(ctx.deps, ctx.factory_id)
     rows = ctx.store.list_tasks(ctx.factory_id)
     projects = {p.slug: p for p in ctx.store.list_projects(ctx.factory_id)}
@@ -1913,6 +2079,14 @@ def tick_sync(ctx: Ctx) -> None:
         check_spend(ctx, task)
         current = ctx.store.get_loop(loop.id) or loop
         check_clock(ctx, current, paused=root_paused or task.project_slug in paused)
+    for loop in ctx.store.list_loops(ctx.factory_id, kinds=["claim"], states=list(_WAITING)):
+        if not _spent(loop).get("waiting"):
+            continue
+        project = projects.get(loop.project_slug or "")
+        held = root_paused or loop.project_slug in paused
+        if project is not None and project.status not in (None, "active"):
+            held = True
+        check_wait(ctx, loop, _get_pr(ctx, loop.pr_id), paused=held)
     for slug in sorted({t.project_slug for t in rows}):
         project = projects.get(slug)
         if project is not None and project.status not in (None, "active"):
@@ -2327,6 +2501,7 @@ __all__ = [
     "check_clock",
     "check_plan",
     "check_spend",
+    "check_wait",
     "claim_status",
     "classify",
     "dry",
@@ -2345,10 +2520,10 @@ __all__ = [
     "observe_claim",
     "observe_demo",
     "observe_failure",
-    "observe_ready",
     "observe_review",
     "observe_rework",
     "observe_verify",
+    "observe_wait",
     "on_event",
     "pr_subject",
     "project_subject",
