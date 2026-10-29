@@ -8,7 +8,9 @@ import {
   agentDecision,
   answeredAndDelivered,
   answeredDecision,
+  answeredNobodyToTell,
   blockedApprovalDecision,
+  doneCheckDecision,
   lateQuestion,
   relaunchFailedDecision,
 } from "./__fixtures__/decisionFixtures";
@@ -102,6 +104,26 @@ export const Conflict: Story = {
     },
   }),
   play: ({ canvasElement }) => pickFirstOption(canvasElement, "D-2"),
+};
+
+/** The answer was recorded but its PL had wrapped up: nobody is told. */
+export const NobodyToTell = card(answeredNobodyToTell());
+
+export const NobodyToTellDark = card(answeredNobodyToTell(), { theme: "dark" });
+
+/** The server refused the answer for a reason other than a lost race: it says why. */
+export const Refused: Story = {
+  ...card(doneCheckDecision(), {
+    routes: {
+      [answerPath(doneCheckDecision())]: {
+        status: 404,
+        body: {
+          error: { code: "unknown_loop", message: "D-11 names no loop of this factory" },
+        },
+      },
+    },
+  }),
+  play: ({ canvasElement }) => pickFirstOption(canvasElement, "D-11"),
 };
 
 /** The answer POST failed: the options come back with the error. */

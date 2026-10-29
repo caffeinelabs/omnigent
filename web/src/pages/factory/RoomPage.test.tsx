@@ -108,6 +108,21 @@ describe("Room page", () => {
     );
   });
 
+  it("shows a loop remedy's refusal in the server's words, not as a lost race", async () => {
+    open("/room/project%3Adb-version", {
+      overrides: {
+        "POST /v1/factory/decisions/ae1fb5c75b755a4dbc645077510d63ef/answer": () =>
+          json({ error: { code: "no_task", message: "D-31 has no task to re-dispatch" } }, 409),
+      },
+    });
+    fireEvent.click(await screen.findByTestId("loop-remedy-D-31-raise"));
+    const error = await screen.findByTestId("loop-remedy-error-D-31");
+    expect(error).toHaveTextContent("D-31 has no task to re-dispatch");
+    expect(error).not.toHaveTextContent("Already answered");
+    // Still open: the remedies stay one click away.
+    expect(screen.getByTestId("loop-remedy-D-31-raise")).toBeEnabled();
+  });
+
   it("pages back through a long thread with before_seq", async () => {
     const messages = busyThread("factory", 120);
     open("/room", {

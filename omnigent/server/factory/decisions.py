@@ -6,7 +6,9 @@ who won). Agent decisions are mailed back to the asker as a server-stamped
 current PL and then the root lead when the asker can no longer act; the mail
 id is stored so the ``message.delivered`` event fills ``delivered_at`` (the
 cockpit's "delivered ✓"). Server decisions run their option's action through
-:mod:`~omnigent.server.factory.control` instead.
+:mod:`~omnigent.server.factory.control` instead. An answer whose recipient is
+gone (the project's PL wrapped up) is still recorded and its server action
+still runs; ``delivered_at`` without a mail id marks it "nobody to tell".
 """
 
 from __future__ import annotations
@@ -38,7 +40,7 @@ from omnigent.server.factory.envelope import display_title, quote_spoofed_lines
 from omnigent.server.factory.mailer import new_mail_id
 from omnigent.server.factory.membership import is_top_level, resolve_role, root_conversation
 from omnigent.server.factory.schemas import DecisionOptionView, DecisionView
-from omnigent.stores.factory_store import DecisionNotFound, DecisionNotOpen, norm_id
+from omnigent.stores.factory_store import DecisionNotFound, DecisionNotOpen, norm_id, now_s
 
 if TYPE_CHECKING:
     from omnigent.server.factory.loop_escalation import BudgetAnswer, LoopAnswer
@@ -87,6 +89,20 @@ class AnswerResult:
     decision: FactoryDecision
     delivered_to: Conversation | None = None
     mail_id: str | None = None
+
+
+@dataclass(frozen=True)
+class NobodyToTell:
+    """
+    An option whose effect is a message to a member that is gone (e.g. the
+    project's PL wrapped up): the answer is recorded with nobody to tell.
+
+    :param action: The option's action, e.g. ``abandon_task``.
+    :param target: What the option named, e.g. ``project:docs``.
+    """
+
+    action: str
+    target: str | None = None
 
 
 @dataclass(frozen=True)
@@ -253,6 +269,7 @@ def decision_view(
         delivered_mail_id=decision.delivered_mail_id,
         delivered_at=decision.delivered_at,
         delivered_to_title=delivered_to_title,
+        nobody_to_tell=decision.nobody_to_tell,
         created_at=decision.created_at,
         updated_at=decision.updated_at,
         assignee=decision.assignee,
@@ -379,7 +396,16 @@ async def _plan_action(
     *,
     text: str | None = None,
     changes: Any = None,
-) -> ControlPlan | GrantPlan | Conversation | ProposalAnswer | LoopAnswer | BudgetAnswer | None:
+) -> (
+    ControlPlan
+    | GrantPlan
+    | Conversation
+    | NobodyToTell
+    | ProposalAnswer
+    | LoopAnswer
+    | BudgetAnswer
+    | None
+):
     """
     Validate a server decision's action before the answer is stored.
 
@@ -388,8 +414,9 @@ async def _plan_action(
     mark done) by :mod:`.loop_escalation`; they run after the compare-and-set below.
 
     :returns: A control plan, a roster grant (access requests), the PL to
-        message (abandon/rework), a proposal answer, or ``None`` for no side
-        effect (dismiss, link-only and unknown actions).
+        message (abandon/rework), :class:`NobodyToTell` when that PL is gone,
+        a proposal answer, or ``None`` for no side effect (dismiss, link-only
+        and unknown actions).
     """
     from omnigent.server.factory import proposals
 
@@ -439,9 +466,7 @@ async def _plan_action(
             slug = subject[len(control.TARGET_PROJECT_PREFIX) :].strip()
         pl = await asyncio.to_thread(control.find_project_pl, deps, decision.factory_id, slug)
         if pl is None:
-            raise CockpitError(
-                409, "no_project_lead", f"{decision.ref} has no project lead to tell"
-            )
+            return NobodyToTell(action=str(action), target=subject)
         await control.require(deps, user_id, pl.id, LEVEL_EDIT)
         return pl
     _logger.warning(
@@ -652,7 +677,14 @@ async def answer_decision(
     by = answered_by or await human_label(deps, decision.factory_id, user_id)
     label = str(option.get("label") or option_id) if option is not None else FREE_TEXT_LABEL
     planned: (
-        ControlPlan | GrantPlan | Conversation | ProposalAnswer | LoopAnswer | BudgetAnswer | None
+        ControlPlan
+        | GrantPlan
+        | Conversation
+        | NobodyToTell
+        | ProposalAnswer
+        | LoopAnswer
+        | BudgetAnswer
+        | None
     ) = None
     failure: CockpitError | None = None
     if decision.source != "agent":
@@ -675,10 +707,13 @@ async def answer_decision(
     outgoing: str | None = None
     kind = "info"
     action = option.get("action") if option is not None else None
+    # The answer is a message, but nobody who could act on it is left to receive it.
+    unrouted = isinstance(planned, NobodyToTell)
     if decision.source == "agent":
         target = await asyncio.to_thread(route_answer, deps, answered, asker)
         if target is not None:
             outgoing = answer_text(answered, by, label, text)
+        unrouted = target is None
     elif isinstance(planned, ControlPlan):
         target = planned.recipients[0] if planned.recipients else None
     elif isinstance(planned, Conversation):
@@ -686,7 +721,9 @@ async def answer_decision(
         outgoing = answer_text(answered, by, label, text, _PL_ACTION_HINTS.get(str(action)))
         kind = "request"
     elif isinstance(planned, loop_escalation.ANSWER_TYPES):
-        target, outgoing = planned.pl, planned.text(by)
+        target = planned.pl
+        outgoing = planned.text(by) if target is not None else None
+        unrouted = target is None
     # The receipt id is stored before the mail is queued, so its delivery is never missed.
     mailed = outgoing is not None or isinstance(planned, ControlPlan)
     mail_id = new_mail_id() if target is not None and mailed else None
@@ -738,6 +775,9 @@ async def answer_decision(
                 kind="info",
             )
 
+    if unrouted and failure is None:
+        answered = await asyncio.to_thread(_record_nobody_to_tell, deps, answered)
+
     to_title = display_title(target.title, target.id) if target is not None else None
     await events.emit(
         app_state,
@@ -747,7 +787,8 @@ async def answer_decision(
         project=answered.project_slug,
         to_id=target.id if target is not None else None,
         subject=f"decision:{answered.ref}",
-        summary=f'{by} answered {answered.ref} · "{display_title(label, FREE_TEXT_LABEL)}"',
+        summary=f'{by} answered {answered.ref} · "{display_title(label, FREE_TEXT_LABEL)}"'
+        + (" · nobody to tell" if answered.nobody_to_tell else ""),
         data={
             "from": by,
             "by": by,
@@ -757,12 +798,22 @@ async def answer_decision(
             "text": control.clip(text, 300) if text else None,
             "mail_id": mail_id,
             "delivered_to_title": to_title,
+            "nobody_to_tell": answered.nobody_to_tell,
             "action_failed": failure is not None,
         },
     )
     if failure is not None:
         raise failure
     return AnswerResult(decision=answered, delivered_to=target, mail_id=mail_id)
+
+
+def _record_nobody_to_tell(deps: FactoryDeps, decision: FactoryDecision) -> FactoryDecision:
+    """Close the answer's delivery with no mail: ``delivered_at`` set, no mail id."""
+    at = decision.answered_at or now_s()
+    stored = deps.factory_store.update_decision(
+        decision.id, delivered_mail_id=None, delivered_at=at
+    )
+    return stored or decision
 
 
 async def withdraw_decision(
@@ -865,6 +916,7 @@ __all__ = [
     "ANSWER_TEXT_MAX_CHARS",
     "AnswerResult",
     "GrantPlan",
+    "NobodyToTell",
     "answer_decision",
     "answer_text",
     "decision_view",

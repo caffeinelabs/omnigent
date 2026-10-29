@@ -12,10 +12,12 @@ answer's compare-and-set) updates the loop and the task and mails the PL
 exactly what to do: ``BUDGET RAISED``, ``SWITCH VENDOR`` or ``FRESH
 RESTART``; ``abandon_task`` and ``mark_done`` answer as a decision with an
 instruction line; ``pause`` and ``dismiss`` run as on any server decision.
-Operators may raise attempts by one; money is for owners. A READY claim that
-only pending gates disagree with gets ``[Factory loop · WAIT · …]`` instead
-(:func:`wait_notice`): it opens nothing and uses no claim attempt. A wait past
-the claim loop's ``wait_h`` stalls it: a ``Keep waiting`` decision.
+Operators may raise attempts by one; money is for owners. With the project's
+PL gone the answer still applies to the loop and the task, with nobody to
+tell. A READY claim that only pending gates disagree with gets
+``[Factory loop · WAIT · …]`` instead (:func:`wait_notice`): it opens nothing
+and uses no claim attempt. A wait past the claim loop's ``wait_h`` stalls it:
+a ``Keep waiting`` decision.
 """
 
 from __future__ import annotations
@@ -60,6 +62,7 @@ from omnigent.stores.factory_store import norm_id
 
 if TYPE_CHECKING:
     from omnigent.entities import Conversation
+    from omnigent.server.factory.decisions import NobodyToTell
 
 _logger = logging.getLogger(__name__)
 
@@ -667,7 +670,8 @@ async def done_checks(app_state: Any, deps: FactoryDeps, factory_id: str, now: f
             project = await asyncio.to_thread(
                 deps.factory_store.get_project, factory_id, loop.project_slug
             )
-            if project is None or project.status not in (None, "active"):
+            # Closed, or its PL already wrapped it up: nothing to ask.
+            if project is None or server_decisions.project_ended(project) is not None:
                 continue
             await asyncio.to_thread(
                 deps.factory_store.update_loop,
@@ -707,7 +711,7 @@ class LoopAnswer:
     """
     A validated answer to a loop decision, run after the compare-and-set.
 
-    :param pl: The project lead mailed the outcome.
+    :param pl: The project lead mailed the outcome (``None``: it is gone, nobody is told).
     :param raised: ``(before, after)`` of what was raised, e.g. ``("3", "4")``.
     """
 
@@ -723,7 +727,7 @@ class LoopAnswer:
 
     @property
     def pl(self) -> Conversation | None:
-        """:returns: The PL the outcome goes to."""
+        """:returns: The PL the outcome goes to, or ``None`` when it is gone."""
         return self.facts.pl
 
     def text(self, by: str) -> str:
@@ -770,13 +774,19 @@ async def plan_answer(
     decision: FactoryDecision,
     option: dict[str, Any] | None,
     user_id: str | None,
-) -> LoopAnswer | BudgetAnswer | control.ControlPlan | None:
+) -> LoopAnswer | BudgetAnswer | control.ControlPlan | NobodyToTell | None:
     """
     Validate an answer to a ``loop`` or ``done_check`` decision before it is stored.
 
+    A loop whose PL is gone (wrapped up, closed) is still answered: the loop
+    and task changes apply and nobody is mailed.
+
     :returns: The loop answer to run, a control plan (a PL's fresh restart),
-        or ``None`` when the generic decision path handles the option.
-    :raises CockpitError: 404 unknown loop, 409 no project lead, 403 money by a non-owner.
+        :class:`~omnigent.server.factory.decisions.NobodyToTell` (a fresh restart
+        with no PL to restart), or ``None`` when the generic decision path
+        handles the option.
+    :raises CockpitError: 404 unknown loop, 409 no task to re-dispatch, 403 money
+        by a non-owner.
     """
     if option is None or option.get("action") not in INTERCEPTED or option.get("href"):
         return None
@@ -790,7 +800,10 @@ async def plan_answer(
         await control.require(deps, user_id, decision.factory_id, LEVEL_MANAGE)
     if action == ACTION_FRESH_RESTART and loop.kind == "claim":
         if facts.pl is None:
-            raise CockpitError(409, "no_project_lead", f"{decision.ref} has no project lead")
+            from omnigent.server.factory.decisions import NobodyToTell
+
+            # No PL to restart: recorded; the tick still starts the claim loop over.
+            return NobodyToTell(action=action, target=loop_target(loop))
         return await control.plan_control(
             app_state,
             decision.factory_id,
@@ -802,8 +815,6 @@ async def plan_answer(
                 "READY claim"
             ),
         )
-    if facts.pl is None:
-        raise CockpitError(409, "no_project_lead", f"{decision.ref} has no project lead to tell")
     answer = LoopAnswer(
         action=action,
         target=loop_target(loop),

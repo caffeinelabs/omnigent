@@ -187,7 +187,8 @@ class FactoryDecision:
     :param answered_by: Human who answered.
     :param answered_at: Epoch seconds.
     :param delivered_mail_id: Mail id of the delivered answer.
-    :param delivered_at: When the answer reached the asker.
+    :param delivered_at: When the answer reached the asker; without a mail id,
+        when it was recorded with nobody to tell (:attr:`nobody_to_tell`).
     :param created_at: Epoch seconds.
     :param updated_at: Epoch seconds.
     :param assignee: ``owners``, ``operators`` or a user id; ``None`` means operators.
@@ -230,6 +231,15 @@ class FactoryDecision:
     def ref(self) -> str:
         """:returns: The human-facing reference, e.g. ``"D-7"``."""
         return f"D-{self.number}"
+
+    @property
+    def nobody_to_tell(self) -> bool:
+        """:returns: Whether the answer was recorded with no member left to tell it to."""
+        return (
+            self.status == "answered"
+            and self.delivered_at is not None
+            and not (self.delivered_mail_id)
+        )
 
     def to_dict(self) -> dict[str, Any]:
         """:returns: A JSON-ready copy of the row, plus ``ref``."""

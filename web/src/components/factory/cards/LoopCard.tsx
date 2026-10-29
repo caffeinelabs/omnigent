@@ -13,12 +13,17 @@ import { factoryInvalidationKeys } from "@/hooks/useFactory";
 import {
   type DecisionOptionView,
   type DecisionView,
-  FactoryApiError,
   type LoopView,
   answerDecision,
+  isDecisionConflict,
 } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
-import { answerBlockedReason, answerLabel } from "../decisions/DecisionCard";
+import {
+  answerBlockedReason,
+  answerLabel,
+  isAnswerRefused,
+  nobodyToTellText,
+} from "../decisions/DecisionCard";
 import { TONE_CHIP, type FactoryTone, formatUsd } from "../factoryFormat";
 import { ReasonGated, useViewer, useViewerCan } from "../shell/viewerCan";
 
@@ -56,6 +61,11 @@ function Remedies({ factoryId, decision }: { factoryId: string; decision: Decisi
   const [done, setDone] = useState<DecisionView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const answered = done ?? (decision.status === "answered" ? decision : null);
+  const invalidate = () => {
+    for (const key of factoryInvalidationKeys(factoryId)) {
+      void queryClient.invalidateQueries({ queryKey: key });
+    }
+  };
   const pick = async (option: DecisionOptionView) => {
     if (busy || blocked) return;
     setBusy(option.id);
@@ -63,16 +73,17 @@ function Remedies({ factoryId, decision }: { factoryId: string; decision: Decisi
     try {
       const res = await answerDecision(decision.id, { option_id: option.id });
       setDone(res.decision);
-      for (const key of factoryInvalidationKeys(factoryId)) {
-        void queryClient.invalidateQueries({ queryKey: key });
-      }
+      invalidate();
     } catch (err) {
-      if (err instanceof FactoryApiError && err.status === 409) {
+      if (isDecisionConflict(err)) {
         const by = (err.body as { answered_by?: string } | null)?.answered_by;
         setError(`Already answered${by ? ` by ${by}` : ""}`);
       } else {
+        // Any other refusal says why (e.g. "D-31 has no task to re-dispatch").
         setError(err instanceof Error ? err.message : String(err));
       }
+      // The server said no: the loop or its decision moved on; show it now.
+      if (isAnswerRefused(err)) invalidate();
     } finally {
       setBusy(null);
     }
@@ -82,6 +93,7 @@ function Remedies({ factoryId, decision }: { factoryId: string; decision: Decisi
       <p data-testid={`loop-remedy-done-${decision.ref}`} className="text-muted-foreground">
         {answerLabel(answered)}
         {answered.answered_by ? ` · ${answered.answered_by.split("@")[0]}` : ""}
+        {answered.nobody_to_tell ? ` · ${nobodyToTellText(answered)}` : ""}
         <span className="ml-1 font-mono text-xs">{decision.ref}</span>
       </p>
     );
@@ -111,7 +123,11 @@ function Remedies({ factoryId, decision }: { factoryId: string; decision: Decisi
         ))}
         <span className="ml-auto font-mono text-xs text-muted-foreground">{decision.ref}</span>
       </div>
-      {error && <p className="text-destructive">{error}</p>}
+      {error && (
+        <p data-testid={`loop-remedy-error-${decision.ref}`} className="text-destructive">
+          {error}
+        </p>
+      )}
     </div>
   );
 }

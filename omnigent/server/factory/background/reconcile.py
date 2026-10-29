@@ -10,7 +10,10 @@ For each factory root this:
    PL title, repo from the PL's managed workspace, else the root's) and links
    a missing or departed PL;
 4. persists each project's derived stage, logging ``stage.changed``;
-5. repairs roster grants that drifted from the factory's people (a member
+5. expires the open supervisor decisions of projects that closed, and the
+   "Mark it done?" of one its PL wrapped up (D-11 waited there forever with
+   nobody left to tell), logging ``decision.expired``;
+6. repairs roster grants that drifted from the factory's people (a member
    that missed the copy, a manual edit), logging ``people.drift_repaired``.
 
 A folder that fails skips only step 2 for that factory; a factory that fails is
@@ -40,7 +43,7 @@ from omnigent.factory import (
     ROLE_PROJECT_LEAD,
     STAGE_READY,
 )
-from omnigent.server.factory import events, people
+from omnigent.server.factory import events, people, server_decisions
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.membership import factory_members
 from omnigent.server.factory.snapshot import (
@@ -57,6 +60,7 @@ from omnigent.util.session_lifecycle import is_session_closed
 
 if TYPE_CHECKING:
     from omnigent.entities import Conversation
+    from omnigent.entities.factory import FactoryDecision
 
 CREATED_BY_RECONCILE: Final = "reconcile"
 """``created_by`` of a project row backfilled from a PL's labels (its repo came from a spawn)."""
@@ -80,6 +84,8 @@ class ReconcileReport:
     projects_created: list[str] = field(default_factory=list)
     pls_linked: list[str] = field(default_factory=list)
     stages_changed: list[tuple[str, str, str]] = field(default_factory=list)
+    # ``(decision ref, why)`` of each decision expired because its project ended.
+    decisions_expired: list[tuple[str, str]] = field(default_factory=list)
     grants_repaired: list[tuple[str, int]] = field(default_factory=list)
     # ``(factory id, step)`` for each step that failed this pass, logged or not.
     failed: list[tuple[str, str]] = field(default_factory=list)
@@ -191,14 +197,22 @@ def _owner(deps: FactoryDeps, session_id: str) -> str | None:
     return get_session_owner_id(session_id, deps.permission_store)
 
 
+@dataclass
+class _Synced:
+    """What :func:`_sync_factory` leaves for the async part of the pass."""
+
+    owner: str | None
+    sidebar_changed: bool
+    # ``(project, old stage, new stage, overlay)``.
+    stages: list[tuple[Any, str, str, str | None]]
+    # ``(decision, why)`` to expire (step 5).
+    stale: list[tuple[FactoryDecision, str]]
+
+
 def _sync_factory(
     deps: FactoryDeps, root: Conversation, claimed: set[str], report: ReconcileReport
-) -> tuple[str | None, bool, list[tuple[Any, str, str, str | None]]]:
-    """
-    Steps 1-4 for one factory (synchronous store work).
-
-    :returns: ``(owner, sidebar changed, [(project, old stage, new stage, overlay)])``.
-    """
+) -> _Synced:
+    """Steps 1-4 for one factory, and what step 5 expires (synchronous store work)."""
     store = deps.conversation_store
     fstore = deps.factory_store
     factory_id = root.id
@@ -265,16 +279,20 @@ def _sync_factory(
     )
     pending = pending_brief_targets(mail)
     changes: list[tuple[Any, str, str, str | None]] = []
+    current: list[Any] = []  # each project as it stands after this pass
     for row in rows.values():
         pl = pick_pl(row, row.slug, members)
         result = project_stage(row, prs, pl, open_decisions, pending)
         if result.stage == row.stage:
+            current.append(row)
             continue
         updated = fstore.update_project(row.id, stage=result.stage)
+        current.append(updated or row)
         if updated is not None:
             changes.append((updated, row.stage, result.stage, result.overlay))
             report.stages_changed.append((row.slug, row.stage, result.stage))
-    return owner, changed_sidebar, changes
+    stale = server_decisions.ended_project_decisions(current, open_decisions)
+    return _Synced(owner, changed_sidebar, changes, stale)
 
 
 async def reconcile_factory(
@@ -287,10 +305,10 @@ async def reconcile_factory(
     """Reconcile one factory and announce what changed."""
     from omnigent.server.routes._sessions.helpers import announce_projects_changed
 
-    owner, sidebar, changes = await asyncio.to_thread(_sync_factory, deps, root, claimed, report)
-    if sidebar:
-        announce_projects_changed(owner)
-    for project, old, new, overlay in changes:
+    synced = await asyncio.to_thread(_sync_factory, deps, root, claimed, report)
+    if synced.sidebar_changed:
+        announce_projects_changed(synced.owner)
+    for project, old, new, overlay in synced.stages:
         await events.emit(
             app_state,
             root.id,
@@ -302,6 +320,9 @@ async def reconcile_factory(
             summary=f"{project.title}: {old} → {new}",
             data={"from": old, "to": new, "overlay": overlay},
         )
+    for decision, why in synced.stale:
+        if await server_decisions.expire_decision(app_state, decision.id, why=why) is not None:
+            report.decisions_expired.append((decision.ref, why))
     try:
         repaired = await people.repair_drift(app_state, root)
     except Exception as exc:  # noqa: BLE001 - the next pass retries

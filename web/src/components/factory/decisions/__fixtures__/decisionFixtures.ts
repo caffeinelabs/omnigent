@@ -1,7 +1,8 @@
 // Decision fixtures from the live run: D-2 (an agent's blocking question),
 // D-3 (the supervisor's relaunch-failed decision with actions), a
-// blocked-approval decision with a link option, and the answered and
-// delivered forms of D-2. Every export is a fresh copy.
+// blocked-approval decision with a link option, the answered and delivered
+// forms of D-2, and D-11 (a done check whose PL is gone). Every export is a
+// fresh copy.
 
 import type { DecisionView, OpenDecisionItem } from "@/lib/factoryApi";
 import { LIVE_RUN_NOW_S, liveRunSnapshot } from "../../__fixtures__/liveRun";
@@ -82,6 +83,62 @@ export function blockedApprovalDecision(): DecisionView {
     ],
     created_at: LIVE_RUN_NOW_S - 12 * 60,
     updated_at: LIVE_RUN_NOW_S - 12 * 60,
+  };
+}
+
+/** D-11: the supervisor's "Mark it done?" of a project whose PL already wrapped up. */
+export function doneCheckDecision(): DecisionView {
+  return {
+    ...relaunchFailedDecision(),
+    id: "7d4e1f2a3b4c5d6e7f8091a2b3c4d5e6",
+    ref: "D-11",
+    number: 11,
+    project_slug: "docs-factory-demo-guide",
+    asked_by_session_id: null,
+    asked_by_title: null,
+    asked_by_role: null,
+    source: "done_check",
+    blocking: false,
+    question: "Every task of docs-factory-demo-guide is closed. Mark it done?",
+    context: null,
+    options: [
+      {
+        id: "done",
+        label: "Mark done",
+        description: null,
+        recommended: true,
+        action: "mark_done",
+        href: null,
+        target: "loop:4f5e6d7c8b9a0f1e2d3c4b5a69788796",
+      },
+      {
+        id: "not_yet",
+        label: "Not yet",
+        description: null,
+        recommended: false,
+        action: "dismiss",
+        href: null,
+        target: "loop:4f5e6d7c8b9a0f1e2d3c4b5a69788796",
+      },
+    ],
+    created_at: LIVE_RUN_NOW_S - 25 * 60,
+    updated_at: LIVE_RUN_NOW_S - 25 * 60,
+  };
+}
+
+/** D-11 answered with its PL gone: recorded, nobody to tell. */
+export function answeredNobodyToTell(): DecisionView {
+  return {
+    ...doneCheckDecision(),
+    status: "answered",
+    answer_option_id: "done",
+    answered_by: "Luka",
+    answered_at: LIVE_RUN_NOW_S,
+    delivered_mail_id: null,
+    delivered_at: LIVE_RUN_NOW_S,
+    delivered_to_title: null,
+    nobody_to_tell: true,
+    updated_at: LIVE_RUN_NOW_S,
   };
 }
 

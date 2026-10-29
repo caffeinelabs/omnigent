@@ -798,8 +798,11 @@ export interface DecisionView {
   answered_by: string | null;
   answered_at: number | null;
   delivered_mail_id: string | null;
+  /** When the answer reached the asker; with `nobody_to_tell`, when it was recorded. */
   delivered_at: number | null;
   delivered_to_title: string | null;
+  /** Answered, but the asker and its project's PL were gone: recorded, not mailed. */
+  nobody_to_tell?: boolean;
   created_at: number;
   updated_at: number;
   /** `owners`, `operators` or a user id; absent or null means operators. */
@@ -1386,7 +1389,10 @@ export interface PrFeedbackResponse {
   mail_id: string | null;
 }
 
-/** `POST /v1/factory/decisions/{id}/answer` refused with 409: someone answered first. */
+/**
+ * `POST /v1/factory/decisions/{id}/answer` refused with 409 `decision_not_open`:
+ * someone answered first, or it was withdrawn or expired meanwhile.
+ */
 export interface DecisionConflictBody {
   status?: DecisionStatus;
   answered_by?: string | null;
@@ -1416,6 +1422,16 @@ export class FactoryApiError extends ApiError {
     this.field = field;
     this.body = body;
   }
+}
+
+/**
+ * Whether an answer was refused because the decision is no longer open (a
+ * lost race, a withdrawal or an expiry), not for another reason.
+ */
+export function isDecisionConflict(error: unknown): error is FactoryApiError {
+  return (
+    error instanceof FactoryApiError && error.status === 409 && error.code === "decision_not_open"
+  );
 }
 
 function pick(source: unknown, key: string): unknown {
@@ -1727,8 +1743,9 @@ export async function sendFactoryControl(
 }
 
 /**
- * Answer a decision. A lost race rejects with a 409 {@link FactoryApiError}
- * whose `body` carries `{answered_by, answered_at}`.
+ * Answer a decision. A lost race rejects with a 409 `decision_not_open`
+ * {@link FactoryApiError} whose `body` carries `{answered_by, answered_at}`;
+ * other refusals carry the server's reason as the error message.
  */
 export async function answerDecision(
   decisionId: string,

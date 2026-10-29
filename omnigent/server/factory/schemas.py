@@ -896,6 +896,8 @@ class DecisionView(_View):
     delivered_mail_id: str | None = None
     delivered_at: int | None = None
     delivered_to_title: str | None = None
+    nobody_to_tell: bool = False
+    """Answered, but the asker and its project's PL were gone: recorded, not mailed."""
     created_at: int
     updated_at: int
     assignee: str | None = None

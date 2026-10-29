@@ -9,12 +9,19 @@ to the agents unchanged) and is deduplicated per episode through its
 - blocked on an approval (S5): a session parked on a human prompt; expired
   when the episode clears.
 - message storm: a sender that hit its post rate limit.
+
+Once their project closed (cancelled, merged or done) these and the loop
+decisions have nothing left to act on: the reconcile pass expires them
+(:func:`ended_project_decisions`). A project whose PL only wrapped up (its
+stage is done; a Stop does that too, and Resume brings the PL back) loses
+just its "Mark it done?": its loop decisions stay answerable.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+from collections.abc import Iterable
 from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.factory import (
@@ -23,6 +30,7 @@ from omnigent.factory import (
     ACTION_RELAUNCH,
     ACTION_RESTART,
     LABEL_PROJECT,
+    STAGE_DONE,
 )
 from omnigent.server.factory import decision_routing, events
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
@@ -31,7 +39,7 @@ from omnigent.stores.factory_store import DecisionNotFound, DecisionNotOpen
 
 if TYPE_CHECKING:
     from omnigent.entities import Conversation
-    from omnigent.entities.factory import FactoryDecision
+    from omnigent.entities.factory import FactoryDecision, FactoryProject
     from omnigent.server.factory.membership import Membership
 
 _logger = logging.getLogger(__name__)
@@ -39,6 +47,14 @@ _logger = logging.getLogger(__name__)
 SOURCE_RELAUNCH_FAILED: Final = "relaunch_failed"
 SOURCE_BLOCKED: Final = "blocked_approval"
 SOURCE_STORM: Final = "storm"
+PROJECT_RUN_SOURCES: Final = frozenset(
+    {SOURCE_RELAUNCH_FAILED, SOURCE_BLOCKED, SOURCE_STORM, "loop", "done_check"}
+)
+"""Supervisor decisions about a project's running work (``loop`` and ``done_check``
+are :mod:`.loop_escalation`'s), expired once it closed; a PR closure's feedback
+and proposals outlive it."""
+WRAPPED_UP_SOURCES: Final = frozenset({"done_check"})
+"""Expired already when the project's stage is done: "Mark it done?" was answered by its PL."""
 _QUESTION_MAX: Final = 1000
 _CONTEXT_MAX: Final = 4000
 
@@ -176,10 +192,13 @@ def _default_assignee(
     )
 
 
-async def expire_decision(app_state: Any, decision_id: str) -> FactoryDecision | None:
+async def expire_decision(
+    app_state: Any, decision_id: str, *, why: str = "the situation cleared"
+) -> FactoryDecision | None:
     """
     Expire an open server decision whose episode ended. Never raises.
 
+    :param why: The end of the event's summary, e.g. ``"docs is done"``.
     :returns: The expired decision, or ``None`` when it was no longer open.
     """
     store = _store(app_state)
@@ -199,7 +218,7 @@ async def expire_decision(app_state: Any, decision_id: str) -> FactoryDecision |
         project=row.project_slug,
         from_id=row.asked_by_session_id,
         subject=f"decision:{row.ref}",
-        summary=f"{row.ref} expired: the situation cleared",
+        summary=f"{row.ref} expired: {why}",
         data={"decision_id": row.id, "source": row.source},
     )
     return row
@@ -220,6 +239,46 @@ async def expire_by_key(app_state: Any, factory_id: str, dedupe_key: str) -> Non
     for row in rows:
         if row.dedupe_key == dedupe_key:
             await expire_decision(app_state, row.id)
+
+
+def project_ended(project: FactoryProject | None) -> str | None:
+    """:returns: How *project* ended (``"done"``, ``"cancelled"``, ``"merged"``), or ``None``."""
+    if project is None:
+        return None
+    if project.status not in (None, "active"):
+        return str(project.status)
+    return STAGE_DONE if project.stage == STAGE_DONE else None
+
+
+def ended_project_decisions(
+    projects: Iterable[FactoryProject], decisions: Iterable[FactoryDecision]
+) -> list[tuple[FactoryDecision, str]]:
+    """
+    The open supervisor decisions of *projects* that have nothing left to act on.
+
+    A closed project (cancelled, merged or done) takes all of
+    :data:`PROJECT_RUN_SOURCES` with it. A project whose PL wrapped it up
+    (stage done, still active) takes only :data:`WRAPPED_UP_SOURCES`: a Stop
+    sets that stage too and Resume brings the PL back, so a stopped loop's
+    decision (Raise budget, Switch vendor, Abandon) must stay open for it.
+
+    :param projects: The factory's projects.
+    :param decisions: Its open decisions (others are skipped).
+    :returns: ``(decision, why)`` pairs, e.g. ``(D-11, "docs is done")``.
+    """
+    by_slug = {p.slug: p for p in projects}
+    out: list[tuple[FactoryDecision, str]] = []
+    for row in decisions:
+        if row.status != "open" or row.source not in PROJECT_RUN_SOURCES:
+            continue
+        project = by_slug.get(row.project_slug or "")
+        if project is None:
+            continue
+        if project.status not in (None, "active"):
+            out.append((row, f"{project.slug} is {project.status}"))
+        elif project.stage == STAGE_DONE and row.source in WRAPPED_UP_SOURCES:
+            out.append((row, f"{project.slug} is {STAGE_DONE}"))
+    return out
 
 
 def _member_target(conv: Conversation) -> str:
@@ -323,16 +382,20 @@ async def open_storm_decision(
 
 
 __all__ = [
+    "PROJECT_RUN_SOURCES",
     "SOURCE_BLOCKED",
     "SOURCE_RELAUNCH_FAILED",
     "SOURCE_STORM",
+    "WRAPPED_UP_SOURCES",
     "blocked_key",
+    "ended_project_decisions",
     "expire_by_key",
     "expire_decision",
     "open_blocked_decision",
     "open_decision",
     "open_relaunch_failed_decision",
     "open_storm_decision",
+    "project_ended",
     "relaunch_failed_key",
     "storm_key",
 ]
