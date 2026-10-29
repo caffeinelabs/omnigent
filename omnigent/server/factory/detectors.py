@@ -38,6 +38,7 @@ from omnigent.factory import (
     LABEL_PROJECT,
     LABEL_STATE,
     STATE_ACTIVE,
+    clamp_label_value,
 )
 from omnigent.server.factory import events, issues
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
@@ -235,10 +236,6 @@ def _member(sid: str) -> str:
 
 def _title(conv: Conversation) -> str:
     return display_title(conv.title, conv.id)
-
-
-def _clip(text: str, limit: int) -> str:
-    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 # ── Activity poller hooks ──────────────────────────────────────
@@ -732,7 +729,9 @@ async def _dead_members(
             reason = conv.labels.get(LABEL_DEAD_REASON)
             summary = f"{_title(conv)} dead · relaunch failed"
             hits[target] = (
-                _clip(f"{summary}: {reason}" if reason else summary, issues.SUMMARY_MAX),
+                clamp_label_value(
+                    f"{summary}: {reason}" if reason else summary, issues.SUMMARY_MAX
+                ),
                 project,
                 {"health": "dead", **({"reason": reason} if reason else {})},
             )

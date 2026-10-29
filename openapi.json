@@ -1802,6 +1802,19 @@
             "title": "Code",
             "type": "string"
           },
+          "detail": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "description": "Optional underlying error the runner hit, one line with secrets redacted, e.g. `\"RuntimeError: tmux launch failed (rc=1): command too long\"`. Set when `message` only points at the runner log.",
+            "title": "Detail"
+          },
           "message": {
             "description": "Human-readable error description. Always populated; older clients render this verbatim.",
             "title": "Message",

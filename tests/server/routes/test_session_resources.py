@@ -929,6 +929,54 @@ async def test_native_subagent_terminal_boot_failure_wakes_parent(
 
 
 @pytest.mark.asyncio
+async def test_native_subagent_terminal_boot_failure_tells_the_parent_the_runner_error(
+    client: httpx.AsyncClient,
+) -> None:
+    """The parent's result names the runner's underlying error, not just its log."""
+    sid = "01d6217454439d2ce8fdace0d4e089b2"
+    log_message = (
+        "Native Claude terminal failed to start; see the runner log for details: "
+        "~/.omnigent/logs/runner.log Error ID: err_1."
+    )
+    fake_runner = _FakeRunnerClient(
+        responses={
+            f"/v1/sessions/{sid}/resources/terminals": (
+                500,
+                {
+                    "error": {
+                        "code": "native_terminal_start_failed",
+                        "message": log_message,
+                        "detail": "RuntimeError: tmux launch failed (rc=1): command too long",
+                    }
+                },
+            ),
+        }
+    )
+    set_runner_router(_FakeRunnerRouter(fake_runner))  # type: ignore[arg-type]
+    set_runner_client(fake_runner)  # type: ignore[arg-type]
+
+    resp = await client.post(
+        f"/v1/sessions/{sid}/events",
+        json={
+            "type": "message",
+            "data": {"role": "user", "content": [{"type": "input_text", "text": "review"}]},
+        },
+    )
+
+    assert resp.status_code == 202, resp.text
+    forward_url, forward_body = fake_runner.post_json_calls[-1]
+    assert forward_url == f"/v1/sessions/{sid}/events"
+    assert forward_body == {
+        "type": "external_session_status",
+        "data": {
+            "status": "failed",
+            "output": f"{log_message} Cause: RuntimeError: tmux launch failed (rc=1): "
+            "command too long",
+        },
+    }
+
+
+@pytest.mark.asyncio
 async def test_native_subagent_terminal_boot_failure_surfaces_unreachable_runner(
     client: httpx.AsyncClient,
 ) -> None:

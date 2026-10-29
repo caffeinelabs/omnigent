@@ -58,10 +58,10 @@ from omnigent.factory import (
     LABEL_PROJECT,
     LABEL_STATE,
     LABEL_SUPERVISOR,
-    LABEL_VALUE_MAX_LEN,
     MAX_HEARTBEAT_S,
     MIN_HEARTBEAT_S,
     STATE_ACTIVE,
+    clamp_label_value,
 )
 from omnigent.server.factory import (
     binder,
@@ -259,10 +259,6 @@ def _heartbeat_interval(conv: Conversation) -> int | None:
 
 def _is_running(conv: Conversation) -> bool:
     return _session_status_from_cache(conv.id, conv.live_status) == "running"
-
-
-def _clip(text: str, limit: int) -> str:
-    return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
 def _int_label(conv: Conversation, key: str) -> int:
@@ -714,7 +710,7 @@ class FactorySupervisor:
         if len(window) < DEAD_AFTER_FAILURES:
             return
         store = self._store()
-        dead_reason = _clip(cause, LABEL_VALUE_MAX_LEN)
+        dead_reason = clamp_label_value(cause)
         alerted = _int_label(conv, LABEL_DEAD_ALERTED_AT)
         if alerted and now - alerted < DEAD_ALERT_INTERVAL_S:
             # Already alerted: keep the recorded cause current for the incident.

@@ -76,6 +76,7 @@ from omnigent.policies.types import (
     EvaluationContext,
     PolicyResult,
 )
+from omnigent.runner.launch_failure import failure_detail
 from omnigent.runner.mcp_execution_registry import (
     MCP_OPERATION_ID_PARAM,
     RUNNER_MCP_EXECUTION_DETACHED_CODE,
@@ -4576,6 +4577,7 @@ async def _persist_native_terminal_failure(
         conv,
         error,
         runner_router,
+        detail=status_error.detail,
     )
     return consumed.id
 
@@ -4672,6 +4674,8 @@ async def _forward_native_subagent_terminal_failure(
     conv: Conversation,
     error: ErrorData,
     runner_router: RunnerRouter | None,
+    *,
+    detail: str | None = None,
 ) -> None:
     """
     Wake the parent runner when a native sub-agent fails to boot its terminal.
@@ -4695,6 +4699,10 @@ async def _forward_native_subagent_terminal_failure(
     :param error: Boot error to relay to the parent as the turn result.
     :param runner_router: Router used to resolve the sub-agent's runner,
         or ``None`` (then the global client is used).
+    :param detail: The runner's underlying error line when *error* only
+        points at its log, e.g.
+        ``"RuntimeError: tmux launch failed (rc=1): command too long"``;
+        appended to the parent's result text.
     :returns: None.
     :raises OmnigentError: If the parent's runner could not be reached
         or rejected the forwarded failure status — dropping it would
@@ -4706,7 +4714,10 @@ async def _forward_native_subagent_terminal_failure(
         "type": _EXTERNAL_SESSION_STATUS_TYPE,
         # ``output`` is the parent-inbox result text on a failed edge
         # (runner: ``output or "...turn failed"``); pass the real error.
-        "data": {"status": "failed", "output": error.message},
+        "data": {
+            "status": "failed",
+            "output": f"{error.message} Cause: {detail}" if detail else error.message,
+        },
     }
     runner_result = await _forward_session_change_to_runner(
         session_id,
@@ -6802,6 +6813,10 @@ async def _relay_runner_stream_once(
                                 if isinstance(raw_err, dict)
                                 else None
                             )
+                            if status_error is not None and status_error.detail is not None:
+                                # The runner is remote: clean its error line once,
+                                # before the event, labels and factory see it.
+                                status_error.detail = failure_detail(status_error.detail)
                             if status == "failed" and status_error is not None:
                                 await _persist_session_status_error_labels(
                                     session_id,
@@ -6844,6 +6859,7 @@ async def _relay_runner_stream_once(
                                 status,
                                 raw_blocked_on,
                                 status_error.message if status_error is not None else None,
+                                status_error.detail if status_error is not None else None,
                             )
                         if status == "running":
                             text_acc.clear()

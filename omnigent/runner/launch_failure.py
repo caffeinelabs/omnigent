@@ -33,8 +33,9 @@ __all__ = [
     "failure_detail",
 ]
 
-#: Longest underlying-error line a failure payload carries to clients.
-FAILURE_DETAIL_MAX_CHARS: Final = 300
+#: Longest underlying-error line a failure payload carries to clients; fits
+#: a 256-char label even behind a reason such as ``"terminal_failed_to_start: "``.
+FAILURE_DETAIL_MAX_CHARS: Final = 200
 
 
 def failure_detail(text: str | None) -> str | None:
