@@ -8,7 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 // resolveServerInfo is imported dynamically inside each probe (below) so every
 // test starts from a fresh module cache; only the pure helpers are static.
 import { sandboxOptionLabel, sandboxProviderOptions } from "./capabilities";
-import type { ServerInfo } from "./capabilities";
+import type { ServerInfo, ServerInfoProbeState } from "./capabilities";
 
 /** A ServerInfo with only the sandbox fields a test cares about set. */
 function info(overrides: Partial<ServerInfo>): ServerInfo {
@@ -48,6 +48,16 @@ function mockJsonResponse(body: unknown, init?: { ok?: boolean }): Response {
   } as unknown as Response;
 }
 
+/** A non-2xx answer with no usable body. */
+function statusResponse(status: number): Response {
+  return {
+    ok: false,
+    status,
+    statusText: "",
+    json: async () => ({}),
+  } as unknown as Response;
+}
+
 const fetchMock = vi.fn();
 
 beforeEach(() => {
@@ -59,6 +69,7 @@ beforeEach(() => {
 afterEach(() => {
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 /** Probe once against *body* and hand back the parsed `ServerInfo`. */
@@ -147,8 +158,8 @@ describe("resolveServerInfo release features", () => {
     expect(isFeatureEnabled(parsed, "harness_install")).toBe(true);
   });
 
-  it("fails all release features closed when the probe fails", async () => {
-    fetchMock.mockRejectedValueOnce(new Error("offline"));
+  it("fails all release features closed when the server answers the probe with an error", async () => {
+    fetchMock.mockResolvedValueOnce(statusResponse(404));
     const { isFeatureEnabled, resolveServerInfo } = await import("./capabilities");
     const parsed = await resolveServerInfo();
     expect(isFeatureEnabled(parsed, "usage_page")).toBe(false);
@@ -191,7 +202,7 @@ describe("resolveServerInfo smart_routing_sources", () => {
 
   // The failed-probe sentinel fails closed, matching `smart_routing_enabled`.
   it("reports neither source on a failed probe", async () => {
-    fetchMock.mockRejectedValueOnce(new Error("offline"));
+    fetchMock.mockResolvedValueOnce(statusResponse(404));
     const { resolveServerInfo } = await import("./capabilities");
     const parsed = await resolveServerInfo();
     expect(parsed.smart_routing_enabled).toBe(false);
@@ -225,5 +236,173 @@ describe("resolveServerInfo branding", () => {
     vi.resetModules();
     const malformed = await probe({ branding: "Acme" });
     expect(malformed.branding).toBeNull();
+  });
+});
+
+// A dropped boot probe used to read as "every feature is off" for the page's
+// lifetime, so a release-feature route rendered "Page not found" until reload.
+describe("resolveServerInfo retries an unreachable server", () => {
+  async function load() {
+    vi.useFakeTimers();
+    // No jitter: each wait is exactly the base step.
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    const capabilities = await import("./capabilities");
+    const states: ServerInfoProbeState[] = [];
+    capabilities.subscribeServerInfoProbe(() =>
+      states.push(capabilities.getServerInfoProbeState()),
+    );
+    return { ...capabilities, states };
+  }
+
+  it("backs off until the server answers, reporting each wait", async () => {
+    fetchMock
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(statusResponse(503))
+      .mockResolvedValueOnce(mockJsonResponse({ features: { factory: true } }));
+    const { resolveServerInfo, getServerInfoProbeState, getCachedServerInfo, states } =
+      await load();
+    const settled = vi.fn();
+    void resolveServerInfo().then(settled);
+
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getServerInfoProbeState()).toEqual({
+      kind: "retrying",
+      failures: 1,
+      retryAt: Date.now() + 1_000,
+    });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(getServerInfoProbeState()).toEqual({
+      kind: "retrying",
+      failures: 2,
+      retryAt: Date.now() + 2_000,
+    });
+    expect(settled).not.toHaveBeenCalled();
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(settled).toHaveBeenCalledOnce();
+    expect(settled.mock.calls[0][0].features).toEqual({ factory: true, harness_install: false });
+    expect(getCachedServerInfo()?.features.factory).toBe(true);
+    expect(states.map((state) => state.kind)).toEqual([
+      "retrying",
+      "retrying",
+      "retrying",
+      "retrying",
+      "settled",
+    ]);
+    // The wait in flight reports no countdown.
+    expect(states[1]).toEqual({ kind: "retrying", failures: 1, retryAt: null });
+  });
+
+  it.each([500, 502, 503, 504, 408, 429])("retries a %i", async (status) => {
+    fetchMock
+      .mockResolvedValueOnce(statusResponse(status))
+      .mockResolvedValueOnce(mockJsonResponse({ accounts_enabled: true }));
+    const { resolveServerInfo } = await load();
+    const result = resolveServerInfo();
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(result).resolves.toMatchObject({ accounts_enabled: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it.each([400, 401, 403, 404])("takes a %i as the final answer: features off", async (status) => {
+    fetchMock.mockResolvedValueOnce(statusResponse(status));
+    const { resolveServerInfo, getServerInfoProbeState, FALLBACK_SERVER_INFO } = await load();
+    await expect(resolveServerInfo()).resolves.toBe(FALLBACK_SERVER_INFO);
+    expect(getServerInfoProbeState()).toEqual({ kind: "settled" });
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+
+  it("retries a 2xx whose body can't be read", async () => {
+    fetchMock
+      .mockResolvedValueOnce({
+        ok: true,
+        status: 200,
+        json: async () => {
+          throw new SyntaxError("Unexpected end of JSON input");
+        },
+      } as unknown as Response)
+      .mockResolvedValueOnce(mockJsonResponse({ features: { factory: true } }));
+    const { resolveServerInfo, getServerInfoProbeState } = await load();
+    const result = resolveServerInfo();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(getServerInfoProbeState()).toMatchObject({ kind: "retrying", failures: 1 });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(result).resolves.toMatchObject({ features: { factory: true } });
+  });
+
+  it("retries at once on Retry now or when the browser comes back online", async () => {
+    fetchMock
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+      .mockResolvedValueOnce(mockJsonResponse({}));
+    const { resolveServerInfo, retryServerInfoNow } = await load();
+    const settled = vi.fn();
+    void resolveServerInfo().then(settled);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+
+    retryServerInfoNow();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    window.dispatchEvent(new Event("online"));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+    expect(settled).toHaveBeenCalledOnce();
+    // Nothing is left armed once the probe has its answer.
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("gives up on an attempt that stalls and retries it", async () => {
+    let aborted: AbortSignal | undefined;
+    fetchMock
+      .mockImplementationOnce((_path: string, init?: RequestInit) => {
+        aborted = init?.signal ?? undefined;
+        return new Promise<never>(() => {});
+      })
+      .mockResolvedValueOnce(mockJsonResponse({ features: { factory: true } }));
+    const { resolveServerInfo, getServerInfoProbeState, SERVER_INFO_ATTEMPT_TIMEOUT_MS } =
+      await load();
+    const result = resolveServerInfo();
+
+    await vi.advanceTimersByTimeAsync(SERVER_INFO_ATTEMPT_TIMEOUT_MS - 1);
+    expect(getServerInfoProbeState()).toEqual({ kind: "pending" });
+    await vi.advanceTimersByTimeAsync(1);
+    expect(aborted?.aborted).toBe(true);
+    expect(getServerInfoProbeState()).toMatchObject({ kind: "retrying", failures: 1 });
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(result).resolves.toMatchObject({ features: { factory: true } });
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("shares one probe between callers and caches the answer", async () => {
+    fetchMock.mockResolvedValueOnce(mockJsonResponse({ features: { canvas: true } }));
+    const { resolveServerInfo } = await load();
+    const [a, b] = await Promise.all([resolveServerInfo(), resolveServerInfo()]);
+    expect(a).toBe(b);
+    await expect(resolveServerInfo()).resolves.toBe(a);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+});
+
+describe("serverInfoRetryDelayMs", () => {
+  it("doubles from 1 s and caps at 15 s", async () => {
+    const { serverInfoRetryDelayMs } = await import("./capabilities");
+    const exact = () => 0.5;
+    expect([1, 2, 3, 4, 5, 6, 50].map((n) => serverInfoRetryDelayMs(n, exact))).toEqual([
+      1_000, 2_000, 4_000, 8_000, 15_000, 15_000, 15_000,
+    ]);
+  });
+
+  it("spreads each wait by ±20% so clients don't retry in lockstep", async () => {
+    const { serverInfoRetryDelayMs } = await import("./capabilities");
+    expect(serverInfoRetryDelayMs(4, () => 0)).toBe(6_400);
+    expect(serverInfoRetryDelayMs(4, () => 1)).toBe(9_600);
   });
 });

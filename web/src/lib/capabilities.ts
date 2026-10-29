@@ -1,11 +1,13 @@
 /**
  * Runtime capabilities probe.
  *
- * Hits ``GET /v1/info`` once at app boot to learn what the server
- * supports — currently just whether the accounts auth provider is
- * active. The SPA uses the result to decide whether to register
- * ``/login`` / ``/register`` / ``/members`` routes and whether to
- * render the ``AccountMenu``.
+ * Hits ``GET /v1/info`` at app boot to learn what the server
+ * supports — whether the accounts auth provider is active, the release
+ * features, and so on. The SPA uses the result to decide whether to
+ * register ``/login`` / ``/register`` / ``/members`` routes, which
+ * release-feature pages to open, and whether to render the
+ * ``AccountMenu``. A transient failure is retried with backoff (see
+ * :func:`resolveServerInfo`) rather than read as "everything is off".
  *
  * This is the single gate for accounts UI in the SPA. When the
  * internal hosted product (header / OIDC) syncs from this repo
@@ -247,7 +249,7 @@ function parseBranding(raw: unknown): Branding | null {
   return isEmpty ? null : branding;
 }
 
-/** Sentinel used when the probe fails — accounts and release features are off. */
+/** Sentinel for a final non-2xx probe answer — accounts and release features are off. */
 export const FALLBACK_SERVER_INFO: ServerInfo = {
   accounts_enabled: false,
   // Fail to multi-user: a failed probe must not hide account/sharing chrome.
@@ -312,83 +314,207 @@ export function isFeatureEnabled(info: ServerInfo | "loading", feature: FeatureK
   return info !== "loading" && info.features?.[feature] === true;
 }
 
-let cachedServerInfo: ServerInfo | null = null;
-let pendingServerInfo: Promise<ServerInfo> | null = null;
+/** Parse a ``/v1/info`` payload defensively: unknown or malformed fields read as off. */
+function parseServerInfo(data: Partial<ServerInfo>): ServerInfo {
+  const smartRoutingEnabled = data.smart_routing_enabled === true;
+  const harnessInstallEnabled = data.harness_install_enabled === true;
+  return {
+    accounts_enabled: data.accounts_enabled === true,
+    single_user: data.single_user === true,
+    login_url: typeof data.login_url === "string" ? data.login_url : null,
+    needs_setup: data.needs_setup === true,
+    databricks_features: data.databricks_features === true,
+    managed_sandboxes_enabled: data.managed_sandboxes_enabled === true,
+    sandbox_provider: typeof data.sandbox_provider === "string" ? data.sandbox_provider : null,
+    sandbox_providers: Array.isArray(data.sandbox_providers)
+      ? data.sandbox_providers.filter((p): p is string => typeof p === "string")
+      : [],
+    // Plain-object guard only; consumers read `?.[p]?.multi_repo === true`,
+    // so any stray shape reads as "unset" (off) rather than throwing.
+    sandbox_provider_capabilities:
+      data.sandbox_provider_capabilities !== null &&
+      typeof data.sandbox_provider_capabilities === "object" &&
+      !Array.isArray(data.sandbox_provider_capabilities)
+        ? (data.sandbox_provider_capabilities as Record<string, { multi_repo?: boolean }>)
+        : {},
+    enabled_connections: Array.isArray(data.enabled_connections)
+      ? data.enabled_connections.filter((p): p is string => typeof p === "string")
+      : [],
+    sharing_mode: SHARING_MODES.includes(data.sharing_mode as SharingMode)
+      ? (data.sharing_mode as SharingMode)
+      : "on",
+    // Fail open: only an explicit false disables the public toggle.
+    public_sharing_enabled: data.public_sharing_enabled !== false,
+    server_version: typeof data.server_version === "string" ? data.server_version : null,
+    smart_routing_enabled: smartRoutingEnabled,
+    smart_routing_sources: parseSmartRoutingSources(
+      data.smart_routing_sources,
+      smartRoutingEnabled,
+    ),
+    github_app_enabled: data.github_app_enabled === true,
+    sshpiper_host: typeof data.sshpiper_host === "string" ? data.sshpiper_host : null,
+    sshpiper_port: typeof data.sshpiper_port === "number" ? data.sshpiper_port : null,
+    sshpiper_user: typeof data.sshpiper_user === "string" ? data.sshpiper_user : null,
+    features: parseFeatures(data.features, harnessInstallEnabled),
+    harness_install_enabled: harnessInstallEnabled,
+    installable_harnesses: Array.isArray(data.installable_harnesses)
+      ? data.installable_harnesses.filter((h): h is string => typeof h === "string")
+      : [],
+    dictation_available: data.dictation_available === true,
+    branding: parseBranding(data.branding),
+  };
+}
 
 /**
- * Fetch ``/v1/info`` once and cache the result.
+ * Where the boot ``/v1/info`` probe stands. ``retrying`` means the server
+ * could not be reached (network error, 5xx, 408/429 or an unreadable body);
+ * ``retryAt`` is when the next attempt fires, ``null`` while one is in flight.
+ */
+export type ServerInfoProbeState =
+  | { kind: "pending" }
+  | { kind: "retrying"; failures: number; retryAt: number | null }
+  | { kind: "settled" };
+
+/** Backoff before the next attempt after `failures` consecutive transient failures. */
+export const SERVER_INFO_RETRY_DELAYS_MS = [1_000, 2_000, 4_000, 8_000, 15_000] as const;
+
+/** Delay before retry number `failures` (1-based), with ±20% jitter. */
+export function serverInfoRetryDelayMs(
+  failures: number,
+  random: () => number = Math.random,
+): number {
+  const steps = SERVER_INFO_RETRY_DELAYS_MS;
+  const base = steps[Math.min(Math.max(failures, 1), steps.length) - 1];
+  return Math.round(base * (0.8 + 0.4 * random()));
+}
+
+const TRANSIENT = Symbol("transient");
+
+/** Statuses a retry can fix; any other non-2xx is the server's final answer. */
+function isTransientStatus(status: number): boolean {
+  return status >= 500 || status === 408 || status === 429;
+}
+
+/**
+ * How long one ``/v1/info`` attempt may take before it counts as transient.
+ * A stalled connection (blackholed TCP, a proxy holding the request) would
+ * otherwise park the probe until the browser gives up, with no retry offered.
+ */
+export const SERVER_INFO_ATTEMPT_TIMEOUT_MS = 10_000;
+
+/** One ``/v1/info`` attempt: the parsed info, the off sentinel, or TRANSIENT. */
+async function fetchServerInfo(signal: AbortSignal): Promise<ServerInfo | typeof TRANSIENT> {
+  try {
+    // Route through the host transport (`hostFetch`) so the embed hits the
+    // proxied omnigent API; standalone `hostFetch` falls back to plain
+    // `fetch("/v1/info")`, preserving the original behavior.
+    const res = await hostFetch("/v1/info", { signal });
+    if (res.ok) return parseServerInfo((await res.json()) as Partial<ServerInfo>);
+    return isTransientStatus(res.status) ? TRANSIENT : FALLBACK_SERVER_INFO;
+  } catch {
+    // Network failure, a timed-out attempt, or a 2xx whose body never arrived intact.
+    return TRANSIENT;
+  }
+}
+
+/**
+ * One attempt, capped at {@link SERVER_INFO_ATTEMPT_TIMEOUT_MS}. The cap is a
+ * race as well as an abort, so a host fetcher that ignores the signal still
+ * can't hold the probe.
+ */
+async function probeServerInfoOnce(): Promise<ServerInfo | typeof TRANSIENT> {
+  const controller = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timedOut = new Promise<typeof TRANSIENT>((resolve) => {
+    timer = setTimeout(() => {
+      controller.abort();
+      resolve(TRANSIENT);
+    }, SERVER_INFO_ATTEMPT_TIMEOUT_MS);
+  });
+  try {
+    return await Promise.race([fetchServerInfo(controller.signal), timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+let cachedServerInfo: ServerInfo | null = null;
+let pendingServerInfo: Promise<ServerInfo> | null = null;
+let probeState: ServerInfoProbeState = { kind: "pending" };
+const probeListeners = new Set<() => void>();
+let wakeProbe: (() => void) | null = null;
+
+function setProbeState(next: ServerInfoProbeState): void {
+  probeState = next;
+  for (const listener of probeListeners) listener();
+}
+
+/** Current probe state; a stable object between changes (`useSyncExternalStore`-safe). */
+export function getServerInfoProbeState(): ServerInfoProbeState {
+  return probeState;
+}
+
+/** Subscribe to probe-state changes. Returns the unsubscribe. */
+export function subscribeServerInfoProbe(listener: () => void): () => void {
+  probeListeners.add(listener);
+  return () => {
+    probeListeners.delete(listener);
+  };
+}
+
+/** Skip the backoff wait and retry the probe now (no-op unless it is waiting). */
+export function retryServerInfoNow(): void {
+  wakeProbe?.();
+}
+
+/** Wait out the backoff; a manual retry or the browser coming back online cuts it short. */
+function waitForRetry(delayMs: number): Promise<void> {
+  return new Promise((resolve) => {
+    const wake = () => {
+      clearTimeout(timer);
+      if (typeof window !== "undefined") window.removeEventListener("online", wake);
+      wakeProbe = null;
+      resolve();
+    };
+    const timer = setTimeout(wake, delayMs);
+    if (typeof window !== "undefined") window.addEventListener("online", wake);
+    wakeProbe = wake;
+  });
+}
+
+/**
+ * Fetch ``/v1/info`` and cache the answer for the page's lifetime.
  *
- * Resolves to ``FALLBACK_SERVER_INFO`` on any failure (network error, non-JSON,
- * 5xx). The frontend treats "no probe result" as "accounts is
- * off" — failing closed prevents the accounts UI from rendering
- * against a server that doesn't actually support it.
+ * A transient failure (network error, 5xx, 408/429, unreadable body, or an
+ * attempt that outlasts {@link SERVER_INFO_ATTEMPT_TIMEOUT_MS}) is retried
+ * with backoff until the server answers, and the probe state reports
+ * ``retrying`` meanwhile so the UI can say so. The returned promise settles
+ * only with a real answer: a failed probe must not read as "every feature is
+ * off" (that rendered "Page not found" on a release-feature route). Any other
+ * non-2xx is final and resolves to ``FALLBACK_SERVER_INFO`` — failing closed
+ * keeps the accounts UI off a server that doesn't support it.
  */
 export async function resolveServerInfo(): Promise<ServerInfo> {
   if (cachedServerInfo !== null) return cachedServerInfo;
   if (pendingServerInfo !== null) return pendingServerInfo;
   pendingServerInfo = (async () => {
-    try {
-      // Route through the host transport (`hostFetch`) so the embed hits the
-      // proxied omnigent API; standalone `hostFetch` falls back to plain
-      // `fetch("/v1/info")`, preserving the original behavior.
-      const res = await hostFetch("/v1/info");
-      if (res.ok) {
-        const data = (await res.json()) as Partial<ServerInfo>;
-        const smartRoutingEnabled = data.smart_routing_enabled === true;
-        const harnessInstallEnabled = data.harness_install_enabled === true;
-        cachedServerInfo = {
-          accounts_enabled: data.accounts_enabled === true,
-          single_user: data.single_user === true,
-          login_url: typeof data.login_url === "string" ? data.login_url : null,
-          needs_setup: data.needs_setup === true,
-          databricks_features: data.databricks_features === true,
-          managed_sandboxes_enabled: data.managed_sandboxes_enabled === true,
-          sandbox_provider:
-            typeof data.sandbox_provider === "string" ? data.sandbox_provider : null,
-          sandbox_providers: Array.isArray(data.sandbox_providers)
-            ? data.sandbox_providers.filter((p): p is string => typeof p === "string")
-            : [],
-          // Plain-object guard only; consumers read `?.[p]?.multi_repo === true`,
-          // so any stray shape reads as "unset" (off) rather than throwing.
-          sandbox_provider_capabilities:
-            data.sandbox_provider_capabilities !== null &&
-            typeof data.sandbox_provider_capabilities === "object" &&
-            !Array.isArray(data.sandbox_provider_capabilities)
-              ? (data.sandbox_provider_capabilities as Record<string, { multi_repo?: boolean }>)
-              : {},
-          enabled_connections: Array.isArray(data.enabled_connections)
-            ? data.enabled_connections.filter((p): p is string => typeof p === "string")
-            : [],
-          sharing_mode: SHARING_MODES.includes(data.sharing_mode as SharingMode)
-            ? (data.sharing_mode as SharingMode)
-            : "on",
-          // Fail open: only an explicit false disables the public toggle.
-          public_sharing_enabled: data.public_sharing_enabled !== false,
-          server_version: typeof data.server_version === "string" ? data.server_version : null,
-          smart_routing_enabled: smartRoutingEnabled,
-          smart_routing_sources: parseSmartRoutingSources(
-            data.smart_routing_sources,
-            smartRoutingEnabled,
-          ),
-          github_app_enabled: data.github_app_enabled === true,
-          sshpiper_host: typeof data.sshpiper_host === "string" ? data.sshpiper_host : null,
-          sshpiper_port: typeof data.sshpiper_port === "number" ? data.sshpiper_port : null,
-          sshpiper_user: typeof data.sshpiper_user === "string" ? data.sshpiper_user : null,
-          features: parseFeatures(data.features, harnessInstallEnabled),
-          harness_install_enabled: harnessInstallEnabled,
-          installable_harnesses: Array.isArray(data.installable_harnesses)
-            ? data.installable_harnesses.filter((h): h is string => typeof h === "string")
-            : [],
-          dictation_available: data.dictation_available === true,
-          branding: parseBranding(data.branding),
-        };
-        return cachedServerInfo;
+    let failures = 0;
+    // Each attempt waits on the last: retries are sequential by design.
+    /* oxlint-disable no-await-in-loop */
+    for (;;) {
+      const result = await probeServerInfoOnce();
+      if (result !== TRANSIENT) {
+        cachedServerInfo = result;
+        setProbeState({ kind: "settled" });
+        return result;
       }
-    } catch {
-      // Network failure — fall through to the off sentinel.
+      failures += 1;
+      const delayMs = serverInfoRetryDelayMs(failures);
+      setProbeState({ kind: "retrying", failures, retryAt: Date.now() + delayMs });
+      await waitForRetry(delayMs);
+      setProbeState({ kind: "retrying", failures, retryAt: null });
     }
-    cachedServerInfo = FALLBACK_SERVER_INFO;
-    return cachedServerInfo;
+    /* oxlint-enable no-await-in-loop */
   })();
   return pendingServerInfo;
 }

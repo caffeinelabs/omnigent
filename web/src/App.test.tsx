@@ -1,10 +1,14 @@
 import { render, screen } from "@testing-library/react";
+import type { ReactNode } from "react";
 import { Outlet, MemoryRouter } from "react-router-dom";
 import { describe, expect, it, vi } from "vitest";
-import { FALLBACK_SERVER_INFO } from "@/lib/capabilities";
+import { FALLBACK_SERVER_INFO, type ServerInfoProbeState } from "@/lib/capabilities";
 import { CapabilitiesProvider } from "@/lib/CapabilitiesContext";
 
-vi.mock("@/lib/analytics", () => ({ useOmnigentPageView: vi.fn() }));
+vi.mock("@/lib/analytics", () => ({
+  useOmnigentPageView: vi.fn(),
+  useOmnigentAnalytics: () => ({ trackClick: vi.fn() }),
+}));
 vi.mock("@/shell/AppShell", () => ({
   AppShell: () => (
     <div>
@@ -145,6 +149,68 @@ describe("Factory routes", () => {
     renderRoute(path, { factory: true });
     expect(await screen.findByText(text)).toBeInTheDocument();
     expect(screen.getByText("app shell")).toBeInTheDocument();
+  });
+});
+
+// A dropped /v1/info probe is retried; until it answers, a deep link into a
+// release-feature route must not read as "Page not found".
+describe("While the server can't be reached", () => {
+  const RETRYING: ServerInfoProbeState = { kind: "retrying", failures: 2, retryAt: null };
+  const PROJECT = "/factory/f4f4ba9c/projects/api-status";
+
+  function frame(info: typeof FALLBACK_SERVER_INFO | "loading", path: string) {
+    return ({ children }: { children: ReactNode }) => (
+      <CapabilitiesProvider info={info} probe={info === "loading" ? RETRYING : undefined}>
+        <MemoryRouter initialEntries={[path]}>{children}</MemoryRouter>
+      </CapabilitiesProvider>
+    );
+  }
+
+  it("shows the retrying state on a cockpit deep link, then the page once the server answers", async () => {
+    const tree = (info: typeof FALLBACK_SERVER_INFO | "loading") => (
+      <CapabilitiesProvider info={info} probe={info === "loading" ? RETRYING : undefined}>
+        <MemoryRouter initialEntries={[PROJECT]}>
+          <App />
+        </MemoryRouter>
+      </CapabilitiesProvider>
+    );
+    const { rerender } = render(tree("loading"));
+    expect(screen.getByRole("heading", { name: "Can’t reach the server" })).toBeInTheDocument();
+    expect(screen.getByText("Retrying…")).toBeInTheDocument();
+    expect(screen.queryByText("not found")).toBeNull();
+    expect(screen.queryByText(/factory page/)).toBeNull();
+    // The shell stays up around it.
+    expect(screen.getByText("app shell")).toBeInTheDocument();
+
+    rerender(tree({ ...FALLBACK_SERVER_INFO, features: { factory: true } }));
+    expect(await screen.findByText("factory page f4f4ba9c")).toBeInTheDocument();
+    expect(screen.queryByTestId("server-unreachable")).toBeNull();
+  });
+
+  it.each(["/usage", "/canvas", "/factory", "/factory/new"])(
+    "never renders not found at %s",
+    (path) => {
+      render(<App />, { wrapper: frame("loading", path) });
+      expect(screen.getByTestId("server-unreachable")).toBeInTheDocument();
+      expect(screen.queryByText("not found")).toBeNull();
+    },
+  );
+
+  it("holds an unmatched path until the answer: it may be a route the answer registers", () => {
+    render(<App />, { wrapper: frame("loading", "/login") });
+    expect(screen.getByTestId("server-unreachable")).toBeInTheDocument();
+    expect(screen.queryByText("not found")).toBeNull();
+  });
+
+  it("shows a spinner, not 'not found', for an unmatched path on the first attempt", () => {
+    renderRoute("/nowhere", {}, "loading");
+    expect(screen.getByRole("status", { name: "Loading" })).toBeInTheDocument();
+    expect(screen.queryByText("not found")).toBeNull();
+  });
+
+  it("renders not found for an unmatched path once the server has answered", async () => {
+    renderRoute("/nowhere");
+    expect(await screen.findByText("not found")).toBeInTheDocument();
   });
 });
 

@@ -111,6 +111,37 @@ describe("resolveIdentity", () => {
 
     await expect(resolveIdentity()).resolves.toBeNull();
   });
+
+  // A dropped boot probe must not pin the page to "no identity" until reload.
+  it.each([
+    ["a network error", () => fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"))],
+    [
+      "a 5xx",
+      () => fetchMock.mockResolvedValueOnce(mockJsonResponse({}, { ok: false, status: 503 })),
+    ],
+  ])("probes again on the next call after %s", async (_case, fail) => {
+    fail();
+    const { resolveIdentity, getCurrentUserId, getCurrentIsAdmin } = await import("./identity");
+    await expect(resolveIdentity()).resolves.toBeNull();
+
+    fetchMock.mockResolvedValueOnce(mockJsonResponse({ user_id: "dana", is_admin: true }));
+    await expect(resolveIdentity()).resolves.toBe("dana");
+    expect(getCurrentUserId()).toBe("dana");
+    expect(getCurrentIsAdmin()).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+
+    // Cached from here on.
+    await resolveIdentity();
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("caches a 4xx answer instead of re-probing", async () => {
+    fetchMock.mockResolvedValueOnce(mockJsonResponse({}, { ok: false, status: 403 }));
+    const { resolveIdentity } = await import("./identity");
+    await expect(resolveIdentity()).resolves.toBeNull();
+    await expect(resolveIdentity()).resolves.toBeNull();
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
 });
 
 describe("getCurrentUserId", () => {

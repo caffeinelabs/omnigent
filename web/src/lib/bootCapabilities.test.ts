@@ -1,10 +1,6 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ServerInfo } from "./capabilities";
-import {
-  createBootServerInfo,
-  SERVER_INFO_OFFLINE_FALLBACK,
-  withBootTimeout,
-} from "./bootCapabilities";
+import { act, renderHook } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { withBootTimeout } from "./bootCapabilities";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -14,33 +10,43 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
+const fetchMock = vi.fn();
+
+beforeEach(() => {
+  fetchMock.mockReset();
+  vi.stubGlobal("fetch", fetchMock);
+  // capabilities.ts caches the probe at module scope.
+  vi.resetModules();
+});
+
 afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
-describe("createBootServerInfo", () => {
-  it("paints the timeout fallback then exposes the eventual real branding", async () => {
+describe("useBootServerInfo", () => {
+  it("stays loading while it retries an unreachable server, then hands over the answer", async () => {
     vi.useFakeTimers();
-    const probe = deferred<ServerInfo>();
-    const boot = createBootServerInfo(probe.promise, 1500);
-    const initialResult = vi.fn();
-    void boot.initial.then(initialResult);
+    vi.spyOn(Math, "random").mockReturnValue(0.5);
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch")).mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ features: { factory: true } }),
+    } as unknown as Response);
+    const { useBootServerInfo } = await import("./bootCapabilities");
 
-    await vi.advanceTimersByTimeAsync(1500);
-    expect(initialResult).toHaveBeenCalledWith(SERVER_INFO_OFFLINE_FALLBACK);
+    const { result } = renderHook(() => useBootServerInfo());
+    expect(result.current).toEqual({ info: "loading", probe: { kind: "pending" } });
 
-    const branded = {
-      ...SERVER_INFO_OFFLINE_FALLBACK,
-      branding: {
-        app_name: "Acme Agent",
-        heading: "Build with Acme",
-        logos: { main: "/logo", loading: null, favicon: null },
-        powered_by: true,
-      },
-    } satisfies ServerInfo;
-    probe.resolve(branded);
+    await act(() => vi.advanceTimersByTimeAsync(0));
+    expect(result.current.info).toBe("loading");
+    expect(result.current.probe).toMatchObject({ kind: "retrying", failures: 1 });
 
-    await expect(boot.settled).resolves.toEqual(branded);
+    await act(() => vi.advanceTimersByTimeAsync(1_000));
+    expect(result.current.probe).toEqual({ kind: "settled" });
+    expect(result.current.info).not.toBe("loading");
+    expect(result.current.info !== "loading" && result.current.info.features.factory).toBe(true);
   });
 });
 

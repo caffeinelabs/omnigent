@@ -14,30 +14,49 @@
  */
 
 import { createContext, type ReactNode, useContext } from "react";
-import type { ServerInfo } from "./capabilities";
+import type { ServerInfo, ServerInfoProbeState } from "./capabilities";
 
 type CapabilitiesValue = ServerInfo | "loading";
 
 export const CapabilitiesContext = createContext<CapabilitiesValue>("loading");
 
+const PENDING: ServerInfoProbeState = { kind: "pending" };
+const SETTLED: ServerInfoProbeState = { kind: "settled" };
+
+/** Why the info is still ``"loading"``: first attempt in flight, or retrying. */
+export const ServerInfoProbeContext = createContext<ServerInfoProbeState>(PENDING);
+
 export function CapabilitiesProvider({
   info,
+  probe,
   children,
 }: {
   info: ServerInfo | "loading";
+  /** Probe progress; defaults to pending while ``info`` is loading, else settled. */
+  probe?: ServerInfoProbeState;
   children: ReactNode;
 }) {
-  return <CapabilitiesContext.Provider value={info}>{children}</CapabilitiesContext.Provider>;
+  return (
+    <CapabilitiesContext.Provider value={info}>
+      <ServerInfoProbeContext.Provider value={probe ?? (info === "loading" ? PENDING : SETTLED)}>
+        {children}
+      </ServerInfoProbeContext.Provider>
+    </CapabilitiesContext.Provider>
+  );
 }
 
 /**
  * Read the current server-info value.
  *
- * Returns ``"loading"`` while the boot probe is still in flight.
- * Once resolved, returns the :class:`ServerInfo` shape — never
- * null, since the probe's failure path resolves to the OFF
- * sentinel instead of erroring out.
+ * Returns ``"loading"`` until the boot probe has a real answer — including
+ * while it retries an unreachable server (see :func:`useServerInfoProbe`).
+ * Once resolved, returns the :class:`ServerInfo` shape — never null.
  */
 export function useServerInfo(): CapabilitiesValue {
   return useContext(CapabilitiesContext);
+}
+
+/** The boot probe's progress, to tell "still loading" from "can't reach the server". */
+export function useServerInfoProbe(): ServerInfoProbeState {
+  return useContext(ServerInfoProbeContext);
 }
