@@ -303,6 +303,7 @@ SPAN_FIELDS = frozenset(
         "version_id",
         "def_version",
         "attrs",
+        "trace_key",
     }
 )
 """Fields ``insert_span`` / ``update_span`` accept besides the identity columns."""
