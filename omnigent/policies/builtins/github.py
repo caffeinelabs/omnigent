@@ -105,8 +105,16 @@ _DEFAULT_SHELL_TOOLS: frozenset[str] = SHELL_TOOLS
 # separator be parsed as the real ``github.com`` and inherit an allowed repo's
 # verdict, so a ``git push`` to ``evil-github.com/<allowed-owner>/<allowed-repo>``
 # would exfiltrate to the attacker host while the policy returned ALLOW.
+#
+# The host matches in any case and with a trailing dot (``GitHub.com``,
+# ``github.com.``), an optional ``www.`` and an optional ``:port`` before a
+# path: gh lowercases hostnames and DNS / TLS ignore case and the root dot, so
+# ``https://GITHUB.COM./o/r`` really reaches ``o/r``. Without them such a URL
+# named no repo and a write to it was never checked.
 _REPO_URL_PATTERN = re.compile(
-    r"(?<![A-Za-z0-9._-])github\.com[:/]+([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+?)(?:\.git)?(?:[/?#]|$)"
+    r"(?<![A-Za-z0-9._-])(?:www\.)?github\.com\.?(?::\d+(?=/))?[:/]+"
+    r"([A-Za-z0-9._-]+)/([A-Za-z0-9._-]+?)(?:\.git)?(?:[/?#]|$)",
+    re.IGNORECASE,
 )
 
 # Bare ``owner/repo`` with nothing else around it (no scheme, no host, no extra

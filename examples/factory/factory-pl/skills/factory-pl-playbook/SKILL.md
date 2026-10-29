@@ -75,8 +75,10 @@ Report: the RESULT block
   syncs with it and opens the PR with `--base <base>`.
 - `Preview: yes` when the change is runnable: it touches `services/**`,
   `libs/**`, `generated/**` or `content/**`, and the charter has previews on.
-  `no` for docs-only and tooling-only changes; the IC labels the PR
-  `factory:no-env` and it gets no preview and no demo.
+  `no` for docs-only and tooling-only changes, and for every change on a repo
+  other than caffeinelabs/app (the factory preview tooling exists only
+  there); the IC labels the PR `factory:no-env` and it gets no preview and no
+  demo.
 - UX changes need a demo with video and screenshots; backend changes need API
   calls in the demo. Write the demo focus so a reviewer knows what to look at.
 - Task ids are short kebab-case names, e.g. `version-route`. A re-dispatch is
@@ -147,7 +149,7 @@ Report: the RESULT block
    when the gates turn green; treat it the same way.
 6. **A new head** invalidates the review, verify and demo for the old one:
    repeat steps 2-5 for it. The preview is redeployed in place.
-7. **Handover** (always human for caffeinelabs/app):
+7. **Handover** (always to a human, on every repo):
    1. Write the review-links block into the PR body (step 8).
    2. Post ONE line to `parent` (kind=info):
       `READY FOR HUMAN MERGE <url> · head <sha7>`.

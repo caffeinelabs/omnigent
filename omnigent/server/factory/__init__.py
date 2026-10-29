@@ -114,7 +114,8 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
     ledger), the work-graph binder, the loop engine and its NEXT hints, the
     supervisor (and the status-edge notifier it reads), the "now" poller, the
     incident detectors and the auto-discovered ``background`` services only when
-    ``OMNIGENT_FACTORY_ENABLED=1``.
+    ``OMNIGENT_FACTORY_ENABLED=1``, as is the resolver of the repos each member's
+    factory guards let it write (:mod:`omnigent.server.factory.guard_repos`).
 
     :param app_state: ``app.state`` of an app passed to
         :func:`register_factory_routes`.
@@ -149,11 +150,13 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
     stop_binder: Callable[[], None] | None = None
     stop_loops: list[Callable[[], Any]] = []
     unseed_invariants = _seed_invariants()
+    uninstall_guard_repos: Callable[[], None] | None = None
     if factory_enabled():
         from omnigent.server.factory import (
             activity_now,
             binder,
             detectors,
+            guard_repos,
             loops,
             pipeline,
             telemetry,
@@ -161,6 +164,8 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
         from omnigent.server.factory.background import start_all
         from omnigent.server.factory.supervisor import start_supervision
 
+        # Members write the repos of their factory projects, as the server reads them.
+        uninstall_guard_repos = guard_repos.install(app_state)
         stop_telemetry = telemetry.start(app_state)
         stop_binder = binder.install()
         # After the binder, so a task's cost is re-totalled before the loops read it.
@@ -182,6 +187,8 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
 
     async def _stop() -> None:
         unseed_invariants()
+        if uninstall_guard_repos is not None:
+            uninstall_guard_repos()
         await stop_tier2()
         restore_definition()
         await stop_room()

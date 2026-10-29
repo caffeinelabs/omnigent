@@ -121,5 +121,6 @@ guardrails:
         path: omnigent.policies.builtins.factory.factory_role_guard
         arguments:
           role: ic
-          write_repos: [caffeinelabs/app]
+          # No write_repos: the server sets factory_repos, the repos of this
+          # member's factory projects (caffeinelabs/app outside a factory).
           push_ref_prefixes: [factory/]
