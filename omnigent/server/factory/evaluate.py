@@ -16,6 +16,12 @@ C-n?" (recommended: revert); it is never kept on its own. A trial nobody
 decides reverts one original window after it ended (2× its window when it was
 never extended).
 
+Trials never overlap on one block (:func:`check_trial`): a second trial on a
+top-level block that already has one running is refused with 409
+``trial_overlap``, since two trials on one block confound each other's guards
+(rules trial one by one). Strategy and product profile changes never run as a
+trial (422 ``not_trialable``): they are judged on outcomes and apply as a version.
+
 An idle trial (no merged PR, finished task or sub-agent run in its window, see
 :mod:`.idle`) proves nothing either way. Instead of ending inconclusive it is
 extended by its original length, at most :data:`MAX_EXTENSIONS` times, with
@@ -33,14 +39,15 @@ import asyncio
 import json
 import logging
 import re
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.factory import ACTION_KEEP_PROPOSAL, ACTION_REVERT_PROPOSAL, THREAD_IMPROVEMENTS
-from omnigent.server.factory import control, events, idle, tuning
+from omnigent.server.factory import control, definition, events, idle, tuning
 from omnigent.server.factory.actor import Actor, proposal_ref
 from omnigent.server.factory.context import FactoryDeps, factory_deps
+from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.telemetry import metrics
 from omnigent.stores.factory_store import ProposalStateConflict, now_s
 
@@ -214,6 +221,90 @@ def evaluate_trial(deps: FactoryDeps, row: FactoryProposal, now: int) -> Evaluat
         activity=activity.to_dict(),
         idle=activity.idle,
     )
+
+
+# ── Which changes may run as a trial ───────────────────────────
+
+TRIAL_OVERLAP: Final = "trial_overlap"
+NOT_TRIALABLE: Final = "not_trialable"
+
+
+def overlapping_trial(
+    deps: FactoryDeps,
+    factory_id: str,
+    paths: Iterable[str],
+    *,
+    exclude_id: str | None = None,
+) -> tuple[FactoryProposal, str] | None:
+    """
+    :returns: The running trial that holds a block a trial on *paths* would
+        need, and that block; ``None`` when every block is free. Synchronous.
+    """
+    wanted = set(definition.trial_blocks(paths))
+    if not wanted:
+        return None
+    rows = deps.factory_store.list_proposals(
+        factory_id, status="trial", kind=["tuning", "rules"], limit=200
+    )
+    for row in rows:
+        if exclude_id and control.same_id(row.id, exclude_id):
+            continue
+        held = wanted & set(definition.trial_blocks((row.after or {}).keys()))
+        if held:
+            return row, sorted(held)[0]
+    return None
+
+
+def trial_day(row: FactoryProposal, now: int) -> tuple[int, int]:
+    """:returns: ``(day, of)`` of *row*'s trial, e.g. ``(4, 14)``."""
+    applied = int(row.applied_at or row.created_at)
+    until = int(row.trial_until or applied)
+    day = max(1, min((now - applied) // 86400 + 1, max(1, (until - applied + 86399) // 86400)))
+    return int(day), int(max(1, (until - applied + 86399) // 86400))
+
+
+def overlap_error(row: FactoryProposal, block: str, now: int) -> CockpitError:
+    """:returns: The 409 ``trial_overlap`` refusal naming *row*, the trial on *block*."""
+    ref = proposal_ref(row.number)
+    day, of = trial_day(row, now)
+    return CockpitError(
+        409,
+        TRIAL_OVERLAP,
+        f"{ref} is already trialing {block} (day {day} of {of}). Two trials on one block "
+        f"confound each other's guards: apply it directly, or wait for {ref} to end.",
+        trial=ref,
+        block=block,
+        day=day,
+        of=of,
+    )
+
+
+def not_trialable_error(reason: str) -> CockpitError:
+    """:returns: The 422 ``not_trialable`` refusal."""
+    return CockpitError(422, NOT_TRIALABLE, reason, reason=definition.blocks.NOT_TRIALABLE_REASON)
+
+
+def check_trial(
+    deps: FactoryDeps,
+    factory_id: str,
+    paths: Iterable[str],
+    *,
+    exclude_id: str | None = None,
+    now: int | None = None,
+) -> None:
+    """
+    Refuse a trial on *paths*. Synchronous.
+
+    :raises CockpitError: 422 ``not_trialable`` (strategy, product profile);
+        409 ``trial_overlap`` when a running trial holds one of its blocks.
+    """
+    paths = list(paths)
+    ok, reason = definition.trialable(paths)
+    if not ok:
+        raise not_trialable_error(reason or definition.blocks.NOT_TRIALABLE_REASON)
+    found = overlapping_trial(deps, factory_id, paths, exclude_id=exclude_id)
+    if found is not None:
+        raise overlap_error(found[0], found[1], now if now is not None else now_s())
 
 
 def extensions(row: FactoryProposal) -> int:
@@ -500,15 +591,22 @@ __all__ = [
     "MAX_EXTENSIONS",
     "MIN_BEAT_HOURS",
     "MIN_MERGED",
+    "NOT_TRIALABLE",
     "OUTCOME_EXTENDED",
     "OUTCOME_INCONCLUSIVE",
     "OUTCOME_KEPT",
     "OUTCOME_REVERTED",
+    "TRIAL_OVERLAP",
     "Evaluation",
     "Guard",
     "attributed_incidents",
+    "check_trial",
     "end_trial",
     "evaluate_trial",
     "extensions",
+    "not_trialable_error",
+    "overlap_error",
+    "overlapping_trial",
     "tick",
+    "trial_day",
 ]

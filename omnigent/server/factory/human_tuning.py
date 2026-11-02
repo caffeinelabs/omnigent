@@ -4,7 +4,9 @@ Owners edit the definition directly (``PUT …/definition``). Operators cannot,
 but they may "Propose change" from a finding, an Insights tile or an
 incident: the change is validated like an agent's, stored pending with its
 evidence, and an owners ``proposal`` decision opens in ``#improvements``.
-Approving it applies the change as a trial; nothing applies on its own.
+Approving it applies the change as a trial (as a version for strategy and
+product profile changes); nothing applies on its own. While another trial
+holds its block the proposal says so, and approving it waits (409 ``trial_overlap``).
 """
 
 from __future__ import annotations
@@ -68,6 +70,7 @@ async def propose_change(
     if not diff:
         raise CockpitError(400, "no_change", "the definition already has these values")
     await asyncio.to_thread(tuning._check_overlap, deps, root.id, diff, resolved.stored)
+    warnings = await asyncio.to_thread(tuning.trial_warnings, deps, root.id, diff)
     actor = await asyncio.to_thread(projects.human_actor, deps, user_id, root.id)
     trial_h = body.trial_h or definition.TRIAL_H_DEFAULT
     row, _ = await asyncio.to_thread(
@@ -84,6 +87,7 @@ async def propose_change(
             rationale=body.rationale,
             evidence=list(body.evidence),
             expected_effect=effect,
+            warnings=warnings,
             author_role=actor.role,
             thread=THREAD_IMPROVEMENTS,
             result={"trial_h": trial_h},

@@ -1,0 +1,225 @@
+{
+  "alerts": {
+    "ask_unneeded_n": 3,
+    "ask_unneeded_s": 120,
+    "dead_ticks": 2,
+    "decision_waiting_m": 30,
+    "gate_flap_window_h": 2.0,
+    "gate_flaps": 3,
+    "heartbeat_waste_usd": 5.0,
+    "mail_stuck_m": 10,
+    "orphan_h": 2.0,
+    "pingpong_n": 6,
+    "pingpong_window_m": 30,
+    "quiet_m": 10,
+    "ready_unreviewed_h": 4.0,
+    "repeat_tool_n": 5,
+    "repeat_window_m": 30,
+    "spend_window_m": 30
+  },
+  "autonomy": {
+    "projects": "requested"
+  },
+  "briefs": {
+    "demo": "",
+    "env_keeper": "",
+    "ic": "",
+    "planner": "",
+    "project_lead": "",
+    "reviewer": "",
+    "scout": ""
+  },
+  "budgets": {
+    "factory_usd_per_day": 400.0,
+    "project_usd": 150.0,
+    "usd_per_hour_alert": 15.0
+  },
+  "cadence": {
+    "demo_project_lead": 600,
+    "lead": 3600,
+    "project_lead": 7200
+  },
+  "caps": {
+    "max_projects": 10
+  },
+  "decisions": {
+    "escalate_after_m": 30,
+    "escalate_owners_after_m": 120
+  },
+  "discovery": {
+    "autonomy": {
+      "bets": "confirm"
+    },
+    "budgets": {
+      "per_ask": 2.0,
+      "usd_per_day": 10.0
+    },
+    "cadence": {
+      "sweep_h": 24,
+      "synthesis_h": 168
+    },
+    "enabled": false,
+    "rubric": {
+      "bands": {
+        "next": 0.1,
+        "now": 0.2
+      },
+      "counter_share_down": 0.33,
+      "decay_half_life_days": 60,
+      "human_minute_usd": 2.0,
+      "intensity": {
+        "annoyance": 0.3,
+        "blocker": 1.0,
+        "nice": 0.1,
+        "workaround": 0.6
+      },
+      "ladder": {
+        "hunch": 0.1,
+        "moderate": 0.5,
+        "proven": 1.0,
+        "strong": 0.8,
+        "weak": 0.25
+      },
+      "map": {
+        "confidence_high": 0.5,
+        "value_high": 0.4
+      },
+      "moderate_min_accounts": 5,
+      "moderate_min_source_types": 2,
+      "off_focus_factor": 0.5,
+      "per_account_cap": 1,
+      "reach_ratio": {
+        "high": 40.0,
+        "low": 10.0
+      },
+      "reach_ref": 1000,
+      "window_days": 90
+    },
+    "seat": {
+      "model": null
+    },
+    "sources": [],
+    "thresholds": {
+      "bets_per_week": 3,
+      "max_open_bets": 3,
+      "min_accounts": 2,
+      "validated_min_level": "moderate"
+    }
+  },
+  "engine": {
+    "mode": "assist",
+    "next_hints": true,
+    "spawn": "server"
+  },
+  "goal_seq": 0,
+  "loops": {
+    "ci": {
+      "flake_reruns": 1
+    },
+    "claim": {
+      "mismatches": 2,
+      "wait_h": 2.0
+    },
+    "demo": {
+      "per_head": 2,
+      "per_pr_heads": 6
+    },
+    "implement": {
+      "attempts": 3,
+      "no_progress_s": 3600,
+      "usd": 15.0,
+      "wall_h": 8.0
+    },
+    "improve": {
+      "usd": 3.0
+    },
+    "intake": {
+      "revisions": 3
+    },
+    "plan": {
+      "stall_h": 24.0
+    },
+    "review": {
+      "rounds": 3
+    },
+    "verify": {
+      "env_retries": 1,
+      "per_head": 2
+    }
+  },
+  "mail": {
+    "pair_rate": 20,
+    "sender_rate": 60
+  },
+  "previews": {
+    "env_probe_s": 60,
+    "max": 8,
+    "preview_probe_s": 300,
+    "ttl_h": 72.0
+  },
+  "product": {
+    "areas": [],
+    "competitors": [],
+    "delivery": {
+      "demo_paths": [],
+      "flags": {
+        "convention": null,
+        "provider": null
+      },
+      "merge_policy": null,
+      "preview_domain": null,
+      "protected_repos": [],
+      "release": "merged"
+    },
+    "kind": null,
+    "links": {},
+    "name": null,
+    "segments": [],
+    "summary": null
+  },
+  "role_defaults": {
+    "demo": {
+      "model": null,
+      "vendor": null
+    },
+    "env_keeper": {
+      "model": null,
+      "vendor": null
+    },
+    "ic": {
+      "model": null,
+      "vendor": null
+    },
+    "planner": {
+      "model": null,
+      "vendor": null
+    },
+    "project_lead": {
+      "model": null,
+      "vendor": null
+    },
+    "reviewer": {
+      "model": null,
+      "vendor": null
+    }
+  },
+  "rule_seq": 0,
+  "rules": [],
+  "strategy": {
+    "focus_segments": [],
+    "goals": [],
+    "guardrails": [],
+    "mix": {
+      "enablers": 15,
+      "hunches": 5,
+      "outcome": 60,
+      "tests": 20
+    },
+    "non_goals": []
+  },
+  "supervisor": {
+    "blocked_escalate_s": 1800,
+    "quiet_beats": true,
+    "stuck_s": 5400
+  }
+}

@@ -1,0 +1,802 @@
+"""The product-agnostic definition blocks: product, strategy, discovery, briefs, role defaults.
+
+Everything a factory knows about its product is data in these blocks of the
+versioned definition (:mod:`.definition`): what the product is and how it is
+delivered (``product``), what the factory is trying to achieve (``strategy``),
+how it finds out what users need (``discovery``), what each role is told
+(``briefs``) and which vendor and model a role runs on (``role_defaults``).
+No product name, metric, source or prompt text lives in code.
+
+The blocks are inert until a reader uses them; discovery stays dark behind
+``discovery.enabled`` (off by default) and the server env :data:`DISCOVERY_ENV`.
+
+Lists whose items carry an ``id`` (:data:`LISTS`) are changed item by item:
+``add`` at the list, ``replace`` or ``remove`` at ``<list>.<id>``. Goal ids
+(``G-n``) are numbered by the server and never reused.
+"""
+
+from __future__ import annotations
+
+import itertools
+import json
+import os
+import re
+from dataclasses import dataclass
+from datetime import date
+from typing import Annotated, Any, Final, Literal
+
+from pydantic import (
+    AfterValidator,
+    BaseModel,
+    ConfigDict,
+    Field,
+    StringConstraints,
+    field_validator,
+    model_validator,
+)
+
+DISCOVERY_ENV: Final = "OMNIGENT_FACTORY_DISCOVERY"
+"""Server switch for discovery routes, tools and jobs (off unless ``1``/``true``)."""
+BRIEF_MAX: Final = 4000
+SOURCE_PARAMS_MAX: Final = 4000
+"""The largest a source's ``params`` may be, as compact JSON."""
+
+_SLUG_RE: Final = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+GOAL_ID_RE: Final = re.compile(r"^G-([1-9][0-9]{0,5})$")
+_ALIAS_RE: Final = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
+_REPO_RE: Final = re.compile(r"^[A-Za-z0-9_.-]{1,100}/[A-Za-z0-9_.-]{1,100}$")
+_HOST_RE: Final = re.compile(
+    r"^(?=.{1,253}$)[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)+$"
+)
+_RELEASE_RE: Final = re.compile(
+    r"^(merged|github_release|manual|github_deployment:[A-Za-z0-9_.-]{1,64})$"
+)
+_SECRET_WORDS: Final = frozenset(
+    {
+        "authorization",
+        "bearer",
+        "cookie",
+        "cookies",
+        "credential",
+        "credentials",
+        "passwd",
+        "password",
+        "secret",
+        "secrets",
+        "token",
+        "tokens",
+    }
+)
+_SECRET_KEY_RE: Final = re.compile(r"(api|access|private|secret)[_-]?key", re.IGNORECASE)
+_SECRET_VALUE_RE: Final = re.compile(
+    r"(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}"
+    r"|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----"
+    r"|\bBearer\s+[A-Za-z0-9._~+/=-]{16,})"
+)
+SECRET_REFUSAL: Final = (
+    "source secrets are never part of the definition (Tier 0): an owner sets them "
+    "write-only on the source, and the server keeps them"
+)
+
+
+def _slug(value: str) -> str:
+    if not _SLUG_RE.match(value):
+        raise ValueError("an id is a short slug: a-z first, then a-z, 0-9, _ or - (≤ 32)")
+    return value
+
+
+def _alias(value: str | None) -> str | None:
+    if value is not None and not _ALIAS_RE.match(value):
+        raise ValueError("a model alias such as 'sonnet' or 'opus', never a model id")
+    return value
+
+
+def _repo(value: str) -> str:
+    if not _REPO_RE.match(value):
+        raise ValueError("a repository is owner/name")
+    return value
+
+
+def _host(value: str | None) -> str | None:
+    if value is not None and not _HOST_RE.match(value):
+        raise ValueError("a domain such as previews.example.org (no scheme or path)")
+    return value
+
+
+Slug = Annotated[str, AfterValidator(_slug)]
+Alias = Annotated[str | None, AfterValidator(_alias)]
+Repo = Annotated[str, AfterValidator(_repo)]
+Host = Annotated[str | None, AfterValidator(_host)]
+
+
+def _strip(max_length: int, min_length: int = 0) -> StringConstraints:
+    return StringConstraints(strip_whitespace=True, min_length=min_length, max_length=max_length)
+
+
+Label = Annotated[str, _strip(80, 1)]
+Line = Annotated[str, _strip(200, 1)]
+Glob = Annotated[str, _strip(200, 1)]
+Event = Annotated[str, _strip(120, 1)]
+Statement = Annotated[str, _strip(280, 1)]
+Url = Annotated[str, _strip(500, 1)]
+Short = Annotated[str, _strip(80)]
+Words = Annotated[str, _strip(500)]
+Brief = Annotated[str, _strip(BRIEF_MAX)]
+
+
+class _Block(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+
+def _unique_ids(items: list[Any], what: str) -> list[Any]:
+    seen: set[str] = set()
+    for item in items:
+        if item.id in seen:
+            raise ValueError(f"duplicate {what} id {item.id}")
+        seen.add(item.id)
+    return items
+
+
+# ── product ────────────────────────────────────────────────────
+
+
+class SegmentDef(_Block):
+    """A kind of user and how a source can recognise one."""
+
+    id: Slug
+    label: Label
+    rule: Words = ""
+
+
+class AreaDef(_Block):
+    """A product area: its code paths (globs) and the events that measure it."""
+
+    id: Slug
+    label: Label
+    paths: list[Glob] = Field(default_factory=list, max_length=20)
+    events: list[Event] = Field(default_factory=list, max_length=20)
+
+
+class CompetitorDef(_Block):
+    name: Label
+    changelog: Url | None = None
+
+
+class FlagsDef(_Block):
+    """How the product ships behind a flag, in words (``provider`` ``none`` when it has none)."""
+
+    provider: Annotated[str, _strip(64)] | None = None
+    convention: Words | None = None
+
+
+class DeliveryDef(_Block):
+    """
+    How work reaches users.
+
+    :param merge_policy: Who merges pull requests, in words. The factory never
+        merges (Tier 0), whatever this says.
+    :param release: What counts as released: ``merged``, ``github_release``,
+        ``github_deployment:<env>`` or ``manual``.
+    """
+
+    merge_policy: Annotated[str, _strip(300)] | None = None
+    protected_repos: list[Repo] = Field(default_factory=list, max_length=20)
+    demo_paths: list[Glob] = Field(default_factory=list, max_length=30)
+    preview_domain: Host = None
+    release: str = "merged"
+    flags: FlagsDef = Field(default_factory=FlagsDef)
+
+    @field_validator("release")
+    @classmethod
+    def _release(cls, value: str) -> str:
+        if not _RELEASE_RE.match(value):
+            raise ValueError(
+                "release is merged, github_release, github_deployment:<env> or manual"
+            )
+        return value
+
+
+class ProductDef(_Block):
+    """What the product is (drafted by an agent as a proposal, corrected by owners)."""
+
+    name: Short | None = None
+    kind: Short | None = None
+    summary: Annotated[str, _strip(2000)] | None = None
+    links: dict[Slug, Url] = Field(default_factory=dict, max_length=12)
+    segments: list[SegmentDef] = Field(default_factory=list, max_length=20)
+    areas: list[AreaDef] = Field(default_factory=list, max_length=50)
+    competitors: list[CompetitorDef] = Field(default_factory=list, max_length=20)
+    delivery: DeliveryDef = Field(default_factory=DeliveryDef)
+
+    @field_validator("segments", "areas")
+    @classmethod
+    def _ids(cls, items: list[Any]) -> list[Any]:
+        return _unique_ids(items, "item")
+
+
+# ── strategy ───────────────────────────────────────────────────
+
+
+class GoalDef(_Block):
+    """
+    One goal, ``G-n``.
+
+    :param metric: A metric binding's name; ``None`` until a source can measure it.
+    :param weight: Its weight against the other goals (the heaviest counts as 1).
+    """
+
+    id: str
+    statement: Statement
+    metric: Annotated[str, _strip(120)] | None = None
+    baseline: float | None = None
+    target: float | None = None
+    by: date | None = None
+    weight: float = Field(1.0, ge=0, le=10)
+
+    @field_validator("id")
+    @classmethod
+    def _id(cls, value: str) -> str:
+        if not GOAL_ID_RE.match(value):
+            raise ValueError("a goal id is G-<n>")
+        return value
+
+
+class MixDef(_Block):
+    """Where capacity goes, in percent of active projects (adds up to 100)."""
+
+    outcome: int = Field(60, ge=0, le=100)
+    tests: int = Field(20, ge=0, le=100)
+    enablers: int = Field(15, ge=0, le=100)
+    hunches: int = Field(5, ge=0, le=100)
+
+    @model_validator(mode="after")
+    def _sum(self) -> MixDef:
+        total = self.outcome + self.tests + self.enablers + self.hunches
+        if total != 100:
+            raise ValueError(f"the mix adds up to 100, not {total}")
+        return self
+
+
+class StrategyDef(_Block):
+    """What the factory is trying to achieve. Never on trial: judged on outcomes."""
+
+    goals: list[GoalDef] = Field(default_factory=list, max_length=10)
+    guardrails: list[Line] = Field(default_factory=list, max_length=10)
+    non_goals: list[Line] = Field(default_factory=list, max_length=20)
+    focus_segments: list[Slug] = Field(default_factory=list, max_length=10)
+    mix: MixDef = Field(default_factory=MixDef)
+
+    @field_validator("goals")
+    @classmethod
+    def _ids(cls, items: list[GoalDef]) -> list[GoalDef]:
+        return _unique_ids(items, "goal")
+
+    @field_validator("focus_segments")
+    @classmethod
+    def _focus(cls, items: list[str]) -> list[str]:
+        if len(set(items)) != len(items):
+            raise ValueError("a focus segment is listed twice")
+        return items
+
+
+# ── discovery ──────────────────────────────────────────────────
+
+SourceKind = Literal[
+    "repo",
+    "team",
+    "web",
+    "analytics",
+    "observability",
+    "chat",
+    "tracker",
+    "reviews",
+    "feedback",
+    "flags",
+    "mcp",
+]
+PrivacyLevel = Literal["public", "internal", "personal", "sensitive"]
+RedactKind = Literal["email", "phone", "token", "ip", "url_secret", "card", "name", "address"]
+REDACT_FLOOR: Final[tuple[RedactKind, ...]] = (
+    "email",
+    "phone",
+    "token",
+    "ip",
+    "url_secret",
+    "card",
+)
+"""Redactions every source applies (Tier 0); a source may add more."""
+PRIVACY_RANK: Final = {"public": 0, "internal": 1, "personal": 2, "sensitive": 3}
+EVIDENCE_LEVELS: Final = ("hunch", "weak", "moderate", "strong", "proven")
+
+
+def _no_secrets(value: Any, where: str = "params") -> None:
+    if isinstance(value, dict):
+        for key, inner in value.items():
+            words = set(re.split(r"[_\-.\s]+", str(key).lower()))
+            if words & _SECRET_WORDS or _SECRET_KEY_RE.search(str(key)):
+                raise ValueError(f"{where}.{key}: {SECRET_REFUSAL}")
+            _no_secrets(inner, f"{where}.{key}")
+    elif isinstance(value, list):
+        for i, inner in enumerate(value):
+            _no_secrets(inner, f"{where}[{i}]")
+    elif isinstance(value, str) and _SECRET_VALUE_RE.search(value):
+        raise ValueError(f"{where}: {SECRET_REFUSAL}")
+
+
+def has_secret(value: Any) -> bool:
+    """Whether *value* (a source or its params) carries a secret-looking key or value."""
+    try:
+        _no_secrets(value)
+    except ValueError:
+        return True
+    return False
+
+
+class SeatDef(_Block):
+    """Scout's seat: ``model`` overrides the bundle's default alias."""
+
+    model: Alias = None
+
+
+class PrivacyDef(_Block):
+    """
+    A source's privacy (``level`` is the privacy class).
+
+    :param redact: Kinds redacted before storage; the Tier-0 floor is always included.
+    """
+
+    level: PrivacyLevel = "public"
+    redact: list[RedactKind] = Field(default_factory=lambda: list(REDACT_FLOOR), max_length=16)
+    quote_max: int = Field(280, ge=0, le=1000)
+    keep_days: int = Field(365, ge=1, le=3650)
+
+    @field_validator("redact")
+    @classmethod
+    def _floor(cls, kinds: list[RedactKind]) -> list[RedactKind]:
+        extra = [k for k in kinds if k not in REDACT_FLOOR]
+        return [*REDACT_FLOOR, *dict.fromkeys(extra)]
+
+
+SourceRole = Literal["scout", "lead"]
+
+
+def _scout_only() -> list[SourceRole]:
+    return ["scout"]
+
+
+class SourceBudgetDef(_Block):
+    calls_per_day: int = Field(100, ge=0, le=10000)
+
+
+class SourceDef(_Block):
+    """
+    One evidence source. Never holds a secret (Tier 0).
+
+    :param roles: Who may query it through the gateway.
+    :param interval_min: Minutes between syncs; ``0`` is query-only.
+    :param state: ``trial`` (its first 14 days), ``active`` or ``paused``.
+    """
+
+    id: Slug
+    label: Label
+    kind: SourceKind
+    params: dict[str, Any] = Field(default_factory=dict)
+    roles: list[SourceRole] = Field(default_factory=_scout_only, max_length=2)
+    privacy: PrivacyDef = Field(default_factory=PrivacyDef)
+    consent: Literal["public", "terms", "opt_in", "internal"] = "public"
+    budget: SourceBudgetDef = Field(default_factory=SourceBudgetDef)
+    interval_min: int = Field(60, ge=0, le=10080)
+    state: Literal["trial", "active", "paused"] = "trial"
+
+    @field_validator("params")
+    @classmethod
+    def _params(cls, params: dict[str, Any]) -> dict[str, Any]:
+        _no_secrets(params)
+        if len(json.dumps(params, separators=(",", ":"), default=str)) > SOURCE_PARAMS_MAX:
+            raise ValueError(f"params is at most {SOURCE_PARAMS_MAX} characters as JSON")
+        return params
+
+    @model_validator(mode="after")
+    def _personal_stays_off(self) -> SourceDef:
+        if PRIVACY_RANK[self.privacy.level] >= PRIVACY_RANK["personal"] and self.state != "paused":
+            raise ValueError(
+                f"source {self.id}: a {self.privacy.level} source stays paused until "
+                "the server can detect names in it"
+            )
+        if self.interval_min and self.interval_min < 5:
+            raise ValueError("interval_min is 0 (query only) or at least 5")
+        return self
+
+
+class LadderDef(_Block):
+    """The evidence meter's levels."""
+
+    hunch: float = 0.1
+    weak: float = 0.25
+    moderate: float = 0.5
+    strong: float = 0.8
+    proven: float = 1.0
+
+    @model_validator(mode="after")
+    def _ascending(self) -> LadderDef:
+        steps = [self.hunch, self.weak, self.moderate, self.strong, self.proven]
+        if any(b < a for a, b in itertools.pairwise(steps)):
+            raise ValueError("the ladder rises from hunch to proven")
+        return self
+
+
+class ReachRatioDef(_Block):
+    low: float = 10
+    high: float = 40
+
+    @model_validator(mode="after")
+    def _order(self) -> ReachRatioDef:
+        if self.high < self.low:
+            raise ValueError("reach_ratio.high is at least reach_ratio.low")
+        return self
+
+
+class IntensityDef(_Block):
+    blocker: float = 1.0
+    workaround: float = 0.6
+    annoyance: float = 0.3
+    nice: float = 0.1
+
+
+class BandsDef(_Block):
+    now: float = 0.20
+    next: float = 0.10
+
+    @model_validator(mode="after")
+    def _order(self) -> BandsDef:
+        if self.next > self.now:
+            raise ValueError("bands.next is at most bands.now")
+        return self
+
+
+class MapDef(_Block):
+    value_high: float = 0.4
+    confidence_high: float = 0.5
+
+
+class RubricDef(_Block):
+    """The numbers of the opportunity rank; its formula is code (Tier 0)."""
+
+    ladder: LadderDef = Field(default_factory=LadderDef)
+    moderate_min_accounts: int = 5
+    moderate_min_source_types: int = 2
+    window_days: int = 90
+    per_account_cap: int = 1
+    decay_half_life_days: int = 60
+    counter_share_down: float = 0.33
+    reach_ratio: ReachRatioDef = Field(default_factory=ReachRatioDef)
+    reach_ref: int = 1000
+    intensity: IntensityDef = Field(default_factory=IntensityDef)
+    off_focus_factor: float = 0.5
+    bands: BandsDef = Field(default_factory=BandsDef)
+    map: MapDef = Field(default_factory=MapDef)
+    human_minute_usd: float = 2.0
+
+
+class ThresholdsDef(_Block):
+    validated_min_level: Literal["hunch", "weak", "moderate", "strong", "proven"] = "moderate"
+    min_accounts: int = 2
+    bets_per_week: int = 3
+    max_open_bets: int = 3
+
+
+class DiscoveryBudgetsDef(_Block):
+    usd_per_day: float = 10.0
+    per_ask: float = 2.0
+
+
+class DiscoveryCadenceDef(_Block):
+    """Hours between Scout's sweeps and syntheses (``0`` turns one off)."""
+
+    sweep_h: int = 24
+    synthesis_h: int = 168
+
+
+class DiscoveryAutonomyDef(_Block):
+    """Who approves a bet Atlas files from an opportunity (the projects autonomy values)."""
+
+    bets: Literal["confirm", "requested", "grace"] = "confirm"
+
+
+class DiscoveryDef(_Block):
+    """How the factory finds out what users need. Off until an owner turns it on."""
+
+    enabled: bool = False
+    seat: SeatDef = Field(default_factory=SeatDef)
+    sources: list[SourceDef] = Field(default_factory=list, max_length=30)
+    rubric: RubricDef = Field(default_factory=RubricDef)
+    thresholds: ThresholdsDef = Field(default_factory=ThresholdsDef)
+    budgets: DiscoveryBudgetsDef = Field(default_factory=DiscoveryBudgetsDef)
+    cadence: DiscoveryCadenceDef = Field(default_factory=DiscoveryCadenceDef)
+    autonomy: DiscoveryAutonomyDef = Field(default_factory=DiscoveryAutonomyDef)
+
+    @field_validator("sources")
+    @classmethod
+    def _ids(cls, items: list[SourceDef]) -> list[SourceDef]:
+        return _unique_ids(items, "source")
+
+
+# ── briefs and role defaults ───────────────────────────────────
+
+
+class BriefsDef(_Block):
+    """This factory's brief per role: added to the built-in prompt, never replacing it."""
+
+    scout: Brief = ""
+    project_lead: Brief = ""
+    ic: Brief = ""
+    reviewer: Brief = ""
+    env_keeper: Brief = ""
+    demo: Brief = ""
+    planner: Brief = ""
+
+
+Vendor = Literal["claude", "codex"]
+VENDORS_BY_ROLE: Final[dict[str, tuple[str, ...]]] = {
+    "project_lead": ("claude",),
+    "ic": ("claude", "codex"),
+    "reviewer": ("claude", "codex"),
+    "env_keeper": ("claude",),
+    "demo": ("claude",),
+    "planner": ("claude",),
+}
+"""The vendors each role's bundle can run on today."""
+
+
+class RoleDefaultDef(_Block):
+    """A role's default vendor and model alias (``None``: the bundle's own)."""
+
+    vendor: Vendor | None = None
+    model: Alias = None
+
+
+class RoleDefaultsDef(_Block):
+    project_lead: RoleDefaultDef = Field(default_factory=RoleDefaultDef)
+    ic: RoleDefaultDef = Field(default_factory=RoleDefaultDef)
+    reviewer: RoleDefaultDef = Field(default_factory=RoleDefaultDef)
+    env_keeper: RoleDefaultDef = Field(default_factory=RoleDefaultDef)
+    demo: RoleDefaultDef = Field(default_factory=RoleDefaultDef)
+    planner: RoleDefaultDef = Field(default_factory=RoleDefaultDef)
+
+    @model_validator(mode="after")
+    def _vendors(self) -> RoleDefaultsDef:
+        for role, allowed in VENDORS_BY_ROLE.items():
+            vendor = getattr(self, role).vendor
+            if vendor is not None and vendor not in allowed:
+                raise ValueError(f"role_defaults.{role}: runs on {', '.join(allowed)} today")
+        return self
+
+
+LEGACY_MODELS: Final[dict[str, str]] = {
+    "models.ic": "role_defaults.ic.model",
+    "models.reviewer": "role_defaults.reviewer.model",
+    "models.planner": "role_defaults.planner.model",
+}
+"""The unread ``models.*`` settings and the ``role_defaults`` paths they moved to."""
+
+
+def upgrade(stored: dict[str, Any]) -> dict[str, Any]:
+    """
+    :returns: *stored* with legacy blocks moved: an owner-set ``models.<kind>``
+        becomes ``role_defaults.<kind>.model`` unless that is already set.
+    """
+    models = stored.get("models")
+    if "models" not in stored:
+        return stored
+    out = {k: v for k, v in stored.items() if k != "models"}
+    if not isinstance(models, dict):
+        return out
+    defaults = dict(out.get("role_defaults") or {})
+    for kind in ("ic", "reviewer", "planner"):
+        alias = models.get(kind)
+        if not isinstance(alias, str) or not alias:
+            continue
+        role = dict(defaults.get(kind) or {})
+        if not role.get("model"):
+            role["model"] = alias
+        defaults[kind] = role
+    if defaults:
+        out["role_defaults"] = defaults
+    return out
+
+
+# ── Lists changed item by item ─────────────────────────────────
+
+
+@dataclass(frozen=True)
+class ListSpec:
+    """
+    A list of the doc whose items carry an ``id``.
+
+    :param prefix: Set when the server numbers its items (``"G"`` gives ``G-1``…).
+    :param seq: The doc's counter of numbers handed out (never reused).
+    """
+
+    path: str
+    prefix: str | None = None
+    seq: str | None = None
+
+    @property
+    def numbered(self) -> bool:
+        return self.prefix is not None
+
+
+LISTS: Final[dict[str, ListSpec]] = {
+    spec.path: spec
+    for spec in (
+        ListSpec("product.segments"),
+        ListSpec("product.areas"),
+        ListSpec("strategy.goals", prefix="G", seq="goal_seq"),
+        ListSpec("discovery.sources"),
+    )
+}
+"""Lists changed by ``id``: ``add`` at the list, ``replace``/``remove`` at ``<list>.<id>``."""
+
+
+def list_of(path: str) -> tuple[ListSpec, str | None, str | None] | None:
+    """
+    :returns: ``(spec, item id, field)`` when *path* is a list of :data:`LISTS`,
+        one of its items (``strategy.goals.G-2``) or an item's field
+        (``discovery.sources.forum.state``); else ``None``.
+    """
+    for list_path, spec in LISTS.items():
+        if path == list_path:
+            return spec, None, None
+        if path.startswith(f"{list_path}."):
+            rest = path[len(list_path) + 1 :].split(".")
+            if len(rest) > 2 or not rest[0]:
+                return None
+            return spec, rest[0], rest[1] if len(rest) == 2 else None
+    return None
+
+
+def item_id_ok(spec: ListSpec, item_id: str) -> bool:
+    """Whether *item_id* is a well-formed id for *spec*'s items."""
+    if spec.numbered:
+        return bool(re.fullmatch(rf"{spec.prefix}-[1-9][0-9]{{0,5}}", item_id))
+    return bool(_SLUG_RE.match(item_id))
+
+
+def seq_of(doc: dict[str, Any], spec: ListSpec, items: list[Any]) -> int:
+    """:returns: The highest number *spec*'s list has used (its counter or an item id)."""
+    numbers = [
+        int(m.group(1))
+        for item in items
+        if isinstance(item, dict)
+        and (m := re.fullmatch(rf"{spec.prefix}-([1-9][0-9]{{0,5}})", str(item.get("id"))))
+    ]
+    return max([int(doc.get(spec.seq or "") or 0), *numbers], default=0)
+
+
+# ── Who may change what ────────────────────────────────────────
+
+BLOCKS: Final = ("product", "strategy", "discovery", "briefs", "role_defaults")
+"""The blocks of this module (agents may propose only some of their paths)."""
+NOT_TRIALABLE: Final = ("product", "strategy")
+"""Blocks a trial would judge on the wrong metrics: they apply as a version."""
+NOT_TRIALABLE_REASON: Final = "judged on outcomes"
+AGENT_PATHS: Final[dict[str, tuple[str, ...]]] = {
+    "scout": ("product", "strategy", "discovery.sources"),
+    "sentinel": ("discovery.rubric", "discovery.thresholds", "briefs.scout"),
+}
+"""What each agent seat may propose in :data:`BLOCKS` (others: nothing)."""
+
+
+def under(path: str, prefix: str) -> bool:
+    """Whether dotted *path* is *prefix* or lies below it (segment-aware)."""
+    return path == prefix or path.startswith(f"{prefix}.")
+
+
+def in_blocks(path: str, blocks: tuple[str, ...] = BLOCKS) -> bool:
+    """Whether *path* lies in one of *blocks*."""
+    return any(under(path, block) for block in blocks)
+
+
+def agent_may_propose(seat: str, path: str) -> bool:
+    """Whether an agent in *seat* (``scout``, ``sentinel``, ``atlas``, …) may propose *path*."""
+    if not in_blocks(path):
+        return True
+    return any(under(path, allowed) for allowed in AGENT_PATHS.get(seat, ()))
+
+
+def discovery_server_on() -> bool:
+    """Whether the server runs discovery at all (:data:`DISCOVERY_ENV`)."""
+    return os.environ.get(DISCOVERY_ENV, "").strip().lower() in ("1", "true", "yes", "on")
+
+
+# ── Approval classes of the new paths ──────────────────────────
+
+
+def _narrower_source(before: Any, after: Any) -> bool:
+    """Whether source *after* only narrows *before* (pause, less budget, fewer roles, stricter)."""
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return False
+    same = ("id", "label", "kind", "params", "consent")
+    if any(before.get(k) != after.get(k) for k in same):
+        return False
+    if not set(after.get("roles") or []) <= set(before.get("roles") or []):
+        return False
+    b_budget = (before.get("budget") or {}).get("calls_per_day", 0)
+    a_budget = (after.get("budget") or {}).get("calls_per_day", 0)
+    if a_budget > b_budget:
+        return False
+    b_priv, a_priv = before.get("privacy") or {}, after.get("privacy") or {}
+    if a_priv.get("level") != b_priv.get("level"):
+        return False
+    if not set(b_priv.get("redact") or []) <= set(a_priv.get("redact") or []):
+        return False
+    if a_priv.get("quote_max", 0) > b_priv.get("quote_max", 0):
+        return False
+    if a_priv.get("keep_days", 0) > b_priv.get("keep_days", 0):
+        return False
+    b_int, a_int = before.get("interval_min", 0), after.get("interval_min", 0)
+    if b_int and (not a_int or a_int < b_int):
+        return False
+    if not b_int and a_int:
+        return False
+    return after.get("state") in (before.get("state"), "paused")
+
+
+def source_class(before: Any, after: Any) -> Literal["A", "B"]:
+    """Class of a ``discovery.sources.<id>`` change: A when it only narrows, else B."""
+    return "A" if _narrower_source(before, after) else "B"
+
+
+def off_is_a(before: Any, after: Any) -> Literal["A", "B"]:
+    """Turning something off is A (cheaper and safer); turning it on is B."""
+    return "A" if after is False and before is True else "B"
+
+
+def slower_or_off_is_a(before: Any, after: Any) -> Literal["A", "B"]:
+    """An hours interval: off (0) or longer is A, shorter or back on is B."""
+    if isinstance(after, bool) or isinstance(before, bool):
+        return "B"
+    if not isinstance(after, int | float) or not isinstance(before, int | float):
+        return "B"
+    if after == 0:
+        return "A"
+    return "A" if before and after >= before else "B"
+
+
+__all__ = [
+    "AGENT_PATHS",
+    "BLOCKS",
+    "BRIEF_MAX",
+    "DISCOVERY_ENV",
+    "EVIDENCE_LEVELS",
+    "GOAL_ID_RE",
+    "LEGACY_MODELS",
+    "LISTS",
+    "NOT_TRIALABLE",
+    "NOT_TRIALABLE_REASON",
+    "PRIVACY_RANK",
+    "REDACT_FLOOR",
+    "SECRET_REFUSAL",
+    "VENDORS_BY_ROLE",
+    "BriefsDef",
+    "DiscoveryDef",
+    "GoalDef",
+    "ListSpec",
+    "ProductDef",
+    "RoleDefaultsDef",
+    "RubricDef",
+    "SourceDef",
+    "StrategyDef",
+    "agent_may_propose",
+    "discovery_server_on",
+    "has_secret",
+    "in_blocks",
+    "item_id_ok",
+    "list_of",
+    "off_is_a",
+    "seq_of",
+    "slower_or_off_is_a",
+    "source_class",
+    "under",
+    "upgrade",
+]

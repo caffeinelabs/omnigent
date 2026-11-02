@@ -4,9 +4,12 @@ People (user JWT; writes carry ``require_human_origin`` and need MANAGE):
 
 - ``GET /v1/factory/factories/{fid}/definition``: the version in force, its
   effective values, bounds, classes and the trials running;
-- ``GET …/definition/versions``, ``GET …/definition/diff?from=&to=``;
+- ``GET …/definition/versions`` (rows carry ``undone_by`` and ``restored_from``),
+  ``GET …/definition/diff?from=&to=``;
 - ``PUT …/definition`` (a human ``C-n``, applied at once, ``trial`` optional);
-- ``POST …/definition/pin`` ``{version}``;
+- ``POST …/definition/preview``: a dry run of ``PUT`` (or of a restore);
+- ``POST …/definition/restore`` ``{version, note?}``: vK's document as a new version;
+- ``POST …/definition/pin`` ``{version}`` (re-pinning a fresh version's parent is its Undo);
 - ``POST …/proposals/{ref}/keep`` and ``…/revert`` ``{note?}``;
 - ``POST …/retro``: run Sentinel's retro now.
 
@@ -25,7 +28,15 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from omnigent.server.auth import LEVEL_MANAGE, LEVEL_READ
-from omnigent.server.factory import control, definition, retro, schemas, tier2, tuning
+from omnigent.server.factory import (
+    control,
+    definition,
+    definition_changes,
+    retro,
+    schemas,
+    tier2,
+    tuning,
+)
 from omnigent.server.factory.actor import proposal_ref
 from omnigent.server.factory.agent_scope import authorize_agent
 from omnigent.server.factory.context import factory_deps
@@ -74,8 +85,24 @@ def _author_title(deps: Any, created_by: str) -> str | None:
     return display_title(conv.title, conv.id) if conv is not None else None
 
 
-def _view(row: Any, pinned: int | None, deps: Any) -> dict[str, Any]:
+def _undone(deps: Any, factory_id: str) -> dict[int, Any]:
+    """:returns: ``{version: its "definition.undone" event}`` (the latest per version)."""
+    rows = deps.factory_store.find_events(factory_id, tuning.UNDONE_KIND, 0, limit=1000)
+    out: dict[int, Any] = {}
+    for event in rows:
+        version = (event.data or {}).get("version")
+        if isinstance(version, int):
+            out[version] = event
+    return out
+
+
+def _view(
+    row: Any, pinned: int | None, deps: Any, undone: dict[int, Any] | None = None
+) -> dict[str, Any]:
     proposal = deps.factory_store.get_proposal(row.proposal_id) if row.proposal_id else None
+    undo = (undone or {}).get(row.version)
+    undo_data = (undo.data or {}) if undo is not None else {}
+    restored = (proposal.result or {}).get("restore_of") if proposal is not None else None
     return schemas.DefinitionView.model_validate(
         {
             "factory_id": row.factory_id,
@@ -90,6 +117,9 @@ def _view(row: Any, pinned: int | None, deps: Any) -> dict[str, Any]:
             "created_at": row.created_at,
             "pinned": row.version == pinned,
             "doc": row.doc or {},
+            "undone_by": undo_data.get("by"),
+            "undone_at": undo.ts // 1000 if undo is not None else None,
+            "restored_from": restored if isinstance(restored, int) else None,
         }
     ).model_dump(mode="json")
 
@@ -123,6 +153,21 @@ def _definition_body(deps: Any, root: Any, app_state: Any) -> dict[str, Any]:
         "classes": [{"paths": p, "class": c} for p, c in definition.CLASS_TABLE],
         "paths": definition.schema_paths(),
         "on_trial": [proposal_view(deps, r) for r in trials],
+        "trial_blocks": [
+            {
+                "proposal": proposal_ref(r.number),
+                "blocks": definition.trial_blocks((r.after or {}).keys()),
+                "trial_until": r.trial_until,
+            }
+            for r in trials
+        ],
+        "lists": {
+            path: {"numbered": spec.prefix} for path, spec in definition.blocks.LISTS.items()
+        },
+        "owner_only": list(definition.OWNER_ONLY_PREFIXES),
+        "not_trialable": list(definition.blocks.NOT_TRIALABLE),
+        "agent_paths": {k: list(v) for k, v in definition.blocks.AGENT_PATHS.items()},
+        "discovery_server": definition.blocks.discovery_server_on(),
         "tier2": tier2.status(app_state),
     }
 
@@ -151,7 +196,8 @@ async def list_definition_versions(
             resolved = definition.definition_for(deps, root.id)
             pinned = resolved.version if resolved is not None else None
             rows = deps.factory_store.list_definitions(root.id, limit=limit)
-            return {"data": [_view(r, pinned, deps) for r in rows], "pinned": pinned}
+            undone = _undone(deps, root.id)
+            return {"data": [_view(r, pinned, deps, undone) for r in rows], "pinned": pinned}
 
         return await asyncio.to_thread(_read)
 
@@ -195,6 +241,42 @@ async def put_definition(
 
     async def run() -> dict[str, Any]:
         return await tuning.human_edit(request.app.state, factory_id, user_id, payload)
+
+    return await _guard(run)
+
+
+@router.post(
+    "/factories/{factory_id}/definition/preview", response_model=None, dependencies=HUMAN_ORIGIN
+)
+async def preview_definition(
+    request: Request, factory_id: str, payload: Annotated[Any, Body()]
+) -> dict[str, Any] | JSONResponse:
+    """A dry run of ``PUT …/definition`` (or ``{restore: K}``): diff, class, effects, trial."""
+    deps = factory_deps(request.app.state)
+    user_id = get_user_id(request, deps.auth_provider)
+
+    async def run() -> dict[str, Any]:
+        return await definition_changes.preview_change(
+            request.app.state, factory_id, user_id, payload
+        )
+
+    return await _guard(run)
+
+
+@router.post(
+    "/factories/{factory_id}/definition/restore", response_model=None, dependencies=HUMAN_ORIGIN
+)
+async def restore_definition(
+    request: Request, factory_id: str, payload: Annotated[Any, Body()]
+) -> dict[str, Any] | JSONResponse:
+    """Owners: store version K's document as the next version (history stays linear)."""
+    deps = factory_deps(request.app.state)
+    user_id = get_user_id(request, deps.auth_provider)
+
+    async def run() -> dict[str, Any]:
+        return await definition_changes.restore_version(
+            request.app.state, factory_id, user_id, payload
+        )
 
     return await _guard(run)
 

@@ -778,10 +778,29 @@ first read from today's env, and the root's `engine_mode`,
 demo_project_lead), `supervisor` (stuck_s, blocked_escalate_s, quiet_beats),
 `mail`, `previews` (TTL, max, probe intervals), `caps`, `loops.*` budgets,
 `budgets`, `autonomy`, `decisions` (escalation minutes), `alerts` (detector
-thresholds), `models` (aliases) and `rules`. The supervisor
+thresholds) and `rules`. The supervisor
 (`SupervisorConfig.for_factory`), the mailer, previews, the env prober, the
 loop engine, the detectors, decision escalation, PL spawns, task cards and
 briefs all read it.
+
+Everything the factory knows about its product is data in five more blocks
+(`definition_blocks.py`; no product name, metric or source lives in code):
+`product` (name, kind, summary, links, `segments[]`, `areas[]`, competitors,
+`delivery` {merge policy in words, protected repos, demo paths, preview
+domain, `release`, flags}), `strategy` (`goals[]` `G-n`, guardrails,
+non-goals, focus segments, the capacity `mix` adding up to 100), `discovery`
+(`enabled` off by default, `seat.model`, `sources[]`, `rubric`, `thresholds`,
+`budgets`, `cadence`, `autonomy`), `briefs` (per role, ≤ 4,000 chars) and
+`role_defaults` (per role vendor and model alias; the old, unread
+`models.ic|reviewer|planner` moved here and their paths still write it).
+They stay inert until something reads them; discovery also needs the server
+env `OMNIGENT_FACTORY_DISCOVERY`. Lists with ids change item by item: `add`
+at `strategy.goals`, `replace`/`remove` at `strategy.goals/G-2` or one field
+at `discovery.sources/forum/state`; goal numbers come from the server and are
+never reused. A source never holds a secret (Tier 0: a secret-looking param
+is refused), always applies the redaction floor, and a `personal` or
+`sensitive` one stays paused. Changes to these blocks are not mailed to
+members (their readers fetch them as data).
 
 | Paths | Class |
 |---|---|
@@ -791,7 +810,18 @@ briefs all read it.
 | `mail.*` | A when lower, else B |
 | `supervisor.*`, `alerts.*`, `decisions.*` | A |
 | `previews.*`, `caps.*`, `rules` | B |
-| `engine.*`, `autonomy.*`, `budgets.*`, `models.*` | B (owners) |
+| `engine.*`, `autonomy.*`, `budgets.*` | B (owners) |
+| `product.*`, `strategy.*` | B (owners); never a trial, applies as a version |
+| `discovery.enabled` | A when turning it off, else B (owners) |
+| `discovery.sources.<id>` | A when it only narrows (pause, less budget, fewer roles), else B |
+| `discovery.budgets.*`, `discovery.cadence.*` | A when lower or slower, else B (owners) |
+| other `discovery.*`, `briefs.*`, `role_defaults.*` | B (owners) |
+
+Owner-only paths (`engine.`, `autonomy.`, `budgets.`, and the five blocks)
+always wait for the owners when an agent proposes them. In the blocks, agents
+propose only their seat's paths (403 `path_not_allowed` otherwise): Scout
+`product`, `strategy` and `discovery.sources`; Sentinel `discovery.rubric`,
+`discovery.thresholds` and `briefs.scout`; Atlas none.
 
 **Proposals** (`C-n`, `sys_factory_propose`): leads propose tuning, rules and
 code; a PL proposes rules for its own project. Each cites evidence ids (422
@@ -800,10 +830,20 @@ without) and one expected metric effect; at most 2 per agent per day.
 - **A** goes to the other lead, who co-signs
   (`sys_factory_propose(op="cosign", kind=…, id="C-n")`; never their own).
   It applies at once as a new version on **trial** (default 48 h).
-- **B** opens an owners `proposal` decision; Approve applies it as a trial.
+- **B** opens an owners `proposal` decision; Approve applies it as a trial
+  (strategy and product profile changes apply as a version: a trial would
+  judge them on delivery metrics).
 - **People** edit with `PUT /v1/factory/factories/{fid}/definition`
   (`{changes, note?, trial?, base_version?}`, MANAGE, human origin): a human
-  `C-n` applied at once.
+  `C-n` applied at once. `POST …/definition/preview` (same body, or
+  `{restore: K}`) is its dry run: the diff with each path's class, who can
+  apply it, the effects, what blocks it, whether it may run as a trial, and
+  the re-rank of opportunities once the discovery ledger exists.
+- **One trial per block.** A trial on a top-level block (`loops`,
+  `discovery`, …) refuses a second trial there with 409 `trial_overlap`
+  naming the running one; applying directly stays possible and rules trial
+  one by one. `trial: true` on strategy or the product profile is 422
+  `not_trialable`. An agent's proposal filed meanwhile says it will wait.
 - **Delivery.** Each version change mails the members
   `[Factory definition · vN · C-n by … · trial 48h]` with the diff; rule
   changes send `[Factory control · RULES UPDATE · C-n · by …]` to the roles they
@@ -827,8 +867,13 @@ without) and one expected metric effect; at most 2 per agent per day.
 - **Revert** (`POST …/proposals/{ref}/revert`, owners, one click) re-pins the
   parent version when it is still in force, else undoes only that change as a
   `revert` version. `…/keep` ends a trial early; `…/definition/pin {version}`
-  puts any stored version back. `GET …/definition`, `…/definition/versions`
-  and `…/definition/diff?from=&to=` show them.
+  puts any stored version back, and re-pinning the parent of a version made
+  in the last 10 minutes is its Undo (the version shows `undone_by`).
+  `POST …/definition/restore {version, note?}` (owners) stores an old
+  version's document as the next version, so history stays linear (its Undo
+  is another restore); trials whose change it takes out end as reverted.
+  `GET …/definition`, `…/definition/versions` (with `undone_by` and
+  `restored_from`) and `…/definition/diff?from=&to=` show them.
 
 **Tier 2: the Factory Smith lane** (code and bundle PRs to omnigent) ships
 off. It turns on only when `OMNIGENT_FACTORY_SMITH=1`, rulesets requiring

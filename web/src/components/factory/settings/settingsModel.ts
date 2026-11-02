@@ -192,9 +192,9 @@ export const OTHER_GROUPS: FieldGroup[] = [
     title: "Models",
     description: "Aliases such as sonnet or opus, never model ids.",
     fields: [
-      { path: "models.ic", label: "Implementers", kind: "text" },
-      { path: "models.reviewer", label: "Reviewer", kind: "text" },
-      { path: "models.planner", label: "Planner", kind: "text" },
+      { path: "role_defaults.ic.model", label: "Implementers", kind: "text" },
+      { path: "role_defaults.reviewer.model", label: "Reviewer", kind: "text" },
+      { path: "role_defaults.planner.model", label: "Planner", kind: "text" },
     ],
   },
 ];
@@ -321,7 +321,12 @@ export function changeLine(change: DefinitionChange, effective: DefinitionDoc): 
   return `${change.path}: ${draftOf(getPath(effective, change.path)) || "—"} → ${draftOf(change.value)}`;
 }
 
-/** Money, engine, autonomy and models changes are for owners (class B, owners). */
+/**
+ * Money, engine, autonomy, models and the product, strategy, discovery, brief
+ * and role-default blocks are for owners (class B, owners).
+ */
 export function ownersOnly(path: string): boolean {
-  return /^(engine|autonomy|budgets|models)\./.test(path);
+  return /^(engine|autonomy|budgets|models|product|strategy|discovery|briefs|role_defaults)\./.test(
+    path,
+  );
 }

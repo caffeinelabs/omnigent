@@ -46,7 +46,43 @@
     "alerts.ask_unneeded_n": [1, 20],
     "alerts.ask_unneeded_s": [30, 1800],
     "alerts.heartbeat_waste_usd": [0.5, 100],
-    "alerts.dead_ticks": [1, 10]
+    "alerts.dead_ticks": [1, 10],
+    "loops.claim.wait_h": [1, 24],
+    "strategy.mix.outcome": [0, 100],
+    "strategy.mix.tests": [0, 100],
+    "strategy.mix.enablers": [0, 100],
+    "strategy.mix.hunches": [0, 100],
+    "discovery.budgets.usd_per_day": [0, 1000],
+    "discovery.budgets.per_ask": [0, 100],
+    "discovery.cadence.sweep_h": [0, 168],
+    "discovery.cadence.synthesis_h": [0, 720],
+    "discovery.thresholds.min_accounts": [1, 100],
+    "discovery.thresholds.bets_per_week": [0, 50],
+    "discovery.thresholds.max_open_bets": [0, 50],
+    "discovery.rubric.ladder.hunch": [0, 1],
+    "discovery.rubric.ladder.weak": [0, 1],
+    "discovery.rubric.ladder.moderate": [0, 1],
+    "discovery.rubric.ladder.strong": [0, 1],
+    "discovery.rubric.ladder.proven": [0, 1],
+    "discovery.rubric.moderate_min_accounts": [1, 100],
+    "discovery.rubric.moderate_min_source_types": [1, 10],
+    "discovery.rubric.window_days": [7, 365],
+    "discovery.rubric.per_account_cap": [1, 10],
+    "discovery.rubric.decay_half_life_days": [7, 365],
+    "discovery.rubric.counter_share_down": [0, 1],
+    "discovery.rubric.reach_ratio.low": [1, 1000],
+    "discovery.rubric.reach_ratio.high": [1, 1000],
+    "discovery.rubric.reach_ref": [1, 10000000],
+    "discovery.rubric.intensity.blocker": [0, 1],
+    "discovery.rubric.intensity.workaround": [0, 1],
+    "discovery.rubric.intensity.annoyance": [0, 1],
+    "discovery.rubric.intensity.nice": [0, 1],
+    "discovery.rubric.off_focus_factor": [0, 1],
+    "discovery.rubric.bands.now": [0, 1],
+    "discovery.rubric.bands.next": [0, 1],
+    "discovery.rubric.map.value_high": [0, 1],
+    "discovery.rubric.map.confidence_high": [0, 1],
+    "discovery.rubric.human_minute_usd": [0, 100]
   },
   "env_ceilings": [
     "caps.max_projects",
@@ -85,7 +121,35 @@
       "class": "B (owners), as a trial"
     },
     {
-      "paths": "engine.*, autonomy.*, budgets.*, models.*",
+      "paths": "engine.*, autonomy.*, budgets.*",
+      "class": "B (owners)"
+    },
+    {
+      "paths": "product.*, strategy.*",
+      "class": "B (owners); never on trial, applies as a version"
+    },
+    {
+      "paths": "discovery.enabled",
+      "class": "A when turning it off, else B (owners)"
+    },
+    {
+      "paths": "discovery.sources.<id>",
+      "class": "A when it only narrows (pause, less budget, fewer roles), else B"
+    },
+    {
+      "paths": "discovery.budgets.*",
+      "class": "A when lower, else B (owners)"
+    },
+    {
+      "paths": "discovery.cadence.*",
+      "class": "A when slower or off, else B (owners)"
+    },
+    {
+      "paths": "discovery.seat|rubric|thresholds|autonomy",
+      "class": "B (owners)"
+    },
+    {
+      "paths": "briefs.*, role_defaults.*",
       "class": "B (owners)"
     },
     {
@@ -111,6 +175,13 @@
     "alerts.repeat_window_m",
     "alerts.spend_window_m",
     "autonomy.projects",
+    "briefs.demo",
+    "briefs.env_keeper",
+    "briefs.ic",
+    "briefs.planner",
+    "briefs.project_lead",
+    "briefs.reviewer",
+    "briefs.scout",
     "budgets.factory_usd_per_day",
     "budgets.project_usd",
     "budgets.usd_per_hour_alert",
@@ -120,11 +191,48 @@
     "caps.max_projects",
     "decisions.escalate_after_m",
     "decisions.escalate_owners_after_m",
+    "discovery.autonomy.bets",
+    "discovery.budgets.per_ask",
+    "discovery.budgets.usd_per_day",
+    "discovery.cadence.sweep_h",
+    "discovery.cadence.synthesis_h",
+    "discovery.enabled",
+    "discovery.rubric.bands.next",
+    "discovery.rubric.bands.now",
+    "discovery.rubric.counter_share_down",
+    "discovery.rubric.decay_half_life_days",
+    "discovery.rubric.human_minute_usd",
+    "discovery.rubric.intensity.annoyance",
+    "discovery.rubric.intensity.blocker",
+    "discovery.rubric.intensity.nice",
+    "discovery.rubric.intensity.workaround",
+    "discovery.rubric.ladder.hunch",
+    "discovery.rubric.ladder.moderate",
+    "discovery.rubric.ladder.proven",
+    "discovery.rubric.ladder.strong",
+    "discovery.rubric.ladder.weak",
+    "discovery.rubric.map.confidence_high",
+    "discovery.rubric.map.value_high",
+    "discovery.rubric.moderate_min_accounts",
+    "discovery.rubric.moderate_min_source_types",
+    "discovery.rubric.off_focus_factor",
+    "discovery.rubric.per_account_cap",
+    "discovery.rubric.reach_ratio.high",
+    "discovery.rubric.reach_ratio.low",
+    "discovery.rubric.reach_ref",
+    "discovery.rubric.window_days",
+    "discovery.seat.model",
+    "discovery.sources",
+    "discovery.thresholds.bets_per_week",
+    "discovery.thresholds.max_open_bets",
+    "discovery.thresholds.min_accounts",
+    "discovery.thresholds.validated_min_level",
     "engine.mode",
     "engine.next_hints",
     "engine.spawn",
     "loops.ci.flake_reruns",
     "loops.claim.mismatches",
+    "loops.claim.wait_h",
     "loops.demo.per_head",
     "loops.demo.per_pr_heads",
     "loops.implement.attempts",
@@ -139,13 +247,44 @@
     "loops.verify.per_head",
     "mail.pair_rate",
     "mail.sender_rate",
-    "models.ic",
-    "models.planner",
-    "models.reviewer",
     "previews.env_probe_s",
     "previews.max",
     "previews.preview_probe_s",
     "previews.ttl_h",
+    "product.areas",
+    "product.competitors",
+    "product.delivery.demo_paths",
+    "product.delivery.flags.convention",
+    "product.delivery.flags.provider",
+    "product.delivery.merge_policy",
+    "product.delivery.preview_domain",
+    "product.delivery.protected_repos",
+    "product.delivery.release",
+    "product.kind",
+    "product.links",
+    "product.name",
+    "product.segments",
+    "product.summary",
+    "role_defaults.demo.model",
+    "role_defaults.demo.vendor",
+    "role_defaults.env_keeper.model",
+    "role_defaults.env_keeper.vendor",
+    "role_defaults.ic.model",
+    "role_defaults.ic.vendor",
+    "role_defaults.planner.model",
+    "role_defaults.planner.vendor",
+    "role_defaults.project_lead.model",
+    "role_defaults.project_lead.vendor",
+    "role_defaults.reviewer.model",
+    "role_defaults.reviewer.vendor",
+    "strategy.focus_segments",
+    "strategy.goals",
+    "strategy.guardrails",
+    "strategy.mix.enablers",
+    "strategy.mix.hunches",
+    "strategy.mix.outcome",
+    "strategy.mix.tests",
+    "strategy.non_goals",
     "supervisor.blocked_escalate_s",
     "supervisor.quiet_beats",
     "supervisor.stuck_s"
@@ -243,12 +382,135 @@
       "heartbeat_waste_usd": 5.0,
       "dead_ticks": 2
     },
-    "models": {
-      "ic": null,
-      "reviewer": null,
-      "planner": null
-    },
     "rules": [],
-    "rule_seq": 0
+    "rule_seq": 0,
+    "product": {
+      "name": null,
+      "kind": null,
+      "summary": null,
+      "links": {},
+      "segments": [],
+      "areas": [],
+      "competitors": [],
+      "delivery": {
+        "merge_policy": null,
+        "protected_repos": [],
+        "demo_paths": [],
+        "preview_domain": null,
+        "release": "merged",
+        "flags": {
+          "provider": null,
+          "convention": null
+        }
+      }
+    },
+    "strategy": {
+      "goals": [],
+      "guardrails": [],
+      "non_goals": [],
+      "focus_segments": [],
+      "mix": {
+        "outcome": 60,
+        "tests": 20,
+        "enablers": 15,
+        "hunches": 5
+      }
+    },
+    "discovery": {
+      "enabled": false,
+      "seat": {
+        "model": null
+      },
+      "sources": [],
+      "rubric": {
+        "ladder": {
+          "hunch": 0.1,
+          "weak": 0.25,
+          "moderate": 0.5,
+          "strong": 0.8,
+          "proven": 1.0
+        },
+        "moderate_min_accounts": 5,
+        "moderate_min_source_types": 2,
+        "window_days": 90,
+        "per_account_cap": 1,
+        "decay_half_life_days": 60,
+        "counter_share_down": 0.33,
+        "reach_ratio": {
+          "low": 10.0,
+          "high": 40.0
+        },
+        "reach_ref": 1000,
+        "intensity": {
+          "blocker": 1.0,
+          "workaround": 0.6,
+          "annoyance": 0.3,
+          "nice": 0.1
+        },
+        "off_focus_factor": 0.5,
+        "bands": {
+          "now": 0.2,
+          "next": 0.1
+        },
+        "map": {
+          "value_high": 0.4,
+          "confidence_high": 0.5
+        },
+        "human_minute_usd": 2.0
+      },
+      "thresholds": {
+        "validated_min_level": "moderate",
+        "min_accounts": 2,
+        "bets_per_week": 3,
+        "max_open_bets": 3
+      },
+      "budgets": {
+        "usd_per_day": 10.0,
+        "per_ask": 2.0
+      },
+      "cadence": {
+        "sweep_h": 24,
+        "synthesis_h": 168
+      },
+      "autonomy": {
+        "bets": "confirm"
+      }
+    },
+    "briefs": {
+      "scout": "",
+      "project_lead": "",
+      "ic": "",
+      "reviewer": "",
+      "env_keeper": "",
+      "demo": "",
+      "planner": ""
+    },
+    "role_defaults": {
+      "project_lead": {
+        "vendor": null,
+        "model": null
+      },
+      "ic": {
+        "vendor": null,
+        "model": null
+      },
+      "reviewer": {
+        "vendor": null,
+        "model": null
+      },
+      "env_keeper": {
+        "vendor": null,
+        "model": null
+      },
+      "demo": {
+        "vendor": null,
+        "model": null
+      },
+      "planner": {
+        "vendor": null,
+        "model": null
+      }
+    },
+    "goal_seq": 0
   }
 }

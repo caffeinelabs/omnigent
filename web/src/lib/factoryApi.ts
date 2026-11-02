@@ -1291,8 +1291,13 @@ export interface DefinitionView {
   created_at: number;
   /** The version the factory runs. */
   pinned: boolean;
-  /** Engine, cadence, loops, budgets, autonomy, alerts, models, rules, … */
+  /** Engine, cadence, loops, budgets, autonomy, alerts, rules, product, strategy, … */
   doc: Record<string, unknown>;
+  /** Who undid this version: re-pinned its parent within 10 minutes. */
+  undone_by?: string | null;
+  undone_at?: number | null;
+  /** The version whose document a restore stored as this one. */
+  restored_from?: number | null;
 }
 
 /** One card on the factory index (`GET /v1/factory/factories`). */
@@ -2603,8 +2608,170 @@ export interface DefinitionRule {
   state: "trial" | "active";
 }
 
-/** The definition doc: engine, cadence, loops, budgets, autonomy, alerts, models, rules, … */
-export type DefinitionDoc = Record<string, unknown> & { rules?: DefinitionRule[] };
+// ── Definition blocks: what the factory knows about its product, as data ──
+// Mirrors `omnigent/server/factory/definition_blocks.py`. Lists with ids change
+// item by item: `add` at the list, `replace`/`remove` at `<list>/<id>`; goal ids
+// (`G-n`) are numbered by the server.
+
+export interface SegmentDef {
+  id: string;
+  label: string;
+  /** How a source can recognise this kind of user. */
+  rule: string;
+}
+
+export interface AreaDef {
+  id: string;
+  label: string;
+  /** Code paths (globs). */
+  paths: string[];
+  /** Events that measure the area. */
+  events: string[];
+}
+
+export interface CompetitorDef {
+  name: string;
+  changelog: string | null;
+}
+
+export interface DeliveryDef {
+  /** Who merges pull requests, in words. The factory never merges. */
+  merge_policy: string | null;
+  protected_repos: string[];
+  /** Paths whose changes need a demo. */
+  demo_paths: string[];
+  preview_domain: string | null;
+  /** `merged`, `github_release`, `github_deployment:<env>` or `manual`. */
+  release: string;
+  flags: { provider: string | null; convention: string | null };
+}
+
+export interface ProductDef {
+  name: string | null;
+  kind: string | null;
+  summary: string | null;
+  links: Record<string, string>;
+  segments: SegmentDef[];
+  areas: AreaDef[];
+  competitors: CompetitorDef[];
+  delivery: DeliveryDef;
+}
+
+export interface GoalDef {
+  /** `G-<n>`, numbered by the server and never reused. */
+  id: string;
+  statement: string;
+  /** A metric binding; `null` until a source can measure it. */
+  metric: string | null;
+  baseline: number | null;
+  target: number | null;
+  /** ISO date. */
+  by: string | null;
+  weight: number;
+}
+
+/** Where capacity goes, in percent (adds up to 100). */
+export interface MixDef {
+  outcome: number;
+  tests: number;
+  enablers: number;
+  hunches: number;
+}
+
+/** Never on trial: strategy changes are judged on outcomes. */
+export interface StrategyDef {
+  goals: GoalDef[];
+  guardrails: string[];
+  non_goals: string[];
+  focus_segments: string[];
+  mix: MixDef;
+}
+
+export type SourceKind =
+  | "repo"
+  | "team"
+  | "web"
+  | "analytics"
+  | "observability"
+  | "chat"
+  | "tracker"
+  | "reviews"
+  | "feedback"
+  | "flags"
+  | "mcp";
+export type PrivacyLevel = "public" | "internal" | "personal" | "sensitive";
+
+/** One evidence source. Never holds a secret. */
+export interface SourceDef {
+  id: string;
+  label: string;
+  kind: SourceKind;
+  params: Record<string, unknown>;
+  roles: ("scout" | "lead")[];
+  privacy: { level: PrivacyLevel; redact: string[]; quote_max: number; keep_days: number };
+  consent: "public" | "terms" | "opt_in" | "internal";
+  budget: { calls_per_day: number };
+  /** Minutes between syncs; 0 is query-only. */
+  interval_min: number;
+  state: "trial" | "active" | "paused";
+}
+
+/** The rank's numbers; its formula is code. */
+export interface RubricDef {
+  ladder: { hunch: number; weak: number; moderate: number; strong: number; proven: number };
+  moderate_min_accounts: number;
+  moderate_min_source_types: number;
+  window_days: number;
+  per_account_cap: number;
+  decay_half_life_days: number;
+  counter_share_down: number;
+  reach_ratio: { low: number; high: number };
+  reach_ref: number;
+  intensity: { blocker: number; workaround: number; annoyance: number; nice: number };
+  off_focus_factor: number;
+  bands: { now: number; next: number };
+  map: { value_high: number; confidence_high: number };
+  human_minute_usd: number;
+}
+
+export interface DiscoveryDef {
+  /** Off by default; the server env must allow discovery too. */
+  enabled: boolean;
+  seat: { model: string | null };
+  sources: SourceDef[];
+  rubric: RubricDef;
+  thresholds: {
+    validated_min_level: "hunch" | "weak" | "moderate" | "strong" | "proven";
+    min_accounts: number;
+    bets_per_week: number;
+    max_open_bets: number;
+  };
+  budgets: { usd_per_day: number; per_ask: number };
+  cadence: { sweep_h: number; synthesis_h: number };
+  autonomy: { bets: "confirm" | "requested" | "grace" };
+}
+
+export type BriefRole =
+  "scout" | "project_lead" | "ic" | "reviewer" | "env_keeper" | "demo" | "planner";
+/** This factory's brief per role (added to the built-in prompt; ≤ 4,000 chars). */
+export type BriefsDef = Record<BriefRole, string>;
+
+export interface RoleDefaultDef {
+  vendor: "claude" | "codex" | null;
+  /** A model alias, never a model id; `null` keeps the bundle's. */
+  model: string | null;
+}
+export type RoleDefaultsDef = Record<Exclude<BriefRole, "scout">, RoleDefaultDef>;
+
+/** The definition doc: engine, cadence, loops, budgets, autonomy, alerts, rules and the blocks. */
+export type DefinitionDoc = Record<string, unknown> & {
+  rules?: DefinitionRule[];
+  product?: ProductDef;
+  strategy?: StrategyDef;
+  discovery?: DiscoveryDef;
+  briefs?: BriefsDef;
+  role_defaults?: RoleDefaultsDef;
+};
 
 /** `GET …/definition`: the version in force, effective values, bounds, classes and trials. */
 export interface DefinitionResponse {
@@ -2617,6 +2784,18 @@ export interface DefinitionResponse {
   classes: { paths: string; class: string }[];
   paths: string[];
   on_trial: ProposalView[];
+  /** The block each running trial holds (no second trial there). */
+  trial_blocks?: { proposal: string; blocks: string[]; trial_until: number | null }[];
+  /** Lists changed by id; `numbered` is the id prefix the server hands out. */
+  lists?: Record<string, { numbered: string | null }>;
+  /** Path prefixes only owners apply (agents propose them). */
+  owner_only?: string[];
+  /** Blocks that apply as a version, never as a trial. */
+  not_trialable?: string[];
+  /** What each agent seat may propose in the blocks. */
+  agent_paths?: Record<string, string[]>;
+  /** Whether this server runs discovery at all. */
+  discovery_server?: boolean;
   tier2: Tier2StatusView;
 }
 
@@ -2674,6 +2853,90 @@ export interface PinResponse {
   changed: boolean;
   from?: number;
   ended?: string[];
+}
+
+/** `POST …/definition/preview`: the body of `PUT …/definition`, or a version to restore. */
+export interface DefinitionPreviewRequest {
+  changes?: DefinitionChange[];
+  restore?: number;
+  trial?: boolean;
+  trial_h?: number;
+  base_version?: number;
+}
+
+export interface DefinitionPreviewEntry extends DefinitionDiffEntry {
+  class: "A" | "B";
+  owner_only: boolean;
+  /** The block a trial on this path would hold (`null` for a rule). */
+  block: string | null;
+  line: string;
+}
+
+/** A change the preview could not take: a Tier-0 path, a bound, a moved base version… */
+export interface DefinitionBlocked {
+  index: number | null;
+  path: string;
+  code: string;
+  message: string;
+}
+
+export interface DefinitionEffect {
+  kind: "restore" | "mail" | "data" | "rules" | "cadence" | "discovery" | "ends_trial";
+  text: string;
+  count?: number;
+  paths?: string[];
+  members?: string[];
+  trial?: string;
+}
+
+/** Whether the change may run as a trial, and why not. */
+export interface TrialVerdict {
+  ok: boolean;
+  code?: "restore" | "no_change" | "not_trialable" | "trial_overlap";
+  reason?: string | null;
+  /** The running trial that holds the block (`trial_overlap`). */
+  trial?: string;
+  block?: string;
+  trial_h?: number;
+  blocks?: string[];
+}
+
+export interface DefinitionPreviewResponse {
+  def_version: number;
+  version_next: number;
+  diff: DefinitionPreviewEntry[];
+  lines: string[];
+  class: "A" | "B" | null;
+  approvers: string[];
+  /** "Who can change this", in words. */
+  who: string;
+  owner_only: boolean;
+  you_can_apply: boolean;
+  you_can_propose: boolean;
+  blocked: DefinitionBlocked[];
+  effects: DefinitionEffect[];
+  /** The opportunities' re-rank; empty until the discovery ledger exists. */
+  rerank: Record<string, unknown>[];
+  trialable: TrialVerdict;
+  restore: { version: number; ends: string[] } | null;
+}
+
+/** `POST …/definition/restore`: version K's document as the next version (owners). */
+export interface DefinitionRestoreRequest {
+  version: number;
+  note?: string;
+  base_version?: number;
+}
+
+export interface DefinitionRestoreResponse {
+  proposal: string;
+  proposal_id: string;
+  status: ProposalStatus;
+  def_version: number;
+  restored: number;
+  from: number;
+  /** Trials the restore ended (their change is out). */
+  ended: string[];
 }
 
 /** `POST …/definition/proposals`: an operator's change for the owners. */
@@ -2912,6 +3175,22 @@ export async function putFactoryDefinition(
   edit: DefinitionEditRequest,
 ): Promise<DefinitionEditResponse> {
   return readJson(await postJson(factoryUrl(factoryId, "/definition"), edit, "PUT"));
+}
+
+/** What a change (or a restore) would do: diff, class, effects, trial verdict. Stores nothing. */
+export async function previewFactoryDefinition(
+  factoryId: string,
+  request: DefinitionPreviewRequest,
+): Promise<DefinitionPreviewResponse> {
+  return readJson(await postJson(factoryUrl(factoryId, "/definition/preview"), request));
+}
+
+/** Store an old version's document as the next version (owners); history stays linear. */
+export async function restoreFactoryDefinition(
+  factoryId: string,
+  request: DefinitionRestoreRequest,
+): Promise<DefinitionRestoreResponse> {
+  return readJson(await postJson(factoryUrl(factoryId, "/definition/restore"), request));
 }
 
 /** Put a stored version back in force (owners). */
