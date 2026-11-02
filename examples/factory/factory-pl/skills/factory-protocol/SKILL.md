@@ -243,7 +243,7 @@ review link and the stable live-preview link), written by the PL.
 |---|---|---|
 | `~/factory/ledger.md` | each lead | its memory: projects, open requests, restarts, open questions |
 | `~/factory/<slug>/plan.md` | PL | plan, task cards, IC sessions, PRs, previews, demos |
-| `~/factory/env.json` | env_keeper (written by `pnpm factory:up`) | the dev env: `env_id`, `namespace` and `urls` (`app`, `api`, `minio`, `tilt_ui`). Read it; never construct env hostnames. |
+| `~/factory/env.json` | env_keeper (written by `pnpm factory:up`) | the dev env: `env_id`, `namespace` and `urls` (`app`, `api`, `minio`). Read it; never construct env hostnames. |
 | `~/factory/previews/p<n>/preview.json` | env_keeper | the factory preview of PR #<n>: `sha`, `env_id`, `namespace`, `urls`, `resources`; `synthetic-secret` beside it (never print it) |
 | `~/factory/demos/<n>/<sha7>/` | demo | `demo.json`, video, screenshots, `api.json` of one demo |
 | `/home/omnigent/workspace/wt/<task>` | one IC | its git worktree (branch `factory/<slug>/<task>`) and its `NOTES.md` |

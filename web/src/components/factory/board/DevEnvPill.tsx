@@ -63,7 +63,6 @@ export function DevEnvDetails({ env, nowS }: { env: EnvView; nowS: number }) {
           <Url label="app" url={reported.urls.app} />
           <Url label="api" url={reported.urls.api} />
           <Url label="minio" url={reported.urls.minio} />
-          <Url label="tilt" url={reported.urls.tilt_ui} />
         </ul>
       )}
       {resources.length > 0 && (

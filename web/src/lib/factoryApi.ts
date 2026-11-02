@@ -339,6 +339,7 @@ export interface EnvUrls {
   app: string | null;
   api: string | null;
   minio: string | null;
+  /** Reported by old sandboxes only; never shown (the session proxy refuses Tilt's port). */
   tilt_ui: string | null;
 }
 

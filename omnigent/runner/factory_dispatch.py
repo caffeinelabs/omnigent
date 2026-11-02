@@ -1536,7 +1536,7 @@ def _env_body(args: _JsonObject, caller: str) -> _JsonObject | str:
         if not isinstance(urls, dict) or not all(
             isinstance(v, str) for v in urls.values() if v is not None
         ):
-            return _error(f"{tool} 'urls' must map app/api/minio/tilt_ui to URLs")
+            return _error(f"{tool} 'urls' must map app/api/minio to URLs")
         body["urls"] = {k: v.strip() for k, v in urls.items() if isinstance(v, str) and v.strip()}
     deployed = args.get("deployed")
     if deployed is not None:

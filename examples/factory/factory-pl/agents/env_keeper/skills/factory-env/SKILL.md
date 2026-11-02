@@ -13,7 +13,7 @@ on UP, PREVIEW and MERGED. Every factory PR targets it.
 |---|---|---|
 | For | ICs, while they code | humans and the demo agent, while a PR waits for review |
 | Commit | origin/<base> (moves on MERGED) | exactly one PR head (moves on a new PREVIEW) |
-| Process | one long-running `tilt up` (port 10350) | one-shot `tilt ci --port 0`; objects keep running after it exits |
+| Process | one long-running `tilt up` | one-shot `tilt ci --port 0`; objects keep running after it exits |
 | Worktree | `/home/omnigent/workspace/wt/env` | `/home/omnigent/workspace/wt/preview-p<n>` |
 | Namespace | `env-<id>` | `env-<id>-p<n>` |
 | State file | `~/factory/env.json` | `~/factory/previews/p<n>/preview.json` (+ `tilt-ci.log`, `tilt-snapshot.json`, `synthetic-secret`) |
@@ -43,7 +43,7 @@ UP base=<base>:
 4. Report (values from env.json; resources from Tilt):
 
 ```
-sys_factory_env(state="ready", env_id=<env_id>, urls={app, api, minio, tilt_ui},
+sys_factory_env(state="ready", env_id=<env_id>, urls={app, api, minio},
   deployed={sha: <git -C wt/env rev-parse HEAD>, ref: "origin/<base>"}, resources=[{name, status, detail}])
 ```
 
@@ -167,6 +167,9 @@ stderr; stdout is only JSON):
    - On a timeout run the same block again: it waits for the previous run's
      lock and redeploys idempotently. A new head of the same PR reuses the
      namespace (about 1-3 min warm).
+   - A head that has the tooling ignores `tooling=<ref>`, unless its preview
+     failed on stale base-image files: then `<ref>` is a tooling fix to try
+     (failure table).
 5. **Overlay sha.** When `TOOLING` was set, `jq -r .tooling_overlay ~/factory/previews/p<n>/preview.json`
    is that commit; report it as `deployed.tooling_overlay`.
 6. **Confirm and report.** Read `~/factory/previews/p<n>/preview.json`, then
@@ -181,12 +184,21 @@ stderr; stdout is only JSON):
    the preview URLs: `{app}`, `{api}` and `{minio}` (or dev env URLs) stand
    for the preview's. Use `curl -fsS -o /tmp/v.out -w '%{http_code}' <url>`
    and keep the status plus a trimmed body.
+   The URLs pass the envs Envoy gateway, which (like prod's) replaces a
+   client's `X-Request-Id`: a header pass-through check cannot pass there.
+   Run it in-cluster against the Service too (a check marked `in-cluster:`
+   runs only there):
+   `kubectl -n <namespace> exec deploy/caffeine-api -- curl -si -H 'X-Request-Id: f-1' http://caffeine-api:3001/status`
+   (`caffeine-ux:3000` for the app). A check that fails through the public
+   URL but passes in-cluster is gateway behaviour, not a FAIL: report both
+   results and leave it out of PASS/FAIL.
 8. **One verify comment.** Write the body to a file and post it once:
    ```
    <!-- factory:verify sha=<sha> result=PASS env=<urls.api> preview=<urls.app> -->
    Verified in factory preview p<n> (`<env_id>`) at `<sha7>`:
    - `/__factory/preview` → sha <sha7> ✓ · `<api>/ready` → 200
    - `<check>` → 200 <trimmed body>
+   - gateway: `<check>` → public <what came back> · in-cluster ✓ <what came back>
    Preview: <urls.app> · API <urls.api> (Tailscale)
    ```
    `gh pr comment <pr url> --body-file /tmp/verify-p<n>.md`. Use
@@ -239,6 +251,7 @@ the PL redeploys the ones that are not ready with PREVIEW.
 ## Reading Tilt
 
 - Dev env: `tilt get uiresources`, `tilt logs <res> | tail -n 80`, `tilt trigger <res>`.
+- The Tilt web UI is not reachable from outside the pod: never report or link it.
 - Preview: there is no Tilt server; read `~/factory/previews/p<n>/tilt-ci.log`,
   `jq '.uiResources // .' ~/factory/previews/p<n>/tilt-snapshot.json`, and the
   cluster: `kubectl -n <namespace> get pods,httproute,httproutefilter,configmap/factory-preview`.
@@ -254,6 +267,7 @@ the PL redeploys the ones that are not ready with PREVIEW.
 | `ImagePullBackOff` | `kubectl -n <ns> describe pod <p>`; check `kubectl -n <ns> get secret github-registry-caffeine`; image pulls on a new node take about a minute. |
 | caffeine-db migrations fail | `kubectl -n <ns> logs <db pod> -c <init container>`; postgres Ready? Then redeploy. |
 | `OOMKilled` | Note container and limit; resource changes go through a PR: report it to the PL. |
+| `pnpm install` or a lib's `prepare` fails on files or imports the checkout no longer has (`TS2307`, `ENOENT`) | A stale base image: suspect the tooling, not the PR and not a missing image. `deploy/tilt/Dockerfile` copies the checkout over the newest published `ghcr.io/caffeinelabs/app/caffeine-db:<sha>` within 50 first-parent commits, and files deleted or moved since `<sha>` survive unless the Dockerfile prunes them (caffeinelabs/app#9832). Take `<sha>` from the build log (or `images.json` in the env's dir) and run `git diff --name-only --diff-filter=DR <sha>..HEAD`: the failing paths in it confirm the stale base. A tooling fix (a `tooling=<ref>` from the PL) can be tried at once, since `deploy/tilt/*` is a tooling path: `git fetch -q origin <ref> && git checkout FETCH_HEAD -- deploy/tilt`, then the `up` line of step 4 with `FACTORY_PREVIEW_TOOLING_REF=<that sha>` (UP: `pnpm factory:up` in `wt/env`). Report the paths, `<sha7>` and what you tried; suggest that humans publish a fresh base image only once the tooling is ruled out. |
 | `exceeded quota: env-budget` | `kubectl -n <ns> describe resourcequota`; each env and preview has its own 12 CPU / 32 Gi quota, so one preview never hits it: look for stray Jobs and Pods. |
 | `forbidden` right after the namespace was created | The RoleBinding arrives within about 5 s; the CLI waits for it. |
 | Namespace owned by another pod UID | Never adopt it; the reaper deletes it. Report it. |

@@ -786,6 +786,81 @@ def test_pl_handles_every_env_keeper_and_demo_result(pl: AgentSpec) -> None:
     assert "playbook's results table" in (pl.instructions or "")
 
 
+def _folded(path: Path) -> str:
+    return " ".join(path.read_text(encoding="utf-8").split())
+
+
+def test_no_bundle_file_mentions_tilt_ui() -> None:
+    """The sandbox session proxy refuses Tilt's port: no agent reports or links a Tilt UI."""
+    for path in sorted(_FACTORY_DIR.rglob("*")):
+        if path.is_file() and "node_modules" not in path.parts:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            name = str(path.relative_to(_FACTORY_DIR))
+            assert "tilt_ui" not in text, name
+            assert "10350" not in text, name
+
+
+def test_env_keeper_reports_the_dev_env_urls_without_tilt(pl: AgentSpec) -> None:
+    env = _sub_agent(pl, "env_keeper")
+    prompt = " ".join((env.instructions or "").split())
+    assert "Result: `ENV READY app=<urls.app> api=<urls.api> env_id=<env_id>`," in prompt
+    skill = (_skill_dir(env) / "factory-env" / "SKILL.md").read_text(encoding="utf-8")
+    assert 'sys_factory_env(state="ready", env_id=<env_id>, urls={app, api, minio},' in skill
+    playbook = (_PL_DIR / "skills/factory-pl-playbook/SKILL.md").read_text(encoding="utf-8")
+    assert "| `ENV READY app=… api=… env_id=…` |" in playbook
+    protocol = (_PL_DIR / "skills/factory-protocol/SKILL.md").read_text(encoding="utf-8")
+    assert "`urls` (`app`, `api`, `minio`). Read it" in protocol
+
+
+def test_env_build_failures_suspect_the_stale_base_image_first(pl: AgentSpec) -> None:
+    """Files deleted since the base image survive the overlay: check the tooling before anyone
+    asks humans to publish a fresh image."""
+    env = _sub_agent(pl, "env_keeper")
+    skill = (_skill_dir(env) / "factory-env" / "SKILL.md").read_text(encoding="utf-8")
+    failures = " ".join(
+        _command_section(skill, "## Failure table", ("## After a sandbox wake",)).split()
+    )
+    for token in (
+        "`ghcr.io/caffeinelabs/app/caffeine-db:<sha>` within 50 first-parent commits",
+        "`git diff --name-only --diff-filter=DR <sha>..HEAD`",
+        "`git fetch -q origin <ref> && git checkout FETCH_HEAD -- deploy/tilt`",
+        "`FACTORY_PREVIEW_TOOLING_REF=<that sha>`",
+        "suggest that humans publish a fresh base image only once the tooling is ruled out",
+    ):
+        assert token in failures, token
+    assert "| A stale base image: suspect the tooling" in failures
+    assert "failure table's stale base image check" in " ".join((env.instructions or "").split())
+    playbook = (_PL_DIR / "skills/factory-pl-playbook/SKILL.md").read_text(encoding="utf-8")
+    row = next(line for line in playbook.splitlines() if line.startswith("| `PREVIEW FAILED"))
+    assert "`PREVIEW pr=<n> head=<sha> base=<base> tooling=<fix sha>`" in row
+    assert "ask for a fresh base image only once env_keeper ruled the tooling out" in row
+
+
+def test_header_checks_run_in_cluster_behind_the_envs_gateway(pl: AgentSpec) -> None:
+    """The envs gateway replaces X-Request-Id: such checks run against the Service, and a
+    public-only failure is gateway behaviour, not a product FAIL."""
+    env = _sub_agent(pl, "env_keeper")
+    skill = (_skill_dir(env) / "factory-env" / "SKILL.md").read_text(encoding="utf-8")
+    checks = " ".join(_command_section(skill, "7. **Checks.**", ("9. **Result:**",)).split())
+    for token in (
+        "replaces a client's `X-Request-Id`",
+        "`kubectl -n <namespace> exec deploy/caffeine-api -- curl -si -H 'X-Request-Id: f-1' "
+        "http://caffeine-api:3001/status`",
+        "is gateway behaviour, not a FAIL: report both results",
+        "- gateway: `<check>` → public",
+    ):
+        assert token in checks, token
+    assert "checked in-cluster too" in " ".join((env.instructions or "").split())
+    playbook = _folded(_PL_DIR / "skills/factory-pl-playbook/SKILL.md")
+    assert "check as `in-cluster: <curl … http://caffeine-api:3001/…>`" in playbook
+    assert "while it passes in-cluster is gateway behaviour, not the author's" in playbook
+    demo = _sub_agent(pl, "demo")
+    demo_skill = _folded(_skill_dir(demo) / "factory-demo" / "SKILL.md")
+    assert "port-forward svc/caffeine-api 13001:3001" in demo_skill
+    assert "A step that fails only through the gateway is not a FAIL." in demo_skill
+    assert "a header the envs gateway rewrites" in " ".join((demo.instructions or "").split())
+
+
 def test_demo_skill_frontmatter_and_the_demo_agent(pl: AgentSpec) -> None:
     demo = _sub_agent(pl, "demo")
     assert [s.name for s in demo.skills] == ["factory-demo"]

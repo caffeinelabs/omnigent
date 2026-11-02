@@ -107,7 +107,8 @@ def test_env_schema_covers_dev_envs_and_previews() -> None:
         "parked",
         "down",
     }
-    assert set(params["properties"]["urls"]["properties"]) == {"app", "api", "minio", "tilt_ui"}
+    # No Tilt UI link: the sandbox session proxy refuses its port.
+    assert set(params["properties"]["urls"]["properties"]) == {"app", "api", "minio"}
     assert "preview_cap" in SysFactoryEnvTool.description()
 
 
@@ -338,6 +339,29 @@ async def test_env_states_depend_on_the_target(args: dict[str, Any]) -> None:
     out = await _call(server, "sys_factory_env", args)
     assert out["error"] == "invalid_state"
     assert server.requests == []
+
+
+async def test_env_urls_name_only_the_current_keys() -> None:
+    server = FakeServer()
+    out = await _call(
+        server,
+        "sys_factory_env",
+        {"state": "ready", "env_id": "1a2b", "urls": ["app"], "deployed": {}},
+    )
+    assert "app/api/minio" in out["error"] and "tilt" not in out["error"]
+    assert server.requests == []
+
+
+async def test_env_passes_an_old_sandboxs_tilt_link_through() -> None:
+    """An old env.json's Tilt UI link still reports; the server keeps it, the cockpit hides it."""
+    server = FakeServer().on("PUT", "/v1/factory/agent/envs", body={"project": "api"})
+    urls = {**_URLS, "tilt_ui": "https://10350-omnigent-managed-1a2b.sessions.example"}
+    await _call(
+        server,
+        "sys_factory_env",
+        {"state": "ready", "env_id": "1a2b", "urls": urls, "deployed": {"sha": SHA}},
+    )
+    assert server.requests[0].body["urls"] == urls
 
 
 async def test_env_preview_cap_reaches_the_agent_with_park_candidates() -> None:

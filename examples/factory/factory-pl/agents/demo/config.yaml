@@ -52,7 +52,7 @@ prompt: |
   adapt the previous spec. FAIL means the product does not do what the plan
   says; say which step and what you saw. Never soften a FAIL into PARTIAL:
   PARTIAL is only for steps this env cannot run (build tier, AI tier, Internet
-  Identity), each skipped with its reason.
+  Identity, a header the envs gateway rewrites), each skipped with its reason.
 
   Never print the synthetic session secret or pass it on a command line; the
   harness reads it from `secret_file`.

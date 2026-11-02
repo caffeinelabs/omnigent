@@ -476,6 +476,7 @@ async def test_dev_env_report_writes_the_project_env(cockpit: Cockpit) -> None:
         "env_keeper",
         urls={
             "app": "https://app-1a2b.envs.sandbox.caffeinelabs.io",
+            # Old sandboxes still report the Tilt UI link; it is kept, never shown.
             "tilt_ui": "http://localhost:10350",
         },
         deployed={"sha": SHA, "ref": "origin/main"},
@@ -588,6 +589,13 @@ async def test_env_reports_are_validated(
     assert code(resp) == error
     # A refused report tracks no PR (it would have no pr.discovered event).
     assert cockpit.store.list_prs(cockpit.factory_id) == []
+
+
+async def test_unknown_env_url_keys_name_only_the_current_keys(cockpit: Cockpit) -> None:
+    resp = await cockpit.env("env_keeper", urls={"grafana": "https://g.envs.example"})
+    assert resp.status_code == 400, resp.text
+    message = resp.json()["error"]["message"]
+    assert "['app', 'api', 'minio']" in message and "tilt" not in message
     assert cockpit.kinds() == []
 
 

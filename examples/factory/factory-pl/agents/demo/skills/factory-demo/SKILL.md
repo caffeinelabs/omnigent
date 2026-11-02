@@ -109,6 +109,14 @@ Rules:
 - Prefer `getByRole` and `getByText` to CSS. No sleeps over 2 s.
 - The spec is published next to the demo: no secrets, tokens or personal data.
 - Never change the product to make a step pass.
+- `api` calls pass the envs Envoy gateway, which (like prod's) replaces a
+  client's `X-Request-Id`: a header pass-through step cannot pass there.
+  Show what the public URL returns as the gateway's behaviour, and the
+  pass-through against the Service: run
+  `kubectl -n <preview.json namespace> port-forward svc/caffeine-api 13001:3001`
+  in the background, then `api.get('http://127.0.0.1:13001/…')` in a step
+  titled "In-cluster: …" (or `step.skip` it, reason "envs gateway replaces
+  X-Request-Id"). A step that fails only through the gateway is not a FAIL.
 
 ## Run
 
