@@ -1573,7 +1573,10 @@ class DefinitionView(_View):
     :param created_by_title: The member's title when ``created_by`` is a session id.
     :param pinned: The version the factory runs (``omnigent.factory.def_version``).
     :param doc: Engine, cadence, supervisor, mail, previews, caps, loops,
-        budgets, autonomy, decisions, alerts, models and rules.
+        budgets, autonomy, decisions, alerts, rules, product, strategy,
+        discovery, briefs and role defaults.
+    :param undone_by: Who undid this version (re-pinned its parent within 10 minutes).
+    :param restored_from: The version whose document a restore stored as this one.
     """
 
     factory_id: str
@@ -1588,6 +1591,9 @@ class DefinitionView(_View):
     created_at: int
     pinned: bool = False
     doc: dict[str, Any] = Field(default_factory=dict)
+    undone_by: str | None = None
+    undone_at: int | None = None
+    restored_from: int | None = None
 
 
 __all__ = [

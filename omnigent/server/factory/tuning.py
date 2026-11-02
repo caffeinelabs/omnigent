@@ -16,6 +16,16 @@ human-authored ``C-n`` applied at once (a trial only when asked). Every
 version change mails ``[Factory definition · vN …]`` to the members and, when
 rules change, ``[Factory control · RULES UPDATE · …]`` to the roles they
 concern. Keep and revert are one click; a revert re-pins the parent version.
+Restoring an old version (``POST …/definition/restore``) stores its document
+as the next version, so history stays linear; re-pinning a version's parent
+within :data:`.definition.UNDO_WINDOW_S` is its Undo.
+
+In the product-agnostic blocks (:mod:`.definition_blocks`) agents propose only
+what their seat may (Scout the profile, strategy and sources; Sentinel the
+rubric, thresholds and Scout's brief), and only owners apply them. Changes
+that never run as a trial (strategy, the product profile, and discovery until
+its guards exist; see :func:`.definition.trialable`) apply as a version once
+approved.
 """
 
 from __future__ import annotations
@@ -28,7 +38,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from omnigent.entities.factory import FactoryDecision, FactoryProposal
+from omnigent.entities.factory import FactoryDecision, FactoryDefinition, FactoryProposal
 from omnigent.factory import (
     ACTION_APPLY_PROPOSAL,
     ACTION_DISMISS,
@@ -169,33 +179,38 @@ def _changes(raw: Sequence[Mapping[str, Any]]) -> list[definition.Change]:
 def _stored_ops(changes: Sequence[definition.Change]) -> list[dict[str, Any]]:
     out = []
     for change in changes:
-        path = "rules" if change.rule_id is None else f"rules.{change.rule_id}"
-        op: dict[str, Any] = {
-            "op": change.op,
-            "path": change.path if change.path != "rules" else path,
-        }
+        op: dict[str, Any] = {"op": change.op, "path": change.full_path}
         if change.op != "remove":
             op["value"] = change.value
         out.append(op)
     return out
 
 
+def _numbered_list(path: str) -> str | None:
+    """:returns: ``rules`` or a numbered list's path when *path* is one of its items."""
+    if path.startswith("rules."):
+        return "rules"
+    listed = definition.blocks.list_of(path)
+    if listed is not None and listed[0].numbered and listed[1] is not None:
+        return listed[0].path
+    return None
+
+
 def preview(diff: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     """
-    *diff* as an unapplied proposal shows it. An added rule has no id yet
-    (``rules.new``, ``rules.new-2``, …): open proposals never claim the same ``R-n``.
+    *diff* as an unapplied proposal shows it. An added rule or goal has no id yet
+    (``rules.new``, ``rules.new-2``, ``strategy.goals.new``, …): open proposals
+    never claim the same ``R-n`` or ``G-n``.
     """
     out: list[dict[str, Any]] = []
-    added = 0
+    added: dict[str, int] = {}
     for entry in diff:
         path, after = str(entry["path"]), entry.get("after")
-        if (
-            path.startswith("rules.")
-            and entry.get("before") is None
-            and isinstance(after, Mapping)
-        ):
-            added += 1
-            path = NEW_RULE if added == 1 else f"{NEW_RULE}-{added}"
+        numbered = _numbered_list(path)
+        if numbered and entry.get("before") is None and isinstance(after, Mapping):
+            added[numbered] = added.get(numbered, 0) + 1
+            n = added[numbered]
+            path = f"{numbered}.new" if n == 1 else f"{numbered}.new-{n}"
             after = {k: v for k, v in after.items() if k != "id"}
         out.append({**entry, "path": path, "after": after})
     return out
@@ -236,12 +251,65 @@ def stale_paths(
     return resolved.version, definition.moved_paths(row.before or {}, resolved.stored)
 
 
-def _klass(diff: Sequence[Mapping[str, Any]]) -> str:
+def diff_class(diff: Sequence[Mapping[str, Any]]) -> str:
+    """:returns: The approval class of *diff*: its worst entry's (see ``CLASS_MAP``)."""
     worst = "A"
     for entry in diff:
         if definition.classify(str(entry["path"]), entry["before"], entry["after"]) == "B":
             worst = "B"
     return worst
+
+
+def _klass(diff: Sequence[Mapping[str, Any]]) -> str:
+    """:returns: The class of an agent's proposal of *diff*: B once it has an owner-only path."""
+    if any(definition.owner_only(str(entry["path"])) for entry in diff):
+        return "B"
+    return diff_class(diff)
+
+
+def diff_paths(diff: Sequence[Mapping[str, Any]] | Mapping[str, Any]) -> list[str]:
+    """:returns: The paths of a diff (or of a proposal's ``after`` map)."""
+    if isinstance(diff, Mapping):
+        return [str(p) for p in diff]
+    return [str(d["path"]) for d in diff]
+
+
+def is_trialable(row: FactoryProposal) -> bool:
+    """Whether approving *row* runs it as a trial (strategy and profile changes never do)."""
+    return definition.trialable(diff_paths({**(row.before or {}), **(row.after or {})}))[0]
+
+
+def agent_seat(caller: AgentCaller) -> str:
+    """:returns: The proposing agent's seat: ``atlas``, ``sentinel``, ``scout`` or its role."""
+    role = caller.membership.role or ""
+    if role == ROLE_LEAD:
+        return "atlas" if control.same_id(caller.session.id, caller.factory_id) else "sentinel"
+    return role
+
+
+def check_agent_paths(seat: str, changes: Sequence[definition.Change]) -> None:
+    """
+    Refuse a path the agent's seat may not propose (see :data:`.definition_blocks.AGENT_PATHS`).
+
+    :raises CockpitError: 403 ``path_not_allowed``.
+    """
+    for change in changes:
+        path = change.full_path
+        if definition.blocks.agent_may_propose(seat, path):
+            continue
+        allowed = definition.blocks.AGENT_PATHS.get(seat, ())
+        may = (
+            f"it may propose {', '.join(allowed)} there"
+            if allowed
+            else "people change it in the cockpit"
+        )
+        raise CockpitError(
+            403,
+            "path_not_allowed",
+            f"{seat} may not propose {path}: {may}",
+            field="changes",
+            path=path,
+        )
 
 
 def _title(diff: Sequence[Mapping[str, Any]], fallback: str) -> str:
@@ -504,7 +572,13 @@ async def deliver(
     """
     deps = factory_deps(app_state)
     diff = definition.diff(before, after)
-    settings = [d for d in diff if not str(d["path"]).startswith("rules.")]
+    # Product, strategy and discovery data are read where needed, never mailed into prompts.
+    settings = [
+        d
+        for d in diff
+        if not str(d["path"]).startswith("rules.")
+        and not definition.blocks.in_blocks(str(d["path"]), definition.QUIET_BLOCKS)
+    ]
     rules = [d for d in diff if str(d["path"]).startswith("rules.")]
     members = await asyncio.to_thread(_members, deps, root.id)
     notified: list[str] = []
@@ -615,13 +689,6 @@ async def propose(app_state: Any, caller: AgentCaller, body: ProposeIn) -> dict[
     effect = _effect(body.expected_effect)
     if body.kind == "code":
         return await _record_code(app_state, caller, root, body, effect)
-    if effect is None:
-        raise CockpitError(
-            400,
-            "invalid_body",
-            "expected_effect {metric, direction} is required",
-            field="expected_effect",
-        )
     raw = list(body.changes)
     if body.rule is not None:
         rule = body.rule.model_dump()
@@ -640,16 +707,25 @@ async def propose(app_state: Any, caller: AgentCaller, body: ProposeIn) -> dict[
         raise CockpitError(400, "invalid_body", "rules go in a rules proposal", field="changes")
     if role == ROLE_PROJECT_LEAD:
         _check_pl_rules(changes, caller.membership.project)
+    check_agent_paths(agent_seat(caller), changes)
     resolved = await asyncio.to_thread(definition.definition_for, deps, root.id, fresh=True)
     assert resolved is not None
     after = definition.apply_changes(resolved.stored, changes, rule_state="trial")
     diff = preview(definition.diff(resolved.stored, after))
     if not diff:
         raise CockpitError(400, "no_change", "the definition already has these values")
+    trialable = definition.trialable(diff_paths(diff))[0]
+    if effect is None and trialable:
+        raise CockpitError(
+            400,
+            "invalid_body",
+            "expected_effect {metric, direction} is required",
+            field="expected_effect",
+        )
     await asyncio.to_thread(_check_overlap, deps, root.id, diff, resolved.stored)
     klass = _klass(diff)
     peer = await asyncio.to_thread(_peer_lead, deps, root.id, author) if klass == "A" else None
-    warnings: list[str] = []
+    warnings: list[str] = await asyncio.to_thread(trial_warnings, deps, root.id, diff)
     if klass == "A" and (role != ROLE_LEAD or peer is None):
         klass = "B"
         warnings.append("no peer lead to co-sign: owners decide")
@@ -731,7 +807,11 @@ def _check_overlap(
     proposal (something it changes moved since, see :func:`stale_paths`) holds
     nothing: it can no longer apply, so its replacement may be filed.
     """
-    settings = {str(d["path"]) for d in diff if not str(d["path"]).startswith("rules.")}
+    settings = {
+        str(d["path"])
+        for d in diff
+        if not str(d["path"]).startswith("rules.") and not definition.is_new_item(str(d["path"]))
+    }
     rules = {
         str(d["path"])
         for d in diff
@@ -762,6 +842,23 @@ def _check_overlap(
             + ", ".join(sorted(taken)),
             proposal=proposal_ref(row.number),
         )
+
+
+def trial_warnings(
+    deps: FactoryDeps, factory_id: str, diff: Sequence[Mapping[str, Any]]
+) -> list[str]:
+    """:returns: Why approving *diff* will wait: a running trial already holds its block."""
+    from omnigent.server.factory import evaluate
+
+    paths = diff_paths(diff)
+    if not definition.trialable(paths)[0]:
+        return []
+    found = evaluate.overlapping_trial(deps, factory_id, paths)
+    if found is None:
+        return []
+    row, block = found
+    ref = proposal_ref(row.number)
+    return [f"{ref} is trialing {block}: approving this waits until {ref} ends"]
 
 
 async def _record_code(
@@ -854,10 +951,17 @@ def _decision_context(row: FactoryProposal, lines: Sequence[str]) -> str:
         f"**Expected:** {effect.get('metric', '?')} {effect.get('direction', '')}"
         + (f" by {effect['delta']}" if effect.get("delta") is not None else ""),
     ]
-    if row.kind != "code":
+    if row.kind != "code" and is_trialable(row):
         trial_h = (row.result or {}).get("trial_h", definition.TRIAL_H_DEFAULT)
         parts.append(
             f"*Approving runs it as a {trial_h} h trial; guard metrics decide keep or revert.*"
+        )
+    elif row.kind != "code":
+        hit = definition.not_trialable(diff_paths({**(row.before or {}), **(row.after or {})}))
+        why = definition.untrialable_text(hit)
+        parts.append(
+            f"*Approving applies it as a new version, not a trial: {why}."
+            " Any earlier version can be restored.*"
         )
     return "\n".join(parts)[:4000]
 
@@ -869,7 +973,9 @@ async def _open_decision(
     ref = proposal_ref(row.number)
     target = f"{SUBJECT_PREFIX}{row.id}"
     trial_h = (row.result or {}).get("trial_h", definition.TRIAL_H_DEFAULT)
-    label = "Approve" if row.kind == "code" else f"Approve · trial {trial_h}h"
+    label = (
+        f"Approve · trial {trial_h}h" if row.kind != "code" and is_trialable(row) else "Approve"
+    )
     decision, _ = await asyncio.to_thread(
         lambda: deps.factory_store.create_decision(
             root.id,
@@ -936,16 +1042,27 @@ async def cosign(app_state: Any, caller: AgentCaller, ref: str) -> dict[str, Any
     root = await control.get_conv(deps, caller.factory_id)
     assert root is not None
     actor = Actor.agent(caller.session.id, ROLE_LEAD, title=caller.title)
+    trial = is_trialable(row)
+    if trial:
+        await asyncio.to_thread(_check_trial, deps, caller.factory_id, row)
     row = await apply(
         app_state,
         root,
         row,
         actor=actor,
-        trial=True,
+        trial=trial,
         expect="awaiting_cosign",
         cosigned_by=caller.session.id,
     )
     return await _reply(deps, row)
+
+
+def _check_trial(deps: FactoryDeps, factory_id: str, row: FactoryProposal) -> None:
+    """Refuse running pending *row* as a trial (409 ``trial_overlap``, 422 ``not_trialable``)."""
+    from omnigent.server.factory import evaluate
+
+    paths = diff_paths({**(row.before or {}), **(row.after or {})})
+    evaluate.check_trial(deps, factory_id, paths, exclude_id=row.id)
 
 
 async def apply(
@@ -997,6 +1114,7 @@ async def _apply(
     if moved:
         await _refuse_stale(app_state, row, expect, resolved.version, moved, actor)
     floor = await asyncio.to_thread(definition.rule_floor, deps, root.id)
+    goal_floor = await asyncio.to_thread(definition.goal_floor, deps, root.id)
     changes = _changes(row.ops)
     after = definition.apply_changes(
         resolved.stored,
@@ -1004,8 +1122,16 @@ async def _apply(
         origin=ref,
         rule_state="trial" if trial else "active",
         min_rule_seq=floor,
+        min_goal_seq=goal_floor,
     )
     applied = definition.diff(resolved.stored, after)
+    if trial and applied:
+        from omnigent.server.factory import evaluate
+
+        # Under the definition lock: two approvals racing for one block cannot both trial.
+        await asyncio.to_thread(
+            evaluate.check_trial, deps, root.id, diff_paths(applied), exclude_id=row.id
+        )
     if not applied:
         await _update(
             deps,
@@ -1273,6 +1399,7 @@ def revert_doc(
             else:
                 rules.pop(rule_id, None)
             continue
+        path = definition.canonical_path(path)
         if definition.get_path(doc, path) != value:
             continue  # Changed again since: that later change stays.
         definition.set_path(doc, path, definition.get_path(old, path))
@@ -1439,6 +1566,10 @@ async def human_edit(
     diff = preview(definition.diff(resolved.stored, after))
     if not diff:
         raise CockpitError(400, "no_change", "the definition already has these values")
+    if body.trial:
+        from omnigent.server.factory import evaluate
+
+        await asyncio.to_thread(evaluate.check_trial, deps, root.id, diff_paths(diff))
     kind = "rules" if all(c.path == "rules" for c in changes) else "tuning"
     trial_h = body.trial_h or definition.TRIAL_H_DEFAULT
     row, _ = await asyncio.to_thread(
@@ -1462,7 +1593,19 @@ async def human_edit(
     await _emit(
         app_state, row, "proposal.opened", f"{projects_name(actor)} edited the definition", actor
     )
-    row = await apply(app_state, root, row, actor=actor, trial=body.trial, note=body.note)
+    try:
+        row = await apply(app_state, root, row, actor=actor, trial=body.trial, note=body.note)
+    except CockpitError as exc:
+        if exc.code in ("trial_overlap", "not_trialable"):
+            # Another trial took the block meanwhile: this edit never applied.
+            await _update(
+                deps,
+                row,
+                "pending",
+                status="refused",
+                result={**(row.result or {}), "reason": exc.code},
+            )
+        raise
     return {
         "proposal": proposal_ref(row.number),
         "proposal_id": row.id,
@@ -1490,6 +1633,15 @@ async def pin_version(
         assert resolved is not None
         if resolved.version == version:
             return {"def_version": version, "changed": False}
+        current = await asyncio.to_thread(
+            deps.factory_store.get_definition, root.id, resolved.version
+        )
+        # Re-pinning the parent of a version made minutes ago is that version's Undo.
+        undo = (
+            current is not None
+            and current.parent_version == version
+            and now_s() - int(current.created_at) <= definition.UNDO_WINDOW_S
+        )
         await asyncio.to_thread(definition.pin, deps, root.id, version)
         await deliver(
             app_state,
@@ -1503,7 +1655,58 @@ async def pin_version(
             actor=actor,
         )
         ended = await _end_trials_outside(app_state, root, version, actor=actor)
+        if undo and current is not None:
+            await _mark_undone(app_state, root, current, version, actor=actor)
     return {"def_version": version, "changed": True, "from": resolved.version, "ended": ended}
+
+
+UNDONE_KIND: Final = "definition.undone"
+
+
+async def _mark_undone(
+    app_state: Any, root: Conversation, undone: FactoryDefinition, parent: int, *, actor: Actor
+) -> None:
+    """Record that *undone* (a version) was undone, and revert the change that made it."""
+    deps = factory_deps(app_state)
+    by = projects_name(actor)
+    await events.emit(
+        app_state,
+        root.id,
+        UNDONE_KIND,
+        severity="notice",
+        subject=f"definition:v{undone.version}",
+        summary=f"v{undone.version} undone by {by}; v{parent} in force",
+        data={**actor.event_data(), "version": undone.version, "to": parent, "by_name": by},
+    )
+    row = (
+        await asyncio.to_thread(deps.factory_store.get_proposal, undone.proposal_id)
+        if undone.proposal_id
+        else None
+    )
+    if row is None or row.status != "applied" or row.def_version_to != undone.version:
+        return
+    reason = f"undone by {by}"
+    try:
+        row = await _update(
+            deps,
+            row,
+            "applied",
+            status="reverted",
+            reverted_at=now_s(),
+            reverted_by=actor.id,
+            result={
+                **(row.result or {}),
+                "revert_reason": reason,
+                "undone": True,
+                "revert_def_version": parent,
+                "revert_changed": True,
+            },
+        )
+    except CockpitError:
+        return
+    ref = proposal_ref(row.number)
+    await _emit(app_state, row, "proposal.reverted", f"{ref} {reason}", actor, reason=reason)
+    await _tell(app_state, row, outcome_text(ref, reason))
 
 
 def _lineage(deps: FactoryDeps, factory_id: str, version: int) -> set[int]:
@@ -1536,26 +1739,36 @@ async def _end_trials_outside(
     for row in rows:
         if row.def_version_to in lineage:
             continue
-        try:
-            row = await _update(
-                deps,
-                row,
-                "trial",
-                status="reverted",
-                reverted_at=now_s(),
-                reverted_by=actor.id,
-                result={**(row.result or {}), "revert_reason": reason},
-            )
-        except CockpitError:
-            continue
-        ref = proposal_ref(row.number)
-        await _close_keep_decision(app_state, row, "expired")
-        await _emit(
-            app_state, row, "proposal.reverted", f"{ref} ended: {reason}", actor, reason=reason
-        )
-        await _tell(app_state, row, outcome_text(ref, f"ended: {reason}"))
-        ended.append(ref)
+        ref = await _end_trial(app_state, row, actor=actor, reason=reason)
+        if ref is not None:
+            ended.append(ref)
     return ended
+
+
+async def _end_trial(
+    app_state: Any, row: FactoryProposal, *, actor: Actor, reason: str
+) -> str | None:
+    """End trial *row* as reverted (its change is out of force). :returns: Its ref, or ``None``."""
+    deps = factory_deps(app_state)
+    try:
+        row = await _update(
+            deps,
+            row,
+            "trial",
+            status="reverted",
+            reverted_at=now_s(),
+            reverted_by=actor.id,
+            result={**(row.result or {}), "revert_reason": reason},
+        )
+    except CockpitError:
+        return None
+    ref = proposal_ref(row.number)
+    await _close_keep_decision(app_state, row, "expired")
+    await _emit(
+        app_state, row, "proposal.reverted", f"{ref} ended: {reason}", actor, reason=reason
+    )
+    await _tell(app_state, row, outcome_text(ref, f"ended: {reason}"))
+    return ref
 
 
 async def human_keep_or_revert(
@@ -1641,6 +1854,9 @@ async def plan_answer(
             if moved:
                 await _tell_stale(app_state, row, version, moved)
                 raise stale_error(row, version, moved)
+            if is_trialable(row):
+                # A running trial holds its block: the decision stays open until it ends.
+                await asyncio.to_thread(_check_trial, deps, root.id, row)
         return TuningAnswer(row, root, actor, user_id, apply=True, action=OPTION_APPLY)
     return TuningAnswer(row, root, actor, user_id, apply=False, note=text, action=OPTION_REJECT)
 
@@ -1696,7 +1912,7 @@ async def execute_answer(
             answer.root,
             row,
             actor=answer.actor,
-            trial=True,
+            trial=is_trialable(row),
             expect=list(PROPOSAL_OPEN_STATUSES),
         )
         return None, None
@@ -1776,19 +1992,25 @@ async def expire_due(app_state: Any, factory_id: str, *, now: int | None = None)
 
 __all__ = [
     "KINDS",
+    "UNDONE_KIND",
     "DefinitionEditIn",
     "ProposeIn",
     "TuningAnswer",
+    "agent_seat",
     "apply",
+    "check_agent_paths",
     "cosign",
     "definition_text",
     "deliver",
+    "diff_class",
+    "diff_paths",
     "execute_answer",
     "expire_due",
     "handle",
     "human_edit",
     "human_keep_or_revert",
     "is_tier1",
+    "is_trialable",
     "keep",
     "pin_version",
     "plan_answer",
@@ -1799,4 +2021,5 @@ __all__ = [
     "rules_update_text",
     "stale_error",
     "stale_paths",
+    "trial_warnings",
 ]

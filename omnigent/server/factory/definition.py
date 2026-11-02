@@ -13,12 +13,18 @@ Changes are JSON-patch-like ``{op, path, value}`` on an allowlist of paths.
 safer: a peer lead co-signs) or ``B`` (owners). Any path outside the schema,
 or a Tier-0 one, is refused with 422 ``tier0``. Rules are advisory text served
 by ``sys_factory_rules``; they never widen a policy or a gate.
+
+The product-agnostic blocks ``product``, ``strategy``, ``discovery``,
+``briefs`` and ``role_defaults`` (:mod:`.definition_blocks`) hold everything
+the factory knows about its product. Their lists with ids (goals, segments,
+areas, sources) change item by item, like ``rules``.
 """
 
 from __future__ import annotations
 
 import copy
 import functools
+import json
 import logging
 import os
 import re
@@ -51,6 +57,14 @@ from omnigent.factory import (
     ROLE_PROJECT_LEAD,
     ROLES,
 )
+from omnigent.server.factory import definition_blocks as blocks
+from omnigent.server.factory.definition_blocks import (
+    BriefsDef,
+    DiscoveryDef,
+    ProductDef,
+    RoleDefaultsDef,
+    StrategyDef,
+)
 from omnigent.stores.factory_store import DefinitionVersionExists, canonical_hash, norm_id
 
 if TYPE_CHECKING:
@@ -70,12 +84,13 @@ RULE_ROLES: Final = (*sorted(ROLES), "*")
 TRIAL_H_DEFAULT: Final = 48
 TRIAL_H_MIN: Final = 24
 TRIAL_H_MAX: Final = 168
+UNDO_WINDOW_S: Final = 600
+"""Re-pinning the parent of a version this young is an Undo (the version gets ``undone_by``)."""
 LABEL_ENGINE_MODE: Final = f"{LABEL_PREFIX}engine_mode"
 LABEL_AUTONOMY: Final = f"{LABEL_PREFIX}autonomy_projects"
 LABEL_ENGINE_SPAWN: Final = f"{LABEL_PREFIX}engine_spawn"
 LEGACY_LABELS: Final = (LABEL_ENGINE_MODE, LABEL_AUTONOMY, LABEL_ENGINE_SPAWN)
 """Root labels whose values move into the doc on the first resolve."""
-_ALIAS_RE: Final = re.compile(r"^[a-z][a-z0-9-]{0,31}$")
 _RULE_ID_RE: Final = re.compile(r"^R-([1-9][0-9]{0,6})$")
 _EVIDENCE_RE: Final = re.compile(r"[A-Za-z0-9!#:_./-]{1,64}")
 _RULE_EDIT_KEYS: Final = frozenset({"role", "project", "text"})
@@ -230,21 +245,6 @@ class AlertsDef(_Block):
     dead_ticks: int = 2
 
 
-class ModelsDef(_Block):
-    """Model aliases (never model ids) per sub-agent kind."""
-
-    ic: str | None = None
-    reviewer: str | None = None
-    planner: str | None = None
-
-    @field_validator("ic", "reviewer", "planner")
-    @classmethod
-    def _alias(cls, value: str | None) -> str | None:
-        if value is not None and not _ALIAS_RE.match(value):
-            raise ValueError("a model alias such as 'sonnet' or 'opus', never a model id")
-        return value
-
-
 class RuleDef(_Block):
     """One advisory rule, e.g. ``R-3 · ic · "Run the package's unit tests before every push."``."""
 
@@ -292,9 +292,14 @@ class FactoryDefinitionDoc(_Block):
     autonomy: AutonomyDef = Field(default_factory=AutonomyDef)
     decisions: DecisionsDef = Field(default_factory=DecisionsDef)
     alerts: AlertsDef = Field(default_factory=AlertsDef)
-    models: ModelsDef = Field(default_factory=ModelsDef)
     rules: list[RuleDef] = Field(default_factory=list)
     rule_seq: int = 0
+    product: ProductDef = Field(default_factory=ProductDef)
+    strategy: StrategyDef = Field(default_factory=StrategyDef)
+    discovery: DiscoveryDef = Field(default_factory=DiscoveryDef)
+    briefs: BriefsDef = Field(default_factory=BriefsDef)
+    role_defaults: RoleDefaultsDef = Field(default_factory=RoleDefaultsDef)
+    goal_seq: int = 0
 
     @field_validator("rules")
     @classmethod
@@ -367,6 +372,41 @@ BOUNDS: Final[dict[str, tuple[float, float]]] = {
     "alerts.ask_unneeded_s": (30, 1800),
     "alerts.heartbeat_waste_usd": (0.5, 100),
     "alerts.dead_ticks": (1, 10),
+    "strategy.mix.outcome": (0, 100),
+    "strategy.mix.tests": (0, 100),
+    "strategy.mix.enablers": (0, 100),
+    "strategy.mix.hunches": (0, 100),
+    "discovery.budgets.usd_per_day": (0, 1000),
+    "discovery.budgets.per_ask": (0, 100),
+    "discovery.cadence.sweep_h": (0, 168),
+    "discovery.cadence.synthesis_h": (0, 720),
+    "discovery.thresholds.min_accounts": (1, 100),
+    "discovery.thresholds.bets_per_week": (0, 50),
+    "discovery.thresholds.max_open_bets": (0, 50),
+    "discovery.rubric.ladder.hunch": (0, 1),
+    "discovery.rubric.ladder.weak": (0, 1),
+    "discovery.rubric.ladder.moderate": (0, 1),
+    "discovery.rubric.ladder.strong": (0, 1),
+    "discovery.rubric.ladder.proven": (0, 1),
+    "discovery.rubric.moderate_min_accounts": (1, 100),
+    "discovery.rubric.moderate_min_source_types": (1, 10),
+    "discovery.rubric.window_days": (7, 365),
+    "discovery.rubric.per_account_cap": (1, 10),
+    "discovery.rubric.decay_half_life_days": (7, 365),
+    "discovery.rubric.counter_share_down": (0, 1),
+    "discovery.rubric.reach_ratio.low": (1, 1000),
+    "discovery.rubric.reach_ratio.high": (1, 1000),
+    "discovery.rubric.reach_ref": (1, 10_000_000),
+    "discovery.rubric.intensity.blocker": (0, 1),
+    "discovery.rubric.intensity.workaround": (0, 1),
+    "discovery.rubric.intensity.annoyance": (0, 1),
+    "discovery.rubric.intensity.nice": (0, 1),
+    "discovery.rubric.off_focus_factor": (0, 1),
+    "discovery.rubric.bands.now": (0, 1),
+    "discovery.rubric.bands.next": (0, 1),
+    "discovery.rubric.map.value_high": (0, 1),
+    "discovery.rubric.map.confidence_high": (0, 1),
+    "discovery.rubric.human_minute_usd": (0, 100),
 }
 """Code bounds of every numeric path (an env default outside them widens them)."""
 ENV_CEILINGS: Final = frozenset(
@@ -412,6 +452,15 @@ CLASS_MAP: Final[dict[str, Callable[[Any, Any], Klass]]] = {
     "autonomy.*": _always("B"),
     "budgets.*": _always("B"),
     "models.*": _always("B"),
+    "product.*": _always("B"),
+    "strategy.*": _always("B"),
+    "discovery.enabled": blocks.off_is_a,
+    "discovery.sources.*": blocks.source_class,
+    "discovery.budgets.*": _lower_is_a,
+    "discovery.cadence.*": blocks.slower_or_off_is_a,
+    "discovery.*": _always("B"),
+    "briefs.*": _always("B"),
+    "role_defaults.*": _always("B"),
 }
 """``path pattern -> (before, after) -> class``; the first matching pattern wins."""
 CLASS_TABLE: Final = (
@@ -422,12 +471,41 @@ CLASS_TABLE: Final = (
     ("supervisor.*, alerts.*, decisions.*", "A"),
     ("previews.*, caps.*", "B"),
     ("rules", "B (owners), as a trial"),
-    ("engine.*, autonomy.*, budgets.*, models.*", "B (owners)"),
+    ("engine.*, autonomy.*, budgets.*", "B (owners)"),
+    ("product.*, strategy.*", "B (owners); never on trial, applies as a version"),
+    ("discovery.enabled", "A when turning it off, else B (owners)"),
+    ("discovery.sources.<id>", "A when it only narrows (pause, less budget, fewer roles), else B"),
+    ("discovery.budgets.*", "A when lower, else B (owners)"),
+    ("discovery.cadence.*", "A when slower or off, else B (owners)"),
+    ("discovery.seat|rubric|thresholds|autonomy", "B (owners)"),
+    ("discovery.*, briefs.scout", "never on trial until discovery guards exist"),
+    ("briefs.*, role_defaults.*", "B (owners)"),
+    ("owner-only paths, proposed by an agent", "B (owners), whatever their class"),
     ("anything else, Tier 0", "refused: 422 tier0"),
 )
 """:data:`CLASS_MAP` in words (the Definition panel shows it)."""
-OWNER_ONLY_PREFIXES: Final = ("engine.", "autonomy.", "budgets.", "models.")
-TIER0_PATHS: Final = frozenset({"alerts.slack_webhook", "alerts.slack_bot_token", "rule_seq"})
+OWNER_ONLY_PREFIXES: Final = (
+    "engine.",
+    "autonomy.",
+    "budgets.",
+    "models.",
+    "product.",
+    "strategy.",
+    "discovery.",
+    "briefs.",
+    "role_defaults.",
+)
+"""Only owners apply these: an agent's proposal of one always waits for them (class B)."""
+TIER0_PATHS: Final = frozenset(
+    {"alerts.slack_webhook", "alerts.slack_bot_token", "rule_seq", "goal_seq"}
+)
+TIER0_REASONS: Final[dict[str, str]] = {
+    "discovery.rubric.formula": "the rubric's formula is code (Tier 0); its numbers are data",
+    "goal_seq": "goal numbers are handed out by the server (Tier 0)",
+    "rule_seq": "rule numbers are handed out by the server (Tier 0)",
+}
+QUIET_BLOCKS: Final = blocks.BLOCKS
+"""Blocks whose readers fetch them as data: their changes are not mailed to members."""
 
 
 def _num(value: Any) -> float | None:
@@ -438,8 +516,13 @@ def _num(value: Any) -> float | None:
 
 def _pattern_match(pattern: str, path: str) -> bool:
     want, have = pattern.split("."), path.split(".")
-    if want[-1] == "*" and len(want) == 2:
-        return have[0] == want[0] and len(have) >= 2
+    if want[-1] == "*":
+        # A trailing ``*`` matches one or more segments: ``discovery.*`` covers
+        # ``discovery.rubric.ladder.weak``.
+        head = want[:-1]
+        return len(have) > len(head) and all(
+            w == "*" or w == h for w, h in zip(head, have[: len(head)], strict=True)
+        )
     if len(want) != len(have):
         return False
     return all(w == "*" or w == h for w, h in zip(want, have, strict=True))
@@ -455,19 +538,26 @@ def classify(path: str, before: Any, after: Any) -> Klass:
     return "B"
 
 
+def owner_only(path: str) -> bool:
+    """Whether only owners may apply *path* (agents only propose it)."""
+    return any(path.startswith(prefix) for prefix in OWNER_ONLY_PREFIXES)
+
+
 def _leaf_paths(model: type[BaseModel], prefix: str = "") -> list[str]:
     out: list[str] = []
     for name, info in model.model_fields.items():
         annotation = info.annotation
         if isinstance(annotation, type) and issubclass(annotation, BaseModel):
             out += _leaf_paths(annotation, f"{prefix}{name}.")
-        elif name not in ("rules", "rule_seq"):
+        elif name not in ("rules", "rule_seq", "goal_seq"):
             out.append(f"{prefix}{name}")
     return out
 
 
 ALLOWED_PATHS: Final = frozenset(_leaf_paths(FactoryDefinitionDoc))
-"""Every scalar path a change may replace (plus ``rules``)."""
+"""Every path a change may replace: scalars, and whole lists (plus ``rules``)."""
+LIST_PATHS: Final = frozenset(blocks.LISTS)
+"""Lists of :data:`.definition_blocks.LISTS` (diffed and changed item by item)."""
 
 
 # ── Env defaults and the seed ──────────────────────────────────
@@ -514,27 +604,92 @@ def env_defaults() -> dict[str, Any]:
     }
 
 
+def _item_index(items: list[Any], item_id: str) -> int | None:
+    return next(
+        (i for i, x in enumerate(items) if isinstance(x, Mapping) and x.get("id") == item_id),
+        None,
+    )
+
+
 def get_path(doc: Mapping[str, Any], path: str) -> Any:
-    """:returns: The value at a dotted *path* of *doc*, or ``None``."""
+    """
+    :returns: The value at a dotted *path* of *doc*, or ``None``. A part after
+        a list names an item by id (``strategy.goals.G-2``).
+    """
     node: Any = doc
     for part in path.split("."):
-        if not isinstance(node, Mapping) or part not in node:
+        if isinstance(node, list):
+            index = _item_index(node, part)
+            if index is None:
+                return None
+            node = node[index]
+        elif isinstance(node, Mapping) and part in node:
+            node = node[part]
+        else:
             return None
-        node = node[part]
     return node
 
 
 def set_path(doc: dict[str, Any], path: str, value: Any) -> None:
-    """Set a dotted *path* of *doc* in place, creating blocks on the way."""
+    """
+    Set a dotted *path* of *doc* in place, creating blocks on the way. On a
+    list item (``strategy.goals.G-2``) a mapping replaces or appends the item
+    and ``None`` removes it.
+    """
     parts = path.split(".")
-    node = doc
+    node: Any = doc
     for part in parts[:-1]:
+        if isinstance(node, list):
+            index = _item_index(node, part)
+            if index is None:
+                return
+            node = node[index]
+            continue
         child = node.get(part)
-        if not isinstance(child, dict):
+        if not isinstance(child, dict | list):
             child = {}
             node[part] = child
         node = child
-    node[parts[-1]] = value
+    last = parts[-1]
+    if isinstance(node, list):
+        index = _item_index(node, last)
+        if value is None:
+            if index is not None:
+                node.pop(index)
+        elif index is None:
+            node.append({**value, "id": last})
+        else:
+            node[index] = {**value, "id": last}
+        return
+    node[last] = value
+
+
+SPARSE_KEYS: Final = (*blocks.BLOCKS, "goal_seq")
+"""Keys a version stores only once they differ from their defaults (see :func:`stored_form`)."""
+
+
+@functools.cache
+def _code_defaults() -> dict[str, Any]:
+    return FactoryDefinitionDoc().model_dump(mode="json")
+
+
+def stored_form(doc: Mapping[str, Any]) -> dict[str, Any]:
+    """
+    :returns: *doc* (validated) as a version stores it. The blocks of
+        :mod:`.definition_blocks` and ``goal_seq`` are left out while they hold
+        their defaults, and role defaults that set only the old model aliases
+        are kept as ``models``. A server from before those blocks then still
+        reads every version of a factory that has not used them (a rollback
+        keeps working); every reader fills the defaults back in.
+    """
+    defaults = _code_defaults()
+    out = {k: v for k, v in doc.items() if not (k in SPARSE_KEYS and v == defaults.get(k))}
+    return blocks.downgrade(out)
+
+
+def _with_defaults(stored: Mapping[str, Any]) -> dict[str, Any]:
+    """:returns: *stored* over the defaults, its legacy blocks moved (see ``blocks.upgrade``)."""
+    return _merge(default_doc(), blocks.upgrade(dict(stored)))
 
 
 def default_doc() -> dict[str, Any]:
@@ -666,15 +821,14 @@ def _merge(base: dict[str, Any], over: Mapping[str, Any]) -> dict[str, Any]:
 
 def full_doc(stored: Mapping[str, Any]) -> dict[str, Any]:
     """:returns: *stored* completed with the defaults and validated (not clamped)."""
-    return FactoryDefinitionDoc.model_validate(_merge(default_doc(), stored)).model_dump(
-        mode="json"
-    )
+    return FactoryDefinitionDoc.model_validate(_with_defaults(stored)).model_dump(mode="json")
 
 
 def effective(stored: Mapping[str, Any]) -> dict[str, Any]:
     """:returns: *stored* over env and code defaults, validated (bad blocks fall back), clamped."""
     env = env_defaults()
     base = default_doc()
+    stored = blocks.upgrade(dict(stored))
     merged = _merge(base, stored)
     try:
         doc = FactoryDefinitionDoc.model_validate(merged).model_dump(mode="json")
@@ -699,7 +853,7 @@ def _is_root(conv: Conversation | None) -> bool:
 
 def _seed(deps: FactoryDeps, root: Conversation) -> FactoryDefinition:
     store = deps.factory_store
-    doc = seed_doc(root.labels)
+    doc = stored_form(seed_doc(root.labels))
     try:
         row = store.put_definition(
             root.id, doc=doc, created_by="server", created_via="seed", version=1
@@ -792,13 +946,16 @@ def store_version(
     pin_it: bool = True,
 ) -> FactoryDefinition:
     """Store *doc* as the next version and pin it. :returns: The new version."""
-    validated = FactoryDefinitionDoc.model_validate(doc).model_dump(mode="json")
-    # Carry the highest rule number forward, so a version built on a re-pinned
-    # older one never hands out a rule id another version already used.
+    validated = FactoryDefinitionDoc.model_validate(blocks.upgrade(dict(doc))).model_dump(
+        mode="json"
+    )
+    # Carry the highest rule and goal numbers forward, so a version built on a
+    # re-pinned older one never hands out an id another version already used.
     validated["rule_seq"] = max(validated["rule_seq"], rule_floor(deps, factory_id))
+    validated["goal_seq"] = max(validated["goal_seq"], goal_floor(deps, factory_id))
     row = deps.factory_store.put_definition(
         factory_id,
-        doc=validated,
+        doc=stored_form(validated),
         created_by=created_by,
         created_via=created_via,
         parent_version=parent_version,
@@ -848,20 +1005,35 @@ class Change:
     """
     One validated change of a definition doc.
 
-    :param path: Dotted path, e.g. ``"cadence.project_lead"`` or ``"rules"``.
+    :param path: Dotted path, e.g. ``"cadence.project_lead"``, ``"rules"`` or a
+        list of :data:`LIST_PATHS` such as ``"strategy.goals"``.
     :param op: ``replace`` / ``add`` / ``remove``.
     :param rule_id: The rule a ``rules`` change adds, replaces or removes.
+    :param item_id: The item of a list a change adds, replaces or removes
+        (``None`` with ``replace``: the whole list).
     """
 
     op: str
     path: str
     value: Any = None
     rule_id: str | None = None
+    item_id: str | None = None
+
+    @property
+    def full_path(self) -> str:
+        """:returns: The path with its rule or item, e.g. ``"strategy.goals.G-2"``."""
+        found = self.rule_id or self.item_id
+        return f"{self.path}.{found}" if found else self.path
 
 
 def normalize_path(raw: str) -> str:
     """:returns: ``"/cadence/project_lead"`` or ``"cadence.project_lead"`` as the dotted form."""
-    return raw.strip().lstrip("/").replace("/", ".")
+    return canonical_path(raw.strip().lstrip("/").replace("/", "."))
+
+
+def canonical_path(path: str) -> str:
+    """:returns: *path*, with a legacy alias (``models.ic``) as the path it moved to."""
+    return blocks.LEGACY_MODELS.get(path, path)
 
 
 def _error(status: int, code: str, message: str, **extra: Any) -> CockpitError:
@@ -887,8 +1059,13 @@ def parse_change(raw: Mapping[str, Any], index: int = 0) -> Change:
     field = f"changes[{index}]"
     if op not in ("replace", "add", "remove"):
         raise _error(400, "invalid_body", f"{field}.op must be replace, add or remove")
+    if path in TIER0_REASONS:
+        raise tier0(f"{path}: {TIER0_REASONS[path]}", field=field)
     if path in TIER0_PATHS or not path:
         raise tier0(f"{path or 'that path'} is not part of the factory definition", field=field)
+    listed = blocks.list_of(path)
+    if listed is not None:
+        return _parse_list_change(op, path, raw.get("value"), listed, field)
     if path == "rules" or path.startswith("rules."):
         rest = path.removeprefix("rules").lstrip(".")
         rule_id = rest.split(".", 1)[0] or None
@@ -912,6 +1089,48 @@ def parse_change(raw: Mapping[str, Any], index: int = 0) -> Change:
         raise _error(400, "invalid_body", f"{field}: settings are replaced, not {op}")
     _check_bounds(path, raw.get("value"), field)
     return Change("replace", path, raw.get("value"))
+
+
+def _parse_list_change(
+    op: str,
+    path: str,
+    value: Any,
+    listed: tuple[blocks.ListSpec, str | None, str | None],
+    field: str,
+) -> Change:
+    """A change of a list with ids: add at the list, replace or remove one item (or a field)."""
+    spec, item_id, item_field = listed
+    if item_id is not None and not blocks.item_id_ok(spec, item_id):
+        raise _error(400, "invalid_body", f"{field}: {item_id!r} is not an id of {spec.path}")
+    if item_field is not None:
+        if blocks.has_secret({item_field: value}):
+            raise tier0(f"{path}: {blocks.SECRET_REFUSAL}", field=field)
+        if op != "replace" or item_field == "id":
+            raise _error(400, "invalid_body", f"{field}: an item's field is replaced, never {op}")
+        return Change("replace", spec.path, {item_field: value}, item_id=item_id)
+    if op == "add":
+        if spec.numbered and item_id is not None:
+            raise _error(
+                400,
+                "invalid_body",
+                f"{field}: add a {spec.prefix}-<n> item at {spec.path}; the server numbers it",
+            )
+        if isinstance(value, Mapping) and blocks.has_secret(value):
+            raise tier0(f"{path}: {blocks.SECRET_REFUSAL}", field=field)
+        return Change("add", spec.path, value, item_id=item_id)
+    if item_id is None:
+        if op == "remove" or spec.numbered:
+            raise _error(
+                400,
+                "invalid_body",
+                f"{field}: add an item at {spec.path}, replace or remove one at {spec.path}/<id>",
+            )
+        if blocks.has_secret(value):
+            raise tier0(f"{path}: {blocks.SECRET_REFUSAL}", field=field)
+        return Change("replace", spec.path, value)
+    if op == "replace" and isinstance(value, Mapping) and blocks.has_secret(value):
+        raise tier0(f"{path}: {blocks.SECRET_REFUSAL}", field=field)
+    return Change(op, spec.path, value, item_id=item_id)
 
 
 def _check_bounds(path: str, value: Any, field: str) -> None:
@@ -955,6 +1174,65 @@ def rule_floor(deps: FactoryDeps, factory_id: str) -> int:
     return rule_seq(latest.doc or {}) if latest is not None else 0
 
 
+_GOALS: Final = blocks.LISTS["strategy.goals"]
+
+
+def goal_seq(doc: Mapping[str, Any]) -> int:
+    """:returns: The highest goal number *doc* has used (its ``goal_seq`` or a goal id)."""
+    goals = get_path(doc, _GOALS.path)
+    return blocks.seq_of(dict(doc), _GOALS, list(goals) if isinstance(goals, list) else [])
+
+
+def goal_floor(deps: FactoryDeps, factory_id: str) -> int:
+    """:returns: The highest goal number any stored version used (``0`` when none)."""
+    latest = deps.factory_store.latest_definition(factory_id)
+    return goal_seq(latest.doc or {}) if latest is not None else 0
+
+
+def _apply_list(doc: dict[str, Any], change: Change) -> None:
+    """Add, replace (merge its fields) or remove one item of a list with ids, or the whole list."""
+    spec = blocks.LISTS[change.path]
+    found = get_path(doc, change.path)
+    items: list[dict[str, Any]] = [dict(x) for x in found] if isinstance(found, list) else []
+    if change.op == "replace" and change.item_id is None:
+        if not isinstance(change.value, list):
+            raise _error(422, "invalid_definition", f"{spec.path}: a list of items")
+        set_path(doc, spec.path, [dict(x) if isinstance(x, Mapping) else x for x in change.value])
+        return
+    if change.op != "remove" and not isinstance(change.value, Mapping):
+        raise _error(
+            422, "invalid_definition", f"{change.full_path}: an item is an object", field="value"
+        )
+    body = dict(change.value) if isinstance(change.value, Mapping) else {}
+    if change.op == "add":
+        if spec.numbered:
+            number = blocks.seq_of(doc, spec, items) + 1
+            item_id = f"{spec.prefix}-{number}"
+            doc[spec.seq or ""] = number
+        else:
+            item_id = change.item_id or str(body.get("id") or "")
+            if not blocks.item_id_ok(spec, item_id):
+                raise _error(
+                    422, "invalid_definition", f"{spec.path}: an item needs an id like 'beta'"
+                )
+            if _item_index(items, item_id) is not None:
+                raise _error(
+                    409, "duplicate_item", f"{spec.path} already has {item_id}", item=item_id
+                )
+        items.append({**body, "id": item_id})
+    else:
+        index = _item_index(items, change.item_id or "")
+        if index is None:
+            raise _error(
+                404, "unknown_item", f"no {change.item_id} in {spec.path}", item=change.item_id
+            )
+        if change.op == "remove":
+            items.pop(index)
+        else:
+            items[index] = {**items[index], **body, "id": change.item_id}
+    set_path(doc, spec.path, items)
+
+
 def apply_changes(
     stored: Mapping[str, Any],
     changes: Sequence[Change],
@@ -962,17 +1240,24 @@ def apply_changes(
     origin: str | None = None,
     rule_state: str = "active",
     min_rule_seq: int = 0,
+    min_goal_seq: int = 0,
 ) -> dict[str, Any]:
     """
     :param min_rule_seq: Added rules number past this (see :func:`rule_floor`).
+    :param min_goal_seq: Added goals number past this (see :func:`goal_floor`).
     :returns: A new stored doc with *changes* applied (validated by the model).
     :raises CockpitError: 422 ``invalid_definition`` when the result does not validate,
-        404 ``unknown_rule`` for a missing rule.
+        404 ``unknown_rule`` / ``unknown_item`` for a missing rule or list item,
+        409 ``duplicate_item`` when an added item's id is taken.
     """
-    doc = _merge(default_doc(), stored)
+    doc = _with_defaults(stored)
     doc["rule_seq"] = max(rule_seq(doc), min_rule_seq)
+    doc["goal_seq"] = max(goal_seq(doc), min_goal_seq)
     rules: list[dict[str, Any]] = [dict(r) for r in doc.get("rules") or []]
     for change in changes:
+        if change.path in LIST_PATHS:
+            _apply_list(doc, change)
+            continue
         if change.path != "rules":
             set_path(doc, change.path, change.value)
             continue
@@ -1022,14 +1307,30 @@ def apply_changes(
         ) from None
 
 
+def _list_diff(path: str, before: Any, after: Any) -> list[dict[str, Any]]:
+    old = {x["id"]: x for x in before or [] if isinstance(x, Mapping) and "id" in x}
+    new = {x["id"]: x for x in after or [] if isinstance(x, Mapping) and "id" in x}
+    ids = [*old, *(i for i in new if i not in old)]
+    return [
+        {"path": f"{path}.{i}", "before": old.get(i), "after": new.get(i)}
+        for i in ids
+        if old.get(i) != new.get(i)
+    ]
+
+
 def diff(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[dict[str, Any]]:
-    """:returns: ``[{path, before, after}]`` of the scalar paths and rules that differ."""
-    a, b = _merge(default_doc(), before), _merge(default_doc(), after)
+    """
+    :returns: ``[{path, before, after}]`` of the paths that differ: scalars (and
+        lists without ids) whole, lists with ids per item (``strategy.goals.G-2``), rules per rule.
+    """
+    a, b = _with_defaults(before), _with_defaults(after)
     out = [
         {"path": path, "before": get_path(a, path), "after": get_path(b, path)}
-        for path in sorted(ALLOWED_PATHS)
+        for path in sorted(ALLOWED_PATHS - LIST_PATHS)
         if get_path(a, path) != get_path(b, path)
     ]
+    for path in sorted(LIST_PATHS):
+        out += _list_diff(path, get_path(a, path), get_path(b, path))
     old = {r["id"]: r for r in a.get("rules") or []}
     new = {r["id"]: r for r in b.get("rules") or []}
     for rule_id in sorted(old.keys() | new.keys(), key=lambda r: int(r[2:])):
@@ -1060,12 +1361,12 @@ def moved_paths(before: Mapping[str, Any], stored: Mapping[str, Any]) -> list[st
     applies. A replaced or removed rule moves once its role, scope or text changed
     or it is gone; its trial/active state does not count.
     """
-    doc = _merge(default_doc(), stored)
+    doc = _with_defaults(stored)
     rules = {str(r.get("id")): r for r in doc.get("rules") or [] if isinstance(r, Mapping)}
     out: list[str] = []
     for path, was in before.items():
         if not path.startswith("rules."):
-            if get_path(doc, path) != was:
+            if get_path(doc, canonical_path(path)) != was:
                 out.append(path)
             continue
         if not isinstance(was, Mapping):
@@ -1075,12 +1376,68 @@ def moved_paths(before: Mapping[str, Any], stored: Mapping[str, Any]) -> list[st
     return out
 
 
+def is_item_path(path: str) -> bool:
+    """Whether *path* names one item of a list with ids (``strategy.goals.G-2``)."""
+    listed = blocks.list_of(path)
+    return listed is not None and listed[1] is not None and listed[2] is None
+
+
+def is_new_item(path: str) -> bool:
+    """Whether *path* is an unnumbered addition of a pending change (``strategy.goals.new``)."""
+    listed = blocks.list_of(path)
+    if path.startswith("rules.new"):
+        return True
+    return (
+        listed is not None
+        and listed[0].numbered
+        and bool(re.fullmatch(r"new(-[0-9]+)?", listed[1] or ""))
+    )
+
+
+_SHORT_MAX: Final = 80
+
+
+def _short(value: Any) -> Any:
+    """*value* for a diff line: long text and structures clipped (short values as they are)."""
+    if isinstance(value, Mapping | list):
+        text = json.dumps(value, separators=(",", ":"), default=str, ensure_ascii=False)
+    elif isinstance(value, str):
+        text = value
+    else:
+        return value
+    return text if len(text) <= _SHORT_MAX else f"{text[: _SHORT_MAX - 1]}…"
+
+
+def _item_label(item: Mapping[str, Any]) -> str:
+    for key in ("label", "statement", "name"):
+        if item.get(key):
+            return f'"{_short(str(item[key]))}"'
+    return str(item.get("id") or "")
+
+
+def _item_line(path: str, before: Any, after: Any) -> str:
+    if before is None and isinstance(after, Mapping):
+        return f"+ {path} · {_item_label(after)}"
+    if after is None and isinstance(before, Mapping):
+        return f"- {path} · {_item_label(before)}"
+    was = before if isinstance(before, Mapping) else {}
+    now = after if isinstance(after, Mapping) else {}
+    keys = [k for k in dict.fromkeys([*was, *now]) if was.get(k) != now.get(k)]
+    parts = [f"{k} {_short(was.get(k))} → {_short(now.get(k))}" for k in keys[:3]]
+    more = f" (+{len(keys) - 3})" if len(keys) > 3 else ""
+    return f"~ {path} · {'; '.join(parts)}{more}"
+
+
 def diff_lines(changes: Iterable[Mapping[str, Any]], limit: int = 12) -> list[str]:
     """:returns: One line per change, e.g. ``"cadence.project_lead: 7200 → 10800"``."""
     lines: list[str] = []
     for change in changes:
         before, after = change.get("before"), change.get("after")
-        if str(change.get("path", "")).startswith("rules."):
+        path = str(change.get("path", ""))
+        if is_item_path(path):
+            lines.append(_item_line(path, before, after))
+            continue
+        if path.startswith("rules."):
             if before is None and isinstance(after, Mapping):
                 rule_id = after.get("id") or "new rule"
                 lines.append(f'+ {rule_id} · {after["role"]} · "{after["text"]}"')
@@ -1091,7 +1448,7 @@ def diff_lines(changes: Iterable[Mapping[str, Any]], limit: int = 12) -> list[st
                     f'~ {after["id"]} · {after["role"]} · "{after["text"]}" ({after.get("state")})'
                 )
             continue
-        lines.append(f"{change.get('path')}: {before} → {after}")
+        lines.append(f"{path}: {_short(before)} → {_short(after)}")
     if len(lines) > limit:
         lines = [*lines[:limit], f"… and {len(lines) - limit} more"]
     return lines
@@ -1212,6 +1569,83 @@ def int_value(deps: FactoryDeps | None, factory_id: str | None, path: str, defau
     return int(found) if found is not None else default
 
 
+def discovery_enabled(deps: FactoryDeps | None, factory_id: str | None) -> bool:
+    """Whether discovery runs for the factory: the server env and ``discovery.enabled`` both on."""
+    if not blocks.discovery_server_on():
+        return False
+    return value(deps, factory_id, "discovery.enabled", False) is True
+
+
+# ── Trials ─────────────────────────────────────────────────────
+
+
+def trial_block(path: str) -> str | None:
+    """
+    :returns: The block a trial on *path* holds: the top-level block of
+        :mod:`.definition_blocks` it lies in (``"discovery"``, ``"briefs"``).
+        ``None`` for today's settings and rules: they trial side by side as
+        before, each change holding only its own paths.
+    """
+    head = canonical_path(path).split(".", 1)[0]
+    return head if head in blocks.BLOCKS else None
+
+
+def trial_blocks(paths: Iterable[str]) -> list[str]:
+    """:returns: The blocks a trial on *paths* would hold, sorted."""
+    return sorted({b for p in paths if (b := trial_block(str(p))) is not None})
+
+
+def not_trialable(paths: Iterable[str]) -> dict[str, str]:
+    """
+    :returns: ``{prefix: reason}`` of :data:`.definition_blocks.NOT_TRIALABLE`
+        for each of *paths* that never runs as a trial (``{}`` when none does).
+    """
+    out: dict[str, str] = {}
+    for path in paths:
+        path = canonical_path(str(path))
+        for prefix, reason in blocks.NOT_TRIALABLE.items():
+            if blocks.under(path, prefix):
+                out[prefix] = reason
+    return {p: out[p] for p in blocks.NOT_TRIALABLE if p in out}
+
+
+_UNTRIALABLE_NAMES: Final = {
+    "product": "product profile",
+    "strategy": "strategy",
+    "discovery": "discovery",
+    "briefs.scout": "Scout's brief",
+}
+_UNTRIALABLE_WHY: Final = {
+    blocks.NOT_TRIALABLE_REASON: "are judged on outcomes",
+    blocks.NEEDS_DISCOVERY_GUARDS: (
+        "are judged on discovery guards, which this server does not measure yet"
+    ),
+}
+
+
+def untrialable_text(hit: Mapping[str, str]) -> str:
+    """:returns: Why the changes of *hit* (see :func:`not_trialable`) never trial, in words."""
+    parts = []
+    for reason in dict.fromkeys(hit.values()):
+        names = " and ".join(_UNTRIALABLE_NAMES.get(p, p) for p, r in hit.items() if r == reason)
+        parts.append(f"{names} changes {_UNTRIALABLE_WHY.get(reason, reason)}")
+    return "; ".join(parts)
+
+
+def trialable(paths: Iterable[str]) -> tuple[bool, str | None]:
+    """
+    Whether a change of *paths* may run as a trial.
+
+    :returns: ``(False, reason)`` when it touches a path a trial would judge on
+        the wrong metrics (strategy, the product profile, discovery, Scout's
+        brief): it applies as a version.
+    """
+    hit = not_trialable(paths)
+    if not hit:
+        return True, None
+    return False, f"{untrialable_text(hit)}: they apply as a version"
+
+
 # ── Install ────────────────────────────────────────────────────
 
 
@@ -1261,11 +1695,16 @@ __all__ = [
     "ALLOWED_PATHS",
     "BOUNDS",
     "CLASS_MAP",
+    "LIST_PATHS",
     "OWNER_ONLY_PREFIXES",
+    "QUIET_BLOCKS",
+    "SPARSE_KEYS",
     "TIER0",
+    "TIER0_REASONS",
     "TRIAL_H_DEFAULT",
     "TRIAL_H_MAX",
     "TRIAL_H_MIN",
+    "UNDO_WINDOW_S",
     "Change",
     "EvidenceId",
     "FactoryDefinitionDoc",
@@ -1273,20 +1712,28 @@ __all__ = [
     "apply_changes",
     "autonomy_mode",
     "bounds",
+    "canonical_path",
     "classify",
     "default_doc",
     "definition_for",
     "diff",
     "diff_lines",
+    "discovery_enabled",
     "effective",
     "engine_mode",
     "env_defaults",
+    "goal_floor",
+    "goal_seq",
     "heartbeat_default",
     "install",
     "int_value",
     "invalidate",
+    "is_item_path",
+    "is_new_item",
     "mail_limits",
     "moved_paths",
+    "not_trialable",
+    "owner_only",
     "parse_change",
     "pin",
     "rule_floor",
@@ -1296,7 +1743,12 @@ __all__ = [
     "same_rule",
     "seed_doc",
     "store_version",
+    "stored_form",
     "supervisor_config",
     "tier0",
+    "trial_block",
+    "trial_blocks",
+    "trialable",
+    "untrialable_text",
     "value",
 ]
