@@ -12,9 +12,9 @@ existing helpers (the cached snapshot plus at most three small store reads),
 :func:`summary_for_viewer` builds from a snapshot already in hand (the route)
 and :func:`status_summary_for` does everything for a factory root and a user.
 
-Reuse for a daily digest (e.g. a Slack DM): call :func:`status_summary_for`
-with the recipient's user id, then render :func:`plain_lines` or the
-structured fields. Every ``href`` is a cockpit path (``/factory/<id>/…``):
+The Slack daily digest (:mod:`.slackdm.digest`) is built from the same
+builder for its recipient (:func:`summary_from_raw`), so the card and the
+digest never disagree. Every ``href`` is a cockpit path (``/factory/<id>/…``):
 prefix it with the server's public URL. Times are epoch seconds and texts
 carry no durations, so the reader ages them against its own clock and a
 cached summary never says something stale.
@@ -26,17 +26,23 @@ Sections:
   ready for a human merge, and open incidents of warning or worse. Each
   item names who it waits on and whether that is the viewer; the viewer's
   come first, urgent ones (critical incidents, blocking decisions) next,
-  then the oldest wait.
-- **Working on** (``working``): live projects past the queue, with stage,
-  primary PR, time in stage and the PL's own one-liner. A project whose PRs
-  merged still counts while its lead is running or was active in the last
-  30 minutes (e.g. it deploys a preview, then checks on it at its next beat).
+  then the oldest wait. An item that is all its project still needs
+  (``holds``: every open PR ready for a merge, or blocked on that decision)
+  stands for the project, which is then not under Working on.
+- **Working on** (``working``): live projects past the queue that agents
+  still work on, with stage, primary PR, time in stage and a plain status
+  built from the stage, the task in hand and the PR's gates, preview and
+  demo (the lead's own label only when none of that says anything). A
+  project whose PRs merged still counts while its lead is running or was
+  active in the last 30 minutes (e.g. it deploys a preview, then checks on
+  it at its next beat).
 - **Next** (``next``): queued projects with why they wait (or why they can't
-  start), what Atlas (the root lead) recently said it is doing, and when it
-  checks in again.
+  start, or which start-up step they are on), what Atlas (the root lead)
+  recently said, with the ids in it linked, and when it checks in again.
 - **Spend** (``spend``): the last 24 h (the ledger is per UTC day, so the
-  part of yesterday inside the window is prorated), the current $/h, and
-  whether the factory is idle (no live or queued project) and since when.
+  part of yesterday inside the window is prorated), the current $/h (the
+  header's), and whether the factory is idle (nothing in progress or queued:
+  at most waiting on people) and since when.
 - **Health** (``health``): a paused or finished factory with who paused it
   and why, projects that are blocked, failed or paused, and GitHub trouble.
 """
@@ -52,12 +58,12 @@ from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Final, Literal
 from urllib.parse import quote
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from omnigent.factory import PROJECT_KIND_INTEGRATION, ROLE_PROJECT_LEAD, STAGES
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER
 from omnigent.server.factory import issues
-from omnigent.server.factory.decision_routing import is_mine_by
+from omnigent.server.factory.decision_routing import is_mine_by, roster_owner
 
 if TYPE_CHECKING:
     from omnigent.entities import Conversation
@@ -68,6 +74,11 @@ if TYPE_CHECKING:
 DAY_S: Final = 86_400
 TEXT_MAX: Final = 200
 """A question, title or one-liner is clipped to this many characters."""
+NOTE_MAX: Final = 140
+"""Atlas's one-liner is trimmed (at a word) to this many characters."""
+LABEL_MAX: Final = 100
+"""A lead's own label, shown only when nothing structured says what it does."""
+TASK_TITLE_MAX: Final = 60
 CONTROL_LOOKBACK_S: Final = 30 * DAY_S
 """How far back the factory's last pause is looked up (only while it is paused)."""
 WAIT_SEVERITIES: Final = frozenset({"warning", "critical"})
@@ -100,6 +111,27 @@ _PROVISIONING_TEXT: Final = {
     "connecting": "starting its lead agent",
     "briefing": "briefing its lead agent",
 }
+_START_TEXT: Final = {
+    **_PROVISIONING_TEXT,
+    "connect": "waiting for its lead agent to connect",
+    "creating": "creating its lead agent",
+}
+"""A starting project's step (``ProjectStartView.phase``) in plain words."""
+_TASK_VERB: Final = {"running": "working on", "review": "reviewing", "blocked": "stuck on"}
+_STAGE_WORDS: Final = {
+    "planning": "planning the work",
+    "building": "building",
+    "review": "in review",
+    "verify": "verifying",
+    "ready": "ready for a merge",
+    "merged": "merged, checking the result",
+}
+_KIND_NOUN: Final = {"pr": "PR", "decision": "decision", "incident": "incident"}
+_REF_TOKEN_RE: Final = re.compile(
+    r"(?<![\w-])(?:PR #(?P<pr>\d+)|[#!](?P<num>\d+)|(?P<decision>D-\d+)|INC-(?P<incident>\d+))"
+    r"(?![\w-])"
+)
+"""Ids an agent's note may name: ``PR #9826``, ``#9826``, ``!9630``, ``D-19``, ``INC-12``."""
 
 
 # ── The response ───────────────────────────────────────────────
@@ -107,6 +139,18 @@ _PROVISIONING_TEXT: Final = {
 
 class _Model(BaseModel):
     model_config = ConfigDict(extra="forbid")
+
+
+class SlackReceipt(_Model):
+    """
+    One Slack DM the viewer got about a waiting item (the ``notify.slack`` ledger).
+
+    :param stage: ``new`` / ``ready`` / ``opened`` (the first DM), ``r4h`` /
+        ``r24h`` (reminders), ``owners`` (escalated) or ``deadline`` (last call).
+    """
+
+    at: int
+    stage: str
 
 
 class WaitingItem(_Model):
@@ -121,6 +165,11 @@ class WaitingItem(_Model):
     :param for_you: The viewer may act on it (theirs or their role's).
     :param urgent: A blocking decision or a critical incident.
     :param since: When it started waiting (epoch seconds).
+    :param holds: It is all its project still needs, so the project is not
+        also listed under Working on.
+    :param deadline_at: When an open decision defaults by itself, and
+        ``deadline_effect`` what happens then.
+    :param slack: The viewer's Slack DMs about it, oldest first.
     :param href: Its cockpit page.
     """
 
@@ -135,6 +184,10 @@ class WaitingItem(_Model):
     since: int
     project: str | None = None
     severity: str | None = None
+    holds: bool = False
+    deadline_at: int | None = None
+    deadline_effect: str | None = None
+    slack: list[SlackReceipt] = Field(default_factory=list)
     href: str
 
 
@@ -154,7 +207,11 @@ class WorkingItem(_Model):
     One project in progress.
 
     :param since: When it entered its stage (epoch seconds).
-    :param doing: Its lead agent's own one-liner (what it says it is doing).
+    :param status: One plain line on where it is, e.g. ``PR #9653: in agent
+        review · working on T-7: Badge colours`` (see :func:`work_status`).
+    :param status_source: ``facts`` (the stage, task and PR say it) or
+        ``lead`` (only the lead's own label, trimmed, says anything).
+    :param doing: Its lead agent's own one-liner, verbatim (not for display).
     :param problem: Plain words for a blocked, failed or paused project.
     :param running: Its lead or one of its agents is running a turn now.
     """
@@ -164,6 +221,8 @@ class WorkingItem(_Model):
     stage: str
     since: int
     pr: WorkingPr | None = None
+    status: str
+    status_source: Literal["facts", "lead"] = "facts"
     doing: str | None = None
     problem: str | None = None
     running: bool = False
@@ -187,15 +246,25 @@ class NextItem(_Model):
     href: str
 
 
+class TextPart(_Model):
+    """A run of text; ``href`` when it names something the cockpit has a page for."""
+
+    text: str
+    href: str | None = None
+
+
 class LeadNote(_Model):
     """
-    What the root lead (Atlas) last said it is doing.
+    What the root lead (Atlas) last said, quoted.
 
+    :param text: Its one-liner, trimmed at a word to :data:`NOTE_MAX`.
+    :param parts: ``text`` split so the PRs, decisions and incidents it names link.
     :param since: When Atlas was last active (the one-liner is at most this fresh).
     """
 
     who: str
     text: str
+    parts: list[TextPart] = Field(default_factory=list)
     since: int | None = None
     session_id: str
     href: str
@@ -261,6 +330,7 @@ class SummaryCounts(_Model):
     Tallies for badges and the headline.
 
     :param cant_start: Queued projects that can't start (counted in ``queued`` too).
+    :param held: Projects that only wait on people (not counted in ``working``).
     """
 
     waiting_for_you: int
@@ -268,14 +338,15 @@ class SummaryCounts(_Model):
     working: int
     queued: int
     cant_start: int = 0
+    held: int = 0
 
 
 class StatusSummary(_Model):
     """
     The factory's "Now" for one viewer.
 
-    :param headline: One plain sentence without times, e.g. ``"Working on 2
-        projects. 1 thing waits on you."``.
+    :param headline: One plain line without times, e.g. ``"4 PRs wait on you
+        · 1 project in progress"`` or ``"Idle · 2 things wait on you"``.
     :param generated_at: Server time of the build (epoch seconds).
     """
 
@@ -308,6 +379,9 @@ class StatusInputs:
     :param incidents: Open or acked incidents the viewer may see.
     :param pause: The newest factory-wide ``control.pause`` / ``control.resume``.
     :param cost_cells: Today's and yesterday's ledger cells the viewer may see.
+    :param notified: Subject -> Slack DM receipts (the snapshot's ``notify.slack`` read).
+    :param owners: Project slug -> its ``human_owner`` on the roster: their
+        ready PRs wait on them, not on every operator.
     """
 
     snapshot: Mapping[str, Any]
@@ -316,6 +390,8 @@ class StatusInputs:
     incidents: Sequence[FactoryIssue] = ()
     pause: FactoryEvent | None = None
     cost_cells: Sequence[FactoryCostDaily] = field(default_factory=tuple)
+    notified: Mapping[str, Sequence[Mapping[str, Any]]] = field(default_factory=dict)
+    owners: Mapping[str, str] = field(default_factory=dict)
 
 
 # ── Small helpers ──────────────────────────────────────────────
@@ -326,6 +402,35 @@ def _clip(text: str | None, limit: int = TEXT_MAX) -> str | None:
     if not flat:
         return None
     return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+def clip_words(text: str | None, limit: int) -> str | None:
+    """*text* on one line, cut at a word to at most *limit* characters (``…`` included)."""
+    flat = " ".join((text or "").split())
+    if not flat:
+        return None
+    if len(flat) <= limit:
+        return flat
+    cut = flat[: limit - 1]
+    space = cut.rfind(" ")
+    if space >= limit // 2:
+        cut = cut[:space]
+    return cut.rstrip(" ·,;:—-") + "…"
+
+
+def _lower_first(text: str) -> str:
+    return text[:1].lower() + text[1:]
+
+
+def _receipts(rows: Iterable[Mapping[str, Any]], user_id: str | None) -> list[SlackReceipt]:
+    """The viewer's sent Slack DMs among *rows* (``NotifiedView`` JSON), oldest first."""
+    if user_id is None:
+        return []
+    return [
+        SlackReceipt(at=int(row["at"]), stage=str(row.get("stage") or ""))
+        for row in rows
+        if row.get("user_id") == user_id and row.get("ok", True) and row.get("at")
+    ]
 
 
 def _person(user_id: str) -> str:
@@ -479,6 +584,14 @@ def _incident_who(assignee: str | None, user_id: str | None) -> str:
     return "you" if user_id is not None and assignee == user_id else _person(assignee)
 
 
+def _pr_who(owner: str | None, user_id: str | None, operator: bool) -> tuple[str, bool]:
+    """``(who, for_you)`` of a ready PR: its project's human owner, else operators."""
+    if owner:
+        mine = user_id is None or owner == user_id
+        return ("you" if user_id is not None and mine else _person(owner)), mine
+    return "operators", operator
+
+
 def waiting_items(inputs: StatusInputs, links: _Links) -> list[WaitingItem]:
     """Everything open that waits on a person, the viewer's first (see :func:`waiting_order`)."""
     body, user_id, level = inputs.snapshot, inputs.user_id, inputs.level
@@ -489,6 +602,7 @@ def waiting_items(inputs: StatusInputs, links: _Links) -> list[WaitingItem]:
             continue
         assignee, claimed = decision.get("assignee"), decision.get("claimed_by")
         text, detail = _decision_text(decision)
+        deadline = decision.get("deadline_at")
         items.append(
             WaitingItem(
                 kind="decision",
@@ -501,12 +615,18 @@ def waiting_items(inputs: StatusInputs, links: _Links) -> list[WaitingItem]:
                 urgent=bool(decision.get("blocking")),
                 since=int(decision.get("created_at") or 0),
                 project=decision.get("project_slug"),
+                deadline_at=int(deadline) if isinstance(deadline, int | float) else None,
+                deadline_effect=decision.get("deadline_effect") if deadline else None,
+                slack=_receipts(decision.get("notified") or (), user_id),
                 href=links.decision(decision["ref"]),
             )
         )
     for pr in body.get("prs") or []:
         if pr.get("state") != "open" or not pr.get("ready"):
             continue
+        project = pr.get("project_slug")
+        who, mine = _pr_who(inputs.owners.get(project or ""), user_id, operator)
+        subject = f"pr:{pr.get('repo')}#{pr['number']}"
         items.append(
             WaitingItem(
                 kind="pr",
@@ -514,10 +634,11 @@ def waiting_items(inputs: StatusInputs, links: _Links) -> list[WaitingItem]:
                 ref=f"PR #{pr['number']}",
                 text="review and merge",
                 detail=_clip(pr.get("title")),
-                who="operators",
-                for_you=operator,
+                who=who,
+                for_you=mine,
                 since=int(pr.get("ready_since") or 0),
-                project=pr.get("project_slug"),
+                project=project,
+                slack=_receipts(inputs.notified.get(subject, ()), user_id),
                 href=links.pr(pr["id"]),
             )
         )
@@ -525,6 +646,8 @@ def waiting_items(inputs: StatusInputs, links: _Links) -> list[WaitingItem]:
         if issue.status not in ("open", "acked") or issue.severity not in WAIT_SEVERITIES:
             continue
         ref = issue.ref or f"INC-{issue.number}"
+        # The DM ledger names an incident as the DM rules do.
+        subject = f"issue:{issue.ref or f'INC {issue.id[:8]}'}"
         items.append(
             WaitingItem(
                 kind="incident",
@@ -538,10 +661,49 @@ def waiting_items(inputs: StatusInputs, links: _Links) -> list[WaitingItem]:
                 since=int(issue.first_seen or 0),
                 project=issue.project_slug,
                 severity=issue.severity,
+                slack=_receipts(inputs.notified.get(subject, ()), user_id),
                 href=links.incident(issue.number),
             )
         )
     return waiting_order(items)
+
+
+def held_projects(
+    body: Mapping[str, Any], waiting: Sequence[WaitingItem], now: float
+) -> dict[str, set[str]]:
+    """
+    Projects whose only remaining step is a person, and the waiting keys that hold each.
+
+    A project in progress is held when every open PR of it is ready for a
+    human merge and no task of it runs or is ready to start, or when it is
+    blocked on an open decision that is listed as waiting. A failed or
+    paused project is a problem, not a wait, and stays under Working on.
+    """
+    waiting_keys = {item.key for item in waiting}
+    decision_keys = {item.ref: item.key for item in waiting if item.kind == "decision"}
+    prs = {p["id"]: p for p in body.get("prs") or []}
+    held: dict[str, set[str]] = {}
+    for project in body.get("projects") or []:
+        if not is_working(project, now):
+            continue
+        overlay = project.get("overlay")
+        if overlay == "blocked":
+            head = str(project.get("overlay_reason") or "").partition(" · ")[0]
+            blocked = _BLOCKED_ON_RE.match(head)
+            if blocked and blocked["ref"] in decision_keys:
+                held[project["slug"]] = {decision_keys[blocked["ref"]]}
+            continue
+        if overlay is not None:
+            continue
+        own = [prs[i] for i in project.get("pr_ids") or [] if i in prs]
+        open_keys = [f"pr:{p['id']}" for p in own if p.get("state") == "open"]
+        if not open_keys or any(key not in waiting_keys for key in open_keys):
+            continue
+        tasks = project.get("tasks_summary") or {}
+        if tasks.get("running") or tasks.get("ready"):
+            continue
+        held[project["slug"]] = set(open_keys)
+    return held
 
 
 def _ref_number(ref: str) -> int:
@@ -634,14 +796,105 @@ def is_working(project: Mapping[str, Any], now: float) -> bool:
     return stage != "merged" or _lead_active(project, now)
 
 
-def working_items(body: Mapping[str, Any], links: _Links, now: float) -> list[WorkingItem]:
-    """Projects in progress: problems first, then furthest along, then longest in stage."""
+def _changes_requested(pr: Mapping[str, Any]) -> bool:
+    """A person asked for changes on the PR's head (:func:`.stage.changes_requested_on_head`)."""
+    review = pr.get("human_review")
+    if not isinstance(review, Mapping) or review.get("verdict") != "changes_requested":
+        return False
+    sha, head = review.get("head_sha"), pr.get("head_sha")
+    if not isinstance(sha, str) or not sha or not head:
+        return True
+    return sha.lower() == str(head).lower()
+
+
+def pr_status(pr: Mapping[str, Any]) -> str | None:
+    """Where a PR is, in plain words, from its state, gates, preview and demo."""
+    ref = f"PR #{pr['number']}"
+    state = pr.get("state")
+    if state == "merged":
+        return f"{ref} merged"
+    if state != "open":
+        return None
+    gates = pr.get("gates") or {}
+    preview = (pr.get("preview") or {}).get("state")
+    demo = pr.get("demo") or {}
+    if _changes_requested(pr):
+        return f"{ref}: making the changes a person asked for"
+    if pr.get("ready"):
+        return f"{ref} ready for a merge"
+    if pr.get("is_draft") or gates.get("draft") == "fail":
+        return f"{ref} is a draft"
+    steps = (
+        (gates.get("checks") == "fail", "fixing failing checks"),
+        (gates.get("checks") == "pending", "checks running"),
+        (gates.get("review") == "fail", "fixing what review found"),
+        (gates.get("review") == "pending", "in agent review"),
+        (preview == "deploying", "deploying a preview"),
+        (preview == "failed", "its preview failed to deploy"),
+        (gates.get("verify") == "fail", "verification failed"),
+        (
+            gates.get("demo") == "fail"
+            or (demo.get("status") in ("FAIL", "ERROR") and demo.get("is_current_head")),
+            "its demo failed",
+        ),
+        (gates.get("verify") == "pending", "verifying"),
+        (gates.get("demo") == "pending", "recording a demo"),
+        (gates.get("mergeable") == "fail", "has merge conflicts"),
+    )
+    words = next((text for hit, text in steps if hit), None)
+    return f"{ref}: {words}" if words else f"{ref} open"
+
+
+def work_status(
+    project: Mapping[str, Any], pr: Mapping[str, Any] | None
+) -> tuple[str, Literal["facts", "lead"]]:
+    """
+    One plain line on where a project in progress is, and what said so.
+
+    From its primary PR (gates, preview, demo), the task in hand, else its
+    tasks done, else its stage note; the lead's own label (trimmed) only when
+    none of these exists, else the stage in words.
+    """
+    parts: list[str] = []
+    said = pr_status(pr) if pr is not None else None
+    if said:
+        parts.append(said)
+    task = project.get("active_task") or {}
+    tasks = project.get("tasks_summary") or {}
+    if task.get("state") in _TASK_VERB:
+        title = clip_words(task.get("title"), TASK_TITLE_MAX)
+        parts.append(
+            f"{_TASK_VERB[task['state']]} {task['ref']}" + (f": {title}" if title else "")
+        )
+    elif tasks.get("total") and not said:
+        parts.append(f"{tasks.get('done') or 0} of {tasks['total']} tasks done")
+    if not parts and project.get("stage_note"):
+        parts.append(str(project["stage_note"]))
+    if parts:
+        return " · ".join(parts), "facts"
+    label = clip_words((project.get("pl") or {}).get("summary"), LABEL_MAX)
+    if label:
+        return label, "lead"
+    stage = str(project.get("stage") or "")
+    return _STAGE_WORDS.get(stage, stage), "facts"
+
+
+def working_items(
+    body: Mapping[str, Any], links: _Links, now: float, held: Iterable[str] = ()
+) -> list[WorkingItem]:
+    """
+    Projects agents still work on: problems first, then furthest along, then longest in stage.
+
+    :param held: Projects that only wait on people (listed under waiting instead).
+    """
     prs = {p["id"]: p for p in body.get("prs") or []}
+    skip = set(held)
     items: list[WorkingItem] = []
     for project in body.get("projects") or []:
-        if not is_working(project, now):
+        if not is_working(project, now) or project["slug"] in skip:
             continue
         pr = _primary_pr(project, prs)
+        status, source = work_status(project, pr)
         items.append(
             WorkingItem(
                 project=project["slug"],
@@ -658,6 +911,8 @@ def working_items(body: Mapping[str, Any], links: _Links, now: float) -> list[Wo
                 )
                 if pr is not None
                 else None,
+                status=status,
+                status_source=source,
                 doing=_clip((project.get("pl") or {}).get("summary")),
                 problem=_problem(project),
                 running=_project_running(project),
@@ -678,7 +933,38 @@ def _queued_problem(project: Mapping[str, Any], factory_paused: bool) -> str | N
     return _problem(project)
 
 
-def _queued_reason(project: Mapping[str, Any], problem: str | None, factory_paused: bool) -> str:
+def start_reason(start: Mapping[str, Any], lead: str = "the lead") -> str | None:
+    """
+    Why a queued project has no working lead yet, from its ``start`` field.
+
+    :param start: ``ProjectStartView`` JSON.
+    :param lead: Who spawns project leads when the server does not (``Atlas``).
+    """
+    phase = str(start.get("phase") or "")
+    label = str(start.get("label") or "").strip()
+    if start.get("state") == "starting":
+        verb = "restarting" if start.get("restart") else "starting up"
+        step = _START_TEXT.get(phase) or (
+            _lower_first(label) if label and label != "Starting" else None
+        )
+        return f"{verb}: {step}" if step else verb
+    if start.get("state") != "queued":
+        return None
+    if phase == "pod_cap":
+        ahead = int(start.get("ahead") or 0)
+        spot = f"{_plural(ahead, 'project')} ahead" if ahead else "next in line"
+        full = _lower_first(label) if label else "every machine is in use"
+        return f"waits for a free machine ({full}, {spot})"
+    if phase == "lead":
+        return f"waits for {lead} to start it"
+    if phase == "server":
+        return "starts within a minute"
+    return _lower_first(label) or None
+
+
+def _queued_reason(
+    project: Mapping[str, Any], problem: str | None, factory_paused: bool, lead: str
+) -> str:
     """Why a queued project has not started, read after its name."""
     if problem is not None:
         if project.get("overlay") == "paused":
@@ -690,6 +976,11 @@ def _queued_reason(project: Mapping[str, Any], problem: str | None, factory_paus
     waiting = _WAITING_ON_RE.match(str(project.get("overlay_reason") or ""))
     if waiting:
         return f"waits for {waiting['deps']} to finish"
+    start = project.get("start")
+    said = start_reason(start, lead) if isinstance(start, Mapping) else None
+    if said:
+        return said
+    # Older servers: the sandbox step only.
     provisioning = project.get("provisioning") or {}
     step = _PROVISIONING_TEXT.get(str(provisioning.get("stage") or ""))
     if step:
@@ -702,6 +993,8 @@ def _queued_reason(project: Mapping[str, Any], problem: str | None, factory_paus
 def next_items(body: Mapping[str, Any], links: _Links) -> list[NextItem]:
     """Queued projects, those that can't start first, then oldest first, with why each waits."""
     paused = (body.get("factory") or {}).get("state") == "paused"
+    root = _root_member(body)
+    lead = _agent_name(root.get("title"), None, None) if root is not None else None
     items: list[NextItem] = []
     for project in body.get("projects") or []:
         if not _is_live(project) or project.get("stage") != "queued":
@@ -711,7 +1004,7 @@ def next_items(body: Mapping[str, Any], links: _Links) -> list[NextItem]:
             NextItem(
                 project=project["slug"],
                 title=project.get("title") or project["slug"],
-                reason=_queued_reason(project, problem, paused),
+                reason=_queued_reason(project, problem, paused, lead or "the lead"),
                 problem=problem,
                 since=int(project.get("stage_since") or 0),
                 href=links.project(project["slug"]),
@@ -725,15 +1018,54 @@ def _root_member(body: Mapping[str, Any]) -> Mapping[str, Any] | None:
     return next((m for m in body.get("members") or [] if m.get("session_id") == root_id), None)
 
 
-def lead_note(body: Mapping[str, Any], links: _Links, now: float) -> LeadNote | None:
+def note_parts(
+    text: str, body: Mapping[str, Any], incidents: Iterable[FactoryIssue], links: _Links
+) -> list[TextPart]:
+    """
+    *text* split so each PR, decision or incident it names links to its page.
+
+    An id links only when it resolves: a PR the factory tracks (``#9826``,
+    ``PR #9826``, ``!9826``), a decision the viewer sees, an open incident.
+    """
+    prs: dict[int, str] = {}
+    for pr in body.get("prs") or []:
+        prs.setdefault(int(pr["number"]), str(pr["id"]))
+    decisions = {str(d.get("ref")) for d in body.get("decisions") or []}
+    numbers = {issue.number for issue in incidents}
+    parts: list[TextPart] = []
+    at = 0
+    for match in _REF_TOKEN_RE.finditer(text):
+        href = None
+        number = match["pr"] or match["num"]
+        if number is not None and int(number) in prs:
+            href = links.pr(prs[int(number)])
+        elif match["decision"] is not None and match["decision"] in decisions:
+            href = links.decision(match["decision"])
+        elif match["incident"] is not None and int(match["incident"]) in numbers:
+            href = links.incident(int(match["incident"]))
+        if href is None:
+            continue
+        if match.start() > at:
+            parts.append(TextPart(text=text[at : match.start()]))
+        parts.append(TextPart(text=match.group(0), href=href))
+        at = match.end()
+    if at < len(text):
+        parts.append(TextPart(text=text[at:]))
+    return parts
+
+
+def lead_note(
+    body: Mapping[str, Any], links: _Links, now: float, incidents: Iterable[FactoryIssue] = ()
+) -> LeadNote | None:
     """
     The root lead's own one-liner (its beacon), when it set one and the viewer reads it.
 
-    Left out once the lead has been quiet for :data:`LEAD_NOTE_MAX_AGE_S`: by
-    then it no longer says what the factory is doing.
+    Trimmed at a word to :data:`NOTE_MAX`, with the ids it names linked. Left
+    out once the lead has been quiet for :data:`LEAD_NOTE_MAX_AGE_S`: by then
+    it no longer says what the factory is doing.
     """
     root = _root_member(body)
-    text = _clip((root or {}).get("summary"))
+    text = clip_words((root or {}).get("summary"), NOTE_MAX)
     if root is None or text is None:
         return None
     last = root.get("last_activity_at")
@@ -743,6 +1075,7 @@ def lead_note(body: Mapping[str, Any], links: _Links, now: float) -> LeadNote | 
     return LeadNote(
         who=_agent_name(root.get("title"), None, None) or "The lead",
         text=text,
+        parts=note_parts(text, body, incidents, links),
         since=since,
         session_id=root["session_id"],
         href=links.agent(root["session_id"]),
@@ -780,8 +1113,15 @@ def spend_block(
     idle: bool,
     now: float,
     links: _Links,
+    held: Iterable[str] = (),
 ) -> SpendBlock:
-    """Spend over the last 24 h, today and the current rate; idle and since when."""
+    """
+    Spend over the last 24 h, today and the current rate; idle and since when.
+
+    The rate is the snapshot's ``totals.usd_per_h``, the one the header shows.
+
+    :param held: Projects that only wait on people: idle since they started to.
+    """
     today, yesterday = utc_day(now), utc_day(now - DAY_S)
     into_today = now - datetime.fromisoformat(f"{today}T00:00:00+00:00").timestamp()
     today_usd = sum(c.cost_usd for c in cells if c.day_utc == today)
@@ -792,11 +1132,14 @@ def spend_block(
     rate = (body.get("totals") or {}).get("usd_per_h")
     idle_since = None
     if idle:
+        waits = set(held)
         ends = [int(factory.get("started_at") or 0)]
         for project in body.get("projects") or []:
             if project.get("kind") == PROJECT_KIND_INTEGRATION:
                 continue
-            if project.get("closed_at"):
+            if project.get("slug") in waits:
+                ends.append(int(project.get("stage_since") or 0))
+            elif project.get("closed_at"):
                 ends.append(int(project["closed_at"]))
             elif project.get("stage") == "merged":
                 # Its lead may have validated it for a while after the merge.
@@ -883,28 +1226,58 @@ def health_block(
 # ── The summary ────────────────────────────────────────────────
 
 
-def headline(state: str, counts: SummaryCounts, health: HealthBlock, idle_spend: bool) -> str:
-    """One plain sentence without clock times (each reader ages the summary itself)."""
+def waits_text(items: Sequence[WaitingItem], whom: str) -> str:
+    """``4 PRs wait on you``, ``1 decision waits on others``, ``3 things wait on you``."""
+    kinds = {item.kind for item in items}
+    noun = _KIND_NOUN[next(iter(kinds))] if len(kinds) == 1 else "thing"
+    verb = "waits" if len(items) == 1 else "wait"
+    return f"{_plural(len(items), noun)} {verb} on {whom}"
+
+
+def headline(
+    state: str,
+    counts: SummaryCounts,
+    health: HealthBlock,
+    idle_spend: bool,
+    waiting: Sequence[WaitingItem] = (),
+) -> str:
+    """
+    One plain line without clock times (each reader ages the summary itself).
+
+    What waits on the viewer leads while work goes on (``4 PRs wait on you · 1
+    project in progress``); a paused, finished or idle factory says so first
+    (``Idle · 2 things wait on you``). Waits on others are named only when
+    nothing waits on the viewer.
+    """
+    mine = [item for item in waiting if item.for_you]
+    waits = waits_text(mine, "you") if mine else None
+    others = waits_text(waiting, "others") if waiting and not mine else None
     if state == "paused":
         first = next((i for i in health.items if i.kind == "paused"), None)
-        lead = f"Paused by {first.by}." if first is not None and first.by else "Paused."
+        parts = [f"paused by {first.by}" if first is not None and first.by else "paused"]
     elif state == "done":
-        lead = "Finished."
+        parts = ["finished"]
     elif state == "idle":
-        lead = "Idle: no active projects" + (", yet still spending." if idle_spend else ".")
-    elif counts.working == 0 and counts.cant_start:
-        stuck = f"{_plural(counts.cant_start, 'project')} can't start"
-        others = counts.queued - counts.cant_start
-        lead = f"Nothing in progress: {stuck}" + (f", {others} queued." if others else ".")
-    elif counts.working == 0:
-        lead = f"Nothing in progress yet; {_plural(counts.queued, 'project')} queued."
+        parts = ["idle, yet still spending" if idle_spend else "idle"]
     else:
-        lead = f"Working on {_plural(counts.working, 'project')}."
-    for_you = counts.waiting_for_you
-    if for_you:
-        verb = "waits" if for_you == 1 else "wait"
-        return f"{lead} {_plural(for_you, 'thing')} {verb} on you."
-    return f"{lead} Nothing waits on you."
+        queued = counts.queued - counts.cant_start
+        if counts.working:
+            parts = [f"{_plural(counts.working, 'project')} in progress"]
+            if counts.cant_start:
+                parts.append(f"{counts.cant_start} can't start")
+        elif counts.cant_start:
+            parts = ["nothing in progress", f"{_plural(counts.cant_start, 'project')} can't start"]
+        else:
+            parts = ["nothing in progress yet"]
+        if queued:
+            alone = not counts.working and not counts.cant_start
+            parts.append(f"{_plural(queued, 'project') if alone else queued} queued")
+        if waits:
+            parts.insert(0, waits)
+            waits = None
+    parts += [text for text in (waits, others) if text]
+    line = " · ".join(parts)
+    return line[:1].upper() + line[1:]
 
 
 def build_status_summary(inputs: StatusInputs, *, now: float) -> dict[str, Any]:
@@ -918,10 +1291,13 @@ def build_status_summary(inputs: StatusInputs, *, now: float) -> dict[str, Any]:
     factory = body.get("factory") or {}
     links = _Links(str(factory.get("id") or ""))
     waiting = waiting_items(inputs, links)
-    working = working_items(body, links, now)
+    held = held_projects(body, waiting, now)
+    holding = {key for keys in held.values() for key in keys}
+    waiting = [item.model_copy(update={"holds": item.key in holding}) for item in waiting]
+    working = working_items(body, links, now, held)
     upcoming = next_items(body, links)
     idle = not working and not upcoming
-    spend = spend_block(body, inputs.cost_cells, idle=idle, now=now, links=links)
+    spend = spend_block(body, inputs.cost_cells, idle=idle, now=now, links=links, held=held)
     health = health_block(body, inputs.pause, links)
     if factory.get("state") == "paused":
         state: Literal["working", "idle", "paused", "done"] = "paused"
@@ -935,17 +1311,18 @@ def build_status_summary(inputs: StatusInputs, *, now: float) -> dict[str, Any]:
         working=len(working),
         queued=len(upcoming),
         cant_start=sum(1 for item in upcoming if item.problem is not None),
+        held=len(held),
     )
     summary = StatusSummary(
         factory_id=str(factory.get("id") or ""),
         factory_name=str(factory.get("name") or ""),
         generated_at=int(now),
-        headline=headline(state, counts, health, spend.idle_spend),
+        headline=headline(state, counts, health, spend.idle_spend, waiting),
         state=state,
         waiting=waiting,
         working=working,
         next=upcoming,
-        lead=lead_note(body, links, now),
+        lead=lead_note(body, links, now, inputs.incidents),
         check_in=check_in(body, links),
         spend=spend,
         health=health,
@@ -954,9 +1331,20 @@ def build_status_summary(inputs: StatusInputs, *, now: float) -> dict[str, Any]:
     return summary.model_dump(mode="json")
 
 
+def spend_text(spend: Mapping[str, Any]) -> str:
+    """``$61.44 in the last 24 h · $3.10/h now``: what the card and the digest say of spend."""
+    day, rate = spend.get("last_24h_usd"), spend.get("usd_per_h")
+    text = (
+        f"${day:.2f} in the last 24 h"
+        if isinstance(day, int | float)
+        else "No spend recorded in the last 24 h"
+    )
+    return text + (f" · ${rate:.2f}/h now" if isinstance(rate, int | float) else "")
+
+
 def plain_lines(summary: Mapping[str, Any], *, now: float, base_url: str = "") -> list[str]:
     """
-    The summary as short plain-text lines (a digest's body).
+    The summary as short plain-text lines (e.g. for a log or a plain-text digest).
 
     :param summary: :func:`build_status_summary`'s JSON.
     :param now: Epoch seconds the waits are aged against.
@@ -989,21 +1377,16 @@ def plain_lines(summary: Mapping[str, Any], *, now: float, base_url: str = "") -
             f" {base_url}{item['href']}"
         )
     for item in summary["working"]:
-        pr = f" · PR #{item['pr']['number']}" if item.get("pr") else ""
-        extra = f" · {item['problem']}" if item.get("problem") else ""
-        lines.append(
-            f"Working on {item['project']}: {item['stage']}{pr}{age(item['since'])}{extra}"
-        )
+        status = item.get("problem") or item["status"]
+        lines.append(f"Working on {item['project']}: {status}{age(item['since'])}")
     for item in summary["next"]:
         lines.append(f"Next: {item['project']} {item['reason']}")
     beat = summary.get("check_in")
     if beat:
         lines.append(f"Next: {beat['who']} checks in again {until(int(beat['at']))}")
     spend = summary["spend"]
-    if spend.get("last_24h_usd") is not None:
-        rate = spend.get("usd_per_h")
-        per_h = f" · ${rate:.2f}/h now" if rate is not None else ""
-        lines.append(f"Spent ${spend['last_24h_usd']:.2f} in the last 24 h{per_h}")
+    if spend.get("last_24h_usd") is not None or spend.get("usd_per_h") is not None:
+        lines.append(f"Spend: {spend_text(spend)}")
     for item in summary["health"]["items"]:
         lines.append(f"Health: {item['text']}")
     return [line.rstrip() for line in lines]
@@ -1024,8 +1407,9 @@ def load_inputs(
     """
     Read what the snapshot does not carry (synchronous; run it in a worker thread).
 
-    One issues read, one two-day ledger read, and a control-events read only
-    while the factory is paused.
+    One issues read, one two-day ledger read, a roster read only when a
+    project names a human owner, and a control-events read only while the
+    factory is paused. Slack DM receipts come with the snapshot.
 
     :param body: The viewer's filtered snapshot.
     :param raw: The unfiltered snapshot (who may see which incident).
@@ -1035,6 +1419,17 @@ def load_inputs(
 
     store = deps.factory_store
     hidden = {slug for slug, pl in raw.project_pl.items() if pl is not None and pl not in readable}
+    named = {
+        p["slug"]: p["human_owner"]
+        for p in body.get("projects") or []
+        if isinstance(p.get("human_owner"), str) and p["human_owner"].strip()
+    }
+    owners: dict[str, str] = {}
+    if named:
+        people = store.list_people(root_id)
+        for slug, value in named.items():
+            if (owner := roster_owner(people, value)) is not None:
+                owners[slug] = owner
     incidents = [
         issue
         for issue in store.list_issues(root_id, class_=issues.INCIDENT, statuses=["open", "acked"])
@@ -1073,7 +1468,32 @@ def load_inputs(
         incidents=incidents,
         pause=pause,
         cost_cells=cells,
+        notified=raw.notified,
+        owners=owners,
     )
+
+
+def summary_from_raw(
+    deps: FactoryDeps,
+    root_id: str,
+    raw: RawSnapshot,
+    readable: set[str] | None,
+    user_id: str | None,
+    now: float,
+) -> dict[str, Any]:
+    """
+    The summary for one viewer from a snapshot in hand (synchronous: store reads).
+
+    The route and the Slack digest both build through here, so they agree.
+
+    :param readable: The members the viewer reads; ``None`` reads them all.
+    """
+    from omnigent.server.factory.snapshot import filter_snapshot
+
+    members = set(raw.top_level_of) if readable is None else readable
+    body = filter_snapshot(raw, members)
+    inputs = load_inputs(deps, root_id, body, raw, members, user_id, now)
+    return build_status_summary(inputs, now=now)
 
 
 async def summary_for_viewer(
@@ -1086,12 +1506,8 @@ async def summary_for_viewer(
     now: float | None = None,
 ) -> dict[str, Any]:
     """The summary from a snapshot already in hand (the route's path)."""
-    from omnigent.server.factory.snapshot import filter_snapshot
-
     at = time.time() if now is None else now
-    body = filter_snapshot(raw, readable)
-    inputs = await asyncio.to_thread(load_inputs, deps, root_id, body, raw, readable, user_id, at)
-    return build_status_summary(inputs, now=at)
+    return await asyncio.to_thread(summary_from_raw, deps, root_id, raw, readable, user_id, at)
 
 
 async def status_summary_for(
@@ -1118,23 +1534,34 @@ __all__ = [
     "HealthItem",
     "LeadNote",
     "NextItem",
+    "SlackReceipt",
     "SpendBlock",
     "StatusInputs",
     "StatusSummary",
     "SummaryCounts",
+    "TextPart",
     "WaitingItem",
     "WorkingItem",
     "WorkingPr",
     "build_status_summary",
+    "clip_words",
     "decision_who",
     "headline",
+    "held_projects",
     "is_working",
     "load_inputs",
+    "note_parts",
     "plain_lines",
+    "pr_status",
+    "spend_text",
+    "start_reason",
     "status_summary_for",
     "summary_for_viewer",
+    "summary_from_raw",
     "utc_day",
     "waiting_items",
     "waiting_order",
+    "waits_text",
+    "work_status",
     "working_items",
 ]

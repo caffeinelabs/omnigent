@@ -506,8 +506,16 @@ def now_states(factory_id: str) -> dict[str, dict[str, Any]]:
 
 
 def factory_usd_per_h(factory_id: str) -> float | None:
-    """:returns: The sum of the agents' $/h at the last poll, ``None`` when unpriced."""
-    rates = [s["usd_per_h"] for s in registry.states(factory_id).values() if s.get("usd_per_h")]
+    """
+    The sum of the agents' $/h at the last poll (idle agents add $0).
+
+    :returns: ``None`` when no agent has a rate yet.
+    """
+    rates = [
+        s["usd_per_h"]
+        for s in registry.states(factory_id).values()
+        if isinstance(s.get("usd_per_h"), int | float)
+    ]
     return round(sum(rates), 2) if rates else None
 
 

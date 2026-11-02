@@ -10,6 +10,7 @@ import type {
   FactorySnapshot,
   IssueView,
   MemberRef,
+  NotifiedView,
   ProjectView,
   PrView,
 } from "@/lib/factoryApi";
@@ -19,8 +20,10 @@ import type {
   StatusHealthItem,
   StatusLeadNote,
   StatusNextItem,
+  StatusSlackReceipt,
   StatusSpend,
   StatusSummary,
+  StatusTextPart,
   StatusWaitingItem,
   StatusWorkingItem,
 } from "@/lib/factoryStatusApi";
@@ -35,6 +38,9 @@ import {
 } from "../../factoryRoutes";
 
 const TEXT_MAX = 200;
+const NOTE_MAX = 140;
+const LABEL_MAX = 100;
+const TASK_TITLE_MAX = 60;
 const MERGED_ACTIVE_S = 30 * 60;
 const LEAD_NOTE_MAX_AGE_S = 6 * 3600;
 const IDLE_SPEND_MIN_USD_PER_H = 0.01;
@@ -59,6 +65,30 @@ const PROVISIONING_TEXT: Record<string, string> = {
   connecting: "starting its lead agent",
   briefing: "briefing its lead agent",
 };
+const START_TEXT: Record<string, string> = {
+  ...PROVISIONING_TEXT,
+  connect: "waiting for its lead agent to connect",
+  creating: "creating its lead agent",
+};
+const TASK_VERB: Record<string, string> = {
+  running: "working on",
+  review: "reviewing",
+  blocked: "stuck on",
+};
+const STAGE_WORDS: Record<string, string> = {
+  planning: "planning the work",
+  building: "building",
+  review: "in review",
+  verify: "verifying",
+  ready: "ready for a merge",
+  merged: "merged, checking the result",
+};
+const KIND_NOUN: Record<StatusWaitingItem["kind"], string> = {
+  pr: "PR",
+  decision: "decision",
+  incident: "incident",
+};
+const REF_TOKEN_RE = /(?<![\w-])(?:PR #(\d+)|[#!](\d+)|(D-\d+)|INC-(\d+))(?![\w-])/g;
 
 /** The factory's newest pause (the server reads its `control.pause` event). */
 export interface FixturePause {
@@ -73,6 +103,31 @@ function clip(text: string | null | undefined, limit = TEXT_MAX): string | null 
   const flat = (text ?? "").trim().split(/\s+/).filter(Boolean).join(" ");
   if (!flat) return null;
   return flat.length <= limit ? flat : `${flat.slice(0, limit - 1)}…`;
+}
+
+/** `text` on one line, cut at a word to at most `limit` characters (as `clip_words`). */
+function clipWords(text: string | null | undefined, limit: number): string | null {
+  const flat = (text ?? "").trim().split(/\s+/).filter(Boolean).join(" ");
+  if (!flat) return null;
+  if (flat.length <= limit) return flat;
+  let cut = flat.slice(0, limit - 1);
+  const space = cut.lastIndexOf(" ");
+  if (space >= Math.floor(limit / 2)) cut = cut.slice(0, space);
+  return `${cut.replace(/[ ·,;:—-]+$/u, "")}…`;
+}
+
+function lowerFirst(text: string): string {
+  return text.slice(0, 1).toLowerCase() + text.slice(1);
+}
+
+function receipts(
+  rows: readonly NotifiedView[] | undefined,
+  userId: string | null,
+): StatusSlackReceipt[] {
+  if (userId == null) return [];
+  return (rows ?? [])
+    .filter((row) => row.user_id === userId && row.ok !== false && row.at)
+    .map((row) => ({ at: row.at, stage: row.stage ?? "" }));
 }
 
 function person(userId: string): string {
@@ -219,19 +274,39 @@ function refNumber(ref: string): number {
   return digits ? Number(digits[1]) : 0;
 }
 
+/** What the fixture builder reads beyond the snapshot (as `StatusInputs`). */
+interface FixtureInputs {
+  incidents: readonly IssueView[];
+  /** Subject -> Slack DM receipts. */
+  notified: Readonly<Record<string, readonly NotifiedView[]>>;
+  /** Project slug -> its human owner on the roster. */
+  owners: Readonly<Record<string, string>>;
+}
+
+function prWho(owner: string | undefined, userId: string | null, operator: boolean) {
+  if (owner) {
+    const mine = userId == null || owner === userId;
+    return { who: userId != null && mine ? "you" : person(owner), forYou: mine };
+  }
+  return { who: "operators", forYou: operator };
+}
+
 function waitingItems(
   snapshot: FactorySnapshot,
-  incidents: readonly IssueView[],
+  inputs: FixtureInputs,
   userId: string | null,
   level: number,
 ): StatusWaitingItem[] {
   const fid = snapshot.factory.id;
   const operator = userId == null || level >= LEVEL_EDIT;
   const items: StatusWaitingItem[] = [];
+  const base = { holds: false, deadline_at: null, deadline_effect: null };
   for (const decision of snapshot.decisions) {
     if (decision.status !== "open") continue;
     const [text, detail] = decisionText(decision);
+    const deadline = decision.deadline_at ?? null;
     items.push({
+      ...base,
       kind: "decision",
       key: `decision:${decision.id}`,
       ref: decision.ref,
@@ -243,32 +318,41 @@ function waitingItems(
       since: decision.created_at || 0,
       project: decision.project_slug ?? null,
       severity: null,
+      deadline_at: deadline,
+      deadline_effect: deadline ? (decision.deadline_effect ?? null) : null,
+      slack: receipts(decision.notified, userId),
       href: decisionsPageHref(fid, { decision: decision.ref }),
     });
   }
   for (const pr of snapshot.prs) {
     if (pr.state !== "open" || !pr.ready) continue;
+    const project = pr.project_slug ?? null;
+    const { who, forYou } = prWho(inputs.owners[project ?? ""], userId, operator);
     items.push({
+      ...base,
       kind: "pr",
       key: `pr:${pr.id}`,
       ref: `PR #${pr.number}`,
       text: "review and merge",
       detail: clip(pr.title),
-      who: "operators",
-      for_you: operator,
+      who,
+      for_you: forYou,
       urgent: false,
       since: pr.ready_since ?? 0,
-      project: pr.project_slug ?? null,
+      project,
       severity: null,
+      slack: receipts(inputs.notified[`pr:${pr.repo}#${pr.number}`], userId),
       href: prPageHref(fid, pr.id),
     });
   }
-  for (const issue of incidents) {
+  for (const issue of inputs.incidents) {
     if (issue.class !== "incident") continue;
     if (issue.status !== "open" && issue.status !== "acked") continue;
     if (issue.severity !== "warning" && issue.severity !== "critical") continue;
     const ref = issue.ref ?? `INC-${issue.number}`;
+    const subject = `issue:${issue.ref ?? `INC ${issue.id.slice(0, 8)}`}`;
     items.push({
+      ...base,
       kind: "incident",
       key: `incident:${issue.id}`,
       ref,
@@ -280,12 +364,45 @@ function waitingItems(
       since: issue.first_seen || 0,
       project: issue.project_slug ?? null,
       severity: issue.severity,
+      slack: receipts(inputs.notified[subject], userId),
       href: alertPageHref(fid, `INC-${issue.number}`),
     });
   }
   return items.sort(
     byKeys((i) => [!i.for_you, !i.urgent, i.since, i.kind, refNumber(i.ref), i.key]),
   );
+}
+
+/** Projects whose only remaining step is a person, and the waiting keys that hold each. */
+function heldProjects(
+  snapshot: FactorySnapshot,
+  waiting: readonly StatusWaitingItem[],
+  nowS: number,
+): Map<string, Set<string>> {
+  const waitingKeys = new Set(waiting.map((item) => item.key));
+  const decisionKeys = new Map(
+    waiting.filter((item) => item.kind === "decision").map((item) => [item.ref, item.key]),
+  );
+  const prs = new Map(snapshot.prs.map((pr) => [pr.id, pr]));
+  const held = new Map<string, Set<string>>();
+  for (const project of snapshot.projects) {
+    if (!isWorking(project, nowS)) continue;
+    if (project.overlay === "blocked") {
+      const head = (project.overlay_reason ?? "").split(" · ")[0]!;
+      const ref = /^Blocked on (D-\d+)/.exec(head)?.[1];
+      const key = ref ? decisionKeys.get(ref) : undefined;
+      if (key) held.set(project.slug, new Set([key]));
+      continue;
+    }
+    if (project.overlay != null) continue;
+    const own = (project.pr_ids ?? []).map((id) => prs.get(id)).filter((pr) => pr != null);
+    const openKeys = own.filter((pr) => pr.state === "open").map((pr) => `pr:${pr.id}`);
+    if (openKeys.length === 0 || openKeys.some((key) => !waitingKeys.has(key))) continue;
+    const tasks = project.tasks_summary;
+    if (tasks?.running || tasks?.ready) continue;
+    held.set(project.slug, new Set(openKeys));
+  }
+  return held;
 }
 
 // ── Working on and next ────────────────────────────────────────
@@ -349,13 +466,78 @@ function primaryPr(project: ProjectView, prs: ReadonlyMap<string, PrView>): PrVi
   );
 }
 
-function workingItems(snapshot: FactorySnapshot, nowS: number): StatusWorkingItem[] {
+function changesRequested(pr: PrView): boolean {
+  const review = pr.human_review;
+  if (review?.verdict !== "changes_requested") return false;
+  const sha = review.head_sha;
+  if (!sha || !pr.head_sha) return true;
+  return sha.toLowerCase() === pr.head_sha.toLowerCase();
+}
+
+/** Where a PR is, in plain words (as `pr_status`). */
+function prStatus(pr: PrView): string | null {
+  const ref = `PR #${pr.number}`;
+  if (pr.state === "merged") return `${ref} merged`;
+  if (pr.state !== "open") return null;
+  const gates: Record<string, unknown> = { ...pr.gates };
+  const preview = pr.preview?.state;
+  const demo = pr.demo;
+  if (changesRequested(pr)) return `${ref}: making the changes a person asked for`;
+  if (pr.ready) return `${ref} ready for a merge`;
+  if (pr.is_draft || gates.draft === "fail") return `${ref} is a draft`;
+  const steps: [boolean, string][] = [
+    [gates.checks === "fail", "fixing failing checks"],
+    [gates.checks === "pending", "checks running"],
+    [gates.review === "fail", "fixing what review found"],
+    [gates.review === "pending", "in agent review"],
+    [preview === "deploying", "deploying a preview"],
+    [preview === "failed", "its preview failed to deploy"],
+    [gates.verify === "fail", "verification failed"],
+    [
+      gates.demo === "fail" ||
+        ((demo?.status === "FAIL" || demo?.status === "ERROR") && Boolean(demo?.is_current_head)),
+      "its demo failed",
+    ],
+    [gates.verify === "pending", "verifying"],
+    [gates.demo === "pending", "recording a demo"],
+    [gates.mergeable === "fail", "has merge conflicts"],
+  ];
+  const words = steps.find(([hit]) => hit)?.[1];
+  return words ? `${ref}: ${words}` : `${ref} open`;
+}
+
+/** One plain line on where a project in progress is (as `work_status`). */
+function workStatus(project: ProjectView, pr: PrView | null): [string, "facts" | "lead"] {
+  const parts: string[] = [];
+  const said = pr ? prStatus(pr) : null;
+  if (said) parts.push(said);
+  const task = project.active_task;
+  const tasks = project.tasks_summary;
+  if (task && TASK_VERB[task.state]) {
+    const title = clipWords(task.title, TASK_TITLE_MAX);
+    parts.push(`${TASK_VERB[task.state]} ${task.ref}${title ? `: ${title}` : ""}`);
+  } else if (tasks?.total && !said) {
+    parts.push(`${tasks.done ?? 0} of ${tasks.total} tasks done`);
+  }
+  if (parts.length === 0 && project.stage_note) parts.push(project.stage_note);
+  if (parts.length > 0) return [parts.join(" · "), "facts"];
+  const label = clipWords(project.pl?.summary, LABEL_MAX);
+  if (label) return [label, "lead"];
+  return [STAGE_WORDS[project.stage] ?? project.stage, "facts"];
+}
+
+function workingItems(
+  snapshot: FactorySnapshot,
+  nowS: number,
+  held: ReadonlyMap<string, unknown>,
+): StatusWorkingItem[] {
   const fid = snapshot.factory.id;
   const prs = new Map(snapshot.prs.map((pr) => [pr.id, pr]));
   return snapshot.projects
-    .filter((project) => isWorking(project, nowS))
+    .filter((project) => isWorking(project, nowS) && !held.has(project.slug))
     .map((project) => {
       const pr = primaryPr(project, prs);
+      const [status, source] = workStatus(project, pr);
       return {
         project: project.slug,
         title: project.title || project.slug,
@@ -371,6 +553,8 @@ function workingItems(snapshot: FactorySnapshot, nowS: number): StatusWorkingIte
               href: prPageHref(fid, pr.id),
             }
           : null,
+        status,
+        status_source: source,
         doing: clip(project.pl?.summary),
         problem: problem(project),
         running: projectRunning(project),
@@ -386,7 +570,32 @@ function queuedProblem(project: ProjectView, factoryPaused: boolean): string | n
   return problem(project);
 }
 
-function queuedReason(project: ProjectView, stuck: string | null, factoryPaused: boolean) {
+/** Why a queued project has no working lead yet, from its `start` field (as `start_reason`). */
+function startReason(start: NonNullable<ProjectView["start"]>, lead: string): string | null {
+  const phase = start.phase ?? "";
+  const label = (start.label ?? "").trim();
+  if (start.state === "starting") {
+    const verb = start.restart ? "restarting" : "starting up";
+    const step = START_TEXT[phase] ?? (label && label !== "Starting" ? lowerFirst(label) : null);
+    return step ? `${verb}: ${step}` : verb;
+  }
+  if (start.state !== "queued") return null;
+  if (phase === "pod_cap") {
+    const ahead = start.ahead ?? 0;
+    const spot = ahead ? `${plural(ahead, "project")} ahead` : "next in line";
+    return `waits for a free machine (${label ? lowerFirst(label) : "every machine is in use"}, ${spot})`;
+  }
+  if (phase === "lead") return `waits for ${lead} to start it`;
+  if (phase === "server") return "starts within a minute";
+  return lowerFirst(label) || null;
+}
+
+function queuedReason(
+  project: ProjectView,
+  stuck: string | null,
+  factoryPaused: boolean,
+  lead: string,
+) {
   if (stuck != null) {
     if (project.overlay === "paused") return `is ${stuck}`;
     return `${project.overlay === "failed" ? "couldn't start" : "can't start"}: ${stuck}`;
@@ -394,6 +603,8 @@ function queuedReason(project: ProjectView, stuck: string | null, factoryPaused:
   if (factoryPaused) return "waits until the factory resumes";
   const waiting = /^waiting on (.+)$/.exec(project.overlay_reason ?? "");
   if (waiting) return `waits for ${waiting[1]} to finish`;
+  const said = project.start ? startReason(project.start, lead) : null;
+  if (said) return said;
   const step = PROVISIONING_TEXT[project.provisioning?.stage ?? ""];
   if (step) return `starting up: ${step}`;
   return project.pl ? "starting up" : "not started yet";
@@ -402,6 +613,8 @@ function queuedReason(project: ProjectView, stuck: string | null, factoryPaused:
 function nextItems(snapshot: FactorySnapshot): StatusNextItem[] {
   const fid = snapshot.factory.id;
   const paused = snapshot.factory.state === "paused";
+  const root = rootMember(snapshot);
+  const lead = (root ? agentName(root.title, null, null) : null) ?? "the lead";
   return snapshot.projects
     .filter((project) => isLive(project) && project.stage === "queued")
     .map((project) => {
@@ -409,7 +622,7 @@ function nextItems(snapshot: FactorySnapshot): StatusNextItem[] {
       return {
         project: project.slug,
         title: project.title || project.slug,
-        reason: queuedReason(project, stuck, paused),
+        reason: queuedReason(project, stuck, paused, lead),
         problem: stuck,
         since: project.stage_since || 0,
         href: projectPageHref(fid, project.slug),
@@ -422,9 +635,47 @@ function rootMember(snapshot: FactorySnapshot) {
   return snapshot.members.find((m) => m.session_id === snapshot.factory.root_session_id) ?? null;
 }
 
-function leadNote(snapshot: FactorySnapshot, nowS: number): StatusLeadNote | null {
+/** `text` split so the PRs, decisions and incidents it names link (as `note_parts`). */
+function noteParts(
+  text: string,
+  snapshot: FactorySnapshot,
+  incidents: readonly IssueView[],
+): StatusTextPart[] {
+  const fid = snapshot.factory.id;
+  const prs = new Map<number, string>();
+  for (const pr of snapshot.prs) if (!prs.has(pr.number)) prs.set(pr.number, pr.id);
+  const decisions = new Set(snapshot.decisions.map((d) => d.ref));
+  const numbers = new Set(
+    incidents.filter((issue) => issue.class === "incident").map((issue) => issue.number),
+  );
+  const parts: StatusTextPart[] = [];
+  let at = 0;
+  for (const match of text.matchAll(REF_TOKEN_RE)) {
+    const [token, prNumber, num, decision, incident] = match;
+    const number = prNumber ?? num;
+    let href: string | null = null;
+    if (number != null && prs.has(Number(number))) href = prPageHref(fid, prs.get(Number(number))!);
+    else if (decision != null && decisions.has(decision)) {
+      href = decisionsPageHref(fid, { decision });
+    } else if (incident != null && numbers.has(Number(incident))) {
+      href = alertPageHref(fid, `INC-${incident}`);
+    }
+    if (href == null) continue;
+    if (match.index > at) parts.push({ text: text.slice(at, match.index), href: null });
+    parts.push({ text: token, href });
+    at = match.index + token.length;
+  }
+  if (at < text.length) parts.push({ text: text.slice(at), href: null });
+  return parts;
+}
+
+function leadNote(
+  snapshot: FactorySnapshot,
+  nowS: number,
+  incidents: readonly IssueView[],
+): StatusLeadNote | null {
   const root = rootMember(snapshot);
-  const text = clip(root?.summary);
+  const text = clipWords(root?.summary, NOTE_MAX);
   if (root == null || text == null) return null;
   const last = root.last_activity_at;
   const since = typeof last === "number" && last > 0 ? last : null;
@@ -432,6 +683,7 @@ function leadNote(snapshot: FactorySnapshot, nowS: number): StatusLeadNote | nul
   return {
     who: agentName(root.title, null, null) ?? "The lead",
     text,
+    parts: noteParts(text, snapshot, incidents),
     since,
     session_id: root.session_id,
     href: agentPageHref(snapshot.factory.id, root.session_id),
@@ -458,6 +710,7 @@ function spendBlock(
   snapshot: FactorySnapshot,
   idle: boolean,
   last24hUsd: number | null | undefined,
+  held: ReadonlyMap<string, unknown>,
 ): StatusSpend {
   const rate = snapshot.totals.usd_per_h ?? null;
   let idleSince: number | null = null;
@@ -465,7 +718,8 @@ function spendBlock(
     const ends = [snapshot.factory.started_at ?? 0];
     for (const project of snapshot.projects) {
       if (project.kind === "integration") continue;
-      if (project.closed_at) ends.push(project.closed_at);
+      if (held.has(project.slug)) ends.push(project.stage_since || 0);
+      else if (project.closed_at) ends.push(project.closed_at);
       else if (project.stage === "merged") {
         ends.push(Math.max(project.stage_since || 0, leadActivity(project) ?? 0));
       } else if (project.stage === "done") ends.push(project.stage_since || 0);
@@ -557,29 +811,48 @@ function healthBlock(snapshot: FactorySnapshot, pause: FixturePause | null): Sta
   return { state: overall, items };
 }
 
+function waitsText(items: readonly StatusWaitingItem[], whom: string): string {
+  const kinds = new Set(items.map((item) => item.kind));
+  const noun = kinds.size === 1 ? KIND_NOUN[[...kinds][0]!] : "thing";
+  return `${plural(items.length, noun)} ${items.length === 1 ? "waits" : "wait"} on ${whom}`;
+}
+
 function headline(
   state: StatusSummary["state"],
   counts: StatusSummary["counts"],
   health: StatusHealth,
   idleSpend: boolean,
+  waiting: readonly StatusWaitingItem[],
 ): string {
-  let lead: string;
+  const mine = waiting.filter((item) => item.for_you);
+  let waits = mine.length ? waitsText(mine, "you") : null;
+  const others = waiting.length && !mine.length ? waitsText(waiting, "others") : null;
+  let parts: string[];
   if (state === "paused") {
     const first = health.items.find((i) => i.kind === "paused");
-    lead = first?.by ? `Paused by ${first.by}.` : "Paused.";
-  } else if (state === "done") lead = "Finished.";
-  else if (state === "idle")
-    lead = `Idle: no active projects${idleSpend ? ", yet still spending." : "."}`;
-  else if (counts.working === 0 && counts.cant_start) {
-    const others = counts.queued - counts.cant_start!;
-    lead = `Nothing in progress: ${plural(counts.cant_start!, "project")} can't start${others ? `, ${others} queued.` : "."}`;
-  } else if (counts.working === 0) {
-    lead = `Nothing in progress yet; ${plural(counts.queued, "project")} queued.`;
-  } else lead = `Working on ${plural(counts.working, "project")}.`;
-  const forYou = counts.waiting_for_you;
-  if (forYou)
-    return `${lead} ${plural(forYou, "thing")} ${forYou === 1 ? "waits" : "wait"} on you.`;
-  return `${lead} Nothing waits on you.`;
+    parts = [first?.by ? `paused by ${first.by}` : "paused"];
+  } else if (state === "done") parts = ["finished"];
+  else if (state === "idle") parts = [idleSpend ? "idle, yet still spending" : "idle"];
+  else {
+    const stuck = counts.cant_start ?? 0;
+    const queued = counts.queued - stuck;
+    if (counts.working) {
+      parts = [`${plural(counts.working, "project")} in progress`];
+      if (stuck) parts.push(`${stuck} can't start`);
+    } else if (stuck) parts = ["nothing in progress", `${plural(stuck, "project")} can't start`];
+    else parts = ["nothing in progress yet"];
+    if (queued) {
+      const alone = !counts.working && !stuck;
+      parts.push(`${alone ? plural(queued, "project") : queued} queued`);
+    }
+    if (waits) {
+      parts.unshift(waits);
+      waits = null;
+    }
+  }
+  parts.push(...[waits, others].filter((text): text is string => Boolean(text)));
+  const line = parts.join(" · ");
+  return line.slice(0, 1).toUpperCase() + line.slice(1);
 }
 
 /**
@@ -594,16 +867,25 @@ export function statusSummaryOf(
     incidents?: readonly IssueView[];
     last24hUsd?: number | null;
     pause?: FixturePause | null;
+    /** Subject (`decision:D-19`, `pr:<repo>#<n>`, `issue:INC-3`) -> Slack DM receipts. */
+    notified?: Readonly<Record<string, readonly NotifiedView[]>>;
+    /** Project slug -> its human owner (their ready PRs wait on them). */
+    owners?: Readonly<Record<string, string>>;
   } = {},
 ): StatusSummary {
   const nowS = snapshot.server_time;
   const userId = snapshot.viewer?.user_id ?? null;
   const level = snapshot.viewer ? snapshot.viewer.level : 4;
-  const waiting = waitingItems(snapshot, options.incidents ?? [], userId, level);
-  const working = workingItems(snapshot, nowS);
+  const incidents = options.incidents ?? [];
+  const inputs = { incidents, notified: options.notified ?? {}, owners: options.owners ?? {} };
+  const listed = waitingItems(snapshot, inputs, userId, level);
+  const held = heldProjects(snapshot, listed, nowS);
+  const holding = new Set([...held.values()].flatMap((keys) => [...keys]));
+  const waiting = listed.map((item) => ({ ...item, holds: holding.has(item.key) }));
+  const working = workingItems(snapshot, nowS, held);
   const next = nextItems(snapshot);
   const idle = working.length === 0 && next.length === 0;
-  const spend = spendBlock(snapshot, idle, options.last24hUsd);
+  const spend = spendBlock(snapshot, idle, options.last24hUsd, held);
   const health = healthBlock(snapshot, options.pause ?? null);
   const factoryState = snapshot.factory.state;
   const state: StatusSummary["state"] =
@@ -614,17 +896,18 @@ export function statusSummaryOf(
     working: working.length,
     queued: next.length,
     cant_start: next.filter((n) => n.problem != null).length,
+    held: held.size,
   };
   return {
     factory_id: snapshot.factory.id,
     factory_name: snapshot.factory.name,
     generated_at: nowS,
-    headline: headline(state, counts, health, spend.idle_spend),
+    headline: headline(state, counts, health, spend.idle_spend, waiting),
     state,
     waiting,
     working,
     next,
-    lead: leadNote(snapshot, nowS),
+    lead: leadNote(snapshot, nowS, incidents),
     check_in: checkIn(snapshot),
     spend,
     health,

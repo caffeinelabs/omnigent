@@ -1,12 +1,15 @@
 /**
  * The Overview's first card: what the factory is doing now, in plain words.
- * What waits on the viewer comes first, then the projects in progress, what
- * comes next (and what Atlas says), spend and health. Every line opens the
- * page it is about. The server says what (`…/status-summary`); this card
+ * What waits on the viewer comes first, each with its next step (Review →,
+ * the decision's answer, Open) and the Slack DMs it already got; then the
+ * projects agents still work on (a project that only waits on a person is
+ * listed once, under waiting), what comes next and what Atlas said, spend
+ * and health. Every line opens the page it is about. The server says what
+ * (`…/status-summary`, the builder the Slack digest uses too); this card
  * ages it against the cockpit's clock.
  */
 
-import type { ReactNode } from "react";
+import { type ReactNode, useState } from "react";
 import {
   ChevronRightIcon,
   CircleCheckIcon,
@@ -17,13 +20,16 @@ import {
   ClockIcon,
   CoinsIcon,
   HourglassIcon,
+  MessageSquareShareIcon,
   MessageSquareTextIcon,
   StarIcon,
   TriangleAlertIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import type { DecisionView, FactorySnapshot } from "@/lib/factoryApi";
 import type {
   StatusHealthItem,
+  StatusLeadNote,
   StatusNextItem,
   StatusSummary,
   StatusWaitingItem,
@@ -31,30 +37,36 @@ import type {
 } from "@/lib/factoryStatusApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
+import { DecisionCard } from "../decisions/DecisionCard";
 import { plural } from "../factoryFormat";
 import { factoryPageHref, projectsPageHref } from "../factoryRoutes";
 import { isMissingRoute } from "../agents/opsQueries";
 import {
-  OTHERS_SHOWN,
-  WAITING_SHOWN,
   WORKING_SHOWN,
   attentionText,
   checkInText,
   idleSpendText,
+  idleText,
+  leadParts,
   leadWho,
   nowHeadline,
+  receiptText,
+  shownWaiting,
   spendText,
   splitHealth,
   splitWaiting,
   staleText,
   waitedFor,
   waitedLong,
+  waitingDetail,
   waitingEmptyText,
   waitsOn,
   workingNote,
+  workingNoteQuoted,
   workingStage,
 } from "./nowCardModel";
 import { useFactoryStatusSummary } from "./statusSummaryQuery";
+import { DecisionAnswerButton, OpenButton, ReviewButton } from "./WaitingActions";
 
 const ICON = "size-3.5";
 
@@ -185,31 +197,113 @@ function waitingIcon(item: StatusWaitingItem): ReactNode {
   );
 }
 
-function WaitingLine({
+/** The next step beside a wait: Review →, the decision's answer (opens its card), or Open. */
+function waitingAction(
+  item: StatusWaitingItem,
+  decision: DecisionView | null,
+  open: boolean,
+  toggle: () => void,
+): ReactNode {
+  const testId = `now-action-${item.key}`;
+  if (item.kind === "pr") {
+    return (
+      <ReviewButton href={item.href} testId={testId} componentId="factory.overview.now_review" />
+    );
+  }
+  if (item.kind === "decision" && decision) {
+    return (
+      <DecisionAnswerButton
+        decision={decision}
+        open={open}
+        onToggle={toggle}
+        testId={testId}
+        componentId="factory.overview.now_decision"
+      />
+    );
+  }
+  return (
+    <OpenButton
+      href={item.href}
+      testId={testId}
+      componentId="factory.overview.now_open"
+      label={item.kind === "decision" ? "Answer →" : "Open"}
+    />
+  );
+}
+
+/**
+ * One wait: its line opens its page; the button beside it is the next step
+ * (a decision's card opens in place); below, the viewer's Slack DMs about it.
+ */
+function WaitingRow({
   item,
   nowS,
   showWho,
+  decision,
+  clockOffsetS,
 }: {
   item: StatusWaitingItem;
   nowS: number;
   showWho: boolean;
+  decision: DecisionView | null;
+  clockOffsetS: number;
 }) {
+  const [open, setOpen] = useState(false);
   const who = showWho ? ` · ${waitsOn(item)}` : "";
-  const detail = item.detail ? ` — ${item.detail}` : "";
+  const detailText = waitingDetail(item);
+  const detail = detailText ? ` — ${detailText}` : "";
+  const meta = waitedFor(item.since, nowS);
+  const long = waitedLong(item.since, nowS);
+  const receipts = receiptText(item.slack, nowS);
   return (
-    <Line
-      href={item.href}
-      icon={waitingIcon(item)}
-      meta={waitedFor(item.since, nowS)}
-      metaLong={waitedLong(item.since, nowS)}
-      testId={`now-waiting-${item.key}`}
-      title={`${item.ref} · ${item.text}${who}${detail}`}
-    >
-      <span className="font-mono text-muted-foreground">{item.ref}</span>
-      <span> · {item.text}</span>
-      {who && <span className="text-muted-foreground">{who}</span>}
-      {detail && <span className="text-muted-foreground">{detail}</span>}
-    </Line>
+    <li data-testid={`now-waiting-row-${item.key}`} className="flex min-w-0 flex-col">
+      <div className="flex min-w-0 items-center gap-2">
+        <Link
+          to={item.href}
+          data-testid={`now-waiting-${item.key}`}
+          title={`${item.ref} · ${item.text}${who}${detail}`}
+          componentId="factory.overview.now_line"
+          className="group -mx-1.5 flex min-w-0 flex-1 items-center gap-2 rounded-md px-1.5 py-1 text-sm hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          <span className="flex w-4 shrink-0 justify-center">{waitingIcon(item)}</span>
+          <span className="min-w-0 flex-1 truncate max-sm:line-clamp-2 max-sm:whitespace-normal">
+            <span className="font-mono text-muted-foreground">{item.ref}</span>
+            <span> · {item.text}</span>
+            {who && <span className="text-muted-foreground">{who}</span>}
+            {detail && <span className="text-muted-foreground">{detail}</span>}
+          </span>
+          {meta && (
+            <span
+              data-long={long || undefined}
+              className={cn(
+                "shrink-0 font-mono text-xs tabular-nums",
+                long ? "font-medium text-warning" : "text-muted-foreground",
+              )}
+            >
+              {meta}
+            </span>
+          )}
+        </Link>
+        <span className="shrink-0">
+          {waitingAction(item, decision, open, () => setOpen((v) => !v))}
+        </span>
+      </div>
+      {receipts && (
+        <p
+          data-testid={`now-slack-${item.key}`}
+          title="Slack DMs to you about it"
+          className="flex min-w-0 items-center gap-1 pb-0.5 pl-6 text-xs text-muted-foreground"
+        >
+          <MessageSquareShareIcon aria-hidden className="size-3 shrink-0" />
+          <span className="truncate">{receipts}</span>
+        </p>
+      )}
+      {open && decision && (
+        <div className="pt-1 pb-2 pl-6">
+          <DecisionCard decision={decision} clockOffsetS={clockOffsetS} />
+        </div>
+      )}
+    </li>
   );
 }
 
@@ -224,23 +318,69 @@ function workingIcon(item: StatusWorkingItem): ReactNode {
 
 function WorkingLine({ item, nowS }: { item: StatusWorkingItem; nowS: number }) {
   const note = workingNote(item);
+  const quoted = note && workingNoteQuoted(item) ? `its lead says “${note}”` : note;
   return (
     <Line
       href={item.href}
       icon={workingIcon(item)}
       meta={waitedFor(item.since, nowS)}
       testId={`now-working-${item.project}`}
-      title={`${item.title} · ${workingStage(item)}${note ? ` — ${note}` : ""}`}
+      title={`${item.title} · ${workingStage(item)}${quoted ? ` — ${quoted}` : ""}`}
     >
       <span className="font-medium">{item.project}</span>
       <span className="text-muted-foreground"> · {workingStage(item)}</span>
-      {note && (
+      {quoted && (
         <span className={cn(item.problem ? "text-warning" : "text-muted-foreground")}>
           {" "}
-          — {note}
+          — {quoted}
         </span>
       )}
     </Line>
+  );
+}
+
+/** `Atlas said 52m ago: “… #9826 …”`: a quote, the ids in it linked to their pages. */
+function LeadLine({ lead, nowS }: { lead: StatusLeadNote; nowS: number }) {
+  const who = leadWho(lead, nowS);
+  return (
+    <li
+      data-testid="now-lead"
+      title={`${who}: “${lead.text}”`}
+      className="flex min-w-0 items-start gap-2 py-1 text-sm"
+    >
+      <span className="flex h-5 w-4 shrink-0 items-center justify-center">
+        <MessageSquareTextIcon aria-hidden className={cn(ICON, "text-muted-foreground")} />
+      </span>
+      <p className="line-clamp-2 min-w-0 flex-1 break-words">
+        <Link
+          to={lead.href}
+          data-testid="now-lead-who"
+          componentId="factory.overview.now_lead"
+          className="rounded-sm font-medium hover:underline focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+        >
+          {who}
+        </Link>
+        <span>: </span>
+        <span data-testid="now-lead-quote" className="text-muted-foreground">
+          “
+          {leadParts(lead).map((part) =>
+            part.href ? (
+              <Link
+                key={part.at}
+                to={part.href}
+                componentId="factory.overview.now_lead_ref"
+                className="rounded-sm font-mono text-foreground underline decoration-muted-foreground/50 underline-offset-2 hover:decoration-foreground focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none"
+              >
+                {part.text}
+              </Link>
+            ) : (
+              <span key={part.at}>{part.text}</span>
+            ),
+          )}
+          ”
+        </span>
+      </p>
+    </li>
   );
 }
 
@@ -314,19 +454,37 @@ export function NowCardView({
   summary,
   nowS,
   stale = null,
+  snapshot = null,
+  clockOffsetS = 0,
 }: {
   factoryId: string;
   summary: StatusSummary;
   nowS: number;
   stale?: NowStale | null;
+  /** The live snapshot: decisions answer in place, and spend shows the header's $/h. */
+  snapshot?: FactorySnapshot | null;
+  clockOffsetS?: number;
 }) {
   const split = splitWaiting(summary);
   const needsYou = `${factoryPageHref(factoryId)}#needs-you`;
-  const mineShown = split.mine.slice(0, WAITING_SHOWN);
+  const shown = shownWaiting(split);
   const working = summary.working.slice(0, WORKING_SHOWN);
-  const idleSpend = idleSpendText(summary.spend);
-  // Problems of projects listed under Working on or Next fold into one line here.
-  const health = splitHealth(summary.health.items, [...working, ...summary.next]);
+  const usdPerH = snapshot ? snapshot.totals.usd_per_h : undefined;
+  const idleSpend = idleSpendText(summary.spend, usdPerH);
+  // Problems of projects listed under Working on or Next fold into one line here;
+  // a project that only waits on a listed wait is said there.
+  const health = splitHealth(summary.health.items, [...working, ...summary.next], shown);
+  const decisions = new Map((snapshot?.decisions ?? []).map((d) => [`decision:${d.id}`, d]));
+  const row = (item: StatusWaitingItem, showWho: boolean) => (
+    <WaitingRow
+      key={item.key}
+      item={item}
+      nowS={nowS}
+      showWho={showWho}
+      decision={decisions.get(item.key) ?? null}
+      clockOffsetS={clockOffsetS}
+    />
+  );
   const quietNext = summary.next.length === 0 && !summary.lead && !summary.check_in;
   return (
     <section
@@ -340,7 +498,7 @@ export function NowCardView({
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
         <h2 className="text-ui font-semibold">Now</h2>
         <p data-testid="now-headline" className={cn("min-w-0 text-sm", stale && "opacity-60")}>
-          {nowHeadline(summary, nowS)}
+          {nowHeadline(summary)}
         </p>
       </div>
       {stale && (
@@ -383,22 +541,16 @@ export function NowCardView({
               >
                 {waitingEmptyText(split)}
               </Quiet>
-              {split.others.length > 0 && (
-                <ul className="flex flex-col">
-                  {split.others.slice(0, OTHERS_SHOWN).map((item) => (
-                    <WaitingLine key={item.key} item={item} nowS={nowS} showWho />
-                  ))}
-                </ul>
+              {shown.length > 0 && (
+                <ul className="flex flex-col">{shown.map((item) => row(item, true))}</ul>
               )}
             </>
           ) : (
             <ul className="flex flex-col">
-              {mineShown.map((item) => (
-                <WaitingLine key={item.key} item={item} nowS={nowS} showWho={false} />
-              ))}
-              {split.mine.length > mineShown.length && (
+              {shown.map((item) => row(item, false))}
+              {split.mine.length > shown.length && (
                 <More href={needsYou} testId="now-waiting-more">
-                  +{split.mine.length - mineShown.length} more waiting on you
+                  +{split.mine.length - shown.length} more waiting on you
                 </More>
               )}
               {split.others.length > 0 && (
@@ -416,7 +568,7 @@ export function NowCardView({
               testId="now-working-empty"
               icon={<HourglassIcon aria-hidden className={cn(ICON, "text-muted-foreground")} />}
             >
-              {summary.spend.idle ? "No active projects" : "Nothing in progress yet"}
+              {summary.spend.idle ? idleText(summary.spend, nowS) : "Nothing in progress yet"}
             </Quiet>
           ) : (
             <ul className="flex flex-col">
@@ -445,22 +597,7 @@ export function NowCardView({
               {summary.next.map((item) => (
                 <NextLine key={item.project} item={item} nowS={nowS} />
               ))}
-              {summary.lead && (
-                <Line
-                  href={summary.lead.href}
-                  icon={
-                    <MessageSquareTextIcon
-                      aria-hidden
-                      className={cn(ICON, "text-muted-foreground")}
-                    />
-                  }
-                  testId="now-lead"
-                  title={`${leadWho(summary.lead, nowS)}: ${summary.lead.text}`}
-                >
-                  <span className="font-medium">{leadWho(summary.lead, nowS)}:</span>
-                  <span className="text-muted-foreground"> “{summary.lead.text}”</span>
-                </Line>
-              )}
+              {summary.lead && <LeadLine lead={summary.lead} nowS={nowS} />}
               {summary.check_in && (
                 <Line
                   href={summary.check_in.href}
@@ -491,11 +628,11 @@ export function NowCardView({
                 />
               }
               testId="now-spend"
-              title={spendText(summary.spend)}
+              title={spendText(summary.spend, usdPerH)}
             >
               {idleSpend && <span className="text-warning">{idleSpend} · </span>}
               <span className={cn(idleSpend && "text-muted-foreground")}>
-                {spendText(summary.spend)}
+                {spendText(summary.spend, usdPerH)}
               </span>
             </Line>
             {health.attention.length > 0 && (
@@ -542,7 +679,18 @@ export function NowCardView({
  * The Now card over its read: a short placeholder while loading, nothing on an
  * older server, and the last good read (dimmed, with its time) when a refresh fails.
  */
-export function NowCard({ factoryId, nowS }: { factoryId: string; nowS: number }) {
+export function NowCard({
+  factoryId,
+  nowS,
+  snapshot = null,
+  clockOffsetS = 0,
+}: {
+  factoryId: string;
+  nowS: number;
+  /** The live snapshot (the Overview's): decisions answer in place; spend shows the header's $/h. */
+  snapshot?: FactorySnapshot | null;
+  clockOffsetS?: number;
+}) {
   const query = useFactoryStatusSummary(factoryId);
   if (query.data) {
     const stale =
@@ -552,7 +700,16 @@ export function NowCard({ factoryId, nowS }: { factoryId: string; nowS: number }
             onRetry: () => void query.refetch(),
           }
         : null;
-    return <NowCardView factoryId={factoryId} summary={query.data} nowS={nowS} stale={stale} />;
+    return (
+      <NowCardView
+        factoryId={factoryId}
+        summary={query.data}
+        nowS={nowS}
+        stale={stale}
+        snapshot={snapshot}
+        clockOffsetS={clockOffsetS}
+      />
+    );
   }
   if (query.error) {
     // A server without the route: the panels below say it all.

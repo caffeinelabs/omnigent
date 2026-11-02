@@ -759,6 +759,14 @@ export interface ProjectStartView {
   pod_cap?: number | null;
 }
 
+/** The task a project has in hand: running, else in review, else blocked. */
+export interface ActiveTaskView {
+  /** `T-<number>`. */
+  ref: string;
+  title: string;
+  state: "running" | "review" | "blocked";
+}
+
 /** One project card. */
 export interface ProjectView {
   slug: string;
@@ -796,6 +804,8 @@ export interface ProjectView {
   depends_mode?: DependsMode | null;
   human_owner?: string | null;
   tasks_summary?: TasksSummaryView | null;
+  /** The task in hand (newer servers). */
+  active_task?: ActiveTaskView | null;
   loops_summary?: LoopsSummaryView | null;
   def_version?: number | null;
 }

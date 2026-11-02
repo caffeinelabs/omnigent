@@ -298,6 +298,30 @@ async def test_spend_rate_above_the_alert(
     assert {r.status for r in _issues(world, "spend.rate")} == {"resolved"}
 
 
+async def test_the_shown_rate_is_back_two_minutes_after_a_restart(
+    world: FactoryWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The header's $/h needs two minutes of samples; the alert still needs half its window."""
+    costs = {"total": 40.0}
+    pl = world.id("pl")
+
+    def _cost(conv: Any, _store: Any) -> float | None:
+        return costs["total"] if conv.id == pl else None
+
+    monkeypatch.setattr(snapshot, "subtree_cost", _cost)
+    t0 = time.time()
+    await _tick(world, t0)
+    assert detectors.spend_rate(_fid(world)) is None  # one sample: no rate yet
+    costs["total"] = 40.1
+    await _tick(world, t0 + 60)
+    assert detectors.spend_rate(_fid(world)) is None  # negative: under two minutes
+
+    costs["total"] = 40.5
+    await _tick(world, t0 + 3 * 60)
+    assert detectors.spend_rate(_fid(world)) == 10.0  # $0.50 in 3 minutes
+    assert _issues(world, "spend.rate") == []  # 10 $/h is under the alert anyway
+
+
 # ── PRs, decisions, previews ───────────────────────────────────
 
 

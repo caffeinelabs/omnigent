@@ -20,7 +20,7 @@ import pytest
 from omnigent import factory as F
 from omnigent.entities.factory import EventDraft, FactoryCostDaily, FactoryEvent, FactoryIssue
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER, LEVEL_READ
-from omnigent.server.factory import snapshot, status
+from omnigent.server.factory import snapshot, status, status_summary
 from omnigent.server.factory.context import factory_deps
 from omnigent.server.factory.status_summary import (
     StatusInputs,
@@ -212,8 +212,9 @@ def test_waiting_puts_the_viewers_first_then_urgent_then_the_longest_wait() -> N
         "working": 0,
         "queued": 0,
         "cant_start": 0,
+        "held": 0,
     }
-    assert summary["headline"].endswith("6 things wait on you.")
+    assert summary["headline"] == "Idle · 6 things wait on you"
 
 
 def test_who_and_for_you_follow_the_viewers_role() -> None:
@@ -239,7 +240,8 @@ def test_who_and_for_you_follow_the_viewers_role() -> None:
         "PR #1": ("operators", True),
     }
     assert not any(i["for_you"] for i in viewer["waiting"])
-    assert viewer["headline"].endswith("Nothing waits on you.")
+    assert viewer["headline"] == "Idle · 5 things wait on others"
+    assert operator["headline"] == "Idle · 4 things wait on you"
 
 
 def test_proposal_decisions_read_as_what_to_do() -> None:
@@ -438,17 +440,20 @@ def test_a_busy_factory_lists_its_work_and_whats_next() -> None:
     working = [
         (w["project"], w["stage"], (w["pr"] or {}).get("number")) for w in summary["working"]
     ]
+    # api-version only waits for its merge: it is listed once, under waiting.
     assert working == [
         ("db-version", "building", None),
         ("validate-build-tier", "merged", 9774),
-        ("api-version", "ready", 9630),
     ]
-    blocked, merged, ready = summary["working"]
+    blocked, merged = summary["working"]
     assert blocked["problem"] == "blocked until someone answers D-2 · T-4 implement exhausted"
     assert merged["running"] is True
-    assert ready["doing"] == "Waiting for a human merge"
-    assert ready["href"] == f"/factory/{FID}/projects/api-version"
-    assert ready["pr"]["href"] == f"/factory/{FID}/prs/p1"
+    assert (merged["status"], merged["status_source"]) == ("PR #9774 merged", "facts")
+    assert merged["href"] == f"/factory/{FID}/projects/validate-build-tier"
+    assert merged["pr"]["href"] == f"/factory/{FID}/prs/p2"
+    [pr] = summary["waiting"]
+    assert (pr["ref"], pr["project"], pr["holds"]) == ("PR #9630", "api-version", True)
+    assert summary["counts"]["held"] == 1
     assert [(n["project"], n["reason"]) for n in summary["next"]] == [
         ("settings-row", "waits for api-version, db-version to finish"),
         ("badge", "starting up: starting its lead agent"),
@@ -456,6 +461,7 @@ def test_a_busy_factory_lists_its_work_and_whats_next() -> None:
     assert summary["lead"] == {
         "who": "Atlas",
         "text": "Next: split the settings work into two PRs",
+        "parts": [{"text": "Next: split the settings work into two PRs", "href": None}],
         "since": NOW - 20 * 60,
         "session_id": ROOT,
         "href": f"/factory/{FID}/agents/{ROOT}",
@@ -471,7 +477,7 @@ def test_a_busy_factory_lists_its_work_and_whats_next() -> None:
     assert [h["text"] for h in summary["health"]["items"]] == [
         "db-version: blocked until someone answers D-2 · T-4 implement exhausted"
     ]
-    assert summary["headline"].startswith("Working on 3 projects.")
+    assert summary["headline"] == "1 PR waits on you · 2 projects in progress · 2 queued"
 
 
 def test_an_idle_factory_says_since_when_and_that_it_still_spends() -> None:
@@ -504,10 +510,7 @@ def test_an_idle_factory_says_since_when_and_that_it_still_spends() -> None:
     assert spend["last_24h_usd"] == 12.0 + 48.0 * 0.75
     assert spend["usd_per_h"] == 2.71 and spend["total_usd"] == 170.0
     assert spend["href"] == f"/factory/{FID}/insights"
-    assert (
-        summary["headline"]
-        == "Idle: no active projects, yet still spending. Nothing waits on you."
-    )
+    assert summary["headline"] == "Idle, yet still spending"
 
 
 def test_a_factory_with_only_queued_projects_is_starting_not_idle() -> None:
@@ -521,9 +524,7 @@ def test_a_factory_with_only_queued_projects_is_starting_not_idle() -> None:
     summary = _build(body)
 
     assert summary["state"] == "working" and summary["spend"]["idle"] is False
-    assert (
-        summary["headline"] == "Nothing in progress yet; 2 projects queued. Nothing waits on you."
-    )
+    assert summary["headline"] == "Nothing in progress yet · 2 projects queued"
     assert [n["reason"] for n in summary["next"]] == [
         "starting up: getting a machine ready",
         "not started yet",
@@ -544,7 +545,7 @@ def test_a_merged_project_whose_lead_is_between_turns_still_counts() -> None:
     assert [(w["project"], w["running"]) for w in summary["working"]] == [
         ("validate-build-tier", False)
     ]
-    assert summary["headline"] == "Working on 1 project. Nothing waits on you."
+    assert summary["headline"] == "1 project in progress"
 
 
 def test_a_merged_project_whose_lead_went_quiet_is_finished() -> None:
@@ -600,9 +601,7 @@ def test_a_queued_project_whose_lead_failed_to_start_says_so() -> None:
         ("badge", "starting up: copying the repository", None),
     ]
     assert summary["counts"]["cant_start"] == 1 and summary["counts"]["queued"] == 2
-    assert summary["headline"] == (
-        "Nothing in progress: 1 project can't start, 1 queued. Nothing waits on you."
-    )
+    assert summary["headline"] == "Nothing in progress · 1 project can't start · 1 queued"
     assert [h["text"] for h in summary["health"]["items"]] == [
         "cache-warm: its lead agent's machine failed to start"
     ]
@@ -668,7 +667,7 @@ def test_an_empty_factory_is_idle_since_it_started() -> None:
     assert summary["spend"]["idle_since"] == NOW - 3 * 86_400
     assert summary["spend"]["last_24h_usd"] is None and summary["spend"]["usd_per_h"] is None
     assert summary["health"] == {"state": "ok", "items": []}
-    assert summary["headline"] == "Idle: no active projects. Nothing waits on you."
+    assert summary["headline"] == "Idle"
     assert plain_lines(summary, now=NOW) == [summary["headline"]]
 
 
@@ -703,7 +702,7 @@ def test_a_paused_factory_names_who_paused_it_and_why() -> None:
     summary = _build(body, pause=pause)
 
     assert summary["state"] == "paused"
-    assert summary["headline"].startswith("Paused by alice.")
+    assert summary["headline"] == "Paused by alice"
     health = summary["health"]
     assert health["state"] == "paused"
     assert [(h["kind"], h["text"]) for h in health["items"]] == [
@@ -726,7 +725,7 @@ def test_a_paused_factory_without_a_pause_event_still_says_so() -> None:
     summary = _build(body)
 
     assert summary["health"]["items"][0]["text"] == "The factory is paused"
-    assert summary["headline"].startswith("Paused.")
+    assert summary["headline"] == "Paused"
 
 
 def test_plain_lines_read_as_a_digest() -> None:
@@ -751,13 +750,460 @@ def test_plain_lines_read_as_a_digest() -> None:
     )
 
     assert lines == [
-        "Working on 1 project. 1 thing waits on you.",
+        "1 decision waits on you · 1 project in progress",
         "Waiting on you: D-19 · approve Atlas's proposal · 2d 18h "
         f"https://omnigent.example/factory/{FID}/decisions?decision=D-19",
         "Working on api-version: building · 1h 30m",
         "Next: Atlas checks in again in 25m",
-        "Spent $5.00 in the last 24 h · $2.71/h now",
+        "Spend: $5.00 in the last 24 h · $2.71/h now",
     ]
+
+
+# ── Waiting on people, once ────────────────────────────────────
+
+
+def _ready_project(slug: str, number: int, since: int, **extra: Any) -> dict[str, Any]:
+    """A project at Ready whose one PR waits for a human merge (its lead quiet)."""
+    pl = _member(
+        f"pl-{slug}",
+        f"PL · {slug}",
+        summary=f"PR #{number} — PR #{number} @00d863e READY FOR HUMAN MERGE (verified)",
+    )
+    return _project(slug, "ready", since, pr_ids=[f"p{number}"], pl=pl, **extra)
+
+
+def _live_factory() -> dict[str, Any]:
+    """
+    The live factory at 11:45 UTC on 2 Nov: four projects wait only on a merge,
+    validate-build-tier still checks its preview.
+    """
+    numbers = (9826, 9827, 9828, 9829)
+    projects = [
+        _ready_project(f"app-{n}", n, NOW - (10 - i) * HOUR) for i, n in enumerate(numbers)
+    ]
+    projects.append(
+        _project(
+            "validate-build-tier",
+            "verify",
+            NOW - HOUR,
+            pr_ids=["p9774"],
+            stage_note="PR merged · 1 task still open",
+            active_task={
+                "ref": "T-9",
+                "title": "Check the build tier on a preview",
+                "state": "running",
+            },
+            pl=_member("pl-vbt", "PL · validate-build-tier", running=True),
+        )
+    )
+    prs = [
+        _pr(f"p{n}", n, f"app-{n}", ready=True, ready_since=NOW - (9 - i) * HOUR)
+        for i, n in enumerate(numbers)
+    ]
+    prs.append(_pr("p9774", 9774, "validate-build-tier", state="merged"))
+    return _snapshot(projects=projects, prs=prs, totals={"usd_per_h": 3.1})
+
+
+def test_a_project_ready_for_a_merge_is_listed_once_under_waiting() -> None:
+    summary = _build(_live_factory(), cost_cells=[_cost("2026-11-02", 61.44)])
+
+    assert summary["headline"] == "4 PRs wait on you · 1 project in progress"
+    assert [w["project"] for w in summary["working"]] == ["validate-build-tier"]
+    assert [(i["ref"], i["project"], i["holds"]) for i in summary["waiting"]] == [
+        ("PR #9826", "app-9826", True),
+        ("PR #9827", "app-9827", True),
+        ("PR #9828", "app-9828", True),
+        ("PR #9829", "app-9829", True),
+    ]
+    counts = summary["counts"]
+    assert (counts["working"], counts["held"], counts["waiting_for_you"]) == (1, 4, 4)
+    # Nothing in the card repeats the lead's raw label.
+    assert "READY FOR HUMAN MERGE" not in str({k: v for k, v in summary.items() if k != "working"})
+    [work] = summary["working"]
+    assert (work["status"], work["status_source"]) == (
+        "PR #9774 merged · working on T-9: Check the build tier on a preview",
+        "facts",
+    )
+
+
+def test_a_factory_that_only_waits_on_people_is_idle_since_the_last_wait_began() -> None:
+    body = _live_factory()
+    body["projects"], body["prs"] = body["projects"][:2], body["prs"][:2]
+    body["decisions"] = [_decision(19, NOW - 66 * HOUR)]
+    body["totals"] = {"usd_per_h": 0.0}
+
+    summary = _build(body)
+
+    assert summary["state"] == "idle" and summary["working"] == []
+    assert summary["headline"] == "Idle · 3 things wait on you"
+    # The newer of the two became ready 9 h ago.
+    assert summary["spend"]["idle_since"] == NOW - 9 * HOUR
+
+
+def test_a_project_with_work_left_for_agents_stays_in_progress() -> None:
+    body = _snapshot(
+        projects=[
+            # One PR ready, another still building.
+            _project("two-prs", "ready", NOW - HOUR, pr_ids=["p1", "p2"]),
+            # Its PR is ready, but a task still runs.
+            _project(
+                "more-tasks",
+                "ready",
+                NOW - HOUR,
+                pr_ids=["p3"],
+                tasks_summary={"total": 3, "done": 1, "running": 1, "ready": 0},
+            ),
+            # Blocked on a decision the viewer does not see: the problem shows here.
+            _project(
+                "hidden-ask",
+                "building",
+                NOW - HOUR,
+                overlay="blocked",
+                overlay_reason="Blocked on D-8",
+            ),
+            # Blocked on a decision that is listed: the decision stands for it.
+            _project(
+                "asks", "building", NOW - HOUR, overlay="blocked", overlay_reason="Blocked on D-9"
+            ),
+            # Failed: a problem, not a wait.
+            _ready_project("dead", 9700, NOW - HOUR, overlay="failed", overlay_reason="PL dead"),
+        ],
+        prs=[
+            _pr("p1", 1, "two-prs", ready=True, ready_since=NOW - HOUR),
+            _pr("p2", 2, "two-prs", gates={"checks": "fail"}),
+            _pr("p3", 3, "more-tasks", ready=True, ready_since=NOW - HOUR),
+            _pr("p9700", 9700, "dead", ready=True, ready_since=NOW - HOUR),
+        ],
+        decisions=[_decision(9, NOW - HOUR, blocking=True, project_slug="asks")],
+    )
+
+    summary = _build(body)
+
+    assert sorted(w["project"] for w in summary["working"]) == [
+        "dead",
+        "hidden-ask",
+        "more-tasks",
+        "two-prs",
+    ]
+    holds = {i["ref"]: i["holds"] for i in summary["waiting"]}
+    assert holds == {"D-9": True, "PR #1": False, "PR #3": False, "PR #9700": False}
+    assert summary["counts"]["held"] == 1
+    by_project = {w["project"]: w for w in summary["working"]}
+    assert by_project["two-prs"]["status"] == "PR #1 ready for a merge"
+    assert by_project["more-tasks"]["status"] == "PR #3 ready for a merge"
+
+
+@pytest.mark.parametrize(
+    ("body", "expected"),
+    [
+        # Others' waits are named only when none are the viewer's.
+        (
+            _snapshot(
+                projects=[_project("api", "building", NOW - HOUR)],
+                decisions=[_decision(1, NOW - HOUR, assignee="mia@caffeine.ai")],
+            ),
+            "1 project in progress · 1 decision waits on others",
+        ),
+        (
+            _snapshot(
+                projects=[
+                    _project("api", "building", NOW - HOUR),
+                    _project("warm", "queued", NOW, overlay="failed", overlay_reason="PL sandbox"),
+                    _project("badge", "queued", NOW, pl=None),
+                ]
+            ),
+            "1 project in progress · 1 can't start · 1 queued",
+        ),
+        (
+            _snapshot(
+                factory={**_snapshot()["factory"], "state": "paused"},
+                decisions=[_decision(1, NOW - HOUR)],
+            ),
+            "Paused · 1 decision waits on you",
+        ),
+        (
+            _snapshot(factory={**_snapshot()["factory"], "state": "done"}),
+            "Finished",
+        ),
+    ],
+)
+def test_the_headline_counts_what_really_happens(body: dict[str, Any], expected: str) -> None:
+    assert _build(body)["headline"] == expected
+
+
+def test_an_incident_alone_is_named_as_one() -> None:
+    summary = _build(_snapshot(), incidents=[_incident(3, "critical", NOW - 60)])
+
+    assert summary["headline"] == "Idle · 1 incident waits on you"
+
+
+# ── A plain status, never the raw label ────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("pr", "expected"),
+    [
+        ({"gates": {"checks": "fail"}}, "PR #7: fixing failing checks"),
+        ({"gates": {"checks": "pending"}}, "PR #7: checks running"),
+        ({"is_draft": True}, "PR #7 is a draft"),
+        ({"gates": {"checks": "pass", "review": "fail"}}, "PR #7: fixing what review found"),
+        ({"gates": {"checks": "pass", "review": "pending"}}, "PR #7: in agent review"),
+        (
+            {"gates": {"checks": "pass", "review": "pass"}, "preview": {"state": "deploying"}},
+            "PR #7: deploying a preview",
+        ),
+        (
+            {
+                "gates": {"checks": "pass", "review": "pass", "demo": "pending"},
+                "demo": {"status": "FAIL", "is_current_head": True},
+            },
+            "PR #7: its demo failed",
+        ),
+        (
+            {"gates": {"checks": "pass", "review": "pass", "verify": "pending"}},
+            "PR #7: verifying",
+        ),
+        (
+            {"gates": {"checks": "pass", "review": "pass", "verify": "pass", "demo": "pending"}},
+            "PR #7: recording a demo",
+        ),
+        (
+            {
+                "head_sha": "abc",
+                "human_review": {"verdict": "changes_requested", "head_sha": "ABC"},
+            },
+            "PR #7: making the changes a person asked for",
+        ),
+        ({"state": "merged"}, "PR #7 merged"),
+        ({"state": "closed"}, None),
+    ],
+)
+def test_a_prs_status_reads_its_gates_preview_and_demo(
+    pr: dict[str, Any], expected: str | None
+) -> None:
+    assert status_summary.pr_status(_pr("p7", 7, "x", **pr)) == expected
+
+
+def test_the_status_falls_back_to_the_leads_label_only_when_nothing_else_says() -> None:
+    label = (
+        "PR #9826 — PR #9826 @00d863e READY FOR HUMAN MERGE · verified on the preview, "
+        "demo recorded, waiting for a human since this morning"
+    )
+    with_task = _project(
+        "a",
+        "building",
+        NOW - HOUR,
+        active_task={"ref": "T-4", "title": "Add the /version route", "state": "running"},
+        pl=_member("pl-a", "PL · a", summary=label),
+    )
+    with_tasks = _project(
+        "b",
+        "planning",
+        NOW - HOUR,
+        tasks_summary={"total": 5, "done": 2, "running": 0, "ready": 1},
+        pl=_member("pl-b", "PL · b", summary=label),
+    )
+    noted = _project("c", "verify", NOW - HOUR, stage_note="PR merged · 1 task still open")
+    bare = _project("d", "building", NOW - HOUR, pl=_member("pl-d", "PL · d", summary=label))
+    quiet = _project("e", "planning", NOW - HOUR)
+
+    statuses = {
+        w["project"]: (w["status"], w["status_source"])
+        for w in _build(_snapshot(projects=[with_task, with_tasks, noted, bare, quiet]))["working"]
+    }
+
+    assert statuses == {
+        "a": ("working on T-4: Add the /version route", "facts"),
+        "b": ("2 of 5 tasks done", "facts"),
+        "c": ("PR merged · 1 task still open", "facts"),
+        # Only the label says anything: trimmed at a word, never cut mid-word.
+        "d": (
+            "PR #9826 — PR #9826 @00d863e READY FOR HUMAN MERGE · verified on the preview, "
+            "demo recorded…",
+            "lead",
+        ),
+        "e": ("planning the work", "facts"),
+    }
+    assert len(statuses["d"][0]) <= status_summary.LABEL_MAX
+
+
+def test_clip_words_cuts_at_a_word() -> None:
+    clip = status_summary.clip_words
+    assert clip("one two three", 20) == "one two three"
+    assert clip("one two three four", 12) == "one two…"
+    assert clip("alpha · beta gamma", 11) == "alpha…"
+    assert clip("abcdefghijklmnop", 8) == "abcdefg…"  # one long word: cut it
+    assert clip("   ", 8) is None
+
+
+# ── Why a queued project waits ─────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    ("start", "expected"),
+    [
+        (
+            {"state": "starting", "phase": "provisioning", "label": "Provisioning sandbox"},
+            "starting up: getting a machine ready",
+        ),
+        (
+            {"state": "starting", "phase": "connect", "label": "Waiting for the agent to connect"},
+            "starting up: waiting for its lead agent to connect",
+        ),
+        (
+            {
+                "state": "starting",
+                "phase": "briefing",
+                "label": "Briefing the PL",
+                "restart": True,
+            },
+            "restarting: briefing its lead agent",
+        ),
+        ({"state": "starting", "phase": None, "label": "Starting"}, "starting up"),
+        (
+            {"state": "starting", "phase": "creating", "label": "Creating the PL session"},
+            "starting up: creating its lead agent",
+        ),
+        (
+            {"state": "queued", "phase": "pod_cap", "label": "All 12 pods in use", "ahead": 3},
+            "waits for a free machine (all 12 pods in use, 3 projects ahead)",
+        ),
+        (
+            {"state": "queued", "phase": "pod_cap", "label": "All 12 pods in use", "ahead": 0},
+            "waits for a free machine (all 12 pods in use, next in line)",
+        ),
+        (
+            {"state": "queued", "phase": "lead", "label": "Waiting for Atlas to start its PL"},
+            "waits for Atlas to start it",
+        ),
+        (
+            {"state": "queued", "phase": "server", "label": "Starts within a minute"},
+            "starts within a minute",
+        ),
+        ({"state": "queued", "phase": "later", "label": "Some new reason"}, "some new reason"),
+    ],
+)
+def test_a_queued_project_says_why_from_its_start_field(
+    start: dict[str, Any], expected: str
+) -> None:
+    body = _snapshot(projects=[_project("billing", "queued", NOW - 300, pl=None, start=start)])
+
+    [item] = _build(body)["next"]
+
+    assert item["reason"] == expected
+
+
+# ── Spend ──────────────────────────────────────────────────────
+
+
+def test_spend_says_the_last_24h_and_the_headers_rate() -> None:
+    working = _snapshot(
+        projects=[_project("api", "building", NOW - HOUR)], totals={"usd_per_h": 3.1}
+    )
+
+    spend = _build(working, cost_cells=[_cost("2026-11-02", 61.44)])["spend"]
+
+    assert (spend["last_24h_usd"], spend["usd_per_h"]) == (61.44, 3.1)
+    assert status_summary.spend_text(spend) == "$61.44 in the last 24 h · $3.10/h now"
+    assert status_summary.spend_text({"last_24h_usd": 61.44}) == "$61.44 in the last 24 h"
+    assert status_summary.spend_text({"usd_per_h": 0.0}) == (
+        "No spend recorded in the last 24 h · $0.00/h now"
+    )
+
+
+# ── Atlas's note ───────────────────────────────────────────────
+
+
+def test_atlas_note_is_trimmed_at_a_word_and_links_what_it_names() -> None:
+    note = (
+        "10 proj (4 done) · 4 PRs ready · 0 ⚠ · #9826 #9827 PR #9828 !9829 verified on "
+        "previews · D-3 open · INC-12 cleared · waiting for a human merge since this morning, "
+        "next beat at 14:45"
+    )
+    body = _snapshot(
+        prs=[
+            _pr("p9826", 9826, "a", ready=True, ready_since=NOW - HOUR),
+            _pr("p9828", 9828, "c", ready=True, ready_since=NOW - HOUR),
+            _pr("p9829", 9829, "d", ready=True, ready_since=NOW - HOUR),
+        ],
+        decisions=[_decision(3, NOW - HOUR)],
+        members=[_member(ROOT, "Atlas", summary=note, last_activity_at=NOW - 52 * 60)],
+    )
+
+    lead = _build(body, incidents=[_incident(12, "warning", NOW - HOUR)])["lead"]
+
+    assert len(lead["text"]) <= status_summary.NOTE_MAX and lead["text"].endswith("…")
+    assert not lead["text"].endswith(" …")
+    assert "".join(p["text"] for p in lead["parts"]) == lead["text"]
+    linked = {p["text"]: p["href"] for p in lead["parts"] if p["href"]}
+    assert linked == {
+        "#9826": f"/factory/{FID}/prs/p9826",
+        "PR #9828": f"/factory/{FID}/prs/p9828",
+        "!9829": f"/factory/{FID}/prs/p9829",
+        "D-3": f"/factory/{FID}/decisions?decision=D-3",
+        "INC-12": f"/factory/{FID}/alerts/12",
+    }
+    # An id the factory does not track stays text.
+    assert any("#9827" in p["text"] and p["href"] is None for p in lead["parts"])
+
+
+# ── Who a wait is for, and the Slack receipts ──────────────────
+
+
+def test_a_ready_pr_waits_on_its_projects_owner() -> None:
+    body = _snapshot(prs=[_pr("p1", 1, "api", ready=True, ready_since=NOW - HOUR)])
+    owners = {"api": "mia@caffeine.ai"}
+
+    luka = _build(body, owners=owners)
+    mia = _build(body, owners=owners, user_id="mia@caffeine.ai", level=LEVEL_EDIT)
+
+    assert [(i["who"], i["for_you"]) for i in luka["waiting"]] == [("mia", False)]
+    assert [(i["who"], i["for_you"]) for i in mia["waiting"]] == [("you", True)]
+    assert luka["headline"] == "Idle · 1 PR waits on others"
+
+
+def test_waiting_items_carry_the_viewers_slack_receipts_and_deadlines() -> None:
+    me, other = "luka@caffeine.ai", "mia@caffeine.ai"
+    decision = _decision(
+        19,
+        NOW - 6 * HOUR,
+        deadline_at=NOW + 3 * HOUR,
+        deadline_effect="expires and nothing is started",
+        notified=[
+            {"user_id": me, "at": NOW - 6 * HOUR, "stage": "new", "ok": True},
+            {"user_id": other, "at": NOW - 6 * HOUR, "stage": "new", "ok": True},
+            {"user_id": me, "at": NOW - 2 * HOUR, "stage": "r4h", "ok": True},
+            {"user_id": me, "at": NOW - HOUR, "stage": "owners", "ok": False},
+        ],
+    )
+    body = _snapshot(
+        decisions=[decision],
+        prs=[_pr("p1", 9826, "api", repo="caffeinelabs/app", ready=True, ready_since=NOW - HOUR)],
+    )
+    notified = {
+        "pr:caffeinelabs/app#9826": [
+            {"user_id": me, "at": NOW - 50 * 60, "stage": "ready", "ok": True}
+        ],
+        "issue:INC-4": [{"user_id": me, "at": NOW - 30 * 60, "stage": "opened", "ok": True}],
+    }
+    incident = _incident(4, "warning", NOW - 40 * 60)
+
+    summary = _build(body, notified=notified, incidents=[incident])
+
+    by_ref = {i["ref"]: i for i in summary["waiting"]}
+    assert by_ref["D-19"]["slack"] == [
+        {"at": NOW - 6 * HOUR, "stage": "new"},
+        {"at": NOW - 2 * HOUR, "stage": "r4h"},
+    ]
+    assert (by_ref["D-19"]["deadline_at"], by_ref["D-19"]["deadline_effect"]) == (
+        NOW + 3 * HOUR,
+        "expires and nothing is started",
+    )
+    assert by_ref["PR #9826"]["slack"] == [{"at": NOW - 50 * 60, "stage": "ready"}]
+    assert by_ref["INC-4"]["slack"] == [{"at": NOW - 30 * 60, "stage": "opened"}]
+    # Someone else's view shows none of Luka's DMs.
+    mia = _build(body, notified=notified, user_id=other, level=LEVEL_EDIT)
+    assert {i["ref"]: len(i["slack"]) for i in mia["waiting"]} == {"D-19": 1, "PR #9826": 0}
 
 
 # ── The cockpit's fixture ──────────────────────────────────────
@@ -790,7 +1236,93 @@ def _round3_summaries() -> dict[str, Any]:
     for role, (user_id, level) in ROUND3_VIEWERS.items():
         inputs = StatusInputs(snapshot=body, user_id=user_id, level=level, incidents=incidents)
         cases[role] = build_status_summary(inputs, now=body["server_time"])
-    return {"now_s": body["server_time"], "cases": cases}
+    return {"now_s": body["server_time"], "cases": cases, "live": _live_case()}
+
+
+def _live_case() -> dict[str, Any]:
+    """
+    The live factory of 2 Nov 11:45 UTC, with what round 3 lacks: projects that
+    only wait on a merge or a decision, start reasons, a task in hand, a PR
+    owner, Slack receipts and a long Atlas note naming ids. The cockpit's
+    fixture builder must say the same over it.
+    """
+    me = "luka@caffeine.ai"
+    body = _live_factory()
+    for pr in body["prs"]:
+        pr["repo"] = "caffeinelabs/app"
+    body["projects"] += [
+        _project(
+            "asks", "building", NOW - 2 * HOUR, overlay="blocked", overlay_reason="Blocked on D-9"
+        ),
+        _project(
+            "billing",
+            "queued",
+            NOW - 600,
+            pl=None,
+            start={
+                "state": "queued",
+                "phase": "pod_cap",
+                "label": "All 12 pods in use",
+                "ahead": 2,
+            },
+        ),
+        _project(
+            "search",
+            "queued",
+            NOW - 120,
+            start={"state": "starting", "phase": "cloning", "label": "Cloning repository"},
+        ),
+        _project(
+            "owned",
+            "ready",
+            NOW - 3 * HOUR,
+            pr_ids=["p9900"],
+            tasks_summary={"total": 2, "done": 1, "running": 1, "ready": 0},
+        ),
+    ]
+    body["prs"].append(
+        _pr("p9900", 9900, "owned", repo="caffeinelabs/app", ready=True, ready_since=NOW - HOUR)
+    )
+    body["decisions"] = [
+        _decision(
+            9,
+            NOW - 3 * HOUR,
+            blocking=True,
+            project_slug="asks",
+            deadline_at=NOW + 4 * HOUR,
+            deadline_effect="expires and nothing is started",
+            notified=[
+                {"user_id": me, "at": NOW - 3 * HOUR, "stage": "new", "ok": True},
+                {"user_id": me, "at": NOW - HOUR, "stage": "r4h", "ok": False},
+            ],
+        )
+    ]
+    body["members"] = [
+        _member(
+            ROOT,
+            "Atlas",
+            summary=(
+                "10 proj (4 done) · 4 PRs ready · 0 ⚠ · #9826 #9827 #9828 #9829 #4242 "
+                "verified on previews · D-9 open · waiting for a human merge since this morning"
+            ),
+            last_activity_at=NOW - 52 * 60,
+        )
+    ]
+    body["factory"]["next_beats"] = [{"session_id": ROOT, "title": "Atlas", "at": NOW + 3 * HOUR}]
+    body["server_time"] = NOW
+    body["viewer"] = {"user_id": me, "level": LEVEL_OWNER}
+    notified = {
+        "pr:caffeinelabs/app#9826": [
+            {"user_id": me, "at": NOW - 7 * HOUR, "stage": "ready", "ok": True},
+            {"user_id": "mia@caffeine.ai", "at": NOW - 7 * HOUR, "stage": "ready", "ok": True},
+        ]
+    }
+    owners = {"owned": "mia@caffeine.ai"}
+    inputs = StatusInputs(
+        snapshot=body, user_id=me, level=LEVEL_OWNER, notified=notified, owners=owners
+    )
+    summary = build_status_summary(inputs, now=NOW)
+    return {"snapshot": body, "notified": notified, "owners": owners, "summary": summary}
 
 
 def test_the_cockpits_now_fixture_is_what_the_builder_says_for_round3() -> None:
@@ -807,6 +1339,9 @@ def test_the_cockpits_now_fixture_is_what_the_builder_says_for_round3() -> None:
     assert json.loads(NOW_FIXTURE.read_text(encoding="utf-8")) == built
     creator = {i["ref"]: i["text"] for i in built["cases"]["creator"]["waiting"]}
     assert creator["D-3"] == "decide what to do: the cache-warm lead couldn't restart"
+    live = built["live"]["summary"]
+    assert live["headline"] == "5 things wait on you · 2 projects in progress · 2 queued"
+    assert live["counts"]["held"] == 5
     assert creator["D-31"] == "decide on T-4 (budget or retries ran out)"
     assert creator["D-34"] == "approve or refuse an access request"
     assert creator["D-35"] == "approve Sentinel's proposal"
@@ -857,11 +1392,15 @@ async def test_the_route_answers_a_reader_with_the_summary(
     assert resp.status_code == 200, resp.text
     body = StatusSummary.model_validate(resp.json())
     assert body.factory_id == snapshot.bare_id(seeded["fid"])
-    assert body.state == "working"
-    assert [w.project for w in body.working] == ["api-version"]
-    assert [(i.ref, i.for_you) for i in body.waiting] == [("D-1", True), ("D-2", True)]
+    # api-version's lead is blocked on its question: the question stands for the project.
+    assert body.state == "idle" and body.working == [] and body.counts.held == 1
+    assert [(i.ref, i.for_you, i.holds) for i in body.waiting] == [
+        ("D-1", True, True),
+        ("D-2", True, False),
+    ]
     assert body.waiting[0].text == "answer the api-version lead"
     assert body.waiting[1].text == "answer Atlas"
+    assert body.headline == "Idle · 2 decisions wait on you"
 
 
 async def test_a_reader_shared_only_on_the_root_sees_only_what_they_may(
@@ -942,7 +1481,10 @@ async def test_the_route_reads_incidents_spend_and_the_pause_the_viewer_may_see(
         "Same failing command 7x",
     ]
     assert alice["spend"]["today_usd"] == 8.0
-    assert alice["state"] == "paused" and alice["headline"].startswith("Paused by alice.")
+    assert (
+        alice["state"] == "paused"
+        and alice["headline"] == "Paused by alice · 4 things wait on you"
+    )
     assert (alice["health"]["items"][0]["by"], alice["health"]["items"][0]["note"]) == (
         "alice",
         "Budget review",

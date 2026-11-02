@@ -4,10 +4,15 @@ import { LIVE_RUN_FACTORY_ID } from "../__fixtures__/liveRun";
 import { BoardFrame } from "../board/boardStoryKit";
 import type { StoryResponse } from "../factoryStoryFixtures";
 import { ROUND3_NOW_S } from "../shell/__fixtures__/shellFixtures";
+import { FactoryNowContext } from "../factoryClock";
+import { FactoryViewerProvider } from "../shell/viewerCan";
 import {
   busyNow,
   cantStartNow,
   idleNow,
+  idleWaitingNow,
+  liveNow,
+  liveSnapshot,
   pausedNow,
   startingNow,
   validatingNow,
@@ -29,6 +34,34 @@ function nowStory(
         <NowCard factoryId={LIVE_RUN_FACTORY_ID} nowS={ROUND3_NOW_S} />
       </BoardFrame>
     ),
+  };
+}
+
+const ROUND3_NOW = new Date(ROUND3_NOW_S * 1000);
+
+/**
+ * The card with the Overview's live snapshot: the header's $/h, and decisions
+ * that answer in place (their full card opens under the line).
+ */
+function withSnapshotStory(theme: "light" | "dark" = "light"): Story {
+  return {
+    render: () => {
+      const snapshot = liveSnapshot();
+      return (
+        <BoardFrame theme={theme} width={1100}>
+          <FactoryNowContext.Provider value={ROUND3_NOW}>
+            <FactoryViewerProvider viewer={snapshot.viewer}>
+              <NowCardView
+                factoryId={LIVE_RUN_FACTORY_ID}
+                summary={liveNow()}
+                nowS={ROUND3_NOW_S}
+                snapshot={snapshot}
+              />
+            </FactoryViewerProvider>
+          </FactoryNowContext.Provider>
+        </BoardFrame>
+      );
+    },
   };
 }
 
@@ -63,9 +96,32 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
+// ── The live factory, 2 Nov 11:45 UTC ─────────────────────────
+
+/**
+ * Four projects only wait on Luka to merge their PRs: each is listed once,
+ * under Waiting on you, with Review → and the Slack DMs he got about it.
+ * validate-build-tier is the one project in progress; Atlas's note links the
+ * PRs it names; spend says the 24 h and the $/h.
+ */
+export const BusyWithPrsWaiting = withSnapshotStory();
+
+export const BusyWithPrsWaitingDark = withSnapshotStory("dark");
+
+export const BusyWithPrsWaitingPhone = phone(withSnapshotStory());
+
+export const BusyWithPrsWaitingPhoneDark = phone(withSnapshotStory("dark"));
+
+/** validate-build-tier done too: idle (still spending), and the four PRs wait on Luka. */
+export const IdleWaitingOnYou = nowStory(idleWaitingNow());
+
+export const IdleWaitingOnYouDark = nowStory(idleWaitingNow(), "dark");
+
+export const IdleWaitingOnYouPhone = phone(nowStory(idleWaitingNow()));
+
 // ── Busy ───────────────────────────────────────────────────────
 
-/** Luka on Atlas's factory: 8 things wait on him, 4 projects in flight, one queued. */
+/** Luka on Atlas's factory: 8 things wait on him, 2 projects in flight, one queued. */
 export const Busy = nowStory(busyNow());
 
 export const BusyDark = nowStory(busyNow(), "dark");
@@ -110,7 +166,10 @@ export const StartingPhone = phone(nowStory(startingNow()));
 
 // ── Can't start, validating, stale ─────────────────────────────
 
-/** cache-warm's lead never got a machine: Next and the headline say so, Health folds it. */
+/**
+ * cache-warm's lead never got a machine: Next and the headline say so, Health
+ * folds it; audit-log is cloning, quota-alerts waits for a free machine.
+ */
 export const CantStart = nowStory(cantStartNow());
 
 export const CantStartDark = nowStory(cantStartNow(), "dark");

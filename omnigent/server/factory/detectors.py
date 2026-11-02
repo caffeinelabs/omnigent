@@ -554,20 +554,35 @@ def _utc_day(epoch_s: float) -> str:
 # ── Supervisor tick ────────────────────────────────────────────
 
 
+SHOWN_RATE_MIN_SPAN_S: Final = 120.0
+"""The cockpit's $/h needs this much history (the alert needs half its window)."""
+
+
 @dataclass
 class _Sampler:
     """Cost samples of one scope (factory or project) for the $/h rate."""
 
     samples: deque[tuple[float, float]]
 
-    def rate(self, now: float, cost: float, window_s: float) -> float | None:
+    def rate(
+        self, now: float, cost: float, window_s: float, min_span_s: float | None = None
+    ) -> float | None:
+        """
+        The $/h over the samples of the last *window_s*.
+
+        :param min_span_s: History needed for a rate (default: half the window).
+        """
         if not self.samples or self.samples[-1][1] != cost or now - self.samples[-1][0] >= 60:
             self.samples.append((now, cost))
         while len(self.samples) > 1 and self.samples[0][0] < now - window_s:
             self.samples.popleft()
+        return self.peek(now, cost, window_s / 2 if min_span_s is None else min_span_s)
+
+    def peek(self, now: float, cost: float, min_span_s: float) -> float | None:
+        """:returns: The rate over the samples held, once they span *min_span_s*."""
         first_t, first_c = self.samples[0]
         span = now - first_t
-        if span < window_s / 2:
+        if span < min_span_s or span <= 0:
             return None
         return round(max(0.0, cost - first_c) * 3600.0 / span, 2)
 
@@ -859,7 +874,11 @@ async def _spend(
         sampler = _samplers.setdefault((key, scope), _Sampler(deque()))
         rate = sampler.rate(now, cost, window_s)
         if scope == "factory":
-            _rates[key] = rate
+            # Shown from two minutes of history, so a server restart does not
+            # blank the cockpit's $/h for half the alert window.
+            _rates[key] = (
+                rate if rate is not None else sampler.peek(now, cost, SHOWN_RATE_MIN_SPAN_S)
+            )
         if rate is not None and rate > limit:
             project = scope.removeprefix("project:") if scope != "factory" else None
             what = "the factory" if project is None else f"project {project}"

@@ -399,6 +399,29 @@ def start_view(
     return {"state": "queued", "phase": "server", "label": START_LABELS["server"], "since": since}
 
 
+_ACTIVE_TASK_ORDER: Final = {"running": 0, "review": 1, "blocked": 2}
+
+
+def active_tasks(tasks: Iterable[FactoryTask]) -> dict[str, dict[str, Any]]:
+    """
+    Each project's task in hand (``ProjectView.active_task``): running first,
+    then in review, then blocked; the lowest number within a state.
+
+    :returns: Project slug -> ``{ref, title, state}``.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    ranked = sorted(
+        (t for t in tasks if t.state in _ACTIVE_TASK_ORDER),
+        key=lambda t: (_ACTIVE_TASK_ORDER[t.state], t.number),
+    )
+    for task in ranked:
+        out.setdefault(
+            task.project_slug,
+            {"ref": f"T-{task.number}", "title": task.title, "state": task.state},
+        )
+    return out
+
+
 def delivered_brief_targets(mail: Sequence[FactoryEvent]) -> set[str]:
     """:returns: Sessions that received a ``brief`` (in the mail window)."""
     return {
@@ -460,6 +483,7 @@ class RawSnapshot:
     :param titles: Session id -> display title.
     :param built_at: ``time.monotonic()`` of the build.
     :param incident_scopes: ``(project, target)`` of each open or acked incident.
+    :param notified: Subject -> Slack DM receipts (``NotifiedView`` rows), oldest first.
     """
 
     factory_id: str
@@ -470,6 +494,7 @@ class RawSnapshot:
     titles: dict[str, str] = field(default_factory=dict)
     built_at: float = 0.0
     incident_scopes: list[tuple[str | None, str]] = field(default_factory=list)
+    notified: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
 
 
 @dataclass
@@ -1183,9 +1208,11 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
     loop_summaries, loop_chips = await asyncio.to_thread(
         loops.snapshot_fields, deps, factory_id, loaded.prs
     )
+    active = active_tasks(open_tasks)
     for view in project_views:
         view["tasks_summary"] = task_summaries.get(view["slug"])
         view["loops_summary"] = loop_summaries.get(view["slug"])
+        view["active_task"] = active.get(view["slug"])
     for pr, view in zip(loaded.prs, pr_views, strict=True):
         view["task_id"], view["task_ref"] = pr.task_id, task_refs.get(pr.task_id or "")
         view["loops"] = loop_chips.get(norm_id(pr.id))
@@ -1275,6 +1302,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
         titles=titles,
         built_at=time.monotonic(),
         incident_scopes=[(i.project_slug, i.target) for i in loaded.issues],
+        notified=loaded.notified,
     )
 
 

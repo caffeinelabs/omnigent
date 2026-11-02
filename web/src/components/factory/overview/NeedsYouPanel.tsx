@@ -1,29 +1,28 @@
 /**
- * The Overview's first panel: everything waiting on a human, split into
- * Mine (assigned to or claimed by me), Role (for operators or owners, when I
- * am one) and All. One dense row per item with its next step: Review → for a
+ * The Overview's panel of everything waiting on a human, split into Mine
+ * (assigned to or claimed by me), Role (for operators or owners, when I am
+ * one) and All. One dense row per item with its next step: Review → for a
  * ready PR, the decision's options (the full card opens in place), an
  * incident's first runbook step and its agent (one click to the Agent page),
- * Open for an alert or a claim the gates don't back.
+ * Open for an alert or a claim the gates don't back. What the Now card above
+ * already lists (with the same buttons) is left out here.
  */
 
-import { type ReactNode, useState } from "react";
+import { type ReactNode, useMemo, useState } from "react";
 import {
-  ChevronDownIcon,
   CircleCheckIcon,
   CircleHelpIcon,
   CircleXIcon,
   StarIcon,
   TriangleAlertIcon,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import type { FactorySnapshot } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { RunbookButtons } from "../alerts/IssueActions";
 import { SeverityIcon } from "../alerts/IssueCard";
 import { issueMember } from "../alerts/runbookModel";
-import { DecisionCard, answerBlockedReason, assigneeText } from "../decisions/DecisionCard";
+import { DecisionCard, assigneeText } from "../decisions/DecisionCard";
 import { formatElapsed, plural } from "../factoryFormat";
 import {
   agentPageHref,
@@ -32,13 +31,15 @@ import {
   prPageHref,
   projectPageHref,
 } from "../factoryRoutes";
-import { useViewer, useViewerCan } from "../shell/viewerCan";
+import { useViewer } from "../shell/viewerCan";
 import {
   type NeedsItem,
   type NeedsTab,
   type NeedsYouSplit,
   defaultNeedsTab,
+  withoutShown,
 } from "./needsYouModel";
+import { DecisionAnswerButton, OpenButton, ReviewButton } from "./WaitingActions";
 
 /** Rows shown before "Show all": keeps the projects table on the first screen. */
 export const NEEDS_ROWS_SHOWN = 5;
@@ -72,7 +73,6 @@ function Row({
   highlighted?: boolean;
 }) {
   const viewer = useViewer();
-  const { can } = useViewerCan();
   const [open, setOpen] = useState(highlighted);
   const fid = snapshot.factory.id;
   let icon = <CircleHelpIcon aria-hidden className="size-3.5 text-warning" />;
@@ -89,15 +89,11 @@ function Row({
       text = `${pr.project_slug ?? pr.repo} ready · ${pr.title}`;
       meta = pr.ready_since != null ? formatElapsed(nowS - pr.ready_since) : null;
       action = (
-        <Button asChild size="xs" variant="outline">
-          <Link
-            to={prPageHref(fid, pr.id)}
-            componentId="factory.overview.needs_review"
-            data-testid={`needs-review-${pr.number}`}
-          >
-            Review →
-          </Link>
-        </Button>
+        <ReviewButton
+          href={prPageHref(fid, pr.id)}
+          componentId="factory.overview.needs_review"
+          testId={`needs-review-${pr.number}`}
+        />
       );
       break;
     }
@@ -112,32 +108,14 @@ function Row({
       const who = assigneeText(decision, viewer?.user_id ?? null);
       text = `${who ? `${who} · ` : ""}${decision.project_slug ? `${decision.project_slug}: ` : ""}${decision.question}`;
       meta = formatElapsed(nowS - decision.created_at);
-      // Someone who may not answer still reads the card: the button says so.
-      const readOnly = answerBlockedReason(decision, can, viewer?.user_id ?? null) != null;
-      const recommended = readOnly ? null : decision.options.find((o) => o.recommended);
       action = (
-        <Button
-          size="xs"
-          variant={open ? "secondary" : "outline"}
-          onClick={() => setOpen((v) => !v)}
-          aria-expanded={open}
-          data-testid={`needs-decision-${decision.ref}`}
+        <DecisionAnswerButton
+          decision={decision}
+          open={open}
+          onToggle={() => setOpen((v) => !v)}
+          testId={`needs-decision-${decision.ref}`}
           componentId="factory.overview.needs_decision"
-        >
-          {open ? (
-            "Close"
-          ) : recommended ? (
-            <>
-              <span className="max-w-40 truncate max-sm:hidden">{recommended.label} ★</span>
-              <span className="sm:hidden">Answer</span>
-            </>
-          ) : readOnly ? (
-            "View"
-          ) : (
-            "Answer…"
-          )}
-          <ChevronDownIcon className={cn("transition-transform", open && "rotate-180")} />
-        </Button>
+        />
       );
       break;
     }
@@ -147,14 +125,10 @@ function Row({
       const slug = item.alert.targetId.replace(/^factory-project-/, "");
       const isProject = item.alert.targetId.startsWith("factory-project-");
       action = (
-        <Button asChild size="xs" variant="outline">
-          <Link
-            to={isProject ? projectPageHref(fid, slug) : factoryPageHref(fid)}
-            componentId="factory.overview.needs_alert"
-          >
-            Open
-          </Link>
-        </Button>
+        <OpenButton
+          href={isProject ? projectPageHref(fid, slug) : factoryPageHref(fid)}
+          componentId="factory.overview.needs_alert"
+        />
       );
       break;
     }
@@ -179,15 +153,11 @@ function Row({
       action = (
         <span className="flex items-center gap-1">
           <RunbookButtons issue={issue} limit={1} />
-          <Button asChild size="xs" variant="outline">
-            <Link
-              to={alertPageHref(fid, issueRef)}
-              componentId="factory.overview.needs_issue"
-              data-testid={`needs-issue-${issueRef}`}
-            >
-              Open
-            </Link>
-          </Button>
+          <OpenButton
+            href={alertPageHref(fid, issueRef)}
+            componentId="factory.overview.needs_issue"
+            testId={`needs-issue-${issueRef}`}
+          />
         </span>
       );
       break;
@@ -196,14 +166,10 @@ function Row({
       icon = <TriangleAlertIcon aria-hidden className="size-3.5 text-warning" />;
       text = `${item.project.slug}: the PL’s claim doesn’t match the gates`;
       action = (
-        <Button asChild size="xs" variant="outline">
-          <Link
-            to={projectPageHref(fid, item.project.slug)}
-            componentId="factory.overview.needs_claim"
-          >
-            Open
-          </Link>
-        </Button>
+        <OpenButton
+          href={projectPageHref(fid, item.project.slug)}
+          componentId="factory.overview.needs_claim"
+        />
       );
       break;
     }
@@ -256,10 +222,11 @@ function Row({
 
 export function NeedsYouPanel({
   snapshot,
-  split,
+  split: everything,
   nowS,
   clockOffsetS,
   highlightDecision = null,
+  shownInNow = null,
 }: {
   snapshot: FactorySnapshot;
   split: NeedsYouSplit;
@@ -267,7 +234,11 @@ export function NeedsYouPanel({
   clockOffsetS: number;
   /** `?decision=` without the dock: that decision's row opens, in a tab that lists it. */
   highlightDecision?: string | null;
+  /** Keys (`decision:<id>`, `pr:<id>`, `issue:<id>`) the Now card lists: left out here. */
+  shownInNow?: ReadonlySet<string> | null;
 }) {
+  const split = useMemo(() => withoutShown(everything, shownInNow), [everything, shownInNow]);
+  const inNow = everything.all.length - split.all.length;
   const [picked, setPicked] = useState<NeedsTab | null>(null);
   const [showAll, setShowAll] = useState(false);
   const fallback = defaultNeedsTab(split);
@@ -286,6 +257,16 @@ export function NeedsYouPanel({
     >
       <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1.5">
         <h2 className="text-ui font-semibold">Needs you</h2>
+        {inNow > 0 && (
+          <Link
+            to={`${factoryPageHref(snapshot.factory.id)}#now`}
+            componentId="factory.overview.needs_in_now"
+            data-testid="needs-you-in-now"
+            className="rounded-sm text-sm text-muted-foreground hover:text-foreground hover:underline"
+          >
+            {inNow} listed in Now above
+          </Link>
+        )}
         <div
           role="tablist"
           aria-label="Whose"
@@ -321,10 +302,12 @@ export function NeedsYouPanel({
         >
           <CircleCheckIcon aria-hidden className="size-3.5 text-success" />
           {total === 0
-            ? "Nothing waits on anyone right now."
+            ? inNow > 0
+              ? "Nothing else: everything that waits is in Now above."
+              : "Nothing waits on anyone right now."
             : tab === "mine"
-              ? `Nothing assigned to you · ${plural(total, "item")} for others`
-              : `Nothing for your role · ${plural(total, "item")} in All`}
+              ? `Nothing${inNow > 0 ? " else" : ""} assigned to you · ${plural(total, "item")} for others`
+              : `Nothing${inNow > 0 ? " else" : ""} for your role · ${plural(total, "item")} in All`}
         </p>
       ) : (
         <ul data-testid="needs-you-list" className="flex flex-col divide-y divide-border">

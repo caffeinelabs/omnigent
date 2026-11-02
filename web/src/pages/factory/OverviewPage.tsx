@@ -1,8 +1,9 @@
 /**
  * The factory Overview (`/factory/:factoryId`), exceptions first: "Now" in
- * plain words (what waits on me, what is in progress, next, spend, health),
- * what needs a human (mine, my role, all; incidents with their first runbook
- * step and agent), the projects table, the last hour of activity per project,
+ * plain words (what waits on me with its next step, what is in progress,
+ * next, spend, health), the rest of what needs a human (mine, my role, all;
+ * incidents with their first runbook step and agent; what Now already lists
+ * is left out), the projects table, the last hour of activity per project,
  * the live feed, and whether the machine is healthy.
  */
 
@@ -12,7 +13,9 @@ import { ActivityHeatmap } from "@/components/factory/overview/ActivityHeatmap";
 import { LiveFeed } from "@/components/factory/overview/LiveFeed";
 import { NeedsYouPanel } from "@/components/factory/overview/NeedsYouPanel";
 import { NowCard } from "@/components/factory/overview/NowCard";
+import { nowShownKeys } from "@/components/factory/overview/nowCardModel";
 import { splitNeedsYou } from "@/components/factory/overview/needsYouModel";
+import { useFactoryStatusSummary } from "@/components/factory/overview/statusSummaryQuery";
 import { OverviewHealth } from "@/components/factory/overview/OverviewHealth";
 import { ProjectsTable } from "@/components/factory/projects/ProjectsTable";
 import { projectsPageHref } from "@/components/factory/factoryRoutes";
@@ -38,10 +41,18 @@ export function OverviewPage() {
       ),
     [snapshot, issues.data],
   );
+  // What the Now card lists (with its buttons) is not repeated in Needs you.
+  const now = useFactoryStatusSummary(snapshot.factory.id);
+  const shownInNow = useMemo(() => (now.data ? nowShownKeys(now.data) : null), [now.data]);
   useHashScroll();
   return (
     <div data-testid="factory-overview" className="flex min-w-0 flex-col gap-4">
-      <NowCard factoryId={snapshot.factory.id} nowS={nowS} />
+      <NowCard
+        factoryId={snapshot.factory.id}
+        nowS={nowS}
+        snapshot={snapshot}
+        clockOffsetS={clockOffsetS}
+      />
       <NeedsYouPanel
         snapshot={snapshot}
         split={split}
@@ -49,6 +60,7 @@ export function OverviewPage() {
         clockOffsetS={clockOffsetS}
         // The dock's rail highlights it when there is a dock.
         highlightDecision={wide ? null : params.get("decision")}
+        shownInNow={shownInNow}
       />
       <ProjectsTable
         snapshot={snapshot}

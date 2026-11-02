@@ -858,6 +858,18 @@ class ProjectStartView(_View):
     pod_cap: int | None = None
 
 
+class ActiveTaskView(_View):
+    """
+    The task a project has in hand: running, else in review, else blocked.
+
+    :param ref: ``T-<number>``.
+    """
+
+    ref: str
+    title: str
+    state: Literal["running", "review", "blocked"]
+
+
 class ProjectView(_View):
     """One project card."""
 
@@ -893,6 +905,7 @@ class ProjectView(_View):
     depends_mode: DependsMode | None = None
     human_owner: str | None = None
     tasks_summary: TasksSummaryView | None = None
+    active_task: ActiveTaskView | None = None
     loops_summary: LoopsSummaryView | None = None
     def_version: int | None = None
 

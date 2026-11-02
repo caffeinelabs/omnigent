@@ -604,7 +604,7 @@ async def _welcome(app_state: Any, deps: FactoryDeps, root: Any, user_id: str) -
         person = ctx.people.get(user_id)
         if person is None:
             return
-        raw = await get_snapshot(app_state, root) if deps.permission_store is not None else None
+        raw = await get_snapshot(app_state, root)
         base = render.base_url()
         waiting = await digest_mod.waiting_async(deps, ctx, person, raw, time.time(), base)
         text, blocks = digest_mod.welcome_message(ctx, person.prefs, waiting, base)

@@ -1090,7 +1090,8 @@ async def test_the_digest_lists_what_waits_and_hides_unreadable_projects(
     assert (
         "*Waiting on you (1)*" in digest_text and "Approve the api-version rollout?" in digest_text
     )
-    assert "1 merged" in digest_text and "#api-version" in digest_text
+    assert "1 merged" in digest_text
+    assert "*In progress (1)*" in digest_text and "|api-version> (Planning)" in digest_text
     assert fake_slack.dms_to("U0BOB") == []  # nothing he may read happened: skipped
     assert [(u, s, st) for u, _, s, st in _ledger(cockpit)] == [("alice", "digest", "sent")]
 

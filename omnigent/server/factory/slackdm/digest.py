@@ -1,9 +1,12 @@
 """The daily digest, the welcome DM, the test DM and the verification-code DM.
 
-The digest is built per person from what the cockpit already shows, filtered
-to what they may read (the snapshot's ``readable_for``: hidden projects never
-appear). Sections: Waiting on you, Last 24 h, Spend, Next, Sentinel. It is
-skipped when nothing happened and nothing is waiting.
+The digest tells the story the cockpit's Now card tells: its headline,
+Waiting on you, In progress, Spend and Next come from the card's own builder
+(:func:`.status_summary.summary_from_raw`) for the recipient, filtered to
+what they may read (the snapshot's ``readable_for``: hidden projects never
+appear). The digest adds the last 24 h's counts, factory-wide budget lines
+for owners and operators who read everything, and Sentinel's newest retro.
+It is skipped when nothing happened and nothing is waiting.
 """
 
 from __future__ import annotations
@@ -14,19 +17,28 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
-from omnigent.server.factory import issues
+from omnigent.server.factory import issues, status_summary
 from omnigent.server.factory.slackdm import prefs as prefs_mod
 from omnigent.server.factory.slackdm import rules
 from omnigent.server.factory.slackdm.render import esc, link, message
 
 if TYPE_CHECKING:
-    from omnigent.entities.factory import FactoryDecision, FactoryIssue, FactoryPr
     from omnigent.server.factory.context import FactoryDeps
     from omnigent.server.factory.slackdm.rules import FactoryCtx, Person
     from omnigent.server.factory.snapshot import RawSnapshot
 
 WAITING_MAX: Final = 8
+PROGRESS_MAX: Final = 6
+NEXT_MAX: Final = 6
 DAY_S: Final = 86400
+STAGE_LABELS: Final = {
+    "planning": "Planning",
+    "building": "Building",
+    "review": "Review",
+    "verify": "Verify",
+    "ready": "Ready",
+    "merged": "Merged",
+}
 COUNT_KINDS: Final = (
     "pr.ready",
     "pr.merged",
@@ -108,6 +120,29 @@ async def visibility_for(deps: FactoryDeps, raw: RawSnapshot | None, user_id: st
     return Visibility(readable=set(readable), hidden=hidden, top_level_of=dict(raw.top_level_of))
 
 
+# ── The card's builder ─────────────────────────────────────────
+
+
+def summary_for(
+    deps: FactoryDeps,
+    ctx: FactoryCtx,
+    person: Person,
+    vis: Visibility,
+    raw: RawSnapshot | None,
+    now: float,
+) -> dict[str, Any] | None:
+    """
+    The person's Now (the cockpit card's ``StatusSummary``), or ``None`` without a snapshot.
+
+    Synchronous (store reads): the digest and the welcome DM run it in a thread.
+    """
+    if raw is None:
+        return None
+    return status_summary.summary_from_raw(
+        deps, ctx.factory_id, raw, vis.readable, person.user_id, now
+    )
+
+
 # ── Waiting on you ─────────────────────────────────────────────
 
 
@@ -119,90 +154,99 @@ class Waiting:
     count: int = 0
 
 
-def _decision_line(
-    ctx: FactoryCtx,
-    decision: FactoryDecision,
-    person: Person,
-    now: float,
-    base: str | None,
-) -> str:
-    path, _ = rules._decision_link(ctx, decision)
-    head = link(path, decision.ref, base)
-    waited = rules.fmt_age(now - decision.created_at)
-    line = f"• {head} {esc(decision.question, 120)} — waiting {waited}"
-    deadline = rules.decision_deadline(ctx, decision)
-    if deadline is not None:
-        at, effect = deadline
+def waiting_line(item: Mapping[str, Any], person: Person, now: float, base: str | None) -> str:
+    """One item the card lists under Waiting on you, as a mrkdwn bullet."""
+    head = link(str(item["href"]), str(item["ref"]), base)
+    text = str(item["text"])
+    if item["kind"] == "incident" and item.get("severity"):
+        text = f"{item['severity']}: {text}"
+    detail = item.get("detail")
+    project = item.get("project")
+    if item["kind"] == "pr" and project:
+        detail = f"{project}: {detail}" if detail else str(project)
+    line = f"• {head} {esc(text, 120)}"
+    if detail:
+        line += f" — {esc(detail, 120)}"
+    since = item.get("since")
+    if since:
+        line += f" · waiting {rules.fmt_age(now - since)}"
+    at, effect = item.get("deadline_at"), item.get("deadline_effect")
+    if isinstance(at, int) and at > now and effect:
         when = prefs_mod.clock_label(person.prefs, at)
         line += f" · {esc(effect, 60)} at {when} (in {rules.fmt_age(at - now)})"
     return line
 
 
-def waiting_on(
-    deps: FactoryDeps,
-    ctx: FactoryCtx,
-    person: Person,
-    vis: Visibility,
-    now: float,
-    base: str | None,
-    *,
-    decisions: Sequence[FactoryDecision] | None = None,
+def waiting_lines(
+    summary: Mapping[str, Any] | None, person: Person, now: float, base: str | None
 ) -> Waiting:
-    """
-    Open decisions for the person (oldest first, with age and deadline), their
-    open incidents, and ready PRs they can review (synchronous store reads).
-    """
-    from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE, LEVEL_READ
-
-    store = deps.factory_store
-    rows = (
-        decisions
-        if decisions is not None
-        else store.list_decisions(factory_id=ctx.factory_id, status="open", limit=500)
-    )
-    out = Waiting()
-    mine: list[FactoryDecision] = []
-    for decision in sorted(rows, key=lambda d: d.created_at):
-        if not vis.project(decision.project_slug) or not vis.session(decision.asked_by_session_id):
-            continue
-        targets = {u for u, _ in rules.decision_recipients(ctx, decision)}
-        if person.is_owner and now - decision.created_at >= rules.OWNERS_AFTER_S:
-            targets.add(person.user_id)
-        if person.user_id in targets:
-            mine.append(decision)
-    level = {"owner": LEVEL_MANAGE, "operator": LEVEL_EDIT}.get(person.role, LEVEL_READ)
-    incidents: list[FactoryIssue] = [
-        i
-        for i in store.list_issues(ctx.factory_id, class_="incident", statuses=["open"], limit=200)
-        if issues.is_mine(i, person.user_id, level) and vis.issue(i.project_slug, i.target)
-    ]
-    prs: list[FactoryPr] = []
-    if person.acts:
-        for pr in store.list_prs(ctx.factory_id, states=["open"]):
-            if not pr.ready or not vis.project(pr.project_slug):
-                continue
-            owner = ctx.human_owners.get(pr.project_slug or "")
-            if owner and owner != person.user_id and owner in ctx.people:
-                continue
-            prs.append(pr)
-    out.count = len(mine) + len(incidents) + len(prs)
-    lines = [_decision_line(ctx, d, person, now, base) for d in mine]
-    for issue in incidents:
-        ref = issue.ref or "INC"
-        path = rules.factory_path(ctx, f"/alerts/{issue.number}")
-        lines.append(
-            f"• {link(path, ref, base)} {esc(issue.severity, 10)} — {esc(issue.summary, 120)}"
-        )
-    for pr in prs:
-        path = rules.factory_path(ctx, f"/prs/{pr.id}")
-        age = rules.fmt_age(now - (pr.ready_at or now))
-        label = link(path, f"PR #{pr.number}", base)
-        lines.append(f"• {label} {esc(pr.title, 100)} — ready for merge {age}")
+    """The card's Waiting on you for *person*: the same items, in the same order."""
+    mine = [item for item in (summary or {}).get("waiting") or [] if item.get("for_you")]
+    lines = [waiting_line(item, person, now, base) for item in mine]
     if len(lines) > WAITING_MAX:
-        more = len(lines) - WAITING_MAX
-        lines = [*lines[:WAITING_MAX], f"…and {more} more"]
-    out.lines = lines
-    return out
+        lines = [*lines[:WAITING_MAX], f"…and {len(lines) - WAITING_MAX} more"]
+    return Waiting(lines=lines, count=len(mine))
+
+
+def progress_lines(summary: Mapping[str, Any] | None, base: str | None) -> list[str]:
+    """The card's Working on: each project with its stage and plain status (or problem)."""
+    items = (summary or {}).get("working") or []
+    lines = []
+    for item in items[:PROGRESS_MAX]:
+        stage = STAGE_LABELS.get(str(item["stage"]), str(item["stage"]))
+        status = item.get("problem") or item["status"]
+        mark = ":warning: " if item.get("problem") else ""
+        name = link(str(item["href"]), str(item["project"]), base)
+        lines.append(f"• {mark}{name} ({esc(stage, 20)}) — {esc(status, 160)}")
+    if len(items) > PROGRESS_MAX:
+        lines.append(f"…and {len(items) - PROGRESS_MAX} more")
+    return lines
+
+
+def spend_line(summary: Mapping[str, Any] | None, extras: Sequence[str] = ()) -> str | None:
+    """
+    The card's spend (the last 24 h and the current $/h), then the digest's *extras*.
+
+    :returns: ``None`` when nothing was priced and there is nothing else to say.
+    """
+    spend = (summary or {}).get("spend") or {}
+    priced = spend.get("last_24h_usd") is not None or spend.get("usd_per_h") is not None
+    parts = [esc(status_summary.spend_text(spend), 120)] if priced else []
+    parts += list(extras)
+    return " · ".join(parts) if parts else None
+
+
+def next_line(
+    summary: Mapping[str, Any] | None, person: Person, now: float, base: str | None
+) -> str | None:
+    """The card's Next: queued projects with why they wait, then when Atlas checks in."""
+    if summary is None:
+        return None
+    items = summary.get("next") or []
+    parts = [
+        f"{link(str(item['href']), str(item['project']), base)} {esc(item['reason'], 100)}"
+        for item in items[:NEXT_MAX]
+    ]
+    if len(items) > NEXT_MAX:
+        parts.append(f"{len(items) - NEXT_MAX} more queued")
+    beat = summary.get("check_in")
+    if beat and int(beat["at"]) > now:
+        when = prefs_mod.clock_label(person.prefs, int(beat["at"]))
+        parts.append(f"{esc(beat['who'], 40)} checks in again at {when}")
+    return " · ".join(parts) if parts else None
+
+
+def lead_line(summary: Mapping[str, Any] | None, base: str | None) -> str | None:
+    """What Atlas said, quoted, with the ids it names linked (as the card shows it)."""
+    lead = (summary or {}).get("lead")
+    if not lead:
+        return None
+    parts = lead.get("parts") or [{"text": lead["text"]}]
+    quote = "".join(
+        link(str(part["href"]), str(part["text"]), base) if part.get("href") else esc(part["text"])
+        for part in parts
+    )
+    return f"“{quote}”"
 
 
 # ── The digest ─────────────────────────────────────────────────
@@ -247,25 +291,17 @@ def _counts_line(counts: Mapping[str, int], still_open: int) -> str | None:
     return " · ".join(parts) if parts else None
 
 
-def _spend_line(
-    deps: FactoryDeps,
-    ctx: FactoryCtx,
-    raw: RawSnapshot | None,
-    now: float,
-    idle: tuple[float, float] | None,
-) -> str | None:
-    from omnigent.server.factory import budgets, detectors
+def _budget_extras(
+    deps: FactoryDeps, ctx: FactoryCtx, now: float, idle: tuple[float, float] | None
+) -> list[str]:
+    """Factory-wide spend the card does not show: today's budget, wasted heartbeats, idling."""
+    from omnigent.server.factory import budgets
 
     rows = budgets.spends(deps, ctx.factory_id, now)
     factory = next((s for s in rows if s.scope == budgets.SCOPE_FACTORY), None)
     parts = []
-    if factory is not None:
+    if factory is not None and factory.usd > 0:
         parts.append(f"today ${factory.usd:.2f} of ${factory.limit:.0f}")
-    rate = detectors.spend_rate(ctx.factory_id)
-    if rate is None and raw is not None:
-        rate = (raw.body.get("totals") or {}).get("usd_per_h")
-    if isinstance(rate, int | float):
-        parts.append(f"now ${rate:.2f}/h")
     waste = 0.0
     for issue in issues.open_issues(deps, ctx.factory_id, "heartbeat.waste"):
         evidence = issue.evidence if isinstance(issue.evidence, Mapping) else {}
@@ -279,33 +315,7 @@ def _spend_line(
         parts.append(
             f":warning: ${spent:.2f} in {round(window / 3600)} h with no progress, consider Pause"
         )
-    if not parts or (factory is not None and factory.usd <= 0 and idle is None and not waste):
-        return None
-    return " · ".join(parts)
-
-
-def _next_line(raw: RawSnapshot | None, vis: Visibility) -> str | None:
-    if raw is None:
-        return None
-    parts = []
-    for project in raw.body.get("projects") or []:
-        slug = project.get("slug")
-        if not vis.project(slug) or project.get("status") not in (None, "active"):
-            continue
-        if (project.get("charter") or {}).get("kind") == "integration":
-            continue
-        text = f"#{slug} {project.get('stage')}"
-        if project.get("overlay") == "waiting":
-            text = f"#{slug} held ({esc(project.get('overlay_reason') or 'waiting', 60)})"
-        summary = project.get("tasks_summary") or {}
-        running, ready = summary.get("running") or 0, summary.get("ready") or 0
-        if running or ready:
-            text += f" ({running} running, {ready} ready)"
-        parts.append(esc(text, 120))
-    pending = (raw.body.get("counts") or {}).get("proposals_pending") or 0
-    if pending:
-        parts.append(f"{pending} proposal{'s' if pending != 1 else ''} waiting")
-    return " · ".join(parts[:8]) if parts else None
+    return parts
 
 
 def _retro_line(
@@ -342,11 +352,15 @@ def build_digest(
     idle: tuple[float, float] | None = None,
 ) -> Digest | None:
     """:returns: The digest, or ``None`` when nothing happened and nothing waits (synchronous)."""
-    waiting = waiting_on(deps, ctx, person, vis, now, base)
+    summary = summary_for(deps, ctx, person, vis, raw, now)
+    waiting = waiting_lines(summary, person, now, base)
     counts, still_open = _counts(deps, ctx, vis, now)
     counted = _counts_line(counts, still_open)
-    spend = _spend_line(deps, ctx, raw, now, idle) if vis.everything and person.acts else None
-    nxt = _next_line(raw, vis)
+    extras = _budget_extras(deps, ctx, now, idle) if vis.everything and person.acts else []
+    spend = spend_line(summary, extras)
+    progress = progress_lines(summary, base)
+    nxt = next_line(summary, person, now, base)
+    said = lead_line(summary, base)
     retro = _retro_line(deps, ctx, vis, now, base)
     if not waiting.count and counted is None and retro is None and idle is None:
         return None
@@ -357,16 +371,23 @@ def build_digest(
         f"  ({local.strftime('%H:%M')} {prefs_mod.tz_name(person.prefs)})"
     )
     lines = [head]
+    if summary is not None:
+        lines.append(esc(summary["headline"], 200))
     if waiting.count:
         lines.append(f"*Waiting on you ({waiting.count})*")
         lines += waiting.lines
     else:
         lines.append("*Waiting on you:* nothing")
+    if progress:
+        lines.append(f"*In progress ({len((summary or {}).get('working') or [])})*")
+        lines += progress
     lines.append(f"*Last 24 h*  {counted or 'nothing new'}")
     if spend:
         lines.append(f"*Spend*  {spend}")
     if nxt:
         lines.append(f"*Next*  {nxt}")
+    if said and summary is not None:
+        lines.append(f"*{esc(summary['lead']['who'], 40)} said*  {said}")
     if retro:
         lines.append(f"*Sentinel*  {retro}")
     settings = link(
@@ -464,9 +485,10 @@ async def waiting_async(
     now: float,
     base: str | None,
 ) -> Waiting:
-    """:func:`waiting_on` with the person's visibility, off the event loop."""
+    """The card's Waiting on you for *person* (:func:`waiting_lines`), off the event loop."""
     vis = await visibility_for(deps, raw, person.user_id)
-    return await asyncio.to_thread(waiting_on, deps, ctx, person, vis, now, base)
+    summary = await asyncio.to_thread(summary_for, deps, ctx, person, vis, raw, now)
+    return waiting_lines(summary, person, now, base)
 
 
 __all__ = [
@@ -476,10 +498,16 @@ __all__ = [
     "bot_test_message",
     "build_digest",
     "code_message",
+    "lead_line",
+    "next_line",
+    "progress_lines",
     "settings_line",
+    "spend_line",
+    "summary_for",
     "test_message",
     "visibility_for",
     "waiting_async",
-    "waiting_on",
+    "waiting_line",
+    "waiting_lines",
     "welcome_message",
 ]
