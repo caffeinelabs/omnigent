@@ -2,7 +2,8 @@
  * The cockpit's side panel (opportunity, bet, agent, source, merge, health):
  * a right-hand panel on desktop and a 90 %-tall bottom sheet with a grab
  * handle under 760 px. Focus moves to its Close button when it opens and back
- * to whatever opened it when it closes; Esc closes it.
+ * to whatever opened it when it closes; Esc closes it. Clicks on the cockpit
+ * toast (Undo, Dismiss) do not count as outside clicks, so the panel stays.
  */
 
 import { XIcon } from "lucide-react";
@@ -11,6 +12,7 @@ import { type ReactNode, useLayoutEffect, useRef } from "react";
 import { getEmbedRoot } from "@/lib/host";
 import { cn } from "@/lib/utils";
 import { FOCUS_RING } from "./statusTokens";
+import { inToastRegion } from "./Toast";
 
 export interface PeekProps {
   open: boolean;
@@ -66,6 +68,10 @@ export function Peek({
             event.preventDefault();
             closeRef.current?.focus();
           }}
+          // Undo or Dismiss on the toast is not a click outside the panel.
+          onInteractOutside={(event) => {
+            if (inToastRegion(event.target)) event.preventDefault();
+          }}
           onCloseAutoFocus={(event) => {
             event.preventDefault();
             const target = returnTo.current;
@@ -73,10 +79,10 @@ export function Peek({
             if (target?.isConnected) target.focus();
           }}
           className={cn(
-            "fixed top-0 right-0 bottom-0 z-[61] flex max-w-[100vw] flex-col border-l border-border bg-card-solid text-ui text-foreground shadow-xl outline-none",
+            "fixed top-0 right-0 bottom-0 z-[61] flex max-w-[100vw] flex-col border-l border-border bg-card-solid pb-[var(--omnigent-inset-bottom,0px)] text-ui text-foreground shadow-xl outline-none",
             wide ? "w-[700px]" : "w-[520px]",
             "motion-safe:data-open:animate-in motion-safe:data-open:fade-in-50 motion-safe:data-open:slide-in-from-right-6",
-            "max-[760px]:top-auto max-[760px]:left-0 max-[760px]:h-[90vh] max-[760px]:w-full max-[760px]:rounded-t-2xl max-[760px]:border-t max-[760px]:border-l-0",
+            "max-[760px]:top-auto max-[760px]:left-0 max-[760px]:h-[90dvh] max-[760px]:w-full max-[760px]:rounded-t-2xl max-[760px]:border-t max-[760px]:border-l-0",
             "max-[760px]:motion-safe:data-open:slide-in-from-bottom-10",
             className,
           )}

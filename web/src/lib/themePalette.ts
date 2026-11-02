@@ -77,6 +77,12 @@ export interface PaletteTokens {
   secondaryForeground: string;
   muted: string;
   mutedForeground: string;
+  /**
+   * Faint text (ids, axis ticks, zeros): >= 5:1 on cards and 4.5:1 on the
+   * page, and a step below muted text wherever muted text has room for one
+   * (components/factory/ui/statusTokens.test.ts checks every palette).
+   */
+  foregroundTertiary: string;
   codeBackground: string;
   accent: string;
   accentForeground: string;
@@ -117,6 +123,7 @@ export const PALETTE_TOKEN_CSS_NAMES = {
   secondaryForeground: "secondary-foreground",
   muted: "muted",
   mutedForeground: "muted-foreground",
+  foregroundTertiary: "foreground-tertiary",
   codeBackground: "code-bg",
   accent: "accent",
   accentForeground: "accent-foreground",
@@ -171,6 +178,8 @@ function paletteTokens(tokens: PaletteTokenInput): PaletteTokens {
     // variants use the lightest alpha that stays visible.
     selectionForeground: tokens.foreground,
     cardForeground: tokens.foreground,
+    // Faint text defaults to muted text; palettes tune it (see PaletteTokens).
+    foregroundTertiary: tokens.mutedForeground,
     tray: tokens.card,
     popover: tokens.cardSolid,
     popoverForeground: tokens.foreground,
@@ -238,6 +247,7 @@ export const PALETTES: readonly PaletteMeta[] = [
         secondary: "#eceef1",
         muted: "#0000000f",
         mutedForeground: "#71717a",
+        foregroundTertiary: "#646d77",
         codeBackground: "#0000000f",
         accent: "#d7edfe",
         accentForeground: "#04355d",
@@ -270,6 +280,7 @@ export const PALETTES: readonly PaletteMeta[] = [
         secondaryForeground: "#e8ecf0",
         muted: "color-mix(in srgb, #92a4b3 15%, #262f36)",
         mutedForeground: "#92a4b3",
+        foregroundTertiary: "#8494a2",
         codeBackground: "oklch(0.38 0.005 240)",
         accent: "#04355d",
         accentForeground: "#4299e0",
@@ -319,6 +330,7 @@ export const PALETTES: readonly PaletteMeta[] = [
         secondary: "#efeaf9",
         muted: "#efeaf9",
         mutedForeground: "#6b6786",
+        foregroundTertiary: "#6f6b89",
         codeBackground: "#efeaf9",
         accent: "#f3e8ff",
         accentForeground: "#6b21a8",
@@ -341,6 +353,7 @@ export const PALETTES: readonly PaletteMeta[] = [
         secondary: "#343746",
         muted: "#3b3d4d",
         mutedForeground: "#b3b8d4",
+        foregroundTertiary: "#a4a9c3",
         codeBackground: "#21222c",
         accent: "#3b304f",
         accentForeground: "#ff79c6",
@@ -378,6 +391,7 @@ export const PALETTES: readonly PaletteMeta[] = [
         secondary: "#eaeef2",
         muted: "#eaeef2",
         mutedForeground: "#59636e",
+        foregroundTertiary: "#666f7a",
         codeBackground: "#eff1f3",
         accent: "#ddf4ff",
         accentForeground: "#0550ae",
@@ -399,6 +413,7 @@ export const PALETTES: readonly PaletteMeta[] = [
         secondary: "#21262d",
         muted: "#21262d",
         mutedForeground: "#8b949e",
+        foregroundTertiary: "#838c95",
         codeBackground: "#1c2128",
         accent: "#121d2f",
         accentForeground: "#58a6ff",
@@ -435,6 +450,7 @@ export const PALETTES: readonly PaletteMeta[] = [
         secondary: "#e6e9ef",
         muted: "#e6e9ef",
         mutedForeground: "#6c6f85",
+        foregroundTertiary: "#686b80",
         codeBackground: "#e6e9ef",
         accent: "#ccd0da",
         accentForeground: "#8839ef",
@@ -460,6 +476,7 @@ export const PALETTES: readonly PaletteMeta[] = [
         secondary: "#313244",
         muted: "#313244",
         mutedForeground: "#a6adc8",
+        foregroundTertiary: "#9299b2",
         codeBackground: "#181825",
         accent: "#45475a",
         accentForeground: "#cba6f7",
@@ -496,6 +513,7 @@ export const PALETTES: readonly PaletteMeta[] = [
         secondary: "#ebdbb2",
         muted: "#ebdbb2",
         mutedForeground: "#7c6f64",
+        foregroundTertiary: "#766a60",
         codeBackground: "#ebdbb2",
         accent: "#f2e5bc",
         accentForeground: "#af3a03",
@@ -517,6 +535,7 @@ export const PALETTES: readonly PaletteMeta[] = [
         secondary: "#3c3836",
         muted: "#3c3836",
         mutedForeground: "#a89984",
+        foregroundTertiary: "#ad9f8b",
         codeBackground: "#1d2021",
         accent: "#504945",
         accentForeground: "#fe8019",
@@ -561,6 +580,7 @@ export const PALETTES: readonly PaletteMeta[] = [
         secondary: "#eee8d5",
         muted: "#eee8d5",
         mutedForeground: "#586e75",
+        foregroundTertiary: "#50646a",
         codeBackground: "#eee8d5",
         accent: "#eee8d5",
         accentForeground: "#268bd2",
@@ -585,6 +605,7 @@ export const PALETTES: readonly PaletteMeta[] = [
         secondary: "#073642",
         muted: "#073642",
         mutedForeground: "#93a1a1",
+        foregroundTertiary: "#97a4a4",
         codeBackground: "#073642",
         accent: "#073642",
         accentForeground: "#2aa198",
@@ -622,6 +643,7 @@ export const PALETTES: readonly PaletteMeta[] = [
         secondary: "#d8dee9",
         muted: "#d8dee9",
         mutedForeground: "#4c566a",
+        foregroundTertiary: "#576174",
         codeBackground: "#d8dee9",
         accent: "#e5e9f0",
         accentForeground: "#5e81ac",
@@ -646,6 +668,7 @@ export const PALETTES: readonly PaletteMeta[] = [
         secondary: "#3b4252",
         muted: "#434c5e",
         mutedForeground: "#d8dee9",
+        foregroundTertiary: "#b2b8c4",
         codeBackground: "#3b4252",
         accent: "#434c5e",
         accentForeground: "#88c0d0",

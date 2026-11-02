@@ -193,6 +193,15 @@ describe("WhyChain", () => {
     fireEvent.click(bet);
     expect(onSelect).toHaveBeenCalledOnce();
   });
+
+  it("draws links that share a kind and value", () => {
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const twice = { kind: "project", value: "none yet", missing: true } as const;
+    inRouter(<WhyChain links={[twice, twice]} />);
+    expect(screen.getAllByText("none yet")).toHaveLength(2);
+    expect(error).not.toHaveBeenCalled();
+    error.mockRestore();
+  });
 });
 
 describe("LoopStrip", () => {
@@ -207,6 +216,7 @@ describe("LoopStrip", () => {
       "Sense: 214 signals this week. 4 sources on · 1 waits for you. Owned by Scout.",
     );
     expect(within(loop).getByText("Not measured yet")).toBeInTheDocument();
+    expect(loop.querySelector("ol")!.className).toContain("max-[760px]:grid-cols-3");
   });
 
   it("shows only Build and Measure, and a way to turn discovery on, while it is off", () => {
@@ -224,6 +234,10 @@ describe("LoopStrip", () => {
       [...loop.querySelectorAll("[data-stage]")].map((s) => s.getAttribute("data-stage")),
     ).toEqual(["build", "measure"]);
     expect(within(loop).queryByText(SAMPLE_GOAL.statement!)).toBeNull();
+    // Two stages keep two columns on a phone too (no empty third column).
+    const grid = loop.querySelector("ol")!;
+    expect(grid.className).toContain("grid-cols-2");
+    expect(grid.className).not.toContain("grid-cols-3");
     fireEvent.click(within(loop).getByRole("button", { name: "Turn on discovery" }));
     expect(onSelect).toHaveBeenCalledOnce();
   });
@@ -254,7 +268,9 @@ describe("StagedBar", () => {
     expect(stagedText(3, "change", "v13")).toBe("3 changes staged · v13");
     const onReview = vi.fn();
     render(<StagedBar count={3} noun="team change" onReview={onReview} placement="inline" />);
-    expect(screen.getByRole("status")).toHaveTextContent("3 team changes staged");
+    const status = screen.getByRole("status");
+    expect(status).toHaveTextContent("3 team changes staged");
+    expect(within(status).queryByRole("button")).toBeNull();
     fireEvent.click(screen.getByRole("button", { name: "Review" }));
     expect(onReview).toHaveBeenCalledOnce();
   });

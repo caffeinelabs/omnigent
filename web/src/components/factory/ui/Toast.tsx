@@ -2,10 +2,13 @@
  * The cockpit's one toast: a single polite live region, newest message wins.
  * Reversible acts (answer, vote, pause, apply) confirm here with an Undo
  * button instead of asking first; `u` presses Undo while one is offered.
+ * It stays up while the pointer or focus is on it, and gives focus back to
+ * where it came from when it closes.
  */
 
 import { CheckIcon, XIcon } from "lucide-react";
 import {
+  type FocusEvent,
   type ReactNode,
   createContext,
   useCallback,
@@ -29,6 +32,17 @@ export interface ToastMessage {
 export const TOAST_MS = 5_000;
 export const TOAST_UNDO_MS = 12_000;
 
+/**
+ * Marks the toast region. Layers that close on an outside click (Peek) leave
+ * clicks here alone, so Undo works from inside an open panel.
+ */
+export const TOAST_REGION_SELECTOR = "[data-factory-toast]";
+
+/** True when `target` sits inside the toast region. */
+export function inToastRegion(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest(TOAST_REGION_SELECTOR) !== null;
+}
+
 interface ToastApi {
   show: (toast: ToastMessage) => void;
   dismiss: () => void;
@@ -43,9 +57,32 @@ export function useFactoryToast(): ToastApi {
 
 const NOOP: ToastApi = { show: () => undefined, dismiss: () => undefined };
 
-function isTyping(target: EventTarget | null): boolean {
+/** Widgets that read printable keys themselves (typeahead, grids, sliders). */
+const KEY_OWNERS = [
+  "menu",
+  "menubar",
+  "menuitem",
+  "menuitemcheckbox",
+  "menuitemradio",
+  "listbox",
+  "option",
+  "combobox",
+  "tree",
+  "treeitem",
+  "grid",
+  "slider",
+  "spinbutton",
+  "textbox",
+  "searchbox",
+]
+  .map((role) => `[role=${role}]`)
+  .join(",");
+
+/** True when a `u` keypress belongs to whatever has focus, not to Undo. */
+function keyBelongsToTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
-  return target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName);
+  if (target.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(target.tagName)) return true;
+  return target.closest(KEY_OWNERS) !== null;
 }
 
 /** The toast's face, without timers (stories and tests render it directly). */
@@ -53,16 +90,51 @@ export function ToastView({
   toast,
   onUndo,
   onDismiss,
+  onHoldChange,
   className,
 }: {
   toast: ToastMessage;
   onUndo?: () => void;
   onDismiss?: () => void;
+  /** Called with true while the pointer is over it or focus is inside it. */
+  onHoldChange?: (held: boolean) => void;
   className?: string;
 }) {
+  const root = useRef<HTMLDivElement>(null);
+  const hovered = useRef(false);
+  const focused = useRef(false);
+  const report = useCallback(
+    () => onHoldChange?.(hovered.current || focused.current),
+    [onHoldChange],
+  );
+  // A newer toast can drop the button that had focus without a blur event.
+  useEffect(() => {
+    if (focused.current && !root.current?.contains(document.activeElement)) {
+      focused.current = false;
+      report();
+    }
+  }, [toast, report]);
   return (
     <div
+      ref={root}
       data-testid="factory-toast"
+      onPointerEnter={() => {
+        hovered.current = true;
+        report();
+      }}
+      onPointerLeave={() => {
+        hovered.current = false;
+        report();
+      }}
+      onFocus={() => {
+        focused.current = true;
+        report();
+      }}
+      onBlur={(event: FocusEvent<HTMLDivElement>) => {
+        if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+        focused.current = false;
+        report();
+      }}
       className={cn(
         "pointer-events-auto flex max-w-[calc(100vw-24px)] items-center gap-3 rounded-[10px] bg-primary py-2 pr-2 pl-3.5 text-ui text-primary-foreground shadow-xl motion-safe:animate-in motion-safe:fade-in-0 motion-safe:slide-in-from-bottom-2",
         className,
@@ -101,37 +173,69 @@ export function ToastView({
 
 export function FactoryToastProvider({ children }: { children: ReactNode }) {
   const [toast, setToast] = useState<ToastMessage | null>(null);
+  const current = useRef<ToastMessage | null>(null);
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const held = useRef(false);
+  const region = useRef<HTMLDivElement>(null);
+  /** What had focus before it moved into the toast. */
+  const returnFocus = useRef<HTMLElement | null>(null);
 
-  const dismiss = useCallback(() => {
+  const clearTimer = useCallback(() => {
     if (timer.current) clearTimeout(timer.current);
     timer.current = null;
-    setToast(null);
   }, []);
+
+  const dismiss = useCallback(() => {
+    clearTimer();
+    const hadFocus = region.current?.contains(document.activeElement) ?? false;
+    const back = returnFocus.current;
+    returnFocus.current = null;
+    held.current = false;
+    current.current = null;
+    setToast(null);
+    if (hadFocus && back?.isConnected) back.focus();
+  }, [clearTimer]);
+
+  /** (Re)starts the close timer, unless the pointer or focus is holding it open. */
+  const arm = useCallback(() => {
+    clearTimer();
+    const next = current.current;
+    if (!next || held.current) return;
+    timer.current = setTimeout(dismiss, next.durationMs ?? (next.undo ? TOAST_UNDO_MS : TOAST_MS));
+  }, [clearTimer, dismiss]);
 
   const show = useCallback(
     (next: ToastMessage) => {
-      if (timer.current) clearTimeout(timer.current);
+      current.current = next;
       setToast(next);
-      timer.current = setTimeout(
-        dismiss,
-        next.durationMs ?? (next.undo ? TOAST_UNDO_MS : TOAST_MS),
-      );
+      arm();
     },
-    [dismiss],
+    [arm],
+  );
+
+  const onHoldChange = useCallback(
+    (next: boolean) => {
+      if (held.current === next) return;
+      held.current = next;
+      if (next) clearTimer();
+      else arm();
+    },
+    [arm, clearTimer],
   );
 
   const undo = useCallback(() => {
-    const fn = toast?.undo;
+    const fn = current.current?.undo;
     dismiss();
     fn?.();
-  }, [toast, dismiss]);
+  }, [dismiss]);
 
   useEffect(() => {
     if (!toast?.undo) return;
     const onKey = (event: KeyboardEvent) => {
-      if (event.key !== "u" || event.metaKey || event.ctrlKey || event.altKey) return;
-      if (isTyping(event.target)) return;
+      if (event.key !== "u") return;
+      if (event.defaultPrevented || event.repeat) return;
+      if (event.metaKey || event.ctrlKey || event.altKey || event.shiftKey) return;
+      if (keyBelongsToTarget(event.target)) return;
       event.preventDefault();
       undo();
     };
@@ -139,24 +243,34 @@ export function FactoryToastProvider({ children }: { children: ReactNode }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [toast, undo]);
 
-  useEffect(
-    () => () => {
-      if (timer.current) clearTimeout(timer.current);
-    },
-    [],
-  );
+  useEffect(() => clearTimer, [clearTimer]);
 
   const api = useMemo(() => ({ show, dismiss }), [show, dismiss]);
   return (
     <ToastContext.Provider value={api}>
       {children}
       <div
+        ref={region}
         role="status"
         aria-live="polite"
         data-testid="factory-toast-region"
-        className="pointer-events-none fixed inset-x-0 bottom-6 z-[80] flex justify-center px-3 max-[760px]:bottom-[76px]"
+        data-factory-toast=""
+        onFocusCapture={(event) => {
+          const from = event.relatedTarget;
+          if (from instanceof HTMLElement && !event.currentTarget.contains(from)) {
+            returnFocus.current = from;
+          }
+        }}
+        className={cn(
+          "pointer-events-none fixed inset-x-0 z-[80] flex justify-center px-3",
+          // Above the OS inset; on a phone also above the 56 px tab bar (shown below `md`).
+          "bottom-[calc(24px+var(--omnigent-inset-bottom,0px))]",
+          "max-md:bottom-[calc(76px+var(--omnigent-inset-bottom,0px))]",
+        )}
       >
-        {toast && <ToastView toast={toast} onUndo={undo} onDismiss={dismiss} />}
+        {toast && (
+          <ToastView toast={toast} onUndo={undo} onDismiss={dismiss} onHoldChange={onHoldChange} />
+        )}
       </div>
     </ToastContext.Provider>
   );

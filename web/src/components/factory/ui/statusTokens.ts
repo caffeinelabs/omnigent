@@ -349,9 +349,15 @@ export function roleLook(
   seat?: LeadSeat | null,
 ): { label: string; glyph: RoleGlyph } {
   if (seat) return SEAT_INFO[seat];
-  if (!role) return { label: "Agent", glyph: "agent" };
-  const info = ROLE_INFO[role];
+  const info = roleInfo(role);
+  // A role this build does not know yet still draws, as a plain agent.
+  if (!info) return { label: role || "Agent", glyph: "agent" };
   return { label: info.label, glyph: info.glyph };
+}
+
+/** A role's entry, for known roles only (never `Object.prototype` keys). */
+function roleInfo(role: string | null | undefined): RoleInfo | undefined {
+  return role && Object.hasOwn(ROLE_INFO, role) ? ROLE_INFO[role as FactoryRole] : undefined;
 }
 
 /** The coding-agent vendors a member can run on. */
@@ -615,5 +621,5 @@ export const TONE_ICON: Record<FactoryMarkerTone, string> = toneMap(MARKER_TONE_
 
 /** Sender role → classes layered over the transcript's neutral role chip. */
 export function roleChipTone(role: string | null | undefined): string {
-  return role && role in ROLE_INFO ? ROLE_INFO[role as FactoryRole].chip : "";
+  return roleInfo(role)?.chip ?? "";
 }

@@ -189,8 +189,9 @@ export function LoopStrip({
       <ol
         className={cn(
           "m-0 grid list-none p-0",
-          shown.length >= 5 ? "grid-cols-5" : "grid-cols-2",
-          "max-[760px]:grid-cols-3 max-[760px]:gap-y-1.5",
+          // Five stages wrap to three columns on a phone; Build and Measure keep two.
+          shown.length >= 5 ? "grid-cols-5 max-[760px]:grid-cols-3" : "grid-cols-2",
+          "max-[760px]:gap-y-1.5",
         )}
       >
         {shown.map((stage, i) => (

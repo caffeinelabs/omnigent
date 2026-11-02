@@ -400,6 +400,11 @@ function rebaseVariant(
       reference.mutedForeground,
       current.mutedForeground,
     ),
+    foregroundTertiary: rebaseColor(
+      base.foregroundTertiary,
+      reference.mutedForeground,
+      current.mutedForeground,
+    ),
     codeBackground: rebaseColor(
       base.codeBackground,
       reference.codeBackground,

@@ -3,6 +3,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { FACTORY_STAGES, type FactoryRole } from "@/lib/factoryApi";
+import { PALETTES, type PaletteTokens } from "@/lib/themePalette";
 import { ROLE_NAME as BOARD_ROLE_NAME, ROLE_SHORT as BOARD_ROLE_SHORT } from "../board/TeamStrip";
 import { TONE_CHIP as FORMAT_TONE_CHIP } from "../factoryFormat";
 import {
@@ -98,6 +99,9 @@ describe("roles and vendors", () => {
     expect(roleLook("ic")).toEqual({ label: "Builder", glyph: "code" });
     expect(roleLook("lead", "discovery")).toEqual(SEAT_INFO.discovery);
     expect(roleLook(null)).toEqual({ label: "Agent", glyph: "agent" });
+    // A role this build does not know (or an Object.prototype key) draws as a plain agent.
+    expect(roleLook("auditor" as FactoryRole)).toEqual({ label: "auditor", glyph: "agent" });
+    expect(roleLook("constructor" as FactoryRole).glyph).toBe("agent");
   });
 
   it("keeps the older role wording exactly", () => {
@@ -196,6 +200,8 @@ describe("older tone maps (one table)", () => {
     expect(roleChipTone("demo")).toBe("border-success/40 text-success");
     expect(roleChipTone("reviewer")).toBe("");
     expect(roleChipTone("someone")).toBe("");
+    for (const key of ["constructor", "toString", "__proto__", "hasOwnProperty"])
+      expect(roleChipTone(key)).toBe("");
     expect(roleChipTone(null)).toBe("");
     expect(transcriptRoleChip).toBe(roleChipTone);
   });
@@ -230,14 +236,30 @@ describe("stages and discovery labels", () => {
   });
 });
 
-// ── Contrast: every text token >= 4.5:1 on cards in both themes ──
+// ── Contrast: every text token >= 4.5:1 in every palette, both themes ──
 
-function rgb(hex: string): [number, number, number] {
-  const h = hex.replace("#", "");
-  return [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16)) as [number, number, number];
+type Rgb = [number, number, number];
+
+/** Parses the colour forms the palettes use, compositing alpha over `under`. */
+function parseColor(value: string, under: Rgb): Rgb {
+  const v = value.trim();
+  const mixed = /^color-mix\(in srgb,\s*(#[0-9a-f]+)\s+(\d+)%,\s*(#[0-9a-f]+)\)$/i.exec(v);
+  if (mixed)
+    return mix(parseColor(mixed[3]!, under), parseColor(mixed[1]!, under), +mixed[2]! / 100);
+  const rgba = /^rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?\)$/.exec(v);
+  if (rgba) return mix(under, [+rgba[1]!, +rgba[2]!, +rgba[3]!], rgba[4] ? +rgba[4] : 1);
+  const hex = /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(v);
+  if (!hex) throw new Error(`unparsed colour ${value}`);
+  const rgb = [0, 2, 4].map((i) => parseInt(hex[1]!.slice(i, i + 2), 16)) as Rgb;
+  return mix(under, rgb, hex[2] ? parseInt(hex[2], 16) / 255 : 1);
 }
 
-function luminance([r, g, b]: [number, number, number]): number {
+/** `amount` of `over` on top of `base`. */
+function mix(base: Rgb, over: Rgb, amount: number): Rgb {
+  return base.map((c, i) => c * (1 - amount) + over[i]! * amount) as Rgb;
+}
+
+function luminance([r, g, b]: Rgb): number {
   const lin = (c: number) => {
     const s = c / 255;
     return s <= 0.03928 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
@@ -245,51 +267,93 @@ function luminance([r, g, b]: [number, number, number]): number {
   return 0.2126 * lin(r) + 0.7152 * lin(g) + 0.0722 * lin(b);
 }
 
-function contrast(a: string, b: string): number {
-  const [x, y] = [luminance(rgb(a)), luminance(rgb(b))];
+function contrast(a: Rgb, b: Rgb): number {
+  const [x, y] = [luminance(a), luminance(b)];
   return (Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05);
 }
 
-/** The hex value `name` takes in the first rule whose selector starts with `selector`. */
-function token(css: string, selector: string, name: string): string {
-  const start = css.indexOf(`${selector} {`);
+/** The value `name` takes in the first rule whose selector is exactly `selector`. */
+function cssToken(css: string, selector: string, name: string): string {
+  const start = css.indexOf(`\n${selector} {`);
   expect(start, `${selector} rule`).toBeGreaterThanOrEqual(0);
-  const body = css.slice(start, css.indexOf("\n}", start));
-  const match = new RegExp(`--${name}:\\s*(#[0-9a-fA-F]{6})`).exec(body);
+  const body = css.slice(start, css.indexOf("\n}", start + 1));
+  const match = new RegExp(`--${name}:\\s*([^;]+);`).exec(body);
   expect(match, `--${name} in ${selector}`).not.toBeNull();
-  return match![1]!;
+  return match![1]!.trim();
 }
 
 const SRC = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const indexCss = readFileSync(path.join(SRC, "index.css"), "utf8");
 const palettesCss = readFileSync(path.join(SRC, "themePalettes.generated.css"), "utf8");
 
-describe("text contrast", () => {
-  const lightCard = token(palettesCss, ":root:not(.dark):not([data-theme])", "card-solid");
-  const darkCard = token(palettesCss, ".dark:not([data-theme])", "card-solid");
-  const darkPage = token(palettesCss, ".dark:not([data-theme])", "background");
-  const textTokens = [
-    "foreground-tertiary",
-    "status-yellow-fg",
-    "status-green-fg",
-    "status-red-fg",
-    "status-orange-fg",
-    "status-blue-fg",
-    "status-violet-fg",
-  ];
+const MODES = ["light", "dark"] as const;
+const STATUS_HUES = ["yellow", "green", "red", "orange", "blue", "violet"] as const;
+const VARIANTS = PALETTES.flatMap((palette) => MODES.map((mode) => ({ palette, mode })));
+const WHITE: Rgb = [255, 255, 255];
 
-  it.each(textTokens)("--%s reads at 4.5:1 or more in both themes", (name) => {
-    const light = token(indexCss, ":root", name);
-    const dark = token(indexCss, ".dark", name);
-    expect(contrast(light, lightCard)).toBeGreaterThanOrEqual(4.5);
-    expect(contrast(dark, darkCard)).toBeGreaterThanOrEqual(4.5);
-    expect(contrast(dark, darkPage)).toBeGreaterThanOrEqual(4.5);
+/** The surfaces text sits on in one palette and mode. */
+function surfaces(tokens: PaletteTokens): { card: Rgb; page: Rgb; muted: Rgb } {
+  const card = parseColor(tokens.cardSolid, WHITE);
+  return {
+    card,
+    page: parseColor(tokens.background, WHITE),
+    muted: parseColor(tokens.muted, card),
+  };
+}
+
+describe("text contrast", () => {
+  it.each(VARIANTS)(
+    "faint text reads at 4.5:1 or more in $palette.id $mode",
+    ({ palette, mode }) => {
+      const tokens = palette.tokens[mode];
+      const { card, page } = surfaces(tokens);
+      const faint = parseColor(tokens.foregroundTertiary, card);
+      expect(contrast(faint, card), "on cards").toBeGreaterThanOrEqual(5);
+      expect(contrast(faint, page), "on the page").toBeGreaterThanOrEqual(4.5);
+      // Faint stays a step below muted text wherever muted text has room for one.
+      const muted = parseColor(tokens.mutedForeground, card);
+      if (contrast(muted, card) >= 5) {
+        expect(contrast(faint, card)).toBeLessThanOrEqual(contrast(muted, card));
+      }
+    },
+  );
+
+  it.each(VARIANTS.flatMap((v) => STATUS_HUES.map((hue) => ({ ...v, hue }))))(
+    "--status-$hue-fg reads at 4.5:1 or more in $palette.id $mode",
+    ({ palette, mode, hue }) => {
+      const selector = mode === "light" ? ":root" : ".dark";
+      const { card, page, muted } = surfaces(palette.tokens[mode]);
+      const fg = parseColor(cssToken(indexCss, selector, `status-${hue}-fg`), card);
+      // Chips and panels tint the card with 15 % of the hue (MEANING.*.surface).
+      const tint = mix(card, parseColor(cssToken(indexCss, selector, `status-${hue}`), card), 0.15);
+      for (const [where, surface] of Object.entries({ card, page, muted, tint })) {
+        expect(contrast(fg, surface), `on ${where}`).toBeGreaterThanOrEqual(4.5);
+      }
+    },
+  );
+
+  it("ships the palette tokens the tests read (generated CSS is current)", () => {
+    for (const palette of PALETTES) {
+      const light =
+        palette.id === "omni"
+          ? ":root:not(.dark):not([data-theme])"
+          : `:root:not(.dark)[data-theme="${palette.id}"]`;
+      const dark =
+        palette.id === "omni" ? ".dark:not([data-theme])" : `.dark[data-theme="${palette.id}"]`;
+      expect(cssToken(palettesCss, light, "foreground-tertiary")).toBe(
+        palette.tokens.light.foregroundTertiary,
+      );
+      expect(cssToken(palettesCss, dark, "foreground-tertiary")).toBe(
+        palette.tokens.dark.foregroundTertiary,
+      );
+    }
   });
 
-  it("keeps muted text at 4.5:1 or more on cards in both themes", () => {
-    const light = token(palettesCss, ":root:not(.dark):not([data-theme])", "muted-foreground");
-    const dark = token(palettesCss, ".dark:not([data-theme])", "muted-foreground");
-    expect(contrast(light, lightCard)).toBeGreaterThanOrEqual(4.5);
-    expect(contrast(dark, darkCard)).toBeGreaterThanOrEqual(4.5);
+  it("keeps muted text at 4.5:1 or more on the default palette's cards", () => {
+    for (const mode of MODES) {
+      const tokens = PALETTES[0]!.tokens[mode];
+      const { card } = surfaces(tokens);
+      expect(contrast(parseColor(tokens.mutedForeground, card), card)).toBeGreaterThanOrEqual(4.5);
+    }
   });
 });

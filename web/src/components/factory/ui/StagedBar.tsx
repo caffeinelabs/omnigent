@@ -41,18 +41,19 @@ export function StagedBar({
   if (count <= 0) return null;
   return (
     <div
-      role="status"
       data-testid="staged-bar"
       className={cn(
         "flex items-center gap-2.5 rounded-xl border border-dashed border-status-violet py-2 pr-2 pl-3.5 text-ui shadow-xl",
         "bg-[color-mix(in_srgb,var(--card-solid)_90%,var(--status-violet))]",
+        // Above the OS inset; on a phone also above the 56 px tab bar (shown below `md`).
         placement === "fixed" &&
-          "fixed bottom-[18px] left-1/2 z-[45] max-w-[calc(100vw-24px)] -translate-x-1/2 max-[760px]:right-3 max-[760px]:bottom-[72px] max-[760px]:left-3 max-[760px]:translate-x-0",
+          "fixed bottom-[calc(18px+var(--omnigent-inset-bottom,0px))] left-1/2 z-[45] max-w-[calc(100vw-24px)] -translate-x-1/2 max-md:right-3 max-md:bottom-[calc(72px+var(--omnigent-inset-bottom,0px))] max-md:left-3 max-md:translate-x-0",
         className,
       )}
     >
       <PencilIcon aria-hidden className="size-3.5 shrink-0 text-status-violet-fg" />
-      <span className="min-w-0 flex-1">
+      {/* Only the count is announced when it changes, not the buttons. */}
+      <span role="status" className="min-w-0 flex-1">
         <b className="font-semibold">{plural(count, noun)}</b> staged
         {context && <span className="text-foreground/75"> · {context}</span>}
       </span>

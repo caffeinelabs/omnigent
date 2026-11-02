@@ -100,6 +100,17 @@ function LinkBox({ link, compact }: { link: WhyLink; compact: boolean }) {
   );
 }
 
+/** Stable keys even when two links share a kind and value ("none yet" twice). */
+function linkKeys(links: readonly WhyLink[]): { link: WhyLink; key: string }[] {
+  const seen = new Map<string, number>();
+  return links.map((link) => {
+    const base = `${link.kind}:${link.value}`;
+    const repeat = seen.get(base) ?? 0;
+    seen.set(base, repeat + 1);
+    return { link, key: repeat ? `${base}#${repeat}` : base };
+  });
+}
+
 export function WhyChain({
   links,
   vertical = false,
@@ -129,8 +140,8 @@ export function WhyChain({
         className,
       )}
     >
-      {links.map((link, i) => (
-        <Fragment key={`${link.kind}:${link.value}`}>
+      {linkKeys(links).map(({ link, key }, i) => (
+        <Fragment key={key}>
           {i > 0 && arrow}
           <li
             className={cn(
