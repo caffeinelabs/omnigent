@@ -68,6 +68,7 @@ from omnigent.server.factory import (
     status,
     stuck,
     tasks,
+    team,
 )
 from omnigent.server.factory.activity_now import factory_usd_per_h
 from omnigent.server.factory.base import base_view
@@ -617,6 +618,8 @@ class _Loaded:
     lead_spawns: bool = False
     notified: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     deadlines: dict[str, tuple[int, str]] = field(default_factory=dict)
+    models: dict[str, str | None] = field(default_factory=dict)
+    def_doc: dict[str, Any] = field(default_factory=dict)
 
 
 def notified_by_subject(rows: Iterable[FactoryEvent]) -> dict[str, list[dict[str, Any]]]:
@@ -665,6 +668,27 @@ def _harness(
     return memo[key]
 
 
+def _model(conv: Conversation, deps: FactoryDeps, memo: dict[tuple[Any, ...], Any]) -> str | None:
+    """:returns: *conv*'s model: its override, else its bundle's (``None`` when unknown)."""
+    if conv.model_override:
+        return conv.model_override
+    key = ("model", conv.agent_id, conv.sub_agent_name)
+    if key not in memo:
+        spec = load_session_spec(conv, deps)
+        model = getattr(getattr(spec, "executor", None), "model", None)
+        memo[key] = model if isinstance(model, str) else None
+    return memo[key]
+
+
+def _def_doc(deps: FactoryDeps, factory_id: str) -> dict[str, Any]:
+    try:
+        resolved = definition.definition_for(deps, factory_id)
+    except Exception:  # noqa: BLE001 - team specs render from the defaults then
+        _logger.warning("factory snapshot: no definition for %s", factory_id, exc_info=True)
+        return {}
+    return resolved.doc if resolved is not None else {}
+
+
 def _load(deps: FactoryDeps, factory_id: str, now: float) -> _Loaded:
     store = deps.conversation_store
     fstore = deps.factory_store
@@ -691,10 +715,8 @@ def _load(deps: FactoryDeps, factory_id: str, now: float) -> _Loaded:
         deadlines = {}
     pending = fstore.list_proposals(factory_id, status=["pending", "awaiting_cosign"], limit=500)
     memo: dict[tuple[Any, ...], Any] = {}
-    harness = {
-        c.id: _harness(c, deps, memo)
-        for c in [*members, *(k for kids in children.values() for k in kids)]
-    }
+    shown = [*members, *(k for kids in children.values() for k in kids)]
+    harness = {c.id: _harness(c, deps, memo) for c in shown}
     return _Loaded(
         members=members,
         closed_members=closed,
@@ -729,6 +751,8 @@ def _load(deps: FactoryDeps, factory_id: str, now: float) -> _Loaded:
         issues=fstore.list_issues(factory_id, class_="incident", statuses=["open", "acked"]),
         notified=_notified(fstore, factory_id, now_ms),
         deadlines=deadlines,
+        models={c.id: _model(c, deps, memo) for c in shown},
+        def_doc=_def_doc(deps, factory_id),
         **_spawn_limits(deps, factory_id, members),
     )
 
@@ -803,6 +827,8 @@ def _member_view(
         "health": labels.get(LABEL_HEALTH),
         "summary": labels.get(LABEL_SUMMARY),
         "harness": loaded.harness.get(conv.id),
+        "vendor": team.vendor_of(loaded.harness.get(conv.id)),
+        "model": loaded.models.get(conv.id),
         "running": status_value == "running",
         "last_activity_at": _int_or_none((row or {}).get("last_activity_at")),
         "heartbeat_s": _heartbeat_s(conv) if is_top else None,
@@ -1157,8 +1183,27 @@ def _project_view(
         "provisioning": provisioning,
         "keep_previews": keep,
         "paused_by": paused_by.get(project.slug) if result.overlay == "paused" else None,
+        "team_spec": _team_spec(project, pl, loaded),
         **_lifecycle(project),
     }
+
+
+def _team_spec(
+    project: FactoryProject, pl: Conversation | None, loaded: _Loaded
+) -> dict[str, Any] | None:
+    """The project's team spec next to its live team (``None`` for a virtual project)."""
+    if not project.id:
+        return None
+    try:
+        return team.snapshot_view(
+            loaded.def_doc,
+            project,
+            loaded.children.get(pl.id, []) if pl is not None else [],
+            def_version=loaded.def_version,
+        )
+    except Exception:  # noqa: BLE001 - a card renders without its team spec
+        _logger.warning("factory snapshot: no team spec for %s", project.slug, exc_info=True)
+        return None
 
 
 def _lifecycle(project: FactoryProject) -> dict[str, Any]:

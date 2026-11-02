@@ -671,7 +671,13 @@ async def test_owners_edit_the_blocks_and_members_get_no_product_text(cockpit: C
     assert view["effective"]["strategy"]["goals"][0]["id"] == "G-1"
     assert view["lists"]["strategy.goals"] == {"numbered": "G"}
     assert "product." in view["owner_only"]
-    assert view["not_trialable"] == ["product", "strategy", "discovery", "briefs.scout"]
+    assert view["not_trialable"] == [
+        "product",
+        "strategy",
+        "discovery",
+        "briefs.scout",
+        "team.projects",
+    ]
     assert view["not_trialable_why"]["discovery"] == "needs discovery guards"
     assert view["agent_paths"]["sentinel"] == list(blocks.AGENT_PATHS["sentinel"])
     assert "discovery.rubric.window_days" in view["bounds"]

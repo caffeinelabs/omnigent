@@ -371,12 +371,21 @@ async def get_agent_rules(
         caller = await authorize_agent(request, from_session_id)
         role = caller.membership.role
         project = caller.membership.project
+        # The Codex builder reports role ic; rules for the ic_codex agent are its too.
+        agent = caller.session.sub_agent_name
 
         def _read() -> dict[str, Any]:
             resolved = definition.definition_for(caller.deps, caller.factory_id)
             if resolved is None:
                 return {"def_version": None, "role": role, "project": project, "rules": []}
             rules = definition.rules_for(resolved.doc, role, project)
+            if agent == "ic_codex" and role != agent:
+                extra = definition.rules_for(resolved.doc, agent, project)
+                seen = {r["id"] for r in rules}
+                rules = sorted(
+                    [*rules, *(r for r in extra if r["id"] not in seen)],
+                    key=lambda r: int(str(r.get("id", "R-0"))[2:] or 0),
+                )
             delivery = resolved.get("product.delivery") or {}
             return {
                 "def_version": resolved.version,

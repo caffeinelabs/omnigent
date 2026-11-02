@@ -804,6 +804,7 @@ LISTS: Final[dict[str, ListSpec]] = {
         ListSpec("product.areas"),
         ListSpec("strategy.goals", prefix="G", seq="goal_seq"),
         ListSpec("discovery.sources"),
+        ListSpec("team.templates"),
     )
 }
 """Lists changed by ``id``: ``add`` at the list, ``replace``/``remove`` at ``<list>.<id>``."""
@@ -850,11 +851,13 @@ BLOCKS: Final = ("product", "strategy", "discovery", "briefs", "role_defaults")
 """The blocks of this module (agents may propose only some of their paths)."""
 NOT_TRIALABLE_REASON: Final = "judged on outcomes"
 NEEDS_DISCOVERY_GUARDS: Final = "needs discovery guards"
+TOO_FEW_PRS: Final = "too few merged PRs per team"
 NOT_TRIALABLE: Final[dict[str, str]] = {
     "product": NOT_TRIALABLE_REASON,
     "strategy": NOT_TRIALABLE_REASON,
     "discovery": NEEDS_DISCOVERY_GUARDS,
     "briefs.scout": NEEDS_DISCOVERY_GUARDS,
+    "team.projects": TOO_FEW_PRS,
 }
 """
 Paths a trial would judge on the wrong metrics, and why: they apply as a version.
@@ -862,7 +865,8 @@ Paths a trial would judge on the wrong metrics, and why: they apply as a version
 Strategy and the profile are judged on outcomes. Discovery and Scout's brief
 are judged on discovery guards (quote failures, privacy events, accepted
 bets), which this server does not measure yet; until it does, the delivery
-guards would judge them.
+guards would judge them. One project's team merges about one PR a day, too
+few for a trial's n: team changes trial on a template instead.
 """
 AGENT_PATHS: Final[dict[str, tuple[str, ...]]] = {
     "scout": ("product", "strategy", "discovery.sources"),
@@ -965,6 +969,7 @@ __all__ = [
     "REDACT_FLOOR",
     "SECRET_REFUSAL",
     "SOURCE_PRIVACY",
+    "TOO_FEW_PRS",
     "VENDORS_BY_ROLE",
     "BriefsDef",
     "DiscoveryDef",

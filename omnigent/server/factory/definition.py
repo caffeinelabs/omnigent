@@ -17,7 +17,8 @@ by ``sys_factory_rules``; they never widen a policy or a gate.
 The product-agnostic blocks ``product``, ``strategy``, ``discovery``,
 ``briefs`` and ``role_defaults`` (:mod:`.definition_blocks`) hold everything
 the factory knows about its product. Their lists with ids (goals, segments,
-areas, sources) change item by item, like ``rules``.
+areas, sources) change item by item, like ``rules``. The ``team`` block
+(:mod:`.team_spec`) holds each project's team, member by member.
 """
 
 from __future__ import annotations
@@ -59,6 +60,7 @@ from omnigent.factory import (
     ROLES,
 )
 from omnigent.server.factory import definition_blocks as blocks
+from omnigent.server.factory import team_spec
 from omnigent.server.factory.definition_blocks import (
     BriefsDef,
     DiscoveryDef,
@@ -66,6 +68,7 @@ from omnigent.server.factory.definition_blocks import (
     RoleDefaultsDef,
     StrategyDef,
 )
+from omnigent.server.factory.team_spec import TeamDef
 from omnigent.stores.factory_store import DefinitionVersionExists, canonical_hash, norm_id
 
 if TYPE_CHECKING:
@@ -83,7 +86,8 @@ PREVIEW_DOMAIN_PATH: Final = "product.delivery.preview_domain"
 """Bounded by the deployment's preview domains (:func:`.env_urls.preview_domains`)."""
 RULES_PER_ROLE: Final = 20
 RULE_TEXT_MAX: Final = 500
-RULE_ROLES: Final = (*sorted(ROLES), "*")
+RULE_ROLES: Final = (*sorted({*ROLES, "ic_codex"}), "*")
+"""Roles a rule may target: the factory roles, the ``ic_codex`` agent and ``*``."""
 TRIAL_H_DEFAULT: Final = 48
 TRIAL_H_MIN: Final = 24
 TRIAL_H_MAX: Final = 168
@@ -303,6 +307,7 @@ class FactoryDefinitionDoc(_Block):
     briefs: BriefsDef = Field(default_factory=BriefsDef)
     role_defaults: RoleDefaultsDef = Field(default_factory=RoleDefaultsDef)
     goal_seq: int = 0
+    team: TeamDef = Field(default_factory=TeamDef)
 
     @field_validator("rules")
     @classmethod
@@ -483,6 +488,16 @@ CLASS_TABLE: Final = (
     ("discovery.seat|rubric|thresholds|autonomy", "B (owners)"),
     ("discovery.*, briefs.scout", "never on trial until discovery guards exist"),
     ("briefs.*, role_defaults.*", "B (owners)"),
+    ("team.templates.*", "B (owners)"),
+    (
+        "team.projects.<slug> members",
+        "adding a member, a vendor or model change, a brief: B (owners); removing one or a "
+        "new handle: A (editors apply it)",
+    ),
+    (
+        "team.projects.<slug>.builders_at_once|budget_usd",
+        "A when lower, else B (owners); never on trial (too few PRs per team)",
+    ),
     ("owner-only paths, proposed by an agent", "B (owners), whatever their class"),
     ("anything else, Tier 0", "refused: 422 tier0"),
 )
@@ -535,6 +550,8 @@ def classify(path: str, before: Any, after: Any) -> Klass:
     """:returns: The approval class of one change (``CLASS_MAP``; unknown paths are ``B``)."""
     if path.startswith("rules"):
         return "B"
+    if team_spec.is_team_path(path):
+        return team_spec.classify(path, before, after)
     for pattern, rule in CLASS_MAP.items():
         if _pattern_match(pattern, path):
             return rule(before, after)
@@ -550,6 +567,8 @@ def _leaf_paths(model: type[BaseModel], prefix: str = "") -> list[str]:
     out: list[str] = []
     for name, info in model.model_fields.items():
         annotation = info.annotation
+        if not prefix and name == team_spec.TEAM:
+            continue  # Changed member by member (team_spec), never as plain paths.
         if isinstance(annotation, type) and issubclass(annotation, BaseModel):
             out += _leaf_paths(annotation, f"{prefix}{name}.")
         elif name not in ("rules", "rule_seq", "goal_seq"):
@@ -667,7 +686,7 @@ def set_path(doc: dict[str, Any], path: str, value: Any) -> None:
     node[last] = value
 
 
-SPARSE_KEYS: Final = (*blocks.BLOCKS, "goal_seq")
+SPARSE_KEYS: Final = (*blocks.BLOCKS, "goal_seq", team_spec.TEAM)
 """Keys a version stores only once they differ from their defaults (see :func:`stored_form`)."""
 
 
@@ -1076,6 +1095,12 @@ def parse_change(raw: Mapping[str, Any], index: int = 0) -> Change:
     listed = blocks.list_of(path)
     if listed is not None:
         return _parse_list_change(op, path, raw.get("value"), listed, field)
+    if team_spec.is_team_path(path):
+        try:
+            parsed = team_spec.parse(op, path, raw.get("value"))
+        except team_spec.TeamError as exc:
+            raise _team_error(exc, field) from None
+        return Change(parsed[0], parsed[1], parsed[2], item_id=parsed[3])
     if path == "rules" or path.startswith("rules."):
         rest = path.removeprefix("rules").lstrip(".")
         rule_id = rest.split(".", 1)[0] or None
@@ -1099,6 +1124,41 @@ def parse_change(raw: Mapping[str, Any], index: int = 0) -> Change:
         raise _error(400, "invalid_body", f"{field}: settings are replaced, not {op}")
     _check_bounds(path, raw.get("value"), field)
     return Change("replace", path, raw.get("value"))
+
+
+def _team_error(exc: team_spec.TeamError, field: str | None = None) -> CockpitError:
+    """:returns: *exc* as the cockpit's error (``tier0`` refusals keep their code)."""
+    return _error(exc.status, exc.code, exc.message, field=field, **exc.extra)
+
+
+def _check_team(
+    before: Mapping[str, Any], after: Mapping[str, Any], facts: team_spec.FactsLookup | None
+) -> None:
+    """
+    Tier 0 for team changes: no gate loses its last member, no team for an unknown project.
+
+    :raises CockpitError: 422 ``gate_requires_role`` (all refusals in ``blocked``),
+        404 ``unknown_project``.
+    """
+    refused = team_spec.gate_refusals(before, after, facts)
+    if refused:
+        first = refused[0]
+        raise _error(
+            422,
+            "gate_requires_role",
+            first["message"],
+            field=first["path"],
+            gate=first["gate"],
+            blocked=refused,
+        )
+    unknown = team_spec.unknown_projects(before, after, facts)
+    if unknown:
+        raise _error(
+            404,
+            "unknown_project",
+            f"no project {unknown[0]} in this factory",
+            field=f"{team_spec.PROJECTS}.{unknown[0]}",
+        )
 
 
 def _parse_list_change(
@@ -1251,23 +1311,35 @@ def apply_changes(
     rule_state: str = "active",
     min_rule_seq: int = 0,
     min_goal_seq: int = 0,
+    facts: team_spec.FactsLookup | None = None,
 ) -> dict[str, Any]:
     """
     :param min_rule_seq: Added rules number past this (see :func:`rule_floor`).
     :param min_goal_seq: Added goals number past this (see :func:`goal_floor`).
+    :param facts: The factory's projects (``slug -> env and previews``) for the
+        team's Tier-0 checks; ``None`` assumes env and previews on.
     :returns: A new stored doc with *changes* applied (validated by the model).
     :raises CockpitError: 422 ``invalid_definition`` when the result does not validate,
         404 ``unknown_rule`` / ``unknown_item`` for a missing rule or list item,
-        409 ``duplicate_item`` when an added item's id is taken.
+        409 ``duplicate_item`` when an added item's id is taken, 422
+        ``gate_requires_role`` when a team loses the last member a gate needs.
     """
     doc = _with_defaults(stored)
     preview_before = get_path(doc, PREVIEW_DOMAIN_PATH)
+    teams = any(team_spec.is_team_path(c.path) for c in changes)
+    before = copy.deepcopy(doc) if teams else doc
     doc["rule_seq"] = max(rule_seq(doc), min_rule_seq)
     doc["goal_seq"] = max(goal_seq(doc), min_goal_seq)
     rules: list[dict[str, Any]] = [dict(r) for r in doc.get("rules") or []]
     for change in changes:
         if change.path in LIST_PATHS:
             _apply_list(doc, change)
+            continue
+        if team_spec.is_project_path(change.path):
+            try:
+                team_spec.apply(doc, change.op, change.path, change.value, change.item_id)
+            except team_spec.TeamError as exc:
+                raise _team_error(exc, change.full_path) from None
             continue
         if change.path != "rules":
             set_path(doc, change.path, change.value)
@@ -1317,6 +1389,8 @@ def apply_changes(
             field=where or None,
         ) from None
     _check_preview_domain(preview_before, get_path(after, PREVIEW_DOMAIN_PATH))
+    if teams:
+        _check_team(before, after, facts)
     return after
 
 
@@ -1361,6 +1435,7 @@ def diff(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[dict[str, 
     ]
     for path in sorted(LIST_PATHS):
         out += _list_diff(path, get_path(a, path), get_path(b, path))
+    out += team_spec.diff(a, b)
     old = {r["id"]: r for r in a.get("rules") or []}
     new = {r["id"]: r for r in b.get("rules") or []}
     for rule_id in sorted(old.keys() | new.keys(), key=lambda r: int(r[2:])):
@@ -1395,6 +1470,10 @@ def moved_paths(before: Mapping[str, Any], stored: Mapping[str, Any]) -> list[st
     rules = {str(r.get("id")): r for r in doc.get("rules") or [] if isinstance(r, Mapping)}
     out: list[str] = []
     for path, was in before.items():
+        if team_spec.is_project_path(path):
+            if team_spec.effective_get(doc, path) != was:
+                out.append(path)
+            continue
         if not path.startswith("rules."):
             if get_path(doc, canonical_path(path)) != was:
                 out.append(path)
@@ -1464,6 +1543,9 @@ def diff_lines(changes: Iterable[Mapping[str, Any]], limit: int = 12) -> list[st
     for change in changes:
         before, after = change.get("before"), change.get("after")
         path = str(change.get("path", ""))
+        if team_spec.is_project_path(path):
+            lines.append(team_spec.diff_line(change))
+            continue
         if is_item_path(path):
             lines.append(_item_line(path, before, after))
             continue
@@ -1617,7 +1699,7 @@ def trial_block(path: str) -> str | None:
         before, each change holding only its own paths.
     """
     head = canonical_path(path).split(".", 1)[0]
-    return head if head in blocks.BLOCKS else None
+    return head if head in blocks.BLOCKS or head == team_spec.TEAM else None
 
 
 def trial_blocks(paths: Iterable[str]) -> list[str]:
@@ -1644,11 +1726,16 @@ _UNTRIALABLE_NAMES: Final = {
     "strategy": "strategy",
     "discovery": "discovery",
     "briefs.scout": "Scout's brief",
+    team_spec.PROJECTS: "a project's team",
 }
 _UNTRIALABLE_WHY: Final = {
     blocks.NOT_TRIALABLE_REASON: "are judged on outcomes",
     blocks.NEEDS_DISCOVERY_GUARDS: (
         "are judged on discovery guards, which this server does not measure yet"
+    ),
+    blocks.TOO_FEW_PRS: (
+        "would rarely reach the 3 merged PRs a trial needs (one team merges about one a "
+        "day); trial team changes on a template instead"
     ),
 }
 

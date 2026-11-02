@@ -223,5 +223,154 @@
     "blocked_escalate_s": 1800,
     "quiet_beats": true,
     "stuck_s": 5400
+  },
+  "team": {
+    "projects": {},
+    "templates": [
+      {
+        "builders_at_once": null,
+        "default": true,
+        "id": "standard",
+        "label": "Standard",
+        "roles": [
+          {
+            "count": 1,
+            "model": null,
+            "role": "project_lead",
+            "vendor": null
+          },
+          {
+            "count": 1,
+            "model": null,
+            "role": "ic",
+            "vendor": "claude"
+          },
+          {
+            "count": 1,
+            "model": null,
+            "role": "ic",
+            "vendor": "codex"
+          },
+          {
+            "count": 1,
+            "model": null,
+            "role": "reviewer",
+            "vendor": "codex"
+          },
+          {
+            "count": 1,
+            "model": null,
+            "role": "env_keeper",
+            "vendor": null
+          },
+          {
+            "count": 1,
+            "model": null,
+            "role": "demo",
+            "vendor": null
+          }
+        ],
+        "summary": "A Claude and a Codex builder, a cross-vendor reviewer, an env keeper and a demo agent."
+      },
+      {
+        "builders_at_once": null,
+        "default": false,
+        "id": "pair",
+        "label": "Pair",
+        "roles": [
+          {
+            "count": 1,
+            "model": null,
+            "role": "project_lead",
+            "vendor": null
+          },
+          {
+            "count": 2,
+            "model": null,
+            "role": "ic",
+            "vendor": "claude"
+          },
+          {
+            "count": 1,
+            "model": null,
+            "role": "reviewer",
+            "vendor": "codex"
+          },
+          {
+            "count": 1,
+            "model": null,
+            "role": "env_keeper",
+            "vendor": null
+          },
+          {
+            "count": 1,
+            "model": null,
+            "role": "demo",
+            "vendor": null
+          }
+        ],
+        "summary": "Two Claude builders, a Codex reviewer, an env keeper and a demo agent."
+      },
+      {
+        "builders_at_once": 1,
+        "default": false,
+        "id": "lean",
+        "label": "Lean",
+        "roles": [
+          {
+            "count": 1,
+            "model": null,
+            "role": "project_lead",
+            "vendor": null
+          },
+          {
+            "count": 1,
+            "model": null,
+            "role": "ic",
+            "vendor": "claude"
+          },
+          {
+            "count": 1,
+            "model": null,
+            "role": "reviewer",
+            "vendor": "codex"
+          },
+          {
+            "count": 1,
+            "model": null,
+            "role": "env_keeper",
+            "vendor": null
+          }
+        ],
+        "summary": "One builder, a reviewer and an env keeper; no demo (previews off only)."
+      },
+      {
+        "builders_at_once": null,
+        "default": false,
+        "id": "investigation",
+        "label": "Investigation",
+        "roles": [
+          {
+            "count": 1,
+            "model": null,
+            "role": "project_lead",
+            "vendor": null
+          },
+          {
+            "count": 2,
+            "model": null,
+            "role": "ic",
+            "vendor": "claude"
+          },
+          {
+            "count": 1,
+            "model": null,
+            "role": "reviewer",
+            "vendor": "codex"
+          }
+        ],
+        "summary": "Two Claude builders and a reviewer, no env (for work that needs none)."
+      }
+    ]
   }
 }

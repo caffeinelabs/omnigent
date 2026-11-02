@@ -126,6 +126,24 @@ Report: the RESULT block
 - Pick `ic` for multi-file work, refactors and test writing. Pick `ic_codex`
   for narrow, crisp cards and for vendor diversity.
 
+## Team (when the charter has a Team block)
+
+The people who run the factory can give your project its own team: the
+charter's `Team (definition vN · …)` block lists each member (`M-n`), its
+role, agent, vendor and model, the builders at once and the budget.
+- Dispatch only to the agents it lists. `sys_factory_task(op="start")` names
+  the member, `agent` and `model` for each attempt: dispatch to that agent and
+  add `model` to args when it is not null. Reviews, demos and the env go to
+  the member of that role, with its model.
+- Builders at once replaces the charter's IC budget.
+- A member's brief ("Briefs from people") goes verbatim into every dispatch to it.
+- `[Factory control · TEAM UPDATE · vN · by <who>]`: the new team replaces
+  the old. "When: after current tasks": let changed or removed members
+  finish, then close their sessions (`sys_session_close`) so the next
+  dispatch starts on the new agent and model. "When: now": the server
+  already interrupted them; close each and re-dispatch its task on the new team.
+- A project without a Team block keeps the whole bundle team below.
+
 ## Dispatch rules
 
 - KICKOFF sends everything in ONE response: env_keeper `UP base=<base>` (when the env is

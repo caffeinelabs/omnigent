@@ -15,13 +15,13 @@ from __future__ import annotations
 import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from pydantic import Field, ValidationError
 
 from omnigent.factory import THREAD_IMPROVEMENTS
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE
-from omnigent.server.factory import control, definition, evaluate, events, people, tuning
+from omnigent.server.factory import control, definition, evaluate, events, people, team, tuning
 from omnigent.server.factory.actor import proposal_ref
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError
@@ -47,6 +47,7 @@ class PreviewIn(tuning._Body):
     trial_h: int | None = Field(None, ge=definition.TRIAL_H_MIN, le=definition.TRIAL_H_MAX)
     expected_effect: tuning.EffectIn | None = None
     base_version: int | None = Field(None, ge=1)
+    when: Literal["after_current", "now"] = "after_current"
 
 
 class RestoreIn(tuning._Body):
@@ -140,8 +141,10 @@ def _effects(
     out: list[dict[str, Any]] = []
     paths = [str(d["path"]) for d in diff]
     quiet = [p for p in paths if definition.blocks.in_blocks(p, definition.QUIET_BLOCKS)]
+    teams = [p for p in paths if definition.team_spec.is_team_path(p)]
+    quiet += [p for p in teams if not definition.team_spec.is_project_path(p)]
     rules = [d for d in diff if str(d["path"]).startswith("rules.")]
-    mailed = [p for p in paths if p not in quiet and not p.startswith("rules.")]
+    mailed = [p for p in paths if p not in quiet and not p.startswith("rules.") and p not in teams]
     members = tuning._members(deps, factory_id) if (mailed or rules) else []
     if restore is not None:
         out.append(
@@ -163,8 +166,8 @@ def _effects(
         out.append(
             {
                 "kind": "data",
-                "text": "Product, strategy, discovery, brief and role-default changes are data "
-                "the factory reads when it needs them; nobody is mailed.",
+                "text": "Product, strategy, discovery, brief, role-default and template changes "
+                "are data the factory reads when it needs them; nobody is mailed.",
                 "paths": quiet[:20],
             }
         )
@@ -249,16 +252,47 @@ def _trial_info(
     }
 
 
-def _who(klass: str | None, level: int, owner_only: bool) -> str:
-    head = f"Owners (class {klass})." if klass else "Owners."
+def _who(klass: str | None, level: int, owner_only: bool, *, editors: bool = False) -> str:
+    if editors:
+        head = "Owners and editors (class A: it only narrows a team)."
+    else:
+        head = f"Owners (class {klass})." if klass else "Owners."
     if level >= LEVEL_MANAGE:
         you = " You are an owner, so it applies when you press Apply."
+    elif level >= LEVEL_EDIT and editors:
+        you = " You are an editor, so it applies when you press Apply."
     elif level >= LEVEL_EDIT:
         you = " It waits for an owner: propose it to them."
     else:
         you = " You can look, not change."
     agents = " Agents can only propose it." if owner_only else ""
     return f"{head}{you}{agents}"
+
+
+def _refusals(exc: CockpitError) -> list[dict[str, Any]]:
+    """:returns: The ``blocked`` rows of a refused change (each gate a team change breaks)."""
+    found = exc.extra.get("blocked")
+    if exc.code == "gate_requires_role" and isinstance(found, list):
+        return [
+            {
+                "index": None,
+                "path": str(b.get("path") or ""),
+                "code": exc.code,
+                "message": str(b.get("message") or exc.message),
+                "gate": b.get("gate"),
+                "role": b.get("role"),
+            }
+            for b in found
+            if isinstance(b, Mapping)
+        ]
+    return [
+        {
+            "index": None,
+            "path": str(exc.field or exc.extra.get("item") or ""),
+            "code": exc.code,
+            "message": exc.message,
+        }
+    ]
 
 
 def _parse_all(
@@ -290,26 +324,21 @@ def _preview(
     version_next = (latest.version if latest is not None else resolved.version) + 1
     blocked: list[dict[str, Any]] = []
     ending: list[FactoryProposal] = []
+    after: Mapping[str, Any] = resolved.stored
     if body.restore is not None:
         target = deps.factory_store.get_definition(root.id, body.restore)
         if target is None:
             raise CockpitError(404, "unknown_version", f"no definition v{body.restore}")
         plan = restore_plan(deps, root.id, resolved.stored, target)
-        diff, ending = plan.diff, plan.ending
+        diff, ending, after = plan.diff, plan.ending, plan.after
     else:
         changes, blocked = _parse_all(body.changes)
-        after: Mapping[str, Any] = resolved.stored
         try:
-            after = definition.apply_changes(resolved.stored, changes)
-        except CockpitError as exc:
-            blocked.append(
-                {
-                    "index": None,
-                    "path": str(exc.field or exc.extra.get("item") or ""),
-                    "code": exc.code,
-                    "message": exc.message,
-                }
+            after = definition.apply_changes(
+                resolved.stored, changes, facts=team.facts_lookup(deps, root.id)
             )
+        except CockpitError as exc:
+            blocked += _refusals(exc)
         diff = tuning.preview(definition.diff(resolved.stored, after))
     if body.base_version is not None and body.base_version != resolved.version:
         blocked.append(
@@ -334,27 +363,33 @@ def _preview(
     klass = tuning.diff_class(diff) if diff else None
     owner_only = any(e["owner_only"] for e in entries)
     level = people.viewer_level(deps, root.id, user_id)
+    editor_applies = definition.team_spec.editor_may_apply(diff)
+    can_apply = level >= LEVEL_MANAGE or (level >= LEVEL_EDIT and editor_applies)
+    effects = _effects(
+        deps,
+        root.id,
+        diff,
+        ending=ending,
+        restore=body.restore,
+        version=resolved.version,
+        version_next=version_next,
+    )
+    effects += team.preview_effects(
+        deps, root.id, resolved.stored, after, diff, version_next=version_next, when=body.when
+    )
     return {
         "def_version": resolved.version,
         "version_next": version_next,
         "diff": entries,
         "lines": definition.diff_lines(diff, 50),
         "class": klass,
-        "approvers": ["owners"],
-        "who": _who(klass, level, owner_only),
+        "approvers": ["owners", "editors"] if editor_applies else ["owners"],
+        "who": _who(klass, level, owner_only, editors=editor_applies),
         "owner_only": owner_only,
-        "you_can_apply": level >= LEVEL_MANAGE and bool(diff) and not blocked,
+        "you_can_apply": can_apply and bool(diff) and not blocked,
         "you_can_propose": level >= LEVEL_EDIT,
         "blocked": blocked,
-        "effects": _effects(
-            deps,
-            root.id,
-            diff,
-            ending=ending,
-            restore=body.restore,
-            version=resolved.version,
-            version_next=version_next,
-        ),
+        "effects": effects,
         "rerank": [],
         "trialable": _trial_info(deps, root.id, paths, restore=body.restore, trial_h=body.trial_h),
         "restore": (

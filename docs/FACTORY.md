@@ -821,6 +821,32 @@ before the blocks therefore still reads every version of a factory that has
 not used them; rolling back past them for a factory that has needs a reader
 that ignores unknown blocks.
 
+**Teams** are a block too (`team_spec.py`, `team.py`). `team.templates[]` are
+named shapes (`standard`, every agent of the PL bundle, is the default; `pair`,
+`lean`, `investigation`); `team.projects.<slug>` is one project's own team:
+`template`, `builders_at_once` and `budget_usd` (`null`: the charter's) and
+`members[]` `{id M-n, handle, role, agent, vendor, model}` plus `briefs`
+(`M-n` → text ≤ 1,000). A project without its own team works with the default
+template's shape and keeps today's behaviour; its first change (`replace
+team.projects.<slug>/members/M-2/model`) stores that team as its own, so every
+diff line names a real member, and member numbers are never reused. Removing
+the last member a ready gate needs (a reviewer, an env keeper while the
+charter needs an env, a demo agent while previews are on, the last builder) is
+refused with 422 `gate_requires_role` (Tier 0); the project lead stays.
+`GET …/catalog[?project=]` lists the roles the PL bundle ships, the vendor ·
+models each runs (project leads, env keepers and demo agents run on Claude Code
+only today), the gate each is needed by, $/h estimates from the cost ledger,
+the templates (with the project's locks) and the roles no bundle covers. The
+preview's team effects say the rate while working, the cost to finish against
+the budget, who restarts and when (`when`: `after_current` or `now`, which
+interrupts), the review route and the TEAM UPDATE it sends. A PL whose project
+has its own team gets a `Team` block in its charter and one
+`[Factory control · TEAM UPDATE · vN · by <who>]` per change;
+`sys_factory_task(op="start")` returns the member, `agent` and `model` per
+task (the PL passes `args.model`). Dispatches outside the team are recorded
+(`team.dispatch_outside_spec`) while `OMNIGENT_FACTORY_TEAM_SPEC=warn` (the
+default) and denied by the PL's `team_guard` with `enforce`.
+
 | Paths | Class |
 |---|---|
 | `cadence.*` | A when slower, else B (0 = off is B) |
@@ -835,6 +861,10 @@ that ignores unknown blocks.
 | `discovery.sources.<id>` | A when it only narrows (pause, less budget, fewer roles), else B |
 | `discovery.budgets.*`, `discovery.cadence.*` | A when lower or slower, else B (owners) |
 | other `discovery.*`, `briefs.*`, `role_defaults.*` | B (owners) |
+| `team.templates.*` | B (owners) |
+| `team.projects.<slug>` member added, vendor or model changed, brief | B (owners) |
+| `team.projects.<slug>` member removed or renamed | A (editors apply it) |
+| `team.projects.<slug>.builders_at_once`, `.budget_usd` | A when lower, else B; never a trial |
 
 Only owners apply the owner-only paths (`engine.`, `autonomy.`, `budgets.`,
 and the five blocks), so their class matters only for agents: an agent's
