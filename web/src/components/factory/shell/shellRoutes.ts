@@ -1,15 +1,24 @@
 // Pure routing logic of the factory shell: which page a sub-path is, where the
-// viewer is for presence, and where an old cockpit link (the board's
+// viewer is for presence, where an old cockpit link (the board's
 // `?project=`, `?review=`, `?tab=activity`, the stable preview link's
-// `?pr=…&preview=unavailable`) lands now. Tests pin every legacy shape.
+// `?pr=…&preview=unavailable`) lands now, and how the classic and the new
+// cockpit's addresses map onto each other (`cockpitRedirect`). Tests pin
+// every legacy shape.
 
 import type { PrView } from "@/lib/factoryApi";
 import {
+  DEBUG_VIEWS,
+  type DebugView,
+  STEER_SECTIONS,
+  type SteerSection,
   activityPageHref,
+  debugPageHref,
   factoryPageHref,
   prPageHref,
   projectPageHref,
   projectSection,
+  roomPageHref,
+  steerPageHref,
 } from "../factoryRoutes";
 
 /** The pages the shell routes to, keyed by their first path segment. */
@@ -31,12 +40,21 @@ export type FactoryPageKey =
   | "insights"
   | "improvements"
   | "proposal"
+  | "discovery"
+  | "teams"
+  | "steer"
+  | "debug"
   | "other";
 
 export interface FactoryLocation {
   page: FactoryPageKey;
-  /** The project slug, PR id, settings section or Room thread the page is about. */
+  /**
+   * The project slug, PR id, settings section, Room thread, Discovery view,
+   * Teams tab, Steer section or Debug view the page is about.
+   */
   id: string | null;
+  /** Under a Debug view: the incident ref or the agent's session id. */
+  sub?: string | null;
 }
 
 /**
@@ -45,8 +63,21 @@ export interface FactoryLocation {
  * @example factoryLocation("projects/db-version") // {page: "project", id: "db-version"}
  */
 export function factoryLocation(rest: string | undefined): FactoryLocation {
-  const [first = "", second] = (rest ?? "").split("/").filter(Boolean).map(decodeURIComponent);
+  const [first = "", second, third] = (rest ?? "")
+    .split("/")
+    .filter(Boolean)
+    .map(decodeURIComponent);
   switch (first) {
+    case "discovery":
+      return { page: "discovery", id: second ?? null };
+    case "teams":
+      return { page: "teams", id: second ?? null };
+    case "steer":
+      return { page: "steer", id: second ?? null };
+    case "debug":
+      return third
+        ? { page: "debug", id: second ?? null, sub: third }
+        : { page: "debug", id: second ?? null };
     case "":
       return { page: "overview", id: null };
     case "projects":
@@ -111,6 +142,15 @@ export function presenceLocation(location: FactoryLocation): string | null {
       return `agent:${location.id}`;
     case "incident":
       return `incident:${location.id}`;
+    case "discovery":
+    case "teams":
+      return location.page;
+    case "steer":
+      return location.id ? `steer:${location.id}` : "steer";
+    case "debug":
+      if (location.id === "agent" && location.sub) return `agent:${location.sub}`;
+      if (location.id === "incidents" && location.sub) return `incident:${location.sub}`;
+      return location.id ? `debug:${location.id}` : "debug";
     default:
       return null;
   }
@@ -155,6 +195,14 @@ export function presenceWhere(location: string | null | undefined): string {
       return "Improvements";
     case "proposal":
       return id ? `${id}` : "a proposal";
+    case "discovery":
+      return "Discovery";
+    case "teams":
+      return "Teams";
+    case "steer":
+      return "Steer";
+    case "debug":
+      return "Debug";
     default:
       return kind ?? "here";
   }
@@ -229,4 +277,209 @@ export function legacyFactoryRedirect(
     };
   }
   return null;
+}
+
+// ── Classic and new cockpit addresses ──────────────────────────
+
+/** Which cockpit the viewer sees. */
+export type CockpitMode = "classic" | "v2";
+
+/** The link parameter that carries a cockpit choice (read by `useCockpitV2`, never carried on). */
+const COCKPIT_LINK_PARAM = "cockpit";
+
+function hrefWith(path: string, params: URLSearchParams, drop: readonly string[] = []): string {
+  const rest = new URLSearchParams(params);
+  for (const key of [...drop, COCKPIT_LINK_PARAM]) rest.delete(key);
+  const qs = rest.toString();
+  if (!qs) return path;
+  const [base, hash] = path.split("#");
+  const sep = base!.includes("?") ? "&" : "?";
+  return `${base}${sep}${qs}${hash != null ? `#${hash}` : ""}`;
+}
+
+/** Settings sections that moved to Steer, and where. */
+const SETTINGS_TO_STEER: Readonly<Record<string, SteerSection>> = {
+  autonomy: "budgets",
+  budgets: "budgets",
+  alerts: "alerts",
+  rules: "alerts",
+  definition: "definition",
+};
+
+/** Steer's sections back to where the classic cockpit keeps them. */
+const STEER_TO_SETTINGS: Readonly<Record<Exclude<SteerSection, "versions">, string>> = {
+  budgets: "budgets",
+  alerts: "alerts",
+  definition: "definition",
+};
+
+/** Debug's views back to the classic pages. */
+const DEBUG_TO_CLASSIC: Readonly<Record<DebugView, string>> = {
+  fleet: "agents",
+  timeline: "timeline",
+  activity: "activity",
+  graph: "graph",
+  incidents: "alerts",
+  insights: "insights",
+  agent: "agents",
+};
+
+/**
+ * Where an address of the other cockpit lands in this one, or null when it
+ * belongs here. Query parameters carry over (a consumed `tab` is dropped).
+ *
+ * The new cockpit (spec §2.2): `/overview` → `/`, `/agents` → `/teams/agents`,
+ * `/graph?kind=org` → `/teams`, `/graph` → `/debug/graph`, `/timeline`,
+ * `/activity`, `/insights` → `/debug/<page>`, `/alerts[/<ref>]` →
+ * `/debug/incidents[/<ref>]`, `/decisions` → `/?peek=needs`,
+ * `/improvements?tab=` → `/steer/versions` (Rules → `/steer/alerts`, Findings
+ * → Debug › Incidents and findings), `/improvements/<ref>` →
+ * `/steer/versions?peek=<ref>`, `/settings/{autonomy,budgets}` →
+ * `/steer/budgets`, `/settings/{alerts,rules}` → `/steer/alerts`,
+ * `/settings/definition` → `/steer/definition`, `/room[/<thread>]` → the page
+ * the viewer was on (`from`, else Home) with `?room=<thread>`.
+ *
+ * The classic cockpit maps the new places back to its pages, so a link one
+ * person copied from the new cockpit opens for someone on the classic one; a
+ * link with the Room drawer open (`?room=<thread>`) opens the Room page on it.
+ * A Room link opens over `from` only when that is a page of the same factory.
+ *
+ * @param from - The factory page (path and query) the viewer was on before a Room link.
+ */
+export function cockpitRedirect(
+  factoryId: string,
+  rest: string | undefined,
+  params: URLSearchParams,
+  mode: CockpitMode,
+  from: string | null = null,
+): string | null {
+  const base = factoryPageHref(factoryId);
+  const location = factoryLocation(rest);
+  // Both cockpits.
+  if (location.page === "other" && location.id === "overview") return hrefWith(base, params);
+  if (location.page === "settings" && location.id === "notify") {
+    return hrefWith(`${base}/settings/notifications`, params);
+  }
+  return mode === "v2"
+    ? toNewCockpit(factoryId, location, params, from)
+    : toClassicCockpit(factoryId, location, params);
+}
+
+function toNewCockpit(
+  factoryId: string,
+  location: FactoryLocation,
+  params: URLSearchParams,
+  from: string | null,
+): string | null {
+  const base = factoryPageHref(factoryId);
+  switch (location.page) {
+    case "agents":
+      return hrefWith(`${base}/teams/agents`, params);
+    case "graph":
+      return params.get("kind") === "org"
+        ? hrefWith(`${base}/teams`, params, ["kind"])
+        : hrefWith(debugPageHref(factoryId, "graph"), params);
+    case "timeline":
+    case "activity":
+    case "insights":
+      return hrefWith(debugPageHref(factoryId, location.page), params);
+    case "alerts":
+      return hrefWith(debugPageHref(factoryId, "incidents"), params);
+    case "incident":
+      return hrefWith(debugPageHref(factoryId, "incidents", { ref: location.id }), params);
+    case "decisions":
+      return hrefWith(`${base}?peek=needs`, params, ["peek"]);
+    case "improvements": {
+      const tab = params.get("tab");
+      if (tab === "rules") return hrefWith(steerPageHref(factoryId, "alerts"), params, ["tab"]);
+      if (tab === "findings") {
+        return hrefWith(
+          debugPageHref(factoryId, "incidents", { params: { class: "finding" } }),
+          params,
+          ["tab", "class"],
+        );
+      }
+      return hrefWith(steerPageHref(factoryId, "versions"), params);
+    }
+    case "proposal":
+      return hrefWith(steerPageHref(factoryId, "versions", { peek: location.id ?? "" }), params, [
+        "peek",
+      ]);
+    case "settings": {
+      const section = SETTINGS_TO_STEER[location.id ?? ""];
+      return section ? hrefWith(steerPageHref(factoryId, section), params) : null;
+    }
+    case "room": {
+      // Only a page of this factory (the layout stays mounted across factories).
+      const own =
+        from != null &&
+        (from === base || from.startsWith(`${base}/`) || from.startsWith(`${base}?`));
+      const target = own ? from : base;
+      const [path, query = ""] = target.split("?");
+      const merged = new URLSearchParams(query);
+      for (const [key, value] of params) merged.set(key, value);
+      merged.delete(COCKPIT_LINK_PARAM);
+      merged.set("room", location.id ?? "");
+      return `${path}?${merged.toString()}`;
+    }
+    case "steer":
+      return location.id && (STEER_SECTIONS as readonly string[]).includes(location.id)
+        ? null
+        : hrefWith(steerPageHref(factoryId, "versions"), params);
+    case "debug":
+      return location.id && (DEBUG_VIEWS as readonly string[]).includes(location.id)
+        ? null
+        : hrefWith(debugPageHref(factoryId, "fleet"), params);
+    default:
+      return null;
+  }
+}
+
+function toClassicCockpit(
+  factoryId: string,
+  location: FactoryLocation,
+  params: URLSearchParams,
+): string | null {
+  const base = factoryPageHref(factoryId);
+  // The new cockpit's Room drawer over any page: the classic Room page on that thread.
+  if (params.has("room") && location.page !== "room") {
+    return hrefWith(roomPageHref(factoryId, params.get("room")), params, ["room"]);
+  }
+  switch (location.page) {
+    case "overview":
+      return params.get("peek") === "needs"
+        ? hrefWith(`${base}/decisions`, params, ["peek"])
+        : null;
+    case "discovery":
+      return hrefWith(base, params);
+    case "teams":
+      return hrefWith(`${base}/agents`, params);
+    case "steer": {
+      const section = location.id as SteerSection | null;
+      if (section && section !== "versions" && section in STEER_TO_SETTINGS) {
+        return hrefWith(`${base}/settings/${STEER_TO_SETTINGS[section]}`, params);
+      }
+      const peek = params.get("peek");
+      // A change (C-n) or a finding (F-n): the classic page of either.
+      if (peek && /^[CF]-\d+$/i.test(peek)) {
+        return hrefWith(`${base}/improvements/${encodeURIComponent(peek)}`, params, ["peek"]);
+      }
+      return hrefWith(`${base}/improvements`, params);
+    }
+    case "debug": {
+      const view = (DEBUG_VIEWS as readonly string[]).includes(location.id ?? "")
+        ? (location.id as DebugView)
+        : "fleet";
+      const page = DEBUG_TO_CLASSIC[view];
+      const tail =
+        location.sub && (view === "incidents" || view === "agent")
+          ? `/${encodeURIComponent(location.sub)}`
+          : "";
+      return hrefWith(`${base}/${page}${tail}`, params);
+    }
+    case "settings":
+      return location.id === "integrations" ? hrefWith(`${base}/settings/alerts`, params) : null;
+    default:
+      return null;
+  }
 }

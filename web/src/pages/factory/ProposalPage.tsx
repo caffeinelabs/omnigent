@@ -45,8 +45,10 @@ function Facts({ items }: { items: [string, ReactNode][] }) {
   );
 }
 
-export function ProposalPage() {
-  const { ref = "" } = useParams<{ ref: string }>();
+/** One change; `proposalRef` names it when the page sits in a panel (else the route's `:ref`). */
+export function ProposalPage({ proposalRef }: { proposalRef?: string } = {}) {
+  const params = useParams<{ ref: string }>();
+  const ref = proposalRef ?? params.ref ?? "";
   const { snapshot, nowS, clockOffsetS } = useFactoryShell();
   const fid = snapshot.factory.id;
   const finding = /^F-\d+$/i.test(ref);

@@ -45,6 +45,10 @@ Sections:
   at most waiting on people) and since when.
 - **Health** (``health``): a paused or finished factory with who paused it
   and why, projects that are blocked, failed or paused, and GitHub trouble.
+- **Verdict** (``verdict``): the top bar's dot and one sentence by fixed
+  rules: red when something is broken, amber when things only wait on the
+  viewer, grey when paused, finished or idle, green otherwise; the digest of
+  someone on the new cockpit opens with the same sentence.
 """
 
 from __future__ import annotations
@@ -337,6 +341,45 @@ class HealthBlock(_Model):
     items: list[HealthItem]
 
 
+class VerdictReason(_Model):
+    """
+    One fact behind the verdict's dot, worst first.
+
+    :param kind: ``project`` (a live project stopped), ``agent`` (a lead
+        stopped), ``incident`` (a critical one), ``github``, ``supervisor``,
+        ``waiting`` (what waits on the viewer, one per kind), or ``blocked``
+        (a live project blocked: named, never a colour of its own; last).
+    """
+
+    kind: Literal["project", "agent", "incident", "github", "supervisor", "waiting", "blocked"]
+    text: str
+    href: str
+
+
+class Verdict(_Model):
+    """
+    The top bar's one answer, built from facts by fixed rules (never by an agent).
+
+    Red when something is broken (a live project or a lead stopped, a critical
+    incident, GitHub unreachable, the supervisor failing); amber when nothing
+    is broken and things wait on the viewer; grey when the factory is paused,
+    finished or idle with nothing broken or waiting on the viewer; green
+    otherwise. It never says green while something is broken, and never
+    "smoothly" while a live project is blocked (the sentence names it). The
+    Slack digest of someone on the new cockpit opens with the same sentence.
+
+    :param sentence: e.g. ``"Running, 1 project stopped"`` or ``"Running smoothly"``.
+    :param usd_per_h: The current rate (the header's), when known.
+    :param usd_per_h_alert: The hourly spend alert of the factory, when known.
+    """
+
+    dot: Literal["red", "amber", "green", "grey"]
+    sentence: str
+    reasons: list[VerdictReason]
+    usd_per_h: float | None = None
+    usd_per_h_alert: float | None = None
+
+
 class SummaryCounts(_Model):
     """
     Tallies for badges and the headline.
@@ -359,6 +402,7 @@ class StatusSummary(_Model):
 
     :param headline: One plain line without times, e.g. ``"4 PRs wait on you
         · 1 project in progress"`` or ``"Idle · 2 things wait on you"``.
+    :param verdict: The fact-built dot and sentence of the top bar (see :class:`Verdict`).
     :param generated_at: Server time of the build (epoch seconds).
     """
 
@@ -366,6 +410,7 @@ class StatusSummary(_Model):
     factory_name: str
     generated_at: int
     headline: str
+    verdict: Verdict
     state: Literal["working", "idle", "paused", "done"]
     waiting: list[WaitingItem]
     working: list[WorkingItem]
@@ -394,6 +439,7 @@ class StatusInputs:
     :param notified: Subject -> Slack DM receipts (the snapshot's ``notify.slack`` read).
     :param owners: Project slug -> its ``human_owner`` on the roster: their
         ready PRs wait on them, not on every operator.
+    :param usd_per_h_alert: The factory's hourly spend alert, for the verdict's rate.
     """
 
     snapshot: Mapping[str, Any]
@@ -404,6 +450,7 @@ class StatusInputs:
     cost_cells: Sequence[FactoryCostDaily] = field(default_factory=tuple)
     notified: Mapping[str, Sequence[Mapping[str, Any]]] = field(default_factory=dict)
     owners: Mapping[str, str] = field(default_factory=dict)
+    usd_per_h_alert: float | None = None
 
 
 # ── Small helpers ──────────────────────────────────────────────
@@ -1331,6 +1378,152 @@ def headline(
     return line[:1].upper() + line[1:]
 
 
+# ── The verdict ────────────────────────────────────────────────
+
+
+def _and(parts: Sequence[str]) -> str:
+    """``a``, ``a and b``, ``a, b and c``."""
+    return parts[0] if len(parts) == 1 else f"{', '.join(parts[:-1])} and {parts[-1]}"
+
+
+def _state_word(state: str, health: HealthBlock) -> str:
+    """``Running``, ``Idle``, ``Paused by luka``, ``Finished``."""
+    if state == "paused":
+        first = next((i for i in health.items if i.kind == "paused"), None)
+        return f"Paused by {first.by}" if first is not None and first.by else "Paused"
+    return {"done": "Finished", "idle": "Idle"}.get(state, "Running")
+
+
+def _broken(
+    body: Mapping[str, Any], incidents: Sequence[FactoryIssue], links: _Links
+) -> tuple[list[str], list[VerdictReason]]:
+    """What is broken, as sentence parts and reasons, worst first."""
+    parts: list[str] = []
+    reasons: list[VerdictReason] = []
+    projects = [p for p in body.get("projects") or [] if _is_live(p)]
+    failed = [p for p in projects if p.get("overlay") == "failed"]
+    if failed:
+        parts.append(f"{_plural(len(failed), 'project')} stopped")
+        for project in failed:
+            reasons.append(
+                VerdictReason(
+                    kind="project",
+                    text=f"{project['slug']}: {_problem(project)}",
+                    href=links.project(project["slug"]),
+                )
+            )
+    gone = {p["slug"] for p in failed}
+    live = {p["slug"] for p in projects}
+    dead = [
+        m
+        for m in body.get("members") or []
+        if m.get("is_top_level", True)
+        and (m.get("health") == "dead" or m.get("status") == "failed")
+        and m.get("state") != "done"
+        and (not m.get("project") or (m["project"] in live and m["project"] not in gone))
+    ]
+    if dead:
+        parts.append(f"{_plural(len(dead), 'lead')} stopped")
+        for member in dead:
+            name = _agent_name(member.get("title"), member.get("role"), member.get("project"))
+            text = f"{name or 'a lead'} stopped"
+            reasons.append(
+                VerdictReason(
+                    kind="agent",
+                    text=text[:1].upper() + text[1:],
+                    href=links.agent(str(member["session_id"])),
+                )
+            )
+    critical = [
+        i
+        for i in incidents
+        if i.severity == "critical"
+        and i.status in ("open", "acked")
+        and (i.project_slug or "") not in gone
+    ]
+    if critical:
+        parts.append(f"{_plural(len(critical), 'critical incident')}")
+        for issue in critical:
+            reasons.append(
+                VerdictReason(
+                    kind="incident",
+                    text=f"{issue.ref or f'INC-{issue.number}'}: "
+                    f"{_clip(issue.summary) or 'something went wrong'}",
+                    href=links.incident(issue.number),
+                )
+            )
+    health = body.get("health") or {}
+    if ((health.get("github") or {}).get("state")) == "disconnected":
+        parts.append("GitHub can't be reached")
+        reasons.append(
+            VerdictReason(
+                kind="github",
+                text="GitHub can't be reached, so PR states may be out of date",
+                href=links.base,
+            )
+        )
+    if (health.get("supervisor") or {}).get("ok") is False:
+        parts.append("the supervisor is failing")
+        reasons.append(
+            VerdictReason(
+                kind="supervisor",
+                text="The supervisor's last check failed, so beats and alerts may stop",
+                href=links.base,
+            )
+        )
+    return parts, reasons
+
+
+def verdict(
+    state: str,
+    health: HealthBlock,
+    waiting: Sequence[WaitingItem],
+    inputs: StatusInputs,
+    links: _Links,
+) -> Verdict:
+    """
+    The top bar's dot and sentence, by fixed rules (see :class:`Verdict`).
+
+    :param state: The summary's ``state`` (``working``, ``idle``, ``paused``, ``done``).
+    """
+    body = inputs.snapshot
+    lead = _state_word(state, health)
+    broken, reasons = _broken(body, inputs.incidents, links)
+    mine = [item for item in waiting if item.for_you]
+    for kind in ("decision", "pr", "incident"):
+        of_kind = [item for item in mine if item.kind == kind]
+        if of_kind:
+            reasons.append(
+                VerdictReason(
+                    kind="waiting", text=waits_text(of_kind, "you"), href=of_kind[0].href
+                )
+            )
+    # A blocked live project is not broken (amber still means only "needs you"),
+    # but the calm sentence names it rather than saying "smoothly".
+    blocked = [item for item in health.items if item.kind == "blocked"]
+    reasons += [VerdictReason(kind="blocked", text=item.text, href=item.href) for item in blocked]
+    if broken:
+        dot: Literal["red", "amber", "green", "grey"] = "red"
+        sentence = f"{lead}, {_and(broken)}"
+    elif mine:
+        dot, sentence = "amber", f"{lead}, {waits_text(mine, 'you')}"
+    else:
+        dot = "green" if state == "working" else "grey"
+        calm = [f"{_plural(len(blocked), 'project')} blocked"] if blocked else []
+        if waiting:
+            calm.append(waits_text(waiting, "others"))
+        smooth = "Running smoothly" if state == "working" else lead
+        sentence = f"{lead}, {_and(calm)}" if calm else smooth
+    rate = (body.get("totals") or {}).get("usd_per_h")
+    return Verdict(
+        dot=dot,
+        sentence=sentence,
+        reasons=reasons,
+        usd_per_h=rate if isinstance(rate, int | float) else None,
+        usd_per_h_alert=inputs.usd_per_h_alert,
+    )
+
+
 def build_status_summary(inputs: StatusInputs, *, now: float) -> dict[str, Any]:
     """
     The ``StatusSummary`` JSON of one viewer's factory. Pure and deterministic.
@@ -1371,6 +1564,7 @@ def build_status_summary(inputs: StatusInputs, *, now: float) -> dict[str, Any]:
         factory_name=str(factory.get("name") or ""),
         generated_at=int(now),
         headline=headline(state, counts, health, spend.idle_spend, waiting),
+        verdict=verdict(state, health, waiting, inputs, links),
         state=state,
         waiting=waiting,
         working=working,
@@ -1468,6 +1662,7 @@ def load_inputs(
     :param raw: The unfiltered snapshot (who may see which incident).
     :param readable: The members the viewer reads.
     """
+    from omnigent.server.factory import detectors
     from omnigent.server.factory.people import viewer_level
 
     store = deps.factory_store
@@ -1515,6 +1710,7 @@ def load_inputs(
         pause = controls[-1] if controls else None
     level = LEVEL_OWNER if deps.permission_store is None else viewer_level(deps, root_id, user_id)
     return StatusInputs(
+        usd_per_h_alert=detectors.threshold(root_id, "usd_per_hour_alert"),
         snapshot=body,
         user_id=user_id,
         level=level,
@@ -1593,6 +1789,8 @@ __all__ = [
     "StatusSummary",
     "SummaryCounts",
     "TextPart",
+    "Verdict",
+    "VerdictReason",
     "WaitingItem",
     "WorkingItem",
     "WorkingPr",
@@ -1612,6 +1810,7 @@ __all__ = [
     "summary_for_viewer",
     "summary_from_raw",
     "utc_day",
+    "verdict",
     "waiting_items",
     "waiting_order",
     "waits_text",

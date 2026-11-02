@@ -4,6 +4,10 @@
  * and frames the page with the header, the page tabs, the viewer banner, the
  * Room dock (from 1280 px) and, on a phone, the bottom tabs. ⌘K opens the
  * factory's palette; Share and Add project open from anywhere in it.
+ *
+ * Someone who switched to the new cockpit (the server offers it with
+ * `OMNIGENT_FACTORY_COCKPIT_V2`; each person chooses) gets `CockpitShell`
+ * instead, and each cockpit sends the other's addresses to its own pages.
  */
 
 import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -35,7 +39,9 @@ import { useRoomThreads } from "@/components/factory/room/roomQueries";
 import { useStickyTop } from "@/components/factory/room/useViewportFill";
 import { PhoneTabBar } from "@/components/factory/shell/PhoneTabBar";
 import { PAGE_EXTRA_TOP, pageExtraBottom } from "@/components/factory/shell/scroll";
+import { useCockpitV2 } from "@/components/factory/shell/cockpitV2";
 import {
+  cockpitRedirect,
   factoryLocation,
   legacyFactoryRedirect,
   presenceLocation,
@@ -53,8 +59,9 @@ import { EmptyState } from "@/components/factory/project/projectParts";
 import { Button } from "@/components/ui/button";
 import { useIsMobileViewport } from "@/hooks/useIsMobileViewport";
 import type { FactorySnapshot } from "@/lib/factoryApi";
-import { Link, useNavigate, useParams, useSearchParams } from "@/lib/routing";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "@/lib/routing";
 import { ApiError } from "@/lib/sessionsApi";
+import { CockpitShell } from "./CockpitShell";
 
 /** The dock's height once stuck 1rem under the header, ending 1rem above the bottom. */
 const DOCK_STUCK_HEIGHT =
@@ -94,12 +101,15 @@ function Shell({
   clockOffsetS,
   updatedAt,
   rest,
+  onTryCockpit,
   children,
 }: {
   snapshot: FactorySnapshot;
   clockOffsetS: number;
   updatedAt: number;
   rest: string;
+  /** Offers "Try the new cockpit" (the server lets people switch). */
+  onTryCockpit?: () => void;
   children: ReactNode;
 }) {
   const [params] = useSearchParams();
@@ -136,6 +146,7 @@ function Shell({
       updatedAt,
       location,
       wide,
+      cockpit: "classic",
       openShare: () => setSharing(true),
       openPalette: () => setPalette(true),
       openAddProject: () => setAdding({ title: null }),
@@ -167,6 +178,7 @@ function Shell({
             mineCount={myDecisionCount(split)}
             roomUnread={roomUnread}
             onPalette={() => setPalette(true)}
+            onTryCockpit={onTryCockpit}
           />
         )}
         {viewer?.role === "viewer" && <ViewerBanner factoryId={snapshot.factory.id} />}
@@ -225,6 +237,7 @@ function Shell({
           roomUnread={roomUnread}
           onShare={() => setSharing(true)}
           onPalette={() => setPalette(true)}
+          onTryCockpit={onTryCockpit}
         />
       )}
       <ShareDialog
@@ -267,16 +280,29 @@ export function FactoryLayout({ children }: { children: ReactNode }) {
     minRefreshMs: COCKPIT_MIN_REFRESH_MS,
   });
   const legacy = legacyFactoryRedirect(factoryId, rest, params, data?.prs);
-  const target = legacy && legacy !== "wait" ? legacy.to : null;
+  const cockpit = useCockpitV2(factoryId);
+  const here = useLocation();
+  // The factory page the viewer was on before a Room link (the drawer opens over it).
+  const from = useRef<string | null>(null);
+  const mode = cockpit.on ? "v2" : "classic";
+  const other = legacy ? null : cockpitRedirect(factoryId, rest, params, mode, from.current);
+  // Follow another cockpit's address only once it is known which cockpit this person sees.
+  const switched = legacy ? null : cockpit.loading || (other && !cockpit.settled) ? "wait" : other;
+  const target = legacy && legacy !== "wait" ? legacy.to : switched !== "wait" ? switched : null;
   useEffect(() => {
     if (target) navigate(target, { replace: true });
   }, [navigate, target]);
+  useEffect(() => {
+    if (factoryLocation(rest).page !== "room") from.current = `${here.pathname}${here.search}`;
+  }, [rest, here.pathname, here.search]);
+  const redirecting = Boolean(legacy) || switched != null;
   // A 404 means no factory or no access; one after data (a removed person's
   // refetch) drops the stale page too.
   const missing = error instanceof ApiError && error.status === 404;
   useFactoryPresence(factoryId, presenceLocation(factoryLocation(rest)), {
-    enabled: !legacy && Boolean(data) && !missing,
+    enabled: !redirecting && Boolean(data) && !missing,
   });
+  const v2 = cockpit.on;
   return (
     <PageScroll
       data-testid="factory-page"
@@ -284,16 +310,19 @@ export function FactoryLayout({ children }: { children: ReactNode }) {
       contentClassName="px-4 md:px-6"
       extraTop={PAGE_EXTRA_TOP}
       // Room for the phone's bottom tabs, or the Room button below 1280 px.
-      extraBottom={pageExtraBottom(phone, wide)}
+      extraBottom={pageExtraBottom(phone, wide && !v2)}
     >
-      <Link
-        to="/factory"
-        componentId="factory.page.back"
-        className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
-      >
-        <ArrowLeftIcon aria-hidden className="size-3.5" />
-        Factory
-      </Link>
+      {/* The new cockpit's switcher lists every factory instead. */}
+      {!v2 && (
+        <Link
+          to="/factory"
+          componentId="factory.page.back"
+          className="mb-2 inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeftIcon aria-hidden className="size-3.5" />
+          Factory
+        </Link>
+      )}
       {error && !missing && (
         <FactoryLoadError
           error={error}
@@ -302,7 +331,7 @@ export function FactoryLayout({ children }: { children: ReactNode }) {
           what="this factory"
         />
       )}
-      {(isLoading || legacy) && !missing && <ShellSkeleton />}
+      {(isLoading || redirecting) && !missing && <ShellSkeleton />}
       {missing && (
         <EmptyState
           testId="factory-missing"
@@ -319,11 +348,29 @@ export function FactoryLayout({ children }: { children: ReactNode }) {
           }
         />
       )}
-      {data && !legacy && !missing && (
+      {data && !redirecting && !missing && (
         <FactoryControlsProvider key={data.factory.id} snapshot={data}>
-          <Shell snapshot={data} clockOffsetS={clockOffsetS} updatedAt={updatedAt} rest={rest}>
-            {children}
-          </Shell>
+          {v2 ? (
+            <CockpitShell
+              snapshot={data}
+              clockOffsetS={clockOffsetS}
+              updatedAt={updatedAt}
+              rest={rest}
+              onClassic={() => cockpit.choose("v1")}
+            >
+              {children}
+            </CockpitShell>
+          ) : (
+            <Shell
+              snapshot={data}
+              clockOffsetS={clockOffsetS}
+              updatedAt={updatedAt}
+              rest={rest}
+              onTryCockpit={cockpit.available ? () => cockpit.choose("v2") : undefined}
+            >
+              {children}
+            </Shell>
+          )}
         </FactoryControlsProvider>
       )}
     </PageScroll>

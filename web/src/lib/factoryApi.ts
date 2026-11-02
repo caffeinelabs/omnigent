@@ -248,6 +248,8 @@ export interface PresenceEntry {
 export interface CountsView {
   issues_open: number;
   proposals_pending: number;
+  /** Pending proposals that change how the factory works (not project plans; absent on older servers). */
+  definition_proposals_pending?: number;
   on_trial: number;
 }
 
@@ -2338,7 +2340,12 @@ export interface NotifySettings {
   /** IANA zone; null means UTC until set. */
   tz: string | null;
   hold_while_active: boolean;
+  /** The person's cockpit choice in this factory (absent on older servers). */
+  ui?: { cockpit: CockpitChoice | null };
 }
+
+/** The classic cockpit (`v1`) or the new one (`v2`). */
+export type CockpitChoice = "v1" | "v2";
 
 /** The caller's own Slack link. */
 export interface SlackLinkView {
@@ -3419,6 +3426,27 @@ export async function putNotifyMe(
   update: Partial<NotifySettings>,
 ): Promise<NotifyMeView> {
   return readJson(await postJson(factoryUrl(factoryId, "/notify/me"), update, "PUT"));
+}
+
+/** Your cockpit choices in this factory (`notify/me/ui`; 409 when you are not on the roster). */
+export interface CockpitPrefsView {
+  cockpit: CockpitChoice | null;
+}
+
+/** Your cockpit choices: a small read (the roster row only), made on every page load. */
+export async function fetchCockpitPrefs(
+  factoryId: string,
+  signal?: AbortSignal,
+): Promise<CockpitPrefsView> {
+  return readJson(await authenticatedFetch(factoryUrl(factoryId, "/notify/me/ui"), { signal }));
+}
+
+/** Switch your own cockpit in this factory. */
+export async function putCockpitPrefs(
+  factoryId: string,
+  update: CockpitPrefsView,
+): Promise<CockpitPrefsView> {
+  return readJson(await postJson(factoryUrl(factoryId, "/notify/me/ui"), update, "PUT"));
 }
 
 /** Find your Slack account by member ID or email; with `send_code`, DM it a code. */

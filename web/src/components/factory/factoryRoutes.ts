@@ -1,6 +1,7 @@
 // Web paths of the factory pages. Every primary object has its own page under
 // `/factory/<fid>`: the Overview, Projects, a project, a PR, Activity and
 // Settings. The project page's sections are anchors (`#demos`), not tabs.
+// The new cockpit adds its places (Discovery, Teams, Steer) and Debug.
 
 /** The project page's sections, in page order; Overview is the top of the page. */
 export const PROJECT_SECTIONS = [
@@ -37,7 +38,45 @@ export const SETTINGS_SECTIONS = [
   "rules",
   "definition",
 ] as const;
-export type SettingsSection = (typeof SETTINGS_SECTIONS)[number];
+
+/** The new cockpit's Settings: personal and access only (the rest moved to Steer). */
+export const SETTINGS_V2_SECTIONS = ["people", "notifications", "integrations"] as const;
+export type SettingsSection =
+  (typeof SETTINGS_SECTIONS)[number] | (typeof SETTINGS_V2_SECTIONS)[number];
+
+/** The new cockpit's places, in tab order (`/` is Home). */
+export const COCKPIT_PLACES = ["home", "discovery", "projects", "teams", "steer"] as const;
+export type CockpitPlace = (typeof COCKPIT_PLACES)[number];
+
+/** Discovery's views (`/discovery/<view>`; Opportunities when omitted). */
+export const DISCOVERY_VIEWS = [
+  "opportunities",
+  "flow",
+  "map",
+  "impact",
+  "signals",
+  "hunches",
+] as const;
+export type DiscoveryView = (typeof DISCOVERY_VIEWS)[number];
+
+/**
+ * Steer's sections the cockpit has today (`/steer/<section>`): how the
+ * factory runs, its budgets, alerts and rules, and its versions and trials.
+ */
+export const STEER_SECTIONS = ["versions", "budgets", "alerts", "definition"] as const;
+export type SteerSection = (typeof STEER_SECTIONS)[number];
+
+/** Debug's views (`/debug/<view>`): today's operator pages, one level down. */
+export const DEBUG_VIEWS = [
+  "fleet",
+  "timeline",
+  "activity",
+  "graph",
+  "incidents",
+  "insights",
+  "agent",
+] as const;
+export type DebugView = (typeof DEBUG_VIEWS)[number];
 
 /** The Improvements page's tabs (`?tab=`), On trial first. */
 export const IMPROVEMENT_TABS = [
@@ -174,6 +213,34 @@ export function alertPageHref(factoryId: string, ref: string): string {
 /** `/factory/<fid>/settings/<section>`. */
 export function settingsPageHref(factoryId: string, section: SettingsSection = "people"): string {
   return `${factoryPageHref(factoryId)}/settings/${section}`;
+}
+
+/** `/factory/<fid>/discovery[/<view>]`. */
+export function discoveryPageHref(factoryId: string, view?: DiscoveryView): string {
+  const tail = view && view !== "opportunities" ? `/${view}` : "";
+  return `${factoryPageHref(factoryId)}/discovery${tail}`;
+}
+
+/** `/factory/<fid>/steer/<section>` with an optional query (`?tab=`, `?peek=C-4`). */
+export function steerPageHref(
+  factoryId: string,
+  section: SteerSection = "versions",
+  params?: Record<string, string>,
+): string {
+  return withQuery(`${factoryPageHref(factoryId)}/steer/${section}`, params);
+}
+
+/**
+ * `/factory/<fid>/debug/<view>[/<ref>]`: an incident (`incidents/12`) or an
+ * agent's depth (`agent/<sid>`) by `ref`, with the view's own query.
+ */
+export function debugPageHref(
+  factoryId: string,
+  view: DebugView = "fleet",
+  options: { ref?: string | null; params?: Record<string, string> } = {},
+): string {
+  const tail = options.ref ? `/${enc(options.ref)}` : "";
+  return withQuery(`${factoryPageHref(factoryId)}/debug/${view}${tail}`, options.params);
 }
 
 /** `/factory/<fid>/room/<thread>` (the Room page; the thread is optional). */

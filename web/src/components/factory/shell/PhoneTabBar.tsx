@@ -2,6 +2,9 @@
  * The factory's bottom tabs on a phone: Room · Needs you · Projects · More.
  * More opens a sheet with the other pages and the shell's actions (Share,
  * Jump or act). It sits above the OS inset; pages leave room for it.
+ *
+ * The new cockpit's bar has its five places instead (`CockpitPhoneTabBar`);
+ * the Room, search and the rest sit in its top bar.
  */
 
 import { useState } from "react";
@@ -33,6 +36,7 @@ import {
 } from "@/components/ui/sheet";
 import { Link, useNavigate } from "@/lib/routing";
 import { cn } from "@/lib/utils";
+import { COCKPIT_TABS, cockpitPlaceOf } from "./FactoryTabs";
 import {
   activityPageHref,
   agentsPageHref,
@@ -130,6 +134,7 @@ export function PhoneTabBar({
   roomUnread = 0,
   onShare,
   onPalette,
+  onTryCockpit,
 }: {
   factoryId: string;
   location: FactoryLocation;
@@ -139,6 +144,8 @@ export function PhoneTabBar({
   roomUnread?: number;
   onShare: () => void;
   onPalette: () => void;
+  /** Offers "Try the new cockpit" in More (when the server lets people switch). */
+  onTryCockpit?: () => void;
 }) {
   const [more, setMore] = useState(false);
   const navigate = useNavigate();
@@ -277,9 +284,56 @@ export function PhoneTabBar({
             >
               All factories
             </button>
+            {onTryCockpit && (
+              <button
+                type="button"
+                onClick={() => {
+                  close();
+                  onTryCockpit();
+                }}
+                data-testid="factory-phone-try-cockpit"
+                className="flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2.5 text-left text-ui text-muted-foreground hover:bg-muted"
+              >
+                Try the new cockpit
+              </button>
+            )}
           </SheetBody>
         </SheetContent>
       </Sheet>
     </>
+  );
+}
+
+/** The new cockpit's bottom bar on a phone: Home (Needs you count), Discovery, Projects, Teams, Steer. */
+export function CockpitPhoneTabBar({
+  factoryId,
+  location,
+  needsYou,
+}: {
+  factoryId: string;
+  location: FactoryLocation;
+  /** What waits on the viewer (Home's badge). */
+  needsYou: number;
+}) {
+  const active = cockpitPlaceOf(location);
+  return (
+    <nav
+      aria-label="Cockpit"
+      data-testid="cockpit-phone-tabs"
+      className="fixed inset-x-0 z-30 flex h-14 items-stretch border-t border-border bg-background/95 backdrop-blur-md md:hidden"
+      style={{ bottom: "var(--omnigent-inset-bottom, 0px)" }}
+    >
+      {COCKPIT_TABS.map((tab) => (
+        <Tab
+          key={tab.key}
+          to={tab.href(factoryId)}
+          label={tab.label}
+          icon={tab.icon}
+          active={tab.key === active}
+          badge={tab.key === "home" ? needsYou : undefined}
+          testId={`cockpit-phone-${tab.key}`}
+        />
+      ))}
+    </nav>
   );
 }

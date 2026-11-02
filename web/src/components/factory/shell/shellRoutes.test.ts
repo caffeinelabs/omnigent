@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { liveRunSnapshot } from "../__fixtures__/liveRun";
 import {
+  type CockpitMode,
+  cockpitRedirect,
   factoryLocation,
   findPr,
   legacyFactoryRedirect,
@@ -35,6 +37,14 @@ describe("factoryLocation", () => {
     ["improvements", { page: "improvements", id: null }],
     ["improvements/C-14", { page: "proposal", id: "C-14" }],
     ["settings/budgets", { page: "settings", id: "budgets" }],
+    ["discovery", { page: "discovery", id: null }],
+    ["discovery/flow", { page: "discovery", id: "flow" }],
+    ["teams/bench", { page: "teams", id: "bench" }],
+    ["steer/budgets", { page: "steer", id: "budgets" }],
+    ["debug", { page: "debug", id: null }],
+    ["debug/timeline", { page: "debug", id: "timeline" }],
+    ["debug/incidents/12", { page: "debug", id: "incidents", sub: "12" }],
+    ["debug/agent/abc", { page: "debug", id: "agent", sub: "abc" }],
     ["nowhere", { page: "other", id: "nowhere" }],
   ])("reads %j", (rest, expected) => {
     expect(factoryLocation(rest)).toEqual(expected);
@@ -138,5 +148,184 @@ describe("findPr", () => {
     expect(findPr(prs, PR_9630)?.number).toBe(9630);
     expect(findPr(prs, "9631")?.number).toBe(9631);
     expect(findPr(prs, "nope")).toBeNull();
+  });
+});
+
+describe("cockpitRedirect", () => {
+  const BASE = `/factory/${FID}`;
+  function land(rest: string, query: string, mode: CockpitMode, from: string | null = null) {
+    return cockpitRedirect(FID, rest, new URLSearchParams(query), mode, from);
+  }
+
+  // Spec §2.2: every address of the classic cockpit lands somewhere in the new one.
+  it.each([
+    ["overview", "", `${BASE}`],
+    ["agents", "", `${BASE}/teams/agents`],
+    [
+      "agents",
+      "view=looping&q=state%3Arunning",
+      `${BASE}/teams/agents?view=looping&q=state%3Arunning`,
+    ],
+    ["graph", "kind=org", `${BASE}/teams`],
+    ["graph", "", `${BASE}/debug/graph`],
+    ["graph", "kind=bus&scope=db-version", `${BASE}/debug/graph?kind=bus&scope=db-version`],
+    [
+      "timeline",
+      "focus=db-version&at=1700000000000",
+      `${BASE}/debug/timeline?focus=db-version&at=1700000000000`,
+    ],
+    ["activity", "", `${BASE}/debug/activity`],
+    ["insights", "window=7d", `${BASE}/debug/insights?window=7d`],
+    ["alerts", "class=finding", `${BASE}/debug/incidents?class=finding`],
+    ["alerts/12", "", `${BASE}/debug/incidents/12`],
+    ["alerts/F-7", "", `${BASE}/debug/incidents/F-7`],
+    ["decisions", "", `${BASE}?peek=needs`],
+    ["decisions", "decision=D-41", `${BASE}?peek=needs&decision=D-41`],
+    ["improvements", "", `${BASE}/steer/versions`],
+    ["improvements", "tab=history", `${BASE}/steer/versions?tab=history`],
+    ["improvements", "tab=proposed", `${BASE}/steer/versions?tab=proposed`],
+    ["improvements", "tab=definition", `${BASE}/steer/versions?tab=definition`],
+    ["improvements", "tab=rules", `${BASE}/steer/alerts`],
+    ["improvements", "tab=findings", `${BASE}/debug/incidents?class=finding`],
+    ["improvements/C-14", "", `${BASE}/steer/versions?peek=C-14`],
+    ["settings/autonomy", "", `${BASE}/steer/budgets`],
+    ["settings/budgets", "", `${BASE}/steer/budgets`],
+    ["settings/alerts", "", `${BASE}/steer/alerts`],
+    ["settings/rules", "", `${BASE}/steer/alerts`],
+    ["settings/definition", "", `${BASE}/steer/definition`],
+    ["settings/notify", "", `${BASE}/settings/notifications`],
+    ["room", "", `${BASE}?room=`],
+    ["room/project%3Adb-version", "", `${BASE}?room=project%3Adb-version`],
+    ["steer", "", `${BASE}/steer/versions`],
+    ["steer/nowhere", "", `${BASE}/steer/versions`],
+    ["debug", "", `${BASE}/debug/fleet`],
+  ])("lands /%s?%s in the new cockpit", (rest, query, expected) => {
+    expect(land(rest, query, "v2")).toBe(expected);
+  });
+
+  it("never carries a ?cockpit= link on: the switch reads it once", () => {
+    expect(land("agents", "cockpit=v2&q=x", "v2")).toBe(`${BASE}/teams/agents?q=x`);
+    expect(land("teams", "cockpit=v2", "classic")).toBe(`${BASE}/agents`);
+    expect(land("room/factory", "cockpit=v2", "v2", `${BASE}/projects`)).toBe(
+      `${BASE}/projects?room=factory`,
+    );
+  });
+
+  it("opens a Room link over the page the viewer was on", () => {
+    expect(land("room/factory", "", "v2", `${BASE}/projects?view=board`)).toBe(
+      `${BASE}/projects?view=board&room=factory`,
+    );
+    expect(land("room", "", "v2", `${BASE}/projects/db-version?room=old`)).toBe(
+      `${BASE}/projects/db-version?room=`,
+    );
+    expect(land("room/factory", "", "v2", `${BASE}?view=board`)).toBe(
+      `${BASE}?view=board&room=factory`,
+    );
+  });
+
+  it("opens a Room link of another factory over that factory's Home, not this page", () => {
+    const other = "/factory/0123456789abcdef0123456789abcdef";
+    expect(land("room/factory", "", "v2", `${other}/projects?view=board`)).toBe(
+      `${BASE}?room=factory`,
+    );
+    // A factory id that only starts like this one is another factory too.
+    expect(land("room/factory", "", "v2", `${BASE}0/projects`)).toBe(`${BASE}?room=factory`);
+  });
+
+  it.each([
+    "",
+    "projects",
+    "projects/db-version",
+    `prs/${PR_9630}`,
+    "agents/abc",
+    "discovery",
+    "discovery/flow",
+    "teams",
+    "teams/agents",
+    "steer/versions",
+    "steer/budgets",
+    "steer/alerts",
+    "steer/definition",
+    "debug/fleet",
+    "debug/timeline",
+    "debug/incidents/12",
+    "debug/agent/abc",
+    "settings/people",
+    "settings/notifications",
+    "settings/integrations",
+  ])("keeps the new cockpit's own /%s", (rest) => {
+    expect(land(rest, "", "v2")).toBeNull();
+  });
+
+  // A link someone copied from the new cockpit opens for a person on the classic one.
+  it.each([
+    ["discovery/flow", "", `${BASE}`],
+    ["teams", "", `${BASE}/agents`],
+    ["teams/agents", "q=sonnet", `${BASE}/agents?q=sonnet`],
+    ["steer", "", `${BASE}/improvements`],
+    ["steer/versions", "tab=history", `${BASE}/improvements?tab=history`],
+    ["steer/versions", "peek=C-14", `${BASE}/improvements/C-14`],
+    ["steer/versions", "peek=F-3", `${BASE}/improvements/F-3`],
+    // The Room drawer over any page opens the classic Room page on that thread.
+    ["projects/db-version", "room=project%3Adb-version", `${BASE}/room/project%3Adb-version`],
+    ["", "room=factory", `${BASE}/room/factory`],
+    ["projects", "room=", `${BASE}/room`],
+    ["teams", "room=factory&q=x", `${BASE}/room/factory?q=x`],
+    ["steer/budgets", "", `${BASE}/settings/budgets`],
+    ["steer/alerts", "", `${BASE}/settings/alerts`],
+    ["steer/definition", "", `${BASE}/settings/definition`],
+    ["debug", "", `${BASE}/agents`],
+    ["debug/fleet", "", `${BASE}/agents`],
+    ["debug/timeline", "focus=x", `${BASE}/timeline?focus=x`],
+    ["debug/activity", "", `${BASE}/activity`],
+    ["debug/graph", "kind=bus", `${BASE}/graph?kind=bus`],
+    ["debug/incidents", "", `${BASE}/alerts`],
+    ["debug/incidents/12", "", `${BASE}/alerts/12`],
+    ["debug/insights", "", `${BASE}/insights`],
+    ["debug/agent/abc", "tab=mail", `${BASE}/agents/abc?tab=mail`],
+    ["settings/integrations", "", `${BASE}/settings/alerts`],
+    ["settings/notify", "", `${BASE}/settings/notifications`],
+    ["", "peek=needs&decision=D-4", `${BASE}/decisions?decision=D-4`],
+    ["overview", "", `${BASE}`],
+  ])("lands /%s?%s in the classic cockpit", (rest, query, expected) => {
+    expect(land(rest, query, "classic")).toBe(expected);
+  });
+
+  it.each([
+    "",
+    "projects",
+    "agents",
+    "agents/abc",
+    "timeline",
+    "activity",
+    "graph",
+    "alerts/12",
+    "decisions",
+    "improvements",
+    "improvements/C-14",
+    "insights",
+    "room/factory",
+    "settings/budgets",
+  ])("keeps the classic cockpit's own /%s", (rest) => {
+    expect(land(rest, "", "classic")).toBeNull();
+  });
+
+  it("names the new places for presence, in the server's pattern", () => {
+    const pattern = /^[a-z][a-z_]{0,31}(?::[A-Za-z0-9_.:#!@/+-]{1,96})?$/;
+    const cases: [string, string][] = [
+      ["discovery", "discovery"],
+      ["teams/bench", "teams"],
+      ["steer/budgets", "steer:budgets"],
+      ["debug/timeline", "debug:timeline"],
+      ["debug/agent/abc", "agent:abc"],
+      ["debug/incidents/12", "incident:12"],
+    ];
+    for (const [rest, expected] of cases) {
+      const where = presenceLocation(factoryLocation(rest));
+      expect(where).toBe(expected);
+      expect(where).toMatch(pattern);
+    }
+    expect(presenceWhere("steer:budgets")).toBe("Steer");
+    expect(presenceWhere("debug:timeline")).toBe("Debug");
   });
 });

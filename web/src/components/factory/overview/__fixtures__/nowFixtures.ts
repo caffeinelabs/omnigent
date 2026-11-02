@@ -24,6 +24,8 @@ import type {
   StatusSpend,
   StatusSummary,
   StatusTextPart,
+  StatusVerdict,
+  StatusVerdictReason,
   StatusWaitingItem,
   StatusWorkingItem,
 } from "@/lib/factoryStatusApi";
@@ -896,6 +898,138 @@ function headline(
   return line.slice(0, 1).toUpperCase() + line.slice(1);
 }
 
+// ── The verdict ────────────────────────────────────────────────
+
+function and(parts: readonly string[]): string {
+  return parts.length === 1 ? parts[0]! : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+}
+
+function stateWord(state: StatusSummary["state"], health: StatusHealth): string {
+  if (state === "paused") {
+    const first = health.items.find((i) => i.kind === "paused");
+    return first?.by ? `Paused by ${first.by}` : "Paused";
+  }
+  return state === "done" ? "Finished" : state === "idle" ? "Idle" : "Running";
+}
+
+function broken(
+  snapshot: FactorySnapshot,
+  incidents: readonly IssueView[],
+): [string[], StatusVerdictReason[]] {
+  const fid = snapshot.factory.id;
+  const parts: string[] = [];
+  const reasons: StatusVerdictReason[] = [];
+  const projects = snapshot.projects.filter(isLive);
+  const failed = projects.filter((p) => p.overlay === "failed");
+  if (failed.length) {
+    parts.push(`${plural(failed.length, "project")} stopped`);
+    for (const project of failed) {
+      reasons.push({
+        kind: "project",
+        text: `${project.slug}: ${problem(project)}`,
+        href: projectPageHref(fid, project.slug),
+      });
+    }
+  }
+  const gone = new Set(failed.map((p) => p.slug));
+  const live = new Set(projects.map((p) => p.slug));
+  const dead = snapshot.members.filter(
+    (m) =>
+      m.is_top_level !== false &&
+      (m.health === "dead" || m.status === "failed") &&
+      m.state !== "done" &&
+      (!m.project || (live.has(m.project) && !gone.has(m.project))),
+  );
+  if (dead.length) {
+    parts.push(`${plural(dead.length, "lead")} stopped`);
+    for (const member of dead) {
+      const text = `${agentName(member.title, member.role, member.project) ?? "a lead"} stopped`;
+      reasons.push({
+        kind: "agent",
+        text: text.slice(0, 1).toUpperCase() + text.slice(1),
+        href: agentPageHref(fid, member.session_id),
+      });
+    }
+  }
+  const critical = incidents.filter(
+    (i) =>
+      i.severity === "critical" &&
+      (i.status === "open" || i.status === "acked") &&
+      !gone.has(i.project_slug ?? ""),
+  );
+  if (critical.length) {
+    parts.push(plural(critical.length, "critical incident"));
+    for (const issue of critical) {
+      reasons.push({
+        kind: "incident",
+        text: `${issue.ref ?? `INC-${issue.number}`}: ${clip(issue.summary) ?? "something went wrong"}`,
+        href: alertPageHref(fid, `INC-${issue.number}`),
+      });
+    }
+  }
+  if (snapshot.health?.github?.state === "disconnected") {
+    parts.push("GitHub can't be reached");
+    reasons.push({
+      kind: "github",
+      text: "GitHub can't be reached, so PR states may be out of date",
+      href: factoryPageHref(fid),
+    });
+  }
+  if (snapshot.health?.supervisor?.ok === false) {
+    parts.push("the supervisor is failing");
+    reasons.push({
+      kind: "supervisor",
+      text: "The supervisor's last check failed, so beats and alerts may stop",
+      href: factoryPageHref(fid),
+    });
+  }
+  return [parts, reasons];
+}
+
+function verdictOf(
+  snapshot: FactorySnapshot,
+  state: StatusSummary["state"],
+  health: StatusHealth,
+  waiting: readonly StatusWaitingItem[],
+  incidents: readonly IssueView[],
+  usdPerHAlert: number | null,
+): StatusVerdict {
+  const lead = stateWord(state, health);
+  const [parts, reasons] = broken(snapshot, incidents);
+  const mine = waiting.filter((item) => item.for_you);
+  for (const kind of ["decision", "pr", "incident"] as const) {
+    const ofKind = mine.filter((item) => item.kind === kind);
+    if (ofKind.length) {
+      reasons.push({ kind: "waiting", text: waitsText(ofKind, "you"), href: ofKind[0]!.href });
+    }
+  }
+  // A blocked live project is not broken, but the calm sentence names it.
+  const blocked = health.items.filter((item) => item.kind === "blocked");
+  for (const item of blocked) reasons.push({ kind: "blocked", text: item.text, href: item.href });
+  let dot: StatusVerdict["dot"];
+  let sentence: string;
+  if (parts.length) {
+    dot = "red";
+    sentence = `${lead}, ${and(parts)}`;
+  } else if (mine.length) {
+    dot = "amber";
+    sentence = `${lead}, ${waitsText(mine, "you")}`;
+  } else {
+    dot = state === "working" ? "green" : "grey";
+    const calm = blocked.length ? [`${plural(blocked.length, "project")} blocked`] : [];
+    if (waiting.length) calm.push(waitsText(waiting, "others"));
+    const smooth = state === "working" ? "Running smoothly" : lead;
+    sentence = calm.length ? `${lead}, ${and(calm)}` : smooth;
+  }
+  return {
+    dot,
+    sentence,
+    reasons,
+    usd_per_h: snapshot.totals.usd_per_h ?? null,
+    usd_per_h_alert: usdPerHAlert,
+  };
+}
+
 /**
  * The "Now" the server would build for `snapshot`'s viewer (fixtures only):
  * open decisions, ready PRs and warning-or-worse `incidents` that wait; live
@@ -912,6 +1046,8 @@ export function statusSummaryOf(
     notified?: Readonly<Record<string, readonly NotifiedView[]>>;
     /** Project slug -> its human owner (their ready PRs wait on them). */
     owners?: Readonly<Record<string, string>>;
+    /** The factory's hourly spend alert (the verdict's rate). */
+    usdPerHAlert?: number | null;
   } = {},
 ): StatusSummary {
   const nowS = snapshot.server_time;
@@ -948,6 +1084,7 @@ export function statusSummaryOf(
     factory_name: snapshot.factory.name,
     generated_at: nowS,
     headline: headline(state, counts, health, spend.idle_spend, waiting),
+    verdict: verdictOf(snapshot, state, health, waiting, incidents, options.usdPerHAlert ?? null),
     state,
     waiting,
     working,

@@ -92,7 +92,8 @@ describe("the new cockpit switch", () => {
   it("links back to Teams from the fleet once this person switched", async () => {
     window.localStorage.setItem(COCKPIT_STORAGE_KEY, "v2");
     serve(true);
-    renderAt("/agents");
+    // The new cockpit keeps the fleet table in Debug (`/agents` lands on Teams › All agents).
+    renderAt("/debug/fleet");
     fireEvent.click(await screen.findByTestId("back-to-teams"));
     await screen.findByTestId("factory-teams-page");
     expect(location).toBe(`${BASE}/teams`);

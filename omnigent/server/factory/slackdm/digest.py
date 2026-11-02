@@ -6,7 +6,9 @@ Waiting on you, In progress, Spend and Next come from the card's own builder
 what they may read (the snapshot's ``readable_for``: hidden projects never
 appear). The digest adds the last 24 h's counts, factory-wide budget lines
 for owners and operators who read everything, and Sentinel's newest retro.
-It is skipped when nothing happened and nothing is waiting.
+It is skipped when nothing happened and nothing is waiting. Someone who
+switched to the new cockpit (offered with ``OMNIGENT_FACTORY_COCKPIT_V2``)
+also gets its top bar's verdict sentence above the headline.
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Final
 
+from omnigent.factory import cockpit_v2_enabled
 from omnigent.server.factory import issues, status_summary
 from omnigent.server.factory.slackdm import prefs as prefs_mod
 from omnigent.server.factory.slackdm import rules
@@ -344,6 +347,11 @@ class Digest:
     waiting: int = 0
 
 
+def sees_cockpit_v2(person: Person) -> bool:
+    """:returns: The server offers the new cockpit and *person* switched to it."""
+    return cockpit_v2_enabled() and person.prefs.ui.cockpit == "v2"
+
+
 def build_digest(
     deps: FactoryDeps,
     ctx: FactoryCtx,
@@ -376,6 +384,10 @@ def build_digest(
     )
     top = [head]
     if summary is not None:
+        # On the new cockpit, its verdict first (the same fact-built sentence as its top bar).
+        sentence = (summary.get("verdict") or {}).get("sentence")
+        if sentence and sees_cockpit_v2(person):
+            top.append(f"*{esc(sentence, 160)}*")
         top.append(esc(summary["headline"], 200))
     # Each heading starts a section of its own (sections split between lines,
     # never inside a link), so a busy factory's digest keeps every heading.
@@ -508,6 +520,7 @@ __all__ = [
     "lead_line",
     "next_line",
     "progress_lines",
+    "sees_cockpit_v2",
     "settings_line",
     "spend_line",
     "summary_for",

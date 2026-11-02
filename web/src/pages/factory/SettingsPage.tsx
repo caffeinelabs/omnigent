@@ -6,6 +6,10 @@
  * settings, "Run retro now"). Every save is `PUT …/definition`: an applied,
  * human-authored `C-n` in History that one click reverts. Viewers and
  * operators see the values read-only.
+ *
+ * In the new cockpit Settings is personal and access only: People,
+ * Notifications and Slack, and Integrations (the Slack app and webhook); how
+ * the factory works moved to Steer, which reuses `DefinitionSections`.
  */
 
 import { Navigate } from "react-router-dom";
@@ -16,12 +20,14 @@ import {
   GaugeIcon,
   HistoryIcon,
   type LucideIcon,
+  PlugIcon,
   UsersIcon,
   WalletIcon,
 } from "lucide-react";
 import { FactoryLoadError } from "@/components/factory/FactoryLoadError";
 import {
   SETTINGS_SECTIONS,
+  SETTINGS_V2_SECTIONS,
   type SettingsSection,
   improvementsPageHref,
   settingsPageHref,
@@ -36,6 +42,7 @@ import {
   ALERT_GROUPS,
   AUTONOMY_GROUPS,
   BUDGET_GROUPS,
+  type FieldGroup,
   OTHER_GROUPS,
 } from "@/components/factory/settings/settingsModel";
 import { SlackAppCard } from "@/components/factory/settings/SlackAppCard";
@@ -52,16 +59,25 @@ const SECTION: Record<SettingsSection, { label: string; icon: LucideIcon; hint: 
   alerts: { label: "Alerts", icon: BellIcon, hint: "Thresholds and Slack" },
   rules: { label: "Rules", icon: BookTextIcon, hint: "Advisory text per role" },
   definition: { label: "Definition", icon: HistoryIcon, hint: "Versions, bundles, cadence" },
+  integrations: { label: "Integrations", icon: PlugIcon, hint: "The Slack app and webhook" },
 };
 
-function SectionNav({ factoryId, active }: { factoryId: string; active: SettingsSection }) {
+function SectionNav({
+  factoryId,
+  active,
+  sections,
+}: {
+  factoryId: string;
+  active: SettingsSection;
+  sections: readonly SettingsSection[];
+}) {
   return (
     <nav
       aria-label="Settings sections"
       data-testid="settings-nav"
       className="flex min-w-0 gap-1 md:sticky md:top-2 md:w-52 md:shrink-0 md:flex-col max-md:flex-wrap"
     >
-      {SETTINGS_SECTIONS.map((key) => {
+      {sections.map((key) => {
         const { label, icon: Icon } = SECTION[key];
         const on = key === active;
         return (
@@ -88,17 +104,40 @@ function SectionNav({ factoryId, active }: { factoryId: string; active: Settings
 }
 
 /** The sections that are not definition forms. */
-const OWN_SECTIONS: ReadonlySet<SettingsSection> = new Set(["people", "notifications"]);
+const OWN_SECTIONS: ReadonlySet<SettingsSection> = new Set([
+  "people",
+  "notifications",
+  "integrations",
+]);
 
-function DefinitionSections({
-  section,
-}: {
-  section: Exclude<SettingsSection, "people" | "notifications">;
-}) {
-  const { snapshot, nowS } = useFactoryShell();
+/** The Slack app (DMs) and the set-only Slack webhook. */
+function Integrations({ factoryId }: { factoryId: string }) {
+  return (
+    <div className="flex min-w-0 flex-col gap-4" data-testid="settings-integrations">
+      <SlackAppCard factoryId={factoryId} />
+      <SlackWebhookCard factoryId={factoryId} />
+    </div>
+  );
+}
+
+/** Groups of definition fields as one form with one save bar (Steer joins sections this way). */
+export function DefinitionGroups({ groups, testId }: { groups: FieldGroup[]; testId: string }) {
+  const { snapshot } = useFactoryShell();
   const fid = snapshot.factory.id;
   const definition = useFactoryDefinition(fid);
-  if (definition.isLoading && !definition.data) {
+  if (!definition.data) return <DefinitionPending definition={definition} />;
+  return (
+    <DefinitionForm factoryId={fid} groups={groups} definition={definition.data} testId={testId} />
+  );
+}
+
+/** The definition's skeleton while it loads, else what failed with Retry. */
+function DefinitionPending({
+  definition,
+}: {
+  definition: ReturnType<typeof useFactoryDefinition>;
+}) {
+  if (definition.isLoading) {
     return (
       <div aria-busy="true" data-testid="settings-loading" className="flex flex-col gap-3">
         {[0, 1].map((i) => (
@@ -107,17 +146,30 @@ function DefinitionSections({
       </div>
     );
   }
-  if (!definition.data) {
-    return (
-      <FactoryLoadError
-        error={definition.error ?? new Error("unavailable")}
-        updatedAt={0}
-        onRetry={() => void definition.refetch()}
-        what="the factory definition"
-        testId="settings-error"
-      />
-    );
-  }
+  return (
+    <FactoryLoadError
+      error={definition.error ?? new Error("unavailable")}
+      updatedAt={0}
+      onRetry={() => void definition.refetch()}
+      what="the factory definition"
+      testId="settings-error"
+    />
+  );
+}
+
+/** One section of the definition's forms (Settings in the classic cockpit, Steer in the new one). */
+export function DefinitionSections({
+  section,
+  slack = true,
+}: {
+  section: Exclude<SettingsSection, "people" | "notifications" | "integrations">;
+  /** Alerts shows the Slack cards (the new cockpit keeps them in Integrations). */
+  slack?: boolean;
+}) {
+  const { snapshot, nowS } = useFactoryShell();
+  const fid = snapshot.factory.id;
+  const definition = useFactoryDefinition(fid);
+  if (!definition.data) return <DefinitionPending definition={definition} />;
   const data = definition.data;
   switch (section) {
     case "autonomy":
@@ -141,8 +193,8 @@ function DefinitionSections({
     case "alerts":
       return (
         <div className="flex min-w-0 flex-col gap-4">
-          <SlackAppCard factoryId={fid} />
-          <SlackWebhookCard factoryId={fid} />
+          {slack && <SlackAppCard factoryId={fid} />}
+          {slack && <SlackWebhookCard factoryId={fid} />}
           <DefinitionForm
             factoryId={fid}
             groups={ALERT_GROUPS}
@@ -176,9 +228,11 @@ function DefinitionSections({
 
 export function SettingsPage() {
   const { section = "people" } = useParams<{ section: string }>();
-  const { snapshot, nowS } = useFactoryShell();
+  const { snapshot, nowS, cockpit } = useFactoryShell();
   const fid = snapshot.factory.id;
-  if (!SETTINGS_SECTIONS.includes(section as SettingsSection)) {
+  const sections: readonly SettingsSection[] =
+    cockpit === "v2" ? SETTINGS_V2_SECTIONS : SETTINGS_SECTIONS;
+  if (!sections.includes(section as SettingsSection)) {
     return <Navigate to={settingsPageHref(fid)} replace />;
   }
   const active = section as SettingsSection;
@@ -198,12 +252,14 @@ export function SettingsPage() {
         )}
       </div>
       <div className="flex min-w-0 gap-4 max-md:flex-col">
-        <SectionNav factoryId={fid} active={active} />
+        <SectionNav factoryId={fid} active={active} sections={sections} />
         <div className="flex min-w-0 flex-1 flex-col gap-4">
           {active === "people" ? (
             <PeopleSettings factoryId={fid} nowS={nowS} />
           ) : active === "notifications" ? (
             <NotificationsSettings factoryId={fid} nowS={nowS} />
+          ) : active === "integrations" ? (
+            <Integrations factoryId={fid} />
           ) : (
             <DefinitionSections section={active} />
           )}

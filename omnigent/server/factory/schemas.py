@@ -283,10 +283,16 @@ class PresenceEntry(_View):
 
 
 class CountsView(_View):
-    """Header counters of the round-3 objects."""
+    """
+    Header counters of the round-3 objects.
+
+    :param definition_proposals_pending: Pending proposals that change how the
+        factory works (every kind but ``projects``): the new cockpit's Steer count.
+    """
 
     issues_open: int = 0
     proposals_pending: int = 0
+    definition_proposals_pending: int = 0
     on_trial: int = 0
 
 

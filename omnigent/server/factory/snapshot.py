@@ -606,6 +606,7 @@ class _Loaded:
     drift: dict[str, dict[str, Any] | None]
     costs: dict[str, float | None]
     proposals_pending: int = 0
+    definition_proposals_pending: int = 0
     on_trial: int = 0
     def_version: int | None = None
     issues: list[Any] = field(default_factory=list)
@@ -686,6 +687,7 @@ def _load(deps: FactoryDeps, factory_id: str, now: float) -> _Loaded:
     except Exception:  # noqa: BLE001 - a deadline chip is never worth a broken snapshot
         _logger.warning("factory: could not compute decision deadlines", exc_info=True)
         deadlines = {}
+    pending = fstore.list_proposals(factory_id, status=["pending", "awaiting_cosign"], limit=500)
     memo: dict[tuple[Any, ...], Any] = {}
     harness = {
         c.id: _harness(c, deps, memo)
@@ -716,9 +718,9 @@ def _load(deps: FactoryDeps, factory_id: str, now: float) -> _Loaded:
         harness=harness,
         drift={m.id: launch_drift(m, deps) for m in members},
         costs={m.id: subtree_cost(m, store) for m in members},
-        proposals_pending=len(
-            fstore.list_proposals(factory_id, status=["pending", "awaiting_cosign"], limit=500)
-        ),
+        proposals_pending=len(pending),
+        # Steer's count: changes to how the factory works (plans and bets wait in Needs you).
+        definition_proposals_pending=sum(1 for p in pending if p.kind != "projects"),
         on_trial=len(fstore.list_proposals(factory_id, status="trial", limit=500)),
         def_version=definition.pinned_version(deps, factory_id),
         issues=fstore.list_issues(factory_id, class_="incident", statuses=["open", "acked"]),
@@ -1411,6 +1413,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
         "server_time": int(now),
         "counts": {
             "proposals_pending": loaded.proposals_pending,
+            "definition_proposals_pending": loaded.definition_proposals_pending,
             "issues_open": counts_open(loaded.issues, frozenset()),
             "on_trial": loaded.on_trial,
         },

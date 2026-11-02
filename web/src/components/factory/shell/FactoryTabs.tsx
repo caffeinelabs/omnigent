@@ -4,19 +4,36 @@
  * (decisions, alerts), Settings and the ⌘K "Jump or act" button. Tabs scroll
  * sideways on a narrow screen rather than wrap; on a phone the bottom bar
  * takes over.
+ *
+ * The new cockpit has five places instead (`CockpitTabs`): Home (with the
+ * amber Needs you count), Discovery, Projects, Teams and Steer (with a grey
+ * count of proposals waiting).
  */
 
 import type { ReactNode } from "react";
-import { CommandIcon, SearchIcon, SettingsIcon, TriangleAlertIcon } from "lucide-react";
+import {
+  CommandIcon,
+  CompassIcon,
+  FolderIcon,
+  HomeIcon,
+  type LucideIcon,
+  SearchIcon,
+  SettingsIcon,
+  SlidersHorizontalIcon,
+  TriangleAlertIcon,
+  UsersIcon,
+} from "lucide-react";
 import type { FactorySnapshot } from "@/lib/factoryApi";
 import { isMacPlatform } from "@/lib/hotkeys";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import {
+  type CockpitPlace,
   activityPageHref,
   agentsPageHref,
   alertsPageHref,
   decisionsPageHref,
+  discoveryPageHref,
   factoryPageHref,
   graphPageHref,
   improvementsPageHref,
@@ -24,9 +41,12 @@ import {
   projectsPageHref,
   roomPageHref,
   settingsPageHref,
+  steerPageHref,
+  teamsPageHref,
   timelinePageHref,
 } from "../factoryRoutes";
 import { TONE_CHIP } from "../factoryFormat";
+import { FOCUS_RING, MEANING } from "../ui/statusTokens";
 import type { FactoryLocation, FactoryPageKey } from "./shellRoutes";
 
 export interface FactoryTab {
@@ -115,6 +135,7 @@ export function FactoryTabs({
   mineCount,
   roomUnread = 0,
   onPalette,
+  onTryCockpit,
 }: {
   snapshot: FactorySnapshot;
   location: FactoryLocation;
@@ -123,6 +144,8 @@ export function FactoryTabs({
   /** Unread Room messages across threads. */
   roomUnread?: number;
   onPalette: () => void;
+  /** Offers "Try the new cockpit" (when the server lets people switch). */
+  onTryCockpit?: () => void;
 }) {
   const fid = snapshot.factory.id;
   const active = FACTORY_TABS.find((tab) => tab.pages.includes(location.page))?.key;
@@ -165,6 +188,16 @@ export function FactoryTabs({
         ))}
       </div>
       <div className="flex shrink-0 items-center gap-2 pb-1 text-sm max-md:hidden">
+        {onTryCockpit && (
+          <button
+            type="button"
+            onClick={onTryCockpit}
+            data-testid="factory-try-cockpit"
+            className="cursor-pointer rounded-md px-1 text-muted-foreground underline underline-offset-2 hover:text-foreground"
+          >
+            Try the new cockpit
+          </button>
+        )}
         <Link
           to={decisionsPageHref(fid)}
           componentId="factory.tab.decisions"
@@ -227,6 +260,152 @@ export function FactoryTabs({
           </kbd>
         </button>
       </div>
+    </nav>
+  );
+}
+
+// ── The new cockpit's five places ──────────────────────────────
+
+export interface CockpitTab {
+  key: CockpitPlace;
+  label: string;
+  icon: LucideIcon;
+  href: (factoryId: string) => string;
+  /** Pages that light this tab. */
+  pages: FactoryPageKey[];
+}
+
+/** Home, Discovery, Projects, Teams, Steer (Debug and Settings sit behind the avatar). */
+export const COCKPIT_TABS: CockpitTab[] = [
+  { key: "home", label: "Home", icon: HomeIcon, href: factoryPageHref, pages: ["overview"] },
+  {
+    key: "discovery",
+    label: "Discovery",
+    icon: CompassIcon,
+    href: (fid) => discoveryPageHref(fid),
+    pages: ["discovery"],
+  },
+  {
+    key: "projects",
+    label: "Projects",
+    icon: FolderIcon,
+    href: projectsPageHref,
+    pages: ["projects", "project", "pr"],
+  },
+  {
+    key: "teams",
+    label: "Teams",
+    icon: UsersIcon,
+    href: (fid) => teamsPageHref(fid),
+    pages: ["teams", "agents", "agent"],
+  },
+  {
+    key: "steer",
+    label: "Steer",
+    icon: SlidersHorizontalIcon,
+    href: (fid) => steerPageHref(fid),
+    pages: ["steer", "improvements", "proposal", "insights"],
+  },
+];
+
+/** The place a page belongs to, if any (Debug and Settings belong to none). */
+export function cockpitPlaceOf(location: FactoryLocation): CockpitPlace | null {
+  return COCKPIT_TABS.find((tab) => tab.pages.includes(location.page))?.key ?? null;
+}
+
+/** A tab's count: amber for what needs you, grey for what merely waits. */
+export function PlaceCount({
+  n,
+  tone,
+  label,
+  testId,
+}: {
+  n: number;
+  tone: "needsYou" | "muted";
+  label: string;
+  testId?: string;
+}) {
+  if (n <= 0) return null;
+  return (
+    <span
+      data-testid={testId}
+      aria-label={label}
+      className={cn(
+        "inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-full px-1 text-xs font-semibold tabular-nums",
+        tone === "needsYou"
+          ? cn(MEANING.needsYou.surface, MEANING.needsYou.text)
+          : "bg-muted text-muted-foreground",
+      )}
+    >
+      {n > 99 ? "99+" : n}
+    </span>
+  );
+}
+
+export function CockpitTabs({
+  factoryId,
+  location,
+  needsYou,
+  proposals,
+  className,
+}: {
+  factoryId: string;
+  location: FactoryLocation;
+  /** What waits on the viewer (Home's amber count). */
+  needsYou: number;
+  /** Proposals to change how the factory works, waiting for a person (Steer's grey count). */
+  proposals: number;
+  className?: string;
+}) {
+  const active = cockpitPlaceOf(location);
+  return (
+    <nav
+      aria-label="Cockpit"
+      data-testid="cockpit-tabs"
+      className={cn(
+        "flex min-w-0 items-center gap-0.5 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden",
+        className,
+      )}
+    >
+      {COCKPIT_TABS.map(({ key, label, icon: Icon, href }) => {
+        const on = key === active;
+        return (
+          <Link
+            key={key}
+            to={href(factoryId)}
+            componentId={`factory.cockpit.tab.${key}`}
+            data-testid={`cockpit-tab-${key}`}
+            aria-current={on ? "page" : undefined}
+            className={cn(
+              "inline-flex h-8 shrink-0 items-center gap-1.5 rounded-md px-2 text-ui font-medium whitespace-nowrap transition-colors",
+              FOCUS_RING,
+              on
+                ? "bg-muted text-foreground"
+                : "text-muted-foreground hover:bg-muted/60 hover:text-foreground",
+            )}
+          >
+            <Icon aria-hidden className="size-4" />
+            {/* A narrow bar keeps the icons; the name stays for screen readers. */}
+            <span className="@max-[900px]:sr-only">{label}</span>
+            {key === "home" && (
+              <PlaceCount
+                n={needsYou}
+                tone="needsYou"
+                label={`${needsYou} need${needsYou === 1 ? "s" : ""} you`}
+                testId="cockpit-tab-home-count"
+              />
+            )}
+            {key === "steer" && (
+              <PlaceCount
+                n={proposals}
+                tone="muted"
+                label={`${proposals} proposal${proposals === 1 ? "" : "s"} waiting`}
+                testId="cockpit-tab-steer-count"
+              />
+            )}
+          </Link>
+        );
+      })}
     </nav>
   );
 }

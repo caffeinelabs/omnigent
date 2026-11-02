@@ -6,6 +6,39 @@
       "factory_name": "Atlas factory",
       "generated_at": 1793017800,
       "headline": "8 things wait on you · 2 projects in progress · 1 queued",
+      "verdict": {
+        "dot": "red",
+        "sentence": "Running, 1 project stopped",
+        "reasons": [
+          {
+            "kind": "project",
+            "text": "cache-warm: its lead agent stopped · relaunch failed 3×",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/cache-warm"
+          },
+          {
+            "kind": "waiting",
+            "text": "5 decisions wait on you",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-35"
+          },
+          {
+            "kind": "waiting",
+            "text": "1 PR waits on you",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
+          },
+          {
+            "kind": "waiting",
+            "text": "2 incidents wait on you",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/12"
+          },
+          {
+            "kind": "blocked",
+            "text": "db-version: blocked until someone answers D-2 · T-4 implement exhausted",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/db-version"
+          }
+        ],
+        "usd_per_h": 6.1,
+        "usd_per_h_alert": null
+      },
       "state": "working",
       "waiting": [
         {
@@ -298,6 +331,39 @@
       "factory_name": "Atlas factory",
       "generated_at": 1793017800,
       "headline": "6 things wait on you · 2 projects in progress · 1 queued",
+      "verdict": {
+        "dot": "red",
+        "sentence": "Running, 1 project stopped",
+        "reasons": [
+          {
+            "kind": "project",
+            "text": "cache-warm: its lead agent stopped · relaunch failed 3×",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/cache-warm"
+          },
+          {
+            "kind": "waiting",
+            "text": "3 decisions wait on you",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-33"
+          },
+          {
+            "kind": "waiting",
+            "text": "1 PR waits on you",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
+          },
+          {
+            "kind": "waiting",
+            "text": "2 incidents wait on you",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/12"
+          },
+          {
+            "kind": "blocked",
+            "text": "db-version: blocked until someone answers D-2 · T-4 implement exhausted",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/db-version"
+          }
+        ],
+        "usd_per_h": 6.1,
+        "usd_per_h_alert": null
+      },
       "state": "working",
       "waiting": [
         {
@@ -590,6 +656,24 @@
       "factory_name": "Atlas factory",
       "generated_at": 1793017800,
       "headline": "2 projects in progress · 1 queued · 9 things wait on others",
+      "verdict": {
+        "dot": "red",
+        "sentence": "Running, 1 project stopped",
+        "reasons": [
+          {
+            "kind": "project",
+            "text": "cache-warm: its lead agent stopped · relaunch failed 3×",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/cache-warm"
+          },
+          {
+            "kind": "blocked",
+            "text": "db-version: blocked until someone answers D-2 · T-4 implement exhausted",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/db-version"
+          }
+        ],
+        "usd_per_h": 6.1,
+        "usd_per_h_alert": null
+      },
       "state": "working",
       "waiting": [
         {
@@ -1281,6 +1365,29 @@
       "factory_name": "Atlas factory",
       "generated_at": 1793599200,
       "headline": "5 things wait on you · 2 projects in progress · 2 queued",
+      "verdict": {
+        "dot": "amber",
+        "sentence": "Running, 5 things wait on you",
+        "reasons": [
+          {
+            "kind": "waiting",
+            "text": "1 decision waits on you",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-9"
+          },
+          {
+            "kind": "waiting",
+            "text": "4 PRs wait on you",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/p9826"
+          },
+          {
+            "kind": "blocked",
+            "text": "asks: blocked until someone answers D-9",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/asks"
+          }
+        ],
+        "usd_per_h": 3.1,
+        "usd_per_h_alert": null
+      },
       "state": "working",
       "waiting": [
         {
