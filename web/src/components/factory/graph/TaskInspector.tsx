@@ -26,6 +26,7 @@ import { cn } from "@/lib/utils";
 import { controlErrorMessage } from "../controls/controlModel";
 import { TONE_CHIP, formatElapsed, formatUsd } from "../factoryFormat";
 import { prPageHref } from "../factoryRoutes";
+import { HeldRefList } from "../loops/HeldRefs";
 import { ReasonGated, useViewerCan } from "../shell/viewerCan";
 import { TASK_TONE } from "./GraphNodes";
 import { type TaskEditKind, TaskEditDialog } from "./TaskDialogs";
@@ -146,6 +147,18 @@ export function TaskInspector({
         {task.waiting_on.length > 0 && (
           <Row label="Waiting on">
             <span className="font-mono text-warning">{task.waiting_on.join(", ")}</span>
+          </Row>
+        )}
+        {task.loop?.state === "running" && task.loop.held_by && (
+          <Row label="Answer due">
+            <span data-testid="task-held" className="text-warning">
+              <HeldRefList
+                held={task.loop.held_by}
+                factoryId={fid}
+                componentId="factory.graph.task_held"
+              />{" "}
+              · not counted as stalled until a person answers
+            </span>
           </Row>
         )}
         {task.scope.length > 0 && (

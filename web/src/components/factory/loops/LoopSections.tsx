@@ -27,8 +27,9 @@ import { FactoryLoadError } from "../FactoryLoadError";
 import { TONE_CHIP } from "../factoryFormat";
 import { prPageHref } from "../factoryRoutes";
 import { EmptyState } from "../project/projectParts";
+import { HeldRefs } from "./HeldRefs";
 import { LoopStrip } from "./LoopStrip";
-import { loopLines, prLoops } from "./loopStripModel";
+import { heldText, loopLines, prLoops } from "./loopStripModel";
 
 const DAY_MS = 86_400_000;
 
@@ -44,24 +45,51 @@ const CHIP_TONE: Record<LoopChipView["state"], keyof typeof TONE_CHIP> = {
 };
 
 /** The snapshot's loop chips (older servers, and while the strip loads). */
-export function LoopChips({ chips }: { chips: readonly LoopChipView[] }) {
+export function LoopChips({
+  chips,
+  factoryId,
+}: {
+  chips: readonly LoopChipView[];
+  /** Links the answers a held loop waits on. */
+  factoryId?: string;
+}) {
   return (
     <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-      {chips.map((loop) => (
-        <span
-          key={loop.id}
-          data-testid={`pr-loop-${loop.kind}`}
-          data-state={loop.state}
-          className={cn(
-            "inline-flex h-5 items-center gap-1 rounded-sm px-1.5 font-mono text-xs",
-            TONE_CHIP[CHIP_TONE[loop.state]],
-          )}
-        >
-          {loop.kind} {loop.iteration}
-          {loop.limit != null ? `/${loop.limit}` : ""}
-          {loop.state === "exhausted" ? " ⛔" : loop.state === "converged" ? " ✓" : ""}
-        </span>
-      ))}
+      {chips.map((loop) => {
+        const heldBy = loop.state === "running" ? (loop.held_by ?? null) : null;
+        const held = heldText(heldBy);
+        return (
+          <span
+            key={loop.id}
+            data-testid={`pr-loop-${loop.kind}`}
+            data-state={held ? "held" : loop.state}
+            className={cn(
+              "inline-flex h-5 items-center gap-1 rounded-sm px-1.5 font-mono text-xs",
+              TONE_CHIP[held ? "warning" : CHIP_TONE[loop.state]],
+            )}
+          >
+            <span>
+              {loop.kind} {loop.iteration}
+              {loop.limit != null ? `/${loop.limit}` : ""}
+              {loop.state === "exhausted" ? " ⛔" : loop.state === "converged" ? " ✓" : ""}
+              {heldBy && factoryId ? (
+                <>
+                  {" · "}
+                  <HeldRefs
+                    held={heldBy}
+                    factoryId={factoryId}
+                    componentId="factory.loop.chip_held"
+                  />
+                </>
+              ) : held ? (
+                ` · ${held}`
+              ) : (
+                ""
+              )}
+            </span>
+          </span>
+        );
+      })}
     </span>
   );
 }
@@ -117,7 +145,7 @@ export function PrLoopStrip({
   } else if (loops.error && !loops.data) {
     body = isMissingRoute(loops.error) ? (
       chips.length > 0 ? (
-        <LoopChips chips={chips} />
+        <LoopChips chips={chips} factoryId={fid} />
       ) : (
         <Empty />
       )
@@ -131,7 +159,7 @@ export function PrLoopStrip({
           testId="pr-loops-error"
           className="mb-0"
         />
-        {chips.length > 0 && <LoopChips chips={chips} />}
+        {chips.length > 0 && <LoopChips chips={chips} factoryId={fid} />}
       </>
     );
   } else if (lines.length === 0) {
@@ -281,7 +309,7 @@ export function ProjectLoops({
               >
                 !{pr.number}
               </Link>
-              <LoopChips chips={pr.loops ?? []} />
+              <LoopChips chips={pr.loops ?? []} factoryId={fid} />
             </p>
           ))}
         </div>

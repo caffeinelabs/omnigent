@@ -219,6 +219,10 @@ export function layoutWork(graph: WorkGraphResponse, options: WorkLayoutOptions 
           const waitsOn = graph.external_edges
             .filter((e) => e.to === task.id && e.kind === "decision" && !e.met)
             .map((e) => ({ ref: e.from.replace(/^decision:/, ""), assignee: e.assignee ?? null }));
+          // A running task whose lead or IC waits on a person's answer shows it too.
+          for (const ref of task.loop?.state === "running" ? (task.loop.held_by?.refs ?? []) : []) {
+            if (!waitsOn.some((w) => w.ref === ref)) waitsOn.push({ ref, assignee: null });
+          }
           nodes.push({
             id: task.id,
             type: "task",

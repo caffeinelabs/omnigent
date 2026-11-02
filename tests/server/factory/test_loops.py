@@ -1525,6 +1525,7 @@ async def test_task_views_carry_their_implement_loop(cockpit: Cockpit) -> None:
         "state": "running",
         "iteration": 1,
         "limit": 3,
+        "held_by": None,
     }
     assert by_key["docs"]["loop"] is None
 

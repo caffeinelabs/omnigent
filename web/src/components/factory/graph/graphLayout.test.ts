@@ -141,6 +141,23 @@ describe("work graph layout (40 tasks)", () => {
     expect((route.data as TaskNodeData).critical).toBe(true);
     expect((route.data as TaskNodeData).waitsOn.map((w) => w.ref)).toEqual(["D-31"]);
   });
+
+  it("chips the answers a running task waits on, once each", () => {
+    const held = workGraphRound3();
+    const t4 = held.tasks.find((t) => t.ref === "T-4")!;
+    t4.loop = {
+      id: "l4",
+      kind: "implement",
+      state: "running",
+      iteration: 1,
+      limit: 3,
+      held_by: { decision_id: null, decision_ref: "D-31", refs: ["D-31", "D-40"], since: 1 },
+    };
+    const route = layoutWork(held).nodes.find(
+      (n) => (n.data as TaskNodeData)?.task?.ref === "T-4",
+    )!;
+    expect((route.data as TaskNodeData).waitsOn.map((w) => w.ref)).toEqual(["D-31", "D-40"]);
+  });
 });
 
 describe("bus graph layout (12 nodes)", () => {

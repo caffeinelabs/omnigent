@@ -164,12 +164,27 @@ export interface NowState {
 }
 
 /** A compact loop badge, e.g. `implement 3/3`. */
+/** The person's answers a running implement loop waits on: its stall clock is paused. */
+export interface LoopHoldView {
+  decision_id: string | null;
+  /** The oldest open one, e.g. `D-22`. */
+  decision_ref: string;
+  /** The oldest ones it waits on, oldest first (at most five). */
+  refs: string[];
+  /** When the oldest was asked (epoch seconds). */
+  since: number | null;
+  /** How many it waits on in all (older servers: absent, read `refs.length`). */
+  count?: number | null;
+}
+
 export interface LoopChipView {
   id: string;
   kind: LoopKind;
   state: LoopState;
   iteration: number;
   limit: number | null;
+  /** Waiting on a person's answer (`waiting on D-22`); older servers omit it. */
+  held_by?: LoopHoldView | null;
 }
 
 export interface TasksSummaryView {
@@ -1131,6 +1146,8 @@ export interface LoopView {
   last_reason: string | null;
   decision_id: string | null;
   decision_ref: string | null;
+  /** A running loop waiting on a person's answer: not counted as stalled. */
+  held_by?: LoopHoldView | null;
   def_version: number | null;
   started_at: number;
   updated_at: number;

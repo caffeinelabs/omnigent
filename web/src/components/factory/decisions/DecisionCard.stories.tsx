@@ -14,6 +14,8 @@ import {
   lateQuestion,
   relaunchFailedDecision,
   slackNotifiedProposal,
+  stallKeepWaitingDecision,
+  stallSwitchVendorDecision,
 } from "./__fixtures__/decisionFixtures";
 import { DecisionCard } from "./DecisionCard";
 
@@ -68,6 +70,16 @@ export const OpenBlockingDark = card(agentDecision(), { theme: "dark" });
 export const ServerRelaunchFailed = card(relaunchFailedDecision());
 
 export const ServerRelaunchFailedDark = card(relaunchFailedDecision(), { theme: "dark" });
+
+/** A stalled task whose IC is busy: why in one plain line, Keep waiting recommended. */
+export const LoopStallKeepWaiting = card(stallKeepWaitingDecision());
+
+export const LoopStallKeepWaitingDark = card(stallKeepWaitingDecision(), { theme: "dark" });
+
+/** A stalled task whose IC failed: Switch vendor recommended; Keep waiting asks again in an hour. */
+export const LoopStallSwitchVendor = card(stallSwitchVendorDecision());
+
+export const LoopStallSwitchVendorDark = card(stallSwitchVendorDecision(), { theme: "dark" });
 
 /** A blocked approval: the recommended option is a link to the Inbox. */
 export const ServerLinkOption = card(blockedApprovalDecision());

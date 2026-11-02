@@ -262,3 +262,77 @@ export function slackNotifiedProposal(): DecisionView {
     deadline_effect: "expires and nothing is started",
   };
 }
+
+function stallOption(
+  id: string,
+  label: string,
+  action: string,
+  recommended: boolean,
+  description: string | null = null,
+): DecisionView["options"][number] {
+  return {
+    id,
+    label,
+    description,
+    recommended,
+    action,
+    href: null,
+    target: "loop:6a7b8c9d0e1f2a3b4c5d6e7f8091a2b3",
+  };
+}
+
+/**
+ * D-25: T-5's implement loop hit its wall budget while its IC was busy running
+ * long builds. The question says why in one plain line; Keep waiting is recommended.
+ */
+export function stallKeepWaitingDecision(): DecisionView {
+  return {
+    ...doneCheckDecision(),
+    id: "8e5f2a3b4c5d6e7f8091a2b3c4d5e6f7",
+    ref: "D-25",
+    number: 25,
+    project_slug: "validate-build-tier",
+    source: "loop",
+    blocking: true,
+    question:
+      "T-5 validate-p9774: implement 1/3 stalled - what next? The IC worked 3 minutes ago; it is running pnpm -F caffeine-app build.",
+    context: "Why: running 16 h (wall budget 16 h)\nLast verdict: DISPATCHED",
+    options: [
+      stallOption(
+        "wait",
+        "Keep waiting",
+        "raise_budget",
+        true,
+        "Up to 32 h in all; asks again sooner only if the IC stops or its run fails",
+      ),
+      stallOption("switch", "Switch vendor → ic_codex", "switch_vendor", false),
+      stallOption("fresh", "Fresh restart", "fresh_restart", false),
+      stallOption("abandon", "Abandon task", "abandon_task", false),
+    ],
+  };
+}
+
+/**
+ * D-26: the same task's IC run failed an hour ago: Switch vendor is recommended,
+ * and Keep waiting asks again in an hour unless an IC starts.
+ */
+export function stallSwitchVendorDecision(): DecisionView {
+  const keep = stallKeepWaitingDecision();
+  return {
+    ...keep,
+    id: "9f6a3b4c5d6e7f8091a2b3c4d5e6f7a8",
+    ref: "D-26",
+    number: 26,
+    question:
+      "T-5 validate-p9774: implement 1/3 stalled - what next? The IC's last run failed 60 minutes ago.",
+    context: "Why: no progress for 60 min\nLast verdict: DISPATCHED",
+    options: keep.options.map((o) => ({
+      ...o,
+      recommended: o.id === "switch",
+      description:
+        o.id === "wait"
+          ? "Nobody works on it now: asks again in 60 minutes unless an IC starts"
+          : o.description,
+    })),
+  };
+}

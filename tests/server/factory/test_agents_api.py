@@ -129,6 +129,7 @@ async def test_fleet_rows_show_each_agent_with_its_now(
         "state": "exhausted",
         "iteration": 3,
         "limit": 3,
+        "held_by": None,
     }
     assert row["mail_in"] == 1 and rows[pl]["mail_out"] == 1
     assert rows[pl]["decisions_pending"] == 1

@@ -10,6 +10,7 @@ import {
   PL_DB,
   agentDetail,
   agentsResponse,
+  heldRow,
 } from "./__fixtures__/opsFixtures";
 
 function agent(sid: string, options: CockpitStoryOptions = {}, play?: Story["play"]): Story {
@@ -153,6 +154,22 @@ const LONG_ARG =
 function longRow<T extends { title: string; now: { tool_arg: string | null } | null }>(row: T): T {
   return { ...row, title: LONG_TITLE, now: row.now ? { ...row.now, tool_arg: LONG_ARG } : null };
 }
+
+/** ic:route-r2's task waits on three answers: the header links D-22 and the other two. */
+const waitingRoutes: CockpitStoryOptions["routes"] = {
+  [`${SNAPSHOT_PATH}/agents/${IC_ROUTE_R2}`]: {
+    body: (() => {
+      const detail = agentDetail(IC_ROUTE_R2)!;
+      return { ...detail, agent: heldRow(detail.agent) };
+    })(),
+  },
+};
+
+export const WaitingOnAnswers = agent(IC_ROUTE_R2, { routes: waitingRoutes });
+
+export const WaitingOnAnswersDark = agent(IC_ROUTE_R2, { routes: waitingRoutes, theme: "dark" });
+
+export const WaitingOnAnswersMobile = phone(agent(IC_ROUTE_R2, { routes: waitingRoutes }));
 
 /** Long title and tool arguments wrap or truncate in place (in the detail, the fleet and the snapshot). */
 export const LongText = agent(IC_ROUTE_R2, {

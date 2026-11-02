@@ -145,6 +145,28 @@ function line(
   };
 }
 
+/**
+ * `row` with its implement loop running while its lead waits on three answers
+ * from a person (D-22, D-23, D-24): "waiting on D-22 +2".
+ */
+export function heldRow<T extends Pick<AgentRowView, "loop">>(row: T): T {
+  if (!row.loop) return row;
+  return {
+    ...row,
+    loop: {
+      ...row.loop,
+      state: "running",
+      held_by: {
+        decision_id: "8e5f2a3b4c5d6e7f8091a2b3c4d5e6f7",
+        decision_ref: "D-22",
+        refs: ["D-22", "D-23", "D-24"],
+        since: ROUND3_NOW_S - 50 * 60,
+        count: 3,
+      },
+    },
+  };
+}
+
 /** `GET …/agents` of the round-3 factory (or `snapshot`). */
 export function agentsResponse(snapshot: FactorySnapshot = round3Snapshot()): AgentsResponse {
   const ic = snapshot.members.find((m) => m.session_id === IC_ROUTE_R2);

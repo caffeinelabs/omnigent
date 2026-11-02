@@ -1,12 +1,13 @@
 // A PR's or project's loops as strip lines: each loop's attempts or rounds
 // (`r0..rk` for implement, `#1..` for review, verify, demo and CI) from its
-// `loop_iter` spans, its strip state (running, converged, exhausted,
-// thrashing, dry, stalled, …), budget use, the last reason and a CI flake.
-// Pure; tests pin every state.
+// `loop_iter` spans, its strip state (running, waiting on a person,
+// converged, exhausted, thrashing, dry, stalled, …), budget use, the last
+// reason and a CI flake. Pure; tests pin every state.
 
 import { prTarget } from "../alerts/runbookModel";
 import type {
   IssueView,
+  LoopHoldView,
   LoopKind,
   LoopState,
   LoopView,
@@ -15,8 +16,11 @@ import type {
   SpanView,
 } from "@/lib/factoryApi";
 
-/** A loop's state as the strip names it: a dry review is a stall of its own. */
-export type StripState = LoopState | "dry";
+/**
+ * A loop's state as the strip names it: a dry review is a stall of its own,
+ * and a running loop waiting on a person's answer is `held`.
+ */
+export type StripState = LoopState | "dry" | "held";
 
 export interface Attempt {
   /** `r0`, `#2`. */
@@ -47,6 +51,8 @@ export interface LoopLine {
   lastReason: string | null;
   /** The open CI-flake finding of this PR, on the ci line. */
   flake: IssueView | null;
+  /** The person's answers it waits on (its stall clock is paused), else null. */
+  heldBy: LoopHoldView | null;
 }
 
 export const LOOP_ORDER: LoopKind[] = [
@@ -73,10 +79,28 @@ export function isBadState(state: StripState): boolean {
   return BAD.has(state);
 }
 
-/** The strip state: a stalled review whose reason says it ran dry reads `dry`. */
-export function stripState(loop: Pick<LoopView, "kind" | "state" | "last_reason">): StripState {
+/**
+ * The strip state: a stalled review whose reason says it ran dry reads `dry`;
+ * a running loop that waits on a person's answer reads `held`.
+ */
+export function stripState(
+  loop: Pick<LoopView, "kind" | "state" | "last_reason" | "held_by">,
+): StripState {
   if (loop.state === "stalled" && /\bdry\b/i.test(loop.last_reason ?? "")) return "dry";
+  if (loop.state === "running" && loop.held_by) return "held";
   return loop.state;
+}
+
+/** How many answers a held loop waits on (`refs` lists at most five). */
+export function heldTotal(held: LoopHoldView): number {
+  return Math.max(held.count ?? 0, held.refs.length, 1);
+}
+
+/** `waiting on D-22`, or `waiting on D-22 +1` when it waits on more than one answer. */
+export function heldText(held: LoopHoldView | null | undefined): string | null {
+  if (!held) return null;
+  const more = heldTotal(held) - 1;
+  return `waiting on ${held.decision_ref}${more ? ` +${more}` : ""}`;
 }
 
 /** The loops of `pr`: its own (review, verify, demo, ci, claim) and its task's implement loop. */
@@ -253,15 +277,20 @@ export function loopLines(
       headNote: headNote(loop),
       lastReason: loop.last_reason,
       flake,
+      heldBy: loop.state === "running" ? (loop.held_by ?? null) : null,
     });
   }
   return lines;
 }
 
-/** `⛔ exhausted 3/3`, `✓ converged 2/3`, `↻ thrashing`, `dry`, `running 1/2`. */
-export function stateText(line: Pick<LoopLine, "state" | "used" | "limit">): string {
+/** `⛔ exhausted 3/3`, `✓ converged 2/3`, `↻ thrashing`, `dry`, `running 1/2`, `waiting on D-22`. */
+export function stateText(
+  line: Pick<LoopLine, "state" | "used" | "limit"> & Partial<Pick<LoopLine, "heldBy">>,
+): string {
   const budget = line.limit != null ? ` ${line.used}/${line.limit}` : "";
   switch (line.state) {
+    case "held":
+      return heldText(line.heldBy) ?? `running${budget}`;
     case "exhausted":
       return `⛔ exhausted${budget}`;
     case "converged":

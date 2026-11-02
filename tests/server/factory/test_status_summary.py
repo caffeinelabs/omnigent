@@ -315,6 +315,13 @@ def test_server_decisions_say_what_to_do_by_their_source() -> None:
                 project_slug="db-version",
             ),
             server(32, "loop", "Project db-version spent $9.10 of $10 (91 %). Pause or raise?"),
+            server(
+                33,
+                "loop",
+                "T-5 validate-p9774: implement 1/3 stalled - what next? The IC's last run "
+                "failed 60 minutes ago.",
+                project_slug="db-version",
+            ),
             server(34, "access_request", "ops@caffeine.ai asks for operator access"),
             server(
                 36,
@@ -352,6 +359,7 @@ def test_server_decisions_say_what_to_do_by_their_source() -> None:
         "D-4": "decide what to do: Sentinel couldn't restart",
         "D-31": "decide on T-4 (budget or retries ran out)",
         "D-32": "decide whether to pause or raise a budget",
+        "D-33": "decide on T-5 (it stalled)",
         "D-34": "approve or refuse an access request",
         "D-35": "approve Sentinel's proposal",
         "D-36": "confirm docs is done",
