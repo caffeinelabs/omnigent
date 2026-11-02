@@ -738,6 +738,7 @@ async def test_preflight_shape(
     world: FactoryWorld, authed_api: FactoryApi, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv(F.FACTORY_ENABLED_ENV, "1")
+    monkeypatch.delenv(F.COCKPIT_V2_ENV, raising=False)
     monkeypatch.setenv("OMNIGENT_FACTORY_DEFAULT_BASE", "caffeinelabs/app#temp-main")
     state = authed_api.app.state
     state.github_store = SimpleNamespace(
@@ -757,6 +758,7 @@ async def test_preflight_shape(
         "default_base": "temp-main",
         "max_projects": 10,
         "tier2": {"enabled": False, "reason": "OMNIGENT_FACTORY_SMITH is not 1", "checks": None},
+        "cockpit_v2": False,
     }
     assert bob["github"] == {"connected": False, "login": None}
     schemas.Preflight.model_validate(bob)

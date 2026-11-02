@@ -1462,11 +1462,13 @@ class FactoryStore(ABC):
         loop_id: str | None = None,
         trace_key: str | None = None,
         limit: int = 1000,
+        session_id: str | None = None,
     ) -> builtins.list[FactorySpan]:
         """
         Spans with ``since_ms <= started_at < until_ms``, oldest first.
 
-        Consumers: R3-05 ``GET …/spans`` and PR timelines, R3-12 metrics.
+        Consumers: R3-05 ``GET …/spans`` and PR timelines, R3-12 metrics, one
+        agent's state timeline (``session_id``).
         """
 
     # ── Cost ledger (R3-05) ─────────────────────────────────────
@@ -2904,12 +2906,14 @@ class InMemoryFactoryStore(FactoryStore):
         loop_id: str | None = None,
         trace_key: str | None = None,
         limit: int = 1000,
+        session_id: str | None = None,
     ) -> builtins.list[FactorySpan]:
         filters = {
             "project_slug": project_slug,
             "pr_id": pr_id,
             "task_id": task_id,
             "loop_id": loop_id,
+            "session_id": session_id,
             "trace_key": trace_key,
         }
         rows = [

@@ -1,12 +1,12 @@
 """The fleet API: every agent of a factory, sub-agents included, with its live "now".
 
-- ``GET /v1/factory/factories/{fid}/agents``: one row per agent (role, harness,
-  model, project, task and loop, status and ``now``, own and subtree cost, open
-  mail in and out, pending decisions, flags, open issues) plus the newest
-  "Live now" lines.
+- ``GET /v1/factory/factories/{fid}/agents``: one row per agent (handle, role,
+  harness, vendor, model, project, task and loop, status and ``now``, stuck and
+  why, own and subtree cost, open mail in and out, pending decisions, flags,
+  open issues) plus the newest "Live now" lines.
 - ``GET /v1/factory/factories/{fid}/agents/{sid}``: the row plus recent tool
   calls, activity lines, mail in and out, tasks, open issues and a daily cost
-  series from the ledger.
+  series from the ledger. ``sid`` may be the agent's handle.
 
 Humans call these with their own credentials: READ on the root (anything else
 is a 404), and only the agents the viewer may read.
@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Final
 
 from fastapi import APIRouter, Query, Request
@@ -26,11 +26,12 @@ from omnigent.entities.factory import FactoryEvent, FactoryIssue, FactoryTask
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.factory import ISSUE_OPEN_STATUSES, LOOP_ENDED_STATES
 from omnigent.server.auth import LEVEL_READ
-from omnigent.server.factory import activity_now, detectors
+from omnigent.server.factory import activity_now, detectors, identity
 from omnigent.server.factory.actor import task_ref
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.delivery import member_last_error
 from omnigent.server.factory.loops import held_by as loop_held_by
+from omnigent.server.factory.membership import load_session_spec
 from omnigent.server.factory.routes import FactoryRouteError
 from omnigent.server.factory.snapshot import (
     RawSnapshot,
@@ -99,12 +100,33 @@ class _Extras:
     decisions: list[Any]
     mail: list[FactoryEvent]
     issues: list[FactoryIssue]
+    models: dict[str, tuple[str | None, str | None]] = field(default_factory=dict)
+
+
+def _vendor_models(
+    deps: FactoryDeps, convs: dict[str, Conversation]
+) -> dict[str, tuple[str | None, str | None]]:
+    """``(vendor, model)`` per session; specs are loaded once per agent and sub-agent name."""
+    specs: dict[tuple[Any, ...], Any] = {}
+    out: dict[str, tuple[str | None, str | None]] = {}
+    for sid, conv in convs.items():
+        key = (conv.agent_id, conv.sub_agent_name)
+        if key not in specs:
+            try:
+                specs[key] = load_session_spec(conv, deps)
+            except Exception:  # noqa: BLE001 - an unknown model only shows as none
+                specs[key] = None
+        model = identity.session_model(conv, specs[key])
+        out[sid] = (identity.vendor_of(identity.harness_of(conv, specs[key]), model), model)
+    return out
 
 
 def _load_extras(deps: FactoryDeps, factory_id: str, ids: list[str], now: float) -> _Extras:
     fstore = deps.factory_store
+    convs = deps.conversation_store.get_conversations(ids) if ids else {}
     return _Extras(
-        convs=deps.conversation_store.get_conversations(ids) if ids else {},
+        convs=convs,
+        models=_vendor_models(deps, convs),
         tasks=fstore.list_tasks(factory_id),
         loops=fstore.list_loops(factory_id),
         decisions=fstore.list_decisions(factory_id=factory_id, status="open", limit=500),
@@ -186,13 +208,19 @@ def agent_rows(ctx: FleetContext, extras: _Extras) -> list[dict[str, Any]]:
             flags.append("dead")
         own = activity_now.own_cost(conv) if conv is not None else member.get("cost_usd")
         mine = _member_issues(sid, extras.issues)
+        vendor, model = extras.models.get(sid, (None, None))
+        if member.get("stuck"):
+            flags.append("stuck")
         rows.append(
             {
                 "session_id": sid,
+                "handle": member.get("handle"),
                 "title": member["title"],
                 "role": member["role"],
                 "harness": member["harness"],
-                "model": (conv.reported_model or conv.model_override) if conv else None,
+                "vendor": vendor or identity.vendor_of(member["harness"], model),
+                "model": model,
+                "model_label": identity.model_label(model),
                 "project": member["project"],
                 "parent_session_id": member["parent_session_id"],
                 "is_top_level": member["is_top_level"],
@@ -212,6 +240,10 @@ def agent_rows(ctx: FleetContext, extras: _Extras) -> list[dict[str, Any]]:
                     1 for d in extras.decisions if _same(d.asked_by_session_id, sid)
                 ),
                 "flags": flags,
+                "stuck": bool(member.get("stuck")),
+                "stuck_reason": member.get("stuck_reason"),
+                "stuck_since": member.get("stuck_since"),
+                "stuck_issue": member.get("stuck_issue"),
                 "issues": [i.ref for i in mine if i.ref],
                 "last_activity_at": (now or {}).get("last_event_at") or member["last_activity_at"],
                 "url": member["url"],
@@ -263,6 +295,24 @@ async def list_agents(
 
 
 # ── One agent ──────────────────────────────────────────────────
+
+
+def resolve_agent(ctx: FleetContext, ref: str) -> str | None:
+    """
+    The readable agent *ref* names: a session id, or its handle (``"dot"``, ``"@dot"``).
+
+    :returns: Its session id, or ``None`` when it is unknown or hidden from the viewer.
+    """
+    sid = next((s for s in ctx.raw.top_level_of if _same(s, ref)), None)
+    if sid is None:
+        handle = ref.strip().removeprefix("@").lower()
+        sid = ctx.raw.handles.get(handle) if identity.is_handle(handle) else None
+    if sid is None or sid not in ctx.readable:
+        return None
+    project = next(
+        (m.get("project") for m in ctx.raw.body["members"] if m["session_id"] == sid), None
+    )
+    return None if project in ctx.hidden else sid
 
 
 def _mail_rows(ctx: FleetContext, sid: str, mail: list[FactoryEvent]) -> list[dict[str, Any]]:
@@ -336,8 +386,8 @@ async def get_agent(request: Request, factory_id: str, session_id: str) -> dict[
     from omnigent.server.factory.api.issues import issue_view
 
     ctx = await fleet_context(request, factory_id)
-    sid = next((s for s in ctx.raw.top_level_of if _same(s, session_id)), None)
-    if sid is None or sid not in ctx.readable:
+    sid = resolve_agent(ctx, session_id)
+    if sid is None:
         raise _not_found("agent")
     deps = ctx.deps
     now = time.time()
@@ -381,4 +431,11 @@ async def get_agent(request: Request, factory_id: str, session_id: str) -> dict[
     }
 
 
-__all__ = ["agent_rows", "fleet_context", "router", "task_view", "visible_lines"]
+__all__ = [
+    "agent_rows",
+    "fleet_context",
+    "resolve_agent",
+    "router",
+    "task_view",
+    "visible_lines",
+]

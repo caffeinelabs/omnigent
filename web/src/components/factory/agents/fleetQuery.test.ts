@@ -133,3 +133,47 @@ describe("fleet query on the round-3 fleet", () => {
     expect(fleetCounts(fleet())).toMatchObject({ total: 41, dead: 1 });
   });
 });
+
+describe("fleet query by vendor, model and handle", () => {
+  const stamped = () =>
+    agentRows().map((row, i) =>
+      fleetAgent(
+        {
+          ...row,
+          handle: i === 0 ? "nova" : null,
+          vendor: row.harness?.includes("codex") ? "codex" : "claude",
+          model: row.harness?.includes("codex") ? "gpt-5-codex" : "claude-sonnet-4-5-20250929",
+          model_label: row.harness?.includes("codex") ? "gpt-5-codex" : "sonnet",
+        },
+        ROUND3_NOW_S,
+      ),
+    );
+  const match = (query: string) => filterFleet(stamped(), parseFleetQuery(query));
+
+  it("parses vendor as its own field", () => {
+    expect(parseFleetQuery("vendor:codex").terms).toEqual([
+      { kind: "match", field: "vendor", value: "codex", negate: false },
+    ]);
+  });
+
+  it("matches vendor, and model by id or short name", () => {
+    const codex = match("vendor:codex");
+    expect(codex.length).toBeGreaterThan(0);
+    expect(codex.every((a) => a.facts.vendor === "codex")).toBe(true);
+    expect(match("model:sonnet").length).toBe(match("vendor:claude").length);
+    expect(match("model:claude-sonnet-*").length).toBe(match("vendor:claude").length);
+    expect(match("-vendor:claude").length).toBe(codex.length);
+  });
+
+  it("matches bare words against the handle, vendor and model", () => {
+    expect(match("nova").map((a) => a.row.handle)).toEqual(["nova"]);
+    expect(match("gpt-5-codex").length).toBe(match("vendor:codex").length);
+  });
+
+  it("falls back to the harness for rows without a vendor", () => {
+    const old = agentRows().map((row) => fleetAgent(row, ROUND3_NOW_S));
+    const codex = filterFleet(old, parseFleetQuery("vendor:codex"));
+    expect(codex.length).toBeGreaterThan(0);
+    expect(codex.every((a) => a.row.harness?.includes("codex"))).toBe(true);
+  });
+});

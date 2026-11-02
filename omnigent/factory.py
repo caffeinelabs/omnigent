@@ -87,6 +87,8 @@ LABEL_BUNDLE: Final = "omnigent.factory.bundle"
 """Bundle a member runs, ``<agent_id>/<sha12>``."""
 LABEL_MODE: Final = "omnigent.factory.mode"
 """``normal``, or ``eval`` for a benchmark factory (root only)."""
+LABEL_HANDLE: Final = "omnigent.factory.handle"
+"""Stable short handle of a member or sub-agent, unique in its factory, e.g. ``"dot"``."""
 MODE_NORMAL: Final = "normal"
 MODE_EVAL: Final = "eval"
 MODES: Final = (MODE_NORMAL, MODE_EVAL)
@@ -649,3 +651,11 @@ FACTORY_ENABLED_ENV: Final = "OMNIGENT_FACTORY_ENABLED"
 def factory_enabled() -> bool:
     """Whether the factory built-ins and supervisor are switched on (``=1``)."""
     return os.environ.get(FACTORY_ENABLED_ENV, "").strip() == "1"
+
+
+COCKPIT_V2_ENV: Final = "OMNIGENT_FACTORY_COCKPIT_V2"
+
+
+def cockpit_v2_enabled() -> bool:
+    """Whether people may switch to the new cockpit (``=1``); each person opts in."""
+    return os.environ.get(COCKPIT_V2_ENV, "").strip() == "1"

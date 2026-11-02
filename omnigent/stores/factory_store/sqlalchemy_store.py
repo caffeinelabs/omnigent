@@ -2478,6 +2478,7 @@ class SqlAlchemyFactoryStore(FactoryStore):
         loop_id: str | None = None,
         trace_key: str | None = None,
         limit: int = 1000,
+        session_id: str | None = None,
     ) -> builtins.list[FactorySpan]:
         model = SqlFactorySpan
         stmt = select(model).where(
@@ -2497,6 +2498,7 @@ class SqlAlchemyFactoryStore(FactoryStore):
                 "pr_id": pr_id,
                 "task_id": task_id,
                 "loop_id": loop_id,
+                "session_id": session_id,
                 "trace_key": trace_key,
             },
         )

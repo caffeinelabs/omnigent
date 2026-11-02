@@ -15,7 +15,6 @@ import { factoryPageHref } from "@/components/factory/factoryRoutes";
 import { EmptyState } from "@/components/factory/project/projectParts";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
 import { Link } from "@/lib/routing";
-import { AgentPage } from "./AgentPage";
 import { AgentsPage } from "./AgentsPage";
 import { AlertsPage } from "./AlertsPage";
 import { DecisionsPage } from "./DecisionsPage";
@@ -32,6 +31,7 @@ import { ProjectsPage } from "./ProjectsPage";
 import { RoomPage } from "./RoomPage";
 import { SettingsPage } from "./SettingsPage";
 import { TimelinePage } from "./TimelinePage";
+import { AgentRoute, TeamsRoute } from "./cockpitV2Routes";
 
 /** `/activity`: every factory event, filterable by project, member and kind. */
 function ActivityPage() {
@@ -78,7 +78,9 @@ export function FactoryPage() {
         <Route path="projects/:slug" element={<ProjectPage />} />
         <Route path="prs/:prId" element={<PrPage />} />
         <Route path="agents" element={<AgentsPage />} />
-        <Route path="agents/:sid" element={<AgentPage />} />
+        <Route path="agents/:sid" element={<AgentRoute />} />
+        <Route path="teams" element={<TeamsRoute />} />
+        <Route path="teams/:tab" element={<TeamsRoute />} />
         <Route path="timeline" element={<TimelinePage />} />
         <Route path="alerts" element={<AlertsPage />} />
         <Route path="alerts/:ref" element={<IncidentPage />} />
