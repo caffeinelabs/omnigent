@@ -195,3 +195,70 @@ export function inboxDecisionItems(): OpenDecisionItem[] {
     },
   ];
 }
+
+/**
+ * D-19: Atlas's projects proposal for the owners, non-blocking, 2 d 18 h old
+ * and 6 h from expiring; Slack DMed Luka when it opened and twice since.
+ */
+export function slackNotifiedProposal(): DecisionView {
+  const opened = LIVE_RUN_NOW_S - (2 * 86400 + 18 * 3600);
+  return {
+    ...agentDecision(),
+    id: "d19d19d19d19d19d19d19d19d19d19d1",
+    ref: "D-19",
+    number: 19,
+    source: "proposal",
+    blocking: false,
+    question: "Approve project validate-build-tier?",
+    asked_by_title: "Atlas",
+    subject: "proposal:C-6",
+    assignee: "owners",
+    project_slug: null,
+    context: null,
+    options: [
+      {
+        id: "apply",
+        label: "Apply",
+        description: null,
+        recommended: true,
+        action: "apply_proposal",
+        href: null,
+        target: "proposal:C-6",
+      },
+      {
+        id: "edit",
+        label: "Edit & apply",
+        description: null,
+        recommended: false,
+        action: null,
+        href: null,
+        target: null,
+      },
+      {
+        id: "reject",
+        label: "Reject",
+        description: null,
+        recommended: false,
+        action: "reject_proposal",
+        href: null,
+        target: "proposal:C-6",
+      },
+    ],
+    created_at: opened,
+    updated_at: opened,
+    notified: [
+      { user_id: "luka@caffeine.ai", at: opened + 31, stage: "new", ok: true },
+      { user_id: "luka@caffeine.ai", at: opened + 4 * 3600, stage: "r4h", ok: true },
+      { user_id: "luka@caffeine.ai", at: opened + 24 * 3600, stage: "r24h", ok: true },
+      {
+        user_id: "mia@caffeine.ai",
+        at: opened + 24 * 3600,
+        stage: "owners",
+        ok: false,
+        error: "messages_tab_disabled",
+      },
+    ],
+    deadline_at: LIVE_RUN_NOW_S + 6 * 3600,
+    deadline_effect: "expires and nothing is started",
+  };
+}

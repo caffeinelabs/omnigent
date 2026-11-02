@@ -165,6 +165,8 @@ RULES: Final[dict[str, Rule]] = {
         Rule("task.unplanned", _FIND, "info", ("open_task",), auto_resolve=False),
         Rule("heartbeat.waste", _FIND, "notice", ("propose_cadence",)),
         Rule(issues.HUMAN_RULE, _INC, "notice", ("open_agent",), auto_resolve=False),
+        # Raised by the Slack DM engine; saving a working token resolves it.
+        Rule("slack.bot", _INC, "warning", (), assignee=issues.ASSIGN_OWNERS),
     )
 }
 """The rules table (spec §13.4)."""

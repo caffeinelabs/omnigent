@@ -359,6 +359,8 @@ async def test_factory_services_run_the_supervisor_only_when_enabled(
     stop = await start_factory_services(world.app_state)
     assert get_supervisor(world.app_state) is None
     assert notify._relay_notifier is None
+    # Factory off: no Slack DM engine either.
+    assert getattr(world.app_state, "factory_slack_dm", None) is None
     await stop()
 
     monkeypatch.setenv(F.FACTORY_ENABLED_ENV, "1")
@@ -368,7 +370,7 @@ async def test_factory_services_run_the_supervisor_only_when_enabled(
     started = [r.getMessage() for r in caplog.records if "factory services started" in r.message]
     assert started == [
         "factory services started: supervisor, env_prober, pr_poller, proposals_sweep, prune, "
-        "reconcile"
+        "reconcile, slack_dm"
     ]
     supervisor = get_supervisor(world.app_state)
     assert supervisor is not None

@@ -13,6 +13,7 @@ import {
   doneCheckDecision,
   lateQuestion,
   relaunchFailedDecision,
+  slackNotifiedProposal,
 } from "./__fixtures__/decisionFixtures";
 import { DecisionCard } from "./DecisionCard";
 
@@ -136,3 +137,20 @@ export const SendFailed: Story = {
 
 /** `?decision=D-2`: highlighted in the rail. */
 export const Highlighted = card(agentDecision(), { highlighted: true });
+
+/** D-19: DMed on Slack when it opened and at 4 h and 24 h; 6 h before it expires. */
+export const SlackNotifiedWithDeadline = card(slackNotifiedProposal());
+
+export const SlackNotifiedWithDeadlineDark = card(slackNotifiedProposal(), { theme: "dark" });
+
+/** The same card in a 390 px phone column. */
+export const SlackNotifiedWithDeadlinePhone: Story = {
+  args: { decision: slackNotifiedProposal() },
+  render: () => (
+    <FactoryStoryFrame mode="inline" width={390}>
+      <div className="p-3">
+        <DecisionCard decision={slackNotifiedProposal()} />
+      </div>
+    </FactoryStoryFrame>
+  ),
+};

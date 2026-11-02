@@ -711,12 +711,18 @@ async def set_slack_webhook(
 
 
 def routing_view(deps: FactoryDeps, factory_id: str) -> dict[str, Any]:
-    """:returns: ``{cockpit, browser, slack}``; ``slack`` says only whether one is set."""
+    """
+    :returns: ``{cockpit, browser, slack, slack_dm}``; ``slack`` says only whether a
+        webhook is set, ``slack_dm`` describes the Slack app (never its token).
+    """
+    from omnigent.server.factory.slackdm import secrets as slack_bot
+
     return {
         "cockpit": True,
         "browser": True,
         "slack": slack_webhook(deps, factory_id) is not None,
         "slack_min_severity": SLACK_MIN_SEVERITY,
+        "slack_dm": slack_bot.meta_view(slack_bot.bot_meta(deps, factory_id)),
     }
 
 

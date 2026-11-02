@@ -840,6 +840,24 @@ export interface DecisionView {
   thread?: string | null;
   /** e.g. `task:T-4`, `pr:<id>`, `proposal:C-4`. */
   subject?: string | null;
+  /** Slack DMs about it, oldest first. */
+  notified?: NotifiedView[];
+  /** When it defaults by itself: a proposal expires or applies, a trial reverts. */
+  deadline_at?: number | null;
+  /** What happens then, e.g. `expires and nothing is started`. */
+  deadline_effect?: string | null;
+}
+
+/** One Slack DM about a decision or incident (the `notify.slack` ledger). */
+export interface NotifiedView {
+  /** The person it went to (never a Slack member id). */
+  user_id: string;
+  at: number;
+  /** `new`, `r4h`, `r24h`, `owners`, `deadline`, `opened`, … */
+  stage: string;
+  /** Sent; false when it failed or was muted by the daily cap. */
+  ok?: boolean;
+  error?: string | null;
 }
 
 /** One activity row. `ts` is epoch milliseconds. */
@@ -905,7 +923,16 @@ export interface PersonView {
   present: boolean;
   location: string | null;
   idle: boolean;
-  notify: Record<string, unknown> | null;
+  /** Only the Slack link status: `{slack: "verified", enabled: true}`. */
+  notify: PersonNotifySummary | Record<string, unknown> | null;
+}
+
+export type SlackLinkStatus = "unlinked" | "pending" | "verified" | "error";
+
+/** What the roster may show of anyone's Slack DM settings. */
+export interface PersonNotifySummary {
+  slack?: SlackLinkStatus;
+  enabled?: boolean;
 }
 
 /** A structured object mirrored into a thread as a live card. */
@@ -1140,6 +1167,8 @@ export interface IssueView {
   def_version: number | null;
   /** Action ids the incident page offers. */
   runbook: string[];
+  /** Slack DMs about it (the incident page fills it). */
+  notified?: NotifiedView[];
 }
 
 /** One span; `started_at` and `ended_at` are epoch milliseconds. */
@@ -2074,6 +2103,116 @@ export interface AlertRoutingView {
   browser: boolean;
   slack: boolean;
   slack_min_severity?: string | null;
+  /** The Slack app for DMs (its token is never returned). */
+  slack_dm?: SlackAppView | null;
+}
+
+/** The factory's Slack app: workspace, bot and health; never the token. */
+export interface SlackAppView {
+  configured: boolean;
+  team: string | null;
+  bot: string | null;
+  status: "ok" | "invalid" | null;
+  error: string | null;
+  missing_scopes: string[];
+  set_by: string | null;
+  set_at: number | null;
+}
+
+export type NotifyGroup =
+  "decisions" | "reminders" | "prs" | "incidents" | "factory" | "budget" | "mentions" | "retros";
+
+/** A person's Slack DM settings (what they edit). */
+export interface NotifySettings {
+  /** The master switch: send me Slack DMs. */
+  enabled: boolean;
+  events: Record<NotifyGroup, boolean>;
+  incident_min: "warning" | "critical";
+  digest: { enabled: boolean; hour: number; days: "daily" | "weekdays" };
+  quiet: { enabled: boolean; start: string; end: string; critical_through: boolean };
+  /** IANA zone; null means UTC until set. */
+  tz: string | null;
+  hold_while_active: boolean;
+}
+
+/** The caller's own Slack link. */
+export interface SlackLinkView {
+  status: SlackLinkStatus;
+  enabled: boolean;
+  user_id: string | null;
+  team_id: string | null;
+  name: string | null;
+  handle: string | null;
+  email: string | null;
+  linked_at: number | null;
+  error: string | null;
+  code_expires_at: number | null;
+}
+
+/** `GET …/notify/me`. */
+export interface NotifyMeView {
+  user_id: string;
+  role: PersonRole;
+  settings: NotifySettings;
+  defaults: Omit<NotifySettings, "enabled">;
+  slack: SlackLinkView;
+  bot: SlackAppView;
+  last_dm: {
+    at: number;
+    summary: string;
+    subject: string | null;
+    status: "sent" | "failed" | "muted" | null;
+    error: string | null;
+  } | null;
+  now: { quiet: boolean; quiet_until: number | null; held_while_active: boolean; tz: string };
+}
+
+/** A Slack account the server resolved from a member ID or email. */
+export interface SlackAccountView {
+  user_id: string;
+  team_id: string;
+  name: string;
+  handle: string;
+  email: string | null;
+  tz: string | null;
+}
+
+export interface SlackLinkResponse {
+  account: SlackAccountView;
+  status: "found" | "pending";
+  code_expires_at?: number;
+}
+
+/** One roster person's reachability (owners; no member ids). */
+export interface NotifyTeamRow {
+  user_id: string;
+  role: PersonRole;
+  slack_status: SlackLinkStatus;
+  error: string | null;
+  enabled: boolean;
+  reachable: boolean;
+  groups_on: NotifyGroup[];
+  digest: boolean;
+  quiet_now: boolean;
+  last_dm_at: number | null;
+  last_error: string | null;
+}
+
+export interface NotifyTeamResponse {
+  data: NotifyTeamRow[];
+  reachable: number;
+  count: number;
+  bot: SlackAppView;
+}
+
+export interface SlackBotTestResponse {
+  ok: boolean;
+  team?: string;
+  bot?: string | null;
+  missing_scopes?: string[];
+  error?: string;
+  /** `sent`, `not_linked` or a Slack error code. */
+  dm: string | null;
 }
 
 export async function fetchAlertRouting(
@@ -2767,6 +2906,63 @@ export async function reportFactoryIssue(
   request: ReportIssueRequest,
 ): Promise<{ issue: IssueView }> {
   return readJson(await postJson(factoryUrl(factoryId, "/issues"), request));
+}
+
+/** Set (or remove with `null`) the Slack app's bot token after `auth.test`. Owners. */
+export async function putSlackBot(
+  factoryId: string,
+  token: string | null,
+): Promise<{ slack_dm: SlackAppView }> {
+  return readJson(await postJson(factoryUrl(factoryId, "/alerts/slack-bot"), { token }, "PUT"));
+}
+
+/** Check the Slack app token and DM the caller when linked. Owners. */
+export async function testSlackBot(factoryId: string): Promise<SlackBotTestResponse> {
+  return readJson(await postJson(factoryUrl(factoryId, "/alerts/slack-bot/test"), {}));
+}
+
+export async function fetchNotifyMe(
+  factoryId: string,
+  signal?: AbortSignal,
+): Promise<NotifyMeView> {
+  return readJson(await authenticatedFetch(factoryUrl(factoryId, "/notify/me"), { signal }));
+}
+
+/** Change your own Slack DM settings (any subset). */
+export async function putNotifyMe(
+  factoryId: string,
+  update: Partial<NotifySettings>,
+): Promise<NotifyMeView> {
+  return readJson(await postJson(factoryUrl(factoryId, "/notify/me"), update, "PUT"));
+}
+
+/** Find your Slack account by member ID or email; with `send_code`, DM it a code. */
+export async function linkSlack(
+  factoryId: string,
+  body: { member_id?: string; email?: string; send_code?: boolean },
+): Promise<SlackLinkResponse> {
+  return readJson(await postJson(factoryUrl(factoryId, "/notify/me/slack"), body));
+}
+
+export async function verifySlack(factoryId: string, code: string): Promise<NotifyMeView> {
+  return readJson(await postJson(factoryUrl(factoryId, "/notify/me/slack/verify"), { code }));
+}
+
+export async function unlinkSlack(factoryId: string): Promise<NotifyMeView> {
+  return readJson(await postJson(factoryUrl(factoryId, "/notify/me/slack"), undefined, "DELETE"));
+}
+
+/** A test DM listing your effective settings. */
+export async function testNotifyMe(factoryId: string): Promise<{ dm: string }> {
+  return readJson(await postJson(factoryUrl(factoryId, "/notify/me/test"), {}));
+}
+
+/** Who Slack DMs reach (owners). */
+export async function fetchNotifyTeam(
+  factoryId: string,
+  signal?: AbortSignal,
+): Promise<NotifyTeamResponse> {
+  return readJson(await authenticatedFetch(factoryUrl(factoryId, "/notify/team"), { signal }));
 }
 
 /** Set (or clear with `null`) the Slack webhook; the server never returns it. Owners. */

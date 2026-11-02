@@ -57,6 +57,8 @@ KEEP_KINDS: Final[tuple[str, ...]] = (
     "member.*",
     "budget.*",
     "chat.posted",
+    "notify.*",
+    "alerts.routing",
 )
 """Lifecycle kinds that are never pruned (any kind outside the pruned lists is kept too)."""
 

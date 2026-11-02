@@ -318,11 +318,24 @@ async def get_issue(request: Request, factory_id: str, ref: str) -> dict[str, An
     issue = await _issue_for(ctx, ref)
     page = await asyncio.to_thread(_page, ctx, issue)
     level = await asyncio.to_thread(_viewer_level, ctx)
+    view = issue_view(issue, ctx.raw.titles)
+    view["notified"] = await asyncio.to_thread(_notified, ctx.deps, ctx.root.id, issue)
     return {
-        "issue": issue_view(issue, ctx.raw.titles),
+        "issue": view,
         "mine": issues.is_mine(issue, ctx.user_id, level),
         **page,
     }
+
+
+def _notified(deps: FactoryDeps, factory_id: str, issue: FactoryIssue) -> list[dict[str, Any]]:
+    """:returns: The Slack DMs about *issue* (``NotifiedView`` rows), oldest first."""
+    from omnigent.server.factory.snapshot import notified_by_subject
+
+    subject = f"issue:{issue.ref or issue.id}"
+    rows = deps.factory_store.find_events(
+        factory_id, "notify.slack", issue.first_seen * 1000, subject, limit=500
+    )
+    return notified_by_subject(rows).get(subject, [])
 
 
 # ── Lifecycle ──────────────────────────────────────────────────

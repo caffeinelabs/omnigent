@@ -30,6 +30,7 @@ export function projectSectionId(section: ProjectSection): string {
 /** Settings sections under `/factory/<fid>/settings/<section>`. */
 export const SETTINGS_SECTIONS = [
   "people",
+  "notifications",
   "autonomy",
   "budgets",
   "alerts",

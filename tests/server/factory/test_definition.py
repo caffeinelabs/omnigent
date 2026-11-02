@@ -167,6 +167,7 @@ def test_an_invalid_block_falls_back_to_its_defaults(world: FactoryWorld) -> Non
     ("change", "code"),
     [
         ({"op": "replace", "path": "alerts.slack_webhook", "value": "https://x"}, "tier0"),
+        ({"op": "replace", "path": "alerts.slack_bot_token", "value": "xoxb-1"}, "tier0"),
         ({"op": "replace", "path": "policies.factory_guard", "value": {}}, "tier0"),
         ({"op": "replace", "path": "/gates/review", "value": "off"}, "tier0"),
         ({"op": "replace", "path": "rule_seq", "value": 9}, "tier0"),

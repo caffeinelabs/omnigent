@@ -902,6 +902,23 @@ class DecisionOptionView(_View):
     reasons: list[str] | None = None
 
 
+class NotifiedView(_View):
+    """
+    One Slack DM about an item (from the ``notify.slack`` ledger).
+
+    :param user_id: The person it went to (never a Slack member id).
+    :param at: Epoch seconds.
+    :param stage: ``new``, ``r4h``, ``r24h``, ``owners``, ``deadline``, ``opened``, …
+    :param ok: Sent (``False``: failed or muted).
+    """
+
+    user_id: str
+    at: int
+    stage: str
+    ok: bool = True
+    error: str | None = None
+
+
 class DecisionView(_View):
     """A question for the human, shown as ``ref`` (``D-<number>``)."""
 
@@ -936,6 +953,12 @@ class DecisionView(_View):
     claimed_at: int | None = None
     thread: str | None = None
     subject: str | None = None
+    notified: list[NotifiedView] = Field(default_factory=list)
+    """Slack DMs about it, oldest first."""
+    deadline_at: int | None = None
+    """When it defaults by itself (a proposal expires or applies, a trial reverts)."""
+    deadline_effect: str | None = None
+    """What happens then, e.g. ``"expires and nothing is started"``."""
 
 
 class EventView(_View):
@@ -1415,6 +1438,8 @@ class IssueView(_ClassView):
     proposal_ref: str | None = None
     def_version: int | None = None
     runbook: list[str] = Field(default_factory=list)
+    notified: list[NotifiedView] = Field(default_factory=list)
+    """Slack DMs about it, oldest first (the incident page fills it)."""
 
 
 class SpanView(_View):
@@ -1489,6 +1514,7 @@ __all__ = [
     "LoopView",
     "MemberRef",
     "MemberView",
+    "NotifiedView",
     "NowState",
     "OpenDecisionsResponse",
     "PersonView",

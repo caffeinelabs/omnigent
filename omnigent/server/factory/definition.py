@@ -427,7 +427,7 @@ CLASS_TABLE: Final = (
 )
 """:data:`CLASS_MAP` in words (the Definition panel shows it)."""
 OWNER_ONLY_PREFIXES: Final = ("engine.", "autonomy.", "budgets.", "models.")
-TIER0_PATHS: Final = frozenset({"alerts.slack_webhook", "rule_seq"})
+TIER0_PATHS: Final = frozenset({"alerts.slack_webhook", "alerts.slack_bot_token", "rule_seq"})
 
 
 def _num(value: Any) -> float | None:
