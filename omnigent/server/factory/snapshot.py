@@ -1205,7 +1205,8 @@ def _identify(
     """
     Stamp each member view with its handle and stuck fields (synchronous).
 
-    Handles are stored on first sight; closed members keep theirs from being reused.
+    Handles are stored on first sight; every session that ever held one in the
+    factory (closed, archived, or past the shown page) keeps it from being reused.
 
     :returns: Session id -> handle of the shown members and sub-agents.
     """
@@ -1477,11 +1478,12 @@ async def get_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
 
 
 def reset_cache() -> None:
-    """Forget cached snapshots, viewer permissions and costs (tests)."""
+    """Forget cached snapshots, viewer permissions, costs and handles (tests)."""
     _snapshots.clear()
     _cost_cache.clear()
     _locks.clear()
     _viewers.clear()
+    identity.reset_cache()
 
 
 def readable_set(

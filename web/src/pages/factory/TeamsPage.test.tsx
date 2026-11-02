@@ -6,6 +6,7 @@ import { preflightOk } from "@/components/factory/__fixtures__/liveRun";
 import { opsRoutes } from "@/components/factory/agents/__fixtures__/opsFixtures";
 import {
   benchResponse,
+  teamsAgentRows,
   teamsRoutes,
   teamsSnapshot,
 } from "@/components/factory/agents/__fixtures__/teamsFixtures";
@@ -88,6 +89,15 @@ describe("the new cockpit switch", () => {
     expect(window.localStorage.getItem(COCKPIT_STORAGE_KEY)).toBe("v2");
   });
 
+  it("links back to Teams from the fleet once this person switched", async () => {
+    window.localStorage.setItem(COCKPIT_STORAGE_KEY, "v2");
+    serve(true);
+    renderAt("/agents");
+    fireEvent.click(await screen.findByTestId("back-to-teams"));
+    await screen.findByTestId("factory-teams-page");
+    expect(location).toBe(`${BASE}/teams`);
+  });
+
   it("switches back to the classic view", async () => {
     window.localStorage.setItem(COCKPIT_STORAGE_KEY, "v2");
     serve(true);
@@ -160,6 +170,36 @@ describe("Teams", () => {
     );
   });
 
+  it("shows the leads' helpers in Other agents, so every counted agent has a line", async () => {
+    const rows = teamsAgentRows(snapshot);
+    const atlas = rows.find((r) => r.handle === "atlas")!;
+    const helper = {
+      ...rows.find((r) => r.handle === "ivy")!,
+      session_id: "f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0f0",
+      handle: "lark",
+      title: "(sample) helper",
+      project: null,
+      parent_session_id: atlas.session_id,
+      status: "running",
+      stuck: true,
+      stuck_reason: "running with no new activity for 20 min",
+    };
+    serve(true, teamsRoutes(snapshot, { rows: [...rows, helper] }));
+    renderAt("/teams?state=stuck");
+    const others = await screen.findByTestId("team-card-others");
+    expect(within(others).getByTestId("team-member-lark")).toHaveTextContent("Stuck");
+    expect(screen.getByTestId("teams-state-stuck")).toHaveTextContent("2 stuck");
+  });
+
+  it("says when a peeked agent is not in this factory", async () => {
+    serve(true);
+    renderAt("/teams?peek=agent%3Anobody");
+    expect(await screen.findByTestId("agent-peek-missing")).toHaveTextContent(
+      "Not in this factory",
+    );
+    expect(screen.queryByTestId("agent-panel")).toBeNull();
+  });
+
   it("shows the bench with low-n rows marked", async () => {
     serve(true);
     renderAt("/teams/bench");
@@ -202,5 +242,26 @@ describe("an agent's full page", () => {
     renderAt(`/agents/${snapshot.members.at(-1)!.session_id}?tab=transcript`);
     await waitFor(() => expect(authenticatedFetch).toHaveBeenCalled());
     expect(screen.queryByTestId("factory-agent-profile")).toBeNull();
+  });
+
+  it("keeps the classic page on its Live tab and for a replay moment", async () => {
+    window.localStorage.setItem(COCKPIT_STORAGE_KEY, "v2");
+    serve(true);
+    const sid = snapshot.members.at(-1)!.session_id;
+    renderAt(`/agents/${sid}?tab=transcript`);
+    fireEvent.click(await screen.findByTestId("agent-tab-live"));
+    await waitFor(() => expect(location).toContain("tab=live"));
+    expect(screen.getByTestId("factory-agent-page")).toBeInTheDocument();
+    expect(screen.queryByTestId("factory-agent-profile")).toBeNull();
+  });
+
+  it("opens a Timeline replay link on the classic page", async () => {
+    window.localStorage.setItem(COCKPIT_STORAGE_KEY, "v2");
+    serve(true);
+    const sid = snapshot.members.at(-1)!.session_id;
+    renderAt(`/agents/${sid}?at=${(snapshot.server_time - 600) * 1000}`);
+    expect(await screen.findByTestId("factory-agent-page")).toBeInTheDocument();
+    expect(screen.queryByTestId("factory-agent-profile")).toBeNull();
+    expect(location).toContain("at=");
   });
 });

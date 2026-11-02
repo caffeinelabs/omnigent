@@ -46,6 +46,7 @@ def bucket_seconds(window_s: int) -> int:
 def _stuck_intervals(
     deps: FactoryDeps, factory_id: str, sid: str, until_ms: int
 ) -> list[states.Interval]:
+    """Stuck stretches: open and acked incidents run to now; snoozed ones end when last seen."""
     target = f"member:{sid.replace('-', '').lower()}"
     rows = deps.factory_store.list_issues(factory_id, class_="incident", limit=2000)
     out: list[states.Interval] = []
@@ -54,7 +55,12 @@ def _stuck_intervals(
             continue
         if issue.target.replace("-", "").lower() != target:
             continue
-        end = issue.resolved_at * 1000 if issue.resolved_at else until_ms
+        if issue.resolved_at:
+            end = issue.resolved_at * 1000
+        elif issue.status in stuck.OPEN_STATUSES:
+            end = until_ms
+        else:
+            end = (issue.last_seen or issue.first_seen) * 1000
         out.append((issue.first_seen * 1000, end))
     return out
 
@@ -126,10 +132,11 @@ def build_timeline(
     last = (member.get("now") or {}).get("last_event_at") or member.get("last_activity_at")
     found = states.segments(deps, factory_id, sid, since_ms, until_ms)
     found = states.clip_open(found, live in _BUSY, int(last * 1000) if last else None)
-    first = deps.factory_store.list_spans(
-        factory_id, kinds=list(states.SEGMENT_KINDS), session_id=sid, limit=1
+    conv = deps.conversation_store.get_conversation(sid)
+    born_ms = int(conv.created_at * 1000) if conv is not None and conv.created_at else None
+    recorded_since, partial = states.coverage(
+        states.recording_start(deps, factory_id), born_ms, since_ms
     )
-    recorded_since = first[0].started_at if first else None
     layers: dict[str, list[states.Interval]] = {states.WORKING: [], states.WAITING: []}
     for seg in found:
         layers.setdefault(seg.state, []).append((seg.start, seg.end or until_ms))
@@ -154,7 +161,7 @@ def build_timeline(
             for i, cost in enumerate(spend)
         ],
         "recorded_since": recorded_since // 1000 if recorded_since else None,
-        "partial": recorded_since is None or recorded_since > since_ms,
+        "partial": partial,
         "tool_calls_partial": tools_partial,
     }
 

@@ -184,6 +184,41 @@ async def test_a_closed_members_handle_is_not_handed_out_again(cockpit: Cockpit)
     assert shown[w.id("pl2")] != "nova"
 
 
+async def test_a_closed_members_sub_agent_keeps_its_handle(cockpit: Cockpit) -> None:
+    w, fid = cockpit.world, cockpit.fid
+    w.make_session(
+        "old_pl",
+        agent="pl",
+        title="PL · old",
+        labels={
+            F.LABEL_ID: fid,
+            F.LABEL_ROLE: "project_lead",
+            F.LABEL_PROJECT: "api-version",
+            F.LABEL_STATE: "active",
+        },
+    )
+    w.make_session("old_ic", agent="pl", title="ic:old", parent="old_pl", sub_agent_name="ic")
+    await snapshot.get_snapshot(cockpit.app.state, w.get("lead_a"))
+    w.store.set_labels(w.id("old_pl"), {CLOSED_LABEL_KEY: CLOSED_LABEL_VALUE})
+    # A new sub-agent of the open PL whose first draw is the closed PL's sub-agent's name.
+    new = w.make_session("new_ic", agent="pl", title="ic:new", parent="pl", sub_agent_name="ic")
+    first_draw = identity.POOL[identity._start(new.id)]
+    w.store.set_labels(w.id("old_ic"), {F.LABEL_HANDLE: first_draw})
+    # A duplicate stored before the holder was known loses the name too.
+    dup = w.make_session("dup_ic", agent="pl", title="ic:dup", parent="pl", sub_agent_name="ic")
+    w.store.set_labels(dup.id, {F.LABEL_HANDLE: first_draw})
+    snapshot.reset_cache()
+
+    raw = await snapshot.get_snapshot(cockpit.app.state, w.get("lead_a"))
+
+    shown = {m["session_id"]: m["handle"] for m in raw.body["members"]}
+    assert w.id("old_ic") not in shown
+    assert shown[w.id("new_ic")] != first_draw and shown[w.id("dup_ic")] != first_draw
+    assert identity.handle_holders(w.store, fid)[w.id("old_ic")] == first_draw
+    assert w.get("old_ic").labels[F.LABEL_HANDLE] == first_draw
+    assert raw.handles.get(first_draw) is None
+
+
 async def test_fleet_rows_carry_handle_vendor_and_model(cockpit: Cockpit) -> None:
     w = cockpit.world
     w.store.set_labels(w.id("ic"), {F.LABEL_HANDLE: "rex"})

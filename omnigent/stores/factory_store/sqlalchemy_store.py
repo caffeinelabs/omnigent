@@ -2479,6 +2479,7 @@ class SqlAlchemyFactoryStore(FactoryStore):
         trace_key: str | None = None,
         limit: int = 1000,
         session_id: str | None = None,
+        newest_first: bool = False,
     ) -> builtins.list[FactorySpan]:
         model = SqlFactorySpan
         stmt = select(model).where(
@@ -2502,9 +2503,35 @@ class SqlAlchemyFactoryStore(FactoryStore):
                 "trace_key": trace_key,
             },
         )
-        stmt = stmt.order_by(model.started_at, model.id).limit(limit)
+        order = (
+            (model.started_at.desc(), model.id.desc())
+            if newest_first
+            else (model.started_at, model.id)
+        )
+        stmt = stmt.order_by(*order).limit(limit)
         with self._session("list_factory_spans") as session:
             return [_span(r) for r in session.execute(stmt).scalars().all()]
+
+    def prune_spans(
+        self, older_than_ms: int, kinds: Sequence[str], *, key_prefix: str | None = None
+    ) -> int:
+        model = SqlFactorySpan
+        stmt = delete(model).where(
+            model.workspace_id == current_workspace_id(),
+            model.kind.in_([encode_factory_span_kind(k) for k in kinds]),
+            or_(
+                model.ended_at < older_than_ms,
+                and_(model.ended_at.is_(None), model.started_at < older_than_ms),
+            ),
+        )
+        if key_prefix is not None:
+            stmt = stmt.where(model.dedupe_key.startswith(key_prefix, autoescape=True))
+
+        def write(session: Session) -> int:
+            result = session.execute(stmt.execution_options(synchronize_session=False))
+            return int(result.rowcount or 0)  # type: ignore[attr-defined]
+
+        return run_write_transaction(self._session_immediate, "prune_factory_spans", write)
 
     # ── Cost ledger ─────────────────────────────────────────────
 

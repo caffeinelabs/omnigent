@@ -47,6 +47,16 @@ describe("an agent's state", () => {
     expect(filterOf("done")).toBe("idle");
   });
 
+  it("ranks waiting on a person above stuck, and stuck above working", () => {
+    const dot = byHandle("dot").row;
+    expect(teamState(dot)).toBe("stuck");
+    expect(teamState(dot, true)).toBe("waiting");
+    expect(teamState({ ...dot, status: "waiting" })).toBe("waiting");
+    expect(teamState({ ...dot, status: "running" })).toBe("stuck");
+    // The fleet's flags no longer carry "stuck"; only the field counts.
+    expect(teamState({ ...byHandle("ivy").row, flags: ["stuck"] })).toBe("working");
+  });
+
   it("says waiting on you only when the viewer answers it", () => {
     const row = byHandle("nova").row;
     const mine = teamMember(row, ROOT, new Set([row.session_id.replace(/-/g, "").toLowerCase()]));
@@ -153,6 +163,38 @@ describe("teams", () => {
     // Busy members always stay, however many share a role.
     const busy = { ...older, status: "running" };
     expect(currentTeam([...team.slice(0, -1), teamMember(busy, ROOT)]).earlier).toBe(0);
+  });
+
+  it("puts the leads' helpers and shared-project members in others", () => {
+    const rows = teamsAgentRows(snapshot);
+    const atlas = rows.find((r) => r.handle === "atlas")!;
+    const helper = {
+      ...rows.find((r) => r.handle === "ivy")!,
+      session_id: "helper",
+      handle: "lark",
+      project: null,
+      parent_session_id: atlas.session_id,
+      stuck: true,
+    };
+    const shared = {
+      ...rows.find((r) => r.handle === "kip")!,
+      session_id: "env",
+      handle: "wren",
+      project: "base-env",
+    };
+    const all = [...rows, helper, shared].map((r) => teamMember(r, ROOT));
+    const { teams, others } = groupTeams(all, snapshot.projects, new Set(["base-env"]));
+    expect(others.members.map((m) => m.row.handle).sort()).toEqual(["lark", "wren"]);
+    expect(teams.some((t) => t.slug === "base-env")).toBe(false);
+    const shown = new Set([
+      ...groupTeams(all, snapshot.projects, new Set(["base-env"])).leads,
+      ...teams.flatMap((t) => t.members),
+      ...others.members,
+    ]);
+    // Every stuck agent the counts include is on a card.
+    expect(stateCounts(all).stuck).toBe(
+      all.filter((m) => m.state === "stuck" && shown.has(m)).length,
+    );
   });
 
   it("falls back to the snapshot's members with their handles", () => {

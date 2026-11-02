@@ -170,6 +170,13 @@ describe("fleet query by vendor, model and handle", () => {
     expect(match("gpt-5-codex").length).toBe(match("vendor:codex").length);
   });
 
+  it("still matches the harness, as when vendor: was its alias", () => {
+    const native = match("vendor:codex-native");
+    expect(native.length).toBeGreaterThan(0);
+    expect(native.every((a) => a.row.harness === "codex-native")).toBe(true);
+    expect(native.length).toBe(stamped().filter((a) => a.row.harness === "codex-native").length);
+  });
+
   it("falls back to the harness for rows without a vendor", () => {
     const old = agentRows().map((row) => fleetAgent(row, ROUND3_NOW_S));
     const codex = filterFleet(old, parseFleetQuery("vendor:codex"));

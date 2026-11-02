@@ -28,11 +28,14 @@ H_MS = 3_600_000
 
 
 @pytest.fixture(autouse=True)
-def _fresh() -> Iterator[None]:
+def _fresh(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv(states.STATE_SEGMENTS_ENV, "1")
     snapshot.reset_cache()
+    states.reset_cache()
     issues.reset()
     yield
     snapshot.reset_cache()
+    states.reset_cache()
     issues.reset()
 
 
@@ -135,6 +138,146 @@ async def test_non_members_are_ignored(world: FactoryWorld) -> None:
 
     assert world.deps.factory_store.list_spans(world.id("plain"), kinds=["turn"]) == []
     assert rec.current(world.id("plain")) is None
+
+
+async def test_recording_is_dark_unless_switched_on(
+    world: FactoryWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    sid = world.id("ic")
+    monkeypatch.delenv(states.STATE_SEGMENTS_ENV)
+    monkeypatch.delenv(F.COCKPIT_V2_ENV, raising=False)
+    rec = StateRecorder(world.app_state, debounce_s=0.0)
+
+    rec.on_relayed(sid, "running", None)
+    await rec.drain()
+    assert _segments(world, "ic") == [] and rec.current(sid) is None
+
+    # The new cockpit turns it on, unless the segments' own switch says no.
+    monkeypatch.setenv(F.COCKPIT_V2_ENV, "1")
+    monkeypatch.setenv(states.STATE_SEGMENTS_ENV, "0")
+    rec.on_relayed(sid, "running", None)
+    await rec.drain()
+    assert _segments(world, "ic") == []
+
+    monkeypatch.delenv(states.STATE_SEGMENTS_ENV)
+    rec.on_relayed(sid, "running", None)
+    await rec.drain()
+    assert len(_segments(world, "ic")) == 1
+
+
+def _item(world: FactoryWorld, key: str, role: str, at_s: int, monkeypatch: Any) -> None:
+    from omnigent.stores.conversation_store import sqlalchemy_store
+
+    with monkeypatch.context() as patched:
+        patched.setattr(sqlalchemy_store, "now_epoch", lambda: at_s)
+        world.store.append(
+            world.id(key),
+            [
+                NewConversationItem(
+                    type="message",
+                    response_id=f"r{at_s}",
+                    data=parse_item_data(
+                        "message",
+                        {
+                            "role": role,
+                            "content": [{"type": "input_text", "text": "(sample)"}],
+                            **({"agent": "ic"} if role == "assistant" else {}),
+                        },
+                    ),
+                )
+            ],
+        )
+
+
+async def test_a_busy_edge_ends_a_stale_segment_at_the_last_activity(
+    world: FactoryWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fid, sid = world.id("lead_a"), world.id("ic")
+    t0 = 1_000_000
+    spans.write_span(
+        world.deps.factory_store,
+        fid,
+        kind="turn",
+        name="working",
+        dedupe_key=spans.state_key(sid, t0 * 1000),
+        started_at=t0 * 1000,
+        session_id=sid,
+        attrs={"segment": "working"},
+    )
+    _item(world, "ic", "assistant", t0 + 60, monkeypatch)
+    # Four hours later a new message starts the next turn; the server restarted in between.
+    _item(world, "ic", "user", t0 + 4 * 3600 - 2, monkeypatch)
+    rec = StateRecorder(world.app_state, clock=Clock(t0 + 4 * 3600), debounce_s=0.0)
+
+    rec.on_relayed(sid, "running", None)
+    await rec.drain()
+
+    stale, fresh = _segments(world, "ic")
+    assert (stale.outcome, stale.ended_at) == ("ok", (t0 + 60) * 1000)
+    assert stale.attrs["closed_late"] is True
+    assert (fresh.outcome, fresh.started_at) == ("open", (t0 + 4 * 3600) * 1000)
+
+
+async def test_shutdown_writes_pending_closes_at_their_turn_end(world: FactoryWorld) -> None:
+    clock = Clock(3_000_000.0)
+    rec = StateRecorder(world.app_state, clock=clock, debounce_s=3600.0)
+    sid = world.id("ic")
+    setattr(world.app_state, states.RECORDER_STATE_ATTR, rec)
+
+    rec.on_relayed(sid, "running", None)
+    await rec.drain(timeout_s=0.2)
+    clock.now += 90
+    rec.on_relayed(sid, "idle", None)
+    clock.now += 600
+    await states.flush(world.app_state)
+
+    [seg] = _segments(world, "ic")
+    assert (seg.outcome, seg.ended_at) == ("ok", 3_000_090_000)
+    assert rec.current(sid) is None and not rec._closing
+
+
+async def test_old_segments_are_pruned(world: FactoryWorld) -> None:
+    fid, sid = world.id("lead_a"), world.id("ic")
+    store = world.deps.factory_store
+    day = 86_400_000
+    now = 100 * day
+    for start, end in ((now - 40 * day, now - 39 * day), (now - 2 * day, now - day)):
+        spans.write_span(
+            store,
+            fid,
+            kind="turn",
+            name="working",
+            dedupe_key=spans.state_key(sid, start),
+            started_at=start,
+            ended_at=end,
+            outcome="ok",
+            session_id=sid,
+        )
+    store.insert_span(
+        fid,
+        kind="turn",
+        name="other",
+        trace_key="other",
+        started_at=now - 50 * day,
+        ended_at=now - 49 * day,
+        outcome="ok",
+    )
+
+    assert states.prune(store, now) == 1
+    assert [s.started_at for s in _segments(world, "ic")] == [now - 2 * day]
+    assert len(store.list_spans(fid, kinds=["turn"])) == 2
+
+
+def test_coverage_counts_only_the_time_an_agent_existed() -> None:
+    since = 10 * H_MS
+    # Recorded since before the window: complete.
+    assert states.coverage(5 * H_MS, 1 * H_MS, since) == (5 * H_MS, False)
+    # Recording began inside the window, after the agent was born: partial.
+    assert states.coverage(12 * H_MS, 1 * H_MS, since) == (12 * H_MS, True)
+    # The agent was born inside the window, after recording began: complete.
+    assert states.coverage(5 * H_MS, 15 * H_MS, since) == (15 * H_MS, False)
+    # Nothing recorded in the factory yet.
+    assert states.coverage(None, 15 * H_MS, since) == (None, True)
 
 
 async def test_a_segment_a_roll_left_open_closes_at_the_first_turn_end(
@@ -300,7 +443,8 @@ async def test_the_timeline_strip_overlays_stuck_and_checks(
     assert body["totals"]["checks"] == pytest.approx(1800, abs=5)
     assert body["bucket_s"] == 3600 and len(body["series"]) == 24
     assert sum(b["tool_calls"] for b in body["series"]) == 1
-    assert body["partial"] is True and body["recorded_since"] == pytest.approx(now - 5 * 3600, 2)
+    # The session was created just now, after its sample segments: nothing is missing.
+    assert body["partial"] is False
 
 
 async def test_timeline_window_and_visibility(cockpit: Cockpit) -> None:
@@ -346,7 +490,7 @@ async def test_a_repeat_incident_marks_its_member_stuck(cockpit: Cockpit) -> Non
     assert member["stuck_reason"] == "same failing Bash call 3 times"
     assert member["stuck_issue"] == "INC-1" and member["stuck_since"]
     row = next(r for r in rows.json()["data"] if r["session_id"] == ic)
-    assert row["stuck"] is True and "stuck" in row["flags"]
+    assert row["stuck"] is True and "stuck" not in row["flags"]
     others = [m for m in snap.json()["members"] if m["session_id"] != ic]
     assert not any(m["stuck"] for m in others)
 

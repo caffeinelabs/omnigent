@@ -172,14 +172,14 @@ export function AgentsPage() {
       : "waiting for the first poll";
   return (
     <div data-testid="factory-agents-page" className="flex min-w-0 flex-col gap-3">
-      {cockpit.available && !cockpit.on && (
+      {cockpit.available && (
         <Link
-          to={teamsPageHref(fid, "teams", { cockpit: "v2" })}
-          componentId="factory.agents.try_teams"
-          data-testid="try-teams-view"
+          to={cockpit.on ? teamsPageHref(fid) : teamsPageHref(fid, "teams", { cockpit: "v2" })}
+          componentId={cockpit.on ? "factory.agents.teams" : "factory.agents.try_teams"}
+          data-testid={cockpit.on ? "back-to-teams" : "try-teams-view"}
           className="self-end text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
         >
-          Try the new Teams view
+          {cockpit.on ? "Back to Teams" : "Try the new Teams view"}
         </Link>
       )}
       {agents.isLoading && !agents.data ? (

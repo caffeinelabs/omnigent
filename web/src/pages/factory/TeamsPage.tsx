@@ -17,6 +17,7 @@ import { MemberRing, STATE_COLOR, StateWord } from "@/components/factory/agents/
 import { isMissingRoute, useFactoryAgents } from "@/components/factory/agents/opsQueries";
 import {
   FILTER_WORD,
+  type OtherAgents,
   type ProjectTeam,
   SEAT_WORD,
   STATE_FILTERS,
@@ -193,6 +194,41 @@ function TeamCard({
   );
 }
 
+/** The leads' helpers and members of shared projects: every counted agent shows somewhere. */
+function OtherAgentsCard({
+  others,
+  onOpen,
+}: {
+  others: OtherAgents;
+  onOpen: (m: TeamMember) => void;
+}) {
+  return (
+    <section
+      aria-label="Other agents"
+      data-testid="team-card-others"
+      className="flex flex-col rounded-xl border border-border bg-card"
+    >
+      <header className="px-4 pt-3 pb-2">
+        <h3 className="text-sm font-semibold">Other agents</h3>
+        <p className="text-xs text-muted-foreground">
+          Helpers of the leads, and agents on shared work outside a project team.
+        </p>
+      </header>
+      <div className="flex flex-col px-2 pb-2">
+        {others.members.map((m) => (
+          <MemberLine key={m.row.session_id} member={m} onOpen={onOpen} />
+        ))}
+      </div>
+      <footer className="mt-auto border-t border-border px-4 py-2 text-right text-xs text-muted-foreground">
+        {others.members.length} {others.members.length === 1 ? "agent" : "agents"}
+        {others.earlier
+          ? ` · ${others.earlier} earlier ${others.earlier === 1 ? "session" : "sessions"}`
+          : ""}
+      </footer>
+    </section>
+  );
+}
+
 function AllAgentsTable({
   members,
   onOpen,
@@ -351,18 +387,22 @@ export function TeamsPage() {
   const grouped = useMemo(
     () =>
       groupTeams(
-        shown.filter((m) => !shared.some((p) => p.slug === m.row.project)),
+        shown,
         projects.filter((p) => p.kind !== "integration"),
+        new Set(projects.filter((p) => p.kind === "integration").map((p) => p.slug)),
       ),
-    [shown, projects, shared],
+    [shown, projects],
   );
   const bench = useFactoryBench(fid, "30d", { enabled: tab === "bench" });
-  const peeked = peek?.startsWith(PEEK_PREFIX)
-    ? members.find((m) => {
-        const ref = peek.slice(PEEK_PREFIX.length).toLowerCase();
+  const peekRef = peek?.startsWith(PEEK_PREFIX) ? peek.slice(PEEK_PREFIX.length) : null;
+  const peeked = peekRef
+    ? (members.find((m) => {
+        const ref = peekRef.toLowerCase();
         return m.row.handle === ref || m.row.session_id === ref;
-      })
+      }) ?? null)
     : null;
+  // A link to an agent this factory does not have (or the viewer cannot see) says so.
+  const peekMissing = peekRef != null && peeked == null && !(agents.isLoading && !agents.data);
   const open = (m: TeamMember) =>
     setParam("peek", `${PEEK_PREFIX}${m.row.handle ?? m.row.session_id}`);
   const memberView = peeked
@@ -564,20 +604,41 @@ export function TeamsPage() {
                 </span>
               ))}
             </div>
-            {grouped.teams.length === 0 ? (
+            {grouped.teams.length === 0 && grouped.others.members.length === 0 ? (
               <p className="text-sm text-muted-foreground">No project team matches.</p>
             ) : (
               <div className="grid gap-3 md:grid-cols-2">
                 {grouped.teams.map((team) => (
                   <TeamCard key={team.slug} factoryId={fid} team={team} onOpen={open} />
                 ))}
+                {grouped.others.members.length > 0 && (
+                  <OtherAgentsCard others={grouped.others} onOpen={open} />
+                )}
               </div>
             )}
           </section>
         </>
       )}
-      <Sheet open={peeked != null} onOpenChange={(o) => !o && setParam("peek", null)}>
+      <Sheet
+        open={peeked != null || peekMissing}
+        onOpenChange={(o) => !o && setParam("peek", null)}
+      >
         <SheetContent side="right" size="lg" aria-describedby={undefined}>
+          {peekMissing && (
+            <>
+              <SheetHeader>
+                <SheetTitle className="text-sm text-muted-foreground">Agent</SheetTitle>
+              </SheetHeader>
+              <SheetBody>
+                <EmptyState
+                  testId="agent-peek-missing"
+                  icon={<UsersIcon aria-hidden className="size-6 text-muted-foreground/50" />}
+                  title="Not in this factory"
+                  body={`No agent here is called “${peekRef}”, or you cannot see it. Its session may have closed, or the link is from another factory.`}
+                />
+              </SheetBody>
+            </>
+          )}
           {peeked && (
             <>
               <SheetHeader className="flex-row items-center gap-2">

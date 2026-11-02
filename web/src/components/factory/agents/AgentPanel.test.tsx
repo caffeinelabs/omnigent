@@ -97,6 +97,14 @@ describe("the state sentence", () => {
     expect(theirs.next).toBe("Someone else answers it. Nothing needs you.");
   });
 
+  it("says a stuck agent that waits on you is waiting on you", () => {
+    const s = sentence(member("dot", {}, true));
+    expect(s.state).toBe("waiting");
+    expect(s.headline).toMatch(/^Waiting on you/);
+    expect(s.next).not.toContain("Nothing needs you");
+    expect(sentence(member("dot", { status: "waiting" })).state).toBe("waiting");
+  });
+
   it("says a stopped agent needs a person, or its lead", () => {
     const lead = sentence(member("mira"));
     expect(lead.headline).toBe("Stopped: (sample) relaunch failed: the sandbox did not start");
@@ -159,6 +167,17 @@ describe("the agent panel", () => {
       "href",
       expect.stringContaining("tab=transcript"),
     );
+    // All eight classic tabs stay one click away; Live keeps its tab so it opens the classic page.
+    for (const [name, tab] of [
+      ["Live", "live"],
+      ["Task & loop", "task"],
+      ["Cost", "cost"],
+    ] as const) {
+      expect(screen.getByRole("link", { name })).toHaveAttribute(
+        "href",
+        expect.stringContaining(`tab=${tab}`),
+      );
+    }
     expect(screen.getByText("@dot")).toBeInTheDocument();
   });
 

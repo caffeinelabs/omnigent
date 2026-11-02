@@ -17,6 +17,7 @@ import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext"
 import {
   ALL_MS,
   DEFAULT_SHOW,
+  TIMELINE_SPAN_KINDS,
   type TimelineShow,
   type TimelineWindow,
   WINDOW_MS,
@@ -115,7 +116,7 @@ export function TimelinePage() {
   const to = replayAt ?? nowMs;
   const span = win === "all" ? ALL_MS : WINDOW_MS[win];
   const since = Math.floor((to - span) / FETCH_GRAIN_MS) * FETCH_GRAIN_MS;
-  const spans = useFactorySpans(fid, since);
+  const spans = useFactorySpans(fid, since, { kinds: TIMELINE_SPAN_KINDS });
   const data = spans.data?.data;
   const from = useMemo(() => windowStart(win, to, data ?? []), [win, to, data]);
   const groups = useMemo(() => {

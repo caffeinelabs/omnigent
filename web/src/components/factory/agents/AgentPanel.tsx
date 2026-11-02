@@ -40,12 +40,15 @@ export interface AgentPanelProps {
   initialWindow?: TimelineWindow;
 }
 
+/** Every classic Agent page tab, one click away. */
 const DEBUG_TABS = [
+  ["live", "Live"],
   ["transcript", "Transcript"],
   ["tools", "Tool calls"],
   ["mail", "Mail"],
   ["terminal", "Terminal"],
   ["diff", "Diff"],
+  ["task", "Task & loop"],
   ["cost", "Cost"],
 ] as const;
 

@@ -89,6 +89,8 @@ LABEL_MODE: Final = "omnigent.factory.mode"
 """``normal``, or ``eval`` for a benchmark factory (root only)."""
 LABEL_HANDLE: Final = "omnigent.factory.handle"
 """Stable short handle of a member or sub-agent, unique in its factory, e.g. ``"dot"``."""
+LABEL_HANDLE_FACTORY: Final = "omnigent.factory.handle_factory"
+"""Root id of the factory a handle was handed out in (closed and archived holders keep it)."""
 MODE_NORMAL: Final = "normal"
 MODE_EVAL: Final = "eval"
 MODES: Final = (MODE_NORMAL, MODE_EVAL)

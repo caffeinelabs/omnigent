@@ -1,9 +1,9 @@
 """The fleet API: every agent of a factory, sub-agents included, with its live "now".
 
 - ``GET /v1/factory/factories/{fid}/agents``: one row per agent (handle, role,
-  harness, vendor, model, project, task and loop, status and ``now``, stuck and
-  why, own and subtree cost, open mail in and out, pending decisions, flags,
-  open issues) plus the newest "Live now" lines.
+  harness, vendor, model and its short label, project, task and loop, status
+  and ``now``, stuck and why, own and subtree cost, open mail in and out,
+  pending decisions, flags, open issues) plus the newest "Live now" lines.
 - ``GET /v1/factory/factories/{fid}/agents/{sid}``: the row plus recent tool
   calls, activity lines, mail in and out, tasks, open issues and a daily cost
   series from the ledger. ``sid`` may be the agent's handle.
@@ -209,8 +209,6 @@ def agent_rows(ctx: FleetContext, extras: _Extras) -> list[dict[str, Any]]:
         own = activity_now.own_cost(conv) if conv is not None else member.get("cost_usd")
         mine = _member_issues(sid, extras.issues)
         vendor, model = extras.models.get(sid, (None, None))
-        if member.get("stuck"):
-            flags.append("stuck")
         rows.append(
             {
                 "session_id": sid,
@@ -219,7 +217,9 @@ def agent_rows(ctx: FleetContext, extras: _Extras) -> list[dict[str, Any]]:
                 "role": member["role"],
                 "harness": member["harness"],
                 "vendor": vendor or identity.vendor_of(member["harness"], model),
-                "model": model,
+                # Unchanged: what it reported or was overridden to; the label also
+                # reads its bundle's model.
+                "model": (conv.reported_model or conv.model_override) if conv else None,
                 "model_label": identity.model_label(model),
                 "project": member["project"],
                 "parent_session_id": member["parent_session_id"],

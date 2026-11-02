@@ -1966,9 +1966,9 @@ export interface AgentRowView {
   harness: string | null;
   /** Who runs it, e.g. `claude` or `codex`. */
   vendor?: string | null;
-  /** Its override, else what it reported, else its bundle's (e.g. `opus`). */
+  /** What it reported, else its override (unchanged; may be null before its first turn). */
   model: string | null;
-  /** The short model name, e.g. `sonnet` or `gpt-5-codex`. */
+  /** The short name of the model it runs (override, report, else its bundle's), e.g. `sonnet`. */
   model_label?: string | null;
   /** An open `agent.quiet` / `agent.repeat` incident targets it, and why. */
   stuck?: boolean;
@@ -1996,7 +1996,7 @@ export interface AgentRowView {
   mail_in: number;
   mail_out: number;
   decisions_pending: number;
-  /** `repeat`, `quiet`, `disconnected`, `dead` and `stuck`. */
+  /** `repeat`, `quiet`, `disconnected` and `dead`. */
   flags: string[];
   /** Open issue refs on this agent, e.g. `INC-13`. */
   issues: string[];

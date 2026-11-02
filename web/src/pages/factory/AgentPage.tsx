@@ -112,8 +112,8 @@ export function AgentPage() {
       setParams(
         (prev) => {
           const out = new URLSearchParams(prev);
-          if (next === "live") out.delete("tab");
-          else out.set("tab", next);
+          // `tab=live` stays in the URL so the new cockpit keeps this page on Live too.
+          out.set("tab", next);
           return out;
         },
         { replace: true },

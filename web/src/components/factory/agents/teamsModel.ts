@@ -78,8 +78,10 @@ export const SEAT_OWNS: Record<Seat, string> = {
 const normId = (id: string) => id.replace(/-/g, "").toLowerCase();
 
 /**
- * An agent's state from its row: dead and failed are stopped; stuck beats
- * working; an open question it asked that waits on the viewer is waiting.
+ * An agent's state from its row: dead and failed are stopped; a parked
+ * prompt or an open question it asked the viewer is waiting, and beats stuck
+ * (amber means a person must act, as on the server's strip); stuck beats
+ * working.
  */
 export function teamState(
   row: Pick<AgentRowView, "status" | "health" | "flags" | "state" | "stuck">,
@@ -88,8 +90,8 @@ export function teamState(
   if (row.health === "dead" || row.flags.includes("dead") || row.status === "failed") {
     return "stopped";
   }
-  if (row.stuck || row.flags.includes("stuck")) return "stuck";
   if (onYou || row.status === "waiting") return "waiting";
+  if (row.stuck) return "stuck";
   if (row.status === "running") return "working";
   if (row.state === "done") return "done";
   return "idle";
@@ -286,18 +288,38 @@ export function currentTeam(members: readonly TeamMember[]): {
   return { shown, earlier: members.length - shown.length };
 }
 
-/** Leads (top-level lead seats) and one team per project, in the snapshot's project order. */
+/** Agents outside every project team: the leads' helpers and members of shared projects. */
+export interface OtherAgents {
+  members: TeamMember[];
+  /** Idle sessions of a role that has a newer one. */
+  earlier: number;
+}
+
+/**
+ * Leads (top-level lead seats), one team per project in the snapshot's
+ * project order, and everyone else (`others`), so every agent the counts
+ * include shows somewhere.
+ *
+ * @param shared - Slugs of shared projects (an integration environment): their
+ *   members are listed with the others, not as a team.
+ */
 export function groupTeams(
   members: readonly TeamMember[],
   projects: readonly ProjectView[],
-): { leads: TeamMember[]; teams: ProjectTeam[] } {
+  shared: ReadonlySet<string> = new Set(),
+): { leads: TeamMember[]; teams: ProjectTeam[]; others: OtherAgents } {
   const seatOrder: Seat[] = ["discovery", "portfolio", "reliability"];
   const leads = members
     .filter((m) => m.seat != null || (m.row.role === "lead" && m.row.is_top_level))
     .sort((a, b) => seatOrder.indexOf(a.seat!) - seatOrder.indexOf(b.seat!));
   const bySlug = new Map<string, TeamMember[]>();
+  const rest: TeamMember[] = [];
   for (const m of members) {
-    if (leads.includes(m) || !m.row.project) continue;
+    if (leads.includes(m)) continue;
+    if (!m.row.project || shared.has(m.row.project)) {
+      rest.push(m);
+      continue;
+    }
     const list = bySlug.get(m.row.project) ?? [];
     list.push(m);
     bySlug.set(m.row.project, list);
@@ -322,7 +344,8 @@ export function groupTeams(
       costUsd: costs.length ? costs.reduce((a, b) => a + b, 0) : null,
     });
   }
-  return { leads, teams };
+  const others = currentTeam(rest);
+  return { leads, teams, others: { members: others.shown, earlier: others.earlier } };
 }
 
 /** `Builder sonnet, gpt-5-codex · Reviewer gpt-5-codex`: a team's shape in words (J2). */

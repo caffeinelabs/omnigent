@@ -239,7 +239,8 @@ function matchTerm(facts: FleetFacts, term: Extract<FleetTerm, { kind: "match" }
     case "model":
       return globMatch(v, facts.model) || globMatch(v, facts.modelLabel);
     case "vendor":
-      return globMatch(v, facts.vendor ?? facts.harness);
+      // `vendor:` was an alias of `harness:`; saved queries such as `vendor:codex-native` still match.
+      return globMatch(v, facts.vendor) || globMatch(v, facts.harness);
     case "tool":
       return globMatch(v, facts.tool) || globMatch(v, facts.toolArg);
     case "flag":

@@ -402,11 +402,7 @@ export function teamsAgentRows(snapshot: FactorySnapshot = teamsSnapshot()): Age
       mail_in: 0,
       mail_out: 0,
       decisions_pending: 0,
-      flags: [
-        ...(m.now?.flags ?? []),
-        ...(m.health === "dead" ? ["dead"] : []),
-        ...(m.stuck ? ["stuck"] : []),
-      ],
+      flags: [...(m.now?.flags ?? []), ...(m.health === "dead" ? ["dead"] : [])],
       stuck: m.stuck ?? false,
       stuck_reason: m.stuck_reason ?? null,
       stuck_since: m.stuck_since ?? null,

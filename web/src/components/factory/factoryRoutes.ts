@@ -128,14 +128,18 @@ export const AGENT_TABS = [
 ] as const;
 export type AgentTab = (typeof AGENT_TABS)[number];
 
-/** `/factory/<fid>/agents/<sid>`, on `tab` (Live when omitted), at a moment (`at`, epoch ms). */
+/**
+ * `/factory/<fid>/agents/<sid>`, on `tab` (Live when omitted), at a moment
+ * (`at`, epoch ms). Naming a tab, Live included, opens the classic page's tab
+ * even with the new cockpit.
+ */
 export function agentPageHref(
   factoryId: string,
   sessionId: string,
   options: { tab?: AgentTab; at?: number } = {},
 ): string {
   const params: Record<string, string | number> = {};
-  if (options.tab && options.tab !== "live") params.tab = options.tab;
+  if (options.tab) params.tab = options.tab;
   if (options.at != null) params.at = Math.round(options.at);
   return withQuery(`${agentsPageHref(factoryId)}/${enc(sessionId)}`, params);
 }

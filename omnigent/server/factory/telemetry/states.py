@@ -14,6 +14,11 @@ mid-turn lull does not split a turn. Each segment keeps the session's
 cumulative cost when it opened and closed (``attrs.cost_start``/``cost_end``),
 its vendor and its model.
 
+Recording is dark by default: it runs only with ``OMNIGENT_FACTORY_STATE_SEGMENTS=1``,
+or, when that is unset, with the new cockpit (``OMNIGENT_FACTORY_COCKPIT_V2=1``).
+Segments older than :data:`RETENTION_S` are pruned daily (the strip reads at
+most 7 days and a day of lookback).
+
 :func:`segments` reads them back for one session and window, with the open one
 clipped to the session's last activity when it no longer runs.
 """
@@ -23,18 +28,20 @@ from __future__ import annotations
 import asyncio
 import itertools
 import logging
+import os
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
-from omnigent.factory import LABEL_ID
+from omnigent.factory import LABEL_ID, cockpit_v2_enabled
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.membership import is_top_level
 
 if TYPE_CHECKING:
     from omnigent.entities import Conversation
     from omnigent.entities.factory import FactorySpan
+    from omnigent.stores.factory_store import FactoryStore
 
 _logger = logging.getLogger(__name__)
 
@@ -51,8 +58,27 @@ NOT_MEMBER_TTL_S: Final = 600.0
 """A session found outside every factory is not looked up again for this long."""
 DEBOUNCE_S: Final = 20.0
 """An idle edge closes a segment only if the session stays idle this long (mid-turn lulls)."""
+STATE_SEGMENTS_ENV: Final = "OMNIGENT_FACTORY_STATE_SEGMENTS"
+KEY_PREFIX: Final = "state:"
+RETENTION_S: Final = 30 * 86400
+"""Segments older than this are pruned (the strip reads at most 7 days plus a day)."""
+ACTIVITY_SCAN: Final = 50
+"""Newest items read to find when a segment left open by an earlier process really ended."""
 _WHO_MAX: Final = 10_000
 _BUSY: Final = frozenset({"running", "waiting"})
+
+
+def recording_enabled() -> bool:
+    """
+    Whether status edges write segments.
+
+    ``OMNIGENT_FACTORY_STATE_SEGMENTS`` decides when set (``1`` on, anything
+    else off); unset, recording follows the new cockpit's flag.
+    """
+    raw = os.environ.get(STATE_SEGMENTS_ENV, "").strip()
+    if raw:
+        return raw == "1"
+    return cockpit_v2_enabled()
 
 
 def state_of(status: str, blocked_on: object = None) -> str | None:
@@ -106,6 +132,33 @@ def _cost(conv: Conversation) -> float | None:
     return round(float(raw), 6) if isinstance(raw, int | float) else None
 
 
+def _is_input(item: Any) -> bool:
+    return item.type == "message" and getattr(item.data, "role", None) == "user"
+
+
+def last_activity_ms(
+    deps: FactoryDeps, session_id: str, before_ms: int, *, skip_input: bool = False
+) -> int | None:
+    """
+    When the session last did something before *before_ms* (synchronous; never raises).
+
+    :param skip_input: Pass over user messages: a new turn's input lands just
+        before its busy edge and is not the old turn's activity.
+    :returns: The newest such item's ``created_at`` in epoch ms, or ``None``.
+    """
+    try:
+        page = deps.conversation_store.list_items(session_id, limit=ACTIVITY_SCAN, order="desc")
+    except Exception:  # noqa: BLE001 - the caller falls back to the segment's start
+        _logger.debug("factory states: no items for %s", session_id, exc_info=True)
+        return None
+    for item in page.data:
+        at = int(item.created_at) * 1000
+        if at >= before_ms or (skip_input and _is_input(item)):
+            continue
+        return at
+    return None
+
+
 class StateRecorder:
     """
     Per-process segment writer: what is open for each session, and ordered writes.
@@ -114,6 +167,16 @@ class StateRecorder:
     failed edge closes it after :data:`DEBOUNCE_S` unless the session is busy
     again by then, so a mid-turn lull does not split one turn. Writes run in
     worker threads, one session at a time in arrival order.
+
+    A segment this process did not open (a restart or deploy left it open)
+    ends at the session's last activity before the edge that finds it, not at
+    the edge. Shutdown writes the pending closes at their idle edge's moment
+    (:meth:`flush`).
+
+    It assumes one server process sees all of a session's edges (today's single
+    replica): with several replicas, a turn's start and end can land on
+    different processes and a segment stays open until the next edge on the
+    process that holds it.
     """
 
     def __init__(
@@ -127,7 +190,7 @@ class StateRecorder:
         self._clock = clock
         self._debounce_s = debounce_s
         self._open: dict[str, str] = {}
-        self._closing: dict[str, asyncio.TimerHandle] = {}
+        self._closing: dict[str, tuple[asyncio.TimerHandle, str, int]] = {}
         self._seen: set[str] = set()
         self._who: dict[str, tuple[float, _Who | None]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
@@ -150,7 +213,7 @@ class StateRecorder:
     def edge(self, session_id: str, status: str, blocked_on: object = None) -> None:
         """Apply one status edge of *session_id* (sync, no I/O)."""
         state = state_of(status, blocked_on)
-        if state is None or self._not_member(session_id):
+        if state is None or not recording_enabled() or self._not_member(session_id):
             return
         if len(self._seen) > _WHO_MAX:
             self._seen.clear()
@@ -158,18 +221,20 @@ class StateRecorder:
         self._seen.add(session_id)
         at_ms = int(self._clock() * 1000)
         if state in KIND_BY_STATE:
-            timer = self._closing.pop(session_id, None)
-            if timer is not None:
-                timer.cancel()
-            if self._open.get(session_id) == state:
+            pending = self._closing.pop(session_id, None)
+            if pending is not None:
+                pending[0].cancel()
+            held = self._open.get(session_id)
+            if held == state:
                 return
             self._open[session_id] = state
-            self._spawn(session_id, state, at_ms)
+            # Nothing held here: whatever is still open was left by an earlier process.
+            self._spawn(session_id, state, at_ms, stale=held is None)
             return
         if session_id not in self._open:
             if first:
                 # A segment a server roll left open is closed at the first turn end seen.
-                self._spawn(session_id, state, at_ms)
+                self._spawn(session_id, state, at_ms, stale=True)
             return
         if session_id in self._closing:
             return
@@ -177,9 +242,8 @@ class StateRecorder:
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
-        self._closing[session_id] = loop.call_later(
-            self._debounce_s, self._close_due, session_id, state, at_ms
-        )
+        timer = loop.call_later(self._debounce_s, self._close_due, session_id, state, at_ms)
+        self._closing[session_id] = (timer, state, at_ms)
 
     def _close_due(self, session_id: str, state: str, at_ms: int) -> None:
         self._closing.pop(session_id, None)
@@ -192,10 +256,10 @@ class StateRecorder:
             return False
         return time.monotonic() - cached[0] < NOT_MEMBER_TTL_S
 
-    def _spawn(self, session_id: str, state: str, at_ms: int) -> None:
+    def _spawn(self, session_id: str, state: str, at_ms: int, *, stale: bool = False) -> None:
         try:
             task = asyncio.get_running_loop().create_task(
-                self._apply(session_id, state, at_ms), name="factory-state-segment"
+                self._apply(session_id, state, at_ms, stale), name="factory-state-segment"
             )
         except RuntimeError:
             _logger.debug("factory states: no loop for %s", session_id)
@@ -211,13 +275,13 @@ class StateRecorder:
             lock = self._locks[session_id] = asyncio.Lock()
         return lock
 
-    async def _apply(self, session_id: str, state: str, at_ms: int) -> None:
+    async def _apply(self, session_id: str, state: str, at_ms: int, stale: bool) -> None:
         deps = getattr(self._app_state, FACTORY_STATE_ATTR, None)
         if not isinstance(deps, FactoryDeps):
             return
         try:
             async with self._lock(session_id):
-                await asyncio.to_thread(self.write, deps, session_id, state, at_ms)
+                await asyncio.to_thread(self.write, deps, session_id, state, at_ms, stale=stale)
         except Exception:  # noqa: BLE001 - a lost segment only thins the strip
             _logger.warning("factory states: could not record %s", session_id, exc_info=True)
 
@@ -232,8 +296,15 @@ class StateRecorder:
         self._who[conv.id] = (now, found)
         return found
 
-    def write(self, deps: FactoryDeps, session_id: str, state: str, at_ms: int) -> None:
-        """Close the session's open segment at *at_ms*, then open *state*'s (synchronous)."""
+    def write(
+        self, deps: FactoryDeps, session_id: str, state: str, at_ms: int, *, stale: bool = False
+    ) -> None:
+        """
+        Close the session's open segment, then open *state*'s (synchronous).
+
+        :param stale: The open segment was not opened by this process: it ends
+            at the session's last activity before *at_ms*, not at *at_ms*.
+        """
         from omnigent.server.factory.telemetry import spans
 
         conv = deps.conversation_store.get_conversation(session_id)
@@ -244,15 +315,22 @@ class StateRecorder:
         store = deps.factory_store
         cost_now = _cost(conv)
         outcome = spans.FAIL if state == FAILED else spans.OK
+        stale_end: int | None = None
         for kind in SEGMENT_KINDS:
             for span in store.list_open_spans(who.factory_id, kind, session_id=session_id):
-                if not (span.dedupe_key or "").startswith("state:"):
+                if not (span.dedupe_key or "").startswith(KEY_PREFIX):
                     continue
                 attrs = dict(span.attrs or {})
+                end = at_ms
+                if stale:
+                    if stale_end is None:
+                        stale_end = self._stale_end(deps, session_id, state, at_ms)
+                    end = stale_end
+                    attrs["closed_late"] = True
                 if cost_now is not None:
                     attrs["cost_end"] = cost_now
                 store.update_span(
-                    span.id, ended_at=max(at_ms, span.started_at), outcome=outcome, attrs=attrs
+                    span.id, ended_at=max(end, span.started_at), outcome=outcome, attrs=attrs
                 )
         kind = KIND_BY_STATE.get(state)
         if kind is None:
@@ -277,6 +355,21 @@ class StateRecorder:
             agent_name=who.agent_name,
         )
 
+    @staticmethod
+    def _stale_end(deps: FactoryDeps, session_id: str, state: str, at_ms: int) -> int:
+        """
+        Where a segment an earlier process left open ends: the session's last activity.
+
+        A busy edge skips the new turn's input and, knowing nothing, ends it
+        where it began (``0``, raised to its start); a turn end with no items
+        keeps its own moment.
+        """
+        busy = state in KIND_BY_STATE
+        found = last_activity_ms(deps, session_id, at_ms, skip_input=busy)
+        if found is None:
+            return 0 if busy else at_ms
+        return min(found, at_ms)
+
     async def drain(self, timeout_s: float = 5.0) -> None:
         """Wait for pending closes and every scheduled write (tests and shutdown)."""
         deadline = time.monotonic() + timeout_s
@@ -285,9 +378,19 @@ class StateRecorder:
                 await asyncio.gather(*list(self._tasks), return_exceptions=True)
             await asyncio.sleep(0.005)
 
+    async def flush(self, timeout_s: float = 5.0) -> None:
+        """Write every pending close at its idle edge's moment, then wait for the writes."""
+        pending = list(self._closing.items())
+        self._closing.clear()
+        for session_id, (timer, state, at_ms) in pending:
+            timer.cancel()
+            self._open.pop(session_id, None)
+            self._spawn(session_id, state, at_ms)
+        await self.drain(timeout_s)
+
     def close(self) -> None:
-        """Drop pending closes (shutdown)."""
-        for timer in self._closing.values():
+        """Drop pending closes without writing them (tests)."""
+        for timer, _state, _at in self._closing.values():
             timer.cancel()
         self._closing.clear()
 
@@ -299,6 +402,20 @@ def get_recorder(app_state: Any) -> StateRecorder:
         recorder = StateRecorder(app_state)
         setattr(app_state, RECORDER_STATE_ATTR, recorder)
     return recorder
+
+
+async def flush(app_state: Any) -> None:
+    """Write the pending closes of the app's recorder, if it has one (server shutdown)."""
+    recorder = getattr(app_state, RECORDER_STATE_ATTR, None)
+    if isinstance(recorder, StateRecorder):
+        await recorder.flush()
+
+
+def prune(store: FactoryStore, now_ms: int) -> int:
+    """Delete segments that ended more than :data:`RETENTION_S` ago (synchronous)."""
+    return store.prune_spans(
+        now_ms - RETENTION_S * 1000, list(SEGMENT_KINDS), key_prefix=KEY_PREFIX
+    )
 
 
 # ── Reading ────────────────────────────────────────────────────
@@ -329,7 +446,7 @@ def _num(value: object) -> float | None:
 
 def from_span(span: FactorySpan) -> Segment | None:
     """:returns: The segment a span records, or ``None`` for other spans."""
-    if span.kind not in SEGMENT_KINDS or not (span.dedupe_key or "").startswith("state:"):
+    if span.kind not in SEGMENT_KINDS or not (span.dedupe_key or "").startswith(KEY_PREFIX):
         return None
     attrs = span.attrs or {}
     state = attrs.get("segment")
@@ -358,6 +475,8 @@ def segments(
     """
     One session's segments that overlap ``[since_ms, until_ms)``, oldest first (synchronous).
 
+    Reads the newest rows first, so a cap drops the oldest, never the latest hours.
+
     :param lookback_ms: How far before *since_ms* a still-overlapping segment may have begun.
     """
     rows = deps.factory_store.list_spans(
@@ -367,9 +486,65 @@ def segments(
         until_ms=until_ms,
         session_id=session_id,
         limit=limit,
+        newest_first=True,
     )
-    out = [seg for row in rows if (seg := from_span(row)) is not None]
+    out = [seg for row in reversed(rows) if (seg := from_span(row)) is not None]
     return [s for s in out if (s.end is None or s.end > since_ms) and s.start < until_ms]
+
+
+_STARTED: dict[str, tuple[float, int | None]] = {}
+_STARTED_TTL_S: Final = 600.0
+_STARTED_MISS_TTL_S: Final = 60.0
+
+
+def recording_start(deps: FactoryDeps, factory_id: str) -> int | None:
+    """
+    When the factory's oldest kept segment began, epoch ms (cached; synchronous).
+
+    One indexed read per kind, so it never walks the table.
+
+    :returns: ``None`` while nothing is recorded.
+    """
+    now = time.monotonic()
+    cached = _STARTED.get(factory_id)
+    if cached is not None:
+        ttl = _STARTED_TTL_S if cached[1] is not None else _STARTED_MISS_TTL_S
+        if now - cached[0] < ttl:
+            return cached[1]
+    starts = [
+        rows[0].started_at
+        for kind in SEGMENT_KINDS
+        if (rows := deps.factory_store.list_spans(factory_id, kinds=[kind], limit=1))
+    ]
+    found = min(starts) if starts else None
+    if len(_STARTED) > _WHO_MAX:
+        _STARTED.clear()
+    _STARTED[factory_id] = (now, found)
+    return found
+
+
+def reset_cache() -> None:
+    """Forget cached recording starts (tests)."""
+    _STARTED.clear()
+
+
+def coverage(
+    recorded_from_ms: int | None, born_ms: int | None, since_ms: int
+) -> tuple[int | None, bool]:
+    """
+    How much of a window the segments can speak for.
+
+    :param recorded_from_ms: When the factory began recording (:func:`recording_start`).
+    :param born_ms: When the session was created; before that it did not exist.
+    :param since_ms: The window's start.
+    :returns: ``(covered_from, partial)``: when the record for this session
+        begins (``None`` while nothing is recorded) and whether some of the
+        window it existed in predates the recording.
+    """
+    if recorded_from_ms is None:
+        return None, True
+    existed_from = max(since_ms, born_ms or since_ms)
+    return max(recorded_from_ms, born_ms or 0), recorded_from_ms > existed_from
 
 
 def clip_open(
@@ -491,9 +666,12 @@ def spend_series(
 __all__ = [
     "CHECKS",
     "IDLE",
+    "KEY_PREFIX",
     "KIND_BY_STATE",
     "RECORDER_STATE_ATTR",
+    "RETENTION_S",
     "SEGMENT_KINDS",
+    "STATE_SEGMENTS_ENV",
     "STRIP_STATES",
     "STUCK",
     "WAITING",
@@ -503,8 +681,15 @@ __all__ = [
     "bucket_index",
     "clip_open",
     "compose_strip",
+    "coverage",
+    "flush",
     "from_span",
     "get_recorder",
+    "last_activity_ms",
+    "prune",
+    "recording_enabled",
+    "recording_start",
+    "reset_cache",
     "segments",
     "spend_series",
     "state_of",

@@ -2,8 +2,8 @@
  * Routes of the new cockpit inside today's shell, dark unless the server
  * offers it and the viewer switched to it (see `cockpitV2`): Teams, and the
  * agent's full page in place of the classic Agent page. The classic page
- * still answers its debug tabs (`?tab=`), and `/teams` without the new
- * cockpit lands on the fleet.
+ * still answers its debug tabs (`?tab=`, Live included) and replay links
+ * (`?at=`), and `/teams` without the new cockpit lands on the fleet.
  */
 
 import { Navigate } from "react-router-dom";
@@ -30,11 +30,11 @@ export function TeamsRoute() {
   return <TeamsPage />;
 }
 
-/** `/agents/:sid`: the agent's full page with the new cockpit (no `?tab=`), else the classic page. */
+/** `/agents/:sid`: the agent's full page with the new cockpit (no `?tab=` or `?at=`), else the classic page. */
 export function AgentRoute() {
   const cockpit = useCockpitV2();
   const [params] = useSearchParams();
-  if (params.get("tab")) return <AgentPage />;
+  if (params.has("tab") || params.has("at")) return <AgentPage />;
   if (cockpit.loading) return <Pending />;
   return cockpit.on ? <AgentProfilePage /> : <AgentPage />;
 }

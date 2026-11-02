@@ -19,7 +19,8 @@ from omnigent.stores.factory_store import norm_id
 STUCK_RULES: Final = ("agent.repeat", "agent.quiet")
 """Incident rules that mark their member stuck (repeat first: it says more)."""
 _MEMBER_PREFIX: Final = "member:"
-_OPEN: Final = frozenset({"open", "acked"})
+OPEN_STATUSES: Final = frozenset({"open", "acked"})
+"""Incident statuses that make a member stuck (a snoozed one does not)."""
 
 
 def _member_id(target: str) -> str | None:
@@ -40,7 +41,7 @@ def stuck_issues(issues: Iterable[FactoryIssue]) -> dict[str, FactoryIssue]:
     """
     found: dict[str, FactoryIssue] = {}
     for issue in issues:
-        if issue.rule not in STUCK_RULES or issue.status not in _OPEN:
+        if issue.rule not in STUCK_RULES or issue.status not in OPEN_STATUSES:
             continue
         sid = _member_id(issue.target)
         if sid is None:
@@ -90,4 +91,4 @@ def stuck_fields(issue: FactoryIssue | None, now: float | None = None) -> dict[s
     }
 
 
-__all__ = ["STUCK_RULES", "stuck_fields", "stuck_issues", "stuck_reason"]
+__all__ = ["OPEN_STATUSES", "STUCK_RULES", "stuck_fields", "stuck_issues", "stuck_reason"]

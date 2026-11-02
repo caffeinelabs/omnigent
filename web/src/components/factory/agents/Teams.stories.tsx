@@ -3,8 +3,10 @@ import { TeamsPage } from "@/pages/factory/TeamsPage";
 import { CockpitStory, type CockpitStoryOptions } from "../board/boardStoryKit";
 import { round3Snapshot } from "../shell/__fixtures__/shellFixtures";
 import {
+  TEAMS_NOW_S,
   benchResponse,
   scaleTeamsSnapshot,
+  teamsAgentRows,
   teamsRoutes,
   teamsSnapshot,
 } from "./__fixtures__/teamsFixtures";
@@ -71,6 +73,41 @@ export const Scale60 = teams({ snapshot: scaleTeamsSnapshot(12, 60) });
 export const Scale60Dark = teams({ snapshot: scaleTeamsSnapshot(12, 60), theme: "dark" });
 
 export const Scale60Mobile = phone(teams({ snapshot: scaleTeamsSnapshot(12, 60) }));
+
+/** A lead's helper (stuck here) has no project team: it shows on the Other agents card. */
+const helperRows = (() => {
+  const rows = teamsAgentRows(teamsSnapshot());
+  const atlas = rows.find((r) => r.handle === "atlas")!;
+  const ivy = rows.find((r) => r.handle === "ivy")!;
+  return [
+    ...rows,
+    {
+      ...ivy,
+      session_id: "5b000000000000000000000000000002",
+      handle: "lark",
+      title: "(sample) helper: tidy the backlog",
+      summary: "(sample) Grouping open ideas by area",
+      project: null,
+      parent_session_id: atlas.session_id,
+      task: null,
+      stuck: true,
+      stuck_reason: "running with no new activity for 20 min",
+      stuck_since: TEAMS_NOW_S - 20 * 60,
+      stuck_issue: "INC-9",
+    },
+  ];
+})();
+
+export const OtherAgents = teams({ routes: teamsRoutes(teamsSnapshot(), { rows: helperRows }) });
+
+export const OtherAgentsDark = teams({
+  routes: teamsRoutes(teamsSnapshot(), { rows: helperRows }),
+  theme: "dark",
+});
+
+export const OtherAgentsMobile = phone(
+  teams({ routes: teamsRoutes(teamsSnapshot(), { rows: helperRows }) }),
+);
 
 /** The fleet read is slow: skeleton cards keep the layout. */
 export const Loading = teams({
@@ -239,6 +276,13 @@ export const PanelScoutSeat = teams({
   query: "peek=agent%3Ascout",
   routes: teamsRoutes(scoutSnapshot),
 });
+
+/** A peek link names an agent this factory does not have (or the viewer cannot see). */
+export const PanelNotFound = peek("nobody");
+
+export const PanelNotFoundDark = peek("nobody", { theme: "dark" });
+
+export const PanelNotFoundMobile = phone(peek("nobody"));
 
 /** The strip covers only part of the day: recording began 9 hours ago. */
 export const PanelPartialStrip = teams({
