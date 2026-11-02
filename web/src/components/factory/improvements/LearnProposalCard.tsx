@@ -44,9 +44,13 @@ import {
   changeLines,
   effectText,
   evidenceHref,
+  extendedLabel,
   issueText,
+  keepsUnansweredAt,
+  overdueNote,
   revertToast,
   tier2Plain,
+  trialExtensions,
   trialProgress,
 } from "./improvementsModel";
 import { ProposeChangeDialog } from "./ProposeChangeDialog";
@@ -123,9 +127,7 @@ function TrialBar({ proposal, nowS }: { proposal: ProposalView; nowS: number }) 
     <span
       data-testid={`proposal-${proposal.ref}-trial`}
       className="inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums"
-      title={
-        progress.overdue ? "Past its window: it reverts unattended at twice the window" : undefined
-      }
+      title={progress.overdue ? overdueNote(proposal, nowS) : undefined}
     >
       <span aria-hidden className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
         <span
@@ -176,6 +178,8 @@ export function LearnProposalCard({
   const recorded = code && proposal.status === "pending" && !proposal.decision_id;
   const revertable = !code && ["trial", "applied", "kept"].includes(proposal.status);
   const effect = effectText(proposal);
+  const extended = extendedLabel(proposal);
+  const keepsAt = isTrial ? keepsUnansweredAt(proposal) : null;
   const busy = decide.isPending || answer.isPending;
   const fail = (error: unknown) => setFailure(controlErrorMessage(error));
 
@@ -251,6 +255,15 @@ export function LearnProposalCard({
           {proposal.title}
         </span>
         <span className="ml-auto inline-flex shrink-0 items-center gap-2">
+          {extended && (
+            <span
+              data-testid={`proposal-${proposal.ref}-extended`}
+              title="Nothing merged or finished while it ran, so it got its trial window again"
+              className="rounded-md bg-muted px-1.5 text-xs leading-5 whitespace-nowrap text-muted-foreground"
+            >
+              {extended}
+            </span>
+          )}
           {isTrial && <TrialBar proposal={proposal} nowS={nowS} />}
           <span
             data-testid={`proposal-${proposal.ref}-state`}
@@ -271,6 +284,13 @@ export function LearnProposalCard({
         )}
         {proposal.status === "awaiting_cosign" && " · waiting for the peer lead to co-sign"}
       </p>
+      {keepsAt != null && (
+        <p data-testid={`proposal-${proposal.ref}-keeps`} className="text-xs text-muted-foreground">
+          {keepsAt > nowS
+            ? `The factory was idle the whole trial. If nobody answers in ${formatElapsed(keepsAt - nowS)}, it stays applied because nothing got worse.`
+            : "The factory was idle the whole trial. Nobody answered, so it stays applied."}
+        </p>
+      )}
       <ChangeList proposal={proposal} />
       {/* A code change says why Tier 2 is off in its own box below. */}
       {!code && proposal.warnings.length > 0 && (
@@ -320,7 +340,11 @@ export function LearnProposalCard({
             </CollapsibleTrigger>
           </div>
           <CollapsibleContent className="pt-2">
-            <ScorecardTable card={card} testId={`proposal-${proposal.ref}-scorecard-table`} />
+            <ScorecardTable
+              card={card}
+              testId={`proposal-${proposal.ref}-scorecard-table`}
+              trial={{ extensions: trialExtensions(proposal), keepsAt, nowS }}
+            />
           </CollapsibleContent>
         </Collapsible>
       )}

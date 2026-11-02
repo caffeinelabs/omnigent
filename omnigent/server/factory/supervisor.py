@@ -13,7 +13,11 @@ Each tick it reads the top-level members of every factory and applies:
   least its ``heartbeat_s`` label. Delivery wakes or relaunches the session;
   ``last_beat`` and ``beat_n`` are written to labels so a server restart keeps
   the cadence and the numbering. With quiet beats on, a due beat nothing
-  needs is skipped (see :mod:`~omnigent.server.factory.quiet_beats`).
+  needs is skipped (see :mod:`~omnigent.server.factory.quiet_beats`), and a
+  member whose backstop beats keep finding nothing waits twice as long each
+  time, up to a day (``idle_beats`` label). Closing a project stops its PL;
+  should its ``state`` label still say active, a project row that is no longer
+  ``active`` keeps it from beating anyway.
   Three failed beats within an hour mark it ``health=dead``, raise a
   ``[NEEDS HUMAN]`` (at most hourly, stamped in ``dead_alerted_at``) and open
   one decision for the human per episode.
@@ -53,13 +57,16 @@ from omnigent.factory import (
     LABEL_HEALTH,
     LABEL_HEARTBEAT_S,
     LABEL_ID,
+    LABEL_IDLE_BEATS,
     LABEL_KEEP_PREVIEWS,
     LABEL_LAST_BEAT,
     LABEL_PROJECT,
+    LABEL_ROLE,
     LABEL_STATE,
     LABEL_SUPERVISOR,
     MAX_HEARTBEAT_S,
     MIN_HEARTBEAT_S,
+    ROLE_PROJECT_LEAD,
     STATE_ACTIVE,
     clamp_label_value,
 )
@@ -126,6 +133,7 @@ BEAT_RETRY_S = 300.0
 DISPATCH_RECENT_S = 900.0
 """A sub-agent first seen this soon after its creation is logged as a new dispatch."""
 PREVIEW_TTL_CHECK_S = 600.0
+DEFAULT_IDLE_BACKSTOP_MAX_S = quiet_beats.DEFAULT_IDLE_BACKSTOP_MAX_S
 
 # Newest sub-agents checked for stalls per member; a PL runs well under this many.
 _MAX_CHILDREN_PER_MEMBER = 200
@@ -164,6 +172,7 @@ class SupervisorConfig:
         on unless ``OMNIGENT_FACTORY_QUIET_BEATS=0``.
     :param preview_ttl_h: Hours a ready preview may go without human attention
         before its PL is asked to park it; ``None`` turns parking off.
+    :param idle_backstop_max_s: The longest a quiet member goes without a beat.
     """
 
     tick_s: float = DEFAULT_TICK_S
@@ -172,6 +181,7 @@ class SupervisorConfig:
     blocked_escalate_s: float = DEFAULT_BLOCKED_ESCALATE_S
     quiet_beats: bool = False
     preview_ttl_h: float | None = previews.DEFAULT_PREVIEW_TTL_H
+    idle_backstop_max_s: float = DEFAULT_IDLE_BACKSTOP_MAX_S
 
     @classmethod
     def from_env(cls) -> SupervisorConfig:
@@ -183,6 +193,7 @@ class SupervisorConfig:
             blocked_escalate_s=_env_seconds(BLOCKED_ESCALATE_ENV, DEFAULT_BLOCKED_ESCALATE_S),
             quiet_beats=quiet_beats.quiet_beats_enabled(),
             preview_ttl_h=previews.preview_ttl_h(),
+            idle_backstop_max_s=quiet_beats.idle_backstop_max_s(),
         )
 
     def for_factory(self, factory_id: str | None) -> SupervisorConfig:
@@ -566,8 +577,9 @@ class FactorySupervisor:
         last_beat = parse_iso(conv.labels.get(LABEL_LAST_BEAT))
         store = _factory_store(self._app_state)
         factory_id = conv.labels.get(LABEL_ID)
+        streak = _int_label(conv, LABEL_IDLE_BEATS)
         if last_beat is None or store is None or not factory_id:
-            return quiet_beats.BeatPlan(skip=False)
+            return quiet_beats.BeatPlan(skip=False, idle_streak=streak)
         since_ms = int(last_beat * 1000)
         newest = await asyncio.to_thread(
             store.list_events, factory_id, None, quiet_beats.EVENT_SCAN_LIMIT
@@ -580,10 +592,31 @@ class FactorySupervisor:
             beat_n=_int_label(conv, LABEL_BEAT_N),
             relevant=quiet_beats.relevant_events(conv, since),
             stalled_child=stalled_child,
+            idle_streak=streak,
+            backstop_max_s=self.config.idle_backstop_max_s,
         )
 
-    def _record_skip(self, conv: Conversation, now: float) -> None:
+    async def _project_closed(self, conv: Conversation) -> bool:
+        """
+        A PL whose project row is no longer ``active`` (cancelled, merged into another).
+
+        Closing a project already pauses or ends its PL; this guards a stale
+        ``state`` label. A project at stage ``merged`` stays active: its PL may
+        still be validating the merge.
+        """
+        project = conv.labels.get(LABEL_PROJECT)
+        factory_id = conv.labels.get(LABEL_ID)
+        store = _factory_store(self._app_state)
+        if conv.labels.get(LABEL_ROLE) != ROLE_PROJECT_LEAD or not (project and factory_id):
+            return False
+        row = await asyncio.to_thread(store.get_project, factory_id, project) if store else None
+        return row is not None and row.status not in (None, "active")
+
+    def _record_skip(self, conv: Conversation, now: float, *, count: bool = True) -> None:
+        """Wait an interval before looking again; *count* it in the hourly report."""
         self._quiet_until[conv.id] = now + float(_heartbeat_interval(conv) or 0)
+        if not count:
+            return
         counts = self._skips.setdefault(conv.labels.get(LABEL_ID, ""), {})
         counts[conv.id] = counts.get(conv.id, 0) + 1
         if self._skips_since is None:
@@ -607,8 +640,19 @@ class FactorySupervisor:
     async def _beat(self, conv: Conversation, now: float, stalled_child: bool = False) -> None:
         n = _int_label(conv, LABEL_BEAT_N) + 1
         delta = None
+        streak = 0
         deliver = self._deliver or deliver_message
         try:
+            try:
+                closed = await self._project_closed(conv)
+            except Exception:  # noqa: BLE001 - an unreadable project row does not stop the beat
+                _logger.warning(
+                    "factory: could not read the project of %s", conv.id, exc_info=True
+                )
+                closed = False
+            if closed:
+                self._record_skip(conv, now, count=False)
+                return
             if self.config.for_factory(conv.labels.get(LABEL_ID)).quiet_beats:
                 try:
                     plan = await self._plan_beat(conv, now, stalled_child)
@@ -616,11 +660,14 @@ class FactorySupervisor:
                     _logger.warning(
                         "factory: could not plan the beat of %s", conv.id, exc_info=True
                     )
-                    plan = quiet_beats.BeatPlan(skip=False)
+                    plan = quiet_beats.BeatPlan(
+                        skip=False, idle_streak=_int_label(conv, LABEL_IDLE_BEATS)
+                    )
                 if plan.skip:
                     self._record_skip(conv, now)
                     return
                 delta = plan.delta
+                streak = plan.idle_streak
             # Queue behind mail still being delivered to this target.
             async with get_mailer(self._app_state).target_slot(conv.id):
                 outcome = await deliver(self._app_state, conv.id, heartbeat_text(n, now, delta))
@@ -629,17 +676,26 @@ class FactorySupervisor:
             outcome = DeliveryOutcome(False, f"internal_error: {type(exc).__name__}")
         try:
             if outcome.delivered:
-                await self._beat_delivered(conv, n)
+                await self._beat_delivered(conv, n, streak)
             else:
                 await self._beat_failed(conv, outcome.reason or "unknown", outcome.detail)
         except Exception:  # noqa: BLE001 - bookkeeping must not kill the task silently
             _logger.warning("factory heartbeat bookkeeping for %s failed", conv.id, exc_info=True)
 
-    async def _beat_delivered(self, conv: Conversation, n: int) -> None:
+    async def _beat_delivered(self, conv: Conversation, n: int, idle_streak: int = 0) -> None:
+        """
+        :param idle_streak: Backstop beats in a row that found nothing, this one
+            included (``0``: the beat had news, which resets the backoff).
+        """
         self._beat_failures.pop(conv.id, None)
         self._last_beat_failure.pop(conv.id, None)
         self._quiet_until.pop(conv.id, None)
         labels = {LABEL_LAST_BEAT: iso_utc(self._clock()), LABEL_BEAT_N: str(n)}
+        stale_labels = [LABEL_DEAD_ALERTED_AT, LABEL_DEAD_REASON]
+        if idle_streak > 0:
+            labels[LABEL_IDLE_BEATS] = str(idle_streak)
+        else:
+            stale_labels.append(LABEL_IDLE_BEATS)
         recovered = conv.labels.get(LABEL_HEALTH) == HEALTH_DEAD
         if recovered:
             # It answered again, so it is no longer dead.
@@ -647,7 +703,7 @@ class FactorySupervisor:
         store = self._store()
         if store is not None:
             await asyncio.to_thread(store.set_labels, conv.id, labels)
-            for stale in (LABEL_DEAD_ALERTED_AT, LABEL_DEAD_REASON):
+            for stale in stale_labels:
                 if stale in conv.labels:
                     await asyncio.to_thread(store.delete_label, conv.id, stale)
         factory_id = conv.labels.get(LABEL_ID)
@@ -659,7 +715,7 @@ class FactorySupervisor:
             to_id=conv.id,
             subject=session_subject(conv.id),
             summary=f"Heartbeat #{n} delivered to {title}",
-            data={"n": n},
+            data={"n": n, **({"idle_streak": idle_streak} if idle_streak else {})},
         )
         if recovered and factory_id:
             await server_decisions.expire_by_key(

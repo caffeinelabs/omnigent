@@ -1222,6 +1222,21 @@ class FactoryStore(ABC):
     ) -> builtins.list[FactoryTask]:
         """:returns: Tasks ordered by number. Consumer: R3-09 graph computations and APIs."""
 
+    def count_tasks_closed(
+        self, factory_id: str, since: int, until: int, *, states: Sequence[str] = ("done",)
+    ) -> int:
+        """
+        Tasks in *states* whose ``closed_at`` falls in ``[since, until)`` (epoch seconds).
+
+        Consumer: :mod:`omnigent.server.factory.idle` (trial and retro activity).
+        This default filters :meth:`list_tasks`; SQL stores count in the database.
+        """
+        return sum(
+            1
+            for t in self.list_tasks(factory_id, states=list(states))
+            if t.closed_at is not None and since <= t.closed_at < until
+        )
+
     @abstractmethod
     def update_task(self, task_id: str, **fields: Any) -> FactoryTask | None:
         """

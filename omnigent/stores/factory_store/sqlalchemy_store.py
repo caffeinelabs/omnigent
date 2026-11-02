@@ -2018,6 +2018,20 @@ class SqlAlchemyFactoryStore(FactoryStore):
             rows = session.execute(stmt.order_by(model.number)).scalars().all()
             return [_task(r) for r in rows]
 
+    def count_tasks_closed(
+        self, factory_id: str, since: int, until: int, *, states: Sequence[str] = ("done",)
+    ) -> int:
+        model = SqlFactoryTask
+        stmt = select(func.count()).where(
+            model.workspace_id == current_workspace_id(),
+            model.factory_id == norm_id(factory_id),
+            model.state.in_([encode_factory_task_state(s) for s in states]),
+            model.closed_at >= since,
+            model.closed_at < until,
+        )
+        with self._session("count_factory_tasks_closed") as session:
+            return int(session.execute(stmt).scalar_one())
+
     def update_task(self, task_id: str, **fields: Any) -> FactoryTask | None:
         check_fields(fields, TASK_FIELDS, "update_task")
         validate_enums("task", fields)

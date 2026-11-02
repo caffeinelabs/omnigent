@@ -438,6 +438,26 @@ def test_task_upsert_numbers_and_updates(store: FactoryStore) -> None:
     assert store.update_task(uuid.uuid4().hex, state="done") is None
 
 
+def test_tasks_closed_in_a_window_are_counted(store: FactoryStore) -> None:
+    for key, state, closed_at in (
+        ("before", "done", 999),
+        ("first", "done", 1000),
+        ("last", "done", 1999),
+        ("after", "done", 2000),
+        ("open", "running", None),
+        ("dropped", "cancelled", 1500),
+    ):
+        task, _ = store.upsert_task(FID, "idle", key, state=state)
+        if closed_at is not None:
+            store.update_task(task.id, closed_at=closed_at)
+    other, _ = store.upsert_task(OTHER_FID, "idle", "elsewhere", state="done")
+    store.update_task(other.id, closed_at=1500)
+
+    assert store.count_tasks_closed(FID, 1000, 2000) == 2
+    assert store.count_tasks_closed(FID, 1000, 2000, states=["done", "cancelled"]) == 3
+    assert store.count_tasks_closed(FID, 3000, 4000) == 0
+
+
 def test_task_rejects_bad_values(store: FactoryStore) -> None:
     with pytest.raises(ValueError, match=r"factory_tasks\.kind"):
         store.upsert_task(FID, "p", "k", kind="epic")

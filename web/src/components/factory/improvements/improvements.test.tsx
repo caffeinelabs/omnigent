@@ -5,13 +5,19 @@ import {
   changeLines,
   effectText,
   evidenceHref,
+  extendedLabel,
   improvementCounts,
   issueText,
+  keepsUnansweredAt,
   onTrial,
+  overdueNote,
   proposed,
   revertToast,
+  revertsUnattendedAt,
   tier2Plain,
+  trialExtensions,
   trialProgress,
+  verdictHint,
   verdictText,
 } from "./improvementsModel";
 import { rowsOf } from "./ProposeChangeDialog";
@@ -20,7 +26,7 @@ import { ScorecardLine, ScorecardTable } from "./Scorecard";
 const FID = "f4f4ba9c77725331b12f0fa7072dc4d3";
 
 function byRef(ref: string) {
-  return learnProposals().find((p) => p.ref === ref)!;
+  return learnProposals({ idle: true }).find((p) => p.ref === ref)!;
 }
 
 describe("improvements model", () => {
@@ -63,6 +69,40 @@ describe("improvements model", () => {
     expect(improvementCounts(all)).toMatchObject({ trial: 1, proposed: 3, kept: 2, reverted: 1 });
     expect(onTrial(all).map((p) => p.ref)).toEqual(["C-14"]);
     expect(proposed(all).map((p) => p.ref)).toEqual(["C-15", "C-16", "C-18"]);
+  });
+
+  it("says how often an idle trial was extended and what happens unanswered", () => {
+    expect(trialExtensions(byRef("C-13"))).toBe(2);
+    expect(extendedLabel(byRef("C-13"))).toBe("extended ×2 (idle)");
+    expect(extendedLabel(byRef("C-10"))).toBe("extended ×1 (idle)");
+    expect(extendedLabel(byRef("C-14"))).toBeNull();
+    expect(keepsUnansweredAt(byRef("C-13"))).toBe(LEARN_NOW_S + 22 * 3600);
+    expect(keepsUnansweredAt(byRef("C-10"))).toBeNull();
+    expect(overdueNote(byRef("C-13"), LEARN_NOW_S)).toContain(
+      "it stays applied because nothing got worse",
+    );
+    // Unattended, a trial reverts one original window (48 h) after it ended.
+    const c14 = byRef("C-14");
+    expect(revertsUnattendedAt(c14)).toBe(c14.trial_until! + 48 * 3600);
+    expect(overdueNote(c14, c14.trial_until! + 3600)).toBe(
+      "Past its window: if nobody decides, it reverts in 1d 23h",
+    );
+    expect(overdueNote(c14, c14.trial_until! + 49 * 3600)).toBe(
+      "Past its window: if nobody decides, it reverts now",
+    );
+    // Extended, it still reverts one original window after the end, not one bar length.
+    const c10 = byRef("C-10");
+    const window = c10.result!.trial_window_s as number;
+    expect(revertsUnattendedAt(c10)).toBe(c10.trial_until! + window);
+    // Its window grew by its own length twice: 144 h, ended 2 h ago.
+    const progress = trialProgress(byRef("C-13"), LEARN_NOW_S)!;
+    expect(progress.totalH).toBe(144);
+    expect(progress.overdue).toBe(true);
+    expect(onTrial(learnProposals({ idle: true })).map((p) => p.ref)).toEqual([
+      "C-13",
+      "C-14",
+      "C-10",
+    ]);
   });
 
   it("reads a trial's progress and overdue state", () => {
@@ -140,6 +180,35 @@ describe("scorecard", () => {
     expect(table).toHaveTextContent("19%");
     expect(table).toHaveTextContent("≥ baseline − 10 pp");
     expect(screen.getByTestId("card-verdict")).toHaveAttribute("data-outcome", "kept");
+  });
+
+  it("calls an idle trial idle, not inconclusive", () => {
+    const idle = scorecard("C-10")!;
+    expect(verdictText(idle)).toBe("idle · no merged PRs or finished tasks");
+    expect(verdictText({ ...idle, live: false })).toBe("idle the whole trial · nothing to judge");
+    expect(verdictText({ ...idle, idle: false })).toBe(
+      "inconclusive so far · n=0 < 3; target not met",
+    );
+    expect(verdictHint(idle)).toBe(
+      "an idle trial gets its window again, at most twice; then the owners decide",
+    );
+    const state = { extensions: 1, keepsAt: null, nowS: LEARN_NOW_S };
+    expect(verdictHint(idle, state)).toBe(
+      "extended once; if still idle when this window ends, it gets one more",
+    );
+    expect(verdictHint(idle, { ...state, extensions: 2 })).toBe(
+      "extended twice; the owners decide when this window ends",
+    );
+    const waiting = { extensions: 2, keepsAt: LEARN_NOW_S + 22 * 3600, nowS: LEARN_NOW_S };
+    expect(verdictHint(idle, waiting)).toBe(
+      "extended twice; the owners decide now — it stays applied if nobody answers in 22h",
+    );
+    expect(verdictHint(idle, { ...waiting, nowS: LEARN_NOW_S + 23 * 3600 })).toBe(
+      "extended twice; nobody answered, so it stays applied",
+    );
+    expect(verdictHint(scorecard("C-14")!)).toBe(
+      "kept once n reaches 24 heartbeat hours, the target is met and every guard holds",
+    );
   });
 
   it("marks the regressed guard", () => {

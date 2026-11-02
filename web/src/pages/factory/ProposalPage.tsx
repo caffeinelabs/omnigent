@@ -18,6 +18,10 @@ import {
   decisionsPageHref,
   improvementsPageHref,
 } from "@/components/factory/factoryRoutes";
+import {
+  keepsUnansweredAt,
+  trialExtensions,
+} from "@/components/factory/improvements/improvementsModel";
 import { LearnProposalCard } from "@/components/factory/improvements/LearnProposalCard";
 import {
   useFactoryDefinition,
@@ -93,6 +97,8 @@ export function ProposalPage() {
   }
   const p = proposal.data.proposal;
   const result = (p.result ?? {}) as Record<string, unknown>;
+  const extensions = trialExtensions(p);
+  const keepsAt = p.status === "trial" ? keepsUnansweredAt(p) : null;
   return (
     <div data-testid="factory-proposal-page" className="flex min-w-0 flex-col gap-3">
       {back}
@@ -160,6 +166,24 @@ export function ProposalPage() {
                   string,
                   ReactNode,
                 ][])
+              : []),
+            ...(extensions > 0
+              ? ([
+                  [
+                    "Extended",
+                    `${extensions}× by its own length: nothing merged or finished while it ran`,
+                  ],
+                ] as [string, ReactNode][])
+              : []),
+            ...(keepsAt != null
+              ? ([
+                  [
+                    "Stays applied",
+                    keepsAt > nowS
+                      ? `In ${formatElapsed(keepsAt - nowS)} if nobody answers — nothing got worse`
+                      : "Now: nobody answered and nothing got worse",
+                  ],
+                ] as [string, ReactNode][])
               : []),
             ...(p.reverted_at != null
               ? ([

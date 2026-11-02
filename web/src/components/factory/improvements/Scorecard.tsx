@@ -10,7 +10,13 @@ import type { ScorecardView } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
 import { TONE_CHIP, TONE_TEXT } from "../factoryFormat";
 import { metricLabel } from "../insights/insightsModel";
-import { metricValue, nCounts, targetTone, verdictText } from "./improvementsModel";
+import {
+  type IdleTrialState,
+  metricValue,
+  targetTone,
+  verdictHint,
+  verdictText,
+} from "./improvementsModel";
 
 const GUARD_LABEL: Record<string, string> = {
   merge_acceptance: "acceptance",
@@ -63,7 +69,16 @@ export function ScorecardLine({ card, testId }: { card: ScorecardView; testId?: 
 }
 
 /** Baseline vs trial per metric, with n and the allowed change. */
-export function ScorecardTable({ card, testId }: { card: ScorecardView; testId?: string }) {
+export function ScorecardTable({
+  card,
+  testId,
+  trial,
+}: {
+  card: ScorecardView;
+  testId?: string;
+  /** Where an idle trial stands, for the hint next to the verdict. */
+  trial?: IdleTrialState;
+}) {
   const rows = [
     ...(card.target.metric
       ? [
@@ -105,8 +120,11 @@ export function ScorecardTable({ card, testId }: { card: ScorecardView; testId?:
         >
           {verdictText(card)}
         </span>
-        <span className="text-xs text-muted-foreground">
-          kept once n reaches {card.min_n} {nCounts(card)}, the target is met and every guard holds
+        <span
+          data-testid={testId ? `${testId}-hint` : undefined}
+          className="text-xs text-muted-foreground"
+        >
+          {verdictHint(card, trial)}
         </span>
       </p>
       <ul className="flex min-w-0 flex-col divide-y divide-border sm:hidden">

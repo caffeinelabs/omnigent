@@ -8,7 +8,12 @@ ids) and suggested changes. A call that cites no evidence is refused (422).
 The retro beat: once a day at ``OMNIGENT_FACTORY_RETRO_HOUR`` (UTC, default 6)
 and when a project is done, Sentinel gets ``[Factory heartbeat · retro · …]``
 and runs the ``factory-retro`` skill. Each beat is recorded as a
-``retro.requested`` event and sent once, also across a server restart.
+``retro.requested`` event and sent once, also across a server restart. The
+daily beat waits while the last 24 h gave it nothing to read: nothing merged,
+finished or ran, and no incident, finding, closed PR, answered or escalated
+decision, exhausted loop, human feedback or human post in the Room (see
+:mod:`.idle`). One ``retro.skipped`` event says so, and the beat goes out
+within the hour once any of that shows up that day.
 """
 
 from __future__ import annotations
@@ -32,7 +37,7 @@ from omnigent.factory import (
     STAGE_DONE,
     STATE_ACTIVE,
 )
-from omnigent.server.factory import control, definition, events, issues
+from omnigent.server.factory import control, definition, events, idle, issues
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.start import parse_body
@@ -47,6 +52,9 @@ RETRO_HOUR_ENV: Final = "OMNIGENT_FACTORY_RETRO_HOUR"
 DEFAULT_RETRO_HOUR: Final = 6
 REQUESTED_KIND: Final = "retro.requested"
 ADDED_KIND: Final = "retro.added"
+SKIPPED_KIND: Final = "retro.skipped"
+IDLE_RECHECK_S: Final = 3600
+"""How often a skipped daily retro looks again for work done that day."""
 FIRST_RETRO_AFTER_S: Final = 86400
 """The daily retro starts once the factory is a day old."""
 PROJECT_DONE_LOOKBACK_S: Final = 7 * 86400
@@ -259,6 +267,7 @@ async def _requested(deps: FactoryDeps, factory_id: str, subject: str) -> bool:
 
 
 _sent: set[tuple[str, str]] = set()
+_quiet_until: dict[tuple[str, str], float] = {}
 
 
 async def request_retro(
@@ -299,6 +308,43 @@ async def request_retro(
     return True
 
 
+async def _quiet_day(app_state: Any, factory_id: str, subject: str, now: float) -> bool:
+    """Whether the daily retro *subject* waits because the last 24 h gave it nothing to read."""
+    key = (factory_id, subject)
+    if key in _sent:
+        return False
+    if now < _quiet_until.get(key, 0.0):
+        return True
+    deps = factory_deps(app_state)
+    if await _requested(deps, factory_id, subject):
+        return False
+    since, until = int(now) - 86400, int(now) + 1
+    activity = await asyncio.to_thread(idle.window_activity, deps, factory_id, since, until)
+    signals = (
+        await asyncio.to_thread(idle.retro_signals, deps, factory_id, since, until)
+        if activity.idle
+        else None
+    )
+    if signals is None or signals.any:
+        _quiet_until.pop(key, None)
+        return False
+    _quiet_until[key] = now + IDLE_RECHECK_S
+    logged = await asyncio.to_thread(
+        deps.factory_store.find_events, factory_id, SKIPPED_KIND, 0, subject, limit=1
+    )
+    if not logged:
+        await events.emit(
+            app_state,
+            factory_id,
+            SKIPPED_KIND,
+            severity="info",
+            subject=subject,
+            summary="No retro yet today: nothing in the last 24 h to learn from",
+            data={"by": "server", "activity": activity.to_dict(), "signals": signals.to_dict()},
+        )
+    return True
+
+
 async def tick(app_state: Any, factory_id: str, now: float | None = None) -> list[str]:
     """The daily beat after the retro hour, and one per project done. :returns: Subjects sent."""
     deps = factory_deps(app_state)
@@ -310,7 +356,8 @@ async def tick(app_state: Any, factory_id: str, now: float | None = None) -> lis
     old_enough = root is not None and now - root.created_at >= FIRST_RETRO_AFTER_S
     if old_enough and stamp.hour >= retro_hour():
         subject = f"retro:{stamp.strftime('%Y-%m-%d')}"
-        if await request_retro(app_state, factory_id, subject):
+        quiet = await _quiet_day(app_state, factory_id, subject, now)
+        if not quiet and await request_retro(app_state, factory_id, subject):
             sent.append(subject)
     for project in await asyncio.to_thread(deps.factory_store.list_projects, factory_id):
         done_at = project.closed_at or project.stage_changed_at
@@ -324,14 +371,16 @@ async def tick(app_state: Any, factory_id: str, now: float | None = None) -> lis
 
 
 def reset() -> None:
-    """Forget the in-process memo of sent beats (tests)."""
+    """Forget the in-process memo of sent and skipped beats (tests)."""
     _sent.clear()
+    _quiet_until.clear()
 
 
 __all__ = [
     "ADDED_KIND",
     "REQUESTED_KIND",
     "RETRO_HOUR_ENV",
+    "SKIPPED_KIND",
     "RetroIn",
     "file_retro",
     "request_retro",
