@@ -45,9 +45,9 @@ import {
 import { EmptyState } from "@/components/factory/project/projectParts";
 import { useCockpitV2 } from "@/components/factory/shell/cockpitV2";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
+import { Peek } from "@/components/factory/ui/Peek";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Sheet, SheetBody, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import type { ProjectView } from "@/lib/factoryApi";
 import { Link, useNavigate, useParams, useSearchParams } from "@/lib/routing";
 import { cn } from "@/lib/utils";
@@ -619,60 +619,51 @@ export function TeamsPage() {
           </section>
         </>
       )}
-      <Sheet
+      <Peek
         open={peeked != null || peekMissing}
         onOpenChange={(o) => !o && setParam("peek", null)}
+        title={
+          <span className="text-sm font-normal text-muted-foreground">
+            {peeked ? (peeked.seat ? "Leads" : (peeked.row.project ?? "Agent")) : "Agent"}
+          </span>
+        }
+        headerExtra={
+          peeked ? (
+            <Button asChild variant="ghost" size="sm">
+              <Link
+                to={agentPageHref(fid, peeked.row.handle ?? peeked.row.session_id)}
+                componentId="factory.teams.peek_full_page"
+              >
+                Full page
+                <ExternalLinkIcon aria-hidden className="size-3.5" />
+              </Link>
+            </Button>
+          ) : undefined
+        }
       >
-        <SheetContent side="right" size="lg" aria-describedby={undefined}>
-          {peekMissing && (
-            <>
-              <SheetHeader>
-                <SheetTitle className="text-sm text-muted-foreground">Agent</SheetTitle>
-              </SheetHeader>
-              <SheetBody>
-                <EmptyState
-                  testId="agent-peek-missing"
-                  icon={<UsersIcon aria-hidden className="size-6 text-muted-foreground/50" />}
-                  title="Not in this factory"
-                  body={`No agent here is called “${peekRef}”, or you cannot see it. Its session may have closed, or the link is from another factory.`}
-                />
-              </SheetBody>
-            </>
-          )}
-          {peeked && (
-            <>
-              <SheetHeader className="flex-row items-center gap-2">
-                <SheetTitle className="grow truncate text-sm text-muted-foreground">
-                  {peeked.seat ? "Leads" : (peeked.row.project ?? "Agent")}
-                </SheetTitle>
-                <Button asChild variant="ghost" size="sm">
-                  <Link
-                    to={agentPageHref(fid, peeked.row.handle ?? peeked.row.session_id)}
-                    componentId="factory.teams.peek_full_page"
-                  >
-                    Full page
-                    <ExternalLinkIcon aria-hidden className="size-3.5" />
-                  </Link>
-                </Button>
-              </SheetHeader>
-              <SheetBody>
-                <AgentPanel
-                  factoryId={fid}
-                  member={peeked}
-                  memberView={memberView}
-                  project={
-                    peeked.row.project
-                      ? (projects.find((p) => p.slug === peeked.row.project) ?? null)
-                      : null
-                  }
-                  nowS={nowS}
-                  defVersion={snapshot.def_version ?? null}
-                />
-              </SheetBody>
-            </>
-          )}
-        </SheetContent>
-      </Sheet>
+        {peekMissing && (
+          <EmptyState
+            testId="agent-peek-missing"
+            icon={<UsersIcon aria-hidden className="size-6 text-muted-foreground/50" />}
+            title="Not in this factory"
+            body={`No agent here is called “${peekRef}”, or you cannot see it. Its session may have closed, or the link is from another factory.`}
+          />
+        )}
+        {peeked && (
+          <AgentPanel
+            factoryId={fid}
+            member={peeked}
+            memberView={memberView}
+            project={
+              peeked.row.project
+                ? (projects.find((p) => p.slug === peeked.row.project) ?? null)
+                : null
+            }
+            nowS={nowS}
+            defVersion={snapshot.def_version ?? null}
+          />
+        )}
+      </Peek>
     </div>
   );
 }

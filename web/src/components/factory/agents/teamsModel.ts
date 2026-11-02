@@ -4,7 +4,7 @@
 // counts that double as filters; and the free-text filter that matches name,
 // role, vendor, model, state and project. Pure; the page and the panel read it.
 
-import type { AgentRowView, FactoryRole, FactorySnapshot, ProjectView } from "@/lib/factoryApi";
+import type { AgentRowView, FactorySnapshot, ProjectView } from "@/lib/factoryApi";
 import { rowsFromSnapshot } from "./fleetModel";
 
 /** What a ring and a state word say about an agent. */
@@ -361,30 +361,6 @@ export function teamLine(members: readonly TeamMember[]): string {
   return [...byRole.entries()]
     .map(([role, models]) => `${role} ${[...models].join(", ")}`)
     .join(" · ");
-}
-
-/** The role glyph a ring draws (spec §11). */
-export type RoleGlyph =
-  "compass" | "shield" | "radar" | "hexagon" | "code" | "eye" | "play" | "box" | "dot";
-
-export function roleGlyph(member: Pick<TeamMember, "seat" | "row">): RoleGlyph {
-  if (member.seat === "portfolio") return "compass";
-  if (member.seat === "reliability") return "shield";
-  if (member.seat === "discovery") return "radar";
-  switch (member.row.role as FactoryRole | "scout" | null) {
-    case "project_lead":
-      return "hexagon";
-    case "ic":
-      return "code";
-    case "reviewer":
-      return "eye";
-    case "demo":
-      return "play";
-    case "env_keeper":
-      return "box";
-    default:
-      return "dot";
-  }
 }
 
 /** The rows Teams shows: the fleet API's, else the snapshot's members (older servers). */

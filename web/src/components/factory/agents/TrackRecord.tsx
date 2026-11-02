@@ -7,6 +7,7 @@
 
 import type { BenchResponse, BenchRowView } from "@/lib/factoryTeamsApi";
 import { cn } from "@/lib/utils";
+import { DATA_HUE } from "../ui/statusTokens";
 
 export function pct(value: number): string {
   return `${Math.round(value * 100)} %`;
@@ -29,7 +30,7 @@ export function QualityBar({ value, low }: { value: number; low: boolean }) {
         className="absolute inset-y-0 left-0 rounded-full"
         style={{
           width: `${Math.max(0, Math.min(1, value)) * 100}%`,
-          background: low ? "var(--status-gray)" : "var(--status-blue)",
+          background: low ? "var(--status-gray)" : DATA_HUE,
         }}
       />
     </span>

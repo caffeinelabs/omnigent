@@ -447,6 +447,38 @@ async def test_the_timeline_strip_overlays_stuck_and_checks(
     assert body["partial"] is False
 
 
+async def test_a_snoozed_stuck_incident_ends_when_last_seen(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.server.factory.api import agent_timeline
+    from omnigent.stores.factory_store import sqlalchemy_store
+
+    fid, ic = cockpit.fid, cockpit.world.id("ic")
+    now = int(time.time())
+    with monkeypatch.context() as patched:
+        patched.setattr(sqlalchemy_store, "now_s", lambda: now - 3600)
+        issue = await issues.raise_issue(
+            cockpit.app.state,
+            fid,
+            rule="agent.repeat",
+            target=f"member:{ic}",
+            summary="(sample) repeat",
+            evidence={"count": 3},
+        )
+    assert issue is not None
+    until_ms = now * 1000
+    deps = cockpit.deps
+
+    cockpit.store.update_issue(issue.id, status="snoozed", snoozed_until=now + 3600)
+    snoozed = agent_timeline._stuck_intervals(deps, fid, ic, until_ms)
+    cockpit.store.update_issue(issue.id, status="acked")
+    acked = agent_timeline._stuck_intervals(deps, fid, ic, until_ms)
+
+    start = (now - 3600) * 1000
+    assert snoozed == [(start, issue.last_seen * 1000)] and issue.last_seen * 1000 < until_ms
+    assert acked == [(start, until_ms)]
+
+
 async def test_timeline_window_and_visibility(cockpit: Cockpit) -> None:
     w, fid = cockpit.world, cockpit.fid
     base = f"/v1/factory/factories/{fid}/agents"

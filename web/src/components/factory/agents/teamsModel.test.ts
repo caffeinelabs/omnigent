@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import type { AgentRowView } from "@/lib/factoryApi";
+import type { AgentRowView, FactoryRole } from "@/lib/factoryApi";
+import { roleLook } from "../ui/statusTokens";
 import { teamsAgentRows, teamsSnapshot } from "./__fixtures__/teamsFixtures";
 import {
   currentTeam,
@@ -8,7 +9,6 @@ import {
   handleName,
   matchesTeamFilter,
   modelLabel,
-  roleGlyph,
   stateCounts,
   stateWord,
   teamLine,
@@ -91,13 +91,17 @@ describe("names, roles, vendors and models", () => {
     expect(modelLabel("claude-opus-4-1[1m]")).toBe("opus");
   });
 
-  it("draws each role's glyph", () => {
-    expect(roleGlyph(byHandle("atlas"))).toBe("compass");
-    expect(roleGlyph(byHandle("sentinel"))).toBe("shield");
-    expect(roleGlyph(byHandle("nova"))).toBe("hexagon");
-    expect(roleGlyph(byHandle("quill"))).toBe("eye");
-    expect(roleGlyph(byHandle("dot"))).toBe("play");
-    expect(roleGlyph(byHandle("kip"))).toBe("box");
+  it("draws each role's glyph with the shared role tokens", () => {
+    const glyph = (handle: string) => {
+      const m = byHandle(handle);
+      return roleLook(m.row.role as FactoryRole | null, m.seat).glyph;
+    };
+    expect(glyph("atlas")).toBe("compass");
+    expect(glyph("sentinel")).toBe("shield");
+    expect(glyph("nova")).toBe("hexagon");
+    expect(glyph("quill")).toBe("eye");
+    expect(glyph("dot")).toBe("play");
+    expect(glyph("kip")).toBe("box");
   });
 });
 

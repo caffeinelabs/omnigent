@@ -7,7 +7,7 @@
 
 import type { CSSProperties } from "react";
 import type { StripPiece, StripState, TimelineBucket } from "@/lib/factoryTeamsApi";
-import { STUCK_ORANGE } from "./MemberRing";
+import { DATA_HUE, STRIP_FILL } from "../ui/statusTokens";
 import { shortSpan } from "./agentSentence";
 
 export const STRIP_WORD: Record<StripState, string> = {
@@ -18,14 +18,13 @@ export const STRIP_WORD: Record<StripState, string> = {
   idle: "idle",
 };
 
-const HATCH = `repeating-linear-gradient(135deg, ${STUCK_ORANGE} 0 3px, transparent 3px 6px)`;
-
+/** Fills from the shared strip tokens (stuck is hatched, so it reads without colour). */
 export const STRIP_STYLE: Record<StripState, CSSProperties> = {
-  working: { background: "var(--status-green)" },
-  checks: { background: "var(--status-blue)" },
-  waiting: { background: "var(--status-yellow)" },
-  stuck: { background: HATCH },
-  idle: { background: "var(--muted)" },
+  working: { background: STRIP_FILL.working },
+  checks: { background: STRIP_FILL.waiting_ci },
+  waiting: { background: STRIP_FILL.waiting },
+  stuck: { background: STRIP_FILL.stuck },
+  idle: { background: STRIP_FILL.idle },
 };
 
 const LEGEND: readonly StripState[] = ["working", "checks", "waiting", "stuck", "idle"];
@@ -128,11 +127,11 @@ export function Sparkline({
     >
       {line && (
         <>
-          <path d={`${line} L200,46 L0,46 Z`} fill="var(--status-blue)" opacity={0.12} />
+          <path d={`${line} L200,46 L0,46 Z`} fill={DATA_HUE} opacity={0.12} />
           <path
             d={line}
             fill="none"
-            stroke="var(--status-blue)"
+            stroke={DATA_HUE}
             strokeWidth={1.6}
             vectorEffect="non-scaling-stroke"
           />

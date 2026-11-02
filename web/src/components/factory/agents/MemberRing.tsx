@@ -1,56 +1,34 @@
 /**
- * An agent's avatar: its role glyph inside a state ring, with a vendor badge.
- * Shape carries the state as well as colour (spec §11): working is a solid
- * green ring (the only one that moves), waiting on a person solid amber,
- * stuck a dashed orange ring, stopped red with a ×, idle a hollow grey ring,
- * done hollow grey with a small check. The label says it all in words.
+ * A team member's avatar and state word, drawn with the cockpit's shared
+ * primitives (`ui/MemberAvatar`, `ui/statusTokens`): the role glyph inside a
+ * state ring with a vendor badge, where shape carries the state as well as
+ * colour (spec §11). The label says it all in words.
  */
 
-import type { ComponentType, SVGProps } from "react";
-import {
-  BoxIcon,
-  CheckIcon,
-  CircleIcon,
-  CodeXmlIcon,
-  CompassIcon,
-  EyeIcon,
-  HexagonIcon,
-  PlayIcon,
-  RadarIcon,
-  ShieldIcon,
-  XIcon,
-} from "lucide-react";
+import type { FactoryRole } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
-import {
-  type RoleGlyph,
-  type TeamMember,
-  type TeamState,
-  roleGlyph,
-  stateWord,
-} from "./teamsModel";
+import { MemberAvatar } from "../ui/MemberAvatar";
+import { type AgentState, STATE_RING, vendorOf as badgeVendor } from "../ui/statusTokens";
+import { type TeamMember, type TeamState, stateWord } from "./teamsModel";
 
-const GLYPH: Record<RoleGlyph, ComponentType<SVGProps<SVGSVGElement>>> = {
-  compass: CompassIcon,
-  shield: ShieldIcon,
-  radar: RadarIcon,
-  hexagon: HexagonIcon,
-  code: CodeXmlIcon,
-  eye: EyeIcon,
-  play: PlayIcon,
-  box: BoxIcon,
-  dot: CircleIcon,
+/** The shared avatar state for each Teams state (a stopped agent draws as dead). */
+export const AVATAR_STATE: Record<TeamState, AgentState> = {
+  working: "working",
+  waiting: "waiting",
+  stuck: "stuck",
+  stopped: "dead",
+  idle: "idle",
+  done: "done",
 };
 
-/** Stuck's orange (dashed rings and hatched strip pieces); not a status token yet. */
-export const STUCK_ORANGE = "#ef7d3c";
-
+/** Each Teams state's hue, from the shared ring tokens. */
 export const STATE_COLOR: Record<TeamState, string> = {
-  working: "var(--status-green)",
-  waiting: "var(--status-yellow)",
-  stuck: STUCK_ORANGE,
-  stopped: "var(--status-red)",
-  idle: "var(--status-gray)",
-  done: "var(--status-gray)",
+  working: STATE_RING.working.color,
+  waiting: STATE_RING.waiting.color,
+  stuck: STATE_RING.stuck.color,
+  stopped: STATE_RING.dead.color,
+  idle: STATE_RING.idle.color,
+  done: STATE_RING.done.color,
 };
 
 /** `Dot, Demo, claude sonnet, Stuck`. */
@@ -69,67 +47,19 @@ export function MemberRing({
   size?: number;
   className?: string;
 }) {
-  const state = member.state;
-  const Glyph = GLYPH[roleGlyph(member)];
-  const color = STATE_COLOR[state];
-  const hollow = state === "idle" || state === "done";
-  const vendor = member.vendorModel?.split(" · ")[0] ?? null;
-  const badge = Math.max(11, Math.round(size * 0.4));
+  const [vendor, model] = member.vendorModel?.split(" · ") ?? [];
   return (
-    <span
-      role="img"
-      aria-label={ringLabel(member)}
-      data-state={state}
-      className={cn("relative inline-flex shrink-0 items-center justify-center", className)}
-      style={{ width: size, height: size }}
-    >
-      <svg
-        viewBox="0 0 40 40"
-        aria-hidden
-        className={cn("absolute inset-0", state === "working" && "motion-safe:animate-pulse")}
-      >
-        <circle
-          cx="20"
-          cy="20"
-          r="18"
-          fill="none"
-          stroke={color}
-          strokeWidth={hollow ? 1.6 : 3}
-          strokeDasharray={state === "stuck" ? "5 4" : undefined}
-        />
-      </svg>
-      <Glyph
-        aria-hidden
-        className="text-foreground"
-        style={{ width: size * 0.45, height: size * 0.45 }}
-      />
-      {(state === "stopped" || state === "done") && (
-        <span
-          aria-hidden
-          className="absolute -top-0.5 -right-0.5 inline-flex items-center justify-center rounded-full bg-background"
-          style={{ width: badge, height: badge }}
-        >
-          {state === "stopped" ? (
-            <XIcon style={{ color, width: badge - 2, height: badge - 2 }} strokeWidth={3} />
-          ) : (
-            <CheckIcon
-              className="text-muted-foreground"
-              style={{ width: badge - 3, height: badge - 3 }}
-              strokeWidth={3}
-            />
-          )}
-        </span>
-      )}
-      {vendor && (
-        <span
-          aria-hidden
-          className="absolute -right-1 -bottom-1 inline-flex items-center justify-center rounded-full border border-border bg-background font-mono leading-none font-semibold text-foreground"
-          style={{ width: badge, height: badge, fontSize: Math.max(8, badge - 5) }}
-        >
-          {vendor.charAt(0).toUpperCase()}
-        </span>
-      )}
-    </span>
+    <MemberAvatar
+      name={member.name}
+      role={(member.row.role as FactoryRole | null) ?? null}
+      seat={member.seat}
+      vendor={badgeVendor(vendor)}
+      model={model ?? null}
+      state={AVATAR_STATE[member.state]}
+      size={size}
+      label={ringLabel(member)}
+      className={className}
+    />
   );
 }
 
