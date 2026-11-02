@@ -178,8 +178,10 @@ export function ProposalPage() {
             ...(keepsAt != null
               ? ([
                   [
-                    "If nobody answers",
-                    `It stays applied ${keepsAt > nowS ? `in ${formatElapsed(keepsAt - nowS)}` : "now"}: nothing got worse`,
+                    "Stays applied",
+                    keepsAt > nowS
+                      ? `In ${formatElapsed(keepsAt - nowS)} if nobody answers — nothing got worse`
+                      : "Now: nobody answered and nothing got worse",
                   ],
                 ] as [string, ReactNode][])
               : []),

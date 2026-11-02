@@ -13,15 +13,18 @@ baseline right before it, on the parent version:
 A regressed guard reverts automatically. Target met, guards held and n ≥ min_n
 keeps it. Anything else is ``inconclusive``: an owners decision "Keep or revert
 C-n?" (recommended: revert); it is never kept on its own. A trial nobody
-decides reverts at 2× its window.
+decides reverts one original window after it ended (2× its window when it was
+never extended).
 
 An idle trial (no merged PR, finished task or sub-agent run in its window, see
 :mod:`.idle`) proves nothing either way. Instead of ending inconclusive it is
 extended by its original length, at most :data:`MAX_EXTENSIONS` times, with
 one line in #improvements each time. Still idle after that, the owners decide
-with Keep recommended when nothing got worse (no guard regressed, no incident
-names the change): nobody answering within :data:`KEEP_DEFAULT_AFTER_S` keeps
-it. An incident that names it by then reverts it instead.
+with Keep recommended when nothing got worse: nobody answering within
+:data:`KEEP_DEFAULT_AFTER_S` keeps it. An idle trial with negative evidence (a
+regressed guard, or an incident or finding that names it, see
+:func:`attributed_incidents`) is never extended and keeps the path above; one
+that names it before the Keep default applies reverts it instead.
 """
 
 from __future__ import annotations
@@ -60,6 +63,8 @@ KEEP_DEFAULT_AFTER_S: Final = 24 * 3600
 EXTENDED_KIND: Final = "proposal.trial_extended"
 DEFAULT_KEEP: Final = "keep"
 KEEP_DEFAULT_REASON: Final = "nobody answered in 24 h and nothing got worse"
+HARM_FINDING_SOURCES: Final = frozenset({"human", "sentinel"})
+"""Filers whose findings count as harm when they name a change (incidents always do)."""
 
 
 @dataclass
@@ -219,23 +224,29 @@ def extensions(row: FactoryProposal) -> int:
 
 def attributed_incidents(deps: FactoryDeps, row: FactoryProposal, now: int) -> list[str]:
     """
-    Incidents since *row* applied that name it (its id, or ``C-n`` in their target or evidence).
+    Incidents and findings since *row* applied that name it: harm attributed to the change.
 
-    :returns: Their refs, e.g. ``["INC-13"]``. Synchronous.
+    An issue names a change when ``C-n`` appears in its target, summary or
+    evidence; nothing else links them (an issue's ``proposal_id`` is the change
+    that fixes it, not one that caused it). Findings count when a human or
+    Sentinel filed them; incidents count from any source.
+
+    :returns: Their refs, e.g. ``["INC-13", "F-4"]``. Synchronous.
     """
     ref = proposal_ref(row.number)
     named = re.compile(rf"(?<![\w-]){re.escape(ref)}(?!\w)")
     since = int(row.applied_at or row.created_at)
     out: list[str] = []
-    for issue in deps.factory_store.list_issues(row.factory_id, class_="incident", limit=500):
+    rows = deps.factory_store.list_issues(
+        row.factory_id, class_=["incident", "finding"], limit=500
+    )
+    for issue in rows:
         if not since <= issue.first_seen <= now:
             continue
+        if issue.class_ == "finding" and issue.source not in HARM_FINDING_SOURCES:
+            continue
         evidence = json.dumps(issue.evidence, default=str) if issue.evidence else ""
-        if (
-            control.same_id(issue.proposal_id, row.id)
-            or named.search(issue.target or "")
-            or named.search(evidence)
-        ):
+        if any(named.search(text) for text in (issue.target or "", issue.summary or "", evidence)):
             out.append(issue.ref or issue.id)
     return out
 
@@ -256,9 +267,18 @@ def _idle_question(ref: str) -> str:
 
 
 async def _ask_owners(
-    app_state: Any, row: FactoryProposal, ev: Evaluation, *, keep_default: bool = False
+    app_state: Any,
+    row: FactoryProposal,
+    ev: Evaluation,
+    *,
+    keep_default: bool = False,
+    harm: list[str] | None = None,
 ) -> str | None:
-    """Open the owners' Keep-or-revert decision (Keep recommended for an idle, harmless trial)."""
+    """
+    Open the owners' Keep-or-revert decision (Keep recommended for an idle, harmless trial).
+
+    :param harm: Refs of the incidents and findings that name the change, for its context.
+    """
     deps = factory_deps(app_state)
     ref = proposal_ref(row.number)
     target = f"{tuning.SUBJECT_PREFIX}{row.id}"
@@ -271,6 +291,8 @@ async def _ask_owners(
     else:
         question = f"Keep or revert {ref}? Its trial was inconclusive: {ev.reason}"
         context = _summary(ev)
+        if harm:
+            context = f"{ref} is named in {', '.join(harm[:5])}.\n\n{context}"
     decision, _ = await asyncio.to_thread(
         lambda: deps.factory_store.create_decision(
             row.factory_id,
@@ -369,7 +391,12 @@ async def end_trial(app_state: Any, row: FactoryProposal, now: int) -> Evaluatio
     deps = factory_deps(app_state)
     root = await control.get_conv(deps, row.factory_id)
     ev = await asyncio.to_thread(evaluate_trial, deps, row, now)
-    if ev.outcome == OUTCOME_INCONCLUSIVE and ev.idle and extensions(row) < MAX_EXTENSIONS:
+    idle_inconclusive = ev.outcome == OUTCOME_INCONCLUSIVE and ev.idle
+    # Negative evidence is never waited out: a trial an incident names goes to the owners now.
+    harm = (
+        await asyncio.to_thread(attributed_incidents, deps, row, now) if idle_inconclusive else []
+    )
+    if idle_inconclusive and not harm and extensions(row) < MAX_EXTENSIONS:
         if await _extend(app_state, row, ev, now) is not None:
             return replace(ev, outcome=OUTCOME_EXTENDED, reason="idle: extended")
     ref = proposal_ref(row.number)
@@ -392,9 +419,8 @@ async def end_trial(app_state: Any, row: FactoryProposal, now: int) -> Evaluatio
     elif ev.outcome == OUTCOME_KEPT:
         await tuning.keep(app_state, root, row, actor=server)
     else:
-        harm = await asyncio.to_thread(attributed_incidents, deps, row, now) if ev.idle else []
         keep_default = ev.idle and not harm
-        decision_id = await _ask_owners(app_state, row, ev, keep_default=keep_default)
+        decision_id = await _ask_owners(app_state, row, ev, keep_default=keep_default, harm=harm)
         result = {**(row.result or {}), "keep_decision_id": decision_id}
         if keep_default:
             result.update(default=DEFAULT_KEEP, default_at=now + KEEP_DEFAULT_AFTER_S)
@@ -445,8 +471,10 @@ async def tick(app_state: Any, factory_id: str, *, now: int | None = None) -> li
                 if action:
                     done.append(f"{ref}:{action}")
                 continue
-            window = max(3600, row.trial_until - row.applied_at)
-            if now >= row.applied_at + 2 * window:
+            # One original window after the trial ended: an extension does not stretch it.
+            stored = (row.result or {}).get("trial_window_s")
+            window = int(stored or max(3600, row.trial_until - row.applied_at))
+            if now >= row.trial_until + window:
                 root = await control.get_conv(deps, factory_id)
                 if root is None:
                     continue
@@ -455,7 +483,7 @@ async def tick(app_state: Any, factory_id: str, *, now: int | None = None) -> li
                     root,
                     row,
                     actor=Actor.server(),
-                    reason="unattended: nobody kept the trial within 2× its window",
+                    reason="unattended: nobody decided within one trial window after it ended",
                 )
                 done.append(f"{ref}:unattended")
         except Exception:  # noqa: BLE001 - one trial must not stop the others
@@ -466,6 +494,7 @@ async def tick(app_state: Any, factory_id: str, *, now: int | None = None) -> li
 __all__ = [
     "DEFAULT_KEEP",
     "EXTENDED_KIND",
+    "HARM_FINDING_SOURCES",
     "KEEP_DEFAULT_AFTER_S",
     "KEEP_DEFAULT_REASON",
     "MAX_EXTENSIONS",

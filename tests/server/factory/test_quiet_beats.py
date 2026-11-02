@@ -14,7 +14,7 @@ import pytest
 from omnigent import factory as F
 from omnigent.entities.factory import EventDraft, FactoryEvent
 from omnigent.server.factory import quiet_beats
-from omnigent.server.factory.mailer import get_mailer
+from omnigent.server.factory.mailer import MailItem, get_mailer
 from omnigent.server.factory.notify import iso_utc
 from omnigent.server.factory.supervisor import FactorySupervisor, SupervisorConfig
 from omnigent.server.routes._sessions.common import _session_status_cache
@@ -234,6 +234,9 @@ def test_relevance_rules(supervision: Supervision) -> None:
         _ev(project_slug="db-version", summary="another project"),
         _ev("heartbeat.delivered", to_id=pl.id, summary="its own beat"),
         _ev("message.delivered", from_id=pl.id, summary="its own post"),
+        _ev("label.changed", from_id=pl.id, to_id=pl.id, summary="its own beacon"),
+        _ev("chat.posted", from_id=pl.id, project_slug="api-version", summary="its own Room post"),
+        _ev("decision.opened", from_id=lead.id, severity="warning", summary="its own question"),
         _ev("message.queued", to_id=pl.id, summary="still queued"),
         _ev(severity="warning", summary="a warning elsewhere"),
     ]
@@ -381,7 +384,9 @@ async def test_a_pr_notice_reaches_a_backed_off_pl_at_once(quiet: Supervision) -
     assert s.deliver.texts_to(w.id("pl"))[-1] == notice
 
 
-async def test_a_pl_whose_project_closed_gets_no_beats(supervision: Supervision) -> None:
+async def test_a_pl_left_active_on_a_closed_project_gets_no_beats(
+    supervision: Supervision,
+) -> None:
     s, w = supervision, supervision.world
     store = w.app_state.factory.factory_store
     project = store.upsert_project(w.id("lead_a"), "api-version", title="API version")
@@ -394,10 +399,101 @@ async def test_a_pl_whose_project_closed_gets_no_beats(supervision: Supervision)
     for _ in range(4):
         s.clock.advance(PL_HEARTBEAT_S)
         await s.tick()
+    s.clock.advance(3600)
+    await s.tick()
 
     assert len(s.deliver.texts_to(w.id("pl"))) == 1
+    # Not a skipped beat either: nothing for the hourly report.
+    assert store.find_events(w.id("lead_a"), "heartbeat.skipped", 0) == []
     # Reopened, it beats again.
     store.update_project(project.id, status="active")
     s.clock.advance(PL_HEARTBEAT_S)
     await s.tick()
     assert len(s.deliver.texts_to(w.id("pl"))) == 2
+
+
+async def test_its_own_beacon_does_not_reset_a_members_backoff(quiet: Supervision) -> None:
+    s, w = quiet, quiet.world
+    await _first_beat(s)
+    assert len(await _idle_backstop(s, 3)) == 1
+    assert w.get("pl").labels[F.LABEL_IDLE_BEATS] == "1"
+    # The PL rewrites its summary label and posts in its own project thread.
+    _event(s, "PL · summary: idle", kind="label.changed", from_id=w.id("pl"), to_id=w.id("pl"))
+    _event(
+        s, "PL: nothing to do", kind="chat.posted", from_id=w.id("pl"), project_slug="api-version"
+    )
+
+    assert await _idle_backstop(s, 5) == []
+    assert len(await _idle_backstop(s, 1)) == 1
+    assert w.get("pl").labels[F.LABEL_IDLE_BEATS] == "2"
+
+
+# ── a backed-off lead hears news at its next beat ──────────────
+
+
+@pytest.fixture()
+def quiet_lead(supervision: Supervision) -> Supervision:
+    """Quiet beats on and only Atlas beating, every ``PL_HEARTBEAT_S``."""
+    w = supervision.world
+    w.store.set_labels(w.id("pl"), {F.LABEL_HEARTBEAT_S: "0"})
+    w.store.set_labels(w.id("lead_b"), {F.LABEL_HEARTBEAT_S: "0"})
+    w.store.set_labels(w.id("lead_a"), {F.LABEL_HEARTBEAT_S: str(PL_HEARTBEAT_S)})
+    supervision.supervisor = FactorySupervisor(
+        w.app_state,
+        config=SupervisorConfig(quiet_beats=True, stuck_s=2000),
+        deliver=supervision.deliver,
+        clock=supervision.clock,
+    )
+    return supervision
+
+
+def _room_message(s: Supervision, lead: str) -> str:
+    """A human's Room message to Atlas, through the mailer like the Room sends it."""
+    text = "[Factory room · #factory] luka: start the next project"
+    get_mailer(s.world.app_state).submit(
+        MailItem(
+            mail_id="mail_room1",
+            sender_id=None,
+            target_id=lead,
+            target_title="Atlas",
+            text=text,
+            kind="chat",
+            factory_id=lead,
+            created_by="luka@caffeine.ai",
+            thread="factory",
+        )
+    )
+    return "start the next project"
+
+
+def _answered(s: Supervision, lead: str) -> str:
+    _event(s, 'luka answered D-3 · "Ship it"', kind="decision.answered", severity="notice")
+    return "answered D-3"
+
+
+def _incident(s: Supervision, lead: str) -> str:
+    _event(s, "INC-4 opened: PL relaunch failed", kind="issue.opened", severity="warning")
+    return "INC-4 opened"
+
+
+@pytest.mark.parametrize("news", [_room_message, _answered, _incident])
+async def test_news_reaches_a_backed_off_lead_at_its_next_beat_and_resets_it(
+    quiet_lead: Supervision, news: Any
+) -> None:
+    s, w = quiet_lead, quiet_lead.world
+    lead = w.id("lead_a")
+    await s.tick()
+    s.clock.advance(PL_HEARTBEAT_S)
+    await s.tick()
+    assert len(s.deliver.texts_to(lead)) == 1
+    w.store.set_labels(lead, {F.LABEL_IDLE_BEATS: "4"})
+    s.clock.advance(30)
+
+    expected = news(s, lead)
+    await s.settle()
+    s.clock.advance(PL_HEARTBEAT_S)
+    await s.tick()
+
+    beat = s.deliver.texts_to(lead)[-1]
+    assert beat.startswith("[Factory heartbeat #2 ") and expected in beat
+    assert F.LABEL_IDLE_BEATS not in w.get("lead_a").labels

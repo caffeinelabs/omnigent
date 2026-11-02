@@ -15,8 +15,9 @@ Each tick it reads the top-level members of every factory and applies:
   the cadence and the numbering. With quiet beats on, a due beat nothing
   needs is skipped (see :mod:`~omnigent.server.factory.quiet_beats`), and a
   member whose backstop beats keep finding nothing waits twice as long each
-  time, up to a day (``idle_beats`` label). A PL whose project was closed
-  (cancelled, merged into another, done) gets no beats.
+  time, up to a day (``idle_beats`` label). Closing a project stops its PL;
+  should its ``state`` label still say active, a project row that is no longer
+  ``active`` keeps it from beating anyway.
   Three failed beats within an hour mark it ``health=dead``, raise a
   ``[NEEDS HUMAN]`` (at most hourly, stamped in ``dead_alerted_at``) and open
   one decision for the human per episode.
@@ -596,7 +597,13 @@ class FactorySupervisor:
         )
 
     async def _project_closed(self, conv: Conversation) -> bool:
-        """A PL whose project was cancelled, merged into another or marked done has no work."""
+        """
+        A PL whose project row is no longer ``active`` (cancelled, merged into another).
+
+        Closing a project already pauses or ends its PL; this guards a stale
+        ``state`` label. A project at stage ``merged`` stays active: its PL may
+        still be validating the merge.
+        """
         project = conv.labels.get(LABEL_PROJECT)
         factory_id = conv.labels.get(LABEL_ID)
         store = _factory_store(self._app_state)
@@ -605,8 +612,11 @@ class FactorySupervisor:
         row = await asyncio.to_thread(store.get_project, factory_id, project) if store else None
         return row is not None and row.status not in (None, "active")
 
-    def _record_skip(self, conv: Conversation, now: float) -> None:
+    def _record_skip(self, conv: Conversation, now: float, *, count: bool = True) -> None:
+        """Wait an interval before looking again; *count* it in the hourly report."""
         self._quiet_until[conv.id] = now + float(_heartbeat_interval(conv) or 0)
+        if not count:
+            return
         counts = self._skips.setdefault(conv.labels.get(LABEL_ID, ""), {})
         counts[conv.id] = counts.get(conv.id, 0) + 1
         if self._skips_since is None:
@@ -641,7 +651,7 @@ class FactorySupervisor:
                 )
                 closed = False
             if closed:
-                self._record_skip(conv, now)
+                self._record_skip(conv, now, count=False)
                 return
             if self.config.for_factory(conv.labels.get(LABEL_ID)).quiet_beats:
                 try:

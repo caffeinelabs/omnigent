@@ -581,6 +581,7 @@ transcript folds.
 | `OMNIGENT_FACTORY_PREVIEW_TTL_H` | `72` | Hours without human attention before a preview gets a park notice. |
 | `OMNIGENT_FACTORY_PREVIEW_TOOLING_REF` | empty (recommended: `main`) | caffeinelabs/app ref the preview tooling is overlaid from onto PR heads that predate it; stored in new charters. Not the project's base branch. Empty: env_keeper uses `main`. |
 | `OMNIGENT_FACTORY_QUIET_BEATS`, `OMNIGENT_FACTORY_MAIL_REPLAY` | on | `0` turns off skipping unchanged heartbeats / replaying queued mail after a restart. |
+| `OMNIGENT_FACTORY_IDLE_BACKSTOP_MAX_S` | `86400` | With quiet beats, the backstop beat of a member nothing touched waits 3 intervals, doubled after each one that found nothing, up to this; any relevant event resets it. Mail never waits. |
 | `OMNIGENT_FACTORY_INVARIANTS` | on | `0` leaves the `factory_invariants` admin default policy unseeded (see Invariants). |
 | `OMNIGENT_IMAGE_TAG`, `OMNIGENT_SERVER_SHA` | unset | Image tag and commit recorded in the platform version (`factory_versions`). |
 | `OMNIGENT_FACTORY_RETRO_HOUR` | `6` | UTC hour after which Sentinel gets its daily retro beat. |
@@ -703,7 +704,13 @@ without) and one expected metric effect; at most 2 per agent per day.
   automatically; target met with n ≥ 3 merged PRs (24 h of beats for a
   cadence change) keeps it; anything else asks the owners "Keep or revert
   C-n?" (recommended: revert). Never auto-kept. A trial nobody decides reverts
-  at 2× its window.
+  one window after it ended (2× its window).
+- **Idle trials**: a window with no merged PR, finished task or ended sub-agent
+  run proves nothing. Such a trial is extended by its own length (at most
+  twice, one line in `#improvements` each time), then the owners decide with
+  Keep recommended; unanswered for 24 h, it stays applied. A regressed guard,
+  or an incident (or a human's or Sentinel's finding) that names `C-n`, skips
+  all of this: the trial takes the revert path above.
 - **Revert** (`POST …/proposals/{ref}/revert`, owners, one click) re-pins the
   parent version when it is still in force, else undoes only that change as a
   `revert` version. `…/keep` ends a trial early; `…/definition/pin {version}`
@@ -743,7 +750,10 @@ evidence and never run.
   day) and at each project done, Sentinel gets
   `[Factory heartbeat · retro · window 24h · budget $3]` and runs the
   `factory-retro` skill (open and axial coding, at most 2 proposals, a digest
-  in `#improvements`). Owners can run it now: `POST …/retro`.
+  in `#improvements`). The daily beat waits (`retro.skipped`, rechecked
+  hourly) while the last 24 h had nothing to read: no work, incident, finding,
+  closed PR, answered or escalated decision, exhausted loop, human feedback or
+  human Room post. Owners can run it now: `POST …/retro`.
 - **Eval mode** (root label `omnigent.factory.mode=eval`): decisions are
   answered with the recommended option after 2 minutes (`answered_by
   eval-auto`) and each project's PL is paused at READY. Decisions only an

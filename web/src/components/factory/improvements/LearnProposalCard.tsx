@@ -50,6 +50,7 @@ import {
   overdueNote,
   revertToast,
   tier2Plain,
+  trialExtensions,
   trialProgress,
 } from "./improvementsModel";
 import { ProposeChangeDialog } from "./ProposeChangeDialog";
@@ -126,7 +127,7 @@ function TrialBar({ proposal, nowS }: { proposal: ProposalView; nowS: number }) 
     <span
       data-testid={`proposal-${proposal.ref}-trial`}
       className="inline-flex items-center gap-1.5 text-xs text-muted-foreground tabular-nums"
-      title={progress.overdue ? overdueNote(proposal) : undefined}
+      title={progress.overdue ? overdueNote(proposal, nowS) : undefined}
     >
       <span aria-hidden className="h-1.5 w-16 overflow-hidden rounded-full bg-muted">
         <span
@@ -339,7 +340,11 @@ export function LearnProposalCard({
             </CollapsibleTrigger>
           </div>
           <CollapsibleContent className="pt-2">
-            <ScorecardTable card={card} testId={`proposal-${proposal.ref}-scorecard-table`} />
+            <ScorecardTable
+              card={card}
+              testId={`proposal-${proposal.ref}-scorecard-table`}
+              trial={{ extensions: trialExtensions(proposal), keepsAt, nowS }}
+            />
           </CollapsibleContent>
         </Collapsible>
       )}

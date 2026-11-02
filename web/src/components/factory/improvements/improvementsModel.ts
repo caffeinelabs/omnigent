@@ -74,11 +74,32 @@ export function keepsUnansweredAt(proposal: ProposalView): number | null {
     : null;
 }
 
+/** The server extends an idle trial at most this many times, then the owners decide. */
+export const IDLE_MAX_EXTENSIONS = 2;
+
+/**
+ * When an unattended trial past its window reverts (epoch s): one original
+ * window after it ended, however often it was extended.
+ */
+export function revertsUnattendedAt(proposal: ProposalView): number | null {
+  if (proposal.applied_at == null || proposal.trial_until == null) return null;
+  const stored = proposal.result?.trial_window_s;
+  const window =
+    typeof stored === "number" && stored > 0
+      ? stored
+      : Math.max(3600, proposal.trial_until - proposal.applied_at);
+  return proposal.trial_until + window;
+}
+
 /** The hover text of a trial past its window: what happens if nobody decides. */
-export function overdueNote(proposal: ProposalView): string {
-  return keepsUnansweredAt(proposal) != null
-    ? "Past its window: the owners decide. If nobody answers, it stays applied because nothing got worse"
-    : "Past its window: it reverts unattended at twice the window";
+export function overdueNote(proposal: ProposalView, nowS: number): string {
+  if (keepsUnansweredAt(proposal) != null) {
+    return "Past its window: the owners decide. If nobody answers, it stays applied because nothing got worse";
+  }
+  const at = revertsUnattendedAt(proposal);
+  return at != null && at > nowS
+    ? `Past its window: if nobody decides, it reverts in ${formatElapsed(at - nowS)}`
+    : "Past its window: if nobody decides, it reverts now";
 }
 
 export function trialProgress(proposal: ProposalView, nowS: number): TrialProgress | null {
@@ -215,9 +236,34 @@ export function verdictText(card: ScorecardView): string {
   }
 }
 
+/** Where an idle trial stands: how often it was extended and when Keep applies. */
+export interface IdleTrialState {
+  extensions: number;
+  /** When an unanswered owners decision keeps it (epoch s), else null. */
+  keepsAt: number | null;
+  nowS: number;
+}
+
+function timesText(n: number): string {
+  return n === 1 ? "once" : n === 2 ? "twice" : `${n} times`;
+}
+
 /** What the server needs to decide: the keep rule, or what happens to an idle trial. */
-export function verdictHint(card: ScorecardView): string {
+export function verdictHint(card: ScorecardView, trial?: IdleTrialState): string {
   if (card.idle && card.outcome === "inconclusive") {
+    const n = trial?.extensions ?? 0;
+    if (trial?.keepsAt != null) {
+      const left = trial.keepsAt - trial.nowS;
+      return left > 0
+        ? `extended ${timesText(n)}; the owners decide now — it stays applied if nobody answers in ${formatElapsed(left)}`
+        : `extended ${timesText(n)}; nobody answered, so it stays applied`;
+    }
+    if (n >= IDLE_MAX_EXTENSIONS) {
+      return `extended ${timesText(n)}; the owners decide when this window ends`;
+    }
+    if (n > 0) {
+      return `extended ${timesText(n)}; if still idle when this window ends, it gets one more`;
+    }
     return "an idle trial gets its window again, at most twice; then the owners decide";
   }
   return `kept once n reaches ${card.min_n} ${nCounts(card)}, the target is met and every guard holds`;

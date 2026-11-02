@@ -1,7 +1,8 @@
 """Trial evaluation on synthetic data: kept, auto-revert on a guard regression,
 inconclusive at small n (an owners decision, never auto-kept), the unattended
-revert at 2× the window, and idle trials: extended twice, then an owners
-decision whose default is Keep when nothing got worse.
+revert one window after the trial ended, and idle trials: extended twice, then
+an owners decision whose default is Keep when nothing got worse, unless an
+incident or finding names the change.
 
 A person's edit with ``trial: true`` starts each trial; the test then moves its
 window so that "now" is its last hour, and seeds merged PRs and incidents
@@ -283,7 +284,7 @@ async def test_an_idle_trial_nobody_answers_stays_applied_after_24h(cockpit: Coc
 async def test_an_incident_naming_an_idle_trial_keeps_revert_as_the_default(
     cockpit: Cockpit,
 ) -> None:
-    row, applied = await _trial(cockpit)
+    await _trial(cockpit)
     for _ in range(evaluate.MAX_EXTENSIONS):
         await evaluate.tick(cockpit.app.state, cockpit.fid, now=_row(cockpit).trial_until + 1)
     await issues.raise_issue(
@@ -302,9 +303,87 @@ async def test_an_incident_naming_an_idle_trial_keeps_revert_as_the_default(
     assert "default" not in row.result
     decision = cockpit.store.get_decision(row.result["keep_decision_id"])
     assert next(o for o in decision.options if o.get("recommended"))["id"] == "revert"
-    # Today's path: unattended, it reverts at twice its (extended) window.
-    late = await evaluate.tick(cockpit.app.state, cockpit.fid, now=applied + 6 * WINDOW + 1)
+    # Today's path: unattended, it reverts one original window after the trial ended.
+    ended = _row(cockpit).trial_until
+    early = await evaluate.tick(cockpit.app.state, cockpit.fid, now=ended + WINDOW - 60)
+    late = await evaluate.tick(cockpit.app.state, cockpit.fid, now=ended + WINDOW + 1)
+    assert early == [] and late == ["C-1:unattended"] and _row(cockpit).status == "reverted"
+
+
+async def test_an_incident_in_the_first_idle_window_skips_the_extensions(
+    cockpit: Cockpit,
+) -> None:
+    row, applied = await _trial(cockpit)
+    incident = await issues.raise_issue(
+        cockpit.app.state,
+        cockpit.fid,
+        rule="agent.repeat",
+        target="proposal:C-1",
+        summary="agents loop on the C-1 rule",
+    )
+    assert incident is not None
+
+    done = await evaluate.tick(cockpit.app.state, cockpit.fid, now=row.trial_until + 1)
+
+    assert done == ["C-1:inconclusive"]
+    row = _row(cockpit)
+    assert "trial_extensions" not in row.result and "default" not in row.result
+    assert row.trial_until == applied + WINDOW
+    assert cockpit.events(evaluate.EXTENDED_KIND) == []
+    decision = cockpit.store.get_decision(row.result["keep_decision_id"])
+    assert next(o for o in decision.options if o.get("recommended"))["id"] == "revert"
+    assert decision.context.startswith(f"C-1 is named in {incident.ref}.")
+    # Unattended, it reverts as early as before: twice its window.
+    late = await evaluate.tick(cockpit.app.state, cockpit.fid, now=applied + 2 * WINDOW + 1)
     assert late == ["C-1:unattended"] and _row(cockpit).status == "reverted"
+
+
+async def test_an_extended_trial_that_saw_some_work_reverts_one_window_after_it_ended(
+    cockpit: Cockpit,
+) -> None:
+    row, applied = await _trial(cockpit)
+    assert await evaluate.tick(cockpit.app.state, cockpit.fid, now=row.trial_until + 1) == [
+        "C-1:extended"
+    ]
+    _merged(cockpit, 9900, applied + WINDOW + H)  # some work, not enough to judge
+    ended = _row(cockpit).trial_until
+    assert await evaluate.tick(cockpit.app.state, cockpit.fid, now=ended + 1) == [
+        "C-1:inconclusive"
+    ]
+
+    early = await evaluate.tick(cockpit.app.state, cockpit.fid, now=ended + WINDOW - 60)
+    late = await evaluate.tick(cockpit.app.state, cockpit.fid, now=ended + WINDOW + 1)
+
+    assert early == [] and late == ["C-1:unattended"]
+    assert _row(cockpit).status == "reverted"
+
+
+async def test_only_an_explicit_mention_by_an_incident_human_or_sentinel_counts_as_harm(
+    cockpit: Cockpit,
+) -> None:
+    row, _applied = await _trial(cockpit)
+    store = cockpit.store
+
+    def finding(summary: str, source: str, **fields: Any) -> None:
+        store.upsert_issue(
+            cockpit.fid,
+            class_="finding",
+            rule="finding.general",
+            target="factory",
+            summary=summary,
+            source=source,
+            **fields,
+        )
+
+    finding("C-1 broke the review loop", "human")
+    finding("since C-1 PLs stop early", "sentinel")
+    finding("C-1 looks fine to me", "agent")  # a PL's own note
+    finding("not related to C-10", "human")
+    finding("the fix for this is a proposal", "human", proposal_id=row.id)
+
+    harm = evaluate.attributed_incidents(cockpit.deps, row, int(time.time()) + 60)
+
+    assert harm == ["F-2", "F-1"]
 
 
 async def test_an_incident_naming_it_before_the_default_reverts_instead(

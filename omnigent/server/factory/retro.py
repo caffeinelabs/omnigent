@@ -9,9 +9,11 @@ The retro beat: once a day at ``OMNIGENT_FACTORY_RETRO_HOUR`` (UTC, default 6)
 and when a project is done, Sentinel gets ``[Factory heartbeat · retro · …]``
 and runs the ``factory-retro`` skill. Each beat is recorded as a
 ``retro.requested`` event and sent once, also across a server restart. The
-daily beat waits while the last 24 h were idle (nothing merged, finished or
-ran, see :mod:`.idle`): one ``retro.skipped`` event says so, and the beat goes
-out within the hour once work shows up that day.
+daily beat waits while the last 24 h gave it nothing to read: nothing merged,
+finished or ran, and no incident, finding, closed PR, answered or escalated
+decision, exhausted loop, human feedback or human post in the Room (see
+:mod:`.idle`). One ``retro.skipped`` event says so, and the beat goes out
+within the hour once any of that shows up that day.
 """
 
 from __future__ import annotations
@@ -307,7 +309,7 @@ async def request_retro(
 
 
 async def _quiet_day(app_state: Any, factory_id: str, subject: str, now: float) -> bool:
-    """Whether the daily retro *subject* waits because the last 24 h were idle."""
+    """Whether the daily retro *subject* waits because the last 24 h gave it nothing to read."""
     key = (factory_id, subject)
     if key in _sent:
         return False
@@ -316,10 +318,14 @@ async def _quiet_day(app_state: Any, factory_id: str, subject: str, now: float) 
     deps = factory_deps(app_state)
     if await _requested(deps, factory_id, subject):
         return False
-    activity = await asyncio.to_thread(
-        idle.window_activity, deps, factory_id, int(now) - 86400, int(now) + 1
+    since, until = int(now) - 86400, int(now) + 1
+    activity = await asyncio.to_thread(idle.window_activity, deps, factory_id, since, until)
+    signals = (
+        await asyncio.to_thread(idle.retro_signals, deps, factory_id, since, until)
+        if activity.idle
+        else None
     )
-    if not activity.idle:
+    if signals is None or signals.any:
         _quiet_until.pop(key, None)
         return False
     _quiet_until[key] = now + IDLE_RECHECK_S
@@ -333,8 +339,8 @@ async def _quiet_day(app_state: Any, factory_id: str, subject: str, now: float) 
             SKIPPED_KIND,
             severity="info",
             subject=subject,
-            summary="No retro yet today: nothing merged, finished or ran in the last 24 h",
-            data={"by": "server", "activity": activity.to_dict()},
+            summary="No retro yet today: nothing in the last 24 h to learn from",
+            data={"by": "server", "activity": activity.to_dict(), "signals": signals.to_dict()},
         )
     return True
 

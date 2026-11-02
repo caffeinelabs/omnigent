@@ -353,9 +353,13 @@ describe("Improvements", () => {
 
     const record = await screen.findByTestId("proposal-record");
     expect(record).toHaveTextContent("Extended2× by its own length: nothing merged or finished");
-    expect(record).toHaveTextContent("If nobody answersIt stays applied in 22h: nothing got worse");
+    expect(record).toHaveTextContent("Stays appliedIn 22h if nobody answers — nothing got worse");
     expect(await screen.findByTestId("proposal-C-13-scorecard-table-verdict")).toHaveTextContent(
       "idle · no merged PRs or finished tasks",
+    );
+    // Its extensions are used up: the hint says what happens now, not the general rule.
+    expect(screen.getByTestId("proposal-C-13-scorecard-table-hint")).toHaveTextContent(
+      "extended twice; the owners decide now — it stays applied if nobody answers in 22h",
     );
   });
 
