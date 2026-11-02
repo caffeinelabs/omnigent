@@ -453,13 +453,14 @@ describe("SessionUpdatesProvider factory_changed frames", () => {
       ["factory-demos", "f4f4ba9c"],
       ["factory-people", "f4f4ba9c"],
       ["factory-spans", "f4f4ba9c"],
+      ["factory-now", "f4f4ba9c"],
       ["factory-room", "f4f4ba9c"],
       ["factories"],
       ["factory-decisions"],
     ]);
   });
 
-  it("re-reads only the snapshot on a live 'now' tick (no spans, events or demos)", () => {
+  it("re-reads only the snapshot on a live 'now' tick (no spans, events, demos or Now)", () => {
     const client = new QueryClient();
     seedConversations(client, ["conv_a"]);
     renderProvider(client, ["/"]);
@@ -477,7 +478,7 @@ describe("SessionUpdatesProvider factory_changed frames", () => {
     ]);
   });
 
-  it("re-reads the snapshot, the index and the Room's issue cards on an issues frame", () => {
+  it("re-reads the snapshot, the index, the Room's issue cards and Now on an issues frame", () => {
     const client = new QueryClient();
     seedConversations(client, ["conv_a"]);
     renderProvider(client, ["/"]);
@@ -491,6 +492,7 @@ describe("SessionUpdatesProvider factory_changed frames", () => {
       ["factory", "f4f4ba9c"],
       ["factories"],
       ["factory-room", "f4f4ba9c", "issues"],
+      ["factory-now", "f4f4ba9c"],
     ]);
   });
 

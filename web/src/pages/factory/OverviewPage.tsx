@@ -1,8 +1,9 @@
 /**
- * The factory Overview (`/factory/:factoryId`), exceptions first: what needs
- * a human (mine, my role, all; incidents with their first runbook step and
- * agent), the projects table, the last hour of activity per project, the
- * live feed, and whether the machine is healthy.
+ * The factory Overview (`/factory/:factoryId`), exceptions first: "Now" in
+ * plain words (what waits on me, what is in progress, next, spend, health),
+ * what needs a human (mine, my role, all; incidents with their first runbook
+ * step and agent), the projects table, the last hour of activity per project,
+ * the live feed, and whether the machine is healthy.
  */
 
 import { useMemo } from "react";
@@ -10,6 +11,7 @@ import { useFactoryIssues } from "@/components/factory/agents/opsQueries";
 import { ActivityHeatmap } from "@/components/factory/overview/ActivityHeatmap";
 import { LiveFeed } from "@/components/factory/overview/LiveFeed";
 import { NeedsYouPanel } from "@/components/factory/overview/NeedsYouPanel";
+import { NowCard } from "@/components/factory/overview/NowCard";
 import { splitNeedsYou } from "@/components/factory/overview/needsYouModel";
 import { OverviewHealth } from "@/components/factory/overview/OverviewHealth";
 import { ProjectsTable } from "@/components/factory/projects/ProjectsTable";
@@ -39,6 +41,7 @@ export function OverviewPage() {
   useHashScroll();
   return (
     <div data-testid="factory-overview" className="flex min-w-0 flex-col gap-4">
+      <NowCard factoryId={snapshot.factory.id} nowS={nowS} />
       <NeedsYouPanel
         snapshot={snapshot}
         split={split}

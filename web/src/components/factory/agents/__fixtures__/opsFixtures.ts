@@ -28,6 +28,7 @@ import type {
 } from "@/lib/factoryApi";
 import round3Json from "../../__fixtures__/snapshot.round3.json";
 import type { StoryRoutes } from "../../factoryStoryFixtures";
+import { statusSummaryOf } from "../../overview/__fixtures__/nowFixtures";
 import { roomRoutes } from "../../room/__fixtures__/roomFixtures";
 import {
   ROUND3_NOW_S,
@@ -695,6 +696,10 @@ export function opsRoutes(
         ],
         totals: { cost_usd: 20.3, tokens_in: 0, tokens_out: 0, turns: 559 },
       },
+    },
+    // The Overview's Now card, as the server would build it for this snapshot's viewer.
+    [`${base}/status-summary`]: {
+      body: statusSummaryOf(snapshot, { incidents: round3IssueList() }),
     },
     [`${base}/alerts/routing`]: {
       body: { cockpit: true, browser: true, slack: false, slack_min_severity: "warning" },
