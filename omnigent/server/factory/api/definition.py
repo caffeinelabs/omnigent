@@ -166,6 +166,7 @@ def _definition_body(deps: Any, root: Any, app_state: Any) -> dict[str, Any]:
         },
         "owner_only": list(definition.OWNER_ONLY_PREFIXES),
         "not_trialable": list(definition.blocks.NOT_TRIALABLE),
+        "not_trialable_why": dict(definition.blocks.NOT_TRIALABLE),
         "agent_paths": {k: list(v) for k, v in definition.blocks.AGENT_PATHS.items()},
         "discovery_server": definition.blocks.discovery_server_on(),
         "tier2": tier2.status(app_state),

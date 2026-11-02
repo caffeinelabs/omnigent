@@ -17,10 +17,12 @@ decides reverts one original window after it ended (2× its window when it was
 never extended).
 
 Trials never overlap on one block (:func:`check_trial`): a second trial on a
-top-level block that already has one running is refused with 409
-``trial_overlap``, since two trials on one block confound each other's guards
-(rules trial one by one). Strategy and product profile changes never run as a
-trial (422 ``not_trialable``): they are judged on outcomes and apply as a version.
+block of :mod:`.definition_blocks` that already has one running is refused
+with 409 ``trial_overlap``, since two trials on one block confound each
+other's guards (today's settings and rules trial side by side, as before).
+Strategy and product profile changes never run as a trial (422
+``not_trialable``): they are judged on outcomes and apply as a version. Nor
+do discovery and Scout's brief until the discovery guards exist.
 
 An idle trial (no merged PR, finished task or sub-agent run in its window, see
 :mod:`.idle`) proves nothing either way. Instead of ending inconclusive it is
@@ -279,9 +281,14 @@ def overlap_error(row: FactoryProposal, block: str, now: int) -> CockpitError:
     )
 
 
-def not_trialable_error(reason: str) -> CockpitError:
-    """:returns: The 422 ``not_trialable`` refusal."""
-    return CockpitError(422, NOT_TRIALABLE, reason, reason=definition.blocks.NOT_TRIALABLE_REASON)
+def not_trialable_error(message: str, reason: str | None = None) -> CockpitError:
+    """
+    :param reason: The short reason (``judged on outcomes``, ``needs discovery guards``).
+    :returns: The 422 ``not_trialable`` refusal.
+    """
+    return CockpitError(
+        422, NOT_TRIALABLE, message, reason=reason or definition.blocks.NOT_TRIALABLE_REASON
+    )
 
 
 def check_trial(
@@ -295,13 +302,15 @@ def check_trial(
     """
     Refuse a trial on *paths*. Synchronous.
 
-    :raises CockpitError: 422 ``not_trialable`` (strategy, product profile);
-        409 ``trial_overlap`` when a running trial holds one of its blocks.
+    :raises CockpitError: 422 ``not_trialable`` (strategy, product profile,
+        discovery, Scout's brief); 409 ``trial_overlap`` when a running trial
+        holds one of its blocks.
     """
     paths = list(paths)
-    ok, reason = definition.trialable(paths)
+    ok, message = definition.trialable(paths)
     if not ok:
-        raise not_trialable_error(reason or definition.blocks.NOT_TRIALABLE_REASON)
+        why = "; ".join(dict.fromkeys(definition.not_trialable(paths).values()))
+        raise not_trialable_error(message or definition.blocks.NOT_TRIALABLE_REASON, why)
     found = overlapping_trial(deps, factory_id, paths, exclude_id=exclude_id)
     if found is not None:
         raise overlap_error(found[0], found[1], now if now is not None else now_s())

@@ -790,17 +790,31 @@ Everything the factory knows about its product is data in five more blocks
 domain, `release`, flags}), `strategy` (`goals[]` `G-n`, guardrails,
 non-goals, focus segments, the capacity `mix` adding up to 100), `discovery`
 (`enabled` off by default, `seat.model`, `sources[]`, `rubric`, `thresholds`,
-`budgets`, `cadence`, `autonomy`), `briefs` (per role, ≤ 4,000 chars) and
-`role_defaults` (per role vendor and model alias; the old, unread
-`models.ic|reviewer|planner` moved here and their paths still write it).
-They stay inert until something reads them; discovery also needs the server
-env `OMNIGENT_FACTORY_DISCOVERY`. Lists with ids change item by item: `add`
-at `strategy.goals`, `replace`/`remove` at `strategy.goals/G-2` or one field
-at `discovery.sources/forum/state`; goal numbers come from the server and are
-never reused. A source never holds a secret (Tier 0: a secret-looking param
-is refused), always applies the redaction floor, and a `personal` or
-`sensitive` one stays paused. Changes to these blocks are not mailed to
-members (their readers fetch them as data).
+`budgets`, `cadence`, `autonomy`), `briefs` (per role, Atlas and Sentinel
+included, ≤ 4,000 chars) and `role_defaults` (per role vendor and model
+alias; the old, unread `models.ic|reviewer|planner` moved here and their
+paths still write it). They stay inert until something reads them; discovery
+also needs the server env `OMNIGENT_FACTORY_DISCOVERY`. Lists with ids change
+item by item: `add` at `strategy.goals`, `replace`/`remove` at
+`strategy.goals/G-2` or one field at `discovery.sources/forum/state`; goal
+numbers come from the server and are never reused. A source never holds a
+secret (Tier 0): a params key with a secret word in it (`accessToken`,
+`client_secret`, `auth`, `pat`), a token-shaped value, a basic or bearer
+credential, or a URL with a password or a secret query parameter is refused,
+and a link never carries one either. A source always applies the redaction
+floor. What it leaves out comes from its kind: `chat` and `feedback` are
+`personal`, kept 90 days, on `opt_in` consent and start paused; `analytics`,
+`observability`, `tracker`, `flags`, `team`, `mcp` and `repo` are
+`internal`, 180 days; `web` and `reviews` are `public`, 365 days. A
+`personal` or `sensitive` source stays paused. Changes to these blocks are not
+mailed to members (their readers fetch them as data).
+
+A version stores these blocks (and `goal_seq`) only once they differ from
+their defaults, and role defaults that set only the `ic`, `reviewer` or
+`planner` model alias are stored as the old `models` block. A server from
+before the blocks therefore still reads every version of a factory that has
+not used them; rolling back past them for a factory that has needs a reader
+that ignores unknown blocks.
 
 | Paths | Class |
 |---|---|
@@ -817,8 +831,10 @@ members (their readers fetch them as data).
 | `discovery.budgets.*`, `discovery.cadence.*` | A when lower or slower, else B (owners) |
 | other `discovery.*`, `briefs.*`, `role_defaults.*` | B (owners) |
 
-Owner-only paths (`engine.`, `autonomy.`, `budgets.`, and the five blocks)
-always wait for the owners when an agent proposes them. In the blocks, agents
+Only owners apply the owner-only paths (`engine.`, `autonomy.`, `budgets.`,
+and the five blocks), so their class matters only for agents: an agent's
+proposal of one always waits for the owners (class B), whatever the table
+says. The preview shows the table's class. In the blocks, agents
 propose only their seat's paths (403 `path_not_allowed` otherwise): Scout
 `product`, `strategy` and `discovery.sources`; Sentinel `discovery.rubric`,
 `discovery.thresholds` and `briefs.scout`; Atlas none.
@@ -832,18 +848,22 @@ without) and one expected metric effect; at most 2 per agent per day.
   It applies at once as a new version on **trial** (default 48 h).
 - **B** opens an owners `proposal` decision; Approve applies it as a trial
   (strategy and product profile changes apply as a version: a trial would
-  judge them on delivery metrics).
+  judge them on delivery metrics; so do discovery and Scout's brief until
+  the discovery guards exist).
 - **People** edit with `PUT /v1/factory/factories/{fid}/definition`
   (`{changes, note?, trial?, base_version?}`, MANAGE, human origin): a human
   `C-n` applied at once. `POST …/definition/preview` (same body, or
   `{restore: K}`) is its dry run: the diff with each path's class, who can
   apply it, the effects, what blocks it, whether it may run as a trial, and
   the re-rank of opportunities once the discovery ledger exists.
-- **One trial per block.** A trial on a top-level block (`loops`,
-  `discovery`, …) refuses a second trial there with 409 `trial_overlap`
-  naming the running one; applying directly stays possible and rules trial
-  one by one. `trial: true` on strategy or the product profile is 422
-  `not_trialable`. An agent's proposal filed meanwhile says it will wait.
+- **One trial per block.** A trial on one of the five blocks (`briefs`,
+  `role_defaults`, …) refuses a second trial there with 409 `trial_overlap`
+  naming the running one; applying directly stays possible. Today's settings
+  (`cadence`, `loops`, `alerts`, …) and rules trial side by side, as before.
+  `trial: true` on strategy or the product profile is 422 `not_trialable`
+  (`reason` "judged on outcomes"), and on discovery or Scout's brief too
+  ("needs discovery guards": a 48 h trial on delivery guards would judge the
+  wrong thing). A proposal filed meanwhile says it will wait.
 - **Delivery.** Each version change mails the members
   `[Factory definition · vN · C-n by … · trial 48h]` with the diff; rule
   changes send `[Factory control · RULES UPDATE · C-n · by …]` to the roles they

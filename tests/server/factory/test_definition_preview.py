@@ -52,12 +52,13 @@ async def test_a_preview_shows_the_diff_class_and_who_applies_it(cockpit: Cockpi
         ("loops.review.rounds", 3, 2, "A"),
     ]
     assert body["diff"][1]["line"] == "loops.review.rounds: 3 → 2"
-    assert body["diff"][1]["block"] == "loops"
+    # Today's settings hold no block: they trial side by side, as before.
+    assert body["diff"][1]["block"] is None
     assert (body["class"], body["approvers"], body["owner_only"]) == ("A", ["owners"], False)
     assert body["you_can_apply"] is True and body["blocked"] == []
     assert body["who"].startswith("Owners (class A). You are an owner")
     assert body["rerank"] == [] and body["restore"] is None
-    assert body["trialable"] == {"ok": True, "trial_h": 48, "blocks": ["cadence", "loops"]}
+    assert body["trialable"] == {"ok": True, "trial_h": 48, "blocks": []}
     kinds = [e["kind"] for e in body["effects"]]
     assert kinds == ["mail", "cadence"]
     # A dry run: nothing stored, nothing mailed.
@@ -81,7 +82,27 @@ async def test_an_operator_sees_it_waits_for_an_owner(cockpit: Cockpit) -> None:
     )
     assert body["trialable"]["ok"] is False and body["trialable"]["code"] == "not_trialable"
     assert "judged on outcomes" in body["trialable"]["reason"]
+    assert body["trialable"]["why"] == "judged on outcomes"
     assert [e["kind"] for e in body["effects"]] == ["data"]
+
+
+async def test_the_preview_class_agrees_with_its_entries(cockpit: Cockpit) -> None:
+    on = {"op": "replace", "path": "discovery.enabled", "value": True}
+    assert (await put(cockpit, on)).status_code == 200
+
+    body = (await _preview(cockpit, changes=[{**on, "value": False}])).json()
+
+    # Turning discovery off is class A; only owners apply it, and an agent's proposal waits.
+    assert [(d["path"], d["class"], d["owner_only"]) for d in body["diff"]] == [
+        ("discovery.enabled", "A", True)
+    ]
+    assert (body["class"], body["owner_only"]) == ("A", True)
+    assert body["who"].startswith("Owners (class A). You are an owner")
+    assert body["who"].endswith("Agents can only propose it.")
+    assert (body["trialable"]["code"], body["trialable"]["why"]) == (
+        "not_trialable",
+        "needs discovery guards",
+    )
 
 
 async def test_blocked_changes_are_listed_and_the_rest_previews(cockpit: Cockpit) -> None:
@@ -142,19 +163,20 @@ async def test_effects_name_the_rules_update_and_discovery_switch(
 
 
 async def test_a_trial_held_block_is_not_trialable_in_the_preview(cockpit: Cockpit) -> None:
-    held = await put(cockpit, ROUNDS, trial=True)
+    brief = {"op": "replace", "path": "briefs.ic", "value": "Run the tests first (sample)."}
+    held = await put(cockpit, brief, trial=True)
     assert held.status_code == 200, held.text
 
     body = (
         await _preview(
-            cockpit, changes=[{"op": "replace", "path": "loops.implement.attempts", "value": 2}]
+            cockpit, changes=[{"op": "replace", "path": "briefs.reviewer", "value": "Be kind."}]
         )
     ).json()
 
     assert body["trialable"]["ok"] is False
     assert (body["trialable"]["code"], body["trialable"]["trial"]) == ("trial_overlap", "C-1")
-    assert body["trialable"]["block"] == "loops"
-    assert "C-1 is already trialing loops (day 1 of 2)" in body["trialable"]["reason"]
+    assert body["trialable"]["block"] == "briefs"
+    assert "C-1 is already trialing briefs (day 1 of 2)" in body["trialable"]["reason"]
 
 
 async def test_a_restore_preview_shows_its_diff_and_the_trials_it_ends(

@@ -21,6 +21,7 @@ import itertools
 import json
 import os
 import re
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date
 from typing import Annotated, Any, Final, Literal
@@ -53,26 +54,53 @@ _RELEASE_RE: Final = re.compile(
 )
 _SECRET_WORDS: Final = frozenset(
     {
+        "apikey",
+        "auth",
         "authorization",
         "bearer",
         "cookie",
         "cookies",
         "credential",
         "credentials",
+        "jwt",
+        "oauth",
         "passwd",
         "password",
+        "pat",
         "secret",
         "secrets",
+        "session",
         "token",
         "tokens",
     }
 )
-_SECRET_KEY_RE: Final = re.compile(r"(api|access|private|secret)[_-]?key", re.IGNORECASE)
+"""Words that make a key secret-looking (``auth``, ``pat`` and ``session`` only as whole words)."""
+_SECRET_PARTS: Final = (
+    "accesskey",
+    "apikey",
+    "authorization",
+    "bearer",
+    "cookie",
+    "credential",
+    "passw",
+    "privatekey",
+    "secret",
+    "token",
+)
+"""Long enough to refuse wherever they appear in a key (``mytoken``, ``clientsecret``)."""
+_QUERY_SECRET_WORDS: Final = frozenset({"sig", "signature"})
+"""Words of a URL query parameter's name that carry a secret (besides the secret-looking keys)."""
+_CAMEL_RE: Final = re.compile(r"([a-z0-9])([A-Z])")
 _SECRET_VALUE_RE: Final = re.compile(
     r"(gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[abprs]-[A-Za-z0-9-]{10,}"
     r"|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----"
     r"|\bBearer\s+[A-Za-z0-9._~+/=-]{16,})"
 )
+_BASIC_RE: Final = re.compile(r"\bBasic\s+([A-Za-z0-9+/]{8,}={0,2})(?![A-Za-z0-9+/=])")
+"""An HTTP basic credential (checked for base64's mixed case, so prose passes)."""
+_URL_USERINFO_RE: Final = re.compile(r"://[^/@\s:?#]+:[^/@\s?#]+@")
+"""A URL with a password in it (``https://user:pass@host``)."""
+_QUERY_NAME_RE: Final = re.compile(r"[?&;#]([^=&;#?\s]+)=")
 SECRET_REFUSAL: Final = (
     "source secrets are never part of the definition (Tier 0): an owner sets them "
     "write-only on the source, and the server keeps them"
@@ -103,6 +131,12 @@ def _host(value: str | None) -> str | None:
     return value
 
 
+def _link(value: str) -> str:
+    if secret_text(value):
+        raise ValueError("a link never carries a secret (Tier 0): no password or token in it")
+    return value
+
+
 Slug = Annotated[str, AfterValidator(_slug)]
 Alias = Annotated[str | None, AfterValidator(_alias)]
 Repo = Annotated[str, AfterValidator(_repo)]
@@ -118,7 +152,7 @@ Line = Annotated[str, _strip(200, 1)]
 Glob = Annotated[str, _strip(200, 1)]
 Event = Annotated[str, _strip(120, 1)]
 Statement = Annotated[str, _strip(280, 1)]
-Url = Annotated[str, _strip(500, 1)]
+Url = Annotated[str, _strip(500, 1), AfterValidator(_link)]
 Short = Annotated[str, _strip(80)]
 Words = Annotated[str, _strip(500)]
 Brief = Annotated[str, _strip(BRIEF_MAX)]
@@ -306,20 +340,85 @@ REDACT_FLOOR: Final[tuple[RedactKind, ...]] = (
 )
 """Redactions every source applies (Tier 0); a source may add more."""
 PRIVACY_RANK: Final = {"public": 0, "internal": 1, "personal": 2, "sensitive": 3}
+SOURCE_PRIVACY: Final[dict[str, PrivacyLevel]] = {
+    "repo": "internal",
+    "team": "internal",
+    "web": "public",
+    "analytics": "internal",
+    "observability": "internal",
+    "chat": "personal",
+    "tracker": "internal",
+    "reviews": "public",
+    "feedback": "personal",
+    "flags": "internal",
+    "mcp": "internal",
+}
+"""A source kind's privacy class when the source does not set one (mechanism §4.1)."""
+KEEP_DAYS: Final[dict[str, int]] = {
+    "public": 365,
+    "internal": 180,
+    "personal": 90,
+    "sensitive": 90,
+}
+"""Retention by privacy class when a source does not set ``keep_days`` (mechanism §4.4)."""
+CONSENT: Final[dict[str, str]] = {
+    "public": "public",
+    "internal": "internal",
+    "personal": "opt_in",
+    "sensitive": "opt_in",
+}
+"""The consent basis by privacy class when a source does not state one."""
 EVIDENCE_LEVELS: Final = ("hunch", "weak", "moderate", "strong", "proven")
+
+
+def secret_key(key: str) -> bool:
+    """
+    Whether a params key looks like it holds a secret: a secret word in it
+    (camelCase and separators split, so ``accessToken``, ``client-secret``)
+    or a long secret word anywhere in it (``mytoken``).
+    """
+    lowered = _CAMEL_RE.sub(r"\1_\2", key).lower()
+    words = set(re.split(r"[^a-z0-9]+", lowered))
+    flat = re.sub(r"[^a-z0-9]+", "", lowered)
+    return bool(words & _SECRET_WORDS) or any(part in flat for part in _SECRET_PARTS)
+
+
+def _basic(text: str) -> bool:
+    for match in _BASIC_RE.finditer(text):
+        token = match.group(1)
+        if token.endswith("=") or (
+            any(c.islower() for c in token)
+            and any(c.isupper() or c.isdigit() or c in "+/" for c in token[1:])
+        ):
+            return True
+    return False
+
+
+def secret_text(text: str) -> bool:
+    """
+    Whether *text* carries a secret: a token-shaped value, a basic or bearer
+    credential, a URL with a password, or a URL query parameter named like one.
+    """
+    if _SECRET_VALUE_RE.search(text) or _URL_USERINFO_RE.search(text) or _basic(text):
+        return True
+    for match in _QUERY_NAME_RE.finditer(text):
+        name = _CAMEL_RE.sub(r"\1_\2", match.group(1)).lower()
+        words = set(re.split(r"[^a-z0-9]+", name))
+        if secret_key(name) or name == "key" or words & _QUERY_SECRET_WORDS:
+            return True
+    return False
 
 
 def _no_secrets(value: Any, where: str = "params") -> None:
     if isinstance(value, dict):
         for key, inner in value.items():
-            words = set(re.split(r"[_\-.\s]+", str(key).lower()))
-            if words & _SECRET_WORDS or _SECRET_KEY_RE.search(str(key)):
+            if secret_key(str(key)):
                 raise ValueError(f"{where}.{key}: {SECRET_REFUSAL}")
             _no_secrets(inner, f"{where}.{key}")
     elif isinstance(value, list):
         for i, inner in enumerate(value):
             _no_secrets(inner, f"{where}[{i}]")
-    elif isinstance(value, str) and _SECRET_VALUE_RE.search(value):
+    elif isinstance(value, str) and secret_text(value):
         raise ValueError(f"{where}: {SECRET_REFUSAL}")
 
 
@@ -372,6 +471,11 @@ class SourceDef(_Block):
     """
     One evidence source. Never holds a secret (Tier 0).
 
+    What it leaves out comes from its kind (see :meth:`_kind_defaults`): a
+    ``chat`` source is ``personal``, kept 90 days, on ``opt_in`` consent and
+    paused; an ``analytics`` one ``internal`` for 180 days; a ``web`` one
+    ``public`` for 365.
+
     :param roles: Who may query it through the gateway.
     :param interval_min: Minutes between syncs; ``0`` is query-only.
     :param state: ``trial`` (its first 14 days), ``active`` or ``paused``.
@@ -387,6 +491,38 @@ class SourceDef(_Block):
     budget: SourceBudgetDef = Field(default_factory=SourceBudgetDef)
     interval_min: int = Field(60, ge=0, le=10080)
     state: Literal["trial", "active", "paused"] = "trial"
+
+    @model_validator(mode="before")
+    @classmethod
+    def _kind_defaults(cls, data: Any) -> Any:
+        """
+        Fill what a source leaves out from its kind: the privacy class
+        (:data:`SOURCE_PRIVACY`), then retention (:data:`KEEP_DAYS`) and the
+        consent basis (:data:`CONSENT`) from that class. A ``personal`` or
+        ``sensitive`` source starts paused (it may not run yet).
+        """
+        if not isinstance(data, Mapping) or data.get("kind") not in SOURCE_PRIVACY:
+            return data
+        out = dict(data)
+        privacy: Any = out.get("privacy")
+        if isinstance(privacy, BaseModel):
+            privacy = privacy.model_dump(exclude_unset=True)
+        if privacy is None:
+            privacy = {}
+        if not isinstance(privacy, Mapping):
+            return out  # Validation says what is wrong with it.
+        privacy = dict(privacy)
+        if privacy.get("level") is None:
+            privacy["level"] = SOURCE_PRIVACY[str(out["kind"])]
+        level = privacy["level"]
+        if privacy.get("keep_days") is None and level in KEEP_DAYS:
+            privacy["keep_days"] = KEEP_DAYS[level]
+        out["privacy"] = privacy
+        if out.get("consent") is None and level in CONSENT:
+            out["consent"] = CONSENT[level]
+        if out.get("state") is None and PRIVACY_RANK.get(level, 0) >= PRIVACY_RANK["personal"]:
+            out["state"] = "paused"
+        return out
 
     @field_validator("params")
     @classmethod
@@ -527,6 +663,8 @@ class DiscoveryDef(_Block):
 class BriefsDef(_Block):
     """This factory's brief per role: added to the built-in prompt, never replacing it."""
 
+    atlas: Brief = ""
+    sentinel: Brief = ""
     scout: Brief = ""
     project_lead: Brief = ""
     ic: Brief = ""
@@ -605,6 +743,39 @@ def upgrade(stored: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+LEGACY_KINDS: Final = ("ic", "reviewer", "planner")
+
+
+def downgrade(stored: Mapping[str, Any]) -> dict[str, Any]:
+    """
+    :returns: *stored* with ``role_defaults`` written as the legacy ``models``
+        block when all it sets is the model alias of ``ic``, ``reviewer`` or
+        ``planner`` (:func:`upgrade` reads it back), so a server from before
+        ``role_defaults`` still reads the version. Anything else stays as it is.
+    """
+    defaults = stored.get("role_defaults")
+    if not isinstance(defaults, Mapping):
+        return dict(stored)
+    empty = RoleDefaultDef().model_dump(mode="json")
+    models: dict[str, Any] = {}
+    for role, found in defaults.items():
+        if found == empty:
+            continue
+        if (
+            role in LEGACY_KINDS
+            and isinstance(found, Mapping)
+            and set(found) <= {"vendor", "model"}
+            and found.get("vendor") is None
+        ):
+            models[role] = found.get("model")
+            continue
+        return dict(stored)
+    out = {k: v for k, v in stored.items() if k != "role_defaults"}
+    if any(v is not None for v in models.values()):
+        out["models"] = {kind: models.get(kind) for kind in LEGACY_KINDS}
+    return out
+
+
 # ── Lists changed item by item ─────────────────────────────────
 
 
@@ -677,9 +848,22 @@ def seq_of(doc: dict[str, Any], spec: ListSpec, items: list[Any]) -> int:
 
 BLOCKS: Final = ("product", "strategy", "discovery", "briefs", "role_defaults")
 """The blocks of this module (agents may propose only some of their paths)."""
-NOT_TRIALABLE: Final = ("product", "strategy")
-"""Blocks a trial would judge on the wrong metrics: they apply as a version."""
 NOT_TRIALABLE_REASON: Final = "judged on outcomes"
+NEEDS_DISCOVERY_GUARDS: Final = "needs discovery guards"
+NOT_TRIALABLE: Final[dict[str, str]] = {
+    "product": NOT_TRIALABLE_REASON,
+    "strategy": NOT_TRIALABLE_REASON,
+    "discovery": NEEDS_DISCOVERY_GUARDS,
+    "briefs.scout": NEEDS_DISCOVERY_GUARDS,
+}
+"""
+Paths a trial would judge on the wrong metrics, and why: they apply as a version.
+
+Strategy and the profile are judged on outcomes. Discovery and Scout's brief
+are judged on discovery guards (quote failures, privacy events, accepted
+bets), which this server does not measure yet; until it does, the delivery
+guards would judge them.
+"""
 AGENT_PATHS: Final[dict[str, tuple[str, ...]]] = {
     "scout": ("product", "strategy", "discovery.sources"),
     "sentinel": ("discovery.rubric", "discovery.thresholds", "briefs.scout"),
@@ -767,16 +951,20 @@ __all__ = [
     "AGENT_PATHS",
     "BLOCKS",
     "BRIEF_MAX",
+    "CONSENT",
     "DISCOVERY_ENV",
     "EVIDENCE_LEVELS",
     "GOAL_ID_RE",
+    "KEEP_DAYS",
     "LEGACY_MODELS",
     "LISTS",
+    "NEEDS_DISCOVERY_GUARDS",
     "NOT_TRIALABLE",
     "NOT_TRIALABLE_REASON",
     "PRIVACY_RANK",
     "REDACT_FLOOR",
     "SECRET_REFUSAL",
+    "SOURCE_PRIVACY",
     "VENDORS_BY_ROLE",
     "BriefsDef",
     "DiscoveryDef",
@@ -789,11 +977,14 @@ __all__ = [
     "StrategyDef",
     "agent_may_propose",
     "discovery_server_on",
+    "downgrade",
     "has_secret",
     "in_blocks",
     "item_id_ok",
     "list_of",
     "off_is_a",
+    "secret_key",
+    "secret_text",
     "seq_of",
     "slower_or_off_is_a",
     "source_class",

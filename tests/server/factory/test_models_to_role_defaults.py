@@ -2,9 +2,10 @@
 
 Nothing read ``models.*``; ``role_defaults.<role>`` holds a role's vendor and
 model now. Stored versions that still carry ``models`` read as the new block
-(an owner-set alias kept, a set role default winning), the old paths still
-write through to the new ones, and a version stored from a legacy doc drops
-``models``.
+(an owner-set alias kept, a set role default winning), and the old paths
+still write through to the new ones. A version whose role defaults set only
+those model aliases stores them as ``models``, which a server from before
+``role_defaults`` still reads.
 """
 
 from __future__ import annotations
@@ -84,15 +85,37 @@ async def test_the_old_paths_write_the_new_ones(cockpit: Cockpit) -> None:
     assert "role_defaults.ic.vendor" in view["paths"]
 
 
-async def test_a_version_stored_on_a_legacy_doc_drops_models(cockpit: Cockpit) -> None:
+async def test_model_aliases_are_stored_as_an_older_server_reads_them(cockpit: Cockpit) -> None:
     _legacy_version(cockpit, {**definition.default_doc(), **LEGACY})
 
     resp = await put(cockpit, {"op": "replace", "path": "loops.review.rounds", "value": 2})
 
     assert resp.status_code == 200, resp.text
     latest = cockpit.store.latest_definition(cockpit.fid)
+    assert latest is not None and "role_defaults" not in latest.doc
+    assert latest.doc["models"] == {"ic": "sonnet", "reviewer": "opus", "planner": None}
+    assert definition.value(cockpit.deps, cockpit.fid, "role_defaults.ic.model") == "sonnet"
+
+    # A role default that says more than a model alias is stored as the new block.
+    vendor = {"op": "replace", "path": "role_defaults.reviewer.vendor", "value": "codex"}
+    assert (await put(cockpit, vendor)).status_code == 200
+    latest = cockpit.store.latest_definition(cockpit.fid)
     assert latest is not None and "models" not in latest.doc
+    assert latest.doc["role_defaults"]["reviewer"] == {"vendor": "codex", "model": "opus"}
     assert latest.doc["role_defaults"]["ic"]["model"] == "sonnet"
+
+
+def test_downgrade_keeps_only_what_models_can_say() -> None:
+    empty = {"vendor": None, "model": None}
+    aliases = {"ic": {"vendor": None, "model": "sonnet"}, "demo": empty}
+    assert blocks.downgrade({"role_defaults": aliases}) == {
+        "models": {"ic": "sonnet", "reviewer": None, "planner": None}
+    }
+    vendor = {"ic": {"vendor": "codex", "model": None}}
+    assert blocks.downgrade({"role_defaults": vendor}) == {"role_defaults": vendor}
+    lead = {"project_lead": {"vendor": None, "model": "opus"}}
+    assert blocks.downgrade({"role_defaults": lead}) == {"role_defaults": lead}
+    assert blocks.downgrade({"role_defaults": {"ic": empty}}) == {}
 
 
 def test_reverting_a_legacy_change_reverts_the_role_default(cockpit: Cockpit) -> None:

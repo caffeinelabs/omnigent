@@ -22,9 +22,10 @@ within :data:`.definition.UNDO_WINDOW_S` is its Undo.
 
 In the product-agnostic blocks (:mod:`.definition_blocks`) agents propose only
 what their seat may (Scout the profile, strategy and sources; Sentinel the
-rubric, thresholds and Scout's brief), and only owners apply them. Strategy
-and product profile changes never run as a trial: approved, they apply as a
-version.
+rubric, thresholds and Scout's brief), and only owners apply them. Changes
+that never run as a trial (strategy, the product profile, and discovery until
+its guards exist; see :func:`.definition.trialable`) apply as a version once
+approved.
 """
 
 from __future__ import annotations
@@ -250,15 +251,20 @@ def stale_paths(
     return resolved.version, definition.moved_paths(row.before or {}, resolved.stored)
 
 
-def _klass(diff: Sequence[Mapping[str, Any]]) -> str:
+def diff_class(diff: Sequence[Mapping[str, Any]]) -> str:
+    """:returns: The approval class of *diff*: its worst entry's (see ``CLASS_MAP``)."""
     worst = "A"
     for entry in diff:
-        path = str(entry["path"])
-        if definition.owner_only(path):
-            return "B"
-        if definition.classify(path, entry["before"], entry["after"]) == "B":
+        if definition.classify(str(entry["path"]), entry["before"], entry["after"]) == "B":
             worst = "B"
     return worst
+
+
+def _klass(diff: Sequence[Mapping[str, Any]]) -> str:
+    """:returns: The class of an agent's proposal of *diff*: B once it has an owner-only path."""
+    if any(definition.owner_only(str(entry["path"])) for entry in diff):
+        return "B"
+    return diff_class(diff)
 
 
 def diff_paths(diff: Sequence[Mapping[str, Any]] | Mapping[str, Any]) -> list[str]:
@@ -951,9 +957,11 @@ def _decision_context(row: FactoryProposal, lines: Sequence[str]) -> str:
             f"*Approving runs it as a {trial_h} h trial; guard metrics decide keep or revert.*"
         )
     elif row.kind != "code":
+        hit = definition.not_trialable(diff_paths({**(row.before or {}), **(row.after or {})}))
+        why = definition.untrialable_text(hit)
         parts.append(
-            "*Approving applies it as a new version, not a trial: strategy and product "
-            "profile changes are judged on outcomes. Any earlier version can be restored.*"
+            f"*Approving applies it as a new version, not a trial: {why}."
+            " Any earlier version can be restored.*"
         )
     return "\n".join(parts)[:4000]
 
@@ -1698,6 +1706,7 @@ async def _mark_undone(
         return
     ref = proposal_ref(row.number)
     await _emit(app_state, row, "proposal.reverted", f"{ref} {reason}", actor, reason=reason)
+    await _tell(app_state, row, outcome_text(ref, reason))
 
 
 def _lineage(deps: FactoryDeps, factory_id: str, version: int) -> set[int]:
@@ -1993,6 +2002,7 @@ __all__ = [
     "cosign",
     "definition_text",
     "deliver",
+    "diff_class",
     "diff_paths",
     "execute_answer",
     "expire_due",

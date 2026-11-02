@@ -21,13 +21,15 @@
     "projects": "requested"
   },
   "briefs": {
+    "atlas": "",
     "demo": "",
     "env_keeper": "",
     "ic": "",
     "planner": "",
     "project_lead": "",
     "reviewer": "",
-    "scout": ""
+    "scout": "",
+    "sentinel": ""
   },
   "budgets": {
     "factory_usd_per_day": 400.0,

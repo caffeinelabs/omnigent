@@ -149,8 +149,16 @@
       "class": "B (owners)"
     },
     {
+      "paths": "discovery.*, briefs.scout",
+      "class": "never on trial until discovery guards exist"
+    },
+    {
       "paths": "briefs.*, role_defaults.*",
       "class": "B (owners)"
+    },
+    {
+      "paths": "owner-only paths, proposed by an agent",
+      "class": "B (owners), whatever their class"
     },
     {
       "paths": "anything else, Tier 0",
@@ -175,6 +183,7 @@
     "alerts.repeat_window_m",
     "alerts.spend_window_m",
     "autonomy.projects",
+    "briefs.atlas",
     "briefs.demo",
     "briefs.env_keeper",
     "briefs.ic",
@@ -182,6 +191,7 @@
     "briefs.project_lead",
     "briefs.reviewer",
     "briefs.scout",
+    "briefs.sentinel",
     "budgets.factory_usd_per_day",
     "budgets.project_usd",
     "budgets.usd_per_hour_alert",
@@ -477,6 +487,8 @@
       }
     },
     "briefs": {
+      "atlas": "",
+      "sentinel": "",
       "scout": "",
       "project_lead": "",
       "ic": "",

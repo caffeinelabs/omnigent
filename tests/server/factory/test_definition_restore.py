@@ -21,7 +21,9 @@ from omnigent.server.factory import definition
 from tests.server.factory.cockpit_helpers import Cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld
 from tests.server.factory.definition_helpers import (
+    answer,
     definition_cockpit,
+    propose,
     put,
     row,
     texts,
@@ -170,6 +172,47 @@ async def test_a_restore_ends_the_trials_it_takes_out_and_keeps_the_rest(
     ended = row(cockpit, 2)
     assert ended.status == "reverted"
     assert ended.result["revert_reason"] == "v2 restored by alice as v4"
+
+
+async def test_a_restored_rule_is_on_trial_only_while_its_trial_runs(cockpit: Cockpit) -> None:
+    rule = {"op": "add", "path": "rules", "value": {"role": "ic", "text": "Lint first (sample)."}}
+    assert (await put(cockpit, rule, trial=True)).status_code == 200
+    reverted = await cockpit.post(f"/v1/factory/factories/{cockpit.fid}/proposals/C-1/revert", {})
+    assert reverted.status_code == 200, reverted.text
+
+    resp = await _restore(cockpit, version=2)
+
+    # C-1 no longer runs, so nothing would ever keep or revert R-1: it comes back active.
+    assert resp.status_code == 200, resp.text
+    [restored] = definition.full_doc(_doc(cockpit, version(cockpit)))["rules"]
+    assert (restored["id"], restored["state"]) == ("R-1", "active")
+
+
+async def test_a_restore_keeps_a_running_trial_s_rule_on_trial(cockpit: Cockpit) -> None:
+    rule = {"op": "add", "path": "rules", "value": {"role": "ic", "text": "Lint first (sample)."}}
+    assert (await put(cockpit, rule, trial=True)).status_code == 200
+    assert (await put(cockpit, ROUNDS)).status_code == 200
+
+    resp = await _restore(cockpit, version=2)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["ended"] == []
+    [kept] = definition.full_doc(_doc(cockpit, version(cockpit)))["rules"]
+    assert (kept["id"], kept["state"], kept["origin"]) == ("R-1", "trial", "C-1")
+    assert row(cockpit, 1).status == "trial"
+
+
+async def test_an_undo_tells_the_agent_whose_change_it_undid(cockpit: Cockpit) -> None:
+    rubric = [{"op": "replace", "path": "discovery.rubric.decay_half_life_days", "value": 45}]
+    assert (await propose(cockpit, changes=rubric)).status_code == 200
+    assert (await answer(cockpit, 1)).status_code == 200
+    assert (row(cockpit).status, version(cockpit)) == ("applied", 2)
+
+    undo = await cockpit.post(url(cockpit, "/pin"), {"version": 1})
+
+    assert undo.status_code == 200, undo.text
+    assert row(cockpit).status == "reverted"
+    assert any("C-1 undone by alice" in t for t in texts(cockpit, "lead_b"))
 
 
 @pytest.mark.parametrize(

@@ -1291,7 +1291,11 @@ export interface DefinitionView {
   created_at: number;
   /** The version the factory runs. */
   pinned: boolean;
-  /** Engine, cadence, loops, budgets, autonomy, alerts, rules, product, strategy, … */
+  /**
+   * The stored document: engine, cadence, loops, budgets, autonomy, alerts, rules, … A block
+   * still at its defaults (product, strategy, discovery, briefs, role_defaults) is left out, and
+   * role defaults that only set model aliases are stored as `models`; read `effective` instead.
+   */
   doc: Record<string, unknown>;
   /** Who undid this version: re-pinned its parent within 10 minutes. */
   undone_by?: string | null;
@@ -2751,8 +2755,10 @@ export interface DiscoveryDef {
   autonomy: { bets: "confirm" | "requested" | "grace" };
 }
 
-export type BriefRole =
-  "scout" | "project_lead" | "ic" | "reviewer" | "env_keeper" | "demo" | "planner";
+/** The roles with a default vendor and model (lead seats stay on their bundle). */
+export type RoleDefaultRole =
+  "project_lead" | "ic" | "reviewer" | "env_keeper" | "demo" | "planner";
+export type BriefRole = "atlas" | "sentinel" | "scout" | RoleDefaultRole;
 /** This factory's brief per role (added to the built-in prompt; ≤ 4,000 chars). */
 export type BriefsDef = Record<BriefRole, string>;
 
@@ -2761,7 +2767,7 @@ export interface RoleDefaultDef {
   /** A model alias, never a model id; `null` keeps the bundle's. */
   model: string | null;
 }
-export type RoleDefaultsDef = Record<Exclude<BriefRole, "scout">, RoleDefaultDef>;
+export type RoleDefaultsDef = Record<RoleDefaultRole, RoleDefaultDef>;
 
 /** The definition doc: engine, cadence, loops, budgets, autonomy, alerts, rules and the blocks. */
 export type DefinitionDoc = Record<string, unknown> & {
@@ -2790,8 +2796,10 @@ export interface DefinitionResponse {
   lists?: Record<string, { numbered: string | null }>;
   /** Path prefixes only owners apply (agents propose them). */
   owner_only?: string[];
-  /** Blocks that apply as a version, never as a trial. */
+  /** Paths that apply as a version, never as a trial. */
   not_trialable?: string[];
+  /** Why each of `not_trialable` never trials ("judged on outcomes", "needs discovery guards"). */
+  not_trialable_why?: Record<string, string>;
   /** What each agent seat may propose in the blocks. */
   agent_paths?: Record<string, string[]>;
   /** Whether this server runs discovery at all. */
@@ -2894,6 +2902,8 @@ export interface TrialVerdict {
   ok: boolean;
   code?: "restore" | "no_change" | "not_trialable" | "trial_overlap";
   reason?: string | null;
+  /** The short reason of `not_trialable` ("judged on outcomes", "needs discovery guards"). */
+  why?: string;
   /** The running trial that holds the block (`trial_overlap`). */
   trial?: string;
   block?: string;

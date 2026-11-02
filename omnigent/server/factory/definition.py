@@ -478,7 +478,9 @@ CLASS_TABLE: Final = (
     ("discovery.budgets.*", "A when lower, else B (owners)"),
     ("discovery.cadence.*", "A when slower or off, else B (owners)"),
     ("discovery.seat|rubric|thresholds|autonomy", "B (owners)"),
+    ("discovery.*, briefs.scout", "never on trial until discovery guards exist"),
     ("briefs.*, role_defaults.*", "B (owners)"),
+    ("owner-only paths, proposed by an agent", "B (owners), whatever their class"),
     ("anything else, Tier 0", "refused: 422 tier0"),
 )
 """:data:`CLASS_MAP` in words (the Definition panel shows it)."""
@@ -662,6 +664,29 @@ def set_path(doc: dict[str, Any], path: str, value: Any) -> None:
     node[last] = value
 
 
+SPARSE_KEYS: Final = (*blocks.BLOCKS, "goal_seq")
+"""Keys a version stores only once they differ from their defaults (see :func:`stored_form`)."""
+
+
+@functools.cache
+def _code_defaults() -> dict[str, Any]:
+    return FactoryDefinitionDoc().model_dump(mode="json")
+
+
+def stored_form(doc: Mapping[str, Any]) -> dict[str, Any]:
+    """
+    :returns: *doc* (validated) as a version stores it. The blocks of
+        :mod:`.definition_blocks` and ``goal_seq`` are left out while they hold
+        their defaults, and role defaults that set only the old model aliases
+        are kept as ``models``. A server from before those blocks then still
+        reads every version of a factory that has not used them (a rollback
+        keeps working); every reader fills the defaults back in.
+    """
+    defaults = _code_defaults()
+    out = {k: v for k, v in doc.items() if not (k in SPARSE_KEYS and v == defaults.get(k))}
+    return blocks.downgrade(out)
+
+
 def _with_defaults(stored: Mapping[str, Any]) -> dict[str, Any]:
     """:returns: *stored* over the defaults, its legacy blocks moved (see ``blocks.upgrade``)."""
     return _merge(default_doc(), blocks.upgrade(dict(stored)))
@@ -828,7 +853,7 @@ def _is_root(conv: Conversation | None) -> bool:
 
 def _seed(deps: FactoryDeps, root: Conversation) -> FactoryDefinition:
     store = deps.factory_store
-    doc = seed_doc(root.labels)
+    doc = stored_form(seed_doc(root.labels))
     try:
         row = store.put_definition(
             root.id, doc=doc, created_by="server", created_via="seed", version=1
@@ -930,7 +955,7 @@ def store_version(
     validated["goal_seq"] = max(validated["goal_seq"], goal_floor(deps, factory_id))
     row = deps.factory_store.put_definition(
         factory_id,
-        doc=validated,
+        doc=stored_form(validated),
         created_by=created_by,
         created_via=created_via,
         parent_version=parent_version,
@@ -1078,7 +1103,7 @@ def _parse_list_change(
     if item_id is not None and not blocks.item_id_ok(spec, item_id):
         raise _error(400, "invalid_body", f"{field}: {item_id!r} is not an id of {spec.path}")
     if item_field is not None:
-        if blocks.has_secret({item_field: None}):
+        if blocks.has_secret({item_field: value}):
             raise tier0(f"{path}: {blocks.SECRET_REFUSAL}", field=field)
         if op != "replace" or item_field == "id":
             raise _error(400, "invalid_body", f"{field}: an item's field is replaced, never {op}")
@@ -1169,12 +1194,16 @@ def _apply_list(doc: dict[str, Any], change: Change) -> None:
     spec = blocks.LISTS[change.path]
     found = get_path(doc, change.path)
     items: list[dict[str, Any]] = [dict(x) for x in found] if isinstance(found, list) else []
-    body = dict(change.value) if isinstance(change.value, Mapping) else {}
     if change.op == "replace" and change.item_id is None:
         if not isinstance(change.value, list):
             raise _error(422, "invalid_definition", f"{spec.path}: a list of items")
         set_path(doc, spec.path, [dict(x) if isinstance(x, Mapping) else x for x in change.value])
         return
+    if change.op != "remove" and not isinstance(change.value, Mapping):
+        raise _error(
+            422, "invalid_definition", f"{change.full_path}: an item is an object", field="value"
+        )
+    body = dict(change.value) if isinstance(change.value, Mapping) else {}
     if change.op == "add":
         if spec.numbered:
             number = blocks.seq_of(doc, spec, items) + 1
@@ -1552,13 +1581,13 @@ def discovery_enabled(deps: FactoryDeps | None, factory_id: str | None) -> bool:
 
 def trial_block(path: str) -> str | None:
     """
-    :returns: The top-level block a trial on *path* holds (``"loops"``,
-        ``"discovery"``), or ``None`` for a rule: rules trial one by one, each
-        holding only itself.
+    :returns: The block a trial on *path* holds: the top-level block of
+        :mod:`.definition_blocks` it lies in (``"discovery"``, ``"briefs"``).
+        ``None`` for today's settings and rules: they trial side by side as
+        before, each change holding only its own paths.
     """
-    if path == "rules" or path.startswith("rules."):
-        return None
-    return canonical_path(path).split(".", 1)[0]
+    head = canonical_path(path).split(".", 1)[0]
+    return head if head in blocks.BLOCKS else None
 
 
 def trial_blocks(paths: Iterable[str]) -> list[str]:
@@ -1566,19 +1595,55 @@ def trial_blocks(paths: Iterable[str]) -> list[str]:
     return sorted({b for p in paths if (b := trial_block(str(p))) is not None})
 
 
+def not_trialable(paths: Iterable[str]) -> dict[str, str]:
+    """
+    :returns: ``{prefix: reason}`` of :data:`.definition_blocks.NOT_TRIALABLE`
+        for each of *paths* that never runs as a trial (``{}`` when none does).
+    """
+    out: dict[str, str] = {}
+    for path in paths:
+        path = canonical_path(str(path))
+        for prefix, reason in blocks.NOT_TRIALABLE.items():
+            if blocks.under(path, prefix):
+                out[prefix] = reason
+    return {p: out[p] for p in blocks.NOT_TRIALABLE if p in out}
+
+
+_UNTRIALABLE_NAMES: Final = {
+    "product": "product profile",
+    "strategy": "strategy",
+    "discovery": "discovery",
+    "briefs.scout": "Scout's brief",
+}
+_UNTRIALABLE_WHY: Final = {
+    blocks.NOT_TRIALABLE_REASON: "are judged on outcomes",
+    blocks.NEEDS_DISCOVERY_GUARDS: (
+        "are judged on discovery guards, which this server does not measure yet"
+    ),
+}
+
+
+def untrialable_text(hit: Mapping[str, str]) -> str:
+    """:returns: Why the changes of *hit* (see :func:`not_trialable`) never trial, in words."""
+    parts = []
+    for reason in dict.fromkeys(hit.values()):
+        names = " and ".join(_UNTRIALABLE_NAMES.get(p, p) for p, r in hit.items() if r == reason)
+        parts.append(f"{names} changes {_UNTRIALABLE_WHY.get(reason, reason)}")
+    return "; ".join(parts)
+
+
 def trialable(paths: Iterable[str]) -> tuple[bool, str | None]:
     """
     Whether a change of *paths* may run as a trial.
 
-    :returns: ``(False, reason)`` when it touches a block a trial would judge on
-        the wrong metrics (strategy, the product profile): it applies as a version.
+    :returns: ``(False, reason)`` when it touches a path a trial would judge on
+        the wrong metrics (strategy, the product profile, discovery, Scout's
+        brief): it applies as a version.
     """
-    hit = sorted({p.split(".", 1)[0] for p in paths if blocks.in_blocks(p, blocks.NOT_TRIALABLE)})
+    hit = not_trialable(paths)
     if not hit:
         return True, None
-    names = {"product": "product profile", "strategy": "strategy"}
-    what = " and ".join(names.get(b, b) for b in hit)
-    return False, f"{what} changes are {blocks.NOT_TRIALABLE_REASON}: they apply as a version"
+    return False, f"{untrialable_text(hit)}: they apply as a version"
 
 
 # ── Install ────────────────────────────────────────────────────
@@ -1633,6 +1698,7 @@ __all__ = [
     "LIST_PATHS",
     "OWNER_ONLY_PREFIXES",
     "QUIET_BLOCKS",
+    "SPARSE_KEYS",
     "TIER0",
     "TIER0_REASONS",
     "TRIAL_H_DEFAULT",
@@ -1666,6 +1732,7 @@ __all__ = [
     "is_new_item",
     "mail_limits",
     "moved_paths",
+    "not_trialable",
     "owner_only",
     "parse_change",
     "pin",
@@ -1676,10 +1743,12 @@ __all__ = [
     "same_rule",
     "seed_doc",
     "store_version",
+    "stored_form",
     "supervisor_config",
     "tier0",
     "trial_block",
     "trial_blocks",
     "trialable",
+    "untrialable_text",
     "value",
 ]

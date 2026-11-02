@@ -16,6 +16,7 @@ from typing import Any
 
 import pytest
 import pytest_asyncio
+from pydantic import BaseModel, ConfigDict, Field, create_model
 
 from omnigent.server.factory import definition, tuning
 from omnigent.server.factory import definition_blocks as blocks
@@ -125,6 +126,28 @@ def test_valid_values_apply_and_the_mix_moves_as_one_change() -> None:
         },
         {"op": "replace", "path": "discovery.sources/forum/api_key", "value": "x"},
         {"op": "replace", "path": "discovery.sources", "value": [{**SOURCE, "secret": "x"}]},
+        *(
+            {"op": "add", "path": "discovery.sources", "value": {**SOURCE, "params": params}}
+            for params in (
+                {"accessToken": "x"},
+                {"apiToken": "x"},
+                {"clientSecret": "x"},
+                {"authToken": "x"},
+                {"githubPat": "x"},
+                {"mytoken": "x"},
+                {"auth": "Basic dXNlcjpwYXNz"},
+                {"header": "Basic dXNlcjpwYXNzd29yZA=="},
+                {"url": "https://user:hunter2@api.example.org/x"},
+                {"url": "https://api.example.org/x?access_token=abcdef123456"},
+                {"urls": ["https://api.example.org/x?page=2&key=abcdef123456"]},
+                {"url": "https://files.example.org/o?X-Amz-Signature=abcdef"},
+            )
+        ),
+        {
+            "op": "replace",
+            "path": "discovery.sources/forum/params",
+            "value": {"url": "https://api.example.org/x?apiKey=abcdef"},
+        },
         {"op": "replace", "path": "discovery.rubric.formula", "value": "reach * 2"},
         {"op": "replace", "path": "goal_seq", "value": 9},
     ],
@@ -135,19 +158,188 @@ def test_secrets_and_the_formula_are_tier0(change: dict[str, Any]) -> None:
     assert (raised.value.status_code, raised.value.code) == (422, "tier0")
 
 
+def test_ordinary_params_and_prose_are_not_secrets() -> None:
+    params = {
+        "repos": ["sample-org/sample"],
+        "paths": ["docs/**"],
+        "authors": ["sample-user"],
+        "author_association": ["NONE"],
+        "since_days": 90,
+        "sessions_metric": "weekly",
+        "urls": ["https://forum.example.org/c/feedback?page=2&sort=new"],
+        "note": "Basic information only (sample)",
+    }
+    source = {**SOURCE, "params": params}
+
+    assert not blocks.has_secret(source)
+    doc = _apply(
+        definition.default_doc(), {"op": "add", "path": "discovery.sources", "value": source}
+    )
+    assert doc["discovery"]["sources"][0]["params"] == params
+
+
+def test_links_never_carry_a_secret() -> None:
+    with pytest.raises(CockpitError) as raised:
+        _apply(
+            definition.default_doc(),
+            {
+                "op": "replace",
+                "path": "product.links",
+                "value": {"docs": "https://docs.example.org/?token=abcdef123456"},
+            },
+        )
+    assert raised.value.code == "invalid_definition" and "never carries a secret" in (
+        raised.value.message
+    )
+
+
 def test_a_personal_source_stays_paused_until_names_can_be_detected() -> None:
     chat = {**SOURCE, "id": "chat", "kind": "chat", "privacy": {"level": "personal"}}
     with pytest.raises(CockpitError) as raised:
-        _apply(definition.default_doc(), {"op": "add", "path": "discovery.sources", "value": chat})
+        _apply(
+            definition.default_doc(),
+            {"op": "add", "path": "discovery.sources", "value": {**chat, "state": "trial"}},
+        )
     assert "stays paused" in raised.value.message
 
     paused = _apply(
-        definition.default_doc(),
-        {"op": "add", "path": "discovery.sources", "value": {**chat, "state": "paused"}},
+        definition.default_doc(), {"op": "add", "path": "discovery.sources", "value": chat}
     )
     [source] = paused["discovery"]["sources"]
+    assert source["state"] == "paused"
     # The Tier-0 redaction floor is always there, a source may add to it.
     assert source["privacy"]["redact"][:6] == list(blocks.REDACT_FLOOR)
+
+
+@pytest.mark.parametrize(
+    ("kind", "level", "keep_days", "consent", "state"),
+    [
+        ("chat", "personal", 90, "opt_in", "paused"),
+        ("feedback", "personal", 90, "opt_in", "paused"),
+        ("analytics", "internal", 180, "internal", "trial"),
+        ("observability", "internal", 180, "internal", "trial"),
+        ("tracker", "internal", 180, "internal", "trial"),
+        ("flags", "internal", 180, "internal", "trial"),
+        ("team", "internal", 180, "internal", "trial"),
+        ("mcp", "internal", 180, "internal", "trial"),
+        ("repo", "internal", 180, "internal", "trial"),
+        ("web", "public", 365, "public", "trial"),
+        ("reviews", "public", 365, "public", "trial"),
+    ],
+)
+def test_a_source_s_privacy_defaults_follow_its_kind(
+    kind: str, level: str, keep_days: int, consent: str, state: str
+) -> None:
+    source = blocks.SourceDef.model_validate({"id": "s", "label": "S (sample)", "kind": kind})
+
+    assert (source.privacy.level, source.privacy.keep_days) == (level, keep_days)
+    assert (source.consent, source.state) == (consent, state)
+
+
+def test_what_a_source_sets_wins_over_its_kind() -> None:
+    repo = blocks.SourceDef.model_validate(
+        {"id": "r", "label": "R", "kind": "repo", "privacy": {"level": "public"}}
+    )
+    chat = blocks.SourceDef.model_validate(
+        {"id": "c", "label": "C", "kind": "chat", "privacy": {"keep_days": 30}, "consent": "terms"}
+    )
+
+    assert (repo.privacy.level, repo.privacy.keep_days, repo.consent) == ("public", 365, "public")
+    assert (chat.privacy.level, chat.privacy.keep_days, chat.consent) == ("personal", 30, "terms")
+    # Stored, a source keeps what it said: reading it back changes nothing.
+    stored = chat.model_dump(mode="json")
+    assert blocks.SourceDef.model_validate(stored).model_dump(mode="json") == stored
+
+
+# ── Stored sparsely: a server from before the blocks still reads them ──
+
+OLD_KEYS = frozenset(
+    {
+        "engine",
+        "cadence",
+        "supervisor",
+        "mail",
+        "previews",
+        "caps",
+        "loops",
+        "budgets",
+        "autonomy",
+        "decisions",
+        "alerts",
+        "models",
+        "rules",
+        "rule_seq",
+    }
+)
+"""The top-level keys of the definition doc before these blocks (frozen)."""
+
+
+class _OldModels(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    ic: str | None = None
+    reviewer: str | None = None
+    planner: str | None = None
+
+
+def _old_reader() -> type[BaseModel]:
+    """The doc model from before the blocks: today's blocks, ``models``, nothing else."""
+    fields: dict[str, Any] = {
+        name: (info.annotation, info)
+        for name, info in definition.FactoryDefinitionDoc.model_fields.items()
+        if name in OLD_KEYS
+    }
+    fields["models"] = (_OldModels, Field(default_factory=_OldModels))
+    return create_model("OldDefinitionDoc", __config__=ConfigDict(extra="forbid"), **fields)
+
+
+def _stored(cockpit: Cockpit) -> dict[str, Any]:
+    latest = cockpit.store.latest_definition(cockpit.fid)
+    assert latest is not None
+    return dict(latest.doc or {})
+
+
+async def test_versions_that_leave_the_blocks_alone_read_on_an_older_server(
+    cockpit: Cockpit,
+) -> None:
+    old = _old_reader()
+    definition.definition_for(cockpit.deps, cockpit.fid)
+    seeded = _stored(cockpit)
+    assert set(seeded) <= OLD_KEYS, set(seeded) - OLD_KEYS
+    old.model_validate(seeded)
+
+    edits = [
+        {"op": "replace", "path": "loops.review.rounds", "value": 2},
+        {"op": "replace", "path": "models.ic", "value": "sonnet"},
+        {"op": "replace", "path": "role_defaults.planner.model", "value": "opus"},
+    ]
+    for edit in edits:
+        assert (await put(cockpit, edit)).status_code == 200
+        stored = _stored(cockpit)
+        assert set(stored) <= OLD_KEYS, (edit, set(stored) - OLD_KEYS)
+        old.model_validate(stored)
+    assert _stored(cockpit)["models"] == {"ic": "sonnet", "reviewer": None, "planner": "opus"}
+    assert definition.value(cockpit.deps, cockpit.fid, "role_defaults.ic.model") == "sonnet"
+
+    # A block in use is stored (an older server needs a tolerant reader then) and leaves
+    # the stored doc again once it is back at its defaults.
+    name = {"op": "replace", "path": "product.name", "value": "Sample (sample)"}
+    assert (await put(cockpit, name)).status_code == 200
+    assert _stored(cockpit)["product"]["name"] == "Sample (sample)"
+    assert (await put(cockpit, {**name, "value": None})).status_code == 200
+    assert "product" not in _stored(cockpit)
+    resolved = definition.definition_for(cockpit.deps, cockpit.fid, fresh=True)
+    assert resolved is not None and resolved.doc["product"]["name"] is None
+
+
+def test_the_stored_form_drops_only_blocks_at_their_defaults() -> None:
+    doc = definition.full_doc({})
+    assert set(definition.stored_form(doc)) <= OLD_KEYS
+    goal = {"op": "add", "path": "strategy.goals", "value": {"statement": "Grow (sample)"}}
+    with_goal = definition.stored_form(_apply(doc, goal))
+    assert with_goal["goal_seq"] == 1 and with_goal["strategy"]["goals"][0]["id"] == "G-1"
+    assert "discovery" not in with_goal and "briefs" not in with_goal
+    assert definition.full_doc(with_goal) == _apply(doc, goal)
 
 
 # ── Bounds and classes ─────────────────────────────────────────
@@ -230,6 +422,7 @@ def test_owner_only_blocks_always_wait_for_owners() -> None:
     # Slower discovery is class A on its own, but an agent's proposal of it waits for owners.
     diff = [{"path": "discovery.cadence.sweep_h", "before": 24, "after": 48}]
     assert definition.classify("discovery.cadence.sweep_h", 24, 48) == "A"
+    assert tuning.diff_class(diff) == "A"
     assert tuning._klass(diff) == "B"
     assert tuning._klass([{"path": "loops.review.rounds", "before": 3, "after": 2}]) == "A"
 
@@ -311,6 +504,12 @@ def test_items_with_slugs_add_replace_and_remove_by_id() -> None:
         ({"op": "remove", "path": "product.segments"}, 400, "invalid_body"),
         ({"op": "replace", "path": "product.segments/Bad Id", "value": {}}, 400, "invalid_body"),
         ({"op": "remove", "path": "discovery.sources/forum/state"}, 400, "invalid_body"),
+        (
+            {"op": "replace", "path": "product.segments/new", "value": "x"},
+            422,
+            "invalid_definition",
+        ),
+        ({"op": "add", "path": "product.segments", "value": ["x"]}, 422, "invalid_definition"),
     ],
 )
 def test_list_changes_are_checked(change: dict[str, Any], status: int, code: str) -> None:
@@ -380,6 +579,7 @@ def test_paths_into_lists_read_and_write_items() -> None:
         ("sentinel", "discovery.thresholds.min_accounts", True),
         ("sentinel", "briefs.scout", True),
         ("sentinel", "briefs.ic", False),
+        ("sentinel", "briefs.sentinel", False),
         ("sentinel", "product.name", False),
         ("atlas", "discovery.rubric.bands.now", False),
         ("atlas", "role_defaults.ic.model", False),
@@ -391,16 +591,41 @@ def test_agent_seats_propose_only_their_paths(seat: str, path: str, allowed: boo
     assert blocks.agent_may_propose(seat, path) is allowed
 
 
-def test_strategy_and_product_are_not_trialable() -> None:
-    assert definition.trialable(["loops.review.rounds", "discovery.rubric.window_days"]) == (
+def test_what_never_runs_as_a_trial() -> None:
+    assert definition.trialable(
+        ["loops.review.rounds", "briefs.ic", "role_defaults.ic.model"]
+    ) == (
         True,
         None,
     )
     ok, reason = definition.trialable(["strategy.focus_segments", "loops.review.rounds"])
     assert not ok and reason is not None and "judged on outcomes" in reason
+    # Discovery and Scout's brief wait for the discovery guards: delivery guards would judge them.
+    ok, reason = definition.trialable(["discovery.rubric.window_days", "briefs.scout"])
+    assert not ok and reason == (
+        "discovery and Scout's brief changes are judged on discovery guards, which this server "
+        "does not measure yet: they apply as a version"
+    )
+    assert definition.not_trialable(["product.name", "discovery.enabled", "briefs.ic"]) == {
+        "product": "judged on outcomes",
+        "discovery": "needs discovery guards",
+    }
+
+
+def test_only_the_blocks_hold_a_trial_today_s_settings_trial_as_before() -> None:
     assert definition.trial_blocks(
-        ["loops.review.rounds", "loops.implement.usd", "discovery.rubric.bands.now", "rules.R-1"]
-    ) == ["discovery", "loops"]
+        [
+            "loops.review.rounds",
+            "cadence.lead",
+            "alerts.quiet_m",
+            "discovery.rubric.bands.now",
+            "briefs.ic",
+            "models.ic",
+            "rules.R-1",
+        ]
+    ) == ["briefs", "discovery", "role_defaults"]
+    assert "briefs.atlas" in definition.ALLOWED_PATHS
+    assert "briefs.sentinel" in definition.ALLOWED_PATHS
 
 
 def test_discovery_needs_the_server_switch_and_the_flag(
@@ -441,7 +666,9 @@ async def test_owners_edit_the_blocks_and_members_get_no_product_text(cockpit: C
     assert view["effective"]["product"]["name"] == "Sample product"
     assert view["effective"]["strategy"]["goals"][0]["id"] == "G-1"
     assert view["lists"]["strategy.goals"] == {"numbered": "G"}
-    assert "product." in view["owner_only"] and view["not_trialable"] == ["product", "strategy"]
+    assert "product." in view["owner_only"]
+    assert view["not_trialable"] == ["product", "strategy", "discovery", "briefs.scout"]
+    assert view["not_trialable_why"]["discovery"] == "needs discovery guards"
     assert view["agent_paths"]["sentinel"] == list(blocks.AGENT_PATHS["sentinel"])
     assert "discovery.rubric.window_days" in view["bounds"]
     assert row(cockpit).status == "applied"
@@ -472,12 +699,14 @@ async def test_sentinel_proposes_the_rubric_and_owners_decide(cockpit: Cockpit) 
     assert profile.status_code == 403 and error_code(profile) == "path_not_allowed"
     assert atlas.status_code == 403 and "people change it" in atlas.text
     decision = cockpit.store.get_decision(row(cockpit).decision_id)
-    assert decision is not None and decision.options[0]["label"] == "Approve · trial 48h"
+    # No discovery guards yet: a rubric change applies as a version, never as a delivery trial.
+    assert decision is not None and decision.options[0]["label"] == "Approve"
+    assert "judged on discovery guards" in (decision.context or "")
 
     resp = await answer(cockpit, 1)
 
     assert resp.status_code == 200, resp.text
-    assert row(cockpit).status == "trial"
+    assert (row(cockpit).status, row(cockpit).trial_until) == ("applied", None)
     assert (
         definition.value(cockpit.deps, cockpit.fid, "discovery.rubric.decay_half_life_days") == 45
     )

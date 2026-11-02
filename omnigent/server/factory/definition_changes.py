@@ -86,12 +86,41 @@ def restore_plan(
             "invalid_definition",
             f"v{target.version} no longer validates: {str(exc)[:300]}",
         ) from None
-    diff = definition.diff(stored, after)
     trials = deps.factory_store.list_proposals(
         factory_id, status="trial", kind=["tuning", "rules"], limit=200
     )
     ending = [r for r in trials if definition.moved_paths(r.after or {}, after)]
+    ended = {r.id for r in ending}
+    running = {proposal_ref(r.number) for r in trials if r.id not in ended}
+    after["rules"] = _settled_rules(after.get("rules") or [], stored, running)
+    diff = definition.diff(stored, after)
     return RestorePlan(after=after, diff=diff, ending=ending)
+
+
+def _settled_rules(
+    rules: Sequence[Mapping[str, Any]], stored: Mapping[str, Any], running: set[str]
+) -> list[dict[str, Any]]:
+    """
+    *rules* of a restored version with their trial state as it stands now: a
+    rule the version in force has unchanged keeps its state there, and a rule
+    "on trial" whose trial no longer runs is active (no keep or revert would
+    ever settle it).
+    """
+    current = {
+        str(r.get("id")): r
+        for r in stored.get("rules") or []
+        if isinstance(r, Mapping) and r.get("id")
+    }
+    out: list[dict[str, Any]] = []
+    for rule in rules:
+        now = current.get(str(rule.get("id")))
+        if now is not None and definition.same_rule(now, rule):
+            out.append({**rule, "state": now.get("state", "active"), "origin": now.get("origin")})
+        elif rule.get("state") == "trial" and rule.get("origin") not in running:
+            out.append({**rule, "state": "active"})
+        else:
+            out.append(dict(rule))
+    return out
 
 
 # ── Preview ────────────────────────────────────────────────────
@@ -201,7 +230,8 @@ def _trial_info(
         return {"ok": False, "code": "no_change", "reason": "Nothing to try."}
     ok, reason = definition.trialable(paths)
     if not ok:
-        return {"ok": False, "code": evaluate.NOT_TRIALABLE, "reason": reason}
+        why = "; ".join(dict.fromkeys(definition.not_trialable(paths).values()))
+        return {"ok": False, "code": evaluate.NOT_TRIALABLE, "reason": reason, "why": why}
     found = evaluate.overlapping_trial(deps, factory_id, paths)
     if found is not None:
         error = evaluate.overlap_error(found[0], found[1], now_s())
@@ -301,7 +331,7 @@ def _preview(
         }
         for d in diff
     ]
-    klass = tuning._klass(diff) if diff else None
+    klass = tuning.diff_class(diff) if diff else None
     owner_only = any(e["owner_only"] for e in entries)
     level = people.viewer_level(deps, root.id, user_id)
     return {

@@ -4,9 +4,10 @@ Owners edit the definition directly (``PUT …/definition``). Operators cannot,
 but they may "Propose change" from a finding, an Insights tile or an
 incident: the change is validated like an agent's, stored pending with its
 evidence, and an owners ``proposal`` decision opens in ``#improvements``.
-Approving it applies the change as a trial (as a version for strategy and
-product profile changes); nothing applies on its own. While another trial
-holds its block the proposal says so, and approving it waits (409 ``trial_overlap``).
+Approving it applies the change as a trial (as a version for the changes
+that never trial, see :func:`.definition.trialable`); nothing applies on its
+own. While another trial holds its block the proposal says so, and approving
+it waits (409 ``trial_overlap``).
 """
 
 from __future__ import annotations
