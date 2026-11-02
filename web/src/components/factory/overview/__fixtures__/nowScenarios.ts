@@ -1,10 +1,10 @@
 // The Now card's own scenarios, from the round-3 factory: busy, idle and still
-// spending, waiting on you (the live factory's D-19), paused and starting up.
+// spending, waiting on you (the live factory's D-19), paused, starting up, a
+// project that can't start, and a merged project its lead still validates.
 
-import type { FactorySnapshot } from "@/lib/factoryApi";
+import type { FactorySnapshot, ProjectView } from "@/lib/factoryApi";
 import type { StatusSummary } from "@/lib/factoryStatusApi";
 import { round3IssueList } from "../../agents/__fixtures__/opsFixtures";
-import { factoryPageHref } from "../../factoryRoutes";
 import { ROUND3_NOW_S, round3Snapshot } from "../../shell/__fixtures__/shellFixtures";
 import { statusSummaryOf } from "./nowFixtures";
 
@@ -12,16 +12,7 @@ const HOUR = 3600;
 
 /** Atlas's factory as Luka (creator): eight things wait on him, four projects in flight. */
 export function busyNow(): StatusSummary {
-  const snapshot = round3Snapshot();
-  // Proposal questions as the server words them today.
-  const questions: Record<string, string> = {
-    "D-33": "Atlas proposes C-4: split billing v2 into 3 projects",
-    "D-35": "Sentinel proposes C-15 (rules): PLs ask before a second preview",
-  };
-  for (const decision of snapshot.decisions) {
-    decision.question = questions[decision.ref] ?? decision.question;
-  }
-  return statusSummaryOf(snapshot, { incidents: round3IssueList(), last24hUsd: 41.2 });
+  return statusSummaryOf(round3Snapshot(), { incidents: round3IssueList(), last24hUsd: 41.2 });
 }
 
 function quietSnapshot(): FactorySnapshot {
@@ -33,9 +24,14 @@ function quietSnapshot(): FactorySnapshot {
   snapshot.decisions = [];
   snapshot.totals = { ...snapshot.totals, usd_per_h: 2.71 };
   snapshot.factory.cost_usd = 170.0;
-  const root = snapshot.members.find((m) => m.session_id === snapshot.factory.root_session_id);
-  if (root) root.summary = "No projects in flight · waiting for the next brief";
+  atlasSays(snapshot, "No projects in flight · waiting for the next brief");
   return snapshot;
+}
+
+/** Atlas's one-liner (its beacon) in `snapshot`. */
+function atlasSays(snapshot: FactorySnapshot, summary: string): void {
+  const root = snapshot.members.find((m) => m.session_id === snapshot.factory.root_session_id);
+  if (root) root.summary = summary;
 }
 
 /** Nothing in flight since the docs project closed, yet the leads still spend $2.71/h. */
@@ -69,26 +65,18 @@ export function waitingOnYouNow(): StatusSummary {
 
 /** Alice paused the whole factory with a note; one project had already failed. */
 export function pausedNow(): StatusSummary {
-  const summary = busyNow();
-  return {
-    ...summary,
-    state: "paused",
-    headline: "Paused by alice. 8 things wait on you.",
-    health: {
-      state: "paused",
-      items: [
-        {
-          kind: "paused",
-          text: "alice paused the factory",
-          by: "alice",
-          note: "Budget review at 14:00, back after",
-          since: ROUND3_NOW_S - 25 * 60,
-          href: factoryPageHref(summary.factory_id),
-        },
-        ...summary.health.items,
-      ],
+  const snapshot = round3Snapshot();
+  snapshot.factory.state = "paused";
+  return statusSummaryOf(snapshot, {
+    incidents: round3IssueList(),
+    last24hUsd: 41.2,
+    pause: {
+      summary: "alice paused the factory",
+      by: "alice",
+      note: "Budget review at 14:00, back after",
+      since: ROUND3_NOW_S - 25 * 60,
     },
-  };
+  });
 }
 
 /** Four new projects queued a few minutes ago while their lead agents start. */
@@ -110,5 +98,75 @@ export function startingNow(): StatusSummary {
     stage_since: ROUND3_NOW_S - minutes * 60,
     provisioning: { stage, label },
   }));
+  return statusSummaryOf(snapshot, { last24hUsd: 65.04 });
+}
+
+/**
+ * Three new projects queued: cache-warm's lead agent never got a machine (its
+ * sandbox failed), the others are still starting.
+ */
+export function cantStartNow(): StatusSummary {
+  const snapshot = quietSnapshot();
+  const template = round3Snapshot().projects.find((p) => p.slug === "cache-warm")!;
+  const queued = (slug: string, minutes: number): ProjectView => ({
+    ...template,
+    slug,
+    title: slug.replace("-", " "),
+    stage: "queued",
+    stage_since: ROUND3_NOW_S - minutes * 60,
+    overlay: null,
+    overlay_reason: null,
+    pr_ids: [],
+    team: [],
+    provisioning: null,
+  });
+  snapshot.projects = [
+    { ...queued("cache-warm", 6), overlay: "failed", overlay_reason: "PL sandbox failed" },
+    { ...queued("audit-log", 4), pl: null, provisioning: { stage: "cloning", label: "x" } },
+    { ...queued("quota-alerts", 2), pl: null, provisioning: { stage: "provisioning", label: "x" } },
+  ];
+  atlasSays(snapshot, "Starting 3 new projects from the brief");
+  return statusSummaryOf(snapshot, { last24hUsd: 65.04 });
+}
+
+/**
+ * validate-build-tier's PR merged an hour ago; its lead deployed a preview to
+ * validate it and checks on it at its next beat (between turns, not running).
+ */
+export function validatingNow(): StatusSummary {
+  const snapshot = quietSnapshot();
+  const round3 = round3Snapshot();
+  const template = round3.projects.find((p) => p.slug === "api-version")!;
+  const pr = round3.prs.find((p) => p.number === 9630)!;
+  snapshot.prs = [
+    {
+      ...pr,
+      id: "pr-9774",
+      number: 9774,
+      title: "build: validate the build tier on previews",
+      state: "merged",
+      ready: false,
+      project_slug: "validate-build-tier",
+    },
+  ];
+  snapshot.projects = [
+    {
+      ...template,
+      slug: "validate-build-tier",
+      title: "Validate build tier",
+      stage: "merged",
+      stage_since: ROUND3_NOW_S - HOUR,
+      pr_ids: ["pr-9774"],
+      pl: {
+        ...template.pl!,
+        title: "PL · validate-build-tier",
+        status: "idle",
+        running: false,
+        summary: "Preview deploying for #9774; checking it at the next beat",
+        last_activity_at: ROUND3_NOW_S - 8 * 60,
+      },
+    },
+  ];
+  atlasSays(snapshot, "validate-build-tier merged · its lead is checking the preview");
   return statusSummaryOf(snapshot, { last24hUsd: 65.04 });
 }

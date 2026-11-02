@@ -62,6 +62,8 @@ export const factoryDemosQueryKey = (factoryId: string, filters: DemoFilters = {
 export const projectDemosQueryKey = (factoryId: string, slug: string) =>
   ["factory-demos", factoryId, "project", slug] as const;
 export const factoryPeopleQueryKey = (factoryId: string) => ["factory-people", factoryId] as const;
+/** The Overview's "Now" card (not under the snapshot's key: light frames skip it). */
+export const factoryNowQueryKey = (factoryId: string) => ["factory-now", factoryId] as const;
 export const factorySpansQueryKey = (
   factoryId: string,
   sinceMs: number,
@@ -90,9 +92,13 @@ export function factoryInvalidationKeys(
       ...(scopes.some((s) => s !== "reads") ? [factoryQueryKey(factoryId)] : []),
       ...(scopes.includes("reads") ? [["factory-room", factoryId, "threads"]] : []),
       ...(scopes.includes("presence") ? [["factory-people", factoryId]] : []),
-      // The Room's incident and finding cards read the issues list.
+      // The Room's incident and finding cards read the issues list; Now lists incidents.
       ...(scopes.includes("issues")
-        ? [FACTORIES_QUERY_KEY, ["factory-room", factoryId, "issues"]]
+        ? [
+            FACTORIES_QUERY_KEY,
+            ["factory-room", factoryId, "issues"],
+            factoryNowQueryKey(factoryId),
+          ]
         : []),
     ];
   }
@@ -102,6 +108,7 @@ export function factoryInvalidationKeys(
     ["factory-demos", factoryId],
     ["factory-people", factoryId],
     ["factory-spans", factoryId],
+    factoryNowQueryKey(factoryId),
     // The Room, proposals, graphs, loops and issues.
     ["factory-room", factoryId],
     FACTORIES_QUERY_KEY,

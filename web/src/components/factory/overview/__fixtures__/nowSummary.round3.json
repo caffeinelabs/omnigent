@@ -1,0 +1,821 @@
+{
+  "now_s": 1793017800,
+  "cases": {
+    "creator": {
+      "factory_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+      "factory_name": "Atlas factory",
+      "generated_at": 1793017800,
+      "headline": "Working on 4 projects. 8 things wait on you.",
+      "state": "working",
+      "waiting": [
+        {
+          "kind": "decision",
+          "key": "decision:931f22a2c84f579aaaba37711970aa4c",
+          "ref": "D-35",
+          "text": "approve Sentinel's proposal",
+          "detail": "C-15 · rules: role=project_lead (class B, owners)",
+          "who": "owners",
+          "for_you": true,
+          "urgent": true,
+          "since": 1793012400,
+          "project": null,
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-35"
+        },
+        {
+          "kind": "decision",
+          "key": "decision:7d39c2ab229d5ebcb20c89e31d3a751e",
+          "ref": "D-33",
+          "text": "approve Atlas's proposal",
+          "detail": "C-4 · plan by Atlas for Luka: split billing v2 into 3 projects",
+          "who": "operators",
+          "for_you": true,
+          "urgent": true,
+          "since": 1793014740,
+          "project": null,
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-33"
+        },
+        {
+          "kind": "decision",
+          "key": "decision:176d6b5479215203bd985355ae160221",
+          "ref": "D-3",
+          "text": "decide what to do: the cache-warm lead couldn't restart",
+          "detail": "\"PL · cache-warm\" relaunch failed 3× (runner_unavailable)",
+          "who": "owners",
+          "for_you": true,
+          "urgent": true,
+          "since": 1793015760,
+          "project": "cache-warm",
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-3"
+        },
+        {
+          "kind": "incident",
+          "key": "incident:1759c7ed06c2570796aa9ea7d578c679",
+          "ref": "INC-12",
+          "text": "PL · cache-warm dead · relaunch failed 3×",
+          "detail": null,
+          "who": "operators",
+          "for_you": true,
+          "urgent": true,
+          "since": 1793015760,
+          "project": "cache-warm",
+          "severity": "critical",
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/12"
+        },
+        {
+          "kind": "decision",
+          "key": "decision:ae1fb5c75b755a4dbc645077510d63ef",
+          "ref": "D-31",
+          "text": "decide on T-4 (budget or retries ran out)",
+          "detail": "T-4 route · implement exhausted 3/3 ($11.80 of $15)",
+          "who": "operators",
+          "for_you": true,
+          "urgent": true,
+          "since": 1793017080,
+          "project": "db-version",
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-31"
+        },
+        {
+          "kind": "decision",
+          "key": "decision:7839f420d1b6578291fc39d54782176c",
+          "ref": "D-34",
+          "text": "approve or refuse an access request",
+          "detail": "ops@caffeine.ai asks for operator access",
+          "who": "owners",
+          "for_you": true,
+          "urgent": true,
+          "since": 1793017200,
+          "project": null,
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-34"
+        },
+        {
+          "kind": "incident",
+          "key": "incident:f3e3cdbee4435450b613ba1916828cde",
+          "ref": "INC-13",
+          "text": "same failing command 7× in 25 min · pnpm -F caffeine-api test",
+          "detail": null,
+          "who": "operators",
+          "for_you": true,
+          "urgent": false,
+          "since": 1793016300,
+          "project": "db-version",
+          "severity": "warning",
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/13"
+        },
+        {
+          "kind": "pr",
+          "key": "pr:f74d5967c53455139e85ba1b402a5bd4",
+          "ref": "PR #9630",
+          "text": "review and merge",
+          "detail": "feat(api): GET /version and a Settings \"API version\" row",
+          "who": "operators",
+          "for_you": true,
+          "urgent": false,
+          "since": 1793017040,
+          "project": "api-version",
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
+        },
+        {
+          "kind": "decision",
+          "key": "decision:a9d44647df3050199c1577ba21f16b67",
+          "ref": "D-2",
+          "text": "answer the db-version lead",
+          "detail": "Which table is the source of truth for the DB version: knex_migrations or schema_migrations?",
+          "who": "mia",
+          "for_you": false,
+          "urgent": true,
+          "since": 1793017080,
+          "project": "db-version",
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-2"
+        }
+      ],
+      "working": [
+        {
+          "project": "cache-warm",
+          "title": "Session cache warm-up",
+          "stage": "building",
+          "since": 1793010800,
+          "pr": {
+            "id": "0fcd093453fc5627913e79b8c97d72d7",
+            "number": 9655,
+            "state": "open",
+            "ready": false,
+            "title": "perf(api): warm the session cache on boot",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/0fcd093453fc5627913e79b8c97d72d7"
+          },
+          "doing": "relaunch failed 3× (runner_unavailable)",
+          "problem": "its lead agent stopped · relaunch failed 3×",
+          "running": false,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/cache-warm"
+        },
+        {
+          "project": "db-version",
+          "title": "DB version endpoint",
+          "stage": "building",
+          "since": 1793014500,
+          "pr": {
+            "id": "8f15c0f9a98e5831a39615fb58f35036",
+            "number": 9631,
+            "state": "open",
+            "ready": false,
+            "title": "feat(api): GET /db/version returns the latest applied migration",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/8f15c0f9a98e5831a39615fb58f35036"
+          },
+          "doing": "Waiting on D-2 (Mia) · T-4 implement exhausted 3/3",
+          "problem": "blocked until someone answers D-2 · T-4 implement exhausted",
+          "running": true,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/db-version"
+        },
+        {
+          "project": "api-version",
+          "title": "API version endpoint",
+          "stage": "ready",
+          "since": 1793017040,
+          "pr": {
+            "id": "f74d5967c53455139e85ba1b402a5bd4",
+            "number": 9630,
+            "state": "open",
+            "ready": true,
+            "title": "feat(api): GET /version and a Settings \"API version\" row",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
+          },
+          "doing": "READY FOR HUMAN MERGE #9630",
+          "problem": null,
+          "running": false,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/api-version"
+        },
+        {
+          "project": "ux-badge",
+          "title": "Environment badge",
+          "stage": "review",
+          "since": 1793014200,
+          "pr": {
+            "id": "701d3bdde13d58d9b594bfdf89457308",
+            "number": 9653,
+            "state": "open",
+            "ready": false,
+            "title": "feat(ux): environment badge in the header",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/701d3bdde13d58d9b594bfdf89457308"
+          },
+          "doing": "review round 2/3 on !9653",
+          "problem": null,
+          "running": true,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/ux-badge"
+        }
+      ],
+      "next": [
+        {
+          "project": "settings-row",
+          "title": "Versions row in Settings",
+          "reason": "waits for api-version, db-version to finish",
+          "problem": null,
+          "since": 1793016600,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/settings-row"
+        }
+      ],
+      "lead": {
+        "who": "Atlas",
+        "text": "6 projects in flight · C-4 waiting for operators · !9630 ready for you",
+        "since": 1793017560,
+        "session_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+        "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/agents/f4f4ba9c77725331b12f0fa7072dc4d3"
+      },
+      "check_in": {
+        "who": "Atlas",
+        "at": 1793017860,
+        "session_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+        "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/agents/f4f4ba9c77725331b12f0fa7072dc4d3"
+      },
+      "spend": {
+        "last_24h_usd": null,
+        "today_usd": null,
+        "usd_per_h": 6.1,
+        "total_usd": 54.62,
+        "idle": false,
+        "idle_since": null,
+        "idle_spend": false,
+        "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/insights"
+      },
+      "health": {
+        "state": "attention",
+        "items": [
+          {
+            "kind": "failed",
+            "text": "cache-warm: its lead agent stopped · relaunch failed 3×",
+            "by": null,
+            "note": null,
+            "project": "cache-warm",
+            "since": 1793010800,
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/cache-warm"
+          },
+          {
+            "kind": "blocked",
+            "text": "db-version: blocked until someone answers D-2 · T-4 implement exhausted",
+            "by": null,
+            "note": null,
+            "project": "db-version",
+            "since": 1793014500,
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/db-version"
+          }
+        ]
+      },
+      "counts": {
+        "waiting_for_you": 8,
+        "waiting_total": 9,
+        "working": 4,
+        "queued": 1,
+        "cant_start": 0
+      }
+    },
+    "operator": {
+      "factory_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+      "factory_name": "Atlas factory",
+      "generated_at": 1793017800,
+      "headline": "Working on 4 projects. 6 things wait on you.",
+      "state": "working",
+      "waiting": [
+        {
+          "kind": "decision",
+          "key": "decision:7d39c2ab229d5ebcb20c89e31d3a751e",
+          "ref": "D-33",
+          "text": "approve Atlas's proposal",
+          "detail": "C-4 · plan by Atlas for Luka: split billing v2 into 3 projects",
+          "who": "operators",
+          "for_you": true,
+          "urgent": true,
+          "since": 1793014740,
+          "project": null,
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-33"
+        },
+        {
+          "kind": "incident",
+          "key": "incident:1759c7ed06c2570796aa9ea7d578c679",
+          "ref": "INC-12",
+          "text": "PL · cache-warm dead · relaunch failed 3×",
+          "detail": null,
+          "who": "operators",
+          "for_you": true,
+          "urgent": true,
+          "since": 1793015760,
+          "project": "cache-warm",
+          "severity": "critical",
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/12"
+        },
+        {
+          "kind": "decision",
+          "key": "decision:a9d44647df3050199c1577ba21f16b67",
+          "ref": "D-2",
+          "text": "answer the db-version lead",
+          "detail": "Which table is the source of truth for the DB version: knex_migrations or schema_migrations?",
+          "who": "you",
+          "for_you": true,
+          "urgent": true,
+          "since": 1793017080,
+          "project": "db-version",
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-2"
+        },
+        {
+          "kind": "decision",
+          "key": "decision:ae1fb5c75b755a4dbc645077510d63ef",
+          "ref": "D-31",
+          "text": "decide on T-4 (budget or retries ran out)",
+          "detail": "T-4 route · implement exhausted 3/3 ($11.80 of $15)",
+          "who": "operators",
+          "for_you": true,
+          "urgent": true,
+          "since": 1793017080,
+          "project": "db-version",
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-31"
+        },
+        {
+          "kind": "incident",
+          "key": "incident:f3e3cdbee4435450b613ba1916828cde",
+          "ref": "INC-13",
+          "text": "same failing command 7× in 25 min · pnpm -F caffeine-api test",
+          "detail": null,
+          "who": "operators",
+          "for_you": true,
+          "urgent": false,
+          "since": 1793016300,
+          "project": "db-version",
+          "severity": "warning",
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/13"
+        },
+        {
+          "kind": "pr",
+          "key": "pr:f74d5967c53455139e85ba1b402a5bd4",
+          "ref": "PR #9630",
+          "text": "review and merge",
+          "detail": "feat(api): GET /version and a Settings \"API version\" row",
+          "who": "operators",
+          "for_you": true,
+          "urgent": false,
+          "since": 1793017040,
+          "project": "api-version",
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
+        },
+        {
+          "kind": "decision",
+          "key": "decision:931f22a2c84f579aaaba37711970aa4c",
+          "ref": "D-35",
+          "text": "approve Sentinel's proposal",
+          "detail": "C-15 · rules: role=project_lead (class B, owners)",
+          "who": "owners",
+          "for_you": false,
+          "urgent": true,
+          "since": 1793012400,
+          "project": null,
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-35"
+        },
+        {
+          "kind": "decision",
+          "key": "decision:176d6b5479215203bd985355ae160221",
+          "ref": "D-3",
+          "text": "decide what to do: the cache-warm lead couldn't restart",
+          "detail": "\"PL · cache-warm\" relaunch failed 3× (runner_unavailable)",
+          "who": "owners",
+          "for_you": false,
+          "urgent": true,
+          "since": 1793015760,
+          "project": "cache-warm",
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-3"
+        },
+        {
+          "kind": "decision",
+          "key": "decision:7839f420d1b6578291fc39d54782176c",
+          "ref": "D-34",
+          "text": "approve or refuse an access request",
+          "detail": "ops@caffeine.ai asks for operator access",
+          "who": "owners",
+          "for_you": false,
+          "urgent": true,
+          "since": 1793017200,
+          "project": null,
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-34"
+        }
+      ],
+      "working": [
+        {
+          "project": "cache-warm",
+          "title": "Session cache warm-up",
+          "stage": "building",
+          "since": 1793010800,
+          "pr": {
+            "id": "0fcd093453fc5627913e79b8c97d72d7",
+            "number": 9655,
+            "state": "open",
+            "ready": false,
+            "title": "perf(api): warm the session cache on boot",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/0fcd093453fc5627913e79b8c97d72d7"
+          },
+          "doing": "relaunch failed 3× (runner_unavailable)",
+          "problem": "its lead agent stopped · relaunch failed 3×",
+          "running": false,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/cache-warm"
+        },
+        {
+          "project": "db-version",
+          "title": "DB version endpoint",
+          "stage": "building",
+          "since": 1793014500,
+          "pr": {
+            "id": "8f15c0f9a98e5831a39615fb58f35036",
+            "number": 9631,
+            "state": "open",
+            "ready": false,
+            "title": "feat(api): GET /db/version returns the latest applied migration",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/8f15c0f9a98e5831a39615fb58f35036"
+          },
+          "doing": "Waiting on D-2 (Mia) · T-4 implement exhausted 3/3",
+          "problem": "blocked until someone answers D-2 · T-4 implement exhausted",
+          "running": true,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/db-version"
+        },
+        {
+          "project": "api-version",
+          "title": "API version endpoint",
+          "stage": "ready",
+          "since": 1793017040,
+          "pr": {
+            "id": "f74d5967c53455139e85ba1b402a5bd4",
+            "number": 9630,
+            "state": "open",
+            "ready": true,
+            "title": "feat(api): GET /version and a Settings \"API version\" row",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
+          },
+          "doing": "READY FOR HUMAN MERGE #9630",
+          "problem": null,
+          "running": false,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/api-version"
+        },
+        {
+          "project": "ux-badge",
+          "title": "Environment badge",
+          "stage": "review",
+          "since": 1793014200,
+          "pr": {
+            "id": "701d3bdde13d58d9b594bfdf89457308",
+            "number": 9653,
+            "state": "open",
+            "ready": false,
+            "title": "feat(ux): environment badge in the header",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/701d3bdde13d58d9b594bfdf89457308"
+          },
+          "doing": "review round 2/3 on !9653",
+          "problem": null,
+          "running": true,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/ux-badge"
+        }
+      ],
+      "next": [
+        {
+          "project": "settings-row",
+          "title": "Versions row in Settings",
+          "reason": "waits for api-version, db-version to finish",
+          "problem": null,
+          "since": 1793016600,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/settings-row"
+        }
+      ],
+      "lead": {
+        "who": "Atlas",
+        "text": "6 projects in flight · C-4 waiting for operators · !9630 ready for you",
+        "since": 1793017560,
+        "session_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+        "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/agents/f4f4ba9c77725331b12f0fa7072dc4d3"
+      },
+      "check_in": {
+        "who": "Atlas",
+        "at": 1793017860,
+        "session_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+        "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/agents/f4f4ba9c77725331b12f0fa7072dc4d3"
+      },
+      "spend": {
+        "last_24h_usd": null,
+        "today_usd": null,
+        "usd_per_h": 6.1,
+        "total_usd": 54.62,
+        "idle": false,
+        "idle_since": null,
+        "idle_spend": false,
+        "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/insights"
+      },
+      "health": {
+        "state": "attention",
+        "items": [
+          {
+            "kind": "failed",
+            "text": "cache-warm: its lead agent stopped · relaunch failed 3×",
+            "by": null,
+            "note": null,
+            "project": "cache-warm",
+            "since": 1793010800,
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/cache-warm"
+          },
+          {
+            "kind": "blocked",
+            "text": "db-version: blocked until someone answers D-2 · T-4 implement exhausted",
+            "by": null,
+            "note": null,
+            "project": "db-version",
+            "since": 1793014500,
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/db-version"
+          }
+        ]
+      },
+      "counts": {
+        "waiting_for_you": 6,
+        "waiting_total": 9,
+        "working": 4,
+        "queued": 1,
+        "cant_start": 0
+      }
+    },
+    "viewer": {
+      "factory_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+      "factory_name": "Atlas factory",
+      "generated_at": 1793017800,
+      "headline": "Working on 4 projects. Nothing waits on you.",
+      "state": "working",
+      "waiting": [
+        {
+          "kind": "decision",
+          "key": "decision:931f22a2c84f579aaaba37711970aa4c",
+          "ref": "D-35",
+          "text": "approve Sentinel's proposal",
+          "detail": "C-15 · rules: role=project_lead (class B, owners)",
+          "who": "owners",
+          "for_you": false,
+          "urgent": true,
+          "since": 1793012400,
+          "project": null,
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-35"
+        },
+        {
+          "kind": "decision",
+          "key": "decision:7d39c2ab229d5ebcb20c89e31d3a751e",
+          "ref": "D-33",
+          "text": "approve Atlas's proposal",
+          "detail": "C-4 · plan by Atlas for Luka: split billing v2 into 3 projects",
+          "who": "operators",
+          "for_you": false,
+          "urgent": true,
+          "since": 1793014740,
+          "project": null,
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-33"
+        },
+        {
+          "kind": "decision",
+          "key": "decision:176d6b5479215203bd985355ae160221",
+          "ref": "D-3",
+          "text": "decide what to do: the cache-warm lead couldn't restart",
+          "detail": "\"PL · cache-warm\" relaunch failed 3× (runner_unavailable)",
+          "who": "owners",
+          "for_you": false,
+          "urgent": true,
+          "since": 1793015760,
+          "project": "cache-warm",
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-3"
+        },
+        {
+          "kind": "incident",
+          "key": "incident:1759c7ed06c2570796aa9ea7d578c679",
+          "ref": "INC-12",
+          "text": "PL · cache-warm dead · relaunch failed 3×",
+          "detail": null,
+          "who": "operators",
+          "for_you": false,
+          "urgent": true,
+          "since": 1793015760,
+          "project": "cache-warm",
+          "severity": "critical",
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/12"
+        },
+        {
+          "kind": "decision",
+          "key": "decision:a9d44647df3050199c1577ba21f16b67",
+          "ref": "D-2",
+          "text": "answer the db-version lead",
+          "detail": "Which table is the source of truth for the DB version: knex_migrations or schema_migrations?",
+          "who": "mia",
+          "for_you": false,
+          "urgent": true,
+          "since": 1793017080,
+          "project": "db-version",
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-2"
+        },
+        {
+          "kind": "decision",
+          "key": "decision:ae1fb5c75b755a4dbc645077510d63ef",
+          "ref": "D-31",
+          "text": "decide on T-4 (budget or retries ran out)",
+          "detail": "T-4 route · implement exhausted 3/3 ($11.80 of $15)",
+          "who": "operators",
+          "for_you": false,
+          "urgent": true,
+          "since": 1793017080,
+          "project": "db-version",
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-31"
+        },
+        {
+          "kind": "decision",
+          "key": "decision:7839f420d1b6578291fc39d54782176c",
+          "ref": "D-34",
+          "text": "approve or refuse an access request",
+          "detail": "ops@caffeine.ai asks for operator access",
+          "who": "owners",
+          "for_you": false,
+          "urgent": true,
+          "since": 1793017200,
+          "project": null,
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-34"
+        },
+        {
+          "kind": "incident",
+          "key": "incident:f3e3cdbee4435450b613ba1916828cde",
+          "ref": "INC-13",
+          "text": "same failing command 7× in 25 min · pnpm -F caffeine-api test",
+          "detail": null,
+          "who": "operators",
+          "for_you": false,
+          "urgent": false,
+          "since": 1793016300,
+          "project": "db-version",
+          "severity": "warning",
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/13"
+        },
+        {
+          "kind": "pr",
+          "key": "pr:f74d5967c53455139e85ba1b402a5bd4",
+          "ref": "PR #9630",
+          "text": "review and merge",
+          "detail": "feat(api): GET /version and a Settings \"API version\" row",
+          "who": "operators",
+          "for_you": false,
+          "urgent": false,
+          "since": 1793017040,
+          "project": "api-version",
+          "severity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
+        }
+      ],
+      "working": [
+        {
+          "project": "cache-warm",
+          "title": "Session cache warm-up",
+          "stage": "building",
+          "since": 1793010800,
+          "pr": {
+            "id": "0fcd093453fc5627913e79b8c97d72d7",
+            "number": 9655,
+            "state": "open",
+            "ready": false,
+            "title": "perf(api): warm the session cache on boot",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/0fcd093453fc5627913e79b8c97d72d7"
+          },
+          "doing": "relaunch failed 3× (runner_unavailable)",
+          "problem": "its lead agent stopped · relaunch failed 3×",
+          "running": false,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/cache-warm"
+        },
+        {
+          "project": "db-version",
+          "title": "DB version endpoint",
+          "stage": "building",
+          "since": 1793014500,
+          "pr": {
+            "id": "8f15c0f9a98e5831a39615fb58f35036",
+            "number": 9631,
+            "state": "open",
+            "ready": false,
+            "title": "feat(api): GET /db/version returns the latest applied migration",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/8f15c0f9a98e5831a39615fb58f35036"
+          },
+          "doing": "Waiting on D-2 (Mia) · T-4 implement exhausted 3/3",
+          "problem": "blocked until someone answers D-2 · T-4 implement exhausted",
+          "running": true,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/db-version"
+        },
+        {
+          "project": "api-version",
+          "title": "API version endpoint",
+          "stage": "ready",
+          "since": 1793017040,
+          "pr": {
+            "id": "f74d5967c53455139e85ba1b402a5bd4",
+            "number": 9630,
+            "state": "open",
+            "ready": true,
+            "title": "feat(api): GET /version and a Settings \"API version\" row",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
+          },
+          "doing": "READY FOR HUMAN MERGE #9630",
+          "problem": null,
+          "running": false,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/api-version"
+        },
+        {
+          "project": "ux-badge",
+          "title": "Environment badge",
+          "stage": "review",
+          "since": 1793014200,
+          "pr": {
+            "id": "701d3bdde13d58d9b594bfdf89457308",
+            "number": 9653,
+            "state": "open",
+            "ready": false,
+            "title": "feat(ux): environment badge in the header",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/701d3bdde13d58d9b594bfdf89457308"
+          },
+          "doing": "review round 2/3 on !9653",
+          "problem": null,
+          "running": true,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/ux-badge"
+        }
+      ],
+      "next": [
+        {
+          "project": "settings-row",
+          "title": "Versions row in Settings",
+          "reason": "waits for api-version, db-version to finish",
+          "problem": null,
+          "since": 1793016600,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/settings-row"
+        }
+      ],
+      "lead": {
+        "who": "Atlas",
+        "text": "6 projects in flight · C-4 waiting for operators · !9630 ready for you",
+        "since": 1793017560,
+        "session_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+        "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/agents/f4f4ba9c77725331b12f0fa7072dc4d3"
+      },
+      "check_in": {
+        "who": "Atlas",
+        "at": 1793017860,
+        "session_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+        "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/agents/f4f4ba9c77725331b12f0fa7072dc4d3"
+      },
+      "spend": {
+        "last_24h_usd": null,
+        "today_usd": null,
+        "usd_per_h": 6.1,
+        "total_usd": 54.62,
+        "idle": false,
+        "idle_since": null,
+        "idle_spend": false,
+        "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/insights"
+      },
+      "health": {
+        "state": "attention",
+        "items": [
+          {
+            "kind": "failed",
+            "text": "cache-warm: its lead agent stopped · relaunch failed 3×",
+            "by": null,
+            "note": null,
+            "project": "cache-warm",
+            "since": 1793010800,
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/cache-warm"
+          },
+          {
+            "kind": "blocked",
+            "text": "db-version: blocked until someone answers D-2 · T-4 implement exhausted",
+            "by": null,
+            "note": null,
+            "project": "db-version",
+            "since": 1793014500,
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/db-version"
+          }
+        ]
+      },
+      "counts": {
+        "waiting_for_you": 0,
+        "waiting_total": 9,
+        "working": 4,
+        "queued": 1,
+        "cant_start": 0
+      }
+    }
+  }
+}

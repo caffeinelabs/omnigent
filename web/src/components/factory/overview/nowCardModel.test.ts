@@ -1,15 +1,24 @@
 import { describe, expect, it } from "vitest";
 import type { StatusSummary } from "@/lib/factoryStatusApi";
 import { ROUND3_NOW_S } from "../shell/__fixtures__/shellFixtures";
-import { busyNow, idleNow, pausedNow, waitingOnYouNow } from "./__fixtures__/nowScenarios";
+import {
+  busyNow,
+  cantStartNow,
+  idleNow,
+  pausedNow,
+  waitingOnYouNow,
+} from "./__fixtures__/nowScenarios";
 import {
   attentionText,
+  checkInText,
   clockText,
   idleSpendText,
+  leadWho,
   nowHeadline,
   spendText,
   splitHealth,
   splitWaiting,
+  staleText,
   waitedFor,
   waitedLong,
   waitingEmptyText,
@@ -46,6 +55,17 @@ describe("nowHeadline", () => {
     );
     const unknown: StatusSummary = { ...summary, spend: { ...summary.spend, idle_since: null } };
     expect(nowHeadline(unknown, ROUND3_NOW_S)).toBe("Idle — no active projects");
+  });
+
+  it("points at projects that can't start before the ones still queued", () => {
+    const summary = cantStartNow();
+    expect(nowHeadline(summary, ROUND3_NOW_S)).toBe(
+      "Nothing in progress · 1 project can't start · 2 queued",
+    );
+    const onlyStuck: StatusSummary = { ...summary, counts: { ...summary.counts, queued: 1 } };
+    expect(nowHeadline(onlyStuck, ROUND3_NOW_S)).toBe(
+      "Nothing in progress · 1 project can't start",
+    );
   });
 
   it("names who paused the factory", () => {
@@ -107,12 +127,13 @@ describe("spend", () => {
   it("says the last 24 h and the rate", () => {
     expect(spendText(busyNow().spend)).toBe("$41.20 in the last 24 h · $6.10/h now");
     expect(spendText({ ...busyNow().spend, last_24h_usd: null, usd_per_h: null })).toBe(
-      "No priced spend in the last 24 h",
+      "No spend recorded in the last 24 h",
     );
   });
 
-  it("calls out an idle factory that still spends", () => {
+  it("calls out an idle factory that still spends, saying the rate once", () => {
     expect(idleSpendText(idleNow().spend)).toBe("Idle, but still spending $2.71/h");
+    expect(spendText(idleNow().spend)).toBe("$65.04 in the last 24 h");
     expect(idleSpendText(busyNow().spend)).toBeNull();
   });
 });
@@ -136,5 +157,28 @@ describe("health", () => {
       "cache-warm",
       "db-version",
     ]);
+  });
+});
+
+describe("lead and check-in", () => {
+  it("says how fresh Atlas's one-liner is", () => {
+    const lead = busyNow().lead!;
+    expect(leadWho(lead, ROUND3_NOW_S)).toBe("Atlas, 4m ago");
+    expect(leadWho({ ...lead, since: null }, ROUND3_NOW_S)).toBe("Atlas");
+  });
+
+  it("says when Atlas checks in again, or that it is due", () => {
+    const checkIn = busyNow().check_in!;
+    expect(checkInText(checkIn, ROUND3_NOW_S)).toBe(
+      `Atlas checks in again at ${clockText(checkIn.at, ROUND3_NOW_S)}`,
+    );
+    expect(checkInText(checkIn, checkIn.at + 60)).toBe("Atlas is due to check in");
+  });
+
+  it("says how old a card is that could not refresh", () => {
+    const at = ROUND3_NOW_S - 300;
+    expect(staleText(at, ROUND3_NOW_S)).toBe(
+      `Showing ${clockText(at, ROUND3_NOW_S)} — couldn’t refresh`,
+    );
   });
 });

@@ -6,12 +6,14 @@ import type { StoryResponse } from "../factoryStoryFixtures";
 import { ROUND3_NOW_S } from "../shell/__fixtures__/shellFixtures";
 import {
   busyNow,
+  cantStartNow,
   idleNow,
   pausedNow,
   startingNow,
+  validatingNow,
   waitingOnYouNow,
 } from "./__fixtures__/nowScenarios";
-import { NowCard } from "./NowCard";
+import { NowCard, NowCardView } from "./NowCard";
 
 const SUMMARY_PATH = `/v1/factory/factories/${LIVE_RUN_FACTORY_ID}/status-summary`;
 
@@ -25,6 +27,22 @@ function nowStory(
     render: () => (
       <BoardFrame theme={theme} width={1100} routes={{ [SUMMARY_PATH]: route }}>
         <NowCard factoryId={LIVE_RUN_FACTORY_ID} nowS={ROUND3_NOW_S} />
+      </BoardFrame>
+    ),
+  };
+}
+
+/** A refresh failed: the busy card, dimmed, says it shows the read from 5 minutes ago. */
+function staleStory(theme: "light" | "dark" = "light"): Story {
+  return {
+    render: () => (
+      <BoardFrame theme={theme} width={1100}>
+        <NowCardView
+          factoryId={LIVE_RUN_FACTORY_ID}
+          summary={busyNow()}
+          nowS={ROUND3_NOW_S}
+          stale={{ updatedAtS: ROUND3_NOW_S - 5 * 60, onRetry: () => undefined }}
+        />
       </BoardFrame>
     ),
   };
@@ -89,6 +107,31 @@ export const PausedDark = nowStory(pausedNow(), "dark");
 export const Starting = nowStory(startingNow());
 
 export const StartingPhone = phone(nowStory(startingNow()));
+
+// ── Can't start, validating, stale ─────────────────────────────
+
+/** cache-warm's lead never got a machine: Next and the headline say so, Health folds it. */
+export const CantStart = nowStory(cantStartNow());
+
+export const CantStartDark = nowStory(cantStartNow(), "dark");
+
+export const CantStartPhone = phone(nowStory(cantStartNow()));
+
+export const CantStartPhoneDark = phone(nowStory(cantStartNow(), "dark"));
+
+/** validate-build-tier merged; its lead checks the preview between turns: still Working on. */
+export const Validating = nowStory(validatingNow());
+
+export const ValidatingDark = nowStory(validatingNow(), "dark");
+
+export const ValidatingPhone = phone(nowStory(validatingNow()));
+
+/** The last refresh failed: the last good read stays, dimmed, with its time and Retry. */
+export const Stale = staleStory();
+
+export const StaleDark = staleStory("dark");
+
+export const StalePhone = phone(staleStory());
 
 export const Loading = nowStory("pending");
 

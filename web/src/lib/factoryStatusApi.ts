@@ -61,7 +61,10 @@ export interface StatusWorkingItem {
 export interface StatusNextItem {
   project: string;
   title: string;
+  /** Why it waits, read after its name: "waits for api-version to finish". */
   reason: string;
+  /** Set when it can't start (its lead's machine failed, blocked, paused). */
+  problem?: string | null;
   since: number;
   href: string;
 }
@@ -70,6 +73,16 @@ export interface StatusNextItem {
 export interface StatusLeadNote {
   who: string;
   text: string;
+  /** When the lead was last active (the one-liner is at most this fresh). */
+  since?: number | null;
+  session_id: string;
+  href: string;
+}
+
+/** When the root lead (Atlas) next wakes up on its own. */
+export interface StatusCheckIn {
+  who: string;
+  at: number;
   session_id: string;
   href: string;
 }
@@ -113,6 +126,8 @@ export interface StatusCounts {
   waiting_total: number;
   working: number;
   queued: number;
+  /** Queued projects that can't start (counted in `queued` too). */
+  cant_start?: number;
 }
 
 /** The factory's "Now" for one viewer. */
@@ -127,6 +142,7 @@ export interface StatusSummary {
   working: StatusWorkingItem[];
   next: StatusNextItem[];
   lead?: StatusLeadNote | null;
+  check_in?: StatusCheckIn | null;
   spend: StatusSpend;
   health: StatusHealth;
   counts: StatusCounts;

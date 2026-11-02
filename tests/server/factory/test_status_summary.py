@@ -7,9 +7,12 @@ everything and ``bob`` gets only what a test grants him.
 
 from __future__ import annotations
 
+import json
+import os
 import time
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -39,15 +42,22 @@ HOUR = 3600
 
 
 def _member(
-    sid: str, title: str, *, running: bool = False, summary: str | None = None
+    sid: str,
+    title: str,
+    *,
+    running: bool = False,
+    summary: str | None = None,
+    last_activity_at: int | None = None,
+    status: str | None = None,
 ) -> dict[str, Any]:
     return {
         "session_id": sid,
         "title": title,
         "role": "project_lead" if title.startswith("PL · ") else "lead",
-        "status": "running" if running else "idle",
+        "status": status or ("running" if running else "idle"),
         "running": running,
         "summary": summary,
+        "last_activity_at": last_activity_at,
         "url": f"/sessions/{sid}",
     }
 
@@ -201,6 +211,7 @@ def test_waiting_puts_the_viewers_first_then_urgent_then_the_longest_wait() -> N
         "waiting_total": 7,
         "working": 0,
         "queued": 0,
+        "cant_start": 0,
     }
     assert summary["headline"].endswith("6 things wait on you.")
 
@@ -275,6 +286,82 @@ def test_proposal_decisions_read_as_what_to_do() -> None:
     }
 
 
+def test_server_decisions_say_what_to_do_by_their_source() -> None:
+    def server(number: int, source: str, question: str, **extra: Any) -> dict[str, Any]:
+        return _decision(
+            number,
+            NOW - HOUR,
+            source=source,
+            question=question,
+            asked_by_session_id=None,
+            asked_by_title=None,
+            asked_by_role=None,
+            **extra,
+        )
+
+    body = _snapshot(
+        decisions=[
+            server(
+                3,
+                "relaunch_failed",
+                '"PL · cache-warm" relaunch failed 3× (runner_unavailable)',
+                project_slug="cache-warm",
+            ),
+            server(4, "relaunch_failed", '"Lead B · Sentinel" relaunch failed 2× (x)'),
+            server(
+                31,
+                "loop",
+                "T-4 route · implement exhausted 3/3 ($11.80 of $15)",
+                project_slug="db-version",
+            ),
+            server(32, "loop", "Project db-version spent $9.10 of $10 (91 %). Pause or raise?"),
+            server(34, "access_request", "ops@caffeine.ai asks for operator access"),
+            server(
+                36,
+                "done_check",
+                "Every task of docs is closed. Mark it done?",
+                project_slug="docs",
+            ),
+            server(
+                37, "pr_closed", "PR caffeinelabs/app#9640 (T-2) was closed without merge by @x."
+            ),
+            server(38, "blocked_approval", '"PL · billing" is waiting on a human approval'),
+            server(39, "storm", '"PL · billing" hit the message rate limit (30/h)'),
+            # A proposal by a lead with a slot title reads by the lead's name.
+            _decision(
+                35,
+                NOW - HOUR,
+                source="proposal",
+                question="C-15 · rules: role=project_lead (class B, owners)",
+                asked_by_session_id="sentinel",
+                asked_by_title="Lead B · Sentinel",
+            ),
+            _decision(
+                40,
+                NOW - HOUR,
+                source="proposal",
+                question="Lead B · Sentinel proposes C-16 (rules): PLs ask before a 2nd preview",
+            ),
+        ]
+    )
+
+    texts = {i["ref"]: i["text"] for i in _build(body)["waiting"]}
+
+    assert texts == {
+        "D-3": "decide what to do: the cache-warm lead couldn't restart",
+        "D-4": "decide what to do: Sentinel couldn't restart",
+        "D-31": "decide on T-4 (budget or retries ran out)",
+        "D-32": "decide whether to pause or raise a budget",
+        "D-34": "approve or refuse an access request",
+        "D-35": "approve Sentinel's proposal",
+        "D-36": "confirm docs is done",
+        "D-37": "decide what to do now that PR #9640 was closed without merging",
+        "D-38": "check the approval the billing lead is waiting on",
+        "D-39": "decide whether to pause the billing lead (it sent too many messages)",
+        "D-40": "approve Sentinel's proposal",
+    }
+
+
 # ── Working, next and idle ─────────────────────────────────────
 
 
@@ -322,9 +409,20 @@ def test_a_busy_factory_lists_its_work_and_whats_next() -> None:
             _pr("p1", 9630, "api-version", ready=True, ready_since=NOW - HOUR),
             _pr("p2", 9774, "validate-build-tier", state="merged"),
         ],
-        members=[_member(ROOT, "Atlas", summary="Next: split the settings work into two PRs")],
+        members=[
+            _member(
+                ROOT,
+                "Atlas",
+                summary="Next: split the settings work into two PRs",
+                last_activity_at=NOW - 20 * 60,
+            )
+        ],
         totals={"usd_per_h": 6.1},
     )
+    body["factory"]["next_beats"] = [
+        {"session_id": "pl-api", "title": "PL · api-version", "at": NOW + 5 * 60},
+        {"session_id": ROOT, "title": "Atlas", "at": NOW + 25 * 60},
+    ]
 
     summary = _build(body)
 
@@ -350,6 +448,13 @@ def test_a_busy_factory_lists_its_work_and_whats_next() -> None:
     assert summary["lead"] == {
         "who": "Atlas",
         "text": "Next: split the settings work into two PRs",
+        "since": NOW - 20 * 60,
+        "session_id": ROOT,
+        "href": f"/factory/{FID}/agents/{ROOT}",
+    }
+    assert summary["check_in"] == {
+        "who": "Atlas",
+        "at": NOW + 25 * 60,
         "session_id": ROOT,
         "href": f"/factory/{FID}/agents/{ROOT}",
     }
@@ -417,13 +522,133 @@ def test_a_factory_with_only_queued_projects_is_starting_not_idle() -> None:
     ]
 
 
-def test_a_merged_project_whose_lead_is_quiet_is_finished() -> None:
+def test_a_merged_project_whose_lead_is_between_turns_still_counts() -> None:
+    # The lead kicked off a preview deploy 10 minutes ago and checks on it at its next beat.
+    pl = _member("pl-vbt", "PL · validate-build-tier", last_activity_at=NOW - 10 * 60)
+    body = _snapshot(
+        projects=[_project("validate-build-tier", "merged", NOW - 2 * HOUR, pl=pl)],
+        totals={"usd_per_h": 2.71},
+    )
+
+    summary = _build(body)
+
+    assert summary["state"] == "working" and summary["spend"]["idle"] is False
+    assert [(w["project"], w["running"]) for w in summary["working"]] == [
+        ("validate-build-tier", False)
+    ]
+    assert summary["headline"] == "Working on 1 project. Nothing waits on you."
+
+
+def test_a_merged_project_whose_lead_went_quiet_is_finished() -> None:
+    # The lead validated for an hour after the merge, then went quiet 40 minutes ago.
+    quiet = _member("pl-vbt", "PL · validate-build-tier", last_activity_at=NOW - 40 * 60)
+    # A lead whose machine died counts as quiet even if it was active a moment ago.
+    dead = _member("pl-old", "PL · old-work", last_activity_at=NOW - 60, status="failed")
+    body = _snapshot(
+        projects=[
+            _project("validate-build-tier", "merged", NOW - 2 * HOUR, pl=quiet),
+            _project("old-work", "merged", NOW - 5 * HOUR, pl=dead),
+        ]
+    )
+
+    summary = _build(body)
+
+    assert summary["state"] == "idle" and summary["working"] == []
+    # Idle since the dead lead's last turn: the newest sign of work after a merge.
+    assert summary["spend"]["idle_since"] == NOW - 60
+    assert summary["spend"]["idle_spend"] is False
+
+
+def test_a_merged_project_without_lead_activity_is_idle_since_the_merge() -> None:
     body = _snapshot(projects=[_project("api-version", "merged", NOW - HOUR)])
 
     summary = _build(body)
 
     assert summary["state"] == "idle" and summary["spend"]["idle_since"] == NOW - HOUR
-    assert summary["spend"]["idle_spend"] is False
+
+
+def test_a_queued_project_whose_lead_failed_to_start_says_so() -> None:
+    body = _snapshot(
+        projects=[
+            _project(
+                "cache-warm",
+                "queued",
+                NOW - 4 * 60,
+                overlay="failed",
+                overlay_reason="PL sandbox failed",
+            ),
+            _project("badge", "queued", NOW - 9 * 60, provisioning={"stage": "cloning"}),
+        ]
+    )
+
+    summary = _build(body)
+
+    assert [(n["project"], n["reason"], n["problem"]) for n in summary["next"]] == [
+        (
+            "cache-warm",
+            "couldn't start: its lead agent's machine failed to start",
+            "its lead agent's machine failed to start",
+        ),
+        ("badge", "starting up: copying the repository", None),
+    ]
+    assert summary["counts"]["cant_start"] == 1 and summary["counts"]["queued"] == 2
+    assert summary["headline"] == (
+        "Nothing in progress: 1 project can't start, 1 queued. Nothing waits on you."
+    )
+    assert [h["text"] for h in summary["health"]["items"]] == [
+        "cache-warm: its lead agent's machine failed to start"
+    ]
+    lines = plain_lines(summary, now=NOW)
+    assert "Next: cache-warm couldn't start: its lead agent's machine failed to start" in lines
+
+
+def test_queued_projects_in_a_paused_factory_wait_for_the_resume() -> None:
+    body = _snapshot(
+        factory={**_snapshot()["factory"], "state": "paused"},
+        projects=[
+            _project("billing", "queued", NOW - 300, provisioning={"stage": "provisioning"}),
+            # Its lead was paused with the factory: still the factory's pause, not its own.
+            _project("search", "queued", NOW - 120, overlay="paused", paused_by="alice"),
+            _project(
+                "blocked", "queued", NOW - 60, overlay="blocked", overlay_reason="Blocked on D-9"
+            ),
+        ],
+    )
+
+    summary = _build(body)
+
+    assert [(n["project"], n["reason"]) for n in summary["next"]] == [
+        ("blocked", "can't start: blocked until someone answers D-9"),
+        ("billing", "waits until the factory resumes"),
+        ("search", "waits until the factory resumes"),
+    ]
+    assert summary["check_in"] is None
+
+
+def test_a_paused_project_in_a_running_factory_says_who_paused_it() -> None:
+    body = _snapshot(
+        projects=[_project("search", "queued", NOW - 120, overlay="paused", paused_by="alice")]
+    )
+
+    [item] = _build(body)["next"]
+
+    assert (item["reason"], item["problem"]) == ("is paused by alice", "paused by alice")
+
+
+def test_atlas_one_liner_is_left_out_once_it_is_stale() -> None:
+    stale = _snapshot(
+        members=[
+            _member(ROOT, "Atlas", summary="6 projects in flight", last_activity_at=NOW - 7 * HOUR)
+        ]
+    )
+    fresh = _snapshot(
+        members=[
+            _member(ROOT, "Atlas", summary="6 projects in flight", last_activity_at=NOW - HOUR)
+        ]
+    )
+
+    assert _build(stale)["lead"] is None
+    assert _build(fresh)["lead"]["since"] == NOW - HOUR
 
 
 def test_an_empty_factory_is_idle_since_it_started() -> None:
@@ -509,6 +734,7 @@ def test_plain_lines_read_as_a_digest() -> None:
         projects=[_project("api-version", "building", NOW - 90 * 60)],
         totals={"usd_per_h": 2.71},
     )
+    body["factory"]["next_beats"] = [{"session_id": ROOT, "title": "Atlas", "at": NOW + 25 * 60}]
 
     lines = plain_lines(
         _build(body, cost_cells=[_cost("2026-11-02", 5.0)]),
@@ -521,8 +747,61 @@ def test_plain_lines_read_as_a_digest() -> None:
         "Waiting on you: D-19 · approve Atlas's proposal · 2d 18h "
         f"https://omnigent.example/factory/{FID}/decisions?decision=D-19",
         "Working on api-version: building · 1h 30m",
+        "Next: Atlas checks in again in 25m",
         "Spent $5.00 in the last 24 h · $2.71/h now",
     ]
+
+
+# ── The cockpit's fixture ──────────────────────────────────────
+
+WEB_FIXTURES = Path(__file__).resolve().parents[3] / "web/src/components/factory"
+ROUND3_FIXTURE = WEB_FIXTURES / "__fixtures__/snapshot.round3.json"
+NOW_FIXTURE = WEB_FIXTURES / "overview/__fixtures__/nowSummary.round3.json"
+# The cockpit's round-3 viewers (``shellFixtures.ts``): user and level per role.
+ROUND3_VIEWERS = {
+    "creator": ("luka@caffeine.ai", 3),
+    "operator": ("mia@caffeine.ai", 2),
+    "viewer": ("ops@caffeine.ai", 1),
+}
+
+
+def _round3_summaries() -> dict[str, Any]:
+    round3 = json.loads(ROUND3_FIXTURE.read_text(encoding="utf-8"))
+    body = round3["snapshot"]
+    fields = {f for f in FactoryIssue.__dataclass_fields__ if f != "class_"}
+    incidents = [
+        FactoryIssue(
+            factory_id=body["factory"]["id"],
+            class_=issue["class"],
+            **{k: v for k, v in issue.items() if k in fields and k != "factory_id"},
+        )
+        for issue in round3["issues"]
+        if issue["class"] == "incident"
+    ]
+    cases = {}
+    for role, (user_id, level) in ROUND3_VIEWERS.items():
+        inputs = StatusInputs(snapshot=body, user_id=user_id, level=level, incidents=incidents)
+        cases[role] = build_status_summary(inputs, now=body["server_time"])
+    return {"now_s": body["server_time"], "cases": cases}
+
+
+def test_the_cockpits_now_fixture_is_what_the_builder_says_for_round3() -> None:
+    """
+    ``nowSummary.round3.json`` is this builder's output over the round-3 snapshot.
+
+    The cockpit's fixture builder (``nowFixtures.ts``) is checked against it, so
+    the stories show what the server says. Regenerate with
+    ``OMNIGENT_UPDATE_NOW_FIXTURE=1``, then ``npx prettier --write`` the file.
+    """
+    built = _round3_summaries()
+    if os.environ.get("OMNIGENT_UPDATE_NOW_FIXTURE"):
+        NOW_FIXTURE.write_text(json.dumps(built, indent=2, ensure_ascii=False) + "\n")
+    assert json.loads(NOW_FIXTURE.read_text(encoding="utf-8")) == built
+    creator = {i["ref"]: i["text"] for i in built["cases"]["creator"]["waiting"]}
+    assert creator["D-3"] == "decide what to do: the cache-warm lead couldn't restart"
+    assert creator["D-31"] == "decide on T-4 (budget or retries ran out)"
+    assert creator["D-34"] == "approve or refuse an access request"
+    assert creator["D-35"] == "approve Sentinel's proposal"
 
 
 # ── The route ──────────────────────────────────────────────────
@@ -635,6 +914,16 @@ async def test_the_route_reads_incidents_spend_and_the_pause_the_viewer_may_see(
             data={"by": "alice", "note": "Budget review"},
         )
     )
+    # A project's own pause after it does not say why the factory is paused.
+    store.append_event(
+        EventDraft(
+            factory_id=fid,
+            kind="control.pause",
+            summary="carol paused api-version",
+            subject="project:api-version",
+            data={"by": "carol", "note": "Wrong repo"},
+        )
+    )
     deps.permission_store.grant("bob", fid, LEVEL_READ)
 
     alice = (await _get(authed_api, _path(fid))).json()
@@ -646,7 +935,10 @@ async def test_the_route_reads_incidents_spend_and_the_pause_the_viewer_may_see(
     ]
     assert alice["spend"]["today_usd"] == 8.0
     assert alice["state"] == "paused" and alice["headline"].startswith("Paused by alice.")
-    assert alice["health"]["items"][0]["note"] == "Budget review"
+    assert (alice["health"]["items"][0]["by"], alice["health"]["items"][0]["note"]) == (
+        "alice",
+        "Budget review",
+    )
     # bob reads only the root: the PL's incident and its project's spend stay hidden.
     assert [i["text"] for i in bob["waiting"] if i["kind"] == "incident"] == [
         "Supervisor ticks stopped"

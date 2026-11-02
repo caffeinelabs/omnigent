@@ -29,9 +29,11 @@ Sections:
   then the oldest wait.
 - **Working on** (``working``): live projects past the queue, with stage,
   primary PR, time in stage and the PL's own one-liner. A project whose PRs
-  merged still counts while its lead is running (e.g. deploying a preview).
-- **Next** (``next``): queued projects with why they wait, and what Atlas
-  (the root lead) last said it is doing.
+  merged still counts while its lead is running or was active in the last
+  30 minutes (e.g. it deploys a preview, then checks on it at its next beat).
+- **Next** (``next``): queued projects with why they wait (or why they can't
+  start), what Atlas (the root lead) recently said it is doing, and when it
+  checks in again.
 - **Spend** (``spend``): the last 24 h (the ledger is per UTC day, so the
   part of yesterday inside the window is prorated), the current $/h, and
   whether the factory is idle (no live or queued project) and since when.
@@ -72,6 +74,10 @@ WAIT_SEVERITIES: Final = frozenset({"warning", "critical"})
 """Incidents at or above warning wait on people."""
 IDLE_SPEND_MIN_USD_PER_H: Final = 0.01
 """Below this rate an idle factory is not called out as spending."""
+MERGED_ACTIVE_S: Final = 30 * 60
+"""A merged project whose lead was active this recently is still being validated."""
+LEAD_NOTE_MAX_AGE_S: Final = 6 * 3600
+"""Atlas's one-liner is left out once Atlas has been quiet this long (it is stale)."""
 
 _PROPOSES_RE: Final = re.compile(
     r"^(?P<who>.+?) proposes (?P<ref>C-\d+)(?: \([^)]*\))?: (?P<title>.+)$"
@@ -79,9 +85,13 @@ _PROPOSES_RE: Final = re.compile(
 _KEEP_OR_REVERT_RE: Final = re.compile(r"^Keep or revert (?P<ref>C-\d+)\b")
 _BLOCKED_ON_RE: Final = re.compile(r"^Blocked on (?P<ref>D-\d+)")
 _WAITING_ON_RE: Final = re.compile(r"^waiting on (?P<deps>.+)$")
+_QUOTED_TITLE_RE: Final = re.compile(r'^"(?P<title>[^"]+)"')
+_LOOP_SUBJECT_RE: Final = re.compile(r"\b(?P<ref>T-\d+|PR #\d+)")
+_PR_NUMBER_RE: Final = re.compile(r"#(?P<number>\d+)")
 _PL_PREFIX: Final = "PL · "
 _STAGE_RANK: Final = {stage: i for i, stage in enumerate(STAGES)}
 _LIVE_STATUSES: Final = (None, "active")
+_STUCK_OVERLAYS: Final = frozenset({"failed", "blocked", "paused"})
 _PROVISIONING_TEXT: Final = {
     "provisioning": "getting a machine ready",
     "cloning": "copying the repository",
@@ -160,20 +170,41 @@ class WorkingItem(_Model):
 
 
 class NextItem(_Model):
-    """A project that has not started yet, and why."""
+    """
+    A project that has not started yet, and why.
+
+    :param reason: Why it waits, e.g. ``waits for api-version to finish``.
+    :param problem: Set when it can't start (its lead's machine failed, it is
+        blocked or paused): the same words Health uses.
+    """
 
     project: str
     title: str
     reason: str
+    problem: str | None = None
     since: int
     href: str
 
 
 class LeadNote(_Model):
-    """What the root lead (Atlas) last said it is doing."""
+    """
+    What the root lead (Atlas) last said it is doing.
+
+    :param since: When Atlas was last active (the one-liner is at most this fresh).
+    """
 
     who: str
     text: str
+    since: int | None = None
+    session_id: str
+    href: str
+
+
+class CheckIn(_Model):
+    """When the root lead (Atlas) next wakes up on its own (its next heartbeat)."""
+
+    who: str
+    at: int
     session_id: str
     href: str
 
@@ -225,12 +256,17 @@ class HealthBlock(_Model):
 
 
 class SummaryCounts(_Model):
-    """Tallies for badges and the headline."""
+    """
+    Tallies for badges and the headline.
+
+    :param cant_start: Queued projects that can't start (counted in ``queued`` too).
+    """
 
     waiting_for_you: int
     waiting_total: int
     working: int
     queued: int
+    cant_start: int = 0
 
 
 class StatusSummary(_Model):
@@ -251,6 +287,7 @@ class StatusSummary(_Model):
     working: list[WorkingItem]
     next: list[NextItem]
     lead: LeadNote | None = None
+    check_in: CheckIn | None = None
     spend: SpendBlock
     health: HealthBlock
     counts: SummaryCounts
@@ -337,12 +374,16 @@ def _is_live(project: Mapping[str, Any]) -> bool:
 
 
 def _agent_name(title: str | None, role: str | None, project: str | None) -> str | None:
-    """How a sentence names an agent: ``Atlas``, ``the db-version lead``."""
+    """
+    How a sentence names an agent: ``Atlas``, ``the db-version lead``, ``Sentinel``.
+
+    A lead's ``<slot> · <name>`` title (``Lead B · Sentinel``) reads as its name.
+    """
     text = (title or "").strip()
     if role == ROLE_PROJECT_LEAD or text.startswith(_PL_PREFIX):
         slug = text[len(_PL_PREFIX) :].strip() if text.startswith(_PL_PREFIX) else project
         return f"the {slug} lead" if slug else "a project lead"
-    return text or None
+    return text.rpartition(" · ")[2].strip() or None
 
 
 # ── Waiting on people ──────────────────────────────────────────
@@ -358,28 +399,67 @@ def decision_who(assignee: str | None, claimed_by: str | None, user_id: str | No
     return "you" if user_id is not None and target == user_id else _person(target)
 
 
+def _subject_agent(decision: Mapping[str, Any]) -> str:
+    """The agent a server decision is about (its question opens with its quoted title)."""
+    quoted = _QUOTED_TITLE_RE.match(str(decision.get("question") or ""))
+    title = quoted["title"] if quoted else decision.get("asked_by_title")
+    project = decision.get("project_slug")
+    return _agent_name(title, None, project) or (f"the {project} lead" if project else "an agent")
+
+
+def _server_decision_text(decision: Mapping[str, Any]) -> str | None:
+    """What to do about a decision the server opened, by its source."""
+    source = decision.get("source")
+    question = str(decision.get("question") or "")
+    project = decision.get("project_slug")
+    if source == "relaunch_failed":
+        return f"decide what to do: {_subject_agent(decision)} couldn't restart"
+    if source == "blocked_approval":
+        return f"check the approval {_subject_agent(decision)} is waiting on"
+    if source == "storm":
+        return f"decide whether to pause {_subject_agent(decision)} (it sent too many messages)"
+    if source == "access_request":
+        return "approve or refuse an access request"
+    if source == "done_check":
+        return f"confirm {project} is done" if project else "confirm a project is done"
+    if source == "pr_closed":
+        closed = _PR_NUMBER_RE.search(question)
+        pr = f"PR #{closed['number']}" if closed else "a PR"
+        return f"decide what to do now that {pr} was closed without merging"
+    if source == "loop":
+        if question.rstrip().endswith("Pause or raise?"):
+            return "decide whether to pause or raise a budget"
+        subject = _LOOP_SUBJECT_RE.search(question)
+        what = subject["ref"] if subject else project
+        if what:
+            return f"decide on {what} (budget or retries ran out)"
+        return "decide what to do: a budget or retry limit ran out"
+    return None
+
+
 def _decision_text(decision: Mapping[str, Any]) -> tuple[str, str | None]:
     """``(what to do, detail)`` for an open decision."""
     question = str(decision.get("question") or "")
+    asker = _agent_name(
+        decision.get("asked_by_title"), decision.get("asked_by_role"), decision.get("project_slug")
+    )
     if decision.get("source") == "proposal":
         keep = _KEEP_OR_REVERT_RE.match(question)
         if keep:
             return f"keep or revert {keep['ref']}", _clip(question)
         proposes = _PROPOSES_RE.match(question)
         if proposes:
-            return f"approve {proposes['who']}'s proposal", _clip(
-                f"{proposes['ref']}: {proposes['title']}"
-            )
-    asker = _agent_name(
-        decision.get("asked_by_title"), decision.get("asked_by_role"), decision.get("project_slug")
-    )
-    if decision.get("source") == "proposal":
+            who = _agent_name(proposes["who"], None, None) or proposes["who"]
+            return f"approve {who}'s proposal", _clip(f"{proposes['ref']}: {proposes['title']}")
         who = (
             f"{asker}'s proposal"
             if decision.get("asked_by_session_id") and asker
             else "a proposal"
         )
         return f"approve {who}", _clip(question)
+    server = _server_decision_text(decision)
+    if server is not None:
+        return server, _clip(question)
     if decision.get("asked_by_session_id") and asker:
         return f"answer {asker}", _clip(question)
     project = decision.get("project_slug")
@@ -482,6 +562,23 @@ def _project_running(project: Mapping[str, Any]) -> bool:
     return bool(pl.get("running")) or any(m.get("running") for m in project.get("team") or [])
 
 
+def _lead_activity(project: Mapping[str, Any]) -> int | None:
+    """When the project's lead was last active (epoch seconds), if known."""
+    last = (project.get("pl") or {}).get("last_activity_at")
+    return int(last) if isinstance(last, int | float) and last > 0 else None
+
+
+def _lead_active(project: Mapping[str, Any], now: float) -> bool:
+    """Its lead (or a teammate) runs a turn now, or its live lead was active lately."""
+    if _project_running(project):
+        return True
+    pl = project.get("pl") or {}
+    if pl.get("status") == "failed" or pl.get("health") == "dead":
+        return False
+    last = _lead_activity(project)
+    return last is not None and last >= now - MERGED_ACTIVE_S
+
+
 def _problem(project: Mapping[str, Any]) -> str | None:
     """Plain words for a project's blocked, failed or paused overlay."""
     overlay = project.get("overlay")
@@ -518,27 +615,28 @@ def _primary_pr(project: Mapping[str, Any], prs: Mapping[str, Mapping[str, Any]]
     return next((p for p in reversed(own) if p.get("state") == "merged"), None)
 
 
-def is_working(project: Mapping[str, Any]) -> bool:
+def is_working(project: Mapping[str, Any], now: float) -> bool:
     """
     A live project past the queue that is not finished.
 
-    Merged counts while its lead (or a teammate) is still running a turn: the
-    PRs landed but the lead is, say, deploying a preview to validate them.
+    Merged counts while its lead is running a turn or was active in the last
+    :data:`MERGED_ACTIVE_S`: the PRs landed but the lead is, say, deploying a
+    preview and checks on it at its next beat, so it works in bursts.
     """
     if not _is_live(project):
         return False
     stage = project.get("stage")
     if stage in ("queued", "done"):
         return False
-    return stage != "merged" or _project_running(project)
+    return stage != "merged" or _lead_active(project, now)
 
 
-def working_items(body: Mapping[str, Any], links: _Links) -> list[WorkingItem]:
+def working_items(body: Mapping[str, Any], links: _Links, now: float) -> list[WorkingItem]:
     """Projects in progress: problems first, then furthest along, then longest in stage."""
     prs = {p["id"]: p for p in body.get("prs") or []}
     items: list[WorkingItem] = []
     for project in body.get("projects") or []:
-        if not is_working(project):
+        if not is_working(project, now):
             continue
         pr = _primary_pr(project, prs)
         items.append(
@@ -569,9 +667,25 @@ def working_items(body: Mapping[str, Any], links: _Links) -> list[WorkingItem]:
     )
 
 
-def _queued_reason(project: Mapping[str, Any]) -> str:
+def _queued_problem(project: Mapping[str, Any], factory_paused: bool) -> str | None:
+    """Why a queued project can't start: its lead's machine failed, it is blocked or paused."""
+    overlay = project.get("overlay")
+    if overlay not in _STUCK_OVERLAYS or (overlay == "paused" and factory_paused):
+        return None
+    return _problem(project)
+
+
+def _queued_reason(project: Mapping[str, Any], problem: str | None, factory_paused: bool) -> str:
+    """Why a queued project has not started, read after its name."""
+    if problem is not None:
+        if project.get("overlay") == "paused":
+            return f"is {problem}"
+        verb = "couldn't start" if project.get("overlay") == "failed" else "can't start"
+        return f"{verb}: {problem}"
+    if factory_paused:
+        return "waits until the factory resumes"
     waiting = _WAITING_ON_RE.match(str(project.get("overlay_reason") or ""))
-    if project.get("overlay") == "waiting" and waiting:
+    if waiting:
         return f"waits for {waiting['deps']} to finish"
     provisioning = project.get("provisioning") or {}
     step = _PROVISIONING_TEXT.get(str(provisioning.get("stage") or ""))
@@ -583,33 +697,73 @@ def _queued_reason(project: Mapping[str, Any]) -> str:
 
 
 def next_items(body: Mapping[str, Any], links: _Links) -> list[NextItem]:
-    """Queued projects, oldest first, with why each one waits."""
-    items = [
-        NextItem(
-            project=p["slug"],
-            title=p.get("title") or p["slug"],
-            reason=_queued_reason(p),
-            since=int(p.get("stage_since") or 0),
-            href=links.project(p["slug"]),
+    """Queued projects, those that can't start first, then oldest first, with why each waits."""
+    paused = (body.get("factory") or {}).get("state") == "paused"
+    items: list[NextItem] = []
+    for project in body.get("projects") or []:
+        if not _is_live(project) or project.get("stage") != "queued":
+            continue
+        problem = _queued_problem(project, paused)
+        items.append(
+            NextItem(
+                project=project["slug"],
+                title=project.get("title") or project["slug"],
+                reason=_queued_reason(project, problem, paused),
+                problem=problem,
+                since=int(project.get("stage_since") or 0),
+                href=links.project(project["slug"]),
+            )
         )
-        for p in body.get("projects") or []
-        if _is_live(p) and p.get("stage") == "queued"
-    ]
-    return sorted(items, key=lambda i: (i.since, i.project))
+    return sorted(items, key=lambda i: (i.problem is None, i.since, i.project))
 
 
-def lead_note(body: Mapping[str, Any], links: _Links) -> LeadNote | None:
-    """The root lead's own one-liner (its beacon), when it set one and the viewer reads it."""
+def _root_member(body: Mapping[str, Any]) -> Mapping[str, Any] | None:
     root_id = (body.get("factory") or {}).get("root_session_id")
-    root = next((m for m in body.get("members") or [] if m.get("session_id") == root_id), None)
+    return next((m for m in body.get("members") or [] if m.get("session_id") == root_id), None)
+
+
+def lead_note(body: Mapping[str, Any], links: _Links, now: float) -> LeadNote | None:
+    """
+    The root lead's own one-liner (its beacon), when it set one and the viewer reads it.
+
+    Left out once the lead has been quiet for :data:`LEAD_NOTE_MAX_AGE_S`: by
+    then it no longer says what the factory is doing.
+    """
+    root = _root_member(body)
     text = _clip((root or {}).get("summary"))
     if root is None or text is None:
         return None
+    last = root.get("last_activity_at")
+    since = int(last) if isinstance(last, int | float) and last > 0 else None
+    if since is not None and now - since > LEAD_NOTE_MAX_AGE_S:
+        return None
     return LeadNote(
-        who=root.get("title") or "The lead",
+        who=_agent_name(root.get("title"), None, None) or "The lead",
         text=text,
+        since=since,
         session_id=root["session_id"],
         href=links.agent(root["session_id"]),
+    )
+
+
+def check_in(body: Mapping[str, Any], links: _Links) -> CheckIn | None:
+    """When the root lead next wakes up on its own; ``None`` while paused or done."""
+    factory = body.get("factory") or {}
+    if factory.get("state") in ("paused", "done"):
+        return None
+    root_id = factory.get("root_session_id")
+    beat = next(
+        (b for b in factory.get("next_beats") or [] if b.get("session_id") == root_id), None
+    )
+    if beat is None or not beat.get("at"):
+        return None
+    root = _root_member(body) or {}
+    title = root.get("title") or beat.get("title")
+    return CheckIn(
+        who=_agent_name(title, None, None) or "The lead",
+        at=int(beat["at"]),
+        session_id=str(root_id),
+        href=links.agent(str(root_id)),
     )
 
 
@@ -641,7 +795,11 @@ def spend_block(
                 continue
             if project.get("closed_at"):
                 ends.append(int(project["closed_at"]))
-            elif project.get("stage") in ("merged", "done"):
+            elif project.get("stage") == "merged":
+                # Its lead may have validated it for a while after the merge.
+                merged_at = int(project.get("stage_since") or 0)
+                ends.append(max(merged_at, _lead_activity(project) or 0))
+            elif project.get("stage") == "done":
                 ends.append(int(project.get("stage_since") or 0))
         idle_since = max(ends) or None
     return SpendBlock(
@@ -731,6 +889,10 @@ def headline(state: str, counts: SummaryCounts, health: HealthBlock, idle_spend:
         lead = "Finished."
     elif state == "idle":
         lead = "Idle: no active projects" + (", yet still spending." if idle_spend else ".")
+    elif counts.working == 0 and counts.cant_start:
+        stuck = f"{_plural(counts.cant_start, 'project')} can't start"
+        others = counts.queued - counts.cant_start
+        lead = f"Nothing in progress: {stuck}" + (f", {others} queued." if others else ".")
     elif counts.working == 0:
         lead = f"Nothing in progress yet; {_plural(counts.queued, 'project')} queued."
     else:
@@ -753,7 +915,7 @@ def build_status_summary(inputs: StatusInputs, *, now: float) -> dict[str, Any]:
     factory = body.get("factory") or {}
     links = _Links(str(factory.get("id") or ""))
     waiting = waiting_items(inputs, links)
-    working = working_items(body, links)
+    working = working_items(body, links, now)
     upcoming = next_items(body, links)
     idle = not working and not upcoming
     spend = spend_block(body, inputs.cost_cells, idle=idle, now=now, links=links)
@@ -769,6 +931,7 @@ def build_status_summary(inputs: StatusInputs, *, now: float) -> dict[str, Any]:
         waiting_total=len(waiting),
         working=len(working),
         queued=len(upcoming),
+        cant_start=sum(1 for item in upcoming if item.problem is not None),
     )
     summary = StatusSummary(
         factory_id=str(factory.get("id") or ""),
@@ -779,7 +942,8 @@ def build_status_summary(inputs: StatusInputs, *, now: float) -> dict[str, Any]:
         waiting=waiting,
         working=working,
         next=upcoming,
-        lead=lead_note(body, links),
+        lead=lead_note(body, links, now),
+        check_in=check_in(body, links),
         spend=spend,
         health=health,
         counts=counts,
@@ -807,6 +971,13 @@ def plain_lines(summary: Mapping[str, Any], *, now: float, base_url: str = "") -
             return f" · {hours}h {minutes}m" if minutes else f" · {hours}h"
         return f" · {minutes}m" if minutes else " · <1m"
 
+    def until(at: int) -> str:
+        s = max(0, at - int(now))
+        hours, minutes = s // 3600, s % 3600 // 60
+        if hours:
+            return f"in {hours}h {minutes}m" if minutes else f"in {hours}h"
+        return f"in {minutes}m" if minutes else "any moment"
+
     lines = [str(summary["headline"])]
     for item in summary["waiting"]:
         who = "you" if item["for_you"] else item["who"]
@@ -822,6 +993,9 @@ def plain_lines(summary: Mapping[str, Any], *, now: float, base_url: str = "") -
         )
     for item in summary["next"]:
         lines.append(f"Next: {item['project']} {item['reason']}")
+    beat = summary.get("check_in")
+    if beat:
+        lines.append(f"Next: {beat['who']} checks in again {until(int(beat['at']))}")
     spend = summary["spend"]
     if spend.get("last_24h_usd") is not None:
         rate = spend.get("usd_per_h")
@@ -879,13 +1053,15 @@ def load_inputs(
     ]
     pause = None
     if (body.get("factory") or {}).get("state") == "paused":
+        # Factory-wide controls only: a project's pauses would crowd out the newest one.
         controls = store.find_events(
             root_id,
             ["control.pause", "control.resume"],
             int((now - CONTROL_LOOKBACK_S) * 1000),
+            subject="factory",
             limit=2000,
         )
-        pause = next((e for e in reversed(controls) if e.subject == "factory"), None)
+        pause = controls[-1] if controls else None
     level = LEVEL_OWNER if deps.permission_store is None else viewer_level(deps, root_id, user_id)
     return StatusInputs(
         snapshot=body,
@@ -934,6 +1110,7 @@ async def status_summary_for(
 
 
 __all__ = [
+    "CheckIn",
     "HealthBlock",
     "HealthItem",
     "LeadNote",

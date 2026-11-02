@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,9 +8,11 @@ import { LIVE_RUN_FACTORY_ID } from "../__fixtures__/liveRun";
 import { ROUND3_NOW_S } from "../shell/__fixtures__/shellFixtures";
 import {
   busyNow,
+  cantStartNow,
   idleNow,
   pausedNow,
   startingNow,
+  validatingNow,
   waitingOnYouNow,
 } from "./__fixtures__/nowScenarios";
 import { clockText } from "./nowCardModel";
@@ -28,11 +30,14 @@ afterEach(() => {
 
 function wrap(children: ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  return render(
-    <QueryClientProvider client={client}>
-      <MemoryRouter>{children}</MemoryRouter>
-    </QueryClientProvider>,
-  );
+  return {
+    client,
+    ...render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>{children}</MemoryRouter>
+      </QueryClientProvider>,
+    ),
+  };
 }
 
 function renderView(summary: StatusSummary) {
@@ -58,7 +63,7 @@ describe("NowCardView", () => {
     expect(lines.map((a) => a.textContent)).toEqual([
       expect.stringContaining("D-35 · approve Sentinel's proposal"),
       expect.stringContaining("D-33 · approve Atlas's proposal"),
-      expect.stringContaining("D-3 · answer a question about cache-warm"),
+      expect.stringContaining("D-3 · decide what to do: the cache-warm lead couldn't restart"),
       "+5 more waiting on you",
       "1 thing waiting on others",
     ]);
@@ -90,7 +95,11 @@ describe("NowCardView", () => {
       "settings-row waits for api-version, db-version to finish",
     );
     expect(screen.getByTestId("now-lead")).toHaveTextContent(
-      "Atlas: “6 projects in flight · C-4 waiting for operators · !9630 ready for you”",
+      "Atlas, 4m ago: “6 projects in flight · C-4 waiting for operators · !9630 ready for you”",
+    );
+    const checkIn = busyNow().check_in!;
+    expect(screen.getByTestId("now-check-in")).toHaveTextContent(
+      `Atlas checks in again at ${clockText(checkIn.at, ROUND3_NOW_S)}`,
     );
     expect(screen.getByTestId("now-spend")).toHaveTextContent(
       "$41.20 in the last 24 h · $6.10/h now",
@@ -117,8 +126,9 @@ describe("NowCardView", () => {
     expect(screen.getByTestId("now-waiting-empty")).toHaveTextContent("Nothing waiting on you");
     expect(screen.getByTestId("now-working-empty")).toHaveTextContent("No active projects");
     expect(screen.getByTestId("now-spend")).toHaveTextContent(
-      "Idle, but still spending $2.71/h · $65.04 in the last 24 h · $2.71/h now",
+      "Idle, but still spending $2.71/h · $65.04 in the last 24 h",
     );
+    expect(screen.getByTestId("now-spend")).not.toHaveTextContent("/h now");
     expect(screen.getByTestId("now-health-ok")).toHaveTextContent("Nothing is blocked or failing");
   });
 
@@ -157,6 +167,66 @@ describe("NowCardView", () => {
     expect(screen.getByTestId("now-health-paused")).toHaveTextContent(
       "alice paused the factory — “Budget review at 14:00, back after”",
     );
+    expect(screen.getByTestId("now-next-settings-row")).toHaveTextContent(
+      "settings-row waits until the factory resumes",
+    );
+    // A paused factory does not check in on its own.
+    expect(screen.queryByTestId("now-check-in")).toBeNull();
+  });
+
+  it("says which queued project can't start and why, in Next and Health", () => {
+    renderView(cantStartNow());
+
+    expect(screen.getByTestId("now-headline")).toHaveTextContent(
+      "Nothing in progress · 1 project can't start · 2 queued",
+    );
+    const next = within(screen.getByTestId("now-next"));
+    expect(next.getAllByRole("link").map((a) => a.getAttribute("data-testid"))).toEqual([
+      "now-next-cache-warm",
+      "now-next-audit-log",
+      "now-next-quota-alerts",
+      "now-lead",
+      "now-check-in",
+    ]);
+    expect(screen.getByTestId("now-next-cache-warm")).toHaveTextContent(
+      "cache-warm couldn't start: its lead agent's machine failed to start",
+    );
+    expect(screen.getByTestId("now-next-audit-log")).toHaveTextContent(
+      "audit-log starting up: copying the repository",
+    );
+    // Its failure folds into Health's one line, as for projects under Working on.
+    expect(screen.getByTestId("now-health-attention")).toHaveTextContent(
+      "1 project needs attention: cache-warm",
+    );
+  });
+
+  it("keeps a merged project under Working on while its lead validates it", () => {
+    renderView(validatingNow());
+
+    expect(screen.getByTestId("now-headline")).toHaveTextContent("Working on 1 project");
+    expect(screen.getByTestId("now-working-validate-build-tier")).toHaveTextContent(
+      "validate-build-tier · Merged · PR #9774 — Preview deploying for #9774; checking it at the next beat",
+    );
+  });
+
+  it("keeps the last good read, dimmed with its time, when a refresh fails", () => {
+    const onRetry = vi.fn();
+    const at = ROUND3_NOW_S - 5 * 60;
+    wrap(
+      <NowCardView
+        factoryId={FID}
+        summary={busyNow()}
+        nowS={ROUND3_NOW_S}
+        stale={{ updatedAtS: at, onRetry }}
+      />,
+    );
+
+    expect(screen.getByTestId("factory-now")).toHaveAttribute("data-stale", "true");
+    const stale = screen.getByTestId("now-stale");
+    expect(stale).toHaveTextContent(`Showing ${clockText(at, ROUND3_NOW_S)} — couldn’t refresh`);
+    fireEvent.click(within(stale).getByRole("button", { name: "Retry" }));
+    expect(onRetry).toHaveBeenCalledOnce();
+    expect(screen.getByTestId("now-waiting")).toBeInTheDocument();
   });
 
   it("gives every queued project a reason", () => {
@@ -174,7 +244,8 @@ describe("NowCardView", () => {
       expect.stringContaining("search-index starting up: copying the repository"),
       expect.stringContaining("audit-log starting up: starting its lead agent"),
       expect.stringContaining("quota-alerts starting up: briefing its lead agent"),
-      expect.stringContaining("Atlas:"),
+      expect.stringContaining("Atlas, 4m ago:"),
+      expect.stringContaining("Atlas checks in again at"),
     ]);
   });
 });
@@ -197,6 +268,20 @@ describe("NowCard", () => {
 
     await vi.waitFor(() => expect(screen.queryByTestId("factory-now-loading")).toBeNull());
     expect(container).toBeEmptyDOMElement();
+  });
+
+  it("marks the card stale when a refresh fails after a good read", async () => {
+    fetchMock.mockResolvedValue(json(busyNow()));
+    const { client } = wrap(<NowCard factoryId={FID} nowS={ROUND3_NOW_S} />);
+    expect(await screen.findByTestId("factory-now")).not.toHaveAttribute("data-stale");
+
+    fetchMock.mockResolvedValue(json({ error: { message: "unavailable" } }, 503));
+    await act(async () => {
+      await client.refetchQueries();
+    });
+
+    expect(await screen.findByTestId("now-stale")).toHaveTextContent("couldn’t refresh");
+    expect(screen.getByTestId("factory-now")).toHaveAttribute("data-stale", "true");
   });
 
   it("offers a retry when the read fails", async () => {

@@ -5,7 +5,9 @@
 
 import type { FactoryStage } from "@/lib/factoryApi";
 import type {
+  StatusCheckIn,
   StatusHealthItem,
+  StatusLeadNote,
   StatusSpend,
   StatusSummary,
   StatusWaitingItem,
@@ -46,6 +48,11 @@ export function nowHeadline(summary: StatusSummary, nowS: number): string {
       return idleText(summary.spend, nowS);
     case "working": {
       const { queued, working } = summary.counts;
+      const stuck = summary.counts.cant_start ?? 0;
+      if (working === 0 && stuck > 0) {
+        const text = `Nothing in progress · ${plural(stuck, "project")} can't start`;
+        return queued > stuck ? `${text} · ${queued - stuck} queued` : text;
+      }
       if (working === 0) return `Nothing in progress yet · ${plural(queued, "project")} queued`;
       const text = `Working on ${plural(working, "project")}`;
       return queued > 0 ? `${text} · ${queued} queued` : text;
@@ -110,14 +117,17 @@ export function workingNote(item: StatusWorkingItem): string | null {
   return item.problem ?? item.doing ?? null;
 }
 
-/** `$48.00 in the last 24 h · $2.71/h now`. */
+/**
+ * `$48.00 in the last 24 h · $2.71/h now`; the rate is left out when the idle
+ * call-out already says it (`idleSpendText`).
+ */
 export function spendText(spend: StatusSpend): string {
   const day =
     spend.last_24h_usd != null
       ? `${formatUsd(spend.last_24h_usd)} in the last 24 h`
-      : "No priced spend in the last 24 h";
+      : "No spend recorded in the last 24 h";
   const rate = formatUsd(spend.usd_per_h);
-  return rate ? `${day} · ${rate}/h now` : day;
+  return rate && !idleSpendText(spend) ? `${day} · ${rate}/h now` : day;
 }
 
 /** `Idle, but still spending $2.71/h`, or null when idle costs nothing. */
@@ -133,12 +143,15 @@ export interface HealthSplit {
   listed: StatusHealthItem[];
 }
 
-/** Health items, with the problems of `working` projects set apart (they fold into one line). */
+/**
+ * Health items, with the problems of projects the card lists (under Working on
+ * or Next) set apart: they fold into one line.
+ */
 export function splitHealth(
   items: StatusHealthItem[],
-  working: readonly StatusWorkingItem[],
+  listed: readonly { project: string }[],
 ): HealthSplit {
-  const shown = new Set(working.map((item) => item.project));
+  const shown = new Set(listed.map((item) => item.project));
   const folds = (item: StatusHealthItem) => item.project != null && shown.has(item.project);
   return { attention: items.filter(folds), listed: items.filter((item) => !folds(item)) };
 }
@@ -148,4 +161,22 @@ export function attentionText(items: readonly StatusHealthItem[]): string {
   const names = items.map((item) => item.project).filter(Boolean);
   const verb = names.length === 1 ? "needs" : "need";
   return `${plural(names.length, "project")} ${verb} attention: ${names.join(", ")}`;
+}
+
+/** `Atlas, 4m ago`: who said the lead's one-liner, and how fresh it is. */
+export function leadWho(lead: StatusLeadNote, nowS: number): string {
+  const age = lead.since ? formatElapsed(nowS - lead.since) : null;
+  return age ? `${lead.who}, ${age} ago` : lead.who;
+}
+
+/** `Atlas checks in again at 14:31`, or that the check-in is due. */
+export function checkInText(checkIn: StatusCheckIn, nowS: number): string {
+  return checkIn.at > nowS
+    ? `${checkIn.who} checks in again at ${clockText(checkIn.at, nowS)}`
+    : `${checkIn.who} is due to check in`;
+}
+
+/** `Showing 14:02 — couldn't refresh`: a card that keeps its last good read. */
+export function staleText(updatedAtS: number, nowS: number): string {
+  return `Showing ${clockText(updatedAtS, nowS)} — couldn’t refresh`;
 }

@@ -1,19 +1,20 @@
-// The Now card's read. It sits under the snapshot's key, so it refreshes on the
-// Overview's cadence: every `factory_changed` frame, at least once a minute,
-// and every 15 s while the push socket is down.
+// The Now card's read. Its own key (`factoryNowQueryKey`) is made stale by a
+// `factory_changed` frame that changes more than who is running (the light
+// "now" and "presence" ticks, every few seconds, would re-read the incidents,
+// the ledger and the pause for nothing); it also refreshes at least once a
+// minute, and every 15 s while the push socket is down.
 
 import { keepPreviousData, useQuery } from "@tanstack/react-query";
 import { useSessionUpdatesConnected } from "@/hooks/useSessionUpdatesConnected";
 import {
   COCKPIT_MIN_REFRESH_MS,
   FACTORY_FALLBACK_POLL_MS,
-  factoryQueryKey,
+  factoryNowQueryKey,
 } from "@/hooks/useFactory";
 import { type StatusSummary, fetchFactoryStatusSummary } from "@/lib/factoryStatusApi";
 import { ApiError } from "@/lib/sessionsApi";
 
-export const statusSummaryKey = (factoryId: string) =>
-  [...factoryQueryKey(factoryId), "status-summary"] as const;
+export const statusSummaryKey = factoryNowQueryKey;
 
 function retryTransient(failureCount: number, error: unknown): boolean {
   if (error instanceof ApiError && error.status >= 400 && error.status < 500) return false;

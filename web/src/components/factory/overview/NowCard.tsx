@@ -14,6 +14,7 @@ import {
   CircleHelpIcon,
   CirclePauseIcon,
   CircleXIcon,
+  ClockIcon,
   CoinsIcon,
   HourglassIcon,
   MessageSquareTextIcon,
@@ -23,6 +24,7 @@ import {
 import { Button } from "@/components/ui/button";
 import type {
   StatusHealthItem,
+  StatusNextItem,
   StatusSummary,
   StatusWaitingItem,
   StatusWorkingItem,
@@ -37,11 +39,14 @@ import {
   WAITING_SHOWN,
   WORKING_SHOWN,
   attentionText,
+  checkInText,
   idleSpendText,
+  leadWho,
   nowHeadline,
   spendText,
   splitHealth,
   splitWaiting,
+  staleText,
   waitedFor,
   waitedLong,
   waitingEmptyText,
@@ -239,6 +244,30 @@ function WorkingLine({ item, nowS }: { item: StatusWorkingItem; nowS: number }) 
   );
 }
 
+function NextLine({ item, nowS }: { item: StatusNextItem; nowS: number }) {
+  return (
+    <Line
+      href={item.href}
+      icon={
+        item.problem ? (
+          <TriangleAlertIcon aria-hidden className={cn(ICON, "text-warning")} />
+        ) : (
+          <HourglassIcon aria-hidden className={cn(ICON, "text-muted-foreground")} />
+        )
+      }
+      meta={waitedFor(item.since, nowS)}
+      testId={`now-next-${item.project}`}
+      title={`${item.title}: ${item.reason}`}
+    >
+      <span className="font-medium">{item.project}</span>
+      <span className={item.problem ? "text-warning" : "text-muted-foreground"}>
+        {" "}
+        {item.reason}
+      </span>
+    </Line>
+  );
+}
+
 function healthIcon(item: StatusHealthItem): ReactNode {
   switch (item.kind) {
     case "paused":
@@ -272,38 +301,71 @@ function HealthLine({ item }: { item: StatusHealthItem }) {
   );
 }
 
+/** A refresh failed: the card keeps its last good read and says how old it is. */
+export interface NowStale {
+  /** When the shown read arrived (epoch seconds). */
+  updatedAtS: number;
+  onRetry: () => void;
+}
+
 /** The card for a summary in hand (stories and tests render it directly). */
 export function NowCardView({
   factoryId,
   summary,
   nowS,
+  stale = null,
 }: {
   factoryId: string;
   summary: StatusSummary;
   nowS: number;
+  stale?: NowStale | null;
 }) {
   const split = splitWaiting(summary);
   const needsYou = `${factoryPageHref(factoryId)}#needs-you`;
   const mineShown = split.mine.slice(0, WAITING_SHOWN);
   const working = summary.working.slice(0, WORKING_SHOWN);
   const idleSpend = idleSpendText(summary.spend);
-  // Problems of projects listed under Working on fold into one line here.
-  const health = splitHealth(summary.health.items, working);
+  // Problems of projects listed under Working on or Next fold into one line here.
+  const health = splitHealth(summary.health.items, [...working, ...summary.next]);
+  const quietNext = summary.next.length === 0 && !summary.lead && !summary.check_in;
   return (
     <section
       id="now"
       aria-label="Now"
       data-testid="factory-now"
       data-state={summary.state}
+      data-stale={stale ? "true" : undefined}
       className="@container flex min-w-0 scroll-mt-24 flex-col gap-3 rounded-xl border border-border bg-card p-4 max-md:p-3"
     >
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-3 gap-y-1">
         <h2 className="text-ui font-semibold">Now</h2>
-        <p data-testid="now-headline" className="min-w-0 text-sm">
+        <p data-testid="now-headline" className={cn("min-w-0 text-sm", stale && "opacity-60")}>
           {nowHeadline(summary, nowS)}
         </p>
       </div>
-      <div className="grid min-w-0 grid-cols-1 gap-x-8 gap-y-3 @2xl:grid-cols-2">
+      {stale && (
+        <div
+          data-testid="now-stale"
+          className="-mt-1 flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm text-warning"
+        >
+          <TriangleAlertIcon aria-hidden className={cn(ICON, "shrink-0")} />
+          <span className="min-w-0">{staleText(stale.updatedAtS, nowS)}</span>
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={stale.onRetry}
+            componentId="factory.overview.now_stale_retry"
+          >
+            Retry
+          </Button>
+        </div>
+      )}
+      <div
+        className={cn(
+          "grid min-w-0 grid-cols-1 gap-x-8 gap-y-3 @2xl:grid-cols-2",
+          stale && "opacity-60",
+        )}
+      >
         <Section
           title="Waiting on you"
           testId="now-waiting"
@@ -371,7 +433,7 @@ export function NowCardView({
         </Section>
 
         <Section title="Next" testId="now-next">
-          {summary.next.length === 0 && !summary.lead ? (
+          {quietNext ? (
             <Quiet
               testId="now-next-empty"
               icon={<CircleDotIcon aria-hidden className={cn(ICON, "text-muted-foreground")} />}
@@ -381,17 +443,7 @@ export function NowCardView({
           ) : (
             <ul className="flex flex-col">
               {summary.next.map((item) => (
-                <Line
-                  key={item.project}
-                  href={item.href}
-                  icon={<HourglassIcon aria-hidden className={cn(ICON, "text-muted-foreground")} />}
-                  meta={waitedFor(item.since, nowS)}
-                  testId={`now-next-${item.project}`}
-                  title={`${item.title}: ${item.reason}`}
-                >
-                  <span className="font-medium">{item.project}</span>
-                  <span className="text-muted-foreground"> {item.reason}</span>
-                </Line>
+                <NextLine key={item.project} item={item} nowS={nowS} />
               ))}
               {summary.lead && (
                 <Line
@@ -403,10 +455,22 @@ export function NowCardView({
                     />
                   }
                   testId="now-lead"
-                  title={`${summary.lead.who}: ${summary.lead.text}`}
+                  title={`${leadWho(summary.lead, nowS)}: ${summary.lead.text}`}
                 >
-                  <span className="font-medium">{summary.lead.who}:</span>
+                  <span className="font-medium">{leadWho(summary.lead, nowS)}:</span>
                   <span className="text-muted-foreground"> “{summary.lead.text}”</span>
+                </Line>
+              )}
+              {summary.check_in && (
+                <Line
+                  href={summary.check_in.href}
+                  icon={<ClockIcon aria-hidden className={cn(ICON, "text-muted-foreground")} />}
+                  testId="now-check-in"
+                  title={checkInText(summary.check_in, nowS)}
+                >
+                  <span className="text-muted-foreground">
+                    {checkInText(summary.check_in, nowS)}
+                  </span>
                 </Line>
               )}
             </ul>
@@ -474,10 +538,22 @@ export function NowCardView({
   );
 }
 
-/** The Now card over its read: a short placeholder while loading, nothing on an older server. */
+/**
+ * The Now card over its read: a short placeholder while loading, nothing on an
+ * older server, and the last good read (dimmed, with its time) when a refresh fails.
+ */
 export function NowCard({ factoryId, nowS }: { factoryId: string; nowS: number }) {
   const query = useFactoryStatusSummary(factoryId);
-  if (query.data) return <NowCardView factoryId={factoryId} summary={query.data} nowS={nowS} />;
+  if (query.data) {
+    const stale =
+      query.isError && query.dataUpdatedAt > 0
+        ? {
+            updatedAtS: Math.floor(query.dataUpdatedAt / 1000),
+            onRetry: () => void query.refetch(),
+          }
+        : null;
+    return <NowCardView factoryId={factoryId} summary={query.data} nowS={nowS} stale={stale} />;
+  }
   if (query.error) {
     // A server without the route: the panels below say it all.
     if (isMissingRoute(query.error)) return null;
