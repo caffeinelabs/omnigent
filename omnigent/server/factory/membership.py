@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING, Any
 from omnigent.db.db_models import InvalidUuidError, uuid_to_bytes
 from omnigent.factory import (
     DEFAULT_HEARTBEAT_S,
+    LABEL_HANDLE,
     LABEL_HEALTH,
     LABEL_HEARTBEAT_S,
     LABEL_ID,
@@ -70,6 +71,7 @@ class Membership:
     :param is_top_level: ``True`` for sessions without a parent conversation.
     :param root_session_id: The spawn-tree root (self for top-level).
     :param title: Session title.
+    :param handle: Its stable short handle once the server assigned one, e.g. ``"dot"``.
     """
 
     session_id: str
@@ -85,6 +87,7 @@ class Membership:
     is_top_level: bool
     root_session_id: str
     title: str | None
+    handle: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """:returns: The JSON body of ``GET /v1/factory/membership``."""
@@ -310,6 +313,7 @@ def membership_of(conv: Conversation, deps: FactoryDeps) -> Membership:
         is_top_level=top,
         root_session_id=root.id,
         title=conv.title,
+        handle=labels.get(LABEL_HANDLE) if factory_id else None,
     )
 
 

@@ -61,9 +61,11 @@ from omnigent.server.factory import (
     activity_now,
     definition,
     detectors,
+    identity,
     loops,
     schemas,
     status,
+    stuck,
     tasks,
 )
 from omnigent.server.factory.activity_now import factory_usd_per_h
@@ -571,6 +573,7 @@ class RawSnapshot:
     :param built_at: ``time.monotonic()`` of the build.
     :param incident_scopes: ``(project, target)`` of each open or acked incident.
     :param notified: Subject -> Slack DM receipts (``NotifiedView`` rows), oldest first.
+    :param handles: Handle -> session id of every member and sub-agent shown.
     """
 
     factory_id: str
@@ -582,6 +585,7 @@ class RawSnapshot:
     built_at: float = 0.0
     incident_scopes: list[tuple[str | None, str]] = field(default_factory=list)
     notified: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    handles: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass
@@ -1191,6 +1195,32 @@ def _virtual_projects(
     return out
 
 
+def _identify(
+    deps: FactoryDeps,
+    factory_id: str,
+    loaded: _Loaded,
+    views: dict[str, dict[str, Any]],
+    now: float,
+) -> dict[str, str]:
+    """
+    Stamp each member view with its handle and stuck fields (synchronous).
+
+    Handles are stored on first sight; every session that ever held one in the
+    factory (closed, archived, or past the shown page) keeps it from being reused.
+
+    :returns: Session id -> handle of the shown members and sub-agents.
+    """
+    shown = [*loaded.members, *(k for kids in loaded.children.values() for k in kids)]
+    sessions = [(c, views[c.id]["role"]) for c in shown if c.id in views]
+    sessions += [(c, c.labels.get(LABEL_ROLE)) for c in loaded.closed_members]
+    handles = identity.ensure_handles(deps.conversation_store, factory_id, sessions)
+    blocked = stuck.stuck_issues(loaded.issues)
+    for sid, view in views.items():
+        view["handle"] = handles.get(sid)
+        view.update(stuck.stuck_fields(blocked.get(norm_id(sid)), now))
+    return {sid: h for sid, h in handles.items() if sid in views}
+
+
 async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
     """
     Build the unfiltered snapshot of the factory rooted at *root*.
@@ -1226,6 +1256,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
     for sid, view in views.items():
         titles[sid] = view["title"]
         roles[sid] = view["role"]
+    handles = await asyncio.to_thread(_identify, deps, factory_id, loaded, views, now)
 
     projects = [
         *loaded.projects,
@@ -1404,6 +1435,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
         built_at=time.monotonic(),
         incident_scopes=[(i.project_slug, i.target) for i in loaded.issues],
         notified=loaded.notified,
+        handles={h: sid for sid, h in handles.items()},
     )
 
 
@@ -1446,11 +1478,12 @@ async def get_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
 
 
 def reset_cache() -> None:
-    """Forget cached snapshots, viewer permissions and costs (tests)."""
+    """Forget cached snapshots, viewer permissions, costs and handles (tests)."""
     _snapshots.clear()
     _cost_cache.clear()
     _locks.clear()
     _viewers.clear()
+    identity.reset_cache()
 
 
 def readable_set(

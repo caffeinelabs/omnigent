@@ -101,6 +101,20 @@ export function agentsPageHref(factoryId: string, params?: Record<string, string
   return withQuery(`${factoryPageHref(factoryId)}/agents`, params);
 }
 
+/** Teams' tabs (`/teams/<tab>`; Teams when omitted). */
+export const TEAMS_TABS = ["teams", "bench", "templates", "agents"] as const;
+export type TeamsTab = (typeof TEAMS_TABS)[number];
+
+/** `/factory/<fid>/teams[/<tab>]` with an optional query (`?q=`, `?state=`, `?peek=agent:<handle>`). */
+export function teamsPageHref(
+  factoryId: string,
+  tab: TeamsTab = "teams",
+  params?: Record<string, string>,
+): string {
+  const path = `${factoryPageHref(factoryId)}/teams${tab === "teams" ? "" : `/${tab}`}`;
+  return withQuery(path, params);
+}
+
 /** The Agent page's tabs. */
 export const AGENT_TABS = [
   "live",
@@ -114,14 +128,18 @@ export const AGENT_TABS = [
 ] as const;
 export type AgentTab = (typeof AGENT_TABS)[number];
 
-/** `/factory/<fid>/agents/<sid>`, on `tab` (Live when omitted), at a moment (`at`, epoch ms). */
+/**
+ * `/factory/<fid>/agents/<sid>`, on `tab` (Live when omitted), at a moment
+ * (`at`, epoch ms). Naming a tab, Live included, opens the classic page's tab
+ * even with the new cockpit.
+ */
 export function agentPageHref(
   factoryId: string,
   sessionId: string,
   options: { tab?: AgentTab; at?: number } = {},
 ): string {
   const params: Record<string, string | number> = {};
-  if (options.tab && options.tab !== "live") params.tab = options.tab;
+  if (options.tab) params.tab = options.tab;
   if (options.at != null) params.at = Math.round(options.at);
   return withQuery(`${agentsPageHref(factoryId)}/${enc(sessionId)}`, params);
 }

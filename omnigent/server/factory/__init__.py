@@ -194,6 +194,10 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
         await stop_room()
         if stop_ops is not None:
             await stop_ops()
+        from omnigent.server.factory.telemetry import states
+
+        # Turn ends still in their quiet spell are written at the moment they arrived.
+        await states.flush(app_state)
         if stop_background is not None:
             await stop_background()
         if stop_supervision is not None:

@@ -125,6 +125,7 @@ def test_top_level_membership_reads_labels(world: FactoryWorld) -> None:
         "is_top_level": True,
         "root_session_id": world.id("pl"),
         "title": "PL · api-version",
+        "handle": None,
     }
 
 

@@ -330,6 +330,11 @@ class MemberView(_View):
 
     :param status: Live activity: ``idle`` / ``running`` / ``waiting`` / ``failed``.
     :param state: Factory state label of a top-level member, else ``None``.
+    :param handle: Its stable short handle in the factory, e.g. ``"dot"``.
+    :param stuck: An open ``agent.quiet`` or ``agent.repeat`` incident targets it.
+    :param stuck_reason: Why, e.g. ``"same failing Bash call 3 times"``.
+    :param stuck_since: When that incident opened (epoch seconds).
+    :param stuck_issue: Its ref, e.g. ``"INC-4"``.
     """
 
     session_id: str
@@ -350,6 +355,11 @@ class MemberView(_View):
     launch_drift: LaunchDriftView | None = None
     url: str
     now: NowState | None = None
+    handle: str | None = None
+    stuck: bool = False
+    stuck_reason: str | None = None
+    stuck_since: int | None = None
+    stuck_issue: str | None = None
 
 
 # ── Factory header and health ──────────────────────────────────
@@ -1165,6 +1175,8 @@ class Preflight(_View):
     :param default_base: Its default base branch, e.g. ``"temp-main"``.
     :param max_projects: Projects one factory can run (one PL pod each).
     :param tier2: Whether agents may open code PRs to omnigent (off by default).
+    :param cockpit_v2: Whether people may switch to the new cockpit
+        (``OMNIGENT_FACTORY_COCKPIT_V2``; off by default, then a per-person choice).
     """
 
     github: PreflightGithub
@@ -1175,6 +1187,7 @@ class Preflight(_View):
     default_base: str | None = None
     max_projects: int = 10
     tier2: Tier2Status | None = None
+    cockpit_v2: bool = False
 
 
 # ── Round 3: people, Room, proposals, work graph, loops, issues, telemetry ──

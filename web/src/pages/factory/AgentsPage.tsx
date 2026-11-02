@@ -31,11 +31,12 @@ import type {
 import { isMissingRoute, useFactoryAgents } from "@/components/factory/agents/opsQueries";
 import { ROLE_SHORT } from "@/components/factory/board/TeamStrip";
 import { FactoryLoadError } from "@/components/factory/FactoryLoadError";
-import { timelinePageHref } from "@/components/factory/factoryRoutes";
+import { teamsPageHref, timelinePageHref } from "@/components/factory/factoryRoutes";
+import { useCockpitV2 } from "@/components/factory/shell/cockpitV2";
 import { EmptyState } from "@/components/factory/project/projectParts";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
 import type { FactoryRole } from "@/lib/factoryApi";
-import { useNavigate, useSearchParams } from "@/lib/routing";
+import { Link, useNavigate, useSearchParams } from "@/lib/routing";
 
 function FleetSkeleton() {
   return (
@@ -92,6 +93,7 @@ export function AgentsPage() {
     [setParams],
   );
   const agents = useFactoryAgents(fid);
+  const cockpit = useCockpitV2();
   const fallback = agents.error != null && !agents.data;
   const rows = useMemo(
     () => agents.data?.data ?? (fallback ? rowsFromSnapshot(snapshot) : []),
@@ -170,6 +172,16 @@ export function AgentsPage() {
       : "waiting for the first poll";
   return (
     <div data-testid="factory-agents-page" className="flex min-w-0 flex-col gap-3">
+      {cockpit.available && (
+        <Link
+          to={cockpit.on ? teamsPageHref(fid) : teamsPageHref(fid, "teams", { cockpit: "v2" })}
+          componentId={cockpit.on ? "factory.agents.teams" : "factory.agents.try_teams"}
+          data-testid={cockpit.on ? "back-to-teams" : "try-teams-view"}
+          className="self-end text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+        >
+          {cockpit.on ? "Back to Teams" : "Try the new Teams view"}
+        </Link>
+      )}
       {agents.isLoading && !agents.data ? (
         <FleetSkeleton />
       ) : (

@@ -452,10 +452,12 @@ def _on_dispatch(rec: Recorder, e: FactoryEvent) -> None:
     child = e.to_id
     if not child:
         return
+    from omnigent.server.factory.identity import vendor_model
     from omnigent.server.factory.telemetry import cost
 
     conv = rec.deps.conversation_store.get_conversation(child)
     who = cost.attribution(rec.deps, conv) if conv is not None else None
+    vendor, model = vendor_model(rec.deps, conv) if conv is not None else (None, None)
     data = _data(e)
     rec.span(
         kind="task",
@@ -467,6 +469,8 @@ def _on_dispatch(rec: Recorder, e: FactoryEvent) -> None:
         role=who.role if who is not None else None,
         agent_name=_str(data.get("agent")),
         attrs={"parent_session_id": e.from_id},
+        vendor=vendor,
+        model=model,
     )
 
 

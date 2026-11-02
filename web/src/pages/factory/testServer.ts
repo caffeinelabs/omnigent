@@ -5,7 +5,11 @@
 // paths throw, so a test sees every request the pages make.
 
 import type { Mock } from "vitest";
-import { LIVE_RUN_FACTORY_ID, pendingForever } from "@/components/factory/__fixtures__/liveRun";
+import {
+  LIVE_RUN_FACTORY_ID,
+  pendingForever,
+  preflightOk,
+} from "@/components/factory/__fixtures__/liveRun";
 import { opsRoutes } from "@/components/factory/agents/__fixtures__/opsFixtures";
 import type { StoryRoutes } from "@/components/factory/factoryStoryFixtures";
 import { boardActivityEvents } from "@/components/factory/board/__fixtures__/boardFixtures";
@@ -107,6 +111,7 @@ export function serveFactory(
       return json({ present: 1, heartbeat_s: 20, ttl_s: 60 });
     }
     if (bare === `${SNAPSHOT}/people`) return json(round3People());
+    if (bare === "/v1/factory/preflight" && method === "GET") return json(preflightOk());
     if (bare === `${SNAPSHOT}/chat` && method === "POST") {
       server.posts.push(body);
       const sent = body as { thread: string; body: string; mentions?: string[] };

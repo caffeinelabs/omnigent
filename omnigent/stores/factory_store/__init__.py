@@ -1462,11 +1462,27 @@ class FactoryStore(ABC):
         loop_id: str | None = None,
         trace_key: str | None = None,
         limit: int = 1000,
+        session_id: str | None = None,
+        newest_first: bool = False,
     ) -> builtins.list[FactorySpan]:
         """
         Spans with ``since_ms <= started_at < until_ms``, oldest first.
 
-        Consumers: R3-05 ``GET …/spans`` and PR timelines, R3-12 metrics.
+        Consumers: R3-05 ``GET …/spans`` and PR timelines, R3-12 metrics, one
+        agent's state timeline (``session_id``).
+
+        :param newest_first: The *limit* newest rows, newest first.
+        """
+
+    @abstractmethod
+    def prune_spans(
+        self, older_than_ms: int, kinds: Sequence[str], *, key_prefix: str | None = None
+    ) -> int:
+        """
+        Delete spans of *kinds* that ended (or, still open, began) before *older_than_ms*.
+
+        :param key_prefix: Only spans whose ``dedupe_key`` starts with it, e.g. ``"state:"``.
+        :returns: Rows deleted.
         """
 
     # ── Cost ledger (R3-05) ─────────────────────────────────────
@@ -2904,12 +2920,15 @@ class InMemoryFactoryStore(FactoryStore):
         loop_id: str | None = None,
         trace_key: str | None = None,
         limit: int = 1000,
+        session_id: str | None = None,
+        newest_first: bool = False,
     ) -> builtins.list[FactorySpan]:
         filters = {
             "project_slug": project_slug,
             "pr_id": pr_id,
             "task_id": task_id,
             "loop_id": loop_id,
+            "session_id": session_id,
             "trace_key": trace_key,
         }
         rows = [
@@ -2919,8 +2938,25 @@ class InMemoryFactoryStore(FactoryStore):
             and (since_ms is None or r.started_at >= since_ms)
             and (until_ms is None or r.started_at < until_ms)
         ]
-        rows.sort(key=lambda r: (r.started_at, r.id))
+        rows.sort(key=lambda r: (r.started_at, r.id), reverse=newest_first)
         return [_detach(r) for r in rows[:limit]]
+
+    def prune_spans(
+        self, older_than_ms: int, kinds: Sequence[str], *, key_prefix: str | None = None
+    ) -> int:
+        ws = self._ws()
+        with self._lock:
+            doomed = [
+                key
+                for key, row in self._spans.items()
+                if key[0] == ws
+                and row.kind in kinds
+                and (key_prefix is None or (row.dedupe_key or "").startswith(key_prefix))
+                and (row.ended_at if row.ended_at is not None else row.started_at) < older_than_ms
+            ]
+            for key in doomed:
+                del self._spans[key]
+        return len(doomed)
 
     # ── Cost ledger ─────────────────────────────────────────────
 

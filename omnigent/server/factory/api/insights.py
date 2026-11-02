@@ -8,7 +8,8 @@ are left out of every number):
   findings, open incidents, the latest retro per project, experiments, and
   (owners only) the per-person breakdown;
 - ``GET …/metrics?names=&group_by=&window=…``: any catalog metric, grouped by
-  ``day | project | role | agent | person (owners only) | version | def_version``;
+  ``day | project | role | agent | vendor | model | person (owners only) | version |
+  def_version``;
 - ``GET /v1/factory/insights?window=``: the fleet (every factory the caller reads).
 
 Agents (runner tunnel): ``GET /v1/factory/agent/insights?kind=kpis|metrics|
@@ -409,7 +410,9 @@ async def get_agent_insights(
                 group_by is not None and group_by not in metrics.GROUP_KEYS
             ):
                 raise CockpitError(
-                    400, "invalid_group_by", "group_by day|project|role|agent|version|def_version"
+                    400,
+                    "invalid_group_by",
+                    "group_by day|project|role|agent|vendor|model|version|def_version",
                 )
             try:
                 values = await asyncio.to_thread(

@@ -716,6 +716,49 @@ def test_span_range_queries_and_ids(store: FactoryStore) -> None:
     ]
     assert [s.name for s in store.list_spans(FID, trace_key="pr:x")] == ["wait4"]
     assert store.list_spans(FID, project_slug="api-version") == []
+    # The newest rows first: a cap drops the oldest.
+    assert [s.name for s in store.list_spans(FID, limit=2, newest_first=True)] == [
+        "wait4",
+        "loop_iter3",
+    ]
+
+
+def test_prune_spans_drops_old_rows_of_the_given_kinds_and_key(store: FactoryStore) -> None:
+    rows = [
+        # (kind, dedupe key, started, ended)
+        ("turn", "state:a:1", 1_000, 2_000),  # old, ended: pruned
+        ("wait", "state:a:2", 1_500, None),  # old, still open: pruned
+        ("turn", "state:a:3", 9_000, 9_500),  # recent: kept
+        ("turn", "turn:x", 1_000, 2_000),  # another writer's key: kept
+        ("gate", "state:b:1", 1_000, 2_000),  # another kind: kept
+    ]
+    for kind, key, started, ended in rows:
+        store.insert_span(
+            FID,
+            kind=kind,
+            name=key,
+            trace_key="t",
+            started_at=started,
+            ended_at=ended,
+            outcome="ok" if ended else "open",
+            dedupe_key=key,
+        )
+    store.insert_span(
+        OTHER_FID,
+        kind="turn",
+        name="other",
+        trace_key="t",
+        started_at=1_000,
+        ended_at=2_000,
+        outcome="ok",
+        dedupe_key="state:o:1",
+    )
+
+    assert store.prune_spans(5_000, ["turn", "wait"], key_prefix="state:") == 3
+    left = {s.name for s in store.list_spans(FID)}
+    assert left == {"state:a:3", "turn:x", "state:b:1"}
+    assert store.list_spans(OTHER_FID) == []
+    assert store.prune_spans(5_000, ["turn", "wait"], key_prefix="state:") == 0
 
 
 def test_a_span_moves_to_another_trace(store: FactoryStore) -> None:

@@ -124,6 +124,11 @@ def decision_key(decision_id: str) -> str:
     return f"decision:{decision_id}"
 
 
+def state_key(session_id: str, ts: int) -> str:
+    """:returns: The dedupe key of the state segment of *session_id* that began at *ts* (ms)."""
+    return f"state:{session_id.replace('-', '').lower()}:{ts}"
+
+
 def task_key(session_id: str) -> str:
     """:returns: The dedupe key of a sub-agent run (one per dispatched session)."""
     return f"task:{session_id}"
@@ -243,6 +248,8 @@ def write_span(
     reopen: bool = False,
     keep_closed_after: int | None = None,
     ctx: SpanContext = NO_CONTEXT,
+    vendor: str | None = None,
+    model: str | None = None,
     **fields: Any,
 ) -> FactorySpan:
     """
@@ -260,6 +267,8 @@ def write_span(
         it keeps its close (no reopen, no forced rewrite).
     :param ended_at: Epoch milliseconds (clamped to ``started_at``).
     :param outcome: ``open`` / ``ok`` / ``fail`` / ``abandoned`` / ….
+    :param vendor: Who runs the span's agent (``attrs.vendor``, kept once set), e.g. ``"codex"``.
+    :param model: The model it runs (``attrs.model``, kept once set), e.g. ``"sonnet"``.
     :param fields: Any other ``factory_spans`` column, e.g. ``pr_id`` or ``cost_usd``.
     :returns: The stored span.
     :raises SpanFieldError: When an id column (``pr_id``, ``session_id``, …) is not a row id.
@@ -271,6 +280,10 @@ def write_span(
             if v is not None
         }
     )
+    stamped = {k: v for k, v in (("vendor", vendor), ("model", model)) if v}
+    if stamped:
+        attrs = {**stamped, **(attrs or {})}
+        set_once = (*set_once, *stamped)
     closed = outcome is not None and outcome != OPEN
     insert: dict[str, Any] = {**values, "outcome": outcome or OPEN}
     if closed:
@@ -445,10 +458,13 @@ def task_cost_fields(child: Any) -> dict[str, Any]:
 
 
 def attach_task_cost_sync(deps: FactoryDeps, factory_id: str, child: Any) -> FactorySpan | None:
-    """Put *child*'s cumulative cost on its task span (synchronous)."""
+    """Put *child*'s cumulative cost, vendor and model on its task span (synchronous)."""
+    from omnigent.server.factory.identity import vendor_model
+
     fields = {k: v for k, v in task_cost_fields(child).items() if v is not None}
     if not fields:
         return None
+    vendor, model = vendor_model(deps, child)
     created = session_start_ms(child) or int(time.time() * 1000)
     return write_span(
         deps.factory_store,
@@ -459,6 +475,8 @@ def attach_task_cost_sync(deps: FactoryDeps, factory_id: str, child: Any) -> Fac
         started_at=created,
         overwrite=tuple(fields),
         ctx=span_context(deps, factory_id),
+        vendor=vendor,
+        model=model,
         session_id=child.id,
         **fields,
     )
@@ -524,6 +542,7 @@ __all__ = [
     "span_context",
     "span_ids",
     "stage_key",
+    "state_key",
     "task_cost_fields",
     "task_key",
     "trace_key_for",

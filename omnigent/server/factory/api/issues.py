@@ -25,7 +25,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from omnigent.entities.factory import FactoryIssue
-from omnigent.factory import ISSUE_CLASSES, ISSUE_STATUSES
+from omnigent.factory import ISSUE_CLASSES, ISSUE_STATUSES, SPAN_KINDS
 from omnigent.server.factory import detectors, issues, people, schemas
 from omnigent.server.factory.api.agents import FleetContext, fleet_context
 from omnigent.server.factory.context import FactoryDeps, factory_deps
@@ -41,6 +41,8 @@ router = APIRouter(prefix="/v1/factory", tags=["factory"])
 LIST_MAX: Final = 500
 PAGE_EVENTS: Final = 200
 PAGE_SPANS: Final = 300
+PAGE_SPAN_KINDS: Final = tuple(k for k in SPAN_KINDS if k not in ("turn", "wait"))
+"""Every span kind but agents' state segments, which the agent panel's strip reads."""
 LOOKBACK_MS: Final = 2 * 3600 * 1000
 """How far before an incident its page looks for culprit steps."""
 
@@ -285,7 +287,12 @@ def _page(ctx: FleetContext, issue: FactoryIssue) -> dict[str, Any]:
         if e.ts >= since_ms and (not e.project_slug or e.project_slug not in ctx.hidden)
     ]
     spans = store.list_spans(
-        ctx.root.id, since_ms=since_ms, until_ms=until_ms, project_slug=project, limit=2000
+        ctx.root.id,
+        kinds=PAGE_SPAN_KINDS,
+        since_ms=since_ms,
+        until_ms=until_ms,
+        project_slug=project,
+        limit=2000,
     )
     wanted = {_norm(s) for s in sessions}
     picked = [

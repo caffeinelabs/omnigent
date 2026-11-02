@@ -6,8 +6,9 @@ them. Only chatter is pruned: mail, notices and preview probes after 14
 days, heartbeats after 15 (a trial's baseline and trial windows, plus a day:
 ``heartbeat_share`` and ``engine_wake_efficiency`` read them), Slack DM
 receipts after 35 (the DM engine's ledger reads 30). Demo files are
-kept; their size shows in the health strip. The nightly span heal runs in the
-same loop, before the prune.
+kept; their size shows in the health strip. Agents' state segments (spans)
+go after 30 days. The nightly span heal runs in the same loop, before the
+prune.
 """
 
 from __future__ import annotations
@@ -88,6 +89,11 @@ async def prune_once(app_state: Any, *, now: int | None = None) -> int:
     receipts = await asyncio.to_thread(
         store.prune_events, at - NOTIFY_RETENTION_S * 1000, list(NOTIFY_KINDS)
     )
+    from omnigent.server.factory.telemetry import states
+
+    segments = await asyncio.to_thread(states.prune, store, at)
+    if segments:
+        _logger.info("factory: pruned %d old state segment(s)", segments)
     if old or beats or receipts:
         _logger.info(
             "factory: pruned %d old event(s), %d heartbeat event(s) and %d Slack DM receipt(s)",

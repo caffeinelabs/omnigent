@@ -1,7 +1,8 @@
 // The fleet's free-text query: `state:running tool:Bash cost>2 project:db-*`.
 // Terms AND together; a `-` negates one; values may be quoted ("pnpm test")
-// and use `*` globs. Bare words match the agent's title, summary and what it
-// runs now. Saved views are `is:` terms. Pure; tests pin the grammar.
+// and use `*` globs. Bare words match the agent's title, handle, summary,
+// vendor, model and what it runs now. Saved views are `is:` terms. Pure;
+// tests pin the grammar.
 
 export type FleetField =
   | "state"
@@ -13,6 +14,7 @@ export type FleetField =
   | "task"
   | "loop"
   | "model"
+  | "vendor"
   | "is"
   | "text";
 
@@ -35,7 +37,7 @@ const FIELDS: Record<string, FleetField> = {
   role: "role",
   project: "project",
   harness: "harness",
-  vendor: "harness",
+  vendor: "vendor",
   tool: "tool",
   flag: "flag",
   flags: "flag",
@@ -200,6 +202,12 @@ export interface FleetFacts {
   project: string | null;
   harness: string | null;
   model: string | null;
+  /** The short model name, e.g. `sonnet`. */
+  modelLabel?: string | null;
+  /** Who runs it (`claude`, `codex`); older rows fall back to the harness. */
+  vendor?: string | null;
+  /** Its stable handle, e.g. `dot`. */
+  handle?: string | null;
   tool: string | null;
   toolArg: string | null;
   flags: readonly string[];
@@ -229,7 +237,10 @@ function matchTerm(facts: FleetFacts, term: Extract<FleetTerm, { kind: "match" }
     case "harness":
       return globMatch(v, facts.harness);
     case "model":
-      return globMatch(v, facts.model);
+      return globMatch(v, facts.model) || globMatch(v, facts.modelLabel);
+    case "vendor":
+      // `vendor:` was an alias of `harness:`; saved queries such as `vendor:codex-native` still match.
+      return globMatch(v, facts.vendor) || globMatch(v, facts.harness);
     case "tool":
       return globMatch(v, facts.tool) || globMatch(v, facts.toolArg);
     case "flag":
@@ -243,9 +254,13 @@ function matchTerm(facts: FleetFacts, term: Extract<FleetTerm, { kind: "match" }
     case "text":
       return (
         globMatch(v, facts.title) ||
+        globMatch(v, facts.handle) ||
         globMatch(v, facts.summary) ||
         globMatch(v, facts.toolArg) ||
-        globMatch(v, facts.task)
+        globMatch(v, facts.task) ||
+        globMatch(v, facts.vendor) ||
+        globMatch(v, facts.model) ||
+        globMatch(v, facts.modelLabel)
       );
   }
 }

@@ -4,8 +4,10 @@ Metrics are computed on demand from the tables, spans, the cost ledger and the
 event log, with a 5-minute cache. Each metric turns the facts of a window into
 *samples* (one per PR, decision, loop, …, carrying its project, role, agent,
 person, platform version and definition version) and aggregates them, so every
-metric can be grouped by ``day | project | role | agent | person | version |
-def_version`` the same way. Definitions are Tier 0: code only.
+metric can be grouped by ``day | project | role | agent | vendor | model |
+person | version | def_version`` the same way. A sample's vendor and model are
+the ones its task span was stamped with; a PR's are its builder's.
+Definitions are Tier 0: code only.
 
 The nightly human-prompt scan (:func:`scan_human_prompts`) counts the
 human-authored conversation items (``created_by``) of the factory's members and
@@ -27,6 +29,7 @@ from typing import TYPE_CHECKING, Any, Final
 from omnigent.factory import (
     LABEL_ID,
     LABEL_ROLE,
+    ROLE_IC,
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
     THREAD_FACTORY,
@@ -50,7 +53,17 @@ CACHE_S: Final = 300.0
 DAY_S: Final = 86400
 DEFAULT_WINDOW: Final = "7d"
 MAX_WINDOW_S: Final = 90 * DAY_S
-GROUP_KEYS: Final = ("day", "project", "role", "agent", "person", "version", "def_version")
+GROUP_KEYS: Final = (
+    "day",
+    "project",
+    "role",
+    "agent",
+    "vendor",
+    "model",
+    "person",
+    "version",
+    "def_version",
+)
 OWNER_ONLY_GROUPS: Final = frozenset({"person"})
 DAISY_BAND: Final = (30, 50)
 """Human prompts per day the reference operator works with (60/35/5 lead/PL/other)."""
@@ -134,6 +147,10 @@ class Facts:
     roles: dict[str, str] = field(default_factory=dict)
     """Member session id → factory role."""
     titles: dict[str, str] = field(default_factory=dict)
+    agents: dict[str, AgentStamp] = field(default_factory=dict)
+    """Bare session id → the role, vendor and model its task span was stamped with."""
+    pr_sessions: dict[str, list[str]] = field(default_factory=dict)
+    """Bare PR id → the bare session ids of its task's workers, oldest first."""
 
     def kind(self, *kinds: str) -> list[FactoryEvent]:
         """:returns: Events of these kinds (``prefix.*`` allowed), oldest first."""
@@ -152,6 +169,46 @@ class Facts:
 
     def pr(self, pr_id: str | None) -> FactoryPr | None:
         return next((p for p in self.prs if pr_id and _same(p.id, pr_id)), None)
+
+    def pr_agent(self, pr_id: str | None, role: str = ROLE_IC) -> AgentStamp:
+        """The vendor and model of the newest *role* worker on a PR's task (empty when unknown)."""
+        for sid in reversed(self.pr_sessions.get(_bare(pr_id), [])):
+            stamp = self.agents.get(sid)
+            if stamp is not None and stamp.role == role and stamp.vendor:
+                return stamp
+        return NO_STAMP
+
+
+@dataclass(frozen=True)
+class AgentStamp:
+    """The role, vendor and model label a worker ran with (from its task span)."""
+
+    role: str | None = None
+    vendor: str | None = None
+    model: str | None = None
+
+
+NO_STAMP: Final = AgentStamp()
+
+
+def _bare(value: str | None) -> str:
+    return (value or "").replace("-", "").lower()
+
+
+def index_agents(facts: Facts) -> None:
+    """Fill ``facts.agents`` from stamped task spans and ``facts.pr_sessions`` from tasks."""
+    from omnigent.server.factory.identity import model_label
+
+    for span in facts.spans:
+        if span.kind != "task" or not span.session_id:
+            continue
+        attrs = span.attrs or {}
+        vendor = attrs.get("vendor") if isinstance(attrs.get("vendor"), str) else None
+        model = attrs.get("model") if isinstance(attrs.get("model"), str) else None
+        facts.agents[_bare(span.session_id)] = AgentStamp(span.role, vendor, model_label(model))
+    for task in facts.tasks:
+        if task.pr_id and task.session_ids:
+            facts.pr_sessions[_bare(task.pr_id)] = [_bare(s) for s in task.session_ids]
 
 
 def _same(a: str | None, b: str | None) -> bool:
@@ -187,6 +244,7 @@ def load_facts(deps: FactoryDeps, factory_id: str, window: Window) -> Facts:
     for member in factory_members(factory_id, deps.conversation_store):
         facts.roles[member.id] = member.labels.get(LABEL_ROLE) or ""
         facts.titles[member.id] = member.title or member.id
+    index_agents(facts)
     return facts
 
 
@@ -221,6 +279,8 @@ class Sample:
 
     :param value: The observed number (seconds, dollars, 1/0 for shares).
     :param key: A category for mixes and per-kind breakdowns (e.g. a stage or gate).
+    :param vendor: Who ran the work, e.g. ``"codex"`` (a PR's: its builder's).
+    :param model: The model label it ran, e.g. ``"sonnet"``.
     """
 
     ts: float
@@ -232,6 +292,8 @@ class Sample:
     person: str | None = None
     version: str | None = None
     def_version: int | None = None
+    vendor: str | None = None
+    model: str | None = None
 
     def group(self, by: str) -> str:
         """:returns: This sample's value of a ``group_by`` key (``""`` when it has none)."""
@@ -336,14 +398,28 @@ class Metric:
 
 def _pr_sample(facts: Facts, pr: FactoryPr, ts: float, value: float, **kw: Any) -> Sample:
     project = facts.project(pr.project_slug)
+    builder = facts.pr_agent(pr.id)
     return Sample(
         ts=ts,
         value=value,
         project=pr.project_slug,
         version=pr.version_id,
         def_version=project.def_version if project is not None else None,
+        vendor=builder.vendor,
+        model=builder.model,
         **kw,
     )
+
+
+def _span_stamp(span: FactorySpan) -> dict[str, str | None]:
+    from omnigent.server.factory.identity import model_label
+
+    attrs = span.attrs or {}
+    vendor, model = attrs.get("vendor"), attrs.get("model")
+    return {
+        "vendor": vendor if isinstance(vendor, str) else None,
+        "model": model_label(model) if isinstance(model, str) else None,
+    }
 
 
 def _merged_in(facts: Facts, w: Window) -> list[FactoryPr]:
@@ -411,6 +487,7 @@ def _span_samples(facts: Facts, w: Window, kind: str, *, key_attr: str = "name")
                 agent=span.agent_name,
                 version=span.version_id,
                 def_version=span.def_version,
+                **_span_stamp(span),
             )
         )
     return out
@@ -484,6 +561,7 @@ def _task_spans(facts: Facts, w: Window) -> list[Sample]:
                 version=span.version_id,
                 def_version=span.def_version,
                 key=f"{start}:{end}",
+                **_span_stamp(span),
             )
         )
     return out
@@ -572,6 +650,7 @@ def _first_pass(facts: Facts, w: Window) -> list[Sample]:
             continue
         if not w.holds(span.started_at / 1000):
             continue
+        builder = facts.pr_agent(span.pr_id)
         out.append(
             Sample(
                 ts=span.started_at / 1000,
@@ -580,6 +659,8 @@ def _first_pass(facts: Facts, w: Window) -> list[Sample]:
                 project=span.project_slug,
                 version=span.version_id,
                 def_version=span.def_version,
+                vendor=builder.vendor,
+                model=builder.model,
             )
         )
     return out
@@ -925,6 +1006,8 @@ def _proposal_extra(facts: Facts, w: Window, samples: list[Sample]) -> dict[str,
 
 
 def _cost(facts: Facts, w: Window) -> list[Sample]:
+    from omnigent.server.factory.identity import model_label, vendor_of
+
     first, last = _day(w.since), _day(w.until - 1)
     return [
         Sample(
@@ -934,6 +1017,8 @@ def _cost(facts: Facts, w: Window) -> list[Sample]:
             project=c.project_slug or None,
             role=c.role,
             agent=c.agent_name,
+            vendor=vendor_of(c.agent_name, c.model),
+            model=model_label(c.model),
         )
         for c in facts.cost
         if first <= c.day_utc <= last
@@ -1757,8 +1842,10 @@ __all__ = [
     "GROUP_KEYS",
     "GUARDS",
     "KPIS",
+    "NO_STAMP",
     "OWNER_ONLY_GROUPS",
     "PROMPT_SCAN_KIND",
+    "AgentStamp",
     "Facts",
     "Filters",
     "Metric",
@@ -1767,6 +1854,7 @@ __all__ = [
     "compute",
     "evaluate_metric",
     "headline",
+    "index_agents",
     "load_facts",
     "parse_window",
     "record_prompt_scan",

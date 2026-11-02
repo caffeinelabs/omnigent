@@ -5,7 +5,7 @@
 // project env, grouped by project. Replay cuts every span at "as of".
 // Pure; tests pin the lanes from span fixtures.
 
-import type { FactorySnapshot, MemberView, SpanView } from "@/lib/factoryApi";
+import type { FactorySnapshot, MemberView, SpanKind, SpanView } from "@/lib/factoryApi";
 
 export type TimelineWindow = "1h" | "6h" | "24h" | "all";
 
@@ -17,6 +17,38 @@ export const WINDOW_MS: Record<Exclude<TimelineWindow, "all">, number> = {
 
 /** How far back "All" reaches, and what the page reads for it. */
 export const ALL_MS = 7 * 24 * 3_600_000;
+
+/**
+ * The span kinds the Timeline reads: all but `turn` and `wait`, which only
+ * agents' state segments write (the agent panel's strip reads those per agent;
+ * fetched here they would crowd the newest spans out of a long window).
+ */
+const TIMELINE_READS: Record<SpanKind, boolean> = {
+  project: true,
+  stage: true,
+  pr: true,
+  pr_round: true,
+  gate: true,
+  ready_wait: true,
+  decision: true,
+  task: true,
+  loop: true,
+  loop_iter: true,
+  wait: false,
+  env: true,
+  preview: true,
+  demo: true,
+  incident: true,
+  intervention: true,
+  proposal: true,
+  chat_turn: true,
+  spawn: true,
+  turn: false,
+  tool: true,
+};
+export const TIMELINE_SPAN_KINDS: readonly SpanKind[] = (
+  Object.keys(TIMELINE_READS) as SpanKind[]
+).filter((kind) => TIMELINE_READS[kind]);
 
 export interface TimelineShow {
   turns: boolean;

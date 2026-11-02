@@ -296,6 +296,15 @@ export interface MemberView {
   launch_drift: LaunchDriftView | null;
   url: string;
   now?: NowState | null;
+  /** Its stable short handle in the factory, e.g. `dot` (absent on older servers). */
+  handle?: string | null;
+  /** An open `agent.quiet` or `agent.repeat` incident targets it. */
+  stuck?: boolean;
+  /** Why, e.g. `"same failing Bash call 3 times"`. */
+  stuck_reason?: string | null;
+  /** When that incident opened (epoch seconds), and its ref, e.g. `INC-4`. */
+  stuck_since?: number | null;
+  stuck_issue?: string | null;
 }
 
 // ── Factory header and health ──────────────────────────────────
@@ -1377,6 +1386,8 @@ export interface Preflight {
   max_projects?: number;
   /** The Factory Smith lane (code PRs to omnigent): off until its prerequisites hold. */
   tier2?: Tier2StatusView | null;
+  /** People may switch to the new cockpit (`OMNIGENT_FACTORY_COCKPIT_V2`); each opts in. */
+  cockpit_v2?: boolean;
 }
 
 // ── Requests ───────────────────────────────────────────────────
@@ -1948,10 +1959,22 @@ export interface AgentTaskRef {
 /** One row of the fleet (`GET …/agents`): a lead, PL or sub-agent. */
 export interface AgentRowView {
   session_id: string;
+  /** Stable short handle, e.g. `dot` (absent on older servers). */
+  handle?: string | null;
   title: string;
   role: FactoryRole | null;
   harness: string | null;
+  /** Who runs it, e.g. `claude` or `codex`. */
+  vendor?: string | null;
+  /** What it reported, else its override (unchanged; may be null before its first turn). */
   model: string | null;
+  /** The short name of the model it runs (override, report, else its bundle's), e.g. `sonnet`. */
+  model_label?: string | null;
+  /** An open `agent.quiet` / `agent.repeat` incident targets it, and why. */
+  stuck?: boolean;
+  stuck_reason?: string | null;
+  stuck_since?: number | null;
+  stuck_issue?: string | null;
   project: string | null;
   parent_session_id: string | null;
   is_top_level: boolean;

@@ -21,7 +21,9 @@ For factory members (labelled themselves, or through their root) this:
   (:mod:`omnigent.server.factory.chat` ``on_status_edge`` / ``on_turn_end``);
 - remembers a ``running`` edge parked on ``blocked_on`` so the supervisor can
   escalate it to the factory root (see
-  :class:`~omnigent.server.factory.supervisor.FactorySupervisor`).
+  :class:`~omnigent.server.factory.supervisor.FactorySupervisor`);
+- records the session's working and waiting segments
+  (:mod:`omnigent.server.factory.telemetry.states`).
 
 Every alert and notice is also logged as an event (``alert.failed``,
 ``notice.reply``); an escalated blocked episode logs ``needs_human.cleared``
@@ -408,6 +410,9 @@ class FactoryNotifier:
         """
         if status not in _BUSY_STATUSES and status not in _TERMINAL_STATUSES:
             return
+        from omnigent.server.factory.telemetry import states
+
+        states.get_recorder(self._app_state).on_relayed(session_id, status, blocked_on)
         known = session_id in self._blocked
         episode = self._track_blocked(session_id, _blocked_on(status, blocked_on))
         error = {"message": error_message, "detail": error_detail}
@@ -596,6 +601,9 @@ def schedule_factory_status_edge(
         from omnigent.server.factory import chat  # turn edges in arrival order arm its fallback
 
         chat.on_status_edge(app_state, conv, status)
+        from omnigent.server.factory.telemetry import states  # the agent's durable state strip
+
+        states.get_recorder(app_state).on_status_edge(conv, status, data)
         notifier = get_notifier(app_state)
         if notifier.wants(conv, status, data):
             notifier.spawn(on_status_edge(app_state, conv, status, dict(data)))
