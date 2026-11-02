@@ -66,9 +66,12 @@ prompt: |
 
   STATUS: `pnpm -s factory:status`, repair (skill), report with `sys_factory_env`.
   Result: `ENV OK <urls>`, `ENV DEGRADED <res: error>` or `ENV FAILED ...`.
+  With no `~/factory/env.json` the dev env is down: never bring it up for
+  STATUS. Result: `ENV DOWN`.
 
-  DOWN: `pnpm factory:down` for the dev env only; previews stay up for review.
-  Report `state="down"`. Result: `ENV DOWN`.
+  DOWN [reason=idle]: `pnpm factory:down` for the dev env only; previews stay
+  up for review. Report `state="down"` (with reason=idle,
+  `note="idle: every PR waits for a human merge"`). Result: `ENV DOWN`.
 
   PREVIEW pr=<n> head=<sha> base=<base> [checks=[...]] [tooling=<ref>]
   (VERIFY is the same command): deploy that PR's preview at its head and
@@ -112,6 +115,8 @@ prompt: |
 
   MERGED pr=<n> base=<base>: PREVIEW_DOWN reason=merged, then move the dev env
   to the new origin/<base> and report it. Result: `ENV OK at <sha7> · PREVIEW DOWN p<n>`.
+  A dev env that is down (no `~/factory/env.json`) stays down: move only
+  `wt/env`. Result: `ENV DOWN at <sha7> · PREVIEW DOWN p<n>`.
   CLOSED pr=<n>: PREVIEW_DOWN reason=closed.
 
   Other agents may read the envs; only you change them. If an env is broken

@@ -17,8 +17,8 @@ from pathlib import Path
 from typing import Any
 
 from omnigent.entities import Conversation
-from omnigent.entities.factory import FactoryDecision, FactoryPr
-from omnigent.server.factory import control, decisions, prs, start
+from omnigent.entities.factory import FactoryDecision, FactoryPr, FactoryProject
+from omnigent.server.factory import control, decisions, idle_env, prs, start
 from omnigent.server.factory.background.env_prober import Hit, Probe, _gone_notice
 from omnigent.server.factory.envelope import failure_text, format_envelope
 from omnigent.server.factory.mailer import bounce_text
@@ -70,10 +70,23 @@ def _decision() -> FactoryDecision:
     )
 
 
+def _project() -> FactoryProject:
+    return FactoryProject(
+        id="5be0a9d2f0b54c1e9d7a3f6c8e2b4a10",
+        factory_id=ATLAS,
+        slug="api-version",
+        title="API version",
+        base_branch="temp-main",
+    )
+
+
 def render_texts() -> list[dict[str, Any]]:
     """Every server text kind, with what the web parser must read from it."""
     pl = _conv(PL, "PL · api-version")
     pr = _pr()
+    project = _project()
+    idle = idle_env.DevEnvNeed(idle_env.NEED_IDLE, "", since=int(NOW), prs=(9630, 9631))
+    work = idle_env.DevEnvNeed(idle_env.NEED_WORK, "luka asked for changes on PR #9630")
     decision = _decision()
     app_hit, api_hit = Hit(code=None, ms=3000, connect_error=True), Hit(code=502, ms=40)
     probe = Probe(app=app_hit, api=api_hit, sha=None, hits=(app_hit, api_hit))
@@ -188,6 +201,16 @@ def render_texts() -> list[dict[str, Any]]:
             "notice_preview_gone",
             _gone_notice(pr, "p9630", probe),
             {"kind": "notice", "pr": 9630},
+        ),
+        (
+            "notice_dev_env_idle",
+            idle_env.down_notice_text(project, idle),
+            {"kind": "notice"},
+        ),
+        (
+            "notice_dev_env_needed",
+            idle_env.up_notice_text(project, work),
+            {"kind": "notice"},
         ),
         (
             "notice_control",

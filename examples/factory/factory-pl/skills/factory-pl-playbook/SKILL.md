@@ -1,6 +1,6 @@
 ---
 name: factory-pl-playbook
-description: Project-lead playbook for the Omnigent software factory - the integration env (KIND: integration), the kickoff worker preflight, plan.md and task-card templates (Preview and Demo focus), worktree and branch naming, parallel dispatch rules, the /goal convention, the review → factory preview → demo → ready-for-human-merge pipeline, the env_keeper and demo results table (preview failures, tooling conflicts, the preview cap), the server message table (reviews, decisions, PR and preview notices), the PR review-links block, questions through sys_factory_ask, the definition of done, milestone reports, and the pause and done procedures.
+description: Project-lead playbook for the Omnigent software factory - the integration env (KIND: integration), the kickoff worker preflight, plan.md and task-card templates (Preview and Demo focus), worktree and branch naming, parallel dispatch rules, the /goal convention, the review → factory preview → demo → ready-for-human-merge pipeline, the idle dev env while PRs wait for a human merge, the env_keeper and demo results table (preview failures, tooling conflicts, the preview cap), the server message table (reviews, decisions, PR, preview and dev env notices), the PR review-links block, questions through sys_factory_ask, the definition of done, milestone reports, and the pause and done procedures.
 ---
 
 # PL playbook
@@ -70,7 +70,7 @@ The server owns the tasks (`T-<n>`), their dependencies and states
 # <slug> · plan · updated <iso>
 Charter: <goal> · DoD: <items> · Repo: caffeinelabs/<repo> · Base: <base> · Env needed: yes|no · Previews: on|off (slots <n>, tooling <ref>) · Budget: <n> ICs
 Lead: <parent id> · Supervisor: <id> · Me: <id> · Cockpit: /factory/<factory id>
-Dev env: <env_keeper session id> · <starting|READY|FAILED|DOWN> · <urls from ENV READY>
+Dev env: <env_keeper session id> · <starting|READY|FAILED|DOWN|DOWN (idle)> · <urls from ENV READY>
 
 ## Milestones
 1. [ ] <milestone> (tasks: t1, t2)
@@ -204,12 +204,28 @@ Report: the RESULT block
    3. `sys_factory_set(stage="ready")` and record `ready <iso>` in plan.md.
    Never merge (any repo) and never enable auto-merge or a merge queue. The
    IC stays idle on its worktree and the preview stays up until the PR merges
-   or a human asks for changes. The merge gate only reports for you:
-   `python -m omnigent.factory_merge --dry-run <pr-url>` (exit 2 when a gate
-   fails); the guard denies it without `--dry-run`. Never add
-   `factory:allow-protected` yourself.
+   or a human asks for changes. Once every open PR is handed over and no task
+   is left, the dev env goes down ("Idle dev env"). The merge gate only
+   reports for you: `python -m omnigent.factory_merge --dry-run <pr-url>`
+   (exit 2 when a gate fails); the guard denies it without `--dry-run`. Never
+   add `factory:allow-protected` yourself.
 8. **Review-links block**: see below. A `factory:no-env` PR gets the review
    link only.
+
+### Idle dev env
+
+The dev env is for ICs while they code; a project whose open PRs all wait
+for a human merge does not need it, while each PR's preview stays up for the
+human to review. The server watches for both edges:
+- `[Factory notice · dev env idle · take it down]`: every open PR is ready for
+  a human and no task is open. Send env_keeper `DOWN reason=idle` (the dev
+  env only; never `PREVIEW_DOWN` for it) and record `DOWN (idle)` in plan.md.
+- `[Factory notice · dev env needed · bring it up]`: work came back (a human
+  change request, a failed gate, a new or restarted task). Send env_keeper
+  `UP base=<base>` at once, with the IC's dispatch; ICs never wait for it.
+While plan.md says `DOWN (idle)`, a heartbeat or a wake does not bring the dev
+env back, and MERGED only moves its worktree. Before you give an IC work the
+server cannot see (a request in the Room, say), send `UP base=<base>` yourself.
 
 ### Engine hints (NEXT, READY, loops)
 
@@ -264,7 +280,7 @@ verify and demo gates pending, so it never becomes ready.
 | `ENV OK <urls>`, `ENV OK at <sha7> · PREVIEW DOWN p<n>` | Record it. |
 | `ENV DEGRADED <res: error>` | Record it. If an IC needs a failing resource, send env_keeper `UP base=<base>` once and keep that IC on work that does not need it. |
 | `ENV FAILED <diagnosis>` | Send env_keeper `UP base=<base>` once more; for a stale base image (see `PREVIEW FAILED`) send `UP base=<base> tooling=<the fix PR's branch>`, which env_keeper keeps applying until that PR merges. If it fails again, `sys_factory_ask` the human with the diagnosis and keep the ICs on work that does not need the env. |
-| `ENV DOWN` | Record it. |
+| `ENV DOWN`, `ENV DOWN at <sha7> · PREVIEW DOWN p<n>` | Record it (`DOWN (idle)` after `DOWN reason=idle`; MERGED kept it down). |
 | `PREVIEW READY … · VERIFY PASS` | Pipeline step 3: dispatch the demo. |
 | `PREVIEW READY … · VERIFY FAIL` | A product failure: send the failing checks to the author like review CHANGES. No demo for that head. A check that fails only through the public URL while it passes in-cluster is the envs gateway's doing, not the author's: env_keeper puts it on a `gateway:` line outside PASS/FAIL, and counts it as a FAIL only when the PR changes routes or gateway config. If the card needs that check's public behaviour, ask the human. |
 | `PREVIEW FAILED p<n> <diagnosis>` | Read the diagnosis. A failure of the PR's own code (its build, its migrations) goes to the author like review CHANGES. A build failing on files or imports the checkout no longer has (`TS2307` in a lib's install) is the env tooling's stale base image, not the PR's. If an open caffeinelabs/app PR fixes it under `deploy/tilt/` (env_keeper lists candidates), send `PREVIEW pr=<n> head=<sha> base=<base> tooling=<the fix PR's branch>` (its head branch, e.g. `factory-tilt-prune-before-install`, never a sha), record the fix in plan.md and add the same `tooling=` to every PREVIEW until it merges; else ask the human for one. Ask for a fresh base image only once env_keeper ruled the tooling out. Otherwise send `PREVIEW pr=<n> head=<sha> base=<base>` once more (after `tooling ref <ref> not found` or `tooling fix <ref>: …`, without `tooling=`). If that fails too, `sys_factory_ask` the human (options: "Review without a preview" = label `factory:no-env`, or "Wait for an env fix") and record D-n in plan.md. |
@@ -292,6 +308,8 @@ To label a PR the human chose to review without a preview:
 | `[Factory notice · PR <repo>#<n> closed without merge …]` | env_keeper `CLOSED pr=<n>`. If it names a decision D-<n>, wait for its answer before reworking or abandoning the task. |
 | `[Factory notice · preview p<n> unreachable · redeploy]` | env_keeper `PREVIEW pr=<n> head=<sha> base=<base>` (the PR's current head). |
 | `[Factory notice · preview p<n> idle 72h · park it]` | env_keeper `PREVIEW_DOWN pr=<n> reason=ttl`. The demo stays reviewable; the cockpit can ask for a redeploy. |
+| `[Factory notice · dev env idle · take it down]` | env_keeper `DOWN reason=idle`; previews stay up. Record `DOWN (idle)` in plan.md ("Idle dev env"). |
+| `[Factory notice · dev env needed · bring it up]` | env_keeper `UP base=<base>` now, next to the IC's dispatch; record it in plan.md. |
 | `[Factory control · …]` | The CONTROL section of your prompt. Reply once. |
 | `[Factory proposal · C-<n> …]` | The outcome of your `sys_factory_project` or `sys_factory_propose` proposal. Record it in plan.md; after a rejection, adapt the plan to the note. |
 
@@ -315,7 +333,8 @@ again returns the same D-n. Never post DECISIONS NEEDED lists to your lead.
 
 On `[Factory notice · PR … merged …]` (or `merged: true` from the gate):
 1. env_keeper `MERGED pr=<n> base=<base>`: it takes the preview down and moves
-   the dev env to the new origin/<base>.
+   the dev env to the new origin/<base> (only its worktree while it is
+   `DOWN (idle)`).
 2. Tell the sibling ICs to run `git merge origin/<base>`. App repos sync by
    merge, never by rebase.
 3. Close the IC and the demo agent of that task with
@@ -354,8 +373,9 @@ Next: <next milestone or DONE>
   3. Update plan.md and reply once.
 - **RESUME:**
   1. Re-read plan.md.
-  2. Send env_keeper `UP base=<base>` (a new env id after a wake) and `PREVIEW`
-     for each PR awaiting review whose preview is gone.
+  2. Send env_keeper `UP base=<base>` (a new env id after a wake; not while
+     plan.md has the dev env `DOWN (idle)`) and `PREVIEW` for each PR
+     awaiting review whose preview is gone.
   3. Re-dispatch each unfinished task with "continue from NOTES.md in <worktree>".
 - **DONE:**
   1. Post the final report to `parent`.
