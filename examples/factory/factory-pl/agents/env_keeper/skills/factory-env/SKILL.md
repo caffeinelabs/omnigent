@@ -31,20 +31,46 @@ the PR in the dev env, then go back to the base" any more.
 | `pnpm -s factory:urls` | The URLs as JSON. |
 | `pnpm factory:down` | `tilt down`, deletes the namespace, removes env.json. |
 
-UP base=<base>:
+UP base=<base> [tooling=<ref>]:
 1. `git -C <repo> fetch origin`. If the worktree does not exist:
    `git -C <repo> worktree add --detach /home/omnigent/workspace/wt/env origin/<base>`.
    If it exists, move it to the current head (the base may have moved, or it
-   was made for another base):
-   `git -C /home/omnigent/workspace/wt/env checkout --detach origin/<base>`.
-2. So humans can watch: `sys_terminal_launch(terminal="tilt", session="log")`, then
+   was made for another base); the reset drops an earlier tooling fix:
+   `git -C /home/omnigent/workspace/wt/env reset -q --hard && git -C /home/omnigent/workspace/wt/env checkout --detach origin/<base>`.
+2. **Tooling fix.** `tooling=<ref>` is the branch of an open caffeinelabs/app
+   PR that fixes the env tooling under `deploy/tilt/` (failure table: stale
+   base image). Keep it: `echo '<ref>' >| ~/factory/env-tooling`
+   (`tooling=main` empties the file instead). While that PR is open, every UP
+   and MERGED re-applies the kept fix, overlaying only the files it changes
+   under `deploy/tilt/`, in ONE Bash call:
+   ```bash
+   cd /home/omnigent/workspace/wt/env
+   REF=$(cat ~/factory/env-tooling 2>/dev/null)
+   if [ -n "$REF" ]; then
+     STATE=$(gh pr view "$REF" --repo caffeinelabs/app --json state -q .state)
+     FIX=$(gh pr diff "$REF" --repo caffeinelabs/app --name-only | grep '^deploy/tilt/')
+     if [ "$STATE" = MERGED ] || [ "$STATE" = CLOSED ]; then
+       : >| ~/factory/env-tooling; echo "tooling fix $REF dropped: its PR is $STATE"
+     elif [ "$STATE" != OPEN ] || [ -z "$FIX" ]; then
+       echo "tooling-fix-failed: $REF (PR ${STATE:-not found}; deploy/tilt files:" ${FIX:-none}")"
+     elif git fetch -q origin "$REF" && git checkout -q FETCH_HEAD -- $FIX; then
+       echo "tooling fix $(git rev-parse --short FETCH_HEAD) from $REF:" $FIX
+     else
+       echo "tooling-fetch-failed: $REF"
+     fi
+   fi
+   ```
+   Put the line it prints in the report's `note`: the env then runs
+   origin/<base> plus that overlay, not plain origin/<base>.
+3. So humans can watch: `sys_terminal_launch(terminal="tilt", session="log")`, then
    `sys_terminal_send(terminal="tilt", session="log", text="tail -n +1 -F /tmp/tilt.log")`.
-3. `pnpm factory:up` with the longest Bash timeout; run it again on a timeout.
-4. Report (values from env.json; resources from Tilt):
+4. `pnpm factory:up` with the longest Bash timeout; run it again on a timeout.
+5. Report (values from env.json; resources from Tilt):
 
 ```
 sys_factory_env(state="ready", env_id=<env_id>, urls={app, api, minio},
-  deployed={sha: <git -C wt/env rev-parse HEAD>, ref: "origin/<base>"}, resources=[{name, status, detail}])
+  deployed={sha: <git -C wt/env rev-parse HEAD>, ref: "origin/<base>"}, resources=[{name, status, detail}],
+  note=<step 2's line, if any>)
 ```
 
 Resources: `tilt get uiresources -o json | jq -c '[.items[] | {name: .metadata.name, status: .status.runtimeStatus, detail: ((.status.buildHistory // [])[0].error // "" | split("\n")[0])}]'`.
@@ -79,8 +105,8 @@ one where `grep -q "case 'preview'" scripts/factory.ts` succeeds: a preview
 worktree after step 4, or `wt/env` once it is at an origin/<base> that includes
 caffeinelabs/app#9640. A `wt/env` created before that stays on its old commit
 until the next MERGED, and there `FP` prints usage and exits 1; move it first
-with `git -C /home/omnigent/workspace/wt/env fetch origin && git -C /home/omnigent/workspace/wt/env checkout --detach origin/<base>`
-(Tilt live-updates the dev env; report it with the new `deployed.sha`).
+as MERGED does (fetch, reset, checkout, then UP step 2; Tilt live-updates the
+dev env; report it with the new `deployed.sha`).
 Never set `FACTORY_DIR` for previews (they live under `~/factory/previews/`).
 `up` refuses unless HEAD is `--sha` and the worktree is clean apart from the
 preview tooling, creates the namespace and the
@@ -139,6 +165,14 @@ stderr; stdout is only JSON):
      if [ -n "$CONFLICT" ]; then echo "tooling-conflict: $CONFLICT"; exit 3; fi
      git fetch -q origin "$REF" && TOOLING=$(git rev-parse FETCH_HEAD) \
        && git checkout "$TOOLING" -- "${P[@]}" || { echo "tooling-fetch-failed"; exit 4; }
+   elif [ "$REF" != main ]; then
+     # A tooling fix (failure table: stale base image): only the deploy/tilt files of its PR.
+     FIX=$(gh pr diff "$REF" --repo caffeinelabs/app --name-only | grep '^deploy/tilt/')
+     if [ -z "$FIX" ]; then echo "tooling-fix-empty: $REF"; exit 5; fi
+     OWN=$(git diff --name-only "origin/$BASE...HEAD" -- $FIX)
+     if [ -n "$OWN" ]; then echo "tooling-fix-overlap: $OWN"; exit 5; fi
+     git fetch -q origin "$REF" && TOOLING=$(git rev-parse FETCH_HEAD) \
+       && git checkout "$TOOLING" -- $FIX || { echo "tooling-fetch-failed"; exit 4; }
    fi
    if grep -q '"factory:preview"' package.json; then
      FACTORY_PREVIEW_TOOLING_REF="$TOOLING" pnpm -s factory:preview up --name p<n> --pr <n> --sha <sha>
@@ -150,6 +184,15 @@ stderr; stdout is only JSON):
    - A head that has `scripts/factory.ts preview` and the `factory:preview`
      script: nothing is overlaid, `TOOLING` stays empty and `preview.json`
      says `"tooling_overlay": null`.
+   - Such a head takes a `tooling=<ref>` other than `main` as the branch of a
+     tooling fix PR (failure table: stale base image). The block overlays only
+     the files that PR changes under `deploy/tilt/` and records the fix's sha
+     as `FACTORY_PREVIEW_TOOLING_REF`. Exit 5 deploys nothing:
+     `tooling-fix-empty` (no PR from that branch, or it changes nothing under
+     `deploy/tilt/`) or `tooling-fix-overlap` (the PR changes those files
+     itself, and the fix would replace its changes). Report
+     `sys_factory_env(pr=<n>, state="failed", env_id=…, urls={}, deployed={sha: <sha>}, note="<the line>")`
+     and reply `PREVIEW FAILED p<n> tooling fix <ref>: <the line>`.
    - A head that predates the tooling has no `preview` subcommand: the
      tooling files are overlaid from the tooling ref (`git fetch origin "$REF"`),
      and the CLI runs with node. Product code stays exactly the PR head; on an old head
@@ -167,9 +210,6 @@ stderr; stdout is only JSON):
    - On a timeout run the same block again: it waits for the previous run's
      lock and redeploys idempotently. A new head of the same PR reuses the
      namespace (about 1-3 min warm).
-   - A head that has the tooling ignores `tooling=<ref>`, unless its preview
-     failed on stale base-image files: then `<ref>` is a tooling fix to try
-     (failure table).
 5. **Overlay sha.** When `TOOLING` was set, `jq -r .tooling_overlay ~/factory/previews/p<n>/preview.json`
    is that commit; report it as `deployed.tooling_overlay`.
 6. **Confirm and report.** Read `~/factory/previews/p<n>/preview.json`, then
@@ -186,12 +226,13 @@ stderr; stdout is only JSON):
    and keep the status plus a trimmed body.
    The URLs pass the envs Envoy gateway, which (like prod's) replaces a
    client's `X-Request-Id`: a header pass-through check cannot pass there.
-   Run it in-cluster against the Service too (a check marked `in-cluster:`
-   runs only there):
-   `kubectl -n <namespace> exec deploy/caffeine-api -- curl -si -H 'X-Request-Id: f-1' http://caffeine-api:3001/status`
-   (`caffeine-ux:3000` for the app). A check that fails through the public
-   URL but passes in-cluster is gateway behaviour, not a FAIL: report both
-   results and leave it out of PASS/FAIL.
+   A check marked `in-cluster:` runs only against the Service, and any check
+   that fails through the public URL runs once more in-cluster:
+   `kubectl -n <namespace> exec deploy/caffeine-api -- curl -si -H 'X-Request-Id: f-1' http://caffeine-api:3001/ready`
+   (`caffeine-ux:3000` for the app). Report both results. A check that fails
+   through the public URL but passes in-cluster is gateway behaviour, not a
+   FAIL, and stays out of PASS/FAIL, unless the PR changes routes or gateway
+   config (`deploy/tilt/routes.yaml`, an `HTTPRoute`): then it is a FAIL.
 8. **One verify comment.** Write the body to a file and post it once:
    ```
    <!-- factory:verify sha=<sha> result=PASS env=<urls.api> preview=<urls.app> -->
@@ -243,9 +284,11 @@ the PL redeploys the ones that are not ready with PREVIEW.
 ### MERGED pr=<n> base=<base> / CLOSED pr=<n>
 
 - MERGED: PREVIEW_DOWN reason=merged, then
-  `git -C /home/omnigent/workspace/wt/env fetch origin && git -C /home/omnigent/workspace/wt/env checkout --detach origin/<base>`
-  (Tilt live-updates the dev env), then report the dev env with the new
-  `deployed.sha` (`deployed.ref` stays `origin/<base>`). Result: `ENV OK at <sha7> · PREVIEW DOWN p<n>`.
+  `git -C /home/omnigent/workspace/wt/env fetch origin && git -C /home/omnigent/workspace/wt/env reset -q --hard && git -C /home/omnigent/workspace/wt/env checkout --detach origin/<base>`
+  (the reset drops a tooling fix, so the checkout never keeps or trips over
+  it), then UP step 2 re-applies a kept fix (Tilt live-updates the dev env).
+  Report the dev env with the new `deployed.sha` (`deployed.ref` stays
+  `origin/<base>`; step 2's line in `note`). Result: `ENV OK at <sha7> · PREVIEW DOWN p<n>`.
 - CLOSED: PREVIEW_DOWN reason=closed.
 
 ## Reading Tilt
@@ -267,7 +310,7 @@ the PL redeploys the ones that are not ready with PREVIEW.
 | `ImagePullBackOff` | `kubectl -n <ns> describe pod <p>`; check `kubectl -n <ns> get secret github-registry-caffeine`; image pulls on a new node take about a minute. |
 | caffeine-db migrations fail | `kubectl -n <ns> logs <db pod> -c <init container>`; postgres Ready? Then redeploy. |
 | `OOMKilled` | Note container and limit; resource changes go through a PR: report it to the PL. |
-| `pnpm install` or a lib's `prepare` fails on files or imports the checkout no longer has (`TS2307`, `ENOENT`) | A stale base image: suspect the tooling, not the PR and not a missing image. `deploy/tilt/Dockerfile` copies the checkout over the newest published `ghcr.io/caffeinelabs/app/caffeine-db:<sha>` within 50 first-parent commits, and files deleted or moved since `<sha>` survive unless the Dockerfile prunes them (caffeinelabs/app#9832). Take `<sha>` from the build log (or `images.json` in the env's dir) and run `git diff --name-only --diff-filter=DR <sha>..HEAD`: the failing paths in it confirm the stale base. A tooling fix (a `tooling=<ref>` from the PL) can be tried at once, since `deploy/tilt/*` is a tooling path: `git fetch -q origin <ref> && git checkout FETCH_HEAD -- deploy/tilt`, then the `up` line of step 4 with `FACTORY_PREVIEW_TOOLING_REF=<that sha>` (UP: `pnpm factory:up` in `wt/env`). Report the paths, `<sha7>` and what you tried; suggest that humans publish a fresh base image only once the tooling is ruled out. |
+| `pnpm install` or a lib's `prepare` fails on files or imports the checkout no longer has (`TS2307`, `ENOENT`) | A stale base image: suspect the tooling, not the PR and not a missing image. See "Stale base image" below. |
 | `exceeded quota: env-budget` | `kubectl -n <ns> describe resourcequota`; each env and preview has its own 12 CPU / 32 Gi quota, so one preview never hits it: look for stray Jobs and Pods. |
 | `forbidden` right after the namespace was created | The RoleBinding arrives within about 5 s; the CLI waits for it. |
 | Namespace owned by another pod UID | Never adopt it; the reaper deletes it. Report it. |
@@ -284,6 +327,32 @@ the PL redeploys the ones that are not ready with PREVIEW.
 
 If a fix needs product or infra changes, report `FAILED` or `DEGRADED` with
 the evidence. Do not edit the repo.
+
+### Stale base image
+
+`deploy/tilt/Dockerfile` copies the checkout over the newest published
+`ghcr.io/caffeinelabs/app/caffeine-db:<image sha>` within 50 first-parent
+commits. Files deleted or moved since `<image sha>` survive in that image
+unless the Dockerfile prunes them (caffeinelabs/app#9832 adds that).
+
+1. Take `<image sha>` from the build log (or `images.json` in the env's dir)
+   and list every path the checkout no longer has, the old side of a move
+   included:
+   ```bash
+   git diff --name-only --no-renames --diff-filter=D <image sha>..HEAD
+   ```
+   The failing paths in that list confirm the stale base.
+2. A fix is the branch of a caffeinelabs/app PR that changes `deploy/tilt/`
+   (for #9832, `factory-tilt-prune-before-install`; a branch, never a sha).
+   Sent as `tooling=<branch>`, PREVIEW step 4 and UP step 2 overlay only the
+   files that PR changes under `deploy/tilt/`. Candidates:
+   ```bash
+   gh pr list --repo caffeinelabs/app --state open --limit 100 --json number,headRefName,files \
+     --jq '.[] | select(any(.files[]; .path | startswith("deploy/tilt/"))) | "#\(.number) \(.headRefName)"'
+   ```
+3. Report the failing paths, `<image sha7>`, the candidate fixes and what you
+   tried. Suggest that humans publish a fresh base image only once the
+   tooling is ruled out.
 
 ## After a sandbox wake
 

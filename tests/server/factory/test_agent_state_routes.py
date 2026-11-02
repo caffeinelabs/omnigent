@@ -589,6 +589,7 @@ async def test_env_reports_are_validated(
     assert code(resp) == error
     # A refused report tracks no PR (it would have no pr.discovered event).
     assert cockpit.store.list_prs(cockpit.factory_id) == []
+    assert cockpit.kinds() == []
 
 
 async def test_unknown_env_url_keys_name_only_the_current_keys(cockpit: Cockpit) -> None:

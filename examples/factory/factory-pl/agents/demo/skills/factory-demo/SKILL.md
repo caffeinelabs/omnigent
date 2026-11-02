@@ -110,13 +110,13 @@ Rules:
 - The spec is published next to the demo: no secrets, tokens or personal data.
 - Never change the product to make a step pass.
 - `api` calls pass the envs Envoy gateway, which (like prod's) replaces a
-  client's `X-Request-Id`: a header pass-through step cannot pass there.
-  Show what the public URL returns as the gateway's behaviour, and the
-  pass-through against the Service: run
-  `kubectl -n <preview.json namespace> port-forward svc/caffeine-api 13001:3001`
-  in the background, then `api.get('http://127.0.0.1:13001/…')` in a step
-  titled "In-cluster: …" (or `step.skip` it, reason "envs gateway replaces
-  X-Request-Id"). A step that fails only through the gateway is not a FAIL.
+  client's `X-Request-Id`: a header pass-through step cannot pass there. On
+  the public URL, assert what the gateway does: exactly one `X-Request-Id`
+  comes back, and it is not the one you sent. Never assert pass-through
+  there. Assert it against the Service instead, in a step titled
+  "In-cluster: …" that calls `api.get('http://127.0.0.1:13001/…')` through a
+  port-forward (Run), or `step.skip` it with the reason "envs gateway
+  replaces X-Request-Id".
 
 ## Run
 
@@ -128,6 +128,22 @@ node ~/factory/demo-harness/run.mjs --spec "$D/demo.spec.ts" --out "$D" \
   [--plan-source derived] [--summary "<one line for reviewers>"]
 ```
 
+With an "In-cluster: …" step, start the port-forward in the same Bash call
+and stop it after the run (`<namespace>` from the preview's `preview.json`).
+A forward left over from another demo can hold the port, so the block checks
+that this one listens before the run:
+
+```bash
+D=~/factory/demos/<n>/<sha7>
+kubectl -n <namespace> port-forward svc/caffeine-api 13001:3001 >/tmp/pf.log 2>&1 & PF=$!
+sleep 2; grep -q 'Forwarding from 127.0.0.1:13001' /tmp/pf.log || { kill $PF; cat /tmp/pf.log; exit 9; }
+node ~/factory/demo-harness/run.mjs --spec "$D/demo.spec.ts" --out "$D" <the flags above>; RC=$?
+kill $PF; exit $RC
+```
+
+Exit 9: the forward did not start (the log says why). Nothing ran:
+`step.skip` the "In-cluster: …" step with that reason and run again.
+
 It checks that `<app>/__factory/preview` serves `--sha`, warms the app up,
 records, and prints `DEMO <STATUS> pr=<n> sha=<sha7> · … ` and the manifest
 path. Use the longest Bash timeout; a run takes 1-3 minutes.
@@ -135,7 +151,7 @@ path. Use the longest Bash timeout; a run takes 1-3 minutes.
 | Exit | Status | Meaning |
 |---|---|---|
 | 0 | PASS | Every step ran and passed. |
-| 0 | PARTIAL | Every step that ran passed; some were skipped for env reasons (build tier, AI tier, Internet Identity). |
+| 0 | PARTIAL | Every step that ran passed; some were skipped for env reasons (build tier, AI tier, Internet Identity, a header the envs gateway rewrites). |
 | 1 | FAIL | A product assertion failed: the failed step has a screenshot and the error. |
 | 2 | ERROR | The harness, browser or spec broke (also bad arguments). Read `run.log`. |
 | 3 | stale | The preview serves another commit. Nothing is recorded: report `DEMO BLOCKED stale-preview`. |

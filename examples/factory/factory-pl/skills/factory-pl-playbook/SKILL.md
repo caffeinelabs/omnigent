@@ -32,7 +32,9 @@ demos or PRs, and heartbeats are off. These steps replace KICKOFF and LOOP:
 4. `[Factory notice · base <base> moved <old7> → <new7>]`: send env_keeper
    `UP base=<base>` again (it moves the env to the new head), then 2-3.
 
-`ENV FAILED`: one more `UP base=<base>`, then `sys_factory_ask` the human.
+`ENV FAILED`: one more `UP base=<base>` (for a stale base image,
+`UP base=<base> tooling=<the fix PR's branch>`: results table), then
+`sys_factory_ask` the human.
 
 ## Preflight (KICKOFF step 2)
 
@@ -157,14 +159,16 @@ Report: the RESULT block
      It posts `<!-- factory:review sha=<head> verdict=APPROVE|CHANGES reviewer=<id> -->`;
    - `Preview: yes`: env_keeper `PREVIEW pr=<n> head=<sha> base=<base> checks=[<env checks>]`
      (add `tooling=<ref>` only when the charter names a preview tooling ref
-     other than `main`).
+     other than `main`, or plan.md records an open tooling fix: results table,
+     `PREVIEW FAILED`).
 3. **PREVIEW READY** `pr=<n> sha=<sha7> app=<url> api=<url> secret_file=<path> · VERIFY PASS|FAIL`:
    env_keeper deployed the head, verified it and posted
    `<!-- factory:verify sha=<head> result=PASS|FAIL env=<api> preview=<app> -->`.
    Dispatch the demo for that head:
    `sys_session_send(agent="demo", title="demo-<task>", args={input: "DEMO pr=<url> sha=<40-char sha> app=<app> api=<api> secret_file=<path> focus=<demo focus>"})`,
    or `sys_session_send(session_id=<its id>, ...)` for a new head of the same PR.
-   VERIFY FAIL is a product failure: send it to the author like review CHANGES.
+   VERIFY FAIL is a product failure: send it to the author like review CHANGES
+   (a check that fails only through the gateway: results table).
 4. **DEMO** results:
    - `DEMO PASS|PARTIAL … demo=<demo url>`: the demo comment is on the PR.
      Record it, then check readiness (step 5).
@@ -259,11 +263,11 @@ verify and demo gates pending, so it never becomes ready.
 | `ENV READY app=… api=… env_id=…` | Record the dev env as READY with its URLs in plan.md. |
 | `ENV OK <urls>`, `ENV OK at <sha7> · PREVIEW DOWN p<n>` | Record it. |
 | `ENV DEGRADED <res: error>` | Record it. If an IC needs a failing resource, send env_keeper `UP base=<base>` once and keep that IC on work that does not need it. |
-| `ENV FAILED <diagnosis>` | Send env_keeper `UP base=<base>` once more (a stale base image: see `PREVIEW FAILED`). If it fails again, `sys_factory_ask` the human with the diagnosis and keep the ICs on work that does not need the env. |
+| `ENV FAILED <diagnosis>` | Send env_keeper `UP base=<base>` once more; for a stale base image (see `PREVIEW FAILED`) send `UP base=<base> tooling=<the fix PR's branch>`, which env_keeper keeps applying until that PR merges. If it fails again, `sys_factory_ask` the human with the diagnosis and keep the ICs on work that does not need the env. |
 | `ENV DOWN` | Record it. |
 | `PREVIEW READY … · VERIFY PASS` | Pipeline step 3: dispatch the demo. |
-| `PREVIEW READY … · VERIFY FAIL` | A product failure: send the failing checks to the author like review CHANGES. No demo for that head. A check that fails only through the public URL while it passes in-cluster is gateway behaviour, not the author's: send the PREVIEW again with that check marked `in-cluster:`, and ask the human only if the card needs the public behaviour. |
-| `PREVIEW FAILED p<n> <diagnosis>` | Read the diagnosis. A failure of the PR's own code (its build, its migrations) goes to the author like review CHANGES. A build failing on files or imports the checkout no longer has (`TS2307` in a lib's install) is the env tooling's stale base image, not the PR's: send `PREVIEW pr=<n> head=<sha> base=<base> tooling=<fix sha>` when a tooling fix exists (a caffeinelabs/app PR changing `deploy/tilt/`), else ask the human for one; ask for a fresh base image only once env_keeper ruled the tooling out. Otherwise send `PREVIEW pr=<n> head=<sha> base=<base>` once more (after `tooling ref <ref> not found`, without `tooling=`: the tooling is on main). If that fails too, `sys_factory_ask` the human (options: "Review without a preview" = label `factory:no-env`, or "Wait for an env fix") and record D-n in plan.md. |
+| `PREVIEW READY … · VERIFY FAIL` | A product failure: send the failing checks to the author like review CHANGES. No demo for that head. A check that fails only through the public URL while it passes in-cluster is the envs gateway's doing, not the author's: env_keeper puts it on a `gateway:` line outside PASS/FAIL, and counts it as a FAIL only when the PR changes routes or gateway config. If the card needs that check's public behaviour, ask the human. |
+| `PREVIEW FAILED p<n> <diagnosis>` | Read the diagnosis. A failure of the PR's own code (its build, its migrations) goes to the author like review CHANGES. A build failing on files or imports the checkout no longer has (`TS2307` in a lib's install) is the env tooling's stale base image, not the PR's. If an open caffeinelabs/app PR fixes it under `deploy/tilt/` (env_keeper lists candidates), send `PREVIEW pr=<n> head=<sha> base=<base> tooling=<the fix PR's branch>` (its head branch, e.g. `factory-tilt-prune-before-install`, never a sha), record the fix in plan.md and add the same `tooling=` to every PREVIEW until it merges; else ask the human for one. Ask for a fresh base image only once env_keeper ruled the tooling out. Otherwise send `PREVIEW pr=<n> head=<sha> base=<base>` once more (after `tooling ref <ref> not found` or `tooling fix <ref>: …`, without `tooling=`). If that fails too, `sys_factory_ask` the human (options: "Review without a preview" = label `factory:no-env`, or "Wait for an env fix") and record D-n in plan.md. |
 | `PREVIEW SKIPPED tooling-conflict <files>` | The PR predates the preview tooling (caffeinelabs/app#9640, on main) and changes those files itself, so they cannot be overlaid. Send the author: merge origin/<base> into the branch and push. The new head has the tooling natively once <base> has it; preview it like any new head (step 6). If the author cannot merge <base> cleanly, or <base> lacks the tooling, `sys_factory_ask` the human with options "Review without a preview" (you label it `factory:no-env`; the verify and demo gates then skip) and "Resolve the merge first", record D-n in plan.md and act on the answer. |
 | `PREVIEW SKIPPED not-open` | The PR merged or closed; its server notice drives the rest. Drop the PREVIEW. |
 | `PREVIEW CAPPED p<n> · park one of: p<m> (<project>, …), …` | The factory-wide preview cap is reached. If a candidate is your project's and not ready, send env_keeper `PREVIEW_DOWN pr=<m> reason=human`, note "p<n> waits for a slot" in plan.md, and send the PREVIEW again when `PREVIEW DOWN p<m>` arrives. Otherwise post one line to `parent` (`kind="info"`, "PR #<n> waits for a preview slot; candidates: …") and send the PREVIEW again at your next heartbeat. |
