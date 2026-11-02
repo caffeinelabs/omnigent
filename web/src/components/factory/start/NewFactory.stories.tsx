@@ -6,7 +6,14 @@ import { NewFactoryPage } from "@/pages/factory/NewFactoryPage";
 import { preflightAllFailing, preflightOk } from "../__fixtures__/liveRun";
 import { DocumentTheme } from "../board/boardStoryKit";
 import { FactoryStoryFrame, type StoryRoutes } from "../factoryStoryFixtures";
-import { clearDraft, emptyFactoryDraft, exampleProjects, saveDraft } from "./projectForm";
+import { sampleDraft, sampleProjects } from "./__fixtures__/sampleProjects";
+import {
+  type FactoryDefaultsDraft,
+  clearDraft,
+  emptyDefaults,
+  emptyFactoryDraft,
+  saveDraft,
+} from "./projectForm";
 import { GITHUB_STORY_ROUTES } from "./startStoryRoutes";
 
 /** Starts each story from an empty form (a previous story's draft would offer a restore). */
@@ -54,9 +61,14 @@ const meta = {
 export default meta;
 type Story = StoryObj<typeof meta>;
 
-async function loadExample(canvasElement: HTMLElement) {
+/** (sample) Saves the three sample projects as the draft a story then restores. */
+function seedSample(defaults?: FactoryDefaultsDraft) {
+  return () => saveDraft(sampleDraft(defaults));
+}
+
+async function restoreSample(canvasElement: HTMLElement) {
   const body = within(canvasElement.ownerDocument.body);
-  fireEvent.click(await body.findByTestId("factory-new-load-example"));
+  fireEvent.click(await body.findByTestId("factory-new-draft-restore"));
   return body;
 }
 
@@ -65,18 +77,18 @@ export const Empty: Story = { render: () => <NewFactoryStory /> };
 
 export const EmptyDark: Story = { render: () => <NewFactoryStory theme="dark" /> };
 
-/** "Load example": the three demo projects (backend, UI, docs-only). */
+/** (sample) Three projects (backend, UI, docs-only), restored from a saved draft. */
 export const ExampleFilled: Story = {
-  render: () => <NewFactoryStory />,
+  render: () => <NewFactoryStory seed={seedSample()} />,
   play: async ({ canvasElement }) => {
-    await loadExample(canvasElement);
+    await restoreSample(canvasElement);
   },
 };
 
 export const ExampleFilledDark: Story = {
-  render: () => <NewFactoryStory theme="dark" />,
+  render: () => <NewFactoryStory theme="dark" seed={seedSample()} />,
   play: async ({ canvasElement }) => {
-    await loadExample(canvasElement);
+    await restoreSample(canvasElement);
   },
 };
 
@@ -96,9 +108,9 @@ export const WithErrors: Story = {
 
 /** Step 1 of the start: Atlas is being created. */
 export const SubmittingCreatingAtlas: Story = {
-  render: () => <NewFactoryStory routes={{ "/v1/sessions": "pending" }} />,
+  render: () => <NewFactoryStory routes={{ "/v1/sessions": "pending" }} seed={seedSample()} />,
   play: async ({ canvasElement }) => {
-    const body = await loadExample(canvasElement);
+    const body = await restoreSample(canvasElement);
     fireEvent.click(body.getByTestId("factory-new-submit"));
   },
 };
@@ -111,10 +123,11 @@ export const SubmittingStoringCharters: Story = {
         "/v1/sessions": { body: { id: "conv_atlas" }, status: 201 },
         "/v1/factory/factories": "pending",
       }}
+      seed={seedSample()}
     />
   ),
   play: async ({ canvasElement }) => {
-    const body = await loadExample(canvasElement);
+    const body = await restoreSample(canvasElement);
     fireEvent.click(body.getByTestId("factory-new-submit"));
   },
 };
@@ -131,10 +144,11 @@ export const RegisterFailedRetry: Story = {
             "this lead already runs a factory with other projects; add projects to it instead",
         },
       }}
+      seed={seedSample()}
     />
   ),
   play: async ({ canvasElement }) => {
-    const body = await loadExample(canvasElement);
+    const body = await restoreSample(canvasElement);
     fireEvent.click(body.getByTestId("factory-new-submit"));
   },
 };
@@ -151,30 +165,33 @@ const TEMP_MAIN_ROUTES: StoryRoutes = {
   },
 };
 
+/** (sample) The sample projects on the server's test base. */
+const TEMP_MAIN_SEED = seedSample(emptyDefaults("caffeinelabs/app", "temp-main"));
+
 /**
  * The default repo & base row prefilled from the server (temp-main), the
- * "Keep a live env" switch on, and the example projects on that base.
+ * "Keep a live env" switch on, and the sample projects on that base.
  */
 export const TempMainDefaults: Story = {
-  render: () => <NewFactoryStory routes={TEMP_MAIN_ROUTES} />,
+  render: () => <NewFactoryStory routes={TEMP_MAIN_ROUTES} seed={TEMP_MAIN_SEED} />,
   play: async ({ canvasElement }) => {
     const body = within(canvasElement.ownerDocument.body);
     await body.findByText("Keep a live env at");
     await waitFor(() =>
       expect(body.getByTestId("factory-new-live-env")).toHaveAttribute("data-state", "checked"),
     );
-    await loadExample(canvasElement);
+    await restoreSample(canvasElement);
   },
 };
 
 export const TempMainDefaultsDark: Story = {
-  render: () => <NewFactoryStory theme="dark" routes={TEMP_MAIN_ROUTES} />,
+  render: () => <NewFactoryStory theme="dark" routes={TEMP_MAIN_ROUTES} seed={TEMP_MAIN_SEED} />,
   play: TempMainDefaults.play,
 };
 
 /** The live env turned off by hand: the projects keep temp-main, base-env is not started. */
 export const TempMainWithoutLiveEnv: Story = {
-  render: () => <NewFactoryStory routes={TEMP_MAIN_ROUTES} />,
+  render: () => <NewFactoryStory routes={TEMP_MAIN_ROUTES} seed={TEMP_MAIN_SEED} />,
   play: async (context) => {
     await TempMainDefaults.play?.(context);
     const body = within(context.canvasElement.ownerDocument.body);
@@ -195,7 +212,7 @@ export const RestoreDraft: Story = {
     <NewFactoryStory
       seed={() =>
         saveDraft(
-          { ...emptyFactoryDraft(), projects: exampleProjects().slice(0, 2) },
+          { ...emptyFactoryDraft(), projects: sampleProjects().slice(0, 2) },
           Date.now() - 12 * 60_000,
         )
       }

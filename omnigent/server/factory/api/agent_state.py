@@ -39,7 +39,15 @@ from omnigent.factory import (
     is_full_sha,
     parse_pr_url,
 )
-from omnigent.server.factory import decision_routing, definition, events, loops, nudge, status
+from omnigent.server.factory import (
+    decision_routing,
+    definition,
+    events,
+    loops,
+    nudge,
+    product_profile,
+    status,
+)
 from omnigent.server.factory.agent_scope import (
     AgentCaller,
     announce_new_pr,
@@ -52,6 +60,7 @@ from omnigent.server.factory.agent_scope import (
 from omnigent.server.factory.api.pr_preview import preview_stable_path
 from omnigent.server.factory.charter import project_base_branch, render_pl_charter
 from omnigent.server.factory.demos import public_base_url, review_url
+from omnigent.server.factory.env_urls import factory_env_domain
 from omnigent.server.factory.prs import human_hold_reason
 from omnigent.server.factory.routes import FactoryRouteError
 from omnigent.server.factory.stage import changes_requested_on_head
@@ -523,7 +532,7 @@ def park_candidates(prs: list[FactoryPr]) -> list[dict[str, Any]]:
     ]
 
 
-def _check_urls(urls: dict[str, str]) -> dict[str, str]:
+def _check_urls(urls: dict[str, str], domain: str) -> dict[str, str]:
     clean: dict[str, str] = {}
     for key, value in urls.items():
         if key not in _ENV_URL_KEYS:
@@ -534,7 +543,7 @@ def _check_urls(urls: dict[str, str]) -> dict[str, str]:
         url = value.strip()
         if not url:
             continue
-        problem = env_url_error(key, url)
+        problem = env_url_error(key, url, domain)
         if problem is not None:
             raise FactoryRouteError(400, "invalid_url", f"urls.{key} {problem}")
         clean[key] = url
@@ -694,7 +703,8 @@ async def report_env(request: Request, body: EnvBody) -> Any:
     if not body.env_id.strip():
         raise FactoryRouteError(400, "invalid_env_id", "env_id is required")
     body = body.model_copy(update={"state": state})
-    urls = _check_urls(body.urls)
+    domain = await asyncio.to_thread(factory_env_domain, caller.factory_id, caller.deps)
+    urls = _check_urls(body.urls, domain)
     # Refuse a bad sha before any row is touched.
     _sha(body.deployed.get("sha"))
     _sha(body.deployed.get("tooling_overlay"))
@@ -798,9 +808,10 @@ async def get_charter(
             await asyncio.to_thread(deps.factory_store.update_project, row.id, charter=charter)
             or row
         )
+    delivery = await asyncio.to_thread(product_profile.delivery, deps, caller.factory_id)
     return {
         "project": row.slug,
-        "text": render_pl_charter(row),
+        "text": render_pl_charter(row, delivery),
         "status": row.status,
         "spawn_owner": spawn_owner(row),
         "pl_session_id": pl.id if pl is not None else None,

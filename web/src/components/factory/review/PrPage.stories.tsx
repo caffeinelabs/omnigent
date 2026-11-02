@@ -4,6 +4,8 @@ import { PrPage } from "@/pages/factory/PrPage";
 import { SNAPSHOT_PATH } from "../board/boardStoryKit";
 import { viewerOf } from "../shell/__fixtures__/shellFixtures";
 import { scenarioApiRoutes } from "./__fixtures__/reviewFixtures";
+import { sampleProduct } from "./__fixtures__/sampleProduct";
+import { PHONE } from "../ui/uiStoryFixtures";
 import { ReviewStory, type ReviewStoryOptions } from "./reviewStoryKit";
 
 const meta = {
@@ -23,6 +25,36 @@ const API_JSON = Object.keys(scenarioApiRoutes())[0]!;
 
 /** #9630 ready: the demo video inline, 4 steps with screenshots, the API call, preview = head. */
 export const ReadyWithVideo = review({ state: "ready-with-video" });
+
+/** (sample) A product profile with its own merge policy: the review actions say it. */
+const customMergePolicy = (snapshot: Parameters<NonNullable<ReviewStoryOptions["tweak"]>>[0]) => {
+  snapshot.factory.product = sampleProduct({
+    merge_policy: "Release managers merge into main after QA",
+  });
+};
+
+export const CustomMergePolicy: Story = {
+  ...review({ state: "ready-with-video", tweak: customMergePolicy }),
+  // Scrolls the action bar into view (the top of the page on a phone) and shows the tooltip.
+  play: async ({ canvasElement }) => {
+    const body = within(canvasElement.ownerDocument.body);
+    const link = await body.findByTestId("review-merge-github");
+    link.scrollIntoView({ block: "center" });
+    await userEvent.hover(link);
+    await body.findByRole("tooltip");
+  },
+};
+
+export const CustomMergePolicyDark: Story = {
+  ...review({ state: "ready-with-video", tweak: customMergePolicy, theme: "dark" }),
+  play: CustomMergePolicy.play,
+};
+
+export const CustomMergePolicyPhone: Story = {
+  ...review({ state: "ready-with-video", tweak: customMergePolicy }),
+  ...PHONE,
+  play: CustomMergePolicy.play,
+};
 
 export const ReadyWithVideoDark = review({ state: "ready-with-video", theme: "dark" });
 

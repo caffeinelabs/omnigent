@@ -568,7 +568,10 @@ async def deliver(
     """
     Tell the members about a version change and move their cadence labels.
 
-    :returns: ``{diff, notified, rules_notified, cadence_moved}``.
+    A change of ``product.delivery`` also sends each live PL its CHARTER
+    UPDATE (:func:`.projects.announce_delivery`).
+
+    :returns: ``{diff, notified, rules_notified, cadence_moved, charters_updated}``.
     """
     deps = factory_deps(app_state)
     diff = definition.diff(before, after)
@@ -605,6 +608,12 @@ async def deliver(
     moved = []
     if any(str(d["path"]).startswith("cadence.") for d in settings):
         moved = await _restamp_cadence(app_state, root, before, after, ref)
+    charters: list[str] = []
+    if any(definition.blocks.under(str(d["path"]), "product.delivery") for d in diff):
+        from omnigent.server.factory.projects import announce_delivery
+
+        # The profile's merge policy, protected repos and demo paths are charter lines.
+        charters = await announce_delivery(app_state, root, before, after, actor, via=ref)
     await events.emit(
         app_state,
         root.id,
@@ -620,6 +629,7 @@ async def deliver(
         "notified": notified,
         "rules_notified": rules_notified,
         "cadence_moved": moved,
+        "charters_updated": charters,
     }
 
 

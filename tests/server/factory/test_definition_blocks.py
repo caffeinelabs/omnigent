@@ -91,7 +91,11 @@ def test_invalid_values_are_refused(change: dict[str, Any], fragment: str) -> No
     assert fragment in raised.value.message
 
 
-def test_valid_values_apply_and_the_mix_moves_as_one_change() -> None:
+def test_valid_values_apply_and_the_mix_moves_as_one_change(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # (sample) A preview domain the deployment lists (see test_delivery_profile).
+    monkeypatch.setenv("OMNIGENT_FACTORY_PREVIEW_DOMAINS", "pr.example.org")
     doc = _apply(
         definition.default_doc(),
         {"op": "replace", "path": "strategy.mix.outcome", "value": 50},

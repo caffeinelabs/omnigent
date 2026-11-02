@@ -357,6 +357,19 @@ describe("health thresholds", () => {
     expect(levels(gh("off")).github).toBe("off");
   });
 
+  it("shows a deployment config problem red, and nothing while there is none", () => {
+    const problem = "no always-deny repos configured (OMNIGENT_FACTORY_ALWAYS_DENY_REPOS)";
+    const config = (h: HealthView) => healthItems(h, NOW).find((i) => i.key === "config");
+    expect(config(health({ config: [problem] }))).toMatchObject({
+      level: "red",
+      detail: "no always-deny repos configured",
+      hint: `The server's factory configuration: ${problem}`,
+    });
+    expect(config(health({ config: [problem, "another"] }))?.detail).toBe("2 problems");
+    expect(config(health({ config: [] }))).toBeUndefined();
+    expect(config(health())).toBeUndefined();
+  });
+
   it("marks an unreachable prober amber and hides drift when none", () => {
     const h = health({ probes: { state: "unreachable", last_run_at: NOW }, drifted_members: 0 });
     expect(levels(h)).toMatchObject({ probes: "amber" });

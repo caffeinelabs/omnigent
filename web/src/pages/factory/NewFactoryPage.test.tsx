@@ -11,7 +11,8 @@ import {
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { preflightAllFailing, preflightOk } from "@/components/factory/__fixtures__/liveRun";
-import { DRAFT_KEY } from "@/components/factory/start/projectForm";
+import { sampleDraft } from "@/components/factory/start/__fixtures__/sampleProjects";
+import { DRAFT_KEY, saveDraft } from "@/components/factory/start/projectForm";
 import { CapabilitiesProvider } from "@/lib/CapabilitiesContext";
 import { FALLBACK_SERVER_INFO, type ServerInfo } from "@/lib/capabilities";
 import { useParams } from "@/lib/routing";
@@ -110,6 +111,21 @@ const type = (testId: string, value: string) =>
 
 const writes = (calls: Call[]) => calls.filter((c) => c.method !== "GET");
 
+/** Render the form holding the three sample projects (sample), restored from a saved draft. */
+function renderSample(info: ServerInfo | "loading" = "loading") {
+  saveDraft(sampleDraft());
+  const view = renderPage(info);
+  fireEvent.click(screen.getByTestId("factory-new-draft-restore"));
+  return view;
+}
+
+/** Fill project *i*'s required fields by hand. */
+function fillProject(i: number, title: string) {
+  type(`factory-new-project-title-${i}`, title);
+  type(`factory-new-goal-${i}`, `${title}: the goal`);
+  type(`factory-new-dod-${i}-0`, "curl -fsS {api}/status → 200");
+}
+
 beforeEach(() => {
   authenticatedFetch.mockReset();
   localStorage.clear();
@@ -169,10 +185,9 @@ describe("NewFactoryPage", () => {
     expect(writes(calls)).toEqual([]);
   });
 
-  it("loads the three-project example and sums it up", () => {
+  it("sums up a three-project start", () => {
     serve();
-    renderPage();
-    fireEvent.click(screen.getByTestId("factory-new-load-example"));
+    renderSample();
     expect(screen.getByTestId("factory-new-slug-0")).toHaveValue("api-status");
     expect(screen.getByTestId("factory-new-slug-1")).toHaveValue("ux-env-badge");
     expect(screen.getByTestId("factory-new-slug-2")).toHaveValue("docs-factory-envs");
@@ -264,8 +279,7 @@ describe("NewFactoryPage", () => {
           releaseSession = () => resolve(json({ id: "conv_atlas" }, 201));
         }),
     });
-    renderPage();
-    fireEvent.click(screen.getByTestId("factory-new-load-example"));
+    renderSample();
     fireEvent.click(screen.getByTestId("factory-new-submit"));
     expect(await screen.findByTestId("factory-new-progress")).toHaveTextContent("Creating Atlas…");
     expect(screen.getByTestId("factory-new-submit")).toBeDisabled();
@@ -307,8 +321,7 @@ describe("NewFactoryPage", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const unavailable = () => json({ error: { message: "Service unavailable" } }, 503);
     const calls = serve({ register: [unavailable, unavailable, unavailable, unavailable] });
-    renderPage();
-    fireEvent.click(screen.getByTestId("factory-new-load-example"));
+    renderSample();
     fireEvent.click(screen.getByTestId("factory-new-submit"));
     await act(() => vi.advanceTimersByTimeAsync(5000));
     const failure = await screen.findByTestId("factory-new-failure");
@@ -332,8 +345,7 @@ describe("NewFactoryPage", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     const unavailable = () => json({ error: { message: "Service unavailable" } }, 503);
     const calls = serve({ register: [unavailable, unavailable, unavailable, unavailable] });
-    renderPage();
-    fireEvent.click(screen.getByTestId("factory-new-load-example"));
+    renderSample();
     fireEvent.click(screen.getByTestId("factory-new-submit"));
     await act(() => vi.advanceTimersByTimeAsync(5000));
     await screen.findByTestId("factory-new-failure");
@@ -379,8 +391,7 @@ describe("NewFactoryPage", () => {
           ),
       ],
     });
-    renderPage();
-    fireEvent.click(screen.getByTestId("factory-new-load-example"));
+    renderSample();
     fireEvent.click(screen.getByTestId("factory-new-submit"));
     // Project 3 has no env, so it shows no demo field: the alert says it.
     expect(await screen.findByTestId("factory-new-failure")).toHaveTextContent(
@@ -394,8 +405,7 @@ describe("NewFactoryPage", () => {
 
   it("never submits on Enter in a one-line field", () => {
     serve();
-    renderPage();
-    fireEvent.click(screen.getByTestId("factory-new-load-example"));
+    renderSample();
     const title = screen.getByTestId("factory-new-project-title-0");
     const enter = createEvent.keyDown(title, { key: "Enter" });
     fireEvent(title, enter);
@@ -420,8 +430,7 @@ describe("NewFactoryPage", () => {
           ),
       ],
     });
-    renderPage();
-    fireEvent.click(screen.getByTestId("factory-new-load-example"));
+    renderSample();
     fireEvent.click(screen.getByTestId("factory-new-submit"));
     expect(await screen.findByTestId("factory-new-error-title-1")).toHaveTextContent(
       "Slug 'ux-env-badge' is used twice",
@@ -447,8 +456,7 @@ describe("NewFactoryPage", () => {
           ),
       ],
     });
-    renderPage();
-    fireEvent.click(screen.getByTestId("factory-new-load-example"));
+    renderSample();
     fireEvent.click(screen.getByTestId("factory-new-submit"));
     expect(await screen.findByTestId("factory-new-failure")).toHaveTextContent(
       "This lead already runs a factory with other projects",
@@ -486,9 +494,12 @@ describe("NewFactoryPage", () => {
     // Nothing was typed: the prefill is not a draft worth keeping.
     expect(localStorage.getItem(DRAFT_KEY)).toBeNull();
 
-    fireEvent.click(screen.getByTestId("factory-new-load-example"));
-    expect(screen.getByTestId("factory-new-branch-2")).toHaveTextContent("temp-main");
-    expect(screen.getByTestId("factory-new-preview-sandboxes")).toHaveTextContent("6 sandboxes");
+    fillProject(0, "Status endpoint");
+    fireEvent.click(screen.getByTestId("factory-new-add-project"));
+    fillProject(1, "Docs page");
+    expect(screen.getByTestId("factory-new-branch-1")).toHaveTextContent("temp-main");
+    // Two PLs, Atlas, Sentinel and the live env.
+    expect(screen.getByTestId("factory-new-preview-sandboxes")).toHaveTextContent("5 sandboxes");
     fireEvent.click(screen.getByTestId("factory-new-submit"));
     expect(await screen.findByTestId("cockpit-stub")).toBeInTheDocument();
 
@@ -502,11 +513,7 @@ describe("NewFactoryPage", () => {
       base_branch: "temp-main",
       integration_env: true,
     });
-    expect(register.projects.map((p) => p.base_branch)).toEqual([
-      "temp-main",
-      "temp-main",
-      "temp-main",
-    ]);
+    expect(register.projects.map((p) => p.base_branch)).toEqual(["temp-main", "temp-main"]);
   });
 
   it("turns the live env off by hand and keeps it off", async () => {
@@ -525,7 +532,7 @@ describe("NewFactoryPage", () => {
     fireEvent.click(screen.getByTestId("factory-new-live-env"));
     expect(screen.getByTestId("factory-new-live-env")).toHaveAttribute("data-state", "unchecked");
     expect(screen.getByTestId("factory-new-project-count")).toHaveTextContent("1/10");
-    fireEvent.click(screen.getByTestId("factory-new-load-example"));
+    fillProject(0, "Status endpoint");
     fireEvent.click(screen.getByTestId("factory-new-submit"));
     expect(await screen.findByTestId("cockpit-stub")).toBeInTheDocument();
     const register = writes(calls)[1]!.body as { defaults: { integration_env: boolean } };

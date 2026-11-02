@@ -13,6 +13,10 @@ passes them to both policies as ``factory_repos``
   factory's projects (the role guard still keeps leads from pushing or
   opening PRs).
 
+With them goes ``factory_protected_repos``: the protected repos of the
+factory's product profile (``product.delivery.protected_repos``), which the
+guards deny unless a human made one a project's repo.
+
 Only server state counts. Membership comes from the labels the server stamps
 at spawn (``omnigent.factory.id``, ``role`` and ``project``), which no agent
 can write, and repos from the factory's live project rows. A row
@@ -30,8 +34,9 @@ a project a human already gave the factory. A repo an agent only spawned a PL
 on stays out of both.
 
 What the repos do not change: merging stays denied on every repo, pushes go
-only to ``factory/**`` refs and never to a protected branch, and
-``caffeinelabs/infra`` is never written.
+only to ``factory/**`` refs and never to a protected branch, and the Tier-0
+always-deny repos the server reads at boot
+(:data:`omnigent.policies.builtins.factory.ALWAYS_DENY_ENV`) are never written.
 
 Only the server's engine gets them. The runner-side gate
 (:class:`omnigent.runner.policy.RunnerToolPolicyGate`) builds the bundle guard
@@ -54,7 +59,7 @@ from omnigent.factory import (
     LABEL_ROLE,
     ROLE_LEAD,
 )
-from omnigent.policies.builtins.factory import FACTORY_REPOS_ARG
+from omnigent.policies.builtins.factory import FACTORY_PROTECTED_ARG, FACTORY_REPOS_ARG
 from omnigent.policies.builtins.factory_invariants import HANDLER as INVARIANTS_HANDLER
 from omnigent.policies.builtins.github import _normalize_repo
 from omnigent.server.bundles import FACTORY_GUARD_HANDLER
@@ -82,7 +87,7 @@ def project_repos(store: FactoryStore, factory_id: str) -> dict[str, str]:
     :param store: The factory store.
     :param factory_id: Factory root session id.
     :returns: Project slug to lowercase ``owner/repo``, e.g.
-        ``{"docs-guide": "caffeinelabs/omnigent"}``; rows without a repo, rows
+        ``{"docs-guide": "acme/docs"}``; rows without a repo, rows
         backfilled by reconcile and cancelled or merged-away projects are left out.
     """
     out: dict[str, str] = {}
@@ -106,7 +111,7 @@ def human_repos(store: FactoryStore, root: Conversation) -> set[str]:
 
     :param store: The factory store.
     :param root: The factory root (its default-repo label is server-stamped).
-    :returns: Lowercase ``owner/repo`` values, e.g. ``{"caffeinelabs/app"}``.
+    :returns: Lowercase ``owner/repo`` values, e.g. ``{"acme/app"}``.
     """
     repos = set(project_repos(store, root.id).values())
     default = _normalize_repo(root.labels.get(LABEL_DEFAULT_REPO) or "")
@@ -146,22 +151,34 @@ def member_repos(
     return frozenset([repos[slug]] if slug in repos else [])
 
 
+def member_factory_id(conversation: Conversation, root: Conversation) -> str | None:
+    """:returns: The factory of a member or of a sub-agent's root, or ``None``."""
+    top = conversation if is_top_level(conversation) else root
+    return conversation.labels.get(LABEL_ID) or top.labels.get(LABEL_ID) or None
+
+
 def guard_arguments(
     deps: FactoryDeps,
 ) -> Callable[[Conversation, Conversation], Mapping[str, object] | None]:
     """
-    Build the server resolver of ``factory_repos`` for one app's factory store.
+    Build the server resolver of the guards' factory arguments for one app's stores.
 
     :param deps: The app's factory stores.
-    :returns: ``resolve(conversation, root)``: ``{"factory_repos": [...]}`` for
-        a factory member, ``None`` for any other session. When the store cannot
-        be read it fails closed with no writable repos.
+    :returns: ``resolve(conversation, root)``: ``{"factory_repos": [...],
+        "factory_protected_repos": [...]}`` for a factory member, ``None`` for
+        any other session. When the store or the definition cannot be read
+        it fails closed with no writable repos.
     """
 
     def _resolve(conversation: Conversation, root: Conversation) -> Mapping[str, object] | None:
+        from omnigent.server.factory.product_profile import protected_repos
+
         try:
             repos = member_repos(conversation, root, deps.factory_store)
-        except Exception:  # noqa: BLE001 - a store error must deny, not widen
+            factory_id = member_factory_id(conversation, root) if repos is not None else None
+            # Reads the definition itself: an error here denies, never drops the protected repos.
+            protected = protected_repos(deps, factory_id) if factory_id else frozenset()
+        except Exception:  # noqa: BLE001 - a store or definition error must deny, not widen
             _logger.warning(
                 "factory: could not resolve the project repos of session %s; "
                 "it writes no repo until they resolve",
@@ -171,20 +188,39 @@ def guard_arguments(
             return {FACTORY_REPOS_ARG: []}
         if repos is None:
             return None
-        return {FACTORY_REPOS_ARG: sorted(repos)}
+        return {FACTORY_REPOS_ARG: sorted(repos), FACTORY_PROTECTED_ARG: sorted(protected)}
 
     return _resolve
+
+
+def config_problems() -> list[str]:
+    """
+    What this deployment's guard configuration lacks (the cockpit health shows it).
+
+    :returns: e.g. ``["no always-deny repos configured (OMNIGENT_FACTORY_ALWAYS_DENY_REPOS)"]``;
+        ``[]`` when nothing is missing.
+    """
+    from omnigent.policies.builtins.factory import ALWAYS_DENY_ENV, always_deny_repos
+
+    if not always_deny_repos():
+        return [f"no always-deny repos configured ({ALWAYS_DENY_ENV})"]
+    return []
 
 
 def install(app_state: Any) -> Callable[[], None]:
     """
     Register the resolver for the factory guards of *app_state*'s factory.
 
+    Logs an error for each :func:`config_problems` entry: a deployment without
+    an always-deny list leaves no repo denied whatever a spec or project says.
+
     :param app_state: ``app.state`` carrying the :class:`FactoryDeps`.
     :returns: A callable that removes what this call registered.
     """
     from omnigent.runtime.policies.builder import SERVER_POLICY_ARGUMENTS
 
+    for problem in config_problems():
+        _logger.error("factory guards: %s", problem)
     deps = getattr(app_state, FACTORY_STATE_ATTR, None)
     if not isinstance(deps, FactoryDeps):
         return lambda: None
@@ -202,9 +238,11 @@ def install(app_state: Any) -> Callable[[], None]:
 
 __all__ = [
     "GUARDED_HANDLERS",
+    "config_problems",
     "guard_arguments",
     "human_repos",
     "install",
+    "member_factory_id",
     "member_repos",
     "project_repos",
 ]

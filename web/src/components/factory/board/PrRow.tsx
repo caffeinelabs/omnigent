@@ -36,6 +36,8 @@ import { ageText, clipDuration, prAnchorId, prHasNoEnv, prTouchesUi } from "./bo
 import { DemoStatusTag, DemoThumb } from "./DemoThumb";
 import { GateChip, shownGates } from "./GateChip";
 import { PreviewPill } from "./PreviewPill";
+import { mergePolicyText } from "../review/deliveryModel";
+import { useDelivery } from "../review/useDelivery";
 
 /** Where GitHub's merge box is; humans merge, the factory never does. */
 export function mergeUrl(pr: PrView): string {
@@ -286,6 +288,7 @@ export function PrRow({
 }) {
   // Tracked here: the row swaps layouts when the PR merges, and only that swap pulses.
   const changed = useChangedSinceMount(pr.state);
+  const mergePolicy = mergePolicyText(useDelivery(undefined));
   if (pr.state !== "open") return <ClosedPrRow pr={pr} nowS={nowS} pulse={changed !== null} />;
   const review = () => onReview(pr.number);
   const badges = prBadges(pr);
@@ -380,7 +383,7 @@ export function PrRow({
                 size="sm"
                 variant="outline"
                 className="@max-md:flex-1"
-                title="Humans merge. The factory never merges."
+                title={mergePolicy}
               >
                 <a
                   href={mergeUrl(pr)}

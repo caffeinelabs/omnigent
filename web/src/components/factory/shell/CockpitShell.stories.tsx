@@ -176,6 +176,28 @@ export const VerdictGreyMobile = phone(cockpit({ calmness: "grey" }));
 /** The Health panel as a bottom sheet. */
 export const HealthMobile = phone(cockpit({}, openHealth));
 
+/** (sample) A deployment without an always-deny list: the machine facts name it. */
+function withConfigProblem(): FactorySnapshot {
+  const snapshot = round3Snapshot();
+  snapshot.health.config = ["no always-deny repos configured (OMNIGENT_FACTORY_ALWAYS_DENY_REPOS)"];
+  return snapshot;
+}
+
+export const HealthConfigProblem = cockpit({ snapshot: withConfigProblem() }, openHealth);
+
+export const HealthConfigProblemDark = cockpit(
+  { snapshot: withConfigProblem(), theme: "dark" },
+  openHealth,
+);
+
+export const HealthConfigProblemMobile = phone(
+  cockpit({ snapshot: withConfigProblem() }, async (context) => {
+    await openHealth(context);
+    const fact = await body(context.canvasElement).findByTestId("health-fact-config");
+    fact.scrollIntoView({ block: "center" });
+  }),
+);
+
 // ── The Room drawer ────────────────────────────────────────────
 
 /** `?room=factory`: the Room over the page, not a dock beside it. */

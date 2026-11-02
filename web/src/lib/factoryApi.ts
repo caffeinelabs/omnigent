@@ -343,6 +343,8 @@ export interface FactoryView {
   /** Absent from servers before the temp-main lane. */
   base?: FactoryBaseView | null;
   url: string;
+  /** The product profile of the definition in force; absent from servers before it. */
+  product?: ProductDef | null;
 }
 
 export interface HealthView {
@@ -357,6 +359,8 @@ export interface HealthView {
   probes: { state: "ok" | "unreachable" | "off"; last_run_at: number | null };
   drifted_members: number;
   demo_storage_bytes: number;
+  /** What the deployment's factory config lacks, e.g. "no always-deny repos configured (…)". */
+  config?: string[];
 }
 
 // ── Envs and previews ──────────────────────────────────────────

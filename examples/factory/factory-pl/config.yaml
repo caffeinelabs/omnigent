@@ -170,8 +170,8 @@ prompt: |
     over: the review-links block in the PR body (playbook), one line
     `READY FOR HUMAN MERGE <url> · head <sha7>` to `parent` (kind=info),
     `sys_factory_set(stage="ready")`, and record it in plan.md. Otherwise fix
-    what `reasons` names. Humans merge every repo, caffeinelabs/app included:
-    never merge. The merge gate only reports for you:
+    what `reasons` names. Humans merge every repo (your charter's merge
+    policy): never merge. The merge gate only reports for you:
     `python -m omnigent.factory_merge --dry-run <url>` (the guard denies it
     without `--dry-run`).
   - IC `BLOCKED`: answer with `sys_session_send(session_id=<ic id>)`; a
@@ -273,7 +273,7 @@ guardrails:
         arguments:
           role: project_lead
           # No write_repos: the server sets factory_repos, the repos of this
-          # member's factory projects (caffeinelabs/app outside a factory).
+          # member's factory projects (none outside a factory).
           push_ref_prefixes: [factory/]
     spawn_bounds:
       type: function

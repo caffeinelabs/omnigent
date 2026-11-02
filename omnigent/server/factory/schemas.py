@@ -17,6 +17,8 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from omnigent.server.factory.definition_blocks import ProductDef
+
 Stage = Literal["queued", "planning", "building", "review", "verify", "ready", "merged", "done"]
 AgentStage = Literal["planning", "building", "review", "verify", "ready", "merged"]
 Overlay = Literal["paused", "blocked", "failed", "pr_closed", "cancelled", "merged", "waiting"]
@@ -412,6 +414,8 @@ class FactoryView(_View):
     next_beats: list[NextBeatView] = Field(default_factory=list)
     base: FactoryBaseView | None = None
     url: str
+    product: ProductDef | None = None
+    """The product profile (``product`` of the definition in force; it holds no secret)."""
 
 
 class SupervisorHealth(_View):
@@ -445,6 +449,8 @@ class HealthView(_View):
     probes: ProbesHealth
     drifted_members: int = 0
     demo_storage_bytes: int = 0
+    config: list[str] = Field(default_factory=list)
+    """What the deployment's factory config lacks, e.g. an empty always-deny list."""
 
 
 # ── Envs and previews ──────────────────────────────────────────

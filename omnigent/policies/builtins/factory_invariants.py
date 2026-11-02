@@ -10,9 +10,12 @@ root's spec guard) and repeats the role-independent rules of
 :func:`~omnigent.policies.builtins.factory.factory_role_guard`:
 
 - pushes only to explicit branches under ``push_ref_prefixes``;
-- no writes to ``deny_repos`` (``caffeinelabs/infra`` always), except a repo
-  of the member's factory projects, which the server passes as
-  ``factory_repos`` (:mod:`omnigent.server.factory.guard_repos`);
+- no writes to ``deny_repos`` or to the protected repos of the factory's
+  product profile (``factory_protected_repos``), except a repo of the
+  member's factory projects (``factory_repos``; the server passes both,
+  :mod:`omnigent.server.factory.guard_repos`), and never to the Tier-0
+  always-deny repos, configuration the server reads at boot
+  (:data:`~omnigent.policies.builtins.factory.ALWAYS_DENY_ENV`);
 - no merges (raw, MCP, API, or the merge gate without ``--dry-run``);
 - no ``OMNIGENT_FACTORY_*`` assignments in commands;
 - no git config that redirects a push (``-c``/``--config-env`` on a push,
@@ -60,16 +63,20 @@ def factory_invariants(
     protected_branches: Sequence[str] | None = None,
     deny_repos: Sequence[str] | None = None,
     factory_repos: Sequence[str] | None = None,
+    factory_protected_repos: Sequence[str] | None = None,
 ) -> Callable[[_Json, _Json], _Json]:
     """
     Factory: the role-independent Tier-0 rules for sessions labelled as factory members.
 
     :param push_ref_prefixes: Branch prefixes pushes may target (default ``["factory/"]``).
     :param protected_branches: Branches never pushed (default includes ``temp-main``).
-    :param deny_repos: Repos never written (``caffeinelabs/infra`` is always added).
+    :param deny_repos: Repos never written (the boot-time always-deny repos are always added).
     :param factory_repos: Set by the server per member, never by an admin: the
-        repos of its factory projects, lifted from the default *deny_repos* the
-        same way the role guard lifts them (``caffeinelabs/infra`` stays denied).
+        repos of its factory projects, lifted from the default *deny_repos* and
+        the protected repos the same way the role guard lifts them (the
+        always-deny repos stay denied).
+    :param factory_protected_repos: Set by the server per member: the protected
+        repos of its factory's product profile.
     :returns: An evaluator ``fn(event, config)`` returning ALLOW or DENY, never ASK.
     """
     guarded = guard_evaluator(
@@ -79,6 +86,7 @@ def factory_invariants(
             protected_branches=protected_branches,
             deny_repos=deny_repos,
             factory_repos=factory_repos,
+            factory_protected_repos=factory_protected_repos,
         ),
         prefix="Factory invariant: ",
     )

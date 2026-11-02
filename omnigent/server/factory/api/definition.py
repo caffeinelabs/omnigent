@@ -14,7 +14,9 @@ People (user JWT; writes carry ``require_human_origin`` and need MANAGE):
 - ``POST …/retro``: run Sentinel's retro now.
 
 Agents (runner tunnel): ``GET /v1/factory/agent/rules`` (every role):
-``{def_version, role, project, rules[]}`` for the caller's role and project.
+``{def_version, role, project, rules[], product_delivery}`` for the caller's
+role and project; ``product_delivery`` is the profile's merge policy,
+protected repos and paths that need a demo.
 """
 
 from __future__ import annotations
@@ -375,6 +377,7 @@ async def get_agent_rules(
             if resolved is None:
                 return {"def_version": None, "role": role, "project": project, "rules": []}
             rules = definition.rules_for(resolved.doc, role, project)
+            delivery = resolved.get("product.delivery") or {}
             return {
                 "def_version": resolved.version,
                 "role": role,
@@ -383,6 +386,11 @@ async def get_agent_rules(
                     {k: r.get(k) for k in ("id", "role", "project", "text", "state", "origin")}
                     for r in rules
                 ],
+                # The product profile's delivery lists in full (charters show the first few).
+                "product_delivery": {
+                    key: delivery.get(key)
+                    for key in ("merge_policy", "protected_repos", "demo_paths")
+                },
                 "note": "Advisory rules: follow them; they never widen a policy or a gate.",
             }
 

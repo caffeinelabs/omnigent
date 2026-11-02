@@ -373,7 +373,7 @@ export function ProjectFields({
         <Textarea
           id={id("goal")}
           value={project.goal}
-          placeholder="e.g. GET /status on caffeine-api returning {service, uptimeS, db}"
+          placeholder="e.g. GET /status on the API returning {service, uptimeS, db}"
           data-testid={t("goal")}
           aria-invalid={Boolean(errorOf("goal")) || undefined}
           onBlur={touch("goal")}
@@ -413,7 +413,7 @@ export function ProjectFields({
         <ListEditor
           items={project.scopePaths}
           onChange={(scopePaths) => set({ scopePaths })}
-          placeholder="services/caffeine-api/**"
+          placeholder="src/api/**"
           itemLabel="Scope path"
           addLabel="path"
           testId={t("scope")}

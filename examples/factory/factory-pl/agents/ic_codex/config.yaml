@@ -46,7 +46,7 @@ prompt: |
     or branch config. Never force-push and never push `<base>` or main.
   - Co-sign every commit: end the message with a blank line and
     `Co-authored-by: omnigent <noreply@omnigent.ai>`.
-  - Open a draft PR early: `gh pr create --draft --repo caffeinelabs/<repo>
+  - Open a draft PR early: `gh pr create --draft --repo <owner/repo>
     --base <base> --head factory/<slug>/<task>`, then register it at once with
     `sys_factory_pr(url=<pr url>, task=<task>, claim="opened")`. Fill the repo
     template and add these sections:
@@ -122,5 +122,5 @@ guardrails:
         arguments:
           role: ic
           # No write_repos: the server sets factory_repos, the repos of this
-          # member's factory projects (caffeinelabs/app outside a factory).
+          # member's factory projects (none outside a factory).
           push_ref_prefixes: [factory/]

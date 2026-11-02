@@ -33,7 +33,7 @@ import httpx
 from omnigent.entities.factory import FactoryPr, FactoryProject
 from omnigent.server.factory import events, nudge, status
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
-from omnigent.server.factory.env_urls import env_path, safe_env_origin
+from omnigent.server.factory.env_urls import env_path, factory_env_domain, safe_env_origin
 from omnigent.server.factory.mailer import get_mailer
 from omnigent.server.factory.prs import (
     FactoryScope,
@@ -361,8 +361,9 @@ class EnvProber:
             reported: Mapping[str, Any] = seen if isinstance(seen, Mapping) else {}
             raw_urls = reported.get("urls")
             urls: Mapping[str, Any] = raw_urls if isinstance(raw_urls, Mapping) else {}
-            app = safe_env_origin(urls.get("app"))
-            api = safe_env_origin(urls.get("api"))
+            domain = await asyncio.to_thread(factory_env_domain, project.factory_id, self._deps())
+            app = safe_env_origin(urls.get("app"), domain)
+            api = safe_env_origin(urls.get("api"), domain)
             if app is None and api is None:
                 _logger.info("factory: %s dev env has no probe-able URL", project.slug)
             hits: list[Hit] = []
@@ -459,8 +460,9 @@ class EnvProber:
         async def _job(client: httpx.AsyncClient) -> Probe | None:
             preview = dict(pr.preview or {})
             urls = preview.get("urls") if isinstance(preview.get("urls"), Mapping) else {}
-            app = safe_env_origin(urls.get("app"))
-            api = safe_env_origin(urls.get("api"))
+            domain = await asyncio.to_thread(factory_env_domain, pr.factory_id, self._deps())
+            app = safe_env_origin(urls.get("app"), domain)
+            api = safe_env_origin(urls.get("api"), domain)
             project = scope.projects.get(pr.project_slug or "")
             hits: list[Hit] = []
             app_hit = None

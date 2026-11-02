@@ -101,6 +101,18 @@ def _register_agent(
     return agent_id
 
 
+SAMPLE_ENV_DOMAIN = "envs.sandbox.caffeinelabs.io"
+"""(sample) The env domain the fixtures' env and preview URLs live under."""
+
+
+@pytest.fixture(autouse=True)
+def _sample_env_domain(monkeypatch: pytest.MonkeyPatch) -> None:
+    """(sample) The deployment's env domain: the server builds none in."""
+    from omnigent.server.factory.env_urls import ENV_DOMAIN_ENV
+
+    monkeypatch.setenv(ENV_DOMAIN_ENV, SAMPLE_ENV_DOMAIN)
+
+
 @pytest.fixture()
 def world(db_uri: str, tmp_path: Path) -> FactoryWorld:
     """A factory rooted at Lead A with Lead B, one PL and its sub-agents."""

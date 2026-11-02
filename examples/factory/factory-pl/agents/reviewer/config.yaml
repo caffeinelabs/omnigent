@@ -80,5 +80,5 @@ guardrails:
         arguments:
           role: reviewer
           # No write_repos: the server sets factory_repos, the repos of this
-          # member's factory projects (caffeinelabs/app outside a factory).
+          # member's factory projects (none outside a factory).
           push_ref_prefixes: [factory/]

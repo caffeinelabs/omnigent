@@ -225,7 +225,7 @@ async def announce_new_pr(app_state: Any, caller: AgentCaller, pr: FactoryPr) ->
     )
 
 
-def env_url_error(key: str, url: str) -> str | None:
+def env_url_error(key: str, url: str, domain: str | None = None) -> str | None:
     """
     Check one reported env URL.
 
@@ -235,12 +235,19 @@ def env_url_error(key: str, url: str) -> str | None:
     so the cockpit never shows it) and only needs to be http(s).
 
     :param key: ``app`` / ``api`` / ``minio``, or the legacy ``tilt_ui``.
+    :param domain: The factory's env domain (:func:`.env_urls.factory_env_domain`);
+        the deployment's when omitted.
     :returns: Why the URL is refused, or ``None``.
     """
     if key == "tilt_ui":
         return None if _LINK_RE.fullmatch(url) else "must be an http(s) URL"
-    if safe_env_origin(url) is None:
-        return f"must be https://<host>.{env_domain()}/…"
+    domain = domain or env_domain()
+    if not domain:
+        return (
+            "is refused: no preview domain is set (an owner sets product.delivery.preview_domain)"
+        )
+    if safe_env_origin(url, domain) is None:
+        return f"must be https://<host>.{domain}/…"
     return None
 
 

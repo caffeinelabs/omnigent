@@ -5,6 +5,7 @@ import { renderBoard } from "../board/__fixtures__/renderBoard";
 import { ProjectCard } from "../board/ProjectCard";
 import { ReadyForMergeBanner } from "./ReadyForMergeBanner";
 import { reviewScenario } from "./__fixtures__/reviewFixtures";
+import { SAMPLE_DEMO_PATHS, sampleProduct } from "./__fixtures__/sampleProduct";
 
 function card(mutate?: (s: ReturnType<typeof liveRunSnapshot>) => void) {
   const snapshot = liveRunSnapshot();
@@ -66,13 +67,31 @@ describe("ReadyForMergeBanner", () => {
     expect(thumb).toHaveTextContent("API · 4 calls");
   });
 
-  it("warns when a caffeine-ux change has no demo", () => {
+  it("warns when a change to a path that needs a demo has none", () => {
     const { card: el } = card((s) => {
+      s.factory.product = sampleProduct({ demo_paths: SAMPLE_DEMO_PATHS });
       const pr = s.prs.find((p) => p.number === 9630)!;
       pr.demo = null;
     });
     expect(within(el).getByTestId("ready-banner-demo-missing-9630")).toHaveTextContent(
-      "No demo, and this PR changes caffeine-ux",
+      "No demo, and this PR changes paths that need one (services/caffeine-ux/**)",
+    );
+  });
+
+  it("expects no demo where the product profile names no such path", () => {
+    const { card: el } = card((s) => {
+      s.factory.product = sampleProduct({ demo_paths: ["web/**"] });
+      s.prs.find((p) => p.number === 9630)!.demo = null;
+    });
+    expect(within(el).queryByTestId("ready-banner-demo-missing-9630")).toBeNull();
+  });
+
+  it("says the profile's merge policy on the merge link", () => {
+    const { card: el } = card((s) => {
+      s.factory.product = sampleProduct({ merge_policy: "Maintainers merge on Fridays" });
+    });
+    expect(within(el).getByTestId("merge-link-9630")).toHaveAccessibleDescription(
+      "Maintainers merge on Fridays. The factory never merges.",
     );
   });
 

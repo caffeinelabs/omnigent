@@ -2236,3 +2236,63 @@ def test_benchmark_charters_are_valid_projects(path: Path) -> None:
 def test_there_are_three_benchmarks() -> None:
     names = sorted(p.stem for p in (_FACTORY_DIR / "benchmarks" / "temp-main").glob("*.json"))
     assert names == ["api-build-info", "docs-factory-previews", "ui-env-badge"]
+
+
+# ── Product-agnostic bundles ─────────────────────────────────────────────────
+
+# (sample) Names of the products factories run on today. A factory learns its
+# product from its definition (``product`` block), never from bundle text.
+_PRODUCT_NAMES = re.compile(r"caffeine", re.IGNORECASE)
+# Env tooling and repo conventions of one product that still live in skills
+# until the environment profile replaces them: the line counts may only shrink.
+_PRODUCT_TEXT_LEFT = {
+    "factory-pl/agents/demo/skills/factory-demo/SKILL.md": 2,
+    "factory-pl/agents/demo/skills/factory-demo/harness/explore.mjs": 1,
+    "factory-pl/agents/demo/skills/factory-demo/harness/fixtures.ts": 1,
+    "factory-pl/agents/demo/skills/factory-demo/harness/run.mjs": 1,
+    "factory-pl/agents/demo/skills/factory-demo/harness/selftest.mjs": 2,
+    "factory-pl/agents/env_keeper/config.yaml": 1,
+    "factory-pl/agents/env_keeper/skills/factory-env/SKILL.md": 21,
+    "factory-pl/agents/ic/config.yaml": 1,
+    "factory-pl/agents/ic_codex/config.yaml": 1,
+    "factory-pl/skills/factory-pl-playbook/SKILL.md": 3,
+}
+
+
+def _product_lines() -> dict[str, int]:
+    """:returns: Bundle file (relative to ``examples/factory``) -> lines naming a product."""
+    out: dict[str, int] = {}
+    for path in sorted(_FACTORY_DIR.rglob("*")):
+        rel = path.relative_to(_FACTORY_DIR).as_posix()
+        if not path.is_file() or rel.startswith("benchmarks/"):
+            continue
+        try:
+            text = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        hits = sum(1 for line in text.splitlines() if _PRODUCT_NAMES.search(line))
+        if hits:
+            out[rel] = hits
+    return out
+
+
+def test_no_product_names_in_bundles() -> None:
+    """The lead, PL and sub-agent prompts and skills name no product (benchmarks excepted)."""
+    found = _product_lines()
+    grown = {rel: n for rel, n in found.items() if n > _PRODUCT_TEXT_LEFT.get(rel, 0)}
+    assert grown == {}, f"product names in bundle text (put them in the definition): {grown}"
+
+
+def test_the_product_text_left_only_shrinks() -> None:
+    """A file cleaned of product text leaves the list, so it cannot come back."""
+    found = _product_lines()
+    stale = {rel: n for rel, n in _PRODUCT_TEXT_LEFT.items() if found.get(rel, 0) < n}
+    assert stale == {}, f"lower these counts in _PRODUCT_TEXT_LEFT: {stale} (now {found})"
+
+
+def test_lead_and_pl_prompts_leave_repos_to_the_charter(lead: AgentSpec, pl: AgentSpec) -> None:
+    """Protected repos and the merge policy come from the product profile via the charter."""
+    for spec in (lead, pl):
+        assert not _PRODUCT_NAMES.search(spec.instructions or ""), spec.name
+    assert "a protected repo of the product profile" in " ".join((lead.instructions or "").split())
+    assert "your charter's merge policy" in " ".join((pl.instructions or "").split())

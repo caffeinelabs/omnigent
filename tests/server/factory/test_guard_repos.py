@@ -33,6 +33,7 @@ from omnigent.spec.types import (
     PolicyAction,
     PolicySpec,
 )
+from tests.policies.factory_samples import use_sample_repos
 from tests.server.factory.cockpit_helpers import Cockpit
 from tests.server.factory.conftest import FactoryWorld
 from tests.server.factory.projects_helpers import header_cockpit, project, propose
@@ -42,6 +43,12 @@ _APP = "caffeinelabs/app"
 _OMNI = "caffeinelabs/omnigent"
 _HELLO = "octo/hello"
 _EVIL = "evilorg/exfil"
+
+
+@pytest.fixture(autouse=True)
+def _sample_repos(monkeypatch: pytest.MonkeyPatch) -> None:
+    """(sample) The guard's repo configuration these tests were written against."""
+    use_sample_repos(monkeypatch)
 
 
 def _guard(role: str) -> FunctionPolicySpec:
@@ -317,7 +324,7 @@ def test_a_sub_agent_without_its_root_writes_no_repo(factory: FactoryWorld) -> N
     ic_docs = factory.get("ic_docs")
     assert guard_repos.member_repos(ic_docs, ic_docs, factory.deps.factory_store) == frozenset()
     resolve = guard_repos.guard_arguments(factory.deps)
-    assert resolve(ic_docs, ic_docs) == {"factory_repos": []}
+    assert resolve(ic_docs, ic_docs) == {"factory_repos": [], "factory_protected_repos": []}
     # A top-level session outside a factory still keeps its own arguments.
     plain = factory.get("plain")
     assert resolve(plain, plain) is None

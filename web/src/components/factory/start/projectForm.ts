@@ -1,8 +1,8 @@
 // The start form's model: the factory's default repo and base, one draft per
 // project section, its validation (limits mirror
 // `omnigent/server/factory/start.py`; the project cap comes from preflight),
-// the request it becomes, the "Load example" projects (spec §12) and the
-// localStorage draft.
+// the request it becomes and the localStorage draft. It ships no example
+// projects: what a factory builds is the factory's own data.
 
 import {
   type CharterPatchRequest,
@@ -573,63 +573,6 @@ export function startSummary(draft: FactoryDraft): StartSummary {
     heartbeats: heartbeatsPerHour(draft.cadence, 2, draft.projects.length),
     repos,
   };
-}
-
-// ── Load example (spec §12) ────────────────────────────────────
-
-/** The three-project demo scenario, on the default base when it is caffeinelabs/app's. */
-export function exampleProjects(defaults?: FactoryDefaultsDraft): ProjectDraft[] {
-  const repo = "caffeinelabs/app";
-  const onDefault = defaults?.repo.trim().toLowerCase() === repo && defaults.branch.trim();
-  const branch = onDefault ? defaults.branch.trim() : "main";
-  return [
-    emptyProject({
-      title: "API status endpoint",
-      slug: "api-status",
-      repo,
-      branch,
-      priority: 1,
-      goal: 'Add GET /status to caffeine-api returning {service, uptimeS, db: "ok" | "down"}.',
-      dod: ['curl -fsS {api}/status → 200 with "db":"ok"', "pnpm -F @caffeine/api test"],
-      scopePaths: ["services/caffeine-api/**"],
-      envNeeded: true,
-      previewEnabled: true,
-      previewSlots: 2,
-      demoFocus: 'Call GET /status and show "db":"ok" in the response.',
-    }),
-    emptyProject({
-      title: "ENV badge in the UX header",
-      slug: "ux-env-badge",
-      repo,
-      branch,
-      priority: 1,
-      goal: "Show an “ENV <id>” badge in the caffeine-ux header when served from *.envs.sandbox.caffeinelabs.io.",
-      dod: [
-        "The badge shows on *.envs.sandbox.caffeinelabs.io and not elsewhere",
-        "pnpm -F @caffeine/ux test",
-      ],
-      scopePaths: ["services/caffeine-ux/**"],
-      envNeeded: true,
-      previewEnabled: true,
-      previewSlots: 2,
-      demoFocus: "Open the app in the preview, show the ENV badge in the header and hover it.",
-      constraints:
-        "Ask the human (sys_factory_ask) whether the badge goes in the header or the footer, and keep building meanwhile.",
-    }),
-    emptyProject({
-      title: "Docs: factory envs",
-      slug: "docs-factory-envs",
-      repo,
-      branch,
-      priority: 2,
-      goal: "Add docs/factory-envs.md: how factory envs and previews work and how to review them.",
-      dod: ["docs/factory-envs.md renders on GitHub"],
-      scopePaths: ["docs/**"],
-      envNeeded: false,
-      previewEnabled: false,
-      demoFocus: "",
-    }),
-  ];
 }
 
 // ── Draft (localStorage) ───────────────────────────────────────

@@ -140,6 +140,8 @@ def factory_stack(
         F.FACTORY_ENABLED_ENV: "1",
         # Park the automatic supervisor loop; the test forces its passes.
         "OMNIGENT_FACTORY_TICK_S": "3600",
+        # (sample) The env domain the reported preview URLs live under.
+        "OMNIGENT_FACTORY_PREVIEW_DOMAIN": "envs.sandbox.caffeinelabs.io",
     }
     apply_server_env(env, _REPO_ROOT)
     port = find_free_port()
