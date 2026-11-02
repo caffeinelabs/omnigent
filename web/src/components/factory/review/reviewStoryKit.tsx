@@ -78,3 +78,19 @@ export function ReviewStory({
     </ImageLightboxProvider>
   );
 }
+
+/** A 390 px phone viewport for review stories (`{...PHONE_390}` on a story). */
+export const PHONE_390 = {
+  parameters: {
+    viewport: {
+      options: {
+        phone390: {
+          name: "Phone 390",
+          styles: { width: "390px", height: "844px" },
+          type: "mobile",
+        },
+      },
+    },
+  },
+  globals: { viewport: { value: "phone390" } },
+};

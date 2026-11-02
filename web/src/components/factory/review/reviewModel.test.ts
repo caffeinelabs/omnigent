@@ -14,7 +14,6 @@ import {
   prettyBody,
   previewHealth,
   previewLinks,
-  uxDemoMissing,
 } from "./reviewModel";
 
 function pr(number: number) {
@@ -69,15 +68,6 @@ describe("gates and demos", () => {
   it("counts a ready PR's gates, demo included", () => {
     expect(gateTally(pr(9630))).toEqual({ passing: 7, total: 7 });
     expect(gateTally(pr(9631))).toEqual({ passing: 2, total: 7 });
-  });
-
-  it("wants a demo of the head for caffeine-ux changes only", () => {
-    const ux = pr(9630);
-    expect(uxDemoMissing(ux)).toBe(false);
-    ux.demo = null;
-    expect(uxDemoMissing(ux)).toBe(true);
-    const api = pr(9631);
-    expect(uxDemoMissing(api)).toBe(false);
   });
 
   it("orders screenshots by step and lists downloads by kind", () => {

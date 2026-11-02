@@ -28,6 +28,7 @@ import {
   PreviewUnavailableNotice,
   StatusLine,
 } from "@/components/factory/review/PrSummary";
+import { deliveryOf } from "@/components/factory/review/deliveryModel";
 import { ReviewActions } from "@/components/factory/review/ReviewActions";
 import { demoRecorder } from "@/components/factory/review/reviewModel";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
@@ -138,7 +139,13 @@ function PrBody({ snapshot, pr, nowS }: { snapshot: FactorySnapshot; pr: PrView;
   const evidence = <EvidencePanel pr={pr} members={members} nowS={nowS} />;
   const actions = (
     <Panel testId="pr-actions" className="py-3">
-      <ReviewActions factoryId={fid} pr={pr} project={project} nowS={nowS} />
+      <ReviewActions
+        factoryId={fid}
+        pr={pr}
+        project={project}
+        nowS={nowS}
+        delivery={deliveryOf(snapshot)}
+      />
     </Panel>
   );
   const room = (

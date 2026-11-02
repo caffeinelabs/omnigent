@@ -318,11 +318,13 @@ def _integration_charter(project: FactoryProject, charter: Mapping[str, Any]) ->
     )
 
 
-def render_pl_charter(project: FactoryProject) -> str:
+def render_pl_charter(project: FactoryProject, delivery: Mapping[str, Any] | None = None) -> str:
     """
     Render the CHARTER block for a project's PL.
 
     :param project: The stored project row.
+    :param delivery: The factory's ``product.delivery`` (merge policy,
+        protected repos, paths that need a demo); ``None`` renders none of it.
     :returns: Plain text starting ``CHARTER · <slug>``.
     """
     charter = normalize_charter(project.charter)
@@ -359,11 +361,10 @@ def render_pl_charter(project: FactoryProject) -> str:
     lines += [
         f"IC budget: up to {charter['budget_ics']} ICs at once",
         *_optional_lines(charter),
-        (
-            f"Merge policy: human. Humans merge {repo}; the factory never merges. Report "
-            "READY FOR HUMAN MERGE <url> to your lead once every gate is green; never run "
-            "`gh pr merge` or the merge gate."
-        ),
+        *_delivery_lines(project, charter, delivery or {}),
+        f"Merge policy: {_merge_policy(repo, delivery or {})} Report READY FOR HUMAN MERGE "
+        "<url> to your lead once every gate is green; never run `gh pr merge` or the merge "
+        "gate.",
     ]
     return "\n".join(lines)
 
@@ -422,6 +423,38 @@ def why_lines(charter: Mapping[str, Any]) -> list[str]:
         lines.append(
             f"Flag: ship behind {flag['key']}, off by default{convention}; add the events "
             "the measurement needs and never quote users in PRs"
+        )
+    return lines
+
+
+def _merge_policy(repo: str, delivery: Mapping[str, Any]) -> str:
+    """The charter's merge policy: the product profile's words, else humans merge *repo*."""
+    policy = _text(delivery.get("merge_policy"))
+    if policy is None:
+        return f"human. Humans merge {repo}; the factory never merges."
+    policy = policy.rstrip(".")
+    if "never merge" in policy.casefold():
+        return f"{policy}."
+    return f"{policy}. The factory never merges."
+
+
+def _delivery_lines(
+    project: FactoryProject, charter: Mapping[str, Any], delivery: Mapping[str, Any]
+) -> list[str]:
+    """Charter lines from the factory's product profile (none while it sets nothing)."""
+    own = (project.repo or "").strip().lower()
+    protected = [r for r in _texts(delivery.get("protected_repos")) if r.lower() != own]
+    lines: list[str] = []
+    if protected:
+        lines.append(
+            f"Protected repos: {', '.join(protected)} (never write them; ask your lead "
+            "before anything touching them)"
+        )
+    paths = _texts(delivery.get("demo_paths"))
+    if paths and charter["env_needed"] and charter["preview"]["enabled"]:
+        lines.append(
+            f"Paths that need a demo: {', '.join(paths)} (a PR touching them shows that "
+            "change running in its demo)"
         )
     return lines
 

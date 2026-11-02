@@ -343,6 +343,8 @@ export interface FactoryView {
   /** Absent from servers before the temp-main lane. */
   base?: FactoryBaseView | null;
   url: string;
+  /** The product profile of the definition in force; absent from servers before it. */
+  product?: ProductDef | null;
 }
 
 export interface HealthView {

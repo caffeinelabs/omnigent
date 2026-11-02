@@ -15,7 +15,9 @@ import {
 import { PrPage } from "@/pages/factory/PrPage";
 import { FactoryControlsProvider } from "../controls/FactoryControlsContext";
 import { FactoryShellContext, type FactoryShellValue } from "../shell/FactoryShellContext";
-import { HUMANS_MERGE, REFRESH_COOLDOWN_MS } from "./ReviewActions";
+import { DEFAULT_MERGE_POLICY } from "./deliveryModel";
+import { REFRESH_COOLDOWN_MS } from "./ReviewActions";
+import { sampleProduct } from "./__fixtures__/sampleProduct";
 
 const authenticatedFetch = vi.fn();
 vi.mock("@/lib/identity", () => ({
@@ -708,7 +710,18 @@ describe("PR page · actions", () => {
     );
     expect(merge).toHaveAttribute("target", "_blank");
     // The description is in the DOM whether or not the tooltip is open.
-    expect(merge).toHaveAccessibleDescription(HUMANS_MERGE);
+    expect(merge).toHaveAccessibleDescription(DEFAULT_MERGE_POLICY);
+  });
+
+  it("says the merge policy the product profile sets", () => {
+    const scenario = reviewScenario("ready-with-video");
+    scenario.snapshot.factory.product = sampleProduct({
+      merge_policy: "Release managers merge into main after QA",
+    });
+    const { drawer } = renderDrawer(scenario);
+    expect(within(drawer).getByTestId("review-merge-github")).toHaveAccessibleDescription(
+      "Release managers merge into main after QA. The factory never merges.",
+    );
   });
 
   it("keeps the draft when Escape is pressed in the composer", () => {

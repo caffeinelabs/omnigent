@@ -21,7 +21,7 @@ from omnigent.entities.factory import FactoryPr
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.server.auth import LEVEL_READ
 from omnigent.server.factory.context import factory_deps
-from omnigent.server.factory.env_urls import safe_env_origin
+from omnigent.server.factory.env_urls import factory_env_domain, safe_env_origin
 from omnigent.server.routes._auth_helpers import require_access, require_user
 from omnigent.stores.factory_store import norm_id
 
@@ -39,12 +39,12 @@ def preview_redirect_target(pr: FactoryPr) -> str:
     """
     Where the stable preview link of *pr* points now.
 
-    :returns: The preview app URL (``ready``/``stale``, on the env domain), or
+    :returns: The preview app URL (``ready``/``stale``, on the factory's env domain), or
         ``/factory/<factory>?review=<n>&pr=<pr_id>&preview=unavailable``.
     """
     preview = pr.preview if isinstance(pr.preview, Mapping) else {}
     urls = preview.get("urls") if isinstance(preview.get("urls"), Mapping) else {}
-    origin = safe_env_origin(urls.get("app"))
+    origin = safe_env_origin(urls.get("app"), factory_env_domain(pr.factory_id))
     if preview.get("state") in LIVE_PREVIEW_STATES and origin:
         return f"{origin}/"
     query = urlencode({"review": pr.number, "pr": pr.id, "preview": "unavailable"})
@@ -66,9 +66,8 @@ async def open_pr_preview(request: Request, pr_id: str) -> RedirectResponse:
     await require_access(
         user_id, pr.factory_id, LEVEL_READ, deps.permission_store, deps.conversation_store
     )
-    return RedirectResponse(
-        preview_redirect_target(pr), status_code=302, headers={"Cache-Control": "no-store"}
-    )
+    target = await asyncio.to_thread(preview_redirect_target, pr)
+    return RedirectResponse(target, status_code=302, headers={"Cache-Control": "no-store"})
 
 
 __all__ = ["preview_redirect_target", "preview_stable_path", "router"]

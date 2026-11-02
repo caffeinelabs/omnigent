@@ -6,7 +6,8 @@ import { ProjectCard } from "../board/ProjectCard";
 import { FactoryNowContext } from "../factoryClock";
 import { ReadyForMergeBanner } from "./ReadyForMergeBanner";
 import { reviewScenario } from "./__fixtures__/reviewFixtures";
-import { withReviewMedia } from "./reviewStoryKit";
+import { SAMPLE_DEMO_PATHS, sampleProduct } from "./__fixtures__/sampleProduct";
+import { PHONE_390, withReviewMedia } from "./reviewStoryKit";
 
 const meta = {
   title: "Factory/Review/Ready banner",
@@ -40,14 +41,35 @@ export const OnCard = onCard(withReviewMedia(liveRunSnapshot()), "api-version");
 
 export const OnCardDark = onCard(withReviewMedia(liveRunSnapshot()), "api-version", "dark");
 
-/** A caffeine-ux change without a demo: the banner warns before merging. */
-export const UxChangeWithoutDemo = onCard(
-  (() => {
-    const snapshot = withReviewMedia(liveRunSnapshot());
-    const pr = snapshot.prs.find((p) => p.number === 9630)!;
-    pr.demo = null;
-    return snapshot;
-  })(),
+/** (sample) #9630 with no demo, under a product profile whose *demoPaths* need one. */
+function withoutDemo(demoPaths: string[], mergePolicy: string | null = null): FactorySnapshot {
+  const snapshot = withReviewMedia(liveRunSnapshot());
+  snapshot.factory.product = sampleProduct({ demo_paths: demoPaths, merge_policy: mergePolicy });
+  snapshot.prs.find((p) => p.number === 9630)!.demo = null;
+  return snapshot;
+}
+
+/**
+ * The PR touches a path the product profile says needs a demo, and has
+ * none: the banner warns before merging and names the paths.
+ */
+export const DemoPathMatch = onCard(withoutDemo(SAMPLE_DEMO_PATHS), "api-version");
+
+export const DemoPathMatchDark = onCard(withoutDemo(SAMPLE_DEMO_PATHS), "api-version", "dark");
+
+export const DemoPathMatchPhone: Story = {
+  ...onCard(withoutDemo(SAMPLE_DEMO_PATHS), "api-version"),
+  ...PHONE_390,
+};
+
+/** The profile's paths that need a demo are elsewhere: no warning, whatever the PR changes. */
+export const NoDemoPathMatch = onCard(withoutDemo(["web/**"]), "api-version");
+
+export const NoDemoPathMatchDark = onCard(withoutDemo(["web/**"]), "api-version", "dark");
+
+/** The profile's own merge policy on the merge link's hover text. */
+export const CustomMergePolicy = onCard(
+  withoutDemo([], "Release managers merge into main after QA"),
   "api-version",
 );
 

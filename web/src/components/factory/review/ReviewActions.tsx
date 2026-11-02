@@ -2,8 +2,9 @@
  * The review drawer's action bar: approve and open GitHub's merge box,
  * request changes (the text goes to the PL), merge on GitHub, copy a merge
  * summary, open the PL's chat, and "I merged it" (asks the poller to look
- * now). Humans merge caffeinelabs/app; the factory never does. Once the
- * poller sees the merge, the bar becomes a merged banner.
+ * now). Humans merge, as the product profile's merge policy says; the
+ * factory never does. Once the poller sees the merge, the bar becomes a
+ * merged banner.
  */
 
 import { type KeyboardEvent, useEffect, useRef, useState } from "react";
@@ -24,7 +25,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { factoryInvalidationKeys } from "@/hooks/useFactory";
 import { copyText } from "@/lib/clipboard";
-import type { PrView, ProjectView } from "@/lib/factoryApi";
+import type { DeliveryDef, PrView, ProjectView } from "@/lib/factoryApi";
 import { FactoryApiError, refreshFactoryPr, sendPrFeedback } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
@@ -33,10 +34,10 @@ import { mergeUrl } from "../board/PrRow";
 import { type PrRatingValue, PrRatingInput, PrRatingStandalone } from "../feedback/PrRating";
 import { TONE_CHIP, shortSha } from "../factoryFormat";
 import { LeverGated, useViewerCan } from "../shell/viewerCan";
+import { mergePolicyText } from "./deliveryModel";
 import { mergeSummary } from "./reviewModel";
 import { DotParts } from "./reviewParts";
-
-export const HUMANS_MERGE = "Humans merge caffeinelabs/app. The factory never merges.";
+import { useDelivery } from "./useDelivery";
 
 /** How long "I merged it" stays disabled after a check (the server allows 1 per 10 s). */
 export const REFRESH_COOLDOWN_MS = 10_000;
@@ -196,12 +197,16 @@ export function ReviewActions({
   pr,
   project,
   nowS,
+  delivery: deliveryProp,
 }: {
   factoryId: string;
   pr: PrView;
   project: ProjectView | null;
   nowS: number;
+  /** The product profile's delivery settings (`null`: none); the shell snapshot's when omitted. */
+  delivery?: DeliveryDef | null;
 }) {
+  const mergePolicy = mergePolicyText(useDelivery(deliveryProp));
   const invalidate = useInvalidateFactory(factoryId);
   const [feedback, setFeedback] = useState<FeedbackState>({ phase: "idle" });
   const [composing, setComposing] = useState(false);
@@ -393,7 +398,7 @@ export function ReviewActions({
           <PrRatingInput value={rating} onChange={setRating} disabled={busy} />
         )}
         <span id="review-humans-merge" className="sr-only">
-          {HUMANS_MERGE}
+          {mergePolicy}
         </span>
         <div className="grid grid-cols-2 gap-2 md:flex md:flex-wrap md:items-center">
           {canReview ? (
@@ -415,7 +420,7 @@ export function ReviewActions({
                   <ExternalLinkIcon />
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>{HUMANS_MERGE}</TooltipContent>
+              <TooltipContent>{mergePolicy}</TooltipContent>
             </Tooltip>
           ) : (
             <LeverGated lever="review" className="col-span-2 *:w-full">
@@ -461,7 +466,7 @@ export function ReviewActions({
                 </a>
               </Button>
             </TooltipTrigger>
-            <TooltipContent>{HUMANS_MERGE}</TooltipContent>
+            <TooltipContent>{mergePolicy}</TooltipContent>
           </Tooltip>
           {chip && <span className="col-span-2 md:contents">{chip}</span>}
           <span className={cn("col-span-2 flex items-center gap-1 md:ml-auto", hideWhileComposing)}>

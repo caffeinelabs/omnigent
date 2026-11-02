@@ -63,6 +63,7 @@ from omnigent.server.factory import (
     detectors,
     identity,
     loops,
+    product_profile,
     schemas,
     status,
     stuck,
@@ -609,6 +610,7 @@ class _Loaded:
     definition_proposals_pending: int = 0
     on_trial: int = 0
     def_version: int | None = None
+    product: dict[str, Any] | None = None
     issues: list[Any] = field(default_factory=list)
     now: dict[str, dict[str, Any]] = field(default_factory=dict)
     pod_cap: int | None = None
@@ -723,6 +725,7 @@ def _load(deps: FactoryDeps, factory_id: str, now: float) -> _Loaded:
         definition_proposals_pending=sum(1 for p in pending if p.kind != "projects"),
         on_trial=len(fstore.list_proposals(factory_id, status="trial", limit=500)),
         def_version=definition.pinned_version(deps, factory_id),
+        product=product_profile.product(deps, factory_id),
         issues=fstore.list_issues(factory_id, class_="incident", statuses=["open", "acked"]),
         notified=_notified(fstore, factory_id, now_ms),
         deadlines=deadlines,
@@ -1402,6 +1405,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
                 root, projects, {view["slug"]: view["env"] for view in project_views}
             ),
             "url": f"/factory/{bare_id(factory_id)}",
+            "product": loaded.product,
         },
         "health": _health(app_state, drifted, demo_bytes),
         "projects": project_views,

@@ -20,6 +20,7 @@ import type { FactorySnapshot, PrView, ProjectView } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { useProjectControlParts } from "../controls/ProjectControlsMenu";
+import { deliveryOf } from "../review/deliveryModel";
 import { ReadyForMergeBanner } from "../review/ReadyForMergeBanner";
 import { STAGE_LABEL, formatElapsed, formatUsd, plural } from "../factoryFormat";
 import { projectPageHref } from "../factoryRoutes";
@@ -414,6 +415,7 @@ export function ProjectCard({
                     factoryId={snapshot.factory.id}
                     onReview={onReview}
                     nowS={nowS}
+                    delivery={deliveryOf(snapshot)}
                   />
                 )
               }

@@ -40,18 +40,6 @@ export function sentinelVerifiedHead(pr: PrView): boolean {
   return pr.sentinel?.verdict === "verified" && sameSha(pr.sentinel.head_sha, pr.head_sha);
 }
 
-const UX_PATH = /^services\/caffeine-ux\//;
-
-/** The PR changes the caffeine-ux app, so a reviewer expects to see it run. */
-export function touchesUx(pr: PrView): boolean {
-  return pr.gates.evidence.files.some((file) => UX_PATH.test(file));
-}
-
-/** A UI PR with no demo of its current head yet. */
-export function uxDemoMissing(pr: PrView): boolean {
-  return pr.state === "open" && touchesUx(pr) && (!pr.demo || !pr.demo.is_current_head);
-}
-
 // ── Demo media ─────────────────────────────────────────────────
 
 /** Where a demo file is served (same origin; the server answers Range). */

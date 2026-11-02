@@ -54,7 +54,7 @@ main.
 ## PR
 
 - Open it early, after the first meaningful commit:
-  `gh pr create --draft --repo caffeinelabs/<repo> --base <base> --head factory/<slug>/<task> --title "<plain title>" --body-file <file>`.
+  `gh pr create --draft --repo <owner/repo> --base <base> --head factory/<slug>/<task> --title "<plain title>" --body-file <file>`.
 - Right after, register it: `sys_factory_pr(url=<pr url>, task=<task>, claim="opened")`.
 - The body uses the repo's PR template. Fill in:
   - **Verification plan**: the env checks from the card, verbatim, with

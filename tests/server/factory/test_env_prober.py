@@ -93,7 +93,7 @@ class Probing:
 @pytest.fixture(autouse=True)
 def _quiet_live(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(live, "announce_factory_changed", lambda *_a, **_k: None)
-    monkeypatch.delenv("OMNIGENT_FACTORY_PREVIEW_DOMAIN", raising=False)
+    monkeypatch.setenv("OMNIGENT_FACTORY_PREVIEW_DOMAIN", DOMAIN)
     monkeypatch.delenv("OMNIGENT_ENV_DOMAIN", raising=False)
     status.reset()
     nudge.reset()

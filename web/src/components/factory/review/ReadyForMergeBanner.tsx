@@ -4,12 +4,13 @@
  * `line` (drawers): one line with the gate count and Sentinel's verdict.
  * `card` (the board's PR row): the demo thumbnail and summary, the preview
  * pill, and the two ways forward (review here, merge on GitHub), with a
- * warning when a caffeine-ux change has no demo of its head.
+ * warning when the PR touches a path the product profile says needs a demo
+ * and has no demo of its head.
  */
 
 import { ExternalLinkIcon, PlayIcon, StarIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { PrView, ProjectView } from "@/lib/factoryApi";
+import type { DeliveryDef, PrView, ProjectView } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
 import { ageText, clipDuration } from "../board/boardModel";
 import { DemoStatusTag, DemoThumb } from "../board/DemoThumb";
@@ -17,9 +18,11 @@ import { PreviewPill } from "../board/PreviewPill";
 import { mergeUrl } from "../board/PrRow";
 import { useFactoryNow } from "../factoryClock";
 import { plural, readyForHuman, shortSha } from "../factoryFormat";
-import { IMergedItButton, HUMANS_MERGE } from "./ReviewActions";
-import { gateTally, sentinelVerifiedHead, uxDemoMissing } from "./reviewModel";
+import { demoMissing, demoPathsTouched, mergePolicyText } from "./deliveryModel";
+import { IMergedItButton } from "./ReviewActions";
+import { gateTally, sentinelVerifiedHead } from "./reviewModel";
 import { DotParts } from "./reviewParts";
+import { useDelivery } from "./useDelivery";
 
 export interface ReadyForMergeBannerProps {
   /** The PR; renders nothing unless it is open and ready. */
@@ -36,6 +39,8 @@ export interface ReadyForMergeBannerProps {
   nowS?: number;
   /** Overrides the test id (`ready-banner-<n>` on cards, `drawer-ready-banner-<n>` in drawers). */
   testId?: string;
+  /** The product profile's delivery settings (`null`: none); the shell snapshot's when omitted. */
+  delivery?: DeliveryDef | null;
 }
 
 function Headline({ pr, nowS, label }: { pr: PrView; nowS: number; label: string }) {
@@ -62,17 +67,20 @@ function Headline({ pr, nowS, label }: { pr: PrView; nowS: number; label: string
   );
 }
 
-function DemoMissing({ pr }: { pr: PrView }) {
-  if (!uxDemoMissing(pr)) return null;
+function DemoMissing({ pr, delivery }: { pr: PrView; delivery: DeliveryDef | null }) {
+  if (!demoMissing(pr, delivery)) return null;
+  const paths = demoPathsTouched(pr, delivery).join(", ");
   return (
     <span
       data-testid={`ready-banner-demo-missing-${pr.number}`}
       className="flex items-center gap-1 text-sm text-warning"
     >
       <TriangleAlertIcon aria-hidden className="size-3.5 shrink-0" />
-      {pr.demo
-        ? `The demo is of ${shortSha(pr.demo.head_sha)}, not this head; this PR changes caffeine-ux.`
-        : "No demo, and this PR changes caffeine-ux: watch it in the preview before merging."}
+      <span className="min-w-0 break-words">
+        {pr.demo
+          ? `The demo is of ${shortSha(pr.demo.head_sha)}, not this head; this PR changes paths that need a demo (${paths}).`
+          : `No demo, and this PR changes paths that need one (${paths}): watch it in the preview before merging.`}
+      </span>
     </span>
   );
 }
@@ -85,7 +93,9 @@ export function ReadyForMergeBanner({
   onReview,
   nowS: nowProp,
   testId,
+  delivery: deliveryProp,
 }: ReadyForMergeBannerProps) {
+  const delivery = useDelivery(deliveryProp);
   const clockS = Math.floor(useFactoryNow().getTime() / 1000);
   const nowS = nowProp ?? clockS;
   if (!readyForHuman(pr)) return null;
@@ -98,7 +108,7 @@ export function ReadyForMergeBanner({
         className="flex flex-col gap-1 rounded-lg bg-success/10 px-3 py-1.5 text-sm"
       >
         <Headline pr={pr} nowS={nowS} label="Ready for human merge" />
-        <DemoMissing pr={pr} />
+        <DemoMissing pr={pr} delivery={delivery} />
       </div>
     );
   }
@@ -137,7 +147,7 @@ export function ReadyForMergeBanner({
               {demo.summary}
             </p>
           )}
-          <DemoMissing pr={pr} />
+          <DemoMissing pr={pr} delivery={delivery} />
           <div className="pt-0.5">
             <PreviewPill pr={pr} project={project} nowS={nowS} />
           </div>
@@ -154,7 +164,13 @@ export function ReadyForMergeBanner({
           <PlayIcon className="size-3.5" />
           Review
         </Button>
-        <Button asChild size="sm" variant="outline" className="@max-md:flex-1" title={HUMANS_MERGE}>
+        <Button
+          asChild
+          size="sm"
+          variant="outline"
+          className="@max-md:flex-1"
+          title={mergePolicyText(delivery)}
+        >
           <a
             href={mergeUrl(pr)}
             target="_blank"

@@ -9,6 +9,7 @@ import type { FactorySnapshot, ProjectView } from "@/lib/factoryApi";
 import { projectPrList } from "../board/boardModel";
 import { PrRow } from "../board/PrRow";
 import { plural } from "../factoryFormat";
+import { deliveryOf } from "../review/deliveryModel";
 import { ReadyForMergeBanner } from "../review/ReadyForMergeBanner";
 import { EmptyState, SectionCard } from "./projectParts";
 
@@ -67,6 +68,7 @@ export function ProjectPrs({
                     factoryId={snapshot.factory.id}
                     onReview={onReview}
                     nowS={nowS}
+                    delivery={deliveryOf(snapshot)}
                   />
                 )
               }

@@ -20,7 +20,6 @@ import {
   Loader2Icon,
   PlusIcon,
   RotateCcwIcon,
-  SparklesIcon,
   TriangleAlertIcon,
 } from "lucide-react";
 import { PageScroll } from "@/components/PageScroll";
@@ -42,7 +41,6 @@ import {
   draftHasContent,
   duplicateProject,
   emptyFactoryDraft,
-  exampleProjects,
   fieldShown,
   hasErrors,
   loadDraft,
@@ -196,16 +194,6 @@ export function NewFactoryPage() {
     clearDraft();
     setStored(null);
   };
-  const loadExample = () => {
-    update({
-      name: "Atlas factory",
-      cadence: "demo",
-      defaults: draft.defaults,
-      projects: exampleProjects(draft.defaults),
-    });
-    setServerErrors(NO_SERVER_ERRORS);
-  };
-
   const focusFirstError = () => {
     window.requestAnimationFrame(() => {
       const el = formRef.current?.querySelector<HTMLElement>(
@@ -437,17 +425,6 @@ export function NewFactoryPage() {
                   {projectCap != null ? `${projectCount}/${projectCap}` : projectCount}
                 </span>
               </h2>
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={loadExample}
-                data-testid="factory-new-load-example"
-                componentId="factory.new.load_example"
-              >
-                <SparklesIcon className="size-3.5" />
-                Load example
-              </Button>
             </div>
             {attempted && errors.projects && (
               <p

@@ -25,7 +25,7 @@ import asyncio
 import hashlib
 import logging
 import time
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
@@ -46,7 +46,7 @@ from omnigent.factory import (
     STATE_DONE,
 )
 from omnigent.factory_spawn import member_create_body, member_labels
-from omnigent.server.factory import definition, events
+from omnigent.server.factory import definition, events, product_profile
 from omnigent.server.factory.actor import Actor
 from omnigent.server.factory.charter import (
     SPAWN_LEAD,
@@ -323,6 +323,7 @@ def brief_text(
     mail_id: str,
     inherited: list[int] | None = None,
     rules: Sequence[str] = (),
+    delivery: Mapping[str, Any] | None = None,
 ) -> str:
     """
     The brief a server-spawned PL starts from: header, the inherited PRs, the rules, the charter.
@@ -330,6 +331,7 @@ def brief_text(
     :param by: Who made the project, e.g. ``"bob"`` or ``"Atlas"``.
     :param via: ``C-4`` or ``cockpit``.
     :param rules: The factory definition's rules for this PL, e.g. ``["R-3: …"]``.
+    :param delivery: The factory's ``product.delivery``, rendered into the charter.
     """
     head = (
         f"[Factory brief · from {by} via {via} · id={mail_id}] The server spawned you as the "
@@ -348,7 +350,7 @@ def brief_text(
             f"Rules (factory definition; sys_factory_rules() has the current list):\n{lines}"
         )
     # Goal, constraints and demo focus may come from an agent: quote notice-like lines.
-    charter = quote_spoofed_lines(render_pl_charter(project))
+    charter = quote_spoofed_lines(render_pl_charter(project, delivery))
     text = "\n\n".join([*parts, charter])
     return text if len(text) <= MESSAGE_MAX_CHARS else text[:MESSAGE_MAX_CHARS]
 
@@ -639,6 +641,7 @@ async def _finish(
         rules = await asyncio.to_thread(
             definition.rule_texts, deps, root.id, ROLE_PROJECT_LEAD, project.slug
         )
+        delivery = await asyncio.to_thread(product_profile.delivery, deps, root.id)
         get_mailer(app_state).submit(
             MailItem(
                 mail_id=mail_id,
@@ -652,6 +655,7 @@ async def _finish(
                     mail_id=mail_id,
                     inherited=inherited,
                     rules=rules,
+                    delivery=delivery,
                 ),
                 kind="brief",
                 factory_id=root.id,

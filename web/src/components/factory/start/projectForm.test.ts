@@ -11,7 +11,6 @@ import {
   emptyDefaults,
   emptyFactoryDraft,
   emptyProject,
-  exampleProjects,
   hasErrors,
   heartbeatsPerHour,
   loadDraft,
@@ -28,6 +27,7 @@ import {
   withTitle,
   workProjectCap,
 } from "./projectForm";
+import { SAMPLE_REPO, sampleProjects } from "./__fixtures__/sampleProjects";
 
 function valid(overrides = {}) {
   return emptyProject({
@@ -232,18 +232,18 @@ describe("default repo & base", () => {
     expect(workProjectCap(10, emptyDefaults("caffeinelabs/app", "main"))).toBe(10);
   });
 
-  it("puts the example projects on the default base", () => {
+  it("puts the sample projects on the default base", () => {
     const defaults = emptyDefaults("caffeinelabs/app", "temp-main");
-    expect(exampleProjects(defaults).every((p) => p.branch === "temp-main")).toBe(true);
-    expect(exampleProjects(emptyDefaults("o/r", "dev")).every((p) => p.branch === "main")).toBe(
+    expect(sampleProjects(defaults).every((p) => p.branch === "temp-main")).toBe(true);
+    expect(sampleProjects(emptyDefaults("o/r", "dev")).every((p) => p.branch === "main")).toBe(
       true,
     );
   });
 });
 
-describe("Load example", () => {
-  it("fills the three demo projects of the scenario", () => {
-    const projects = exampleProjects();
+describe("sample projects (sample)", () => {
+  it("are three valid projects", () => {
+    const projects = sampleProjects();
     expect(projects.map((p) => p.slug)).toEqual([
       "api-status",
       "ux-env-badge",
@@ -255,14 +255,14 @@ describe("Load example", () => {
       [true, true, 2],
       [false, false, 2],
     ]);
-    expect(projects.every((p) => p.repo === "caffeinelabs/app")).toBe(true);
+    expect(projects.every((p) => p.repo === SAMPLE_REPO)).toBe(true);
     for (const p of projects) expect(validateProject(p)).toEqual({});
   });
 });
 
 describe("summary", () => {
   it("counts sandboxes, previews (capped at 8) and heartbeat turns", () => {
-    const draft = { ...emptyFactoryDraft(), projects: exampleProjects() };
+    const draft = { ...emptyFactoryDraft(), projects: sampleProjects() };
     expect(startSummary(draft)).toEqual({
       sandboxes: 5,
       maxPreviews: 4,
@@ -329,7 +329,7 @@ describe("server field errors", () => {
 
 describe("draft", () => {
   it("round-trips through localStorage and survives a broken entry", () => {
-    const draft = { ...emptyFactoryDraft(), projects: exampleProjects() };
+    const draft = { ...emptyFactoryDraft(), projects: sampleProjects() };
     saveDraft(draft, 1000);
     expect(loadDraft()).toEqual({ savedAt: 1000, draft });
     clearDraft();

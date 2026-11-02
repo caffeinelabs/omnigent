@@ -713,7 +713,10 @@ def default_doc() -> dict[str, Any]:
 
 
 def seed_doc(labels: Mapping[str, str]) -> dict[str, Any]:
-    """:returns: The v1 doc for a root with *labels* (its legacy labels migrated)."""
+    """
+    :returns: The v1 doc for a root with *labels*: its legacy labels migrated,
+        and the deployment's delivery settings as its ``product.delivery``.
+    """
     doc = default_doc()
     mode = (labels.get(LABEL_ENGINE_MODE) or "").strip()
     if mode in ENGINE_MODES:
@@ -724,7 +727,10 @@ def seed_doc(labels: Mapping[str, str]) -> dict[str, Any]:
     spawn = (labels.get(LABEL_ENGINE_SPAWN) or "").strip()
     if spawn in ("server", "lead"):
         doc["engine"]["spawn"] = spawn
-    return doc
+    from omnigent.server.factory.product_profile import seed_into
+
+    # The deployment's delivery settings (preview domain, protected repos…).
+    return seed_into(doc)
 
 
 # ── Resolution ─────────────────────────────────────────────────

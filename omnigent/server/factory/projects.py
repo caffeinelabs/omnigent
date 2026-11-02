@@ -24,7 +24,7 @@ from omnigent.entities import Conversation
 from omnigent.entities.factory import FactoryPr, FactoryProject
 from omnigent.factory import STAGE_DONE, STAGE_MERGED, STAGE_READY
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE, LEVEL_READ
-from omnigent.server.factory import control, events, gating, spawn, start
+from omnigent.server.factory import control, events, gating, product_profile, spawn, start
 from omnigent.server.factory.actor import Actor
 from omnigent.server.factory.charter import (
     SPAWN_SERVER,
@@ -568,7 +568,9 @@ async def _announce_charter(
     """Tell the PL what changed (and what it inherited); :returns: ``(diff, mail id)``."""
     deps = factory_deps(app_state)
     slug = after_row.slug
-    before, after = render_pl_charter(before_row), render_pl_charter(after_row)
+    delivery = await asyncio.to_thread(product_profile.delivery, deps, root.id)
+    before = render_pl_charter(before_row, delivery)
+    after = render_pl_charter(after_row, delivery)
     diff = start.charter_diff(before, after) if before != after else ""
     if not diff and not inherited:
         return "", None

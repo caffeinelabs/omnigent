@@ -68,7 +68,7 @@ The server owns the tasks (`T-<n>`), their dependencies and states
 
 ```
 # <slug> · plan · updated <iso>
-Charter: <goal> · DoD: <items> · Repo: caffeinelabs/<repo> · Base: <base> · Env needed: yes|no · Previews: on|off (slots <n>, tooling <ref>) · Budget: <n> ICs
+Charter: <goal> · DoD: <items> · Repo: <owner/repo> · Base: <base> · Env needed: yes|no · Previews: on|off (slots <n>, tooling <ref>) · Budget: <n> ICs
 Lead: <parent id> · Supervisor: <id> · Me: <id> · Cockpit: /factory/<factory id>
 Dev env: <env_keeper session id> · <starting|READY|FAILED|DOWN|DOWN (idle)> · <urls from ENV READY>
 

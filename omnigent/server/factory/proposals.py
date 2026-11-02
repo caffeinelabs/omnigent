@@ -299,10 +299,12 @@ def fingerprint(row: FactoryProject) -> str:
     return hashlib.sha256(json.dumps(data, sort_keys=True, default=str).encode()).hexdigest()[:24]
 
 
-def _protected_repos() -> frozenset[str]:
-    from omnigent.policies.builtins.factory import DEFAULT_DENY_REPOS
+def _protected_repos(deps: FactoryDeps, factory_id: str) -> frozenset[str]:
+    """:returns: The profile's protected repos and the always-denied ones (lowercase)."""
+    from omnigent.policies.builtins.factory import always_deny_repos
+    from omnigent.server.factory.product_profile import protected_repos
 
-    return frozenset(r.lower() for r in DEFAULT_DENY_REPOS)
+    return protected_repos(deps, factory_id) | frozenset(always_deny_repos())
 
 
 def factory_repo_set(deps: FactoryDeps, root: Conversation) -> set[str]:
@@ -316,7 +318,7 @@ def factory_repo_set(deps: FactoryDeps, root: Conversation) -> set[str]:
     a repo an agent chose, so they never count: otherwise a lead could spawn a
     PL on any repo, propose a project there and have the guards let it write.
 
-    :returns: Lowercase ``owner/repo`` values, e.g. ``{"caffeinelabs/app"}``.
+    :returns: Lowercase ``owner/repo`` values, e.g. ``{"acme/app"}``.
     """
     from omnigent.server.factory.guard_repos import human_repos
 
@@ -329,12 +331,17 @@ def _with_default_repo(raw: Any, defaults: start.FactoryDefaults) -> Any:
     return raw
 
 
-def _needs_owner(project: ProjectIn, repos: set[str], defaults: start.FactoryDefaults) -> bool:
+def _needs_owner(
+    project: ProjectIn,
+    repos: set[str],
+    defaults: start.FactoryDefaults,
+    protected: frozenset[str] = frozenset(),
+) -> bool:
     """A project off the factory's repos, off the default base, or on a protected repo."""
     from omnigent.policies.builtins.github import _normalize_repo
 
     repo = _normalize_repo(project.repo) or project.repo.lower()
-    if repo not in repos or repo in _protected_repos():
+    if repo not in repos or repo in protected:
         return True
     expected = resolve_base_branch(None, project.repo, defaults.repo, defaults.base)
     return project.base_branch is not None and project.base_branch != expected
@@ -352,6 +359,7 @@ class _Context:
     repos: set[str]
     live_pods: int
     max_pods: int
+    protected: frozenset[str] = frozenset()
 
 
 def _load_context(deps: FactoryDeps, root: Conversation, exclude: str | None) -> _Context:
@@ -375,6 +383,7 @@ def _load_context(deps: FactoryDeps, root: Conversation, exclude: str | None) ->
         repos=factory_repo_set(deps, root),
         live_pods=len(spawn._live_members(deps, root.id)),
         max_pods=spawn._max_pods(deps, root),
+        protected=_protected_repos(deps, root.id),
     )
 
 
@@ -428,7 +437,7 @@ def _new_project(
         )
     taken[project.slug] = where
     money = autonomy.raises_budgets(None, project)
-    return project, money or _needs_owner(project, ctx.repos, ctx.defaults)
+    return project, money or _needs_owner(project, ctx.repos, ctx.defaults, ctx.protected)
 
 
 def _parse_change(
