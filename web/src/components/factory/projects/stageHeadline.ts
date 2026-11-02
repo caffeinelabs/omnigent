@@ -1,14 +1,27 @@
 // What a project's stage reads as in one line: "Starting PL · 2m" while its PL
-// comes up, "Queued · 3 projects ahead" while nothing starts it, "Waiting"
-// while held on its dependencies, else the stage. Pure; StageDots, the
-// project header and the board card render it.
+// comes up ("Restarting PL" when a PL that already worked is woken),
+// "Queued · 3 projects ahead" while nothing starts it, "Waiting" while held on
+// its dependencies, else the stage. Pure; StageDots, the project header and
+// the board card render it.
 
 import type { ProjectView } from "@/lib/factoryApi";
-import { type FactoryTone, STAGE_SHORT_LABEL, plural, stageTone } from "../factoryFormat";
+import {
+  type FactoryTone,
+  STAGE_LABEL,
+  STAGE_SHORT_LABEL,
+  plural,
+  stageTone,
+} from "../factoryFormat";
 
 export interface StageHeadline {
   /** The short label, e.g. `Starting PL`, `Queued`, `Waiting`, `Verify`. */
   label: string;
+  /**
+   * The label where there is room (project header, board card): the start
+   * label while queued with a reason, else the full stage name (`Building`).
+   * An overlay such as `waiting` has its own tag there.
+   */
+  long: string;
   /** Short muted words after the label in a dense row: the start phase or the queue spot. */
   detail: string | null;
   /** The whole reason where there is room: why it is queued, or the stage note. */
@@ -23,20 +36,32 @@ export interface StageHeadline {
 export function stageHeadline(project: ProjectView, nowS: number): StageHeadline {
   const stageAge = nowS - project.stage_since;
   const tone = stageTone(project.stage, project.overlay);
+  const long = STAGE_LABEL[project.stage];
   if (project.overlay === "waiting") {
     const deps = project.depends_on ?? [];
     const why = `Waiting on ${deps.length ? deps.join(", ") : "its dependencies"}`;
-    return { label: "Waiting", detail: null, explain: null, ageS: stageAge, title: why, tone };
+    return {
+      label: "Waiting",
+      long,
+      detail: null,
+      explain: why,
+      ageS: stageAge,
+      title: why,
+      tone,
+    };
   }
   const start = project.stage === "queued" && !project.overlay ? project.start : null;
   if (start?.state === "starting") {
     const phase = start.label === "Starting" ? null : start.label;
+    const label = start.restart ? "Restarting PL" : "Starting PL";
+    const verb = start.restart ? "Restarting" : "Starting";
     return {
-      label: "Starting PL",
+      label,
+      long: label,
       detail: phase,
       explain: phase,
       ageS: start.since != null ? nowS - start.since : stageAge,
-      title: `Starting the project lead${phase ? `: ${phase}` : ""}`,
+      title: `${verb} the project lead${phase ? `: ${phase}` : ""}`,
       tone: "active",
     };
   }
@@ -47,10 +72,11 @@ export function stageHeadline(project: ProjectView, nowS: number): StageHeadline
     const explain = pod ? `${start.label} · ${spot}` : start.label;
     return {
       label: "Queued",
+      long: "Queued",
       detail: pod ? spot : start.label,
       explain,
       ageS: start.since != null ? nowS - start.since : stageAge,
-      title: `Queued: ${explain}`,
+      title: `Queued · ${explain}`,
       tone,
     };
   }
@@ -58,6 +84,7 @@ export function stageHeadline(project: ProjectView, nowS: number): StageHeadline
   const note = project.stage_note ?? null;
   return {
     label: stage,
+    long,
     detail: null,
     explain: note,
     ageS: stageAge,

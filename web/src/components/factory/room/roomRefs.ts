@@ -4,7 +4,8 @@
 //
 // A token that names nothing the cockpit knows ("shortlist #2", "!12" of a
 // PR nobody tracks, "@pl:x" without a PL) is no ref: `refView` returns
-// `null` and the text stays plain. Kinds the cockpit cannot check from what
+// `null` and the text stays plain. A GitHub-style "#9774" that names no
+// project but a tracked PR opens that PR. Kinds the cockpit cannot check from what
 // it holds (tasks, an incident while the issues are not loaded) keep their
 // chip, since their pages say what they are.
 
@@ -59,6 +60,26 @@ function numberExists(n: number, known: readonly { number: number }[]): boolean 
   return known.some((row) => row.number >= n);
 }
 
+/** The chip of tracked PR number `n` as `label` (`!9774`, or `#9774` GitHub-style). */
+function prRef(snapshot: FactorySnapshot, n: string, label: string): RefView | null {
+  const pr = snapshot.prs.find((p) => String(p.number) === n);
+  if (!pr) return null;
+  const state = pr.state === "open" ? (pr.ready ? "ready" : "open") : pr.state;
+  return {
+    label,
+    href: prPageHref(snapshot.factory.id, pr.id),
+    tone:
+      state === "ready"
+        ? "pass"
+        : state === "merged"
+          ? "merged"
+          : state === "closed"
+            ? "muted"
+            : "active",
+    title: `${pr.title} · ${state}`,
+  };
+}
+
 /**
  * A token's chip: label, link and tone from the snapshot (and proposals, people,
  * issues), or `null` when the token names nothing here and stays plain text.
@@ -69,7 +90,10 @@ export function refView(token: RoomToken, sources: RefSources): RefView | null {
   switch (token.kind) {
     case "project": {
       const project = snapshot.projects.find((p) => p.slug === token.value);
-      if (!project) return null;
+      if (!project) {
+        // "#9774" as agents write a GitHub PR: the tracked PR, else plain text.
+        return /^\d+$/.test(token.value) ? prRef(snapshot, token.value, token.text) : null;
+      }
       return {
         label: token.text,
         href: projectPageHref(fid, project.slug),
@@ -84,24 +108,8 @@ export function refView(token: RoomToken, sources: RefSources): RefView | null {
         tone: "muted",
         title: `The ${token.text} thread`,
       };
-    case "pr": {
-      const pr = snapshot.prs.find((p) => String(p.number) === token.value);
-      if (!pr) return null;
-      const state = pr.state === "open" ? (pr.ready ? "ready" : "open") : pr.state;
-      return {
-        label: token.text,
-        href: prPageHref(fid, pr.id),
-        tone:
-          state === "ready"
-            ? "pass"
-            : state === "merged"
-              ? "merged"
-              : state === "closed"
-                ? "muted"
-                : "active",
-        title: `${pr.title} · ${state}`,
-      };
-    }
+    case "pr":
+      return prRef(snapshot, token.value, token.text);
     case "decision": {
       const decision = snapshot.decisions.find((d) => d.ref === token.text);
       if (!decision && !numberExists(Number(token.value), snapshot.decisions)) return null;

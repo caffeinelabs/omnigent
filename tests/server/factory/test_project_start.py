@@ -7,6 +7,7 @@ its PL was still deploying the preview.
 
 from __future__ import annotations
 
+import dataclasses
 import time
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
@@ -15,9 +16,9 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-from omnigent.entities.factory import EventDraft, FactoryProject
+from omnigent.entities.factory import EventDraft, FactoryEvent, FactoryProject
 from omnigent.server.factory import snapshot, spawn
-from omnigent.server.factory.snapshot import start_view
+from omnigent.server.factory.snapshot import delivered_brief_targets, pl_ran_before, start_view
 from omnigent.server.factory.stage import StageResult
 from omnigent.server.routes._sessions.common import _session_sandbox_status_cache
 from omnigent.server.schemas import SandboxStatus
@@ -46,7 +47,9 @@ class _Pl:
     labels: dict[str, str] = field(default_factory=dict)
 
 
-def _row(spawner: str | None = "server", status: str = "active") -> FactoryProject:
+def _row(
+    spawner: str | None = "server", status: str = "active", stage_changed_at: int = 0
+) -> FactoryProject:
     charter: dict[str, Any] = {"goal": "g"}
     if spawner:
         charter["spawn_owner"] = spawner
@@ -58,6 +61,7 @@ def _row(spawner: str | None = "server", status: str = "active") -> FactoryProje
         charter=charter,
         status=status,
         created_at=NOW - 300,
+        stage_changed_at=stage_changed_at,
     )
 
 
@@ -94,6 +98,7 @@ CASES: list[tuple[str, FactoryProject, StageResult, Any, dict[str, Any], dict | 
             "phase": "provisioning",
             "label": "Provisioning sandbox",
             "since": NOW - 120,
+            "restart": False,
         },
     ),
     (
@@ -107,6 +112,7 @@ CASES: list[tuple[str, FactoryProject, StageResult, Any, dict[str, Any], dict | 
             "phase": "connecting",
             "label": "Starting agent",
             "since": NOW - 120,
+            "restart": False,
         },
     ),
     (
@@ -120,6 +126,7 @@ CASES: list[tuple[str, FactoryProject, StageResult, Any, dict[str, Any], dict | 
             "phase": "connect",
             "label": "Waiting for the agent to connect",
             "since": NOW - 120,
+            "restart": False,
         },
     ),
     (
@@ -128,7 +135,28 @@ CASES: list[tuple[str, FactoryProject, StageResult, Any, dict[str, Any], dict | 
         QUEUED,
         _Pl(),
         {"runner_online": True, "briefing": True},
-        {"state": "starting", "phase": "briefing", "label": "Briefing the PL", "since": NOW - 120},
+        {
+            "state": "starting",
+            "phase": "briefing",
+            "label": "Briefing the PL",
+            "since": NOW - 120,
+            "restart": False,
+        },
+    ),
+    # A PL made days ago, woken: timed from when the project went back to queued.
+    (
+        "a PL created days ago comes back",
+        _row(stage_changed_at=NOW - 30),
+        QUEUED,
+        _Pl(created_at=NOW - 3 * 86400),
+        {"sandbox": "provisioning", "ran_before": True},
+        {
+            "state": "starting",
+            "phase": "provisioning",
+            "label": "Provisioning sandbox",
+            "since": NOW - 30,
+            "restart": True,
+        },
     ),
     (
         "the server creates the session",
@@ -178,7 +206,7 @@ CASES: list[tuple[str, FactoryProject, StageResult, Any, dict[str, Any], dict | 
         {
             "state": "queued",
             "phase": "pod_cap",
-            "label": "No free pod: 12 of 12 in use",
+            "label": "All 12 pods in use",
             "since": NOW - 300,
             "ahead": 2,
             "pods_in_use": 12,
@@ -194,7 +222,7 @@ CASES: list[tuple[str, FactoryProject, StageResult, Any, dict[str, Any], dict | 
         {
             "state": "queued",
             "phase": "server",
-            "label": "Waiting for the server to start its PL",
+            "label": "Starts within a minute",
             "since": NOW - 300,
         },
     ),
@@ -214,6 +242,57 @@ def test_start_view(
     expected: dict | None,
 ) -> None:
     assert start_view(row, result, pl, **kwargs) == expected
+
+
+def _brief(factory_id: str, kind: str, to_id: str) -> EventDraft:
+    return EventDraft(
+        factory_id=factory_id,
+        kind=kind,
+        summary="brief",
+        to_id=to_id,
+        subject="mail:mail_brief",
+        data={"kind": "brief", "mail_id": "mail_brief"},
+    )
+
+
+def test_a_pl_that_already_worked_is_a_restart() -> None:
+    # A fresh PL: its project has been queued since before the PL was made.
+    fresh_pl = _Pl(created_at=NOW - 120)
+    queued = _row(stage_changed_at=NOW - 300)
+    assert pl_ran_before(queued, fresh_pl, set()) is False  # type: ignore[arg-type]
+    assert pl_ran_before(queued, fresh_pl, {fresh_pl.id}) is True  # type: ignore[arg-type]
+
+    old_pl = _Pl(created_at=NOW - 3 * 86400)
+    # It moved the stage on since it was made (before reconcile stores the wake's queued).
+    building = dataclasses.replace(_row(stage_changed_at=NOW - 86400), stage="building")
+    assert pl_ran_before(building, old_pl, set()) is True  # type: ignore[arg-type]
+    # A queued stage stored since is no proof: a replacement PL's project is queued too.
+    assert pl_ran_before(_row(stage_changed_at=NOW - 30), old_pl, set()) is False  # type: ignore[arg-type]
+    # It claimed a stage since it was made (every PL does at kickoff).
+    claimed = _row(stage_changed_at=NOW - 30)
+    assert pl_ran_before(claimed, old_pl, set()) is False  # type: ignore[arg-type]
+    claimed = dataclasses.replace(claimed, agent_stage="building", agent_stage_at=NOW - 2 * 86400)
+    assert pl_ran_before(claimed, old_pl, set()) is True  # type: ignore[arg-type]
+
+
+def test_only_a_delivered_brief_counts_as_briefed() -> None:
+    def event(kind: str, to_id: str, mail_kind: str = "brief") -> FactoryEvent:
+        return FactoryEvent(
+            id="e" * 32,
+            factory_id=FID,
+            ts=NOW * 1000,
+            kind=kind,
+            summary="brief",
+            to_id=to_id,
+            data={"kind": mail_kind},
+        )
+
+    mail = [
+        event("message.queued", "queued-only"),
+        event("message.delivered", "briefed"),
+        event("message.delivered", "mailed", mail_kind="message"),
+    ]
+    assert delivered_brief_targets(mail) == {"briefed"}
 
 
 # ── Through the snapshot ────────────────────────────────────────
@@ -285,9 +364,28 @@ async def test_projects_waiting_for_a_pod_say_so_and_how_many_are_ahead(
     first, second = (views[slug] for slug in order)
     assert first["stage"] == second["stage"] == "queued"
     assert first["start"]["phase"] == second["start"]["phase"] == "pod_cap"
-    assert first["start"]["label"] == "No free pod: 3 of 3 in use"
+    assert first["start"]["label"] == "All 3 pods in use"
     assert (first["start"]["ahead"], second["start"]["ahead"]) == (0, 1)
     assert views["api-version"]["start"] is None
+
+
+async def test_an_archived_member_holds_no_pod(
+    spawning: tuple[Cockpit, FakeCreates], monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cockpit, _creates = spawning
+
+    async def later(*_args: Any, **_kw: Any) -> spawn.SpawnOutcome:
+        return spawn.SpawnOutcome("busy")
+
+    monkeypatch.setattr(spawn, "launch", later)
+    await _create(cockpit, "ux-status-page")
+    monkeypatch.setattr(spawn, "pod_cap", lambda _deps, _lead: 3)
+    assert (await _projects(cockpit))["ux-status-page"]["start"]["phase"] == "pod_cap"
+
+    # The spawner does not count an archived member; neither does the cockpit.
+    cockpit.world.store.update_conversation(cockpit.world.id("lead_b"), archived=True)
+    start = (await _projects(cockpit))["ux-status-page"]["start"]
+    assert (start["phase"], start["label"]) == ("server", "Starts within a minute")
 
 
 async def test_a_starting_pl_shows_its_sandbox_then_its_runner(
@@ -309,6 +407,7 @@ async def test_a_starting_pl_shows_its_sandbox_then_its_runner(
             "phase": "provisioning",
             "label": "Provisioning sandbox",
             "since": pl.created_at,
+            "restart": False,
             "ahead": None,
             "pods_in_use": None,
             "pod_cap": None,
@@ -332,6 +431,32 @@ async def test_a_starting_pl_shows_its_sandbox_then_its_runner(
         assert view["start"]["label"] == "Waiting for the agent to connect"
     finally:
         _session_sandbox_status_cache.pop(pl.id, None)
+
+
+async def test_a_woken_pl_restarts_timed_from_the_wake(
+    spawning: tuple[Cockpit, FakeCreates],
+) -> None:
+    cockpit, _creates = spawning
+    pl_id = cockpit.world.id("pl")
+    pl = cockpit.world.store.get_conversation(pl_id)
+    assert pl is not None
+    row = cockpit.store.get_project(cockpit.fid, "api-version")
+    assert row is not None
+    # Briefed when it first started; days later it is woken and back to queued.
+    cockpit.store.append_event(_brief(cockpit.fid, "message.queued", pl_id))
+    cockpit.store.append_event(_brief(cockpit.fid, "message.delivered", pl_id))
+    woke = int(pl.created_at) + 3 * 86400
+    cockpit.store.update_project(row.id, stage="queued", stage_changed_at=woke)
+    try:
+        _session_sandbox_status_cache[pl_id] = SandboxStatus(stage="provisioning")
+        view = (await _projects(cockpit))["api-version"]
+    finally:
+        _session_sandbox_status_cache.pop(pl_id, None)
+
+    assert view["stage"] == "queued"
+    start = view["start"]
+    assert (start["state"], start["phase"], start["restart"]) == ("starting", "provisioning", True)
+    assert start["since"] == woke
 
 
 async def test_a_lead_spawned_project_waits_for_atlas(lead_spawned: Cockpit) -> None:
@@ -363,7 +488,7 @@ async def test_a_project_made_to_validate_a_merged_pr_is_not_merged(
 
     view = (await _projects(cockpit))["api-version"]
     assert (view["stage"], view["stage_note"]) == (
-        "planning",
+        "verify",
         "!9774 was merged before this project started",
     )
 
@@ -372,7 +497,10 @@ async def test_a_project_made_to_validate_a_merged_pr_is_not_merged(
         cockpit.fid, "api-version", agent_stage="verify", agent_stage_at=int(time.time())
     )
     view = (await _projects(cockpit))["api-version"]
-    assert (view["stage"], view["stage_note"]) == ("verify", "PR merged · PL still at verify")
+    assert (view["stage"], view["stage_note"]) == (
+        "verify",
+        "PR merged · the PL says it is verifying",
+    )
 
     # Done validating: only now does it read Merged.
     cockpit.store.upsert_project(

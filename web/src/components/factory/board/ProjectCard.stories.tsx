@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { LIVE_RUN_NOW_S } from "../__fixtures__/liveRun";
+import { startStorySnapshot } from "../projects/__fixtures__/startFixtures";
 import { CARD_STATES, type CardState, cardScenario } from "./__fixtures__/boardFixtures";
 import { BoardFrame } from "./boardStoryKit";
 import { ProjectCard } from "./ProjectCard";
@@ -67,3 +68,81 @@ export const Merged = card("merged");
 export const PrClosed = card("pr-closed");
 export const ClaimMismatch = card("claim-mismatch");
 export const LaunchDrift = card("launch-drift");
+
+/** Queued and validating cards from the 2026-11-02 morning, each saying why. */
+const START_SLUGS = [
+  "ux-status-page",
+  "ux-env-badge-copy",
+  "api-rate-limit",
+  "db-backfill",
+  "api-request-id",
+  "api-healthz",
+  "ux-slash-focus",
+  "ux-dark-toggle",
+  "ux-theme-tokens",
+  "settings-row",
+  "validate-build-tier",
+  "validate-preview-ttl",
+];
+
+function StartCards() {
+  const snapshot = startStorySnapshot();
+  return (
+    <>
+      {START_SLUGS.map((slug) => (
+        <ProjectCard
+          key={slug}
+          snapshot={snapshot}
+          project={snapshot.projects.find((p) => p.slug === slug)!}
+          nowS={snapshot.server_time}
+          onReview={noop}
+          onDecision={noop}
+        />
+      ))}
+    </>
+  );
+}
+
+const PHONE_390 = {
+  parameters: {
+    viewport: {
+      options: {
+        phone390: {
+          name: "Phone 390",
+          styles: { width: "390px", height: "844px" },
+          type: "mobile",
+        },
+      },
+    },
+  },
+  globals: { viewport: { value: "phone390" } },
+} satisfies Partial<Story>;
+
+/**
+ * "Starting PL" / "Restarting PL" with the step, "Queued" with the reason
+ * (next pass, pods, Atlas), "Waiting on" a dependency, and Verify on merged PRs.
+ */
+export const QueuedReasons: Story = {
+  render: () => (
+    <BoardFrame>
+      <StartCards />
+    </BoardFrame>
+  ),
+};
+
+export const QueuedReasonsDark: Story = {
+  render: () => (
+    <BoardFrame theme="dark">
+      <StartCards />
+    </BoardFrame>
+  ),
+};
+
+export const QueuedReasonsPhone: Story = {
+  ...PHONE_390,
+  render: () => (
+    <BoardFrame width={390}>
+      <StartCards />
+    </BoardFrame>
+  ),
+};

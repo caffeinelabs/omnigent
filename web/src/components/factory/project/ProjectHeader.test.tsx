@@ -43,13 +43,31 @@ describe("ProjectHeader stage line", () => {
     const stage = header("ux-dark-toggle");
     expect(stage.getByTestId("project-stage-label")).toHaveTextContent("Queued");
     expect(stage.getByTestId("project-stage-why")).toHaveTextContent(
-      "No free pod: 12 of 12 in use · 1 project ahead",
+      "All 12 pods in use · 1 project ahead",
     );
   });
 
+  it("says a woken PL is restarting, timed from the wake", () => {
+    const stage = header("db-backfill");
+    expect(stage.getByTestId("project-stage-label")).toHaveTextContent("Restarting PL");
+    expect(stage.getByText("· 2m")).toBeInTheDocument();
+  });
+
+  it("says what a project held on a dependency waits for", () => {
+    const stage = header("ux-theme-tokens");
+    expect(stage.getByTestId("project-stage-why")).toHaveTextContent("Waiting on ux-dark-toggle");
+  });
+
   it("says why a project on a merged PR is not Merged", () => {
-    const stage = header("validate-build-tier");
-    expect(stage.getByTestId("project-stage-label")).toHaveTextContent("Verify");
+    const adopted = header("validate-build-tier");
+    expect(adopted.getByTestId("project-stage-label")).toHaveTextContent("Verify");
+    expect(adopted.getByTestId("project-stage-why")).toHaveTextContent(
+      "!9774 was merged before this project started",
+    );
+  });
+
+  it("says a merged project still has open tasks", () => {
+    const stage = header("validate-preview-ttl");
     expect(stage.getByTestId("project-stage-why")).toHaveTextContent(
       "PR merged · 1 task still open",
     );

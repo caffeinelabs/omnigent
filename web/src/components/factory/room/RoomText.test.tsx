@@ -54,6 +54,12 @@ describe("RoomText refs", () => {
     );
   });
 
+  it("chips a GitHub-style PR number next to plain shortlist numbers", () => {
+    renderText("Validating #9632 (shortlist #2)");
+    expect(chips()).toEqual(["#9632"]);
+    expect(screen.getByTestId("body").textContent).toBe("Validating #9632 (shortlist #2)");
+  });
+
   it("drops unresolved refs from a markdown body's chip row", () => {
     renderText("Shortlist:\n- ux-status-page (#2)\n- #db-version\n- @pl:nope");
     expect(chips()).toEqual(["#db-version"]);
@@ -72,6 +78,15 @@ describe("refView", () => {
     expect(view("#factory")?.href).toContain("factory");
     expect(view("!9632")?.tone).toBe("merged");
     expect(view("@pl:api-version")?.label).toBe("@PL · api-version");
+  });
+
+  it("opens a tracked PR written GitHub-style as #9632", () => {
+    const pr = view("#9632");
+    expect(pr?.label).toBe("#9632");
+    expect(pr?.tone).toBe("merged");
+    expect(pr?.href).toBe(view("!9632")?.href);
+    // A number that is neither a project nor a tracked PR stays plain text.
+    expect(view("#9999")).toBeNull();
   });
 
   it("returns null for a slug, PR or agent the factory doesn't have", () => {

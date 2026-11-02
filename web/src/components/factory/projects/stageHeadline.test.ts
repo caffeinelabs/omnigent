@@ -30,10 +30,30 @@ describe("stageHeadline", () => {
     );
     expect(h).toMatchObject({
       label: "Starting PL",
+      long: "Starting PL",
       detail: "Provisioning sandbox",
       ageS: 120,
       title: "Starting the project lead: Provisioning sandbox",
       tone: "active",
+    });
+  });
+
+  it("says a woken PL is restarting, timed from the wake", () => {
+    const h = stageHeadline(
+      queued({
+        state: "starting",
+        phase: "provisioning",
+        label: "Provisioning sandbox",
+        since: NOW - 45,
+        restart: true,
+      }),
+      NOW,
+    );
+    expect(h).toMatchObject({
+      label: "Restarting PL",
+      long: "Restarting PL",
+      ageS: 45,
+      title: "Restarting the project lead: Provisioning sandbox",
     });
   });
 
@@ -53,7 +73,7 @@ describe("stageHeadline", () => {
     const start: ProjectStartView = {
       state: "queued",
       phase: "pod_cap",
-      label: "No free pod: 12 of 12 in use",
+      label: "All 12 pods in use",
       since: NOW - 240,
       ahead: 3,
       pods_in_use: 12,
@@ -62,7 +82,8 @@ describe("stageHeadline", () => {
     expect(stageHeadline(queued(start), NOW)).toMatchObject({
       label: "Queued",
       detail: "3 projects ahead",
-      explain: "No free pod: 12 of 12 in use · 3 projects ahead",
+      explain: "All 12 pods in use · 3 projects ahead",
+      title: "Queued · All 12 pods in use · 3 projects ahead",
       ageS: 240,
     });
     expect(stageHeadline(queued({ ...start, ahead: 0 }), NOW).detail).toBe("next for a free pod");
@@ -83,7 +104,13 @@ describe("stageHeadline", () => {
 
   it("keeps a bare Queued when the server says nothing (older servers)", () => {
     const h = stageHeadline(queued(null), NOW);
-    expect([h.label, h.detail, h.explain, h.ageS]).toEqual(["Queued", null, null, 300]);
+    expect([h.label, h.long, h.detail, h.explain, h.ageS]).toEqual([
+      "Queued",
+      "Queued",
+      null,
+      null,
+      300,
+    ]);
   });
 
   it("lets an overlay speak over the start reason", () => {
@@ -91,6 +118,7 @@ describe("stageHeadline", () => {
     const waiting = queued(start, { overlay: "waiting", depends_on: ["db-version"] });
     expect(stageHeadline(waiting, NOW)).toMatchObject({
       label: "Waiting",
+      explain: "Waiting on db-version",
       title: "Waiting on db-version",
     });
     const failed = queued(start, { overlay: "failed" });
@@ -106,6 +134,7 @@ describe("stageHeadline", () => {
     };
     expect(stageHeadline(project, NOW)).toMatchObject({
       label: "Verify",
+      long: "Verify",
       detail: null,
       explain: "!9774 was merged before this project started",
       title: "Verify · !9774 was merged before this project started",

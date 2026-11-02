@@ -605,35 +605,61 @@ AFTER_MERGE: list[tuple[str, FactoryProject, list[FactoryTask], StageResult]] = 
         StageResult("planning", note="PR merged · 1 task still open"),
     ),
     (
-        "a ready claim after the merge is no work stage",
+        "a ready claim after the merge: its report is ready",
         _later_project(agent_stage="ready", agent_stage_at=T0 + 60),
         [],
-        StageResult("merged"),
+        StageResult("ready", note="PR merged · the PL says its work is ready for you"),
     ),
     (
         "PL claims building after the merge",
         _later_project(agent_stage="building", agent_stage_at=T0 + 60),
         [],
-        StageResult("building", note="PR merged · PL still at building"),
+        StageResult("building", note="PR merged · the PL says it is still building"),
+    ),
+    # Every PL claims building at kickoff: a running task outranks that claim.
+    (
+        "the kickoff claim does not hide a running check",
+        _later_project(agent_stage="building", agent_stage_at=T0 + 60),
+        [_task("measure", "running", kind="ops")],
+        StageResult("verify", note="PR merged · 1 task still open"),
+    ),
+    (
+        "a ready claim while an implement task runs",
+        _later_project(agent_stage="ready", agent_stage_at=T0 + 60),
+        [_task("follow-up", "running")],
+        StageResult("building", note="PR merged · 1 task still open", claim_mismatch=True),
     ),
     # validate-build-tier: made to validate app#9774 after Luka merged it.
     (
         "made to validate an already-merged PR",
         _later_project(created_at=T0 + 600),
         [],
-        StageResult("planning", note="!9774 was merged before this project started"),
+        StageResult("verify", note="!9774 was merged before this project started"),
     ),
     (
         "validating an already-merged PR, PL at verify",
         _later_project(created_at=T0 + 600, agent_stage="verify", agent_stage_at=T0 + 900),
         [],
-        StageResult("verify", note="PR merged · PL still at verify"),
+        StageResult("verify", note="PR merged · the PL says it is verifying"),
     ),
     (
         "validating an already-merged PR, a test task running",
         _later_project(created_at=T0 + 600),
         [_task("recipe", "running", kind="test")],
         StageResult("verify", note="PR merged · 1 task still open"),
+    ),
+    # The live validate-build-tier: made after app#9774 merged, kickoff claim, a test running.
+    (
+        "validating an already-merged PR: kickoff claim and a test task running",
+        _later_project(created_at=T0 + 600, agent_stage="building", agent_stage_at=T0 + 660),
+        [_task("recipe", "running", kind="test")],
+        StageResult("verify", note="PR merged · 1 task still open"),
+    ),
+    (
+        "validation report handed over: the PL claims ready",
+        _later_project(created_at=T0 + 600, agent_stage="ready", agent_stage_at=T0 + 3600),
+        [],
+        StageResult("ready", note="PR merged · the PL says its work is ready for you"),
     ),
     (
         "validation done: the PL claims merged",

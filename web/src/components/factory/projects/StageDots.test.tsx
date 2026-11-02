@@ -50,7 +50,7 @@ describe("StageDots while queued", () => {
       start: {
         state: "queued" as const,
         phase: "pod_cap",
-        label: "No free pod: 12 of 12 in use",
+        label: "All 12 pods in use",
         since: ROUND3_NOW_S - 60,
         ahead: 3,
       },
@@ -60,9 +60,6 @@ describe("StageDots while queued", () => {
     expect(screen.getByTestId(`stage-detail-${project.slug}`)).toHaveTextContent(
       "3 projects ahead",
     );
-    expect(dots).toHaveAttribute(
-      "title",
-      "Queued: No free pod: 12 of 12 in use · 3 projects ahead",
-    );
+    expect(dots).toHaveAttribute("title", "Queued · All 12 pods in use · 3 projects ahead");
   });
 });

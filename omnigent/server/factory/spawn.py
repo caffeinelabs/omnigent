@@ -197,12 +197,16 @@ def _max_pods(deps: FactoryDeps, root: Conversation) -> int:
     return pod_cap(deps, root) or DEFAULT_MAX_PODS
 
 
-def live_members(factory_id: str, store: ConversationStore) -> list[Conversation]:
-    """:returns: The members that hold a pod: top-level, not closed and not done."""
+def holds_pod(member: Conversation) -> bool:
+    """:returns: Whether a top-level *member* holds a pod: not closed or archived, not done."""
     from omnigent.server.factory.control import is_closed
 
-    members = factory_members(factory_id, store)
-    return [m for m in members if not is_closed(m) and m.labels.get(LABEL_STATE) != STATE_DONE]
+    return not is_closed(member) and member.labels.get(LABEL_STATE) != STATE_DONE
+
+
+def live_members(factory_id: str, store: ConversationStore) -> list[Conversation]:
+    """:returns: The members that hold a pod: top-level, not closed and not done."""
+    return [m for m in factory_members(factory_id, store) if holds_pod(m)]
 
 
 def _live_members(deps: FactoryDeps, factory_id: str) -> list[Conversation]:

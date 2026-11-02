@@ -720,7 +720,6 @@ export interface CharterView {
   health_path?: string | null;
 }
 
-/** One project card. */
 /**
  * Why a queued project has no working PL yet. `starting`: its PL session comes
  * up (sandbox, runner, brief) or is being created; `queued`: nothing starts it
@@ -731,16 +730,20 @@ export interface ProjectStartView {
   /** `provisioning`/`cloning`/`starting`/`connecting` (the PL sandbox), `connect`,
    * `briefing`, `creating`, `lead`, `pod_cap` or `server`. */
   phase: string | null;
-  /** e.g. `Provisioning sandbox`, `No free pod: 12 of 12 in use`. */
+  /** e.g. `Provisioning sandbox`, `All 12 pods in use`. */
   label: string;
-  /** Epoch seconds: the PL session's creation while starting, the project's while queued. */
+  /** Epoch seconds: while starting, the PL session's creation or, for a woken PL,
+   * when the project went back to queued; while queued, the project's creation. */
   since: number | null;
+  /** The PL already worked and is coming back (woken or relaunched). */
+  restart?: boolean;
   /** Projects ahead of this one for a free pod. */
   ahead?: number | null;
   pods_in_use?: number | null;
   pod_cap?: number | null;
 }
 
+/** One project card. */
 export interface ProjectView {
   slug: string;
   title: string;

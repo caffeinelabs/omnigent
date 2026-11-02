@@ -49,12 +49,12 @@ from omnigent.server.factory.membership import factory_members
 from omnigent.server.factory.snapshot import (
     MAIL_WINDOW_S,
     list_factory_roots,
+    load_open_tasks,
     pending_brief_targets,
     pick_pl,
     pl_title_slug,
     project_stage,
 )
-from omnigent.server.factory.stage import OPEN_TASK_STATES
 from omnigent.server.factory.start import FOLDER_ICON, folder_name, is_factory_folder
 from omnigent.stores.factory_store import now_ms
 from omnigent.util.session_lifecycle import is_session_closed
@@ -279,7 +279,7 @@ def _sync_factory(
         limit=5000,
     )
     pending = pending_brief_targets(mail)
-    open_tasks = fstore.list_tasks(factory_id, states=OPEN_TASK_STATES)
+    open_tasks = load_open_tasks(deps, factory_id)
     changes: list[tuple[Any, str, str, str | None]] = []
     current: list[Any] = []  # each project as it stands after this pass
     for row in rows.values():

@@ -185,41 +185,56 @@ def _claim_after_merge(project: FactoryProject, prs: Sequence[FactoryPr]) -> str
     return claim if project.agent_stage_at > last else None
 
 
+# How a stage claim made after the merge reads in the note.
+_CLAIM_NOTE: Final = {
+    STAGE_PLANNING: "the PL says it is still planning",
+    STAGE_BUILDING: "the PL says it is still building",
+    STAGE_REVIEW: "the PL says its work is in review",
+    STAGE_VERIFY: "the PL says it is verifying",
+    STAGE_READY: "the PL says its work is ready for you",
+}
+
+
 def work_after_merge(
     project: FactoryProject, prs: Sequence[FactoryPr], tasks: Sequence[FactoryTask] = ()
 ) -> tuple[str, str] | None:
     """
     The stage of the work a project still does once all its PRs are merged.
 
-    In order: its open tasks (a working-stage claim the PL made after the merge
-    names their stage); such a claim alone; a project whose every merge
-    predates it (made to validate an already-merged PR) until its PL claims
-    ``merged``.
+    In order: its active tasks (running, in review, blocked) name the stage;
+    else a stage claim the PL made after the merge short of ``merged`` (every
+    PL claims ``building`` at kickoff, so the claim never outranks a running
+    task); else open tasks that have not started read as planning; else a
+    project whose every merge predates it (made to validate an
+    already-merged PR) is verifying until its PL claims ``merged``.
 
     :param prs: The project's PRs; none open, at least one merged.
     :param tasks: The factory's tasks (other projects' and closed ones are ignored).
     :returns: ``(stage, note)``, or ``None`` when the merge finished the project's work.
     """
     claim = _claim_after_merge(project, prs)
-    # "ready" means a PR ready for a human: with every PR merged, not a stage of work.
-    working = claim if claim is not None and stage_rank(claim) < _RANK[STAGE_READY] else None
+    # Short of "merged" a claim names work going on ("ready": its report is ready for a human).
+    working = claim if claim in _CLAIM_NOTE else None
     open_tasks = [
         t for t in tasks if t.project_slug == project.slug and t.state not in TASK_CLOSED_STATES
     ]
     if open_tasks:
-        active = [t for t in open_tasks if t.state not in ("planned", "ready")]
-        stage = min((_task_stage(t) for t in active), key=stage_rank, default=STAGE_PLANNING)
         n = len(open_tasks)
-        return working or stage, f"PR merged · {n} task{'s' if n != 1 else ''} still open"
+        note = f"PR merged · {n} task{'s' if n != 1 else ''} still open"
+        active = [t for t in open_tasks if t.state not in ("planned", "ready")]
+        if active:
+            return min((_task_stage(t) for t in active), key=stage_rank), note
+        return working or STAGE_PLANNING, note
     if working is not None:
-        return working, f"PR merged · PL still at {working}"
+        return working, f"PR merged · {_CLAIM_NOTE[working]}"
     times = _merge_times(prs)
     started = project.created_at if project.created_by != _BACKFILLED_BY else 0
     adopted = bool(started) and all(t is not None and t < started for t in times)
     if adopted and times and claim != STAGE_MERGED:
         refs = [f"!{p.number}" for p in prs if p.state == "merged"]
         verb = "was" if len(refs) == 1 else "were"
-        return STAGE_PLANNING, f"{', '.join(refs)} {verb} merged before this project started"
+        # Such a project exists to check work that is already merged.
+        return STAGE_VERIFY, f"{', '.join(refs)} {verb} merged before this project started"
     return None
 
 

@@ -14,7 +14,7 @@ import { LiveDot } from "../board/FactoryHeader";
 import { ClaimChip, StatusTag } from "../board/ProjectCard";
 import { ProvisioningTimeline, StageStepper } from "../board/StageStepper";
 import { ProjectControlsMenu } from "../controls/ProjectControlsMenu";
-import { STAGE_LABEL, formatElapsed, formatUsd } from "../factoryFormat";
+import { formatElapsed, formatUsd } from "../factoryFormat";
 import { stageHeadline } from "../projects/stageHeadline";
 
 export function ProjectHeader({
@@ -34,8 +34,7 @@ export function ProjectHeader({
   const elapsed = formatElapsed(projectElapsed(project, snapshot.server_time, nowS));
   // A queued project says why ("Starting PL", "Queued"); a merged one still working, what.
   const headline = stageHeadline(project, nowS);
-  const queuedWhy = project.stage === "queued" && project.start != null;
-  const stageLabel = queuedWhy ? headline.label : STAGE_LABEL[project.stage];
+  const stageLabel = headline.long;
   // The provisioning timeline below already names the sandbox step.
   const timeline = project.stage === "queued" && project.provisioning != null;
   const why = timeline ? null : headline.explain;

@@ -818,9 +818,12 @@ class ProjectStartView(_View):
         (the PL sandbox), ``connect`` (runner not attached), ``briefing``,
         ``creating`` (the server creates the session), ``lead`` (Atlas spawns
         it), ``pod_cap`` (no free pod) or ``server`` (the server's next pass).
-    :param label: Plain text for the phase, e.g. ``"Provisioning sandbox"``.
-    :param since: Epoch seconds: the PL session's creation while starting, the
-        project's while queued.
+    :param label: Plain text for the phase, e.g. ``"Provisioning sandbox"``
+        or ``"All 12 pods in use"``.
+    :param since: Epoch seconds: while starting, the PL session's creation or,
+        for a woken PL, when the project went back to queued; while queued,
+        the project's creation.
+    :param restart: The PL already worked and is coming back (woken or relaunched).
     :param ahead: Projects ahead of this one for a free pod (``pod_cap``).
     """
 
@@ -828,6 +831,7 @@ class ProjectStartView(_View):
     phase: str | None = None
     label: str
     since: int | None = None
+    restart: bool = False
     ahead: int | None = None
     pods_in_use: int | None = None
     pod_cap: int | None = None

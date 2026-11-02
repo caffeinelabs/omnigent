@@ -8,11 +8,16 @@ import { StageDots } from "./StageDots";
 const SLUGS = [
   "ux-status-page",
   "ux-env-badge-copy",
+  "api-rate-limit",
+  "db-backfill",
   "api-request-id",
+  "api-healthz",
   "ux-slash-focus",
   "ux-dark-toggle",
-  "validate-build-tier",
+  "ux-theme-tokens",
   "settings-row",
+  "validate-build-tier",
+  "validate-preview-ttl",
 ];
 
 /** Each queued state's stage chip next to its project, as a Projects row reads it. */
@@ -33,12 +38,20 @@ function Chips() {
   );
 }
 
-/** The project page's stage card for a starting PL, a pod-capped project and validation. */
+/** The project page's stage card for starting, restarting, queued, waiting and validating. */
 function Headers() {
   const snapshot = startStorySnapshot();
   return (
     <FactoryViewerProvider viewer={snapshot.viewer}>
-      {["ux-status-page", "ux-dark-toggle", "validate-build-tier"].map((slug) => (
+      {[
+        "ux-status-page",
+        "db-backfill",
+        "ux-dark-toggle",
+        "settings-row",
+        "ux-theme-tokens",
+        "validate-build-tier",
+        "validate-preview-ttl",
+      ].map((slug) => (
         <ProjectHeader
           key={slug}
           snapshot={snapshot}
@@ -75,9 +88,10 @@ const PHONE = {
 } satisfies Partial<Story>;
 
 /**
- * Starting PL (sandbox, runner, session being created), Queued for a pod
- * (next, 1 ahead), Verify on a merged PR still being validated, and a bare
- * Queued from a server that sends no reason.
+ * Starting PL (sandbox, runner, brief, session being created), Restarting PL
+ * (a woken PL), Queued (the server's next pass, a pod: next or 1 ahead,
+ * Atlas), Waiting on a dependency, and Verify on merged PRs still validated
+ * (merged before the project started; a test task still open).
  */
 export const QueuedAndStarting: Story = {
   render: () => (
