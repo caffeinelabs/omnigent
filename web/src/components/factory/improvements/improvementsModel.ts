@@ -50,8 +50,35 @@ export interface TrialProgress {
   elapsedH: number;
   totalH: number;
   pct: number;
-  /** Unattended trials revert at twice the window. */
+  /** Past its window: waiting on the owners (unattended trials revert at twice the window). */
   overdue: boolean;
+}
+
+/** How many times the server extended a trial because the factory was idle. */
+export function trialExtensions(proposal: ProposalView): number {
+  const value = proposal.result?.trial_extensions;
+  return typeof value === "number" && value > 0 ? Math.floor(value) : 0;
+}
+
+/** `"extended ×2 (idle)"`, or null for a trial that ran its first window. */
+export function extendedLabel(proposal: ProposalView): string | null {
+  const n = trialExtensions(proposal);
+  return n > 0 ? `extended ×${n} (idle)` : null;
+}
+
+/** When an idle trial's unanswered decision keeps it (epoch s), else null. */
+export function keepsUnansweredAt(proposal: ProposalView): number | null {
+  const result = proposal.result ?? {};
+  return result.default === "keep" && typeof result.default_at === "number"
+    ? result.default_at
+    : null;
+}
+
+/** The hover text of a trial past its window: what happens if nobody decides. */
+export function overdueNote(proposal: ProposalView): string {
+  return keepsUnansweredAt(proposal) != null
+    ? "Past its window: the owners decide. If nobody answers, it stays applied because nothing got worse"
+    : "Past its window: it reverts unattended at twice the window";
 }
 
 export function trialProgress(proposal: ProposalView, nowS: number): TrialProgress | null {
@@ -171,6 +198,11 @@ export function nCounts(card: ScorecardView): string {
 /** The scorecard's verdict as a chip: what the server would do now. */
 export function verdictText(card: ScorecardView): string {
   const tail = `${card.n} of ${card.min_n} ${nCounts(card)}`;
+  if (card.idle && card.outcome === "inconclusive") {
+    return card.live
+      ? "idle · no merged PRs or finished tasks"
+      : "idle the whole trial · nothing to judge";
+  }
   switch (card.outcome) {
     case "kept":
       return card.live ? `on track to keep · ${tail}` : `kept · ${tail}`;
@@ -181,6 +213,14 @@ export function verdictText(card: ScorecardView): string {
     default:
       return `inconclusive so far · ${readableReason(card.reason)}`;
   }
+}
+
+/** What the server needs to decide: the keep rule, or what happens to an idle trial. */
+export function verdictHint(card: ScorecardView): string {
+  if (card.idle && card.outcome === "inconclusive") {
+    return "an idle trial gets its window again, at most twice; then the owners decide";
+  }
+  return `kept once n reaches ${card.min_n} ${nCounts(card)}, the target is met and every guard holds`;
 }
 
 /** The server's reason with metric keys as people read them. */

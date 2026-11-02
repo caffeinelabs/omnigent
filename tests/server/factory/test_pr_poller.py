@@ -15,6 +15,7 @@ import httpx
 import pytest
 import pytest_asyncio
 
+from omnigent import factory as F
 from omnigent.server.factory import live, nudge, status
 from omnigent.server.factory.background.pr_poller import PrPoller
 from omnigent.server.factory.mailer import MAILER_STATE_ATTR, Mailer
@@ -325,6 +326,20 @@ async def test_failed_checks_notify_the_pl_once(polling: Polling) -> None:
         f"https://github.com/{REPO}/pull/9630/checks"
     ]
     assert p.pr().gates["evidence"]["checks"]["failing_names"] == ["ci / test", "lint"]
+
+
+async def test_a_pr_event_reaches_a_pl_whose_heartbeats_backed_off_at_once(
+    polling: Polling,
+) -> None:
+    p = polling
+    p.world.store.set_labels(p.pl, {F.LABEL_IDLE_BEATS: "5"})
+    gh_pr = p.new_pr(checks=[FakeCheck("ci / test", status="IN_PROGRESS")])
+    await p.poll()
+
+    gh_pr.checks = [FakeCheck("ci / test", conclusion="FAILURE")]
+    await p.poll()
+
+    assert len(p.notices(p.pl, "checks failed")) == 1
 
 
 async def test_closed_pr_opens_exactly_one_decision(polling: Polling) -> None:

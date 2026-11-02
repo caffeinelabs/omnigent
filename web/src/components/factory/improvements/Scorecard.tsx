@@ -10,7 +10,7 @@ import type { ScorecardView } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
 import { TONE_CHIP, TONE_TEXT } from "../factoryFormat";
 import { metricLabel } from "../insights/insightsModel";
-import { metricValue, nCounts, targetTone, verdictText } from "./improvementsModel";
+import { metricValue, targetTone, verdictHint, verdictText } from "./improvementsModel";
 
 const GUARD_LABEL: Record<string, string> = {
   merge_acceptance: "acceptance",
@@ -105,9 +105,7 @@ export function ScorecardTable({ card, testId }: { card: ScorecardView; testId?:
         >
           {verdictText(card)}
         </span>
-        <span className="text-xs text-muted-foreground">
-          kept once n reaches {card.min_n} {nCounts(card)}, the target is met and every guard holds
-        </span>
+        <span className="text-xs text-muted-foreground">{verdictHint(card)}</span>
       </p>
       <ul className="flex min-w-0 flex-col divide-y divide-border sm:hidden">
         {rows.map((row) => (

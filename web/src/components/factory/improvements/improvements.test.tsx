@@ -5,13 +5,18 @@ import {
   changeLines,
   effectText,
   evidenceHref,
+  extendedLabel,
   improvementCounts,
   issueText,
+  keepsUnansweredAt,
   onTrial,
+  overdueNote,
   proposed,
   revertToast,
   tier2Plain,
+  trialExtensions,
   trialProgress,
+  verdictHint,
   verdictText,
 } from "./improvementsModel";
 import { rowsOf } from "./ProposeChangeDialog";
@@ -20,7 +25,7 @@ import { ScorecardLine, ScorecardTable } from "./Scorecard";
 const FID = "f4f4ba9c77725331b12f0fa7072dc4d3";
 
 function byRef(ref: string) {
-  return learnProposals().find((p) => p.ref === ref)!;
+  return learnProposals({ idle: true }).find((p) => p.ref === ref)!;
 }
 
 describe("improvements model", () => {
@@ -63,6 +68,28 @@ describe("improvements model", () => {
     expect(improvementCounts(all)).toMatchObject({ trial: 1, proposed: 3, kept: 2, reverted: 1 });
     expect(onTrial(all).map((p) => p.ref)).toEqual(["C-14"]);
     expect(proposed(all).map((p) => p.ref)).toEqual(["C-15", "C-16", "C-18"]);
+  });
+
+  it("says how often an idle trial was extended and what happens unanswered", () => {
+    expect(trialExtensions(byRef("C-13"))).toBe(2);
+    expect(extendedLabel(byRef("C-13"))).toBe("extended ×2 (idle)");
+    expect(extendedLabel(byRef("C-10"))).toBe("extended ×1 (idle)");
+    expect(extendedLabel(byRef("C-14"))).toBeNull();
+    expect(keepsUnansweredAt(byRef("C-13"))).toBe(LEARN_NOW_S + 22 * 3600);
+    expect(keepsUnansweredAt(byRef("C-10"))).toBeNull();
+    expect(overdueNote(byRef("C-13"))).toContain("it stays applied because nothing got worse");
+    expect(overdueNote(byRef("C-14"))).toBe(
+      "Past its window: it reverts unattended at twice the window",
+    );
+    // Its window grew by its own length twice: 144 h, ended 2 h ago.
+    const progress = trialProgress(byRef("C-13"), LEARN_NOW_S)!;
+    expect(progress.totalH).toBe(144);
+    expect(progress.overdue).toBe(true);
+    expect(onTrial(learnProposals({ idle: true })).map((p) => p.ref)).toEqual([
+      "C-13",
+      "C-14",
+      "C-10",
+    ]);
   });
 
   it("reads a trial's progress and overdue state", () => {
@@ -140,6 +167,21 @@ describe("scorecard", () => {
     expect(table).toHaveTextContent("19%");
     expect(table).toHaveTextContent("≥ baseline − 10 pp");
     expect(screen.getByTestId("card-verdict")).toHaveAttribute("data-outcome", "kept");
+  });
+
+  it("calls an idle trial idle, not inconclusive", () => {
+    const idle = scorecard("C-10")!;
+    expect(verdictText(idle)).toBe("idle · no merged PRs or finished tasks");
+    expect(verdictText({ ...idle, live: false })).toBe("idle the whole trial · nothing to judge");
+    expect(verdictText({ ...idle, idle: false })).toBe(
+      "inconclusive so far · n=0 < 3; target not met",
+    );
+    expect(verdictHint(idle)).toBe(
+      "an idle trial gets its window again, at most twice; then the owners decide",
+    );
+    expect(verdictHint(scorecard("C-14")!)).toBe(
+      "kept once n reaches 24 heartbeat hours, the target is met and every guard holds",
+    );
   });
 
   it("marks the regressed guard", () => {

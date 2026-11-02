@@ -1,8 +1,9 @@
 """The learning tick: Sentinel's retro beat (S12) and eval mode.
 
 The retro beat goes to Sentinel once a day after ``OMNIGENT_FACTORY_RETRO_HOUR``
-(never on the factory's first day) and once per project done; a
-``retro.requested`` event makes it idempotent across a server restart. In eval
+(never on the factory's first day, and not while the last 24 h were idle) and
+once per project done; a ``retro.requested`` event makes it idempotent across a
+server restart. In eval
 mode the server answers decisions after 2 minutes as ``eval-auto`` and pauses a
 project's PL once it reaches READY.
 """
@@ -17,10 +18,11 @@ import pytest
 import pytest_asyncio
 
 from omnigent import factory as F
+from omnigent.entities.factory import EventDraft
 from omnigent.server.factory import definition, eval_mode, learning, retro
 from tests.server.factory.cockpit_helpers import Cockpit
 from tests.server.factory.conftest import FactoryWorld, Supervision
-from tests.server.factory.projects_helpers import header_cockpit
+from tests.server.factory.projects_helpers import REPO, header_cockpit
 
 D = 86400
 
@@ -50,6 +52,13 @@ def _hour_of(ts: float) -> int:
     return datetime.fromtimestamp(ts, tz=UTC).hour
 
 
+def _merged_pr(cockpit: Cockpit, at: float, number: int = 9700) -> None:
+    """Some work the daily retro can look back on."""
+    cockpit.store.upsert_pr(
+        cockpit.fid, REPO, number, state="merged", project_slug="api-version", merged_at=int(at)
+    )
+
+
 def _retro_texts(cockpit: Cockpit) -> list[str]:
     return [
         t
@@ -63,6 +72,7 @@ async def test_the_daily_retro_goes_to_sentinel_once_even_across_a_restart(
 ) -> None:
     later = time.time() + 2 * D
     monkeypatch.setenv(retro.RETRO_HOUR_ENV, str(_hour_of(later)))
+    _merged_pr(cockpit, later - 3600)
 
     sent = await retro.tick(cockpit.app.state, cockpit.fid, later)
     again = await retro.tick(cockpit.app.state, cockpit.fid, later + 60)
@@ -78,6 +88,51 @@ async def test_the_daily_retro_goes_to_sentinel_once_even_across_a_restart(
     ]
     [event] = cockpit.events(retro.REQUESTED_KIND)
     assert event.to_id == cockpit.world.id("lead_b") and event.data["budget_usd"] == 3.0
+
+
+async def test_an_idle_day_holds_the_daily_retro_until_work_shows_up(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    later = time.time() + 2 * D
+    if _hour_of(later) == 23:
+        later -= 3 * 3600
+    monkeypatch.setenv(retro.RETRO_HOUR_ENV, str(_hour_of(later)))
+    _merged_pr(cockpit, later - 2 * D)  # two days ago: not in the last 24 h
+
+    idle = await retro.tick(cockpit.app.state, cockpit.fid, later)
+    still_idle = await retro.tick(cockpit.app.state, cockpit.fid, later + 60)
+    _merged_pr(cockpit, later + 120, number=9701)
+    within_the_hour = await retro.tick(cockpit.app.state, cockpit.fid, later + 600)
+    rechecked = await retro.tick(cockpit.app.state, cockpit.fid, later + retro.IDLE_RECHECK_S)
+
+    day = datetime.fromtimestamp(later, tz=UTC).strftime("%Y-%m-%d")
+    assert idle == still_idle == within_the_hour == []
+    assert rechecked == [f"retro:{day}"]
+    assert len(_retro_texts(cockpit)) == 1
+    [skipped] = cockpit.events(retro.SKIPPED_KIND)
+    assert skipped.subject == f"retro:{day}" and skipped.severity == "info"
+    assert skipped.summary == (
+        "No retro yet today: nothing merged, finished or ran in the last 24 h"
+    )
+
+
+async def test_a_finished_sub_agent_run_is_enough_for_a_retro(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    later = time.time() + 2 * D
+    monkeypatch.setenv(retro.RETRO_HOUR_ENV, str(_hour_of(later)))
+    cockpit.store.append_event(
+        EventDraft(
+            factory_id=cockpit.fid,
+            kind="task.failed",
+            summary="ic:task-1 failed",
+            ts=int((later - 3600) * 1000),
+        )
+    )
+
+    sent = await retro.tick(cockpit.app.state, cockpit.fid, later)
+
+    assert len(sent) == 1 and cockpit.events(retro.SKIPPED_KIND) == []
 
 
 async def test_no_retro_before_the_hour_or_on_the_first_day(
@@ -127,6 +182,14 @@ async def test_the_supervisor_tick_runs_the_retro_beat(
     clock = supervision.clock
     clock.advance(2 * D)
     monkeypatch.setenv(retro.RETRO_HOUR_ENV, str(_hour_of(clock.now)))
+    supervision.world.deps.factory_store.append_event(
+        EventDraft(
+            factory_id=supervision.world.id("lead_a"),
+            kind="task.done",
+            summary="ic:task-1 finished",
+            ts=int((clock.now - 3600) * 1000),
+        )
+    )
 
     await supervision.tick()
     await supervision.tick()

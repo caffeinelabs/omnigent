@@ -2519,6 +2519,9 @@ export interface ScorecardView {
   baseline_window: [number, number];
   evaluated_at: number;
   live: boolean;
+  /** Nothing merged, finished or ran in the trial window (older servers omit it). */
+  idle?: boolean;
+  activity?: { merged_prs: number; tasks_done: number; runs_ended: number };
 }
 
 export interface ScorecardResponse {

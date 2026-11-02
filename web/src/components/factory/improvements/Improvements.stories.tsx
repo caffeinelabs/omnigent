@@ -92,6 +92,33 @@ export const OnTrialMobile = phone(page("/improvements"));
 
 export const OnTrialMobileDark = phone(page("/improvements", { theme: "dark" }));
 
+/**
+ * An idle factory: C-13 was extended twice (nothing merged or finished) and now
+ * waits on the owners, staying applied if nobody answers; C-10 was extended once.
+ */
+export const IdleTrialsExtended = page("/improvements", { learn: { idle: true } });
+
+export const IdleTrialsExtendedDark = page("/improvements", {
+  learn: { idle: true },
+  theme: "dark",
+});
+
+export const IdleTrialsExtendedMobile = phone(page("/improvements", { learn: { idle: true } }));
+
+export const IdleTrialsExtendedMobileDark = phone(
+  page("/improvements", { learn: { idle: true }, theme: "dark" }),
+);
+
+/** C-13's page: the record says how often it was extended and when it stays applied. */
+export const IdleTrialPage = page("/improvements/C-13", { learn: { idle: true } });
+
+export const IdleTrialPageDark = page("/improvements/C-13", {
+  learn: { idle: true },
+  theme: "dark",
+});
+
+export const IdleTrialPageMobile = phone(page("/improvements/C-13", { learn: { idle: true } }));
+
 /** The scorecard opened: baseline vs trial for the target and every guard. */
 export const OnTrialScorecard = page("/improvements", {}, async ({ canvasElement }) => {
   const body = within(canvasElement.ownerDocument.body);

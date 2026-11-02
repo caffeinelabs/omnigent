@@ -14,24 +14,35 @@ A regressed guard reverts automatically. Target met, guards held and n ≥ min_n
 keeps it. Anything else is ``inconclusive``: an owners decision "Keep or revert
 C-n?" (recommended: revert); it is never kept on its own. A trial nobody
 decides reverts at 2× its window.
+
+An idle trial (no merged PR, finished task or sub-agent run in its window, see
+:mod:`.idle`) proves nothing either way. Instead of ending inconclusive it is
+extended by its original length, at most :data:`MAX_EXTENSIONS` times, with
+one line in #improvements each time. Still idle after that, the owners decide
+with Keep recommended when nothing got worse (no guard regressed, no incident
+names the change): nobody answering within :data:`KEEP_DEFAULT_AFTER_S` keeps
+it. An incident that names it by then reverts it instead.
 """
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+import re
 from collections.abc import Mapping
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, replace
 from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.factory import ACTION_KEEP_PROPOSAL, ACTION_REVERT_PROPOSAL, THREAD_IMPROVEMENTS
-from omnigent.server.factory import control, events, tuning
+from omnigent.server.factory import control, events, idle, tuning
 from omnigent.server.factory.actor import Actor, proposal_ref
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.telemetry import metrics
-from omnigent.stores.factory_store import now_s
+from omnigent.stores.factory_store import ProposalStateConflict, now_s
 
 if TYPE_CHECKING:
+    from omnigent.entities import Conversation
     from omnigent.entities.factory import FactoryProposal
 
 _logger = logging.getLogger(__name__)
@@ -41,6 +52,14 @@ MIN_BEAT_HOURS: Final = 24
 OUTCOME_KEPT: Final = "kept"
 OUTCOME_REVERTED: Final = "reverted"
 OUTCOME_INCONCLUSIVE: Final = "inconclusive"
+OUTCOME_EXTENDED: Final = "extended"
+"""Not stored: :func:`end_trial`'s answer for an idle trial it extended."""
+MAX_EXTENSIONS: Final = 2
+KEEP_DEFAULT_AFTER_S: Final = 24 * 3600
+"""How long the owners have to answer an idle trial's decision before Keep applies."""
+EXTENDED_KIND: Final = "proposal.trial_extended"
+DEFAULT_KEEP: Final = "keep"
+KEEP_DEFAULT_REASON: Final = "nobody answered in 24 h and nothing got worse"
 
 
 @dataclass
@@ -69,6 +88,9 @@ class Evaluation:
     trial_window: tuple[int, int] = (0, 0)
     baseline_window: tuple[int, int] = (0, 0)
     evaluated_at: int = 0
+    activity: dict[str, int] = field(default_factory=dict)
+    idle: bool = False
+    """Nothing merged, finished or ran in the trial window (see :mod:`.idle`)."""
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -167,6 +189,13 @@ def evaluate_trial(deps: FactoryDeps, row: FactoryProposal, now: int) -> Evaluat
         if not target.get("met"):
             why.append("target not met" if target_metric else "no target metric")
         outcome, reason = OUTCOME_INCONCLUSIVE, "; ".join(why) or "unclear"
+    activity = idle.window_activity(
+        deps,
+        row.factory_id,
+        trial.since,
+        trial.until,
+        merged_prs=int(now_values["throughput"].get("n") or 0),
+    )
     return Evaluation(
         outcome=outcome,
         reason=reason,
@@ -177,7 +206,38 @@ def evaluate_trial(deps: FactoryDeps, row: FactoryProposal, now: int) -> Evaluat
         trial_window=(trial.since, trial.until),
         baseline_window=(baseline.since, baseline.until),
         evaluated_at=now,
+        activity=activity.to_dict(),
+        idle=activity.idle,
     )
+
+
+def extensions(row: FactoryProposal) -> int:
+    """:returns: How many times *row*'s trial was extended for being idle."""
+    value = (row.result or {}).get("trial_extensions")
+    return value if isinstance(value, int) and value > 0 else 0
+
+
+def attributed_incidents(deps: FactoryDeps, row: FactoryProposal, now: int) -> list[str]:
+    """
+    Incidents since *row* applied that name it (its id, or ``C-n`` in their target or evidence).
+
+    :returns: Their refs, e.g. ``["INC-13"]``. Synchronous.
+    """
+    ref = proposal_ref(row.number)
+    named = re.compile(rf"(?<![\w-]){re.escape(ref)}(?!\w)")
+    since = int(row.applied_at or row.created_at)
+    out: list[str] = []
+    for issue in deps.factory_store.list_issues(row.factory_id, class_="incident", limit=500):
+        if not since <= issue.first_seen <= now:
+            continue
+        evidence = json.dumps(issue.evidence, default=str) if issue.evidence else ""
+        if (
+            control.same_id(issue.proposal_id, row.id)
+            or named.search(issue.target or "")
+            or named.search(evidence)
+        ):
+            out.append(issue.ref or issue.id)
+    return out
 
 
 def _summary(ev: Evaluation) -> str:
@@ -188,17 +248,34 @@ def _summary(ev: Evaluation) -> str:
     return f"{ev.outcome}: {ev.reason} (n={ev.n}/{ev.min_n}) · guards {guards}"
 
 
-async def _ask_owners(app_state: Any, row: FactoryProposal, ev: Evaluation) -> str | None:
+def _idle_question(ref: str) -> str:
+    return (
+        f"Keep {ref}? The factory was idle for its whole trial, so there is nothing to judge "
+        "it on. If nobody answers in 24 h this stays applied because nothing got worse."
+    )
+
+
+async def _ask_owners(
+    app_state: Any, row: FactoryProposal, ev: Evaluation, *, keep_default: bool = False
+) -> str | None:
+    """Open the owners' Keep-or-revert decision (Keep recommended for an idle, harmless trial)."""
     deps = factory_deps(app_state)
     ref = proposal_ref(row.number)
     target = f"{tuning.SUBJECT_PREFIX}{row.id}"
+    if keep_default:
+        question = _idle_question(ref)
+        context = (
+            f"Extended {extensions(row)}× by its original length and still no merged PRs or "
+            f"finished tasks. No guard regressed and no incident names {ref}.\n\n{_summary(ev)}"
+        )
+    else:
+        question = f"Keep or revert {ref}? Its trial was inconclusive: {ev.reason}"
+        context = _summary(ev)
     decision, _ = await asyncio.to_thread(
         lambda: deps.factory_store.create_decision(
             row.factory_id,
             dedupe_key=f"{tuning.SUBJECT_PREFIX}{row.id}:trial"[:64],
-            question=control.clip(
-                f"Keep or revert {ref}? Its trial was inconclusive: {ev.reason}", 1000
-            ),
+            question=control.clip(question, 1000),
             source="proposal",
             options=[
                 {
@@ -206,18 +283,19 @@ async def _ask_owners(app_state: Any, row: FactoryProposal, ev: Evaluation) -> s
                     "label": "Keep",
                     "action": ACTION_KEEP_PROPOSAL,
                     "target": target,
+                    **({"recommended": True} if keep_default else {}),
                 },
                 {
                     "id": tuning.OPTION_REVERT,
                     "label": "Revert",
                     "action": ACTION_REVERT_PROPOSAL,
                     "target": target,
-                    "recommended": True,
+                    **({} if keep_default else {"recommended": True}),
                 },
             ],
             blocking=False,
             allow_text=False,
-            context=_summary(ev)[:4000],
+            context=context[:4000],
             assignee="owners",
             thread=row.thread or THREAD_IMPROVEMENTS,
             subject=f"{tuning.SUBJECT_PREFIX}{ref}",
@@ -235,11 +313,65 @@ async def _ask_owners(app_state: Any, row: FactoryProposal, ev: Evaluation) -> s
     return decision.id
 
 
+async def _extend(
+    app_state: Any, row: FactoryProposal, ev: Evaluation, now: int
+) -> FactoryProposal | None:
+    """
+    Extend an idle trial by its original length and say so in its thread.
+
+    :returns: The extended row, or ``None`` when it left ``trial`` meanwhile.
+    """
+    deps = factory_deps(app_state)
+    ref = proposal_ref(row.number)
+    result = dict(row.result or {})
+    applied = int(row.applied_at or row.created_at)
+    until = int(row.trial_until or now)
+    window = int(result.get("trial_window_s") or max(3600, until - applied))
+    count = extensions(row) + 1
+    # A server that was down past a whole window still gives the trial a full one.
+    new_until = until + window if until + window > now else now + window
+    try:
+        extended = await asyncio.to_thread(
+            lambda: deps.factory_store.update_proposal(
+                row.id,
+                expect_status="trial",
+                trial_until=new_until,
+                result={**result, "trial_extensions": count, "trial_window_s": window},
+            )
+        )
+    except ProposalStateConflict:
+        return None
+    again = "" if count == 1 else " again"
+    why = "no merged PRs since it started — the factory was idle"
+    await events.emit(
+        app_state,
+        row.factory_id,
+        EXTENDED_KIND,
+        severity="info",
+        subject=f"{tuning.SUBJECT_PREFIX}{ref}",
+        summary=f"{ref} trial extended{again}: {why}",
+        data={
+            "proposal_id": row.id,
+            "by": "server",
+            "by_kind": "server",
+            "extensions": count,
+            "max_extensions": MAX_EXTENSIONS,
+            "trial_until": new_until,
+            "window_s": window,
+            "activity": ev.activity,
+        },
+    )
+    return extended or row
+
+
 async def end_trial(app_state: Any, row: FactoryProposal, now: int) -> Evaluation:
-    """Evaluate one trial and act on the outcome (keep, revert, or ask the owners)."""
+    """Evaluate one trial and act on the outcome (extend, keep, revert, or ask the owners)."""
     deps = factory_deps(app_state)
     root = await control.get_conv(deps, row.factory_id)
     ev = await asyncio.to_thread(evaluate_trial, deps, row, now)
+    if ev.outcome == OUTCOME_INCONCLUSIVE and ev.idle and extensions(row) < MAX_EXTENSIONS:
+        if await _extend(app_state, row, ev, now) is not None:
+            return replace(ev, outcome=OUTCOME_EXTENDED, reason="idle: extended")
     ref = proposal_ref(row.number)
     result = {**(row.result or {}), "evaluation": ev.to_dict()}
     row = await asyncio.to_thread(deps.factory_store.update_proposal, row.id, result=result) or row
@@ -260,14 +392,35 @@ async def end_trial(app_state: Any, row: FactoryProposal, now: int) -> Evaluatio
     elif ev.outcome == OUTCOME_KEPT:
         await tuning.keep(app_state, root, row, actor=server)
     else:
-        decision_id = await _ask_owners(app_state, row, ev)
+        harm = await asyncio.to_thread(attributed_incidents, deps, row, now) if ev.idle else []
+        keep_default = ev.idle and not harm
+        decision_id = await _ask_owners(app_state, row, ev, keep_default=keep_default)
         result = {**(row.result or {}), "keep_decision_id": decision_id}
+        if keep_default:
+            result.update(default=DEFAULT_KEEP, default_at=now + KEEP_DEFAULT_AFTER_S)
         await asyncio.to_thread(deps.factory_store.update_proposal, row.id, result=result)
     return ev
 
 
+async def _settle_default(
+    app_state: Any, root: Conversation, row: FactoryProposal, now: int
+) -> str | None:
+    """Apply an idle trial's default once its decision went unanswered. :returns: The action."""
+    deps = factory_deps(app_state)
+    if now < int((row.result or {}).get("default_at") or 0):
+        return None
+    harm = await asyncio.to_thread(attributed_incidents, deps, row, now)
+    server = Actor.server()
+    if harm:
+        reason = f"unattended: {', '.join(harm[:3])} names it"
+        await tuning.revert(app_state, root, row, actor=server, reason=reason)
+        return "unattended"
+    await tuning.keep(app_state, root, row, actor=server, reason=KEEP_DEFAULT_REASON)
+    return "kept_unanswered"
+
+
 async def tick(app_state: Any, factory_id: str, *, now: int | None = None) -> list[str]:
-    """End due trials and revert unattended ones. :returns: ``"C-n:<outcome>"`` per action."""
+    """End due trials and settle unattended ones. :returns: ``"C-n:<outcome>"`` per action."""
     deps = factory_deps(app_state)
     now = now if now is not None else now_s()
     rows = await asyncio.to_thread(
@@ -285,6 +438,12 @@ async def tick(app_state: Any, factory_id: str, *, now: int | None = None) -> li
                 done.append(f"{ref}:{ev.outcome}")
                 continue
             if not isinstance(evaluation, Mapping) or not row.applied_at or not row.trial_until:
+                continue
+            if (row.result or {}).get("default") == DEFAULT_KEEP:
+                root = await control.get_conv(deps, factory_id)
+                action = await _settle_default(app_state, root, row, now) if root else None
+                if action:
+                    done.append(f"{ref}:{action}")
                 continue
             window = max(3600, row.trial_until - row.applied_at)
             if now >= row.applied_at + 2 * window:
@@ -305,14 +464,22 @@ async def tick(app_state: Any, factory_id: str, *, now: int | None = None) -> li
 
 
 __all__ = [
+    "DEFAULT_KEEP",
+    "EXTENDED_KIND",
+    "KEEP_DEFAULT_AFTER_S",
+    "KEEP_DEFAULT_REASON",
+    "MAX_EXTENSIONS",
     "MIN_BEAT_HOURS",
     "MIN_MERGED",
+    "OUTCOME_EXTENDED",
     "OUTCOME_INCONCLUSIVE",
     "OUTCOME_KEPT",
     "OUTCOME_REVERTED",
     "Evaluation",
     "Guard",
+    "attributed_incidents",
     "end_trial",
     "evaluate_trial",
+    "extensions",
     "tick",
 ]

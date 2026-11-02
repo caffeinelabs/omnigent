@@ -612,9 +612,90 @@ function proposal(base: ProposalView, patch: Partial<ProposalView>): ProposalVie
   return { ...clone(base), ...patch };
 }
 
+/**
+ * Two trials of an idle factory: C-13 extended twice and now with the owners
+ * (Keep if nobody answers), C-10 extended once and still running.
+ */
+function idleTrials(c14: ProposalView, c15: ProposalView): ProposalView[] {
+  const window = 48 * H;
+  const c13Applied = NOW - 146 * H;
+  const c10Applied = NOW - 60 * H;
+  return [
+    proposal(c15, {
+      id: "c13c13c13c13c13c13c13c13c13c13c1",
+      ref: "C-13",
+      number: 13,
+      status: "trial",
+      class: "A",
+      approval: "auto",
+      title: "role=ic: paste the test command you ran into the PR body",
+      ops: [
+        {
+          op: "add",
+          path: "rules",
+          value: { role: "ic", project: "*", text: "Paste the test command you ran." },
+        },
+      ],
+      before: { "rules.R-5": null },
+      after: {
+        "rules.R-5": {
+          id: "R-5",
+          role: "ic",
+          project: "*",
+          text: "Paste the test command you ran into the PR body.",
+          origin: "C-13",
+          state: "trial",
+        },
+      },
+      rationale: "Reviewers asked 4 times last week which tests an IC ran.",
+      evidence: ["F-9"],
+      expected_effect: { metric: "review_rounds", direction: "down", delta: null },
+      author: c14.author,
+      author_title: c14.author_title,
+      cosigned_by: c14.cosigned_by,
+      decision_id: null,
+      decision_ref: null,
+      decided_by: null,
+      decided_at: null,
+      applied_at: c13Applied,
+      trial_until: c13Applied + 3 * window,
+      def_version_from: 6,
+      def_version_to: 7,
+      result: {
+        trial_extensions: 2,
+        trial_window_s: window,
+        keep_decision_id: "d21d21d21d21d21d21d21d21d21d21d2",
+        default: "keep",
+        default_at: NOW + 22 * H,
+      },
+      created_at: c13Applied - 600,
+      updated_at: NOW - 2 * H,
+    }),
+    proposal(c14, {
+      id: "c10c10c10c10c10c10c10c10c10c10c1",
+      ref: "C-10",
+      number: 10,
+      status: "trial",
+      class: "A",
+      title: "alerts.decision_waiting_m 30→20",
+      ops: [{ op: "replace", path: "alerts.decision_waiting_m", value: 20 }],
+      before: { "alerts.decision_waiting_m": 30 },
+      after: { "alerts.decision_waiting_m": 20 },
+      rationale: "D-19 waited 2 days before anyone saw it.",
+      evidence: ["D-19"],
+      expected_effect: { metric: "decision_latency", direction: "down", delta: null },
+      applied_at: c10Applied,
+      trial_until: c10Applied + 2 * window,
+      result: { trial_extensions: 1, trial_window_s: window },
+      created_at: c10Applied - 600,
+      updated_at: c10Applied + window,
+    }),
+  ];
+}
+
 /** Every proposal of the round-3 factory plus the learning ones (kept, reverted, code, co-sign). */
 export function learnProposals(
-  options: { afterSave?: boolean; scale?: boolean } = {},
+  options: { afterSave?: boolean; scale?: boolean; idle?: boolean } = {},
 ): ProposalView[] {
   const base = clone(ROUND3.proposals);
   const c14 = base.find((p) => p.ref === "C-14")!;
@@ -764,6 +845,7 @@ export function learnProposals(
       }),
     );
   }
+  if (options.idle) extra.push(...idleTrials(c14, c15));
   if (options.scale) {
     for (let n = 19; n <= 48; n++) {
       extra.push(
@@ -832,7 +914,44 @@ export function scorecard(ref: string): ScorecardView | null {
       status: "no_data",
     },
   ];
+  const idleGuards = (): ScorecardView["guards"] =>
+    guards(null).map((g) =>
+      g.metric === "incidents"
+        ? { ...g, baseline: 0, trial: 0, n_baseline: 0, n_trial: 0 }
+        : { ...g, baseline: null, trial: null, n_baseline: 0, n_trial: 0, status: "no_data" },
+    );
+  const idleActivity = { merged_prs: 0, tasks_done: 0, runs_ended: 0 };
   switch (ref) {
+    case "C-13":
+      return {
+        outcome: "inconclusive",
+        reason: "n=0 < 3; target not met",
+        n: 0,
+        min_n: 3,
+        target: { metric: "review_rounds", met: false, baseline: null, trial: null },
+        guards: idleGuards(),
+        trial_window: [NOW - 146 * H, NOW - 2 * H],
+        baseline_window: [NOW - 290 * H, NOW - 146 * H],
+        evaluated_at: NOW,
+        live: true,
+        idle: true,
+        activity: idleActivity,
+      };
+    case "C-10":
+      return {
+        outcome: "inconclusive",
+        reason: "n=0 < 3; target not met",
+        n: 0,
+        min_n: 3,
+        target: { metric: "decision_latency", met: false, baseline: null, trial: null },
+        guards: idleGuards(),
+        trial_window: [NOW - 60 * H, NOW],
+        baseline_window: [NOW - 120 * H, NOW - 60 * H],
+        evaluated_at: NOW,
+        live: true,
+        idle: true,
+        activity: idleActivity,
+      };
     case "C-14":
       return {
         outcome: "kept",
@@ -1019,6 +1138,8 @@ export interface LearnRouteOptions {
   afterSave?: boolean;
   tier2On?: boolean;
   scale?: boolean;
+  /** Add an idle factory's trials: C-13 (extended ×2, with the owners) and C-10 (×1). */
+  idle?: boolean;
   bundlesDrift?: boolean;
   /** Replace the Insights read (e.g. `"pending"` or an error). */
   insights?: StoryResponse;
@@ -1034,7 +1155,8 @@ function query(path: string): URLSearchParams {
 export function learnRoutes(factoryId: string, options: LearnRouteOptions = {}): StoryRoutes {
   const base = `/v1/factory/factories/${factoryId}`;
   const kind = options.kind ?? "populated";
-  const proposals = () => learnProposals({ afterSave: options.afterSave, scale: options.scale });
+  const proposals = () =>
+    learnProposals({ afterSave: options.afterSave, scale: options.scale, idle: options.idle });
   const routes: StoryRoutes = {
     [`${base}/insights`]: options.insights ?? {
       body: insightsResponse(kind, { owner: options.owner }),

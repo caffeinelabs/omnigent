@@ -325,6 +325,40 @@ describe("Improvements", () => {
     await waitFor(() => expect(sent("POST", `${SNAPSHOT}/proposals/C-14/keep`)).toHaveLength(1));
   });
 
+  it("marks trials the idle factory extended and says when one stays applied", async () => {
+    serve("creator", {}, { idle: true });
+    renderAt("/improvements");
+
+    const c13 = await screen.findByTestId("proposal-C-13");
+    expect(within(c13).getByTestId("proposal-C-13-extended")).toHaveTextContent(
+      "extended ×2 (idle)",
+    );
+    expect(within(c13).getByTestId("proposal-C-13-keeps")).toHaveTextContent(
+      "If nobody answers in 22h, it stays applied because nothing got worse.",
+    );
+    expect(await within(c13).findByTestId("proposal-C-13-scorecard")).toBeInTheDocument();
+    const c10 = screen.getByTestId("proposal-C-10");
+    expect(within(c10).getByTestId("proposal-C-10-extended")).toHaveTextContent(
+      "extended ×1 (idle)",
+    );
+    expect(within(c10).queryByTestId("proposal-C-10-keeps")).toBeNull();
+    expect(
+      within(screen.getByTestId("proposal-C-14")).queryByTestId("proposal-C-14-extended"),
+    ).toBeNull();
+  });
+
+  it("records an idle trial's extensions on its page", async () => {
+    serve("creator", {}, { idle: true });
+    renderAt("/improvements/C-13");
+
+    const record = await screen.findByTestId("proposal-record");
+    expect(record).toHaveTextContent("Extended2× by its own length: nothing merged or finished");
+    expect(record).toHaveTextContent("If nobody answersIt stays applied in 22h: nothing got worse");
+    expect(await screen.findByTestId("proposal-C-13-scorecard-table-verdict")).toHaveTextContent(
+      "idle · no merged PRs or finished tasks",
+    );
+  });
+
   it("shows a regressed guard on an automatically reverted change", async () => {
     serve();
     renderAt("/improvements/C-12");

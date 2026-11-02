@@ -1183,18 +1183,33 @@ def _hhmm(ts: int | None) -> str:
 
 
 async def keep(
-    app_state: Any, root: Conversation, row: FactoryProposal, *, actor: Actor
+    app_state: Any,
+    root: Conversation,
+    row: FactoryProposal,
+    *,
+    actor: Actor,
+    reason: str | None = None,
 ) -> FactoryProposal:
-    """End a trial as kept; its trial rules become active (a new version when any)."""
+    """
+    End a trial as kept; its trial rules become active (a new version when any).
+
+    :param reason: Why, when nobody chose it, e.g. ``"nobody answered in 24 h …"``.
+    """
     async with definition_lock(app_state, root.id):
-        return await _keep(app_state, root, row, actor=actor)
+        return await _keep(app_state, root, row, actor=actor, reason=reason)
 
 
 async def _keep(
-    app_state: Any, root: Conversation, row: FactoryProposal, *, actor: Actor
+    app_state: Any,
+    root: Conversation,
+    row: FactoryProposal,
+    *,
+    actor: Actor,
+    reason: str | None = None,
 ) -> FactoryProposal:
     deps = factory_deps(app_state)
     ref = proposal_ref(row.number)
+    why = f": {reason}" if reason else ""
     row = await _update(deps, row, "trial", status="kept", decided_by=actor.id, decided_at=now_s())
     resolved = await asyncio.to_thread(definition.definition_for, deps, root.id, fresh=True)
     assert resolved is not None
@@ -1227,8 +1242,10 @@ async def _keep(
             actor=actor,
         )
     await _close_keep_decision(app_state, row, "expired")
-    await _emit(app_state, row, "proposal.kept", f"{ref} kept by {projects_name(actor)}", actor)
-    await _tell(app_state, row, outcome_text(ref, f"kept by {projects_name(actor)}"))
+    by = projects_name(actor)
+    extra = {"reason": reason} if reason else {}
+    await _emit(app_state, row, "proposal.kept", f"{ref} kept by {by}{why}", actor, **extra)
+    await _tell(app_state, row, outcome_text(ref, f"kept by {by}{why}"))
     return row
 
 

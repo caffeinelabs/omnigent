@@ -9,11 +9,12 @@ from pathlib import Path
 import pytest
 import pytest_asyncio
 
+from omnigent import factory as F
 from omnigent.factory import PENDING_REPLY_KINDS
 from omnigent.server.factory import chat
 from omnigent.server.factory.chat import Line, render_envelope
 from omnigent.server.factory.mailer import MailItem
-from omnigent.server.factory.notify import FactoryNotifier
+from omnigent.server.factory.notify import FactoryNotifier, iso_utc
 from tests.server.factory.chat_helpers import RoomEnv, room_env
 from tests.server.factory.conftest import FactoryWorld
 
@@ -110,6 +111,21 @@ async def test_a_message_to_an_idle_target_goes_out_at_once(env: RoomEnv) -> Non
     assert row.routed[0]["mail_id"] == chat.mail_id_for(message_id, atlas)
     assert row.routed[0]["delivered_at"] is not None
     assert env.room.pending[atlas] == [("factory", message_id, env.clock.now)]
+
+
+async def test_a_message_reaches_a_lead_whose_heartbeats_backed_off_at_once(
+    env: RoomEnv,
+) -> None:
+    lead = env.world.id("lead_a")
+    env.world.store.set_labels(
+        lead, {F.LABEL_IDLE_BEATS: "4", F.LABEL_LAST_BEAT: iso_utc(env.clock.now)}
+    )
+
+    await _post(env, "start the next project")
+    await env.settle()
+
+    [text] = env.deliveries.to(lead)
+    assert "start the next project" in text
 
 
 async def test_three_messages_to_a_busy_target_make_one_delivery(env: RoomEnv) -> None:

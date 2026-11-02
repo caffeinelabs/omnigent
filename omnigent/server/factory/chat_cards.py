@@ -24,8 +24,9 @@ and retros always)                              (findings: ``improvements``)
 ``project.*`` lifecycle                         only there)
 ==============================================  =============================  =========
 
-A card row's id derives from the event id and thread, so a repeated event
-delivery writes nothing twice.
+``proposal.trial_extended`` is a plain line in the proposal's thread. A card
+row's id derives from the event id and thread, so a repeated event delivery
+writes nothing twice.
 """
 
 from __future__ import annotations
@@ -33,7 +34,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Final
 
 from omnigent.factory import (
@@ -74,6 +75,8 @@ PROJECT_LINE_KINDS: Final = frozenset(
     }
 )
 _QUIET_KINDS: Final = frozenset({"people.drift_repaired"})
+PROPOSAL_LINE_KIND: Final = "proposal.trial_extended"
+"""A proposal event the Room shows as a line (the proposal card is already in the thread)."""
 _WARNING: Final = ISSUE_SEVERITIES.index("warning")
 
 
@@ -203,6 +206,12 @@ def plan_cards(deps: FactoryDeps, event: Any) -> list[CardRow]:
         return []
     if kind in DECISION_KINDS:
         return _decision_rows(deps, event)
+    if kind == PROPOSAL_LINE_KIND:
+        # One quiet line in its thread, not another copy of the proposal card.
+        return [
+            replace(r, card=_card("system", r.card["ref"], r.card["id"]))
+            for r in _proposal_rows(deps, event)
+        ]
     if kind.startswith("proposal."):
         return _proposal_rows(deps, event)
     if kind.startswith("control."):
@@ -266,6 +275,7 @@ register()
 __all__ = [
     "DECISION_KINDS",
     "LOOP_KINDS",
+    "PROPOSAL_LINE_KIND",
     "PR_KINDS",
     "CardRow",
     "mirror_event",
