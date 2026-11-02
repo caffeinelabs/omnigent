@@ -9,7 +9,7 @@
  * draw it.
  */
 
-import { Fragment, useState } from "react";
+import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { RepeatIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -22,9 +22,10 @@ import { InterventionDialog } from "../agents/InterventionDialog";
 import type { InterventionKind, InterventionTarget } from "../agents/interventionModel";
 import { controlErrorMessage } from "../controls/controlModel";
 import { TONE_CHIP, type FactoryTone, formatUsd, shortSha } from "../factoryFormat";
-import { agentPageHref, alertPageHref, decisionsPageHref } from "../factoryRoutes";
+import { agentPageHref, alertPageHref } from "../factoryRoutes";
 import { answerBlockedReason } from "../decisions/DecisionCard";
 import { LeverGated, ReasonGated, useViewer, useViewerCan } from "../shell/viewerCan";
+import { HeldRefList } from "./HeldRefs";
 import { type Attempt, type LoopLine, budgetShare, isBadState, stateText } from "./loopStripModel";
 
 const STATE_TONE: Record<LoopLine["state"], FactoryTone> = {
@@ -342,18 +343,12 @@ function LineView({
             className="min-w-0 text-xs text-muted-foreground"
           >
             Waits for a person to answer{" "}
-            {line.heldBy.refs.map((ref, i) => (
-              <Fragment key={ref}>
-                {i > 0 && ", "}
-                <Link
-                  to={decisionsPageHref(fid, { decision: ref })}
-                  componentId="factory.loop.held"
-                  className="font-mono text-foreground/80 hover:underline"
-                >
-                  {ref}
-                </Link>
-              </Fragment>
-            ))}
+            <HeldRefList
+              held={line.heldBy}
+              factoryId={fid}
+              componentId="factory.loop.held"
+              className="text-foreground/80"
+            />
             ; not counted as stalled until then.
           </span>
         )}

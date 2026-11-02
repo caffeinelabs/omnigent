@@ -91,10 +91,15 @@ export function stripState(
   return loop.state;
 }
 
+/** How many answers a held loop waits on (`refs` lists at most five). */
+export function heldTotal(held: LoopHoldView): number {
+  return Math.max(held.count ?? 0, held.refs.length, 1);
+}
+
 /** `waiting on D-22`, or `waiting on D-22 +1` when it waits on more than one answer. */
 export function heldText(held: LoopHoldView | null | undefined): string | null {
   if (!held) return null;
-  const more = Math.max(0, held.refs.length - 1);
+  const more = heldTotal(held) - 1;
   return `waiting on ${held.decision_ref}${more ? ` +${more}` : ""}`;
 }
 

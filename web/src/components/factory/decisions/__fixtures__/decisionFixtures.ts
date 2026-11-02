@@ -312,7 +312,10 @@ export function stallKeepWaitingDecision(): DecisionView {
   };
 }
 
-/** D-26: the same task's IC run failed an hour ago: Switch vendor is recommended. */
+/**
+ * D-26: the same task's IC run failed an hour ago: Switch vendor is recommended,
+ * and Keep waiting asks again in an hour unless an IC starts.
+ */
 export function stallSwitchVendorDecision(): DecisionView {
   const keep = stallKeepWaitingDecision();
   return {
@@ -323,6 +326,13 @@ export function stallSwitchVendorDecision(): DecisionView {
     question:
       "T-5 validate-p9774: implement 1/3 stalled - what next? The IC's last run failed 60 minutes ago.",
     context: "Why: no progress for 60 min\nLast verdict: DISPATCHED",
-    options: keep.options.map((o) => ({ ...o, recommended: o.id === "switch" })),
+    options: keep.options.map((o) => ({
+      ...o,
+      recommended: o.id === "switch",
+      description:
+        o.id === "wait"
+          ? "Nobody works on it now: asks again in 60 minutes unless an IC starts"
+          : o.description,
+    })),
   };
 }

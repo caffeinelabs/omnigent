@@ -970,26 +970,39 @@ ci, claim, plan, intake, improve); `factory_loops` keeps one row per
   *thrashing* when a fixed one returns. The supervisor tick adds wall and
   no-progress stalls, the plan loop and the `done_check` decision.
 - **Stalls read the task's people** (`task_pulse.py`), not only task events:
-  - An open **blocking** question a person owes the task's PL or one of its
-    sessions (`sys_factory_ask`, a parked approval), or one whose subject is
-    the task, holds the implement loop: no stall, the cockpit shows "waiting
-    on D-n", the held time is not charged to `wall_h`, and the no-progress
-    clock restarts when the last one is answered.
-  - The task's sessions' activity is progress: their newest item (IC,
-    reviewer and demo turns, tool calls, the PL's messages to them), a turn
-    running now (until it has been silent for `supervisor.stuck_s`), and,
-    only once the clock runs out, a PL tool call or reply that names the
-    task (its ref, branch, or key).
+  - An open **blocking** question a person owes one of the task's sessions,
+    one its PL asked about this task or about no task in particular (one
+    naming another task, e.g. "T-9", does not count), or one whose subject
+    is the task, holds the implement loop: no stall, the cockpit shows
+    "waiting on D-n" (each ref links to its decision), and the no-progress
+    clock restarts when the last one is answered. While the IC lives the
+    held time is not charged to `wall_h`; with nobody working on the task it
+    is, so a question cannot hide a dead IC for good.
+  - While the task's IC lives, its open sessions' activity is progress:
+    their newest item (IC, reviewer and demo turns, tool calls, the PL's
+    messages to them), a turn running now (until it has been silent for
+    `supervisor.stuck_s`), and, only once the clock runs out, a PL tool call
+    that names the task (its ref, branch, or key). Closing a session is not
+    activity, and the PL's replies never count (they are mostly status
+    chatter). With the IC gone, failed or never bound, only task events and
+    questions count.
   - The stall's decision says why in one plain line at the end of its
     question ("The IC worked 3 minutes ago; it is running pnpm build.") and
     recommends **Keep waiting** while the IC is alive, or **Switch vendor**
     when it is gone, failed or erroring, has been silent mid-turn past the
-    stuck time, or produced nothing since the last Keep waiting. A
-    no-progress stall whose task moves again (or now waits on a person)
-    runs again by itself.
+    stuck time, or produced nothing since the last Keep waiting. The IC's
+    last error is quoted with secrets redacted. A decision re-opened later
+    (after Pause project) is worded as of then.
+  - A no-progress stall runs again by itself only on real work (a turn
+    running now while the IC lives, or a task event) or when the task now
+    waits on a person: a ping and a one-line reply do not reopen it. Each
+    time it does, the try's next no-progress stall waits twice as long (up
+    to 8x `no_progress_s`; a new try starts over).
   - After **Keep waiting** (it doubles `wall_h`) the no-progress rule rests
     on that try: it asks again only at the new wall budget, or sooner if the
     IC, once alive, is gone or failed, or the worker reports FAIL or BLOCKED.
+    Keep waiting on a stall whose IC was already dead asks again after
+    `no_progress_s` unless an IC starts, and its option says so.
 - **Claims** (`loops.claim_status`, judged on the fresh gates and stored on
   `pr.claim`): `held` (ready), `refuted` (a failed gate, a draft, a moved head,
   a PR not open; or Sentinel `not_verified`) or `early` (only pending gates:

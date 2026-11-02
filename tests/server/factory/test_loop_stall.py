@@ -4,12 +4,15 @@ Reproduces two false "stalled - what next?" decisions from the live factory
 (validate-build-tier, T-5): one raised while the task only waited on two
 blocking questions its PL had asked a person, one raised while the IC was
 busy running long builds without a factory task event. A dead IC still stalls
-and recommends switching vendors; after "Keep waiting" the loop is not asked
-about again within the new budget unless its IC dies.
+and recommends switching vendors (closing it, or the PL's chatter about it,
+is not progress); after "Keep waiting" the loop is not asked about again
+within the new budget unless its IC dies; a stall does not reopen on a ping
+and a one-line reply.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
@@ -21,7 +24,15 @@ import pytest_asyncio
 from omnigent.entities import Conversation
 from omnigent.entities.conversation import NewConversationItem, parse_item_data
 from omnigent.entities.factory import FactoryDecision, FactoryLoop
-from omnigent.server.factory import budgets, decisions, loops, pipeline, task_pulse, tasks
+from omnigent.server.factory import (
+    budgets,
+    decisions,
+    loop_escalation,
+    loops,
+    pipeline,
+    task_pulse,
+    tasks,
+)
 from omnigent.server.routes._sessions.common import _session_status_cache
 from omnigent.stores.conversation_store import sqlalchemy_store as conv_store_mod
 from omnigent.stores.factory_store import sqlalchemy_store as factory_store_mod
@@ -74,6 +85,20 @@ class Stall:
 
     def status(self, session_id: str, value: str) -> None:
         self.monkeypatch.setitem(_session_status_cache, session_id, value)
+
+    def close(self, session_id: str) -> None:
+        """Close a session as ``sys_session_close`` does: a PATCH that bumps its row."""
+        self.cockpit.world.store.update_conversation(
+            session_id, title=f"ic:{KEY}:closed:{session_id}", archived=True
+        )
+
+    def say(self, session_id: str, role: str, text: str) -> None:
+        """A message in (``user``: the PL or the server) or out (``assistant``)."""
+        kind = "output_text" if role == "assistant" else "input_text"
+        data: dict[str, Any] = {"role": role, "content": [{"type": kind, "text": text}]}
+        if role == "assistant":
+            data["agent"] = "pl" if session_id == self.cockpit.world.id("pl") else "ic"
+        self.item(session_id, "message", data)
 
     def item(self, session_id: str, kind: str, data: dict[str, Any]) -> None:
         """Append one item to a session at the fake clock's time."""
@@ -183,6 +208,7 @@ async def test_a_task_waiting_on_its_pls_questions_is_not_stalled(stall: Stall) 
         "decision_ref": first.ref,
         "refs": [first.ref, second.ref],
         "since": first.created_at,
+        "count": 2,
     }
     # The task's chip says what it waits on, too.
     chip = next(t for t in tasks.list_view(cockpit.deps, cockpit.fid, SLUG)["tasks"])["loop"]
@@ -232,6 +258,51 @@ async def test_an_ics_own_question_or_one_about_the_task_holds_it(stall: Stall) 
     )
     row = await stall.ticks(2 * HOUR)
     assert row.state == "running" and loops.loop_view(row)["held_by"]["refs"] == [about.ref]
+
+
+async def test_a_lead_question_about_another_task_does_not_hold_this_one(stall: Stall) -> None:
+    """D-1 is about T-9's docs: T-1, with an idle IC, still stalls and says nothing of D-1."""
+    stall.status(stall.ic.id, "idle")
+    stall.ask("Should T-9 docs use the new logo?")
+    w = stall.cockpit.world
+    stall.cockpit.store.create_decision(
+        stall.cockpit.fid,
+        dedupe_key="about-t9",
+        question="Ship it without the migration?",
+        source="agent",
+        blocking=True,
+        project_slug=SLUG,
+        asked_by_session_id=w.id("pl"),
+        subject="task:T-9",
+    )
+    row = await stall.ticks(30 * MIN)
+    assert row.state == "running" and loops.loop_view(row)["held_by"] is None
+    row = await stall.ticks(35 * MIN)
+    assert row.state == "stalled"
+
+
+async def test_a_hold_does_not_hide_a_dead_ic_from_the_wall_budget(stall: Stall) -> None:
+    """With nobody working on the task, a question the PL waits on is shown but time is charged."""
+    cockpit = stall.cockpit
+    row = implement(cockpit, KEY)
+    cockpit.store.update_loop(row.id, spec={**row.spec, "wall_h": 2})
+    stall.close(stall.ic.id)
+    asked = stall.ask("May I reset the preview database?")
+    row = await stall.ticks(110 * MIN, every=10 * MIN)
+    assert row.state == "running"
+    assert loops.loop_view(row)["held_by"]["refs"] == [asked.ref]
+    assert not row.spent.get("held_s")
+    row = await stall.ticks(10 * MIN, every=10 * MIN)
+    assert row.state == "stalled" and row.last_reason == "running 2 h (wall budget 2 h)"
+
+
+async def test_the_hold_counts_every_open_question(stall: Stall) -> None:
+    stall.status(stall.ic.id, "idle")
+    asked = [stall.ask(f"Question {n} about the preview?") for n in range(7)]
+    row = await stall.tick(MIN)
+    held = loops.loop_view(row)["held_by"]
+    assert held["count"] == 7
+    assert held["refs"] == [d.ref for d in asked[: task_pulse.HOLD_REFS_MAX]]
 
 
 # ── Live case 2: the IC works without task events ──────────────
@@ -301,16 +372,9 @@ async def test_the_pls_turns_about_the_task_count_its_other_turns_do_not(stall: 
     )
     row = await stall.ticks(40 * MIN)
     assert row.state == "running"
-    # Later turns about something else, and the server's own mail, do not count.
-    stall.item(
-        w.id("pl"),
-        "message",
-        {
-            "role": "assistant",
-            "agent": "pl",
-            "content": [{"type": "output_text", "text": "Docs look fine."}],
-        },
-    )
+    # Later replies, even one naming the task, and the server's own mail do not count.
+    stall.say(w.id("pl"), "assistant", "Docs look fine.")
+    stall.say(w.id("pl"), "assistant", "Heartbeat: T-1 is still on its first try.")
     stall.item(
         w.id("pl"),
         "message",
@@ -336,12 +400,71 @@ async def test_a_dead_ic_stalls_and_recommends_switching_vendors(stall: Stall) -
 
 
 async def test_a_closed_ic_session_is_nobody_working(stall: Stall) -> None:
-    stall.cockpit.world.store.set_labels(stall.ic.id, {CLOSED_LABEL_KEY: CLOSED_LABEL_VALUE})
+    """Closing the IC bumps its row; the clock still runs from its last real activity."""
+    stall.status(stall.ic.id, "idle")
+    row = await stall.ticks(50 * MIN)
+    assert row.state == "running"
+    stall.close(stall.ic.id)
+    row = await stall.ticks(10 * MIN)
+    assert row.state == "stalled" and row.last_reason == "no progress for 60 min"
+    (decision,) = stall.stall_decisions()
+    assert _recommended(decision) == ["Switch vendor → ic_codex"]
+    assert _why(decision) == (
+        "The IC's session was closed 10 minutes ago; nobody is working on the task."
+    )
+    wait = next(o for o in decision.options if o["id"] == "wait")
+    assert wait["description"] == (
+        "Nobody works on it now: asks again in 60 minutes unless an IC starts"
+    )
+
+
+async def test_closing_the_ic_of_a_stalled_task_keeps_it_stalled(stall: Stall) -> None:
+    stall.status(stall.ic.id, "idle")
     row = await stall.ticks(65 * MIN)
     assert row.state == "stalled"
     (decision,) = stall.stall_decisions()
+    stall.close(stall.ic.id)
+    row = await stall.ticks(30 * MIN)
+    assert row.state == "stalled"
+    assert stall.cockpit.store.get_decision(decision.id).status == "open"
+
+
+async def test_the_pls_chatter_does_not_keep_a_dead_task_running(stall: Stall) -> None:
+    """With its IC closed, the PL's replies and tool calls naming the task are not progress."""
+    w = stall.cockpit.world
+    stall.cockpit.world.store.set_labels(stall.ic.id, {CLOSED_LABEL_KEY: CLOSED_LABEL_VALUE})
+    for n in range(5):
+        row = await stall.tick(10 * MIN)
+        assert row.state == "running", n
+        stall.say(w.id("pl"), "assistant", "Heartbeat: T-1 still has no IC; nothing to do.")
+        stall.item(
+            w.id("pl"),
+            "function_call",
+            {
+                "agent": "pl",
+                "name": "sys_factory_task",
+                "arguments": json.dumps({"op": "get", "key": KEY}),
+                "call_id": f"pl-{n}",
+            },
+        )
+    row = await stall.tick(10 * MIN)
+    assert row.state == "stalled" and row.last_reason == "no progress for 60 min"
+    (decision,) = stall.stall_decisions()
     assert _recommended(decision) == ["Switch vendor → ic_codex"]
-    assert "nobody is working on the task" in _why(decision)
+
+
+async def test_keep_waiting_on_a_dead_ic_asks_again_in_an_hour(stall: Stall) -> None:
+    cockpit = stall.cockpit
+    stall.close(stall.ic.id)
+    await stall.ticks(60 * MIN)
+    (first,) = stall.stall_decisions()
+    await decisions.answer_decision(cockpit.app.state, first.id, user_id="carol", option_id="wait")
+    row = await stall.ticks(55 * MIN)
+    assert row.state == "running"
+    row = await stall.ticks(5 * MIN)
+    assert row.state == "stalled"
+    second = next(d for d in stall.stall_decisions() if d.id != first.id)
+    assert _recommended(second) == ["Switch vendor → ic_codex"]
 
 
 async def test_a_stalled_task_whose_ic_works_again_runs_again(stall: Stall) -> None:
@@ -354,6 +477,48 @@ async def test_a_stalled_task_whose_ic_works_again_runs_again(stall: Stall) -> N
     row = await stall.tick(MIN)
     assert row.state == "running"
     assert stall.cockpit.store.get_decision(decision.id).status == "expired"
+
+
+async def test_a_ping_and_a_one_line_reply_do_not_reopen_a_stall(stall: Stall) -> None:
+    """The STALLED mail makes the PL ask the IC for status; the idle IC answers in a line."""
+    w = stall.cockpit.world
+    stall.status(stall.ic.id, "idle")
+    row = await stall.ticks(65 * MIN)
+    assert row.state == "stalled"
+    (decision,) = stall.stall_decisions()
+    stall.say(stall.ic.id, "user", "status?")
+    stall.say(stall.ic.id, "assistant", "Waiting for the next step.")
+    stall.say(w.id("pl"), "assistant", "Asked T-1's IC for status.")
+    row = await stall.ticks(65 * MIN)
+    assert row.state == "stalled"
+    assert [d.id for d in stall.stall_decisions()] == [decision.id]
+    assert stall.cockpit.store.get_decision(decision.id).status == "open"
+
+
+async def test_a_stall_that_clears_itself_waits_twice_as_long_next_time(stall: Stall) -> None:
+    stall.status(stall.ic.id, "idle")
+    await stall.ticks(65 * MIN)
+    (first,) = stall.stall_decisions()
+    # The IC runs one short turn: real work, the stall clears.
+    stall.status(stall.ic.id, "running")
+    stall.say(stall.ic.id, "assistant", "Checking the build.")
+    row = await stall.tick(MIN)
+    assert row.state == "running" and row.spent["idle_clears"] == 1
+    assert stall.cockpit.store.get_decision(first.id).status == "expired"
+    stall.status(stall.ic.id, "idle")
+    row = await stall.ticks(65 * MIN)
+    assert row.state == "running"
+    row = await stall.ticks(60 * MIN)
+    assert row.state == "stalled" and row.last_reason.startswith("no progress for 12")
+    second = next(d for d in stall.stall_decisions() if d.id != first.id)
+    # A new try gets the full budget again.
+    await decisions.answer_decision(
+        stall.cockpit.app.state, second.id, user_id="carol", option_id="switch"
+    )
+    await start(stall.cockpit, KEY)
+    row = implement(stall.cockpit, KEY)
+    assert row.iteration == 2 and "idle_clears" not in row.spent
+    assert loops.idle_budget_s(row) == HOUR
 
 
 # ── After "Keep waiting" ───────────────────────────────────────
@@ -418,6 +583,112 @@ async def test_a_wall_stall_after_keep_waiting_with_nothing_done_recommends_swit
     assert _why(second).startswith("The IC produced nothing in the")
 
 
+async def test_an_answer_and_the_tick_do_not_overwrite_each_other(stall: Stall) -> None:
+    """The answer writes the loop under the engine's lock, from a fresh read."""
+    cockpit = stall.cockpit
+    stall.status(stall.ic.id, "idle")
+    await stall.ticks(65 * MIN)
+    (first,) = stall.stall_decisions()
+    seen = implement(cockpit, KEY)  # what a tick read before the answer
+    async with loops.lock(cockpit.fid):
+        answering = asyncio.create_task(
+            decisions.answer_decision(
+                cockpit.app.state, first.id, user_id="carol", option_id="wait"
+            )
+        )
+        for _ in range(20):
+            await asyncio.sleep(0.01)
+        assert not answering.done()
+        # The tick writes what it read, as wake() would.
+        cockpit.store.update_loop(seen.id, spent={**seen.spent, "idle_clears": 1})
+    await asyncio.wait_for(answering, timeout=10)
+    row = implement(cockpit, KEY)
+    assert row.state == "running"
+    assert row.spent["kept_waiting"]["iteration"] == row.iteration
+    assert row.spent["idle_clears"] == 1
+
+
+async def test_a_stall_asked_about_again_later_says_why_as_of_then(stall: Stall) -> None:
+    cockpit = stall.cockpit
+    row = implement(cockpit, KEY)
+    cockpit.store.update_loop(row.id, spec={**row.spec, "wall_h": 1})
+    stall.status(stall.ic.id, "running")
+    for n in range(13):
+        stall.tool_call(stall.ic.id, "pnpm -F web build", f"call-{n}")
+        row = await stall.tick(5 * MIN)
+    assert row.state == "stalled"
+    assert row.spent["stall"]["line"].startswith("The IC worked 5 minutes ago")
+    # Hours later (the project was paused from the decision), the IC has gone quiet.
+    stall.status(stall.ic.id, "idle")
+    at = row.spent["stall"]["at"]
+    assert loops.reword_stall(cockpit.deps, row, at + MIN) == row  # fresh: as it stalled
+    row = loops.reword_stall(cockpit.deps, row, stall.clock.advance(3 * HOUR))
+    assert row.spent["stall"]["line"] == (
+        "The IC is alive but has been idle for 3 hours; its lead may owe it a next step."
+    )
+    facts = loop_escalation.read_facts(cockpit.deps, row)
+    question, *_ = loop_escalation.decision_for(facts, "stalled")
+    assert question.endswith("its lead may owe it a next step.")
+
+
+async def test_a_wall_stall_is_not_read_each_tick(
+    stall: Stall, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cockpit = stall.cockpit
+    row = implement(cockpit, KEY)
+    cockpit.store.update_loop(row.id, spec={**row.spec, "wall_h": 1})
+    stall.status(stall.ic.id, "idle")
+    row = await stall.ticks(60 * MIN, every=30 * MIN)
+    assert row.state == "stalled" and row.spent["stall"]["kind"] == "wall"
+    reads: list[str] = []
+    real = loops._watch
+
+    def counted(reader: task_pulse.Reader, task: Any) -> Any:
+        reads.append(task.key)
+        return real(reader, task)
+
+    monkeypatch.setattr(loops, "_watch", counted)
+    await stall.ticks(30 * MIN)
+    assert reads == []
+
+
+async def test_the_ics_last_error_is_quoted_without_secrets(stall: Stall) -> None:
+    stall.status(stall.ic.id, "idle")
+    stall.item(
+        stall.ic.id,
+        "error",
+        {
+            "source": "tool",
+            "code": "push_failed",
+            "message": "git push https://x-access-token:ghs_secretsecret@github.com/o/r failed",
+        },
+    )
+    row = await stall.ticks(65 * MIN)
+    assert row.state == "stalled"
+    (decision,) = stall.stall_decisions()
+    assert "ghs_secretsecret" not in decision.question
+    assert _why(decision).startswith("The IC's last run failed 60 minutes ago: git push https://")
+    assert "[REDACTED]" in decision.question
+    assert _recommended(decision) == ["Switch vendor → ic_codex"]
+
+
+@pytest.mark.parametrize(
+    ("name", "arg", "words"),
+    [
+        ("Bash", "pnpm -F web build", "running pnpm -F web build"),
+        ("bash", None, "running a command"),
+        ("mcp__preview__exec", "pnpm e2e", "running pnpm e2e"),
+        ("Read", "src/app.ts", "reading files"),
+        ("apply_patch", "src/app.ts", "editing files"),
+        ("mcp__linear__get_issue", "ENG-1", None),
+    ],
+)
+def test_a_running_call_reads_in_plain_words(
+    name: str, arg: str | None, words: str | None
+) -> None:
+    assert task_pulse.doing_text(name, arg) == words
+
+
 # ── The words ──────────────────────────────────────────────────
 
 
@@ -433,7 +704,7 @@ async def test_a_wall_stall_after_keep_waiting_with_nothing_done_recommends_swit
                 worker_status="running",
                 worker_at=1000 - 180,
             ),
-            task_pulse.WorkerLook(tool="pnpm -F web build"),
+            task_pulse.WorkerLook(tool="running pnpm -F web build"),
             None,
             "wait",
             "The IC worked 3 minutes ago; it is running pnpm -F web build.",

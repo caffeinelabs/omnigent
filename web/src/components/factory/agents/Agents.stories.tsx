@@ -13,7 +13,12 @@ import {
   round3Events,
   round3Snapshot,
 } from "../shell/__fixtures__/shellFixtures";
-import { agentsResponse, scaleAgentsResponse } from "./__fixtures__/opsFixtures";
+import {
+  IC_ROUTE_R2,
+  agentsResponse,
+  heldRow,
+  scaleAgentsResponse,
+} from "./__fixtures__/opsFixtures";
 import { COMMIT_BUDGET_MS, FleetPerfHarness } from "./fleetPerfKit";
 
 const AGENTS_PATH = `${SNAPSHOT_PATH}/agents`;
@@ -239,6 +244,27 @@ export const LongText = fleet({
 });
 
 export const LongTextMobile = phone(LongText);
+
+// ── Waiting on a person ────────────────────────────────────────
+
+/** ic:route-r2's task waits on three answers: its loop chip links D-22 and the other two. */
+const waitingRoutes: CockpitStoryOptions["routes"] = {
+  [AGENTS_PATH]: {
+    body: (() => {
+      const res = agentsResponse();
+      return {
+        ...res,
+        data: res.data.map((row) => (row.session_id === IC_ROUTE_R2 ? heldRow(row) : row)),
+      };
+    })(),
+  },
+};
+
+export const WaitingOnAnswers = fleet({ routes: waitingRoutes, search: T4 });
+
+export const WaitingOnAnswersDark = fleet({ routes: waitingRoutes, search: T4, theme: "dark" });
+
+export const WaitingOnAnswersMobile = phone(fleet({ routes: waitingRoutes, search: T4 }));
 
 // ── Empty, loading and errors ──────────────────────────────────
 

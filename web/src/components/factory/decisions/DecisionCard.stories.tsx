@@ -76,8 +76,10 @@ export const LoopStallKeepWaiting = card(stallKeepWaitingDecision());
 
 export const LoopStallKeepWaitingDark = card(stallKeepWaitingDecision(), { theme: "dark" });
 
-/** A stalled task whose IC failed: Switch vendor recommended. */
+/** A stalled task whose IC failed: Switch vendor recommended; Keep waiting asks again in an hour. */
 export const LoopStallSwitchVendor = card(stallSwitchVendorDecision());
+
+export const LoopStallSwitchVendorDark = card(stallSwitchVendorDecision(), { theme: "dark" });
 
 /** A blocked approval: the recommended option is a link to the Inbox. */
 export const ServerLinkOption = card(blockedApprovalDecision());

@@ -223,6 +223,11 @@ describe("a task waiting on a person's answer", () => {
     expect(heldText({ decision_id: null, decision_ref: "D-7", refs: ["D-7"], since: null })).toBe(
       "waiting on D-7",
     );
+    // `refs` lists at most five; `count` says how many there are.
+    const many = ["D-1", "D-2", "D-3", "D-4", "D-5"];
+    expect(
+      heldText({ decision_id: null, decision_ref: "D-1", refs: many, since: null, count: 8 }),
+    ).toBe("waiting on D-1 +7");
     // Only a running loop is held: a stall the tick already raised stays a stall.
     expect(stripState({ ...heldLoop(), state: "stalled" })).toBe("stalled");
     expect(loopLines([{ ...heldLoop(), state: "stalled" }], [])[0]!.heldBy).toBeNull();
@@ -277,5 +282,35 @@ describe("a task waiting on a person's answer", () => {
     const chip = screen.getByTestId("pr-loop-implement");
     expect(chip).toHaveAttribute("data-state", "held");
     expect(chip).toHaveTextContent("implement 1/3 · waiting on D-22 +1");
+  });
+
+  it("links the oldest answer and the rest from the chips", () => {
+    render(
+      <MemoryRouter>
+        <LoopChips
+          factoryId={snapshot.factory.id}
+          chips={[
+            {
+              id: "c1",
+              kind: "implement",
+              state: "running",
+              iteration: 1,
+              limit: 3,
+              held_by: { ...heldLoop().held_by!, count: 7 },
+            },
+          ]}
+        />
+      </MemoryRouter>,
+    );
+    const chip = screen.getByTestId("pr-loop-implement");
+    expect(chip).toHaveTextContent("implement 1/3 · waiting on D-22 +6");
+    expect(within(chip).getByRole("link", { name: "D-22" })).toHaveAttribute(
+      "href",
+      `/factory/${snapshot.factory.id}/decisions?decision=D-22`,
+    );
+    expect(within(chip).getByRole("link", { name: "+6" })).toHaveAttribute(
+      "href",
+      `/factory/${snapshot.factory.id}/decisions`,
+    );
   });
 });

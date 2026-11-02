@@ -54,6 +54,46 @@ describe("60-agent fleet perf", () => {
 });
 
 describe("FleetTable", () => {
+  it("links the answers a held task waits on", () => {
+    const { snapshot, body } = scaleAgentsResponse(41);
+    const row = body.data.find((r) => r.loop)!;
+    const held = {
+      ...row,
+      loop: {
+        ...row.loop!,
+        state: "running" as const,
+        held_by: {
+          decision_id: "d22",
+          decision_ref: "D-22",
+          refs: ["D-22", "D-23"],
+          since: 1,
+          count: 2,
+        },
+      },
+    };
+    const groups = groupFleet([fleetAgent(held, ROUND3_NOW_S)], "project", [held.project ?? ""]);
+    render(
+      <MemoryRouter>
+        <FleetTable
+          factoryId={snapshot.factory.id}
+          snapshot={snapshot}
+          groups={groups}
+          nowS={ROUND3_NOW_S}
+          selected={new Set()}
+          onSelect={() => undefined}
+          selectable
+          initialHeight={4000}
+        />
+      </MemoryRouter>,
+    );
+    const chip = screen.getByTestId(`fleet-loop-${held.session_id}`);
+    expect(chip).toHaveTextContent("waiting on D-22 +1");
+    expect(within(chip).getByRole("link", { name: "D-22" })).toHaveAttribute(
+      "href",
+      `/factory/${snapshot.factory.id}/decisions?decision=D-22`,
+    );
+  });
+
   it("groups agents under project headers with their counts and links rows to the Agent page", () => {
     const { snapshot, body } = scaleAgentsResponse(41);
     const agents = body.data.map((row) => fleetAgent(row, ROUND3_NOW_S));

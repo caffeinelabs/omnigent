@@ -18,6 +18,7 @@ import { HarnessGlyph, ROLE_SHORT } from "../board/TeamStrip";
 import { devEnvStatus } from "../board/DevEnvPill";
 import { TONE_CHIP, TONE_TEXT, formatElapsed, formatUsd, previewStatus } from "../factoryFormat";
 import { agentPageHref, alertPageHref, projectPageHref } from "../factoryRoutes";
+import { HeldRefs } from "../loops/HeldRefs";
 import { heldText } from "../loops/loopStripModel";
 import { type FleetAgent, type FleetGroup, nowText } from "./fleetModel";
 import { useElementWidth } from "./useElementWidth";
@@ -99,16 +100,18 @@ function age(nowS: number, at: number | null): string {
   return formatElapsed(s) ?? "—";
 }
 
-function TaskLoop({ agent }: { agent: FleetAgent }) {
+function TaskLoop({ agent, factoryId }: { agent: FleetAgent; factoryId: string }) {
   const { task, loop } = agent.row;
   if (!task && !loop) return <span className="text-muted-foreground">—</span>;
   const bad = loop && ["exhausted", "thrashing", "stalled", "escalated"].includes(loop.state);
-  const held = loop?.state === "running" ? heldText(loop.held_by) : null;
+  const heldBy = loop?.state === "running" ? (loop.held_by ?? null) : null;
+  const held = heldText(heldBy);
   return (
     <span className="flex min-w-0 items-center gap-1 truncate">
       {task && <span className="shrink-0 font-mono">{task.ref}</span>}
       {loop && (
         <span
+          data-testid={`fleet-loop-${agent.row.session_id}`}
           className={cn(
             "inline-flex h-5 min-w-0 items-center truncate rounded-sm px-1 font-mono text-xs",
             bad
@@ -121,10 +124,17 @@ function TaskLoop({ agent }: { agent: FleetAgent }) {
           )}
           title={held ? `${held}: not counted as stalled until a person answers` : undefined}
         >
-          {loop.kind === "implement" ? "impl" : loop.kind} {loop.iteration}
-          {loop.limit != null ? `/${loop.limit}` : ""}
-          {loop.state === "exhausted" ? " ⛔" : loop.state === "converged" ? " ✓" : ""}
-          {held ? ` · ${held}` : ""}
+          <span className="min-w-0 truncate">
+            {loop.kind === "implement" ? "impl" : loop.kind} {loop.iteration}
+            {loop.limit != null ? `/${loop.limit}` : ""}
+            {loop.state === "exhausted" ? " ⛔" : loop.state === "converged" ? " ✓" : ""}
+            {heldBy && (
+              <>
+                {" · "}
+                <HeldRefs held={heldBy} factoryId={factoryId} componentId="factory.fleet.held" />
+              </>
+            )}
+          </span>
         </span>
       )}
     </span>
@@ -330,7 +340,7 @@ export const FleetRow = memo(function FleetRow({
           <span className="flex min-w-0 items-center gap-2 text-xs text-muted-foreground">
             {(row.task || row.loop) && (
               <span className="min-w-0 truncate">
-                <TaskLoop agent={agent} />
+                <TaskLoop agent={agent} factoryId={factoryId} />
               </span>
             )}
             <Flags agent={agent} factoryId={factoryId} />
@@ -365,7 +375,7 @@ export const FleetRow = memo(function FleetRow({
         {STATE_TEXT[agent.state]}
       </span>
       <span role="cell" className="min-w-0">
-        <TaskLoop agent={agent} />
+        <TaskLoop agent={agent} factoryId={factoryId} />
       </span>
       <span role="cell" className="min-w-0">
         <NowCell agent={agent} nowS={nowS} />

@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
@@ -54,11 +54,14 @@ from omnigent.server.factory.loops import (
     _spent,
     claim_status,
     engine_mode,
+    idle_budget_s,
     limit_of,
+    reword_stall,
     task_label,
     wait_words,
 )
-from omnigent.server.factory.task_pulse import RECOMMEND_WAIT
+from omnigent.server.factory.loops import lock as loop_lock
+from omnigent.server.factory.task_pulse import DEAD_WORKERS, RECOMMEND_WAIT, span_text
 from omnigent.stores.factory_store import norm_id
 
 if TYPE_CHECKING:
@@ -233,7 +236,7 @@ def decision_for(
                     target,
                     wait=True,
                     recommended=wait,
-                    description=_wait_description(loop),
+                    description=_wait_description(loop, state),
                 )
             )
         else:
@@ -336,19 +339,36 @@ def decision_for(
     )
 
 
-def _stall_advice(loop: FactoryLoop, state: str) -> tuple[str, str] | None:
-    """:returns: ``(recommend, line)`` the tick recorded when an implement loop stalled."""
+def _stall_of(loop: FactoryLoop, state: str) -> dict[str, Any]:
+    """:returns: What the tick recorded when an implement loop stalled (``{}`` if nothing)."""
     stall = _spent(loop).get("stall")
     if loop.kind != "implement" or state != "stalled" or not isinstance(stall, dict):
-        return None
+        return {}
+    return stall
+
+
+def _stall_advice(loop: FactoryLoop, state: str) -> tuple[str, str] | None:
+    """
+    :returns: ``(recommend, line)`` of an implement loop's stall, as of when it
+        stalled, or as of its re-asking (:func:`.loops.reword_stall`).
+    """
+    stall = _stall_of(loop, state)
     recommend, line = stall.get("recommend"), stall.get("line")
     if not isinstance(recommend, str) or not isinstance(line, str) or not line:
         return None
     return recommend, line
 
 
-def _wait_description(loop: FactoryLoop) -> str:
+def _nobody_works(loop: FactoryLoop, state: str) -> bool:
+    """:returns: Whether the stall found the task's IC gone, failed or never bound."""
+    return _stall_of(loop, state).get("worker") in DEAD_WORKERS
+
+
+def _wait_description(loop: FactoryLoop, state: str = "stalled") -> str:
     """What "Keep waiting" on an implement loop does, e.g. ``Up to 32 h in all; …``."""
+    idle_s = idle_budget_s(loop)
+    if _nobody_works(loop, state) and idle_s:
+        return f"Nobody works on it now: asks again in {span_text(idle_s)} unless an IC starts"
     wall_h = float((loop.spec or {}).get("wall_h") or DEFAULT_BUDGETS["implement"]["wall_h"])
     return (
         f"Up to {wall_h * 2:g} h in all; asks again sooner only if the IC stops or its run fails"
@@ -413,6 +433,10 @@ async def _escalate(
     current = await asyncio.to_thread(store.get_loop, loop.id)
     if current is None or current.state != state:
         return
+    if current.kind == "implement" and state == "stalled":
+        # Asked again later (after Pause project): say why as of now.
+        async with loop_lock(current.factory_id):
+            current = await asyncio.to_thread(reword_stall, deps, current)
     facts = await asyncio.to_thread(read_facts, deps, current)
     fid = current.factory_id
     if current.kind == "verify":
@@ -1055,21 +1079,29 @@ async def execute_answer(
     kind_event: str | None = None
     if answer.action == ACTION_RAISE_BUDGET:
         key, value = answer.extra["key"], answer.extra["value"]
-        spec = {**(loop.spec or {}), key: value}
-        if key == "per_head" and loop.kind == "demo":
-            spec["per_pr_heads"] = int((loop.spec or {}).get("per_pr_heads") or 6) + 1
-        answered_at = int(decision.answered_at or loop.updated_at)
-        values = {**_spent(loop), "progress_at": answered_at}
-        if key == "usd":
-            values["usd_near"] = False  # budget.near fires again at 80 % of the new cap
-        if key == "wall_h" and loop.kind == "implement":
-            # Not asked again on this try within the new budget unless it gets worse.
-            values["kept_waiting"] = {
-                "at": answered_at,
-                "iteration": loop.iteration,
-                "try_open": bool(values.get("try_open", True)),
-            }
-        fields = {"spec": spec, "state": "running", "ended_at": None, "spent": values}
+
+        def raised(row: FactoryLoop) -> dict[str, Any]:
+            spec = {**(row.spec or {}), key: value}
+            if key == "per_head" and row.kind == "demo":
+                spec["per_pr_heads"] = int((row.spec or {}).get("per_pr_heads") or 6) + 1
+            answered_at = int(decision.answered_at or row.updated_at)
+            values = {**_spent(row), "progress_at": answered_at}
+            if key == "usd":
+                values["usd_near"] = False  # budget.near fires again at 80 % of the new cap
+            if key == "wall_h" and row.kind == "implement":
+                # Not asked again on this try within the new budget unless it gets worse.
+                kept: dict[str, Any] = {
+                    "at": answered_at,
+                    "iteration": row.iteration,
+                    "try_open": bool(values.get("try_open", True)),
+                }
+                if _nobody_works(row, row.state):
+                    # Nobody works on it: the no-progress rule asks again unless an IC starts.
+                    kept["alive"] = True
+                values["kept_waiting"] = kept
+            return {"spec": spec, "state": "running", "ended_at": None, "spent": values}
+
+        loop = await _write_loop(deps, loop, raised)
         if task is not None and loop.kind == "implement" and key in ("attempts", "usd"):
             budget = {**(task.budget or {}), key: value}
             moved = await _task_write(deps, task, budget=budget)
@@ -1080,14 +1112,17 @@ async def execute_answer(
         )
         target = implement or loop
         cap = int((target.spec or {}).get("attempts") or 0) or task.attempts
-        spec = {**(target.spec or {}), "attempts": cap + 1}
-        values = {**_spent(target), "progress_at": int(decision.answered_at or target.updated_at)}
-        values.pop("kept_waiting", None)  # a new worker is not covered by an old Keep waiting
-        if answer.action == ACTION_SWITCH_VENDOR:
-            values["switched"] = True
-        await asyncio.to_thread(
-            store.update_loop, target.id, spec=spec, state="running", ended_at=None, spent=values
-        )
+
+        def restarted(row: FactoryLoop) -> dict[str, Any]:
+            spec = {**(row.spec or {}), "attempts": cap + 1}
+            answered_at = int(decision.answered_at or row.updated_at)
+            values = {**_spent(row), "progress_at": answered_at}
+            values.pop("kept_waiting", None)  # a new worker is not covered by an old Keep waiting
+            if answer.action == ACTION_SWITCH_VENDOR:
+                values["switched"] = True
+            return {"spec": spec, "state": "running", "ended_at": None, "spent": values}
+
+        await _write_loop(deps, target, restarted)
         if target.id != loop.id:
             fields = {"state": "running", "ended_at": None}
         budget = {**(task.budget or {}), "attempts": cap + 1}
@@ -1158,6 +1193,25 @@ def _settle_siblings(
             if other.kind == "review":
                 spec["rounds"] = int(spec.get("rounds") or 0) + 1
             store.update_loop(other.id, state="running", ended_at=None, spec=spec)
+
+
+async def _write_loop(
+    deps: FactoryDeps, loop: FactoryLoop, build: Callable[[FactoryLoop], dict[str, Any]]
+) -> FactoryLoop:
+    """
+    Read *loop* again and write ``build(it)`` under the loop engine's lock.
+
+    The tick writes stalled loops too (a stall that runs again by itself); without
+    the lock it could overwrite the answer's ``spent`` with what it read before.
+    """
+    store = deps.factory_store
+
+    def run() -> FactoryLoop:
+        current = store.get_loop(loop.id) or loop
+        return store.update_loop(current.id, **build(current)) or current
+
+    async with loop_lock(loop.factory_id):
+        return await asyncio.to_thread(run)
 
 
 async def _task_write(

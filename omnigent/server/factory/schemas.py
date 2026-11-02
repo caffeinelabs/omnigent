@@ -178,14 +178,16 @@ class LoopHoldView(_View):
     The questions a running implement loop waits on: its stall clock is paused.
 
     :param decision_ref: The oldest open one, e.g. ``D-22``.
-    :param refs: Every one it waits on, oldest first.
+    :param refs: The oldest ones it waits on, oldest first (at most five).
     :param since: When the oldest was asked (epoch seconds).
+    :param count: How many it waits on in all.
     """
 
     decision_id: str | None = None
     decision_ref: str
     refs: list[str] = Field(default_factory=list)
     since: int | None = None
+    count: int | None = None
 
 
 class LoopChipView(_View):

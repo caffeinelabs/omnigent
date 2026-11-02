@@ -169,10 +169,12 @@ export interface LoopHoldView {
   decision_id: string | null;
   /** The oldest open one, e.g. `D-22`. */
   decision_ref: string;
-  /** Every one it waits on, oldest first. */
+  /** The oldest ones it waits on, oldest first (at most five). */
   refs: string[];
   /** When the oldest was asked (epoch seconds). */
   since: number | null;
+  /** How many it waits on in all (older servers: absent, read `refs.length`). */
+  count?: number | null;
 }
 
 export interface LoopChipView {

@@ -22,7 +22,7 @@ import {
   projectPageHref,
 } from "../factoryRoutes";
 import { RunbookButtons } from "../alerts/IssueActions";
-import { heldText } from "../loops/loopStripModel";
+import { HeldRefs } from "../loops/HeldRefs";
 import { PresenceFace } from "../shell/FactoryPresence";
 import { LeverGated } from "../shell/viewerCan";
 import { agentState, nowText } from "./fleetModel";
@@ -267,7 +267,11 @@ export function AgentHeader({
                   className="text-warning"
                   title="Not counted as stalled until a person answers"
                 >
-                  {heldText(agent.loop.held_by)}
+                  <HeldRefs
+                    held={agent.loop.held_by}
+                    factoryId={fid}
+                    componentId="factory.agent.held"
+                  />
                 </span>
               ),
               pr && (
