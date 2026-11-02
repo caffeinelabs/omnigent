@@ -554,6 +554,51 @@ def build_delivery(
 # ── Views ──────────────────────────────────────────────────────
 
 
+def _int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _meta_view(meta: object) -> dict[str, Any] | None:
+    """:returns: ``IssueCardMeta`` / ``BaseMovesMeta`` JSON without internal keys, or ``None``."""
+    if not isinstance(meta, Mapping):
+        return None
+    kind = meta.get("kind")
+    if kind == "issue" and isinstance(meta.get("severity"), str):
+        return {
+            "kind": "issue",
+            "severity": meta["severity"],
+            "reopened": _int(meta.get("reopened")) or 0,
+            "reopened_at": _int(meta.get("reopened_at")),
+        }
+    if kind == "base.moved" and isinstance(meta.get("moves"), list):
+        moves = [
+            {
+                "at": _int(m.get("at")) or 0,
+                "from_sha": m.get("from_sha") if isinstance(m.get("from_sha"), str) else None,
+                "to_sha": str(m.get("to_sha") or ""),
+                "pr": _int(m.get("pr")),
+            }
+            for m in meta["moves"]
+            if isinstance(m, Mapping)
+        ]
+        return {
+            "kind": "base.moved",
+            "repo": str(meta.get("repo") or ""),
+            "base": str(meta.get("base") or ""),
+            "moves": moves,
+        }
+    return None
+
+
+def card_view(card: Mapping[str, Any]) -> dict[str, Any]:
+    """:returns: ``ChatCardView`` JSON: ``{type, ref, id}`` plus a live card's ``meta``."""
+    view = {k: card.get(k) for k in ("type", "ref", "id")}
+    meta = _meta_view(card.get("meta"))
+    if meta is not None:
+        view["meta"] = meta
+    return view
+
+
 def message_views(deps: FactoryDeps, rows: Sequence[FactoryChatMessage]) -> list[dict[str, Any]]:
     """:returns: ``ChatMessageView`` JSON for *rows* (one batched title read)."""
     sessions = [r.author for r in rows if r.author_kind == "agent"]
@@ -582,7 +627,7 @@ def message_views(deps: FactoryDeps, rows: Sequence[FactoryChatMessage]) -> list
                 "mentions": list(row.mentions),
                 "refs": list(row.refs),
                 "reply_to": norm_id(row.reply_to) if row.reply_to else None,
-                "card": {k: card.get(k) for k in ("type", "ref", "id")} if card else None,
+                "card": card_view(card) if card else None,
                 "routed": [
                     {
                         "session_id": _key(str(e.get("session_id"))),
@@ -1490,6 +1535,7 @@ __all__ = [
     "author_label",
     "brief_room_line",
     "build_delivery",
+    "card_view",
     "chat_ref",
     "derived_id",
     "envelope_ids",

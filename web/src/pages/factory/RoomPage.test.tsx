@@ -4,7 +4,14 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LIVE_RUN_FACTORY_ID } from "@/components/factory/__fixtures__/liveRun";
 import { resetFactoryControls } from "@/components/factory/controls/useFactoryControls";
-import { busyThread, chatPage } from "@/components/factory/room/__fixtures__/roomFixtures";
+import {
+  busyThread,
+  chatPage,
+  longIncidentThread,
+  manyBaseMovesThread,
+  roomIssues,
+  spendIncident,
+} from "@/components/factory/room/__fixtures__/roomFixtures";
 import { round3Snapshot } from "@/components/factory/shell/__fixtures__/shellFixtures";
 import type { EventView, FactorySnapshot, ViewerRole } from "@/lib/factoryApi";
 import { FactoryPage } from "./FactoryPage";
@@ -137,6 +144,45 @@ describe("Room page", () => {
     expect(await screen.findByTestId("room-message-1050")).toBeInTheDocument();
     const reads = server.calls.filter((c) => c.path.includes("/chat?"));
     expect(reads.some((c) => c.path.includes("before_seq=1071"))).toBe(true);
+  });
+
+  it("shows a long-running incident as one live card, its older cards as one line", async () => {
+    const messages = longIncidentThread();
+    const issues = [spendIncident(), ...roomIssues()];
+    open("/room", {
+      overrides: {
+        [`GET ${SNAPSHOT}/chat`]: () =>
+          json(chatPage(messages, String(authenticatedFetch.mock.lastCall?.[0]))),
+        [`GET ${SNAPSHOT}/issues`]: () => json({ data: issues, count: issues.length, mine: [] }),
+      },
+    });
+    const card = await screen.findByTestId("issue-card-INC-14");
+    expect(screen.getAllByTestId("issue-card-INC-14")).toHaveLength(1);
+    expect(card).toHaveTextContent("$18.33/h");
+    expect(screen.getByTestId("issue-seen-INC-14")).toHaveTextContent("came back 4×");
+    expect(screen.getByTestId("room-issue-repeats-INC-14")).toHaveAttribute("data-count", "3");
+    expect(screen.getByTestId("room-issue-repeat-2001")).toHaveTextContent("$16.40/h");
+    // People's words between the cards stay where they were.
+    expect(screen.getByTestId("room-message-2002")).toHaveTextContent("why does the factory");
+    expect(screen.getByTestId("room-message-2007")).toHaveTextContent("park the idle previews");
+  });
+
+  it("folds a busy base into one line per run, every move one click away", async () => {
+    const messages = manyBaseMovesThread();
+    open("/room", {
+      overrides: {
+        [`GET ${SNAPSHOT}/chat`]: () =>
+          json(chatPage(messages, String(authenticatedFetch.mock.lastCall?.[0]))),
+      },
+    });
+    await screen.findByTestId("room-message-3101");
+    const main = screen.getAllByTestId("room-base-moves-main");
+    expect(main.map((m) => m.getAttribute("data-moves"))).toEqual(["12", "7"]);
+    expect(screen.getByTestId("room-base-moves-temp-main")).toHaveAttribute("data-moves", "3");
+    expect(screen.getByTestId("room-system-3106")).toHaveTextContent("(#9631)");
+    fireEvent.click(screen.getAllByTestId("room-base-moves-toggle-main")[1]!);
+    const list = screen.getByTestId("room-base-moves-list-main");
+    expect(within(list).getAllByRole("listitem")).toHaveLength(8);
   });
 
   it("runs /pause as a control, never as a message", async () => {

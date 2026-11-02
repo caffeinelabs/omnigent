@@ -1,7 +1,8 @@
 /**
  * An incident (`INC-n`) or finding (`F-n`) as a Room card: severity, what it
- * is about, how often it fired, its status, Ack for an open incident and
- * Open → to its page.
+ * is about (its latest value), how often it fired and when last, how often it
+ * cleared and came back, its status, Ack for an open incident and Open → to
+ * its page. The card is live: one per incident and thread, updated in place.
  */
 
 import { useState } from "react";
@@ -15,7 +16,7 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { factoryInvalidationKeys } from "@/hooks/useFactory";
-import type { IssueView } from "@/lib/factoryApi";
+import type { IssueCardMeta, IssueView } from "@/lib/factoryApi";
 import { ackRoomIssue } from "@/lib/factoryRoomApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
@@ -32,14 +33,24 @@ const SEVERITY_TONE: Record<IssueView["severity"], FactoryTone> = {
   critical: "fail",
 };
 
+/** `Last seen 3m ago · cleared and came back 4×`. */
+export function issueSeenLine(issue: IssueView, nowS: number, meta?: IssueCardMeta | null): string {
+  const comebacks = meta?.reopened ?? 0;
+  const back = comebacks > 0 ? ` · cleared and came back ${comebacks}×` : "";
+  return `Last seen ${ageText(nowS - issue.last_seen)}${back}`;
+}
+
 export function IssueCard({
   factoryId,
   issue,
+  meta = null,
   clockOffsetS = 0,
   className,
 }: {
   factoryId: string;
   issue: IssueView;
+  /** The Room card's own record (comebacks) when the server keeps one live card. */
+  meta?: IssueCardMeta | null;
   clockOffsetS?: number;
   className?: string;
 }) {
@@ -95,12 +106,18 @@ export function IssueCard({
           {issue.severity}
         </span>
         {issue.count > 1 && <span className="text-muted-foreground">×{issue.count}</span>}
-        <span className="ml-auto shrink-0 text-xs text-muted-foreground">
+        <span
+          className="ml-auto shrink-0 text-xs text-muted-foreground"
+          title={`First seen ${ageText(nowS - issue.first_seen)}`}
+        >
           {issue.status} · {ageText(nowS - issue.first_seen)}
         </span>
       </header>
       <p className="break-words">{issue.summary}</p>
       {issue.target_title && <p className="text-muted-foreground">on {issue.target_title}</p>}
+      <p data-testid={`issue-seen-${ref}`} className="text-xs text-muted-foreground">
+        {issueSeenLine(issue, nowS, meta)}
+      </p>
       <div className="flex flex-wrap items-center gap-1">
         {incident && issue.status === "open" && (
           <ReasonGated reason={gate("control").reason} testId="ack">

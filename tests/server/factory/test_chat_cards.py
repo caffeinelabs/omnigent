@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator
 from typing import Any
 
 import pytest
 import pytest_asyncio
 
-from omnigent.server.factory import chat_cards, events
+from omnigent.entities.factory import FactoryEvent
+from omnigent.server.factory import chat, chat_cards, events, issues, schemas
+from omnigent.stores.factory_store import new_event_id
 from tests.server.factory.chat_helpers import RoomEnv, room_env
 from tests.server.factory.conftest import FactoryWorld
 
@@ -227,3 +230,214 @@ def test_only_card_kinds_reach_the_store() -> None:
         assert shows(kind), kind
     for kind in ("chat.posted", "message.delivered", "heartbeat.sent", "people.drift_repaired"):
         assert not shows(kind), kind
+
+
+# ── Live incident cards ────────────────────────────────────────
+
+SPEND = "the factory spends ${:.2f}/h (alert above $15/h)"
+
+
+async def _spend(env: RoomEnv, rate: float, severity: str = "warning") -> Any:
+    issue = await issues.raise_issue(
+        env.cockpit.app.state,
+        env.cockpit.fid,
+        rule="spend.rate",
+        target="factory",
+        summary=SPEND.format(rate),
+        severity=severity,
+        assignee=issues.ASSIGN_OWNERS,
+    )
+    assert issue is not None
+    return issue
+
+
+def _issue_cards(env: RoomEnv, thread: str = "factory") -> list[Any]:
+    return [m for m in env.messages(thread) if (m.card or {}).get("type") == "issue"]
+
+
+async def test_a_flapping_incident_keeps_one_live_card(env: RoomEnv) -> None:
+    state, fid = env.cockpit.app.state, env.cockpit.fid
+    first = await _spend(env, 18.33)
+    for rate in (16.10, 19.75, 21.40):
+        await issues.clear_issue(state, fid, "spend.rate", "factory", reason="back under")
+        await _spend(env, rate)
+    await _spend(env, 22.05)  # a plain re-raise: no event, the card reads it live
+
+    [card] = _issue_cards(env)
+    assert card.card["ref"] == first.ref and card.card["id"] == first.id
+    assert card.body == f"{first.ref} {SPEND.format(21.40)}"
+    meta = chat_cards.card_meta(card)
+    assert meta["reopened"] == 3 and meta["severity"] == "warning"
+    assert isinstance(meta["reopened_at"], int)
+    # Every comeback is still an event (Slack, the digest and Activity read those).
+    assert len(env.cockpit.events("issue.opened")) == 4
+    assert env.cockpit.store.get_issue(first.id).count == 5
+    [view] = chat.message_views(env.cockpit.deps, [card])
+    assert view["card"]["meta"] == {
+        "kind": "issue",
+        "severity": "warning",
+        "reopened": 3,
+        "reopened_at": meta["reopened_at"],
+    }
+    schemas.ChatMessageView.model_validate(view)
+
+
+async def test_an_incident_posts_again_when_its_severity_rises(env: RoomEnv) -> None:
+    await _spend(env, 18.0)
+    await _spend(env, 40.0, severity="critical")
+    await _spend(env, 45.0, severity="critical")  # already shown at critical
+    await _spend(env, 19.0, severity="warning")  # a drop changes no card
+
+    first, again = _issue_cards(env)
+    assert chat_cards.card_meta(first)["severity"] == "warning"
+    assert chat_cards.card_meta(first)["posts"] == 1
+    assert chat_cards.card_meta(again)["severity"] == "critical"
+    assert again.body.endswith("is now critical: " + SPEND.format(40.0))
+    [escalated] = env.cockpit.events(issues.ESCALATED)
+    assert escalated.data["was_severity"] == "warning"
+    assert escalated.data["severity"] == "critical"
+
+
+async def test_an_incident_posts_again_after_a_person_resolved_it(env: RoomEnv) -> None:
+    issue = await _spend(env, 18.0)
+    env.cockpit.store.update_issue(
+        issue.id, status="resolved", resolved_at=int(time.time()), resolved_by="alice"
+    )
+    await _spend(env, 19.0)
+
+    _, again = _issue_cards(env)
+    assert chat_cards.card_meta(again)["reopened"] == 0
+    assert again.id == chat_cards.issue_card_id(issue.id, "factory", 1)
+    [_, reopened] = env.cockpit.events("issue.opened")
+    assert reopened.data["was_resolved_by"] == "alice"
+
+
+async def test_an_incident_posts_again_after_staying_clear_an_hour(env: RoomEnv) -> None:
+    state, fid = env.cockpit.app.state, env.cockpit.fid
+    issue = await _spend(env, 18.0)
+    await issues.clear_issue(state, fid, "spend.rate", "factory")
+    env.cockpit.store.update_issue(
+        issue.id, resolved_at=int(time.time()) - chat_cards.REPOST_AFTER_S - 5
+    )
+    await _spend(env, 19.0)
+    await issues.clear_issue(state, fid, "spend.rate", "factory")
+    await _spend(env, 20.0)  # flaps right back: the new card counts it
+
+    first, again = _issue_cards(env)
+    assert chat_cards.card_meta(first)["posts"] == 1
+    assert chat_cards.card_meta(again)["reopened"] == 1
+
+
+async def test_every_report_of_a_person_shows(env: RoomEnv) -> None:
+    data = {"issue_id": "f" * 32, "ref": "INC-5", "class": "incident", "severity": "warning"}
+    await _emit(env, "issue.opened", data={**data, "by_kind": "human"}, summary="mia reported")
+    await _emit(env, "issue.opened", data={**data, "by_kind": "human"}, summary="leo reported")
+
+    assert [m.body for m in _issue_cards(env)] == ["mia reported", "leo reported"]
+
+
+async def test_a_repeated_incident_event_changes_nothing(env: RoomEnv) -> None:
+    state, fid = env.cockpit.app.state, env.cockpit.fid
+    await _spend(env, 18.0)
+    await issues.clear_issue(state, fid, "spend.rate", "factory")
+    await _spend(env, 19.0)
+    for event in env.cockpit.events("issue.opened"):
+        await chat_cards.mirror_event(state, event)
+
+    [card] = _issue_cards(env)
+    assert chat_cards.card_meta(card)["reopened"] == 1
+    assert len(chat_cards.card_meta(card)["events"]) == 2
+
+
+# ── Batched base lines ─────────────────────────────────────────
+
+HEAD = [f"{i:x}" * 40 for i in range(16)]
+
+
+def _move(env: RoomEnv, i: int, at_s: int, *, base: str = "main", pr: int | None = None) -> Any:
+    data = {"repo": REPO, "base": base, "from": HEAD[i], "to": HEAD[i + 1], "pr": pr}
+    via = f" (#{pr})" if pr else ""
+    return FactoryEvent(
+        id=new_event_id(at_s * 1000),
+        factory_id=env.cockpit.fid,
+        ts=at_s * 1000,
+        kind="base.moved",
+        summary=f"base {base} moved {HEAD[i][:7]} → {HEAD[i + 1][:7]}{via}",
+        severity="notice",
+        subject=f"base:{REPO}#{base}",
+        data=data,
+    )
+
+
+def _base_lines(env: RoomEnv) -> list[Any]:
+    return [
+        m
+        for m in env.messages("factory")
+        if chat_cards.card_meta(m).get("kind") == chat_cards.BASE_MOVED
+    ]
+
+
+async def test_base_moves_join_one_line_while_nothing_else_is_said(env: RoomEnv) -> None:
+    state = env.cockpit.app.state
+    t0 = 1_793_000_000  # 2026-10-26 07:33 UTC
+    await chat_cards.mirror_event(state, _move(env, 0, t0, pr=9630))
+    [line] = _base_lines(env)
+    assert line.body == f"base main moved {HEAD[0][:7]} → {HEAD[1][:7]} (#9630)"
+
+    for i in range(1, 7):
+        await chat_cards.mirror_event(state, _move(env, i, t0 + i * 3600))  # hours apart
+
+    [line] = _base_lines(env)
+    assert line.body == f"base main moved 7 times since 07:33 UTC → {HEAD[7][:7]}"
+    moves = chat_cards.card_meta(line)["moves"]
+    assert [m["to_sha"] for m in moves] == HEAD[1:8]
+    assert moves[0]["pr"] == 9630 and moves[0]["from_sha"] == HEAD[0]
+    [view] = chat.message_views(env.cockpit.deps, [line])
+    schemas.ChatMessageView.model_validate(view)
+    assert view["card"]["meta"]["moves"][0] == {
+        "at": t0,
+        "from_sha": HEAD[0],
+        "to_sha": HEAD[1],
+        "pr": 9630,
+    }
+    assert view["card"]["meta"]["base"] == "main"
+
+
+async def test_a_message_after_the_line_starts_a_new_one_ten_minutes_on(env: RoomEnv) -> None:
+    state, store, fid = env.cockpit.app.state, env.cockpit.store, env.cockpit.fid
+    t0 = 1_793_000_000
+    await chat_cards.mirror_event(state, _move(env, 0, t0))
+    store.append_chat(fid, thread="factory", author_kind="human", author="alice", body="hi")
+    await chat_cards.mirror_event(state, _move(env, 1, t0 + 300))  # inside the window
+    # Another base's line is no conversation: main's line still takes main's moves.
+    await chat_cards.mirror_event(state, _move(env, 9, t0 + 400, base="temp-main"))
+    await chat_cards.mirror_event(state, _move(env, 2, t0 + 500))
+    await chat_cards.mirror_event(state, _move(env, 3, t0 + chat_cards.BASE_BATCH_S + 1))
+
+    lines = _base_lines(env)
+    assert [len(chat_cards.card_meta(m)["moves"]) for m in lines] == [3, 1, 1]
+    assert [chat_cards.card_meta(m)["base"] for m in lines] == ["main", "temp-main", "main"]
+    assert [m.body for m in env.messages("factory")][1] == "hi"
+
+
+async def test_a_full_line_starts_another_and_a_replay_adds_nothing(
+    env: RoomEnv, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(chat_cards, "BASE_BATCH_MAX", 3)
+    state = env.cockpit.app.state
+    t0 = 1_793_000_000
+    moves = [_move(env, i, t0 + i) for i in range(4)]
+    for event in moves:
+        await chat_cards.mirror_event(state, event)
+    for event in moves:
+        await chat_cards.mirror_event(state, event)
+
+    assert [len(chat_cards.card_meta(m)["moves"]) for m in _base_lines(env)] == [3, 1]
+
+
+def test_a_base_move_without_its_data_stays_a_plain_line() -> None:
+    event = FactoryEvent(id="a" * 32, factory_id="b" * 32, ts=0, kind="base.moved", summary="x")
+    assert chat_cards.base_move(event) is None
+    assert chat_cards.base_line_text(
+        "main", [{"at": 0, "from_sha": None, "to_sha": HEAD[1], "pr": None}]
+    ) == (f"base main moved ? → {HEAD[1][:7]}")

@@ -282,7 +282,23 @@ def test_chat_routing_updates_and_read_marks(store: FactoryStore) -> None:
     assert updated is not None and updated.routed == routed and updated.body == "hi"
     assert store.update_chat_message(uuid.uuid4().hex, routed=[]) is None
     with pytest.raises(TypeError):
+        store.update_chat_message(msg.id, author="someone else")
+    # People's and agents' words never change; a system row's line may (a batched line).
+    with pytest.raises(ValueError, match="system"):
         store.update_chat_message(msg.id, body="edited")
+    assert store.get_chat_message(msg.id).body == "hi"  # type: ignore[union-attr]
+    line = store.append_chat(
+        FID,
+        thread="factory",
+        author_kind="system",
+        author="server",
+        body="base main moved a → b",
+        card={"type": "system", "ref": None, "id": None},
+    )
+    card = {"type": "system", "ref": None, "id": None, "meta": {"kind": "base.moved"}}
+    moved = store.update_chat_message(line.id, body="base main moved 2 times", card=card)
+    assert moved is not None and moved.body == "base main moved 2 times" and moved.card == card
+    assert moved.seq == line.seq and moved.created_at == line.created_at
 
     first = store.upsert_chat_read(FID, MIA, "factory", 5)
     assert first.last_seq == 5

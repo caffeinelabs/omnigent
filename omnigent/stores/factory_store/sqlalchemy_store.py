@@ -136,6 +136,7 @@ from omnigent.stores.factory_store import (
     ProposalStateConflict,
     as_list,
     canonical_hash,
+    check_chat_body,
     check_fields,
     clip_text,
     clip_value,
@@ -1692,6 +1693,7 @@ class SqlAlchemyFactoryStore(FactoryStore):
             row = session.get(SqlFactoryChatMessage, key, with_for_update=True)
             if row is None:
                 return None
+            check_chat_body(decode_factory_chat_author_kind(row.author_kind), values)
             for name, value in values.items():
                 setattr(row, name, value)
             return _chat(row)

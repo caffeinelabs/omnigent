@@ -221,6 +221,182 @@ export function busyThread(thread = "factory", count = 120): ChatMessageView[] {
   return out;
 }
 
+// ── Room noise: a long-running incident and a busy base ───────
+
+const SPEND_ID = "5bd1f0c2a8e94d7cb1e6a3f09d24c871";
+const SPEND_TEXT = (rate: string) => `the factory spends $${rate}/h (alert above $15/h)`;
+
+/** INC-14: the factory's spend over the alert all afternoon, cleared and back again. */
+export function spendIncident(nowS = ROOM_NOW_S): IssueView {
+  const base = roomIssues().find((i) => i.ref === "INC-13")!;
+  return {
+    ...base,
+    id: SPEND_ID,
+    ref: "INC-14",
+    number: 14,
+    rule: "spend.rate",
+    severity: "warning",
+    project_slug: null,
+    target: "factory",
+    target_title: null,
+    summary: SPEND_TEXT("18.33"),
+    evidence: { usd_per_h: 18.33, limit: 15 },
+    status: "open",
+    assignee: "owners",
+    count: 31,
+    first_seen: nowS - 5 * 3600,
+    last_seen: nowS - 180,
+    resolved_at: null,
+    runbook: ["pause_project", "cadence_normal"],
+  };
+}
+
+function systemRow(
+  seq: number,
+  atS: number,
+  body: string,
+  card: ChatMessageView["card"],
+  thread = "factory",
+): ChatMessageView {
+  return {
+    id: `noise${String(seq).padStart(27, "0")}`,
+    factory_id: ROOM_FID,
+    thread,
+    seq,
+    author_kind: "system",
+    author: "server",
+    author_title: null,
+    author_role: null,
+    body,
+    mentions: [],
+    refs: [],
+    reply_to: null,
+    card,
+    routed: [],
+    auto_reply: false,
+    created_at: atS,
+  };
+}
+
+function personRow(seq: number, atS: number, body: string, agent = false): ChatMessageView {
+  const row = systemRow(seq, atS, body, null);
+  return agent
+    ? { ...row, author_kind: "agent", author: ATLAS_ID, author_title: "Atlas", author_role: "lead" }
+    : {
+        ...row,
+        author_kind: "human",
+        author: "luka@caffeine.ai",
+        author_title: "Luka",
+        author_role: "owner",
+      };
+}
+
+/**
+ * #factory after an afternoon of INC-14: five cards an older server posted
+ * (three in a row), people talking about it, then the one live card that
+ * counts its comebacks.
+ */
+export function longIncidentThread(nowS = ROOM_NOW_S): ChatMessageView[] {
+  const card = { type: "issue" as const, ref: "INC-14", id: SPEND_ID };
+  const old = (seq: number, minAgo: number, rate: string) =>
+    systemRow(seq, nowS - minAgo * 60, `INC-14 ${SPEND_TEXT(rate)}`, card);
+  return [
+    ...roomMessages("factory").slice(0, 2),
+    old(2001, 200, "16.40"),
+    personRow(2002, nowS - 195 * 60, "@atlas why does the factory spend this much?"),
+    personRow(2003, nowS - 193 * 60, "Four PLs wait on merges and keep their sandboxes.", true),
+    old(2004, 160, "17.10"),
+    old(2005, 150, "15.80"),
+    old(2006, 140, "19.75"),
+    personRow(2007, nowS - 130 * 60, "@atlas park the idle previews"),
+    old(2008, 100, "21.40"),
+    systemRow(2009, nowS - 90 * 60, `INC-14 ${SPEND_TEXT("18.33")}`, {
+      ...card,
+      meta: { kind: "issue", severity: "warning", reopened: 4, reopened_at: nowS - 25 * 60 },
+    }),
+    personRow(2010, nowS - 15 * 60, "Parked 3 previews; spend should drop within the hour.", true),
+  ];
+}
+
+/** `13:12`: what the server writes in a batched line (UTC). */
+function utcTime(epochS: number): string {
+  return new Date(epochS * 1000).toISOString().slice(11, 16);
+}
+
+function sha40(n: number): string {
+  return (n.toString(16).padStart(4, "0") + "c8a4e1b7d2f5").repeat(4).slice(0, 40);
+}
+
+/**
+ * #factory with a busy main: twelve one-move lines an older server wrote in a
+ * row, one batched line of 7 moves since 13:12, a lone move (reads as
+ * before) and a temp-main line, with people talking between them.
+ */
+export function manyBaseMovesThread(nowS = ROOM_NOW_S): ChatMessageView[] {
+  const legacy = Array.from({ length: 12 }, (_, i) =>
+    systemRow(
+      3001 + i,
+      nowS - (205 - i * 5) * 60,
+      `base main moved ${sha40(i).slice(0, 7)} → ${sha40(i + 1).slice(0, 7)}${i % 4 === 0 ? ` (#${9820 + i})` : ""}`,
+      { type: "system", ref: null, id: null },
+    ),
+  );
+  const moves = (from: number, n: number, startMinAgo: number) =>
+    Array.from({ length: n }, (_, k) => ({
+      at: nowS - (startMinAgo - k * 14) * 60,
+      from_sha: sha40(from + k),
+      to_sha: sha40(from + k + 1),
+      pr: k % 3 === 0 ? 9830 + k : null,
+    }));
+  const batched = moves(20, 7, 130);
+  const temp = moves(40, 3, 35);
+  return [
+    ...roomMessages("factory").slice(0, 2),
+    ...legacy,
+    personRow(3101, nowS - 145 * 60, "@atlas is main stable enough to cut a release?"),
+    personRow(3102, nowS - 143 * 60, "Yes: CI is green on the last 12 merges.", true),
+    systemRow(
+      3103,
+      batched[0]!.at,
+      `base main moved 7 times since ${utcTime(batched[0]!.at)} UTC → ${sha40(27).slice(0, 7)}`,
+      {
+        type: "system",
+        ref: null,
+        id: null,
+        meta: { kind: "base.moved", repo: "caffeinelabs/app", base: "main", moves: batched },
+      },
+    ),
+    personRow(3104, nowS - 40 * 60, "@pl:db-version rebase once main settles"),
+    systemRow(
+      3105,
+      temp[0]!.at,
+      `base temp-main moved 3 times since ${utcTime(temp[0]!.at)} UTC → ${sha40(43).slice(0, 7)}`,
+      {
+        type: "system",
+        ref: null,
+        id: null,
+        meta: { kind: "base.moved", repo: "caffeinelabs/app", base: "temp-main", moves: temp },
+      },
+    ),
+    systemRow(
+      3106,
+      nowS - 3 * 60,
+      `base main moved ${sha40(27).slice(0, 7)} → ${sha40(28).slice(0, 7)} (#9631)`,
+      {
+        type: "system",
+        ref: null,
+        id: null,
+        meta: {
+          kind: "base.moved",
+          repo: "caffeinelabs/app",
+          base: "main",
+          moves: [{ at: nowS - 3 * 60, from_sha: sha40(27), to_sha: sha40(28), pr: 9631 }],
+        },
+      },
+    ),
+  ];
+}
+
 /** `GET …/chat?thread=&before_seq=&limit=` over `messages` (oldest first, latest page). */
 export function chatPage(messages: readonly ChatMessageView[], path: string): ChatPage {
   const query = new URL(path, "http://story").searchParams;
@@ -671,6 +847,7 @@ export interface RoomRouteOptions {
   flow?: FlowGraphResponse;
   org?: OrgGraphResponse;
   role?: ViewerRole;
+  issues?: IssueView[];
 }
 
 /** The Room, proposals, graph, loops, issues and decisions routes of `factoryId`, for the story kit. */
@@ -701,7 +878,10 @@ export function roomRoutes(factoryId = ROOM_FID, options: RoomRouteOptions = {})
     },
     [`${base}/proposals`]: { body: { data: options.proposals ?? roomProposals() } },
     [`${base}/loops`]: { body: { data: roomLoops() } },
-    [`${base}/issues`]: { body: { data: roomIssues(), count: roomIssues().length, mine: [] } },
+    [`${base}/issues`]: (() => {
+      const issues = options.issues ?? roomIssues();
+      return { body: { data: issues, count: issues.length, mine: [] } };
+    })(),
     [`${base}/tasks`]: { body: tasksOf(work) },
     [`${base}/graph`]: (path) => {
       const kind = new URL(path, "http://story").searchParams.get("kind") ?? "work";

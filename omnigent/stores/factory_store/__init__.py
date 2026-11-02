@@ -172,8 +172,18 @@ DECISION_UPDATE_FIELDS = frozenset(
 PERSON_UPDATE_FIELDS = frozenset({"role", "last_seen_at", "notify"})
 """Fields ``update_person`` accepts."""
 
-CHAT_UPDATE_FIELDS = frozenset({"routed", "card"})
-"""Fields ``update_chat_message`` accepts (messages are otherwise append-only)."""
+CHAT_UPDATE_FIELDS = frozenset({"routed", "card", "body"})
+"""Fields ``update_chat_message`` accepts (messages are otherwise append-only).
+
+``body`` only on a system row (a live card or a batched line rewritten in
+place); people's and agents' words never change."""
+
+
+def check_chat_body(author_kind: str, fields: Mapping[str, Any]) -> None:
+    """:raises ValueError: When *fields* rewrite the body of a person's or agent's message."""
+    if "body" in fields and author_kind != "system":
+        raise ValueError("only a system message's body can change")
+
 
 PROPOSAL_FIELDS = frozenset(
     {
@@ -1085,11 +1095,13 @@ class FactoryStore(ABC):
     @abstractmethod
     def update_chat_message(self, message_id: str, **fields: Any) -> FactoryChatMessage | None:
         """
-        Update delivery state (any of :data:`CHAT_UPDATE_FIELDS`).
+        Update delivery state or a system row's card (any of :data:`CHAT_UPDATE_FIELDS`).
 
-        Consumer: R3-08 delivery and the reply fallback (``routed``).
+        Consumers: R3-08 delivery and the reply fallback (``routed``); the Room's
+        live incident cards and batched base lines (``card``, ``body``).
 
         :returns: The updated row, or ``None`` when the id is unknown.
+        :raises ValueError: On a ``body`` for a person's or agent's message.
         """
 
     @abstractmethod
@@ -2330,6 +2342,7 @@ class InMemoryFactoryStore(FactoryStore):
             current = self._chat.get((self._ws(), norm_id(message_id)))
             if current is None:
                 return None
+            check_chat_body(current.author_kind, values)
             row = replace(current, **values)
             self._chat[(self._ws(), row.id)] = row
             return _detach(row)

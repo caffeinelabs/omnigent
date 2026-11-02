@@ -13,7 +13,7 @@ Money is USD; ``None`` means unpriced or unknown, never zero.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -1183,17 +1183,57 @@ class PersonView(_View):
     notify: dict[str, Any] | None = None
 
 
+class IssueCardMeta(_View):
+    """
+    An incident's live card: one per open incident and thread, updated in place.
+
+    :param severity: The highest severity the card was posted at (a rise posts it again).
+    :param reopened: Times the server cleared it and it came back since this card was posted.
+    :param reopened_at: Epoch seconds of the latest comeback.
+    """
+
+    kind: Literal["issue"] = "issue"
+    severity: Severity
+    reopened: int = 0
+    reopened_at: int | None = None
+
+
+class BaseMoveView(_View):
+    """
+    One move of a watched base.
+
+    :param at: Epoch seconds the server saw it.
+    :param pr: The tracked PR whose merge commit is the new head, if any.
+    """
+
+    at: int
+    from_sha: str | None = None
+    to_sha: str
+    pr: int | None = None
+
+
+class BaseMovesMeta(_View):
+    """A batched "base moved" line: every move it holds, oldest first."""
+
+    kind: Literal["base.moved"] = "base.moved"
+    repo: str
+    base: str
+    moves: list[BaseMoveView]
+
+
 class ChatCardView(_View):
     """
     A structured object mirrored into a thread as a live card.
 
     :param ref: e.g. ``"D-7"``, ``"C-4"``, ``"!9630"`` or ``"INC-13"``.
     :param id: Row id of the object, when it has one.
+    :param meta: What an incident's live card or a batched base line holds.
     """
 
     type: ChatCardType
     ref: str | None = None
     id: str | None = None
+    meta: Annotated[IssueCardMeta | BaseMovesMeta, Field(discriminator="kind")] | None = None
 
 
 class RoutedView(_View):

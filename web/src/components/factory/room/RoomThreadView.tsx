@@ -35,6 +35,8 @@ import { useOptionalFactoryShell } from "../shell/FactoryShellContext";
 import { FoldableMarkdown } from "../transcript/FoldableMarkdown";
 import { roomCandidateList } from "./roomCandidates";
 import { RoomComposer } from "./RoomComposer";
+import { foldRoomItems, supersededIssueCards } from "./roomFold";
+import { BaseMovesLine, IssueRepeats } from "./RoomFolds";
 import { BusRow, RoomMessage } from "./RoomMessage";
 import {
   busFilterFor,
@@ -198,7 +200,10 @@ export function RoomThreadView({
     () => busLines(busEvents.data?.pages.flatMap((p) => p.data) ?? []),
     [busEvents.data],
   );
-  const items = useMemo(() => interleave(messages, lines, showBus), [messages, lines, showBus]);
+  const items = useMemo(() => {
+    const all = interleave(messages, lines, showBus);
+    return foldRoomItems(all, supersededIssueCards(messages));
+  }, [messages, lines, showBus]);
   const byId = useMemo(() => new Map(messages.map((m) => [m.id, m])), [messages]);
   const status = responderStatus(snapshot, threadView, messages);
   const statusLine = responderLine(status);
@@ -279,7 +284,8 @@ export function RoomThreadView({
     } else if (atBottom.current) {
       el.scrollTop = el.scrollHeight;
     }
-  }, [items.length, notes.length]);
+    // Messages too: an older page can fold into the first line without adding an item.
+  }, [items.length, messages.length, notes.length]);
   useLayoutEffect(() => {
     atBottom.current = true;
     const el = scrollerRef.current;
@@ -468,6 +474,31 @@ export function RoomThreadView({
             <ol className="flex min-w-0 flex-col pb-2" data-testid="room-message-list">
               {items.map((item, i) => {
                 if (item.type === "bus") return <BusRow key={item.key} line={item.line} />;
+                if (item.type === "base" || item.type === "repeats") {
+                  return (
+                    <li
+                      key={item.key}
+                      data-testid={`room-message-${item.messages[0]!.seq}`}
+                      data-kind="system"
+                      className="py-1"
+                    >
+                      {item.type === "base" ? (
+                        <BaseMovesLine
+                          base={item.base}
+                          moves={item.moves}
+                          messages={item.messages}
+                          sources={sources}
+                        />
+                      ) : (
+                        <IssueRepeats
+                          refText={item.ref}
+                          messages={item.messages}
+                          sources={sources}
+                        />
+                      )}
+                    </li>
+                  );
+                }
                 const prev = items[i - 1];
                 const prevMessage = prev?.type === "message" ? prev.message : undefined;
                 return (
