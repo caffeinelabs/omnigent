@@ -4,7 +4,9 @@ import { SANDBOX_STAGE_LABELS } from "@/pages/ChatIndicators";
 import { LIVE_RUN_NOW_S } from "../__fixtures__/liveRun";
 import { CARD_STATES, type CardState, cardScenario } from "./__fixtures__/boardFixtures";
 import { renderBoard } from "./__fixtures__/renderBoard";
+import { startStorySnapshot } from "../projects/__fixtures__/startFixtures";
 import { requestChanges } from "../shell/__fixtures__/shellFixtures";
+import type { ProjectView } from "@/lib/factoryApi";
 import { DoneProjectRow, ProjectCard } from "./ProjectCard";
 
 function renderCard(state: CardState) {
@@ -59,6 +61,87 @@ describe("ProjectCard", () => {
     );
     expect(within(card).getByTestId("stage-stepper")).toHaveClass("opacity-50");
     expect(within(card).queryByTestId("team-strip")).toBeNull();
+  });
+
+  function renderQueued(patch: Partial<ProjectView>) {
+    const { snapshot, project } = cardScenario("queued-waiting");
+    Object.assign(project, patch);
+    renderBoard(
+      <ProjectCard
+        snapshot={snapshot}
+        project={project}
+        nowS={LIVE_RUN_NOW_S}
+        onReview={vi.fn()}
+        onDecision={vi.fn()}
+      />,
+    );
+    return {
+      label: screen.getByTestId(`stage-label-${project.slug}`),
+      note: screen.queryByTestId("queued-note"),
+    };
+  }
+
+  it("queued without a PL says what the server is waiting for", () => {
+    const { label, note } = renderQueued({
+      start: {
+        state: "queued",
+        phase: "pod_cap",
+        label: "All 12 pods in use",
+        since: LIVE_RUN_NOW_S - 120,
+        ahead: 2,
+      },
+    });
+    expect(label).toHaveTextContent("Queued");
+    expect(note).toHaveTextContent(/^All 12 pods in use · 2 projects ahead$/);
+    expect(note).not.toHaveTextContent("Atlas");
+  });
+
+  it("names a starting PL in the header and its step in the note", () => {
+    const { label, note } = renderQueued({
+      start: {
+        state: "starting",
+        phase: "provisioning",
+        label: "Provisioning sandbox",
+        since: LIVE_RUN_NOW_S - 150,
+        restart: true,
+      },
+    });
+    expect(label).toHaveTextContent("Restarting PL");
+    expect(label.nextSibling).toHaveTextContent("· 2m");
+    expect(note).toHaveTextContent(/^Provisioning sandbox$/);
+  });
+
+  it("says what a project held on its dependencies waits for, not Atlas", () => {
+    const { note } = renderQueued({
+      overlay: "waiting",
+      overlay_reason: "waiting on db-version",
+      depends_on: ["db-version"],
+      start: null,
+    });
+    expect(note).toHaveTextContent(/^Waiting on db-version$/);
+  });
+
+  it("says why a project on a merged PR is not Merged", () => {
+    const snapshot = startStorySnapshot();
+    const project = snapshot.projects.find((p) => p.slug === "validate-build-tier")!;
+    renderBoard(
+      <ProjectCard
+        snapshot={snapshot}
+        project={project}
+        nowS={snapshot.server_time}
+        onReview={vi.fn()}
+        onDecision={vi.fn()}
+      />,
+    );
+    expect(screen.getByTestId("stage-label-validate-build-tier")).toHaveTextContent("Verify");
+    expect(screen.getByTestId("stage-note")).toHaveTextContent(
+      "!9774 was merged before this project started",
+    );
+  });
+
+  it("leaves another overlay's reason to its tag", () => {
+    const { note } = renderQueued({ overlay: "failed", overlay_reason: "PL sandbox failed" });
+    expect(note).toBeNull();
   });
 
   it("queued with a PL shows the provisioning timeline with the sandbox labels", () => {

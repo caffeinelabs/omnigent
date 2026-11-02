@@ -39,6 +39,7 @@ from omnigent.factory import (
     LABEL_PREFIX,
     LABEL_STATE,
     STATE_PAUSED,
+    TASK_CLOSED_STATES,
     TASK_KEY_RE,
 )
 from omnigent.server.factory import events, schemas
@@ -645,22 +646,28 @@ def summary(ctx: ProjectCtx, analysis: Analysis) -> dict[str, Any]:
 
 def snapshot_fields(
     deps: FactoryDeps, factory_id: str
-) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
+) -> tuple[dict[str, dict[str, Any]], dict[str, str], list[FactoryTask]]:
     """
     What the snapshot shows of the work graph (synchronous; never raises).
 
-    :returns: ``(project slug → tasks summary, task id → "T-n")``.
+    :returns: ``(project slug → tasks summary, task id → "T-n", open tasks)``;
+        the open tasks feed the project stage (:func:`.stage.derive_stage`).
     """
     try:
         data = load_factory(deps, factory_id)
+    except Exception:  # noqa: BLE001 - the snapshot renders without them
+        _logger.warning("factory tasks: no snapshot fields for %s", factory_id, exc_info=True)
+        return {}, {}, []
+    open_tasks = [t for t in data.tasks if t.state not in TASK_CLOSED_STATES]
+    try:
         out: dict[str, dict[str, Any]] = {}
         for slug in sorted({t.project_slug for t in data.tasks}):
             ctx = data.project_ctx(deps, slug)
             out[slug] = summary(ctx, analyze(ctx))
-        return out, {t.id: t.ref for t in data.tasks}
+        return out, {t.id: t.ref for t in data.tasks}, open_tasks
     except Exception:  # noqa: BLE001 - the snapshot renders without them
         _logger.warning("factory tasks: no snapshot fields for %s", factory_id, exc_info=True)
-        return {}, {}
+        return {}, {}, open_tasks
 
 
 def graph_view(ctx: ProjectCtx, analysis: Analysis) -> dict[str, Any]:

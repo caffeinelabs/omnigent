@@ -808,6 +808,35 @@ class ProvisioningView(_View):
     label: str
 
 
+class ProjectStartView(_View):
+    """
+    Why a queued project has no working PL yet.
+
+    :param state: ``starting``: its PL session comes up (or is being created);
+        ``queued``: nothing starts it yet.
+    :param phase: ``provisioning`` / ``cloning`` / ``starting`` / ``connecting``
+        (the PL sandbox), ``connect`` (runner not attached), ``briefing``,
+        ``creating`` (the server creates the session), ``lead`` (Atlas spawns
+        it), ``pod_cap`` (no free pod) or ``server`` (the server's next pass).
+    :param label: Plain text for the phase, e.g. ``"Provisioning sandbox"``
+        or ``"All 12 pods in use"``.
+    :param since: Epoch seconds: while starting, the PL session's creation or,
+        for a woken PL, when the project went back to queued; while queued,
+        the project's creation.
+    :param restart: The PL already worked and is coming back (woken or relaunched).
+    :param ahead: Projects ahead of this one for a free pod (``pod_cap``).
+    """
+
+    state: Literal["starting", "queued"]
+    phase: str | None = None
+    label: str
+    since: int | None = None
+    restart: bool = False
+    ahead: int | None = None
+    pods_in_use: int | None = None
+    pod_cap: int | None = None
+
+
 class ProjectView(_View):
     """One project card."""
 
@@ -819,6 +848,7 @@ class ProjectView(_View):
     charter: CharterView | None
     stage: Stage
     stage_since: int
+    stage_note: str | None = None
     overlay: Overlay | None = None
     overlay_reason: str | None = None
     agent_stage: AgentStage | None = None
@@ -831,6 +861,7 @@ class ProjectView(_View):
     cost_usd: float | None = None
     elapsed_s: int | None = None
     provisioning: ProvisioningView | None = None
+    start: ProjectStartView | None = None
     keep_previews: bool = True
     paused_by: str | None = None
     kind: ProjectKind | None = None
@@ -1468,6 +1499,7 @@ __all__ = [
     "ProjectDemoGroup",
     "ProjectDemoView",
     "ProjectDemosResponse",
+    "ProjectStartView",
     "ProjectView",
     "ProposalView",
     "SpanView",

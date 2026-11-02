@@ -2,7 +2,8 @@
  * A Room message's body. Plain text renders with its tokens as live chips
  * (`#db-version`, `!9631`, `D-7`, `@pl:db-version`, `@mia@…`) plus inline
  * `code`; a body with block markdown (fences, lists, tables, headings)
- * renders as markdown, its refs as a chip row underneath.
+ * renders as markdown, its refs as a chip row underneath. A token that names
+ * nothing here ("shortlist #2") stays plain text.
  */
 
 import { type ReactNode, useMemo } from "react";
@@ -11,7 +12,7 @@ import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { TONE_DOT } from "../factoryFormat";
 import { FoldableMarkdown } from "../transcript/FoldableMarkdown";
-import { type RefSources, refView } from "./roomRefs";
+import { type RefSources, type RefView, refView } from "./roomRefs";
 
 const BLOCK_MARKDOWN = /(^|\n)(```|\s*[-*] |\s*\d+\. |#{1,6} |\|.*\|)/;
 
@@ -20,8 +21,7 @@ export function isBlockMarkdown(body: string): boolean {
   return BLOCK_MARKDOWN.test(body);
 }
 
-export function RefChip({ token, sources }: { token: RoomToken; sources: RefSources }) {
-  const view = refView(token, sources);
+export function RefChip({ token, view }: { token: RoomToken; view: RefView }) {
   const className = cn(
     "inline-flex max-w-full items-baseline gap-1 rounded-[5px] px-1 align-baseline font-mono text-[0.92em] leading-snug whitespace-nowrap",
     view.self
@@ -96,15 +96,22 @@ export function RoomText({
   testId?: string;
 }) {
   const tokens = useMemo(() => findRoomTokens(body), [body]);
+  // Only tokens that resolve become chips; the rest read as the text they are.
+  const refs = tokens.flatMap((token) => {
+    const view = refView(token, sources);
+    return view ? [{ token, view }] : [];
+  });
   if (isBlockMarkdown(body)) {
-    const refs = tokens.filter((t, i) => tokens.findIndex((u) => u.text === t.text) === i);
+    const unique = refs.filter(
+      (r, i) => refs.findIndex((u) => u.token.text === r.token.text) === i,
+    );
     return (
       <div className={cn("flex min-w-0 flex-col gap-1", className)} data-testid={testId}>
         <FoldableMarkdown text={body} className="text-ui" />
-        {refs.length > 0 && (
+        {unique.length > 0 && (
           <p className="flex flex-wrap gap-1">
-            {refs.map((token) => (
-              <RefChip key={token.text} token={token} sources={sources} />
+            {unique.map(({ token, view }) => (
+              <RefChip key={token.text} token={token} view={view} />
             ))}
           </p>
         )}
@@ -113,9 +120,9 @@ export function RoomText({
   }
   const out: ReactNode[] = [];
   let at = 0;
-  for (const token of tokens) {
+  for (const { token, view } of refs) {
     if (token.start > at) out.push(...withCode(body.slice(at, token.start), at));
-    out.push(<RefChip key={`r${token.start}`} token={token} sources={sources} />);
+    out.push(<RefChip key={`r${token.start}`} token={token} view={view} />);
     at = token.end;
   }
   if (at < body.length) out.push(...withCode(body.slice(at), at));

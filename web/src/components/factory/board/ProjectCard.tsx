@@ -23,6 +23,7 @@ import { useProjectControlParts } from "../controls/ProjectControlsMenu";
 import { ReadyForMergeBanner } from "../review/ReadyForMergeBanner";
 import { STAGE_LABEL, formatElapsed, formatUsd, plural } from "../factoryFormat";
 import { projectPageHref } from "../factoryRoutes";
+import { stageHeadline } from "../projects/stageHeadline";
 import {
   ageText,
   projectAnchorId,
@@ -157,23 +158,48 @@ export function ClaimChip({ project }: { project: ProjectView }) {
   );
 }
 
+/**
+ * Why a queued card has no working PL, under the header that names the state
+ * ("Starting PL", "Queued"): the start step, the queue spot, or the dependencies.
+ */
+function queuedNote(
+  project: ProjectView,
+  nowS: number,
+): { text: string | null; starting: boolean } {
+  const { explain } = stageHeadline(project, nowS);
+  if (project.overlay === "waiting") return { text: explain, starting: false };
+  // Another overlay (failed, blocked, paused...) has its own tag.
+  if (project.overlay) return { text: null, starting: false };
+  const start = project.start;
+  if (start?.state === "starting") return { text: explain ?? "The PL is starting", starting: true };
+  if (start) return { text: explain ?? start.label, starting: false };
+  // Older servers send no start reason.
+  return project.pl
+    ? { text: "The PL is starting", starting: true }
+    : { text: "Waiting for Atlas to spawn the PL · usually under 5 min", starting: false };
+}
+
 /** What a card says under its stepper while there is nothing else to show. */
-function StageNote({ snapshot, project }: { snapshot: FactorySnapshot; project: ProjectView }) {
+function StageNote({
+  snapshot,
+  project,
+  nowS,
+}: {
+  snapshot: FactorySnapshot;
+  project: ProjectView;
+  nowS: number;
+}) {
   if (project.stage === "queued") {
     if (project.provisioning) return <ProvisioningTimeline stage={project.provisioning.stage} />;
+    const { text, starting } = queuedNote(project, nowS);
+    if (!text) return null;
     return (
       <p
         data-testid="queued-note"
         className="flex items-center gap-1.5 text-sm text-muted-foreground"
       >
-        {project.pl ? (
-          <>
-            <RunningDot className="size-3" />
-            The PL is starting
-          </>
-        ) : (
-          "Waiting for Atlas to spawn the PL · usually under 5 min"
-        )}
+        {starting && <RunningDot className="size-3" />}
+        {text}
       </p>
     );
   }
@@ -194,6 +220,14 @@ function StageNote({ snapshot, project }: { snapshot: FactorySnapshot; project: 
             ? `${plural(live, "preview")} going down`
             : "no previews up"}{" "}
         · dev env {env === "ready" ? "up" : "down"}
+      </p>
+    );
+  }
+  // Why a project whose PRs are merged still works ("PR merged · 1 task still open").
+  if (project.stage_note && !project.overlay) {
+    return (
+      <p data-testid="stage-note" className="text-sm text-muted-foreground">
+        {project.stage_note}
       </p>
     );
   }
@@ -231,7 +265,9 @@ export function ProjectCard({
   const open = prs.filter((pr) => pr.state === "open");
   const closed = prs.filter((pr) => pr.state !== "open");
   const shownClosed = closed.slice(0, CLOSED_PRS_SHOWN);
-  const inStage = formatElapsed(nowS - project.stage_since);
+  // "Starting PL · 2m", "Queued · 4m", else the stage and its age.
+  const headline = stageHeadline(project, nowS);
+  const inStage = formatElapsed(headline.ageS);
   const elapsed = formatElapsed(projectElapsed(project, snapshot.server_time, nowS));
   const cost = formatUsd(project.cost_usd);
   const charter = project.charter;
@@ -329,7 +365,12 @@ export function ProjectCard({
         />
         <div className="flex min-w-0 flex-1 flex-col gap-0.5">
           <p className="flex flex-wrap items-center gap-x-1.5 text-sm">
-            <span className="font-medium text-foreground">{STAGE_LABEL[project.stage]}</span>
+            <span
+              className="font-medium text-foreground"
+              data-testid={`stage-label-${project.slug}`}
+            >
+              {headline.long}
+            </span>
             {inStage && <span className="text-muted-foreground tabular-nums">· {inStage}</span>}
             <ClaimChip project={project} />
           </p>
@@ -345,7 +386,7 @@ export function ProjectCard({
         </div>
       </div>
 
-      <StageNote snapshot={snapshot} project={project} />
+      <StageNote snapshot={snapshot} project={project} nowS={nowS} />
 
       {/* One keyed list, so a PR that merges keeps its row (and pulses) instead of remounting. */}
       {open.length + shownClosed.length > 0 && (

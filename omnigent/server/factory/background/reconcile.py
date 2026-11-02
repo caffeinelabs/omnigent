@@ -49,6 +49,7 @@ from omnigent.server.factory.membership import factory_members
 from omnigent.server.factory.snapshot import (
     MAIL_WINDOW_S,
     list_factory_roots,
+    load_open_tasks,
     pending_brief_targets,
     pick_pl,
     pl_title_slug,
@@ -278,11 +279,12 @@ def _sync_factory(
         limit=5000,
     )
     pending = pending_brief_targets(mail)
+    open_tasks = load_open_tasks(deps, factory_id)
     changes: list[tuple[Any, str, str, str | None]] = []
     current: list[Any] = []  # each project as it stands after this pass
     for row in rows.values():
         pl = pick_pl(row, row.slug, members)
-        result = project_stage(row, prs, pl, open_decisions, pending)
+        result = project_stage(row, prs, pl, open_decisions, pending, tasks=open_tasks)
         if result.stage == row.stage:
             current.append(row)
             continue

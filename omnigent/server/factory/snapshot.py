@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from pydantic import BaseModel, ValidationError
 
-from omnigent.entities.factory import FactoryProject
+from omnigent.entities.factory import FactoryProject, FactoryTask
 from omnigent.factory import (
     AGENT_STAGES,
     CADENCE_DEMO,
@@ -53,6 +53,7 @@ from omnigent.factory import (
     ROLE_LEAD,
     ROLE_PROJECT_LEAD,
     ROLES,
+    STAGE_QUEUED,
     STATE_ACTIVE,
     STATES,
 )
@@ -67,7 +68,12 @@ from omnigent.server.factory import (
 )
 from omnigent.server.factory.activity_now import factory_usd_per_h
 from omnigent.server.factory.base import base_view
-from omnigent.server.factory.charter import normalize_charter
+from omnigent.server.factory.charter import (
+    SPAWN_LEAD,
+    SPAWN_SERVER,
+    normalize_charter,
+    spawn_owner,
+)
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.envelope import display_title
 from omnigent.server.factory.gating import unmet_dependencies
@@ -76,7 +82,12 @@ from omnigent.server.factory.launch import launch_drift
 from omnigent.server.factory.membership import factory_members, load_session_spec
 from omnigent.server.factory.notify import parse_iso
 from omnigent.server.factory.roster import build_roster, session_url
-from omnigent.server.factory.stage import StageResult, derive_stage, ready_for_human
+from omnigent.server.factory.stage import (
+    OPEN_TASK_STATES,
+    StageResult,
+    derive_stage,
+    ready_for_human,
+)
 from omnigent.stores.factory_store import norm_id
 from omnigent.util.session_lifecycle import is_session_closed
 
@@ -102,6 +113,15 @@ SANDBOX_STAGE_LABELS: Final = {
     "briefing": "Briefing the PL",
 }
 """Provisioning steps of a queued project (the web's ``SANDBOX_STAGE_LABELS`` plus the brief)."""
+
+START_LABELS: Final = {
+    **SANDBOX_STAGE_LABELS,
+    "connect": "Waiting for the agent to connect",
+    "creating": "Creating the PL session",
+    "lead": "Waiting for Atlas to start its PL",
+    "server": "Starts within a minute",
+}
+"""Phases of a queued project's start (``ProjectStartView.phase`` -> label)."""
 
 
 # ── Small helpers ──────────────────────────────────────────────
@@ -240,6 +260,13 @@ def sandbox_stage(session_id: str) -> str | None:
     return stage if isinstance(stage, str) and stage != "ready" else None
 
 
+def _spawning(factory_id: str, slug: str) -> bool:
+    """:returns: Whether this process is creating *slug*'s PL session now."""
+    from omnigent.server.factory import spawn
+
+    return spawn.in_flight(factory_id, slug)
+
+
 def pick_pl(
     project: FactoryProject | None, slug: str, members: Sequence[Conversation]
 ) -> Conversation | None:
@@ -270,8 +297,12 @@ def project_stage(
     open_decisions: Sequence[FactoryDecision],
     pending_briefs: set[str],
     waiting_on: Sequence[str] = (),
+    tasks: Sequence[FactoryTask] = (),
 ) -> StageResult:
-    """:returns: The derived stage of *project* (see :func:`.stage.derive_stage`)."""
+    """
+    :param tasks: The factory's open tasks (see :data:`.stage.OPEN_TASK_STATES`).
+    :returns: The derived stage of *project* (see :func:`.stage.derive_stage`).
+    """
     own = [p for p in prs if p.project_slug == project.slug]
     sandbox = sandbox_stage(pl.id) if pl is not None else None
     brief_delivered = pl is not None and pl.id not in pending_briefs and sandbox is None
@@ -283,7 +314,129 @@ def project_stage(
         brief_delivered=brief_delivered,
         sandbox_failed=sandbox == "failed",
         waiting_on=waiting_on,
+        tasks=tasks,
     )
+
+
+def start_view(
+    project: FactoryProject,
+    result: StageResult,
+    pl: Conversation | None,
+    *,
+    sandbox: str | None = None,
+    briefing: bool = False,
+    runner_online: bool | None = None,
+    spawning: bool = False,
+    lead_spawns: bool = False,
+    pods: tuple[int, int | None] = (0, None),
+    ahead: int = 0,
+    ran_before: bool = False,
+) -> dict[str, Any] | None:
+    """
+    Why a plainly queued project has no working PL yet (``ProjectView.start``).
+
+    ``starting`` while its PL session comes up (sandbox, runner, brief) or is
+    being created; ``queued`` while nothing starts it yet, with the reason.
+
+    :param sandbox: The PL's managed-sandbox launch stage (``None`` once ready).
+    :param briefing: The PL's brief is queued and not delivered yet.
+    :param runner_online: Whether the PL's runner is attached (``None``: unknown).
+    :param ran_before: The PL already worked (see :func:`pl_ran_before`): waking
+        or relaunching it is a restart, timed from when the project went back
+        to queued, not from the PL's creation days ago.
+    :param spawning: The server is creating the PL session right now.
+    :param lead_spawns: Atlas, not the server, spawns this project's PL.
+    :param pods: ``(live members, the factory's pod cap)``.
+    :param ahead: Earlier projects also waiting for a free pod.
+    :returns: ``ProjectStartView`` JSON, or ``None`` when the project is not
+        queued, or an overlay (waiting, failed, blocked, ...) says why.
+    """
+    if result.stage != "queued" or result.overlay is not None or project.status != "active":
+        return None
+    if pl is not None:
+        if sandbox in SANDBOX_STAGE_LABELS:
+            phase: str | None = sandbox
+        elif runner_online is False:
+            phase = "connect"
+        else:
+            phase = "briefing" if briefing else None
+        return {
+            "state": "starting",
+            "phase": phase,
+            "label": START_LABELS[phase] if phase else "Starting",
+            # A woken PL went back to queued long after it was made (reconcile
+            # stores that stage within a minute).
+            "since": max(int(pl.created_at), project.stage_changed_at or 0),
+            "restart": ran_before,
+        }
+    since = project.created_at or None
+    if spawning:
+        return {
+            "state": "starting",
+            "phase": "creating",
+            "label": START_LABELS["creating"],
+            "since": since,
+        }
+    owner = spawn_owner(project)
+    if lead_spawns or owner != SPAWN_SERVER:
+        return {"state": "queued", "phase": "lead", "label": START_LABELS["lead"], "since": since}
+    live, cap = pods
+    if cap is not None and live >= cap:
+        return {
+            "state": "queued",
+            "phase": "pod_cap",
+            "label": f"All {cap} pods in use",
+            "since": since,
+            "ahead": ahead,
+            "pods_in_use": live,
+            "pod_cap": cap,
+        }
+    return {"state": "queued", "phase": "server", "label": START_LABELS["server"], "since": since}
+
+
+def delivered_brief_targets(mail: Sequence[FactoryEvent]) -> set[str]:
+    """:returns: Sessions that received a ``brief`` (in the mail window)."""
+    return {
+        e.to_id
+        for e in mail
+        if e.kind == "message.delivered" and e.to_id and (e.data or {}).get("kind") == "brief"
+    }
+
+
+def pl_ran_before(project: FactoryProject, pl: Conversation, briefed: set[str]) -> bool:
+    """
+    Whether *pl* already worked on *project*, so starting it now is a restart.
+
+    It did when it received its brief, claimed a stage since it was made (every
+    PL claims one at kickoff), or moved the stored stage past queued since it
+    was made (before reconcile stores the wake's queued). ``member.spawned``
+    does not count: the server logs it before a fresh PL's sandbox comes up.
+    Nor does a queued stage stored after the PL was made: a replacement PL's
+    project is stored queued too.
+
+    :param briefed: Sessions that received a brief (:func:`delivered_brief_targets`).
+    """
+    made = int(pl.created_at)
+    moved = project.stage != STAGE_QUEUED and (project.stage_changed_at or 0) > made
+    return pl.id in briefed or (project.agent_stage_at or 0) > made or moved
+
+
+def load_open_tasks(
+    deps: FactoryDeps, factory_id: str, slug: str | None = None
+) -> list[FactoryTask]:
+    """
+    The open tasks of a factory (or one project) for :func:`.stage.derive_stage` (never raises).
+
+    :returns: The tasks, or ``[]`` when the work graph cannot be read (the
+        stage then reads as the PRs alone say).
+    """
+    try:
+        return deps.factory_store.list_tasks(
+            factory_id, project_slug=slug, states=OPEN_TASK_STATES
+        )
+    except Exception:  # noqa: BLE001 - the stage renders from the PRs alone
+        _logger.warning("factory: no open tasks for %s", factory_id, exc_info=True)
+        return []
 
 
 # ── The unfiltered snapshot ────────────────────────────────────
@@ -336,6 +489,8 @@ class _Loaded:
     def_version: int | None = None
     issues: list[Any] = field(default_factory=list)
     now: dict[str, dict[str, Any]] = field(default_factory=dict)
+    pod_cap: int | None = None
+    lead_spawns: bool = False
 
 
 def _harness(
@@ -404,7 +559,27 @@ def _load(deps: FactoryDeps, factory_id: str, now: float) -> _Loaded:
         on_trial=len(fstore.list_proposals(factory_id, status="trial", limit=500)),
         def_version=definition.pinned_version(deps, factory_id),
         issues=fstore.list_issues(factory_id, class_="incident", statuses=["open", "acked"]),
+        **_spawn_limits(deps, factory_id, members),
     )
+
+
+def _spawn_limits(
+    deps: FactoryDeps, factory_id: str, members: Sequence[Conversation]
+) -> dict[str, Any]:
+    """The factory's pod cap and whether Atlas, not the server, spawns its PLs."""
+    from omnigent.server.factory import spawn
+
+    root = next((m for m in members if m.id == factory_id), None)
+    if root is None:
+        return {}
+    mode = definition.value(deps, factory_id, "engine.spawn") or root.labels.get(
+        spawn.LABEL_ENGINE_SPAWN
+    )
+    try:
+        cap = spawn.pod_cap(deps, root)
+    except Exception:  # noqa: BLE001 - the snapshot renders without the cap
+        cap = None
+    return {"pod_cap": cap, "lead_spawns": (mode or "").strip() == SPAWN_LEAD}
 
 
 def _next_beat(conv: Conversation, now: float) -> int | None:
@@ -746,6 +921,7 @@ def _project_view(
     pending: set[str],
     paused_by: Mapping[str, str],
     now: float,
+    start: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     pr_ids = [p.id for p in loaded.prs if p.project_slug == project.slug]
     open_ids = [
@@ -774,6 +950,8 @@ def _project_view(
         "charter": charter if project.charter is not None else None,
         "stage": result.stage,
         "stage_since": since or int(now),
+        "stage_note": result.note,
+        "start": _lenient(schemas.ProjectStartView, start) if start else None,
         "overlay": result.overlay,
         "overlay_reason": result.overlay_reason,
         "agent_stage": agent_stage,
@@ -874,10 +1052,21 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
         *_virtual_projects(factory_id, loaded.projects, loaded.members),
     ]
     pending = pending_brief_targets(loaded.mail)
+    briefed = delivered_brief_targets(loaded.mail)
     paused = _paused_by(loaded.controls)
+    # Work graph: each project's tasks summary, each PR's task, the open tasks
+    # the stage reads (one read; never raises).
+    task_summaries, task_refs, open_tasks = await asyncio.to_thread(
+        tasks.snapshot_fields, deps, factory_id
+    )
     project_views: list[dict[str, Any]] = []
     project_pl: dict[str, str | None] = {}
     by_slug = {p.slug: p for p in projects}
+    from omnigent.server.factory import spawn
+
+    # Pods as the spawner counts them (spawn.live_members).
+    live_pods = sum(1 for m in loaded.members if spawn.holds_pod(m))
+    waiting_for_pod = 0  # projects (oldest first, as the spawner takes them) without a pod
     for project in projects:
         pl = pick_pl(project, project.slug, loaded.members)
         waiting = (
@@ -886,8 +1075,29 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
             else []
         )
         result = project_stage(
-            project, loaded.prs, pl, loaded.open_decisions, pending, waiting_on=waiting
+            project,
+            loaded.prs,
+            pl,
+            loaded.open_decisions,
+            pending,
+            waiting_on=waiting,
+            tasks=open_tasks,
         )
+        start = start_view(
+            project,
+            result,
+            pl,
+            sandbox=sandbox_stage(pl.id) if pl is not None else None,
+            briefing=pl is not None and pl.id in pending,
+            runner_online=rows[pl.id].get("runner_online") if pl and pl.id in rows else None,
+            spawning=_spawning(factory_id, project.slug),
+            lead_spawns=loaded.lead_spawns,
+            pods=(live_pods, loaded.pod_cap),
+            ahead=waiting_for_pod,
+            ran_before=pl is not None and pl_ran_before(project, pl, briefed),
+        )
+        if start is not None and start["phase"] == "pod_cap":
+            waiting_for_pod += 1
         project_pl[project.slug] = pl.id if pl is not None else None
         project_views.append(
             _project_view(
@@ -899,6 +1109,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
                 pending=pending,
                 paused_by=paused,
                 now=now,
+                start=start,
             )
         )
 
@@ -910,8 +1121,6 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
     pr_views = [
         _pr_view(pr, demos_by_pr.get((pr.repo, pr.number), []), titles) for pr in loaded.prs
     ]
-    # Work graph: each project's tasks summary and each PR's task.
-    task_summaries, task_refs = await asyncio.to_thread(tasks.snapshot_fields, deps, factory_id)
     loop_summaries, loop_chips = await asyncio.to_thread(
         loops.snapshot_fields, deps, factory_id, loaded.prs
     )
@@ -1204,12 +1413,15 @@ __all__ = [
     "RawSnapshot",
     "build_snapshot",
     "decision_view",
+    "delivered_brief_targets",
     "filter_snapshot",
     "get_snapshot",
     "is_factory_root",
     "list_factory_roots",
+    "load_open_tasks",
     "pending_brief_targets",
     "pick_pl",
+    "pl_ran_before",
     "pl_title_slug",
     "project_demo_view",
     "project_stage",
@@ -1217,6 +1429,7 @@ __all__ = [
     "readable_set",
     "reset_cache",
     "snapshot_etag",
+    "start_view",
     "subtree_cost",
     "summary_from",
     "viewer_readable",

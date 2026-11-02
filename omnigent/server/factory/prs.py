@@ -1072,6 +1072,8 @@ async def persist_stage(
     :param sandbox_failed: Passed to :func:`derive_stage`.
     :returns: The current stage, or ``None`` when the project is unknown.
     """
+    from omnigent.server.factory.snapshot import load_open_tasks
+
     deps = factory_deps(app_state)
     store = deps.factory_store
 
@@ -1083,6 +1085,7 @@ async def persist_stage(
         pl_id = project_lead_id(deps, factory_id, project)
         pl_conv = deps.conversation_store.get_conversation(pl_id) if pl_id else None
         open_decisions = store.list_decisions(factory_id=factory_id, status="open")
+        tasks = load_open_tasks(deps, factory_id, slug)
         result = derive_stage(
             project,
             prs,
@@ -1090,6 +1093,7 @@ async def persist_stage(
             open_decisions,
             brief_delivered=brief_delivered,
             sandbox_failed=sandbox_failed,
+            tasks=tasks,
         )
         if result.stage != project.stage:
             store.update_project(project.id, stage=result.stage)

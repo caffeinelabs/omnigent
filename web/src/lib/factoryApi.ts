@@ -720,6 +720,29 @@ export interface CharterView {
   health_path?: string | null;
 }
 
+/**
+ * Why a queued project has no working PL yet. `starting`: its PL session comes
+ * up (sandbox, runner, brief) or is being created; `queued`: nothing starts it
+ * yet, for the reason in `label`.
+ */
+export interface ProjectStartView {
+  state: "starting" | "queued";
+  /** `provisioning`/`cloning`/`starting`/`connecting` (the PL sandbox), `connect`,
+   * `briefing`, `creating`, `lead`, `pod_cap` or `server`. */
+  phase: string | null;
+  /** e.g. `Provisioning sandbox`, `All 12 pods in use`. */
+  label: string;
+  /** Epoch seconds: while starting, the PL session's creation or, for a woken PL,
+   * when the project went back to queued; while queued, the project's creation. */
+  since: number | null;
+  /** The PL already worked and is coming back (woken or relaunched). */
+  restart?: boolean;
+  /** Projects ahead of this one for a free pod. */
+  ahead?: number | null;
+  pods_in_use?: number | null;
+  pod_cap?: number | null;
+}
+
 /** One project card. */
 export interface ProjectView {
   slug: string;
@@ -730,6 +753,8 @@ export interface ProjectView {
   charter: CharterView | null;
   stage: FactoryStage;
   stage_since: number;
+  /** Why the stage is not what the PRs alone say, e.g. `!9774 was merged before this project started`. */
+  stage_note?: string | null;
   overlay: FactoryOverlay | null;
   overlay_reason: string | null;
   agent_stage: AgentStage | null;
@@ -742,6 +767,8 @@ export interface ProjectView {
   cost_usd: number | null;
   elapsed_s: number | null;
   provisioning: { stage: string; label: string } | null;
+  /** Why a queued project has no working PL yet (only while plainly queued). */
+  start?: ProjectStartView | null;
   keep_previews: boolean;
   paused_by: string | null;
   kind?: ProjectKind | null;

@@ -14,7 +14,8 @@ import { LiveDot } from "../board/FactoryHeader";
 import { ClaimChip, StatusTag } from "../board/ProjectCard";
 import { ProvisioningTimeline, StageStepper } from "../board/StageStepper";
 import { ProjectControlsMenu } from "../controls/ProjectControlsMenu";
-import { STAGE_LABEL, formatElapsed, formatUsd } from "../factoryFormat";
+import { formatElapsed, formatUsd } from "../factoryFormat";
+import { stageHeadline } from "../projects/stageHeadline";
 
 export function ProjectHeader({
   snapshot,
@@ -31,7 +32,13 @@ export function ProjectHeader({
   const prs = projectPrList(snapshot, project);
   const cost = formatUsd(project.cost_usd);
   const elapsed = formatElapsed(projectElapsed(project, snapshot.server_time, nowS));
-  const inStage = formatElapsed(nowS - project.stage_since);
+  // A queued project says why ("Starting PL", "Queued"); a merged one still working, what.
+  const headline = stageHeadline(project, nowS);
+  const stageLabel = headline.long;
+  // The provisioning timeline below already names the sandbox step.
+  const timeline = project.stage === "queued" && project.provisioning != null;
+  const why = timeline ? null : headline.explain;
+  const inStage = formatElapsed(headline.ageS);
   const paused = project.overlay === "paused";
   return (
     <header data-testid="project-header" className="flex min-w-0 flex-col gap-3">
@@ -102,11 +109,18 @@ export function ProjectHeader({
           />
           <div className="flex min-w-0 flex-1 flex-col gap-1">
             <p className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-              <span className="font-medium text-foreground">{STAGE_LABEL[project.stage]}</span>
+              <span className="font-medium text-foreground" data-testid="project-stage-label">
+                {stageLabel}
+              </span>
               {inStage && <span className="text-muted-foreground tabular-nums">· {inStage}</span>}
               {project.overlay && <StatusTag project={project} onDecision={onDecision} />}
               <ClaimChip project={project} />
             </p>
+            {why && (
+              <p data-testid="project-stage-why" className="text-sm text-muted-foreground">
+                {why}
+              </p>
+            )}
             {project.pl?.summary && (
               <p
                 data-testid="project-pl-beacon"
@@ -140,7 +154,7 @@ export function ProjectHeader({
             </dl>
           )}
         </div>
-        {project.stage === "queued" && project.provisioning && (
+        {timeline && project.provisioning && (
           <ProvisioningTimeline stage={project.provisioning.stage} />
         )}
       </div>
