@@ -419,6 +419,8 @@ class EnvUrls(_View):
     app: str | None = None
     api: str | None = None
     minio: str | None = None
+    # Reported by old sandboxes only; the cockpit never shows it (the sandbox
+    # session proxy refuses Tilt's port).
     tilt_ui: str | None = None
 
 

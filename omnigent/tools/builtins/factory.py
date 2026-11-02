@@ -585,7 +585,9 @@ class SysFactoryEnvTool(Tool):
                     },
                     "urls": {
                         "type": "object",
-                        "properties": {"app": url, "api": url, "minio": url, "tilt_ui": url},
+                        # No Tilt UI link: the sandbox session proxy refuses its port.
+                        # The server still accepts ``tilt_ui`` from old runners.
+                        "properties": {"app": url, "api": url, "minio": url},
                         "additionalProperties": False,
                     },
                     "deployed": {

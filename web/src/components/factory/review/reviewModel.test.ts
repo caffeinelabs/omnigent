@@ -13,6 +13,7 @@ import {
   parseApiCalls,
   prettyBody,
   previewHealth,
+  previewLinks,
   uxDemoMissing,
 } from "./reviewModel";
 
@@ -94,6 +95,13 @@ describe("gates and demos", () => {
     });
     const parked = reviewScenario("preview-parked").pr;
     expect(previewHealth(parked, parked.preview!)).toMatchObject({ reachable: false });
+  });
+
+  it("never links the Tilt UI an old sandbox still reports", () => {
+    const preview = pr(9630).preview!;
+    const tilt = "https://10350-omnigent-managed-b693ef0a-2c6683.sessions.sandbox.caffeinelabs.io";
+    const old = { ...preview, urls: { ...preview.urls, tilt_ui: tilt } };
+    expect(previewLinks(old).map((l) => l.key)).toEqual(["app", "api", "minio"]);
   });
 });
 

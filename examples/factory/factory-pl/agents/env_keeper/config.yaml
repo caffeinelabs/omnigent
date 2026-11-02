@@ -57,10 +57,11 @@ prompt: |
   PREVIEW and MERGED; a command without `base=` uses the base of your last
   UP, else `main`.
 
-  UP base=<base>: dev env at origin/<base> in `wt/env` with `pnpm factory:up`
-  (skill). Report
+  UP base=<base> [tooling=<ref>]: dev env at origin/<base> in `wt/env` with
+  `pnpm factory:up` (skill). `tooling=` is the branch of a tooling fix PR: the
+  skill overlays its `deploy/tilt/` files until that PR merges. Report
   `sys_factory_env(state="ready", env_id=..., urls=..., deployed=..., resources=...)`.
-  Result: `ENV READY app=<urls.app> api=<urls.api> tilt_ui=<urls.tilt_ui> env_id=<env_id>`,
+  Result: `ENV READY app=<urls.app> api=<urls.api> env_id=<env_id>`,
   or `ENV FAILED <failing resources + last error lines + what you tried>`.
 
   STATUS: `pnpm -s factory:status`, repair (skill), report with `sys_factory_env`.
@@ -82,16 +83,19 @@ prompt: |
      assert `git rev-parse HEAD` is the head.
   4. A head that has the preview tooling (`scripts/factory.ts preview`,
      `pnpm factory:preview`; on caffeinelabs/app main since #9640) deploys as
-     is. An older head has none: overlay the tooling files from the tooling
-     ref (`main`; `tooling=<ref>` replaces it), never the root package.json
-     or the deploy lockfile, or stop with
+     is, or with only the `deploy/tilt/` files of the tooling fix PR a
+     `tooling=<branch>` other than `main` names. An older head has none:
+     overlay the tooling files from the tooling ref (`main`; `tooling=<ref>`
+     replaces it), never the root package.json or the deploy lockfile, or stop with
      `PREVIEW SKIPPED tooling-conflict <files>` when the PR itself changes
      those files (its diff against origin/<base>).
   5. `pnpm -s factory:preview up --name p<n> --pr <n> --sha <sha>`, or
      `node … scripts/factory.ts preview up …` on an overlaid head (longest
      Bash timeout; run it again on a timeout).
   6. `sys_factory_env(pr=<n>, state="ready", ...)` from preview.json.
-  7. Run the checks verbatim against the preview URLs, then post ONE PR comment:
+  7. Run the checks verbatim against the preview URLs (the envs gateway
+     rewrites headers such as `X-Request-Id`: a check that fails there runs
+     once more in-cluster, skill step 7), then post ONE PR comment:
      `<!-- factory:verify sha=<sha> result=PASS|FAIL env=<api url> preview=<app url> -->`
      with the evidence.
   Result: `PREVIEW READY pr=<n> sha=<sha7> app=<url> api=<url> secret_file=<path> · VERIFY PASS|FAIL <evidence>`,
@@ -112,7 +116,9 @@ prompt: |
 
   Other agents may read the envs; only you change them. If an env is broken
   for a reason you cannot fix (quota, platform, image), say so in the result
-  and stop; do not loop.
+  and stop; do not loop. A build that fails on files or imports the checkout
+  no longer has points at the tooling, not a missing image: run the failure
+  table's stale base image check before you suggest that humans publish one.
 
 os_env:
   type: caller_process

@@ -230,10 +230,11 @@ def env_url_error(key: str, url: str) -> str | None:
     Check one reported env URL.
 
     App, API and MinIO URLs are probed by the server, so they must pass the
-    prober's own SSRF guard (https, one label under the env domain); the Tilt
-    UI link only needs to be http(s).
+    prober's own SSRF guard (https, one label under the env domain). ``tilt_ui``
+    is accepted only from old sandboxes (the session proxy refuses Tilt's port,
+    so the cockpit never shows it) and only needs to be http(s).
 
-    :param key: ``app`` / ``api`` / ``minio`` / ``tilt_ui``.
+    :param key: ``app`` / ``api`` / ``minio``, or the legacy ``tilt_ui``.
     :returns: Why the URL is refused, or ``None``.
     """
     if key == "tilt_ui":

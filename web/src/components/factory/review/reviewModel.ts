@@ -306,15 +306,18 @@ export function previewSeenAt(preview: PreviewView): {
   return { at: preview.reported_at ?? preview.deployed.at, source: "reported" };
 }
 
-/** The preview's links in display order, with what the prober measured on each. */
+/**
+ * The preview's links in display order, with what the prober measured on each.
+ * Never the Tilt UI an old sandbox may still report: the session proxy refuses its port.
+ */
 export function previewLinks(preview: PreviewView): {
-  key: "app" | "api" | "minio" | "tilt";
+  key: "app" | "api" | "minio";
   url: string;
   code: number | null;
   ms: number | null;
 }[] {
   const out: {
-    key: "app" | "api" | "minio" | "tilt";
+    key: "app" | "api" | "minio";
     url: string;
     code: number | null;
     ms: number | null;
@@ -337,9 +340,6 @@ export function previewLinks(preview: PreviewView): {
     });
   }
   if (preview.urls.minio) out.push({ key: "minio", url: preview.urls.minio, code: null, ms: null });
-  if (preview.urls.tilt_ui) {
-    out.push({ key: "tilt", url: preview.urls.tilt_ui, code: null, ms: null });
-  }
   return out;
 }
 

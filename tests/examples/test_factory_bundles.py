@@ -501,7 +501,7 @@ def test_prompts_carry_the_operational_contracts(lead: AgentSpec, pl: AgentSpec)
     assert "python -m omnigent.factory_merge --dry-run <url>" in flat
     env_text = _sub_agent(pl, "env_keeper").instructions or ""
     for token in (
-        "UP base=<base>:",
+        "UP base=<base> [tooling=<ref>]:",
         "STATUS:",
         "DOWN:",
         "PREVIEW pr=<n> head=<sha> base=<base>",
@@ -786,6 +786,123 @@ def test_pl_handles_every_env_keeper_and_demo_result(pl: AgentSpec) -> None:
     assert "playbook's results table" in (pl.instructions or "")
 
 
+def _folded(path: Path) -> str:
+    return " ".join(path.read_text(encoding="utf-8").split())
+
+
+_TEXT_SUFFIXES = (".md", ".yaml", ".ts", ".mjs")
+
+
+def test_no_bundle_file_mentions_tilt_ui() -> None:
+    """The sandbox session proxy refuses Tilt's port: no agent reports or links a Tilt UI."""
+    texts = 0
+    for path in sorted(_FACTORY_DIR.rglob("*")):
+        if path.is_file() and "node_modules" not in path.parts:
+            text = path.read_text(encoding="utf-8", errors="replace")
+            name = str(path.relative_to(_FACTORY_DIR))
+            assert "tilt_ui" not in text, name
+            # Lockfile hashes and benchmark numbers may contain the digits.
+            if path.suffix in _TEXT_SUFFIXES:
+                texts += 1
+                assert "10350" not in text, name
+    assert texts >= 15, texts
+
+
+def test_env_keeper_reports_the_dev_env_urls_without_tilt(pl: AgentSpec) -> None:
+    env = _sub_agent(pl, "env_keeper")
+    prompt = " ".join((env.instructions or "").split())
+    assert "Result: `ENV READY app=<urls.app> api=<urls.api> env_id=<env_id>`," in prompt
+    skill = (_skill_dir(env) / "factory-env" / "SKILL.md").read_text(encoding="utf-8")
+    assert 'sys_factory_env(state="ready", env_id=<env_id>, urls={app, api, minio},' in skill
+    playbook = (_PL_DIR / "skills/factory-pl-playbook/SKILL.md").read_text(encoding="utf-8")
+    assert "| `ENV READY app=… api=… env_id=…` |" in playbook
+    protocol = (_PL_DIR / "skills/factory-protocol/SKILL.md").read_text(encoding="utf-8")
+    assert "`urls` (`app`, `api`, `minio`). Read it" in protocol
+
+
+def test_env_build_failures_suspect_the_stale_base_image_first(pl: AgentSpec) -> None:
+    """Files deleted since the base image survive the overlay: check the tooling before anyone
+    asks humans to publish a fresh image."""
+    env = _sub_agent(pl, "env_keeper")
+    skill = (_skill_dir(env) / "factory-env" / "SKILL.md").read_text(encoding="utf-8")
+    failures = " ".join(
+        _command_section(skill, "## Failure table", ("## After a sandbox wake",)).split()
+    )
+    for token in (
+        "`ghcr.io/caffeinelabs/app/caffeine-db:<image sha>` within 50 first-parent commits",
+        # A move shows only its new path without --no-renames; the image keeps the old one.
+        "git diff --name-only --no-renames --diff-filter=D <image sha>..HEAD",
+        "`factory-tilt-prune-before-install`; a branch, never a sha",
+        "PREVIEW step 4 and UP step 2 overlay only the files that PR changes",
+        "Suggest that humans publish a fresh base image only once the tooling is ruled out",
+    ):
+        assert token in failures, token
+    assert "--diff-filter=DR" not in skill and "-- deploy/tilt`" not in skill
+    assert "| A stale base image: suspect the tooling" in failures
+    assert "failure table's stale base image check" in " ".join((env.instructions or "").split())
+    playbook = (_PL_DIR / "skills/factory-pl-playbook/SKILL.md").read_text(encoding="utf-8")
+    row = next(line for line in playbook.splitlines() if line.startswith("| `PREVIEW FAILED"))
+    assert "`PREVIEW pr=<n> head=<sha> base=<base> tooling=<the fix PR's branch>`" in row
+    assert "never a sha" in row and "<fix sha>" not in playbook
+    assert "Ask for a fresh base image only once env_keeper ruled the tooling out" in row
+    # The dev env takes the same fix, and env_keeper keeps it until the fix PR merges.
+    env_failed = next(line for line in playbook.splitlines() if line.startswith("| `ENV FAILED"))
+    assert "`UP base=<base> tooling=<the fix PR's branch>`" in env_failed
+    prompt = " ".join((env.instructions or "").split())
+    assert "UP base=<base> [tooling=<ref>]: dev env at origin/<base>" in prompt
+    assert "deploys as is, or with only the `deploy/tilt/` files of the tooling fix PR" in prompt
+
+
+def test_header_checks_run_in_cluster_behind_the_envs_gateway(pl: AgentSpec) -> None:
+    """The envs gateway replaces X-Request-Id: such checks run against the Service, and a
+    public-only failure is gateway behaviour, not a product FAIL."""
+    env = _sub_agent(pl, "env_keeper")
+    skill = (_skill_dir(env) / "factory-env" / "SKILL.md").read_text(encoding="utf-8")
+    checks = " ".join(_command_section(skill, "7. **Checks.**", ("9. **Result:**",)).split())
+    for token in (
+        "replaces a client's `X-Request-Id`",
+        "any check that fails through the public URL runs once more in-cluster",
+        # caffeine-api serves / and /ready only.
+        "`kubectl -n <namespace> exec deploy/caffeine-api -- curl -si -H 'X-Request-Id: f-1' "
+        "http://caffeine-api:3001/ready`",
+        "Report both results.",
+        "is gateway behaviour, not a FAIL",
+        "unless the PR changes routes or gateway config "
+        "(`deploy/tilt/routes.yaml`, an `HTTPRoute`)",
+        "- gateway: `<check>` → public",
+    ):
+        assert token in checks, token
+    assert "3001/status" not in skill
+    assert "a check that fails there runs once more in-cluster" in " ".join(
+        (env.instructions or "").split()
+    )
+    playbook = _folded(_PL_DIR / "skills/factory-pl-playbook/SKILL.md")
+    assert "check as `in-cluster: <curl … http://caffeine-api:3001/…>`" in playbook
+    assert "while it passes in-cluster is the envs gateway's doing, not the author's" in playbook
+    assert "counts it as a FAIL only when the PR changes routes or gateway config" in playbook
+    # Pipeline step 3, where the PL reads a VERIFY FAIL, points at the table.
+    step3 = _command_section(playbook, "3. **PREVIEW READY**", ("4. **DEMO**",))
+    assert "(a check that fails only through the gateway: results table)" in step3
+    demo = _sub_agent(pl, "demo")
+    demo_skill = _folded(_skill_dir(demo) / "factory-demo" / "SKILL.md")
+    assert "exactly one `X-Request-Id` comes back, and it is not the one you sent" in demo_skill
+    assert "Never assert pass-through there." in demo_skill
+    assert "is not a FAIL" not in demo_skill
+    assert "a header the envs gateway rewrites" in " ".join((demo.instructions or "").split())
+
+
+def test_the_demo_port_forward_is_checked_and_stopped(pl: AgentSpec) -> None:
+    """A leftover forward holds the port: the demo checks its own forward and kills it after."""
+    demo_skill = _skill_dir(_sub_agent(pl, "demo")) / "factory-demo" / "SKILL.md"
+    [block] = [b for b in _shell_blocks(demo_skill) if "port-forward" in b]
+    lines = block.splitlines()
+    assert lines[1].startswith("kubectl -n x port-forward svc/caffeine-api 13001:3001 ")
+    assert lines[1].endswith("& PF=$!")
+    assert "grep -q 'Forwarding from 127.0.0.1:13001' /tmp/pf.log" in lines[2]
+    assert "node ~/factory/demo-harness/run.mjs" in lines[3] and lines[3].endswith("RC=$?")
+    assert lines[4] == "kill $PF; exit $RC"
+
+
 def test_demo_skill_frontmatter_and_the_demo_agent(pl: AgentSpec) -> None:
     demo = _sub_agent(pl, "demo")
     assert [s.name for s in demo.skills] == ["factory-demo"]
@@ -1045,6 +1162,15 @@ _TOOLING_FILES = (
 _STUB = (
     '#!/bin/sh\necho "$(basename "$0") $* tooling=$FACTORY_PREVIEW_TOOLING_REF" >> "$STUB_LOG"\n'
 )
+# `gh pr diff <ref> --name-only` lists $STUB_GH_FILES; `gh pr view <ref> … -q .state` prints
+# $STUB_GH_STATE (empty: no PR, exit 1).
+_GH_STUB = """#!/bin/sh
+echo "gh $*" >> "$STUB_LOG.gh"
+case "$2" in
+  diff) [ -n "$STUB_GH_FILES" ] || exit 1; printf '%s\\n' $STUB_GH_FILES ;;
+  view) [ -n "$STUB_GH_STATE" ] || exit 1; echo "$STUB_GH_STATE" ;;
+esac
+"""
 
 
 def _git_env(path: str, **extra: str) -> dict[str, str]:
@@ -1107,28 +1233,61 @@ def app_repo(tmp_path: Path) -> dict[str, object]:
     _git(origin, "checkout", "-q", "-b", "mixed-head", main)
     no_script = {"package.json": '{"scripts": {"factory:up": "x"}}\n'}
     heads["mixed"] = _commit(origin, no_script, "PR without the factory:preview script")
+    _git(origin, "checkout", "-q", "-b", "tilt-head", main)
+    heads["tilt"] = _commit(origin, {"deploy/tilt/postgres.yaml": "pr\n"}, "PR changing tilt")
+    # A tooling fix PR: one deploy/tilt file, plus a file outside the tooling.
+    _git(origin, "checkout", "-q", "-b", "tilt-fix", main)
+    fixed = {"deploy/tilt/postgres.yaml": "fixed\n", "docs/fix.md": "why\n"}
+    fix = _commit(origin, fixed, "tooling fix")
     _git(origin, "checkout", "-q", "main")
     clone = tmp_path / "clone"
     _git(tmp_path, "clone", "-q", str(origin), str(clone))
-    branches = ("old-head", "old-tooling", "new-head", "mixed-head", "temp-head", "temp-main")
+    branches = (
+        "old-head",
+        "old-tooling",
+        "new-head",
+        "mixed-head",
+        "temp-head",
+        "temp-main",
+        "tilt-head",
+    )
     _git(clone, "fetch", "-q", "origin", *branches)
     stubs = tmp_path / "bin"
     stubs.mkdir()
-    for tool in ("pnpm", "node"):
-        (stubs / tool).write_text(_STUB, encoding="utf-8")
+    for tool, body in (("pnpm", _STUB), ("node", _STUB), ("gh", _GH_STUB)):
+        (stubs / tool).write_text(body, encoding="utf-8")
         (stubs / tool).chmod(0o755)
-    return {"clone": clone, "heads": heads, "main": main, "stubs": stubs, "log": tmp_path / "log"}
+    return {
+        "clone": clone,
+        "heads": heads,
+        "main": main,
+        "fix": fix,
+        "stubs": stubs,
+        "log": tmp_path / "log",
+        "home": tmp_path / "home",
+    }
 
 
-def _run_deploy(app_repo: dict[str, object], head: str) -> subprocess.CompletedProcess[str]:
+def _run_deploy(
+    app_repo: dict[str, object], head: str, *, ref: str = "main", base: str = "temp-main"
+) -> subprocess.CompletedProcess[str]:
     clone = app_repo["clone"]
     assert isinstance(clone, Path)
     _git(clone, "checkout", "-q", "--detach", head)
     env_skill = _PL_DIR / "agents/env_keeper/skills/factory-env/SKILL.md"
     deploy = next(b for b in _shell_blocks(env_skill) if "TOOLING=" in b)
     deploy = deploy.replace("cd /home/omnigent/workspace/wt/preview-p9630", f"cd {clone}")
+    assert "\nREF=main " in deploy and "\nBASE=temp-main " in deploy
+    deploy = deploy.replace("\nREF=main ", f"\nREF={ref} ").replace(
+        "\nBASE=temp-main ", f"\nBASE={base} "
+    )
     path = f"{app_repo['stubs']}{os.pathsep}{os.environ.get('PATH', '')}"
-    env = _git_env(path, STUB_LOG=str(app_repo["log"]))
+    env = _git_env(
+        path,
+        STUB_LOG=str(app_repo["log"]),
+        STUB_GH_FILES="deploy/tilt/postgres.yaml docs/fix.md",
+        STUB_GH_STATE="OPEN",
+    )
     return subprocess.run(["bash", "-c", deploy], env=env, capture_output=True, text=True)
 
 
@@ -1181,6 +1340,103 @@ def test_preview_deploy_block_overlays_only_heads_without_the_tooling(
     [call] = log.read_text().splitlines()
     assert call.endswith(f"tooling={app_repo['main']}")
     assert (clone / "app.txt").read_text() == "feature\n"
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_preview_deploy_block_overlays_only_the_files_of_a_tooling_fix(
+    app_repo: dict[str, object],
+) -> None:
+    """A head with the tooling takes a fix branch's deploy/tilt files and nothing else."""
+    clone, log, heads = app_repo["clone"], app_repo["log"], app_repo["heads"]
+    assert isinstance(clone, Path) and isinstance(log, Path) and isinstance(heads, dict)
+
+    done = _run_deploy(app_repo, heads["new"], ref="tilt-fix", base="main")
+    assert done.returncode == 0, done.stdout + done.stderr
+    [call] = log.read_text().splitlines()
+    assert call.startswith("pnpm -s factory:preview up --name p9630")
+    assert call.endswith(f"tooling={app_repo['fix']}")
+    # Only the fix PR's deploy/tilt file: the head's other tooling and product code stay.
+    assert _git(clone, "status", "--porcelain") == "M  deploy/tilt/postgres.yaml"
+    assert (clone / "deploy/tilt/postgres.yaml").read_text() == "fixed\n"
+    assert (clone / "Tiltfile").read_text() == "new\n"
+    assert not (clone / "docs/fix.md").exists()
+    assert (
+        "gh pr diff tilt-fix --repo caffeinelabs/app --name-only" in Path(f"{log}.gh").read_text()
+    )
+
+    # A PR that changes the fix's files itself keeps them: nothing is deployed.
+    log.unlink()
+    _git(clone, "reset", "-q", "--hard")
+    done = _run_deploy(app_repo, heads["tilt"], ref="tilt-fix", base="main")
+    assert done.returncode == 5
+    assert "tooling-fix-overlap: deploy/tilt/postgres.yaml" in done.stdout
+    assert not log.exists()
+    assert (clone / "deploy/tilt/postgres.yaml").read_text() == "pr\n"
+
+
+def _dev_env_tooling_block(clone: Path) -> str:
+    env_skill = _PL_DIR / "agents/env_keeper/skills/factory-env/SKILL.md"
+    [block] = [b for b in _shell_blocks(env_skill) if "env-tooling" in b]
+    assert block.startswith("cd /home/omnigent/workspace/wt/env\n")
+    return block.replace("cd /home/omnigent/workspace/wt/env", f"cd {clone}", 1)
+
+
+def _merged_move(clone: Path) -> str:
+    """The MERGED step's documented git line, pointed at *clone* with base main."""
+    skill = (_PL_DIR / "agents/env_keeper/skills/factory-env/SKILL.md").read_text("utf-8")
+    merged = _command_section(skill, "### MERGED pr=<n>", ("## Reading Tilt",))
+    [line] = re.findall(r"`(git -C /home/omnigent/workspace/wt/env fetch origin [^`]+)`", merged)
+    return line.replace("/home/omnigent/workspace/wt/env", str(clone)).replace("<base>", "main")
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+def test_dev_env_keeps_a_tooling_fix_until_its_pr_merges(app_repo: dict[str, object]) -> None:
+    """UP tooling= overlays the fix's deploy/tilt files; MERGED drops and re-applies it."""
+    clone, home = app_repo["clone"], app_repo["home"]
+    assert isinstance(clone, Path) and isinstance(home, Path)
+    (home / "factory").mkdir(parents=True)
+    kept = home / "factory" / "env-tooling"
+    path = f"{app_repo['stubs']}{os.pathsep}{os.environ.get('PATH', '')}"
+
+    def run(command: str, state: str) -> subprocess.CompletedProcess[str]:
+        env = _git_env(
+            path,
+            HOME=str(home),
+            STUB_LOG=str(app_repo["log"]),
+            STUB_GH_FILES="deploy/tilt/postgres.yaml docs/fix.md",
+            STUB_GH_STATE=state,
+        )
+        return subprocess.run(["bash", "-c", command], env=env, capture_output=True, text=True)
+
+    _git(clone, "checkout", "-q", "--detach", "origin/main")
+    block = _dev_env_tooling_block(clone)
+    # No kept fix: nothing happens.
+    done = run(block, "OPEN")
+    assert done.returncode == 0 and done.stdout == "", done.stdout + done.stderr
+    assert _git(clone, "status", "--porcelain") == ""
+
+    kept.write_text("tilt-fix\n", encoding="utf-8")
+    done = run(block, "OPEN")
+    fix7 = str(app_repo["fix"])[:7]
+    assert done.stdout.strip() == f"tooling fix {fix7} from tilt-fix: deploy/tilt/postgres.yaml"
+    assert _git(clone, "status", "--porcelain") == "M  deploy/tilt/postgres.yaml"
+
+    # MERGED's move drops the overlay (a plain checkout would keep it), then the block
+    # re-applies the kept fix while its PR is open.
+    done = run(_merged_move(clone), "OPEN")
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert _git(clone, "status", "--porcelain") == ""
+    assert _git(clone, "rev-parse", "HEAD") == app_repo["main"]
+    assert run(block, "OPEN").stdout.startswith(f"tooling fix {fix7} ")
+
+    # A failed lookup keeps the fix for the next UP; a merged fix PR ends it.
+    _git(clone, "reset", "-q", "--hard")
+    done = run(block, "")
+    assert done.stdout.startswith("tooling-fix-failed: tilt-fix (PR not found;")
+    assert kept.read_text() == "tilt-fix\n" and _git(clone, "status", "--porcelain") == ""
+    done = run(block, "MERGED")
+    assert done.stdout.strip() == "tooling fix tilt-fix dropped: its PR is MERGED"
+    assert kept.read_text() == "" and _git(clone, "status", "--porcelain") == ""
 
 
 def test_real_bundles_seed_with_the_demo_harness(
@@ -1277,7 +1533,7 @@ def test_the_integration_project_has_its_own_branch(pl: AgentSpec) -> None:
     # env_keeper's UP moves an existing dev env to the current head of the base.
     env = _sub_agent(pl, "env_keeper")
     skill = (_skill_dir(env) / "factory-env" / "SKILL.md").read_text(encoding="utf-8")
-    up = " ".join(_command_section(skill, "UP base=<base>:", ("STATUS",)).split())
+    up = " ".join(_command_section(skill, "UP base=<base> [tooling=<ref>]:", ("STATUS",)).split())
     assert "If it exists, move it to the current head" in up
     assert "checkout --detach origin/<base>" in up
 

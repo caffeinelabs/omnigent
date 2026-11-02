@@ -66,7 +66,9 @@ PR_REFRESH_WAIT_S: Final = 10.0
 _REFRESH_POLL_S: Final = 0.25
 # Previews that hold a namespace and count toward the factory cap.
 LIVE_PREVIEW_STATES: Final = frozenset({"deploying", "starting", "ready", "stale", "degraded"})
-_ENV_URL_KEYS: Final = ("app", "api", "minio", "tilt_ui")
+_ADVERTISED_ENV_URL_KEYS: Final = ("app", "api", "minio")
+# Old sandboxes still report a Tilt UI link: accepted, never advertised or shown.
+_ENV_URL_KEYS: Final = (*_ADVERTISED_ENV_URL_KEYS, "tilt_ui")
 _DECISION_REF_RE: Final = re.compile(r"(?:[Dd]-)?([1-9][0-9]{0,8})")
 _SHA_RE: Final = re.compile(r"[0-9a-f]{7,40}")
 
@@ -525,8 +527,9 @@ def _check_urls(urls: dict[str, str]) -> dict[str, str]:
     clean: dict[str, str] = {}
     for key, value in urls.items():
         if key not in _ENV_URL_KEYS:
+            advertised = list(_ADVERTISED_ENV_URL_KEYS)
             raise FactoryRouteError(
-                400, "invalid_url", f"urls has unknown key {key!r} (use {list(_ENV_URL_KEYS)})"
+                400, "invalid_url", f"urls has unknown key {key!r} (use {advertised})"
             )
         url = value.strip()
         if not url:
