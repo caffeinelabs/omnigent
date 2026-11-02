@@ -11,10 +11,21 @@ import { type FactoryTone, TONE_DOT, shortSha } from "../factoryFormat";
 import { ageText } from "./boardModel";
 import { BreakableText } from "./BreakableText";
 
+/**
+ * Whether the probe judged the env reported now. The prober probes only a
+ * ready env, so a probe older than the report (e.g. `down` after
+ * `factory:down`) says nothing about it.
+ */
+function probeIsCurrent(env: EnvView): boolean {
+  const probedAt = env.probe?.at;
+  const reportedAt = env.reported?.at;
+  return probedAt == null || reportedAt == null || probedAt >= reportedAt;
+}
+
 /** Tone and word of a dev env from the report and the probe. */
 export function devEnvStatus(env: EnvView): { tone: FactoryTone; word: string } {
   const reported = env.reported?.state ?? null;
-  const probe = env.probe?.health ?? null;
+  const probe = probeIsCurrent(env) ? (env.probe?.health ?? null) : null;
   if (reported === "failed" || probe === "down") return { tone: "fail", word: "down" };
   if (reported === "down") return { tone: "muted", word: "down" };
   if (reported === "parked") return { tone: "muted", word: "parked" };
@@ -102,6 +113,7 @@ export function DevEnvDetails({ env, nowS }: { env: EnvView; nowS: number }) {
             Probed {ageText(nowS - probe.at)} · {probe.health}
             {probe.app?.code != null && ` · app ${probe.app.code} ${probe.app.ms ?? "?"}ms`}
             {probe.api?.code != null && ` · api ${probe.api.code} ${probe.api.ms ?? "?"}ms`}
+            {!probeIsCurrent(env) && " · before the last report"}
           </>
         ) : (
           "Not probed yet"

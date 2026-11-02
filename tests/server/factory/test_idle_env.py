@@ -52,15 +52,18 @@ PREVIEW = {
 }
 DOWN_NOTICE = (
     "[Factory notice · dev env idle · take it down] Project api-version only waits for a "
-    "human merge: PR #9630 is ready and no task is open. Send env_keeper DOWN reason=idle. "
-    "It takes down the dev env only: keep every preview up for review. The server tells you "
-    "when work comes back."
+    "human: PR #9630 is ready for merge and no other task is open. Send env_keeper DOWN "
+    "reason=idle. It takes down the dev env only: keep every preview up for review. The "
+    "server tells you when work comes back."
 )
 UP_NOTICE = (
     "[Factory notice · dev env needed · bring it up] Project api-version has work again: "
     "luka asked for changes on PR #9630. Send env_keeper UP base=temp-main so the IC has "
     "its dev env."
 )
+UP_AGAIN = "The dev env is still down after the last ask."
+DOWN_AGAIN = "The dev env came back up after the last ask."
+CHANGES = {"verdict": "changes_requested", "by": "luka", "head_sha": HEAD, "at": 1}
 
 
 # ── assess (pure) ──────────────────────────────────────────────
@@ -210,6 +213,67 @@ def test_other_projects_are_ignored() -> None:
     assert assess(_project(), [_pr(), theirs], [their_task]).need == NEED_IDLE
 
 
+def test_a_follow_up_task_that_waits_for_the_merge_is_idle() -> None:
+    """A later milestone's task stays planned until the ready PR merges (and a decision)."""
+    pr = _pr()
+    shipped, review = _task(1, "done"), _task(2, "review", pr)
+    follow = _task(3, "planned", deps=["task-1", "task-2"])
+    after = _task(4, "planned", deps=["task-3", "decision:D-7"])
+
+    need = assess(_project(), [pr], [shipped, review, follow, after])
+
+    assert (need.need, need.waiting) == (NEED_IDLE, ("T-3", "T-4"))
+    assert "T-3 and T-4 wait for a merge or a decision" in down_notice_text(_project(), need)
+
+
+@pytest.mark.parametrize(
+    ("deps", "met"),
+    [
+        # Every dependency is met: the PL can start it now.
+        (["task-1", "decision:D-7"], {"decision:D-7": True}),
+        # Another project's merge, a dead task, a task nobody can see.
+        (["task-2", "project:auth"], {}),
+        (["task-2", "task-5"], {}),
+        (["task-2", "gone"], {}),
+        # A dependency still in the works.
+        (["task-2", "task-6"], {}),
+    ],
+)
+def test_a_planned_task_waiting_on_anything_else_waits(
+    deps: list[str], met: dict[str, bool]
+) -> None:
+    pr = _pr()
+    tasks = [
+        _task(1, "done"),
+        _task(2, "review", pr),
+        _task(5, "failed"),
+        _task(6, "blocked"),
+        _task(7, "planned", deps=deps),
+    ]
+
+    need = assess(_project(), [pr], tasks, external_met=met)
+
+    assert need.need == NEED_WAIT
+
+
+def test_a_dependency_on_a_task_not_read_waits() -> None:
+    """Without the closed tasks, a dependency on one reads as unknown: never idle on that."""
+    pr = _pr()
+    tasks = [_task(2, "review", pr), _task(3, "planned", deps=["task-1", "task-2"])]
+
+    assert assess(_project(), [pr], tasks).reason == "task T-3 task-3 is planned"
+
+
+def test_an_ad_hoc_task_counts_only_while_its_session_runs() -> None:
+    """The binder never closes an ad-hoc task (e.g. a helper titled ``helper:x``)."""
+    pr = _pr()
+    helper = _task(2, "running", key="x", kind="adhoc", session_ids=["a" * 32])
+
+    assert assess(_project(), [pr], [_task(1, "review", pr), helper]).need == NEED_IDLE
+    need = assess(_project(), [pr], [helper], running={"a" * 32})
+    assert (need.need, need.reason) == (NEED_WORK, "task T-2 x is running")
+
+
 def test_notice_texts() -> None:
     project = _project()
     idle = assess(project, [_pr()], [])
@@ -222,7 +286,9 @@ def test_notice_texts() -> None:
     assert down_notice_text(project, idle) == DOWN_NOTICE
     assert up_notice_text(project, work) == UP_NOTICE
     two = assess(project, [_pr(9630), _pr(9631)], [])
-    assert "PRs #9630 and #9631 are ready" in down_notice_text(project, two)
+    assert "PRs #9630 and #9631 are ready for merge" in down_notice_text(project, two)
+    assert UP_AGAIN in up_notice_text(project, work, again=True)
+    assert DOWN_AGAIN in down_notice_text(project, idle, again=True)
 
 
 @pytest.mark.parametrize(
@@ -267,12 +333,13 @@ def _fid(s: Supervision) -> str:
 
 
 def _report_env(s: Supervision, state: str) -> None:
+    """env_keeper reports the dev env now."""
     _store(s).upsert_project(
         _fid(s),
         SLUG,
         base_branch="temp-main",
         pl_session_id=s.world.id("pl"),
-        env={"reported": {"state": state, "env_id": "abc", "urls": {}, "at": 1}},
+        env={"reported": {"state": state, "env_id": "abc", "urls": {}, "at": int(s.clock.now)}},
     )
 
 
@@ -342,17 +409,16 @@ async def test_a_change_request_brings_the_dev_env_back(quiet: Supervision) -> N
     await s.tick()
     assert _notices(s) == [DOWN_NOTICE]
 
-    _store(s).update_pr(
-        pr.id,
-        ready=False,
-        human_review={"verdict": "changes_requested", "by": "luka", "head_sha": HEAD, "at": 1},
-    )
+    _store(s).update_pr(pr.id, ready=False, human_review=CHANGES)
     clock.advance(60)
     await s.tick()
     assert _notices(s) == [DOWN_NOTICE, UP_NOTICE]
 
-    # One ask per stretch, while env_keeper brings it up.
+    # One ask while env_keeper brings it up.
     clock.advance(60)
+    await s.tick()
+    _report_env(s, "starting")
+    clock.advance(10 * AFTER_S)
     await s.tick()
     assert _notices(s) == [DOWN_NOTICE, UP_NOTICE]
     [up] = _store(s).find_events(_fid(s), UP_KIND, 0)
@@ -390,17 +456,216 @@ async def test_idle_again_after_the_work_asks_again(quiet: Supervision) -> None:
     assert len(_notices(s)) == 2
 
     # The task is dropped before any new head: the PR is still ready since long ago,
-    # but the env is coming back, so the grace counts from the ask to bring it up.
+    # but the env is coming back. Never asked down while it starts (a cold up takes
+    # up to 20 min); the grace counts from when it is up again.
     _store(s).update_task(task.id, state="cancelled")
     _report_env(s, "starting")
+    clock.advance(10 * AFTER_S)
+    await s.tick()
+    assert len(_notices(s)) == 2
+
+    _report_env(s, "ready")
+    clock.advance(AFTER_S - 60)
+    await s.tick()
+    assert len(_notices(s)) == 2
+    clock.advance(60)
+    await s.tick()
+    assert _notices(s)[2:] == [DOWN_NOTICE]
+    assert _store(s).get_pr(pr.id).preview == pr.preview
+
+
+async def test_a_second_work_stretch_asks_up_again(quiet: Supervision) -> None:
+    """An UP ask the PL never acted on (lost, or a PAUSE came first) is not the last one."""
+    s, clock = quiet, quiet.clock
+    _report_env(s, "ready")
+    pr = _ready_pr(s, clock.now)
+    clock.advance(AFTER_S)
+    await s.tick()
+    _report_env(s, "down")
+
+    # A check fails: UP is asked, and the PL does not act on it.
+    _store(s).update_pr(pr.id, ready=False, gates={**READY_GATES, "checks": "fail"})
+    clock.advance(60)
+    await s.tick()
+    assert "PR #9630 failed checks" in _notices(s)[1]
+    # The check passes on a re-run: nothing to bring back.
+    _store(s).update_pr(pr.id, ready=True, gates=dict(READY_GATES))
     clock.advance(60)
     await s.tick()
     assert len(_notices(s)) == 2
 
+    clock.advance(4 * 3600)
+    _store(s).update_pr(pr.id, ready=False, human_review=CHANGES)
+    await s.tick()
+
+    assert _notices(s)[2] == UP_NOTICE.replace("Send env_keeper", f"{UP_AGAIN} Send env_keeper")
+
+
+async def test_up_is_asked_again_while_the_work_lasts(quiet: Supervision) -> None:
+    """Asks back off from the idle wait up to 4 h while the dev env stays down."""
+    s, clock = quiet, quiet.clock
+    _report_env(s, "ready")
+    pr = _ready_pr(s, clock.now)
     clock.advance(AFTER_S)
     await s.tick()
-    assert _notices(s)[2:] == [DOWN_NOTICE]
-    assert _store(s).get_pr(pr.id).preview == pr.preview
+    _report_env(s, "down")
+    _store(s).update_pr(pr.id, ready=False, human_review=CHANGES)
+    clock.advance(60)
+    await s.tick()
+    assert len(_notices(s)) == 2
+
+    for gap in (AFTER_S, 2 * AFTER_S, 4 * AFTER_S, 8 * AFTER_S, 4 * 3600, 4 * 3600):
+        before = len(_notices(s))
+        clock.advance(gap - 60)
+        await s.tick()
+        assert len(_notices(s)) == before, gap
+        clock.advance(60)
+        await s.tick()
+        assert len(_notices(s)) == before + 1, gap
+        assert UP_AGAIN in _notices(s)[-1]
+
+    # Once env_keeper is on it, nothing more.
+    _report_env(s, "starting")
+    clock.advance(10 * 3600)
+    await s.tick()
+    ups = _store(s).find_events(_fid(s), UP_KIND, 0)
+    assert [e.data["ask"] for e in ups] == [1, 2, 3, 4, 5, 6, 7]
+    assert len(_notices(s)) == 8
+
+
+async def test_a_dev_env_that_came_back_up_is_asked_down_once_more(quiet: Supervision) -> None:
+    """An older heartbeat's STATUS can bring the env back: one more ask, then it is left."""
+    s, clock = quiet, quiet.clock
+    _report_env(s, "ready")
+    _ready_pr(s, clock.now)
+    clock.advance(AFTER_S)
+    await s.tick()
+    for _ in range(2):
+        clock.advance(300)
+        _report_env(s, "down")
+        clock.advance(7200)
+        _report_env(s, "ready")
+        clock.advance(AFTER_S - 60)
+        await s.tick()
+        clock.advance(60)
+        await s.tick()
+
+    assert _notices(s) == [
+        DOWN_NOTICE,
+        DOWN_NOTICE.replace("Send env_keeper", f"{DOWN_AGAIN} Send env_keeper"),
+    ]
+    downs = _store(s).find_events(_fid(s), DOWN_KIND, 0)
+    assert [e.data["again"] for e in downs] == [False, True]
+
+
+async def test_a_pl_that_kept_the_dev_env_up_is_not_asked_again(quiet: Supervision) -> None:
+    s, clock = quiet, quiet.clock
+    _report_env(s, "ready")
+    _ready_pr(s, clock.now)
+    clock.advance(AFTER_S)
+    await s.tick()
+
+    clock.advance(10 * AFTER_S)
+    await s.tick()
+
+    assert _notices(s) == [DOWN_NOTICE]
+
+
+async def test_a_task_read_error_skips_the_factory(
+    quiet: Supervision, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A lost task list must not read as an idle project."""
+    s, clock = quiet, quiet.clock
+    _report_env(s, "ready")
+    _ready_pr(s, clock.now)
+    _store(s).upsert_task(_fid(s), SLUG, "badge", state="ready")
+    clock.advance(AFTER_S)
+
+    def boom(*_: Any, **__: Any) -> Any:
+        raise RuntimeError("database is locked")
+
+    monkeypatch.setattr(_store(s), "list_tasks", boom)
+    members = [s.world.get("lead_a"), s.world.get("pl")]
+    await idle_env.on_tick(s.world.app_state, members, {}, clock.now, after_s=AFTER_S)
+    await s.settle()
+
+    assert _notices(s) == []
+    assert _store(s).find_events(_fid(s), DOWN_KIND, 0) == []
+
+
+async def test_an_ask_whose_event_is_lost_is_not_sent(
+    quiet: Supervision, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The event dedupes the ask: without it the notice would go out every tick."""
+    s, clock = quiet, quiet.clock
+    _report_env(s, "ready")
+    _ready_pr(s, clock.now)
+    store = _store(s)
+    append = store.append_event
+    failing = True
+
+    def flaky(draft: Any) -> Any:
+        if failing and draft.kind == DOWN_KIND:
+            raise RuntimeError("disk full")
+        return append(draft)
+
+    monkeypatch.setattr(store, "append_event", flaky)
+    clock.advance(AFTER_S)
+    for _ in range(3):
+        await s.tick()
+        clock.advance(60)
+    assert _notices(s) == []
+
+    failing = False
+    await s.tick()
+    await s.tick()
+    assert _notices(s) == [DOWN_NOTICE]
+
+
+async def test_a_stray_sub_agent_does_not_hold_the_dev_env(
+    quiet: Supervision, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The binder tracks ``helper:y`` as an ad-hoc task that nothing closes."""
+    s, clock = quiet, quiet.clock
+    stray = s.world.make_session(
+        "stray", agent="pl", title="helper:y", parent="pl", sub_agent_name="helper"
+    )
+    _report_env(s, "ready")
+    _ready_pr(s, clock.now)
+    clock.advance(AFTER_S)
+    await s.tick()
+
+    [adhoc] = [t for t in _store(s).list_tasks(_fid(s)) if t.kind == "adhoc"]
+    assert adhoc.state == "running"
+    assert _notices(s) == [
+        DOWN_NOTICE.replace("no other task is open", f"{adhoc.ref} has no agent running")
+    ]
+
+    # While it runs, it is work: the dev env comes back.
+    _report_env(s, "down")
+    monkeypatch.setitem(_session_status_cache, stray.id, "running")
+    clock.advance(60)
+    await s.tick()
+    assert _notices(s)[1:] == [
+        UP_NOTICE.replace("luka asked for changes on PR #9630", f"task {adhoc.ref} y is running")
+    ]
+
+
+async def test_a_next_milestone_behind_the_merge_lets_the_dev_env_go(quiet: Supervision) -> None:
+    s, clock = quiet, quiet.clock
+    _report_env(s, "ready")
+    _ready_pr(s, clock.now)
+    _store(s).upsert_task(_fid(s), SLUG, "shipped", state="done")
+    _store(s).upsert_task(_fid(s), SLUG, "badge", state="planned", deps=["task-1", "shipped"])
+
+    clock.advance(AFTER_S)
+    await s.tick()
+
+    assert _notices(s) == [
+        DOWN_NOTICE.replace("no other task is open", "T-3 waits for a merge or a decision")
+    ]
+    [event] = _store(s).find_events(_fid(s), DOWN_KIND, 0)
+    assert event.data["waiting"] == ["T-3"]
 
 
 async def test_a_dev_env_the_server_did_not_take_down_stays_down(quiet: Supervision) -> None:

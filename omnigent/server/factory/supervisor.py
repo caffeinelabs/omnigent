@@ -33,7 +33,7 @@ Each tick it reads the top-level members of every factory and applies:
   to operators, then to owners (see :mod:`~omnigent.server.factory.decision_routing`).
 - **S11 idle dev env**: a project that only waits for a human merge for
   ``OMNIGENT_FACTORY_IDLE_ENV_S`` gets one ask to take its dev env down (its
-  previews stay up), and one to bring it back when work comes back (see
+  previews stay up), and asks to bring it back while work waits on it (see
   :mod:`~omnigent.server.factory.idle_env`).
 
 Each tick also logs what it saw to the factory event log: heartbeats, alerts,
@@ -1046,12 +1046,23 @@ class FactorySupervisor:
         if self.config.idle_env_s is None:
             return
         busy: dict[str, list[str]] = {}
+        running: set[str] = set()
         for child in children:
-            if child.sub_agent_name in binder.TEAM_AGENTS or not _is_running(child):
+            if not _is_running(child):
+                continue
+            running.add(child.id)
+            if child.sub_agent_name in binder.TEAM_AGENTS:
                 continue
             title = display_title(child.title, child.id)
             busy.setdefault(child.parent_conversation_id or "", []).append(title)
-        await idle_env.on_tick(self._app_state, members, busy, now, after_s=self.config.idle_env_s)
+        await idle_env.on_tick(
+            self._app_state,
+            members,
+            busy,
+            now,
+            after_s=self.config.idle_env_s,
+            running=running,
+        )
 
     # ── housekeeping ────────────────────────────────────────────
 

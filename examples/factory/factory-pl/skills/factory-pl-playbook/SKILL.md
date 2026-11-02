@@ -204,8 +204,9 @@ Report: the RESULT block
    3. `sys_factory_set(stage="ready")` and record `ready <iso>` in plan.md.
    Never merge (any repo) and never enable auto-merge or a merge queue. The
    IC stays idle on its worktree and the preview stays up until the PR merges
-   or a human asks for changes. Once every open PR is handed over and no task
-   is left, the dev env goes down ("Idle dev env"). The merge gate only
+   or a human asks for changes. Once every open PR is handed over and no other
+   task can start before a merge or a decision, the dev env goes down ("Idle
+   dev env"). The merge gate only
    reports for you: `python -m omnigent.factory_merge --dry-run <pr-url>`
    (exit 2 when a gate fails); the guard denies it without `--dry-run`. Never
    add `factory:allow-protected` yourself.
@@ -218,11 +219,13 @@ The dev env is for ICs while they code; a project whose open PRs all wait
 for a human merge does not need it, while each PR's preview stays up for the
 human to review. The server watches for both edges:
 - `[Factory notice · dev env idle · take it down]`: every open PR is ready for
-  a human and no task is open. Send env_keeper `DOWN reason=idle` (the dev
-  env only; never `PREVIEW_DOWN` for it) and record `DOWN (idle)` in plan.md.
+  a human merge, and no other task is open or each one waits for a merge or a
+  decision. Send env_keeper `DOWN reason=idle` (the dev env only; never
+  `PREVIEW_DOWN` for it) and record `DOWN (idle)` in plan.md.
 - `[Factory notice · dev env needed · bring it up]`: work came back (a human
   change request, a failed gate, a new or restarted task). Send env_keeper
-  `UP base=<base>` at once, with the IC's dispatch; ICs never wait for it.
+  `UP base=<base>` at once, with the IC's dispatch; ICs never wait for it. The
+  server asks again while the work lasts and the dev env stays down.
 While plan.md says `DOWN (idle)`, a heartbeat or a wake does not bring the dev
 env back, and MERGED only moves its worktree. Before you give an IC work the
 server cannot see (a request in the Room, say), send `UP base=<base>` yourself.
