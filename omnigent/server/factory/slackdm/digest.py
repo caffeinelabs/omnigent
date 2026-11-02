@@ -1,7 +1,8 @@
 """The daily digest, the welcome DM, the test DM and the verification-code DM.
 
-The digest tells the story the cockpit's Now card tells: its headline,
-Waiting on you, In progress, Spend and Next come from the card's own builder
+The digest tells the story the cockpit tells: its verdict sentence (the top
+bar's), headline, Waiting on you, In progress, Spend and Next come from the
+Now card's own builder
 (:func:`.status_summary.summary_from_raw`) for the recipient, filtered to
 what they may read (the snapshot's ``readable_for``: hidden projects never
 appear). The digest adds the last 24 h's counts, factory-wide budget lines
@@ -376,6 +377,10 @@ def build_digest(
     )
     top = [head]
     if summary is not None:
+        # The cockpit's verdict first (the same fact-built sentence as its top bar).
+        sentence = (summary.get("verdict") or {}).get("sentence")
+        if sentence:
+            top.append(f"*{esc(sentence, 160)}*")
         top.append(esc(summary["headline"], 200))
     # Each heading starts a section of its own (sections split between lines,
     # never inside a link), so a busy factory's digest keeps every heading.

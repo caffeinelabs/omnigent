@@ -5,6 +5,10 @@
  * Decisions is the decisions rail. Its width is dragged on the left edge and
  * kept in this browser. Below 1280 px the same panel opens as a bottom sheet
  * from a "Room" button that carries the unread count.
+ *
+ * The new cockpit has no dock: the Room is a drawer you open (`RoomDrawer`,
+ * `?room=<thread>`), from the right on a desktop and as a bottom sheet on a
+ * phone, and it gives the page its width back.
  */
 
 import {
@@ -325,4 +329,76 @@ export function RoomSheetButton(props: Omit<RoomDockProps, "className" | "visibl
       </Sheet>
     </>
   );
+}
+
+export interface RoomDrawerProps {
+  snapshot: FactorySnapshot;
+  location: FactoryLocation;
+  clockOffsetS: number;
+  open: boolean;
+  /** The thread `?room=` names; the page's, else the last one used, when null. */
+  thread: string | null;
+  onOpenChange: (open: boolean) => void;
+  /** A thread picked in the switcher (the shell writes it to `?room=`). */
+  onThread: (thread: string) => void;
+}
+
+/** The new cockpit's Room: a drawer over the page, one thread at a time. */
+export function RoomDrawer({
+  snapshot,
+  location,
+  clockOffsetS,
+  open,
+  thread: wanted,
+  onOpenChange,
+  onThread,
+}: RoomDrawerProps) {
+  const [fallback, remember] = useDockThread(snapshot, location);
+  const threads = useRoomThreads(snapshot.factory.id);
+  const thread = wanted || fallback;
+  const pick = (next: string) => {
+    remember(next);
+    onThread(next);
+  };
+  return (
+    <Sheet open={open} onOpenChange={onOpenChange}>
+      <SheetContent
+        side="right"
+        size="md"
+        data-testid="room-drawer"
+        data-thread={thread}
+        className="md:max-w-[440px] max-md:top-auto max-md:h-[90dvh] max-md:rounded-t-2xl max-md:border-t"
+      >
+        <SheetHeader className="shrink-0 border-b border-border px-4 py-3 pr-12">
+          <SheetTitle className="text-base">Room</SheetTitle>
+          <SheetDescription className="sr-only">
+            Talk with the factory's leads, one thread at a time
+          </SheetDescription>
+        </SheetHeader>
+        <div className="flex min-h-0 flex-1 flex-col px-4 pt-2 pb-[calc(0.75rem+var(--omnigent-safe-bottom,0px))]">
+          <RoomThreadView
+            snapshot={snapshot}
+            clockOffsetS={clockOffsetS}
+            thread={thread}
+            variant="dock"
+            visible={open}
+            className="min-h-0 flex-1"
+            headerStart={
+              <ThreadSwitcher
+                snapshot={snapshot}
+                threads={threads.data?.data ?? []}
+                active={thread}
+                onPick={pick}
+              />
+            }
+          />
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+/** Threads with an unread message that mentions the viewer (the new cockpit's Room count). */
+export function mentionCount(threads: readonly { mention?: unknown }[] | null | undefined): number {
+  return (threads ?? []).filter((t) => t.mention != null).length;
 }

@@ -120,6 +120,17 @@ class QuietPrefs(_Model):
         return _hhmm(value)
 
 
+class UiPrefs(_Model):
+    """
+    The person's cockpit choices in this factory (not Slack; kept with the same row).
+
+    :param cockpit: ``v2`` to use the new cockpit, ``v1`` for the classic one,
+        ``None`` until they choose (the classic one while it is the default).
+    """
+
+    cockpit: Literal["v1", "v2"] | None = None
+
+
 def valid_tz(value: str | None) -> str | None:
     """:returns: *value* when ``zoneinfo`` knows it. :raises ValueError: Otherwise."""
     if value is None:
@@ -144,6 +155,7 @@ class NotifyPrefs(_Model):
     quiet: QuietPrefs = Field(default_factory=QuietPrefs)
     tz: str | None = None
     hold_while_active: bool = True
+    ui: UiPrefs = Field(default_factory=UiPrefs)
 
     @field_validator("tz")
     @classmethod
@@ -166,7 +178,7 @@ class NotifyPrefs(_Model):
 
 
 class PrefsUpdate(_Model):
-    """``PUT …/notify/me``: the fields a person changes (each optional)."""
+    """``PUT …/notify/me``: the fields a person changes (each optional; ``ui`` too)."""
 
     enabled: bool | None = None
     events: EventPrefs | None = None
@@ -175,6 +187,7 @@ class PrefsUpdate(_Model):
     quiet: QuietPrefs | None = None
     tz: str | None = None
     hold_while_active: bool | None = None
+    ui: UiPrefs | None = None
 
     @field_validator("tz")
     @classmethod
@@ -271,6 +284,7 @@ def settings_view(prefs: NotifyPrefs) -> dict[str, Any]:
         "quiet": prefs.quiet.model_dump(),
         "tz": prefs.tz,
         "hold_while_active": prefs.hold_while_active,
+        "ui": prefs.ui.model_dump(),
     }
 
 
@@ -324,6 +338,9 @@ def apply_update(raw: Mapping[str, Any] | None, update: PrefsUpdate) -> dict[str
         out["tz"] = update.tz
     if update.hold_while_active is not None:
         out["hold_while_active"] = update.hold_while_active
+    if update.ui is not None:
+        kept = out.get("ui") if isinstance(out.get("ui"), dict) else {}
+        out["ui"] = {**kept, **update.ui.model_dump(exclude_unset=True)}
     return out
 
 

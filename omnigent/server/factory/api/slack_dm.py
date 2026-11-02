@@ -405,7 +405,7 @@ async def get_notify_me(request: Request, factory_id: str) -> dict[str, Any] | J
 async def put_notify_me(
     request: Request, factory_id: str, body: prefs_mod.PrefsUpdate
 ) -> dict[str, Any] | JSONResponse:
-    """Change the caller's own settings (events, incident minimum, digest, quiet hours, tz)."""
+    """Change the caller's own settings (events, incident minimum, digest, quiet hours, tz, ui)."""
     deps, user_id = _caller(request)
 
     async def run() -> dict[str, Any]:

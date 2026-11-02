@@ -161,6 +161,27 @@ export interface StatusCounts {
   held?: number;
 }
 
+/** Red broken, amber waits on you, grey paused / finished / idle, green working. */
+export type VerdictDot = "red" | "amber" | "green" | "grey";
+
+/** One fact behind the verdict's dot, worst first. */
+export interface StatusVerdictReason {
+  kind: "project" | "agent" | "incident" | "github" | "supervisor" | "waiting";
+  text: string;
+  href: string;
+}
+
+/** The top bar's one answer, built from facts by fixed rules (never by an agent). */
+export interface StatusVerdict {
+  dot: VerdictDot;
+  /** e.g. `Running, 1 project stopped` or `Running smoothly`. */
+  sentence: string;
+  reasons: StatusVerdictReason[];
+  usd_per_h?: number | null;
+  /** The factory's hourly spend alert, when known. */
+  usd_per_h_alert?: number | null;
+}
+
 /** The factory's "Now" for one viewer. */
 export interface StatusSummary {
   factory_id: string;
@@ -169,6 +190,8 @@ export interface StatusSummary {
   /** One plain line without times, e.g. `4 PRs wait on you · 1 project in progress`
    * (the card and the Slack digest both show it). */
   headline: string;
+  /** The top bar's dot and sentence (absent on older servers). */
+  verdict?: StatusVerdict | null;
   state: "working" | "idle" | "paused" | "done";
   waiting: StatusWaitingItem[];
   working: StatusWorkingItem[];

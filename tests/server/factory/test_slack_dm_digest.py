@@ -150,9 +150,11 @@ async def test_the_digest_says_what_the_now_card_says(cockpit: Cockpit) -> None:
     _same(summary, card)
     assert built is not None
     text = _text(built)
-    # The card's headline, word for word.
+    # The top bar's verdict first, then the card's headline, word for word.
+    assert card["verdict"]["sentence"] == "Running, 2 things wait on you"
     assert card["headline"] == "2 things wait on you · nothing in progress yet · 1 project queued"
-    assert card["headline"] in text.splitlines()
+    lines = text.splitlines()
+    assert lines.index(f"*{card['verdict']['sentence']}*") == lines.index(card["headline"]) - 1
     # Waiting on you: the card's items, in its order, each linked.
     mine = [item for item in card["waiting"] if item["for_you"]]
     assert [item["ref"] for item in mine] == ["PR #9826", "D-1"]  # the longest wait first

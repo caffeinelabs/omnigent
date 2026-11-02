@@ -6,6 +6,9 @@
  * change, and Settings. Old cockpit links
  * (`?project=`, `?review=`, `?pr=…&preview=unavailable`, `?tab=activity`)
  * are sent to their pages by the shell.
+ *
+ * The new cockpit's places (Discovery, Teams, Steer) and Debug live here too;
+ * the shell sends each cockpit's addresses to the other's pages.
  */
 
 import { CompassIcon } from "lucide-react";
@@ -17,7 +20,9 @@ import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext"
 import { Link } from "@/lib/routing";
 import { AgentsPage } from "./AgentsPage";
 import { AlertsPage } from "./AlertsPage";
+import { DebugPage } from "./DebugPage";
 import { DecisionsPage } from "./DecisionsPage";
+import { DiscoveryPage } from "./DiscoveryPage";
 import { FactoryLayout } from "./FactoryLayout";
 import { GraphPage } from "./GraphPage";
 import { ImprovementsPage } from "./ImprovementsPage";
@@ -30,6 +35,7 @@ import { ProjectPage } from "./ProjectPage";
 import { ProjectsPage } from "./ProjectsPage";
 import { RoomPage } from "./RoomPage";
 import { SettingsPage } from "./SettingsPage";
+import { SteerPage } from "./SteerPage";
 import { TimelinePage } from "./TimelinePage";
 import { AgentRoute, TeamsRoute } from "./cockpitV2Routes";
 
@@ -94,6 +100,14 @@ export function FactoryPage() {
         <Route path="improvements/:ref" element={<ProposalPage />} />
         <Route path="settings" element={<SettingsPage />} />
         <Route path="settings/:section" element={<SettingsPage />} />
+        <Route path="discovery" element={<DiscoveryPage />} />
+        <Route path="discovery/:view" element={<DiscoveryPage />} />
+        <Route path="steer" element={<SteerPage />} />
+        <Route path="steer/:section" element={<SteerPage />} />
+        <Route path="debug" element={<DebugPage />} />
+        <Route path="debug/:view" element={<DebugPage />} />
+        <Route path="debug/incidents/:ref" element={<DebugPage />} />
+        <Route path="debug/agent/:sid" element={<DebugPage />} />
         <Route path="*" element={<UnknownPage />} />
       </Routes>
     </FactoryLayout>

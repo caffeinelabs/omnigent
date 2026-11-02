@@ -6,7 +6,7 @@
 
 import { createContext, useContext } from "react";
 import type { FactorySnapshot } from "@/lib/factoryApi";
-import type { FactoryLocation } from "./shellRoutes";
+import type { CockpitMode, FactoryLocation } from "./shellRoutes";
 
 export interface FactoryShellValue {
   factoryId: string;
@@ -18,8 +18,10 @@ export interface FactoryShellValue {
   /** When the snapshot was fetched (epoch ms). */
   updatedAt: number;
   location: FactoryLocation;
-  /** The dock sits beside the page (≥ 1280 px). */
+  /** The dock sits beside the page (≥ 1280 px; never in the new cockpit). */
   wide: boolean;
+  /** The cockpit around the page (the classic one when absent). */
+  cockpit?: CockpitMode;
   openShare: () => void;
   openPalette: () => void;
   openAddProject: () => void;

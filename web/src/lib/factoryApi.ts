@@ -2338,7 +2338,12 @@ export interface NotifySettings {
   /** IANA zone; null means UTC until set. */
   tz: string | null;
   hold_while_active: boolean;
+  /** The person's cockpit choice in this factory (absent on older servers). */
+  ui?: { cockpit: CockpitChoice | null };
 }
+
+/** The classic cockpit (`v1`) or the new one (`v2`). */
+export type CockpitChoice = "v1" | "v2";
 
 /** The caller's own Slack link. */
 export interface SlackLinkView {
