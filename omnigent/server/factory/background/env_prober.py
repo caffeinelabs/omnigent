@@ -361,7 +361,7 @@ class EnvProber:
             reported: Mapping[str, Any] = seen if isinstance(seen, Mapping) else {}
             raw_urls = reported.get("urls")
             urls: Mapping[str, Any] = raw_urls if isinstance(raw_urls, Mapping) else {}
-            domain = await asyncio.to_thread(factory_env_domain, project.factory_id)
+            domain = await asyncio.to_thread(factory_env_domain, project.factory_id, self._deps())
             app = safe_env_origin(urls.get("app"), domain)
             api = safe_env_origin(urls.get("api"), domain)
             if app is None and api is None:
@@ -460,7 +460,7 @@ class EnvProber:
         async def _job(client: httpx.AsyncClient) -> Probe | None:
             preview = dict(pr.preview or {})
             urls = preview.get("urls") if isinstance(preview.get("urls"), Mapping) else {}
-            domain = await asyncio.to_thread(factory_env_domain, pr.factory_id)
+            domain = await asyncio.to_thread(factory_env_domain, pr.factory_id, self._deps())
             app = safe_env_origin(urls.get("app"), domain)
             api = safe_env_origin(urls.get("api"), domain)
             project = scope.projects.get(pr.project_slug or "")

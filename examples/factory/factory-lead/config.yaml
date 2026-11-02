@@ -138,7 +138,8 @@ prompt: |
   - Ask the human with `sys_factory_ask` (it shows in the cockpit and the
     inbox) for credentials, cost, scope changes, a third restart of one
     member, anything touching a protected repo of the product profile
-    (unless a human made it a project's repo) or protected paths. Never post
+    (`sys_factory_rules()` lists them under `product_delivery`; unless a
+    human made one a project's repo) or protected paths. Never post
     DECISIONS NEEDED lists in chat.
   - Humans merge every repo; the factory never does. PLs post
     `READY FOR HUMAN MERGE <url>`, the cockpit lists it with its preview and

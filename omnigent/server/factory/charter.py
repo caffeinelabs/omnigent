@@ -361,10 +361,11 @@ def render_pl_charter(project: FactoryProject, delivery: Mapping[str, Any] | Non
     lines += [
         f"IC budget: up to {charter['budget_ics']} ICs at once",
         *_optional_lines(charter),
-        *_delivery_lines(project, charter, delivery or {}),
+        # Before the profile's lists: a brief cut at its length limit keeps it.
         f"Merge policy: {_merge_policy(repo, delivery or {})} Report READY FOR HUMAN MERGE "
         "<url> to your lead once every gate is green; never run `gh pr merge` or the merge "
         "gate.",
+        *_delivery_lines(project, charter, delivery or {}),
     ]
     return "\n".join(lines)
 
@@ -427,15 +428,28 @@ def why_lines(charter: Mapping[str, Any]) -> list[str]:
     return lines
 
 
+FACTORY_NEVER_MERGES: Final = "The factory never merges."
+"""Added to a profile's merge policy unless it already says so (the cockpit adds it too)."""
+DELIVERY_LIST_MAX: Final = 8
+"""Entries of a profile list a charter line shows; ``sys_factory_rules`` lists them all."""
+
+
 def _merge_policy(repo: str, delivery: Mapping[str, Any]) -> str:
     """The charter's merge policy: the product profile's words, else humans merge *repo*."""
     policy = _text(delivery.get("merge_policy"))
     if policy is None:
         return f"human. Humans merge {repo}; the factory never merges."
     policy = policy.rstrip(".")
-    if "never merge" in policy.casefold():
+    if "factory never merges" in policy.casefold():
         return f"{policy}."
-    return f"{policy}. The factory never merges."
+    return f"{policy}. {FACTORY_NEVER_MERGES}"
+
+
+def _capped(items: Sequence[str]) -> str:
+    """:returns: The first :data:`DELIVERY_LIST_MAX` *items*, then how many more there are."""
+    shown = ", ".join(items[:DELIVERY_LIST_MAX])
+    more = len(items) - DELIVERY_LIST_MAX
+    return f"{shown} and {more} more (sys_factory_rules lists them all)" if more > 0 else shown
 
 
 def _delivery_lines(
@@ -447,13 +461,13 @@ def _delivery_lines(
     lines: list[str] = []
     if protected:
         lines.append(
-            f"Protected repos: {', '.join(protected)} (never write them; ask your lead "
+            f"Protected repos: {_capped(protected)} (never write them; ask your lead "
             "before anything touching them)"
         )
     paths = _texts(delivery.get("demo_paths"))
     if paths and charter["env_needed"] and charter["preview"]["enabled"]:
         lines.append(
-            f"Paths that need a demo: {', '.join(paths)} (a PR touching them shows that "
+            f"Paths that need a demo: {_capped(paths)} (a PR touching them shows that "
             "change running in its demo)"
         )
     return lines

@@ -128,10 +128,12 @@ FACTORY_PROTECTED_ARG = "factory_protected_repos"
 
 # Named rule sets a spec selects with ``profile``; explicit arguments still win.
 # ``smith`` is the Tier-2 self-modification lane (PRs to omnigent, never merges).
+# It denies no repo of its own: the always-deny repos (:data:`ALWAYS_DENY_ENV`)
+# bind it like every guard, and the default deny list must not cover its repo.
 GUARD_PROFILES: dict[str, dict[str, tuple[str, ...]]] = {
     "smith": {
         "write_repos": ("caffeinelabs/omnigent",),
-        "deny_repos": ("caffeinelabs/infra",),
+        "deny_repos": (),
         "push_ref_prefixes": ("factory/self/",),
     },
 }

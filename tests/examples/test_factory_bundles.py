@@ -2255,7 +2255,7 @@ _PRODUCT_TEXT_LEFT = {
     "factory-pl/agents/env_keeper/skills/factory-env/SKILL.md": 21,
     "factory-pl/agents/ic/config.yaml": 1,
     "factory-pl/agents/ic_codex/config.yaml": 1,
-    "factory-pl/skills/factory-pl-playbook/SKILL.md": 4,
+    "factory-pl/skills/factory-pl-playbook/SKILL.md": 3,
 }
 
 

@@ -269,7 +269,7 @@ export const DEMO_STORAGE_RED_BYTES = 16 * 1024 ** 3;
 export type HealthLevel = "ok" | "amber" | "red" | "off";
 
 export interface HealthItem {
-  key: "supervisor" | "mail" | "github" | "probes" | "demos" | "drift";
+  key: "supervisor" | "mail" | "github" | "probes" | "demos" | "drift" | "config";
   label: string;
   detail: string;
   level: HealthLevel;
@@ -405,6 +405,20 @@ export function healthItems(health: HealthView, nowS: number): HealthItem[] {
     at: null,
     hint: "Demo videos and screenshots kept on the server's data volume; nothing is deleted automatically",
   });
+
+  const config = health.config ?? [];
+  if (config.length > 0) {
+    items.push({
+      key: "config",
+      label: "Config",
+      // The setting's name stays in the hint: the strip's items never wrap.
+      detail:
+        config.length === 1 ? config[0]!.replace(/\s*\(.*\)$/, "") : `${config.length} problems`,
+      level: "red",
+      at: null,
+      hint: `The server's factory configuration: ${config.join("; ")}`,
+    });
+  }
 
   if (health.drifted_members > 0) {
     items.push({

@@ -26,6 +26,10 @@ describe("merge policy", () => {
     expect(
       mergePolicyText(delivery({ merge_policy: "Maintainers merge; the factory never merges." })),
     ).toBe("Maintainers merge; the factory never merges.");
+    // Another "never merge" is not the factory's clause.
+    expect(mergePolicyText(delivery({ merge_policy: "Never merge before QA sign-off" }))).toBe(
+      "Never merge before QA sign-off. The factory never merges.",
+    );
   });
 
   it("reads the delivery block from the snapshot when the server sends one", () => {

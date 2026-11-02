@@ -703,7 +703,7 @@ async def report_env(request: Request, body: EnvBody) -> Any:
     if not body.env_id.strip():
         raise FactoryRouteError(400, "invalid_env_id", "env_id is required")
     body = body.model_copy(update={"state": state})
-    domain = await asyncio.to_thread(factory_env_domain, caller.factory_id)
+    domain = await asyncio.to_thread(factory_env_domain, caller.factory_id, caller.deps)
     urls = _check_urls(body.urls, domain)
     # Refuse a bad sha before any row is touched.
     _sha(body.deployed.get("sha"))

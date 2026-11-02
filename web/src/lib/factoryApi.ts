@@ -359,6 +359,8 @@ export interface HealthView {
   probes: { state: "ok" | "unreachable" | "off"; last_run_at: number | null };
   drifted_members: number;
   demo_storage_bytes: number;
+  /** What the deployment's factory config lacks, e.g. "no always-deny repos configured (…)". */
+  config?: string[];
 }
 
 // ── Envs and previews ──────────────────────────────────────────

@@ -1,9 +1,11 @@
 """Seed the delivery profile of factories from before it, once, at boot.
 
 A factory started before ``product.delivery`` existed gets the deployment's
-delivery fields (:data:`omnigent.server.factory.product_profile.DELIVERY_SEED_ENV`)
-as one seed version, so what the server and the cockpit read from the
-profile matches what they did before (:func:`.product_profile.seed_existing`).
+delivery fields for its repo
+(:data:`omnigent.server.factory.product_profile.DELIVERY_SEED_ENV`) as one
+seed version, so what the server and the cockpit read from the profile
+matches what they did before (:func:`.product_profile.seed_existing`). A
+factory on a repo the seed does not name is left alone.
 It runs in the background, one factory at a time under its definition lock,
 and never again for a factory it marked.
 """
@@ -33,7 +35,7 @@ async def seed_all(app_state: Any) -> list[str]:
     from omnigent.server.factory.tuning import definition_lock
 
     deps = getattr(app_state, FACTORY_STATE_ATTR, None)
-    if not isinstance(deps, FactoryDeps) or not product_profile.seed_values():
+    if not isinstance(deps, FactoryDeps) or not product_profile.deployment_seeds():
         return []
     roots = await asyncio.to_thread(list_factory_roots, deps.conversation_store)
     seeded: list[str] = []

@@ -106,12 +106,12 @@ Report: the RESULT block
 
 - `Base:` is the charter's base branch. The IC branches from origin/<base>,
   syncs with it and opens the PR with `--base <base>`.
-- `Preview: yes` when the change is runnable: it touches `services/**`,
-  `libs/**`, `generated/**` or `content/**`, and the charter has previews on.
-  `no` for docs-only and tooling-only changes, and for every change on a repo
-  other than caffeinelabs/app (the factory preview tooling exists only
-  there); the IC labels the PR `factory:no-env` and it gets no preview and no
-  demo.
+- `Preview: yes` when the charter has previews on and the change touches a
+  path your charter lists under `Paths that need a demo` (or is runnable per
+  the repo's `agents/factory.md`). `no` for docs-only and tooling-only
+  changes, and on a repo without the factory preview tooling (its
+  `agents/factory.md` says whether it has it); the IC labels the PR
+  `factory:no-env` and it gets no preview and no demo.
 - UX changes need a demo with video and screenshots; backend changes need API
   calls in the demo. Write the demo focus so a reviewer knows what to look at.
 - Env checks reach the preview through the envs Envoy gateway, which (like

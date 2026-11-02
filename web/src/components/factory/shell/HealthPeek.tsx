@@ -212,6 +212,13 @@ export function HealthPeek({
                 <span className="font-mono">v{snapshot.def_version}</span>
               </Fact>
             )}
+            {(snapshot.health.config ?? []).length > 0 && (
+              <Fact term="Config">
+                <span className="text-destructive" data-testid="health-fact-config">
+                  {snapshot.health.config!.join("; ")}
+                </span>
+              </Fact>
+            )}
             {factory.base && (
               <Fact term="Base">
                 <BaseEnvLine base={factory.base} nowS={nowS} />

@@ -1,4 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
+import { userEvent, within } from "storybook/test";
 import type { FactorySnapshot } from "@/lib/factoryApi";
 import { liveRunSnapshot } from "../__fixtures__/liveRun";
 import { BoardFrame } from "../board/boardStoryKit";
@@ -7,7 +8,8 @@ import { FactoryNowContext } from "../factoryClock";
 import { ReadyForMergeBanner } from "./ReadyForMergeBanner";
 import { reviewScenario } from "./__fixtures__/reviewFixtures";
 import { SAMPLE_DEMO_PATHS, sampleProduct } from "./__fixtures__/sampleProduct";
-import { PHONE_390, withReviewMedia } from "./reviewStoryKit";
+import { PHONE } from "../ui/uiStoryFixtures";
+import { withReviewMedia } from "./reviewStoryKit";
 
 const meta = {
   title: "Factory/Review/Ready banner",
@@ -59,7 +61,7 @@ export const DemoPathMatchDark = onCard(withoutDemo(SAMPLE_DEMO_PATHS), "api-ver
 
 export const DemoPathMatchPhone: Story = {
   ...onCard(withoutDemo(SAMPLE_DEMO_PATHS), "api-version"),
-  ...PHONE_390,
+  ...PHONE,
 };
 
 /** The profile's paths that need a demo are elsewhere: no warning, whatever the PR changes. */
@@ -67,11 +69,33 @@ export const NoDemoPathMatch = onCard(withoutDemo(["web/**"]), "api-version");
 
 export const NoDemoPathMatchDark = onCard(withoutDemo(["web/**"]), "api-version", "dark");
 
-/** The profile's own merge policy on the merge link's hover text. */
-export const CustomMergePolicy = onCard(
-  withoutDemo([], "Release managers merge into main after QA"),
-  "api-version",
-);
+/** Scrolls to #9630's merge link and hovers it, so the merge policy tooltip shows. */
+const hoverMergeLink: Story["play"] = async ({ canvasElement }) => {
+  const body = within(canvasElement.ownerDocument.body);
+  const link = await body.findByTestId("merge-link-9630");
+  link.scrollIntoView({ block: "center" });
+  await userEvent.hover(link);
+  await body.findByRole("tooltip");
+};
+
+const CUSTOM_POLICY = "Release managers merge into main after QA";
+
+/** The profile's own merge policy on the merge link's tooltip. */
+export const CustomMergePolicy: Story = {
+  ...onCard(withoutDemo([], CUSTOM_POLICY), "api-version"),
+  play: hoverMergeLink,
+};
+
+export const CustomMergePolicyDark: Story = {
+  ...onCard(withoutDemo([], CUSTOM_POLICY), "api-version", "dark"),
+  play: hoverMergeLink,
+};
+
+export const CustomMergePolicyPhone: Story = {
+  ...onCard(withoutDemo([], CUSTOM_POLICY), "api-version"),
+  ...PHONE,
+  play: hoverMergeLink,
+};
 
 /** A backend PR whose demo is its API transcript (no video). */
 export const BackendPr = onCard(

@@ -5,7 +5,8 @@ import { SNAPSHOT_PATH } from "../board/boardStoryKit";
 import { viewerOf } from "../shell/__fixtures__/shellFixtures";
 import { scenarioApiRoutes } from "./__fixtures__/reviewFixtures";
 import { sampleProduct } from "./__fixtures__/sampleProduct";
-import { PHONE_390, ReviewStory, type ReviewStoryOptions } from "./reviewStoryKit";
+import { PHONE } from "../ui/uiStoryFixtures";
+import { ReviewStory, type ReviewStoryOptions } from "./reviewStoryKit";
 
 const meta = {
   title: "Factory/PR page",
@@ -34,9 +35,13 @@ const customMergePolicy = (snapshot: Parameters<NonNullable<ReviewStoryOptions["
 
 export const CustomMergePolicy: Story = {
   ...review({ state: "ready-with-video", tweak: customMergePolicy }),
+  // Scrolls the action bar into view (the top of the page on a phone) and shows the tooltip.
   play: async ({ canvasElement }) => {
     const body = within(canvasElement.ownerDocument.body);
-    await userEvent.hover(await body.findByTestId("review-merge-github"));
+    const link = await body.findByTestId("review-merge-github");
+    link.scrollIntoView({ block: "center" });
+    await userEvent.hover(link);
+    await body.findByRole("tooltip");
   },
 };
 
@@ -47,7 +52,8 @@ export const CustomMergePolicyDark: Story = {
 
 export const CustomMergePolicyPhone: Story = {
   ...review({ state: "ready-with-video", tweak: customMergePolicy }),
-  ...PHONE_390,
+  ...PHONE,
+  play: CustomMergePolicy.play,
 };
 
 export const ReadyWithVideoDark = review({ state: "ready-with-video", theme: "dark" });

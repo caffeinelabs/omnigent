@@ -166,8 +166,8 @@ def guard_arguments(
     :param deps: The app's factory stores.
     :returns: ``resolve(conversation, root)``: ``{"factory_repos": [...],
         "factory_protected_repos": [...]}`` for a factory member, ``None`` for
-        any other session. When the store cannot be read it fails closed with
-        no writable repos.
+        any other session. When the store or the definition cannot be read
+        it fails closed with no writable repos.
     """
 
     def _resolve(conversation: Conversation, root: Conversation) -> Mapping[str, object] | None:
@@ -176,8 +176,9 @@ def guard_arguments(
         try:
             repos = member_repos(conversation, root, deps.factory_store)
             factory_id = member_factory_id(conversation, root) if repos is not None else None
+            # Reads the definition itself: an error here denies, never drops the protected repos.
             protected = protected_repos(deps, factory_id) if factory_id else frozenset()
-        except Exception:  # noqa: BLE001 - a store error must deny, not widen
+        except Exception:  # noqa: BLE001 - a store or definition error must deny, not widen
             _logger.warning(
                 "factory: could not resolve the project repos of session %s; "
                 "it writes no repo until they resolve",
@@ -192,15 +193,34 @@ def guard_arguments(
     return _resolve
 
 
+def config_problems() -> list[str]:
+    """
+    What this deployment's guard configuration lacks (the cockpit health shows it).
+
+    :returns: e.g. ``["no always-deny repos configured (OMNIGENT_FACTORY_ALWAYS_DENY_REPOS)"]``;
+        ``[]`` when nothing is missing.
+    """
+    from omnigent.policies.builtins.factory import ALWAYS_DENY_ENV, always_deny_repos
+
+    if not always_deny_repos():
+        return [f"no always-deny repos configured ({ALWAYS_DENY_ENV})"]
+    return []
+
+
 def install(app_state: Any) -> Callable[[], None]:
     """
     Register the resolver for the factory guards of *app_state*'s factory.
+
+    Logs an error for each :func:`config_problems` entry: a deployment without
+    an always-deny list leaves no repo denied whatever a spec or project says.
 
     :param app_state: ``app.state`` carrying the :class:`FactoryDeps`.
     :returns: A callable that removes what this call registered.
     """
     from omnigent.runtime.policies.builder import SERVER_POLICY_ARGUMENTS
 
+    for problem in config_problems():
+        _logger.error("factory guards: %s", problem)
     deps = getattr(app_state, FACTORY_STATE_ATTR, None)
     if not isinstance(deps, FactoryDeps):
         return lambda: None
@@ -218,6 +238,7 @@ def install(app_state: Any) -> Callable[[], None]:
 
 __all__ = [
     "GUARDED_HANDLERS",
+    "config_problems",
     "guard_arguments",
     "human_repos",
     "install",

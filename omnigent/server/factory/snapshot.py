@@ -1044,6 +1044,7 @@ def decision_view(
 
 
 def _health(app_state: Any, drifted: int, demo_bytes: int) -> dict[str, Any]:
+    from omnigent.server.factory import guard_repos
     from omnigent.server.factory.mailer import MAILER_STATE_ATTR
 
     supervisor = status.get_status("supervisor") or {}
@@ -1073,6 +1074,7 @@ def _health(app_state: Any, drifted: int, demo_bytes: int) -> dict[str, Any]:
         },
         "drifted_members": drifted,
         "demo_storage_bytes": demo_bytes,
+        "config": guard_repos.config_problems(),
     }
 
 

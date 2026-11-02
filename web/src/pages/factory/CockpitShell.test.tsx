@@ -346,9 +346,26 @@ describe("the new cockpit · the shell", () => {
     const peek = await screen.findByTestId("health-peek");
     expect(within(peek).getByTestId("health-reasons")).toHaveTextContent("cache-warm");
     expect(within(peek).getByTestId("health-facts")).toHaveTextContent("Updates");
+    expect(within(peek).queryByTestId("health-fact-config")).toBeNull();
     expect(screen.getByTestId("factory-live-dot")).toBeInTheDocument();
     fireEvent.keyDown(peek, { key: "Escape" });
     await waitFor(() => expect(location).not.toContain("peek="));
+  });
+
+  it("names a deployment config problem among the machine facts", async () => {
+    const snapshot = round3Snapshot();
+    snapshot.health.config = [
+      "no always-deny repos configured (OMNIGENT_FACTORY_ALWAYS_DENY_REPOS)",
+    ];
+    serve({ snapshot });
+    renderAt("");
+
+    fireEvent.click(await screen.findByTestId("cockpit-verdict"));
+
+    const peek = await screen.findByTestId("health-peek");
+    expect(within(peek).getByTestId("health-fact-config")).toHaveTextContent(
+      "no always-deny repos configured (OMNIGENT_FACTORY_ALWAYS_DENY_REPOS)",
+    );
   });
 
   it("keeps the Room as a drawer: the button opens it, the address names it, Esc closes it", async () => {

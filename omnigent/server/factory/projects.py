@@ -554,6 +554,52 @@ async def restore_project_core(
     return updated
 
 
+async def announce_delivery(
+    app_state: Any,
+    root: Conversation,
+    before_doc: Mapping[str, Any],
+    after_doc: Mapping[str, Any],
+    actor: Actor,
+    *,
+    via: str | None,
+) -> list[str]:
+    """
+    Send each live PL the CHARTER UPDATE a ``product.delivery`` change makes.
+
+    The profile's merge policy, protected repos and paths that need a demo are
+    charter lines, so a new definition version that changes them reaches every
+    PL like a charter edit does (a PL whose charter reads the same gets none).
+
+    :param before_doc: The definition document before the change.
+    :param after_doc: The document now in force.
+    :param via: What changed it, e.g. ``"P-3"`` or ``"PUT"``.
+    :returns: The slugs of the projects whose PL was told.
+    """
+    old = product_profile.delivery_of(before_doc)
+    new = product_profile.delivery_of(after_doc)
+    if old == new:
+        return []
+    deps = factory_deps(app_state)
+    rows = await asyncio.to_thread(deps.factory_store.list_projects, root.id)
+    told: list[str] = []
+    for row in rows:
+        if row.status != STATUS_ACTIVE:
+            continue
+        _diff, mail_id = await _announce_charter(
+            app_state,
+            root,
+            row,
+            row,
+            actor,
+            via=via,
+            fields=["product.delivery"],
+            delivery=(old, new),
+        )
+        if mail_id is not None:
+            told.append(row.slug)
+    return told
+
+
 async def _announce_charter(
     app_state: Any,
     root: Conversation,
@@ -564,13 +610,21 @@ async def _announce_charter(
     via: str | None,
     fields: Sequence[str],
     inherited: Sequence[int] = (),
+    delivery: tuple[Mapping[str, Any], Mapping[str, Any]] | None = None,
 ) -> tuple[str, str | None]:
-    """Tell the PL what changed (and what it inherited); :returns: ``(diff, mail id)``."""
+    """
+    Tell the PL what changed (and what it inherited); :returns: ``(diff, mail id)``.
+
+    :param delivery: The product profile's ``product.delivery`` before and after
+        (a profile change); the factory's current one for both when omitted.
+    """
     deps = factory_deps(app_state)
     slug = after_row.slug
-    delivery = await asyncio.to_thread(product_profile.delivery, deps, root.id)
-    before = render_pl_charter(before_row, delivery)
-    after = render_pl_charter(after_row, delivery)
+    if delivery is None:
+        current = await asyncio.to_thread(product_profile.delivery, deps, root.id)
+        delivery = (current, current)
+    before = render_pl_charter(before_row, delivery[0])
+    after = render_pl_charter(after_row, delivery[1])
     diff = start.charter_diff(before, after) if before != after else ""
     if not diff and not inherited:
         return "", None
@@ -932,6 +986,7 @@ __all__ = [
     "SplitResult",
     "Started",
     "actor_name",
+    "announce_delivery",
     "cancel_project_core",
     "cap_candidates",
     "cap_slots",

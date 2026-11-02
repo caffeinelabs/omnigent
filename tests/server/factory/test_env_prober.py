@@ -423,6 +423,35 @@ async def test_ssrf_guard_never_fetches_other_hosts(probing: Probing) -> None:
         assert p.preview()["probe"]["app"] is None
 
 
+@pytest.mark.parametrize("domain", ["github.io", "default.svc.cluster.local"])
+async def test_a_profile_domain_the_deployment_does_not_list_is_never_fetched(
+    probing: Probing, monkeypatch: pytest.MonkeyPatch, domain: str
+) -> None:
+    """A stored ``product.delivery.preview_domain`` outside the deployment's list is ignored."""
+    from omnigent.server.factory import definition
+
+    p = probing
+    # Stored past the PUT check, e.g. restored from a version of an older deployment.
+    definition.set_values(
+        p.world.deps, p.fid, {"product.delivery.preview_domain": domain}, created_by="alice"
+    )
+    foreign = f"https://attacker.{domain}"
+    _report_env(p, app=foreign, api=foreign)
+    _report_preview(p, app=foreign, api=foreign)
+    await p.probe(force=True)
+    assert p.envs.requests == []
+
+    # Listed by the deployment, the same profile value is probed.
+    listed = "previews.example.test"
+    monkeypatch.setenv("OMNIGENT_FACTORY_PREVIEW_DOMAINS", listed)
+    definition.set_values(
+        p.world.deps, p.fid, {"product.delivery.preview_domain": listed}, created_by="alice"
+    )
+    _report_env(p, app=f"https://app-1.{listed}", api=f"https://api-1.{listed}")
+    await p.probe(force=True)
+    assert f"https://app-1.{listed}/" in p.envs.requests
+
+
 def test_safe_env_origin_keeps_only_the_origin(monkeypatch: pytest.MonkeyPatch) -> None:
     assert safe_env_origin(f"{P_APP}/some/path?q=1") == P_APP
     assert safe_env_origin(f"https://APP-X.{DOMAIN}/") == f"https://app-x.{DOMAIN}"

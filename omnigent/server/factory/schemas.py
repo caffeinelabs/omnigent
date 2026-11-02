@@ -449,6 +449,8 @@ class HealthView(_View):
     probes: ProbesHealth
     drifted_members: int = 0
     demo_storage_bytes: int = 0
+    config: list[str] = Field(default_factory=list)
+    """What the deployment's factory config lacks, e.g. an empty always-deny list."""
 
 
 # ── Envs and previews ──────────────────────────────────────────

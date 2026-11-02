@@ -90,8 +90,7 @@ describe("ReadyForMergeBanner", () => {
     const { card: el } = card((s) => {
       s.factory.product = sampleProduct({ merge_policy: "Maintainers merge on Fridays" });
     });
-    expect(within(el).getByTestId("merge-link-9630").closest("[title]")).toHaveAttribute(
-      "title",
+    expect(within(el).getByTestId("merge-link-9630")).toHaveAccessibleDescription(
       "Maintainers merge on Fridays. The factory never merges.",
     );
   });

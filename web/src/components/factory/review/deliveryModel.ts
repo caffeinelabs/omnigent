@@ -13,11 +13,14 @@ export function deliveryOf(snapshot: FactorySnapshot | null | undefined): Delive
   return snapshot?.factory.product?.delivery ?? null;
 }
 
+/** Added to a profile's merge policy unless it already says so (the PL's charter does the same). */
+export const FACTORY_NEVER_MERGES = "The factory never merges.";
+
 /** The merge policy in words: the profile's (the factory never merges either way), or the default. */
 export function mergePolicyText(delivery: DeliveryDef | null | undefined): string {
   const policy = delivery?.merge_policy?.trim().replace(/\.+$/, "");
   if (!policy) return DEFAULT_MERGE_POLICY;
-  return /never merge/i.test(policy) ? `${policy}.` : `${policy}. The factory never merges.`;
+  return /factory never merges/i.test(policy) ? `${policy}.` : `${policy}. ${FACTORY_NEVER_MERGES}`;
 }
 
 function escapeRegExp(text: string): string {

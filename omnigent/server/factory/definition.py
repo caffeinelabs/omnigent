@@ -49,6 +49,7 @@ from omnigent.factory import (
     ENGINE_MODES,
     LABEL_CADENCE,
     LABEL_DEF_VERSION,
+    LABEL_DEFAULT_REPO,
     LABEL_ID,
     LABEL_PREFIX,
     MAX_HEARTBEAT_S,
@@ -78,6 +79,8 @@ _logger = logging.getLogger(__name__)
 
 CACHE_S: Final = 5.0
 TIER0: Final = "tier0"
+PREVIEW_DOMAIN_PATH: Final = "product.delivery.preview_domain"
+"""Bounded by the deployment's preview domains (:func:`.env_urls.preview_domains`)."""
 RULES_PER_ROLE: Final = 20
 RULE_TEXT_MAX: Final = 500
 RULE_ROLES: Final = (*sorted(ROLES), "*")
@@ -715,7 +718,8 @@ def default_doc() -> dict[str, Any]:
 def seed_doc(labels: Mapping[str, str]) -> dict[str, Any]:
     """
     :returns: The v1 doc for a root with *labels*: its legacy labels migrated,
-        and the deployment's delivery settings as its ``product.delivery``.
+        and the deployment's delivery settings for its default repo (if any)
+        as its ``product.delivery``.
     """
     doc = default_doc()
     mode = (labels.get(LABEL_ENGINE_MODE) or "").strip()
@@ -729,8 +733,8 @@ def seed_doc(labels: Mapping[str, str]) -> dict[str, Any]:
         doc["engine"]["spawn"] = spawn
     from omnigent.server.factory.product_profile import seed_into
 
-    # The deployment's delivery settings (preview domain, protected repos…).
-    return seed_into(doc)
+    # The deployment's delivery settings for this factory's repo (none for another repo).
+    return seed_into(doc, labels.get(LABEL_DEFAULT_REPO))
 
 
 # ── Resolution ─────────────────────────────────────────────────
@@ -1257,6 +1261,7 @@ def apply_changes(
         409 ``duplicate_item`` when an added item's id is taken.
     """
     doc = _with_defaults(stored)
+    preview_before = get_path(doc, PREVIEW_DOMAIN_PATH)
     doc["rule_seq"] = max(rule_seq(doc), min_rule_seq)
     doc["goal_seq"] = max(goal_seq(doc), min_goal_seq)
     rules: list[dict[str, Any]] = [dict(r) for r in doc.get("rules") or []]
@@ -1301,7 +1306,7 @@ def apply_changes(
             }
     doc["rules"] = rules
     try:
-        return FactoryDefinitionDoc.model_validate(doc).model_dump(mode="json")
+        after = FactoryDefinitionDoc.model_validate(doc).model_dump(mode="json")
     except ValidationError as exc:
         first = exc.errors()[0] if exc.errors() else {}
         where = ".".join(str(p) for p in first.get("loc", ()))
@@ -1311,6 +1316,25 @@ def apply_changes(
             f"{where}: {first.get('msg', 'invalid value')}" if where else str(exc)[:300],
             field=where or None,
         ) from None
+    _check_preview_domain(preview_before, get_path(after, PREVIEW_DOMAIN_PATH))
+    return after
+
+
+def _check_preview_domain(before: Any, after: Any) -> None:
+    """
+    A changed ``product.delivery.preview_domain`` names one of the deployment's
+    preview domains: which hosts the server probes and redirects to is Tier 0.
+
+    :raises CockpitError: 422 ``tier0`` for any other domain.
+    """
+    from omnigent.server.factory.env_urls import preview_domain_error
+
+    def norm(value: Any) -> str:
+        return str(value or "").strip().strip(".").lower()
+
+    problem = None if norm(before) == norm(after) else preview_domain_error(after)
+    if problem is not None:
+        raise tier0(f"{PREVIEW_DOMAIN_PATH}: {problem}", field=PREVIEW_DOMAIN_PATH)
 
 
 def _list_diff(path: str, before: Any, after: Any) -> list[dict[str, Any]]:

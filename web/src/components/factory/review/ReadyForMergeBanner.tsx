@@ -10,6 +10,7 @@
 
 import { ExternalLinkIcon, PlayIcon, StarIcon, TriangleAlertIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import type { DeliveryDef, PrView, ProjectView } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
 import { ageText, clipDuration } from "../board/boardModel";
@@ -164,23 +165,28 @@ export function ReadyForMergeBanner({
           <PlayIcon className="size-3.5" />
           Review
         </Button>
-        <Button
-          asChild
-          size="sm"
-          variant="outline"
-          className="@max-md:flex-1"
-          title={mergePolicyText(delivery)}
-        >
-          <a
-            href={mergeUrl(pr)}
-            target="_blank"
-            rel="noreferrer"
-            data-testid={`merge-link-${pr.number}`}
-          >
-            Merge on GitHub
-            <ExternalLinkIcon className="size-3.5" />
-          </a>
-        </Button>
+        <TooltipProvider delayDuration={300}>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button asChild size="sm" variant="outline" className="@max-md:flex-1">
+                <a
+                  href={mergeUrl(pr)}
+                  target="_blank"
+                  rel="noreferrer"
+                  data-testid={`merge-link-${pr.number}`}
+                  aria-describedby={`merge-policy-${pr.number}`}
+                >
+                  Merge on GitHub
+                  <ExternalLinkIcon className="size-3.5" />
+                </a>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>{mergePolicyText(delivery)}</TooltipContent>
+          </Tooltip>
+        </TooltipProvider>
+        <span id={`merge-policy-${pr.number}`} className="sr-only">
+          {mergePolicyText(delivery)}
+        </span>
         {factoryId && (
           <IMergedItButton factoryId={factoryId} pr={pr} testId={`i-merged-it-${pr.number}`} />
         )}
