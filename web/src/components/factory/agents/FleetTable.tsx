@@ -18,6 +18,7 @@ import { HarnessGlyph, ROLE_SHORT } from "../board/TeamStrip";
 import { devEnvStatus } from "../board/DevEnvPill";
 import { TONE_CHIP, TONE_TEXT, formatElapsed, formatUsd, previewStatus } from "../factoryFormat";
 import { agentPageHref, alertPageHref, projectPageHref } from "../factoryRoutes";
+import { heldText } from "../loops/loopStripModel";
 import { type FleetAgent, type FleetGroup, nowText } from "./fleetModel";
 import { useElementWidth } from "./useElementWidth";
 
@@ -102,6 +103,7 @@ function TaskLoop({ agent }: { agent: FleetAgent }) {
   const { task, loop } = agent.row;
   if (!task && !loop) return <span className="text-muted-foreground">—</span>;
   const bad = loop && ["exhausted", "thrashing", "stalled", "escalated"].includes(loop.state);
+  const held = loop?.state === "running" ? heldText(loop.held_by) : null;
   return (
     <span className="flex min-w-0 items-center gap-1 truncate">
       {task && <span className="shrink-0 font-mono">{task.ref}</span>}
@@ -109,12 +111,20 @@ function TaskLoop({ agent }: { agent: FleetAgent }) {
         <span
           className={cn(
             "inline-flex h-5 min-w-0 items-center truncate rounded-sm px-1 font-mono text-xs",
-            bad ? TONE_CHIP.fail : loop.state === "converged" ? TONE_CHIP.pass : TONE_CHIP.muted,
+            bad
+              ? TONE_CHIP.fail
+              : held
+                ? TONE_CHIP.warning
+                : loop.state === "converged"
+                  ? TONE_CHIP.pass
+                  : TONE_CHIP.muted,
           )}
+          title={held ? `${held}: not counted as stalled until a person answers` : undefined}
         >
           {loop.kind === "implement" ? "impl" : loop.kind} {loop.iteration}
           {loop.limit != null ? `/${loop.limit}` : ""}
           {loop.state === "exhausted" ? " ⛔" : loop.state === "converged" ? " ✓" : ""}
+          {held ? ` · ${held}` : ""}
         </span>
       )}
     </span>

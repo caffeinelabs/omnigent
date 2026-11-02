@@ -969,6 +969,27 @@ ci, claim, plan, intake, improve); `factory_loops` keeps one row per
   one up. Review is *dry* when a round adds no new fingerprint and fixes none,
   *thrashing* when a fixed one returns. The supervisor tick adds wall and
   no-progress stalls, the plan loop and the `done_check` decision.
+- **Stalls read the task's people** (`task_pulse.py`), not only task events:
+  - An open **blocking** question a person owes the task's PL or one of its
+    sessions (`sys_factory_ask`, a parked approval), or one whose subject is
+    the task, holds the implement loop: no stall, the cockpit shows "waiting
+    on D-n", the held time is not charged to `wall_h`, and the no-progress
+    clock restarts when the last one is answered.
+  - The task's sessions' activity is progress: their newest item (IC,
+    reviewer and demo turns, tool calls, the PL's messages to them), a turn
+    running now (until it has been silent for `supervisor.stuck_s`), and,
+    only once the clock runs out, a PL tool call or reply that names the
+    task (its ref, branch, or key).
+  - The stall's decision says why in one plain line at the end of its
+    question ("The IC worked 3 minutes ago; it is running pnpm build.") and
+    recommends **Keep waiting** while the IC is alive, or **Switch vendor**
+    when it is gone, failed or erroring, has been silent mid-turn past the
+    stuck time, or produced nothing since the last Keep waiting. A
+    no-progress stall whose task moves again (or now waits on a person)
+    runs again by itself.
+  - After **Keep waiting** (it doubles `wall_h`) the no-progress rule rests
+    on that try: it asks again only at the new wall budget, or sooner if the
+    IC, once alive, is gone or failed, or the worker reports FAIL or BLOCKED.
 - **Claims** (`loops.claim_status`, judged on the fresh gates and stored on
   `pr.claim`): `held` (ready), `refuted` (a failed gate, a draft, a moved head,
   a PR not open; or Sentinel `not_verified`) or `early` (only pending gates:

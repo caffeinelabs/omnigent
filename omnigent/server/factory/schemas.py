@@ -173,11 +173,27 @@ class NowState(_View):
     flags: list[NowFlag] = Field(default_factory=list)
 
 
+class LoopHoldView(_View):
+    """
+    The questions a running implement loop waits on: its stall clock is paused.
+
+    :param decision_ref: The oldest open one, e.g. ``D-22``.
+    :param refs: Every one it waits on, oldest first.
+    :param since: When the oldest was asked (epoch seconds).
+    """
+
+    decision_id: str | None = None
+    decision_ref: str
+    refs: list[str] = Field(default_factory=list)
+    since: int | None = None
+
+
 class LoopChipView(_View):
     """
     A compact loop badge on a PR, task or project row, e.g. ``implement 3/3``.
 
     :param limit: The iteration budget, when the loop has one.
+    :param held_by: The person's answers it waits on (``waiting on D-n``).
     """
 
     id: str
@@ -185,6 +201,7 @@ class LoopChipView(_View):
     state: LoopState
     iteration: int
     limit: int | None = None
+    held_by: LoopHoldView | None = None
 
 
 class TasksSummaryView(_View):
@@ -1378,6 +1395,8 @@ class LoopView(_View):
     :param subject: e.g. ``"task:<id>"`` or ``"pr:<id>@<sha7>"``.
     :param limit: The iteration budget from :attr:`spec`, when it has one.
     :param spec: The resolved budgets the loop started with.
+    :param held_by: The person's answers a running loop waits on: it is not
+        counted as stalled until they are answered.
     """
 
     id: str
@@ -1397,6 +1416,7 @@ class LoopView(_View):
     last_reason: str | None = None
     decision_id: str | None = None
     decision_ref: str | None = None
+    held_by: LoopHoldView | None = None
     def_version: int | None = None
     started_at: int
     updated_at: int
@@ -1513,6 +1533,7 @@ __all__ = [
     "FactorySummary",
     "HealthView",
     "IssueView",
+    "LoopHoldView",
     "LoopView",
     "MemberRef",
     "MemberView",

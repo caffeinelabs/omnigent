@@ -30,6 +30,7 @@ from omnigent.server.factory import activity_now, detectors
 from omnigent.server.factory.actor import task_ref
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.delivery import member_last_error
+from omnigent.server.factory.loops import held_by as loop_held_by
 from omnigent.server.factory.routes import FactoryRouteError
 from omnigent.server.factory.snapshot import (
     RawSnapshot,
@@ -159,6 +160,7 @@ def _loop_chip(task: FactoryTask | None, loops: list[Any]) -> dict[str, Any] | N
         "state": loop.state,
         "iteration": loop.iteration,
         "limit": limit if isinstance(limit, int) else None,
+        "held_by": loop_held_by(loop),
     }
 
 

@@ -58,6 +58,7 @@ from omnigent.server.factory.loops import (
     task_label,
     wait_words,
 )
+from omnigent.server.factory.task_pulse import RECOMMEND_WAIT
 from omnigent.stores.factory_store import norm_id
 
 if TYPE_CHECKING:
@@ -189,6 +190,10 @@ def decision_for(
     reason = loop.last_reason or state
     question = f"{what}: {_count(loop)} {state} - what next?"
     context = [f"Why: {reason}", f"Last verdict: {loop.last_verdict or '-'}"]
+    advice = _stall_advice(loop, state)
+    if advice is not None:
+        # Why, in one plain line, where every surface shows it (the card, the Room, Slack).
+        question = f"{question} {advice[1]}"
     pause = (
         [_option("pause", "Pause project", ACTION_PAUSE, f"project:{loop.project_slug}")]
         if loop.project_slug
@@ -200,6 +205,7 @@ def decision_for(
         other = OTHER_VENDOR.get(harness, "ic_codex")
         switched = bool(_spent(loop).get("switched"))
         money = bool(_spent(loop).get("usd")) and state == "exhausted" and "$" in reason
+        wait = advice is not None and advice[0] == RECOMMEND_WAIT
         options: list[dict[str, Any]] = []
         if money:
             usd = float((loop.spec or {}).get("usd") or 0.0) or 15.0
@@ -219,7 +225,17 @@ def decision_for(
                 _option("raise", "One more review round", ACTION_RAISE_BUDGET, target, rounds=1)
             )
         elif state == "stalled":
-            options.append(_option("wait", "Keep waiting", ACTION_RAISE_BUDGET, target, wait=True))
+            options.append(
+                _option(
+                    "wait",
+                    "Keep waiting",
+                    ACTION_RAISE_BUDGET,
+                    target,
+                    wait=True,
+                    recommended=wait,
+                    description=_wait_description(loop),
+                )
+            )
         else:
             options.append(_option("raise", "+1 attempt", ACTION_RAISE_BUDGET, target, attempts=1))
         options += [
@@ -229,9 +245,15 @@ def decision_for(
                 ACTION_SWITCH_VENDOR,
                 target,
                 vendor=other,
-                recommended=not switched,
+                recommended=not switched and not wait,
             ),
-            _option("fresh", "Fresh restart", ACTION_FRESH_RESTART, target, recommended=switched),
+            _option(
+                "fresh",
+                "Fresh restart",
+                ACTION_FRESH_RESTART,
+                target,
+                recommended=switched and not wait,
+            ),
             _option("abandon", "Abandon task", ACTION_ABANDON_TASK, target),
         ]
         if money:
@@ -311,6 +333,25 @@ def decision_for(
             _option("dismiss", "Dismiss", ACTION_DISMISS, target),
         ],
         None,
+    )
+
+
+def _stall_advice(loop: FactoryLoop, state: str) -> tuple[str, str] | None:
+    """:returns: ``(recommend, line)`` the tick recorded when an implement loop stalled."""
+    stall = _spent(loop).get("stall")
+    if loop.kind != "implement" or state != "stalled" or not isinstance(stall, dict):
+        return None
+    recommend, line = stall.get("recommend"), stall.get("line")
+    if not isinstance(recommend, str) or not isinstance(line, str) or not line:
+        return None
+    return recommend, line
+
+
+def _wait_description(loop: FactoryLoop) -> str:
+    """What "Keep waiting" on an implement loop does, e.g. ``Up to 32 h in all; …``."""
+    wall_h = float((loop.spec or {}).get("wall_h") or DEFAULT_BUDGETS["implement"]["wall_h"])
+    return (
+        f"Up to {wall_h * 2:g} h in all; asks again sooner only if the IC stops or its run fails"
     )
 
 
@@ -1017,9 +1058,17 @@ async def execute_answer(
         spec = {**(loop.spec or {}), key: value}
         if key == "per_head" and loop.kind == "demo":
             spec["per_pr_heads"] = int((loop.spec or {}).get("per_pr_heads") or 6) + 1
-        values = {**_spent(loop), "progress_at": int(decision.answered_at or loop.updated_at)}
+        answered_at = int(decision.answered_at or loop.updated_at)
+        values = {**_spent(loop), "progress_at": answered_at}
         if key == "usd":
             values["usd_near"] = False  # budget.near fires again at 80 % of the new cap
+        if key == "wall_h" and loop.kind == "implement":
+            # Not asked again on this try within the new budget unless it gets worse.
+            values["kept_waiting"] = {
+                "at": answered_at,
+                "iteration": loop.iteration,
+                "try_open": bool(values.get("try_open", True)),
+            }
         fields = {"spec": spec, "state": "running", "ended_at": None, "spent": values}
         if task is not None and loop.kind == "implement" and key in ("attempts", "usd"):
             budget = {**(task.budget or {}), key: value}
@@ -1033,6 +1082,7 @@ async def execute_answer(
         cap = int((target.spec or {}).get("attempts") or 0) or task.attempts
         spec = {**(target.spec or {}), "attempts": cap + 1}
         values = {**_spent(target), "progress_at": int(decision.answered_at or target.updated_at)}
+        values.pop("kept_waiting", None)  # a new worker is not covered by an old Keep waiting
         if answer.action == ACTION_SWITCH_VENDOR:
             values["switched"] = True
         await asyncio.to_thread(

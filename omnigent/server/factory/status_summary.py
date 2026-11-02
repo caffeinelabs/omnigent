@@ -87,6 +87,7 @@ _BLOCKED_ON_RE: Final = re.compile(r"^Blocked on (?P<ref>D-\d+)")
 _WAITING_ON_RE: Final = re.compile(r"^waiting on (?P<deps>.+)$")
 _QUOTED_TITLE_RE: Final = re.compile(r'^"(?P<title>[^"]+)"')
 _LOOP_SUBJECT_RE: Final = re.compile(r"\b(?P<ref>T-\d+|PR #\d+)")
+_STALLED_RE: Final = re.compile(r" stalled - what next\?")
 _PR_NUMBER_RE: Final = re.compile(r"#(?P<number>\d+)")
 _PL_PREFIX: Final = "PL · "
 _STAGE_RANK: Final = {stage: i for i, stage in enumerate(STAGES)}
@@ -431,6 +432,8 @@ def _server_decision_text(decision: Mapping[str, Any]) -> str | None:
             return "decide whether to pause or raise a budget"
         subject = _LOOP_SUBJECT_RE.search(question)
         what = subject["ref"] if subject else project
+        if what and _STALLED_RE.search(question):
+            return f"decide on {what} (it stalled)"
         if what:
             return f"decide on {what} (budget or retries ran out)"
         return "decide what to do: a budget or retry limit ran out"

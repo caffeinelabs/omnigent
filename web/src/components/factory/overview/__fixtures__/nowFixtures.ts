@@ -167,6 +167,7 @@ function serverDecisionText(decision: DecisionView): string | null {
         return "decide whether to pause or raise a budget";
       }
       const what = /\b(T-\d+|PR #\d+)/.exec(question)?.[1] ?? project;
+      if (what && / stalled - what next\?/.test(question)) return `decide on ${what} (it stalled)`;
       return what
         ? `decide on ${what} (budget or retries ran out)`
         : "decide what to do: a budget or retry limit ran out";

@@ -28,7 +28,7 @@ import { TONE_CHIP } from "../factoryFormat";
 import { prPageHref } from "../factoryRoutes";
 import { EmptyState } from "../project/projectParts";
 import { LoopStrip } from "./LoopStrip";
-import { loopLines, prLoops } from "./loopStripModel";
+import { heldText, loopLines, prLoops } from "./loopStripModel";
 
 const DAY_MS = 86_400_000;
 
@@ -47,21 +47,25 @@ const CHIP_TONE: Record<LoopChipView["state"], keyof typeof TONE_CHIP> = {
 export function LoopChips({ chips }: { chips: readonly LoopChipView[] }) {
   return (
     <span className="flex min-w-0 flex-wrap items-center gap-1.5">
-      {chips.map((loop) => (
-        <span
-          key={loop.id}
-          data-testid={`pr-loop-${loop.kind}`}
-          data-state={loop.state}
-          className={cn(
-            "inline-flex h-5 items-center gap-1 rounded-sm px-1.5 font-mono text-xs",
-            TONE_CHIP[CHIP_TONE[loop.state]],
-          )}
-        >
-          {loop.kind} {loop.iteration}
-          {loop.limit != null ? `/${loop.limit}` : ""}
-          {loop.state === "exhausted" ? " ⛔" : loop.state === "converged" ? " ✓" : ""}
-        </span>
-      ))}
+      {chips.map((loop) => {
+        const held = loop.state === "running" ? heldText(loop.held_by) : null;
+        return (
+          <span
+            key={loop.id}
+            data-testid={`pr-loop-${loop.kind}`}
+            data-state={held ? "held" : loop.state}
+            className={cn(
+              "inline-flex h-5 items-center gap-1 rounded-sm px-1.5 font-mono text-xs",
+              TONE_CHIP[held ? "warning" : CHIP_TONE[loop.state]],
+            )}
+          >
+            {loop.kind} {loop.iteration}
+            {loop.limit != null ? `/${loop.limit}` : ""}
+            {loop.state === "exhausted" ? " ⛔" : loop.state === "converged" ? " ✓" : ""}
+            {held ? ` · ${held}` : ""}
+          </span>
+        );
+      })}
     </span>
   );
 }

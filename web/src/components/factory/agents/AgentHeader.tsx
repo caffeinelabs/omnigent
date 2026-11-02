@@ -22,6 +22,7 @@ import {
   projectPageHref,
 } from "../factoryRoutes";
 import { RunbookButtons } from "../alerts/IssueActions";
+import { heldText } from "../loops/loopStripModel";
 import { PresenceFace } from "../shell/FactoryPresence";
 import { LeverGated } from "../shell/viewerCan";
 import { agentState, nowText } from "./fleetModel";
@@ -257,6 +258,16 @@ export function AgentHeader({
                 >
                   attempt {agent.loop.iteration}/{agent.loop.limit}
                   {agent.loop.state === "exhausted" ? " ⛔" : ""}
+                </span>
+              ),
+              agent.loop?.state === "running" && agent.loop.held_by && (
+                <span
+                  key="held"
+                  data-testid="agent-loop-held"
+                  className="text-warning"
+                  title="Not counted as stalled until a person answers"
+                >
+                  {heldText(agent.loop.held_by)}
                 </span>
               ),
               pr && (

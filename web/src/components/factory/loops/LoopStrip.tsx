@@ -3,11 +3,13 @@
  * with its attempts or rounds (`r0 ✗ r1 ✗ r2 ✗`, `#1 3 blocking → #2 ✓`),
  * its state, a budget meter, the last reason, the decision it waits on and
  * the remedies (the loop decision's answers, else Switch vendor and Fresh
- * restart on the task). The PR page, the project's Loops tab and the Agent
- * page's Task & loop tab all draw it.
+ * restart on the task). A running task waiting on a person's answer reads
+ * "waiting on D-n": it is not counted as stalled until it is answered. The
+ * PR page, the project's Loops tab and the Agent page's Task & loop tab all
+ * draw it.
  */
 
-import { useState } from "react";
+import { Fragment, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { RepeatIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -20,13 +22,14 @@ import { InterventionDialog } from "../agents/InterventionDialog";
 import type { InterventionKind, InterventionTarget } from "../agents/interventionModel";
 import { controlErrorMessage } from "../controls/controlModel";
 import { TONE_CHIP, type FactoryTone, formatUsd, shortSha } from "../factoryFormat";
-import { agentPageHref, alertPageHref } from "../factoryRoutes";
+import { agentPageHref, alertPageHref, decisionsPageHref } from "../factoryRoutes";
 import { answerBlockedReason } from "../decisions/DecisionCard";
 import { LeverGated, ReasonGated, useViewer, useViewerCan } from "../shell/viewerCan";
 import { type Attempt, type LoopLine, budgetShare, isBadState, stateText } from "./loopStripModel";
 
 const STATE_TONE: Record<LoopLine["state"], FactoryTone> = {
   running: "active",
+  held: "warning",
   converged: "pass",
   exhausted: "fail",
   thrashing: "fail",
@@ -331,6 +334,27 @@ function LineView({
         {line.lastReason && (
           <span className="min-w-0 text-xs text-muted-foreground">
             last: <span className="break-words text-foreground/80">“{line.lastReason}”</span>
+          </span>
+        )}
+        {line.heldBy && (
+          <span
+            data-testid={`loop-held-${line.loop.kind}`}
+            className="min-w-0 text-xs text-muted-foreground"
+          >
+            Waits for a person to answer{" "}
+            {line.heldBy.refs.map((ref, i) => (
+              <Fragment key={ref}>
+                {i > 0 && ", "}
+                <Link
+                  to={decisionsPageHref(fid, { decision: ref })}
+                  componentId="factory.loop.held"
+                  className="font-mono text-foreground/80 hover:underline"
+                >
+                  {ref}
+                </Link>
+              </Fragment>
+            ))}
+            ; not counted as stalled until then.
           </span>
         )}
         {(decision || isBadState(line.state)) && (

@@ -37,6 +37,12 @@ and the engine never cancels a session on its own.
 Budgets come from :data:`DEFAULT_BUDGETS` through :func:`budget` (the seam the
 factory definition plugs into), then the charter's ``budgets`` and the task's
 own budget.
+
+The implement loop's clock reads more than task events (:mod:`.task_pulse`):
+a blocking question a person owes the task's lead or sessions holds it (shown
+as "waiting on D-n"; the held time is not charged to the wall budget), its
+sessions' activity counts as progress, and after "Keep waiting" only the wall
+budget or the worker dying or failing asks again.
 """
 
 from __future__ import annotations
@@ -66,7 +72,7 @@ from omnigent.factory import (
     STATE_PAUSED,
 )
 from omnigent.factory_gates import DEMO_GATE, GATE_FAIL, GATE_PENDING, READY_GATES
-from omnigent.server.factory import events, tasks
+from omnigent.server.factory import events, task_pulse, tasks
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.stage import changes_requested_on_head, ready_for_human
@@ -666,6 +672,11 @@ def _transition(
     if loop.state == state:
         return loop
     fields: dict[str, Any] = {"state": state, "last_reason": _clip(reason)}
+    if loop.state == "running" and "held_by" in (loop.spent or {}):
+        # It stops waiting on the person's answer with the run it was part of.
+        values = _spent(loop)
+        _track_hold(values, None, int(ctx.now))
+        fields["spent"] = values
     if state in LOOP_ENDED_STATES:
         fields["ended_at"] = int(ctx.now)
     elif loop.ended_at is not None:
@@ -702,7 +713,7 @@ def _note_progress(ctx: Ctx, loop: FactoryLoop, **spent: Any) -> FactoryLoop:
     values["progress_at"] = int(ctx.now)
     row = _update(ctx, loop, spent=values)
     wall_h = float((row.spec or {}).get("wall_h") or 0)
-    if row.state == "stalled" and not (wall_h and ctx.now - row.started_at >= wall_h * 3600):
+    if row.state == "stalled" and not (wall_h and _worked_s(row, ctx.now) >= wall_h * 3600):
         row = _transition(ctx, row, "running", "progress resumed")
         ctx.changes.append(
             Change(
@@ -1695,28 +1706,142 @@ def check_plan(
     return row
 
 
-def check_clock(ctx: Ctx, loop: FactoryLoop, *, paused: bool) -> FactoryLoop:
-    """The wall and no-progress rules of a running implement loop (fake-clock testable)."""
+def _worked_s(loop: FactoryLoop, now: float) -> int:
+    """:returns: The loop's running time, less the time it waited on a person."""
+    return int(now - loop.started_at) - int(_spent(loop).get("held_s") or 0)
+
+
+def _track_hold(values: dict[str, Any], hold: task_pulse.Hold | None, now: int) -> None:
+    """Record the questions the task waits on; when the last is answered, restart the clock."""
+    if hold is not None:
+        values["held_by"] = hold.to_json()
+        values.setdefault("held_at", now)
+    elif "held_by" in values:
+        values.pop("held_by")
+        start = int(values.pop("held_at", None) or now)
+        values["held_s"] = int(values.get("held_s") or 0) + max(0, now - start)
+        values["progress_at"] = now
+
+
+def _kept(loop: FactoryLoop) -> Mapping[str, Any] | None:
+    """:returns: The "Keep waiting" answer on the loop's current try, if any."""
+    kept = _spent(loop).get("kept_waiting")
+    if not isinstance(kept, Mapping) or kept.get("iteration") != loop.iteration:
+        return None
+    return kept
+
+
+def _keeps_waiting(loop: FactoryLoop, pulse: task_pulse.Pulse | None) -> bool:
+    """
+    After "Keep waiting" the no-progress rule rests on this try, until it gets worse.
+
+    Worse: the IC, once seen alive, is gone or its run failed, or the worker
+    reported FAIL or BLOCKED (its try closed) since the answer.
+    """
+    kept = _kept(loop)
+    if kept is None:
+        return False
+    if kept.get("try_open") and not _spent(loop).get("try_open"):
+        return False
+    return not (
+        pulse is not None and kept.get("alive") and pulse.worker in task_pulse.DEAD_WORKERS
+    )
+
+
+def _stall(
+    ctx: Ctx, loop: FactoryLoop, reason: str, watch: task_pulse.Watch | None, **data: Any
+) -> FactoryLoop:
+    """Stall *loop* with what its decision should recommend, and why in one plain line."""
+    values = _spent(loop)
+    kept = _kept(loop)
+    stall: dict[str, Any] = {"at": int(ctx.now), "kind": "wall" if data.get("wall") else "idle"}
+    if watch is not None:
+        try:
+            advice = watch.advise(int(kept["at"]) if kept and kept.get("at") else None)
+        except Exception:  # noqa: BLE001 - the decision still opens, with the old defaults
+            _logger.warning("factory loops: no advice for %s", loop.id, exc_info=True)
+        else:
+            stall.update(recommend=advice.recommend, line=advice.line)
+            data.update(recommend=advice.recommend, why=advice.line)
+    values["stall"] = stall
+    loop = _update(ctx, loop, spent=values)
+    return _transition(ctx, loop, "stalled", reason, **data)
+
+
+def check_clock(
+    ctx: Ctx, loop: FactoryLoop, *, paused: bool, watch: task_pulse.Watch | None = None
+) -> FactoryLoop:
+    """
+    The wall and no-progress rules of a running implement loop (fake-clock testable).
+
+    With the tick's *watch* the clock also reads the task's people: a blocking
+    question a person owes them holds it (that time is not charged to the wall
+    budget, and the no-progress clock restarts once it is answered), its
+    sessions' activity and its lead's turns about it are progress, and after
+    "Keep waiting" only the wall budget, or the try getting worse, stalls it.
+    """
     if loop.kind != "implement" or loop.state != "running" or paused:
         return loop
     spec, values = loop.spec or {}, _spent(loop)
-    wall = int(ctx.now - loop.started_at)
-    if values.get("wall_s") != wall:
-        values["wall_s"] = wall
+    before = dict(values)
+    now = int(ctx.now)
+    values["wall_s"] = now - loop.started_at
+    pulse = watch.pulse if watch is not None else None
+    hold = pulse.held if pulse is not None else None
+    _track_hold(values, hold, now)
+    if pulse is not None and (pulse.active_at or 0) > int(values.get("active_at") or 0):
+        values["active_at"] = pulse.active_at
+    kept = _kept(loop)
+    if kept is not None and pulse is not None and pulse.worker == task_pulse.WORKER_ALIVE:
+        if not kept.get("alive"):
+            values["kept_waiting"] = {**kept, "alive": True}
+    if values != before:
         loop = _update(ctx, loop, spent=values)
+    if hold is not None:
+        return loop
+    worked = _worked_s(loop, now)
     wall_h = float(spec.get("wall_h") or 0)
-    if wall_h and wall >= wall_h * 3600:
-        return _transition(
-            ctx, loop, "stalled", f"running {wall // 3600} h (wall budget {wall_h:g} h)", wall=True
-        )
+    if wall_h and worked >= wall_h * 3600:
+        reason = f"running {worked // 3600} h (wall budget {wall_h:g} h)"
+        return _stall(ctx, loop, reason, watch, wall=True)
     idle_budget = float(spec.get("no_progress_s") or 0)
-    since = int(values.get("progress_at") or loop.started_at)
-    idle = int(ctx.now - since)
-    if idle_budget and idle >= idle_budget:
-        return _transition(
-            ctx, loop, "stalled", f"no progress for {idle // 60} min", no_progress=True
-        )
-    return loop
+    if not idle_budget or _keeps_waiting(loop, pulse):
+        return loop
+    since = max(
+        int(values.get("progress_at") or loop.started_at), int(values.get("active_at") or 0)
+    )
+    if pulse is not None and pulse.working:
+        since = now
+    if now - since < idle_budget:
+        return loop
+    seen = watch.lead_seen(since) if watch is not None else None
+    if seen is not None:
+        loop = _update(ctx, loop, spent={**_spent(loop), "active_at": seen})
+        since = seen
+        if now - since < idle_budget:
+            return loop
+    idle = now - since
+    return _stall(ctx, loop, f"no progress for {idle // 60} min", watch, no_progress=True)
+
+
+def wake(ctx: Ctx, loop: FactoryLoop, watch: task_pulse.Watch) -> FactoryLoop:
+    """
+    A no-progress stall whose task moved again, or now waits on a person, runs again.
+
+    Its open decision then expires and the PL hears the hold is lifted
+    (:func:`.loop_escalation.settle`). A wall stall stays: progress does not
+    give the time back.
+    """
+    stall = _spent(loop).get("stall")
+    if loop.kind != "implement" or loop.state != "stalled" or not isinstance(stall, Mapping):
+        return loop
+    if stall.get("kind") != "idle":
+        return loop
+    pulse = watch.pulse
+    moved = pulse.working or (pulse.active_at or 0) > int(stall.get("at") or 0)
+    if not moved and pulse.held is None:
+        return loop
+    return _note_progress(ctx, loop)
 
 
 # ── Event mapping ──────────────────────────────────────────────
@@ -2082,13 +2207,23 @@ def tick_sync(ctx: Ctx) -> None:
     rows = ctx.store.list_tasks(ctx.factory_id)
     projects = {p.slug: p for p in ctx.store.list_projects(ctx.factory_id)}
     by_task = {norm_id(t.id): t for t in rows}
-    for loop in ctx.store.list_loops(ctx.factory_id, kinds=["implement"], states=["running"]):
+    reader = task_pulse.Reader(ctx.deps, ctx.factory_id, ctx.now)
+    for loop in ctx.store.list_loops(
+        ctx.factory_id, kinds=["implement"], states=["running", "stalled"]
+    ):
         task = by_task.get(norm_id(loop.task_id or ""))
         if task is None or task.state in ("done", "cancelled"):
             continue
-        check_spend(ctx, task)
+        held = root_paused or task.project_slug in paused
+        if loop.state == "running":
+            check_spend(ctx, task)
         current = ctx.store.get_loop(loop.id) or loop
-        check_clock(ctx, current, paused=root_paused or task.project_slug in paused)
+        watch = None if held else _watch(reader, task)
+        if current.state == "stalled":
+            if watch is not None:
+                wake(ctx, current, watch)
+            continue
+        check_clock(ctx, current, paused=held, watch=watch)
     for loop in ctx.store.list_loops(ctx.factory_id, kinds=["claim"], states=list(_WAITING)):
         if not _spent(loop).get("waiting"):
             continue
@@ -2107,6 +2242,15 @@ def tick_sync(ctx: Ctx) -> None:
             [t for t in rows if t.project_slug == slug],
             paused=root_paused or slug in paused,
         )
+
+
+def _watch(reader: task_pulse.Reader, task: FactoryTask) -> task_pulse.Watch | None:
+    """*task*'s pulse, or ``None`` (the clock then reads task events only) when unreadable."""
+    try:
+        return reader.watch(task)
+    except Exception:  # noqa: BLE001 - one unreadable task must not stop the tick
+        _logger.warning("factory loops: no pulse for %s", task.id, exc_info=True)
+        return None
 
 
 # ── Applying changes: events, spans, escalation ────────────────
@@ -2275,6 +2419,13 @@ async def apply(app_state: Any, ctx: Ctx) -> None:
 _SPENT_VIEW: Final = ("attempts", "usd", "wall_s", "per_head", "env_retries")
 
 
+def held_by(loop: FactoryLoop) -> dict[str, Any] | None:
+    """:returns: What a running loop waits on (:class:`LoopHoldView` JSON), else ``None``."""
+    if loop.state != "running":
+        return None
+    return task_pulse.held_view(loop.spent)
+
+
 def loop_chip(loop: FactoryLoop) -> dict[str, Any]:
     """:returns: The :class:`~omnigent.server.factory.schemas.LoopChipView` JSON."""
     return {
@@ -2283,6 +2434,7 @@ def loop_chip(loop: FactoryLoop) -> dict[str, Any]:
         "state": loop.state,
         "iteration": loop.iteration,
         "limit": limit_of(loop),
+        "held_by": held_by(loop),
     }
 
 
@@ -2321,6 +2473,7 @@ def loop_view(
         "last_reason": loop.last_reason,
         "decision_id": loop.decision_id,
         "decision_ref": decision.ref if decision is not None else None,
+        "held_by": held_by(loop),
         "def_version": loop.def_version,
         "started_at": loop.started_at,
         "updated_at": loop.updated_at,
@@ -2518,6 +2671,7 @@ __all__ = [
     "engine_mode",
     "handle_event",
     "head_subject",
+    "held_by",
     "implement_loop",
     "install",
     "limit_of",
@@ -2550,4 +2704,5 @@ __all__ = [
     "tick",
     "tick_sync",
     "wait_words",
+    "wake",
 ]

@@ -148,6 +148,14 @@ export function TaskInspector({
             <span className="font-mono text-warning">{task.waiting_on.join(", ")}</span>
           </Row>
         )}
+        {task.loop?.state === "running" && task.loop.held_by && (
+          <Row label="Answer due">
+            <span data-testid="task-held" className="text-warning">
+              <span className="font-mono">{task.loop.held_by.refs.join(", ")}</span> · not counted
+              as stalled until a person answers
+            </span>
+          </Row>
+        )}
         {task.scope.length > 0 && (
           <Row label="Scope">
             <span className="font-mono text-xs">{task.scope.join(", ")}</span>

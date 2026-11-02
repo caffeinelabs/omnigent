@@ -23,10 +23,31 @@ function loop(kind: LoopView["kind"], patch: Partial<LoopView> = {}): LoopView {
   return { ...round3LoopList().find((l) => l.kind === kind)!, ...patch };
 }
 
+/** T-5's IC is dispatched; its lead waits on two answers from a person (D-22, D-23). */
+function heldLoop(): LoopView {
+  return loop("implement", {
+    id: "impl-held",
+    subject: "task:held",
+    task_id: "0f5e4d3c2b1a49788776655443322110",
+    task_ref: "T-5",
+    pr_id: null,
+    pr_number: null,
+    state: "running",
+    iteration: 1,
+    spent: { attempts: 1, usd: 2.4, wall_s: 5400, per_head: {}, env_retries: 0 },
+    last_verdict: "DISPATCHED",
+    last_reason: "attempt 1 (dispatch)",
+    decision_id: null,
+    decision_ref: null,
+    held_by: { decision_id: null, decision_ref: "D-22", refs: ["D-22", "D-23"], since: null },
+  });
+}
+
 /** One loop in each strip state. */
 function stateLoops(): LoopView[] {
   return [
     loop("implement"),
+    heldLoop(),
     loop("review", {
       id: "rv-thrash",
       state: "thrashing",
@@ -90,7 +111,8 @@ type Story = StoryObj<typeof meta>;
 // ── The strip's states ─────────────────────────────────────────
 
 /**
- * Exhausted (r0..r2 ✗, $11.80/$15, D-31's remedies), thrashing (`#3 ✗ CHANGES · 3
+ * Exhausted (r0..r2 ✗, $11.80/$15, D-31's remedies), waiting on a person (T-5:
+ * `waiting on D-22 +1`, not counted as stalled), thrashing (`#3 ✗ CHANGES · 3
  * blocking`), dry, running, converged.
  */
 export const States: Story = {
@@ -162,3 +184,28 @@ export const ProjectTabEmpty = pageStory("/projects/docs-factory-envs", {
   search: "#loops",
   routes: { [LOOPS_PATH]: { body: { data: [], engine_mode: "assist" } } },
 });
+
+/** db-version's Loops tab while T-5 waits on a person's answers: no stall, no remedies. */
+const waitingRoutes = {
+  [LOOPS_PATH]: {
+    body: {
+      data: [heldLoop(), ...round3LoopList().filter((l) => l.project_slug === "db-version")],
+      engine_mode: "assist",
+    },
+  },
+};
+
+export const ProjectTabWaiting = pageStory("/projects/db-version", {
+  search: "#loops",
+  routes: waitingRoutes,
+});
+
+export const ProjectTabWaitingDark = pageStory("/projects/db-version", {
+  search: "#loops",
+  routes: waitingRoutes,
+  theme: "dark",
+});
+
+export const ProjectTabWaitingMobile = phone(
+  pageStory("/projects/db-version", { search: "#loops", routes: waitingRoutes }),
+);

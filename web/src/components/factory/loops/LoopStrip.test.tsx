@@ -11,11 +11,14 @@ import {
 } from "../agents/__fixtures__/opsFixtures";
 import { round3Snapshot, viewerOf } from "../shell/__fixtures__/shellFixtures";
 import { FactoryViewerProvider } from "../shell/viewerCan";
+import { LoopChips } from "./LoopSections";
 import { LoopStrip, verdictWord } from "./LoopStrip";
 import {
   attemptsOf,
   budgetShare,
   flakeOnLoop,
+  heldText,
+  isBadState,
   loopLines,
   prLoops,
   stateText,
@@ -192,5 +195,87 @@ describe("LoopStrip", () => {
       </QueryClientProvider>,
     );
     expect(screen.getByTestId("loop-remedy-raise")).toBeDisabled();
+  });
+});
+
+/** T-5's IC was dispatched; its lead waits on two questions a person has not answered. */
+function heldLoop(): LoopView {
+  return loop("implement", {
+    id: "impl-held",
+    subject: "task:held",
+    task_ref: "T-5",
+    state: "running",
+    iteration: 1,
+    last_verdict: "DISPATCHED",
+    last_reason: "attempt 1 (dispatch)",
+    decision_id: null,
+    decision_ref: null,
+    held_by: { decision_id: "d22", decision_ref: "D-22", refs: ["D-22", "D-23"], since: 100 },
+  });
+}
+
+describe("a task waiting on a person's answer", () => {
+  it("reads `held`, not running or stalled, and names the answers it waits on", () => {
+    const [line] = loopLines([heldLoop()], []);
+    expect(line!.state).toBe("held");
+    expect(isBadState(line!.state)).toBe(false);
+    expect(stateText(line!)).toBe("waiting on D-22 +1");
+    expect(heldText({ decision_id: null, decision_ref: "D-7", refs: ["D-7"], since: null })).toBe(
+      "waiting on D-7",
+    );
+    // Only a running loop is held: a stall the tick already raised stays a stall.
+    expect(stripState({ ...heldLoop(), state: "stalled" })).toBe("stalled");
+    expect(loopLines([{ ...heldLoop(), state: "stalled" }], [])[0]!.heldBy).toBeNull();
+    // An older server sends no hold.
+    const { held_by: _drop, ...older } = heldLoop();
+    expect(stripState(older)).toBe("running");
+  });
+
+  it("draws the state chip and links each answer it waits on", () => {
+    const client = new QueryClient();
+    render(
+      <QueryClientProvider client={client}>
+        <MemoryRouter>
+          <FactoryViewerProvider viewer={viewerOf("creator")}>
+            <LoopStrip snapshot={snapshot} lines={loopLines([heldLoop()], [])} showSubject />
+          </FactoryViewerProvider>
+        </MemoryRouter>
+      </QueryClientProvider>,
+    );
+    const line = screen.getByTestId("loop-line-implement");
+    expect(line).toHaveAttribute("data-state", "held");
+    expect(within(line).getByTestId("loop-state-implement")).toHaveTextContent(
+      "waiting on D-22 +1",
+    );
+    const held = within(line).getByTestId("loop-held-implement");
+    expect(held).toHaveTextContent(
+      "Waits for a person to answer D-22, D-23; not counted as stalled until then.",
+    );
+    expect(within(held).getByRole("link", { name: "D-23" })).toHaveAttribute(
+      "href",
+      `/factory/${snapshot.factory.id}/decisions?decision=D-23`,
+    );
+    // No remedies: nothing is wrong with the task.
+    expect(within(line).queryByTestId("loop-remedies-implement")).toBeNull();
+  });
+
+  it("says so on the snapshot's loop chips too", () => {
+    render(
+      <LoopChips
+        chips={[
+          {
+            id: "c1",
+            kind: "implement",
+            state: "running",
+            iteration: 1,
+            limit: 3,
+            held_by: heldLoop().held_by,
+          },
+        ]}
+      />,
+    );
+    const chip = screen.getByTestId("pr-loop-implement");
+    expect(chip).toHaveAttribute("data-state", "held");
+    expect(chip).toHaveTextContent("implement 1/3 · waiting on D-22 +1");
   });
 });
