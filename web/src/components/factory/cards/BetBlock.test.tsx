@@ -7,7 +7,7 @@ import type { ProposalView } from "@/lib/factoryApi";
 import { FactoryNowContext } from "../factoryClock";
 import { round3Snapshot, viewerOf } from "../shell/__fixtures__/shellFixtures";
 import { FactoryViewerProvider } from "../shell/viewerCan";
-import { betProposal, requestedFromOpportunity } from "./__fixtures__/betFixtures";
+import { betProposal, requestedFromOpportunity, sampleBet } from "./__fixtures__/betFixtures";
 import { ProposalCard } from "./ProposalCard";
 
 vi.mock("@/lib/identity", () => ({ authenticatedFetch: vi.fn() }));
@@ -42,7 +42,7 @@ describe("a proposal with a bet", () => {
       within(block).getByText("Users can share a draft privately before publishing (sample)"),
     ).toBeTruthy();
     expect(
-      within(block).getByRole("img", { name: "Predicted 1 to 4 pp, not measured yet" }),
+      within(block).getByRole("img", { name: "Predicted +1 to +4 pp, not measured yet" }),
     ).toBeTruthy();
     expect(within(block).getByText("the signal trend, days 7 and 28 after release")).toBeTruthy();
     const against = screen.getByTestId("proposal-case-C-4");
@@ -62,6 +62,35 @@ describe("a proposal with a bet", () => {
     expect(screen.queryByTestId("proposal-edit-C-4")).toBeNull();
     expect(screen.getByTestId("proposal-reject-C-4")).toBeTruthy();
     expect(screen.getByTestId("proposal-case-C-4").dataset.state).toBe("waiting");
+    // Not amber: it waits for the other lead, not for a person.
+    expect(screen.getByTestId("proposal-card-C-4").className).not.toMatch(/border-warning/);
+    expect(screen.getByTestId("proposal-state-C-4").className).not.toMatch(/warning/);
+    expect(screen.queryByText(/^If you approve/)).toBeNull();
+  });
+
+  it("a requested bet does not wait for a case against", () => {
+    renderCard(betProposal("requested", NOW));
+
+    const against = screen.getByTestId("proposal-case-C-4");
+    expect(against.dataset.state).toBe("later");
+    expect(within(against).getByText(/It does not block approval/)).toBeTruthy();
+    expect(screen.getByTestId("proposal-apply-C-4")).toBeTruthy();
+    expect(screen.getByTestId("proposal-card-C-4").className).toMatch(/border-warning/);
+    expect(screen.getByText(/^If you approve/)).toBeTruthy();
+  });
+
+  it("draws a predicted drop below zero", () => {
+    const drop = {
+      ...betProposal("waiting", NOW),
+      bet: sampleBet({ expected: { direction: "down", low: -4, high: -1, unit: "pp" } }),
+    };
+    renderCard(drop);
+
+    const block = screen.getByTestId("proposal-bet-C-4");
+    expect(
+      within(block).getByRole("img", { name: "Predicted -4 to -1 pp, not measured yet" }),
+    ).toBeTruthy();
+    expect(within(block).getByText(/^expects down -4 to -1 pp/)).toBeTruthy();
   });
 
   it("says when nobody wrote a case against", () => {
@@ -89,7 +118,7 @@ describe("a proposal with a bet", () => {
     expect(screen.queryByTestId("proposal-why-C-4")).toBeNull();
   });
 
-  it.each(["cosigning", "waiting", "alone", "applied"] as const)(
+  it.each(["cosigning", "waiting", "requested", "alone", "applied"] as const)(
     "%s has no axe violations",
     async (state) => {
       const { container } = renderCard(betProposal(state, NOW));

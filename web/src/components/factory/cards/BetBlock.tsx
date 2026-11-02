@@ -19,8 +19,9 @@ import {
   expectedText,
   flagText,
   killText,
-  numberText,
   readoutText,
+  signedText,
+  waitsForCosign,
 } from "./betModel";
 
 const EYEBROW = "text-xs font-medium tracking-wide text-muted-foreground uppercase";
@@ -77,7 +78,7 @@ export function BetBlock({ proposal, snapshot = null, className }: BetBlockProps
               low={bet.expected.low}
               high={bet.expected.high}
               unit={bet.expected.unit}
-              format={numberText}
+              format={signedText}
             />
             <p className="text-xs text-muted-foreground">
               {expectedText(bet.expected)} · not measured yet
@@ -118,11 +119,13 @@ export function BetBlock({ proposal, snapshot = null, className }: BetBlockProps
           )}
         </div>
       </div>
-      <p className="text-xs text-muted-foreground">
-        {proposal.status === "applied"
-          ? "Frozen into the charter of each new project when it was applied."
-          : "If you approve, the bet is frozen into the charter of each new project: the metric, the range and the readout days cannot move after you have seen data."}
-      </p>
+      {!waitsForCosign(proposal) && (
+        <p className="text-xs text-muted-foreground">
+          {proposal.status === "applied"
+            ? "Frozen into the charter of each new project when it was applied."
+            : "If you approve, the bet is frozen into the charter of each new project: the metric, the range and the readout days cannot move after you have seen data."}
+        </p>
+      )}
     </section>
   );
 }

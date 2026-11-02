@@ -190,6 +190,7 @@ _FACTORY_ERROR_CODES: Final = frozenset(
         "metric_not_measurable",
         "quote_unverified",
         "quote_in_charter",
+        "discovery_off",
         "daily_quota",
         "path_busy",
         "no_change",
@@ -2173,11 +2174,11 @@ async def _learning(
         return await _passthrough(
             server_client, "GET", "/v1/factory/agent/insights", tool_name=tool, params=params
         )
-    cosign_bet = args.get("kind") == "projects" and args.get("op") == "cosign"
+    cosign_bet = args.get("kind") == "projects" and args.get("op") in ("cosign", "send_back")
     if tool == SYS_FACTORY_PROPOSE and args.get("kind") not in _PROPOSE_KINDS and not cosign_bet:
         return _error(
             f"{tool} 'kind' must be one of {list(_PROPOSE_KINDS)} "
-            "('projects' only with op='cosign')"
+            "('projects' only with op='cosign' or 'send_back')"
         )
     if tool == SYS_FACTORY_RETRO and not (
         isinstance(args.get("target"), str) and args["target"].strip()

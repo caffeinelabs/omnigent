@@ -114,8 +114,8 @@ def test_upgrade_skips_columns_that_already_exist(engine: sa.Engine) -> None:
         engine.dispose()
 
 
-def test_revision_is_the_single_head() -> None:
+def test_revision_chains_off_the_round3_revision() -> None:
+    # test_migration_connections.test_single_alembic_head guards the single head.
     script = ScriptDirectory.from_config(_build_alembic_config("sqlite://"))
     revision = script.get_revision(_REVISION)
     assert revision is not None and revision.down_revision == _PREVIOUS
-    assert script.get_heads() == [_REVISION]

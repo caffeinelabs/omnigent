@@ -753,7 +753,7 @@ export type BetKind = "outcome" | "test" | "enabler" | "hunch";
 export type BetMethod =
   "controlled" | "before_after" | "adoption" | "signal_trend" | "human_verdict";
 
-/** A bet's predicted effect, e.g. up 1 to 4 `pp`. */
+/** A bet's predicted effect as a signed change, e.g. up +1 to +4 `pp`, down -4 to -1 `pp`. */
 export interface BetExpectedView {
   direction: "up" | "down";
   low: number;
@@ -828,6 +828,8 @@ export interface WhyView {
   plan_version?: number | null;
   frozen_at?: number | null;
   frozen_by?: string | null;
+  /** The project this one was split from, whose bet it inherited. */
+  split_from?: string | null;
 }
 
 /**

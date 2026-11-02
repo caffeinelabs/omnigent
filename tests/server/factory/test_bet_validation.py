@@ -14,18 +14,20 @@ import pytest_asyncio
 
 from omnigent.server.factory import bets
 from omnigent.server.factory.control import CockpitError
+from omnigent.server.factory.definition_blocks import DISCOVERY_ENV
 from tests.server.factory.bets_helpers import (
     FLAGS,
     GUARDRAIL,
     FakeLedger,
     bet,
+    bet_cockpit,
+    cosign,
     file_bet,
     human_chat,
     set_strategy,
 )
 from tests.server.factory.cockpit_helpers import Cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld
-from tests.server.factory.definition_helpers import definition_cockpit
 from tests.server.factory.projects_helpers import project, propose
 
 
@@ -33,8 +35,7 @@ from tests.server.factory.projects_helpers import project, propose
 async def cockpit(
     world: FactoryWorld, db_uri: str, monkeypatch: pytest.MonkeyPatch
 ) -> AsyncIterator[Cockpit]:
-    async for value in definition_cockpit(world, db_uri, monkeypatch):
-        set_strategy(value)
+    async for value in bet_cockpit(world, db_uri, monkeypatch):
         yield value
 
 
@@ -196,6 +197,12 @@ async def test_an_incomplete_plan_names_what_is_missing(cockpit: Cockpit) -> Non
         ({"outcome": "x" * 141}, "bet.outcome"),
         ({"kind": "moonshot"}, "bet.kind"),
         ({"goal": "goal-1"}, "bet.goal"),
+        # low and high are the signed change: a rise ends above 0, a drop starts below it.
+        ({"expected": {"direction": "up", "low": -4, "high": -1, "unit": "pp"}}, "bet.expected"),
+        ({"expected": {"direction": "down", "low": 1, "high": 4, "unit": "pp"}}, "bet.expected"),
+        # The flag's convention and provider are the owner's, never the lead's.
+        ({"flag": {"key": "a", "convention": "mine (sample)"}}, "bet.flag.convention"),
+        ({"flag": {"key": "a", "provider": "mine (sample)"}}, "bet.flag.provider"),
     ],
 )
 async def test_bad_bet_fields_name_their_path(cockpit: Cockpit, over: dict, where: str) -> None:
@@ -203,6 +210,18 @@ async def test_bad_bet_fields_name_their_path(cockpit: Cockpit, over: dict, wher
 
     assert (resp.status_code, error_code(resp)) == (400, "invalid_body")
     assert resp.json()["field"] == where
+
+
+async def test_a_drop_is_a_negative_range(cockpit: Cockpit) -> None:
+    down = bet(expected={"direction": "down", "low": -4, "high": -1, "unit": "pp"})
+
+    resp = await file_bet(cockpit, bet=down)
+
+    assert resp.status_code == 200, resp.text
+    stored = _row(cockpit).bet
+    assert stored is not None
+    assert bets.expected_text(stored["expected"]) == "down -4 to -1 pp"
+    assert bets.expected_text(bet()["expected"]) == "up +1 to +4 pp"
 
 
 async def test_a_bet_starts_a_project(cockpit: Cockpit) -> None:
@@ -271,6 +290,97 @@ async def test_charter_fields_carry_no_user_quotes(cockpit: Cockpit) -> None:
     assert goal.json()["field"] == "changes[0].project.goal"
     # A short quoted label is not someone's words.
     assert short.status_code == 200, short.text
+
+
+@pytest.mark.parametrize(
+    ("over", "where"),
+    [
+        ({"metric": 'signal_trend "users never find the export"'}, "bet.metric"),
+        (
+            {"kill": {"state": "no lift (sample)", "date": 'when "we stop losing drafts" holds'}},
+            "bet.kill.date",
+        ),
+        (
+            {"expected": {"direction": "up", "low": 1, "high": 2, "unit": '"a b c d"'}},
+            "bet.expected.unit",
+        ),
+    ],
+)
+async def test_quotes_in_charter_only_bet_fields_are_refused(
+    cockpit: Cockpit, ledger: FakeLedger, over: dict, where: str
+) -> None:
+    # Even words a signal holds stay out of these: nothing strips them later.
+    ledger.excerpts["S-3"] = "users never find the export; we stop losing drafts; a b c d"
+
+    resp = await file_bet(cockpit, bet=bet(**over))
+
+    assert (resp.status_code, error_code(resp)) == (422, "quote_in_charter")
+    assert resp.json()["field"] == where
+    assert cockpit.store.list_proposals(cockpit.fid) == []
+
+
+async def test_the_rationale_of_a_bet_quotes_only_verified_words(
+    cockpit: Cockpit, ledger: FakeLedger
+) -> None:
+    ledger.excerpts["S-3"] = "honestly I lose my drafts every single day (sample)"
+    unverified = await file_bet(
+        cockpit, rationale='One user said "nobody here uses drafts at all".'
+    )
+    verified = await file_bet(
+        cockpit, rationale='Users say "I lose my drafts every single day" (S-3).'
+    )
+    plain = await propose(
+        cockpit,
+        {"op": "create", "project": project("plain")},
+        rationale='The owner said "ship the export before the trip" (sample).',
+    )
+
+    assert (unverified.status_code, error_code(unverified)) == (422, "quote_unverified")
+    assert unverified.json()["field"] == "rationale"
+    assert cockpit.events("bet.quote_refused")
+    assert verified.status_code == 200, verified.text
+    # Work without a bet or an opportunity keeps today's freedom.
+    assert plain.status_code == 200, plain.text
+
+
+# ── Dark while discovery is off ────────────────────────────────
+
+
+@pytest.mark.parametrize("off", ["env", "flag"])
+async def test_bets_stay_dark_while_discovery_is_off(
+    cockpit: Cockpit, ledger: FakeLedger, monkeypatch: pytest.MonkeyPatch, off: str
+) -> None:
+    ledger.add("O-4", status="idea")
+    if off == "env":
+        monkeypatch.delenv(DISCOVERY_ENV)
+    else:
+        set_strategy(cockpit, discovery=False)
+
+    filed = await file_bet(cockpit)
+    requested = await file_bet(cockpit, opportunity="O-4", bet=None, reply_to=human_chat(cockpit))
+    co = await cosign(cockpit)
+    back = await cosign(cockpit, op="send_back")
+    declined = await cockpit.client.post(
+        "/v1/factory/agent/proposals",
+        json={
+            "from_session_id": cockpit.world.id("lead_a"),
+            "kind": "projects",
+            "op": "decline",
+            "opportunity": "O-4",
+            "reason": "off strategy (sample)",
+        },
+        headers={"X-Test-User": "alice"},
+    )
+    plain = await propose(cockpit, {"op": "create", "project": project("plain")})
+
+    for resp in (filed, requested, co, back, declined):
+        assert (resp.status_code, error_code(resp)) == (404, "discovery_off"), resp.text
+    assert cockpit.events("bet.filed") == [] and cockpit.events("bet.declined") == []
+    assert cockpit.mailer.texts_to(cockpit.world.id("lead_b")) == []
+    # A plain create is unchanged: no bet, no co-sign, no wait.
+    assert plain.status_code == 200, plain.text
+    row = _row(cockpit)
+    assert row.status != "awaiting_cosign" and row.bet is None
 
 
 async def test_work_without_a_bet_keeps_its_quotes_out_of_the_outcome(

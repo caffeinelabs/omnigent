@@ -894,10 +894,11 @@ class SysFactoryProjectTool(Tool):
             "on every project; a project lead may update, split or cancel its own project. "
             "Split and merge move PRs only through pr_map ({'<PR number>': '<slug>'}). Call "
             "it without arguments to list the projects; withdraw='C-4' takes back a pending "
-            "proposal of yours. Work from an opportunity carries opportunity='O-<n>' and a "
-            "bet (its plan is frozen into each new charter); a bet you file on your own waits "
-            "for the other lead's case against before a person sees it. op='decline' with "
-            "opportunity and reason records why you do not plan it."
+            "proposal of yours. While discovery is on (else 404 discovery_off): work from an "
+            "opportunity carries opportunity='O-<n>' and a bet (its plan is frozen into each "
+            "new charter); a bet you file on your own waits for the other lead's case against "
+            "before a person can approve it. op='decline' with opportunity and reason records "
+            "why you do not plan it."
         )
 
     def get_schema(self) -> dict[str, Any]:
@@ -1214,9 +1215,10 @@ class SysFactoryProposeTool(Tool):
             "op='cosign', id='C-<n>' (never your own); B (rules, money, engine, autonomy) "
             "waits for an owner. Guardrails, gates and metric definitions are Tier 0: "
             "refused (422 tier0). A project lead proposes rules for its own project only. "
-            "At most 2 proposals per day. Co-sign the other lead's bet with op='cosign', "
-            "kind='projects', id='C-<n>' and case_against (up to three lines: the strongest "
-            "reasons it is wrong)."
+            "At most 2 proposals per day. While discovery is on, co-sign the other lead's bet "
+            "with op='cosign', kind='projects', id='C-<n>' and case_against (up to three "
+            "lines: the strongest reasons it is wrong), or return it with op='send_back' and "
+            "up to three lines why it should not reach a person."
         )
 
     def get_schema(self) -> dict[str, Any]:
@@ -1252,19 +1254,23 @@ class SysFactoryProposeTool(Tool):
                     "kind": {
                         "type": "string",
                         "enum": ["tuning", "rules", "code", "projects"],
-                        "description": "projects: only to co-sign a bet (op='cosign').",
+                        "description": "projects: only to co-sign or send back a bet.",
                     },
                     "op": {
                         "type": "string",
-                        "enum": ["propose", "cosign", "withdraw"],
+                        "enum": ["propose", "cosign", "withdraw", "send_back"],
                         "default": "propose",
+                        "description": "send_back: only a bet (kind='projects').",
                     },
-                    "id": {"type": "string", "description": "cosign/withdraw: e.g. 'C-14'."},
+                    "id": {
+                        "type": "string",
+                        "description": "cosign/withdraw/send_back: e.g. 'C-14'.",
+                    },
                     "case_against": {
                         "type": "array",
                         "items": {"type": "string", "maxLength": 300},
                         "maxItems": 3,
-                        "description": "cosign a bet: up to three lines against it.",
+                        "description": "cosign or send_back a bet: up to three lines against it.",
                     },
                     "changes": {"type": "array", "items": change, "maxItems": PROPOSE_CHANGES_MAX},
                     "rule": {

@@ -36,12 +36,13 @@ const CASE_AGAINST = [
   "A private link may only move the problem to the share step (sample).",
 ];
 
-export type BetState = "cosigning" | "waiting" | "alone" | "applied";
+export type BetState = "cosigning" | "waiting" | "requested" | "alone" | "applied";
 
 /**
  * C-4 carrying a bet: `cosigning` waits for Sentinel's case against;
- * `waiting` is co-signed and waits for a person; `alone` had no other lead to
- * write one; `applied` is applied with Undo.
+ * `waiting` is co-signed and waits for a person; `requested` is a bet a
+ * person asked for, so it did not wait and Sentinel may still write lines;
+ * `alone` had no other lead to write one; `applied` is applied with Undo.
  */
 /** One new project, product-neutral, as a bet's proposal creates it. */
 const DRAFT_SHARE = {
@@ -86,6 +87,8 @@ export function betProposal(state: BetState, nowS = ROOM_NOW_S): ProposalView {
     case "waiting":
     case "applied":
       return { ...withBet, case_against: CASE_AGAINST, cosigned_by: SENTINEL_ID };
+    case "requested":
+      return { ...withBet, on_behalf_of: "owner@example.org" };
     case "alone":
       return {
         ...withBet,

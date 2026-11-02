@@ -13,17 +13,16 @@ import httpx
 import pytest
 import pytest_asyncio
 
-from tests.server.factory.bets_helpers import FakeLedger
+from tests.server.factory.bets_helpers import FakeLedger, bet_cockpit
 from tests.server.factory.cockpit_helpers import Cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld
-from tests.server.factory.projects_helpers import header_cockpit
 
 
 @pytest_asyncio.fixture()
 async def cockpit(
     world: FactoryWorld, db_uri: str, monkeypatch: pytest.MonkeyPatch
 ) -> AsyncIterator[Cockpit]:
-    async for value in header_cockpit(world, db_uri, monkeypatch):
+    async for value in bet_cockpit(world, db_uri, monkeypatch):
         yield value
 
 
@@ -91,6 +90,27 @@ async def test_a_decline_needs_a_known_opportunity_and_a_reason(
     assert (pl.status_code, error_code(pl)) == (403, "not_allowed")
     # Either top-level lead may decline; Atlas is the one that plans.
     assert sentinel.status_code == 200, sentinel.text
+    assert len(ledger.declined) == 1
+
+
+async def test_a_decline_reason_quotes_only_verified_words(
+    cockpit: Cockpit, ledger: FakeLedger
+) -> None:
+    ledger.add("O-12")
+    ledger.excerpts["S-4"] = "honestly we never share drafts with anyone (sample)"
+
+    unverified = await _decline(
+        cockpit, opportunity="O-12", reason='A user wrote "I never want this to go live" so skip'
+    )
+    verified = await _decline(
+        cockpit, opportunity="O-12", reason='Users say "we never share drafts with anyone" (S-4)'
+    )
+
+    assert (unverified.status_code, error_code(unverified)) == (422, "quote_unverified")
+    assert unverified.json()["field"] == "reason"
+    [logged] = cockpit.events("bet.quote_refused")
+    assert logged.data["field"] == "reason"
+    assert verified.status_code == 200, verified.text
     assert len(ledger.declined) == 1
 
 

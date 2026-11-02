@@ -834,7 +834,10 @@ class CharterView(_View):
 
 
 class BetExpectedView(_View):
-    """A bet's predicted effect, e.g. up 0.01 to 0.04 ``share``."""
+    """
+    A bet's predicted effect as a signed change, e.g. up +0.01 to +0.04
+    ``share`` or down -4 to -1 ``pp``.
+    """
 
     direction: Literal["up", "down"]
     low: float
@@ -898,6 +901,7 @@ class WhyView(_View):
 
     :param proposal: The applied proposal, e.g. ``"C-31"``.
     :param plan_version: The measurement plan's version (1 until a plan is amended).
+    :param split_from: The project this one was split from, whose bet it inherited.
     """
 
     proposal: str | None = None
@@ -916,6 +920,7 @@ class WhyView(_View):
     plan_version: int | None = None
     frozen_at: int | None = None
     frozen_by: str | None = None
+    split_from: str | None = None
 
 
 class ProvisioningView(_View):

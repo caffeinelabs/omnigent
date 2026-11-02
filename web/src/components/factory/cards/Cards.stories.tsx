@@ -18,7 +18,7 @@ import {
 import type { RefSources } from "../room/roomRefs";
 import { round3People, round3Snapshot } from "../shell/__fixtures__/shellFixtures";
 import { FactoryViewerProvider } from "../shell/viewerCan";
-import { betProposal, requestedFromOpportunity } from "./__fixtures__/betFixtures";
+import { betProposal, requestedFromOpportunity, sampleBet } from "./__fixtures__/betFixtures";
 import { ProposalCard } from "./ProposalCard";
 import { RoomCard } from "./RoomCard";
 import { RoomCardContext, type RoomCardData } from "./RoomCardContext";
@@ -360,6 +360,37 @@ export const ProposalTrial = proposalStory(roomProposals().find((p) => p.ref ===
 
 /** Atlas filed it on its own: it waits for Sentinel's case against; nobody applies it yet. */
 export const ProposalBetCosigning = proposalStory(betProposal("cosigning"));
+
+export const ProposalBetCosigningDark = proposalStory(betProposal("cosigning"), {
+  theme: "dark",
+});
+
+export const ProposalBetCosigningPhone = proposalStory(betProposal("cosigning"), { width: 358 });
+
+/** A person asked for it: it did not wait, and Sentinel may still add lines (not blocking). */
+export const ProposalBetRequested = proposalStory(betProposal("requested"));
+
+/** A predicted drop: the band sits below zero and reads "-4 to -1 pp" (sample). */
+export const ProposalBetDrop = proposalStory({
+  ...betProposal("waiting"),
+  bet: sampleBet({
+    outcome: "Fewer users abandon a half-written draft (sample)",
+    metric: "draft_abandon_rate (sample)",
+    expected: { direction: "down", low: -4, high: -1, unit: "pp" },
+  }),
+});
+
+export const ProposalBetDropDark = proposalStory(
+  {
+    ...betProposal("waiting"),
+    bet: sampleBet({
+      outcome: "Fewer users abandon a half-written draft (sample)",
+      metric: "draft_abandon_rate (sample)",
+      expected: { direction: "down", low: -4, high: -1, unit: "pp" },
+    }),
+  },
+  { theme: "dark" },
+);
 
 /** Co-signed: the bet beside Sentinel's three lines against it, waiting for a person. */
 export const ProposalBetWithCaseAgainst = proposalStory(betProposal("waiting"));

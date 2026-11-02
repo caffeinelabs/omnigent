@@ -19,14 +19,13 @@ from omnigent.stores.factory_store import now_s
 from tests.server.factory.bets_helpers import (
     FakeLedger,
     bet,
+    bet_cockpit,
     cosign,
     file_bet,
     human_chat,
-    set_strategy,
 )
 from tests.server.factory.cockpit_helpers import Cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld
-from tests.server.factory.definition_helpers import definition_cockpit
 from tests.server.factory.projects_helpers import REPO, project, propose
 
 
@@ -34,8 +33,7 @@ from tests.server.factory.projects_helpers import REPO, project, propose
 async def cockpit(
     world: FactoryWorld, db_uri: str, monkeypatch: pytest.MonkeyPatch
 ) -> AsyncIterator[Cockpit]:
-    async for value in definition_cockpit(world, db_uri, monkeypatch):
-        set_strategy(value)
+    async for value in bet_cockpit(world, db_uri, monkeypatch):
         yield value
 
 
@@ -65,6 +63,7 @@ async def test_an_own_bet_waits_for_the_other_leads_case_against(cockpit: Cockpi
     assert "[Factory proposal · C-1 · co-sign requested by Atlas]" in mail
     assert "Enabler bet under G-1" in mail
     assert 'op="cosign", kind="projects", id="C-1"' in mail
+    assert 'op="send_back"' in mail
     assert "no person sees it before you co-sign" in mail
     # A person cannot apply it before the case against exists.
     applied = await cockpit.post(_url(cockpit, "C-1", "apply"))
@@ -153,6 +152,120 @@ async def test_a_person_may_reject_a_bet_still_waiting(cockpit: Cockpit) -> None
     late = await cosign(cockpit)
     assert (late.status_code, error_code(late)) == (409, "proposal_not_pending")
     assert any("rejected by" in t for t in cockpit.mailer.texts_to(cockpit.fid))
+
+
+async def test_a_reject_racing_a_cosign_loses(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await file_bet(cockpit)
+    stale = _row(cockpit)
+    await cosign(cockpit)
+    # The person's page still read the bet as waiting when the co-sign opened its decision.
+    real = proposals.find_proposal
+    monkeypatch.setattr(proposals, "find_proposal", lambda *_a, **_k: stale)
+
+    rejected = await cockpit.post(_url(cockpit, "C-1", "reject"), {"note": "late (sample)"})
+
+    monkeypatch.setattr(proposals, "find_proposal", real)
+    assert (rejected.status_code, error_code(rejected)) == (409, "proposal_not_pending")
+    row = _row(cockpit)
+    assert row.status == "pending"
+    decision = cockpit.store.get_decision(row.decision_id)
+    assert decision is not None and decision.status == "open"
+
+
+async def test_a_cosign_overtaken_while_its_decision_opens_closes_it(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await file_bet(cockpit)
+    real = proposals._mirror
+
+    async def mirror_then_reject(app_state, root, row, plan, author):  # type: ignore[no-untyped-def]
+        decision = await real(app_state, root, row, plan, author)
+        cockpit.store.update_proposal(row.id, status="rejected")
+        return decision
+
+    monkeypatch.setattr(proposals, "_mirror", mirror_then_reject)
+
+    resp = await cosign(cockpit)
+
+    assert (resp.status_code, error_code(resp)) == (409, "proposal_not_pending")
+    row = _row(cockpit)
+    assert row.status == "rejected" and row.decision_id
+    decision = cockpit.store.get_decision(row.decision_id)
+    assert decision is not None and decision.status == "withdrawn"
+
+
+async def test_a_cosigned_bet_expires_72_h_after_the_cosign(cockpit: Cockpit) -> None:
+    await file_bet(cockpit)
+    await cosign(cockpit)
+    row = _row(cockpit)
+    late = row.created_at + 70 * 3600
+    assert (row.result or {}).get("cosigned_at")
+    cockpit.store.update_proposal(row.id, result={**(row.result or {}), "cosigned_at": late})
+
+    early = await proposals.expire_due(
+        cockpit.app.state, cockpit.fid, now=row.created_at + proposals.PROPOSAL_EXPIRY_S + 1
+    )
+    due = await proposals.expire_due(
+        cockpit.app.state, cockpit.fid, now=late + proposals.PROPOSAL_EXPIRY_S + 1
+    )
+
+    assert (early, due) == ([], ["C-1"])
+    assert _row(cockpit).status == "expired"
+    # The co-signer hears it too, not only the proposer.
+    sentinel = cockpit.mailer.texts_to(cockpit.world.id("lead_b"))
+    assert any("C-1 expired" in t for t in sentinel)
+
+
+async def test_the_other_lead_may_send_a_waiting_bet_back(cockpit: Cockpit) -> None:
+    await file_bet(cockpit)
+    lines = ["One thread carries all of it (sample).", "No guardrail on returning users (sample)."]
+
+    own = await cosign(cockpit, key="lead_a", op="send_back")
+    resp = await cosign(cockpit, op="send_back", case_against=lines)
+
+    assert (own.status_code, error_code(own)) == (403, "self_cosign")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "rejected"
+    row = _row(cockpit)
+    assert row.status == "rejected" and row.decision_id is None
+    assert row.decided_by == cockpit.world.id("lead_b")
+    assert row.result is not None
+    assert row.result["note"] == " · ".join(lines)
+    assert row.result["sent_back_by"] == cockpit.world.id("lead_b")
+    [event] = cockpit.events("bet.sent_back")
+    assert event.data["lines"] == lines
+    [told] = cockpit.mailer.texts_to(cockpit.fid)
+    assert told.startswith("[Factory proposal · C-1 sent back by Lead B · Sentinel]")
+    assert "- No guardrail on returning users (sample)." in told
+    again = await cosign(cockpit)
+    assert (again.status_code, error_code(again)) == (409, "proposal_not_pending")
+
+
+async def test_only_a_waiting_bet_goes_back(cockpit: Cockpit) -> None:
+    await file_bet(cockpit)
+    await cosign(cockpit)
+    asked = await file_bet(
+        cockpit,
+        {"op": "create", "project": project("asked")},
+        reply_to=human_chat(cockpit),
+    )
+    assert asked.status_code == 200, asked.text
+
+    cosigned = await cosign(cockpit, op="send_back")
+    requested = await cosign(cockpit, "C-2", op="send_back")
+    quoted = await cosign(
+        cockpit,
+        "C-2",
+        op="send_back",
+        case_against=['A user wrote "drafts are never needed here"'],
+    )
+
+    assert (cosigned.status_code, error_code(cosigned)) == (409, "proposal_not_pending")
+    assert (requested.status_code, error_code(requested)) == (409, "proposal_not_pending")
+    assert (quoted.status_code, error_code(quoted)) == (422, "quote_unverified")
+    assert _row(cockpit).status == "pending"
 
 
 async def test_a_requested_bet_does_not_wait(cockpit: Cockpit) -> None:

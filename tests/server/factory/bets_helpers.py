@@ -2,22 +2,27 @@
 
 The seeded factory has Atlas (``lead_a``, the root) and Sentinel (``lead_b``);
 Atlas files bets with ``sys_factory_project`` and Sentinel co-signs them with
-``sys_factory_propose(op="cosign", kind="projects")``. Opportunities live in the
-discovery ledger, which the tests stand in for with :class:`FakeLedger`.
-Every text is sample data.
+``sys_factory_propose(op="cosign", kind="projects")``. Bets need discovery on
+(the server env and ``discovery.enabled``): :func:`bet_cockpit` turns both on.
+Opportunities live in the discovery ledger, which the tests stand in for with
+:class:`FakeLedger`. Every text is sample data.
 """
 
 from __future__ import annotations
 
 import copy
-from collections.abc import Sequence
+from collections.abc import AsyncIterator, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+import pytest
 
 from omnigent.server.factory import bets, definition
+from omnigent.server.factory.definition_blocks import DISCOVERY_ENV
 from tests.server.factory.cockpit_helpers import Cockpit
+from tests.server.factory.conftest import FactoryWorld
+from tests.server.factory.definition_helpers import definition_cockpit
 from tests.server.factory.projects_helpers import project
 
 GOAL = {
@@ -54,8 +59,11 @@ def bet(**over: Any) -> dict[str, Any]:
     return out
 
 
-def set_strategy(cockpit: Cockpit, *, goals: Sequence[dict[str, Any]] = (GOAL,)) -> None:
-    """Give the factory a goal, a strategy guardrail and the product's flag convention."""
+def set_strategy(
+    cockpit: Cockpit, *, goals: Sequence[dict[str, Any]] = (GOAL,), discovery: bool = True
+) -> None:
+    """Give the factory a goal, a strategy guardrail, the product's flag convention and
+    ``discovery.enabled`` (the server env is :func:`bet_cockpit`'s)."""
     definition.set_values(
         cockpit.deps,
         cockpit.fid,
@@ -63,10 +71,21 @@ def set_strategy(cockpit: Cockpit, *, goals: Sequence[dict[str, Any]] = (GOAL,))
             "strategy.goals": [dict(g) for g in goals],
             "strategy.guardrails": [GUARDRAIL],
             "product.delivery.flags": dict(FLAGS),
+            "discovery.enabled": discovery,
         },
         created_by="alice",
     )
     definition.invalidate(cockpit.fid)
+
+
+async def bet_cockpit(
+    world: FactoryWorld, db_uri: str, monkeypatch: pytest.MonkeyPatch
+) -> AsyncIterator[Cockpit]:
+    """The definition cockpit with discovery on and :func:`set_strategy` applied."""
+    monkeypatch.setenv(DISCOVERY_ENV, "1")
+    async for value in definition_cockpit(world, db_uri, monkeypatch):
+        set_strategy(value)
+        yield value
 
 
 async def file_bet(
@@ -161,6 +180,7 @@ __all__ = [
     "GUARDRAIL",
     "FakeLedger",
     "bet",
+    "bet_cockpit",
     "cosign",
     "file_bet",
     "human_chat",

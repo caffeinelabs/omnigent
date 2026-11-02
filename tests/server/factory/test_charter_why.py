@@ -9,6 +9,7 @@ user quotes.
 from __future__ import annotations
 
 from collections.abc import AsyncIterator, Iterator
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
@@ -22,15 +23,14 @@ from tests.server.factory.bets_helpers import (
     GUARDRAIL,
     FakeLedger,
     bet,
+    bet_cockpit,
     cosign,
     file_bet,
     human_chat,
-    set_strategy,
 )
 from tests.server.factory.cockpit_helpers import Cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld
-from tests.server.factory.definition_helpers import definition_cockpit
-from tests.server.factory.projects_helpers import REPO, project
+from tests.server.factory.projects_helpers import REPO, project, propose
 
 _WHY = {
     "proposal": "C-31",
@@ -68,8 +68,7 @@ def _project(charter: dict) -> FactoryProject:
 async def cockpit(
     world: FactoryWorld, db_uri: str, monkeypatch: pytest.MonkeyPatch
 ) -> AsyncIterator[Cockpit]:
-    async for value in definition_cockpit(world, db_uri, monkeypatch):
-        set_strategy(value)
+    async for value in bet_cockpit(world, db_uri, monkeypatch):
         yield value
 
 
@@ -107,7 +106,7 @@ def test_the_charter_prints_the_outcome_and_the_frozen_why() -> None:
         "Why: outcome bet C-31 · from O-12 · under G-1 (frozen when approved; the plan "
         "below does not change)",
         "Hypothesis: New users publish more once a draft can be shared first (S-1, S-2).",
-        "Metric: first_week_success · expected up 0.01 to 0.04 share · measured by "
+        "Metric: first_week_success · expected up +0.01 to +0.04 share · measured by "
         "before_after on days 7, 28 after release · guardrails: support load stays flat "
         "(sample)",
         "Kill if: lift under 0.5 pp (sample) (28 days after release)",
@@ -205,6 +204,52 @@ async def test_applying_a_bet_freezes_it_into_each_new_charter(
     assert "Flag: ship behind funnel-events, off by default" in text
 
 
+async def test_no_verified_quote_reaches_the_charter_from_any_field(
+    cockpit: Cockpit, ledger: FakeLedger
+) -> None:
+    said = "I never want this to go live before my cofounder sees it"
+    ledger.excerpts["S-3"] = f"honestly {said} (sample)"
+    quoted = bet(
+        kill={"state": f'users still say "{said}" (S-3)', "date": "28 days"},
+        guardrails=[f'nobody says "{said}" again (S-3)'],
+    )
+    filed = await file_bet(cockpit, bet=quoted, rationale=f'Users wrote "{said}" (S-3).')
+    assert filed.status_code == 200, filed.text
+    await cosign(cockpit)
+
+    applied = await cockpit.post(f"/v1/factory/factories/{cockpit.fid}/proposals/C-1/apply")
+
+    assert applied.status_code == 200, applied.text
+    row = cockpit.store.get_project(cockpit.fid, "draft-share")
+    assert row is not None
+    assert said not in render_pl_charter(row)
+    assert said not in str(row.charter)
+    assert row.charter["why"]["kill"]["state"] == f"users still say {bets.OMITTED} (S-3)"
+    # The person deciding still read the verified words, in the cockpit.
+    proposal = cockpit.store.get_proposal_by_number(cockpit.fid, 1)
+    assert proposal is not None and proposal.bet is not None
+    assert said in proposal.bet["kill"]["state"]
+
+
+def test_frozen_why_strips_every_string() -> None:
+    said = "we lose our drafts every single day"
+    row = SimpleNamespace(
+        ref="C-9",
+        opportunity="O-1",
+        bet={
+            **bet(),
+            "flag": {"key": "k", "convention": f'say "{said}"', "provider": "p"},
+            "expected": {"direction": "up", "low": 1, "high": 2, "unit": "pp"},
+        },
+    )
+
+    why = bets.frozen_why(row, by="alice", at=1)  # type: ignore[arg-type]
+
+    assert why is not None
+    assert why["flag"]["convention"] == f"say {bets.OMITTED}"
+    assert said not in str(why)
+
+
 async def test_a_projects_own_outcome_wins_and_split_children_get_the_why(
     cockpit: Cockpit,
 ) -> None:
@@ -232,7 +277,45 @@ async def test_a_projects_own_outcome_wins_and_split_children_get_the_why(
     assert route.charter["outcome"] == "Clients read the version (sample)"
     assert docs.charter["outcome"] == bet()["outcome"]
     assert route.charter["why"]["proposal"] == docs.charter["why"]["proposal"] == "C-1"
+    assert "split_from" not in route.charter["why"]
     assert "why" not in umbrella.charter
+
+
+@pytest.mark.parametrize("keep", ["cancel", "umbrella"])
+async def test_a_split_without_a_bet_keeps_the_parents_why(cockpit: Cockpit, keep: str) -> None:
+    await file_bet(cockpit)
+    await cosign(cockpit)
+    await cockpit.post(f"/v1/factory/factories/{cockpit.fid}/proposals/C-1/apply")
+    parent = cockpit.store.get_project(cockpit.fid, "draft-share")
+    assert parent is not None
+    frozen = parent.charter["why"]
+
+    split = {
+        "op": "split",
+        "slug": "draft-share",
+        "into": [project("draft-share-a"), project("draft-share-b")],
+        "keep": keep,
+    }
+    resp = await propose(cockpit, split, reason="too big for one PL (sample)")
+    assert resp.status_code == 200, resp.text
+    ref = resp.json()["proposal"]
+    if resp.json()["status"] != "applied":
+        applied = await cockpit.post(f"/v1/factory/factories/{cockpit.fid}/proposals/{ref}/apply")
+        assert applied.status_code == 200, applied.text
+
+    for slug in ("draft-share-a", "draft-share-b"):
+        child = cockpit.store.get_project(cockpit.fid, slug)
+        assert child is not None
+        why = child.charter["why"]
+        assert why["split_from"] == "draft-share"
+        # The plan the parent was approved on, unchanged: same proposal, freeze and version.
+        for key in ("proposal", "frozen_at", "plan_version", "metric", "measurement", "kill"):
+            assert why[key] == frozen[key], key
+        assert child.charter["outcome"] == bet()["outcome"]
+        assert "· split from draft-share (frozen when approved" in render_pl_charter(child)
+    row = cockpit.store.get_proposal_by_number(cockpit.fid, 2)
+    assert row is not None and row.result is not None
+    assert row.result["why"] == ["draft-share-a", "draft-share-b"]
 
 
 async def test_editing_a_bet_keeps_a_project_to_freeze_into(cockpit: Cockpit) -> None:

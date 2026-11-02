@@ -1232,7 +1232,7 @@ def test_learning_schemas() -> None:
     assert propose["required"] == ["kind"]
     assert propose["properties"]["kind"]["enum"] == ["tuning", "rules", "code", "projects"]
     assert propose["properties"]["case_against"]["maxItems"] == 3
-    assert propose["properties"]["op"]["enum"] == ["propose", "cosign", "withdraw"]
+    assert propose["properties"]["op"]["enum"] == ["propose", "cosign", "withdraw", "send_back"]
     assert propose["properties"]["trial_h"] == {"type": "integer", "minimum": 24, "maximum": 168}
     assert propose["properties"]["expected_effect"]["required"] == ["metric", "direction"]
     assert "422" in SysFactoryProposeTool.description()
@@ -1286,6 +1286,32 @@ async def test_propose_cosigns_a_bet_with_its_case_against() -> None:
     assert out == reply
     [call] = server.calls("POST", "/v1/factory/agent/proposals")
     assert call.body == {**args, "from_session_id": LEAD}
+
+
+async def test_propose_sends_a_bet_back() -> None:
+    reply = {"proposal": "C-31", "status": "rejected", "decision": None}
+    server = FakeServer().on("POST", "/v1/factory/agent/proposals", body=reply)
+    args = {"kind": "projects", "op": "send_back", "id": "C-31", "case_against": ["a"]}
+
+    out = await _call(server, "sys_factory_propose", args, caller=LEAD, role="lead")
+
+    assert out == reply
+    [call] = server.calls("POST", "/v1/factory/agent/proposals")
+    assert call.body == {**args, "from_session_id": LEAD}
+
+
+async def test_a_bet_while_discovery_is_off_keeps_its_code() -> None:
+    server = FakeServer().on(
+        "POST",
+        "/v1/factory/agent/proposals",
+        status=404,
+        body={"error": {"code": "discovery_off", "message": "discovery is off"}},
+    )
+    args = {"kind": "projects", "op": "cosign", "id": "C-31", "case_against": ["a"]}
+
+    out = await _call(server, "sys_factory_propose", args, caller=LEAD, role="lead")
+
+    assert (out["error"], out["status"]) == ("discovery_off", 404)
 
 
 async def test_propose_refusals_keep_their_code() -> None:

@@ -18,7 +18,11 @@ What the server checks when a bet is filed:
   runs without one (``signal_trend``, ``human_verdict``);
 - quoted user words in agent text match a stored excerpt of a cited signal
   (a hook the discovery ledger fills; until it does every quote is refused);
-- charter fields carry no user quotes.
+- charter fields carry no user quotes: the outcome, metric, kill date and unit
+  refuse them, and freezing replaces any left in the other fields.
+
+The flag's convention and provider come from the owner's
+``product.delivery.flags``; a lead names only the key, or why there is none.
 
 Opportunities live in the discovery ledger. It registers its lookup with
 :func:`register_opportunities`; while none is registered no opportunity is
@@ -229,7 +233,12 @@ def _one_line(value: str | None, what: str) -> str | None:
 
 
 class ExpectedIn(_Body):
-    """The predicted effect, e.g. up 0.01 to 0.04 ``share``."""
+    """
+    The predicted effect as a signed change, e.g. up +0.01 to +0.04 ``share``
+    or down -4 to -1 ``pp``.
+
+    :param low: The low end of the signed change (``low <= high``).
+    """
 
     direction: Literal["up", "down"]
     low: float = Field(ge=-1e9, le=1e9)
@@ -240,15 +249,20 @@ class ExpectedIn(_Body):
     def _order(self) -> ExpectedIn:
         if self.low > self.high:
             raise ValueError("expected.low is at most expected.high")
+        if self.direction == "up" and self.high <= 0:
+            raise ValueError("up predicts a rise: low and high are the signed change, high > 0")
+        if self.direction == "down" and self.low >= 0:
+            raise ValueError("down predicts a drop: low and high are the signed change, low < 0")
         return self
 
 
 class FlagIn(_Body):
-    """The flag the change ships behind, or why there is none."""
+    """
+    The flag the change ships behind, or why there is none. The convention and
+    provider are the owner's (``product.delivery.flags``), never the lead's.
+    """
 
     key: str | None = Field(None, max_length=64)
-    convention: str | None = Field(None, max_length=300)
-    provider: str | None = Field(None, max_length=64)
     none: str | None = Field(None, min_length=1, max_length=300)
 
     @field_validator("key")
@@ -436,6 +450,7 @@ def check(
     requested: bool,
     creates: int,
     charter_texts: Sequence[tuple[str, str | None]] = (),
+    agent_texts: Sequence[tuple[str, str | None]] = (),
 ) -> Checked:
     """
     Check a projects proposal's ``opportunity`` and ``bet`` (synchronous; run in a thread).
@@ -444,6 +459,9 @@ def check(
     :param creates: How many projects the proposal creates.
     :param charter_texts: ``(field path, text)`` of the charter fields the
         proposal writes (no user quotes allowed).
+    :param agent_texts: Other agent text a person reads with the bet (the
+        rationale): its quotes must be verified once the proposal names an
+        opportunity or carries a bet.
     :returns: The :class:`Checked` fields to store.
     :raises CockpitError: 400 ``invalid_body``, 404 ``unknown_opportunity``,
         422 ``bet_required`` / ``bet_incomplete`` / ``bet_prerequisite`` /
@@ -464,6 +482,8 @@ def check(
                 field="bet",
             )
         check_charter_quotes(charter_texts)
+        if ref is not None:
+            verify_quotes(deps, factory_id, agent_texts)
         return Checked(opportunity=ref)
     if not isinstance(bet, Mapping):
         raise CockpitError(400, "invalid_body", "bet must be an object", field="bet")
@@ -501,7 +521,15 @@ def check(
             "signal_trend or human_verdict until one does",
             field="bet.metric",
         )
-    check_charter_quotes([("bet.outcome", parsed.outcome), *charter_texts])
+    check_charter_quotes(
+        [
+            ("bet.outcome", parsed.outcome),
+            ("bet.metric", parsed.metric),
+            ("bet.kill.date", parsed.kill.date),
+            ("bet.expected.unit", parsed.expected.unit),
+            *charter_texts,
+        ]
+    )
     verify_quotes(
         deps,
         factory_id,
@@ -510,6 +538,7 @@ def check(
             ("bet.kill.state", parsed.kill.state),
             ("bet.flag.none", parsed.flag.none),
             *((f"bet.guardrails[{i}]", g) for i, g in enumerate(parsed.guardrails)),
+            *agent_texts,
         ],
     )
     stored = parsed.model_dump(mode="json", exclude_none=True)
@@ -520,8 +549,8 @@ def check(
     if parsed.flag.key is not None:
         for key in ("convention", "provider"):
             value = strategy.flags.get(key)
-            if not flag.get(key) and isinstance(value, str) and value:
-                flag[key] = value
+            if isinstance(value, str) and value.strip():
+                flag[key] = value.strip()
     warnings: list[str] = []
     if owner:
         warnings.append("hunch_bet: no evidence behind it; only an owner approves (bet anyway)")
@@ -561,11 +590,23 @@ def _check_kind(
 # ── Freezing ───────────────────────────────────────────────────
 
 
+def _strip_all(value: Any) -> Any:
+    """*value* with :func:`strip_quotes` applied to every string in it."""
+    if isinstance(value, str):
+        return strip_quotes(value)
+    if isinstance(value, Mapping):
+        return {k: _strip_all(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_strip_all(v) for v in value]
+    return value
+
+
 def frozen_why(row: FactoryProposal, *, by: str, at: int) -> dict[str, Any] | None:
     """
     The ``charter.why`` an applied proposal gives each project it creates.
 
-    Quoted user words never reach a charter: they are replaced by :data:`OMITTED`.
+    Quoted user words never reach a charter: every string is passed through
+    :func:`strip_quotes`, so each quote is replaced by :data:`OMITTED`.
 
     :param by: Who applied it (a name).
     :param at: Epoch seconds of the apply.
@@ -583,7 +624,7 @@ def frozen_why(row: FactoryProposal, *, by: str, at: int) -> dict[str, Any] | No
     if bet is not None:
         why.update(
             {key: bet.get(key) for key in ("kind", "goal", "outcome", "metric", "cost")},
-            hypothesis=strip_quotes(str(bet.get("hypothesis") or "")),
+            hypothesis=bet.get("hypothesis"),
             expected=bet.get("expected"),
             guardrails=list(bet.get("guardrails") or []),
             flag=bet.get("flag"),
@@ -591,7 +632,20 @@ def frozen_why(row: FactoryProposal, *, by: str, at: int) -> dict[str, Any] | No
             kill=bet.get("kill"),
             plan_version=PLAN_VERSION,
         )
-    return {k: v for k, v in why.items() if not _blank(v)}
+    return _strip_all({k: v for k, v in why.items() if not _blank(v)})
+
+
+def split_why(parent: Any, *, split_from: str) -> dict[str, Any] | None:
+    """
+    The ``charter.why`` a split child inherits from its parent when the split
+    carries no bet of its own: the same frozen plan (proposal, ``frozen_at``,
+    ``plan_version``), so its readouts follow the bet the parent was approved on.
+
+    :returns: ``None`` when the parent has no why.
+    """
+    if not isinstance(parent, Mapping) or not parent:
+        return None
+    return _strip_all({**parent, "split_from": split_from})
 
 
 def autonomy_mode(deps: FactoryDeps, factory_id: str) -> str | None:
@@ -606,12 +660,12 @@ def autonomy_mode(deps: FactoryDeps, factory_id: str) -> str | None:
 
 
 def expected_text(expected: Mapping[str, Any] | None) -> str:
-    """:returns: e.g. ``"up 0.01 to 0.04 share"``."""
+    """:returns: The signed change, e.g. ``"up +0.01 to +0.04 share"``, ``"down -4 to -1 pp"``."""
     if not isinstance(expected, Mapping):
         return "no range"
     return (
-        f"{expected.get('direction', '?')} {expected.get('low', '?'):g} to "
-        f"{expected.get('high', '?'):g} {expected.get('unit', '')}".strip()
+        f"{expected.get('direction', '?')} {expected.get('low', '?'):+g} to "
+        f"{expected.get('high', '?'):+g} {expected.get('unit', '')}".strip()
         if isinstance(expected.get("low"), int | float)
         and isinstance(expected.get("high"), int | float)
         else "no range"
@@ -675,6 +729,7 @@ __all__ = [
     "record_decline",
     "register_opportunities",
     "register_quote_check",
+    "split_why",
     "strip_quotes",
     "summary_lines",
     "verify_quotes",

@@ -18,10 +18,12 @@ after 72 hours. The proposer is told every outcome as a
 
 A lead's proposal may carry an ``opportunity`` and a ``bet`` (:mod:`.bets`).
 A bet the lead filed on its own waits as ``awaiting_cosign`` until the other
-lead co-signs it with a case against (``op="cosign"``); only then does a
-person see it. Applying it freezes the bet into ``charter.why`` of every
-project it creates. ``op="decline"`` records why a lead does not plan an
-opportunity.
+lead co-signs it with a case against (``op="cosign"``) or sends it back
+(``op="send_back"``); only once co-signed does a person apply it. Applying it
+freezes the bet into ``charter.why`` of every project it creates.
+``op="decline"`` records why a lead does not plan an opportunity. Bets,
+co-signing and declines need discovery on (``definition.discovery_enabled``);
+while it is off they are refused with 404 ``discovery_off``.
 """
 
 from __future__ import annotations
@@ -166,15 +168,17 @@ _OPS: Final[dict[str, type[_Body]]] = {
 
 class CosignIn(BaseModel):
     """
-    ``sys_factory_propose(op="cosign", kind="projects", id, case_against)``.
+    ``sys_factory_propose(op="cosign"|"send_back", kind="projects", id, case_against)``.
 
-    The other ``sys_factory_propose`` fields (rationale, evidence …) are ignored.
+    ``send_back`` returns a waiting bet to its proposer, with the lines as the
+    reasons. The other ``sys_factory_propose`` fields (rationale, evidence …)
+    are ignored.
     """
 
     model_config = ConfigDict(extra="ignore", str_strip_whitespace=True)
 
     kind: Literal["projects"] = KIND_PROJECTS
-    op: Literal["cosign"] = "cosign"
+    op: Literal["cosign", "send_back"] = "cosign"
     id: str | None = Field(None, max_length=16)
     case_against: str | list[str] | None = None
 
@@ -982,7 +986,13 @@ def cosign_request_text(row: FactoryProposal, by: str, *, blocking: bool) -> str
         "for counter-evidence and for segments the bet ignores, check whether a few accounts "
         "carry the evidence and whether any text leaks private data. Then co-sign with "
         f'sys_factory_propose(op="cosign", kind="projects", id="{ref}", case_against=[up to '
-        f"three lines]), or tell {by} why not."
+        "three lines])"
+        + (
+            ', or send it back with op="send_back" and up to three lines why it should not '
+            "reach a person."
+            if blocking
+            else "."
+        )
     )[:MESSAGE_MAX_CHARS]
 
 
@@ -990,6 +1000,15 @@ def cosigned_text(ref: str, by: str, decision_ref: str | None) -> str:
     """:returns: ``[Factory proposal · C-31 co-signed by Sentinel]`` and what happens next."""
     waits = f"; it waits for a person in {decision_ref}" if decision_ref else ""
     return f"[Factory proposal · {ref} co-signed by {by}{waits}] Record it in the ledger."
+
+
+def sent_back_text(ref: str, by: str, lines: Sequence[str]) -> str:
+    """:returns: ``[Factory proposal · C-31 sent back by Sentinel]`` with its reasons."""
+    body = quote_spoofed_lines("\n".join(f"- {line}" for line in lines))
+    return (
+        f"[Factory proposal · {ref} sent back by {by}]\n{body}\nAnswer these in a new bet, "
+        "or drop it. Record it in the ledger."
+    )[:MESSAGE_MAX_CHARS]
 
 
 def _tell_proposer(app_state: Any, row: FactoryProposal, text: str, mail_id: str | None) -> str:
@@ -1101,18 +1120,23 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
     """
     File (or withdraw) a projects proposal for an agent (``POST /v1/factory/agent/proposals``).
 
-    ``op="cosign"`` co-signs a bet (:func:`cosign`); ``op="decline"`` declines
-    an opportunity (:func:`decline`).
+    ``op="cosign"`` co-signs a bet (:func:`cosign`), ``op="send_back"`` returns
+    it (:func:`send_back`); ``op="decline"`` declines an opportunity
+    (:func:`decline`). Those and any ``bet`` or ``opportunity`` need discovery on.
 
     :returns: ``{proposal, decision, status, approval, warnings, undo_until, spawning, held}``.
     :raises CockpitError: See :func:`validate` and :func:`.bets.check`; 403
-        ``not_allowed`` for other roles.
+        ``not_allowed`` for other roles; 404 ``discovery_off``.
     """
     role = caller.membership.role
     if role not in (ROLE_LEAD, ROLE_PROJECT_LEAD) or not caller.membership.is_top_level:
         raise CockpitError(403, "not_allowed", "only leads and project leads propose projects")
+    if _wants_discovery(payload):
+        await _require_discovery(caller)
     if isinstance(payload, Mapping) and payload.get("op") == "cosign":
         return await cosign(app_state, caller, parse_body(CosignIn, payload))
+    if isinstance(payload, Mapping) and payload.get("op") == "send_back":
+        return await send_back(app_state, caller, parse_body(CosignIn, payload))
     body = parse_body(ProposalIn, payload)
     deps = caller.deps
     if body.withdraw:
@@ -1235,6 +1259,30 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
     return _reply(row, decision=decision.ref)
 
 
+def _wants_discovery(payload: Any) -> bool:
+    """Whether *payload* uses discovery: a bet, an opportunity, a co-sign, send-back or decline."""
+    if not isinstance(payload, Mapping):
+        return False
+    return (
+        payload.get("op") in ("cosign", "send_back", "decline")
+        or payload.get("bet") is not None
+        or bool(payload.get("opportunity"))
+    )
+
+
+async def _require_discovery(caller: AgentCaller) -> None:
+    """:raises CockpitError: 404 ``discovery_off`` unless the caller's factory runs discovery."""
+    from omnigent.server.factory import definition
+
+    if not await asyncio.to_thread(definition.discovery_enabled, caller.deps, caller.factory_id):
+        raise CockpitError(
+            404,
+            "discovery_off",
+            "bets, co-signs and declines need discovery, which is off for this factory; "
+            "propose the work without opportunity or bet",
+        )
+
+
 def _charter_texts(plan: Plan, *, full: bool) -> list[tuple[str, str | None]]:
     """
     The charter fields a proposal writes, by field path, for the no-quotes check.
@@ -1287,6 +1335,7 @@ async def _check_bet(
                 charter_texts=_charter_texts(
                     plan, full=body.bet is not None or bool(body.opportunity)
                 ),
+                agent_texts=[("rationale", body.rationale), ("reason", body.reason)],
             )
         )
     except CockpitError as exc:
@@ -1379,27 +1428,8 @@ async def cosign(app_state: Any, caller: AgentCaller, body: CosignIn) -> dict:
     """
     deps = caller.deps
     store = deps.factory_store
-    if caller.membership.role != ROLE_LEAD or not caller.membership.is_top_level:
-        raise CockpitError(403, "not_allowed", "only the other lead co-signs a bet")
-    if not body.id:
-        raise CockpitError(400, "invalid_body", "cosign needs the proposal id", field="id")
-    row = await asyncio.to_thread(find_proposal, deps, caller.factory_id, body.id)
-    if row is None or row.kind != KIND_PROJECTS or row.bet is None:
-        raise CockpitError(404, "unknown_proposal", f"no bet {body.id!r} in your factory")
+    row, lines = await _peer_bet(app_state, caller, body)
     ref = proposal_ref(row.number)
-    if control.same_id(row.author, caller.session.id):
-        raise CockpitError(403, "self_cosign", f"{ref} is yours; the other lead co-signs it")
-    lines = bets.parse_case_against(body.case_against)
-    try:
-        await asyncio.to_thread(
-            bets.verify_quotes,
-            deps,
-            caller.factory_id,
-            [(f"case_against[{i}]", line) for i, line in enumerate(lines)],
-        )
-    except CockpitError as exc:
-        await _quote_refused(app_state, caller, exc)
-        raise
     if row.case_against:
         raise CockpitError(409, "already_cosigned", f"{ref} already has a case against")
     if row.status not in (*PROPOSAL_OPEN_STATUSES, "applied"):
@@ -1413,10 +1443,12 @@ async def cosign(app_state: Any, caller: AgentCaller, body: CosignIn) -> dict:
     plan = await asyncio.to_thread(_cosign_plan, deps, root, row) if waiting else None
     fields: dict[str, Any] = {"case_against": lines, "cosigned_by": norm_id(caller.session.id)}
     if waiting:
-        result = dict(row.result or {})
+        now = now_s()
+        # A person sees it from now: expiry and grace count from the co-sign.
+        result = {**(row.result or {}), "cosigned_at": now}
         if result.pop("grace_on_cosign", False):
-            result["grace_until"] = now_s() + GRACE_S
-        fields.update(status="pending", result=result or None)
+            result["grace_until"] = now + GRACE_S
+        fields.update(status="pending", result=result)
     try:
         row = (
             await asyncio.to_thread(
@@ -1437,6 +1469,12 @@ async def cosign(app_state: Any, caller: AgentCaller, body: CosignIn) -> dict:
             await asyncio.to_thread(store.update_proposal, row.id, decision_id=decision.id) or row
         )
         decision_ref = decision.ref
+        if row.status != "pending":
+            # Rejected, withdrawn or expired while the decision opened: close it again.
+            await _close_decision(app_state, row, "withdrawn")
+            raise CockpitError(
+                409, "proposal_not_pending", f"{ref} is already {row.status}", status=row.status
+            )
     elif row.decision_id:
         decision_ref = await _decision_ref(deps, row)
         await asyncio.to_thread(_refresh_context, deps, row)
@@ -1459,6 +1497,95 @@ async def cosign(app_state: Any, caller: AgentCaller, body: CosignIn) -> dict:
     )
     _tell_proposer(app_state, row, cosigned_text(ref, caller.title, decision_ref), None)
     return _reply(row, decision=decision_ref)
+
+
+async def _peer_bet(
+    app_state: Any, caller: AgentCaller, body: CosignIn
+) -> tuple[FactoryProposal, list[str]]:
+    """
+    The other lead's bet *body* names, and its checked lines (co-sign or send back).
+
+    :raises CockpitError: 403 ``not_allowed`` / ``self_cosign``, 400
+        ``invalid_body``, 404 ``unknown_proposal``, 422 ``quote_unverified``.
+    """
+    deps = caller.deps
+    if caller.membership.role != ROLE_LEAD or not caller.membership.is_top_level:
+        raise CockpitError(403, "not_allowed", "only the other lead co-signs a bet")
+    if not body.id:
+        raise CockpitError(400, "invalid_body", f"{body.op} needs the proposal id", field="id")
+    row = await asyncio.to_thread(find_proposal, deps, caller.factory_id, body.id)
+    if row is None or row.kind != KIND_PROJECTS or row.bet is None:
+        raise CockpitError(404, "unknown_proposal", f"no bet {body.id!r} in your factory")
+    if control.same_id(row.author, caller.session.id):
+        raise CockpitError(
+            403, "self_cosign", f"{proposal_ref(row.number)} is yours; the other lead co-signs it"
+        )
+    lines = bets.parse_case_against(body.case_against)
+    try:
+        await asyncio.to_thread(
+            bets.verify_quotes,
+            deps,
+            caller.factory_id,
+            [(f"case_against[{i}]", line) for i, line in enumerate(lines)],
+        )
+    except CockpitError as exc:
+        await _quote_refused(app_state, caller, exc)
+        raise
+    return row, lines
+
+
+async def send_back(app_state: Any, caller: AgentCaller, body: CosignIn) -> dict:
+    """
+    The other lead sends a waiting bet back to its proposer instead of co-signing
+    (``sys_factory_propose(op="send_back", kind="projects", id, case_against)``).
+
+    The bet closes as ``rejected`` with the lines as its note; no person sees it.
+    A bet a person asked for did not wait: it can only be co-signed.
+
+    :raises CockpitError: as :func:`cosign`; 409 ``proposal_not_pending``
+        unless the bet is ``awaiting_cosign``.
+    """
+    deps = caller.deps
+    row, lines = await _peer_bet(app_state, caller, body)
+    ref = proposal_ref(row.number)
+    if row.status != "awaiting_cosign":
+        raise CockpitError(
+            409,
+            "proposal_not_pending",
+            f"{ref} is {row.status}: only a bet waiting for your case against goes back",
+            status=row.status,
+        )
+    by = norm_id(caller.session.id)
+    note = " · ".join(lines)
+    try:
+        row = (
+            await asyncio.to_thread(
+                lambda: deps.factory_store.update_proposal(
+                    row.id,
+                    expect_status="awaiting_cosign",
+                    status="rejected",
+                    decided_by=by,
+                    decided_at=now_s(),
+                    result={**(row.result or {}), "note": note, "sent_back_by": by},
+                )
+            )
+            or row
+        )
+    except ProposalStateConflict as exc:
+        raise CockpitError(
+            409, "proposal_not_pending", f"{ref} is already {exc.proposal.status}"
+        ) from None
+    actor = Actor.agent(caller.session.id, ROLE_LEAD, title=caller.title)
+    await _emit_bet(
+        app_state,
+        row,
+        "bet.sent_back",
+        f"{caller.title} sent {ref} back: {control.clip(note, 200)}",
+        actor,
+        lines=lines,
+    )
+    _tell_proposer(app_state, row, sent_back_text(ref, caller.title, lines), None)
+    return _reply(row)
 
 
 def _cosign_plan(deps: FactoryDeps, root: Conversation, row: FactoryProposal) -> Plan:
@@ -1493,7 +1620,8 @@ async def decline(app_state: Any, caller: AgentCaller, body: ProposalIn) -> dict
     A lead declines to plan an opportunity, with one line of reason
     (``sys_factory_project(op="decline", opportunity="O-12", reason=…)``).
 
-    :raises CockpitError: 403 ``not_allowed``, 400 ``invalid_body``, 404 ``unknown_opportunity``.
+    :raises CockpitError: 403 ``not_allowed``, 400 ``invalid_body``, 404
+        ``unknown_opportunity``, 422 ``quote_unverified``.
     """
     if caller.membership.role != ROLE_LEAD or not caller.membership.is_top_level:
         raise CockpitError(403, "not_allowed", "only a lead declines an opportunity")
@@ -1512,6 +1640,11 @@ async def decline(app_state: Any, caller: AgentCaller, body: ProposalIn) -> dict
         )
     deps = caller.deps
     await asyncio.to_thread(bets.lookup_opportunity, deps, caller.factory_id, ref)
+    try:
+        await asyncio.to_thread(bets.verify_quotes, deps, caller.factory_id, [("reason", reason)])
+    except CockpitError as exc:
+        await _quote_refused(app_state, caller, exc)
+        raise
     await asyncio.to_thread(
         bets.record_decline, deps, caller.factory_id, ref, reason, caller.title
     )
@@ -1624,14 +1757,15 @@ async def apply_now(
     rows = await asyncio.to_thread(store.list_projects, root.id)
     slots = {p.slug for p in rows if projects.holds_cap_slot(p)}
     try:
+        inherited = await asyncio.to_thread(_split_whys, deps, root, row, plan)
         for i, change in enumerate(plan.changes):
             closing = sum(_closes(c, slots) for c in plan.changes[i + 1 :])
             await _apply_change(
                 app_state, root, change, actor, user_id, ref, result, created, closing
             )
-        created = await asyncio.to_thread(_freeze_why, deps, row, created, actor, now)
-        if created and (row.bet is not None or row.opportunity):
-            result["why"] = [p.slug for p in created]
+        created = await asyncio.to_thread(_freeze_why, deps, row, created, actor, now, inherited)
+        if why_slugs := [p.slug for p in created if (p.charter or {}).get("why")]:
+            result["why"] = why_slugs
         for project in created:
             how = await projects.start_project(
                 app_state, root, project, actor=actor, proposal_ref=ref
@@ -1679,29 +1813,58 @@ async def apply_now(
     return result
 
 
+def _split_whys(
+    deps: FactoryDeps, root: Conversation, row: FactoryProposal, plan: Plan
+) -> dict[str, dict[str, Any]]:
+    """
+    The why each split child inherits when the proposal carries no bet of its
+    own: its parent's, read before the split closes the parent.
+
+    :returns: ``{child slug: why}``.
+    """
+    if row.bet is not None:
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for change in plan.changes:
+        if change.op != "split" or not change.slug:
+            continue
+        parent = deps.factory_store.get_project(root.id, change.slug)
+        why = bets.split_why(
+            (parent.charter or {}).get("why") if parent is not None else None,
+            split_from=change.slug,
+        )
+        if why is not None:
+            out.update({child.slug: why for child in change.creates})
+    return out
+
+
 def _freeze_why(
     deps: FactoryDeps,
     row: FactoryProposal,
     created: list[FactoryProject],
     actor: Actor,
     now: int,
+    inherited: Mapping[str, dict[str, Any]] | None = None,
 ) -> list[FactoryProject]:
     """
     Freeze the proposal's bet into ``charter.why`` of each project it created,
     before their PLs start (the bet's outcome fills an unset ``charter.outcome``).
+    A split child of a project with a why keeps that why when the split has no bet.
 
+    :param inherited: ``{child slug: why}`` from :func:`_split_whys`.
     :returns: The created rows as stored now.
     """
-    why = bets.frozen_why(row, by=projects.actor_name(actor), at=now)
-    if why is None:
-        return created
-    outcome = (row.bet or {}).get("outcome")
+    frozen = bets.frozen_why(row, by=projects.actor_name(actor), at=now)
     out: list[FactoryProject] = []
     for project in created:
+        why = (inherited or {}).get(project.slug) or frozen
+        if why is None:
+            out.append(project)
+            continue
         charter = normalize_charter(project.charter)
         charter["why"] = why
-        if outcome and not charter.get("outcome"):
-            charter["outcome"] = outcome
+        if why.get("outcome") and not charter.get("outcome"):
+            charter["outcome"] = why["outcome"]
         stored = deps.factory_store.update_project(project.id, charter=normalize_charter(charter))
         out.append(stored or project)
     return out
@@ -1808,6 +1971,7 @@ class ProposalAnswer:
     :param apply: Apply (else reject).
     :param plan: The plan to apply (re-validated, possibly edited).
     :param note: The reject note.
+    :param expect: The status a reject's compare-and-set expects (any open one by default).
     """
 
     proposal: FactoryProposal
@@ -1818,6 +1982,7 @@ class ProposalAnswer:
     plan: Plan | None = None
     note: str | None = None
     edited: bool = False
+    expect: str | None = None
 
 
 async def _load_for_decision(
@@ -1938,7 +2103,7 @@ async def execute_answer(
             await asyncio.to_thread(
                 lambda: deps.factory_store.update_proposal(
                     row.id,
-                    expect_status=list(PROPOSAL_OPEN_STATUSES),
+                    expect_status=answer.expect or list(PROPOSAL_OPEN_STATUSES),
                     status="rejected",
                     decided_by=answer.actor.id,
                     decided_at=now_s(),
@@ -1995,7 +2160,10 @@ async def answer(
             deps, user_id, root.id, LEVEL_MANAGE if row.approval == "owner" else LEVEL_EDIT
         )
         actor = await asyncio.to_thread(projects.human_actor, deps, user_id, root.id)
-        verdict = ProposalAnswer(row, root, actor, user_id, apply=False, note=text)
+        # Only while it still waits: a co-sign that just opened its decision wins.
+        verdict = ProposalAnswer(
+            row, root, actor, user_id, apply=False, note=text, expect="awaiting_cosign"
+        )
         await execute_answer(app_state, verdict, mail_id=None)
         fresh = await asyncio.to_thread(deps.factory_store.get_proposal, row.id) or row
         return {"proposal": await asyncio.to_thread(proposal_view, deps, fresh), "decision": None}
@@ -2203,8 +2371,17 @@ async def _close_decision(app_state: Any, row: FactoryProposal, status: str) -> 
     )
 
 
+def _expiry_start(row: FactoryProposal) -> int:
+    """When a proposal's 72 h start: its filing, or the co-sign that let a person see it."""
+    cosigned = (row.result or {}).get("cosigned_at")
+    return max(row.created_at, cosigned if isinstance(cosigned, int) else 0)
+
+
 async def expire_due(app_state: Any, factory_id: str, *, now: int | None = None) -> list[str]:
-    """Expire this factory's proposals pending for 72 h; :returns: their refs."""
+    """
+    Expire this factory's proposals pending for 72 h (a co-signed bet: 72 h
+    after the co-sign); :returns: their refs.
+    """
     deps = factory_deps(app_state)
     store = deps.factory_store
     now = now if now is not None else now_s()
@@ -2215,7 +2392,7 @@ async def expire_due(app_state: Any, factory_id: str, *, now: int | None = None)
     )
     expired: list[str] = []
     for row in rows:
-        if row.created_at + PROPOSAL_EXPIRY_S > now:
+        if _expiry_start(row) + PROPOSAL_EXPIRY_S > now:
             continue
         label = proposal_ref(row.number)
         try:
@@ -2243,6 +2420,13 @@ async def expire_due(app_state: Any, factory_id: str, *, now: int | None = None)
             data={"proposal_id": row.id},
         )
         _tell_proposer(app_state, row, closed_text(label, "expired"), None)
+        if row.cosigned_by:
+            control.send_text(
+                app_state,
+                row.cosigned_by,
+                closed_text(label, "expired")[:MESSAGE_MAX_CHARS],
+                kind="info",
+            )
         expired.append(label)
     return expired
 
@@ -2341,6 +2525,8 @@ __all__ = [
     "propose",
     "rejected_text",
     "requested_by",
+    "send_back",
+    "sent_back_text",
     "undo",
     "validate",
     "withdraw",

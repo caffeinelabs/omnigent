@@ -35,11 +35,20 @@ export function numberText(value: number): string {
   return String(Number(value.toFixed(4)));
 }
 
-/** `"expects up 1 to 4 pp"`. */
+/** A signed change: `+4`, `-0.5`, `0`. */
+export function signedText(value: number): string {
+  const text = numberText(value);
+  return value > 0 ? `+${text}` : text;
+}
+
+/**
+ * `"expects up +1 to +4 pp"`, `"expects down -4 to -1 pp"`: low and high are
+ * the signed predicted change.
+ */
 export function expectedText(expected: BetExpectedView): string {
   const [low, high] =
     expected.low <= expected.high ? [expected.low, expected.high] : [expected.high, expected.low];
-  return `expects ${expected.direction} ${numberText(low)} to ${numberText(high)} ${expected.unit}`;
+  return `expects ${expected.direction} ${signedText(low)} to ${signedText(high)} ${expected.unit}`;
 }
 
 /** `"days 7 and 28 after release"`, `"day 28 after release"`. */
@@ -84,12 +93,20 @@ export function betOrigin(proposal: ProposalView): string {
     .join(" · ");
 }
 
-/** `written`: lines exist; `waiting`: the other lead is writing them; `missing`: nobody will. */
-export type CaseState = "written" | "waiting" | "missing";
+/**
+ * `written`: lines exist; `waiting`: the bet waits for them; `later`: the
+ * other lead may still write them, which blocks nothing (a person asked for
+ * the work); `missing`: no other lead will.
+ */
+export type CaseState = "written" | "waiting" | "later" | "missing";
+
+/** The server's warning when no other lead writes a case against. */
+export const NO_PEER_WARNING = "no_peer_lead";
 
 export function caseState(proposal: ProposalView): CaseState {
   if (proposal.case_against && proposal.case_against.length > 0) return "written";
-  return proposal.status === "awaiting_cosign" ? "waiting" : "missing";
+  if (proposal.status === "awaiting_cosign") return "waiting";
+  return proposal.warnings.some((w) => w.startsWith(NO_PEER_WARNING)) ? "missing" : "later";
 }
 
 /** The case-against box's heading and its text when no lines exist. */
@@ -104,12 +121,18 @@ export function caseCopy(
   if (state === "waiting") {
     return {
       heading: "Case against · not written yet",
-      empty: "The other lead writes up to three lines against this bet before a person sees it.",
+      empty: "The other lead writes up to three lines against this bet before it can be approved.",
+    };
+  }
+  if (state === "later") {
+    return {
+      heading: "Case against · not written yet",
+      empty: "The other lead may still add up to three lines. It does not block approval.",
     };
   }
   return {
     heading: "Case against · none",
-    empty: "No other lead wrote one. Read the evidence before you approve.",
+    empty: "No other lead writes one. Read the evidence before you approve.",
   };
 }
 

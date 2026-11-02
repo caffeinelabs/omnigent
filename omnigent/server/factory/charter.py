@@ -66,8 +66,10 @@ WHY_KEYS: Final = (
     "plan_version",
     "frozen_at",
     "frozen_by",
+    "split_from",
 )
-"""``charter.why``: the bet frozen when its proposal applied (read-only)."""
+"""``charter.why``: the bet frozen when its proposal applied (read-only; a split
+child inherits its parent's, with ``split_from``)."""
 DEFAULT_BASE_ENV: Final = "OMNIGENT_FACTORY_DEFAULT_BASE"
 """``owner/repo#branch`` new factories default to, e.g. ``caffeinelabs/app#temp-main``."""
 
@@ -367,7 +369,8 @@ def render_pl_charter(project: FactoryProject) -> str:
 
 
 def _num(value: Any) -> str:
-    return f"{value:g}" if isinstance(value, int | float) and not isinstance(value, bool) else "?"
+    """A signed change, e.g. ``+0.01`` or ``-4``."""
+    return f"{value:+g}" if isinstance(value, int | float) and not isinstance(value, bool) else "?"
 
 
 def why_lines(charter: Mapping[str, Any]) -> list[str]:
@@ -386,6 +389,7 @@ def why_lines(charter: Mapping[str, Any]) -> list[str]:
             f"{why['kind']} bet {why.get('proposal', '')}".strip() if why.get("kind") else None,
             f"from {why['opportunity']}" if why.get("opportunity") else None,
             f"under {why['goal']}" if why.get("goal") else None,
+            f"split from {why['split_from']}" if why.get("split_from") else None,
         )
         if part
     )
