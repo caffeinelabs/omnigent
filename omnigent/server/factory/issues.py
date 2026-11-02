@@ -47,6 +47,8 @@ INCIDENT: Final = "incident"
 FINDING: Final = "finding"
 RETRO: Final = "retro"
 HUMAN_RULE: Final = "human.report"
+ESCALATED: Final = "issue.escalated"
+"""An open issue re-raised at a higher severity (the Room posts its card again)."""
 SCOPE: Final = "issues"
 """The frame scope an issue change announces."""
 
@@ -149,8 +151,10 @@ async def raise_issue(
     Open (or re-raise) the issue of *rule* on *target*. Never raises.
 
     A re-raise bumps ``count`` and ``last_seen``; a resolved one reopens and,
-    like a new one, emits ``issue.opened`` and is routed (Slack for incidents
-    of warning or worse). ``wontfix`` stays closed.
+    like a new one, emits ``issue.opened`` (with when and by whom it had been
+    resolved) and is routed (Slack for incidents of warning or worse).
+    ``wontfix`` stays closed. A re-raise at a higher severity emits
+    ``issue.escalated`` (the Room posts the card again; Slack is unchanged).
 
     :param target: e.g. ``"member:<id>"``, ``"pr:<id>"``, ``"project:<slug>"``.
     :param by: Attribution for the event (``by``, ``by_kind``, ``by_role``); the server by default.
@@ -192,18 +196,38 @@ async def raise_issue(
     reopened = reopened and issue.status in ISSUE_OPEN_STATUSES
     attribution = dict(by or {"by": "server", "by_kind": "server"})
     if created or reopened:
+        # How long it stayed resolved, and by whom, tells a flap from a comeback.
+        was = before if reopened else None
         await _emit(
             app_state,
             issue,
             "issue.opened",
             f"{_label(issue)} {issue.summary}",
             reopened=reopened or None,
+            was_resolved_at=was.resolved_at if was is not None else None,
+            was_resolved_by=was.resolved_by if was is not None else None,
             **attribution,
         )
         await route_opened(app_state, issue)
+    elif before is not None and _rose(before, issue):
+        await _emit(
+            app_state,
+            issue,
+            ESCALATED,
+            f"{_label(issue)} is now {issue.severity}: {issue.summary}",
+            was_severity=before.severity,
+            **attribution,
+        )
     else:
         live.announce_factory_changed(app_state, factory_id, [SCOPE])
     return issue
+
+
+def _rose(before: FactoryIssue, after: FactoryIssue) -> bool:
+    """Whether an open issue's re-raise moved it to a higher severity."""
+    if after.status not in ISSUE_OPEN_STATUSES or before.status not in ISSUE_OPEN_STATUSES:
+        return False
+    return _SEVERITY_RANK.get(after.severity, 0) > _SEVERITY_RANK.get(before.severity, 0)
 
 
 def _find_by_key(deps: FactoryDeps, factory_id: str, key: str) -> FactoryIssue | None:
@@ -795,6 +819,7 @@ def reset() -> None:
 __all__ = [
     "ASSIGN_OPERATORS",
     "ASSIGN_OWNERS",
+    "ESCALATED",
     "FINDING",
     "HUMAN_RULE",
     "INCIDENT",

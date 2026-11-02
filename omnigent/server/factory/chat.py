@@ -97,6 +97,8 @@ CONTEXT_LINES: Final = 8
 CONTEXT_SCAN: Final = 60
 REFS_MAX: Final = 6
 LINE_MAX: Final = 200
+SYSTEM_LINE_MAX: Final = 600
+"""Chars a system row's body keeps (it is always one line)."""
 HUMAN_POSTS_PER_WINDOW: Final = 20
 HUMAN_WINDOW_S: Final = 600.0
 
@@ -364,6 +366,11 @@ def one_line(text: str, limit: int = LINE_MAX) -> str:
     return flat if len(flat) <= limit else flat[: limit - 1] + "…"
 
 
+def system_line(text: str) -> str:
+    """:returns: A system row's body: *text* on one line, cut to :data:`SYSTEM_LINE_MAX`."""
+    return one_line(text, SYSTEM_LINE_MAX)
+
+
 def _quoted(body: str) -> list[str]:
     """The body as a block quote; a forged server line is quoted twice."""
     return [f"> {line}" if line else ">" for line in quote_spoofed_lines(body).split("\n")]
@@ -554,6 +561,51 @@ def build_delivery(
 # ── Views ──────────────────────────────────────────────────────
 
 
+def _int(value: object) -> int | None:
+    return value if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _meta_view(meta: object) -> dict[str, Any] | None:
+    """:returns: ``IssueCardMeta`` / ``BaseMovesMeta`` JSON without internal keys, or ``None``."""
+    if not isinstance(meta, Mapping):
+        return None
+    kind = meta.get("kind")
+    if kind == "issue" and isinstance(meta.get("severity"), str):
+        return {
+            "kind": "issue",
+            "severity": meta["severity"],
+            "reopened": _int(meta.get("reopened")) or 0,
+            "reopened_at": _int(meta.get("reopened_at")),
+        }
+    if kind == "base.moved" and isinstance(meta.get("moves"), list):
+        moves = [
+            {
+                "at": _int(m.get("at")) or 0,
+                "from_sha": m.get("from_sha") if isinstance(m.get("from_sha"), str) else None,
+                "to_sha": str(m.get("to_sha") or ""),
+                "pr": _int(m.get("pr")),
+            }
+            for m in meta["moves"]
+            if isinstance(m, Mapping)
+        ]
+        return {
+            "kind": "base.moved",
+            "repo": str(meta.get("repo") or ""),
+            "base": str(meta.get("base") or ""),
+            "moves": moves,
+        }
+    return None
+
+
+def card_view(card: Mapping[str, Any]) -> dict[str, Any]:
+    """:returns: ``ChatCardView`` JSON: ``{type, ref, id}`` plus a live card's ``meta``."""
+    view = {k: card.get(k) for k in ("type", "ref", "id")}
+    meta = _meta_view(card.get("meta"))
+    if meta is not None:
+        view["meta"] = meta
+    return view
+
+
 def message_views(deps: FactoryDeps, rows: Sequence[FactoryChatMessage]) -> list[dict[str, Any]]:
     """:returns: ``ChatMessageView`` JSON for *rows* (one batched title read)."""
     sessions = [r.author for r in rows if r.author_kind == "agent"]
@@ -582,7 +634,7 @@ def message_views(deps: FactoryDeps, rows: Sequence[FactoryChatMessage]) -> list
                 "mentions": list(row.mentions),
                 "refs": list(row.refs),
                 "reply_to": norm_id(row.reply_to) if row.reply_to else None,
-                "card": {k: card.get(k) for k in ("type", "ref", "id")} if card else None,
+                "card": card_view(card) if card else None,
                 "routed": [
                     {
                         "session_id": _key(str(e.get("session_id"))),
@@ -1134,7 +1186,7 @@ async def post_system(
             thread=thread,
             author_kind="system",
             author="server",
-            body=one_line(body, 600),
+            body=system_line(body),
             card=dict(card) if card else {"type": "system", "ref": None, "id": None},
             refs=list(refs),
             message_id=message_id,
@@ -1143,6 +1195,30 @@ async def post_system(
     if announce:
         live.announce_factory_changed(app_state, factory_id, [SCOPE])
     return row
+
+
+async def update_system(
+    app_state: Any,
+    message_id: str,
+    *,
+    body: str | None = None,
+    card: Mapping[str, Any] | None = None,
+) -> FactoryChatMessage | None:
+    """
+    Rewrite a system row in place (a live card or a batched line); announces nothing.
+
+    The body is flattened like :func:`post_system` flattens it, so a row reads
+    the same whether it was posted or updated.
+
+    :returns: The updated row, or ``None`` when the id is unknown.
+    """
+    deps = factory_deps(app_state)
+    fields: dict[str, Any] = {}
+    if body is not None:
+        fields["body"] = system_line(body)
+    if card is not None:
+        fields["card"] = dict(card)
+    return await asyncio.to_thread(deps.factory_store.update_chat_message, message_id, **fields)
 
 
 async def _route_and_store(
@@ -1482,6 +1558,7 @@ __all__ = [
     "KIND_REPLIED",
     "KIND_UNROUTABLE",
     "ROOM_STATE_ATTR",
+    "SYSTEM_LINE_MAX",
     "Line",
     "Posted",
     "Room",
@@ -1490,6 +1567,7 @@ __all__ = [
     "author_label",
     "brief_room_line",
     "build_delivery",
+    "card_view",
     "chat_ref",
     "derived_id",
     "envelope_ids",
@@ -1515,5 +1593,7 @@ __all__ = [
     "room_members",
     "start",
     "store_brief",
+    "system_line",
     "thread_title",
+    "update_system",
 ]

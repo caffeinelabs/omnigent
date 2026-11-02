@@ -93,7 +93,10 @@ export function RoomCard({
         data.issues?.find((i) => i.ref != null && i.ref === card.ref) ??
         null;
       if (!issue) return attached ? null : line;
-      return <IssueCard factoryId={factoryId} issue={issue} clockOffsetS={clockOffsetS} />;
+      const meta = card.meta?.kind === "issue" ? card.meta : null;
+      return (
+        <IssueCard factoryId={factoryId} issue={issue} meta={meta} clockOffsetS={clockOffsetS} />
+      );
     }
     default:
       return attached ? null : line;

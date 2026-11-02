@@ -961,12 +961,43 @@ export interface PersonNotifySummary {
   enabled?: boolean;
 }
 
+/** An incident's live card: one per open incident and thread, updated in place. */
+export interface IssueCardMeta {
+  kind: "issue";
+  /** The highest severity the card was posted at (a rise posts it again). */
+  severity: EventSeverity;
+  /** Times the server cleared it and it came back since this card was posted. */
+  reopened: number;
+  /** Epoch seconds of the latest comeback. */
+  reopened_at: number | null;
+}
+
+/** One move of a watched base. */
+export interface BaseMoveView {
+  /** Epoch seconds the server saw it. */
+  at: number;
+  from_sha: string | null;
+  to_sha: string;
+  /** The tracked PR whose merge commit is the new head. */
+  pr: number | null;
+}
+
+/** A batched "base moved" line: every move it holds, oldest first. */
+export interface BaseMovesMeta {
+  kind: "base.moved";
+  repo: string;
+  base: string;
+  moves: BaseMoveView[];
+}
+
 /** A structured object mirrored into a thread as a live card. */
 export interface ChatCardView {
   type: ChatCardType;
   /** e.g. `D-7`, `C-4`, `!9630`, `INC-13`. */
   ref: string | null;
   id: string | null;
+  /** What an incident's live card or a batched base line holds (older servers: absent). */
+  meta?: IssueCardMeta | BaseMovesMeta | null;
 }
 
 /** Delivery of one message to one agent. */

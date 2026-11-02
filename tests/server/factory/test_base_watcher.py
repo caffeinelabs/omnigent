@@ -16,7 +16,7 @@ import pytest
 import pytest_asyncio
 
 from omnigent import factory as F
-from omnigent.server.factory import base, live, nudge, status
+from omnigent.server.factory import base, chat_cards, live, nudge, status
 from omnigent.server.factory.background import pr_poller
 from omnigent.server.factory.background.pr_poller import BASE_WATCH_INTERVAL_S, PrPoller
 from omnigent.server.factory.charter import normalize_charter
@@ -220,6 +220,31 @@ async def test_sync_notices_are_spaced_but_the_env_always_redeploys(watching: Wa
     w.gh.branches[(REPO, BASE)] = sha("d")
     await w.poll()
     assert len(w.texts("pl", "sync open branches")) == 2
+
+
+async def test_moves_share_one_room_line_and_every_pl_still_hears(watching: Watching) -> None:
+    w = watching
+    _open_pr(w)
+    await w.poll()
+    for seed in ("b", "c", "d"):
+        w.gh.branches[(REPO, BASE)] = sha(seed)
+        await w.poll()
+
+    # Each move stays its own event (Activity) and the agents' mail is unchanged.
+    assert [m.data["to"] for m in w.moves()] == [sha("b"), sha("c"), sha("d")]
+    assert len(w.texts("pl_env")) == 3
+    assert len(w.texts("pl", "sync open branches")) == 1
+    # The Room shows one line that holds them all.
+    lines = [m for m in w.store.list_chat(w.fid, "factory", limit=50) if m.author_kind == "system"]
+    [line] = [m for m in lines if chat_cards.card_meta(m).get("kind") == "base.moved"]
+    assert len(lines) == 1
+    # The factory watches app and infra: the line says which repo moved.
+    assert line.body.startswith(f"base {BASE} (app) moved 3 times since ")
+    assert {m.data["repos_watched"] for m in w.moves()} == {2}
+    assert line.body.endswith(f" UTC → {sha('d')[:7]}")
+    meta = chat_cards.card_meta(line)
+    assert [m["to_sha"] for m in meta["moves"]] == [sha("b"), sha("c"), sha("d")]
+    assert meta["repo"] == REPO and meta["base"] == BASE
 
 
 async def test_heads_are_read_on_their_own_when_no_pr_is_due(watching: Watching) -> None:

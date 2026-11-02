@@ -7,11 +7,16 @@ import {
   ROOM_FID,
   ROOM_NOW_S,
   type RoomRouteOptions,
+  afterDeployThread,
   busyThread,
+  longIncidentThread,
+  manyBaseMovesThread,
+  roomIssues,
   roomMessages,
   roomRoutes,
   roomThreads,
   scaleSnapshot,
+  spendIncident,
 } from "./__fixtures__/roomFixtures";
 
 const NOW = new Date(ROOM_NOW_S * 1000);
@@ -202,6 +207,77 @@ export const Operator = room("/room", { room: { role: "operator" } });
 export const Viewer = room("/room", { room: { role: "viewer" } });
 
 export const ViewerMobile = phone(room("/room", { room: { role: "viewer" } }));
+
+// ── Noise, folded ──────────────────────────────────────────────
+
+const incidentRoom = {
+  room: { messages: longIncidentThread(), issues: [spendIncident(), ...roomIssues()] },
+};
+
+/**
+ * INC-14 spent over the alert all afternoon: one live card (latest $/h, ×31,
+ * last seen, came back 4×), the cards an older server posted again folded
+ * into quiet lines, people's messages untouched.
+ */
+export const LongRunningIncident = room("/room", incidentRoom);
+
+export const LongRunningIncidentDark = room("/room", { ...incidentRoom, theme: "dark" });
+
+export const LongRunningIncidentMobile = phone(room("/room", incidentRoom));
+
+/** The folded older cards, opened. */
+export const LongRunningIncidentOpened = room("/room", incidentRoom, async ({ canvasElement }) => {
+  fireEvent.click(
+    await body(canvasElement).findByTestId(
+      "room-issue-repeats-toggle-INC-14",
+      {},
+      { timeout: 6000 },
+    ),
+  );
+});
+
+const basesRoom = { room: { messages: manyBaseMovesThread() } };
+
+/**
+ * A busy main: twelve one-move lines an older server wrote, a batched line of
+ * 7 moves, a temp-main line and a lone move, each run one line.
+ */
+export const ManyBaseMoves = room("/room", basesRoom);
+
+export const ManyBaseMovesDark = room("/room", { ...basesRoom, theme: "dark" });
+
+export const ManyBaseMovesMobile = phone(room("/room", basesRoom));
+
+async function openMoves({ canvasElement }: { canvasElement: HTMLElement }) {
+  const toggles = await body(canvasElement).findAllByTestId(
+    "room-base-moves-toggle-main",
+    {},
+    { timeout: 6000 },
+  );
+  fireEvent.click(toggles[toggles.length - 1]!);
+}
+
+/** The batched line opened: each move with its time, sha and PR, and Activity a click away. */
+export const ManyBaseMovesOpened = room("/room", basesRoom, openMoves);
+
+export const ManyBaseMovesOpenedDark = room("/room", { ...basesRoom, theme: "dark" }, openMoves);
+
+export const ManyBaseMovesOpenedMobile = phone(room("/room", basesRoom, openMoves));
+
+const deployRoom = {
+  room: { messages: afterDeployThread(), issues: [spendIncident(), ...roomIssues()] },
+};
+
+/**
+ * #factory as the deploy finds it: six old INC-14 cards each followed by a
+ * one-move base line read as one base line, one quiet line of the old cards
+ * right above the live card, and app main and infra main each their own line.
+ */
+export const AfterDeploy = room("/room", deployRoom);
+
+export const AfterDeployDark = room("/room", { ...deployRoom, theme: "dark" });
+
+export const AfterDeployMobile = phone(room("/room", deployRoom));
 
 // ── Scale and edge cases ───────────────────────────────────────
 
