@@ -9,7 +9,7 @@ import { definitionResponse } from "@/components/factory/insights/__fixtures__/l
 import { notifyMe } from "@/components/factory/notify/__fixtures__/notifyFixtures";
 import { round3Snapshot } from "@/components/factory/shell/__fixtures__/shellFixtures";
 import { COCKPIT_STORAGE_KEY, resetCockpitChoiceCache } from "@/components/factory/shell/cockpitV2";
-import type { CockpitChoice, FactorySnapshot, NotifyMeView } from "@/lib/factoryApi";
+import type { CockpitChoice, FactorySnapshot } from "@/lib/factoryApi";
 import { FactoryPage } from "./FactoryPage";
 import { type FactoryServer, SNAPSHOT, json, serveFactory } from "./testServer";
 
@@ -71,36 +71,41 @@ function renderAt(path: string) {
 let server: FactoryServer;
 let saved: CockpitChoice | null;
 
+const NOT_ON_ROSTER = { error: { code: "not_on_roster", message: "not on the roster" } };
+
 /** The server offers the new cockpit (or not), and the person's saved choice. */
 function serve({
   offered = true,
   choice = "v2",
   snapshot = round3Snapshot(),
   onRoster = true,
+  summary,
+  prefs,
 }: {
   offered?: boolean;
   choice?: CockpitChoice | null;
   snapshot?: FactorySnapshot;
   onRoster?: boolean;
+  /** Overrides the status-summary read (say, a failure). */
+  summary?: () => Response | Promise<Response>;
+  /** Overrides the saved-choice read (say, a slow one). */
+  prefs?: () => Response | Promise<Response>;
 } = {}) {
   saved = choice;
-  const me = (): NotifyMeView => {
-    const base = notifyMe();
-    return { ...base, settings: { ...base.settings, ui: { cockpit: saved } } };
-  };
   server = serveFactory(authenticatedFetch, {
     snapshot: () => json(snapshot),
     overrides: {
       "GET /v1/factory/preflight": () => json({ ...preflightOk(), cockpit_v2: offered }),
-      [`GET ${SNAPSHOT}/notify/me`]: () =>
-        onRoster
-          ? json(me())
-          : json({ error: { code: "not_on_roster", message: "not on the roster" } }, 409),
-      [`PUT ${SNAPSHOT}/notify/me`]: async () => {
-        const last = server.calls.at(-1)!.body as { ui: { cockpit: CockpitChoice } };
-        saved = last.ui.cockpit;
-        return json(me());
+      [`GET ${SNAPSHOT}/notify/me/ui`]:
+        prefs ?? (() => (onRoster ? json({ cockpit: saved }) : json(NOT_ON_ROSTER, 409))),
+      [`PUT ${SNAPSHOT}/notify/me/ui`]: async () => {
+        if (!onRoster) return json(NOT_ON_ROSTER, 409);
+        const last = server.calls.at(-1)!.body as { cockpit: CockpitChoice };
+        saved = last.cockpit;
+        return json({ cockpit: saved });
       },
+      [`GET ${SNAPSHOT}/notify/me`]: () => json(notifyMe()),
+      ...(summary ? { [`GET ${SNAPSHOT}/status-summary`]: summary } : {}),
       [`GET ${SNAPSHOT}/definition`]: () => {
         const body = definitionResponse();
         return json({
@@ -114,8 +119,17 @@ function serve({
 
 function puts(): unknown[] {
   return server.calls
-    .filter((c) => c.method === "PUT" && c.path.endsWith("/notify/me"))
+    .filter((c) => c.method === "PUT" && c.path.endsWith("/notify/me/ui"))
     .map((c) => c.body);
+}
+
+/** A response the test answers later. */
+function later(): { answer: (r: Response) => void; respond: () => Promise<Response> } {
+  let answer: (r: Response) => void = () => undefined;
+  const pending = new Promise<Response>((resolve) => {
+    answer = resolve;
+  });
+  return { answer: (r) => answer(r), respond: () => pending };
 }
 
 function openMenu(trigger: HTMLElement) {
@@ -153,7 +167,7 @@ describe("the new cockpit · the switch", () => {
 
     expect(await screen.findByTestId("cockpit-topbar")).toBeInTheDocument();
     expect(screen.queryByTestId("factory-header")).toBeNull();
-    await waitFor(() => expect(puts()).toEqual([{ ui: { cockpit: "v2" } }]));
+    await waitFor(() => expect(puts()).toEqual([{ cockpit: "v2" }]));
     expect(localStorage.getItem(COCKPIT_STORAGE_KEY)).toBe("v2");
   });
 
@@ -165,7 +179,7 @@ describe("the new cockpit · the switch", () => {
     fireEvent.click(await screen.findByTestId("cockpit-you-classic"));
 
     expect(await screen.findByTestId("factory-header")).toBeInTheDocument();
-    await waitFor(() => expect(puts()).toEqual([{ ui: { cockpit: "v1" } }]));
+    await waitFor(() => expect(puts()).toEqual([{ cockpit: "v1" }]));
     expect(location).toBe(`${BASE}/projects`);
   });
 
@@ -186,6 +200,36 @@ describe("the new cockpit · the switch", () => {
     expect(puts()).toEqual([]);
   });
 
+  it("keeps a switch made before the saved choice answers, and saves it", async () => {
+    localStorage.setItem(COCKPIT_STORAGE_KEY, "v1");
+    const slow = later();
+    serve({ choice: "v1", prefs: slow.respond });
+    renderAt("/projects");
+
+    // The classic page shows from this browser's copy while the read is out.
+    fireEvent.click(await screen.findByTestId("factory-try-cockpit"));
+    expect(await screen.findByTestId("cockpit-topbar")).toBeInTheDocument();
+    await waitFor(() => expect(puts()).toEqual([{ cockpit: "v2" }]));
+    // The read that was already out answers with the old choice: the click still wins.
+    slow.answer(json({ cockpit: "v1" }));
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
+    });
+    expect(screen.getByTestId("cockpit-topbar")).toBeInTheDocument();
+    expect(saved).toBe("v2");
+  });
+
+  it("ignores a ?cockpit= link while the server does not offer the new cockpit", async () => {
+    serve({ offered: false, choice: null });
+    renderAt("/projects?cockpit=v2");
+
+    expect(await screen.findByTestId("factory-header")).toBeInTheDocument();
+    expect(localStorage.getItem(COCKPIT_STORAGE_KEY)).toBeNull();
+    expect(puts()).toEqual([]);
+  });
+
   it("keeps the classic page up for someone the server cannot store a choice for", async () => {
     serve({ choice: null, onRoster: false });
     renderAt("/projects");
@@ -197,7 +241,9 @@ describe("the new cockpit · the switch", () => {
       });
     });
     // The refused preference is asked for a few times at most, never in a loop.
-    const asked = server.calls.filter((c) => c.method === "GET" && c.path.endsWith("/notify/me"));
+    const asked = server.calls.filter(
+      (c) => c.method === "GET" && c.path.endsWith("/notify/me/ui"),
+    );
     expect(asked.length).toBeLessThanOrEqual(3);
     expect(screen.getByTestId("factory-header")).toBeInTheDocument();
   });
@@ -208,7 +254,7 @@ describe("the new cockpit · the switch", () => {
 
     expect(await screen.findByTestId("cockpit-topbar")).toBeInTheDocument();
     await waitFor(() => expect(location).toBe(`${BASE}/projects`));
-    await waitFor(() => expect(puts()).toEqual([{ ui: { cockpit: "v2" } }]));
+    await waitFor(() => expect(puts()).toEqual([{ cockpit: "v2" }]));
   });
 });
 
@@ -231,6 +277,8 @@ describe("the new cockpit · the shell", () => {
     expect(within(tabs).getByTestId("cockpit-tab-home")).toHaveAttribute("aria-current", "page");
     // Round 3 waits on the creator: Home carries the one amber count.
     expect(await within(tabs).findByTestId("cockpit-tab-home-count")).toHaveTextContent(/\d+/);
+    // Steer counts only changes to how the factory works (C-15), not the plan C-4 in Needs you.
+    expect(within(tabs).getByTestId("cockpit-tab-steer-count")).toHaveTextContent("1");
     const verdict = await within(bar).findByTestId("cockpit-verdict");
     await waitFor(() => expect(verdict).toHaveAttribute("data-dot", "red"));
     // The served summary is the server's builder over the page scenario (fixture-built).
@@ -242,6 +290,50 @@ describe("the new cockpit · the shell", () => {
     expect(screen.queryByTestId("factory-tabs")).toBeNull();
     expect(screen.queryByTestId("factory-live-dot")).toBeNull();
     expect(screen.getByTestId("factory-shell")).toHaveAttribute("data-cockpit", "v2");
+    // The switch reads the small preference, never the Slack view (it pages the DM ledger).
+    const reads = server.calls.filter((c) => c.method === "GET").map((c) => c.path.split("?")[0]);
+    expect(reads).toContain(`${SNAPSHOT}/notify/me/ui`);
+    expect(reads).not.toContain(`${SNAPSHOT}/notify/me`);
+  });
+
+  it("never says green while the server's verdict is out and the snapshot shows a stopped project", async () => {
+    const snapshot = round3Snapshot();
+    expect(snapshot.projects.some((p) => p.overlay === "failed")).toBe(true);
+    serve({
+      snapshot,
+      summary: () => json({ error: { code: "internal", message: "boom" } }, 500),
+    });
+    renderAt("");
+
+    const verdict = await screen.findByTestId("cockpit-verdict");
+    await waitFor(() =>
+      expect(server.calls.some((c) => c.path.endsWith("/status-summary"))).toBe(true),
+    );
+    await act(async () => {
+      await new Promise<void>((resolve) => {
+        setTimeout(resolve, 50);
+      });
+    });
+    expect(verdict).not.toHaveAttribute("data-dot", "green");
+    expect(verdict).toHaveAttribute("data-dot", "red");
+    expect(verdict).toHaveTextContent(/stopped/);
+  });
+
+  it("says the health is unknown, in grey, when the verdict fails for a calm factory", async () => {
+    const snapshot = round3Snapshot();
+    snapshot.projects = snapshot.projects.map((p) => ({ ...p, overlay: null }));
+    snapshot.members = snapshot.members.map((m) => ({ ...m, health: null, status: "idle" }));
+    serve({
+      snapshot,
+      summary: () => json({ error: { code: "internal", message: "boom" } }, 500),
+    });
+    renderAt("");
+
+    const verdict = await screen.findByTestId("cockpit-verdict");
+    // Grey "Checking health…" while the read (and its one retry) is out, then unknown.
+    expect(verdict).toHaveAttribute("data-dot", "grey");
+    await waitFor(() => expect(verdict).toHaveTextContent("Health unknown"), { timeout: 4000 });
+    expect(verdict).toHaveAttribute("data-dot", "grey");
   });
 
   it("opens the Health panel from the verdict, with why and the machine facts", async () => {

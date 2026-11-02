@@ -15,6 +15,7 @@ import pytest
 from omnigent.entities.factory import FactoryIssue
 from omnigent.server.auth import LEVEL_OWNER, LEVEL_READ
 from omnigent.server.factory import detectors, snapshot, status
+from omnigent.server.factory.context import factory_deps
 from omnigent.server.factory.status_summary import (
     StatusInputs,
     StatusSummary,
@@ -180,6 +181,52 @@ def test_waits_on_others_alone_keep_it_green_and_say_so() -> None:
         "Running, 1 decision waits on others",
         [],
     )
+
+
+def test_a_blocked_project_is_named_instead_of_smoothly() -> None:
+    body = _snapshot(
+        projects=[
+            _project("search"),
+            _project("export", overlay="blocked", overlay_reason="Task T-3 ran out of retries"),
+        ]
+    )
+
+    v = _verdict(body)
+
+    # Not broken and not waiting on the viewer: the dot stays green (amber means "needs you").
+    assert (v["dot"], v["sentence"]) == ("green", "Running, 1 project blocked")
+    assert [(r["kind"], r["href"]) for r in v["reasons"]] == [
+        ("blocked", f"/factory/{FID}/projects/export")
+    ]
+    assert v["reasons"][0]["text"].startswith("export: ")
+
+
+def test_blocked_projects_and_waits_on_others_are_both_named() -> None:
+    body = _snapshot(
+        projects=[
+            _project("search", overlay="blocked"),
+            _project("export", overlay="blocked"),
+        ],
+        decisions=[_decision(1, assignee="owners")],
+    )
+
+    v = _verdict(body, user_id="reader@example.com", level=LEVEL_READ)
+
+    assert v["dot"] == "green"
+    assert v["sentence"] == "Running, 2 projects blocked and 1 decision waits on others"
+    assert [r["kind"] for r in v["reasons"]] == ["blocked", "blocked"]
+
+
+def test_a_blocked_project_keeps_a_paused_factory_grey_and_amber_amber() -> None:
+    blocked = _project("export", overlay="blocked")
+
+    paused = _verdict(_snapshot(state="paused", projects=[blocked]))
+    waiting = _verdict(_snapshot(projects=[blocked], decisions=[_decision(1)]))
+
+    assert (paused["dot"], paused["sentence"]) == ("grey", "Paused, 1 project blocked")
+    assert (waiting["dot"], waiting["sentence"]) == ("amber", "Running, 1 decision waits on you")
+    # The blocked project is still a reason, after what waits on the viewer.
+    assert [r["kind"] for r in waiting["reasons"]] == ["waiting", "blocked"]
 
 
 @pytest.mark.parametrize(
@@ -367,3 +414,33 @@ async def test_the_route_carries_the_verdict_with_the_factorys_spend_alert(
     assert verdict["dot"] in ("red", "amber", "green", "grey")
     assert verdict["sentence"]
     assert verdict["usd_per_h_alert"] == 40.0
+
+
+async def test_the_snapshot_counts_proposals_that_change_the_factory_for_steer(
+    world: FactoryWorld, authed_api: FactoryApi
+) -> None:
+    fid = world.id("lead_a")
+    store = factory_deps(authed_api.app.state).factory_store
+    for kind, status_ in (
+        ("projects", "pending"),  # a project plan waits in Needs you, not in Steer
+        ("tuning", "pending"),
+        ("rules", "awaiting_cosign"),
+        ("tuning", "applied"),
+    ):
+        store.create_proposal(
+            fid,
+            kind=kind,
+            title=f"{kind} change (sample)",
+            author_kind="agent",
+            author=world.id("lead_a"),
+            status=status_,
+        )
+    snapshot.reset_cache()
+
+    resp = await authed_api.client.get(
+        f"/v1/factory/factories/{fid}", headers={"X-Test-User": "alice"}
+    )
+
+    assert resp.status_code == 200, resp.text
+    counts = resp.json()["counts"]
+    assert (counts["proposals_pending"], counts["definition_proposals_pending"]) == (3, 2)

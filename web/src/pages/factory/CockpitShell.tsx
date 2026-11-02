@@ -80,11 +80,20 @@ export function CockpitShell({
       [snapshot, fid, threads],
     ),
   );
-  const summary = useFactoryStatusSummary(fid).data;
+  const summaryQuery = useFactoryStatusSummary(fid);
+  // The query keeps the previous factory's answer while a switched-to one loads.
+  const summary = summaryQuery.data?.factory_id === fid ? summaryQuery.data : undefined;
   const productName = useFactoryDefinition(fid).data?.effective.product?.name ?? null;
   const split = useMemo(() => splitNeedsYou(snapshot), [snapshot]);
   const needsYou = summary?.counts.waiting_for_you ?? split.mine.length + split.role.length;
-  const verdict = summary?.verdict ?? fallbackVerdict(snapshot);
+  // Until the server's verdict is in (or when the read fails, or an older
+  // server has none) the snapshot's facts speak, and they never say green.
+  const verdict =
+    summary?.verdict ??
+    fallbackVerdict(
+      snapshot,
+      summaryQuery.isPending || summaryQuery.isPlaceholderData ? "checking" : "unknown",
+    );
   const room = params.get(ROOM_PARAM);
   const peek = params.get(PEEK_PARAM);
 

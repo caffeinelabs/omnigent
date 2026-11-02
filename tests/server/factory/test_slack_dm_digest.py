@@ -9,6 +9,7 @@ project, and that a ready PR waits on its project's human owner in both.
 
 from __future__ import annotations
 
+import dataclasses
 import re
 import time
 from collections.abc import AsyncIterator, Iterator
@@ -23,6 +24,7 @@ from omnigent.server.auth import LEVEL_OWNER, LEVEL_READ
 from omnigent.server.factory import snapshot
 from omnigent.server.factory.slackdm import digest as digest_mod
 from omnigent.server.factory.slackdm import engine as engine_mod
+from omnigent.server.factory.slackdm import prefs as prefs_mod
 from omnigent.server.factory.slackdm import render
 from omnigent.server.factory.slackdm.render import SECTION_MAX
 from omnigent.server.factory.status_summary import spend_text, utc_day
@@ -150,11 +152,10 @@ async def test_the_digest_says_what_the_now_card_says(cockpit: Cockpit) -> None:
     _same(summary, card)
     assert built is not None
     text = _text(built)
-    # The top bar's verdict first, then the card's headline, word for word.
-    assert card["verdict"]["sentence"] == "Running, 2 things wait on you"
+    # The card's headline, word for word (the verdict line is only for the new cockpit).
     assert card["headline"] == "2 things wait on you · nothing in progress yet · 1 project queued"
-    lines = text.splitlines()
-    assert lines.index(f"*{card['verdict']['sentence']}*") == lines.index(card["headline"]) - 1
+    assert card["headline"] in text.splitlines()
+    assert f"*{card['verdict']['sentence']}*" not in text.splitlines()
     # Waiting on you: the card's items, in its order, each linked.
     mine = [item for item in card["waiting"] if item["for_you"]]
     assert [item["ref"] for item in mine] == ["PR #9826", "D-1"]  # the longest wait first
@@ -175,6 +176,39 @@ async def test_the_digest_says_what_the_now_card_says(cockpit: Cockpit) -> None:
     assert nxt == f"*Next*  {digest_mod.next_line(card, person, now, BASE)}"
     [queued] = card["next"]
     assert queued["project"] == "billing" and queued["reason"] in nxt
+
+
+async def test_someone_on_the_new_cockpit_gets_its_verdict_above_the_headline(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _seed(cockpit)
+    link(cockpit, "alice")
+    card = await _card(cockpit, "alice")
+    now = time.time()
+    root = cockpit.world.store.get_conversation(cockpit.fid)
+    ctx = await engine_mod.factory_ctx(cockpit.app.state, root)
+    raw = await snapshot.get_snapshot(cockpit.app.state, root)
+    vis = await digest_mod.visibility_for(cockpit.deps, raw, "alice")
+    person = ctx.people["alice"]
+    chose = dataclasses.replace(
+        person, prefs=person.prefs.model_copy(update={"ui": prefs_mod.UiPrefs(cockpit="v2")})
+    )
+    verdict = f"*{card['verdict']['sentence']}*"
+    assert card["verdict"]["sentence"] == "Running, 2 things wait on you"
+
+    def lines(who: Any) -> list[str]:
+        built = digest_mod.build_digest(cockpit.deps, ctx, who, vis, raw, now, BASE)
+        assert built is not None
+        return _text(built).splitlines()
+
+    # The server does not offer the new cockpit: nobody's digest changes.
+    monkeypatch.delenv(F.COCKPIT_V2_ENV, raising=False)
+    assert verdict not in lines(chose)
+    # Offered: only the person who switched gets the top bar's sentence, right above the headline.
+    monkeypatch.setenv(F.COCKPIT_V2_ENV, "1")
+    assert verdict not in lines(person)
+    mine = lines(chose)
+    assert mine.index(verdict) == mine.index(card["headline"]) - 1
 
 
 async def test_a_readers_digest_hides_what_their_card_hides(cockpit: Cockpit) -> None:

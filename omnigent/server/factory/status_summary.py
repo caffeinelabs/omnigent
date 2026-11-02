@@ -47,8 +47,8 @@ Sections:
   and why, projects that are blocked, failed or paused, and GitHub trouble.
 - **Verdict** (``verdict``): the top bar's dot and one sentence by fixed
   rules: red when something is broken, amber when things only wait on the
-  viewer, grey when paused, finished or idle, green otherwise; the digest
-  opens with the same sentence.
+  viewer, grey when paused, finished or idle, green otherwise; the digest of
+  someone on the new cockpit opens with the same sentence.
 """
 
 from __future__ import annotations
@@ -347,10 +347,11 @@ class VerdictReason(_Model):
 
     :param kind: ``project`` (a live project stopped), ``agent`` (a lead
         stopped), ``incident`` (a critical one), ``github``, ``supervisor``,
-        or ``waiting`` (what waits on the viewer, one per kind).
+        ``waiting`` (what waits on the viewer, one per kind), or ``blocked``
+        (a live project blocked: named, never a colour of its own; last).
     """
 
-    kind: Literal["project", "agent", "incident", "github", "supervisor", "waiting"]
+    kind: Literal["project", "agent", "incident", "github", "supervisor", "waiting", "blocked"]
     text: str
     href: str
 
@@ -363,8 +364,9 @@ class Verdict(_Model):
     incident, GitHub unreachable, the supervisor failing); amber when nothing
     is broken and things wait on the viewer; grey when the factory is paused,
     finished or idle with nothing broken or waiting on the viewer; green
-    otherwise. It never says green while something is broken. The Slack
-    digest opens with the same sentence.
+    otherwise. It never says green while something is broken, and never
+    "smoothly" while a live project is blocked (the sentence names it). The
+    Slack digest of someone on the new cockpit opens with the same sentence.
 
     :param sentence: e.g. ``"Running, 1 project stopped"`` or ``"Running smoothly"``.
     :param usd_per_h: The current rate (the header's), when known.
@@ -1496,6 +1498,10 @@ def verdict(
                     kind="waiting", text=waits_text(of_kind, "you"), href=of_kind[0].href
                 )
             )
+    # A blocked live project is not broken (amber still means only "needs you"),
+    # but the calm sentence names it rather than saying "smoothly".
+    blocked = [item for item in health.items if item.kind == "blocked"]
+    reasons += [VerdictReason(kind="blocked", text=item.text, href=item.href) for item in blocked]
     if broken:
         dot: Literal["red", "amber", "green", "grey"] = "red"
         sentence = f"{lead}, {_and(broken)}"
@@ -1503,8 +1509,11 @@ def verdict(
         dot, sentence = "amber", f"{lead}, {waits_text(mine, 'you')}"
     else:
         dot = "green" if state == "working" else "grey"
-        calm = "Running smoothly" if state == "working" else lead
-        sentence = f"{lead}, {waits_text(waiting, 'others')}" if waiting else calm
+        calm = [f"{_plural(len(blocked), 'project')} blocked"] if blocked else []
+        if waiting:
+            calm.append(waits_text(waiting, "others"))
+        smooth = "Running smoothly" if state == "working" else lead
+        sentence = f"{lead}, {_and(calm)}" if calm else smooth
     rate = (body.get("totals") or {}).get("usd_per_h")
     return Verdict(
         dot=dot,

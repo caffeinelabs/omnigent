@@ -40,7 +40,13 @@ import type { StatusVerdict, VerdictDot } from "@/lib/factoryStatusApi";
 import { isMacPlatform } from "@/lib/hotkeys";
 import { useNavigate } from "@/lib/routing";
 import { cn } from "@/lib/utils";
-import { debugPageHref, factoryPageHref, settingsPageHref } from "../factoryRoutes";
+import {
+  agentPageHref,
+  debugPageHref,
+  factoryPageHref,
+  projectPageHref,
+  settingsPageHref,
+} from "../factoryRoutes";
 import { FOCUS_RING } from "../ui/statusTokens";
 import { CockpitTabs } from "./FactoryTabs";
 import { useViewerCan } from "./viewerCan";
@@ -87,13 +93,92 @@ export function verdictRate(verdict: StatusVerdict | null | undefined): string |
   return alert != null ? `${shortUsd(rate)}/h of ${shortUsd(alert)}/h` : `${shortUsd(rate)}/h`;
 }
 
-/** The verdict a snapshot alone supports while the server's is not in (or on an older server). */
-export function fallbackVerdict(snapshot: FactorySnapshot): StatusVerdict {
+function plural(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+
+function and(parts: readonly string[]): string {
+  return parts.length === 1 ? parts[0]! : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`;
+}
+
+/**
+ * The verdict a snapshot alone supports while the server's is not in: on
+ * first paint, after the read failed, or from an older server without one.
+ * It is never green, since only the server sees every fact (critical
+ * incidents among them). Red when the snapshot itself shows something broken
+ * (the server's facts: a live project or a top-level lead stopped, GitHub
+ * unreachable, the supervisor failing), grey otherwise.
+ *
+ * @param status - `checking` while the server's verdict loads, `unknown` once it failed.
+ */
+export function fallbackVerdict(
+  snapshot: FactorySnapshot,
+  status: "checking" | "unknown" = "checking",
+): StatusVerdict {
+  const fid = snapshot.factory.id;
   const state = snapshot.factory.state;
+  const lead = state === "paused" ? "Paused" : state === "done" ? "Finished" : "Running";
+  const parts: string[] = [];
+  const reasons: StatusVerdict["reasons"] = [];
+  const live = snapshot.projects.filter(
+    (p) => (p.status == null || p.status === "active") && p.kind !== "integration",
+  );
+  const failed = live.filter((p) => p.overlay === "failed");
+  if (failed.length) {
+    parts.push(`${plural(failed.length, "project")} stopped`);
+    for (const p of failed) {
+      reasons.push({
+        kind: "project",
+        text: `${p.slug}: ${p.overlay_reason ?? "stopped"}`,
+        href: projectPageHref(fid, p.slug),
+      });
+    }
+  }
+  const gone = new Set(failed.map((p) => p.slug));
+  const liveSlugs = new Set(live.map((p) => p.slug));
+  const dead = snapshot.members.filter(
+    (m) =>
+      m.is_top_level !== false &&
+      (m.health === "dead" || m.status === "failed") &&
+      m.state !== "done" &&
+      (!m.project || (liveSlugs.has(m.project) && !gone.has(m.project))),
+  );
+  if (dead.length) {
+    parts.push(`${plural(dead.length, "lead")} stopped`);
+    for (const m of dead) {
+      reasons.push({
+        kind: "agent",
+        text: `${m.title || "A lead"} stopped`,
+        href: agentPageHref(fid, m.session_id),
+      });
+    }
+  }
+  if (snapshot.health?.github?.state === "disconnected") {
+    parts.push("GitHub can't be reached");
+    reasons.push({
+      kind: "github",
+      text: "GitHub can't be reached, so PR states may be out of date",
+      href: factoryPageHref(fid),
+    });
+  }
+  if (snapshot.health?.supervisor?.ok === false) {
+    parts.push("the supervisor is failing");
+    reasons.push({
+      kind: "supervisor",
+      text: "The supervisor's last check failed, so beats and alerts may stop",
+      href: factoryPageHref(fid),
+    });
+  }
+  const calm =
+    state === "paused" || state === "done"
+      ? lead
+      : status === "checking"
+        ? "Checking health…"
+        : "Health unknown";
   return {
-    dot: state === "active" ? "green" : "grey",
-    sentence: state === "paused" ? "Paused" : state === "done" ? "Finished" : "Running",
-    reasons: [],
+    dot: parts.length ? "red" : "grey",
+    sentence: parts.length ? `${lead}, ${and(parts)}` : calm,
+    reasons,
     usd_per_h: snapshot.totals.usd_per_h ?? null,
   };
 }
@@ -348,7 +433,9 @@ export function FactoryTopBar({
 }: FactoryTopBarProps) {
   const fid = snapshot.factory.id;
   const mac = isMacPlatform();
-  const proposals = snapshot.counts?.proposals_pending ?? 0;
+  // Steer's grey count: proposals to change how the factory works (plans and
+  // bets wait in Needs you); absent from older servers, so no count.
+  const proposals = snapshot.counts?.definition_proposals_pending ?? 0;
   return (
     <header
       data-testid="cockpit-topbar"

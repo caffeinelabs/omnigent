@@ -134,7 +134,11 @@ export function HealthPeek({
                     className="mt-1.5 size-1.5 shrink-0 rounded-full"
                     style={{
                       background:
-                        reason.kind === "waiting" ? MEANING.needsYou.hue : MEANING.broken.hue,
+                        reason.kind === "waiting"
+                          ? MEANING.needsYou.hue
+                          : reason.kind === "blocked"
+                            ? MEANING.stuck.hue
+                            : MEANING.broken.hue,
                     }}
                   />
                   <Link
@@ -231,9 +235,10 @@ export function HealthPeek({
           <p className="text-sm text-muted-foreground">
             Red when something is broken: a project or a lead stopped, a critical incident, GitHub
             out of reach or the supervisor failing. Amber when nothing is broken and things wait on
-            you. Grey when the factory is paused, finished or idle. Green otherwise. It is built
-            from facts by fixed rules, never written by an agent, and the Slack digest opens with
-            the same sentence.
+            you. Grey when the factory is paused, finished or idle. Green otherwise. A blocked
+            project is named in the sentence without changing the colour. It is built from facts by
+            fixed rules, never written by an agent, and your Slack digest opens with the same
+            sentence.
           </p>
         </Section>
       </div>

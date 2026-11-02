@@ -353,7 +353,7 @@ export function CockpitTabs({
   location: FactoryLocation;
   /** What waits on the viewer (Home's amber count). */
   needsYou: number;
-  /** Proposals waiting for a person (Steer's grey count). */
+  /** Proposals to change how the factory works, waiting for a person (Steer's grey count). */
   proposals: number;
   className?: string;
 }) {

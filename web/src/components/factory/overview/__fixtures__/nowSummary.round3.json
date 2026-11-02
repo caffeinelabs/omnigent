@@ -29,6 +29,11 @@
             "kind": "waiting",
             "text": "2 incidents wait on you",
             "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/12"
+          },
+          {
+            "kind": "blocked",
+            "text": "db-version: blocked until someone answers D-2 · T-4 implement exhausted",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/db-version"
           }
         ],
         "usd_per_h": 6.1,
@@ -349,6 +354,11 @@
             "kind": "waiting",
             "text": "2 incidents wait on you",
             "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/12"
+          },
+          {
+            "kind": "blocked",
+            "text": "db-version: blocked until someone answers D-2 · T-4 implement exhausted",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/db-version"
           }
         ],
         "usd_per_h": 6.1,
@@ -654,6 +664,11 @@
             "kind": "project",
             "text": "cache-warm: its lead agent stopped · relaunch failed 3×",
             "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/cache-warm"
+          },
+          {
+            "kind": "blocked",
+            "text": "db-version: blocked until someone answers D-2 · T-4 implement exhausted",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/db-version"
           }
         ],
         "usd_per_h": 6.1,
@@ -1363,6 +1378,11 @@
             "kind": "waiting",
             "text": "4 PRs wait on you",
             "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/p9826"
+          },
+          {
+            "kind": "blocked",
+            "text": "asks: blocked until someone answers D-9",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/asks"
           }
         ],
         "usd_per_h": 3.1,

@@ -17,6 +17,7 @@ import {
   prPageHref,
   projectPageHref,
   projectSection,
+  roomPageHref,
   steerPageHref,
 } from "../factoryRoutes";
 
@@ -339,7 +340,9 @@ const DEBUG_TO_CLASSIC: Readonly<Record<DebugView, string>> = {
  * the viewer was on (`from`, else Home) with `?room=<thread>`.
  *
  * The classic cockpit maps the new places back to its pages, so a link one
- * person copied from the new cockpit opens for someone on the classic one.
+ * person copied from the new cockpit opens for someone on the classic one; a
+ * link with the Room drawer open (`?room=<thread>`) opens the Room page on it.
+ * A Room link opens over `from` only when that is a page of the same factory.
  *
  * @param from - The factory page (path and query) the viewer was on before a Room link.
  */
@@ -407,7 +410,11 @@ function toNewCockpit(
       return section ? hrefWith(steerPageHref(factoryId, section), params) : null;
     }
     case "room": {
-      const target = from ?? base;
+      // Only a page of this factory (the layout stays mounted across factories).
+      const own =
+        from != null &&
+        (from === base || from.startsWith(`${base}/`) || from.startsWith(`${base}?`));
+      const target = own ? from : base;
       const [path, query = ""] = target.split("?");
       const merged = new URLSearchParams(query);
       for (const [key, value] of params) merged.set(key, value);
@@ -434,6 +441,10 @@ function toClassicCockpit(
   params: URLSearchParams,
 ): string | null {
   const base = factoryPageHref(factoryId);
+  // The new cockpit's Room drawer over any page: the classic Room page on that thread.
+  if (params.has("room") && location.page !== "room") {
+    return hrefWith(roomPageHref(factoryId, params.get("room")), params, ["room"]);
+  }
   switch (location.page) {
     case "overview":
       return params.get("peek") === "needs"
@@ -449,7 +460,8 @@ function toClassicCockpit(
         return hrefWith(`${base}/settings/${STEER_TO_SETTINGS[section]}`, params);
       }
       const peek = params.get("peek");
-      if (peek && /^C-\d+$/.test(peek)) {
+      // A change (C-n) or a finding (F-n): the classic page of either.
+      if (peek && /^[CF]-\d+$/i.test(peek)) {
         return hrefWith(`${base}/improvements/${encodeURIComponent(peek)}`, params, ["peek"]);
       }
       return hrefWith(`${base}/improvements`, params);

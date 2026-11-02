@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { userEvent, within } from "storybook/test";
-import type { FactorySnapshot, NotifyMeView } from "@/lib/factoryApi";
+import type { FactorySnapshot } from "@/lib/factoryApi";
 import { FactoryLayout } from "@/pages/factory/FactoryLayout";
 import { preflightOk } from "../__fixtures__/liveRun";
 import { round3IssueList } from "../agents/__fixtures__/opsFixtures";
@@ -17,10 +17,8 @@ import { round3Snapshot } from "./__fixtures__/shellFixtures";
 const PRODUCT = "Sample app (sample)";
 const ALERT_USD_PER_H = 15;
 
-function meChoosing(): NotifyMeView {
-  const me = notifyMe();
-  return { ...me, settings: { ...me.settings, ui: { cockpit: "v2" } } };
-}
+/** The person's saved choice (`GET …/notify/me/ui`). */
+const CHOSE_V2 = { cockpit: "v2" } as const;
 
 /** Nothing is broken and nothing waits: no stopped project or lead, no open asks. */
 function calm(snapshot: FactorySnapshot, keepDecisions = false): FactorySnapshot {
@@ -37,14 +35,42 @@ function calm(snapshot: FactorySnapshot, keepDecisions = false): FactorySnapshot
   };
 }
 
+/** Calm, and no live project blocked either. */
+function smooth(snapshot: FactorySnapshot): FactorySnapshot {
+  const quiet = calm(snapshot);
+  return {
+    ...quiet,
+    projects: quiet.projects.map((p) =>
+      p.overlay === "blocked" ? { ...p, overlay: null, overlay_reason: null } : p,
+    ),
+  };
+}
+
+/** A smooth factory someone paused. */
+function pausedCalm(snapshot: FactorySnapshot): FactorySnapshot {
+  const quiet = smooth(snapshot);
+  return { ...quiet, factory: { ...quiet.factory, state: "paused" } };
+}
+
+const CALMNESS = {
+  red: (s: FactorySnapshot) => s,
+  amber: (s: FactorySnapshot) => calm(s, true),
+  blocked: (s: FactorySnapshot) => calm(s),
+  green: smooth,
+  grey: pausedCalm,
+} as const;
+
 function cockpit(
-  options: CockpitStoryOptions & { calmness?: "red" | "amber" | "green" } = {},
+  options: CockpitStoryOptions & {
+    calmness?: keyof typeof CALMNESS;
+    /** The definition has discovery turned on. */
+    discovery?: boolean;
+  } = {},
   play?: Story["play"],
 ): Story {
-  const { calmness = "red", routes, snapshot: given, ...rest } = options;
+  const { calmness = "red", discovery = false, routes, snapshot: given, ...rest } = options;
   const base = given ?? round3Snapshot();
-  const snapshot =
-    calmness === "green" ? calm(base) : calmness === "amber" ? calm(base, true) : base;
+  const snapshot = CALMNESS[calmness](base);
   const own = `/v1/factory/factories/${snapshot.factory.id}`;
   const definition = definitionResponse();
   return {
@@ -53,11 +79,18 @@ function cockpit(
         snapshot={snapshot}
         routes={{
           "/v1/factory/preflight": { body: { ...preflightOk(), cockpit_v2: true } },
-          [`${own}/notify/me`]: { body: meChoosing() },
+          [`${own}/notify/me/ui`]: { body: CHOSE_V2 },
+          [`${own}/notify/me`]: { body: notifyMe() },
           [`${own}/definition`]: {
             body: {
               ...definition,
-              effective: { ...definition.effective, product: { name: PRODUCT } },
+              effective: {
+                ...definition.effective,
+                product: { name: PRODUCT },
+                ...(discovery
+                  ? { discovery: { ...definition.effective.discovery, enabled: true } }
+                  : {}),
+              },
             },
           },
           // A calm factory has no open incidents either.
@@ -130,6 +163,16 @@ export const VerdictGreen = cockpit({ calmness: "green" }, openHealth);
 
 export const VerdictGreenDark = cockpit({ calmness: "green", theme: "dark" }, openHealth);
 
+/** Green with a blocked project: the sentence names it instead of "smoothly". */
+export const VerdictGreenBlocked = cockpit({ calmness: "blocked" }, openHealth);
+
+/** Grey: paused, nothing broken and nothing waiting on you. */
+export const VerdictGrey = cockpit({ calmness: "grey" }, openHealth);
+
+export const VerdictGreyDark = cockpit({ calmness: "grey", theme: "dark" }, openHealth);
+
+export const VerdictGreyMobile = phone(cockpit({ calmness: "grey" }));
+
 /** The Health panel as a bottom sheet. */
 export const HealthMobile = phone(cockpit({}, openHealth));
 
@@ -162,6 +205,13 @@ export const SteerBudgetsMobile = phone(cockpit({ path: "/steer/budgets" }));
 /** Discovery while the factory has not turned it on. */
 export const DiscoveryOff = cockpit({ path: "/discovery" });
 
+/** Discovery on, before the factory has gathered anything. */
+export const DiscoveryOnEmpty = cockpit({ path: "/discovery", discovery: true });
+
+export const DiscoveryOnEmptyDark = cockpit({ path: "/discovery", discovery: true, theme: "dark" });
+
+export const DiscoveryOnEmptyMobile = phone(cockpit({ path: "/discovery", discovery: true }));
+
 /** Settings is personal and access only. */
 export const SettingsIntegrations = cockpit({ path: "/settings/integrations" });
 
@@ -179,7 +229,9 @@ export const ClassicOffersSwitch: Story = {
       snapshot={round3Snapshot()}
       routes={{
         "/v1/factory/preflight": { body: { ...preflightOk(), cockpit_v2: true } },
-        [`/v1/factory/factories/${round3Snapshot().factory.id}/notify/me`]: { body: notifyMe() },
+        [`/v1/factory/factories/${round3Snapshot().factory.id}/notify/me/ui`]: {
+          body: { cockpit: null },
+        },
       }}
     />
   ),

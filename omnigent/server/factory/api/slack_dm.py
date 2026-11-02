@@ -422,6 +422,45 @@ async def put_notify_me(
     return await _run(run)
 
 
+@router.get("/factories/{factory_id}/notify/me/ui", response_model=None)
+async def get_notify_me_ui(request: Request, factory_id: str) -> dict[str, Any] | JSONResponse:
+    """
+    The caller's cockpit choices in this factory (``{cockpit}``).
+
+    Read on every factory page load while the new cockpit is offered, so it
+    reads only the roster (``GET …/notify/me`` also pages the DM ledger).
+    """
+    deps, user_id = _caller(request)
+
+    async def run() -> dict[str, Any]:
+        _, _, prefs = await _me(deps, user_id, factory_id)
+        return prefs.ui.model_dump()
+
+    return await _run(run)
+
+
+@router.put("/factories/{factory_id}/notify/me/ui", response_model=None, dependencies=HUMAN_ORIGIN)
+async def put_notify_me_ui(
+    request: Request, factory_id: str, body: prefs_mod.UiPrefs
+) -> dict[str, Any] | JSONResponse:
+    """Change the caller's own cockpit choice; returns their choices afterwards."""
+    deps, user_id = _caller(request)
+    update = prefs_mod.PrefsUpdate(ui=body)
+
+    async def run() -> dict[str, Any]:
+        root, person, prefs = await _me(deps, user_id, factory_id)
+        row = await asyncio.to_thread(
+            prefs_mod.update_notify,
+            deps,
+            root.id,
+            person.user_id,
+            lambda raw: prefs_mod.apply_update(raw, update),
+        )
+        return (prefs_mod.for_person(row) if row is not None else prefs).ui.model_dump()
+
+    return await _run(run)
+
+
 @router.post(
     "/factories/{factory_id}/notify/me/slack", response_model=None, dependencies=HUMAN_ORIGIN
 )

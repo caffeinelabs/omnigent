@@ -1,17 +1,23 @@
 // The new cockpit is dark by default. The server offers it for people to try
 // (`OMNIGENT_FACTORY_COCKPIT_V2`, read from preflight), and each person
 // switches to it and back. The choice is the person's own preference in the
-// factory (`ui.cockpit` on `notify/me`, so it follows them to another
-// browser); this browser remembers it too, for people the server cannot store
-// it for (not on the roster, auth off) and while the preference loads. A link
-// can carry it (`?cockpit=v2` or `?cockpit=v1`).
+// factory (`ui.cockpit`, read from the small `notify/me/ui`, so it follows them
+// to another browser); this browser remembers it too, for people the server
+// cannot store it for (not on the roster, auth off) and while the preference
+// loads. A link can carry it (`?cockpit=v2` or `?cockpit=v1`) while the server
+// offers the new cockpit.
 
 import { useCallback, useEffect, useSyncExternalStore } from "react";
-import { useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { usePreflight } from "@/hooks/useFactory";
-import { type CockpitChoice, type NotifyMeView, putNotifyMe } from "@/lib/factoryApi";
+import {
+  type CockpitChoice,
+  type CockpitPrefsView,
+  fetchCockpitPrefs,
+  putCockpitPrefs,
+} from "@/lib/factoryApi";
 import { useSearchParams } from "@/lib/routing";
-import { notifyMeKey, useNotifyMe } from "../notify/notifyQueries";
+import { notifyMeKey } from "../notify/notifyQueries";
 import { useOptionalFactoryShell } from "./FactoryShellContext";
 
 export type { CockpitChoice } from "@/lib/factoryApi";
@@ -75,9 +81,29 @@ export interface CockpitV2 {
   choose: (choice: CockpitChoice) => void;
 }
 
+export const cockpitPrefsKey = (factoryId: string) => ["factory-cockpit-prefs", factoryId] as const;
+
+/**
+ * The person's saved choice: read once per page load (only this person
+ * changes it, and the switch writes the cache), never again on focus, and a
+ * refusal (not on the roster) is not asked again.
+ */
+function useCockpitPrefs(factoryId: string) {
+  return useQuery<CockpitPrefsView>({
+    queryKey: cockpitPrefsKey(factoryId),
+    queryFn: ({ signal }) => fetchCockpitPrefs(factoryId, signal),
+    enabled: Boolean(factoryId),
+    staleTime: Number.POSITIVE_INFINITY,
+    refetchOnWindowFocus: false,
+    retry: false,
+    retryOnMount: false,
+  });
+}
+
 /**
  * Whether the viewer sees the new cockpit: the server allows it and they chose
- * it. The person's preference in the factory wins over this browser's copy.
+ * it. The person's preference in the factory wins over this browser's copy,
+ * and a switch made here wins over a read still on its way.
  *
  * @param factoryId - The factory whose preference counts (the shell's when omitted).
  */
@@ -87,37 +113,44 @@ export function useCockpitV2(factoryId?: string): CockpitV2 {
   const preflight = usePreflight();
   const available = preflight.data?.cockpit_v2 === true;
   const queryClient = useQueryClient();
-  const me = useNotifyMe(available ? fid : "");
+  const prefs = useCockpitPrefs(available ? fid : "");
   const [params, setParams] = useSearchParams();
   const fromLink = params.get(COCKPIT_PARAM);
   const local = useSyncExternalStore(subscribe, readCockpitChoice, () => null);
-  const saved = me.data?.settings.ui?.cockpit ?? null;
+  const saved = prefs.data?.cockpit ?? null;
 
   const choose = useCallback(
     (next: CockpitChoice) => {
       writeCockpitChoice(next);
       if (!fid) return;
-      const key = notifyMeKey(fid);
-      const current = queryClient.getQueryData<NotifyMeView>(key);
-      // Only a person on the roster has a preference to keep.
-      if (!current) return;
-      queryClient.setQueryData<NotifyMeView>(key, {
-        ...current,
-        settings: { ...current.settings, ui: { cockpit: next } },
-      });
-      putNotifyMe(fid, { ui: { cockpit: next } }).then(
-        (view) => queryClient.setQueryData(key, view),
-        () => void queryClient.invalidateQueries({ queryKey: key }),
+      const key = cockpitPrefsKey(fid);
+      const keep = () => queryClient.setQueryData<CockpitPrefsView>(key, { cockpit: next });
+      // The click is newer than any read on its way: drop that answer, keep the click.
+      if (queryClient.isFetching({ queryKey: key })) {
+        void queryClient.cancelQueries({ queryKey: key }).then(keep);
+      } else {
+        keep();
+      }
+      // Sent even before the read answers; someone not on the roster gets a 409
+      // and keeps the choice in this browser only.
+      putCockpitPrefs(fid, { cockpit: next }).then(
+        (view) => {
+          queryClient.setQueryData(key, view);
+          void queryClient.invalidateQueries({ queryKey: notifyMeKey(fid) });
+        },
+        () => undefined,
       );
     },
     [fid, queryClient],
   );
 
-  // A link's choice is kept, then dropped from the address.
-  const linked = isChoice(fromLink) ? fromLink : null;
+  // A link's choice counts only while the server offers the new cockpit; it is
+  // kept, then dropped from the address.
+  const fromLinkChoice = isChoice(fromLink) ? fromLink : null;
+  const linked = available ? fromLinkChoice : null;
   // Waits only for the first answer: a refetch (say after an error) never hides the page again.
-  const meAnswered = !available || !fid || me.isFetched;
-  const settled = !preflight.isLoading && meAnswered;
+  const prefsAnswered = !available || !fid || prefs.isFetched;
+  const settled = !preflight.isLoading && prefsAnswered;
   useEffect(() => {
     if (!linked || !settled) return;
     choose(linked);
@@ -133,7 +166,7 @@ export function useCockpitV2(factoryId?: string): CockpitV2 {
 
   const choice = linked ?? saved ?? local;
   const loading =
-    (preflight.isLoading && (linked ?? local) === "v2") ||
-    (!meAnswered && linked == null && local == null);
+    (preflight.isLoading && (fromLinkChoice ?? local) === "v2") ||
+    (!prefsAnswered && linked == null && local == null);
   return { available, loading, settled, on: available && choice === "v2", choose };
 }

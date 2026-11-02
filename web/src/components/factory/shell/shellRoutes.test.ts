@@ -218,6 +218,18 @@ describe("cockpitRedirect", () => {
     expect(land("room", "", "v2", `${BASE}/projects/db-version?room=old`)).toBe(
       `${BASE}/projects/db-version?room=`,
     );
+    expect(land("room/factory", "", "v2", `${BASE}?view=board`)).toBe(
+      `${BASE}?view=board&room=factory`,
+    );
+  });
+
+  it("opens a Room link of another factory over that factory's Home, not this page", () => {
+    const other = "/factory/0123456789abcdef0123456789abcdef";
+    expect(land("room/factory", "", "v2", `${other}/projects?view=board`)).toBe(
+      `${BASE}?room=factory`,
+    );
+    // A factory id that only starts like this one is another factory too.
+    expect(land("room/factory", "", "v2", `${BASE}0/projects`)).toBe(`${BASE}?room=factory`);
   });
 
   it.each([
@@ -253,6 +265,12 @@ describe("cockpitRedirect", () => {
     ["steer", "", `${BASE}/improvements`],
     ["steer/versions", "tab=history", `${BASE}/improvements?tab=history`],
     ["steer/versions", "peek=C-14", `${BASE}/improvements/C-14`],
+    ["steer/versions", "peek=F-3", `${BASE}/improvements/F-3`],
+    // The Room drawer over any page opens the classic Room page on that thread.
+    ["projects/db-version", "room=project%3Adb-version", `${BASE}/room/project%3Adb-version`],
+    ["", "room=factory", `${BASE}/room/factory`],
+    ["projects", "room=", `${BASE}/room`],
+    ["teams", "room=factory&q=x", `${BASE}/room/factory?q=x`],
     ["steer/budgets", "", `${BASE}/settings/budgets`],
     ["steer/alerts", "", `${BASE}/settings/alerts`],
     ["steer/definition", "", `${BASE}/settings/definition`],

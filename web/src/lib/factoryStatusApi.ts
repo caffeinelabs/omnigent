@@ -164,9 +164,9 @@ export interface StatusCounts {
 /** Red broken, amber waits on you, grey paused / finished / idle, green working. */
 export type VerdictDot = "red" | "amber" | "green" | "grey";
 
-/** One fact behind the verdict's dot, worst first. */
+/** One fact behind the verdict's dot, worst first (`blocked` projects last: named, no colour of their own). */
 export interface StatusVerdictReason {
-  kind: "project" | "agent" | "incident" | "github" | "supervisor" | "waiting";
+  kind: "project" | "agent" | "incident" | "github" | "supervisor" | "waiting" | "blocked";
   text: string;
   href: string;
 }

@@ -1003,6 +1003,9 @@ function verdictOf(
       reasons.push({ kind: "waiting", text: waitsText(ofKind, "you"), href: ofKind[0]!.href });
     }
   }
+  // A blocked live project is not broken, but the calm sentence names it.
+  const blocked = health.items.filter((item) => item.kind === "blocked");
+  for (const item of blocked) reasons.push({ kind: "blocked", text: item.text, href: item.href });
   let dot: StatusVerdict["dot"];
   let sentence: string;
   if (parts.length) {
@@ -1013,8 +1016,10 @@ function verdictOf(
     sentence = `${lead}, ${waitsText(mine, "you")}`;
   } else {
     dot = state === "working" ? "green" : "grey";
-    const calm = state === "working" ? "Running smoothly" : lead;
-    sentence = waiting.length ? `${lead}, ${waitsText(waiting, "others")}` : calm;
+    const calm = blocked.length ? [`${plural(blocked.length, "project")} blocked`] : [];
+    if (waiting.length) calm.push(waitsText(waiting, "others"));
+    const smooth = state === "working" ? "Running smoothly" : lead;
+    sentence = calm.length ? `${lead}, ${and(calm)}` : smooth;
   }
   return {
     dot,

@@ -1,8 +1,10 @@
 """Each person's "Try the new cockpit" choice (``ui.cockpit``), kept with their notify row.
 
 It is per person and per factory, set only by that person through ``PUT
-…/notify/me`` (human origin), never moves anyone else's settings, and an old
-row without it reads as "not chosen yet".
+…/notify/me`` or ``PUT …/notify/me/ui`` (human origin), never moves anyone
+else's settings, and an old row without it reads as "not chosen yet". The
+cockpit reads it on every page load from ``GET …/notify/me/ui``, which reads
+the roster only.
 """
 
 from __future__ import annotations
@@ -88,4 +90,49 @@ async def test_the_choice_is_human_only_and_validated(cockpit: Cockpit) -> None:
     assert agent.status_code == 403
     assert bad.status_code == 422
     assert stranger.status_code in (404, 409)
+    assert "ui" not in notify_of(cockpit, "carol")
+
+
+async def test_the_small_read_and_write_carry_only_the_choice(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.server.factory.api import slack_dm
+
+    # The page-load read never pages the DM ledger (``notify/me`` does, for "last DM").
+    def no_ledger(*_: object) -> None:
+        raise AssertionError("the ledger was read")
+
+    monkeypatch.setattr(slack_dm, "_last_dm", no_ledger)
+    ui = f"{base(cockpit)}/notify/me/ui"
+
+    before = await cockpit.client.get(ui, headers={"X-Test-User": "vic"})
+    assert (before.status_code, before.json()) == (200, {"cockpit": None})
+
+    on = await cockpit.client.put(ui, json={"cockpit": "v2"}, headers={"X-Test-User": "vic"})
+    assert (on.status_code, on.json()) == (200, {"cockpit": "v2"})
+    assert notify_of(cockpit, "vic")["ui"] == {"cockpit": "v2"}
+    assert (await cockpit.client.get(ui, headers={"X-Test-User": "vic"})).json() == {
+        "cockpit": "v2"
+    }
+    # Only the caller's row moved.
+    assert "ui" not in notify_of(cockpit, "carol")
+
+
+async def test_the_small_write_is_human_only_validated_and_roster_only(cockpit: Cockpit) -> None:
+    ui = f"{base(cockpit)}/notify/me/ui"
+    agent = await cockpit.client.put(
+        ui,
+        json={"cockpit": "v2"},
+        headers={"X-Test-User": "carol", RUNNER_TUNNEL_TOKEN_HEADER: "rt_x.y"},
+    )
+    bad = await cockpit.client.put(ui, json={"cockpit": "v3"}, headers={"X-Test-User": "carol"})
+    stranger_put = await cockpit.client.put(
+        ui, json={"cockpit": "v2"}, headers={"X-Test-User": "bob"}
+    )
+    stranger_get = await cockpit.client.get(ui, headers={"X-Test-User": "bob"})
+
+    assert agent.status_code == 403
+    assert bad.status_code == 422
+    assert stranger_put.status_code in (404, 409)
+    assert stranger_get.status_code in (404, 409)
     assert "ui" not in notify_of(cockpit, "carol")

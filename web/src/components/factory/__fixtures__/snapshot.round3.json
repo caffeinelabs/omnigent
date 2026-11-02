@@ -3423,6 +3423,7 @@
     "counts": {
       "issues_open": 4,
       "proposals_pending": 2,
+      "definition_proposals_pending": 1,
       "on_trial": 1
     },
     "def_version": 7,

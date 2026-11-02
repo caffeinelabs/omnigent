@@ -236,6 +236,10 @@ def test_round3_tuning_change_is_on_trial(r3: Round3) -> None:
     counts = r3.snapshot.counts
     assert counts is not None and counts.on_trial == 1
     assert counts.proposals_pending == sum(p.status == "pending" for p in r3.proposals)
+    # Steer's count leaves project plans out (they wait in Needs you).
+    assert counts.definition_proposals_pending == sum(
+        p.status == "pending" and p.kind != "projects" for p in r3.proposals
+    )
 
 
 def test_round3_db_version_task_graph(r3: Round3) -> None:
