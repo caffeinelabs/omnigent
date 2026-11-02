@@ -228,11 +228,14 @@ def deadline_for(
     - A pending projects proposal expires 72 h after it was made (nothing is
       started); under ``grace`` autonomy it applies once its 15 min pass.
     - A pending tuning or rules proposal expires 72 h after it was made.
-    - An inconclusive trial's "Keep or revert" reverts at 2x its window.
+    - An inconclusive trial's "Keep or revert" reverts one original window
+      after the trial ended; an idle, harmless one stays applied at its
+      ``default_at`` instead.
 
     :returns: ``(epoch second, effect line)``, or ``None`` when nothing defaults.
     """
     from omnigent.server.factory import tuning
+    from omnigent.server.factory.evaluate import DEFAULT_KEEP
     from omnigent.server.factory.proposals import PROPOSAL_EXPIRY_S
 
     if proposal is None or decision.status != "open":
@@ -252,8 +255,13 @@ def deadline_for(
         and proposal.trial_until
         and result.get("keep_decision_id") in (None, decision.id)
     ):
-        window = max(3600, proposal.trial_until - proposal.applied_at)
-        return proposal.applied_at + 2 * window, f"C-{proposal.number} reverts on its own"
+        default_at = result.get("default_at")
+        if result.get("default") == DEFAULT_KEEP and isinstance(default_at, int):
+            return default_at, f"C-{proposal.number} stays applied"
+        stored = result.get("trial_window_s")
+        window = int(stored) if isinstance(stored, int) and stored > 0 else 0
+        window = window or max(3600, proposal.trial_until - proposal.applied_at)
+        return proposal.trial_until + window, f"C-{proposal.number} reverts on its own"
     return None
 
 

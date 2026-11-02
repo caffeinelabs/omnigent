@@ -107,16 +107,17 @@ export function notifiedChips(
   });
 }
 
-/** `expires`, `auto-applies` or `reverts` from a decision's deadline effect. */
+/** `expires`, `auto-applies`, `reverts` or `kept` from a decision's deadline effect. */
 export function deadlineVerb(effect: string | null | undefined): string {
   const text = (effect ?? "").toLowerCase();
   if (text.includes("auto-applies")) return "auto-applies";
   if (text.includes("revert")) return "reverts";
   if (text.includes("expire")) return "expires";
+  if (text.includes("stays applied")) return "kept";
   return "defaults";
 }
 
-/** `expires in 6h`, `reverts in 1d 2h`, `auto-applies now`; null without a deadline. */
+/** `expires in 6h`, `reverts in 1d 2h`, `kept in 3h`, `auto-applies now`; null without one. */
 export function deadlineText(
   deadlineAt: number | null | undefined,
   effect: string | null | undefined,

@@ -313,6 +313,42 @@ def test_deadlines_for_expiry_grace_and_trials() -> None:
         10_000 + 96 * 3600,
         "C-4 reverts on its own",
     )
+    extended = FactoryProposal(
+        id="p",
+        factory_id="f",
+        number=4,
+        kind="tuning",
+        title="t",
+        status="trial",
+        applied_at=10_000,
+        trial_until=10_000 + 3 * 48 * 3600,  # extended twice while idle
+        result={
+            "evaluation": {"outcome": "inconclusive"},
+            "keep_decision_id": "d",
+            "trial_window_s": 48 * 3600,
+        },
+    )
+    assert rules.deadline_for(d, extended, None) == (
+        10_000 + 4 * 48 * 3600,
+        "C-4 reverts on its own",
+    )
+    kept = FactoryProposal(
+        id="p",
+        factory_id="f",
+        number=4,
+        kind="tuning",
+        title="t",
+        status="trial",
+        applied_at=10_000,
+        trial_until=10_000 + 3 * 48 * 3600,
+        result={
+            "evaluation": {"outcome": "inconclusive", "idle": True},
+            "keep_decision_id": "d",
+            "default": "keep",
+            "default_at": 900_000,
+        },
+    )
+    assert rules.deadline_for(d, kept, None) == (900_000, "C-4 stays applied")
     assert rules.deadline_for(d, None, None) is None
     for kind in ("tuning", "rules"):
         for status in ("pending", "awaiting_cosign"):

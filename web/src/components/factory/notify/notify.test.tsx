@@ -168,6 +168,8 @@ describe("notifyModel", () => {
       "auto-applies in 10m",
     );
     expect(deadlineText(900, "C-4 reverts on its own", 1000)).toBe("reverts now");
+    expect(deadlineText(1000 + 3 * 3600, "C-4 stays applied", 1000)).toBe("kept in 3h");
+    expect(deadlineText(1000 + 3600, "expires and is not applied", 1000)).toBe("expires in 1h");
     expect(deadlineText(null, null, 1000)).toBeNull();
   });
 
