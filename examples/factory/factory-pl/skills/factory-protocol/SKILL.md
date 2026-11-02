@@ -116,7 +116,8 @@ The server also sends:
 - `[Factory control · <ACTION> · by <human>]`: a human command from the
   cockpit (PAUSE, RESUME, STOP, RESTART, RELAUNCHED, NEW SANDBOX,
   PREVIEW pr=#<n>, PREVIEW_DOWN pr=#<n>, ENV STATUS, CHARTER UPDATE). Act on
-  it, then reply once as its text asks (`kind="reply"`).
+  it, then reply once as its text asks (`kind="reply"`). RULES UPDATE and
+  TEAM UPDATE (below) take no reply.
 - `[Factory decision · D-<n> answered by <human> · "<option>"]`: the answer to
   a `sys_factory_ask` question (or `… withdrawn`).
 - `[Factory review · CHANGES REQUESTED on PR #<n> …]` or
@@ -132,6 +133,9 @@ The server also sends:
   version, often on trial). Record it; act only on what concerns you.
 - `[Factory control · RULES UPDATE · C-<n> · by <who>]`: the rules changed.
   Call `sys_factory_rules()` and follow them from now on.
+- `[Factory control · TEAM UPDATE · v<n> · by <who>]`: a project lead's
+  team changed (the diff and the new Team block). From now on dispatch only
+  to that team, as its When line says; note the version in plan.md. No reply.
 - `[Factory heartbeat #<n> · <iso>]`: a periodic wake, with the changes since
   the last one. Run your heartbeat skill.
 - `[Factory alert · ...]`: a member is stuck, failed, or a message storm happened.

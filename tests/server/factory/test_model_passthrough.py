@@ -1,10 +1,11 @@
 """``sys_factory_task(op="start")`` says which member, agent and model runs each attempt.
 
-Without its own team a project keeps today's dispatch: the card's harness, and
-the ``role_defaults`` model when an owner set one for that vendor. With its own
-team the least busy builder runs it (its agent may differ from the card's), the
+Without its own team a project keeps today's dispatch: the card's harness on
+its bundle's model. With its own team the least busy builder runs it (its
+agent may differ from the card's), a re-attempt stays on its member, the
 member is recorded on the task, and its model is what the PL passes as
-``args.model`` to ``sys_session_send``.
+``args.model`` to ``sys_session_send``. ``role_defaults`` does not steer
+dispatch yet: a member's ``null`` model is its bundle's.
 """
 
 from __future__ import annotations
@@ -71,16 +72,36 @@ async def test_without_its_own_team_start_keeps_todays_dispatch(cockpit: Cockpit
     assert body["harness"] == "ic"
 
 
-async def test_role_defaults_name_the_model_for_their_vendor(cockpit: Cockpit) -> None:
+async def test_role_defaults_do_not_steer_dispatch_yet(cockpit: Cockpit) -> None:
     resp = await put(cockpit, {"op": "replace", "path": "role_defaults.ic.model", "value": "opus"})
     assert resp.status_code == 200, resp.text
 
     claude = (await _start(cockpit, "one")).json()
+    assert (claude["agent"], claude["model"]) == ("ic", None)
+    # Nor once the project has its own team: storing it changes nothing at run time.
+    resp = await put(cockpit, {"op": "replace", "path": f"{MEMBERS}/M-2/handle", "value": "Rex"})
+    assert resp.status_code == 200, resp.text
+    second = (await _start(cockpit, "two")).json()
     codex = (await _start(cockpit, "three")).json()
+    assert (second["member"], second["agent"], second["model"]) == ("M-2", "ic", None)
+    assert (codex["member"], codex["agent"], codex["model"]) == ("M-3", "ic_codex", None)
 
-    assert (claude["agent"], claude["model"]) == ("ic", "opus")
-    # A default without a vendor is for the role's default vendor only.
-    assert (codex["agent"], codex["model"]) == ("ic_codex", None)
+
+async def test_a_re_attempt_stays_on_its_member(cockpit: Cockpit) -> None:
+    resp = await put(
+        cockpit,
+        {"op": "remove", "path": f"{MEMBERS}/M-3"},
+        {"op": "add", "path": MEMBERS, "value": {"role": "ic", "model": "opus"}},
+    )
+    assert resp.status_code == 200, resp.text
+
+    first = (await _start(cockpit, "one")).json()
+    again = (await _start(cockpit, "one")).json()
+
+    assert (first["member"], first["model"]) == ("M-2", None)
+    assert (again["member"], again["agent"], again["model"]) == ("M-2", "ic", None)
+    row = cockpit.store.get_task_by_key(cockpit.fid, SLUG, "one")
+    assert row is not None and row.card["member"] == "M-2"
 
 
 async def test_its_own_team_picks_the_least_busy_builder_and_its_model(cockpit: Cockpit) -> None:

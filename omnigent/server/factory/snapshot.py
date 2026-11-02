@@ -654,30 +654,30 @@ def _notified(fstore: Any, factory_id: str, now_ms: int) -> dict[str, list[dict[
     return notified_by_subject(reversed(rows))
 
 
+def _executor(conv: Conversation, deps: FactoryDeps, memo: dict[tuple[Any, ...], Any]) -> Any:
+    """:returns: The executor of *conv*'s spec, loaded once per agent and sub-agent."""
+    key = (conv.agent_id, conv.sub_agent_name)
+    if key not in memo:
+        memo[key] = getattr(load_session_spec(conv, deps), "executor", None)
+    return memo[key]
+
+
 def _harness(
     conv: Conversation, deps: FactoryDeps, memo: dict[tuple[Any, ...], Any]
 ) -> str | None:
     if conv.harness_override:
         return conv.harness_override
-    key = (conv.agent_id, conv.sub_agent_name)
-    if key not in memo:
-        spec = load_session_spec(conv, deps)
-        config = getattr(getattr(spec, "executor", None), "config", None)
-        harness = config.get("harness") if isinstance(config, dict) else None
-        memo[key] = harness if isinstance(harness, str) else None
-    return memo[key]
+    config = getattr(_executor(conv, deps, memo), "config", None)
+    harness = config.get("harness") if isinstance(config, dict) else None
+    return harness if isinstance(harness, str) else None
 
 
 def _model(conv: Conversation, deps: FactoryDeps, memo: dict[tuple[Any, ...], Any]) -> str | None:
     """:returns: *conv*'s model: its override, else its bundle's (``None`` when unknown)."""
     if conv.model_override:
         return conv.model_override
-    key = ("model", conv.agent_id, conv.sub_agent_name)
-    if key not in memo:
-        spec = load_session_spec(conv, deps)
-        model = getattr(getattr(spec, "executor", None), "model", None)
-        memo[key] = model if isinstance(model, str) else None
-    return memo[key]
+    model = getattr(_executor(conv, deps, memo), "model", None)
+    return model if isinstance(model, str) else None
 
 
 def _def_doc(deps: FactoryDeps, factory_id: str) -> dict[str, Any]:

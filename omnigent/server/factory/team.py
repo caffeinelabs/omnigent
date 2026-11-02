@@ -130,6 +130,19 @@ def facts_lookup(deps: FactoryDeps, factory_id: str) -> team_spec.FactsLookup:
     return lookup
 
 
+async def hidden_projects(
+    app_state: Any, deps: FactoryDeps, root: Conversation, user_id: str | None
+) -> frozenset[str]:
+    """:returns: The slugs of projects whose PL *user_id* cannot read (the snapshot's filter)."""
+    from omnigent.server.factory.snapshot import get_snapshot, readable_for
+
+    raw = await get_snapshot(app_state, root)
+    readable = await readable_for(user_id, raw, deps)
+    return frozenset(
+        s for s, pl in raw.project_pl.items() if pl is not None and pl not in readable
+    )
+
+
 def _doc(deps: FactoryDeps, factory_id: str) -> tuple[dict[str, Any], int | None]:
     resolved = definition.definition_for(deps, factory_id)
     if resolved is None:
@@ -142,7 +155,8 @@ class TeamView:
     """
     A project's team with its charter's values filled in.
 
-    :param own: The project has its own team (else the default template's).
+    :param own: The project has its own team (else today's bundle, see
+        :func:`.team_spec.implicit_team`).
     :param builders_from: ``team`` or ``charter``.
     :param budget_from: ``team``, ``charter`` or ``definition``.
     """
@@ -214,13 +228,33 @@ def view_of(
     )
 
 
-def own_view(deps: FactoryDeps, factory_id: str, slug: str) -> TeamView | None:
-    """:returns: Project *slug*'s own team (``None`` without one, or no project row)."""
+def _own_with_project(
+    deps: FactoryDeps, factory_id: str, slug: str
+) -> tuple[TeamView, FactoryProject] | None:
     doc, version = _doc(deps, factory_id)
     if not team_spec.has_own(doc, slug):
         return None
     project = deps.factory_store.get_project(factory_id, slug)
-    return view_of(doc, project, def_version=version) if project is not None else None
+    return (view_of(doc, project, def_version=version), project) if project is not None else None
+
+
+def own_view(deps: FactoryDeps, factory_id: str, slug: str) -> TeamView | None:
+    """:returns: Project *slug*'s own team (``None`` without one, or no project row)."""
+    found = _own_with_project(deps, factory_id, slug)
+    return found[0] if found is not None else None
+
+
+def gap_agents(view: TeamView, facts: ProjectFacts) -> dict[str, team_spec.GateNeed]:
+    """
+    :returns: Agent -> the gate need it covers, for the roles *view* has no
+        member for while its charter needs them (a team saved with env or
+        previews off, before they turned on). Those agents stay dispatchable.
+    """
+    members = {"members": list(view.members)}
+    return {
+        str(team_spec.AGENTS[(need.role, team_spec.VENDORS[need.role][0])]): need
+        for need in team_spec.gate_gaps(members, facts)
+    }
 
 
 def builders_at_once(deps: FactoryDeps, factory_id: str, slug: str) -> int | None:
@@ -593,10 +627,13 @@ def preview_effects(
     *,
     version_next: int,
     when: str = "after_current",
+    hidden: frozenset[str] = frozenset(),
 ) -> list[dict[str, Any]]:
     """
     What the team changes in *entries* do, per project, in plain words (synchronous).
 
+    :param hidden: Projects whose PL the viewer cannot read: their spend,
+        sessions and PL stay out.
     :returns: Effects of kinds ``rate`` {before_usd_h, after_usd_h}, ``finish``
         {spent_usd, before_usd, after_usd, budget_usd}, ``restart`` {members[],
         when, sessions}, ``review_route`` {text} and ``team_update`` {to}.
@@ -627,23 +664,25 @@ def preview_effects(
                 "(estimate from the cost ledger).",
             }
         )
-        spent, finish_before, finish_after = _finish(
-            deps, factory_id, slug, before_rate, after_rate
-        )
-        out.append(
-            {
-                "kind": "finish",
-                "project": slug,
-                "spent_usd": spent,
-                "before_usd": finish_before,
-                "after_usd": finish_after,
-                "budget_usd": new.budget_usd,
-                "text": f"To finish: ${finish_before:.0f} → ${finish_after:.0f} of "
-                f"${new.budget_usd:.0f}.",
-            }
-        )
+        secret = slug in hidden
+        if not secret:
+            spent, finish_before, finish_after = _finish(
+                deps, factory_id, slug, before_rate, after_rate
+            )
+            out.append(
+                {
+                    "kind": "finish",
+                    "project": slug,
+                    "spent_usd": spent,
+                    "before_usd": finish_before,
+                    "after_usd": finish_after,
+                    "budget_usd": new.budget_usd,
+                    "text": f"To finish: ${finish_before:.0f} → ${finish_after:.0f} of "
+                    f"${new.budget_usd:.0f}.",
+                }
+            )
         moved = _changed_members(changes)
-        pl = find_project_pl(deps, factory_id, slug)
+        pl = None if secret else find_project_pl(deps, factory_id, slug)
         running = _running(deps, pl, {str(b["agent"]) for b, _a in moved})
         if moved:
             parts = []
@@ -688,6 +727,8 @@ def preview_effects(
                 "text": (
                     f"{name} gets one TEAM UPDATE message with v{version_next}."
                     if name
+                    else f"Its project lead gets one TEAM UPDATE message with v{version_next}."
+                    if secret
                     else f"{slug} has no running project lead: its next one reads the team "
                     "from its charter."
                 ),
@@ -699,11 +740,16 @@ def preview_effects(
 # ── The PL's view: charter, TEAM UPDATE ────────────────────────
 
 
-def charter_lines(view: TeamView) -> list[str]:
-    """:returns: The Team block of a PL's charter (briefs spoof-quoted)."""
+def charter_lines(view: TeamView, facts: ProjectFacts | None = None) -> list[str]:
+    """
+    :param facts: The project's charter facts: a role its gates need now and
+        the team lacks is listed as dispatchable too.
+    :returns: The Team block of a PL's charter (briefs spoof-quoted).
+    """
     version = f"definition v{view.def_version} · " if view.def_version else ""
     lines = [
-        f"Team ({version}template {view.template or 'none'} · {len(view.members)} members · "
+        f"Team ({version}{f'template {view.template}' if view.template else 'no template'} · "
+        f"{len(view.members)} members · "
         f"builders at once: {view.builders_at_once} · budget ${view.budget_usd:g}):"
     ]
     for member in view.members:
@@ -716,6 +762,11 @@ def charter_lines(view: TeamView) -> list[str]:
         lines.append(
             f"- {member['id']}{handle} · {role} · agent {member['agent']} · "
             f"{member['vendor']} · {model}"
+        )
+    for agent, need in (gap_agents(view, facts) if facts is not None else {}).items():
+        lines.append(
+            f"- also {agent} · {team_spec.ROLE_LABELS[need.role]} · default model: "
+            f"{need.text} and the team has none"
         )
     if view.briefs:
         lines.append("Briefs from people (add each to that member's dispatches, verbatim):")
@@ -737,7 +788,10 @@ def charter_team(deps: FactoryDeps, factory_id: str, project: FactoryProject) ->
     except Exception:  # noqa: BLE001 - a charter goes out without a Team block rather than not at all
         _logger.warning("factory team: no Team block for %s", project.slug, exc_info=True)
         return None
-    return TeamBlock(builders_at_once=view.builders_at_once, lines=tuple(charter_lines(view)))
+    return TeamBlock(
+        builders_at_once=view.builders_at_once,
+        lines=tuple(charter_lines(view, project_facts(project))),
+    )
 
 
 def team_update_text(
@@ -852,7 +906,7 @@ async def deliver_update(
                 version=version,
                 by=by,
                 lines=lines,
-                block=charter_lines(view),
+                block=charter_lines(view, project_facts(project)),
                 when=when,
                 interrupted=len(interrupted),
             )
@@ -893,19 +947,6 @@ async def deliver_update(
 # ── Dispatch ───────────────────────────────────────────────────
 
 
-def role_default_model(doc: Mapping[str, Any], role: str, vendor: str | None) -> str | None:
-    """
-    :returns: The ``role_defaults.<role>`` model when it is for *vendor* (a
-        default without a vendor is for the role's default vendor), else ``None``.
-    """
-    defaults = (doc.get("role_defaults") or {}).get(role) or {}
-    model = defaults.get("model")
-    if not model or role not in team_spec.VENDORS:
-        return None
-    for_vendor = defaults.get("vendor") or team_spec.VENDORS[role][0]
-    return str(model) if for_vendor == (vendor or team_spec.VENDORS[role][0]) else None
-
-
 def dispatch_choice(
     deps: FactoryDeps,
     factory_id: str,
@@ -914,41 +955,44 @@ def dispatch_choice(
     tasks: Sequence[FactoryTask] = (),
     *,
     pinned: bool = False,
+    task: FactoryTask | None = None,
 ) -> dict[str, Any]:
     """
     The member a task's next attempt runs on.
 
+    A member's model ``None`` is its bundle's default (``role_defaults`` does
+    not steer dispatch yet), so a project's first edit changes nothing else.
+
     :param harness: The agent the card (or the caller) asks for, ``ic`` or ``ic_codex``.
     :param tasks: The project's tasks (the least busy builder wins).
     :param pinned: The caller named *harness*: keep it even when the team has none.
+    :param task: The task being started: a re-attempt stays on its member while
+        that member is on the team and fits, and its own run is not counted as busy.
     :returns: ``{agent, model, member, handle, team}``; ``team`` is ``own``,
         ``default`` (no team of its own: today's behaviour) or ``outside``.
     """
     doc, _ = _doc(deps, factory_id)
     if not team_spec.has_own(doc, slug):
-        vendor = "codex" if harness == "ic_codex" else "claude"
-        return {
-            "agent": harness,
-            "model": role_default_model(doc, team_spec.BUILDER, vendor),
-            "member": None,
-            "handle": None,
-            "team": "default",
-        }
+        return {"agent": harness, "model": None, "member": None, "handle": None, "team": "default"}
     team = team_spec.team_of(doc, slug)
     builders = [m for m in team["members"] if m["role"] == team_spec.BUILDER]
     fits = [m for m in builders if m["agent"] == harness] or ([] if pinned else builders)
     if not fits:
         return {"agent": harness, "model": None, "member": None, "handle": None, "team": "outside"}
-    busy: dict[str, int] = {}
-    for task in tasks:
-        member = (task.card or {}).get("member")
-        if task.state in OCCUPYING and isinstance(member, str):
-            busy[member] = busy.get(member, 0) + 1
-    chosen = min(fits, key=lambda m: (busy.get(m["id"], 0), team_spec.member_number(m["id"])))
+    own = (task.card or {}).get("member") if task is not None else None
+    chosen = next((m for m in fits if m["id"] == own), None)
+    if chosen is None:
+        busy: dict[str, int] = {}
+        for other in tasks:
+            member = (other.card or {}).get("member")
+            if task is not None and other.id == task.id:
+                continue
+            if other.state in OCCUPYING and isinstance(member, str):
+                busy[member] = busy.get(member, 0) + 1
+        chosen = min(fits, key=lambda m: (busy.get(m["id"], 0), team_spec.member_number(m["id"])))
     return {
         "agent": chosen["agent"],
-        "model": chosen.get("model")
-        or role_default_model(doc, team_spec.BUILDER, chosen.get("vendor")),
+        "model": chosen.get("model"),
         "member": chosen["id"],
         "handle": chosen.get("handle"),
         "team": "own",
@@ -960,19 +1004,27 @@ def _team_arguments(deps: FactoryDeps, conversation: Conversation) -> dict[str, 
     factory_id, slug = labels.get(LABEL_ID), labels.get(LABEL_PROJECT)
     if labels.get(LABEL_ROLE) != ROLE_PROJECT_LEAD or not factory_id or not slug:
         return None
-    view = own_view(deps, factory_id, slug)
-    if view is None:
+    found = _own_with_project(deps, factory_id, slug)
+    if found is None:
         return None
+    view, project = found
     occupying = sum(
         1
         for t in deps.factory_store.list_tasks(factory_id, project_slug=slug)
         if t.state in OCCUPYING
     )
+    agents = view.agents()
+    builder_agents = {str(m["agent"]) for m in view.builders()}
+    # A gate the charter needs now never loses its role to the check.
+    for agent, need in gap_agents(view, project_facts(project)).items():
+        agents.setdefault(agent, [None])
+        if need.role == team_spec.BUILDER:
+            builder_agents.add(agent)
     return {
         "team": {
             "project": slug,
-            "agents": view.agents(),
-            "builder_agents": sorted({str(m["agent"]) for m in view.builders()}),
+            "agents": agents,
+            "builder_agents": sorted(builder_agents),
             "builders_at_once": view.builders_at_once,
             "occupying": occupying,
             "def_version": view.def_version,
@@ -1027,9 +1079,16 @@ def install(app_state: Any) -> Callable[[], None]:
     return _uninstall
 
 
-def outside_spec(view: TeamView, child: Conversation) -> list[str]:
-    """:returns: What sub-agent *child* breaks of *view* (its agent or model), in words."""
+def outside_spec(
+    view: TeamView, child: Conversation, facts: ProjectFacts | None = None
+) -> list[str]:
+    """
+    :param facts: The project's charter facts (the roles its gates need now stay allowed).
+    :returns: What sub-agent *child* breaks of *view* (its agent or model), in words.
+    """
     agents = view.agents()
+    for extra in gap_agents(view, facts) if facts is not None else {}:
+        agents.setdefault(extra, [None])
     agent = child.sub_agent_name
     if not agent:
         return []
@@ -1047,6 +1106,9 @@ async def observe_dispatch(app_state: Any, pl: Conversation, child: Conversation
     """
     Record a sub-agent created outside its project's own team
     (``team.dispatch_outside_spec``, once per session). Never raises.
+
+    The binder calls it when it first binds *child* (its creation): a session
+    created inside the team stays inside it after a TEAM UPDATE removes its member.
     """
     from omnigent.server.factory import events
     from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
@@ -1056,8 +1118,11 @@ async def observe_dispatch(app_state: Any, pl: Conversation, child: Conversation
     if not isinstance(deps, FactoryDeps) or not factory_id or not slug:
         return
     try:
-        view = await asyncio.to_thread(own_view, deps, factory_id, slug)
-        problems = outside_spec(view, child) if view is not None else []
+        found = await asyncio.to_thread(_own_with_project, deps, factory_id, slug)
+        if found is None:
+            return
+        view, project = found
+        problems = outside_spec(view, child, project_facts(project))
         if not problems:
             return
         subject = f"session:{child.id}"
@@ -1065,6 +1130,14 @@ async def observe_dispatch(app_state: Any, pl: Conversation, child: Conversation
             deps.factory_store.find_events, factory_id, OUTSIDE_KIND, 0, subject, limit=1
         )
         if seen:
+            return
+        changed = await asyncio.to_thread(
+            lambda: deps.factory_store.find_events(
+                factory_id, UPDATED_KIND, 0, f"project:{slug}", limit=1, newest_first=True
+            )
+        )
+        # Created (whole seconds) before the last TEAM UPDATE: a restart's first bind.
+        if changed and (int(child.created_at or 0) + 1) * 1000 <= changed[0].ts:
             return
         title = display_title(child.title, child.id)
         await events.emit(
@@ -1083,7 +1156,7 @@ async def observe_dispatch(app_state: Any, pl: Conversation, child: Conversation
                 "model": child.model_override,
                 "problems": problems,
                 "mode": mode(),
-                "def_version": view.def_version if view is not None else None,
+                "def_version": view.def_version,
             },
         )
     except Exception:  # noqa: BLE001 - the record is best effort
@@ -1119,8 +1192,17 @@ def snapshot_view(
     drift: list[dict[str, Any]] = []
     live = [c for c in children if not is_session_closed(c.labels, c.title)]
     if view.own:
+        for agent, need in gap_agents(view, facts).items():
+            drift.append(
+                {
+                    "kind": "missing_gate_role",
+                    "session_id": None,
+                    "text": f"No {team_spec.ROLE_LABELS[need.role]} on the team: {need.text}; "
+                    f"{agent} stays dispatchable until one is added",
+                }
+            )
         for child in live:
-            for problem in outside_spec(view, child):
+            for problem in outside_spec(view, child, facts):
                 drift.append(
                     {
                         "kind": "outside_team",
@@ -1147,6 +1229,8 @@ def snapshot_view(
             )
     return {
         "own": view.own,
+        "follows": "own" if view.own else "bundle",
+        "summary": None if view.own else team_spec.BUNDLE_SUMMARY,
         "template": view.template,
         "builders_at_once": view.builders_at_once,
         "builders_from": view.builders_from,
@@ -1189,7 +1273,6 @@ __all__ = [
     "preview_effects",
     "project_facts",
     "rate_book",
-    "role_default_model",
     "snapshot_view",
     "team_rate",
     "team_update_text",

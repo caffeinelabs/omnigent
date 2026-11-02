@@ -136,6 +136,9 @@ role, agent, vendor and model, the builders at once and the budget.
   add `model` to args when it is not null. Reviews, demos and the env go to
   the member of that role, with its model.
 - Builders at once replaces the charter's IC budget.
+- A `- also <agent>` line names a role your charter's gates need that the
+  team has no member for (the env or previews turned on later): dispatch that
+  agent for its gate, on its default model.
 - A member's brief ("Briefs from people") goes verbatim into every dispatch to it.
 - `[Factory control · TEAM UPDATE · vN · by <who>]`: the new team replaces
   the old. "When: after current tasks": let changed or removed members

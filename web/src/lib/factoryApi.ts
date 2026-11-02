@@ -3545,14 +3545,19 @@ export interface TeamMemberSpecView {
 }
 
 export interface TeamDriftView {
-  kind: "outside_team" | "over_builders" | string;
+  /** `missing_gate_role`: a gate the charter needs now has no member (its agent stays allowed). */
+  kind: "outside_team" | "over_builders" | "missing_gate_role" | string;
   session_id: string | null;
   text: string;
 }
 
-/** `projects[].team_spec`: its own team, or the default template's (`own: false`). */
+/** `projects[].team_spec`: its own team, or today's bundle (`own: false`). */
 export interface TeamSpecView {
   own: boolean;
+  /** `bundle`: no team of its own, so every agent of the PL bundle on its default model. */
+  follows?: "own" | "bundle";
+  /** `follows: "bundle"` in words, else `null`. */
+  summary?: string | null;
   template: string | null;
   builders_at_once: number;
   builders_from: "team" | "charter";

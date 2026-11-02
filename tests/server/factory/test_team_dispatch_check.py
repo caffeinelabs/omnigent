@@ -15,10 +15,12 @@ from typing import Any
 
 import pytest
 
+from omnigent.entities.factory import EventDraft
 from omnigent.policies.builtins.factory_team import HANDLER, factory_team_guard
 from omnigent.policies.types import EvaluationContext
 from omnigent.runtime.policies.builder import SERVER_POLICY_ARGUMENTS, build_policy_engine
 from omnigent.server.factory import binder, definition, team
+from omnigent.server.factory.team_spec import ProjectFacts
 from omnigent.spec import load
 from omnigent.spec.types import (
     AgentSpec,
@@ -143,12 +145,16 @@ def factory(world: FactoryWorld) -> Iterator[FactoryWorld]:
     assert HANDLER not in SERVER_POLICY_ARGUMENTS
 
 
-def _own_team(world: FactoryWorld, *changes: dict[str, Any]) -> None:
+def _own_team(
+    world: FactoryWorld, *changes: dict[str, Any], facts: ProjectFacts | None = None
+) -> None:
     deps, fid = world.deps, world.id("lead_a")
     resolved = definition.definition_for(deps, fid, fresh=True)
     assert resolved is not None
     parsed = [definition.parse_change(c, i) for i, c in enumerate(changes)]
-    after = definition.apply_changes(resolved.stored, parsed)
+    after = definition.apply_changes(
+        resolved.stored, parsed, facts=(lambda _s: facts) if facts is not None else None
+    )
     definition.store_version(
         deps, fid, after, created_by="alice", created_via="human", parent_version=resolved.version
     )
@@ -205,6 +211,33 @@ async def test_builders_at_once_counts_the_started_tasks(
     assert verdict == "DENY" and "1 builders at once" in reason
 
 
+async def test_a_role_the_charter_needs_now_is_never_denied(
+    factory: FactoryWorld, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv(team.TEAM_SPEC_ENV, "enforce")
+    # Saved while the charter needed no env and no previews.
+    _own_team(
+        factory,
+        {"op": "remove", "path": f"{MEMBERS}/M-5"},
+        {"op": "remove", "path": f"{MEMBERS}/M-6"},
+        facts=ProjectFacts(env_needed=False, previews_on=False),
+    )
+    row = factory.deps.factory_store.get_project(factory.id("lead_a"), SLUG)
+    assert row is not None
+    factory.deps.factory_store.update_project(row.id, charter={"env_needed": True})
+
+    found = team.guard_arguments(factory.deps)(factory.get("pl"), factory.get("pl"))
+    assert found is not None
+    assert found["team"]["agents"]["env_keeper"] == [None]  # type: ignore[index]
+    assert (await _decide(factory, "pl", _send("env_keeper", title="env-up")))[0] == "ALLOW"
+    assert (await _decide(factory, "pl", _send("ic_codex")))[0] == "ALLOW"
+    project = factory.deps.factory_store.get_project(factory.id("lead_a"), SLUG)
+    assert project is not None
+    block = team.charter_team(factory.deps, factory.id("lead_a"), project)
+    assert block is not None
+    assert any(line.startswith("- also env_keeper · env keeper") for line in block.lines)
+
+
 # ── Warn mode records ──────────────────────────────────────────
 
 
@@ -228,3 +261,34 @@ async def test_warn_mode_records_a_sub_agent_outside_the_team_once(
     ok = factory.make_session("ic_ok", agent="pl", title="docs", parent="pl", sub_agent_name="ic")
     await binder.bind_session(factory.app_state, ok)
     assert len(factory.deps.factory_store.find_events(fid, team.OUTSIDE_KIND, 0)) == 1
+
+
+async def test_a_session_created_inside_the_team_is_not_recorded_after_it_leaves(
+    factory: FactoryWorld,
+) -> None:
+    binder.reset()
+    child = factory.make_session(
+        "codex_ic", agent="pl", title="route", parent="pl", sub_agent_name="ic_codex"
+    )
+    fid = factory.id("lead_a")
+    await binder.bind_session(factory.app_state, child)  # created on today's team
+    _own_team(factory, {"op": "remove", "path": f"{MEMBERS}/M-3"})
+
+    # Its run ends after the TEAM UPDATE (when=after_current): bound again, not recorded.
+    await binder.bind_session(factory.app_state, child)
+    assert factory.deps.factory_store.find_events(fid, team.OUTSIDE_KIND, 0) == []
+
+    # Nor after a restart forgets it: it is older than the team's last change.
+    factory.deps.factory_store.append_event(
+        EventDraft(
+            factory_id=fid,
+            kind=team.UPDATED_KIND,
+            summary="Team of api-version changed (sample)",
+            project_slug=SLUG,
+            subject=f"project:{SLUG}",
+            ts=(int(child.created_at) + 5) * 1000,
+        )
+    )
+    binder.reset()
+    await binder.bind_session(factory.app_state, child)
+    assert factory.deps.factory_store.find_events(fid, team.OUTSIDE_KIND, 0) == []

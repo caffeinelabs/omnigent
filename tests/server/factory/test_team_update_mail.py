@@ -57,9 +57,7 @@ async def test_a_team_change_sends_its_pl_one_team_update(cockpit: Cockpit) -> N
     lines = update.splitlines()
     assert lines[0] == "[Factory control · TEAM UPDATE · v2 · by alice]"
     assert f"- ~ {MEMBERS}.M-2 · handle none → Rex; model default → opus" in lines
-    assert "Team (definition v2 · template standard · 6 members · builders at once: 3 · " in (
-        update
-    )
+    assert "Team (definition v2 · no template · 6 members · builders at once: 3 · " in (update)
     assert "- M-2 Rex · builder · agent ic · claude · opus" in lines
     assert "- M-2: Keep each PR under 300 lines (sample)." in lines
     assert any(line.startswith("When: after current tasks.") for line in lines)
@@ -130,4 +128,4 @@ async def test_the_charter_prints_a_project_s_own_team(cockpit: Cockpit) -> None
     assert "- M-4 · reviewer · agent reviewer · codex · default model" in charter
     assert not any("ic_codex" in line for line in charter)
     brief = brief_text(project, by="alice", via="cockpit", mail_id="mail_x", team=block)
-    assert "Team (definition v2 · template standard · 5 members" in brief
+    assert "Team (definition v2 · no template · 5 members" in brief

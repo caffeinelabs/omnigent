@@ -1,25 +1,29 @@
 """The team spec (definition block ``team``): who works on a project, on which vendor and model.
 
 - ``team.templates[]``: named team shapes ``{id, label, summary, roles: [{role,
-  vendor, model, count}], builders_at_once?, default}``. The default template is
-  the shape of every project that has no team of its own (its *implicit* team).
+  vendor, model, count}], builders_at_once?, default}``. A project takes a
+  template's shape only when it switches to it; the default template is the one
+  a new team (``add team.projects.<slug>``) starts from.
 - ``team.projects.<slug>``: one project's own team ``{template, builders_at_once,
   budget_usd, members: [{id M-n, handle, role, agent, vendor, model}], briefs:
   {M-n: text}}``. ``None`` keeps the charter's value for ``builders_at_once`` and
   ``budget_usd`` and the bundle's default for a member's ``model``.
 
+A project without its own team runs today's bundle (its *implicit* team): every
+agent of the PL bundle on its default model, whatever the templates say.
 Members change like any list with ids: add one at ``team.projects.<slug>.members``,
 replace or remove one at ``….members.M-3``, one field at ``….members.M-3.model``,
 a member's brief at ``….briefs.M-3``. The first change to a project stores its
-implicit team (members ``M-1``… in the default template's order) as its own, so
-every change and every diff line names a real member. Member numbers are never
-reused within a project.
+implicit team (members ``M-1``…) as its own, so every change and every diff
+line names a real member and nothing else changes at run time. Member numbers
+are handed out by the server and never reused within a project.
 
 Classes (Tier 0, :func:`classify`): adding a member, a vendor or model change,
 more builders at once, a higher budget, a brief and any template are B
 (owners); removing a member, fewer builders at once, a lower budget, a new
 handle or a template label are A. Removing the only member a ready gate needs
-is refused (422 ``gate_requires_role``, :func:`gate_refusals`).
+is refused (422 ``gate_requires_role``, :func:`gate_refusals`), and so is a
+template without the roles every project needs (:func:`template_refusals`).
 
 Pure: no store and no server. :mod:`omnigent.server.factory.team` reads it at run time.
 """
@@ -102,8 +106,7 @@ MEMBER_ID_RE: Final = re.compile(r"^M-([1-9][0-9]{0,4})$")
 _MODEL_RE: Final = re.compile(r"^[a-z0-9][a-z0-9._:-]{0,63}$")
 _HANDLE_RE: Final = re.compile(r"^[A-Za-z][A-Za-z0-9 ._-]{0,23}$")
 NOT_TRIALABLE_REASON: Final = (
-    "a trial needs at least 3 merged PRs in its window and one team merges about one a "
-    "day: trial team changes on a template instead"
+    "a trial needs at least 3 merged PRs in its window and one team merges about one a day"
 )
 
 
@@ -303,6 +306,9 @@ class ProjectTeamDef(_Block):
             raise ValueError("a member id is listed twice")
         if sum(1 for m in self.members if m.role == ROLE_PROJECT_LEAD) != 1:
             raise ValueError("a team has exactly one project lead")
+        handles = [m.handle.casefold() for m in self.members if m.handle]
+        if len(set(handles)) != len(handles):
+            raise ValueError("two members share a handle: a handle names one member")
         for key, text in self.briefs.items():
             if key not in ids:
                 raise ValueError(f"briefs.{key}: no member {key}")
@@ -481,15 +487,24 @@ def expand(shape: Mapping[str, Any], start: int = 0) -> list[dict[str, Any]]:
     return out
 
 
-def implicit_team(doc: Mapping[str, Any]) -> dict[str, Any]:
+BUNDLE_SUMMARY: Final = (
+    "Follows today's bundle: every agent of the PL bundle on its default model, with the "
+    "charter's builders at once and budget."
+)
+"""What a project without its own team runs, in words (the snapshot's ``summary``)."""
+
+
+def implicit_team(doc: Mapping[str, Any] | None = None) -> dict[str, Any]:
     """
-    :returns: The team of a project without its own: the default template's
-        members, the charter's builders at once and budget.
+    :returns: The team of a project without its own: what runs today, every
+        agent of the PL bundle (the built-in standard shape) on its default
+        model, with the charter's builders at once and budget. Template edits
+        never change it.
     """
-    shape = default_template(doc)
-    members = expand(shape)
+    del doc
+    members = expand(_standard())
     return {
-        "template": shape.get("id"),
+        "template": None,
         "builders_at_once": None,
         "budget_usd": None,
         "members": members,
@@ -787,25 +802,44 @@ def _check_vendor(role: str, vendor: Any) -> None:
         raise TeamError(422, "invalid_definition", vendor_refusal(role, str(vendor)))
 
 
-def _numbered(members: Iterable[Any], seq: int) -> tuple[list[dict[str, Any]], int]:
+def _numbered(
+    members: Iterable[Any], seq: int, current: Mapping[str, str]
+) -> tuple[list[dict[str, Any]], int]:
+    """
+    Number a whole members list. An entry keeps its ``id`` only when it names a
+    current member (*current*: id -> role) of the same role; every other entry
+    gets the next number past *seq*, so a number never names two members.
+    """
     out: list[dict[str, Any]] = []
-    taken = {str(m.get("id")) for m in members if isinstance(m, Mapping) and m.get("id")}
-    seq = max([seq, *(member_number(i) for i in taken)])
+    seq = max([seq, *(member_number(i) for i in current)])
     for member in members:
         if not isinstance(member, Mapping):
             raise TeamError(422, "invalid_definition", "a member is an object")
         body = dict(member)
-        if not body.get("id"):
+        given = str(body.get("id") or "")
+        if not given or current.get(given) != body.get("role"):
             seq += 1
             body["id"] = f"M-{seq}"
         out.append(body)
     return out, seq
 
 
-def _new_team(doc: dict[str, Any], body: Mapping[str, Any]) -> dict[str, Any]:
+def _roles(team: Mapping[str, Any]) -> dict[str, str]:
+    return {str(m.get("id")): str(m.get("role")) for m in team.get("members") or []}
+
+
+def _new_team(doc: dict[str, Any], op: str, slug: str, body: Mapping[str, Any]) -> dict[str, Any]:
+    """
+    A project's first own team: from *body*'s template, else (``add``) from the
+    default template, else (``replace``) its implicit team, which is what runs today.
+    """
     team: dict[str, Any]
-    if body.get("template") is not None:
-        shape = _template_or_raise(doc, body["template"])
+    current = team_of(doc, slug)
+    named = body.get("template")
+    if named is None and op == "add" and "members" not in body:
+        named = default_template(doc).get("id")
+    if named is not None:
+        shape = _template_or_raise(doc, named)
         team = {
             "template": shape.get("id"),
             "builders_at_once": shape.get("builders_at_once"),
@@ -816,7 +850,9 @@ def _new_team(doc: dict[str, Any], body: Mapping[str, Any]) -> dict[str, Any]:
     else:
         team = implicit_team(doc)
     if "members" in body:
-        team["members"], team["seq"] = _numbered(body.get("members") or [], 0)
+        team["members"], team["seq"] = _numbered(
+            body.get("members") or [], int(current.get("seq") or 0), _roles(current)
+        )
     team["seq"] = max(
         [int(team.get("seq") or 0), *(member_number(str(m["id"])) for m in team["members"])]
     )
@@ -845,7 +881,7 @@ def apply(doc: dict[str, Any], op: str, path: str, value: Any, item: str | None)
         if op == "add" and slug in projects:
             raise TeamError(409, "duplicate_item", f"{slug} already has its own team", item=slug)
         if op == "add" or slug not in projects:
-            projects[slug] = _new_team(doc, body)
+            projects[slug] = _new_team(doc, op, slug, body)
             return
         team = _own(doc, slug)
         if "template" in body and body["template"] != team.get("template"):
@@ -853,7 +889,9 @@ def apply(doc: dict[str, Any], op: str, path: str, value: Any, item: str | None)
                 switch_template(team, _template_or_raise(doc, body["template"]))
             team["template"] = body["template"]
         if "members" in body:
-            team["members"], team["seq"] = _numbered(body["members"] or [], team["seq"])
+            team["members"], team["seq"] = _numbered(
+                body["members"] or [], team["seq"], _roles(team)
+            )
         for key in ("builders_at_once", "budget_usd"):
             if key in body:
                 team[key] = body[key]
@@ -923,7 +961,8 @@ def diff(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[dict[str, 
     """
     :returns: ``[{path, before, after}]`` between the teams of two docs (own or
         implicit) for every project with its own team in either: its fields,
-        each member (``team.projects.<slug>.members.M-3``) and each brief.
+        each member (``team.projects.<slug>.members.M-3``) and each brief (a
+        removed member's brief goes with it, without a line of its own).
     """
     out: list[dict[str, Any]] = []
     for slug in sorted(set(own_teams(before)) | set(own_teams(after))):
@@ -945,6 +984,8 @@ def diff(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[dict[str, 
                 )
         old_briefs, new_briefs = a.get("briefs") or {}, b.get("briefs") or {}
         for member_id in [*old_briefs, *(i for i in new_briefs if i not in old_briefs)]:
+            if member_id not in new:
+                continue
             if old_briefs.get(member_id) != new_briefs.get(member_id):
                 out.append(
                     {
@@ -1006,8 +1047,10 @@ def member_text(member: Mapping[str, Any], *, with_id: bool = False) -> str:
     return f"{prefix}{role} · {filled_in['vendor']} · {filled_in.get('model') or 'default'}"
 
 
-def _value(value: Any) -> str:
-    return "charter's" if value is None else str(value)
+def _value(value: Any, part: str | None = None) -> str:
+    if value is None:
+        return "today's bundle" if part == "template" else "charter's"
+    return str(value)
 
 
 def diff_line(entry: Mapping[str, Any]) -> str:
@@ -1034,7 +1077,7 @@ def diff_line(entry: Mapping[str, Any]) -> str:
     if where.part == "briefs":
         what = "brief set" if after and not before else "brief cleared" if not after else "brief"
         return f"~ {path} · {what}"
-    return f"{path}: {_value(before)} → {_value(after)}"
+    return f"{path}: {_value(before, where.part)} → {_value(after, where.part)}"
 
 
 # ── Tier 0: gates, unknown projects ────────────────────────────
@@ -1073,6 +1116,55 @@ def gate_refusals(
                     }
                 )
     return out
+
+
+def template_refusals(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[dict[str, Any]]:
+    """
+    Templates of *after* that changed and lack a role every project needs (a
+    reviewer, a builder): no project could switch to one.
+
+    :returns: ``[{path, template, gate, role, message}]``.
+    """
+    old = {str(t.get("id")): t for t in templates(before)}
+    out: list[dict[str, Any]] = []
+    for shape in templates(after):
+        template_id = str(shape.get("id"))
+        if old.get(template_id) == shape:
+            continue
+        roles = {str(r.get("role")) for r in shape.get("roles") or []}
+        for need in GATE_NEEDS:
+            if need.when == "always" and need.role not in roles:
+                out.append(
+                    {
+                        "path": f"{TEMPLATES}.{template_id}",
+                        "template": template_id,
+                        "gate": need.gate,
+                        "role": need.role,
+                        "message": f"template {template_id} has no "
+                        f"{ROLE_LABELS[need.role]}: {need.text} (Tier 0)",
+                    }
+                )
+    return out
+
+
+def templates_in_use(before: Mapping[str, Any], after: Mapping[str, Any]) -> list[tuple[str, str]]:
+    """:returns: ``(template id, slug)`` of templates *after* removed that a team still names."""
+    gone = {str(t.get("id")) for t in templates(before)} - {
+        str(t.get("id")) for t in templates(after)
+    }
+    return sorted(
+        (str(team.get("template")), slug)
+        for slug, team in own_teams(after).items()
+        if team.get("template") in gone
+    )
+
+
+def gate_gaps(team: Mapping[str, Any], facts: ProjectFacts) -> list[GateNeed]:
+    """
+    :returns: The gate needs *team* has no member for under *facts* (a team
+        saved while its charter needed no env or previews, before they turned on).
+    """
+    return [n for n in GATE_NEEDS if needed(n, facts) and count(team, n.role) == 0]
 
 
 def unknown_projects(
@@ -1137,6 +1229,9 @@ def revert_entry(doc: dict[str, Any], old: Mapping[str, Any], path: str, value: 
             team["members"].pop(index)
         elif previous is not None and index is None:
             team["members"].append(dict(previous))
+            brief = (team_of(old, where.slug).get("briefs") or {}).get(where.item)
+            if brief:
+                team["briefs"][where.item] = brief
         elif previous is not None and index is not None:
             team["members"][index] = dict(previous)
 
@@ -1144,6 +1239,7 @@ def revert_entry(doc: dict[str, Any], old: Mapping[str, Any], path: str, value: 
 __all__ = [
     "AGENTS",
     "BUILDER",
+    "BUNDLE_SUMMARY",
     "GATE_NEEDS",
     "MEMBER_FIELDS",
     "NOT_TRIALABLE_REASON",
@@ -1173,6 +1269,7 @@ __all__ = [
     "effective_get",
     "expand",
     "filled",
+    "gate_gaps",
     "gate_refusals",
     "has_own",
     "implicit_team",
@@ -1188,7 +1285,9 @@ __all__ = [
     "team_of",
     "template",
     "template_lock",
+    "template_refusals",
     "templates",
+    "templates_in_use",
     "unknown_projects",
     "vendor_refusal",
 ]

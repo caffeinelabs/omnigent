@@ -1025,7 +1025,10 @@ class TeamMemberSpecView(_View):
 
 
 class TeamDriftView(_View):
-    """Where the live team differs from the spec (``outside_team`` or ``over_builders``)."""
+    """
+    Where the live team differs from the spec: ``outside_team``, ``over_builders``
+    or ``missing_gate_role`` (a gate the charter needs now has no member).
+    """
 
     kind: str
     session_id: str | None = None
@@ -1034,15 +1037,20 @@ class TeamDriftView(_View):
 
 class TeamSpecView(_View):
     """
-    ``projects[].team_spec``: the project's team (its own, or the default template's).
+    ``projects[].team_spec``: the project's team (its own, or today's bundle).
 
     :param own: The project has its own team in the definition.
+    :param follows: ``own``, or ``bundle`` (no team of its own: every agent of
+        the PL bundle on its default model; template edits never change it).
+    :param summary: That in words for ``bundle``, else ``None``.
     :param builders_from: ``team`` or ``charter``; ``budget_from``: ``team``,
         ``charter`` or ``definition``.
     :param mode: ``OMNIGENT_FACTORY_TEAM_SPEC``: ``warn`` or ``enforce``.
     """
 
     own: bool
+    follows: Literal["own", "bundle"] = "own"
+    summary: str | None = None
     template: str | None = None
     builders_at_once: int
     builders_from: str

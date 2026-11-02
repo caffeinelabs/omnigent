@@ -488,7 +488,7 @@ CLASS_TABLE: Final = (
     ("discovery.seat|rubric|thresholds|autonomy", "B (owners)"),
     ("discovery.*, briefs.scout", "never on trial until discovery guards exist"),
     ("briefs.*, role_defaults.*", "B (owners)"),
-    ("team.templates.*", "B (owners)"),
+    ("team.templates.*", "B (owners); never on trial (it reaches a project on a switch)"),
     (
         "team.projects.<slug> members",
         "adding a member, a vendor or model change, a brief: B (owners); removing one or a "
@@ -1135,12 +1135,17 @@ def _check_team(
     before: Mapping[str, Any], after: Mapping[str, Any], facts: team_spec.FactsLookup | None
 ) -> None:
     """
-    Tier 0 for team changes: no gate loses its last member, no team for an unknown project.
+    Tier 0 for team changes: no gate loses its last member, every template has
+    the roles every project needs, no template a team names is removed, no team
+    for an unknown project.
 
     :raises CockpitError: 422 ``gate_requires_role`` (all refusals in ``blocked``),
-        404 ``unknown_project``.
+        409 ``in_use``, 404 ``unknown_project``.
     """
-    refused = team_spec.gate_refusals(before, after, facts)
+    refused = [
+        *team_spec.gate_refusals(before, after, facts),
+        *team_spec.template_refusals(before, after),
+    ]
     if refused:
         first = refused[0]
         raise _error(
@@ -1150,6 +1155,17 @@ def _check_team(
             field=first["path"],
             gate=first["gate"],
             blocked=refused,
+        )
+    in_use = team_spec.templates_in_use(before, after)
+    if in_use:
+        template_id, slug = in_use[0]
+        raise _error(
+            409,
+            "in_use",
+            f"template {template_id} is the template of {slug}'s team: switch "
+            f"{', '.join(sorted({s for t, s in in_use if t == template_id}))} to another first",
+            field=f"{team_spec.TEMPLATES}.{template_id}",
+            item=template_id,
         )
     unknown = team_spec.unknown_projects(before, after, facts)
     if unknown:
@@ -1727,6 +1743,7 @@ _UNTRIALABLE_NAMES: Final = {
     "discovery": "discovery",
     "briefs.scout": "Scout's brief",
     team_spec.PROJECTS: "a project's team",
+    team_spec.TEMPLATES: "team template",
 }
 _UNTRIALABLE_WHY: Final = {
     blocks.NOT_TRIALABLE_REASON: "are judged on outcomes",
@@ -1734,8 +1751,11 @@ _UNTRIALABLE_WHY: Final = {
         "are judged on discovery guards, which this server does not measure yet"
     ),
     blocks.TOO_FEW_PRS: (
-        "would rarely reach the 3 merged PRs a trial needs (one team merges about one a "
-        "day); trial team changes on a template instead"
+        "would rarely reach the 3 merged PRs a trial needs (one team merges about one a day)"
+    ),
+    blocks.NO_PROJECT_FOLLOWS: (
+        "reach a project only when it switches to the template, so a trial would measure "
+        "nothing yet"
     ),
 }
 

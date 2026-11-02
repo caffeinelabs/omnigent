@@ -78,7 +78,7 @@ async def test_a_model_swap_previews_rate_finish_restart_route_and_mail(cockpit:
     # Nobody else is mailed the change.
     assert _effects(body, "mail") == []
     assert body["trialable"]["ok"] is False
-    assert "trial team changes on a template instead" in body["trialable"]["reason"]
+    assert "would rarely reach the 3 merged PRs a trial needs" in body["trialable"]["reason"]
     # A dry run.
     assert version(cockpit) == 1
 
@@ -99,7 +99,7 @@ async def test_an_editor_sees_a_narrowing_team_change_is_theirs(cockpit: Cockpit
     assert body["you_can_apply"] is True
     assert body["who"] == (
         "Owners and editors (class A: it only narrows a team). You are an editor, so it "
-        "applies when you press Apply."
+        "applies when you press Apply (and you can Undo it for 10 minutes)."
     )
 
     wider = await _preview(
@@ -151,3 +151,23 @@ async def test_rates_come_from_the_cost_ledger_once_it_has_some(cockpit: Cockpit
     book = team.rate_book(cockpit.deps, cockpit.fid)
     learned = book.rate("ic", "claude", None)
     assert (learned.source, learned.n, learned.usd_per_h) == ("ledger", 3, 6.0)
+
+
+async def test_a_hidden_projects_spend_sessions_and_lead_stay_out(cockpit: Cockpit) -> None:
+    from omnigent.server.auth import LEVEL_READ
+    from omnigent.server.factory import snapshot
+
+    assert cockpit.deps.permission_store is not None
+    cockpit.deps.permission_store.grant("bob", cockpit.fid, LEVEL_READ)
+    snapshot.reset_cache()
+
+    resp = await _preview(cockpit, {"op": "remove", "path": f"{MEMBERS}/M-3"}, user="bob")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert _effects(body, "finish") == []
+    (restart,) = _effects(body, "restart")
+    assert restart["sessions"] == []
+    (update,) = _effects(body, "team_update")
+    assert update["to"] is None
+    assert update["text"] == "Its project lead gets one TEAM UPDATE message with v2."

@@ -318,9 +318,12 @@ async def bind_session(
             return None
         async with tasks.lock(factory_id):
             task, evs = await asyncio.to_thread(bind_sync, deps, factory_id, slug, child)
+        first = child.id not in _seen
         _remember(child.id)
         await tasks.emit_all(app_state, factory_id, evs)
-        await team.observe_dispatch(app_state, pl, child)
+        if first:
+            # Checked against the team when created, not when it ends after a TEAM UPDATE.
+            await team.observe_dispatch(app_state, pl, child)
         return task
     except Exception:  # noqa: BLE001 - the next tick binds it
         _logger.warning("factory binder: could not bind %s", child.id, exc_info=True)

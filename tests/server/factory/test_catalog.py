@@ -111,3 +111,22 @@ async def test_the_catalog_needs_read_access_and_a_real_project(cockpit: Cockpit
         headers={"X-Test-User": "alice"},
     )
     assert missing.status_code == 404 and error_code(missing) == "unknown_project"
+
+
+async def test_a_project_whose_lead_the_viewer_cannot_read_is_not_in_the_catalog(
+    cockpit: Cockpit,
+) -> None:
+    from omnigent.server.auth import LEVEL_READ
+    from omnigent.server.factory import snapshot
+
+    assert cockpit.deps.permission_store is not None
+    cockpit.deps.permission_store.grant("bob", cockpit.fid, LEVEL_READ)
+    snapshot.reset_cache()
+    path = f"/v1/factory/factories/{cockpit.fid}/catalog"
+
+    hidden = await cockpit.client.get(
+        path, params={"project": SLUG}, headers={"X-Test-User": "bob"}
+    )
+    assert hidden.status_code == 404 and error_code(hidden) == "unknown_project"
+    general = await cockpit.client.get(path, headers={"X-Test-User": "bob"})
+    assert general.status_code == 200 and "project" not in general.json()

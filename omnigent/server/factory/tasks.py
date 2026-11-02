@@ -1400,7 +1400,7 @@ async def start_task(
         warning = loops.start_warning(deps, factory_id, task) if mode == "assist" else None
         use = harness or harness_of(task)
         choice = team.dispatch_choice(
-            deps, factory_id, slug, use, ctx.tasks, pinned=harness is not None
+            deps, factory_id, slug, use, ctx.tasks, pinned=harness is not None, task=task
         )
         if choice["agent"] in HARNESSES:
             use = choice["agent"]  # The project's team decides which builder runs it.

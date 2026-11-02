@@ -1,11 +1,13 @@
 """The team spec in the definition: members by id, classes, the gate refusal.
 
-A project without its own team works with the default template's shape (its
-implicit team, members ``M-1``…). Its first edit stores that team as its own,
-so every change and diff line names a real member. Adding a member, a vendor
-or model change and more money are owner changes (class B); removing a member,
-fewer builders, a lower budget and a handle are class A, which an editor
-applies. Removing the last member a ready gate needs is refused (Tier 0).
+A project without its own team runs today's bundle (its implicit team, members
+``M-1``…), whatever the templates say. Its first edit stores that team as its
+own, so every change and diff line names a real member and nothing else
+changes at run time. Adding a member, a vendor or model change and more money
+are owner changes (class B); removing a member, fewer builders, a lower budget
+and a handle are class A, which an editor applies. Removing the last member a
+ready gate needs is refused (Tier 0), and so is a template without a reviewer
+or a builder.
 """
 
 from __future__ import annotations
@@ -16,12 +18,12 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-from omnigent.server.factory import definition, team_spec
+from omnigent.server.factory import definition, team_spec, tuning
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.team_spec import ProjectFacts
 from tests.server.factory.cockpit_helpers import Cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld
-from tests.server.factory.definition_helpers import definition_cockpit, put, version
+from tests.server.factory.definition_helpers import definition_cockpit, put, url, version
 
 SLUG = "api-version"
 MEMBERS = f"team.projects.{SLUG}.members"
@@ -47,10 +49,27 @@ def _team(doc: dict[str, Any], slug: str = SLUG) -> dict[str, Any]:
 # ── The implicit team and the first edit ───────────────────────
 
 
-def test_a_project_without_its_own_team_has_the_default_templates_shape() -> None:
+STANDARD_OPUS = {
+    "id": "standard",
+    "label": "Standard",
+    "default": True,
+    "roles": [
+        {"role": "project_lead"},
+        {"role": "ic", "vendor": "claude", "model": "opus", "count": 2},
+        {"role": "reviewer", "vendor": "codex"},
+        {"role": "env_keeper"},
+        {"role": "demo"},
+    ],
+}
+"""The default template reshaped: two Claude builders on opus and no Codex builder."""
+ALL_ON = ProjectFacts(env_needed=True, previews_on=True)
+
+
+def test_a_project_without_its_own_team_runs_todays_bundle() -> None:
     doc = definition.full_doc({})
     team = _team(doc)
     assert not team_spec.has_own(doc, SLUG)
+    assert team["template"] is None
     assert [(m["id"], m["role"], m["vendor"], m["agent"]) for m in team["members"]] == [
         ("M-1", "project_lead", "claude", "factory-pl"),
         ("M-2", "ic", "claude", "ic"),
@@ -63,6 +82,49 @@ def test_a_project_without_its_own_team_has_the_default_templates_shape() -> Non
     assert (team["builders_at_once"], team["budget_usd"]) == (None, None)
     # Nothing stored while it holds the defaults (a rollback still reads the version).
     assert "team" not in definition.stored_form(doc)
+
+
+def test_template_edits_never_reach_a_project_without_its_own_team() -> None:
+    doc = _apply({}, {"op": "replace", "path": "team.templates/standard", "value": STANDARD_OPUS})
+    assert _team(doc) == _team(definition.full_doc({}))
+
+    # An editor's rename stores today's team, not the reshaped template.
+    after = _apply(doc, {"op": "replace", "path": f"{MEMBERS}/M-2/handle", "value": "Rex"})
+    diff = definition.diff(doc, after)
+    assert [d["path"] for d in diff] == [f"{MEMBERS}.M-2"]
+    assert team_spec.editor_may_apply(diff)
+    builders = [(m["agent"], m["model"]) for m in _team(after)["members"] if m["role"] == "ic"]
+    assert builders == [("ic", None), ("ic_codex", None)]
+
+    # Switching to the template is what applies it, as an owner change.
+    switched = _apply(
+        after,
+        {"op": "replace", "path": f"team.projects.{SLUG}.template", "value": "standard"},
+        facts=lambda _s: ALL_ON,
+    )
+    lines = definition.diff_lines(definition.diff(after, switched))
+    assert f"team.projects.{SLUG}.template: today's bundle → standard" in lines
+    assert f"+ {MEMBERS}.M-7 · builder · claude · opus" in lines
+    assert not team_spec.editor_may_apply(definition.diff(after, switched))
+
+
+def test_a_new_team_starts_from_the_default_template() -> None:
+    pair = team_spec.template(definition.full_doc({}), "pair")
+    standard = team_spec.template(definition.full_doc({}), "standard")
+    assert pair is not None and standard is not None
+    doc = _apply(
+        {},
+        {
+            "op": "replace",
+            "path": "team.templates/standard",
+            "value": {**standard, "default": False},
+        },
+        {"op": "replace", "path": "team.templates/pair", "value": {**pair, "default": True}},
+    )
+    doc = _apply(doc, {"op": "add", "path": f"team.projects.{SLUG}", "value": {}})
+    team = _team(doc)
+    assert team["template"] == "pair"
+    assert [(m["role"], m["vendor"]) for m in team["members"]].count(("ic", "claude")) == 2
 
 
 def test_the_first_edit_stores_the_team_and_the_diff_names_one_member() -> None:
@@ -89,6 +151,32 @@ def test_members_change_by_id_and_numbers_are_never_reused() -> None:
     doc = _apply(doc, {"op": "remove", "path": f"{MEMBERS}/M-7"})
     doc = _apply(doc, {"op": "add", "path": MEMBERS, "value": {"role": "ic"}})
     assert [m["id"] for m in _team(doc)["members"]][-1] == "M-8"
+
+
+def test_a_whole_team_write_never_reuses_a_member_number() -> None:
+    doc = _apply({}, {"op": "remove", "path": f"{MEMBERS}/M-3"})
+    members = [*_team(doc)["members"], {"id": "M-3", "role": "ic", "vendor": "claude"}]
+    # M-2 named as a reviewer is no longer M-2: a member never changes its role.
+    members[1] = {"id": "M-2", "role": "reviewer", "vendor": "claude"}
+    doc = _apply(
+        doc, {"op": "replace", "path": f"team.projects.{SLUG}", "value": {"members": members}}
+    )
+    assert [(m["id"], m["role"]) for m in _team(doc)["members"]] == [
+        ("M-1", "project_lead"),
+        ("M-7", "reviewer"),
+        ("M-4", "reviewer"),
+        ("M-5", "env_keeper"),
+        ("M-6", "demo"),
+        ("M-8", "ic"),
+    ]
+
+
+def test_two_members_never_share_a_handle() -> None:
+    doc = _apply({}, {"op": "replace", "path": f"{MEMBERS}/M-2/handle", "value": "Rex"})
+    with pytest.raises(CockpitError) as caught:
+        _apply(doc, {"op": "replace", "path": f"{MEMBERS}/M-3/handle", "value": "rex"})
+    assert caught.value.code == "invalid_definition"
+    assert "share a handle" in caught.value.message
 
 
 def test_a_vendor_switch_moves_the_agent_and_drops_the_old_model() -> None:
@@ -189,6 +277,50 @@ def test_a_new_team_for_an_unknown_project_is_refused() -> None:
     assert (caught.value.status_code, caught.value.code) == (404, "unknown_project")
 
 
+@pytest.mark.parametrize(
+    "roles",
+    [
+        [{"role": "project_lead"}, {"role": "ic"}],
+        [{"role": "project_lead"}, {"role": "reviewer"}],
+        [{"role": "project_lead"}],
+    ],
+)
+def test_a_template_without_a_reviewer_and_a_builder_is_refused(
+    roles: list[dict[str, Any]],
+) -> None:
+    with pytest.raises(CockpitError) as caught:
+        _apply(
+            {}, {"op": "add", "path": "team.templates", "value": {"id": "solo", "roles": roles}}
+        )
+    assert (caught.value.status_code, caught.value.code) == (422, "gate_requires_role")
+    assert caught.value.message.startswith("template solo has no ")
+    assert caught.value.message.endswith("(Tier 0)")
+    # Nor may the default lose its reviewer.
+    no_review = {
+        **STANDARD_OPUS,
+        "roles": [r for r in STANDARD_OPUS["roles"] if r["role"] != "reviewer"],
+    }
+    with pytest.raises(CockpitError) as caught:
+        _apply({}, {"op": "replace", "path": "team.templates/standard", "value": no_review})
+    assert caught.value.extra["gate"] == "review"
+
+
+def test_a_template_a_team_names_cannot_be_removed() -> None:
+    doc = _apply(
+        {},
+        {"op": "replace", "path": f"team.projects.{SLUG}.template", "value": "pair"},
+        facts=lambda _s: ALL_ON,
+    )
+    with pytest.raises(CockpitError) as caught:
+        _apply(doc, {"op": "remove", "path": "team.templates/pair"})
+    assert (caught.value.status_code, caught.value.code) == (409, "in_use")
+    assert f"switch {SLUG} to another first" in caught.value.message
+    assert (
+        team_spec.template(_apply(doc, {"op": "remove", "path": "team.templates/lean"}), "lean")
+        is None
+    )
+
+
 # ── Classes ────────────────────────────────────────────────────
 
 
@@ -213,11 +345,30 @@ def test_the_class_map_of_team_changes(path: str, before: Any, after: Any, klass
     assert definition.classify(path, before, after) == klass
 
 
-def test_team_changes_never_trial_and_templates_hold_the_team_block() -> None:
+def test_removing_a_briefed_member_is_one_class_a_line() -> None:
+    doc = _apply(
+        {},
+        {
+            "op": "replace",
+            "path": f"team.projects.{SLUG}/briefs/M-3",
+            "value": "Narrow cards only (sample).",
+        },
+    )
+    after = _apply(doc, {"op": "remove", "path": f"{MEMBERS}/M-3"})
+
+    diff = definition.diff(doc, after)
+    assert [d["path"] for d in diff] == [f"{MEMBERS}.M-3"]
+    assert team_spec.editor_may_apply(diff)
+
+
+def test_team_changes_never_trial() -> None:
     ok, reason = definition.trialable([f"{MEMBERS}.M-2"])
     assert ok is False and reason is not None
-    assert "trial team changes on a template instead" in reason
-    assert definition.trialable(["team.templates.lean"]) == (True, None)
+    assert "would rarely reach the 3 merged PRs a trial needs" in reason
+    # A template reaches a project only when it switches, so a trial would measure nothing.
+    ok, reason = definition.trialable(["team.templates.lean"])
+    assert ok is False and reason is not None
+    assert reason.startswith("team template changes reach a project only when it switches")
     assert definition.trial_block("team.templates.lean") == "team"
 
 
@@ -343,6 +494,32 @@ async def test_an_editor_applies_a_removal_but_not_a_model_change(cockpit: Cockp
     assert version(cockpit) == 2
 
 
+async def test_an_editor_undoes_their_own_narrowing_change_but_never_restores(
+    cockpit: Cockpit,
+) -> None:
+    removal = await put(cockpit, {"op": "remove", "path": f"{MEMBERS}/M-3"}, user="carol")
+    assert removal.status_code == 200, removal.text
+
+    undo = await cockpit.post(url(cockpit, "/pin"), {"version": 1}, user="carol")
+    assert undo.status_code == 200, undo.text
+    assert version(cockpit) == 1
+    # Restoring v2 is the owners' restore route, so its preview says so.
+    preview = await cockpit.post(url(cockpit, "/preview"), {"restore": 2}, user="carol")
+    body = preview.json()
+    assert (body["approvers"], body["you_can_apply"]) == (["owners"], False)
+    restore = await cockpit.post(url(cockpit, "/restore"), {"version": 2}, user="carol")
+    assert restore.status_code == 403
+
+
+async def test_an_editor_cannot_undo_an_owners_change(cockpit: Cockpit) -> None:
+    swap = await put(cockpit, {"op": "replace", "path": f"{MEMBERS}/M-2/model", "value": "opus"})
+    assert swap.status_code == 200, swap.text
+
+    undo = await cockpit.post(url(cockpit, "/pin"), {"version": 1}, user="carol")
+    assert undo.status_code == 403 and error_code(undo) == "owners_only"
+    assert version(cockpit) == 2
+
+
 async def test_the_gate_refusal_reaches_the_cockpit(cockpit: Cockpit) -> None:
     resp = await put(cockpit, {"op": "remove", "path": f"{MEMBERS}/M-4"})
 
@@ -362,3 +539,10 @@ async def test_an_agents_team_proposal_always_waits_for_the_owners(cockpit: Cock
     # A removal is class A for a person, but an agent never changes a team without the owners.
     assert (body["class"], body["status"], body["approval"]) == ("B", "pending", "owner")
     assert body["decision"] is not None
+    # Only the portfolio and reliability seats propose team changes.
+    change = definition.parse_change({"op": "remove", "path": f"{MEMBERS}/M-3"})
+    tuning.check_agent_paths("atlas", [change])
+    with pytest.raises(CockpitError) as caught:
+        tuning.check_agent_paths("scout", [change])
+    assert caught.value.code == "path_not_allowed"
+    assert caught.value.message.endswith("people change it in the cockpit")

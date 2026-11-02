@@ -305,7 +305,8 @@ def check_agent_paths(seat: str, changes: Sequence[definition.Change]) -> None:
         path = change.full_path
         if definition.blocks.agent_may_propose(seat, path):
             continue
-        allowed = definition.blocks.AGENT_PATHS.get(seat, ())
+        team = definition.team_spec.is_team_path(path)
+        allowed = [a for a in definition.blocks.AGENT_PATHS.get(seat, ()) if (a == "team") == team]
         may = (
             f"it may propose {', '.join(allowed)} there"
             if allowed
@@ -1695,12 +1696,19 @@ async def human_edit(
 async def pin_version(
     app_state: Any, factory_id: str, user_id: str | None, version: int
 ) -> dict[str, Any]:
-    """``POST …/definition/pin``: an owner puts a stored version back in force."""
+    """
+    ``POST …/definition/pin``: an owner puts a stored version back in force.
+
+    An editor may pin only the Undo of their own team change that editors
+    apply (class A), within :data:`.definition.UNDO_WINDOW_S`.
+    """
+    from omnigent.server.factory import people
     from omnigent.server.factory.projects import human_actor
 
     deps = factory_deps(app_state)
     root = await control.load_factory_root(deps, user_id, factory_id)
-    await control.require(deps, user_id, root.id, LEVEL_MANAGE)
+    await control.require(deps, user_id, root.id, LEVEL_EDIT)
+    owner = await asyncio.to_thread(people.viewer_level, deps, root.id, user_id) >= LEVEL_MANAGE
     target = await asyncio.to_thread(deps.factory_store.get_definition, root.id, version)
     if target is None:
         raise CockpitError(404, "unknown_version", f"no definition v{version}")
@@ -1720,6 +1728,20 @@ async def pin_version(
             and current.parent_version == version
             and now_s() - int(current.created_at) <= definition.UNDO_WINDOW_S
         )
+        if not owner and not (
+            undo
+            and current is not None
+            and current.created_by == actor.id
+            and definition.team_spec.editor_may_apply(
+                definition.diff(dict(target.doc or {}), dict(current.doc or {}))
+            )
+        ):
+            raise CockpitError(
+                403,
+                "owners_only",
+                "owners pin versions; an editor may only Undo their own team change within "
+                f"{definition.UNDO_WINDOW_S // 60} minutes",
+            )
         await asyncio.to_thread(definition.pin, deps, root.id, version)
         await deliver(
             app_state,

@@ -3,7 +3,8 @@
 - ``GET /v1/factory/factories/{fid}/catalog[?project=<slug>]``: the PL bundle's
   roles with the vendor · models each runs, the gate each is needed by, $/h
   estimates from the cost ledger, the templates, and the roles no bundle covers
-  yet; with ``project``, its template locks and the members it cannot remove.
+  yet; with ``project``, its template locks and the members it cannot remove
+  (404 for a project whose PL the viewer cannot read).
 
 Team changes themselves go through ``PUT …/definition`` and its preview
 (paths ``team.projects.<slug>…`` and ``team.templates``).
@@ -41,7 +42,11 @@ async def get_catalog(
             raise CockpitError(400, "invalid_project", f"{project!r} is not a project slug")
         if project is not None:
             row = await asyncio.to_thread(deps.factory_store.get_project, root.id, project)
-            if row is None:
+            # A project whose PL the viewer cannot read is no project of theirs.
+            hidden = row is not None and project in await team.hidden_projects(
+                request.app.state, deps, root, user_id
+            )
+            if row is None or hidden:
                 raise CockpitError(404, "unknown_project", f"no project {project}")
         return await asyncio.to_thread(team.catalog, deps, root.id, project)
     except CockpitError as exc:

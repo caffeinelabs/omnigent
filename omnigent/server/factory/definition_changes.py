@@ -260,7 +260,10 @@ def _who(klass: str | None, level: int, owner_only: bool, *, editors: bool = Fal
     if level >= LEVEL_MANAGE:
         you = " You are an owner, so it applies when you press Apply."
     elif level >= LEVEL_EDIT and editors:
-        you = " You are an editor, so it applies when you press Apply."
+        you = (
+            " You are an editor, so it applies when you press Apply (and you can Undo it "
+            "for 10 minutes)."
+        )
     elif level >= LEVEL_EDIT:
         you = " It waits for an owner: propose it to them."
     else:
@@ -316,7 +319,11 @@ def _parse_all(
 
 
 def _preview(
-    deps: FactoryDeps, root: Conversation, user_id: str | None, body: PreviewIn
+    deps: FactoryDeps,
+    root: Conversation,
+    user_id: str | None,
+    body: PreviewIn,
+    hidden: frozenset[str] = frozenset(),
 ) -> dict[str, Any]:
     resolved = definition.definition_for(deps, root.id, fresh=True)
     assert resolved is not None
@@ -363,7 +370,8 @@ def _preview(
     klass = tuning.diff_class(diff) if diff else None
     owner_only = any(e["owner_only"] for e in entries)
     level = people.viewer_level(deps, root.id, user_id)
-    editor_applies = definition.team_spec.editor_may_apply(diff)
+    # A restore goes through the owners' restore route, whatever it changes.
+    editor_applies = body.restore is None and definition.team_spec.editor_may_apply(diff)
     can_apply = level >= LEVEL_MANAGE or (level >= LEVEL_EDIT and editor_applies)
     effects = _effects(
         deps,
@@ -375,7 +383,14 @@ def _preview(
         version_next=version_next,
     )
     effects += team.preview_effects(
-        deps, root.id, resolved.stored, after, diff, version_next=version_next, when=body.when
+        deps,
+        root.id,
+        resolved.stored,
+        after,
+        diff,
+        version_next=version_next,
+        when=body.when,
+        hidden=hidden,
     )
     return {
         "def_version": resolved.version,
@@ -417,7 +432,8 @@ async def preview_change(
         raise CockpitError(400, "invalid_body", "send changes, or the version to restore")
     deps = factory_deps(app_state)
     root = await control.load_factory_root(deps, user_id, factory_id)
-    return await asyncio.to_thread(_preview, deps, root, user_id, body)
+    hidden = await team.hidden_projects(app_state, deps, root, user_id)
+    return await asyncio.to_thread(_preview, deps, root, user_id, body, hidden)
 
 
 # ── Restore ────────────────────────────────────────────────────
