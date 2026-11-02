@@ -63,11 +63,14 @@ async def test_relaunch_failed_opens_exactly_one_decision_per_episode(
     assert decision.asked_by_session_id == pl and decision.project_slug == "api-version"
     assert decision.question == '"PL · api-version" relaunch failed 3× (runner_unavailable)'
     assert [(o["id"], o.get("action"), o.get("target")) for o in decision.options] == [
+        ("new_sandbox", "new_sandbox", f"member:{pl}"),
         ("restart", "restart", f"member:{pl}"),
         ("relaunch", "relaunch", f"member:{pl}"),
         ("pause", "pause", "project:api-version"),
         ("dismiss", "dismiss", None),
     ]
+    # No runner to reach: only a new sandbox can help, so it is the recommendation.
+    assert [o["id"] for o in decision.options if o["recommended"]] == ["new_sandbox"]
     [opened] = _store(s).find_events(w.id("lead_a"), "decision.opened", 0)
     assert opened.subject == f"decision:{decision.ref}"
 

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { ProjectStartView, ProjectView } from "@/lib/factoryApi";
 import { ROUND3_NOW_S, round3Snapshot } from "../shell/__fixtures__/shellFixtures";
-import { stageHeadline } from "./stageHeadline";
+import { provisioningStep, stageHeadline } from "./stageHeadline";
 
 const NOW = ROUND3_NOW_S;
 
@@ -54,6 +54,49 @@ describe("stageHeadline", () => {
       long: "Restarting PL",
       ageS: 45,
       title: "Restarting the project lead: Provisioning sandbox",
+    });
+  });
+
+  it("says what a starting sandbox waits on and for how long", () => {
+    const h = stageHeadline(
+      queued({
+        state: "starting",
+        phase: "image",
+        label: "Pulling the image",
+        since: NOW - 540,
+        phase_since: NOW - 236,
+      }),
+      NOW,
+    );
+    expect(h).toMatchObject({
+      label: "Starting PL",
+      detail: "Pulling the image · 3m",
+      explain: "Pulling the image · 3m",
+      ageS: 540,
+      title: "Starting the project lead: Pulling the image · 3m",
+    });
+  });
+
+  it("says the server retries the PL on a new sandbox", () => {
+    const h = stageHeadline(
+      queued({
+        state: "starting",
+        phase: "node",
+        label: "Waiting for a node",
+        since: NOW - 900,
+        phase_since: NOW - 95,
+        attempt: 2,
+        restart: true,
+      }),
+      NOW,
+    );
+    expect(h).toMatchObject({
+      label: "Retrying PL",
+      long: "Retrying PL",
+      detail: "Waiting for a node · 1m",
+      explain: "New sandbox, try 2 · Waiting for a node · 1m",
+      title: "Retrying the project lead on a new sandbox (try 2): Waiting for a node · 1m",
+      tone: "active",
     });
   });
 
@@ -139,5 +182,26 @@ describe("stageHeadline", () => {
       explain: "!9774 was merged before this project started",
       title: "Verify · !9774 was merged before this project started",
     });
+  });
+});
+
+describe("provisioningStep", () => {
+  it("names the step a starting sandbox waits on, with for how long", () => {
+    expect(
+      provisioningStep(
+        { stage: "starting", label: "Pulling the image", step: "image", since: NOW - 236 },
+        NOW,
+      ),
+    ).toBe("Pulling the image · 3m");
+    expect(
+      provisioningStep({ stage: "starting", label: "Starting the host", step: "host" }, NOW),
+    ).toBe("Starting the host");
+  });
+
+  it("leaves a stage without a step to its own label", () => {
+    expect(
+      provisioningStep({ stage: "provisioning", label: "Provisioning sandbox" }, NOW),
+    ).toBeNull();
+    expect(provisioningStep(null, NOW)).toBeNull();
   });
 });

@@ -469,6 +469,44 @@ class AgentSandboxLauncher(KubernetesSandboxLauncher):
         finally:
             self._close_clients()
 
+    def suspend(self, sandbox_id: str) -> None:
+        """
+        Expire the ``Sandbox`` now, as its idle window would later.
+
+        ``shutdownPolicy: Retain`` keeps the ``Sandbox`` and its workspace claim
+        while the controller stops its Pod, so a wake resumes it in place with
+        the workspace intact. A sandbox already gone (404) is success.
+
+        :param sandbox_id: The ``Sandbox`` to stop.
+        :raises click.ClickException: On an API failure other than not-found.
+        """
+        _ensure_sdk()
+        from kubernetes.client.rest import ApiException
+        from urllib3.exceptions import HTTPError
+
+        namespace = self._resolve_namespace()
+        try:
+            self._load_custom().patch_namespaced_custom_object(
+                API_GROUP,
+                API_VERSION,
+                namespace,
+                SANDBOX_PLURAL,
+                sandbox_id,
+                {"spec": {"shutdownTime": _shutdown_time(0)}},
+                _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
+            )
+        except ApiException as exc:
+            if getattr(exc, "status", None) != 404:
+                raise click.ClickException(
+                    f"could not stop agent-sandbox '{sandbox_id}': {_api_reason(exc)}"
+                ) from exc
+        except HTTPError as exc:
+            raise click.ClickException(
+                f"could not stop agent-sandbox '{sandbox_id}': {_api_reason(exc)}"
+            ) from exc
+        finally:
+            self._close_clients()
+
     def terminate(self, sandbox_id: str) -> None:
         """
         Delete the ``Sandbox`` (cascading to its Pod) and its token Secret.

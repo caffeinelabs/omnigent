@@ -260,6 +260,29 @@ async def test_resuming_a_stopped_project_revives_it(cockpit: Cockpit, by: str) 
     assert cockpit.mailer.texts_to(pl)[-1].startswith("[Factory control · RESUME · by alice]")
 
 
+async def test_resuming_a_stopped_project_over_the_cap_is_refused(cockpit: Cockpit) -> None:
+    """Stop gave up the project's slot; another project took it; Resume would run 11."""
+    store = cockpit.store
+    row = store.upsert_project(cockpit.fid, "api-version", title="API version")
+    await _control(cockpit, "stop")
+    store.update_project(row.id, stage="done")
+    for i in range(10):
+        store.upsert_project(cockpit.fid, f"p{i}", title=f"p{i}")
+
+    resp = await _control(cockpit, "resume")
+
+    assert (resp.status_code, error_code(resp)) == (409, "over_caps")
+    assert _labels(cockpit, "pl")[F.LABEL_STATE] == "done"
+
+    # A project that finished frees a slot again: now it fits.
+    p0 = store.get_project(cockpit.fid, "p0")
+    assert p0 is not None
+    store.update_project(p0.id, stage="merged")
+    resp = await _control(cockpit, "resume")
+    assert resp.status_code == 202, resp.text
+    assert _labels(cockpit, "pl")[F.LABEL_STATE] == "active"
+
+
 async def test_only_resume_reaches_a_stopped_project(cockpit: Cockpit) -> None:
     cockpit.store.upsert_project(cockpit.fid, "api-version", title="API version")
     await _control(cockpit, "stop")

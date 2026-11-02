@@ -220,6 +220,7 @@
           "reason": "waits for api-version, db-version to finish",
           "problem": null,
           "since": 1793016600,
+          "step_since": null,
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/settings-row"
         }
       ],
@@ -511,6 +512,7 @@
           "reason": "waits for api-version, db-version to finish",
           "problem": null,
           "since": 1793016600,
+          "step_since": null,
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/settings-row"
         }
       ],
@@ -802,6 +804,7 @@
           "reason": "waits for api-version, db-version to finish",
           "problem": null,
           "since": 1793016600,
+          "step_since": null,
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/settings-row"
         }
       ],
@@ -1448,6 +1451,7 @@
           "reason": "waits for a free machine (all 12 pods in use, 2 projects ahead)",
           "problem": null,
           "since": 1793598600,
+          "step_since": null,
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/billing"
         },
         {
@@ -1456,6 +1460,7 @@
           "reason": "starting up: copying the repository",
           "problem": null,
           "since": 1793599080,
+          "step_since": null,
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/search"
         }
       ],

@@ -9,10 +9,12 @@ create/read/delete/log fakes — there is no exec transport to fake.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import sys
 import types
+from datetime import UTC, datetime
 from types import SimpleNamespace
 
 import click
@@ -1544,3 +1546,206 @@ def test_provision_reserves_pod_name_and_no_exec_transport() -> None:
     assert not hasattr(launcher, "run")
     assert launcher.capabilities.cli_bootstrap is False
     assert launcher.capabilities.classifies_runner_by_agent is True
+
+
+# ── launch progress: what a starting Pod waits on ──────────
+
+_HOST_IMAGE = "ghcr.io/caffeinelabs/omnigent-sandbox-host:6b438e0"
+_SIDECAR_IMAGE = "ghcr.io/caffeinelabs/omnigent-sandbox-host:06f1a8e"
+
+
+def _at(epoch: int) -> datetime:
+    return datetime.fromtimestamp(epoch, UTC)
+
+
+def _pull_event(
+    reason: str, image: str, at: int, *, present: bool = False, uid: str | None = None
+) -> SimpleNamespace:
+    """A ``Pulling`` / ``Pulled`` event as the kubelet writes it (for the Pod *uid*)."""
+    if reason == "Pulling":
+        message = f'Pulling image "{image}"'
+    elif present:
+        message = f'Container image "{image}" already present on machine'
+    else:
+        message = f'Successfully pulled image "{image}" in 3m33.272s'
+    return SimpleNamespace(
+        reason=reason,
+        message=message,
+        last_timestamp=_at(at),
+        event_time=None,
+        first_timestamp=_at(at),
+        involved_object=SimpleNamespace(name="omnigent-pod-child-xyz", uid=uid),
+    )
+
+
+def _starting_pod(
+    *,
+    node: str | None = None,
+    scheduled: tuple[str, int] | None = None,
+    clone_since: int | None = None,
+    created: int = 1000,
+    uid: str | None = None,
+) -> SimpleNamespace:
+    """A Pending Pod: maybe scheduled on *node*, maybe running its workspace prep."""
+    conditions = []
+    if scheduled is not None:
+        conditions.append(
+            SimpleNamespace(
+                type="PodScheduled",
+                status=scheduled[0],
+                last_transition_time=_at(scheduled[1]),
+            )
+        )
+    init = []
+    if clone_since is not None:
+        init.append(
+            SimpleNamespace(
+                name="workspace-prep",
+                state=SimpleNamespace(
+                    running=SimpleNamespace(started_at=_at(clone_since)),
+                    waiting=None,
+                    terminated=None,
+                ),
+            )
+        )
+    return SimpleNamespace(
+        metadata=SimpleNamespace(
+            name="omnigent-pod-child-xyz", creation_timestamp=_at(created), uid=uid
+        ),
+        spec=SimpleNamespace(node_name=node),
+        status=SimpleNamespace(
+            phase="Pending",
+            conditions=conditions,
+            init_container_statuses=init,
+            container_statuses=None,
+        ),
+    )
+
+
+def test_start_step_waits_for_a_node_until_the_pod_is_scheduled() -> None:
+    """A full cluster leaves the Pod Unschedulable while the autoscaler adds a node."""
+    assert k8s._start_step(_starting_pod(scheduled=("False", 1010)), []) == ("node", 1010)
+    # Before the scheduler says anything: since the Pod was made.
+    assert k8s._start_step(_starting_pod(), []) == ("node", 1000)
+
+
+def test_start_step_follows_the_pulls_and_the_clone() -> None:
+    """The 2026-11-02 cold node: host image, clone, then the sidecar's other tag."""
+    events = [_pull_event("Pulling", _HOST_IMAGE, 1110)]
+    scheduled = _starting_pod(node="ip-100-64-21-103", scheduled=("True", 1100))
+    assert k8s._start_step(scheduled, events) == ("image", 1110)
+
+    events.append(_pull_event("Pulled", _HOST_IMAGE, 1323))
+    cloning = _starting_pod(node="ip-100-64-21-103", scheduled=("True", 1100), clone_since=1330)
+    assert k8s._start_step(cloning, events) == ("clone", 1330)
+
+    events.append(_pull_event("Pulling", _SIDECAR_IMAGE, 1400))
+    assert k8s._start_step(scheduled, events) == ("image", 1400)
+
+    events.append(_pull_event("Pulled", _SIDECAR_IMAGE, 1472))
+    assert k8s._start_step(scheduled, events) == ("containers", None)
+
+
+def test_an_image_already_on_the_node_is_not_pulling() -> None:
+    events = [
+        _pull_event("Pulling", _HOST_IMAGE, 1200),
+        _pull_event("Pulled", _HOST_IMAGE, 1200, present=True),
+        _pull_event("Scheduled", _HOST_IMAGE, 1300),
+    ]
+    assert k8s._pending_pull_since(events) is None
+
+
+def test_progress_tracker_reports_each_change_once_and_reads_events_sparingly() -> None:
+    seen: list[tuple[str, int | None]] = []
+    reads: list[float] = []
+    now = [0.0]
+    tracker = k8s._ProgressTracker(lambda step, since: seen.append((step, since)), lambda: now[0])
+    events = [_pull_event("Pulling", _HOST_IMAGE, 1110)]
+
+    def read(_uid: str | None) -> list[object]:
+        reads.append(now[0])
+        return events
+
+    unscheduled = _starting_pod(scheduled=("False", 1010))
+    tracker.observe(unscheduled, read)
+    tracker.observe(unscheduled, read)
+    scheduled = _starting_pod(node="ip-1", scheduled=("True", 1100))
+    for t in (10.0, 12.0, 14.0, 16.0):
+        now[0] = t
+        tracker.observe(scheduled, read)
+
+    assert seen == [("node", 1010), ("image", 1110)]
+    # Not before the Pod is on a node, then at most every few seconds.
+    assert reads == [10.0, 16.0]
+
+
+def test_a_woken_pod_ignores_the_events_of_the_pod_it_replaced(
+    fake_clients: tuple[_FakeCore, _FakeBatch],
+) -> None:
+    """agent-sandbox names the Pod after its Sandbox: an earlier Pod's cut-off pull is not ours."""
+    core, _batch = fake_clients
+    core.events = [
+        _pull_event("Pulling", _HOST_IMAGE, 1000, uid="old-pod"),  # killed mid-pull
+        _pull_event("Scheduled", _HOST_IMAGE, 3400, uid="new-pod"),
+    ]
+    launcher = _launcher()
+
+    events = launcher._pod_events("omnigent-sandboxes", "omnigent-pod-child-xyz", "new-pod")
+
+    assert [e.involved_object.uid for e in events] == ["new-pod"]
+    assert k8s._pending_pull_since(events) is None
+    # Without the filter the old Pod's pull would read as still running since 1000.
+    assert k8s._pending_pull_since(core.events) == 1000
+
+    seen: list[tuple[str, int | None]] = []
+    tracker = k8s._ProgressTracker(lambda step, since: seen.append((step, since)), lambda: 0.0)
+    pod = _starting_pod(node="ip-1", scheduled=("True", 3300), uid="new-pod")
+    tracker.observe(
+        pod,
+        functools.partial(launcher._pod_events, "omnigent-sandboxes", "omnigent-pod-child-xyz"),
+    )
+    assert seen == [("containers", None)]
+
+
+def test_an_observer_error_never_fails_the_launch(caplog: pytest.LogCaptureFixture) -> None:
+    def boom(_step: str, _since: int | None) -> None:
+        raise RuntimeError("observer broke")
+
+    with caplog.at_level(logging.WARNING):
+        k8s._report_progress(boom, "node", None)
+    assert "progress observer failed" in caplog.text
+
+
+def test_start_host_reports_what_the_pod_waits_on(
+    fake_clients: tuple[_FakeCore, _FakeBatch],
+) -> None:
+    """Node, image, then the host: each once, with when it began."""
+    core, _batch = fake_clients
+    unscheduled = _starting_pod(scheduled=("False", 1010))
+    pulling = _starting_pod(node="ip-1", scheduled=("True", 1100))
+    core.pod_list_items = [unscheduled]
+    core.read_queue = [unscheduled, unscheduled, pulling, pulling, _pod(phase="Running")]
+    core.events = [_pull_event("Pulling", _HOST_IMAGE, 1110)]
+    seen: list[tuple[str, int | None]] = []
+
+    _launcher().start_host(
+        "omnigent-job-progress",
+        token=_TOKEN,
+        host_id="host_p",
+        host_name="managed-p",
+        server_url="http://srv.example.com",
+        on_progress=lambda step, since: seen.append((step, since)),
+    )
+
+    assert seen[:2] == [("node", 1010), ("image", 1110)]
+    assert [step for step, _ in seen] == ["node", "image", "host"]
+
+
+def test_kubernetes_declares_launch_progress_and_suspends_by_terminating(
+    fake_clients: tuple[_FakeCore, _FakeBatch],
+) -> None:
+    _core, batch = fake_clients
+    launcher = _launcher()
+    assert launcher.capabilities.reports_launch_progress is True
+    launcher.suspend("omnigent-job-7")
+    assert batch.deleted_jobs == ["omnigent-job-7"]

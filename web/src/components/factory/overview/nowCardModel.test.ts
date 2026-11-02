@@ -6,6 +6,7 @@ import {
   cantStartNow,
   idleNow,
   idleWaitingNow,
+  launchingNow,
   liveNow,
   pausedNow,
   waitingOnYouNow,
@@ -19,6 +20,7 @@ import {
   idleText,
   leadParts,
   leadWho,
+  nextReason,
   nowHeadline,
   nowShownKeys,
   receiptText,
@@ -291,5 +293,21 @@ describe("lead and check-in", () => {
     expect(staleText(at, ROUND3_NOW_S)).toBe(
       `Showing ${clockText(at, ROUND3_NOW_S)} — couldn’t refresh`,
     );
+  });
+});
+
+describe("next", () => {
+  it("says what a starting lead's machine waits on, and for how long", () => {
+    const next = launchingNow().next;
+    expect(next.map((item) => [item.project, nextReason(item, ROUND3_NOW_S)])).toEqual([
+      ["tier-alerts", "couldn't start: its lead agent's machine failed to start twice"],
+      [
+        "tier-metrics",
+        "couldn't start: its lead agent's machine failed to start · retrying on a new sandbox",
+      ],
+      ["tier-docs", "starting up on a new sandbox (try 2): copying the repository · 1m"],
+      ["build-tier-drafts", "starting up: pulling its image · 4m"],
+      ["tier-copy", "starting up: waiting for a free machine · 2m"],
+    ]);
   });
 });

@@ -65,8 +65,16 @@ const PROVISIONING_TEXT: Record<string, string> = {
   connecting: "starting its lead agent",
   briefing: "briefing its lead agent",
 };
+const STEP_TEXT: Record<string, string> = {
+  node: "waiting for a free machine",
+  image: "pulling its image",
+  clone: "copying the repository",
+  containers: "starting its containers",
+  host: "connecting its machine",
+};
 const START_TEXT: Record<string, string> = {
   ...PROVISIONING_TEXT,
+  ...STEP_TEXT,
   connect: "waiting for its lead agent to connect",
   creating: "creating its lead agent",
 };
@@ -443,10 +451,12 @@ function problem(project: ProjectView): string | null {
         ? `blocked until someone answers ${ref}${extra}`
         : `its lead agent says it is blocked${extra}`;
     }
-    case "failed":
-      return head.includes("sandbox")
-        ? `its lead agent's machine failed to start${extra}`
-        : `its lead agent stopped${extra}`;
+    case "failed": {
+      if (!head.includes("sandbox")) return `its lead agent stopped${extra}`;
+      // "PL sandbox failed twice": keep how often.
+      const times = head.split("failed")[1]?.trim();
+      return `its lead agent's machine failed to start${times ? ` ${times}` : ""}${extra}`;
+    }
     case "pr_closed":
       return "its PR was closed without merging";
     default:
@@ -583,7 +593,13 @@ function startReason(start: NonNullable<ProjectView["start"]>, lead: string): st
   const phase = start.phase ?? "";
   const label = (start.label ?? "").trim();
   if (start.state === "starting") {
-    const verb = start.restart ? "restarting" : "starting up";
+    const attempt = start.attempt ?? 1;
+    const verb =
+      attempt > 1
+        ? `starting up on a new sandbox (try ${attempt})`
+        : start.restart
+          ? "restarting"
+          : "starting up";
     const step = START_TEXT[phase] ?? (label && label !== "Starting" ? lowerFirst(label) : null);
     return step ? `${verb}: ${step}` : verb;
   }
@@ -613,9 +629,23 @@ function queuedReason(
   if (waiting) return `waits for ${waiting[1]} to finish`;
   const said = project.start ? startReason(project.start, lead) : null;
   if (said) return said;
-  const step = PROVISIONING_TEXT[project.provisioning?.stage ?? ""];
-  if (step) return `starting up: ${step}`;
-  return project.pl ? "starting up" : "not started yet";
+  // Older servers: the sandbox step only.
+  const provisioning = project.provisioning;
+  const step = STEP_TEXT[provisioning?.step ?? ""] ?? PROVISIONING_TEXT[provisioning?.stage ?? ""];
+  const attempt = provisioning?.attempt ?? 1;
+  const head = attempt > 1 ? `starting up on a new sandbox (try ${attempt})` : "starting up";
+  if (step) return `${head}: ${step}`;
+  return project.pl ? head : "not started yet";
+}
+
+function stepSince(project: ProjectView, stuck: string | null): number | null {
+  if (stuck != null) return null;
+  const start = project.start;
+  if (start?.state === "starting") {
+    return start.phase && start.phase in STEP_TEXT ? (start.phase_since ?? null) : null;
+  }
+  const provisioning = project.provisioning;
+  return provisioning?.step && provisioning.since != null ? provisioning.since : null;
 }
 
 function nextItems(snapshot: FactorySnapshot): StatusNextItem[] {
@@ -633,6 +663,7 @@ function nextItems(snapshot: FactorySnapshot): StatusNextItem[] {
         reason: queuedReason(project, stuck, paused, lead),
         problem: stuck,
         since: project.stage_since || 0,
+        step_since: paused ? null : stepSince(project, stuck),
         href: projectPageHref(fid, project.slug),
       };
     })

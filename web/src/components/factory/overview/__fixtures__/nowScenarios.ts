@@ -277,6 +277,48 @@ export function cantStartNow(): StatusSummary {
 }
 
 /**
+ * The 2026-11-02 launch: the cluster was full, then a cold node pulled the
+ * 3.9 GB image; one PL's first sandbox failed and the server retries it on a
+ * new one, another failed twice and waits for owners.
+ */
+export function launchingNow(): StatusSummary {
+  const snapshot = quietSnapshot();
+  const template = round3Snapshot().projects.find((p) => p.slug === "settings-row")!;
+  const queued = (slug: string, minutes: number, patch: Partial<ProjectView>): ProjectView => ({
+    ...template,
+    slug,
+    title: slug.replaceAll("-", " "),
+    overlay: null,
+    overlay_reason: null,
+    stage_since: ROUND3_NOW_S - minutes * 60,
+    ...patch,
+  });
+  const starting = (step: string, label: string, minutes: number, attempt?: number) => ({
+    stage: "starting",
+    step,
+    label,
+    since: ROUND3_NOW_S - minutes * 60,
+    ...(attempt ? { attempt } : {}),
+  });
+  snapshot.projects = [
+    queued("build-tier-drafts", 9, {
+      provisioning: starting("image", "Pulling the image", 4),
+    }),
+    queued("tier-copy", 3, { provisioning: starting("node", "Waiting for a node", 2) }),
+    queued("tier-docs", 21, {
+      provisioning: starting("clone", "Cloning the repo", 1, 2),
+    }),
+    queued("tier-metrics", 6, {
+      overlay: "failed",
+      overlay_reason: "PL sandbox failed · retrying on a new sandbox",
+    }),
+    queued("tier-alerts", 34, { overlay: "failed", overlay_reason: "PL sandbox failed twice" }),
+  ];
+  atlasSays(snapshot, "Starting the build-tier projects");
+  return statusSummaryOf(snapshot, { last24hUsd: 65.04 });
+}
+
+/**
  * validate-build-tier's PR merged an hour ago; its lead deployed a preview to
  * validate it and checks on it at its next beat (between turns, not running).
  */

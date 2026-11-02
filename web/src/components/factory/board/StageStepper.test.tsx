@@ -63,4 +63,22 @@ describe("StageStepper", () => {
     ]);
     expect(steps[4]).toHaveTextContent("Briefing the PL");
   });
+
+  it("names the current step by what the starting sandbox waits on", () => {
+    render(<ProvisioningTimeline stage="starting" detail="Pulling the image · 3m" />);
+    const steps = within(screen.getByTestId("provisioning-timeline")).getAllByRole("listitem");
+    // It clones inside its own start: no separate clone step.
+    expect(steps.map((s) => s.textContent)).toEqual([
+      "Provisioning sandbox",
+      "→Pulling the image · 3m",
+      "→Starting agent",
+      "→Briefed",
+    ]);
+    expect(steps.map((s) => s.getAttribute("data-state"))).toEqual([
+      "done",
+      "current",
+      "todo",
+      "todo",
+    ]);
+  });
 });

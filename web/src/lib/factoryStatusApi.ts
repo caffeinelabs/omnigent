@@ -85,6 +85,8 @@ export interface StatusNextItem {
   /** Set when it can't start (its lead's machine failed, blocked, paused). */
   problem?: string | null;
   since: number;
+  /** When the start step the reason names began (e.g. pulling its image). */
+  step_since?: number | null;
   href: string;
 }
 

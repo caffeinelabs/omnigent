@@ -17,6 +17,7 @@ import types
 from datetime import UTC, datetime
 from types import SimpleNamespace
 
+import click
 import pytest
 
 import omnigent.onboarding.sandboxes.kubernetes as k8s
@@ -566,3 +567,39 @@ def test_terminate_still_hard_deletes(
 
     assert custom.deleted == [_SANDBOX_ID]
     assert core.deleted_secrets == [f"{_SANDBOX_ID}-token"]
+
+
+# ── suspend ────────────────────────────────────────────
+
+
+def test_suspend_expires_the_sandbox_now_and_keeps_it(
+    fake_clients: tuple[_FakeCore, _FakeCustom],
+) -> None:
+    """Suspend is an early expiry: the Sandbox and its claim stay for a wake."""
+    _, custom = fake_clients
+    _launcher().suspend(_SANDBOX_ID)
+
+    assert custom.calls == ["patch"] and custom.deleted == []
+    name, body = custom.patches[0]
+    assert name == _SANDBOX_ID
+    when = datetime.strptime(body["spec"]["shutdownTime"], "%Y-%m-%dT%H:%M:%SZ").replace(
+        tzinfo=UTC
+    )
+    assert abs((when - datetime.now(UTC)).total_seconds()) <= 60
+
+
+def test_suspend_of_a_vanished_sandbox_is_success(
+    fake_clients: tuple[_FakeCore, _FakeCustom],
+) -> None:
+    _, custom = fake_clients
+    custom.patch_error = _FakeApiException(status=404, reason="NotFound")
+    _launcher().suspend(_SANDBOX_ID)
+
+
+def test_suspend_raises_on_an_api_error(
+    fake_clients: tuple[_FakeCore, _FakeCustom],
+) -> None:
+    _, custom = fake_clients
+    custom.patch_error = _FakeApiException(status=500, reason="ServerTimeout")
+    with pytest.raises(click.ClickException, match="could not stop agent-sandbox"):
+        _launcher().suspend(_SANDBOX_ID)

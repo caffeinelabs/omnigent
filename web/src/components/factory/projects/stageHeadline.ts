@@ -1,14 +1,16 @@
 // What a project's stage reads as in one line: "Starting PL · 2m" while its PL
-// comes up ("Restarting PL" when a PL that already worked is woken),
-// "Queued · 3 projects ahead" while nothing starts it, "Waiting" while held on
-// its dependencies, else the stage. Pure; StageDots, the project header and
-// the board card render it.
+// comes up, with what its sandbox waits on ("Pulling the image · 3m");
+// "Restarting PL" when a PL that already worked is woken, "Retrying PL" on the
+// server's retry on a new sandbox; "Queued · 3 projects ahead" while nothing
+// starts it, "Waiting" while held on its dependencies, else the stage. Pure;
+// StageDots, the project header and the board card render it.
 
-import type { ProjectView } from "@/lib/factoryApi";
+import type { ProjectStartView, ProjectView, ProvisioningView } from "@/lib/factoryApi";
 import {
   type FactoryTone,
   STAGE_LABEL,
   STAGE_SHORT_LABEL,
+  formatElapsed,
   plural,
   stageTone,
 } from "../factoryFormat";
@@ -52,16 +54,22 @@ export function stageHeadline(project: ProjectView, nowS: number): StageHeadline
   }
   const start = project.stage === "queued" && !project.overlay ? project.start : null;
   if (start?.state === "starting") {
-    const phase = start.label === "Starting" ? null : start.label;
-    const label = start.restart ? "Restarting PL" : "Starting PL";
-    const verb = start.restart ? "Restarting" : "Starting";
+    const phase = startPhase(start, nowS);
+    const attempt = start.attempt ?? 1;
+    const retry = attempt > 1;
+    const label = retry ? "Retrying PL" : start.restart ? "Restarting PL" : "Starting PL";
+    const verb = retry ? "Retrying" : start.restart ? "Restarting" : "Starting";
+    const where = retry ? ` on a new sandbox (try ${attempt})` : "";
+    const explain = retry
+      ? [`New sandbox, try ${attempt}`, phase].filter(Boolean).join(" · ")
+      : phase;
     return {
       label,
       long: label,
       detail: phase,
-      explain: phase,
+      explain,
       ageS: start.since != null ? nowS - start.since : stageAge,
-      title: `${verb} the project lead${phase ? `: ${phase}` : ""}`,
+      title: `${verb} the project lead${where}${phase ? `: ${phase}` : ""}`,
       tone: "active",
     };
   }
@@ -91,4 +99,27 @@ export function stageHeadline(project: ProjectView, nowS: number): StageHeadline
     title: [stage, project.overlay, note].filter(Boolean).join(" · "),
     tone,
   };
+}
+
+/**
+ * A starting PL's phase with how long it has taken, e.g. `Pulling the image · 3m`;
+ * null when the server has no words for it.
+ */
+export function startPhase(start: ProjectStartView, nowS: number): string | null {
+  const phase = start.label === "Starting" ? null : start.label;
+  if (!phase || start.phase_since == null) return phase;
+  return `${phase} · ${formatElapsed(nowS - start.phase_since)}`;
+}
+
+/**
+ * What a starting PL sandbox waits on, with for how long, e.g. `Pulling the image · 3m`;
+ * null when the server names no step (the stage's own label stands).
+ */
+export function provisioningStep(
+  provisioning: ProvisioningView | null | undefined,
+  nowS: number,
+): string | null {
+  if (!provisioning?.step) return null;
+  if (provisioning.since == null) return provisioning.label;
+  return `${provisioning.label} · ${formatElapsed(nowS - provisioning.since)}`;
 }

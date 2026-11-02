@@ -271,6 +271,7 @@ from omnigent.server.routes._sessions.helpers import (
     _load_model_options,
     _load_model_options_from_host,
     _load_runner_skills,
+    _mark_launch_wake,
     _mcp_error_response,
     _mcp_input_required_response,
     _mcp_ok_response,
@@ -3411,6 +3412,7 @@ def _kick_managed_reprovision(
     conversation_store: ConversationStore,
     host_store: HostStore,
     app_state: Any,
+    claimed: bool = False,
 ) -> None:
     """
     Provision a FRESH sandbox for a session released from a foreign one.
@@ -3430,6 +3432,9 @@ def _kick_managed_reprovision(
     :param host_store: Persistent host registrations.
     :param app_state: ``request.app.state`` — supplies the registries and the
         agent store.
+    :param claimed: The caller already holds this session's tracker entry
+        (begun, unsettled); the launch settles that entry instead of a new one,
+        so a message already parked on it is answered.
     """
     from omnigent.server.managed_hosts import parse_repo_workspace
 
@@ -3437,7 +3442,8 @@ def _kick_managed_reprovision(
         repos = [parse_repo_workspace(w) for w in read_managed_repo_workspaces(conv.labels)]
     except ValueError:
         repos = []
-    tracker.begin(session_id)
+    if not claimed:
+        tracker.begin(session_id)
     _publish_sandbox_status(session_id, "provisioning")
     task = asyncio.create_task(
         _run_managed_launch(
@@ -3958,6 +3964,7 @@ def _kick_managed_relaunch(
     # Seed the relaunch's progress indicator immediately — the user is
     # typically watching the session page when "wake the sandbox" runs.
     _publish_sandbox_status(session_id, "provisioning")
+    _mark_launch_wake(session_id)
     agent_store = getattr(app_state, "agent_store", None)
     if agent_store is None:
         _logger.warning(
@@ -4053,6 +4060,7 @@ def _kick_managed_wake_impl(
     # session page when the wake fires (the composer let them send into a
     # host_asleep session).
     _publish_sandbox_status(session_id, "provisioning")
+    _mark_launch_wake(session_id)
     wake_agent_store = getattr(app_state, "agent_store", None)
     if wake_agent_store is None:
         _logger.warning(

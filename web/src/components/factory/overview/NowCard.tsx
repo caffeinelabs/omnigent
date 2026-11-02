@@ -49,6 +49,7 @@ import {
   idleText,
   leadParts,
   leadWho,
+  nextReason,
   nowHeadline,
   receiptText,
   shownWaiting,
@@ -404,6 +405,7 @@ function LeadLine({ lead, nowS }: { lead: StatusLeadNote; nowS: number }) {
 }
 
 function NextLine({ item, nowS }: { item: StatusNextItem; nowS: number }) {
+  const reason = nextReason(item, nowS);
   return (
     <Line
       href={item.href}
@@ -416,13 +418,10 @@ function NextLine({ item, nowS }: { item: StatusNextItem; nowS: number }) {
       }
       meta={waitedFor(item.since, nowS)}
       testId={`now-next-${item.project}`}
-      title={`${item.title}: ${item.reason}`}
+      title={`${item.title}: ${reason}`}
     >
       <span className="font-medium">{item.project}</span>
-      <span className={item.problem ? "text-warning" : "text-muted-foreground"}>
-        {" "}
-        {item.reason}
-      </span>
+      <span className={item.problem ? "text-warning" : "text-muted-foreground"}> {reason}</span>
     </Line>
   );
 }

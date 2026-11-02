@@ -119,8 +119,18 @@ SANDBOX_STAGE_LABELS: Final = {
 }
 """Provisioning steps of a queued project (the web's ``SANDBOX_STAGE_LABELS`` plus the brief)."""
 
+LAUNCH_STEP_LABELS: Final = {
+    "node": "Waiting for a node",
+    "image": "Pulling the image",
+    "clone": "Cloning the repo",
+    "containers": "Starting containers",
+    "host": "Starting the host",
+}
+"""What a starting PL sandbox waits on, as the provider reports it (``LAUNCH_STEPS``)."""
+
 START_LABELS: Final = {
     **SANDBOX_STAGE_LABELS,
+    **LAUNCH_STEP_LABELS,
     "connect": "Waiting for the agent to connect",
     "creating": "Creating the PL session",
     "lead": "Waiting for Atlas to start its PL",
@@ -265,6 +275,70 @@ def sandbox_stage(session_id: str) -> str | None:
     return stage if isinstance(stage, str) and stage != "ready" else None
 
 
+@dataclass(frozen=True)
+class SandboxProgress:
+    """
+    A PL sandbox's launch as the start view shows it.
+
+    :param stage: The launch stage (see :func:`sandbox_stage`), ``None`` once settled.
+    :param step: What the starting sandbox waits on (:data:`LAUNCH_STEP_LABELS`), if known.
+    :param since: Epoch seconds the stage or step began, if known.
+    :param tries: Sandbox launches of this start (``2`` on the server's retry).
+    :param wake: The launch brings back the PL's own sandbox (a wake), not a new one.
+    :param retry: The launch watch will retry it on its own once it fails.
+    """
+
+    stage: str | None = None
+    step: str | None = None
+    since: int | None = None
+    tries: int = 1
+    wake: bool = False
+    retry: bool = False
+
+    @property
+    def new_try(self) -> int | None:
+        """:returns: The try of a relaunch on a new sandbox (``2``…), else ``None``."""
+        return self.tries if self.tries > 1 and not self.wake else None
+
+
+def sandbox_progress(conv: Conversation | None) -> SandboxProgress:
+    """:returns: The launch progress of *conv*'s managed sandbox (empty when settled)."""
+    from omnigent.server.factory.new_sandbox import launch_tries, server_retried
+    from omnigent.server.routes._sessions.common import _session_launch_progress_cache
+
+    if conv is None:
+        return SandboxProgress()
+    stage = sandbox_stage(conv.id)
+    tries = launch_tries(conv)
+    retry = conv.labels.get(LABEL_STATE) == STATE_ACTIVE and not server_retried(conv)
+    progress = _session_launch_progress_cache.get(conv.id)
+    if stage is None or progress is None or progress.stage != stage:
+        return SandboxProgress(stage=stage, tries=tries, retry=retry)
+    step = progress.step if progress.step in LAUNCH_STEP_LABELS else None
+    return SandboxProgress(stage, step, progress.since, tries, progress.wake, retry)
+
+
+def _times(tries: int) -> str:
+    return "" if tries < 2 else " twice" if tries == 2 else f" {tries} times"
+
+
+def sandbox_failed_reason(progress: SandboxProgress) -> str | None:
+    """
+    :returns: The failed overlay's reason for a PL sandbox that did not come up,
+        e.g. ``"PL sandbox failed · retrying on a new sandbox"`` or ``"PL sandbox
+        did not wake twice"``; ``None`` while it is not failed.
+    """
+    if progress.stage != "failed":
+        return None
+    if progress.wake:
+        if progress.retry:
+            return "PL sandbox did not wake · waking it again"
+        return f"PL sandbox did not wake{_times(progress.tries)}"
+    if progress.retry:
+        return "PL sandbox failed · retrying on a new sandbox"
+    return f"PL sandbox failed{_times(progress.tries)}"
+
+
 def _spawning(factory_id: str, slug: str) -> bool:
     """:returns: Whether this process is creating *slug*'s PL session now."""
     from omnigent.server.factory import spawn
@@ -309,15 +383,16 @@ def project_stage(
     :returns: The derived stage of *project* (see :func:`.stage.derive_stage`).
     """
     own = [p for p in prs if p.project_slug == project.slug]
-    sandbox = sandbox_stage(pl.id) if pl is not None else None
-    brief_delivered = pl is not None and pl.id not in pending_briefs and sandbox is None
+    progress = sandbox_progress(pl)
+    brief_delivered = pl is not None and pl.id not in pending_briefs and progress.stage is None
     return derive_stage(
         project,
         own,
         pl,
         open_decisions,
         brief_delivered=brief_delivered,
-        sandbox_failed=sandbox == "failed",
+        sandbox_failed=progress.stage == "failed",
+        sandbox_reason=sandbox_failed_reason(progress),
         waiting_on=waiting_on,
         tasks=tasks,
     )
@@ -336,6 +411,7 @@ def start_view(
     pods: tuple[int, int | None] = (0, None),
     ahead: int = 0,
     ran_before: bool = False,
+    progress: SandboxProgress | None = None,
 ) -> dict[str, Any] | None:
     """
     Why a plainly queued project has no working PL yet (``ProjectView.start``).
@@ -344,6 +420,8 @@ def start_view(
     being created; ``queued`` while nothing starts it yet, with the reason.
 
     :param sandbox: The PL's managed-sandbox launch stage (``None`` once ready).
+    :param progress: What its starting sandbox waits on (a node, the image, the
+        clone, ...) and since when, and its launch try; the phase names the step.
     :param briefing: The PL's brief is queued and not delivered yet.
     :param runner_online: Whether the PL's runner is attached (``None``: unknown).
     :param ran_before: The PL already worked (see :func:`pl_ran_before`): waking
@@ -359,13 +437,17 @@ def start_view(
     if result.stage != "queued" or result.overlay is not None or project.status != "active":
         return None
     if pl is not None:
+        phase_since: int | None = None
         if sandbox in SANDBOX_STAGE_LABELS:
             phase: str | None = sandbox
+            if progress is not None and progress.stage == sandbox:
+                phase = progress.step or sandbox
+                phase_since = progress.since
         elif runner_online is False:
             phase = "connect"
         else:
             phase = "briefing" if briefing else None
-        return {
+        view: dict[str, Any] = {
             "state": "starting",
             "phase": phase,
             "label": START_LABELS[phase] if phase else "Starting",
@@ -374,6 +456,11 @@ def start_view(
             "since": max(int(pl.created_at), project.stage_changed_at or 0),
             "restart": ran_before,
         }
+        if phase_since is not None:
+            view["phase_since"] = phase_since
+        if progress is not None and progress.new_try and sandbox is not None:
+            view["attempt"] = progress.new_try
+        return view
     since = project.created_at or None
     if spawning:
         return {
@@ -1014,11 +1101,20 @@ def _project_view(
         if d.project_slug == project.slug or (pl is not None and d.asked_by_session_id == pl.id)
     ]
     team = [_member_ref(views[c.id]) for c in loaded.children.get(pl.id, [])] if pl else []
-    provisioning = None
+    provisioning: dict[str, Any] | None = None
     if result.stage == "queued" and pl is not None:
-        stage = sandbox_stage(pl.id) or ("briefing" if pl.id in pending else None)
+        progress = sandbox_progress(pl)
+        stage = progress.stage or ("briefing" if pl.id in pending else None)
         if stage in SANDBOX_STAGE_LABELS:
             provisioning = {"stage": stage, "label": SANDBOX_STAGE_LABELS[stage]}
+            if progress.step is not None:
+                provisioning.update(
+                    step=progress.step,
+                    label=LAUNCH_STEP_LABELS[progress.step],
+                    since=progress.since,
+                )
+            if progress.new_try:
+                provisioning["attempt"] = progress.new_try
     charter = _lenient(schemas.CharterView, normalize_charter(project.charter))
     agent_stage = project.agent_stage if project.agent_stage in AGENT_STAGES else None
     env = _lenient(schemas.EnvView, project.env) if project.env else None
@@ -1172,6 +1268,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
             result,
             pl,
             sandbox=sandbox_stage(pl.id) if pl is not None else None,
+            progress=sandbox_progress(pl),
             briefing=pl is not None and pl.id in pending,
             runner_online=rows[pl.id].get("runner_online") if pl and pl.id in rows else None,
             spawning=_spawning(factory_id, project.slug),

@@ -345,6 +345,10 @@ class Mailer:
         """:returns: Whether *mail_id* is waiting for or in delivery."""
         return mail_id in self._queued
 
+    def has_mail_for(self, target_id: str) -> bool:
+        """:returns: Whether a message to *target_id* is being delivered or waits for its slot."""
+        return target_id in self._target_users
+
     def queue_stats(self) -> tuple[int, float | None]:
         """:returns: ``(messages not yet delivered or bounced, age of the oldest in seconds)``."""
         if not self._queued:

@@ -583,6 +583,29 @@ _session_terminal_pending_cache: dict[str, bool] = {}
 _session_sandbox_status_cache: dict[str, SandboxStatus] = {}
 
 
+@dataclass(frozen=True)
+class LaunchProgress:
+    """
+    How long a managed launch has been at its current stage, and what it waits on.
+
+    :param stage: The :data:`~omnigent.server.schemas.SandboxLaunchStage`, e.g. ``"starting"``.
+    :param step: What the provider says the sandbox waits on (``LAUNCH_STEPS``,
+        e.g. ``"image"``), or ``None`` when it does not say.
+    :param since: Epoch seconds the stage (or step) began, e.g. the image pull's start.
+    :param wake: The launch brings back the session's own sandbox (a wake, or a
+        new generation of its host), not a first one.
+    """
+
+    stage: str
+    step: str | None
+    since: int
+    wake: bool = False
+
+
+_session_launch_progress_cache: dict[str, LaunchProgress] = {}
+"""Session id -> :class:`LaunchProgress` while its managed launch is in flight or failed."""
+
+
 _session_mcp_startup_cache: dict[str, dict[str, McpServerStartup]] = {}
 
 
@@ -1050,6 +1073,7 @@ __all__ = [
     "_UI_ADDED_AGENT_TITLE_PREFIX",
     "_UPLOAD_READ_CHUNK_BYTES",
     "_WATCHER_TASKS",
+    "LaunchProgress",
     "_MirroredToolCall",
     "_PendingPolicyAskWrites",
     "_RelayHandle",
@@ -1083,6 +1107,7 @@ __all__ = [
     "_session_active_response_cache",
     "_session_background_task_count_cache",
     "_session_background_tasks_cache",
+    "_session_launch_progress_cache",
     "_session_mcp_startup_cache",
     "_session_sandbox_status_cache",
     "_session_status_cache",

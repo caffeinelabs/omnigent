@@ -143,8 +143,16 @@ export const PROVISIONING_STEPS = [
   { stage: "briefing", label: "Briefed" },
 ] as const;
 
-export function ProvisioningTimeline({ stage }: { stage: string }) {
-  const current = PROVISIONING_STEPS.findIndex((s) => s.stage === stage);
+/**
+ * The provisioning steps, the current one named by what its sandbox waits on
+ * when the server says (`detail`, e.g. `Pulling the image · 3m`). Such a
+ * sandbox clones inside its own start, so the separate clone step is left out.
+ */
+export function ProvisioningTimeline({ stage, detail }: { stage: string; detail?: string | null }) {
+  const steps = detail
+    ? PROVISIONING_STEPS.filter((s) => s.stage !== "cloning")
+    : PROVISIONING_STEPS;
+  const current = steps.findIndex((s) => s.stage === stage);
   return (
     <ol
       data-testid="provisioning-timeline"
@@ -152,7 +160,7 @@ export function ProvisioningTimeline({ stage }: { stage: string }) {
       aria-label="Starting the project lead"
       className="flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm"
     >
-      {PROVISIONING_STEPS.map((step, i) => {
+      {steps.map((step, i) => {
         const state: StepState = i < current ? "done" : i === current ? "current" : "todo";
         return (
           <li
@@ -173,7 +181,11 @@ export function ProvisioningTimeline({ stage }: { stage: string }) {
             )}
             {state === "done" && <CheckIcon aria-hidden className="size-3 text-success" />}
             {state === "current" && <RunningDot className="size-3" />}
-            {step.stage === "briefing" && state === "current" ? "Briefing the PL" : step.label}
+            {state === "current" && step.stage === "briefing"
+              ? "Briefing the PL"
+              : state === "current" && detail
+                ? detail
+                : step.label}
           </li>
         );
       })}

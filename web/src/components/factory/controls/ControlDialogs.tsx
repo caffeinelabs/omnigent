@@ -1,7 +1,7 @@
 /**
  * The cockpit's confirm dialogs: pause (with what it does and the "also tear
- * down previews" choice), type-to-confirm stops, a restart note and the
- * relaunch-with-spec diff. Every confirm button is `control-confirm`; a
+ * down previews" choice), type-to-confirm stops, a restart note, the
+ * relaunch-with-spec diff and the relaunch on a new sandbox. Every confirm button is `control-confirm`; a
  * dialog with a note keeps it put while the note is typed (pinned footer).
  */
 
@@ -276,6 +276,73 @@ export function RestartDialog(props: RestartDialogProps) {
         className={`${STICKY_DIALOG} sm:max-w-md`}
       >
         <RestartBody {...props} />
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function NewSandboxBody({
+  onOpenChange,
+  who,
+  onConfirm,
+}: BaseProps & { who: string; onConfirm: (note: string) => void }) {
+  const [note, setNote] = useState("");
+  return (
+    <>
+      <DialogHeader>
+        <DialogTitle>Relaunch {who} on a new sandbox?</DialogTitle>
+        <DialogDescription>
+          Restart keeps its sandbox; this replaces it. Use it when the sandbox never started or is
+          stuck.
+        </DialogDescription>
+      </DialogHeader>
+      <DialogBody>
+        <Consequences
+          items={[
+            "Its sandbox is deleted, with its files, dev env and previews.",
+            "A fresh sandbox starts and clones the repo again.",
+            "The project, charter, tasks, PRs and decisions stay; it rebuilds its plan from them.",
+          ]}
+        />
+        <NoteTextarea
+          value={note}
+          placeholder="Why, or what to do first (optional)"
+          aria-label="Note"
+          data-testid="control-note"
+          onChange={(event) => setNote(event.target.value)}
+          className="text-sm"
+        />
+      </DialogBody>
+      <DialogFooter>
+        <Button variant="outline" onClick={() => onOpenChange(false)}>
+          Cancel
+        </Button>
+        <Button
+          data-testid="control-confirm"
+          onClick={() => {
+            onConfirm(note.trim());
+            onOpenChange(false);
+          }}
+        >
+          Relaunch on new sandbox
+        </Button>
+      </DialogFooter>
+    </>
+  );
+}
+
+/** Relaunch a lead or PL on a fresh sandbox, keeping its project (Restart keeps the sandbox). */
+export function NewSandboxDialog(
+  props: BaseProps & { who: string; onConfirm: (note: string) => void },
+) {
+  return (
+    <Dialog open={props.open} onOpenChange={props.onOpenChange}>
+      <DialogContent
+        data-testid="control-new-sandbox-dialog"
+        className={`${STICKY_DIALOG} sm:max-w-md`}
+        onOpenAutoFocus={focusConfirm}
+      >
+        <NewSandboxBody {...props} />
       </DialogContent>
     </Dialog>
   );

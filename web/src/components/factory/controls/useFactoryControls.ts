@@ -160,6 +160,18 @@ export function useFactoryControls(factoryId: string): FactoryControls {
           return null;
         }
       }
+      if (request.action === "new_sandbox") {
+        // No reply to wait for: the project's start phase shows the new sandbox coming up.
+        try {
+          const res = await sendFactoryControl(factoryId, request);
+          refresh();
+          showToast(`${options.label ?? "The agent"} is starting on a new sandbox`);
+          return res;
+        } catch (error) {
+          showToast(`No new sandbox: ${controlErrorMessage(error)}`);
+          return null;
+        }
+      }
       const entry = addLocal(factoryId, {
         action: ackedAction(request.action, request.options) as AckedAction,
         target: request.target,

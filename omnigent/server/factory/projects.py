@@ -127,6 +127,21 @@ async def _active(deps: FactoryDeps, root: Conversation, slug: str) -> FactoryPr
     return row
 
 
+def holds_cap_slot(project: FactoryProject) -> bool:
+    """
+    Whether *project* counts toward the project cap: active and not finished.
+
+    A project whose work is merged or done keeps its row (and maybe its PL for
+    a while) but no longer takes a slot; its pod still counts toward the pods.
+    """
+    return project.status == STATUS_ACTIVE and project.stage not in (STAGE_MERGED, STAGE_DONE)
+
+
+def cap_slots(projects: Sequence[FactoryProject]) -> int:
+    """:returns: How many of *projects* take a slot under the project cap."""
+    return sum(1 for p in projects if holds_cap_slot(p))
+
+
 def cap_candidates(projects: Sequence[FactoryProject]) -> dict[str, list[str]]:
     """
     Projects a human could close to make room under the project cap.
@@ -149,7 +164,10 @@ def over_caps(active: int, adding: int, projects: Sequence[FactoryProject]) -> N
     """
     Refuse a plan that would run more projects than the factory's cap.
 
-    :raises CockpitError: 409 ``over_caps`` listing done and park candidates.
+    Merged and done projects hold no slot, so closing one frees nothing: only
+    the park candidates (work waiting for a human merge) are named.
+
+    :raises CockpitError: 409 ``over_caps`` listing the park candidates.
     """
     from omnigent.server.factory import definition
 
@@ -157,15 +175,14 @@ def over_caps(active: int, adding: int, projects: Sequence[FactoryProject]) -> N
     cap = definition.int_value(None, fid, "caps.max_projects", start.max_projects())
     if active + adding <= cap:
         return
-    candidates = cap_candidates(projects)
     raise CockpitError(
         409,
         "over_caps",
-        f"the factory runs at most {cap} projects; it has {active} and this adds {adding}",
+        f"the factory runs at most {cap} projects at work (merged and done ones take no "
+        f"slot); it has {active} and this adds {adding}",
         cap=cap,
         active=active,
-        done_candidates=candidates["done_candidates"],
-        park_candidates=candidates["park_candidates"],
+        park_candidates=cap_candidates(projects)["park_candidates"],
     )
 
 
@@ -423,8 +440,7 @@ async def create_project_core(
         if check_depends:
             check_dependencies(rows, {project.slug: (project.depends_on or [], "depends_on")})
         if check_caps:
-            active = sum(1 for p in rows if p.status == STATUS_ACTIVE)
-            over_caps(active - cap_allowance, 1, rows)
+            over_caps(cap_slots(rows) - cap_allowance, 1, rows)
         fields = start.project_fields(project, actor_name(actor), defaults)
         fields["charter"] = {**fields["charter"], "spawn_owner": SPAWN_SERVER}
         fields["created_by"] = actor.id if actor.kind != "human" else actor_name(actor)
@@ -730,9 +746,9 @@ async def split_project_core(
             {c.slug: (c.depends_on or [], f"into[{i}].depends_on") for i, c in enumerate(into)},
             closing=[slug] if keep == KEEP_CANCEL else [],
         )
-    active = sum(1 for p in rows if p.status == STATUS_ACTIVE)
-    closing = 1 if keep == KEEP_CANCEL else 0
-    over_caps(active - closing - cap_allowance, len(into), rows)
+    original = next((p for p in rows if p.slug == slug), None)
+    closing = 1 if keep == KEEP_CANCEL and original is not None and holds_cap_slot(original) else 0
+    over_caps(cap_slots(rows) - closing - cap_allowance, len(into), rows)
     children: list[FactoryProject] = []
     try:
         for child in into:
@@ -916,10 +932,12 @@ __all__ = [
     "actor_name",
     "cancel_project_core",
     "cap_candidates",
+    "cap_slots",
     "check_dependencies",
     "check_pr_map",
     "create_project_core",
     "drop_unstarted",
+    "holds_cap_slot",
     "human_actor",
     "human_role",
     "merge_projects_core",

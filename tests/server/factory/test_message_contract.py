@@ -18,7 +18,8 @@ from typing import Any
 
 from omnigent.entities import Conversation
 from omnigent.entities.factory import FactoryDecision, FactoryPr, FactoryProject
-from omnigent.server.factory import control, decisions, idle_env, prs, start
+from omnigent.factory import LABEL_ROLE, ROLE_PROJECT_LEAD
+from omnigent.server.factory import control, decisions, idle_env, new_sandbox, prs, start
 from omnigent.server.factory.background.env_prober import Hit, Probe, _gone_notice
 from omnigent.server.factory.envelope import failure_text, format_envelope
 from omnigent.server.factory.mailer import bounce_text
@@ -134,6 +135,22 @@ def render_texts() -> list[dict[str, Any]]:
             "control_env_status",
             f"{control.control_header('ENV STATUS', 'Luka')} Report env status.",
             {"kind": "control", "action": "ENV STATUS"},
+        ),
+        (
+            "control_new_sandbox",
+            new_sandbox.new_sandbox_text(
+                Conversation(
+                    id=PL,
+                    created_at=0,
+                    updated_at=0,
+                    title="PL · api-version",
+                    root_conversation_id=None,
+                    labels={LABEL_ROLE: ROLE_PROJECT_LEAD},
+                ),
+                "Luka",
+                "The node pool was full.",
+            ),
+            {"kind": "control", "action": "NEW SANDBOX", "by": "Luka"},
         ),
         (
             "control_charter_update",

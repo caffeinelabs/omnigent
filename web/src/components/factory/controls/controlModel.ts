@@ -15,11 +15,14 @@ import { ApiError } from "@/lib/sessionsApi";
 import { heartbeatsPerHour, sentence } from "../start/projectForm";
 
 /**
- * Controls whose recipients acknowledge (cadence only relabels). A preview
- * control with `mode: "down"` reads as `preview_down`.
+ * Controls whose recipients acknowledge (cadence only relabels; a new sandbox
+ * shows as the project's start phase). A preview control with `mode: "down"`
+ * reads as `preview_down`.
  */
 export type AckedAction =
-  Exclude<FactoryControlAction, "cadence" | InterventionAction> | "preview_down" | "charter_update";
+  | Exclude<FactoryControlAction, "cadence" | "new_sandbox" | InterventionAction>
+  | "preview_down"
+  | "charter_update";
 
 /** No reply after this long: the chip turns amber and offers a restart. */
 export const ACK_LATE_MS = 15 * 60_000;
@@ -377,6 +380,9 @@ const REFUSAL_TEXT: Record<string, string> = {
   no_project_lead: "The project has no PL yet",
   has_pl: "The project already has a PL; resume or restart it",
   spawn_in_flight: "Its PL is already being created",
+  launch_in_flight: "Its sandbox is starting; wait until it is up or fails",
+  no_managed_sandboxes: "This server does not launch sandboxes",
+  not_managed: "It runs on a host the server did not launch; restart it instead",
 };
 
 /** A refused control as the human should read it (403 → missing access). */

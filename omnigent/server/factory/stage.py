@@ -261,6 +261,7 @@ def derive_stage(
     *,
     brief_delivered: bool = True,
     sandbox_failed: bool = False,
+    sandbox_reason: str | None = None,
     waiting_on: Sequence[str] = (),
     tasks: Sequence[FactoryTask] = (),
 ) -> StageResult:
@@ -278,6 +279,8 @@ def derive_stage(
     :param open_decisions: Open decisions of the factory (others are ignored).
     :param brief_delivered: ``False`` while the PL has not received its brief.
     :param sandbox_failed: The PL's sandbox failed to provision.
+    :param sandbox_reason: The failed overlay's reason then, e.g.
+        ``"PL sandbox failed · retrying on a new sandbox"`` (default ``"PL sandbox failed"``).
     :param waiting_on: The project's unmet dependencies.
     :param tasks: The project's work graph (any state; others' tasks are ignored).
     :returns: The :class:`StageResult`.
@@ -299,7 +302,7 @@ def derive_stage(
         blocker = _blocking_decision(project, pl_conv.id, open_decisions)
         if health == HEALTH_DEAD or sandbox_failed:
             overlay = OVERLAY_FAILED
-            reason = "PL sandbox failed" if sandbox_failed else "PL dead"
+            reason = (sandbox_reason or "PL sandbox failed") if sandbox_failed else "PL dead"
         elif blocker is not None:
             overlay, reason = OVERLAY_BLOCKED, f"Blocked on {blocker.ref}"
         elif health == HEALTH_BLOCKED:

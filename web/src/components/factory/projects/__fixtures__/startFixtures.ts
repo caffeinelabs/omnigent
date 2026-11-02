@@ -208,3 +208,120 @@ export function startStorySnapshot(): FactorySnapshot {
   snapshot.projects = [...active, adopted, checking, ...fresh, ...closed];
   return snapshot;
 }
+
+/**
+ * PL sandboxes of the 2026-11-02 launch, one card per step: the cluster full
+ * (waiting for a node), a cold node pulling the 3.9 GB image, the clone, the
+ * containers and the host starting, the server's retry on a new sandbox, a
+ * first failure about to be retried, one that failed twice, and a PL whose own
+ * sandbox did not wake (once, then twice).
+ */
+export function launchStorySnapshot(): FactorySnapshot {
+  const snapshot = round3Snapshot();
+  const now = snapshot.server_time;
+  const template = snapshot.projects.find((p) => p.slug === "settings-row")!;
+  const pl = snapshot.projects.find((p) => p.slug === "api-version")!.pl!;
+  let n = 0;
+  const card = (
+    slug: string,
+    title: string,
+    patch: Partial<ProjectView>,
+    start: ProjectStartView | null = null,
+  ): ProjectView => ({
+    ...structuredClone(template),
+    slug,
+    title,
+    priority: 2,
+    stage: "queued",
+    stage_since: now - 600,
+    overlay: null,
+    overlay_reason: null,
+    depends_on: null,
+    pl: plRef(pl, slug, ++n),
+    team: [],
+    pr_ids: [],
+    open_decision_ids: [],
+    cost_usd: null,
+    provisioning: null,
+    tasks_summary: null,
+    loops_summary: null,
+    start,
+    ...patch,
+  });
+  const starting = (
+    phase: string,
+    label: string,
+    phaseAgo: number,
+    attempt?: number,
+  ): ProjectStartView => ({
+    state: "starting",
+    phase,
+    label,
+    since: now - 600,
+    phase_since: now - phaseAgo,
+    ...(attempt ? { attempt } : {}),
+  });
+  const step = (waitsOn: string, label: string, ago: number, attempt?: number) => ({
+    stage: "starting",
+    label,
+    step: waitsOn,
+    since: now - ago,
+    ...(attempt ? { attempt } : {}),
+  });
+  snapshot.projects = [
+    card(
+      "build-tier-drafts",
+      "Draft previews for the build tier",
+      { provisioning: step("image", "Pulling the image", 236) },
+      starting("image", "Pulling the image", 236),
+    ),
+    card(
+      "tier-copy",
+      "Build tier copy",
+      { provisioning: step("node", "Waiting for a node", 95) },
+      starting("node", "Waiting for a node", 95),
+    ),
+    card(
+      "tier-docs",
+      "Build tier docs",
+      { provisioning: step("clone", "Cloning the repo", 40) },
+      starting("clone", "Cloning the repo", 40),
+    ),
+    card(
+      "tier-metrics",
+      "Build tier metrics",
+      { provisioning: step("containers", "Starting containers", 15) },
+      starting("containers", "Starting containers", 15),
+    ),
+    card(
+      "tier-limits",
+      "Build tier limits",
+      { provisioning: step("host", "Starting the host", 20) },
+      starting("host", "Starting the host", 20),
+    ),
+    card(
+      "tier-alerts",
+      "Build tier alerts",
+      { provisioning: step("image", "Pulling the image", 130, 2) },
+      starting("image", "Pulling the image", 130, 2),
+    ),
+    card("tier-flags", "Build tier flags", {
+      overlay: "failed",
+      overlay_reason: "PL sandbox failed · retrying on a new sandbox",
+    }),
+    card("tier-billing", "Build tier billing", {
+      overlay: "failed",
+      overlay_reason: "PL sandbox failed twice",
+    }),
+    // Its own sandbox, with its files, did not wake: Restart first, a new sandbox last.
+    card("tier-quota", "Build tier quota", {
+      overlay: "failed",
+      overlay_reason: "PL sandbox did not wake · waking it again",
+    }),
+    card("tier-search", "Build tier search", {
+      overlay: "failed",
+      overlay_reason: "PL sandbox did not wake twice",
+    }),
+  ];
+  return snapshot;
+}

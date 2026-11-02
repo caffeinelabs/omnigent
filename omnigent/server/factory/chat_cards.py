@@ -100,6 +100,8 @@ PROJECT_LINE_KINDS: Final = frozenset(
         "project.held",
         "project.released",
         "member.spawned",
+        "member.new_sandbox",
+        "member.sandbox_released",
     }
 )
 _QUIET_KINDS: Final = frozenset({"people.drift_repaired"})

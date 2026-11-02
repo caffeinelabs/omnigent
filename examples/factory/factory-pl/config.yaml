@@ -207,7 +207,7 @@ prompt: |
   - `DEMO pr=#<n>`, `REVIEW pr=#<n>`: re-run that PR's demo (env_keeper
     PREVIEW first when its preview is not ready at that head) or cross-vendor
     review at its head, as LOOP does.
-  - RESTART, RELAUNCHED, ENV STATUS, CHARTER UPDATE: do what the text says.
+  - RESTART, RELAUNCHED, NEW SANDBOX, ENV STATUS, CHARTER UPDATE: do what the text says.
   - TASK ADD, TASK EDIT: a person changed your work graph (diff included): re-read
     `sys_factory_task(op="ready")`, tell a running worker, note it in plan.md.
   - RULES UPDATE: call `sys_factory_rules()`, relay the changed rules to your

@@ -85,6 +85,7 @@ const EXPECTED: Record<string, string[]> = {
   "member.dead": [
     `control:restart→member:${PL_CACHE}`,
     `control:relaunch→member:${PL_CACHE}`,
+    `control:new_sandbox→member:${PL_CACHE}`,
     'control:pause→project:db-version {"keep_previews":true}',
     `link:/factory/${FID}/agents/${PL_CACHE}`,
   ],
@@ -146,7 +147,7 @@ describe("runbook mapping per rule", () => {
   it("gates each lever on the role that may pull it", () => {
     const levers = (rule: string) =>
       runbookActions(issueFor(rule), ctx).map((a) => ("lever" in a ? a.lever : null));
-    expect(levers("member.dead")).toEqual(["restart", "restart", "control", null]);
+    expect(levers("member.dead")).toEqual(["restart", "restart", "restart", "control", null]);
     expect(levers("agent.repeat")).toEqual(["intervene", "intervene", "intervene", "intervene"]);
     expect(levers("loop.exhausted")).toEqual(["answer", "answer", "answer", "answer"]);
     expect(levers("preview.gone_ready")).toEqual(["review"]);

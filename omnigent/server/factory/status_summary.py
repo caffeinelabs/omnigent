@@ -111,8 +111,17 @@ _PROVISIONING_TEXT: Final = {
     "connecting": "starting its lead agent",
     "briefing": "briefing its lead agent",
 }
+_STEP_TEXT: Final = {
+    "node": "waiting for a free machine",
+    "image": "pulling its image",
+    "clone": "copying the repository",
+    "containers": "starting its containers",
+    "host": "connecting its machine",
+}
+"""What a starting machine waits on (``ProvisioningView.step``), in plain words."""
 _START_TEXT: Final = {
     **_PROVISIONING_TEXT,
+    **_STEP_TEXT,
     "connect": "waiting for its lead agent to connect",
     "creating": "creating its lead agent",
 }
@@ -236,6 +245,8 @@ class NextItem(_Model):
     :param reason: Why it waits, e.g. ``waits for api-version to finish``.
     :param problem: Set when it can't start (its lead's machine failed, it is
         blocked or paused): the same words Health uses.
+    :param step_since: When the start step in *reason* began (e.g. pulling its
+        image), so the card can say for how long; ``None`` when unknown.
     """
 
     project: str
@@ -243,6 +254,7 @@ class NextItem(_Model):
     reason: str
     problem: str | None = None
     since: int
+    step_since: int | None = None
     href: str
 
 
@@ -760,7 +772,11 @@ def _problem(project: Mapping[str, Any]) -> str | None:
         return f"its lead agent says it is blocked{extra}"
     if overlay == "failed":
         if "sandbox" in head:
-            return f"its lead agent's machine failed to start{extra}"
+            # "PL sandbox failed twice", "PL sandbox did not wake": keep what and how often.
+            wake = "did not wake" in head
+            times = head.partition("did not wake" if wake else "failed")[2].strip()
+            what = "did not wake" if wake else "failed to start"
+            return f"its lead agent's machine {what}{f' {times}' if times else ''}{extra}"
         return f"its lead agent stopped{extra}"
     if overlay == "pr_closed":
         return "its PR was closed without merging"
@@ -951,7 +967,11 @@ def start_reason(start: Mapping[str, Any], lead: str = "the lead") -> str | None
     phase = str(start.get("phase") or "")
     label = str(start.get("label") or "").strip()
     if start.get("state") == "starting":
-        verb = "restarting" if start.get("restart") else "starting up"
+        attempt = start.get("attempt")
+        if isinstance(attempt, int) and attempt > 1:
+            verb = f"starting up on a new sandbox (try {attempt})"
+        else:
+            verb = "restarting" if start.get("restart") else "starting up"
         step = _START_TEXT.get(phase) or (
             _lower_first(label) if label and label != "Starting" else None
         )
@@ -990,12 +1010,33 @@ def _queued_reason(
         return said
     # Older servers: the sandbox step only.
     provisioning = project.get("provisioning") or {}
-    step = _PROVISIONING_TEXT.get(str(provisioning.get("stage") or ""))
+    step = _STEP_TEXT.get(str(provisioning.get("step") or "")) or _PROVISIONING_TEXT.get(
+        str(provisioning.get("stage") or "")
+    )
+    attempt = provisioning.get("attempt")
+    head = (
+        f"starting up on a new sandbox (try {attempt})"
+        if isinstance(attempt, int) and attempt > 1
+        else "starting up"
+    )
     if step:
-        return f"starting up: {step}"
+        return f"{head}: {step}"
     if project.get("pl") is not None:
-        return "starting up"
+        return head
     return "not started yet"
+
+
+def _step_since(project: Mapping[str, Any], problem: str | None) -> int | None:
+    """When the start step a queued project's reason names began (its image pull...), if known."""
+    if problem is not None:
+        return None
+    start = project.get("start")
+    if isinstance(start, Mapping) and start.get("state") == "starting":
+        since = start.get("phase_since") if start.get("phase") in _STEP_TEXT else None
+        return since if isinstance(since, int) else None
+    provisioning = project.get("provisioning") or {}
+    since = provisioning.get("since")
+    return since if provisioning.get("step") and isinstance(since, int) else None
 
 
 def next_items(body: Mapping[str, Any], links: _Links) -> list[NextItem]:
@@ -1015,6 +1056,7 @@ def next_items(body: Mapping[str, Any], links: _Links) -> list[NextItem]:
                 reason=_queued_reason(project, problem, paused, lead or "the lead"),
                 problem=problem,
                 since=int(project.get("stage_since") or 0),
+                step_since=None if paused else _step_since(project, problem),
                 href=links.project(project["slug"]),
             )
         )

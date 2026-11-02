@@ -71,6 +71,15 @@
     }
   },
   {
+    "name": "control_new_sandbox",
+    "text": "[Factory control · NEW SANDBOX · by Luka] You run on a new sandbox: files, worktrees, the dev env and previews of the old one are gone. The server kept your charter, tasks, PRs and decisions. Load your playbook, rebuild plan.md from sys_factory_task(op=\"ready\") and sys_factory_roster(), re-drive the tasks that were running, bring the dev env UP if ICs need it and run PREVIEW for each open PR; reply once: sys_session_post(to=\"parent\", kind=\"reply\").\nThe node pool was full.",
+    "expect": {
+      "kind": "control",
+      "action": "NEW SANDBOX",
+      "by": "Luka"
+    }
+  },
+  {
     "name": "control_charter_update",
     "text": "[Factory control · CHARTER UPDATE · by Luka] Your charter changed: follow the new one from your next step, update plan.md, and reply once: sys_session_post(to=\"parent\", kind=\"reply\").\n```diff\n-goal: a\n+goal: b\n```",
     "expect": {
