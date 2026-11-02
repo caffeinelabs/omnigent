@@ -60,6 +60,7 @@ from omnigent.server.factory.charter import (
     DEFAULT_BASE_BRANCH,
     DEFAULT_BUDGET_ICS,
     MAX_PREVIEW_SLOTS,
+    OUTCOME_MAX,
     REPO_RE,
     SPAWN_SERVER,
     normalize_charter,
@@ -156,6 +157,8 @@ class _CharterFields(_Body):
     depends_mode: Literal["merged", "ready"] | None = None
     human_owner: str | None = Field(None, max_length=256)
     budgets: BudgetsIn | None = None
+    outcome: str | None = Field(None, max_length=OUTCOME_MAX)
+    """What users get, in one sentence (the project card's title). ``why`` is read-only."""
 
     @field_validator("dod")
     @classmethod
@@ -185,10 +188,15 @@ class _CharterFields(_Body):
     def _owner(cls, value: str | None) -> str | None:
         return _one_line(value, "human_owner") or None
 
+    @field_validator("outcome")
+    @classmethod
+    def _outcome(cls, value: str | None) -> str | None:
+        return _one_line(value, "outcome") or None
+
     def charter_extras(self) -> dict[str, Any]:
-        """:returns: The dependency, owner and budget keys as sent (unset ones left out)."""
+        """:returns: The dependency, owner, outcome and budget keys as sent (unset: left out)."""
         out: dict[str, Any] = {}
-        for key in ("depends_on", "depends_mode", "human_owner"):
+        for key in ("depends_on", "depends_mode", "human_owner", "outcome"):
             if key in self.model_fields_set:
                 out[key] = getattr(self, key)
         if "budgets" in self.model_fields_set:

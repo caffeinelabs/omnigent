@@ -181,6 +181,16 @@ _FACTORY_ERROR_CODES: Final = frozenset(
         "evidence_required",
         "self_cosign",
         "not_peer",
+        "already_cosigned",
+        "bet_required",
+        "bet_incomplete",
+        "bet_prerequisite",
+        "unknown_opportunity",
+        "unknown_goal",
+        "metric_not_measurable",
+        "quote_unverified",
+        "quote_in_charter",
+        "discovery_off",
         "daily_quota",
         "path_busy",
         "no_change",
@@ -1981,6 +1991,9 @@ _PROJECT_PASSTHROUGH_KEYS: Final = (
     "reply_to",
     "dedupe_key",
     "withdraw",
+    "op",
+    "opportunity",
+    "bet",
 )
 
 
@@ -2028,7 +2041,7 @@ async def _propose_projects(
     analysis file, which lives on this machine.
     """
     tool = SYS_FACTORY_PROJECT
-    if not args.get("changes") and not args.get("withdraw"):
+    if not args.get("changes") and not args.get("withdraw") and args.get("op") != "decline":
         return await _passthrough(
             server_client,
             "GET",
@@ -2161,8 +2174,12 @@ async def _learning(
         return await _passthrough(
             server_client, "GET", "/v1/factory/agent/insights", tool_name=tool, params=params
         )
-    if tool == SYS_FACTORY_PROPOSE and args.get("kind") not in _PROPOSE_KINDS:
-        return _error(f"{tool} 'kind' must be one of {list(_PROPOSE_KINDS)}")
+    cosign_bet = args.get("kind") == "projects" and args.get("op") in ("cosign", "send_back")
+    if tool == SYS_FACTORY_PROPOSE and args.get("kind") not in _PROPOSE_KINDS and not cosign_bet:
+        return _error(
+            f"{tool} 'kind' must be one of {list(_PROPOSE_KINDS)} "
+            "('projects' only with op='cosign' or 'send_back')"
+        )
     if tool == SYS_FACTORY_RETRO and not (
         isinstance(args.get("target"), str) and args["target"].strip()
     ):

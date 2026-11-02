@@ -727,6 +727,11 @@ def _project_schema() -> dict[str, Any]:
                 "description": "Defaults to the factory's default base (another needs an owner).",
             },
             "kind": {"type": "string", "enum": ["work"], "default": "work"},
+            "outcome": {
+                "type": "string",
+                "maxLength": 140,
+                "description": "What users get, in one sentence (the card's title).",
+            },
             "goal": {"type": "string", "maxLength": 4000},
             "dod": {**text_list, "description": "Observable Definition of Done items."},
             "scope_paths": {**text_list, "description": "Path globs the ICs may touch."},
@@ -771,6 +776,100 @@ def _project_schema() -> dict[str, Any]:
     }
 
 
+def _bet_schema() -> dict[str, Any]:
+    """The bet a lead files on a projects proposal (frozen into each new charter's why)."""
+    line = {"type": "string", "maxLength": 300}
+    return {
+        "type": "object",
+        "description": (
+            "Kinds: outcome (needs a validated opportunity), test (an opportunity, an idea "
+            "is enough), enabler (needs goal), hunch (an owner approves). Quote no one: "
+            "cite signal ids (S-n) and say it in your words."
+        ),
+        "properties": {
+            "kind": {"type": "string", "enum": ["outcome", "test", "enabler", "hunch"]},
+            "goal": {"type": "string", "description": "A strategy goal, e.g. 'G-1'."},
+            "hypothesis": {
+                "type": "string",
+                "maxLength": 1000,
+                "description": "Who does what more, because why (cite S-n).",
+            },
+            "outcome": {"type": "string", "maxLength": 140},
+            "metric": {
+                "type": "string",
+                "description": "A goal's metric binding, or e.g. 'signal_trend:O-12'.",
+            },
+            "expected": {
+                "type": "object",
+                "properties": {
+                    "direction": {"type": "string", "enum": ["up", "down"]},
+                    "low": {"type": "number"},
+                    "high": {"type": "number"},
+                    "unit": {"type": "string", "maxLength": 24},
+                },
+                "required": ["direction", "low", "high", "unit"],
+                "additionalProperties": False,
+            },
+            "guardrails": {"type": "array", "items": {"type": "string"}, "maxItems": 10},
+            "flag": {
+                "type": "object",
+                "description": "{key} to ship behind, or {none: why the product has none}.",
+                "properties": {"key": {"type": "string"}, "none": line},
+                "additionalProperties": False,
+            },
+            "measurement": {
+                "type": "object",
+                "properties": {
+                    "method": {
+                        "type": "string",
+                        "enum": [
+                            "controlled",
+                            "before_after",
+                            "adoption",
+                            "signal_trend",
+                            "human_verdict",
+                        ],
+                    },
+                    "readout_days": {
+                        "type": "array",
+                        "items": {"type": "integer", "minimum": 1, "maximum": 365},
+                        "description": "Days after release, e.g. [7, 28].",
+                    },
+                    "min_n": {"type": "integer", "minimum": 1},
+                },
+                "required": ["method", "readout_days"],
+                "additionalProperties": False,
+            },
+            "kill": {
+                "type": "object",
+                "properties": {"state": line, "date": {"type": "string", "maxLength": 120}},
+                "required": ["state", "date"],
+                "additionalProperties": False,
+            },
+            "cost": {
+                "type": "object",
+                "properties": {
+                    "agent_usd": {"type": "number", "minimum": 0},
+                    "human_review_min": {"type": "integer", "minimum": 0},
+                    "risk": {"type": "string", "enum": ["low", "medium", "high"]},
+                },
+                "additionalProperties": False,
+            },
+        },
+        "required": [
+            "kind",
+            "hypothesis",
+            "outcome",
+            "metric",
+            "expected",
+            "flag",
+            "measurement",
+            "kill",
+        ],
+        "additionalProperties": False,
+    }
+
+
 class SysFactoryProjectTool(Tool):
     """Propose project changes: create, update, split, merge or cancel (one proposal C-n)."""
 
@@ -795,7 +894,11 @@ class SysFactoryProjectTool(Tool):
             "on every project; a project lead may update, split or cancel its own project. "
             "Split and merge move PRs only through pr_map ({'<PR number>': '<slug>'}). Call "
             "it without arguments to list the projects; withdraw='C-4' takes back a pending "
-            "proposal of yours."
+            "proposal of yours. While discovery is on (else 404 discovery_off): work from an "
+            "opportunity carries opportunity='O-<n>' and a bet (its plan is frozen into each "
+            "new charter); a bet you file on your own waits for the other lead's case against "
+            "before a person can approve it. op='decline' with opportunity and reason records "
+            "why you do not plan it."
         )
 
     def get_schema(self) -> dict[str, Any]:
@@ -810,9 +913,9 @@ class SysFactoryProjectTool(Tool):
                 "patch": {
                     "type": "object",
                     "description": (
-                        "update/merge: charter fields to change (goal, dod, scope_paths, "
-                        "constraints, preview, demo_focus, budget_ics, priority, depends_on, "
-                        "depends_mode, human_owner, budgets); unset fields stay."
+                        "update/merge: charter fields to change (outcome, goal, dod, "
+                        "scope_paths, constraints, preview, demo_focus, budget_ics, priority, "
+                        "depends_on, depends_mode, human_owner, budgets); unset fields stay."
                     ),
                 },
                 "into": {
@@ -883,6 +986,17 @@ class SysFactoryProjectTool(Tool):
                         "type": "string",
                         "description": "A pending proposal of yours to take back, e.g. 'C-4'.",
                     },
+                    "op": {
+                        "type": "string",
+                        "enum": ["propose", "decline"],
+                        "default": "propose",
+                        "description": "decline: do not plan `opportunity`; give a reason.",
+                    },
+                    "opportunity": {
+                        "type": "string",
+                        "description": "The opportunity this work answers, e.g. 'O-12'.",
+                    },
+                    "bet": _bet_schema(),
                 },
                 "required": [],
                 "additionalProperties": False,
@@ -1101,7 +1215,10 @@ class SysFactoryProposeTool(Tool):
             "op='cosign', id='C-<n>' (never your own); B (rules, money, engine, autonomy) "
             "waits for an owner. Guardrails, gates and metric definitions are Tier 0: "
             "refused (422 tier0). A project lead proposes rules for its own project only. "
-            "At most 2 proposals per day."
+            "At most 2 proposals per day. While discovery is on, co-sign the other lead's bet "
+            "with op='cosign', kind='projects', id='C-<n>' and case_against (up to three "
+            "lines: the strongest reasons it is wrong), or return it with op='send_back' and "
+            "up to three lines why it should not reach a person."
         )
 
     def get_schema(self) -> dict[str, Any]:
@@ -1134,13 +1251,27 @@ class SysFactoryProposeTool(Tool):
             {
                 "type": "object",
                 "properties": {
-                    "kind": {"type": "string", "enum": ["tuning", "rules", "code"]},
+                    "kind": {
+                        "type": "string",
+                        "enum": ["tuning", "rules", "code", "projects"],
+                        "description": "projects: only to co-sign or send back a bet.",
+                    },
                     "op": {
                         "type": "string",
-                        "enum": ["propose", "cosign", "withdraw"],
+                        "enum": ["propose", "cosign", "withdraw", "send_back"],
                         "default": "propose",
+                        "description": "send_back: only a bet (kind='projects').",
                     },
-                    "id": {"type": "string", "description": "cosign/withdraw: e.g. 'C-14'."},
+                    "id": {
+                        "type": "string",
+                        "description": "cosign/withdraw/send_back: e.g. 'C-14'.",
+                    },
+                    "case_against": {
+                        "type": "array",
+                        "items": {"type": "string", "maxLength": 300},
+                        "maxItems": 3,
+                        "description": "cosign or send_back a bet: up to three lines against it.",
+                    },
                     "changes": {"type": "array", "items": change, "maxItems": PROPOSE_CHANGES_MAX},
                     "rule": {
                         "type": "object",

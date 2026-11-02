@@ -1035,9 +1035,22 @@ def test_writes_replay_lock_conflicts(
         assert len(calls) == 1
 
 
+def test_a_proposal_keeps_its_bet_and_case_against(store: FactoryStore) -> None:
+    bet = {"kind": "enabler", "goal": "G-1", "expected": {"low": 1, "high": 4, "unit": "pp"}}
+    row, _ = _propose(store, opportunity="O-12", bet=bet)
+
+    assert (row.opportunity, row.bet, row.case_against) == ("O-12", bet, None)
+    cosigned = store.update_proposal(row.id, case_against=["one (sample)", "two (sample)"])
+    assert cosigned is not None and cosigned.case_against == ["one (sample)", "two (sample)"]
+    fresh = store.get_proposal(row.id)
+    assert fresh is not None and fresh.bet == bet and fresh.opportunity == "O-12"
+    plain, _ = _propose(store, title="no bet", dedupe_key="plain")
+    assert (plain.opportunity, plain.bet, plain.case_against) == (None, None, None)
+
+
 def test_free_text_is_clipped_to_column_bounds(store: FactoryStore) -> None:
     long = "x" * 1000
-    proposal, _ = _propose(store, title=long)
+    proposal, _ = _propose(store, title=long, opportunity=long)
     task, _ = store.upsert_task(FID, "db-version", "route", title=long)
     loop, _ = store.upsert_loop(FID, "implement", "t", last_verdict=long, last_reason=long)
     issue, _ = store.upsert_issue(

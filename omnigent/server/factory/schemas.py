@@ -830,6 +830,97 @@ class CharterView(_View):
     budget_ics: int
     version_path: str | None = None
     health_path: str | None = None
+    outcome: str | None = None
+
+
+class BetExpectedView(_View):
+    """
+    A bet's predicted effect as a signed change, e.g. up +0.01 to +0.04
+    ``share`` or down -4 to -1 ``pp``.
+    """
+
+    direction: Literal["up", "down"]
+    low: float
+    high: float
+    unit: str
+
+
+class BetFlagView(_View):
+    """The flag a bet ships behind (``key``), or why there is none (``none``)."""
+
+    key: str | None = None
+    convention: str | None = None
+    provider: str | None = None
+    none: str | None = None
+
+
+class BetMeasurementView(_View):
+    method: Literal["controlled", "before_after", "adoption", "signal_trend", "human_verdict"]
+    readout_days: list[int] = Field(default_factory=list)
+    min_n: int | None = None
+
+
+class BetKillView(_View):
+    state: str
+    date: str
+
+
+class BetCostView(_View):
+    agent_usd: float | None = None
+    human_review_min: int | None = None
+    risk: Literal["low", "medium", "high"] | None = None
+
+
+class BetView(_View):
+    """
+    A bet on a projects proposal: what it expects and how the server measures it.
+
+    :param kind: The capacity-mix category: ``outcome``, ``test``, ``enabler`` or ``hunch``.
+    :param guardrails: The bet's and the strategy's guardrails.
+    """
+
+    kind: Literal["outcome", "test", "enabler", "hunch"]
+    goal: str | None = None
+    hypothesis: str
+    outcome: str
+    metric: str
+    expected: BetExpectedView
+    guardrails: list[str] = Field(default_factory=list)
+    flag: BetFlagView
+    measurement: BetMeasurementView
+    kill: BetKillView
+    cost: BetCostView | None = None
+
+
+class WhyView(_View):
+    """
+    Why a project exists: the bet frozen into its charter when its proposal applied.
+
+    Read-only; only ``proposal`` and ``opportunity`` for requested work from an
+    opportunity, which carries no bet.
+
+    :param proposal: The applied proposal, e.g. ``"C-31"``.
+    :param plan_version: The measurement plan's version (1 until a plan is amended).
+    :param split_from: The project this one was split from, whose bet it inherited.
+    """
+
+    proposal: str | None = None
+    opportunity: str | None = None
+    kind: Literal["outcome", "test", "enabler", "hunch"] | None = None
+    goal: str | None = None
+    outcome: str | None = None
+    hypothesis: str | None = None
+    metric: str | None = None
+    expected: BetExpectedView | None = None
+    guardrails: list[str] = Field(default_factory=list)
+    flag: BetFlagView | None = None
+    measurement: BetMeasurementView | None = None
+    kill: BetKillView | None = None
+    cost: BetCostView | None = None
+    plan_version: int | None = None
+    frozen_at: int | None = None
+    frozen_by: str | None = None
+    split_from: str | None = None
 
 
 class ProvisioningView(_View):
@@ -936,6 +1027,7 @@ class ProjectView(_View):
     active_task: ActiveTaskView | None = None
     loops_summary: LoopsSummaryView | None = None
     def_version: int | None = None
+    why: WhyView | None = None
 
 
 # ── Decisions and events ───────────────────────────────────────
@@ -1352,6 +1444,9 @@ class ProposalView(_ClassView):
     :param ops: Project ops or definition patches ``{op, path, value}``.
     :param analysis: The planner's analysis (cohesion, hub files, size estimates).
     :param evidence: Ids the proposal cites, e.g. ``["F-9", "D-2"]``.
+    :param opportunity: A projects proposal's opportunity, e.g. ``"O-12"``.
+    :param bet: A projects proposal's bet, frozen into ``charter.why`` at apply.
+    :param case_against: The other lead's case against the bet, up to three lines.
     """
 
     id: str
@@ -1392,6 +1487,9 @@ class ProposalView(_ClassView):
     applied_at: int | None = None
     reverted_at: int | None = None
     reverted_by: str | None = None
+    opportunity: str | None = None
+    bet: BetView | None = None
+    case_against: list[str] | None = None
     created_at: int
     updated_at: int
 

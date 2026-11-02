@@ -56,6 +56,8 @@ import {
 } from "./proposalModel";
 import { RejectProposalForm } from "./RejectProposalForm";
 import { useCountdown } from "./useCountdown";
+import { BetBlock } from "./BetBlock";
+import { waitsForCosign } from "./betModel";
 
 const KIND_ICON: Record<ProposalKind, typeof ListTreeIcon> = {
   projects: ListTreeIcon,
@@ -190,6 +192,9 @@ export function ProposalCard({
   const [editing, setEditing] = useState(false);
   const state: ProposalCardState = proposalState(proposal, stale);
   const open = isOpen(state) && conflict == null;
+  // A bet waiting for the other lead's case against does not need a person yet.
+  const cosigning = waitsForCosign(proposal);
+  const needsYou = open && !cosigning;
   // A lost race shows what the proposal became at once, not "Pending" until the refetch.
   const chip: ProposalCardState =
     conflict && isOpen(state) && conflict.status in STATE_LABEL
@@ -258,11 +263,11 @@ export function ProposalCard({
       aria-label={`${proposal.ref}: ${proposal.title}`}
       className={cn(
         "relative flex min-w-0 flex-col gap-2 rounded-lg border bg-card p-3 text-sm",
-        open ? "border-warning/40" : "border-border",
+        needsYou ? "border-warning/40" : "border-border",
         className,
       )}
     >
-      {open && (
+      {needsYou && (
         <span aria-hidden className="absolute inset-y-3 left-0 w-[3px] rounded-r-full bg-warning" />
       )}
       <header className="flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1">
@@ -276,7 +281,10 @@ export function ProposalCard({
         <span className="ml-auto flex shrink-0 items-center gap-1.5">
           <span
             data-testid={`proposal-state-${proposal.ref}`}
-            className={cn("rounded-full px-1.5 text-xs leading-5", TONE_CHIP[STATE_TONE[chip]])}
+            className={cn(
+              "rounded-full px-1.5 text-xs leading-5",
+              TONE_CHIP[cosigning && chip === "awaiting_cosign" ? "muted" : STATE_TONE[chip]],
+            )}
           >
             {STATE_LABEL[chip]}
           </span>
@@ -286,6 +294,9 @@ export function ProposalCard({
         </span>
       </header>
       <p className="text-ui font-medium break-words">{proposal.title}</p>
+      {(proposal.bet || proposal.opportunity) && (
+        <BetBlock proposal={proposal} snapshot={snapshot} />
+      )}
       {rows.length > 0 && <Changes rows={rows} />}
       {proposal.warnings.length > 0 && (
         <ul data-testid="proposal-warnings" className="flex flex-col gap-0.5">
@@ -321,6 +332,10 @@ export function ProposalCard({
             >
               <CircleAlertIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
               {outcomeLine(proposal, "stale")}
+            </p>
+          ) : cosigning ? (
+            <p data-testid={`proposal-cosigning-${proposal.ref}`} className="text-muted-foreground">
+              Waits for the other lead's case against
             </p>
           ) : (
             <>

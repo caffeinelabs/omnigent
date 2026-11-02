@@ -525,6 +525,10 @@ class FactoryProposal:
     :param undo_until: End of the undo window (epoch seconds).
     :param result: Apply or trial outcome (spawned PLs, metrics, reason).
     :param dedupe_key: A re-proposal with the same key returns this row.
+    :param opportunity: A projects proposal's opportunity, e.g. ``"O-12"``.
+    :param bet: A projects proposal's bet (kind, hypothesis, metric, expected
+        range, flag, measurement plan, kill); frozen into ``charter.why`` at apply.
+    :param case_against: The peer lead's case against the bet, up to three lines.
     """
 
     id: str
@@ -563,6 +567,9 @@ class FactoryProposal:
     reverted_at: int | None = None
     reverted_by: str | None = None
     dedupe_key: str | None = None
+    opportunity: str | None = None
+    bet: dict[str, Any] | None = None
+    case_against: list[str] | None = None
     created_at: int = 0
     updated_at: int = 0
     workspace_id: int = 0

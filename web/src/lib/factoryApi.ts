@@ -743,6 +743,93 @@ export interface CharterView {
   budget_ics: number;
   version_path?: string | null;
   health_path?: string | null;
+  /** What users get, in one sentence (newer servers). */
+  outcome?: string | null;
+}
+
+/** The capacity-mix category of a bet. */
+export type BetKind = "outcome" | "test" | "enabler" | "hunch";
+/** How the server measures a bet after release (strongest first). */
+export type BetMethod =
+  "controlled" | "before_after" | "adoption" | "signal_trend" | "human_verdict";
+
+/** A bet's predicted effect as a signed change, e.g. up +1 to +4 `pp`, down -4 to -1 `pp`. */
+export interface BetExpectedView {
+  direction: "up" | "down";
+  low: number;
+  high: number;
+  unit: string;
+}
+
+/** The flag a bet ships behind (`key`), or why the product has none (`none`). */
+export interface BetFlagView {
+  key?: string | null;
+  convention?: string | null;
+  provider?: string | null;
+  none?: string | null;
+}
+
+export interface BetMeasurementView {
+  method: BetMethod;
+  /** Days after release, e.g. `[7, 28]`. */
+  readout_days: number[];
+  min_n?: number | null;
+}
+
+export interface BetKillView {
+  state: string;
+  date: string;
+}
+
+export interface BetCostView {
+  agent_usd?: number | null;
+  human_review_min?: number | null;
+  risk?: "low" | "medium" | "high" | null;
+}
+
+/** A bet on a projects proposal, frozen into each new project's `why` at apply. */
+export interface BetView {
+  kind: BetKind;
+  /** A strategy goal, e.g. `G-1`. */
+  goal?: string | null;
+  hypothesis: string;
+  outcome: string;
+  metric: string;
+  expected: BetExpectedView;
+  /** The bet's and the strategy's guardrails. */
+  guardrails: string[];
+  flag: BetFlagView;
+  measurement: BetMeasurementView;
+  kill: BetKillView;
+  cost?: BetCostView | null;
+}
+
+/**
+ * Why a project exists: the bet frozen into its charter when its proposal
+ * applied (read-only). Requested work from an opportunity has only
+ * `proposal` and `opportunity`.
+ */
+export interface WhyView {
+  /** The applied proposal, e.g. `C-31`. */
+  proposal?: string | null;
+  /** e.g. `O-12`. */
+  opportunity?: string | null;
+  kind?: BetKind | null;
+  goal?: string | null;
+  outcome?: string | null;
+  hypothesis?: string | null;
+  metric?: string | null;
+  expected?: BetExpectedView | null;
+  guardrails?: string[];
+  flag?: BetFlagView | null;
+  measurement?: BetMeasurementView | null;
+  kill?: BetKillView | null;
+  cost?: BetCostView | null;
+  plan_version?: number | null;
+  frozen_at?: number | null;
+  frozen_by?: string | null;
+  /** The project this one was split from, whose bet it inherited. */
+  split_from?: string | null;
 }
 
 /**
@@ -835,6 +922,8 @@ export interface ProjectView {
   active_task?: ActiveTaskView | null;
   loops_summary?: LoopsSummaryView | null;
   def_version?: number | null;
+  /** The bet frozen into the charter, when the project came from one (newer servers). */
+  why?: WhyView | null;
 }
 
 // ── Decisions and events ───────────────────────────────────────
@@ -1132,6 +1221,12 @@ export interface ProposalView {
   applied_at: number | null;
   reverted_at: number | null;
   reverted_by: string | null;
+  /** A projects proposal's opportunity, e.g. `O-12` (newer servers). */
+  opportunity?: string | null;
+  /** A projects proposal's bet (newer servers). */
+  bet?: BetView | null;
+  /** The other lead's case against the bet, up to three lines. */
+  case_against?: string[] | null;
   created_at: number;
   updated_at: number;
 }
