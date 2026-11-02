@@ -4,25 +4,8 @@
 
 import type { FactoryMarkerTone } from "@/lib/factoryMessages";
 
-/** Pill classes per tone (border + tinted fill + text), light and dark via tokens. */
-export const TONE_PILL: Record<FactoryMarkerTone, string> = {
-  muted: "border-border bg-muted text-muted-foreground",
-  info: "border-info/25 bg-info/10 text-info",
-  success: "border-success/25 bg-success/10 text-success",
-  accent: "border-brand-accent/25 bg-brand-accent/10 text-brand-accent",
-  warning: "border-warning/30 bg-warning/10 text-warning",
-  danger: "border-destructive/25 bg-destructive/10 text-destructive",
-};
-
-/** Icon colour per tone. */
-export const TONE_ICON: Record<FactoryMarkerTone, string> = {
-  muted: "text-muted-foreground",
-  info: "text-info",
-  success: "text-success",
-  accent: "text-brand-accent",
-  warning: "text-warning",
-  danger: "text-destructive",
-};
+// The tone and role-chip classes live with the rest of the status grammar.
+export { TONE_ICON, TONE_PILL, roleChipTone } from "../ui/statusTokens";
 
 /** Envelope kind → pill tone. */
 export function messageKindTone(kind: string | undefined): FactoryMarkerTone {
@@ -37,21 +20,6 @@ export function messageKindTone(kind: string | undefined): FactoryMarkerTone {
       return "warning";
     default:
       return "muted";
-  }
-}
-
-/** Sender role → classes layered over `FactoryRoleChip`'s neutral chip. */
-export function roleChipTone(role: string | null | undefined): string {
-  switch (role) {
-    case "lead":
-      return "border-brand-accent/40 text-brand-accent";
-    case "project_lead":
-      return "border-info/40 text-info";
-    case "env_keeper":
-    case "demo":
-      return "border-success/40 text-success";
-    default:
-      return "";
   }
 }
 

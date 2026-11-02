@@ -434,6 +434,9 @@ importers:
       ai-elements:
         specifier: ^1.9.0
         version: 1.9.0
+      axe-core:
+        specifier: ^4.14.0
+        version: 4.14.0
       fake-indexeddb:
         specifier: ^6.2.5
         version: 6.2.5
@@ -4839,6 +4842,10 @@ packages:
 
   aws4@1.13.2:
     resolution: {integrity: sha512-lHe62zvbTB5eEABUVi/AwVh0ZKY9rMMDhmm+eeyuuUQbQ3+J+fONVQOZyj+DdrvD4BY33uYniyRJ4UJIaSKAfw==}
+
+  axe-core@4.14.0:
+    resolution: {integrity: sha512-9WTZxEjsZ7b13TH8JPmbV2z8CHbl80/2hm3XPEG4JgNdQLK81IBRXmSxHfMAOkSqQeRxT/0dwNDz2GOm3zzpcQ==}
+    engines: {node: '>=4'}
 
   azure-devops-node-api@12.5.0:
     resolution: {integrity: sha512-R5eFskGvOm3U/GzeAuxRkUsAl0hrAwGgWn6zAd2KrZmrEhWZVqLew4OOupbQlXUuojUzpGtq62SmdhJ06N88og==}
@@ -14308,6 +14315,8 @@ snapshots:
   attr-accept@2.2.5: {}
 
   aws4@1.13.2: {}
+
+  axe-core@4.14.0: {}
 
   azure-devops-node-api@12.5.0:
     dependencies:
