@@ -31,6 +31,10 @@ Each tick it reads the top-level members of every factory and applies:
   ``OMNIGENT_FACTORY_PREVIEW_TTL_H`` gets one park notice to its PL per window.
 - **S10 decision escalation**: a blocking decision whose person is away widens
   to operators, then to owners (see :mod:`~omnigent.server.factory.decision_routing`).
+- **S11 idle dev env**: a project that only waits for a human merge for
+  ``OMNIGENT_FACTORY_IDLE_ENV_S`` gets one ask to take its dev env down (its
+  previews stay up), and asks to bring it back while work waits on it (see
+  :mod:`~omnigent.server.factory.idle_env`).
 
 Each tick also logs what it saw to the factory event log: heartbeats, alerts,
 and the PL ↔ sub-agent traffic (``dispatch``, ``task.done|failed``) read off
@@ -75,6 +79,7 @@ from omnigent.server.factory import (
     decision_routing,
     detectors,
     events,
+    idle_env,
     learning,
     loops,
     previews,
@@ -173,6 +178,8 @@ class SupervisorConfig:
     :param preview_ttl_h: Hours a ready preview may go without human attention
         before its PL is asked to park it; ``None`` turns parking off.
     :param idle_backstop_max_s: The longest a quiet member goes without a beat.
+    :param idle_env_s: Seconds a project must only wait for a human merge before
+        its PL is asked to take the dev env down; ``None`` turns this off.
     """
 
     tick_s: float = DEFAULT_TICK_S
@@ -182,6 +189,7 @@ class SupervisorConfig:
     quiet_beats: bool = False
     preview_ttl_h: float | None = previews.DEFAULT_PREVIEW_TTL_H
     idle_backstop_max_s: float = DEFAULT_IDLE_BACKSTOP_MAX_S
+    idle_env_s: float | None = idle_env.DEFAULT_IDLE_ENV_S
 
     @classmethod
     def from_env(cls) -> SupervisorConfig:
@@ -194,6 +202,7 @@ class SupervisorConfig:
             quiet_beats=quiet_beats.quiet_beats_enabled(),
             preview_ttl_h=previews.preview_ttl_h(),
             idle_backstop_max_s=quiet_beats.idle_backstop_max_s(),
+            idle_env_s=idle_env.idle_env_s(),
         )
 
     def for_factory(self, factory_id: str | None) -> SupervisorConfig:
@@ -419,6 +428,7 @@ class FactorySupervisor:
         await self._check_stuck(members, children, now)
         await self._escalate_blocked(store, now)
         await self._park_idle_previews(members, now)
+        await self._idle_dev_envs(members, children, now)
         await decision_routing.escalate_decisions(self._app_state, now)
         await detectors.on_tick(self._app_state, members, children, now)
         # Loop engine: wall and no-progress, $ budgets, READY waves, NEXT flushes.
@@ -1026,6 +1036,33 @@ class FactorySupervisor:
                 ),
                 data={"pr_id": pr.id, "attention_at": int(attention), "ttl_h": ttl_h},
             )
+
+    # ── S11 idle dev env ────────────────────────────────────────
+
+    async def _idle_dev_envs(
+        self, members: list[Conversation], children: list[Conversation], now: float
+    ) -> None:
+        """Ask PLs to take idle dev envs down and to bring them back for new work."""
+        if self.config.idle_env_s is None:
+            return
+        busy: dict[str, list[str]] = {}
+        running: set[str] = set()
+        for child in children:
+            if not _is_running(child):
+                continue
+            running.add(child.id)
+            if child.sub_agent_name in binder.TEAM_AGENTS:
+                continue
+            title = display_title(child.title, child.id)
+            busy.setdefault(child.parent_conversation_id or "", []).append(title)
+        await idle_env.on_tick(
+            self._app_state,
+            members,
+            busy,
+            now,
+            after_s=self.config.idle_env_s,
+            running=running,
+        )
 
     # ── housekeeping ────────────────────────────────────────────
 

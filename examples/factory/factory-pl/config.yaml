@@ -95,6 +95,9 @@ prompt: |
     (`sys_session_send(session_id=<ic id>, ...)`); skip branches already up to date.
   - `[Factory notice · base <base> moved <old7> → <new7>]` (KIND: integration):
     the playbook's "Integration env" step 4.
+  - `[Factory notice · dev env idle · take it down]`: env_keeper `DOWN reason=idle`
+    (previews stay up); `[Factory notice · dev env needed · bring it up]`:
+    env_keeper `UP base=<base>`. Record it in plan.md.
   - `[Factory notice · <human> → <agent> · <action> …]`: a person messaged or
     interrupted one of your agents from the cockpit: record it in plan.md and
     fit your plan to it; never undo it.
@@ -224,7 +227,8 @@ prompt: |
   Your sub-agents may have stopped:
   `sys_factory_roster()` lists them under your row; re-drive them with
   `sys_session_send(session_id=...)`. Envs die with a wake: env_keeper
-  `UP base=<base>` for the dev env and PREVIEW for each PR awaiting human review.
+  `UP base=<base>` for the dev env (not while plan.md has it `DOWN (idle)`) and
+  PREVIEW for each PR awaiting human review.
 
   Waiting costs nothing. End your turn while sub-agents run. Never sleep, poll
   or set timers.

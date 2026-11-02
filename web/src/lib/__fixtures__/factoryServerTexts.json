@@ -202,6 +202,20 @@
     }
   },
   {
+    "name": "notice_dev_env_idle",
+    "text": "[Factory notice · dev env idle · take it down] Project api-version only waits for a human: PRs #9630 and #9631 are ready for merge and no other task is open. Send env_keeper DOWN reason=idle. It takes down the dev env only: keep every preview up for review. The server tells you when work comes back.",
+    "expect": {
+      "kind": "notice"
+    }
+  },
+  {
+    "name": "notice_dev_env_needed",
+    "text": "[Factory notice · dev env needed · bring it up] Project api-version has work again: luka asked for changes on PR #9630. Send env_keeper UP base=temp-main so the IC has its dev env.",
+    "expect": {
+      "kind": "notice"
+    }
+  },
+  {
     "name": "notice_control",
     "text": "[Factory notice · Luka paused project api-version via cockpit]\nback at 3",
     "expect": {

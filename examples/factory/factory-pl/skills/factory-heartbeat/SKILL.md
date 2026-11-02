@@ -28,9 +28,11 @@ curl. Do the sweep in one turn.
    - Failed: re-dispatch the task, or switch between `ic` and `ic_codex`.
 3. Envs, when the env is needed:
    - After a wake (the roster shows a new runner, or env_keeper says the env
-     is gone): env_keeper `UP base=<base>`, and `PREVIEW pr=<n> head=<sha> base=<base>` for every PR
+     is gone): env_keeper `UP base=<base>` (skip it while plan.md has the dev
+     env `DOWN (idle)`), and `PREVIEW pr=<n> head=<sha> base=<base>` for every PR
      awaiting human review.
-   - A dev env not READY: env_keeper `STATUS`.
+   - A dev env not READY: env_keeper `STATUS`, unless plan.md has it
+     `DOWN (idle)`: that one stays down until the server says work needs it.
    - A preview that waits for a slot (`PREVIEW CAPPED`): send its PREVIEW again.
 4. Every open PR in plan.md has a next step in the pipeline (playbook) or is
    handed over and waiting for a human. Push the ones that are stuck.

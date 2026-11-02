@@ -503,7 +503,7 @@ def test_prompts_carry_the_operational_contracts(lead: AgentSpec, pl: AgentSpec)
     for token in (
         "UP base=<base> [tooling=<ref>]:",
         "STATUS:",
-        "DOWN:",
+        "DOWN [reason=idle]:",
         "PREVIEW pr=<n> head=<sha> base=<base>",
         "PREVIEW_DOWN pr=<n>",
         "PREVIEW_STATUS",
@@ -1588,6 +1588,49 @@ def test_base_notices_have_dispatch_rows(pl: AgentSpec) -> None:
     for text in texts:
         header = text.split("]", 1)[0] + "]"
         assert any(_row_pattern(row).fullmatch(header) for row in rows), header
+
+
+def test_idle_dev_env_notices_have_rows(pl: AgentSpec) -> None:
+    """The idle dev env notices match a PL dispatch row and a playbook row, and keep previews."""
+    from omnigent.entities.factory import FactoryProject
+    from omnigent.server.factory import idle_env
+
+    project = FactoryProject(
+        id="p" * 32, factory_id="f" * 32, slug="api-version", title="API", base_branch="temp-main"
+    )
+    texts = {
+        "DOWN reason=idle": idle_env.down_notice_text(
+            project, idle_env.DevEnvNeed(idle_env.NEED_IDLE, "", prs=(9630,))
+        ),
+        "UP base=<base>": idle_env.up_notice_text(
+            project, idle_env.DevEnvNeed(idle_env.NEED_WORK, "task T-4 badge is ready")
+        ),
+    }
+    prompt = " ".join((pl.instructions or "").split())
+    playbook = _folded(_PL_DIR / "skills/factory-pl-playbook/SKILL.md")
+    for command, text in texts.items():
+        header = text.split("]", 1)[0] + "]"
+        for label, doc in (("prompt", prompt), ("playbook", playbook)):
+            rows = re.findall(r"`(\[Factory notice · dev env [^`]*\])`: env_keeper `([^`]*)`", doc)
+            rows += re.findall(
+                r"\| `(\[Factory notice · dev env [^`]*\])` \| env_keeper `([^`]*)`", doc
+            )
+            assert (header, command) in rows, (label, header, rows)
+    # The dev env only: the notice keeps previews up, and DOWN never parks one.
+    assert "keep every preview up" in texts["DOWN reason=idle"]
+    env = _sub_agent(pl, "env_keeper")
+    env_text = " ".join(
+        (
+            (env.instructions or "")
+            + (_skill_dir(env) / "factory-env" / "SKILL.md").read_text(encoding="utf-8")
+        ).split()
+    )
+    assert "DOWN [reason=idle]: `pnpm factory:down` for the dev env only; previews stay up" in (
+        env_text
+    )
+    assert "`ENV DOWN at <sha7> · PREVIEW DOWN p<n>`" in env_text
+    heartbeat = _folded(_PL_DIR / "skills/factory-heartbeat/SKILL.md")
+    assert "`DOWN (idle)`" in heartbeat and "`DOWN (idle)`" in prompt
 
 
 def test_intervention_texts_have_pl_rows(pl: AgentSpec) -> None:

@@ -31,6 +31,14 @@ the PR in the dev env, then go back to the base" any more.
 | `pnpm -s factory:urls` | The URLs as JSON. |
 | `pnpm factory:down` | `tilt down`, deletes the namespace, removes env.json. |
 
+DOWN [reason=idle]: `pnpm factory:down`, nothing else: previews are not the
+dev env and stay up for review. Report
+`sys_factory_env(state="down", env_id=<env_id>, urls={}, deployed={})`, with
+`note="idle: every PR waits for a human merge"` for reason=idle (the PL sends
+it when the project only waits for a merge; a later UP brings it back).
+While the dev env is down (no `~/factory/env.json`), only UP starts it again:
+STATUS answers `ENV DOWN` and MERGED moves only the worktree.
+
 UP base=<base> [tooling=<ref>]:
 1. `git -C <repo> fetch origin`. If the worktree does not exist:
    `git -C <repo> worktree add --detach /home/omnigent/workspace/wt/env origin/<base>`.
@@ -289,6 +297,9 @@ the PL redeploys the ones that are not ready with PREVIEW.
   it), then UP step 2 re-applies a kept fix (Tilt live-updates the dev env).
   Report the dev env with the new `deployed.sha` (`deployed.ref` stays
   `origin/<base>`; step 2's line in `note`). Result: `ENV OK at <sha7> · PREVIEW DOWN p<n>`.
+  While the dev env is down (no `~/factory/env.json`), stop after the git
+  commands: no UP step 2, no `pnpm factory:up`, no dev env report. Result:
+  `ENV DOWN at <sha7> · PREVIEW DOWN p<n>`.
 - CLOSED: PREVIEW_DOWN reason=closed.
 
 ## Reading Tilt
