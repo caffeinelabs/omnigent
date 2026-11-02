@@ -40,11 +40,11 @@ export function SlackWebhookCard({ factoryId }: { factoryId: string }) {
   return (
     <section
       data-testid="settings-slack"
-      aria-label="Slack"
+      aria-label="Slack webhook"
       className="flex min-w-0 flex-col gap-2 rounded-xl border border-border bg-card p-4 max-md:p-3"
     >
       <div className="flex min-w-0 flex-wrap items-baseline gap-2">
-        <h2 className="text-ui font-semibold">Slack</h2>
+        <h2 className="text-ui font-semibold">Slack webhook</h2>
         <span
           data-testid="settings-slack-state"
           className="inline-flex min-w-0 items-baseline gap-1.5 text-sm text-muted-foreground"

@@ -32,7 +32,6 @@ import {
 } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
-import { controlErrorMessage } from "../controls/controlModel";
 import { formatElapsed } from "../factoryFormat";
 import { settingsPageHref } from "../factoryRoutes";
 import {
@@ -41,8 +40,11 @@ import {
   browserTz,
   hhmm,
   hourLabel,
+  refParts,
   parseSlackTarget,
   settingsChanges,
+  slackErrorText,
+  slackErrorWords,
   timeZones,
   validClock,
 } from "../notify/notifyModel";
@@ -60,11 +62,6 @@ import { slackAppLabel } from "./SlackAppCard";
 import { TeamReachability } from "./TeamReachability";
 
 const CARD = "flex min-w-0 flex-col gap-3 rounded-xl border border-border bg-card p-4 max-md:p-3";
-
-function errorText(error: unknown): string {
-  if (error instanceof FactoryApiError && error.code === "rate_limited") return error.message;
-  return controlErrorMessage(error);
-}
 
 // ── 1. The Slack app ───────────────────────────────────────────
 
@@ -84,13 +81,13 @@ export function AppStatusStrip({
       data-testid="notify-app-status"
       data-state={!app.configured ? "unset" : ok ? "ok" : "broken"}
       className={cn(
-        "flex min-w-0 flex-wrap items-center gap-x-1.5 gap-y-1 rounded-lg border px-3 py-2 text-sm",
+        "flex min-w-0 items-start gap-1.5 rounded-lg border px-3 py-2 text-sm",
         ok ? "border-border text-muted-foreground" : "border-warning/40 text-warning",
       )}
     >
-      <BellRingIcon aria-hidden className="size-4 shrink-0" />
+      <BellRingIcon aria-hidden className="mt-0.5 size-4 shrink-0" />
       {!app.configured ? (
-        <span>
+        <span className="min-w-0 break-words">
           Slack DMs are not set up yet:{" "}
           {owner ? (
             <Link
@@ -107,12 +104,31 @@ export function AppStatusStrip({
         </span>
       ) : ok ? (
         <span className="min-w-0 break-words">
-          Slack app: <span className="text-foreground">{slackAppLabel(app)}</span> ✓
+          Slack app: <span className="text-foreground">{slackAppLabel(app)}</span>
+          {app.missing_scopes.length > 0 ? (
+            <span className="text-warning"> · missing scopes: some DMs may fail</span>
+          ) : (
+            " ✓"
+          )}
         </span>
       ) : (
         <span className="min-w-0 break-words">
-          The Slack app token fails ({app.error ?? "invalid"}): no DMs go out until{" "}
-          {owner ? "you replace it under Alerts" : "an owner replaces it"}.
+          The Slack app token fails ({slackErrorWords(app.error ?? "invalid")}): no DMs go out until{" "}
+          {owner ? (
+            <>
+              you replace it{" "}
+              <Link
+                to={settingsPageHref(factoryId, "alerts")}
+                componentId="factory.notify.fix_app"
+                className="underline"
+              >
+                under Alerts
+              </Link>
+            </>
+          ) : (
+            "an owner replaces it"
+          )}
+          .
         </span>
       )}
     </p>
@@ -122,19 +138,22 @@ export function AppStatusStrip({
 // ── 2. Your Slack account ──────────────────────────────────────
 
 function accountLine(account: Pick<SlackAccountView, "name" | "handle" | "user_id" | "email">) {
-  const parts = [`${account.name} (@${account.handle})`, account.user_id];
+  const handle = account.handle ? `@${account.handle}` : "";
+  const who =
+    account.name && account.name !== account.handle
+      ? `${account.name}${handle ? ` (${handle})` : ""}`
+      : handle || account.name;
+  const parts = [who, account.user_id];
   if (account.email) parts.push(account.email);
-  return parts.join(" · ");
+  return parts.filter(Boolean).join(" · ");
 }
 
 function FindForm({
   factoryId,
-  suggestion,
   disabled,
   onCancel,
 }: {
   factoryId: string;
-  suggestion: string;
   disabled: boolean;
   onCancel?: () => void;
 }) {
@@ -149,7 +168,7 @@ function FindForm({
     setFailure(null);
     link.mutate(target, {
       onSuccess: (res) => setFound(res.account),
-      onError: (error) => setFailure(errorText(error)),
+      onError: (error) => setFailure(slackErrorText(error)),
     });
   };
   const sendCode = () => {
@@ -159,7 +178,7 @@ function FindForm({
       { member_id: found.user_id, send_code: true },
       {
         onSuccess: () => showToast("Code sent: check your Slack DMs"),
-        onError: (error) => setFailure(errorText(error)),
+        onError: (error) => setFailure(slackErrorText(error)),
       },
     );
   };
@@ -201,7 +220,7 @@ function FindForm({
             onKeyDown={(e) => {
               if (e.key === "Enter") find();
             }}
-            placeholder={`Member ID (U0…) or Slack email, e.g. ${suggestion}`}
+            placeholder="Member ID (U0…) or Slack email"
             autoComplete="off"
             spellCheck={false}
             aria-label="Slack member ID or email"
@@ -233,6 +252,11 @@ function FindForm({
           )}
         </div>
       )}
+      {!found && input.trim() && !target && (
+        <p data-testid="notify-find-invalid" className="text-xs text-destructive">
+          That is neither a member ID (U0 and letters or digits) nor an email.
+        </p>
+      )}
       {!found && (
         <p className="text-xs text-muted-foreground">
           Your member ID: Slack → your profile → ⋯ → Copy member ID. Your Slack email may differ
@@ -263,7 +287,7 @@ function CodeForm({ factoryId, me, nowS }: { factoryId: string; me: NotifyMeView
     setFailure(null);
     verify.mutate(code.trim(), {
       onSuccess: () => showToast("Slack linked: a welcome DM lists what waits on you"),
-      onError: (error) => setFailure(errorText(error)),
+      onError: (error) => setFailure(slackErrorText(error)),
     });
   };
 
@@ -272,7 +296,12 @@ function CodeForm({ factoryId, me, nowS }: { factoryId: string; me: NotifyMeView
       <p className="text-sm">
         A code went to{" "}
         <span className="font-medium">
-          {slack.name ?? slack.user_id} (@{slack.handle ?? "?"})
+          {accountLine({
+            name: slack.name ?? "",
+            handle: slack.handle ?? "",
+            user_id: "",
+            email: null,
+          }) || slack.user_id}
         </span>{" "}
         in Slack.
         {left != null && (
@@ -294,7 +323,7 @@ function CodeForm({ factoryId, me, nowS }: { factoryId: string; me: NotifyMeView
           aria-label="Verification code"
           data-testid="notify-code"
           componentId="factory.notify.code"
-          className="h-7 w-32 font-mono tracking-widest"
+          className="h-7 w-40 font-mono tracking-widest placeholder:font-sans placeholder:tracking-normal"
         />
         <Button
           size="sm"
@@ -315,7 +344,7 @@ function CodeForm({ factoryId, me, nowS }: { factoryId: string; me: NotifyMeView
               { member_id: slack.user_id ?? "", send_code: true },
               {
                 onSuccess: () => showToast("New code sent"),
-                onError: (error) => setFailure(errorText(error)),
+                onError: (error) => setFailure(slackErrorText(error)),
               },
             )
           }
@@ -359,8 +388,8 @@ function LinkedAccount({
   const slack = me.slack;
   return (
     <div data-testid="notify-linked" className="flex min-w-0 flex-col gap-2">
-      <p className="flex min-w-0 flex-wrap items-center gap-x-1.5 text-sm">
-        <CheckCircle2Icon aria-hidden className="size-4 shrink-0 text-success" />
+      <p className="flex min-w-0 items-start gap-1.5 text-sm">
+        <CheckCircle2Icon aria-hidden className="mt-0.5 size-4 shrink-0 text-success" />
         <span className="min-w-0 break-words">
           {accountLine({
             name: slack.name ?? "",
@@ -374,7 +403,7 @@ function LinkedAccount({
         <Switch
           checked={me.settings.enabled}
           onCheckedChange={(enabled) =>
-            save.mutate({ enabled }, { onError: (error) => setFailure(errorText(error)) })
+            save.mutate({ enabled }, { onError: (error) => setFailure(slackErrorText(error)) })
           }
           disabled={save.isPending}
           data-testid="notify-enabled"
@@ -390,7 +419,7 @@ function LinkedAccount({
           onClick={() =>
             test.mutate(undefined, {
               onSuccess: () => showToast("Test DM sent"),
-              onError: (error) => setFailure(errorText(error)),
+              onError: (error) => setFailure(slackErrorText(error)),
             })
           }
           loading={test.isPending}
@@ -452,7 +481,8 @@ export function SlackAccountCard({
       </div>
       {slack.status === "error" && (
         <p data-testid="notify-link-broken" className="text-sm text-destructive">
-          Slack cannot reach you ({slack.error ?? "error"}). Link your account again.
+          Slack cannot reach you ({slackErrorWords(slack.error ?? "error")}). Link your account
+          again.
         </p>
       )}
       {slack.status === "unlinked" && slack.error && (
@@ -465,7 +495,6 @@ export function SlackAccountCard({
       ) : (
         <FindForm
           factoryId={factoryId}
-          suggestion={me.user_id}
           disabled={!appOk}
           onCancel={changing ? () => setChanging(false) : undefined}
         />
@@ -518,6 +547,7 @@ function SmallSelect<T extends string>({
   label,
   testId,
   className,
+  disabled,
 }: {
   value: T;
   options: readonly { value: T; label: string }[];
@@ -525,6 +555,7 @@ function SmallSelect<T extends string>({
   label: string;
   testId: string;
   className?: string;
+  disabled?: boolean;
 }) {
   return (
     <Select
@@ -532,6 +563,7 @@ function SmallSelect<T extends string>({
       onValueChange={(next) => onChange(next as T)}
       componentId={`factory.notify.${testId}`}
       valueHasNoPii
+      disabled={disabled}
     >
       <SelectTrigger
         size="sm"
@@ -577,7 +609,7 @@ export function PreferencesForm({ factoryId, me }: { factoryId: string; me: Noti
     if (body.tz === "") body.tz = null;
     save.mutate(body, {
       onSuccess: () => showToast("Notification settings saved"),
-      onError: (error) => setFailure(errorText(error)),
+      onError: (error) => setFailure(slackErrorText(error)),
     });
   };
 
@@ -619,13 +651,6 @@ export function PreferencesForm({ factoryId, me }: { factoryId: string; me: Noti
             label="Daily digest"
             hint="What waits on you, the last 24 h, spend and what's next"
           >
-            <Switch
-              checked={draft.digest.enabled}
-              onCheckedChange={(on) => set("digest", { ...draft.digest, enabled: on })}
-              data-testid="notify-digest"
-              componentId="factory.notify.digest"
-              aria-label="Daily digest"
-            />
             <SmallSelect
               value={String(draft.digest.hour)}
               options={HOUR_OPTIONS}
@@ -633,6 +658,7 @@ export function PreferencesForm({ factoryId, me }: { factoryId: string; me: Noti
               label="Digest hour"
               testId="notify-digest-hour"
               className="w-24"
+              disabled={!draft.digest.enabled}
             />
             <SmallSelect
               value={draft.digest.days}
@@ -643,36 +669,50 @@ export function PreferencesForm({ factoryId, me }: { factoryId: string; me: Noti
               onChange={(value) => set("digest", { ...draft.digest, days: value })}
               label="Digest days"
               testId="notify-digest-days"
+              disabled={!draft.digest.enabled}
+            />
+            <Switch
+              checked={draft.digest.enabled}
+              onCheckedChange={(on) => set("digest", { ...draft.digest, enabled: on })}
+              data-testid="notify-digest"
+              componentId="factory.notify.digest"
+              aria-label="Daily digest"
             />
           </Row>
           <Row wide label="Quiet hours" hint="DMs wait until they end, then arrive as one">
-            <Switch
-              checked={draft.quiet.enabled}
-              onCheckedChange={(on) => set("quiet", { ...draft.quiet, enabled: on })}
-              data-testid="notify-quiet"
-              componentId="factory.notify.quiet"
-              aria-label="Quiet hours"
-            />
             <Input
               type="time"
               value={draft.quiet.start}
               onChange={(e) => set("quiet", { ...draft.quiet, start: e.target.value })}
               aria-label="Quiet from"
               aria-invalid={validClock(draft.quiet.start) ? undefined : true}
+              disabled={!draft.quiet.enabled}
               data-testid="notify-quiet-start"
               componentId="factory.notify.quiet_start"
               className="h-7 w-24 tabular-nums"
             />
-            <span className="text-xs text-muted-foreground">to</span>
+            <span
+              className={cn("text-xs text-muted-foreground", !draft.quiet.enabled && "opacity-50")}
+            >
+              to
+            </span>
             <Input
               type="time"
               value={draft.quiet.end}
               onChange={(e) => set("quiet", { ...draft.quiet, end: e.target.value })}
               aria-label="Quiet until"
               aria-invalid={validClock(draft.quiet.end) ? undefined : true}
+              disabled={!draft.quiet.enabled}
               data-testid="notify-quiet-end"
               componentId="factory.notify.quiet_end"
               className="h-7 w-24 tabular-nums"
+            />
+            <Switch
+              checked={draft.quiet.enabled}
+              onCheckedChange={(on) => set("quiet", { ...draft.quiet, enabled: on })}
+              data-testid="notify-quiet"
+              componentId="factory.notify.quiet"
+              aria-label="Quiet hours"
             />
           </Row>
           <Row label="Let critical incidents through" hint="e.g. an agent died, during quiet hours">
@@ -771,7 +811,16 @@ export function LastDm({ me, nowS }: { me: NotifyMeView; nowS: number }) {
       data-testid="notify-last-dm"
       className={cn("text-sm", failed ? "text-destructive" : "text-muted-foreground")}
     >
-      Last DM {hhmm(last.at)} ({formatElapsed(nowS - last.at)} ago) · {last.summary}
+      Last DM {hhmm(last.at)} ({formatElapsed(nowS - last.at)} ago) ·{" "}
+      {refParts(last.summary).map((part) =>
+        part.ref ? (
+          <span key={part.at} className="whitespace-nowrap">
+            {part.text}
+          </span>
+        ) : (
+          part.text
+        ),
+      )}
       {me.now.quiet && me.now.quiet_until != null && (
         <span className="text-muted-foreground"> · quiet until {hhmm(me.now.quiet_until)}</span>
       )}

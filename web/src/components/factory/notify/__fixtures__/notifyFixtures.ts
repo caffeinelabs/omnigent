@@ -97,10 +97,13 @@ function link(state: LinkState): SlackLinkView {
         code_expires_at: null,
       };
     case "pending":
+      // Until the code proves it is his, the server shows only the handle.
       return {
         status: "pending",
         enabled: true,
         ...account,
+        name: account.handle,
+        email: null,
         linked_at: null,
         error: null,
         code_expires_at: ROUND3_NOW_S + 12 * 60,

@@ -4,7 +4,8 @@ Lifecycle facts (stages, PRs, gates, decisions, controls, demos, tasks, …)
 are kept indefinitely: telemetry and the nightly span heal are built from
 them. Only chatter is pruned: mail, notices and preview probes after 14
 days, heartbeats after 15 (a trial's baseline and trial windows, plus a day:
-``heartbeat_share`` and ``engine_wake_efficiency`` read them). Demo files are
+``heartbeat_share`` and ``engine_wake_efficiency`` read them), Slack DM
+receipts after 35 (the DM engine's ledger reads 30). Demo files are
 kept; their size shows in the health strip. The nightly span heal runs in the
 same loop, before the prune.
 """
@@ -25,11 +26,14 @@ _logger = logging.getLogger(__name__)
 INTERVAL_S: Final = 86400.0
 EVENT_RETENTION_S: Final = 14 * 86400
 HEARTBEAT_RETENTION_S: Final = 2 * TRIAL_H_MAX * 3600 + 86400
+NOTIFY_RETENTION_S: Final = 35 * 86400
 
 PRUNED_KINDS: Final[tuple[str, ...]] = ("message.*", "notice.*", "preview.health")
 """The only kinds dropped after :data:`EVENT_RETENTION_S` (besides heartbeats)."""
 HEARTBEAT_KINDS: Final[tuple[str, ...]] = ("heartbeat.*",)
 """Dropped after :data:`HEARTBEAT_RETENTION_S`."""
+NOTIFY_KINDS: Final[tuple[str, ...]] = ("notify.*",)
+"""Slack DM receipts, dropped after :data:`NOTIFY_RETENTION_S`."""
 KEEP_KINDS: Final[tuple[str, ...]] = (
     "stage.*",
     "pr.*",
@@ -57,7 +61,6 @@ KEEP_KINDS: Final[tuple[str, ...]] = (
     "member.*",
     "budget.*",
     "chat.posted",
-    "notify.*",
     "alerts.routing",
 )
 """Lifecycle kinds that are never pruned (any kind outside the pruned lists is kept too)."""
@@ -82,9 +85,17 @@ async def prune_once(app_state: Any, *, now: int | None = None) -> int:
     beats = await asyncio.to_thread(
         store.prune_events, at - HEARTBEAT_RETENTION_S * 1000, list(HEARTBEAT_KINDS)
     )
-    if old or beats:
-        _logger.info("factory: pruned %d old event(s) and %d heartbeat event(s)", old, beats)
-    return old + beats
+    receipts = await asyncio.to_thread(
+        store.prune_events, at - NOTIFY_RETENTION_S * 1000, list(NOTIFY_KINDS)
+    )
+    if old or beats or receipts:
+        _logger.info(
+            "factory: pruned %d old event(s), %d heartbeat event(s) and %d Slack DM receipt(s)",
+            old,
+            beats,
+            receipts,
+        )
+    return old + beats + receipts
 
 
 async def start(app_state: Any) -> Callable[[], Awaitable[None]]:
@@ -117,6 +128,8 @@ __all__ = [
     "HEARTBEAT_KINDS",
     "HEARTBEAT_RETENTION_S",
     "KEEP_KINDS",
+    "NOTIFY_KINDS",
+    "NOTIFY_RETENTION_S",
     "PRUNED_KINDS",
     "prune_once",
     "start",

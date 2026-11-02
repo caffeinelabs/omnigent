@@ -386,7 +386,7 @@ _GROUP_WORDS: Final = {
     "factory": "pause/stop changes",
     "budget": "budgets and idle spend",
     "mentions": "@mentions",
-    "retros": "Sentinel retros",
+    "retros": "retros and findings",
 }
 
 

@@ -906,6 +906,7 @@ class FactoryStore(ABC):
         subject: str | None = None,
         *,
         limit: int = 1000,
+        newest_first: bool = False,
     ) -> builtins.list[FactoryEvent]:
         """
         Events of the given kind(s) with ``ts >= since_ms``, oldest first.
@@ -913,6 +914,7 @@ class FactoryStore(ABC):
         :param factory_id: One factory, or ``None`` for all of them.
         :param kind: Exact kinds or ``prefix.*`` patterns.
         :param subject: Only this subject.
+        :param newest_first: The *limit* newest rows, newest first.
         """
 
     @abstractmethod
@@ -2070,6 +2072,7 @@ class InMemoryFactoryStore(FactoryStore):
         subject: str | None = None,
         *,
         limit: int = 1000,
+        newest_first: bool = False,
     ) -> builtins.list[FactoryEvent]:
         fid = opt_id(factory_id)
         patterns = as_list(kind) or []
@@ -2082,7 +2085,7 @@ class InMemoryFactoryStore(FactoryStore):
                 and kind_matches(r.kind, patterns)
                 and (subject is None or r.subject == subject)
             ]
-        rows.sort(key=lambda r: (r.ts, r.id))
+        rows.sort(key=lambda r: (r.ts, r.id), reverse=newest_first)
         return [_detach(r) for r in rows[:limit]]
 
     def prune_events(self, older_than_ms: int, kinds: Sequence[str] | None = None) -> int:

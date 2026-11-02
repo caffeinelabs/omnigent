@@ -3,25 +3,36 @@ import { fireEvent, render, screen, waitFor, within } from "@testing-library/rea
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { NotifyMeView, PersonView, ViewerRole } from "@/lib/factoryApi";
+import {
+  FactoryApiError,
+  type NotifyMeView,
+  type NotifyTeamRow,
+  type PersonView,
+  type ViewerRole,
+} from "@/lib/factoryApi";
 import { LIVE_RUN_NOW_S } from "../__fixtures__/liveRun";
 import { DecisionCard } from "../decisions/DecisionCard";
 import { slackNotifiedProposal } from "../decisions/__fixtures__/decisionFixtures";
 import { FactoryNowContext } from "../factoryClock";
 import { NotificationsSettings } from "../settings/NotificationsSettings";
-import { SlackAppCard, slackTestText } from "../settings/SlackAppCard";
+import { SlackAppCard, slackTestOk, slackTestText } from "../settings/SlackAppCard";
+import { teamDetails } from "../settings/TeamReachability";
 import { FactoryViewerProvider } from "../shell/viewerCan";
 import { ROUND3_NOW_S, viewerOf } from "../shell/__fixtures__/shellFixtures";
 import { NotifiedLine } from "./NotifiedChips";
 import { notifyMe, notifyTeam, routingWith } from "./__fixtures__/notifyFixtures";
 import {
   deadlineText,
+  refParts,
   notifiedChips,
   parseSlackTarget,
   personSlackStatus,
   settingsChanges,
+  slackErrorText,
+  slackErrorWords,
   validBotToken,
   validClock,
+  whenText,
 } from "./notifyModel";
 
 const authenticatedFetch = vi.fn();
@@ -84,25 +95,69 @@ beforeEach(() => {
 });
 
 describe("notifyModel", () => {
-  it("renders one chip per DM, failed ones with their error", () => {
-    const chips = notifiedChips([
-      { user_id: "carol@x.io", at: 1_762_070_400, stage: "new", ok: true },
-      { user_id: "carol@x.io", at: 1_762_084_800, stage: "r4h", ok: true },
-      {
-        user_id: "mia@x.io",
-        at: 1_762_084_800,
-        stage: "owners",
-        ok: false,
-        error: "user_not_found",
-      },
-    ]);
+  it("renders one chip per DM, failed ones with their error in words", () => {
+    const now = 1_762_084_860;
+    const chips = notifiedChips(
+      [
+        { user_id: "carol@x.io", at: now - 60, stage: "new", ok: true },
+        { user_id: "carol@x.io", at: now - 60, stage: "r4h", ok: true },
+        {
+          user_id: "mia@x.io",
+          at: now - 60,
+          stage: "owners",
+          ok: false,
+          error: "user_not_found",
+        },
+        { user_id: "mia@x.io", at: now - 60, stage: "owners", ok: false, error: "odd_code" },
+      ],
+      now,
+    );
     expect(chips.map((c) => c.text.replace(/\d\d:\d\d/, "HH:MM"))).toEqual([
       "carol HH:MM",
       "carol reminder HH:MM",
-      "mia ⚠ user_not_found",
+      "mia ⚠ Slack account gone",
+      "mia ⚠ odd_code",
     ]);
     expect(chips[2]!.ok).toBe(false);
+    expect(chips[2]!.title).toContain("user_not_found");
     expect(notifiedChips(undefined)).toEqual([]);
+  });
+
+  it("shows an earlier day's DM by its age, so a long wait shows", () => {
+    const now = 1_762_084_800;
+    const old = now - (2 * 86400 + 18 * 3600);
+    const [opened, reminder] = notifiedChips(
+      [
+        { user_id: "luka@x.io", at: old, stage: "new", ok: true },
+        { user_id: "luka@x.io", at: old + 86400, stage: "r24h", ok: true },
+      ],
+      now,
+    );
+    expect(opened!.text).toBe("luka 2d 18h ago");
+    expect(reminder!.text).toBe("luka reminder 1d 18h ago");
+    expect(whenText(now - 60, now)).toMatch(/^\d\d:\d\d$/);
+  });
+
+  it("words Slack's codes and the server's refusals for people", () => {
+    expect(slackErrorWords("messages_tab_disabled")).toBe("Messages tab off");
+    expect(slackErrorWords("something_new")).toBe("something_new");
+    const notFound = new FactoryApiError(
+      "Slack has no such account here",
+      404,
+      "slack_user_not_found",
+      null,
+      null,
+    );
+    expect(slackErrorText(notFound)).toBe("Slack has no such account here");
+    const other = new FactoryApiError("gone", 404, "not_found", null, null);
+    expect(slackErrorText(other)).toBe("Not found on the server; reload the cockpit");
+    expect(refParts("luka: D-19 needs you, INC-7 too")).toEqual([
+      { text: "luka: ", ref: false, at: 0 },
+      { text: "D-19", ref: true, at: 6 },
+      { text: " needs you, ", ref: false, at: 10 },
+      { text: "INC-7", ref: true, at: 22 },
+      { text: " too", ref: false, at: 27 },
+    ]);
   });
 
   it("says when a decision defaults, by its effect", () => {
@@ -167,8 +222,8 @@ describe("NotifiedLine", () => {
     expect(within(line).getByTestId("decision-notified-D-19-deadline").textContent).toBe(
       "expires in 6h",
     );
-    expect(line.textContent).toContain("luka reminder");
-    expect(line.textContent).toContain("mia ⚠ messages_tab_disabled");
+    expect(line.textContent).toContain("luka reminder 1d 18h ago");
+    expect(line.textContent).toContain("mia ⚠ Messages tab off");
   });
 });
 
@@ -185,10 +240,10 @@ describe("NotificationsSettings", () => {
           account: {
             user_id: "U04LUKA9Z",
             team_id: "T0CAFE",
-            name: "Luka Rumora",
+            name: "luka",
             handle: "luka",
-            email: "luka@caffeine.ai",
-            tz: "Europe/Zagreb",
+            email: null,
+            tz: null,
           },
           status: body.send_code ? "pending" : "found",
         });
@@ -209,7 +264,7 @@ describe("NotificationsSettings", () => {
     });
     fireEvent.click(screen.getByTestId("notify-find"));
     const found = await screen.findByTestId("notify-found");
-    expect(found.textContent).toContain("Luka Rumora (@luka) · U04LUKA9Z · luka@caffeine.ai");
+    expect(found.textContent).toContain("@luka · U04LUKA9Z");
     expect(calls("POST", "/notify/me/slack")).toEqual([{ email: "luka@caffeine.ai" }]);
 
     fireEvent.click(screen.getByTestId("notify-send-code"));
@@ -260,7 +315,7 @@ describe("NotificationsSettings", () => {
       </Frame>,
     );
     expect(await screen.findByTestId("notify-link-broken")).toHaveTextContent(
-      "messages_tab_disabled",
+      "Slack cannot reach you (Messages tab off)",
     );
     view.unmount();
 
@@ -275,6 +330,36 @@ describe("NotificationsSettings", () => {
     );
     expect(await screen.findByTestId("notify-unavailable")).toHaveTextContent(
       "You're not on this factory's roster",
+    );
+  });
+
+  it("says why Find is off and shows the server's answer when Slack has no such account", async () => {
+    serve({
+      [`GET ${BASE}/notify/me`]: () => json(notifyMe({ link: "unlinked", lastDm: false })),
+      [`GET ${BASE}/notify/team`]: () => json(notifyTeam()),
+      [`POST ${BASE}/notify/me/slack`]: () =>
+        json(
+          {
+            error: { code: "slack_user_not_found", message: "Slack has no such account here" },
+          },
+          404,
+        ),
+    });
+    render(
+      <Frame>
+        <NotificationsSettings factoryId={FID} nowS={ROUND3_NOW_S} />
+      </Frame>,
+    );
+    const input = await screen.findByTestId("notify-find-input");
+    fireEvent.change(input, { target: { value: "not an id" } });
+    expect(screen.getByTestId("notify-find-invalid")).toHaveTextContent("neither a member ID");
+    expect(screen.getByTestId("notify-find")).toBeDisabled();
+
+    fireEvent.change(input, { target: { value: "luka@slack.example" } });
+    expect(screen.queryByTestId("notify-find-invalid")).toBeNull();
+    fireEvent.click(screen.getByTestId("notify-find"));
+    expect(await screen.findByTestId("notify-link-error")).toHaveTextContent(
+      "Slack has no such account here",
     );
   });
 
@@ -348,5 +433,50 @@ describe("SlackAppCard", () => {
     expect(slackTestText({ ok: true, dm: "sent", missing_scopes: ["im:write"] })).toBe(
       "The token works · missing im:write · a test DM is on its way",
     );
+    expect(slackTestText({ ok: true, dm: "messages_tab_disabled" })).toBe(
+      "The token works · the test DM failed (Messages tab off)",
+    );
+    expect(slackTestOk({ ok: true, dm: "not_linked" })).toBe(true);
+    expect(slackTestOk({ ok: true, dm: "channel_not_found" })).toBe(false);
+    expect(slackTestOk({ ok: false, error: "invalid_auth", dm: null })).toBe(false);
+  });
+
+  it("shows a failed test in red", async () => {
+    serve({
+      [`GET ${BASE}/alerts/routing`]: () => json(routingWith("ok")),
+      [`POST ${BASE}/alerts/slack-bot/test`]: () =>
+        json({ ok: false, error: "invalid_auth", dm: null }),
+    });
+    render(
+      <Frame>
+        <SlackAppCard factoryId={FID} />
+      </Frame>,
+    );
+    fireEvent.click(await screen.findByTestId("settings-slack-app-test"));
+    const tested = await screen.findByTestId("settings-slack-app-tested");
+    expect(tested).toHaveAttribute("data-ok", "false");
+    expect(tested.className).toContain("text-destructive");
+  });
+});
+
+describe("TeamReachability", () => {
+  it("joins a row's details with even separators", () => {
+    const row = {
+      user_id: "mia@x.io",
+      role: "operator",
+      slack_status: "verified",
+      error: null,
+      enabled: true,
+      reachable: true,
+      groups_on: ["decisions"],
+      digest: false,
+      quiet_now: true,
+      last_dm_at: null,
+      last_error: null,
+    } as NotifyTeamRow;
+    expect(teamDetails(row, 1000)).toBe("1 of 8 groups · quiet now · no DM yet");
+    expect(
+      teamDetails({ ...row, digest: true, quiet_now: false, last_dm_at: 1000 - 47 * 60 }, 1000),
+    ).toBe("1 of 8 groups · digest · last DM 47m ago");
   });
 });

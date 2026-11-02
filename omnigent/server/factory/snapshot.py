@@ -104,6 +104,8 @@ COST_TTL_S: Final = 60.0
 MAIL_WINDOW_S: Final = 6 * 3600
 NOTIFIED_WINDOW_S: Final = 30 * 86400
 """How far back the snapshot reads Slack DM receipts (``notify.slack``)."""
+NOTIFIED_ROWS: Final = 5000
+"""At most this many of the newest receipts per snapshot."""
 CONTROL_WINDOW_S: Final = 7 * 86400
 ANSWERED_DECISIONS: Final = 10
 PL_TITLE_PREFIX: Final = "PL · "
@@ -518,6 +520,18 @@ def notified_by_subject(rows: Iterable[FactoryEvent]) -> dict[str, list[dict[str
     return out
 
 
+def _notified(fstore: Any, factory_id: str, now_ms: int) -> dict[str, list[dict[str, Any]]]:
+    """Slack DM receipts by subject, oldest first, from the newest ledger rows."""
+    rows = fstore.find_events(
+        factory_id,
+        "notify.slack",
+        now_ms - NOTIFIED_WINDOW_S * 1000,
+        limit=NOTIFIED_ROWS,
+        newest_first=True,
+    )
+    return notified_by_subject(reversed(rows))
+
+
 def _harness(
     conv: Conversation, deps: FactoryDeps, memo: dict[tuple[Any, ...], Any]
 ) -> str | None:
@@ -592,11 +606,7 @@ def _load(deps: FactoryDeps, factory_id: str, now: float) -> _Loaded:
         on_trial=len(fstore.list_proposals(factory_id, status="trial", limit=500)),
         def_version=definition.pinned_version(deps, factory_id),
         issues=fstore.list_issues(factory_id, class_="incident", statuses=["open", "acked"]),
-        notified=notified_by_subject(
-            fstore.find_events(
-                factory_id, "notify.slack", now_ms - NOTIFIED_WINDOW_S * 1000, limit=5000
-            )
-        ),
+        notified=_notified(fstore, factory_id, now_ms),
         deadlines=deadlines,
         **_spawn_limits(deps, factory_id, members),
     )

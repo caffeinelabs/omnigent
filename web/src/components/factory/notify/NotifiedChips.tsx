@@ -1,5 +1,5 @@
 /**
- * "Slack · carol 10:04 · reminder 14:04 · ⚠ mia not linked" under a decision
+ * "Slack · carol 10:04 · carol reminder 1d 4h ago · mia ⚠ Messages tab off" under a decision
  * or incident, and the deadline chip ("expires in 6h") of a decision that
  * defaults on its own. Renders nothing when there is neither.
  */
@@ -26,7 +26,7 @@ export function NotifiedLine({
   testId: string;
   className?: string;
 }) {
-  const chips = notifiedChips(notified);
+  const chips = notifiedChips(notified, nowS);
   const deadline = deadlineText(deadlineAt, deadlineEffect, nowS);
   if (chips.length === 0 && deadline == null) return null;
   return (

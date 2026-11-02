@@ -3,15 +3,18 @@
 // incidents, deadline chips ("expires in 6 h"), link-status words, and the
 // Slack app manifest owners paste at api.slack.com/apps.
 
-import type {
-  NotifiedView,
-  NotifyGroup,
-  NotifySettings,
-  PersonNotifySummary,
-  PersonView,
-  SlackLinkStatus,
+import {
+  FactoryApiError,
+  type NotifiedView,
+  type NotifyGroup,
+  type NotifySettings,
+  type PersonNotifySummary,
+  type PersonView,
+  type SlackLinkStatus,
 } from "@/lib/factoryApi";
+import { controlErrorMessage } from "../controls/controlModel";
 import { formatElapsed } from "../factoryFormat";
+import { sentence } from "../start/projectForm";
 
 export interface NotifyGroupInfo {
   id: NotifyGroup;
@@ -38,8 +41,8 @@ export const NOTIFY_GROUPS: readonly NotifyGroupInfo[] = [
   { id: "mentions", label: "@mentions", hint: "Someone mentioned you in the Room" },
   {
     id: "retros",
-    label: "Sentinel retros",
-    hint: "Each retro as it is filed (the digest has the headline)",
+    label: "Retros and findings",
+    hint: "Each retro or finding a lead files (the digest has the headline)",
   },
 ];
 
@@ -61,6 +64,13 @@ export function hhmm(epochS: number): string {
   });
 }
 
+/** `14:04` for a moment today (browser zone), `2d 18h ago` for anything earlier. */
+export function whenText(epochS: number, nowS: number): string {
+  const day = (s: number) => new Date(s * 1000).toDateString();
+  if (day(epochS) === day(nowS) || epochS > nowS) return hhmm(epochS);
+  return `${formatElapsed(nowS - epochS)} ago`;
+}
+
 /** `carol` from `carol@caffeine.ai`. */
 export function shortName(userId: string): string {
   return userId.split("@")[0] || userId;
@@ -74,18 +84,22 @@ export interface NotifiedChip {
 }
 
 /**
- * One chip per DM, oldest first: `Carol 10:04`, `reminder 14:04`; a failed
- * one reads `carol ⚠ messages_tab_disabled`.
+ * One chip per DM, oldest first: `carol 10:04`, `carol reminder 2d 18h ago`
+ * (only today's DMs show a clock time); a failed one reads
+ * `carol ⚠ messages_tab_disabled`.
  */
-export function notifiedChips(notified: readonly NotifiedView[] | undefined): NotifiedChip[] {
+export function notifiedChips(
+  notified: readonly NotifiedView[] | undefined,
+  nowS: number = Date.now() / 1000,
+): NotifiedChip[] {
   return (notified ?? []).map((n, index) => {
     const word = STAGE_WORD[n.stage] ?? n.stage;
     const who = shortName(n.user_id);
     const ok = n.ok !== false;
-    const when = hhmm(n.at);
+    const when = whenText(n.at, nowS);
     const text = ok
       ? `${who}${word ? ` ${word}` : ""} ${when}`
-      : `${who} ⚠ ${n.error ?? "not sent"}`;
+      : `${who} ⚠ ${n.error ? slackErrorWords(n.error) : "not sent"}`;
     const title = `Slack DM to ${n.user_id}${word ? ` (${word})` : ""} at ${new Date(
       n.at * 1000,
     ).toLocaleString()}${ok ? "" : `: ${n.error ?? "not sent"}`}`;
@@ -196,6 +210,85 @@ export function settingsChanges(
     }
   }
   return out;
+}
+
+/** Slack's error codes in plain words (the code stays in tooltips). */
+const SLACK_ERROR_WORDS: Record<string, string> = {
+  messages_tab_disabled: "Messages tab off",
+  token_revoked: "token revoked",
+  token_expired: "token expired",
+  invalid_auth: "token refused",
+  not_authed: "no token",
+  account_inactive: "app account inactive",
+  missing_scope: "a scope is missing",
+  user_not_found: "Slack account gone",
+  users_not_found: "Slack account gone",
+  user_disabled: "account deactivated",
+  channel_not_found: "DM channel gone",
+  cannot_dm_bot: "a bot account",
+  is_archived: "DM channel archived",
+  ratelimited: "rate-limited",
+};
+
+/** `Messages tab off` for `messages_tab_disabled`; an unknown code as is. */
+export function slackErrorWords(code: string): string {
+  return SLACK_ERROR_WORDS[code] ?? code;
+}
+
+export interface TextPart {
+  text: string;
+  /** A ref such as `D-19` or `INC-7`, kept on one line. */
+  ref: boolean;
+  /** Where it starts in the whole text (a stable key). */
+  at: number;
+}
+
+/** `text` cut around refs such as `D-19` or `INC-7`, so a line never breaks inside one. */
+export function refParts(text: string): TextPart[] {
+  const out: TextPart[] = [];
+  let at = 0;
+  text.split(/\b([A-Z]{1,4}-\d+)\b/).forEach((part, index) => {
+    if (part) out.push({ text: part, ref: index % 2 === 1, at });
+    at += part.length;
+  });
+  return out;
+}
+
+/** Codes of the Slack DM routes whose server message is written for the person. */
+const SLACK_DM_CODES: ReadonlySet<string> = new Set([
+  "slack_user_not_found",
+  "wrong_workspace",
+  "deactivated",
+  "is_bot",
+  "invalid_member_id",
+  "invalid_email",
+  "invalid_body",
+  "no_code",
+  "wrong_code",
+  "code_expired",
+  "not_linked",
+  "slack_not_set_up",
+  "slack_app_broken",
+  "missing_scope",
+  "slack_unavailable",
+  "slack_error",
+  "rate_limited",
+  "invalid_token",
+  "not_on_roster",
+]);
+
+/** An error of the Slack DM routes in words: the server's own message for its codes. */
+export function slackErrorText(error: unknown): string {
+  if (
+    error instanceof FactoryApiError &&
+    error.status !== 403 &&
+    error.code != null &&
+    SLACK_DM_CODES.has(error.code) &&
+    error.message
+  ) {
+    return sentence(error.message);
+  }
+  return controlErrorMessage(error);
 }
 
 /** `HH:MM` 00:00–23:59. */

@@ -8,7 +8,7 @@
 import type { NotifyTeamRow } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
 import { TONE_CHIP, formatElapsed } from "../factoryFormat";
-import { LINK_STATUS_TEXT, shortName } from "../notify/notifyModel";
+import { LINK_STATUS_TEXT, shortName, slackErrorWords } from "../notify/notifyModel";
 import { useNotifyTeam } from "../notify/notifyQueries";
 
 const STATUS_TONE = {
@@ -20,13 +20,22 @@ const STATUS_TONE = {
 
 function statusText(row: NotifyTeamRow): string {
   if (row.slack_status === "verified" && !row.enabled) return "linked · DMs off";
-  if (row.slack_status === "error") return `broken · ${row.error ?? "error"}`;
+  if (row.slack_status === "error") return `broken · ${slackErrorWords(row.error ?? "error")}`;
   return LINK_STATUS_TEXT[row.slack_status];
 }
 
+/** `7 of 8 groups · digest · quiet now · last DM 47m ago`. */
+export function teamDetails(row: NotifyTeamRow, nowS: number): string {
+  const parts = [`${row.groups_on.length} of 8 groups`];
+  if (row.digest) parts.push("digest");
+  if (row.quiet_now) parts.push("quiet now");
+  parts.push(
+    row.last_dm_at != null ? `last DM ${formatElapsed(nowS - row.last_dm_at)} ago` : "no DM yet",
+  );
+  return parts.join(" · ");
+}
+
 export function TeamRow({ row, nowS }: { row: NotifyTeamRow; nowS: number }) {
-  const last =
-    row.last_dm_at != null ? `last DM ${formatElapsed(nowS - row.last_dm_at)} ago` : "no DM yet";
   return (
     <li
       data-testid={`notify-team-${row.user_id}`}
@@ -45,14 +54,16 @@ export function TeamRow({ row, nowS }: { row: NotifyTeamRow; nowS: number }) {
       >
         {statusText(row)}
       </span>
-      <span className="ml-auto flex min-w-0 flex-wrap items-center gap-x-2 text-xs text-muted-foreground max-sm:ml-0 max-sm:w-full">
-        <span>
-          {row.groups_on.length} of 8 groups{row.digest ? " · digest" : ""}
-        </span>
-        {row.quiet_now && <span>· quiet now</span>}
-        <span>· {last}</span>
+      <span
+        data-testid={`notify-team-${row.user_id}-details`}
+        className="ml-auto min-w-0 text-xs break-words text-muted-foreground max-sm:ml-0 max-sm:w-full"
+      >
+        {teamDetails(row, nowS)}
         {row.last_error && row.last_error !== row.error && (
-          <span className="text-destructive">· {row.last_error}</span>
+          <span className="text-destructive" title={row.last_error}>
+            {" · "}
+            {slackErrorWords(row.last_error)}
+          </span>
         )}
       </span>
     </li>

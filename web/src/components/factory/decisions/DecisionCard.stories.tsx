@@ -143,12 +143,13 @@ export const SlackNotifiedWithDeadline = card(slackNotifiedProposal());
 
 export const SlackNotifiedWithDeadlineDark = card(slackNotifiedProposal(), { theme: "dark" });
 
-/** The same card in a 390 px phone column. */
+/** The same card filling a phone's width. */
 export const SlackNotifiedWithDeadlinePhone: Story = {
   args: { decision: slackNotifiedProposal() },
+  globals: { viewport: { value: "mobile2" } },
   render: () => (
-    <FactoryStoryFrame mode="inline" width={390}>
-      <div className="p-3">
+    <FactoryStoryFrame mode="viewport">
+      <div className="overflow-y-auto p-3">
         <DecisionCard decision={slackNotifiedProposal()} />
       </div>
     </FactoryStoryFrame>

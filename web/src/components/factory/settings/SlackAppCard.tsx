@@ -15,8 +15,12 @@ import type { SlackAppView, SlackBotTestResponse } from "@/lib/factoryApi";
 import { copyText } from "@/lib/clipboard";
 import { cn } from "@/lib/utils";
 import { useAlertRouting } from "../agents/opsQueries";
-import { controlErrorMessage } from "../controls/controlModel";
-import { SLACK_APP_MANIFEST, validBotToken } from "../notify/notifyModel";
+import {
+  SLACK_APP_MANIFEST,
+  slackErrorText,
+  slackErrorWords,
+  validBotToken,
+} from "../notify/notifyModel";
 import { useSlackBot, useTestSlackBot } from "../notify/notifyQueries";
 import { LEVER_REASON, ReasonGated, useViewerCan } from "../shell/viewerCan";
 
@@ -24,6 +28,11 @@ import { LEVER_REASON, ReasonGated, useViewerCan } from "../shell/viewerCan";
 export function slackAppLabel(app: SlackAppView): string {
   const bot = app.bot ? `@${app.bot}` : "its bot";
   return `${app.team ?? "Slack"} · ${bot}`;
+}
+
+/** Whether a Test answer is all good (the token works and the test DM went or was not due). */
+export function slackTestOk(res: SlackBotTestResponse): boolean {
+  return res.ok && (res.dm === "sent" || res.dm === "not_linked");
 }
 
 /** What a Test answered, in words. */
@@ -34,7 +43,7 @@ export function slackTestText(res: SlackBotTestResponse): string {
   if (res.dm === "not_linked") {
     return `The token works${missing} · link your Slack under Notifications to get a test DM`;
   }
-  return `The token works${missing} · the test DM failed (${res.dm})`;
+  return `The token works${missing} · the test DM failed (${slackErrorWords(res.dm ?? "unknown")})`;
 }
 
 function StateLine({ app, loading }: { app: SlackAppView | null | undefined; loading: boolean }) {
@@ -51,18 +60,23 @@ function StateLine({ app, loading }: { app: SlackAppView | null | undefined; loa
     );
   }
   const broken = app.status !== "ok";
+  const scopes = !broken && app.missing_scopes.length > 0;
   return (
     <>
       <span
         aria-hidden
         className={cn(
           "size-2 shrink-0 self-center rounded-full",
-          broken ? "bg-destructive" : "bg-success",
+          broken ? "bg-destructive" : scopes ? "bg-warning" : "bg-success",
         )}
       />
       <span className="min-w-0 break-words">
-        <span className={broken ? "text-destructive" : "text-success"}>
-          {broken ? `token fails (${app.error ?? "invalid"})` : "connected"}
+        <span className={broken ? "text-destructive" : scopes ? "text-warning" : "text-success"}>
+          {broken
+            ? `token fails (${slackErrorWords(app.error ?? "invalid")})`
+            : scopes
+              ? "connected · missing scopes"
+              : "connected"}
         </span>{" "}
         · {slackAppLabel(app)}
       </span>
@@ -78,7 +92,7 @@ export function SlackAppCard({ factoryId }: { factoryId: string }) {
   const test = useTestSlackBot(factoryId);
   const [token, setToken] = useState("");
   const [failure, setFailure] = useState<string | null>(null);
-  const [tested, setTested] = useState<string | null>(null);
+  const [tested, setTested] = useState<{ text: string; ok: boolean } | null>(null);
   const app = routing.data?.slack_dm;
   const set = app?.configured ?? false;
   const valid = validBotToken(token);
@@ -91,14 +105,14 @@ export function SlackAppCard({ factoryId }: { factoryId: string }) {
         setToken("");
         showToast(res.slack_dm.configured ? "Slack app saved" : "Slack app removed");
       },
-      onError: (error) => setFailure(controlErrorMessage(error)),
+      onError: (error) => setFailure(slackErrorText(error)),
     });
   };
   const runTest = () => {
     setFailure(null);
     test.mutate(undefined, {
-      onSuccess: (res) => setTested(slackTestText(res)),
-      onError: (error) => setFailure(controlErrorMessage(error)),
+      onSuccess: (res) => setTested({ text: slackTestText(res), ok: slackTestOk(res) }),
+      onError: (error) => setFailure(slackErrorText(error)),
     });
   };
   const copyManifest = () => {
@@ -220,8 +234,13 @@ export function SlackAppCard({ factoryId }: { factoryId: string }) {
         </a>
       </div>
       {tested && (
-        <p data-testid="settings-slack-app-tested" className="text-sm text-muted-foreground">
-          {tested}
+        <p
+          data-testid="settings-slack-app-tested"
+          data-ok={tested.ok ? "true" : "false"}
+          role={tested.ok ? undefined : "alert"}
+          className={cn("text-sm", tested.ok ? "text-muted-foreground" : "text-destructive")}
+        >
+          {tested.text}
         </p>
       )}
       {failure && (

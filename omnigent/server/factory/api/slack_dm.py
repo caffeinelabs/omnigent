@@ -27,11 +27,12 @@ import re
 import time
 from collections import deque
 from collections.abc import Awaitable, Callable
-from typing import Any, Final, TypeVar
+from dataclasses import dataclass
+from typing import Any, Final, Literal, TypeVar
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, ValidationError
 
 from omnigent.server.auth import LEVEL_MANAGE
 from omnigent.server.factory import control, issues, people
@@ -55,6 +56,10 @@ CODE_TRIES: Final = 5
 WINDOW_S: Final = 600.0
 LOOKUPS_PER_WINDOW: Final = 5
 TESTS_PER_WINDOW: Final = 5
+CODES_PER_TARGET_HOUR: Final = 3
+"""Code DMs one Slack account gets per hour, whoever asks for them."""
+CODES_PER_DAY: Final = 10
+"""Code DMs one person can have sent per day."""
 LAST_DM_LOOKBACK_S: Final = 30 * 86400
 _MEMBER_RE: Final = re.compile(r"^[UW][A-Z0-9]{2,20}$")
 _EMAIL_RE: Final = re.compile(r"^[^\s@<>|]{1,64}@[^\s@<>|]{1,190}\.[^\s@<>|]{2,}$")
@@ -105,21 +110,40 @@ def _caller(request: Request) -> tuple[FactoryDeps, str | None]:
 _slots: dict[tuple[str, str, str], deque[float]] = {}
 
 
-def _take_slot(factory_id: str, user_id: str, kind: str, limit: int) -> None:
-    """:raises CockpitError: 429 ``rate_limited`` past *limit* per 10 minutes."""
+_SPANS: Final = {WINDOW_S: "10 minutes", 3600.0: "hour", 86400.0: "day"}
+
+
+def _take_slot(
+    factory_id: str,
+    user_id: str,
+    kind: str,
+    limit: int,
+    span_s: float = WINDOW_S,
+    what: str = "",
+) -> None:
+    """:raises CockpitError: 429 ``rate_limited`` past *limit* per *span_s*."""
     now = time.monotonic()
     window = _slots.setdefault((norm_id(factory_id), user_id, kind), deque())
-    while window and now - window[0] >= WINDOW_S:
+    while window and now - window[0] >= span_s:
         window.popleft()
     if len(window) >= limit:
-        retry = int(WINDOW_S - (now - window[0])) + 1
+        retry = int(span_s - (now - window[0])) + 1
+        per = _SPANS.get(span_s, f"{int(span_s)} s")
         raise CockpitError(
             429,
             "rate_limited",
-            f"at most {limit} per 10 minutes; try again in {retry} s",
+            f"at most {limit}{what} per {per}; try again in {_wait(retry)}",
             retry_after=retry,
         )
     window.append(now)
+
+
+def _wait(seconds: int) -> str:
+    if seconds < 120:
+        return f"{seconds} s"
+    if seconds < 7200:
+        return f"{seconds // 60} min"
+    return f"{seconds // 3600} h"
 
 
 def reset() -> None:
@@ -150,11 +174,10 @@ async def _me(
 
 def _last_dm(deps: FactoryDeps, factory_id: str, user_id: str) -> dict[str, Any] | None:
     since = int((time.time() - LAST_DM_LOOKBACK_S) * 1000)
-    rows = deps.factory_store.find_events(factory_id, engine_mod.LEDGER_KIND, since, limit=5000)
-    mine = [e for e in rows if (e.data or {}).get("to_user") == user_id]
-    if not mine:
+    rows = engine_mod.ledger_newest(deps.factory_store, factory_id, since)
+    last = next((e for e in rows if (e.data or {}).get("to_user") == user_id), None)
+    if last is None:
         return None
-    last = mine[-1]
     data = last.data or {}
     return {
         "at": last.ts // 1000,
@@ -218,9 +241,11 @@ async def _client(deps: FactoryDeps, root: Any) -> tuple[SlackClient, dict[str, 
     return SlackClient(token), meta
 
 
-async def _slack_failed(app_state: Any, root: Any, exc: SlackError) -> CockpitError:
+async def _slack_failed(
+    app_state: Any, root: Any, exc: SlackError, client: SlackClient
+) -> CockpitError:
     if exc.kind == "bot":
-        await bot_secrets.mark_invalid(app_state, root.id, exc.code)
+        await bot_secrets.mark_invalid(app_state, root.id, exc.code, token=client.token)
         if exc.code == "missing_scope":
             return CockpitError(
                 409, "missing_scope", "the Slack app lacks a scope; reinstall it from the manifest"
@@ -235,13 +260,14 @@ async def _slack_failed(app_state: Any, root: Any, exc: SlackError) -> CockpitEr
 
 
 def _account(user: SlackUser) -> dict[str, Any]:
+    """The account as the person sees it before proving it is theirs: no email, name or zone."""
     return {
         "user_id": user.id,
         "team_id": user.team_id,
-        "name": user.name,
+        "name": user.handle,
         "handle": user.handle,
-        "email": user.email,
-        "tz": user.tz,
+        "email": None,
+        "tz": None,
     }
 
 
@@ -292,10 +318,13 @@ async def test_slack_bot(request: Request, factory_id: str) -> dict[str, Any] | 
             info = await client.auth_test()
         except SlackError as exc:
             if exc.kind == "bot":
-                await bot_secrets.mark_invalid(request.app.state, root.id, exc.code)
+                await bot_secrets.mark_invalid(request.app.state, root.id, exc.code, token=token)
             return {"ok": False, "error": exc.code, "dm": None}
         meta = await asyncio.to_thread(bot_secrets.bot_meta, deps, root.id) or {}
-        if meta.get("status") != bot_secrets.STATUS_OK:
+        missing = bot_secrets.missing_scopes(info.scopes)
+        # auth.test passes without scopes: a scope failure only clears once none is missing.
+        scope_failure = meta.get("error") == "missing_scope" and missing
+        if meta.get("status") != bot_secrets.STATUS_OK and not scope_failure:
             # The token works again (a transient failure): DMs resume.
             meta.update(status=bot_secrets.STATUS_OK, error=None, scopes=info.scopes)
             await asyncio.to_thread(bot_secrets.write_meta, deps, root.id, meta)
@@ -324,7 +353,7 @@ async def test_slack_bot(request: Request, factory_id: str) -> dict[str, Any] | 
             "ok": True,
             "team": info.team,
             "bot": info.user,
-            "missing_scopes": bot_secrets.missing_scopes(info.scopes),
+            "missing_scopes": missing,
             "dm": dm,
         }
 
@@ -419,7 +448,7 @@ async def link_slack(
         try:
             found = await (client.users_info(member) if member else client.lookup_by_email(email))
         except SlackError as exc:
-            raise await _slack_failed(request.app.state, root, exc) from None
+            raise await _slack_failed(request.app.state, root, exc, client) from None
         if found.team_id and meta.get("team_id") and found.team_id != meta.get("team_id"):
             raise CockpitError(
                 400, "wrong_workspace", "that account is in another Slack workspace"
@@ -431,6 +460,15 @@ async def link_slack(
         account = _account(found)
         if not body.send_code:
             return {"account": account, "status": "found"}
+        _take_slot(
+            root.id,
+            f"slack:{found.id}",
+            "code",
+            CODES_PER_TARGET_HOUR,
+            3600.0,
+            " codes to one Slack account",
+        )
+        _take_slot(root.id, person.user_id, "code", CODES_PER_DAY, 86400.0, " codes")
         code = engine_mod.new_code()
         by = await control.human_label(deps, root.id, person.user_id)
         ctx = await engine_mod.factory_ctx(request.app.state, root)
@@ -439,7 +477,7 @@ async def link_slack(
             channel = await client.open_dm(found.id)
             await client.post_message(channel, text, blocks)
         except SlackError as exc:
-            raise await _slack_failed(request.app.state, root, exc) from None
+            raise await _slack_failed(request.app.state, root, exc, client) from None
         expires = int(time.time()) + CODE_TTL_S
         verify = {
             "hash": _hash(root.id, person.user_id, found.id, code),
@@ -472,6 +510,53 @@ async def link_slack(
     return await _run(run)
 
 
+@dataclass
+class _CodeCheck:
+    result: Literal["ok", "no_code", "expired", "wrong"]
+    tries_left: int = 0
+
+
+def _check_code(
+    deps: FactoryDeps, factory_id: str, user_id: str, code: str, now: int
+) -> _CodeCheck:
+    """
+    Check *code* against the stored pending link and record the outcome (synchronous).
+
+    Everything runs on the stored value under the person's lock, so concurrent
+    guesses each count, and only the account the code was sent to gets verified.
+    """
+    outcome = _CodeCheck("no_code")
+
+    def change(raw: dict[str, Any]) -> dict[str, Any] | None:
+        try:
+            link = prefs_mod.SlackLink.model_validate(raw.get("slack") or {})
+        except ValidationError:
+            return None
+        verify = link.verify
+        if link.status != "pending" or verify is None or not link.user_id:
+            return None
+        if verify.expires_at < now or verify.tries >= CODE_TRIES:
+            outcome.result = "expired"
+            return None
+        given = _hash(factory_id, user_id, link.user_id, code) if _CODE_RE.fullmatch(code) else ""
+        if not hmac.compare_digest(verify.hash.encode(), given.encode()):
+            tries = verify.tries + 1
+            outcome.result, outcome.tries_left = "wrong", max(0, CODE_TRIES - tries)
+            return prefs_mod.set_link(raw, verify={**verify.model_dump(), "tries": tries})
+        outcome.result = "ok"
+        slack = dict(raw.get("slack") or {})
+        slack.update(status="verified", linked_at=now, error=None)
+        slack.pop("verify", None)
+        raw["slack"] = slack
+        if not raw.get("tz") and slack.get("tz"):
+            with contextlib.suppress(ValueError):
+                raw["tz"] = prefs_mod.valid_tz(slack["tz"])
+        return raw
+
+    prefs_mod.update_notify(deps, factory_id, user_id, change)
+    return outcome
+
+
 @router.post(
     "/factories/{factory_id}/notify/me/slack/verify",
     response_model=None,
@@ -484,28 +569,16 @@ async def verify_slack(
     deps, user_id = _caller(request)
 
     async def run() -> dict[str, Any]:
-        root, person, prefs = await _me(deps, user_id, factory_id)
-        link = prefs.slack
-        if link.status != "pending" or link.verify is None or not link.user_id:
-            raise CockpitError(409, "no_code", "send a code first")
+        root, person, _ = await _me(deps, user_id, factory_id)
         code = body.code.strip()
         now = int(time.time())
-        if link.verify.expires_at < now or link.verify.tries >= CODE_TRIES:
+        outcome = await asyncio.to_thread(_check_code, deps, root.id, person.user_id, code, now)
+        if outcome.result == "no_code":
+            raise CockpitError(409, "no_code", "send a code first")
+        if outcome.result == "expired":
             raise CockpitError(410, "code_expired", "that code expired; send a new one")
-        expected = link.verify.hash
-        given = (
-            _hash(root.id, person.user_id, link.user_id, code) if _CODE_RE.fullmatch(code) else ""
-        )
-        if not hmac.compare_digest(expected, given):
-            tries = link.verify.tries + 1
-
-            def _miss(raw: dict[str, Any]) -> dict[str, Any]:
-                verify = dict((raw.get("slack") or {}).get("verify") or {})
-                verify["tries"] = tries
-                return prefs_mod.set_link(raw, verify=verify)
-
-            await asyncio.to_thread(prefs_mod.update_notify, deps, root.id, person.user_id, _miss)
-            left = max(0, CODE_TRIES - tries)
+        if outcome.result == "wrong":
+            left = outcome.tries_left
             raise CockpitError(
                 400,
                 "wrong_code",
@@ -513,18 +586,6 @@ async def verify_slack(
                 field="code",
                 tries_left=left,
             )
-
-        def _verified(raw: dict[str, Any]) -> dict[str, Any]:
-            slack = dict(raw.get("slack") or {})
-            slack.update(status="verified", linked_at=now, error=None)
-            slack.pop("verify", None)
-            raw["slack"] = slack
-            if not raw.get("tz") and slack.get("tz"):
-                with contextlib.suppress(ValueError):
-                    raw["tz"] = prefs_mod.valid_tz(slack["tz"])
-            return raw
-
-        await asyncio.to_thread(prefs_mod.update_notify, deps, root.id, person.user_id, _verified)
         await _welcome(request.app.state, deps, root, person.user_id)
         return await _view(deps, root, person.user_id)
 
@@ -597,7 +658,7 @@ async def test_notify_me(request: Request, factory_id: str) -> dict[str, Any] | 
             await _record_direct(
                 request.app.state, root.id, person.user_id, "test", "failed", exc.code
             )
-            raise await _slack_failed(request.app.state, root, exc) from None
+            raise await _slack_failed(request.app.state, root, exc, client) from None
         await _record_direct(request.app.state, root.id, person.user_id, "test", "sent")
         return {"dm": "sent"}
 
@@ -616,14 +677,17 @@ async def get_notify_team(request: Request, factory_id: str) -> dict[str, Any] |
         def _load() -> dict[str, Any]:
             now = time.time()
             since = int((now - LAST_DM_LOOKBACK_S) * 1000)
-            ledger = deps.factory_store.find_events(
-                root.id, engine_mod.LEDGER_KIND, since, limit=5000
-            )
+            roster = people.list_people(deps, root.id)
+            wanted = {p.user_id for p in roster}
             last: dict[str, Any] = {}
-            for event in ledger:
-                last[(event.data or {}).get("to_user", "")] = event
+            for event in engine_mod.ledger_newest(deps.factory_store, root.id, since):
+                user = (event.data or {}).get("to_user")
+                if isinstance(user, str) and user in wanted:
+                    last.setdefault(user, event)
+                    if len(last) == len(wanted):
+                        break
             rows = []
-            for person in people.list_people(deps, root.id):
+            for person in roster:
                 prefs = prefs_mod.for_person(person)
                 seen = last.get(person.user_id)
                 data = (seen.data or {}) if seen is not None else {}

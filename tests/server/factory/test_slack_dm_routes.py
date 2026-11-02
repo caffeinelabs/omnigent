@@ -3,6 +3,7 @@ link (lookup, code DM, verify, welcome), settings, the team view and redaction."
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
@@ -14,6 +15,7 @@ import pytest_asyncio
 from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
 from omnigent.server.factory import issues
 from omnigent.server.factory.api import slack_dm as slack_routes
+from omnigent.server.factory.slackdm import prefs as prefs_mod
 from omnigent.server.factory.slackdm import secrets
 from tests.server.factory.cockpit_helpers import Cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld
@@ -148,6 +150,57 @@ async def test_a_token_of_another_workspace_resets_every_link(
     assert "user_id" not in slack
 
 
+async def test_removing_the_token_then_adding_another_workspace_resets_links(
+    cockpit: Cockpit, fake_slack: FakeSlack
+) -> None:
+    await install_bot(cockpit)
+    link(cockpit, "carol")
+    await secrets.mark_invalid(cockpit.app.state, cockpit.fid, "token_revoked")
+    assert issues.open_issue_for(cockpit.deps, cockpit.fid, "slack.bot", "factory") is not None
+
+    await secrets.set_bot_token(cockpit.app.state, cockpit.fid, user_id="alice", token=None)
+    assert issues.open_issue_for(cockpit.deps, cockpit.fid, "slack.bot", "factory") is None
+    assert notify_of(cockpit, "carol")["slack"]["status"] == "verified"  # no workspace yet
+
+    await install_bot(cockpit, OTHER_TEAM_TOKEN)
+    assert notify_of(cockpit, "carol")["slack"]["status"] == "unlinked"
+
+
+async def test_an_old_tokens_failure_never_marks_a_new_token(
+    cockpit: Cockpit, fake_slack: FakeSlack
+) -> None:
+    await install_bot(cockpit)
+    await install_bot(cockpit, OTHER_TEAM_TOKEN)  # an owner saved another token meanwhile
+
+    await secrets.mark_invalid(cockpit.app.state, cockpit.fid, "invalid_auth", token=TOKEN)
+
+    meta = secrets.bot_meta(cockpit.deps, cockpit.fid)
+    assert meta is not None and meta["status"] == "ok"
+    assert issues.open_issue_for(cockpit.deps, cockpit.fid, "slack.bot", "factory") is None
+    await secrets.mark_invalid(
+        cockpit.app.state, cockpit.fid, "invalid_auth", token=OTHER_TEAM_TOKEN
+    )
+    assert secrets.bot_meta(cockpit.deps, cockpit.fid)["status"] == "invalid"  # type: ignore[index]
+
+
+async def test_a_test_press_does_not_clear_a_scope_failure_while_scopes_are_missing(
+    cockpit: Cockpit, fake_slack: FakeSlack
+) -> None:
+    route = f"{base(cockpit)}/alerts/slack-bot/test"
+    fake_slack.scopes = "chat:write,users:read"
+    await install_bot(cockpit)
+    await secrets.mark_invalid(cockpit.app.state, cockpit.fid, "missing_scope")
+
+    still = await cockpit.post(route)
+
+    assert still.json()["ok"] is True and still.json()["missing_scopes"]
+    assert secrets.bot_meta(cockpit.deps, cockpit.fid)["status"] == "invalid"  # type: ignore[index]
+    fake_slack.scopes = "chat:write,im:write,users:read,users:read.email"  # reinstalled
+    await cockpit.post(route)
+    assert secrets.bot_meta(cockpit.deps, cockpit.fid)["status"] == "ok"  # type: ignore[index]
+    assert issues.open_issue_for(cockpit.deps, cockpit.fid, "slack.bot", "factory") is None
+
+
 async def test_the_owner_test_checks_the_token_and_dms_a_linked_owner(
     cockpit: Cockpit, fake_slack: FakeSlack
 ) -> None:
@@ -186,14 +239,15 @@ async def test_link_find_send_code_verify_and_welcome(
 
     found = await cockpit.post(f"{me}/slack", {"email": "carol@slack.example"}, user="carol")
     assert found.status_code == 200, found.text
+    # Before the code proves it is theirs: no email, real name or zone of anyone.
     assert found.json() == {
         "account": {
             "user_id": "U0CAROL",
             "team_id": "T0CAFE",
-            "name": "Carol Operator",
+            "name": "carol",
             "handle": "carol",
-            "email": "carol@slack.example",
-            "tz": "UTC",
+            "email": None,
+            "tz": None,
         },
         "status": "found",
     }
@@ -212,6 +266,7 @@ async def test_link_find_send_code_verify_and_welcome(
     pending = await _get(cockpit, me, "carol")
     assert pending.json()["slack"]["status"] == "pending"
     assert "verify" not in pending.text and "hash" not in pending.text
+    assert "carol@slack.example" not in pending.text and "Carol Operator" not in pending.text
 
     wrong = await cockpit.post(f"{me}/slack/verify", {"code": "000000"}, user="carol")
     assert error_code(wrong) == "wrong_code" and wrong.json()["tries_left"] == 4
@@ -220,6 +275,8 @@ async def test_link_find_send_code_verify_and_welcome(
     assert ok.status_code == 200, ok.text
     view = ok.json()
     assert view["slack"]["status"] == "verified" and view["slack"]["user_id"] == "U0CAROL"
+    assert view["slack"]["name"] == "Carol Operator"
+    assert view["slack"]["email"] == "carol@slack.example"
     assert view["settings"]["tz"] == "UTC"  # prefilled from Slack
     welcome = fake_slack.texts_to("U0CAROL")[-1]
     assert "Slack DMs are on" in welcome and "You'll get: decisions" in welcome
@@ -281,6 +338,85 @@ async def test_codes_expire_burn_after_five_tries_and_lookups_are_rate_limited(
     limited = await cockpit.post(route, {"member_id": "U0VIC"}, user="vic")
     assert limited.status_code == 429 and error_code(limited) == "rate_limited"
     assert limited.json()["retry_after"] > 0
+
+
+async def test_code_dms_to_one_account_and_per_person_are_capped(
+    cockpit: Cockpit, fake_slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    await install_bot(cockpit)
+    route = f"{base(cockpit)}/notify/me/slack"
+    sent = []
+    for user in ("vic", "carol", "alice", "vic"):  # several people, one target
+        resp = await cockpit.post(route, {"member_id": "U0CAROL", "send_code": True}, user=user)
+        sent.append(resp.status_code if resp.status_code == 200 else error_code(resp))
+    assert sent == [200, 200, 200, "rate_limited"]
+    assert len(fake_slack.texts_to("U0CAROL")) == slack_routes.CODES_PER_TARGET_HOUR
+
+    slack_routes.reset()
+    monkeypatch.setattr(slack_routes, "LOOKUPS_PER_WINDOW", 100)
+    targets = [f"U0X{n:03d}" for n in range(slack_routes.CODES_PER_DAY + 1)]
+    for n, target in enumerate(targets):
+        fake_slack.add_user(target, f"Person {n}", f"p{n}@x.example")
+    answers = []
+    for target in targets:
+        resp = await cockpit.post(route, {"member_id": target, "send_code": True}, user="vic")
+        answers.append(error_code(resp) if resp.status_code != 200 else 200)
+    assert answers[:-1] == [200] * slack_routes.CODES_PER_DAY
+    assert answers[-1] == "rate_limited"
+
+
+async def test_concurrent_guesses_each_count_against_the_five_tries(
+    cockpit: Cockpit, fake_slack: FakeSlack
+) -> None:
+    await install_bot(cockpit)
+    route = f"{base(cockpit)}/notify/me/slack"
+    await cockpit.post(route, {"member_id": "U0VIC", "send_code": True}, user="vic")
+    code = fake_slack.texts_to("U0VIC")[-1].split("notifications is ")[1][:6]
+    wrong = [f"{n:06d}" for n in range(61) if f"{n:06d}" != code][:60]
+
+    evaluated = 0
+    for burst in (wrong[:30], wrong[30:]):
+        answers = await asyncio.gather(
+            *(cockpit.post(f"{route}/verify", {"code": g}, user="vic") for g in burst)
+        )
+        codes = [error_code(a) for a in answers]
+        assert set(codes) <= {"wrong_code", "code_expired"}, codes
+        evaluated += codes.count("wrong_code")
+
+    assert evaluated == slack_routes.CODE_TRIES
+    assert notify_of(cockpit, "vic")["slack"]["verify"]["tries"] == slack_routes.CODE_TRIES
+    burnt = await cockpit.post(f"{route}/verify", {"code": code}, user="vic")
+    assert error_code(burnt) == "code_expired"
+    assert notify_of(cockpit, "vic")["slack"]["status"] == "pending"
+
+
+async def test_a_code_only_verifies_the_account_it_was_sent_to(
+    cockpit: Cockpit, fake_slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A new pending account lands between the code being sent and typed back."""
+    await install_bot(cockpit)
+    route = f"{base(cockpit)}/notify/me/slack"
+    await cockpit.post(route, {"member_id": "U0VIC", "send_code": True}, user="vic")
+    code = fake_slack.texts_to("U0VIC")[-1].split("notifications is ")[1][:6]
+    real = prefs_mod.update_notify
+    armed = {"swap": True}
+
+    def swap_first(deps, fid, user, change):  # type: ignore[no-untyped-def]
+        if armed.pop("swap", False):
+
+            def _other(raw):  # type: ignore[no-untyped-def]
+                verify = {"hash": "x" * 64, "expires_at": 2**40, "tries": 0, "by": "vic"}
+                return prefs_mod.set_link(raw, user_id="U0CAROL", verify=verify)
+
+            real(deps, fid, user, _other)
+        return real(deps, fid, user, change)
+
+    monkeypatch.setattr(prefs_mod, "update_notify", swap_first)
+    resp = await cockpit.post(f"{route}/verify", {"code": code}, user="vic")
+
+    assert error_code(resp) == "wrong_code"
+    stored = notify_of(cockpit, "vic")["slack"]
+    assert stored["status"] == "pending" and stored["user_id"] == "U0CAROL"
 
 
 async def test_settings_are_your_own_and_validated(

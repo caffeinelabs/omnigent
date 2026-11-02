@@ -394,11 +394,18 @@ digest. The factory never waits on Slack.
    `factory/secrets/{fid}/slack_bot_token` plus non-secret metadata in
    `…/slack_bot_meta.json`. It is Tier 0 (`alerts.slack_bot_token`), set only
    through a human-origin owner route and never returned, logged or put in an
-   event. A token of another workspace unlinks everyone.
+   event. A token of another workspace unlinks everyone linked in another
+   one (also after the old token was removed); removing the token closes the
+   `slack.bot` incident.
 3. Each person links their own account under Settings > Notifications: a
    member ID or a Slack email (omnigent ids are GitHub-login emails and may
    differ), then a 6-digit code DM'd to that account (15 min, 5 tries; the DM
-   names who entered it). A welcome DM lists what is waiting on them now.
+   names who entered it). Find shows only the handle and member ID; the
+   account's name and email show once the code proved it is theirs. The code
+   is checked against the stored pending account under the person's lock, so
+   concurrent guesses each count and only the account the code went to is
+   linked. One Slack account gets at most 3 codes an hour, one person can
+   have 10 sent a day. A welcome DM lists what is waiting on them now.
 
 | Route (`/v1/factory/factories/{fid}/…`) | Who | What |
 |---|---|---|
@@ -424,14 +431,14 @@ opt-in. The People list shows only `notify: {slack, enabled}`.
 | Decision needs you (any open decision, blocking or not) | 30 s after it opens or is routed to you | The claimer; else a person assignee; else operators (owners when no operator is reachable); owners for owner decisions |
 | Reminder | 4 h and 24 h after it reached you | The same |
 | Waiting on the owners | open 24 h | Every owner not already a recipient |
-| Last call | 2 h before a projects proposal expires (72 h) or a trial reverts on its own (2x its window); 15 min before quiet hours when the deadline falls inside them | Recipients and owners |
+| Last call | 2 h before a projects, tuning or rules proposal expires (72 h) or a trial reverts on its own (2x its window); 15 min before quiet hours when the deadline falls inside them | Recipients and owners |
 | PR ready for human merge (`pr.ready`) | at once; dropped if no longer ready, a new head, or a human reviewed it | The project's `human_owner`, else operators and owners |
 | Incident (`issue.opened`, warning or worse by the person's minimum) | at once, at most once per issue and person an hour | `issues.is_mine`: assignee, else operators (owners as fallback); owners also get critical ones |
 | Factory or project paused, stopped, resumed; `factory.warning` | at once | Owners and the project's human owner, never the person who did it |
-| Budget at 80 % / 100 % | at once | Owners and the project's human owner |
+| Budget at 80 % / 100 % (factory or project; a task's own budget stays with its loop) | at once | Owners and the project's human owner |
 | Idle spend | ≥ $5 in 6 h with no `pr.ready`, `pr.merged`, `task.done`, `stage.changed`, `demo.published` or `proposal.applied`; once a day | Owners |
 | Room @mention | at once; dropped once the thread is read | The person mentioned |
-| Sentinel retro (opt-in) | at once | Opted-in people |
+| Retro or finding (opt-in) | at once, named by who filed it, visibility of its target | Opted-in people |
 | Daily digest | at the person's hour, after quiet hours; skipped when nothing happened and nothing waits | Everyone with the digest on |
 
 **Engine.** `background/slack_dm.py` ticks every 30 s
@@ -440,10 +447,13 @@ from the open rows; transitions come from an event cursor (the last 12 h are
 replayed after a restart). Each item is visibility-filtered per person (the
 snapshot's `readable_for`: hidden projects never appear), held 10 min while
 the person is active in the cockpit, held through quiet hours (and re-checked
-when released), grouped into at most one DM a minute and 30 a day (the rest
-waits for the digest). Every delivery is one `notify.slack` event per item and
-person (`{to_user, key, stage, status}`): the dedupe ledger (rebuilt from 30
-days of events, so a server roll never sends twice), the cockpit's
+when released; an event held that way may be up to 26 h old), grouped into at
+most one DM a minute and 30 a day (the rest waits for the digest; last calls
+and critical incidents still go). Every delivery is one `notify.slack` event
+per item and person (`{to_user, key, stage, status}`): the dedupe ledger
+(rebuilt from every row of the last 30 days, read in pages, and checked in the
+store again right before each post, so a server roll or two processes during a
+rollout never send twice; rows are pruned after 35 days), the cockpit's
 "Slack · Luka 10:04" chips on decisions and incidents (`DecisionView.notified`,
 `IssueView.notified`) and the Activity "Notifications" filter. An item whose
 mark falls before the person linked is not sent (the welcome DM listed it).
@@ -457,7 +467,8 @@ failures: retryable ones (network, 5xx, 429 with `Retry-After`) back off 5 s,
 `missing_scope`, …) stops the factory's DMs and opens the `slack.bot` incident
 for owners until a working token is saved; a person error (`user_not_found`,
 `messages_tab_disabled`, …) marks their link; refused blocks are retried once
-as plain text. Assumes one server replica: the ledger is not an atomic claim.
+as plain text. A failure of a token that was replaced meanwhile never marks
+the new one. Assumes one server replica: the ledger is not an atomic claim.
 
 ### Base branches & integration env
 

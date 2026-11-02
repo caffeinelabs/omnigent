@@ -1,5 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { fireEvent, userEvent, within } from "storybook/test";
+import { Toaster } from "@/components/ui/sonner";
 import { SettingsPage } from "@/pages/factory/SettingsPage";
 import type { NotifyMeView, ViewerRole } from "@/lib/factoryApi";
 import { CockpitStory, type CockpitStoryOptions } from "../board/boardStoryKit";
@@ -21,6 +22,13 @@ interface NotifyStoryOptions extends CockpitStoryOptions {
   me?: NotifyMeView | { error: number; message?: string; code?: string };
   app?: SlackAppState;
   path?: string;
+  /** Mount the toaster, for feedback that only shows as a toast ("Test DM sent"). */
+  toasts?: boolean;
+}
+
+/** A route answering like a refused Slack DM call. */
+function refused(status: number, code: string, message: string) {
+  return { body: { error: { code, message } }, status };
 }
 
 function page(options: NotifyStoryOptions = {}, play?: Story["play"]): Story {
@@ -30,6 +38,7 @@ function page(options: NotifyStoryOptions = {}, play?: Story["play"]): Story {
     app = "ok",
     path = "/settings/notifications",
     routes,
+    toasts = false,
     ...rest
   } = options;
   const meRoute =
@@ -41,32 +50,36 @@ function page(options: NotifyStoryOptions = {}, play?: Story["play"]): Story {
       : { body: me ?? notifyMe({ app }) };
   return {
     render: () => (
-      <CockpitStory
-        snapshot={round3Snapshot(role)}
-        events={round3Events()}
-        path={path}
-        routes={{
-          ...learnRoutes(FID),
-          [`${BASE}/alerts/routing`]: { body: routingWith(app) },
-          [`${BASE}/notify/me`]: meRoute,
-          [`${BASE}/notify/team`]: { body: notifyTeam() },
-          [`${BASE}/notify/me/slack`]: {
-            body: {
-              account: {
-                user_id: "U04LUKA9Z",
-                team_id: "T0CAFE",
-                name: "Luka Rumora",
-                handle: "luka",
-                email: "luka@caffeine.ai",
-                tz: "Europe/Zagreb",
+      <>
+        <CockpitStory
+          snapshot={round3Snapshot(role)}
+          events={round3Events()}
+          path={path}
+          routes={{
+            ...learnRoutes(FID),
+            [`${BASE}/alerts/routing`]: { body: routingWith(app) },
+            [`${BASE}/notify/me`]: meRoute,
+            [`${BASE}/notify/team`]: { body: notifyTeam() },
+            [`${BASE}/notify/me/slack`]: {
+              body: {
+                // Before the code proves it is his: no real name, email or zone.
+                account: {
+                  user_id: "U04LUKA9Z",
+                  team_id: "T0CAFE",
+                  name: "luka",
+                  handle: "luka",
+                  email: null,
+                  tz: null,
+                },
+                status: "found",
               },
-              status: "found",
             },
-          },
-          ...routes,
-        }}
-        {...rest}
-      />
+            ...routes,
+          }}
+          {...rest}
+        />
+        {toasts && <Toaster position="bottom-right" />}
+      </>
     ),
     play,
   };
@@ -119,6 +132,41 @@ export const FoundDark = page({ ...linked("unlinked"), theme: "dark" }, Found.pl
 
 export const FoundMobile = phone(page(linked("unlinked"), Found.play));
 
+function findNotFound(): NotifyStoryOptions {
+  return {
+    ...linked("unlinked"),
+    routes: {
+      [`${BASE}/notify/me/slack`]: refused(
+        404,
+        "slack_user_not_found",
+        "Slack has no such account here",
+      ),
+    },
+  };
+}
+
+/** Slack has no account with that email (it differs from the sign-in one): say so. */
+export const FindNotFound = page(findNotFound(), async ({ canvasElement }) => {
+  const body = within(canvasElement.ownerDocument.body);
+  await body.findByTestId("notify-team-count", undefined, { timeout: 5000 });
+  fireEvent.change(await body.findByTestId("notify-find-input"), {
+    target: { value: "luka@caffeine.ai" },
+  });
+  fireEvent.click(await body.findByTestId("notify-find"));
+  await body.findByTestId("notify-link-error");
+});
+
+export const FindNotFoundMobile = phone(page(findNotFound(), FindNotFound.play));
+
+/** What was typed is neither a member ID nor an email: Find stays off and says why. */
+export const FindInvalid = page(linked("unlinked"), async ({ canvasElement }) => {
+  const body = within(canvasElement.ownerDocument.body);
+  fireEvent.change(await body.findByTestId("notify-find-input"), {
+    target: { value: "not an id" },
+  });
+  await body.findByTestId("notify-find-invalid");
+});
+
 /** The code DM went out: type it back. */
 export const PendingCode = page(linked("pending"));
 
@@ -134,6 +182,52 @@ export const VerifiedDark = page({ ...linked("verified"), theme: "dark" });
 export const VerifiedMobile = phone(page(linked("verified")));
 
 export const VerifiedMobileDark = phone(page({ ...linked("verified"), theme: "dark" }));
+
+async function pressTestDm({ canvasElement }: { canvasElement: HTMLElement }) {
+  const body = within(canvasElement.ownerDocument.body);
+  await body.findByTestId("notify-team-count", undefined, { timeout: 5000 });
+  fireEvent.click(await body.findByTestId("notify-test"));
+}
+
+/** Send test DM went through: the toast says so. */
+export const VerifiedTestSent = page(
+  {
+    ...linked("verified"),
+    toasts: true,
+    routes: { [`${BASE}/notify/me/test`]: { body: { dm: "sent" } } },
+  },
+  async (context) => {
+    await pressTestDm(context);
+    await within(context.canvasElement.ownerDocument.body).findByTestId("toast");
+  },
+);
+
+export const VerifiedTestSentMobile = phone(
+  page(
+    {
+      ...linked("verified"),
+      toasts: true,
+      routes: { [`${BASE}/notify/me/test`]: { body: { dm: "sent" } } },
+    },
+    VerifiedTestSent.play,
+  ),
+);
+
+/** Slack refused the test DM: the reason shows under the account, in red. */
+export const VerifiedTestFailed = page(
+  {
+    ...linked("verified"),
+    toasts: true,
+    routes: {
+      [`${BASE}/notify/me/test`]: refused(
+        502,
+        "slack_error",
+        "Slack refused it (messages_tab_disabled)",
+      ),
+    },
+  },
+  pressTestDm,
+);
 
 /** Slack stopped reaching Luka (messages tab off): link again. */
 export const LinkBroken = page(linked("error"));
@@ -202,6 +296,59 @@ export const AlertsAppInvalidDark = page({
 });
 
 export const AlertsAppInvalidMobile = phone(page({ path: "/settings/alerts", app: "invalid" }));
+
+async function pressAppTest({ canvasElement }: { canvasElement: HTMLElement }) {
+  const body = within(canvasElement.ownerDocument.body);
+  fireEvent.click(await body.findByTestId("settings-slack-app-test"));
+  await body.findByTestId("settings-slack-app-tested");
+}
+
+/** Test with a token Slack refuses: the answer is red, not muted. */
+export const AlertsAppTestRefused = page(
+  {
+    path: "/settings/alerts",
+    app: "ok",
+    routes: {
+      [`${BASE}/alerts/slack-bot/test`]: { body: { ok: false, error: "invalid_auth", dm: null } },
+    },
+  },
+  pressAppTest,
+);
+
+export const AlertsAppTestRefusedMobile = phone(
+  page(
+    {
+      path: "/settings/alerts",
+      app: "ok",
+      routes: {
+        [`${BASE}/alerts/slack-bot/test`]: {
+          body: { ok: false, error: "invalid_auth", dm: null },
+        },
+      },
+    },
+    pressAppTest,
+  ),
+);
+
+/** Test passed and the owner's test DM is on its way. */
+export const AlertsAppTestSent = page(
+  {
+    path: "/settings/alerts",
+    app: "ok",
+    routes: {
+      [`${BASE}/alerts/slack-bot/test`]: {
+        body: {
+          ok: true,
+          team: "Caffeine Labs",
+          bot: "omnigent-factory",
+          missing_scopes: [],
+          dm: "sent",
+        },
+      },
+    },
+  },
+  pressAppTest,
+);
 
 function peopleWithSlack() {
   const people = round3People("creator");

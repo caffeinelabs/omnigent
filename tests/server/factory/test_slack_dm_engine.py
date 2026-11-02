@@ -314,6 +314,25 @@ def test_deadlines_for_expiry_grace_and_trials() -> None:
         "C-4 reverts on its own",
     )
     assert rules.deadline_for(d, None, None) is None
+    for kind in ("tuning", "rules"):
+        for status in ("pending", "awaiting_cosign"):
+            tuning = FactoryProposal(
+                id="p",
+                factory_id="f",
+                number=5,
+                kind=kind,
+                title="t",
+                status=status,
+                created_at=1000,
+            )
+            assert rules.deadline_for(d, tuning, "confirm") == (
+                1000 + 72 * 3600,
+                "expires and is not applied",
+            )
+    applied = FactoryProposal(
+        id="p", factory_id="f", number=5, kind="tuning", title="t", status="applied"
+    )
+    assert rules.deadline_for(d, applied, None) is None
 
 
 async def test_the_last_call_reaches_recipients_and_owners_two_hours_before(
@@ -336,6 +355,37 @@ async def test_the_last_call_reaches_recipients_and_owners_two_hours_before(
     for text in texts:
         assert "Last call: D-1" in text
         assert "If nobody answers by" in text and "(UTC), expires and nothing is started" in text
+
+
+async def test_a_tuning_proposal_gets_its_deadline_and_a_last_call(
+    rig: Rig, cockpit: Cockpit, fake_slack: FakeSlack
+) -> None:
+    link(cockpit, "alice", tz="UTC", quiet={"enabled": False})
+    proposal = _proposal(cockpit, kind="tuning")
+    _decision(
+        cockpit,
+        assignee="owners",
+        source="proposal",
+        subject=f"proposal:C-{proposal.number}",
+    )
+    snapshot.reset_cache()
+    body = (
+        await cockpit.client.get(
+            f"/v1/factory/factories/{cockpit.fid}", headers={"X-Test-User": "alice"}
+        )
+    ).json()
+    [decision] = [d for d in body["decisions"] if d["ref"] == "D-1"]
+    assert decision["deadline_at"] == proposal.created_at + 72 * 3600
+    assert decision["deadline_effect"] == "expires and is not applied"
+    for step in (0, 31, 4 * H, 31, 20 * H, 31, 61):
+        await rig.tick(step)
+    assert not any("Last call" in p["text"] for p in fake_slack.posts)
+
+    await rig.tick(proposal.created_at + 70 * H + 60 - rig.clock.now)
+    await rig.tick(31)
+
+    last = fake_slack.texts_to("U0ALICE")[-1]
+    assert "Last call: D-1" in last and "(UTC), expires and is not applied" in last
 
 
 def test_a_last_call_moves_before_quiet_hours() -> None:
@@ -487,6 +537,34 @@ async def test_the_daily_cap_mutes_the_rest_until_the_digest(
     assert _ledger(cockpit)[-1][3] == "muted"
 
 
+async def test_the_daily_cap_still_lets_last_calls_and_criticals_through(
+    rig: Rig, cockpit: Cockpit, fake_slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(engine_mod, "DAILY_CAP", 1)
+    link(cockpit, "carol", tz="UTC", quiet={"enabled": False})
+    for n in range(2):
+        _decision(cockpit, f"Q{n}", key=f"k{n}")
+        await rig.tick()
+        await rig.tick(61)
+    assert len(fake_slack.texts_to("U0CAROL")) == 1
+    assert _ledger(cockpit)[-1][3] == "muted"
+
+    await issues.raise_issue(
+        cockpit.app.state,
+        cockpit.fid,
+        rule="agent.quiet",
+        target=f"member:{cockpit.world.id('pl')}",
+        summary="PL silent",
+        severity="critical",
+        project="api-version",
+    )
+    await rig.tick(61)
+    await rig.tick(31)
+
+    texts = fake_slack.texts_to("U0CAROL")
+    assert len(texts) == 2 and "INC-1 critical" in texts[1]
+
+
 async def test_a_rate_limit_backs_off_with_retry_after(
     rig: Rig, cockpit: Cockpit, fake_slack: FakeSlack
 ) -> None:
@@ -564,6 +642,84 @@ async def test_a_restart_never_sends_twice(
     assert len(keys) == 2
 
 
+async def test_a_restart_reads_the_whole_ledger_however_long(
+    rig: Rig, cockpit: Cockpit, fake_slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.entities.factory import EventDraft
+
+    monkeypatch.setattr(engine_mod, "LEDGER_PAGE", 20)
+    old = int((time.time() - 10 * 86400) * 1000)
+    for i in range(70):  # older receipts than D-1's: several pages of them
+        cockpit.store.append_event(
+            EventDraft(
+                factory_id=cockpit.fid,
+                kind="notify.slack",
+                summary="old",
+                subject=f"decision:D-old{i}",
+                data={"to_user": "alice", "key": f"decision:old{i}:new", "status": "sent"},
+                ts=old + i,
+            )
+        )
+    link(cockpit, "carol")
+    decision = _decision(cockpit)
+    await rig.tick()
+    await rig.tick(31)
+    assert len(fake_slack.dms_to("U0CAROL")) == 1
+
+    rig.restart()
+    await rig.engine.load()
+    assert rig.engine.in_ledger(cockpit.fid, "carol", f"decision:{decision.id}:new")
+    assert sum(1 for k in rig.engine.ledger if k[1] == "alice") == 70
+
+    for step in (120, 31, 31):
+        await rig.tick(step)
+    assert len(fake_slack.dms_to("U0CAROL")) == 1
+
+
+def test_ledger_pages_step_over_rows_sharing_a_millisecond(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from omnigent.entities.factory import EventDraft
+
+    monkeypatch.setattr(engine_mod, "LEDGER_PAGE", 4)
+    stamps = [1000, 1001, 1002, 1003, 1003, 1003, 1004, 1005, 1005]
+    for i, ts in enumerate(stamps):
+        cockpit.store.append_event(
+            EventDraft(
+                factory_id=cockpit.fid,
+                kind="notify.slack",
+                summary=str(i),
+                data={"to_user": "carol", "key": f"k{i}"},
+                ts=ts,
+            )
+        )
+
+    rows = engine_mod.ledger_rows(cockpit.store, None, 0)
+    assert sorted(r.summary for r in rows) == [str(i) for i in range(len(stamps))]
+    newest = list(engine_mod.ledger_newest(cockpit.store, cockpit.fid, 1002))
+    assert [r.ts for r in newest] == [1005, 1005, 1004, 1003, 1003, 1003, 1002]
+
+
+async def test_a_second_process_does_not_resend_what_the_first_sent(
+    rig: Rig, cockpit: Cockpit, fake_slack: FakeSlack
+) -> None:
+    """During a rollout two server processes run engines over the same store."""
+    link(cockpit, "carol")
+    other = Engine(cockpit.app.state, clock=rig.clock, cost_fn=rig.engine.cost_fn)
+    other.pace_s = 0
+    await other.load()
+    decision = _decision(cockpit)
+
+    await rig.tick()
+    await other.tick()
+    await rig.tick(31)
+    assert len(fake_slack.dms_to("U0CAROL")) == 1
+    await other.tick()
+
+    assert len(fake_slack.dms_to("U0CAROL")) == 1
+    assert other.in_ledger(cockpit.fid, "carol", f"decision:{decision.id}:new")
+
+
 async def test_a_dead_token_stops_every_dm_and_raises_the_incident(
     rig: Rig, cockpit: Cockpit, fake_slack: FakeSlack
 ) -> None:
@@ -634,6 +790,7 @@ async def test_a_ready_pr_goes_to_the_projects_human_owner(
         ready=True,
         ready_at=int(time.time()),
         head_sha="b" * 40,
+        preview={"state": "ready", "urls": {"app": "https://p9781.env.omnigent.test"}},
     )
     stale, _ = cockpit.store.upsert_pr(
         cockpit.fid, "caffeinelabs/app", 9782, project_slug="api-version", ready=True
@@ -657,6 +814,7 @@ async def test_a_ready_pr_goes_to_the_projects_human_owner(
     assert "PR #9781 ready for human merge" in text and "you own project api-version" in text
     assert "9782" not in text  # no longer ready when it was due
     assert fake_slack.dms_to("U0ALICE") == []
+    assert f"<https://{DOMAIN}/v1/factory/prs/{pr.id}/preview|preview>" in text
 
 
 async def test_pauses_budgets_and_warnings_reach_owners_but_not_the_actor(
@@ -697,6 +855,59 @@ async def test_pauses_budgets_and_warnings_reach_owners_but_not_the_actor(
     assert "Budget exceeded" in alice and "Budget exceeded" not in carol  # operators: no budgets
 
 
+async def test_task_budgets_stay_with_their_loop(
+    rig: Rig, cockpit: Cockpit, fake_slack: FakeSlack
+) -> None:
+    link(cockpit, "alice")
+    await rig.tick()
+    for scope, summary in (("task", "implement #42: $8.00 of $10.00"), ("project", "#api 80 %")):
+        await events.emit(
+            cockpit.app.state,
+            cockpit.fid,
+            "budget.near",
+            severity="notice",
+            project="api-version",
+            subject=f"budget:{scope}",
+            summary=summary,
+            data={"scope": scope},
+        )
+
+    await rig.tick(1)
+    await rig.tick(31)
+
+    [alice] = fake_slack.texts_to("U0ALICE")
+    assert "#api 80 %" in alice and "implement #42" not in alice
+
+
+async def test_an_event_held_through_long_quiet_hours_still_arrives(
+    rig: Rig, cockpit: Cockpit, fake_slack: FakeSlack
+) -> None:
+    hour = datetime.fromtimestamp(rig.clock.now, tz=UTC).hour
+    quiet = {
+        "enabled": True,
+        "start": f"{(hour - 1) % 24:02d}:00",
+        "end": f"{(hour + 14) % 24:02d}:00",
+    }
+    link(cockpit, "alice", tz="UTC", quiet=quiet)
+    await rig.tick()
+    await events.emit(
+        cockpit.app.state,
+        cockpit.fid,
+        "control.stop",
+        subject="factory",
+        summary="stopped",
+        data={"by": "carol (operator)", "target": "factory", "action": "stop"},
+    )
+    await rig.tick(1)
+    await rig.tick(31)
+    assert fake_slack.posts == []
+
+    await rig.tick(14 * H)
+
+    [alice] = fake_slack.texts_to("U0ALICE")
+    assert "While you were away" in alice and "The factory stopped" in alice
+
+
 async def test_a_mention_is_dropped_once_the_thread_was_read(
     rig: Rig, cockpit: Cockpit, fake_slack: FakeSlack
 ) -> None:
@@ -724,6 +935,46 @@ async def test_a_mention_is_dropped_once_the_thread_was_read(
 
     [text] = fake_slack.texts_to("U0CAROL")
     assert "look #6" in text and "look #5" not in text
+
+
+async def test_a_retro_names_who_filed_it_and_keeps_its_target(
+    rig: Rig, cockpit: Cockpit, fake_slack: FakeSlack
+) -> None:
+    link(cockpit, "alice", events={"retros": True})
+    await rig.tick()
+    issue = await issues.raise_issue(
+        cockpit.app.state,
+        cockpit.fid,
+        rule="retro",
+        target=f"member:{cockpit.world.id('pl')}",
+        summary="the PL retried a red build five times",
+        class_="finding",
+        severity="info",
+        project="api-version",
+    )
+    assert issue is not None
+    await events.emit(
+        cockpit.app.state,
+        cockpit.fid,
+        "retro.added",
+        project="api-version",
+        subject=f"issue:{issue.ref}",
+        summary="Lead B filed a finding on api-version: retried a red build",
+        data={"issue_id": issue.id, "class": "finding", "by": cockpit.world.id("lead_b")},
+    )
+
+    await rig.tick(1)
+    await rig.tick(31)
+
+    [alice] = fake_slack.texts_to("U0ALICE")
+    assert "Sentinel filed a finding" in alice
+    ctx = await engine_mod.factory_ctx(cockpit.app.state, cockpit.world.get("lead_a"))
+    [(_, item)] = [
+        pair
+        for pair in rules.retro_items(ctx, cockpit.events("retro.added")[-1], issue)
+        if pair[0] == "alice"
+    ]
+    assert item.target == issue.target
 
 
 async def test_idle_spend_tells_the_owners_once_a_day(

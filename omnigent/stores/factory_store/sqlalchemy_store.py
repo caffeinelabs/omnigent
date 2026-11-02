@@ -1377,6 +1377,7 @@ class SqlAlchemyFactoryStore(FactoryStore):
         subject: str | None = None,
         *,
         limit: int = 1000,
+        newest_first: bool = False,
     ) -> builtins.list[FactoryEvent]:
         stmt = select(SqlFactoryEvent).where(
             SqlFactoryEvent.workspace_id == current_workspace_id(),
@@ -1387,7 +1388,11 @@ class SqlAlchemyFactoryStore(FactoryStore):
             stmt = stmt.where(SqlFactoryEvent.factory_id == norm_id(factory_id))
         if subject is not None:
             stmt = stmt.where(SqlFactoryEvent.subject == subject)
-        stmt = stmt.order_by(SqlFactoryEvent.ts, SqlFactoryEvent.id).limit(limit)
+        if newest_first:
+            stmt = stmt.order_by(SqlFactoryEvent.ts.desc(), SqlFactoryEvent.id.desc())
+        else:
+            stmt = stmt.order_by(SqlFactoryEvent.ts, SqlFactoryEvent.id)
+        stmt = stmt.limit(limit)
         with self._session("find_factory_events") as session:
             return [_event(r) for r in session.execute(stmt).scalars().all()]
 

@@ -197,6 +197,11 @@ class SlackClient:
     def __init__(self, token: str) -> None:
         self._token = token
 
+    @property
+    def token(self) -> str:
+        """:returns: The token it calls with (never logged)."""
+        return self._token
+
     async def call(
         self,
         method: str,

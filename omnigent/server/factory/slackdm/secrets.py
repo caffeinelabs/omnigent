@@ -179,7 +179,7 @@ async def set_bot_token(
     """
     Set (after ``auth.test``) or remove the factory's bot token (MANAGE on the root).
 
-    A token of a different workspace resets every person's Slack link.
+    A token of a different workspace resets every Slack link made in another one.
 
     :returns: The routing view's ``slack_dm`` block.
     :raises CockpitError: 400 ``invalid_token``; 409 without a secret store.
@@ -202,6 +202,9 @@ async def set_bot_token(
             if await asyncio.to_thread(store.exists, key):
                 await asyncio.to_thread(store.delete, key)
         reset()
+        await issues.clear_issue(
+            app_state, root.id, INCIDENT_RULE, INCIDENT_TARGET, reason="the Slack app was removed"
+        )
         await _emit_routing(
             app_state, root.id, f"{by} removed the Slack app", by=by, by_kind="human"
         )
@@ -214,7 +217,6 @@ async def set_bot_token(
         raise CockpitError(
             400, "invalid_token", f"Slack refused the token ({exc.code})", field="token"
         ) from None
-    before = await asyncio.to_thread(bot_meta, deps, root.id)
     now = int(time.time())
     meta = {
         "team_id": info.team_id,
@@ -232,8 +234,10 @@ async def set_bot_token(
     await asyncio.to_thread(store.put, token_key, token.encode())
     await asyncio.to_thread(write_meta, deps, root.id, meta)
     _token_cache[fid] = (time.monotonic(), token)
-    if before is not None and before.get("team_id") and before.get("team_id") != info.team_id:
-        await asyncio.to_thread(prefs.reset_links, deps, root.id, "Slack workspace changed")
+    # Links made in another workspace (also one whose token was removed since) go.
+    await asyncio.to_thread(
+        prefs.reset_links, deps, root.id, "Slack workspace changed", keep_team=info.team_id
+    )
     await issues.clear_issue(
         app_state, root.id, INCIDENT_RULE, INCIDENT_TARGET, reason="a working Slack token"
     )
@@ -250,14 +254,21 @@ async def set_bot_token(
     return meta_view(meta)
 
 
-async def mark_invalid(app_state: Any, factory_id: str, code: str) -> None:
+async def mark_invalid(
+    app_state: Any, factory_id: str, code: str, *, token: str | None = None
+) -> None:
     """
     The token stopped working (a ``bot`` error): stop sending and tell the owners.
 
     Raises the ``slack.bot`` incident (warning, owners); saving a working token
     resolves it.
+
+    :param token: The token that failed; when an owner saved another one since,
+        nothing is marked (the new token is not judged by the old one's failure).
     """
     deps = factory_deps(app_state)
+    if token is not None and await asyncio.to_thread(bot_token, deps, factory_id) != token:
+        return
     meta = await asyncio.to_thread(bot_meta, deps, factory_id) or {}
     if meta.get("status") == STATUS_INVALID and meta.get("error") == code:
         return

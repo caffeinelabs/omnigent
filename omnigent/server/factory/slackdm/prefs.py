@@ -275,16 +275,20 @@ def settings_view(prefs: NotifyPrefs) -> dict[str, Any]:
 
 
 def link_view(prefs: NotifyPrefs) -> dict[str, Any]:
-    """:returns: The person's own link (their member id, never the hash or DM channel)."""
+    """
+    :returns: The person's own link (their member id, never the hash or DM channel);
+        the account's name and email only once they proved it is theirs.
+    """
     link = prefs.slack
+    proven = link.status in ("verified", "error")
     return {
         "status": link.status,
         "enabled": link.enabled,
         "user_id": link.user_id,
         "team_id": link.team_id,
-        "name": link.name,
+        "name": link.name if proven else link.handle,
         "handle": link.handle,
-        "email": link.email,
+        "email": link.email if proven else None,
         "linked_at": link.linked_at,
         "error": link.error,
         "code_expires_at": link.verify.expires_at if link.verify is not None else None,
@@ -473,12 +477,21 @@ def unlinked(raw: dict[str, Any], reason: str | None = None) -> dict[str, Any]:
     return raw
 
 
-def reset_links(deps: FactoryDeps, factory_id: str, reason: str) -> int:
-    """Unlink everyone (the bot token moved to another workspace). :returns: How many."""
+def reset_links(
+    deps: FactoryDeps, factory_id: str, reason: str, *, keep_team: str | None = None
+) -> int:
+    """
+    Unlink everyone (the bot token moved to another workspace).
+
+    :param keep_team: Keep the links made in this workspace.
+    :returns: How many were unlinked.
+    """
     count = 0
     for person in deps.factory_store.list_people(factory_id):
-        status = ((person.notify or {}).get("slack") or {}).get("status")
-        if status in (None, "unlinked"):
+        slack = (person.notify or {}).get("slack") or {}
+        if slack.get("status") in (None, "unlinked"):
+            continue
+        if keep_team and slack.get("team_id") == keep_team:
             continue
         update_notify(deps, factory_id, person.user_id, lambda raw: unlinked(raw, reason))
         count += 1

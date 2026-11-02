@@ -10,13 +10,15 @@ One :meth:`Engine.tick` (every 30 s):
 4. Queue with a 30 s gather; hold 10 min while they are active in the cockpit;
    hold until quiet hours end (critical incidents may break through).
 5. Send at most one DM per person per minute (everything due is grouped),
-   at most 30 a day; re-check relevance first; record one ``notify.slack``
-   event per item and recipient: the ledger that keeps a restart from
-   sending anything twice.
+   at most 30 a day (last calls and critical incidents still go); re-check
+   relevance and the stored ledger first; record one ``notify.slack`` event
+   per item and recipient: the ledger that keeps a restart from sending
+   anything twice.
 
 Queues, the cursor, counters and spend samples live in memory; the ledger is
-rebuilt from 30 days of ``notify.slack`` events and edge events are replayed
-from the last 12 hours, so a server roll loses or repeats nothing.
+rebuilt from every ``notify.slack`` event of the last 30 days (read in pages)
+and edge events are replayed from the last 12 hours, so a server roll loses or
+repeats nothing.
 """
 
 from __future__ import annotations
@@ -26,9 +28,9 @@ import logging
 import secrets as pysecrets
 import time
 from collections import deque
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Awaitable, Callable, Iterator, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.factory import LABEL_NAME, LABEL_STATE, STATE_DONE
 from omnigent.server.factory import events
@@ -40,6 +42,9 @@ from omnigent.server.factory.slackdm import render, rules
 from omnigent.server.factory.slackdm import secrets as bot_secrets
 from omnigent.server.factory.slackdm.client import SlackClient, SlackError
 from omnigent.stores.factory_store import norm_id
+
+if TYPE_CHECKING:
+    from omnigent.entities.factory import FactoryEvent
 
 _logger = logging.getLogger(__name__)
 
@@ -55,6 +60,8 @@ REPLAY_S: Final = rules.EDGE_MAX_AGE_S
 EVENTS_PER_TICK: Final = 1000
 IDLE_SAMPLE_S: Final = 300.0
 DIGEST_LATE_S: Final = 12 * 3600
+LEDGER_PAGE: Final = 5000
+RECHECK_ROWS: Final = 1000
 PACE_S: Final = 1.0
 """At most one post per second and token (Slack allows about one per channel and second)."""
 _SEVERITY_RANK: Final = {"info": 0, "notice": 1, "warning": 2, "critical": 3}
@@ -229,6 +236,47 @@ def new_code() -> str:
     return f"{pysecrets.randbelow(1_000_000):06d}"
 
 
+def ledger_rows(store: Any, factory_id: str | None, since_ms: int) -> list[FactoryEvent]:
+    """
+    Every ``notify.slack`` row since *since_ms*, oldest first (synchronous).
+
+    Read in pages, so however many rows there are, none is cut off.
+    """
+    page = LEDGER_PAGE
+    out: list[FactoryEvent] = []
+    cursor = since_ms
+    edge: set[str] = set()
+    while True:
+        rows = store.find_events(factory_id, LEDGER_KIND, cursor, limit=page)
+        out += [r for r in rows if r.id not in edge]
+        if len(rows) < page:
+            return out
+        last = rows[-1].ts
+        if last == cursor:
+            # A whole page within one millisecond: step past it.
+            cursor, edge = last + 1, set()
+        else:
+            cursor, edge = last, {r.id for r in rows if r.ts == last}
+
+
+def ledger_newest(store: Any, factory_id: str, since_ms: int) -> Iterator[FactoryEvent]:
+    """One factory's ``notify.slack`` rows since *since_ms*, newest first (paged, synchronous)."""
+    page = LEDGER_PAGE
+    before_ms: int | None = None
+    before_id: str | None = None
+    while True:
+        rows = store.list_events(
+            factory_id, before_ms, page, kinds=[LEDGER_KIND], before_id=before_id
+        )
+        for row in rows:
+            if row.ts < since_ms:
+                return
+            yield row
+        if len(rows) < page:
+            return
+        before_ms, before_id = rows[-1].ts, rows[-1].id
+
+
 # ── The engine ─────────────────────────────────────────────────
 
 
@@ -291,9 +339,7 @@ class Engine:
             return
         now = self.clock()
         since = int((now - LEDGER_DAYS * 86400) * 1000)
-        rows = await asyncio.to_thread(
-            lambda: deps.factory_store.find_events(None, LEDGER_KIND, since, limit=20000)
-        )
+        rows = await asyncio.to_thread(ledger_rows, deps.factory_store, None, since)
         for event in rows:
             self._remember(event.factory_id, event.data or {}, event.ts / 1000)
         self.cursor_ms = int((now - REPLAY_S) * 1000)
@@ -307,6 +353,37 @@ class Engine:
     def in_ledger(self, factory_id: str, user_id: str, key: str) -> bool:
         """:returns: Whether *key* was already sent (or failed, or muted) to *user_id*."""
         return (_fid(factory_id), user_id, key) in self.ledger
+
+    async def _recorded(
+        self, deps: FactoryDeps, factory_id: str, user_id: str, items: list[rules.Item], now: float
+    ) -> set[str]:
+        """
+        Keys of *items* the store already records for *user_id*, right before a post.
+
+        Covers another server process (a rollout) sending them meanwhile; the keys
+        found join the in-memory ledger.
+        """
+        since = int((now - LEDGER_DAYS * 86400) * 1000)
+        keys = {i.key for i in items}
+        subjects = {events.stored_subject(i.subject) for i in items}
+
+        def _load() -> dict[str, float]:
+            found: dict[str, float] = {}
+            for subject in subjects:
+                rows = deps.factory_store.find_events(
+                    factory_id, LEDGER_KIND, since, subject, limit=RECHECK_ROWS, newest_first=True
+                )
+                for event in rows:
+                    data = event.data or {}
+                    key = data.get("key")
+                    if data.get("to_user") == user_id and key in keys:
+                        found.setdefault(str(key), event.ts / 1000)
+            return found
+
+        found = await asyncio.to_thread(_load)
+        for key, at in found.items():
+            self.ledger[(_fid(factory_id), user_id, key)] = at
+        return set(found)
 
     def _recent_issue_dm(self, fid: str, user_id: str, issue_id: str, now: float) -> bool:
         prefix = f"issue:{issue_id}:"
@@ -499,7 +576,9 @@ class Engine:
         if kind == "chat.posted":
             return rules.mention_items(ctx, event)
         if kind == "retro.added":
-            return rules.retro_items(ctx, event)
+            issue_id = data.get("issue_id")
+            issue = await asyncio.to_thread(store.get_issue, issue_id) if issue_id else None
+            return rules.retro_items(ctx, event, issue)
         return []
 
     # ── Idle spend (E9) ──
@@ -605,21 +684,33 @@ class Engine:
                 pending.item,
                 now,
                 root_state=state,
+                held=pending.quiet_held,
             )
             if ok:
                 relevant.append(pending)
             else:
                 queue.pop(pending.item.key, None)
                 _logger.debug("factory slack: dropped stale %s", pending.item.key)
+        if relevant:
+            done = await self._recorded(
+                deps, root.id, person.user_id, [p.item for p in relevant], now
+            )
+            for pending in [p for p in relevant if p.item.key in done]:
+                queue.pop(pending.item.key, None)
+            relevant = [p for p in relevant if p.item.key not in done]
         if not relevant:
             return None
         day = prefs_mod.local_day(prefs, now).isoformat()
         count = self.daily.get((fid, person.user_id, day), 0)
         if count >= DAILY_CAP:
-            for pending in relevant:
+            # Last calls and critical incidents still go out; the rest waits for the digest.
+            muted = [p for p in relevant if not _past_cap(p.item)]
+            for pending in muted:
                 await self._record(root.id, person.user_id, pending.item, "muted", now)
                 queue.pop(pending.item.key, None)
-            return Outcome(root.id, person.user_id, [p.item.key for p in relevant], "muted")
+            relevant = [p for p in relevant if _past_cap(p.item)]
+            if not relevant:
+                return Outcome(root.id, person.user_id, [p.item.key for p in muted], "muted")
         header = None
         if any(p.quiet_held for p in relevant):
             header = f"While you were away ({prefs.quiet.start}-{prefs.quiet.end})"
@@ -641,7 +732,7 @@ class Engine:
             await self._pace(fid)
             await post_to_person(deps, root.id, person.user_id, client, text, blocks)
         except SlackError as exc:
-            return await self._failed(deps, root, person, relevant, exc, now)
+            return await self._failed(deps, root, person, relevant, exc, now, client)
         self.next_dm_at[key] = now + MIN_GAP_S
         self.daily[(fid, person.user_id, day)] = count + 1
         for pending in relevant:
@@ -685,12 +776,13 @@ class Engine:
         pendings: list[Pending],
         exc: SlackError,
         now: float,
+        client: SlackClient,
     ) -> Outcome:
         fid = _fid(root.id)
         queue = self.queues.get((fid, person.user_id), {})
         keys = [p.item.key for p in pendings]
         if exc.kind == "bot":
-            await bot_secrets.mark_invalid(self.app_state, root.id, exc.code)
+            await bot_secrets.mark_invalid(self.app_state, root.id, exc.code, token=client.token)
             raise _BotDown(exc.code)
         if exc.kind in ("retryable", "other"):
             for pending in pendings:
@@ -783,12 +875,16 @@ class Engine:
             mark=at,
             ref={"type": "digest"},
         )
+        if await self._recorded(deps, root.id, person.user_id, [item], now):
+            return False
         try:
             await self._pace(fid)
             await post_to_person(deps, root.id, person.user_id, client, built.text, built.blocks)
         except SlackError as exc:
             if exc.kind == "bot":
-                await bot_secrets.mark_invalid(self.app_state, root.id, exc.code)
+                await bot_secrets.mark_invalid(
+                    self.app_state, root.id, exc.code, token=client.token
+                )
                 raise _BotDown(exc.code) from None
             if exc.kind == "person":
                 await mark_person_error(deps, root.id, person.user_id, exc.code)
@@ -798,6 +894,11 @@ class Engine:
         self.next_dm_at[(fid, person.user_id)] = now + MIN_GAP_S
         await self._record(root.id, person.user_id, item, "sent", now)
         return True
+
+
+def _past_cap(item: rules.Item) -> bool:
+    """:returns: Whether *item* goes out even past the daily cap (a last call, a critical)."""
+    return item.stage == "deadline" or item.critical
 
 
 class _BotDown(Exception):
@@ -817,6 +918,8 @@ __all__ = [
     "TickReport",
     "ensure_channel",
     "factory_ctx",
+    "ledger_newest",
+    "ledger_rows",
     "mark_person_error",
     "new_code",
     "post_to_person",

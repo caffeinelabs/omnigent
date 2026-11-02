@@ -37,6 +37,8 @@ OWNERS_AFTER_S: Final = 24 * 3600
 LAST_CALL_S: Final = 2 * 3600
 LAST_CALL_BEFORE_QUIET_S: Final = 15 * 60
 EDGE_MAX_AGE_S: Final = 12 * 3600
+HELD_MAX_AGE_S: Final = 26 * 3600
+"""An event item held through quiet hours (up to a day) still goes out after them."""
 INCIDENT_REPOST_S: Final = 3600
 IDLE_USD: Final = 5.0
 IDLE_WINDOW_S: Final = 6 * 3600
@@ -225,10 +227,12 @@ def deadline_for(
 
     - A pending projects proposal expires 72 h after it was made (nothing is
       started); under ``grace`` autonomy it applies once its 15 min pass.
+    - A pending tuning or rules proposal expires 72 h after it was made.
     - An inconclusive trial's "Keep or revert" reverts at 2x its window.
 
     :returns: ``(epoch second, effect line)``, or ``None`` when nothing defaults.
     """
+    from omnigent.server.factory import tuning
     from omnigent.server.factory.proposals import PROPOSAL_EXPIRY_S
 
     if proposal is None or decision.status != "open":
@@ -239,6 +243,8 @@ def deadline_for(
         if autonomy == "grace" and proposal.status == "pending" and isinstance(grace, int):
             return grace, "auto-applies unless someone objects"
         return proposal.created_at + PROPOSAL_EXPIRY_S, "expires and nothing is started"
+    if proposal.kind in ("tuning", "rules") and proposal.status in PROPOSAL_OPEN_STATUSES:
+        return proposal.created_at + tuning.EXPIRY_S, "expires and is not applied"
     if (
         proposal.status == "trial"
         and isinstance(result.get("evaluation"), Mapping)
@@ -621,14 +627,11 @@ def pr_items(
             for p in ctx.people.values()
             if p.acts
         ]
+    from omnigent.server.factory.api.pr_preview import preview_stable_path
+
     links: list[tuple[str, str]] = []
-    preview = pr.preview if isinstance(pr.preview, Mapping) else {}
-    stable = preview.get("stable_url")
-    if isinstance(stable, str) and stable:
-        if stable.startswith("/") and base_url:
-            links.append((base_url + stable, "preview"))
-        elif stable.startswith(("https://", "http://")):
-            links.append((stable, "preview"))
+    if isinstance(pr.preview, Mapping) and pr.preview and base_url:
+        links.append((base_url + preview_stable_path(pr.id), "preview"))
     links.append((pr.url, "GitHub"))
     out = []
     for user_id, why in recipients:
@@ -711,7 +714,9 @@ def warning_items(ctx: FactoryCtx, event: FactoryEvent) -> list[tuple[str, Item]
 
 
 def budget_items(ctx: FactoryCtx, event: FactoryEvent) -> list[tuple[str, Item]]:
-    """E8: a budget at 80 % or 100 %."""
+    """E8: a factory or project budget at 80 % or 100 % (a task's own budget is its loop's)."""
+    if (event.data or {}).get("scope") == "task":
+        return []
     exceeded = event.kind == "budget.exceeded"
     project = event.project_slug
     path = (
@@ -773,27 +778,31 @@ def mention_items(ctx: FactoryCtx, event: FactoryEvent) -> list[tuple[str, Item]
     return out
 
 
-def retro_items(ctx: FactoryCtx, event: FactoryEvent) -> list[tuple[str, Item]]:
-    """E11: Sentinel filed a retro or finding (opt-in)."""
-    issue_id = str((event.data or {}).get("issue_id") or event.id)
-    return [
-        (
-            person.user_id,
-            _event_item(
-                event,
-                key=f"retro:{issue_id}",
-                group="retros",
-                stage="retro",
-                title="Sentinel filed a retro",
-                text=event.summary,
-                why="you asked for retros",
-                path=factory_path(ctx, "/improvements?tab=findings"),
-                label="Open the findings",
-                emoji=":mag:",
-            ),
+def retro_items(
+    ctx: FactoryCtx, event: FactoryEvent, issue: FactoryIssue | None = None
+) -> list[tuple[str, Item]]:
+    """E11: a lead or PL filed a retro or finding (opt-in)."""
+    data = event.data or {}
+    issue_id = str(data.get("issue_id") or event.id)
+    what = "finding" if data.get("class") == "finding" else "retro"
+    author = ctx.titles.get(str(data.get("by") or "")) or "An agent"
+    out = []
+    for person in ctx.people.values():
+        item = _event_item(
+            event,
+            key=f"retro:{issue_id}",
+            group="retros",
+            stage="retro",
+            title=f"{author} filed a {what}",
+            text=event.summary,
+            why="you asked for retros",
+            path=factory_path(ctx, "/improvements?tab=findings"),
+            label="Open the findings",
+            emoji=":mag:",
         )
-        for person in ctx.people.values()
-    ]
+        item.target = issue.target if issue is not None else None
+        out.append((person.user_id, item))
+    return out
 
 
 def idle_items(
@@ -840,13 +849,18 @@ def still_relevant(
     now: float,
     *,
     root_state: str | None = None,
+    held: bool = False,
 ) -> bool:
     """
     Whether *item* still matters to *user_id* (synchronous store reads).
 
     A decision must still be open and theirs; an incident still open; a PR
-    still ready at that head with no human review since; a mention unread.
+    still ready at that head with no human review since; a mention unread;
+    an event at most 12 h old (a day when it waited for quiet hours to end).
+
+    :param held: It waited for the person's quiet hours to end.
     """
+    max_age = HELD_MAX_AGE_S if held else EDGE_MAX_AGE_S
     ref = item.ref
     kind = ref.get("type")
     store = deps.factory_store
@@ -879,11 +893,11 @@ def still_relevant(
             return True
         reads = store.list_chat_reads(ctx.factory_id, user_id)
         last = next((r.last_seq for r in reads if r.thread == ref.get("thread")), 0)
-        return last < seq and now - ref.get("ts", now * 1000) / 1000 < EDGE_MAX_AGE_S
+        return last < seq and now - ref.get("ts", now * 1000) / 1000 < max_age
     if kind == "idle":
         return root_state not in ("paused", "stopped", "done")
     if kind == "event":
-        return now - ref.get("ts", 0) / 1000 < EDGE_MAX_AGE_S
+        return now - ref.get("ts", 0) / 1000 < max_age
     return True
 
 
@@ -895,6 +909,7 @@ def now_s() -> float:
 __all__ = [
     "EDGE_KINDS",
     "EDGE_MAX_AGE_S",
+    "HELD_MAX_AGE_S",
     "IDLE_USD",
     "IDLE_WINDOW_S",
     "INCIDENT_REPOST_S",
