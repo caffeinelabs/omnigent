@@ -26,7 +26,7 @@ import {
   TriangleAlertIcon,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { DecisionView, FactorySnapshot } from "@/lib/factoryApi";
+import type { DecisionView, FactorySnapshot, IssueView } from "@/lib/factoryApi";
 import type {
   StatusHealthItem,
   StatusLeadNote,
@@ -66,7 +66,7 @@ import {
   workingStage,
 } from "./nowCardModel";
 import { useFactoryStatusSummary } from "./statusSummaryQuery";
-import { DecisionAnswerButton, OpenButton, ReviewButton } from "./WaitingActions";
+import { DecisionAnswerButton, IncidentActions, OpenButton, ReviewButton } from "./WaitingActions";
 
 const ICON = "size-3.5";
 
@@ -197,14 +197,28 @@ function waitingIcon(item: StatusWaitingItem): ReactNode {
   );
 }
 
-/** The next step beside a wait: Review →, the decision's answer (opens its card), or Open. */
+/**
+ * The next step beside a wait: Review →, the decision's answer (opens its
+ * card), an incident's first runbook step and Open, or Open.
+ */
 function waitingAction(
   item: StatusWaitingItem,
   decision: DecisionView | null,
+  issue: IssueView | null,
   open: boolean,
   toggle: () => void,
 ): ReactNode {
   const testId = `now-action-${item.key}`;
+  if (item.kind === "incident") {
+    return (
+      <IncidentActions
+        issue={issue}
+        href={item.href}
+        testId={testId}
+        componentId="factory.overview.now_open"
+      />
+    );
+  }
   if (item.kind === "pr") {
     return (
       <ReviewButton href={item.href} testId={testId} componentId="factory.overview.now_review" />
@@ -233,22 +247,27 @@ function waitingAction(
 
 /**
  * One wait: its line opens its page; the button beside it is the next step
- * (a decision's card opens in place); below, the viewer's Slack DMs about it.
+ * (a decision's card opens in place, and starts open when `?decision=` names
+ * it); below, the viewer's Slack DMs about it.
  */
 function WaitingRow({
   item,
   nowS,
   showWho,
   decision,
+  issue,
+  highlighted,
   clockOffsetS,
 }: {
   item: StatusWaitingItem;
   nowS: number;
   showWho: boolean;
   decision: DecisionView | null;
+  issue: IssueView | null;
+  highlighted: boolean;
   clockOffsetS: number;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(highlighted);
   const who = showWho ? ` · ${waitsOn(item)}` : "";
   const detailText = waitingDetail(item);
   const detail = detailText ? ` — ${detailText}` : "";
@@ -285,7 +304,7 @@ function WaitingRow({
           )}
         </Link>
         <span className="shrink-0">
-          {waitingAction(item, decision, open, () => setOpen((v) => !v))}
+          {waitingAction(item, decision, issue, open, () => setOpen((v) => !v))}
         </span>
       </div>
       {receipts && (
@@ -300,7 +319,7 @@ function WaitingRow({
       )}
       {open && decision && (
         <div className="pt-1 pb-2 pl-6">
-          <DecisionCard decision={decision} clockOffsetS={clockOffsetS} />
+          <DecisionCard decision={decision} clockOffsetS={clockOffsetS} highlighted={highlighted} />
         </div>
       )}
     </li>
@@ -448,6 +467,15 @@ export interface NowStale {
   onRetry: () => void;
 }
 
+/** Whether `?decision=` (an id or `D-n`) names this wait. */
+function isHighlighted(item: StatusWaitingItem, highlight: string | null): boolean {
+  return (
+    highlight != null &&
+    item.kind === "decision" &&
+    (item.ref === highlight || item.key === `decision:${highlight}`)
+  );
+}
+
 /** The card for a summary in hand (stories and tests render it directly). */
 export function NowCardView({
   factoryId,
@@ -455,6 +483,8 @@ export function NowCardView({
   nowS,
   stale = null,
   snapshot = null,
+  issues = null,
+  highlightDecision = null,
   clockOffsetS = 0,
 }: {
   factoryId: string;
@@ -463,6 +493,10 @@ export function NowCardView({
   stale?: NowStale | null;
   /** The live snapshot: decisions answer in place, and spend shows the header's $/h. */
   snapshot?: FactorySnapshot | null;
+  /** Open incidents (the Overview's read): an incident's first runbook step shows. */
+  issues?: readonly IssueView[] | null;
+  /** `?decision=` without the dock: that decision's card opens in place. */
+  highlightDecision?: string | null;
   clockOffsetS?: number;
 }) {
   const split = splitWaiting(summary);
@@ -475,6 +509,7 @@ export function NowCardView({
   // a project that only waits on a listed wait is said there.
   const health = splitHealth(summary.health.items, [...working, ...summary.next], shown);
   const decisions = new Map((snapshot?.decisions ?? []).map((d) => [`decision:${d.id}`, d]));
+  const incidents = new Map((issues ?? []).map((i) => [`incident:${i.id}`, i]));
   const row = (item: StatusWaitingItem, showWho: boolean) => (
     <WaitingRow
       key={item.key}
@@ -482,6 +517,8 @@ export function NowCardView({
       nowS={nowS}
       showWho={showWho}
       decision={decisions.get(item.key) ?? null}
+      issue={incidents.get(item.key) ?? null}
+      highlighted={isHighlighted(item, highlightDecision)}
       clockOffsetS={clockOffsetS}
     />
   );
@@ -683,12 +720,18 @@ export function NowCard({
   factoryId,
   nowS,
   snapshot = null,
+  issues = null,
+  highlightDecision = null,
   clockOffsetS = 0,
 }: {
   factoryId: string;
   nowS: number;
   /** The live snapshot (the Overview's): decisions answer in place; spend shows the header's $/h. */
   snapshot?: FactorySnapshot | null;
+  /** Open incidents (the Overview's read): an incident's first runbook step shows. */
+  issues?: readonly IssueView[] | null;
+  /** `?decision=` without the dock: that decision's card opens in place. */
+  highlightDecision?: string | null;
   clockOffsetS?: number;
 }) {
   const query = useFactoryStatusSummary(factoryId);
@@ -707,6 +750,8 @@ export function NowCard({
         nowS={nowS}
         stale={stale}
         snapshot={snapshot}
+        issues={issues}
+        highlightDecision={highlightDecision}
         clockOffsetS={clockOffsetS}
       />
     );

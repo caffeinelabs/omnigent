@@ -2,16 +2,18 @@
  * The one-click next step beside something that waits on a person: Review →
  * for a ready PR, the decision's answer button (its recommended option, else
  * Answer…, or View for someone who may not answer) that opens the full card
- * in place, and Open for an incident or anything else. The Now card and the
- * Needs-you panel share them.
+ * in place, an incident's first runbook step and Open, and Open for anything
+ * else. The Now card and the Needs-you panel share them.
  */
 
 import { ChevronDownIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import type { DecisionView } from "@/lib/factoryApi";
+import type { DecisionView, IssueView } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
+import { RunbookButtons } from "../alerts/IssueActions";
 import { answerBlockedReason } from "../decisions/DecisionCard";
+import { useOptionalFactoryShell } from "../shell/FactoryShellContext";
 import { useViewer, useViewerCan } from "../shell/viewerCan";
 
 /** `Review →`: the PR page, where the merge happens. */
@@ -99,5 +101,29 @@ export function DecisionAnswerButton({
       )}
       <ChevronDownIcon className={cn("transition-transform", open && "rotate-180")} />
     </Button>
+  );
+}
+
+/**
+ * An incident's first runbook step (Interrupt, Restart, …) and Open. Without
+ * the incident in hand (or outside a factory page) only Open.
+ */
+export function IncidentActions({
+  issue,
+  href,
+  testId,
+  componentId,
+}: {
+  issue: IssueView | null;
+  href: string;
+  testId?: string;
+  componentId: string;
+}) {
+  const shell = useOptionalFactoryShell();
+  return (
+    <span className="flex items-center gap-1">
+      {issue && shell && <RunbookButtons issue={issue} limit={1} />}
+      <OpenButton href={href} testId={testId} componentId={componentId} />
+    </span>
   );
 }

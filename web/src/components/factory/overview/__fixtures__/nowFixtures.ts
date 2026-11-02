@@ -389,7 +389,7 @@ function heldProjects(
     if (!isWorking(project, nowS)) continue;
     if (project.overlay === "blocked") {
       const head = (project.overlay_reason ?? "").split(" · ")[0]!;
-      const ref = /^Blocked on (D-\d+)/.exec(head)?.[1];
+      const ref = head.match(/^Blocked on (D-\d+)/)?.[1];
       const key = ref ? decisionKeys.get(ref) : undefined;
       if (key) held.set(project.slug, new Set([key]));
       continue;
@@ -438,7 +438,7 @@ function problem(project: ProjectView): string | null {
     case "paused":
       return project.paused_by ? `paused by ${project.paused_by}` : "paused";
     case "blocked": {
-      const ref = /^Blocked on (D-\d+)/.exec(head)?.[1];
+      const ref = head.match(/^Blocked on (D-\d+)/)?.[1];
       return ref
         ? `blocked until someone answers ${ref}${extra}`
         : `its lead agent says it is blocked${extra}`;
@@ -464,6 +464,14 @@ function primaryPr(project: ProjectView, prs: ReadonlyMap<string, PrView>): PrVi
     [...own].reverse().find((pr) => pr.state === "merged") ??
     null
   );
+}
+
+/** The PR agents work on: the first open one not ready yet, else the primary one. */
+function workPr(project: ProjectView, prs: ReadonlyMap<string, PrView>): PrView | null {
+  const working = (project.pr_ids ?? [])
+    .map((id) => prs.get(id))
+    .find((pr) => pr != null && pr.state === "open" && !pr.ready);
+  return working ?? primaryPr(project, prs);
 }
 
 function changesRequested(pr: PrView): boolean {
@@ -536,7 +544,7 @@ function workingItems(
   return snapshot.projects
     .filter((project) => isWorking(project, nowS) && !held.has(project.slug))
     .map((project) => {
-      const pr = primaryPr(project, prs);
+      const pr = workPr(project, prs);
       const [status, source] = workStatus(project, pr);
       return {
         project: project.slug,
@@ -710,7 +718,8 @@ function spendBlock(
   snapshot: FactorySnapshot,
   idle: boolean,
   last24hUsd: number | null | undefined,
-  held: ReadonlyMap<string, unknown>,
+  /** Projects that only wait on people -> when the newest of their waits began. */
+  held: ReadonlyMap<string, number>,
 ): StatusSpend {
   const rate = snapshot.totals.usd_per_h ?? null;
   let idleSince: number | null = null;
@@ -718,7 +727,8 @@ function spendBlock(
     const ends = [snapshot.factory.started_at ?? 0];
     for (const project of snapshot.projects) {
       if (project.kind === "integration") continue;
-      if (held.has(project.slug)) ends.push(project.stage_since || 0);
+      const heldSince = held.get(project.slug);
+      if (heldSince != null) ends.push(heldSince);
       else if (project.closed_at) ends.push(project.closed_at);
       else if (project.stage === "merged") {
         ends.push(Math.max(project.stage_since || 0, leadActivity(project) ?? 0));
@@ -882,10 +892,14 @@ export function statusSummaryOf(
   const held = heldProjects(snapshot, listed, nowS);
   const holding = new Set([...held.values()].flatMap((keys) => [...keys]));
   const waiting = listed.map((item) => ({ ...item, holds: holding.has(item.key) }));
+  const since = new Map(waiting.map((item) => [item.key, item.since]));
+  const heldSince = new Map(
+    [...held].map(([slug, keys]) => [slug, Math.max(...[...keys].map((k) => since.get(k)!))]),
+  );
   const working = workingItems(snapshot, nowS, held);
   const next = nextItems(snapshot);
   const idle = working.length === 0 && next.length === 0;
-  const spend = spendBlock(snapshot, idle, options.last24hUsd, held);
+  const spend = spendBlock(snapshot, idle, options.last24hUsd, heldSince);
   const health = healthBlock(snapshot, options.pause ?? null);
   const factoryState = snapshot.factory.state;
   const state: StatusSummary["state"] =

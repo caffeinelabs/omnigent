@@ -836,8 +836,29 @@ def test_a_factory_that_only_waits_on_people_is_idle_since_the_last_wait_began()
 
     assert summary["state"] == "idle" and summary["working"] == []
     assert summary["headline"] == "Idle · 3 things wait on you"
-    # The newer of the two became ready 9 h ago.
-    assert summary["spend"]["idle_since"] == NOW - 9 * HOUR
+    # The newer of the two PRs became ready 8 h ago (its project reached Ready at 9 h).
+    assert summary["spend"]["idle_since"] == NOW - 8 * HOUR
+
+
+def test_a_project_blocked_on_a_decision_is_idle_since_the_decision_was_asked() -> None:
+    body = _snapshot(
+        projects=[
+            _project(
+                "asks",
+                "building",
+                NOW - 3 * 86_400,
+                overlay="blocked",
+                overlay_reason="Blocked on D-9",
+            )
+        ],
+        decisions=[_decision(9, NOW - HOUR, blocking=True, project_slug="asks")],
+    )
+
+    summary = _build(body)
+
+    assert summary["state"] == "idle" and summary["counts"]["held"] == 1
+    # Its lead worked in Building until it asked, an hour ago.
+    assert summary["spend"]["idle_since"] == NOW - HOUR
 
 
 def test_a_project_with_work_left_for_agents_stays_in_progress() -> None:
@@ -889,7 +910,9 @@ def test_a_project_with_work_left_for_agents_stays_in_progress() -> None:
     assert holds == {"D-9": True, "PR #1": False, "PR #3": False, "PR #9700": False}
     assert summary["counts"]["held"] == 1
     by_project = {w["project"]: w for w in summary["working"]}
-    assert by_project["two-prs"]["status"] == "PR #1 ready for a merge"
+    # PR #1 waits on a person (listed under waiting): the line says what agents do.
+    assert by_project["two-prs"]["status"] == "PR #2: fixing failing checks"
+    assert by_project["two-prs"]["pr"]["number"] == 2
     assert by_project["more-tasks"]["status"] == "PR #3 ready for a merge"
 
 

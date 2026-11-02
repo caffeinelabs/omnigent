@@ -780,6 +780,13 @@ def _primary_pr(project: Mapping[str, Any], prs: Mapping[str, Mapping[str, Any]]
     return next((p for p in reversed(own) if p.get("state") == "merged"), None)
 
 
+def _work_pr(project: Mapping[str, Any], prs: Mapping[str, Mapping[str, Any]]) -> Any:
+    """The PR agents work on: the first open one not ready yet, else the primary one."""
+    own = [prs[i] for i in project.get("pr_ids") or [] if i in prs]
+    working = next((p for p in own if p.get("state") == "open" and not p.get("ready")), None)
+    return working if working is not None else _primary_pr(project, prs)
+
+
 def is_working(project: Mapping[str, Any], now: float) -> bool:
     """
     A live project past the queue that is not finished.
@@ -893,7 +900,8 @@ def working_items(
     for project in body.get("projects") or []:
         if not is_working(project, now) or project["slug"] in skip:
             continue
-        pr = _primary_pr(project, prs)
+        # A ready PR already waits on a person: the line says what agents still do.
+        pr = _work_pr(project, prs)
         status, source = work_status(project, pr)
         items.append(
             WorkingItem(
@@ -1113,14 +1121,15 @@ def spend_block(
     idle: bool,
     now: float,
     links: _Links,
-    held: Iterable[str] = (),
+    held: Mapping[str, int] | None = None,
 ) -> SpendBlock:
     """
     Spend over the last 24 h, today and the current rate; idle and since when.
 
     The rate is the snapshot's ``totals.usd_per_h``, the one the header shows.
 
-    :param held: Projects that only wait on people: idle since they started to.
+    :param held: Projects that only wait on people -> when the newest of their
+        waits began: idle since then.
     """
     today, yesterday = utc_day(now), utc_day(now - DAY_S)
     into_today = now - datetime.fromisoformat(f"{today}T00:00:00+00:00").timestamp()
@@ -1132,13 +1141,13 @@ def spend_block(
     rate = (body.get("totals") or {}).get("usd_per_h")
     idle_since = None
     if idle:
-        waits = set(held)
+        waits = held or {}
         ends = [int(factory.get("started_at") or 0)]
         for project in body.get("projects") or []:
             if project.get("kind") == PROJECT_KIND_INTEGRATION:
                 continue
             if project.get("slug") in waits:
-                ends.append(int(project.get("stage_since") or 0))
+                ends.append(int(waits[project["slug"]]))
             elif project.get("closed_at"):
                 ends.append(int(project["closed_at"]))
             elif project.get("stage") == "merged":
@@ -1294,10 +1303,12 @@ def build_status_summary(inputs: StatusInputs, *, now: float) -> dict[str, Any]:
     held = held_projects(body, waiting, now)
     holding = {key for keys in held.values() for key in keys}
     waiting = [item.model_copy(update={"holds": item.key in holding}) for item in waiting]
+    since = {item.key: item.since for item in waiting}
+    held_since = {slug: max(since[key] for key in keys) for slug, keys in held.items()}
     working = working_items(body, links, now, held)
     upcoming = next_items(body, links)
     idle = not working and not upcoming
-    spend = spend_block(body, inputs.cost_cells, idle=idle, now=now, links=links, held=held)
+    spend = spend_block(body, inputs.cost_cells, idle=idle, now=now, links=links, held=held_since)
     health = health_block(body, inputs.pause, links)
     if factory.get("state") == "paused":
         state: Literal["working", "idle", "paused", "done"] = "paused"

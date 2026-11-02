@@ -9,6 +9,7 @@ project, and that a ready PR waits on its project's human owner in both.
 
 from __future__ import annotations
 
+import re
 import time
 from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
@@ -17,10 +18,13 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
-from omnigent.server.auth import LEVEL_READ
+from omnigent import factory as F
+from omnigent.server.auth import LEVEL_OWNER, LEVEL_READ
 from omnigent.server.factory import snapshot
 from omnigent.server.factory.slackdm import digest as digest_mod
 from omnigent.server.factory.slackdm import engine as engine_mod
+from omnigent.server.factory.slackdm import render
+from omnigent.server.factory.slackdm.render import SECTION_MAX
 from omnigent.server.factory.status_summary import spend_text, utc_day
 from tests.server.factory.cockpit_helpers import Cockpit
 from tests.server.factory.conftest import FactoryWorld
@@ -29,6 +33,7 @@ from tests.server.factory.slack_helpers import base, install_bot, link, slack_co
 
 DOMAIN = "omnigent.test"
 BASE = f"https://{DOMAIN}"
+_LINK = re.compile(r"<[^<>|]+\|([^<>]*)>")
 
 
 @pytest.fixture()
@@ -228,3 +233,150 @@ async def test_the_welcome_dm_lists_the_cards_waiting_items(cockpit: Cockpit) ->
     assert waiting.lines == [
         digest_mod.waiting_line(item, ctx.people["carol"], now, BASE) for item in mine
     ]
+
+
+def _working(cockpit: Cockpit, slug: str, pr: int, task: str) -> None:
+    """*slug* in Building: its PL is live, PR #*pr* open (not ready), *task* running."""
+    world = cockpit.world
+    pl = world.make_session(
+        f"pl-{slug}",
+        agent="pl",
+        title=f"PL · {slug}",
+        labels={
+            F.LABEL_ID: cockpit.fid,
+            F.LABEL_ROLE: "project_lead",
+            F.LABEL_PROJECT: slug,
+            F.LABEL_PARENT: cockpit.fid,
+            F.LABEL_SUPERVISOR: world.id("lead_b"),
+            F.LABEL_STATE: "active",
+        },
+    )
+    cockpit.permissions.grant("alice", pl.id, LEVEL_OWNER)
+    store = cockpit.store
+    store.upsert_project(cockpit.fid, slug, title=slug, pl_session_id=pl.id)
+    store.upsert_pr(cockpit.fid, "caffeinelabs/app", pr, title="Build it", project_slug=slug)
+    store.upsert_task(cockpit.fid, slug, task, title=task, state="running")
+
+
+def _unlinked(text: str) -> str:
+    """*text* with each mrkdwn ``<url|label>`` replaced by its label."""
+    return _LINK.sub(lambda m: m.group(1), text)
+
+
+async def test_in_progress_lists_what_the_card_lists_under_working_on(cockpit: Cockpit) -> None:
+    _seed(cockpit)
+    _working(cockpit, "search", 9901, "Index the docs")
+    link(cockpit, "alice")
+
+    card = await _card(cockpit, "alice")
+    built, summary, _ = await _digest(cockpit, "alice", time.time())
+
+    _same(summary, card)
+    assert built is not None
+    [work] = card["working"]
+    assert work["project"] == "search"
+    assert "working on T-1: Index the docs" in work["status"]
+    lines = _section(_text(built), "In progress (1)")
+    assert lines == digest_mod.progress_lines(card, BASE)
+    assert lines[0].startswith(f"• <{BASE}{work['href']}|search> (Building) — PR #9901")
+
+
+async def test_atlas_is_quoted_word_for_word_with_the_prs_it_names_linked(
+    cockpit: Cockpit,
+) -> None:
+    _seed(cockpit)
+    store = cockpit.store
+    for number in (9827, 9828):
+        store.upsert_pr(cockpit.fid, "caffeinelabs/app", number, title=f"PR {number}")
+    note = "3 PRs ready · #9826 #9827 #9828 verified, waiting for <@here> & a merge"
+    cockpit.world.store.set_labels(cockpit.fid, {F.LABEL_SUMMARY: note})
+    link(cockpit, "alice")
+
+    card = await _card(cockpit, "alice")
+    built, _, _ = await _digest(cockpit, "alice", time.time())
+
+    lead = card["lead"]
+    assert [p["text"] for p in lead["parts"] if p.get("href")] == ["#9826", "#9827", "#9828"]
+    assert built is not None
+    said = next(line for line in _text(built).splitlines() if line.startswith("*Atlas said*"))
+    quote = said.removeprefix("*Atlas said*  ")
+    assert quote == digest_mod.lead_line(card, BASE)
+    # Linked ids keep the spaces around them; the rest is escaped, not dropped.
+    unescaped = _unlinked(quote).replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+    assert unescaped == f"“{lead['text']}”"
+    assert "<@here>" not in quote
+
+
+async def test_a_busy_factorys_digest_keeps_every_heading_and_link_whole(
+    cockpit: Cockpit,
+) -> None:
+    """8 waits, 7 in progress and 14 queued with real-length names: nothing is cut."""
+    store, now = cockpit.store, time.time()
+    for i in range(8):
+        slug = f"validate-build-tier-{i}"
+        store.upsert_project(cockpit.fid, slug, title=slug)
+        store.upsert_pr(
+            cockpit.fid,
+            "caffeinelabs/app",
+            9800 + i,
+            title=f"Validate the build tier on a preview environment, part {i} " + "x" * 60,
+            project_slug=slug,
+            ready=True,
+            ready_at=int(now) - 3600 * (i + 1),
+            head_sha="a" * 40,
+        )
+    for i in range(6):
+        _working(cockpit, f"preview-build-pipeline-{i}", 9900 + i, "Wire it " + "y" * 60)
+    for i in range(6):
+        store.upsert_project(cockpit.fid, f"queued-follow-up-project-{i}", title=f"Q{i}")
+    store.add_cost_daily(
+        cockpit.fid,
+        project_slug="",
+        role="lead",
+        agent_name="Atlas",
+        model="opus",
+        day_utc=utc_day(now),
+        cost_usd=12.5,
+    )
+    cockpit.world.store.set_labels(
+        cockpit.fid, {F.LABEL_SUMMARY: "8 PRs ready · #9800 #9801 #9802 #9803 to merge first"}
+    )
+    link(cockpit, "alice")
+
+    built, summary, _ = await _digest(cockpit, "alice", now)
+
+    assert built is not None and summary is not None
+    sections = [b["text"]["text"] for b in built.blocks if b["type"] == "section"]
+    assert sum(len(text) for text in sections) > SECTION_MAX  # one section would be cut
+    for text in sections:
+        assert len(text) <= SECTION_MAX
+        assert text.count("<") == text.count(">")
+        assert not text.endswith("…")
+    text = _text(built)
+    lines = text.splitlines()
+    for heading in ("*Waiting on you (8)*", "*In progress (", "*Last 24 h*", "*Spend*", "*Next*"):
+        assert any(line.startswith(heading) for line in lines), heading
+    assert any(line.startswith("*Atlas said*") for line in lines)
+    assert len(_section(text, "Waiting on you (8)")) == 8
+    progress = _section(text, "In progress")
+    assert progress == digest_mod.progress_lines(summary, BASE)
+    assert progress[-1].startswith("…and ")
+
+
+def test_long_messages_split_between_lines_and_never_inside_a_link() -> None:
+    url = "https://omnigent.test/factory/f/projects/" + "p" * 60
+    lines = [f"• {render.link(url, f'project-{i}')} — " + "z" * 200 for i in range(40)]
+
+    blocks = render.message(lines[:1], "settings", groups=(lines[1:],))
+
+    texts = [b["text"]["text"] for b in blocks if b["type"] == "section"]
+    assert len(texts) > 1 and all(len(t) <= SECTION_MAX for t in texts)
+    assert [line for t in texts for line in t.splitlines()] == lines  # every line, whole
+    assert blocks[-1]["type"] == "context"
+    # One line longer than a section is cut before a link it would break.
+    long = "a" * (SECTION_MAX - 10) + render.link(url, "the end")
+    assert render.cut(long, SECTION_MAX) == "a" * (SECTION_MAX - 10) + "…"
+    # The plain-text fallback keeps whole lines too.
+    flat = render.plain(render.message(lines), "fallback")
+    assert len(flat) <= render.PLAIN_MAX and flat.endswith("\n…")
+    assert flat.count("<") == flat.count(">")

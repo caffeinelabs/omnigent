@@ -125,6 +125,15 @@ export const LiveFactoryDark = liveFactory({ theme: "dark" });
 
 export const LiveFactoryMobile = phone(liveFactory());
 
+/**
+ * A transcript's decision link on a phone (no dock): `?decision=D-35` opens
+ * that decision's card in Now, which lists it, and Needs you leaves it out.
+ * Now's incident rows carry their first runbook step beside Open.
+ */
+export const DecisionLinkMobile = phone(overview({ search: "?decision=D-35" }));
+
+export const DecisionLinkMobileDark = phone(overview({ search: "?decision=D-35", theme: "dark" }));
+
 // ── After a human review ───────────────────────────────────────
 
 function changesRequested(options: CockpitStoryOptions = {}): Story {

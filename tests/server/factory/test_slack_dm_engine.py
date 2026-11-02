@@ -1099,6 +1099,35 @@ async def test_the_digest_lists_what_waits_and_hides_unreadable_projects(
     assert sum("daily digest" in t for t in fake_slack.texts_to("U0ALICE")) == 1
 
 
+async def test_a_digest_that_fails_to_build_holds_back_no_other_dm(
+    rig: Rig, cockpit: Cockpit, fake_slack: FakeSlack, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    hour = datetime.fromtimestamp(rig.clock.now, tz=UTC).hour
+    digest = {"enabled": True, "hour": hour, "days": "daily"}
+    link(cockpit, "carol", linked_at=rig.clock.now - 2 * 86400, tz="UTC", digest=digest)
+    _decision(cockpit)
+    from omnigent.server.factory import status_summary
+
+    working = status_summary.summary_from_raw
+
+    def _broken(*_args: Any, **_kwargs: Any) -> Any:
+        raise RuntimeError("builder bug")
+
+    monkeypatch.setattr(status_summary, "summary_from_raw", _broken)
+
+    await rig.tick()
+    report = await rig.tick(31)
+
+    assert report.digests == []
+    [text] = fake_slack.texts_to("U0CAROL")
+    assert "D-1 needs you" in text  # the decision still went out
+    assert rig.engine.digest_skipped == set()  # not skipped for the day: tried again
+
+    monkeypatch.setattr(status_summary, "summary_from_raw", working)
+    report = await rig.tick(61)
+    assert report.digests == ["carol"]
+
+
 async def test_posts_are_paced_one_a_second_per_token(
     rig: Rig, cockpit: Cockpit, fake_slack: FakeSlack
 ) -> None:

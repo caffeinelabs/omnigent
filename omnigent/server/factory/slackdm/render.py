@@ -67,12 +67,50 @@ def link(path_or_url: str, label: str, base: str | None = None) -> str:
     return f"<{url}|{safe_label}>"
 
 
+def cut(text: str, limit: int) -> str:
+    """
+    *text* cut to at most *limit* chars without breaking a mrkdwn link.
+
+    Escaped text has no bare ``<``, so one after the last ``>`` opens a link
+    the cut would leave unclosed: the cut goes before it (and ends in ``…``).
+    """
+    if len(text) <= limit:
+        return text
+    head = text[: limit - 1]
+    opened = head.rfind("<")
+    if opened > head.rfind(">"):
+        head = head[:opened]
+    return head.rstrip() + "…"
+
+
 def _section(text: str) -> dict[str, Any]:
-    return {"type": "section", "text": {"type": "mrkdwn", "text": text[:SECTION_MAX]}}
+    return {"type": "section", "text": {"type": "mrkdwn", "text": cut(text, SECTION_MAX)}}
 
 
 def _context(text: str) -> dict[str, Any]:
-    return {"type": "context", "elements": [{"type": "mrkdwn", "text": text[:SECTION_MAX]}]}
+    return {"type": "context", "elements": [{"type": "mrkdwn", "text": cut(text, SECTION_MAX)}]}
+
+
+def sections(lines: Sequence[str]) -> list[dict[str, Any]]:
+    """
+    Section blocks of *lines* (already escaped), each under :data:`SECTION_MAX`.
+
+    A section ends between lines, never inside one, so no link is cut; a
+    single line longer than a section is cut by :func:`cut`.
+    """
+    blocks: list[dict[str, Any]] = []
+    chunk: list[str] = []
+    size = 0
+    for line in lines:
+        grown = size + len(line) + (1 if chunk else 0)
+        if chunk and grown > SECTION_MAX:
+            blocks.append(_section("\n".join(chunk)))
+            chunk, grown = [], len(line)
+        chunk.append(line)
+        size = grown
+    if chunk:
+        blocks.append(_section("\n".join(chunk)))
+    return blocks
 
 
 def _deadline_line(item: Item, prefs: NotifyPrefs | None) -> str | None:
@@ -160,12 +198,26 @@ def plain(blocks: Sequence[Mapping[str, Any]], text: str) -> str:
             if isinstance(element, Mapping):
                 parts.append(str(element.get("text") or ""))
     joined = "\n".join(p for p in parts if p) or text
-    return joined[:PLAIN_MAX]
+    if len(joined) <= PLAIN_MAX:
+        return joined
+    # Whole lines while they fit, so no link is cut.
+    kept = joined[: PLAIN_MAX - 1].rpartition("\n")[0]
+    return (kept + "\n…") if kept else cut(joined, PLAIN_MAX)
 
 
-def message(lines: Sequence[str], context: str | None = None) -> list[dict[str, Any]]:
-    """:returns: Blocks of a simple DM (already escaped lines)."""
-    blocks = [_section("\n".join(lines))]
+def message(
+    lines: Sequence[str],
+    context: str | None = None,
+    *,
+    groups: Sequence[Sequence[str]] = (),
+) -> list[dict[str, Any]]:
+    """
+    Blocks of a simple DM (already escaped lines), split between lines when long.
+
+    :param groups: More lines after *lines*, each group starting a section of
+        its own (a digest's headings).
+    """
+    blocks = [block for group in (lines, *groups) if group for block in sections(group)]
     if context:
         blocks.append(_context(context))
     return blocks
@@ -174,6 +226,7 @@ def message(lines: Sequence[str], context: str | None = None) -> list[dict[str, 
 __all__ = [
     "base_url",
     "clip",
+    "cut",
     "esc",
     "fallback",
     "link",
@@ -181,4 +234,5 @@ __all__ = [
     "plain",
     "render_group",
     "render_one",
+    "sections",
 ]

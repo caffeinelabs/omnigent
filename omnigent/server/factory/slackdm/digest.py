@@ -242,8 +242,12 @@ def lead_line(summary: Mapping[str, Any] | None, base: str | None) -> str | None
     if not lead:
         return None
     parts = lead.get("parts") or [{"text": lead["text"]}]
+    # The note is one line, already trimmed: each run is escaped as is, so the
+    # spaces around a linked id stay (``esc`` would strip them).
     quote = "".join(
-        link(str(part["href"]), str(part["text"]), base) if part.get("href") else esc(part["text"])
+        link(str(part["href"]), str(part["text"]), base)
+        if part.get("href")
+        else issues.slack_escape(" ".join(str(part["text"]).splitlines()))
         for part in parts
     )
     return f"“{quote}”"
@@ -370,31 +374,34 @@ def build_digest(
         f"{local.strftime('%b')}*"
         f"  ({local.strftime('%H:%M')} {prefs_mod.tz_name(person.prefs)})"
     )
-    lines = [head]
+    top = [head]
     if summary is not None:
-        lines.append(esc(summary["headline"], 200))
+        top.append(esc(summary["headline"], 200))
+    # Each heading starts a section of its own (sections split between lines,
+    # never inside a link), so a busy factory's digest keeps every heading.
     if waiting.count:
-        lines.append(f"*Waiting on you ({waiting.count})*")
-        lines += waiting.lines
+        waits = [f"*Waiting on you ({waiting.count})*", *waiting.lines]
     else:
-        lines.append("*Waiting on you:* nothing")
+        waits = ["*Waiting on you:* nothing"]
+    doing = []
     if progress:
-        lines.append(f"*In progress ({len((summary or {}).get('working') or [])})*")
-        lines += progress
-    lines.append(f"*Last 24 h*  {counted or 'nothing new'}")
+        doing = [f"*In progress ({len((summary or {}).get('working') or [])})*", *progress]
+    day = [f"*Last 24 h*  {counted or 'nothing new'}"]
     if spend:
-        lines.append(f"*Spend*  {spend}")
+        day.append(f"*Spend*  {spend}")
     if nxt:
-        lines.append(f"*Next*  {nxt}")
+        day.append(f"*Next*  {nxt}")
+    notes = []
     if said and summary is not None:
-        lines.append(f"*{esc(summary['lead']['who'], 40)} said*  {said}")
+        notes.append(f"*{esc(summary['lead']['who'], 40)} said*  {said}")
     if retro:
-        lines.append(f"*Sentinel*  {retro}")
+        notes.append(f"*Sentinel*  {retro}")
     settings = link(
         rules.factory_path(ctx, "/settings/notifications"), "Notification settings", base
     )
     text = esc(f"{ctx.name} daily digest: {waiting.count} waiting on you", 150)
-    return Digest(text=text, blocks=message(lines, settings), waiting=waiting.count)
+    blocks = message(top, settings, groups=(waits, doing, day, notes))
+    return Digest(text=text, blocks=blocks, waiting=waiting.count)
 
 
 # ── Welcome, test and code DMs ─────────────────────────────────

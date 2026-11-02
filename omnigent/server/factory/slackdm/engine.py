@@ -503,8 +503,19 @@ class Engine:
         client = self.client_factory(token)
         for user_id, person in linked.items():
             try:
-                if await self._digest(deps, ctx, root, person, client, now, base, visibility):
-                    report.digests.append(user_id)
+                try:
+                    if await self._digest(deps, ctx, root, person, client, now, base, visibility):
+                        report.digests.append(user_id)
+                except _BotDown:
+                    raise
+                except Exception:  # noqa: BLE001 - a digest bug never holds back the DMs
+                    # Not marked skipped: the next tick tries the digest again.
+                    _logger.warning(
+                        "factory slack: digest failed for %s in %s",
+                        user_id,
+                        root.id,
+                        exc_info=True,
+                    )
                 outcome = await self._send(deps, ctx, root, person, client, now, base)
             except _BotDown:
                 return

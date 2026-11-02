@@ -298,10 +298,10 @@ async def test_spend_rate_above_the_alert(
     assert {r.status for r in _issues(world, "spend.rate")} == {"resolved"}
 
 
-async def test_the_shown_rate_is_back_two_minutes_after_a_restart(
+async def test_an_early_rate_is_back_five_minutes_after_a_restart(
     world: FactoryWorld, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The header's $/h needs two minutes of samples; the alert still needs half its window."""
+    """An early $/h needs five minutes of samples; the alert still needs half its window."""
     costs = {"total": 40.0}
     pl = world.id("pl")
 
@@ -311,15 +311,17 @@ async def test_the_shown_rate_is_back_two_minutes_after_a_restart(
     monkeypatch.setattr(snapshot, "subtree_cost", _cost)
     t0 = time.time()
     await _tick(world, t0)
-    assert detectors.spend_rate(_fid(world)) is None  # one sample: no rate yet
-    costs["total"] = 40.1
-    await _tick(world, t0 + 60)
-    assert detectors.spend_rate(_fid(world)) is None  # negative: under two minutes
+    assert detectors.spend_rate(_fid(world), early=True) is None  # one sample: no rate yet
+    # A turn's cost lands at once: two minutes would read it as $9/h.
+    costs["total"] = 40.3
+    await _tick(world, t0 + 2 * 60)
+    assert detectors.spend_rate(_fid(world), early=True) is None  # under five minutes
 
     costs["total"] = 40.5
-    await _tick(world, t0 + 3 * 60)
-    assert detectors.spend_rate(_fid(world)) == 10.0  # $0.50 in 3 minutes
-    assert _issues(world, "spend.rate") == []  # 10 $/h is under the alert anyway
+    await _tick(world, t0 + 6 * 60)
+    assert detectors.spend_rate(_fid(world), early=True) == 5.0  # $0.50 in 6 minutes
+    assert detectors.spend_rate(_fid(world)) is None  # the window's rate is not there yet
+    assert _issues(world, "spend.rate") == []
 
 
 # ── PRs, decisions, previews ───────────────────────────────────

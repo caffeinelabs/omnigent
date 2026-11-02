@@ -554,8 +554,8 @@ def _utc_day(epoch_s: float) -> str:
 # ── Supervisor tick ────────────────────────────────────────────
 
 
-SHOWN_RATE_MIN_SPAN_S: Final = 120.0
-"""The cockpit's $/h needs this much history (the alert needs half its window)."""
+SHOWN_RATE_MIN_SPAN_S: Final = 300.0
+"""History an early $/h needs (the alert needs half its window): see :func:`spend_rate`."""
 
 
 @dataclass
@@ -589,21 +589,30 @@ class _Sampler:
 
 _samplers: dict[tuple[str, str], _Sampler] = {}
 _rates: dict[str, float | None] = {}
+_early_rates: dict[str, float | None] = {}
 _down_streak: dict[str, int] = {}
 
 
-def spend_rate(factory_id: str) -> float | None:
-    """:returns: The factory's $/h over the spend window at the last tick, if known."""
+def spend_rate(factory_id: str, *, early: bool = False) -> float | None:
+    """
+    The factory's $/h over the spend window at the last tick, if known.
+
+    :param early: Until the samples span half the window (after a restart),
+        the rate over :data:`SHOWN_RATE_MIN_SPAN_S` of them instead.
+    """
     try:
-        return _rates.get(norm_id(factory_id))
+        key = norm_id(factory_id)
     except ValueError:
         return None
+    rate = _rates.get(key)
+    return _early_rates.get(key) if rate is None and early else rate
 
 
 def reset() -> None:
     """Forget in-memory detector state (tests)."""
     _samplers.clear()
     _rates.clear()
+    _early_rates.clear()
     _down_streak.clear()
     _open_beats.clear()
     _waste.clear()
@@ -874,11 +883,8 @@ async def _spend(
         sampler = _samplers.setdefault((key, scope), _Sampler(deque()))
         rate = sampler.rate(now, cost, window_s)
         if scope == "factory":
-            # Shown from two minutes of history, so a server restart does not
-            # blank the cockpit's $/h for half the alert window.
-            _rates[key] = (
-                rate if rate is not None else sampler.peek(now, cost, SHOWN_RATE_MIN_SPAN_S)
-            )
+            _rates[key] = rate
+            _early_rates[key] = sampler.peek(now, cost, SHOWN_RATE_MIN_SPAN_S)
         if rate is not None and rate > limit:
             project = scope.removeprefix("project:") if scope != "factory" else None
             what = "the factory" if project is None else f"project {project}"

@@ -2,12 +2,16 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import type { FactorySnapshot } from "@/lib/factoryApi";
 import type { StatusSummary } from "@/lib/factoryStatusApi";
 import { LIVE_RUN_FACTORY_ID } from "../__fixtures__/liveRun";
+import { round3IssueList } from "../agents/__fixtures__/opsFixtures";
 import { FactoryNowContext } from "../factoryClock";
 import { ROUND3_NOW_S, round3Snapshot } from "../shell/__fixtures__/shellFixtures";
+import { FactoryShellContext, type FactoryShellValue } from "../shell/FactoryShellContext";
 import { FactoryViewerProvider } from "../shell/viewerCan";
+import { statusSummaryOf } from "./__fixtures__/nowFixtures";
 import {
   busyNow,
   cantStartNow,
@@ -18,7 +22,9 @@ import {
   validatingNow,
   waitingOnYouNow,
 } from "./__fixtures__/nowScenarios";
-import { clockText } from "./nowCardModel";
+import { clockText, nowShownKeys } from "./nowCardModel";
+import { splitNeedsYou } from "./needsYouModel";
+import { NeedsYouPanel } from "./NeedsYouPanel";
 import { NowCard, NowCardView } from "./NowCard";
 
 const fetchMock = vi.hoisted(() => vi.fn());
@@ -28,9 +34,62 @@ const FID = LIVE_RUN_FACTORY_ID;
 const ROUND3_NOW = new Date(ROUND3_NOW_S * 1000);
 const SUMMARY_PATH = `/v1/factory/factories/${FID}/status-summary`;
 
+beforeAll(() => {
+  Element.prototype.scrollIntoView ??= () => undefined;
+});
+
 afterEach(() => {
   fetchMock.mockReset();
 });
+
+function shellOf(snapshot: FactorySnapshot): FactoryShellValue {
+  return {
+    factoryId: snapshot.factory.id,
+    snapshot,
+    clockOffsetS: 0,
+    nowS: ROUND3_NOW_S,
+    updatedAt: Date.now(),
+    location: { page: "overview", id: null },
+    wide: false,
+    openShare: vi.fn(),
+    openPalette: vi.fn(),
+    openAddProject: vi.fn(),
+    openAddProjectTitled: vi.fn(),
+  };
+}
+
+/** The Overview's two lists as the page wires them: Now above, Needs you below. */
+function renderOverview(highlightDecision: string | null = null) {
+  const snapshot = round3Snapshot();
+  const issues = round3IssueList();
+  const summary = statusSummaryOf(snapshot, { incidents: issues, last24hUsd: 41.2 });
+  const shell = shellOf(snapshot);
+  wrap(
+    <FactoryNowContext.Provider value={ROUND3_NOW}>
+      <FactoryShellContext.Provider value={shell}>
+        <FactoryViewerProvider viewer={snapshot.viewer}>
+          <NowCardView
+            factoryId={snapshot.factory.id}
+            summary={summary}
+            nowS={ROUND3_NOW_S}
+            snapshot={snapshot}
+            issues={issues}
+            highlightDecision={highlightDecision}
+          />
+          <NeedsYouPanel
+            snapshot={snapshot}
+            split={splitNeedsYou(snapshot, snapshot.viewer ?? null, { data: issues, mine: [] })}
+            nowS={ROUND3_NOW_S}
+            clockOffsetS={0}
+            highlightDecision={highlightDecision}
+            shownInNow={nowShownKeys(summary)}
+          />
+        </FactoryViewerProvider>
+      </FactoryShellContext.Provider>
+    </FactoryNowContext.Provider>,
+  );
+  return summary;
+}
 
 function wrap(children: ReactNode) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
@@ -365,6 +424,44 @@ describe("NowCardView", () => {
       "Atlas said 4m ago",
       expect.stringContaining("Atlas checks in again at"),
     ]);
+  });
+});
+
+describe("NowCardView on the Overview", () => {
+  it("gives an incident it lists the panel's first runbook step beside Open", () => {
+    const summary = renderOverview();
+
+    const inc12 = summary.waiting.find((item) => item.ref === "INC-12")!;
+    const now = screen.getByTestId(`now-waiting-row-${inc12.key}`);
+    const step = within(now).getByTestId("runbook-INC-12");
+    expect(step.querySelectorAll("button, a")).toHaveLength(1);
+    expect(within(now).getByTestId(`now-action-${inc12.key}`)).toHaveTextContent("Open");
+    // Needs you leaves it out: the step is on the Overview once, in Now.
+    expect(screen.getAllByTestId("runbook-INC-12")).toHaveLength(1);
+    expect(
+      screen.queryByTestId(`needs-item-${inc12.key.replace("incident:", "issue:")}`),
+    ).toBeNull();
+  });
+
+  it("opens the decision ?decision= names in Now when Now lists it", () => {
+    const summary = renderOverview("D-35");
+
+    const d35 = summary.waiting.find((item) => item.ref === "D-35")!;
+    expect(nowShownKeys(summary).has(d35.key)).toBe(true);
+    const card = screen.getByTestId("decision-card-D-35");
+    expect(card).toHaveAttribute("data-highlighted", "true");
+    expect(screen.getByTestId(`now-waiting-row-${d35.key}`)).toContainElement(card);
+    expect(screen.getAllByTestId("decision-card-D-35")).toHaveLength(1);
+    expect(screen.getByTestId(`now-action-${d35.key}`)).toHaveAttribute("aria-expanded", "true");
+  });
+
+  it("leaves a decision Now does not list to Needs you, which opens it", () => {
+    const summary = renderOverview("D-34");
+
+    const d34 = summary.waiting.find((item) => item.ref === "D-34")!;
+    expect(nowShownKeys(summary).has(d34.key)).toBe(false);
+    const card = screen.getByTestId("decision-card-D-34");
+    expect(screen.getByTestId(`needs-item-${d34.key}`)).toContainElement(card);
   });
 });
 

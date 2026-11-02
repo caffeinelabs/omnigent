@@ -19,7 +19,6 @@ import {
 import type { FactorySnapshot } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
-import { RunbookButtons } from "../alerts/IssueActions";
 import { SeverityIcon } from "../alerts/IssueCard";
 import { issueMember } from "../alerts/runbookModel";
 import { DecisionCard, assigneeText } from "../decisions/DecisionCard";
@@ -39,7 +38,7 @@ import {
   defaultNeedsTab,
   withoutShown,
 } from "./needsYouModel";
-import { DecisionAnswerButton, OpenButton, ReviewButton } from "./WaitingActions";
+import { DecisionAnswerButton, IncidentActions, OpenButton, ReviewButton } from "./WaitingActions";
 
 /** Rows shown before "Show all": keeps the projects table on the first screen. */
 export const NEEDS_ROWS_SHOWN = 5;
@@ -151,14 +150,12 @@ function Row({
       ) : null;
       meta = formatElapsed(nowS - issue.first_seen);
       action = (
-        <span className="flex items-center gap-1">
-          <RunbookButtons issue={issue} limit={1} />
-          <OpenButton
-            href={alertPageHref(fid, issueRef)}
-            componentId="factory.overview.needs_issue"
-            testId={`needs-issue-${issueRef}`}
-          />
-        </span>
+        <IncidentActions
+          issue={issue}
+          href={alertPageHref(fid, issueRef)}
+          componentId="factory.overview.needs_issue"
+          testId={`needs-issue-${issueRef}`}
+        />
       );
       break;
     }

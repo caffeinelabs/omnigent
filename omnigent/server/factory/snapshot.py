@@ -1289,9 +1289,13 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
         "engine_mode": await asyncio.to_thread(loops.engine_mode, deps, factory_id),
     }
     rate = detectors.spend_rate(factory_id)
-    body["totals"] = _totals(
-        body, cost, rate if rate is not None else factory_usd_per_h(factory_id)
-    )
+    if rate is None:
+        # Right after a restart: the agents' own rates, else a few minutes of samples
+        # (a turn's cost lands at once, so a shorter span would inflate it).
+        rate = factory_usd_per_h(factory_id)
+    if rate is None:
+        rate = detectors.spend_rate(factory_id, early=True)
+    body["totals"] = _totals(body, cost, rate)
     validated = schemas.FactorySnapshot.model_validate(body).model_dump(mode="json")
     return RawSnapshot(
         factory_id=bare_id(factory_id),

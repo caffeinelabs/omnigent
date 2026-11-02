@@ -44,6 +44,9 @@ export function OverviewPage() {
   // What the Now card lists (with its buttons) is not repeated in Needs you.
   const now = useFactoryStatusSummary(snapshot.factory.id);
   const shownInNow = useMemo(() => (now.data ? nowShownKeys(now.data) : null), [now.data]);
+  // `?decision=` opens that decision where it is listed: in Now, else in Needs you.
+  // The dock's rail highlights it when there is a dock.
+  const highlightDecision = wide ? null : params.get("decision");
   useHashScroll();
   return (
     <div data-testid="factory-overview" className="flex min-w-0 flex-col gap-4">
@@ -51,6 +54,8 @@ export function OverviewPage() {
         factoryId={snapshot.factory.id}
         nowS={nowS}
         snapshot={snapshot}
+        issues={issues.data?.data ?? null}
+        highlightDecision={highlightDecision}
         clockOffsetS={clockOffsetS}
       />
       <NeedsYouPanel
@@ -58,8 +63,7 @@ export function OverviewPage() {
         split={split}
         nowS={nowS}
         clockOffsetS={clockOffsetS}
-        // The dock's rail highlights it when there is a dock.
-        highlightDecision={wide ? null : params.get("decision")}
+        highlightDecision={highlightDecision}
         shownInNow={shownInNow}
       />
       <ProjectsTable
