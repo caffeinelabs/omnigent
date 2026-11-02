@@ -51,6 +51,14 @@ LABEL_DEAD_ALERTED_AT: Final = "omnigent.factory.dead_alerted_at"
 """Epoch seconds of the last dead-member alert (top-level; dedupes across rolls)."""
 LABEL_DEAD_REASON: Final = "omnigent.factory.dead_reason"
 """Why a dead member's relaunch failed, e.g. ``"terminal_failed_to_start: RuntimeError: …"``."""
+LABEL_LAUNCH_TRIES: Final = "omnigent.factory.launch_tries"
+"""Sandbox launches of a member's current start, ``"2"`` after one retry on a new sandbox.
+
+Absent once its sandbox came up (top-level; set by the server only)."""
+LABEL_LAUNCH_ASKED: Final = "omnigent.factory.launch_asked"
+"""The ``launch_tries`` value owners were last asked about (dedupes the decision)."""
+LABEL_SANDBOX_RELEASED_AT: Final = "omnigent.factory.sandbox_released_at"
+"""Epoch seconds the server stopped a finished member's sandbox (top-level)."""
 LABEL_KEEP_PREVIEWS: Final = "omnigent.factory.keep_previews"
 """``"0"`` lets a paused PL's pod idle out despite live previews (PL only)."""
 LABEL_DEFAULT_REPO: Final = "omnigent.factory.default_repo"
@@ -151,6 +159,7 @@ AGENT_STAGES: Final = frozenset(
 # Action ids a decision option can carry; the server runs them on answer.
 ACTION_RESTART: Final = "restart"
 ACTION_RELAUNCH: Final = "relaunch"
+ACTION_NEW_SANDBOX: Final = "new_sandbox"
 ACTION_PAUSE: Final = "pause"
 ACTION_RESUME: Final = "resume"
 ACTION_DISMISS: Final = "dismiss"
@@ -169,6 +178,7 @@ DECISION_ACTIONS: Final = frozenset(
     {
         ACTION_RESTART,
         ACTION_RELAUNCH,
+        ACTION_NEW_SANDBOX,
         ACTION_PAUSE,
         ACTION_RESUME,
         ACTION_DISMISS,

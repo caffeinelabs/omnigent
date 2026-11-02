@@ -1,7 +1,8 @@
 /**
  * The ⋯ menu of a project card and the project page: pause/resume, restart
- * and relaunch the PL (or start a missing one), switch its factory preview to
- * a PR, ask for env status, edit the charter and stop the project. Every lever is a server
+ * and relaunch the PL (with its spec, or on a new sandbox), or start a missing
+ * one, switch its factory preview to a PR, ask for env status, edit the
+ * charter and stop the project. Every lever is a server
  * control (never a chat message); a chip shows what it is waiting for, and
  * paused or failed projects get their next step inline. A card places that
  * inline part under its title (`useProjectControlParts`); the page keeps
@@ -21,6 +22,7 @@ import {
   RefreshCwIcon,
   RotateCcwIcon,
   ServerIcon,
+  ServerCogIcon,
   SquareIcon,
   SquareStackIcon,
   TriangleAlertIcon,
@@ -47,7 +49,13 @@ import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { driftText } from "../board/TeamStrip";
 import { LEVER_REASON, LeverGated, useViewerCan } from "../shell/viewerCan";
-import { PauseDialog, RelaunchDialog, RestartDialog, TypeToConfirmDialog } from "./ControlDialogs";
+import {
+  NewSandboxDialog,
+  PauseDialog,
+  RelaunchDialog,
+  RestartDialog,
+  TypeToConfirmDialog,
+} from "./ControlDialogs";
 import { PendingChip, showUndoToast } from "./ControlFeedback";
 import { controlErrorMessage, relaunchableDrift } from "./controlModel";
 import { EditCharterDialog } from "./EditCharterDialog";
@@ -65,7 +73,7 @@ export interface ProjectControlsMenuProps {
   members: MemberView[];
 }
 
-type DialogKind = "pause" | "stop" | "restart" | "relaunch" | "charter";
+type DialogKind = "pause" | "stop" | "restart" | "relaunch" | "new_sandbox" | "charter";
 
 const LIVE_PREVIEW = new Set(["deploying", "ready", "stale"]);
 
@@ -81,8 +89,9 @@ function previewWord(pr: PrView): string {
 export interface ProjectControlParts {
   /**
    * The project's next step, or what a control waits for: the pending chip,
-   * Resume on a paused or stopped (not done) project, Restart and Relaunch on
-   * a failed one; null when there is none.
+   * Resume on a paused or stopped (not done) project, New sandbox (and Restart
+   * and Relaunch, unless the sandbox never came up) on a failed one; null when
+   * there is none.
    */
   quick: ReactNode | null;
   /** The ⋯ trigger with its menu and confirm dialogs. */
@@ -121,6 +130,8 @@ export function useProjectControlParts(
   const paused = project.overlay === "paused";
   const stopped = plMember?.state === "done";
   const failed = project.overlay === "failed";
+  // Its sandbox never came up: Restart and Relaunch would reuse it; only a new one helps.
+  const sandboxFailed = failed && (project.overlay_reason ?? "").startsWith("PL sandbox failed");
   const openPrs = prs.filter((pr) => pr.state === "open");
   const previewsEnabled = project.charter?.preview.enabled === true;
   const livePreviews = openPrs.filter(
@@ -159,6 +170,11 @@ export function useProjectControlParts(
   const restart = (note: string) =>
     void controls.send({ action: "restart", target, ...(note ? { note } : {}) });
   const relaunch = () => void controls.send({ action: "relaunch", target });
+  const newSandbox = (note: string) =>
+    void controls.send(
+      { action: "new_sandbox", target, ...(note ? { note } : {}) },
+      { label: pl?.title ?? project.title },
+    );
   const stop = () => void controls.send({ action: "stop", target });
   const envStatus = () => void controls.send({ action: "env_status", target });
   const startPl = async () => {
@@ -218,26 +234,42 @@ export function useProjectControlParts(
         <Button
           variant="outline"
           size="xs"
-          onClick={() => setDialog("restart")}
-          data-testid={`control-restart-quick-${project.slug}`}
-          componentId="factory.project.restart_quick"
+          onClick={() => setDialog("new_sandbox")}
+          data-testid={`control-new-sandbox-quick-${project.slug}`}
+          componentId="factory.project.new_sandbox_quick"
         >
-          <RotateCcwIcon />
-          Restart
+          <ServerCogIcon />
+          New sandbox
         </Button>
       </LeverGated>
-      <LeverGated lever="restart" className="@max-[40rem]:hidden">
-        <Button
-          variant="outline"
-          size="xs"
-          onClick={() => setDialog("relaunch")}
-          data-testid={`control-relaunch-quick-${project.slug}`}
-          componentId="factory.project.relaunch_quick"
-        >
-          <RefreshCwIcon />
-          Relaunch with spec
-        </Button>
-      </LeverGated>
+      {!sandboxFailed && (
+        <LeverGated lever="restart">
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={() => setDialog("restart")}
+            data-testid={`control-restart-quick-${project.slug}`}
+            componentId="factory.project.restart_quick"
+          >
+            <RotateCcwIcon />
+            Restart
+          </Button>
+        </LeverGated>
+      )}
+      {!sandboxFailed && (
+        <LeverGated lever="restart" className="@max-[40rem]:hidden">
+          <Button
+            variant="outline"
+            size="xs"
+            onClick={() => setDialog("relaunch")}
+            data-testid={`control-relaunch-quick-${project.slug}`}
+            componentId="factory.project.relaunch_quick"
+          >
+            <RefreshCwIcon />
+            Relaunch with spec
+          </Button>
+        </LeverGated>
+      )}
     </span>
   ) : null;
 
@@ -332,6 +364,20 @@ export function useProjectControlParts(
                   {driftText(drift)}
                 </span>
               )}
+            </span>
+          </DropdownMenuItem>
+          <DropdownMenuItem
+            onSelect={() => setDialog("new_sandbox")}
+            disabled={!pl || !can.restart}
+            data-testid="control-new-sandbox"
+            className="items-start"
+          >
+            <ServerCogIcon className="mt-0.5" />
+            <span className="flex min-w-0 flex-col">
+              <span>Relaunch on a new sandbox…</span>
+              <span className="text-sm whitespace-normal text-muted-foreground">
+                When its sandbox never started or is stuck
+              </span>
             </span>
           </DropdownMenuItem>
           <MenuSection
@@ -435,6 +481,12 @@ export function useProjectControlParts(
         who={pl?.title ?? "the PL"}
         drift={drift}
         onConfirm={relaunch}
+      />
+      <NewSandboxDialog
+        open={dialog === "new_sandbox"}
+        onOpenChange={close}
+        who={pl?.title ?? "the PL"}
+        onConfirm={newSandbox}
       />
       <TypeToConfirmDialog
         open={dialog === "stop"}

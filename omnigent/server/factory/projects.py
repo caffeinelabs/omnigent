@@ -127,6 +127,21 @@ async def _active(deps: FactoryDeps, root: Conversation, slug: str) -> FactoryPr
     return row
 
 
+def holds_cap_slot(project: FactoryProject) -> bool:
+    """
+    Whether *project* counts toward the project cap: active and not finished.
+
+    A project whose work is merged or done keeps its row (and maybe its PL for
+    a while) but no longer takes a slot; its pod still counts toward the pods.
+    """
+    return project.status == STATUS_ACTIVE and project.stage not in (STAGE_MERGED, STAGE_DONE)
+
+
+def cap_slots(projects: Sequence[FactoryProject]) -> int:
+    """:returns: How many of *projects* take a slot under the project cap."""
+    return sum(1 for p in projects if holds_cap_slot(p))
+
+
 def cap_candidates(projects: Sequence[FactoryProject]) -> dict[str, list[str]]:
     """
     Projects a human could close to make room under the project cap.
@@ -423,8 +438,7 @@ async def create_project_core(
         if check_depends:
             check_dependencies(rows, {project.slug: (project.depends_on or [], "depends_on")})
         if check_caps:
-            active = sum(1 for p in rows if p.status == STATUS_ACTIVE)
-            over_caps(active - cap_allowance, 1, rows)
+            over_caps(cap_slots(rows) - cap_allowance, 1, rows)
         fields = start.project_fields(project, actor_name(actor), defaults)
         fields["charter"] = {**fields["charter"], "spawn_owner": SPAWN_SERVER}
         fields["created_by"] = actor.id if actor.kind != "human" else actor_name(actor)
@@ -730,9 +744,9 @@ async def split_project_core(
             {c.slug: (c.depends_on or [], f"into[{i}].depends_on") for i, c in enumerate(into)},
             closing=[slug] if keep == KEEP_CANCEL else [],
         )
-    active = sum(1 for p in rows if p.status == STATUS_ACTIVE)
-    closing = 1 if keep == KEEP_CANCEL else 0
-    over_caps(active - closing - cap_allowance, len(into), rows)
+    original = next((p for p in rows if p.slug == slug), None)
+    closing = 1 if keep == KEEP_CANCEL and original is not None and holds_cap_slot(original) else 0
+    over_caps(cap_slots(rows) - closing - cap_allowance, len(into), rows)
     children: list[FactoryProject] = []
     try:
         for child in into:
@@ -916,10 +930,12 @@ __all__ = [
     "actor_name",
     "cancel_project_core",
     "cap_candidates",
+    "cap_slots",
     "check_dependencies",
     "check_pr_map",
     "create_project_core",
     "drop_unstarted",
+    "holds_cap_slot",
     "human_actor",
     "human_role",
     "merge_projects_core",

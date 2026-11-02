@@ -683,13 +683,10 @@ def validate(
         raise CockpitError(
             400, "invalid_body", "split, merge and cancel need a reason", field="reason"
         )
-    active = sum(1 for p in ctx.rows.values() if p.status == projects.STATUS_ACTIVE)
-    removed = sum(
-        1 if c.op == "cancel" or (c.op == "split" and c.keep == "cancel") else len(c.absorbed)
-        for c in changes
-    )
+    slots = {p.slug for p in ctx.rows.values() if projects.holds_cap_slot(p)}
+    removed = sum(_closes(c, slots) for c in changes)
     added = sum(len(c.creates) for c in changes)
-    projects.over_caps(active - removed, added, list(ctx.rows.values()))
+    projects.over_caps(len(slots) - removed, added, list(ctx.rows.values()))
     spawn_now = sum(1 for c in changes for p in c.creates if not p.depends_on)
     if spawn_now and ctx.live_pods + spawn_now > ctx.max_pods:
         raise CockpitError(
@@ -1214,9 +1211,11 @@ async def apply_now(
     }
     created: list[FactoryProject] = []
     started: set[str] = set()
+    rows = await asyncio.to_thread(store.list_projects, root.id)
+    slots = {p.slug for p in rows if projects.holds_cap_slot(p)}
     try:
         for i, change in enumerate(plan.changes):
-            closing = sum(_closes(c) for c in plan.changes[i + 1 :])
+            closing = sum(_closes(c, slots) for c in plan.changes[i + 1 :])
             await _apply_change(
                 app_state, root, change, actor, user_id, ref, result, created, closing
             )
@@ -1267,11 +1266,14 @@ async def apply_now(
     return result
 
 
-def _closes(change: Change) -> int:
-    """:returns: How many active projects *change* closes."""
+def _closes(change: Change, slots: set[str]) -> int:
+    """
+    :param slots: Slugs of the projects that take a slot under the cap.
+    :returns: How many slots *change* frees by closing projects.
+    """
     if change.op == "cancel" or (change.op == "split" and change.keep == "cancel"):
-        return 1
-    return len(change.absorbed) if change.op == "merge" else 0
+        return 1 if change.slug in slots else 0
+    return sum(1 for slug in change.absorbed if slug in slots) if change.op == "merge" else 0
 
 
 async def _apply_change(

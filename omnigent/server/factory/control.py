@@ -67,6 +67,7 @@ ACTION_RESUME: Final = "resume"
 ACTION_STOP: Final = "stop"
 ACTION_RESTART: Final = "restart"
 ACTION_RELAUNCH: Final = "relaunch"
+ACTION_NEW_SANDBOX: Final = "new_sandbox"
 ACTION_CADENCE: Final = "cadence"
 ACTION_PREVIEW: Final = "preview"
 ACTION_ENV_STATUS: Final = "env_status"
@@ -76,6 +77,7 @@ CONTROL_ACTIONS: Final = (
     ACTION_STOP,
     ACTION_RESTART,
     ACTION_RELAUNCH,
+    ACTION_NEW_SANDBOX,
     ACTION_CADENCE,
     ACTION_PREVIEW,
     ACTION_ENV_STATUS,
@@ -552,9 +554,10 @@ async def plan_control(
     Validate and authorize a control without side effects.
 
     Access: EDIT on every member acted on (and the root for a factory-wide
-    action); MANAGE (factory owners) to stop, restart and relaunch, and on the
-    root to stop the whole factory. They run as server mail, so an owner needs
-    no session ownership. Only ``cadence`` may omit *target* (it is factory-wide).
+    action); MANAGE (factory owners) to stop, restart and relaunch (also on a
+    new sandbox), and on the root to stop the whole factory. They run as server
+    mail, so an owner needs no session ownership. Only ``cadence`` may omit
+    *target* (it is factory-wide).
 
     :raises CockpitError: On an invalid action, target or option.
     :raises OmnigentError: 401/403/404 from the access checks.
@@ -578,7 +581,10 @@ async def plan_control(
     by = await human_label(deps, root.id, user_id)
     plan = ControlPlan(root=root, action=action, target=resolved, by=by, note=note)
 
-    if action in (ACTION_RESTART, ACTION_RELAUNCH) and resolved.kind == "factory":
+    if (
+        action in (ACTION_RESTART, ACTION_RELAUNCH, ACTION_NEW_SANDBOX)
+        and resolved.kind == "factory"
+    ):
         raise CockpitError(
             400, "invalid_target", f"{action} acts on one project or member", field="target"
         )
@@ -631,7 +637,7 @@ async def plan_control(
     if resolved.kind == "factory":
         level = LEVEL_MANAGE if action == ACTION_STOP else LEVEL_EDIT
         await require(deps, user_id, root.id, level)
-    owner_actions = (ACTION_STOP, ACTION_RESTART, ACTION_RELAUNCH)
+    owner_actions = (ACTION_STOP, ACTION_RESTART, ACTION_RELAUNCH, ACTION_NEW_SANDBOX)
     member_level = LEVEL_MANAGE if action in owner_actions else LEVEL_EDIT
     for member in recipients:
         await require(deps, user_id, member.id, member_level)
@@ -647,6 +653,11 @@ async def plan_control(
                     "declares no launch args",
                 )
             plan.launch_args[member.id] = args
+    if action == ACTION_NEW_SANDBOX:
+        from omnigent.server.factory import new_sandbox
+
+        for member in recipients:
+            await new_sandbox.check(app_state, member)
     return plan
 
 
@@ -788,6 +799,8 @@ def control_summary(plan: ControlPlan) -> str:
         return f"{plan.by} updated the cadence of {what} to {plan.options['cadence']}"
     if action == ACTION_ENV_STATUS:
         return f"{plan.by} requested env status of {what}"
+    if action == ACTION_NEW_SANDBOX:
+        return f"{plan.by} relaunched {what} on a new sandbox"
     verb = {
         ACTION_PAUSE: "paused",
         ACTION_RESUME: "resumed",
@@ -836,6 +849,12 @@ async def execute_control(app_state: Any, plan: ControlPlan) -> ControlResult:
     store = deps.conversation_store
     mail_ids: dict[str, str] = {}
     for member in plan.recipients:
+        if plan.action == ACTION_NEW_SANDBOX:
+            from omnigent.server.factory.new_sandbox import relaunch_on_new_sandbox
+
+            # Its text goes out once the new sandbox is up (see launch_watch).
+            await relaunch_on_new_sandbox(app_state, member, by=plan.by, note=plan.note)
+            continue
         labels = _labels_for(plan, member)
         if plan.action in (ACTION_RESTART, ACTION_RELAUNCH):
             # It comes back on this platform version and its agent's current bundle.
@@ -1192,6 +1211,7 @@ async def submit_pr_feedback(
 __all__ = [
     "ACTION_CADENCE",
     "ACTION_ENV_STATUS",
+    "ACTION_NEW_SANDBOX",
     "ACTION_PAUSE",
     "ACTION_PREVIEW",
     "ACTION_RELAUNCH",

@@ -15,7 +15,7 @@ import { ClaimChip, StatusTag } from "../board/ProjectCard";
 import { ProvisioningTimeline, StageStepper } from "../board/StageStepper";
 import { ProjectControlsMenu } from "../controls/ProjectControlsMenu";
 import { formatElapsed, formatUsd } from "../factoryFormat";
-import { stageHeadline } from "../projects/stageHeadline";
+import { provisioningStep, stageHeadline } from "../projects/stageHeadline";
 
 export function ProjectHeader({
   snapshot,
@@ -155,7 +155,10 @@ export function ProjectHeader({
           )}
         </div>
         {timeline && project.provisioning && (
-          <ProvisioningTimeline stage={project.provisioning.stage} />
+          <ProvisioningTimeline
+            stage={project.provisioning.stage}
+            detail={provisioningStep(project.provisioning, nowS)}
+          />
         )}
       </div>
     </header>

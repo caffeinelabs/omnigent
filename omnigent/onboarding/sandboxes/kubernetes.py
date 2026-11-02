@@ -46,6 +46,7 @@ Platform notes that shape this launcher:
 from __future__ import annotations
 
 import contextlib
+import functools
 import importlib
 import logging
 import os
@@ -69,7 +70,15 @@ from omnigent.onboarding.sandboxes.base import (
     SandboxHostLauncher,
     render_host_config_write_command,
 )
-from omnigent.onboarding.sandboxes.types import SandboxCapabilities, clone_dir_names
+from omnigent.onboarding.sandboxes.types import (
+    LAUNCH_STEP_CLONE,
+    LAUNCH_STEP_CONTAINERS,
+    LAUNCH_STEP_HOST,
+    LAUNCH_STEP_IMAGE,
+    LAUNCH_STEP_NODE,
+    SandboxCapabilities,
+    clone_dir_names,
+)
 from omnigent.pr_button import (
     _GH_WRAPPER_BIN_REL,
     _SESSION_URL_RE,
@@ -237,6 +246,13 @@ _JOB_ACTIVE_DEADLINE_S: int = 7 * 24 * 3600
 # application-level cleanup never ran. 24h leaves a window to inspect a
 # failed Job's status/logs before it's swept.
 _JOB_TTL_SECONDS_AFTER_FINISHED: int = 24 * 3600
+
+# How often the start wait re-reads a scheduled Pod's events to tell an image
+# pull from a container start (one list call; only while the Pod is not running).
+_PROGRESS_EVENTS_EVERY_S: float = 6.0
+
+# The image an image-pull event names: ``Pulling image "<ref>"``.
+_EVENT_IMAGE_RE = re.compile(r'image "([^"]+)"')
 
 # Lines of container log tail surfaced in a start-failure message (e.g. the git
 # clone error from the init container).
@@ -1204,6 +1220,138 @@ def _current_wait_reason(pod: object) -> str | None:
     return None
 
 
+def _epoch(value: object) -> int | None:
+    """:returns: A Kubernetes timestamp as epoch seconds, or ``None`` when absent."""
+    timestamp = getattr(value, "timestamp", None)
+    if not callable(timestamp):
+        return None
+    try:
+        seconds = timestamp()
+        return int(seconds) if isinstance(seconds, int | float) else None
+    except (TypeError, ValueError, OverflowError, OSError):
+        return None
+
+
+def _event_at(event: object) -> int | None:
+    """:returns: When an event last happened (epoch seconds), or ``None``."""
+    for attr in ("last_timestamp", "event_time", "first_timestamp"):
+        at = _epoch(getattr(event, attr, None))
+        if at is not None:
+            return at
+    return None
+
+
+def _pending_pull_since(events: Sequence[object]) -> int | None:
+    """
+    When the oldest image pull still in progress started, per the Pod's events.
+
+    An image is still pulling while its newest ``Pulling`` event is newer than
+    its newest ``Pulled`` one (``Pulled`` also covers "already present").
+
+    :param events: The Pod's ``V1Event`` objects, any order.
+    :returns: Epoch seconds, or ``None`` when no pull is in progress.
+    """
+    pulling: dict[str, int] = {}
+    pulled: dict[str, int] = {}
+    for event in events:
+        reason = getattr(event, "reason", None)
+        if reason not in ("Pulling", "Pulled"):
+            continue
+        match = _EVENT_IMAGE_RE.search(getattr(event, "message", None) or "")
+        at = _event_at(event)
+        if match is None or at is None:
+            continue
+        seen = pulling if reason == "Pulling" else pulled
+        seen[match.group(1)] = max(seen.get(match.group(1), at), at)
+    pending = [at for image, at in pulling.items() if at > pulled.get(image, -1)]
+    return min(pending) if pending else None
+
+
+def _start_step(pod: object, events: Sequence[object]) -> tuple[str, int | None]:
+    """
+    What a Pod that is not running yet waits on: a node, an image, the clone, its containers.
+
+    :param pod: A ``V1Pod`` read from the API.
+    :param events: The Pod's recent events (an image pull shows only there).
+    :returns: ``(step, since)``: one of the ``LAUNCH_STEP_*`` values and when it
+        began (epoch seconds), or ``None`` when the Pod does not say.
+    """
+    status = getattr(pod, "status", None)
+    conditions = getattr(status, "conditions", None) or []
+    scheduled = next((c for c in conditions if getattr(c, "type", None) == "PodScheduled"), None)
+    node = getattr(getattr(pod, "spec", None), "node_name", None)
+    if not node and (scheduled is None or getattr(scheduled, "status", None) != "True"):
+        since = _epoch(getattr(scheduled, "last_transition_time", None))
+        if since is None:
+            since = _epoch(getattr(getattr(pod, "metadata", None), "creation_timestamp", None))
+        return LAUNCH_STEP_NODE, since
+    pull = _pending_pull_since(events)
+    if pull is not None:
+        return LAUNCH_STEP_IMAGE, pull
+    for cs in getattr(status, "init_container_statuses", None) or []:
+        running = getattr(getattr(cs, "state", None), "running", None)
+        if running is not None:
+            return LAUNCH_STEP_CLONE, _epoch(getattr(running, "started_at", None))
+    return LAUNCH_STEP_CONTAINERS, None
+
+
+def _report_progress(
+    on_progress: Callable[[str, int | None], None] | None, step: str, since: int | None
+) -> None:
+    """Tell *on_progress* about *step*; an observer's error never fails the launch."""
+    if on_progress is None:
+        return
+    try:
+        on_progress(step, since)
+    except Exception:
+        _logger.warning("sandbox launch progress observer failed", exc_info=True)
+
+
+class _ProgressTracker:
+    """
+    Report a starting Pod's :func:`_start_step` to an observer, once per change.
+
+    Events are re-read at most every :data:`_PROGRESS_EVENTS_EVERY_S`, and only
+    once the Pod is on a node (before that, nothing pulls).
+
+    :param on_progress: The observer, or ``None`` to do nothing.
+    :param clock: Monotonic seconds (injectable for tests).
+    """
+
+    def __init__(
+        self,
+        on_progress: Callable[[str, int | None], None] | None,
+        clock: Callable[[], float] = time.monotonic,
+    ) -> None:
+        self._on_progress = on_progress
+        self._clock = clock
+        self._events: list[object] = []
+        self._events_at: float | None = None
+        self._last: tuple[str, int | None] | None = None
+
+    @property
+    def enabled(self) -> bool:
+        """:returns: Whether anyone listens."""
+        return self._on_progress is not None
+
+    def observe(self, pod: object, read_events: Callable[[], list[object]]) -> None:
+        """
+        Classify *pod* and report a changed step.
+
+        :param pod: The ``V1Pod`` just read.
+        :param read_events: Reads the Pod's events (called only when due).
+        """
+        if getattr(getattr(pod, "spec", None), "node_name", None):
+            now = self._clock()
+            if self._events_at is None or now - self._events_at >= _PROGRESS_EVENTS_EVERY_S:
+                self._events = read_events()
+                self._events_at = now
+        step = _start_step(pod, self._events)
+        if step != self._last:
+            self._last = step
+            _report_progress(self._on_progress, *step)
+
+
 class KubernetesSandboxLauncher(SandboxHostLauncher):
     """
     :class:`SandboxLauncher` for on-demand Kubernetes Jobs.
@@ -1243,6 +1391,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
             # are on the exec-model branch and stay single-repo until they
             # opt in themselves.
             multi_repo=True,
+            reports_launch_progress=True,
         )
 
     def __init__(
@@ -1521,6 +1670,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
         agent_name: str | None = None,
         session_url: str | None = None,
         on_stage: Callable[[str], None] | None = None,
+        on_progress: Callable[[str, int | None], None] | None = None,
     ) -> str:
         """
         Create the token Secret + runner Job and wait for the host to start.
@@ -1544,6 +1694,10 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
             the init container installs the PR-body ``gh`` wrapper stamped with it.
             ``None`` disables the button.
         :param on_stage: Progress observer; invoked with ``"starting"``.
+        :param on_progress: Observer of what the Pod waits on, called with
+            ``(step, since)`` on each change (see ``LAUNCH_STEPS``); ``since`` is
+            epoch seconds, or ``None`` when the Pod does not say. Called from
+            this worker thread; must not block.
         :returns: The absolute in-sandbox workspace path.
         :raises click.ClickException: When creation fails or the host does not
             start in time.
@@ -1612,12 +1766,13 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                 ) from exc
 
             try:
-                self._wait_for_pod_running(namespace, sandbox_id)
+                self._wait_for_pod_running(namespace, sandbox_id, on_progress=on_progress)
             except BaseException:
                 self._best_effort_delete(namespace, sandbox_id, secret_name)
                 raise
         finally:
             self._close_clients()
+        _report_progress(on_progress, LAUNCH_STEP_HOST, int(time.time()))
         click.echo(f"  → {self.workload_kind} '{sandbox_id}' is starting the host")
         # One repo → drop the agent straight into it; several (or none) → the
         # workspace root that parents every clone.
@@ -1684,7 +1839,13 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                 return getattr(getattr(p, "metadata", None), "name", None)
         return getattr(getattr(alive[0], "metadata", None), "name", None)
 
-    def _wait_for_pod_running(self, namespace: str, job_name: str) -> None:
+    def _wait_for_pod_running(
+        self,
+        namespace: str,
+        job_name: str,
+        *,
+        on_progress: Callable[[str, int | None], None] | None = None,
+    ) -> None:
         """
         Block until the Job's child Pod's main container is running,
         fast-failing on genuinely terminal states.
@@ -1696,6 +1857,8 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
 
         :param namespace: Namespace the Job lives in.
         :param job_name: The Job whose child Pod to wait on.
+        :param on_progress: Told what the Pod waits on whenever that changes
+            (see :func:`_start_step`); ``None`` skips the extra event reads.
         :raises click.ClickException: On a terminal state or timeout.
         """
         from kubernetes.client.rest import ApiException
@@ -1706,6 +1869,7 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
         deadline = time.monotonic() + timeout_s
         last_reason: str | None = None
         pod_name: str | None = None
+        progress = _ProgressTracker(on_progress)
         while True:
             # Discover the child Pod if we haven't yet.
             if pod_name is None:
@@ -1789,6 +1953,8 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                         namespace, pod_name, f"container cannot start ({fatal})"
                     )
                 )
+            if progress.enabled:
+                progress.observe(pod, functools.partial(self._pod_events, namespace, pod_name))
             last_reason = _current_wait_reason(pod) or last_reason
             if time.monotonic() >= deadline:
                 detail = f"; last reason: {last_reason}" if last_reason else ""
@@ -1835,6 +2001,27 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
                 message += f" Container '{log_container}' log tail: {tail[-1500:]}"
         message += f" Inspect with `kubectl describe pod {pod_name} -n {namespace}`."
         return message
+
+    def _pod_events(self, namespace: str, pod_name: str) -> list[object]:
+        """
+        Return the Pod's events, or an empty list when they cannot be read.
+
+        :param namespace: Namespace the Pod lives in.
+        :param pod_name: The Pod to fetch events for.
+        :returns: ``V1Event`` objects, any order.
+        """
+        from kubernetes.client.rest import ApiException
+        from urllib3.exceptions import HTTPError
+
+        try:
+            event_list = self._load_core().list_namespaced_event(
+                namespace,
+                field_selector=f"involvedObject.name={pod_name}",
+                _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
+            )
+        except (ApiException, HTTPError):
+            return []
+        return list(getattr(event_list, "items", None) or [])
 
     def _recent_events(self, namespace: str, pod_name: str) -> str:
         """
@@ -2022,6 +2209,18 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
             self._close_clients()
         if first_error is not None:
             raise first_error
+
+    def suspend(self, sandbox_id: str) -> None:
+        """
+        Stop a sandbox Job now; a wake recreates it under the same name.
+
+        A Job's home is not persistent, so stopping it is a terminate; the
+        managed wake path (:meth:`resume` then :meth:`start_host`) brings it
+        back with the session's repositories re-cloned.
+
+        :param sandbox_id: The Job to stop.
+        """
+        self.terminate(sandbox_id)
 
     def resume(self, sandbox_id: str) -> None:
         """

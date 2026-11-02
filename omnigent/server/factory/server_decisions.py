@@ -6,6 +6,8 @@ to the agents unchanged) and is deduplicated per episode through its
 
 - relaunch failed (S2b): a member whose heartbeat relaunch failed 3×;
   expired when it answers a beat again.
+- launch failed: a member whose sandbox failed to start even on the new one
+  the server retried it on (same source, its own key); expired once it is up.
 - blocked on an approval (S5): a session parked on a human prompt; expired
   when the episode clears.
 - message storm: a sender that hit its post rate limit.
@@ -26,6 +28,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.factory import (
     ACTION_DISMISS,
+    ACTION_NEW_SANDBOX,
     ACTION_PAUSE,
     ACTION_RELAUNCH,
     ACTION_RESTART,
@@ -62,6 +65,11 @@ _CONTEXT_MAX: Final = 4000
 def relaunch_failed_key(session_id: str) -> str:
     """:returns: The dedupe key of a member's relaunch-failed decision."""
     return f"relaunch_failed:{session_id}"
+
+
+def launch_failed_key(session_id: str) -> str:
+    """:returns: The dedupe key of a member's sandbox-launch-failed decision."""
+    return f"launch_failed:{session_id}"
 
 
 def blocked_key(session_id: str) -> str:
@@ -308,6 +316,8 @@ async def open_relaunch_failed_decision(
     # A backtick in the error would end the markdown code span early.
     quoted = (detail or "").replace("`", "'")
     cause = f"Last error: `{quoted}`\n\n" if detail else ""
+    # No runner to reach means its sandbox is gone or never came up: only a new one helps.
+    no_runner = reason == "runner_unavailable"
     return await open_decision(
         app_state,
         factory_id,
@@ -316,16 +326,24 @@ async def open_relaunch_failed_decision(
         question=f'"{title}" relaunch failed {failures}× ({failure_text(reason, detail)})',
         context=(
             f"{cause}Its heartbeat could not wake or relaunch it. Restart stops and "
-            "redelivers; relaunch first restores the launch mode its spec declares."
+            "redelivers; relaunch first restores the launch mode its spec declares; both "
+            "keep its sandbox. A new sandbox replaces it and keeps the project."
         ),
         options=[
+            _option(
+                "new_sandbox",
+                "Relaunch on a new sandbox",
+                action=ACTION_NEW_SANDBOX,
+                target=_member_target(conv),
+                recommended=no_runner,
+            ),
             _option("restart", "Restart", action=ACTION_RESTART, target=_member_target(conv)),
             _option(
                 "relaunch",
                 "Relaunch with spec mode",
                 action=ACTION_RELAUNCH,
                 target=_member_target(conv),
-                recommended=True,
+                recommended=not no_runner,
             ),
             _option(
                 "pause",
@@ -338,6 +356,60 @@ async def open_relaunch_failed_decision(
         blocking=True,
         project=project,
         asked_by=conv.id,
+    )
+
+
+async def open_launch_failed_decision(
+    app_state: Any,
+    conv: Conversation,
+    factory_id: str,
+    tries: int,
+    error: str | None,
+) -> tuple[FactoryDecision, bool] | None:
+    """
+    Ask owners what to do with a member whose sandbox failed to start *tries* times.
+
+    The server already retried it once on a new sandbox and does not again.
+
+    :param error: The last launch error, e.g. ``"… did not start within 900s …"``.
+    """
+    title = display_title(conv.title, conv.id)
+    project = conv.labels.get(LABEL_PROJECT)
+    times = "twice" if tries == 2 else f"{tries} times"
+    quoted = (error or "").replace("`", "'")
+    cause = f"Last error: `{quoted}`\n\n" if error else ""
+    return await open_decision(
+        app_state,
+        factory_id,
+        source=SOURCE_RELAUNCH_FAILED,
+        dedupe_key=launch_failed_key(conv.id),
+        question=f'"{title}" could not start its sandbox {times}',
+        context=(
+            f"{cause}The server already tried a new sandbox once and does not try again on "
+            "its own. A new sandbox keeps the project, its charter, tasks and PRs."
+        ),
+        options=[
+            _option(
+                "new_sandbox",
+                "Try a new sandbox",
+                action=ACTION_NEW_SANDBOX,
+                target=_member_target(conv),
+                description="Start it again on a fresh sandbox.",
+                recommended=True,
+            ),
+            _option(
+                "pause",
+                "Pause project" if project else "Pause",
+                action=ACTION_PAUSE,
+                target=f"project:{project}" if project else _member_target(conv),
+                description="Leave it stopped until someone resumes it.",
+            ),
+            _option("dismiss", "Dismiss", action=ACTION_DISMISS),
+        ],
+        blocking=True,
+        project=project,
+        asked_by=conv.id,
+        assignee="owners",
     )
 
 
@@ -407,8 +479,10 @@ __all__ = [
     "ended_project_decisions",
     "expire_by_key",
     "expire_decision",
+    "launch_failed_key",
     "open_blocked_decision",
     "open_decision",
+    "open_launch_failed_decision",
     "open_relaunch_failed_decision",
     "open_storm_decision",
     "project_ended",

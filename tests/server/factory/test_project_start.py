@@ -16,11 +16,19 @@ from typing import Any
 import pytest
 import pytest_asyncio
 
+from omnigent import factory as F
 from omnigent.entities.factory import EventDraft, FactoryEvent, FactoryProject
 from omnigent.server.factory import snapshot, spawn
 from omnigent.server.factory.snapshot import delivered_brief_targets, pl_ran_before, start_view
 from omnigent.server.factory.stage import StageResult
-from omnigent.server.routes._sessions.common import _session_sandbox_status_cache
+from omnigent.server.routes._sessions.common import (
+    _session_launch_progress_cache,
+    _session_sandbox_status_cache,
+)
+from omnigent.server.routes._sessions.helpers import (
+    _publish_launch_step,
+    _publish_sandbox_status_impl,
+)
 from omnigent.server.schemas import SandboxStatus
 from tests.server.factory.cockpit_helpers import Cockpit
 from tests.server.factory.conftest import FactoryWorld
@@ -97,6 +105,60 @@ CASES: list[tuple[str, FactoryProject, StageResult, Any, dict[str, Any], dict | 
             "state": "starting",
             "phase": "provisioning",
             "label": "Provisioning sandbox",
+            "since": NOW - 120,
+            "restart": False,
+        },
+    ),
+    (
+        "cluster full: waiting for a node",
+        _row(),
+        QUEUED,
+        _Pl(),
+        {
+            "sandbox": "starting",
+            "progress": snapshot.SandboxProgress("starting", "node", NOW - 90),
+        },
+        {
+            "state": "starting",
+            "phase": "node",
+            "label": "Waiting for a node",
+            "since": NOW - 120,
+            "phase_since": NOW - 90,
+            "restart": False,
+        },
+    ),
+    (
+        "a cold node pulls the image, on the retry's new sandbox",
+        _row(),
+        QUEUED,
+        _Pl(),
+        {
+            "sandbox": "starting",
+            "progress": snapshot.SandboxProgress("starting", "image", NOW - 236, tries=2),
+        },
+        {
+            "state": "starting",
+            "phase": "image",
+            "label": "Pulling the image",
+            "since": NOW - 120,
+            "phase_since": NOW - 236,
+            "attempt": 2,
+            "restart": False,
+        },
+    ),
+    (
+        "a step of an earlier stage is not shown",
+        _row(),
+        QUEUED,
+        _Pl(),
+        {
+            "sandbox": "connecting",
+            "progress": snapshot.SandboxProgress("starting", "clone", NOW - 60),
+        },
+        {
+            "state": "starting",
+            "phase": "connecting",
+            "label": "Starting agent",
             "since": NOW - 120,
             "restart": False,
         },
@@ -407,6 +469,8 @@ async def test_a_starting_pl_shows_its_sandbox_then_its_runner(
             "phase": "provisioning",
             "label": "Provisioning sandbox",
             "since": pl.created_at,
+            "phase_since": None,
+            "attempt": None,
             "restart": False,
             "ahead": None,
             "pods_in_use": None,
@@ -431,6 +495,51 @@ async def test_a_starting_pl_shows_its_sandbox_then_its_runner(
         assert view["start"]["label"] == "Waiting for the agent to connect"
     finally:
         _session_sandbox_status_cache.pop(pl.id, None)
+
+
+async def test_a_starting_pl_names_what_its_sandbox_waits_on(
+    spawning: tuple[Cockpit, FakeCreates],
+) -> None:
+    """The 2026-11-02 launch: a full cluster, then a cold image pull, then a retry."""
+    cockpit, _creates = spawning
+    await _create(cockpit, "build-tier-drafts")
+    pl = next(
+        m
+        for m in cockpit.world.store.list_conversations(limit=50).data
+        if m.title == "PL · build-tier-drafts"
+    )
+    try:
+        pulling_since = int(time.time()) - 200
+        _publish_sandbox_status_impl(pl.id, "starting")
+        _publish_launch_step(pl.id, "image", pulling_since)
+        view = (await _projects(cockpit))["build-tier-drafts"]
+        assert view["start"]["phase"] == "image"
+        assert view["start"]["label"] == "Pulling the image"
+        assert view["start"]["phase_since"] == pulling_since
+        assert view["provisioning"]["step"] == "image"
+        assert view["provisioning"]["label"] == "Pulling the image"
+
+        # It failed: the server retries it on a new sandbox.
+        _publish_sandbox_status_impl(pl.id, "failed", "did not start within 300s")
+        view = (await _projects(cockpit))["build-tier-drafts"]
+        assert view["overlay"] == "failed"
+        assert view["overlay_reason"] == "PL sandbox failed · retrying on a new sandbox"
+        assert view["start"] is None
+
+        cockpit.world.store.set_labels(pl.id, {F.LABEL_LAUNCH_TRIES: "2"})
+        _publish_sandbox_status_impl(pl.id, "provisioning")
+        view = (await _projects(cockpit))["build-tier-drafts"]
+        assert view["overlay"] is None
+        assert (view["start"]["phase"], view["start"]["attempt"]) == ("provisioning", 2)
+        assert view["provisioning"]["attempt"] == 2
+
+        # The retry failed too: owners decide.
+        _publish_sandbox_status_impl(pl.id, "failed", "did not start within 300s")
+        view = (await _projects(cockpit))["build-tier-drafts"]
+        assert view["overlay_reason"] == "PL sandbox failed twice"
+    finally:
+        _session_sandbox_status_cache.pop(pl.id, None)
+        _session_launch_progress_cache.pop(pl.id, None)
 
 
 async def test_a_woken_pl_restarts_timed_from_the_wake(

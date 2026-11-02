@@ -92,6 +92,10 @@ class SandboxCapabilities:
         single session's workspace. Off by default, so a provider that
         clones only one repo (and every out-of-tree provider) is never
         handed a multi-repo request; providers opt in explicitly.
+    :param reports_launch_progress: ``start_host`` accepts an ``on_progress``
+        observer and reports what a starting sandbox waits on (see
+        :data:`LAUNCH_STEPS`). Providers that leave it ``False`` never
+        receive the keyword.
     """
 
     cli_bootstrap: bool = False
@@ -107,6 +111,27 @@ class SandboxCapabilities:
     # compatibility for out-of-tree providers.
     snapshot_restore: bool = False
     multi_repo: bool = False
+    reports_launch_progress: bool = False
+
+
+LAUNCH_STEP_NODE = "node"
+"""The sandbox waits for a node (the scheduler, or the autoscaler adding one)."""
+LAUNCH_STEP_IMAGE = "image"
+"""The node pulls the sandbox image."""
+LAUNCH_STEP_CLONE = "clone"
+"""The workspace prep clones the repositories."""
+LAUNCH_STEP_CONTAINERS = "containers"
+"""The node starts the sandbox's containers."""
+LAUNCH_STEP_HOST = "host"
+"""The sandbox runs; the host inside it boots and dials back."""
+LAUNCH_STEPS = (
+    LAUNCH_STEP_NODE,
+    LAUNCH_STEP_IMAGE,
+    LAUNCH_STEP_CLONE,
+    LAUNCH_STEP_CONTAINERS,
+    LAUNCH_STEP_HOST,
+)
+"""What a starting sandbox can wait on, reported through ``on_progress(step, since)``."""
 
 
 @dataclass(frozen=True)

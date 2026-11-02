@@ -823,10 +823,22 @@ class CharterView(_View):
 
 
 class ProvisioningView(_View):
-    """The PL sandbox's provisioning step while the project is queued."""
+    """
+    The PL sandbox's provisioning step while the project is queued.
+
+    :param stage: The launch stage, e.g. ``"starting"``.
+    :param label: Plain text, e.g. ``"Pulling the image"``.
+    :param step: What the starting sandbox waits on: ``node``, ``image``,
+        ``clone``, ``containers`` or ``host``, when the provider says.
+    :param since: Epoch seconds that step began, e.g. the image pull's start.
+    :param attempt: The launch try, ``2`` on the retry on a new sandbox.
+    """
 
     stage: str
     label: str
+    step: str | None = None
+    since: int | None = None
+    attempt: int | None = None
 
 
 class ProjectStartView(_View):
@@ -836,14 +848,18 @@ class ProjectStartView(_View):
     :param state: ``starting``: its PL session comes up (or is being created);
         ``queued``: nothing starts it yet.
     :param phase: ``provisioning`` / ``cloning`` / ``starting`` / ``connecting``
-        (the PL sandbox), ``connect`` (runner not attached), ``briefing``,
-        ``creating`` (the server creates the session), ``lead`` (Atlas spawns
-        it), ``pod_cap`` (no free pod) or ``server`` (the server's next pass).
-    :param label: Plain text for the phase, e.g. ``"Provisioning sandbox"``
+        (the PL sandbox), or what a starting sandbox waits on: ``node``,
+        ``image``, ``clone``, ``containers``, ``host``; ``connect`` (runner not
+        attached), ``briefing``, ``creating`` (the server creates the session),
+        ``lead`` (Atlas spawns it), ``pod_cap`` (no free pod) or ``server`` (the
+        server's next pass).
+    :param label: Plain text for the phase, e.g. ``"Pulling the image"``
         or ``"All 12 pods in use"``.
     :param since: Epoch seconds: while starting, the PL session's creation or,
         for a woken PL, when the project went back to queued; while queued,
         the project's creation.
+    :param phase_since: Epoch seconds the phase began (e.g. the image pull), when known.
+    :param attempt: The sandbox launch try, set from ``2`` (a retry on a new sandbox).
     :param restart: The PL already worked and is coming back (woken or relaunched).
     :param ahead: Projects ahead of this one for a free pod (``pod_cap``).
     """
@@ -852,6 +868,8 @@ class ProjectStartView(_View):
     phase: str | None = None
     label: str
     since: int | None = None
+    phase_since: int | None = None
+    attempt: int | None = None
     restart: bool = False
     ahead: int | None = None
     pods_in_use: int | None = None

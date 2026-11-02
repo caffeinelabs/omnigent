@@ -236,9 +236,21 @@ arms the relay and dispatches.
 | S5 blocked | a turn parked on `blocked_on` (an approval only a human can answer) for `BLOCKED_ESCALATE_S` | `[NEEDS HUMAN · "<title>" waiting since <ts>: <what>]` to the factory root once; to the root's supervisor when the root itself is parked. |
 | S6 storm | rate limit hit | One alert per hour to the factory root. |
 | S10 decision escalation | an open blocking decision whose person has not been seen for `decisions.escalate_after_m` (30 min) / any still open after `decisions.owners_after_m` (120 min) | Its assignee widens to `operators`, then to `owners`; `decision.escalated` each step. |
+| S13 launch watch | an `active` member whose managed sandbox failed to start (pod never ready, timed out, image pull error), or whose launch a server restart cut off | `member.launch_failed`; 30 s later one retry on a **new sandbox** for the same session (`member.new_sandbox`, `launch_tries=2`). When that fails too, one owners' decision "could not start its sandbox twice" (Try a new sandbox, Pause project, Dismiss); nothing retries on its own again. No heartbeat goes to a member whose launch is in flight or failed. Once the new sandbox is up, the member gets `[Factory control · NEW SANDBOX …]` (a PL that never got its brief gets the brief again) and `member.launch_recovered`. |
+| S13 release | a PL whose project is cancelled, merged into another or done, or that finished itself, idle with no mail on its way for 5 min, keeping no preview up for review | Its sandbox is stopped (`member.sandbox_released`); the host row stays, so a message (Resume) wakes it. Its sub-agents and, on the cluster, its dev env and previews go with the pod. |
 
 Paused and done members get no keepalive and no heartbeats, so their runners
 idle out and their sandboxes are reclaimed.
+
+**Relaunch on a new sandbox** (`new_sandbox` control, owners; the project menu,
+the failed-PL decisions and the dead-member runbook) is not Restart: Restart
+and "Relaunch with spec mode" keep the member's sandbox, this one deletes it
+(with its files, dev env and previews) and provisions a fresh one for the same
+session, so the project, charter, role, tasks, PRs and decisions stay. While a
+PL sandbox starts, the project card, page and Now card name what it waits on:
+a node, the image (and for how long), the clone, the containers, the host.
+Finished (merged or done) projects take no slot under `caps.max_projects`;
+their pods still count toward `factory_max_pods` until released.
 
 ## Cockpit, previews and demos
 

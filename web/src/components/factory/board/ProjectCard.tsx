@@ -23,7 +23,7 @@ import { useProjectControlParts } from "../controls/ProjectControlsMenu";
 import { ReadyForMergeBanner } from "../review/ReadyForMergeBanner";
 import { STAGE_LABEL, formatElapsed, formatUsd, plural } from "../factoryFormat";
 import { projectPageHref } from "../factoryRoutes";
-import { stageHeadline } from "../projects/stageHeadline";
+import { provisioningStep, stageHeadline } from "../projects/stageHeadline";
 import {
   ageText,
   projectAnchorId,
@@ -190,7 +190,13 @@ function StageNote({
   nowS: number;
 }) {
   if (project.stage === "queued") {
-    if (project.provisioning) return <ProvisioningTimeline stage={project.provisioning.stage} />;
+    if (project.provisioning)
+      return (
+        <ProvisioningTimeline
+          stage={project.provisioning.stage}
+          detail={provisioningStep(project.provisioning, nowS)}
+        />
+      );
     const { text, starting } = queuedNote(project, nowS);
     if (!text) return null;
     return (

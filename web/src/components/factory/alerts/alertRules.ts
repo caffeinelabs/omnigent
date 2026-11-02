@@ -20,7 +20,7 @@ export const ALERT_RULES: AlertRule[] = [
     class: "incident",
     severity: "critical",
     trigger: "a lead or PL is dead, or its relaunch failed",
-    runbook: ["restart", "relaunch", "pause_project", "open_agent"],
+    runbook: ["new_sandbox", "restart", "relaunch", "pause_project", "open_agent"],
   },
   {
     rule: "agent.repeat",

@@ -201,6 +201,7 @@ from omnigent.server.routes._sessions.common import (  # noqa: F401
     _UPLOAD_READ_CHUNK_BYTES,
     COST_CONTROL_OVERRIDE_VALUES,
     SUBAGENT_ROUTING_OVERRIDE_VALUES,
+    LaunchProgress,
     _catalog_prefetch_tasks,
     _logger,
     _managed_launch_tasks,
@@ -219,6 +220,7 @@ from omnigent.server.routes._sessions.common import (  # noqa: F401
     _session_active_response_cache,
     _session_background_task_count_cache,
     _session_background_tasks_cache,
+    _session_launch_progress_cache,
     _session_mcp_startup_cache,
     _session_sandbox_status_cache,
     _session_status_cache,
@@ -4859,8 +4861,12 @@ def _publish_sandbox_status_impl(session_id: str, stage: str, error: str | None 
     status = SandboxStatus.model_validate({"stage": stage, "error": error})
     if status.stage == "ready":
         _session_sandbox_status_cache.pop(session_id, None)
+        _session_launch_progress_cache.pop(session_id, None)
     else:
         _session_sandbox_status_cache[session_id] = status
+        _session_launch_progress_cache[session_id] = LaunchProgress(
+            stage=status.stage, step=None, since=int(time.time())
+        )
     event = SessionSandboxStatusEvent(
         type="session.sandbox_status",
         conversation_id=session_id,
@@ -4868,6 +4874,25 @@ def _publish_sandbox_status_impl(session_id: str, stage: str, error: str | None 
         error=status.error,
     )
     session_stream.publish(session_id, event.model_dump())
+
+
+def _publish_launch_step(session_id: str, step: str, since: int | None = None) -> None:
+    """
+    Record what a starting managed sandbox waits on (``LAUNCH_STEPS``).
+
+    Keeps the current stage; a step after the launch settled is ignored.
+    Thread-safe (one dict assignment), like :func:`_publish_sandbox_status`.
+
+    :param session_id: Session/conversation identifier.
+    :param step: e.g. ``"image"``.
+    :param since: Epoch seconds the step began, or ``None`` for now.
+    """
+    current = _session_sandbox_status_cache.get(session_id)
+    if current is None or current.stage in ("ready", "failed"):
+        return
+    _session_launch_progress_cache[session_id] = LaunchProgress(
+        stage=current.stage, step=step, since=int(since or time.time())
+    )
 
 
 def _publish_mcp_startup(session_id: str, servers: dict[str, McpServerStartup]) -> None:
@@ -5721,6 +5746,10 @@ async def _provision_managed_sandbox(
         """
         _publish_sandbox_status(session_id, stage)
 
+    def _on_progress(step: str, since: int | None) -> None:
+        """Record what the starting sandbox waits on, e.g. ``"image"`` (thread-safe)."""
+        _publish_launch_step(session_id, step, since)
+
     try:
         if relaunch_host is not None:
             return await relaunch_managed_host(
@@ -5731,6 +5760,7 @@ async def _provision_managed_sandbox(
                 agent_name=agent_name,
                 session_id=session_id,
                 on_stage=_on_stage,
+                on_progress=_on_progress,
             )
         return await launch_managed_host(
             config=sandbox_config,
@@ -5741,6 +5771,7 @@ async def _provision_managed_sandbox(
             agent_name=agent_name,
             session_id=session_id,
             on_stage=_on_stage,
+            on_progress=_on_progress,
         )
     except HTTPException as exc:
         _logger.warning(
@@ -10989,6 +11020,7 @@ __all__ = [
     "_publish_input_consumed",
     "_publish_input_deny_terminal",
     "_publish_interrupted",
+    "_publish_launch_step",
     "_publish_mcp_startup",
     "_publish_model_options",
     "_publish_permission_mode",

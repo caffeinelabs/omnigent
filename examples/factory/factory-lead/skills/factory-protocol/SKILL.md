@@ -114,9 +114,9 @@ The server also sends:
 - `[Factory brief · from <human> via cockpit · id=mail_…]`: a factory started
   from the cockpit (Atlas's first message), with the projects to spawn.
 - `[Factory control · <ACTION> · by <human>]`: a human command from the
-  cockpit (PAUSE, RESUME, STOP, RESTART, RELAUNCHED, PREVIEW pr=#<n>,
-  PREVIEW_DOWN pr=#<n>, ENV STATUS, CHARTER UPDATE). Act on it, then reply
-  once as its text asks (`kind="reply"`).
+  cockpit (PAUSE, RESUME, STOP, RESTART, RELAUNCHED, NEW SANDBOX,
+  PREVIEW pr=#<n>, PREVIEW_DOWN pr=#<n>, ENV STATUS, CHARTER UPDATE). Act on
+  it, then reply once as its text asks (`kind="reply"`).
 - `[Factory decision · D-<n> answered by <human> · "<option>"]`: the answer to
   a `sys_factory_ask` question (or `… withdrawn`).
 - `[Factory review · CHANGES REQUESTED on PR #<n> …]` or

@@ -5262,7 +5262,7 @@
       "proposal_id": null,
       "proposal_ref": null,
       "def_version": 7,
-      "runbook": ["restart", "relaunch", "pause_project", "open_agent"]
+      "runbook": ["new_sandbox", "restart", "relaunch", "pause_project", "open_agent"]
     },
     {
       "id": "ef6d473e8d9355dc946fddc1932b07c7",

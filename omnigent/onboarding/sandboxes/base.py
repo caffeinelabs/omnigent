@@ -671,6 +671,23 @@ class SandboxLifecycle(ABC):
             "own tooling."
         )
 
+    def suspend(self, sandbox_id: str) -> None:
+        """
+        Stop a sandbox now, keeping what :meth:`resume` needs to wake it.
+
+        Optional capability: the default implementation raises
+        :class:`SandboxCapabilityError`. Used by the server to release the
+        compute of a session whose work is finished; its next message wakes
+        the sandbox through the managed wake path. Implementations must treat
+        an already-stopped or absent sandbox as success.
+
+        :param sandbox_id: The sandbox to stop, e.g. ``"sb-a1b2c3"``.
+        :raises SandboxCapabilityError: When the provider cannot stop a
+            sandbox on request.
+        :raises click.ClickException: If the stop fails.
+        """
+        raise self._capability_error("suspend a sandbox")
+
     def resume(self, sandbox_id: str) -> None:
         """
         Resume a stopped sandbox in place, reattaching its persistent

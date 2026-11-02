@@ -3487,6 +3487,7 @@ async def launch_managed_host(
     agent_name: str | None = None,
     session_id: str | None = None,
     on_stage: Callable[[str], None] | None = None,
+    on_progress: Callable[[str, int | None], None] | None = None,
 ) -> ManagedHostLaunch:
     """
     Provision a sandbox, start a host in it, and wait until it registers.
@@ -3528,6 +3529,9 @@ async def launch_managed_host(
         worker thread (the sandbox exec steps run via
         ``asyncio.to_thread``), so it must be thread-safe. ``None``
         disables progress reporting.
+    :param on_progress: Told what a starting sandbox waits on, as
+        ``(step, since)`` (see ``LAUNCH_STEPS``), by providers that declare
+        ``reports_launch_progress``; thread-safe like *on_stage*.
     :returns: The registered host id + in-sandbox workspace path
         (the cloned repository directory when *repo* is set).
     :raises HTTPException: 400 when *provider* is not configured or the
@@ -3561,6 +3565,7 @@ async def launch_managed_host(
         agent_name=agent_name,
         session_id=session_id,
         on_stage=on_stage,
+        on_progress=on_progress,
     )
     return ManagedHostLaunch(host_id=host_id, workspace=workspace)
 
@@ -3574,6 +3579,7 @@ async def relaunch_managed_host(
     agent_name: str | None = None,
     session_id: str | None = None,
     on_stage: Callable[[str], None] | None = None,
+    on_progress: Callable[[str, int | None], None] | None = None,
 ) -> ManagedHostLaunch:
     """
     Provision a NEW sandbox generation for an existing managed host.
@@ -3606,6 +3612,7 @@ async def relaunch_managed_host(
     :param on_stage: Progress observer forwarded to
         :func:`_register_and_start_host`; see :func:`launch_managed_host`.
         ``None`` disables progress reporting.
+    :param on_progress: See :func:`launch_managed_host`.
     :returns: The (unchanged) host id + fresh in-sandbox workspace.
     :raises HTTPException: 400 when the host's recorded provider no
         longer matches the configured launcher; 502 when
@@ -3654,6 +3661,7 @@ async def relaunch_managed_host(
             agent_name=agent_name,
             session_id=session_id,
             on_stage=on_stage,
+            on_progress=on_progress,
             keep_host_on_failure=True,
         )
     except ValueError as exc:
@@ -3677,6 +3685,7 @@ async def _start_sandbox_host(
     agent_name: str | None = None,
     session_id: str | None = None,
     on_stage: Callable[[str], None] | None = None,
+    on_progress: Callable[[str, int | None], None] | None = None,
 ) -> str:
     """Start a host without sending absent optional arguments to legacy launchers."""
     # Open-in-Omnigent (fork): the public session URL, derived from the session
@@ -3708,6 +3717,8 @@ async def _start_sandbox_host(
             kwargs["agent_name"] = agent_name
         if session_url is not None:
             kwargs["session_url"] = session_url
+    if on_progress is not None and launcher.capabilities.reports_launch_progress:
+        kwargs["on_progress"] = on_progress
     start = cast(Callable[..., str], launcher.start_host)
     return await asyncio.to_thread(start, sandbox_id, **kwargs)
 
@@ -3725,6 +3736,7 @@ async def _register_and_start_host(
     agent_name: str | None = None,
     session_id: str | None = None,
     on_stage: Callable[[str], None] | None = None,
+    on_progress: Callable[[str, int | None], None] | None = None,
     keep_host_on_failure: bool = False,
 ) -> str:
     """
@@ -3759,6 +3771,8 @@ async def _register_and_start_host(
     :param on_stage: Progress observer forwarded to the launcher's
         ``start_host``; see :func:`launch_managed_host`. ``None``
         disables progress reporting.
+    :param on_progress: Forwarded to ``start_host`` when the launcher
+        declares ``reports_launch_progress``; see :func:`launch_managed_host`.
     :param keep_host_on_failure: ``True`` on a relaunch — failure
         cleanup terminates the new sandbox and revokes the token but
         keeps the host row. ``False`` (first launch) deletes the row.
@@ -3813,6 +3827,7 @@ async def _register_and_start_host(
             agent_name=agent_name,
             session_id=session_id,
             on_stage=on_stage,
+            on_progress=on_progress,
         )
         await _wait_for_host_online(host_store, host_id)
     except Exception as exc:
@@ -4142,6 +4157,47 @@ async def terminate_managed_host(
                     tombstone.host_id,
                     sandbox_id=sandbox_id,
                 )
+
+
+async def stop_managed_sandbox(
+    host: Host,
+    host_store: HostStore,
+    config: ManagedSandboxDeployment | None,
+) -> bool:
+    """
+    Stop a managed host's sandbox now, keeping the host row and the binding.
+
+    Releases the compute of a session whose work is finished: the provider
+    keeps what a wake needs (see ``SandboxHostLauncher.suspend``) and the next
+    message to the session wakes or relaunches it through the usual paths.
+    Best-effort: a provider that cannot stop a sandbox on request leaves it to
+    idle out, and a failure is logged.
+
+    :param host: The managed host whose current sandbox to stop.
+    :param host_store: Persistent host registrations (the row is marked offline).
+    :param config: The deployment's sandbox config (supplies the launcher).
+    :returns: Whether the sandbox was stopped.
+    """
+    from omnigent.onboarding.sandboxes.base import SandboxCapabilityError
+
+    launcher = _launcher_for_teardown(host, config)
+    if launcher is None or host.sandbox_id is None:
+        return False
+    try:
+        await asyncio.to_thread(launcher.suspend, host.sandbox_id)
+    except SandboxCapabilityError:
+        return False
+    except Exception:  # noqa: BLE001 - it idles out on its own instead
+        _logger.warning(
+            "Failed to stop managed sandbox %s (provider=%s) for host %s",
+            host.sandbox_id,
+            host.sandbox_provider,
+            host.host_id,
+            exc_info=True,
+        )
+        return False
+    await asyncio.to_thread(host_store.set_offline, host.host_id)
+    return True
 
 
 async def _terminate_sandbox_best_effort(

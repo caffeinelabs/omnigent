@@ -743,14 +743,19 @@ export interface CharterView {
  */
 export interface ProjectStartView {
   state: "starting" | "queued";
-  /** `provisioning`/`cloning`/`starting`/`connecting` (the PL sandbox), `connect`,
-   * `briefing`, `creating`, `lead`, `pod_cap` or `server`. */
+  /** `provisioning`/`cloning`/`starting`/`connecting` (the PL sandbox), what a
+   * starting sandbox waits on (`node`, `image`, `clone`, `containers`, `host`),
+   * `connect`, `briefing`, `creating`, `lead`, `pod_cap` or `server`. */
   phase: string | null;
-  /** e.g. `Provisioning sandbox`, `All 12 pods in use`. */
+  /** e.g. `Pulling the image`, `All 12 pods in use`. */
   label: string;
   /** Epoch seconds: while starting, the PL session's creation or, for a woken PL,
    * when the project went back to queued; while queued, the project's creation. */
   since: number | null;
+  /** Epoch seconds the phase began (e.g. the image pull), when the server knows. */
+  phase_since?: number | null;
+  /** The sandbox launch try, from 2 (the retry on a new sandbox). */
+  attempt?: number | null;
   /** The PL already worked and is coming back (woken or relaunched). */
   restart?: boolean;
   /** Projects ahead of this one for a free pod. */
@@ -765,6 +770,19 @@ export interface ActiveTaskView {
   ref: string;
   title: string;
   state: "running" | "review" | "blocked";
+}
+
+/** The PL sandbox's provisioning step while the project is queued. */
+export interface ProvisioningView {
+  stage: string;
+  /** e.g. `Provisioning sandbox`, `Pulling the image`. */
+  label: string;
+  /** What a starting sandbox waits on: `node`, `image`, `clone`, `containers`, `host`. */
+  step?: string | null;
+  /** Epoch seconds that step began. */
+  since?: number | null;
+  /** The launch try, from 2 (the retry on a new sandbox). */
+  attempt?: number | null;
 }
 
 /** One project card. */
@@ -790,7 +808,7 @@ export interface ProjectView {
   open_decision_ids: string[];
   cost_usd: number | null;
   elapsed_s: number | null;
-  provisioning: { stage: string; label: string } | null;
+  provisioning: ProvisioningView | null;
   /** Why a queued project has no working PL yet (only while plainly queued). */
   start?: ProjectStartView | null;
   keep_previews: boolean;
@@ -1459,6 +1477,7 @@ export type FactoryControlAction =
   | "stop"
   | "restart"
   | "relaunch"
+  | "new_sandbox"
   | "cadence"
   | "preview"
   | "env_status"

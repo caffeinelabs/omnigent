@@ -62,6 +62,7 @@ export interface RunbookContext {
 }
 
 const LABEL: Record<string, string> = {
+  new_sandbox: "New sandbox",
   restart: "Restart",
   relaunch: "Relaunch with spec",
   pause_project: "Pause project",
@@ -204,6 +205,7 @@ export function runbookActions(issue: IssueView, ctx: RunbookContext): RunbookAc
   for (const action of issue.runbook) {
     const label = LABEL[action] ?? action;
     switch (action) {
+      case "new_sandbox":
       case "restart":
       case "relaunch": {
         if (!member) {
@@ -218,9 +220,11 @@ export function runbookActions(issue: IssueView, ctx: RunbookContext): RunbookAc
           lever: "restart",
           request: { action, target: `member:${top.session_id}` },
           confirm:
-            action === "restart"
-              ? `${top.title} stops its turn and starts again on the same sandbox, re-reading its plan.`
-              : `${top.title} restarts with the launch args its agent spec declares now.`,
+            action === "new_sandbox"
+              ? `${top.title} starts again on a fresh sandbox; its old one, with its files, dev env and previews, is deleted. The project and its tasks stay.`
+              : action === "restart"
+                ? `${top.title} stops its turn and starts again on the same sandbox, re-reading its plan.`
+                : `${top.title} restarts with the launch args its agent spec declares now.`,
         });
         break;
       }

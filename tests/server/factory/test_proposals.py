@@ -135,14 +135,37 @@ async def test_scope_overlap_is_a_warning(cockpit: Cockpit) -> None:
     ]
 
 
+async def test_finished_projects_take_no_slot_under_the_cap(cockpit: Cockpit) -> None:
+    # Merged and done work keeps its row but frees its slot: api-version + 9 is the cap.
+    cockpit.store.upsert_project(cockpit.fid, "old", title="old", repo=REPO, stage="merged")
+    cockpit.store.upsert_project(cockpit.fid, "wrapped", title="wrapped", repo=REPO, stage="done")
+    changes = [{"op": "create", "project": project(f"p{i}")} for i in range(9)]
+
+    resp = await propose(cockpit, *changes)
+
+    assert resp.status_code == 200, resp.text
+
+
 async def test_over_the_cap_is_refused_with_candidates(cockpit: Cockpit) -> None:
     cockpit.store.upsert_project(cockpit.fid, "old", title="old", repo=REPO, stage="merged")
+    cockpit.store.upsert_project(cockpit.fid, "parked", title="parked", repo=REPO, stage="ready")
     changes = [{"op": "create", "project": project(f"p{i}")} for i in range(9)]
 
     resp = await propose(cockpit, *changes)
 
     assert (resp.status_code, error_code(resp)) == (409, "over_caps")
     assert resp.json()["done_candidates"] == ["old"]
+    assert resp.json()["park_candidates"] == ["parked"]
+
+
+async def test_cancelling_a_finished_project_frees_no_slot(cockpit: Cockpit) -> None:
+    cockpit.store.upsert_project(cockpit.fid, "old", title="old", repo=REPO, stage="merged")
+    cockpit.store.upsert_project(cockpit.fid, "parked", title="parked", repo=REPO, stage="ready")
+    changes = [{"op": "create", "project": project(f"p{i}")} for i in range(9)]
+
+    resp = await propose(cockpit, {"op": "cancel", "slug": "old"}, *changes, reason="tidy up")
+
+    assert (resp.status_code, error_code(resp)) == (409, "over_caps")
 
 
 async def test_a_project_lead_proposes_only_for_its_own_project(cockpit: Cockpit) -> None:

@@ -10,6 +10,7 @@ import type {
   StatusHealthItem,
   StatusLeadNote,
   StatusSlackReceipt,
+  StatusNextItem,
   StatusSpend,
   StatusSummary,
   StatusTextPart,
@@ -138,6 +139,15 @@ export function waitedLong(since: number, nowS: number): boolean {
 /** How long it has waited, e.g. `2d 18h`. */
 export function waitedFor(since: number, nowS: number): string | null {
   return since > 0 ? formatElapsed(nowS - since) : null;
+}
+
+/**
+ * Why a queued project waits, with how long its start step has taken, e.g.
+ * `starting up: pulling its image · 3m`.
+ */
+export function nextReason(item: StatusNextItem, nowS: number): string {
+  const took = item.step_since != null ? formatElapsed(nowS - item.step_since) : null;
+  return took ? `${item.reason} · ${took}` : item.reason;
 }
 
 /** Whom someone else's wait is for: `for mia`, `for owners`. */

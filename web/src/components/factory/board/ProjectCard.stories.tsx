@@ -1,6 +1,6 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { LIVE_RUN_NOW_S } from "../__fixtures__/liveRun";
-import { startStorySnapshot } from "../projects/__fixtures__/startFixtures";
+import { launchStorySnapshot, startStorySnapshot } from "../projects/__fixtures__/startFixtures";
 import { CARD_STATES, type CardState, cardScenario } from "./__fixtures__/boardFixtures";
 import { BoardFrame } from "./boardStoryKit";
 import { ProjectCard } from "./ProjectCard";
@@ -143,6 +143,55 @@ export const QueuedReasonsPhone: Story = {
   render: () => (
     <BoardFrame width={390}>
       <StartCards />
+    </BoardFrame>
+  ),
+};
+
+/** PL sandboxes starting, step by step, then a retry on a new sandbox and two failures. */
+function LaunchCards() {
+  const snapshot = launchStorySnapshot();
+  return (
+    <>
+      {snapshot.projects.map((project) => (
+        <ProjectCard
+          key={project.slug}
+          snapshot={snapshot}
+          project={project}
+          nowS={snapshot.server_time}
+          onReview={noop}
+          onDecision={noop}
+        />
+      ))}
+    </>
+  );
+}
+
+/**
+ * "Starting PL" with what its sandbox waits on and for how long (a node, the
+ * image, the clone, the containers, the host), "Retrying PL" on the server's
+ * retry on a new sandbox, and "New sandbox" on a sandbox that failed.
+ */
+export const LaunchPhases: Story = {
+  render: () => (
+    <BoardFrame>
+      <LaunchCards />
+    </BoardFrame>
+  ),
+};
+
+export const LaunchPhasesDark: Story = {
+  render: () => (
+    <BoardFrame theme="dark">
+      <LaunchCards />
+    </BoardFrame>
+  ),
+};
+
+export const LaunchPhasesPhone: Story = {
+  ...PHONE_390,
+  render: () => (
+    <BoardFrame width={390}>
+      <LaunchCards />
     </BoardFrame>
   ),
 };

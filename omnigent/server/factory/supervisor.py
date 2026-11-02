@@ -35,6 +35,10 @@ Each tick it reads the top-level members of every factory and applies:
   ``OMNIGENT_FACTORY_IDLE_ENV_S`` gets one ask to take its dev env down (its
   previews stay up), and asks to bring it back while work waits on it (see
   :mod:`~omnigent.server.factory.idle_env`).
+- **S13 launch watch**: a member whose sandbox failed to start is retried once on
+  a new sandbox, then owners decide; a finished PL's idle sandbox is stopped
+  (see :mod:`~omnigent.server.factory.launch_watch`). No heartbeat goes to a
+  member whose launch is in flight or failed.
 
 Each tick also logs what it saw to the factory event log: heartbeats, alerts,
 and the PL ↔ sub-agent traffic (``dispatch``, ``task.done|failed``) read off
@@ -80,6 +84,7 @@ from omnigent.server.factory import (
     detectors,
     events,
     idle_env,
+    launch_watch,
     learning,
     loops,
     previews,
@@ -365,6 +370,7 @@ class FactorySupervisor:
         self._skips_since: float | None = None
         self._child_status: dict[str, str] = {}
         self._ttl_checked_at: float | None = None
+        self._launch_watch = launch_watch.LaunchWatch(app_state)
 
     # ── lifecycle ───────────────────────────────────────────────
 
@@ -420,6 +426,8 @@ class FactorySupervisor:
         children = await asyncio.to_thread(_load_children, store, members)
         await asyncio.gather(*(self._keepalive(m, now) for m in members))
         await self._track_children(members, children, now)
+        # S13: retry failed launches on a new sandbox, stop finished PLs' sandboxes.
+        await self._launch_watch.tick(members, children, now)
         # Work graph: bind new sub-agents to their tasks, re-derive readiness.
         await binder.on_tick(self._app_state, members, children)
         stalled = self._stalled_parents(children, now)
@@ -558,7 +566,7 @@ class FactorySupervisor:
         if conv.labels.get(LABEL_STATE) != STATE_ACTIVE or conv.id in self._beat_tasks:
             return False
         interval = _heartbeat_interval(conv)
-        if interval is None or _is_running(conv):
+        if interval is None or _is_running(conv) or launch_watch.launch_pending(conv):
             return False
         if now < self._quiet_until.get(conv.id, 0.0):
             return False
@@ -1079,6 +1087,7 @@ class FactorySupervisor:
         ):
             for sid in [s for s in state if s not in member_ids]:
                 del state[sid]
+        self._launch_watch.forget(member_ids)
         watched = member_ids | child_ids
         for sid in [s for s in self._stuck_alerted if s not in watched]:
             del self._stuck_alerted[sid]

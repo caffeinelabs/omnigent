@@ -11,6 +11,7 @@ import {
   cantStartNow,
   idleNow,
   idleWaitingNow,
+  launchingNow,
   liveNow,
   liveSnapshot,
   pausedNow,
@@ -179,6 +180,13 @@ export const CantStartPhone = phone(nowStory(cantStartNow()));
 export const CantStartPhoneDark = phone(nowStory(cantStartNow(), "dark"));
 
 /** validate-build-tier merged; its lead checks the preview between turns: still Working on. */
+/** PL sandboxes coming up: waiting for a node, pulling the image, a retry, a failure. */
+export const Launching = nowStory(launchingNow());
+
+export const LaunchingDark = nowStory(launchingNow(), "dark");
+
+export const LaunchingPhone = phone(nowStory(launchingNow()));
+
 export const Validating = nowStory(validatingNow());
 
 export const ValidatingDark = nowStory(validatingNow(), "dark");

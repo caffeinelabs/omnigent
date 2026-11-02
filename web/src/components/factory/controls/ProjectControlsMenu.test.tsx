@@ -393,12 +393,48 @@ describe("ProjectControlsMenu", () => {
     expect(screen.getByTestId("control-resume")).toBeInTheDocument();
   });
 
-  it("offers Restart and Relaunch inline on a failed project", () => {
+  it("offers a new sandbox, Restart and Relaunch inline on a failed project", () => {
     setup((_, project) => {
       project.overlay = "failed";
+      project.overlay_reason = "PL dead";
     });
+    expect(screen.getByTestId("control-new-sandbox-quick-api-version")).toBeInTheDocument();
     expect(screen.getByTestId("control-restart-quick-api-version")).toBeInTheDocument();
     expect(screen.getByTestId("control-relaunch-quick-api-version")).toBeInTheDocument();
+  });
+
+  it("offers only a new sandbox when the PL's sandbox never came up", () => {
+    // Restart and Relaunch would reuse the failed sandbox.
+    setup((_, project) => {
+      project.overlay = "failed";
+      project.overlay_reason = "PL sandbox failed twice";
+    });
+    expect(screen.getByTestId("control-new-sandbox-quick-api-version")).toBeInTheDocument();
+    expect(screen.queryByTestId("control-restart-quick-api-version")).toBeNull();
+    expect(screen.queryByTestId("control-relaunch-quick-api-version")).toBeNull();
+  });
+
+  it("relaunches the PL on a new sandbox with a note, apart from Restart", async () => {
+    const { controlBodies } = setup();
+    open();
+    fireEvent.click(screen.getByTestId("control-new-sandbox"));
+    const dialog = await screen.findByTestId("control-new-sandbox-dialog");
+    expect(dialog).toHaveTextContent("Restart keeps its sandbox; this replaces it.");
+    expect(within(dialog).getByTestId("control-consequences")).toHaveTextContent(
+      "The project, charter, tasks, PRs and decisions stay",
+    );
+    fireEvent.change(within(dialog).getByTestId("control-note"), {
+      target: { value: "the node pool was full" },
+    });
+    fireEvent.click(within(dialog).getByTestId("control-confirm"));
+
+    await waitFor(() =>
+      expect(controlBodies()).toEqual([
+        { action: "new_sandbox", target: "project:api-version", note: "the node pool was full" },
+      ]),
+    );
+    // No reply to wait for: the card's start phase shows the new sandbox coming up.
+    expect(screen.queryByTestId("control-pending-api-version")).toBeNull();
   });
 
   it("ages control events on the server's clock, not a skewed browser's", async () => {

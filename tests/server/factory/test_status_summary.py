@@ -609,6 +609,79 @@ def test_a_queued_project_whose_lead_failed_to_start_says_so() -> None:
     assert "Next: cache-warm couldn't start: its lead agent's machine failed to start" in lines
 
 
+def test_a_starting_project_says_what_its_machine_waits_on_and_since_when() -> None:
+    """The 2026-11-02 PL: no free node, a cold image pull, then the retry on a new sandbox."""
+    body = _snapshot(
+        projects=[
+            _project(
+                "build-tier-drafts",
+                "queued",
+                NOW - 9 * 60,
+                start={
+                    "state": "starting",
+                    "phase": "image",
+                    "label": "Pulling the image",
+                    "since": NOW - 9 * 60,
+                    "phase_since": NOW - 4 * 60,
+                },
+            ),
+            _project(
+                "tier-copy",
+                "queued",
+                NOW - 20 * 60,
+                start={
+                    "state": "starting",
+                    "phase": "node",
+                    "label": "Waiting for a node",
+                    "since": NOW - 20 * 60,
+                    "phase_since": NOW - 90,
+                    "attempt": 2,
+                    "restart": True,
+                },
+            ),
+            # A server without start views: the provisioning step says it.
+            _project(
+                "tier-docs",
+                "queued",
+                NOW - 2 * 60,
+                provisioning={"stage": "starting", "step": "clone", "since": NOW - 30},
+            ),
+            _project(
+                "cache-warm",
+                "queued",
+                NOW - 4 * 60,
+                overlay="failed",
+                overlay_reason="PL sandbox failed · retrying on a new sandbox",
+            ),
+            _project(
+                "tier-alerts",
+                "queued",
+                NOW - 34 * 60,
+                overlay="failed",
+                overlay_reason="PL sandbox failed twice",
+            ),
+        ]
+    )
+
+    summary = _build(body)
+
+    assert [(n["project"], n["reason"], n["step_since"]) for n in summary["next"]] == [
+        ("tier-alerts", "couldn't start: its lead agent's machine failed to start twice", None),
+        (
+            "cache-warm",
+            "couldn't start: its lead agent's machine failed to start · retrying on a new sandbox",
+            None,
+        ),
+        (
+            "tier-copy",
+            "starting up on a new sandbox (try 2): waiting for a free machine",
+            NOW - 90,
+        ),
+        ("build-tier-drafts", "starting up: pulling its image", NOW - 4 * 60),
+        ("tier-docs", "starting up: copying the repository", NOW - 30),
+    ]
+
+
 def test_queued_projects_in_a_paused_factory_wait_for_the_resume() -> None:
     body = _snapshot(
         factory={**_snapshot()["factory"], "state": "paused"},

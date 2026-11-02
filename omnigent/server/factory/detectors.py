@@ -137,7 +137,7 @@ RULES: Final[dict[str, Rule]] = {
             "member.dead",
             _INC,
             "critical",
-            ("restart", "relaunch", "pause_project", "open_agent"),
+            ("new_sandbox", "restart", "relaunch", "pause_project", "open_agent"),
             assignee=issues.ASSIGN_OWNERS,
         ),
         Rule("agent.repeat", _INC, "warning", ("interrupt", "redispatch", "reassign", "message")),
