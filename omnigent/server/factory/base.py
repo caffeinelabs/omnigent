@@ -289,6 +289,8 @@ async def _observe_one(
             "to": oid,
             "pr": pr,
             "notified": [target for target, _, _ in notices],
+            # The Room names the repo in its base line when there is more than one.
+            "repos_watched": len({r.lower() for r, _ in watched_bases(scope)}),
         },
     )
     for hook in list(_hooks):

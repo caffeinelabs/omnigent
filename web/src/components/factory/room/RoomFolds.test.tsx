@@ -88,6 +88,31 @@ describe("a base's moves", () => {
     );
   });
 
+  it("names the repo when asked and dates moves that are not from today", () => {
+    const thread = manyBaseMovesThread(ROOM_NOW_S - 2 * 86_400);
+    const item = folded(thread).find((i) => i.type === "base" && i.moves.length === 7)!;
+    if (item.type !== "base") throw new Error("no base line");
+    wrap(
+      <BaseMovesLine
+        base={item.base}
+        repo={item.repo}
+        moves={item.moves}
+        messages={item.messages}
+        sources={sources}
+      />,
+    );
+    const line = screen.getByTestId("room-base-moves-main");
+    const day = new Date(item.moves[0]!.at * 1000).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+    expect(line).toHaveTextContent(`base main (app) moved 7 times since ${day}, `);
+    expect(screen.getByTestId("room-base-moves-repo")).toHaveAttribute("title", "caffeinelabs/app");
+    fireEvent.click(screen.getByTestId("room-base-moves-toggle-main"));
+    const list = screen.getByTestId("room-base-moves-list-main");
+    expect(within(list).getAllByRole("listitem")[0]).toHaveTextContent(`${day}, `);
+  });
+
   it("a single move reads as it always did", () => {
     const thread = manyBaseMovesThread();
     const lone = thread[thread.length - 1]!;
@@ -113,12 +138,13 @@ describe("a long-running incident", () => {
     wrap(<IssueRepeats refText={run.ref} messages={run.messages} sources={sources} />);
 
     const line = screen.getByTestId("room-issue-repeats-INC-14");
-    expect(line).toHaveAttribute("data-count", "3");
+    expect(line).toHaveAttribute("data-count", "5");
     expect(line).toHaveTextContent(
-      /INC-14 was posted 3 times \(\d\d:\d\d–\d\d:\d\d\); its live card is below/,
+      /INC-14 was posted 5 times \(\d\d:\d\d–\d\d:\d\d\); its live card is below/,
     );
     fireEvent.click(screen.getByTestId("room-issue-repeats-toggle-INC-14"));
-    expect(within(line).getAllByRole("listitem")).toHaveLength(3);
+    expect(within(line).getAllByRole("listitem")).toHaveLength(5);
+    expect(line).toHaveTextContent("$16.40/h");
     expect(line).toHaveTextContent("$19.75/h");
   });
 

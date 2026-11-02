@@ -238,7 +238,9 @@ async def test_moves_share_one_room_line_and_every_pl_still_hears(watching: Watc
     lines = [m for m in w.store.list_chat(w.fid, "factory", limit=50) if m.author_kind == "system"]
     [line] = [m for m in lines if chat_cards.card_meta(m).get("kind") == "base.moved"]
     assert len(lines) == 1
-    assert line.body.startswith(f"base {BASE} moved 3 times since ")
+    # The factory watches app and infra: the line says which repo moved.
+    assert line.body.startswith(f"base {BASE} (app) moved 3 times since ")
+    assert {m.data["repos_watched"] for m in w.moves()} == {2}
     assert line.body.endswith(f" UTC → {sha('d')[:7]}")
     meta = chat_cards.card_meta(line)
     assert [m["to_sha"] for m in meta["moves"]] == [sha("b"), sha("c"), sha("d")]

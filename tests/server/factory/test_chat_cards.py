@@ -349,13 +349,67 @@ async def test_a_repeated_incident_event_changes_nothing(env: RoomEnv) -> None:
     assert len(chat_cards.card_meta(card)["events"]) == 2
 
 
+async def test_an_updated_card_reads_on_one_line_like_a_posted_one(env: RoomEnv) -> None:
+    data = {"issue_id": "e" * 32, "ref": "INC-6", "class": "incident", "severity": "warning"}
+    await _emit(env, "issue.opened", data=data, summary="INC-6 line one\nline two")
+    [card] = _issue_cards(env)
+    assert card.body == "INC-6 line one line two"
+    comeback = {**data, "reopened": True, "was_resolved_by": "server"}
+    comeback["was_resolved_at"] = int(time.time())
+    await _emit(env, "issue.opened", data=comeback, summary="INC-6 back\n  again\tnow")
+
+    [card] = _issue_cards(env)
+    assert card.body == "INC-6 back again now"
+    assert chat_cards.card_meta(card)["reopened"] == 1
+
+
+async def test_a_late_copy_of_an_older_event_leaves_the_live_card_alone(env: RoomEnv) -> None:
+    state = env.cockpit.app.state
+    await _spend(env, 18.0)
+    await _spend(env, 40.0, severity="critical")
+    first, live = _issue_cards(env)
+    [opened] = env.cockpit.events("issue.opened")
+    [escalated] = env.cockpit.events(issues.ESCALATED)
+
+    # The first card's event, delivered again after the repost.
+    await chat_cards.mirror_event(state, opened)
+    # An event older than the live card's newest that neither card recorded.
+    stale = FactoryEvent(
+        id=new_event_id(escalated.ts - 1),
+        factory_id=env.cockpit.fid,
+        ts=escalated.ts - 1,
+        kind="issue.opened",
+        summary="INC-1 an old copy",
+        severity="warning",
+        data={**opened.data, "reopened": True, "was_resolved_by": "server"},
+    )
+    await chat_cards.mirror_event(state, stale)
+
+    assert [(m.id, m.body) for m in _issue_cards(env)] == [
+        (first.id, first.body),
+        (live.id, live.body),
+    ]
+    assert chat_cards.card_meta(_issue_cards(env)[1]) == chat_cards.card_meta(live)
+
+
 # ── Batched base lines ─────────────────────────────────────────
 
 HEAD = [f"{i:x}" * 40 for i in range(16)]
 
 
-def _move(env: RoomEnv, i: int, at_s: int, *, base: str = "main", pr: int | None = None) -> Any:
-    data = {"repo": REPO, "base": base, "from": HEAD[i], "to": HEAD[i + 1], "pr": pr}
+def _move(
+    env: RoomEnv,
+    i: int,
+    at_s: int,
+    *,
+    base: str = "main",
+    pr: int | None = None,
+    repo: str = REPO,
+    repos: int | None = None,
+) -> Any:
+    data = {"repo": repo, "base": base, "from": HEAD[i], "to": HEAD[i + 1], "pr": pr}
+    if repos is not None:
+        data["repos_watched"] = repos
     via = f" (#{pr})" if pr else ""
     return FactoryEvent(
         id=new_event_id(at_s * 1000),
@@ -364,7 +418,7 @@ def _move(env: RoomEnv, i: int, at_s: int, *, base: str = "main", pr: int | None
         kind="base.moved",
         summary=f"base {base} moved {HEAD[i][:7]} → {HEAD[i + 1][:7]}{via}",
         severity="notice",
-        subject=f"base:{REPO}#{base}",
+        subject=f"base:{repo}#{base}",
         data=data,
     )
 
@@ -433,6 +487,52 @@ async def test_a_full_line_starts_another_and_a_replay_adds_nothing(
         await chat_cards.mirror_event(state, event)
 
     assert [len(chat_cards.card_meta(m)["moves"]) for m in _base_lines(env)] == [3, 1]
+
+
+async def test_cards_between_moves_keep_one_line_people_and_agents_do_not(
+    env: RoomEnv,
+) -> None:
+    state, store, fid = env.cockpit.app.state, env.cockpit.store, env.cockpit.fid
+    t0 = 1_793_000_000
+    await chat_cards.mirror_event(state, _move(env, 0, t0))
+    await chat.post_system(state, fid, "factory", "INC-1 the factory spends $18/h")
+    await chat_cards.mirror_event(state, _move(env, 1, t0 + 3600))
+    store.append_chat(fid, thread="factory", author_kind="agent", author="atlas", body="ok")
+    await chat_cards.mirror_event(state, _move(env, 2, t0 + 7200))
+
+    assert [len(chat_cards.card_meta(m)["moves"]) for m in _base_lines(env)] == [2, 1]
+
+
+async def test_a_line_spans_one_utc_day_and_at_most_twelve_hours(env: RoomEnv) -> None:
+    state = env.cockpit.app.state
+    t0 = 1_792_972_800 + 60  # 2026-10-26 00:01 UTC
+    await chat_cards.mirror_event(state, _move(env, 0, t0))
+    await chat_cards.mirror_event(state, _move(env, 1, t0 + chat_cards.BASE_LINE_SPAN_S - 60))
+    await chat_cards.mirror_event(state, _move(env, 2, t0 + chat_cards.BASE_LINE_SPAN_S))
+    await chat_cards.mirror_event(state, _move(env, 3, t0 + 86_400 - 120))  # 23:59, same day
+    await chat_cards.mirror_event(state, _move(env, 4, t0 + 86_400))  # 00:01 the next day
+
+    lines = _base_lines(env)
+    assert [len(chat_cards.card_meta(m)["moves"]) for m in lines] == [2, 2, 1]
+    assert lines[0].body == f"base main moved 2 times since 00:01 UTC → {HEAD[2][:7]}"
+
+
+async def test_each_repo_has_its_own_line_named_when_there_are_several(env: RoomEnv) -> None:
+    state = env.cockpit.app.state
+    t0 = 1_793_000_000
+    infra = "caffeinelabs/infra"
+    await chat_cards.mirror_event(state, _move(env, 0, t0, repos=2))
+    await chat_cards.mirror_event(state, _move(env, 1, t0 + 60, repos=2))
+    await chat_cards.mirror_event(state, _move(env, 8, t0 + 120, repo=infra, repos=2, pr=12))
+    await chat_cards.mirror_event(state, _move(env, 2, t0 + 180, repos=2))
+
+    app, other = _base_lines(env)
+    assert app.body == f"base main (app) moved 3 times since 07:33 UTC → {HEAD[3][:7]}"
+    assert other.body == f"base main (infra) moved {HEAD[8][:7]} → {HEAD[9][:7]} (#12)"
+    assert chat_cards.card_meta(other)["repo"] == infra
+    assert chat_cards.base_line_text("main", chat_cards.card_meta(app)["moves"]).startswith(
+        "base main moved 3 times"
+    )
 
 
 def test_a_base_move_without_its_data_stays_a_plain_line() -> None:

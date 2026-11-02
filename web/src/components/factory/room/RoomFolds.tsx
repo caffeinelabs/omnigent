@@ -2,7 +2,7 @@
  * Room noise, folded but never hidden: a base's moves as one line ("base
  * main moved 7 times since 14:12 → 0c8a4e1", each move a click away and all
  * of them in Activity), and an incident's older cards as one quiet line above
- * its live card.
+ * its live card. Times carry their date when it is not today.
  */
 
 import { useId, useState } from "react";
@@ -13,9 +13,11 @@ import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { useRoomCardData } from "../cards/RoomCardContext";
 import { SystemLine } from "../cards/SystemLine";
+import { useFactoryNow } from "../factoryClock";
 import { shortSha } from "../factoryFormat";
 import { activityPageHref } from "../factoryRoutes";
-import { messageTime } from "./roomModel";
+import { clockText } from "../overview/nowCardModel";
+import { repoName } from "./roomFold";
 import { type RefSources, refView } from "./roomRefs";
 import { RefChip, RoomText } from "./RoomText";
 
@@ -49,17 +51,25 @@ function moveText(move: BaseMoveView): string {
   return `${shortSha(move.from_sha) || "?"} → ${shortSha(move.to_sha)}${pr}`;
 }
 
+/** The viewer's "now" in epoch seconds, for "today or with its date". */
+function useNowS(): number {
+  return Math.floor(useFactoryNow().getTime() / 1000);
+}
+
 /**
  * One line for a base's moves: a batched line, or a run of one-move lines. A
  * single move reads as it always did.
  */
 export function BaseMovesLine({
   base,
+  repo = null,
   moves,
   messages,
   sources,
 }: {
   base: string;
+  /** `owner/name` to name, when the factory watches more than one repo. */
+  repo?: string | null;
   moves: readonly BaseMoveView[];
   messages: readonly ChatMessageView[];
   sources: RefSources;
@@ -67,6 +77,7 @@ export function BaseMovesLine({
   const { factoryId } = useRoomCardData();
   const [open, setOpen] = useState(false);
   const listId = useId();
+  const nowS = useNowS();
   const first = moves[0];
   const last = moves[moves.length - 1];
   if (!first || !last || (moves.length === 1 && messages.length === 1)) {
@@ -81,8 +92,14 @@ export function BaseMovesLine({
       <div className="flex min-w-0 items-start gap-2">
         <GitBranchIcon aria-hidden className="mt-[3px] size-3.5 shrink-0 opacity-70" />
         <p className="min-w-0 flex-1 break-words">
-          base <span className="font-mono">{base}</span> moved {moves.length} times since{" "}
-          {messageTime(first.at)} →{" "}
+          base <span className="font-mono">{base}</span>
+          {repo && (
+            <span title={repo} data-testid="room-base-moves-repo">
+              {" "}
+              ({repoName(repo)})
+            </span>
+          )}{" "}
+          moved {moves.length} times since {clockText(first.at, nowS)} →{" "}
           <span className="font-mono text-foreground/80">{shortSha(last.to_sha)}</span>{" "}
           <Toggle
             open={open}
@@ -95,7 +112,7 @@ export function BaseMovesLine({
           className="shrink-0 font-mono text-xs tabular-nums opacity-80"
           title="The latest move"
         >
-          {messageTime(last.at)}
+          {clockText(last.at, nowS)}
         </time>
       </div>
       {open && (
@@ -109,7 +126,7 @@ export function BaseMovesLine({
               key={`${move.at}-${move.from_sha}-${move.to_sha}`}
               className="flex min-w-0 items-baseline gap-2"
             >
-              <time className="shrink-0 font-mono tabular-nums">{messageTime(move.at)}</time>
+              <time className="shrink-0 font-mono tabular-nums">{clockText(move.at, nowS)}</time>
               <RoomText
                 body={moveText(move)}
                 sources={sources}
@@ -153,6 +170,7 @@ export function IssueRepeats({
 }) {
   const [open, setOpen] = useState(false);
   const listId = useId();
+  const nowS = useNowS();
   const first = messages[0];
   const last = messages[messages.length - 1];
   if (!first || !last) return null;
@@ -160,7 +178,7 @@ export function IssueRepeats({
     <div className={cn("flex min-w-0 items-start gap-2", className)}>
       <RoomText body={message.body} sources={sources} className="min-w-0 flex-1 text-sm" />
       <time className="shrink-0 font-mono text-xs tabular-nums opacity-80">
-        {messageTime(message.created_at)}
+        {clockText(message.created_at, nowS)}
       </time>
     </div>
   );
@@ -185,7 +203,8 @@ export function IssueRepeats({
         <OctagonAlertIcon aria-hidden className="mt-[3px] size-3.5 shrink-0 opacity-70" />
         <p className="min-w-0 flex-1 break-words">
           <RefLabel text={refText} sources={sources} /> was posted {messages.length} times (
-          {messageTime(first.created_at)}–{messageTime(last.created_at)}); its live card is below.{" "}
+          {clockText(first.created_at, nowS)}–{clockText(last.created_at, nowS)}); its live card is
+          below.{" "}
           <Toggle
             open={open}
             onToggle={() => setOpen((v) => !v)}

@@ -97,6 +97,8 @@ CONTEXT_LINES: Final = 8
 CONTEXT_SCAN: Final = 60
 REFS_MAX: Final = 6
 LINE_MAX: Final = 200
+SYSTEM_LINE_MAX: Final = 600
+"""Chars a system row's body keeps (it is always one line)."""
 HUMAN_POSTS_PER_WINDOW: Final = 20
 HUMAN_WINDOW_S: Final = 600.0
 
@@ -362,6 +364,11 @@ def one_line(text: str, limit: int = LINE_MAX) -> str:
     """:returns: *text* on one line, cut to *limit* chars."""
     flat = " ".join(text.split())
     return flat if len(flat) <= limit else flat[: limit - 1] + "…"
+
+
+def system_line(text: str) -> str:
+    """:returns: A system row's body: *text* on one line, cut to :data:`SYSTEM_LINE_MAX`."""
+    return one_line(text, SYSTEM_LINE_MAX)
 
 
 def _quoted(body: str) -> list[str]:
@@ -1179,7 +1186,7 @@ async def post_system(
             thread=thread,
             author_kind="system",
             author="server",
-            body=one_line(body, 600),
+            body=system_line(body),
             card=dict(card) if card else {"type": "system", "ref": None, "id": None},
             refs=list(refs),
             message_id=message_id,
@@ -1188,6 +1195,30 @@ async def post_system(
     if announce:
         live.announce_factory_changed(app_state, factory_id, [SCOPE])
     return row
+
+
+async def update_system(
+    app_state: Any,
+    message_id: str,
+    *,
+    body: str | None = None,
+    card: Mapping[str, Any] | None = None,
+) -> FactoryChatMessage | None:
+    """
+    Rewrite a system row in place (a live card or a batched line); announces nothing.
+
+    The body is flattened like :func:`post_system` flattens it, so a row reads
+    the same whether it was posted or updated.
+
+    :returns: The updated row, or ``None`` when the id is unknown.
+    """
+    deps = factory_deps(app_state)
+    fields: dict[str, Any] = {}
+    if body is not None:
+        fields["body"] = system_line(body)
+    if card is not None:
+        fields["card"] = dict(card)
+    return await asyncio.to_thread(deps.factory_store.update_chat_message, message_id, **fields)
 
 
 async def _route_and_store(
@@ -1527,6 +1558,7 @@ __all__ = [
     "KIND_REPLIED",
     "KIND_UNROUTABLE",
     "ROOM_STATE_ATTR",
+    "SYSTEM_LINE_MAX",
     "Line",
     "Posted",
     "Room",
@@ -1561,5 +1593,7 @@ __all__ = [
     "room_members",
     "start",
     "store_brief",
+    "system_line",
     "thread_title",
+    "update_system",
 ]

@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { LIVE_RUN_FACTORY_ID } from "@/components/factory/__fixtures__/liveRun";
 import { resetFactoryControls } from "@/components/factory/controls/useFactoryControls";
 import {
+  afterDeployThread,
   busyThread,
   chatPage,
   longIncidentThread,
@@ -160,11 +161,35 @@ describe("Room page", () => {
     expect(screen.getAllByTestId("issue-card-INC-14")).toHaveLength(1);
     expect(card).toHaveTextContent("$18.33/h");
     expect(screen.getByTestId("issue-seen-INC-14")).toHaveTextContent("came back 4×");
-    expect(screen.getByTestId("room-issue-repeats-INC-14")).toHaveAttribute("data-count", "3");
-    expect(screen.getByTestId("room-issue-repeat-2001")).toHaveTextContent("$16.40/h");
+    const repeats = screen.getByTestId("room-issue-repeats-INC-14");
+    expect(repeats).toHaveAttribute("data-count", "5");
     // People's words between the cards stay where they were.
     expect(screen.getByTestId("room-message-2002")).toHaveTextContent("why does the factory");
     expect(screen.getByTestId("room-message-2007")).toHaveTextContent("park the idle previews");
+    // The older cards read as one line right above the live card.
+    const rows = within(screen.getByTestId("room-message-list")).getAllByRole("listitem");
+    const at = rows.findIndex((r) => r.contains(repeats));
+    expect(rows[at + 1]).toContainElement(card);
+  });
+
+  it("cleans up a Room where old incident cards and base lines alternate", async () => {
+    const messages = afterDeployThread();
+    const issues = [spendIncident(), ...roomIssues()];
+    open("/room", {
+      overrides: {
+        [`GET ${SNAPSHOT}/chat`]: () =>
+          json(chatPage(messages, String(authenticatedFetch.mock.lastCall?.[0]))),
+        [`GET ${SNAPSHOT}/issues`]: () => json({ data: issues, count: issues.length, mine: [] }),
+      },
+    });
+    await screen.findByTestId("issue-card-INC-14");
+    expect(screen.getByTestId("room-issue-repeats-INC-14")).toHaveAttribute("data-count", "6");
+    const main = screen.getAllByTestId("room-base-moves-main");
+    expect(main.map((m) => m.getAttribute("data-moves"))).toEqual(["6", "2", "2"]);
+    expect(main[1]).toHaveTextContent("base main (infra) moved 2 times");
+    expect(main[2]).toHaveTextContent("base main (app) moved 2 times");
+    // The older server's lines never named a repo.
+    expect(main[0]).toHaveTextContent(/^base main moved 6 times/);
   });
 
   it("folds a busy base into one line per run, every move one click away", async () => {

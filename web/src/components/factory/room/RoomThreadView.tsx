@@ -35,7 +35,7 @@ import { useOptionalFactoryShell } from "../shell/FactoryShellContext";
 import { FoldableMarkdown } from "../transcript/FoldableMarkdown";
 import { roomCandidateList } from "./roomCandidates";
 import { RoomComposer } from "./RoomComposer";
-import { foldRoomItems, supersededIssueCards } from "./roomFold";
+import { foldRoomItems, namesRepos, supersededIssueCards } from "./roomFold";
 import { BaseMovesLine, IssueRepeats } from "./RoomFolds";
 import { BusRow, RoomMessage } from "./RoomMessage";
 import {
@@ -205,6 +205,7 @@ export function RoomThreadView({
     return foldRoomItems(all, supersededIssueCards(messages));
   }, [messages, lines, showBus]);
   const byId = useMemo(() => new Map(messages.map((m) => [m.id, m])), [messages]);
+  const nameRepos = namesRepos(snapshot, items);
   const status = responderStatus(snapshot, threadView, messages);
   const statusLine = responderLine(status);
   const here = peopleHere(snapshot.presence, snapshot, thread);
@@ -485,6 +486,7 @@ export function RoomThreadView({
                       {item.type === "base" ? (
                         <BaseMovesLine
                           base={item.base}
+                          repo={nameRepos ? item.repo : null}
                           moves={item.moves}
                           messages={item.messages}
                           sources={sources}

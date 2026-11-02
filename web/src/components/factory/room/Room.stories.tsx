@@ -7,6 +7,7 @@ import {
   ROOM_FID,
   ROOM_NOW_S,
   type RoomRouteOptions,
+  afterDeployThread,
   busyThread,
   longIncidentThread,
   manyBaseMovesThread,
@@ -262,6 +263,21 @@ export const ManyBaseMovesOpened = room("/room", basesRoom, openMoves);
 export const ManyBaseMovesOpenedDark = room("/room", { ...basesRoom, theme: "dark" }, openMoves);
 
 export const ManyBaseMovesOpenedMobile = phone(room("/room", basesRoom, openMoves));
+
+const deployRoom = {
+  room: { messages: afterDeployThread(), issues: [spendIncident(), ...roomIssues()] },
+};
+
+/**
+ * #factory as the deploy finds it: six old INC-14 cards each followed by a
+ * one-move base line read as one base line, one quiet line of the old cards
+ * right above the live card, and app main and infra main each their own line.
+ */
+export const AfterDeploy = room("/room", deployRoom);
+
+export const AfterDeployDark = room("/room", { ...deployRoom, theme: "dark" });
+
+export const AfterDeployMobile = phone(room("/room", deployRoom));
 
 // ── Scale and edge cases ───────────────────────────────────────
 

@@ -5,6 +5,7 @@
 // bus. Every export is a fresh copy a caller may mutate.
 
 import type {
+  BaseMoveView,
   ChatMessageView,
   FactorySnapshot,
   IssueView,
@@ -395,6 +396,64 @@ export function manyBaseMovesThread(nowS = ROOM_NOW_S): ChatMessageView[] {
       },
     ),
   ];
+}
+
+function batchedLine(
+  seq: number,
+  repo: string,
+  base: string,
+  moves: BaseMoveView[],
+  label = base,
+): ChatMessageView {
+  const last = moves[moves.length - 1]!;
+  return systemRow(
+    seq,
+    moves[0]!.at,
+    `base ${label} moved ${moves.length} times since ${utcTime(moves[0]!.at)} UTC → ${last.to_sha.slice(0, 7)}`,
+    { type: "system", ref: null, id: null, meta: { kind: "base.moved", repo, base, moves } },
+  );
+}
+
+/**
+ * #factory as the deploy finds it: six INC-14 cards an older server posted,
+ * each followed by a one-move "base main moved" line (app main merged all
+ * afternoon), then the live card, a question, and new batched lines of app
+ * main and infra main.
+ */
+export function afterDeployThread(nowS = ROOM_NOW_S): ChatMessageView[] {
+  const card = { type: "issue" as const, ref: "INC-14", id: SPEND_ID };
+  const rates = ["16.40", "17.10", "15.80", "19.75", "21.40", "18.90"];
+  const rows: ChatMessageView[] = [...roomMessages("factory").slice(0, 2)];
+  rates.forEach((rate, i) => {
+    const at = nowS - (180 - i * 20) * 60;
+    rows.push(systemRow(4001 + 2 * i, at, `INC-14 ${SPEND_TEXT(rate)}`, card));
+    const from = sha40(60 + i).slice(0, 7);
+    rows.push(
+      systemRow(4002 + 2 * i, at + 300, `base main moved ${from} → ${sha40(61 + i).slice(0, 7)}`, {
+        type: "system",
+        ref: null,
+        id: null,
+      }),
+    );
+  });
+  rows.push(
+    systemRow(4013, nowS - 50 * 60, `INC-14 ${SPEND_TEXT("18.33")}`, {
+      ...card,
+      meta: { kind: "issue", severity: "warning", reopened: 2, reopened_at: nowS - 20 * 60 },
+    }),
+    personRow(4014, nowS - 45 * 60, "@atlas what still burns money?"),
+  );
+  const move = (n: number, minAgo: number): BaseMoveView => ({
+    at: nowS - minAgo * 60,
+    from_sha: sha40(n),
+    to_sha: sha40(n + 1),
+    pr: null,
+  });
+  rows.push(
+    batchedLine(4015, "caffeinelabs/infra", "main", [move(80, 30), move(81, 25)], "main (infra)"),
+    batchedLine(4016, "caffeinelabs/app", "main", [move(66, 20), move(67, 8)], "main (app)"),
+  );
+  return rows;
 }
 
 /** `GET …/chat?thread=&before_seq=&limit=` over `messages` (oldest first, latest page). */

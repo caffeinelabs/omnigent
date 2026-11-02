@@ -37,12 +37,15 @@ incident or a busy base does not bury what people and agents say:
   takes the latest value and its meta counts the comeback. The card is posted
   again when the severity rises above what it showed, when it comes back
   after a person resolved it or after staying clear that long, and for every
-  person's report.
-- ``base.moved`` joins the newest line of its base while nothing else was said
-  after it, or while its first move is under :data:`BASE_BATCH_S` old: "base
-  main moved 7 times since 13:12 UTC → 0c8a4e1", each move kept in the meta.
-  Every move is still its own event (Activity), and the PLs on that base are
-  mailed as before.
+  person's report. A late copy of an event (one the cards took, or older than
+  the newest the live card took) changes nothing.
+- ``base.moved`` joins the newest line of its repo and base while no person
+  or agent said anything after it, or while its first move is under
+  :data:`BASE_BATCH_S` old: "base main moved 7 times since 13:12 UTC →
+  0c8a4e1", each move kept in the meta. A line spans one UTC day and at most
+  :data:`BASE_LINE_SPAN_S`. When the factory watches more than one repo, the
+  line names it: "base main (infra) moved …". Every move is still its own
+  event (Activity), and the PLs on that base are mailed as before.
 
 Neither changes the events themselves, so Slack, the digest and the Now card
 read what they always read.
@@ -112,6 +115,8 @@ BASE_BATCH_S: Final = 600
 """Moves of one base this soon after a line's first move join that line."""
 BASE_BATCH_MAX: Final = 50
 """Moves one base line holds."""
+BASE_LINE_SPAN_S: Final = 12 * 3600
+"""A base line takes no move this long after its first one (nor one on another UTC day)."""
 BASE_SCAN: Final = 60
 """Newest rows of a thread searched for the line a base move joins."""
 _EVENTS_KEPT: Final = 10
@@ -347,6 +352,21 @@ def repost_reason(meta: Mapping[str, Any], event: Any) -> str | None:
     return None
 
 
+def seen_before(meta: Mapping[str, Any], first_meta: Mapping[str, Any], event: Any) -> bool:
+    """
+    Whether an incident event is one its cards already showed (a repeated delivery).
+
+    :param meta: The live card's meta.
+    :param first_meta: The incident's first card's meta (its events from before a repost).
+    :returns: ``True`` for an event either card recorded, or one older than the
+        newest the live card took: a late copy never overwrites newer text.
+    """
+    if event.id in (meta.get("events") or []) or event.id in (first_meta.get("events") or []):
+        return True
+    last = meta.get("last_ts")
+    return isinstance(last, int) and event.ts < last
+
+
 def _remember(meta: Mapping[str, Any], event_id: str) -> list[str]:
     seen = [e for e in meta.get("events") or [] if isinstance(e, str)]
     return [*seen, event_id][-_EVENTS_KEPT:]
@@ -363,17 +383,16 @@ async def _write_issue_card(app_state: Any, deps: FactoryDeps, event: Any, row: 
     async with _lock(app_state, event.factory_id, row.thread):
         first, current = await asyncio.to_thread(live_issue_card, store, issue_id, row.thread)
         meta = card_meta(current) if current is not None else {}
-        if current is not None and event.id in (meta.get("events") or []):
+        if current is not None and seen_before(meta, card_meta(first) if first else {}, event):
             return False
         if current is not None and repost_reason(meta, event) is None:
             meta["events"] = _remember(meta, event.id)
+            meta["last_ts"] = event.ts
             if data.get("reopened"):
                 meta["reopened"] = int(meta.get("reopened") or 0) + 1
                 meta["reopened_at"] = event.ts // 1000
             card = {**(current.card or {}), "meta": meta}
-            await asyncio.to_thread(
-                store.update_chat_message, current.id, body=row.body, card=card
-            )
+            await chat.update_system(app_state, current.id, body=row.body, card=card)
             return True
         post = 0
         if first is not None:
@@ -385,6 +404,7 @@ async def _write_issue_card(app_state: Any, deps: FactoryDeps, event: Any, row: 
             "reopened": 0,
             "reopened_at": None,
             "events": [event.id],
+            "last_ts": event.ts,
         }
         await chat.post_system(
             app_state,
@@ -397,10 +417,8 @@ async def _write_issue_card(app_state: Any, deps: FactoryDeps, event: Any, row: 
         )
         if first is not None:
             first_meta = {**card_meta(first), "posts": post}
-            await asyncio.to_thread(
-                store.update_chat_message,
-                first.id,
-                card={**(first.card or {}), "meta": first_meta},
+            await chat.update_system(
+                app_state, first.id, card={**(first.card or {}), "meta": first_meta}
             )
         return True
 
@@ -430,21 +448,34 @@ def base_key(repo: str, base: str) -> str:
     return f"{repo.lower()}#{base}"
 
 
-def base_line_text(base: str, moves: Sequence[Mapping[str, Any]]) -> str:
+def base_line_text(base: str, moves: Sequence[Mapping[str, Any]], repo: str | None = None) -> str:
     """
     The line of a batch of moves of *base*.
 
+    :param repo: ``owner/name`` to name (its name only), when the factory watches
+        more than one repo.
     :returns: ``base main moved 7f3e2a1 → 0c8a4e1 (#9630)`` for one move,
-        ``base main moved 7 times since 13:12 UTC → 0c8a4e1`` for several.
+        ``base main moved 7 times since 13:12 UTC → 0c8a4e1`` for several,
+        ``base main (infra) moved …`` with *repo*.
     """
     last = moves[-1]
     to = str(last.get("to_sha") or "")[:7]
+    name = f"{base} ({repo.rsplit('/', 1)[-1]})" if repo else base
     if len(moves) == 1:
         before = str(last.get("from_sha") or "")[:7] or "?"
         via = f" (#{last['pr']})" if last.get("pr") else ""
-        return f"base {base} moved {before} → {to}{via}"
-    since = datetime.fromtimestamp(int(moves[0].get("at") or 0), UTC).strftime("%H:%M")
-    return f"base {base} moved {len(moves)} times since {since} UTC → {to}"
+        return f"base {name} moved {before} → {to}{via}"
+    since = _utc(int(moves[0].get("at") or 0)).strftime("%H:%M")
+    return f"base {name} moved {len(moves)} times since {since} UTC → {to}"
+
+
+def _utc(epoch_s: int) -> datetime:
+    return datetime.fromtimestamp(epoch_s, UTC)
+
+
+def _one_span(first_at: int, at: int) -> bool:
+    """Whether a move at *at* may join a line whose first move was at *first_at*."""
+    return at - first_at < BASE_LINE_SPAN_S and _utc(first_at).date() == _utc(at).date()
 
 
 def joinable_line(
@@ -454,15 +485,16 @@ def joinable_line(
     The base line a move of *key* at *at* joins.
 
     :param rows: The thread's newest rows, oldest first.
-    :returns: The newest line of that base while nothing else was said after it
-        (other bases' lines do not count) or its first move is under
-        :data:`BASE_BATCH_S` old and it has room; else ``None`` (a new line).
+    :returns: The newest line of that repo and base while no person or agent
+        said anything after it (cards and other lines do not count) or its
+        first move is under :data:`BASE_BATCH_S` old, and it has room and the
+        move falls in its span (:func:`_one_span`); else ``None`` (a new line).
     """
-    others = False
+    said = False
     for row in reversed(rows):
         meta = card_meta(row)
         if meta.get("kind") != BASE_MOVED:
-            others = True
+            said = said or row.author_kind != "system"
             continue
         if meta.get("key") != key:
             continue
@@ -471,7 +503,9 @@ def joinable_line(
             return None
         first = moves[0].get("at") if isinstance(moves[0], Mapping) else None
         first_at = first if isinstance(first, int) else row.created_at
-        return row if not others or at - first_at < BASE_BATCH_S else None
+        if not _one_span(first_at, at):
+            return None
+        return row if not said or at - first_at < BASE_BATCH_S else None
     return None
 
 
@@ -494,6 +528,8 @@ async def _write_base_line(
     data = event.data or {}
     repo, base = str(data["repo"]), str(data["base"])
     key = base_key(repo, base)
+    watched = data.get("repos_watched")
+    named = repo if isinstance(watched, int) and watched > 1 else None
     async with _lock(app_state, event.factory_id, row.thread):
         recent = await asyncio.to_thread(
             lambda: store.list_chat(event.factory_id, row.thread, limit=BASE_SCAN)
@@ -506,10 +542,10 @@ async def _write_base_line(
             moves = [m for m in meta.get("moves") or [] if isinstance(m, Mapping)]
             moves.append(move)
             meta["moves"] = moves
-            await asyncio.to_thread(
-                store.update_chat_message,
+            await chat.update_system(
+                app_state,
                 line.id,
-                body=base_line_text(base, moves),
+                body=base_line_text(base, moves, named),
                 card={**(line.card or {}), "meta": meta},
             )
             return True
@@ -518,7 +554,7 @@ async def _write_base_line(
             app_state,
             event.factory_id,
             row.thread,
-            row.body,
+            base_line_text(base, [move], named),
             card={**row.card, "meta": meta},
             message_id=chat.derived_id(event.id, row.thread),
             announce=False,
@@ -579,6 +615,7 @@ register()
 __all__ = [
     "BASE_BATCH_MAX",
     "BASE_BATCH_S",
+    "BASE_LINE_SPAN_S",
     "DECISION_KINDS",
     "ISSUE_KINDS",
     "LOOP_KINDS",
@@ -596,5 +633,6 @@ __all__ = [
     "plan_cards",
     "register",
     "repost_reason",
+    "seen_before",
     "shows",
 ]
