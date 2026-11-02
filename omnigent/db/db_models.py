@@ -2096,6 +2096,9 @@ class SqlFactoryProposal(OmnigentBase):
     :param ops: JSON list of changes (project ops or definition patches).
     :param based_on: JSON ``{slug: updated_at}`` of the rows the proposal read.
     :param dedupe_key: A re-proposal with the same key returns this row.
+    :param opportunity: A projects proposal's opportunity id, e.g. ``O-12``.
+    :param bet: JSON bet of a projects proposal (frozen into ``charter.why`` at apply).
+    :param case_against: JSON list of the peer lead's lines against the bet.
     """
 
     __tablename__ = "factory_proposals"
@@ -2137,6 +2140,9 @@ class SqlFactoryProposal(OmnigentBase):
     reverted_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     reverted_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
     dedupe_key: Mapped[str | None] = mapped_column(String(96), nullable=True)
+    opportunity: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    bet: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    case_against: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
     updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
 

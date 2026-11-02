@@ -56,6 +56,8 @@ import {
 } from "./proposalModel";
 import { RejectProposalForm } from "./RejectProposalForm";
 import { useCountdown } from "./useCountdown";
+import { BetBlock } from "./BetBlock";
+import { waitsForCosign } from "./betModel";
 
 const KIND_ICON: Record<ProposalKind, typeof ListTreeIcon> = {
   projects: ListTreeIcon,
@@ -286,6 +288,9 @@ export function ProposalCard({
         </span>
       </header>
       <p className="text-ui font-medium break-words">{proposal.title}</p>
+      {(proposal.bet || proposal.opportunity) && (
+        <BetBlock proposal={proposal} snapshot={snapshot} />
+      )}
       {rows.length > 0 && <Changes rows={rows} />}
       {proposal.warnings.length > 0 && (
         <ul data-testid="proposal-warnings" className="flex flex-col gap-0.5">
@@ -321,6 +326,10 @@ export function ProposalCard({
             >
               <CircleAlertIcon aria-hidden className="mt-0.5 size-3.5 shrink-0" />
               {outcomeLine(proposal, "stale")}
+            </p>
+          ) : waitsForCosign(proposal) ? (
+            <p data-testid={`proposal-cosigning-${proposal.ref}`} className="text-muted-foreground">
+              Waits for the other lead's case against
             </p>
           ) : (
             <>

@@ -438,6 +438,8 @@ _JSON_COLUMNS: dict[str, frozenset[str]] = {
             "warnings",
             "based_on",
             "result",
+            "bet",
+            "case_against",
         }
     ),
     "task": frozenset({"card", "deps", "scope", "session_ids", "budget"}),
@@ -557,6 +559,9 @@ def _proposal(row: SqlFactoryProposal) -> FactoryProposal:
         reverted_at=row.reverted_at,
         reverted_by=row.reverted_by,
         dedupe_key=row.dedupe_key,
+        opportunity=row.opportunity,
+        bet=load_json(row.bet),
+        case_against=load_json(row.case_against),
         created_at=row.created_at,
         updated_at=row.updated_at,
         workspace_id=row.workspace_id,

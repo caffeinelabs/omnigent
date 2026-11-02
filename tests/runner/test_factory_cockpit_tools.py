@@ -927,6 +927,42 @@ async def test_project_without_changes_lists_projects_and_withdraw_withdraws() -
     assert call.body == {"from_session_id": PL, "kind": "projects", "withdraw": "C-1"}
 
 
+async def test_project_carries_a_bet_and_declines_an_opportunity() -> None:
+    server = (
+        FakeServer()
+        .on("POST", "/v1/factory/agent/proposals", body=_PROPOSAL)
+        .on("GET", "/v1/factory/agent/projects", body={"projects": []})
+    )
+    change = {"op": "create", "project": {"slug": "draft-share", "goal": "g"}}
+    bet = {"kind": "test", "hypothesis": "h (sample)", "outcome": "o"}
+
+    await _call(
+        server,
+        "sys_factory_project",
+        {"changes": [change], "opportunity": "O-12", "bet": bet},
+        caller=LEAD,
+        role="lead",
+    )
+    await _call(
+        server,
+        "sys_factory_project",
+        {"op": "decline", "opportunity": "O-7", "reason": "off strategy"},
+        caller=LEAD,
+        role="lead",
+    )
+
+    filed, declined = server.calls("POST", "/v1/factory/agent/proposals")
+    assert filed.body["opportunity"] == "O-12" and filed.body["bet"] == bet
+    assert declined.body == {
+        "from_session_id": LEAD,
+        "kind": "projects",
+        "op": "decline",
+        "opportunity": "O-7",
+        "reason": "off strategy",
+    }
+    assert server.calls("GET", "/v1/factory/agent/projects") == []
+
+
 async def test_project_errors_keep_the_field_path() -> None:
     server = FakeServer().on(
         "POST",
@@ -1194,7 +1230,8 @@ def test_learning_schemas() -> None:
 
     propose = _params(SysFactoryProposeTool)
     assert propose["required"] == ["kind"]
-    assert propose["properties"]["kind"]["enum"] == ["tuning", "rules", "code"]
+    assert propose["properties"]["kind"]["enum"] == ["tuning", "rules", "code", "projects"]
+    assert propose["properties"]["case_against"]["maxItems"] == 3
     assert propose["properties"]["op"]["enum"] == ["propose", "cosign", "withdraw"]
     assert propose["properties"]["trial_h"] == {"type": "integer", "minimum": 24, "maximum": 168}
     assert propose["properties"]["expected_effect"]["required"] == ["metric", "direction"]
@@ -1237,6 +1274,18 @@ async def test_propose_validates_the_kind_locally() -> None:
     out = await _call(server, "sys_factory_propose", {"kind": "projects"})
     assert "'kind' must be one of" in out["error"]
     assert server.calls("POST", "/v1/factory/agent/proposals") == []
+
+
+async def test_propose_cosigns_a_bet_with_its_case_against() -> None:
+    reply = {"proposal": "C-31", "status": "pending", "decision": "D-4"}
+    server = FakeServer().on("POST", "/v1/factory/agent/proposals", body=reply)
+    args = {"kind": "projects", "op": "cosign", "id": "C-31", "case_against": ["a", "b"]}
+
+    out = await _call(server, "sys_factory_propose", args, caller=LEAD, role="lead")
+
+    assert out == reply
+    [call] = server.calls("POST", "/v1/factory/agent/proposals")
+    assert call.body == {**args, "from_session_id": LEAD}
 
 
 async def test_propose_refusals_keep_their_code() -> None:

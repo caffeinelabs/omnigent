@@ -8,6 +8,7 @@ mangle it. ``normalize_charter`` gives the stored charter one shape.
 
 from __future__ import annotations
 
+import copy
 import logging
 import os
 import re
@@ -46,6 +47,27 @@ SPAWN_SERVER: Final = "server"
 SPAWN_LEAD: Final = "lead"
 SPAWN_OWNERS: Final = (SPAWN_SERVER, SPAWN_LEAD)
 """``spawn_owner``: who starts the project's PL (the server, or the lead from a brief)."""
+OUTCOME_MAX: Final = 140
+"""``charter.outcome``: what users get, in one sentence."""
+WHY_KEYS: Final = (
+    "proposal",
+    "opportunity",
+    "kind",
+    "goal",
+    "outcome",
+    "hypothesis",
+    "metric",
+    "expected",
+    "guardrails",
+    "flag",
+    "measurement",
+    "kill",
+    "cost",
+    "plan_version",
+    "frozen_at",
+    "frozen_by",
+)
+"""``charter.why``: the bet frozen when its proposal applied (read-only)."""
 DEFAULT_BASE_ENV: Final = "OMNIGENT_FACTORY_DEFAULT_BASE"
 """``owner/repo#branch`` new factories default to, e.g. ``caffeinelabs/app#temp-main``."""
 
@@ -146,6 +168,13 @@ def _budgets(value: Any) -> dict[str, float]:
     return out
 
 
+def _why(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, Mapping):
+        return None
+    out = {k: copy.deepcopy(value[k]) for k in WHY_KEYS if value.get(k) not in (None, "", [], {})}
+    return out or None
+
+
 def normalize_charter(
     raw: Mapping[str, Any] | None, *, tooling_ref: str | None = None
 ) -> dict[str, Any]:
@@ -162,7 +191,7 @@ def normalize_charter(
     :returns: ``{kind, goal, dod, scope_paths, constraints, env_needed,
         preview{enabled, slots, tooling_ref?}, preview_slots, demo_focus, demo,
         budget_ics, version_path?, health_path?, depends_on?, depends_mode?,
-        human_owner?, budgets?, spawn_owner?}``; ``kind`` is ``work`` unless it is
+        human_owner?, budgets?, spawn_owner?, outcome?, why?}``; ``kind`` is ``work`` unless it is
         one of :data:`~omnigent.factory.PROJECT_KINDS`. The optional keys are
         stored only when set.
     """
@@ -212,6 +241,12 @@ def normalize_charter(
         out["budgets"] = budgets
     if src.get("spawn_owner") in SPAWN_OWNERS:
         out["spawn_owner"] = src["spawn_owner"]
+    outcome = _text(src.get("outcome"))
+    if outcome:
+        out["outcome"] = " ".join(outcome.split())[:OUTCOME_MAX]
+    why = _why(src.get("why"))
+    if why:
+        out["why"] = why
     return out
 
 
@@ -295,6 +330,7 @@ def render_pl_charter(project: FactoryProject) -> str:
     lines = [
         f"CHARTER · {project.slug}",
         f"Title: {project.title} · priority P{project.priority}",
+        *why_lines(charter),
         f"Goal: {charter['goal'] or '(ask your lead)'}",
         "Definition of Done:",
         f"- {_fixed_dod(charter)}",
@@ -328,6 +364,62 @@ def render_pl_charter(project: FactoryProject) -> str:
         ),
     ]
     return "\n".join(lines)
+
+
+def _num(value: Any) -> str:
+    return f"{value:g}" if isinstance(value, int | float) and not isinstance(value, bool) else "?"
+
+
+def why_lines(charter: Mapping[str, Any]) -> list[str]:
+    """
+    The charter's Outcome and its frozen Why: hypothesis, metric, kill rule and flag.
+
+    :returns: No lines for a charter without an outcome or a why (most of today's).
+    """
+    lines = [f"Outcome: {charter['outcome']}"] if charter.get("outcome") else []
+    why = charter.get("why")
+    if not isinstance(why, Mapping):
+        return lines
+    origin = " · ".join(
+        part
+        for part in (
+            f"{why['kind']} bet {why.get('proposal', '')}".strip() if why.get("kind") else None,
+            f"from {why['opportunity']}" if why.get("opportunity") else None,
+            f"under {why['goal']}" if why.get("goal") else None,
+        )
+        if part
+    )
+    if not why.get("kind"):
+        lines.append(f"Why: {origin or why.get('proposal', 'a proposal')} · not measured")
+        return lines
+    lines.append(f"Why: {origin} (frozen when approved; the plan below does not change)")
+    if why.get("hypothesis"):
+        lines.append(f"Hypothesis: {why['hypothesis']}")
+    expected = why.get("expected") or {}
+    measurement = why.get("measurement") or {}
+    days = ", ".join(str(d) for d in measurement.get("readout_days") or []) or "?"
+    metric = (
+        f"Metric: {why.get('metric', '?')} · expected {expected.get('direction', '?')} "
+        f"{_num(expected.get('low'))} to {_num(expected.get('high'))} "
+        f"{expected.get('unit', '')}".rstrip()
+        + f" · measured by {measurement.get('method', '?')} on days {days} after release"
+    )
+    if why.get("guardrails"):
+        metric += f" · guardrails: {'; '.join(str(g) for g in why['guardrails'])}"
+    lines.append(metric)
+    kill = why.get("kill") or {}
+    if kill:
+        lines.append(f"Kill if: {kill.get('state', '?')} ({kill.get('date', '?')})")
+    flag = why.get("flag") or {}
+    if flag.get("none"):
+        lines.append(f"Flag: none ({flag['none']}); the readout uses a weaker method")
+    elif flag.get("key"):
+        convention = f" · convention: {flag['convention']}" if flag.get("convention") else ""
+        lines.append(
+            f"Flag: ship behind {flag['key']}, off by default{convention}; add the events "
+            "the measurement needs and never quote users in PRs"
+        )
+    return lines
 
 
 def _optional_lines(charter: Mapping[str, Any]) -> list[str]:
@@ -497,12 +589,14 @@ __all__ = [
     "DEPENDS_MODES",
     "DEPENDS_READY",
     "FIXED_DOD",
+    "OUTCOME_MAX",
     "PREVIEW_TOOLING_REF_ENV",
     "REPO_RE",
     "RETIRED_PREVIEW_TOOLING_REFS",
     "SPAWN_LEAD",
     "SPAWN_OWNERS",
     "SPAWN_SERVER",
+    "WHY_KEYS",
     "normalize_charter",
     "preview_tooling_ref",
     "project_base_branch",
@@ -513,4 +607,5 @@ __all__ = [
     "resolve_base_branch",
     "server_default_base",
     "spawn_owner",
+    "why_lines",
 ]

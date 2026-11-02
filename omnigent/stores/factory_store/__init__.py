@@ -216,6 +216,9 @@ PROPOSAL_FIELDS = frozenset(
         "applied_at",
         "reverted_at",
         "reverted_by",
+        "opportunity",
+        "bet",
+        "case_against",
     }
 )
 """Fields ``create_proposal`` / ``update_proposal`` accept."""
@@ -551,7 +554,7 @@ def validate_enums(entity: str, fields: Mapping[str, Any]) -> None:
 # VARCHAR bounds of the free-text columns. Longer values are cut to fit, since
 # PostgreSQL raises DataError where SQLite would store them whole.
 TEXT_BOUNDS: dict[str, dict[str, int]] = {
-    "proposal": {"title": 256},
+    "proposal": {"title": 256, "opportunity": 16},
     "task": {"title": 256},
     "loop": {"last_verdict": 32, "last_reason": 300},
     "issue": {"rule": 48, "category": 48, "target": 128, "summary": 300},

@@ -206,13 +206,12 @@ def test_upgrade_and_downgrade_postgres(pg_uri: str) -> None:
     _round_trip(pg_uri)
 
 
-def test_revision_is_the_single_head() -> None:
+def test_revision_chains_off_the_cockpit_revision() -> None:
     from alembic.script import ScriptDirectory
 
     script = ScriptDirectory.from_config(_build_alembic_config("sqlite://"))
     revision = script.get_revision(_REVISION)
     assert revision is not None and revision.down_revision == _PREVIOUS
-    assert script.get_heads() == [_REVISION]
 
 
 def _seed_previous(engine: sa.Engine) -> None:

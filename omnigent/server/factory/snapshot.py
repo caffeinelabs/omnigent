@@ -1166,6 +1166,7 @@ def _lifecycle(project: FactoryProject) -> dict[str, Any]:
         "depends_mode": charter.get("depends_mode"),
         "human_owner": charter.get("human_owner"),
         "def_version": project.def_version,
+        "why": _lenient(schemas.WhyView, charter.get("why")),
     }
 
 

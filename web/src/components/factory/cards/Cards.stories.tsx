@@ -18,6 +18,7 @@ import {
 import type { RefSources } from "../room/roomRefs";
 import { round3People, round3Snapshot } from "../shell/__fixtures__/shellFixtures";
 import { FactoryViewerProvider } from "../shell/viewerCan";
+import { betProposal, requestedFromOpportunity } from "./__fixtures__/betFixtures";
 import { ProposalCard } from "./ProposalCard";
 import { RoomCard } from "./RoomCard";
 import { RoomCardContext, type RoomCardData } from "./RoomCardContext";
@@ -354,6 +355,34 @@ export const ProposalOwnersOnly = proposalStory(
 
 /** A tuning change on trial (C-14). */
 export const ProposalTrial = proposalStory(roomProposals().find((p) => p.ref === "C-14")!);
+
+// ── Bets: a projects proposal with a bet and a case against (sample) ──
+
+/** Atlas filed it on its own: it waits for Sentinel's case against; nobody applies it yet. */
+export const ProposalBetCosigning = proposalStory(betProposal("cosigning"));
+
+/** Co-signed: the bet beside Sentinel's three lines against it, waiting for a person. */
+export const ProposalBetWithCaseAgainst = proposalStory(betProposal("waiting"));
+
+export const ProposalBetWithCaseAgainstDark = proposalStory(betProposal("waiting"), {
+  theme: "dark",
+});
+
+/** A 390 px phone: the bet and the case against stack. */
+export const ProposalBetWithCaseAgainstPhone = proposalStory(betProposal("waiting"), {
+  width: 358,
+});
+
+export const ProposalBetDock = proposalStory(betProposal("waiting"), { width: 320 });
+
+/** No other lead to write a case against: a person decides alone, and the card says so. */
+export const ProposalBetAlone = proposalStory(betProposal("alone"));
+
+/** Applied: frozen into the new project's charter, Undo counting down. */
+export const ProposalBetApplied = proposalStory(betProposal("applied"));
+
+/** Requested work from an opportunity carries no bet: it says it is not measured. */
+export const ProposalFromOpportunity = proposalStory(requestedFromOpportunity());
 
 /** Long titles, many changes and a long rationale. */
 export const ProposalLong = proposalStory({
