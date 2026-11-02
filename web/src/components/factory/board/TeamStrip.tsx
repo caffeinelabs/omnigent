@@ -9,33 +9,17 @@ import { ClaudeIcon } from "@/components/icons/ClaudeIcon";
 import { CodexIcon } from "@/components/icons/CodexIcon";
 import { RunningDot } from "@/components/RunningDot";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
-import type { FactoryRole, LaunchDriftView, MemberRef, MemberView } from "@/lib/factoryApi";
+import type { LaunchDriftView, MemberRef, MemberView } from "@/lib/factoryApi";
 import { Link } from "@/lib/routing";
 import { cn } from "@/lib/utils";
 import { activityDotClassName } from "@/shell/subagentStatus";
 import { useDriftRelaunch } from "../controls/FactoryControlsContext";
 import { formatUsd } from "../factoryFormat";
+import { ROLE_NAME, ROLE_SHORT } from "../ui/statusTokens";
 import { ageText } from "./boardModel";
 
-export const ROLE_SHORT: Record<FactoryRole, string> = {
-  lead: "lead",
-  project_lead: "PL",
-  ic: "ic",
-  env_keeper: "env",
-  reviewer: "rev",
-  demo: "demo",
-  planner: "plan",
-};
-
-export const ROLE_NAME: Record<FactoryRole, string> = {
-  lead: "Lead",
-  project_lead: "Project lead",
-  ic: "Implementer",
-  env_keeper: "Env keeper",
-  reviewer: "Reviewer",
-  demo: "Demo recorder",
-  planner: "Planner",
-};
+// Role wording lives with the rest of the status grammar.
+export { ROLE_NAME, ROLE_SHORT } from "../ui/statusTokens";
 
 export function HarnessGlyph({
   harness,

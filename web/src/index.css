@@ -72,6 +72,19 @@
   --color-status-yellow: var(--status-yellow);
   --color-status-red: var(--status-red);
   --color-status-gray: var(--status-gray);
+  /* Factory status grammar (components/factory/ui/statusTokens.ts): orange is
+     * stuck, violet is staged, chart-data the one data hue. The `-fg` steps are
+     * the text-safe form of each hue: >= 4.5:1 on the cards, page, muted and
+     * own-tint surfaces of every palette in both themes (statusTokens.test.ts). */
+  --color-status-orange: var(--status-orange);
+  --color-status-violet: var(--status-violet);
+  --color-chart-data: var(--chart-data);
+  --color-status-yellow-fg: var(--status-yellow-fg);
+  --color-status-green-fg: var(--status-green-fg);
+  --color-status-red-fg: var(--status-red-fg);
+  --color-status-orange-fg: var(--status-orange-fg);
+  --color-status-blue-fg: var(--status-blue-fg);
+  --color-status-violet-fg: var(--status-violet-fg);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -218,8 +231,8 @@
       var(--omnigent-bottom-bar-visible)
   );
 
-  /* Tertiary gray for lighter/disabled/placeholder text. */
-  --foreground-tertiary: #a1a1aa;
+  /* Tertiary ("faint") text, --foreground-tertiary, is a palette token
+   * (lib/themePalette.ts), so every palette sets its own: >= 5:1 on its cards. */
   --destructive: #c8324c;
   --destructive-foreground: #fff;
   /* success/warning/info repointed onto the named status hues below so
@@ -242,6 +255,15 @@
   --status-yellow: #d4972a;
   --status-red: #f04858;
   --status-gray: #8e99a4;
+  --status-orange: #ef7d3c;
+  --status-violet: #a78bfa;
+  --chart-data: #2a78d6;
+  --status-yellow-fg: #84560d;
+  --status-green-fg: #196b3c;
+  --status-red-fg: #b01f33;
+  --status-orange-fg: #9e4418;
+  --status-blue-fg: #1a5eab;
+  --status-violet-fg: #5b35cc;
   --chart-1: #3b8ff5;
   --chart-2: #2272b4;
   --chart-3: #2ea65c;
@@ -279,6 +301,15 @@
   --status-yellow: #d4972a;
   --status-red: #f04858;
   --status-gray: #8e99a4;
+  --status-orange: #ef7d3c;
+  --status-violet: #a78bfa;
+  --chart-data: #3987e5;
+  --status-yellow-fg: #f3b95c;
+  --status-green-fg: #6ed395;
+  --status-red-fg: #ffa5af;
+  --status-orange-fg: #fab089;
+  --status-blue-fg: #91c3ff;
+  --status-violet-fg: #cab9ff;
   --chart-1: oklch(0.64 0.22 254);
   --chart-2: oklch(0.65 0.14 200);
   --chart-3: oklch(0.68 0.15 145);

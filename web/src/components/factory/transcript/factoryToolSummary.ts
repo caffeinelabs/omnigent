@@ -5,6 +5,7 @@
 import { type FactoryMarkerTone, factoryToolBaseName } from "@/lib/factoryMessages";
 import { isFactoryWarningHealth } from "@/lib/factory";
 import type { ToolState } from "@/lib/renderItems";
+import { ROLE_WORD } from "../ui/statusTokens";
 
 /** Factory tools that render as a one-liner instead of the generic tool row. */
 export const FACTORY_LINE_TOOLS: ReadonlySet<string> = new Set([
@@ -86,14 +87,7 @@ function excerpt(text: string, max: number): string {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
-const ROLE_SHORT: Record<string, string> = {
-  lead: "Lead",
-  project_lead: "PL",
-  env_keeper: "Env",
-  reviewer: "Reviewer",
-  demo: "Demo",
-  ic: "IC",
-};
+const ROLE_SHORT: Record<string, string> = ROLE_WORD;
 
 /** A roster row as `sys_factory_roster` returns it. */
 export interface RosterRow {

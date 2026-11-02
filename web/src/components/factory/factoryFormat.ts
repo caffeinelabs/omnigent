@@ -12,6 +12,7 @@ import type {
   ProjectView,
   ReadyGate,
 } from "@/lib/factoryApi";
+import type { FactoryTone } from "./ui/statusTokens";
 
 /** Stage names as the board and the index read them. */
 export const STAGE_LABEL: Record<FactoryStage, string> = {
@@ -42,45 +43,8 @@ export const GATE_LABEL: Record<ReadyGate, string> = {
   protected_paths: "Paths",
 };
 
-/**
- * A semantic status tone. Each maps onto an existing color token: `pass`
- * success, `pending`/`warning` warning, `fail` destructive, `merged` the
- * brand accent, `active` the session-active blue, `muted` grey.
- */
-export type FactoryTone = "pass" | "pending" | "warning" | "fail" | "merged" | "active" | "muted";
-
-/** Small round dot fill per tone. */
-export const TONE_DOT: Record<FactoryTone, string> = {
-  pass: "bg-success",
-  pending: "bg-warning",
-  warning: "bg-warning",
-  fail: "bg-destructive",
-  merged: "bg-brand-accent",
-  active: "bg-session-active",
-  muted: "bg-muted-foreground/40",
-};
-
-/** Text color per tone. */
-export const TONE_TEXT: Record<FactoryTone, string> = {
-  pass: "text-success",
-  pending: "text-warning",
-  warning: "text-warning",
-  fail: "text-destructive",
-  merged: "text-brand-accent",
-  active: "text-session-active",
-  muted: "text-muted-foreground",
-};
-
-/** Tinted chip surface per tone (the "Needs response" badge recipe). */
-export const TONE_CHIP: Record<FactoryTone, string> = {
-  pass: "bg-success/10 text-success",
-  pending: "bg-warning/15 text-warning",
-  warning: "bg-warning/15 text-warning",
-  fail: "bg-destructive/10 text-destructive",
-  merged: "bg-brand-accent/10 text-brand-accent",
-  active: "bg-session-active/10 text-session-active",
-  muted: "bg-muted text-muted-foreground",
-};
+// The tone type and its class maps live with the rest of the status grammar.
+export { TONE_CHIP, TONE_DOT, TONE_TEXT, type FactoryTone } from "./ui/statusTokens";
 
 export function gateTone(state: GateState | null | undefined): FactoryTone {
   switch (state) {
