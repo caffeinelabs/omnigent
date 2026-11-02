@@ -9,20 +9,26 @@ the old sandbox are gone: once the new sandbox is up, the launch watch
 (:mod:`.launch_watch`) tells the member to rebuild from the server
 (:func:`send_follow_up`), or sends its brief again when it never got it.
 
-The launch watch also runs it once on its own after a failed launch; owners
-run it from the project menu or a decision (``new_sandbox``).
+The launch watch also runs it once on its own after a first launch failed
+(the member has no sandbox to lose); owners run it from the project menu or a
+decision (``new_sandbox``). A member whose own sandbox failed to wake is woken
+again instead (:func:`wake_same_sandbox`): the server never deletes a sandbox
+on its own.
 """
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from typing import Any, Final
 
 from omnigent.entities import Conversation
 from omnigent.factory import (
     LABEL_ID,
+    LABEL_LAUNCH_AUTO,
+    LABEL_LAUNCH_NEW,
     LABEL_LAUNCH_TRIES,
     LABEL_PROJECT,
     LABEL_ROLE,
@@ -40,6 +46,9 @@ _logger = logging.getLogger(__name__)
 TEXT_LABEL: Final = "NEW SANDBOX"
 """The ``[Factory control · …]`` label of the text a relaunched member gets."""
 EVENT_KIND: Final = "member.new_sandbox"
+WAKE_EVENT_KIND: Final = "member.wake_retried"
+
+_NOT_STARTED: Final = "the server could not start a new sandbox"
 
 BRIEF_DELIVERED: Final = "delivered"
 BRIEF_PENDING: Final = "pending"
@@ -65,6 +74,43 @@ def launch_tries(conv: Conversation) -> int:
     """:returns: Sandbox launches of *conv*'s current start (``1`` without the label)."""
     raw = (conv.labels.get(LABEL_LAUNCH_TRIES) or "").strip()
     return int(raw) if raw.isdigit() and int(raw) > 0 else 1
+
+
+def new_sandbox_since(conv: Conversation) -> float | None:
+    """:returns: When the current start's latest new sandbox began (epoch s), else ``None``."""
+    raw = (conv.labels.get(LABEL_LAUNCH_NEW) or "").strip()
+    try:
+        return float(raw) if raw else None
+    except ValueError:
+        return 0.0  # set, but not a time: still a new sandbox
+
+
+def server_retried(conv: Conversation) -> bool:
+    """:returns: Whether the server already retried *conv*'s current start on its own."""
+    return conv.labels.get(LABEL_LAUNCH_AUTO) == "1"
+
+
+def _launch_failed(session_id: str) -> bool:
+    """:returns: Whether *session_id*'s last managed launch failed (in this process)."""
+    from omnigent.server.routes._sessions.common import _session_sandbox_status_cache
+
+    status = _session_sandbox_status_cache.get(session_id)
+    return status is not None and status.stage == "failed"
+
+
+def _next_try(conv: Conversation, failed: bool) -> int:
+    """
+    :param failed: Its last launch failed.
+    :returns: The number of the launch about to start: the next try of a start
+        that has not come up, or ``1`` for a member whose sandbox is up.
+    """
+    if LABEL_LAUNCH_TRIES in conv.labels:
+        return launch_tries(conv) + 1
+    return 2 if failed else 1
+
+
+def _try_suffix(tries: int) -> str:
+    return f" (try {tries})" if tries > 1 else ""
 
 
 def launch_in_flight(app_state: Any, session_id: str) -> bool:
@@ -277,19 +323,24 @@ async def relaunch_on_new_sandbox(
 
     Runs in the background like a managed create: the call returns once the
     launch is scheduled (its progress shows as the member's sandbox stage).
-    The member's ``launch_tries`` label counts this launch; the launch watch
-    sends the follow-up text once the sandbox is up.
+    The launch is claimed before anything else, so a message arriving while
+    the old sandbox is deleted waits for the new one instead of waking the
+    old one. The member's ``launch_tries`` label counts this launch; the
+    launch watch sends the follow-up text once the sandbox is up.
 
     :param by: Who asked, e.g. ``"alice@example.com (owner)"`` or ``"server"``.
-    :param auto: The launch watch retried a failed launch on its own.
+    :param auto: The launch watch retried a failed first launch on its own;
+        refused while *conv* is bound to a sandbox (the server never deletes one).
     :param note: A human note the member reads with the ``NEW SANDBOX`` text
         (kept in the event until then).
     :param reason: Why, e.g. the failed launch's error (logged in the event).
     :returns: The :class:`NewSandbox`.
-    :raises CockpitError: When it cannot run now (see :func:`check`).
+    :raises CockpitError: When it cannot run now (see :func:`check`), or 409
+        ``has_sandbox`` on an *auto* retry of a member that has a sandbox.
     """
     from omnigent.server.auth import RESERVED_USER_LOCAL
     from omnigent.server.routes._auth_helpers import get_session_owner_id
+    from omnigent.server.routes._sessions.helpers import _publish_sandbox_status
     from omnigent.server.routes._sessions.orchestration import _kick_managed_reprovision
 
     await check(app_state, conv)
@@ -298,25 +349,46 @@ async def relaunch_on_new_sandbox(
     host_store, sandbox_config, tracker = managed
     deps = factory_deps(app_state)
     store = deps.conversation_store
-    owner = await asyncio.to_thread(get_session_owner_id, conv.id, deps.permission_store)
-    old_host_id = await _drop_old_sandbox(app_state, conv)
-    fresh = await asyncio.to_thread(store.get_conversation, conv.id) or conv
-    # A concurrent relaunch (the watch's retry, an owner's click) may have begun
-    # meanwhile; the check and the claim run with no await between them.
+    if auto and conv.host_id and await asyncio.to_thread(host_store.get_host, conv.host_id):
+        raise CockpitError(
+            409, "has_sandbox", "it has a sandbox; the server does not replace one on its own"
+        )
+    # Claim the launch with no await since the check: a message from here on
+    # waits for this launch instead of waking the sandbox being deleted.
     if launch_in_flight(app_state, conv.id):
         raise CockpitError(409, "launch_in_flight", "a new sandbox is already starting")
-    _kick_managed_reprovision(
-        session_id=conv.id,
-        conv=fresh,
-        owner=owner or RESERVED_USER_LOCAL,
-        sandbox_config=sandbox_config,
-        tracker=tracker,
-        conversation_store=store,
-        host_store=host_store,
-        app_state=app_state,
-    )
-    tries = launch_tries(fresh) + 1
-    await asyncio.to_thread(store.set_labels, conv.id, {LABEL_LAUNCH_TRIES: str(tries)})
+    # The watch retries only a launch that failed (or that a restart cut off).
+    failed = auto or _launch_failed(conv.id)
+    tracker.begin(conv.id)
+    _publish_sandbox_status(conv.id, "provisioning")
+    try:
+        fresh = await asyncio.to_thread(store.get_conversation, conv.id) or conv
+        tries = _next_try(fresh, failed)
+        labels = {LABEL_LAUNCH_TRIES: str(tries), LABEL_LAUNCH_NEW: str(int(time.time()))}
+        if auto:
+            labels[LABEL_LAUNCH_AUTO] = "1"
+        # Counted before the launch, so a failure of it is never counted as try 1 again.
+        await asyncio.to_thread(store.set_labels, conv.id, labels)
+        owner = await asyncio.to_thread(get_session_owner_id, conv.id, deps.permission_store)
+        old_host_id = await _drop_old_sandbox(app_state, fresh)
+        fresh = await asyncio.to_thread(store.get_conversation, conv.id) or fresh
+        _kick_managed_reprovision(
+            session_id=conv.id,
+            conv=fresh,
+            owner=owner or RESERVED_USER_LOCAL,
+            sandbox_config=sandbox_config,
+            tracker=tracker,
+            conversation_store=store,
+            host_store=host_store,
+            app_state=app_state,
+            claimed=True,
+        )
+    except BaseException:
+        # Settle the claim: a parked message gets an answer and the watch sees the failure.
+        _logger.warning("factory: relaunching %s on a new sandbox failed", conv.id, exc_info=True)
+        tracker.fail(conv.id, _NOT_STARTED)
+        _publish_sandbox_status(conv.id, "failed", _NOT_STARTED)
+        raise
     title = display_title(conv.title, conv.id)
     who = "the server" if auto else by
     data: dict[str, Any] = {
@@ -337,11 +409,76 @@ async def relaunch_on_new_sandbox(
         project=conv.labels.get(LABEL_PROJECT),
         to_id=conv.id,
         subject=f"member:{conv.id}",
-        summary=f'{who} relaunched "{title}" on a new sandbox (try {tries})',
+        summary=f'{who} relaunched "{title}" on a new sandbox{_try_suffix(tries)}',
         data=data,
     )
     _logger.info("factory: %s relaunched %s on a new sandbox (try %d)", who, conv.id, tries)
     return NewSandbox(session_id=conv.id, tries=tries, old_host_id=old_host_id)
+
+
+async def wake_same_sandbox(
+    app_state: Any, conv: Conversation, *, reason: str | None = None
+) -> bool:
+    """
+    Wake *conv*'s own sandbox again: the server's one retry of a failed wake.
+
+    The same path a message takes to a sleeping sandbox (a wake in place, or a
+    new generation of its host when the provider cannot resume), so its files
+    stay. Counted in ``launch_tries`` before the wake starts.
+
+    :param reason: Why, e.g. the failed wake's error (logged in the event).
+    :returns: Whether a wake was started (``False`` when another launch began
+        meanwhile, which then stands for the retry, or there is no sandbox).
+    """
+    from omnigent.server.managed_hosts import host_resume_supported
+    from omnigent.server.routes._sessions import orchestration
+
+    managed = _managed(app_state)
+    if managed is None or not conv.host_id or launch_in_flight(app_state, conv.id):
+        return False
+    host_store, sandbox_config, tracker = managed
+    host = await asyncio.to_thread(host_store.get_host, conv.host_id)
+    if host is None or host.sandbox_provider is None:
+        return False
+    deps = factory_deps(app_state)
+    store = deps.conversation_store
+    tries = launch_tries(conv) + 1
+    await asyncio.to_thread(
+        store.set_labels, conv.id, {LABEL_LAUNCH_TRIES: str(tries), LABEL_LAUNCH_AUTO: "1"}
+    )
+    fresh = await asyncio.to_thread(store.get_conversation, conv.id) or conv
+    if launch_in_flight(app_state, conv.id) or fresh.host_id != host.host_id:
+        return False
+    kick: dict[str, Any] = {
+        "session_id": conv.id,
+        "conv": fresh,
+        "sandbox_config": sandbox_config,
+        "tracker": tracker,
+        "conversation_store": store,
+        "host_store": host_store,
+        "app_state": app_state,
+    }
+    if host_resume_supported(host, sandbox_config):
+        orchestration._kick_managed_wake(**kick)
+    else:
+        orchestration._kick_managed_relaunch(host=host, **kick)
+    title = display_title(conv.title, conv.id)
+    data: dict[str, Any] = {"tries": tries, "auto": True, "host_id": host.host_id}
+    if reason:
+        data["reason"] = reason
+    await events.emit(
+        app_state,
+        conv.labels.get(LABEL_ID) or conv.id,
+        WAKE_EVENT_KIND,
+        severity="notice",
+        project=conv.labels.get(LABEL_PROJECT),
+        to_id=conv.id,
+        subject=f"member:{conv.id}",
+        summary=f'the server is waking "{title}" again on its own sandbox (try {tries})',
+        data=data,
+    )
+    _logger.info("factory: waking %s again on its own sandbox (try %d)", conv.id, tries)
+    return True
 
 
 __all__ = [
@@ -350,13 +487,17 @@ __all__ = [
     "BRIEF_PENDING",
     "EVENT_KIND",
     "TEXT_LABEL",
+    "WAKE_EVENT_KIND",
     "NewSandbox",
     "brief_state",
     "check",
     "last_relaunch",
     "launch_in_flight",
     "launch_tries",
+    "new_sandbox_since",
     "new_sandbox_text",
     "relaunch_on_new_sandbox",
     "send_follow_up",
+    "server_retried",
+    "wake_same_sandbox",
 ]

@@ -154,7 +154,8 @@ async def test_over_the_cap_is_refused_with_candidates(cockpit: Cockpit) -> None
     resp = await propose(cockpit, *changes)
 
     assert (resp.status_code, error_code(resp)) == (409, "over_caps")
-    assert resp.json()["done_candidates"] == ["old"]
+    # Cancelling merged work frees no slot: it is not named.
+    assert "done_candidates" not in resp.json()
     assert resp.json()["park_candidates"] == ["parked"]
 
 

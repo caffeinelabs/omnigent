@@ -26,6 +26,7 @@ from omnigent.server.routes._sessions.common import (
     _session_sandbox_status_cache,
 )
 from omnigent.server.routes._sessions.helpers import (
+    _mark_launch_wake,
     _publish_launch_step,
     _publish_sandbox_status_impl,
 )
@@ -526,7 +527,10 @@ async def test_a_starting_pl_names_what_its_sandbox_waits_on(
         assert view["overlay_reason"] == "PL sandbox failed · retrying on a new sandbox"
         assert view["start"] is None
 
-        cockpit.world.store.set_labels(pl.id, {F.LABEL_LAUNCH_TRIES: "2"})
+        cockpit.world.store.set_labels(
+            pl.id,
+            {F.LABEL_LAUNCH_TRIES: "2", F.LABEL_LAUNCH_AUTO: "1", F.LABEL_LAUNCH_NEW: "1"},
+        )
         _publish_sandbox_status_impl(pl.id, "provisioning")
         view = (await _projects(cockpit))["build-tier-drafts"]
         assert view["overlay"] is None
@@ -537,6 +541,48 @@ async def test_a_starting_pl_names_what_its_sandbox_waits_on(
         _publish_sandbox_status_impl(pl.id, "failed", "did not start within 300s")
         view = (await _projects(cockpit))["build-tier-drafts"]
         assert view["overlay_reason"] == "PL sandbox failed twice"
+    finally:
+        _session_sandbox_status_cache.pop(pl.id, None)
+        _session_launch_progress_cache.pop(pl.id, None)
+
+
+async def test_a_pl_whose_own_sandbox_did_not_wake_is_told_apart(
+    spawning: tuple[Cockpit, FakeCreates],
+) -> None:
+    """Its sandbox keeps its files: woken again, never "on a new sandbox"."""
+    cockpit, _creates = spawning
+    await _create(cockpit, "build-tier-drafts")
+    pl = next(
+        m
+        for m in cockpit.world.store.list_conversations(limit=50).data
+        if m.title == "PL · build-tier-drafts"
+    )
+
+    def wake() -> None:
+        _publish_sandbox_status_impl(pl.id, "provisioning")
+        _mark_launch_wake(pl.id)
+
+    try:
+        wake()
+        _publish_sandbox_status_impl(pl.id, "starting")
+        _publish_sandbox_status_impl(pl.id, "failed", "did not start within 900s")
+        view = (await _projects(cockpit))["build-tier-drafts"]
+        assert view["overlay_reason"] == "PL sandbox did not wake · waking it again"
+
+        # The server's one wake again: a retry, not a new sandbox.
+        cockpit.world.store.set_labels(
+            pl.id, {F.LABEL_LAUNCH_TRIES: "2", F.LABEL_LAUNCH_AUTO: "1"}
+        )
+        wake()
+        _publish_launch_step(pl.id, "node", int(time.time()) - 30)
+        view = (await _projects(cockpit))["build-tier-drafts"]
+        assert view["start"]["phase"] == "node"
+        assert "attempt" not in view["start"] or view["start"]["attempt"] is None
+        assert view["provisioning"].get("attempt") is None
+
+        _publish_sandbox_status_impl(pl.id, "failed", "did not start within 900s")
+        view = (await _projects(cockpit))["build-tier-drafts"]
+        assert view["overlay_reason"] == "PL sandbox did not wake twice"
     finally:
         _session_sandbox_status_cache.pop(pl.id, None)
         _session_launch_progress_cache.pop(pl.id, None)

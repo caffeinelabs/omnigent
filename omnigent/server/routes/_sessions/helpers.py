@@ -27,6 +27,7 @@ from collections.abc import (
     Sequence,
 )
 from dataclasses import dataclass
+from dataclasses import replace as dataclass_replace
 from typing import Any, Literal, cast
 
 import httpx
@@ -4864,8 +4865,11 @@ def _publish_sandbox_status_impl(session_id: str, stage: str, error: str | None 
         _session_launch_progress_cache.pop(session_id, None)
     else:
         _session_sandbox_status_cache[session_id] = status
+        # "provisioning" starts a launch; later stages keep what kind it is.
+        prior = _session_launch_progress_cache.get(session_id)
+        wake = prior is not None and prior.wake and status.stage != "provisioning"
         _session_launch_progress_cache[session_id] = LaunchProgress(
-            stage=status.stage, step=None, since=int(time.time())
+            stage=status.stage, step=None, since=int(time.time()), wake=wake
         )
     event = SessionSandboxStatusEvent(
         type="session.sandbox_status",
@@ -4890,9 +4894,27 @@ def _publish_launch_step(session_id: str, step: str, since: int | None = None) -
     current = _session_sandbox_status_cache.get(session_id)
     if current is None or current.stage in ("ready", "failed"):
         return
+    prior = _session_launch_progress_cache.get(session_id)
     _session_launch_progress_cache[session_id] = LaunchProgress(
-        stage=current.stage, step=step, since=int(since or time.time())
+        stage=current.stage,
+        step=step,
+        since=int(since or time.time()),
+        wake=prior is not None and prior.wake,
     )
+
+
+def _mark_launch_wake(session_id: str) -> None:
+    """
+    Mark *session_id*'s launch, just begun, as bringing back its own sandbox.
+
+    Called right after the ``"provisioning"`` publish of a wake or of a new
+    generation of the session's host; the mark lasts until the launch settles.
+
+    :param session_id: Session/conversation identifier.
+    """
+    current = _session_launch_progress_cache.get(session_id)
+    if current is not None:
+        _session_launch_progress_cache[session_id] = dataclass_replace(current, wake=True)
 
 
 def _publish_mcp_startup(session_id: str, servers: dict[str, McpServerStartup]) -> None:
@@ -10950,6 +10972,7 @@ __all__ = [
     "_load_model_options",
     "_load_model_options_from_host",
     "_load_runner_skills",
+    "_mark_launch_wake",
     "_mcp_error_response",
     "_mcp_input_required_response",
     "_mcp_ok_response",

@@ -52,9 +52,13 @@ LABEL_DEAD_ALERTED_AT: Final = "omnigent.factory.dead_alerted_at"
 LABEL_DEAD_REASON: Final = "omnigent.factory.dead_reason"
 """Why a dead member's relaunch failed, e.g. ``"terminal_failed_to_start: RuntimeError: …"``."""
 LABEL_LAUNCH_TRIES: Final = "omnigent.factory.launch_tries"
-"""Sandbox launches of a member's current start, ``"2"`` after one retry on a new sandbox.
+"""Sandbox launches of a member's current start, ``"2"`` after one retry.
 
 Absent once its sandbox came up (top-level; set by the server only)."""
+LABEL_LAUNCH_AUTO: Final = "omnigent.factory.launch_auto"
+"""``"1"`` once the server retried the current start on its own (it does so once)."""
+LABEL_LAUNCH_NEW: Final = "omnigent.factory.launch_new"
+"""Epoch seconds the current start's latest new sandbox began (the member is told once up)."""
 LABEL_LAUNCH_ASKED: Final = "omnigent.factory.launch_asked"
 """The ``launch_tries`` value owners were last asked about (dedupes the decision)."""
 LABEL_SANDBOX_RELEASED_AT: Final = "omnigent.factory.sandbox_released_at"

@@ -1,9 +1,9 @@
 """A managed-sandbox stand-in for the factory's relaunch and release tests.
 
 Wires a real host store, a launch tracker and a sandbox config onto an
-``app.state`` and records, instead of running, the three provider-facing
-steps: provisioning a fresh sandbox for a session, terminating one, and
-stopping one.
+``app.state`` and records, instead of running, the provider-facing steps:
+provisioning a fresh sandbox for a session, waking a session's own sandbox,
+terminating one, and stopping one.
 """
 
 from __future__ import annotations
@@ -25,7 +25,10 @@ from omnigent.server.routes._sessions.common import (
     _session_launch_progress_cache,
     _session_sandbox_status_cache,
 )
-from omnigent.server.routes._sessions.helpers import _publish_sandbox_status_impl
+from omnigent.server.routes._sessions.helpers import (
+    _mark_launch_wake,
+    _publish_sandbox_status_impl,
+)
 from omnigent.stores.host_store import HostStore
 
 OWNER = "alice"
@@ -38,6 +41,7 @@ class SandboxRig:
     host_store: HostStore
     tracker: ManagedLaunchTracker
     kicks: list[str] = field(default_factory=list)
+    wakes: list[str] = field(default_factory=list)
     terminated: list[str] = field(default_factory=list)
     stopped: list[str] = field(default_factory=list)
 
@@ -63,11 +67,25 @@ class SandboxRig:
             store.set_labels(session_id, {MANAGED_HOST_CLAIM_LABEL_KEY: host_id})
         return host_id
 
-    def fail_launch(self, session_id: str, error: str = "pod did not start") -> None:
-        """Record a failed managed launch of *session_id*, as the launch task does."""
+    def fail_launch(
+        self, session_id: str, error: str = "pod did not start", *, wake: bool = False
+    ) -> None:
+        """
+        Record a failed managed launch of *session_id*, as the launch task does.
+
+        :param wake: It was a wake of the session's own sandbox.
+        """
         self.tracker.begin(session_id)
+        _publish_sandbox_status_impl(session_id, "provisioning")
+        if wake:
+            _mark_launch_wake(session_id)
         self.tracker.fail(session_id, error)
         _publish_sandbox_status_impl(session_id, "failed", error)
+
+    def come_up(self, session_id: str) -> None:
+        """Settle *session_id*'s launch as up, as the launch task does."""
+        _publish_sandbox_status_impl(session_id, "ready")
+        self.tracker.finish(session_id)
 
 
 def install_sandbox_rig(
@@ -79,10 +97,19 @@ def install_sandbox_rig(
     app_state.sandbox_config = SimpleNamespace(managed_launch_supported=True)
     app_state.managed_launches = rig.tracker
 
-    def _kick(*, session_id: str, tracker: ManagedLaunchTracker, **_: Any) -> None:
+    def _kick(
+        *, session_id: str, tracker: ManagedLaunchTracker, claimed: bool = False, **_: Any
+    ) -> None:
         rig.kicks.append(session_id)
+        if not claimed:
+            tracker.begin(session_id)
+        _publish_sandbox_status_impl(session_id, "provisioning")
+
+    def _wake(*, session_id: str, tracker: ManagedLaunchTracker, **_: Any) -> None:
+        rig.wakes.append(session_id)
         tracker.begin(session_id)
         _publish_sandbox_status_impl(session_id, "provisioning")
+        _mark_launch_wake(session_id)
 
     async def _terminate(host: Any, host_store: HostStore, _config: Any) -> None:
         rig.terminated.append(host.host_id)
@@ -94,7 +121,10 @@ def install_sandbox_rig(
         return True
 
     monkeypatch.setattr(orchestration, "_kick_managed_reprovision", _kick)
+    monkeypatch.setattr(orchestration, "_kick_managed_wake", _wake)
+    monkeypatch.setattr(orchestration, "_kick_managed_relaunch", _wake)
     monkeypatch.setattr(managed_hosts, "terminate_managed_host", _terminate)
+    monkeypatch.setattr(managed_hosts, "host_resume_supported", lambda _host, _config: True)
     monkeypatch.setattr(managed_hosts, "stop_managed_sandbox", _stop)
     return rig
 

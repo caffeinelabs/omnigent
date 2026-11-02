@@ -18,12 +18,15 @@ import pytest_asyncio
 from omnigent import factory as F
 from omnigent.entities.factory import EventDraft
 from omnigent.server.factory import launch_watch, server_decisions
+from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.launch_watch import LaunchWatch
 from omnigent.server.factory.new_sandbox import (
     BRIEF_DELIVERED,
     BRIEF_NONE,
     BRIEF_PENDING,
     brief_state,
+    launch_in_flight,
+    relaunch_on_new_sandbox,
 )
 from omnigent.server.managed_host_isolation import MANAGED_HOST_CLAIM_LABEL_KEY
 from omnigent.server.routes._sessions.helpers import _publish_sandbox_status_impl
@@ -107,7 +110,10 @@ async def test_a_new_sandbox_replaces_the_pls_sandbox_and_keeps_the_session(
     assert rig.kicks == [pl]
     after = w.get("pl")
     assert after.host_id is None
-    assert after.labels[F.LABEL_LAUNCH_TRIES] == "2"
+    # A healthy PL starts a new episode: try 1, on a new sandbox, not the server's retry.
+    assert after.labels[F.LABEL_LAUNCH_TRIES] == "1"
+    assert after.labels[F.LABEL_LAUNCH_NEW].isdigit()
+    assert F.LABEL_LAUNCH_AUTO not in after.labels
     assert after.labels[F.LABEL_PROJECT] == "api-version"
     # Nothing is sent while the sandbox starts: a slow launch must not bounce it.
     assert cockpit.mailer.texts_to(pl) == []
@@ -123,11 +129,12 @@ async def test_a_new_sandbox_replaces_the_pls_sandbox_and_keeps_the_session(
     assert event["kind"] == "control.new_sandbox"
     assert event["summary"] == "alice relaunched project api-version on a new sandbox"
     [logged] = cockpit.events("member.new_sandbox")
-    assert logged.data["tries"] == 2 and logged.data["auto"] is False
+    assert logged.data["tries"] == 1 and logged.data["auto"] is False
     assert logged.data["old_host_id"] == old
+    assert logged.summary == 'alice relaunched "PL · api-version" on a new sandbox'
     assert F.LABEL_LAUNCH_TRIES not in w.get("pl").labels
     [up] = cockpit.events("member.launch_recovered")
-    assert up.summary == '"PL · api-version" is up on a new sandbox (try 2)'
+    assert up.summary == '"PL · api-version" is up on a new sandbox'
 
 
 async def test_a_pl_that_never_got_its_brief_gets_it_again(
@@ -291,24 +298,138 @@ async def test_answering_try_a_new_sandbox_relaunches_the_pl(
     assert [e.kind for e in cockpit.events("control.new_sandbox")] == ["control.new_sandbox"]
 
 
-async def test_a_launch_begun_meanwhile_is_not_doubled(
+async def test_the_launch_is_claimed_before_the_old_sandbox_goes(
     cockpit: Cockpit, rig: SandboxRig, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """The watch's retry and an owner's click race: only one fresh sandbox starts."""
+    """A message or a second relaunch while the old sandbox is deleted waits for the new one."""
+    from omnigent.server import managed_hosts
+
+    w = cockpit.world
+    pl = w.id("pl")
+    rig.bind_host(w.store, pl)
+    seen: dict[str, Any] = {}
+
+    async def _terminate_and_race(host: Any, host_store: Any, _config: Any) -> None:
+        # Claimed and counted before the old sandbox goes.
+        seen["claim"] = rig.tracker.get(pl)
+        seen["in_flight"] = launch_in_flight(cockpit.app.state, pl)
+        seen["tries"] = w.get("pl").labels.get(F.LABEL_LAUNCH_TRIES)
+        with pytest.raises(CockpitError) as raced:
+            await relaunch_on_new_sandbox(cockpit.app.state, w.get("pl"), by="bob")
+        seen["raced"] = raced.value.code
+        host_store.delete_host(host.host_id)
+
+    monkeypatch.setattr(managed_hosts, "terminate_managed_host", _terminate_and_race)
+
+    resp = await _control(cockpit)
+
+    assert resp.status_code == 202, resp.text
+    assert seen["in_flight"] is True and seen["tries"] == "1"
+    assert seen["raced"] == "launch_in_flight"
+    # One launch, settling the very entry a parked message waits on.
+    assert rig.kicks == [pl]
+    assert rig.tracker.get(pl) is seen["claim"]
+
+
+async def test_a_failed_drop_settles_the_claim(
+    cockpit: Cockpit, rig: SandboxRig, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from omnigent.server import managed_hosts
 
     w = cockpit.world
     pl = w.id("pl")
     rig.bind_host(w.store, pl)
 
-    async def _terminate_while_another_begins(host: Any, host_store: Any, _config: Any) -> None:
-        rig.tracker.begin(pl)
-        host_store.delete_host(host.host_id)
+    async def _boom(_host: Any, _host_store: Any, _config: Any) -> None:
+        raise RuntimeError("kube API down")
 
-    monkeypatch.setattr(managed_hosts, "terminate_managed_host", _terminate_while_another_begins)
+    monkeypatch.setattr(managed_hosts, "terminate_managed_host", _boom)
 
-    resp = await _control(cockpit)
+    with pytest.raises(RuntimeError):
+        await relaunch_on_new_sandbox(cockpit.app.state, w.get("pl"), by="alice")
 
-    assert (resp.status_code, error_code(resp)) == (409, "launch_in_flight")
+    launch = rig.tracker.get(pl)
+    assert launch is not None and launch.settled.is_set() and launch.error
     assert rig.kicks == []
-    assert F.LABEL_LAUNCH_TRIES not in w.get("pl").labels
+
+
+async def test_the_server_never_replaces_a_sandbox_on_its_own(
+    cockpit: Cockpit, rig: SandboxRig
+) -> None:
+    w = cockpit.world
+    pl = w.id("pl")
+    rig.bind_host(w.store, pl, online=False)
+    rig.fail_launch(pl, "did not start within 900s", wake=True)
+
+    with pytest.raises(CockpitError) as refused:
+        await relaunch_on_new_sandbox(cockpit.app.state, w.get("pl"), by="server", auto=True)
+
+    assert refused.value.code == "has_sandbox"
+    assert rig.terminated == [] and rig.kicks == []
+
+
+# ── What owners are told after a failed relaunch ───────────────
+
+
+def _launch_decisions(cockpit: Cockpit) -> list[Any]:
+    return [
+        d
+        for d in cockpit.store.list_decisions(factory_id=cockpit.fid, limit=50)
+        if d.dedupe_key.startswith("launch_failed:")
+    ]
+
+
+async def _fails(cockpit: Cockpit, rig: SandboxRig, watch: LaunchWatch, now: float) -> float:
+    """The running launch fails; the watch takes two passes RETRY_DELAY_S apart."""
+    pl = cockpit.world.id("pl")
+    rig.tracker.fail(pl, "did not start within 900s")
+    _publish_sandbox_status_impl(pl, "failed", "did not start within 900s")
+    await watch.tick([cockpit.world.get("pl")], [], now)
+    now += launch_watch.RETRY_DELAY_S + 30
+    await watch.tick([cockpit.world.get("pl")], [], now)
+    return now
+
+
+async def test_an_owners_relaunch_that_fails_is_retried_once_then_asks(
+    cockpit: Cockpit, rig: SandboxRig
+) -> None:
+    """An owner's first new sandbox on a healthy PL fails once: the server still retries once."""
+    w = cockpit.world
+    pl = w.id("pl")
+    old = rig.bind_host(w.store, pl)
+    resp = await _control(cockpit)
+    assert resp.status_code == 202, resp.text
+    watch = LaunchWatch(cockpit.app.state)
+
+    now = await _fails(cockpit, rig, watch, time.time())
+    assert rig.kicks == [pl, pl] and rig.terminated == [old]
+    assert w.get("pl").labels[F.LABEL_LAUNCH_TRIES] == "2"
+    assert _launch_decisions(cockpit) == []
+
+    await _fails(cockpit, rig, watch, now)
+    assert rig.kicks == [pl, pl]
+    [decision] = _launch_decisions(cockpit)
+    assert decision.question == '"PL · api-version" could not start its sandbox twice'
+    assert "The server already tried a new sandbox once" in (decision.context or "")
+    assert "after alice" not in (decision.context or "")
+
+
+async def test_an_owners_relaunch_after_the_servers_retry_says_so(
+    cockpit: Cockpit, rig: SandboxRig
+) -> None:
+    w = cockpit.world
+    pl = w.id("pl")
+    w.store.set_labels(
+        pl, {F.LABEL_LAUNCH_TRIES: "2", F.LABEL_LAUNCH_AUTO: "1", F.LABEL_LAUNCH_NEW: "1"}
+    )
+    rig.fail_launch(pl, "did not start within 300s")
+    resp = await _control(cockpit)
+    assert resp.status_code == 202, resp.text
+    assert w.get("pl").labels[F.LABEL_LAUNCH_TRIES] == "3"
+
+    await _fails(cockpit, rig, LaunchWatch(cockpit.app.state), time.time())
+
+    assert rig.kicks == [pl]  # no second retry of the server's own
+    [decision] = _launch_decisions(cockpit)
+    assert decision.question == '"PL · api-version" could not start its sandbox 3 times'
+    assert "It failed after alice relaunched it on a new sandbox." in (decision.context or "")

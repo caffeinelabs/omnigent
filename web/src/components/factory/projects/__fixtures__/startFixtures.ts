@@ -213,7 +213,8 @@ export function startStorySnapshot(): FactorySnapshot {
  * PL sandboxes of the 2026-11-02 launch, one card per step: the cluster full
  * (waiting for a node), a cold node pulling the 3.9 GB image, the clone, the
  * containers and the host starting, the server's retry on a new sandbox, a
- * first failure about to be retried, and one that failed twice.
+ * first failure about to be retried, one that failed twice, and a PL whose own
+ * sandbox did not wake (once, then twice).
  */
 export function launchStorySnapshot(): FactorySnapshot {
   const snapshot = round3Snapshot();
@@ -311,6 +312,15 @@ export function launchStorySnapshot(): FactorySnapshot {
     card("tier-billing", "Build tier billing", {
       overlay: "failed",
       overlay_reason: "PL sandbox failed twice",
+    }),
+    // Its own sandbox, with its files, did not wake: Restart first, a new sandbox last.
+    card("tier-quota", "Build tier quota", {
+      overlay: "failed",
+      overlay_reason: "PL sandbox did not wake · waking it again",
+    }),
+    card("tier-search", "Build tier search", {
+      overlay: "failed",
+      overlay_reason: "PL sandbox did not wake twice",
     }),
   ];
   return snapshot;

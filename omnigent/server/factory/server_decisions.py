@@ -6,8 +6,9 @@ to the agents unchanged) and is deduplicated per episode through its
 
 - relaunch failed (S2b): a member whose heartbeat relaunch failed 3×;
   expired when it answers a beat again.
-- launch failed: a member whose sandbox failed to start even on the new one
-  the server retried it on (same source, its own key); expired once it is up.
+- launch failed: a member whose sandbox did not come up after the server's one
+  retry (a new sandbox for a first launch, a wake of its own sandbox otherwise;
+  same source, its own key); expired once it is up.
 - blocked on an approval (S5): a session parked on a human prompt; expired
   when the episode clears.
 - message storm: a sender that hit its post rate limit.
@@ -359,53 +360,103 @@ async def open_relaunch_failed_decision(
     )
 
 
+def _times(tries: int) -> str:
+    return "" if tries < 2 else " twice" if tries == 2 else f" {tries} times"
+
+
 async def open_launch_failed_decision(
     app_state: Any,
     conv: Conversation,
     factory_id: str,
     tries: int,
     error: str | None,
+    *,
+    wake: bool = False,
+    lost: bool = False,
+    retried: bool = True,
+    relaunched_by: str | None = None,
 ) -> tuple[FactoryDecision, bool] | None:
     """
-    Ask owners what to do with a member whose sandbox failed to start *tries* times.
+    Ask owners what to do with a member whose sandbox did not come up.
 
-    The server already retried it once on a new sandbox and does not again.
-
+    :param tries: Launches of this start, the failed one included.
     :param error: The last launch error, e.g. ``"… did not start within 900s …"``.
+    :param wake: Its own sandbox (with its files) did not wake; else a new or
+        first sandbox did not start.
+    :param lost: A server restart cut the last launch off.
+    :param retried: The server already retried this start once on its own.
+    :param relaunched_by: Who relaunched it on the new sandbox that failed last,
+        when a person did.
     """
     title = display_title(conv.title, conv.id)
     project = conv.labels.get(LABEL_PROJECT)
-    times = "twice" if tries == 2 else f"{tries} times"
-    quoted = (error or "").replace("`", "'")
-    cause = f"Last error: `{quoted}`\n\n" if error else ""
+    target = _member_target(conv)
+    if lost:
+        question = f'"{title}" sandbox launch was cut off by a server restart'
+        cause = f"A server restart cut off its launch (try {tries}).\n\n"
+    else:
+        verb = "wake" if wake else "start"
+        question = f'"{title}" could not {verb} its sandbox{_times(tries)}'
+        quoted = (error or "").replace("`", "'")
+        cause = f"Last error: `{quoted}`\n\n" if error else ""
+    story: list[str] = []
+    if relaunched_by:
+        story.append(f"It failed after {relaunched_by} relaunched it on a new sandbox.")
+    if retried:
+        again = "woke it once more" if wake else "tried a new sandbox once"
+        story.append(f"The server already {again} and does not try again on its own.")
+    if wake:
+        story.append(
+            "Its sandbox keeps its files: Restart wakes it again. A new sandbox deletes "
+            "its files, dev env and previews; the project, charter, tasks and PRs stay."
+        )
+        options = [
+            _option(
+                "restart",
+                "Restart",
+                action=ACTION_RESTART,
+                target=target,
+                description="Wake the same sandbox again; its files stay.",
+                recommended=True,
+            ),
+            _option(
+                "new_sandbox",
+                "Try a new sandbox",
+                action=ACTION_NEW_SANDBOX,
+                target=target,
+                description="Deletes its files, dev env and previews.",
+            ),
+        ]
+    else:
+        story.append("A new sandbox keeps the project, its charter, tasks and PRs.")
+        options = [
+            _option(
+                "new_sandbox",
+                "Try a new sandbox",
+                action=ACTION_NEW_SANDBOX,
+                target=target,
+                description="Start it again on a fresh sandbox.",
+                recommended=True,
+            )
+        ]
+    options += [
+        _option(
+            "pause",
+            "Pause project" if project else "Pause",
+            action=ACTION_PAUSE,
+            target=f"project:{project}" if project else target,
+            description="Leave it stopped until someone resumes it.",
+        ),
+        _option("dismiss", "Dismiss", action=ACTION_DISMISS),
+    ]
     return await open_decision(
         app_state,
         factory_id,
         source=SOURCE_RELAUNCH_FAILED,
         dedupe_key=launch_failed_key(conv.id),
-        question=f'"{title}" could not start its sandbox {times}',
-        context=(
-            f"{cause}The server already tried a new sandbox once and does not try again on "
-            "its own. A new sandbox keeps the project, its charter, tasks and PRs."
-        ),
-        options=[
-            _option(
-                "new_sandbox",
-                "Try a new sandbox",
-                action=ACTION_NEW_SANDBOX,
-                target=_member_target(conv),
-                description="Start it again on a fresh sandbox.",
-                recommended=True,
-            ),
-            _option(
-                "pause",
-                "Pause project" if project else "Pause",
-                action=ACTION_PAUSE,
-                target=f"project:{project}" if project else _member_target(conv),
-                description="Leave it stopped until someone resumes it.",
-            ),
-            _option("dismiss", "Dismiss", action=ACTION_DISMISS),
-        ],
+        question=question,
+        context=cause + " ".join(story),
+        options=options,
         blocking=True,
         project=project,
         asked_by=conv.id,

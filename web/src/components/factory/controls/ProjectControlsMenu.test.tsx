@@ -393,15 +393,27 @@ describe("ProjectControlsMenu", () => {
     expect(screen.getByTestId("control-resume")).toBeInTheDocument();
   });
 
-  it("offers a new sandbox, Restart and Relaunch inline on a failed project", () => {
-    setup((_, project) => {
-      project.overlay = "failed";
-      project.overlay_reason = "PL dead";
-    });
-    expect(screen.getByTestId("control-new-sandbox-quick-api-version")).toBeInTheDocument();
-    expect(screen.getByTestId("control-restart-quick-api-version")).toBeInTheDocument();
-    expect(screen.getByTestId("control-relaunch-quick-api-version")).toBeInTheDocument();
-  });
+  const quickIds = () =>
+    screen
+      .getAllByRole("button")
+      .map((b) => b.getAttribute("data-testid") ?? "")
+      .filter((id) => id.endsWith("-quick-api-version"));
+
+  it.each(["PL dead", "PL sandbox did not wake · waking it again"])(
+    "offers Restart, Relaunch, then a new sandbox inline when %s",
+    (reason) => {
+      // Its sandbox keeps its files: the lever that deletes them comes last.
+      setup((_, project) => {
+        project.overlay = "failed";
+        project.overlay_reason = reason;
+      });
+      expect(quickIds()).toEqual([
+        "control-restart-quick-api-version",
+        "control-relaunch-quick-api-version",
+        "control-new-sandbox-quick-api-version",
+      ]);
+    },
+  );
 
   it("offers only a new sandbox when the PL's sandbox never came up", () => {
     // Restart and Relaunch would reuse the failed sandbox.

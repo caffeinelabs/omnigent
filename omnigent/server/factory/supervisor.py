@@ -35,10 +35,11 @@ Each tick it reads the top-level members of every factory and applies:
   ``OMNIGENT_FACTORY_IDLE_ENV_S`` gets one ask to take its dev env down (its
   previews stay up), and asks to bring it back while work waits on it (see
   :mod:`~omnigent.server.factory.idle_env`).
-- **S13 launch watch**: a member whose sandbox failed to start is retried once on
-  a new sandbox, then owners decide; a finished PL's idle sandbox is stopped
-  (see :mod:`~omnigent.server.factory.launch_watch`). No heartbeat goes to a
-  member whose launch is in flight or failed.
+- **S13 launch watch**: a member whose sandbox did not come up is retried once (a
+  new sandbox for a first launch, a wake of its own sandbox otherwise), then
+  owners decide; a finished PL's idle sandbox is stopped (see
+  :mod:`~omnigent.server.factory.launch_watch`). No heartbeat goes to a member
+  whose launch is in flight or failed.
 
 Each tick also logs what it saw to the factory event log: heartbeats, alerts,
 and the PL ↔ sub-agent traffic (``dispatch``, ``task.done|failed``) read off
@@ -426,7 +427,7 @@ class FactorySupervisor:
         children = await asyncio.to_thread(_load_children, store, members)
         await asyncio.gather(*(self._keepalive(m, now) for m in members))
         await self._track_children(members, children, now)
-        # S13: retry failed launches on a new sandbox, stop finished PLs' sandboxes.
+        # S13: retry failed launches once, stop finished PLs' sandboxes.
         await self._launch_watch.tick(members, children, now)
         # Work graph: bind new sub-agents to their tasks, re-derive readiness.
         await binder.on_tick(self._app_state, members, children)

@@ -1327,6 +1327,7 @@ class _ProgressTracker:
         self._clock = clock
         self._events: list[object] = []
         self._events_at: float | None = None
+        self._uid: str | None = None
         self._last: tuple[str, int | None] | None = None
 
     @property
@@ -1334,17 +1335,23 @@ class _ProgressTracker:
         """:returns: Whether anyone listens."""
         return self._on_progress is not None
 
-    def observe(self, pod: object, read_events: Callable[[], list[object]]) -> None:
+    def observe(self, pod: object, read_events: Callable[[str | None], list[object]]) -> None:
         """
         Classify *pod* and report a changed step.
 
         :param pod: The ``V1Pod`` just read.
-        :param read_events: Reads the Pod's events (called only when due).
+        :param read_events: Reads the events of the Pod with the given uid
+            (called only when due). A Pod recreated under the same name (a
+            woken sandbox) has a new uid, so an earlier one's events never count.
         """
+        uid = getattr(getattr(pod, "metadata", None), "uid", None)
+        uid = uid if isinstance(uid, str) and uid else None
+        if uid != self._uid:
+            self._uid, self._events, self._events_at = uid, [], None
         if getattr(getattr(pod, "spec", None), "node_name", None):
             now = self._clock()
             if self._events_at is None or now - self._events_at >= _PROGRESS_EVENTS_EVERY_S:
-                self._events = read_events()
+                self._events = read_events(uid)
                 self._events_at = now
         step = _start_step(pod, self._events)
         if step != self._last:
@@ -2002,26 +2009,40 @@ class KubernetesSandboxLauncher(SandboxHostLauncher):
         message += f" Inspect with `kubectl describe pod {pod_name} -n {namespace}`."
         return message
 
-    def _pod_events(self, namespace: str, pod_name: str) -> list[object]:
+    def _pod_events(self, namespace: str, pod_name: str, pod_uid: str | None) -> list[object]:
         """
         Return the Pod's events, or an empty list when they cannot be read.
 
+        Events outlive their Pod (about an hour), and a woken agent-sandbox Pod
+        takes its Sandbox's name: only the events of *pod_uid* are this Pod's.
+
         :param namespace: Namespace the Pod lives in.
         :param pod_name: The Pod to fetch events for.
+        :param pod_uid: The Pod's ``metadata.uid``, or ``None`` to match on the name alone.
         :returns: ``V1Event`` objects, any order.
         """
         from kubernetes.client.rest import ApiException
         from urllib3.exceptions import HTTPError
 
+        selector = f"involvedObject.name={pod_name}"
+        if pod_uid:
+            selector += f",involvedObject.uid={pod_uid}"
         try:
             event_list = self._load_core().list_namespaced_event(
                 namespace,
-                field_selector=f"involvedObject.name={pod_name}",
+                field_selector=selector,
                 _request_timeout=_POD_READY_REQUEST_TIMEOUT_S,
             )
         except (ApiException, HTTPError):
             return []
-        return list(getattr(event_list, "items", None) or [])
+        items = list(getattr(event_list, "items", None) or [])
+        if pod_uid is None:
+            return items
+        return [
+            e
+            for e in items
+            if getattr(getattr(e, "involved_object", None), "uid", None) in (pod_uid, None)
+        ]
 
     def _recent_events(self, namespace: str, pod_name: str) -> str:
         """

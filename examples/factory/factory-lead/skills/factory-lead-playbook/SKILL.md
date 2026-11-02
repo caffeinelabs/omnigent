@@ -40,8 +40,10 @@ Every project is created, changed, split, merged or cancelled with
   at once with Undo. Anything structural, or anything you start on your own,
   waits for a human on its decision `D-<n>`: do not ask again.
 - Errors name the field (`changes[1].project.slug`): fix it and call again.
-  `slug_exists`: another slug. `over_caps`: finish or cancel a project
-  first. `cycle`: fix `depends_on`. `stale_proposal`: re-read and propose again.
+  `slug_exists`: another slug. `over_caps`: merged and done projects free
+  their slot on their own, so never cancel those for room; wait for one to
+  merge, or ask a human about one of `park_candidates` (it only waits for a
+  merge). `cycle`: fix `depends_on`. `stale_proposal`: re-read and propose again.
 - Shared groundwork is its own project that the others `depends_on`. The
   server holds those ("waiting on …") and spawns each PL once its
   dependencies merged (or are ready for human merge, with `depends_mode`).

@@ -89,9 +89,9 @@ function previewWord(pr: PrView): string {
 export interface ProjectControlParts {
   /**
    * The project's next step, or what a control waits for: the pending chip,
-   * Resume on a paused or stopped (not done) project, New sandbox (and Restart
-   * and Relaunch, unless the sandbox never came up) on a failed one; null when
-   * there is none.
+   * Resume on a paused or stopped (not done) project, Restart, Relaunch and
+   * then New sandbox on a failed one (New sandbox alone when its sandbox never
+   * came up); null when there is none.
    */
   quick: ReactNode | null;
   /** The ⋯ trigger with its menu and confirm dialogs. */
@@ -131,6 +131,7 @@ export function useProjectControlParts(
   const stopped = plMember?.state === "done";
   const failed = project.overlay === "failed";
   // Its sandbox never came up: Restart and Relaunch would reuse it; only a new one helps.
+  // ("PL sandbox did not wake" keeps its files: Restart wakes it again.)
   const sandboxFailed = failed && (project.overlay_reason ?? "").startsWith("PL sandbox failed");
   const openPrs = prs.filter((pr) => pr.state === "open");
   const previewsEnabled = project.charter?.preview.enabled === true;
@@ -230,18 +231,6 @@ export function useProjectControlParts(
     </LeverGated>
   ) : failed && pl ? (
     <span className="flex items-center gap-1">
-      <LeverGated lever="restart">
-        <Button
-          variant="outline"
-          size="xs"
-          onClick={() => setDialog("new_sandbox")}
-          data-testid={`control-new-sandbox-quick-${project.slug}`}
-          componentId="factory.project.new_sandbox_quick"
-        >
-          <ServerCogIcon />
-          New sandbox
-        </Button>
-      </LeverGated>
       {!sandboxFailed && (
         <LeverGated lever="restart">
           <Button
@@ -261,6 +250,7 @@ export function useProjectControlParts(
           <Button
             variant="outline"
             size="xs"
+            className="@max-[40rem]:hidden"
             onClick={() => setDialog("relaunch")}
             data-testid={`control-relaunch-quick-${project.slug}`}
             componentId="factory.project.relaunch_quick"
@@ -270,6 +260,20 @@ export function useProjectControlParts(
           </Button>
         </LeverGated>
       )}
+      {/* It deletes the sandbox's files: first only when that sandbox never came up. */}
+      <LeverGated lever="restart" className={sandboxFailed ? undefined : "@max-[40rem]:hidden"}>
+        <Button
+          variant="outline"
+          size="xs"
+          className={sandboxFailed ? undefined : "@max-[40rem]:hidden"}
+          onClick={() => setDialog("new_sandbox")}
+          data-testid={`control-new-sandbox-quick-${project.slug}`}
+          componentId="factory.project.new_sandbox_quick"
+        >
+          <ServerCogIcon />
+          New sandbox
+        </Button>
+      </LeverGated>
     </span>
   ) : null;
 

@@ -283,40 +283,60 @@ class SandboxProgress:
     :param stage: The launch stage (see :func:`sandbox_stage`), ``None`` once settled.
     :param step: What the starting sandbox waits on (:data:`LAUNCH_STEP_LABELS`), if known.
     :param since: Epoch seconds the stage or step began, if known.
-    :param tries: Sandbox launches of this start (``2`` on the retry on a new sandbox).
+    :param tries: Sandbox launches of this start (``2`` on the server's retry).
+    :param wake: The launch brings back the PL's own sandbox (a wake), not a new one.
+    :param retry: The launch watch will retry it on its own once it fails.
     """
 
     stage: str | None = None
     step: str | None = None
     since: int | None = None
     tries: int = 1
+    wake: bool = False
+    retry: bool = False
+
+    @property
+    def new_try(self) -> int | None:
+        """:returns: The try of a relaunch on a new sandbox (``2``…), else ``None``."""
+        return self.tries if self.tries > 1 and not self.wake else None
 
 
 def sandbox_progress(conv: Conversation | None) -> SandboxProgress:
     """:returns: The launch progress of *conv*'s managed sandbox (empty when settled)."""
-    from omnigent.server.factory.new_sandbox import launch_tries
+    from omnigent.server.factory.new_sandbox import launch_tries, server_retried
     from omnigent.server.routes._sessions.common import _session_launch_progress_cache
 
     if conv is None:
         return SandboxProgress()
     stage = sandbox_stage(conv.id)
+    tries = launch_tries(conv)
+    retry = conv.labels.get(LABEL_STATE) == STATE_ACTIVE and not server_retried(conv)
     progress = _session_launch_progress_cache.get(conv.id)
     if stage is None or progress is None or progress.stage != stage:
-        return SandboxProgress(stage=stage, tries=launch_tries(conv))
+        return SandboxProgress(stage=stage, tries=tries, retry=retry)
     step = progress.step if progress.step in LAUNCH_STEP_LABELS else None
-    return SandboxProgress(stage, step, progress.since, launch_tries(conv))
+    return SandboxProgress(stage, step, progress.since, tries, progress.wake, retry)
+
+
+def _times(tries: int) -> str:
+    return "" if tries < 2 else " twice" if tries == 2 else f" {tries} times"
 
 
 def sandbox_failed_reason(progress: SandboxProgress) -> str | None:
-    """:returns: The failed overlay's reason for a PL sandbox that did not start, else ``None``."""
-    from omnigent.server.factory.launch_watch import AUTO_TRIES
-
+    """
+    :returns: The failed overlay's reason for a PL sandbox that did not come up,
+        e.g. ``"PL sandbox failed · retrying on a new sandbox"`` or ``"PL sandbox
+        did not wake twice"``; ``None`` while it is not failed.
+    """
     if progress.stage != "failed":
         return None
-    if progress.tries < AUTO_TRIES:
+    if progress.wake:
+        if progress.retry:
+            return "PL sandbox did not wake · waking it again"
+        return f"PL sandbox did not wake{_times(progress.tries)}"
+    if progress.retry:
         return "PL sandbox failed · retrying on a new sandbox"
-    times = "twice" if progress.tries == 2 else f"{progress.tries} times"
-    return f"PL sandbox failed {times}"
+    return f"PL sandbox failed{_times(progress.tries)}"
 
 
 def _spawning(factory_id: str, slug: str) -> bool:
@@ -438,8 +458,8 @@ def start_view(
         }
         if phase_since is not None:
             view["phase_since"] = phase_since
-        if progress is not None and progress.tries > 1 and sandbox is not None:
-            view["attempt"] = progress.tries
+        if progress is not None and progress.new_try and sandbox is not None:
+            view["attempt"] = progress.new_try
         return view
     since = project.created_at or None
     if spawning:
@@ -1093,8 +1113,8 @@ def _project_view(
                     label=LAUNCH_STEP_LABELS[progress.step],
                     since=progress.since,
                 )
-            if progress.tries > 1:
-                provisioning["attempt"] = progress.tries
+            if progress.new_try:
+                provisioning["attempt"] = progress.new_try
     charter = _lenient(schemas.CharterView, normalize_charter(project.charter))
     agent_stage = project.agent_stage if project.agent_stage in AGENT_STAGES else None
     env = _lenient(schemas.EnvView, project.env) if project.env else None

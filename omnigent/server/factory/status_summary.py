@@ -772,9 +772,11 @@ def _problem(project: Mapping[str, Any]) -> str | None:
         return f"its lead agent says it is blocked{extra}"
     if overlay == "failed":
         if "sandbox" in head:
-            # "PL sandbox failed twice": keep how often.
-            times = head.partition("failed")[2].strip()
-            return f"its lead agent's machine failed to start{f' {times}' if times else ''}{extra}"
+            # "PL sandbox failed twice", "PL sandbox did not wake": keep what and how often.
+            wake = "did not wake" in head
+            times = head.partition("did not wake" if wake else "failed")[2].strip()
+            what = "did not wake" if wake else "failed to start"
+            return f"its lead agent's machine {what}{f' {times}' if times else ''}{extra}"
         return f"its lead agent stopped{extra}"
     if overlay == "pr_closed":
         return "its PR was closed without merging"

@@ -609,6 +609,34 @@ def test_a_queued_project_whose_lead_failed_to_start_says_so() -> None:
     assert "Next: cache-warm couldn't start: its lead agent's machine failed to start" in lines
 
 
+def test_a_lead_whose_own_machine_did_not_wake_is_not_said_to_fail_to_start() -> None:
+    body = _snapshot(
+        projects=[
+            _project(
+                "cache-warm",
+                "queued",
+                NOW - 4 * 60,
+                overlay="failed",
+                overlay_reason="PL sandbox did not wake · waking it again",
+            ),
+            _project(
+                "tier-alerts",
+                "queued",
+                NOW - 34 * 60,
+                overlay="failed",
+                overlay_reason="PL sandbox did not wake twice",
+            ),
+        ]
+    )
+
+    summary = _build(body)
+
+    assert [(n["project"], n["reason"]) for n in summary["next"]] == [
+        ("tier-alerts", "couldn't start: its lead agent's machine did not wake twice"),
+        ("cache-warm", "couldn't start: its lead agent's machine did not wake · waking it again"),
+    ]
+
+
 def test_a_starting_project_says_what_its_machine_waits_on_and_since_when() -> None:
     """The 2026-11-02 PL: no free node, a cold image pull, then the retry on a new sandbox."""
     body = _snapshot(

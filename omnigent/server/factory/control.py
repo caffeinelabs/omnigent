@@ -658,7 +658,45 @@ async def plan_control(
 
         for member in recipients:
             await new_sandbox.check(app_state, member)
+    if action == ACTION_RESUME:
+        await _check_revived_cap(deps, root, recipients)
     return plan
+
+
+async def _check_revived_cap(
+    deps: FactoryDeps, root: Conversation, recipients: Sequence[Conversation]
+) -> None:
+    """
+    Refuse a resume that brings stopped projects back over the project cap.
+
+    Stopping a project gives up its slot (its stage turns done); resuming its
+    PL takes one again.
+
+    :raises CockpitError: 409 ``over_caps`` (see :func:`.projects.over_caps`).
+    """
+    from omnigent.factory import STAGE_DONE
+    from omnigent.server.factory import projects
+
+    slugs = {
+        m.labels[LABEL_PROJECT]
+        for m in recipients
+        if m.labels.get(LABEL_STATE) == STATE_DONE
+        and m.labels.get(LABEL_ROLE) == ROLE_PROJECT_LEAD
+        and m.labels.get(LABEL_PROJECT)
+    }
+    if not slugs:
+        return
+    rows = await asyncio.to_thread(deps.factory_store.list_projects, root.id)
+    adding = sum(
+        1
+        for p in rows
+        if p.slug in slugs
+        and p.status == projects.STATUS_ACTIVE
+        and p.stage == STAGE_DONE
+        and not projects.holds_cap_slot(p)
+    )
+    if adding:
+        projects.over_caps(projects.cap_slots(rows), adding, rows)
 
 
 # ── Texts (spec §10) ───────────────────────────────────────────

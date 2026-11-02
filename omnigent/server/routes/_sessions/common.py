@@ -592,11 +592,14 @@ class LaunchProgress:
     :param step: What the provider says the sandbox waits on (``LAUNCH_STEPS``,
         e.g. ``"image"``), or ``None`` when it does not say.
     :param since: Epoch seconds the stage (or step) began, e.g. the image pull's start.
+    :param wake: The launch brings back the session's own sandbox (a wake, or a
+        new generation of its host), not a first one.
     """
 
     stage: str
     step: str | None
     since: int
+    wake: bool = False
 
 
 _session_launch_progress_cache: dict[str, LaunchProgress] = {}

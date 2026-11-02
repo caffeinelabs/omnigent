@@ -164,7 +164,10 @@ def over_caps(active: int, adding: int, projects: Sequence[FactoryProject]) -> N
     """
     Refuse a plan that would run more projects than the factory's cap.
 
-    :raises CockpitError: 409 ``over_caps`` listing done and park candidates.
+    Merged and done projects hold no slot, so closing one frees nothing: only
+    the park candidates (work waiting for a human merge) are named.
+
+    :raises CockpitError: 409 ``over_caps`` listing the park candidates.
     """
     from omnigent.server.factory import definition
 
@@ -172,15 +175,14 @@ def over_caps(active: int, adding: int, projects: Sequence[FactoryProject]) -> N
     cap = definition.int_value(None, fid, "caps.max_projects", start.max_projects())
     if active + adding <= cap:
         return
-    candidates = cap_candidates(projects)
     raise CockpitError(
         409,
         "over_caps",
-        f"the factory runs at most {cap} projects; it has {active} and this adds {adding}",
+        f"the factory runs at most {cap} projects at work (merged and done ones take no "
+        f"slot); it has {active} and this adds {adding}",
         cap=cap,
         active=active,
-        done_candidates=candidates["done_candidates"],
-        park_candidates=candidates["park_candidates"],
+        park_candidates=cap_candidates(projects)["park_candidates"],
     )
 
 

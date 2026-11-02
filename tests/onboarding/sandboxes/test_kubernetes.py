@@ -9,6 +9,7 @@ create/read/delete/log fakes — there is no exec transport to fake.
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import sys
@@ -1557,8 +1558,10 @@ def _at(epoch: int) -> datetime:
     return datetime.fromtimestamp(epoch, UTC)
 
 
-def _pull_event(reason: str, image: str, at: int, *, present: bool = False) -> SimpleNamespace:
-    """A ``Pulling`` / ``Pulled`` event as the kubelet writes it."""
+def _pull_event(
+    reason: str, image: str, at: int, *, present: bool = False, uid: str | None = None
+) -> SimpleNamespace:
+    """A ``Pulling`` / ``Pulled`` event as the kubelet writes it (for the Pod *uid*)."""
     if reason == "Pulling":
         message = f'Pulling image "{image}"'
     elif present:
@@ -1571,6 +1574,7 @@ def _pull_event(reason: str, image: str, at: int, *, present: bool = False) -> S
         last_timestamp=_at(at),
         event_time=None,
         first_timestamp=_at(at),
+        involved_object=SimpleNamespace(name="omnigent-pod-child-xyz", uid=uid),
     )
 
 
@@ -1580,6 +1584,7 @@ def _starting_pod(
     scheduled: tuple[str, int] | None = None,
     clone_since: int | None = None,
     created: int = 1000,
+    uid: str | None = None,
 ) -> SimpleNamespace:
     """A Pending Pod: maybe scheduled on *node*, maybe running its workspace prep."""
     conditions = []
@@ -1604,7 +1609,9 @@ def _starting_pod(
             )
         )
     return SimpleNamespace(
-        metadata=SimpleNamespace(name="omnigent-pod-child-xyz", creation_timestamp=_at(created)),
+        metadata=SimpleNamespace(
+            name="omnigent-pod-child-xyz", creation_timestamp=_at(created), uid=uid
+        ),
         spec=SimpleNamespace(node_name=node),
         status=SimpleNamespace(
             phase="Pending",
@@ -1655,7 +1662,7 @@ def test_progress_tracker_reports_each_change_once_and_reads_events_sparingly() 
     tracker = k8s._ProgressTracker(lambda step, since: seen.append((step, since)), lambda: now[0])
     events = [_pull_event("Pulling", _HOST_IMAGE, 1110)]
 
-    def read() -> list[object]:
+    def read(_uid: str | None) -> list[object]:
         reads.append(now[0])
         return events
 
@@ -1670,6 +1677,34 @@ def test_progress_tracker_reports_each_change_once_and_reads_events_sparingly() 
     assert seen == [("node", 1010), ("image", 1110)]
     # Not before the Pod is on a node, then at most every few seconds.
     assert reads == [10.0, 16.0]
+
+
+def test_a_woken_pod_ignores_the_events_of_the_pod_it_replaced(
+    fake_clients: tuple[_FakeCore, _FakeBatch],
+) -> None:
+    """agent-sandbox names the Pod after its Sandbox: an earlier Pod's cut-off pull is not ours."""
+    core, _batch = fake_clients
+    core.events = [
+        _pull_event("Pulling", _HOST_IMAGE, 1000, uid="old-pod"),  # killed mid-pull
+        _pull_event("Scheduled", _HOST_IMAGE, 3400, uid="new-pod"),
+    ]
+    launcher = _launcher()
+
+    events = launcher._pod_events("omnigent-sandboxes", "omnigent-pod-child-xyz", "new-pod")
+
+    assert [e.involved_object.uid for e in events] == ["new-pod"]
+    assert k8s._pending_pull_since(events) is None
+    # Without the filter the old Pod's pull would read as still running since 1000.
+    assert k8s._pending_pull_since(core.events) == 1000
+
+    seen: list[tuple[str, int | None]] = []
+    tracker = k8s._ProgressTracker(lambda step, since: seen.append((step, since)), lambda: 0.0)
+    pod = _starting_pod(node="ip-1", scheduled=("True", 3300), uid="new-pod")
+    tracker.observe(
+        pod,
+        functools.partial(launcher._pod_events, "omnigent-sandboxes", "omnigent-pod-child-xyz"),
+    )
+    assert seen == [("containers", None)]
 
 
 def test_an_observer_error_never_fails_the_launch(caplog: pytest.LogCaptureFixture) -> None:

@@ -83,9 +83,9 @@ function shape(action: RunbookAction): string {
 
 const EXPECTED: Record<string, string[]> = {
   "member.dead": [
-    `control:new_sandbox→member:${PL_CACHE}`,
     `control:restart→member:${PL_CACHE}`,
     `control:relaunch→member:${PL_CACHE}`,
+    `control:new_sandbox→member:${PL_CACHE}`,
     'control:pause→project:db-version {"keep_previews":true}',
     `link:/factory/${FID}/agents/${PL_CACHE}`,
   ],
