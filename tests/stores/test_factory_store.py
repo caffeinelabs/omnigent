@@ -396,6 +396,8 @@ def test_find_events(store: FactoryStore) -> None:
     )
     assert [e.kind for e in terminal] == ["message.delivered"]
     assert len(store.find_events(FID, "message.*", 0)) == 3
+    newest = store.find_events(None, "message.queued", 0, limit=2, newest_first=True)
+    assert [e.ts for e in newest] == [4_000, 3_000]
 
 
 def test_prune_events(store: FactoryStore) -> None:

@@ -45,6 +45,7 @@ from omnigent.server.factory import presence as factory_presence
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.envelope import display_title
 from omnigent.server.factory.membership import factory_members, is_top_level
+from omnigent.server.factory.slackdm import prefs as slack_prefs
 from omnigent.server.routes._sharing import sharing_mode, sharing_refusal
 from omnigent.stores.factory_store import norm_id
 
@@ -844,7 +845,8 @@ def person_view(person: FactoryPerson) -> dict[str, Any]:
         "present": entry is not None,
         "location": entry.location if entry is not None else None,
         "idle": entry.idle if entry is not None else False,
-        "notify": person.notify,
+        # Only the link status: member ids, DM channels and codes stay behind notify/me.
+        "notify": slack_prefs.summary(person.notify),
     }
 
 

@@ -133,6 +133,17 @@ async def test_chatter_keeps_its_windows(store: FactoryStore) -> None:
     assert _kinds(store) == sorted(beats)
 
 
+async def test_slack_dm_receipts_go_after_35_days(store: FactoryStore) -> None:
+    _seed(store, ("notify.slack",), age_days=36)
+    _seed(store, ("notify.slack",), age_days=31)
+
+    deleted = await prune.prune_once(_app_state(store), now=NOW)
+
+    # The DM engine's dedupe ledger reads 30 days, so a 31-day-old receipt stays.
+    assert deleted == 1
+    assert _kinds(store) == ["notify.slack"]
+
+
 async def test_a_second_prune_deletes_nothing(store: FactoryStore) -> None:
     _seed(store, LIFECYCLE + CHATTER, age_days=400)
     await prune.prune_once(_app_state(store), now=NOW)
@@ -142,7 +153,7 @@ async def test_a_second_prune_deletes_nothing(store: FactoryStore) -> None:
 
 
 def test_no_lifecycle_kind_matches_a_pruned_pattern() -> None:
-    pruned = prune.PRUNED_KINDS + prune.HEARTBEAT_KINDS
+    pruned = prune.PRUNED_KINDS + prune.HEARTBEAT_KINDS + prune.NOTIFY_KINDS
     for kind in LIFECYCLE:
         assert not kind_matches(kind, pruned), kind
     for pattern in prune.KEEP_KINDS:

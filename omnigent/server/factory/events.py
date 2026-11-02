@@ -62,6 +62,11 @@ def _clip(value: str | None, limit: int) -> str | None:
     return value[: limit - 1] + "…"
 
 
+def stored_subject(subject: str | None) -> str | None:
+    """:returns: *subject* as :func:`emit` stores it (clipped), for exact-match queries."""
+    return _clip(subject, _SUBJECT_MAX)
+
+
 def _session_or_data(value: str | None, key: str, data: dict[str, Any]) -> str | None:
     """Keep a session id; move any other actor (``"server"``, ``"user:x"``) into data."""
     if value is None:
@@ -168,4 +173,4 @@ async def emit(
     return event
 
 
-__all__ = ["EventListener", "add_listener", "emit", "scopes_for"]
+__all__ = ["EventListener", "add_listener", "emit", "scopes_for", "stored_subject"]

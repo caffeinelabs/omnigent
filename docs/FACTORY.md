@@ -373,6 +373,103 @@ with spoofed server lines quoted, and server texts name the human as
 `<name> (<role>)`. Session streams check access only when they open, so
 removing someone closes their open member streams (they reconnect and get 404).
 
+### Slack DMs
+
+The cockpit is pull: a non-blocking proposal can sit for days, a trial can
+revert on its own and an idle factory can burn money while nobody looks. Each
+person on the roster can therefore get **personal Slack DMs** about what is
+waiting on *them*, with reminders before anything defaults and a daily
+digest. The factory never waits on Slack.
+
+**Setup.**
+
+1. A Slack admin creates the app from the manifest (Settings > Alerts >
+   Slack app > **Copy app manifest**, then api.slack.com/apps > Create New
+   App > From a manifest), installs it and copies the Bot User OAuth Token
+   (`xoxb-…`). The app only sends DMs (`chat:write`, `im:write`,
+   `users:read`, `users:read.email`): no events, no interactivity.
+2. An owner pastes the token under Settings > Alerts > Slack app and presses
+   **Test**. The server checks it with `auth.test` (granted scopes come from
+   `x-oauth-scopes`) and stores it per factory like the webhook:
+   `factory/secrets/{fid}/slack_bot_token` plus non-secret metadata in
+   `…/slack_bot_meta.json`. It is Tier 0 (`alerts.slack_bot_token`), set only
+   through a human-origin owner route and never returned, logged or put in an
+   event. A token of another workspace unlinks everyone linked in another
+   one (also after the old token was removed); removing the token closes the
+   `slack.bot` incident.
+3. Each person links their own account under Settings > Notifications: a
+   member ID or a Slack email (omnigent ids are GitHub-login emails and may
+   differ), then a 6-digit code DM'd to that account (15 min, 5 tries; the DM
+   names who entered it). Find shows only the handle and member ID; the
+   account's name and email show once the code proved it is theirs. The code
+   is checked against the stored pending account under the person's lock, so
+   concurrent guesses each count and only the account the code went to is
+   linked. One Slack account gets at most 3 codes an hour, one person can
+   have 10 sent a day. A welcome DM lists what is waiting on them now.
+
+| Route (`/v1/factory/factories/{fid}/…`) | Who | What |
+|---|---|---|
+| `PUT alerts/slack-bot` `{token\|null}`, `POST alerts/slack-bot/test` | MANAGE, human origin | Set (after `auth.test`) or remove the token; test it and DM the caller when linked. `GET alerts/routing` gains `slack_dm {configured, team, bot, status, error, missing_scopes}`. |
+| `GET\|PUT notify/me` | on the roster (PUT: human origin) | Own settings with role defaults, link status, the app's status, last DM, quiet now. |
+| `POST notify/me/slack` `{member_id\|email, send_code}`, `POST notify/me/slack/verify` `{code}`, `DELETE notify/me/slack` | self, human origin, 5 lookups per 10 min | Find, send the code, verify, unlink. Someone with access but no roster row gets 409 `not_on_roster`. |
+| `POST notify/me/test` | self, human origin, 5 per 10 min | A test DM listing the effective settings. |
+| `GET notify/team` | MANAGE | Who is reachable (status, groups, quiet now, last DM); no member ids. |
+
+Settings live in the existing `factory_people.notify` JSON (no migration):
+event groups (decisions, reminders, PRs, incidents, factory, budget,
+mentions, retros), the incident minimum (warning or critical), the digest
+(hour, every day or weekdays), quiet hours (default 22:00-08:00 in the
+person's IANA zone, DST-correct; critical incidents may break through) and
+"hold while I'm active in the cockpit". Viewers default to mentions only,
+operators to everything but budgets, owners to everything; retros are
+opt-in. The People list shows only `notify: {slack, enabled}`.
+
+**What is sent.**
+
+| Item | When | To |
+|---|---|---|
+| Decision needs you (any open decision, blocking or not) | 30 s after it opens or is routed to you | The claimer; else a person assignee; else operators (owners when no operator is reachable); owners for owner decisions |
+| Reminder | 4 h and 24 h after it reached you | The same |
+| Waiting on the owners | open 24 h | Every owner not already a recipient |
+| Last call | 2 h before a projects, tuning or rules proposal expires (72 h) or a trial reverts on its own (2x its window); 15 min before quiet hours when the deadline falls inside them | Recipients and owners |
+| PR ready for human merge (`pr.ready`) | at once; dropped if no longer ready, a new head, or a human reviewed it | The project's `human_owner`, else operators and owners |
+| Incident (`issue.opened`, warning or worse by the person's minimum) | at once, at most once per issue and person an hour | `issues.is_mine`: assignee, else operators (owners as fallback); owners also get critical ones |
+| Factory or project paused, stopped, resumed; `factory.warning` | at once | Owners and the project's human owner, never the person who did it |
+| Budget at 80 % / 100 % (factory or project; a task's own budget stays with its loop) | at once | Owners and the project's human owner |
+| Idle spend | ≥ $5 in 6 h with no `pr.ready`, `pr.merged`, `task.done`, `stage.changed`, `demo.published` or `proposal.applied`; once a day | Owners |
+| Room @mention | at once; dropped once the thread is read | The person mentioned |
+| Retro or finding (opt-in) | at once, named by who filed it, visibility of its target | Opted-in people |
+| Daily digest | at the person's hour, after quiet hours; skipped when nothing happened and nothing waits | Everyone with the digest on |
+
+**Engine.** `background/slack_dm.py` ticks every 30 s
+(`omnigent/server/factory/slackdm/engine.py`). Decisions are level-triggered
+from the open rows; transitions come from an event cursor (the last 12 h are
+replayed after a restart). Each item is visibility-filtered per person (the
+snapshot's `readable_for`: hidden projects never appear), held 10 min while
+the person is active in the cockpit, held through quiet hours (and re-checked
+when released; an event held that way may be up to 26 h old), grouped into at
+most one DM a minute and 30 a day (the rest waits for the digest; last calls
+and critical incidents still go). Every delivery is one `notify.slack` event
+per item and person (`{to_user, key, stage, status}`): the dedupe ledger
+(rebuilt from every row of the last 30 days, read in pages, and checked in the
+store again right before each post, so a server roll or two processes during a
+rollout never send twice; rows are pruned after 35 days), the cockpit's
+"Slack · Luka 10:04" chips on decisions and incidents (`DecisionView.notified`,
+`IssueView.notified`) and the Activity "Notifications" filter. An item whose
+mark falls before the person linked is not sent (the welcome DM listed it).
+`DecisionView` also gains `deadline_at` and `deadline_effect`.
+
+Agent text is collapsed to one line, clipped, escaped and posted with
+`parse: none` and no unfurls, so `<!channel>` and spoofed links cannot be
+injected; links are built from ids on `https://$OMNIGENT_DOMAIN`. Slack
+failures: retryable ones (network, 5xx, 429 with `Retry-After`) back off 5 s,
+20 s, 80 s, 5 min, 20 min; a dead token (`invalid_auth`, `token_revoked`,
+`missing_scope`, …) stops the factory's DMs and opens the `slack.bot` incident
+for owners until a working token is saved; a person error (`user_not_found`,
+`messages_tab_disabled`, …) marks their link; refused blocks are retried once
+as plain text. A failure of a token that was replaced meanwhile never marks
+the new one. Assumes one server replica: the ledger is not an atomic claim.
+
 ### Base branches & integration env
 
 Each project has a **base branch**: the branch every PR of the project
@@ -585,6 +682,8 @@ transcript folds.
 | `OMNIGENT_FACTORY_INVARIANTS` | on | `0` leaves the `factory_invariants` admin default policy unseeded (see Invariants). |
 | `OMNIGENT_IMAGE_TAG`, `OMNIGENT_SERVER_SHA` | unset | Image tag and commit recorded in the platform version (`factory_versions`). |
 | `OMNIGENT_FACTORY_RETRO_HOUR` | `6` | UTC hour after which Sentinel gets its daily retro beat. |
+| `OMNIGENT_FACTORY_SLACK_DM` | on | `0` turns Slack DMs off (the engine is inert anyway until an owner saves a Slack app token). |
+| `OMNIGENT_FACTORY_SLACK_TICK_S`, `OMNIGENT_FACTORY_SLACK_API` | `30`, `https://slack.com/api/` | Slack DM tick (at least 5 s) and the Slack Web API base (tests). DM links use `OMNIGENT_DOMAIN`. |
 | `OMNIGENT_FACTORY_SMITH`, `…_SMITH_GITHUB_LOGIN`, `…_SMITH_GITHUB_TOKEN`, `…_SMITH_REPO` | off | Tier 2 prerequisites (see Self-modification); the repo defaults to `caffeinelabs/omnigent#staging`. |
 
 ### Rollback
@@ -794,8 +893,9 @@ evidence and never run.
   approving it runs it as a trial.
 - **Settings** (`/factory/:id/settings/:section`): People, Autonomy (project
   autonomy and engine mode), Budgets & loops, Alerts (detector thresholds,
-  decision escalation and the Slack webhook, set-only through
-  `PUT …/alerts/slack`), Rules and Definition (history, bundles, "Run retro
+  decision escalation, the Slack webhook, set-only through
+  `PUT …/alerts/slack`, and the Slack app for DMs), Notifications (each
+  person's Slack DMs, see Slack DMs), Rules and Definition (history, bundles, "Run retro
   now", heartbeats, mail, previews, models). Every save is one
   `PUT …/definition` with `base_version` (a newer version answers 409
   `stale_definition`): an applied human `C-n` in History that one click
@@ -1207,6 +1307,7 @@ with a managed sandbox launcher configured.
 | Work graph | `omnigent/server/factory/tasks.py`, `graph.py`, `binder.py`, `api/tasks.py`, `api/graph.py` | `tests/server/factory/test_graph.py`, `test_binder.py`, `test_tasks_routes.py`, `test_graph_api.py` |
 | Loop engine | `omnigent/server/factory/loops.py`, `loop_escalation.py`, `pipeline.py`, `budgets.py`, `api/loops.py` | `tests/server/factory/test_loops.py`, `test_pipeline.py`, `test_budgets.py` |
 | Telemetry | `omnigent/server/factory/telemetry/`, `api/telemetry_read.py`, `background/prune.py` | `tests/server/factory/test_telemetry_*.py` (replays `fixtures/live_run_2026_10_26.json`), `test_prune.py` |
+| Slack DMs | `omnigent/server/factory/slackdm/`, `background/slack_dm.py`, `api/slack_dm.py`, `web/src/components/factory/settings/{NotificationsSettings,SlackAppCard,TeamReachability}.tsx` | `tests/server/factory/test_slack_dm_*.py` (a fake Slack behind `httpx.MockTransport`, a fake clock), web `notify*.test.tsx` |
 | Bundles | `examples/factory/` | `tests/examples/`, `tests/server/factory/test_factory_agents_listed.py` |
 | Demo harness | `examples/factory/factory-pl/agents/demo/skills/factory-demo/harness/` | `tests/examples/test_factory_demo_harness.py` (runs `factory_demo_harness.test.mjs` under `node --test`); `node run.mjs --selftest` records real demos of a local fixture |
 | Learning reads | `omnigent/server/factory/learn_view.py`, `human_tuning.py`, `api/learn.py` | `tests/server/factory/test_learn_routes.py` |

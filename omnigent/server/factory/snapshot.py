@@ -82,6 +82,7 @@ from omnigent.server.factory.launch import launch_drift
 from omnigent.server.factory.membership import factory_members, load_session_spec
 from omnigent.server.factory.notify import parse_iso
 from omnigent.server.factory.roster import build_roster, session_url
+from omnigent.server.factory.slackdm import rules as slack_rules
 from omnigent.server.factory.stage import (
     OPEN_TASK_STATES,
     StageResult,
@@ -101,6 +102,10 @@ _logger = logging.getLogger(__name__)
 SNAPSHOT_TTL_S: Final = 2.0
 COST_TTL_S: Final = 60.0
 MAIL_WINDOW_S: Final = 6 * 3600
+NOTIFIED_WINDOW_S: Final = 30 * 86400
+"""How far back the snapshot reads Slack DM receipts (``notify.slack``)."""
+NOTIFIED_ROWS: Final = 5000
+"""At most this many of the newest receipts per snapshot."""
 CONTROL_WINDOW_S: Final = 7 * 86400
 ANSWERED_DECISIONS: Final = 10
 PL_TITLE_PREFIX: Final = "PL · "
@@ -491,6 +496,40 @@ class _Loaded:
     now: dict[str, dict[str, Any]] = field(default_factory=dict)
     pod_cap: int | None = None
     lead_spawns: bool = False
+    notified: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    deadlines: dict[str, tuple[int, str]] = field(default_factory=dict)
+
+
+def notified_by_subject(rows: Iterable[FactoryEvent]) -> dict[str, list[dict[str, Any]]]:
+    """:returns: Subject -> ``NotifiedView`` rows of ``notify.slack`` events, oldest first."""
+    out: dict[str, list[dict[str, Any]]] = {}
+    for event in rows:
+        data = event.data or {}
+        user = data.get("to_user")
+        if not event.subject or not isinstance(user, str):
+            continue
+        out.setdefault(event.subject, []).append(
+            {
+                "user_id": user,
+                "at": event.ts // 1000,
+                "stage": str(data.get("stage") or ""),
+                "ok": data.get("status") == "sent",
+                "error": data.get("error") if isinstance(data.get("error"), str) else None,
+            }
+        )
+    return out
+
+
+def _notified(fstore: Any, factory_id: str, now_ms: int) -> dict[str, list[dict[str, Any]]]:
+    """Slack DM receipts by subject, oldest first, from the newest ledger rows."""
+    rows = fstore.find_events(
+        factory_id,
+        "notify.slack",
+        now_ms - NOTIFIED_WINDOW_S * 1000,
+        limit=NOTIFIED_ROWS,
+        newest_first=True,
+    )
+    return notified_by_subject(reversed(rows))
 
 
 def _harness(
@@ -523,6 +562,14 @@ def _load(deps: FactoryDeps, factory_id: str, now: float) -> _Loaded:
         )
         children[member.id] = list(reversed(page.data))
     now_ms = int(now * 1000)
+    open_decisions = fstore.list_decisions(factory_id=factory_id, status="open", limit=500)
+    try:
+        deadlines = slack_rules.deadlines(
+            deps, factory_id, open_decisions, store.get_conversation(factory_id)
+        )
+    except Exception:  # noqa: BLE001 - a deadline chip is never worth a broken snapshot
+        _logger.warning("factory: could not compute decision deadlines", exc_info=True)
+        deadlines = {}
     memo: dict[tuple[Any, ...], Any] = {}
     harness = {
         c.id: _harness(c, deps, memo)
@@ -534,7 +581,7 @@ def _load(deps: FactoryDeps, factory_id: str, now: float) -> _Loaded:
         children=children,
         projects=fstore.list_projects(factory_id),
         prs=fstore.list_prs(factory_id),
-        open_decisions=fstore.list_decisions(factory_id=factory_id, status="open", limit=500),
+        open_decisions=open_decisions,
         closed_decisions=fstore.list_decisions(
             factory_id=factory_id,
             status=["answered", "withdrawn", "expired"],
@@ -559,6 +606,8 @@ def _load(deps: FactoryDeps, factory_id: str, now: float) -> _Loaded:
         on_trial=len(fstore.list_proposals(factory_id, status="trial", limit=500)),
         def_version=definition.pinned_version(deps, factory_id),
         issues=fstore.list_issues(factory_id, class_="incident", statuses=["open", "acked"]),
+        notified=_notified(fstore, factory_id, now_ms),
+        deadlines=deadlines,
         **_spawn_limits(deps, factory_id, members),
     )
 
@@ -825,8 +874,15 @@ def decision_view(
     titles: Mapping[str, str],
     roles: Mapping[str, str | None],
     delivered_to: Mapping[str, str],
+    *,
+    notified: Sequence[Mapping[str, Any]] = (),
+    deadline: tuple[int, str] | None = None,
 ) -> dict[str, Any]:
-    """:returns: The ``DecisionView`` JSON of one decision."""
+    """
+    :param notified: Its Slack DM receipts (``NotifiedView`` rows).
+    :param deadline: ``(at, effect)`` when it defaults by itself.
+    :returns: The ``DecisionView`` JSON of one decision.
+    """
     asker = decision.asked_by_session_id
     target = delivered_to.get(decision.delivered_mail_id or "")
     return {
@@ -860,6 +916,9 @@ def decision_view(
         "claimed_at": decision.claimed_at,
         "thread": decision.thread,
         "subject": decision.subject,
+        "notified": [dict(n) for n in notified],
+        "deadline_at": deadline[0] if deadline is not None else None,
+        "deadline_effect": deadline[1] if deadline is not None else None,
     }
 
 
@@ -1139,7 +1198,19 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
     decisions = [
         view
         for d in [*sorted(loaded.open_decisions, key=lambda d: d.number), *loaded.closed_decisions]
-        if (view := _lenient(schemas.DecisionView, decision_view(d, titles, roles, delivered_to)))
+        if (
+            view := _lenient(
+                schemas.DecisionView,
+                decision_view(
+                    d,
+                    titles,
+                    roles,
+                    delivered_to,
+                    notified=loaded.notified.get(f"decision:{d.ref}", ()),
+                    deadline=loaded.deadlines.get(d.id),
+                ),
+            )
+        )
     ]
 
     member_views = list(views.values())

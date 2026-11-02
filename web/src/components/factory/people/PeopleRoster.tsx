@@ -28,6 +28,7 @@ import {
 } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
 import { plural } from "../factoryFormat";
+import { personSlackStatus } from "../notify/notifyModel";
 import { PresenceFace } from "../shell/FactoryPresence";
 import { LEVER_REASON, ReasonGated } from "../shell/viewerCan";
 import {
@@ -205,6 +206,29 @@ export function InviteRow({
   );
 }
 
+const SLACK_BADGE = {
+  verified: { text: "Slack ✓", className: "text-success" },
+  pending: { text: "Slack ◐ code sent", className: "text-warning" },
+  error: { text: "Slack ⚠ broken", className: "text-destructive" },
+} as const;
+
+/** Owners see who Slack DMs reach: ✓ linked, ◐ code sent, ⚠ broken; nothing when unlinked. */
+function SlackBadge({ person }: { person: PersonView }) {
+  const status = personSlackStatus(person);
+  if (status === "unlinked") return null;
+  const badge = SLACK_BADGE[status];
+  return (
+    <span
+      data-testid={`people-slack-${person.user_id}`}
+      data-status={status}
+      title="Slack DMs (Settings → Notifications)"
+      className={cn("shrink-0", badge.className)}
+    >
+      · {badge.text}
+    </span>
+  );
+}
+
 function PersonRow({
   factoryId,
   person,
@@ -264,6 +288,7 @@ function PersonRow({
               />
               <span className="min-w-0 truncate">{presence.text}</span>
             </span>
+            {people.viewer.can.settings && <SlackBadge person={person} />}
           </span>
         </div>
         {person.is_creator ? (

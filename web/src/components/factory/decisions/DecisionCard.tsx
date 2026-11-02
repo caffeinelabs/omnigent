@@ -34,6 +34,7 @@ import { cn } from "@/lib/utils";
 import { ageText, decisionAnchorId } from "../board/boardModel";
 import { useFactoryServerNowS } from "../factoryClock";
 import { formatElapsed } from "../factoryFormat";
+import { NotifiedLine } from "../notify/NotifiedChips";
 import { decisionsPageHref } from "../factoryRoutes";
 import { DOCK_SCROLLER_ATTRIBUTE, DOCK_TABS_PX } from "../shell/scroll";
 import { LEVER_REASON, ReasonGated, useViewer, useViewerCan } from "../shell/viewerCan";
@@ -556,6 +557,13 @@ export function DecisionCard({
         )}
       </p>
       <p className="text-muted-foreground">{askerText(decision)}</p>
+      <NotifiedLine
+        notified={decision.notified}
+        deadlineAt={open ? decision.deadline_at : null}
+        deadlineEffect={decision.deadline_effect}
+        nowS={nowS}
+        testId={`decision-notified-${decision.ref}`}
+      />
       <p className={cn("text-ui break-words", open ? "text-foreground" : "text-muted-foreground")}>
         {decision.question}
       </p>

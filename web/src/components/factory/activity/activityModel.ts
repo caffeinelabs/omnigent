@@ -33,6 +33,7 @@ export const ACTIVITY_KIND_GROUPS = [
   { id: "issues", label: "Issues", patterns: ["issue.*", "agent.repeat"] },
   { id: "controls", label: "Controls", patterns: ["control.*", "factory.*", "project.*"] },
   { id: "people", label: "People", patterns: ["people.*", "access.*", "member.*"] },
+  { id: "notifications", label: "Notifications", patterns: ["notify.*", "alerts.*"] },
   { id: "heartbeats", label: "Heartbeats", patterns: ["heartbeat.*"] },
 ] as const;
 

@@ -24,6 +24,7 @@ import { IssueTargetLink, SeverityIcon } from "@/components/factory/alerts/Issue
 import { issuePr } from "@/components/factory/alerts/runbookModel";
 import { controlErrorMessage } from "@/components/factory/controls/controlModel";
 import { FactoryLoadError } from "@/components/factory/FactoryLoadError";
+import { NotifiedLine } from "@/components/factory/notify/NotifiedChips";
 import { TONE_CHIP, formatElapsed, shortSha } from "@/components/factory/factoryFormat";
 import {
   alertPageHref,
@@ -476,6 +477,7 @@ export function IncidentPage() {
                 <span className={cn("rounded-sm px-1 text-xs", TONE_CHIP.active)}>yours</span>
               )}
             </p>
+            <NotifiedLine notified={issue.notified} nowS={nowS} testId="incident-notified" />
             {issue.body && <p className="max-w-prose text-sm break-words">{issue.body}</p>}
           </div>
           <IssueLifecycleButtons factoryId={fid} issue={issue} />

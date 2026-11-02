@@ -1,7 +1,8 @@
 /**
- * Settings (`/factory/:factoryId/settings/:section`): People, Autonomy and
- * engine mode, Budgets & loops, Alerts (thresholds and the set-only Slack
- * webhook), Rules and Definition (versions, diff, revert, bundles, other
+ * Settings (`/factory/:factoryId/settings/:section`): People, Notifications
+ * (your own Slack DMs), Autonomy and engine mode, Budgets & loops, Alerts
+ * (thresholds, the Slack app for DMs and the set-only Slack webhook), Rules
+ * and Definition (versions, diff, revert, bundles, other
  * settings, "Run retro now"). Every save is `PUT …/definition`: an applied,
  * human-authored `C-n` in History that one click reverts. Viewers and
  * operators see the values read-only.
@@ -10,6 +11,7 @@
 import { Navigate } from "react-router-dom";
 import {
   BellIcon,
+  BellRingIcon,
   BookTextIcon,
   GaugeIcon,
   HistoryIcon,
@@ -28,6 +30,7 @@ import { DefinitionPanel } from "@/components/factory/improvements/DefinitionPan
 import { useFactoryDefinition } from "@/components/factory/insights/learnQueries";
 import { PeopleSettings } from "@/components/factory/people/PeopleSettings";
 import { DefinitionForm } from "@/components/factory/settings/DefinitionForm";
+import { NotificationsSettings } from "@/components/factory/settings/NotificationsSettings";
 import { RulesEditor } from "@/components/factory/settings/RulesEditor";
 import {
   ALERT_GROUPS,
@@ -35,6 +38,7 @@ import {
   BUDGET_GROUPS,
   OTHER_GROUPS,
 } from "@/components/factory/settings/settingsModel";
+import { SlackAppCard } from "@/components/factory/settings/SlackAppCard";
 import { SlackWebhookCard } from "@/components/factory/settings/SlackWebhookCard";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
 import { Link, useParams } from "@/lib/routing";
@@ -42,6 +46,7 @@ import { cn } from "@/lib/utils";
 
 const SECTION: Record<SettingsSection, { label: string; icon: LucideIcon; hint: string }> = {
   people: { label: "People", icon: UsersIcon, hint: "Who can watch, operate and own" },
+  notifications: { label: "Notifications", icon: BellRingIcon, hint: "Your Slack DMs" },
   autonomy: { label: "Autonomy", icon: GaugeIcon, hint: "Project proposals and engine mode" },
   budgets: { label: "Budgets & loops", icon: WalletIcon, hint: "Money, attempts and rounds" },
   alerts: { label: "Alerts", icon: BellIcon, hint: "Thresholds and Slack" },
@@ -82,7 +87,14 @@ function SectionNav({ factoryId, active }: { factoryId: string; active: Settings
   );
 }
 
-function DefinitionSections({ section }: { section: Exclude<SettingsSection, "people"> }) {
+/** The sections that are not definition forms. */
+const OWN_SECTIONS: ReadonlySet<SettingsSection> = new Set(["people", "notifications"]);
+
+function DefinitionSections({
+  section,
+}: {
+  section: Exclude<SettingsSection, "people" | "notifications">;
+}) {
   const { snapshot, nowS } = useFactoryShell();
   const fid = snapshot.factory.id;
   const definition = useFactoryDefinition(fid);
@@ -129,6 +141,7 @@ function DefinitionSections({ section }: { section: Exclude<SettingsSection, "pe
     case "alerts":
       return (
         <div className="flex min-w-0 flex-col gap-4">
+          <SlackAppCard factoryId={fid} />
           <SlackWebhookCard factoryId={fid} />
           <DefinitionForm
             factoryId={fid}
@@ -174,7 +187,7 @@ export function SettingsPage() {
       <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
         <h1 className="text-base font-semibold">Settings</h1>
         <span className="text-sm text-muted-foreground">{SECTION[active].label}</span>
-        {active !== "people" && (
+        {!OWN_SECTIONS.has(active) && (
           <Link
             to={improvementsPageHref(fid, "history")}
             componentId="factory.settings.history"
@@ -189,6 +202,8 @@ export function SettingsPage() {
         <div className="flex min-w-0 flex-1 flex-col gap-4">
           {active === "people" ? (
             <PeopleSettings factoryId={fid} nowS={nowS} />
+          ) : active === "notifications" ? (
+            <NotificationsSettings factoryId={fid} nowS={nowS} />
           ) : (
             <DefinitionSections section={active} />
           )}
