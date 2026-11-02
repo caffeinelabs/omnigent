@@ -23,3 +23,46 @@ describe("StageDots", () => {
     expect(screen.getByTestId(`stage-dots-${project.slug}`)).not.toHaveTextContent("Waiting");
   });
 });
+
+describe("StageDots while queued", () => {
+  const base = { ...round3Snapshot().projects[0]!, stage: "queued" as const, overlay: null };
+
+  it("shows a starting PL with its step instead of a bare Queued", () => {
+    const project = {
+      ...base,
+      start: {
+        state: "starting" as const,
+        phase: "connect",
+        label: "Waiting for the agent to connect",
+        since: ROUND3_NOW_S - 150,
+      },
+    };
+    render(<StageDots project={project} nowS={ROUND3_NOW_S} />);
+    const dots = screen.getByTestId(`stage-dots-${project.slug}`);
+    expect(dots).toHaveTextContent("Starting PL2mWaiting for the agent to connect");
+    expect(dots).toHaveAttribute("data-start", "starting");
+    expect(dots).not.toHaveTextContent("Queued");
+  });
+
+  it("says how many projects wait ahead for a pod", () => {
+    const project = {
+      ...base,
+      start: {
+        state: "queued" as const,
+        phase: "pod_cap",
+        label: "No free pod: 12 of 12 in use",
+        since: ROUND3_NOW_S - 60,
+        ahead: 3,
+      },
+    };
+    render(<StageDots project={project} nowS={ROUND3_NOW_S} />);
+    const dots = screen.getByTestId(`stage-dots-${project.slug}`);
+    expect(screen.getByTestId(`stage-detail-${project.slug}`)).toHaveTextContent(
+      "3 projects ahead",
+    );
+    expect(dots).toHaveAttribute(
+      "title",
+      "Queued: No free pod: 12 of 12 in use · 3 projects ahead",
+    );
+  });
+});

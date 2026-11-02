@@ -23,6 +23,7 @@ import { useProjectControlParts } from "../controls/ProjectControlsMenu";
 import { ReadyForMergeBanner } from "../review/ReadyForMergeBanner";
 import { STAGE_LABEL, formatElapsed, formatUsd, plural } from "../factoryFormat";
 import { projectPageHref } from "../factoryRoutes";
+import { stageHeadline } from "../projects/stageHeadline";
 import {
   ageText,
   projectAnchorId,
@@ -161,16 +162,21 @@ export function ClaimChip({ project }: { project: ProjectView }) {
 function StageNote({ snapshot, project }: { snapshot: FactorySnapshot; project: ProjectView }) {
   if (project.stage === "queued") {
     if (project.provisioning) return <ProvisioningTimeline stage={project.provisioning.stage} />;
+    const start = project.start;
     return (
       <p
         data-testid="queued-note"
         className="flex items-center gap-1.5 text-sm text-muted-foreground"
       >
-        {project.pl ? (
+        {project.pl || start?.state === "starting" ? (
           <>
             <RunningDot className="size-3" />
-            The PL is starting
+            {start?.state === "starting" && start.label !== "Starting"
+              ? `Starting the PL: ${start.label}`
+              : "The PL is starting"}
           </>
+        ) : start ? (
+          `Queued: ${stageHeadline(project, snapshot.server_time).explain ?? start.label}`
         ) : (
           "Waiting for Atlas to spawn the PL · usually under 5 min"
         )}

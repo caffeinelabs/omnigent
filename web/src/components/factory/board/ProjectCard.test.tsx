@@ -61,6 +61,29 @@ describe("ProjectCard", () => {
     expect(within(card).queryByTestId("team-strip")).toBeNull();
   });
 
+  it("queued without a PL says what the server is waiting for", () => {
+    const { snapshot, project } = cardScenario("queued-waiting");
+    project.start = {
+      state: "queued",
+      phase: "pod_cap",
+      label: "No free pod: 12 of 12 in use",
+      since: LIVE_RUN_NOW_S - 120,
+      ahead: 2,
+    };
+    renderBoard(
+      <ProjectCard
+        snapshot={snapshot}
+        project={project}
+        nowS={LIVE_RUN_NOW_S}
+        onReview={vi.fn()}
+        onDecision={vi.fn()}
+      />,
+    );
+    const note = screen.getByTestId("queued-note");
+    expect(note).toHaveTextContent("Queued: No free pod: 12 of 12 in use · 2 projects ahead");
+    expect(note).not.toHaveTextContent("Atlas");
+  });
+
   it("queued with a PL shows the provisioning timeline with the sandbox labels", () => {
     const { card } = renderCard("queued-provisioning");
     const timeline = within(card).getByTestId("provisioning-timeline");

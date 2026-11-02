@@ -45,7 +45,11 @@ from omnigent.server.factory.charter import (
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.envelope import quote_spoofed_lines
 from omnigent.server.factory.mailer import get_mailer
-from omnigent.server.factory.stage import changes_requested_on_head, derive_stage
+from omnigent.server.factory.stage import (
+    OPEN_TASK_STATES,
+    changes_requested_on_head,
+    derive_stage,
+)
 from omnigent.server.factory.telemetry.pr_rounds import record_refresh
 from omnigent.stores.factory_store import norm_id
 from omnigent.util.session_lifecycle import is_session_closed
@@ -1083,6 +1087,7 @@ async def persist_stage(
         pl_id = project_lead_id(deps, factory_id, project)
         pl_conv = deps.conversation_store.get_conversation(pl_id) if pl_id else None
         open_decisions = store.list_decisions(factory_id=factory_id, status="open")
+        tasks = store.list_tasks(factory_id, project_slug=slug, states=OPEN_TASK_STATES)
         result = derive_stage(
             project,
             prs,
@@ -1090,6 +1095,7 @@ async def persist_stage(
             open_decisions,
             brief_delivered=brief_delivered,
             sandbox_failed=sandbox_failed,
+            tasks=tasks,
         )
         if result.stage != project.stage:
             store.update_project(project.id, stage=result.stage)

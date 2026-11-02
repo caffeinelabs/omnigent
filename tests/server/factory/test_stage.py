@@ -7,7 +7,7 @@ from typing import Any
 
 import pytest
 
-from omnigent.entities.factory import FactoryDecision, FactoryPr, FactoryProject
+from omnigent.entities.factory import FactoryDecision, FactoryPr, FactoryProject, FactoryTask
 from omnigent.factory import LABEL_HEALTH, LABEL_STATE, STAGES
 from omnigent.server.factory.stage import (
     OVERLAYS,
@@ -16,6 +16,7 @@ from omnigent.server.factory.stage import (
     derive_stage,
     pr_stage,
     ready_for_human,
+    work_after_merge,
 )
 
 FID = "f" * 32
@@ -485,3 +486,198 @@ def test_a_held_head_is_not_ready_for_a_human() -> None:
     assert pr_stage(held) == "building"
     assert ready_for_human(_pr(ready=True, human_review=_CHANGES_ON_OLD)) is True
     assert ready_for_human(_pr(human_review=_CHANGES_ON_OLD)) is False
+
+
+# ── After the merge: work the PRs no longer show ─────────────────
+
+T0 = 1_793_000_000  # the project's own PR merges here
+MERGED_9774 = FactoryPr(
+    id="9" * 32,
+    factory_id=FID,
+    repo="caffeinelabs/app",
+    number=9774,
+    url="https://github.com/caffeinelabs/app/pull/9774",
+    state="merged",
+    merged_at=T0,
+    closed_at=T0,
+)
+
+
+def _later_project(
+    *,
+    created_at: int = T0 - 3600,
+    agent_stage: str | None = None,
+    agent_stage_at: int | None = None,
+    created_by: str = "atlas",
+) -> FactoryProject:
+    return FactoryProject(
+        id="c" * 32,
+        factory_id=FID,
+        slug="api",
+        title="API",
+        created_at=created_at,
+        created_by=created_by,
+        agent_stage=agent_stage,
+        agent_stage_at=agent_stage_at,
+    )
+
+
+def _task(key: str, state: str, kind: str = "implement", slug: str = "api") -> FactoryTask:
+    return FactoryTask(
+        id=key.ljust(32, "0")[:32],
+        factory_id=FID,
+        number=1,
+        project_slug=slug,
+        key=key,
+        title=key,
+        kind=kind,
+        state=state,
+    )
+
+
+# (id, project, tasks, expected)
+AFTER_MERGE: list[tuple[str, FactoryProject, list[FactoryTask], StageResult]] = [
+    ("merged, nothing left", _later_project(), [], StageResult("merged")),
+    (
+        "PL claimed ready before the merge",
+        _later_project(agent_stage="ready", agent_stage_at=T0 - 60),
+        [],
+        StageResult("merged"),
+    ),
+    (
+        "PL claimed merged after the merge",
+        _later_project(agent_stage="merged", agent_stage_at=T0 + 60),
+        [],
+        StageResult("merged"),
+    ),
+    (
+        "only closed tasks",
+        _later_project(),
+        [_task("route", "done"), _task("docs", "cancelled"), _task("x", "failed")],
+        StageResult("merged"),
+    ),
+    (
+        "another project's open task",
+        _later_project(),
+        [_task("route", "running", slug="ux")],
+        StageResult("merged"),
+    ),
+    (
+        "a planned task left",
+        _later_project(),
+        [_task("docs", "planned")],
+        StageResult("planning", note="PR merged · 1 task still open"),
+    ),
+    (
+        "an implement task running",
+        _later_project(),
+        [_task("follow-up", "running"), _task("docs", "planned")],
+        StageResult("building", note="PR merged · 2 tasks still open"),
+    ),
+    (
+        "a validation task running",
+        _later_project(),
+        [_task("measure", "running", kind="test")],
+        StageResult("verify", note="PR merged · 1 task still open"),
+    ),
+    (
+        "a task out for review",
+        _later_project(),
+        [_task("follow-up", "review")],
+        StageResult("review", note="PR merged · 1 task still open"),
+    ),
+    (
+        "open tasks and a working claim since the merge",
+        _later_project(agent_stage="verify", agent_stage_at=T0 + 60),
+        [_task("docs", "planned")],
+        StageResult("verify", note="PR merged · 1 task still open"),
+    ),
+    (
+        "open tasks while the PL claims merged",
+        _later_project(agent_stage="merged", agent_stage_at=T0 + 60),
+        [_task("docs", "planned")],
+        StageResult("planning", note="PR merged · 1 task still open", claim_mismatch=True),
+    ),
+    (
+        "open tasks and a stale ready claim",
+        _later_project(agent_stage="ready", agent_stage_at=T0 - 60),
+        [_task("docs", "planned")],
+        StageResult("planning", note="PR merged · 1 task still open"),
+    ),
+    (
+        "a ready claim after the merge is no work stage",
+        _later_project(agent_stage="ready", agent_stage_at=T0 + 60),
+        [],
+        StageResult("merged"),
+    ),
+    (
+        "PL claims building after the merge",
+        _later_project(agent_stage="building", agent_stage_at=T0 + 60),
+        [],
+        StageResult("building", note="PR merged · PL still at building"),
+    ),
+    # validate-build-tier: made to validate app#9774 after Luka merged it.
+    (
+        "made to validate an already-merged PR",
+        _later_project(created_at=T0 + 600),
+        [],
+        StageResult("planning", note="!9774 was merged before this project started"),
+    ),
+    (
+        "validating an already-merged PR, PL at verify",
+        _later_project(created_at=T0 + 600, agent_stage="verify", agent_stage_at=T0 + 900),
+        [],
+        StageResult("verify", note="PR merged · PL still at verify"),
+    ),
+    (
+        "validating an already-merged PR, a test task running",
+        _later_project(created_at=T0 + 600),
+        [_task("recipe", "running", kind="test")],
+        StageResult("verify", note="PR merged · 1 task still open"),
+    ),
+    (
+        "validation done: the PL claims merged",
+        _later_project(created_at=T0 + 600, agent_stage="merged", agent_stage_at=T0 + 3600),
+        [],
+        StageResult("merged"),
+    ),
+    (
+        "a row reconcile backfilled after the merge",
+        _later_project(created_at=T0 + 600, created_by="reconcile"),
+        [],
+        StageResult("merged"),
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("project", "tasks", "expected"),
+    [case[1:] for case in AFTER_MERGE],
+    ids=[case[0] for case in AFTER_MERGE],
+)
+def test_a_merged_project_that_still_works_shows_that_work(
+    project: FactoryProject, tasks: list[FactoryTask], expected: StageResult
+) -> None:
+    result = derive_stage(project, [MERGED_9774], _pl(), [], tasks=tasks)  # type: ignore[arg-type]
+    assert result == expected
+
+
+def test_without_a_merge_time_only_open_tasks_count() -> None:
+    unknown = FactoryPr(id="8" * 32, factory_id=FID, repo="r/r", number=7, url="u", state="merged")
+    claimed = _later_project(created_at=T0, agent_stage="building", agent_stage_at=T0)
+    assert work_after_merge(claimed, [unknown]) is None
+    assert work_after_merge(claimed, [unknown], [_task("docs", "running")]) == (
+        "building",
+        "PR merged · 1 task still open",
+    )
+
+
+def test_a_done_pl_is_done_even_with_open_tasks() -> None:
+    result = derive_stage(
+        _later_project(created_at=T0 + 600),
+        [MERGED_9774],
+        _pl(**{LABEL_STATE: "done"}),  # type: ignore[arg-type]
+        [],
+        tasks=[_task("docs", "planned")],
+    )
+    assert result == StageResult("done")

@@ -1,19 +1,16 @@
 /**
  * The pipeline as seven small dots for a dense row: passed steps filled, the
- * current one ringed in the stage's tone (pulsing while the PL works), later
- * ones hollow. The stage name and its age follow.
+ * current one ringed in the stage's tone (pulsing while the PL works or
+ * starts), later ones hollow. The stage name and its age follow, and for a
+ * queued project why: "Starting PL · 2m · Provisioning sandbox",
+ * "Queued · 3 projects ahead".
  */
 
 import type { ProjectView } from "@/lib/factoryApi";
 import { cn } from "@/lib/utils";
 import { stepStates } from "../board/StageStepper";
-import {
-  type FactoryTone,
-  STAGE_SHORT_LABEL,
-  TONE_DOT,
-  formatElapsed,
-  stageTone,
-} from "../factoryFormat";
+import { type FactoryTone, TONE_DOT, formatElapsed } from "../factoryFormat";
+import { stageHeadline } from "./stageHeadline";
 
 const TONE_RING: Record<FactoryTone, string> = {
   pass: "ring-success/35",
@@ -44,20 +41,16 @@ export function StageDots({
   nowS: number;
   showAge?: boolean;
 }) {
-  const tone = stageTone(project.stage, project.overlay);
-  const age = formatElapsed(nowS - project.stage_since);
-  const running = project.pl?.running === true;
-  // A project held on its dependencies says so instead of a bare "Queued".
-  const waiting = project.overlay === "waiting";
-  const deps = project.depends_on ?? [];
-  const label = waiting ? "Waiting" : STAGE_SHORT_LABEL[project.stage];
-  const title = waiting
-    ? `Waiting on ${deps.length ? deps.join(", ") : "its dependencies"}`
-    : `${STAGE_SHORT_LABEL[project.stage]}${project.overlay ? ` · ${project.overlay}` : ""}`;
+  // A queued project says why (starting PL, no free pod, held on its dependencies).
+  const { label, detail, ageS, title, tone } = stageHeadline(project, nowS);
+  const age = formatElapsed(ageS);
+  const starting = project.stage === "queued" && project.start?.state === "starting";
+  const running = project.pl?.running === true || starting;
   return (
     <span
       data-testid={`stage-dots-${project.slug}`}
       data-stage={project.stage}
+      data-start={project.stage === "queued" ? (project.start?.state ?? undefined) : undefined}
       className="inline-flex min-w-0 items-center gap-2"
       title={title}
     >
@@ -80,9 +73,17 @@ export function StageDots({
           />
         ))}
       </span>
-      <span className={cn("shrink-0 text-sm", LABEL_TONE[tone])}>{label}</span>
+      <span className={cn("shrink-0 text-sm whitespace-nowrap", LABEL_TONE[tone])}>{label}</span>
       {showAge && age && (
         <span className="shrink-0 text-xs text-muted-foreground tabular-nums">{age}</span>
+      )}
+      {detail && (
+        <span
+          data-testid={`stage-detail-${project.slug}`}
+          className="max-w-44 min-w-0 truncate text-xs text-muted-foreground"
+        >
+          {detail}
+        </span>
       )}
     </span>
   );

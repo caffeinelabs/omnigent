@@ -226,6 +226,7 @@ export function RoomThreadView({
     snapshot,
     proposals: proposals.data?.data ?? null,
     people: people.data?.data ?? null,
+    issues: issues.data ?? null,
     viewerId: snapshot.viewer?.user_id ?? null,
   };
   const cardData: RoomCardData = useMemo(
