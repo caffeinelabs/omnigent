@@ -5,7 +5,7 @@
       "factory_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
       "factory_name": "Atlas factory",
       "generated_at": 1793017800,
-      "headline": "Working on 4 projects. 8 things wait on you.",
+      "headline": "8 things wait on you · 2 projects in progress · 1 queued",
       "state": "working",
       "waiting": [
         {
@@ -20,6 +20,10 @@
           "since": 1793012400,
           "project": null,
           "severity": null,
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-35"
         },
         {
@@ -34,6 +38,10 @@
           "since": 1793014740,
           "project": null,
           "severity": null,
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-33"
         },
         {
@@ -48,6 +56,10 @@
           "since": 1793015760,
           "project": "cache-warm",
           "severity": null,
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-3"
         },
         {
@@ -62,6 +74,10 @@
           "since": 1793015760,
           "project": "cache-warm",
           "severity": "critical",
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/12"
         },
         {
@@ -76,6 +92,10 @@
           "since": 1793017080,
           "project": "db-version",
           "severity": null,
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-31"
         },
         {
@@ -90,6 +110,10 @@
           "since": 1793017200,
           "project": null,
           "severity": null,
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-34"
         },
         {
@@ -104,6 +128,10 @@
           "since": 1793016300,
           "project": "db-version",
           "severity": "warning",
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/13"
         },
         {
@@ -118,6 +146,10 @@
           "since": 1793017040,
           "project": "api-version",
           "severity": null,
+          "holds": true,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
         },
         {
@@ -132,6 +164,10 @@
           "since": 1793017080,
           "project": "db-version",
           "severity": null,
+          "holds": true,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-2"
         }
       ],
@@ -149,46 +185,12 @@
             "title": "perf(api): warm the session cache on boot",
             "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/0fcd093453fc5627913e79b8c97d72d7"
           },
+          "status": "PR #9655 is a draft",
+          "status_source": "facts",
           "doing": "relaunch failed 3× (runner_unavailable)",
           "problem": "its lead agent stopped · relaunch failed 3×",
           "running": false,
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/cache-warm"
-        },
-        {
-          "project": "db-version",
-          "title": "DB version endpoint",
-          "stage": "building",
-          "since": 1793014500,
-          "pr": {
-            "id": "8f15c0f9a98e5831a39615fb58f35036",
-            "number": 9631,
-            "state": "open",
-            "ready": false,
-            "title": "feat(api): GET /db/version returns the latest applied migration",
-            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/8f15c0f9a98e5831a39615fb58f35036"
-          },
-          "doing": "Waiting on D-2 (Mia) · T-4 implement exhausted 3/3",
-          "problem": "blocked until someone answers D-2 · T-4 implement exhausted",
-          "running": true,
-          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/db-version"
-        },
-        {
-          "project": "api-version",
-          "title": "API version endpoint",
-          "stage": "ready",
-          "since": 1793017040,
-          "pr": {
-            "id": "f74d5967c53455139e85ba1b402a5bd4",
-            "number": 9630,
-            "state": "open",
-            "ready": true,
-            "title": "feat(api): GET /version and a Settings \"API version\" row",
-            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
-          },
-          "doing": "READY FOR HUMAN MERGE #9630",
-          "problem": null,
-          "running": false,
-          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/api-version"
         },
         {
           "project": "ux-badge",
@@ -203,6 +205,8 @@
             "title": "feat(ux): environment badge in the header",
             "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/701d3bdde13d58d9b594bfdf89457308"
           },
+          "status": "PR #9653: in agent review",
+          "status_source": "facts",
           "doing": "review round 2/3 on !9653",
           "problem": null,
           "running": true,
@@ -222,6 +226,20 @@
       "lead": {
         "who": "Atlas",
         "text": "6 projects in flight · C-4 waiting for operators · !9630 ready for you",
+        "parts": [
+          {
+            "text": "6 projects in flight · C-4 waiting for operators · ",
+            "href": null
+          },
+          {
+            "text": "!9630",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
+          },
+          {
+            "text": " ready for you",
+            "href": null
+          }
+        ],
         "since": 1793017560,
         "session_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
         "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/agents/f4f4ba9c77725331b12f0fa7072dc4d3"
@@ -268,16 +286,17 @@
       "counts": {
         "waiting_for_you": 8,
         "waiting_total": 9,
-        "working": 4,
+        "working": 2,
         "queued": 1,
-        "cant_start": 0
+        "cant_start": 0,
+        "held": 2
       }
     },
     "operator": {
       "factory_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
       "factory_name": "Atlas factory",
       "generated_at": 1793017800,
-      "headline": "Working on 4 projects. 6 things wait on you.",
+      "headline": "6 things wait on you · 2 projects in progress · 1 queued",
       "state": "working",
       "waiting": [
         {
@@ -292,6 +311,10 @@
           "since": 1793014740,
           "project": null,
           "severity": null,
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-33"
         },
         {
@@ -306,6 +329,10 @@
           "since": 1793015760,
           "project": "cache-warm",
           "severity": "critical",
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/12"
         },
         {
@@ -320,6 +347,10 @@
           "since": 1793017080,
           "project": "db-version",
           "severity": null,
+          "holds": true,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-2"
         },
         {
@@ -334,6 +365,10 @@
           "since": 1793017080,
           "project": "db-version",
           "severity": null,
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-31"
         },
         {
@@ -348,6 +383,10 @@
           "since": 1793016300,
           "project": "db-version",
           "severity": "warning",
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/13"
         },
         {
@@ -362,6 +401,10 @@
           "since": 1793017040,
           "project": "api-version",
           "severity": null,
+          "holds": true,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
         },
         {
@@ -376,6 +419,10 @@
           "since": 1793012400,
           "project": null,
           "severity": null,
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-35"
         },
         {
@@ -390,6 +437,10 @@
           "since": 1793015760,
           "project": "cache-warm",
           "severity": null,
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-3"
         },
         {
@@ -404,6 +455,10 @@
           "since": 1793017200,
           "project": null,
           "severity": null,
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-34"
         }
       ],
@@ -421,46 +476,12 @@
             "title": "perf(api): warm the session cache on boot",
             "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/0fcd093453fc5627913e79b8c97d72d7"
           },
+          "status": "PR #9655 is a draft",
+          "status_source": "facts",
           "doing": "relaunch failed 3× (runner_unavailable)",
           "problem": "its lead agent stopped · relaunch failed 3×",
           "running": false,
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/cache-warm"
-        },
-        {
-          "project": "db-version",
-          "title": "DB version endpoint",
-          "stage": "building",
-          "since": 1793014500,
-          "pr": {
-            "id": "8f15c0f9a98e5831a39615fb58f35036",
-            "number": 9631,
-            "state": "open",
-            "ready": false,
-            "title": "feat(api): GET /db/version returns the latest applied migration",
-            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/8f15c0f9a98e5831a39615fb58f35036"
-          },
-          "doing": "Waiting on D-2 (Mia) · T-4 implement exhausted 3/3",
-          "problem": "blocked until someone answers D-2 · T-4 implement exhausted",
-          "running": true,
-          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/db-version"
-        },
-        {
-          "project": "api-version",
-          "title": "API version endpoint",
-          "stage": "ready",
-          "since": 1793017040,
-          "pr": {
-            "id": "f74d5967c53455139e85ba1b402a5bd4",
-            "number": 9630,
-            "state": "open",
-            "ready": true,
-            "title": "feat(api): GET /version and a Settings \"API version\" row",
-            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
-          },
-          "doing": "READY FOR HUMAN MERGE #9630",
-          "problem": null,
-          "running": false,
-          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/api-version"
         },
         {
           "project": "ux-badge",
@@ -475,6 +496,8 @@
             "title": "feat(ux): environment badge in the header",
             "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/701d3bdde13d58d9b594bfdf89457308"
           },
+          "status": "PR #9653: in agent review",
+          "status_source": "facts",
           "doing": "review round 2/3 on !9653",
           "problem": null,
           "running": true,
@@ -494,6 +517,20 @@
       "lead": {
         "who": "Atlas",
         "text": "6 projects in flight · C-4 waiting for operators · !9630 ready for you",
+        "parts": [
+          {
+            "text": "6 projects in flight · C-4 waiting for operators · ",
+            "href": null
+          },
+          {
+            "text": "!9630",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
+          },
+          {
+            "text": " ready for you",
+            "href": null
+          }
+        ],
         "since": 1793017560,
         "session_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
         "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/agents/f4f4ba9c77725331b12f0fa7072dc4d3"
@@ -540,16 +577,17 @@
       "counts": {
         "waiting_for_you": 6,
         "waiting_total": 9,
-        "working": 4,
+        "working": 2,
         "queued": 1,
-        "cant_start": 0
+        "cant_start": 0,
+        "held": 2
       }
     },
     "viewer": {
       "factory_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
       "factory_name": "Atlas factory",
       "generated_at": 1793017800,
-      "headline": "Working on 4 projects. Nothing waits on you.",
+      "headline": "2 projects in progress · 1 queued · 9 things wait on others",
       "state": "working",
       "waiting": [
         {
@@ -564,6 +602,10 @@
           "since": 1793012400,
           "project": null,
           "severity": null,
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-35"
         },
         {
@@ -578,6 +620,10 @@
           "since": 1793014740,
           "project": null,
           "severity": null,
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-33"
         },
         {
@@ -592,6 +638,10 @@
           "since": 1793015760,
           "project": "cache-warm",
           "severity": null,
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-3"
         },
         {
@@ -606,6 +656,10 @@
           "since": 1793015760,
           "project": "cache-warm",
           "severity": "critical",
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/12"
         },
         {
@@ -620,6 +674,10 @@
           "since": 1793017080,
           "project": "db-version",
           "severity": null,
+          "holds": true,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-2"
         },
         {
@@ -634,6 +692,10 @@
           "since": 1793017080,
           "project": "db-version",
           "severity": null,
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-31"
         },
         {
@@ -648,6 +710,10 @@
           "since": 1793017200,
           "project": null,
           "severity": null,
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-34"
         },
         {
@@ -662,6 +728,10 @@
           "since": 1793016300,
           "project": "db-version",
           "severity": "warning",
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/13"
         },
         {
@@ -676,6 +746,10 @@
           "since": 1793017040,
           "project": "api-version",
           "severity": null,
+          "holds": true,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
         }
       ],
@@ -693,46 +767,12 @@
             "title": "perf(api): warm the session cache on boot",
             "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/0fcd093453fc5627913e79b8c97d72d7"
           },
+          "status": "PR #9655 is a draft",
+          "status_source": "facts",
           "doing": "relaunch failed 3× (runner_unavailable)",
           "problem": "its lead agent stopped · relaunch failed 3×",
           "running": false,
           "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/cache-warm"
-        },
-        {
-          "project": "db-version",
-          "title": "DB version endpoint",
-          "stage": "building",
-          "since": 1793014500,
-          "pr": {
-            "id": "8f15c0f9a98e5831a39615fb58f35036",
-            "number": 9631,
-            "state": "open",
-            "ready": false,
-            "title": "feat(api): GET /db/version returns the latest applied migration",
-            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/8f15c0f9a98e5831a39615fb58f35036"
-          },
-          "doing": "Waiting on D-2 (Mia) · T-4 implement exhausted 3/3",
-          "problem": "blocked until someone answers D-2 · T-4 implement exhausted",
-          "running": true,
-          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/db-version"
-        },
-        {
-          "project": "api-version",
-          "title": "API version endpoint",
-          "stage": "ready",
-          "since": 1793017040,
-          "pr": {
-            "id": "f74d5967c53455139e85ba1b402a5bd4",
-            "number": 9630,
-            "state": "open",
-            "ready": true,
-            "title": "feat(api): GET /version and a Settings \"API version\" row",
-            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
-          },
-          "doing": "READY FOR HUMAN MERGE #9630",
-          "problem": null,
-          "running": false,
-          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/api-version"
         },
         {
           "project": "ux-badge",
@@ -747,6 +787,8 @@
             "title": "feat(ux): environment badge in the header",
             "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/701d3bdde13d58d9b594bfdf89457308"
           },
+          "status": "PR #9653: in agent review",
+          "status_source": "facts",
           "doing": "review round 2/3 on !9653",
           "problem": null,
           "running": true,
@@ -766,6 +808,20 @@
       "lead": {
         "who": "Atlas",
         "text": "6 projects in flight · C-4 waiting for operators · !9630 ready for you",
+        "parts": [
+          {
+            "text": "6 projects in flight · C-4 waiting for operators · ",
+            "href": null
+          },
+          {
+            "text": "!9630",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
+          },
+          {
+            "text": " ready for you",
+            "href": null
+          }
+        ],
         "since": 1793017560,
         "session_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
         "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/agents/f4f4ba9c77725331b12f0fa7072dc4d3"
@@ -812,9 +868,687 @@
       "counts": {
         "waiting_for_you": 0,
         "waiting_total": 9,
-        "working": 4,
+        "working": 2,
         "queued": 1,
-        "cant_start": 0
+        "cant_start": 0,
+        "held": 2
+      }
+    }
+  },
+  "live": {
+    "snapshot": {
+      "factory": {
+        "id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+        "name": "Atlas factory",
+        "state": "active",
+        "started_at": 1793340000,
+        "root_session_id": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "cost_usd": 170.0,
+        "next_beats": [
+          {
+            "session_id": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+            "title": "Atlas",
+            "at": 1793610000
+          }
+        ]
+      },
+      "projects": [
+        {
+          "slug": "app-9826",
+          "title": "App 9826",
+          "stage": "ready",
+          "stage_since": 1793563200,
+          "overlay": null,
+          "overlay_reason": null,
+          "pl": {
+            "session_id": "pl-app-9826",
+            "title": "PL · app-9826",
+            "role": "project_lead",
+            "status": "idle",
+            "running": false,
+            "summary": "PR #9826 — PR #9826 @00d863e READY FOR HUMAN MERGE (verified)",
+            "last_activity_at": null,
+            "url": "/sessions/pl-app-9826"
+          },
+          "team": [],
+          "pr_ids": ["p9826"],
+          "provisioning": null,
+          "paused_by": null,
+          "kind": "work",
+          "status": "active",
+          "closed_at": null
+        },
+        {
+          "slug": "app-9827",
+          "title": "App 9827",
+          "stage": "ready",
+          "stage_since": 1793566800,
+          "overlay": null,
+          "overlay_reason": null,
+          "pl": {
+            "session_id": "pl-app-9827",
+            "title": "PL · app-9827",
+            "role": "project_lead",
+            "status": "idle",
+            "running": false,
+            "summary": "PR #9827 — PR #9827 @00d863e READY FOR HUMAN MERGE (verified)",
+            "last_activity_at": null,
+            "url": "/sessions/pl-app-9827"
+          },
+          "team": [],
+          "pr_ids": ["p9827"],
+          "provisioning": null,
+          "paused_by": null,
+          "kind": "work",
+          "status": "active",
+          "closed_at": null
+        },
+        {
+          "slug": "app-9828",
+          "title": "App 9828",
+          "stage": "ready",
+          "stage_since": 1793570400,
+          "overlay": null,
+          "overlay_reason": null,
+          "pl": {
+            "session_id": "pl-app-9828",
+            "title": "PL · app-9828",
+            "role": "project_lead",
+            "status": "idle",
+            "running": false,
+            "summary": "PR #9828 — PR #9828 @00d863e READY FOR HUMAN MERGE (verified)",
+            "last_activity_at": null,
+            "url": "/sessions/pl-app-9828"
+          },
+          "team": [],
+          "pr_ids": ["p9828"],
+          "provisioning": null,
+          "paused_by": null,
+          "kind": "work",
+          "status": "active",
+          "closed_at": null
+        },
+        {
+          "slug": "app-9829",
+          "title": "App 9829",
+          "stage": "ready",
+          "stage_since": 1793574000,
+          "overlay": null,
+          "overlay_reason": null,
+          "pl": {
+            "session_id": "pl-app-9829",
+            "title": "PL · app-9829",
+            "role": "project_lead",
+            "status": "idle",
+            "running": false,
+            "summary": "PR #9829 — PR #9829 @00d863e READY FOR HUMAN MERGE (verified)",
+            "last_activity_at": null,
+            "url": "/sessions/pl-app-9829"
+          },
+          "team": [],
+          "pr_ids": ["p9829"],
+          "provisioning": null,
+          "paused_by": null,
+          "kind": "work",
+          "status": "active",
+          "closed_at": null
+        },
+        {
+          "slug": "validate-build-tier",
+          "title": "Validate build tier",
+          "stage": "verify",
+          "stage_since": 1793595600,
+          "overlay": null,
+          "overlay_reason": null,
+          "pl": {
+            "session_id": "pl-vbt",
+            "title": "PL · validate-build-tier",
+            "role": "project_lead",
+            "status": "running",
+            "running": true,
+            "summary": null,
+            "last_activity_at": null,
+            "url": "/sessions/pl-vbt"
+          },
+          "team": [],
+          "pr_ids": ["p9774"],
+          "provisioning": null,
+          "paused_by": null,
+          "kind": "work",
+          "status": "active",
+          "closed_at": null,
+          "stage_note": "PR merged · 1 task still open",
+          "active_task": {
+            "ref": "T-9",
+            "title": "Check the build tier on a preview",
+            "state": "running"
+          }
+        },
+        {
+          "slug": "asks",
+          "title": "Asks",
+          "stage": "building",
+          "stage_since": 1793592000,
+          "overlay": "blocked",
+          "overlay_reason": "Blocked on D-9",
+          "pl": {
+            "session_id": "pl-asks",
+            "title": "PL · asks",
+            "role": "project_lead",
+            "status": "idle",
+            "running": false,
+            "summary": null,
+            "last_activity_at": null,
+            "url": "/sessions/pl-asks"
+          },
+          "team": [],
+          "pr_ids": [],
+          "provisioning": null,
+          "paused_by": null,
+          "kind": "work",
+          "status": "active",
+          "closed_at": null
+        },
+        {
+          "slug": "billing",
+          "title": "Billing",
+          "stage": "queued",
+          "stage_since": 1793598600,
+          "overlay": null,
+          "overlay_reason": null,
+          "pl": null,
+          "team": [],
+          "pr_ids": [],
+          "provisioning": null,
+          "paused_by": null,
+          "kind": "work",
+          "status": "active",
+          "closed_at": null,
+          "start": {
+            "state": "queued",
+            "phase": "pod_cap",
+            "label": "All 12 pods in use",
+            "ahead": 2
+          }
+        },
+        {
+          "slug": "search",
+          "title": "Search",
+          "stage": "queued",
+          "stage_since": 1793599080,
+          "overlay": null,
+          "overlay_reason": null,
+          "pl": {
+            "session_id": "pl-search",
+            "title": "PL · search",
+            "role": "project_lead",
+            "status": "idle",
+            "running": false,
+            "summary": null,
+            "last_activity_at": null,
+            "url": "/sessions/pl-search"
+          },
+          "team": [],
+          "pr_ids": [],
+          "provisioning": null,
+          "paused_by": null,
+          "kind": "work",
+          "status": "active",
+          "closed_at": null,
+          "start": {
+            "state": "starting",
+            "phase": "cloning",
+            "label": "Cloning repository"
+          }
+        },
+        {
+          "slug": "owned",
+          "title": "Owned",
+          "stage": "ready",
+          "stage_since": 1793588400,
+          "overlay": null,
+          "overlay_reason": null,
+          "pl": {
+            "session_id": "pl-owned",
+            "title": "PL · owned",
+            "role": "project_lead",
+            "status": "idle",
+            "running": false,
+            "summary": null,
+            "last_activity_at": null,
+            "url": "/sessions/pl-owned"
+          },
+          "team": [],
+          "pr_ids": ["p9900"],
+          "provisioning": null,
+          "paused_by": null,
+          "kind": "work",
+          "status": "active",
+          "closed_at": null,
+          "tasks_summary": {
+            "total": 2,
+            "done": 1,
+            "running": 1,
+            "ready": 0
+          }
+        }
+      ],
+      "prs": [
+        {
+          "id": "p9826",
+          "number": 9826,
+          "project_slug": "app-9826",
+          "title": "PR 9826",
+          "state": "open",
+          "ready": true,
+          "ready_since": 1793566800,
+          "repo": "caffeinelabs/app"
+        },
+        {
+          "id": "p9827",
+          "number": 9827,
+          "project_slug": "app-9827",
+          "title": "PR 9827",
+          "state": "open",
+          "ready": true,
+          "ready_since": 1793570400,
+          "repo": "caffeinelabs/app"
+        },
+        {
+          "id": "p9828",
+          "number": 9828,
+          "project_slug": "app-9828",
+          "title": "PR 9828",
+          "state": "open",
+          "ready": true,
+          "ready_since": 1793574000,
+          "repo": "caffeinelabs/app"
+        },
+        {
+          "id": "p9829",
+          "number": 9829,
+          "project_slug": "app-9829",
+          "title": "PR 9829",
+          "state": "open",
+          "ready": true,
+          "ready_since": 1793577600,
+          "repo": "caffeinelabs/app"
+        },
+        {
+          "id": "p9774",
+          "number": 9774,
+          "project_slug": "validate-build-tier",
+          "title": "PR 9774",
+          "state": "merged",
+          "ready": false,
+          "ready_since": null,
+          "repo": "caffeinelabs/app"
+        },
+        {
+          "id": "p9900",
+          "number": 9900,
+          "project_slug": "owned",
+          "title": "PR 9900",
+          "state": "open",
+          "ready": true,
+          "ready_since": 1793595600,
+          "repo": "caffeinelabs/app"
+        }
+      ],
+      "decisions": [
+        {
+          "id": "d9",
+          "ref": "D-9",
+          "status": "open",
+          "source": "agent",
+          "blocking": true,
+          "question": "Question 9?",
+          "asked_by_session_id": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "asked_by_title": "Atlas",
+          "asked_by_role": "lead",
+          "project_slug": "asks",
+          "assignee": null,
+          "claimed_by": null,
+          "created_at": 1793588400,
+          "deadline_at": 1793613600,
+          "deadline_effect": "expires and nothing is started",
+          "notified": [
+            {
+              "user_id": "luka@caffeine.ai",
+              "at": 1793588400,
+              "stage": "new",
+              "ok": true
+            },
+            {
+              "user_id": "luka@caffeine.ai",
+              "at": 1793595600,
+              "stage": "r4h",
+              "ok": false
+            }
+          ]
+        }
+      ],
+      "members": [
+        {
+          "session_id": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+          "title": "Atlas",
+          "role": "lead",
+          "status": "idle",
+          "running": false,
+          "summary": "10 proj (4 done) · 4 PRs ready · 0 ⚠ · #9826 #9827 #9828 #9829 #4242 verified on previews · D-9 open · waiting for a human merge since this morning",
+          "last_activity_at": 1793596080,
+          "url": "/sessions/a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+        }
+      ],
+      "totals": {
+        "usd_per_h": 3.1
+      },
+      "health": {
+        "github": {
+          "state": "ok"
+        }
+      },
+      "server_time": 1793599200,
+      "viewer": {
+        "user_id": "luka@caffeine.ai",
+        "level": 4
+      }
+    },
+    "notified": {
+      "pr:caffeinelabs/app#9826": [
+        {
+          "user_id": "luka@caffeine.ai",
+          "at": 1793574000,
+          "stage": "ready",
+          "ok": true
+        },
+        {
+          "user_id": "mia@caffeine.ai",
+          "at": 1793574000,
+          "stage": "ready",
+          "ok": true
+        }
+      ]
+    },
+    "owners": {
+      "owned": "mia@caffeine.ai"
+    },
+    "summary": {
+      "factory_id": "f4f4ba9c77725331b12f0fa7072dc4d3",
+      "factory_name": "Atlas factory",
+      "generated_at": 1793599200,
+      "headline": "5 things wait on you · 2 projects in progress · 2 queued",
+      "state": "working",
+      "waiting": [
+        {
+          "kind": "decision",
+          "key": "decision:d9",
+          "ref": "D-9",
+          "text": "answer Atlas",
+          "detail": "Question 9?",
+          "who": "operators",
+          "for_you": true,
+          "urgent": true,
+          "since": 1793588400,
+          "project": "asks",
+          "severity": null,
+          "holds": true,
+          "deadline_at": 1793613600,
+          "deadline_effect": "expires and nothing is started",
+          "slack": [
+            {
+              "at": 1793588400,
+              "stage": "new"
+            }
+          ],
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-9"
+        },
+        {
+          "kind": "pr",
+          "key": "pr:p9826",
+          "ref": "PR #9826",
+          "text": "review and merge",
+          "detail": "PR 9826",
+          "who": "operators",
+          "for_you": true,
+          "urgent": false,
+          "since": 1793566800,
+          "project": "app-9826",
+          "severity": null,
+          "holds": true,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [
+            {
+              "at": 1793574000,
+              "stage": "ready"
+            }
+          ],
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/p9826"
+        },
+        {
+          "kind": "pr",
+          "key": "pr:p9827",
+          "ref": "PR #9827",
+          "text": "review and merge",
+          "detail": "PR 9827",
+          "who": "operators",
+          "for_you": true,
+          "urgent": false,
+          "since": 1793570400,
+          "project": "app-9827",
+          "severity": null,
+          "holds": true,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/p9827"
+        },
+        {
+          "kind": "pr",
+          "key": "pr:p9828",
+          "ref": "PR #9828",
+          "text": "review and merge",
+          "detail": "PR 9828",
+          "who": "operators",
+          "for_you": true,
+          "urgent": false,
+          "since": 1793574000,
+          "project": "app-9828",
+          "severity": null,
+          "holds": true,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/p9828"
+        },
+        {
+          "kind": "pr",
+          "key": "pr:p9829",
+          "ref": "PR #9829",
+          "text": "review and merge",
+          "detail": "PR 9829",
+          "who": "operators",
+          "for_you": true,
+          "urgent": false,
+          "since": 1793577600,
+          "project": "app-9829",
+          "severity": null,
+          "holds": true,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/p9829"
+        },
+        {
+          "kind": "pr",
+          "key": "pr:p9900",
+          "ref": "PR #9900",
+          "text": "review and merge",
+          "detail": "PR 9900",
+          "who": "mia",
+          "for_you": false,
+          "urgent": false,
+          "since": 1793595600,
+          "project": "owned",
+          "severity": null,
+          "holds": false,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "slack": [],
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/p9900"
+        }
+      ],
+      "working": [
+        {
+          "project": "owned",
+          "title": "Owned",
+          "stage": "ready",
+          "since": 1793588400,
+          "pr": {
+            "id": "p9900",
+            "number": 9900,
+            "state": "open",
+            "ready": true,
+            "title": "PR 9900",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/p9900"
+          },
+          "status": "PR #9900 ready for a merge",
+          "status_source": "facts",
+          "doing": null,
+          "problem": null,
+          "running": false,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/owned"
+        },
+        {
+          "project": "validate-build-tier",
+          "title": "Validate build tier",
+          "stage": "verify",
+          "since": 1793595600,
+          "pr": {
+            "id": "p9774",
+            "number": 9774,
+            "state": "merged",
+            "ready": false,
+            "title": "PR 9774",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/p9774"
+          },
+          "status": "PR #9774 merged · working on T-9: Check the build tier on a preview",
+          "status_source": "facts",
+          "doing": null,
+          "problem": null,
+          "running": true,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/validate-build-tier"
+        }
+      ],
+      "next": [
+        {
+          "project": "billing",
+          "title": "Billing",
+          "reason": "waits for a free machine (all 12 pods in use, 2 projects ahead)",
+          "problem": null,
+          "since": 1793598600,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/billing"
+        },
+        {
+          "project": "search",
+          "title": "Search",
+          "reason": "starting up: copying the repository",
+          "problem": null,
+          "since": 1793599080,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/search"
+        }
+      ],
+      "lead": {
+        "who": "Atlas",
+        "text": "10 proj (4 done) · 4 PRs ready · 0 ⚠ · #9826 #9827 #9828 #9829 #4242 verified on previews · D-9 open · waiting for a human merge since…",
+        "parts": [
+          {
+            "text": "10 proj (4 done) · 4 PRs ready · 0 ⚠ · ",
+            "href": null
+          },
+          {
+            "text": "#9826",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/p9826"
+          },
+          {
+            "text": " ",
+            "href": null
+          },
+          {
+            "text": "#9827",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/p9827"
+          },
+          {
+            "text": " ",
+            "href": null
+          },
+          {
+            "text": "#9828",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/p9828"
+          },
+          {
+            "text": " ",
+            "href": null
+          },
+          {
+            "text": "#9829",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/p9829"
+          },
+          {
+            "text": " #4242 verified on previews · ",
+            "href": null
+          },
+          {
+            "text": "D-9",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/decisions?decision=D-9"
+          },
+          {
+            "text": " open · waiting for a human merge since…",
+            "href": null
+          }
+        ],
+        "since": 1793596080,
+        "session_id": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/agents/a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+      },
+      "check_in": {
+        "who": "Atlas",
+        "at": 1793610000,
+        "session_id": "a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1",
+        "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/agents/a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1a1"
+      },
+      "spend": {
+        "last_24h_usd": null,
+        "today_usd": null,
+        "usd_per_h": 3.1,
+        "total_usd": 170.0,
+        "idle": false,
+        "idle_since": null,
+        "idle_spend": false,
+        "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/insights"
+      },
+      "health": {
+        "state": "attention",
+        "items": [
+          {
+            "kind": "blocked",
+            "text": "asks: blocked until someone answers D-9",
+            "by": null,
+            "note": null,
+            "project": "asks",
+            "since": 1793592000,
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/asks"
+          }
+        ]
+      },
+      "counts": {
+        "waiting_for_you": 5,
+        "waiting_total": 6,
+        "working": 2,
+        "queued": 2,
+        "cant_start": 0,
+        "held": 5
       }
     }
   }

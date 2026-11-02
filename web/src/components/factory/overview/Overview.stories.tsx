@@ -5,6 +5,9 @@ import { OverviewPage } from "@/pages/factory/OverviewPage";
 import { LIVE_RUN_FACTORY_ID } from "../__fixtures__/liveRun";
 import { storySnapshot } from "../board/__fixtures__/boardFixtures";
 import { CockpitStory, type CockpitStoryOptions, SNAPSHOT_PATH } from "../board/boardStoryKit";
+import { round3IssueList } from "../agents/__fixtures__/opsFixtures";
+import { statusSummaryOf } from "./__fixtures__/nowFixtures";
+import { liveNotified, liveSnapshot } from "./__fixtures__/nowScenarios";
 import {
   changesRequestedEvents,
   changesRequestedSnapshot,
@@ -96,6 +99,40 @@ export const RoundTwoServer = overview({
   events: undefined,
   routes: { [SPANS_PATH]: { error: 404, message: "not found" } },
 });
+
+// ── The live factory, 2 Nov 11:45 UTC ─────────────────────────
+
+function liveFactory(options: CockpitStoryOptions = {}): Story {
+  const snapshot = liveSnapshot();
+  const path = `/v1/factory/factories/${snapshot.factory.id}/status-summary`;
+  // As the server says it: the open incidents the issues route serves wait too.
+  const body = statusSummaryOf(snapshot, {
+    incidents: round3IssueList(),
+    last24hUsd: 61.44,
+    notified: liveNotified(),
+  });
+  return overview({ snapshot, routes: { [path]: { body } }, ...options });
+}
+
+/**
+ * Four PRs wait on Luka's merge and two incidents on his role: Now lists the
+ * first five with their next step (Review →, Open) and Slack DMs; Needs you
+ * below lists only the rest instead of all of them again.
+ */
+export const LiveFactory = liveFactory();
+
+export const LiveFactoryDark = liveFactory({ theme: "dark" });
+
+export const LiveFactoryMobile = phone(liveFactory());
+
+/**
+ * A transcript's decision link on a phone (no dock): `?decision=D-35` opens
+ * that decision's card in Now, which lists it, and Needs you leaves it out.
+ * Now's incident rows carry their first runbook step beside Open.
+ */
+export const DecisionLinkMobile = phone(overview({ search: "?decision=D-35" }));
+
+export const DecisionLinkMobileDark = phone(overview({ search: "?decision=D-35", theme: "dark" }));
 
 // ── After a human review ───────────────────────────────────────
 

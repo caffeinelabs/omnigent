@@ -160,6 +160,16 @@ export function splitNeedsYou(
   return { mine, role, all: [...mine, ...role, ...other] };
 }
 
+/** `split` without the items `shown` names (what the Now card already lists). */
+export function withoutShown(
+  split: NeedsYouSplit,
+  shown: ReadonlySet<string> | null | undefined,
+): NeedsYouSplit {
+  if (!shown || shown.size === 0) return split;
+  const keep = (items: NeedsItem[]) => items.filter((item) => !shown.has(item.key));
+  return { mine: keep(split.mine), role: keep(split.role), all: keep(split.all) };
+}
+
 export type NeedsTab = "mine" | "role" | "all";
 
 /** The tab to open on: mine when something is mine, else my role's, else all. */

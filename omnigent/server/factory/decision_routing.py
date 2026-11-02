@@ -85,7 +85,14 @@ def human_owner_of(deps: FactoryDeps, factory_id: str, project: str | None) -> s
     owner = (row.charter or {}).get("human_owner") if row is not None else None
     if not isinstance(owner, str) or not owner.strip():
         return None
-    person = _roster_match(deps.factory_store.list_people(factory_id), owner)
+    return roster_owner(deps.factory_store.list_people(factory_id), owner)
+
+
+def roster_owner(people: list[FactoryPerson], value: str | None) -> str | None:
+    """:returns: Who a charter's ``human_owner`` names, when on the roster and not a viewer."""
+    if not isinstance(value, str) or not value.strip():
+        return None
+    person = _roster_match(people, value)
     return person.user_id if person is not None and person.role != "viewer" else None
 
 
@@ -316,4 +323,5 @@ __all__ = [
     "may_answer",
     "plan_escalations",
     "resolve_for",
+    "roster_owner",
 ]

@@ -541,6 +541,28 @@ async def test_snapshot_carries_the_tasks_summary(cockpit: Cockpit) -> None:
         "failed": 0,
         "critical_path_min": 165,
     }
+    assert project["active_task"] is None  # nothing started yet
+
+
+async def test_snapshot_names_the_task_in_hand(cockpit: Cockpit) -> None:
+    """Running beats in review beats blocked; the lowest number within a state."""
+    await _planned(cockpit)
+    store, fid = cockpit.store, cockpit.fid
+    store.upsert_task(fid, SLUG, "docs", state="blocked")
+    store.upsert_task(fid, SLUG, "tests", state="review")
+
+    async def _active() -> Any:
+        resp = await cockpit.client.get(
+            f"/v1/factory/factories/{fid}", headers={"X-Test-User": "alice"}
+        )
+        assert resp.status_code == 200, resp.text
+        snapshot.reset_cache()
+        [project] = [p for p in resp.json()["projects"] if p["slug"] == SLUG]
+        return project["active_task"]
+
+    assert await _active() == {"ref": "T-2", "title": "tests", "state": "review"}
+    store.upsert_task(fid, SLUG, "route", state="running")
+    assert await _active() == {"ref": "T-1", "title": "GET /version", "state": "running"}
 
 
 async def test_critical_path_weighs_observed_durations(cockpit: Cockpit) -> None:

@@ -10,6 +10,14 @@ import { factoryErrorFromResponse } from "./factoryApi";
 
 export type WaitingKind = "decision" | "pr" | "incident";
 
+/** One Slack DM the viewer got about a waiting item. */
+export interface StatusSlackReceipt {
+  at: number;
+  /** `new` / `ready` / `opened` (the first DM), `r4h` / `r24h` (reminders),
+   * `owners` (escalated) or `deadline` (last call). */
+  stage: string;
+}
+
 /** One thing that waits on a person. */
 export interface StatusWaitingItem {
   kind: WaitingKind;
@@ -29,6 +37,13 @@ export interface StatusWaitingItem {
   since: number;
   project?: string | null;
   severity?: string | null;
+  /** All its project still needs: the project is not also under Working on. */
+  holds?: boolean;
+  /** When an open decision defaults by itself, and what happens then. */
+  deadline_at?: number | null;
+  deadline_effect?: string | null;
+  /** The viewer's Slack DMs about it, oldest first. */
+  slack?: StatusSlackReceipt[];
   href: string;
 }
 
@@ -49,7 +64,11 @@ export interface StatusWorkingItem {
   /** When it entered its stage. */
   since: number;
   pr?: StatusWorkingPr | null;
-  /** Its lead agent's own one-liner. */
+  /** One plain line on where it is, from its stage, task and PR (never the raw label). */
+  status?: string;
+  /** `facts`, or `lead` when only the lead's own label (trimmed) says anything. */
+  status_source?: "facts" | "lead";
+  /** Its lead agent's own one-liner, verbatim: not for display. */
   doing?: string | null;
   /** Plain words for a blocked, failed or paused project. */
   problem?: string | null;
@@ -69,10 +88,18 @@ export interface StatusNextItem {
   href: string;
 }
 
-/** What the root lead (Atlas) last said it is doing. */
+/** A run of text that links when it names a page (a PR, decision or incident). */
+export interface StatusTextPart {
+  text: string;
+  href?: string | null;
+}
+
+/** What the root lead (Atlas) last said, trimmed at a word. */
 export interface StatusLeadNote {
   who: string;
   text: string;
+  /** `text` split so the ids it names link (newer servers). */
+  parts?: StatusTextPart[];
   /** When the lead was last active (the one-liner is at most this fresh). */
   since?: number | null;
   session_id: string;
@@ -128,6 +155,8 @@ export interface StatusCounts {
   queued: number;
   /** Queued projects that can't start (counted in `queued` too). */
   cant_start?: number;
+  /** Projects that only wait on people (not in `working`). */
+  held?: number;
 }
 
 /** The factory's "Now" for one viewer. */
@@ -135,7 +164,8 @@ export interface StatusSummary {
   factory_id: string;
   factory_name: string;
   generated_at: number;
-  /** One plain sentence without times (digests read it). */
+  /** One plain line without times, e.g. `4 PRs wait on you · 1 project in progress`
+   * (the card and the Slack digest both show it). */
   headline: string;
   state: "working" | "idle" | "paused" | "done";
   waiting: StatusWaitingItem[];
