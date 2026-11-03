@@ -1,0 +1,2705 @@
+{
+  "I-1": {
+    "breadcrumb": [
+      {
+        "level": "product",
+        "level_name": "Product",
+        "ref": "product",
+        "state": "needs",
+        "title": "Sample app (sample)"
+      },
+      {
+        "level": "need",
+        "level_name": "Need",
+        "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
+        "state": "needs",
+        "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+      }
+    ],
+    "children": {
+      "columns": [
+        {
+          "col": 0,
+          "title": "First"
+        },
+        {
+          "col": 1,
+          "title": "Then"
+        }
+      ],
+      "ghosts": [
+        {
+          "kind": "project",
+          "kind_name": "Project",
+          "level": "project",
+          "level_name": "Project",
+          "needs": {
+            "blocking": 1,
+            "open": 1
+          },
+          "ref": "live-search-fix",
+          "short": "proposed in C-19",
+          "state": "ghost",
+          "status_compact": {
+            "detail": "proposed in C-19",
+            "ends": "other",
+            "kind": "proposed",
+            "label": "Proposed",
+            "segments": []
+          },
+          "tag": "C-19",
+          "title": "Fix live search"
+        }
+      ],
+      "items": [
+        {
+          "budget": 150.0,
+          "col": 0,
+          "cost": 25.13,
+          "grandchildren": {
+            "by_state": {
+              "done": 1,
+              "waiting": 1
+            },
+            "count": 2,
+            "later": 0,
+            "noun": "tasks"
+          },
+          "idle": 3,
+          "in_base_env": true,
+          "kind": "project",
+          "kind_name": "Project",
+          "level": "project",
+          "level_name": "Project",
+          "needs": {
+            "blocking": 1,
+            "open": 1
+          },
+          "owner": {
+            "name": "Juno",
+            "working": false
+          },
+          "progress": {
+            "label": "1/2",
+            "value": 0.6667,
+            "what": "tasks"
+          },
+          "ref": "assistant-core",
+          "short": "The shared core the panel, connectors and skills build on",
+          "state": "needs",
+          "status_compact": {
+            "ends": "other",
+            "kind": "needs",
+            "label": "Needs you",
+            "segments": []
+          },
+          "title": "assistant-core",
+          "working": []
+        },
+        {
+          "col": 1,
+          "cost": 14.2,
+          "grandchildren": {
+            "by_state": {
+              "done": 1
+            },
+            "count": 1,
+            "later": 0,
+            "noun": "task"
+          },
+          "in_base_env": true,
+          "kind": "project",
+          "kind_name": "Project",
+          "level": "project",
+          "level_name": "Project",
+          "needs": {
+            "blocking": 0,
+            "open": 1
+          },
+          "progress": {
+            "label": "1/1",
+            "value": 1.0,
+            "what": "tasks"
+          },
+          "ref": "connectors-core",
+          "state": "done",
+          "status_compact": {
+            "ends": "other",
+            "kind": "done",
+            "label": "Done",
+            "segments": []
+          },
+          "title": "connectors-core"
+        },
+        {
+          "col": 1,
+          "cost": 11.8,
+          "grandchildren": {
+            "by_state": {
+              "done": 1
+            },
+            "count": 1,
+            "later": 0,
+            "noun": "task"
+          },
+          "in_base_env": true,
+          "kind": "project",
+          "kind_name": "Project",
+          "level": "project",
+          "level_name": "Project",
+          "needs": {
+            "blocking": 0,
+            "open": 1
+          },
+          "progress": {
+            "label": "1/1",
+            "value": 1.0,
+            "what": "tasks"
+          },
+          "ref": "skill-discovery",
+          "state": "done",
+          "status_compact": {
+            "ends": "other",
+            "kind": "done",
+            "label": "Done",
+            "segments": []
+          },
+          "title": "skill-discovery"
+        },
+        {
+          "budget": 150.0,
+          "col": 1,
+          "kind": "project",
+          "kind_name": "Project",
+          "level": "project",
+          "level_name": "Project",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "owner": {
+            "name": "Ori",
+            "working": false
+          },
+          "progress": {
+            "growing": true,
+            "label": "–",
+            "value": 0,
+            "what": "not planned"
+          },
+          "ref": "assistant-panel-ux",
+          "short": "The assistant panel inside the app",
+          "state": "waiting",
+          "status_compact": {
+            "ends": "other",
+            "kind": "waiting",
+            "label": "Waiting",
+            "segments": []
+          },
+          "title": "assistant-panel-ux"
+        }
+      ],
+      "later": [
+        {
+          "col": "later",
+          "held_for": "wave 2: ads network and growth",
+          "kind": "project",
+          "kind_name": "Project",
+          "level": "project",
+          "level_name": "Project",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "ref": "ads-integration",
+          "state": "later",
+          "status_compact": {
+            "detail": "held for wave 2: ads network and growth",
+            "ends": "other",
+            "kind": "later",
+            "label": "Later",
+            "segments": []
+          },
+          "title": "ads-integration"
+        },
+        {
+          "col": "later",
+          "held_for": "wave 2: ads network and growth",
+          "kind": "project",
+          "kind_name": "Project",
+          "level": "project",
+          "level_name": "Project",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "ref": "growth-seo",
+          "state": "later",
+          "status_compact": {
+            "detail": "held for wave 2: ads network and growth",
+            "ends": "other",
+            "kind": "later",
+            "label": "Later",
+            "segments": []
+          },
+          "title": "growth-seo"
+        },
+        {
+          "col": "later",
+          "held_for": "wave 3: sales and promotion",
+          "kind": "project",
+          "kind_name": "Project",
+          "level": "project",
+          "level_name": "Project",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "ref": "sales-skill",
+          "state": "later",
+          "status_compact": {
+            "detail": "held for wave 3: sales and promotion",
+            "ends": "other",
+            "kind": "later",
+            "label": "Later",
+            "segments": []
+          },
+          "title": "sales-skill"
+        },
+        {
+          "col": "later",
+          "held_for": "wave 3: sales and promotion",
+          "kind": "project",
+          "kind_name": "Project",
+          "level": "project",
+          "level_name": "Project",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "ref": "promotion-skill",
+          "state": "later",
+          "status_compact": {
+            "detail": "held for wave 3: sales and promotion",
+            "ends": "other",
+            "kind": "later",
+            "label": "Later",
+            "segments": []
+          },
+          "title": "promotion-skill"
+        }
+      ],
+      "later_title": "Later (held)",
+      "level": "project",
+      "level_name": "Projects",
+      "tiles": true,
+      "total": 9
+    },
+    "chips": [],
+    "levels_below": [
+      {
+        "by_state": {
+          "done": 2,
+          "needs": 1,
+          "waiting": 1
+        },
+        "count": 4,
+        "later": 4,
+        "level": "project",
+        "name": "Projects",
+        "needs": 1
+      },
+      {
+        "by_state": {
+          "done": 3,
+          "waiting": 1
+        },
+        "count": 4,
+        "later": 0,
+        "level": "task",
+        "name": "Tasks",
+        "needs": 0
+      },
+      {
+        "by_state": {
+          "done": 3
+        },
+        "count": 3,
+        "later": 0,
+        "level": "change",
+        "name": "Changes",
+        "needs": 0
+      },
+      {
+        "by_state": {
+          "done": 1
+        },
+        "count": 1,
+        "debug": true,
+        "later": 0,
+        "level": "run",
+        "name": "Runs",
+        "needs": 0
+      }
+    ],
+    "more_chips": 0,
+    "node": {
+      "acceptance": {
+        "run_at": "2026-11-03T13:22:00Z",
+        "steps": [
+          {
+            "result": "none",
+            "source": "not run yet",
+            "text": "A flag-on user opens the assistant panel"
+          },
+          {
+            "result": "pass",
+            "source": "run 1 · demo of #9876",
+            "text": "Ask how the app is doing: the answer uses analytics"
+          },
+          {
+            "result": "pass",
+            "source": "run 1 · demo of #9876",
+            "text": "A flag-off user gets no assistant"
+          },
+          {
+            "result": "none",
+            "source": "not run yet",
+            "text": "Each turn debits the user's credits"
+          },
+          {
+            "result": "none",
+            "source": "not run yet",
+            "text": "The assistant calls a connected service"
+          },
+          {
+            "result": "fail",
+            "source": "run 1 · live search fails on the base env",
+            "text": "The discovery skill runs a live web search"
+          }
+        ]
+      },
+      "cost": 51.13,
+      "grandchildren": {
+        "by_state": {
+          "done": 2,
+          "needs": 1,
+          "waiting": 1
+        },
+        "count": 4,
+        "later": 4,
+        "noun": "projects"
+      },
+      "in_base_env": true,
+      "kind": "feature",
+      "kind_name": "Feature",
+      "level": "feature",
+      "level_name": "Feature",
+      "needs": {
+        "blocking": 2,
+        "open": 4
+      },
+      "owner": {
+        "name": "Atlas",
+        "working": false
+      },
+      "progress": {
+        "growing": true,
+        "label": "2/6",
+        "secondary": 0.6667,
+        "value": 0.3333,
+        "what": "acceptance"
+      },
+      "ref": "I-1",
+      "short": "An assistant inside the app that helps users build",
+      "state": "needs",
+      "status_compact": {
+        "ends": "other",
+        "kind": "needs",
+        "label": "Needs you",
+        "segments": []
+      },
+      "tag": "I-1",
+      "title": "Agent assistant (sample)",
+      "why_html": "An assistant inside the app that helps users build"
+    },
+    "results": {
+      "in_base_env": 3,
+      "merged": 3,
+      "open": [],
+      "readouts": "not measured"
+    },
+    "rollup": {
+      "cost": 51.13,
+      "in_base_env": {
+        "sha": "817480d",
+        "try_it": false
+      },
+      "moving_anywhere": false,
+      "progress": {
+        "growing": true,
+        "label": "2/6",
+        "secondary": 0.6667,
+        "value": 0.3333,
+        "what": "acceptance"
+      }
+    },
+    "status": {
+      "ends": "other",
+      "kind": "needs",
+      "label": "Needs you",
+      "segments": []
+    },
+    "thread": {
+      "key": "feature:I-1",
+      "responder": "Atlas",
+      "unread": 0
+    },
+    "verbs": [
+      {
+        "enabled": true,
+        "key": "/",
+        "label": "Talk",
+        "verb": "talk"
+      },
+      {
+        "enabled": true,
+        "key": "a",
+        "label": "Add child",
+        "verb": "add"
+      },
+      {
+        "enabled": true,
+        "key": "u",
+        "label": "Autonomy & merge",
+        "verb": "auto"
+      },
+      {
+        "enabled": true,
+        "key": "p",
+        "label": "Pause",
+        "verb": "pause"
+      },
+      {
+        "enabled": true,
+        "key": "m",
+        "label": "Move",
+        "verb": "move"
+      }
+    ],
+    "version": "4e3d188c9836702d"
+  },
+  "PR-9876": {
+    "breadcrumb": [
+      {
+        "level": "product",
+        "level_name": "Product",
+        "ref": "product",
+        "state": "needs",
+        "title": "Sample app (sample)"
+      },
+      {
+        "level": "need",
+        "level_name": "Need",
+        "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
+        "state": "needs",
+        "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+      },
+      {
+        "level": "feature",
+        "level_name": "Feature",
+        "ref": "I-1",
+        "state": "needs",
+        "title": "Agent assistant (sample)"
+      },
+      {
+        "level": "project",
+        "level_name": "Project",
+        "ref": "assistant-core",
+        "state": "needs",
+        "title": "assistant-core"
+      },
+      {
+        "level": "task",
+        "level_name": "Task",
+        "ref": "T-15",
+        "state": "done",
+        "tag": "T-15",
+        "title": "Sessions, tool registry, flagged chat API"
+      }
+    ],
+    "children": {
+      "columns": null,
+      "ghosts": [],
+      "items": [
+        {
+          "glyph": "▶",
+          "kind": "run",
+          "kind_name": "Run",
+          "level": "run",
+          "level_name": "Run",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "owner": {
+            "name": "Luz · builder",
+            "working": false
+          },
+          "ref": "run:000000000000000000000000000002bd",
+          "state": "done",
+          "status_compact": {
+            "ends": "other",
+            "kind": "done",
+            "label": "Done",
+            "segments": []
+          },
+          "tag": "run 1",
+          "title": "Luz · builder"
+        }
+      ],
+      "later": [],
+      "level": "run",
+      "level_name": "Runs",
+      "tiles": false,
+      "total": 1
+    },
+    "chips": [],
+    "levels_below": [
+      {
+        "by_state": {
+          "done": 1
+        },
+        "count": 1,
+        "debug": true,
+        "later": 0,
+        "level": "run",
+        "name": "Runs",
+        "needs": 0
+      }
+    ],
+    "more_chips": 0,
+    "node": {
+      "base": "sample-main",
+      "glyph": "PR",
+      "in_base_env": true,
+      "kind": "pr",
+      "kind_name": "Pull request",
+      "level": "change",
+      "level_name": "Change",
+      "needs": {
+        "blocking": 0,
+        "open": 0
+      },
+      "ref": "PR-9876",
+      "state": "done",
+      "status_compact": {
+        "ends": "other",
+        "kind": "done",
+        "label": "Done",
+        "segments": []
+      },
+      "tag": "#9876",
+      "title": "Assistant core",
+      "why_html": ""
+    },
+    "results": {
+      "in_base_env": 1,
+      "merged": 1,
+      "open": [],
+      "readouts": "not measured"
+    },
+    "rollup": {
+      "cost": 0.0,
+      "in_base_env": {
+        "sha": "817480d",
+        "try_it": false
+      },
+      "moving_anywhere": false
+    },
+    "status": {
+      "ends": "other",
+      "kind": "done",
+      "label": "Done",
+      "segments": []
+    },
+    "thread": {
+      "key": "pr:00000000000000000000000000002694",
+      "responder": "Juno",
+      "unread": 0
+    },
+    "verbs": [
+      {
+        "enabled": true,
+        "key": "/",
+        "label": "Talk",
+        "verb": "talk"
+      }
+    ],
+    "version": "4e3d188c9836702d"
+  },
+  "T-16": {
+    "breadcrumb": [
+      {
+        "level": "product",
+        "level_name": "Product",
+        "ref": "product",
+        "state": "needs",
+        "title": "Sample app (sample)"
+      },
+      {
+        "level": "need",
+        "level_name": "Need",
+        "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
+        "state": "needs",
+        "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+      },
+      {
+        "level": "feature",
+        "level_name": "Feature",
+        "ref": "I-1",
+        "state": "needs",
+        "title": "Agent assistant (sample)"
+      },
+      {
+        "level": "project",
+        "level_name": "Project",
+        "ref": "assistant-core",
+        "state": "needs",
+        "title": "assistant-core"
+      }
+    ],
+    "children": {
+      "columns": null,
+      "ghosts": [],
+      "items": [],
+      "later": [],
+      "level": "change",
+      "level_name": "Changes",
+      "tiles": false,
+      "total": 0
+    },
+    "chips": [],
+    "levels_below": [],
+    "more_chips": 0,
+    "node": {
+      "col": 1,
+      "cost": 1.66,
+      "glyph": "T",
+      "kind": "task",
+      "kind_name": "Task",
+      "level": "task",
+      "level_name": "Task",
+      "needs": {
+        "blocking": 0,
+        "open": 0
+      },
+      "owner": {
+        "name": "Luz · builder",
+        "working": false
+      },
+      "ref": "T-16",
+      "state": "waiting",
+      "status_compact": {
+        "ends": "other",
+        "kind": "waiting",
+        "label": "Waiting",
+        "segments": []
+      },
+      "tag": "T-16",
+      "title": "Debit each turn",
+      "why_html": ""
+    },
+    "results": {
+      "in_base_env": 0,
+      "merged": 0,
+      "open": [],
+      "readouts": "not measured"
+    },
+    "rollup": {
+      "cost": 1.66,
+      "moving_anywhere": false
+    },
+    "status": {
+      "ends": "other",
+      "kind": "waiting",
+      "label": "Waiting",
+      "segments": []
+    },
+    "thread": {
+      "key": "task:T-16",
+      "responder": "Juno",
+      "unread": 0
+    },
+    "verbs": [
+      {
+        "enabled": true,
+        "key": "/",
+        "label": "Talk",
+        "verb": "talk"
+      },
+      {
+        "enabled": true,
+        "key": "p",
+        "label": "Pause",
+        "verb": "pause"
+      },
+      {
+        "enabled": true,
+        "key": "m",
+        "label": "Move",
+        "verb": "move"
+      }
+    ],
+    "version": "4e3d188c9836702d"
+  },
+  "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1": {
+    "breadcrumb": [
+      {
+        "level": "product",
+        "level_name": "Product",
+        "ref": "product",
+        "state": "needs",
+        "title": "Sample app (sample)"
+      }
+    ],
+    "children": {
+      "columns": null,
+      "ghosts": [],
+      "items": [
+        {
+          "cost": 51.13,
+          "grandchildren": {
+            "by_state": {
+              "done": 2,
+              "needs": 1,
+              "waiting": 1
+            },
+            "count": 4,
+            "later": 4,
+            "noun": "projects"
+          },
+          "in_base_env": true,
+          "kind": "feature",
+          "kind_name": "Feature",
+          "level": "feature",
+          "level_name": "Feature",
+          "needs": {
+            "blocking": 2,
+            "open": 4
+          },
+          "owner": {
+            "name": "Atlas",
+            "working": false
+          },
+          "progress": {
+            "growing": true,
+            "label": "2/6",
+            "secondary": 0.6667,
+            "value": 0.3333,
+            "what": "acceptance"
+          },
+          "ref": "I-1",
+          "short": "An assistant inside the app that helps users build",
+          "state": "needs",
+          "status_compact": {
+            "ends": "other",
+            "kind": "needs",
+            "label": "Needs you",
+            "segments": []
+          },
+          "tag": "I-1",
+          "title": "Agent assistant (sample)"
+        }
+      ],
+      "later": [],
+      "level": "feature",
+      "level_name": "Features",
+      "tiles": true,
+      "total": 1
+    },
+    "chips": [],
+    "levels_below": [
+      {
+        "by_state": {
+          "needs": 1
+        },
+        "count": 1,
+        "later": 0,
+        "level": "feature",
+        "name": "Features",
+        "needs": 1
+      },
+      {
+        "by_state": {
+          "done": 2,
+          "needs": 1,
+          "waiting": 1
+        },
+        "count": 4,
+        "later": 4,
+        "level": "project",
+        "name": "Projects",
+        "needs": 1
+      },
+      {
+        "by_state": {
+          "done": 3,
+          "waiting": 1
+        },
+        "count": 4,
+        "later": 0,
+        "level": "task",
+        "name": "Tasks",
+        "needs": 0
+      },
+      {
+        "by_state": {
+          "done": 3
+        },
+        "count": 3,
+        "later": 0,
+        "level": "change",
+        "name": "Changes",
+        "needs": 0
+      },
+      {
+        "by_state": {
+          "done": 1
+        },
+        "count": 1,
+        "debug": true,
+        "later": 0,
+        "level": "run",
+        "name": "Runs",
+        "needs": 0
+      }
+    ],
+    "more_chips": 0,
+    "node": {
+      "cost": 51.13,
+      "evidence": {
+        "items": [
+          {
+            "kind": "request",
+            "quote": true,
+            "text": "I want an assistant in the app that helps with building, and later with discovery and sales too.",
+            "who": "ana (sample)"
+          }
+        ],
+        "summary": "an ask · no user evidence yet"
+      },
+      "glyph": "ASK",
+      "grandchildren": {
+        "by_state": {
+          "needs": 1
+        },
+        "count": 1,
+        "later": 0,
+        "noun": "feature"
+      },
+      "in_base_env": true,
+      "kind": "ask",
+      "kind_name": "Ask",
+      "level": "need",
+      "level_name": "Need",
+      "needs": {
+        "blocking": 2,
+        "open": 4
+      },
+      "owner": {
+        "name": "Scout",
+        "working": false
+      },
+      "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
+      "state": "needs",
+      "status_compact": {
+        "ends": "other",
+        "kind": "needs",
+        "label": "Needs you",
+        "segments": []
+      },
+      "title": "I want an assistant in the app that helps with building, and later with discovery and sales too.",
+      "why_html": "<b>“I want an assistant in the app that helps with building, and later with discovery and sales too.”</b>"
+    },
+    "results": {
+      "in_base_env": 3,
+      "merged": 3,
+      "open": [],
+      "readouts": "not measured"
+    },
+    "rollup": {
+      "cost": 51.13,
+      "in_base_env": {
+        "sha": "817480d",
+        "try_it": false
+      },
+      "moving_anywhere": false
+    },
+    "status": {
+      "ends": "other",
+      "kind": "needs",
+      "label": "Needs you",
+      "segments": []
+    },
+    "thread": {
+      "key": "need:ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
+      "responder": "Scout",
+      "unread": 0
+    },
+    "verbs": [
+      {
+        "enabled": true,
+        "key": "/",
+        "label": "Talk",
+        "verb": "talk"
+      },
+      {
+        "enabled": true,
+        "key": "a",
+        "label": "Add child",
+        "verb": "add"
+      }
+    ],
+    "version": "4e3d188c9836702d"
+  },
+  "assistant-core": {
+    "breadcrumb": [
+      {
+        "level": "product",
+        "level_name": "Product",
+        "ref": "product",
+        "state": "needs",
+        "title": "Sample app (sample)"
+      },
+      {
+        "level": "need",
+        "level_name": "Need",
+        "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
+        "state": "needs",
+        "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+      },
+      {
+        "level": "feature",
+        "level_name": "Feature",
+        "ref": "I-1",
+        "state": "needs",
+        "title": "Agent assistant (sample)"
+      }
+    ],
+    "children": {
+      "columns": [
+        {
+          "col": 0,
+          "title": "First"
+        },
+        {
+          "col": 1,
+          "title": "Then"
+        }
+      ],
+      "ghosts": [],
+      "items": [
+        {
+          "col": 0,
+          "glyph": "T",
+          "in_base_env": true,
+          "kind": "task",
+          "kind_name": "Task",
+          "level": "task",
+          "level_name": "Task",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "owner": {
+            "name": "Luz · builder",
+            "working": false
+          },
+          "ref": "T-15",
+          "state": "done",
+          "status_compact": {
+            "ends": "other",
+            "kind": "done",
+            "label": "Done",
+            "segments": []
+          },
+          "tag": "T-15",
+          "title": "Sessions, tool registry, flagged chat API"
+        },
+        {
+          "col": 1,
+          "cost": 1.66,
+          "glyph": "T",
+          "kind": "task",
+          "kind_name": "Task",
+          "level": "task",
+          "level_name": "Task",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "owner": {
+            "name": "Luz · builder",
+            "working": false
+          },
+          "ref": "T-16",
+          "state": "waiting",
+          "status_compact": {
+            "ends": "other",
+            "kind": "waiting",
+            "label": "Waiting",
+            "segments": []
+          },
+          "tag": "T-16",
+          "title": "Debit each turn"
+        }
+      ],
+      "later": [],
+      "level": "task",
+      "level_name": "Tasks",
+      "tiles": false,
+      "total": 2
+    },
+    "chips": [
+      {
+        "kind": "needed by",
+        "ref": "assistant-panel-ux",
+        "state": "waiting",
+        "title": "assistant-panel-ux"
+      }
+    ],
+    "levels_below": [
+      {
+        "by_state": {
+          "done": 1,
+          "waiting": 1
+        },
+        "count": 2,
+        "later": 0,
+        "level": "task",
+        "name": "Tasks",
+        "needs": 0
+      },
+      {
+        "by_state": {
+          "done": 1
+        },
+        "count": 1,
+        "later": 0,
+        "level": "change",
+        "name": "Changes",
+        "needs": 0
+      },
+      {
+        "by_state": {
+          "done": 1
+        },
+        "count": 1,
+        "debug": true,
+        "later": 0,
+        "level": "run",
+        "name": "Runs",
+        "needs": 0
+      }
+    ],
+    "more_chips": 0,
+    "node": {
+      "budget": 150.0,
+      "col": 0,
+      "cost": 25.13,
+      "grandchildren": {
+        "by_state": {
+          "done": 1,
+          "waiting": 1
+        },
+        "count": 2,
+        "later": 0,
+        "noun": "tasks"
+      },
+      "idle": 3,
+      "in_base_env": true,
+      "kind": "project",
+      "kind_name": "Project",
+      "level": "project",
+      "level_name": "Project",
+      "needs": {
+        "blocking": 1,
+        "open": 1
+      },
+      "owner": {
+        "name": "Juno",
+        "working": false
+      },
+      "progress": {
+        "label": "1/2",
+        "value": 0.6667,
+        "what": "tasks"
+      },
+      "ref": "assistant-core",
+      "short": "The shared core the panel, connectors and skills build on",
+      "state": "needs",
+      "status_compact": {
+        "ends": "other",
+        "kind": "needs",
+        "label": "Needs you",
+        "segments": []
+      },
+      "title": "assistant-core",
+      "why_html": "The shared core the panel, connectors and skills build on <b>Wave 1 of Agent assistant (sample).</b>",
+      "working": []
+    },
+    "results": {
+      "in_base_env": 1,
+      "merged": 1,
+      "open": [],
+      "readouts": "not measured"
+    },
+    "rollup": {
+      "budget": 150.0,
+      "cost": 25.13,
+      "in_base_env": {
+        "sha": "817480d",
+        "try_it": false
+      },
+      "moving_anywhere": false,
+      "progress": {
+        "label": "1/2",
+        "value": 0.6667,
+        "what": "tasks"
+      },
+      "team": {
+        "idle": 3,
+        "working": []
+      }
+    },
+    "status": {
+      "ends": "other",
+      "kind": "needs",
+      "label": "Needs you",
+      "segments": []
+    },
+    "thread": {
+      "key": "project:assistant-core",
+      "responder": "Juno",
+      "unread": 0
+    },
+    "verbs": [
+      {
+        "enabled": true,
+        "key": "/",
+        "label": "Talk",
+        "verb": "talk"
+      },
+      {
+        "enabled": true,
+        "key": "a",
+        "label": "Add child",
+        "verb": "add"
+      },
+      {
+        "enabled": true,
+        "key": "t",
+        "label": "Team",
+        "verb": "team"
+      },
+      {
+        "enabled": true,
+        "key": "u",
+        "label": "Autonomy & merge",
+        "verb": "auto"
+      },
+      {
+        "enabled": true,
+        "key": "p",
+        "label": "Pause",
+        "verb": "pause"
+      },
+      {
+        "enabled": true,
+        "key": "m",
+        "label": "Move",
+        "verb": "move"
+      }
+    ],
+    "version": "4e3d188c9836702d"
+  },
+  "assistant-panel-ux": {
+    "breadcrumb": [
+      {
+        "level": "product",
+        "level_name": "Product",
+        "ref": "product",
+        "state": "needs",
+        "title": "Sample app (sample)"
+      },
+      {
+        "level": "need",
+        "level_name": "Need",
+        "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
+        "state": "needs",
+        "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+      },
+      {
+        "level": "feature",
+        "level_name": "Feature",
+        "ref": "I-1",
+        "state": "needs",
+        "title": "Agent assistant (sample)"
+      }
+    ],
+    "children": {
+      "columns": null,
+      "ghosts": [],
+      "items": [],
+      "later": [],
+      "level": "task",
+      "level_name": "Tasks",
+      "tiles": false,
+      "total": 0
+    },
+    "chips": [
+      {
+        "kind": "depends on",
+        "reason": "needs the session API and per-turn debit",
+        "ref": "assistant-core",
+        "state": "needs you",
+        "title": "assistant-core"
+      },
+      {
+        "list": [
+          {
+            "chips": [
+              {
+                "kind": "depended on",
+                "ref": "ux-env-badge-copy",
+                "state": "done · no reason given, across features",
+                "title": "ux-env-badge-copy"
+              },
+              {
+                "kind": "depended on",
+                "ref": "ux-slash-focus",
+                "state": "done · no reason given, across features",
+                "title": "ux-slash-focus"
+              },
+              {
+                "kind": "depended on",
+                "ref": "ux-status-page",
+                "state": "done · no reason given, across features",
+                "title": "ux-status-page"
+              }
+            ],
+            "note": "Met links are history; they no longer hold this node."
+          }
+        ],
+        "state": "3 had no reason",
+        "title": "3 met links",
+        "tone": "warn"
+      }
+    ],
+    "levels_below": [],
+    "more_chips": 0,
+    "node": {
+      "budget": 150.0,
+      "col": 1,
+      "kind": "project",
+      "kind_name": "Project",
+      "level": "project",
+      "level_name": "Project",
+      "needs": {
+        "blocking": 0,
+        "open": 0
+      },
+      "owner": {
+        "name": "Ori",
+        "working": false
+      },
+      "progress": {
+        "growing": true,
+        "label": "–",
+        "value": 0,
+        "what": "not planned"
+      },
+      "ref": "assistant-panel-ux",
+      "short": "The assistant panel inside the app",
+      "state": "waiting",
+      "status_compact": {
+        "ends": "other",
+        "kind": "waiting",
+        "label": "Waiting",
+        "segments": []
+      },
+      "title": "assistant-panel-ux",
+      "why_html": "The assistant panel inside the app <b>Wave 1 of Agent assistant (sample).</b>"
+    },
+    "results": {
+      "in_base_env": 0,
+      "merged": 0,
+      "open": [],
+      "readouts": "not measured"
+    },
+    "rollup": {
+      "budget": 150.0,
+      "cost": 0.0,
+      "moving_anywhere": false,
+      "progress": {
+        "growing": true,
+        "label": "–",
+        "value": 0,
+        "what": "not planned"
+      }
+    },
+    "status": {
+      "ends": "other",
+      "kind": "waiting",
+      "label": "Waiting",
+      "segments": []
+    },
+    "thread": {
+      "key": "project:assistant-panel-ux",
+      "responder": "Ori",
+      "unread": 0
+    },
+    "verbs": [
+      {
+        "enabled": true,
+        "key": "/",
+        "label": "Talk",
+        "verb": "talk"
+      },
+      {
+        "enabled": true,
+        "key": "a",
+        "label": "Add child",
+        "verb": "add"
+      },
+      {
+        "enabled": true,
+        "key": "s",
+        "label": "Start now",
+        "verb": "start"
+      },
+      {
+        "enabled": true,
+        "key": "t",
+        "label": "Team",
+        "verb": "team"
+      },
+      {
+        "enabled": true,
+        "key": "u",
+        "label": "Autonomy & merge",
+        "verb": "auto"
+      },
+      {
+        "enabled": true,
+        "key": "p",
+        "label": "Pause",
+        "verb": "pause"
+      },
+      {
+        "enabled": true,
+        "key": "m",
+        "label": "Move",
+        "verb": "move"
+      }
+    ],
+    "version": "4e3d188c9836702d"
+  },
+  "base-env": {
+    "breadcrumb": [
+      {
+        "level": "fx",
+        "level_name": "Factory",
+        "ref": "fx",
+        "state": "needs",
+        "title": "Factory"
+      },
+      {
+        "level": "area",
+        "level_name": "Area",
+        "ref": "fx:environments",
+        "state": "waiting",
+        "title": "Environments"
+      }
+    ],
+    "children": {
+      "columns": null,
+      "ghosts": [],
+      "items": [],
+      "later": [],
+      "level": "",
+      "level_name": "",
+      "tiles": true,
+      "total": 0
+    },
+    "chips": [],
+    "levels_below": [],
+    "more_chips": 0,
+    "node": {
+      "glyph": "⌂",
+      "kind": "env",
+      "kind_name": "Environment",
+      "level": "item",
+      "level_name": "Item",
+      "needs": {
+        "blocking": 0,
+        "open": 0
+      },
+      "owner": {
+        "name": "Mae",
+        "working": false
+      },
+      "ref": "base-env",
+      "state": "waiting",
+      "status_compact": {
+        "detail": "in planning · nobody is working on it",
+        "ends": "other",
+        "kind": "waiting",
+        "label": "Waiting",
+        "segments": []
+      },
+      "title": "base-env",
+      "why_html": ""
+    },
+    "rollup": {
+      "cost": 0.0,
+      "moving_anywhere": false
+    },
+    "status": {
+      "detail": "in planning · nobody is working on it",
+      "ends": "other",
+      "kind": "waiting",
+      "label": "Waiting",
+      "segments": []
+    },
+    "thread": {
+      "key": "project:base-env",
+      "responder": "Sentinel",
+      "unread": 0
+    },
+    "verbs": [
+      {
+        "enabled": true,
+        "key": "/",
+        "label": "Talk",
+        "verb": "talk"
+      },
+      {
+        "enabled": true,
+        "key": "r",
+        "label": "Rename",
+        "verb": "rename"
+      }
+    ],
+    "version": "4e3d188c9836702d"
+  },
+  "build-tier-drafts-3": {
+    "breadcrumb": [
+      {
+        "level": "product",
+        "level_name": "Product",
+        "ref": "product",
+        "state": "needs",
+        "title": "Sample app (sample)"
+      },
+      {
+        "folded": true,
+        "implicit": true,
+        "level": "need",
+        "level_name": "Need",
+        "ref": "need:from-C-12",
+        "state": "waiting",
+        "title": "From C-12"
+      },
+      {
+        "folded": true,
+        "implicit": true,
+        "level": "feature",
+        "level_name": "Feature",
+        "ref": "feature:from-C-12",
+        "state": "waiting",
+        "title": "From C-12: Third round of build-tier drafts"
+      }
+    ],
+    "children": {
+      "columns": null,
+      "ghosts": [],
+      "items": [
+        {
+          "base": "main",
+          "folded_from": ["adhoc:00000000000000000000000000002680"],
+          "glyph": "PR",
+          "kind": "pr",
+          "kind_name": "Pull request",
+          "level": "change",
+          "level_name": "Change",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "ref": "PR-9856",
+          "state": "waiting",
+          "status_compact": {
+            "ends": "other",
+            "kind": "waiting",
+            "label": "Waiting",
+            "segments": []
+          },
+          "tag": "#9856",
+          "title": "build-tier-drafts-3, part 1"
+        },
+        {
+          "base": "main",
+          "folded_from": ["adhoc:00000000000000000000000000002681"],
+          "glyph": "PR",
+          "kind": "pr",
+          "kind_name": "Pull request",
+          "level": "change",
+          "level_name": "Change",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "ref": "PR-9857",
+          "state": "waiting",
+          "status_compact": {
+            "ends": "other",
+            "kind": "waiting",
+            "label": "Waiting",
+            "segments": []
+          },
+          "tag": "#9857",
+          "title": "build-tier-drafts-3, part 2"
+        }
+      ],
+      "later": [],
+      "level": "task",
+      "level_name": "Tasks",
+      "tiles": false,
+      "total": 2,
+      "via_fold": 2
+    },
+    "chips": [],
+    "levels_below": [
+      {
+        "by_state": {
+          "waiting": 2
+        },
+        "count": 2,
+        "later": 0,
+        "level": "task",
+        "name": "Tasks",
+        "needs": 0
+      },
+      {
+        "by_state": {
+          "waiting": 2
+        },
+        "count": 2,
+        "later": 0,
+        "level": "change",
+        "name": "Changes",
+        "needs": 0
+      }
+    ],
+    "more_chips": 0,
+    "node": {
+      "base": "main",
+      "cost": 38.4,
+      "folded_from": ["feature:from-C-12", "need:from-C-12"],
+      "grandchildren": {
+        "by_state": {
+          "waiting": 2
+        },
+        "count": 2,
+        "later": 0,
+        "noun": "changes"
+      },
+      "kind": "project",
+      "kind_name": "Project",
+      "level": "project",
+      "level_name": "Project",
+      "needs": {
+        "blocking": 0,
+        "open": 0
+      },
+      "owner": {
+        "name": "Nova",
+        "working": false
+      },
+      "progress": {
+        "label": "0/2",
+        "value": 0.0,
+        "what": "tasks"
+      },
+      "ref": "build-tier-drafts-3",
+      "state": "waiting",
+      "status_compact": {
+        "ends": "other",
+        "kind": "waiting",
+        "label": "Waiting",
+        "segments": []
+      },
+      "title": "build-tier-drafts-3",
+      "why_html": ""
+    },
+    "results": {
+      "in_base_env": 0,
+      "merged": 0,
+      "open": ["PR-9856", "PR-9857"],
+      "readouts": "not measured"
+    },
+    "rollup": {
+      "cost": 38.4,
+      "moving_anywhere": false,
+      "progress": {
+        "label": "0/2",
+        "value": 0.0,
+        "what": "tasks"
+      }
+    },
+    "status": {
+      "ends": "other",
+      "kind": "waiting",
+      "label": "Waiting",
+      "segments": []
+    },
+    "thread": {
+      "key": "project:build-tier-drafts-3",
+      "responder": "Nova",
+      "unread": 0
+    },
+    "verbs": [
+      {
+        "enabled": true,
+        "key": "/",
+        "label": "Talk",
+        "verb": "talk"
+      },
+      {
+        "enabled": true,
+        "key": "a",
+        "label": "Add child",
+        "verb": "add"
+      },
+      {
+        "enabled": true,
+        "key": "t",
+        "label": "Team",
+        "verb": "team"
+      },
+      {
+        "enabled": true,
+        "key": "u",
+        "label": "Autonomy & merge",
+        "verb": "auto"
+      },
+      {
+        "enabled": true,
+        "key": "p",
+        "label": "Pause",
+        "verb": "pause"
+      },
+      {
+        "enabled": true,
+        "key": "m",
+        "label": "Move",
+        "verb": "move"
+      }
+    ],
+    "version": "4e3d188c9836702d"
+  },
+  "feature:from-C-13": {
+    "breadcrumb": [
+      {
+        "level": "product",
+        "level_name": "Product",
+        "ref": "product",
+        "state": "needs",
+        "title": "Sample app (sample)"
+      },
+      {
+        "level": "need",
+        "level_name": "Need",
+        "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2",
+        "state": "done",
+        "title": "Your shortlist pick: env badge copy, / to chat, status page, request id."
+      }
+    ],
+    "children": {
+      "columns": null,
+      "ghosts": [],
+      "items": [
+        {
+          "col": 0,
+          "cost": 6.4,
+          "grandchildren": {
+            "by_state": {
+              "done": 1
+            },
+            "count": 1,
+            "later": 0,
+            "noun": "change"
+          },
+          "in_base_env": true,
+          "kind": "project",
+          "kind_name": "Project",
+          "level": "project",
+          "level_name": "Project",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "progress": {
+            "label": "1/1",
+            "value": 1.0,
+            "what": "tasks"
+          },
+          "ref": "ux-env-badge-copy",
+          "state": "done",
+          "status_compact": {
+            "ends": "other",
+            "kind": "done",
+            "label": "Done",
+            "segments": []
+          },
+          "title": "ux-env-badge-copy"
+        },
+        {
+          "col": 0,
+          "cost": 5.1,
+          "grandchildren": {
+            "by_state": {
+              "done": 1
+            },
+            "count": 1,
+            "later": 0,
+            "noun": "change"
+          },
+          "in_base_env": true,
+          "kind": "project",
+          "kind_name": "Project",
+          "level": "project",
+          "level_name": "Project",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "progress": {
+            "label": "1/1",
+            "value": 1.0,
+            "what": "tasks"
+          },
+          "ref": "ux-slash-focus",
+          "state": "done",
+          "status_compact": {
+            "ends": "other",
+            "kind": "done",
+            "label": "Done",
+            "segments": []
+          },
+          "title": "ux-slash-focus"
+        },
+        {
+          "col": 0,
+          "cost": 8.9,
+          "grandchildren": {
+            "by_state": {
+              "done": 1
+            },
+            "count": 1,
+            "later": 0,
+            "noun": "change"
+          },
+          "in_base_env": true,
+          "kind": "project",
+          "kind_name": "Project",
+          "level": "project",
+          "level_name": "Project",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "progress": {
+            "label": "1/1",
+            "value": 1.0,
+            "what": "tasks"
+          },
+          "ref": "ux-status-page",
+          "state": "done",
+          "status_compact": {
+            "ends": "other",
+            "kind": "done",
+            "label": "Done",
+            "segments": []
+          },
+          "title": "ux-status-page"
+        },
+        {
+          "col": 0,
+          "cost": 7.2,
+          "grandchildren": {
+            "by_state": {
+              "done": 1
+            },
+            "count": 1,
+            "later": 0,
+            "noun": "change"
+          },
+          "in_base_env": true,
+          "kind": "project",
+          "kind_name": "Project",
+          "level": "project",
+          "level_name": "Project",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "progress": {
+            "label": "1/1",
+            "value": 1.0,
+            "what": "tasks"
+          },
+          "ref": "api-request-id",
+          "state": "done",
+          "status_compact": {
+            "ends": "other",
+            "kind": "done",
+            "label": "Done",
+            "segments": []
+          },
+          "title": "api-request-id"
+        }
+      ],
+      "later": [],
+      "level": "project",
+      "level_name": "Projects",
+      "tiles": true,
+      "total": 4
+    },
+    "chips": [],
+    "levels_below": [
+      {
+        "by_state": {
+          "done": 4
+        },
+        "count": 4,
+        "later": 0,
+        "level": "project",
+        "name": "Projects",
+        "needs": 0
+      },
+      {
+        "by_state": {
+          "done": 4
+        },
+        "count": 4,
+        "later": 0,
+        "level": "task",
+        "name": "Tasks",
+        "needs": 0
+      },
+      {
+        "by_state": {
+          "done": 4
+        },
+        "count": 4,
+        "later": 0,
+        "level": "change",
+        "name": "Changes",
+        "needs": 0
+      }
+    ],
+    "more_chips": 0,
+    "node": {
+      "cost": 27.6,
+      "glyph": "C",
+      "grandchildren": {
+        "by_state": {
+          "done": 4
+        },
+        "count": 4,
+        "later": 0,
+        "noun": "projects"
+      },
+      "implicit": true,
+      "in_base_env": true,
+      "kind": "proposal",
+      "kind_name": "From a proposal",
+      "level": "feature",
+      "level_name": "Feature",
+      "needs": {
+        "blocking": 0,
+        "open": 0
+      },
+      "owner": {
+        "name": "Atlas",
+        "working": false
+      },
+      "progress": {
+        "label": "4/4",
+        "value": 1.0,
+        "what": "projects"
+      },
+      "ref": "feature:from-C-13",
+      "state": "done",
+      "status_compact": {
+        "detail": "all 4 done",
+        "ends": "other",
+        "kind": "done",
+        "label": "Done",
+        "segments": []
+      },
+      "title": "From C-13: Shortlist fixes",
+      "why_html": "Implicit: the projects C-13 created, with no initiative. Name it, or file it under a feature."
+    },
+    "results": {
+      "in_base_env": 4,
+      "merged": 4,
+      "open": [],
+      "readouts": "not measured"
+    },
+    "rollup": {
+      "cost": 27.6,
+      "in_base_env": {
+        "sha": "817480d",
+        "try_it": false
+      },
+      "moving_anywhere": false,
+      "progress": {
+        "label": "4/4",
+        "value": 1.0,
+        "what": "projects"
+      }
+    },
+    "status": {
+      "detail": "all 4 done",
+      "ends": "other",
+      "kind": "done",
+      "label": "Done",
+      "segments": []
+    },
+    "thread": {
+      "key": "feature:from-C-13",
+      "responder": "Atlas",
+      "unread": 0
+    },
+    "verbs": [
+      {
+        "enabled": true,
+        "key": "/",
+        "label": "Talk",
+        "verb": "talk"
+      },
+      {
+        "enabled": true,
+        "key": "n",
+        "label": "Name it / file under",
+        "verb": "name"
+      }
+    ],
+    "version": "4e3d188c9836702d"
+  },
+  "fx": {
+    "breadcrumb": [],
+    "children": {
+      "columns": null,
+      "ghosts": [],
+      "items": [
+        {
+          "glyph": "▦",
+          "grandchildren": {
+            "by_state": {
+              "needs": 2
+            },
+            "count": 2,
+            "later": 0,
+            "noun": "items"
+          },
+          "kind": "area",
+          "kind_name": "Area",
+          "level": "area",
+          "level_name": "Area",
+          "needs": {
+            "blocking": 2,
+            "open": 2
+          },
+          "owner": {
+            "name": "Sentinel",
+            "working": false
+          },
+          "ref": "fx:rules",
+          "short": "2 open",
+          "state": "needs",
+          "status_compact": {
+            "ends": "other",
+            "kind": "needs",
+            "label": "Needs you",
+            "segments": []
+          },
+          "title": "Rules"
+        },
+        {
+          "glyph": "▦",
+          "grandchildren": {
+            "by_state": {
+              "moving": 1,
+              "notstarted": 1
+            },
+            "count": 2,
+            "later": 0,
+            "noun": "items"
+          },
+          "idle": 2,
+          "kind": "area",
+          "kind_name": "Area",
+          "level": "area",
+          "level_name": "Area",
+          "needs": {
+            "blocking": 0,
+            "open": 1
+          },
+          "owner": {
+            "name": "Sentinel",
+            "working": false
+          },
+          "ref": "fx:team",
+          "short": "5 members · 1 running",
+          "state": "moving",
+          "status_compact": {
+            "ends": "moving",
+            "kind": "moving",
+            "label": "Moving",
+            "segments": []
+          },
+          "title": "Team",
+          "working": [
+            {
+              "name": "Atlas",
+              "working": true
+            }
+          ]
+        },
+        {
+          "glyph": "▦",
+          "grandchildren": {
+            "by_state": {
+              "waiting": 1
+            },
+            "count": 1,
+            "later": 0,
+            "noun": "item"
+          },
+          "kind": "area",
+          "kind_name": "Area",
+          "level": "area",
+          "level_name": "Area",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "owner": {
+            "name": "Sentinel",
+            "working": false
+          },
+          "ref": "fx:environments",
+          "short": "Base env sample-main @817480d · ready",
+          "state": "waiting",
+          "status_compact": {
+            "ends": "other",
+            "kind": "waiting",
+            "label": "Waiting",
+            "segments": []
+          },
+          "title": "Environments"
+        },
+        {
+          "glyph": "▦",
+          "kind": "area",
+          "kind_name": "Area",
+          "level": "area",
+          "level_name": "Area",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "owner": {
+            "name": "Sentinel",
+            "working": false
+          },
+          "ref": "fx:health",
+          "state": "done",
+          "status_compact": {
+            "ends": "other",
+            "kind": "done",
+            "label": "Done",
+            "segments": []
+          },
+          "title": "Health"
+        },
+        {
+          "glyph": "▦",
+          "kind": "area",
+          "kind_name": "Area",
+          "level": "area",
+          "level_name": "Area",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "owner": {
+            "name": "Sentinel",
+            "working": false
+          },
+          "ref": "fx:definition",
+          "short": "version 14",
+          "state": "done",
+          "status_compact": {
+            "ends": "other",
+            "kind": "done",
+            "label": "Done",
+            "segments": []
+          },
+          "title": "Definition"
+        }
+      ],
+      "later": [],
+      "level": "area",
+      "level_name": "Areas",
+      "tiles": true,
+      "total": 5
+    },
+    "chips": [],
+    "home": "area",
+    "levels_below": [
+      {
+        "by_state": {
+          "done": 2,
+          "moving": 1,
+          "needs": 1,
+          "waiting": 1
+        },
+        "count": 5,
+        "later": 0,
+        "level": "area",
+        "name": "Areas",
+        "needs": 1
+      },
+      {
+        "by_state": {
+          "moving": 1,
+          "needs": 2,
+          "notstarted": 1,
+          "waiting": 1
+        },
+        "count": 5,
+        "later": 0,
+        "level": "item",
+        "name": "Items",
+        "needs": 2
+      }
+    ],
+    "more_chips": 0,
+    "node": {
+      "grandchildren": {
+        "by_state": {
+          "done": 2,
+          "moving": 1,
+          "needs": 1,
+          "waiting": 1
+        },
+        "count": 5,
+        "later": 0,
+        "noun": "areas"
+      },
+      "kind": "factory",
+      "kind_name": "Factory",
+      "level": "fx",
+      "level_name": "Factory",
+      "needs": {
+        "blocking": 2,
+        "open": 3
+      },
+      "owner": {
+        "name": "Sentinel",
+        "working": false
+      },
+      "ref": "fx",
+      "state": "needs",
+      "status_compact": {
+        "ends": "other",
+        "kind": "needs",
+        "label": "Needs you",
+        "segments": []
+      },
+      "title": "Factory",
+      "why_html": "How the factory itself runs: its team, rules, environments, health and definition. Product work never shows here."
+    },
+    "rollup": {
+      "cost": 0.0,
+      "moving_anywhere": true,
+      "team": {
+        "idle": 2,
+        "working": [
+          {
+            "name": "Atlas",
+            "working": true
+          }
+        ]
+      }
+    },
+    "status": {
+      "ends": "other",
+      "kind": "needs",
+      "label": "Needs you",
+      "segments": []
+    },
+    "thread": {
+      "key": "improvements",
+      "responder": "Sentinel",
+      "unread": 0
+    },
+    "verbs": [
+      {
+        "enabled": true,
+        "key": "/",
+        "label": "Talk",
+        "verb": "talk"
+      }
+    ],
+    "version": "4e3d188c9836702d"
+  },
+  "fx:rules": {
+    "breadcrumb": [
+      {
+        "level": "fx",
+        "level_name": "Factory",
+        "ref": "fx",
+        "state": "needs",
+        "title": "Factory"
+      }
+    ],
+    "children": {
+      "columns": null,
+      "ghosts": [],
+      "items": [
+        {
+          "glyph": "§",
+          "kind": "rule",
+          "kind_name": "Rule",
+          "level": "item",
+          "level_name": "Item",
+          "needs": {
+            "blocking": 1,
+            "open": 1
+          },
+          "owner": {
+            "name": "Sentinel",
+            "working": false
+          },
+          "ref": "C-17",
+          "state": "needs",
+          "status_compact": {
+            "ends": "other",
+            "kind": "needs",
+            "label": "Needs you",
+            "segments": []
+          },
+          "tag": "C-17",
+          "title": "Spike unproven external capabilities first"
+        },
+        {
+          "glyph": "§",
+          "kind": "rule",
+          "kind_name": "Rule",
+          "level": "item",
+          "level_name": "Item",
+          "needs": {
+            "blocking": 1,
+            "open": 1
+          },
+          "owner": {
+            "name": "Sentinel",
+            "working": false
+          },
+          "ref": "C-18",
+          "state": "needs",
+          "status_compact": {
+            "ends": "other",
+            "kind": "needs",
+            "label": "Needs you",
+            "segments": []
+          },
+          "tag": "C-18",
+          "title": "Name pending scope decisions in READY posts"
+        }
+      ],
+      "later": [],
+      "level": "item",
+      "level_name": "Items",
+      "tiles": true,
+      "total": 2
+    },
+    "chips": [],
+    "levels_below": [
+      {
+        "by_state": {
+          "needs": 2
+        },
+        "count": 2,
+        "later": 0,
+        "level": "item",
+        "name": "Items",
+        "needs": 2
+      }
+    ],
+    "more_chips": 0,
+    "node": {
+      "glyph": "▦",
+      "grandchildren": {
+        "by_state": {
+          "needs": 2
+        },
+        "count": 2,
+        "later": 0,
+        "noun": "items"
+      },
+      "kind": "area",
+      "kind_name": "Area",
+      "level": "area",
+      "level_name": "Area",
+      "needs": {
+        "blocking": 2,
+        "open": 2
+      },
+      "owner": {
+        "name": "Sentinel",
+        "working": false
+      },
+      "ref": "fx:rules",
+      "short": "2 open",
+      "state": "needs",
+      "status_compact": {
+        "ends": "other",
+        "kind": "needs",
+        "label": "Needs you",
+        "segments": []
+      },
+      "title": "Rules",
+      "why_html": "Rules agents follow, with trials. Changes are proposed from what went wrong."
+    },
+    "rollup": {
+      "cost": 0.0,
+      "moving_anywhere": false
+    },
+    "status": {
+      "ends": "other",
+      "kind": "needs",
+      "label": "Needs you",
+      "segments": []
+    },
+    "thread": {
+      "key": "improvements",
+      "responder": "Sentinel",
+      "unread": 0
+    },
+    "verbs": [
+      {
+        "enabled": true,
+        "key": "/",
+        "label": "Talk",
+        "verb": "talk"
+      }
+    ],
+    "version": "4e3d188c9836702d"
+  },
+  "product": {
+    "breadcrumb": [],
+    "children": {
+      "columns": null,
+      "ghosts": [],
+      "items": [
+        {
+          "cost": 51.13,
+          "glyph": "ASK",
+          "grandchildren": {
+            "by_state": {
+              "needs": 1
+            },
+            "count": 1,
+            "later": 0,
+            "noun": "feature"
+          },
+          "in_base_env": true,
+          "kind": "ask",
+          "kind_name": "Ask",
+          "level": "need",
+          "level_name": "Need",
+          "needs": {
+            "blocking": 2,
+            "open": 4
+          },
+          "owner": {
+            "name": "Scout",
+            "working": false
+          },
+          "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa1",
+          "state": "needs",
+          "status_compact": {
+            "ends": "other",
+            "kind": "needs",
+            "label": "Needs you",
+            "segments": []
+          },
+          "title": "I want an assistant in the app that helps with building, and later with discovery and sales too."
+        },
+        {
+          "base": "main",
+          "cost": 38.4,
+          "folded_from": ["feature:from-C-12", "need:from-C-12"],
+          "grandchildren": {
+            "by_state": {
+              "waiting": 2
+            },
+            "count": 2,
+            "later": 0,
+            "noun": "changes"
+          },
+          "kind": "project",
+          "kind_name": "Project",
+          "level": "project",
+          "level_name": "Project",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "owner": {
+            "name": "Nova",
+            "working": false
+          },
+          "progress": {
+            "label": "0/2",
+            "value": 0.0,
+            "what": "tasks"
+          },
+          "ref": "build-tier-drafts-3",
+          "state": "waiting",
+          "status_compact": {
+            "ends": "other",
+            "kind": "waiting",
+            "label": "Waiting",
+            "segments": []
+          },
+          "title": "build-tier-drafts-3"
+        },
+        {
+          "cost": 27.6,
+          "glyph": "ASK",
+          "grandchildren": {
+            "by_state": {
+              "done": 1
+            },
+            "count": 1,
+            "later": 0,
+            "noun": "feature"
+          },
+          "in_base_env": true,
+          "kind": "ask",
+          "kind_name": "Ask",
+          "level": "need",
+          "level_name": "Need",
+          "needs": {
+            "blocking": 0,
+            "open": 0
+          },
+          "owner": {
+            "name": "Scout",
+            "working": false
+          },
+          "ref": "ask:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa2",
+          "state": "done",
+          "status_compact": {
+            "ends": "other",
+            "kind": "done",
+            "label": "Done",
+            "segments": []
+          },
+          "title": "Your shortlist pick: env badge copy, / to chat, status page, request id."
+        }
+      ],
+      "later": [],
+      "level": "need",
+      "level_name": "Needs",
+      "tiles": true,
+      "total": 3,
+      "via_fold": 1
+    },
+    "chips": [],
+    "home": "feature",
+    "levels_below": [
+      {
+        "by_state": {
+          "done": 1,
+          "needs": 1,
+          "waiting": 1
+        },
+        "count": 3,
+        "later": 0,
+        "level": "need",
+        "name": "Needs",
+        "needs": 1
+      },
+      {
+        "by_state": {
+          "done": 1,
+          "needs": 1,
+          "waiting": 1
+        },
+        "count": 3,
+        "later": 0,
+        "level": "feature",
+        "name": "Features",
+        "needs": 1
+      },
+      {
+        "by_state": {
+          "done": 6,
+          "needs": 1,
+          "waiting": 2
+        },
+        "count": 9,
+        "later": 4,
+        "level": "project",
+        "name": "Projects",
+        "needs": 1
+      },
+      {
+        "by_state": {
+          "done": 7,
+          "waiting": 3
+        },
+        "count": 10,
+        "later": 0,
+        "level": "task",
+        "name": "Tasks",
+        "needs": 0
+      },
+      {
+        "by_state": {
+          "done": 7,
+          "waiting": 2
+        },
+        "count": 9,
+        "later": 0,
+        "level": "change",
+        "name": "Changes",
+        "needs": 0
+      },
+      {
+        "by_state": {
+          "done": 1
+        },
+        "count": 1,
+        "debug": true,
+        "later": 0,
+        "level": "run",
+        "name": "Runs",
+        "needs": 0
+      }
+    ],
+    "more_chips": 0,
+    "node": {
+      "cost": 444.0,
+      "glyph": "◆",
+      "grandchildren": {
+        "by_state": {
+          "done": 1,
+          "needs": 1,
+          "waiting": 1
+        },
+        "count": 3,
+        "later": 0,
+        "noun": "needs"
+      },
+      "kind": "product",
+      "kind_name": "Product",
+      "level": "product",
+      "level_name": "Product",
+      "needs": {
+        "blocking": 2,
+        "open": 4
+      },
+      "owner": {
+        "name": "Atlas",
+        "working": false
+      },
+      "ref": "product",
+      "state": "needs",
+      "status_compact": {
+        "ends": "other",
+        "kind": "needs",
+        "label": "Needs you",
+        "segments": []
+      },
+      "title": "Sample app (sample)",
+      "why_html": "Builds <b>sample-org/sample-app</b> into <b>sample-main</b>. No goals are set yet, so that level is hidden and needs hang off the product."
+    },
+    "results": {
+      "in_base_env": 7,
+      "merged": 7,
+      "open": ["PR-9856", "PR-9857"],
+      "readouts": "not measured"
+    },
+    "rollup": {
+      "burn": 9.37,
+      "cost": 444.0,
+      "counts": [
+        {
+          "count": 3,
+          "key": "feature",
+          "name": "Feature",
+          "plural": "Features"
+        },
+        {
+          "count": 9,
+          "key": "project",
+          "later": 4,
+          "name": "Project",
+          "plural": "Projects"
+        }
+      ],
+      "in_base_env": {
+        "sha": "817480d",
+        "try_it": false
+      },
+      "moving_anywhere": false
+    },
+    "status": {
+      "ends": "other",
+      "kind": "needs",
+      "label": "Needs you",
+      "segments": []
+    },
+    "thread": {
+      "key": "factory",
+      "responder": "Atlas",
+      "unread": 0
+    },
+    "verbs": [
+      {
+        "enabled": true,
+        "key": "/",
+        "label": "Talk",
+        "verb": "talk"
+      },
+      {
+        "enabled": true,
+        "key": "a",
+        "label": "Add child",
+        "verb": "add"
+      }
+    ],
+    "version": "4e3d188c9836702d"
+  }
+}

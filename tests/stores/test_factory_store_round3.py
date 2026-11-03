@@ -263,6 +263,18 @@ def test_chat_pages(store: FactoryStore) -> None:
     assert store.list_chat(OTHER_FID) == []
 
 
+def test_chat_messages_read_in_one_batch(store: FactoryStore) -> None:
+    first = store.append_chat(FID, thread="factory", author_kind="human", author=LENA, body="a")
+    second = store.append_chat(FID, thread="factory", author_kind="human", author=MIA, body="b")
+
+    found = store.get_chat_messages(
+        [str(uuid.UUID(first.id)), second.id, first.id, "not-a-uuid", uuid.uuid4().hex]
+    )
+
+    assert found == {first.id: first, second.id: second}
+    assert store.get_chat_messages([]) == {}
+
+
 def test_chat_append_replay_returns_the_stored_message(store: FactoryStore) -> None:
     message_id = uuid.uuid4().hex
     first = store.append_chat(

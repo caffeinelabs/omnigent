@@ -46,6 +46,9 @@ class FactoryProject:
     :param version_id: ``factory_versions`` row of the platform that created it.
     :param lead_update: The project lead's latest structured update
         ``{health, done, next, blocker, at, by}``, or ``None``.
+    :param feature: Its home feature, ``I-<n>`` (the initiative that planned it and
+        accepts it), or ``None`` while its feature is implicit (made from the
+        proposal that created it).
     :param workspace_id: Tenant partition key.
     """
 
@@ -72,6 +75,7 @@ class FactoryProject:
     def_version: int | None = None
     version_id: str | None = None
     lead_update: dict[str, Any] | None = None
+    feature: str | None = None
     workspace_id: int = 0
 
     def to_dict(self) -> dict[str, Any]:

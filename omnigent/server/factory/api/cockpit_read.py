@@ -18,7 +18,7 @@ from fastapi.responses import JSONResponse, Response
 
 from omnigent.entities import Conversation
 from omnigent.errors import ErrorCode, OmnigentError
-from omnigent.factory import LABEL_NAME, cockpit_v2_enabled, factory_enabled
+from omnigent.factory import LABEL_NAME, cockpit_v2_enabled, factory_enabled, node_api_enabled
 from omnigent.server.auth import LEVEL_READ, RESERVED_USER_LOCAL
 from omnigent.server.factory import decision_routing, people, schemas, tier2
 from omnigent.server.factory.api.presence import entries_for
@@ -149,6 +149,7 @@ async def get_preflight(request: Request) -> dict[str, Any]:
         max_projects=max_projects(),
         tier2=schemas.Tier2Status.model_validate(tier2.status(state)),
         cockpit_v2=cockpit_v2_enabled(),
+        node_api=node_api_enabled(),
     ).model_dump(mode="json")
 
 

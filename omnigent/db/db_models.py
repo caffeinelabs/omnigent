@@ -1701,6 +1701,7 @@ class SqlFactoryProject(OmnigentBase):
     :param parent_slug: The project this one was split from, or merged into.
     :param def_version: Factory definition version in force when the row was created.
     :param version_id: ``factory_versions`` row of the platform that created it.
+    :param feature: Its home feature (``I-<n>``), or NULL while its feature is implicit.
     """
 
     __tablename__ = "factory_projects"
@@ -1735,6 +1736,7 @@ class SqlFactoryProject(OmnigentBase):
     def_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     version_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
     lead_update: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    feature: Mapped[str | None] = mapped_column(String(16), nullable=True)
 
     __table_args__ = (
         CheckConstraint("priority IN (0, 1, 2, 3)", name="ck_factory_projects_priority"),

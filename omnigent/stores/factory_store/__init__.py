@@ -20,13 +20,14 @@ import copy
 import hashlib
 import json
 import os
+import re
 import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import replace
-from typing import Any, TypeVar
+from typing import Any, Final, TypeVar
 
 from omnigent.db.db_models import current_workspace_id, uuid_to_bytes
 from omnigent.db.enum_codecs import (
@@ -105,9 +106,13 @@ PROJECT_FIELDS = frozenset(
         "def_version",
         "version_id",
         "lead_update",
+        "feature",
     }
 )
 """Fields ``upsert_project`` / ``update_project`` accept."""
+
+FEATURE_REF_RE: Final = re.compile(r"^I-[1-9][0-9]{0,8}$")
+"""A project's home feature (``factory_projects.feature``): an initiative's ``I-<n>``."""
 
 PR_FIELDS = frozenset(
     {
@@ -453,6 +458,17 @@ def opt_id(value: str | None) -> str | None:
     return None if value is None else norm_id(value)
 
 
+def bare_ids(values: Iterable[str]) -> list[str]:
+    """Bare hex ids of *values*, in order, without duplicates or non-uuids."""
+    out: dict[str, None] = {}
+    for value in values:
+        try:
+            out[norm_id(value)] = None
+        except ValueError:
+            continue
+    return list(out)
+
+
 def check_fields(fields: Mapping[str, Any], allowed: frozenset[str], where: str) -> None:
     """:raises TypeError: When *fields* holds a key outside *allowed*."""
     unknown = sorted(set(fields) - allowed)
@@ -482,6 +498,9 @@ def validate_project_fields(fields: Mapping[str, Any]) -> None:
         check_name(FACTORY_PROJECT_STAGE, fields["stage"], "factory_projects.stage")
     if "status" in fields:
         check_name(FACTORY_PROJECT_STATUS, fields["status"], "factory_projects.status")
+    feature = fields.get("feature")
+    if feature is not None and not (isinstance(feature, str) and FEATURE_REF_RE.match(feature)):
+        raise ValueError(f"factory_projects.feature is an I-<n> ref, not {feature!r}")
 
 
 def validate_pr_fields(fields: Mapping[str, Any]) -> None:
@@ -1084,6 +1103,16 @@ class FactoryStore(DiscoveryStore, InitiativeStore, ABC):
     @abstractmethod
     def get_chat_message(self, message_id: str) -> FactoryChatMessage | None:
         """:returns: The message, or ``None``. Consumer: R3-08 ``reply_to`` resolution."""
+
+    @abstractmethod
+    def get_chat_messages(self, message_ids: Iterable[str]) -> dict[str, FactoryChatMessage]:
+        """
+        Read several messages at once (ids that are not uuids or not found are left out).
+
+        Consumer: the cockpit's node projection (the asks proposals answer).
+
+        :returns: Bare message id -> the message.
+        """
 
     @abstractmethod
     def list_chat(
@@ -2345,6 +2374,12 @@ class InMemoryFactoryStore(InMemoryDiscoveryStore, InMemoryInitiativeStore, Fact
     def get_chat_message(self, message_id: str) -> FactoryChatMessage | None:
         with self._lock:
             return _detach(self._chat.get((self._ws(), norm_id(message_id))))
+
+    def get_chat_messages(self, message_ids: Iterable[str]) -> dict[str, FactoryChatMessage]:
+        ids = bare_ids(message_ids)
+        with self._lock:
+            found = [self._chat.get((self._ws(), i)) for i in ids]
+        return {row.id: _detach(row) for row in found if row is not None}
 
     def list_chat(
         self,
