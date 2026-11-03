@@ -107,7 +107,8 @@ def test_enforce_caps_builders_and_lets_the_rest_through() -> None:
     assert guard(_send("reviewer", title="review-route", model="any"), {})["result"] == "ALLOW"
 
 
-def test_the_pl_bundle_carries_the_unarmed_team_guard() -> None:
+def test_the_pl_bundle_holds_team_guard_back_until_hosts_ship_it() -> None:
+    """Old sandbox runners deny every tool call on a policy path they cannot import."""
     from tests.examples.test_factory_bundles import _PL_DIR
 
     pl = load(_PL_DIR, expand_env=False)
@@ -117,8 +118,7 @@ def test_the_pl_bundle_carries_the_unarmed_team_guard() -> None:
         for p in pl.guardrails.policies
         if isinstance(p, FunctionPolicySpec) and p.function and p.function.path == HANDLER
     ]
-    assert len(found) == 1 and found[0].name == "team_guard"
-    assert not found[0].function.arguments  # type: ignore[union-attr]
+    assert found == []
 
 
 # ── The server's arguments ─────────────────────────────────────

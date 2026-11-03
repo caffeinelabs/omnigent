@@ -855,7 +855,10 @@ has its own team gets a `Team` block in its charter and one
 `sys_factory_task(op="start")` returns the member, `agent` and `model` per
 task (the PL passes `args.model`). Dispatches outside the team are recorded
 (`team.dispatch_outside_spec`) while `OMNIGENT_FACTORY_TEAM_SPEC=warn` (the
-default) and denied by the PL's `team_guard` with `enforce`.
+default). `enforce` needs the PL's `team_guard` policy, which is held out of the
+`factory-pl` bundle until every PL pod runs a sandbox host image that ships
+`omnigent.policies.builtins.factory_team` (a runner that cannot import a policy
+path denies every tool call); add it back before turning `enforce` on.
 
 | Paths | Class |
 |---|---|
