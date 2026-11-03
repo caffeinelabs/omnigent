@@ -36,6 +36,15 @@ async def cockpit(
     initiatives.register()
     nodes.reset_cache()
     snapshot.reset_cache()
+    check = nodes.check_levels
+
+    def strict(tree: nodes.Tree) -> list[str]:
+        """Every projection the route builds keeps one parent, one level up (or the test fails)."""
+        bad = check(tree)
+        assert not bad, bad
+        return bad
+
+    monkeypatch.setattr(nodes, "check_levels", strict)
     async for value in header_cockpit(world, db_uri, monkeypatch):
         yield value
     nodes.reset_cache()
@@ -153,6 +162,44 @@ async def test_readers_see_verbs_disabled_and_editors_use_them(cockpit: Cockpit)
     assert reader["children"]["total"] == 0
 
 
+async def test_a_reader_sees_only_the_members_decisions_and_cost_they_may_read(
+    cockpit: Cockpit,
+) -> None:
+    store, world = cockpit.store, cockpit.world
+    cockpit.permissions.ensure_user("dave")
+    cockpit.permissions.grant("dave", cockpit.fid, LEVEL_READ)
+    world.store.set_session_usage(world.id("lead_a"), {"total_cost_usd": 1.5})
+    world.store.set_session_usage(world.id("pl"), {"total_cost_usd": 4.0})
+    pl = world.id("pl")
+    store.create_decision(
+        cockpit.fid,
+        dedupe_key="pl-asks",
+        question="Which migrations table? (sample)",
+        asked_by_session_id=pl,
+        subject=f"member:{pl}",
+        blocking=True,
+    )
+
+    owner_team = await _page(cockpit, "fx:team")
+    reader_team = await _page(cockpit, "fx:team", user="dave")
+    owner = await _page(cockpit, "product")
+    reader = await _page(cockpit, "product", user="dave")
+    raw = await snapshot.get_snapshot(cockpit.app.state, world.get("lead_a"))
+    readable = await snapshot.readable_for("dave", raw, cockpit.deps)
+    cut = snapshot.filter_snapshot(raw, readable)
+
+    # The owner sees the PL (its open ask draws it); the reader sees neither it nor its ask.
+    assert f"member:{pl}" in [i["ref"] for i in owner_team["children"]["items"]]
+    assert f"member:{pl}" not in [i["ref"] for i in reader_team["children"]["items"]]
+    assert "PL · api-version" not in str(reader_team)
+    assert (await _get(cockpit, f"member:{pl}", user="dave")).status_code == 404
+    assert owner_team["node"]["needs"]["open"] == 1 and reader_team["node"]["needs"]["open"] == 0
+    # The reader's cost is what they may read, not the whole factory's.
+    assert owner["rollup"]["cost"] == round(raw.body["factory"]["cost_usd"], 2) == 5.5
+    assert reader["rollup"]["cost"] == round(cut["factory"]["cost_usd"] or 0.0, 2) == 1.5
+    assert "burn" not in reader["rollup"]
+
+
 async def test_the_thread_counts_this_viewers_unread(cockpit: Cockpit) -> None:
     for body in ("one (sample)", "two (sample)"):
         cockpit.store.append_chat(
@@ -245,3 +292,57 @@ async def test_every_page_of_a_13_45_360_factory_answers_under_300ms(cockpit: Co
     median, worst = timings[len(timings) // 2], timings[-1]
     print(f"node pages: {len(timings)}, p50 {median:.4f} s, p95 {p95:.4f} s, max {worst:.4f} s")
     assert p95 < 0.3, (p95, timings[-5:])
+
+
+async def test_a_cold_build_with_history_answers_under_300ms(cockpit: Cockpit) -> None:
+    """Asks of applied proposals are read in one batch, and only those live nodes quote."""
+    store, fid = cockpit.store, cockpit.fid
+    slugs = [f"proj-{p:02d}" for p in range(45)]
+    for p, slug in enumerate(slugs):
+        store.upsert_project(fid, slug, title=slug, repo=REPO, base_branch=BASE)
+    for n in range(150):
+        message = store.append_chat(
+            fid,
+            thread="factory",
+            author_kind="human",
+            author="alice",
+            author_role="owner",
+            body=f"Ask {n} (sample)",
+        )
+        store.create_proposal(
+            fid,
+            kind="projects",
+            title=f"Plan {n} (sample)",
+            author_kind="agent",
+            author=cockpit.world.id("lead_a"),
+            status="applied",
+            on_behalf_of="alice",
+            reply_to_chat=message.id,
+            result={"created": [slugs[n % 45]]},
+        )
+    states = ("done", "running", "ready", "planned")
+    for t in range(600):
+        task, _ = store.upsert_task(
+            fid, slugs[t % 45], f"k{t}", title=f"Task {t}", state=states[t % 4], estimate_min=45
+        )
+        if t < 450:
+            pr, _ = store.upsert_pr(
+                fid,
+                REPO,
+                10_000 + t,
+                project_slug=slugs[t % 45],
+                state="merged" if t % 3 else "open",
+                task_id=task.id,
+                title=f"Task {t}",
+            )
+            store.update_task(task.id, pr_id=pr.id)
+    await _page(cockpit, "fx")  # warms the snapshot
+    nodes.reset_cache()
+
+    started = time.perf_counter()
+    page = await _page(cockpit, "product")
+    cold = time.perf_counter() - started
+
+    print(f"cold node page with history: {cold:.4f} s")
+    assert page["results"]["merged"] == 300
+    assert cold < 0.3, cold

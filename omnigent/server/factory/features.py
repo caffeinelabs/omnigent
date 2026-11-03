@@ -17,8 +17,9 @@ Where the home comes from, first match wins:
 
 None of these: the project's feature is implicit (made from its proposal by
 the node projection, never stored). :func:`backfill` writes rules 2 and 3
-into the column for rows that have none; it is idempotent and the reconcile
-loop runs it every pass.
+into the column for live work projects that have none; it is idempotent,
+the reconcile loop runs it every pass, and a pass with no new homeless
+project reads nothing.
 """
 
 from __future__ import annotations
@@ -27,7 +28,8 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal
 
-from omnigent.server.factory.charter import normalize_charter
+from omnigent.factory import PROJECT_KIND_WORK
+from omnigent.server.factory.charter import normalize_charter, project_kind
 from omnigent.server.factory.initiative_view import plan_of
 from omnigent.stores.factory_store import FEATURE_REF_RE
 
@@ -38,6 +40,8 @@ Source = Literal["stored", "plan", "proposal", "none"]
 
 CLOSED: Final = frozenset({"cancelled"})
 """Initiative statuses that are nobody's home (a done one still is)."""
+_GONE: Final = frozenset({"cancelled", "merged"})
+"""Project statuses that need no home (merged: folded into another project)."""
 
 
 @dataclass(frozen=True)
@@ -128,27 +132,59 @@ def homes(
     return out
 
 
-def backfill(store: Any, factory_id: str) -> list[tuple[str, str]]:
+_settled: dict[str, frozenset[tuple[str, ...]]] = {}
+"""Factory id -> the projects a pass found no home for (see :func:`backfill`)."""
+_SETTLED_MAX: Final = 256
+
+
+def _identity(project: FactoryProject) -> tuple[str, ...]:
+    """What decides a project's home from its own side: its row, its origin, its stamp."""
+    stamp = normalize_charter(project.charter).get("initiative")
+    ref = stamp.get("ref") if isinstance(stamp, Mapping) else None
+    return (project.id, project.slug, origin_proposal(project) or "", str(ref or ""))
+
+
+def backfill(
+    store: Any, factory_id: str, projects: Sequence[FactoryProject] | None = None
+) -> list[tuple[str, str]]:
     """
-    Write the home feature of every project that has none stored yet (sync).
+    Write the home feature of every live work project that has none stored yet (sync).
 
     Idempotent: a project with a stored feature is never rewritten, so a
-    second run writes nothing.
+    second run writes nothing. Only rows written before the column need it
+    (a plan that lists a project writes the column itself), so a project
+    found homeless stays settled: later passes skip the initiatives' read
+    until a homeless project is new or its origin changes.
 
+    :param projects: The factory's project rows, when the caller has them.
     :returns: ``(slug, I-n)`` of each row written.
     """
-    projects = store.list_projects(factory_id)
-    if all(p.feature for p in projects):
+    rows = store.list_projects(factory_id) if projects is None else projects
+    homeless = [
+        p
+        for p in rows
+        if not p.feature and p.status not in _GONE and project_kind(p) == PROJECT_KIND_WORK
+    ]
+    if not homeless:
+        _settled.pop(factory_id, None)
+        return []
+    wanted = frozenset(_identity(p) for p in homeless)
+    if wanted <= _settled.get(factory_id, frozenset()):
         return []
     initiatives = store.list_initiatives(factory_id, limit=5000)
-    found = homes(projects, initiatives)
+    found = homes(homeless, initiatives)
     written: list[tuple[str, str]] = []
-    for project in projects:
+    left: set[tuple[str, ...]] = set()
+    for project in homeless:
         home = found[project.slug]
-        if project.feature or home.feature is None or not FEATURE_REF_RE.match(home.feature):
+        if home.feature is None or not FEATURE_REF_RE.match(home.feature):
+            left.add(_identity(project))
             continue
         if store.update_project(project.id, feature=home.feature) is not None:
             written.append((project.slug, home.feature))
+    if len(_settled) >= _SETTLED_MAX:
+        _settled.clear()
+    _settled[factory_id] = frozenset(left)
     return written
 
 

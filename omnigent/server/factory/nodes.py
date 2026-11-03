@@ -9,8 +9,9 @@ the views do not carry) and answers ``GET /factories/{fid}/n/{ref}`` one node
 at a time (:meth:`Tree.page`): the node, its breadcrumb, its state and
 progress, its children (60 a page) in order columns, grandchildren only as
 state counts, the levels below it and its results. Nothing is stored here;
-:func:`tree_for` memoizes a factory's tree for :data:`FACTS_TTL_S` and drops
-it on any write the event log records.
+:func:`tree_for` builds one viewer's tree from the snapshot cut to what they
+may read, memoizes it for :data:`FACTS_TTL_S` and drops it on any write the
+event log records.
 
 Adapters (``api.md`` §5):
 
@@ -26,10 +27,17 @@ Adapters (``api.md`` §5):
   to it are ghosts.
 - project: work projects; integration and self projects are items of the
   factory tree (under Environments). Tasks (``T-n``), their PRs
-  (``PR-n``; a PR no task owns gets the implicit task ``adhoc:<pr id>``) and
-  the sessions that ran a task (``run:<session id>``, under its PR).
-- the factory tree: its areas, open rule proposals (``C-n``), the top-level
-  members and the environments.
+  (``PR-n``; a PR no task owns gets the implicit task ``adhoc:<pr id>``; a
+  number two repos share is ``PR-n`` in the factory's repo and
+  ``commit:<sha>`` in the other) and the sessions that ran a task
+  (``run:<session id>``, under its PR; a task with runs and no PR yet has no
+  run page: a follow-up with S6).
+- states: a closed project is done whatever tasks it left (those are history
+  and read "Closed"); a project between queued and ready moves only while its
+  lead or a teammate works, else it waits.
+- the factory tree: its areas (each with its one line), open rule proposals
+  (``C-n``), the working top-level members (and any an open ask names; idle
+  ones are counted on Team) and the environments.
 
 Implicit parents are keyed by their origin and fold into their only child
 (``structure.fold_single_child``). A level hidden by the definition's
@@ -79,7 +87,6 @@ from omnigent.stores.factory_store import norm_id
 if TYPE_CHECKING:
     from omnigent.entities import Conversation
     from omnigent.entities.factory import (
-        FactoryChatMessage,
         FactoryDecision,
         FactoryInitiative,
         FactoryPr,
@@ -89,6 +96,7 @@ if TYPE_CHECKING:
     )
     from omnigent.entities.factory_discovery import FactoryOpportunity
     from omnigent.server.factory.context import FactoryDeps
+    from omnigent.server.factory.snapshot import RawSnapshot
 
 _logger = logging.getLogger(__name__)
 
@@ -140,13 +148,19 @@ _STAGE_STATE: Final[dict[str, str]] = {
     STAGE_MERGED: "done",
     STAGE_DONE: "done",
 }
-"""A project's own state by stage (the stages between queued and ready move)."""
+"""A project's own state by stage. Between queued and ready it moves only while
+its lead or a teammate is working; otherwise it waits (:func:`_project_own`)."""
 _PROJECT_WAIT_KINDS: Final = frozenset(
     {"stall", "proposal", "hold", "merge", "dependency", "capacity"}
 )
 """Project waits that make it wait (an open question is a decision: it needs you)."""
 _RULE_KINDS: Final = frozenset({"tuning", "rules", "code"})
 _RULE_OPEN: Final = frozenset({*PROPOSAL_OPEN_STATUSES, "trial"})
+READ_PROPOSALS: Final = (*sorted(_RULE_OPEN), "applied")
+"""The proposals the projection reads: open ones (ghosts, rules, decisions),
+on trial (rules) and applied (what created a project; whose ask it answers)."""
+_GONE: Final = frozenset({"cancelled", "merged"})
+"""Project statuses that leave the tree (merged: folded into another project)."""
 _FACTORY_SOURCES: Final[dict[str, str]] = {"access_request": "fx:team", "storm": "fx:health"}
 """Decisions about the factory itself, by source, when their subject names no node."""
 _GLYPHS: Final[dict[str, str]] = {
@@ -181,6 +195,16 @@ _VERB_LABELS: Final[dict[str, tuple[str, str]]] = {
     "rename": ("Rename", "r"),
 }
 _READ_ONLY: Final = "You can read this factory; ask an owner for edit access to steer it."
+_AREA_WHY: Final[dict[str, str]] = {
+    "rules": "Rules agents follow, with trials. Changes are proposed from what went wrong.",
+    "team": "Only working agents are drawn; idle ones are counted.",
+    "environments": "The base env, its previews, and the projects that set them up.",
+    "health": "Alarms the factory handled by itself, each with its cause. An alarm reaches "
+    "you only when its cause path ends at a person.",
+    "definition": "The factory's definition, versioned: levels, autonomy, budgets and gates. "
+    "Level names come from here, not from code.",
+}
+"""Each factory area's one line on what it holds (``fx:<area>``)."""
 _WHO_RE: Final = re.compile(r"[^a-z0-9]+")
 _TITLE_MAX: Final = 120
 _SHORT_MAX: Final = 140
@@ -202,13 +226,15 @@ class NodeFacts:
     :param goals: ``strategy.goals`` (``{id, statement, …}``).
     :param views: Project slug -> its snapshot ``ProjectView`` JSON (stage,
         cost, team, what it waits on).
-    :param decisions: The open decisions.
-    :param members: The snapshot's member views (``session_id``, ``title``,
-        ``running``, ``is_top_level``, ``role``).
+    :param proposals: Open, on-trial and applied proposals (:data:`READ_PROPOSALS`).
+    :param decisions: The open decisions the viewer may read.
+    :param members: The viewer's snapshot's member views (``session_id``,
+        ``title``, ``running``, ``is_top_level``, ``role``).
     :param asks: Chat message id (bare hex) -> ``(text, who)`` of the asks
-        projects proposals answer.
+        that the proposals behind live nodes answer.
     :param base_env: The snapshot's ``factory.base`` (head, the live env).
-    :param cost: The factory's spend so far; ``burn`` its spend per hour.
+    :param cost: What the viewer may see spent so far; ``burn`` its spend
+        per hour (``None`` when part of the factory is hidden from them).
     """
 
     factory_id: str
@@ -259,25 +285,51 @@ def _bare(value: str | None) -> str | None:
         return None
 
 
-def _ask_ids(initiatives: Iterable[Any], proposals: Iterable[Any]) -> set[str]:
-    """The chat messages a projects proposal answers on a person's behalf (no initiative's ask)."""
-    covered = {_bare((i.ask_ref or "").removeprefix("chat_")) for i in initiatives}
+def _ask_ids(
+    initiatives: Sequence[FactoryInitiative],
+    proposals: Sequence[FactoryProposal],
+    projects: Sequence[FactoryProject],
+) -> set[str]:
+    """
+    The chat messages live nodes quote: the ask a projects proposal answers on a
+    person's behalf, for the proposals that created a live project or started a
+    live initiative (an initiative that carries the ask itself needs no read).
+    """
+    live = [i for i in initiatives if i.status not in features.CLOSED]
+    covered = {_bare((i.ask_ref or "").removeprefix("chat_")) for i in live}
+    origins = {i.created_by for i in live if (i.created_by or "").startswith("C-")}
+    open_slugs = {p.slug for p in projects if p.status not in _GONE}
+    for project in projects:
+        if project.slug in open_slugs and (origin := features.origin_proposal(project)):
+            origins.add(origin)
+    for row in proposals:
+        created = (row.result or {}).get("created") if row.status == "applied" else None
+        if isinstance(created, list) and open_slugs.intersection(str(s) for s in created):
+            origins.add(row.ref)
     wanted = {
         _bare(p.reply_to_chat)
         for p in proposals
-        if p.kind == "projects" and p.on_behalf_of and p.reply_to_chat
+        if p.ref in origins and p.kind == "projects" and p.on_behalf_of and p.reply_to_chat
     }
     return {m for m in wanted - covered if m}
 
 
 def load_facts(
-    deps: FactoryDeps, root: Conversation, body: Mapping[str, Any], *, now: float | None = None
+    deps: FactoryDeps,
+    root: Conversation,
+    body: Mapping[str, Any],
+    *,
+    readable: Iterable[str] | None = None,
+    now: float | None = None,
 ) -> NodeFacts:
     """
     Read what the projection needs (synchronous; a handful of row reads).
 
-    :param body: The factory's unfiltered snapshot body (``RawSnapshot.body``):
-        its project views, members, base and totals are reused, not rebuilt.
+    :param body: The viewer's snapshot (``snapshot.filter_snapshot``): its
+        project views, members, base env and totals are reused, not rebuilt,
+        already cut to what the viewer may read.
+    :param readable: The sessions the viewer may read; open decisions asked by
+        any other session are left out (``None``: every decision).
     """
     from omnigent.server.factory import definition
 
@@ -288,15 +340,19 @@ def load_facts(
     factory = body.get("factory") or {}
     base = factory.get("base") or {}
     initiatives = store.list_initiatives(fid, limit=5000)
-    proposals = store.list_proposals(fid, limit=5000)
+    proposals = store.list_proposals(fid, status=list(READ_PROPOSALS), limit=5000)
+    projects = store.list_projects(fid)
     asks: dict[str, tuple[str, str]] = {}
-    for message_id in sorted(_ask_ids(initiatives, proposals)):
-        try:
-            message: FactoryChatMessage | None = store.get_chat_message(message_id)
-        except ValueError:
-            message = None
-        if message is not None and message.body.strip():
+    found = store.get_chat_messages(sorted(_ask_ids(initiatives, proposals, projects)))
+    for message_id, message in sorted(found.items()):
+        if message.body.strip():
             asks[message_id] = (message.body.strip(), message.author or "")
+    decisions = store.list_decisions(factory_id=fid, status="open", limit=1000)
+    if readable is not None:
+        sessions = set(readable)
+        decisions = [
+            d for d in decisions if not d.asked_by_session_id or d.asked_by_session_id in sessions
+        ]
     product = (doc.get("product") or {}).get("name") or factory.get("name") or ""
     totals = body.get("totals") or {}
     return NodeFacts(
@@ -310,11 +366,11 @@ def load_facts(
         opportunities=store.list_opportunities(fid, limit=5000),
         initiatives=initiatives,
         proposals=proposals,
-        projects=store.list_projects(fid),
+        projects=projects,
         views={str(v.get("slug")): v for v in body.get("projects") or []},
         tasks=store.list_tasks(fid),
         prs=store.list_prs(fid),
-        decisions=store.list_decisions(factory_id=fid, status="open", limit=1000),
+        decisions=decisions,
         members=list(body.get("members") or []),
         asks=asks,
         base_env=base or None,
@@ -365,6 +421,9 @@ class _N:
     depends_on: tuple[str, ...] = ()
     depends_why: Mapping[str, str] = field(default_factory=dict)
     col: int | None = None
+    note: str | None = None
+    history: bool = False
+    row_id: str | None = None
 
 
 def _esc(text: Any) -> str:
@@ -700,7 +759,6 @@ class Tree:
         charter = normalize_charter(project.charter)
         stage = str(view.get("stage") or project.stage or STAGE_QUEUED)
         status = view.get("status") or project.status
-        own = "done" if status == "done" else _STAGE_STATE.get(stage, "moving")
         waits = any(
             w.get("kind") in _PROJECT_WAIT_KINDS and not w.get("task")
             for w in view.get("waiting_on") or []
@@ -708,6 +766,8 @@ class Tree:
         pl = view.get("pl") or {}
         team = list(view.get("team") or [])
         working = tuple(str(m.get("title")) for m in team if m.get("running") and m.get("title"))
+        running = bool(pl.get("running")) or any(m.get("running") for m in team)
+        own, note = _project_own(stage, status, running=running)
         budget = (charter.get("budgets") or {}).get("project_usd")
         depends_on = [str(d) for d in charter.get("depends_on") or []]
         what = charter.get("outcome") or charter.get("goal")
@@ -730,6 +790,7 @@ class Tree:
             _clip(project.title or project.slug, _TITLE_MAX),
             parent,
             own=own,
+            note=note,
             leaf=item,
             waits=waits,
             paused=bool(view.get("paused_by")),
@@ -750,11 +811,7 @@ class Tree:
     def _projects(self) -> None:
         facts = self.facts
         live = sorted(
-            (
-                p
-                for p in facts.projects
-                if p.status not in ("cancelled", "merged") and p.slug not in self.hidden
-            ),
+            (p for p in facts.projects if p.status not in _GONE and p.slug not in self.hidden),
             key=lambda p: (p.created_at, p.slug),
         )
         work = [p for p in live if project_kind(p) == PROJECT_KIND_WORK]
@@ -842,6 +899,9 @@ class Tree:
                 continue
             sessions = [s for s in task.session_ids or [] if _bare(s)]
             member = self._members.get(_bare(sessions[-1]) or "") if sessions else None
+            own = _TASK_STATE.get(task.state, "notstarted")
+            # A closed project's unfinished tasks are history: they never colour it.
+            history = own != "done" and self.nodes[project].own == "done"
             node = self._add(
                 _N(
                     task.ref,
@@ -851,9 +911,13 @@ class Tree:
                     _clip(task.title, _TITLE_MAX),
                     project,
                     tag=task.ref,
-                    own=_TASK_STATE.get(task.state, "notstarted"),
+                    own="done" if history else own,
+                    note=f"{task.state} when its {self._level_name('project').lower()} closed"
+                    if history
+                    else None,
+                    history=history,
                     leaf=True,
-                    waits=task.state != "done" and task.ref in held,
+                    waits=not history and task.state != "done" and task.ref in held,
                     why=_esc(_clip((task.card or {}).get("text"), _WHY_MAX)),
                     order=task.key,
                     deps=tuple(str(d) for d in task.deps or ()),
@@ -863,20 +927,16 @@ class Tree:
                 )
             )
             tasks_by_id[norm_id(task.id)] = node
-        counts: dict[int, int] = {}
-        for pr in facts.prs:
-            counts[pr.number] = counts.get(pr.number, 0) + 1
         own_pr = {t.ref: _bare(t.pr_id) for t in facts.tasks if t.pr_id}
         change_of: dict[str, str] = {}
-        for pr in sorted(facts.prs, key=lambda p: p.number):
+        self._pr_ref: dict[str, str] = {}
+        for pr, ref in self._pr_refs():
             project = self._work.get(pr.project_slug or "")
-            if project is None or counts[pr.number] > 1:
-                continue
-            if pr.state == "closed":
+            if project is None:
                 continue
             task = tasks_by_id.get(_bare(pr.task_id) or "")
             parent = task.ref if task is not None else self._adhoc(pr, project)
-            ref = f"PR-{pr.number}"
+            same_repo = not facts.repo or pr.repo == facts.repo
             self._add(
                 _N(
                     ref,
@@ -885,14 +945,16 @@ class Tree:
                     "pr",
                     _clip(pr.title or f"#{pr.number}", _TITLE_MAX),
                     parent,
-                    tag=f"#{pr.number}",
+                    tag=f"#{pr.number}" if same_repo else f"{pr.repo}#{pr.number}",
                     own=self._pr_state(pr),
                     leaf=True,
                     merged_at=pr.merged_at,
                     merged_sha=pr.merged_sha,
                     base=pr.base_ref or None,
+                    row_id=norm_id(pr.id),
                 )
             )
+            self._pr_ref[norm_id(pr.id)] = ref
             if task is not None and (
                 own_pr.get(task.ref) == _bare(pr.id) or task.ref not in change_of
             ):
@@ -911,6 +973,42 @@ class Tree:
             until = hold.get("until")
             if hold and (not isinstance(until, int | float) or until > self.facts.now):
                 out.add(task.ref)
+        return out
+
+    def _pr_refs(self) -> list[tuple[FactoryPr, str]]:
+        """
+        The PRs that are changes, with their refs (closed ones are left out).
+
+        A number is ``PR-n`` once; when two repos share it, the one in the
+        factory's repo (else the oldest) keeps ``PR-n`` and the others are named
+        by their commit (``commit:<sha>``), so every PR keeps one home.
+        """
+        live = [p for p in self.facts.prs if p.state != "closed"]
+        by_number: dict[int, list[FactoryPr]] = {}
+        for pr in live:
+            by_number.setdefault(pr.number, []).append(pr)
+        out: list[tuple[FactoryPr, str]] = []
+        taken: set[str] = set()
+        for number in sorted(by_number):
+            rows = sorted(
+                by_number[number],
+                key=lambda p: (p.repo != self.facts.repo, p.created_at, p.repo),
+            )
+            out.append((rows[0], f"PR-{number}"))
+            for pr in rows[1:]:
+                ref = f"commit:{(pr.merged_sha or pr.head_sha or '').lower()}"
+                if node_refs.parse(ref) is None or ref in taken:
+                    _logger.info(
+                        "factory %s: %s#%s shares PR-%s with another repo and has no "
+                        "commit of its own to be named by; it is not shown",
+                        self.facts.factory_id,
+                        pr.repo,
+                        number,
+                        number,
+                    )
+                    continue
+                taken.add(ref)
+                out.append((pr, ref))
         return out
 
     def _pr_state(self, pr: FactoryPr) -> str:
@@ -983,13 +1081,24 @@ class Tree:
                     why=_esc(_clip(proposal.rationale, _WHY_MAX)),
                 )
             )
-        for member in self.facts.members:
-            sid = _bare(member.get("session_id"))
-            if not sid or not member.get("is_top_level"):
+        self._team()
+        self._areas()
+
+    def _team(self) -> None:
+        """Working top-level agents are drawn (and any an open ask names); idle ones counted."""
+        named = {node_refs.normalize(d.subject) for d in self.facts.decisions if d.subject}
+        tops = [
+            m for m in self.facts.members if m.get("is_top_level") and _bare(m.get("session_id"))
+        ]
+        drawn: list[str] = []
+        for member in tops:
+            sid = _bare(member.get("session_id")) or ""
+            ref = f"member:{sid}"
+            if not member.get("running") and ref not in named:
                 continue
             self._add(
                 _N(
-                    f"member:{sid}",
+                    ref,
                     FACTORY_TREE,
                     "item",
                     "agent",
@@ -1001,9 +1110,34 @@ class Tree:
                     cost=member.get("cost_usd"),
                 )
             )
-        for ref in node_refs.FACTORY_AREAS:
-            area = self.nodes[f"{node_refs.FX}:{ref}"]
-            area.own = "done"
+            if member.get("running"):
+                drawn.append(str(member.get("title") or sid[:8]))
+        team = self.nodes[f"{node_refs.FX}:team"]
+        team.working = tuple(drawn)
+        team.idle = sum(1 for m in tops if not m.get("running")) or None
+        everyone = self.facts.members
+        if everyone:
+            running = sum(1 for m in everyone if m.get("running"))
+            team.short = f"{len(everyone)} members · {running} running"
+
+    def _areas(self) -> None:
+        """Each area's one line on what it holds; an area with nothing to act on is done."""
+        for key in node_refs.FACTORY_AREAS:
+            area = self.nodes[f"{node_refs.FX}:{key}"]
+            area.own, area.why = "done", _AREA_WHY.get(key, "")
+        rules = sum(1 for n in self.nodes.values() if n.parent == "fx:rules")
+        if rules:
+            self.nodes["fx:rules"].short = f"{rules} open"
+        base = self.facts.base_env or {}
+        reported = (base.get("env") or {}).get("reported") or {}
+        sha = str((reported.get("deployed") or {}).get("sha") or "")[:7]
+        if base.get("branch") and (sha or reported.get("state")):
+            words = [f"Base env {base['branch']}" + (f" @{sha}" if sha else "")]
+            if reported.get("state"):
+                words.append(str(reported["state"]))
+            self.nodes["fx:environments"].short = " · ".join(words)
+        if self.facts.definition_version:
+            self.nodes["fx:definition"].short = f"version {self.facts.definition_version}"
 
     # ── Levels, parents, columns ───────────────────────────────
 
@@ -1063,7 +1197,9 @@ class Tree:
         target: str | None = None
         if head.lower() == "pr" and (pid := _bare(rest.split("@", 1)[0])):
             pr = self._prs_by_id.get(pid)
-            target = f"PR-{pr.number}" if pr is not None else None
+            if pr is not None and pr.project_slug in self.hidden:
+                return None
+            target = self._pr_ref.get(pid)
         elif head.lower() == "task" and "/" in rest:
             slug, _s, key = rest.partition("/")
             task = self._tasks_by_key.get((slug, key))
@@ -1203,6 +1339,8 @@ class Tree:
             return "ghost"
         if node.later:
             return "later"
+        if node.level == "project" and node.own == "done":
+            return "done"  # closed: the tasks it left are history, not active children
         if node.paused:
             return "paused"
         active = [
@@ -1273,10 +1411,16 @@ class Tree:
         return self._median.get(slug, DEFAULT_WEIGHT_MIN)
 
     def _project_progress(self, node: _N) -> tuple[float, int, int, float] | None:
-        """``(done by weight, tasks done, tasks, total weight)``; ``None`` without a task."""
+        """
+        ``(done by weight, tasks done, tasks, total weight)``; ``None`` without a task.
+
+        A closed project's unfinished tasks are history: they count nowhere.
+        """
 
         def make() -> tuple[float, int, int, float] | None:
-            tasks = [k for k in self.real_children(node.ref) if k.level == "task"]
+            tasks = [
+                k for k in self.real_children(node.ref) if k.level == "task" and not k.history
+            ]
             if not tasks:
                 return None
             weights = [self._weight(t, node.ref) for t in tasks]
@@ -1302,9 +1446,10 @@ class Tree:
         for project, progress in zip(projects, found, strict=True):
             weight = weights.get(project.ref, median)
             total += weight
-            if progress is None:
-                growing = growing or self.state(project.ref) != "done"
-                done += weight if self.state(project.ref) == "done" else 0.0
+            if self.state(project.ref) == "done":
+                done += weight  # a closed project is complete, whatever it left
+            elif progress is None:
+                growing = True
             else:
                 done += weight * progress[0]
         finished = sum(1 for p in projects if self.state(p.ref) == "done")
@@ -1396,10 +1541,20 @@ class Tree:
             out["detail"] = f"held for {node.held_for}"
         elif state == "ghost" and node.short:
             out["detail"] = node.short
+        elif state == "done" and node.history:
+            out["label"] = "Closed"
+            if node.note:
+                out["detail"] = node.note
         elif state == "done":
-            kids = len(self.real_children(node.ref))
-            if kids > 1:
-                out["detail"] = f"all {kids} done"
+            kids = self.real_children(node.ref)
+            left = sum(1 for k in kids if k.history)
+            if left:
+                noun = self._level_name(kids[0].level, plural=left != 1).lower()
+                out["detail"] = f"closed · {left} unfinished {noun} left as history"
+            elif len(kids) > 1:
+                out["detail"] = f"all {len(kids)} done"
+        elif node.note and state == node.own:
+            out["detail"] = node.note
         return out
 
     def _grandchildren(self, node: _N) -> dict[str, Any] | None:
@@ -1614,7 +1769,7 @@ class Tree:
                 }
         env = self._env()
         sha = (env.get("deployed") or {}).get("sha")
-        if node.tree == PRODUCT_TREE and sha and self.results(node)["in_base_env"]:
+        if node.tree == PRODUCT_TREE and sha and self.in_base_env(node):
             out["in_base_env"] = {"sha": str(sha)[:7], "try_it": False}
         return out
 
@@ -1803,9 +1958,7 @@ class Tree:
             )
         key = node_refs.thread_key(target.ref)
         if target.level == "change" and target.kind == "pr":
-            number = int(target.ref.removeprefix("PR-"))
-            pr = next((p for p in self._prs_by_id.values() if p.number == number), None)
-            key = f"pr:{norm_id(pr.id)}" if pr is not None else None
+            key = f"pr:{target.row_id}" if target.row_id else None
         root_thread = "improvements" if target.tree == FACTORY_TREE else "factory"
         out: dict[str, Any] = {"key": key or root_thread, "unread": 0}
         if responder := self.responder(target):
@@ -1916,6 +2069,23 @@ class Tree:
         if node.parent is None:
             out["home"] = self.home.get(node.tree) or (self.ladder[node.tree][1:2] or [""])[0]
         return out
+
+
+def _project_own(stage: str, status: str | None, *, running: bool) -> tuple[str, str | None]:
+    """
+    A project's own state (and the one line that says why) from its stage.
+
+    Closed (status done, or stage merged / done) is done whatever tasks it left.
+    Queued has not started and ready waits for its merge. Any stage between
+    moves only while its lead or a teammate is working; otherwise it waits.
+    """
+    if status == "done" or stage in (STAGE_MERGED, STAGE_DONE):
+        return "done", None
+    if stage in _STAGE_STATE:
+        return _STAGE_STATE[stage], None
+    if running:
+        return "moving", None
+    return "waiting", f"in {stage.replace('_', ' ')} · nobody is working on it"
 
 
 def _offset(cursor: str | None) -> int:
@@ -2042,24 +2212,41 @@ def assert_levels(tree: Tree) -> Tree:
 
 # ── The cache ──────────────────────────────────────────────────
 
-_trees: dict[tuple[str, frozenset[str]], tuple[float, Tree]] = {}
+_trees: dict[tuple[str, str], tuple[float, Tree]] = {}
 _locks: dict[tuple[int, str], asyncio.Lock] = {}
 _TREES_MAX: Final = 64
+
+
+def viewer_key(readable: Iterable[str]) -> str:
+    """:returns: A digest of the sessions a viewer may read (who read the same share a tree)."""
+    return hashlib.sha256("\n".join(sorted(set(readable))).encode()).hexdigest()[:24]
+
+
+def hidden_projects(raw: RawSnapshot, readable: Iterable[str]) -> frozenset[str]:
+    """:returns: The slugs of the projects whose lead the viewer cannot read."""
+    sessions = set(readable)
+    return frozenset(
+        slug for slug, pl in raw.project_pl.items() if pl is not None and pl not in sessions
+    )
 
 
 async def tree_for(
     deps: FactoryDeps,
     root: Conversation,
-    body: Mapping[str, Any],
-    *,
-    hidden: Iterable[str] = (),
+    raw: RawSnapshot,
+    readable: Iterable[str],
 ) -> Tree:
     """
-    The factory's projection for a viewer who cannot read *hidden* projects,
-    built from the cached snapshot *body* and reused for :data:`FACTS_TTL_S`.
+    The factory as a viewer who may read the sessions *readable* sees it, built
+    from the cached snapshot cut to that viewer (``snapshot.filter_snapshot``:
+    members, team chips, cost and burn, the base env) and from the store rows
+    of the projects they may read; reused for :data:`FACTS_TTL_S`.
     """
+    from omnigent.server.factory.snapshot import filter_snapshot
+
     fid = norm_id(root.id)
-    key = (fid, frozenset(hidden))
+    sessions = set(readable)
+    key = (fid, viewer_key(sessions))
     cached = _trees.get(key)
     if cached is not None and time.monotonic() - cached[0] < FACTS_TTL_S:
         return cached[1]
@@ -2070,7 +2257,9 @@ async def tree_for(
             return cached[1]
 
         def build() -> Tree:
-            tree = Tree(load_facts(deps, root, body), hidden=key[1])
+            body = filter_snapshot(raw, sessions)
+            facts = load_facts(deps, root, body, readable=sessions)
+            tree = Tree(facts, hidden=hidden_projects(raw, sessions))
             if bad := check_levels(tree):
                 _logger.warning(
                     "factory %s: the level projection breaks the rule: %s", fid, bad[:5]
@@ -2126,9 +2315,11 @@ __all__ = [
     "Tree",
     "assert_levels",
     "check_levels",
+    "hidden_projects",
     "invalidate",
     "load_facts",
     "register",
     "reset_cache",
     "tree_for",
+    "viewer_key",
 ]

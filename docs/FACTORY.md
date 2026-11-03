@@ -966,14 +966,19 @@ planned it, pays for it and accepts it. Applying a projects proposal that
 starts or extends an initiative writes it; the reconcile loop backfills rows
 that have none from the initiatives' `plan.projects` (the one that added it
 first) and then from the initiative its creating proposal
-(`charter.why.proposal`) started. Any other initiative that lists the
-project gets an "also serves" link, never a second parent.
+(`charter.why.proposal`) started; a project found homeless is settled, so
+later passes read nothing until a new homeless project appears. Any other
+initiative that lists the project gets an "also serves" link, never a
+second parent.
 
 **Node pages** (`GET …/factories/{fid}/n/{ref}`, `nodes.py`) project the
 factory onto the levels one node at a time: the node, its breadcrumb (folded
 implicit ancestors flagged), its state (the worst among its active
-children; the status line is the state for now), progress (acceptance
-steps passing on the base env for a feature, task weight for a project),
+children; the status line is the state for now; a closed project is done
+whatever tasks it left, and those read "Closed"; a project between queued
+and ready moves only while its lead or a teammate works, else it waits),
+progress (acceptance steps passing on the base env for a feature, task
+weight for a project),
 its children in order columns (siblings layered by their dependencies;
 Later holds an initiative's later waves, ghosts the projects an open
 proposal would add), 60 a page (`children_page` is the next cursor; past 60
@@ -983,10 +988,17 @@ are keyed by their origin (`need:from-C-12`, `feature:from-C-12`,
 `feature:by-<who>`, `goal:no-goal` once goals exist) and fold into their only
 child; a level the definition hides now is left out and its nodes' children
 hang one level up; integration and self projects sit in the factory tree
-under Environments. One projection per factory (and set of projects a
-viewer cannot read) is memoized for 5 s and dropped on any recorded write.
-Cockpit v3 reads these pages instead of its sample when
-`OMNIGENT_FACTORY_NODE_API=1` (preflight `node_api`).
+under Environments; the Team area draws the working agents (and any an
+open ask names) and counts the idle ones. A PR number two repos share is
+`PR-n` in the factory's repo and `commit:<sha>` in the other. Runs show
+under their task's PR; a task with runs and no PR yet has no run page
+(follow-up with S6). The projection is built from the snapshot cut to the
+viewer (`filter_snapshot`: members, team chips, decisions, cost and burn,
+the base env), memoized for 5 s per factory and set of sessions the viewer
+may read, and dropped on any recorded write; open asks come from one
+batched read of the messages live nodes quote. Cockpit v3 reads these pages
+instead of its sample when `OMNIGENT_FACTORY_NODE_API=1` (preflight
+`node_api`).
 
 **The environment profile** (`environment`, `environment.py`) holds the
 facts one product's dev env and previews need, which the bundles used to

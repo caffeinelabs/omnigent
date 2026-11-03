@@ -23,6 +23,7 @@ from omnigent.server.factory.node_views import validate_page
 from omnigent.server.factory.nodes import NO_GOAL, PAGE_SIZE, LevelError, Tree, assert_levels
 from tests.server.factory.node_fixtures import (
     ASK_MESSAGE,
+    NOW,
     SHORTLIST,
     SHORTLIST_MESSAGE,
     WAVE_1,
@@ -213,6 +214,80 @@ def test_base_env_lands_in_the_factory_tree(tree: Tree) -> None:
     assert "results" not in page
     assert "base-env" not in [n.ref for n in tree.subtree("product")]
     assert product["rollup"]["counts"][1]["count"] == 9  # the product's projects only
+    # Parked in planning with its lead idle: it waits, it does not claim to move.
+    assert page["node"]["state"] == "waiting"
+    assert page["status"]["detail"] == "in planning · nobody is working on it"
+    assert _page(tree, "fx:environments")["node"]["state"] == "waiting"
+    assert _page(tree, "fx")["rollup"]["moving_anywhere"] is True  # Atlas works
+    assert product["rollup"]["moving_anywhere"] is False
+
+
+def test_a_project_between_stages_moves_only_while_someone_works() -> None:
+    facts = factory_1340()
+    views = dict(facts.views)
+    views["base-env"] = {**views["base-env"], "pl": {"title": "Mae", "running": True}}
+    views["build-tier-drafts-3"] = {
+        **views["build-tier-drafts-3"],
+        "stage": "building",
+        "waiting_on": [],
+        "team": [{"session_id": hex_id(950), "title": "Kai", "running": True}],
+    }
+    facts.views = views
+    tree = assert_levels(Tree(facts))
+
+    assert _page(tree, "base-env")["node"]["state"] == "moving"
+    drafts = _page(tree, "build-tier-drafts-3")
+    # Its PRs wait for a person to merge them; the project itself has Kai working.
+    assert drafts["node"]["state"] == "waiting"
+    assert tree.nodes["build-tier-drafts-3"].own == "moving"
+
+
+def test_a_finished_project_is_done_whatever_tasks_it_left() -> None:
+    facts = factory_1340()
+    left = [
+        dataclasses.replace(
+            facts.tasks[0],
+            id=hex_id(230 + n),
+            number=30 + n,
+            project_slug="ux-status-page",
+            key=f"left-{n}",
+            title=f"Left over {n}",
+            state=state,
+            pr_id=None,
+            session_ids=[],
+            deps=[],
+        )
+        for n, state in enumerate(("planned", "failed"))
+    ]
+    done = dataclasses.replace(
+        facts.tasks[0],
+        id=hex_id(240),
+        number=40,
+        project_slug="ux-status-page",
+        key="page",
+        title="Status page",
+        state="done",
+        pr_id=None,
+        session_ids=[],
+        deps=[],
+    )
+    facts.tasks = [*facts.tasks, *left, done]
+    tree = assert_levels(Tree(facts))
+
+    project = _page(tree, "ux-status-page")
+    feature = _page(tree, "feature:from-C-13")
+
+    assert project["node"]["state"] == "done"
+    assert project["status"]["detail"] == "closed · 2 unfinished tasks left as history"
+    # T-40 and the implicit task of its merged PR; the two left over count nowhere.
+    assert project["node"]["progress"] == {"value": 1.0, "label": "2/2", "what": "tasks"}
+    assert feature["node"]["state"] == "done"
+    assert feature["node"]["progress"] == {"value": 1.0, "label": "4/4", "what": "projects"}
+    rows = {i["ref"]: i for i in project["children"]["items"]}
+    assert {rows[r]["state"] for r in ("T-30", "T-31", "T-40")} == {"done"}
+    assert rows["T-31"]["status_compact"]["label"] == "Closed"
+    assert rows["T-31"]["status_compact"]["detail"] == "failed when its project closed"
+    assert "broken" not in str(_page(tree, "product")["levels_below"])
 
 
 def test_assistant_core(tree: Tree) -> None:
@@ -363,6 +438,85 @@ def test_the_factory_tree(tree: Tree) -> None:
     assert rules["node"]["state"] == "needs"  # D-50 and D-51
     assert page["thread"] == {"key": "improvements", "unread": 0, "responder": "Sentinel"}
     assert page["rollup"]["team"] == {"working": [{"name": "Atlas", "working": True}], "idle": 2}
+    # Every area says in one line what it holds; none is an empty tile.
+    for area in page["children"]["items"]:
+        assert _page(tree, area["ref"])["node"]["why_html"], area["ref"]
+
+
+def test_the_team_draws_working_agents_and_counts_idle_ones(tree: Tree) -> None:
+    team = _page(tree, "fx:team")
+
+    # Atlas works; Sentinel is idle but an open ask (D-37) names it; Juno is only counted.
+    assert [i["title"] for i in team["children"]["items"]] == ["Atlas", "Sentinel"]
+    assert team["node"]["idle"] == 2 and team["node"]["short"] == "5 members · 1 running"
+    assert team["node"]["working"] == [{"name": "Atlas", "working": True}]
+    assert _page(tree, "fx:environments")["node"]["short"] == (
+        "Base env sample-main @817480d · ready"
+    )
+    assert _page(tree, "fx:definition")["node"]["short"] == "version 14"
+
+
+def test_in_base_env_needs_every_merged_change() -> None:
+    facts = factory_1340()
+    late = dataclasses.replace(
+        facts.prs[0],
+        id=hex_id(9890),
+        number=9890,
+        project_slug="connectors-core",
+        task_id=None,
+        merged_at=NOW,
+        merged_sha="9890000" + "0" * 33,
+        title="After the deploy",
+    )
+    facts.prs = [*facts.prs, late]
+    tree = assert_levels(Tree(facts))
+
+    product = _page(tree, "product")
+    connectors = _page(tree, "connectors-core")
+
+    assert product["results"]["merged"] == 8 and product["results"]["in_base_env"] == 7
+    assert "in_base_env" not in product["rollup"]
+    assert "in_base_env" not in connectors["rollup"]
+    assert _page(tree, "skill-discovery")["rollup"]["in_base_env"] == {
+        "sha": "817480d",
+        "try_it": False,
+    }
+
+
+def test_a_pr_number_two_repos_share_keeps_one_home_each() -> None:
+    facts = factory_1340()
+    other = dataclasses.replace(
+        facts.prs[0],
+        id=hex_id(19876),
+        repo="sample-org/other-app",
+        task_id=None,
+        project_slug="connectors-core",
+        merged_sha="abc1234" + "0" * 33,
+        title="Same number, other repo",
+    )
+    closed = dataclasses.replace(
+        facts.prs[1],
+        id=hex_id(29882),
+        repo="sample-org/third-app",
+        state="closed",
+        merged_at=None,
+        merged_sha=None,
+    )
+    facts.prs = [other, *facts.prs, closed]
+    tree = assert_levels(Tree(facts))
+
+    mine = _page(tree, "PR-9876")
+    theirs = _page(tree, f"commit:{other.merged_sha}")
+    connectors = _page(tree, "connectors-core")
+
+    assert mine["breadcrumb"][-1]["ref"] == "T-15"
+    assert mine["thread"]["key"] == f"pr:{hex_id(9876)}"
+    assert theirs["node"]["tag"] == "sample-org/other-app#9876"
+    assert theirs["thread"]["key"] == f"pr:{hex_id(19876)}"
+    # A closed row never takes the number: PR-9882 is still the merged one.
+    assert _page(tree, "PR-9882")["node"]["title"] == "connectors-core"
+    assert connectors["results"]["merged"] == 2
+    assert _page(tree, "product")["results"]["merged"] == 8
 
 
 def test_unknown_refs_have_no_page_and_spellings_resolve(tree: Tree) -> None:

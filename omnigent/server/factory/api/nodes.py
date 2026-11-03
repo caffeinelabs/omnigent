@@ -7,8 +7,10 @@ its roll-up, its children in order columns (``children_page``: the cursor
 of the next 60), grandchildren as state counts, the levels below it and its
 results. ``ref`` is any node ref (``product``, ``I-1``, ``<slug>``,
 ``T-16``, ``PR-9876``, ``fx:health`` …); an implicit parent with one child
-answers as that child. Projects the viewer cannot read are left out with
-everything under them. ``seen`` is accepted and ignored until last-look
+answers as that child. The tree is built from the snapshot cut to the viewer
+(``filter_snapshot``): projects whose lead they cannot read are left out with
+everything under them, and so are the members, team chips, decisions, cost
+and base env they may not see. ``seen`` is accepted and ignored until last-look
 marks exist. 404 ``unknown_node`` for a ref the factory has no node for;
 400 ``bad_cursor`` for a cursor no page handed out.
 """
@@ -24,7 +26,7 @@ from fastapi.responses import JSONResponse
 from omnigent.server.auth import LEVEL_EDIT
 from omnigent.server.factory import node_views, nodes, people
 from omnigent.server.factory.api.agents import fleet_context
-from omnigent.server.factory.api.chat import _reader, _unread
+from omnigent.server.factory.api.chat import UNREAD_CAP, _reader
 
 router = APIRouter(prefix="/v1/factory", tags=["factory"])
 
@@ -43,7 +45,7 @@ async def get_node(
 ) -> dict[str, Any] | JSONResponse:
     """One node page: the node, breadcrumb, state, roll-up and its children (60 a page)."""
     ctx = await fleet_context(request, factory_id)
-    tree = await nodes.tree_for(ctx.deps, ctx.root, ctx.raw.body, hidden=ctx.hidden)
+    tree = await nodes.tree_for(ctx.deps, ctx.root, ctx.raw, ctx.readable)
     level = await asyncio.to_thread(people.viewer_level, ctx.deps, ctx.root.id, ctx.user_id)
     try:
         page = tree.page(ref, cursor=children_page, can_edit=level >= LEVEL_EDIT)
@@ -58,10 +60,10 @@ async def get_node(
 
 
 def _thread_unread(deps: Any, factory_id: str, thread: str, user_id: str | None) -> int:
-    """This viewer's unread messages in the node's thread (0 without one)."""
+    """This viewer's unread messages in the node's one thread (others' messages, capped)."""
     store = deps.factory_store
-    stat = next((s for s in store.chat_thread_stats(factory_id) if s.thread == thread), None)
-    if stat is None:
-        return 0
-    reads = {r.thread: r.last_seq for r in store.list_chat_reads(factory_id, _reader(user_id))}
-    return int(_unread(deps, factory_id, thread, reads.get(thread, 0), stat, user_id)["unread"])
+    reader = _reader(user_id)
+    marks = store.list_chat_reads(factory_id, reader)
+    last = next((r.last_seq for r in marks if r.thread == thread), 0)
+    rows = store.list_chat(factory_id, thread, after_seq=last, limit=UNREAD_CAP + 1)
+    return min(UNREAD_CAP, sum(1 for r in rows if r.author != user_id))

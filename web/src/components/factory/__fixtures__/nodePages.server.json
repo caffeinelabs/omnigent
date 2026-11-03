@@ -1419,7 +1419,7 @@
         "level": "area",
         "level_name": "Area",
         "ref": "fx:environments",
-        "state": "moving",
+        "state": "waiting",
         "title": "Environments"
       }
     ],
@@ -1451,11 +1451,12 @@
         "working": false
       },
       "ref": "base-env",
-      "state": "moving",
+      "state": "waiting",
       "status_compact": {
-        "ends": "moving",
-        "kind": "moving",
-        "label": "Moving",
+        "detail": "in planning · nobody is working on it",
+        "ends": "other",
+        "kind": "waiting",
+        "label": "Waiting",
         "segments": []
       },
       "title": "base-env",
@@ -1463,12 +1464,13 @@
     },
     "rollup": {
       "cost": 0.0,
-      "moving_anywhere": true
+      "moving_anywhere": false
     },
     "status": {
-      "ends": "moving",
-      "kind": "moving",
-      "label": "Moving",
+      "detail": "in planning · nobody is working on it",
+      "ends": "other",
+      "kind": "waiting",
+      "label": "Waiting",
       "segments": []
     },
     "thread": {
@@ -2028,6 +2030,7 @@
             "working": false
           },
           "ref": "fx:rules",
+          "short": "2 open",
           "state": "needs",
           "status_compact": {
             "ends": "other",
@@ -2042,12 +2045,13 @@
           "grandchildren": {
             "by_state": {
               "moving": 1,
-              "notstarted": 2
+              "notstarted": 1
             },
-            "count": 3,
+            "count": 2,
             "later": 0,
             "noun": "items"
           },
+          "idle": 2,
           "kind": "area",
           "kind_name": "Area",
           "level": "area",
@@ -2061,6 +2065,7 @@
             "working": false
           },
           "ref": "fx:team",
+          "short": "5 members · 1 running",
           "state": "moving",
           "status_compact": {
             "ends": "moving",
@@ -2068,13 +2073,19 @@
             "label": "Moving",
             "segments": []
           },
-          "title": "Team"
+          "title": "Team",
+          "working": [
+            {
+              "name": "Atlas",
+              "working": true
+            }
+          ]
         },
         {
           "glyph": "▦",
           "grandchildren": {
             "by_state": {
-              "moving": 1
+              "waiting": 1
             },
             "count": 1,
             "later": 0,
@@ -2093,11 +2104,12 @@
             "working": false
           },
           "ref": "fx:environments",
-          "state": "moving",
+          "short": "Base env sample-main @817480d · ready",
+          "state": "waiting",
           "status_compact": {
-            "ends": "moving",
-            "kind": "moving",
-            "label": "Moving",
+            "ends": "other",
+            "kind": "waiting",
+            "label": "Waiting",
             "segments": []
           },
           "title": "Environments"
@@ -2141,6 +2153,7 @@
             "working": false
           },
           "ref": "fx:definition",
+          "short": "version 14",
           "state": "done",
           "status_compact": {
             "ends": "other",
@@ -2163,8 +2176,9 @@
       {
         "by_state": {
           "done": 2,
-          "moving": 2,
-          "needs": 1
+          "moving": 1,
+          "needs": 1,
+          "waiting": 1
         },
         "count": 5,
         "later": 0,
@@ -2174,11 +2188,12 @@
       },
       {
         "by_state": {
-          "moving": 2,
+          "moving": 1,
           "needs": 2,
-          "notstarted": 2
+          "notstarted": 1,
+          "waiting": 1
         },
-        "count": 6,
+        "count": 5,
         "later": 0,
         "level": "item",
         "name": "Items",
@@ -2190,8 +2205,9 @@
       "grandchildren": {
         "by_state": {
           "done": 2,
-          "moving": 2,
-          "needs": 1
+          "moving": 1,
+          "needs": 1,
+          "waiting": 1
         },
         "count": 5,
         "later": 0,
@@ -2362,6 +2378,7 @@
         "working": false
       },
       "ref": "fx:rules",
+      "short": "2 open",
       "state": "needs",
       "status_compact": {
         "ends": "other",
@@ -2370,7 +2387,7 @@
         "segments": []
       },
       "title": "Rules",
-      "why_html": ""
+      "why_html": "Rules agents follow, with trials. Changes are proposed from what went wrong."
     },
     "rollup": {
       "cost": 0.0,

@@ -298,7 +298,7 @@ def _sync_factory(
             report.stages_changed.append((row.slug, row.stage, result.stage))
     stale = server_decisions.ended_project_decisions(current, open_decisions)
     try:
-        report.features_backfilled += features.backfill(fstore, factory_id)
+        report.features_backfilled += features.backfill(fstore, factory_id, current)
     except Exception as exc:  # noqa: BLE001 - the next pass retries; stages still persist
         _record_failure(report, factory_id, "features", exc)
     else:

@@ -5,7 +5,7 @@ from __future__ import annotations
 import builtins
 import random
 import time
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from typing import Any, TypeVar
 
@@ -135,6 +135,7 @@ from omnigent.stores.factory_store import (
     FactoryStore,
     ProposalStateConflict,
     as_list,
+    bare_ids,
     canonical_hash,
     check_chat_body,
     check_fields,
@@ -168,6 +169,8 @@ _WRITE_RETRIES = 5
 _SEQUENCE_RETRIES = 12
 _RETRY_PAUSE_S = 0.02
 _RETRY_PAUSE_MAX_S = 0.4
+_IN_CHUNK = 500
+"""Ids per ``IN (…)`` of a batched read (well under every backend's parameter limit)."""
 
 # Lock conflicts worth replaying: MySQL deadlock (1213) and lock wait timeout
 # (1205); PostgreSQL serialization failure (40001) and deadlock (40P01).
@@ -1669,6 +1672,23 @@ class SqlAlchemyFactoryStore(SqlDiscoveryStore, SqlInitiativeStore, FactoryStore
         with self._session("get_factory_chat_message") as session:
             row = session.get(SqlFactoryChatMessage, (current_workspace_id(), norm_id(message_id)))
             return _chat(row) if row is not None else None
+
+    def get_chat_messages(self, message_ids: Iterable[str]) -> dict[str, FactoryChatMessage]:
+        ids = bare_ids(message_ids)
+        if not ids:
+            return {}
+        model = SqlFactoryChatMessage
+        out: dict[str, FactoryChatMessage] = {}
+        with self._session("get_factory_chat_messages") as session:
+            for start in range(0, len(ids), _IN_CHUNK):
+                chunk = ids[start : start + _IN_CHUNK]
+                stmt = select(model).where(
+                    model.workspace_id == current_workspace_id(), model.id.in_(chunk)
+                )
+                for row in session.execute(stmt).scalars().all():
+                    message = _chat(row)
+                    out[message.id] = message
+        return out
 
     def list_chat(
         self,

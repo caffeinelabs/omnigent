@@ -136,6 +136,38 @@ def test_backfill_is_idempotent(db_uri: str, kind: str) -> None:
     assert stored == {"core": "I-1", "panel": "I-2", "loose": None, "kept": "I-2"}
 
 
+class _CountingStore(InMemoryFactoryStore):
+    def __init__(self) -> None:
+        super().__init__()
+        self.reads = 0
+
+    def list_initiatives(self, *args: Any, **kwargs: Any) -> Any:
+        self.reads += 1
+        return super().list_initiatives(*args, **kwargs)
+
+
+def test_backfill_reads_initiatives_only_for_new_homeless_projects() -> None:
+    store = _CountingStore()
+    fid = hex_id(79)
+    store.upsert_project(fid, "loose", title="loose")
+    store.upsert_project(fid, "env", title="env", charter={"kind": "integration"})
+    store.upsert_project(fid, "gone", title="gone", status="cancelled")
+    store.create_initiative(fid, title="One (sample)", ask="", plan={"projects": ["late"]})
+
+    first = features.backfill(store, fid)
+    rows = store.list_projects(fid)
+    second = features.backfill(store, fid, rows)
+    store.upsert_project(fid, "late", title="late")
+    third = features.backfill(store, fid)
+    fourth = features.backfill(store, fid)
+
+    # "loose" never finds a home: after one read, passes skip the initiatives.
+    assert (first, second) == ([], [])
+    assert third == [("late", "I-1")]
+    assert fourth == []
+    assert store.reads == 2
+
+
 @pytest.mark.parametrize("bad", ["C-1", "I-0", "I-x", "", 7])
 def test_the_store_keeps_only_initiative_refs(bad: Any) -> None:
     store = InMemoryFactoryStore()
