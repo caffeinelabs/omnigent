@@ -141,6 +141,8 @@ def _effects(
     out: list[dict[str, Any]] = []
     paths = [str(d["path"]) for d in diff]
     quiet = [p for p in paths if definition.blocks.in_blocks(p, definition.QUIET_BLOCKS)]
+    levels = [p for p in quiet if definition.blocks.under(p, "structure")]
+    quiet = [p for p in quiet if p not in levels]
     teams = [p for p in paths if definition.team_spec.is_team_path(p)]
     quiet += [p for p in teams if not definition.team_spec.is_project_path(p)]
     rules = [d for d in diff if str(d["path"]).startswith("rules.")]
@@ -169,6 +171,15 @@ def _effects(
                 "text": "Product, strategy, discovery, brief, role-default and template changes "
                 "are data the factory reads when it needs them; nobody is mailed.",
                 "paths": quiet[:20],
+            }
+        )
+    if levels:
+        out.append(
+            {
+                "kind": "data",
+                "text": "Level names and settings change how the cockpit shows work, not how "
+                "it is done; nobody is mailed.",
+                "paths": levels[:20],
             }
         )
     if rules:
@@ -279,7 +290,13 @@ def _who(
     *,
     editors: bool = False,
     narrows: str = "narrows a team",
+    agents_never: bool = False,
 ) -> str:
+    """
+    Who applies a change, in words.
+
+    :param agents_never: Every path is one no agent proposes (:data:`.AGENT_NEVER`).
+    """
     if editors:
         head = f"Owners and editors (class A: it only {narrows})."
     else:
@@ -295,7 +312,10 @@ def _who(
         you = " It waits for an owner: propose it to them."
     else:
         you = " You can look, not change."
-    agents = " Agents can only propose it." if owner_only else ""
+    if agents_never:
+        agents = " No agent proposes it."
+    else:
+        agents = " Agents can only propose it." if owner_only else ""
     return f"{head}{you}{agents}"
 
 
@@ -441,6 +461,8 @@ def _preview(
             owner_only,
             editors=editor_applies,
             narrows=_narrows(diff),
+            agents_never=bool(diff)
+            and all(definition.blocks.agent_never(str(d["path"])) for d in diff),
         ),
         "owner_only": owner_only,
         "you_can_apply": can_apply and bool(diff) and not blocked,

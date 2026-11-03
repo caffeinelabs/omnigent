@@ -185,13 +185,15 @@ def _clip(value: str | None, limit: int) -> str | None:
 
 
 def _subject_key(store: Any, factory_id: str, raw: str | None) -> str | None:
-    """A decision's subject with a node in its one key spelling (``T-4`` -> ``task:T-4``)."""
+    """
+    A decision's subject with a node in its one key spelling (``T-4`` ->
+    ``task:T-4``, a PR the store knows -> ``pr:<id>``); reads only the rows that
+    subject names.
+    """
     subject = _clip(raw, decision_routing.SUBJECT_MAX)
     if subject is None:
         return None
-    facts = node_refs.RefFacts(
-        projects=store.list_projects(factory_id), prs=store.list_prs(factory_id)
-    )
+    facts = node_refs.RefFacts.for_subject(store, factory_id, subject)
     return _clip(node_refs.canonical_key(subject, facts), decision_routing.SUBJECT_MAX)
 
 

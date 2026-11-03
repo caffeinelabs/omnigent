@@ -19,7 +19,13 @@ from omnigent.server.factory import definition, levels, tuning
 from omnigent.server.factory import definition_blocks as blocks
 from tests.server.factory.cockpit_helpers import Cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld
-from tests.server.factory.definition_helpers import definition_cockpit, propose, put, version
+from tests.server.factory.definition_helpers import (
+    definition_cockpit,
+    propose,
+    put,
+    url,
+    version,
+)
 
 REPO = "sample-org/sample-app"
 
@@ -97,6 +103,13 @@ def test_the_defaults_are_the_ladder_of_the_spec() -> None:
     assert doc["levels"]["task"]["authority"]["approval"] == "none"
     assert doc["levels"]["project"]["authority"]["approval"] == "autonomy"
     assert doc["levels"]["need"]["authority"]["approval"] == "ledger"
+    # A study sits on the feature level, but Scout starts one within the need's research budget.
+    assert doc["kind_authority"] == {
+        "study": {"create": ["scout"], "move": [], "approval": "budget"}
+    }
+    # No kind repeats its level's name: those kinds read the level (see /levels).
+    assert not set(doc["kinds"]) & set(blocks.KIND_IS_LEVEL)
+    assert set(blocks.KIND_IS_LEVEL.values()) <= set(blocks.PRODUCT_LEVELS + blocks.FACTORY_LEVELS)
 
 
 def test_an_untouched_structure_is_not_stored() -> None:
@@ -134,6 +147,17 @@ async def test_get_levels_returns_both_trees_with_defaults(cockpit: Cockpit) -> 
     assert body["responders"]["need"] == "scout" and body["responders"]["run"] is None
     assert body["verbs"]["feature"] == ["talk", "add", "auto", "pause", "move", "name"]
     assert body["kinds"]["adhoc"] == "Task (no ticket)"
+    # Kinds named after their level read its name; the factory root is the fx level.
+    assert (body["kinds"]["feature"], body["kinds"]["task"], body["kinds"]["factory"]) == (
+        "Feature",
+        "Task",
+        "Factory",
+    )
+    assert body["kind_authority"]["study"] == {
+        "create": ["scout"],
+        "move": [],
+        "approval": "budget",
+    }
     assert body["order"]["cols"][0] == "First"
     assert (body["tiles_max"], body["fold_single_child"]) == (12, "implicit_only")
     assert body["version"] == version(cockpit)
@@ -163,7 +187,6 @@ async def test_a_rename_by_put_definition_shows_in_levels(cockpit: Cockpit) -> N
         _change("structure.levels.feature.plural", "Outcomes"),
         _change("structure.levels.project.name", "Workstream"),
         _change("structure.levels.project.plural", "Workstreams"),
-        _change("structure.kinds.feature", "Outcome"),
         note="our words (sample)",
     )
 
@@ -175,7 +198,9 @@ async def test_a_rename_by_put_definition_shows_in_levels(cockpit: Cockpit) -> N
         "Outcomes",
     )
     assert _level(body, "project")["name"] == "Workstream"
-    assert body["kinds"]["feature"] == "Outcome"
+    # One change renames the level and the kind named after it.
+    assert (body["kinds"]["feature"], body["kinds"]["project"]) == ("Outcome", "Workstream")
+    assert body["kinds"]["study"] == "Study"
     # The keys never change; only what people read does.
     assert [row["key"] for row in body["trees"]["product"]["levels"]][2:4] == [
         "feature",
@@ -224,6 +249,9 @@ async def test_no_agent_proposes_the_structure(cockpit: Cockpit, seat_key: str) 
         (_change("structure.tiles_max", 61), 422, "out_of_bounds"),
         (_change("structure.levels.feature.key", "outcome"), 422, "tier0"),
         (_change("structure.levels.area_two.name", "Zone"), 422, "tier0"),
+        # A kind named after its level is renamed with the level, never on its own.
+        (_change("structure.kinds.feature", "Outcome"), 422, None),
+        (_change("structure.kind_authority.study.approval", "whenever"), 422, None),
     ],
 )
 async def test_bad_structure_changes_are_refused(
@@ -234,6 +262,24 @@ async def test_bad_structure_changes_are_refused(
     assert resp.status_code == status, resp.text
     if code is not None:
         assert error_code(resp) == code
+
+
+async def test_the_preview_of_a_rename_says_no_agent_proposes_it(cockpit: Cockpit) -> None:
+    resp = await cockpit.client.post(
+        url(cockpit, "/preview"),
+        json={"changes": [_change("structure.levels.feature.name", "Outcome")]},
+        headers={"X-Test-User": "alice"},
+    )
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["who"] == (
+        "Owners (class B). You are an owner, so it applies when you press Apply. "
+        "No agent proposes it."
+    )
+    (effect,) = [e for e in body["effects"] if e["kind"] == "data"]
+    assert effect["paths"] == ["structure.levels.feature.name"]
+    assert effect["text"].startswith("Level names and settings change how the cockpit shows work")
 
 
 # ── Hidden per factory ─────────────────────────────────────────

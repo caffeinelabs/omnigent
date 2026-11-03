@@ -4,10 +4,11 @@ The cockpit's levels: ``GET /v1/factory/factories/{fid}/levels`` (anyone who rea
 Both trees (``product`` and ``factory``) from the definition's ``structure``
 block: each level's name, plural, visibility (``hidden`` when a level shown
 ``when_any`` has no node in this factory) and authority, who answers per
-level, the verbs per level, kind names, the order column titles,
-``tiles_max``, ``fold_single_child`` and the definition ``version``. Owners
-rename levels with ``PUT …/definition`` (``structure.levels.<key>.name``); a
-definition frame tells clients to refetch.
+level, the verbs per level, kind names (a kind named after its level reads
+the level's name), the authority of kinds changed apart from their level (a
+study's), the order column titles, ``tiles_max``, ``fold_single_child`` and
+the definition ``version``. Owners rename levels with ``PUT …/definition``
+(``structure.levels.<key>.name``); a definition frame tells clients to refetch.
 """
 
 from __future__ import annotations

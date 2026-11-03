@@ -923,21 +923,24 @@ floor. What it leaves out comes from its kind: `chat` and `feedback` are
 mailed to members (their readers fetch them as data).
 
 **The levels** (`structure`, read by cockpit v3) name the two trees work is
-shown in: the product tree (product › goal › need › feature › project › task ›
-change › run) and the factory tree (fx › area › item). The keys and their
+shown in: the product tree (product › goal › need › feature › project › task
+› change › run) and the factory tree (fx › area › item). The keys and their
 order are code; per level the block holds `name`, `plural`, `show`
 (`always`, `when_any`: hidden while no node is on it, `when_many`: while at
 most one is, `inline`: drawn inside the parent's row), `debug` and
 `authority` {`create`, `move`: seats, `approval`: `none`, `autonomy`,
 `owner`, `budget` or `ledger`}; beside them `home` (the level each tree's
 home shows), `responders` and `verbs` per level (and for the study kind),
-`kinds` (what each kind of node is called), `order` {`cols`, `later`} (the
-sibling column titles), `tiles_max` and `fold_single_child`. Owners rename a
-level with one change (`structure.levels.feature.name`); the block is
-owner-only, never a trial, and no agent proposes it (403
-`path_not_allowed`). `GET …/factories/{fid}/levels` returns both trees with
-`hidden` computed for this factory (a level counts the implicit parents its
-nodes get), the maps above and the definition `version`.
+`kinds` (what the kinds not named after their level are called: a feature,
+project or task reads its level's name), `kind_authority` (a study: Scout,
+within the need's research budget), `order` {`cols`, `later`} (the sibling
+column titles), `tiles_max` and `fold_single_child`. Owners rename a level,
+and the kind named after it, with one change
+(`structure.levels.feature.name`); the block is owner-only, never a trial,
+and no agent proposes it (403 `path_not_allowed`).
+`GET …/factories/{fid}/levels` returns both trees with `hidden` computed for
+this factory (a level counts the implicit parents its nodes get), the maps
+above and the definition `version`.
 
 **Node refs** (`node_refs.py`) give every node one address that never
 changes when it moves and is safe in a URL: `product`, `G-n`, `O-n`,
@@ -948,12 +951,14 @@ changes when it moves and is safe in a URL: `product`, `G-n`, `O-n`,
 any spelling (refs, the stored keys such as `task:T-4`, `project:<slug>`,
 `pr:<repo>#<n>`, `member:<id>`, the chat's `!9630` and `#<slug>`, and with
 the store `pr:<id>`, `task:<slug>/<key>` and `loop:<id>`) as the ref, and
-`resolve()` finds the node behind it; unknown text is `None`, never a guess.
-Decisions' subjects, issues' targets, events' subjects and chat thread
-names are normalized on write to the node's key (`T-4` is stored as
-`task:T-4`, `PR-9630` as `pr:<id>`), and every key the server writes is
-stored as it is, so old rows read back through `normalize()` with no
-migration.
+`resolve()` finds the node behind it; unknown text is `None`, never a guess
+(a spelling that names a repo never resolves to another repo's PR).
+Decisions' subjects, issues' targets, events' subjects and chat thread names
+are normalized on write to the node's key (`T-4` is stored as `task:T-4`); a
+decision stores `PR-9630` as `pr:<id>` when the store knows the PR, while
+events, issues and an unknown PR store `pr:9630`. Every key the server
+writes is stored as it is, so old rows read back through `normalize()` with
+no migration.
 
 **The environment profile** (`environment`, `environment.py`) holds the
 facts one product's dev env and previews need, which the bundles used to

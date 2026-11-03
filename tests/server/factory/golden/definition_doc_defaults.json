@@ -243,29 +243,30 @@
       "factory": "area",
       "product": "feature"
     },
+    "kind_authority": {
+      "study": {
+        "approval": "budget",
+        "create": [
+          "scout"
+        ],
+        "move": []
+      }
+    },
     "kinds": {
       "adhoc": "Task (no ticket)",
       "agent": "Agent",
-      "area": "Area",
+      "alarm": "Alarm",
       "ask": "Ask",
       "commit": "Local commit",
       "decision": "Decision",
       "definition": "Definition",
       "env": "Environment",
-      "factory": "Factory",
-      "feature": "Feature",
-      "goal": "Goal",
-      "item": "Item",
       "opportunity": "Opportunity",
       "pr": "Pull request",
-      "product": "Product",
-      "project": "Project",
       "proposal": "From a proposal",
       "question": "Question",
       "rule": "Rule",
-      "run": "Run",
-      "study": "Study",
-      "task": "Task"
+      "study": "Study"
     },
     "levels": {
       "area": {

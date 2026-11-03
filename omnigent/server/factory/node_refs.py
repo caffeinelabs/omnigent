@@ -186,8 +186,8 @@ _IMPLICIT_RE: Final = re.compile(r"^[a-z0-9][A-Za-z0-9._-]{0,63}$")
 """An implicit parent's key: its origin, e.g. ``from-C-12`` or ``no-goal``."""
 _DIGITS_RE: Final = re.compile(rf"^{_NUMBER}$")
 _PR_TEXT_RE: Final = re.compile(rf"^(?:PR-|!|#)({_NUMBER})$", re.IGNORECASE)
-_REPO_PR_RE: Final = re.compile(rf"^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+#({_NUMBER})$")
-_PR_URL_RE: Final = re.compile(rf"^https?://[^/\s]+/[^/\s]+/[^/\s]+/pull/({_NUMBER})/?$")
+_REPO_PR_RE: Final = re.compile(rf"^([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)#({_NUMBER})$")
+_PR_URL_RE: Final = re.compile(rf"^https?://[^/\s]+/([^/\s]+/[^/\s]+)/pull/({_NUMBER})/?$")
 _ID_RE: Final = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
 _TEXT_MAX: Final = 200
 
@@ -200,10 +200,14 @@ class Ref:
     :param kind: What it names (:data:`RefKind`).
     :param id: The number (``"16"``), slug, implicit key, sha or bare-hex id;
         empty for ``product`` and ``fx``.
+    :param repo: The ``owner/name`` a PR's spelling named (``pr:<repo>#<n>``, its
+        URL, ``pr:<id>``), so a lookup never lands on another repo's PR; not part
+        of the ref (``PR-n``), empty when the spelling named none.
     """
 
     kind: RefKind
     id: str = ""
+    repo: str = ""
 
     @property
     def text(self) -> str:
@@ -332,6 +336,7 @@ class RefFacts:
         prs_by_number: dict[int, list[FactoryPr]] = {}
         for pr in self.prs:
             prs_by_number.setdefault(pr.number, []).append(pr)
+        prs_by_repo = {(pr.repo.lower(), pr.number): pr for pr in self.prs}
         runs: dict[str, FactoryTask] = {}
         for task in self.tasks:
             for session in task.session_ids or []:
@@ -348,6 +353,7 @@ class RefFacts:
             "task_key": by(self.tasks, lambda t: (t.project_slug, t.key)),
             "pr_id": by(self.prs, lambda p: _hex(p.id)),
             "pr": prs_by_number,
+            "pr_repo": prs_by_repo,
             "proposal": by(self.proposals, lambda p: p.number),
             "decision": by(self.decisions, lambda d: d.number),
             "loop": by(self.loops, lambda loop: _hex(loop.id)),
@@ -360,10 +366,24 @@ class RefFacts:
         """:returns: The row of *table* under *key*, or ``None``."""
         return self._index[table].get(key)
 
-    def pr_by_number(self, number: int) -> FactoryPr | None:
-        """:returns: The one PR with *number*; ``None`` when none or several repos share it."""
+    def pr_by_number(self, number: int, repo: str = "") -> FactoryPr | None:
+        """
+        :param repo: ``owner/name`` (any case): only that repo's PR.
+        :returns: The PR *repo* has under *number*; without *repo*, the one PR
+            with *number*, ``None`` when none or several repos share it.
+        """
+        if repo:
+            return self._index["pr_repo"].get((repo.lower(), number))
         found = self._index["pr"].get(number) or []
         return found[0] if len(found) == 1 else None
+
+    def pr_for(self, ref: Ref) -> FactoryPr | None:
+        """:returns: The PR a ``pr`` ref names (in the repo it names, if any), or ``None``."""
+        return self.pr_by_number(int(ref.id), ref.repo) if ref.kind == "pr" else None
+
+    def numbered(self, number: int) -> bool:
+        """Whether any repo has a PR with *number*."""
+        return bool(self._index["pr"].get(number))
 
     @classmethod
     def load(cls, deps: FactoryDeps, factory_id: str) -> RefFacts:
@@ -392,6 +412,35 @@ class RefFacts:
             members={c.id: display_title(c.title, c.id) for c in members},
         )
 
+    @classmethod
+    def for_subject(cls, store: Any, factory_id: str, text: str | None) -> RefFacts:
+        """
+        Just the rows :func:`canonical_key` reads to write *text*, looked up one
+        by one (writing one subject never loads the factory): the PRs with the
+        number it names, the PR with the id it names, or its bare slug's project.
+        Free text reads nothing.
+        """
+        value = (text or "").strip()
+        if len(value) > _TEXT_MAX:
+            return cls()
+        head, sep, rest = value.partition(":")
+        if sep and head.strip().lower() == "pr":
+            spelled = _pr_number(rest.strip())
+            if spelled is not None:
+                return cls(prs=store.list_prs(factory_id, number=int(spelled[1])))
+            found = _hex(rest.strip().split("@", 1)[0])
+            pr = store.get_pr(found) if found is not None else None
+            mine = pr is not None and norm_id(pr.factory_id) == norm_id(factory_id)
+            return cls(prs=[pr] if mine else [])
+        bare = parse(value)
+        if bare is not None and bare.kind == "project" and ":" not in value:
+            project = store.get_project(factory_id, bare.id)
+            return cls(projects=[project] if project is not None else [])
+        ref = bare or _read(value, None)
+        if ref is not None and ref.kind == "pr":
+            return cls(prs=store.list_prs(factory_id, number=int(ref.id)))
+        return cls()
+
 
 def stored_features(store: Any, factory_id: str) -> list[Any]:
     """:returns: The factory's stored features (``I-n``) once the store keeps them, else none."""
@@ -407,7 +456,7 @@ def _task_ref(task: FactoryTask | None) -> Ref | None:
 
 
 def _pr_ref(pr: FactoryPr | None) -> Ref | None:
-    return Ref("pr", str(pr.number)) if pr is not None else None
+    return Ref("pr", str(pr.number), pr.repo) if pr is not None else None
 
 
 def _typed(head: str, rest: str, facts: RefFacts | None) -> Ref | None:
@@ -473,20 +522,34 @@ def _task(rest: str, facts: RefFacts | None) -> Ref | None:
     return _task_ref(facts.get("task_id", found)) if found else None
 
 
-def _pr(rest: str, facts: RefFacts | None) -> Ref | None:
+def _pr_number(rest: str) -> tuple[str, str] | None:
+    """``(repo, number)`` of a PR spelled by its number (``repo`` empty when none is named)."""
     if match := _PR_URL_RE.match(rest):
-        return Ref("pr", match.group(1))
+        return match.group(1), match.group(2)
     head = rest.split("@", 1)[0]
     if match := _REPO_PR_RE.match(head):
-        return Ref("pr", match.group(1))
+        return match.group(1), match.group(2)
     if _DIGITS_RE.match(head):
-        return Ref("pr", head)
+        return "", head
     if match := _PR_TEXT_RE.match(head):
-        return Ref("pr", match.group(1))
-    found = _hex(head)
-    if facts is None or found is None:
+        return "", match.group(1)
+    return None
+
+
+def _pr(rest: str, facts: RefFacts | None) -> Ref | None:
+    spelled = _pr_number(rest)
+    if spelled is None:
+        found = _hex(rest.split("@", 1)[0])
+        if facts is None or found is None:
+            return None
+        return _pr_ref(facts.get("pr_id", found))
+    repo, number = spelled
+    ref = Ref("pr", number, repo)
+    # The named repo has no such PR but another repo does: ``PR-n`` would name
+    # that other PR, so the spelling names no node the facts know.
+    if repo and facts is not None and facts.pr_for(ref) is None and facts.numbered(int(number)):
         return None
-    return _pr_ref(facts.get("pr_id", found))
+    return ref
 
 
 def _loop(rest: str, facts: RefFacts | None) -> Ref | None:
@@ -533,17 +596,24 @@ def normalize(text: object, facts: RefFacts | None = None) -> str | None:
     ``p:<slug>``) and, with *facts*, spellings only the store can map
     (``pr:<id>``, ``task:<slug>/<key>``, ``task:<id>``, ``loop:<id>``, and
     ``session:<id>`` as a run when a task ran it). A bare slug reads as a
-    project; whether one exists is :func:`resolve`'s call.
+    project; whether one exists is :func:`resolve`'s call. A PR spelling that
+    names a repo (``pr:<repo>#<n>``, its URL) is ``None`` when *facts* know
+    PR ``n`` only in other repos: ``PR-n`` would name one of those.
 
     :returns: The canonical ref, or ``None`` when *text* names no node.
     """
+    ref = _read(text, facts)
+    return ref.text if ref is not None else None
+
+
+def _read(text: object, facts: RefFacts | None) -> Ref | None:
+    """:func:`normalize`'s ref, keeping the repo a PR's spelling named (:attr:`Ref.repo`)."""
     if not isinstance(text, str):
         return None
     value = text.strip()
     if not value or len(value) > _TEXT_MAX:
         return None
-    ref = parse(value) or _lenient(value, facts)
-    return ref.text if ref is not None else None
+    return parse(value) or _lenient(value, facts)
 
 
 # ── Writing one spelling ───────────────────────────────────────
@@ -589,8 +659,9 @@ def canonical_key(text: str | None, facts: RefFacts | None = None) -> str | None
     ``decision:D-7``, ``PR-9876`` and ``!9876`` ``pr:9876``, ``product``
     ``factory``. With *facts*, every spelling of a PR they know (``pr:9876``,
     ``pr:<repo>#9876``, its URL) becomes ``pr:<id>``, the spelling decisions
-    act on, and a project's bare slug ``project:<slug>``. Anything else (free
-    text, ``mail:<id>``, ``budget:<scope>``) is returned unchanged.
+    act on (a spelling that names a repo only when that repo has the PR), and
+    a project's bare slug ``project:<slug>``. Anything else (free text,
+    ``mail:<id>``, ``budget:<scope>``, another repo's PR) is returned unchanged.
     """
     if text is None:
         return None
@@ -600,7 +671,7 @@ def canonical_key(text: str | None, facts: RefFacts | None = None) -> str | None
     head, sep, rest = value.partition(":")
     if sep and head.strip().lower() == "pr" and facts is not None:
         found = _pr(rest.strip(), facts)
-        pr = facts.pr_by_number(int(found.id)) if found is not None else None
+        pr = facts.pr_for(found) if found is not None else None
         return f"{THREAD_PR_PREFIX}{norm_id(pr.id)}" if pr is not None else text
     if sep and head in _KEPT_HEADS:
         return text
@@ -706,10 +777,10 @@ def resolve(facts: RefFacts, ref: object) -> Node | None:
 
     :returns: The node, or ``None`` for unknown text or a node the facts lack.
     """
-    text = normalize(ref, facts)
-    parsed = parse(text) if text is not None else None
-    if parsed is None or text is None:
+    parsed = _read(ref, facts)
+    if parsed is None:
         return None
+    text = parsed.text
     tree, level = LEVEL_OF[parsed.kind]
 
     def node(kind: str, title: str, row: Any = None, *, implicit: bool = False) -> Node:
@@ -769,7 +840,8 @@ def resolve(facts: RefFacts, ref: object) -> Node | None:
             return None
         return node("adhoc", row.title or f"#{row.number}", row, implicit=True)
     if kind == "pr":
-        row = facts.pr_by_number(number)
+        # In the repo its spelling named, if any: never another repo's PR.
+        row = facts.pr_for(parsed)
         return node("pr", row.title or f"#{row.number}", row) if row is not None else None
     if kind == "commit":
         task_ref = facts.commits.get(parsed.id)

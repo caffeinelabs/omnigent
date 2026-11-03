@@ -18,7 +18,7 @@ from typing import TYPE_CHECKING, Any, Final
 from omnigent.factory import PROJECT_KIND_WORK
 from omnigent.server.factory import definition, node_refs
 from omnigent.server.factory.charter import project_kind
-from omnigent.server.factory.definition_blocks import PRODUCT_LEVELS, TREES
+from omnigent.server.factory.definition_blocks import KIND_IS_LEVEL, PRODUCT_LEVELS, TREES
 
 if TYPE_CHECKING:
     from omnigent.server.factory.context import FactoryDeps
@@ -83,7 +83,9 @@ def view(
     The ladder of both trees, as ``GET …/levels`` returns it.
 
     A tree lists its levels below the root, top down; ``show`` is left out
-    when ``always``, and ``debug`` and ``hidden`` when false.
+    when ``always``, and ``debug`` and ``hidden`` when false. ``kinds`` names
+    every kind: one named after its level reads that level's name
+    (:data:`.KIND_IS_LEVEL`), so renaming a level renames its kind too.
     """
     levels = structure["levels"]
     trees: dict[str, Any] = {}
@@ -111,7 +113,9 @@ def view(
         "trees": trees,
         "responders": structure["responders"],
         "verbs": structure["verbs"],
-        "kinds": structure["kinds"],
+        "kinds": {kind: levels[key]["name"] for kind, key in KIND_IS_LEVEL.items()}
+        | structure["kinds"],
+        "kind_authority": structure["kind_authority"],
         "order": structure["order"],
         "tiles_max": structure["tiles_max"],
         "fold_single_child": structure["fold_single_child"],

@@ -894,7 +894,8 @@ TREES: Final[dict[str, tuple[str, ...]]] = {
     FACTORY_TREE: FACTORY_LEVELS,
 }
 LEVEL_KINDS: Final = ("study",)
-"""Kinds that answer and steer apart from their level (a study sits on the feature level)."""
+"""Kinds that answer, steer and are changed apart from their level (a study sits on the
+feature level): their responders, verbs and authority are their own."""
 TILES_MAX_BOUNDS: Final = (1, 60)
 
 Show = Literal["always", "when_any", "when_many", "inline"]
@@ -1052,31 +1053,53 @@ class VerbsDef(_Block):
     item: Verbs = _verbs("talk", "rename")
 
 
-class KindsDef(_Block):
-    """What each kind of node is called (the kinds themselves come from the adapters)."""
+KIND_IS_LEVEL: Final[dict[str, str]] = {
+    "product": "product",
+    "goal": "goal",
+    "feature": "feature",
+    "project": "project",
+    "task": "task",
+    "run": "run",
+    "factory": "fx",
+    "area": "area",
+    "item": "item",
+}
+"""Kinds of node called what their level is called (kind -> level key): renaming the level
+renames them, so :class:`KindsDef` names only the other kinds."""
 
-    product: LevelName = "Product"
-    goal: LevelName = "Goal"
+
+class KindsDef(_Block):
+    """
+    What each kind of node is called, for the kinds not named after their level
+    (:data:`KIND_IS_LEVEL`; the kinds themselves come from the adapters).
+    """
+
     opportunity: LevelName = "Opportunity"
     ask: LevelName = "Ask"
     question: LevelName = "Question"
     proposal: LevelName = "From a proposal"
-    feature: LevelName = "Feature"
     study: LevelName = "Study"
-    project: LevelName = "Project"
-    task: LevelName = "Task"
     adhoc: LevelName = "Task (no ticket)"
     pr: LevelName = "Pull request"
     commit: LevelName = "Local commit"
-    run: LevelName = "Run"
-    factory: LevelName = "Factory"
-    area: LevelName = "Area"
-    item: LevelName = "Item"
     rule: LevelName = "Rule"
     agent: LevelName = "Agent"
     env: LevelName = "Environment"
+    alarm: LevelName = "Alarm"
     decision: LevelName = "Decision"
     definition: LevelName = "Definition"
+
+
+class KindAuthorityDef(_Block):
+    """
+    Who changes the nodes of a kind that is changed apart from its level
+    (:data:`LEVEL_KINDS`): a study sits on the feature level, but Scout starts one
+    within the need's research budget.
+    """
+
+    study: AuthorityDef = Field(
+        default_factory=lambda: AuthorityDef(create=["scout"], approval="budget")
+    )
 
 
 def _unique_columns(items: list[str]) -> list[str]:
@@ -1106,6 +1129,10 @@ class StructureDef(_Block):
     (:data:`TREES`); everything people read is data. Only owners change it,
     and no agent proposes it (:data:`AGENT_NEVER`).
 
+    :param kinds: Names of the kinds not named after their level (the others
+        read their level's name: :data:`KIND_IS_LEVEL`).
+    :param kind_authority: Who changes the kinds changed apart from their
+        level (:data:`LEVEL_KINDS`).
     :param tiles_max: Children shown as tiles up to this many; rows past it.
     :param fold_single_child: ``implicit_only``: an implicit parent with one
         child shows as that child; ``never``: every parent shows.
@@ -1116,6 +1143,7 @@ class StructureDef(_Block):
     responders: RespondersDef = Field(default_factory=RespondersDef)
     verbs: VerbsDef = Field(default_factory=VerbsDef)
     kinds: KindsDef = Field(default_factory=KindsDef)
+    kind_authority: KindAuthorityDef = Field(default_factory=KindAuthorityDef)
     order: OrderDef = Field(default_factory=OrderDef)
     tiles_max: int = Field(12, ge=TILES_MAX_BOUNDS[0], le=TILES_MAX_BOUNDS[1])
     fold_single_child: Literal["implicit_only", "never"] = "implicit_only"
@@ -1540,6 +1568,7 @@ __all__ = [
     "GOAL_ID_RE",
     "HOW_WORK_SHOWS",
     "KEEP_DAYS",
+    "KIND_IS_LEVEL",
     "LEGACY_MODELS",
     "LEVEL_KEY",
     "LEVEL_KINDS",
@@ -1569,6 +1598,7 @@ __all__ = [
     "EnvironmentDef",
     "GoalDef",
     "HomeDef",
+    "KindAuthorityDef",
     "KindsDef",
     "LevelDef",
     "LevelsDef",

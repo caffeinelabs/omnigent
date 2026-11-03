@@ -748,10 +748,11 @@ class FactoryStore(DiscoveryStore, InitiativeStore, ABC):
 
     @abstractmethod
     def list_prs(
-        self, factory_id: str, states: Sequence[str] | None = None
+        self, factory_id: str, states: Sequence[str] | None = None, *, number: int | None = None
     ) -> builtins.list[FactoryPr]:
         """
         :param states: Only these states (e.g. ``["open"]``); ``None`` for all.
+        :param number: Only PRs with this number (one per repo); ``None`` for all.
         :returns: The factory's PRs, oldest first.
         """
 
@@ -1862,7 +1863,7 @@ class InMemoryFactoryStore(InMemoryDiscoveryStore, InMemoryInitiativeStore, Fact
         return None
 
     def list_prs(
-        self, factory_id: str, states: Sequence[str] | None = None
+        self, factory_id: str, states: Sequence[str] | None = None, *, number: int | None = None
     ) -> builtins.list[FactoryPr]:
         fid = norm_id(factory_id)
         wanted = set(states) if states is not None else None
@@ -1870,7 +1871,9 @@ class InMemoryFactoryStore(InMemoryDiscoveryStore, InMemoryInitiativeStore, Fact
             rows = [
                 _detach(r)
                 for r in self._rows(self._prs)
-                if r.factory_id == fid and (wanted is None or r.state in wanted)
+                if r.factory_id == fid
+                and (wanted is None or r.state in wanted)
+                and (number is None or r.number == number)
             ]
         return sorted(rows, key=lambda r: (r.created_at, r.id))
 

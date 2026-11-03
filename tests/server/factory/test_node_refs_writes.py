@@ -65,9 +65,12 @@ async def test_an_agents_decision_subject_is_stored_as_the_nodes_key(cockpit: Co
     slug = await _ask(cockpit, "api-version", "Pause the version project?")
     kept = await _ask(cockpit, "pr:" + pr_id, "Redeploy its preview?")
     prose = await _ask(cockpit, "the settings copy", "Which wording?")
+    # Another repo's #9630 is not the one the store knows: kept as the agent wrote it.
+    other = await _ask(cockpit, "pr:sample-org/other#9630", "Port the version route?")
 
     assert task == "task:T-4"
     assert pr == number == kept == f"pr:{pr_id}"
+    assert other == "pr:sample-org/other#9630"
     assert slug == "project:api-version"
     assert prose == "the settings copy"
 

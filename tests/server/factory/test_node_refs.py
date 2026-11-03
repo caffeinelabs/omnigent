@@ -38,6 +38,8 @@ from omnigent.server.factory.node_refs import Implicit, RefFacts, canonical_key,
 
 FID = "f" * 32
 REPO = "sample-org/sample-app"
+DOCS = "sample-org/sample-docs"
+OTHER = "sample-org/other"
 SESSION = "5e55" + "0" * 28
 LEAD = "1ead" + "0" * 28
 MESSAGE = "a5c0" + "0" * 28
@@ -109,7 +111,7 @@ def facts() -> RefFacts:
             _pr(9630, "api-version", task_id=_id(1004)),
             _pr(9631, None),
             _pr(77, "api-version"),
-            _pr(77, "settings-row", repo="sample-org/sample-docs"),
+            _pr(77, "settings-row", repo=DOCS),
         ],
         proposals=[
             FactoryProposal(id=_id(7004), factory_id=FID, number=4, kind="projects", title="Plan"),
@@ -363,6 +365,9 @@ def test_resolve_reads_any_spelling(facts: RefFacts) -> None:
         "the login page",
         # Two repos share #77: a number alone never guesses which.
         "PR-77",
+        # Another repo's #9630 is not this repo's.
+        f"pr:{OTHER}#9630",
+        f"pr:https://github.com/{OTHER}/pull/9630",
     ],
 )
 def test_unknown_refs_resolve_to_none(facts: RefFacts, ref: str) -> None:
@@ -487,6 +492,99 @@ def test_with_facts_prs_get_their_row_id_and_project_slugs_their_key(facts: RefF
     assert canonical_key("api-version", facts) == "project:api-version"
     assert canonical_key("ghost-project", facts) == "ghost-project"
     assert canonical_key(None) is None
+
+
+# ── A PR's repo ────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize(
+    "spelling",
+    [
+        f"pr:{OTHER}#9630",
+        f"pr:https://github.com/{OTHER}/pull/9630",
+        f"PR: {OTHER}#9630",
+        f"pr:{OTHER}#9630@a097437",
+    ],
+)
+def test_a_spelling_naming_another_repo_never_lands_on_this_repos_pr(
+    facts: RefFacts, spelling: str
+) -> None:
+    # The facts know only sample-app's #9630: the subject stays as the writer spelled it.
+    assert canonical_key(spelling, facts) == spelling
+    assert node_refs.resolve(facts, spelling) is None
+    assert normalize(spelling, facts) is None
+    # Without the store a PR number is all there is (nothing to land on).
+    assert normalize(spelling) == "PR-9630"
+
+
+def test_a_named_repo_picks_its_pr_where_a_number_alone_cannot(facts: RefFacts) -> None:
+    docs_key = f"pr:{_pr_id(77, DOCS)}"
+    for spelling in (f"pr:{DOCS}#77", f"pr:https://github.com/{DOCS}/pull/77", docs_key):
+        node = node_refs.resolve(facts, spelling)
+        assert node is not None and node.row.id == _pr_id(77, DOCS), spelling
+        assert canonical_key(spelling, facts) == docs_key, spelling
+    # Repo names are matched in any case, as GitHub does.
+    assert canonical_key("pr:Sample-Org/Sample-App#9630", facts) == f"pr:{_pr_id(9630)}"
+    # A repo with no such PR where no repo has one is unknown, not another PR.
+    assert node_refs.resolve(facts, f"pr:{REPO}#1") is None
+    assert normalize(f"pr:{REPO}#1", facts) == "PR-1"
+
+
+class _CountingStore:
+    """Answers the one-row lookups :meth:`RefFacts.for_subject` makes; anything else fails."""
+
+    def __init__(self, facts: RefFacts) -> None:
+        self.facts = facts
+        self.calls: list[str] = []
+
+    def list_prs(self, factory_id: str, states: Any = None, *, number: int | None = None) -> Any:
+        assert number is not None, "never every PR of the factory"
+        self.calls.append(f"list_prs:{number}")
+        return [p for p in self.facts.prs if p.number == number]
+
+    def get_pr(self, pr_id: str) -> FactoryPr | None:
+        self.calls.append("get_pr")
+        return next((p for p in self.facts.prs if p.id == pr_id), None)
+
+    def get_project(self, factory_id: str, slug: str) -> FactoryProject | None:
+        self.calls.append(f"get_project:{slug}")
+        return next((p for p in self.facts.projects if p.slug == slug), None)
+
+
+@pytest.mark.parametrize(
+    ("subject", "reads"),
+    [
+        ("PR-9630", ["list_prs:9630"]),
+        ("!9630", ["list_prs:9630"]),
+        ("pr:9630", ["list_prs:9630"]),
+        (f"pr:{REPO}#9630", ["list_prs:9630"]),
+        (f"pr:{OTHER}#9630", ["list_prs:9630"]),
+        (f"pr:https://github.com/{REPO}/pull/9630", ["list_prs:9630"]),
+        (f"pr:{_pr_id(9630)}", ["get_pr"]),
+        (f"pr:{_pr_id(9630)}@a097437", ["get_pr"]),
+        (f"pr:{_id(4)}", ["get_pr"]),
+        ("PR-77", ["list_prs:77"]),
+        (f"pr:{DOCS}#77", ["list_prs:77"]),
+        ("api-version", ["get_project:api-version"]),
+        ("ghost-project", ["get_project:ghost-project"]),
+        ("#api-version", []),
+        ("T-4", []),
+        ("D-7", []),
+        (f"member:{LEAD}", []),
+        ("the login page", []),
+        ("", []),
+    ],
+)
+def test_a_subject_reads_only_the_rows_it_names(
+    facts: RefFacts, subject: str, reads: list[str]
+) -> None:
+    store = _CountingStore(facts)
+    one = RefFacts.for_subject(store, FID, subject)
+
+    assert store.calls == reads
+    # The same key as with every project and PR of the factory loaded.
+    every = RefFacts(projects=facts.projects, prs=facts.prs)
+    assert canonical_key(subject, one) == canonical_key(subject, every)
 
 
 # ── Threads ────────────────────────────────────────────────────
