@@ -275,10 +275,40 @@ def test_a_ready_pr_with_a_named_owner_waits_on_them_in_a_row_of_their_own() -> 
     assert _rows(built) == [("merge", "merge")]
     assert [i["ref"] for i in built["asks"][0]["items"]] == ["PR #1"]
     assert built["counts"]["others"] == 1
+    # mia owns export and is an operator too: one merge row holds both PRs.
     mia = _asks(
         _snapshot(prs=prs), owners={"export": "mia@example.com"}, user_id="mia@example.com"
     )
-    assert [(a["id"], a["mine"]) for a in mia["asks"]] == [("merge", False), ("merge:mia", True)]
+    assert [(a["id"], a["mine"], a["assignee"]) for a in mia["asks"]] == [("merge", True, "you")]
+    assert [i["ref"] for i in mia["asks"][0]["items"]] == ["PR #1", "PR #2"]
+    assert mia["asks"][0]["covers"] == [f"pr:{prs[0]['id']}", f"pr:{prs[1]['id']}"]
+    # A reader who owns export merges only that one.
+    reader = _asks(
+        _snapshot(prs=prs),
+        owners={"export": "mia@example.com"},
+        user_id="mia@example.com",
+        level=LEVEL_READ,
+    )
+    assert [(a["id"], len(a["items"])) for a in reader["asks"]] == [("merge:mia", 1)]
+
+
+def test_one_merge_row_for_an_operator_owner_caps_its_items() -> None:
+    prs = [_pr(100 + i, f"p{i}", ready_since=NOW - (20 - i) * 60) for i in range(4)]
+    prs += [_pr(200 + i, "export", ready_since=NOW - (10 - i) * 60) for i in range(4)]
+
+    built = _asks(_snapshot(prs=prs), owners={"export": ME})
+
+    [row] = built["asks"]
+    assert (row["id"], row["title"]) == ("merge", "Merge 8 ready pull requests")
+    assert [i["ref"] for i in row["items"]] == [
+        "PR #100",
+        "PR #101",
+        "PR #102",
+        "PR #103",
+        "PR #200",
+    ]
+    assert row["more_count"] == 3 and len(row["covers"]) == 8
+    assert built["counts"]["others"] == 0
 
 
 # ── Incidents ──────────────────────────────────────────────────
@@ -355,6 +385,53 @@ def test_a_stopped_agents_incident_folds_into_the_decision_about_it() -> None:
     }
     assert [o["id"] for o in row["options"]] == ["restart", "pause"]
     assert row["covers"] == ["decision:d3", "incident:i12"]
+
+
+def test_an_operators_incident_never_hides_in_an_owners_merge_row() -> None:
+    pr = _pr(41, "export")
+    # A gone preview on the owner's ready PR: the operators must look at it.
+    incidents = [_incident(7, "preview.gone_ready", f"pr:{pr['id']}", assignee="operators")]
+    owners = {"export": "mia@example.com"}
+
+    operator = _asks(_snapshot(prs=[pr]), incidents=incidents, owners=owners, level=LEVEL_EDIT)
+    owner = _asks(
+        _snapshot(prs=[pr]),
+        incidents=incidents,
+        owners=owners,
+        user_id="mia@example.com",
+        level=LEVEL_READ,
+    )
+
+    assert _rows(operator) == [("broken", "INC-7")]
+    assert operator["counts"]["folded"] == 0 and operator["counts"]["others"] == 1
+    # The owner, who does not act on it, still reads it inside their own row.
+    assert _rows(owner) == [("merge", "merge:mia")]
+    assert owner["asks"][0]["folded"] == ["INC-7"]
+
+
+def test_the_verdict_counts_rows_not_what_they_fold() -> None:
+    dead = "9d803e0e87b5587d844039f6cd433257"
+    decision = _decision(
+        3,
+        source="relaunch_failed",
+        question='"PL · export" relaunch failed 3× (runner_unavailable)',
+        options=[{"id": "restart", "label": "Restart", "target": f"member:{dead}"}],
+        asked_by_session_id=None,
+        project_slug="export",
+        assignee="operators",
+    )
+    prs = [_pr(1, "search"), _pr(2, "export"), _pr(3, "docs")]
+    incidents = [_incident(12, "member.dead", f"member:{dead}")]
+    body = _snapshot(projects=[_project("search")], decisions=[decision], prs=prs)
+    status_inputs = StatusInputs(snapshot=body, user_id=ME, level=LEVEL_EDIT, incidents=incidents)
+
+    summary = build_status_summary(status_inputs, now=NOW)
+
+    # One decision row (with INC-12 folded in) and one merge row: two things.
+    assert summary["counts"]["needs_you"] == 2
+    assert summary["verdict"]["sentence"] == "Running, 2 things need you"
+    texts = [r["text"] for r in summary["verdict"]["reasons"] if r["kind"] == "waiting"]
+    assert texts == ["1 decision waits on you", "3 PRs wait on you"]
 
 
 # ── Decisions and proposals ────────────────────────────────────
@@ -462,7 +539,8 @@ def test_a_bet_reads_its_range_and_its_case_against() -> None:
 def test_a_co_signing_bet_and_a_running_trial_are_handled_not_asked() -> None:
     proposals = [
         _proposal(31, "projects", status="awaiting_cosign"),
-        _proposal(33, status="trial", title="Shorter heartbeats (sample)"),
+        _proposal(33, status="trial", title="Shorter heartbeats (sample)", trial_until=NOW + HOUR),
+        _proposal(34, status="trial", trial_until=NOW - HOUR),
     ]
 
     built = _asks(_snapshot(), proposals=proposals)
@@ -471,7 +549,38 @@ def test_a_co_signing_bet_and_a_running_trial_are_handled_not_asked() -> None:
     assert built["handled"] == [
         "The bet C-31 waits for the other lead's co-sign before it reaches a person.",
         "Trial C-33 is running: Shorter heartbeats (sample).",
+        "Trial C-34 has ended; the factory is evaluating it.",
     ]
+
+
+def test_an_agents_ended_trial_asks_keep_or_revert_and_never_waits_in_steer() -> None:
+    evaluation = {"outcome": "inconclusive", "reason": "too few runs (sample)"}
+    proposals = [
+        _proposal(
+            35,
+            status="trial",
+            title="Shorter heartbeats (sample)",
+            trial_until=NOW - HOUR,
+            result={"evaluation": evaluation},
+        )
+    ]
+    decision = _proposal_decision(
+        70,
+        "C-35",
+        question="Keep or revert C-35? Its trial was inconclusive: too few runs (sample)",
+        deadline_at=NOW + 60 * HOUR,
+    )
+
+    built = _asks(_snapshot(decisions=[decision]), proposals=proposals)
+
+    # Not "running", and not left to Steer although an agent proposed it.
+    assert built["handled"] == []
+    assert built["counts"]["in_steer"] == 0
+    [row] = built["asks"]
+    assert (row["id"], row["title"]) == (
+        "C-35",
+        "Keep or revert C-35: Shorter heartbeats (sample)",
+    )
 
 
 def test_a_reader_acts_on_nothing_and_sees_what_waits_on_others() -> None:
@@ -496,8 +605,9 @@ def test_the_summary_counts_the_same_rows_and_its_verdict_stays_calm() -> None:
     built = build_asks(AskInputs.from_status(status_inputs), now=NOW)
 
     assert summary["counts"]["needs_you"] == built["counts"]["total"] == 1
-    # The stuck agent heals itself: it is not "waiting on you" in the verdict either.
-    assert summary["verdict"]["sentence"] == "Running, 2 PRs wait on you"
+    # The stuck agent heals itself: it is not "waiting on you" in the verdict
+    # either, and the two PRs are one row, as on Home.
+    assert summary["verdict"]["sentence"] == "Running, 1 thing needs you"
     assert [r["text"] for r in summary["verdict"]["reasons"]] == ["2 PRs wait on you"]
     # The classic Now card still lists everything (it is unchanged).
     assert [i["ref"] for i in summary["waiting"]] == ["INC-9", "PR #1", "PR #2"]
@@ -645,12 +755,16 @@ async def test_the_digest_of_someone_on_the_new_cockpit_counts_what_home_counts(
 WEB_FIXTURES = Path(__file__).resolve().parents[3] / "web/src/components/factory"
 ROUND3_FIXTURE = WEB_FIXTURES / "__fixtures__/snapshot.round3.json"
 ASKS_FIXTURE = WEB_FIXTURES / "home/__fixtures__/asks.round3.json"
-# The cockpit's round-3 viewers (``shellFixtures.ts``): user and level per role.
-ROUND3_VIEWERS = {
-    "creator": ("luka@caffeine.ai", 3),
-    "operator": ("mia@caffeine.ai", 2),
-    "viewer": ("ops@caffeine.ai", 1),
-}
+# The level of each round-3 viewer (``shellFixtures.ts``); their user ids come
+# from the fixture's own roster, so no name is written here.
+ROUND3_LEVELS = {"creator": LEVEL_OWNER, "operator": LEVEL_EDIT, "viewer": LEVEL_READ}
+ASKS_NOTE = "(sample) Sample data: asks.py over snapshot.round3.json, per viewer role."
+
+
+def _round3_viewers(people: list[dict[str, Any]]) -> dict[str, tuple[str, int]]:
+    """Role -> (user id, level) of the round-3 roster (the creator is its owner)."""
+    by_role = {"creator" if p.get("is_creator") else p["role"]: p["user_id"] for p in people}
+    return {role: (by_role[role], level) for role, level in ROUND3_LEVELS.items()}
 
 
 def _round3_asks() -> dict[str, Any]:
@@ -667,7 +781,7 @@ def _round3_asks() -> dict[str, Any]:
         if issue["class"] == "incident"
     ]
     cases = {}
-    for role, (user_id, level) in ROUND3_VIEWERS.items():
+    for role, (user_id, level) in _round3_viewers(round3["people"]).items():
         inputs = AskInputs(
             snapshot=body,
             user_id=user_id,
@@ -676,7 +790,7 @@ def _round3_asks() -> dict[str, Any]:
             proposals=round3["proposals"],
         )
         cases[role] = build_asks(inputs, now=body["server_time"])
-    return {"now_s": body["server_time"], "cases": cases}
+    return {"note": ASKS_NOTE, "now_s": body["server_time"], "cases": cases}
 
 
 def test_the_cockpits_asks_fixture_is_what_the_builder_says_for_round3() -> None:

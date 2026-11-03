@@ -7,6 +7,7 @@ import {
   NEEDS_ROWS_MAX,
   askMeta,
   discoveryChecklist,
+  discoveryRuns,
   homeAgentRows,
   homeFacts,
   homeHeadline,
@@ -17,6 +18,7 @@ import {
   parseOpportunities,
   usersNeed,
   whyLine,
+  yourMergeCount,
 } from "./homeModel";
 
 const NOW = 1_793_600_000;
@@ -100,11 +102,36 @@ describe("the headline", () => {
 
   it("states facts and skips zeros", () => {
     expect(
-      homeFacts({ building: 1, waitingMerge: 4, todayUsd: 128.4, dayBudgetUsd: 240, usdPerH: 27 }),
-    ).toEqual(["1 building", "4 waiting for a merge", "$128 spent today of $240"]);
+      homeFacts({
+        building: 1,
+        waitingMerge: 4,
+        yourMerge: true,
+        todayUsd: 128.4,
+        dayBudgetUsd: 240,
+        usdPerH: 27,
+      }),
+    ).toEqual(["1 building", "4 waiting for your merge", "$128 spent today of $240"]);
+    // Without the asks route it can only count ready projects.
+    expect(
+      homeFacts({ building: 0, waitingMerge: 2, todayUsd: 0, dayBudgetUsd: null, usdPerH: 0 }),
+    ).toEqual(["2 waiting for a merge"]);
     expect(
       homeFacts({ building: 0, waitingMerge: 0, todayUsd: null, dayBudgetUsd: null, usdPerH: 3.5 }),
     ).toEqual(["$3.50/h now"]);
+  });
+});
+
+describe("your merges", () => {
+  it("count the ready PRs of Needs you's merge rows, listed or not", () => {
+    const items = [1, 2, 3, 4, 5].map((n) => ({
+      ref: `PR #${n}`,
+      title: `Change ${n} (sample)`,
+      href: `/pr/${n}`,
+    }));
+    expect(
+      yourMergeCount([ask("merge", { kind: "merge", items, more_count: 3 }), ask("D-1")]),
+    ).toBe(8);
+    expect(yourMergeCount([ask("D-1")])).toBe(0);
   });
 });
 
@@ -226,6 +253,7 @@ describe("the loop strip", () => {
     const loop = homeLoop({
       snapshot,
       definition: {} as DefinitionDoc,
+      discoveryOn: false,
       asks: [],
       discovery: null,
       leads: {},
@@ -245,6 +273,7 @@ describe("the loop strip", () => {
     const loop = homeLoop({
       snapshot: round3Snapshot(),
       definition: DISCOVERY_ON,
+      discoveryOn: true,
       asks: [ask("C-9", { kind: "source" }), ask("C-31", { kind: "bet" })],
       discovery: parseDiscoveryFacts({ chain: { signals: 64, opportunities: 0 } }),
       leads: {},
@@ -267,9 +296,32 @@ describe("the loop strip", () => {
     expect([decide!.count, decide!.waiting]).toEqual([1, "1 waits for you"]);
   });
 
+  it("stays dark while this server has discovery off, whatever the definition says", () => {
+    const definition = { discovery_server: false, effective: DISCOVERY_ON };
+    expect(discoveryRuns(definition)).toBe(false);
+    expect(discoveryRuns({ ...definition, discovery_server: true })).toBe(true);
+    expect(discoveryRuns({ discovery_server: true, effective: {} as DefinitionDoc })).toBe(false);
+    expect(discoveryRuns(undefined)).toBe(false);
+
+    const loop = homeLoop({
+      snapshot: round3Snapshot(),
+      definition: DISCOVERY_ON,
+      discoveryOn: discoveryRuns(definition),
+      asks: [ask("C-9", { kind: "source" })],
+      discovery: null,
+      leads: {},
+      hrefs: { signals: "/s", opportunities: "/o", flow: "/f", projects: "/p", impact: "/i" },
+    });
+
+    // Only Build and Measure (the strip draws the rest as "turn on"), no goal, no checklist.
+    expect(loop.discoveryOn).toBe(false);
+    expect(loop.goal).toBeNull();
+    expect(discoveryChecklist(DISCOVERY_ON, [], null, discoveryRuns(definition))).toBeNull();
+  });
+
   it("lists the cold-start steps until each is done", () => {
-    expect(discoveryChecklist({} as DefinitionDoc, [], null)).toBeNull();
-    const steps = discoveryChecklist(DISCOVERY_ON, [ask("C-2", { kind: "profile" })], null)!;
+    expect(discoveryChecklist({} as DefinitionDoc, [], null, true)).toBeNull();
+    const steps = discoveryChecklist(DISCOVERY_ON, [ask("C-2", { kind: "profile" })], null, true)!;
     expect(steps.map((s) => [s.label, s.done])).toEqual([
       ["Turn on discovery", true],
       ["Approve the starter sources", true],

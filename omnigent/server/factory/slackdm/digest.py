@@ -196,18 +196,22 @@ def waiting_lines(
 # ── Needs you (the new cockpit's list) ─────────────────────────
 
 
-def asks_for(
+def summary_and_asks(
     deps: FactoryDeps,
     ctx: FactoryCtx,
     person: Person,
     vis: Visibility,
     raw: RawSnapshot | None,
     now: float,
-) -> dict[str, Any] | None:
-    """The person's Needs you (Home's ``AsksResponse``), or ``None`` without a snapshot."""
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None]:
+    """The person's Now and Needs you from one load of their inputs (``None``: no snapshot)."""
     if raw is None:
-        return None
-    return asks.asks_from_raw(deps, ctx.factory_id, raw, vis.readable, person.user_id, now)
+        return None, None
+    inputs = status_summary.inputs_from_raw(
+        deps, ctx.factory_id, raw, vis.readable, person.user_id, now
+    )
+    summary = status_summary.build_status_summary(inputs, now=now)
+    return summary, asks.build_asks(asks.AskInputs.from_status(inputs), now=now)
 
 
 def ask_line(ask: Mapping[str, Any], now: float, base: str | None) -> str:
@@ -412,9 +416,11 @@ def build_digest(
     idle: tuple[float, float] | None = None,
 ) -> Digest | None:
     """:returns: The digest, or ``None`` when nothing happened and nothing waits (synchronous)."""
-    summary = summary_for(deps, ctx, person, vis, raw, now)
     v2 = sees_cockpit_v2(person)
-    asked = asks_for(deps, ctx, person, vis, raw, now) if v2 else None
+    if v2:
+        summary, asked = summary_and_asks(deps, ctx, person, vis, raw, now)
+    else:
+        summary, asked = summary_for(deps, ctx, person, vis, raw, now), None
     waiting = (
         needs_lines(asked, now, base)
         if asked is not None
@@ -573,7 +579,6 @@ __all__ = [
     "Visibility",
     "Waiting",
     "ask_line",
-    "asks_for",
     "bot_test_message",
     "build_digest",
     "code_message",
@@ -584,6 +589,7 @@ __all__ = [
     "sees_cockpit_v2",
     "settings_line",
     "spend_line",
+    "summary_and_asks",
     "summary_for",
     "test_message",
     "visibility_for",

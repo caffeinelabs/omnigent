@@ -1,4 +1,5 @@
 {
+  "note": "(sample) Sample data: asks.py over snapshot.round3.json, per viewer role.",
   "now_s": 1793017800,
   "cases": {
     "creator": {
@@ -353,6 +354,45 @@
       "generated_at": 1793017800,
       "asks": [
         {
+          "id": "INC-12",
+          "kind": "broken",
+          "subject": "issue:INC-12",
+          "ref": "INC-12",
+          "title": "PL · cache-warm dead · relaunch failed 3×",
+          "context": null,
+          "meta": ["cache-warm", "critical", "for operators"],
+          "since": 1793015760,
+          "age_s": 2040,
+          "cost_of_waiting": {
+            "score": 100,
+            "level": "high",
+            "text": "something is down",
+            "holds": 0
+          },
+          "primary_action": {
+            "kind": "open",
+            "label": "See what to do",
+            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/12",
+            "option_id": null,
+            "peek": null
+          },
+          "options": null,
+          "allow_text": false,
+          "items": [],
+          "more_count": 0,
+          "assignee": "operators",
+          "mine": false,
+          "project": "cache-warm",
+          "decision_id": null,
+          "deadline_at": null,
+          "deadline_effect": null,
+          "folded": [],
+          "covers": ["incident:1759c7ed06c2570796aa9ea7d578c679"],
+          "critical": true,
+          "opportunity": null,
+          "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/12"
+        },
+        {
           "id": "C-4",
           "kind": "proposal",
           "subject": "proposal:C-4",
@@ -574,11 +614,11 @@
         "Trial C-14 is running: cadence.project_lead 7200→10800."
       ],
       "counts": {
-        "total": 4,
+        "total": 5,
         "mine": 1,
         "others": 3,
         "in_steer": 0,
-        "folded": 1
+        "folded": 0
       }
     },
     "viewer": {

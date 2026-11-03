@@ -24,6 +24,7 @@ import {
 import {
   dayBudget,
   discoveryChecklist,
+  discoveryRuns,
   headlineDate,
   homeAgentRows,
   homeFacts,
@@ -33,8 +34,10 @@ import {
   loopLeads,
   mergeProjects,
   movingCount,
+  needsView,
   usersNeed,
   waitingMergeCount,
+  yourMergeCount,
 } from "@/components/factory/home/homeModel";
 import {
   isMissing,
@@ -72,7 +75,8 @@ function HomeBody() {
   const summary = useFactoryStatusSummary(fid).data;
   const definition = useFactoryDefinition(fid).data;
   const effective = definition?.effective ?? null;
-  const discoveryOn = effective?.discovery?.enabled === true;
+  // Discovery runs only with both switches on: this server's and the definition's.
+  const discoveryOn = discoveryRuns(definition);
   const discovery = useDiscoveryHome(fid, discoveryOn);
   const opportunities = useTopOpportunities(fid, discoveryOn);
   const deferred = useDeferredAnswers(fid);
@@ -96,15 +100,18 @@ function HomeBody() {
     [snapshot, members, nowS, asksData],
   );
   const moving = movingCount(snapshot);
-  const needs = asksData ? asksData.counts.total - deferred.hidden.size : null;
-  const headline = homeHeadline({
-    needs: needs == null ? null : Math.max(0, needs),
-    moving,
-    state: snapshot.factory.state,
-  });
+  // The same count Needs you shows (held answers already left the list).
+  const needs = asksData ? needsView(asksData.asks, "all", true, deferred.hidden).total : null;
+  const headline = homeHeadline({ needs, moving, state: snapshot.factory.state });
   const facts = homeFacts({
     building: moving,
-    waitingMerge: waitingMergeCount(snapshot),
+    // The viewer's own merges; every ready project only while the server has no asks route.
+    waitingMerge: asksData
+      ? yourMergeCount(asksData.asks)
+      : asksMissing
+        ? waitingMergeCount(snapshot)
+        : 0,
+    yourMerge: asksData != null,
     todayUsd: summary?.factory_id === fid ? summary.spend.today_usd : null,
     dayBudgetUsd: dayBudget(effective),
     usdPerH: snapshot.totals.usd_per_h,
@@ -112,6 +119,7 @@ function HomeBody() {
   const loop = homeLoop({
     snapshot,
     definition: effective,
+    discoveryOn,
     asks: asksData?.asks,
     discovery: discovery.data,
     leads: loopLeads(snapshot, members),
@@ -123,7 +131,7 @@ function HomeBody() {
       impact: discoveryPageHref(fid, "impact"),
     },
   });
-  const checklist = discoveryChecklist(effective, asksData?.asks, discovery.data);
+  const checklist = discoveryChecklist(effective, asksData?.asks, discovery.data, discoveryOn);
   const peek = params.get("peek");
   const setPeek = useCallback(
     (value: string | null) =>
@@ -198,7 +206,12 @@ function HomeBody() {
                 }
               : undefined
           }
-          turnOn={{ label: "Turn on discovery", to: discoveryPageHref(fid) }}
+          // Only a server that runs discovery offers to turn it on.
+          turnOn={
+            definition?.discovery_server === true
+              ? { label: "Turn on discovery", to: discoveryPageHref(fid) }
+              : undefined
+          }
         />
         <div className="contents lg:flex lg:min-w-0 lg:flex-col lg:gap-4">
           <ProjectRows
@@ -233,6 +246,8 @@ function HomeBody() {
               loading={opportunities.isPending}
               defVersion={snapshot.def_version ?? null}
               betsForYou={betsForYou}
+              // Hunches need a writer and a server that answers discovery (not 404).
+              canHunch={can.post && discovery.data != null}
             />
           )}
         </div>

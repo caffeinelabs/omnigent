@@ -2,8 +2,9 @@
  * Home's What users need: the top opportunities in their Now and Next bands,
  * ranked from evidence with the factory's own rubric (rank, title, evidence
  * meter, accounts, status, score; "Waits for you" in amber only where its bet
- * waits on the viewer), then a box for a person's hunch. Votes and pins never
- * change a score. While the factory has gathered nothing yet it says so.
+ * waits on the viewer), then a box for a person's hunch (for people who may
+ * write, once the server answers discovery). Votes and pins never change a
+ * score. While the factory has gathered nothing yet it says so.
  */
 
 import { ChevronRightIcon, LightbulbIcon } from "lucide-react";
@@ -131,6 +132,7 @@ export function WhatUsersNeed({
   loading,
   defVersion,
   betsForYou,
+  canHunch,
   className,
 }: {
   factoryId: string;
@@ -141,6 +143,8 @@ export function WhatUsersNeed({
   total: number | null;
   loading: boolean;
   defVersion: number | null;
+  /** Show the hunch box: the viewer may write and the server takes hunches. */
+  canHunch: boolean;
   className?: string;
 }) {
   return (
@@ -193,7 +197,7 @@ export function WhatUsersNeed({
           synthesis.
         </p>
       )}
-      <HunchBox factoryId={factoryId} />
+      {canHunch && <HunchBox factoryId={factoryId} />}
     </section>
   );
 }

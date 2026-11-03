@@ -18,8 +18,8 @@ import {
 
 // Home in the new cockpit over sample factories (every product word is the
 // sample's own data): the round-3 sample with discovery learning, nothing
-// waiting, many ready PRs, discovery off, a cold start, and 12 projects with
-// 60 agents; light, dark and a 390 px phone.
+// waiting, many ready PRs, discovery off (in the factory, or on the server), a
+// cold start, and 12 projects with 60 agents; light, dark and a 390 px phone.
 
 function home(
   snapshot: FactorySnapshot,
@@ -103,6 +103,12 @@ export const DiscoveryOff = home(homeSnapshot());
 export const DiscoveryOffDark = home(homeSnapshot(), {}, { theme: "dark" });
 
 export const DiscoveryOffMobile = phone(home(homeSnapshot()));
+
+/** The definition turns discovery on, but this server does not run it: it stays dark. */
+export const DiscoveryOffOnThisServer = home(homeSnapshot(), {
+  ...LEARNING,
+  definition: discoveryDefinition({ goal: true, server: false }),
+});
 
 /** Cold start: no goal yet, the checklist, and the profile and goal to review. */
 export const DiscoveryColdStart = home(cold.snapshot, COLD);

@@ -218,12 +218,18 @@ export function manyProjectsSnapshot(): FactorySnapshot {
   return { ...base, projects, members, prs: [], decisions: [] };
 }
 
-/** (sample) A definition with discovery on, its starter sources, and (or not) a goal. */
-export function discoveryDefinition(options: { goal?: boolean } = {}): DefinitionResponse {
+/**
+ * (sample) A definition with discovery on, its starter sources, and (or not)
+ * a goal, on a server that runs discovery (`server: false`: one that does not).
+ */
+export function discoveryDefinition(
+  options: { goal?: boolean; server?: boolean } = {},
+): DefinitionResponse {
   const body = definitionResponse();
   const base = body.effective.discovery;
   return {
     ...body,
+    discovery_server: options.server ?? true,
     effective: {
       ...body.effective,
       product: { name: "Sample app (sample)" } as DefinitionResponse["effective"]["product"],

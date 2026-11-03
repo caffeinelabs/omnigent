@@ -7,6 +7,11 @@ import { LIVE_RUN_FACTORY_ID, preflightOk } from "@/components/factory/__fixture
 import { round3IssueList } from "@/components/factory/agents/__fixtures__/opsFixtures";
 import { resetFactoryControls } from "@/components/factory/controls/useFactoryControls";
 import { asksOf } from "@/components/factory/home/__fixtures__/asksFixtures";
+import {
+  SAMPLE_DISCOVERY,
+  SAMPLE_OPPORTUNITIES,
+  discoveryDefinition,
+} from "@/components/factory/home/__fixtures__/homeFixtures";
 import { ANSWER_UNDO_MS } from "@/components/factory/home/useDeferredAnswers";
 import { definitionResponse } from "@/components/factory/insights/__fixtures__/learnFixtures";
 import { notifyMe } from "@/components/factory/notify/__fixtures__/notifyFixtures";
@@ -14,7 +19,7 @@ import { roomProposals } from "@/components/factory/room/__fixtures__/roomFixtur
 import { round3Snapshot } from "@/components/factory/shell/__fixtures__/shellFixtures";
 import { resetCockpitChoiceCache } from "@/components/factory/shell/cockpitV2";
 import type { AsksResponse } from "@/lib/factoryAsksApi";
-import type { FactorySnapshot, PrView } from "@/lib/factoryApi";
+import type { DefinitionResponse, FactorySnapshot, PrView } from "@/lib/factoryApi";
 import { FactoryPage } from "./FactoryPage";
 import { type FactoryServer, SNAPSHOT, json, serveFactory } from "./testServer";
 
@@ -29,6 +34,8 @@ vi.mock("@/hooks/useSessionUpdatesConnected", () => ({
 const FID = LIVE_RUN_FACTORY_ID;
 /** Round 3's D-2, which waits on the operator (mia). */
 const D2 = "a9d44647df3050199c1577ba21f16b67";
+/** Round 3's D-31, which waits on the operators. */
+const D31 = "ae1fb5c75b755a4dbc645077510d63ef";
 const BASE = `/factory/${FID}`;
 
 let location = "";
@@ -80,11 +87,16 @@ function serve({
   snapshot = round3Snapshot(),
   asks,
   answer,
+  definition = { ...definitionResponse(), discovery_server: true },
+  extra = {},
 }: {
   snapshot?: FactorySnapshot;
   /** The asks read; the fixture builder over `snapshot` by default. */
   asks?: () => Response;
   answer?: () => Response;
+  /** The definition read: discovery off in the factory, on this server, by default. */
+  definition?: DefinitionResponse;
+  extra?: Record<string, () => Response>;
 } = {}) {
   const built: AsksResponse = asksOf(snapshot, {
     incidents: round3IssueList(),
@@ -96,9 +108,11 @@ function serve({
       "GET /v1/factory/preflight": () => json({ ...preflightOk(), cockpit_v2: true }),
       [`GET ${SNAPSHOT}/notify/me/ui`]: () => json({ cockpit: "v2" }),
       [`GET ${SNAPSHOT}/notify/me`]: () => json(notifyMe()),
-      [`GET ${SNAPSHOT}/definition`]: () => json(definitionResponse()),
+      [`GET ${SNAPSHOT}/definition`]: () => json(definition),
       [`GET ${SNAPSHOT}/asks`]: asks ?? (() => json(built)),
       [`POST /v1/factory/decisions/${D2}/answer`]: answer ?? (() => json({ decision: {} })),
+      [`POST /v1/factory/decisions/${D31}/answer`]: () => json({ decision: {} }),
+      ...extra,
     },
   });
   return built;
@@ -106,6 +120,10 @@ function serve({
 
 function answers(): unknown[] {
   return server.calls.filter((c) => c.method === "POST" && c.path.endsWith("/answer"));
+}
+
+function reads(suffix: string): unknown[] {
+  return server.calls.filter((c) => c.method === "GET" && c.path.split("?")[0]!.endsWith(suffix));
 }
 
 beforeEach(() => {
@@ -182,6 +200,95 @@ describe("Home", () => {
         },
       ]),
     );
+  });
+
+  it("keeps Undo for a second answer while the first one goes out", async () => {
+    serve({ snapshot: round3Snapshot("operator") });
+    renderAt("");
+    await screen.findByTestId("need-D-31");
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    fireEvent.click(screen.getByTestId("need-D-2-option-a"));
+    await act(async () => {
+      vi.advanceTimersByTime(3_000);
+    });
+    fireEvent.click(screen.getByTestId("need-D-31-option-raise"));
+    expect(await screen.findByTestId("factory-toast")).toHaveTextContent(
+      "2 answers go out in a few seconds. Undo takes back D-31.",
+    );
+
+    // D-2's time is up: it goes out, and the toast still offers Undo for D-31.
+    await act(async () => {
+      vi.advanceTimersByTime(ANSWER_UNDO_MS - 3_000 + 100);
+    });
+    await waitFor(() => expect(answers()).toHaveLength(1));
+    const toast = screen.getByTestId("factory-toast");
+    expect(toast).toHaveTextContent("your answer to D-31 goes out in a few seconds.");
+    fireEvent.click(within(toast).getByRole("button", { name: "Undo" }));
+
+    expect(await screen.findByTestId("need-D-31")).toBeInTheDocument();
+    await act(async () => {
+      vi.advanceTimersByTime(ANSWER_UNDO_MS * 2);
+    });
+    expect(answers()).toEqual([
+      { method: "POST", path: `/v1/factory/decisions/${D2}/answer`, body: { option_id: "a" } },
+    ]);
+  });
+
+  it("holds an answer while the pointer is on its toast, and sends it once the tab is hidden", async () => {
+    serve({ snapshot: round3Snapshot("operator") });
+    renderAt("");
+    await screen.findByTestId("need-D-2");
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+
+    fireEvent.click(screen.getByTestId("need-D-2-option-a"));
+    const toast = await screen.findByTestId("factory-toast");
+    fireEvent.pointerEnter(toast);
+    await act(async () => {
+      vi.advanceTimersByTime(ANSWER_UNDO_MS * 3);
+    });
+    // Held open: nothing went out, and Undo still works later.
+    expect(answers()).toEqual([]);
+    fireEvent.pointerLeave(toast);
+
+    // A phone switching apps hides the tab: what is held goes out at once.
+    const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue("hidden");
+    act(() => {
+      document.dispatchEvent(new Event("visibilitychange"));
+    });
+    visibility.mockRestore();
+    await waitFor(() => expect(answers()).toHaveLength(1));
+  });
+
+  it("stays dark while this server has discovery off, whatever the definition says", async () => {
+    serve({ definition: discoveryDefinition({ goal: true, server: false }) });
+    renderAt("");
+
+    await screen.findByTestId("home-needs-rows");
+    const loop = screen.getByLabelText("How the factory works right now");
+    expect(loop).toHaveAttribute("data-discovery", "off");
+    expect(within(loop).queryByText("Turn on discovery")).toBeNull();
+    expect(screen.queryByTestId("home-checklist")).toBeNull();
+    expect(screen.queryByTestId("home-users")).toBeNull();
+    expect(reads("/discovery")).toEqual([]);
+    expect(reads("/opportunities")).toEqual([]);
+  });
+
+  it("offers the hunch box to people who may write, once the server answers discovery", async () => {
+    const extra = {
+      [`GET ${SNAPSHOT}/discovery`]: () => json(SAMPLE_DISCOVERY),
+      [`GET ${SNAPSHOT}/opportunities`]: () => json(SAMPLE_OPPORTUNITIES),
+    };
+    serve({ definition: discoveryDefinition({ goal: true }), extra });
+    const { unmount } = renderAt("");
+
+    expect(await screen.findByTestId("home-hunch")).toBeInTheDocument();
+    unmount();
+
+    serve({ snapshot: round3Snapshot("viewer"), definition: discoveryDefinition(), extra });
+    renderAt("");
+    expect(await screen.findByTestId("home-users")).toBeInTheDocument();
+    expect(screen.queryByTestId("home-hunch")).toBeNull();
   });
 
   it("folds every ready PR into one merge row, lists five, and opens the merge panel", async () => {

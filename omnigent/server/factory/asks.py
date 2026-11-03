@@ -6,8 +6,9 @@ the new cockpit all read this list, so they tell one story with one count.
 viewer's filtered snapshot (open decisions, PRs, projects, members), the
 open incidents and the pending, co-signing and trial proposals, and returns
 the ``AsksResponse`` JSON. :func:`asks_from_raw` gathers those inputs with the
-status summary's loader (:func:`.status_summary.load_inputs`), so Home and
-the Now card read the same facts.
+status summary's loader (:func:`.status_summary.load_inputs`, which takes
+the open proposals from the snapshot), so Home and the Now card read the
+same facts.
 
 **Kinds.** ``decision`` (a question an agent or the server asked), ``merge``
 (ready pull requests), ``bet`` (a projects proposal that carries a bet),
@@ -20,10 +21,14 @@ measured bet; nothing produces one until readouts land), ``broken``
 **One row per subject.**
 
 - Every ready PR the same person merges folds into one ``merge`` row, with
-  at most :data:`ITEMS_MAX` sub-items and ``more_count`` for the rest.
+  at most :data:`ITEMS_MAX` sub-items and ``more_count`` for the rest; a
+  viewer who merges as an operator and as a project's owner gets one row.
 - An incident folds into the row of what it is about: a ready PR's merge
   row, or the decision whose options act on the same target (an agent that
-  could not restart, a loop out of budget).
+  could not restart, a loop out of budget), as long as that row waits on
+  the viewer whenever the incident does.
+- A trial's "Keep or revert" always shows (a person decides it); a running
+  trial is a ``handled`` sentence.
 - An incident shows on its own only when a person must act
   (:func:`needs_person`); incidents the factory heals itself (an agent that
   is stuck until it moves again) become one calm ``handled`` sentence.
@@ -603,6 +608,34 @@ def _author(row: Mapping[str, Any] | None, decision: Mapping[str, Any], ctx: _Ct
     return _asker(decision, ctx)
 
 
+def _evaluated(row: Mapping[str, Any] | None) -> bool:
+    """Whether a trial has been evaluated (its result carries the evaluation)."""
+    result = (row or {}).get("result")
+    return isinstance(result, Mapping) and isinstance(result.get("evaluation"), Mapping)
+
+
+def keep_or_revert(decision: Mapping[str, Any], row: Mapping[str, Any] | None) -> bool:
+    """
+    Whether a proposal decision is a trial's "Keep or revert": a person
+    decides it whoever proposed the change, so it never waits in Steer.
+    """
+    return str(decision.get("question") or "").startswith("Keep or revert") or (
+        row is not None and row.get("status") == "trial" and _evaluated(row)
+    )
+
+
+def trial_running(row: Mapping[str, Any], now: float) -> bool:
+    """A trial whose window is still open and that nobody has evaluated yet."""
+    until = row.get("trial_until")
+    return (
+        row.get("status") == "trial"
+        and isinstance(until, int | float)
+        and not isinstance(until, bool)
+        and until > now
+        and not _evaluated(row)
+    )
+
+
 def _deadline(decision: Mapping[str, Any]) -> int | None:
     at = decision.get("deadline_at")
     return int(at) if isinstance(at, int | float) and not isinstance(at, bool) else None
@@ -703,7 +736,8 @@ def _decision_draft(decision: Mapping[str, Any], ctx: _Ctx, in_steer: list[str])
             kind = definition_kind(paths)
             agent = row.get("author_kind") != "human"
             soon = deadline is not None and deadline - ctx.now <= DEADLINE_SOON_S
-            if kind == "proposal" and agent and not blocking and not soon:
+            readout = keep_or_revert(decision, row)
+            if kind == "proposal" and agent and not blocking and not soon and not readout:
                 in_steer.append(shown_ref)
                 return None
         elif row is not None and row.get("bet"):
@@ -730,7 +764,7 @@ def _decision_draft(decision: Mapping[str, Any], ctx: _Ctx, in_steer: list[str])
             action = AskAction(kind="open", label="Review the goal", href=href)
             cost_text = "opportunities are ranked against goals"
         else:
-            if str(decision.get("question") or "").startswith("Keep or revert"):
+            if keep_or_revert(decision, row):
                 title = f"Keep or revert {shown_ref}: {title_text}" if title_text else question
             else:
                 whose = f"{author}'s proposal" if author else "a proposal"
@@ -848,6 +882,13 @@ def _merge_drafts(ctx: _Ctx) -> list[_Draft]:
         if pr.get("state") != "open" or not pr.get("ready"):
             continue
         groups.setdefault(_pr_who(ctx, pr.get("project_slug")), []).append(pr)
+    yours = [key for key in groups if key[2]]
+    if len(yours) > 1:
+        # An operator who also owns projects merges both: one row, not one per group.
+        mine = any(key[3] for key in yours)
+        who = "you" if mine and ctx.user_id is not None else "operators"
+        combined = [pr for key in yours for pr in groups.pop(key)]
+        groups[(None, who, True, mine)] = combined
     product = ((body.get("factory") or {}).get("product") or {}) or {}
     policy = _clip(((product.get("delivery") or {}) or {}).get("merge_policy"), 300)
     drafts: list[_Draft] = []
@@ -991,9 +1032,11 @@ def _handled(ctx: _Ctx, healing: Sequence[FactoryIssue]) -> list[str]:
     rows = sorted(ctx.proposals.values(), key=lambda r: int(r.get("number") or 0))
     for row in rows:
         ref = f"C-{row.get('number')}"
-        if row.get("status") == "trial":
+        if trial_running(row, ctx.now):
             title = _clip(str(row.get("title") or ""), TITLE_MAX)
             lines.append(f"Trial {ref} is running" + (f": {title}." if title else "."))
+        elif row.get("status") == "trial" and not _evaluated(row):
+            lines.append(f"Trial {ref} has ended; the factory is evaluating it.")
         elif row.get("status") == "awaiting_cosign":
             lines.append(
                 f"The bet {ref} waits for the other lead's co-sign before it reaches a person."
@@ -1010,16 +1053,30 @@ class Assembled:
     :param handled: The calm "Handled by the factory" sentences.
     :param in_steer: Refs of agents' definition proposals left to Steer.
     :param folded: Refs of incidents folded into another row.
+    :param folded_keys: Their waiting keys (``incident:<id>``).
     """
 
     drafts: list[_Draft]
     handled: list[str]
     in_steer: list[str]
     folded: list[str]
+    folded_keys: frozenset[str] = frozenset()
 
     def covered(self) -> set[str]:
-        """The status summary's waiting keys some row stands for (anyone's)."""
-        return {key for draft in self.drafts for key in draft.ask["covers"]}
+        """
+        The status summary's waiting keys some row leads with (anyone's): an
+        incident folded into another row is left out, so it is not counted twice.
+        """
+        return {
+            key
+            for draft in self.drafts
+            for key in draft.ask["covers"]
+            if key not in self.folded_keys
+        }
+
+    def yours(self) -> int:
+        """How many rows wait on the viewer (the one Needs you count)."""
+        return sum(1 for draft in self.drafts if draft.for_you)
 
 
 def assemble(inputs: AskInputs, *, now: float) -> Assembled:
@@ -1049,25 +1106,35 @@ def assemble(inputs: AskInputs, *, now: float) -> Assembled:
     drafts += _merge_drafts(ctx)
     healing: list[FactoryIssue] = []
     folded: list[str] = []
+    folded_keys: set[str] = set()
     for issue in sorted(inputs.incidents, key=lambda i: (i.first_seen, i.number)):
         if issue.class_ != issues.INCIDENT or issue.status not in ("open", "acked"):
             continue
         target = _norm_target(issue.target) or ""
-        home = next((d for d in drafts if target and target in d.targets), None)
+        # Fold only where the viewer sees it too: an incident that waits on
+        # them never hides inside a row that waits on someone else.
+        yours = inputs.user_id is None or issues.is_mine(issue, inputs.user_id, inputs.level)
+        fits = [d for d in drafts if d.for_you or not yours]
+        home = next((d for d in fits if target and target in d.targets), None)
         if home is None and target.startswith("pr:"):
             pr_id = target.partition(":")[2].partition("@")[0]
-            home = next((d for d in drafts if pr_id in d.pr_ids), None)
+            home = next((d for d in fits if pr_id in d.pr_ids), None)
         ref = issue.ref or f"INC-{issue.number}"
         if home is not None:
             home.ask["folded"] = [*home.ask.get("folded", []), ref]
             home.ask["covers"] = [*home.ask["covers"], f"incident:{issue.id}"]
             folded.append(ref)
+            folded_keys.add(f"incident:{issue.id}")
         elif needs_person(issue):
             drafts.append(_incident_draft(issue, ctx))
         elif heals_itself(issue):
             healing.append(issue)
     return Assembled(
-        drafts=drafts, handled=_handled(ctx, healing), in_steer=in_steer, folded=folded
+        drafts=drafts,
+        handled=_handled(ctx, healing),
+        in_steer=in_steer,
+        folded=folded,
+        folded_keys=frozenset(folded_keys),
     )
 
 
@@ -1116,8 +1183,9 @@ def asks_from_raw(
     """
     The viewer's asks from a snapshot in hand (synchronous: store reads).
 
-    The route and the Slack digest both build through here, with the status
-    summary's own loader, so Home, the top bar and the digest agree.
+    It loads with the status summary's own loader (the digest builds both
+    from one :func:`.status_summary.inputs_from_raw`), so Home, the top bar
+    and the digest agree.
 
     :param readable: The members the viewer reads; ``None`` reads them all.
     """
@@ -1125,7 +1193,8 @@ def asks_from_raw(
 
     members = set(raw.top_level_of) if readable is None else readable
     body = filter_snapshot(raw, members)
-    loaded = summary_mod.load_inputs(deps, root_id, body, raw, members, user_id, now)
+    # The asks read no spend ledger and no pause events: skip those reads.
+    loaded = summary_mod.load_inputs(deps, root_id, body, raw, members, user_id, now, ledger=False)
     return build_asks(AskInputs.from_status(loaded), now=now)
 
 
@@ -1164,7 +1233,9 @@ __all__ = [
     "cost_of_waiting",
     "definition_kind",
     "heals_itself",
+    "keep_or_revert",
     "member_name",
     "needs_person",
     "proposal_paths",
+    "trial_running",
 ]

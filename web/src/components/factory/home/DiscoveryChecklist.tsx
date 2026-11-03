@@ -55,8 +55,7 @@ export function DiscoveryChecklist({
         ))}
       </ol>
       <p className="mt-2 text-xs text-muted-foreground">
-        Nothing here is product code. The discovery starter is a definition template; the discovery
-        lead drafts the profile and a goal, and owners correct them.
+        The discovery lead drafts the profile and a first goal; you correct them.
       </p>
     </section>
   );

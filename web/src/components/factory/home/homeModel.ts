@@ -66,22 +66,25 @@ export function homeHeadline({ needs, moving, state }: HeadlineInput): string {
 export interface FactsInput {
   building: number;
   waitingMerge: number;
+  /** The count is the viewer's own merges (Needs you's merge rows), not every ready project. */
+  yourMerge?: boolean;
   todayUsd: number | null | undefined;
   dayBudgetUsd: number | null | undefined;
   usdPerH: number | null | undefined;
 }
 
-/** `1 building · 4 waiting for a merge · $128 spent today of $240`, zeros skipped. */
+/** `1 building · 4 waiting for your merge · $128 spent today of $240`, zeros skipped. */
 export function homeFacts({
   building,
   waitingMerge,
+  yourMerge = false,
   todayUsd,
   dayBudgetUsd,
   usdPerH,
 }: FactsInput): string[] {
   const facts: string[] = [];
   if (building) facts.push(`${building} building`);
-  if (waitingMerge) facts.push(`${waitingMerge} waiting for a merge`);
+  if (waitingMerge) facts.push(`${waitingMerge} waiting for ${yourMerge ? "your" : "a"} merge`);
   if (todayUsd != null && todayUsd > 0) {
     const of = dayBudgetUsd ? ` of ${money(dayBudgetUsd)}` : "";
     facts.push(`${money(todayUsd)} spent today${of}`);
@@ -353,7 +356,14 @@ export function movingCount(snapshot: FactorySnapshot): number {
   ).length;
 }
 
-/** Projects whose PR waits for a person's merge. */
+/** Ready PRs that wait on the viewer's merge: the items of Needs you's merge rows. */
+export function yourMergeCount(asks: readonly Ask[]): number {
+  return asks
+    .filter((a) => a.kind === "merge")
+    .reduce((n, a) => n + a.items.length + a.more_count, 0);
+}
+
+/** Projects whose PR waits for a person's merge (for a server without the asks route). */
 export function waitingMergeCount(snapshot: FactorySnapshot): number {
   return snapshot.projects.filter((p) => isLive(p) && p.stage === "ready" && p.overlay !== "failed")
     .length;
@@ -551,9 +561,21 @@ const AVATAR_OF: Record<TeamMember["state"], AgentState> = {
   done: "done",
 };
 
+/**
+ * Whether discovery runs: this server has it on (`OMNIGENT_FACTORY_DISCOVERY`)
+ * and the factory's definition turns it on. Either alone keeps it dark.
+ */
+export function discoveryRuns(
+  definition: { discovery_server?: boolean; effective?: DefinitionDoc | null } | null | undefined,
+): boolean {
+  return definition?.discovery_server === true && definition.effective?.discovery?.enabled === true;
+}
+
 export interface LoopInput {
   snapshot: FactorySnapshot;
   definition: DefinitionDoc | null | undefined;
+  /** Discovery runs (see `discoveryRuns`): the server's switch and the definition's. */
+  discoveryOn: boolean;
   asks: readonly Ask[] | null | undefined;
   discovery: DiscoveryHomeFacts | null | undefined;
   leads: LoopLeads;
@@ -580,14 +602,13 @@ function countKind(asks: readonly Ask[] | null | undefined, kind: Ask["kind"]): 
 export function homeLoop({
   snapshot,
   definition,
+  discoveryOn,
   asks,
   discovery,
   leads,
   hrefs,
 }: LoopInput): HomeLoop {
-  const disc = definition?.discovery;
-  const discoveryOn = disc?.enabled === true;
-  const sources = disc?.sources ?? [];
+  const sources = definition?.discovery?.sources ?? [];
   const on = sources.filter((s) => s.state !== "paused").length;
   const sourceAsks = countKind(asks, "source");
   const goals = definition?.strategy?.goals ?? [];
@@ -678,17 +699,19 @@ export interface ChecklistStep {
 }
 
 /**
- * "Getting discovery going" while discovery is on and a step is still open:
- * turned on, starter sources approved, the product profile reviewed, a first
- * goal, the first weekly synthesis. Null once every step is done (or while off).
+ * "Getting discovery going" while discovery runs (`discoveryOn`: the server's
+ * switch and the definition's) and a step is still open: turned on, starter
+ * sources approved, the product profile reviewed, a first goal, the first
+ * weekly synthesis. Null once every step is done (or while it does not run).
  */
 export function discoveryChecklist(
   definition: DefinitionDoc | null | undefined,
   asks: readonly Ask[] | null | undefined,
   discovery: DiscoveryHomeFacts | null | undefined,
+  discoveryOn: boolean,
 ): ChecklistStep[] | null {
   const disc = definition?.discovery;
-  if (disc?.enabled !== true) return null;
+  if (!discoveryOn || !disc) return null;
   const product = definition?.product;
   const steps: ChecklistStep[] = [
     { label: "Turn on discovery", done: true },

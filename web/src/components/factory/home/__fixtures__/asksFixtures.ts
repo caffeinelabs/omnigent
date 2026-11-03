@@ -170,6 +170,24 @@ function goalTitle(row: ProposalView, list: string[]): string {
   return "Review a change to the goals";
 }
 
+function evaluated(row: ProposalView | undefined): boolean {
+  const evaluation = (row?.result as { evaluation?: unknown } | null | undefined)?.evaluation;
+  return evaluation != null && typeof evaluation === "object";
+}
+
+/** A trial's "Keep or revert": a person decides it, so it never waits in Steer. */
+function keepOrRevert(decision: DecisionView, row: ProposalView | undefined): boolean {
+  return (
+    decision.question.startsWith("Keep or revert") || (row?.status === "trial" && evaluated(row))
+  );
+}
+
+function trialRunning(row: ProposalView, nowS: number): boolean {
+  return (
+    row.status === "trial" && row.trial_until != null && row.trial_until > nowS && !evaluated(row)
+  );
+}
+
 interface Ctx {
   snapshot: FactorySnapshot;
   userId: string | null;
@@ -305,7 +323,8 @@ function decisionDraft(decision: DecisionView, ctx: Ctx, inSteer: string[]): Dra
     if (row && row.kind !== "projects") {
       kind = definitionKind(paths(row));
       const soon = deadline != null && deadline - ctx.nowS <= DEADLINE_SOON_S;
-      if (kind === "proposal" && row.author_kind !== "human" && !blocking && !soon) {
+      const readout = keepOrRevert(decision, row);
+      if (kind === "proposal" && row.author_kind !== "human" && !blocking && !soon && !readout) {
         inSteer.push(shownRef);
         return null;
       }
@@ -335,7 +354,7 @@ function decisionDraft(decision: DecisionView, ctx: Ctx, inSteer: string[]): Dra
       action = open("Review the goal");
       costText = "opportunities are ranked against goals";
     } else {
-      if (decision.question.startsWith("Keep or revert")) {
+      if (keepOrRevert(decision, row)) {
         title = titleText ? `Keep or revert ${shownRef}: ${titleText}` : question;
       } else {
         const whose = by ? `${by}'s proposal` : "a proposal";
@@ -431,6 +450,19 @@ function mergeDrafts(ctx: Ctx): Draft[] {
     const group = groups.get(key) ?? { owner, who, forYou: owner ? mine : operator, mine, prs: [] };
     group.prs.push(pr);
     groups.set(key, group);
+  }
+  // An operator who also owns projects merges both: one row for the viewer.
+  const yours = [...groups.entries()].filter(([, g]) => g.forYou);
+  if (yours.length > 1) {
+    const mine = yours.some(([, g]) => g.mine);
+    for (const [key] of yours) groups.delete(key);
+    groups.set("\u0000yours", {
+      owner: null,
+      who: mine && userId != null ? "you" : "operators",
+      forYou: true,
+      mine,
+      prs: yours.flatMap(([, g]) => g.prs),
+    });
   }
   const policy = clip(snapshot.factory.product?.delivery?.merge_policy, 300);
   const outcome = new Map(
@@ -602,9 +634,11 @@ function handledLines(ctx: Ctx, healing: IssueView[]): string[] {
   }
   for (const row of [...ctx.proposals.values()].sort((a, b) => a.number - b.number)) {
     const ref = `C-${row.number}`;
-    if (row.status === "trial") {
+    if (trialRunning(row, ctx.nowS)) {
       const title = clip(row.title, TITLE_MAX);
       lines.push(`Trial ${ref} is running${title ? `: ${title}.` : "."}`);
+    } else if (row.status === "trial" && !evaluated(row)) {
+      lines.push(`Trial ${ref} has ended; the factory is evaluating it.`);
     } else if (row.status === "awaiting_cosign") {
       lines.push(`The bet ${ref} waits for the other lead's co-sign before it reaches a person.`);
     }
@@ -656,10 +690,13 @@ export function asksOf(
     if (issue.class !== "incident" || (issue.status !== "open" && issue.status !== "acked"))
       continue;
     const target = normTarget(issue.target) ?? "";
-    let home = drafts.find((d) => target !== "" && d.targets.has(target));
+    // Fold only where the viewer sees it too (never into a row that waits on someone else).
+    const yours = ctx.userId == null || incidentIsMine(issue, ctx.userId, ctx.level);
+    const fits = drafts.filter((d) => d.forYou || !yours);
+    let home = fits.find((d) => target !== "" && d.targets.has(target));
     if (!home && target.startsWith("pr:")) {
       const prId = target.slice(3).split("@")[0] ?? "";
-      home = drafts.find((d) => d.prIds.has(prId));
+      home = fits.find((d) => d.prIds.has(prId));
     }
     const ref = issue.ref ?? `INC-${issue.number}`;
     if (home) {

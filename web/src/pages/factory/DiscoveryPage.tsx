@@ -6,6 +6,7 @@
  */
 
 import { CompassIcon } from "lucide-react";
+import { discoveryRuns } from "@/components/factory/home/homeModel";
 import { useFactoryDefinition } from "@/components/factory/insights/learnQueries";
 import { EmptyState } from "@/components/factory/project/projectParts";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
@@ -13,7 +14,9 @@ import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext"
 export function DiscoveryPage() {
   const { snapshot } = useFactoryShell();
   const definition = useFactoryDefinition(snapshot.factory.id);
-  const on = definition.data?.effective.discovery?.enabled === true;
+  // On only with both switches: this server's and the factory's definition.
+  const on = discoveryRuns(definition.data);
+  const serverOff = definition.data != null && definition.data.discovery_server !== true;
   const product = definition.data?.effective.product?.name ?? null;
   return (
     <div data-testid="factory-discovery-page" className="flex min-w-0 flex-col gap-3">
@@ -40,8 +43,12 @@ export function DiscoveryPage() {
         <EmptyState
           testId="discovery-off"
           icon={<CompassIcon aria-hidden className="size-6 text-muted-foreground/50" />}
-          title="Discovery is off in this factory"
-          body="With discovery on, the factory reads where its users talk about the product, groups what it hears into opportunities, scores them with the evidence shown, and proposes what to build. People steer it with hunches, votes and the strategy. An owner turns it on as a change to the factory's definition."
+          title={serverOff ? "Discovery is off on this server" : "Discovery is off in this factory"}
+          body={
+            serverOff
+              ? "This server does not run discovery yet, so the factory gathers no evidence and proposes nothing from it, whatever its definition says."
+              : "With discovery on, the factory reads where its users talk about the product, groups what it hears into opportunities, scores them with the evidence shown, and proposes what to build. People steer it with hunches, votes and the strategy. An owner turns it on as a change to the factory's definition."
+          }
         />
       )}
     </div>

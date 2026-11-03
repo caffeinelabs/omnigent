@@ -1018,10 +1018,12 @@ export function normTarget(target: string | null | undefined): string | null {
 
 /**
  * What the one Needs-you list (`asks.py`) makes of the waiting items (a
- * fixture port without proposals, so every decision shows): the keys some row
- * stands for, and its rows for the viewer: ready PRs one row per person who
- * merges, an incident folded into the row of what it is about, and an
- * incident that heals itself left out.
+ * fixture port without proposals, so every decision shows): the keys its rows
+ * lead with, and how many rows wait on the viewer: ready PRs one row (the
+ * viewer merges them all in one), an incident folded into the row of what it
+ * is about when that row waits on the viewer whenever the incident does (its
+ * key then counted once, with that row), and an incident that heals itself
+ * left out.
  */
 function needsYou(
   snapshot: FactorySnapshot,
@@ -1029,40 +1031,53 @@ function needsYou(
   incidents: readonly IssueView[],
 ): { covered: Set<string>; count: number } {
   const decisions = new Map(snapshot.decisions.map((d) => [`decision:${d.id}`, d]));
-  const targets = new Set<string>();
+  /** Target -> whether a row about it waits on the viewer. */
+  const targets = new Map<string, boolean>();
+  const mark = (map: Map<string, boolean>, key: string, forYou: boolean) =>
+    map.set(key, (map.get(key) ?? false) || forYou);
   for (const item of waiting) {
     const decision = item.kind === "decision" ? decisions.get(item.key) : undefined;
     if (!decision) continue;
     for (const option of decision.options ?? []) {
       const target = normTarget(option.target);
-      if (target) targets.add(target);
+      if (target) mark(targets, target, item.for_you);
     }
-    if (decision.subject) targets.add(decision.subject);
+    if (decision.subject) mark(targets, decision.subject, item.for_you);
   }
-  const readyPrs = new Set(
-    waiting
-      .filter((i) => i.kind === "pr")
-      .map((i) => i.key.slice(3).replace(/-/g, "").toLowerCase()),
-  );
+  /** Ready PR id -> whether its merge row waits on the viewer. */
+  const readyPrs = new Map<string, boolean>();
+  for (const item of waiting) {
+    if (item.kind === "pr") {
+      mark(readyPrs, item.key.slice(3).replace(/-/g, "").toLowerCase(), item.for_you);
+    }
+  }
   const byId = new Map(incidents.map((i) => [`incident:${i.id}`, i]));
   const covered = new Set<string>();
-  const mergers = new Set<string>();
+  let merges = false;
   let count = 0;
   for (const item of waiting) {
     if (item.kind !== "incident") {
       covered.add(item.key);
       if (item.for_you && item.kind === "decision") count += 1;
-      if (item.for_you && item.kind === "pr") mergers.add(item.who);
+      if (item.for_you && item.kind === "pr") merges = true;
       continue;
     }
     const issue = byId.get(item.key);
     const target = normTarget(issue?.target) ?? "";
     const prId = target.startsWith("pr:") ? (target.slice(3).split("@")[0] ?? "") : "";
-    const folded = targets.has(target) || (prId !== "" && readyPrs.has(prId));
-    if (folded || (issue != null && needsPerson(issue))) covered.add(item.key);
-    if (!folded && issue != null && needsPerson(issue) && item.for_you) count += 1;
+    const fits = (forYou: boolean | undefined) => forYou !== undefined && (forYou || !item.for_you);
+    const folded =
+      (target !== "" && fits(targets.get(target))) || (prId !== "" && fits(readyPrs.get(prId)));
+    if (folded || issue == null || !needsPerson(issue)) continue;
+    covered.add(item.key);
+    if (item.for_you) count += 1;
   }
-  return { covered, count: count + mergers.size };
+  return { covered, count: count + (merges ? 1 : 0) };
+}
+
+/** `1 thing needs you`, `6 things need you` (the server's `needs_text`). */
+function needsText(n: number): string {
+  return `${plural(n, "thing")} ${n === 1 ? "needs" : "need"} you`;
 }
 
 function verdictOf(
@@ -1072,6 +1087,7 @@ function verdictOf(
   waiting: readonly StatusWaitingItem[],
   incidents: readonly IssueView[],
   usdPerHAlert: number | null,
+  needs: number,
 ): StatusVerdict {
   const lead = stateWord(state, health);
   const [parts, reasons] = broken(snapshot, incidents);
@@ -1090,9 +1106,9 @@ function verdictOf(
   if (parts.length) {
     dot = "red";
     sentence = `${lead}, ${and(parts)}`;
-  } else if (mine.length) {
+  } else if (needs) {
     dot = "amber";
-    sentence = `${lead}, ${waitsText(mine, "you")}`;
+    sentence = `${lead}, ${needsText(needs)}`;
   } else {
     dot = state === "working" ? "green" : "grey";
     const calm = blocked.length ? [`${plural(blocked.length, "project")} blocked`] : [];
@@ -1173,6 +1189,7 @@ export function statusSummaryOf(
       waiting.filter((item) => needs.covered.has(item.key)),
       incidents,
       options.usdPerHAlert ?? null,
+      needs.count,
     ),
     state,
     waiting,

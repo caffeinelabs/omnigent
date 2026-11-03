@@ -26,11 +26,6 @@
             "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/prs/f74d5967c53455139e85ba1b402a5bd4"
           },
           {
-            "kind": "waiting",
-            "text": "1 incident waits on you",
-            "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/alerts/12"
-          },
-          {
             "kind": "blocked",
             "text": "db-version: blocked until someone answers D-2 · T-4 implement exhausted",
             "href": "/factory/f4f4ba9c77725331b12f0fa7072dc4d3/projects/db-version"
@@ -650,7 +645,7 @@
         "queued": 1,
         "cant_start": 0,
         "held": 2,
-        "needs_you": 4
+        "needs_you": 5
       }
     },
     "viewer": {
@@ -1370,7 +1365,7 @@
       "headline": "5 things wait on you · 2 projects in progress · 2 queued",
       "verdict": {
         "dot": "amber",
-        "sentence": "Running, 5 things wait on you",
+        "sentence": "Running, 2 things need you",
         "reasons": [
           {
             "kind": "waiting",
