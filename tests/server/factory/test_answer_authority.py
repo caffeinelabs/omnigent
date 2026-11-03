@@ -17,7 +17,7 @@ import pytest
 import pytest_asyncio
 
 from omnigent.entities.factory import FactoryDecision
-from omnigent.server.factory import answer_authority, decisions, snapshot
+from omnigent.server.factory import answer_authority, decisions, proposals, snapshot
 from omnigent.server.factory.charter import normalize_charter
 from omnigent.stores.factory_store import now_s
 from tests.server.factory.cockpit_helpers import Cockpit
@@ -373,6 +373,28 @@ async def test_two_proposals_at_once_carry_an_answer_out_once(cockpit: Cockpit) 
     row = cockpit.store.get_proposal_by_number(cockpit.fid, 2)
     assert row is not None and row.on_behalf_of is None and row.decision_id is not None
     assert "authority" not in (row.result or {})
+
+
+async def test_an_answer_stays_claimed_while_its_proposal_applies(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The race above, made certain: a second proposal that checks the claim while
+    # C-1 is still applying must find it, or it carries the same answer out again.
+    decision = _ask(cockpit)
+    await _answer(cockpit, decision, option_id="follow_up")
+    seen: list[str | None] = []
+    real = proposals._apply_change
+
+    async def watching(*args: Any, **kwargs: Any) -> Any:
+        seen.append(answer_authority.claimed_by(cockpit.deps, cockpit.fid, decision.ref))
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(proposals, "_apply_change", watching)
+    resp = await propose(cockpit, _dod_update(), key="pl", reply_to=decision.ref)
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["status"] == "applied"
+    assert seen and set(seen) == {"C-1"}
 
 
 async def test_an_open_or_old_answer_approves_nothing(
