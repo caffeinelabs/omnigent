@@ -12,6 +12,14 @@ Definitions are Tier 0: code only.
 The nightly human-prompt scan (:func:`scan_human_prompts`) counts the
 human-authored conversation items (``created_by``) of the factory's members and
 records one ``metrics.prompts`` event per factory and day.
+
+The discovery family (:data:`DISCOVERY_CATALOG`) judges discovery's method:
+its guards (:data:`DISCOVERY_GUARDS`: quote failures, privacy events, accepted
+bets, cost per accepted bet) and the prediction ledger (the share of readouts
+inside the predicted range, the win rate by evidence level at filing, the yield
+per source, the hit rate by origin), each with n and stamped with the
+definition version that ranked the bet. It stays out of the Insights catalog;
+:func:`compute` and :func:`known` take both.
 """
 
 from __future__ import annotations
@@ -35,6 +43,7 @@ from omnigent.factory import (
     THREAD_FACTORY,
     THREAD_IMPROVEMENTS,
 )
+from omnigent.server.factory.definition_blocks import discovery_server_on
 
 if TYPE_CHECKING:
     from omnigent.entities.factory import (
@@ -144,6 +153,9 @@ class Facts:
     chat: list[FactoryChatMessage] = field(default_factory=list)
     proposals: list[Any] = field(default_factory=list)
     spans: list[FactorySpan] = field(default_factory=list)
+    readouts: list[Any] = field(default_factory=list)
+    discovery_events: list[FactoryEvent] = field(default_factory=list)
+    """Quote refusals and source reads refused for privacy (only while discovery runs)."""
     roles: dict[str, str] = field(default_factory=dict)
     """Member session id → factory role."""
     titles: dict[str, str] = field(default_factory=dict)
@@ -246,6 +258,11 @@ def load_facts(deps: FactoryDeps, factory_id: str, window: Window) -> Facts:
     facts.spans = store.list_spans(
         factory_id, kinds=list(_SPAN_KINDS), since_ms=since_ms, limit=_SPAN_LIMIT
     )
+    if discovery_server_on():
+        facts.readouts = store.list_readouts(factory_id, limit=_READOUT_LIMIT)
+        facts.discovery_events = store.find_events(
+            factory_id, list(_DISCOVERY_EVENT_KINDS), since_ms, limit=_DISCOVERY_EVENT_LIMIT
+        )
     for member in factory_members(factory_id, deps.conversation_store):
         facts.roles[member.id] = member.labels.get(LABEL_ROLE) or ""
         facts.titles[member.id] = member.title or member.id
@@ -272,6 +289,21 @@ _EVENT_KINDS: Final = (
     PROMPT_SCAN_KIND,
 )
 _SPAN_KINDS: Final = ("task", "stage", "gate", "env", "preview")
+_DISCOVERY_EVENT_KINDS: Final = (
+    "bet.quote_refused",
+    "opportunity.quote_refused",
+    "source.query",
+    "source.sync",
+    "privacy.*",
+)
+_DISCOVERY_EVENT_LIMIT: Final = 10000
+_READOUT_LIMIT: Final = 2000
+PRIVACY_CODES: Final = frozenset({"source_not_allowed", "redaction_unavailable"})
+"""Source reads refused for privacy: a personal or sensitive source, a redaction not available."""
+SCOUT_ROLE: Final = "scout"
+"""The discovery seat's role (its spend is discovery's cost)."""
+WIN_RATE_MIN_PER_LEVEL: Final = 5
+"""Readouts an evidence level needs before its win rate is a rate (else "not enough data")."""
 
 
 # ── Samples and aggregation ────────────────────────────────────
@@ -1220,6 +1252,160 @@ def _wakes(facts: Facts, w: Window) -> list[Sample]:
     ]
 
 
+# ── Discovery ──────────────────────────────────────────────────
+
+_BET_ACCEPTED: Final = frozenset({"applied"})
+_BET_DECIDED: Final = frozenset({"applied", "rejected", "undone"})
+"""A bet a person decided: applied (accepted), rejected, or undone within its 10 minutes."""
+_READ_OUT: Final = frozenset({"written", "decided"})
+_DECISIVE: Final = frozenset({"won", "flat", "lost"})
+
+
+def _bets(facts: Facts) -> list[Any]:
+    return [p for p in facts.proposals if p.kind == "projects" and p.bet]
+
+
+def _bet_decisions(facts: Facts, w: Window) -> list[Sample]:
+    out = []
+    for row in _bets(facts):
+        at = row.decided_at or row.applied_at
+        if row.status not in _BET_DECIDED or not w.holds(at):
+            continue
+        out.append(
+            Sample(
+                ts=at or 0,
+                value=1.0 if row.status in _BET_ACCEPTED else 0.0,
+                key=str((row.bet or {}).get("kind") or ""),
+                def_version=row.def_version_from,
+            )
+        )
+    return out
+
+
+def _quote_failures(facts: Facts, w: Window) -> list[Sample]:
+    return [
+        Sample(ts=e.ts / 1000, value=1.0, key=e.kind, agent=facts.titles.get(e.from_id or ""))
+        for e in facts.discovery_events
+        if e.kind.endswith(".quote_refused") and w.holds(e.ts / 1000)
+    ]
+
+
+def _privacy_events(facts: Facts, w: Window) -> list[Sample]:
+    out = []
+    for e in facts.discovery_events:
+        data = e.data or {}
+        refused = e.kind in ("source.query", "source.sync") and data.get("error_code") in (
+            PRIVACY_CODES
+        )
+        if (refused or e.kind.startswith("privacy.")) and w.holds(e.ts / 1000):
+            out.append(Sample(ts=e.ts / 1000, value=1.0, key=str(data.get("source") or e.kind)))
+    return out
+
+
+def _cost_per_bet(facts: Facts, w: Window) -> list[Sample]:
+    accepted = [s for s in _bet_decisions(facts, w) if s.value == 1.0]
+    if not accepted:
+        return []
+    spend = sum(s.value for s in _cost(facts, w) if s.role == SCOUT_ROLE)
+    return [replace(s, value=spend / len(accepted)) for s in accepted]
+
+
+def latest_readouts(readouts: Iterable[Any]) -> list[Any]:
+    """:returns: Each bet's latest readout that is written (the highest day), oldest bet first."""
+    best: dict[int, Any] = {}
+    for row in readouts:
+        if row.status not in _READ_OUT or not row.verdict:
+            continue
+        held = best.get(row.proposal)
+        if held is None or row.day > held.day:
+            best[row.proposal] = row
+    return [best[k] for k in sorted(best)]
+
+
+def _stamped(row: Any, value: float, key: str | None) -> Sample:
+    stamp = row.stamp or {}
+    version = stamp.get("def_version")
+    return Sample(
+        ts=float(row.written_at or row.due_at or 0),
+        value=value,
+        key=key,
+        def_version=version if isinstance(version, int) else None,
+    )
+
+
+def _level(row: Any) -> str:
+    return str((row.stamp or {}).get("evidence_level") or "unknown")
+
+
+def _inside(facts: Facts, w: Window) -> list[Sample]:
+    out = []
+    for row in latest_readouts(facts.readouts):
+        where = (row.result or {}).get("predicted_vs_actual")
+        if where in ("inside", "below", "above") and w.holds(row.written_at):
+            out.append(_stamped(row, 1.0 if where == "inside" else 0.0, _level(row)))
+    return out
+
+
+def _wins(facts: Facts, w: Window) -> list[Sample]:
+    return [
+        _stamped(row, 1.0 if row.verdict == "won" else 0.0, _level(row))
+        for row in latest_readouts(facts.readouts)
+        if row.verdict in _DECISIVE and w.holds(row.written_at)
+    ]
+
+
+def _agg_win_rate(samples: list[Sample], window: Window) -> dict[str, Any]:
+    out = agg_share(samples, window)
+    by: dict[str, list[Sample]] = defaultdict(list)
+    for sample in samples:
+        by[sample.key or "unknown"].append(sample)
+    out["by"] = {
+        level: {
+            **agg_share(rows, window),
+            "enough": len(rows) >= WIN_RATE_MIN_PER_LEVEL,
+        }
+        for level, rows in sorted(by.items())
+    }
+    out["min_per_level"] = WIN_RATE_MIN_PER_LEVEL
+    return out
+
+
+def _source_yield(facts: Facts, w: Window) -> list[Sample]:
+    out = []
+    for row in latest_readouts(facts.readouts):
+        if row.verdict not in _DECISIVE or not w.holds(row.written_at):
+            continue
+        for source in (row.stamp or {}).get("sources") or []:
+            out.append(_stamped(row, 1.0 if row.verdict == "won" else 0.0, str(source)))
+    return out
+
+
+def _origin_hits(facts: Facts, w: Window) -> list[Sample]:
+    return [
+        _stamped(
+            row,
+            1.0 if row.verdict == "won" else 0.0,
+            str((row.stamp or {}).get("origin") or "discovered"),
+        )
+        for row in latest_readouts(facts.readouts)
+        if row.verdict in _DECISIVE and w.holds(row.written_at)
+    ]
+
+
+def _unmeasured_work(facts: Facts, w: Window, _s: list[Sample]) -> dict[str, Any]:
+    """Requested work: shipped projects without a measurement plan (never counted as a success)."""
+    shipped = 0
+    for project in facts.projects:
+        charter = project.charter or {}
+        why = charter.get("why") if isinstance(charter.get("why"), Mapping) else {}
+        if charter.get("kind") not in (None, "work") or (why or {}).get("measurement"):
+            continue
+        done = project.status in ("merged", "done") or project.stage in ("merged", "done")
+        if done and project.status != "cancelled" and w.holds(project.stage_changed_at):
+            shipped += 1
+    return {"requested": {"shipped": shipped, "measured": 0}}
+
+
 def _m(
     name: str,
     family: str,
@@ -1616,6 +1802,126 @@ GUARDS: Final[dict[str, tuple[str, float]]] = {
 }
 """Guard metrics a trial must not regress, with the allowed change (Tier 0)."""
 
+DISCOVERY_CATALOG: Final[dict[str, Metric]] = {
+    m.name: m
+    for m in (
+        _m(
+            "quote_failures",
+            "discovery",
+            "Quote failures",
+            "count",
+            "agent text refused because a quote matched no stored excerpt of a cited signal",
+            "bet.quote_refused, opportunity.quote_refused events",
+            _quote_failures,
+            agg_count,
+        ),
+        _m(
+            "privacy_events",
+            "discovery",
+            "Privacy events",
+            "count",
+            "source reads refused for privacy (a personal or sensitive source, a redaction "
+            "the server cannot do) and privacy.* events",
+            "source.query, source.sync, privacy.* events",
+            _privacy_events,
+            agg_count,
+        ),
+        _m(
+            "bet_acceptance",
+            "discovery",
+            "Accepted bets",
+            "share",
+            "bets people decided in the window: applied / (applied + rejected + undone); "
+            "n counts decided bets",
+            "proposals (projects with a bet)",
+            _bet_decisions,
+            agg_share,
+        ),
+        _m(
+            "cost_per_accepted_bet",
+            "discovery",
+            "$ per accepted bet",
+            "usd",
+            "the discovery seat's ledger cost in the window / bets accepted in the window",
+            "ledger, proposals",
+            _cost_per_bet,
+            _agg_cost_per_pr,
+        ),
+        _m(
+            "prediction_hit_rate",
+            "discovery",
+            "Inside the predicted range",
+            "share",
+            "each bet's latest readout: the effect inside its predicted range (key: the "
+            "evidence level at filing; def_version: the rubric that ranked it)",
+            "factory_readouts",
+            _inside,
+            agg_share,
+        ),
+        _m(
+            "bet_win_rate",
+            "discovery",
+            "Win rate by evidence level",
+            "share",
+            "each bet's latest won, flat or lost readout: won / all, by the evidence level at "
+            f"filing (a level is a rate from {WIN_RATE_MIN_PER_LEVEL} readouts)",
+            "factory_readouts",
+            _wins,
+            _agg_win_rate,
+        ),
+        _m(
+            "source_yield",
+            "discovery",
+            "Yield per source",
+            "share",
+            "per source in a bet's evidence at filing: its bets' latest readouts won / all",
+            "factory_readouts",
+            _source_yield,
+            by_key(agg_share),
+        ),
+        _m(
+            "origin_hit_rate",
+            "discovery",
+            "Hit rate by origin",
+            "share",
+            "discovered, requested and hunch bets: won / measured; requested work without a "
+            "plan is shipped, never measured",
+            "factory_readouts, projects",
+            _origin_hits,
+            by_key(agg_share),
+            _unmeasured_work,
+        ),
+    )
+}
+"""The discovery family (Tier 0): discovery's guards and the prediction ledger."""
+DISCOVERY_GUARDS: Final[dict[str, tuple[str, float]]] = {
+    "quote_failures": ("abs_max", 0.0),
+    "privacy_events": ("abs_max", 0.0),
+    "bet_acceptance": ("pp_drop", 0.10),
+    "cost_per_accepted_bet": ("pct_rise", 0.20),
+}
+"""What a trial of discovery's method must hold (Tier 0): quote failures and privacy
+events stay at 0, accepted bets fall at most 10 pp, cost per accepted bet rises at
+most 20 %."""
+LEDGER_METRICS: Final = (
+    "prediction_hit_rate",
+    "bet_win_rate",
+    "source_yield",
+    "origin_hit_rate",
+)
+
+
+def known(name: str) -> bool:
+    """:returns: Whether *name* is a metric of the catalog or the discovery family."""
+    return name in CATALOG or name in DISCOVERY_CATALOG
+
+
+def _metric(name: str) -> Metric:
+    found = CATALOG.get(name) or DISCOVERY_CATALOG.get(name)
+    if found is None:
+        raise KeyError(name)
+    return found
+
 
 # ── Computing ──────────────────────────────────────────────────
 
@@ -1708,8 +2014,7 @@ def compute(
     """
     wanted = list(names) if names is not None else list(CATALOG)
     for name in wanted:
-        if name not in CATALOG:
-            raise KeyError(name)
+        _metric(name)
     filters = filters or Filters()
     bucket = window.until // int(CACHE_S)
     key = (factory_id, tuple(wanted), window.seconds, bucket, group_by, filters, previous)
@@ -1719,7 +2024,7 @@ def compute(
     facts = load_facts(deps, factory_id, window)
     out: dict[str, dict[str, Any]] = {}
     for name in wanted:
-        metric = CATALOG[name]
+        metric = _metric(name)
         try:
             value = evaluate_metric(facts, metric, window, filters, group_by)
             if previous:
@@ -1844,12 +2149,17 @@ async def record_prompt_scan(app_state: Any, factory_id: str, day: str) -> bool:
 __all__ = [
     "CATALOG",
     "DAISY_BAND",
+    "DISCOVERY_CATALOG",
+    "DISCOVERY_GUARDS",
     "GROUP_KEYS",
     "GUARDS",
     "KPIS",
+    "LEDGER_METRICS",
     "NO_STAMP",
     "OWNER_ONLY_GROUPS",
+    "PRIVACY_CODES",
     "PROMPT_SCAN_KIND",
+    "WIN_RATE_MIN_PER_LEVEL",
     "AgentStamp",
     "Facts",
     "Filters",
@@ -1860,6 +2170,8 @@ __all__ = [
     "evaluate_metric",
     "headline",
     "index_agents",
+    "known",
+    "latest_readouts",
     "load_facts",
     "parse_window",
     "record_prompt_scan",

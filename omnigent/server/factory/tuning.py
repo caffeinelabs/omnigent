@@ -133,7 +133,7 @@ class ProposeIn(_Body):
     rationale: str | None = Field(None, max_length=2000)
     evidence: list[definition.EvidenceId] = Field(default_factory=list, max_length=MAX_EVIDENCE)
     expected_effect: EffectIn | None = None
-    trial_h: int | None = Field(None, ge=definition.TRIAL_H_MIN, le=definition.TRIAL_H_MAX)
+    trial_h: int | None = Field(None, ge=definition.TRIAL_H_MIN, le=definition.TRIAL_H_LIMIT)
     thread: str | None = Field(None, max_length=THREAD_MAX_LEN)
     dedupe_key: str | None = Field(None, max_length=96)
 
@@ -144,7 +144,7 @@ class DefinitionEditIn(_Body):
     changes: list[dict[str, Any]] = Field(min_length=1, max_length=MAX_CHANGES)
     note: str | None = Field(None, max_length=2000)
     trial: bool = False
-    trial_h: int | None = Field(None, ge=definition.TRIAL_H_MIN, le=definition.TRIAL_H_MAX)
+    trial_h: int | None = Field(None, ge=definition.TRIAL_H_MIN, le=definition.TRIAL_H_LIMIT)
     expected_effect: EffectIn | None = None
     base_version: int | None = Field(None, ge=1)
     when: Literal["after_current", "now"] = "after_current"
@@ -341,11 +341,11 @@ def _applied_title(row: FactoryProposal, applied: Sequence[Mapping[str, Any]]) -
 
 
 def _effect(body: EffectIn | None) -> dict[str, Any] | None:
-    from omnigent.server.factory.telemetry.metrics import CATALOG
+    from omnigent.server.factory.telemetry.metrics import CATALOG, known
 
     if body is None:
         return None
-    if body.metric not in CATALOG:
+    if not known(body.metric):
         raise CockpitError(
             400,
             "unknown_metric",
@@ -776,7 +776,7 @@ async def propose(app_state: Any, caller: AgentCaller, body: ProposeIn) -> dict[
     if klass == "A" and (role != ROLE_LEAD or peer is None):
         klass = "B"
         warnings.append("no peer lead to co-sign: owners decide")
-    trial_h = body.trial_h or definition.TRIAL_H_DEFAULT
+    trial_h = definition.trial_hours(diff_paths(diff), body.trial_h)
     row, deduped = await asyncio.to_thread(
         lambda: store.create_proposal(
             root.id,
@@ -1658,7 +1658,7 @@ async def human_edit(
 
         await asyncio.to_thread(evaluate.check_trial, deps, root.id, diff_paths(diff))
     kind = "rules" if all(c.path == "rules" for c in changes) else "tuning"
-    trial_h = body.trial_h or definition.TRIAL_H_DEFAULT
+    trial_h = definition.trial_hours(diff_paths(diff), body.trial_h)
     row, _ = await asyncio.to_thread(
         lambda: deps.factory_store.create_proposal(
             root.id,

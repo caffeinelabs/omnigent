@@ -866,11 +866,17 @@ Paths a trial would judge on the wrong metrics, and why: they apply as a version
 
 Strategy and the profile are judged on outcomes. Discovery and Scout's brief
 are judged on discovery guards (quote failures, privacy events, accepted
-bets), which this server does not measure yet; until it does, the delivery
-guards would judge them. One project's team merges about one PR a day, too
-few for a trial's n. A template reaches a project only when it switches to
-it, so a template trial would measure nothing until projects follow one.
+bets, cost per accepted bet), which a server measures only while it runs
+discovery; there, discovery's method (:data:`DISCOVERY_TRIALS`) trials on
+them, and its other settings apply as a version. One project's team merges
+about one PR a day, too few for a trial's n. A template reaches a project
+only when it switches to it, so a template trial would measure nothing until
+projects follow one.
 """
+DISCOVERY_TRIALS: Final = ("discovery.rubric", "discovery.thresholds", "briefs.scout")
+"""Discovery's method: on a server that runs discovery it trials on the discovery guards."""
+DISCOVERY_SETTING: Final = "a setting, not discovery's method"
+MIXED_GUARDS: Final = "discovery guards: split from other changes"
 AGENT_PATHS: Final[dict[str, tuple[str, ...]]] = {
     "scout": ("product", "strategy", "discovery.sources"),
     "sentinel": ("discovery.rubric", "discovery.thresholds", "briefs.scout", "team"),
@@ -979,11 +985,14 @@ __all__ = [
     "BRIEF_MAX",
     "CONSENT",
     "DISCOVERY_ENV",
+    "DISCOVERY_SETTING",
+    "DISCOVERY_TRIALS",
     "EVIDENCE_LEVELS",
     "GOAL_ID_RE",
     "KEEP_DAYS",
     "LEGACY_MODELS",
     "LISTS",
+    "MIXED_GUARDS",
     "NEEDS_DISCOVERY_GUARDS",
     "NOT_TRIALABLE",
     "NOT_TRIALABLE_REASON",

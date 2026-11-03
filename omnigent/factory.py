@@ -215,6 +215,7 @@ DECISION_SOURCES: Final = (
     "loop",
     "access_request",
     "done_check",
+    "readout",
 )
 
 MIN_HEARTBEAT_S: Final = 120

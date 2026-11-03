@@ -44,7 +44,7 @@ class PreviewIn(tuning._Body):
     restore: int | None = Field(None, ge=1)
     note: str | None = Field(None, max_length=2000)
     trial: bool = False
-    trial_h: int | None = Field(None, ge=definition.TRIAL_H_MIN, le=definition.TRIAL_H_MAX)
+    trial_h: int | None = Field(None, ge=definition.TRIAL_H_MIN, le=definition.TRIAL_H_LIMIT)
     expected_effect: tuning.EffectIn | None = None
     base_version: int | None = Field(None, ge=1)
     when: Literal["after_current", "now"] = "after_current"
@@ -245,9 +245,14 @@ def _trial_info(
             "trial": proposal_ref(found[0].number),
             "block": found[1],
         }
+    try:
+        hours = definition.trial_hours(paths, trial_h)
+    except CockpitError as exc:
+        return {"ok": False, "code": exc.code, "reason": exc.message}
     return {
         "ok": True,
-        "trial_h": trial_h or definition.TRIAL_H_DEFAULT,
+        "trial_h": hours,
+        "guards": definition.guard_set(paths),
         "blocks": definition.trial_blocks(paths),
     }
 

@@ -366,3 +366,116 @@ def test_racing_writers_get_distinct_numbers(store: FactoryStore) -> None:
         t.join()
 
     assert sorted(out) == [1, 2, 3, 4, 5, 6]
+
+
+# ── Readouts ───────────────────────────────────────────────────
+
+
+def readout(store: FactoryStore, fid: str = FID, **over: Any) -> Any:
+    fields: dict[str, Any] = {
+        "proposal": 31,
+        "day": 7,
+        "status": "scheduled",
+        "method": "signal_trend",
+        "released_at": 1000,
+        "due_at": 1000 + 7 * 86400,
+        **over,
+    }
+    return store.add_readout(fid, **fields)
+
+
+def test_a_readout_round_trips_and_is_stored_once_per_bet_and_day(store: FactoryStore) -> None:
+    decision = uuid.uuid4().hex
+    row, existed = readout(
+        store,
+        opportunity=15,
+        plan_version=2,
+        plan={"expected": {"direction": "down", "low": -40, "high": -20, "unit": "%"}},
+        stamp={"evidence_level": "moderate", "def_version": 7, "sources": ["web"]},
+        result={"release": {"how": "merged"}},
+        decision_id=decision,
+    )
+    again, again_existed = readout(store, status="written")
+    other, _ = readout(store, day=28, due_at=1000 + 28 * 86400)
+
+    assert (existed, again_existed, again.id, again.status) == (False, True, row.id, "scheduled")
+    got = store.get_readout(FID, row.id)
+    assert got is not None and got == row
+    assert (got.ref, got.key, got.bet) == ("C-31 · day 7", "C-31-d7", "C-31")
+    assert (got.opportunity, got.plan_version, got.decision_id) == (15, 2, decision)
+    assert got.plan["expected"]["low"] == -40 and got.stamp["def_version"] == 7
+    assert (got.answer, got.review, got.verdict) == (None, None, None)
+    assert [r.day for r in store.list_readouts(FID)] == [7, 28]
+    assert store.get_readout(OTHER, row.id) is None
+    assert store.get_readout(FID, "not-an-id") is None
+    assert other.day == 28
+
+
+def test_readouts_filter_by_bet_opportunity_status_and_due(store: FactoryStore) -> None:
+    readout(store, opportunity=1)
+    readout(store, day=28, due_at=5000, opportunity=1)
+    readout(store, proposal=32, status="written", opportunity=2)
+    readout(store, OTHER)
+
+    assert [(r.proposal, r.day) for r in store.list_readouts(FID, proposal=31)] == [
+        (31, 7),
+        (31, 28),
+    ]
+    assert [r.proposal for r in store.list_readouts(FID, opportunity=2)] == [32]
+    assert [r.proposal for r in store.list_readouts(FID, statuses=["written"])] == [32]
+    due = store.list_readouts(FID, statuses=["scheduled"], due_before=5000)
+    assert [r.day for r in due] == [28]
+
+
+def test_a_readout_update_is_a_compare_and_set_on_its_status(store: FactoryStore) -> None:
+    row, _ = readout(store)
+
+    moved = store.update_readout(
+        FID,
+        row.id,
+        expect_status="scheduled",
+        status="written",
+        written_at=2000,
+        verdict="won",
+        recommendation="keep",
+        signal=12,
+        result={"effect": -31.0, "n": 23},
+    )
+    stale = store.update_readout(FID, row.id, expect_status="scheduled", status="cancelled")
+    decided = store.update_readout(
+        FID,
+        row.id,
+        expect_status=["written", "awaiting_answer"],
+        status="decided",
+        decision="keep",
+        decided_by="ana (sample)",
+        decided_at=3000,
+        review={"against_recommendation": False},
+        answer={"answer": "helped"},
+    )
+
+    assert moved is not None and (moved.status, moved.verdict, moved.signal) == (
+        "written",
+        "won",
+        12,
+    )
+    assert moved.result == {"effect": -31.0, "n": 23}
+    assert stale is None
+    assert decided is not None and (decided.decision, decided.decided_by) == (
+        "keep",
+        "ana (sample)",
+    )
+    assert decided.review == {"against_recommendation": False}
+    assert store.update_readout(OTHER, row.id, status="cancelled") is None
+    with pytest.raises(ValueError):
+        store.update_readout(FID, row.id, verdict="maybe")
+    with pytest.raises(TypeError):
+        store.update_readout(FID, row.id, colour="red")
+
+
+def test_readouts_stay_in_their_workspace(store: FactoryStore) -> None:
+    with workspace_scope(1):
+        row, _ = readout(store)
+    with workspace_scope(2):
+        assert store.list_readouts(FID) == []
+        assert store.get_readout(FID, row.id) is None

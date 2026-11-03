@@ -49,6 +49,7 @@ DecisionSource = Literal[
     "loop",
     "access_request",
     "done_check",
+    "readout",
 ]
 DecisionStatus = Literal["open", "answered", "withdrawn", "expired"]
 Severity = Literal["info", "notice", "warning", "critical"]

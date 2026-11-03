@@ -306,7 +306,7 @@ def _insert_minimal(engine: sa.Engine, table: str, **overrides: object) -> None:
     ("table", "column", "good", "bad"),
     [
         ("factory_projects", "status", 4, 5),
-        ("factory_decisions", "source", 9, 10),
+        ("factory_decisions", "source", 10, 11),
         ("factory_people", "role", 3, 4),
         ("factory_chat_messages", "author_kind", 3, 4),
         ("factory_proposals", "status", 11, 12),

@@ -58,7 +58,7 @@ async def test_a_preview_shows_the_diff_class_and_who_applies_it(cockpit: Cockpi
     assert body["you_can_apply"] is True and body["blocked"] == []
     assert body["who"].startswith("Owners (class A). You are an owner")
     assert body["rerank"] == [] and body["restore"] is None
-    assert body["trialable"] == {"ok": True, "trial_h": 48, "blocks": []}
+    assert body["trialable"] == {"ok": True, "trial_h": 48, "guards": "delivery", "blocks": []}
     kinds = [e["kind"] for e in body["effects"]]
     assert kinds == ["mail", "cadence"]
     # A dry run: nothing stored, nothing mailed.

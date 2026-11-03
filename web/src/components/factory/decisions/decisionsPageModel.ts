@@ -31,6 +31,7 @@ export const SOURCE_LABEL: Record<DecisionSource, string> = {
   loop: "Loop",
   access_request: "Access request",
   done_check: "Done check",
+  readout: "Readout",
 };
 
 /** Whether `decision` passes the filters, from `viewer`'s side. */

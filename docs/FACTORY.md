@@ -55,7 +55,7 @@ SERVER: FactorySupervisor — keepalive, heartbeats, alerts, reply notices
 | `OMNIGENT_FACTORY_MERGE_REPOS` | empty | `owner/repo` list (comma or space separated) the merge gate may merge in. Empty means the gate merges nowhere. Read by the gate inside the sandbox. |
 | `OMNIGENT_FACTORY_ARTIFACT_LOCATION` | unset | Where demo files (video, screenshots, `api.json`, HAR, traces) are written: `s3://<bucket>[/<prefix>]` (credentials from the standard AWS chain, IRSA included; `AWS_REGION` must be set for AWS S3; `AWS_ENDPOINT_URL_S3` for MinIO or R2) or a directory. Unset keeps them session files of the PL in the server's artifact store, shown in its Files panel. Each demo file records the location it was written to and is always read from there, so demos stored before a change keep playing. Files are still served only through `/v1/factory/demos/…` behind omnigent auth (a Range is a ranged read of the store, at most 4 MiB per response; no presigned links). A store that fails (unreachable, throttled, denied) answers 503 `artifact_store_unavailable` with `Retry-After`. A malformed location fails server start. |
 | `OMNIGENT_FACTORY_COCKPIT_V2` | unset | `1` lets each person switch to the new cockpit (Teams and the agent panel; `?cockpit=v2`, remembered per browser). Unset, every page and API behaves as before. |
-| `OMNIGENT_FACTORY_DISCOVERY` | unset | `1` runs discovery on this server: the discovery ledger's routes, Room hunches as team signals, the ledger's upkeep (retention, daily score snapshots) and the definition preview's re-rank. A factory also needs its own `discovery.enabled` (owners, off by default); until both are on every discovery route answers `404 discovery_off`. |
+| `OMNIGENT_FACTORY_DISCOVERY` | unset | `1` runs discovery on this server: the discovery ledger's routes, Room hunches as team signals, the ledger's upkeep (retention, daily score snapshots), the definition preview's re-rank, readouts and the prediction ledger, and trials of discovery's method on discovery guards. A factory also needs its own `discovery.enabled` (owners, off by default); until both are on every discovery route answers `404 discovery_off`. |
 | `OMNIGENT_FACTORY_WEB_SEARCH` | unset | The keyless search backend of `web` sources: `keenable` (its public, keyless endpoint; no key, no account). Unset or `none`, `web` sources fetch only (their `search` tool is not offered). Turn one on only where the server can reach it. |
 | `OMNIGENT_FACTORY_STATE_SEGMENTS` | follows `OMNIGENT_FACTORY_COCKPIT_V2` | `1` records each agent's working and waiting stretches (the agent panel's strip); any other value turns recording off. Segments older than 30 days are pruned. One server process is assumed to see all of a session's status edges. |
 | `OMNIGENT_BUILTIN_AGENT_DIRS` | unset | Extra built-in bundles, seeded after the defaults. Used as the prompt hotfix lane (below). |
@@ -958,8 +958,8 @@ without) and one expected metric effect; at most 2 per agent per day.
   It applies at once as a new version on **trial** (default 48 h).
 - **B** opens an owners `proposal` decision; Approve applies it as a trial
   (strategy and product profile changes apply as a version: a trial would
-  judge them on delivery metrics; so do discovery and Scout's brief until
-  the discovery guards exist).
+  judge them on delivery metrics; so do discovery's settings, and its method
+  on a server that does not run discovery).
 - **People** edit with `PUT /v1/factory/factories/{fid}/definition`
   (`{changes, note?, trial?, base_version?}`, MANAGE, human origin): a human
   `C-n` applied at once. `POST …/definition/preview` (same body, or
@@ -972,9 +972,12 @@ without) and one expected metric effect; at most 2 per agent per day.
   naming the running one; applying directly stays possible. Today's settings
   (`cadence`, `loops`, `alerts`, …) and rules trial side by side, as before.
   `trial: true` on strategy or the product profile is 422 `not_trialable`
-  (`reason` "judged on outcomes"), and on discovery or Scout's brief too
-  ("needs discovery guards": a 48 h trial on delivery guards would judge the
-  wrong thing). A proposal filed meanwhile says it will wait.
+  (`reason` "judged on outcomes"). Discovery's method (`discovery.rubric`,
+  `discovery.thresholds`, `briefs.scout`) trials on discovery guards on a
+  server that runs discovery (else "needs discovery guards"), never in one
+  trial with other changes; its other settings apply as a version ("a
+  setting, not discovery's method"). A proposal filed meanwhile says it will
+  wait.
 - **Delivery.** Each version change mails the members
   `[Factory definition · vN · C-n by … · trial 48h]` with the diff; rule
   changes send `[Factory control · RULES UPDATE · C-n · by …]` to the roles they
@@ -988,7 +991,12 @@ without) and one expected metric effect; at most 2 per agent per day.
   automatically; target met with n ≥ 3 merged PRs (24 h of beats for a
   cadence change) keeps it; anything else asks the owners "Keep or revert
   C-n?" (recommended: revert). Never auto-kept. A trial nobody decides reverts
-  one window after it ended (2× its window).
+  one window after it ended (2× its window). A trial of discovery's method
+  runs 7 to 56 days (14 by default; `trial_h` 168-1344, else 422
+  `invalid_trial_window`) on the discovery guards (quote failures and privacy
+  events stay at 0, accepted bets −10 pp, $ per accepted bet +20 %), its
+  expected effect may name a discovery metric, and its n is the bets people
+  decided (≥ 3; none decided is idle).
 - **Idle trials**: a window with no merged PR, finished task or ended sub-agent
   run proves nothing. Such a trial is extended by its own length (at most
   twice, one line in `#improvements` each time), then the owners decide with
@@ -1145,6 +1153,74 @@ rest of discovery. A source is an owner-approved `discovery.sources[]` entry
   /sources/{id}/log` (READ; status and every `source.*` event, newest first).
   Any version that adds, removes, pauses or resumes a source also writes
   `source.added|removed|paused|resumed`.
+
+### Readouts and the prediction ledger
+
+Every bet is measured after its release, by the server, against the plan frozen
+into its projects' charters (`discovery/readouts.py`, table
+`factory_readouts`, `background/discovery_readouts.py` every 2 minutes); dark
+like the rest of discovery.
+
+- **Release** (`product.delivery.release`): `merged` (all the bet's projects
+  are out: stage merged or done; from the newest merged PR), `github_release`
+  or `github_deployment:<env>` (then a release, or a successful deployment to
+  `<env>`, of their repos at or after that; read every 15 minutes with the
+  owner's GitHub connection, read-only GraphQL), `manual` (only a person:
+  `POST …/readouts/release {proposal | project, at?}`, EDIT; any mode may use
+  it). One readout per readout day of the plan (7 and 28 by default), counted
+  from the release; an eval-mode factory's readout day is a minute.
+- **Methods**: `signal_trend` (the distinct accounts behind the opportunity's
+  linked user signals in the window after the release against the same window
+  before; counter-evidence, hunches, suspects and the server's own signals left
+  out; the effect in the plan's unit: a relative change for `share`/`%`, a
+  change per week for a count; n under the plan's `min_n`, default 5, is too
+  little data) and `human_verdict` (a "Needs you" question "Did C-n help?";
+  the answer, `helped` / `no_change` / `hurt`, needs a reason).
+  `before_after`, `adoption` and `controlled` are hooks
+  (`readouts.register_method`): until a source measures them their readouts
+  are inconclusive and say so. Guardrails no source measures are
+  `unmeasured`; a person may report one broken.
+- **Fixed rules** (Tier 0, `readouts.judge`): won (moved the promised way by
+  at least the near end of the signed range: `low` going up, `high` going
+  down, zero when it spans zero) → keep; flat (less; a move the wrong way
+  smaller than the near end is noise) → iterate; lost (the wrong way by the
+  near end or more, or any guardrail broken) → roll back; inconclusive (too
+  little data or a failed data check) → extend once, then iterate. Each
+  readout says whether the effect fell inside the predicted range.
+- **Write-back**, through the ledger only: a `test_result` signal of the
+  server's own source (verdict, method and the level that method can show:
+  signal trend moderate, a person's verdict weak, before/after and adoption
+  strong, controlled proven) linked to the opportunity, which turns measured.
+  The meter counts a readout only through its verdict: lost drops it to
+  weak, won raises it to that level. A `readout.written` event, a line in the
+  Room's discovery thread (`#factory` until the Room has one), and
+  `[Factory readout · C-n · day 28 · flat]` to Scout when it runs.
+- **Deciding** (`POST …/readouts/{id}/decide`, EDIT, human origin; `{id}` is
+  the row id or `C-31-d28`): `{decision: keep|drop|iterate|extend, reason?,
+  reviewer?}`, `{answer, reason}`, `{guardrails_broken: [...]}` (judged
+  again: lost). Following the recommendation is an operator's; going against
+  it is an owner's with a named reviewer and a reason, all shown on the
+  readout. The last readout of a bet, and any lost one, opens a `readout`
+  decision (assignee operators) whose one-click options follow the
+  recommendation (Home's Needs you kind `readout`); "Decide otherwise…" opens
+  the readout. Keep and drop close the opportunity (kept, dropped) and cancel
+  later readouts; drop names the flag to turn off; iterate closes the bet and
+  the opportunity falls back to its evidence; extend adds one readout at twice
+  the day. `readout.scheduled`, `readout.written`, `readout.decided` events.
+- **Reads** (READ): `GET …/readouts` (readouts, the bets `pending` with their
+  band only, the `ledger`), `GET …/readouts/{id}`; `GET …/discovery` gains
+  `readouts` and `ledger`.
+- **The prediction ledger** (discovery family in `telemetry/metrics.py`, kept
+  out of the Insights catalog): each bet's latest readout scores it: the share
+  inside the predicted range, the win rate by the evidence level at filing (a
+  level is a rate from 5 readouts, else "not enough data"), the yield per
+  source in its evidence at filing, the hit rate by origin (discovered,
+  requested, hunch; requested work without a plan is shipped, never
+  measured), each with n and grouped by the definition version that ranked the
+  bet (a filed bet snapshots its opportunity's score). The discovery guards
+  are in the same family: `quote_failures`, `privacy_events` (source reads
+  refused for privacy), `bet_acceptance`, `cost_per_accepted_bet` (the
+  discovery seat's spend).
 
 ### Learning
 
@@ -1668,6 +1744,7 @@ with a managed sandbox launcher configured.
 | Demo harness | `examples/factory/factory-pl/agents/demo/skills/factory-demo/harness/` | `tests/examples/test_factory_demo_harness.py` (runs `factory_demo_harness.test.mjs` under `node --test`); `node run.mjs --selftest` records real demos of a local fixture |
 | Discovery ledger | `omnigent/server/factory/discovery/`, `api/discovery.py`, `background/discovery_ledger.py`, `omnigent/stores/factory_store/discovery.py`, `sqlalchemy_discovery.py` | `tests/server/factory/test_{ledger_append_only,redact,evidence_meter,rubric_example,opportunity_status,quote_check,discovery_routes,preview_rerank,team_signals,discovery_ledger_upkeep}.py`, `tests/stores/test_factory_store_discovery.py` |
 | Source gateway | `omnigent/server/factory/discovery/{gateway,sources,web_io}.py`, `discovery/kinds/`, `api/discovery_sources.py`, `background/discovery_sync.py`, `envelope.py` (`format_untrusted`) | `tests/server/factory/test_{gateway_scope,source_repo,source_web,source_pause_undo,injection_envelope}.py` |
+| Readouts and the prediction ledger | `omnigent/server/factory/discovery/readouts.py`, `api/discovery_readouts.py`, `background/discovery_readouts.py`, the discovery family in `telemetry/metrics.py`, discovery trials in `evaluate.py` and `definition.py` (`guard_set`, `trial_hours`) | `tests/server/factory/test_{readouts,release_detection,prediction_ledger,discovery_trials}.py`, `tests/db/test_migration_factory_readouts.py` |
 | Learning reads | `omnigent/server/factory/learn_view.py`, `human_tuning.py`, `api/learn.py` | `tests/server/factory/test_learn_routes.py` |
 | Learning UI | `web/src/components/factory/{insights,improvements,settings,feedback}/`, `web/src/pages/factory/{Insights,Improvements,Proposal,Settings}Page.tsx` | `web/src/pages/factory/LearnPages.test.tsx` and the component tests; stories under Factory/Insights, Improvements, Settings and Feedback |
 | End to end | — | `tests/integration/test_factory_tree.py` (live server and runner, mock LLM); `tests/e2e_ui/factory_round3/` (multi-user browser run) |

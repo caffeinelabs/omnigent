@@ -40,7 +40,7 @@ class HumanChangeIn(tuning._Body):
         default_factory=list, max_length=tuning.MAX_EVIDENCE
     )
     expected_effect: tuning.EffectIn | None = None
-    trial_h: int | None = Field(None, ge=definition.TRIAL_H_MIN, le=definition.TRIAL_H_MAX)
+    trial_h: int | None = Field(None, ge=definition.TRIAL_H_MIN, le=definition.TRIAL_H_LIMIT)
 
 
 async def propose_change(
@@ -73,7 +73,7 @@ async def propose_change(
     await asyncio.to_thread(tuning._check_overlap, deps, root.id, diff, resolved.stored)
     warnings = await asyncio.to_thread(tuning.trial_warnings, deps, root.id, diff)
     actor = await asyncio.to_thread(projects.human_actor, deps, user_id, root.id)
-    trial_h = body.trial_h or definition.TRIAL_H_DEFAULT
+    trial_h = definition.trial_hours(tuning.diff_paths(diff), body.trial_h)
     row, _ = await asyncio.to_thread(
         lambda: deps.factory_store.create_proposal(
             root.id,

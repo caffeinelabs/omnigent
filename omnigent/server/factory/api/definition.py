@@ -167,8 +167,16 @@ def _definition_body(deps: Any, root: Any, app_state: Any) -> dict[str, Any]:
             path: {"numbered": spec.prefix} for path, spec in definition.blocks.LISTS.items()
         },
         "owner_only": list(definition.OWNER_ONLY_PREFIXES),
-        "not_trialable": list(definition.blocks.NOT_TRIALABLE),
-        "not_trialable_why": dict(definition.blocks.NOT_TRIALABLE),
+        "not_trialable": list(definition.not_trialable_table()),
+        "not_trialable_why": definition.not_trialable_table(),
+        "trial_windows_h": {
+            definition.GUARDS_DELIVERY: [
+                definition.TRIAL_H_MIN,
+                definition.TRIAL_H_DEFAULT,
+                definition.TRIAL_H_MAX,
+            ],
+            definition.GUARDS_DISCOVERY: list(definition.DISCOVERY_TRIAL_H),
+        },
         "agent_paths": {k: list(v) for k, v in definition.blocks.AGENT_PATHS.items()},
         "discovery_server": definition.blocks.discovery_server_on(),
         "tier2": tier2.status(app_state),

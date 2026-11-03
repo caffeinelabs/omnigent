@@ -67,7 +67,8 @@ export type DecisionSource =
   | "proposal"
   | "loop"
   | "access_request"
-  | "done_check";
+  | "done_check"
+  | "readout";
 export type DecisionStatus = "open" | "answered" | "withdrawn" | "expired";
 export type EventSeverity = "info" | "notice" | "warning" | "critical";
 
