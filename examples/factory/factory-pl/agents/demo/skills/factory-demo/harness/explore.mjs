@@ -2,30 +2,30 @@
 // Look at a page before writing a demo spec: prints its accessibility snapshot
 // (roles and names for getByRole selectors) and saves a screenshot.
 //
-//   node explore.mjs <url> [--out <png>] [--login --api <url> --synthetic-secret-file <path>]
+//   node explore.mjs <url> [--out <png>] [--login --api <url> --synthetic-secret-file <path> [--storage <json>]]
 
 import { readFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
-import { firstLine, sessionCookies, syntheticSession } from './lib.mjs';
+import { firstLine, parseStorage, sessionCookies, storageEntries, syntheticSession } from './lib.mjs';
 import { browserEnv, ensureDeps } from './setup.mjs';
 
 const USAGE =
-  'usage: node explore.mjs <url> [--out <png>] [--login --api <api url> --synthetic-secret-file <path>] [--wait <ms>]';
+  'usage: node explore.mjs <url> [--out <png>] [--login --api <api url> --synthetic-secret-file <path> ' +
+  '[--storage <json>]] [--wait <ms>]';
 
-async function login(context, page, appUrl, apiUrl, secretFile) {
+async function login(context, page, appUrl, apiUrl, secretFile, storage) {
   const session = await syntheticSession(apiUrl, readFileSync(secretFile, 'utf8').trim());
   await context.addCookies(sessionCookies(appUrl, apiUrl, session));
-  await page.addInitScript((id) => {
+  await page.addInitScript((write) => {
     try {
-      window.localStorage.removeItem('jwt');
-      if (id) window.localStorage.setItem('userId', id);
-      window.localStorage.setItem('caffeineAuthSessionTransport', 'cookie');
+      for (const key of write.clear) window.localStorage.removeItem(key);
+      for (const [key, value] of write.set) window.localStorage.setItem(key, value);
     } catch {
       // Storage is unavailable on opaque origins.
     }
-  }, session.userId);
+  }, storageEntries(storage, session.userId));
 }
 
 async function main(argv) {
@@ -37,6 +37,7 @@ async function main(argv) {
       login: { type: 'boolean', default: false },
       api: { type: 'string' },
       'synthetic-secret-file': { type: 'string' },
+      storage: { type: 'string' },
       wait: { type: 'string', default: '1500' },
     },
     strict: true,
@@ -44,6 +45,13 @@ async function main(argv) {
   const url = positionals[0];
   if (!url || (values.login && (!values.api || !values['synthetic-secret-file']))) {
     console.error(USAGE);
+    return 2;
+  }
+  let storage;
+  try {
+    storage = parseStorage(values.storage);
+  } catch (error) {
+    console.error(`${error.message}\n${USAGE}`);
     return 2;
   }
   const log = (line) => console.error(`[explore] ${line}`);
@@ -58,7 +66,7 @@ async function main(argv) {
     const page = await context.newPage();
     if (values.login) {
       const secretFile = resolve(values['synthetic-secret-file'].replace(/^~\//, `${homedir()}/`));
-      await login(context, page, new URL(url).origin, values.api.replace(/\/+$/, ''), secretFile);
+      await login(context, page, new URL(url).origin, values.api.replace(/\/+$/, ''), secretFile, storage);
     }
     const res = await page.goto(url, { waitUntil: 'load', timeout: 60_000 });
     await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => undefined);

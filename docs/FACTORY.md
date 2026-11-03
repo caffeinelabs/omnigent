@@ -731,6 +731,7 @@ transcript folds.
 | `OMNIGENT_FACTORY_PREVIEW_DOMAIN` | unset | The deployment's env domain: the only domain env and preview URLs may use (SSRF guard) for a factory whose product profile sets no `product.delivery.preview_domain`. `OMNIGENT_ENV_DOMAIN` (the sandboxes' env domain) is read when it is unset. With neither, no env URL is accepted. |
 | `OMNIGENT_FACTORY_PREVIEW_DOMAINS` | the env domain | Tier 0: comma-separated domains a product profile may name as its `product.delivery.preview_domain` (the env domain is always one). A definition change to any other domain is refused (422 `tier0`); a stored one the deployment no longer lists is ignored with a warning, and the env domain applies. |
 | `OMNIGENT_FACTORY_DELIVERY_SEED` | unset | JSON keyed by repo, `{"<owner/repo>": {<product.delivery fields>}}` (`merge_policy`, `protected_repos`, `demo_paths`, `preview_domain`, `release`, `flags`): the profile a factory on that repo starts from. A new factory whose default repo is listed gets it in v1; a factory from before the product profile whose default or project repo is listed gets it once as a seed version at boot. A factory on another repo starts with an empty profile. Owners edit it afterwards. |
+| `OMNIGENT_FACTORY_ENVIRONMENT_SEED` | unset | JSON keyed by repo, `{"<owner/repo>": {<environment fields>}}` (`summary`, `services`, `tooling`, `registry`, `base_image`, `pull_secret`, `notes`, `conventions`, `protected_branches`, `demo`): the environment profile a factory on that repo starts from, seeded like `OMNIGENT_FACTORY_DELIVERY_SEED` (in v1, or once at boot for a factory from before it). The seed's `repo` is its key unless it names one, so it reaches only that repo's projects. An invalid value seeds nothing (logged). |
 | `OMNIGENT_FACTORY_ALWAYS_DENY_REPOS` | unset | Tier 0: comma-separated `owner/repo` values no factory agent ever writes, whatever a spec, a project or a profile says. Read once at boot. Unset, the server logs an error at start and the cockpit health strip shows "Config: no always-deny repos configured". |
 | `OMNIGENT_DOMAIN` | unset | Public host of this server, e.g. `omnigent.example.com`. Demo PR comments and `demo_url` use it for absolute links; unset, they use the address the runner called. |
 | `OMNIGENT_FACTORY_MAX_PREVIEWS` | `8` | Live previews per factory. |
@@ -830,11 +831,11 @@ thresholds) and `rules`. The supervisor
 loop engine, the detectors, decision escalation, PL spawns, task cards and
 briefs all read it.
 
-Everything the factory knows about its product is data in five more blocks
+Everything the factory knows about its product is data in six more blocks
 (`definition_blocks.py`; no product name, metric or source lives in code):
 `product` (name, kind, summary, links, `segments[]`, `areas[]`, competitors,
 `delivery` {merge policy in words, protected repos, demo paths, preview
-domain, `release`, flags}), `strategy` (`goals[]` `G-n`, guardrails,
+domain, `release`, flags}), `environment` (see below), `strategy` (`goals[]` `G-n`, guardrails,
 non-goals, focus segments, the capacity `mix` adding up to 100), `discovery`
 (`enabled` off by default, `seat.model`, `sources[]`, `rubric`, `thresholds`,
 `budgets`, `cadence`, `autonomy`), `briefs` (per role, Atlas and Sentinel
@@ -856,12 +857,44 @@ floor. What it leaves out comes from its kind: `chat` and `feedback` are
 `personal` or `sensitive` source stays paused. Changes to these blocks are not
 mailed to members (their readers fetch them as data).
 
+**The environment profile** (`environment`, `environment.py`) holds the
+facts one product's dev env and previews need, which the bundles used to
+carry: `repo` (the repo whose projects run it; unset: every project's),
+`summary` (how the dev env starts), `services[]` `{id, name, port, health}`
+(`id` is the service's key in `env.json`'s `urls`, `name` its Deployment and
+Service), `tooling` (where the env tooling lives, known tooling fixes),
+`registry`, `base_image`, `pull_secret`, `notes[]` (for env_keeper),
+`conventions[]` (repo conventions builders follow), `protected_branches[]`
+(literal names: the guards compare them exactly, so a glob is refused) and
+`demo` {`storage`, `clear`} (how the app keeps a demo's synthetic session in
+localStorage; `{user_id}` stands for the signed-in user; values are
+shell-safe, since the demo agent passes them in single quotes). The bundles keep
+the factory's env protocol (the `factory:*` scripts, `env.json` and
+`preview.json`, the verify marker) and read the rest: the PL's charter
+renders an `Environment` block (dev env, services with the in-cluster check
+form, tooling, conventions, protected branches) for projects on its repo,
+every task card a `Repo conventions:` line, and `sys_factory_rules()` returns
+the block in full as `environment` (null when it does not apply to the
+caller's project repo), which env_keeper and the demo agent read at the
+start of every command (most fields are on no charter, so no CHARTER UPDATE
+announces them). Its protected branches join the guards' defaults (`main`,
+`master`, `staging`) as `factory_protected_branches`. Only owners change it
+(no agent seat may propose it, since its facts reach shell commands), as a
+version, never a trial ("facts, not a way of working"); a change that moves
+a charter's `Environment` lines sends that PL a CHARTER UPDATE asking it to
+have env_keeper and the demo agent read it again. Every text field refuses a
+secret. A deployment seeds it per repo with `OMNIGENT_FACTORY_ENVIRONMENT_SEED`.
+
 A version stores these blocks (and `goal_seq`) only once they differ from
 their defaults, and role defaults that set only the `ic`, `reviewer` or
 `planner` model alias are stored as the old `models` block. A server from
 before the blocks therefore still reads every version of a factory that has
 not used them; rolling back past them for a factory that has needs a reader
-that ignores unknown blocks.
+that ignores unknown blocks. Such a server still reads that factory (it falls
+back block by block), but it cannot write its definition: restore the last
+version without the block first (Versions › Restore). The environment boot
+seed stores the block at once for a factory on a seeded repo, so after such a
+rollback an owner restores the version before the seed.
 
 **Teams** are a block too (`team_spec.py`, `team.py`). `team.templates[]` are
 named shapes (`standard`, every agent of the PL bundle, is the default a new
@@ -945,7 +978,7 @@ previews, until the server runs with `OMNIGENT_FACTORY_TEAM_SPEC=enforce`.
 | any `team.projects.<slug>` change | never a trial (one team merges about one PR a day) |
 
 Owners apply the owner-only paths (`engine.`, `autonomy.`, `budgets.`, and
-the five blocks), except the class-A changes editors apply (below). For agents
+the six blocks), except the class-A changes editors apply (below). For agents
 the class of those paths does not matter: an agent's proposal of one always
 waits for the owners (class B), whatever the table says. Editors
 (`PUT …/definition`) apply a change that only narrows a team or a source, or
@@ -958,7 +991,7 @@ spends anything waits for an owner. The preview shows the table's class. In
 the blocks, agents propose only their seat's paths (403
 `path_not_allowed` otherwise): Scout `product`, `strategy` and
 `discovery.sources`; Sentinel `discovery.rubric`, `discovery.thresholds` and
-`briefs.scout`; Atlas none.
+`briefs.scout`; Atlas none; nobody `environment`.
 
 **Proposals** (`C-n`, `sys_factory_propose`): leads propose tuning, rules and
 code; a PL proposes rules for its own project. Each cites evidence ids (422
@@ -978,7 +1011,7 @@ without) and one expected metric effect; at most 2 per agent per day.
   apply it, the effects, what blocks it, whether it may run as a trial, and
   `rerank`: the open opportunities a strategy or rubric change moves, each
   with its position, rank and band before and after.
-- **One trial per block.** A trial on one of the five blocks (`briefs`,
+- **One trial per block.** A trial on one of the six blocks (`briefs`,
   `role_defaults`, …) refuses a second trial there with 409 `trial_overlap`
   naming the running one; applying directly stays possible. Today's settings
   (`cadence`, `loops`, `alerts`, …) and rules trial side by side, as before.
@@ -1630,8 +1663,8 @@ enforced in code.
 | Invariant | Enforced by |
 |---|---|
 | The factory never merges (any repo, a test base included). | The guard denies raw `gh pr merge`, MCP merges, merge-capable `gh api`/GraphQL calls and every `omnigent.factory_merge` run without `--dry-run` (`python -m`, a script path, `python -c` code, a Python heredoc), for every role. It also denies any `OMNIGENT_FACTORY_*=` assignment, `env OMNIGENT_FACTORY_…` or `export OMNIGENT_FACTORY_…`, which closes the inline `OMNIGENT_FACTORY_MERGE_REPOS=… python -m omnigent.factory_merge` override. `OMNIGENT_FACTORY_MERGE_REPOS` stays empty on the server. |
-| Agents push only `factory/**` (the `smith` profile: `factory/self/**`). | `push_ref_prefixes` in every bundle's `factory_guard`: each explicit refspec destination must be `refs/heads/<prefix>**`. A bare `git push` and `git push <remote> HEAD` are denied (their destination depends on config and the checked-out branch, which the guard cannot see), so the IC prompts always push `git push -u origin factory/<slug>/<task>`. An explicit `<src>` still follows config: with `push.default=upstream` it lands on the branch's upstream, and `remote.<r>.push`, `pushurl` or `url.<x>.pushInsteadOf` repoint it. So the guard also denies `-c`/`--config-env` on a push, any `GIT_CONFIG_*` assignment, `git config` writes to `push.*`, `remote.<r>.url\|pushurl\|push\|mirror`, `url.*`, `branch.*`, `alias.*` and `include.*`, and `git remote add\|set-url\|rename`; the IC worktree is created with `--no-track`, so its branch has no upstream to fall back to. Deletes (`:<b>`, `--delete`, `--prune`), tags, `--all`/`--mirror` and API ref writes outside the prefix are denied too. `DEFAULT_PROTECTED_BRANCHES` also lists the live deployment's test base. |
-| No writes to the always-deny repos; none to a protected repo of the product profile unless a human made it a project's repo (or under the `smith` profile). | The server passes the profile's `product.delivery.protected_repos` as `factory_protected_repos`; `OMNIGENT_FACTORY_ALWAYS_DENY_REPOS` (read at boot) is denied whatever a spec passes; an explicit spec `deny_repos` binds too. A project's repo is lifted from the protected repos and the default `deny_repos` (empty) for the members that write it (next row). The `smith` profile (`write_repos`: the deployment's omnigent fork, `push_ref_prefixes: [factory/self/]`, never merges) is registered for Tier 2 and unused while Tier 2 is off. |
+| Agents push only `factory/**` (the `smith` profile: `factory/self/**`). | `push_ref_prefixes` in every bundle's `factory_guard`: each explicit refspec destination must be `refs/heads/<prefix>**`. A bare `git push` and `git push <remote> HEAD` are denied (their destination depends on config and the checked-out branch, which the guard cannot see), so the IC prompts always push `git push -u origin factory/<slug>/<task>`. An explicit `<src>` still follows config: with `push.default=upstream` it lands on the branch's upstream, and `remote.<r>.push`, `pushurl` or `url.<x>.pushInsteadOf` repoint it. So the guard also denies `-c`/`--config-env` on a push, any `GIT_CONFIG_*` assignment, `git config` writes to `push.*`, `remote.<r>.url\|pushurl\|push\|mirror`, `url.*`, `branch.*`, `alias.*` and `include.*`, and `git remote add\|set-url\|rename`; the IC worktree is created with `--no-track`, so its branch has no upstream to fall back to. Deletes (`:<b>`, `--delete`, `--prune`), tags, `--all`/`--mirror` and API ref writes outside the prefix are denied too. Protected branches are `main`, `master` and `staging` plus the environment profile's `protected_branches`, which the server passes as `factory_protected_branches`. |
+| No writes to the always-deny repos; none to a protected repo of the product profile unless a human made it a project's repo (or under the `smith` profile). | The server passes the profile's `product.delivery.protected_repos` as `factory_protected_repos`; `OMNIGENT_FACTORY_ALWAYS_DENY_REPOS` (read at boot) is denied whatever a spec passes; an explicit spec `deny_repos` binds too. A project's repo is lifted from the protected repos and the default `deny_repos` (empty) for the members that write it (next row). The `smith` profile (no `write_repos` of its own: as a member it writes its project's repo, the deployment's omnigent fork; `push_ref_prefixes: [factory/self/]`, never merges) is registered for Tier 2 and unused while Tier 2 is off. |
 | A member writes only the repos of its factory projects: a PL and its sub-agents their own project's repo, a lead (and the planner) every project's. Pushes, `gh pr create/edit/comment/review/…`, `gh issue` writes, `gh api` writes and `GH_REPO` all check the same set. | The server resolves the set whenever it builds a member's policy engine (`server/factory/guard_repos.py`, registered in `runtime/policies/builder.SERVER_POLICY_ARGUMENTS`) and passes it as `factory_repos` to `factory_role_guard` and `factory_invariants`. It replaces the bundle's `write_repos` (bundles pass none; outside a factory the guard writes only the repos a spec names). It reads only the server-stamped membership labels (`id`, `role`, `project`) and the factory's project rows, never tool input, `session_state`, charters or other labels; a row reconcile backfilled from a PL's sandbox (its repo came from a lead's spawn) does not count, nor do cancelled or merged-away projects. An agent's project proposal on a repo outside the same set (plus the default repo) needs the owner, so no agent can grow it. Rows are read on every build, so a project added later extends the set at once. A store error, or a sub-agent whose root cannot be loaded, leaves the member no writable repo. The runner-side gate keeps the bundle defaults; no factory bundle declares an MCP server, so every GitHub write is a shell command the server decides. |
 | A write target the guard cannot read is denied, never assumed to be the project's. | `-R`/`--repo`, `GH_REPO`, PR and issue URL arguments and `git push` URLs are read the way gh and git read them (host in any case, `www.` or another github.com subdomain, a root dot, a port, a token in the URL, `-R=x`). A value that names no GitHub `owner/repo` (a shell expansion such as `-R $R` or `git push $URL`, another host, `.`/`..` segments, percent-escaped separators) is denied, as is a push refspec the shell fills in (`factory/$X`), a `gh api` write whose repo is not spelled out, `gh api -X=PUT` (read as PUT), and `gh repo create`, `fork` and `sync <repo>`. Still open, as on staging: `gh api graphql` mutations by node id, a fresh `git clone` followed by `git push origin`, and calls through `curl` or a script. |
 | Factory agents always run fenced, and never run a bundle of their own making. | `server/bundles.validate_agent_bundle` rejects any (sub-)agent spec with `executor.config.factory_role` that lacks an unconditional `factory_role_guard` with the same role plus `blast_radius`. `sys_session_create(config_path=…)` from a session whose root carries `omnigent.factory.id` gets 403 `factory_custom_bundle_denied` (`server/factory/custom_bundle.py`). |

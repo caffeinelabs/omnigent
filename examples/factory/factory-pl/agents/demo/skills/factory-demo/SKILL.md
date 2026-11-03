@@ -17,7 +17,10 @@ secret and the session tokens.
 
 The harness ships in this skill's `harness/` directory, inside the agent
 bundle the runner unpacked under the temp directory. Copy it to
-`~/factory/demo-harness` (on the PVC):
+`~/factory/demo-harness` (on the PVC). When Claude Code showed the skill's
+base directory, set `SRC=<base>/harness` in place of the `find` line: that is
+the harness of the skill you are reading, while the newest one under the temp
+directory may come from another bundle version.
 
 ```bash
 SRC=$(dirname "$(find "${TMPDIR:-/tmp}" /tmp -path '*/skills/factory-demo/harness/run.mjs' \
@@ -27,9 +30,6 @@ H=~/factory/demo-harness
 mkdir -p "$H"
 diff -rq -x node_modules -x .install.lock "$SRC" "$H" >/dev/null 2>&1 || cp -R "$SRC"/. "$H"/
 ```
-
-If Claude Code showed the skill's base directory, set `SRC=<base>/harness`
-instead of the `find`.
 
 `run.mjs` runs `npm ci` (pinned `@playwright/test@1.56.1`; one demo agent
 at a time, under `.install.lock`) and picks the
@@ -43,6 +43,16 @@ demos of a local fixture page and prints `SELFTEST OK`).
 
 The PL's DEMO command gives `pr`, `sha` (40 chars), `app`, `api`,
 `secret_file` (`~/factory/previews/p<n>/synthetic-secret`) and `focus`.
+
+The product's own demo facts come from its environment profile:
+`sys_factory_rules()` returns `environment` (call it at the start of every
+DEMO command; owners change it).
+`environment.demo` (`{"storage": {…}, "clear": […]}`) is how the app keeps a
+signed-in session in the browser: pass it verbatim as `--storage '<json>'`
+to `run.mjs` and to `explore.mjs --login` (leave the flag out when
+`environment` is null or `demo` is empty). Below, `<api service>` and
+`<api port>` are the `name` and `port` of the `environment.services` entry
+whose `id` is `api`.
 Read the PR: `gh pr view <url> --json headRefOid,title,body,files` and
 `gh pr diff <url>`. The PR body's `## Demo plan` lists tagged steps:
 
@@ -62,7 +72,7 @@ Verification plan, the diff and the focus, and pass `--plan-source derived`
 
 ```bash
 node ~/factory/demo-harness/explore.mjs <app url>/settings --out /tmp/settings.png \
-  [--login --api <api url> --synthetic-secret-file <secret_file>]
+  [--login --api <api url> --synthetic-secret-file <secret_file> [--storage '<environment.demo>']]
 ```
 
 It prints the page's accessibility snapshot (roles and names for
@@ -99,7 +109,7 @@ demo('Settings shows the API version', async ({ ui, api, login }) => {
 | `step.skip(title, reason)` | A planned step this env cannot run. The reason is shown to reviewers and makes the demo PARTIAL. |
 | `ui.goto(path)`, `ui.click(t)`, `ui.fill(t, v)`, `ui.see(t)`, `ui.page` | Paths resolve against the preview app. `t` is a locator or selector; the element is outlined in the video before the action. `see` asserts visibility. |
 | `api.get/post/put/patch/delete(path, {data?, headers?, params?})` | Requests to the preview API with the browser's cookies. Each call goes to `api.json` (bodies up to 8 KB, credentials redacted). |
-| `login()` | `POST <api>/auth/synthetic-session` with the secret from the file (sent by Node, outside the browser, so it never reaches the trace or HAR), then the session cookies on the app and API hosts. Call it before the first page that needs a user. |
+| `login()` | `POST <api>/auth/synthetic-session` with the secret from the file (sent by Node, outside the browser, so it never reaches the trace or HAR), then the session cookies on the app and API hosts and the `--storage` entries in the app's localStorage. Call it before the first page that needs a user. |
 | `preview.{app, api, pr, prUrl, sha, sha7}` | The run's preview and head. |
 
 Rules:
@@ -125,7 +135,7 @@ D=~/factory/demos/<n>/<sha7>
 node ~/factory/demo-harness/run.mjs --spec "$D/demo.spec.ts" --out "$D" \
   --app <app url> --api <api url> --pr <pr url> --sha <40-char sha> \
   --synthetic-secret-file ~/factory/previews/p<n>/synthetic-secret \
-  [--plan-source derived] [--summary "<one line for reviewers>"]
+  [--storage '<environment.demo>'] [--plan-source derived] [--summary "<one line for reviewers>"]
 ```
 
 With an "In-cluster: …" step, start the port-forward in the same Bash call
@@ -135,7 +145,7 @@ that this one listens before the run:
 
 ```bash
 D=~/factory/demos/<n>/<sha7>
-kubectl -n <namespace> port-forward svc/caffeine-api 13001:3001 >/tmp/pf.log 2>&1 & PF=$!
+kubectl -n <namespace> port-forward svc/<api service> 13001:<api port> >/tmp/pf.log 2>&1 & PF=$!
 sleep 2; grep -q 'Forwarding from 127.0.0.1:13001' /tmp/pf.log || { kill $PF; cat /tmp/pf.log; exit 9; }
 node ~/factory/demo-harness/run.mjs --spec "$D/demo.spec.ts" --out "$D" <the flags above>; RC=$?
 kill $PF; exit $RC

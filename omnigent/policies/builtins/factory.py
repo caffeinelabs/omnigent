@@ -104,7 +104,8 @@ MERGE_GATE_HINT = (
 # No product repo is built in: a factory member writes its projects' repos
 # (``factory_repos``), anything else only what its spec names.
 DEFAULT_WRITE_REPOS: tuple[str, ...] = ()
-DEFAULT_PROTECTED_BRANCHES: tuple[str, ...] = ("main", "master", "staging", "temp-main")
+# A product's own long-lived branches come from its environment profile (server-set).
+DEFAULT_PROTECTED_BRANCHES: tuple[str, ...] = ("main", "master", "staging")
 DEFAULT_DENY_REPOS: tuple[str, ...] = ()
 DEFAULT_PUSH_REF_PREFIXES: tuple[str, ...] = ("factory/",)
 ALWAYS_DENY_ENV = "OMNIGENT_FACTORY_ALWAYS_DENY_REPOS"
@@ -130,14 +131,18 @@ FACTORY_REPOS_ARG = "factory_repos"
 """The guard argument the server sets per member (see :func:`build_guard`); bundles never do."""
 FACTORY_PROTECTED_ARG = "factory_protected_repos"
 """The member's factory's protected repos (``product.delivery.protected_repos``), server-set."""
+FACTORY_BRANCHES_ARG = "factory_protected_branches"
+"""The member's factory's protected branches (``environment.protected_branches``), server-set."""
 
 # Named rule sets a spec selects with ``profile``; explicit arguments still win.
 # ``smith`` is the Tier-2 self-modification lane (PRs to omnigent, never merges).
-# It denies no repo of its own: the always-deny repos (:data:`ALWAYS_DENY_ENV`)
-# bind it like every guard, and the default deny list must not cover its repo.
+# It names no repo: as a factory member it writes its project's repo
+# (``factory_repos``, server-set), elsewhere only what its spec names. It denies
+# no repo of its own: the always-deny repos (:data:`ALWAYS_DENY_ENV`) bind it
+# like every guard, and the default deny list must not cover its repo.
 GUARD_PROFILES: dict[str, dict[str, tuple[str, ...]]] = {
     "smith": {
-        "write_repos": ("caffeinelabs/omnigent",),
+        "write_repos": (),
         "deny_repos": (),
         "push_ref_prefixes": ("factory/self/",),
     },
@@ -2108,6 +2113,7 @@ def build_guard(
     profile: str | None = None,
     factory_repos: Sequence[str] | str | None = None,
     factory_protected_repos: Sequence[str] | str | None = None,
+    factory_protected_branches: Sequence[str] | str | None = None,
 ) -> _RoleGuard:
     """
     Resolve guard parameters: explicit argument, then *profile*, then the default.
@@ -2115,11 +2121,12 @@ def build_guard(
     *factory_repos* (set by the server, never by a bundle) wins over all three
     for the writable repos: a factory member writes exactly the repos of its
     factory projects. *factory_protected_repos* (the profile's protected
-    repos, also set by the server) join the denied repos. A project's repo on
-    the default deny list or among the protected repos is lifted from them,
-    because a human picked it for the project; an explicit *deny_repos* still
-    binds, and the boot-time :data:`ALWAYS_DENY_ENV` repos are denied whatever
-    is passed.
+    repos, also set by the server) join the denied repos, and
+    *factory_protected_branches* (the environment profile's) the protected
+    branches. A project's repo on the default deny list or among the
+    protected repos is lifted from them, because a human picked it for the
+    project; an explicit *deny_repos* still binds, and the boot-time
+    :data:`ALWAYS_DENY_ENV` repos are denied whatever is passed.
 
     :param role: A factory role, or ``None`` for the role-independent invariants.
     :param write_repos: See :func:`factory_role_guard`.
@@ -2129,6 +2136,7 @@ def build_guard(
     :param profile: A :data:`GUARD_PROFILES` name, e.g. ``"smith"``.
     :param factory_repos: See :func:`factory_role_guard`.
     :param factory_protected_repos: See :func:`factory_role_guard`.
+    :param factory_protected_branches: See :func:`factory_role_guard`.
     :returns: The configured rule set.
     :raises ValueError: On an unknown *profile*.
     """
@@ -2154,9 +2162,10 @@ def build_guard(
     return _RoleGuard(
         role=role,
         write_repos=writable,
-        protected_branches=_pick(
-            protected_branches, "protected_branches", DEFAULT_PROTECTED_BRANCHES
-        ),
+        protected_branches=[
+            *_pick(protected_branches, "protected_branches", DEFAULT_PROTECTED_BRANCHES),
+            *_as_list(factory_protected_branches),
+        ],
         deny_repos=denied,
         push_ref_prefixes=_pick(push_ref_prefixes, "push_ref_prefixes", DEFAULT_PUSH_REF_PREFIXES),
         from_projects=factory_repos is not None,
@@ -2174,6 +2183,7 @@ def factory_role_guard(
     cost_budget_agents: Sequence[str] | None = None,
     factory_repos: Sequence[str] | None = None,
     factory_protected_repos: Sequence[str] | None = None,
+    factory_protected_branches: Sequence[str] | None = None,
 ) -> Callable[[_Json, _Json], _Json]:
     """
     Factory: DENY-only guard for one software-factory role.
@@ -2217,6 +2227,9 @@ def factory_role_guard(
         the protected repos of the factory's product profile
         (``product.delivery.protected_repos``), denied unless one is the
         member's project repo.
+    :param factory_protected_branches: Set by the server next to
+        *factory_repos*: the environment profile's protected branches
+        (``environment.protected_branches``), added to *protected_branches*.
     :returns: An evaluator ``fn(event, config)`` returning a V0 decision.
     :raises ValueError: If *role* is not a factory role or *profile* is
         unknown (the runner then fails closed and denies every tool call).
@@ -2242,6 +2255,7 @@ def factory_role_guard(
             profile=profile,
             factory_repos=factory_repos,
             factory_protected_repos=factory_protected_repos,
+            factory_protected_branches=factory_protected_branches,
         ),
         cost_budget_agents=budgeted,
     )

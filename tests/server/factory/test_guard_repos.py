@@ -324,7 +324,11 @@ def test_a_sub_agent_without_its_root_writes_no_repo(factory: FactoryWorld) -> N
     ic_docs = factory.get("ic_docs")
     assert guard_repos.member_repos(ic_docs, ic_docs, factory.deps.factory_store) == frozenset()
     resolve = guard_repos.guard_arguments(factory.deps)
-    assert resolve(ic_docs, ic_docs) == {"factory_repos": [], "factory_protected_repos": []}
+    assert resolve(ic_docs, ic_docs) == {
+        "factory_repos": [],
+        "factory_protected_repos": [],
+        "factory_protected_branches": [],
+    }
     # A top-level session outside a factory still keeps its own arguments.
     plain = factory.get("plain")
     assert resolve(plain, plain) is None

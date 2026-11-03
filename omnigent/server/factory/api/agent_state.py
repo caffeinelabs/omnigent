@@ -62,6 +62,7 @@ from omnigent.server.factory.api.pr_preview import preview_stable_path
 from omnigent.server.factory.charter import project_base_branch, render_pl_charter
 from omnigent.server.factory.demos import public_base_url, review_url
 from omnigent.server.factory.env_urls import factory_env_domain
+from omnigent.server.factory.environment import environment as factory_environment
 from omnigent.server.factory.prs import human_hold_reason
 from omnigent.server.factory.routes import FactoryRouteError
 from omnigent.server.factory.stage import changes_requested_on_head
@@ -810,12 +811,14 @@ async def get_charter(
             or row
         )
     delivery = await asyncio.to_thread(product_profile.delivery, deps, caller.factory_id)
+    env = await asyncio.to_thread(factory_environment, deps, caller.factory_id)
     return {
         "project": row.slug,
         "text": render_pl_charter(
             row,
             delivery,
             team=await asyncio.to_thread(team.charter_team, deps, caller.factory_id, row),
+            environment=env,
         ),
         "status": row.status,
         "spawn_owner": spawn_owner(row),

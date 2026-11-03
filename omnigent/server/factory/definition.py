@@ -64,6 +64,7 @@ from omnigent.server.factory import team_spec
 from omnigent.server.factory.definition_blocks import (
     BriefsDef,
     DiscoveryDef,
+    EnvironmentDef,
     ProductDef,
     RoleDefaultsDef,
     StrategyDef,
@@ -310,6 +311,7 @@ class FactoryDefinitionDoc(_Block):
     rules: list[RuleDef] = Field(default_factory=list)
     rule_seq: int = 0
     product: ProductDef = Field(default_factory=ProductDef)
+    environment: EnvironmentDef = Field(default_factory=EnvironmentDef)
     strategy: StrategyDef = Field(default_factory=StrategyDef)
     discovery: DiscoveryDef = Field(default_factory=DiscoveryDef)
     briefs: BriefsDef = Field(default_factory=BriefsDef)
@@ -470,6 +472,7 @@ CLASS_MAP: Final[dict[str, Callable[[Any, Any], Klass]]] = {
     "budgets.*": _lower_is_a,
     "models.*": _always("B"),
     "product.*": _always("B"),
+    "environment.*": _always("B"),
     "strategy.*": _always("B"),
     "discovery.enabled": blocks.off_is_a,
     "discovery.sources.*": blocks.source_class,
@@ -492,6 +495,7 @@ CLASS_TABLE: Final = (
     ("engine.*, autonomy.*", "B (owners)"),
     ("budgets.*", "A when lower (editors apply it at once), else B (owners)"),
     ("product.*, strategy.*", "B (owners); never on trial, applies as a version"),
+    ("environment.*", "B (owners only: agents never propose it); applies as a version"),
     ("discovery.enabled", "A when turning it off, else B (owners)"),
     ("discovery.sources.<id>", "A when it only narrows (pause, less budget, fewer roles), else B"),
     ("discovery.budgets.*", "A when lower (editors apply it at once), else B (owners)"),
@@ -519,6 +523,7 @@ OWNER_ONLY_PREFIXES: Final = (
     "budgets.",
     "models.",
     "product.",
+    "environment.",
     "strategy.",
     "discovery.",
     "briefs.",
@@ -777,8 +782,8 @@ def default_doc() -> dict[str, Any]:
 def seed_doc(labels: Mapping[str, str]) -> dict[str, Any]:
     """
     :returns: The v1 doc for a root with *labels*: its legacy labels migrated,
-        and the deployment's delivery settings for its default repo (if any)
-        as its ``product.delivery``.
+        and the deployment's delivery and environment settings for its default
+        repo (if any) as its ``product.delivery`` and ``environment``.
     """
     doc = default_doc()
     mode = (labels.get(LABEL_ENGINE_MODE) or "").strip()
@@ -792,7 +797,7 @@ def seed_doc(labels: Mapping[str, str]) -> dict[str, Any]:
         doc["engine"]["spawn"] = spawn
     from omnigent.server.factory.product_profile import seed_into
 
-    # The deployment's delivery settings for this factory's repo (none for another repo).
+    # The deployment's profile seeds for this factory's repo (none for another repo).
     return seed_into(doc, labels.get(LABEL_DEFAULT_REPO))
 
 
@@ -1878,6 +1883,7 @@ def trial_text(hours: int, guards: str = GUARDS_DELIVERY) -> str:
 
 _UNTRIALABLE_NAMES: Final = {
     "product": "product profile",
+    "environment": "environment profile",
     "strategy": "strategy",
     "discovery": "discovery",
     "briefs.scout": "Scout's brief",
@@ -1886,6 +1892,7 @@ _UNTRIALABLE_NAMES: Final = {
 }
 _UNTRIALABLE_WHY: Final = {
     blocks.NOT_TRIALABLE_REASON: "are judged on outcomes",
+    blocks.ENV_FACTS: "are facts about how the product runs, not a way of working",
     blocks.DISCOVERY_SETTING: (
         "are settings, not discovery's method (the rubric, thresholds and Scout's brief "
         "trial on discovery guards)"

@@ -6,12 +6,14 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import {
   errorNote,
+  parseStorage,
   redactHeaders,
   redactJsonText,
   redactUrl,
   screenshotName,
   sessionCookies,
   sha7,
+  storageEntries,
   syntheticSession,
   truncate,
   watermark,
@@ -339,15 +341,16 @@ async function syntheticLogin(page: Page): Promise<{ userId: string }> {
   const session = await syntheticSession(preview.api || preview.app, secret);
   recordSecrets([session.accessToken, session.refreshToken]);
   await page.context().addCookies(sessionCookies(preview.app, preview.api || preview.app, session));
-  await page.addInitScript((id: string) => {
+  // The product's own sign-in storage comes from its environment profile (run.mjs --storage).
+  const entries = storageEntries(parseStorage(process.env.FACTORY_DEMO_STORAGE), session.userId);
+  await page.addInitScript((write: { clear: string[]; set: [string, string][] }) => {
     try {
-      window.localStorage.removeItem('jwt');
-      if (id) window.localStorage.setItem('userId', id);
-      window.localStorage.setItem('caffeineAuthSessionTransport', 'cookie');
+      for (const key of write.clear) window.localStorage.removeItem(key);
+      for (const [key, value] of write.set) window.localStorage.setItem(key, value);
     } catch {
       // Storage is unavailable on opaque origins.
     }
-  }, session.userId);
+  }, entries);
   return { userId: session.userId };
 }
 

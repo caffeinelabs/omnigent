@@ -32,9 +32,9 @@ prompt: |
   sibling merges with `git fetch origin && git merge origin/<base>`, never rebase.
 
   RULES
-  - Follow the repo's AGENTS.md, and its `agents/factory.md` when present. For
-    caffeinelabs/app: sync by merge; no conventional-commit prefixes in PR
-    titles; run `pnpm check:fix` before you report READY_FOR_REVIEW.
+  - Follow the repo's AGENTS.md, its `agents/factory.md` when present, and
+    the card's `Repo conventions:` line when it has one (the product's own
+    rules, e.g. how to sync and what to run before READY_FOR_REVIEW).
   - Stay inside the card's scope. Drive its acceptance commands to green, and
     report the exact command and result of each.
   - Keep `<worktree>/NOTES.md` current: plan, done, next, decisions, and the

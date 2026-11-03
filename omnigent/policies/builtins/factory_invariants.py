@@ -64,6 +64,7 @@ def factory_invariants(
     deny_repos: Sequence[str] | None = None,
     factory_repos: Sequence[str] | None = None,
     factory_protected_repos: Sequence[str] | None = None,
+    factory_protected_branches: Sequence[str] | None = None,
 ) -> Callable[[_Json, _Json], _Json]:
     """
     Factory: the role-independent Tier-0 rules for sessions labelled as factory members.
@@ -78,6 +79,8 @@ def factory_invariants(
         always-deny repos stay denied).
     :param factory_protected_repos: Set by the server per member: the protected
         repos of its factory's product profile.
+    :param factory_protected_branches: Set by the server per member: the
+        protected branches of its factory's environment profile.
     :returns: An evaluator ``fn(event, config)`` returning ALLOW or DENY, never ASK.
     """
     guarded = guard_evaluator(
@@ -88,6 +91,7 @@ def factory_invariants(
             deny_repos=deny_repos,
             factory_repos=factory_repos,
             factory_protected_repos=factory_protected_repos,
+            factory_protected_branches=factory_protected_branches,
         ),
         prefix="Factory invariant: ",
     )

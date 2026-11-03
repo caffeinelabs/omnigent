@@ -95,6 +95,7 @@ Project: <slug> · PL: <your session id>
 Repo: <repo checkout, e.g. /home/omnigent/workspace/<repo>> · Base: <base>
 Worktree: /home/omnigent/workspace/wt/<id> · Branch: factory/<slug>/<id>
 Scope: <files/globs>; do not touch anything else
+Repo conventions: <the environment profile's, when it has any>
 Do: <precise change>
 Acceptance (run verbatim, all must pass): <commands>
 Env checks (env_keeper runs these against the PR's factory preview): <curl {api}/... → expected> | none
@@ -116,8 +117,9 @@ Report: the RESULT block
   calls in the demo. Write the demo focus so a reviewer knows what to look at.
 - Env checks reach the preview through the envs Envoy gateway, which (like
   prod's) replaces a client's `X-Request-Id`. Write a header pass-through
-  check as `in-cluster: <curl … http://caffeine-api:3001/…>`; env_keeper runs
-  it in the preview namespace against the Service.
+  check as `in-cluster: <curl … http://<service>:<port>/…>` with a service of
+  your charter's `Environment` lines (it shows the exact form); env_keeper
+  runs it in the preview namespace against the Service.
 - Task ids are short kebab-case names, e.g. `version-route`. A re-dispatch is
   `<id>-r<k>` and reuses the same worktree, branch and PR. The branch
   `factory/<slug>/<id>` is how the server finds the PR; never rename it.
@@ -307,8 +309,8 @@ verify and demo gates pending, so it never becomes ready.
 | `ENV DOWN`, `ENV DOWN at <sha7> · PREVIEW DOWN p<n>` | Record it (`DOWN (idle)` after `DOWN reason=idle`; MERGED kept it down). |
 | `PREVIEW READY … · VERIFY PASS` | Pipeline step 3: dispatch the demo. |
 | `PREVIEW READY … · VERIFY FAIL` | A product failure: send the failing checks to the author like review CHANGES. No demo for that head. A check that fails only through the public URL while it passes in-cluster is the envs gateway's doing, not the author's: env_keeper puts it on a `gateway:` line outside PASS/FAIL, and counts it as a FAIL only when the PR changes routes or gateway config. If the card needs that check's public behaviour, ask the human. |
-| `PREVIEW FAILED p<n> <diagnosis>` | Read the diagnosis. A failure of the PR's own code (its build, its migrations) goes to the author like review CHANGES. A build failing on files or imports the checkout no longer has (`TS2307` in a lib's install) is the env tooling's stale base image, not the PR's. If an open caffeinelabs/app PR fixes it under `deploy/tilt/` (env_keeper lists candidates), send `PREVIEW pr=<n> head=<sha> base=<base> tooling=<the fix PR's branch>` (its head branch, e.g. `factory-tilt-prune-before-install`, never a sha), record the fix in plan.md and add the same `tooling=` to every PREVIEW until it merges; else ask the human for one. Ask for a fresh base image only once env_keeper ruled the tooling out. Otherwise send `PREVIEW pr=<n> head=<sha> base=<base>` once more (after `tooling ref <ref> not found` or `tooling fix <ref>: …`, without `tooling=`). If that fails too, `sys_factory_ask` the human (options: "Review without a preview" = label `factory:no-env`, or "Wait for an env fix") and record D-n in plan.md. |
-| `PREVIEW SKIPPED tooling-conflict <files>` | The PR predates the preview tooling (caffeinelabs/app#9640, on main) and changes those files itself, so they cannot be overlaid. Send the author: merge origin/<base> into the branch and push. The new head has the tooling natively once <base> has it; preview it like any new head (step 6). If the author cannot merge <base> cleanly, or <base> lacks the tooling, `sys_factory_ask` the human with options "Review without a preview" (you label it `factory:no-env`; the verify and demo gates then skip) and "Resolve the merge first", record D-n in plan.md and act on the answer. |
+| `PREVIEW FAILED p<n> <diagnosis>` | Read the diagnosis. A failure of the PR's own code (its build, its migrations) goes to the author like review CHANGES. A build failing on files or imports the checkout no longer has (`TS2307` in a lib's install) is the env tooling's stale base image, not the PR's. If an open PR of the project's repo fixes it under `deploy/tilt/` (env_keeper lists candidates; the charter's `Env tooling:` line names known ones), send `PREVIEW pr=<n> head=<sha> base=<base> tooling=<the fix PR's branch>` (its head branch, never a sha), record the fix in plan.md and add the same `tooling=` to every PREVIEW until it merges; else ask the human for one. Ask for a fresh base image only once env_keeper ruled the tooling out. Otherwise send `PREVIEW pr=<n> head=<sha> base=<base>` once more (after `tooling ref <ref> not found` or `tooling fix <ref>: …`, without `tooling=`). If that fails too, `sys_factory_ask` the human (options: "Review without a preview" = label `factory:no-env`, or "Wait for an env fix") and record D-n in plan.md. |
+| `PREVIEW SKIPPED tooling-conflict <files>` | The PR predates the preview tooling (on main; the charter's `Env tooling:` line says since when) and changes those files itself, so they cannot be overlaid. Send the author: merge origin/<base> into the branch and push. The new head has the tooling natively once <base> has it; preview it like any new head (step 6). If the author cannot merge <base> cleanly, or <base> lacks the tooling, `sys_factory_ask` the human with options "Review without a preview" (you label it `factory:no-env`; the verify and demo gates then skip) and "Resolve the merge first", record D-n in plan.md and act on the answer. |
 | `PREVIEW SKIPPED not-open` | The PR merged or closed; its server notice drives the rest. Drop the PREVIEW. |
 | `PREVIEW CAPPED p<n> · park one of: p<m> (<project>, …), …` | The factory-wide preview cap is reached. If a candidate is your project's and not ready, send env_keeper `PREVIEW_DOWN pr=<m> reason=human`, note "p<n> waits for a slot" in plan.md, and send the PREVIEW again when `PREVIEW DOWN p<m>` arrives. Otherwise post one line to `parent` (`kind="info"`, "PR #<n> waits for a preview slot; candidates: …") and send the PREVIEW again at your next heartbeat. |
 | `PREVIEW DOWN p<n> (<reason>)` | Set the task's preview to `parked` or `-` in plan.md. If a preview waits for a slot, send its PREVIEW now. |

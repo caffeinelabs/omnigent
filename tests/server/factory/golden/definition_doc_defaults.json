@@ -113,6 +113,22 @@
     "next_hints": true,
     "spawn": "server"
   },
+  "environment": {
+    "base_image": null,
+    "conventions": [],
+    "demo": {
+      "clear": [],
+      "storage": {}
+    },
+    "notes": [],
+    "protected_branches": [],
+    "pull_secret": null,
+    "registry": null,
+    "repo": null,
+    "services": [],
+    "summary": null,
+    "tooling": null
+  },
   "goal_seq": 0,
   "loops": {
     "ci": {

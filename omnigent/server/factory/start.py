@@ -604,13 +604,25 @@ def charter_diff(before: str, after: str) -> str:
     )
 
 
-def charter_update_text(by: str, diff: str, inherited: Sequence[int] = ()) -> str:
+ENVIRONMENT_CHANGED: Final = (
+    "Its Environment lines changed: tell env_keeper and the demo agent to call "
+    "sys_factory_rules() again."
+)
+"""Added to a CHARTER UPDATE whose environment lines changed (the sub-agents read it there)."""
+
+
+def charter_update_text(
+    by: str, diff: str, inherited: Sequence[int] = (), *, environment_changed: bool = False
+) -> str:
     """
     :returns: The ``[Factory control · CHARTER UPDATE · by <human>]`` text.
 
     :param inherited: PRs the project received from a split or merge.
+    :param environment_changed: The charter's ``Environment`` lines changed.
     """
     reply = 'reply once: sys_session_post(to="parent", kind="reply")'
+    if environment_changed:
+        reply = f"{reply}. {ENVIRONMENT_CHANGED.rstrip('.')}"
     header = control.control_header("CHARTER UPDATE", by)
     if not inherited:
         return (

@@ -42,9 +42,6 @@ SCANNED: tuple[str, ...] = (
 TOKENS_LEFT: dict[str, int] = {
     # Tier 2's default Smith repo: the deployment's own omnigent fork (env-overridable).
     "omnigent/server/factory/tier2.py": 1,
-    # Runner-imported guard constants (hosts lag the server): the default
-    # protected branches include a live test base; the smith profile's repo.
-    "omnigent/policies/builtins/factory.py": 2,
     # The cockpit's docs link points at the fork that hosts docs/FACTORY.md.
     "web/src/lib/factory.ts": 1,
 }

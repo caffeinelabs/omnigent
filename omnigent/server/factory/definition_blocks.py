@@ -1,11 +1,12 @@
-"""The product-agnostic definition blocks: product, strategy, discovery, briefs, role defaults.
+"""The product-agnostic definition blocks: product, environment, strategy, discovery and more.
 
 Everything a factory knows about its product is data in these blocks of the
 versioned definition (:mod:`.definition`): what the product is and how it is
-delivered (``product``), what the factory is trying to achieve (``strategy``),
-how it finds out what users need (``discovery``), what each role is told
-(``briefs``) and which vendor and model a role runs on (``role_defaults``).
-No product name, metric, source or prompt text lives in code.
+delivered (``product``), how its dev env and previews run (``environment``),
+what the factory is trying to achieve (``strategy``), how it finds out what
+users need (``discovery``), what each role is told (``briefs``) and which
+vendor and model a role runs on (``role_defaults``). No product name, metric,
+source or prompt text lives in code.
 
 The blocks are inert until a reader uses them; discovery stays dark behind
 ``discovery.enabled`` (off by default) and the server env :data:`DISCOVERY_ENV`.
@@ -246,6 +247,138 @@ class ProductDef(_Block):
     @classmethod
     def _ids(cls, items: list[Any]) -> list[Any]:
         return _unique_ids(items, "item")
+
+
+# ── environment ────────────────────────────────────────────────
+
+_K8S_NAME_RE: Final = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
+_HEALTH_RE: Final = re.compile(r"^/[A-Za-z0-9._~/%+-]{0,199}$")
+_IMAGE_RE: Final = re.compile(r"^[a-z0-9.-]+(:[0-9]{1,5})?(/[a-z0-9._-]+){1,6}$")
+# A literal name: the guards compare branches exactly, so a glob would protect nothing.
+_PROTECTED_BRANCH_RE: Final = re.compile(r"^(?![-./])(?!.*\.\.)(?!.*//)[A-Za-z0-9._/-]{1,200}$")
+_STORAGE_KEY_RE: Final = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+# The demo agent passes the storage as JSON in single quotes on a shell line.
+_STORAGE_VALUE_RE: Final = re.compile(r"^[A-Za-z0-9_.:@{}/=+-]{0,200}$")
+USER_ID: Final = "{user_id}"
+"""Stands for the signed-in user's id in a demo storage value."""
+
+
+def _k8s_name(value: str | None) -> str | None:
+    if value is not None and not _K8S_NAME_RE.match(value):
+        raise ValueError("a Kubernetes name: a-z, 0-9 and -, e.g. sample-api")
+    return value
+
+
+def _health(value: str | None) -> str | None:
+    if value is not None and not _HEALTH_RE.match(value):
+        raise ValueError("a path such as /ready (no host, query or spaces)")
+    return value
+
+
+def _image(value: str | None) -> str | None:
+    if value is not None and not _IMAGE_RE.match(value):
+        raise ValueError("an image without its tag, e.g. registry.example.com/sample-org/db")
+    return value
+
+
+def _branch(value: str) -> str:
+    if not _PROTECTED_BRANCH_RE.match(value):
+        raise ValueError("a branch name such as develop or release/2026 (no globs)")
+    return value
+
+
+def _storage_key(value: str) -> str:
+    if not _STORAGE_KEY_RE.match(value):
+        raise ValueError("a storage key: letters, digits and _ . : - (≤ 64)")
+    return value
+
+
+def _storage_value(value: str) -> str:
+    if not _STORAGE_VALUE_RE.match(value):
+        raise ValueError(
+            "a storage value: letters, digits and _ . : @ { } / = + - (no spaces or quotes)"
+        )
+    return value
+
+
+def _no_secret(value: str) -> str:
+    if secret_text(value):
+        raise ValueError("environment facts never carry a secret (Tier 0)")
+    return value
+
+
+K8sName = Annotated[str, AfterValidator(_k8s_name)]
+HealthPath = Annotated[str | None, AfterValidator(_health)]
+Fact = Annotated[str, _strip(200, 1), AfterValidator(_no_secret)]
+Facts = Annotated[str, _strip(500), AfterValidator(_no_secret)]
+StorageKey = Annotated[str, AfterValidator(_storage_key)]
+StorageValue = Annotated[
+    str, _strip(200), AfterValidator(_storage_value), AfterValidator(_no_secret)
+]
+
+
+class ServiceDef(_Block):
+    """
+    One service of the env.
+
+    :param id: Its key in the env's ``urls`` (``env.json``, ``preview.json``), e.g. ``api``.
+    :param name: Its Deployment and Service in the env namespace, e.g. ``sample-api``.
+    :param health: The path that answers 200 once it is up, e.g. ``/ready``.
+    """
+
+    id: Slug
+    name: K8sName
+    port: int = Field(ge=1, le=65535)
+    health: HealthPath = None
+
+
+class DemoAuthDef(_Block):
+    """
+    How the app keeps a demo's synthetic session in the browser.
+
+    :param storage: ``localStorage`` entries set after the synthetic login;
+        ``{user_id}`` in a value stands for the signed-in user's id. Values
+        are shell-safe: the demo agent passes them in single quotes.
+    :param clear: ``localStorage`` keys removed before them.
+    """
+
+    storage: dict[StorageKey, StorageValue] = Field(default_factory=dict, max_length=12)
+    clear: list[StorageKey] = Field(default_factory=list, max_length=12)
+
+
+class EnvironmentDef(_Block):
+    """
+    How the product's dev env and previews run: the facts env_keeper, the
+    demo agent, ICs and PLs read instead of bundle text.
+
+    :param repo: The repo whose projects run this env, e.g. ``sample-org/sample-app``
+        (``None``: every project's repo).
+    :param summary: How the dev env starts, in words.
+    :param tooling: Where the env tooling lives (since when the base has it, known fixes).
+    :param notes: Facts env_keeper reads before it fixes a failed env.
+    :param conventions: Repo conventions every builder follows (on every task card).
+    :param protected_branches: Branches no agent pushes, besides the guards'
+        defaults: literal names, since the guards compare them exactly.
+    """
+
+    repo: Repo | None = None
+    summary: Facts | None = None
+    services: list[ServiceDef] = Field(default_factory=list, max_length=12)
+    tooling: Facts | None = None
+    registry: Host = None
+    base_image: Annotated[str | None, AfterValidator(_image)] = None
+    pull_secret: Annotated[str | None, AfterValidator(_k8s_name)] = None
+    notes: list[Fact] = Field(default_factory=list, max_length=20)
+    conventions: list[Fact] = Field(default_factory=list, max_length=10)
+    protected_branches: list[Annotated[str, AfterValidator(_branch)]] = Field(
+        default_factory=list, max_length=20
+    )
+    demo: DemoAuthDef = Field(default_factory=DemoAuthDef)
+
+    @field_validator("services")
+    @classmethod
+    def _ids(cls, items: list[ServiceDef]) -> list[ServiceDef]:
+        return _unique_ids(items, "service")
 
 
 # ── strategy ───────────────────────────────────────────────────
@@ -847,14 +980,17 @@ def seq_of(doc: dict[str, Any], spec: ListSpec, items: list[Any]) -> int:
 
 # ── Who may change what ────────────────────────────────────────
 
-BLOCKS: Final = ("product", "strategy", "discovery", "briefs", "role_defaults")
-"""The blocks of this module (agents may propose only some of their paths)."""
+BLOCKS: Final = ("product", "environment", "strategy", "discovery", "briefs", "role_defaults")
+"""The blocks of this module (agents may propose only some of their paths; none of
+``environment``, whose facts reach shell commands)."""
 NOT_TRIALABLE_REASON: Final = "judged on outcomes"
+ENV_FACTS: Final = "facts, not a way of working"
 NEEDS_DISCOVERY_GUARDS: Final = "needs discovery guards"
 TOO_FEW_PRS: Final = "too few merged PRs per team"
 NO_PROJECT_FOLLOWS: Final = "no project follows a template"
 NOT_TRIALABLE: Final[dict[str, str]] = {
     "product": NOT_TRIALABLE_REASON,
+    "environment": ENV_FACTS,
     "strategy": NOT_TRIALABLE_REASON,
     "discovery": NEEDS_DISCOVERY_GUARDS,
     "briefs.scout": NEEDS_DISCOVERY_GUARDS,
@@ -992,6 +1128,7 @@ __all__ = [
     "DISCOVERY_ENV",
     "DISCOVERY_SETTING",
     "DISCOVERY_TRIALS",
+    "ENV_FACTS",
     "EVIDENCE_LEVELS",
     "GOAL_ID_RE",
     "KEEP_DAYS",
@@ -1007,14 +1144,18 @@ __all__ = [
     "SECRET_REFUSAL",
     "SOURCE_PRIVACY",
     "TOO_FEW_PRS",
+    "USER_ID",
     "VENDORS_BY_ROLE",
     "BriefsDef",
+    "DemoAuthDef",
     "DiscoveryDef",
+    "EnvironmentDef",
     "GoalDef",
     "ListSpec",
     "ProductDef",
     "RoleDefaultsDef",
     "RubricDef",
+    "ServiceDef",
     "SourceDef",
     "StrategyDef",
     "agent_may_propose",

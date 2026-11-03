@@ -351,6 +351,7 @@ def render_pl_charter(
     delivery: Mapping[str, Any] | None = None,
     *,
     team: TeamBlock | None = None,
+    environment: Mapping[str, Any] | None = None,
 ) -> str:
     """
     Render the CHARTER block for a project's PL.
@@ -360,8 +361,12 @@ def render_pl_charter(
         protected repos, paths that need a demo); ``None`` renders none of it.
     :param team: The project's own team, when it has one (its builders at once
         replace the charter's IC budget).
+    :param environment: The factory's ``environment`` profile; its lines
+        render when it applies to the project's repo (:mod:`.environment`).
     :returns: Plain text starting ``CHARTER · <slug>``.
     """
+    from omnigent.server.factory.environment import charter_lines
+
     charter = normalize_charter(project.charter)
     if charter["kind"] == PROJECT_KIND_INTEGRATION:
         return _integration_charter(project, charter)
@@ -404,6 +409,7 @@ def render_pl_charter(
         "<url> to your lead once every gate is green; never run `gh pr merge` or the merge "
         "gate.",
         *_delivery_lines(project, charter, delivery or {}),
+        *charter_lines(environment, project.repo, env_needed=charter["env_needed"]),
     ]
     return "\n".join(lines)
 

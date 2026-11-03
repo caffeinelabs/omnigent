@@ -1,11 +1,13 @@
 /**
  * Steer › Product profile: what the product is (name, kind, summary, links),
  * who uses it (segments, each with the rule a source can recognise it by),
- * its areas (paths and events), its competitors, and how work reaches users
+ * its areas (paths and events), its competitors, how work reaches users
  * (merge policy, protected repos, paths that need a demo, preview domain,
- * what "released" means, feature flags). All of it is data the factory reads;
- * none of it is code. When an agent drafted a profile, a banner offers to
- * stage the draft. The profile applies as a version (never a trial).
+ * what "released" means, feature flags) and how its dev env and previews run
+ * (the environment: services, tooling, repo conventions, protected branches,
+ * demo sign-in). All of it is data the factory reads; none of it is code.
+ * When an agent drafted a profile, a banner offers to stage the draft. The
+ * profile applies as a version (never a trial).
  */
 
 import { FileTextIcon, PlusIcon, Trash2Icon, XIcon } from "lucide-react";
@@ -18,6 +20,18 @@ import { SectionCard } from "../project/projectParts";
 import { FOCUS_RING, MEANING } from "../ui/statusTokens";
 import { useFactoryToast } from "../ui/Toast";
 import { useSteer } from "./SteerContext";
+import {
+  formatLines,
+  formatServices,
+  formatStorage,
+  parseBranches,
+  parseImage,
+  parseK8sName,
+  parseKeys,
+  parseLines,
+  parseServices,
+  parseStorage,
+} from "./environmentModel";
 import { STAGED_CONTROL, StagedChip, TextField } from "./steerFields";
 import {
   agentProposals,
@@ -49,6 +63,12 @@ function parseHost(text: string): { value: unknown } | { error: string } {
 
 function parseList(text: string): { value: unknown } {
   return { value: splitList(text) };
+}
+
+function parseRepo(text: string): { value: unknown } | { error: string } {
+  const t = text.trim();
+  if (!t) return { value: null };
+  return REPO_RE.test(t) ? { value: t } : { error: `${t} is not owner/name` };
 }
 
 const RELEASE = [
@@ -574,6 +594,124 @@ function LinksAndCompetitors() {
   );
 }
 
+/** How the product's dev env and previews run: what env_keeper, demos, builders and PLs read. */
+function EnvironmentCard() {
+  const field = (path: string) => `environment.${path}`;
+  return (
+    <SectionCard
+      title="Environment"
+      meta="how the dev env and previews run; only owners change it"
+      testId="steer-environment"
+    >
+      <p className="text-sm text-muted-foreground">
+        The project lead's charter, every task card and each agent's rules carry these facts; the
+        bundles keep only the factory's env steps. Agents never propose changes here.
+      </p>
+      <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+        <TextField
+          section="product"
+          path={field("repo")}
+          label="Repo it runs"
+          placeholder="owner/name (empty: every project's repo)"
+          parse={parseRepo}
+        />
+        <TextField
+          section="product"
+          path={field("registry")}
+          label="Image registry"
+          placeholder="registry.example.com"
+          parse={parseHost}
+        />
+        <TextField
+          section="product"
+          path={field("base_image")}
+          label="Base image"
+          placeholder="registry.example.com/org/app-db"
+          maxLength={200}
+          parse={parseImage}
+        />
+        <TextField
+          section="product"
+          path={field("pull_secret")}
+          label="Image pull secret"
+          placeholder="registry-pull"
+          maxLength={63}
+          parse={parseK8sName}
+        />
+      </div>
+      <TextField
+        section="product"
+        path={field("summary")}
+        label="How the dev env starts"
+        multiline
+        maxLength={500}
+      />
+      <TextField
+        section="product"
+        path={field("services")}
+        label="Services"
+        help="One per line: id = name:port /health. The id is its key in the env's URLs."
+        placeholder={"app = web:3000\napi = api:8080 /ready"}
+        multiline
+        parse={parseServices}
+        format={formatServices}
+      />
+      <TextField
+        section="product"
+        path={field("tooling")}
+        label="Env tooling"
+        help="Where it lives, since when the base has it, known fixes."
+        multiline
+        maxLength={500}
+      />
+      <div className="grid min-w-0 grid-cols-1 gap-3 sm:grid-cols-2">
+        <TextField
+          section="product"
+          path={field("conventions")}
+          label="Repo conventions"
+          help="One per line; on every task card."
+          multiline
+          parse={parseLines}
+          format={formatLines}
+        />
+        <TextField
+          section="product"
+          path={field("notes")}
+          label="Notes for the env keeper"
+          help="One per line; read before it fixes a failed env."
+          multiline
+          parse={parseLines}
+          format={formatLines}
+        />
+        <TextField
+          section="product"
+          path={field("protected_branches")}
+          label="Protected branches"
+          help="Besides main, master and staging; no agent pushes them. Names, not globs."
+          placeholder="develop, release"
+          parse={parseBranches}
+        />
+        <TextField
+          section="product"
+          path={field("demo.clear")}
+          label="Demo sign-in: keys to clear"
+          placeholder="jwt"
+          parse={parseKeys}
+        />
+      </div>
+      <TextField
+        section="product"
+        path={field("demo.storage")}
+        label="Demo sign-in: storage"
+        help="One per line: key = value. {user_id} stands for the signed-in user; no spaces or quotes."
+        multiline
+        parse={parseStorage}
+        format={formatStorage}
+      />
+    </SectionCard>
+  );
+}
+
 function draftOf(proposals: readonly ProposalView[]): ProposalView | null {
   return (
     agentProposals(proposals).find((p) =>
@@ -696,6 +834,7 @@ export function ProductProfile({ proposals }: { proposals: readonly ProposalView
           />
         </div>
       </SectionCard>
+      <EnvironmentCard />
       <p className="text-sm text-muted-foreground">
         The profile applies as a new version, never as a trial: it is judged on outcomes.
       </p>

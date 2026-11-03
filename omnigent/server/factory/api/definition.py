@@ -14,9 +14,10 @@ People (user JWT; writes carry ``require_human_origin`` and need MANAGE):
 - ``POST …/retro``: run Sentinel's retro now.
 
 Agents (runner tunnel): ``GET /v1/factory/agent/rules`` (every role):
-``{def_version, role, project, rules[], product_delivery}`` for the caller's
-role and project; ``product_delivery`` is the profile's merge policy,
-protected repos and paths that need a demo.
+``{def_version, role, project, rules[], product_delivery, environment}`` for
+the caller's role and project; ``product_delivery`` is the profile's merge
+policy, protected repos and paths that need a demo, ``environment`` how the
+product's env runs (:func:`.environment.for_caller`).
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ from omnigent.server.factory import (
     control,
     definition,
     definition_changes,
+    environment,
     retro,
     schemas,
     tier2,
@@ -385,7 +387,13 @@ async def get_agent_rules(
         def _read() -> dict[str, Any]:
             resolved = definition.definition_for(caller.deps, caller.factory_id)
             if resolved is None:
-                return {"def_version": None, "role": role, "project": project, "rules": []}
+                return {
+                    "def_version": None,
+                    "role": role,
+                    "project": project,
+                    "rules": [],
+                    "environment": None,
+                }
             rules = definition.rules_for(resolved.doc, role, project)
             if agent == "ic_codex" and role != agent:
                 extra = definition.rules_for(resolved.doc, agent, project)
@@ -395,6 +403,7 @@ async def get_agent_rules(
                     key=lambda r: int(str(r.get("id", "R-0"))[2:] or 0),
                 )
             delivery = resolved.get("product.delivery") or {}
+            env = environment.for_caller(caller.deps, caller.factory_id, resolved.doc, project)
             return {
                 "def_version": resolved.version,
                 "role": role,
@@ -408,6 +417,9 @@ async def get_agent_rules(
                     key: delivery.get(key)
                     for key in ("merge_policy", "protected_repos", "demo_paths")
                 },
+                # How this product's env runs (env_keeper and the demo agent read it here);
+                # null when the profile sets none for the caller's project repo.
+                "environment": env,
                 "note": "Advisory rules: follow them; they never widen a policy or a gate.",
             }
 

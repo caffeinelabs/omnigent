@@ -826,9 +826,9 @@ def test_planner_reasons_name_the_planner() -> None:
         assert "planner" in _decide(ROLE_PLANNER, command)["reason"]
 
 
-# The smith lane's own repo (the deployment's omnigent fork) comes from the
-# policy, so no repo name is written here.
-_SMITH_REPO = GUARD_PROFILES["smith"]["write_repos"][0]
+# The smith lane names no repo: as a factory member it writes its project's
+# repo (the deployment's omnigent fork), which the server sets.
+_SMITH_REPO = "sample-org/sample-tool"
 _SMITH_ALLOWED = [
     "git push -u origin factory/self/guard/t1",
     "git push origin HEAD:factory/self/guard/t1",
@@ -863,8 +863,33 @@ def test_smith_profile_matrix(role: str, command: str, expected: str) -> None:
     Registered for Tier 2 (off): a wrong ALLOW would let self-modification
     touch infra, app or a base branch, or merge its own PR.
     """
-    decision = _decide(role, command, profile="smith")
+    decision = _decide(role, command, profile="smith", factory_repos=[_SMITH_REPO])
     assert decision["result"] == expected, decision.get("reason")
+
+
+def test_smith_profile_names_no_repo() -> None:
+    """Outside a factory the smith profile writes nothing its spec does not name."""
+    assert GUARD_PROFILES["smith"]["write_repos"] == ()
+    create = f"gh pr create -R {_SMITH_REPO} --base staging --head factory/self/g/t1 --fill"
+    assert _decide(ROLE_IC, create, profile="smith")["result"] == "DENY"
+    named = _decide(ROLE_IC, create, profile="smith", write_repos=[_SMITH_REPO])
+    assert named["result"] == "ALLOW"
+
+
+def test_the_profile_protected_branches_join_the_defaults() -> None:
+    """``factory_protected_branches`` (server-set) adds branches; the defaults stay."""
+    params: dict[str, Any] = {
+        "push_ref_prefixes": ["release/", "factory/"],
+        "factory_protected_branches": ["release/1.0", "develop"],
+    }
+    pushed = _decide(ROLE_IC, "git push origin HEAD:release/1.0", **params)
+    assert pushed["result"] == "DENY" and "protected branch `release/1.0`" in pushed["reason"]
+    assert _decide(ROLE_IC, "git push origin HEAD:release/1.1", **params)["result"] == "ALLOW"
+    api = "gh api -X PATCH repos/sample-org/sample-app/git/refs/heads/develop -f sha=x"
+    assert "moves protected branch `develop`" in _decide(ROLE_IC, api, **params)["reason"]
+    for branch in DEFAULT_PROTECTED_BRANCHES:
+        reason = _decide(ROLE_IC, f"git push origin HEAD:{branch}", **params)["reason"]
+        assert f"protected branch `{branch}`" in reason
 
 
 def test_unknown_profile_is_rejected() -> None:
