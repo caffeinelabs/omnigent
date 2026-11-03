@@ -231,9 +231,11 @@ def _trial_info(
         }
     if not paths:
         return {"ok": False, "code": "no_change", "reason": "Nothing to try."}
-    ok, reason = definition.trialable(paths)
+    ok, reason = definition.trialable(paths, factory_id=factory_id)
     if not ok:
-        why = "; ".join(dict.fromkeys(definition.not_trialable(paths).values()))
+        why = "; ".join(
+            dict.fromkeys(definition.not_trialable(paths, factory_id=factory_id).values())
+        )
         return {"ok": False, "code": evaluate.NOT_TRIALABLE, "reason": reason, "why": why}
     found = evaluate.overlapping_trial(deps, factory_id, paths)
     if found is not None:
@@ -246,13 +248,13 @@ def _trial_info(
             "block": found[1],
         }
     try:
-        hours = definition.trial_hours(paths, trial_h)
+        hours = definition.trial_hours(paths, trial_h, factory_id=factory_id)
     except CockpitError as exc:
         return {"ok": False, "code": exc.code, "reason": exc.message}
     return {
         "ok": True,
         "trial_h": hours,
-        "guards": definition.guard_set(paths),
+        "guards": definition.guard_set(paths, factory_id=factory_id),
         "blocks": definition.trial_blocks(paths),
     }
 

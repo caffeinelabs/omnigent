@@ -170,6 +170,26 @@ async def test_over_budget_is_refused_and_the_cap_is_per_day(cockpit: Cockpit) -
     assert (await query(cockpit, "repo-issues", "issues")).status_code == 200
 
 
+async def test_a_privacy_refusal_is_logged_for_the_guards_too(cockpit: Cockpit) -> None:
+    github(cockpit)
+    # It asks to redact a kind this server cannot detect yet: it stores nothing.
+    set_sources(cockpit, {**REPO_SOURCE, "privacy": {"redact": ["email", "name"]}})
+
+    resp = await query(cockpit, "repo-issues", "issues")
+
+    assert resp.status_code == 422 and error_code(resp) == "redaction_unavailable"
+    (access,) = source_events(cockpit)
+    assert (access.data["outcome"], access.data["error_code"]) == (
+        "refused",
+        "redaction_unavailable",
+    )
+    # A rare kind of its own: a discovery guard counts it without reading the access log.
+    (privacy,) = source_events(cockpit, gateway.PRIVACY_KIND)
+    assert privacy.subject == "source:repo-issues"
+    assert privacy.data["error_code"] == "redaction_unavailable"
+    assert cockpit.store.get_signal(cockpit.fid, 1) is None
+
+
 async def test_a_kind_that_needs_a_secret_is_refused(cockpit: Cockpit) -> None:
     install_backends(cockpit)
     set_sources(

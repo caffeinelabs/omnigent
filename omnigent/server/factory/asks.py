@@ -781,7 +781,11 @@ def _decision_draft(decision: Mapping[str, Any], ctx: _Ctx, in_steer: list[str])
         action = _answer_action(
             options, AskAction(kind="open", label="Open the readout", href=option_href or href)
         )
-        cost_text = "a measured bet waits for keep or drop; what it taught waits with it"
+        if any(o.id == "answer" for o in options):
+            # "Did C-n help?": a person's verdict is the measurement itself.
+            cost_text = "the readout waits for your verdict; until then the bet is not measured"
+        else:
+            cost_text = "a measured bet waits for keep or drop; what it taught waits with it"
     elif source == "relaunch_failed":
         kind = "broken"
         # The question opens with the stopped agent's quoted title (the server asks).

@@ -12,6 +12,8 @@ and the factory's ``discovery.enabled`` are on.
 - ``GET /readouts/{id}``: one readout (``id`` or its key, e.g. ``C-31-d28``);
 - ``POST /readouts/{id}/decide`` ``{decision?: keep|drop|iterate|extend,
   reason?, reviewer?, answer?: helped|no_change|hurt, guardrails_broken?}``;
+- ``POST /readouts/{id}/reopen``: take a keep, drop or iterate back (EDIT
+  within 10 minutes of the decision, an owner after that);
 - ``POST /readouts/release`` ``{proposal | project, at?, note?}``: a person
   says a bet is out (the ``manual`` release; any mode may use it).
 
@@ -145,6 +147,19 @@ async def decide_readout(
     async def run() -> dict[str, Any]:
         _deps, user_id, root = await _root(request, factory_id)
         return await readouts.decide(request.app.state, root, user_id, ref, payload)
+
+    return await _guard(run)
+
+
+@router.post(f"{_BASE}/{{ref}}/reopen", response_model=None, dependencies=HUMAN_ORIGIN)
+async def reopen_readout(
+    request: Request, factory_id: str, ref: str
+) -> dict[str, Any] | JSONResponse:
+    """Take a readout's keep, drop or iterate back: it waits for a decision again."""
+
+    async def run() -> dict[str, Any]:
+        _deps, user_id, root = await _root(request, factory_id)
+        return await readouts.reopen(request.app.state, root, user_id, ref)
 
     return await _guard(run)
 

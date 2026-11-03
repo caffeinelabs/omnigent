@@ -13,19 +13,21 @@ recommendation:
 ============  =======================================================  ==============
 verdict       when                                                     recommendation
 ============  =======================================================  ==============
-won           moved the promised way by at least the near end of the   keep
-              predicted range, with no guardrail broken
+won           moved the promised way by at least the smallest change   keep
+              predicted, with no guardrail broken
 flat          moved less than that; a move the wrong way smaller than  iterate
-              the near end is noise
-lost          moved the wrong way by the near end or more, or a        roll_back
+              that is noise
+lost          moved the wrong way by that much or more, or a           roll_back
               guardrail broke
 inconclusive  too little data (n under the plan's minimum), or a data  extend (once;
               check failed                                             then iterate)
 ============  =======================================================  ==============
 
-The near end is the end of the signed range closest to zero in the promised
-direction (``low`` going up, ``high`` going down; zero when the range spans
-it). ``predicted_vs_actual`` says whether the effect fell inside the range.
+The smallest change predicted (:func:`near_end`) is the end of the signed
+range closest to zero in the promised direction (``low`` going up, ``high``
+going down; zero when the range spans it). ``predicted_vs_actual`` says whether
+the effect fell inside the range. A won or flat readout whose guardrails no
+source measured says so in its why-line.
 
 **Methods** (``mechanism.md`` §7.2). ``signal_trend`` needs nothing extra:
 the distinct accounts behind the opportunity's linked user signals in the
@@ -62,7 +64,7 @@ import logging
 import time
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -71,10 +73,10 @@ from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE
 from omnigent.server.factory import control, definition, events, people
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps, factory_deps
 from omnigent.server.factory.control import CockpitError
-from omnigent.server.factory.discovery import evidence, ledger, opportunities
+from omnigent.server.factory.discovery import evidence, ledger, opportunities, sources
 from omnigent.server.factory.discovery.ledger import CONVICTION_KINDS, INJECTION_SUSPECT
-from omnigent.stores.factory_store import now_s
-from omnigent.stores.factory_store.discovery import SignalFilter
+from omnigent.stores.factory_store import now_s, opt_id
+from omnigent.stores.factory_store.discovery import SignalFilter, is_unsorted
 
 if TYPE_CHECKING:
     from omnigent.entities import Conversation
@@ -91,6 +93,10 @@ DEFAULT_DAYS: Final = (7, 28)
 MAX_DAY: Final = 365
 SIGNAL_TREND_MIN_N: Final = 5
 """Distinct accounts (before and after together) a signal trend needs unless the plan says."""
+OBSERVE_GRACE_DAYS: Final = 7
+"""Readout days a signal trend waits past its day for its window to be read and sorted."""
+REOPEN_WINDOW_S: Final = 600
+"""How long the person who decided a readout may reopen it (owners may later)."""
 RELEASE_POLL_S: Final = 900
 """How often one bet's GitHub release or deployment is looked up."""
 SUBJECT: Final = "readout:"
@@ -98,6 +104,7 @@ DECISION_SOURCE: Final = "readout"
 REASON_MAX: Final = 300
 REVIEWER_MAX: Final = 128
 GUARDRAILS_MAX: Final = 10
+GUARDRAIL_MAX: Final = 200
 SERVER_BY: Final = "server"
 
 MVP_METHODS: Final = ("signal_trend", "human_verdict")
@@ -147,6 +154,11 @@ _RELATIVE: Final[dict[str, float]] = {
 }
 _PER_WEEK_WORDS: Final = ("week", "/w", "signal", "account", "count")
 _SKIP_KINDS: Final = frozenset({*CONVICTION_KINDS, "simulation", "test_result", "behavior"})
+_READ_KINDS: Final = ("source.sync", "source.query")
+_READ_OK: Final = frozenset({"ok", "partial"})
+_UNREAD_SOURCES: Final = frozenset({ledger.TEAM_SOURCE, ledger.SERVER_SOURCE})
+"""Sources no server read covers: people's notes and the server's own signals."""
+_WINDOW_SCAN: Final = 5000
 _last_poll: dict[tuple[str, int], float] = {}
 
 
@@ -181,6 +193,13 @@ def near_end(expected: Mapping[str, Any]) -> float:
         return 0.0
     edge = low if expected.get("direction") == "up" else -high
     return max(edge, 0.0)
+
+
+def smallest_change(expected: Mapping[str, Any]) -> str:
+    """:returns: The smallest change the plan predicted, signed, e.g. ``-20 %``."""
+    near = near_end(expected)
+    signed = near if expected.get("direction") == "up" else -near
+    return f"{signed:+g} {expected.get('unit') or ''}".strip()
 
 
 def predicted_vs_actual(expected: Mapping[str, Any], effect: float | None) -> str | None:
@@ -224,10 +243,17 @@ def judge(
     failed = [c for c in checks if not c.get("ok")]
     if failed:
         return Judgement("inconclusive", unsure, None, str(failed[0].get("note") or "a check"))
+    # Won and flat assume the guardrails held: say so when no source measured one.
+    unmeasured = (
+        " (guardrails not measured)"
+        if any(g.get("state") == "unmeasured" for g in guardrails)
+        else ""
+    )
     if answer is not None:
         verdict = ANSWERS[answer]
         rec = {"won": "keep", "flat": "iterate", "lost": "roll_back"}[verdict]
-        return Judgement(verdict, rec, None, f"a person answered: {answer.replace('_', ' ')}")
+        why = f"a person answered: {answer.replace('_', ' ')}"
+        return Judgement(verdict, rec, None, why + (unmeasured if verdict != "lost" else ""))
     if effect is None:
         return Judgement("inconclusive", unsure, None, "nothing was measured")
     if n < min_n:
@@ -235,13 +261,23 @@ def judge(
     sign = 1.0 if expected.get("direction") == "up" else -1.0
     moved = sign * effect
     near = near_end(expected)
+    edge = smallest_change(expected)
     if moved > 0 and moved >= near:
-        return Judgement(
-            "won", "keep", predicted, "moved the promised way by the near end or more"
+        why = (
+            f"moved at least the smallest predicted change ({edge})"
+            if near > 0
+            else "moved the predicted way (the range allows any move that way)"
         )
+        return Judgement("won", "keep", predicted, why + unmeasured)
     if moved < 0 and -moved >= near:
-        return Judgement("lost", "roll_back", predicted, "moved the wrong way")
-    return Judgement("flat", "iterate", predicted, "moved less than the near end of the range")
+        why = f"moved the wrong way by at least {edge.lstrip('+-')}" if near > 0 else ""
+        return Judgement("lost", "roll_back", predicted, why or "moved the wrong way")
+    why = (
+        f"moved the wrong way, but less than the smallest predicted change ({edge}): noise"
+        if moved < 0
+        else f"moved less than the smallest predicted change ({edge})"
+    )
+    return Judgement("flat", "iterate", predicted, why + unmeasured)
 
 
 def aligned(recommendation: str | None, decision: str) -> bool:
@@ -258,6 +294,8 @@ class Measured:
     What a method measured for one readout.
 
     :param pending: It waits for a person (``human_verdict`` before the answer).
+    :param waiting: Why it waits for data (its window not read or sorted yet); the
+        readout stays scheduled until that clears or the grace runs out.
     :param guardrails: ``{name: held | broken}`` for the guardrails it could read.
     """
 
@@ -272,6 +310,7 @@ class Measured:
     guardrails: Mapping[str, str] = field(default_factory=dict)
     inputs: Mapping[str, Any] = field(default_factory=dict)
     pending: bool = False
+    waiting: str | None = None
 
 
 @dataclass(frozen=True)
@@ -304,14 +343,14 @@ def _unit_scale(unit: str) -> tuple[str, float] | None:
     return None
 
 
-def _accounts(deps: FactoryDeps, factory_id: str, opportunity: int) -> list[tuple[int, str]]:
-    """``(seen_at, account)`` of the user signals linked to *opportunity* (not against it)."""
+def _accounts(deps: FactoryDeps, factory_id: str, opportunity: int) -> list[tuple[int, str, str]]:
+    """``(seen_at, account, source)`` of the user signals linked to *opportunity* (not against)."""
     links = [
         link
         for link in deps.factory_store.list_links(factory_id, opportunities=[opportunity])
         if not link.counter
     ]
-    out: list[tuple[int, str]] = []
+    out: list[tuple[int, str, str]] = []
     numbers = sorted({link.signal for link in links})
     for start in range(0, len(numbers), 500):
         chunk = tuple(numbers[start : start + 500])
@@ -322,7 +361,88 @@ def _accounts(deps: FactoryDeps, factory_id: str, opportunity: int) -> list[tupl
                 continue
             if INJECTION_SUSPECT in signal.flags:
                 continue
-            out.append((signal.seen_at, evidence.account_key(signal)))
+            out.append((signal.seen_at, evidence.account_key(signal), signal.source))
+    return out
+
+
+def _unread(ctx: MethodContext, source_ids: Iterable[str], end: int) -> list[str]:
+    """:returns: The sources of *source_ids* with no successful read at or after *end*."""
+    out = []
+    for source_id in sorted(set(source_ids) - _UNREAD_SOURCES):
+        reads = ctx.deps.factory_store.find_events(
+            ctx.factory_id,
+            list(_READ_KINDS),
+            end * 1000,
+            sources.subject(source_id),
+            limit=50,
+            newest_first=True,
+        )
+        if not any((e.data or {}).get("outcome") in _READ_OK for e in reads):
+            out.append(source_id)
+    return out
+
+
+def _unsorted(ctx: MethodContext, source_ids: Iterable[str], start: int, end: int) -> int:
+    """:returns: User signals of *source_ids* seen in ``[start, end)`` that nobody sorted yet."""
+    store = ctx.deps.factory_store
+    rows = [
+        r
+        for r in store.list_signals(
+            ctx.factory_id,
+            SignalFilter(sources=tuple(sorted(set(source_ids))), since=start),
+            limit=_WINDOW_SCAN,
+        )
+        if start <= r.seen_at < end and is_unsorted(r, ledger.SUSPECT_AT)
+    ]
+    if not rows:
+        return 0
+    # A link, even one taken back (a person said "not this"), means it was sorted.
+    sorted_ = {
+        link.signal
+        for link in store.list_links(
+            ctx.factory_id, signals=[r.number for r in rows], active_only=False
+        )
+    }
+    return sum(1 for r in rows if r.number not in sorted_)
+
+
+def _window_gaps(
+    ctx: MethodContext, source_ids: set[str], start: int, end: int
+) -> list[dict[str, Any]]:
+    """
+    Failed checks while the window after the release is not fully observed: a
+    source behind the opportunity not read since the window closed, or signals
+    seen in the window that nobody sorted yet. Counting then would read a drop
+    into what was never looked at.
+    """
+    read = source_ids - _UNREAD_SOURCES
+    if not read:
+        return [
+            _check(
+                "observed",
+                "no source the server reads is behind this opportunity: a signal trend "
+                "needs one (use a person's verdict)",
+            )
+        ]
+    out = []
+    unread = _unread(ctx, read, end)
+    if unread:
+        out.append(
+            _check(
+                "observed",
+                f"not read since the window closed: {', '.join(unread)}; a signal trend "
+                "needs its sources read after the window",
+            )
+        )
+    waiting = _unsorted(ctx, source_ids, start, end)
+    if waiting:
+        out.append(
+            _check(
+                "sorted",
+                f"{waiting} signal{'s' if waiting != 1 else ''} from the window "
+                f"{'are' if waiting != 1 else 'is'} not sorted into an opportunity yet",
+            )
+        )
     return out
 
 
@@ -332,7 +452,14 @@ def signal_trend(ctx: MethodContext) -> Measured:
 
     Each window is the readout's length (``day`` readout days); an account
     counts once per window, so one loud user is one voice. The effect is in the
-    plan's unit: a relative change (``share``, ``%``) or a change per week.
+    plan's unit: a relative change (``share``, ``%``) or a change per week. The
+    plan must predict a drop of ``signal_trend:O-n``: it counts who still asks.
+
+    The window after the release counts only once it was observed: each source
+    behind the opportunity read after the window closed, and every signal seen
+    in it sorted (linked to an opportunity, or detached). Until then the
+    readout stays scheduled, for at most :data:`OBSERVE_GRACE_DAYS` readout
+    days; after that it is inconclusive and says what was missing.
     """
     row = ctx.readout
     expected = ctx.plan.get("expected") or {}
@@ -344,6 +471,20 @@ def signal_trend(ctx: MethodContext) -> Measured:
             unit=unit,
             min_n=min_n,
             checks=(_check("opportunity", "a signal trend reads the bet's opportunity; none"),),
+        )
+    metric = str(ctx.plan.get("metric") or "")
+    if expected.get("direction") != "down" or metric != f"signal_trend:O-{row.opportunity}":
+        return Measured(
+            unit=unit,
+            min_n=min_n,
+            checks=(
+                _check(
+                    "plan",
+                    f"a signal trend counts the accounts still asking about O-{row.opportunity}: "
+                    f"its plan predicts a drop of signal_trend:O-{row.opportunity}, not "
+                    f"{expected.get('direction') or 'no direction'} {metric or 'no metric'}",
+                ),
+            ),
         )
     scale = _unit_scale(unit)
     if scale is None:
@@ -362,7 +503,9 @@ def signal_trend(ctx: MethodContext) -> Measured:
     released = row.released_at
     before: set[str] = set()
     after: set[str] = set()
-    for seen, account in _accounts(ctx.deps, ctx.factory_id, row.opportunity):
+    behind: set[str] = set()
+    for seen, account, source in _accounts(ctx.deps, ctx.factory_id, row.opportunity):
+        behind.add(source)
         if released - span <= seen < released:
             before.add(account)
         elif released <= seen < released + span:
@@ -375,7 +518,20 @@ def signal_trend(ctx: MethodContext) -> Measured:
         "window_days": row.day,
         "before": [released - span, released],
         "after": [released, released + span],
+        "sources": sorted(behind),
     }
+    gaps = _window_gaps(ctx, behind, released, released + span)
+    if gaps:
+        grace_until = row.due_at + OBSERVE_GRACE_DAYS * ctx.day_s
+        if row.status == "scheduled" and ctx.now < grace_until:
+            return Measured(
+                unit=unit,
+                n=n,
+                min_n=min_n,
+                inputs=inputs,
+                waiting="; ".join(str(g["note"]) for g in gaps),
+            )
+        return Measured(unit=unit, n=n, min_n=min_n, inputs=inputs, checks=tuple(gaps))
     kind, factor = scale
     if kind == "relative":
         if not before:
@@ -783,11 +939,13 @@ def schedule(
     *,
     how: str,
     by: str = SERVER_BY,
+    note: str | None = None,
 ) -> list[FactoryReadout]:
     """
     Store one scheduled readout per readout day of *bet*, counted from *released_at*.
 
     :param how: How the release was seen (``merged``, ``github_release``, ``manual`` …).
+    :param note: A person's note on a manual release.
     :returns: The rows it stored now (none when they existed already).
     """
     day_s = day_seconds(deps, factory_id)
@@ -807,7 +965,15 @@ def schedule(
             due_at=released_at + day * day_s,
             plan=plan,
             stamp=stamped,
-            result={"release": {"how": how, "by": by, "at": released_at, "day_s": day_s}},
+            result={
+                "release": {
+                    "how": how,
+                    "by": by,
+                    "at": released_at,
+                    "day_s": day_s,
+                    **({"note": note} if note else {}),
+                }
+            },
         )
         if not existed:
             created.append(row)
@@ -815,7 +981,13 @@ def schedule(
 
 
 async def _announce_scheduled(
-    app_state: Any, factory_id: str, bet: Bet, rows: Sequence[FactoryReadout], how: str, by: str
+    app_state: Any,
+    factory_id: str,
+    bet: Bet,
+    rows: Sequence[FactoryReadout],
+    how: str,
+    by: str,
+    note: str | None = None,
 ) -> None:
     if not rows:
         return
@@ -832,6 +1004,7 @@ async def _announce_scheduled(
             "released_at": rows[0].released_at,
             "how": how,
             "by": by,
+            "note": note,
             "readouts": [r.key for r in rows],
         },
     )
@@ -852,16 +1025,34 @@ async def detect_releases(
     at = now if now is not None else now_s()
 
     def unreleased() -> tuple[list[tuple[Bet, int]], str]:
-        known = {r.proposal for r in deps.factory_store.list_readouts(factory_id, limit=5000)}
-        prs = deps.factory_store.list_prs(factory_id, states=["merged"])
-        out = []
-        for bet in bets(deps, factory_id):
-            if bet.proposal.number in known:
-                continue
+        # Cheap first: only bets whose projects are all out need readouts or PRs read.
+        out_now = [
+            b
+            for b in bets(deps, factory_id)
+            if b.live and all(opportunities.project_shipped(p) for p in b.live)
+        ]
+        if not out_now:
+            return [], ""
+        known = {
+            r.proposal
+            for r in deps.factory_store.list_readouts(factory_id, limit=5000)
+            if r.proposal in {b.proposal.number for b in out_now}
+        }
+        out_now = [b for b in out_now if b.proposal.number not in known]
+        if not out_now:
+            return [], ""
+        slugs = {p.slug for b in out_now for p in b.live}
+        prs = [
+            pr
+            for pr in deps.factory_store.list_prs(factory_id, states=["merged"])
+            if pr.project_slug in slugs
+        ]
+        found = []
+        for bet in out_now:
             shipped = merged_at(bet, prs)
             if shipped is not None:
-                out.append((bet, shipped))
-        return out, release_mode(deps, factory_id)
+                found.append((bet, shipped))
+        return found, release_mode(deps, factory_id)
 
     due, mode = await asyncio.to_thread(unreleased)
     created: list[FactoryReadout] = []
@@ -923,7 +1114,8 @@ def evaluate(
 ) -> tuple[Measured, list[dict[str, Any]], Judgement | None]:
     """
     Measure *row* and judge it (synchronous). :returns: ``(measured, guardrails,
-    judgement)``; the judgement is ``None`` while the method waits for a person.
+    judgement)``; the judgement is ``None`` while the method waits for a person
+    (``measured.pending``) or for its window's data (``measured.waiting``).
     """
     ctx = _context(deps, factory_id, row, now)
     try:
@@ -935,7 +1127,7 @@ def evaluate(
     rails = guardrail_rows(ctx, measured, reported)
     answer = (row.answer or {}).get("answer")
     broken = any(g["state"] == "broken" for g in rails)
-    if measured.pending and not broken:
+    if (measured.pending or measured.waiting) and not broken:
         return measured, rails, None
     judgement = judge(
         expected=(row.plan or {}).get("expected") or {},
@@ -953,8 +1145,9 @@ def evaluate(
 def _result(
     row: FactoryReadout, measured: Measured, rails: list[dict[str, Any]], judgement: Judgement
 ) -> dict[str, Any]:
+    earlier = {k: v for k, v in (row.result or {}).items() if k != "waiting"}
     return {
-        **(row.result or {}),
+        **earlier,
         "effect": measured.effect,
         "baseline": measured.baseline,
         "after": measured.after,
@@ -1165,13 +1358,10 @@ async def _ask(app_state: Any, factory_id: str, row: FactoryReadout, *, answer: 
     deps = factory_deps(app_state)
     if answer:
         question = f"Did {row.bet} help? {_outcome(row)} · day {row.day} after the release"
+        # Only a person answers, in the cockpit: no option here is a one-click answer
+        # (an eval-mode factory leaves it open rather than closing it unanswered).
         options = [
-            {
-                "id": "answer",
-                "label": "Answer in the cockpit",
-                "href": link(factory_id, row),
-                "recommended": True,
-            }
+            {"id": "answer", "label": "Answer in the cockpit", "href": link(factory_id, row)}
         ]
         context = (
             f"{row.ref} is measured by a person's verdict: answer helped, no change or hurt, "
@@ -1316,6 +1506,18 @@ async def _write_one(
 
     def run() -> tuple[FactoryReadout | None, bool, bool]:
         measured, rails, judgement = evaluate(deps, factory_id, row, now=now)
+        if judgement is None and measured.waiting:
+            # Its window is not observed yet: it stays scheduled and says why.
+            day_s = _context(deps, factory_id, row, now).day_s
+            note = {"why": measured.waiting, "until": row.due_at + OBSERVE_GRACE_DAYS * day_s}
+            if (row.result or {}).get("waiting") != note:
+                deps.factory_store.update_readout(
+                    factory_id,
+                    row.id,
+                    expect_status="scheduled",
+                    result={**(row.result or {}), "waiting": note},
+                )
+            return None, False, False
         if judgement is None:
             waiting = deps.factory_store.update_readout(
                 factory_id,
@@ -1369,6 +1571,7 @@ class ReleaseIn(BaseModel):
     project: str | None = Field(None, max_length=64)
     at: int | None = Field(None, ge=0)
     note: str | None = Field(None, max_length=REASON_MAX)
+    """Stored with the release and shown on its readouts."""
 
 
 class DecideIn(BaseModel):
@@ -1380,7 +1583,9 @@ class DecideIn(BaseModel):
     reason: str | None = Field(None, max_length=REASON_MAX)
     reviewer: str | None = Field(None, max_length=REVIEWER_MAX)
     answer: Literal["helped", "no_change", "hurt"] | None = None
-    guardrails_broken: list[str] = Field(default_factory=list, max_length=GUARDRAILS_MAX)
+    guardrails_broken: list[Annotated[str, Field(max_length=GUARDRAIL_MAX)]] = Field(
+        default_factory=list, max_length=GUARDRAILS_MAX
+    )
 
 
 def find(deps: FactoryDeps, factory_id: str, ref: str) -> FactoryReadout:
@@ -1463,8 +1668,10 @@ async def mark_released(
             "a release falls between the bet's approval and now",
             field="at",
         )
-    rows = await asyncio.to_thread(schedule, deps, root.id, bet, at, how="manual", by=by)
-    await _announce_scheduled(app_state, root.id, bet, rows, "manual", by)
+    rows = await asyncio.to_thread(
+        lambda: schedule(deps, root.id, bet, at, how="manual", by=by, note=body.note)
+    )
+    await _announce_scheduled(app_state, root.id, bet, rows, "manual", by, body.note)
     return {
         "proposal": bet.ref,
         "released_at": at,
@@ -1480,7 +1687,7 @@ def _report(row: FactoryReadout, names: Sequence[str], by: str, now: int) -> dic
         raise CockpitError(
             422,
             "unknown_guardrail",
-            f"{unknown[0]!r} is no guardrail of {row.bet}'s plan",
+            f"{control.clip(unknown[0], 80)!r} is no guardrail of {row.bet}'s plan",
             field="guardrails_broken",
         )
     if not wanted:
@@ -1658,6 +1865,9 @@ async def _apply_decision(
     if decision == "extend" and await asyncio.to_thread(_extended, deps, factory_id, row.proposal):
         raise CockpitError(409, "already_extended", f"{row.bet} was extended once already")
 
+    # A readout decided again keeps the history of its reopenings.
+    reopened = {k: v for k, v in (row.review or {}).items() if k == "reopened" and v}
+
     def run() -> tuple[FactoryReadout | None, list[FactoryReadout], FactoryReadout | None]:
         stored = deps.factory_store.update_readout(
             factory_id,
@@ -1672,6 +1882,7 @@ async def _apply_decision(
                 "reviewer": body.reviewer,
                 "against_recommendation": against,
                 "via": via or "cockpit",
+                **reopened,
             },
         )
         if stored is None:
@@ -1690,7 +1901,11 @@ async def _apply_decision(
                     other.id,
                     expect_status=other.status,
                     status="cancelled",
-                    review={"reason": f"{row.bet} was decided on day {row.day}: {decision}"},
+                    review={
+                        "reason": f"{row.bet} was decided on day {row.day}: {decision}",
+                        "cancelled_by": row.id,
+                        "was": other.status,
+                    },
                 )
                 if done is not None:
                     cancelled.append(done)
@@ -1764,6 +1979,136 @@ async def _apply_decision(
         f"{stored.id}:decided",
     )
     return stored
+
+
+async def reopen(
+    app_state: Any, root: Conversation, user_id: str | None, ref: str
+) -> dict[str, Any]:
+    """
+    Take back a readout's keep, drop or iterate (the Undo of ``mechanism.md`` §8.1).
+
+    The readout is written again (its question asked again when it is the
+    bet's last or lost), the later readouts that decision cancelled are back,
+    and the opportunity is measured again. EDIT within :data:`REOPEN_WINDOW_S`
+    of the decision; an owner after that.
+
+    :raises CockpitError: 403 ``owners_only``, 404 ``unknown_readout``, 409
+        ``not_decided`` / ``not_reopenable`` / ``readout_changed``.
+    """
+    from omnigent.server.factory.projects import actor_name, human_actor
+
+    deps = factory_deps(app_state)
+    await control.require(deps, user_id, root.id, LEVEL_EDIT)
+    actor = await asyncio.to_thread(human_actor, deps, user_id, root.id)
+    by = actor_name(actor)
+    level = await asyncio.to_thread(people.viewer_level, deps, root.id, user_id)
+    now = now_s()
+    row = await asyncio.to_thread(find, deps, root.id, ref)
+    if row.status != "decided":
+        raise CockpitError(409, "not_decided", f"{row.ref} is {row.status}: nothing to reopen")
+    if row.decision not in CLOSING:
+        raise CockpitError(
+            409,
+            "not_reopenable",
+            f"{row.ref} was extended: decide its next readout instead",
+        )
+    if now - int(row.decided_at or 0) > REOPEN_WINDOW_S and level < LEVEL_MANAGE:
+        raise CockpitError(
+            403,
+            "owners_only",
+            f"{row.ref} was decided more than {REOPEN_WINDOW_S // 60} minutes ago: "
+            "reopening it is for owners",
+        )
+    decision = str(row.decision)
+
+    def run() -> tuple[FactoryReadout | None, list[FactoryReadout], bool]:
+        history = [*((row.review or {}).get("reopened") or [])][-4:]
+        history.append(
+            {
+                "decision": decision,
+                "decided_by": row.decided_by,
+                "decided_at": row.decided_at,
+                "by": by[:128],
+                "at": now,
+            }
+        )
+        stored = deps.factory_store.update_readout(
+            root.id,
+            row.id,
+            expect_status="decided",
+            status="written",
+            decision=None,
+            decided_by=None,
+            decided_at=None,
+            review={"reopened": history},
+        )
+        if stored is None:
+            return None, [], False
+        restored: list[FactoryReadout] = []
+        for other in deps.factory_store.list_readouts(root.id, proposal=row.proposal):
+            review = other.review or {}
+            if other.status != "cancelled" or review.get("cancelled_by") != row.id:
+                continue
+            back = review.get("was") if review.get("was") in OPEN_STATUSES else "scheduled"
+            done = deps.factory_store.update_readout(
+                root.id, other.id, expect_status="cancelled", status=back, review=None
+            )
+            if done is not None:
+                restored.append(done)
+        _unsettle_opportunity(deps, root.id, stored, decision)
+        return stored, restored, _final(deps, root.id, stored)
+
+    stored, restored, final = await asyncio.to_thread(run)
+    if stored is None:
+        raise CockpitError(409, "readout_changed", f"{row.ref} changed meanwhile; read it again")
+    await events.emit(
+        app_state,
+        root.id,
+        "readout.reopened",
+        severity="notice",
+        subject=f"proposal:{stored.bet}",
+        summary=f"{by} reopened {stored.ref} (it was {decision})",
+        data={
+            "readout": stored.key,
+            "readout_id": stored.id,
+            "proposal": stored.bet,
+            "opportunity": f"O-{stored.opportunity}" if stored.opportunity else None,
+            "decision": decision,
+            "by": by,
+            "restored": [r.key for r in restored],
+        },
+    )
+    await _room(
+        app_state,
+        root.id,
+        f"{by} reopened {stored.ref} (it was {decision}): {_outcome(stored)}. It waits for a "
+        "decision again.",
+        f"{stored.id}:reopened:{now}",
+    )
+    if final or stored.verdict == "lost":
+        await _ask(app_state, root.id, stored, answer=False)
+    for other in restored:
+        # Its "did it help?" closed with the decision: ask it again.
+        if other.status == "awaiting_answer":
+            await _ask(app_state, root.id, other, answer=True)
+    return readout_view(stored, now=now)
+
+
+def _unsettle_opportunity(
+    deps: FactoryDeps, factory_id: str, row: FactoryReadout, decision: str
+) -> None:
+    """Undo what :func:`_settle_opportunity` wrote for *row* (it is measured again)."""
+    if row.opportunity is None:
+        return
+    opp = deps.factory_store.get_opportunity(factory_id, row.opportunity)
+    if opp is None or (opp.result or {}).get("readout") != row.key:
+        return
+    result = dict(opp.result or {})
+    result.pop("decision", None)
+    result.pop("decided_at", None)
+    if decision == "iterate":
+        result["iterated"] = sorted(opportunities.iterated(opp.result) - {row.bet})
+    deps.factory_store.update_opportunity(factory_id, row.opportunity, result=result)
 
 
 def _settle_opportunity(
@@ -1927,6 +2272,7 @@ def readout_view(row: FactoryReadout, *, now: int) -> dict[str, Any]:
         "release": result.get("release"),
         "due_at": row.due_at,
         "due_in_s": max(0, row.due_at - now) if row.status == "scheduled" else 0,
+        "waiting": result.get("waiting") if row.status == "scheduled" else None,
         "written_at": row.written_at,
         "baseline": result.get("baseline"),
         "after": result.get("after"),
@@ -1943,6 +2289,7 @@ def readout_view(row: FactoryReadout, *, now: int) -> dict[str, Any]:
         "why": result.get("why"),
         "answer": row.answer,
         "decision": decision,
+        "reopened": (row.review or {}).get("reopened") or [],
         "options": options,
         "signal": f"S-{row.signal}" if row.signal else None,
         "evidence_level": (row.stamp or {}).get("evidence_level"),
@@ -1960,6 +2307,10 @@ def pending_bets(deps: FactoryDeps, factory_id: str) -> list[dict[str, Any]]:
         if bet.proposal.number in known:
             continue
         shipped = all(opportunities.project_shipped(p) for p in bet.live) and bool(bet.live)
+        if not bet.live:
+            state = "cancelled"
+        else:
+            state = "awaiting_release" if shipped else "building"
         out.append(
             {
                 "proposal": bet.ref,
@@ -1972,7 +2323,7 @@ def pending_bets(deps: FactoryDeps, factory_id: str) -> list[dict[str, Any]]:
                 "projects": [
                     {"slug": p.slug, "status": p.status, "stage": p.stage} for p in bet.live
                 ],
-                "state": "awaiting_release" if shipped else "building",
+                "state": state,
             }
         )
     return out
@@ -2054,8 +2405,17 @@ def summary_fields(deps: FactoryDeps, factory_id: str, *, now: int) -> dict[str,
     rows = deps.factory_store.list_readouts(factory_id, limit=5000)
     scheduled = [r for r in rows if r.status == "scheduled"]
     written = [r for r in rows if r.status in ("written", "decided")]
-    waiting = [r for r in rows if r.status == "awaiting_answer"] + [
-        r for r in rows if r.status == "written" and r.decision_id
+    asking = {
+        opt_id(d.id)
+        for d in deps.factory_store.list_decisions(status="open", factory_id=factory_id, limit=500)
+        if d.source == DECISION_SOURCE
+    }
+    # A person still owes an answer or a decision: one per open question.
+    waiting = [
+        r
+        for r in rows
+        if r.status == "awaiting_answer"
+        or (r.status == "written" and r.decision_id and opt_id(r.decision_id) in asking)
     ]
     latest = sorted(written, key=lambda r: r.written_at or 0, reverse=True)[:3]
     return {
@@ -2081,8 +2441,10 @@ __all__ = [
     "EVAL_DAY_S",
     "METHOD_LABEL",
     "MVP_METHODS",
+    "OBSERVE_GRACE_DAYS",
     "REACHES",
     "RECOMMENDATIONS",
+    "REOPEN_WINDOW_S",
     "VERDICTS",
     "Bet",
     "DecideIn",
@@ -2114,9 +2476,11 @@ __all__ = [
     "register_guardrail_check",
     "register_method",
     "release_mode",
+    "reopen",
     "schedule",
     "set_release_reader",
     "signal_trend",
+    "smallest_change",
     "stamp",
     "summary_fields",
     "tick",

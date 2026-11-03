@@ -974,10 +974,11 @@ without) and one expected metric effect; at most 2 per agent per day.
   `trial: true` on strategy or the product profile is 422 `not_trialable`
   (`reason` "judged on outcomes"). Discovery's method (`discovery.rubric`,
   `discovery.thresholds`, `briefs.scout`) trials on discovery guards on a
-  server that runs discovery (else "needs discovery guards"), never in one
-  trial with other changes; its other settings apply as a version ("a
-  setting, not discovery's method"). A proposal filed meanwhile says it will
-  wait.
+  server that runs discovery and in a factory with `discovery.enabled` (else
+  it applies as a version: "needs discovery guards", or "discovery off for
+  this factory"), never in one trial with other changes; its other settings
+  apply as a version ("a setting, not discovery's method"). A proposal filed
+  meanwhile says it will wait.
 - **Delivery.** Each version change mails the members
   `[Factory definition · vN · C-n by … · trial 48h]` with the diff; rule
   changes send `[Factory control · RULES UPDATE · C-n · by …]` to the roles they
@@ -993,10 +994,13 @@ without) and one expected metric effect; at most 2 per agent per day.
   C-n?" (recommended: revert). Never auto-kept. A trial nobody decides reverts
   one window after it ended (2× its window). A trial of discovery's method
   runs 7 to 56 days (14 by default; `trial_h` 168-1344, else 422
-  `invalid_trial_window`) on the discovery guards (quote failures and privacy
-  events stay at 0, accepted bets −10 pp, $ per accepted bet +20 %), its
-  expected effect may name a discovery metric, and its n is the bets people
-  decided (≥ 3; none decided is idle).
+  `invalid_trial_window`; an agent's out-of-window `trial_h` becomes the
+  default with a warning, since its tool bounds it to 24-168; the approve
+  option reads "trial 14 days") on the discovery guards (quote failures and
+  privacy events stay at 0, accepted bets −10 pp, $ per accepted bet +20 %),
+  its expected effect may name a discovery metric, and its n is the bets
+  people decided (≥ 3; none decided is idle). The guard set is stamped on the
+  proposal when the trial starts (`result.guards`) and judged on that.
 - **Idle trials**: a window with no merged PR, finished task or ended sub-agent
   run proves nothing. Such a trial is extended by its own length (at most
   twice, one line in `#improvements` each time), then the owners decide with
@@ -1174,19 +1178,32 @@ like the rest of discovery.
   before; counter-evidence, hunches, suspects and the server's own signals left
   out; the effect in the plan's unit: a relative change for `share`/`%`, a
   change per week for a count; n under the plan's `min_n`, default 5, is too
-  little data) and `human_verdict` (a "Needs you" question "Did C-n help?";
-  the answer, `helped` / `no_change` / `hurt`, needs a reason).
+  little data). It counts who still asks, so its plan's metric is
+  `signal_trend:O-n` and it predicts a drop: a bet filed otherwise is refused
+  (422 `metric_not_measurable`, "predict a drop"), and a frozen plan that
+  says otherwise reads out inconclusive. The window after the release counts
+  only once it was observed: every source behind the opportunity read
+  successfully (`source.sync` / `source.query`) after the window closed, and
+  every user signal seen in it sorted (linked to an opportunity, or detached).
+  Until then the readout stays scheduled and says why (`waiting`), for at most
+  7 readout days; then it is inconclusive and names what was missing. An
+  opportunity whose evidence comes from no source the server reads cannot be
+  measured by a signal trend. `human_verdict`: a "Needs you" question "Did C-n
+  help?" (no one-click answer: the answer, `helped` / `no_change` / `hurt`,
+  needs a reason, in the cockpit).
   `before_after`, `adoption` and `controlled` are hooks
   (`readouts.register_method`): until a source measures them their readouts
   are inconclusive and say so. Guardrails no source measures are
   `unmeasured`; a person may report one broken.
 - **Fixed rules** (Tier 0, `readouts.judge`): won (moved the promised way by
-  at least the near end of the signed range: `low` going up, `high` going
-  down, zero when it spans zero) → keep; flat (less; a move the wrong way
-  smaller than the near end is noise) → iterate; lost (the wrong way by the
-  near end or more, or any guardrail broken) → roll back; inconclusive (too
+  at least the smallest predicted change: `low` going up, `high` going down,
+  zero when the range spans zero) → keep; flat (less; a move the wrong way
+  smaller than that is noise, not a loss) → iterate; lost (the wrong way by
+  that much or more, or any guardrail broken) → roll back; inconclusive (too
   little data or a failed data check) → extend once, then iterate. Each
-  readout says whether the effect fell inside the predicted range.
+  readout says whether the effect fell inside the predicted range; a won or
+  flat readout whose guardrails no source measured says "(guardrails not
+  measured)".
 - **Write-back**, through the ledger only: a `test_result` signal of the
   server's own source (verdict, method and the level that method can show:
   signal trend moderate, a person's verdict weak, before/after and adoption
@@ -1206,7 +1223,12 @@ like the rest of discovery.
   the readout. Keep and drop close the opportunity (kept, dropped) and cancel
   later readouts; drop names the flag to turn off; iterate closes the bet and
   the opportunity falls back to its evidence; extend adds one readout at twice
-  the day. `readout.scheduled`, `readout.written`, `readout.decided` events.
+  the day. `POST …/readouts/{id}/reopen` (EDIT within 10 minutes of the
+  decision, an owner after that; human origin) takes a keep, drop or iterate
+  back: the readout is written again (its question asked again), the later
+  readouts it cancelled are back, and the opportunity is measured again.
+  `readout.scheduled`, `readout.written`, `readout.decided`,
+  `readout.reopened` events. A manual release's `note` is kept with it.
 - **Reads** (READ): `GET …/readouts` (readouts, the bets `pending` with their
   band only, the `ledger`), `GET …/readouts/{id}`; `GET …/discovery` gains
   `readouts` and `ledger`.
@@ -1219,8 +1241,11 @@ like the rest of discovery.
   measured), each with n and grouped by the definition version that ranked the
   bet (a filed bet snapshots its opportunity's score). The discovery guards
   are in the same family: `quote_failures`, `privacy_events` (source reads
-  refused for privacy), `bet_acceptance`, `cost_per_accepted_bet` (the
-  discovery seat's spend).
+  refused for privacy: the gateway logs each as `privacy.source_refused`
+  besides its access-log row, so the guard never scans the access log),
+  `bet_acceptance`, `cost_per_accepted_bet` (the discovery seat's spend). The
+  family is read only for its own metrics, and is unknown while the server
+  does not run discovery.
 
 ### Learning
 

@@ -22,7 +22,14 @@ from omnigent.server.github_app_client import graphql_operations
 from tests.server.factory.cockpit_helpers import Cockpit, error_code
 from tests.server.factory.conftest import FactoryWorld
 from tests.server.factory.discovery_helpers import DAY, discovery_cockpit
-from tests.server.factory.readout_helpers import REPO, base, file_bet, now, seeded
+from tests.server.factory.readout_helpers import (
+    REPO,
+    base,
+    file_bet,
+    now,
+    read_sources,
+    seeded,
+)
 
 
 @pytest_asyncio.fixture()
@@ -108,6 +115,25 @@ async def test_cancelled_projects_are_left_out_and_done_counts_as_out(cockpit: C
     assert [r.day for r in rows] == [7, 28]
 
 
+async def test_nothing_out_reads_no_pull_requests(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seeded(cockpit)
+    file_bet(cockpit, stage="building")
+    file_bet(cockpit, slugs=("draft-old",))
+    cockpit.store.upsert_project(cockpit.fid, "draft-old", status="cancelled")
+
+    def no_prs(*_args: Any, **_kwargs: Any) -> list[Any]:
+        raise AssertionError("nothing is out: no pull request is read")
+
+    monkeypatch.setattr(cockpit.store, "list_prs", no_prs)
+
+    assert await detect(cockpit) == []
+    pending = {p["proposal"]: p["state"] for p in readouts.pending_bets(cockpit.deps, cockpit.fid)}
+    # A bet whose every project was cancelled will never ship.
+    assert pending == {"C-1": "building", "C-2": "cancelled"}
+
+
 async def test_only_applied_bets_with_a_frozen_plan_are_measured(cockpit: Cockpit) -> None:
     seeded(cockpit)
     row, _ = file_bet(cockpit)
@@ -141,7 +167,10 @@ async def test_manual_waits_for_a_person(cockpit: Cockpit) -> None:
         base(cockpit, "/readouts/release"), {"proposal": "C-1"}, user="bob"
     )
     unknown = await cockpit.post(base(cockpit, "/readouts/release"), {"proposal": "C-9"})
-    resp = await cockpit.post(base(cockpit, "/readouts/release"), {"project": "#draft-share"})
+    resp = await cockpit.post(
+        base(cockpit, "/readouts/release"),
+        {"project": "#draft-share", "note": "shipped to everyone today (sample)"},
+    )
     again = await cockpit.post(base(cockpit, "/readouts/release"), {"proposal": "C-1"})
 
     assert early.status_code == 422 and error_code(early) == "release_before_apply"
@@ -153,6 +182,9 @@ async def test_manual_waits_for_a_person(cockpit: Cockpit) -> None:
     assert body["proposal"] == "C-1" and [r["day"] for r in body["readouts"]] == [7, 28]
     assert body["readouts"][0]["release"]["how"] == "manual"
     assert body["readouts"][0]["release"]["by"].startswith("alice")
+    assert body["readouts"][0]["release"]["note"] == "shipped to everyone today (sample)"
+    [event] = cockpit.events("readout.scheduled")
+    assert event.data["note"] == "shipped to everyone today (sample)"
     assert again.status_code == 409 and error_code(again) == "already_released"
 
 
@@ -269,6 +301,7 @@ async def test_the_job_schedules_and_writes_for_open_factories_only(cockpit: Coc
     seeded(cockpit, before_days=10)
     file_bet(cockpit)
     merged_pr(cockpit, 101, "draft-share", now() - 8 * DAY)
+    read_sources(cockpit, now())
 
     first = await job.run_once(cockpit.app.state)
 

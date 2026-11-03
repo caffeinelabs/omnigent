@@ -26,6 +26,7 @@ from tests.server.factory.readout_helpers import (
     file_bet,
     later_signals,
     now,
+    read_sources,
     release,
     seeded,
 )
@@ -192,6 +193,7 @@ async def test_the_discovery_summary_carries_readouts_and_the_ledger(cockpit: Co
     later_signals(cockpit, 2, age_days=4)
     file_bet(cockpit)
     release(cockpit, now() - 8 * DAY)
+    read_sources(cockpit, now())
     await readouts.write_due(cockpit.app.state, cockpit.fid, now=now())
 
     resp = await cockpit.client.get(base(cockpit, "/discovery"), headers={"X-Test-User": "alice"})

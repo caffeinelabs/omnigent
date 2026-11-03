@@ -138,10 +138,59 @@ async def test_sentinel_proposes_a_rubric_trial_with_a_discovery_metric(cockpit:
 
     assert filed.status_code == 200, filed.text
     decision = cockpit.store.get_decision(row(cockpit).decision_id)
-    assert decision is not None and decision.options[0]["label"] == "Approve · trial 336h"
+    assert decision is not None and decision.options[0]["label"] == "Approve · trial 14 days"
     assert (await answer(cockpit, 1)).status_code == 200
     trial = row(cockpit)
     assert trial.status == "trial" and trial.trial_until - trial.applied_at == 336 * H
+    assert trial.result["guards"] == "discovery"
+
+
+async def test_an_agents_delivery_trial_length_becomes_the_discovery_default(
+    cockpit: Cockpit,
+) -> None:
+    # An agent's tool bounds trial_h to 24-168 h; a rubric trial takes its own window.
+    filed = await propose(cockpit, changes=[RUBRIC], expected_effect=EFFECT, trial_h=48)
+
+    assert filed.status_code == 200, filed.text
+    proposal = row(cockpit)
+    assert proposal.result["trial_h"] == 336
+    assert any(w.startswith("trial_h: a trial on discovery guards") for w in proposal.warnings)
+
+
+async def test_a_factory_with_discovery_off_applies_the_method_as_a_version(
+    cockpit: Cockpit,
+) -> None:
+    definition.set_values(
+        cockpit.deps, cockpit.fid, {"discovery.enabled": False}, created_by="alice"
+    )
+    definition.invalidate(cockpit.fid)
+    paths = ["discovery.rubric.decay_half_life_days"]
+
+    ok, reason = definition.trialable(paths, factory_id=cockpit.fid)
+    trial = await put(cockpit, RUBRIC, trial=True, expected_effect=EFFECT)
+
+    assert not ok and reason is not None and "discovery is off" in reason
+    assert definition.guard_set(paths, factory_id=cockpit.fid) == "delivery"
+    assert definition.trial_window_h(paths, factory_id=cockpit.fid) == (24, 48, 168)
+    assert trial.status_code == 422 and error_code(trial) == "not_trialable"
+    version = await put(cockpit, RUBRIC)
+    assert version.status_code == 200, version.text
+    assert row(cockpit).status == "applied"
+
+
+async def test_a_trial_keeps_the_guards_it_started_with(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trial, applied = await _trial(cockpit)
+    assert trial.result["guards"] == "discovery"
+    for days in (1, 3, 5):
+        _bet(cockpit, applied + days * DAY)
+    # The server stops running discovery while it trials: it is still judged on its own guards.
+    monkeypatch.delenv(DISCOVERY_ENV)
+
+    ev = evaluate.evaluate_trial(cockpit.deps, row(cockpit), trial.trial_until + 1)
+
+    assert {g.metric for g in ev.guards} == set(metrics.DISCOVERY_GUARDS)
 
 
 # ── Judging one ────────────────────────────────────────────────
@@ -236,10 +285,9 @@ async def test_a_privacy_refusal_or_fewer_accepted_bets_revert_it(cockpit: Cockp
     _bet(cockpit, applied + 3 * DAY, "rejected")
     _event(
         cockpit,
-        "source.query",
+        "privacy.source_refused",
         applied + DAY,
         source="forum",
-        outcome="refused",
         error_code="source_not_allowed",
     )
 
@@ -284,8 +332,55 @@ async def test_too_few_decided_bets_go_to_the_owners_and_none_extends(cockpit: C
     assert ev["n"] == 1 and "n=1 < 3" in ev["reason"]
 
 
-def test_the_discovery_family_stays_out_of_the_insights_catalog() -> None:
+async def test_a_busy_access_log_never_hides_a_guard_event(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    trial, applied = await _trial(cockpit)
+    monkeypatch.setattr(metrics, "_DISCOVERY_EVENT_LIMIT", 20)
+    # More access-log rows than the guard query reads, all before the refusal.
+    for i in range(30):
+        _event(cockpit, "source.sync", applied - DAY + i, source="web", outcome="ok")
+    _event(cockpit, "bet.quote_refused", applied + 2 * DAY, code="quote_unverified")
+    _event(cockpit, "privacy.source_refused", applied + 3 * DAY, source="web")
+    window = metrics.Window(applied, trial.trial_until)
+
+    found = metrics.compute(
+        cockpit.deps,
+        cockpit.fid,
+        ["quote_failures", "privacy_events"],
+        window=window,
+        use_cache=False,
+    )
+
+    assert metrics.headline(found["quote_failures"]) == 1
+    assert metrics.headline(found["privacy_events"]) == 1
+
+
+async def test_delivery_metrics_never_read_discovery_facts(
+    cockpit: Cockpit, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom(*_args: Any, **_kwargs: Any) -> list[Any]:
+        raise AssertionError("a delivery metric read the readouts")
+
+    monkeypatch.setattr(cockpit.store, "list_readouts", boom)
+    at = int(time.time())
+    window = metrics.Window(at - WINDOW, at)
+
+    found = metrics.compute(
+        cockpit.deps, cockpit.fid, ["throughput"], window=window, use_cache=False
+    )
+
+    assert "throughput" in found
+
+
+def test_the_discovery_family_stays_out_of_the_insights_catalog(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv(DISCOVERY_ENV, "1")
     assert not set(metrics.DISCOVERY_CATALOG) & set(metrics.CATALOG)
     assert all(m.family == "discovery" for m in metrics.DISCOVERY_CATALOG.values())
     assert metrics.known("bet_acceptance") and metrics.known("merge_acceptance")
     assert not metrics.known("nothing_at_all")
+    # With discovery off its metrics are unknown, as before.
+    monkeypatch.delenv(DISCOVERY_ENV)
+    assert not metrics.known("bet_acceptance") and metrics.known("merge_acceptance")

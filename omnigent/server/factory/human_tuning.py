@@ -73,7 +73,7 @@ async def propose_change(
     await asyncio.to_thread(tuning._check_overlap, deps, root.id, diff, resolved.stored)
     warnings = await asyncio.to_thread(tuning.trial_warnings, deps, root.id, diff)
     actor = await asyncio.to_thread(projects.human_actor, deps, user_id, root.id)
-    trial_h = definition.trial_hours(tuning.diff_paths(diff), body.trial_h)
+    trial_h = definition.trial_hours(tuning.diff_paths(diff), body.trial_h, factory_id=root.id)
     row, _ = await asyncio.to_thread(
         lambda: deps.factory_store.create_proposal(
             root.id,

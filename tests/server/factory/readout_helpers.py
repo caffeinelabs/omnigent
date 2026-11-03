@@ -2,7 +2,9 @@
 
 Builds on :mod:`tests.server.factory.discovery_helpers`: the factory has
 discovery on, a sample profile and goal, and O-1 backed by five accounts from
-two source kinds before the release. Every product word is sample data.
+two source kinds before the release. A signal trend counts the window after
+the release only once its sources were read after it (:func:`read_sources`)
+and its signals sorted. Every product word is sample data.
 """
 
 from __future__ import annotations
@@ -11,10 +13,10 @@ import time
 from collections.abc import Sequence
 from typing import Any
 
-from omnigent.entities.factory import FactoryProject, FactoryProposal
+from omnigent.entities.factory import EventDraft, FactoryProject, FactoryProposal
 from omnigent.entities.factory_discovery import FactoryReadout, FactorySignal
 from omnigent.server.factory import bets
-from omnigent.server.factory.discovery import readouts
+from omnigent.server.factory.discovery import readouts, sources
 from tests.server.factory.cockpit_helpers import Cockpit
 from tests.server.factory.discovery_helpers import DAY, ingest, label, make_opportunity
 
@@ -113,6 +115,27 @@ def file_bet(
     return row, projects
 
 
+def read_sources(
+    cockpit: Cockpit,
+    at: int,
+    ids: Sequence[str] = ("repo-issues", "web"),
+    *,
+    outcome: str = "ok",
+) -> None:
+    """The server read sources *ids* at *at* (one ``source.sync`` row each, as the gateway)."""
+    for source_id in ids:
+        cockpit.store.append_event(
+            EventDraft(
+                factory_id=cockpit.fid,
+                kind="source.sync",
+                summary=f"the server read {source_id} (sample)",
+                subject=sources.subject(source_id),
+                data={"source": source_id, "mode": "sync", "outcome": outcome},
+                ts=at * 1000,
+            )
+        )
+
+
 def bet_of(cockpit: Cockpit, number: int = 1) -> readouts.Bet:
     found = [b for b in readouts.bets(cockpit.deps, cockpit.fid) if b.proposal.number == number]
     assert found, f"no bet C-{number}"
@@ -145,6 +168,7 @@ __all__ = [
     "file_bet",
     "later_signals",
     "now",
+    "read_sources",
     "readout",
     "release",
     "seeded",

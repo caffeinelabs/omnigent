@@ -157,7 +157,11 @@ def evaluate_trial(deps: FactoryDeps, row: FactoryProposal, now: int) -> Evaluat
     span = max(3600, end - applied)
     trial = metrics.Window(applied, min(end, now) if min(end, now) > applied else applied + 1)
     baseline = metrics.Window(applied - span, applied)
-    discovery = definition.guard_set((row.after or {}).keys()) == definition.GUARDS_DISCOVERY
+    # The guard set stamped when the trial started; a trial from before the stamp recomputes it.
+    stamped = (row.result or {}).get("guards")
+    if stamped not in (definition.GUARDS_DELIVERY, definition.GUARDS_DISCOVERY):
+        stamped = definition.guard_set((row.after or {}).keys())
+    discovery = stamped == definition.GUARDS_DISCOVERY
     table = metrics.DISCOVERY_GUARDS if discovery else metrics.GUARDS
     count = "bet_acceptance" if discovery else "throughput"
     names = list(table)
@@ -332,9 +336,11 @@ def check_trial(
         holds one of its blocks.
     """
     paths = list(paths)
-    ok, message = definition.trialable(paths)
+    ok, message = definition.trialable(paths, factory_id=factory_id)
     if not ok:
-        why = "; ".join(dict.fromkeys(definition.not_trialable(paths).values()))
+        why = "; ".join(
+            dict.fromkeys(definition.not_trialable(paths, factory_id=factory_id).values())
+        )
         raise not_trialable_error(message or definition.blocks.NOT_TRIALABLE_REASON, why)
     found = overlapping_trial(deps, factory_id, paths, exclude_id=exclude_id)
     if found is not None:

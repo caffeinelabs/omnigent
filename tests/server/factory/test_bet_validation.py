@@ -98,6 +98,50 @@ async def test_a_metric_binding_allows_a_stronger_method(cockpit: Cockpit) -> No
     assert refused.json()["field"] == "bet.metric"
 
 
+async def test_a_signal_trend_predicts_a_drop_of_its_opportunity(
+    cockpit: Cockpit, ledger: FakeLedger
+) -> None:
+    ledger.add("O-7", status="idea")
+    trend = {"method": "signal_trend", "readout_days": [7, 28]}
+    drop = {"direction": "down", "low": -60, "high": -20, "unit": "%"}
+
+    no_opportunity = await file_bet(cockpit, bet=bet(metric="signal_trend:G-1", measurement=trend))
+    other_metric = await file_bet(
+        cockpit,
+        {"op": "create", "project": project("other-metric")},
+        bet=bet(kind="test", metric="first_week_success", expected=drop, measurement=trend),
+        opportunity="O-7",
+    )
+    rise = await file_bet(
+        cockpit,
+        {"op": "create", "project": project("rise")},
+        bet=bet(kind="test", metric="signal_trend:O-7", measurement=trend),
+        opportunity="O-7",
+    )
+    ok = await file_bet(
+        cockpit,
+        {"op": "create", "project": project("fewer-asks")},
+        bet=bet(kind="test", metric="signal_trend:O-7", expected=drop, measurement=trend),
+        opportunity="O-7",
+    )
+
+    refused = {
+        name: (resp.status_code, error_code(resp), resp.json()["field"])
+        for name, resp in (
+            ("no_opportunity", no_opportunity),
+            ("other_metric", other_metric),
+            ("rise", rise),
+        )
+    }
+    assert refused == {
+        "no_opportunity": (422, "metric_not_measurable", "opportunity"),
+        "other_metric": (422, "metric_not_measurable", "bet.metric"),
+        "rise": (422, "metric_not_measurable", "bet.expected"),
+    }
+    assert "predict a drop" in rise.json()["message"]
+    assert ok.status_code == 200, ok.text
+
+
 async def test_requested_work_from_an_opportunity_needs_no_bet(
     cockpit: Cockpit, ledger: FakeLedger
 ) -> None:

@@ -191,7 +191,7 @@ async def test_applying_a_bet_freezes_it_into_each_new_charter(
     assert row is not None
     why = row.charter["why"]
     assert why["proposal"] == "C-1" and why["kind"] == "enabler" and why["goal"] == "G-1"
-    assert why["measurement"] == {"method": "signal_trend", "readout_days": [7, 28]}
+    assert why["measurement"] == {"method": "human_verdict", "readout_days": [7, 28]}
     assert why["guardrails"] == ["no new prompts for users (sample)", GUARDRAIL]
     assert why["flag"] == {"key": "funnel-events", **FLAGS}
     assert why["frozen_by"] and why["plan_version"] == 1

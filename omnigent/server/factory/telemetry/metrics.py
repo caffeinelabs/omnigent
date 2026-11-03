@@ -155,7 +155,7 @@ class Facts:
     spans: list[FactorySpan] = field(default_factory=list)
     readouts: list[Any] = field(default_factory=list)
     discovery_events: list[FactoryEvent] = field(default_factory=list)
-    """Quote refusals and source reads refused for privacy (only while discovery runs)."""
+    """Quote refusals and ``privacy.*`` events (only for discovery metrics, while it runs)."""
     roles: dict[str, str] = field(default_factory=dict)
     """Member session id → factory role."""
     titles: dict[str, str] = field(default_factory=dict)
@@ -229,8 +229,15 @@ def _same(a: str | None, b: str | None) -> bool:
     return a.replace("-", "").lower() == b.replace("-", "").lower()
 
 
-def load_facts(deps: FactoryDeps, factory_id: str, window: Window) -> Facts:
-    """Read what the metrics of *window* (and the window before it) need. Synchronous."""
+def load_facts(
+    deps: FactoryDeps, factory_id: str, window: Window, *, discovery: bool = False
+) -> Facts:
+    """
+    Read what the metrics of *window* (and the window before it) need. Synchronous.
+
+    :param discovery: Also read what the discovery family needs (readouts and its
+        rare guard events), only while the server runs discovery.
+    """
     from omnigent.server.factory.membership import factory_members
 
     store = deps.factory_store
@@ -258,8 +265,10 @@ def load_facts(deps: FactoryDeps, factory_id: str, window: Window) -> Facts:
     facts.spans = store.list_spans(
         factory_id, kinds=list(_SPAN_KINDS), since_ms=since_ms, limit=_SPAN_LIMIT
     )
-    if discovery_server_on():
+    if discovery and discovery_server_on():
         facts.readouts = store.list_readouts(factory_id, limit=_READOUT_LIMIT)
+        # Only rare kinds: the busy access log (source.query, source.sync) never crowds
+        # a guard event out of the window.
         facts.discovery_events = store.find_events(
             factory_id, list(_DISCOVERY_EVENT_KINDS), since_ms, limit=_DISCOVERY_EVENT_LIMIT
         )
@@ -289,17 +298,9 @@ _EVENT_KINDS: Final = (
     PROMPT_SCAN_KIND,
 )
 _SPAN_KINDS: Final = ("task", "stage", "gate", "env", "preview")
-_DISCOVERY_EVENT_KINDS: Final = (
-    "bet.quote_refused",
-    "opportunity.quote_refused",
-    "source.query",
-    "source.sync",
-    "privacy.*",
-)
+_DISCOVERY_EVENT_KINDS: Final = ("bet.quote_refused", "opportunity.quote_refused", "privacy.*")
 _DISCOVERY_EVENT_LIMIT: Final = 10000
 _READOUT_LIMIT: Final = 2000
-PRIVACY_CODES: Final = frozenset({"source_not_allowed", "redaction_unavailable"})
-"""Source reads refused for privacy: a personal or sensitive source, a redaction not available."""
 SCOUT_ROLE: Final = "scout"
 """The discovery seat's role (its spend is discovery's cost)."""
 WIN_RATE_MIN_PER_LEVEL: Final = 5
@@ -1291,15 +1292,11 @@ def _quote_failures(facts: Facts, w: Window) -> list[Sample]:
 
 
 def _privacy_events(facts: Facts, w: Window) -> list[Sample]:
-    out = []
-    for e in facts.discovery_events:
-        data = e.data or {}
-        refused = e.kind in ("source.query", "source.sync") and data.get("error_code") in (
-            PRIVACY_CODES
-        )
-        if (refused or e.kind.startswith("privacy.")) and w.holds(e.ts / 1000):
-            out.append(Sample(ts=e.ts / 1000, value=1.0, key=str(data.get("source") or e.kind)))
-    return out
+    return [
+        Sample(ts=e.ts / 1000, value=1.0, key=str((e.data or {}).get("source") or e.kind))
+        for e in facts.discovery_events
+        if e.kind.startswith("privacy.") and w.holds(e.ts / 1000)
+    ]
 
 
 def _cost_per_bet(facts: Facts, w: Window) -> list[Sample]:
@@ -1821,8 +1818,8 @@ DISCOVERY_CATALOG: Final[dict[str, Metric]] = {
             "Privacy events",
             "count",
             "source reads refused for privacy (a personal or sensitive source, a redaction "
-            "the server cannot do) and privacy.* events",
-            "source.query, source.sync, privacy.* events",
+            "the server cannot do) and other privacy.* events",
+            "privacy.* events (privacy.source_refused from the source gateway)",
             _privacy_events,
             agg_count,
         ),
@@ -1912,8 +1909,11 @@ LEDGER_METRICS: Final = (
 
 
 def known(name: str) -> bool:
-    """:returns: Whether *name* is a metric of the catalog or the discovery family."""
-    return name in CATALOG or name in DISCOVERY_CATALOG
+    """
+    :returns: Whether *name* is a metric of the catalog, or of the discovery family
+        while the server runs discovery.
+    """
+    return name in CATALOG or (name in DISCOVERY_CATALOG and discovery_server_on())
 
 
 def _metric(name: str) -> Metric:
@@ -2021,7 +2021,9 @@ def compute(
     hit = _cache.get(key) if use_cache else None
     if hit is not None and time.monotonic() - hit[0] < CACHE_S:
         return hit[1]
-    facts = load_facts(deps, factory_id, window)
+    facts = load_facts(
+        deps, factory_id, window, discovery=any(n in DISCOVERY_CATALOG for n in wanted)
+    )
     out: dict[str, dict[str, Any]] = {}
     for name in wanted:
         metric = _metric(name)
@@ -2157,7 +2159,6 @@ __all__ = [
     "LEDGER_METRICS",
     "NO_STAMP",
     "OWNER_ONLY_GROUPS",
-    "PRIVACY_CODES",
     "PROMPT_SCAN_KIND",
     "WIN_RATE_MIN_PER_LEVEL",
     "AgentStamp",

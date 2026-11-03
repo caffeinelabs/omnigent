@@ -40,6 +40,7 @@ from tests.server.factory.readout_helpers import (
     file_bet,
     later_signals,
     now,
+    read_sources,
     readout,
     release,
     seeded,
@@ -80,6 +81,7 @@ async def won_day_7(cockpit: Cockpit) -> int:
     file_bet(cockpit)
     released = now() - 8 * DAY
     release(cockpit, released)
+    read_sources(cockpit, now())
     await write(cockpit, now())
     return released
 
@@ -166,6 +168,27 @@ def test_a_persons_verdict_and_what_follows_each_recommendation() -> None:
     assert readouts.aligned("extend", "extend") and not readouts.aligned("extend", "keep")
 
 
+def test_the_why_line_says_it_in_plain_words() -> None:
+    unmeasured = [{"name": "support load (sample)", "state": "unmeasured"}]
+
+    won = judge(expected=DOWN, effect=-30.0, n=10, min_n=5, guardrails=unmeasured)
+    noise = judge(expected=DOWN, effect=15.0, n=10, min_n=5, guardrails=HELD)
+    lost = judge(expected=DOWN, effect=25.0, n=10, min_n=5, guardrails=unmeasured)
+    helped = judge(
+        expected=DOWN, effect=None, n=1, min_n=1, answer="helped", guardrails=unmeasured
+    )
+
+    assert won.why == (
+        "moved at least the smallest predicted change (-20 %) (guardrails not measured)"
+    )
+    assert noise.why == (
+        "moved the wrong way, but less than the smallest predicted change (-20 %): noise"
+    )
+    assert lost.why == "moved the wrong way by at least 20 %"
+    assert helped.why == "a person answered: helped (guardrails not measured)"
+    assert readouts.smallest_change(UP) == "+0.01 share"
+
+
 # ── Measuring and writing back ─────────────────────────────────
 
 
@@ -220,6 +243,7 @@ async def test_the_frozen_plan_is_what_is_measured(cockpit: Cockpit) -> None:
     cockpit.store.update_proposal(
         row.id, bet={**PLAN, "expected": {"direction": "up", "low": 1, "high": 2, "unit": "%"}}
     )
+    read_sources(cockpit, now())
 
     await write(cockpit, now())
 
@@ -236,11 +260,13 @@ async def test_signals_against_and_server_signals_are_not_counted(cockpit: Cockp
     )
     file_bet(cockpit)
     release(cockpit, now() - 8 * DAY)
+    read_sources(cockpit, now())
 
     await write(cockpit, now())
 
     day7 = readout(cockpit, 7)
     assert day7.result["inputs"]["accounts_after"] == 0
+    # Its sources were read after the window and everything in it sorted: nobody asks now.
     assert (day7.verdict, day7.result["effect"]) == ("won", -100.0)
 
 
@@ -251,11 +277,12 @@ async def test_a_unit_it_cannot_read_or_a_missing_baseline_is_inconclusive(
     file_bet(cockpit, plan={"expected": {"direction": "down", "low": -5, "high": -1, "unit": "%"}})
     file_bet(
         cockpit,
-        plan={"expected": {"direction": "up", "low": 1, "high": 3, "unit": "usd"}},
+        plan={"expected": {"direction": "down", "low": -3, "high": -1, "unit": "usd"}},
         slugs=("draft-cost",),
     )
     release(cockpit, now() - 8 * DAY, number=1)
     release(cockpit, now() - 8 * DAY, number=2)
+    read_sources(cockpit, now())
 
     await write(cockpit, now())
 
@@ -263,6 +290,110 @@ async def test_a_unit_it_cannot_read_or_a_missing_baseline_is_inconclusive(
     assert (first.verdict, first.recommendation) == ("inconclusive", "extend")
     assert first.result["data_checks"][0]["name"] == "baseline"
     assert second.verdict == "inconclusive" and "not usd" in second.result["why"]
+
+
+async def test_a_signal_trend_waits_until_its_window_is_sorted(cockpit: Cockpit) -> None:
+    seeded(cockpit, before_days=10)
+    # Two people asked after the release, but nobody sorted their signals yet.
+    unsorted = ingest(
+        cockpit,
+        "repo-issues",
+        ["Still no private draft (sample)", "Draft links? (sample)"],
+        accounts=["late-1", "late-2"],
+        age_days=4,
+    )
+    file_bet(cockpit)
+    released = now() - 8 * DAY
+    release(cockpit, released)
+    read_sources(cockpit, now())
+
+    await write(cockpit, now())
+
+    day7 = readout(cockpit, 7)
+    assert (day7.status, day7.verdict) == ("scheduled", None)
+    assert (
+        day7.result["waiting"]["why"]
+        == "2 signals from the window are not sorted into an opportunity yet"
+    )
+    assert day7.result["waiting"]["until"] == day7.due_at + readouts.OBSERVE_GRACE_DAYS * DAY
+    view = (
+        await cockpit.client.get(
+            base(cockpit, "/readouts/C-1-d7"), headers={"X-Test-User": "alice"}
+        )
+    ).json()
+    assert view["waiting"]["why"].startswith("2 signals")
+
+    # Once sorted (one linked here, one taken back: both count as sorted) it is written.
+    cockpit.store.put_link(
+        cockpit.fid, unsorted[0].number, 1, attached_by="scout (sample)", attached_kind="agent"
+    )
+    cockpit.store.put_link(
+        cockpit.fid, unsorted[1].number, 1, attached_by="scout (sample)", attached_kind="agent"
+    )
+    cockpit.store.detach_link(cockpit.fid, unsorted[1].number, 1, by="alice", reason="not this")
+    await write(cockpit, now())
+
+    day7 = readout(cockpit, 7)
+    assert day7.status == "written" and "waiting" not in day7.result
+    assert day7.result["inputs"]["accounts_after"] == 1
+
+
+async def test_a_window_never_sorted_or_read_is_inconclusive_after_the_grace(
+    cockpit: Cockpit,
+) -> None:
+    seeded(cockpit, before_days=10)
+    ingest(cockpit, "web", ["Show me a draft first (sample)"], accounts=["late"], age_days=4)
+    file_bet(cockpit, plan={"measurement": {"method": "signal_trend", "readout_days": [7]}})
+    released = now() - 8 * DAY
+    release(cockpit, released)
+    grace_over = released + (7 + readouts.OBSERVE_GRACE_DAYS) * DAY + 60
+
+    await write(cockpit, now())
+    assert readout(cockpit, 7).status == "scheduled"
+    await write(cockpit, grace_over)
+
+    day7 = readout(cockpit, 7)
+    assert (day7.status, day7.verdict, day7.recommendation) == (
+        "written",
+        "inconclusive",
+        "extend",
+    )
+    checks = {c["name"]: c["note"] for c in day7.result["data_checks"]}
+    assert checks["observed"].startswith("not read since the window closed: repo-issues, web")
+    assert checks["sorted"] == "1 signal from the window is not sorted into an opportunity yet"
+
+
+async def test_no_reads_at_all_never_reads_as_a_drop(cockpit: Cockpit) -> None:
+    # Five accounts before, none after, and nothing read the sources since: not a win.
+    seeded(cockpit, before_days=10)
+    file_bet(cockpit, plan={"measurement": {"method": "signal_trend", "readout_days": [7]}})
+    released = now() - 8 * DAY
+    release(cockpit, released)
+    read_sources(cockpit, released + 3 * DAY)  # read during the window only
+    read_sources(cockpit, now(), ("repo-issues",), outcome="refused")
+
+    await write(cockpit, released + (7 + readouts.OBSERVE_GRACE_DAYS) * DAY + 60)
+
+    day7 = readout(cockpit, 7)
+    assert day7.verdict == "inconclusive" and day7.result["effect"] is None
+    assert "repo-issues, web" in day7.result["why"]
+    assert day7.result["inputs"]["accounts_after"] == 0
+
+
+async def test_a_signal_trend_plan_predicts_a_drop_of_its_opportunity(cockpit: Cockpit) -> None:
+    seeded(cockpit, before_days=10)
+    later_signals(cockpit, 2, age_days=4)
+    file_bet(cockpit, plan={"metric": "activation", "expected": UP})
+    release(cockpit, now() - 8 * DAY)
+    read_sources(cockpit, now())
+
+    await write(cockpit, now())
+
+    day7 = readout(cockpit, 7)
+    # Fewer people asking is no evidence about another metric, nor a rise of anything.
+    assert (day7.verdict, day7.recommendation) == ("inconclusive", "extend")
+    assert day7.result["data_checks"][0]["name"] == "plan"
+    assert "not up activation" in day7.result["why"]
 
 
 async def test_methods_without_a_source_say_so(cockpit: Cockpit) -> None:
@@ -327,6 +458,8 @@ async def test_a_reported_broken_guardrail_makes_it_lost_and_asks_a_person(
     assert [o["id"] for o in asked.options] == ["drop", "iterate", "other"]
     unknown = await decide(cockpit, "C-1-d7", {"guardrails_broken": ["page speed (sample)"]})
     assert unknown.status_code == 422 and error_code(unknown) == "unknown_guardrail"
+    huge = await decide(cockpit, "C-1-d7", {"guardrails_broken": ["x" * 201]})
+    assert huge.status_code == 400 and error_code(huge) == "invalid_body"
 
 
 async def test_the_last_readout_waits_in_needs_you_and_one_click_keeps_it(
@@ -334,6 +467,7 @@ async def test_the_last_readout_waits_in_needs_you_and_one_click_keeps_it(
 ) -> None:
     released = await won_day_7(cockpit)
     later_signals(cockpit, 1, age_days=1, tag="late")
+    read_sources(cockpit, released + 29 * DAY)
 
     await write(cockpit, released + 29 * DAY)
 
@@ -418,6 +552,7 @@ async def test_iterate_closes_the_bet_and_the_opportunity_falls_back_to_its_evid
     later_signals(cockpit, 5, age_days=4)  # as many after as before: flat
     file_bet(cockpit, plan={"measurement": {"method": "signal_trend", "readout_days": [7]}})
     release(cockpit, now() - 8 * DAY)
+    read_sources(cockpit, now())
     await write(cockpit, now())
     assert (readout(cockpit, 7).verdict, status(cockpit)) == ("flat", "measured")
 
@@ -435,6 +570,7 @@ async def test_extend_adds_one_later_readout_once(cockpit: Cockpit) -> None:
     file_bet(cockpit, plan=plan)
     released = now() - 8 * DAY
     release(cockpit, released)
+    read_sources(cockpit, now())
     await write(cockpit, now())
     assert readout(cockpit, 7).recommendation == "extend"
 
@@ -447,6 +583,7 @@ async def test_extend_adds_one_later_readout_once(cockpit: Cockpit) -> None:
         released + 14 * DAY,
         True,
     )
+    read_sources(cockpit, released + 15 * DAY)
     await write(cockpit, released + 15 * DAY)
     day14 = readout(cockpit, 14)
     assert (day14.verdict, day14.recommendation) == ("inconclusive", "iterate")
@@ -486,6 +623,76 @@ async def test_a_persons_verdict_waits_for_an_answer_with_a_reason(cockpit: Cock
     assert twice.status_code == 409 and error_code(twice) == "already_answered"
 
 
+async def test_a_decision_is_reopened_within_ten_minutes_or_by_an_owner(cockpit: Cockpit) -> None:
+    await won_day_7(cockpit)
+    kept = await decide(cockpit, "C-1-d7", {"decision": "keep"}, user="carol")
+    assert kept.status_code == 200, kept.text
+    assert (readout(cockpit, 28).status, status(cockpit)) == ("cancelled", "kept")
+
+    resp = await cockpit.post(base(cockpit, "/readouts/C-1-d7/reopen"), {}, user="carol")
+
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert (body["status"], body["decision"], body["reopened"][0]["decision"]) == (
+        "written",
+        None,
+        "keep",
+    )
+    assert readout(cockpit, 28).status == "scheduled"
+    assert status(cockpit) == "measured"
+    [event] = cockpit.events("readout.reopened")
+    assert event.data["restored"] == ["C-1-d28"]
+    again = await cockpit.post(base(cockpit, "/readouts/C-1-d7/reopen"), {}, user="carol")
+    assert again.status_code == 409 and error_code(again) == "not_decided"
+
+    # Decided again, then reopened later: only an owner may.
+    kept_again = await decide(cockpit, "C-1-d7", {"decision": "keep"}, user="carol")
+    assert kept_again.status_code == 200, kept_again.text
+    cockpit.store.update_readout(cockpit.fid, readout(cockpit, 7).id, decided_at=now() - 700)
+    late = await cockpit.post(base(cockpit, "/readouts/C-1-d7/reopen"), {}, user="carol")
+    owner = await cockpit.post(base(cockpit, "/readouts/C-1-d7/reopen"), {}, user="alice")
+
+    assert late.status_code == 403 and error_code(late) == "owners_only"
+    assert owner.status_code == 200, owner.text
+    assert len(readout(cockpit, 7).review["reopened"]) == 2
+
+
+async def test_an_eval_factory_leaves_did_it_help_to_a_person(cockpit: Cockpit) -> None:
+    from omnigent.server.factory import eval_mode
+
+    cockpit.world.store.set_labels(cockpit.fid, {F.LABEL_MODE: F.MODE_EVAL})
+    seeded(cockpit)
+    file_bet(cockpit, plan={"measurement": {"method": "human_verdict", "readout_days": [7]}})
+    t = now()
+    release(cockpit, t - 600)
+    await readouts.tick(cockpit.app.state, cockpit.fid, now=t)
+    day7 = readout(cockpit, 7)
+    question = cockpit.store.get_decision(day7.decision_id)
+    assert question is not None and not any(o.get("recommended") for o in question.options)
+
+    answered = await eval_mode.auto_answer(
+        cockpit.app.state, cockpit.fid, question.created_at + eval_mode.ANSWER_AFTER_S + 1
+    )
+
+    assert question.ref not in answered
+    still = cockpit.store.get_decision(question.id)
+    assert still is not None and still.status == "open"
+    assert readout(cockpit, 7).status == "awaiting_answer"
+
+
+async def test_waiting_counts_each_open_question_once(cockpit: Cockpit) -> None:
+    released = await won_day_7(cockpit)
+    lost = await decide(cockpit, "C-1-d7", {"guardrails_broken": ["support load (sample)"]})
+    assert lost.status_code == 200, lost.text
+    read_sources(cockpit, released + 29 * DAY)
+    await write(cockpit, released + 29 * DAY)
+
+    summary = readouts.summary_fields(cockpit.deps, cockpit.fid, now=now())
+
+    # Day 7's question closed when day 28 came in: one bet, one question.
+    assert summary["readouts"]["waiting"] == 1
+
+
 async def test_an_eval_factory_reads_out_in_minutes(cockpit: Cockpit) -> None:
     cockpit.world.store.set_labels(cockpit.fid, {F.LABEL_MODE: F.MODE_EVAL})
     t = now()
@@ -502,6 +709,7 @@ async def test_an_eval_factory_reads_out_in_minutes(cockpit: Cockpit) -> None:
     released = t - 600
     [row] = release(cockpit, released)
     assert row.due_at == released + 7 * readouts.EVAL_DAY_S
+    read_sources(cockpit, t - 60, ("repo-issues",))
 
     done = await readouts.tick(cockpit.app.state, cockpit.fid, now=t)
 
@@ -522,7 +730,7 @@ def test_every_readout_write_route_requires_human_origin() -> None:
         for route in readouts_api.router.routes
         if isinstance(route, APIRoute) and route.methods & {"POST", "PUT", "PATCH", "DELETE"}
     ]
-    assert len(writes) == 2
+    assert len(writes) == 3
     for route in writes:
         calls = [dep.call for dep in route.dependant.dependencies]
         assert require_human_origin in calls, route.path

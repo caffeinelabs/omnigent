@@ -167,8 +167,8 @@ def _definition_body(deps: Any, root: Any, app_state: Any) -> dict[str, Any]:
             path: {"numbered": spec.prefix} for path, spec in definition.blocks.LISTS.items()
         },
         "owner_only": list(definition.OWNER_ONLY_PREFIXES),
-        "not_trialable": list(definition.not_trialable_table()),
-        "not_trialable_why": definition.not_trialable_table(),
+        "not_trialable": list(definition.not_trialable_table(root.id)),
+        "not_trialable_why": definition.not_trialable_table(root.id),
         "trial_windows_h": {
             definition.GUARDS_DELIVERY: [
                 definition.TRIAL_H_MIN,
