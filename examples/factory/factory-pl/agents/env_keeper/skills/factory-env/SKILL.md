@@ -13,7 +13,7 @@ project's GitHub repo: `environment.repo` (below), else
 
 This skill is the factory's env protocol. The facts of this product's env
 are data in its environment profile: `sys_factory_rules()` returns them as
-`environment` (call it on your first turn and after a sandbox wake):
+`environment` (call it at the start of every command; owners change it):
 `summary` (how the dev env starts), `services` (each `{id, name, port,
 health}`: `id` is its key in `urls`, `name` its Deployment and Service in the
 env namespace), `tooling` (where the env tooling lives and known tooling

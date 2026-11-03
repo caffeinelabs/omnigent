@@ -17,7 +17,10 @@ secret and the session tokens.
 
 The harness ships in this skill's `harness/` directory, inside the agent
 bundle the runner unpacked under the temp directory. Copy it to
-`~/factory/demo-harness` (on the PVC):
+`~/factory/demo-harness` (on the PVC). When Claude Code showed the skill's
+base directory, set `SRC=<base>/harness` in place of the `find` line: that is
+the harness of the skill you are reading, while the newest one under the temp
+directory may come from another bundle version.
 
 ```bash
 SRC=$(dirname "$(find "${TMPDIR:-/tmp}" /tmp -path '*/skills/factory-demo/harness/run.mjs' \
@@ -27,9 +30,6 @@ H=~/factory/demo-harness
 mkdir -p "$H"
 diff -rq -x node_modules -x .install.lock "$SRC" "$H" >/dev/null 2>&1 || cp -R "$SRC"/. "$H"/
 ```
-
-If Claude Code showed the skill's base directory, set `SRC=<base>/harness`
-instead of the `find`.
 
 `run.mjs` runs `npm ci` (pinned `@playwright/test@1.56.1`; one demo agent
 at a time, under `.install.lock`) and picks the
@@ -45,7 +45,8 @@ The PL's DEMO command gives `pr`, `sha` (40 chars), `app`, `api`,
 `secret_file` (`~/factory/previews/p<n>/synthetic-secret`) and `focus`.
 
 The product's own demo facts come from its environment profile:
-`sys_factory_rules()` returns `environment` (call it once per session).
+`sys_factory_rules()` returns `environment` (call it at the start of every
+DEMO command; owners change it).
 `environment.demo` (`{"storage": {…}, "clear": […]}`) is how the app keeps a
 signed-in session in the browser: pass it verbatim as `--storage '<json>'`
 to `run.mjs` and to `explore.mjs --login` (leave the flag out when

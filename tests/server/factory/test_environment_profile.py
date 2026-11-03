@@ -248,7 +248,12 @@ def test_the_seed_is_a_valid_block() -> None:
         ({"pull_secret": "Pull Secret"}, "Kubernetes name"),
         ({"registry": "https://registry.example.com"}, "a domain"),
         ({"protected_branches": ["-f"]}, "branch name"),
+        # The guards compare branch names exactly: a glob would protect nothing.
+        ({"protected_branches": ["release/*"]}, "no globs"),
         ({"demo": {"storage": {"a b": "x"}}}, "storage key"),
+        # The demo agent passes the storage in single quotes on a shell line.
+        ({"demo": {"storage": {"mode": "it's $(id)"}}}, "storage value"),
+        ({"demo": {"storage": {"mode": "two words"}}}, "storage value"),
         ({"demo": {"storage": {"token": "ghp_" + "a" * 36}}}, "secret"),
         ({"notes": ["log in with https://user:hunter2@registry.example.com"]}, "secret"),
         ({"repo": "not a repo"}, "owner/name"),
@@ -513,7 +518,8 @@ async def test_an_environment_change_reaches_each_pl_and_its_sub_agents(cockpit:
     events = cockpit.store.list_events(cockpit.fid, limit=50, kinds=["control.charter_update"])
     assert [e.data["fields"] for e in events] == [["environment"]]
 
-    # A fact no charter shows (env_keeper's notes) mails no PL: env_keeper reads it on demand.
+    # A fact no charter shows (env_keeper's notes) mails no PL: env_keeper and the demo
+    # agent read sys_factory_rules() at the start of every command.
     before = len(cockpit.mailer.texts_to(pl))
     resp = await put(cockpit, {"op": "replace", "path": "environment.notes", "value": ["n"]})
     assert resp.status_code == 200, resp.text

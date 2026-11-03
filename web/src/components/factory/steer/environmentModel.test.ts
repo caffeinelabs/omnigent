@@ -4,6 +4,8 @@ import {
   formatServices,
   formatStorage,
   parseBranches,
+  parseImage,
+  parseK8sName,
   parseKeys,
   parseLines,
   parseServices,
@@ -32,8 +34,19 @@ describe("environment profile text forms", () => {
     expect(parseServices("api = a:1\napi = b:2")).toEqual({ error: "api is listed twice" });
     expect(parseStorage("no equals sign")).toHaveProperty("error");
     expect(parseBranches("-f")).toHaveProperty("error");
+    // The guards compare branch names exactly: a glob would protect nothing.
+    expect(parseBranches("develop, release/*")).toHaveProperty("error");
     expect(parseKeys("a b")).toHaveProperty("error");
     expect(parseLines("x".repeat(201))).toHaveProperty("error");
+    // The demo agent passes the storage in single quotes on a shell line.
+    expect(parseStorage("mode = it's $(id)")).toHaveProperty("error");
+    expect(parseStorage("mode = two words")).toHaveProperty("error");
+    expect(parseImage("ghcr.io/sample-org/db:latest")).toHaveProperty("error");
+    expect(parseImage("ghcr.io/sample-org/db")).toEqual({ value: "ghcr.io/sample-org/db" });
+    expect(parseImage(" ")).toEqual({ value: null });
+    expect(parseK8sName("Pull Secret")).toHaveProperty("error");
+    expect(parseK8sName("registry-pull")).toEqual({ value: "registry-pull" });
+    expect(parseK8sName("")).toEqual({ value: null });
   });
 
   it("keeps a fact's commas and a value's equals signs", () => {
@@ -44,7 +57,7 @@ describe("environment profile text forms", () => {
     const storage = parseStorage("userId = {user_id}\nquery = a=b");
     expect(storage).toEqual({ value: { userId: "{user_id}", query: "a=b" } });
     expect(formatStorage({ userId: "{user_id}" })).toBe("userId = {user_id}");
-    expect(parseBranches("develop, release/*")).toEqual({ value: ["develop", "release/*"] });
+    expect(parseBranches("develop, release/2026")).toEqual({ value: ["develop", "release/2026"] });
   });
 
   it("lives in Steer's product section", () => {

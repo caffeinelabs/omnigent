@@ -865,16 +865,19 @@ carry: `repo` (the repo whose projects run it; unset: every project's),
 Service), `tooling` (where the env tooling lives, known tooling fixes),
 `registry`, `base_image`, `pull_secret`, `notes[]` (for env_keeper),
 `conventions[]` (repo conventions builders follow), `protected_branches[]`
-and `demo` {`storage`, `clear`} (how the app keeps a demo's synthetic session
-in localStorage; `{user_id}` stands for the signed-in user). The bundles keep
+(literal names: the guards compare them exactly, so a glob is refused) and
+`demo` {`storage`, `clear`} (how the app keeps a demo's synthetic session in
+localStorage; `{user_id}` stands for the signed-in user; values are
+shell-safe, since the demo agent passes them in single quotes). The bundles keep
 the factory's env protocol (the `factory:*` scripts, `env.json` and
 `preview.json`, the verify marker) and read the rest: the PL's charter
 renders an `Environment` block (dev env, services with the in-cluster check
 form, tooling, conventions, protected branches) for projects on its repo,
 every task card a `Repo conventions:` line, and `sys_factory_rules()` returns
 the block in full as `environment` (null when it does not apply to the
-caller's project repo), which env_keeper and the demo agent read on their
-first turn. Its protected branches join the guards' defaults (`main`,
+caller's project repo), which env_keeper and the demo agent read at the
+start of every command (most fields are on no charter, so no CHARTER UPDATE
+announces them). Its protected branches join the guards' defaults (`main`,
 `master`, `staging`) as `factory_protected_branches`. Only owners change it
 (no agent seat may propose it, since its facts reach shell commands), as a
 version, never a trial ("facts, not a way of working"); a change that moves
@@ -887,7 +890,11 @@ their defaults, and role defaults that set only the `ic`, `reviewer` or
 `planner` model alias are stored as the old `models` block. A server from
 before the blocks therefore still reads every version of a factory that has
 not used them; rolling back past them for a factory that has needs a reader
-that ignores unknown blocks.
+that ignores unknown blocks. Such a server still reads that factory (it falls
+back block by block), but it cannot write its definition: restore the last
+version without the block first (Versions › Restore). The environment boot
+seed stores the block at once for a factory on a seeded repo, so after such a
+rollback an owner restores the version before the seed.
 
 **Teams** are a block too (`team_spec.py`, `team.py`). `team.templates[]` are
 named shapes (`standard`, every agent of the PL bundle, is the default a new

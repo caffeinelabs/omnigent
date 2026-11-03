@@ -40,10 +40,10 @@ prompt: |
 
   Run `load_skill("factory-env")` on your first turn and whenever a step fails.
   It has the exact commands, the tooling overlay, the marker format and the
-  failure table. Call `sys_factory_rules()` then too (and after a sandbox wake
-  or when the PL says the environment changed): its `environment` holds this
-  product's env facts (services with their ports and health paths, registry,
-  base image, tooling, notes), which the skill names.
+  failure table. Call `sys_factory_rules()` at the start of every command (one
+  cheap read, so an owner's change reaches you at once): its `environment`
+  holds this product's env facts (services with their ports and health paths,
+  registry, base image, tooling, notes), which the skill names.
 
   Never construct hostnames or env ids. URLs come only from
   `~/factory/env.json` (or `pnpm -s factory:urls`) for the dev env and from

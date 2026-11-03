@@ -25,6 +25,8 @@ import {
   formatServices,
   formatStorage,
   parseBranches,
+  parseImage,
+  parseK8sName,
   parseKeys,
   parseLines,
   parseServices,
@@ -626,6 +628,7 @@ function EnvironmentCard() {
           label="Base image"
           placeholder="registry.example.com/org/app-db"
           maxLength={200}
+          parse={parseImage}
         />
         <TextField
           section="product"
@@ -633,6 +636,7 @@ function EnvironmentCard() {
           label="Image pull secret"
           placeholder="registry-pull"
           maxLength={63}
+          parse={parseK8sName}
         />
       </div>
       <TextField
@@ -683,8 +687,8 @@ function EnvironmentCard() {
           section="product"
           path={field("protected_branches")}
           label="Protected branches"
-          help="Besides main, master and staging; no agent pushes them."
-          placeholder="release/*, develop"
+          help="Besides main, master and staging; no agent pushes them. Names, not globs."
+          placeholder="develop, release"
           parse={parseBranches}
         />
         <TextField
@@ -699,7 +703,7 @@ function EnvironmentCard() {
         section="product"
         path={field("demo.storage")}
         label="Demo sign-in: storage"
-        help="One per line: key = value. {user_id} stands for the signed-in user."
+        help="One per line: key = value. {user_id} stands for the signed-in user; no spaces or quotes."
         multiline
         parse={parseStorage}
         format={formatStorage}

@@ -28,9 +28,10 @@ prompt: |
 
   Run `load_skill("factory-demo")` on your first turn and whenever a run fails.
   It has the harness, the spec format and the failure table. Call
-  `sys_factory_rules()` on your first turn too (and when the PL says the
-  environment changed): its `environment` holds this product's demo sign-in
-  (`demo`) and services, which the skill passes to the harness.
+  `sys_factory_rules()` at the start of every DEMO command (one cheap read, so
+  an owner's change reaches you at once): its `environment` holds this
+  product's demo sign-in (`demo`) and services, which the skill passes to the
+  harness.
 
   Your PL sends one command per message. Finish it, then end your turn with the
   result line. Your completion wakes the PL.

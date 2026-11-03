@@ -254,8 +254,11 @@ class ProductDef(_Block):
 _K8S_NAME_RE: Final = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 _HEALTH_RE: Final = re.compile(r"^/[A-Za-z0-9._~/%+-]{0,199}$")
 _IMAGE_RE: Final = re.compile(r"^[a-z0-9.-]+(:[0-9]{1,5})?(/[a-z0-9._-]+){1,6}$")
-_PROTECTED_BRANCH_RE: Final = re.compile(r"^(?![-./])(?!.*\.\.)(?!.*//)[A-Za-z0-9._/*-]{1,200}$")
+# A literal name: the guards compare branches exactly, so a glob would protect nothing.
+_PROTECTED_BRANCH_RE: Final = re.compile(r"^(?![-./])(?!.*\.\.)(?!.*//)[A-Za-z0-9._/-]{1,200}$")
 _STORAGE_KEY_RE: Final = re.compile(r"^[A-Za-z0-9_.:-]{1,64}$")
+# The demo agent passes the storage as JSON in single quotes on a shell line.
+_STORAGE_VALUE_RE: Final = re.compile(r"^[A-Za-z0-9_.:@{}/=+-]{0,200}$")
 USER_ID: Final = "{user_id}"
 """Stands for the signed-in user's id in a demo storage value."""
 
@@ -280,13 +283,21 @@ def _image(value: str | None) -> str | None:
 
 def _branch(value: str) -> str:
     if not _PROTECTED_BRANCH_RE.match(value):
-        raise ValueError("a branch name or a glob such as release/*")
+        raise ValueError("a branch name such as develop or release/2026 (no globs)")
     return value
 
 
 def _storage_key(value: str) -> str:
     if not _STORAGE_KEY_RE.match(value):
         raise ValueError("a storage key: letters, digits and _ . : - (≤ 64)")
+    return value
+
+
+def _storage_value(value: str) -> str:
+    if not _STORAGE_VALUE_RE.match(value):
+        raise ValueError(
+            "a storage value: letters, digits and _ . : @ { } / = + - (no spaces or quotes)"
+        )
     return value
 
 
@@ -301,7 +312,9 @@ HealthPath = Annotated[str | None, AfterValidator(_health)]
 Fact = Annotated[str, _strip(200, 1), AfterValidator(_no_secret)]
 Facts = Annotated[str, _strip(500), AfterValidator(_no_secret)]
 StorageKey = Annotated[str, AfterValidator(_storage_key)]
-StorageValue = Annotated[str, _strip(200), AfterValidator(_no_secret)]
+StorageValue = Annotated[
+    str, _strip(200), AfterValidator(_storage_value), AfterValidator(_no_secret)
+]
 
 
 class ServiceDef(_Block):
@@ -324,7 +337,8 @@ class DemoAuthDef(_Block):
     How the app keeps a demo's synthetic session in the browser.
 
     :param storage: ``localStorage`` entries set after the synthetic login;
-        ``{user_id}`` in a value stands for the signed-in user's id.
+        ``{user_id}`` in a value stands for the signed-in user's id. Values
+        are shell-safe: the demo agent passes them in single quotes.
     :param clear: ``localStorage`` keys removed before them.
     """
 
@@ -343,7 +357,8 @@ class EnvironmentDef(_Block):
     :param tooling: Where the env tooling lives (since when the base has it, known fixes).
     :param notes: Facts env_keeper reads before it fixes a failed env.
     :param conventions: Repo conventions every builder follows (on every task card).
-    :param protected_branches: Branches no agent pushes, besides the guards' defaults.
+    :param protected_branches: Branches no agent pushes, besides the guards'
+        defaults: literal names, since the guards compare them exactly.
     """
 
     repo: Repo | None = None

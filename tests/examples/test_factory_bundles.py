@@ -827,6 +827,25 @@ def test_env_keeper_reports_the_dev_env_urls_without_tilt(pl: AgentSpec) -> None
     assert "`urls` (`app`, `api`, `minio`). Read it" in protocol
 
 
+def test_env_keeper_and_demo_read_the_environment_at_every_command(pl: AgentSpec) -> None:
+    """
+    An owner's environment change reaches them without a relaunch.
+
+    Most environment fields (demo storage, registry, notes) are on no charter,
+    so no CHARTER UPDATE announces them: the agents that use them read
+    ``sys_factory_rules()`` at the start of every command instead of once.
+    """
+    for name, skill, phrase in (
+        ("env_keeper", "factory-env", "at the start of every command"),
+        ("demo", "factory-demo", "at the start of every DEMO command"),
+    ):
+        agent = _sub_agent(pl, name)
+        prompt = " ".join((agent.instructions or "").split())
+        assert f"`sys_factory_rules()` {phrase}" in prompt, name
+        text = (_skill_dir(agent) / skill / "SKILL.md").read_text(encoding="utf-8")
+        assert f"call it {phrase}" in " ".join(text.split()), skill
+
+
 def test_env_build_failures_suspect_the_stale_base_image_first(pl: AgentSpec) -> None:
     """Files deleted since the base image survive the overlay: check the tooling before anyone
     asks humans to publish a fresh image."""

@@ -232,28 +232,43 @@ export const ProductProfileEmpty = steer("/steer/product", {
   proposals: [],
 });
 
-/** The environment profile, scrolled into view, with a protected branch staged. */
-function environment(options: SteerStoryOptions = {}): Story {
-  const story = steer("/steer/product", {
-    proposals: [],
-    staging: () =>
-      stageEdit(
-        EMPTY_STEER,
-        replaceEdit(
-          "product",
-          "environment.protected_branches",
-          "Protected branches",
-          doc().environment!.protected_branches,
-          ["develop", "release/*"],
-        ),
-      ),
-    ...options,
-  });
+const branchStaged = () =>
+  stageEdit(
+    EMPTY_STEER,
+    replaceEdit(
+      "product",
+      "environment.protected_branches",
+      "Protected branches",
+      doc().environment!.protected_branches,
+      ["develop", "release"],
+    ),
+  );
+
+/**
+ * The environment profile, scrolled into view (a protected branch staged
+ * unless `options` stage something else). `typed` lines go into the services
+ * and demo storage fields, as an owner would type them.
+ */
+function environment(
+  options: SteerStoryOptions = {},
+  typed?: { services: string; storage: string },
+): Story {
+  const story = steer("/steer/product", { proposals: [], staging: branchStaged, ...options });
   return {
     ...story,
     play: async ({ canvasElement }) => {
       const body = within(canvasElement.ownerDocument.body);
-      (await body.findByTestId("steer-environment")).scrollIntoView({ block: "start" });
+      // The page reads its definition first: allow it a few seconds.
+      const card = await body.findByTestId("steer-environment", {}, { timeout: 6000 });
+      if (typed) {
+        const services = await body.findByTestId("steer-input-environment.services");
+        await userEvent.clear(services);
+        await userEvent.type(services, typed.services);
+        const storage = await body.findByTestId("steer-input-environment.demo.storage");
+        await userEvent.clear(storage);
+        await userEvent.type(storage, typed.storage);
+      }
+      card.scrollIntoView({ block: "start" });
     },
   };
 }
@@ -263,6 +278,63 @@ export const ProductProfileEnvironment = environment();
 export const ProductProfileEnvironmentLight = environment(light);
 
 export const ProductProfileEnvironmentMobile = phone(environment());
+
+/** No seed for this factory's repo: every field empty, ready for an owner to fill in. */
+export const ProductProfileEnvironmentEmpty = environment({
+  noEnvironment: true,
+  staging: undefined,
+});
+
+export const ProductProfileEnvironmentEmptyMobile = phone(
+  environment({ noEnvironment: true, staging: undefined }),
+);
+
+/** A viewer reads the facts but changes nothing. */
+export const ProductProfileEnvironmentViewer = environment({
+  role: "viewer",
+  staging: undefined,
+});
+
+/** A viewer of a factory with no seed: each fact reads "(none)". */
+export const ProductProfileEnvironmentViewerEmptyLight = environment({
+  ...light,
+  role: "viewer",
+  noEnvironment: true,
+  staging: undefined,
+});
+
+/**
+ * An owner types a service without its port and a storage value with a quote:
+ * each field says what is wrong, and only the last valid text is staged.
+ */
+export const ProductProfileEnvironmentInvalid = environment(
+  {
+    staging: undefined,
+    // The server's preview of what the typing stages (the last valid text of each field).
+    preview: autoPreview(
+      stageEdit(
+        stageEdit(
+          EMPTY_STEER,
+          replaceEdit(
+            "product",
+            "environment.services",
+            "Services",
+            doc().environment!.services,
+            doc().environment!.services.slice(0, 1),
+          ),
+        ),
+        replaceEdit(
+          "product",
+          "environment.demo.storage",
+          "Demo sign-in: storage",
+          doc().environment!.demo.storage,
+          { mode: "it" },
+        ),
+      ),
+    ),
+  },
+  { services: "app = sample-ux:3000\napi = sample-api /ready", storage: "mode = it's on" },
+);
 
 // ── Sources ────────────────────────────────────────────────────
 

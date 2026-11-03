@@ -12,7 +12,12 @@ type Parsed = { value: unknown } | { error: string };
 const SERVICE_RE =
   /^([a-z][a-z0-9_-]{0,31})\s*=\s*([a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?):(\d{1,5})(?:\s+(\/[A-Za-z0-9._~/%+-]{0,199}))?$/;
 const STORAGE_KEY_RE = /^[A-Za-z0-9_.:-]{1,64}$/;
-const BRANCH_RE = /^(?![-./])(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._/*-]{1,200}$/;
+// Shell-safe: the demo agent passes the storage in single quotes.
+const STORAGE_VALUE_RE = /^[A-Za-z0-9_.:@{}/=+-]{0,200}$/;
+// A literal name: the guards compare branches exactly, so a glob would protect nothing.
+const BRANCH_RE = /^(?![-./])(?!.*\.\.)(?!.*\/\/)[A-Za-z0-9._/-]{1,200}$/;
+const K8S_NAME_RE = /^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$/;
+const IMAGE_RE = /^[a-z0-9.-]+(:[0-9]{1,5})?(\/[a-z0-9._-]+){1,6}$/;
 
 function lines(text: string): string[] {
   return text
@@ -59,7 +64,13 @@ export function parseStorage(text: string): Parsed {
     if (!STORAGE_KEY_RE.test(key)) {
       return { error: `"${line}": one entry per line, as key = value` };
     }
-    out[key] = line.slice(at + 1).trim();
+    const value = line.slice(at + 1).trim();
+    if (!STORAGE_VALUE_RE.test(value)) {
+      return {
+        error: `"${line}": a value has letters, digits and _ . : @ { } / = + - (no spaces or quotes)`,
+      };
+    }
+    out[key] = value;
   }
   return { value: out };
 }
@@ -77,7 +88,7 @@ export function parseLines(text: string): Parsed {
     : { value: out };
 }
 
-/** Branch names or globs, comma separated. */
+/** Branch names (no globs), comma separated. */
 export function parseBranches(text: string): Parsed {
   const out = text
     .split(/[,\n]/)
@@ -85,8 +96,26 @@ export function parseBranches(text: string): Parsed {
     .filter(Boolean);
   const bad = out.find((b) => !BRANCH_RE.test(b));
   return bad
-    ? { error: `${bad} is not a branch name or a glob such as release/*` }
+    ? { error: `${bad} is not a branch name such as develop or release/2026 (no globs)` }
     : { value: out };
+}
+
+/** An image without its tag, e.g. `registry.example.com/org/app-db`; empty is none. */
+export function parseImage(text: string): Parsed {
+  const t = text.trim();
+  if (!t) return { value: null };
+  return IMAGE_RE.test(t)
+    ? { value: t }
+    : { error: "An image without its tag, e.g. registry.example.com/org/app-db" };
+}
+
+/** A Kubernetes name (a Secret in the env namespace); empty is none. */
+export function parseK8sName(text: string): Parsed {
+  const t = text.trim();
+  if (!t) return { value: null };
+  return K8S_NAME_RE.test(t)
+    ? { value: t }
+    : { error: "A Kubernetes name: a-z, 0-9 and -, e.g. registry-pull" };
 }
 
 /** Storage keys, comma separated. */

@@ -185,7 +185,7 @@ def protected_branches(deps: FactoryDeps, factory_id: str) -> frozenset[str]:
     Resolves the definition directly, so a store or definition error raises
     and the caller fails closed.
 
-    :returns: e.g. ``frozenset({"release/*"})``.
+    :returns: e.g. ``frozenset({"develop"})``.
     """
     from omnigent.server.factory import definition
 
