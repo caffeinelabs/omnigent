@@ -282,10 +282,8 @@ guardrails:
         arguments:
           max_dispatches_per_turn: 8
           dispatch_tools: [sys_session_send, sys_session_create]
-    team_guard:
-      type: function
-      function:
-        path: omnigent.policies.builtins.factory_team.factory_team_guard
-        # No arguments: it allows everything until the server arms it with
-        # this project's team (OMNIGENT_FACTORY_TEAM_SPEC=enforce).
-        arguments: {}
+    # team_guard (omnigent.policies.builtins.factory_team.factory_team_guard)
+    # is held out of the bundle until every PL pod runs a sandbox host image
+    # that ships the module: a runner that cannot resolve a policy path denies
+    # every tool call. Add it back (arguments: {}) before turning on
+    # OMNIGENT_FACTORY_TEAM_SPEC=enforce.
