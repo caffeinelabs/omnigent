@@ -6,6 +6,7 @@ import type { ProposalView, ViewerRole } from "@/lib/factoryApi";
 import { FactoryNowContext } from "../factoryClock";
 import { proposalInState } from "../room/__fixtures__/roomFixtures";
 import { round3Snapshot, viewerOf } from "../shell/__fixtures__/shellFixtures";
+import { FactoryShellContext, type FactoryShellValue } from "../shell/FactoryShellContext";
 import { FactoryViewerProvider } from "../shell/viewerCan";
 import { ProposalCard } from "./ProposalCard";
 
@@ -55,15 +56,30 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+/** Only the cockpit around the card matters to it. */
+const SHELL = {
+  classic: { cockpit: "classic" } as FactoryShellValue,
+  v2: { cockpit: "v2" } as FactoryShellValue,
+};
+
 function renderCard(
   proposal: ProposalView,
-  { role = "creator", pinned = true }: { role?: ViewerRole; pinned?: boolean } = {},
+  {
+    role = "creator",
+    pinned = true,
+    cockpit,
+  }: { role?: ViewerRole; pinned?: boolean; cockpit?: "classic" | "v2" } = {},
 ) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
-  const card = (
+  const inner = (
     <FactoryViewerProvider viewer={viewerOf(role)}>
       <ProposalCard factoryId={FID} proposal={proposal} snapshot={round3Snapshot()} />
     </FactoryViewerProvider>
+  );
+  const card = cockpit ? (
+    <FactoryShellContext.Provider value={SHELL[cockpit]}>{inner}</FactoryShellContext.Provider>
+  ) : (
+    inner
   );
   return render(
     <QueryClientProvider client={client}>
@@ -269,5 +285,26 @@ describe("Undo countdown", () => {
     fireEvent.click(screen.getByTestId("proposal-undo-C-4"));
     await waitFor(() => expect(card()).toHaveAttribute("data-state", "undone"));
     expect(calls.find((c) => c.path === `${BASE}/undo`)?.method).toBe("POST");
+  });
+});
+
+describe("ProposalCard origin", () => {
+  it("says in the new cockpit where the work comes from: a person's request", () => {
+    renderCard(proposalInState("pending"), { cockpit: "v2" });
+    expect(screen.getByTestId("proposal-origin-C-4")).toHaveTextContent(
+      /^No user evidence · requested by \w+ · not measured$/,
+    );
+  });
+
+  it("names an agent's own idea, counted as a hunch", () => {
+    renderCard({ ...proposalInState("pending"), on_behalf_of: null }, { cockpit: "v2" });
+    expect(screen.getByTestId("proposal-origin-C-4")).toHaveTextContent(
+      "own idea, counted as a hunch",
+    );
+  });
+
+  it("leaves the classic cockpit's card as it was", () => {
+    renderCard(proposalInState("pending"), { cockpit: "classic" });
+    expect(screen.queryByTestId("proposal-origin-C-4")).toBeNull();
   });
 });

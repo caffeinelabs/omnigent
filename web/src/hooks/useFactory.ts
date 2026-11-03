@@ -75,6 +75,14 @@ export const factorySpansQueryKey = (
  * when they carry the `definition` scope, so their stale time holds otherwise.
  */
 export const factoryTeamQueryKey = (factoryId: string) => ["factory-team", factoryId] as const;
+/**
+ * Discovery's costly reads (the signal queues, readouts, a source's log, the
+ * open proposals): full frames refresh them only with the `discovery`,
+ * `proposals` or `definition` scope.
+ */
+export const factoryDiscoveryQueryKey = (factoryId: string) =>
+  ["factory-discovery", factoryId] as const;
+const DISCOVERY_SCOPES = new Set(["discovery", "proposals", "definition"]);
 export const FACTORIES_QUERY_KEY = ["factories"] as const;
 export const FACTORY_DECISIONS_QUERY_KEY = ["factory-decisions"] as const;
 export const FACTORY_PREFLIGHT_QUERY_KEY = ["factory-preflight"] as const;
@@ -121,6 +129,9 @@ export function factoryInvalidationKeys(
     FACTORY_DECISIONS_QUERY_KEY,
     // A frame without scopes (a local write) may have changed anything.
     ...(!scopes?.length || scopes.includes("definition") ? [factoryTeamQueryKey(factoryId)] : []),
+    ...(!scopes?.length || scopes.some((s) => DISCOVERY_SCOPES.has(s))
+      ? [factoryDiscoveryQueryKey(factoryId)]
+      : []),
   ];
 }
 

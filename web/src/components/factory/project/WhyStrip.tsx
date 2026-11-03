@@ -23,6 +23,8 @@ function sentence(why: ProjectWhy): string {
       return `Requested${by ? ` by ${by}` : ""}. No user evidence. ${why.measured ? "Measured after release." : "Not measured."}`;
     case "stopped":
       return why.text;
+    case "evidence":
+      return `From user evidence${why.opportunity ? ` (${why.opportunity})` : ""}. ${why.measured ? "Measured after release." : "Not measured yet."}`;
     default:
       return "";
   }
@@ -73,7 +75,7 @@ export function WhyStrip({
         >
           Why it exists
         </h2>
-        {said && why.kind !== "evidence" && why.kind !== "stopped" && (
+        {said && why.kind !== "stopped" && (
           <p data-testid="project-why-sentence" className="text-sm text-muted-foreground">
             {said}
           </p>
