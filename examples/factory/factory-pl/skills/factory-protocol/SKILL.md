@@ -119,7 +119,8 @@ The server also sends:
   it, then reply once as its text asks (`kind="reply"`). RULES UPDATE and
   TEAM UPDATE (below) take no reply.
 - `[Factory decision · D-<n> answered by <human> · "<option>"]`: the answer to
-  a `sys_factory_ask` question (or `… withdrawn`).
+  a `sys_factory_ask` question (or `… withdrawn`). A project change it calls
+  for carries `reply_to="D-<n>"` and applies at once: never ask twice.
 - `[Factory review · CHANGES REQUESTED on PR #<n> …]` or
   `[Factory review · APPROVED PR #<n> …]`: a human's review from the cockpit
   or GitHub.

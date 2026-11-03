@@ -94,6 +94,36 @@ export interface Ask {
   href: string;
 }
 
+/**
+ * Something the factory did on its own that a person can still undo: a
+ * projects proposal applied without a click (an autonomy level, a person's
+ * answer it carried out), for its Undo window. It needs nobody, so it never
+ * counts as an ask.
+ */
+export interface Fyi {
+  /** The proposal's ref, `C-16`. */
+  id: string;
+  subject: string;
+  ref: string;
+  title: string;
+  /** Why it applied at once: `for alice: their answer to D-42`, `autonomy: standard`. */
+  why: string;
+  project?: string | null;
+  since: number;
+  age_s: number;
+  /** When its Undo closes (epoch seconds). */
+  undo_until: number;
+  /** The viewer may undo it, and it still can be undone. */
+  can_undo: boolean;
+  /** Why there is no Undo although the window is open (a new project's lead started). */
+  note?: string | null;
+  /** The answer it carried out (`D-42`). */
+  decision?: string | null;
+  /** The autonomy level that let it apply (`standard`, `tryout`). */
+  level?: string | null;
+  href: string;
+}
+
 export interface AskCounts {
   /** Rows that need the viewer: the one Needs you count. */
   total: number;
@@ -103,6 +133,8 @@ export interface AskCounts {
   /** Agents' definition proposals that wait in Steer instead. */
   in_steer: number;
   folded: number;
+  /** FYI lines (never in `total`); absent from older servers. */
+  fyi?: number;
 }
 
 export interface AsksResponse {
@@ -111,6 +143,8 @@ export interface AsksResponse {
   asks: Ask[];
   /** "Handled by the factory" sentences. */
   handled: string[];
+  /** What the factory did on its own, Undo still open; absent from older servers. */
+  fyi?: Fyi[];
   counts: AskCounts;
 }
 

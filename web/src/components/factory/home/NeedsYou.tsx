@@ -4,7 +4,8 @@
  * more". Each row has a kind icon, one sentence, one line of context, its
  * facts (project, who asks, what waiting costs, age, deadline), a small id
  * link and its main button; a question is answered in place, with Undo.
- * Under it one calm line says what the factory handled itself. All | Mine
+ * Under it the FYI lines say what the factory did on its own that a person
+ * can still undo, and one calm line says what it handled itself. All | Mine
  * narrows it to what is assigned to the viewer by name.
  */
 
@@ -29,6 +30,7 @@ import { cn } from "@/lib/utils";
 import { FactoryLoadError } from "../FactoryLoadError";
 import { PlaceCount } from "../shell/FactoryTabs";
 import { FAINT_TEXT, FOCUS_RING, MEANING } from "../ui/statusTokens";
+import { FyiLines } from "./FyiLines";
 import { type NeedsFilter, askMeta, needsView } from "./homeModel";
 import type { DeferredAnswers } from "./useDeferredAnswers";
 
@@ -265,6 +267,8 @@ export interface NeedsYouProps {
   canAnswer: boolean;
   deferred: DeferredAnswers;
   onPeek: (peek: string) => void;
+  /** Undo an FYI line's proposal (`C-16`); without it the lines show no Undo. */
+  onUndo?: (ref: string) => Promise<void>;
   className?: string;
 }
 
@@ -279,6 +283,7 @@ export function NeedsYou({
   canAnswer,
   deferred,
   onPeek,
+  onUndo,
   className,
 }: NeedsYouProps) {
   const [filter, setFilter] = useState<NeedsFilter>("all");
@@ -396,6 +401,7 @@ export function NeedsYou({
           </button>
         </div>
       )}
+      <FyiLines fyi={asks?.fyi} nowS={nowS} onUndo={onUndo} />
       {handled.length > 0 && (
         <div
           data-testid="home-handled"

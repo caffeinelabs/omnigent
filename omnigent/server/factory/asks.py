@@ -41,6 +41,12 @@ dropping a measured bet, or answering "did it help?"), ``broken``
   or when it blocks something; proposals that change the sources, the
   product profile or the goals always show, since discovery waits on them.
 
+**FYI.** A projects proposal the factory applied without a person's click
+(an autonomy level let it through, it carried out a person's answer to a
+decision, a person asked for it in the Room) is an FYI line while its Undo is
+open (:func:`fyi_items`): it needs nobody, so it never counts, and it says why
+it applied at once and offers Undo.
+
 **Order.** By the cost of waiting (:func:`cost_of_waiting`): something
 broken first, then what blocks work, ready merges (more for each project
 they hold), deadlines that come soon, then the rest; the longest wait first
@@ -63,7 +69,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from omnigent.server.auth import LEVEL_EDIT
+from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE
 from omnigent.server.factory import issues
 from omnigent.server.factory import status_summary as summary_mod
 from omnigent.server.factory.auto_merge import AUTO_TEXT
@@ -233,6 +239,39 @@ class Ask(_Model):
     href: str
 
 
+class Fyi(_Model):
+    """
+    Something the factory did on its own that a person can still undo: a
+    projects proposal applied without a click (an autonomy level, a person's
+    answer it carried out, a request in the Room), for its Undo window. It
+    needs nobody, so it never counts as an ask.
+
+    :param id: The proposal's ref, e.g. ``C-16``.
+    :param why: Why it applied at once, in words, e.g. ``"for alice: their
+        answer to D-42"`` or ``"autonomy: standard"``.
+    :param undo_until: When its Undo closes (epoch seconds).
+    :param can_undo: The viewer may undo it (operators; owners for owner changes),
+        and it still can be: a new project whose lead started is cancelled instead.
+    :param note: Why there is no Undo although the window is open.
+    :param decision: The answer it carried out, e.g. ``D-42``.
+    """
+
+    id: str
+    subject: str
+    ref: str
+    title: str
+    why: str
+    project: str | None = None
+    since: int
+    age_s: int
+    undo_until: int
+    can_undo: bool = False
+    note: str | None = None
+    decision: str | None = None
+    level: str | None = None
+    href: str
+
+
 class AskCounts(_Model):
     """
     :param total: Rows that need the viewer (the one Needs you count).
@@ -240,6 +279,7 @@ class AskCounts(_Model):
     :param others: Rows that wait on other people.
     :param in_steer: Agents' definition proposals that wait in Steer, not here.
     :param folded: Incidents folded into another row.
+    :param fyi: FYI lines (never counted in ``total``).
     """
 
     total: int
@@ -247,15 +287,20 @@ class AskCounts(_Model):
     others: int = 0
     in_steer: int = 0
     folded: int = 0
+    fyi: int = 0
 
 
 class AsksResponse(_Model):
-    """``GET /v1/factory/factories/{fid}/asks``: the viewer's Needs you, costliest first."""
+    """
+    ``GET /v1/factory/factories/{fid}/asks``: the viewer's Needs you, costliest
+    first, then the FYI lines (newest first).
+    """
 
     factory_id: str
     generated_at: int
     asks: list[Ask]
     handled: list[str] = Field(default_factory=list)
+    fyi: list[Fyi] = Field(default_factory=list)
     counts: AskCounts
 
 
@@ -277,6 +322,8 @@ class AskInputs:
     :param owners: Project slug -> its ``human_owner`` on the roster.
     :param pending_sources: Discovery sources that wait for an owner's approval
         (``{id, label, kind, since}``, see :func:`.status_summary.pending_sources`).
+    :param fyi: Proposals the factory applied on its own, Undo still open
+        (:func:`.status_summary.fyi_rows`).
     """
 
     snapshot: Mapping[str, Any]
@@ -286,6 +333,7 @@ class AskInputs:
     proposals: Sequence[Mapping[str, Any]] = ()
     owners: Mapping[str, str] = field(default_factory=dict)
     pending_sources: Sequence[Mapping[str, Any]] = ()
+    fyi: Sequence[Mapping[str, Any]] = ()
 
     @classmethod
     def from_status(cls, inputs: summary_mod.StatusInputs) -> AskInputs:
@@ -298,6 +346,7 @@ class AskInputs:
             proposals=inputs.proposals,
             owners=inputs.owners,
             pending_sources=inputs.pending_sources,
+            fyi=inputs.fyi,
         )
 
 
@@ -1262,6 +1311,70 @@ def assemble(inputs: AskInputs, *, now: float) -> Assembled:
     )
 
 
+def _fyi_project(row: Mapping[str, Any]) -> str | None:
+    slugs = {
+        str(op.get("slug") or (op.get("project") or {}).get("slug") or "")
+        for op in row.get("ops") or []
+        if isinstance(op, Mapping)
+    } - {""}
+    return next(iter(slugs)) if len(slugs) == 1 else None
+
+
+def fyi_why(row: Mapping[str, Any]) -> str:
+    """
+    Why a proposal applied at once, in words: ``"for alice: their answer to
+    D-42"``, ``"autonomy: standard"``, ``"asked for by alice"`` or ``"a minor change"``.
+    """
+    result = row.get("result") or {}
+    authority = result.get("authority")
+    if isinstance(authority, Mapping) and authority.get("decision"):
+        who = authority.get("answered_by_name") or authority.get("answered_by") or "a person"
+        return f"for {_person(str(who))}: their answer to {authority['decision']}"
+    if result.get("level"):
+        return f"autonomy: {result['level']}"
+    if row.get("on_behalf_of"):
+        return f"asked for by {_person(str(row['on_behalf_of']))}"
+    return "a minor change it may make on its own"
+
+
+def fyi_items(inputs: AskInputs, *, now: float) -> list[Fyi]:
+    """The viewer's FYI lines: proposals applied on their own, Undo still open, newest first."""
+    factory = inputs.snapshot.get("factory") or {}
+    links = _Links(str(factory.get("id") or ""))
+    out: list[Fyi] = []
+    for row in sorted(inputs.fyi, key=lambda r: -int(r.get("applied_at") or 0)):
+        until = int(row.get("undo_until") or 0)
+        if until < now:
+            continue
+        ref = f"C-{row.get('number')}"
+        since = int(row.get("applied_at") or now)
+        result = row.get("result") or {}
+        authority = result.get("authority")
+        need = LEVEL_MANAGE if row.get("approval") == "owner" else LEVEL_EDIT
+        # Undo drops a new project only until its lead starts.
+        started = [*(result.get("spawning") or []), *(result.get("lead") or [])]
+        note = f"{', '.join(started)} started: cancel it instead of Undo" if started else None
+        out.append(
+            Fyi(
+                id=ref,
+                subject=f"proposal:{ref}",
+                ref=ref,
+                title=_clip(str(row.get("title") or ref), TITLE_MAX) or ref,
+                why=fyi_why(row),
+                project=_fyi_project(row),
+                since=since,
+                age_s=max(0, int(now) - since),
+                undo_until=until,
+                can_undo=not started and (inputs.user_id is None or inputs.level >= need),
+                note=note,
+                decision=authority.get("decision") if isinstance(authority, Mapping) else None,
+                level=result.get("level"),
+                href=links.proposal(ref),
+            )
+        )
+    return out
+
+
 def _order(ask: Mapping[str, Any]) -> tuple[int, int, str]:
     """Costliest first, then the longest wait, then by id."""
     return (-int(ask["cost_of_waiting"].score), int(ask["since"]), str(ask["id"]))
@@ -1277,17 +1390,20 @@ def build_asks(inputs: AskInputs, *, now: float) -> dict[str, Any]:
     built = assemble(inputs, now=now)
     mine = sorted((d.ask for d in built.drafts if d.for_you), key=_order)
     factory = inputs.snapshot.get("factory") or {}
+    fyi = fyi_items(inputs, now=now)
     response = AsksResponse(
         factory_id=str(factory.get("id") or ""),
         generated_at=int(now),
         asks=[Ask.model_validate(ask) for ask in mine],
         handled=built.handled,
+        fyi=fyi,
         counts=AskCounts(
             total=len(mine),
             mine=sum(1 for ask in mine if ask["mine"]),
             others=len(built.drafts) - len(mine),
             in_steer=len(built.in_steer),
             folded=len(built.folded),
+            fyi=len(fyi),
         ),
     )
     return response.model_dump(mode="json")
@@ -1350,12 +1466,15 @@ __all__ = [
     "AskOption",
     "AsksResponse",
     "Assembled",
+    "Fyi",
     "asks_for_viewer",
     "asks_from_raw",
     "assemble",
     "build_asks",
     "cost_of_waiting",
     "definition_kind",
+    "fyi_items",
+    "fyi_why",
     "heals_itself",
     "keep_or_revert",
     "member_name",

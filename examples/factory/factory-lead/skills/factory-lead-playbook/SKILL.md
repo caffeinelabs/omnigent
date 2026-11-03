@@ -160,7 +160,7 @@ factory_id: <id> · me: <id> · peer lead: <id> · mode: demo|normal · heartbea
 |---|---|
 | `[Factory brief · from <human> via cockpit` | First-turn bootstrap from the cockpit. |
 | `[Factory control · <ACTION> · by <human>]` | A human command: do it (below), then reply once as its text asks. |
-| `[Factory decision · D-<n> answered …]` | Act on the answer; close D-<n> in the ledger. |
+| `[Factory decision · D-<n> answered …]` | Act on the answer; close D-<n> in the ledger. A project change it calls for goes through `sys_factory_project(…, reply_to="D-<n>")`: it applies at once on the person's behalf. |
 | `[Factory notice · PR … READY FOR HUMAN MERGE …] Info only` | Add it to "Ready for human merge"; ask Sentinel to verify it (Atlas). |
 | `[Factory notice · PR … merged by …] Info only` | Move it to merged; its PL runs the post-merge steps. Mention it in the next digest. |
 | `[Factory notice · PR … closed without merge …]` | Record it; the PL handles the decision the server opened. |

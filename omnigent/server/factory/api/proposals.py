@@ -10,7 +10,8 @@ Agents (runner tunnel, ``from_session_id``):
 People (user JWT; writes carry ``require_human_origin``):
 
 - ``GET /v1/factory/factories/{fid}/proposals?kind=&status=``, ``GET …/proposals/{ref}``
-- ``POST …/proposals/{ref}/apply`` (``{changes?}`` for Edit & apply), ``…/reject``, ``…/undo``
+- ``POST …/proposals/{ref}/apply`` (``{changes?}`` for Edit & apply), ``…/reject``, ``…/undo``,
+  ``…/reopen`` (a proposal that closed itself because it no longer applied)
 - ``POST /v1/factory/factories/{fid}/projects/{slug}/cancel|split|merge``
 - ``POST /v1/factory/factories/{fid}/projects/{slug}/start``: start a missing PL
 
@@ -287,6 +288,25 @@ async def undo_proposal(
 
     async def run() -> dict[str, Any]:
         view = await proposals.undo(request.app.state, factory_id, ref, user_id=user_id)
+        return {"proposal": view}
+
+    return await _guard(run)
+
+
+@router.post(
+    "/factories/{factory_id}/proposals/{ref}/reopen",
+    response_model=None,
+    dependencies=HUMAN_ORIGIN,
+)
+async def reopen_proposal(
+    request: Request, factory_id: str, ref: str
+) -> dict[str, Any] | JSONResponse:
+    """Reopen a proposal that closed itself (it no longer applied): it waits for a person again."""
+    deps = factory_deps(request.app.state)
+    user_id = get_user_id(request, deps.auth_provider)
+
+    async def run() -> dict[str, Any]:
+        view = await proposals.reopen(request.app.state, factory_id, ref, user_id=user_id)
         return {"proposal": view}
 
     return await _guard(run)

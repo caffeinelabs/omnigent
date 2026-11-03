@@ -315,11 +315,12 @@ def check_agent_paths(seat: str, changes: Sequence[definition.Change]) -> None:
         path = change.full_path
         if definition.blocks.agent_may_propose(seat, path):
             continue
-        if definition.blocks.agent_never(path):
+        never = definition.blocks.agent_never_reason(path)
+        if never is not None:
             raise CockpitError(
                 403,
                 "path_not_allowed",
-                f"{seat} may not propose {path}: {definition.blocks.AGENT_NEVER_REASON}",
+                f"{seat} may not propose {path}: {never}",
                 field="changes",
                 path=path,
             )
@@ -1354,6 +1355,9 @@ async def _refuse_agent_never(
     never = [c.full_path for c in changes if definition.blocks.agent_never(c.full_path)]
     if not never:
         return
+    reason = "; ".join(
+        dict.fromkeys(definition.blocks.agent_never_reason(path) or "" for path in never)
+    )
     await _update(
         deps,
         row,
@@ -1364,8 +1368,7 @@ async def _refuse_agent_never(
     raise CockpitError(
         403,
         "path_not_allowed",
-        f"{proposal_ref(row.number)} changes {', '.join(never)}: "
-        f"{definition.blocks.AGENT_NEVER_REASON}",
+        f"{proposal_ref(row.number)} changes {', '.join(never)}: {reason}",
         path=never[0],
     )
 

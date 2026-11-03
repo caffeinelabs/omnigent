@@ -634,7 +634,8 @@ async def test_human_write_routes_refuse_runners(cockpit: Cockpit) -> None:
         and route.methods & {"POST", "PUT", "PATCH", "DELETE"}
         and "/agent/" not in route.path
     ]
-    assert len(writes) == 7
+    # apply, reject, undo, reopen and the project lifecycle (cancel, split, merge, start).
+    assert len(writes) == 8
     for route in writes:
         assert require_human_origin in [d.call for d in route.dependant.dependencies], route.path
 

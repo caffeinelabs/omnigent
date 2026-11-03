@@ -288,6 +288,60 @@ describe("Undo countdown", () => {
   });
 });
 
+describe("ProposalCard autonomy", () => {
+  it("says it carried out a person's answer, with Undo", () => {
+    renderCard({
+      ...proposalInState("auto_applied", NOW),
+      on_behalf_of: "lena@example.com",
+      result: {
+        spawning: [],
+        authority: {
+          decision: "D-42",
+          answered_by: "lena@example.com",
+          answered_by_name: "lena@example.com",
+        },
+      },
+    });
+    expect(screen.getByTestId("proposal-outcome-C-4")).toHaveTextContent(
+      "Applied at once, for lena: their answer to D-42",
+    );
+    expect(screen.getByTestId("proposal-undo-C-4")).toBeInTheDocument();
+  });
+
+  it("names the autonomy level that let it apply", () => {
+    renderCard({ ...proposalInState("auto_applied", NOW), result: { level: "standard" } });
+    expect(screen.getByTestId("proposal-outcome-C-4")).toHaveTextContent(
+      "Applied at once, autonomy: standard",
+    );
+  });
+
+  it("a proposal that closed itself says why and reopens", async () => {
+    const closed = {
+      ...proposalInState("withdrawn", NOW),
+      decided_by: "server",
+      result: {
+        closed: { by: "server", code: "project_closed", reason: "project 'billing' is done" },
+      },
+    };
+    reply = (call) =>
+      call.path === `${BASE}/reopen`
+        ? json({ proposal: { ...proposalInState("pending"), updated_at: NOW + 5 } })
+        : json({}, 404);
+    renderCard(closed);
+    expect(screen.getByTestId("proposal-outcome-C-4")).toHaveTextContent(
+      "Closed itself: project 'billing' is done",
+    );
+    fireEvent.click(screen.getByTestId("proposal-reopen-C-4"));
+    await waitFor(() => expect(card()).toHaveAttribute("data-state", "pending"));
+    expect(calls.find((c) => c.path === `${BASE}/reopen`)?.method).toBe("POST");
+  });
+
+  it("an agent's own withdrawal offers no Reopen", () => {
+    renderCard(proposalInState("withdrawn", NOW));
+    expect(screen.queryByTestId("proposal-reopen-C-4")).toBeNull();
+  });
+});
+
 describe("ProposalCard origin", () => {
   it("says in the new cockpit where the work comes from: a person's request", () => {
     renderCard(proposalInState("pending"), { cockpit: "v2" });

@@ -200,6 +200,14 @@ export async function undoProposal(
   return readJson(await sendJson(factoryPath(factoryId, `/proposals/${enc(ref)}/undo`), {}));
 }
 
+/** Reopen a proposal that closed itself because it no longer applied. */
+export async function reopenProposal(
+  factoryId: string,
+  ref: string,
+): Promise<{ proposal: ProposalView }> {
+  return readJson(await sendJson(factoryPath(factoryId, `/proposals/${enc(ref)}/reopen`), {}));
+}
+
 // ── Work graph: tasks ──────────────────────────────────────────
 
 /** One project's computed graph, as the tasks list returns it. */

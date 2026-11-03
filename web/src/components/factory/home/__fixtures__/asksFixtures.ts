@@ -723,12 +723,15 @@ export function asksOf(
     generated_at: nowS,
     asks: mine,
     handled: handledLines(ctx, healing),
+    // What the factory did on its own: none in the round-3 sample (stories add their own).
+    fyi: [],
     counts: {
       total: mine.length,
       mine: mine.filter((a) => a.mine).length,
       others: drafts.length - mine.length,
       in_steer: inSteer.length,
       folded: folded.length,
+      fyi: 0,
     },
   };
 }

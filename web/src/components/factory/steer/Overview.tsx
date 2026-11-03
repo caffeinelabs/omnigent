@@ -230,7 +230,11 @@ export function Overview({
           section: "strategy",
           value: `${goals.length} ${goals.length === 1 ? "goal" : "goals"}`,
         },
-        { label: "Autonomy", section: "budgets", value: "who decides what" },
+        {
+          label: "Autonomy",
+          section: "budgets",
+          value: `level ${String((effective.autonomy as { level?: string } | undefined)?.level ?? "careful")}`,
+        },
       ],
     },
     {

@@ -341,12 +341,14 @@
         "The builder ic:route-r2 is stuck (the same failing call again and again); it clears once the agent moves again.",
         "Trial C-14 is running: cadence.project_lead 7200→10800."
       ],
+      "fyi": [],
       "counts": {
         "total": 6,
         "mine": 0,
         "others": 1,
         "in_steer": 0,
-        "folded": 1
+        "folded": 1,
+        "fyi": 0
       }
     },
     "operator": {
@@ -613,12 +615,14 @@
         "The builder ic:route-r2 is stuck (the same failing call again and again); it clears once the agent moves again.",
         "Trial C-14 is running: cadence.project_lead 7200→10800."
       ],
+      "fyi": [],
       "counts": {
         "total": 5,
         "mine": 1,
         "others": 3,
         "in_steer": 0,
-        "folded": 0
+        "folded": 0,
+        "fyi": 0
       }
     },
     "viewer": {
@@ -629,12 +633,14 @@
         "The builder ic:route-r2 is stuck (the same failing call again and again); it clears once the agent moves again.",
         "Trial C-14 is running: cadence.project_lead 7200→10800."
       ],
+      "fyi": [],
       "counts": {
         "total": 0,
         "mine": 0,
         "others": 7,
         "in_steer": 0,
-        "folded": 1
+        "folded": 1,
+        "fyi": 0
       }
     }
   }

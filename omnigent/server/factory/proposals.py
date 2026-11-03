@@ -7,13 +7,17 @@ against the factory: slugs free (including other pending proposals), the
 project cap and pods, the factory's repos and default base, no ``depends_on``
 cycle, a scope-overlap warning. ``based_on`` fingerprints every touched row.
 
-The autonomy policy (:mod:`.autonomy`) decides what applies on its own. The
-rest is mirrored as a ``proposal`` decision (Apply, Edit & apply, Reject);
-answering it re-validates against ``based_on`` (409 ``stale_proposal``) and runs
-the cores (:mod:`.projects`) after the decision's compare-and-set, so a double
-click or two humans apply it once. Applied creates and updates can be undone
-for 10 minutes (a create only until its PL spawned); pending proposals expire
-after 72 hours. The proposer is told every outcome as a
+The autonomy policy (:mod:`.autonomy`, with the owners' ``autonomy.level``)
+decides what applies on its own; a proposal that carries out a person's answer
+to a decision (``reply_to="D-<n>"``) applies at once on their behalf
+(:mod:`.answer_authority`). The rest is mirrored as a ``proposal`` decision
+(Apply, Edit & apply, Reject); answering it re-validates against ``based_on``
+(409 ``stale_proposal``) and runs the cores (:mod:`.projects`) after the
+decision's compare-and-set, so a double click or two humans apply it once.
+Applied creates and updates can be undone for 10 minutes (a create only until
+its PL spawned); pending proposals expire after 72 hours, and close themselves
+sooner once they no longer apply (:func:`close_stale`; a person can
+:func:`reopen` one). The proposer is told every outcome as a
 ``[Factory proposal · C-n …]`` text.
 
 A lead's proposal may carry an ``opportunity`` and a ``bet`` (:mod:`.bets`).
@@ -55,6 +59,7 @@ from omnigent.factory import (
 )
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE
 from omnigent.server.factory import (
+    answer_authority,
     autonomy,
     bets,
     control,
@@ -1245,23 +1250,57 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
     ask = await asyncio.to_thread(
         functools.partial(requested_by, deps, root, body.reply_to, thread=body.thread)
     )
-    asker = ask.user_id if ask is not None else None
+    # A person's answer to a decision the proposal carries out is its approval.
+    authority = (
+        await asyncio.to_thread(
+            answer_authority.authority_for, deps, root, caller, str(body.reply_to), plan
+        )
+        if ask is None and answer_authority.is_decision_ref(body.reply_to)
+        else None
+    )
+    carried = answer_authority.covers_all(authority, plan.changes)
+    asker = (
+        ask.user_id if ask is not None else (authority.user_id if carried and authority else None)
+    )
     checked = await _check_bet(app_state, caller, root, body, plan, requested=asker is not None)
+    if carried and checked.owner and authority is not None and not authority.owner:
+        # The bet itself needs an owner (a hunch): an operator's answer does not carry it.
+        authority.extra.append(
+            f"the bet (needs an owner; {authority.name} answered as an operator)"
+        )
+        carried, asker = False, None
     thread = body.thread or (ask.thread if ask is not None else None)
+    if thread is None and authority is not None:
+        thread = authority.thread
     # A bet a lead files on its own waits for the other lead's case against first.
     own_bet = checked.bet is not None and asker is None
     mode = await asyncio.to_thread(autonomy.factory_autonomy, deps, root)
     if own_bet:
         mode = await asyncio.to_thread(bets.autonomy_mode, deps, root.id) or mode
-    classes: list[autonomy.OpClass] = [c.op_class for c in plan.changes]
+    level = await asyncio.to_thread(autonomy.factory_level, deps, root.id)
+    joined = (
+        await asyncio.to_thread(joined_initiatives, deps, root, body, plan)
+        if level == autonomy.LEVEL_TRYOUT and not own_bet
+        else {}
+    )
+    has_reason = bool((body.rationale or body.reason or "").strip())
+    classes: list[autonomy.OpClass] = [
+        level_class(c, has_reason=has_reason, joined=joined) for c in plan.changes
+    ]
     if checked.owner:
         classes.append("owner")
-    verdict = autonomy.decide(classes, requested=asker is not None, mode=mode)
+    verdict = autonomy.decide(classes, requested=asker is not None, mode=mode, level=level)
+    if carried:
+        # Never a second approval of what the person decided, whatever the mode.
+        verdict = autonomy.Verdict("auto", info_line=True)
     peer = await asyncio.to_thread(_peer, deps, root.id, caller) if checked.bet else None
     waits = own_bet and peer is not None
     warnings = [*plan.warnings, *checked.warnings]
     if own_bet and peer is None:
         warnings.append("no_peer_lead: no other lead writes a case against; a person decides")
+    if authority is not None and (scope_warning := authority.warning()) is not None:
+        warnings.append(scope_warning)
+    audit = authority.audit() if carried and authority is not None else None
     approval = "operator" if waits and verdict.approval == "auto" else verdict.approval
     now = now_s()
     result: dict[str, Any] | None = None
@@ -1315,6 +1354,10 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
             "warnings": warnings,
             "requested": asker is not None,
             "mode": mode,
+            "level": level,
+            "by_level": verdict.by_level,
+            "authority": audit,
+            "joined": joined or None,
             "opportunity": row.opportunity,
             "bet": (row.bet or {}).get("kind"),
         },
@@ -1329,7 +1372,15 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
         return {**_reply(row), "cosign_from": display_title(peer.title, peer.id)}
     if verdict.approval == "auto":
         result = await apply_now(
-            app_state, root, row, plan, actor=actor, user_id=caller.user_id, info=verdict.info_line
+            app_state,
+            root,
+            row,
+            plan,
+            actor=actor,
+            user_id=caller.user_id,
+            info=verdict.info_line,
+            authority=audit,
+            by_level=verdict.by_level,
         )
         row = await asyncio.to_thread(store.get_proposal, row.id) or row
         out = _reply(row)
@@ -1338,6 +1389,91 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
     decision = await _mirror(app_state, root, row, plan, caller.title)
     row = await asyncio.to_thread(store.update_proposal, row.id, decision_id=decision.id) or row
     return _reply(row, decision=decision.ref)
+
+
+def level_class(
+    change: Change, *, has_reason: bool, joined: Mapping[str, str] | None = None
+) -> autonomy.OpClass:
+    """
+    The class the autonomy level reads for *change*.
+
+    An update is ``update_routine`` when it only touches a lead's routine
+    fields (a dependency change only with a reason); a create is
+    ``create_joined`` when it joins an initiative a person already started
+    (*joined*). Owner and structural ops keep their class.
+    """
+    if change.op_class in ("owner", "structural"):
+        return change.op_class
+    if change.op == "update" and change.patch is not None:
+        return autonomy.update_class(change.patch.model_fields_set, has_reason=has_reason)
+    if change.op == "create" and change.creates and change.creates[0].slug in (joined or {}):
+        return "create_joined"
+    return change.op_class
+
+
+def ask_initiative(deps: FactoryDeps, factory_id: str, ask: Mapping[str, Any]) -> str | None:
+    """
+    The built-in initiative lookup: the person's ask this proposal answers
+    (its ``reply_to``: a Room message, the start brief or a decision) already
+    started live projects, through a proposal that named the same ask.
+
+    :returns: That proposal's ref (the initiative), e.g. ``"C-11"``, or ``None``.
+    """
+    reply_to = str(ask.get("reply_to") or "").strip()
+    if not reply_to:
+        return None
+    store = deps.factory_store
+    refs: set[str] = set()
+    for row in store.list_projects(factory_id):
+        if row.status != projects.STATUS_ACTIVE:
+            continue
+        asker = normalize_charter(row.charter).get("requested_by")
+        if isinstance(asker, Mapping) and asker.get("kind") == "human" and asker.get("proposal"):
+            refs.add(str(asker["proposal"]))
+    chat = reply_to.removeprefix(_CHAT_PREFIX)
+    for ref in sorted(refs):
+        row = find_proposal(deps, factory_id, ref)
+        if row is None or not row.on_behalf_of:
+            continue
+        if reply_to in (row.evidence or []) or (row.reply_to_chat and same_chat(chat, row)):
+            return ref
+    return None
+
+
+def same_chat(chat_id: str, row: FactoryProposal) -> bool:
+    """:returns: Whether *row* answered the Room message *chat_id*."""
+    return control.same_id(chat_id, row.reply_to_chat)
+
+
+def joined_initiatives(
+    deps: FactoryDeps, root: Conversation, body: ProposalIn, plan: Plan
+) -> dict[str, str]:
+    """
+    :returns: ``{new slug: initiative}`` for each create of *plan* that joins an
+        initiative a person already started (see
+        :func:`.autonomy.register_initiative_lookup`; :func:`ask_initiative` last).
+    """
+    out: dict[str, str] = {}
+    lookups = (*autonomy.initiative_lookups(), ask_initiative)
+    for change in plan.changes:
+        if change.op != "create" or change.op_class != "create":
+            continue
+        ask = {
+            "reply_to": body.reply_to,
+            "opportunity": body.opportunity,
+            "project": change.stored.get("project"),
+            "changes": plan.ops,
+        }
+        for lookup in lookups:
+            try:
+                found = lookup(deps, root.id, ask)
+            except Exception:  # noqa: BLE001 - a broken lookup only means "not joined"
+                _logger.warning("factory: an initiative lookup failed", exc_info=True)
+                continue
+            if found:
+                out[change.creates[0].slug] = str(found)
+                break
+    return out
 
 
 def _wants_discovery(payload: Any) -> bool:
@@ -1793,6 +1929,8 @@ async def apply_now(
     user_id: str | None,
     info: bool = False,
     edited: bool = False,
+    authority: Mapping[str, Any] | None = None,
+    by_level: str | None = None,
 ) -> dict[str, Any]:
     """
     Apply a validated proposal: mark it applied (compare-and-set), then run the cores.
@@ -1801,6 +1939,9 @@ async def apply_now(
     :param user_id: Whose access the stop controls run with.
     :param info: An auto-apply the agent chose itself (the thread gets an info line).
     :param edited: A human edited the changes before applying.
+    :param authority: The answer it carries out (``result.authority``,
+        :meth:`.answer_authority.Authority.audit`).
+    :param by_level: The autonomy level that let it apply at once (``result.level``).
     :returns: ``{created, updated, cancelled, split, merged, spawning, lead, held}``.
     :raises CockpitError: 409 ``proposal_not_pending`` when it was decided meanwhile.
     """
@@ -1846,6 +1987,10 @@ async def apply_now(
         "held": {},
         "edited": edited,
     }
+    if authority:
+        result["authority"] = dict(authority)
+    if by_level:
+        result["level"] = by_level
     created: list[FactoryProject] = []
     started: set[str] = set()
     rows = await asyncio.to_thread(store.list_projects, root.id)
@@ -1894,23 +2039,41 @@ async def apply_now(
     await asyncio.to_thread(
         lambda: store.update_proposal(row.id, result=result, after=after or None)
     )
-    by = projects.actor_name(actor)
     await events.emit(
         app_state,
         root.id,
         "proposal.applied",
         severity="notice",
         subject=f"{_SUBJECT_PREFIX}{ref}",
-        summary=f"{ref} applied by {by}{_outcome_tail(result)}",
+        summary=applied_summary(ref, actor, result),
         data={
             **actor.event_data(),
             "proposal_id": row.id,
             "result": result,
             "auto": actor.kind == "agent",
             "info_line": info,
+            "authority": result.get("authority"),
+            "level": result.get("level"),
         },
     )
     return result
+
+
+def applied_summary(ref: str, actor: Actor, result: Mapping[str, Any]) -> str:
+    """
+    The Room line of an applied proposal, e.g. ``C-16 applied at once for bob:
+    their answer to D-42 · Undo for 10 min · spawning: none``.
+    """
+    tail = _outcome_tail(result)
+    undo = f" · Undo for {UNDO_WINDOW_S // 60} min"
+    authority = result.get("authority")
+    if isinstance(authority, Mapping) and authority.get("decision"):
+        name = authority.get("answered_by_name") or "a person"
+        answer = f"their answer to {authority['decision']}"
+        return f"{ref} applied at once for {name}: {answer}{undo}{tail}"
+    if result.get("level"):
+        return f"{ref} applied at once (autonomy: {result['level']}){undo}{tail}"
+    return f"{ref} applied by {projects.actor_name(actor)}{tail}"
 
 
 def _split_whys(
@@ -2547,9 +2710,232 @@ async def _close_decision(app_state: Any, row: FactoryProposal, status: str) -> 
 
 
 def _expiry_start(row: FactoryProposal) -> int:
-    """When a proposal's 72 h start: its filing, or the co-sign that let a person see it."""
-    cosigned = (row.result or {}).get("cosigned_at")
-    return max(row.created_at, cosigned if isinstance(cosigned, int) else 0)
+    """
+    When a proposal's 72 h start: its filing, the co-sign that let a person see
+    it, or a person reopening it after it closed itself.
+    """
+    result = row.result or {}
+    cosigned = result.get("cosigned_at")
+    reopened = result.get("reopened")
+    again = reopened.get("at") if isinstance(reopened, Mapping) else None
+    return max(
+        row.created_at,
+        cosigned if isinstance(cosigned, int) else 0,
+        again if isinstance(again, int) else 0,
+    )
+
+
+# ── Stale proposals close themselves ───────────────────────────
+
+STALE_CODES: Final = frozenset(
+    {
+        "unknown_project",
+        "project_closed",
+        "slug_exists",
+        "unknown_dependency",
+        "not_your_project",
+        "stale_proposal",
+    }
+)
+"""Refusals that stay true: a closed or gone project, a taken slug, a changed charter.
+A full factory (``over_caps``), a cycle or unmapped PRs can still clear: those wait."""
+CLOSED_BY: Final = "server"
+
+
+def stale_reason(
+    deps: FactoryDeps, root: Conversation, row: FactoryProposal
+) -> tuple[str, str] | None:
+    """
+    Why an open projects proposal no longer applies (synchronous: store reads).
+
+    It re-validates the ops against the factory as it is now, then its
+    ``based_on``. A person who reopened it after it closed for a reason keeps it
+    open for that reason.
+
+    :returns: ``(code, reason)``, e.g. ``("project_closed", "project 'api' is cancelled")``,
+        or ``None`` while a person could still apply it.
+    """
+    found: tuple[str, str] | None = None
+    try:
+        validate(deps, root, row.ops, reason=row.rationale or "a proposal", exclude=row.id)
+    except CockpitError as exc:
+        if exc.code in STALE_CODES:
+            found = (exc.code, exc.message)
+    if found is None:
+        try:
+            check_based_on(deps, root, row.based_on or {})
+        except CockpitError as exc:
+            found = (exc.code, exc.message)
+    reopened = (row.result or {}).get("reopened")
+    if found is not None and isinstance(reopened, Mapping) and reopened.get("code") == found[0]:
+        return None
+    return found
+
+
+def closed_itself_text(ref: str, reason: str) -> str:
+    """:returns: ``[Factory proposal · C-4 closed: <reason>]`` and what to do about it."""
+    clean = control.clip(reason, 300).replace("[", "(").replace("]", ")")
+    return (
+        f"[Factory proposal · {ref} closed: {clean}] It no longer applies, so nobody is asked "
+        "about it. Propose again if the work is still needed. Record it in the ledger."
+    )
+
+
+async def close_stale(app_state: Any, factory_id: str, *, now: int | None = None) -> list[str]:
+    """
+    Close this factory's open projects proposals that no longer apply
+    (:func:`stale_reason`), so Needs you holds no moot asks.
+
+    Each closes as ``withdrawn`` with ``result.closed {by: "server", code,
+    reason, at, from}``, its decision is withdrawn, the Room gets a line and the
+    proposer is told. A person can :func:`reopen` it.
+
+    :returns: The refs closed.
+    """
+    deps = factory_deps(app_state)
+    store = deps.factory_store
+    now = now if now is not None else now_s()
+    root = await control.get_conv(deps, factory_id)
+    if root is None:
+        return []
+    rows = await asyncio.to_thread(
+        lambda: store.list_proposals(
+            factory_id, status=list(PROPOSAL_OPEN_STATUSES), kind=KIND_PROJECTS, limit=500
+        )
+    )
+    closed: list[str] = []
+    for row in rows:
+        label = proposal_ref(row.number)
+        try:
+            found = await asyncio.to_thread(stale_reason, deps, root, row)
+        except Exception:  # noqa: BLE001 - one unreadable proposal never stops the rest
+            _logger.warning("factory: could not check %s for staleness", label, exc_info=True)
+            continue
+        if found is None:
+            continue
+        code, reason = found
+        info = {"by": CLOSED_BY, "code": code, "reason": reason, "at": now, "from": row.status}
+        try:
+            row = (
+                await asyncio.to_thread(
+                    functools.partial(
+                        store.update_proposal,
+                        row.id,
+                        expect_status=row.status,
+                        status="withdrawn",
+                        decided_by=CLOSED_BY,
+                        decided_at=now,
+                        result={**(row.result or {}), "closed": info},
+                    )
+                )
+                or row
+            )
+        except ProposalStateConflict:
+            continue
+        await _close_decision(app_state, row, "withdrawn")
+        await events.emit(
+            app_state,
+            factory_id,
+            "proposal.withdrawn",
+            severity="info",
+            subject=f"{_SUBJECT_PREFIX}{label}",
+            summary=f"{label} closed itself: {control.clip(reason, 200)} · a person can reopen it",
+            data={
+                "proposal_id": row.id,
+                "by": CLOSED_BY,
+                "by_kind": "server",
+                "closed": info,
+            },
+        )
+        _tell_proposer(app_state, row, closed_itself_text(label, reason), None)
+        closed.append(label)
+    return closed
+
+
+async def reopen(app_state: Any, factory_id: str, ref: str, *, user_id: str | None) -> dict:
+    """
+    A person reopens a proposal that closed itself (``POST …/proposals/{ref}/reopen``).
+
+    It returns to the status it had, a pending one with a new decision; it no
+    longer closes itself for the reason it closed with. Applying it still
+    re-validates, so a change that cannot apply is refused then with its reason.
+
+    :raises CockpitError: 404 ``unknown_proposal``, 409 ``not_closed`` (only a
+        proposal the server closed reopens).
+    """
+    deps = factory_deps(app_state)
+    store = deps.factory_store
+    root = await control.load_factory_root(deps, user_id, factory_id)
+    await control.require(deps, user_id, root.id, LEVEL_EDIT)
+    row = await asyncio.to_thread(find_proposal, deps, root.id, ref)
+    if row is None or row.kind != KIND_PROJECTS:
+        raise CockpitError(404, "unknown_proposal", f"no projects proposal {ref!r} here")
+    if row.approval == "owner":
+        await control.require(deps, user_id, root.id, LEVEL_MANAGE)
+    label = proposal_ref(row.number)
+    closed = (row.result or {}).get("closed")
+    if (
+        row.status != "withdrawn"
+        or not isinstance(closed, Mapping)
+        or closed.get("by") != CLOSED_BY
+    ):
+        raise CockpitError(
+            409,
+            "not_closed",
+            f"{label} did not close itself; it is {row.status}",
+            status=row.status,
+        )
+    back = closed.get("from") if closed.get("from") in PROPOSAL_OPEN_STATUSES else "pending"
+    actor = await asyncio.to_thread(projects.human_actor, deps, user_id, root.id)
+    now = now_s()
+    result = {k: v for k, v in (row.result or {}).items() if k != "closed"}
+    result["reopened"] = {
+        "by": actor.id,
+        "at": now,
+        "code": closed.get("code"),
+        "reason": closed.get("reason"),
+    }
+    try:
+        row = (
+            await asyncio.to_thread(
+                lambda: store.update_proposal(
+                    row.id,
+                    expect_status="withdrawn",
+                    status=back,
+                    decided_by=None,
+                    decided_at=None,
+                    result=result,
+                )
+            )
+            or row
+        )
+    except ProposalStateConflict as exc:
+        raise CockpitError(
+            409, "not_closed", f"{label} is already {exc.proposal.status}"
+        ) from None
+    if back == "pending":
+        plan = await asyncio.to_thread(_cosign_plan, deps, root, row)
+        author = (
+            await asyncio.to_thread(_title_of, deps, row.author)
+            if row.author_kind == "agent"
+            else control.human_name(row.author)
+        )
+        decision = await _mirror(app_state, root, row, plan, author)
+        row = (
+            await asyncio.to_thread(store.update_proposal, row.id, decision_id=decision.id) or row
+        )
+    by = projects.actor_name(actor)
+    await events.emit(
+        app_state,
+        root.id,
+        "proposal.reopened",
+        severity="notice",
+        subject=f"{_SUBJECT_PREFIX}{label}",
+        summary=f"{label} reopened by {by}",
+        data={**actor.event_data(), "proposal_id": row.id, "reason": closed.get("reason")},
+    )
+    _tell_proposer(app_state, row, closed_text(label, "reopened", by), None)
+    return await asyncio.to_thread(proposal_view, deps, row)
 
 
 async def expire_due(app_state: Any, factory_id: str, *, now: int | None = None) -> list[str]:
@@ -2669,10 +3055,12 @@ async def apply_graceful(app_state: Any, factory_id: str, *, now: int | None = N
 
 
 __all__ = [
+    "CLOSED_BY",
     "GRACE_S",
     "KIND_PROJECTS",
     "MAX_CHANGES",
     "PROPOSAL_EXPIRY_S",
+    "STALE_CODES",
     "UNDO_WINDOW_S",
     "Change",
     "CosignIn",
@@ -2682,11 +3070,15 @@ __all__ = [
     "Request",
     "after_state",
     "answer",
+    "applied_summary",
     "applied_text",
     "apply_graceful",
     "apply_now",
+    "ask_initiative",
     "charter_hash",
     "check_based_on",
+    "close_stale",
+    "closed_itself_text",
     "closed_text",
     "cosign",
     "cosign_request_text",
@@ -2697,13 +3089,18 @@ __all__ = [
     "find_proposal",
     "fingerprint",
     "is_mirror",
+    "joined_initiatives",
+    "level_class",
     "plan_answer",
     "proposal_view",
     "propose",
     "rejected_text",
+    "reopen",
     "requested_by",
+    "same_chat",
     "send_back",
     "sent_back_text",
+    "stale_reason",
     "undo",
     "validate",
     "withdraw",

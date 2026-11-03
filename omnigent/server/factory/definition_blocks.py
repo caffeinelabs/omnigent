@@ -1104,12 +1104,15 @@ AGENT_GATED: Final = (*BLOCKS, "team")
 ALLOWLIST_SEATS: Final = frozenset({"scout"})
 """Seats that may propose only their :data:`AGENT_PATHS`, in any block (Scout reads users'
 text, so it never proposes caps, budgets, autonomy or any other setting)."""
-AGENT_NEVER: Final = ("product.delivery.auto_merge",)
-"""Paths no agent proposes, whatever its seat: which PRs the server merges is the owners' call."""
-AGENT_NEVER_REASON: Final = (
-    "auto-merge targets are set by owners in the cockpit; agents never propose them "
-    "and never merge"
-)
+AGENT_NEVER: Final[Mapping[str, str]] = {
+    "product.delivery.auto_merge": (
+        "auto-merge targets are set by owners in the cockpit; agents never propose them "
+        "and never merge"
+    ),
+    "autonomy": "owners set the factory's autonomy in Steer; agents never propose it",
+}
+"""Paths no agent proposes, whatever its seat, and why: which PRs the server merges and how
+much the agents may do alone are the owners' call."""
 
 
 def under(path: str, prefix: str) -> bool:
@@ -1122,9 +1125,20 @@ def in_blocks(path: str, blocks: tuple[str, ...] = BLOCKS) -> bool:
     return any(under(path, block) for block in blocks)
 
 
+def agent_never_reason(path: str) -> str | None:
+    """
+    :returns: Why no agent may propose *path* when it is, holds or lies in one of
+        :data:`AGENT_NEVER` (the first that matches), else ``None``.
+    """
+    for never, reason in AGENT_NEVER.items():
+        if under(path, never) or under(never, path):
+            return reason
+    return None
+
+
 def agent_never(path: str) -> bool:
     """Whether *path* is, holds or lies in one no agent may propose (:data:`AGENT_NEVER`)."""
-    return any(under(path, never) or under(never, path) for never in AGENT_NEVER)
+    return agent_never_reason(path) is not None
 
 
 def agent_may_propose(seat: str, path: str) -> bool:
@@ -1214,7 +1228,6 @@ def slower_or_off_is_a(before: Any, after: Any) -> Literal["A", "B"]:
 __all__ = [
     "AGENT_GATED",
     "AGENT_NEVER",
-    "AGENT_NEVER_REASON",
     "AGENT_PATHS",
     "ALLOWLIST_SEATS",
     "AUTO_MERGE_KEY",
@@ -1258,6 +1271,7 @@ __all__ = [
     "StrategyDef",
     "agent_may_propose",
     "agent_never",
+    "agent_never_reason",
     "discovery_server_on",
     "downgrade",
     "has_secret",

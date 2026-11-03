@@ -3058,6 +3058,19 @@ export interface DefinitionResponse {
   /** Whether this server runs discovery at all. */
   discovery_server?: boolean;
   tier2: Tier2StatusView;
+  /** Each `autonomy.level` in plain words (absent from older servers). */
+  autonomy_levels?: AutonomyLevelText[];
+}
+
+/** One autonomy level as Steer explains it: what applies at once, what still waits. */
+export interface AutonomyLevelText {
+  level: "careful" | "standard" | "tryout";
+  label: string;
+  summary: string;
+  /** Applies at once, with an FYI in Needs you and Undo. */
+  at_once: string[];
+  /** Still waits for a person. */
+  waits: string[];
 }
 
 export interface DefinitionVersionsResponse {

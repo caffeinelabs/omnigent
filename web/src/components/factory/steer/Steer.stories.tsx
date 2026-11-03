@@ -489,6 +489,13 @@ const dayBudgetStaged = (usd: number) => () =>
 
 export const Budgets = steer("/steer/budgets");
 
+/** The autonomy level at standard, every level explained in plain words. */
+export const BudgetsAutonomyStandard = steer("/steer/budgets", { autonomyLevel: "standard" });
+
+export const BudgetsAutonomyStandardMobile = phone(
+  steer("/steer/budgets", { autonomyLevel: "standard" }),
+);
+
 /** An owner lowers the daily budget: class A, it applies at once. */
 export const BudgetsStaged = steer("/steer/budgets", {
   staging: dayBudgetStaged(300),

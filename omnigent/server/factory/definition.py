@@ -61,6 +61,7 @@ from omnigent.factory import (
 )
 from omnigent.server.factory import definition_blocks as blocks
 from omnigent.server.factory import team_spec
+from omnigent.server.factory.autonomy import AutonomyDef
 from omnigent.server.factory.definition_blocks import (
     BriefsDef,
     DiscoveryDef,
@@ -229,10 +230,6 @@ class BudgetsDef(_Block):
     project_usd: float = 150.0
     factory_usd_per_day: float = 400.0
     usd_per_hour_alert: float = 15.0
-
-
-class AutonomyDef(_Block):
-    projects: Literal["confirm", "requested", "grace"] = "requested"
 
 
 class DecisionsDef(_Block):
@@ -492,7 +489,8 @@ CLASS_TABLE: Final = (
     ("supervisor.*, alerts.*, decisions.*", "A"),
     ("previews.*, caps.*", "B"),
     ("rules", "B (owners), as a trial"),
-    ("engine.*, autonomy.*", "B (owners)"),
+    ("engine.*", "B (owners)"),
+    ("autonomy.*", "B (owners only: agents never propose it)"),
     ("budgets.*", "A when lower (editors apply it at once), else B (owners)"),
     ("product.*, strategy.*", "B (owners); never on trial, applies as a version"),
     ("environment.*", "B (owners only: agents never propose it); applies as a version"),

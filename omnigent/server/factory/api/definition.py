@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from omnigent.server.auth import LEVEL_MANAGE, LEVEL_READ
 from omnigent.server.factory import (
+    autonomy,
     control,
     definition,
     definition_changes,
@@ -182,6 +183,7 @@ def _definition_body(deps: Any, root: Any, app_state: Any) -> dict[str, Any]:
         "agent_paths": {k: list(v) for k, v in definition.blocks.AGENT_PATHS.items()},
         "discovery_server": definition.blocks.discovery_server_on(),
         "tier2": tier2.status(app_state),
+        "autonomy_levels": [level.as_json() for level in autonomy.LEVELS],
     }
 
 

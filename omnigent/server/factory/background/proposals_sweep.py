@@ -1,9 +1,12 @@
-"""Every minute, per factory: expire, grace-apply and spawn.
+"""Every minute, per factory: expire, close stale ones, grace-apply and spawn.
 
 1. Projects proposals pending for 72 hours expire (``proposal.expired``).
-2. Under ``grace`` autonomy, proposals nobody objected to within 15 minutes
+2. Open projects proposals that no longer apply (a project closed or changed
+   since, a slug taken) close themselves with their reason; a person can
+   reopen one (:func:`.proposals.close_stale`).
+3. Under ``grace`` autonomy, proposals nobody objected to within 15 minutes
    are applied by the server.
-3. Server-owned projects are (re)started: held ones whose dependencies are now
+4. Server-owned projects are (re)started: held ones whose dependencies are now
    met are released, and a spawn a restart cut off is finished, once.
 """
 
@@ -30,6 +33,7 @@ class SweepReport:
     """What one pass did (for logs and tests)."""
 
     expired: list[str] = field(default_factory=list)
+    closed: list[str] = field(default_factory=list)
     applied: list[str] = field(default_factory=list)
     started: list[str] = field(default_factory=list)
 
@@ -46,6 +50,7 @@ async def sweep_once(app_state: Any) -> SweepReport:
             continue
         try:
             report.expired += await proposals.expire_due(app_state, root.id)
+            report.closed += await proposals.close_stale(app_state, root.id)
             report.applied += await proposals.apply_graceful(app_state, root.id)
             report.started += await spawn.finish_pending(app_state, root.id)
         except Exception:
