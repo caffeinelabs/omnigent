@@ -63,7 +63,9 @@ function fullPath(line: StatusLine, parts: Part[]) {
   line.segments.forEach((sg, i) => {
     if (i > 0) parts.push({ t: "sep", text: sg.sep });
     if ("person" in sg) {
-      parts.push({ t: "person", text: personText(sg.decision) });
+      // "Needs you: Merge #9856 and #9857", not "Needs you: needs you: …".
+      const alone = i === 0 && needsStyle(line.label);
+      parts.push({ t: "person", text: alone ? sg.decision.verb : personText(sg.decision) });
       return;
     }
     const ref = "ref" in sg ? sg.ref : undefined;
