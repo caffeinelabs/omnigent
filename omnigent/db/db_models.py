@@ -2494,7 +2494,8 @@ class SqlFactoryFeedback(OmnigentBase):
 
     __table_args__ = (
         CheckConstraint(
-            "target_kind IN (1, 2, 3, 4, 5, 6, 7, 8)", name="ck_factory_feedback_target_kind"
+            "target_kind IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10)",
+            name="ck_factory_feedback_target_kind",
         ),
         CheckConstraint("author_kind IN (1, 2, 3)", name="ck_factory_feedback_author_kind"),
         CheckConstraint("kind IN (1, 2, 3, 4, 5, 6)", name="ck_factory_feedback_kind"),
@@ -2507,3 +2508,242 @@ class SqlFactoryFeedback(OmnigentBase):
             "id",
         ),
     )
+
+
+# ── Discovery ledger ───────────────────────────────────────────
+
+
+class SqlFactorySignal(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_signals``: the append-only evidence ledger, ``S-<number>``.
+
+    Only the server's ledger inserts rows. The evidence columns never change;
+    the label columns are set by a labeller, and retention or a withdrawn
+    hunch clears ``excerpt`` (the row and its counts stay).
+
+    :param source_kind: Code of FACTORY_SOURCE_KIND.
+    :param kind: Code of FACTORY_SIGNAL_KIND, or ``NULL`` until labelled.
+    :param say_do: Code of FACTORY_SAY_DO.
+    :param privacy: Code of FACTORY_PRIVACY.
+    :param account: A salted hash per factory, never a raw id.
+    :param redactions: JSON ``{kind: count}`` of the placeholders written.
+    :param injection: Injection score 0-100 at ingest.
+    :param flags: JSON list, e.g. ``["injection_suspect"]``.
+    :param meta: JSON written by the server (a readout verdict, a behaviour reach).
+    """
+
+    __tablename__ = "factory_signals"
+
+    workspace_id: Mapped[int] = _ws_column()
+    factory_id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    number: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    source: Mapped[str] = mapped_column(String(32), nullable=False)
+    source_kind: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    kind: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    say_do: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="1")
+    excerpt: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    excerpt_sha: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    pointer: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    pointer_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    query_event: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    observed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    ingested_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    account: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    segments: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    redactions: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    privacy: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    expires_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    injection: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="0")
+    flags: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    author: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    author_kind: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    meta: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    paraphrase: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    intensity: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    force: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    labelled_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    labelled_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    withdrawn_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    withdrawn_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    expired_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    __table_args__ = (
+        CheckConstraint(
+            "source_kind IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12)",
+            name="ck_factory_signals_source_kind",
+        ),
+        CheckConstraint(
+            "kind IN (1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11)", name="ck_factory_signals_kind"
+        ),
+        CheckConstraint("say_do IN (1, 2)", name="ck_factory_signals_say_do"),
+        CheckConstraint("privacy IN (1, 2, 3, 4)", name="ck_factory_signals_privacy"),
+        CheckConstraint("intensity IN (1, 2, 3, 4)", name="ck_factory_signals_intensity"),
+        CheckConstraint("force IN (1, 2, 3, 4)", name="ck_factory_signals_force"),
+        CheckConstraint("author_kind IN (1, 2, 3)", name="ck_factory_signals_author_kind"),
+        UniqueConstraint(
+            "workspace_id",
+            "factory_id",
+            "source",
+            "pointer_key",
+            name="uq_factory_signals_pointer",
+        ),
+        Index(
+            "ix_factory_signals_ingested",
+            "workspace_id",
+            "factory_id",
+            "ingested_at",
+            "number",
+        ),
+        Index("ix_factory_signals_expires", "workspace_id", "expires_at", "factory_id", "number"),
+    )
+
+
+class SqlFactorySignalLink(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_signal_links``: a signal attached to an opportunity.
+
+    A detached link keeps its row (``detached_at``) for history and Undo.
+
+    :param counter: ``1`` when the signal argues against the opportunity.
+    :param confidence: 0-100, or ``NULL`` when the attacher did not say.
+    :param attached_kind: Code of FACTORY_ACTOR_KIND.
+    :param via: Provenance of a link the server moved, e.g. ``merge:O-3``.
+    """
+
+    __tablename__ = "factory_signal_links"
+
+    workspace_id: Mapped[int] = _ws_column()
+    factory_id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    signal: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    opportunity: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    counter: Mapped[int] = mapped_column(SmallInteger, nullable=False, server_default="0")
+    confidence: Mapped[int | None] = mapped_column(SmallInteger, nullable=True)
+    attached_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    attached_kind: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    attached_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    via: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    detached_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    detached_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    detach_reason: Mapped[str | None] = mapped_column(String(200), nullable=True)
+
+    __table_args__ = (
+        CheckConstraint("counter IN (0, 1)", name="ck_factory_signal_links_counter"),
+        CheckConstraint(
+            "attached_kind IN (1, 2, 3)", name="ck_factory_signal_links_attached_kind"
+        ),
+        Index(
+            "ix_factory_signal_links_opportunity",
+            "workspace_id",
+            "factory_id",
+            "opportunity",
+            "signal",
+        ),
+    )
+
+
+class SqlFactoryOpportunity(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_opportunities``: a user need, ``O-<number>``.
+
+    Status, evidence and score are derived by the server and never stored.
+
+    :param votes: JSON ``{user id: +1 | -1}``.
+    :param park: JSON ``{until?, reason?, by, at}`` while snoozed.
+    :param kill: JSON ``{reason, note?, by, at, level}``.
+    :param created_kind: Code of FACTORY_ACTOR_KIND.
+    """
+
+    __tablename__ = "factory_opportunities"
+
+    workspace_id: Mapped[int] = _ws_column()
+    factory_id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    number: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    title: Mapped[str] = mapped_column(String(120), nullable=False)
+    statement: Mapped[str] = mapped_column(String(300), nullable=False)
+    problem: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    goal: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    non_goal: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    segments: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    area: Mapped[str | None] = mapped_column(String(32), nullable=True)
+    alternatives: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    bet_note: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    votes: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    pinned_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    pinned_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    park: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    kill: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    merged_into: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    split_from: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    research: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    plan_request: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    declines: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    origin: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    result: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    created_by: Mapped[str] = mapped_column(String(128), nullable=False)
+    created_kind: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("created_kind IN (1, 2, 3)", name="ck_factory_opportunities_created_kind"),
+    )
+
+
+class SqlFactoryScoreSnapshot(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_score_snapshots``: one score at a decision point.
+
+    :param inputs: JSON facts the score read.
+    :param parts: JSON ``{reach_s, intensity, fit, confidence}``.
+    """
+
+    __tablename__ = "factory_score_snapshots"
+
+    workspace_id: Mapped[int] = _ws_column()
+    id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    factory_id: Mapped[str] = mapped_column(Uuid16, nullable=False)
+    opportunity: Mapped[int] = mapped_column(Integer, nullable=False)
+    at: Mapped[int] = mapped_column(Integer, nullable=False)
+    reason: Mapped[str] = mapped_column(String(32), nullable=False)
+    def_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    rank: Mapped[float] = mapped_column(Float, nullable=False)
+    band: Mapped[str] = mapped_column(String(16), nullable=False)
+    level: Mapped[str] = mapped_column(String(16), nullable=False)
+    inputs: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    parts: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+
+    __table_args__ = (
+        Index(
+            "ix_factory_score_snapshots_opportunity",
+            "workspace_id",
+            "factory_id",
+            "opportunity",
+            "at",
+            "id",
+        ),
+    )
+
+
+class SqlFactorySourceState(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_source_state``: a source's cursor, health and usage.
+
+    :param usage_day: The UTC day ``calls_today`` counts (``YYYY-MM-DD``).
+    :param data: JSON the source keeps between runs.
+    """
+
+    __tablename__ = "factory_source_state"
+
+    workspace_id: Mapped[int] = _ws_column()
+    factory_id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    source: Mapped[str] = mapped_column(String(32), primary_key=True)
+    cursor: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    last_ok_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_error_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String(300), nullable=True)
+    failures: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    usage_day: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    calls_today: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    signals_total: Mapped[int] = mapped_column(Integer, nullable=False, server_default="0")
+    data: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)

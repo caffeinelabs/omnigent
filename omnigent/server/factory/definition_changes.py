@@ -3,7 +3,7 @@
 - :func:`preview_change` is a dry run of ``PUT …/definition`` (or of a
   restore): the diff with each path's class, who can apply it, what it would
   do, what blocks it, whether it may run as a trial, and the re-rank of
-  opportunities (filled once the discovery ledger exists). Nothing is stored.
+  opportunities a strategy or rubric change causes. Nothing is stored.
 - :func:`restore_version` stores an old version's document as the next
   version (a human ``C-n``), so history stays linear: its Undo is a re-pin of
   the version before it within :data:`.definition.UNDO_WINDOW_S`, or another
@@ -405,7 +405,7 @@ def _preview(
         "you_can_propose": level >= LEVEL_EDIT,
         "blocked": blocked,
         "effects": effects,
-        "rerank": [],
+        "rerank": _rerank(deps, root.id, resolved.stored, after, paths),
         "trialable": _trial_info(deps, root.id, paths, restore=body.restore, trial_h=body.trial_h),
         "restore": (
             {"version": body.restore, "ends": [proposal_ref(r.number) for r in ending]}
@@ -413,6 +413,19 @@ def _preview(
             else None
         ),
     }
+
+
+def _rerank(
+    deps: FactoryDeps,
+    factory_id: str,
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+    paths: Sequence[str],
+) -> list[dict[str, Any]]:
+    """How the change moves the open opportunities (empty while discovery is off)."""
+    from omnigent.server.factory.discovery import rubric
+
+    return rubric.rerank(deps, factory_id, before, after, paths)
 
 
 async def preview_change(

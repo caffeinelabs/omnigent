@@ -5,10 +5,14 @@
 - the closure reason of a ``pr_closed`` decision (its options carry
   ``reasons``; an answer without one records no closure);
 - "Is this right?" calibration of retro and finding labels (+1/-1, or a
-  corrected category in ``tags``) and root-cause confirmations on incidents.
+  corrected category in ``tags``) and root-cause confirmations on incidents;
+- discovery: people's corrections of signals and opportunities (merge,
+  split, rename, move, attach, "not about this") as ``calibration``, and the
+  reason an opportunity was killed as ``closure``.
 
-Taxonomies are the seeded Tier-0 constants :data:`~omnigent.factory.CLOSURE_REASONS`
-and :data:`~omnigent.factory.ROOT_CAUSES`.
+Taxonomies are the seeded Tier-0 constants :data:`~omnigent.factory.CLOSURE_REASONS`,
+:data:`~omnigent.factory.ROOT_CAUSES`, :data:`~omnigent.factory.KILL_REASONS` and
+:data:`~omnigent.factory.DISCOVERY_CALIBRATIONS`.
 """
 
 from __future__ import annotations
@@ -20,7 +24,14 @@ from typing import TYPE_CHECKING, Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from omnigent.factory import CLOSURE_REASONS, FEEDBACK_KINDS, FEEDBACK_TARGETS, ROOT_CAUSES
+from omnigent.factory import (
+    CLOSURE_REASONS,
+    DISCOVERY_CALIBRATIONS,
+    FEEDBACK_KINDS,
+    FEEDBACK_TARGETS,
+    KILL_REASONS,
+    ROOT_CAUSES,
+)
 from omnigent.server.auth import LEVEL_READ
 from omnigent.server.factory import control, definition, events, live
 from omnigent.server.factory.context import factory_deps
@@ -40,6 +51,12 @@ _TAG_SETS: Final[dict[str, tuple[str, ...]]] = {
     "root_cause": ROOT_CAUSES,
     "calibration": ROOT_CAUSES,
 }
+_DISCOVERY_TAGS: Final[dict[tuple[str, str], tuple[str, ...]]] = {
+    ("closure", "opportunity"): KILL_REASONS,
+    ("calibration", "opportunity"): DISCOVERY_CALIBRATIONS,
+    ("calibration", "signal"): DISCOVERY_CALIBRATIONS,
+}
+"""Tag sets of the discovery targets (they replace the kind's set for that target)."""
 
 
 class FeedbackIn(BaseModel):
@@ -49,7 +66,16 @@ class FeedbackIn(BaseModel):
 
     factory_id: str
     target_kind: Literal[
-        "pr", "demo", "decision", "project", "member", "factory", "issue", "proposal"
+        "pr",
+        "demo",
+        "decision",
+        "project",
+        "member",
+        "factory",
+        "issue",
+        "proposal",
+        "signal",
+        "opportunity",
     ]
     target_id: str = Field(min_length=1, max_length=64)
     kind: Literal["rating", "useful", "unneeded", "closure", "calibration", "root_cause"]
@@ -60,9 +86,11 @@ class FeedbackIn(BaseModel):
     project: str | None = Field(None, max_length=64)
 
 
-def check(kind: str, rating: int | None, tags: Sequence[str]) -> None:
+def check(
+    kind: str, rating: int | None, tags: Sequence[str], target_kind: str | None = None
+) -> None:
     """
-    Validate one signal's rating and tags.
+    Validate one signal's rating and tags (a discovery target has its own tag sets).
 
     :raises CockpitError: 400 ``invalid_rating`` / ``invalid_tag``.
     """
@@ -72,7 +100,7 @@ def check(kind: str, rating: int | None, tags: Sequence[str]) -> None:
         raise CockpitError(400, "invalid_rating", "thumbs are +1 or -1", field="rating")
     if kind == "useful" and rating is None:
         raise CockpitError(400, "invalid_rating", "useful needs +1 or -1", field="rating")
-    allowed = _TAG_SETS.get(kind)
+    allowed = _DISCOVERY_TAGS.get((kind, target_kind or "")) or _TAG_SETS.get(kind)
     if allowed is not None:
         bad = [t for t in tags if t not in allowed]
         if bad:
@@ -104,7 +132,7 @@ async def add(
     """Store one signal (validated) and emit ``feedback.added``."""
     if target_kind not in FEEDBACK_TARGETS or kind not in FEEDBACK_KINDS:
         raise CockpitError(400, "invalid_body", "unknown target kind or feedback kind")
-    check(kind, rating, tags)
+    check(kind, rating, tags, target_kind)
     deps = factory_deps(app_state)
     version = await asyncio.to_thread(definition.pinned_version, deps, factory_id)
     row = await asyncio.to_thread(

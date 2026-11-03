@@ -319,7 +319,7 @@ def _insert_minimal(engine: sa.Engine, table: str, **overrides: object) -> None:
         ("factory_spans", "kind", 21, 22),
         ("factory_spans", "outcome", 8, 9),
         ("factory_definitions", "created_via", 4, 5),
-        ("factory_feedback", "target_kind", 8, 9),
+        ("factory_feedback", "target_kind", 10, 11),
         ("factory_feedback", "kind", 6, 7),
     ],
 )

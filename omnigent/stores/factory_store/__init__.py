@@ -78,6 +78,7 @@ from omnigent.entities.factory import (
     FactoryTask,
     FactoryVersion,
 )
+from omnigent.stores.factory_store.discovery import DiscoveryStore, InMemoryDiscoveryStore
 
 PROJECT_FIELDS = frozenset(
     {
@@ -655,7 +656,7 @@ def default_pr_url(repo: str, number: int) -> str:
 # ── The store contract ─────────────────────────────────────────
 
 
-class FactoryStore(ABC):
+class FactoryStore(DiscoveryStore, ABC):
     """
     Abstract base for the factory cockpit's persistence.
 
@@ -1702,7 +1703,7 @@ def _normalise_pr_fields(fields: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-class InMemoryFactoryStore(FactoryStore):
+class InMemoryFactoryStore(InMemoryDiscoveryStore, FactoryStore):
     """
     A process-local :class:`FactoryStore` with the same semantics as the SQL store.
 

@@ -111,6 +111,12 @@ _CODECS = [
         ec.decode_factory_feedback_target,
     ),
     (ec.FACTORY_FEEDBACK_KIND, ec.encode_factory_feedback_kind, ec.decode_factory_feedback_kind),
+    (ec.FACTORY_SIGNAL_KIND, ec.encode_factory_signal_kind, ec.decode_factory_signal_kind),
+    (ec.FACTORY_SOURCE_KIND, ec.encode_factory_source_kind, ec.decode_factory_source_kind),
+    (ec.FACTORY_PRIVACY, ec.encode_factory_privacy, ec.decode_factory_privacy),
+    (ec.FACTORY_SAY_DO, ec.encode_factory_say_do, ec.decode_factory_say_do),
+    (ec.FACTORY_INTENSITY, ec.encode_factory_intensity, ec.decode_factory_intensity),
+    (ec.FACTORY_FORCE, ec.encode_factory_force, ec.decode_factory_force),
 ]
 
 
@@ -223,3 +229,23 @@ def test_shipped_codes_are_stable() -> None:
     assert ec.FACTORY_DECISION_STATUS == {"open": 1, "answered": 2, "withdrawn": 3, "expired": 4}
     assert ec.FACTORY_EVENT_SEVERITY == {"info": 0, "notice": 1, "warning": 2, "critical": 3}
     assert ec.FACTORY_DEMO_STATUS == {"PASS": 1, "PARTIAL": 2, "FAIL": 3, "ERROR": 4}
+    assert ec.FACTORY_FEEDBACK_TARGET["signal"] == 9
+    assert ec.FACTORY_FEEDBACK_TARGET["opportunity"] == 10
+    assert ec.FACTORY_SIGNAL_KIND == {
+        "request": 1,
+        "pain": 2,
+        "praise": 3,
+        "bug": 4,
+        "churn_reason": 5,
+        "behavior": 6,
+        "market": 7,
+        "test_result": 8,
+        "hunch": 9,
+        "idea": 10,
+        "simulation": 11,
+    }
+    assert ec.FACTORY_SOURCE_KIND["repo"] == 1 and ec.FACTORY_SOURCE_KIND["factory"] == 12
+    assert ec.FACTORY_PRIVACY == {"public": 1, "internal": 2, "personal": 3, "sensitive": 4}
+    assert ec.FACTORY_SAY_DO == {"say": 1, "do": 2}
+    assert ec.FACTORY_INTENSITY == {"blocker": 1, "workaround": 2, "annoyance": 3, "nice": 4}
+    assert ec.FACTORY_FORCE == {"push": 1, "pull": 2, "anxiety": 3, "habit": 4}

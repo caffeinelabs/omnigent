@@ -133,10 +133,12 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
 
         return _noop
 
-    from omnigent.server.factory import chat, definition, tier2
+    from omnigent.server.factory import chat, definition, discovery, tier2
 
     # The per-factory definition feeds loop budgets, detector thresholds and timings.
     restore_definition = definition.install(app_state)
+    # Bets read opportunities and quotes from the discovery ledger (dark until turned on).
+    uninstall_discovery = discovery.install(app_state)
     stop_tier2 = tier2.start_probe(app_state)
     mailer = get_mailer(app_state)
     if replay_enabled():
@@ -196,6 +198,7 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
         if uninstall_team is not None:
             uninstall_team()
         await stop_tier2()
+        uninstall_discovery()
         restore_definition()
         await stop_room()
         if stop_ops is not None:
