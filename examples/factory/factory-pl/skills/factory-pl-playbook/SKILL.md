@@ -1,6 +1,6 @@
 ---
 name: factory-pl-playbook
-description: Project-lead playbook for the Omnigent software factory - the integration env (KIND: integration), the kickoff worker preflight, plan.md and task-card templates (Preview and Demo focus), worktree and branch naming, parallel dispatch rules, the /goal convention, the review → factory preview → demo → ready-for-human-merge pipeline, the idle dev env while PRs wait for a human merge, the env_keeper and demo results table (preview failures, tooling conflicts, the preview cap), the server message table (reviews, decisions, PR, preview and dev env notices), the PR review-links block, questions through sys_factory_ask, the definition of done, milestone reports, and the pause and done procedures.
+description: Project-lead playbook for the Omnigent software factory - the integration env (KIND: integration), initiatives' acceptance runs (ACCEPT), the kickoff worker preflight, plan.md and task-card templates (Preview and Demo focus), worktree and branch naming, parallel dispatch rules, the /goal convention, the review → factory preview → demo → ready-for-human-merge pipeline, the idle dev env while PRs wait for a human merge, the env_keeper and demo results table (preview failures, tooling conflicts, the preview cap), the server message table (reviews, decisions, PR, preview and dev env notices), the PR review-links block, questions through sys_factory_ask, the definition of done, milestone reports, and the pause and done procedures.
 ---
 
 # PL playbook
@@ -19,7 +19,8 @@ env tracks origin/<base>. Pass it on every dispatch, never assume `main`:
 
 A charter with a `KIND: integration` line (slug `base-env`) only keeps a live
 env at the head of origin/<base> for humans to try: no tasks, ICs, reviewers,
-demos or PRs, and heartbeats are off. These steps replace KICKOFF and LOOP:
+demos or PRs (the demo agent only runs ACCEPT, step 5), and heartbeats are
+off. These steps replace KICKOFF and LOOP:
 1. Run `load_skill("factory-protocol")` and `sys_factory_rules()`, then
    `sys_session_send(agent="env_keeper", title="env", args={input: "UP base=<base>"})`.
 2. `ENV READY <urls>`: smoke-check it: `curl -fsS <app>/__factory/preview`
@@ -30,11 +31,38 @@ demos or PRs, and heartbeats are off. These steps replace KICKOFF and LOOP:
    "degraded" and the failing check otherwise), and one line of status:
    `sys_factory_set(summary="<base>@<sha7> · app ok · api ok")`.
 4. `[Factory notice · base <base> moved <old7> → <new7>]`: send env_keeper
-   `UP base=<base>` again (it moves the env to the new head), then 2-3.
+   `UP base=<base>` again (it moves the env to the new head), then 2-3. The
+   step-3 report at the new sha is what releases a waiting acceptance run.
+5. `[Factory acceptance · I-<n> run <k> · base <base> at <sha7>]`: the
+   playbook's "Acceptance runs" below.
 
 `ENV FAILED`: one more `UP base=<base>` (for a stale base image,
 `UP base=<base> tooling=<the fix PR's branch>`: results table), then
 `sys_factory_ask` the human.
+
+## Acceptance runs (initiatives)
+
+An initiative is one outcome several projects build (a charter
+`Initiative: I-<n> …` line names your part: as its walking skeleton, put a
+thin slice from the user surface to the back end on the base env first,
+behind the flag, and stub what a sibling has not built; otherwise integrate
+through the flag and the agreed contract, never by waiting on a sibling).
+After merges into the base the server runs its acceptance steps there:
+
+- `[Factory acceptance · I-<n> run <k> · base <base> at <sha7>]` (the base
+  env's PL, or the skeleton's when that PL is gone): send the request's
+  `ACCEPT …` line and numbered steps verbatim:
+  `sys_session_send(agent="demo", title="accept-i-<n>-r<k>", args={input: "<the ACCEPT line and the steps>"})`.
+  Add `secret_file=<path>` to the ACCEPT line when env_keeper has a
+  synthetic sign-in secret for the base env; without one the demo agent
+  skips the steps that need a signed-in user, with that reason. If the env
+  does not serve the request's sha, redeploy first (Integration env step 4).
+  The result line (`ACCEPT PASS|PARTIAL|FAIL|ERROR …`) is the whole answer:
+  the server records the run. Note it in plan.md.
+- `[Factory acceptance · I-<n> run <k> FAIL · step <s>]`: the server added
+  the task it names to your work graph: `sys_factory_task(op="ready")` and
+  dispatch it like any task; the next merge runs the acceptance again. While
+  that task is open a later failing run only updates its text (no new task).
 
 ## Preflight (KICKOFF step 2)
 

@@ -582,6 +582,70 @@ then `main`; Add project resolves the same way. It is stored as
   default `main`) is separate: it only names where heads that predate the
   tooling get it from.
 
+### Initiatives and acceptance runs
+
+An ask bigger than one project (a core, a UI, an integration) is **one
+initiative** (`I-<n>`, `server/factory/initiatives.py`, table
+`factory_initiatives`). It is a small object next to the projects rather
+than a reuse of a proposal (one wave each), an opportunity (discovery may be
+off) or a bet (frozen per project): it holds the ask verbatim, who asked,
+the acceptance steps, the projects, the planned waves and the newest
+acceptance runs; its state is computed from the projects and runs.
+
+- **Planning.** The lead files wave 1 as one projects proposal whose
+  analysis file carries `initiative: {title, outcome, flag, acceptance[{step,
+  expect, owner, needs}], skeleton, user_facing, why_wait, waves}`; a later
+  wave extends it with `{"id": "I-<n>"}`. The server refuses
+  `initiative_missing` (two or more projects for one person's ask, creates
+  or a split, without a block; also a later plan for the same Room message,
+  which extends that ask's initiative; `{"none": "<why>"}` opts out),
+  `initiative_open_for_ask` (a second initiative for an ask that has one),
+  `skeleton_waits` (the walking skeleton has a `depends_on`),
+  `skeleton_owns_no_step` (the skeleton is the user surface, so it owns an
+  acceptance step), `surface_waits_on_all` (a user-facing project, i.e.
+  `user_facing`, the skeleton or a step's owner, waits on every other new
+  project) and `unrelated_dependency` (a new project of the initiative
+  waits on a project outside it), each unless `why_wait` says why; each
+  dependency's own reason stays the project's `depends_why`. A plan that
+  extends an initiative a person asked for (a later wave, a follow-up for a
+  closed owner) is filed on that person's behalf when it only creates
+  projects or makes minor updates, so it applies at once (Undo stays open;
+  `confirm` autonomy still asks). Applying it stores the row and stamps each
+  project's charter with `initiative: {ref, title, role, wave, flag}`, which
+  the PL's charter renders; undoing the proposal takes it back.
+- **Acceptance runs** (`server/factory/acceptance.py`). A base move that
+  brings in a merged PR of an initiative's project (the one at the new head,
+  or any tracked PR merged since the previous head) makes a run `due`; an
+  initiative keeps one due run, at the newest head, and one run on its way
+  at a time (a due run waits for the requested one to report or expire).
+  When the base env reports ready at that head (or after 30 min anyway) the
+  server sends the base env's PL (else the skeleton's) `[Factory acceptance
+  · I-<n> run <k> · base <base> at <sha7>]` with an `ACCEPT …` line for its
+  demo agent. The demo agent records the steps on the base env with the demo
+  harness (`--skip-stale-check`; a step the env cannot run is skipped with
+  its reason) and publishes it with `sys_factory_demo(title="Acceptance
+  I-<n> run <k>", pr_url=<the run's PR>, head_sha=<the run's head>)`; only a
+  title that starts so counts, and only the member it was asked of (or the
+  base env's or skeleton's project) may report it (403 `not_your_run`). The
+  server stores it as a demo of no PR (`pr_number` 0, left out of the
+  project's PR demos) and the per-step result on the initiative. Each failed
+  step becomes a task of its owner project (`accept-i-<n>-s<k>`), and its
+  PL is told once; a later failing run updates the open task instead of
+  adding one. A closed owner (not active, done, or merged with no PL left)
+  goes to the lead as a follow-up to plan, and so does a step that still
+  fails after 3 fix tasks (told once); no person decides. A run with no
+  result expires after 3 h; `POST …/initiatives/{ref}/acceptance` runs one
+  now. Once the skeleton is on the base env, the card and the page link
+  "Try it on the base env" with the flag to turn on.
+- **Reads.** `GET /v1/factory/factories/{fid}/initiatives` (one line each)
+  and `GET …/initiatives/{ref}` (ask, acceptance with evidence links,
+  projects with stage, role, wave, dependencies and what each waits on,
+  runs, next wave, cost, time since the ask). The asks, the status summary
+  and the Slack digest carry the same one line (`initiatives`, left out when
+  none); Home shows a card per initiative above the projects. People rename
+  it, rewrite its steps, close, cancel or reopen it with `PATCH
+  …/initiatives/{ref}` (human origin; every change is an event).
+
 ### Factory previews
 
 A **factory preview** is the app deployed at one PR head so humans (and the

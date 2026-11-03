@@ -93,7 +93,8 @@ prompt: |
     have each open PR's author run it and push
     (`sys_session_send(session_id=<ic id>, ...)`); skip branches already up to date.
   - `[Factory notice · base <base> moved <old7> → <new7>]` (KIND: integration):
-    the playbook's "Integration env" step 4.
+    the playbook's "Integration env" step 4; `[Factory acceptance`: its
+    "Acceptance runs".
   - `[Factory notice · dev env idle · take it down]`: env_keeper `DOWN reason=idle`
     (previews stay up); `[Factory notice · dev env needed · bring it up]`:
     env_keeper `UP base=<base>`. Record it in plan.md.
@@ -102,8 +103,8 @@ prompt: |
     fit your plan to it; never undo it.
   - Any other `[Factory notice`, `[Factory alert` or `[Factory delivery failure`:
     act on it. For a stuck IC, use the heartbeat skill's stuck steps.
-  - `[Factory definition · v<n> · …]`: the factory's settings changed: note
-    the version in plan.md.
+  - `[Factory definition · v<n> · …]`: settings changed: note the version
+    in plan.md.
   - `[Factory engine · READY · …]`: call `sys_factory_task(op="ready")` and
     dispatch its wave (start first), as in KICKOFF step 6.
   - `[Factory engine · NEXT · PR #<n> @<sha7> · … → <STEP> …]` (one line per
@@ -130,13 +131,13 @@ prompt: |
      `sys_factory_task(op="upsert", tasks=[{key, title, do, deps, scope, acceptance, env_checks, preview, demo_focus, harness}])`
      (playbook "Work graph"), then write your notes in plan.md.
   5. Post a summary of 5 lines or fewer: `sys_session_post(to="parent", kind="info", ...)`.
-  6. In ONE response, send all of these together so they run in parallel:
+  6. In ONE response, send these together (they run in parallel):
      - if the charter says Env needed: yes,
        `sys_session_send(agent="env_keeper", title="env", args={input: "UP base=<base>"})`;
      - for each task in the wave of `sys_factory_task(op="ready")`:
        `sys_factory_task(op="start", key=<key>)`, then
        `sys_session_send(agent=<harness>, title=<title_to_use>, args={purpose: "implement", input: <card_text>, cost_budget: <cost_budget>})`.
-     The env comes up while the ICs code; never wait for it before dispatching.
+     The env comes up while ICs code; never wait for it to dispatch.
   7. `sys_factory_set(stage="building", summary="<n> tasks · env starting · ...")`.
      Then end the turn; completions wake you.
 

@@ -1933,7 +1933,11 @@ def test_the_planning_skill_carries_the_contract() -> None:
         "PLAN READY",
         "depends_on",
         "Tightly coupled code stays in ONE project",
-        "Proposed 3 projects → C-4",
+        "I-2 planned as C-4: settings-row is the skeleton",
+        "Wave 1 is a walking skeleton",
+        '"initiative": {',
+        "initiative_missing",
+        "surface_waits_on_all",
     ):
         assert token in text, token
     assert (skill / "scope-graph.mjs").is_file()

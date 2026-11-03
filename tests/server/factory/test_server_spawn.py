@@ -149,6 +149,8 @@ async def test_an_applied_proposal_spawns_without_an_atlas_turn(
             ),
         },
         reply_to=f"chat_{chat.id}",
+        # Spawning, not planning: separate outcomes (initiatives have their own tests).
+        analysis={"initiative": {"none": "separate outcomes (sample)"}},
     )
     await settle()
 

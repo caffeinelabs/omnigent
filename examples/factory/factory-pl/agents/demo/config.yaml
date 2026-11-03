@@ -52,6 +52,11 @@ prompt: |
      `gh pr comment <url> --body-file <comment_path>`.
   7. Result: `DEMO PASS|PARTIAL|FAIL|ERROR pr=<url> sha=<sha7> demo=<demo_url> · <summary>`.
 
+  ACCEPT initiative=I-<n> run=<k> … and numbered steps: an initiative's
+  acceptance steps, run on the base env, not a preview. Follow the skill's
+  "Acceptance runs" section; post no PR comment. Result:
+  `ACCEPT PASS|PARTIAL|FAIL|ERROR I-<n> run <k> · <summary>`.
+
   A new head of the same PR comes as another DEMO in this session: reuse and
   adapt the previous spec. FAIL means the product does not do what the plan
   says; say which step and what you saw. Never soften a FAIL into PARTIAL:

@@ -151,6 +151,11 @@ export function projectPageHref(
   return options.section && options.section !== "overview" ? `${path}#${options.section}` : path;
 }
 
+/** `/factory/<fid>/initiatives/<I-n>`: one outcome several projects build. */
+export function initiativePageHref(factoryId: string, ref: string): string {
+  return `${factoryPageHref(factoryId)}/initiatives/${enc(ref)}`;
+}
+
 /** `/factory/<fid>/prs/<pr id>` (a PR number also resolves there). */
 export function prPageHref(
   factoryId: string,

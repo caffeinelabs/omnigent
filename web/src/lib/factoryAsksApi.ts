@@ -7,6 +7,7 @@
 // are epoch seconds; every `href` is a cockpit path (`/factory/<id>/…`).
 
 import { factoryErrorFromResponse } from "./factoryApi";
+import type { InitiativeLine } from "./factoryInitiativesApi";
 import { authenticatedFetch } from "./identity";
 
 export type AskKind =
@@ -146,6 +147,8 @@ export interface AsksResponse {
   /** What the factory did on its own, Undo still open; absent from older servers. */
   fyi?: Fyi[];
   counts: AskCounts;
+  /** Initiatives being built, one line each (absent when none, and on older servers). */
+  initiatives?: InitiativeLine[];
 }
 
 export async function fetchFactoryAsks(

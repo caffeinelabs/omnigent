@@ -1,6 +1,6 @@
 ---
 name: factory-planning
-description: How Atlas turns work asked for in the Room, or an opportunity discovery found, into factory projects - when to plan alone and when to dispatch the read-only planner sub-agent, the splitting heuristics, the planner's {changes, analysis} JSON contract with the scope-graph.mjs import-graph report, sys_factory_project(reply_to=…, analysis_file=…), autonomy, the one-line answer in the thread, the bet contract for work from an opportunity (flags from the product profile, decline with a reason), and filing your own ideas as idea signals.
+description: How Atlas turns work asked for in the Room, or an opportunity discovery found, into factory projects - when to plan alone and when to dispatch the read-only planner sub-agent, the splitting heuristics, an ask bigger than one project as ONE initiative (walking skeleton first, waves that widen it, integration through flags and stable contracts, acceptance steps the server runs on the base env after every merge), the planner's {changes, analysis} JSON contract with the scope-graph.mjs import-graph report and the analysis.initiative block, sys_factory_project(reply_to=…, analysis_file=…), autonomy, the one-line answer in the thread, the bet contract for work from an opportunity (flags from the product profile, decline with a reason), and filing your own ideas as idea signals.
 ---
 
 # Planning work into projects
@@ -57,8 +57,81 @@ node ~/factory/bin/scope-graph.mjs --selftest
   edges in the analysis mean merge, not split. Parallel PLs pay only when
   coupling is low; every extra PL costs about 15x the chat tokens.
 - Every DoD item has an observable check, and every project a `demo_focus`.
+- An ask that needs more than one project is ONE initiative: section 3b.
+
+## 3b. An ask bigger than one project: one initiative
+
+People judge the factory by whether a feature of that size reaches them, not
+by how many projects it runs. Plan it as one outcome:
+
+- **Wave 1 is a walking skeleton**: ONE project that cuts a thin vertical
+  slice from the user surface to the back end (a visible entry point, one
+  real round trip, the flag), which a person can try on the base env within
+  hours. It starts at once: no `depends_on`. What it needs from a sibling
+  that does not exist yet, it stubs behind a stable contract.
+- **Later waves widen it**: more capabilities, integrations, polish. Each
+  wave is a projects proposal that extends the initiative.
+- **Parallel projects integrate through the flag and stable contracts**
+  (an agreed API shape, a typed interface, a fake), never by waiting on each
+  other. A project that faces users never waits for every other project to
+  merge.
+- **`depends_on` only for a real code or API dependency**, with its reason
+  (section 3); never on unrelated projects.
+- **Every wave ends with the acceptance run**: the server runs the
+  initiative's acceptance steps on the base env after each merge into the
+  base and turns a failed step into a task of its project.
+
+Put the initiative in the plan's analysis JSON (the `analysis_file`), next
+to the planner's analysis:
+
+```json
+{"changes": [...],
+ "analysis": {"…": "…"},
+ "initiative": {
+   "title": "<short name, ≤ 80 chars>",
+   "outcome": "<what users get, one sentence>",
+   "flag": "<flag key from the product profile's delivery.flags>",
+   "acceptance": [
+     {"step": "<what a person does on the base env>", "expect": "<what they see>",
+      "owner": "<slug whose code it exercises>", "needs": ["login"]}
+   ],
+   "skeleton": "<slug of the walking skeleton>",
+   "user_facing": ["<slugs with a user surface>"],
+   "why_wait": {"<user-facing slug>": "<why it cannot start before the others merge>"},
+   "waves": [{"n": 2, "goal": "<what wave 2 widens>", "projects": ["<planned slugs>"]}]
+ }}
+```
+
+- 1-12 acceptance steps, each one thing a person does and sees, runnable by
+  a demo agent with a browser and the API against the base env behind the
+  flag. `needs` names what an env may lack (`login`: a signed-in user,
+  `build`, `ai`, `external` providers): the demo agent skips such a step
+  with the reason, and the cockpit shows it as "cannot run in envs".
+- Several projects for one person's ask without an `initiative` block are
+  refused (`initiative_missing`), also when you file them one by one: a
+  later plan for the same message extends that ask's initiative
+  (`{"id": "I-<n>"}`). Separate, unrelated outcomes asked in one message:
+  `"initiative": {"none": "<why they are separate>"}`.
+- The skeleton is the surface people try first: it owns at least one step
+  (`skeleton_owns_no_step`). Every step's owner counts as user-facing.
+- The server refuses `skeleton_waits` (the skeleton has a `depends_on`),
+  `surface_waits_on_all` (a user-facing project waits for every other new
+  one) and `unrelated_dependency` (any project of it waits on a project
+  outside the initiative) unless `why_wait` says why. Fix the plan, do not
+  just add a reason.
+- Extend it in a later wave with `"initiative": {"id": "I-<n>", "waves": […]}`
+  (new acceptance steps replace the old ones); it applies at once for the
+  person who asked. `sys_factory_project()` with no arguments lists the open
+  initiatives with their projects and last run.
+- `[Factory acceptance · I-<n> run <k> FAIL · step <s> · <slug> is closed]`
+  or `… · fixes did not hold]`: plan the fix as a follow-up project of I-<n>
+  (extend it); never ask a person.
 
 ## 4. The contract and the proposal
+
+For an initiative, also tell the planner: `INITIATIVE: wave 1 is a walking
+skeleton project (user surface to back end, no depends_on), the rest
+parallel behind the flag; write the initiative block (section 3b)`.
 
 The planner writes `~/factory/plans/<id>.json` and ends with
 `PLAN READY ~/factory/plans/<id>.json · <n> projects` (or `PLAN FAILED <why>`):
@@ -73,8 +146,9 @@ The planner writes `~/factory/plans/<id>.json` and ends with
 ```
 
 Read it, fix anything that breaks the heuristics (drop each dependency that is
-not a real code or API one; give each one left its reason, `"<slug>: <why>"`),
-then file it as ONE proposal:
+not a real code or API one; give each one left its reason, `"<slug>: <why>"`;
+add or fix the `initiative` block for a multi-project ask), then file it as
+ONE proposal:
 `sys_factory_project(changes=<its changes>, rationale=<why this split, 2-4 lines>, thread="factory", reply_to="chat_<id>", analysis_file="~/factory/plans/<id>.json")`.
 A field error names its path (`changes[1].project.slug`): fix and call again.
 `dependency_reason_required`: write the item it names as `"<slug>: <why>"`.
@@ -88,6 +162,9 @@ and change only what the answer covers: routine upkeep (scope paths,
 constraints, DoD, priority, depends_on) of the decision's project or one the
 answer names, and a create or a goal change only of a project the chosen
 option names. That applies at once on their behalf; one proposal per answer.
+A plan that extends an initiative a person asked for (`{"id": "I-<n>"}`:
+a later wave, a follow-up for a failing step) applies at once on their
+behalf too when it only creates projects or makes minor updates.
 Never ask twice. What else applies at once depends on the owners' autonomy
 level (`standard`: routine updates of scope paths, constraints, DoD,
 priority, and depends_on with each reason; `tryout`: also a new project
@@ -99,8 +176,9 @@ again if the work is still needed.
 
 ## 5. Answer in one line
 
-`sys_factory_chat(thread="factory", reply_to="chat_<id>", message="Proposed 3 projects → C-4: db-version, api-version, settings-row waits on both")`.
-The C-n card in the thread shows the plan, its depends_on and the analysis.
+`sys_factory_chat(thread="factory", reply_to="chat_<id>", message="I-2 planned as C-4: settings-row is the skeleton (on the base env in hours, behind settings.version); db-version and api-version widen it in parallel. Acceptance: 3 steps.")`.
+The C-n card in the thread shows the plan, its depends_on and the analysis;
+the initiative's page shows its acceptance and progress.
 
 ## From an opportunity (discovery)
 

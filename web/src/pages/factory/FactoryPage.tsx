@@ -37,6 +37,7 @@ import { SettingsPage } from "./SettingsPage";
 import { SteerPage } from "./SteerPage";
 import { TimelinePage } from "./TimelinePage";
 import { AgentRoute, HomeRoute, ProjectTeamRoute, TeamsRoute } from "./cockpitV2Routes";
+import { InitiativePage } from "./InitiativePage";
 
 /** `/activity`: every factory event, filterable by project, member and kind. */
 function ActivityPage() {
@@ -83,6 +84,7 @@ export function FactoryPage() {
         <Route path="projects/:slug" element={<ProjectPage />} />
         <Route path="projects/:slug/team" element={<ProjectTeamRoute />} />
         <Route path="projects/:slug/:tab" element={<ProjectPage />} />
+        <Route path="initiatives/:ref" element={<InitiativePage />} />
         <Route path="prs/:prId" element={<PrPage />} />
         <Route path="agents" element={<AgentsPage />} />
         <Route path="agents/:sid" element={<AgentRoute />} />

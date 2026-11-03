@@ -1,6 +1,6 @@
 ---
 name: factory-demo
-description: Demo agent reference for recording reviewable PR demos in a factory preview - the Playwright harness shipped with this skill (setup, the demo.spec.ts format and fixtures, synthetic login, run.mjs exit codes, explore.mjs), the ~/factory/demos layout and demo.json manifest, publishing with sys_factory_demo, the PR comment, caps, statuses and the failure table.
+description: Demo agent reference for recording reviewable PR demos in a factory preview - the Playwright harness shipped with this skill (setup, the demo.spec.ts format and fixtures, synthetic login, run.mjs exit codes, explore.mjs), the ~/factory/demos layout and demo.json manifest, publishing with sys_factory_demo, the PR comment, caps, statuses and the failure table - and running an initiative's acceptance steps on the base env (ACCEPT).
 ---
 
 # factory-demo
@@ -201,6 +201,42 @@ text and JSON ≤ 2 MB, at most 30 files and 120 MB per demo. Files over a cap
 are skipped and listed under `skipped`. Errors: `sha_mismatch` (the manifest
 is for another head: run again at the head), `file_not_allowed`,
 `demo_too_large`.
+
+## Acceptance runs on the base env (ACCEPT)
+
+An initiative is one outcome several projects build. After merges into the
+base the server asks for its acceptance steps to be run on the base env
+(the env that tracks the base branch), not on a preview:
+`ACCEPT initiative=I-<n> run=<k> pr=<url> sha=<40> app=<url> api=<url> flag=<key|none> [secret_file=<path>]`
+followed by the numbered steps (`<step> → <expect> [needs: …]`).
+
+- Spec: `~/factory/accept/<n>-<k>/demo.spec.ts`, one `step` (or `step.api`)
+  per numbered step, in order, each titled with its step, each asserting the
+  expected result. Turn the flag on the way the environment profile says
+  (a query parameter, a header, a storage entry) when the step needs it.
+- A step this env cannot run is `step.skip(title, reason)`, never a fake
+  pass: `needs: login` without `secret_file` →
+  `"synthetic login unavailable on the base env"`; `needs: build`/`ai` →
+  `"needs the build tier"`/`"needs the AI tier (not in factory envs)"`;
+  `needs: external` → `"needs <provider>, not reachable from envs"`.
+- Run with `--skip-stale-check` (the base env serves no preview stamp) and
+  `--summary "Acceptance I-<n> run <k>: <one line>"`:
+
+```bash
+D=~/factory/accept/<n>-<k>
+node ~/factory/demo-harness/run.mjs --spec "$D/demo.spec.ts" --out "$D" \
+  --app <app> --api <api> --pr <pr url> --sha <40-char sha> --skip-stale-check \
+  [--synthetic-secret-file <secret_file>] [--storage '<environment.demo>'] \
+  --summary "Acceptance I-<n> run <k>: <one line>"
+```
+
+- Publish with the run's words in the title, so the server files it on the
+  initiative instead of the PR:
+  `sys_factory_demo(pr_url=<pr url>, head_sha=<sha>, title="Acceptance I-<n> run <k>", manifest_path=$D/demo.json)`.
+  It returns no PR comment; never post one. `sha_mismatch` means the run is
+  at another head: use the sha of the ACCEPT line.
+- Result: `ACCEPT <STATUS> I-<n> run <k> · <summary>`. A failed step becomes
+  a task of its project on the server; say which step and what you saw.
 
 ## Failure table
 

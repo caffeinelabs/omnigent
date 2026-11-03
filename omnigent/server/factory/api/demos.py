@@ -26,7 +26,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field, ValidationError
 from starlette.datastructures import FormData, UploadFile
 
-from omnigent.entities.factory import FactoryDemo, FactoryPr
+from omnigent.entities.factory import FactoryDemo, FactoryInitiative, FactoryPr
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.factory import (
     DEMO_CLASS_MAX_BYTES,
@@ -44,7 +44,7 @@ from omnigent.factory import (
     parse_pr_url,
 )
 from omnigent.server.auth import LEVEL_READ
-from omnigent.server.factory import events
+from omnigent.server.factory import acceptance, events
 from omnigent.server.factory.agent_scope import (
     AgentCaller,
     announce_new_pr,
@@ -53,6 +53,7 @@ from omnigent.server.factory.agent_scope import (
     require_factory_repo,
 )
 from omnigent.server.factory.context import FactoryDeps, factory_deps
+from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.demo_mirror import mirror_for_comment
 from omnigent.server.factory.demo_storage import (
     DemoStoreUnavailableError,
@@ -283,10 +284,101 @@ def _resolve_status(meta: DemoMeta) -> str:
     return status
 
 
+def _record_acceptance(
+    caller: AgentCaller,
+    meta: DemoMeta,
+    files: list[DemoFileIn],
+    *,
+    status: str,
+    repo: str,
+    accepted: tuple[FactoryInitiative, dict[str, Any]],
+) -> FactoryDemo:
+    """Store an acceptance run's evidence as a demo of no PR (``pr_number`` 0) on the base env."""
+    deps = caller.deps
+    row, run = accepted
+    owner = caller.membership.root_session_id
+    demo_id = new_id()
+    stored = _store_files(
+        deps, owner, files, factory_id=norm_id(caller.factory_id), demo_id=demo_id
+    )
+    given = meta.summary or (meta.manifest or {}).get("summary")
+    title, summary, preview_url = clip_meta(
+        meta.title, given if isinstance(given, str) else None, meta.preview_url
+    )
+    manifest = link_manifest(meta.manifest, stored) or {}
+    manifest["acceptance"] = {"initiative": row.ref, "run": run.get("n")}
+    integ = acceptance.integration_for(deps, caller.factory_id, run.get("repo"), run.get("base"))
+    try:
+        return deps.factory_store.create_demo(
+            factory_id=caller.factory_id,
+            project_slug=integ.slug if integ is not None else (caller.membership.project or ""),
+            repo=repo,
+            pr_number=0,
+            head_sha=meta.head_sha.lower(),
+            session_id=owner,
+            created_by_session=caller.session.id,
+            status=status,
+            title=title,
+            summary=summary,
+            files=stored,
+            manifest=manifest,
+            pr_id=None,
+            preview_url=preview_url or run.get("app"),
+            demo_id=demo_id,
+        )
+    except Exception:
+        _discard_files(deps, owner, stored)
+        raise
+
+
+def _match_acceptance(
+    caller: AgentCaller, meta: DemoMeta
+) -> tuple[FactoryInitiative, dict[str, Any]] | None:
+    """
+    The acceptance run a demo titled ``Acceptance I-<n> run <k> …`` reports.
+
+    :raises FactoryRouteError: As :func:`.acceptance.match_report`; 403
+        ``not_your_run`` when the run was asked of another member.
+    """
+    try:
+        found = acceptance.match_report(
+            caller.deps, caller.factory_id, meta.title or "", meta.head_sha.lower()
+        )
+    except CockpitError as exc:
+        raise FactoryRouteError(exc.status_code, exc.code, exc.message) from exc
+    if found is None:
+        return None
+    row, run = found
+    if not acceptance.may_report(
+        caller.deps,
+        caller.factory_id,
+        row,
+        run,
+        root_session_id=caller.membership.root_session_id,
+        project=caller.membership.project,
+    ):
+        raise FactoryRouteError(
+            403,
+            "not_your_run",
+            f"{row.ref} run {run.get('n')} was asked of "
+            f"{run.get('requested_of_title') or 'the base env lead'}; only that lead's demo "
+            "agent, or one of the base env or the walking skeleton, reports it",
+        )
+    return found
+
+
 async def _publish(
     request: Request, form: FormData, caller: AgentCaller
-) -> tuple[FactoryDemo, dict[str, Any] | None, list[DemoFileIn]]:
-    """Validate the parsed upload, then store it; returns the demo, preview URLs and files."""
+) -> tuple[
+    FactoryDemo,
+    dict[str, Any] | None,
+    list[DemoFileIn],
+    tuple[FactoryInitiative, dict[str, Any]] | None,
+]:
+    """
+    Validate the parsed upload, then store it; returns the demo, preview URLs,
+    files and the acceptance run it reports (``None`` for a PR demo).
+    """
     meta = _parse_meta(form.get("meta"))
     if caller.session.id != meta.from_session_id:
         raise FactoryRouteError(
@@ -305,12 +397,27 @@ async def _publish(
     status = _resolve_status(meta)
     repo, number = parsed
     slugs = await asyncio.to_thread(require_factory_repo, caller, repo)
+    accepted = await asyncio.to_thread(_match_acceptance, caller, meta)
     uploads = [part for part in form.getlist("files") if isinstance(part, UploadFile)]
     parts = await _read_parts(uploads)
     try:
         files = check_upload([f.model_dump() for f in meta.files], parts)
     except DemoUploadError as exc:
         raise _upload_error(exc) from exc
+    if accepted is not None:
+        try:
+            demo = await asyncio.to_thread(
+                _record_acceptance,
+                caller,
+                meta,
+                files,
+                status=status,
+                repo=repo,
+                accepted=accepted,
+            )
+        except DemoStoreUnavailableError as exc:
+            raise _store_unavailable() from exc
+        return demo, None, files, accepted
     try:
         demo, preview_urls, new_pr = await asyncio.to_thread(
             _record_demo, caller, meta, files, status=status, repo=repo, number=number, slugs=slugs
@@ -319,7 +426,7 @@ async def _publish(
         raise _store_unavailable() from exc
     if new_pr is not None:
         await announce_new_pr(request.app.state, caller, new_pr)
-    return demo, preview_urls, files
+    return demo, preview_urls, files, None
 
 
 @router.post("/agent/demos", dependencies=[Depends(require_trusted_origin)])
@@ -342,10 +449,12 @@ async def publish_demo(request: Request, from_session_id: str = Query(...)) -> d
         max_part_size=DEMO_MANIFEST_MAX_BYTES + _MULTIPART_SLACK,
     )
     try:
-        demo, preview_urls, files = await _publish(request, form, caller)
+        demo, preview_urls, files, accepted = await _publish(request, form, caller)
     finally:
         await form.close()
     base = public_base_url(str(request.base_url))
+    if accepted is not None:
+        return await _acceptance_reply(request, caller, demo, accepted, base)
     # Stored first; the GitHub copy for reviewers is best effort and bounded.
     embeds = await mirror_for_comment(request.app.state, demo, files, base_url=base)
     subject = f"pr:{demo.repo}#{demo.pr_number}"
@@ -377,6 +486,49 @@ async def publish_demo(request: Request, from_session_id: str = Query(...)) -> d
         ],
         "comment_markdown": render_demo_comment(
             demo, base_url=base, preview_urls=preview_urls, embeds=embeds
+        ),
+    }
+
+
+def _files_view(demo: FactoryDemo, base: str) -> list[dict[str, Any]]:
+    return [
+        {
+            "id": f["file_id"],
+            "name": f["name"],
+            "kind": f["kind"],
+            "content_type": f["content_type"],
+            "bytes": f["bytes"],
+            "url": demo_file_url(base, demo.id, f["file_id"]),
+        }
+        for f in demo.files
+    ]
+
+
+async def _acceptance_reply(
+    request: Request,
+    caller: AgentCaller,
+    demo: FactoryDemo,
+    accepted: tuple[FactoryInitiative, dict[str, Any]],
+    base: str,
+) -> dict[str, Any]:
+    """Record the run on its initiative; an acceptance run gets no PR comment."""
+    row, run = accepted
+    stored = await acceptance.record_report(
+        request.app.state, caller.factory_id, row, run, demo, by=caller.title
+    )
+    reported = next((r for r in stored.runs if r.get("n") == run.get("n")), {})
+    tasks = list(reported.get("tasks") or [])
+    return {
+        "demo_id": demo.id,
+        "demo_url": f"{base}/factory/{caller.factory_id}/initiatives/{row.ref}",
+        "status": demo.status,
+        "files": _files_view(demo, base),
+        "comment_markdown": None,
+        "acceptance": {"initiative": row.ref, "run": run.get("n"), "tasks": tasks},
+        "next": (
+            f"No PR comment: the server recorded run {run.get('n')} on {row.ref}"
+            + (f"; failed steps became {', '.join(tasks)}" if tasks else "")
+            + ". Report the result line to your lead."
         ),
     }
 

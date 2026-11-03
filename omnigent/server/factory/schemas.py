@@ -1162,6 +1162,21 @@ class WaitingOnView(_View):
     decision_id: str | None = None
 
 
+class InitiativeRefView(_View):
+    """
+    The initiative a project is part of (``charter.initiative``).
+
+    :param role: ``skeleton`` (starts first, user surface to back end), ``surface``
+        (faces users) or ``part``.
+    """
+
+    ref: str
+    title: str
+    role: Literal["skeleton", "surface", "part"] = "part"
+    wave: int = 1
+    flag: str | None = None
+
+
 class ProjectView(_View):
     """One project card."""
 
@@ -1208,6 +1223,7 @@ class ProjectView(_View):
     health: ProjectHealthView | None = None
     waiting_on: list[WaitingOnView] = Field(default_factory=list)
     """Why it is not moving, the most decisive first (empty: nothing holds it)."""
+    initiative: InitiativeRefView | None = None
 
 
 # ── Decisions and events ───────────────────────────────────────
@@ -1932,6 +1948,7 @@ __all__ = [
     "FactorySnapshot",
     "FactorySummary",
     "HealthView",
+    "InitiativeRefView",
     "IssueView",
     "LoopHoldView",
     "LoopView",

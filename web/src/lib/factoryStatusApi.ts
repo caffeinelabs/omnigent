@@ -7,6 +7,7 @@
 
 import { authenticatedFetch } from "./identity";
 import { factoryErrorFromResponse } from "./factoryApi";
+import type { InitiativeLine } from "./factoryInitiativesApi";
 
 export type WaitingKind = "decision" | "pr" | "incident";
 
@@ -203,6 +204,8 @@ export interface StatusSummary {
   spend: StatusSpend;
   health: StatusHealth;
   counts: StatusCounts;
+  /** Initiatives being built, one line each (absent when none, and on older servers). */
+  initiatives?: InitiativeLine[];
 }
 
 /** Read one factory's "Now" as the viewer may see it. */

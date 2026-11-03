@@ -35,7 +35,10 @@ level.
 
 A proposal that carries out a person's answer to a decision (its
 ``reply_to`` names ``D-<n>``) never waits for a second approval of what the
-answer covers: see :mod:`.answer_authority`. Over-cap plans never get here: validation refuses
+answer covers: see :mod:`.answer_authority`. Likewise a plan that extends an
+initiative (``I-n``) a person asked for counts as their request when it only
+creates or makes minor updates (:func:`.initiatives.carried_request`), at
+every level; ``confirm`` still asks. Over-cap plans never get here: validation refuses
 them. Money is the owners': an op that sets, raises or removes a USD budget
 (:func:`raises_budgets`) is of class ``owner``.
 """
