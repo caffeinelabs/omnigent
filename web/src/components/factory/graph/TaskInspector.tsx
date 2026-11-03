@@ -27,6 +27,7 @@ import { controlErrorMessage } from "../controls/controlModel";
 import { TONE_CHIP, formatElapsed, formatUsd } from "../factoryFormat";
 import { prPageHref } from "../factoryRoutes";
 import { HeldRefList } from "../loops/HeldRefs";
+import { heldNote, heldOnAnswer } from "../loops/loopStripModel";
 import { ReasonGated, useViewerCan } from "../shell/viewerCan";
 import { TASK_TONE } from "./GraphNodes";
 import { type TaskEditKind, TaskEditDialog } from "./TaskDialogs";
@@ -150,14 +151,14 @@ export function TaskInspector({
           </Row>
         )}
         {task.loop?.state === "running" && task.loop.held_by && (
-          <Row label="Answer due">
+          <Row label={heldOnAnswer(task.loop.held_by) ? "Answer due" : "Held"}>
             <span data-testid="task-held" className="text-warning">
               <HeldRefList
                 held={task.loop.held_by}
                 factoryId={fid}
                 componentId="factory.graph.task_held"
               />{" "}
-              · not counted as stalled until a person answers
+              · {heldNote(task.loop.held_by)}
             </span>
           </Row>
         )}

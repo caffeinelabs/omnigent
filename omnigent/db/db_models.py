@@ -2176,6 +2176,7 @@ class SqlFactoryTask(OmnigentBase):
     :param deps: JSON list of task keys, ``project:<slug>`` and ``decision:D-n``.
     :param scope: JSON list of path globs.
     :param created_via: Code of ``human``/``agent``/``server`` (FACTORY_ACTOR_KIND).
+    :param hold: JSON hold its lead (or a person) put on it on purpose, or NULL.
     """
 
     __tablename__ = "factory_tasks"
@@ -2207,6 +2208,7 @@ class SqlFactoryTask(OmnigentBase):
     closed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     created_at: Mapped[int] = mapped_column(Integer, nullable=False)
     updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    hold: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
 
     __table_args__ = (
         CheckConstraint("kind IN (1, 2, 3, 4, 5, 6)", name="ck_factory_tasks_kind"),

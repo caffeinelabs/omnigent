@@ -145,7 +145,12 @@ async def _plan(cockpit: Cockpit, mode: str = "merged") -> None:
         {"op": "create", "project": project("db-version")},
         {
             "op": "create",
-            "project": project("settings", depends_on=["db-version"], depends_mode=mode),
+            "project": project(
+                "settings",
+                depends_on=["db-version"],
+                depends_mode=mode,
+                depends_why={"db-version": "reads the version table it adds"},
+            ),
         },
         reply_to=f"chat_{chat.id}",
     )

@@ -2081,7 +2081,10 @@ async def _propose_projects(
 
 
 _TASK_KEY_RE: Final = re.compile(r"[a-z0-9][a-z0-9-]{0,47}")
+_TASK_REF_RE: Final = re.compile(r"[Tt]-[0-9]{1,9}")
 _TASK_WRITE_OPS: Final = frozenset({"start", "done", "fail", "cancel", "report"})
+_TASK_HOLD_OPS: Final = frozenset({"hold", "release"})
+_HOLD_ON_MAX: Final = 200
 
 
 async def _task(args: _JsonObject, *, server_client: httpx.AsyncClient, caller: str) -> str:
@@ -2089,7 +2092,8 @@ async def _task(args: _JsonObject, *, server_client: httpx.AsyncClient, caller: 
     ``sys_factory_task``: the work graph's routes (``/v1/factory/agent/tasks``).
 
     ``upsert`` is a PUT, ``ready``/``get``/``list`` are reads, and ``start``,
-    ``done``, ``fail``, ``cancel`` and ``report`` post to the task's key.
+    ``done``, ``fail``, ``cancel``, ``report``, ``hold`` and ``release`` post to
+    the task's key (``hold`` and ``release`` also take its ``T-<n>``).
     """
     tool = SYS_FACTORY_TASK
     op = args.get("op")
@@ -2107,6 +2111,16 @@ async def _task(args: _JsonObject, *, server_client: httpx.AsyncClient, caller: 
             tool_name=tool,
             body={"from_session_id": caller, "tasks": items},
         )
+    if op in _TASK_HOLD_OPS and not (
+        isinstance(key, str)
+        and (_TASK_KEY_RE.fullmatch(key.strip()) or _TASK_REF_RE.fullmatch(key.strip()))
+    ):
+        return _error(f"{tool} op={op!r} needs the task 'key' (its branch suffix or T-<n>)")
+    if op == "hold" and not (isinstance(args.get("on"), str) and args["on"].strip()):
+        return _error(
+            f"{tool} op='hold' needs 'on': what the task waits on (D-<n>, C-<n>, PR #<n>, "
+            "T-<n>, a project or a few words)"
+        )
     if op in ("get", *_TASK_WRITE_OPS) and not (
         isinstance(key, str) and _TASK_KEY_RE.fullmatch(key.strip())
     ):
@@ -2121,9 +2135,13 @@ async def _task(args: _JsonObject, *, server_client: httpx.AsyncClient, caller: 
             server_client, "GET", "/v1/factory/agent/tasks", tool_name=tool, params=params
         )
     body: _JsonObject = {"from_session_id": caller}
-    for name in ("harness", "result", "note"):
+    for name in ("harness", "result", "note", "on"):
         if isinstance(args.get(name), str) and args[name].strip():
-            body[name] = args[name].strip()[:_NOTE_MAX] if name == "note" else args[name].strip()
+            limit = _NOTE_MAX if name == "note" else _HOLD_ON_MAX if name == "on" else None
+            body[name] = args[name].strip()[:limit]
+    until = args.get("until")
+    if op == "hold" and isinstance(until, int | str) and not isinstance(until, bool):
+        body["until"] = until.strip() if isinstance(until, str) else until
     path = f"/v1/factory/agent/tasks/{quote(str(key).strip(), safe='')}/{op}"
     return await _passthrough(server_client, "POST", path, tool_name=tool, body=body)
 

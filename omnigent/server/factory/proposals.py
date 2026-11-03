@@ -631,8 +631,16 @@ def _parse_change(
     )
 
 
-def _check_dependencies(ctx: _Context, changes: Sequence[Change]) -> list[str]:
-    """Unknown dependencies (400) and cycles (409); :returns: dependency warnings."""
+def _check_dependencies(
+    ctx: _Context, changes: Sequence[Change], *, agent: bool = False
+) -> list[str]:
+    """
+    Unknown dependencies (400) and cycles (409); :returns: dependency warnings.
+
+    :param agent: An agent proposes: each new dependency must be an open project
+        (not done, cancelled or closed by the same proposal; 409 ``dependency_closed``)
+        and carry a one-line reason (400 ``dependency_reason_required``).
+    """
     removed = {c.slug for c in changes if c.op == "cancel"}
     removed |= {c.slug for c in changes if c.op == "split" and c.keep == "cancel"}
     merged_into = {s: c.slug for c in changes if c.op == "merge" and c.slug for s in c.absorbed}
@@ -645,6 +653,7 @@ def _check_dependencies(ctx: _Context, changes: Sequence[Change]) -> list[str]:
         ):
             graph[slug], _ = _depends(row)
     new: dict[str, tuple[list[str], str]] = {}
+    reasons: dict[str, dict[str, str]] = {}
     for change in changes:
         for i, project in enumerate(change.creates):
             at = (
@@ -653,12 +662,17 @@ def _check_dependencies(ctx: _Context, changes: Sequence[Change]) -> list[str]:
                 else f"changes[{change.index}].into[{i}].depends_on"
             )
             new[project.slug] = (project.depends_on or [], at)
+            reasons[project.slug] = dict(project.depends_why or {})
         if change.op == "update" and change.patch is not None:
             if "depends_on" in change.patch.model_fields_set and change.slug:
                 deps_ = change.patch.depends_on or []
                 new[change.slug] = (deps_, f"changes[{change.index}].patch.depends_on")
+                row = ctx.rows.get(change.slug)
+                old = normalize_charter(row.charter).get("depends_why") if row else None
+                reasons[change.slug] = {**(old or {}), **(change.patch.depends_why or {})}
     known = set(ctx.rows) | set(new)
     warnings: list[str] = []
+    unexplained: CockpitError | None = None
     for slug, (deps_, at) in new.items():
         for dep in deps_:
             if dep not in known:
@@ -666,8 +680,35 @@ def _check_dependencies(ctx: _Context, changes: Sequence[Change]) -> list[str]:
                     400, "unknown_dependency", f"depends_on {dep!r} names no project", field=at
                 )
             row = ctx.rows.get(dep)
-            if dep in removed or (row is not None and row.status == projects.STATUS_CANCELLED):
-                warnings.append(f"depends_on_cancelled: {slug} waits on cancelled {dep}")
+            target = gating.resolve_alias(dep, ctx.rows) if row is not None else None
+            ended = (
+                "cancelled"
+                if dep in removed or (row is not None and row.status == projects.STATUS_CANCELLED)
+                else "done"
+                if target is not None and target.status == "done"
+                else None
+            )
+            if ended is not None and agent:
+                hint = (
+                    "it is done: nothing to wait for, drop it"
+                    if ended == "done"
+                    else "it is cancelled and will never finish: drop it or depend on "
+                    "what replaced it"
+                )
+                raise CockpitError(
+                    409, "dependency_closed", f"depends_on {dep!r}: {hint}", field=at
+                )
+            if ended is not None:
+                warnings.append(f"depends_on_{ended}: {slug} waits on {ended} {dep}")
+            if agent and unexplained is None and not (reasons.get(slug) or {}).get(dep):
+                unexplained = CockpitError(
+                    400,
+                    "dependency_reason_required",
+                    f"say in one line why {slug} must wait for {dep} (the code or API it "
+                    f"needs): depends_why={{{dep!r}: '…'}}, or write the item as "
+                    f"'{dep}: <why>'",
+                    field=at.removesuffix(".depends_on") + f".depends_why.{dep}",
+                )
         graph[slug] = [merged_into.get(d, d) for d in deps_]
     for slug, deps_ in list(graph.items()):
         graph[slug] = [_alias(ctx, merged_into.get(d, d)) for d in deps_]
@@ -676,6 +717,8 @@ def _check_dependencies(ctx: _Context, changes: Sequence[Change]) -> list[str]:
         raise CockpitError(
             409, "cycle", f"depends_on cycle: {' → '.join(cycle)}", field="changes", path=cycle
         )
+    if unexplained is not None:
+        raise unexplained
     return warnings
 
 
@@ -746,12 +789,15 @@ def validate(
     reason: str | None = None,
     scope: str | None = None,
     exclude: str | None = None,
+    agent: bool = False,
 ) -> Plan:
     """
     Validate a proposal's changes against the factory as it is now (sync; run in a thread).
 
     :param scope: A project lead's own project: only update, split or cancel of it.
     :param exclude: The proposal being (re)applied, so its own creates do not collide.
+    :param agent: An agent files it: new dependencies must be open projects, each
+        with a one-line reason (see :func:`_check_dependencies`).
     :returns: The :class:`Plan`.
     :raises CockpitError: 400 ``invalid_body`` / ``unknown_dependency`` (with ``field``),
         403 ``not_your_project``, 404 ``unknown_project``, 409 ``slug_exists`` /
@@ -787,7 +833,7 @@ def validate(
             max_pods=ctx.max_pods,
             **_candidates(ctx),
         )
-    warnings = _check_dependencies(ctx, changes)
+    warnings = _check_dependencies(ctx, changes, agent=agent)
     warnings += _scope_warnings(ctx, changes)
     warnings += _preview_warning(ctx, changes)
     based_on = {
@@ -1192,7 +1238,9 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
         if existing is not None:
             return _reply(existing, deduped=True, decision=await _decision_ref(deps, existing))
     plan = await asyncio.to_thread(
-        validate, deps, root, body.changes, reason=body.reason, scope=scope
+        functools.partial(
+            validate, deps, root, body.changes, reason=body.reason, scope=scope, agent=True
+        )
     )
     ask = await asyncio.to_thread(
         functools.partial(requested_by, deps, root, body.reply_to, thread=body.thread)

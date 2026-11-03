@@ -72,10 +72,12 @@ from omnigent.factory import (
     LOOP_KINDS,
     LOOP_STATES,
     ROLE_PROJECT_LEAD,
+    STAGE_DONE,
+    STAGE_MERGED,
     STATE_PAUSED,
 )
 from omnigent.factory_gates import DEMO_GATE, GATE_FAIL, GATE_PENDING, READY_GATES
-from omnigent.server.factory import events, task_pulse, tasks
+from omnigent.server.factory import events, task_pulse, tasks, waits
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.control import CockpitError
 from omnigent.server.factory.stage import changes_requested_on_head, ready_for_human
@@ -480,6 +482,12 @@ class Ctx:
     factory_id: str
     now: float
     changes: list[Change] = field(default_factory=list)
+    held: list[FactoryTask] = field(default_factory=list)
+    """Tasks read with a hold this pass (the hold sweep re-checks them)."""
+    facts: waits.Facts | None = None
+    """What the pass read of the tasks' waits, when it read them."""
+    targets: frozenset[tuple[str, str]] = frozenset()
+    """The auto-merge targets the server merges into now (merge waits name the server)."""
 
     @property
     def store(self) -> Any:
@@ -964,10 +972,12 @@ def observe_task_closed(ctx: Ctx, task: FactoryTask, to: str, reason: str | None
     row = implement_loop(ctx, task, create=False)
     if row is None or row.state in LOOP_ENDED_STATES:
         return
+    # The reason closes the loop's decision too ("Closed by the server: T-4 is done").
+    said = f" ({reason})" if reason and reason not in ("done", "cancel", "fail", to) else ""
     if to == "done":
-        _transition(ctx, row, "converged", reason or "task done")
+        _transition(ctx, row, "converged", f"{task.ref} is done{said}")
     elif to == "cancelled":
-        _transition(ctx, row, "cancelled", reason or "task cancelled")
+        _transition(ctx, row, "cancelled", f"{task.ref} is cancelled{said}")
     elif to == "failed":
         observe_failure(ctx, task, verdict="FAIL", reason=reason or "task failed")
 
@@ -1777,14 +1787,17 @@ def _keeps_waiting(loop: FactoryLoop, pulse: task_pulse.Pulse | None) -> bool:
 
 
 def _advice(loop: FactoryLoop, watch: task_pulse.Watch) -> dict[str, Any] | None:
-    """:returns: ``{recommend, line, worker}`` for a stall of *loop* now, else ``None``."""
+    """
+    :returns: What a stall of *loop* says now (:meth:`.task_pulse.Watch.stall_words`:
+        the recommendation and why, what the IC last did, what the task waits on,
+        where to look), else ``None``.
+    """
     kept = _kept(loop)
     try:
-        advice = watch.advise(int(kept["at"]) if kept and kept.get("at") else None)
+        return watch.stall_words(int(kept["at"]) if kept and kept.get("at") else None)
     except Exception:  # noqa: BLE001 - the decision still opens, with the old defaults
         _logger.warning("factory loops: no advice for %s", loop.id, exc_info=True)
         return None
-    return {"recommend": advice.recommend, "line": advice.line, "worker": watch.pulse.worker}
 
 
 def _stall(
@@ -1797,6 +1810,8 @@ def _stall(
     if advice is not None:
         stall.update(advice)
         data.update(recommend=advice["recommend"], why=advice["line"])
+        # The incident says what the decision says (detectors read the event).
+        data["stall"] = {**stall, "budget_s": idle_budget_s(loop)}
     values["stall"] = stall
     loop = _update(ctx, loop, spent=values)
     return _transition(ctx, loop, "stalled", reason, **data)
@@ -1845,14 +1860,16 @@ def check_clock(
     """
     The wall and no-progress rules of a running implement loop (fake-clock testable).
 
-    With the tick's *watch* the clock also reads the task's people: a blocking
-    question a person owes them holds it (that time is not charged to the wall
-    budget while its IC lives, and the no-progress clock restarts once it is
-    answered), its open sessions' activity and its lead's tool calls about it
-    are progress while its IC lives, and after "Keep waiting" only the wall
-    budget, or the try getting worse, stalls it. With its IC gone, failed or
-    never bound, only task events and holds count: a closed session's bump or
-    the lead's chatter must not hide a dead task.
+    With the tick's *watch* the clock also reads what the task waits on
+    (:mod:`.waits`): while something holds it, that time is not charged to the
+    wall budget while its IC lives (or always, for a stored hold on purpose:
+    one a person must act on, see :attr:`.waits.Wait.on_purpose`), and the
+    no-progress clock restarts once it ends. Its open
+    sessions' activity and its lead's tool calls about it are progress while
+    its IC lives, and after "Keep waiting" only the wall budget, or the try
+    getting worse, stalls it. With its IC gone, failed or never bound, only
+    task events and holds count: a closed session's bump or the lead's chatter
+    must not hide a dead task.
     """
     if loop.kind != "implement" or loop.state != "running" or paused:
         return loop
@@ -1861,8 +1878,12 @@ def check_clock(
     now = int(ctx.now)
     values["wall_s"] = now - loop.started_at
     pulse = watch.pulse if watch is not None else None
-    dead = pulse is not None and pulse.worker in task_pulse.DEAD_WORKERS
     hold = pulse.held if pulse is not None else None
+    # A stored hold a person must act on (or that a person put on, or that names no
+    # ref) says no IC is expected: it pauses the clock like a live IC's hold. It lapses
+    # at its limit, so it hides nothing for good; any other wait keeps the dead-IC rule.
+    on_purpose = hold is not None and hold.on_purpose
+    dead = pulse is not None and pulse.worker in task_pulse.DEAD_WORKERS and not on_purpose
     _track_hold(values, hold, now, paused=not dead)
     if (
         pulse is not None
@@ -2224,9 +2245,12 @@ async def tick(
     The supervisor's per-tick hook. Never raises.
 
     Mirrors each factory's engine mode onto its PLs (the guard reads it),
-    applies the wall, no-progress, $ and plan rules, re-opens the decision of
-    a loop whose project was paused from it, checks the project and factory $
-    budgets, sends READY waves and flushes coalesced NEXT hints.
+    ends the loops whose work ended (:func:`close_ended`), applies the wall,
+    no-progress, $ and plan rules, clears the task holds that lapsed (their
+    PL is told), re-opens the decision of a loop whose project was paused
+    from it, closes stall decisions nothing is left to act on, checks the
+    project and factory $ budgets, sends READY waves and flushes coalesced
+    NEXT hints.
     """
     from omnigent.server.factory import budgets, loop_escalation, pipeline
 
@@ -2239,11 +2263,14 @@ async def tick(
         try:
             mine = [m for m in members if norm_id(m.labels.get(LABEL_ID) or "") == factory_id]
             await asyncio.to_thread(_mirror_mode, deps, factory_id, mine)
+            targets = await asyncio.to_thread(waits.auto_targets, app_state, deps, factory_id)
             async with lock(factory_id):
-                ctx = Ctx(deps, factory_id, at)
+                ctx = Ctx(deps, factory_id, at, targets=targets)
                 await asyncio.to_thread(tick_sync, ctx)
             await apply(app_state, ctx)
+            await tasks.sweep_holds(app_state, factory_id, ctx.held, now=at, facts=ctx.facts)
             await loop_escalation.reconcile(app_state, deps, factory_id)
+            await loop_escalation.close_stale(app_state, deps, factory_id)
             await loop_escalation.done_checks(app_state, deps, factory_id, at)
             await budgets.check(app_state, factory_id, now=at)
             await pipeline.on_tick(app_state, factory_id, now=at)
@@ -2293,13 +2320,92 @@ def _paused_projects(deps: FactoryDeps, factory_id: str) -> tuple[bool, set[str]
     return root_paused, paused
 
 
+_SWEPT_STATES: Final = ("running", "stalled", "exhausted", "thrashing", "escalated")
+
+
+def ended_work(
+    loop: FactoryLoop,
+    task: FactoryTask | None,
+    pr: FactoryPr | None,
+    project: FactoryProject | None,
+    project_prs: Sequence[FactoryPr] = (),
+) -> tuple[str, str] | None:
+    """
+    Whether the work a loop is about ended, so it has nothing left to ask.
+
+    :param pr: The loop's PR, else its task's.
+    :param project_prs: The project's PRs.
+    :returns: ``(converged|cancelled, why)``, e.g. ``("converged", "PR #9881 merged")``.
+    """
+    if task is not None and task.state == "done":
+        return "converged", f"{task.ref} is done"
+    if task is not None and task.state == "cancelled":
+        return "cancelled", f"{task.ref} is cancelled"
+    if pr is not None and pr.state == "merged":
+        return "converged", f"PR #{pr.number} merged"
+    if project is not None:
+        if project.status == "cancelled":
+            return "cancelled", f"{project.slug} is cancelled"
+        if project.status == "merged":
+            into = f" into {project.parent_slug}" if project.parent_slug else ""
+            return "cancelled", f"{project.slug} was merged{into}"
+        if project.status == "done":
+            return "converged", f"{project.slug} is done"
+        # Shipped: every PR merged. A Stop also sets the stage done, but leaves its
+        # tasks open (Resume brings the PL back), so an open task keeps its loop.
+        shipped = (
+            project.stage in (STAGE_MERGED, STAGE_DONE)
+            and any(p.state == "merged" for p in project_prs)
+            and not any(p.state == "open" for p in project_prs)
+        )
+        if shipped and loop.kind == "implement" and (task is None or task.state == "failed"):
+            return "converged", f"{project.slug} is {project.stage}: its PRs merged"
+    return None
+
+
+def close_ended(
+    ctx: Ctx,
+    projects: Mapping[str, FactoryProject],
+    tasks_by_id: Mapping[str, FactoryTask],
+) -> None:
+    """
+    End the loops whose work ended without them: a stalled or exhausted loop of a
+    task that closed, a PR that merged or a project that closed or shipped, and a
+    running implement loop of a closed task. Their decision closes with them
+    (:func:`.loop_escalation.settle`), answered by the server with the reason.
+    """
+    prs = {norm_id(p.id): p for p in ctx.store.list_prs(ctx.factory_id)}
+    by_project: dict[str, list[FactoryPr]] = {}
+    for pr in prs.values():
+        by_project.setdefault(pr.project_slug or "", []).append(pr)
+    for loop in ctx.store.list_loops(ctx.factory_id, states=list(_SWEPT_STATES)):
+        if loop.state == "running" and loop.kind != "implement":
+            continue
+        task = tasks_by_id.get(norm_id(loop.task_id)) if loop.task_id else None
+        pr = prs.get(norm_id(loop.pr_id)) if loop.pr_id else None
+        if task is None and pr is not None and pr.task_id:
+            task = tasks_by_id.get(norm_id(pr.task_id))
+        if pr is None and task is not None and task.pr_id:
+            pr = prs.get(norm_id(task.pr_id))
+        project = projects.get(loop.project_slug or "")
+        if loop.state == "running" and not (
+            task is not None and task.state in ("done", "cancelled")
+        ):
+            continue
+        ended = ended_work(loop, task, pr, project, by_project.get(loop.project_slug or "", []))
+        if ended is not None:
+            _transition(ctx, loop, ended[0], ended[1], swept=True)
+
+
 def tick_sync(ctx: Ctx) -> None:
     """The clock rules over one factory (synchronous): wall, no progress, $, claim waits, plan."""
     root_paused, paused = _paused_projects(ctx.deps, ctx.factory_id)
     rows = ctx.store.list_tasks(ctx.factory_id)
     projects = {p.slug: p for p in ctx.store.list_projects(ctx.factory_id)}
     by_task = {norm_id(t.id): t for t in rows}
-    reader = task_pulse.Reader(ctx.deps, ctx.factory_id, ctx.now, tasks=rows)
+    close_ended(ctx, projects, by_task)
+    ctx.held = [t for t in rows if t.hold]
+    reader = task_pulse.Reader(ctx.deps, ctx.factory_id, ctx.now, tasks=rows, targets=ctx.targets)
     for loop in ctx.store.list_loops(
         ctx.factory_id, kinds=["implement"], states=["running", "stalled"]
     ):
@@ -2325,6 +2431,7 @@ def tick_sync(ctx: Ctx) -> None:
         if project is not None and project.status not in (None, "active"):
             held = True
         check_wait(ctx, loop, _get_pr(ctx, loop.pr_id), paused=held)
+    ctx.facts = reader.loaded()
     for slug in sorted({t.project_slug for t in rows}):
         project = projects.get(slug)
         if project is not None and project.status not in (None, "active"):

@@ -19,7 +19,7 @@ import { devEnvStatus } from "../board/DevEnvPill";
 import { TONE_CHIP, TONE_TEXT, formatElapsed, formatUsd, previewStatus } from "../factoryFormat";
 import { agentPageHref, alertPageHref, projectPageHref } from "../factoryRoutes";
 import { HeldRefs } from "../loops/HeldRefs";
-import { heldText } from "../loops/loopStripModel";
+import { heldNote, heldText } from "../loops/loopStripModel";
 import { type FleetAgent, type FleetGroup, nowText } from "./fleetModel";
 import { useElementWidth } from "./useElementWidth";
 
@@ -122,7 +122,7 @@ function TaskLoop({ agent, factoryId }: { agent: FleetAgent; factoryId: string }
                   ? TONE_CHIP.pass
                   : TONE_CHIP.muted,
           )}
-          title={held ? `${held}: not counted as stalled until a person answers` : undefined}
+          title={held && heldBy ? `${held}: ${heldNote(heldBy)}` : undefined}
         >
           <span className="min-w-0 truncate">
             {loop.kind === "implement" ? "impl" : loop.kind} {loop.iteration}

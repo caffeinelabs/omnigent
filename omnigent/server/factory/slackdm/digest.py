@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 from omnigent.factory import cockpit_v2_enabled
 from omnigent.server.factory import asks, issues, status_summary
+from omnigent.server.factory.server_decisions import server_closed
 from omnigent.server.factory.slackdm import prefs as prefs_mod
 from omnigent.server.factory.slackdm import rules
 from omnigent.server.factory.slackdm.render import esc, link, message
@@ -247,7 +248,10 @@ def needs_lines(asked: Mapping[str, Any] | None, now: float, base: str | None) -
 
 
 def progress_lines(summary: Mapping[str, Any] | None, base: str | None) -> list[str]:
-    """The card's Working on: each project with its stage and plain status (or problem)."""
+    """
+    The card's Working on: each project with its stage and plain status (or problem),
+    and what holds it when something does (the cockpit's "waiting on" line).
+    """
     items = (summary or {}).get("working") or []
     lines = []
     for item in items[:PROGRESS_MAX]:
@@ -255,7 +259,8 @@ def progress_lines(summary: Mapping[str, Any] | None, base: str | None) -> list[
         status = item.get("problem") or item["status"]
         mark = ":warning: " if item.get("problem") else ""
         name = link(str(item["href"]), str(item["project"]), base)
-        lines.append(f"• {mark}{name} ({esc(stage, 20)}) — {esc(status, 160)}")
+        held = f" · {esc(str(item['waiting']), 120)}" if item.get("waiting") else ""
+        lines.append(f"• {mark}{name} ({esc(stage, 20)}) — {esc(status, 160)}{held}")
     if len(items) > PROGRESS_MAX:
         lines.append(f"…and {len(items) - PROGRESS_MAX} more")
     return lines
@@ -327,6 +332,8 @@ def _counts(
             continue
         data = event.data or {}
         if event.kind.startswith("issue.") and data.get("class") != "incident":
+            continue
+        if event.kind == "decision.answered" and server_closed(data):
             continue
         counts[event.kind] = counts.get(event.kind, 0) + 1
     if counts.get("issue.opened"):

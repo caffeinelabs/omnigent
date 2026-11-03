@@ -246,6 +246,7 @@ TASK_FIELDS = frozenset(
         "def_version",
         "started_at",
         "closed_at",
+        "hold",
     }
 )
 """Fields ``upsert_task`` / ``update_task`` accept."""

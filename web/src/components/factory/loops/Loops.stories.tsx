@@ -43,11 +43,33 @@ function heldLoop(): LoopView {
   });
 }
 
+/** T-6's PR is ready: it waits on a person's merge, not an answer (no Decisions link). */
+function mergeHeldLoop(): LoopView {
+  const label = "waiting on a person to merge PR #9640";
+  return {
+    ...heldLoop(),
+    id: "impl-merge",
+    subject: "task:merge",
+    task_ref: "T-6",
+    held_by: {
+      decision_id: null,
+      decision_ref: label,
+      refs: [],
+      since: null,
+      count: 0,
+      kind: "merge",
+      label,
+      who: "an operator",
+    },
+  };
+}
+
 /** One loop in each strip state. */
 function stateLoops(): LoopView[] {
   return [
     loop("implement"),
     heldLoop(),
+    mergeHeldLoop(),
     loop("review", {
       id: "rv-thrash",
       state: "thrashing",
@@ -112,8 +134,9 @@ type Story = StoryObj<typeof meta>;
 
 /**
  * Exhausted (r0..r2 ✗, $11.80/$15, D-31's remedies), waiting on a person (T-5:
- * `waiting on D-22 +1`, not counted as stalled), thrashing (`#3 ✗ CHANGES · 3
- * blocking`), dry, running, converged.
+ * `waiting on D-22 +1`, not counted as stalled), waiting on a merge (T-6, the
+ * server's words, unlinked), thrashing (`#3 ✗ CHANGES · 3 blocking`), dry,
+ * running, converged.
  */
 export const States: Story = {
   render: () => (

@@ -118,8 +118,11 @@ def retro_signals(deps: FactoryDeps, factory_id: str, since: int, until: int) ->
         if e.ts < until * 1000
     ]
 
+    from omnigent.server.factory.server_decisions import server_closed
+
     def count(*names: str) -> int:
-        return sum(1 for e in found if e.kind in names)
+        # A decision the server closed itself (its question no longer applied) is no signal.
+        return sum(1 for e in found if e.kind in names and not server_closed(e.data or {}))
 
     feedback = store.list_feedback(factory_id, since=since, limit=_SIGNAL_SCAN_LIMIT)
     return RetroSignals(

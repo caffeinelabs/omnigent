@@ -94,6 +94,48 @@ describe("FleetTable", () => {
     );
   });
 
+  it("says what a held task waits on when it is not a person's answer", () => {
+    const { snapshot, body } = scaleAgentsResponse(41);
+    const row = body.data.find((r) => r.loop)!;
+    const label = "T-5 held: waiting on T-7 (Task schema, running)";
+    const held = {
+      ...row,
+      loop: {
+        ...row.loop!,
+        state: "running" as const,
+        held_by: {
+          decision_id: null,
+          decision_ref: label,
+          refs: [],
+          since: 1,
+          count: 0,
+          kind: "hold",
+          label,
+          who: "api-core's lead",
+        },
+      },
+    };
+    const groups = groupFleet([fleetAgent(held, ROUND3_NOW_S)], "project", [held.project ?? ""]);
+    render(
+      <MemoryRouter>
+        <FleetTable
+          factoryId={snapshot.factory.id}
+          snapshot={snapshot}
+          groups={groups}
+          nowS={ROUND3_NOW_S}
+          selected={new Set()}
+          onSelect={() => undefined}
+          selectable
+          initialHeight={4000}
+        />
+      </MemoryRouter>,
+    );
+    const chip = screen.getByTestId(`fleet-loop-${held.session_id}`);
+    expect(chip).toHaveTextContent(label);
+    expect(chip).toHaveAttribute("title", `${label}: not counted as stalled while it waits`);
+    expect(within(chip).queryByRole("link")).toBeNull();
+  });
+
   it("groups agents under project headers with their counts and links rows to the Agent page", () => {
     const { snapshot, body } = scaleAgentsResponse(41);
     const agents = body.data.map((row) => fleetAgent(row, ROUND3_NOW_S));

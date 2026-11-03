@@ -902,9 +902,36 @@ def _merge_context(prs: Sequence[Mapping[str, Any]], policy: str | None) -> str 
     return _clip(" ".join(parts), 300) if parts else None
 
 
+def merge_dependents(body: Mapping[str, Any]) -> dict[str, list[str]]:
+    """
+    :returns: Project slug -> the live projects that wait on a person to merge it
+        (a ``merge`` wait in their ``waiting_on``), in snapshot order. A merge the
+        server makes itself (an auto-merge target) asks nobody.
+    """
+    out: dict[str, list[str]] = {}
+    for project in body.get("projects") or []:
+        for wait in project.get("waiting_on") or []:
+            if not isinstance(wait, Mapping) or wait.get("kind") != "merge":
+                continue
+            if not wait.get("person"):
+                continue
+            ref = str(wait.get("ref") or "")
+            if ref and not ref.startswith("PR #") and project["slug"] not in out.get(ref, []):
+                out.setdefault(ref, []).append(project["slug"])
+    return out
+
+
+def _unblocks_text(slugs: Sequence[str]) -> str | None:
+    if not slugs:
+        return None
+    names = ", ".join(slugs[:3]) + (f" and {len(slugs) - 3} more" if len(slugs) > 3 else "")
+    return f"{names} {'waits' if len(slugs) == 1 else 'wait'} on this merge."
+
+
 def _merge_drafts(ctx: _Ctx) -> list[_Draft]:
     """One merge row per person who merges: every ready PR they wait on, oldest first."""
     body = ctx.inputs.snapshot
+    dependents = merge_dependents(body)
     groups: dict[tuple[str | None, str, bool, bool], list[Mapping[str, Any]]] = {}
     for pr in body.get("prs") or []:
         if pr.get("state") != "open" or not pr.get("ready") or pr.get("auto_merge"):
@@ -942,7 +969,14 @@ def _merge_drafts(ctx: _Ctx) -> list[_Draft]:
         since = int(prs[0].get("ready_since") or 0)
         # One row per person who merges: the operators' is "merge", an owner's "merge:<name>".
         key = "merge" if owner is None else f"merge:{_person(owner)}"
-        holds = len(projects) or n
+        waiting = list(
+            dict.fromkeys(
+                slug
+                for pr in prs
+                for slug in dependents.get(str(pr.get("project_slug") or ""), [])
+            )
+        )
+        holds = len(projects | set(waiting)) or n
         action = (
             AskAction(kind="open", label="Review", href=items[0].href)
             if n == 1
@@ -957,7 +991,11 @@ def _merge_drafts(ctx: _Ctx) -> list[_Draft]:
             "subject": "prs:ready" if owner is None else f"prs:ready:{_person(owner)}",
             "ref": None,
             "title": f"Merge {n} ready pull requests" if n > 1 else "Merge a ready pull request",
-            "context": _merge_context(prs, policy),
+            "context": _clip(
+                " ".join(t for t in (_unblocks_text(waiting), _merge_context(prs, policy)) if t),
+                300,
+            )
+            or None,
             "meta": meta,
             "since": since,
             "age_s": max(0, int(ctx.now) - since) if since else 0,

@@ -210,6 +210,7 @@ async def _raise(
     project: str | None = None,
     evidence: Any = None,
     severity: str | None = None,
+    body: str | None = None,
 ) -> FactoryIssue | None:
     spec = RULES[rule]
     return await issues.raise_issue(
@@ -222,6 +223,7 @@ async def _raise(
         severity=severity or spec.severity,
         project=project,
         evidence=evidence,
+        body=body,
         assignee=spec.assignee,
     )
 
@@ -361,6 +363,7 @@ async def _on_event(app_state: Any, event: FactoryEvent) -> None:
                 event.summary,
                 project=event.project_slug,
                 evidence={"event_id": event.id, **_pick(data, "kind", "subject")},
+                body=_stall_body(fid, data),
             )
     elif kind in LOOP_GOOD:
         target = _loop_target(event)
@@ -387,6 +390,24 @@ async def _on_event(app_state: Any, event: FactoryEvent) -> None:
             project=event.project_slug,
             evidence={"event_id": event.id},
         )
+
+
+def _stall_body(factory_id: str, data: Mapping[str, Any]) -> str | None:
+    """A stalled implement loop's incident in the decision's words (what, on what, where)."""
+    from omnigent.server.factory.task_pulse import stall_lines
+
+    stall = data.get("stall")
+    if not isinstance(stall, Mapping):
+        return None
+    budget = stall.get("budget_s")
+    lines = [str(data["why"])] if data.get("why") else []
+    try:
+        lines += stall_lines(
+            stall, factory_id, budget if isinstance(budget, int | float) else None
+        )
+    except ValueError:
+        return None
+    return "\n".join(lines) or None
 
 
 def _pick(data: Mapping[str, Any], *keys: str) -> dict[str, Any]:
@@ -659,6 +680,7 @@ async def tick_factory(
     for row in open_rows:
         open_by_rule.setdefault(row.rule, []).append(row)
     for step in (
+        _closed_projects_cleared,
         _dead_members,
         _repeat_cleared,
         _quiet_cleared,
@@ -708,6 +730,45 @@ async def _sync(
             await clear(app_state, factory_id, rule, target, reason)
 
 
+def _closed_projects(deps: FactoryDeps, factory_id: str) -> dict[str, str]:
+    """:returns: Slug -> how it ended (``cancelled``, ``merged``, ``done``) of closed projects."""
+    return {
+        p.slug: str(p.status)
+        for p in deps.factory_store.list_projects(factory_id)
+        if p.status not in (None, "active")
+    }
+
+
+async def _closed_projects_cleared(
+    app_state: Any,
+    deps: FactoryDeps,
+    fid: str,
+    _members: Sequence[Conversation],
+    _children: Sequence[Conversation],
+    _now: float,
+    open_by_rule: OpenByRule,
+) -> None:
+    """
+    Resolve the incidents of projects that closed: nothing is left to act on.
+
+    A dead lead of a cancelled project, a stalled loop of a merged one. The
+    rows a person raised, and facts a person or Sentinel reads, stay.
+    """
+    closed = await asyncio.to_thread(_closed_projects, deps, fid)
+    if not closed:
+        return
+    for rule, rows in open_by_rule.items():
+        spec = RULES.get(rule)
+        if spec is None or not spec.auto_resolve or spec.class_ != _INC:
+            continue
+        for row in list(rows):
+            ended = closed.get(row.project_slug or "")
+            if ended is None:
+                continue
+            await clear(app_state, fid, rule, row.target, f"{row.project_slug} is {ended}")
+            rows.remove(row)
+
+
 def member_down(app_state: Any, conv: Conversation, now: float) -> bool | None:
     """
     Whether a member's sandbox is gone: its runner tunnel is down and its host
@@ -749,10 +810,15 @@ async def _dead_members(
     rows = await asyncio.to_thread(
         deps.conversation_store.get_conversations, [m.id for m in members]
     )
+    closed = await asyncio.to_thread(_closed_projects, deps, fid)
     hits: dict[str, tuple[str, str | None, Any]] = {}
     for conv in (rows.get(m.id, m) for m in members):
         target = _member(conv.id)
         project = conv.labels.get(LABEL_PROJECT)
+        if project and project in closed:
+            # Its project closed: a dead lead there has nothing left to do.
+            _down_streak.pop(conv.id, None)
+            continue
         if conv.labels.get(LABEL_HEALTH) == HEALTH_DEAD:
             reason = conv.labels.get(LABEL_DEAD_REASON)
             summary = f"{_title(conv)} dead · relaunch failed"

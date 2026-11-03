@@ -92,6 +92,31 @@ FACTORY_POD_BUDGET: Final = 12
 """Pods a factory may use (the lead bundle's ``factory_max_pods``): 2 leads plus the PLs."""
 BRIEF_MAX_CHARS: Final = 8000
 _SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?$")
+DEPENDS_WHY_MAX = 200
+"""A dependency's reason: one line, at most this long."""
+_DEP_WITH_WHY_RE = re.compile(
+    r"^(?P<slug>[a-z0-9](?:[a-z0-9-]{0,46}[a-z0-9])?)\s*(?::|—|–|\s-{1,2}\s)\s*(?P<why>\S.*)$"
+)
+
+
+def split_dependency_reasons(items: Sequence[Any]) -> tuple[list[Any], dict[str, str]]:
+    """
+    Split ``"slug: why"`` (or ``"slug — why"``) ``depends_on`` items into slugs and reasons.
+
+    :returns: ``(items with each reason taken off, slug -> reason)``; other items stay as given.
+    """
+    out: list[Any] = []
+    found: dict[str, str] = {}
+    for item in items:
+        match = _DEP_WITH_WHY_RE.match(item.strip()) if isinstance(item, str) else None
+        if match is None:
+            out.append(item)
+            continue
+        out.append(match["slug"])
+        found.setdefault(match["slug"], " ".join(match["why"].split()))
+    return out, found
+
+
 _URL_PATH_RE = re.compile(r"^/[A-Za-z0-9._~/-]{0,199}$")
 
 _M = TypeVar("_M", bound=BaseModel)
@@ -155,10 +180,28 @@ class _CharterFields(_Body):
     budget_ics: int | None = Field(None, ge=1, le=10)
     depends_on: list[str] | None = Field(None, max_length=MAX_PROJECTS)
     depends_mode: Literal["merged", "ready"] | None = None
+    depends_why: dict[str, str] | None = None
+    """Why each dependency must come first, one line per slug (agents must give one).
+    A ``depends_on`` item may carry it too: ``"api-core: calls its /v1/items route"``."""
     human_owner: str | None = Field(None, max_length=256)
     budgets: BudgetsIn | None = None
     outcome: str | None = Field(None, max_length=OUTCOME_MAX)
     """What users get, in one sentence (the project card's title). ``why`` is read-only."""
+
+    @model_validator(mode="before")
+    @classmethod
+    def _split_reasons(cls, data: Any) -> Any:
+        """``"slug: why"`` items of ``depends_on`` become a slug and its ``depends_why``."""
+        if not isinstance(data, Mapping) or not isinstance(data.get("depends_on"), list):
+            return data
+        items, found = split_dependency_reasons(data["depends_on"])
+        if not found:
+            return data
+        out = dict(data)
+        out["depends_on"] = items
+        given = out.get("depends_why")
+        out["depends_why"] = {**found, **(dict(given) if isinstance(given, Mapping) else {})}
+        return out
 
     @field_validator("dod")
     @classmethod
@@ -183,6 +226,29 @@ class _CharterFields(_Body):
                 out.append(slug)
         return out
 
+    @field_validator("depends_why")
+    @classmethod
+    def _depends_why(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        if value is None:
+            return None
+        out: dict[str, str] = {}
+        for slug, why in value.items():
+            if not _SLUG_RE.match(str(slug)):
+                raise ValueError(f"depends_why key {slug!r} is not a project slug")
+            text = " ".join(str(why or "").split())
+            if len(text) > DEPENDS_WHY_MAX:
+                raise ValueError(f"each depends_why reason is at most {DEPENDS_WHY_MAX} chars")
+            if text:
+                out[str(slug)] = text
+        return out
+
+    @model_validator(mode="after")
+    def _reasons_name_dependencies(self) -> _CharterFields:
+        extra = set(self.depends_why or {}) - set(self.depends_on or [])
+        if self.depends_on is not None and extra:
+            raise ValueError(f"depends_why names {sorted(extra)[0]!r}, which is not in depends_on")
+        return self
+
     @field_validator("human_owner")
     @classmethod
     def _owner(cls, value: str | None) -> str | None:
@@ -196,7 +262,7 @@ class _CharterFields(_Body):
     def charter_extras(self) -> dict[str, Any]:
         """:returns: The dependency, owner, outcome and budget keys as sent (unset: left out)."""
         out: dict[str, Any] = {}
-        for key in ("depends_on", "depends_mode", "human_owner", "outcome"):
+        for key in ("depends_on", "depends_mode", "depends_why", "human_owner", "outcome"):
             if key in self.model_fields_set:
                 out[key] = getattr(self, key)
         if "budgets" in self.model_fields_set:
@@ -1050,7 +1116,12 @@ def merge_charter(old: Mapping[str, Any] | None, patch: CharterPatchIn) -> dict[
         focus = patch.demo_focus if "demo_focus" in fields else patch.demo
         merged["demo_focus"] = focus
         merged["demo"] = focus
+    old_why = dict(merged.get("depends_why") or {})
     merged.update(patch.charter_extras())
+    if "depends_why" in merged and merged["depends_why"] is not None:
+        # A patch names the reasons it changes; the others stay (normalize drops
+        # those of slugs no longer in depends_on).
+        merged["depends_why"] = {**old_why, **merged["depends_why"]}
     return merged
 
 

@@ -20,6 +20,7 @@ import copy
 import hashlib
 import json
 import logging
+import re
 import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -71,6 +72,7 @@ from omnigent.server.factory import (
     stuck,
     tasks,
     team,
+    waits,
 )
 from omnigent.server.factory.activity_now import factory_usd_per_h
 from omnigent.server.factory.base import base_view
@@ -1244,6 +1246,52 @@ def _health_views(
             _logger.warning("factory snapshot: no health for %s", slug, exc_info=True)
 
 
+def _waiting_views(
+    deps: FactoryDeps,
+    factory_id: str,
+    project_views: list[dict[str, Any]],
+    rows: Mapping[str, FactoryProject],
+    loaded: _Loaded,
+    starts: Mapping[str, Mapping[str, Any] | None],
+    project_pl: Mapping[str, str | None],
+    now: float,
+    open_tasks: Sequence[FactoryTask],
+    targets: auto_merge.Targets = frozenset(),
+) -> None:
+    """
+    Each live project's ``waiting_on``: why it is not moving (in place; never raises).
+
+    :param open_tasks: The factory's open tasks, as the snapshot read them.
+    :param targets: The auto-merge targets the server merges into now.
+    """
+    try:
+        bad = deps.factory_store.list_loops(factory_id, states=sorted(waits.BAD_LOOP_STATES))
+        facts = waits.Facts(
+            projects=rows,
+            prs=loaded.prs,
+            decisions=loaded.open_decisions,
+            proposals=loaded.proposals,
+            tasks=open_tasks,
+            loops=bad,
+            leads=project_pl,
+            now=now,
+            targets=targets,
+        )
+    except Exception:  # noqa: BLE001 - the cards render without it
+        _logger.warning("factory snapshot: no waits for %s", factory_id, exc_info=True)
+        return
+    for view in project_views:
+        row = rows.get(view["slug"])
+        if row is None or not row.id:
+            continue
+        try:
+            found = waits.project_waits(row, facts, start=starts.get(row.slug))
+        except Exception:  # noqa: BLE001 - one card renders without it
+            _logger.warning("factory snapshot: no waits for %s", row.slug, exc_info=True)
+            continue
+        view["waiting_on"] = [w.to_json() for w in found]
+
+
 def _team_spec(
     project: FactoryProject, pl: Conversation | None, loaded: _Loaded
 ) -> dict[str, Any] | None:
@@ -1272,6 +1320,7 @@ def _lifecycle(project: FactoryProject) -> dict[str, Any]:
         "closed_at": project.closed_at,
         "depends_on": charter.get("depends_on") or None,
         "depends_mode": charter.get("depends_mode"),
+        "depends_why": charter.get("depends_why") or None,
         "human_owner": charter.get("human_owner"),
         "def_version": project.def_version,
         "why": _lenient(schemas.WhyView, charter.get("why")),
@@ -1388,6 +1437,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
     # Pods as the spawner counts them (spawn.live_members).
     live_pods = sum(1 for m in loaded.members if spawn.holds_pod(m))
     waiting_for_pod = 0  # projects (oldest first, as the spawner takes them) without a pod
+    starts: dict[str, dict[str, Any] | None] = {}
     for project in projects:
         pl = pick_pl(project, project.slug, loaded.members)
         waiting = (
@@ -1420,6 +1470,7 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
         )
         if start is not None and start["phase"] == "pod_cap":
             waiting_for_pod += 1
+        starts[project.slug] = start
         project_pl[project.slug] = pl.id if pl is not None else None
         project_views.append(
             _project_view(
@@ -1465,6 +1516,19 @@ async def build_snapshot(app_state: Any, root: Conversation) -> RawSnapshot:
         view["loops_summary"] = loop_summaries.get(view["slug"])
         view["active_task"] = active.get(view["slug"])
     _health_views(project_views, by_slug, pr_views, views, project_pl, now)
+    await asyncio.to_thread(
+        _waiting_views,
+        deps,
+        factory_id,
+        project_views,
+        by_slug,
+        loaded,
+        starts,
+        project_pl,
+        now,
+        open_tasks,
+        targets,
+    )
     for pr, view in zip(loaded.prs, pr_views, strict=True):
         view["task_id"], view["task_ref"] = pr.task_id, task_refs.get(pr.task_id or "")
         view["loops"] = loop_chips.get(norm_id(pr.id))
@@ -1654,6 +1718,31 @@ async def readable_for(user_id: str | None, raw: RawSnapshot, deps: FactoryDeps)
     return readable
 
 
+_REF_WORD_RE: Final = re.compile(r"[A-Za-z0-9][\w#-]*")
+
+
+def _visible_wait(
+    wait: dict[str, Any], open_ids: set[str], dropped: set[str], hidden: set[str]
+) -> dict[str, Any]:
+    """
+    A ``waiting_on`` item as a viewer may read it: one that quotes a decision they
+    cannot open, or names a project they cannot see, keeps only its ref.
+    """
+    label = str(wait.get("label") or "")
+    words = set(_REF_WORD_RE.findall(label))
+    decision_id = wait.get("decision_id")
+    hides = bool(decision_id and decision_id not in open_ids) or bool(words & (dropped | hidden))
+    if not hides:
+        return wait
+    ref = str(wait.get("ref") or "")
+    head = f"{wait['task']} held: " if wait.get("kind") == "hold" and wait.get("task") else ""
+    return {
+        **wait,
+        "label": f"{head}waiting on {ref}",
+        "decision_id": decision_id if decision_id in open_ids else None,
+    }
+
+
 def filter_snapshot(raw: RawSnapshot, readable: set[str]) -> dict[str, Any]:
     """
     Cut *raw* down to what a viewer reading *readable* may see.
@@ -1672,9 +1761,14 @@ def filter_snapshot(raw: RawSnapshot, readable: set[str]) -> dict[str, Any]:
         if not d["asked_by_session_id"] or d["asked_by_session_id"] in readable
     ]
     open_ids = {d["id"] for d in body["decisions"]}
+    dropped = {d["ref"] for d in raw.body["decisions"] if d["id"] not in open_ids and d.get("ref")}
     for project in visible_projects:
         project["team"] = [m for m in project["team"] if m["session_id"] in readable]
         project["open_decision_ids"] = [i for i in project["open_decision_ids"] if i in open_ids]
+        if project.get("waiting_on"):
+            project["waiting_on"] = [
+                _visible_wait(w, open_ids, dropped, hidden) for w in project["waiting_on"]
+            ]
     body["projects"] = visible_projects
     prs = [p for p in body["prs"] if p["project_slug"] not in hidden]
     for pr in prs:

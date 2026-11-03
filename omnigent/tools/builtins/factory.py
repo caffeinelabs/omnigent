@@ -782,7 +782,19 @@ def _project_schema() -> dict[str, Any]:
             "priority": {"type": "integer", "minimum": 0, "maximum": 3, "default": 2},
             "depends_on": {
                 **text_list,
-                "description": "Slugs this project waits for; the server holds it until then.",
+                "description": (
+                    "Slugs this project waits for; the server holds it until then. Only a "
+                    "real code or API dependency, each with its reason: "
+                    "'<slug>: <what it needs from it>'."
+                ),
+            },
+            "depends_why": {
+                "type": "object",
+                "additionalProperties": {"type": "string", "maxLength": 200},
+                "description": (
+                    "Why each dependency must come first, one line per slug (the inline "
+                    "'<slug>: <why>' form of depends_on works too)."
+                ),
             },
             "depends_mode": {
                 "type": "string",
@@ -947,7 +959,8 @@ class SysFactoryProjectTool(Tool):
                     "description": (
                         "update/merge: charter fields to change (outcome, goal, dod, "
                         "scope_paths, constraints, preview, demo_focus, budget_ics, priority, "
-                        "depends_on, depends_mode, human_owner, budgets); unset fields stay."
+                        "depends_on ('<slug>: <why>' items), depends_mode, depends_why, "
+                        "human_owner, budgets); unset fields stay."
                     ),
                 },
                 "into": {
@@ -1036,7 +1049,19 @@ class SysFactoryProjectTool(Tool):
         )
 
 
-TASK_OPS: Final = ("upsert", "ready", "start", "done", "fail", "cancel", "get", "list", "report")
+TASK_OPS: Final = (
+    "upsert",
+    "ready",
+    "start",
+    "done",
+    "fail",
+    "cancel",
+    "get",
+    "list",
+    "report",
+    "hold",
+    "release",
+)
 TASK_UPSERT_MAX: Final = 30
 
 
@@ -1069,6 +1094,11 @@ class SysFactoryTaskTool(Tool):
             "cost_budget: <cost_budget>, model: <model, when not null>}). "
             "op='done', 'fail' or 'cancel' (key, note) closes a task; a merged PR closes "
             "its task by itself. op='get' (key) and op='list' read (leads: any project). "
+            "A task you hold back on purpose: op='hold' (key, on='D-<n>'|'C-<n>'|'PR #<n>'|"
+            "'T-<n>'|'<project>'|a few words, until?, note?) says on what, so the server "
+            "shows it as held instead of stalled; it lifts by itself when that closes or "
+            "after a day (until: at most 7 days; hold again to renew), or op='release' "
+            "(key). Leads hold any task by its T-<n>. "
             "ICs: op='report' (key, result PASS|FAIL|BLOCKED, note) for the task you were "
             "dispatched for."
         )
@@ -1140,6 +1170,22 @@ class SysFactoryTaskTool(Tool):
                         "description": "report: your RESULT.",
                     },
                     "note": {"type": "string", "maxLength": 1000},
+                    "on": {
+                        "type": "string",
+                        "maxLength": 200,
+                        "description": (
+                            "hold: what the task waits on, e.g. 'C-16', 'D-45', 'PR #9881', "
+                            "'T-3', a project slug, or a few words."
+                        ),
+                    },
+                    "until": {
+                        "type": "string",
+                        "description": (
+                            "hold: when it lapses by itself, e.g. '2h', '1d' or an ISO-8601 time "
+                            "(default a day, at most 7 days); a hold on a ref also lifts when "
+                            "the ref closes."
+                        ),
+                    },
                 },
                 "required": ["op"],
                 "additionalProperties": False,

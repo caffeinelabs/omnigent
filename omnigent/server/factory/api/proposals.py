@@ -20,6 +20,8 @@ Refusals render as ``{"error": {code, message, field?}, ...}``.
 from __future__ import annotations
 
 import asyncio
+import functools
+import time
 from collections.abc import Awaitable, Callable
 from typing import Annotated, Any, Literal, TypeVar
 
@@ -29,7 +31,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from omnigent.factory import PROPOSAL_KINDS, PROPOSAL_STATUSES, ROLE_LEAD, ROLE_PROJECT_LEAD
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE
-from omnigent.server.factory import control, gating, projects, proposals, tuning
+from omnigent.server.factory import control, gating, projects, proposals, tuning, waits
 from omnigent.server.factory.agent_scope import authorize_agent
 from omnigent.server.factory.charter import normalize_charter
 from omnigent.server.factory.context import factory_deps
@@ -84,7 +86,9 @@ async def post_agent_proposal(
     return await _guard(run)
 
 
-def _project_row(project: Any, by_slug: dict[str, Any], prs: list[Any]) -> dict[str, Any]:
+def _project_row(
+    project: Any, by_slug: dict[str, Any], prs: list[Any], facts: waits.Facts | None = None
+) -> dict[str, Any]:
     charter = normalize_charter(project.charter)
     return {
         "slug": project.slug,
@@ -99,8 +103,12 @@ def _project_row(project: Any, by_slug: dict[str, Any], prs: list[Any]) -> dict[
         "budget_ics": charter["budget_ics"],
         "depends_on": charter.get("depends_on", []),
         "depends_mode": charter.get("depends_mode"),
+        "depends_why": charter.get("depends_why") or {},
         "waiting_on": gating.unmet_dependencies(project, by_slug, prs)
         if project.status == "active"
+        else [],
+        "waits": [w.to_json() for w in waits.project_waits(project, facts)]
+        if facts is not None
         else [],
         "parent_slug": project.parent_slug,
         "pl_session_id": project.pl_session_id,
@@ -123,6 +131,14 @@ async def get_agent_projects(
         rows = await asyncio.to_thread(store.list_projects, caller.factory_id)
         prs = await asyncio.to_thread(store.list_prs, caller.factory_id)
         by_slug = {p.slug: p for p in rows}
+        targets = await asyncio.to_thread(
+            waits.auto_targets, request.app.state, caller.deps, caller.factory_id
+        )
+        facts = await asyncio.to_thread(
+            functools.partial(
+                waits.Facts.load, caller.deps, caller.factory_id, time.time(), targets=targets
+            )
+        )
         if role == ROLE_PROJECT_LEAD:
             rows = [p for p in rows if p.slug == caller.membership.project]
         pending = await asyncio.to_thread(
@@ -131,7 +147,7 @@ async def get_agent_projects(
             )
         )
         return {
-            "projects": [_project_row(p, by_slug, prs) for p in rows],
+            "projects": [_project_row(p, by_slug, prs, facts) for p in rows],
             "pending_proposals": [
                 {"proposal": f"C-{p.number}", "title": p.title, "approval": p.approval}
                 for p in pending

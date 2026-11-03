@@ -96,11 +96,27 @@ export function heldTotal(held: LoopHoldView): number {
   return Math.max(held.count ?? 0, held.refs.length, 1);
 }
 
-/** `waiting on D-22`, or `waiting on D-22 +1` when it waits on more than one answer. */
+/** Whether a held loop waits on a person's answer (a decision it can link to). */
+export function heldOnAnswer(held: LoopHoldView): boolean {
+  return held.refs.length > 0 || !held.label;
+}
+
+/**
+ * `waiting on D-22`, `waiting on D-22 +1` when it waits on more than one answer,
+ * or what else it waits on (`waiting on a person to merge PR #12`).
+ */
 export function heldText(held: LoopHoldView | null | undefined): string | null {
   if (!held) return null;
+  if (!heldOnAnswer(held)) return held.label ?? null;
   const more = heldTotal(held) - 1;
-  return `waiting on ${held.decision_ref}${more ? ` +${more}` : ""}`;
+  return `waiting on ${held.refs[0] ?? held.decision_ref}${more ? ` +${more}` : ""}`;
+}
+
+/** Why the stall clock waits, after the hold: a person's answer, or what it waits on. */
+export function heldNote(held: LoopHoldView): string {
+  return heldOnAnswer(held)
+    ? "not counted as stalled until a person answers"
+    : "not counted as stalled while it waits";
 }
 
 /** The loops of `pr`: its own (review, verify, demo, ci, claim) and its task's implement loop. */
