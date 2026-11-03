@@ -443,6 +443,9 @@ async def create_project_core(
             over_caps(cap_slots(rows) - cap_allowance, 1, rows)
         fields = start.project_fields(project, actor_name(actor), defaults)
         fields["charter"] = {**fields["charter"], "spawn_owner": SPAWN_SERVER}
+        if actor.kind == "human":
+            # A proposal's author replaces this when the proposal applies (proposals._freeze_why).
+            fields["charter"]["requested_by"] = {"kind": "human", "name": actor_name(actor)}
         fields["created_by"] = actor.id if actor.kind != "human" else actor_name(actor)
         if parent_slug:
             fields["parent_slug"] = parent_slug

@@ -41,7 +41,7 @@ describe("GateChip", () => {
     expect(shownGates(docs)).not.toContain("demo");
     renderBoard(<Row pr={api} />);
     expect(screen.getByTestId("gate-checks-9630")).toHaveTextContent("CI 14/14");
-    expect(screen.getByTestId("gate-checks-9630")).toHaveAccessibleName("CI passed");
+    expect(screen.getByTestId("gate-checks-9630")).toHaveAccessibleName("CI 14/14 passed");
   });
 
   it("hides the Base chip for a server that sends no base gate", () => {

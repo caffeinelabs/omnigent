@@ -70,6 +70,8 @@ WHY_KEYS: Final = (
 )
 """``charter.why``: the bet frozen when its proposal applied (read-only; a split
 child inherits its parent's, with ``split_from``)."""
+REQUESTED_BY_KINDS: Final = ("human", "agent")
+"""``charter.requested_by.kind``: who asked for the project (server-written at create)."""
 DEFAULT_BASE_ENV: Final = "OMNIGENT_FACTORY_DEFAULT_BASE"
 """``owner/repo#branch`` new factories default to, e.g. ``caffeinelabs/app#temp-main``."""
 
@@ -170,6 +172,20 @@ def _budgets(value: Any) -> dict[str, float]:
     return out
 
 
+def _requested_by(value: Any) -> dict[str, str] | None:
+    """``{kind, name, proposal?}``: who asked for the project, as the server recorded it."""
+    if not isinstance(value, Mapping) or value.get("kind") not in REQUESTED_BY_KINDS:
+        return None
+    name = _text(value.get("name"))
+    if not name:
+        return None
+    out = {"kind": str(value["kind"]), "name": name[:128]}
+    proposal = _text(value.get("proposal"))
+    if proposal:
+        out["proposal"] = proposal[:16]
+    return out
+
+
 def _why(value: Any) -> dict[str, Any] | None:
     if not isinstance(value, Mapping):
         return None
@@ -193,7 +209,8 @@ def normalize_charter(
     :returns: ``{kind, goal, dod, scope_paths, constraints, env_needed,
         preview{enabled, slots, tooling_ref?}, preview_slots, demo_focus, demo,
         budget_ics, version_path?, health_path?, depends_on?, depends_mode?,
-        human_owner?, budgets?, spawn_owner?, outcome?, why?}``; ``kind`` is ``work`` unless it is
+        human_owner?, budgets?, spawn_owner?, outcome?, why?, requested_by?}``; ``kind`` is
+        ``work`` unless it is
         one of :data:`~omnigent.factory.PROJECT_KINDS`. The optional keys are
         stored only when set.
     """
@@ -249,6 +266,9 @@ def normalize_charter(
     why = _why(src.get("why"))
     if why:
         out["why"] = why
+    requested_by = _requested_by(src.get("requested_by"))
+    if requested_by:
+        out["requested_by"] = requested_by
     return out
 
 

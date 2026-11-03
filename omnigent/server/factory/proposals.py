@@ -1864,19 +1864,29 @@ def _freeze_why(
     :returns: The created rows as stored now.
     """
     frozen = bets.frozen_why(row, by=projects.actor_name(actor), at=now)
+    asker = _requester(deps, row)
     out: list[FactoryProject] = []
     for project in created:
         why = (inherited or {}).get(project.slug) or frozen
-        if why is None:
+        charter = normalize_charter(project.charter)
+        if why is None and charter.get("requested_by") == asker:
             out.append(project)
             continue
-        charter = normalize_charter(project.charter)
-        charter["why"] = why
-        if why.get("outcome") and not charter.get("outcome"):
-            charter["outcome"] = why["outcome"]
+        charter["requested_by"] = asker
+        if why is not None:
+            charter["why"] = why
+            if why.get("outcome") and not charter.get("outcome"):
+                charter["outcome"] = why["outcome"]
         stored = deps.factory_store.update_project(project.id, charter=normalize_charter(charter))
         out.append(stored or project)
     return out
+
+
+def _requester(deps: FactoryDeps, row: FactoryProposal) -> dict[str, str]:
+    """Who asked for the projects a proposal creates: its author, not whoever applied it."""
+    if row.author_kind == "agent":
+        return {"kind": "agent", "name": _title_of(deps, row.author), "proposal": row.ref}
+    return {"kind": "human", "name": control.human_name(row.author), "proposal": row.ref}
 
 
 def _closes(change: Change, slots: set[str]) -> int:

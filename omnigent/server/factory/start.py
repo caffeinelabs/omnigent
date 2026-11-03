@@ -29,7 +29,7 @@ from pydantic import (
 )
 
 from omnigent.entities import Conversation
-from omnigent.entities.factory import FactoryProject
+from omnigent.entities.factory import FactoryProject, FactoryProposal
 from omnigent.errors import ErrorCode, OmnigentError
 from omnigent.factory import (
     CADENCE_DEMO,
@@ -1044,19 +1044,21 @@ def merge_charter(old: Mapping[str, Any] | None, patch: CharterPatchIn) -> dict[
 
 async def update_charter(
     app_state: Any, factory_id: str, slug: str, payload: Any, *, user_id: str | None
-) -> tuple[FactoryProject, bool, str | None]:
+) -> tuple[FactoryProject, bool, str | None, FactoryProposal | None]:
     """
     Edit a project's charter and send its PL a CHARTER UPDATE with the diff.
 
     Needs EDIT on the root, and MANAGE when it sets, raises or removes a USD
     budget. A PATCH that changes nothing sends nothing; a project without a PL
-    yet gets the new charter when it is spawned.
+    yet gets the new charter when it is spawned. A change is recorded as a
+    charter version (:mod:`.charter_versions`) with a 10-minute Undo.
 
-    :returns: ``(updated project, whether the rendered charter changed, mail id or None)``.
+    :returns: ``(updated project, whether the rendered charter changed, mail id
+        or None, the version or None)``.
     :raises CockpitError: 400 invalid body or unknown dependency, 404 unknown factory
         or project, 409 dependency cycle.
     """
-    from omnigent.server.factory import autonomy, projects
+    from omnigent.server.factory import autonomy, charter_versions, projects
 
     patch = parse_body(CharterPatchIn, payload)
     deps = factory_deps(app_state)
@@ -1068,8 +1070,8 @@ async def update_charter(
         if autonomy.raises_budgets(charter, patch):
             await control.require(deps, user_id, root.id, LEVEL_MANAGE)
     actor = await asyncio.to_thread(projects.human_actor, deps, user_id, root.id)
-    row, diff, mail_id = await projects.patch_project_core(app_state, root, slug, patch, actor)
-    return row, bool(diff), mail_id
+    row, diff, mail_id, version = await charter_versions.edit(app_state, root, slug, patch, actor)
+    return row, bool(diff), mail_id, version
 
 
 __all__ = [

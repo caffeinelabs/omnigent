@@ -299,6 +299,8 @@ export function GateChip({
   const Icon = STATE_ICON[state];
   const reasons = pr.gates.reasons.filter((r) => REASON_MATCH[gate].test(r));
   const label = `${GATE_KEY_LABEL[gate]} ${STATE_WORD[state]}`;
+  // The name starts with what the chip shows ("CI 14/14 passed").
+  const name = `${chipText(pr, gate)} ${STATE_WORD[state]}`;
   return (
     <HoverCard openDelay={150} closeDelay={100}>
       <HoverCardTrigger asChild>
@@ -306,7 +308,7 @@ export function GateChip({
           type="button"
           data-testid={`gate-${gate}-${pr.number}`}
           data-state={state}
-          aria-label={label}
+          aria-label={name}
           className={cn(
             "relative inline-flex h-5 min-w-0 cursor-default items-center gap-1 rounded-full border px-1.5 text-sm whitespace-nowrap tabular-nums transition-colors focus-visible:ring-3 focus-visible:ring-ring/50 focus-visible:outline-none",
             STATE_CHIP[state],

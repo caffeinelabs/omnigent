@@ -93,7 +93,7 @@ export function SectionNav({
               "after:absolute after:inset-x-0 after:-bottom-px after:h-0.5 after:rounded-full after:bg-foreground after:opacity-0",
               active === section
                 ? "text-foreground after:opacity-100"
-                : "text-foreground/60 hover:text-foreground dark:text-muted-foreground dark:hover:text-foreground",
+                : "text-foreground/70 hover:text-foreground dark:text-muted-foreground dark:hover:text-foreground",
             )}
           >
             {SECTION_LABEL[section]}
@@ -108,7 +108,7 @@ export function SectionNav({
           to={room.href}
           componentId="factory.project.room"
           data-testid="project-nav-room"
-          className="inline-flex h-9 shrink-0 items-center gap-1.5 text-ui font-medium whitespace-nowrap text-foreground/60 hover:text-foreground dark:text-muted-foreground"
+          className="inline-flex h-9 shrink-0 items-center gap-1.5 text-ui font-medium whitespace-nowrap text-foreground/70 hover:text-foreground dark:text-muted-foreground"
         >
           <MessagesSquareIcon aria-hidden className="size-3.5" />
           Room {room.label}

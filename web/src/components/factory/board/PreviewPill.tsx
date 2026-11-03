@@ -207,7 +207,7 @@ export function PreviewPill({
           view.state === "deploying" && "animate-pulse motion-reduce:animate-none",
         )}
       />
-      <span className="text-muted-foreground">Preview</span>
+      <span className="text-muted-foreground">Preview</span>{" "}
       <span
         className={cn(
           "min-w-0 truncate",

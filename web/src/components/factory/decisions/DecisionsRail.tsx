@@ -169,7 +169,12 @@ export function DecisionsRail({
   const remember = (stored: DecisionView) => setMine((prev) => ({ ...prev, [stored.id]: stored }));
 
   return (
-    <section data-testid="decisions-rail" aria-label="Decisions" className="flex flex-col gap-2">
+    // With its heading hidden it sits in a section that names it: no second "Decisions" landmark.
+    <section
+      data-testid="decisions-rail"
+      aria-label={hideHeading ? undefined : "Decisions"}
+      className="flex flex-col gap-2"
+    >
       <h2 className={cn("text-sm font-medium text-muted-foreground", hideHeading && "sr-only")}>
         Decisions · <span className="tabular-nums">{open.length}</span> open
       </h2>

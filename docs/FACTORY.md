@@ -341,6 +341,32 @@ applied proposals call with the acting person, agent or the server.
   An apply that fails part-way takes back the projects it created before
   their PLs started. Pending proposals expire after 72 h; the proposer gets
   `[Factory proposal · C-<n> applied|rejected|expired|undone …]`.
+- **Charter versions** (`server/factory/charter_versions.py`). A person's
+  charter edit (`PATCH …/projects/{slug}`) is recorded as a human projects
+  proposal that applied when it was filed (`C-n`, `result.charter_edit`, the
+  charter and priority from before it), so it has a 10-minute Undo through
+  `POST …/proposals/{ref}/undo` and the PL's CHARTER UPDATE names it. `GET
+  …/projects/{slug}/charter/versions` lists every applied or undone change of
+  the charter (people's and agents'), each field before and after; `POST
+  …/projects/{slug}/charter/revert {proposal, note?}` puts the fields one
+  version changed back as they were, as a new version (MANAGE when it raises
+  a budget; 409 `nothing_to_revert` / `not_a_charter_version`). A no-op edit
+  records nothing; charter edits do not count in the proposals metric. Dark
+  by default: only while the server offers the new cockpit
+  (`OMNIGENT_FACTORY_COCKPIT_V2=1`); otherwise edits apply as before and both
+  routes answer 404 `charter_versions_off`.
+- **Who asked for a project** (`charter.requested_by {kind, name, proposal?}`,
+  server-written): the person who added it in the cockpit, or the author of
+  the proposal that created it (an agent's idea shows as one).
+- **The lead's update** (`factory_projects.lead_update`). A project lead posts
+  `sys_factory_set(update={health: on_track|at_risk|off_track, done, next,
+  blocker})` on itself (`PATCH /v1/factory/sessions/{id}` `update`; only the
+  project's current lead, 403 `not_your_project`; 400 `invalid_update`), logged
+  as `project.update`. The snapshot's `projects[].update` is the latest one and
+  `projects[].health` the health the server computes from facts (stopped,
+  failing checks, spend against the team budget, stuck members, a blocking
+  question): the facts override the lead when they say worse, never when they
+  say better, and an update older than 3 h is stale.
 - **Dependencies are checked by every core**: an unknown `depends_on` is 400
   `unknown_dependency`, a cycle 409 `cycle` with its path, from the cockpit
   forms as from proposals.
@@ -862,6 +888,15 @@ default). `enforce` needs the PL's `team_guard` policy, which is held out of the
 `factory-pl` bundle until every PL pod runs a sandbox host image that ships
 `omnigent.policies.builtins.factory_team` (a runner that cannot import a policy
 path denies every tool call); add it back before turning `enforce` on.
+
+In the new cockpit, Projects shows outcome-first cards or a board by stage
+(`?view=board`), filtered to all, from evidence, requested, needs you or stopped
+(`?f=`), with shipped work folded; the table moved to Debug › Projects table.
+A project's page is its header (what users get, the facts, the health chip),
+why it exists (the why-chain from evidence to readout, missing links hatched,
+and the stage bar), its team, then the Overview, Work, History and Charter tabs
+(`/projects/:slug/{work,history,charter}`; an old `#section` link opens the tab
+that holds it, and the classic cockpit sends a tab address to its section).
 
 In the new cockpit a project's page draws its team as an org chart (the lead,
 then Build, Check and Run), and `/projects/<slug>/team` (also `e` on the

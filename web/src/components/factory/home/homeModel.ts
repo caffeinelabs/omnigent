@@ -17,6 +17,7 @@ import type {
 } from "@/lib/factoryApi";
 import { type TeamMember, groupTeams, modelLabel, teamRows } from "../agents/teamsModel";
 import { formatElapsed, formatUsd, plural, primaryPr, projectPrs } from "../factoryFormat";
+import { projectWhy } from "../project/projectModel";
 import type { MemberIdentity } from "../ui/MemberAvatar";
 import type { LoopGoal, LoopStage } from "../ui/LoopStrip";
 import {
@@ -113,7 +114,7 @@ export function headlineDate(nowS: number, locale?: string): string {
 
 // ── Projects ───────────────────────────────────────────────────
 
-/** Why a project exists, in one line (B4 grows this into the project's why-chain). */
+/** Why a project exists, in one line (the project page draws the whole why-chain). */
 export interface WhyLine {
   kind: "evidence" | "requested" | "hunch" | "stopped";
   /** e.g. `from O-3 · measured by weekly publishes`, `No user evidence · requested by mia`. */
@@ -152,46 +153,21 @@ export interface ShippedLine {
   measured: boolean;
 }
 
-function person(userId: string): string {
-  return userId.split("@")[0] || userId;
-}
-
 function outcome(project: ProjectView): string {
   return project.charter?.outcome?.trim() || project.title || project.slug;
 }
 
-/** Why a project exists: from evidence, a hunch, or a person's request; or that it stopped. */
+/**
+ * Why a project exists: from evidence, a hunch or an agent's idea, or a
+ * person's request; or that it stopped (the project page's why, in one line).
+ */
 export function whyLine(project: ProjectView): WhyLine {
-  if (project.overlay === "failed") {
-    const reason = (project.overlay_reason ?? "").split(" · ")[0]?.trim();
-    return {
-      kind: "stopped",
-      text: reason ? `Stopped: ${reason}` : "Stopped",
-      noEvidence: false,
-    };
-  }
-  const why = project.why ?? null;
-  if (why?.opportunity) {
-    const measured = why.metric ? `measured by ${why.metric}` : "not measured yet";
-    return {
-      kind: "evidence",
-      text: `from ${why.opportunity} · ${measured}`,
-      ref: why.opportunity,
-      noEvidence: false,
-    };
-  }
-  if (why?.kind === "hunch") {
-    return {
-      kind: "hunch",
-      text: "No user evidence · a hunch, counted as one · not measured",
-      noEvidence: true,
-    };
-  }
-  const by = project.human_owner ? ` by ${person(project.human_owner)}` : "";
+  const why = projectWhy(project);
   return {
-    kind: "requested",
-    text: `No user evidence · requested${by} · not measured`,
-    noEvidence: true,
+    kind: why.kind === "idea" ? "hunch" : why.kind,
+    text: why.text,
+    ...(why.opportunity && why.kind === "evidence" ? { ref: why.opportunity } : {}),
+    noEvidence: why.noEvidence,
   };
 }
 

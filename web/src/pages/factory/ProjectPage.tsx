@@ -1,10 +1,15 @@
 /**
- * One factory project (`/factory/:factoryId/projects/:slug`) as a page of
- * anchored sections: Overview (charter, progress, plan), Tasks, PRs, Demos
- * (every recorded run, playing inline, older runs per PR), Previews & env,
- * Decisions, Team, Loops and Activity, with a link to the project's Room
- * thread. `#demos` and the other section ids scroll to their section;
- * `?decision=<D-n>` highlights a decision.
+ * One factory project (`/factory/:factoryId/projects/:slug`).
+ *
+ * The classic cockpit: a page of anchored sections: Overview (charter,
+ * progress, plan), Tasks, PRs, Demos (every recorded run, playing inline,
+ * older runs per PR), Previews & env, Decisions, Team, Loops and Activity,
+ * with a link to the project's Room thread. `#demos` and the other section
+ * ids scroll to their section; `?decision=<D-n>` highlights a decision. A
+ * new-cockpit tab address (`/projects/:slug/work`) lands on its section.
+ *
+ * The new cockpit: header, why it exists, the team chart, then the Overview,
+ * Work, History and Charter tabs (`ProjectPageV2`).
  */
 
 import { useEffect, useMemo, useState } from "react";
@@ -15,10 +20,14 @@ import { DecisionsRail } from "@/components/factory/decisions/DecisionsRail";
 import {
   PROJECT_SECTIONS,
   type ProjectSection,
+  type ProjectTab,
   factoryPageHref,
   prPageHref,
+  projectPageHref,
+  projectTabHref,
   projectsPageHref,
 } from "@/components/factory/factoryRoutes";
+import { ProjectPageV2, tabOf } from "@/components/factory/project/ProjectPageV2";
 import { ProjectDemos } from "@/components/factory/project/ProjectDemos";
 import { ProjectHeader } from "@/components/factory/project/ProjectHeader";
 import { projectDecisions } from "@/components/factory/project/projectModel";
@@ -36,7 +45,6 @@ import {
   roomLink,
 } from "@/components/factory/projects/ProjectSections";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
-import { TeamSection } from "@/components/factory/team/TeamSection";
 import { useHashScroll } from "@/components/factory/shell/scroll";
 import { findPr } from "@/components/factory/shell/shellRoutes";
 import { plural } from "@/components/factory/factoryFormat";
@@ -44,6 +52,7 @@ import { WrapUpRating } from "@/components/factory/feedback/FeedbackWidgets";
 import { ReportProblemButton } from "@/components/factory/feedback/ReportProblem";
 import { SectionCard } from "@/components/factory/project/projectParts";
 import type { FactorySnapshot, ProjectView } from "@/lib/factoryApi";
+import { Navigate } from "react-router-dom";
 import { Link, useNavigate, useParams, useSearchParams } from "@/lib/routing";
 
 function Breadcrumb({ factoryId, title }: { factoryId: string; title: string }) {
@@ -131,8 +140,6 @@ function ProjectBody({
   const navigate = useNavigate();
   const [editing, setEditing] = useState(false);
   const fid = snapshot.factory.id;
-  // The new cockpit draws the team as an org chart right under the header.
-  const cockpitV2 = useFactoryShell().cockpit === "v2";
   const prs = projectPrList(snapshot, project);
   const decisions = projectDecisions(snapshot, project);
   const openDecisions = decisions.filter((d) => d.status === "open").length;
@@ -159,9 +166,6 @@ function ProjectBody({
     <div data-testid={`project-page-${project.slug}`} className="flex min-w-0 flex-col gap-4">
       <Breadcrumb factoryId={fid} title={project.title} />
       <ProjectHeader snapshot={snapshot} project={project} nowS={nowS} onDecision={onDecision} />
-      {cockpitV2 && (
-        <TeamSection snapshot={snapshot} project={project} nowS={nowS} sectionId="team" />
-      )}
       <SectionNav
         sections={PROJECT_SECTIONS}
         counts={counts}
@@ -236,12 +240,9 @@ function ProjectBody({
             </p>
           )}
         </PageSection>
-        {/* The new cockpit's chart above is the Team section. */}
-        {!cockpitV2 && (
-          <PageSection id="team" title="Team" meta="agents on this project">
-            <TeamTable project={project} nowS={nowS} factoryId={fid} />
-          </PageSection>
-        )}
+        <PageSection id="team" title="Team" meta="agents on this project">
+          <TeamTable project={project} nowS={nowS} factoryId={fid} />
+        </PageSection>
         <PageSection id="loops" title="Loops">
           <ProjectLoops snapshot={snapshot} project={project} nowS={nowS} />
         </PageSection>
@@ -265,14 +266,49 @@ function ProjectBody({
   );
 }
 
+/** A new-cockpit tab's section on the classic page. */
+const CLASSIC_SECTION: Record<ProjectTab, ProjectSection> = {
+  overview: "overview",
+  work: "tasks",
+  history: "activity",
+  charter: "overview",
+};
+
 export function ProjectPage() {
-  const { slug = "" } = useParams<{ slug: string }>();
-  const { snapshot, nowS, clockOffsetS } = useFactoryShell();
+  const { slug = "", tab: tabParam } = useParams<{ slug: string; tab?: string }>();
+  const { snapshot, nowS, clockOffsetS, cockpit } = useFactoryShell();
+  const [params] = useSearchParams();
+  const fid = snapshot.factory.id;
   const project = useMemo(
     () => snapshot.projects.find((p) => p.slug === slug) ?? null,
     [snapshot, slug],
   );
-  if (!project) return <NotOnBoard factoryId={snapshot.factory.id} slug={slug} />;
+  const tab = tabOf(tabParam);
+  if (cockpit !== "v2" && tabParam) {
+    const section = tab ? CLASSIC_SECTION[tab] : undefined;
+    return (
+      <Navigate
+        to={projectPageHref(fid, slug, {
+          ...(section ? { section } : {}),
+          params: Object.fromEntries(params.entries()),
+        })}
+        replace
+      />
+    );
+  }
+  if (!project) return <NotOnBoard factoryId={fid} slug={slug} />;
+  if (cockpit === "v2") {
+    if (!tab) return <Navigate to={projectTabHref(fid, slug)} replace />;
+    return (
+      <ProjectPageV2
+        snapshot={snapshot}
+        project={project}
+        tab={tab}
+        nowS={nowS}
+        clockOffsetS={clockOffsetS}
+      />
+    );
+  }
   return (
     <ProjectBody snapshot={snapshot} project={project} nowS={nowS} clockOffsetS={clockOffsetS} />
   );

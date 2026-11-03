@@ -99,6 +99,7 @@ PROJECT_FIELDS = frozenset(
         "closed_at",
         "def_version",
         "version_id",
+        "lead_update",
     }
 )
 """Fields ``upsert_project`` / ``update_project`` accept."""

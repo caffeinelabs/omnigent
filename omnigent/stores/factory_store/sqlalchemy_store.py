@@ -215,7 +215,7 @@ def _decision_lock_key(workspace_id: int, factory_id: str) -> int:
     return _lock_key(_DECISION_LOCK_NS, workspace_id, factory_id)
 
 
-_PROJECT_JSON = frozenset({"charter", "env"})
+_PROJECT_JSON = frozenset({"charter", "env", "lead_update"})
 _PR_JSON = frozenset({"gates", "sentinel", "human_review", "preview"})
 
 
@@ -243,6 +243,7 @@ def _project(row: SqlFactoryProject) -> FactoryProject:
         closed_at=row.closed_at,
         def_version=row.def_version,
         version_id=row.version_id,
+        lead_update=load_json(row.lead_update),
         workspace_id=row.workspace_id,
     )
 

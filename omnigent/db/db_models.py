@@ -1734,6 +1734,7 @@ class SqlFactoryProject(OmnigentBase):
     closed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
     def_version: Mapped[int | None] = mapped_column(Integer, nullable=True)
     version_id: Mapped[str | None] = mapped_column(Uuid16, nullable=True)
+    lead_update: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
 
     __table_args__ = (
         CheckConstraint("priority IN (0, 1, 2, 3)", name="ck_factory_projects_priority"),

@@ -82,6 +82,7 @@ export function FactoryPage() {
         <Route path="projects" element={<ProjectsPage />} />
         <Route path="projects/:slug" element={<ProjectPage />} />
         <Route path="projects/:slug/team" element={<ProjectTeamRoute />} />
+        <Route path="projects/:slug/:tab" element={<ProjectPage />} />
         <Route path="prs/:prId" element={<PrPage />} />
         <Route path="agents" element={<AgentsPage />} />
         <Route path="agents/:sid" element={<AgentRoute />} />

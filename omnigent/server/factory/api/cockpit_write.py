@@ -246,14 +246,25 @@ async def add_project(
 async def update_charter(
     request: Request, factory_id: str, slug: str, payload: Annotated[Any, Body()]
 ) -> dict[str, Any] | JSONResponse:
-    """Edit a project's charter; its PL gets a CHARTER UPDATE with the diff."""
+    """
+    Edit a project's charter; its PL gets a CHARTER UPDATE with the diff.
+
+    A change is recorded as a charter version: ``proposal`` names it (``C-n``)
+    and ``undo_until`` is when its Undo (``POST …/proposals/{ref}/undo``) closes.
+    """
     _, user_id = _caller(request)
 
     async def run() -> dict[str, Any]:
-        row, changed, mail_id = await start.update_charter(
+        row, changed, mail_id, version = await start.update_charter(
             request.app.state, factory_id, slug, payload, user_id=user_id
         )
-        return {"project": _row_json(row), "changed": changed, "mail_id": mail_id}
+        return {
+            "project": _row_json(row),
+            "changed": changed,
+            "mail_id": mail_id,
+            "proposal": version.ref if version is not None else None,
+            "undo_until": version.undo_until if version is not None else None,
+        }
 
     return await _guard(run)
 

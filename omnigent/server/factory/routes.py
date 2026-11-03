@@ -40,7 +40,7 @@ from omnigent.factory import (
 )
 from omnigent.runner.identity import RUNNER_TUNNEL_TOKEN_HEADER
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER, LEVEL_READ
-from omnigent.server.factory import events, live
+from omnigent.server.factory import events, lead_update, live
 from omnigent.server.factory.context import FactoryDeps, factory_deps
 from omnigent.server.factory.envelope import display_title, format_envelope
 from omnigent.server.factory.mailer import MailItem, get_mailer, new_mail_id
@@ -153,6 +153,7 @@ class PatchSessionBody(BaseModel):
     supervisor_session_id: str | None = None
     title: str | None = None
     stage: str | None = None
+    update: dict[str, Any] | None = None
 
 
 async def _get_session(deps: FactoryDeps, session_id: str) -> Conversation:
@@ -394,6 +395,17 @@ def create_factory_router() -> APIRouter:
         if body.stage is not None:
             stage_project = await _stage_claim_project(deps, sender_m, target.id, body.stage)
             fields = fields - {"stage"}
+        posted: dict[str, Any] | None = None
+        update_project: str | None = None
+        if body.update is not None:
+            try:
+                posted = lead_update.parse_update(body.update)
+            except lead_update.UpdateError as exc:
+                raise FactoryRouteError(400, "invalid_update", str(exc)) from None
+            update_project = await _lead_project(
+                deps, sender_m, target.id, "only a project's lead posts its update, on itself"
+            )
+            fields = fields - {"update"}
         beacon_only = fields <= _BEACON_FIELDS
         allowed = (
             target.id == sender.id
@@ -477,6 +489,10 @@ def create_factory_router() -> APIRouter:
         if stage_project is not None and body.stage is not None:
             await _record_stage_claim(request, deps, sender_m, stage_project, body.stage)
             result["agent_stage"] = body.stage
+        if posted is not None and update_project is not None:
+            result["update"] = await _record_lead_update(
+                request, deps, sender_m, update_project, posted
+            )
         return result
 
     return router
@@ -545,6 +561,21 @@ async def _stage_claim_project(
         raise FactoryRouteError(
             400, "invalid_stage", f"stage must be one of {sorted(AGENT_STAGES)}"
         )
+    return await _lead_project(
+        deps, sender, target_id, "only a project's lead claims its stage, on itself"
+    )
+
+
+async def _lead_project(
+    deps: FactoryDeps, sender: Membership, target_id: str, refusal: str
+) -> str:
+    """
+    Check that *sender* is its project's current lead, acting on itself.
+
+    :param refusal: The 403 message when it is not.
+    :returns: The project slug.
+    :raises FactoryRouteError: 403 ``not_your_project``.
+    """
     project = sender.project
     if (
         target_id != sender.session_id
@@ -553,9 +584,7 @@ async def _stage_claim_project(
         or not project
         or sender.factory_id is None
     ):
-        raise FactoryRouteError(
-            403, "not_your_project", "only a project's lead claims its stage, on itself"
-        )
+        raise FactoryRouteError(403, "not_your_project", refusal)
     try:
         current = await asyncio.to_thread(
             resolve_target, f"project:{project}", sender, deps.conversation_store
@@ -567,6 +596,39 @@ async def _stage_claim_project(
             403, "not_your_project", f"you are not the current lead of project {project!r}"
         )
     return project
+
+
+async def _record_lead_update(
+    request: Request,
+    deps: FactoryDeps,
+    sender: Membership,
+    project: str,
+    update: dict[str, Any],
+) -> dict[str, Any]:
+    """Store a PL's structured update on its project row, log it and refresh open cockpits."""
+    assert sender.factory_id is not None
+    value = lead_update.stored(update, by=sender.session_id, at=int(time.time()))
+    await asyncio.to_thread(
+        deps.factory_store.upsert_project,
+        sender.factory_id,
+        project,
+        lead_update=value,
+        pl_session_id=sender.session_id,
+    )
+    words = update["health"].replace("_", " ")
+    await events.emit(
+        request.app.state,
+        sender.factory_id,
+        "project.update",
+        project=project,
+        from_id=sender.session_id,
+        subject=f"project:{project}",
+        summary=f"{display_title(sender.title, sender.session_id)} posted an update on "
+        f"{project}: {words}",
+        data={**update, "by": sender.session_id, "by_kind": "agent", "by_role": sender.role},
+    )
+    live.announce_factory_changed(request.app.state, sender.factory_id, ["snapshot"])
+    return value
 
 
 async def _record_stage_claim(

@@ -17,6 +17,10 @@ export const PROJECT_SECTIONS = [
 ] as const;
 export type ProjectSection = (typeof PROJECT_SECTIONS)[number];
 
+/** The new cockpit's project tabs (`/projects/<slug>/<tab>`; Overview when omitted). */
+export const PROJECT_TABS = ["overview", "work", "history", "charter"] as const;
+export type ProjectTab = (typeof PROJECT_TABS)[number];
+
 /** The section a `#hash` or an old `?tab=` value names, else null. */
 export function projectSection(value: string | null | undefined): ProjectSection | null {
   const key = (value ?? "").replace(/^#/, "");
@@ -69,6 +73,7 @@ export type SteerSection = (typeof STEER_SECTIONS)[number];
 /** Debug's views (`/debug/<view>`): today's operator pages, one level down. */
 export const DEBUG_VIEWS = [
   "fleet",
+  "projects",
   "timeline",
   "activity",
   "graph",
@@ -106,6 +111,17 @@ export function factoryPageHref(factoryId: string): string {
 /** `/factory/<fid>/projects`. */
 export function projectsPageHref(factoryId: string): string {
   return `${factoryPageHref(factoryId)}/projects`;
+}
+
+/** `/factory/<fid>/projects/<slug>[/<tab>]`: a tab of the new cockpit's project page. */
+export function projectTabHref(
+  factoryId: string,
+  slug: string,
+  tab: ProjectTab = "overview",
+  params?: Record<string, string | number>,
+): string {
+  const tail = tab === "overview" ? "" : `/${tab}`;
+  return withQuery(`${projectsPageHref(factoryId)}/${enc(slug)}${tail}`, params);
 }
 
 /**
