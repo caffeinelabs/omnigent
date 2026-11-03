@@ -291,6 +291,10 @@ export interface MemberView {
   health: string | null;
   summary: string | null;
   harness: string | null;
+  /** `claude` or `codex` (from its harness; newer servers). */
+  vendor?: string | null;
+  /** Its model override, else its bundle's model (newer servers). */
+  model?: string | null;
   running: boolean;
   last_activity_at: number | null;
   heartbeat_s: number | null;
@@ -930,6 +934,8 @@ export interface ProjectView {
   def_version?: number | null;
   /** The bet frozen into the charter, when the project came from one (newer servers). */
   why?: WhyView | null;
+  /** The project's team spec next to its live team (newer servers). */
+  team_spec?: TeamSpecView | null;
 }
 
 // ── Decisions and events ───────────────────────────────────────
@@ -2976,6 +2982,8 @@ export interface DefinitionEditRequest {
   expected_effect?: EffectInput;
   /** The version the edit was made on; a newer one in force answers 409 `stale_definition`. */
   base_version?: number;
+  /** Team changes: members finish their current task first (default), or stop now. */
+  when?: TeamChangeWhen;
 }
 
 export interface DefinitionEditResponse {
@@ -2999,6 +3007,7 @@ export interface DefinitionPreviewRequest {
   trial?: boolean;
   trial_h?: number;
   base_version?: number;
+  when?: TeamChangeWhen;
 }
 
 export interface DefinitionPreviewEntry extends DefinitionDiffEntry {
@@ -3015,15 +3024,31 @@ export interface DefinitionBlocked {
   path: string;
   code: string;
   message: string;
+  /** `gate_requires_role`: the gate that would lose its last member, and its role. */
+  gate?: string;
+  role?: string;
 }
 
 export interface DefinitionEffect {
-  kind: "restore" | "mail" | "data" | "rules" | "cadence" | "discovery" | "ends_trial";
+  kind:
+    "restore" | "mail" | "data" | "rules" | "cadence" | "discovery" | "ends_trial" | TeamEffectKind;
   text: string;
   count?: number;
   paths?: string[];
   members?: string[];
   trial?: string;
+  /** Team effects: the project they are about. */
+  project?: string;
+  before_usd_h?: number;
+  after_usd_h?: number;
+  spent_usd?: number;
+  before_usd?: number;
+  after_usd?: number;
+  budget_usd?: number;
+  when?: TeamChangeWhen;
+  sessions?: string[];
+  /** `team_update`: the PL that gets the TEAM UPDATE (`null` without one). */
+  to?: string | null;
 }
 
 /** Whether the change may run as a trial, and why not. */
@@ -3498,4 +3523,116 @@ export async function fetchFactoryExport(
   const res = await authenticatedFetch(factoryUrl(factoryId, `/export?format=${format}`));
   if (!res.ok) throw await factoryErrorFromResponse(res);
   return res.blob();
+}
+
+// ── Team spec (definition block `team`) ────────────────────────
+
+export type TeamChangeWhen = "after_current" | "now";
+export type TeamEffectKind = "rate" | "finish" | "restart" | "review_route" | "team_update";
+
+/** One seat of a project's team; `model` `null` is the bundle's default (`model_label`). */
+export interface TeamMemberSpecView {
+  id: string;
+  role: string;
+  handle: string | null;
+  vendor: string;
+  agent: string;
+  model: string | null;
+  model_label: string | null;
+  brief: boolean;
+  /** Why it cannot be removed now (a gate needs it), else `null`. */
+  remove_blocked: string | null;
+}
+
+export interface TeamDriftView {
+  /** `missing_gate_role`: a gate the charter needs now has no member (its agent stays allowed). */
+  kind: "outside_team" | "over_builders" | "missing_gate_role" | string;
+  session_id: string | null;
+  text: string;
+}
+
+/** `projects[].team_spec`: its own team, or today's bundle (`own: false`). */
+export interface TeamSpecView {
+  own: boolean;
+  /** `bundle`: no team of its own, so every agent of the PL bundle on its default model. */
+  follows?: "own" | "bundle";
+  /** `follows: "bundle"` in words, else `null`. */
+  summary?: string | null;
+  template: string | null;
+  builders_at_once: number;
+  builders_from: "team" | "charter";
+  budget_usd: number;
+  budget_from: "team" | "charter" | "definition";
+  members: TeamMemberSpecView[];
+  drift: TeamDriftView[];
+  drifted: boolean;
+  /** `OMNIGENT_FACTORY_TEAM_SPEC`: dispatches outside the team are recorded or refused. */
+  mode: "warn" | "enforce";
+  def_version: number | null;
+}
+
+export interface CatalogVendor {
+  vendor: string;
+  available: boolean;
+  /** Why the role cannot run this vendor ("Codex is not available for project leads yet…"). */
+  reason?: string | null;
+  agent?: string;
+  default_model?: string | null;
+  models?: string[];
+  usd_per_h?: number;
+  rate_source?: "ledger" | "default";
+  rate_n?: number;
+  model_rates?: Record<string, number>;
+  bench?: unknown;
+}
+
+export interface CatalogRole {
+  role: string;
+  label: string;
+  does: string;
+  needed_by: { gate: string; text: string; when: "always" | "env" | "previews" } | null;
+  addable: boolean;
+  vendors: CatalogVendor[];
+}
+
+export interface TeamTemplateView {
+  id: string;
+  label: string;
+  summary: string;
+  roles: { role: string; vendor: string | null; model: string | null; count: number }[];
+  builders_at_once: number | null;
+  default: boolean;
+  members: number;
+  /** With `?project=`: why the project cannot use it, else `null`. */
+  locked: string | null;
+}
+
+/** `GET …/catalog[?project=]`: what a team can be made of. */
+export interface CatalogResponse {
+  def_version: number | null;
+  roles: CatalogRole[];
+  missing: { role: string; label: string; reason: string }[];
+  templates: TeamTemplateView[];
+  gates: { gate: string; role: string; text: string; when: string }[];
+  vendors: Record<string, string>;
+  mode: "warn" | "enforce";
+  rates_window_days: number;
+  project?: {
+    slug: string;
+    own: boolean;
+    env_needed: boolean;
+    previews_on: boolean;
+    /** Member id -> why it cannot be removed now. */
+    remove_blocked: Record<string, string>;
+  };
+}
+
+/** The team catalog: roles, vendor · models, gates, $/h estimates and templates. */
+export async function fetchFactoryCatalog(
+  factoryId: string,
+  project?: string,
+  signal?: AbortSignal,
+): Promise<CatalogResponse> {
+  const query = project ? `?project=${enc(project)}` : "";
+  return readJson(await authenticatedFetch(factoryUrl(factoryId, `/catalog${query}`), { signal }));
 }

@@ -35,7 +35,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final, Literal
 
 from omnigent.factory import LABEL_ID, LABEL_PROJECT, LABEL_ROLE, ROLE_PROJECT_LEAD, TASK_KEY_RE
-from omnigent.server.factory import events, tasks
+from omnigent.server.factory import events, tasks, team
 from omnigent.server.factory.actor import Actor
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.prs import parse_factory_branch
@@ -318,8 +318,12 @@ async def bind_session(
             return None
         async with tasks.lock(factory_id):
             task, evs = await asyncio.to_thread(bind_sync, deps, factory_id, slug, child)
+        first = child.id not in _seen
         _remember(child.id)
         await tasks.emit_all(app_state, factory_id, evs)
+        if first:
+            # Checked against the team when created, not when it ends after a TEAM UPDATE.
+            await team.observe_dispatch(app_state, pl, child)
         return task
     except Exception:  # noqa: BLE001 - the next tick binds it
         _logger.warning("factory binder: could not bind %s", child.id, exc_info=True)

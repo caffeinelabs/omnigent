@@ -151,6 +151,7 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
     stop_loops: list[Callable[[], Any]] = []
     unseed_invariants = _seed_invariants()
     uninstall_guard_repos: Callable[[], None] | None = None
+    uninstall_team: Callable[[], None] | None = None
     if factory_enabled():
         from omnigent.server.factory import (
             activity_now,
@@ -159,6 +160,7 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
             guard_repos,
             loops,
             pipeline,
+            team,
             telemetry,
         )
         from omnigent.server.factory.background import start_all
@@ -166,6 +168,8 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
 
         # Members write the repos of their factory projects, as the server reads them.
         uninstall_guard_repos = guard_repos.install(app_state)
+        # The PL's dispatch check reads its project's team (armed by OMNIGENT_FACTORY_TEAM_SPEC).
+        uninstall_team = team.install(app_state)
         stop_telemetry = telemetry.start(app_state)
         stop_binder = binder.install()
         # After the binder, so a task's cost is re-totalled before the loops read it.
@@ -189,6 +193,8 @@ async def start_factory_services(app_state: Any) -> Callable[[], Awaitable[None]
         unseed_invariants()
         if uninstall_guard_repos is not None:
             uninstall_guard_repos()
+        if uninstall_team is not None:
+            uninstall_team()
         await stop_tier2()
         restore_definition()
         await stop_room()

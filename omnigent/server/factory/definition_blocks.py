@@ -804,6 +804,7 @@ LISTS: Final[dict[str, ListSpec]] = {
         ListSpec("product.areas"),
         ListSpec("strategy.goals", prefix="G", seq="goal_seq"),
         ListSpec("discovery.sources"),
+        ListSpec("team.templates"),
     )
 }
 """Lists changed by ``id``: ``add`` at the list, ``replace``/``remove`` at ``<list>.<id>``."""
@@ -850,11 +851,15 @@ BLOCKS: Final = ("product", "strategy", "discovery", "briefs", "role_defaults")
 """The blocks of this module (agents may propose only some of their paths)."""
 NOT_TRIALABLE_REASON: Final = "judged on outcomes"
 NEEDS_DISCOVERY_GUARDS: Final = "needs discovery guards"
+TOO_FEW_PRS: Final = "too few merged PRs per team"
+NO_PROJECT_FOLLOWS: Final = "no project follows a template"
 NOT_TRIALABLE: Final[dict[str, str]] = {
     "product": NOT_TRIALABLE_REASON,
     "strategy": NOT_TRIALABLE_REASON,
     "discovery": NEEDS_DISCOVERY_GUARDS,
     "briefs.scout": NEEDS_DISCOVERY_GUARDS,
+    "team.projects": TOO_FEW_PRS,
+    "team.templates": NO_PROJECT_FOLLOWS,
 }
 """
 Paths a trial would judge on the wrong metrics, and why: they apply as a version.
@@ -862,13 +867,18 @@ Paths a trial would judge on the wrong metrics, and why: they apply as a version
 Strategy and the profile are judged on outcomes. Discovery and Scout's brief
 are judged on discovery guards (quote failures, privacy events, accepted
 bets), which this server does not measure yet; until it does, the delivery
-guards would judge them.
+guards would judge them. One project's team merges about one PR a day, too
+few for a trial's n. A template reaches a project only when it switches to
+it, so a template trial would measure nothing until projects follow one.
 """
 AGENT_PATHS: Final[dict[str, tuple[str, ...]]] = {
     "scout": ("product", "strategy", "discovery.sources"),
-    "sentinel": ("discovery.rubric", "discovery.thresholds", "briefs.scout"),
+    "sentinel": ("discovery.rubric", "discovery.thresholds", "briefs.scout", "team"),
+    "atlas": ("team",),
 }
-"""What each agent seat may propose in :data:`BLOCKS` (others: nothing)."""
+"""What each agent seat may propose in :data:`BLOCKS` and ``team`` (others: nothing)."""
+AGENT_GATED: Final = (*BLOCKS, "team")
+"""Blocks an agent proposes only by :data:`AGENT_PATHS` (teams: Atlas and Sentinel)."""
 
 
 def under(path: str, prefix: str) -> bool:
@@ -883,7 +893,7 @@ def in_blocks(path: str, blocks: tuple[str, ...] = BLOCKS) -> bool:
 
 def agent_may_propose(seat: str, path: str) -> bool:
     """Whether an agent in *seat* (``scout``, ``sentinel``, ``atlas``, …) may propose *path*."""
-    if not in_blocks(path):
+    if not in_blocks(path, AGENT_GATED):
         return True
     return any(under(path, allowed) for allowed in AGENT_PATHS.get(seat, ()))
 
@@ -948,6 +958,7 @@ def slower_or_off_is_a(before: Any, after: Any) -> Literal["A", "B"]:
 
 
 __all__ = [
+    "AGENT_GATED",
     "AGENT_PATHS",
     "BLOCKS",
     "BRIEF_MAX",
@@ -961,10 +972,12 @@ __all__ = [
     "NEEDS_DISCOVERY_GUARDS",
     "NOT_TRIALABLE",
     "NOT_TRIALABLE_REASON",
+    "NO_PROJECT_FOLLOWS",
     "PRIVACY_RANK",
     "REDACT_FLOOR",
     "SECRET_REFUSAL",
     "SOURCE_PRIVACY",
+    "TOO_FEW_PRS",
     "VENDORS_BY_ROLE",
     "BriefsDef",
     "DiscoveryDef",

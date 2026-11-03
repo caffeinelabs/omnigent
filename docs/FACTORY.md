@@ -821,6 +821,42 @@ before the blocks therefore still reads every version of a factory that has
 not used them; rolling back past them for a factory that has needs a reader
 that ignores unknown blocks.
 
+**Teams** are a block too (`team_spec.py`, `team.py`). `team.templates[]` are
+named shapes (`standard`, every agent of the PL bundle, is the default a new
+team starts from; `pair`, `lean`, `investigation`); `team.projects.<slug>` is
+one project's own team: `template`, `builders_at_once` and `budget_usd`
+(`null`: the charter's) and `members[]` `{id M-n, handle, role, agent, vendor,
+model}` plus `briefs` (`M-n` → text ≤ 1,000). A project without its own team
+runs today's bundle (every agent of the PL bundle on its default model;
+template edits never change it, and the snapshot says `follows: "bundle"`).
+Its first change (`replace team.projects.<slug>/members/M-2/model`) stores
+that team as its own, so every diff line names a real member and nothing else
+changes at run time; a template applies only when a project switches to it.
+Member numbers are handed out by the server and never reused, and handles are
+unique within a team. A member's `model: null` is its bundle's default
+(`role_defaults` does not steer dispatch yet). Removing the last member a
+ready gate needs (a reviewer, an env keeper while the charter needs an env, a
+demo agent while previews are on, the last builder) is refused with 422
+`gate_requires_role` (Tier 0), and so is a template without a reviewer and a
+builder; a template a team names cannot be removed (409 `in_use`); the project
+lead stays. When a charter later needs a role its team lacks (env or previews
+turned on), that role's agent stays dispatchable and the snapshot flags
+`missing_gate_role`. Editors apply class-A team changes and may Undo their own
+within 10 minutes; only Atlas and Sentinel may propose team changes (class B).
+`GET …/catalog[?project=]` lists the roles the PL bundle ships, the vendor ·
+models each runs (project leads, env keepers and demo agents run on Claude Code
+only today), the gate each is needed by, $/h estimates from the cost ledger,
+the templates (with the project's locks) and the roles no bundle covers. The
+preview's team effects say the rate while working, the cost to finish against
+the budget, who restarts and when (`when`: `after_current` or `now`, which
+interrupts), the review route and the TEAM UPDATE it sends. A PL whose project
+has its own team gets a `Team` block in its charter and one
+`[Factory control · TEAM UPDATE · vN · by <who>]` per change;
+`sys_factory_task(op="start")` returns the member, `agent` and `model` per
+task (the PL passes `args.model`). Dispatches outside the team are recorded
+(`team.dispatch_outside_spec`) while `OMNIGENT_FACTORY_TEAM_SPEC=warn` (the
+default) and denied by the PL's `team_guard` with `enforce`.
+
 | Paths | Class |
 |---|---|
 | `cadence.*` | A when slower, else B (0 = off is B) |
@@ -835,6 +871,11 @@ that ignores unknown blocks.
 | `discovery.sources.<id>` | A when it only narrows (pause, less budget, fewer roles), else B |
 | `discovery.budgets.*`, `discovery.cadence.*` | A when lower or slower, else B (owners) |
 | other `discovery.*`, `briefs.*`, `role_defaults.*` | B (owners) |
+| `team.templates.*` | B (owners); never a trial (a template reaches a project only on a switch) |
+| `team.projects.<slug>` member added, vendor or model changed, brief | B (owners) |
+| `team.projects.<slug>` member removed or renamed | A (editors apply it) |
+| `team.projects.<slug>.builders_at_once`, `.budget_usd` | A when lower, else B |
+| any `team.projects.<slug>` change | never a trial (one team merges about one PR a day) |
 
 Only owners apply the owner-only paths (`engine.`, `autonomy.`, `budgets.`,
 and the five blocks), so their class matters only for agents: an agent's

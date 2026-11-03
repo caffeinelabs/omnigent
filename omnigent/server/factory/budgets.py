@@ -70,7 +70,15 @@ def utc_day(now: float) -> str:
 
 
 def project_limit(deps: FactoryDeps, factory_id: str, slug: str) -> float:
-    """:returns: The project $ cap: the charter's ``budgets.project_usd``, else the definition."""
+    """
+    :returns: The project $ cap: its own team's ``budget_usd``, else the
+        charter's ``budgets.project_usd``, else the definition's.
+    """
+    from omnigent.server.factory import team
+
+    own = team.budget_usd(deps, factory_id, slug)
+    if own is not None:
+        return own
     project = deps.factory_store.get_project(factory_id, slug)
     charter = (project.charter or {}) if project is not None else {}
     found = charter.get("budgets") if isinstance(charter.get("budgets"), Mapping) else {}

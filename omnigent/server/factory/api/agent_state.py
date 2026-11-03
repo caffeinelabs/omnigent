@@ -47,6 +47,7 @@ from omnigent.server.factory import (
     nudge,
     product_profile,
     status,
+    team,
 )
 from omnigent.server.factory.agent_scope import (
     AgentCaller,
@@ -811,7 +812,11 @@ async def get_charter(
     delivery = await asyncio.to_thread(product_profile.delivery, deps, caller.factory_id)
     return {
         "project": row.slug,
-        "text": render_pl_charter(row, delivery),
+        "text": render_pl_charter(
+            row,
+            delivery,
+            team=await asyncio.to_thread(team.charter_team, deps, caller.factory_id, row),
+        ),
         "status": row.status,
         "spawn_owner": spawn_owner(row),
         "pl_session_id": pl.id if pl is not None else None,

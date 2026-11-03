@@ -56,7 +56,7 @@ from omnigent.factory import (
     THREAD_IMPROVEMENTS,
     THREAD_MAX_LEN,
 )
-from omnigent.server.auth import LEVEL_MANAGE
+from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE
 from omnigent.server.factory import control, definition, events, live
 from omnigent.server.factory.actor import Actor, proposal_ref
 from omnigent.server.factory.context import FactoryDeps, factory_deps
@@ -147,6 +147,8 @@ class DefinitionEditIn(_Body):
     trial_h: int | None = Field(None, ge=definition.TRIAL_H_MIN, le=definition.TRIAL_H_MAX)
     expected_effect: EffectIn | None = None
     base_version: int | None = Field(None, ge=1)
+    when: Literal["after_current", "now"] = "after_current"
+    """Team changes: members finish their current task first, or are interrupted now."""
 
 
 # ── Helpers ────────────────────────────────────────────────────
@@ -261,8 +263,14 @@ def diff_class(diff: Sequence[Mapping[str, Any]]) -> str:
 
 
 def _klass(diff: Sequence[Mapping[str, Any]]) -> str:
-    """:returns: The class of an agent's proposal of *diff*: B once it has an owner-only path."""
-    if any(definition.owner_only(str(entry["path"])) for entry in diff):
+    """
+    :returns: The class of an agent's proposal of *diff*: B once it has an
+        owner-only path or changes a team (people decide who works on a project).
+    """
+    if any(
+        definition.owner_only(str(e["path"])) or definition.team_spec.is_team_path(str(e["path"]))
+        for e in diff
+    ):
         return "B"
     return diff_class(diff)
 
@@ -297,7 +305,8 @@ def check_agent_paths(seat: str, changes: Sequence[definition.Change]) -> None:
         path = change.full_path
         if definition.blocks.agent_may_propose(seat, path):
             continue
-        allowed = definition.blocks.AGENT_PATHS.get(seat, ())
+        team = definition.team_spec.is_team_path(path)
+        allowed = [a for a in definition.blocks.AGENT_PATHS.get(seat, ()) if (a == "team") == team]
         may = (
             f"it may propose {', '.join(allowed)} there"
             if allowed
@@ -345,6 +354,13 @@ def _effect(body: EffectIn | None) -> dict[str, Any] | None:
             field="expected_effect.metric",
         )
     return body.model_dump(exclude_none=True)
+
+
+def _facts(deps: FactoryDeps, factory_id: str) -> definition.team_spec.FactsLookup:
+    """:returns: The factory's projects for the team's Tier-0 checks (read on first use)."""
+    from omnigent.server.factory.team import facts_lookup
+
+    return facts_lookup(deps, factory_id)
 
 
 def _members(deps: FactoryDeps, factory_id: str) -> list[Conversation]:
@@ -564,15 +580,21 @@ async def deliver(
     after: Mapping[str, Any],
     version: int,
     actor: Actor,
+    team_when: str = "after_current",
 ) -> dict[str, Any]:
     """
-    Tell the members about a version change and move their cadence labels.
+    Tell the members about a version change and move their cadence labels;
+    each PL whose project's team changed gets one TEAM UPDATE instead.
 
     A change of ``product.delivery`` also sends each live PL its CHARTER
     UPDATE (:func:`.projects.announce_delivery`).
 
-    :returns: ``{diff, notified, rules_notified, cadence_moved, charters_updated}``.
+    :param team_when: ``now`` also interrupts the sessions of changed or removed team members.
+    :returns: ``{diff, notified, rules_notified, cadence_moved, charters_updated,
+        team_notified}``.
     """
+    from omnigent.server.factory import team
+
     deps = factory_deps(app_state)
     diff = definition.diff(before, after)
     # Product, strategy and discovery data are read where needed, never mailed into prompts.
@@ -581,6 +603,7 @@ async def deliver(
         for d in diff
         if not str(d["path"]).startswith("rules.")
         and not definition.blocks.in_blocks(str(d["path"]), definition.QUIET_BLOCKS)
+        and not definition.team_spec.is_team_path(str(d["path"]))
     ]
     rules = [d for d in diff if str(d["path"]).startswith("rules.")]
     members = await asyncio.to_thread(_members, deps, root.id)
@@ -614,6 +637,17 @@ async def deliver(
 
         # The profile's merge policy, protected repos and demo paths are charter lines.
         charters = await announce_delivery(app_state, root, before, after, actor, via=ref)
+    team_notified = await team.deliver_update(
+        app_state,
+        root,
+        before,
+        after,
+        version=version,
+        ref=ref,
+        by=by,
+        actor=actor,
+        when=team_when,
+    )
     await events.emit(
         app_state,
         root.id,
@@ -630,6 +664,7 @@ async def deliver(
         "rules_notified": rules_notified,
         "cadence_moved": moved,
         "charters_updated": charters,
+        "team_notified": team_notified,
     }
 
 
@@ -720,7 +755,9 @@ async def propose(app_state: Any, caller: AgentCaller, body: ProposeIn) -> dict[
     check_agent_paths(agent_seat(caller), changes)
     resolved = await asyncio.to_thread(definition.definition_for, deps, root.id, fresh=True)
     assert resolved is not None
-    after = definition.apply_changes(resolved.stored, changes, rule_state="trial")
+    after = definition.apply_changes(
+        resolved.stored, changes, rule_state="trial", facts=_facts(deps, root.id)
+    )
     diff = preview(definition.diff(resolved.stored, after))
     if not diff:
         raise CockpitError(400, "no_change", "the definition already has these values")
@@ -1085,6 +1122,7 @@ async def apply(
     expect: str | Sequence[str] = "pending",
     cosigned_by: str | None = None,
     note: str | None = None,
+    team_when: str = "after_current",
 ) -> FactoryProposal:
     """
     Apply *row* as a new pinned definition version (once: a compare-and-set on its status).
@@ -1102,6 +1140,7 @@ async def apply(
             expect=expect,
             cosigned_by=cosigned_by,
             note=note,
+            team_when=team_when,
         )
 
 
@@ -1115,6 +1154,7 @@ async def _apply(
     expect: str | Sequence[str],
     cosigned_by: str | None,
     note: str | None,
+    team_when: str = "after_current",
 ) -> FactoryProposal:
     deps = factory_deps(app_state)
     ref = proposal_ref(row.number)
@@ -1133,6 +1173,7 @@ async def _apply(
         rule_state="trial" if trial else "active",
         min_rule_seq=floor,
         min_goal_seq=goal_floor,
+        facts=_facts(deps, root.id),
     )
     applied = definition.diff(resolved.stored, after)
     if trial and applied:
@@ -1203,6 +1244,7 @@ async def _apply(
         after=after,
         version=version.version,
         actor=actor,
+        team_when=team_when,
     )
     result = {**(row.result or {}), "diff": delivered["diff"][:30], "note": note}
     row = await asyncio.to_thread(deps.factory_store.update_proposal, row.id, result=result) or row
@@ -1410,6 +1452,9 @@ def revert_doc(
                 rules.pop(rule_id, None)
             continue
         path = definition.canonical_path(path)
+        if definition.team_spec.is_project_path(path):
+            definition.team_spec.revert_entry(doc, old, path, value)
+            continue
         if definition.get_path(doc, path) != value:
             continue  # Changed again since: that later change stays.
         definition.set_path(doc, path, definition.get_path(old, path))
@@ -1555,12 +1600,18 @@ async def human_edit(
     app_state: Any, factory_id: str, user_id: str | None, payload: Any
 ) -> dict[str, Any]:
     """``PUT …/definition``: a person's edit, applied at once as a human ``C-n``."""
+    from omnigent.server.factory import people
     from omnigent.server.factory.projects import human_actor
 
     body = parse_body(DefinitionEditIn, payload if payload is not None else {})
     deps = factory_deps(app_state)
     root = await control.load_factory_root(deps, user_id, factory_id)
-    await control.require(deps, user_id, root.id, LEVEL_MANAGE)
+    # Editors apply a team change that only narrows a team (class A); owners everything.
+    team_only = all(
+        definition.team_spec.is_project_path(definition.normalize_path(str(c.get("path") or "")))
+        for c in body.changes
+    )
+    await control.require(deps, user_id, root.id, LEVEL_EDIT if team_only else LEVEL_MANAGE)
     actor = await asyncio.to_thread(human_actor, deps, user_id, root.id)
     resolved = await asyncio.to_thread(definition.definition_for, deps, root.id, fresh=True)
     assert resolved is not None
@@ -1572,10 +1623,20 @@ async def human_edit(
             version=resolved.version,
         )
     changes = _changes(body.changes)
-    after = definition.apply_changes(resolved.stored, changes)
+    after = definition.apply_changes(resolved.stored, changes, facts=_facts(deps, root.id))
     diff = preview(definition.diff(resolved.stored, after))
     if not diff:
         raise CockpitError(400, "no_change", "the definition already has these values")
+    if team_only and not definition.team_spec.editor_may_apply(diff):
+        level = await asyncio.to_thread(people.viewer_level, deps, root.id, user_id)
+        if level < LEVEL_MANAGE:
+            raise CockpitError(
+                403,
+                "owners_only",
+                "adding a member, a vendor or model change, more builders, a higher budget "
+                "and briefs are owner changes (class B); an editor applies removals, fewer "
+                "builders, a lower budget and handles",
+            )
     if body.trial:
         from omnigent.server.factory import evaluate
 
@@ -1604,7 +1665,15 @@ async def human_edit(
         app_state, row, "proposal.opened", f"{projects_name(actor)} edited the definition", actor
     )
     try:
-        row = await apply(app_state, root, row, actor=actor, trial=body.trial, note=body.note)
+        row = await apply(
+            app_state,
+            root,
+            row,
+            actor=actor,
+            trial=body.trial,
+            note=body.note,
+            team_when=body.when,
+        )
     except CockpitError as exc:
         if exc.code in ("trial_overlap", "not_trialable"):
             # Another trial took the block meanwhile: this edit never applied.
@@ -1627,12 +1696,19 @@ async def human_edit(
 async def pin_version(
     app_state: Any, factory_id: str, user_id: str | None, version: int
 ) -> dict[str, Any]:
-    """``POST …/definition/pin``: an owner puts a stored version back in force."""
+    """
+    ``POST …/definition/pin``: an owner puts a stored version back in force.
+
+    An editor may pin only the Undo of their own team change that editors
+    apply (class A), within :data:`.definition.UNDO_WINDOW_S`.
+    """
+    from omnigent.server.factory import people
     from omnigent.server.factory.projects import human_actor
 
     deps = factory_deps(app_state)
     root = await control.load_factory_root(deps, user_id, factory_id)
-    await control.require(deps, user_id, root.id, LEVEL_MANAGE)
+    await control.require(deps, user_id, root.id, LEVEL_EDIT)
+    owner = await asyncio.to_thread(people.viewer_level, deps, root.id, user_id) >= LEVEL_MANAGE
     target = await asyncio.to_thread(deps.factory_store.get_definition, root.id, version)
     if target is None:
         raise CockpitError(404, "unknown_version", f"no definition v{version}")
@@ -1652,6 +1728,20 @@ async def pin_version(
             and current.parent_version == version
             and now_s() - int(current.created_at) <= definition.UNDO_WINDOW_S
         )
+        if not owner and not (
+            undo
+            and current is not None
+            and current.created_by == actor.id
+            and definition.team_spec.editor_may_apply(
+                definition.diff(dict(target.doc or {}), dict(current.doc or {}))
+            )
+        ):
+            raise CockpitError(
+                403,
+                "owners_only",
+                "owners pin versions; an editor may only Undo their own team change within "
+                f"{definition.UNDO_WINDOW_S // 60} minutes",
+            )
         await asyncio.to_thread(definition.pin, deps, root.id, version)
         await deliver(
             app_state,

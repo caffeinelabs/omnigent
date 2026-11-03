@@ -208,6 +208,11 @@ def role_rules(deps: FactoryDeps, factory_id: str, role: str, project: str | Non
     return definition.rule_texts(deps, factory_id, role, project)
 
 
+def _rule_number(text: str) -> int:
+    head = text.split(":", 1)[0]
+    return int(head[2:]) if head.startswith("R-") and head[2:].isdigit() else 0
+
+
 def node_of(task: FactoryTask) -> TaskNode:
     """:returns: The graph node of a task row."""
     return TaskNode(
@@ -418,9 +423,13 @@ def _slots(
     prs: Sequence[FactoryPr],
     slug: str,
     idle: Collection[str] = (),
+    builders: int | None = None,
 ) -> Slots:
-    """:param idle: Ids of occupying tasks that hold no IC slot (no worker running)."""
-    budget_ics = int(charter.get("budget_ics") or 3)
+    """
+    :param idle: Ids of occupying tasks that hold no IC slot (no worker running).
+    :param builders: The project's own team's builders at once (replaces ``budget_ics``).
+    """
+    budget_ics = builders or int(charter.get("budget_ics") or 3)
     running = sum(1 for t in tasks if t.state in OCCUPYING and t.id not in idle)
     preview = charter.get("preview") or {}
     previews_on = bool(charter.get("env_needed")) and bool(preview.get("enabled"))
@@ -440,6 +449,17 @@ def _slots(
         preview_slots=preview_slots,
         previews_on=previews_on,
     )
+
+
+def _team_builders(deps: FactoryDeps, data: FactoryData, slug: str) -> int | None:
+    """:returns: The builders at once of the project's own team (``None``: the charter's)."""
+    from omnigent.server.factory import team
+
+    try:
+        return team.builders_at_once(deps, data.factory_id, slug)
+    except Exception:  # noqa: BLE001 - the charter's IC budget applies
+        _logger.warning("factory tasks: no team for %s", slug, exc_info=True)
+        return None
 
 
 @dataclass
@@ -486,7 +506,7 @@ class FactoryData:
             external_met=external,
             paused=_is_paused(deps, self.factory_id, project),
             active=active,
-            slots=_slots(charter, tasks, self.prs, slug, idle),
+            slots=_slots(charter, tasks, self.prs, slug, idle, _team_builders(deps, self, slug)),
             observed=self.observed,
             prs={p.id: p for p in self.prs},
             hub_files=self.hubs.get(slug, []),
@@ -821,6 +841,10 @@ def dispatch_item(
     harness = harness_of(task)
     left = budget_left(task, ctx.project)
     pl_id = _pl_id(deps, ctx.factory_id, ctx.project)
+    rules = role_rules(deps, ctx.factory_id, "ic", ctx.slug)
+    if harness == "ic_codex":
+        # Rules for the Codex builder ride its cards (its sessions report role ic).
+        rules += role_rules(deps, ctx.factory_id, "ic_codex", ctx.slug)
     item: dict[str, Any] = {
         "key": task.key,
         "number": task.number,
@@ -833,7 +857,7 @@ def dispatch_item(
             ctx.project,
             pl_id=pl_id,
             attempt=attempt,
-            rules=role_rules(deps, ctx.factory_id, "ic", ctx.slug),
+            rules=sorted(set(rules), key=_rule_number),
         ),
         "budget_left": left,
         "preview": bool((task.card or {}).get("preview")),
@@ -1340,11 +1364,14 @@ async def start_task(
     ``sys_factory_task(op="start")``: the next attempt of a task.
 
     :returns: ``{key, ref, title_to_use, attempt, of, usd_left, harness, card_text,
-        cost_budget?}``.
+        cost_budget?, agent, model, member, team}``: the team member to run it on
+        (``model`` ``None``: the agent's default; see :func:`.team.dispatch_choice`).
     :raises CockpitError: 404 ``unknown_task``, 409 ``task_closed`` or ``not_ready``.
     """
     if harness is not None and harness not in HARNESSES:
         raise CockpitError(400, "invalid_harness", f"harness must be one of {list(HARNESSES)}")
+    from omnigent.server.factory import team
+
     deps = factory_deps(app_state)
 
     def run() -> tuple[dict[str, Any], list[TaskEvent]]:
@@ -1372,12 +1399,19 @@ async def start_task(
             raise refusal  # enforce: 409 budget_exhausted past the attempt budget
         warning = loops.start_warning(deps, factory_id, task) if mode == "assist" else None
         use = harness or harness_of(task)
+        choice = team.dispatch_choice(
+            deps, factory_id, slug, use, ctx.tasks, pinned=harness is not None, task=task
+        )
+        if choice["agent"] in HARNESSES:
+            use = choice["agent"]  # The project's team decides which builder runs it.
         # A start sent alongside its dispatch may land after the binder counted it.
         racing = task.state == "running" and task.attempts > 0 and _claim_bound_attempt(task)
         attempt = task.attempts if racing else task.attempts + 1
         card = dict(task.card or {})
-        if harness is not None:
-            card["harness"] = harness
+        if harness is not None or use != harness_of(task):
+            card["harness"] = use
+        if choice["member"]:
+            card["member"] = choice["member"]
         row, event = move(
             deps,
             task,
@@ -1397,7 +1431,13 @@ async def start_task(
             "of": attempts_cap,
             "usd_left": item["budget_left"]["usd"],
             "state": row.state,
+            "agent": use,
+            "model": choice["model"],
+            "member": choice["member"],
+            "team": choice["team"],
         }
+        if choice["team"] == "outside":
+            out["team_warning"] = f"{use} is not on this project's team"
         if warning:
             out["budget_warning"] = warning
         evs = [event] if event is not None else []

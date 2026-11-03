@@ -343,6 +343,8 @@ class MemberView(_View):
     :param stuck_reason: Why, e.g. ``"same failing Bash call 3 times"``.
     :param stuck_since: When that incident opened (epoch seconds).
     :param stuck_issue: Its ref, e.g. ``"INC-4"``.
+    :param vendor: ``claude`` or ``codex`` (from its harness).
+    :param model: Its model override, else its bundle's model.
     """
 
     session_id: str
@@ -356,6 +358,8 @@ class MemberView(_View):
     health: str | None = None
     summary: str | None = None
     harness: str | None = None
+    vendor: str | None = None
+    model: str | None = None
     running: bool = False
     last_activity_at: int | None = None
     heartbeat_s: int | None = None
@@ -1001,6 +1005,64 @@ class ActiveTaskView(_View):
     state: Literal["running", "review", "blocked"]
 
 
+class TeamMemberSpecView(_View):
+    """
+    One seat of a project's team spec.
+
+    :param model: ``None``: the bundle's default (``model_label`` names it when known).
+    :param remove_blocked: Why it cannot be removed now (a gate needs it), else ``None``.
+    """
+
+    id: str
+    role: str
+    handle: str | None = None
+    vendor: str
+    agent: str
+    model: str | None = None
+    model_label: str | None = None
+    brief: bool = False
+    remove_blocked: str | None = None
+
+
+class TeamDriftView(_View):
+    """
+    Where the live team differs from the spec: ``outside_team``, ``over_builders``
+    or ``missing_gate_role`` (a gate the charter needs now has no member).
+    """
+
+    kind: str
+    session_id: str | None = None
+    text: str
+
+
+class TeamSpecView(_View):
+    """
+    ``projects[].team_spec``: the project's team (its own, or today's bundle).
+
+    :param own: The project has its own team in the definition.
+    :param follows: ``own``, or ``bundle`` (no team of its own: every agent of
+        the PL bundle on its default model; template edits never change it).
+    :param summary: That in words for ``bundle``, else ``None``.
+    :param builders_from: ``team`` or ``charter``; ``budget_from``: ``team``,
+        ``charter`` or ``definition``.
+    :param mode: ``OMNIGENT_FACTORY_TEAM_SPEC``: ``warn`` or ``enforce``.
+    """
+
+    own: bool
+    follows: Literal["own", "bundle"] = "own"
+    summary: str | None = None
+    template: str | None = None
+    builders_at_once: int
+    builders_from: str
+    budget_usd: float
+    budget_from: str
+    members: list[TeamMemberSpecView] = Field(default_factory=list)
+    drift: list[TeamDriftView] = Field(default_factory=list)
+    drifted: bool = False
+    mode: str = "warn"
+    def_version: int | None = None
+
+
 class ProjectView(_View):
     """One project card."""
 
@@ -1040,6 +1102,7 @@ class ProjectView(_View):
     loops_summary: LoopsSummaryView | None = None
     def_version: int | None = None
     why: WhyView | None = None
+    team_spec: TeamSpecView | None = None
 
 
 # ── Decisions and events ───────────────────────────────────────

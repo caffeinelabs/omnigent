@@ -589,6 +589,11 @@ def test_paths_into_lists_read_and_write_items() -> None:
         ("atlas", "role_defaults.ic.model", False),
         ("atlas", "loops.review.rounds", True),
         ("sentinel", "cadence.lead", True),
+        ("atlas", "team.projects.api-version.members.M-2", True),
+        ("sentinel", "team.templates.lean", True),
+        ("scout", "team.projects.api-version.members.M-2.model", False),
+        ("project_lead", "team.projects.api-version", False),
+        ("ic", "team.templates", False),
     ],
 )
 def test_agent_seats_propose_only_their_paths(seat: str, path: str, allowed: bool) -> None:
@@ -671,7 +676,14 @@ async def test_owners_edit_the_blocks_and_members_get_no_product_text(cockpit: C
     assert view["effective"]["strategy"]["goals"][0]["id"] == "G-1"
     assert view["lists"]["strategy.goals"] == {"numbered": "G"}
     assert "product." in view["owner_only"]
-    assert view["not_trialable"] == ["product", "strategy", "discovery", "briefs.scout"]
+    assert view["not_trialable"] == [
+        "product",
+        "strategy",
+        "discovery",
+        "briefs.scout",
+        "team.projects",
+        "team.templates",
+    ]
     assert view["not_trialable_why"]["discovery"] == "needs discovery guards"
     assert view["agent_paths"]["sentinel"] == list(blocks.AGENT_PATHS["sentinel"])
     assert "discovery.rubric.window_days" in view["bounds"]

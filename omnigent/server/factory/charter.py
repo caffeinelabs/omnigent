@@ -13,7 +13,7 @@ import logging
 import os
 import re
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import Any, Final, NamedTuple
 
 from omnigent.entities.factory import FactoryProject
 from omnigent.factory import (
@@ -318,13 +318,27 @@ def _integration_charter(project: FactoryProject, charter: Mapping[str, Any]) ->
     )
 
 
-def render_pl_charter(project: FactoryProject, delivery: Mapping[str, Any] | None = None) -> str:
+class TeamBlock(NamedTuple):
+    """A project's own team as its charter prints it (:mod:`.team` renders the lines)."""
+
+    builders_at_once: int
+    lines: tuple[str, ...]
+
+
+def render_pl_charter(
+    project: FactoryProject,
+    delivery: Mapping[str, Any] | None = None,
+    *,
+    team: TeamBlock | None = None,
+) -> str:
     """
     Render the CHARTER block for a project's PL.
 
     :param project: The stored project row.
     :param delivery: The factory's ``product.delivery`` (merge policy,
         protected repos, paths that need a demo); ``None`` renders none of it.
+    :param team: The project's own team, when it has one (its builders at once
+        replace the charter's IC budget).
     :returns: Plain text starting ``CHARTER · <slug>``.
     """
     charter = normalize_charter(project.charter)
@@ -358,8 +372,10 @@ def render_pl_charter(project: FactoryProject, delivery: Mapping[str, Any] | Non
         )
     else:
         lines.append("Demo focus: none (no env)")
+    ics = team.builders_at_once if team is not None else charter["budget_ics"]
     lines += [
-        f"IC budget: up to {charter['budget_ics']} ICs at once",
+        f"IC budget: up to {ics} ICs at once" + (" (the team's builders at once)" if team else ""),
+        *(team.lines if team is not None else ()),
         *_optional_lines(charter),
         # Before the profile's lists: a brief cut at its length limit keeps it.
         f"Merge policy: {_merge_policy(repo, delivery or {})} Report READY FOR HUMAN MERGE "
@@ -648,6 +664,7 @@ __all__ = [
     "SPAWN_OWNERS",
     "SPAWN_SERVER",
     "WHY_KEYS",
+    "TeamBlock",
     "normalize_charter",
     "preview_tooling_ref",
     "project_base_branch",
