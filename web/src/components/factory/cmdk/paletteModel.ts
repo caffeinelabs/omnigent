@@ -37,8 +37,13 @@ import {
   AUTONOMY_GROUPS,
   BUDGET_GROUPS,
   type FieldGroup,
-  OTHER_GROUPS,
 } from "../settings/settingsModel";
+import {
+  CADENCE_GROUPS,
+  DISCOVERY_SECTIONS,
+  SECTION_INFO,
+  sectionOfPath,
+} from "../steer/steerModel";
 
 export type JumpKind = "page" | "project" | "pr" | "task" | "decision" | "agent";
 
@@ -386,25 +391,42 @@ export function scoreMatch(
 // ── Where things open ──────────────────────────────────────────
 
 /** Steer's sections by the words the new cockpit uses for them. */
-export const STEER_SECTION_LABEL: Record<SteerSection, string> = {
-  versions: "Versions and trials",
-  budgets: "Budgets and autonomy",
-  alerts: "Alerts and rules",
-  definition: "Cadence, previews and models",
-};
+export const STEER_SECTION_LABEL: Record<SteerSection, string> = Object.fromEntries(
+  STEER_SECTIONS.map((section) => [section, SECTION_INFO[section].label]),
+) as Record<SteerSection, string>;
 
 const SETTING_SECTIONS: readonly [SteerSection, readonly FieldGroup[]][] = [
   ["budgets", [...BUDGET_GROUPS, ...AUTONOMY_GROUPS]],
   ["alerts", ALERT_GROUPS],
-  ["definition", OTHER_GROUPS],
+  ["cadence", CADENCE_GROUPS],
 ];
+
+/** A role's name in Roles and briefs, by its `role_defaults` / `briefs` key. */
+const ROLE_WORD: Readonly<Record<string, string>> = {
+  project_lead: "Project lead",
+  ic: "Builder",
+  reviewer: "Reviewer",
+  env_keeper: "Env keeper",
+  demo: "Demo",
+  planner: "Planner",
+  scout: "Scout",
+  atlas: "Atlas",
+  sentinel: "Sentinel",
+};
+
+/** Where a setting opens in Steer: its section, its words, and the role it is about. */
+export interface SettingTarget {
+  section: SteerSection;
+  title: string;
+  params?: Record<string, string>;
+}
 
 /**
  * The Steer section that edits a definition path, with its words
- * ("Money · Factory per day"); null while no section of this cockpit edits
- * it yet (the palette leaves it out rather than open the wrong page).
+ * ("Money · Factory per day", "Roles and briefs · Builder"); null for a path
+ * no section edits (the palette leaves it out rather than open the wrong page).
  */
-export function settingTarget(path: string): { section: SteerSection; title: string } | null {
+export function settingTarget(path: string): SettingTarget | null {
   if (path === "rules" || path.startsWith("rules")) return { section: "alerts", title: "Rules" };
   for (const [section, groups] of SETTING_SECTIONS) {
     for (const group of groups) {
@@ -412,7 +434,16 @@ export function settingTarget(path: string): { section: SteerSection; title: str
       if (field) return { section, title: `${group.title} · ${field.label}` };
     }
   }
-  return null;
+  const role =
+    /^(?:role_defaults|briefs)\.([a-z_]+)/.exec(path)?.[1] ??
+    (/^discovery\.(?:seat|cadence)\./.test(path) ? "scout" : null);
+  if (role && ROLE_WORD[role]) {
+    return { section: "roles", title: `Roles and briefs · ${ROLE_WORD[role]}`, params: { role } };
+  }
+  const section = sectionOfPath(path);
+  if (section === "overview" && path !== "discovery.enabled") return null;
+  const field = path.split(".").pop()!.replaceAll("_", " ");
+  return { section, title: `${STEER_SECTION_LABEL[section]} · ${field}` };
 }
 
 /** `INC-12` → `12` (Debug's incident address); a finding keeps its ref. */
@@ -452,7 +483,7 @@ export function hitTarget(
     case "goal":
       return discoveryOn
         ? { href: `${discoveryPageHref(factoryId)}?goal=${encodeURIComponent(ref)}` }
-        : { href: steerPageHref(factoryId, "definition") };
+        : { href: steerPageHref(factoryId, "strategy") };
     case "project":
       return hit.slug ? { href: projectPageHref(factoryId, hit.slug) } : null;
     case "pr":
@@ -476,7 +507,7 @@ export function hitTarget(
       return { href: steerPageHref(factoryId, "alerts") };
     case "setting": {
       const target = settingTarget(hit.path ?? ref);
-      return target ? { href: steerPageHref(factoryId, target.section) } : null;
+      return target ? { href: steerPageHref(factoryId, target.section, target.params) } : null;
     }
     case "version":
       return {
@@ -503,6 +534,11 @@ export function hitItems(
     if (!group || (!discoveryOn && DISCOVERY_GROUPS.has(group))) continue;
     const target = hitTarget(factoryId, hit, { discoveryOn });
     if (!target) continue;
+    // Discovery's Steer sections hide while it is off.
+    if (hit.kind === "setting" && !discoveryOn) {
+      const found = settingTarget(hit.path ?? hit.ref ?? "");
+      if (found && DISCOVERY_SECTIONS.has(found.section)) continue;
+    }
     let { title, detail } = hit;
     if (hit.kind === "setting") {
       const path = hit.path ?? hit.ref ?? "";

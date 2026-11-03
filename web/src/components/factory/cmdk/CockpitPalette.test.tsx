@@ -280,7 +280,7 @@ describe("the new cockpit's palette", () => {
     await screen.findByText("Use my own custom domain (sample)");
     const groups = screen.getAllByTestId(/^factory-palette-group-/).map((g) => g.dataset.testid);
     expect(groups[0]).toBe("factory-palette-group-opportunities");
-    expect(screen.getByText("Models · Implementers")).toBeInTheDocument();
+    expect(screen.getByText("Roles and briefs · Builder")).toBeInTheDocument();
     expect(calls.some((c) => c.path === `${BASE}/search?q=custom+domain`)).toBe(true);
   });
 

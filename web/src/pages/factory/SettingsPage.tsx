@@ -9,7 +9,8 @@
  *
  * In the new cockpit Settings is personal and access only: People,
  * Notifications and Slack, and Integrations (the Slack app and webhook); how
- * the factory works moved to Steer, which reuses `DefinitionSections`.
+ * the factory works moved to Steer, where every change is staged and applied
+ * as one version.
  */
 
 import { Navigate } from "react-router-dom";
@@ -42,7 +43,6 @@ import {
   ALERT_GROUPS,
   AUTONOMY_GROUPS,
   BUDGET_GROUPS,
-  type FieldGroup,
   OTHER_GROUPS,
 } from "@/components/factory/settings/settingsModel";
 import { SlackAppCard } from "@/components/factory/settings/SlackAppCard";
@@ -120,17 +120,6 @@ function Integrations({ factoryId }: { factoryId: string }) {
   );
 }
 
-/** Groups of definition fields as one form with one save bar (Steer joins sections this way). */
-export function DefinitionGroups({ groups, testId }: { groups: FieldGroup[]; testId: string }) {
-  const { snapshot } = useFactoryShell();
-  const fid = snapshot.factory.id;
-  const definition = useFactoryDefinition(fid);
-  if (!definition.data) return <DefinitionPending definition={definition} />;
-  return (
-    <DefinitionForm factoryId={fid} groups={groups} definition={definition.data} testId={testId} />
-  );
-}
-
 /** The definition's skeleton while it loads, else what failed with Retry. */
 function DefinitionPending({
   definition,
@@ -157,8 +146,8 @@ function DefinitionPending({
   );
 }
 
-/** One section of the definition's forms (Settings in the classic cockpit, Steer in the new one). */
-export function DefinitionSections({
+/** One section of the definition's forms (the classic cockpit's Settings). */
+function DefinitionSections({
   section,
   slack = true,
 }: {

@@ -303,14 +303,25 @@ const SETTINGS_TO_STEER: Readonly<Record<string, SteerSection>> = {
   budgets: "budgets",
   alerts: "alerts",
   rules: "alerts",
-  definition: "definition",
+  definition: "versions",
 };
 
-/** Steer's sections back to where the classic cockpit keeps them. */
-const STEER_TO_SETTINGS: Readonly<Record<Exclude<SteerSection, "versions">, string>> = {
+/** Improvements tabs that moved to a Steer section (the rest land on Versions and trials). */
+const IMPROVEMENTS_TO_STEER: Readonly<Record<string, SteerSection>> = {
+  rules: "alerts",
+};
+
+/** Steer sections an earlier cockpit named otherwise. */
+const STEER_RENAMED: Readonly<Record<string, SteerSection>> = {
+  definition: "cadence",
+};
+
+/** Steer's sections the classic cockpit keeps in Settings (the rest live on Improvements). */
+const STEER_TO_SETTINGS: Readonly<Partial<Record<SteerSection, string>>> = {
   budgets: "budgets",
   alerts: "alerts",
-  definition: "definition",
+  cadence: "definition",
+  roles: "definition",
 };
 
 /** Debug's views back to the classic pages. */
@@ -337,8 +348,9 @@ const DEBUG_TO_CLASSIC: Readonly<Record<DebugView, string>> = {
  * → Debug › Incidents and findings), `/improvements/<ref>` →
  * `/steer/versions?peek=<ref>`, `/settings/{autonomy,budgets}` →
  * `/steer/budgets`, `/settings/{alerts,rules}` → `/steer/alerts`,
- * `/settings/definition` → `/steer/definition`, `/room[/<thread>]` → the page
- * the viewer was on (`from`, else Home) with `?room=<thread>`.
+ * `/settings/definition` → `/steer/versions`, `/steer/definition` →
+ * `/steer/cadence`, `/room[/<thread>]` → the page the viewer was on (`from`,
+ * else Home) with `?room=<thread>`.
  *
  * The classic cockpit maps the new places back to its pages, so a link one
  * person copied from the new cockpit opens for someone on the classic one; a
@@ -392,7 +404,8 @@ function toNewCockpit(
       return hrefWith(`${base}?peek=needs`, params, ["peek"]);
     case "improvements": {
       const tab = params.get("tab");
-      if (tab === "rules") return hrefWith(steerPageHref(factoryId, "alerts"), params, ["tab"]);
+      const section = IMPROVEMENTS_TO_STEER[tab ?? ""];
+      if (section) return hrefWith(steerPageHref(factoryId, section), params, ["tab"]);
       if (tab === "findings") {
         return hrefWith(
           debugPageHref(factoryId, "incidents", { params: { class: "finding" } }),
@@ -423,10 +436,11 @@ function toNewCockpit(
       merged.set("room", location.id ?? "");
       return `${path}?${merged.toString()}`;
     }
-    case "steer":
-      return location.id && (STEER_SECTIONS as readonly string[]).includes(location.id)
-        ? null
-        : hrefWith(steerPageHref(factoryId, "versions"), params);
+    case "steer": {
+      if (location.id && (STEER_SECTIONS as readonly string[]).includes(location.id)) return null;
+      const renamed = STEER_RENAMED[location.id ?? ""];
+      return hrefWith(steerPageHref(factoryId, renamed ?? "overview"), params);
+    }
     case "debug":
       return location.id && (DEBUG_VIEWS as readonly string[]).includes(location.id)
         ? null
@@ -456,10 +470,9 @@ function toClassicCockpit(
     case "teams":
       return hrefWith(`${base}/agents`, params);
     case "steer": {
-      const section = location.id as SteerSection | null;
-      if (section && section !== "versions" && section in STEER_TO_SETTINGS) {
-        return hrefWith(`${base}/settings/${STEER_TO_SETTINGS[section]}`, params);
-      }
+      const section = (STEER_RENAMED[location.id ?? ""] ?? location.id) as SteerSection | null;
+      const settings = section ? STEER_TO_SETTINGS[section] : undefined;
+      if (settings) return hrefWith(`${base}/settings/${settings}`, params);
       const peek = params.get("peek");
       // A change (C-n) or a finding (F-n): the classic page of either.
       if (peek && /^[CF]-\d+$/i.test(peek)) {
