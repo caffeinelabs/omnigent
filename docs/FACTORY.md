@@ -1210,8 +1210,8 @@ like the rest of discovery.
   strong, controlled proven) linked to the opportunity, which turns measured.
   The meter counts a readout only through its verdict: lost drops it to
   weak, won raises it to that level. A `readout.written` event, a line in the
-  Room's discovery thread (`#factory` until the Room has one), and
-  `[Factory readout · C-n · day 28 · flat]` to Scout when it runs.
+  Room's `#discovery` thread, and `[Factory readout · C-n · day 28 · flat]`
+  to Scout when it is awake (seated, active and within today's budget).
 - **Deciding** (`POST …/readouts/{id}/decide`, EDIT, human origin; `{id}` is
   the row id or `C-31-d28`): `{decision: keep|drop|iterate|extend, reason?,
   reviewer?}`, `{answer, reason}`, `{guardrails_broken: [...]}` (judged

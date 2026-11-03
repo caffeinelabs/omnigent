@@ -212,6 +212,14 @@ async def test_a_zero_budget_means_scout_spends_nothing(cockpit: Cockpit, scout:
     assert _texts(cockpit, scout, "[Factory discovery · research") == []
 
 
+def test_a_readout_wakes_scout_only_within_its_budget(cockpit: Cockpit, scout: str) -> None:
+    from omnigent.server.factory.discovery import readouts
+
+    assert readouts._scout(cockpit.deps, cockpit.fid) == scout
+    _spend(cockpit, 10.0)
+    assert readouts._scout(cockpit.deps, cockpit.fid) is None
+
+
 def test_the_budget_cap_reads_the_definition() -> None:
     assert beats.budget_cap({}) == 10.0  # the starter's default
     assert beats.budget_cap({"discovery": {"budgets": {"usd_per_day": 0}}}) == 0.0
