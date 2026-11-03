@@ -863,6 +863,17 @@ export interface RequestedByView {
   proposal?: string | null;
 }
 
+/** The initiative a project is part of (one outcome several projects build). */
+export interface InitiativeRefView {
+  /** `I-3`. */
+  ref: string;
+  title: string;
+  /** `skeleton` starts first (user surface to back end); `surface` faces users. */
+  role: "skeleton" | "surface" | "part";
+  wave: number;
+  flag?: string | null;
+}
+
 export type ProjectHealth = "on_track" | "at_risk" | "off_track";
 
 /** The project lead's latest structured update (`sys_factory_set(update=…)`). */
@@ -1001,6 +1012,8 @@ export interface ProjectView {
   update?: LeadUpdateView | null;
   /** Health from facts, overriding an optimistic lead (newer servers). */
   health?: ProjectHealthView | null;
+  /** The initiative it is part of (newer servers). */
+  initiative?: InitiativeRefView | null;
 }
 
 // ── Decisions and events ───────────────────────────────────────

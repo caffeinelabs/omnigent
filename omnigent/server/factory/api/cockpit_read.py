@@ -422,9 +422,17 @@ def _project_demo_rows(
     project_prs: dict[tuple[str, int], dict[str, Any]],
     limit: int,
 ) -> list[Any]:
-    """The project's demos plus unlabelled demos of its PRs, newest first, at most *limit*."""
+    """
+    The project's demos plus unlabelled demos of its PRs, newest first, at most
+    *limit*. An initiative's acceptance evidence (a demo of no PR, ``pr_number``
+    0) is left out: its initiative's page shows it.
+    """
     store = deps.factory_store
-    rows = {d.id: d for d in store.list_demos(factory_id, project_slug=slug, limit=limit)}
+    rows = {
+        d.id: d
+        for d in store.list_demos(factory_id, project_slug=slug, limit=limit)
+        if d.pr_number
+    }
     for repo, number in project_prs:
         for demo in store.list_demos(factory_id, number, repo=repo, limit=limit):
             if not demo.project_slug or demo.project_slug == slug:

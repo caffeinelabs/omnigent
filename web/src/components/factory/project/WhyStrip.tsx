@@ -1,7 +1,8 @@
 /**
  * Why the project exists: the five-box why-chain (Evidence → Opportunity →
- * Bet → Project → Readout) with missing links hatched, then the full stage bar
- * with its labels. Work without user evidence says so in words; while
+ * Bet → Project → Readout) with missing links hatched, the initiative it is
+ * part of (one outcome several projects build), then the full stage bar with
+ * its labels. Work without user evidence says so in words; while
  * discovery runs it offers to find it an opportunity and to ask for a metric.
  */
 
@@ -9,10 +10,16 @@ import { CompassIcon, MessageSquareIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ProjectView } from "@/lib/factoryApi";
 import { Link, useSearchParams } from "@/lib/routing";
-import { discoveryPageHref } from "../factoryRoutes";
+import { discoveryPageHref, initiativePageHref } from "../factoryRoutes";
 import { StageBar } from "../ui/StageBar";
 import { WhyChain } from "../ui/WhyChain";
 import { type OpportunityFacts, type ProjectWhy, projectWhyChain } from "./projectModel";
+
+const INITIATIVE_ROLE: Record<"skeleton" | "surface" | "part", string> = {
+  skeleton: " · its walking skeleton",
+  surface: " · faces users",
+  part: "",
+};
 
 function sentence(why: ProjectWhy): string {
   const by = why.by;
@@ -78,6 +85,19 @@ export function WhyStrip({
         {said && why.kind !== "stopped" && (
           <p data-testid="project-why-sentence" className="text-sm text-muted-foreground">
             {said}
+          </p>
+        )}
+        {project.initiative && (
+          <p data-testid="project-why-initiative" className="text-sm text-muted-foreground">
+            Part of{" "}
+            <Link
+              to={initiativePageHref(factoryId, project.initiative.ref)}
+              componentId="factory.project.why_initiative"
+              className="text-foreground underline decoration-dotted underline-offset-2"
+            >
+              {project.initiative.ref} {project.initiative.title}
+            </Link>
+            {INITIATIVE_ROLE[project.initiative.role]}
           </p>
         )}
         <span className="grow" />

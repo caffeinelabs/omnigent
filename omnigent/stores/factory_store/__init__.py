@@ -79,6 +79,11 @@ from omnigent.entities.factory import (
     FactoryVersion,
 )
 from omnigent.stores.factory_store.discovery import DiscoveryStore, InMemoryDiscoveryStore
+from omnigent.stores.factory_store.initiatives import (
+    InitiativeStore,
+    InitiativeVersionConflict,
+    InMemoryInitiativeStore,
+)
 
 PROJECT_FIELDS = frozenset(
     {
@@ -658,7 +663,7 @@ def default_pr_url(repo: str, number: int) -> str:
 # ── The store contract ─────────────────────────────────────────
 
 
-class FactoryStore(DiscoveryStore, ABC):
+class FactoryStore(DiscoveryStore, InitiativeStore, ABC):
     """
     Abstract base for the factory cockpit's persistence.
 
@@ -1711,7 +1716,7 @@ def _normalise_pr_fields(fields: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-class InMemoryFactoryStore(InMemoryDiscoveryStore, FactoryStore):
+class InMemoryFactoryStore(InMemoryDiscoveryStore, InMemoryInitiativeStore, FactoryStore):
     """
     A process-local :class:`FactoryStore` with the same semantics as the SQL store.
 
@@ -3207,5 +3212,6 @@ __all__ = [
     "FactoryStore",
     "FactoryStoreError",
     "InMemoryFactoryStore",
+    "InitiativeVersionConflict",
     "ProposalStateConflict",
 ]

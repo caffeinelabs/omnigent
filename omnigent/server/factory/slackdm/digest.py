@@ -13,7 +13,10 @@ instead of Waiting on you: the rows of the one list Home shows
 (:mod:`.asks`), in its order, with what the factory handled itself; while
 discovery runs for the factory, a discovery section follows with the lines of
 Home's "Learned this week" (ids and titles, never a user's words); only a line
-from the last 24 h keeps the digest from being skipped.
+from the last 24 h keeps the digest from being skipped. Every initiative (an
+outcome several projects build) is one line under "Initiatives", the same
+line as Home's card: how many projects merged, whether the walking skeleton is
+on the base env, how its acceptance went and what it waits on.
 """
 
 from __future__ import annotations
@@ -37,6 +40,7 @@ if TYPE_CHECKING:
     from omnigent.server.factory.snapshot import RawSnapshot
 
 WAITING_MAX: Final = 8
+INITIATIVES_MAX: Final = 4
 PROGRESS_MAX: Final = 6
 NEXT_MAX: Final = 6
 DAY_S: Final = 86400
@@ -263,6 +267,20 @@ def progress_lines(summary: Mapping[str, Any] | None, base: str | None) -> list[
         lines.append(f"• {mark}{name} ({esc(stage, 20)}) — {esc(status, 160)}{held}")
     if len(items) > PROGRESS_MAX:
         lines.append(f"…and {len(items) - PROGRESS_MAX} more")
+    return lines
+
+
+def initiative_lines(summary: Mapping[str, Any] | None, base: str | None) -> list[str]:
+    """Each initiative as Home's card says it, its title linked to its page."""
+    items = (summary or {}).get("initiatives") or []
+    lines = []
+    for item in items[:INITIATIVES_MAX]:
+        mark = ":warning: " if item.get("state") == "failing" else ""
+        name = link(str(item["href"]), f"{item['ref']} {item['title']}", base)
+        rest = str(item["line"]).removeprefix(f"{item['title']}: ")
+        lines.append(f"• {mark}{name}: {esc(rest, 220)}")
+    if len(items) > INITIATIVES_MAX:
+        lines.append(f"…and {len(items) - INITIATIVES_MAX} more")
     return lines
 
 
@@ -503,8 +521,11 @@ def build_digest(
     if handled:
         waits.append(f"*Handled by the factory*  {esc(' '.join(handled), 400)}")
     doing = []
+    outcomes = initiative_lines(summary, base)
+    if outcomes:
+        doing += [f"*Initiatives ({len((summary or {}).get('initiatives') or [])})*", *outcomes]
     if progress:
-        doing = [f"*In progress ({len((summary or {}).get('working') or [])})*", *progress]
+        doing += [f"*In progress ({len((summary or {}).get('working') or [])})*", *progress]
     day = [f"*Last 24 h*  {counted or 'nothing new'}"]
     if spend:
         day.append(f"*Spend*  {spend}")
@@ -626,6 +647,7 @@ __all__ = [
     "bot_test_message",
     "build_digest",
     "code_message",
+    "initiative_lines",
     "lead_line",
     "needs_lines",
     "next_line",

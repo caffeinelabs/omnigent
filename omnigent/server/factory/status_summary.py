@@ -73,6 +73,7 @@ from omnigent.server.auth import LEVEL_EDIT, LEVEL_OWNER
 from omnigent.server.factory import issues
 from omnigent.server.factory.auto_merge import AUTO_TEXT
 from omnigent.server.factory.decision_routing import is_mine_by, roster_owner
+from omnigent.server.factory.initiative_view import InitiativeLine, lines_for
 
 if TYPE_CHECKING:
     from omnigent.entities import Conversation
@@ -438,6 +439,9 @@ class StatusSummary(_Model):
     spend: SpendBlock
     health: HealthBlock
     counts: SummaryCounts
+    initiatives: list[InitiativeLine] = Field(
+        default_factory=list, description="Initiatives, one line each; left out when none."
+    )
 
 
 # ── Inputs ─────────────────────────────────────────────────────
@@ -464,6 +468,7 @@ class StatusInputs:
         (``{id, label, kind, since}``; only while discovery runs for the factory).
     :param fyi: Projects proposals the factory applied without a person's click
         whose Undo is still open (:func:`fyi_rows`): Needs you's FYI lines.
+    :param initiatives: The newest initiative rows (``to_dict()``), shown as one line each.
     """
 
     snapshot: Mapping[str, Any]
@@ -478,6 +483,7 @@ class StatusInputs:
     proposals: Sequence[Mapping[str, Any]] = ()
     pending_sources: Sequence[Mapping[str, Any]] = ()
     fyi: Sequence[Mapping[str, Any]] = ()
+    initiatives: Sequence[Mapping[str, Any]] = ()
 
 
 # ── Small helpers ──────────────────────────────────────────────
@@ -1652,12 +1658,19 @@ def build_status_summary(inputs: StatusInputs, *, now: float) -> dict[str, Any]:
         spend=spend,
         health=health,
         counts=counts,
+        initiatives=[
+            InitiativeLine.model_validate(line)
+            for line in lines_for(inputs.initiatives, body, now=now)
+        ],
     )
     out = summary.model_dump(mode="json")
     # "waiting" shows only when something holds the project (older readers never see it).
     for item in (*out["working"], *out["next"]):
         if item.get("waiting") is None:
             item.pop("waiting", None)
+    # Present only when there are some (older readers never see the key).
+    if not out["initiatives"]:
+        out.pop("initiatives")
     return out
 
 
@@ -1700,6 +1713,8 @@ def plain_lines(summary: Mapping[str, Any], *, now: float, base_url: str = "") -
         return f"in {minutes}m" if minutes else "any moment"
 
     lines = [str(summary["headline"])]
+    for item in summary.get("initiatives") or []:
+        lines.append(f"Initiative {item['ref']}: {item['line']} {base_url}{item['href']}")
     for item in summary["waiting"]:
         who = "you" if item["for_you"] else item["who"]
         lines.append(
@@ -1808,7 +1823,10 @@ def load_inputs(
         else store.list_proposals(root_id, status=list(PROPOSAL_ASK_STATUSES), limit=500)
     )
     proposals = [proposal_row(row) for row in open_proposals]
+    from omnigent.server.factory.initiatives import load_rows
+
     return StatusInputs(
+        initiatives=load_rows(deps, root_id),
         proposals=proposals,
         fyi=fyi_rows(deps, root_id, now),
         pending_sources=pending_sources(deps, root_id),
@@ -1898,7 +1916,7 @@ def fyi_rows(deps: FactoryDeps, root_id: str, now: float) -> list[dict[str, Any]
                 "undo_until": row.undo_until,
                 "result": {
                     k: result.get(k)
-                    for k in ("authority", "level", "grace", "spawning", "lead")
+                    for k in ("authority", "level", "grace", "spawning", "lead", "initiative")
                     if k in result
                 },
             }

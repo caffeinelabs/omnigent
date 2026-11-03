@@ -142,6 +142,11 @@ _CODECS = [
         ec.encode_factory_readout_decision,
         ec.decode_factory_readout_decision,
     ),
+    (
+        ec.FACTORY_INITIATIVE_STATUS,
+        ec.encode_factory_initiative_status,
+        ec.decode_factory_initiative_status,
+    ),
 ]
 
 
@@ -297,3 +302,4 @@ def test_shipped_codes_are_stable() -> None:
         "extend": 4,
     }
     assert ec.FACTORY_READOUT_DECISION == {"keep": 1, "drop": 2, "iterate": 3, "extend": 4}
+    assert ec.FACTORY_INITIATIVE_STATUS == {"open": 1, "done": 2, "cancelled": 3}

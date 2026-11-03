@@ -1325,6 +1325,7 @@ def _lifecycle(project: FactoryProject) -> dict[str, Any]:
         "def_version": project.def_version,
         "why": _lenient(schemas.WhyView, charter.get("why")),
         "requested_by": _lenient(schemas.RequestedByView, charter.get("requested_by")),
+        "initiative": _lenient(schemas.InitiativeRefView, charter.get("initiative")),
     }
 
 

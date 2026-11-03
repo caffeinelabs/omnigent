@@ -156,6 +156,7 @@ from omnigent.stores.factory_store import (
     version_content_hash,
 )
 from omnigent.stores.factory_store.sqlalchemy_discovery import SqlDiscoveryStore
+from omnigent.stores.factory_store.sqlalchemy_initiatives import SqlInitiativeStore
 
 _T = TypeVar("_T")
 
@@ -757,7 +758,7 @@ def _feedback(row: SqlFactoryFeedback) -> FactoryFeedback:
     )
 
 
-class SqlAlchemyFactoryStore(SqlDiscoveryStore, FactoryStore):
+class SqlAlchemyFactoryStore(SqlDiscoveryStore, SqlInitiativeStore, FactoryStore):
     """
     SQLAlchemy-backed implementation of :class:`FactoryStore`.
 

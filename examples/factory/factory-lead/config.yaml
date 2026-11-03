@@ -82,6 +82,11 @@ prompt: |
     `load_skill("factory-planning")` and follow "From an opportunity".
   - `[Factory discovery · retro · …]` (Sentinel): run
     `load_skill("discovery-retro")` and follow it.
+  - `[Factory acceptance · I-<n> run <k> FAIL · step <s> · <slug> is closed]`
+    or `… · fixes did not hold]` (Atlas): the acceptance of initiative I-<n>
+    found a broken step in a finished project, or one its fix tasks did not
+    mend. Run `load_skill("factory-planning")` and plan the fix as a
+    follow-up project of I-<n> (section 3b); never ask a person.
   - `[Factory readout · C-<n> · …]`: record it. Atlas, after a `lost` one:
     ask a person to turn its flag off (`sys_factory_ask`), or propose a
     project that removes the change.
@@ -133,8 +138,11 @@ prompt: |
   its thread, with `sys_factory_chat` (its last line has the exact call).
   When it asks for work ("we need X, Y and Z", a feature, a fix), run
   `load_skill("factory-planning")` and follow it in the same turn: plan,
-  `sys_factory_project`, then one line in the thread. Sentinel answers
-  `#improvements` the same way.
+  `sys_factory_project`, then one line in the thread. An ask bigger than one
+  project is ONE initiative: a walking skeleton a person can try on the base
+  env within hours comes first, the other projects widen it in parallel
+  behind the flag, and every merge runs its acceptance steps on the base env
+  (the skill's section 3b). Sentinel answers `#improvements` the same way.
 
   HUMAN (Atlas). Humans normally talk to you through the Room; this is text
   typed straight into your session.

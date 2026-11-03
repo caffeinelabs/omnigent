@@ -1,6 +1,6 @@
 ---
 name: factory-plan-analysis
-description: The planner's procedure - a fresh read-only worktree of origin/<base>, finding the areas a goal touches, drafting projects with scope_paths, running scope-graph.mjs (cohesion, cross-scope edges, hub files, overlaps), applying the split heuristics, sizing each project, and writing the {changes, analysis} JSON for the lead's sys_factory_project call.
+description: The planner's procedure - a fresh read-only worktree of origin/<base>, finding the areas a goal touches, drafting projects with scope_paths, running scope-graph.mjs (cohesion, cross-scope edges, hub files, overlaps), applying the split heuristics, sizing each project, a walking skeleton and acceptance steps for an ask bigger than one project, and writing the {changes, analysis, initiative} JSON for the lead's sys_factory_project call.
 ---
 
 # Plan analysis
@@ -48,6 +48,18 @@ node <script> --root ~/factory/plans/wt/$ID \
    - `overlaps`: tighten the globs until there are none.
 4. Size each project: files likely touched, PRs (about 3 or fewer), and
    `S`/`M`/`L`. Set `budget_ics` (1-3) and `priority` (0 highest).
+5. More than one project (the request says `INITIATIVE`): it is one outcome.
+   - Wave 1 is a walking skeleton: one project with a thin vertical slice
+     from the user surface (the entry point a person sees) to the back end,
+     behind the flag, that stubs what the others will build. It has no
+     `depends_on` and priority 0.
+   - The others run in parallel and integrate through the flag and a stable
+     contract (write the contract into each goal); `depends_on` only for a
+     real code or API dependency, with its reason (`"<slug>: <why>"`).
+   - Write 2-8 acceptance steps a demo agent can run on the base env with a
+     browser and the API: what a person does and what they see, each with
+     the project whose code it exercises (`owner`) and `needs` (`login`,
+     `build`, `ai`, `external`) when an env may lack it.
 
 ## 3. Write the plan
 
@@ -58,8 +70,14 @@ Write `~/factory/plans/<id>.json` (one file, valid JSON):
   "dod": ["…"], "scope_paths": ["…"], "demo_focus": "…", "depends_on": [],
   "budget_ics": 2, "priority": 1}}],
  "analysis": {"head": "<sha>", "scope_graph": <the report>, "hub_files": ["…"],
-  "overlaps": [], "sizes": {"<slug>": "S · 1 PR · 4 files"}, "notes": ["…"]}}
+  "overlaps": [], "sizes": {"<slug>": "S · 1 PR · 4 files"}, "notes": ["…"]},
+ "initiative": {"title": "…", "outcome": "…", "flag": "<flag key>",
+  "acceptance": [{"step": "…", "expect": "…", "owner": "<slug>", "needs": []}],
+  "skeleton": "<slug>", "user_facing": ["<slug>"],
+  "waves": [{"n": 2, "goal": "…", "projects": ["<planned slug>"]}]}}
 ```
+
+Leave `initiative` out for a single project.
 
 Check it with `node -e 'JSON.parse(require("fs").readFileSync(process.argv[1]))' ~/factory/plans/$ID.json`.
 Leave the worktree for the lead to inspect. End with exactly one line:

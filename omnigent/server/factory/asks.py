@@ -75,6 +75,7 @@ from omnigent.server.factory import status_summary as summary_mod
 from omnigent.server.factory.auto_merge import AUTO_TEXT
 from omnigent.server.factory.auto_merge import INCIDENT_RULES as AUTO_MERGE_INCIDENTS
 from omnigent.server.factory.decision_routing import is_mine_by
+from omnigent.server.factory.initiative_view import InitiativeLine, lines_for
 from omnigent.server.factory.stuck import STUCK_RULES
 
 if TYPE_CHECKING:
@@ -294,6 +295,9 @@ class AsksResponse(_Model):
     """
     ``GET /v1/factory/factories/{fid}/asks``: the viewer's Needs you, costliest
     first, then the FYI lines (newest first).
+
+    :param initiatives: The outcomes being built, one line each (Home's cards above
+        the projects); they wait on no one, so they are not asks. Left out when none.
     """
 
     factory_id: str
@@ -302,6 +306,7 @@ class AsksResponse(_Model):
     handled: list[str] = Field(default_factory=list)
     fyi: list[Fyi] = Field(default_factory=list)
     counts: AskCounts
+    initiatives: list[InitiativeLine] = Field(default_factory=list)
 
 
 # ── Inputs ─────────────────────────────────────────────────────
@@ -334,6 +339,7 @@ class AskInputs:
     owners: Mapping[str, str] = field(default_factory=dict)
     pending_sources: Sequence[Mapping[str, Any]] = ()
     fyi: Sequence[Mapping[str, Any]] = ()
+    initiatives: Sequence[Mapping[str, Any]] = ()
 
     @classmethod
     def from_status(cls, inputs: summary_mod.StatusInputs) -> AskInputs:
@@ -347,6 +353,7 @@ class AskInputs:
             owners=inputs.owners,
             pending_sources=inputs.pending_sources,
             fyi=inputs.fyi,
+            initiatives=inputs.initiatives,
         )
 
 
@@ -1324,7 +1331,8 @@ def fyi_why(row: Mapping[str, Any]) -> str:
     """
     Why a proposal applied at once, in words: ``"for alice: their answer to
     D-42"``, ``"autonomy: standard"``, ``"no objection in 15 min"`` (the grace
-    period), ``"asked for by alice"`` or ``"a minor change"``.
+    period), ``"asked for by alice"`` (``"…, part of I-3"`` when it extends an
+    initiative they asked for) or ``"a minor change"``.
     """
     result = row.get("result") or {}
     authority = result.get("authority")
@@ -1338,7 +1346,8 @@ def fyi_why(row: Mapping[str, Any]) -> str:
 
         return GRACE_TEXT
     if row.get("on_behalf_of"):
-        return f"asked for by {_person(str(row['on_behalf_of']))}"
+        part = f", part of {result['initiative']}" if result.get("initiative") else ""
+        return f"asked for by {_person(str(row['on_behalf_of']))}{part}"
     return "a minor change it may make on its own"
 
 
@@ -1410,8 +1419,16 @@ def build_asks(inputs: AskInputs, *, now: float) -> dict[str, Any]:
             folded=len(built.folded),
             fyi=len(fyi),
         ),
+        initiatives=[
+            InitiativeLine.model_validate(line)
+            for line in lines_for(inputs.initiatives, inputs.snapshot, now=now)
+        ],
     )
-    return response.model_dump(mode="json")
+    out = response.model_dump(mode="json")
+    # Present only when there are some (older readers never see the key).
+    if not out["initiatives"]:
+        out.pop("initiatives")
+    return out
 
 
 # ── Loading ────────────────────────────────────────────────────

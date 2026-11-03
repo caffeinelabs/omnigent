@@ -153,6 +153,8 @@ async def _plan(cockpit: Cockpit, mode: str = "merged") -> None:
             ),
         },
         reply_to=f"chat_{chat.id}",
+        # Gating, not planning: two separate outcomes (initiatives have their own tests).
+        analysis={"initiative": {"none": "two separate outcomes (sample)"}},
     )
     assert resp.json()["status"] == "applied", resp.text
     await settle()

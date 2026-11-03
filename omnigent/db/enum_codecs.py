@@ -434,6 +434,13 @@ FACTORY_READOUT_STATUS: dict[str, int] = {
     "cancelled": 5,
 }
 
+FACTORY_INITIATIVE_STATUS: dict[str, int] = {
+    "open": 1,
+    "done": 2,
+    "cancelled": 3,
+}
+"""``factory_initiatives.status``: a person's close or reopen (the state is computed)."""
+
 FACTORY_READOUT_METHOD: dict[str, int] = {
     "controlled": 1,
     "before_after": 2,
@@ -535,6 +542,7 @@ for _factory_table in (
     FACTORY_READOUT_VERDICT,
     FACTORY_READOUT_RECOMMENDATION,
     FACTORY_READOUT_DECISION,
+    FACTORY_INITIATIVE_STATUS,
 ):
     _CODE_TO_NAME[id(_factory_table)] = _invert(_factory_table)
 
@@ -1045,6 +1053,16 @@ def encode_factory_readout_status(name: str) -> int:
 def decode_factory_readout_status(code: int) -> str:
     """Decode a stored ``factory_readouts.status`` code to its name."""
     return _decode(FACTORY_READOUT_STATUS, code, field="factory_readouts.status")
+
+
+def encode_factory_initiative_status(name: str) -> int:
+    """Encode a ``factory_initiatives.status`` name to its stable code."""
+    return _encode(FACTORY_INITIATIVE_STATUS, name, field="factory_initiatives.status")
+
+
+def decode_factory_initiative_status(code: int) -> str:
+    """Decode a stored ``factory_initiatives.status`` code to its name."""
+    return _decode(FACTORY_INITIATIVE_STATUS, code, field="factory_initiatives.status")
 
 
 def encode_factory_readout_method(name: str) -> int:

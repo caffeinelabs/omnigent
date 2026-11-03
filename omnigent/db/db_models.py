@@ -2816,3 +2816,51 @@ class SqlFactoryReadout(OmnigentBase):
         ),
         Index("ix_factory_readouts_due", "workspace_id", "factory_id", "status", "due_at"),
     )
+
+
+class SqlFactoryInitiative(OmnigentBase):
+    """
+    SQLAlchemy model for ``factory_initiatives``: one outcome a person asked
+    for that spans projects, shown as ``I-<number>``.
+
+    The projects carry the work; the row carries the ask (verbatim), who asked,
+    the plan (acceptance steps, skeleton, waves, the projects in it) and the
+    newest acceptance runs on the base env. Its state is computed from its
+    projects; ``status`` only records a person's close or reopen.
+
+    :param status: Code of FACTORY_INITIATIVE_STATUS.
+    :param requested_by: JSON ``{kind, id, name}``.
+    :param plan: JSON: flag, acceptance steps, skeleton, waves, projects.
+    :param runs: JSON: the newest acceptance runs (oldest first).
+    :param version: Bumped on every write; updates compare and set it.
+    """
+
+    __tablename__ = "factory_initiatives"
+
+    workspace_id: Mapped[int] = _ws_column()
+    id: Mapped[str] = mapped_column(Uuid16, primary_key=True)
+    factory_id: Mapped[str] = mapped_column(Uuid16, nullable=False)
+    number: Mapped[int] = mapped_column(Integer, nullable=False)
+    title: Mapped[str] = mapped_column(String(120), nullable=False)
+    ask: Mapped[str] = mapped_column(CompressedText, nullable=False)
+    status: Mapped[int] = mapped_column(SmallInteger, nullable=False)
+    requested_by: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    ask_ref: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    thread: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    outcome: Mapped[str | None] = mapped_column(String(280), nullable=True)
+    plan: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    runs: Mapped[str | None] = mapped_column(CompressedText, nullable=True)
+    created_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    version: Mapped[int] = mapped_column(Integer, nullable=False, server_default="1")
+    closed_at: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    closed_by: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    created_at: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint("status IN (1, 2, 3)", name="ck_factory_initiatives_status"),
+        UniqueConstraint(
+            "workspace_id", "factory_id", "number", name="uq_factory_initiatives_number"
+        ),
+        Index("ix_factory_initiatives_status", "workspace_id", "factory_id", "status"),
+    )

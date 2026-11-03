@@ -67,6 +67,7 @@ from omnigent.server.factory import (
     control,
     events,
     gating,
+    initiatives,
     projects,
     spawn,
     start,
@@ -1022,6 +1023,8 @@ def _reply(row: FactoryProposal, *, deduped: bool = False, decision: str | None 
         out.update(opportunity=row.opportunity, bet=row.bet is not None)
     if row.case_against:
         out["case_against"] = list(row.case_against)
+    if result.get("initiative"):
+        out["initiative"] = result["initiative"]
     return out
 
 
@@ -1034,6 +1037,8 @@ def _outcome_tail(result: Mapping[str, Any]) -> str:
     held = result.get("held") or {}
     if held:
         tail += " · waiting: " + "; ".join(f"{s} on {', '.join(d)}" for s, d in held.items())
+    if result.get("initiative"):
+        tail += f" · initiative: {result['initiative']}"
     return tail
 
 
@@ -1277,6 +1282,29 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
     thread = body.thread or (ask.thread if ask is not None else None)
     if thread is None and authority is not None:
         thread = authority.thread
+    reply_chat = (body.reply_to or "").removeprefix(_CHAT_PREFIX)
+    draft = await asyncio.to_thread(
+        functools.partial(
+            initiatives.check_plan,
+            deps,
+            root.id,
+            plan,
+            body.analysis,
+            requested=asker is not None,
+            reply_to_chat=reply_chat if ask is not None and _is_uuid(reply_chat) else None,
+        )
+    )
+    # A plan that extends an initiative a person asked for builds what they asked for:
+    # it is filed on their behalf (no second approval; Undo stays open).
+    extends = draft.extend if draft is not None else None
+    extension = (
+        initiatives.carried_request(extends, plan)
+        if asker is None and checked.bet is None and not checked.owner and not body.opportunity
+        else None
+    )
+    if extension is not None:
+        asker = extension[0]
+        thread = thread or extension[1]
     # A bet a lead files on its own waits for the other lead's case against first;
     # only a person's request in the Room makes it theirs (an answer never carries one).
     own_bet = checked.bet is not None and ask is None
@@ -1296,12 +1324,14 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
     if checked.owner:
         classes.append("owner")
     # What it needs without the answer (also when another proposal already carried it out).
-    unanswered = autonomy.decide(classes, requested=ask is not None, mode=mode, level=level)
+    unanswered = autonomy.decide(
+        classes, requested=ask is not None or extension is not None, mode=mode, level=level
+    )
     # Never a second approval of what the person decided, whatever the mode.
     verdict = autonomy.Verdict("auto", info_line=True) if carried else unanswered
     peer = await asyncio.to_thread(_peer, deps, root.id, caller) if checked.bet else None
     waits = own_bet and peer is not None
-    warnings = [*plan.warnings, *checked.warnings]
+    warnings = [*plan.warnings, *checked.warnings, *(draft.warnings if draft else [])]
     if own_bet and peer is None:
         warnings.append("no_peer_lead: no other lead writes a case against; a person decides")
     if authority is not None and (scope_warning := authority.warning()) is not None:
@@ -1316,7 +1346,6 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
     if audit is not None:
         # The claim on the answer, stored with the row (see answer_authority.claimed_by).
         result = {**(result or {}), "authority": audit}
-    reply_chat = (body.reply_to or "").removeprefix(_CHAT_PREFIX)
     row, deduped = await asyncio.to_thread(
         lambda: store.create_proposal(
             root.id,
@@ -1387,6 +1416,9 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
             "grace": verdict.grace,
             "warnings": warnings,
             "requested": asker is not None,
+            "for_initiative": (
+                extends.ref if extension is not None and extends is not None else None
+            ),
             "mode": mode,
             "level": level,
             "by_level": verdict.by_level,
@@ -1412,7 +1444,7 @@ async def propose(app_state: Any, caller: AgentCaller, payload: Mapping[str, Any
             plan,
             actor=actor,
             user_id=caller.user_id,
-            info=verdict.info_line,
+            info=verdict.info_line or extension is not None,
             authority=audit,
             by_level=verdict.by_level,
         )
@@ -2053,6 +2085,10 @@ async def apply_now(
         )
         if why_slugs := [p.slug for p in created if (p.charter or {}).get("why")]:
             result["why"] = why_slugs
+        created = await initiatives.link_created(app_state, root.id, row, created, actor)
+        parts = [(p.charter or {}).get("initiative") for p in created]
+        if refs := [part["ref"] for part in parts if isinstance(part, Mapping)]:
+            result["initiative"] = refs[0]
         for project in created:
             how = await projects.start_project(
                 app_state, root, project, actor=actor, proposal_ref=ref

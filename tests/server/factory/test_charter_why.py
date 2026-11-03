@@ -263,7 +263,11 @@ async def test_a_projects_own_outcome_wins_and_split_children_get_the_why(
         "keep": "umbrella",
     }
     resp = await file_bet(
-        cockpit, split, reason="two milestones (sample)", reply_to=human_chat(cockpit)
+        cockpit,
+        split,
+        reason="two milestones (sample)",
+        reply_to=human_chat(cockpit),
+        analysis={"initiative": {"none": "two milestones of one project (sample)"}},
     )
     assert resp.status_code == 200, resp.text
     if resp.json()["status"] != "applied":

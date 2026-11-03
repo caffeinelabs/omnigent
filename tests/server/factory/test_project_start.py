@@ -401,6 +401,8 @@ async def _create(cockpit: Cockpit, *slugs: str) -> None:
         cockpit,
         *({"op": "create", "project": project(slug)} for slug in slugs),
         reply_to=f"chat_{chat.id}",
+        # Starting, not planning: separate outcomes (initiatives have their own tests).
+        analysis={"initiative": {"none": "separate outcomes (sample)"}},
     )
     assert resp.status_code == 200 and resp.json()["status"] == "applied", resp.text
     await settle()

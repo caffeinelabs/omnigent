@@ -934,3 +934,63 @@ class FactoryFeedback:
     def to_dict(self) -> dict[str, Any]:
         """:returns: A JSON-ready copy of the row."""
         return _plain(self)
+
+
+@dataclass(frozen=True)
+class FactoryInitiative:
+    """
+    One outcome a person asked for that spans projects (``factory_initiatives``),
+    shown as ``I-<number>``.
+
+    The projects carry the work; the initiative carries what holds them
+    together: the ask, the user-visible acceptance steps a demo agent runs on
+    the base env, the plan of waves, and the acceptance runs. Its state is
+    computed from its projects and runs (:mod:`omnigent.server.factory.initiatives`);
+    only a person's close or reopen is stored in ``status``.
+
+    :param title: Short name, e.g. ``"In-app assistant (sample)"``.
+    :param ask: The person's ask, verbatim (the Room message the plan answers).
+    :param status: ``open`` / ``done`` / ``cancelled`` (a person's word; else open).
+    :param requested_by: ``{kind: human|agent, id, name}``.
+    :param ask_ref: The message it answers, e.g. ``"chat_<id>"``.
+    :param outcome: What users get, in one sentence.
+    :param plan: ``{flag, acceptance[{n, step, expect?, owner?, needs?}], skeleton,
+        user_facing[], why_wait{}, depends_why{}, waves[{n, goal, projects, proposal, at}],
+        projects[], opportunity?}``.
+    :param runs: The newest acceptance runs, oldest first
+        (``{n, status, sha, pr, repo, base, due_at, requested_at, reported_at,
+        requested_of, demo_id, steps[], tasks[], note}``).
+    :param created_by: The proposal that created it (``"C-11"``) or a person.
+    :param version: Bumped on every write (compare-and-set).
+    """
+
+    id: str
+    factory_id: str
+    number: int
+    title: str
+    ask: str = ""
+    status: str = "open"
+    requested_by: dict[str, Any] | None = None
+    ask_ref: str | None = None
+    thread: str | None = None
+    outcome: str | None = None
+    plan: dict[str, Any] | None = None
+    runs: list[dict[str, Any]] = field(default_factory=list)
+    created_by: str | None = None
+    version: int = 1
+    closed_at: int | None = None
+    closed_by: str | None = None
+    created_at: int = 0
+    updated_at: int = 0
+    workspace_id: int = 0
+
+    @property
+    def ref(self) -> str:
+        """:returns: The human-facing reference, e.g. ``"I-3"``."""
+        return f"I-{self.number}"
+
+    def to_dict(self) -> dict[str, Any]:
+        """:returns: A JSON-ready copy with ``ref``."""
+        out = _plain(self)
+        out["ref"] = self.ref
+        return out

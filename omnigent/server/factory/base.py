@@ -66,6 +66,8 @@ class BaseMove:
     One move of a watched base, as :func:`on_base_moved` hooks receive it.
 
     :param pr: The tracked PR whose merge commit is the new head, if any.
+    :param from_at: When the server saw the previous head (``None`` when unknown);
+        PRs merged since then are in this move too.
     """
 
     factory_id: str
@@ -75,6 +77,7 @@ class BaseMove:
     to_sha: str
     at: int
     pr: int | None = None
+    from_at: int | None = None
 
 
 BaseMovedHook = Callable[[Any, BaseMove], Awaitable[None] | None]
@@ -262,7 +265,7 @@ async def _observe_one(
         return None
     # Read before recording: a failed read leaves the move for the next poll.
     pr = await asyncio.to_thread(_merged_pr, deps, scope.factory_id, repo, oid)
-    move = BaseMove(scope.factory_id, repo, base, known.sha, oid, now, pr)
+    move = BaseMove(scope.factory_id, repo, base, known.sha, oid, now, pr, known.moved_at)
     notices = await asyncio.to_thread(_notices, deps, scope, move)
     record = {key: head_value(BaseHead(oid, now), repo, base)}
     await asyncio.to_thread(deps.conversation_store.set_labels, scope.factory_id, record)

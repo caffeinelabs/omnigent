@@ -32,7 +32,15 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from omnigent.factory import PROPOSAL_KINDS, PROPOSAL_STATUSES, ROLE_LEAD, ROLE_PROJECT_LEAD
 from omnigent.server.auth import LEVEL_EDIT, LEVEL_MANAGE
-from omnigent.server.factory import control, gating, projects, proposals, tuning, waits
+from omnigent.server.factory import (
+    control,
+    gating,
+    initiatives,
+    projects,
+    proposals,
+    tuning,
+    waits,
+)
 from omnigent.server.factory.agent_scope import authorize_agent
 from omnigent.server.factory.charter import normalize_charter
 from omnigent.server.factory.context import factory_deps
@@ -117,6 +125,48 @@ def _project_row(
     }
 
 
+def _initiative_rows(
+    deps: Any, factory_id: str, role: str, project: str | None
+) -> list[dict[str, Any]]:
+    """The open initiatives a lead extends with ``analysis.initiative.id`` (a PL: its own)."""
+    out: list[dict[str, Any]] = []
+    for row in deps.factory_store.list_initiatives(factory_id, status="open", limit=20):
+        plan = initiatives.plan_of(row)
+        if role == ROLE_PROJECT_LEAD and project not in plan["projects"]:
+            continue
+        runs = [r for r in row.runs if r.get("status")]
+        last = runs[-1] if runs else None
+        out.append(
+            {
+                "initiative": row.ref,
+                "title": row.title,
+                "projects": plan["projects"],
+                "skeleton": plan.get("skeleton"),
+                "acceptance_steps": len(plan["acceptance"]),
+                "last_run": (
+                    {
+                        "run": last.get("n"),
+                        "status": last.get("status"),
+                        "sha": str(last.get("sha") or "")[:7] or None,
+                        "failed_steps": [
+                            s.get("n")
+                            for s in last.get("steps") or []
+                            if s.get("status") == "fail"
+                        ],
+                    }
+                    if last
+                    else None
+                ),
+                "waves": [
+                    {"wave": h.get("wave"), "proposal": h.get("proposal"), "added": h.get("added")}
+                    for h in plan["history"]
+                ],
+                "planned_waves": plan["waves"],
+            }
+        )
+    return out
+
+
 @router.get("/agent/projects", response_model=None)
 async def get_agent_projects(
     request: Request, from_session_id: str = Query(...)
@@ -153,6 +203,9 @@ async def get_agent_projects(
                 {"proposal": f"C-{p.number}", "title": p.title, "approval": p.approval}
                 for p in pending
             ],
+            "initiatives": await asyncio.to_thread(
+                _initiative_rows, caller.deps, caller.factory_id, role, caller.membership.project
+            ),
         }
 
     return await _guard(run)

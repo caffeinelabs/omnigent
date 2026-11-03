@@ -211,6 +211,27 @@ def _why(value: Any) -> dict[str, Any] | None:
     return out or None
 
 
+_INITIATIVE_ROLES: Final = ("skeleton", "surface", "part")
+
+
+def _initiative(value: Any) -> dict[str, Any] | None:
+    """``{ref, title, role, wave, flag?}``: the initiative the server put the project in."""
+    if not isinstance(value, Mapping):
+        return None
+    ref = _text(value.get("ref"))
+    if not ref or not re.fullmatch(r"I-[1-9][0-9]{0,8}", ref):
+        return None
+    out: dict[str, Any] = {"ref": ref, "title": (_text(value.get("title")) or ref)[:120]}
+    role = value.get("role")
+    out["role"] = role if role in _INITIATIVE_ROLES else "part"
+    wave = value.get("wave")
+    out["wave"] = wave if isinstance(wave, int) and not isinstance(wave, bool) and wave > 0 else 1
+    flag = _text(value.get("flag"))
+    if flag:
+        out["flag"] = flag[:64]
+    return out
+
+
 def normalize_charter(
     raw: Mapping[str, Any] | None, *, tooling_ref: str | None = None
 ) -> dict[str, Any]:
@@ -227,7 +248,8 @@ def normalize_charter(
     :returns: ``{kind, goal, dod, scope_paths, constraints, env_needed,
         preview{enabled, slots, tooling_ref?}, preview_slots, demo_focus, demo,
         budget_ics, version_path?, health_path?, depends_on?, depends_mode?, depends_why?,
-        human_owner?, budgets?, spawn_owner?, outcome?, why?, requested_by?}``; ``kind`` is
+        human_owner?, budgets?, spawn_owner?, outcome?, why?, requested_by?, initiative?}``;
+        ``kind`` is
         ``work`` unless it is
         one of :data:`~omnigent.factory.PROJECT_KINDS`. The optional keys are
         stored only when set.
@@ -296,6 +318,9 @@ def normalize_charter(
     requested_by = _requested_by(src.get("requested_by"))
     if requested_by:
         out["requested_by"] = requested_by
+    initiative = _initiative(src.get("initiative"))
+    if initiative:
+        out["initiative"] = initiative
     return out
 
 
@@ -401,6 +426,7 @@ def render_pl_charter(
         f"CHARTER · {project.slug}",
         f"Title: {project.title} · priority P{project.priority}",
         *why_lines(charter),
+        *initiative_lines(charter),
         f"Goal: {charter['goal'] or '(ask your lead)'}",
         "Definition of Done:",
         f"- {_fixed_dod(charter)}",
@@ -443,6 +469,40 @@ def render_pl_charter(
 def _num(value: Any) -> str:
     """A signed change, e.g. ``+0.01`` or ``-4``."""
     return f"{value:+g}" if isinstance(value, int | float) and not isinstance(value, bool) else "?"
+
+
+def initiative_lines(charter: Mapping[str, Any]) -> list[str]:
+    """
+    The project's part in an initiative (one outcome several projects build).
+
+    :returns: No lines for a project outside any initiative.
+    """
+    part = charter.get("initiative")
+    if not isinstance(part, Mapping):
+        return []
+    flag = f" behind the flag {part['flag']}" if part.get("flag") else " behind its flag"
+    head = f"Initiative: {part['ref']} {part['title']} · wave {part.get('wave', 1)}"
+    if part.get("role") == "skeleton":
+        role = (
+            "You are its walking skeleton: start now and get a thin slice from the user "
+            f"surface to the back end onto the base env within hours{flag}; stub what a "
+            "sibling project has not built yet and keep the contract stable."
+        )
+    elif part.get("role") == "surface":
+        role = (
+            f"Your project faces users: ship what works{flag} as it lands, against a stable "
+            "contract; never wait on a sibling project to merge first."
+        )
+    else:
+        role = (
+            f"Integrate with the other projects through{flag.removeprefix(' behind')} and stable "
+            "contracts, not by waiting on them."
+        )
+    return [
+        head,
+        f"{role} Every merge into the base runs the initiative's acceptance steps on the "
+        "base env; a failed step comes back to its project as a task.",
+    ]
 
 
 def why_lines(charter: Mapping[str, Any]) -> list[str]:
@@ -746,6 +806,7 @@ __all__ = [
     "UPDATE_LINE",
     "WHY_KEYS",
     "TeamBlock",
+    "initiative_lines",
     "normalize_charter",
     "preview_tooling_ref",
     "project_base_branch",

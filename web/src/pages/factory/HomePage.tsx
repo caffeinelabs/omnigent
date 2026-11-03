@@ -2,7 +2,9 @@
  * Home (`/factory/:factoryId` in the new cockpit): is it OK, what needs me,
  * how is everything going. The date and one sentence built from facts, the
  * loop the factory runs (Build and Measure only while discovery is off), then
- * the projects (outcome, why, stage, team with models) beside Needs you (the
+ * the initiatives (one card per outcome several projects build: merged
+ * projects, the walking skeleton on the base env, its acceptance) and the
+ * projects (outcome, why, stage, team with models) beside Needs you (the
  * server's one list, answered in place with Undo), What users need and the
  * cold-start checklist; Learned this week folds under the projects. On a
  * phone Needs you comes first. `?peek=merge` opens the merge panel and
@@ -53,6 +55,8 @@ import { useDeferredAnswers } from "@/components/factory/home/useDeferredAnswers
 import { DiscoveryChecklist } from "@/components/factory/home/DiscoveryChecklist";
 import { LearnedThisWeek } from "@/components/factory/home/LearnedThisWeek";
 import { WhatUsersNeed } from "@/components/factory/home/WhatUsersNeed";
+import { InitiativeCards } from "@/components/factory/initiatives/InitiativeCard";
+import { homeInitiatives } from "@/components/factory/initiatives/initiativeModel";
 import { useFactoryDefinition } from "@/components/factory/insights/learnQueries";
 import { NowCard } from "@/components/factory/overview/NowCard";
 import { useFactoryStatusSummary } from "@/components/factory/overview/statusSummaryQuery";
@@ -170,6 +174,8 @@ function HomeBody() {
     ? (members.find((m) => m.row.handle === agentRef || m.row.session_id === agentRef) ?? null)
     : null;
   const users = usersNeed(opportunities.data);
+  // Outcomes several projects build, above the projects (the asks carry their lines).
+  const initiatives = useMemo(() => homeInitiatives(asksData?.initiatives), [asksData]);
   const betsForYou = new Set(
     (asksData?.asks ?? []).flatMap((a) =>
       a.kind === "bet" && a.opportunity ? [a.opportunity] : [],
@@ -231,6 +237,7 @@ function HomeBody() {
           }
         />
         <div className="contents lg:flex lg:min-w-0 lg:flex-col lg:gap-4">
+          <InitiativeCards className="order-2" lines={initiatives} />
           <ProjectRows
             className="order-3"
             factoryId={fid}
