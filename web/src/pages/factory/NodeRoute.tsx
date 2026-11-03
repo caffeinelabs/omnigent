@@ -9,7 +9,12 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Navigate } from "react-router-dom";
-import { factoryPageHref, prPageHref, projectPageHref } from "@/components/factory/factoryRoutes";
+import {
+  factoryPageHref,
+  initiativePageHref,
+  prPageHref,
+  projectPageHref,
+} from "@/components/factory/factoryRoutes";
 import { useCockpitV2 } from "@/components/factory/shell/cockpitV2";
 import { useFactoryShell } from "@/components/factory/shell/FactoryShellContext";
 import { useFactoryToast } from "@/components/factory/ui/Toast";
@@ -31,7 +36,10 @@ function Pending() {
 /** A task ref (`T-16`): its project is on the tasks list, not the snapshot. */
 const TASK_REF = /^T-\d+$/;
 
-/** The classic or v2 page closest to a node ref: its project (a task's too), its PR, else Home. */
+/** A feature ref (`I-1`): an initiative, which has its own page. */
+const INITIATIVE_REF = /^I-\d+$/;
+
+/** The classic or v2 page closest to a node ref: its project (a task's too), its PR, its initiative, else Home. */
 export function closestPage(
   snapshot: FactorySnapshot,
   ref: string,
@@ -42,6 +50,7 @@ export function closestPage(
   const pr = ref.match(/^PR-(\d+)$/);
   const hit = pr ? snapshot.prs.find((p) => String(p.number) === pr[1]) : undefined;
   if (hit) return prPageHref(fid, hit.id);
+  if (INITIATIVE_REF.test(ref)) return initiativePageHref(fid, ref);
   const task = TASK_REF.test(ref) ? tasks.find((t) => t.ref === ref) : undefined;
   if (task && snapshot.projects.some((p) => p.slug === task.project_slug)) {
     return projectPageHref(fid, task.project_slug, { section: "tasks" });

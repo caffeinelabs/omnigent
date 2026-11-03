@@ -185,6 +185,13 @@ describe("cockpit v3 · the switch and routes", () => {
     await waitFor(() => expect(location).toBe(`${BASE}/projects/api-version`));
   });
 
+  it("sends a feature's v3 link opened on v2 to its initiative's page", async () => {
+    serve({ choice: "v2" });
+    renderAt("/n/I-1");
+
+    await waitFor(() => expect(location).toBe(`${BASE}/initiatives/I-1`));
+  });
+
   it("offers the way back to v2 in the person's menu while v3 is on", async () => {
     serve({ choice: "v2" });
     renderAt("?cockpit=v3");
