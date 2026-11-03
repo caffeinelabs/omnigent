@@ -59,6 +59,8 @@ _REQUEST_RE: Final = re.compile(
     r"\b(enhancement|feature|request|idea|proposal|suggestion)\b", re.IGNORECASE
 )
 _QUALIFIER_RE: Final = re.compile(r"^-?[A-Za-z_][\w.-]*:")
+_OPERATORS: Final = frozenset({"and", "or", "not"})
+"""Search operators (any case) dropped from search words, with parentheses."""
 
 _ISSUE_FIELDS: Final = (
     "number title bodyText url createdAt updatedAt authorAssociation "
@@ -222,9 +224,12 @@ class SearchArgs(Args):
 
 
 def search_words(q: str) -> str:
-    """:returns: *q* without qualifiers (``repo:``, ``org:``, ``is:`` …) or control characters."""
-    flat = "".join(ch for ch in q if ch.isprintable())
-    words = [w for w in flat.split() if not _QUALIFIER_RE.match(w)]
+    """
+    :returns: *q* as plain words: no qualifiers (``repo:``, ``org:``, ``is:`` …),
+        no parentheses, no ``AND``/``OR``/``NOT``, no control characters.
+    """
+    flat = "".join(ch for ch in q if ch.isprintable() and ch not in "()")
+    words = [w for w in flat.split() if not _QUALIFIER_RE.match(w) and w.lower() not in _OPERATORS]
     return " ".join(words)[:SEARCH_Q_MAX]
 
 
@@ -411,12 +416,12 @@ class RepoKind(Kind):
                     "type": "ISSUE" if args.in_ == "issues" else "DISCUSSION",
                 },
             )
-            nodes = _nodes((data or {}).get("search"))
-            out.returned = len(nodes)
-            for node in nodes:
+            # Only nodes of the source's repos count, so not even a count leaves them.
+            for node in _nodes((data or {}).get("search")):
                 repo = str((node.get("repository") or {}).get("nameWithOwner") or "").lower()
                 if repo not in repos:
                     continue
+                out.returned += 1
                 kind_of = "issue" if node.get("__typename") == "Issue" else "discussion"
                 item = post_item(node, repo, kind_of)
                 if item is not None:

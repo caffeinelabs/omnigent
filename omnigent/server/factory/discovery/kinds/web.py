@@ -11,6 +11,11 @@ signals and an unchanged one none.
 ``params``: ``urls`` (≤ 10), ``changelogs`` (true), ``domains`` (only these
 hosts and their subdomains; empty is any public host), ``exclude_domains``,
 ``chunks`` (items kept per page, 3).
+
+A page an agent asked for that cannot be read (a dead link, a host that does
+not resolve) is that query's miss (:class:`~.base.ItemFailed`), never the
+source's failure; a sync fails the source only when every URL it reads fails,
+and a query only when the search backend does not answer.
 """
 
 from __future__ import annotations
@@ -30,8 +35,10 @@ from omnigent.server.factory.discovery.kinds.base import (
     Check,
     Context,
     Fetched,
+    ItemFailed,
     Kind,
     Params,
+    Refused,
     Source,
     SourceFailed,
     ToolSpec,
@@ -123,6 +130,19 @@ def _digest(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
 
+def _why(exc: Exception) -> str:
+    """:returns: What went wrong, for people's log (never shown to an agent)."""
+    if isinstance(exc, (Refused, ItemFailed)):
+        return exc.detail
+    if isinstance(exc, CockpitError):
+        return exc.message
+    return str(exc)
+
+
+def _refused(exc: FetchRefused) -> Refused:
+    return Refused(400, "url_refused", exc.message, detail=exc.detail, field="args.url")
+
+
 def page_items(page: Page, *, size: int, limit: int, kind: str | None) -> list[Item]:
     """:returns: A page's chunks as ledger items (pointer ``<url>#s-<digest>``)."""
     base = page.final_url.split("#", 1)[0]
@@ -174,9 +194,14 @@ class WebKind(Kind):
             try:
                 check_url(args.url, domains=params.domains, exclude=params.exclude_domains)
             except FetchRefused as exc:
-                raise CockpitError(400, "url_refused", str(exc), field="args.url") from None
+                raise _refused(exc) from None
 
     async def _fetch(self, ctx: Context, url: str) -> Page:
+        """
+        :raises Refused: 400 ``url_refused`` (the URL, or where it redirected, is not allowed).
+        :raises ItemFailed: The page could not be read.
+        :raises SourceFailed: This server cannot fetch at all.
+        """
         params = self._params(ctx.source)
         if ctx.backends.fetcher is None:
             raise SourceFailed("this server cannot fetch pages")
@@ -185,9 +210,9 @@ class WebKind(Kind):
                 url, domains=params.domains, exclude=params.exclude_domains
             )
         except FetchRefused as exc:
-            raise CockpitError(400, "url_refused", str(exc), field="args.url") from None
+            raise _refused(exc) from None
         except FetchFailed as exc:
-            raise SourceFailed(str(exc)) from None
+            raise ItemFailed(exc.message, exc.detail) from None
 
     async def query(self, ctx: Context, tool: str, args: Args) -> Fetched:  # noqa: ARG002
         params = self._params(ctx.source)
@@ -207,7 +232,7 @@ class WebKind(Kind):
             try:
                 hits = await backend.search(query, args.limit)
             except FetchFailed as exc:
-                raise SourceFailed(str(exc)) from None
+                raise SourceFailed(exc.detail) from None
             out.returned = len(hits)
             for hit in hits:
                 try:
@@ -256,9 +281,8 @@ class WebKind(Kind):
                 await ctx.charge()
             try:
                 page = await self._fetch(ctx, url)
-            except (SourceFailed, CockpitError) as exc:
-                message = exc.message if isinstance(exc, CockpitError) else str(exc)
-                out.errors.append(f"{url[:120]}: {message}")
+            except (ItemFailed, SourceFailed, CockpitError) as exc:
+                out.errors.append(f"{url[:120]}: {_why(exc)}")
                 continue
             out.urls += list(page.hops)
             items = page_items(page, size=size, limit=params.chunks, kind="market")
@@ -281,9 +305,8 @@ class WebKind(Kind):
             return checks
         try:
             page = await self._fetch(ctx, urls[0])
-        except (SourceFailed, CockpitError) as exc:
-            message = exc.message if isinstance(exc, CockpitError) else str(exc)
-            checks.append(Check(urls[0][:120], False, message))
+        except (ItemFailed, SourceFailed, CockpitError) as exc:
+            checks.append(Check(urls[0][:120], False, _why(exc)))
             return checks
         detail = f"{page.status}, {page.size} bytes{' (cut)' if page.truncated else ''}"
         checks.append(Check(urls[0][:120], True, detail))

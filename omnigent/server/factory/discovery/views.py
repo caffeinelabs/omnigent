@@ -382,7 +382,7 @@ def _spent_today(deps: FactoryDeps, factory_id: str, now: int) -> float:
 def _sources(
     deps: FactoryDeps, factory_id: str, per_source: Mapping[str, int]
 ) -> list[dict[str, Any]]:
-    from omnigent.server.factory.discovery.sources import held as source_held
+    from omnigent.server.factory.discovery.sources import health as source_health
     from omnigent.server.factory.discovery.sources import usage_today as source_usage
 
     states = {
@@ -408,7 +408,7 @@ def _sources(
                 "privacy": ref.privacy,
                 "keep_days": ref.keep_days,
                 "calls_today": source_usage(state),
-                "health": "failing" if source_held(state) else "ok",
+                "health": source_health(state),
                 "calls_per_day": (raw.get("budget") or {}).get("calls_per_day"),
                 "last_ok_at": state.last_ok_at if state is not None else None,
                 "last_error": state.last_error if state is not None else None,

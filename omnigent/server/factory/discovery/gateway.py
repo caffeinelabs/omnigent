@@ -15,6 +15,10 @@ signal keeps, and answers with the signals' ids and their redacted excerpts
 wrapped as untrusted text (:func:`~omnigent.server.factory.envelope.format_untrusted`).
 A signal that reads like instructions is withheld from the agent.
 
+Outside text reaches an agent only inside that envelope: an error an agent
+gets is a fixed sentence (a page's content type, a redirect's host, a
+backend's error text stay in the access log, for people).
+
 The background sync (``background/discovery_sync.py``) runs the same path as
 the server (``source.sync``). Failures in a row put a source on hold and open
 an incident; a pause (a definition change, applied at once by an editor, with
@@ -50,7 +54,9 @@ from omnigent.server.factory.discovery.kinds.base import (
     Check,
     Context,
     Fetched,
+    ItemFailed,
     Kind,
+    Refused,
     Source,
     SourceFailed,
 )
@@ -198,7 +204,12 @@ async def _log(
     :param event_id: The id the stored signals already name (a successful read).
     """
     code = error.code if isinstance(error, CockpitError) else None
-    message = error.message if isinstance(error, CockpitError) else error
+    if isinstance(error, Refused):
+        message: str | None = error.detail
+    elif isinstance(error, CockpitError):
+        message = error.message
+    else:
+        message = error
     verb = {"ok": "read", "partial": "partly read", "stopped": "stopped reading"}.get(
         outcome, "could not read"
     )
@@ -206,7 +217,7 @@ async def _log(
     if outcome in ("ok", "partial"):
         summary += f": {data.get('returned', 0)} items, {data.get('new', 0)} new"
     elif message:
-        summary += f": {message}"
+        summary += f": {_clean(message)}"
     await _emit(
         app_state,
         factory_id,
@@ -377,6 +388,20 @@ async def _run(
             **log,
         )
         raise
+    except ItemFailed as exc:
+        # The caller's miss (a dead link): logged, never counted against the source.
+        await _log(
+            app_state,
+            factory_id,
+            source,
+            actor,
+            outcome="error",
+            error=CockpitError(502, "item_failed", exc.detail),
+            calls=calls,
+            started=started,
+            **log,
+        )
+        raise CockpitError(502, "item_failed", exc.message, source=source.id) from None
     except (SourceFailed, TimeoutError) as exc:
         message = str(exc) or f"no answer within {int(OP_TIMEOUT_S)} s"
         await _log(
@@ -392,7 +417,10 @@ async def _run(
         )
         await _failed(app_state, factory_id, source, message, now)
         raise CockpitError(
-            502, "source_failed", f"source {source.id} failed: {message}", source=source.id
+            502,
+            "source_failed",
+            f"source {source.id} failed; people see why in its log",
+            source=source.id,
         ) from None
     except asyncio.CancelledError:
         with contextlib.suppress(Exception):
@@ -408,6 +436,26 @@ async def _run(
                 **log,
             )
         raise
+    except Exception as exc:
+        # A bug, not the source: every charged call still gets its log row.
+        _logger.exception("factory source %s: %s broke", source.id, mode)
+        await _log(
+            app_state,
+            factory_id,
+            source,
+            actor,
+            outcome="error",
+            error=CockpitError(502, "source_error", f"unexpected {type(exc).__name__}"),
+            calls=calls,
+            started=started,
+            **log,
+        )
+        raise CockpitError(
+            502,
+            "source_error",
+            f"reading source {source.id} broke; people see it in its log",
+            source=source.id,
+        ) from None
     # A pause while it read: nothing is stored.
     fresh = await asyncio.to_thread(_fresh, deps, factory_id, source.id)
     if fresh is None or fresh.state == "paused":
@@ -562,7 +610,8 @@ def answer(run: Run) -> dict[str, Any]:
             "new": len(new),
             "flagged": sum(1 for i in items if i["withheld"]),
         },
-        "errors": run.fetched.errors[:5],
+        # How many parts failed; what they said stays in the source's log, for people.
+        "errors": len(run.fetched.errors),
         "calls": run.calls,
         "text": format_untrusted(origin=origin, items=wrapped),
         "note": NOTE,
@@ -764,7 +813,12 @@ async def _human(app_state: Any, root: Conversation, user_id: str | None) -> Act
 async def test(
     app_state: Any, root: Conversation, user_id: str | None, source_id: str
 ) -> dict[str, Any]:
-    """``POST …/sources/{id}/test``: check the source answers (one call; nothing stored)."""
+    """
+    ``POST …/sources/{id}/test``: check the source answers (one call; nothing stored).
+
+    A source on hold may be tested (that is how people check it before
+    resuming it); a paused one may not: a pause stops every read.
+    """
     deps = factory_deps(app_state)
     await control.require(deps, user_id, root.id, LEVEL_EDIT)
     source = await asyncio.to_thread(sources.resolve, deps, root.id, source_id)
@@ -782,6 +836,13 @@ async def test(
 
     log = {"mode": "test", "tool": "test", "raw_args": None}
     try:
+        if source.state == "paused":
+            raise CockpitError(
+                409,
+                "source_paused",
+                f"source {source.id} is paused; resume it to test it",
+                source=source.id,
+            )
         kind.params(source)
         await charge()
     except CockpitError as exc:
@@ -793,8 +854,15 @@ async def test(
         checks = await asyncio.wait_for(kind.test(ctx), OP_TIMEOUT_S)
     except (SourceFailed, TimeoutError) as exc:
         checks = [Check("answer", False, str(exc) or "no answer in time")]
+    except ItemFailed as exc:
+        checks = [Check("answer", False, exc.detail)]
+    except Refused as exc:
+        checks = [Check("answer", False, exc.detail)]
     except CockpitError as exc:
         checks = [Check("answer", False, exc.message)]
+    except Exception as exc:
+        _logger.exception("factory source %s: test broke", source.id)
+        checks = [Check("answer", False, f"unexpected {type(exc).__name__}")]
     ok = all(c.ok for c in checks)
     await _log(
         app_state,

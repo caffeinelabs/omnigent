@@ -28,7 +28,47 @@ TEXT_MAX: Final = 4000
 
 
 class SourceFailed(Exception):
-    """The source did not answer or broke (counts toward pausing it); the message says why."""
+    """
+    The source itself did not answer or broke (counts toward holding it).
+
+    Its message is for people (the access log, ``last_error``, the incident);
+    an agent only learns that the source failed.
+    """
+
+
+class ItemFailed(Exception):
+    """
+    One thing the caller chose could not be read (a dead link): the caller's
+    miss, not the source's, so it never counts toward holding the source.
+
+    :param message: A fixed sentence, safe to show an agent.
+    :param detail: What happened, for people's log.
+    """
+
+    def __init__(self, message: str, detail: str | None = None) -> None:
+        super().__init__(message)
+        self.message = message
+        self.detail = (detail or message)[:300]
+
+
+class Refused(CockpitError):
+    """
+    A refusal whose agent-facing message is fixed, with what happened kept for people's log.
+
+    :param detail: Never in the response body; the gateway logs it in place of the message.
+    """
+
+    def __init__(
+        self,
+        status_code: int,
+        code: str,
+        message: str,
+        *,
+        detail: str | None = None,
+        field: str | None = None,
+    ) -> None:
+        super().__init__(status_code, code, message, field=field)
+        self.detail = (detail or message)[:300]
 
 
 class Args(BaseModel):
@@ -247,8 +287,10 @@ __all__ = [
     "Check",
     "Context",
     "Fetched",
+    "ItemFailed",
     "Kind",
     "Params",
+    "Refused",
     "Source",
     "SourceFailed",
     "ToolSpec",

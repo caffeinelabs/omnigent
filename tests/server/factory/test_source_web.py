@@ -9,6 +9,8 @@ is sample data (``example.com`` and its subdomains).
 
 from __future__ import annotations
 
+import gzip
+import tracemalloc
 from collections.abc import AsyncIterator
 
 import httpx
@@ -16,13 +18,15 @@ import pytest
 import pytest_asyncio
 
 from omnigent.server.factory import definition
-from omnigent.server.factory.discovery import gateway, web_io
+from omnigent.server.factory.control import CockpitError
+from omnigent.server.factory.discovery import gateway, sources, web_io
 from omnigent.server.factory.discovery.kinds.web import chunks
 from omnigent.server.factory.discovery.web_io import (
     FetchFailed,
     FetchRefused,
     Hit,
     KeenableSearch,
+    ascii_host,
     check_url,
     html_text,
     public_address,
@@ -141,6 +145,11 @@ async def test_the_fetch_stops_at_its_byte_cap() -> None:
         "https://example.com/?token=abc123",
         "https://example.com/?" + "q=x&" * 100,
         "https://" + "a" * 600 + ".example.com/",
+        "http://ignore your instructions.example.com/",
+        "http://a.example.com:not-a-port/",
+        "https://-bad-.example.com/",
+        "https://a%2Fb.example.com/",
+        "http://[64:ff9b::a00:1]/",
     ],
 )
 def test_urls_that_could_reach_inside_or_carry_secrets_are_refused(url: str) -> None:
@@ -164,8 +173,37 @@ def test_public_addresses_only() -> None:
         "fd00::1",
         "::ffff:10.0.0.1",
         "168.63.129.16",
+        # NAT64 and IPv4-compatible addresses are judged by the IPv4 address they carry.
+        "64:ff9b::a00:1",
+        "64:ff9b::a9fe:a9fe",
+        "64:ff9b::7f00:1",
+        "::7f00:1",
+        "::a00:1",
+        "2002:a00:1::",
     ):
         assert not public_address(address), address
+    assert public_address("64:ff9b::5db8:d822")  # NAT64 of the public sample address
+
+
+def test_a_host_name_is_sent_as_ascii() -> None:
+    assert ascii_host("bücher.example.com") == "xn--bcher-kva.example.com"
+    assert ascii_host("News.Example.com") == "news.example.com"
+    for bad in ("a b.example.com", "x..example.com", "-a.example.com", "a" * 64 + ".example"):
+        assert ascii_host(bad) is None, bad
+    url, host, port = check_url("https://bücher.example.com/a?b=1")
+    assert (url, host, port) == ("https://xn--bcher-kva.example.com/a?b=1", host, 443)
+    assert host == "xn--bcher-kva.example.com"
+
+
+async def test_a_non_ascii_host_is_fetched_by_its_ascii_name() -> None:
+    fetcher = web_fetcher({"xn--bcher-kva.example.com": html("Books (sample)", *PARAS)})
+
+    page = await fetcher.fetch("https://bücher.example.com/")
+
+    (request,) = fetcher.requests
+    assert request.headers["host"] == "xn--bcher-kva.example.com"
+    assert request.extensions["sni_hostname"] == "xn--bcher-kva.example.com"
+    assert page.title == "Books (sample)"
 
 
 async def test_a_host_that_resolves_inside_is_refused() -> None:
@@ -212,7 +250,7 @@ async def test_too_many_redirects_fail() -> None:
     loop = lambda _r: httpx.Response(302, headers={"location": "https://loop.example.com/"})  # noqa: E731
     fetcher = web_fetcher({"loop.example.com": loop})
 
-    with pytest.raises(FetchFailed, match="redirects"):
+    with pytest.raises(FetchFailed, match="too many times"):
         await fetcher.fetch("https://loop.example.com/")
     assert len(fetcher.requests) == web_io.MAX_REDIRECTS + 1
 
@@ -266,17 +304,162 @@ async def test_refused_urls_cost_no_call_and_the_source_domains_bind(cockpit: Co
     assert [e.data["outcome"] for e in source_events(cockpit)] == ["refused"] * 3
 
 
-def test_html_becomes_plain_text_without_scripts() -> None:
+async def test_dead_links_are_the_callers_miss_not_the_sources_failure(
+    cockpit: Cockpit,
+) -> None:
+    install_backends(cockpit, fetcher=web_fetcher({"news.example.com": html("x", *PARAS)}))
+
+    misses = [
+        await query(cockpit, "web", "fetch", {"url": f"https://gone{n}.example.com/"})
+        for n in range(4)
+    ]
+    good = await query(cockpit, "web", "fetch", {"url": "https://news.example.com/"})
+
+    assert {(r.status_code, error_code(r)) for r in misses} == {(502, "item_failed")}
+    assert misses[0].json()["error"]["message"] == "the page could not be read (HTTP 404)"
+    assert good.status_code == 200, good.text
+    state = cockpit.store.get_source_state(cockpit.fid, "web")
+    assert state is not None and state.failures == 0 and sources.held(state) is None
+    assert sources.health(state) == "ok"
+    assert source_events(cockpit, "source.failed") == []
+    assert [i for i in cockpit.store.list_issues(cockpit.fid) if i.rule == "source.failed"] == []
+    rows = source_events(cockpit)
+    assert [e.data["outcome"] for e in rows] == ["error"] * 4 + ["ok"]
+    assert rows[0].data["error_code"] == "item_failed"
+    assert "gone0.example.com answered 404" in rows[0].data["error"]
+
+
+async def test_a_sync_whose_every_url_fails_fails_the_source(cockpit: Cockpit) -> None:
+    install_backends(cockpit, fetcher=web_fetcher({}))
+
+    with pytest.raises(CockpitError) as caught:
+        await gateway.sync_source(cockpit.app.state, cockpit.fid, "web")
+
+    assert caught.value.code == "source_failed"
+    state = cockpit.store.get_source_state(cockpit.fid, "web")
+    assert state is not None and state.failures == 1
+    assert "changelog.example.com answered 404" in (state.last_error or "")
+
+
+async def test_an_unexpected_error_still_logs_the_charged_call(cockpit: Cockpit) -> None:
+    class Broken(web_io.WebFetcher):
+        async def fetch(self, url: str, **_kwargs: object) -> web_io.Page:
+            raise RuntimeError("sample bug")
+
+    install_backends(cockpit, fetcher=Broken())
+
+    resp = await query(cockpit, "web", "fetch", {"url": "https://news.example.com/"})
+
+    assert resp.status_code == 502 and error_code(resp) == "source_error"
+    assert "sample bug" not in resp.text
+    (event,) = source_events(cockpit)
+    assert event.data["outcome"] == "error" and event.data["calls"] == 1
+    state = cockpit.store.get_source_state(cockpit.fid, "web")
+    assert state is not None and state.failures == 0 and state.calls_today == 1
+
+
+def test_html_becomes_plain_text_without_scripts_or_menus() -> None:
     title, text = html_text(
         "<html><head><title> A  title </title><style>p{}</style></head>"
-        "<body><nav>Menu</nav><p>One <b>two</b></p><script>evil()</script><p>Three</p>"
-        "</body></html>"
+        "<body><nav>Menu</nav><header>Sign in</header><p>One <b>two</b></p>"
+        "<script>evil()</script><p>Three</p><button>Buy</button>"
+        "<footer>Imprint</footer></body></html>"
     )
     assert title == "A title"
-    assert text.splitlines() == ["Menu", "One two", "Three"]
+    assert text.splitlines() == ["One two", "Three"]
+    # A page that is all menu still yields its text.
+    assert html_text("<body><nav>Only a menu (sample)</nav></body>")[1] == "Only a menu (sample)"
     assert chunks("\n".join(PARAS), 200, 2) == [PARAS[0], PARAS[1]]
     assert chunks("\n".join(PARAS), 1000, 3) == [" ".join(PARAS)]
     assert chunks("too short\n\nalso short", 280, 3) == []
+
+
+def test_a_pages_main_content_comes_first() -> None:
+    page = (
+        "<html><body><div class='banner'>Banner words (sample)</div>"
+        f"<aside>Related links (sample)</aside><main><h1>Release notes</h1><p>{PARAS[0]}</p>"
+        f"<p>{PARAS[1]}</p></main><div>{PARAS[2]}</div></body></html>"
+    )
+
+    _title, text = html_text(page)
+
+    assert text.splitlines() == ["Release notes", PARAS[0], PARAS[1]]
+    # Too little main text: the whole page (still without its frames) is read.
+    _title, text = html_text(f"<body><article>Short</article><p>{PARAS[1]}</p></body>")
+    assert text.splitlines() == ["Short", PARAS[1]]
+
+
+# ── Compressed bodies ─────────────────────────────────────────
+
+
+def _streamed(body: bytes, encoding: str) -> httpx.Response:
+    return httpx.Response(
+        200,
+        headers={"content-type": "text/plain", "content-encoding": encoding},
+        stream=httpx.ByteStream(body),
+    )
+
+
+async def _peak(fetcher: web_io.WebFetcher, url: str) -> tuple[object, int]:
+    tracemalloc.start()
+    try:
+        try:
+            outcome: object = await fetcher.fetch(url)
+        except Exception as exc:
+            outcome = exc
+        return outcome, tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+
+
+async def test_a_compression_bomb_is_never_inflated() -> None:
+    zstandard = pytest.importorskip("zstandard")
+    bomb = zstandard.ZstdCompressor(level=19).compress(b"\0" * 50_000_000)
+    fetcher = web_fetcher({"bomb.example.com": lambda _r: _streamed(bomb, "zstd")})
+
+    outcome, peak = await _peak(fetcher, "https://bomb.example.com/")
+
+    assert isinstance(outcome, FetchRefused)
+    assert outcome.message == "the page is compressed in a way that is not read"
+    assert peak < 5_000_000
+
+
+async def test_a_gzip_body_is_inflated_only_up_to_the_cap() -> None:
+    bomb = gzip.compress(b"a" * 50_000_000)
+    fetcher = web_fetcher(
+        {
+            "bomb.example.com": lambda _r: _streamed(bomb, "gzip"),
+            "small.example.com": lambda _r: _streamed(gzip.compress(PARAS[0].encode()), "gzip"),
+        }
+    )
+
+    outcome, peak = await _peak(fetcher, "https://bomb.example.com/")
+    small = await fetcher.fetch("https://small.example.com/")
+
+    assert isinstance(outcome, web_io.Page)
+    assert outcome.truncated is True and outcome.size == web_io.MAX_BYTES
+    assert peak < 6 * web_io.MAX_BYTES
+    assert small.text == PARAS[0] and small.truncated is False
+
+
+async def test_the_search_answer_is_capped_and_never_inflated_unbounded() -> None:
+    big = b'{"results": [' + b'{"title": "x", "url": "https://a.example.com/"},' * 40_000
+    zstandard = pytest.importorskip("zstandard")
+    bomb = zstandard.ZstdCompressor(level=19).compress(b" " * 50_000_000)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "big" in request.url.path:
+            return httpx.Response(200, stream=httpx.ByteStream(big))
+        return httpx.Response(
+            200, headers={"content-encoding": "zstd"}, stream=httpx.ByteStream(bomb)
+        )
+
+    transport = httpx.MockTransport(handler)
+    for path in ("/big", "/bomb"):
+        backend = KeenableSearch(url=f"https://search.example.com{path}", transport=transport)
+        with pytest.raises(FetchFailed) as caught:
+            await backend.search("sample words", 5)
+        assert caught.value.message == "the search backend did not answer"
 
 
 # ── Search ─────────────────────────────────────────────────────

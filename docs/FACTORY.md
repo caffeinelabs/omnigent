@@ -1043,10 +1043,15 @@ rest of discovery. A source is an owner-approved `discovery.sources[]` entry
   `COLLABORATOR`, and a release of the factory's own repo, is the team's and
   becomes a hunch; bots are skipped; searches lose every qualifier and stay in
   the source's repos. `web` fetches public pages (`web_io.py`: `http(s)` on
-  default ports, every address public and pinned across redirects, no
-  cookies, no credentials, no proxy or `.netrc` from the environment, text
-  types only, 1 MB cap, pages kept as a few chunk signals) and searches only
-  when `OMNIGENT_FACTORY_WEB_SEARCH` names a keyless backend. `team` reads the
+  default ports, host names sent as ASCII (IDNA), every address public
+  (also an IPv4 address inside NAT64 or IPv4-compatible IPv6) and pinned
+  across redirects, no cookies, no credentials, no proxy or `.netrc` from the
+  environment, text types only, 1 MB cap applied before decoding: only
+  `gzip`/`deflate` bodies are inflated, a bounded slice at a time, and any
+  other encoding is refused; a page's `main`/`article` text first, without
+  menus and frames, kept as a few chunk signals) and searches only when
+  `OMNIGENT_FACTORY_WEB_SEARCH` names a keyless backend (its answer capped the
+  same way). `team` reads the
   Room's hunches already in the ledger. Other kinds answer `422
   kind_not_supported` until secret-backed sources exist.
 - **Agents** (`/v1/factory/agent/discovery/*`, scoped like every agent route):
@@ -1059,7 +1064,12 @@ rest of discovery. A source is an owner-approved `discovery.sources[]` entry
   a write (`403 tool_not_allowed`), bad arguments (`400 invalid_args`), a URL
   or repo outside the source (`400 url_refused`, `403 repo_not_allowed`); a
   spent daily cap answers `429 over_budget` (queries, sync requests and tests
-  all count, per UTC day, atomically).
+  all count, per UTC day, atomically). A page the agent picked that cannot be
+  read (a dead link, a host that does not resolve) answers `502 item_failed`
+  and never counts against the source; the source failing itself (the search
+  backend, GitHub) answers `502 source_failed`. Every error an agent gets is a
+  fixed sentence: what a remote server sent (a content type, a redirect's
+  host, an error text, a hold's reason) stays in the access log for people.
 - **Storing and answering**: raw items go to the ledger, which alone writes
   signal text (redact, hash, injection score, clip). Each read writes one
   `source.query` (or `source.sync`) event: who, seat, tool, an argument
@@ -1070,11 +1080,14 @@ rest of discovery. A source is an owner-approved `discovery.sources[]` entry
   server header and rule, every outside line quoted between markers with a
   fresh nonce). A signal flagged `injection_suspect` is withheld from agents.
 - **Sync** (`background/discovery_sync.py`, every minute): each source with
-  `interval_min` above 0 whose interval passed, as the server. Three failures
-  in a row put a source on hold and open a `source.failed` incident for the
-  owners; `POST …/sources/{id}/resume` (an editor) lifts the hold.
+  `interval_min` above 0 whose interval passed, in factories that are not
+  done or closed, as the server. Three failures in a row (a `web` sync fails
+  when every URL it reads fails) put a source on hold and open a
+  `source.failed` incident for the owners; `POST …/sources/{id}/resume` (an
+  editor) lifts the hold.
 - **People** (prefix `/v1/factory/factories/{fid}`; writes carry human
-  origin): `POST /sources/{id}/test` (EDIT; one call, stores nothing),
+  origin): `POST /sources/{id}/test` (EDIT; one call, stores nothing; a held
+  source may be tested, a paused one answers `409 source_paused`),
   `POST /sources/{id}/pause` (EDIT; a class-A definition version applied at
   once, which stops a running sync; its Undo is `POST …/definition/pin` of the
   version before, theirs for 10 minutes), `POST /sources/{id}/resume` (owners

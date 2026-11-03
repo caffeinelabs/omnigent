@@ -14,6 +14,7 @@ from types import SimpleNamespace
 import pytest
 import pytest_asyncio
 
+from omnigent import factory as F
 from omnigent.server.factory.background import discovery_sync
 from omnigent.server.factory.discovery import gateway, ledger
 from omnigent.server.factory.discovery.kinds import repo as repo_kind
@@ -141,6 +142,20 @@ async def test_the_background_sync_runs_due_sources_once_per_interval(cockpit: C
     assert len(fake.calls) == 2
 
 
+@pytest.mark.parametrize(
+    "labels", [{F.LABEL_STATE: F.STATE_DONE}, {"omnigent.closed": "true"}], ids=["done", "closed"]
+)
+async def test_a_finished_or_closed_factory_syncs_nothing(
+    cockpit: Cockpit, labels: dict[str, str]
+) -> None:
+    fake = FakeGitHub(repos={SAMPLE_REPO: sample_repo()})
+    install_backends(cockpit, github=fake)
+    cockpit.world.store.set_labels(cockpit.fid, labels)
+
+    assert await discovery_sync.run_once(cockpit.app.state) == {"synced": 0, "failed": 0}
+    assert fake.calls == []
+
+
 async def test_query_only_sources_never_sync(cockpit: Cockpit) -> None:
     fake = FakeGitHub(repos={SAMPLE_REPO: sample_repo()})
     install_backends(cockpit, github=fake)
@@ -169,6 +184,8 @@ async def test_search_never_leaves_the_sources_repos(cockpit: Cockpit) -> None:
     assert pointers and all(SAMPLE_REPO in p for p in pointers)
     (event,) = source_events(cockpit)
     assert event.data["q"] == "share draft"
+    # Not even a count of what matched elsewhere comes back.
+    assert resp.json()["count"]["returned"] == event.data["returned"] == 5
 
 
 async def test_a_search_of_only_qualifiers_is_refused(cockpit: Cockpit) -> None:
@@ -242,6 +259,10 @@ def test_search_words_drop_every_qualifier() -> None:
     assert repo_kind.search_words("repo:x/y user:z -label:bug share\x00 a draft") == (
         "share a draft"
     )
+    assert repo_kind.search_words("(repo:x/y) OR (org:z AND share) NOT -(is:open) draft") == (
+        "share draft"
+    )
+    assert repo_kind.search_words("share or draft and not this") == "share draft this"
 
 
 async def test_the_server_reader_needs_the_owners_github_connection(cockpit: Cockpit) -> None:

@@ -1,9 +1,10 @@
 """The sources' sync: sync-mode sources read on their interval, through the gateway.
 
 Every :data:`TICK_S` seconds, while the server runs discovery
-(``OMNIGENT_FACTORY_DISCOVERY``), each factory with ``discovery.enabled``
-syncs every source whose interval passed: not paused, not on hold, a kind
-that syncs (``repo``, ``web``), ``interval_min`` above 0. A sync is the
+(``OMNIGENT_FACTORY_DISCOVERY``), each open factory (not done, not closed)
+with ``discovery.enabled`` syncs every source whose interval passed: not
+paused, not on hold, a kind that syncs (``repo``, ``web``), ``interval_min``
+above 0. A sync is the
 gateway's own read (``source.sync`` events, the ledger, the daily call cap);
 a pause stops one that runs at once, and repeated failures put the source on
 hold with an incident.
@@ -16,13 +17,14 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, Final
 
-from omnigent.factory import LABEL_ID
+from omnigent.factory import LABEL_ID, LABEL_STATE, STATE_DONE
 from omnigent.server.factory import definition
 from omnigent.server.factory.context import FACTORY_STATE_ATTR, FactoryDeps
 from omnigent.server.factory.control import CockpitError, same_id
 from omnigent.server.factory.definition_blocks import discovery_server_on
 from omnigent.server.factory.membership import is_top_level
 from omnigent.stores.factory_store import now_s
+from omnigent.util.session_lifecycle import is_session_closed
 
 _logger = logging.getLogger(__name__)
 
@@ -30,7 +32,7 @@ TICK_S: Final = 60.0
 
 
 def _due(deps: FactoryDeps, now: int) -> list[tuple[str, str]]:
-    """:returns: ``(factory id, source id)`` of every source whose sync is due."""
+    """:returns: ``(factory id, source id)`` of each due source of an open factory."""
     from omnigent.server.factory.discovery import gateway, sources
 
     store = deps.conversation_store
@@ -42,6 +44,11 @@ def _due(deps: FactoryDeps, now: int) -> list[tuple[str, str]]:
             conv is None
             or not is_top_level(conv)
             or not same_id(conv.labels.get(LABEL_ID), conv.id)
+        ):
+            continue
+        # A finished or closed factory reads nothing more (as the PR poller skips it).
+        if conv.labels.get(LABEL_STATE) == STATE_DONE or is_session_closed(
+            conv.labels, conv.title
         ):
             continue
         if not definition.discovery_enabled(deps, conv.id):

@@ -101,6 +101,32 @@ async def test_an_editor_pauses_at_once_and_undoes_it(cockpit: Cockpit) -> None:
     assert paused_row["data"]["by"] == "carol" and paused_row["data"]["from"] == "active"
 
 
+async def test_a_paused_source_is_not_tested(cockpit: Cockpit) -> None:
+    fake = github(cockpit)
+    await cockpit.post(base(cockpit, "/sources/repo-issues/pause"), user="carol")
+
+    tested = await cockpit.post(base(cockpit, "/sources/repo-issues/test"), user="carol")
+
+    assert tested.status_code == 409 and error_code(tested) == "source_paused"
+    assert fake.calls == []
+    (row,) = source_events(cockpit)
+    assert row.data["mode"] == "test" and row.data["outcome"] == "refused"
+
+
+async def test_the_cockpit_and_the_log_agree_on_health(cockpit: Cockpit) -> None:
+    fake = github(cockpit)
+    fake.fail = "GitHub answered 502 (sample)"
+    await query(cockpit, "repo-issues", "issues")
+
+    summary = await cockpit.client.get(
+        base(cockpit, "/discovery"), headers={"X-Test-User": "alice"}
+    )
+    status = (await log(cockpit)).json()["source"]
+
+    row = next(s for s in summary.json()["sources"] if s["id"] == "repo-issues")
+    assert row["health"] == status["health"] == "erroring"
+
+
 async def test_resuming_a_paused_source_is_for_owners(cockpit: Cockpit) -> None:
     github(cockpit)
     assert (await cockpit.post(base(cockpit, "/sources/repo-issues/pause"))).status_code == 200

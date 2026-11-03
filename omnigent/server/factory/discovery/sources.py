@@ -154,11 +154,12 @@ def require_running(source: Source, state: FactorySourceState | None) -> None:
         raise CockpitError(409, "source_paused", f"source {source.id} is paused", source=source.id)
     hold = held(state)
     if hold is not None:
+        # The hold's reason may quote what the source sent: it stays in the log, for people.
         raise CockpitError(
             409,
             "source_failing",
             f"source {source.id} failed {hold.get('failures', FAIL_LIMIT)} times in a row and is "
-            f"on hold ({hold.get('reason') or 'see its log'}); a person resumes it",
+            "on hold; a person resumes it",
             source=source.id,
         )
 
